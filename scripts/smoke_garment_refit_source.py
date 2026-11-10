@@ -127,6 +127,22 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     the front cells of bands 1..9 at 0.85 -> front 0.85 vs 1.0, drop 0.15 >
     0.10: refused "torso front"; at 0.95 -> ok. Band 0 at 0 in the fit changes
     nothing (not in the area).
+[11] Torso holes (garment_source.torso_holes / torso_hole_gate, outfit bodies). Body: a closed cylinder r 0.10,
+    y 0.79 .. 1.45, 360 segments, rings every 2 mm; rings at y 0.85 split by x into Hips / LeftUpLeg (x >= 0) and
+    Hips / RightUpLeg (0.5 / 0.5; the hip joint = the mean of both half rings' means = (0, 0.85, 0)), at 0.95 / 1.10
+    / 1.25 / 1.40 Hips|Spine, Spine|Spine1, Spine1|Spine2, Spine2|Neck (0.5 / 0.5), every other vertex its band's bone
+    -> hip 0.85, neck 1.40. Garment: an open tube r 0.115 over y 0.80 .. 1.40 (same grid) with a window cut out:
+    the faces whose centre lies within 15 deg of the front (+z) and between y 1.10 and 1.20.
+    A skin vertex at angle phi is seen when no garment sample lies within 12 mm of its ray points (radius 0.102,
+    0.110, 0.118, ...): the nearest, 0.118, is 3 mm off the tube, so the window's border is reached at an arc of
+    sqrt(0.012^2 - 0.003^2) = 0.01162 at r 0.115: |phi| < 15 deg - 0.01162 / 0.115 = 0.1608 rad and
+    1.1116 < y < 1.1884. Seen skin (r 0.10): 2 x 0.1608 x 0.10 = 0.03216 m wide x 0.0768 m = 24.7 cm2 (+- 2.5: the
+    grid's half cell along the 0.22 m border).
+    - No open cell: one HOLE of 24.7 cm2 (largest_cm2), at angle 0; edge 0; the gate refuses (> 15 cm2) naming
+      "torso hole".
+    - The cells of bands 13 - 14 (v 0.55 .. 0.65, y >= 1.1525) x sectors 11 - 12 (-15 .. 15 deg) open (the base fit
+      leaves them seen): the patch reaches into them -> an EDGE, no hole (largest 0, the gate passes), edge_cm2 = its
+      part below y 1.1525: 0.03216 x (1.1525 - 1.1116) = 13.2 cm2 (+- 2).
 """
 import json
 import os
@@ -217,6 +233,55 @@ def sleeves(x_end, hang=0.0):
             for a in angles:
                 out.append([sign * x, 1.4 + dy + 0.045 * np.cos(a), 0.045 * np.sin(a)])
     return np.asarray(out, np.float64)
+
+
+def within(label, value, lo, hi):
+    ok = value is not None and lo <= value <= hi
+    print(("  OK   " if ok else "  FAIL ") + f"{label}: {value!r} in [{lo}, {hi}]")
+    if not ok:
+        FAILS.append(label)
+
+
+TRUNK_JOINTS = ["Hips", "LeftUpLeg", "RightUpLeg", "Spine", "Spine1", "Spine2", "Neck"]
+
+
+def trunk_and_tube():
+    """[11]'s trunk cylinder (BodyMesh) and the windowed garment tube ``(positions, faces)``."""
+    import smoke_garment_fit as fx
+    from app.core.glb_mesh import BodyMesh
+    P, F = fx.cylinder(0.10, 0.79, 1.45, nseg=360, nrings=331)
+    J = np.zeros((len(P), 4), np.int64)
+    W = np.zeros((len(P), 4))
+    idx = {n: i for i, n in enumerate(TRUNK_JOINTS)}
+    joints = {0.95: ("Hips", "Spine"), 1.10: ("Spine", "Spine1"), 1.25: ("Spine1", "Spine2"), 1.40: ("Spine2", "Neck")}
+    for i, (x, y, _z) in enumerate(P):
+        y = round(float(y), 4)
+        if y == 0.85:
+            pair = ("Hips", "LeftUpLeg" if x >= 0 else "RightUpLeg")
+        elif y in joints:
+            pair = joints[y]
+        else:
+            bone = "Hips" if y < 0.95 else "Spine" if y < 1.10 else "Spine1" if y < 1.25 else "Spine2" if y < 1.40 \
+                else "Neck"
+            J[i, 0], W[i, 0] = idx[bone], 1.0
+            continue
+        J[i, :2], W[i, :2] = [idx[pair[0]], idx[pair[1]]], [0.5, 0.5]
+    body = BodyMesh(positions=P, faces=np.asarray(F, np.int64), uvs=np.zeros((len(P), 2)), joints=J, weights=W,
+                    joint_names=["mixamorig:" + n for n in TRUNK_JOINTS])
+    nseg, ys = 360, np.linspace(0.80, 1.40, 301)
+    ang = np.arange(nseg) * 2 * np.pi / nseg
+    G = np.array([(0.115 * np.cos(a), y, 0.115 * np.sin(a)) for y in ys for a in ang])
+    faces = []
+    for r in range(len(ys) - 1):
+        for j in range(nseg):
+            a, b = r * nseg + j, r * nseg + (j + 1) % nseg
+            c, d = (r + 1) * nseg + (j + 1) % nseg, (r + 1) * nseg + j
+            faces += [(a, b, c), (a, c, d)]
+    faces = np.asarray(faces, np.int64)
+    centre = G[faces].mean(1)
+    window = (np.abs(np.arctan2(centre[:, 0], centre[:, 2])) < np.radians(15)) & (centre[:, 1] > 1.10) \
+        & (centre[:, 1] < 1.20)
+    return body, (G, faces[~window])
 
 
 def main() -> int:
@@ -549,6 +614,28 @@ def main() -> int:
         check("front 0.85 refused", (gate["ok"], gate["shares"]["front"], ["torso front" in r for r in gate["reasons"]]),
               (False, {"fit": 0.85, "source": 1.0}, [True]))
         check("front 0.95 ok", garment_source.torso_gate(fit_cover(0.95), source_cover)["ok"], True)
+
+        # --- [11] --------------------------------------------------------------------
+        print("[11] torso holes on synthetic geometry")
+        body, garment = trunk_and_tube()
+        lo_v, hi_v = garment_source.TORSO_V_RANGE
+        bands = int(round((hi_v - lo_v) / garment_source.TORSO_OPEN_V))
+        closed = [[False] * garment_source.TORSO_OPEN_SECTORS for _ in range(bands)]
+        holes = garment_source.torso_holes(garment[0], garment[1], body, closed)
+        print(f"  holes {holes}")
+        within("hole area", holes["largest_cm2"], 22.2, 27.2)
+        check("hole at the front, no edge", (abs(holes["patches"][0]["theta_deg"]) <= 1, holes["edge_cm2"]),
+              (True, 0.0))
+        gate = garment_source.torso_hole_gate(holes)
+        check("hole refused", (gate["ok"], gate["limit_cm2"], ["torso hole" in r for r in gate["reasons"]]),
+              (False, 15.0, [True]))
+        partly = [[(13 <= b <= 14 and 11 <= k <= 12) for k in range(garment_source.TORSO_OPEN_SECTORS)]
+                  for b in range(bands)]
+        holes = garment_source.torso_holes(garment[0], garment[1], body, partly)
+        print(f"  edge {holes}")
+        check("reaching an open cell = edge", (holes["largest_cm2"], garment_source.torso_hole_gate(holes)["ok"]),
+              (0.0, True))
+        within("edge area", holes["edge_cm2"], 11.2, 15.2)
 
     if FAILS:
         print(f"FAILED ({len(FAILS)}): " + ", ".join(FAILS))

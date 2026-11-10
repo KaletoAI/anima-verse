@@ -1103,13 +1103,21 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             record["frame"] = {**frame, "limbs": limbs}
         if (limb_source or {}).get("torso_cover"):
             # The trunk the base fit covers stays covered (``garment_source`` TORSO) — never a torn piece.
-            torso = garment_source.torso_gate(
-                garment_source.torso_cover(result.garment.positions, glb_mesh.body_arrays(body["rigged"])),
-                limb_source["torso_cover"])
+            body_r = glb_mesh.body_arrays(body["rigged"])
+            torso = garment_source.torso_gate(garment_source.torso_cover(result.garment.positions, body_r),
+                                              limb_source["torso_cover"])
             if not torso["ok"]:
                 raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(torso["reasons"]),
                                {"ok": False, "reasons": torso["reasons"], "torso": torso})
             record["frame"] = {**record["frame"], "torso": torso}
+            # ... and no single hole opens in it (``garment_source`` TORSO holes).
+            holes = garment_source.torso_holes(result.garment.positions, result.garment.indices,
+                                               body_r, limb_source.get("torso_open"))
+            hole_gate = garment_source.torso_hole_gate(holes)
+            if not hole_gate["ok"]:
+                raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(hole_gate["reasons"]),
+                               {"ok": False, "reasons": hole_gate["reasons"], "holes": holes})
+            record["frame"]["holes"] = holes
         record.update({
             "metrics": result.metrics, "gates": gates, "report": result.report,
             "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
@@ -1133,8 +1141,12 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
     asked for), ``error`` why nothing current is grafted. ``build`` (the
     assembly build, never serving) fits a missing / stale / outdated one
     first — serialised per body; a refusal or failure is recorded per body
-    and, like a persisted failure, leaves an older fit accepted on this body
-    served (R11) or nothing. Nothing is fitted on a body whose stored bytes
+    and, like a persisted failure, leaves an older fit of the CURRENT
+    ``garment_fit.FIT_VERSION`` accepted on these body bytes served (R11) or
+    nothing: a fit of an older FIT_VERSION (or made on other body bytes) is
+    never served once the fit that replaces it is refused — the piece is left
+    off that body with the reason (coordinator ruling 2026-11-10, like mesh
+    mode and footwear: a v5 blazer could be torn open). Nothing is fitted on a body whose stored bytes
     are no longer ``body_sha`` (the outfit model is stale; its rebuild copies
     the new body)."""
     from app.core import garment_fit, garment_store as gs
@@ -1174,7 +1186,8 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
                 state, base_fit_sha, failure = current()
     record = gs.read_record(fit_path.with_suffix(".json"))
     usable = (fit_path.is_file() and record.get("accepted") is True and record.get("body_id") == body_id
-              and record.get("body_sha256") == body_sha)
+              and record.get("body_sha256") == body_sha
+              and (failure is None or record.get("fit_version") == version))
     low = gs.garment_path(character_name, item_id, fsig, "low", body=body_id)
     pending = state != "accepted" and failure is None and on_body and not build
     error = "" if state == "accepted" else str((failure or {}).get("error") or "") or (

@@ -67,6 +67,10 @@ SDF_MARGIN_M = 0.05
 SDF_ZERO_OFFSET_VOX = 1.3
 # Outside the body, voxels up to this many voxels away carry the exact distance to the surface triangles.
 SDF_EXACT_BAND_VOX = 6.0
+# A cavity of the body solid that the hole fill leaves open (``body_sdf``): kept as inside when it is enclosed along
+# all six axis directions and at least 2 x this many voxels + 1 thick (10 at 3.4 mm: 7 cm — a trunk, not the
+# pocket between baked hair and the nape, 3 - 6 cm, nor an armpit or a gap between the legs).
+SDF_SEAL_THICK_VOX = 10
 # A vertex counts as moved by the push-out above this displacement (spike 1e-4 units x 1.70).
 MOVED_EPS_M = 0.00017
 # Loose components below this share of the garment area are dropped in the weld step (R8).
@@ -96,7 +100,9 @@ RIGGED_SMOOTH_UNTIL = 7
 #: legs onto the body's own limbs (``align_limbs``); a native base fit is unchanged.
 #: 6 (2026-11-10): clothing — a fit on an outfit body places its trunk from the base fit too (``map_torso``) and
 #: smooths the alignment's displacement over the mesh; v5 outfit-body fits could be torn open at the front.
-FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 6}
+#: 7 (2026-11-10): clothing — the body solid is sealed (``_seal_cavities``: a hollow outfit body let the piece sink
+#: into its cavity, the skin showed through) and a fit placed from the base fit is not gated on the image placement.
+FIT_VERSION: Dict[str, int] = {"hair": 2, "clothing": 7}
 
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {
@@ -237,6 +243,11 @@ CLOTHING_GATES = {
 SCALE_RETRY_STEPS: Tuple[float, ...] = (1.02, 1.04, 1.06, 1.08)
 #: The clothing gates whose refusal means "too small for the body".
 SCALE_RETRY_KEYS: Tuple[str, ...] = ("deep_push_share", "max_push_m")
+#: The clothing gates that judge the image-framing placement (the unrigged push-out). Not gated for a piece whose
+#: trunk is placed from its base fit (``fit_clothing`` with a torso source): Kira's blazer on the outfit body
+#: 3b3a0adaf672 2026-11-10 — framed 6 cm low, pushed out of the sealed body (``_seal_cavities``) by more than 3 cm
+#: at 0.19 of its vertices, a placement the torso transfer then replaced entirely.
+PLACEMENT_GATE_KEYS: Tuple[str, ...] = ("deep_push_share", "max_push_m")
 #: Stamped on a refused fit's failure record (``garment_store.record_failure``): the refusal was made WITH the scale
 #: retry. A too-small refusal recorded without it is retried once by the refit sweep (``garment_refit``).
 SCALE_RETRY_VERSION = 1
@@ -535,6 +546,12 @@ def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = Non
       much is added and a clearance means distance from the real surface. A median over the surface samples
       would be pulled inward by the inner wall of a double-walled body. ``zero_offset_vox=0`` keeps the raw
       level.
+    - A hollow body is sealed (``_seal_cavities``): an outfit body meshed from its dressed views can be a SHELL — an
+      outer and an inner wall, the inner one facing into a cavity — whose cavity is reached from outside through a
+      slit or an opening of 1 - 3 cm (Kira's outfit bodies 22354b972aef / 3b3a0adaf672 / 62aad0dac21c 2026-11-10:
+      the trunk axis read as OUTSIDE, 4 - 7 cm from the "surface"). The hole fill then keeps only the wall, and
+      a garment vertex placed under the skin is pushed AWAY from the inner wall, deeper into the body — the skin
+      shows through the piece wherever that happened.
     - Outside the body, within ``exact_band_vox`` voxels, the field is the EXACT distance to the surface (nearest
       of the triangles of the 8 nearest surface samples). The voxel EDT is up to 0.6 voxel short along diagonal
       directions, and the clearance is decided exactly in this band. Inside, the corrected EDT stays (it only
@@ -562,7 +579,7 @@ def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = Non
     surf = np.zeros(tuple(full_shape), bool)
     surf[idx[:, 0], idx[:, 1], idx[:, 2]] = True
     surf = ndimage.binary_dilation(surf, iterations=1)
-    inside_full = ndimage.binary_fill_holes(surf)
+    inside_full = _seal_cavities(surf, ndimage.binary_fill_holes(surf))
     del surf
     crop = tuple(slice(int(b), int(b + n)) for b, n in zip(before, shape))
     inside = np.ascontiguousarray(inside_full[crop])
@@ -576,6 +593,26 @@ def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = Non
     if exact_band_vox > 0:
         _exact_outside_band(field, lo, vox, P, F, pts, tri_of, exact_band_vox)
     return Sdf(field=field, lo=lo, vox=float(vox))
+
+
+def _seal_cavities(surf: np.ndarray, inside: np.ndarray, thick_vox: int = SDF_SEAL_THICK_VOX) -> np.ndarray:
+    """``inside`` plus the cavities the hole fill left open (``body_sdf``): voxels that are not inside but have a
+    surface voxel before AND after them along each of the three axes (enclosed by the body in all six directions —
+    an opening of a few centimetres only leaves the voxels in line with it), kept where they belong to a region at
+    least ``2 * thick_vox + 1`` voxels thick (eroded by ``thick_vox``, grown back within the candidates). Kira's
+    base bodies, the bodies whose fill holds and every unrigged body but one: nothing added."""
+    from scipy import ndimage
+    enclosed = ~inside
+    for axis in range(3):
+        before = np.cumsum(surf, axis=axis, dtype=np.int16)
+        total = np.take(before, [-1], axis=axis)
+        enclosed &= (before - surf) > 0
+        enclosed &= (total - before) > 0
+        del before
+    core = ndimage.binary_erosion(enclosed, iterations=thick_vox)
+    if not core.any():
+        return inside
+    return inside | ndimage.binary_dilation(core, iterations=thick_vox + 1, mask=enclosed)
 
 
 def _exact_outside_band(field: np.ndarray, lo: np.ndarray, vox: float, P: np.ndarray, F: np.ndarray,
@@ -2116,7 +2153,11 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         J = np.where(W > 0, remap[J], 0)
         names = [body_r.joint_names[i] for i in used]
         m = clothing_metrics(X, Fk, Qs * k, Qp * k, transfer_report)
-        ok, reasons = gate(m, CLOTHING_GATES)
+        torso_mapped = "torso" in ((transfer_report.get("limbs") or {}).get("chains") or {})
+        # A piece whose trunk is re-expressed from its base fit (``map_torso``, outfit bodies) no longer stands
+        # where the image framing put it: the push numbers of that placement are recorded, not gated.
+        ok, reasons = gate(m, {key: spec for key, spec in CLOTHING_GATES.items()
+                               if not (torso_mapped and key in PLACEMENT_GATE_KEYS)})
 
         garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material)
         crotch = crotch_height(body_r)

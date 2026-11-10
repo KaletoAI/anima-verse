@@ -122,6 +122,33 @@ refused one (0.216). The displacement smoothing (``garment_fit.LIMB_SMOOTH_PASSE
 skin showing through the sleeves of 3b3a / 62aad from 0.12 / 0.17 to 0.02 / 0.00 (body vertices outside the
 sleeve).
 
+A share cannot see ONE big hole. After the trunk transfer the skin still showed through at the side of the chest
+(3b3a, 62aad) and on the upper back (3b3a): three of the five outfit bodies are hollow SHELLS whose cavity reaches
+the outside through a slit or a 3 cm opening (``garment_fit.body_sdf`` / ``_seal_cavities``) — the body solid was
+only the wall, a piece vertex mapped under the skin was pushed AWAY from the inner wall, deeper into the body. The
+seal fixes that at the root; the hole gate (``torso_holes`` / ``torso_hole_gate``) is the backstop. The outer trunk
+skin (the outermost trunk vertices per direction) is SEEN where no garment surface lies on its outward normal
+(within ``TORSO_SEE_LATERAL_M``, up to ``TORSO_SEE_DEPTH_M``); with the piece found just UNDER the skin instead,
+outside the body solid, the skin there is an outer layer over the piece — baked hair hanging over the blazer's
+back, recorded (``under_layer_cm2``) and never a hole (the hair over a piece is a separate, pending question);
+inside the solid the body pokes through — a hole. Seen patches that reach into a cell the base fit itself leaves
+open (``torso_open``: neckline, below the hem) are EDGES (a deeper neckline, a higher hem — the share's business);
+every other patch is a HOLE, and the largest may not exceed ``TORSO_HOLE_CM2``. Largest hole, cm2:
+    base fits (own openings)       base20d5701a 8.6, the refits 5c5f / 233f 0
+    the defects of sheet v4        3b3a 90 (upper back) / 42 / 35 (side of the chest), 62aad 16.9 (side); the torn
+                                   image-framing fits 213 (22354; the others tear into the neckline: edges of
+                                   1900 - 3100, refused by the share)
+    after the seal, all five       072149 8.0, 22354 12.5, 2b67 6.0, 3b3a 4.8, 62aad 14.2 (a patch at the small of
+                                   the back)
+``TORSO_HOLE_CM2`` 15 lies between the largest accepted hole (14.2) and the smallest defect (16.9) — a narrow
+margin, measured on one piece; the edges of the accepted fits reach 73 cm2 (22354's hem), the skin under baked hair
+80 - 204 cm2.
+
+The image placement of such a fit is discarded (every vertex is re-expressed from the base fit), so its push
+numbers are recorded, not gated (``garment_fit.PLACEMENT_GATE_KEYS``): after the seal the outfit bodies' unrigged
+push-out moved 0.12 - 0.19 of the blazer more than 3 cm. A fit of an older FIT_VERSION is never served on an outfit
+body once the fit replacing it is refused (``garments.body_fit``): the piece is left off with the reason.
+
 Subtract hair: the cut labels the hair by the haired view against ITS base view (``garment_subtract._views``
 reads the group's base copy) and places the haired mesh through ``place_mask`` — the current base front
 registered into the haired views' frame; ``garment_cut.cut_hair`` refines with its ICP. HairDeck: no rule needed
@@ -162,6 +189,24 @@ TORSO_SECTORS = 12
 TORSO_SOURCE_COVERED = 0.5
 #: The covered share of that area may fall at most this below the source's (front / side / back each).
 TORSO_COVER_DELTA = 0.10
+#: Torso holes (module docstring TORSO): the outer trunk surface is seen through the piece where no garment surface
+#: lies within ``TORSO_SEE_LATERAL_M`` of the ray from the skin outward (radially from the trunk axis) between
+#: ``TORSO_SEE_FROM_M`` and ``TORSO_SEE_DEPTH_M``; outer = within ``TORSO_OUTER_M`` of the outermost trunk vertex of
+#: its direction (0.01 height x 2.5 degrees).
+TORSO_SEE_LATERAL_M = 0.012
+TORSO_SEE_FROM_M = 0.002
+TORSO_SEE_DEPTH_M = 0.08
+#: Seen skin with the piece within this under it: the piece lies under an outer layer of the body (outside the body
+#: solid: baked hair over it — not a hole of the piece) or the body pokes through it (inside the solid: a hole).
+TORSO_UNDER_DEPTH_M = 0.05
+TORSO_OUTER_M = 0.008
+#: The cells of the base fit's own openings (neckline, below the hem): this height step x this many angles; a cell
+#: whose outer skin the base fit leaves seen at more than ``TORSO_OPEN_SHARE`` is open, a hole there is no defect.
+TORSO_OPEN_V = 0.05
+TORSO_OPEN_SECTORS = 24
+TORSO_OPEN_SHARE = 0.5
+#: The largest connected patch of skin seen through the piece where the base fit covers it may not exceed this.
+TORSO_HOLE_CM2 = 15.0
 #: The image "step" name of the base view copies (``base_copy``).
 BASE_STEP = "base"
 #: Marker key of a copied record (``materialize``).
@@ -626,8 +671,9 @@ def limb_source_from_fit(blob: bytes, *, skirt: bool = False, torso: bool = Fals
     vertices, its skin weights on the limb (and with ``torso`` the trunk) bones, and the frames of the limb chains
     the piece COVERS (``limb_numbers`` not None — a blazer's hem carries thigh weights but is no trouser leg; legs
     never for a skirt) plus, with ``torso`` (a fit on an outfit body), the trunk (``garment_fit.torso_frame``).
-    ``numbers`` = the covered limbs' numbers, ``torso_cover`` (with ``torso``) the trunk coverage (``torso_cover``),
-    both the gate's source. None without anything to align."""
+    ``numbers`` = the covered limbs' numbers, ``torso_cover`` / ``torso_open`` (with ``torso``) the trunk coverage
+    (``torso_cover``) and the base fit's openings (``torso_open``), the gates' sources. None without anything to
+    align."""
     from app.core import garment_fit, glb_mesh
     from app.core.rig_contract import norm_bone_name
     garment = glb_mesh.garment_arrays(blob)
@@ -637,13 +683,14 @@ def limb_source_from_fit(blob: bytes, *, skirt: bool = False, torso: bool = Fals
               if covered.get(name) and not (skirt and frame["kind"] == "leg")}
     keep = {side + bone for side in ("left", "right") for kind in ("arm", "leg") for bone in _limb_bones(kind)}
     kinds = ["arm"] if skirt else ["arm", "leg"]
-    cover = None
+    cover = opening = None
     if torso:
         trunk = garment_fit.torso_frame(body)
         if trunk is not None:
             frames["torso"] = trunk
             kinds.append("torso")
             cover = torso_cover(garment.positions, body)
+            opening = torso_open(garment.positions, garment.indices, body)
     names = [n for n in garment.joint_names
              if norm_bone_name(n) in keep or ("torso" in frames and garment_fit.torso_bone(norm_bone_name(n)))]
     if not frames or not names:
@@ -657,7 +704,7 @@ def limb_source_from_fit(blob: bytes, *, skirt: bool = False, torso: bool = Fals
                 rows = J[:, c] == j
                 W0[rows, col[name]] += Wt[rows, c]
     return {"x0": np.asarray(garment.positions, np.float32), "w0": W0, "names0": names, "frames": frames,
-            "kinds": kinds, "numbers": covered, "torso_cover": cover}
+            "kinds": kinds, "numbers": covered, "torso_cover": cover, "torso_open": opening}
 
 
 def write_limb_source(character_name: str, item_id: str, source: str, target: str) -> bool:
@@ -822,3 +869,171 @@ def torso_gate(fit: Optional[Dict[str, Any]], source: Optional[Dict[str, Any]]) 
         reasons.append("torso: not measurable on this body")
     return {"ok": not reasons, "reasons": reasons, "shares": shares,
             "limits": {"cover_m": TORSO_COVER_M, "cover_delta": TORSO_COVER_DELTA}}
+
+
+# --- Torso holes (outfit bodies) --------------------------------------------------------------------------------
+
+def _welded(body) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(positions, faces, representative original vertex)`` of the body welded by position (a GLB splits its
+    vertices at the UV seams; a patch must not end there)."""
+    P = np.asarray(body.positions, np.float64)
+    _, first, inverse = np.unique(np.round(P / 1e-5).astype(np.int64), axis=0, return_index=True,
+                                  return_inverse=True)
+    inverse = np.asarray(inverse).ravel()
+    F = inverse[np.asarray(body.faces, np.int64).reshape(-1, 3)]
+    F = F[(F[:, 0] != F[:, 1]) & (F[:, 1] != F[:, 2]) & (F[:, 0] != F[:, 2])]
+    return P[first], F, first
+
+
+def _trunk_seen(positions, faces, body) -> Optional[Dict[str, Any]]:
+    """The outer trunk skin of the rigged ``body`` (welded) and which of it is seen through the garment
+    (``positions`` / ``faces``; block TORSO holes above): ``{P, F, area (per vertex, m2), region, seen (a hole:
+    no piece over it, or the body through the piece), layered (the piece under an outer layer of the body), v,
+    theta}``; None without a trunk."""
+    from scipy.spatial import cKDTree
+    from app.core import garment_fit
+    from app.core.rig_contract import norm_bone_name
+    frame = garment_fit.torso_frame(body)
+    if frame is None:
+        return None
+    P, F, first = _welded(body)
+    names = [norm_bone_name(n) for n in body.joint_names]
+    dominant = garment_fit.dense_weights(body).argmax(1)[first]
+    trunk = np.isin(dominant, [i for i, n in enumerate(names) if garment_fit.trunk_bone(n)])
+    v, theta, rho = garment_fit._torso_coords(P, frame)
+    lo, hi = TORSO_V_RANGE
+    region = trunk & (v >= lo) & (v < hi)
+    cell = np.floor(v / 0.01).astype(np.int64) * 1000 + np.floor((theta + np.pi) / np.radians(2.5)).astype(np.int64)
+    rows = np.nonzero(region)[0]
+    if len(rows):
+        order = np.argsort(cell[rows])
+        keys = cell[rows][order]
+        starts = np.unique(keys, return_index=True)[1]
+        top = np.repeat(np.maximum.reduceat(rho[rows][order], starts), np.diff(np.append(starts, len(keys))))
+        outer = np.empty(len(rows), bool)
+        outer[order] = rho[rows][order] >= top - TORSO_OUTER_M
+        region[rows[~outer]] = False
+    rows = np.nonzero(region)[0]
+    # outward: the skin's normal, turned to face away from the trunk axis (a generated mesh may wind either way)
+    normal = garment_fit.vertex_normals(P, F)[rows]
+    radial = np.zeros((len(rows), 3))
+    radial[:, 0], radial[:, 2] = np.sin(theta[rows]), np.cos(theta[rows])
+    out = np.where(((normal * radial).sum(1) < 0)[:, None], -normal, normal)
+    G = np.asarray(positions, np.float64)
+    Fg = np.asarray(faces, np.int64).reshape(-1, 3)
+    samples = garment_fit._surface_samples(G, Fg)[0] if len(Fg) else G
+    covered = np.zeros(len(rows), bool)
+    under = np.full(len(rows), -1, np.int64)   # the garment sample found under the skin's outer layer
+    if len(samples) and len(rows):
+        tree = cKDTree(samples)
+        for step in np.arange(TORSO_SEE_FROM_M, TORSO_SEE_DEPTH_M, 0.008):
+            todo = np.nonzero(~covered)[0]
+            d = tree.query(P[rows[todo]] + step * out[todo], distance_upper_bound=TORSO_SEE_LATERAL_M)[0]
+            covered[todo[d <= TORSO_SEE_LATERAL_M]] = True
+        for step in np.arange(-TORSO_SEE_FROM_M, -TORSO_UNDER_DEPTH_M, -0.006):
+            todo = np.nonzero(~covered & (under < 0))[0]
+            d, j = tree.query(P[rows[todo]] + step * out[todo], distance_upper_bound=TORSO_SEE_LATERAL_M)
+            under[todo[d <= TORSO_SEE_LATERAL_M]] = j[d <= TORSO_SEE_LATERAL_M]
+    layered = np.zeros(len(rows), bool)
+    found = np.nonzero(~covered & (under >= 0))[0]
+    if len(found):
+        # the piece lies under an outer layer of the body (baked hair over it) when it is outside the body solid
+        # there; inside it, the body pokes through the piece — a hole
+        Q = samples[under[found]]
+        sdf = garment_fit.body_sdf(P, F, vox=garment_fit.VOX_M, bounds=(Q.min(0) - 0.02, Q.max(0) + 0.02))
+        layered[found[sdf.sample(Q) > 0]] = True
+    covered |= layered
+    hidden = np.zeros(len(P), bool)
+    hidden[rows[layered]] = True
+    seen = np.zeros(len(P), bool)
+    seen[rows[~covered]] = True
+    tri = P[F]
+    face_area = np.linalg.norm(np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]), axis=1) / 2
+    area = np.zeros(len(P))
+    for c in range(3):
+        np.add.at(area, F[:, c], face_area / 3)
+    return {"P": P, "F": F, "area": area, "region": region, "seen": seen, "layered": hidden, "v": v,
+            "theta": theta}
+
+
+def _open_cell(v: np.ndarray, theta: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    lo, hi = TORSO_V_RANGE
+    bands = int(round((hi - lo) / TORSO_OPEN_V))
+    band = np.clip(np.floor((v - lo) / TORSO_OPEN_V).astype(np.int64), 0, bands - 1)
+    sector = np.floor((theta + np.pi) / (2 * np.pi) * TORSO_OPEN_SECTORS).astype(np.int64) % TORSO_OPEN_SECTORS
+    return band, sector
+
+
+def torso_open(positions, faces, body) -> Optional[List[List[bool]]]:
+    """The base fit's own openings (block TORSO holes): per ``TORSO_OPEN_V`` band x ``TORSO_OPEN_SECTORS`` angle
+    whether its outer trunk skin is seen at more than ``TORSO_OPEN_SHARE``. None without a trunk."""
+    seen = _trunk_seen(positions, faces, body)
+    if seen is None:
+        return None
+    lo, hi = TORSO_V_RANGE
+    bands = int(round((hi - lo) / TORSO_OPEN_V))
+    rows = np.nonzero(seen["region"])[0]
+    band, sector = _open_cell(seen["v"][rows], seen["theta"][rows])
+    total = np.zeros((bands, TORSO_OPEN_SECTORS))
+    hidden = np.zeros((bands, TORSO_OPEN_SECTORS))
+    np.add.at(total, (band, sector), seen["area"][rows])
+    np.add.at(hidden, (band, sector), seen["area"][rows] * seen["seen"][rows])
+    return (hidden > TORSO_OPEN_SHARE * np.maximum(total, 1e-12)).tolist()
+
+
+def torso_holes(positions, faces, body, source_open: Optional[List[List[bool]]]) -> Optional[Dict[str, Any]]:
+    """The connected patches of outer trunk skin seen through the garment (``_trunk_seen``), split by the base
+    fit's openings (``source_open``, ``torso_open`` of the base fit): a patch that reaches into an open cell is an
+    EDGE (the neckline or the hem lies elsewhere than on the base fit — the coverage share judges that), any other
+    one a HOLE in the piece. ``{largest_cm2 (the largest hole), patches [{cm2, v, theta_deg}] (holes, largest first,
+    at most 5), edge_cm2 (the largest edge, outside the open cells), under_layer_cm2 (skin over the piece: baked
+    hair)}``, areas outside the open cells. None without a trunk or a source."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    if not source_open:
+        return None
+    seen = _trunk_seen(positions, faces, body)
+    if seen is None:
+        return None
+    mask = seen["seen"]
+    rows = np.nonzero(mask)[0]
+    band, sector = _open_cell(seen["v"][rows], seen["theta"][rows])
+    is_open = np.zeros(len(mask), bool)
+    is_open[rows[np.asarray(source_open, bool)[band, sector]]] = True
+    F = seen["F"]
+    edges = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    edges = edges[mask[edges[:, 0]] & mask[edges[:, 1]]]
+    n = len(seen["P"])
+    _, label = connected_components(coo_matrix((np.ones(len(edges)), (edges[:, 0], edges[:, 1])), shape=(n, n)),
+                                    directed=False)
+    holes, edge = [], 0.0
+    if mask.any():
+        ids = label[mask]
+        area = np.bincount(ids, weights=seen["area"][mask] * ~is_open[mask])
+        touches = np.bincount(ids, weights=is_open[mask].astype(float)) > 0
+        for c in np.argsort(-area):
+            if area[c] <= 0:
+                break
+            if touches[c]:
+                edge = max(edge, float(area[c]))
+                continue
+            if len(holes) < 5:
+                m = mask & (label == c)
+                th = seen["theta"][m]
+                holes.append({"cm2": round(float(area[c]) * 1e4, 1), "v": round(float(seen["v"][m].mean()), 2),
+                              "theta_deg": round(float(np.degrees(np.arctan2(np.sin(th).mean(),
+                                                                             np.cos(th).mean()))))})
+    return {"largest_cm2": holes[0]["cm2"] if holes else 0.0, "patches": holes,
+            "edge_cm2": round(edge * 1e4, 1),
+            "under_layer_cm2": round(float(seen["area"][seen["layered"]].sum()) * 1e4, 1)}
+
+
+def torso_hole_gate(holes: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """``{ok, reasons, largest_cm2, limit_cm2}``: refused when the largest patch exceeds ``TORSO_HOLE_CM2``."""
+    largest = float((holes or {}).get("largest_cm2") or 0.0)
+    reasons = []
+    if holes is not None and largest > TORSO_HOLE_CM2:
+        where = (holes.get("patches") or [{}])[0]
+        reasons.append(f"torso hole: {largest:.0f} cm2 of skin seen through the piece (height {where.get('v')}, "
+                       f"angle {where.get('theta_deg')} deg; limit {TORSO_HOLE_CM2:.0f} cm2)")
+    return {"ok": not reasons, "reasons": reasons, "largest_cm2": largest, "limit_cm2": TORSO_HOLE_CM2}

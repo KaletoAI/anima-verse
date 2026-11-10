@@ -78,6 +78,20 @@ No world, no server, no external assets: every mesh below is built in this file.
     every vertex ends within 0.005 m of 1.7 * cap + (0, 0.05, 0), k = 1.700 +- 0.002, the gate passes, all weights
     are Head (the cap is above the chin 1.7 * 0.8 + 0.05 = 1.41). Masks of different sizes (no shared framing) are
     refused.
+
+(g) A hollow body is sealed (``body_sdf`` / ``_seal_cavities``, 2026-11-10). A closed cylinder r 0.10 (y 0.80..1.40)
+    and inside it a closed cylinder r 0.09 (y 0.81..1.39) — a shell 1 cm thick around a cavity — with both walls
+    opened by a slit: the faces whose centre has z > 0 and |x| < 0.0105 between y 1.00 and 1.20 (64 segments of
+    9.8 mm / 8.8 mm: both triangles of the two segments either side of angle 90 deg — centres at |x| 3.3 and 6.5 mm
+    outside, the next segment's from 11.7 mm — go, a slit ~2 cm wide). vox 0.004: the dilated surface (one
+    voxel) leaves ~1.2 cm of it open, so the hole fill keeps only the wall. The probe (0.05, 1.30, 0) lies in the
+    cavity and off every axis line through the slit (the slit is at x ~ 0, y 1.00..1.20).
+    - Without the seal (``_seal_cavities`` replaced by the identity): the probe reads OUTSIDE, sdf > 0 (it lies
+      0.09 - 0.05 = 0.04 from the inner wall).
+    - With it: the cavity (18 cm across, > 2 x 10 + 1 voxels = 8.4 cm) is enclosed along all six axis directions ->
+      inside; the nearest outside is the outer surface 0.10 - 0.05 = 0.05 away (the slit's column at x ~ 0 lies
+      sqrt(0.05^2 + 0.1^2) = 0.11 away) -> sdf < -0.03.
+    - The closed double-walled head of (b) gains nothing: the field with and without the seal is identical.
 """
 import io
 import json
@@ -536,6 +550,37 @@ def test_fit_hair():
           f"({len(hf)} -> {len(g.indices)})")
 
 
+def test_seal():
+    from app.core import garment_fit as gf
+    outer = cylinder(0.10, 0.80, 1.40, nseg=64, nrings=61)
+    inner = cylinder(0.09, 0.81, 1.39, nseg=64, nrings=59)
+    P, F = merge(outer, inner)
+    centre = P[F].mean(1)
+    slit = (centre[:, 2] > 0) & (np.abs(centre[:, 0]) < 0.0105) & (centre[:, 1] > 1.0) & (centre[:, 1] < 1.2)
+    F = F[~slit]
+    check(int(slit.sum()) > 0, f"seal: the slit removes faces ({int(slit.sum())})")
+    probe = np.array([[0.05, 1.30, 0.0]])
+    bounds = (np.array([-0.15, 0.75, -0.15]), np.array([0.15, 1.45, 0.15]))
+    real = gf._seal_cavities
+    try:
+        gf._seal_cavities = lambda surf, inside, **_kw: inside
+        unsealed = float(gf.body_sdf(P, F, vox=0.004, bounds=bounds).sample(probe)[0])
+    finally:
+        gf._seal_cavities = real
+    sealed = float(gf.body_sdf(P, F, vox=0.004, bounds=bounds).sample(probe)[0])
+    check(unsealed > 0, f"seal: without it the cavity reads outside (sdf {unsealed:+.4f} > 0)")
+    check(sealed < -0.03, f"seal: with it the cavity is inside (sdf {sealed:+.4f} < -0.03)")
+    Pb, Fb = head_body()
+    c = np.array([0, 0.9, 0])
+    with_seal = gf.body_sdf(Pb, Fb, vox=0.002, bounds=(c - 0.15, c + 0.15)).field
+    try:
+        gf._seal_cavities = lambda surf, inside, **_kw: inside
+        without = gf.body_sdf(Pb, Fb, vox=0.002, bounds=(c - 0.15, c + 0.15)).field
+    finally:
+        gf._seal_cavities = real
+    check(np.array_equal(with_seal, without), "seal: the closed double-walled head is unchanged")
+
+
 def main():
     test_weld()
     test_framing()
@@ -544,6 +589,7 @@ def main():
     test_weights()
     test_metrics()
     test_fit_hair()
+    test_seal()
     if FAILS:
         print(f"\n{len(FAILS)} FAILED")
         sys.exit(1)
