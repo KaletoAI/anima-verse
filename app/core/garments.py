@@ -2083,6 +2083,14 @@ def hairdeck_panel(character_name: str, item_id: str, *,
             "input_source": "beard_free" if sent is not None and sent != source else "profile"}
 
 
+def _mm(value: Any) -> Optional[float]:
+    """A stored thickness in mm, rounded to 0.01 (None when absent)."""
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     """UI info of one garment (the Hair tab): fsig, the method and its
     source, description, every step's files and gate numbers (the steps of
@@ -2095,7 +2103,10 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     ``hairdeck_changed`` (another profile picture or HairDeck setting than
     the served fit's job), ``colour_changed`` (another colour override) and
     ``placement_changed`` (another manual forward/tilt, or a fit from before
-    the placement correction).
+    the placement correction). Subtract hair adds ``shape_changed`` (the
+    served fit's cut has another shape than the current cut / shell) and
+    ``shell_changed`` (a shell of another thickness) — the next run re-cuts
+    on the CPU, no mesh job.
     ``failed`` also reports the persisted failure of the current fsig after
     a restart (automatic triggers skip it until an explicit run).
     ``queue_position`` / ``queue_running`` (``queue_state``): the 1-based
@@ -2165,6 +2176,12 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                     stale.append("colour_changed")
                 if used.get("placement") != garment_hair.hair_placement(profile):
                     stale.append("placement_changed")
+            if method == gs.SUBTRACT and gs.fit_method(record) == gs.SUBTRACT:
+                shape = garment_hair.subtract_shape(character_name, profile=profile)
+                if (used.get("shape") or record.get("shape")) != shape:
+                    stale.append("shape_changed")
+                elif shape == "shell" and _mm(used.get("shell_mm")) != _mm(garment_hair.shell_mm(profile)):
+                    stale.append("shell_changed")
     preview = preview_path(character_name, item_id)
     preview_url = None
     if preview is not None:
@@ -2188,14 +2205,15 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         if record is not None:
             failed = {"step": record.get("step"), "error": record.get("error"), "gates": None,
                       "failed_at": record.get("failed_at")}
-    return {"item_id": item_id, "kind": kind, "fsig": fsig, "method": method, "method_source": method_source,
-            "hsig": hsig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
-            "steps": steps, "stale_reasons": stale,
-            "running_step": status["running_step"], "started_at": status["started_at"],
-            "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
-            "failed": failed, "preview_url": preview_url, "served_fsig": served_fsig,
-            "body": body, "body_id": body["body_id"] if body else None}
-
+    # finite_json: a NaN in an in-memory failure's gates must not fail the whole tab's JSON encoding
+    return gs.finite_json({
+        "item_id": item_id, "kind": kind, "fsig": fsig, "method": method, "method_source": method_source,
+        "hsig": hsig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
+        "steps": steps, "stale_reasons": stale,
+        "running_step": status["running_step"], "started_at": status["started_at"],
+        "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
+        "failed": failed, "preview_url": preview_url, "served_fsig": served_fsig,
+        "body": body, "body_id": body["body_id"] if body else None})
 
 def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """``{item_id, status}`` of the worn hair item for ``base_body.base_info``

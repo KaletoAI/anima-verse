@@ -48,6 +48,16 @@ EXPECTED, BY HAND
     floater component (a separate sphere) touching no label stays out; an island above HOLE_FILL_MAX_M2 stays.
 [g] majority: a one-vertex tooth on the cap edge (a row-21 vertex) goes, the cap stays.
 [h] shapes: thickness outside 2..15 mm or an unknown shape is a ValueError.
+[e'] shell rim: ring 0 re-seated SHELL_INNER_M over the scalp -> report shell_rim rim p50 = max = 1.0 mm.
+[i] recolour_texture on a 20 x 20 hair texture (90,60,30): a 2 x 3 skin patch (200,160,140) with one texel outside
+    the cover, a 1 x 4 white run (240,240,240), a 2 x 2 lighter hair patch (100,68,36; Delta E ~4 < OFF_MIN_DE 12)
+    -> 9 texels recoloured, painted with the hair colour; all 9 count as skin-like (the white, L* 95, is nearer to
+    the skin, L* 69 / Delta E ~33, than to the dark hair, L* 28 / Delta E ~71); the uncovered skin texel and the
+    lighter hair stay. Without a skin colour only the 4 white texels go (the skin, C* ~20 > 15, is no white).
+[j] outer wall: a double-walled sphere (outer R 0.100 outward, inner R 0.095 wound inward) -> outer_faces keeps
+    none of the inner wall's faces and the outer wall's (its pole rows' degenerate faces may drop, at most
+    2 x 120); ExactNearSdf: a point at R 0.093 (2 mm inside the INNER wall) reads 0.093 - 0.100 = -7.0 mm (not
+    +2 mm), a point at R 0.101 reads +1.0 mm (+-0.2: the chordal grid).
 """
 import io
 import math
@@ -279,6 +289,47 @@ def test_shell():
         check("texture", (mime, im.size), ("image/png", (512, 512)))
     check("closed", (res.report["closed"]["open_edges"], res.report["closed"]["components"]), (0, 1))
     check("fit params", (res.clearance_m, res.spread_m), (0.001, 0.0))
+    rim = res.report.get("shell_rim") or {}
+    check("rim seated 1.0 mm on the scalp", (rim.get("rim_p50_mm"), rim.get("rim_max_mm")), (1.0, 1.0))
+
+
+def test_colour_mend():
+    print("[i] colour mend")
+    from app.core import garment_cut as gc
+    tex = np.tile(np.array(HAIR, float), (20, 20, 1))
+    tex[2:4, 2:5] = SKIN
+    tex[10, 5:9] = (240, 240, 240)
+    tex[15:17, 15:17] = (100, 68, 36)
+    cover = np.ones((20, 20), bool)
+    cover[2, 2] = False
+    hair_lab, skin_lab = gc.lab(np.array(HAIR, float)), gc.lab(np.array(SKIN, float))
+    out, rep = gc.recolour_texture(tex, cover, hair_lab, skin_lab)
+    check("counts", (rep["recoloured_texels"], rep["skin_texels"], rep["white_texels"]), (9, 9, 0))
+    _out, rep0 = gc.recolour_texture(tex, cover, hair_lab, None)
+    check("no skin colour: the white only", (rep0["recoloured_texels"], rep0["skin_texels"], rep0["white_texels"]),
+          (4, 0, 4))
+    check("skin + white painted with hair", (out[2:4, 2:5][cover[2:4, 2:5]] == HAIR).all()
+          and (out[10, 5:9] == HAIR).all(), True)
+    check("outside the cover untouched", tuple(out[2, 2]), tuple(float(c) for c in SKIN))
+    check("lighter hair kept", tuple(out[15, 15]), (100.0, 68.0, 36.0))
+
+
+def test_outer_wall():
+    print("[j] outer wall")
+    from app.core import garment_fit as gf
+    oP, oF, _r, _n = head_grid(lambda i: 0.100, centre=np.zeros(3))
+    iP, iF, _r, _n = head_grid(lambda i: 0.095, centre=np.zeros(3))
+    P = np.concatenate([oP, iP])
+    F = np.concatenate([oF, iF[:, ::-1] + len(oP)])      # the inner wall faces inward
+    sdf = gf.body_sdf(P, F, vox=0.002, bounds=(np.full(3, -0.15), np.full(3, 0.15)))
+    outer = gf.outer_faces(P, F, sdf)
+    check("no inner-wall face", int(outer[len(oF):].sum()), 0)
+    check("every non-degenerate outer face", int(outer[:len(oF)].sum()) >= len(oF) - 2 * 120, True)
+    ex = gf.ExactNearSdf(sdf, P, F, 0.03)
+    X = np.array([[0.0, 0.093, 0.0], [0.0, 0.0, 0.101]])
+    near("2 mm inside the inner wall reads 7 mm inside the skin (mm)", round(float(ex.sample(X)[0]) * 1000, 2),
+         -7.0, 0.2)
+    near("1 mm outside the skin (mm)", round(float(ex.sample(X)[1]) * 1000, 2), 1.0, 0.2)
 
 
 def test_fill_and_majority():
@@ -334,6 +385,8 @@ def main() -> int:
         test_register()
         test_cut()
         test_shell()
+        test_colour_mend()
+        test_outer_wall()
         test_fill_and_majority()
         test_args()
     print(f"\n{'FAILED: ' + ', '.join(FAILS) if FAILS else 'all checks passed'}")

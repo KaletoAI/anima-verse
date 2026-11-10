@@ -429,6 +429,93 @@ def point_triangle_closest(X: np.ndarray, A: np.ndarray, B: np.ndarray, C: np.nd
     return closest
 
 
+class BodySurface:
+    """B's surface for exact snapping: ``closest(X)`` -> ``(closest point, outward unit normal there)``, the
+    closest point over the triangles of the ``k`` nearest dense samples (Ericson), the normal B's vertex normals
+    interpolated at it. The voxel SDF moves a point onto its zero level only to within a fraction of a voxel and
+    its gradient turns at a polar fan — the 5 mm hair shell of ``scripts/smoke_garment_cut.py`` came out 6.4 mm
+    at the crown through it (``garment_cut`` snaps with this)."""
+
+    def __init__(self, P: np.ndarray, F: np.ndarray, k: int = 8):
+        from scipy.spatial import cKDTree
+        self.P, self.F, self.k = np.asarray(P, np.float64), np.asarray(F, np.int64), k
+        pts, self.tri_of = _surface_samples(self.P, self.F)
+        self.tree = cKDTree(pts)
+        self.vn = vertex_normals(self.P, self.F)
+
+    def closest(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        X = np.asarray(X, np.float64)
+        _d, j = self.tree.query(X, k=min(self.k, self.tree.n))
+        tris = self.F[self.tri_of[j.reshape(len(X), -1)]]                    # (n, k, 3)
+        A, B, C = (self.P[tris[..., i]] for i in range(3))
+        cand = point_triangle_closest(X[:, None, :], A, B, C)
+        best = np.linalg.norm(cand - X[:, None, :], axis=-1).argmin(1)
+        rows = np.arange(len(X))
+        Y, tri = cand[rows, best], tris[rows, best]
+        a, b, c = A[rows, best], B[rows, best], C[rows, best]
+        # barycentric coordinates of Y in its triangle -> interpolated vertex normal
+        v0, v1, v2 = b - a, c - a, Y - a
+        d00, d01, d11 = (v0 * v0).sum(1), (v0 * v1).sum(1), (v1 * v1).sum(1)
+        d20, d21 = (v2 * v0).sum(1), (v2 * v1).sum(1)
+        den = np.maximum(d00 * d11 - d01 * d01, 1e-30)
+        wv, ww = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
+        N = (1 - wv - ww)[:, None] * self.vn[tri[:, 0]] + wv[:, None] * self.vn[tri[:, 1]] \
+            + ww[:, None] * self.vn[tri[:, 2]]
+        return Y, _unit(N)
+
+
+def outer_faces(P: np.ndarray, F: np.ndarray, sdf: Sdf) -> np.ndarray:
+    """The faces of the body's OUTER wall: those whose normal agrees with the gradient of the voxel field
+    ``sdf`` at their centre (faces outside its crop count as outer). A double-walled body's inner wall faces
+    inward, a few millimetres below the skin: a hair vertex that lies inside the skin is nearer to it than to the
+    skin (Kai's temple 2026-11-10: a shell snapped onto it sat 8.4 mm under the skin and was pushed out 11 mm)."""
+    P = np.asarray(P, np.float64)
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    fn = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
+    centre = P[F].mean(1)
+    hi = sdf.lo + (np.array(sdf.field.shape) - 1) * sdf.vox
+    crop = ((centre >= sdf.lo) & (centre <= hi)).all(1)
+    outer = np.ones(len(F), bool)
+    if crop.any():
+        outer[crop] = (fn[crop] * sdf.grad(centre[crop])).sum(1) > 0
+    return outer
+
+
+class ExactNearSdf:
+    """A voxel ``Sdf`` whose values below ``band`` (the units of the field) are replaced by the exact signed
+    distance to the body's outer wall (``outer_faces``; ``BodySurface.closest``: the distance, signed by the
+    interpolated normal) and whose gradient there is that normal. The voxel field is off by up to 1.5 mm near
+    the skin (p95 over Kira's cut, 0.6 mm over Kai's shell) — as much as the placed hair fit's whole clearance
+    (a shell's inner sheet lies 1 mm over the scalp). Used by the placed hair fit (``fit_hair(placed=True)``)
+    only."""
+
+    def __init__(self, sdf: Sdf, P: np.ndarray, F: np.ndarray, band: float):
+        F = np.asarray(F, np.int64).reshape(-1, 3)
+        self.sdf, self.band = sdf, float(band)
+        self.surface = BodySurface(P, F[outer_faces(P, F, sdf)])
+
+    def _exact(self, X: np.ndarray):
+        X = np.asarray(X, np.float64)
+        v = np.array(self.sdf.sample(X), np.float64)
+        near = np.nonzero(v < self.band)[0]
+        N = None
+        if len(near):
+            Y, N = self.surface.closest(X[near])
+            off = X[near] - Y
+            v[near] = np.linalg.norm(off, axis=1) * np.where((off * N).sum(1) < 0, -1.0, 1.0)
+        return v, near, N
+
+    def sample(self, X) -> np.ndarray:
+        return self._exact(X)[0]
+
+    def grad(self, X) -> np.ndarray:
+        g = np.array(self.sdf.grad(X), np.float64)
+        _v, near, N = self._exact(X)
+        if len(near):
+            g[near] = N
+        return g
+
+
 def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = None,
              exact_band_vox: float = SDF_EXACT_BAND_VOX) -> Sdf:
     """Signed distance field of the body solid on a grid cropped to ``bounds = (lo, hi)``.
@@ -620,7 +707,8 @@ def region_similarity(body_unrigged: BodyMesh, body_rigged: BodyMesh, corr: np.n
 
 def transfer(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: int = KABSCH_K,
              res_max_m: float = KABSCH_RES_M, clear_m: float = CLEAR_M, vox_m: float = VOX_M,
-             margin_m: float = SDF_MARGIN_M, split_y: Optional[float] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+             margin_m: float = SDF_MARGIN_M, split_y: Optional[float] = None,
+             exact_near_m: Optional[float] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Carry welded garment positions ``Q`` (unrigged units) into the rigged bind space (metres) -> ``(X, report)``.
 
     1. Each garment vertex takes the nearest unrigged body vertex that is not arm/hand/shoulder (weight < 0.2).
@@ -634,7 +722,8 @@ def transfer(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: int
        large motions stay, per-vertex jumps go. The global similarity is fit over the body vertices of the good
        neighbourhoods — the region the garment rides on. (The spike fit a fixed torso band; on a T-pose rig the
        spine-weighted region deforms with the shoulders and gives scales of 1.15..1.6 instead of 1.70.)
-    4. A clearance pass on the rigged body (SDF in metres, 10 iterations, smoothed in the first 7).
+    4. A clearance pass on the rigged body (SDF in metres, 10 iterations, smoothed in the first 7); with
+       ``exact_near_m`` the field is exact below that distance (``ExactNearSdf``).
     """
     from scipy.spatial import cKDTree
     from app.core.rig_contract import norm_bone_name
@@ -700,6 +789,8 @@ def transfer(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: int
 
     lo, hi = X.min(0) - margin_m, X.max(0) + margin_m
     sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
+    if exact_near_m is not None:
+        sdf = ExactNearSdf(sdf, Pr, body_rigged.faces, exact_near_m)
     Xd = np.zeros_like(X)
     for it in range(RIGGED_ITERATIONS):
         Y = X + Xd
@@ -1409,6 +1500,10 @@ def _prepare(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     return (Pd, Fd, Ud, image, mime, material), (body_u, body_r), (Pw, Fw0, inv), (Pk, Fk, new_of_welded)
 
 
+#: The placed hair fit (subtract method) measures the clearance exactly below this distance (``ExactNearSdf``).
+PLACED_EXACT_M = 0.03
+
+
 def hair_gates(length_class: Optional[str] = None, *, shell: bool = False) -> Dict[str, Tuple[str, float, str]]:
     """The fit gates of hair of ``length_class`` (``garment_hair.LENGTH_CLASSES``): ``GATES`` without
     ``moved_share`` for short hair (``garment_hair.SHORT_LENGTH_CLASSES``) and for a scalp ``shell`` — a
@@ -1457,8 +1552,13 @@ def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
         Q = align_depth(Q, head_P, probe_u=PROBE_M / k, band_u=PROBE_BAND_M / k)
     margin = SDF_MARGIN_M / k
     sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k, bounds=(Q.min(0) - margin, Q.max(0) + margin))
+    if placed:
+        sdf = ExactNearSdf(sdf, body_u.positions, body_u.faces, PLACED_EXACT_M / k)
     Qp, disp = push_out(Q, Fk, sdf, clear=clearance_m / k, spread=spread_m / k, spread_depth=SPREAD_DEPTH_M / k)
-    X, transfer_report = transfer(Qp, body_u, body_r, faces=Fk)
+    # placed: the rigged clearance pass keeps the cut's own clearance — the default CLEAR_M (11.9 mm) lifted a 1 mm
+    # shell to 12 mm off the scalp (Kai, p50 11.9 mm) and curled its rim where both sheets meet
+    X, transfer_report = (transfer(Qp, body_u, body_r, faces=Fk, clear_m=clearance_m, exact_near_m=PLACED_EXACT_M)
+                          if placed else transfer(Qp, body_u, body_r, faces=Fk))
     names, J, W = hair_weights(X, body_r)
     m = metrics(X, Fk, Q * k, Qp * k, body_r)
     ok, reasons = gate(m, gates)

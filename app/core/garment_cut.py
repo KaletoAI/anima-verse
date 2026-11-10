@@ -30,7 +30,12 @@ rigged, ``k_h`` the same for H's own units):
    sheet ``FREE_INNER_M`` inward), the two sheets joined at the cut edge -> one closed part. ``shell`` (short
    hair): the hair patch snapped onto the scalp, outer sheet at the shell thickness, inner at ``SHELL_INNER_M``,
    colour baked from the haired views into a ``TEXTURE_SIDE``² texture (seamless azimuthal UVs from the head
-   top). Both: the cut edge is smoothed along its loops (``EDGE_SMOOTH_PASSES``) and feathered — ring 0 is
+   top), the shell's rim re-seated on the scalp after the smoothing (a smoothed rim cuts chords into the curved
+   head). Body distances are taken to B's OUTER wall only (``garment_fit.outer_faces``). Colour mend
+   (``recolour_texture``): texels nearer to the skin colour than to the hair colour, and white ones, are painted
+   over with the nearest hair texel (CIELAB; the hair colour = the label ``CORE_RINGS`` inside its border, the
+   skin = H's non-hair head for ``cut``, the bald front view's face for ``shell``). Both: the cut edge is smoothed
+   along its loops (``EDGE_SMOOTH_PASSES``) and feathered — ring 0 is
    where both sheets meet (no rim strip), ring 1 halfway — so the hairline thins out instead of ending in a
    wall. The edge is found on H's WELDED topology: H carries UV-seam duplicates, and an edge on a UV seam is no
    cut edge (the spike's rims along UV seams were its white streaks).
@@ -57,7 +62,7 @@ from app.core.log import get_logger
 logger = get_logger("garment_cut")
 
 #: Bump whenever the cut's output changes (part of the subtract fsig, ``garment_store``).
-CUT_VERSION = 1
+CUT_VERSION = 2   # 2: colour mend, shell rim seated on the outer scalp
 
 SHAPES: Tuple[str, ...] = ("cut", "shell")
 #: Default / allowed shell thickness (profile ``hair_shell_mm``).
@@ -93,6 +98,10 @@ HOLE_LOOP_MAX_M = 0.12      # a boundary loop of the hair sheet shorter than thi
 EDGE_SMOOTH_PASSES = 3      # Laplacian passes along the cut edge
 FEATHER = (0.0, 0.5)        # outer-sheet thickness kept on ring 0 / ring 1 of the cut edge
 TEXTURE_SIDE = 512          # the shell's baked colour texture
+CORE_RINGS = 3              # recolour: the hair colour is the median of the label this many rings inside
+OFF_MIN_DE = 12.0           # recolour: never off-colour within this CIELAB distance of the hair colour
+WHITE_DL = 8.0              # recolour: "white" = lighter than the hair by this much L* ...
+WHITE_CHROMA = 15.0         # ... and greyer than this chroma (C*ab) and than half the hair's chroma + 3
 
 #: The cut's gates: (kind, limit, label) like ``garment_fit.GATES``.
 CUT_GATES: Dict[str, Tuple[str, float, str]] = {
@@ -555,49 +564,15 @@ def _hairline(views: Dict[str, View], masks: Dict[str, np.ndarray], frame_h: Fra
     return out
 
 
-class Surface:
-    """B's surface for exact snapping: ``closest(X)`` -> ``(closest point, outward unit normal there)``, the
-    closest point over the triangles of the ``k`` nearest dense samples (Ericson), the normal B's vertex normals
-    interpolated at it. The voxel SDF moves a point onto its zero level only to within a fraction of a voxel and
-    its gradient turns at a polar fan — the smoke's 5 mm shell came out 6.4 mm at the crown through it."""
-
-    def __init__(self, P: np.ndarray, F: np.ndarray, k: int = 8):
-        from scipy.spatial import cKDTree
-        self.P, self.F, self.k = np.asarray(P, np.float64), np.asarray(F, np.int64), k
-        pts, self.tri_of = gf._surface_samples(self.P, self.F)
-        self.tree = cKDTree(pts)
-        self.vn = gf.vertex_normals(self.P, self.F)
-
-    def closest(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        X = np.asarray(X, np.float64)
-        _d, j = self.tree.query(X, k=min(self.k, self.tree.n))
-        tris = self.F[self.tri_of[j.reshape(len(X), -1)]]                    # (n, k, 3)
-        A, B, C = (self.P[tris[..., i]] for i in range(3))
-        cand = gf.point_triangle_closest(X[:, None, :], A, B, C)
-        best = np.linalg.norm(cand - X[:, None, :], axis=-1).argmin(1)
-        rows = np.arange(len(X))
-        Y, tri = cand[rows, best], tris[rows, best]
-        a, b, c = A[rows, best], B[rows, best], C[rows, best]
-        # barycentric coordinates of Y in its triangle -> interpolated vertex normal
-        v0, v1, v2 = b - a, c - a, Y - a
-        d00, d01, d11 = (v0 * v0).sum(1), (v0 * v1).sum(1), (v1 * v1).sum(1)
-        d20, d21 = (v2 * v0).sum(1), (v2 * v1).sum(1)
-        den = np.maximum(d00 * d11 - d01 * d01, 1e-30)
-        wv, ww = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
-        N = (1 - wv - ww)[:, None] * self.vn[tri[:, 0]] + wv[:, None] * self.vn[tri[:, 1]] \
-            + ww[:, None] * self.vn[tri[:, 2]]
-        return Y, gf._unit(N)
-
-
-def _snap_offsets(points: np.ndarray, surface: Surface, k: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _snap_offsets(points: np.ndarray, surface: "gf.BodySurface", k: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """``(closest B surface point, outward unit normal there, distance in metres)`` per point."""
     snap, normal = surface.closest(points)
     return snap, normal, np.linalg.norm(points - snap, axis=1) * k
 
 
-def _relax_on_surface(P: np.ndarray, F: np.ndarray, surface: Surface, passes: int) -> Tuple[np.ndarray, np.ndarray]:
+def _relax_on_surface(P: np.ndarray, F: np.ndarray, surface: "gf.BodySurface", passes: int) -> Tuple[np.ndarray, np.ndarray]:
     """Tangential relaxation of a patch lying on B: Laplacian passes, each projected back onto B
-    (``Surface.closest``) — snapped vertices that bunched up spread out again. -> ``(points, normals)``."""
+    (``garment_fit.BodySurface.closest``) — snapped vertices that bunched up spread out again. -> ``(points, normals)``."""
     adj = gf._adjacency(F, len(P))
     A, deg = adj
     deg = np.maximum(np.asarray(deg, np.float64).ravel(), 1.0)[:, None]
@@ -669,6 +644,112 @@ def _bake_shell_texture(P: np.ndarray, centre: np.ndarray, to_h, R_inv: np.ndarr
             "mean_colour_srgb": [round(float(c), 1) for c in (out[covered].mean(0) if covered.any() else median)],
             "median_hair_srgb": [round(float(c), 1) for c in median]}
     return uv, buf.getvalue(), info
+
+
+def _finite(value: float, digits: int) -> Optional[float]:
+    """``value`` rounded, None when it could not be measured (NaN): a metric is JSON, and the gates refuse a
+    None as "missing"."""
+    return round(float(value), digits) if math.isfinite(value) else None
+
+
+# --- colour mend --------------------------------------------------------------------------------------------------
+
+def lab(rgb: np.ndarray) -> np.ndarray:
+    """sRGB 0..255 (..., 3) -> CIELAB (D65)."""
+    c = np.asarray(rgb, np.float64) / 255.0
+    c = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    M = np.array([[0.4124, 0.3576, 0.1805], [0.2126, 0.7152, 0.0722], [0.0193, 0.1192, 0.9505]])
+    xyz = c @ M.T / np.array([0.95047, 1.0, 1.08883])
+    f = np.where(xyz > (6 / 29) ** 3, np.cbrt(xyz), xyz / (3 * (6 / 29) ** 2) + 4 / 29)
+    return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], -1)
+
+
+def _rgb_of(image: bytes) -> Optional[np.ndarray]:
+    """A texture as (h, w, 3) float 0..255, None when there is none / it does not decode."""
+    if not image:
+        return None
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(image)) as im:
+            return np.asarray(im.convert("RGB"), np.float64)
+    except Exception:  # noqa: BLE001 — an undecodable texture only switches the colour trim off
+        return None
+
+
+def sample_texture(tex: np.ndarray, uv: np.ndarray) -> np.ndarray:
+    """Nearest texel of glTF UVs (v = 0 is the top row), wrapped."""
+    h, w = tex.shape[:2]
+    uv = np.asarray(uv, np.float64)
+    x = np.floor(np.mod(uv[:, 0], 1.0) * w).astype(np.int64).clip(0, w - 1)
+    y = np.floor(np.mod(uv[:, 1], 1.0) * h).astype(np.int64).clip(0, h - 1)
+    return tex[y, x]
+
+
+def off_colour(L: np.ndarray, hair_lab: np.ndarray, skin_lab: Optional[np.ndarray]) -> Tuple[np.ndarray, np.ndarray]:
+    """``(skin-like, white)`` masks of CIELAB colours ``L`` that are not hair: nearer to the skin colour than to
+    the hair colour; white = lighter than the hair by ``WHITE_DL`` and greyer than ``WHITE_CHROMA`` and than half
+    the hair's own chroma + 3 (Kira's white streaks: L* 71, C* 5 on blonde hair of L* 59, C* 27). Neither within
+    ``OFF_MIN_DE`` of the hair colour."""
+    L = np.asarray(L, np.float64).reshape(-1, 3)
+    d_hair = np.linalg.norm(L - hair_lab, axis=1)
+    far = d_hair > OFF_MIN_DE
+    skin = (np.linalg.norm(L - skin_lab, axis=1) < d_hair) & far if skin_lab is not None else np.zeros(len(L), bool)
+    grey = min(WHITE_CHROMA, 0.5 * float(np.hypot(hair_lab[1], hair_lab[2])) + 3.0)
+    white = (L[:, 0] > hair_lab[0] + WHITE_DL) & (np.hypot(L[:, 1], L[:, 2]) < grey) & far
+    return skin, white
+
+
+def _raster(uv_faces: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
+    """Texels covered by the UV triangles ``uv_faces`` (n, 3, 2), one texel of margin."""
+    from PIL import Image, ImageDraw
+    from scipy import ndimage
+    h, w = shape
+    im = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(im)
+    for tri in np.asarray(uv_faces, np.float64):
+        draw.polygon([(float(u) * w - 0.5, float(v) * h - 0.5) for u, v in tri], fill=255)
+    return ndimage.binary_dilation(np.asarray(im) > 0, iterations=1)
+
+
+def recolour_texture(tex: np.ndarray, cover: np.ndarray, hair_lab: np.ndarray,
+                     skin_lab: Optional[np.ndarray]) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Paint the off-colour texels (``off_colour``: skin-like or white) within ``cover`` (the texels the hair
+    uses) over with the nearest hair texel. The mesher paints the forehead skin a centimetre or two past the
+    hairline and the background's white along strand edges onto H's hair surface (Kira 2026-11-10); the hair
+    GEOMETRY there is right — its hairline agrees with the 2D mask's to 0.4 cm, and peeling the skin-coloured
+    border off the label moved it to 1.9 cm — so the colour is mended, not the label. -> ``(texture, report)``."""
+    from scipy import ndimage
+    tex = np.array(tex, np.float64)
+    skin, white = off_colour(lab(tex[cover]), hair_lab, skin_lab)
+    off = np.zeros(cover.shape, bool)
+    off[cover] = skin | white
+    source = cover & ~off
+    if not off.any() or not source.any():
+        return tex, {"recoloured_texels": 0, "recoloured_share": 0.0}
+    _d, (iy, ix) = ndimage.distance_transform_edt(~source, return_indices=True)
+    tex[off] = tex[iy[off], ix[off]]
+    n = int(off.sum())
+    return tex, {"recoloured_texels": n, "recoloured_share": round(n / max(int(cover.sum()), 1), 4),
+                 "skin_texels": int(skin.sum()), "white_texels": int((white & ~skin).sum())}
+
+
+def _view_skin_lab(view: "View", hair_mask: np.ndarray) -> Optional[np.ndarray]:
+    """CIELAB median of the bald front view's skin: its figure without hair in the top eighth of the figure (the
+    face), None when there is none."""
+    rows = np.nonzero(view.base_mask.any(1))[0]
+    if not len(rows):
+        return None
+    face = view.base_mask & ~hair_mask
+    face[: rows[0]] = False
+    face[rows[0] + max(1, (rows[-1] - rows[0]) // 8):] = False
+    return lab(np.median(view.base_rgb[face], 0)) if face.sum() >= 50 else None
+
+
+def _png(tex: np.ndarray) -> bytes:
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.fromarray(np.clip(np.round(tex), 0, 255).astype(np.uint8)).save(buf, format="PNG")
+    return buf.getvalue()
 
 
 # --- the cut --------------------------------------------------------------------------------------------------------
@@ -757,6 +838,19 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     hair_v = majority(hair_v, adj, LABEL_SMOOTH_PASSES) & outer_h & ~deep
     hair_v, filled = fill_label_holes(Fh, Q * k, hair_v, adj, HOLE_FILL_MAX_M2)
     hair_v &= largest_components(faces_all(Fh, hair_v), len(Q), 0.02)
+    # colour reference: H's texture per welded vertex; the skin colour from H's own non-hair head, the hair
+    # colour from the label CORE_RINGS inside its border
+    tex_h = _rgb_of(img_h)
+    hair_lab = skin_lab = None
+    if tex_h is not None and len(Uh) == len(Ph0) and hair_v.any():
+        rgb_v = np.zeros((len(Ph), 3))
+        np.add.at(rgb_v, inv_h, sample_texture(tex_h, Uh))
+        rgb_v /= np.maximum(np.bincount(inv_h, minlength=len(Ph)), 1)[:, None]
+        lab_v = lab(rgb_v)
+        face = (~hair_v) & (~voted) & outer_h & (Q[:, 1] > ytop - REGISTER_TOP_M / k) & (sd_h > -DEEP_M)
+        skin_lab = np.median(lab_v[face], 0) if face.sum() >= 20 else None
+        core = erode(hair_v, adj, CORE_RINGS)
+        hair_lab = np.median(lab_v[core if core.any() else hair_v], 0)
     Fhair_w = faces_all(Fh, hair_v)
     report["label"] = {"votes": int(guess.sum()), "outer": int(outer_h.sum()), "seeds": int(seed.sum()),
                        "grown": int(grown.sum()), "vertices": int(hair_v.sum()), "faces": int(len(Fhair_w)),
@@ -771,7 +865,7 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     reg_p95 = float(np.percentile(dist_m[upper], 95)) * 100 if upper.any() else float("nan")
     report["registration"] = {**icp, "outer_nonhair_p50_cm": round(float(np.percentile(dist_m[upper], 50)) * 100, 3)
                               if upper.any() else None,
-                              "outer_nonhair_p95_cm": round(reg_p95, 3), "n": int(upper.sum()),
+                              "outer_nonhair_p95_cm": _finite(reg_p95, 3), "n": int(upper.sum()),
                               "scale_h_to_b": round(float(T_hq[0]), 5)}
 
     # hairline: 2D (front centre strip, mapped into B's frame) vs the 3D label
@@ -793,7 +887,7 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     Fo_w = inv_h[Fo]
     Fo = Fo[(Fo_w[:, 0] != Fo_w[:, 1]) & (Fo_w[:, 1] != Fo_w[:, 2]) & (Fo_w[:, 0] != Fo_w[:, 2])]
     if len(Fo) == 0:
-        metrics = {"registration_p95_cm": round(reg_p95, 3), "hairline_cm": float("nan"), "label_holes": 0,
+        metrics = {"registration_p95_cm": _finite(reg_p95, 3), "hairline_cm": None, "label_holes": 0,
                    "hair_area_cm2": 0.0}
         ok, reasons = gf.gate(metrics, CUT_GATES)
         clear, spread = fit_params(shape)
@@ -819,7 +913,7 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     report["edge"] = {"loops": len(loops), "perimeters_cm": sorted(round(p * 100, 1) for _v, p in loops)[:12],
                       "holes": len(holes), "ring0": int(ring0.sum()), "ring1": int(ring1.sum())}
 
-    surface = Surface(Pb, Fb)
+    surface = gf.BodySurface(Pb, Fb[gf.outer_faces(Pb, Fb, sdf)])   # never onto an inner wall
     snap, normal, d_m = _snap_offsets(Pw_q, surface, k)
     if shape == "cut":
         sd_outer = sdf.sample(Pw_q) * k
@@ -840,20 +934,45 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
         image, mime, material = img_h, mime_h, mat_h
         report["cut"] = {"snapped_share": round(float(near.mean()), 3),
                          "inner_offset_p50_mm": round(float(np.median(offset[near])) * 1000, 2) if near.any() else None}
+        if tex_h is not None and hair_lab is not None:
+            cover = _raster(uv_out[F_out], tex_h.shape[:2])
+            mended, report["colour"] = recolour_texture(tex_h, cover, hair_lab, skin_lab)
+            if report["colour"]["recoloured_texels"]:
+                image, mime = _png(mended), "image/png"
     else:
         base_pts, n_out = _relax_on_surface(snap, Fw, surface, SHELL_RELAX_PASSES)
         outer = base_pts + n_out * (thickness_m / k)
         inner = base_pts + n_out * (SHELL_INNER_M / k)
         inner = smooth_edge(inner, B_edges, EDGE_SMOOTH_PASSES)
+        # the smoothed rim cuts chords through the curved scalp (Kai: down to 2.95 mm inside): back onto it
+        seat, seat_n = surface.closest(inner[ring0])
+        inner[ring0] = seat + seat_n * (SHELL_INNER_M / k)
         outer[ring0] = inner[ring0]
         f1 = FEATHER[1]
         outer[ring1] = inner[ring1] + f1 * (outer[ring1] - inner[ring1])
+        on = surface.closest(np.concatenate([outer, inner]))[0]
+        gap_mm = np.linalg.norm(np.concatenate([outer, inner]) - on, axis=1) * k * 1000
+        rim_mm = gap_mm[np.concatenate([ring0, ring0])]
+        report["shell_rim"] = {"rim_p50_mm": round(float(np.median(rim_mm)), 2) if len(rim_mm) else None,
+                               "rim_max_mm": round(float(rim_mm.max()), 2) if len(rim_mm) else None,
+                               "max_mm": round(float(gap_mm.max()), 2)}
         head_pts = Pb[head_b] if head_b.any() else Pb[Pb[:, 1] > ytop - 0.15 / k]
         centre = np.array([float(np.median(head_pts[:, 0])), float(head_pts[:, 1].mean()),
                            float(np.median(head_pts[:, 2]))])
         R_inv = T_qh[1]
         uv_w, image, tex_info = _bake_shell_texture(outer, centre, to_h, R_inv, frames_h, views, masks)
         uv_out = uv_w[w_local]
+        # the baked colour comes from the haired views: a parting or a temple shows the skin there, which on a
+        # shell reads as a bald speck — every skin-like or white texel is painted over (the shell IS the hair)
+        baked = _rgb_of(image)
+        skin_view = _view_skin_lab(views["front"], masks["front"])
+        if baked is not None:
+            cover = _raster(uv_out[F_out], baked.shape[:2])
+            if cover.any():
+                hair_baked = np.median(lab(baked[cover]), 0)
+                mended, report["colour"] = recolour_texture(baked, cover, hair_baked, skin_view)
+                if report["colour"]["recoloured_texels"]:
+                    image = _png(mended)
         mime, material = "image/png", {"name": "hair_shell", "doubleSided": True,
                                        "pbrMetallicRoughness": {"metallicFactor": 0.0, "roughnessFactor": 0.8}}
         report["shell"] = {"thickness_mm": round(thickness_m * 1000, 2),
@@ -871,8 +990,7 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
                         "largest_share": round(float(shares.max()) if len(shares) else 0.0, 4),
                         "vertices": int(len(Pc)), "faces": int(len(Fc))}
 
-    metrics = {"registration_p95_cm": round(reg_p95, 3),
-               "hairline_cm": round(hairline_cm, 2) if math.isfinite(hairline_cm) else float("nan"),
+    metrics = {"registration_p95_cm": _finite(reg_p95, 3), "hairline_cm": _finite(hairline_cm, 2),
                "label_holes": len(holes), "hair_area_cm2": round(hair_area_cm2, 1)}
     ok, reasons = gf.gate(metrics, CUT_GATES)
     glb = static_glb(P_out, F_all, U_out, image=image, mime=mime, material=material, name="hair_subtract")

@@ -96,6 +96,7 @@ that was in flight, every finished step is cached on disk under ``fsig``.
 """
 import hashlib
 import json
+import math
 import os
 import re
 import threading
@@ -528,22 +529,38 @@ def fit_method(record: Dict[str, Any]) -> str:
 
 # --- Records ------------------------------------------------------------------
 
+def finite_json(value: Any) -> Any:
+    """A copy of a JSON value with every non-finite float (NaN, +-inf) as None. A refused cut whose hairline
+    could not be measured stored NaN (Python's json writes it), and the Hair tab's GET could not encode the
+    record: every record is written and read through this."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: finite_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [finite_json(v) for v in value]
+    return value
+
+
 def read_record(path: Path) -> Dict[str, Any]:
-    """A sidecar's JSON object, {} when missing, unreadable or not an object."""
+    """A sidecar's JSON object, {} when missing, unreadable or not an object; non-finite numbers (a NaN already
+    on disk) read as None (``finite_json``)."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    return finite_json(data) if isinstance(data, dict) else {}
 
 
 def write_record(path: Path, record: Dict[str, Any]) -> None:
-    """Write a sidecar atomically (temp file in the same folder + replace)."""
+    """Write a sidecar atomically (temp file in the same folder + replace); non-finite numbers are written as
+    null (``finite_json``)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        tmp.write_text(json.dumps(record, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        tmp.write_text(json.dumps(finite_json(record), indent=2, ensure_ascii=False, sort_keys=True,
+                                  allow_nan=False), encoding="utf-8")
         os.replace(tmp, path)
     finally:
         if tmp.exists():

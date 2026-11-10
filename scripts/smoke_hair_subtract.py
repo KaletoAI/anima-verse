@@ -37,7 +37,8 @@ EXPECTED, BY HAND
 [5] Gates per length class: hair_gates("medium") has moved_share, hair_gates("short") / ("very short") /
     (shell=True) do not. set_hair_subtract("shell", 5) -> subtract fsig changes, run -> ran ["cut", "fit"], no
     job; cut record shape "shell", shell_mm 5.0; fit gates.limits without moved_share. Bad values (shape "helmet",
-    shell 30 mm) -> ValueError, nothing stored.
+    shell 30 mm) -> ValueError, nothing stored. Before the shell run garment_info serves F4 with stale_reasons
+    ["shape_changed"]; after it, shell 7 mm -> served F5 with ["shell_changed"]; back to 5 mm -> fsig F5 again, [].
 [6] Outfit body A (the same geometry, another texture colour, front view = the bald image): garments.fit_on_body ->
     bodies/<A>/H_<F>.glb; record method subtract, body_id A, inputs.ssig; no render, no mesh job.
 [7] GC dry run (artefact_graph.collect(dry_run, explicit)): garment / hair-source orphans = exactly the superseded subtract groups
@@ -45,6 +46,9 @@ EXPECTED, BY HAND
     garment:H_<F5>, the edit-chain group garment:H_<edit fsig> (the haired views) and hairsource:H_<ssig>.
 [8] The route POST /characters/Demo/hair/subtract (called directly): {shape "", shell_mm 4} -> shape "cut" from the
     length class, no override, 4.0 mm; shape "helmet" -> HTTP 400, nothing stored.
+[9] NaN: garment_cut._finite(NaN) None, 1.234 -> 1.23; write_record of {hairline_cm NaN, x [inf, 1.5]} reads back
+    as null / [null, 1.5]; a cut record holding a literal NaN on disk (written by the code before this fix) ->
+    garment_info encodes with allow_nan=False, cut "refused", hairline_cm None.
 """
 import hashlib
 import json
@@ -315,6 +319,9 @@ def main() -> int:
         check("set shell", garment_hair.set_hair_subtract("Demo", "shell", 5), True)
         f5 = gs.garment_fsig("Demo", hid)
         check("fsig changes", f5 not in (f1, f4), True)
+        info = garments.garment_info("Demo", hid)
+        check("old cut fit served, marked shape_changed", (info["served_fsig"], info["stale_reasons"]),
+              (f4, ["shape_changed"]))
         res = garments.run_garment("Demo", hid)
         check("shell run", (res.get("ok"), res.get("ran"), counts(), res.get("error")),
               (True, ["cut", "fit"], before, None))
@@ -323,6 +330,13 @@ def main() -> int:
         check("shell cut", (c5.get("shape"), c5.get("shell_mm")), ("shell", 5.0))
         check("shell fit gates without moved_share",
               "moved_share" in ((fit_record(f5).get("gates") or {}).get("limits") or {}), False)
+        check("shell 7 mm", garment_hair.set_hair_subtract("Demo", "shell", 7), True)
+        info = garments.garment_info("Demo", hid)
+        check("5 mm shell served, marked shell_changed", (info["served_fsig"], info["stale_reasons"]),
+              (f5, ["shell_changed"]))
+        garment_hair.set_hair_subtract("Demo", "shell", 5)
+        info = garments.garment_info("Demo", hid)
+        check("back to 5 mm: current, no reason", (gs.garment_fsig("Demo", hid), info["stale_reasons"]), (f5, []))
 
         # --- [6] outfit body ----------------------------------------------------------------------
         print("[6] outfit body")
@@ -375,6 +389,29 @@ def main() -> int:
         except HTTPException as e:
             check("helmet -> 400", e.status_code, 400)
         check("helmet stored nothing", garment_hair.shell_mm(get_character_profile("Demo")), 4.0)
+
+        # --- [9] NaN in a record -----------------------------------------------------------------------
+        print("[9] NaN never reaches the Hair tab")
+        from app.core import garment_cut
+        check("garment_cut: unmeasured -> None", (garment_cut._finite(float("nan"), 2), garment_cut._finite(1.234, 2)),
+              (None, 1.23))
+        probe = Path(tmp) / "probe.json"
+        gs.write_record(probe, {"metrics": {"hairline_cm": float("nan"), "x": [float("inf"), 1.5]}})
+        check("written as null", json.loads(probe.read_text())["metrics"], {"hairline_cm": None, "x": [None, 1.5]})
+        prepared = gs.garment_path("Demo", hid, gs.garment_fsig("Demo", hid), "prepared").with_suffix(".json")
+        prepared.parent.mkdir(parents=True, exist_ok=True)
+        prepared.write_text('{"accepted": false, "method": "subtract", "shape": "cut", '
+                            '"metrics": {"hairline_cm": NaN, "registration_p95_cm": 0.5}}', encoding="utf-8")
+        info = garments.garment_info("Demo", hid)
+        try:
+            json.dumps(info, allow_nan=False)
+            encodes = True
+        except ValueError:
+            encodes = False
+        check("NaN on disk: tab encodes, cut refused, hairline None",
+              (encodes, info["steps"]["cut"]["status"], info["steps"]["cut"]["metrics"].get("hairline_cm")),
+              (True, "refused", None))
+        prepared.unlink()
 
     print(f"\n{'FAILED: ' + ', '.join(FAILS) if FAILS else 'all checks passed'}")
     return 1 if FAILS else 0
