@@ -4277,7 +4277,7 @@
     "The previous mesh stays in use until the new one is fitted.": "Das bisherige Mesh bleibt in Gebrauch, bis das neue angepasst ist.",
     "Distance tier failed — the full piece is used": "Fernstufe fehlgeschlagen — das volle Teil wird verwendet",
     "No fitted mesh yet": "Noch kein angepasstes Mesh",
-    "Clothing meshes have no collision yet — two own-mesh pieces worn over each other can intersect": "Kleidungs-Meshes haben noch keine Kollision — zwei übereinander getragene Teile mit eigenem Mesh können sich durchdringen",
+    "Pushed out of the body's collision capsules when moving (viewer: “Garment collision”); worn over another own-mesh piece, it is fitted over it.": "Wird beim Bewegen aus den Kollisionskapseln des Körpers gedrückt (Viewer: „Kleidungskollision“); über einem anderen Teil mit eigenem Mesh getragen, wird es darüber angepasst.",
     "{items} cover each other on {slots} — layered in slot order, {inner} innermost.": "{items} bedecken sich gegenseitig an {slots} — nach Slot-Reihenfolge geschichtet, {inner} innen.",
     "Fitted over {items}": "Angepasst über {items}",
     "without {items}": "ohne {items}",

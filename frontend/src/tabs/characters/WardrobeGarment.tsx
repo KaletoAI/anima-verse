@@ -261,7 +261,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
             </div>
           ) : null}
           <div className="ga-hint">
-            {t('Clothing meshes have no collision yet — two own-mesh pieces worn over each other can intersect')}
+            {t('Pushed out of the body\'s collision capsules when moving (viewer: “Garment collision”); worn over another own-mesh piece, it is fitted over it.')}
           </div>
         </div>
       </div>
