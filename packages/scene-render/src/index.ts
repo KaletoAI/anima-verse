@@ -33,7 +33,7 @@ export type { GroundSampler, StoreyGroundStep,
 
 export { applyClipOutline, disposeClipMaterials, CLIP_MAX_POINTS } from './clip'
 
-export { normBoneName, restPoseOf, restCorrections, restSolesOf, bindRelativeValues,
+export { normBoneName, restPoseOf, restCorrections, restSolesOf, transplantedRestPose, bindRelativeValues,
   bindRelativeClip, LEG_STANCE_TOLERANCE_DEG, TORSO_STANCE_TOLERANCE_DEG,
   FOOT_STANCE_TOLERANCE_DEG } from './clipRetarget'
 export type { RestPose, RestCorrection } from './clipRetarget'
@@ -193,3 +193,7 @@ export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry } from './
 export { FOOT_POSE_VERSION, applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches,
   footContactsNow } from './footPose'
 export type { FootPose, FootContact, FootSide } from './footPose'
+
+export { GROUND_SAMPLE_FRAMES, GROUND_SAMPLE_VERTICES, SOLE_LEVEL_M, groundOffsetOf, soleGroundOffsetOf,
+  clipGroundOffset, measureClipGround } from './clipGround'
+export type { ClipGroundOptions } from './clipGround'

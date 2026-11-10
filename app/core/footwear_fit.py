@@ -45,9 +45,12 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    pose the shoe is turned back by the extension, spec § 6.3). No leg bone gets weight.
 
 Gates (``FIT_GATES``; P2 gates only ``ACTIVE_IN_P2``, the rest is recorded): ``ball_placement_mm`` (the
-spike's measure: the posed ball contact vs the shoe's chord ball point under the heel-anchored placement,
-before the midline step), ``lift_asymmetry_mm``, ``slim_needed``, ``stand_floor_mm`` (the lowest shoe point
-in the shod stand vs the floor), ``boot`` (mm by which the shoe's topline stands above the shod ankle +
+posed ball contact — the plantar ball vertices SKINNED with Foot and ToeBase, so the ToeBase counter-turn
+is in it — vs the shoe's chord ball point under the heel-anchored placement, before the midline step; the
+spike read the ball rigid on Foot, 4–5 mm off on the real material), ``lift_asymmetry_mm``,
+``slim_needed``, ``stand_floor_mm`` (the lowest shoe point in the shod stand vs the floor — a BIND-pose
+number; floor contact under clips is the renderer's shared ground measure, ``packages/scene-render``
+``clipGround.ts``), ``boot`` (mm by which the shoe's topline stands above the shod ankle +
 ``footwear_insole.BOOT_MARGIN_M``; refused with ``footwear_insole.BOOT_REFUSED``).
 """
 import math
@@ -146,6 +149,9 @@ class FootMeasure:
     toe_joint: str = ""
     foot_index: int = -1         # skin indices
     toe_index: int = -1
+    # vertex ids behind the two contacts: the plantar heel band and ball band (``measure_feet``)
+    heel_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
+    ball_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
 
 
 @dataclass
@@ -294,7 +300,7 @@ def measure_feet(body: glb_mesh.BodyMesh, joints: Dict[str, np.ndarray]) -> Dict
             rest_pitch_deg=math.degrees(math.atan2(H[1] - B[1], float((B - H) @ fwd))),
             ankle=a, ball_joint=b, plantar=plantar, vertex_ids=idx, heel_contact=H, ball_contact=B,
             forward=fwd, toe_height_m=float(np.ptp(P[tsel, 1])), foot_joint=body.joint_names[fi],
-            toe_joint=body.joint_names[ti], foot_index=fi, toe_index=ti)
+            toe_joint=body.joint_names[ti], foot_index=fi, toe_index=ti, heel_ids=hsel, ball_ids=bsel)
     return out
 
 
@@ -453,10 +459,16 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         P4 = np.eye(4)
         P4[:3, :3] = S
         P4[:3, 3] = H1 - S @ np.array([xh, float(ins.z(xh)), 0.0])
-        ball_err = float(np.linalg.norm(_apply(P4, np.array([xb, float(ins.z(xb)), 0.0])) - B1))
+        # The gate reads the ball AS SKINNED (Foot and ToeBase): the ToeBase counter-turn moves the
+        # plantar ball vertices off the Foot-rigid point B1 — 4–5 mm on the real material — and the
+        # shoe's ball point has to meet the ball the clips will show, not the rigid stand-in.
+        mats = {fm.foot_index: Bf, fm.toe_index: Bt}
+        Bs = _skin(P, body, fm.ball_ids, mats)
+        B1s = Bs.mean(0)
+        B1s[1] = Bs[:, 1].min()
+        ball_err = float(np.linalg.norm(_apply(P4, np.array([xb, float(ins.z(xb)), 0.0])) - B1s))
 
         # the midline: foot slab middle - insole middle along the shoe, a line fitted to it
-        mats = {fm.foot_index: Bf, fm.toe_index: Bt}
         Xf = _skin(P, body, fm.vertex_ids, mats)
         C = _apply(np.linalg.inv(P4), Xf)
         edges = np.linspace(xh, xb + MIDLINE_PAST_BALL_M / k, MIDLINE_SLABS + 1)

@@ -158,6 +158,79 @@ export function restPoseOf(three: THREE, root: Object3D): RestPose {
   return { world, parent, parentBone, position }
 }
 
+/**
+ * THE REST THE CLIPS SEE. A clip is written relative to the DONOR's rest, and
+ * the transplant (`restCorrections`) plays it on the target as
+ * `q = left · c · right` per bone. So the pose every clip is relative to is
+ * the donor's rest played through those corrections — and that is NOT the
+ * target's bind pose wherever the kernel stands the figure differently: the
+ * global attitude is divided out (a generated rig leaning 4.6° forward in
+ * its bind plays upright), the leg and foot stance rules turn whole subtrees.
+ * Measured on a generated character (2026-11-10): the Foot's world rotation
+ * under this rest sits 4.64° from its bind rotation, both feet alike, with
+ * the feet's own local rotations untouched — the attitude, not the ankle.
+ *
+ * Anything defined relative to the BIND pose that must hold under the clips
+ * — the fitted shoe's foot extension (`footPose.ts`) is the case — reads
+ * this to carry the difference: per bone the world rotation here against
+ * `self.world` is the delta the transplant introduced. Pure pose data:
+ * `self` and `donor` from `restPoseOf`, `corrections` from
+ * `restCorrections` built for exactly this pair.
+ *
+ * Per bone, parents first: `W = W_parent · q`, with `q = left · c_d · right`
+ * for a corrected bone, the donor's own rest local `c_d` for a bone the
+ * donor has but the kernel left alone (its track is copied verbatim), and
+ * the target's rest local for a bone the donor lacks (no track, it keeps its
+ * bind). The root bone's parent is the target's armature frame, as in
+ * `restPoseOf`. Positions follow the same walk on the target's own offsets.
+ */
+export function transplantedRestPose(three: THREE, donor: RestPose, self: RestPose,
+                                     corrections: Map<string, RestCorrection>): RestPose {
+  const world = new Map<string, Quaternion>()
+  const parent = new Map<string, Quaternion>()
+  const position = new Map<string, Vector3>()
+  const parentBone = new Map(self.parentBone)
+  const donorLocal = (key: string): Quaternion | undefined => {
+    const w = donor.world.get(key)
+    const p = donor.parent.get(key)
+    return w && p ? new three.Quaternion().copy(p).invert().multiply(w) : undefined
+  }
+  const selfLocal = (key: string): Quaternion =>
+    new three.Quaternion().copy(self.parent.get(key)!).invert().multiply(self.world.get(key)!)
+  const visit = (key: string): void => {
+    if (world.has(key)) return
+    const above = self.parentBone.get(key) ?? null
+    let aboveWorld: Quaternion
+    let abovePos: Vector3 | null = null
+    if (above === null) {
+      aboveWorld = self.parent.get(key)!
+    } else {
+      visit(above)
+      aboveWorld = world.get(above)!
+      abovePos = position.get(above)!
+    }
+    const k = corrections.get(key)
+    const c = donorLocal(key)
+    let q: Quaternion
+    if (k && c) q = new three.Quaternion().copy(k.left).multiply(c).multiply(k.right)
+    else if (c) q = c
+    else q = selfLocal(key)
+    const here = new three.Quaternion().copy(aboveWorld).multiply(q)
+    world.set(key, here)
+    parent.set(key, aboveWorld)
+    if (abovePos === null) {
+      position.set(key, self.position.get(key)!.clone())
+    } else {
+      // the bind offset from the parent, re-expressed under the parent's new rotation
+      const offset = self.position.get(key)!.clone().sub(self.position.get(above!)!)
+        .applyQuaternion(new three.Quaternion().copy(self.parent.get(key)!).invert())
+      position.set(key, offset.applyQuaternion(aboveWorld).add(abovePos))
+    }
+  }
+  for (const key of self.world.keys()) visit(key)
+  return { world, parent, parentBone, position }
+}
+
 /** the rotation angle of a quaternion, in degrees */
 function angleOf(q: Quaternion): number {
   return 2 * Math.acos(Math.min(1, Math.abs(q.w))) * (180 / Math.PI)

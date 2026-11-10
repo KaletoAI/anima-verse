@@ -73,6 +73,35 @@
  *     [1]'s (0, −0.034008, 0.086615); a second call changes nothing; the root
  *     is marked `userData.footPosed = 'abc'`; null fp → no mark, no change.
  * [9] null fp: applyFootPose returns its input (===).
+ * [10] transplantedRestPose (clipRetarget.ts) — the rest the clips see on
+ *     the chain, with donor = the chain's own rest and ONE correction,
+ *     leftfoot {left identity, right R(+x, −6°)}: the Foot plays
+ *     `left · c_d · right` = R(+x, −6°) = (−0.0523360, 0, 0, 0.9986295)
+ *     (c_d = the donor's rest local = identity), the ToeBase (donor has it,
+ *     no correction) keeps its local identity under it → world R(+x, −6°)
+ *     as well, parent(toe) = world(foot); positions: foot (0, 0.08, 0),
+ *     toe = foot + R(−6°)·(0, −0.06, 0.13) = (0, 0.08 − 0.06·cos6° +
+ *     0.13·sin6°, 0.06·sin6° + 0.13·cos6°) = (0, 0.0339174, 0.1355596).
+ *     A bone the donor LACKS keeps its own rest local: a `mixamorigLeftToe_End`
+ *     under the ToeBase with local R(+z, 90°) → world R(+x,−6°)·R(+z,90°) =
+ *     (−0.0370071, 0.0370071, 0.7061377, 0.7061377). Empty corrections →
+ *     world == the chain's rest for every bone.
+ * [11] applyFootPose with rest + clipRest (module docstring: the extension is
+ *     relative to the BIND foot, the clip to the transplanted rest). fpToe
+ *     (Foot 28°, ToeBase −10°) on the one-key Foot clip, clipRest = [10]'s:
+ *     the Foot is the top named bone → its WORLD delta D = W_bind⁻¹·W_clip
+ *     = R(+x, −6°) → turn D⁻¹·R = R(+x, 34°) = (0.2923717, 0, 0, 0.9563048);
+ *     mixer frame 0 puts the ball at rel (0, −0.06, 0.13) turned 34°:
+ *     (0, 0.08 − 0.06·cos34° − 0.13·sin34°, −0.06·sin34° + 0.13·cos34°) =
+ *     (0, −0.0424373, 0.0742233). The ToeBase has a named ancestor → its
+ *     LOCAL delta, identity here (no track: it keeps its bind local; with an
+ *     identity track: clipLocal = parent⁻¹·world = identity too) → the
+ *     constant track stays R(+x, −10°) = (−0.0871557, 0, 0, 0.9961947).
+ *     A correction that also turns the ToeBase locally, lefttoebase {left
+ *     identity, right R(+x, +4°)}: clipLocal(toe) = R(4°) → turn
+ *     R(−4°)·R(−10°) = R(+x, −14°) = (−0.1218693, 0, 0, 0.9925462), the Foot
+ *     unchanged at 34°. rest alone (no clipRest) → R(28°) as in [1]; a
+ *     clipRest lacking the bone → R(28°).
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -103,7 +132,7 @@ async function main() {
   }
 
   const F = await import('../packages/scene-render/src/footPose.ts')
-  const { restPoseOf } = await import('../packages/scene-render/src/clipRetarget.ts')
+  const { restPoseOf, transplantedRestPose } = await import('../packages/scene-render/src/clipRetarget.ts')
   const THREE = await import('three')
   const { applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches, footContactsNow } = F
 
@@ -286,11 +315,69 @@ async function main() {
   check('applyFootPose(null) returns its input', applyFootPose(THREE, clip, null) === clip)
   check('applyFootPose(undefined) returns its input', applyFootPose(THREE, clip, undefined) === clip)
 
+  console.log('--- [10] transplantedRestPose ---')
+  const figR = chain()
+  const donorR = restPoseOf(THREE, figR.root)
+  const selfR = restPoseOf(THREE, figR.root)
+  const qx = (deg) => new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), deg * Math.PI / 180)
+  const corr = new Map([['leftfoot', { left: new THREE.Quaternion(), right: qx(-6) }]])
+  const clipRest = transplantedRestPose(THREE, donorR, selfR, corr)
+  const q4 = (q) => [q.x, q.y, q.z, q.w]
+  const nearQ = (q, e, eps = EPS) => q4(q).every((v, i) => near(v, e[i], eps))
+  const RX6 = [-0.0523360, 0, 0, 0.9986295]
+  check('world(leftfoot) = R(+x, −6°)', nearQ(clipRest.world.get('leftfoot'), RX6), fmt(q4(clipRest.world.get('leftfoot'))))
+  check('world(lefttoebase) = R(+x, −6°) (local identity under the foot)',
+    nearQ(clipRest.world.get('lefttoebase'), RX6), fmt(q4(clipRest.world.get('lefttoebase'))))
+  check('parent(lefttoebase) = world(leftfoot)', nearQ(clipRest.parent.get('lefttoebase'), RX6))
+  check('parentBone copied', clipRest.parentBone.get('lefttoebase') === 'leftfoot' && clipRest.parentBone.get('leftfoot') === null)
+  check('position(leftfoot) = (0, 0.08, 0)', nearV(clipRest.position.get('leftfoot').toArray(), [0, 0.08, 0], 1e-12))
+  check('position(lefttoebase) = (0, 0.0339174, 0.1355596)',
+    nearV(clipRest.position.get('lefttoebase').toArray(), [0, 0.0339174, 0.1355596]), fmt(clipRest.position.get('lefttoebase').toArray()))
+  const figE = chain()
+  const end = new THREE.Bone(); end.name = 'mixamorigLeftToe_End'; end.position.set(0, 0, 0.05)
+  end.quaternion.set(0, 0, Math.SQRT1_2, Math.SQRT1_2); figE.toe.add(end); figE.root.updateMatrixWorld(true)
+  const clipRestE = transplantedRestPose(THREE, donorR, restPoseOf(THREE, figE.root), corr)
+  check('a bone the donor lacks keeps its rest local: world(toe_end) = R(+x,−6°)·R(+z,90°)',
+    nearQ(clipRestE.world.get('lefttoe_end'), [-0.0370071, 0.0370071, 0.7061377, 0.7061377]), fmt(q4(clipRestE.world.get('lefttoe_end'))))
+  const clipRest0 = transplantedRestPose(THREE, donorR, selfR, new Map())
+  check('empty corrections → world == rest', [...selfR.world.keys()].every((k) => nearQ(clipRest0.world.get(k), q4(selfR.world.get(k)), 1e-12)))
+
+  console.log('--- [11] applyFootPose with rest + clipRest ---')
+  const under = applyFootPose(THREE, clip, fpToe, selfR, clipRest)
+  const kf = under.tracks.find((t) => /leftfoot\.quaternion$/i.test(t.name)).values
+  check('foot key = D⁻¹·R = R(+x, 34°) = (0.2923717, 0, 0, 0.9563048)',
+    nearV([kf[0], kf[1], kf[2]], [0.2923717, 0, 0]) && near(kf[3], 0.9563048), fmt(kf))
+  const kt = under.tracks.find((t) => /toebase\.quaternion$/i.test(t.name)).values
+  check('toe constant track unchanged R(+x, −10°)', nearV([kt[0], kt[1], kt[2]], [-0.0871557, 0, 0]) && near(kt[3], 0.9961947), fmt(kt))
+  const fig11 = chain()
+  play(fig11, under)
+  check('ball world = (0, −0.0424373, 0.0742233)', nearV(worldOf(fig11.toe), [0, -0.0424373, 0.0742233]), fmt(worldOf(fig11.toe)))
+  const clipT = new THREE.AnimationClip('t', 1, [
+    new THREE.QuaternionKeyframeTrack('mixamorigLeftFoot.quaternion', [0], ID),
+    new THREE.QuaternionKeyframeTrack('mixamorigLeftToeBase.quaternion', [0], ID),
+  ])
+  const underT = applyFootPose(THREE, clipT, fpToe, selfR, clipRest)
+  const ktT = underT.tracks.find((t) => /toebase\.quaternion$/i.test(t.name)).values
+  check('toe WITH an identity track: local delta identity → R(+x, −10°)',
+    nearV([ktT[0], ktT[1], ktT[2]], [-0.0871557, 0, 0]) && near(ktT[3], 0.9961947), fmt(ktT))
+  const corr2 = new Map([...corr, ['lefttoebase', { left: new THREE.Quaternion(), right: qx(4) }]])
+  const under2 = applyFootPose(THREE, clipT, fpToe, selfR, transplantedRestPose(THREE, donorR, selfR, corr2))
+  const kf2 = under2.tracks.find((t) => /leftfoot\.quaternion$/i.test(t.name)).values
+  const kt2 = under2.tracks.find((t) => /toebase\.quaternion$/i.test(t.name)).values
+  check('toe corrected by +4° locally → R(−4°)·R(−10°) = R(+x, −14°) = (−0.1218693, 0, 0, 0.9925462)',
+    nearV([kt2[0], kt2[1], kt2[2]], [-0.1218693, 0, 0]) && near(kt2[3], 0.9925462), fmt(kt2))
+  check('… and the foot still 34°', nearV([kf2[0], kf2[1], kf2[2]], [0.2923717, 0, 0]) && near(kf2[3], 0.9563048), fmt(kf2))
+  const restOnly = applyFootPose(THREE, clip, fpToe, selfR).tracks.find((t) => /leftfoot\.quaternion$/i.test(t.name)).values
+  check('rest alone → R(28°)', nearV([restOnly[0], restOnly[1], restOnly[2]], [0.2419219, 0, 0]) && near(restOnly[3], 0.9702957))
+  const lacking = transplantedRestPose(THREE, donorR, selfR, corr); lacking.world.delete('leftfoot')
+  const lack = applyFootPose(THREE, clip, fpToe, selfR, lacking).tracks.find((t) => /leftfoot\.quaternion$/i.test(t.name)).values
+  check('clipRest lacking the bone → R(28°)', nearV([lack[0], lack[1], lack[2]], [0.2419219, 0, 0]) && near(lack[3], 0.9702957))
+
   if (failures.length) {
     console.log(`\nFAIL: ${failures.length} check(s) failed`)
     process.exit(1)
   }
-  console.log('\nOK: foot pose — extension, still pose, lift, match, contacts')
+  console.log('\nOK: foot pose — extension, still pose, lift, match, contacts, transplanted rest')
 }
 
 main().catch((err) => { console.error(err); process.exit(1) })

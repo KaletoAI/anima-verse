@@ -16,6 +16,24 @@
  * Both mark what they did (`userData.footPosed = fsig`) and do nothing on a
  * marked input, so a second call can never double the turn.
  *
+ * THE EXTENSION IS RELATIVE TO THE BIND FOOT — the only pose the server has.
+ * A retargeted clip, though, is relative to the rest the transplant plays
+ * (`transplantedRestPose`): the kernel divides the rig's global attitude
+ * out and may turn leg or foot subtrees, so under every clip the Foot already
+ * sits some degrees from its bind rotation before the clip moves it. Measured
+ * on a generated character (P2 acceptance, 2026-11-10): 4.64° heel-down on
+ * both feet, which left the fitted sole 13 mm under the floor at the heel in
+ * the idle clip and shifted every walk frame by the same amount. So a caller
+ * that hands in the target's rest AND that transplanted rest gets the delta
+ * carried: for the top named bone of a side (the Foot) the turn becomes
+ * `D⁻¹ · R` with `D = W_bind⁻¹ · W_clip` its WORLD delta — the sole stands
+ * where the fit put it whatever the parents did; a named bone under a named
+ * one (the ToeBase) takes its LOCAL delta, because its parent's turn already
+ * carries the world. A bone without a track keeps its bind local under the
+ * mixer, so its delta is read with that local in place. Without a
+ * transplanted rest the turn is `R` alone — the still pose, or a clip played
+ * against the bind itself.
+ *
  * THE LIFT. The shod sole stands `root_lift_m` higher than the bare one. It
  * is never baked into a track: standing (`clipHeightGroup` 'ground', which
  * includes unknown groups) lifts the root by it, seated and lying figures
@@ -86,32 +104,74 @@ function turnsOf(three: Three, fp: FootPose): Map<string, Quaternion> {
   return out
 }
 
+/** `key`'s local rest rotation in `pose`, identity when the pose lacks it. */
+function localOf(three: Three, pose: RestPose | null | undefined, key: string): Quaternion {
+  const out = new three.Quaternion()
+  const world = pose?.world.get(key)
+  const parent = pose?.parent.get(key)
+  if (world && parent) out.copy(parent).invert().multiply(world)
+  return out
+}
+
+/**
+ * The turn a named bone gets under a clip relative to `clipRest`
+ * (module docstring, "relative to the bind foot"): `D⁻¹ · R`, with `D` the
+ * bone's WORLD delta bind → transplanted rest when no ancestor is named,
+ * else its LOCAL delta. `hasTrack` false = the bone keeps its bind local
+ * under the mixer, so the delta is read with that local in place of the
+ * transplant's. `R` alone when either rest is missing or lacks the bone.
+ */
+function turnUnderClip(three: Three, key: string, R: Quaternion, hasTrack: boolean,
+  named: Set<string>, rest?: RestPose | null, clipRest?: RestPose | null): Quaternion {
+  if (!rest || !clipRest) return R
+  const bindWorld = rest.world.get(key)
+  const clipParent = clipRest.parent.get(key)
+  const clipWorld = clipRest.world.get(key)
+  if (!bindWorld || !clipParent || !clipWorld) return R
+  let ancestorNamed = false
+  for (let above = rest.parentBone.get(key); above; above = rest.parentBone.get(above)) {
+    if (named.has(above)) { ancestorNamed = true; break }
+  }
+  const bindLocal = localOf(three, rest, key)
+  const clipLocal = hasTrack ? new three.Quaternion().copy(clipParent).invert().multiply(clipWorld) : bindLocal
+  const delta = ancestorNamed
+    ? new three.Quaternion().copy(bindLocal).invert().multiply(clipLocal)
+    : new three.Quaternion().copy(bindWorld).invert().multiply(clipParent).multiply(clipLocal)
+  return delta.invert().multiply(R)
+}
+
 /**
  * A clone of `clip` with the extension baked in: every quaternion key of a
  * bone `fp` names (matched by `normBoneName`) becomes `q · R(axis, deg)`; a
  * named bone without a quaternion track gets a constant one-key track
  * `rest · R`, where `rest` is that bone's local rest rotation from the
  * TARGET figure's `RestPose` (identity when no rest pose is given or it
- * lacks the bone). The result is marked `userData.footPosed = fsig`; a
+ * lacks the bone). With `clipRest` — the rest the retargeted clip is
+ * relative to, `transplantedRestPose` of the same figure and corrections —
+ * `R` becomes `D⁻¹ · R` per bone (module docstring), so the sole stands
+ * where the fit put it although the transplant moved the foot off its bind.
+ * The result is marked `userData.footPosed = fsig`; a
  * marked clip is returned unchanged, and so is `clip` for a null record.
  * The input clip is never modified (a cached clip may be shared by shod and
  * bare figures); tracks the record does not touch are shared with it, as in
  * `bindRelativeClip`.
  */
 export function applyFootPose(three: Three, clip: AnimationClip, fp: FootPose | null | undefined,
-  rest?: RestPose | null): AnimationClip {
+  rest?: RestPose | null, clipRest?: RestPose | null): AnimationClip {
   if (!usable(fp)) return clip
   if ((clip.userData as { footPosed?: unknown } | undefined)?.footPosed) return clip
   const turns = turnsOf(three, fp)
+  const named = new Set(turns.keys())
   const tracks: KeyframeTrack[] = []
   const seen = new Set<string>()
   const q = new three.Quaternion()
   for (const track of clip.tracks) {
     const dot = track.name.lastIndexOf('.')
     const key = dot > 0 && track.name.slice(dot + 1) === 'quaternion' ? normBoneName(track.name.slice(0, dot)) : ''
-    const turn = key ? turns.get(key) : undefined
-    if (!turn) { tracks.push(track); continue }
+    const R = key ? turns.get(key) : undefined
+    if (!R) { tracks.push(track); continue }
     seen.add(key)
+    const turn = turnUnderClip(three, key, R, true, named, rest, clipRest)
     const values = new Float32Array(track.values.length)
     for (let i = 0; i + 3 < track.values.length; i += 4) {
       q.set(track.values[i], track.values[i + 1], track.values[i + 2], track.values[i + 3]).multiply(turn)
@@ -123,17 +183,13 @@ export function applyFootPose(three: Three, clip: AnimationClip, fp: FootPose | 
   // (three drops the reserved characters, e.g. the colon of `mixamorig:LeftFoot`).
   for (const [name] of Object.entries(fp.bones ?? {})) {
     const key = normBoneName(name)
-    const turn = turns.get(key)
-    if (!turn || seen.has(key)) continue
+    const R = turns.get(key)
+    if (!R || seen.has(key)) continue
     seen.add(key)
-    const restLocal = new three.Quaternion()
-    const world = rest?.world.get(key)
-    const parent = rest?.parent.get(key)
-    if (world && parent) restLocal.copy(parent).invert().multiply(world)
-    restLocal.multiply(turn)
+    const value = localOf(three, rest, key).multiply(turnUnderClip(three, key, R, false, named, rest, clipRest))
     const node = three.PropertyBinding.sanitizeNodeName(name)
     tracks.push(new three.QuaternionKeyframeTrack(`${node}.quaternion`, [0],
-      [restLocal.x, restLocal.y, restLocal.z, restLocal.w]))
+      [value.x, value.y, value.z, value.w]))
   }
   const out = new three.AnimationClip(clip.name, clip.duration, tracks, clip.blendMode)
   out.userData = { ...(clip.userData ?? {}), footPosed: fp.source.fsig }

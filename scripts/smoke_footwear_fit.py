@@ -43,7 +43,16 @@ Expected, by hand:
      rest ankle height over the floor y = 0) = 0.05574 m (+-0.5 mm), equal on both sides -> root lift
      0.05574, lift asymmetry 0.
 [F4] ball placement: the foot's heel -> ball line is the foot axis, so the turn about the lateral axis puts
-     the ball exactly on the chord -> error <= 1e-4 m (0.1 mm). The shoe ground lands on the floor ->
+     the RIGID ball (the bind contact carried by Foot, (0.13, 0, zc)) exactly on the chord. The gate reads
+     the ball AS SKINNED, though (P2 fix round): the ball band is |x - 0.13| < 0.012 -> the sole columns
+     x = 0.12, 0.13 (Foot) and 0.14 (ToeBase). Foot turns 24.62 deg about the ankle (0, 0.08):
+     (x, -0.08) -> (x cos + 0.08 sin, -x sin - 0.08 cos) + (0, 0.08) with cos = 0.909077, sin = 0.416629:
+     x = 0.12 -> (0.075759, -0.042722), x = 0.13 -> (0.084850, -0.046888). The ToeBase turns back by the
+     same angle about the posed ball joint, so its vertices keep their orientation and only move with that
+     joint: (0.13, 0.01) -> (0.089016, -0.037797), delta (-0.040984, -0.047797) -> x = 0.14 lands at
+     (0.099016, -0.047797). Skinned contact = mean x, lowest y = (0.086541, -0.047797) against the rigid
+     (0.084850, -0.046888): error sqrt(0.001692^2 + 0.000909^2) = 1.921 mm (+-0.02; the z means agree).
+     Under 3 mm -> the gate passes on the fixture. The shoe ground lands on the floor ->
      stand_floor 0 (+-0.01 mm); every active gate passes, ok True, no reasons.
      Re-posing the LEFT bind shoe with the stand pose built here by hand (Foot turned 24.62 deg about z = -1
      through the ankle): the wedge vertex (0, 0.09, 0.04) (heel end on the insole, the shoe's right edge,
@@ -164,7 +173,8 @@ def main() -> int:
 
     # [F4]
     g = rec["gates"]
-    check(g["ball_placement_mm"]["value"] <= 0.1, f"[F4] ball placement {g['ball_placement_mm']['value']} mm <= 0.1")
+    check(near(g["ball_placement_mm"]["value"], 1.921, 0.02),
+          f"[F4] ball placement {g['ball_placement_mm']['value']:.4f} mm = 1.921 (skinned ball vs the rigid chord point)")
     check(near(g["stand_floor_mm"]["value"], 0.0, 0.01), f"[F4] stand floor {g['stand_floor_mm']['value']} mm")
     check(fit.ok and fit.reasons == [], f"[F4] ok {fit.ok}, reasons {fit.reasons}")
     left, right = fit.shoes["left"], fit.shoes["right"]

@@ -21,7 +21,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   restCorrections, restPoseOf, rigHipsHeight,
   standingHipsRef, clipHeightOffsetM, createCollisionOverlay, collidingGarmentMeshes,
   createGarmentCollision, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
-  footPoseMatches } from '@anima/scene-render'
+  footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision } from '@anima/scene-render'
 import { applyViewerTexture } from './modelTexture'
@@ -467,7 +467,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  this viewer plays every clip in place, so without it a seated clip
      *  would sit at standing hips height: lowered by `clipHipsDrop`, moved by
      *  the clip's `clipHeightOffsetM` and lifted by `footPoseLiftM` (the shod
-     *  sole; standing only), over a floor grid at the bare bind soles.
+     *  sole; standing only), over a floor grid at the bare bind soles. A shod
+     *  figure in the ground group is then grounded on its SOLE per clip
+     *  (`measureClipGround`, the rule the 3D client's terrain drop shares).
      *  Model mode only; absent = centred as before. */
     clipGroup?: 'ground' | 'seat' | 'lie' }) {
   const { t } = useI18n()
@@ -1179,17 +1181,38 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           // model's own bind pose. Without it the copy overwrites the
           // character's stance — a model whose T-pose stands with the feet
           // splayed 18° showed 18° of extra toe-in on every clip.
-          const corrections = restCorrections(THREE, await donorRest(), object)
+          const donor = await donorRest()
+          const corrections = restCorrections(THREE, donor, object)
           if (disposed) return
           // The shoe's extension, baked ONCE right after the bind-relative
           // step into this load's own (unposed) clip; a bone the clip has no
-          // track for takes the figure's rest rotation (footPose.ts).
-          const bound = applyFootPose(THREE, bindRelativeClip(THREE, clip, corrections), shod,
-            shod ? restPoseOf(THREE, object) : null)
+          // track for takes the figure's rest rotation, and the extension
+          // carries the delta the transplant put on the foot — the clip is
+          // relative to the rest the corrections play, not to the bind
+          // (footPose.ts, `transplantedRestPose`).
+          const rest = shod ? restPoseOf(THREE, object) : null
+          const bound = applyFootPose(THREE, bindRelativeClip(THREE, clip, corrections), shod, rest,
+            rest ? transplantedRestPose(THREE, donor, rest, corrections) : null)
           if (clipGroup) {
             const entry = (await clipIndex()).clips.find((c) => c.url === clipUrl)
             stance = await measureStance(clipHipsMedian, entry?.height_offsets_cm)
             if (disposed) return
+            if (stance && shod && clipGroup === 'ground') {
+              // THE SHOD GROUND (scene-render `clipGround.ts`, the shared
+              // rule the 3D client's terrain drop uses too): the sole of a
+              // rigid shoe sinks wherever the clip bends the knees, so the
+              // clip's offset is measured on the sole contacts, with the
+              // placement so far as the root term, on a clone the mixer may
+              // pose — under the same up-axis fix as the figure.
+              const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
+              if (disposed) return
+              const holder = new THREE.Group()
+              holder.rotation.copy(pivot.rotation)
+              const probe = skclone(object) as Object3D
+              holder.add(probe)
+              measureClipGround(THREE, [bound], probe, { footPose: shod, rootY: stance.y })
+              stance.y -= clipGroundOffset(bound)
+            }
           }
           // Bind capture after the automatic up-axis fix, before frame zero.
           secondary = createSecondaryMotion(THREE, object, secondaryEnabled ? motionRef.current : undefined, object)
@@ -1918,9 +1941,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 // as the 3D client: the marker figure keeps its own stance —
                 // and the shoe's extension right after it, from the unposed
                 // cached clip.
-                const bound = applyFootPose(THREE, bindRelativeClip(
-                  THREE, anim.clip, restCorrections(THREE, await donorRest(), inst)),
-                shodFig, shodFig ? restPoseOf(THREE, inst) : null)
+                const donor = await donorRest()
+                const corrections = restCorrections(THREE, donor, inst)
+                const restFig = shodFig ? restPoseOf(THREE, inst) : null
+                const bound = applyFootPose(THREE, bindRelativeClip(THREE, anim.clip, corrections),
+                  shodFig, restFig, restFig ? transplantedRestPose(THREE, donor, restFig, corrections) : null)
                 if (disposed || figTokenRef.current !== o.token) return
                 const mixer = new THREE.AnimationMixer(inst)
                 mixer.clipAction(bound).play()
