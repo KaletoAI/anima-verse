@@ -6,26 +6,31 @@
  * mesh of its own on characters of the base-body pipeline instead of being
  * painted onto the body; the flag lives on the ITEM, so the toggle applies
  * to every wearer (2D images stay unchanged). Per row: the toggle, the
- * status chip (server: `garment_set.piece_status`) and an expandable panel
- * with the clothing chain (worn → piece-only → cut-outs → mesh → fit) —
- * every step with its gate chips (limits from the server) and Regenerate,
- * the preview with its freshness badge and the step overview (ModelSteps).
+ * status chip (server: `garment_set.piece_status`) and "Mesh steps", which
+ * opens the piece's dialog (GarmentPieceDialog): the clothing chain (worn →
+ * piece-only → cut-outs → mesh → fit) as a compact grid — thumbnails, one
+ * gate icon per image with the chips in its tooltip, Regenerate per view —
+ * beside the fitted preview with its freshness badge, its fit numbers and
+ * the step overview (ModelSteps).
  *
  * Backend: GET /characters/{n}/garments (overview: pipeline, row status
- * incl. the pieces it is fitted over, worn pieces over each other), GET /characters/{n}/garments/{item} (the panel,
- * polled while a step runs — useGarment), POST
- * /characters/{n}/garments/{item}/run {step?, view?, force?} (409 while a
- * garment run of the character goes — shown beside the clicked button,
- * useGarmentRun), GET + PUT /inventory/items/{item}
+ * incl. the pieces it is fitted over, worn pieces over each other), GET
+ * /characters/{n}/garments/{item} (the dialog, polled while a step runs —
+ * useGarment), POST /characters/{n}/garments/{item}/run {step?, view?,
+ * force?} (a run behind the character's other garment runs is queued; the
+ * click answers on its button and tile — useGarmentRun), GET + PUT
+ * /inventory/items/{item}
  * (the flag; the PUT replaces the whole outfit_piece, so it is read first).
  */
-import { useCallback, useEffect, useState } from 'react'
-import type { CSSProperties } from 'react'
+import { useEffect, useState } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPut } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { useClockSettings } from '../../lib/clockFormat'
-import { GarmentFailure, GarmentSteps, RunButton, RunStatusLine } from './GarmentSteps'
+import { GarmentFailure, GateChips, RunButton, RunStatusLine } from './GarmentSteps'
+import { GarmentStepGrid } from './GarmentStepGrid'
 import type { ImageStepSpec } from './GarmentSteps'
 import { ROW, WARN_STYLE } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
@@ -87,6 +92,7 @@ const GHOST_CHIPS: ChipSpec[] = [
 const FIT_CHIPS: ChipSpec[] = [
   { key: 'max_push_m', label: 'Max push', scale: 100, unit: 'cm', digits: 1 },
   { key: 'moved_share', label: 'Moved', scale: 100, unit: '%', digits: 1 },
+  { key: 'deep_push_share', label: 'Pushed > 3 cm', scale: 100, unit: '%', digits: 1 },
   { key: 'largest_component_share', label: 'Largest part', scale: 100, unit: '%', digits: 1 },
   { key: 'rigged_inside_share', label: 'Inside the body', scale: 100, unit: '%', digits: 2 },
   // Reported, not gated.
@@ -165,89 +171,130 @@ export function OwnMeshToggle({ itemId, checked, disabled, onChanged }: {
   )
 }
 
-/** The expanded panel of one own-mesh piece. */
-export function GarmentPiecePanel({ character, itemId, onStatus }: {
+/** The steps dialog of one own-mesh piece: a wide modal (portal to
+ *  document.body) — top bar with the piece, its ONE status (state, queue
+ *  place or running step), Run all and close; left the chain as a compact
+ *  grid (GarmentStepGrid), right the fitted preview with its fit numbers,
+ *  the failure and the hints. Escape or a click beside it closes it; a run
+ *  goes on without it (the row chip keeps showing it). */
+export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose }: {
   character: string
   itemId: string
-  /** The row chip follows the panel's polls. */
+  /** The piece's display name. */
+  name: string
+  /** The row chip follows the dialog's polls. */
   onStatus: (itemId: string, status: PieceStatus) => void
+  onClose: () => void
 }) {
   useClockSettings()
   const { t } = useI18n()
-  const { toast } = useToast()
   const enc = encodeURIComponent(character)
   const url = character && itemId ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}` : null
   const { info, startPoll } = useGarment<GarmentItemInfo & { steps?: ModelStep[] }>(url)
-  const onError = useCallback((message: string) => { toast(t('Error') + ': ' + message, 'error') }, [t, toast])
-  const { feedback, start } = useGarmentRun(character, itemId, info, startPoll, onError)
+  const { feedback, start } = useGarmentRun(character, itemId, info, startPoll)
 
   useEffect(() => { if (info?.status) onStatus(itemId, info.status) }, [info, itemId, onStatus])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
-  if (!info) return <div className="ga-hint">{t('Loading…')}</div>
-  if (!info.pipeline) {
-    return <div className="ga-hint">{t('Own meshes need the base body pipeline — switch it on in the Base body tab')}</div>
-  }
-  const garment = info.garment
-  const busy = feedback.pending !== null || garmentRunning(info)
+  const garment = info?.garment ?? null
+  const running = garmentRunning(info)
+  const busy = feedback.pending !== null || running
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
-  return (
-    <div className="ga-form" style={{ padding: 8, borderRadius: 6, background: 'rgba(0,0,0,0.18)' }}>
-      <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS} />
-      <div style={ROW}>
-        <PieceStatusChip status={info.status} />
-        <RunButton
-          feedback={feedback}
-          slot="all"
-          disabled={busy || !garment}
-          title={t('Runs every step that is missing or out of date')}
-          onClick={() => onRun({}, 'all')}
-          label={garment?.running_step === 'queued' ? t('Queued')
-            : garmentRunning(info) ? t('Generating…') : t('Run all')}
-          stepLabels={STEP_LABELS}
-        />
-      </div>
-      {info.status.painted && !garmentRunning(info) ? (
-        <div className="ga-hint" style={WARN_STYLE}>
-          {t('Until it has an accepted fit, the outfit model paints this piece onto the body.')}
-        </div>
-      ) : null}
-      {garment && garment.stale_reasons.length ? (
-        <div style={{ ...ROW, padding: 8, borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
-          <span style={WARN_STYLE}>{garment.stale_reasons.map((r) => t(STALE_LABELS[r] || r)).join(' · ')}</span>
-          <span className="ga-hint">{t('The previous mesh stays in use until the new one is fitted.')}</span>
-          <RunButton feedback={feedback} slot="stale" disabled={busy} onClick={() => onRun({}, 'stale')}
-            label={t('Regenerate')} stepLabels={STEP_LABELS} />
-        </div>
-      ) : null}
-      <GarmentFailure garment={garment} stepLabels={STEP_LABELS} />
+  const fit = garment?.steps.fit
+  const fitRecord = fit && fit.status !== 'missing' ? fit.metrics : null
 
-      <GarmentSteps
-        garment={garment}
-        imageSteps={IMAGE_STEPS}
-        stepLabels={STEP_LABELS}
-        limits={info.limits || {}}
-        fitChips={FIT_CHIPS}
-        busy={busy}
-        onRun={onRun}
-        lowFailedText="Distance tier failed — the full piece is used"
-        compact
-        feedback={feedback}
-      />
-
-      <div className="ga-fieldset-title">{t('Preview')}</div>
-      {garment?.preview_url ? (
-        <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={280}
-          freshness={garment.preview_freshness}
-          statusPanel={info.steps?.length ? <ModelSteps steps={info.steps} /> : undefined} />
-      ) : (
-        <>
-          <div className="ga-hint">{t('No fitted mesh yet')}</div>
-          {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
-        </>
-      )}
-      <div className="ga-hint">
-        {t('Clothing meshes have no collision yet — two own-mesh pieces worn over each other can intersect')}
+  let body: ReactNode
+  if (!info) {
+    body = <div className="ga-hint">{t('Loading…')}</div>
+  } else if (!info.pipeline) {
+    body = <div className="ga-hint">{t('Own meshes need the base body pipeline — switch it on in the Base body tab')}</div>
+  } else {
+    body = (
+      <div className="ga-garment-dialog-body">
+        <div className="ga-garment-dialog-col">
+          {garment && garment.stale_reasons.length ? (
+            <div style={{ ...ROW, gap: 8, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
+              <span style={WARN_STYLE} title={t('The previous mesh stays in use until the new one is fitted.')}>
+                {garment.stale_reasons.map((r) => t(STALE_LABELS[r] || r)).join(' · ')}
+              </span>
+              <RunButton feedback={feedback} slot="stale" disabled={busy} onClick={() => onRun({}, 'stale')}
+                title={t('The previous mesh stays in use until the new one is fitted.')}
+                label={t('Regenerate')} />
+            </div>
+          ) : null}
+          <GarmentStepGrid
+            garment={garment}
+            imageSteps={IMAGE_STEPS}
+            stepLabels={STEP_LABELS}
+            limits={info.limits || {}}
+            fitChips={FIT_CHIPS}
+            busy={busy}
+            onRun={onRun}
+            feedback={feedback}
+          />
+        </div>
+        <div className="ga-garment-dialog-col">
+          {garment?.preview_url ? (
+            <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={430}
+              freshness={garment.preview_freshness}
+              statusPanel={info.steps?.length ? <ModelSteps steps={info.steps} /> : undefined} />
+          ) : (
+            <>
+              <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>{t('No fitted mesh yet')}</div>
+              {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
+            </>
+          )}
+          <GateChips specs={FIT_CHIPS} record={fitRecord} limits={info.limits?.fit} />
+          {fit?.low && fit.low.ok === false ? (
+            <div className="ga-hint" style={WARN_STYLE}>
+              {t('Distance tier failed — the full piece is used')}: {fit.low.error}
+            </div>
+          ) : null}
+          <GarmentFailure garment={garment} stepLabels={STEP_LABELS} />
+          {info.status.painted && !running ? (
+            <div className="ga-hint" style={WARN_STYLE}>
+              {t('Until it has an accepted fit, the outfit model paints this piece onto the body.')}
+            </div>
+          ) : null}
+          <div className="ga-hint">
+            {t('Clothing meshes have no collision yet — two own-mesh pieces worn over each other can intersect')}
+          </div>
+        </div>
       </div>
-    </div>
+    )
+  }
+
+  return createPortal(
+    <div className="ga-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="ga-modal ga-garment-dialog" role="dialog" aria-modal="true"
+        aria-label={`${t('Mesh steps')} · ${name}`}>
+        <div className="ga-modal-header ga-garment-dialog-head">
+          <span className="ga-garment-dialog-title" title={name}>{name}</span>
+          <div style={{ flex: '1 1 auto', minWidth: 0, fontWeight: 400 }}>
+            {running || feedback.pending !== null
+              ? <RunStatusLine garment={garment} feedback={feedback} stepLabels={STEP_LABELS} bare />
+              : info?.status ? <PieceStatusChip status={info.status} /> : null}
+          </div>
+          {info?.pipeline ? (
+            <RunButton
+              feedback={feedback}
+              slot="all"
+              primary
+              disabled={busy || !garment}
+              title={t('Runs every step that is missing or out of date')}
+              onClick={() => onRun({}, 'all')}
+              label={t('Run all')}
+            />
+          ) : null}
+          <button type="button" className="ga-modal-close" aria-label={t('Close')} onClick={onClose}>×</button>
+        </div>
+        {body}
+      </div>
+    </div>,
+    document.body,
   )
 }

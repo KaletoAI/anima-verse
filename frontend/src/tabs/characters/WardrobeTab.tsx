@@ -14,7 +14,7 @@ import { apiGet, apiPost, apiDelete } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
-import { GarmentPiecePanel, OwnMeshToggle, PieceStatusChip } from './WardrobeGarment'
+import { GarmentPieceDialog, OwnMeshToggle, PieceStatusChip } from './WardrobeGarment'
 import { useWardrobeGarments } from './useGarment'
 import { ConfirmDialog, PromptPreview } from '@anima/player-ui'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
@@ -189,6 +189,7 @@ export function WardrobeTab({ character }: { character: string }) {
   // Own-mesh pieces: row toggles + chips, one expanded chain panel.
   const { data: garments, reload: reloadGarments, setStatus: setGarmentStatus } = useWardrobeGarments(character)
   const [openGarment, setOpenGarment] = useState('')
+  const closeGarment = useCallback(() => setOpenGarment(''), [])
   const load = useCallback(async () => {
     if (!character) { setData(EMPTY); return }
     try { setData(await apiGet<Belongings>(`/characters/${enc}/belongings`)) } catch { /* ignore */ }
@@ -383,15 +384,16 @@ export function WardrobeTab({ character }: { character: string }) {
                     onChanged={() => { void load() }} />
                   {garmentStatus ? <PieceStatusChip status={garmentStatus} /> : null}
                   {garmentStatus ? (
-                    <button style={{ ...btn(), marginLeft: 'auto' }} aria-expanded={open}
-                      onClick={() => setOpenGarment(open ? '' : it.item_id)}>
-                      {open ? t('Hide steps') : t('Mesh steps')}
+                    <button style={{ ...btn(), marginLeft: 'auto' }} aria-haspopup="dialog"
+                      onClick={() => setOpenGarment(it.item_id)}>
+                      {t('Mesh steps')}
                     </button>
                   ) : null}
                 </div>
               ) : null}
               {open ? (
-                <GarmentPiecePanel character={character} itemId={it.item_id} onStatus={setGarmentStatus} />
+                <GarmentPieceDialog character={character} itemId={it.item_id} name={it.name}
+                  onStatus={setGarmentStatus} onClose={closeGarment} />
               ) : null}
               </div>
             )

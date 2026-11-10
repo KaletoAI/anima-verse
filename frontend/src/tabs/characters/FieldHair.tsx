@@ -401,12 +401,13 @@ export function FieldHair({ character, onEditAppearance }: {
   )
 
   const itemId = info?.item_id || ''
-  const onError = useCallback((message: string) => { toast(t('Error') + ': ' + message, 'error') }, [t, toast])
-  const { feedback, start } = useGarmentRun(character, itemId, info, startPoll, onError)
+  const { feedback, start } = useGarmentRun(character, itemId, info, startPoll)
 
   const create = useCallback(
     () => call(`/characters/${enc}/hair`, {}, (d) => {
-      if ((d as { started?: boolean })?.started === false) {
+      // A run behind the character's other garment runs is queued (the status line shows it).
+      const answer = d as { started?: boolean; queued?: boolean } | null
+      if (answer?.started === false && !answer.queued) {
         toast(t('A hair run is already going for this character'))
       }
     }),
@@ -527,7 +528,6 @@ export function FieldHair({ character, onEditAppearance }: {
           title={!hd.images.input ? t('Set a profile picture first') : undefined}
           onClick={() => onRun({ step: 'hairdeck', force: true })}
           label={t('Regenerate hair (HairDeck)')}
-          stepLabels={STEP_LABELS}
         />
       </div>
       {hd.notes.length ? <div className="ga-hint">{t('Notes')}: {hd.notes.join(' · ')}</div> : null}
@@ -537,7 +537,7 @@ export function FieldHair({ character, onEditAppearance }: {
       <FitBlock garment={garment} chips={HAIRDECK_FIT_CHIPS} limits={limits.hairdeck_fit}
         ready={hd.status === 'accepted'} busy={busy} onRun={onRun}
         lowFailedText="Distance tier failed — the full hair is used"
-        feedback={feedback} order={HAIRDECK_ORDER} stepLabels={STEP_LABELS} />
+        feedback={feedback} order={HAIRDECK_ORDER} />
       {hd.attempts.length ? (
         <details>
           <summary className="ga-hint" style={{ cursor: 'pointer' }}>
@@ -653,7 +653,7 @@ export function FieldHair({ character, onEditAppearance }: {
               </span>
               <span className="ga-hint">{t('The previous hair stays in use until the new one is fitted.')}</span>
               <RunButton feedback={feedback} slot="stale" disabled={busy} onClick={() => onRun({}, 'stale')}
-                label={t('Regenerate')} stepLabels={STEP_LABELS} />
+                label={t('Regenerate')} />
             </div>
           ) : null}
 
@@ -663,7 +663,7 @@ export function FieldHair({ character, onEditAppearance }: {
             <div style={{ ...ROW, padding: 8, borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
               <span style={WARN_STYLE}>{t('No hair from this method yet')}</span>
               <RunButton feedback={feedback} slot="nohair" disabled={busy} onClick={() => onRun({}, 'nohair')}
-                label={t('Regenerate')} stepLabels={STEP_LABELS} />
+                label={t('Regenerate')} />
             </div>
           ) : null}
 
@@ -686,7 +686,6 @@ export function FieldHair({ character, onEditAppearance }: {
                 onClick={() => onRun({}, 'all')}
                 label={garment?.running_step === 'queued' ? t('Queued')
                   : garmentRunning(info) ? t('Generating…') : t('Run all')}
-                stepLabels={STEP_LABELS}
               />
             </div>
             {garment?.preview_url ? (

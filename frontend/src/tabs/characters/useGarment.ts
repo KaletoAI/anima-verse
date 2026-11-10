@@ -9,7 +9,7 @@
  * (another character or item; null = nothing to load).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, apiGet, apiPost } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
 import type { Freshness } from './FreshnessBadge'
 import type { CollisionPayload } from '@anima/scene-render'
@@ -186,6 +186,11 @@ export interface GarmentInfo {
   /** The step in flight, `queued` between the click and the first step. */
   running_step: string | null
   started_at: string | null
+  /** The 1-based place of the item's next waiting run in the character's
+   *  garment queue (null = none waits) and the item id in flight (null =
+   *  idle) — `garments.queue_state`; absent on an older server. */
+  queue_position?: number | null
+  queue_running?: string | null
   failed: GarmentFailure | null
   preview_url: string | null
   served_fsig: string | null
@@ -345,6 +350,17 @@ export const runSlot = (body: GarmentRunBody) => `${body.step || ''}|${body.view
 /** Another garment of the character that runs or waits (overview + names). */
 export interface OtherRun { id: string; name: string; step: string | null }
 
+/** The answer of POST …/garments/{item}/run. A run of a character whose
+ *  other garment runs go is QUEUED behind them (`queued`, its 1-based
+ *  `position` in the character's queue, `behind` = what runs/waits before
+ *  it); every key is optional — an older server answers `{started}` only. */
+export interface RunAnswer {
+  started?: boolean
+  queued?: boolean
+  position?: number | null
+  behind?: unknown
+}
+
 /** What the panel shows about the user's own run clicks (useGarmentRun). */
 export interface RunFeedback {
   /** The slot whose POST is in flight ("Starting…"). */
@@ -352,12 +368,32 @@ export interface RunFeedback {
   /** The run this panel started, until it ends: the tiles it targets show
    *  Queued / Generating… / Will be redone. */
   target: GarmentRunBody | null
-  /** A click the server refused (409: another garment run of the character
-   *  goes), shown beside that button until the next click. */
+  /** The start answer's queue place of that run (null = not queued / unknown). */
+  queue: { position: number | null; behind: string[] } | null
+  /** A click that failed (a real error — a run behind the character's other
+   *  garment runs is queued, never refused), shown beside that button until
+   *  the next click. */
   refused: { slot: string; message: string } | null
   /** The character's OTHER garments that run or wait — loaded while this
    *  item is queued and after a refusal; null = not known. */
   others: OtherRun[] | null
+  /** Item id → display name of the character's belongings (loaded with
+   *  `others`), for the ids the queue answers carry. */
+  names: Record<string, string>
+}
+
+/** The queue place of a start answer; `behind` may name items (strings or
+ *  `{name}`/`{item_id}` records) or count them. */
+function queuePlace(answer: RunAnswer | null | undefined): RunFeedback['queue'] {
+  if (!answer?.queued) return null
+  const raw = answer.behind
+  const behind = Array.isArray(raw)
+    ? raw.map((b) => (typeof b === 'string' ? b
+      : b && typeof b === 'object' ? String((b as Record<string, unknown>).name
+        ?? (b as Record<string, unknown>).item_id ?? '') : '')).filter(Boolean)
+    : typeof raw === 'string' && raw ? [raw] : []
+  const position = typeof answer.position === 'number' ? answer.position : null
+  return { position, behind }
 }
 
 /** The run tile mark of one step (and view) under the feedback. */
@@ -389,21 +425,23 @@ export function runMark(fb: RunFeedback | undefined, garment: GarmentInfo | null
  * The run clicks of a garment panel: `start(body, slot?)` POSTs the run,
  * marks the clicked slot pending while the POST is in flight, keeps the
  * started run as `target` until the poll shows the item idle again, and
- * keeps a 409 beside the clicked button (other errors go to `onError`).
- * While the item is queued and after a refusal, the character's other
- * running garments are loaded (GET /characters/{n}/garments + the names of
+ * keeps a failure beside the clicked button. A run behind the character's
+ * other garment runs is queued by the server (`RunAnswer`): its queue place
+ * goes into `queue`. While the item is queued, the character's other
+ * running garments and the item names are loaded (GET /characters/{n}/garments + the names of
  * GET /characters/{n}/belongings).
  */
 export function useGarmentRun(character: string, itemId: string,
   info: { garment?: GarmentInfo | null } | null,
-  startPoll: (delayMs?: number) => void,
-  onError: (message: string) => void) {
+  startPoll: (delayMs?: number) => void) {
   const [pending, setPending] = useState<string | null>(null)
   // `since` = the info on screen when the run started: the target ends on
   // the first NEWER info that shows the item idle.
-  const [target, setTarget] = useState<{ body: GarmentRunBody; since: unknown } | null>(null)
+  const [target, setTarget] = useState<{ body: GarmentRunBody; since: unknown;
+    queue: RunFeedback['queue'] } | null>(null)
   const [refused, setRefused] = useState<RunFeedback['refused']>(null)
   const [others, setOthers] = useState<OtherRun[] | null>(null)
+  const [names, setNames] = useState<Record<string, string>>({})
   const enc = encodeURIComponent(character)
 
   const loadOthers = useCallback(async () => {
@@ -415,6 +453,7 @@ export function useGarmentRun(character: string, itemId: string,
           .catch(() => ({ items: [] })),
       ])
       const names = new Map((belongings.items || []).map((i) => [i.item_id, i.name]))
+      setNames(Object.fromEntries(names))
       setOthers(Object.entries(overview.items || {})
         .filter(([id, st]) => id !== itemId && st.state === 'running')
         .map(([id, st]) => ({ id, name: names.get(id) || id, step: st.step })))
@@ -428,21 +467,17 @@ export function useGarmentRun(character: string, itemId: string,
     setPending(slot)
     setRefused(null)
     try {
-      await apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, body)
-      setTarget({ body, since: info })
+      const answer = await apiPost<RunAnswer>(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, body)
+      setTarget({ body, since: info, queue: queuePlace(answer) })
+      if (answer?.queued) void loadOthers()
       startPoll(300)
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409) {
-        setRefused({ slot, message: e.message })
-        void loadOthers()
-      } else {
-        onError((e as Error).message)
-      }
+      setRefused({ slot, message: e instanceof Error ? e.message : String(e) })
       startPoll()
     } finally {
       setPending(null)
     }
-  }, [enc, info, itemId, loadOthers, onError, pending, startPoll])
+  }, [enc, info, itemId, loadOthers, pending, startPoll])
 
   const running = info?.garment?.running_step || null
   const queued = running === 'queued'
@@ -457,6 +492,8 @@ export function useGarmentRun(character: string, itemId: string,
     setTarget(null); setRefused(null); setOthers(null)
   }, [character, itemId])
 
-  const feedback: RunFeedback = { pending, target: target?.body ?? null, refused, others }
+  const feedback: RunFeedback = {
+    pending, target: target?.body ?? null, queue: target?.queue ?? null, refused, others, names,
+  }
   return { feedback, start }
 }

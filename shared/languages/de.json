@@ -4281,7 +4281,6 @@
     "{items} cover each other on {slots} — layered in slot order, {inner} innermost.": "{items} bedecken sich gegenseitig an {slots} — nach Slot-Reihenfolge geschichtet, {inner} innen.",
     "Fitted over {items}": "Angepasst über {items}",
     "without {items}": "ohne {items}",
-    "Hide steps": "Schritte ausblenden",
     "Mesh steps": "Mesh-Schritte",
     "no accepted fit on the current base model": "keine akzeptierte Anpassung auf dem aktuellen Grundmodell",
     "Base body model missing — generate it in the 3D tab": "Grundkörper-Modell fehlt — im 3D-Tab erzeugen",
@@ -4352,6 +4351,11 @@
     "Queued behind {items}": "Wartet hinter {items}",
     "Requested": "Angefordert",
     "started": "gestartet",
-    "Another piece of this character is being generated — this run was not started": "Ein anderes Teil dieses Charakters wird gerade erzeugt — dieser Lauf wurde nicht gestartet"
+    "position {n}": "Position {n}",
+    "Worn views: the base body wearing this piece, front and back (image edits of the base views). Regenerate: one hub image job for that view (a second attempt when the gate refuses it), then every later step runs again.": "Getragene Ansichten: der Grundkörper mit diesem Teil, vorne und hinten (Bildbearbeitungen der Grundansichten). Neu generieren: ein Hub-Bildjob für diese Ansicht (ein zweiter Versuch, wenn die Prüfung ihn ablehnt), danach laufen alle späteren Schritte erneut.",
+    "Piece-only views: the piece alone, the body removed, aligned to the worn view. Regenerate: one hub image job for that view (a second attempt when the gate refuses it), then every later step runs again.": "Nur-Teil-Ansichten: das Teil allein, ohne Körper, an der getragenen Ansicht ausgerichtet. Neu generieren: ein Hub-Bildjob für diese Ansicht (ein zweiter Versuch, wenn die Prüfung ihn ablehnt), danach laufen alle späteren Schritte erneut.",
+    "Cut-outs: the piece-only views squared and upscaled as the mesh input. Regenerate: local crop plus a routed upscale job, then the mesh and the fit run again.": "Ausschnitte: die Nur-Teil-Ansichten quadratisch zugeschnitten und hochskaliert als Mesh-Eingabe. Neu generieren: lokaler Zuschnitt plus ein gerouteter Upscale-Job, danach laufen Mesh und Anpassung erneut.",
+    "Mesh: a 3D mesh built from both cut-outs and decimated. Regenerate: one hub mesh job (a second attempt when the gate refuses it), then the fit runs again.": "Mesh: ein 3D-Mesh aus beiden Ausschnitten, danach reduziert. Neu generieren: ein Hub-Mesh-Job (ein zweiter Versuch, wenn die Prüfung ihn ablehnt), danach läuft die Anpassung erneut.",
+    "Fit: the mesh fitted onto the rigged base model. Re-fit runs locally — no hub job.": "Anpassung: das Mesh auf das geriggte Basismodell angepasst. Neu anpassen läuft lokal — kein Hub-Job."
   }
 }
