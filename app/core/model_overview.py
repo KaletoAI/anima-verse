@@ -1224,10 +1224,11 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
 def _annotate_garment_info(garment: Any) -> None:
     """``freshness`` on every image of a ``garments.garment_info`` (all of
     them belong to the current fsig: current when present) and its
-    ``preview_freshness``."""
+    ``preview_freshness``. A footwear panel carries its own per-step
+    ``freshness`` (``garment_footwear.info``) and is left as it is."""
     if not isinstance(garment, dict):
         return
-    for views in (garment.get("steps") or {}).values():
+    for views in ((garment.get("steps") or {}).values() if garment.get("kind") != "footwear" else ()):
         if not isinstance(views, dict):
             continue
         for tile in views.values():
@@ -1242,6 +1243,9 @@ def _annotate_garment_info(garment: Any) -> None:
 # The steps of a garment's chain -> row label (``garment_steps``).
 GARMENT_STEP_LABELS = {"haired": "Haired views", "worn": "Worn views", "ghost": "Hair-only views",
                        "cutout": "Cut-outs", "mesh": "Mesh", "hairdeck": "HairDeck", "fit": "Fit"}
+# Footwear (``garment_footwear.info``): the shoe source rows.
+FOOTWEAR_STEP_LABELS = {"source": "Item image", "empty": "Empty shoe", "cutout": "Cut-out", "mesh": "Mesh",
+                        "insole": "Insole", "fit": "Fit"}
 CLOTHING_GHOST_LABEL = "Piece-only views"
 STEP_RUNNING = "running"
 
@@ -1257,11 +1261,13 @@ def garment_steps(garment: Dict[str, Any]) -> List[Dict[str, Any]]:
     failed = _dict(garment.get("failed"))
     running = garment.get("running_step")
     clothing = garment.get("kind") == "clothing"
+    footwear = garment.get("kind") == "footwear"
+    labels = FOOTWEAR_STEP_LABELS if footwear else GARMENT_STEP_LABELS
     for step_id, data in steps.items():
-        label = CLOTHING_GHOST_LABEL if clothing and step_id == "ghost" else GARMENT_STEP_LABELS.get(step_id, step_id)
+        label = CLOTHING_GHOST_LABEL if clothing and step_id == "ghost" else labels.get(step_id, step_id)
         data = _dict(data)
         numbers: Dict[str, Any] = {}
-        if step_id in ("haired", "worn", "ghost", "cutout"):
+        if step_id in ("haired", "worn", "ghost", "cutout") and not footwear:
             tiles = [_dict(data.get(view)) for view in ("front", "back")]
             status = DONE if all(tile.get("accepted") for tile in tiles) else MISSING
             detail = ""
@@ -1269,8 +1275,8 @@ def garment_steps(garment: Dict[str, Any]) -> List[Dict[str, Any]]:
             state = data.get("status")
             status = DONE if state == "accepted" else WARNING if state in ("stale", "outdated") else MISSING
             numbers = {k: v for k, v in _dict(data.get("metrics")).items() if isinstance(v, (int, float))}
-            detail = f"{data['tris']} triangles" if data.get("tris") else ""
-        else:  # mesh, hairdeck
+            detail = f"{data['tris']} triangles" if data.get("tris") else str(data.get("detail") or "")
+        else:  # mesh, hairdeck, the footwear source steps
             state = data.get("status")
             status = DONE if state == "accepted" else FAILED if state == "refused" else MISSING
             numbers = {k: v for k, v in _dict(data.get("metrics")).items() if isinstance(v, (int, float))}

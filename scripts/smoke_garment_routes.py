@@ -76,6 +76,29 @@ Fixture (expected values derived by hand):
     -> 200 model/gltf-binary with those bytes and ETag "<content_version>";
     If-None-Match with that ETag -> 304; ?v=<content_version> -> immutable
     Cache-Control. garment.preview_url of GET /hair names that version.
+[9] Footwear routes (plan 2026-11-10-footwear-rigid-shoes Task 6). Items
+    ``shoe_demo`` (outfit piece, slots [feet], own_mesh) held by Demo with
+    the item image b"\x89PNG-item", and ``shoe_other`` held by Other only.
+    S = footwear_source.current_ssig(shoe_demo); nothing recorded yet -> the
+    shown source is S.
+    Player session: the three routes 403.
+    Before any file: image/source 200 (the item image bytes, image/png),
+    image/upscaled 404, mesh 404, insole 404.
+    Planted under footwear/shoe_demo/S/: record.json {steps: {source:
+    accepted}}, upscaled.png, empty.png, empty.try1.png, cutout.png,
+    prepared.glb, insole.json -> each comes back 200 with its bytes;
+    empty?attempt=1 -> the try1 bytes, ?attempt=2 (absent) -> 404; mesh
+    model/gltf-binary with ETag "<content_version>", insole
+    application/json. 400: which "nope", attempt 7, cutout?attempt=1.
+    404: Other's shoe_other for Demo, hair_demo (no footwear) on the
+    footwear image route, traversal item "..%2Fsecret".
+    GET /characters/Demo/garments/shoe_demo -> 200 {kind "footwear",
+    own_mesh True, garment.kind "footwear", garment.ssig S}; limits
+    {empty, mesh, insole, fit} with empty.aspect {op "range", value [1.1,
+    2.4]}, mesh.mesh_iou {op "ge", value 0.8}, insole.insole_cover {op "ge",
+    value 0.8}; the ModelSteps rows' labels "Item image", "Empty shoe",
+    "Cut-out", "Mesh", "Insole", "Fit". POST …/shoe_demo/run {view
+    "front"} -> 400 (footwear has no views).
 """
 import json
 import os
@@ -347,6 +370,77 @@ def main() -> int:
             check("immutable", "immutable" in (r.headers.get("cache-control") or ""), True)
             g = client.get("/characters/Demo/hair").json().get("garment") or {}
             check("preview url", g.get("preview_url"), f"{murl}?v={ver}")
+
+            # --- [9] footwear ----------------------------------------------------------------------
+            print("[9] footwear routes")
+            from app.core import footwear_source
+            for iid, holder in (("shoe_demo", "Demo"), ("shoe_other", "Other")):
+                inventory.add_item(name="Heels", category="outfit_piece", prompt_fragment="black heels",
+                                   item_id=iid, outfit_piece={"slots": ["feet"], "outfit_types": ["casual"],
+                                                              "own_mesh": True})
+                check(f"{holder} holds {iid}", inventory.add_to_inventory(holder, iid), True)
+            folder = inventory._get_item_dir("shoe_demo", create=True)
+            (folder / "image.png").write_bytes(b"\x89PNG-item")
+            check("item image set", inventory.set_item_image("shoe_demo", "image.png"), True)
+            S = footwear_source.current_ssig("shoe_demo")
+            fbase = "/characters/Demo/garments/shoe_demo/footwear"
+            client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_USER])
+            for url in (f"{fbase}/image/upscaled", f"{fbase}/mesh", f"{fbase}/insole"):
+                check(f"player {url}", client.get(url).status_code, 403)
+            client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_ADMIN])
+            r = client.get(f"{fbase}/image/source")
+            check("item image", (r.status_code, r.content, r.headers.get("content-type")),
+                  (200, b"\x89PNG-item", "image/png"))
+            for url in (f"{fbase}/image/upscaled", f"{fbase}/mesh", f"{fbase}/insole"):
+                check(f"absent {url}", client.get(url).status_code, 404)
+            d = footwear_source.source_dir("shoe_demo", S)
+            d.mkdir(parents=True, exist_ok=True)
+            gs.write_record(d / "record.json", {"steps": {"source": {"accepted": True}}})
+            planted = {"upscaled.png": b"\x89PNG-up", "empty.png": b"\x89PNG-empty",
+                       "empty.try1.png": b"\x89PNG-try1", "cutout.png": b"\x89PNG-cut",
+                       "prepared.glb": b"glTF-shoe", "insole.json": b'{"version": 1}'}
+            for name, data in planted.items():
+                (d / name).write_bytes(data)
+            for which, name in (("upscaled", "upscaled.png"), ("empty", "empty.png"), ("cutout", "cutout.png")):
+                r = client.get(f"{fbase}/image/{which}")
+                check(f"image {which}", (r.status_code, r.content), (200, planted[name]))
+            r = client.get(f"{fbase}/image/empty?attempt=1")
+            check("empty attempt 1", (r.status_code, r.content), (200, planted["empty.try1.png"]))
+            check("empty attempt 2 absent", client.get(f"{fbase}/image/empty?attempt=2").status_code, 404)
+            from app.core.http_files import content_version
+            mver = content_version(d / "prepared.glb")
+            r = client.get(f"{fbase}/mesh")
+            check("shoe mesh", (r.status_code, r.content, r.headers.get("content-type"), r.headers.get("etag")),
+                  (200, b"glTF-shoe", "model/gltf-binary", f'"{mver}"'))
+            r = client.get(f"{fbase}/insole")
+            check("insole", (r.status_code, r.content, (r.headers.get("content-type") or "").split(";")[0]),
+                  (200, planted["insole.json"], "application/json"))
+            check("which nope 400", client.get(f"{fbase}/image/nope").status_code, 400)
+            check("attempt 7 400", client.get(f"{fbase}/image/empty?attempt=7").status_code, 400)
+            check("cutout attempt 400", client.get(f"{fbase}/image/cutout?attempt=1").status_code, 400)
+            for url in ("/characters/Demo/garments/shoe_other/footwear/image/source",
+                        "/characters/Demo/garments/shoe_other/footwear/mesh",
+                        "/characters/Demo/garments/shoe_other/footwear/insole",
+                        "/characters/Demo/garments/hair_demo/footwear/image/source",
+                        "/characters/Demo/garments/..%2Fsecret/footwear/image/source"):
+                r = client.get(url)
+                check(f"404 {url}", (r.status_code in (404,) or (r.status_code == 400 and "..%2F" in url),
+                                     b"SECRET" in r.content), (True, False))
+            r = client.get("/characters/Demo/garments/shoe_demo")
+            body = r.json() if r.status_code == 200 else {}
+            g = body.get("garment") or {}
+            check("footwear panel", (r.status_code, body.get("kind"), body.get("own_mesh"), g.get("kind"),
+                                     g.get("ssig")), (200, "footwear", True, "footwear", S))
+            lim = body.get("limits") or {}
+            check("footwear limits", (sorted(lim), (lim.get("empty") or {}).get("aspect"),
+                                      (lim.get("mesh") or {}).get("mesh_iou"),
+                                      (lim.get("insole") or {}).get("insole_cover")),
+                  (["empty", "fit", "insole", "mesh"], {"op": "range", "value": [1.1, 2.4]},
+                   {"op": "ge", "value": 0.8}, {"op": "ge", "value": 0.8}))
+            check("footwear rows", [row.get("label") for row in body.get("steps") or []],
+                  ["Item image", "Empty shoe", "Cut-out", "Mesh", "Insole", "Fit"])
+            r = client.post("/characters/Demo/garments/shoe_demo/run", json={"view": "front"})
+            check("footwear view 400", r.status_code, 400)
 
         gate.set()
         garments.wait_idle(30)

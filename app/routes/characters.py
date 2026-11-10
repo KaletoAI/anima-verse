@@ -1881,12 +1881,26 @@ def _gate_limits(gates: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             for key, (kind, limit, _label) in gates.items()}
 
 
+def _footwear_gate_limits(gates: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Chip limits of a footwear gate table ``{key: (min|max|range, limit, label)}``."""
+    return {key: ({"op": "range", "value": list(limit)} if kind == "range"
+                  else {"op": "le" if kind == "max" else "ge", "value": limit})
+            for key, (kind, limit, _label) in gates.items()}
+
+
 def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """The gate limits per step of a garment ``kind`` for the chips, read
     from the gate constants themselves: the image gates
     (``garment_gates.limits``), the mesh component share and the fit gates
-    (hair ``garment_fit.GATES``, clothing ``CLOTHING_GATES``)."""
+    (hair ``garment_fit.GATES``, clothing ``CLOTHING_GATES``). Footwear: the
+    empty-shoe, mesh and insole gates of the shoe source (``footwear_gates``,
+    ``footwear_insole``); its fit gates come with the fit."""
     from app.core import garment_fit, garment_gates, garment_mesh
+    if kind == "footwear":
+        from app.core import footwear_gates, footwear_insole
+        return {"empty": _footwear_gate_limits(footwear_gates.EMPTY_GATES),
+                "mesh": _footwear_gate_limits(footwear_gates.MESH_GATES),
+                "insole": _footwear_gate_limits(footwear_insole.INSOLE_GATES), "fit": {}}
     return {**garment_gates.limits(kind),
             "mesh": {"largest_component_share": {"op": "ge", "value": garment_mesh.MIN_COMPONENT_SHARE}},
             "fit": _gate_limits(garment_fit.CLOTHING_GATES if kind == "clothing" else garment_fit.GATES)}
@@ -1912,7 +1926,8 @@ def get_character_garment(character_name: str, item_id: str,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Wardrobe's panel of one own-mesh piece (or any garment of the
     character): ``{pipeline, item_id, name, kind, own_mesh, worn, status,
-    garment, limits}`` — ``garment`` is ``garments.garment_info`` (every
+    garment, limits}`` — ``garment`` is ``garments.garment_info`` (a
+    footwear piece: ``garment_footwear.info``, the shoe source steps; every
     image with its ``freshness``, the preview with ``preview_freshness``,
     ``failed`` also after a restart), ``limits`` the chip limits of the
     item's kind (``_garment_limits``), ``status`` the row chip
@@ -2239,6 +2254,69 @@ def get_character_garment_image(character_name: str, item_id: str, step: str, vi
     if path is None or not path.is_file():
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return etag_file_response(path, request, "image/png")
+
+
+@router.get("/{character_name}/garments/{item_id}/footwear/image/{which}")
+def get_character_footwear_image(character_name: str, item_id: str, which: str, request: Request,
+                                 attempt: int = 0, _: Dict[str, Any] = Depends(require_admin)):
+    """One image of a footwear piece's SHOWN shoe source
+    (``garment_footwear.image_path``): ``source`` (the item image),
+    ``upscaled``, ``empty`` (``attempt`` 1..n = that edit attempt) or
+    ``cutout``. 400 for another name or attempt, 404 for an item that is no
+    footwear piece of this character or a file that is not there."""
+    from fastapi.responses import Response
+    from app.core import footwear_source, garment_footwear
+    if which not in garment_footwear.IMAGES:
+        raise HTTPException(status_code=400, detail=f"image must be one of {', '.join(garment_footwear.IMAGES)}")
+    if not 0 <= attempt <= footwear_source.EMPTY_ATTEMPTS or (attempt and which != "empty"):
+        raise HTTPException(status_code=400,
+                            detail=f"attempt must be 0 (or 1..{footwear_source.EMPTY_ATTEMPTS} for the empty shoe)")
+    _require_character(character_name)
+    try:
+        path = garment_footwear.image_path(character_name, item_id, which, attempt)
+    except ValueError:
+        path = None
+    if path is None or not path.is_file():
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    media_type, _encoding = mimetypes.guess_type(str(path))
+    return etag_file_response(path, request, media_type or "image/png")
+
+
+@router.get("/{character_name}/garments/{item_id}/footwear/mesh")
+def get_character_footwear_mesh(character_name: str, item_id: str, request: Request,
+                                _: Dict[str, Any] = Depends(require_admin)):
+    """The prepared shoe GLB of a footwear piece's SHOWN source
+    (``garment_footwear.mesh_path``), versioned by content. 404 without one or
+    for an item that is no footwear piece of this character."""
+    from app.core import garment_footwear
+    from app.core.http_files import snapshot_response
+    _require_character(character_name)
+
+    def resolve() -> Optional[Path]:
+        try:
+            return garment_footwear.mesh_path(character_name, item_id)
+        except ValueError:
+            return None
+    return snapshot_response(None, request, media_type="model/gltf-binary",
+                             version=request.query_params.get("v"), resolve=resolve)
+
+
+@router.get("/{character_name}/garments/{item_id}/footwear/insole")
+def get_character_footwear_insole(character_name: str, item_id: str, request: Request,
+                                  _: Dict[str, Any] = Depends(require_admin)):
+    """``insole.json`` of a footwear piece's SHOWN source
+    (``garment_footwear.insole_path``). 404 without one or for an item that is
+    no footwear piece of this character."""
+    from fastapi.responses import Response
+    from app.core import garment_footwear
+    _require_character(character_name)
+    try:
+        path = garment_footwear.insole_path(character_name, item_id)
+    except ValueError:
+        path = None
+    if path is None or not path.is_file():
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return etag_file_response(path, request, "application/json")
 
 
 @router.get("/{character_name}/garments/{item_id}/hairdeck/{image}")

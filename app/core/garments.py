@@ -75,6 +75,15 @@ Hair made by HairDeck (``garment_hair.hair_method``; plan
   A gate refusal of the attempt-1 job re-runs ``hairdeck`` once with that
   job's seed + 1 and fits again; a second refusal refuses with both attempts.
 
+Footwear (kind ``footwear``, method ``shoe``; plan
+``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md``) runs
+``garment_footwear.run_chain`` instead (``_run_locked`` dispatches it first):
+the per-item source steps ``source → empty → cutout → mesh → insole`` under
+the ITEM lock — two wearers never run a step twice, the later one finds it
+done — then the wearer's ``fit`` (not wired yet; the chain ends after the
+insole). Same queue, status and cancel as every garment; a failure that is
+load or the media switch (``retry_later``) is not persisted.
+
 The served fit follows the CURRENT method (``garment_store.accepted_fit``): a
 switch never generates anything, and a method without an accepted fit yet
 serves no hair.
@@ -191,21 +200,21 @@ def _item(character_name: str, item_id: str) -> Tuple[Dict[str, Any], str]:
     return item, kind
 
 
-#: Until the shoe chain is wired into the garment run (plan 2026-11-10-footwear-rigid-shoes Task 6, which
-#: replaces ``_footwear_unavailable``), no run of a footwear piece starts: the clothing chain must never run for
-#: it, and no failure may be stored under its fsig (automatic triggers would skip it after Task 6).
-FOOTWEAR_NOT_AVAILABLE = "the shoe chain is not available yet"
+def _footwear() -> str:
+    from app.core.garment_set import FOOTWEAR
+    return FOOTWEAR
 
 
-def _footwear_unavailable(item_id: str) -> Optional[Dict[str, Any]]:
-    """The result of a run of a footwear piece that does not start (``FOOTWEAR_NOT_AVAILABLE``: no job, no
-    status mark, no failure record); None for any other item."""
-    from app.core import garment_set
-    from app.models.inventory import get_item
-    item = get_item(item_id) if isinstance(item_id, str) and item_id else None
-    if garment_set.garment_kind_of(item) != garment_set.FOOTWEAR:
-        return None
-    return {"ok": False, "fsig": "", "error": FOOTWEAR_NOT_AVAILABLE, "unavailable": True, "ran": []}
+def _check_view(kind: str, view: Optional[str]) -> None:
+    """ValueError for a ``view`` that is no garment view, and for any view of
+    footwear (its steps are per item, without views)."""
+    from app.core.garment_store import GARMENT_VIEWS
+    if view is None:
+        return
+    if kind == _footwear():
+        raise ValueError("Footwear has no views")
+    if view not in GARMENT_VIEWS:
+        raise ValueError(f"Unknown garment view {view!r}")
 
 
 def _steps(steps: Union[None, str, Iterable[str]], order: Tuple[str, ...]) -> Optional[List[str]]:
@@ -327,8 +336,12 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
     accepted job), ``stale`` (accepted on another base model, or by an
     older fit algorithm: ``garment_fit.FIT_VERSION``), ``outdated``
     (accepted, but the prepared mesh / HairDeck hair it was fitted from was
-    replaced or removed) or ``missing``."""
-    from app.core.garment_store import HAIRDECK, garment_path, read_record
+    replaced or removed) or ``missing``. Footwear (method ``shoe``):
+    ``garment_footwear.fit_state`` on the base."""
+    from app.core.garment_store import HAIRDECK, SHOE, garment_path, read_record
+    if method == SHOE:
+        from app.core import garment_footwear
+        return garment_footwear.fit_state(character_name, item_id, fsig, base_model_sha)
     fit = garment_path(character_name, item_id, fsig, "fit")
     record = read_record(fit.with_suffix(".json"))
     if not fit.is_file() or record.get("accepted") is not True:
@@ -355,7 +368,11 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
 
 def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, base_model_sha: str,
           method: str = "edit_chain", hsig: str = "") -> bool:
-    from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS, SUBTRACT, image_fsig
+    from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS, SHOE, SUBTRACT, image_fsig
+    if method == SHOE and step != "fit":
+        # The shoe's item steps: per item under its current ssig (``footwear_source``).
+        from app.core import garment_footwear
+        return garment_footwear.step_done(item_id, step)
     if method == SUBTRACT and step != "fit":
         if step in IMAGE_STEPS:  # the haired views: the edit chain's own, under its fsig
             fsig = image_fsig(character_name, item_id)
@@ -1275,19 +1292,17 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     and every later step runs again. Without ``force`` a cached step is reused.
 
     The steps are those of the item's CURRENT method
-    (``garment_store.steps_for``; hair by HairDeck: ``hairdeck``, ``fit``).
+    (``garment_store.steps_for``; hair by HairDeck: ``hairdeck``, ``fit``;
+    footwear: the shoe chain, ``garment_footwear.run_chain``).
 
     Returns ``{ok: True, fsig, ran: [steps that produced output]}`` or
     ``{ok: False, fsig, step, error, gates}`` (also recorded as the item's
-    failed status). ValueError for an invalid item, step or view."""
-    from app.core.garment_store import GARMENT_VIEWS
+    failed status; not persisted for a footwear failure that is load,
+    ``retry_later``). ValueError for an invalid item, step or view (any view
+    of footwear)."""
     item, kind, order = _item_order(character_name, item_id)
     wanted = _steps(steps, order)
-    if view is not None and view not in GARMENT_VIEWS:
-        raise ValueError(f"Unknown garment view {view!r}")
-    unavailable = _footwear_unavailable(item_id)
-    if unavailable is not None:
-        return unavailable
+    _check_view(kind, view)
     from app.core import garment_store as gs
     with gs.char_lock(character_name):
         result = _run_locked(character_name, item, kind, wanted, view, bool(force))
@@ -1305,7 +1320,9 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
 
 def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> None:
     """Persist a failed run's step + error under its fsig (automatic
-    triggers skip it, ``cached_failure``); a successful run clears it."""
+    triggers skip it, ``cached_failure``); a successful run clears it. A
+    failure that is load or the media switch (``retry_later``, footwear) is
+    not persisted: automatic triggers try again."""
     from app.core import base_body, garment_store as gs
     fsig = str(result.get("fsig") or "")
     if not fsig:
@@ -1313,7 +1330,7 @@ def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> 
     try:
         if result.get("ok"):
             gs.clear_failure(character_name, item_id, fsig)
-        elif result.get("step"):
+        elif result.get("step") and not result.get("retry_later"):
             base = base_body.current_base(character_name)
             gs.record_failure(character_name, item_id, fsig, step=str(result["step"]),
                               error=str(result.get("error") or ""), base_model_sha=base[1] if base else "")
@@ -1358,6 +1375,11 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
     from app.core import base_body, garment_images, garment_mesh
     from app.core import garment_store as gs
     from app.models.character import get_character_profile
+    if kind == _footwear():
+        # The shoe chain: per-item steps under the item lock, then the wearer's fit (no base needed for the
+        # item steps; the edit chain never runs for a feet piece).
+        from app.core import garment_footwear
+        return garment_footwear.run_chain(character_name, item, wanted, force)
     item_id = item["id"]
     profile = get_character_profile(character_name) or {}
     method = gs.kind_method(kind, character_name, profile)
@@ -1573,12 +1595,10 @@ def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iter
               view: Optional[str] = None) -> None:
     """ValueError unless ``item_id`` is a garment of a known kind owned by
     the character and ``steps`` / ``view`` name steps of its current method
-    and a view of it."""
-    from app.core.garment_store import GARMENT_VIEWS
-    _item_, _kind, order = _item_order(character_name, item_id)
+    and a view of it (footwear has none)."""
+    _item_, kind, order = _item_order(character_name, item_id)
     _steps(steps, order)
-    if view is not None and view not in GARMENT_VIEWS:
-        raise ValueError(f"Unknown garment view {view!r}")
+    _check_view(kind, view)
 
 
 class _Job:
@@ -1693,14 +1713,9 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     counts as running (``queued``) from THIS moment (the UI polls), unless it
     is in a step right now. Returns ``{started, queued, position, behind}``
     (``_position_locked``). ValueError for an invalid item, step or view
-    (checked before anything is queued). A footwear piece is not queued
-    (``FOOTWEAR_NOT_AVAILABLE``): ``{started: False, queued: False,
-    position: None, behind: None, unavailable}``."""
+    (checked before anything is queued)."""
     from app.core import garment_store as gs
     check_run(character_name, item_id, steps=steps, view=view)
-    if _footwear_unavailable(item_id) is not None:
-        return {"started": False, "queued": False, "position": None, "behind": None,
-                "unavailable": FOOTWEAR_NOT_AVAILABLE}
     wanted = _Job(item_id, steps, view, bool(force))
     with _lock:
         queue = _queues.setdefault(character_name, deque())
@@ -1730,17 +1745,9 @@ def enqueue_garment(character_name: str, item_id: str) -> "_Job":
     character's other runs — the per-character FIFO the triggers use
     (``after_base_model``, the outfit build). A default run of the same
     item that has not started yet is reused, never queued twice. Returns
-    the job (``done`` / ``result``). ValueError like ``check_run``. A
-    footwear piece gets a job that is done at once and never queued
-    (``FOOTWEAR_NOT_AVAILABLE``)."""
+    the job (``done`` / ``result``). ValueError like ``check_run``."""
     from app.core import garment_store as gs
     check_run(character_name, item_id)
-    unavailable = _footwear_unavailable(item_id)
-    if unavailable is not None:
-        job = _Job(item_id, None, None, False)
-        job.result = unavailable
-        job.done.set()
-        return job
     with _lock:
         queue = _queues.setdefault(character_name, deque())
         for job in queue:
@@ -1895,7 +1902,10 @@ def after_base_model(character_name: str) -> bool:
     cached under the unchanged fsig). A chain that failed for the current fsig is skipped
     (``garment_store.chain_failure``; a refused fit only on the base model
     it failed on). A character with hair text but no hair item gets one first
-    (``_ensure_hair``). True if a run was queued. Never raises."""
+    (``_ensure_hair``). Footwear is not queued here: its fit is a Wardrobe
+    preview until the body cut lands, so a shoe chain starts from the
+    Wardrobe only (plan 2026-11-10-footwear-rigid-shoes Task 25 queues the
+    refit of a shod wearer). True if a run was queued. Never raises."""
     try:
         from app.core import base_body, garment_store as gs
         from app.models.character import get_character_profile
@@ -1907,10 +1917,9 @@ def after_base_model(character_name: str) -> bool:
             profile = get_character_profile(character_name) or {}
         started = False
         for item_id in _worn_garments(character_name, profile):
-            if _footwear_unavailable(item_id) is not None:
-                continue  # no shoe chain yet (FOOTWEAR_NOT_AVAILABLE)
             try:
-                _item(character_name, item_id)
+                if _item(character_name, item_id)[1] == _footwear():
+                    continue  # started from the Wardrobe only (docstring)
                 fsig = gs.garment_fsig(character_name, item_id, profile=profile)
                 method = gs.garment_method(character_name, item_id, profile=profile)
             except ValueError:
@@ -2313,6 +2322,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     piece's fit on the outfit body the CURRENT outfit model stands on
     (``body_fit_info``; ``body_id`` repeats its id), None on the base body —
     ``steps.fit`` stays the chain's fit on the base model.
+    Footwear has its own panel (``garment_footwear.info``: the per-item
+    source steps, the insole, the fit).
     ValueError for an invalid item."""
     from app.core import base_body, garment_hair, garment_store as gs
     from app.core.http_files import content_version
@@ -2320,6 +2331,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     from app.models.character import get_character_profile
     _item_, kind = _item(character_name, item_id)
     profile = get_character_profile(character_name) or {}
+    if kind == _footwear():
+        from app.core import garment_footwear
+        return gs.finite_json(garment_footwear.info(character_name, item_id, profile=profile))
     inputs = _kind_inputs(kind, character_name, profile, item_id)
     method, method_source = (garment_hair.hair_method_source(character_name, profile=profile)
                              if kind == garment_hair.HAIR_KIND else (gs.EDIT_CHAIN, "world"))

@@ -81,23 +81,29 @@ and wears heels + dress; Mira holds heels.
      FOOTWEAR_PREVIEW_ONLY)] (dress has its fit -> not missing; the reason is
      the transition reason whatever the record says); in retexture mode
      mesh_items_off_rule of that record == [heels] (it belongs painted on).
-[K5] No entry point runs a chain for footwear until Task 6 wires the shoe
-     chain (fix round 1; the REAL queue functions, run_queued restored).
-     R = {ok: False, fsig: "", error: FOOTWEAR_NOT_AVAILABLE, unavailable:
-     True, ran: []}, FOOTWEAR_NOT_AVAILABLE = "the shoe chain is not
-     available yet".
-       run_garment(Kira, heels) == R; run_garment(…, steps="mesh",
-       force=True) == R;
-       start_garment(Kira, heels) == {started False, queued False, position
-       None, behind None, unavailable FOOTWEAR_NOT_AVAILABLE}; same with
-       steps="empty", force=True;
-       enqueue_garment(Kira, heels): job.done set, job.result == R;
-       run_queued(Kira, [heels]) == {heels: R};
+[K5] Every entry point runs the SHOE chain for footwear, never the clothing
+     chain (Task 6 replaced the temporary skip; the REAL queue functions,
+     run_queued restored). ``garment_footwear.run_chain`` is a recorder
+     answering R = {ok: True, fsig: F, ran: [], fit: "pending"} (F = the
+     current footwear fsig, [K2]); ``garments._fit``,
+     ``garment_images.run_edit_step`` / ``cut_out`` and
+     ``garment_mesh.generate`` record any call.
+       run_garment(Kira, heels) == R, recorder (Kira, heels, None, False);
+       run_garment(…, steps="mesh", force=True) == R, recorder (["mesh"],
+       True);
+       start_garment(Kira, heels) == {started True, queued False, position
+       0, behind None} (idle character) -> recorder (None, False);
+       start_garment(…, steps="empty", force=True) -> recorder (["empty"],
+       True); start_garment(…, view="front") -> ValueError (no views);
+       enqueue_garment(Kira, heels): job.done after the worker, job.result
+       == R; run_queued(Kira, [heels]) == {heels: R};
        the Wardrobe run route run_character_garment(Kira, heels, {}) answers
-       the start_garment dict above;
+       {started True, …} and the recorder gets (None, False);
+       the clothing-chain recorders saw no call for heels at all;
        after_base_model(Kira) (hair creation stubbed off, enqueue_garment
        wrapped to record its ids and answer a done job): the ids == [dress]
-       (dress has no prepared mesh -> its fit is "outdated"), never heels;
+       (dress has no prepared mesh -> its fit is "outdated"), never heels —
+       a shoe chain starts from the Wardrobe only until Task 25;
        refit sweep: an old clothing-era fit of heels under fsig
        "0123456789ab" (kind clothing, fit_version 6 < 7, accepted on SHA) and
        a too-small "fit" failure under "0123456789cd" (scale_retry absent,
@@ -329,22 +335,49 @@ def main() -> int:
         check("retexture mode on", save_character_profile("Kira", profile), True)
         check("off rule in retexture", base_body.mesh_items_off_rule("Kira", left_out, base_sha=sha), [heels])
 
-        print("[K5] no chain for footwear before Task 6")
-        from app.core import garment_refit
+        print("[K5] footwear runs the shoe chain, never the clothing chain")
+        from app.core import garment_footwear, garment_images, garment_refit
         garments.run_queued = real_run_queued
-        unavailable = "the shoe chain is not available yet"
-        check("FOOTWEAR_NOT_AVAILABLE", garments.FOOTWEAR_NOT_AVAILABLE, unavailable)
-        R = {"ok": False, "fsig": "", "error": unavailable, "unavailable": True, "ran": []}
-        S = {"started": False, "queued": False, "position": None, "behind": None, "unavailable": unavailable}
-        check("run_garment", garments.run_garment("Kira", heels), R)
-        check("run_garment forced mesh", garments.run_garment("Kira", heels, steps="mesh", force=True), R)
-        check("start_garment", garments.start_garment("Kira", heels), S)
-        check("start_garment forced empty", garments.start_garment("Kira", heels, steps="empty", force=True), S)
-        job = garments.enqueue_garment("Kira", heels)
-        check("enqueue_garment done", (job.done.is_set(), job.result), (True, R))
-        check("run_queued", garments.run_queued("Kira", [heels]), {heels: R})
-        from app.routes.characters import GarmentRunRequest, run_character_garment
-        check("run route", run_character_garment("Kira", heels, GarmentRunRequest(), {}), S)
+        F = gs.garment_fsig("Kira", heels)
+        R = {"ok": True, "fsig": F, "ran": [], "fit": "pending"}
+        CHAIN, CLOTHING = [], []
+
+        def chain_recorder(character_name, item, wanted, force):
+            CHAIN.append((character_name, item["id"], wanted, force))
+            return dict(R)
+        real_chain = garment_footwear.run_chain
+        garment_footwear.run_chain = chain_recorder
+        saved = (garments._fit, garment_images.run_edit_step, garment_images.cut_out, garment_mesh.generate)
+        garments._fit = lambda name, item_id, *a, **k: CLOTHING.append(("fit", item_id))
+        garment_images.run_edit_step = lambda name, item_id, *a, **k: CLOTHING.append(("edit", item_id))
+        garment_images.cut_out = lambda name, item_id, *a, **k: CLOTHING.append(("cutout", item_id))
+        garment_mesh.generate = lambda name, item_id, *a, **k: CLOTHING.append(("mesh", item_id))
+        try:
+            started = {"started": True, "queued": False, "position": 0, "behind": None}
+            check("run_garment", garments.run_garment("Kira", heels), R)
+            check("run_garment forced mesh", garments.run_garment("Kira", heels, steps="mesh", force=True), R)
+            check("chain calls", CHAIN, [("Kira", heels, None, False), ("Kira", heels, ["mesh"], True)])
+            CHAIN.clear()
+            check("start_garment", garments.start_garment("Kira", heels), started)
+            check("idle 1", garments.wait_idle(10), True)
+            check("start_garment forced empty", garments.start_garment("Kira", heels, steps="empty", force=True),
+                  started)
+            check("idle 2", garments.wait_idle(10), True)
+            check("start chain calls", CHAIN, [("Kira", heels, None, False), ("Kira", heels, ["empty"], True)])
+            raises("start_garment with a view", lambda: garments.start_garment("Kira", heels, view="front"),
+                   ValueError, "no views")
+            CHAIN.clear()
+            job = garments.enqueue_garment("Kira", heels)
+            check("enqueue_garment done", (job.done.wait(10), job.result), (True, R))
+            check("run_queued", garments.run_queued("Kira", [heels]), {heels: R})
+            from app.routes.characters import GarmentRunRequest, run_character_garment
+            check("run route", run_character_garment("Kira", heels, GarmentRunRequest(), {}), started)
+            check("idle 3", garments.wait_idle(10), True)
+            check("queue chain calls", CHAIN, [("Kira", heels, None, False)] * 3)
+            check("no clothing chain for heels", [c for c in CLOTHING if c[1] == heels], [])
+        finally:
+            garment_footwear.run_chain = real_chain
+            garments._fit, garment_images.run_edit_step, garment_images.cut_out, garment_mesh.generate = saved
         ENQUEUED = []
         real_enqueue = garments.enqueue_garment
         real_ensure_hair = garments._ensure_hair
