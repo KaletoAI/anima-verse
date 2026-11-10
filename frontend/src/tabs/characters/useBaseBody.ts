@@ -103,6 +103,11 @@ export interface ExtensionTipPanelInfo {
   id: string
   /** The group's declared label, else its id. */
   label: string
+  /** This model's own switch (extension_rig_models[sig][group].enabled,
+   *  the 3D tab's Enabled box). */
+  enabled: boolean
+  /** Whether the build uses the group — false also when its source group is off. */
+  active: boolean
   status: string
   reason: string
   tip_source: 'colour' | 'geometry' | null

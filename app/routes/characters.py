@@ -3059,6 +3059,8 @@ class ExtensionTipRequest(BaseModel):
     signature: str
     group: str
     tip: Optional[Dict[str, Any]] = None
+    #: Given → only the group's per-model switch changes, the tip stays.
+    enabled: Optional[bool] = None
 
 
 @router.post("/{character_name}/model3d/extension-tip", status_code=202)
@@ -3066,7 +3068,9 @@ def apply_character_model3d_extension_tip(character_name: str, body: ExtensionTi
                                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Store a ``pair_tip`` group's tip override on one stored model
     (``tip``: offsets per side, mirror, colour disc — None resets it; see
-    ``extension_rig.validate_tip_override``) and rebuild that model's
+    ``extension_rig.validate_tip_override``) — or, with ``enabled`` given,
+    only the group's per-model on/off switch (the 3D tab's, tip kept; off
+    builds no tip bone, stub or disc) — and rebuild that model's
     extension rig in a worker thread (CPU, no hub job). ``{tip, started}``;
     the Base body poll reports the run (``extension_tips[].running``). 400
     for a malformed value or a group the model does not carry, 409 while the
@@ -3081,7 +3085,11 @@ def apply_character_model3d_extension_tip(character_name: str, body: ExtensionTi
     if (base_body.base_model_info(character_name, signature) or {}).get("status") == "running":
         raise HTTPException(409, "The base model is being generated")
     try:
-        started, stored = extension_tip.apply_tip_override(character_name, signature, body.group, body.tip)
+        if body.enabled is not None:
+            started, stored = extension_tip.apply_tip_override(
+                character_name, signature, body.group, enabled=body.enabled)
+        else:
+            started, stored = extension_tip.apply_tip_override(character_name, signature, body.group, body.tip)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:

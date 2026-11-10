@@ -60,6 +60,11 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
   const [showDots, setShowDots] = useState(true)
   const limit = panel.limits.offset_max_mm
   const busy = disabled || posting || panel.running
+  // This model's own switch for the group — the same one as the 3D tab's
+  // Enabled box (extension_rig_models[sig][group].enabled). Off: no tip bone,
+  // stub or disc; the controls rest until it is on again.
+  const off = panel.enabled === false
+  const locked = busy || off
 
   useEffect(() => {
     const dots: TipDots = []
@@ -76,8 +81,8 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
         color: moved ? DRAFT_COLOR : BUILT_COLOR,
       })
     })
-    onPreview(panel.id, showDots && dots.length ? dots : null)
-  }, [draft, onPreview, panel.id, panel.sides, showDots])
+    onPreview(panel.id, showDots && !off && dots.length ? dots : null)
+  }, [draft, off, onPreview, panel.id, panel.sides, showDots])
   useEffect(() => () => onPreview(panel.id, null), [onPreview, panel.id])
 
   const setOffset = (i: number, key: 'up' | 'out', value: number) => { setShowDots(true); setDraft((previous) => {
@@ -87,11 +92,11 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
     return { ...previous, offsets }
   }) }
 
-  const send = async (tip: ExtensionTipOverride | null) => {
+  const send = async (change: { tip: ExtensionTipOverride | null } | { enabled: boolean }) => {
     setPosting(true)
     try {
       await apiPost(`/characters/${encodeURIComponent(character)}/model3d/extension-tip`,
-        { signature, group: panel.id, tip })
+        { signature, group: panel.id, ...change })
       onStarted()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -102,6 +107,8 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
   const source = panel.tip_source === 'colour' ? t('Position: colour marker')
     : panel.tip_source === 'geometry' ? t('Position: geometry (suggestion)') : t('Position: not found')
   const state = panel.running ? t('Rebuilding…')
+    : off ? t('Group switched off for this model')
+    : panel.active === false ? t('Source group switched off for this model')
     : panel.error ? `${t('Failed')}: ${panel.error}`
     : panel.status !== 'applied' ? `${t('Not built')}${panel.reason ? `: ${panel.reason}` : ''}`
     : panel.disc?.status === 'failed' ? `${t('Colour disc failed')}: ${panel.disc.reason}`
@@ -112,6 +119,12 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
   return (
     <fieldset className="ga-fieldset ga-model3d-group" title={help}>
       <legend>{panel.label}</legend>
+      <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}
+        title={t('Off builds this model without the tips of this group: no tip bone, no stub, no colour disc. The same switch as Enabled in the 3D tab.')}>
+        <input type="checkbox" checked={!off} disabled={busy}
+          onChange={(event) => void send({ enabled: event.target.checked })} />
+        {t('Enabled')}
+      </label>
       <div className="ga-hint" style={{ fontSize: 10, margin: 0 }}>
         {source}{moved ? ` · ${t('moved')}` : ''}
       </div>
@@ -126,7 +139,7 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
           <label key={`${i}-${key}`} style={{ display: 'contents' }}>
             <span>{sideLabel(i)} {key === 'up' ? t('up') : t('out')}</span>
             <input type="range" min={-limit} max={limit} step={0.5} value={draft.offsets[i][key]}
-              disabled={busy || (draft.mirror && i === 1) || !panel.sides[i]}
+              disabled={locked || (draft.mirror && i === 1) || !panel.sides[i]}
               onChange={(event) => setOffset(i, key, Number(event.target.value))} />
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{draft.offsets[i][key].toFixed(1)} mm</span>
           </label>
@@ -138,16 +151,16 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
         {t('Show markers')}
       </label>
       <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-        <input type="checkbox" checked={draft.mirror} disabled={busy}
+        <input type="checkbox" checked={draft.mirror} disabled={locked}
           onChange={(event) => setDraft((previous) => ({ ...previous, mirror: event.target.checked,
             offsets: event.target.checked ? [{ ...previous.offsets[0] }, { ...previous.offsets[0] }] : previous.offsets }))} />
         {t('Mirror (both sides alike)')}
       </label>
       <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-        <input type="checkbox" checked={draft.disc.enabled} disabled={busy}
+        <input type="checkbox" checked={draft.disc.enabled} disabled={locked}
           onChange={(event) => setDraft((previous) => ({ ...previous, disc: { ...previous.disc, enabled: event.target.checked } }))} />
         {t('Colour disc')}
-        <input type="color" value={draft.disc.color} disabled={busy || !draft.disc.enabled}
+        <input type="color" value={draft.disc.color} disabled={locked || !draft.disc.enabled}
           aria-label={t('Disc colour')}
           onChange={(event) => setDraft((previous) => ({ ...previous, disc: { ...previous.disc, color: event.target.value } }))} />
       </label>
@@ -156,7 +169,7 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
           <label style={{ display: 'contents' }}>
             <span>{t('Diameter')}</span>
             <input type="range" min={panel.limits.diameter_mm[0]} max={panel.limits.diameter_mm[1]} step={1}
-              value={draft.disc.diameter_mm} disabled={busy}
+              value={draft.disc.diameter_mm} disabled={locked}
               onChange={(event) => setDraft((previous) => ({ ...previous,
                 disc: { ...previous.disc, diameter_mm: Number(event.target.value) } }))} />
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{draft.disc.diameter_mm.toFixed(0)} mm</span>
@@ -164,7 +177,7 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
           <label style={{ display: 'contents' }}>
             <span>{t('Soft edge')}</span>
             <input type="range" min={0} max={panel.limits.soft_max_mm} step={0.5}
-              value={draft.disc.soft_mm} disabled={busy}
+              value={draft.disc.soft_mm} disabled={locked}
               onChange={(event) => setDraft((previous) => ({ ...previous,
                 disc: { ...previous.disc, soft_mm: Number(event.target.value) } }))} />
             <span style={{ fontVariantNumeric: 'tabular-nums' }}>{draft.disc.soft_mm.toFixed(1)} mm</span>
@@ -172,13 +185,13 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
         </div>
       ) : null}
       <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
-        <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={busy || !changed}
+        <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={locked || !changed}
           title={changed ? t('Unsaved changes') : undefined}
-          onClick={() => void send(draft)}>{t('Apply')}</button>
-        <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !changed}
+          onClick={() => void send({ tip: draft })}>{t('Apply')}</button>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={locked || !changed}
           onClick={() => setDraft(stored)}>{t('Revert')}</button>
-        <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !panel.override}
-          onClick={() => void send(null)}>{t('Reset')}</button>
+        <button type="button" className="ga-btn ga-btn-sm" disabled={locked || !panel.override}
+          onClick={() => void send({ tip: null })}>{t('Reset')}</button>
       </div>
     </fieldset>
   )

@@ -619,7 +619,10 @@ script returns the covered texels (UV rasterisation, distance from the tip axis,
 1.5 texels of island gutter unless another triangle owns them) and the server
 blends them into the staged copy. Every build starts from the clean source, so
 the disc never compounds and "off" restores the texture byte for byte. An outfit
-model on the base body inherits the base's `tip` override.
+model on the base body inherits the base's `tip` override. The panel's Enabled box
+is the model's own group switch (`[group].enabled`, the 3D tab's): off builds no
+tip bone, stub or disc (texture = the clean source's); on again stores the
+default as the key's absence, so the fingerprint is the one of before.
 A tip the mesher already modelled is measured on the outer skin (depth map by rays
 from in front, surface fitted on the 8–15 mm ring): when the pair's mean height is
 at least 2.5 mm it is kept — no fill, no stub, the bone spans it base to apex and

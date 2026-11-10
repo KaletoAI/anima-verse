@@ -143,29 +143,46 @@ def paint_disc_masks(path, groups: List[Dict[str, Any]], metrics: Dict[str, Any]
     return out
 
 
+#: ``set_tip_override``'s "leave this field as it is".
+KEEP: Any = object()
+
+
 def set_tip_override(character_name: str, signature: str, group_id: str,
-                     tip: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+                     tip: Any = KEEP, *, enabled: Any = KEEP) -> Optional[Dict[str, Any]]:
     """Store (or with None / the defaults remove) the ``tip`` override of
-    ``group_id`` on the stored model ``signature``; the group's other
-    switches stay. ValueError when the model is missing, the group is not
-    one of its ``pair_tip`` groups or the value is malformed; RuntimeError
-    when the profile cannot be saved. Returns the stored value (None = reset)."""
+    ``group_id`` on the stored model ``signature`` and/or its per-model
+    ``enabled`` switch — the same ``extension_rig_models[sig][group]`` dict
+    the 3D tab's switches write (``model3d.set_model3d_options``); what is
+    not given stays, the group's other switches too. ``enabled`` True is the
+    default and is stored as the key's absence, so off → on gives the
+    fingerprint of before. ValueError when the model is missing, the group
+    is not one of its ``pair_tip`` groups or a value is malformed;
+    RuntimeError when the profile cannot be saved. Returns the stored tip
+    value (None = none)."""
     from app.core.extension_rig import validate_tip_override
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
     if group_id not in {group["id"] for group in _tip_groups(character_name, signature)}:
         raise ValueError("Not a tip group of this model")
-    cleaned = validate_tip_override(tip)
+    if enabled is not KEEP and type(enabled) is not bool:
+        raise ValueError("enabled must be a boolean")
+    cleaned = validate_tip_override(tip) if tip is not KEEP else None
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         opts = dict(profile.get("model3d_opts") or {})
         models = dict(opts.get("extension_rig_models") or {})
         model = dict(models.get(signature) or {})
         values = dict(model.get(group_id) or {})
-        if cleaned is None:
+        if tip is KEEP:
+            cleaned = values.get("tip")
+        elif cleaned is None:
             values.pop("tip", None)
         else:
             values["tip"] = cleaned
+        if enabled is False:
+            values["enabled"] = False
+        elif enabled is True:
+            values.pop("enabled", None)
         if values:
             model[group_id] = values
         else:
@@ -201,7 +218,7 @@ def _tip_groups(character_name: str, signature: str, *, profile=None, meta=None)
 
 
 def apply_tip_override(character_name: str, signature: str, group_id: str,
-                       tip: Optional[Dict[str, Any]]) -> Tuple[bool, Optional[Dict[str, Any]]]:
+                       tip: Any = KEEP, *, enabled: Any = KEEP) -> Tuple[bool, Optional[Dict[str, Any]]]:
     """Store the tip override (``set_tip_override``) and rebuild the
     extension rig of ``signature`` in a worker thread (the CPU rebuild of
     ``model3d.rebuild_extension_rig``, forced so a failed attempt is
@@ -214,7 +231,7 @@ def apply_tip_override(character_name: str, signature: str, group_id: str,
             return False, None
         _running[character_name] = signature
     try:
-        stored = set_tip_override(character_name, signature, group_id, tip)
+        stored = set_tip_override(character_name, signature, group_id, tip, enabled=enabled)
     except BaseException:
         with _lock:
             _running.pop(character_name, None)
@@ -284,7 +301,7 @@ def tip_panels(character_name: str, signature: str) -> List[Dict[str, Any]]:
     """The Base body tab's panel per ``pair_tip`` group of the stored model
     ``signature`` (all positions in the model's glTF frame, metres):
 
-    ``{id, label, status, reason, tip_source, sides: [{side: left|right,
+    ``{id, label, enabled, active, status, reason, tip_source, sides: [{side: left|right,
     suggested, tip, tangent_up, tangent_out, offset_mm} | None, ...],
     override, disc, limits, running, error}``. ``tip`` is the built tip
     (None while the group was not built); ``suggested`` falls back to the
@@ -294,12 +311,14 @@ def tip_panels(character_name: str, signature: str) -> List[Dict[str, Any]]:
     from app.core.extension_rig import (DISC_DEFAULTS, DISC_DIAMETER_MM, DISC_SOFT_MAX_MM,
                                        TIP_OFFSET_MAX_MM)
     from app.core.model3d import _read_sidecar, find_model3d
+    from app.models.character import get_character_profile
     try:
         path = find_model3d(character_name, signature)
         if path is None:
             return []
         meta = _read_sidecar(path)
-        groups = _tip_groups(character_name, signature, meta=meta)
+        profile = get_character_profile(character_name) or {}
+        groups = _tip_groups(character_name, signature, meta=meta, profile=profile)
     except Exception:  # noqa: BLE001 — the poll never fails on the panel
         logger.exception("Tip panels of %s (%s) failed", character_name, signature)
         return []
@@ -332,7 +351,15 @@ def tip_panels(character_name: str, signature: str) -> List[Dict[str, Any]]:
         tip_source = built.get("tip_source") or (
             ("colour" if all(r.get("apex_source") == "colour" for r in source_rows) else "geometry")
             if source_rows else None)
+        # ``enabled``: this model's own switch (the one the 3D tab shows);
+        # ``active``: what the build uses — off also when the source group is.
+        own = ((((profile.get("model3d_opts") or {}).get("extension_rig_models") or {})
+                .get(signature) or {}).get(group["id"]) or {})
+        enabled = own.get("enabled", True) is not False
+        if not group["enabled"]:
+            status = "disabled"
         panels.append({"id": group["id"], "label": group.get("label") or group["id"],
+                       "enabled": enabled, "active": bool(group["enabled"]),
                        "status": status, "reason": built.get("reason") or "",
                        "tip_source": tip_source, "sides": sides,
                        "override": group.get("tip_override"), "disc": built.get("disc"),

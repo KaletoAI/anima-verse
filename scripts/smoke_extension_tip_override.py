@@ -43,6 +43,15 @@ markers rejected -> geometry):
     centroid (x=(i+.5)/1024*.6-.3, z=1.1+.6*(1-(j+.5)/1024)) is the tip within
     one texel. Soft edge 4 mm: alpha = 255*smooth((14+2-r)/4) for r the x/z
     distance to the tip (within 8/255), 0 beyond 16 mm.
+[9] The per-model switch (Python): set_tip_override(enabled=False) stores
+    {"enabled": False} next to the kept tip in extension_rig_models[sig]
+    [group] — the 3D tab's dict; enabled=True removes the key again, so the
+    stored dict, and with it the fingerprint, is the one of before (off
+    differs). resolved_extension_groups (declarations Pair -> Tip) drops Tip
+    from the enabled list when off, and only then. A non-bool is refused.
+    Blender: the fixture built from the enabled list. Off -> no TipLeft /
+    TipRight bone and no Tip metrics; on again -> the same tip rows and bone
+    heads as the first build, and the same output GLB bytes.
 """
 import argparse
 import io
@@ -94,6 +103,55 @@ def glb_with(image: bytes, mime: str) -> bytes:
     image += b"\0" * (-len(image) % 4)
     body = struct.pack("<II", len(raw), 0x4e4f534a) + raw + struct.pack("<II", len(image), 0x004e4942) + image
     return b"glTF" + struct.pack("<II", 2, len(body) + 12) + body
+
+
+SWITCH_IDS = {}
+
+
+def switch_part():
+    """[9] Python half; leaves the enabled lists for the Blender half."""
+    from app.core import paths
+    paths.init(Path(tempfile.mkdtemp(prefix="tip-switch-")))   # never a real world (profile reads are patched)
+    from app.core import extension_rig as er
+    from app.core import extension_tip
+    import app.models.character as character
+    tip = {"offsets": [{"up": 4.0, "out": 0.0}], "mirror": True,
+           "disc": {"enabled": True, "color": "#aa5544", "diameter_mm": 20.0, "soft_mm": 2.0}}
+    store = {"model3d_opts": {"extension_rig_models": {"sig": {"Tip": {"tip": tip}, "Pair": {"flip": True}}}}}
+    before = json.loads(json.dumps(store))
+    declared = [{"id": "Pair", "op": "pair_protrusion", "depends_on": None, "chains": [], "params": {}},
+                {"id": "Tip", "op": "pair_tip", "depends_on": "Pair", "chains": [], "params": {}}]
+
+    def save(name, profile, **_):
+        store.clear()
+        store.update(json.loads(json.dumps(profile)))
+        return True
+
+    def enabled_ids():
+        with patch.object(er, "rig_groups_for", lambda *a, **k: [dict(g) for g in declared]):
+            groups = er.resolved_extension_groups("X", profile=store, signature="sig")
+        return [g["id"] for g in groups if g["enabled"]]
+
+    def fingerprint():
+        return er.extension_rig_fingerprint(declared, er.model_extension_overrides(store, "sig"))
+
+    with patch.object(extension_tip, "_tip_groups", lambda *a, **k: [{"id": "Tip"}]), \
+            patch.object(character, "get_character_profile", lambda name: json.loads(json.dumps(store))), \
+            patch.object(character, "save_character_profile", save):
+        first = fingerprint()
+        SWITCH_IDS["on"] = enabled_ids()
+        returned = extension_tip.set_tip_override("X", "sig", "Tip", enabled=False)
+        model = store["model3d_opts"]["extension_rig_models"]["sig"]
+        check("[9] off stored beside the kept tip", model["Tip"] == {"tip": tip, "enabled": False}
+              and model["Pair"] == {"flip": True} and returned == tip, model)
+        check("[9] off changes the fingerprint", fingerprint() != first)
+        SWITCH_IDS["off"] = enabled_ids()
+        check("[9] off drops Tip from the build", SWITCH_IDS == {"on": ["Pair", "Tip"], "off": ["Pair"]}, SWITCH_IDS)
+        extension_tip.set_tip_override("X", "sig", "Tip", enabled=True)
+        check("[9] on again: the stored dict of before", store == before, store)
+        check("[9] on again: the fingerprint of before", fingerprint() == first)
+        check("[9] a non-bool switch is refused", raises(lambda: extension_tip.set_tip_override(
+            "X", "sig", "Tip", enabled="no")))
 
 
 def python_part():
@@ -155,6 +213,7 @@ def python_part():
                                                                     "color": "#000000"}])
     with Image.open(io.BytesIO(jpeg.getvalue())) as a, Image.open(io.BytesIO(jpeg_painted)) as b:
         check("[4] JPEG keeps its quantisation tables", a.quantization == b.quantization)
+    switch_part()
     # [5]
     with tempfile.TemporaryDirectory(prefix="tip-disc-") as tmp:
         path = Path(tmp) / "model.glb"
@@ -175,6 +234,7 @@ def python_part():
 
 
 PROBE = r'''
+import hashlib
 fixture('C')
 obj=bpy.data.objects['Surface']; arm=bpy.data.objects['Rig']
 obj.vertex_groups['Child'].remove(list(range(len(obj.data.vertices))))
@@ -197,13 +257,20 @@ if case=='walk':
  out['plane']=[list(scope['surface_walk'](nearest,Vector((.01,-.1,1.2)),side,.01,.005)[0]) for side in (1,-1)]
 scope['_common'].reset_scene=lambda:None
 scope['_common'].import_model=lambda path:None
-result,outputs=scope['extension_bones']({'params':{'groups':[tip_group,group]},'inputs':{'model':'fixture'},'out_dir':str(Path(job['result']).parent)})
+ids=job['params'].get('enabled_ids')
+groups=[g for g in (tip_group,group) if ids is None or g['id'] in ids]
+result,outputs=scope['extension_bones']({'params':{'groups':groups},'inputs':{'model':'fixture'},'out_dir':str(Path(job['result']).parent)})
 assert result['status']=='applied',result
-metrics=result['metrics']['Tip']
-out['tip_source']=metrics['tip_source']
-out['rows']=[{k:row[k] for k in ('suggested','placed','tip','axis','offset_mm')} for row in metrics['placement']]
-out['heads']=[list(arm.data.bones[name].head_local) for name in ('TipLeft','TipRight')]
-out['disc']=metrics.get('disc_mask')
+out['bones']=sorted(b.name for b in arm.data.bones)
+model=(outputs or {}).get('model')
+out['model_sha']=hashlib.sha256(Path(model).read_bytes()).hexdigest() if model and Path(model).exists() else None
+out['has_tip_metrics']='Tip' in result['metrics']
+if out['has_tip_metrics']:
+ metrics=result['metrics']['Tip']
+ out['tip_source']=metrics['tip_source']
+ out['rows']=[{k:row[k] for k in ('suggested','placed','tip','axis','offset_mm')} for row in metrics['placement']]
+ out['heads']=[list(arm.data.bones[name].head_local) for name in ('TipLeft','TipRight')]
+ out['disc']=metrics.get('disc_mask')
 Path(job['result']).write_text(json.dumps({'ok':True,'data':out,'outputs':{}}))
 '''
 
@@ -284,6 +351,23 @@ def blender_part():
                     beyond = [p for p in pos if math.hypot(p[0] - tip[0], p[1] - tip[2]) > .016 + texel]
                     check(f"[8] side {sign}: soft edge alpha within 8/255", worst <= 8, worst)
                     check(f"[8] side {sign}: nothing beyond 16 mm", not beyond, len(beyond))
+        # [9]
+        override = {'offsets': [{'up': 4, 'out': 0}], 'mirror': True,
+                    'disc': {'enabled': True, 'color': '#aa5544', 'diameter_mm': 20, 'soft_mm': 2}}
+        builds = {label: run(root, f'switch-{label}', {'case': 'switch', 'override': override,
+                                                       'enabled_ids': SWITCH_IDS[key]})
+                  for label, key in (('on', 'on'), ('off', 'off'), ('again', 'on'))}
+        off = builds['off']
+        check("[9] off: no tip bones", not {'TipLeft', 'TipRight'} & set(off['bones']), off['bones'])
+        check("[9] off: no tip metrics", not off['has_tip_metrics'])
+        check("[9] on: tip bones", {'TipLeft', 'TipRight'} <= set(builds['on']['bones']))
+        same = {key: builds['on'].get(key) == builds['again'].get(key) for key in ('rows', 'heads', 'disc', 'bones')}
+        check("[9] on again: rows, heads, disc and bones as before", all(same.values()), same)
+        if builds['on']['model_sha']:
+            check("[9] on again: the same GLB bytes", builds['on']['model_sha'] == builds['again']['model_sha'],
+                  (builds['on']['model_sha'], builds['again']['model_sha']))
+        else:
+            check("[9] the build wrote a GLB", False, "no model output")
 
 
 def main():
