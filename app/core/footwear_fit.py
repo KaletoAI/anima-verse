@@ -21,12 +21,19 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    open (unlimited) in the rear ``OPEN_THROAT_SHARE`` of the length and as closed in front of it. The
    spike's fixed-point iteration (``SCALE_ITERATIONS``) from k = foot / arc(0.9 L).
 3. **Extension per side** = the 2-point chord minus the rest pitch: the heel contact sits on the insole
-   ``d_heel_m`` from the heel end, the ball on the insole at the chord distance ``heel_ball_m`` from it;
-   the Foot turns by that angle about its lateral axis (horizontal, ⟂ the foot axis) at the ankle, toe
-   down. The ToeBase turns back so the toes lie on the forepart slope (the insole slope over
-   ``FOREPART_SPAN_M`` in front of the ball): its net pitch is the slope, its own turn
-   ``-(extension + slope)``. (The spike turned it by ``-(extension - slope)``, i.e. the toes DOWN by an
-   up-going slope — a sign slip; 1.6 / 0.2 deg on the Stilettos.)
+   ``d_heel_m`` from the heel end, the ball on the insole at the chord distance from it; the Foot turns
+   by that angle about its lateral axis (horizontal, ⟂ the foot axis) at the ankle, toe down. The ToeBase
+   turns back so the toes lie on the forepart slope (the insole slope over ``FOREPART_SPAN_M`` in front of
+   the ball): its net pitch is the slope, its own turn ``-(extension + slope)``. (The spike turned it by
+   ``-(extension - slope)``, i.e. the toes DOWN by an up-going slope — a sign slip; 1.6 / 0.2 deg on the
+   Stilettos.) THE BALL IS THE SKINNED BALL (fit version 2): the plantar ball band skinned with Foot and
+   ToeBase in the stand pose (mean xz, lowest y), not the bind contact carried rigidly by Foot — the
+   counter-turn moves it 4–5 mm on the real material and the shoe has to meet the ball the clips show. The
+   ball depends on the pose and the pose on the chord to the ball, so the extension is a fixed point:
+   start from the rigid solve (``heel_ball_m``, ``rest_pitch_deg``), then repeat — pose, skin the ball,
+   chord of the posed heel-ball distance, correct the extension by chord minus the posed heel-over-ball
+   pitch — until the correction is under ``BALL_SOLVE_TOL_RAD`` (``BALL_SOLVE_STEPS`` at most; three
+   turns on the real material).
 4. **Placement** (posed, before the root lift): yaw = the horizontal direction heel -> ball after the
    extension; the shoe's insole heel point on the posed heel contact; the left foot gets the source, the
    right foot its mirror (the shoe's lateral axis negated). Then the footprint midline goes onto the
@@ -45,9 +52,9 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    pose the shoe is turned back by the extension, spec § 6.3). No leg bone gets weight.
 
 Gates (``FIT_GATES``; P2 gates only ``ACTIVE_IN_P2``, the rest is recorded): ``ball_placement_mm`` (the
-posed ball contact — the plantar ball vertices SKINNED with Foot and ToeBase, so the ToeBase counter-turn
-is in it — vs the shoe's chord ball point under the heel-anchored placement, before the midline step; the
-spike read the ball rigid on Foot, 4–5 mm off on the real material), ``lift_asymmetry_mm``,
+posed SKINNED ball of step 3 vs the shoe's chord ball point under the heel-anchored placement, before the
+midline step — the residual of the fixed point plus whatever the chord's elevation misses; the spike read
+the ball rigid on Foot, 4–5 mm off on the real material), ``lift_asymmetry_mm``,
 ``slim_needed``, ``stand_floor_mm`` (the lowest shoe point in the shod stand vs the floor — a BIND-pose
 number; floor contact under clips is the renderer's shared ground measure, ``packages/scene-render``
 ``clipGround.ts``), ``boot`` (mm by which the shoe's topline stands above the shod ankle +
@@ -64,7 +71,7 @@ from app.core.footwear_gates import check_gates
 
 #: Bumped when the fit changes what it produces (part of the footwear fsig and
 #: ``garment_fit.FIT_VERSION["footwear"]``).
-FOOTWEAR_FIT_VERSION = 1
+FOOTWEAR_FIT_VERSION = 2
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -108,6 +115,10 @@ BALL_BAND_M = 0.012
 TOE_BAND_M = 0.006
 #: Fixed-point iterations of the scale against the cavity end.
 SCALE_ITERATIONS = 20
+#: The extension against the SKINNED ball (step 3): most turns of the fixed point, and the chord-minus-pitch
+#: correction (radians) under which it has converged.
+BALL_SOLVE_STEPS = 8
+BALL_SOLVE_TOL_RAD = 1e-7
 #: An unroofed station counts as the open throat in this rear share of the length, else as closed.
 OPEN_THROAT_SHARE = 0.6
 #: The forepart slope runs this far (metres) in front of the ball.
@@ -443,13 +454,30 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     for side, fm in feet.items():
         # 3. extension: the 2-point chord minus the rest pitch; the ToeBase back onto the forepart slope
         xh = ins.x0 + fm.d_heel_m / k
+        # The ball the shoe is placed on is the ball AS SKINNED (Foot and ToeBase): the ToeBase
+        # counter-turn moves the plantar ball vertices off the Foot-rigid point — 4–5 mm on the real
+        # material — and the shoe has to meet the ball the clips show. That ball depends on the pose,
+        # the pose on the chord to that ball: a fixed point, started from the rigid solve (the chord of
+        # the bind heel–ball distance minus the rest pitch) and converged in a few turns
+        # (|correction| < BALL_SOLVE_TOL_RAD, at most BALL_SOLVE_STEPS).
         xb = ins.chord_to(xh, fm.heel_ball_m, k)
         chord = math.atan2(float(ins.z(xh) - ins.z(xb)) * k, (xb - xh) * k)
         theta = chord - math.radians(fm.rest_pitch_deg)
-        x_fore = min(xb + FOREPART_SPAN_M / k, x_end)
-        slope = (math.atan2(float(ins.z(x_fore) - ins.z(xb)) * k, (x_fore - xb) * k) if x_fore > xb else 0.0)
-        Bf, Bt, axis, toe_turn = _pose(fm, theta, slope)
-        H1, B1 = _apply(Bf, fm.heel_contact), _apply(Bf, fm.ball_contact)
+        for _ in range(BALL_SOLVE_STEPS):
+            x_fore = min(xb + FOREPART_SPAN_M / k, x_end)
+            slope = (math.atan2(float(ins.z(x_fore) - ins.z(xb)) * k, (x_fore - xb) * k) if x_fore > xb else 0.0)
+            Bf, Bt, axis, toe_turn = _pose(fm, theta, slope)
+            H1 = _apply(Bf, fm.heel_contact)
+            mats = {fm.foot_index: Bf, fm.toe_index: Bt}
+            Bs = _skin(P, body, fm.ball_ids, mats)
+            B1 = Bs.mean(0)
+            B1[1] = Bs[:, 1].min()
+            xb = ins.chord_to(xh, float(np.linalg.norm(B1 - H1)), k)
+            chord = math.atan2(float(ins.z(xh) - ins.z(xb)) * k, (xb - xh) * k)
+            pitch = math.atan2(float(H1[1] - B1[1]), float(np.hypot(B1[0] - H1[0], B1[2] - H1[2])))
+            if abs(chord - pitch) < BALL_SOLVE_TOL_RAD:
+                break
+            theta += chord - pitch
 
         # 4. placement: yaw heel -> ball, the insole heel point on the posed heel contact; right = mirror
         d = _unit(np.array([B1[0] - H1[0], 0.0, B1[2] - H1[2]]))
@@ -459,14 +487,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         P4 = np.eye(4)
         P4[:3, :3] = S
         P4[:3, 3] = H1 - S @ np.array([xh, float(ins.z(xh)), 0.0])
-        # The gate reads the ball AS SKINNED (Foot and ToeBase): the ToeBase counter-turn moves the
-        # plantar ball vertices off the Foot-rigid point B1 — 4–5 mm on the real material — and the
-        # shoe's ball point has to meet the ball the clips will show, not the rigid stand-in.
-        mats = {fm.foot_index: Bf, fm.toe_index: Bt}
-        Bs = _skin(P, body, fm.ball_ids, mats)
-        B1s = Bs.mean(0)
-        B1s[1] = Bs[:, 1].min()
-        ball_err = float(np.linalg.norm(_apply(P4, np.array([xb, float(ins.z(xb)), 0.0])) - B1s))
+        ball_err = float(np.linalg.norm(_apply(P4, np.array([xb, float(ins.z(xb)), 0.0])) - B1))
 
         # the midline: foot slab middle - insole middle along the shoe, a line fitted to it
         Xf = _skin(P, body, fm.vertex_ids, mats)

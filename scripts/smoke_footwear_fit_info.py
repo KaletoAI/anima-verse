@@ -35,7 +35,7 @@ extension_deg_right 22.2, toe_room_mm_right 18.0, root_lift_m 0.052, k_m_per_uni
 [I2] Mesh mode with three stored outfit bodies (model3d/<id>.glb, ids sorted A < B < C by construction:
      ``outfit_body_id`` of three texture signatures, then sorted): A carries an accepted record of F on
      sha(A) -> status accepted, metrics width_factor 1.05 (its own hand value); B has nothing -> missing;
-     C has a recorded body failure of F on sha(C) (base_fit_sha "", fit_version 1, error "fit refused — x")
+     C has a recorded body failure of F on sha(C) (base_fit_sha "", the current fit version, error "fit refused — x")
      -> status refused, error "fit refused — x". ``fits`` = [base, then the three in sorted id order], each
      ``base`` False. A model3d/ file that is NOT an outfit body id (the base GLB, an outfit model "o…") is no
      row.
@@ -94,6 +94,7 @@ def main() -> int:
         config.load(paths.get_config_path(), instance_path=root / "inst/config.json")
         from app.core import db
         db.init_schema()
+        from app.core import footwear_fit as ff
         plugins = root / "plugins"
         shutil.copytree(ROOT / "plugins" / "human", plugins / "human")
         from app.plugins.loader import discover_packages
@@ -151,8 +152,8 @@ def main() -> int:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(base_glb + body_id.encode())
             record = {
-                "method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 1,
-                "fit_version": 1, "accepted": True, "body_id": body_id, "body_sha256": body_sha,
+                "method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": ff.FOOTWEAR_FIT_VERSION,
+                "fit_version": ff.FOOTWEAR_FIT_VERSION, "accepted": True, "body_id": body_id, "body_sha256": body_sha,
                 "base_signature": bsig, "parents": {"body_id": body_id, "body_sha256": body_sha,
                                                     "base_signature": bsig, "source": source_parents},
                 "scale": {"k_m_per_unit": 0.9, "length_m": 0.254, "width_factor": width_factor, "width_cap": 1.1,
@@ -214,7 +215,7 @@ def main() -> int:
         (mdir / "o0123456789ab.glb").write_bytes(b"an outfit model, no body")
         write_fit(A, shas[A], width_factor=1.05, on_base=False)
         gs.record_body_failure("Demo", heels, F, C, error="fit refused — x", body_sha=shas[C], base_fit_sha="",
-                               fit_version=1)
+                               fit_version=ff.FOOTWEAR_FIT_VERSION)
         info = garments.garment_info("Demo", heels)
         rows = [(r.get("body_id"), r.get("base"), r.get("status"), r.get("error")) for r in info.get("fits") or []]
         check("I2 rows", rows, [(bsig, True, "accepted", None), (A, False, "accepted", None),

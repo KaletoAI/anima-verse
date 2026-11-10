@@ -17,7 +17,7 @@ The shoe: the Task 5 wedge pump (length 0.26, width 0.08, insole h(x) = 0.09 on 
 footwear_insole.analyse_arrays (frame = the wedge's own coordinates).
 
 Expected, by hand:
-[F0] constants: FOOTWEAR_FIT_VERSION 1, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
+[F0] constants: FOOTWEAR_FIT_VERSION 2, BALL_SOLVE_STEPS 8, BALL_SOLVE_TOL_RAD 1e-7, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
      SLIM_MAX_SHARE 0.18, FIT_GATES / ACTIVE_IN_P2 verbatim.
 [F9] joint_bind_matrices(glb) = inverse(inverseBindMatrix) per normalised joint name: the fixture's IBMs are
      the negated joint translations -> "leftfoot" = translation (0, 0.08, -0.10), "righttoebase" =
@@ -33,32 +33,34 @@ Expected, by hand:
      k = (0.25 + 0.005) / 0.288062 = 0.88522. The arc is read on the 240-station polyline, which cuts the two
      kinks at 0.05 / 0.15 (arc 3.5e-5 short) -> k within 2e-4.
 [F2] chord: heel contact on the insole at x_h = 0.02 / k = 0.022593 (flat part, height 0.09 k = 0.07967); the
-     ball at the chord distance 0.17 on the forepart (height 0.01 k = 0.00885): dy = 0.07082, horizontal
-     sqrt(0.17^2 - 0.07082^2) = 0.15455 -> chord pitch = atan2(0.07082, 0.15455) = 24.62 deg; rest pitch 0
-     -> extension 24.62 deg both sides (+-0.05). Forepart flat -> slope 0 -> ToeBase turn -(24.62 + 0) =
-     -24.62 deg. Axis = up x forward = y x x = (0, 0, -1) (a positive turn takes the toes down).
-[F3] the heel contact relative to the ankle (-0.04, -0.08) turned toe-down by 24.62 deg:
-     x = -0.04 cos - 0.08 sin = -0.06969, y = 0.04 sin - 0.08 cos = -0.05607 -> it sits 0.05607 below the
-     ankle; the shoe's heel point stands 0.07967 above the shoe ground -> lift = 0.07967 + 0.05607 - 0.08 (the
-     rest ankle height over the floor y = 0) = 0.05574 m (+-0.5 mm), equal on both sides -> root lift
-     0.05574, lift asymmetry 0.
-[F4] ball placement: the foot's heel -> ball line is the foot axis, so the turn about the lateral axis puts
-     the RIGID ball (the bind contact carried by Foot, (0.13, 0, zc)) exactly on the chord. The gate reads
-     the ball AS SKINNED, though (P2 fix round): the ball band is |x - 0.13| < 0.012 -> the sole columns
-     x = 0.12, 0.13 (Foot) and 0.14 (ToeBase). Foot turns 24.62 deg about the ankle (0, 0.08):
-     (x, -0.08) -> (x cos + 0.08 sin, -x sin - 0.08 cos) + (0, 0.08) with cos = 0.909077, sin = 0.416629:
-     x = 0.12 -> (0.075759, -0.042722), x = 0.13 -> (0.084850, -0.046888). The ToeBase turns back by the
-     same angle about the posed ball joint, so its vertices keep their orientation and only move with that
-     joint: (0.13, 0.01) -> (0.089016, -0.037797), delta (-0.040984, -0.047797) -> x = 0.14 lands at
-     (0.099016, -0.047797). Skinned contact = mean x, lowest y = (0.086541, -0.047797) against the rigid
-     (0.084850, -0.046888): error sqrt(0.001692^2 + 0.000909^2) = 1.921 mm (+-0.02; the z means agree).
-     Under 3 mm -> the gate passes on the fixture. The shoe ground lands on the floor ->
-     stand_floor 0 (+-0.01 mm); every active gate passes, ok True, no reasons.
-     Re-posing the LEFT bind shoe with the stand pose built here by hand (Foot turned 24.62 deg about z = -1
+     ball on the flat forepart (height 0.01 k = 0.00885): dy = 0.07082 whatever the chord length L, so the
+     chord pitch is atan2(0.07082, sqrt(L^2 - 0.07082^2)). THE RIGID START: L = heel_ball 0.17 -> horizontal
+     0.15455 -> 24.62 deg, rest pitch 0 -> theta_0 = 24.62. THE FIXED POINT on the SKINNED ball (fit version
+     2): under a turn theta about the ankle (0, 0.08) (toes down, axis (0, 0, -1)) a Foot point (x, 0) lands
+     at (x cos + 0.08 sin, 0.08 - x sin - 0.08 cos); the ToeBase column keeps its orientation and moves with
+     the posed ball joint (0.13, 0.01): delta = (0.13 cos - 0.07 sin - 0.13, 0.07 - 0.13 sin - 0.07 cos). Heel
+     contact H1 = (-0.04 cos - 0.08 sin, 0.08 + 0.04 sin - 0.08 cos); skinned ball B1s = (mean x of the posed
+     columns 0.12, 0.13 (Foot) and 0.14 + delta_x (ToeBase), lowest y = the ToeBase column 0.07 - 0.13 sin
+     - 0.07 cos); L = |B1s - H1|; posed pitch = atan2(H1_y - B1s_y, B1s_x - H1_x); theta += chord - pitch:
+       theta 24.6200: H1 (-0.06969, 0.02394), B1s (0.08655, -0.04779), L 0.17192, chord 24.3263, pitch 24.6606
+       theta 24.2857: H1 (-0.06936, 0.02353), B1s (0.08726, -0.04727), L 0.17188, chord 24.3314, pitch 24.3262
+       theta 24.2910: chord 24.3314 = pitch 24.3314 -> converged: extension 24.29 deg both sides (+-0.05;
+       the module reads k and the chord off the sampled insole, 0.003 deg from this closed form). Forepart
+     flat -> slope 0 -> ToeBase turn -(24.29 + 0) = -24.29 deg. Axis = up x forward = y x x = (0, 0, -1).
+[F3] the heel contact relative to the ankle (-0.04, -0.08) turned toe-down by 24.29 deg:
+     x = -0.04 cos - 0.08 sin = -0.06937, y = 0.04 sin - 0.08 cos = -0.05646 -> it sits 0.05646 below the
+     ankle; the shoe's heel point stands 0.07967 above the shoe ground -> lift = 0.07967 + 0.05646 - 0.08 (the
+     rest ankle height over the floor y = 0) = 0.05613 m (+-0.5 mm), equal on both sides -> root lift
+     0.05613, lift asymmetry 0.
+[F4] ball placement: the shoe's chord ball point under the heel-anchored placement is L from the heel point
+     in the vertical plane of d, at the chord pitch; the fixed point of [F2] made the posed heel -> skinned
+     ball pitch equal to it -> the two coincide: error 0 (<= 0.01 mm; the z means agree). The shoe ground
+     lands on the floor -> stand_floor 0 (+-0.01 mm); every active gate passes, ok True, no reasons.
+     Re-posing the LEFT bind shoe with the stand pose built here by hand (Foot turned 24.29 deg about z = -1
      through the ankle): the wedge vertex (0, 0.09, 0.04) (heel end on the insole, the shoe's right edge,
      weight 100 % Foot) lands 0.02 behind the posed heel contact (x_h k = d_heel = 0.02) at its height, at
-     the foot's centre + 0.04 k x 1.10 to the right: (-0.06969 - 0.02, 0.08 - 0.05607, -0.10 + 0.038950) =
-     (-0.08969, 0.02393, -0.06105) (+-1e-4).
+     the foot's centre + 0.04 k x 1.10 to the right: (-0.06937 - 0.02, 0.08 - 0.05646, -0.10 + 0.038950) =
+     (-0.08937, 0.02354, -0.06105) (+-1e-4).
 [F5] width: foot 0.085 vs insole 0.08 k = 0.07082 at the ball -> needed 0.085 / 0.07082 = 1.2003 (+-0.002)
      both sides, applied min(1.10, 1.2003) = 1.10, slim_needed = 1 - 0.07082 x 1.10 / 0.085 = 1 - 0.07790 /
      0.085 = 0.0835 (+-0.001). A 0.10 m wide foot: needed 1.4120, slim_needed 1 - 0.07790 / 0.10 = 0.2210
@@ -69,13 +71,14 @@ Expected, by hand:
      the winding flipped -> the signed volume (sum det(a, b, c) / 6) is equal; every shoe's vertex normals
      agree with its winding's face normals (dot > 0). Joints: [LeftFoot, LeftToeBase] / [RightFoot,
      RightToeBase] only, weights in columns 0 and 1 summing to 1 — no Leg anywhere. The ToeBase weight is
-     the smoothstep of (x - (x_ball - 0.015 / k)) / (0.03 / k), x_ball = 0.022593 + 0.15455 / k = 0.19718 raw.
+     the smoothstep of (x - (x_ball - 0.015 / k)) / (0.03 / k), x_ball = 0.022593 + sqrt(0.17188^2 - 0.07082^2) / k
+     = 0.022593 + 0.15663 / k = 0.19952 raw.
 [F7] boot: walls over [0, 0.10] raised to 0.2098 raw -> topline 0.2098 k = 0.18572; the shod ankle stands
-     at 0.08 + 0.05574 = 0.13574 -> 0.18572 - (0.13574 + 0.03) = +0.01998 m = +20.0 mm (+-0.5) > 0 ->
-     ok False, reasons[0] = BOOT_REFUSED, record refusal BOOT_REFUSED. The pump: 0.12 k - 0.16574 =
-     -59.5 mm (+-0.5) -> passes.
-[F8] foot_pose (spec § 6.1 without source): bones["LeftFoot"] = {axis (0, 0, -1), deg 24.62},
-     bones["LeftToeBase"].deg = -24.62, root_lift_m 0.05574; contacts per side heel (on Foot), ball and toe
+     at 0.08 + 0.05613 = 0.13613 -> 0.18572 - (0.13613 + 0.03) = +0.01959 m = +19.6 mm (+-0.5) > 0 ->
+     ok False, reasons[0] = BOOT_REFUSED, record refusal BOOT_REFUSED. The pump: 0.12 k - 0.16613 =
+     -59.9 mm (+-0.5) -> passes.
+[F8] foot_pose (spec § 6.1 without source): bones["LeftFoot"] = {axis (0, 0, -1), deg 24.29},
+     bones["LeftToeBase"].deg = -24.29, root_lift_m 0.05613; contacts per side heel (on Foot), ball and toe
      (on ToeBase). The record's sides carry the same extension, the lift, toe room = the shoe's front 0.26 k
      = 0.23016 minus the posed toe tip: the toes keep their rest orientation (net ToeBase turn 0) and move
      with the ToeBase head (0.13, 0.01) turned about the ankle: x 0.13 cos + (-0.07) sin = 0.08902 ->
@@ -119,7 +122,8 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 1 and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10
+    check(ff.FOOTWEAR_FIT_VERSION == 2 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+          and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
     check(ff.FIT_GATES == {"ball_placement_mm": ("max", 3.0), "lift_asymmetry_mm": ("max", 10.0),
                            "slim_needed": ("max", 0.18), "stand_floor_mm": ("range", (-3.0, 3.0)),
@@ -162,19 +166,19 @@ def main() -> int:
     # [F2]
     for side in ("left", "right"):
         sd = rec["sides"][side]
-        check(near(sd["extension"]["deg"], 24.62, 0.05) and near(sd["toe_counter"]["deg"], -24.62, 0.05)
+        check(near(sd["extension"]["deg"], 24.29, 0.05) and near(sd["toe_counter"]["deg"], -24.29, 0.05)
               and np.allclose(sd["extension"]["axis_local"], (0, 0, -1), atol=1e-6),
               f"[F2] {side} extension {sd['extension']['deg']:.4f} deg, toe turn {sd['toe_counter']['deg']:.4f}")
 
     # [F3]
-    check(near(rec["root_lift_m"], 0.05574, 5e-4), f"[F3] root lift {rec['root_lift_m']:.6f} = 0.05574")
+    check(near(rec["root_lift_m"], 0.05613, 5e-4), f"[F3] root lift {rec['root_lift_m']:.6f} = 0.05613")
     check(near(rec["sides"]["left"]["lift_m"], rec["sides"]["right"]["lift_m"], 1e-9)
           and near(rec["gates"]["lift_asymmetry_mm"]["value"], 0.0, 1e-6), "[F3] equal sides, asymmetry 0")
 
     # [F4]
     g = rec["gates"]
-    check(near(g["ball_placement_mm"]["value"], 1.921, 0.02),
-          f"[F4] ball placement {g['ball_placement_mm']['value']:.4f} mm = 1.921 (skinned ball vs the rigid chord point)")
+    check(g["ball_placement_mm"]["value"] <= 0.01,
+          f"[F4] ball placement {g['ball_placement_mm']['value']:.5f} mm <= 0.01 (the shoe's chord point on the skinned ball)")
     check(near(g["stand_floor_mm"]["value"], 0.0, 0.01), f"[F4] stand floor {g['stand_floor_mm']['value']} mm")
     check(fit.ok and fit.reasons == [], f"[F4] ok {fit.ok}, reasons {fit.reasons}")
     left, right = fit.shoes["left"], fit.shoes["right"]
@@ -182,7 +186,7 @@ def main() -> int:
     theta = math.radians(rec["sides"]["left"]["extension"]["deg"])
     Bf = ff._about(np.array([0.0, 0.08, -0.10]), np.array([0.0, 0.0, -1.0]), theta)
     posed = ff._apply(Bf, left.positions[i])
-    check(left.weights[i, 0] == 1.0 and np.allclose(posed, (-0.08969, 0.02393, -0.06105), atol=1e-4),
+    check(left.weights[i, 0] == 1.0 and np.allclose(posed, (-0.08937, 0.02354, -0.06105), atol=1e-4),
           f"[F4] re-posed heel-edge vertex {np.round(posed, 5)}")
 
     # [F5]
@@ -217,7 +221,7 @@ def main() -> int:
               f"[F6] {side} weights on {gm.joint_names} only")
     xb = rec["diagnostics"]["left"]["ball_x_m"] / k
     u = np.clip((P[:, 0] - (xb - 0.015 / k)) / (0.03 / k), 0, 1)
-    check(np.allclose(left.weights[:, 1], u * u * (3 - 2 * u), atol=1e-9) and near(xb, 0.19718, 1e-4),
+    check(np.allclose(left.weights[:, 1], u * u * (3 - 2 * u), atol=1e-9) and near(xb, 0.19952, 1e-4),
           f"[F6] ToeBase weight = smoothstep over +-0.015 m around the ball (x {xb:.5f} raw)")
 
     # [F7]
@@ -225,22 +229,22 @@ def main() -> int:
     boot = ff.fit_pair(footwear_insole.analyse_arrays(Pb, Fb), fx.shoe_garment(Pb, Fb), body, joints)
     bv = boot.record["gates"]["boot"]["value"]
     check(not boot.ok and boot.reasons[:1] == [footwear_insole.BOOT_REFUSED]
-          and boot.record.get("refusal") == footwear_insole.BOOT_REFUSED and near(bv, 20.0, 0.5),
+          and boot.record.get("refusal") == footwear_insole.BOOT_REFUSED and near(bv, 19.6, 0.5),
           f"[F7] boot {bv} mm -> refused {boot.reasons[:1]}")
-    check(near(g["boot"]["value"], -59.5, 0.5) and g["boot"]["ok"], f"[F7] the pump: boot {g['boot']['value']} mm")
+    check(near(g["boot"]["value"], -59.9, 0.5) and g["boot"]["ok"], f"[F7] the pump: boot {g['boot']['value']} mm")
 
     # [F8]
     fp = fit.foot_pose
-    check(fp["version"] == 1 and "source" not in fp and near(fp["bones"]["LeftFoot"]["deg"], 24.62, 0.05)
+    check(fp["version"] == 1 and "source" not in fp and near(fp["bones"]["LeftFoot"]["deg"], 24.29, 0.05)
           and np.allclose(fp["bones"]["LeftFoot"]["axis"], (0, 0, -1), atol=1e-6)
-          and near(fp["bones"]["LeftToeBase"]["deg"], -24.62, 0.05) and near(fp["root_lift_m"], 0.05574, 5e-4)
+          and near(fp["bones"]["LeftToeBase"]["deg"], -24.29, 0.05) and near(fp["root_lift_m"], 0.05613, 5e-4)
           and set(fp["bones"]) == {"LeftFoot", "LeftToeBase", "RightFoot", "RightToeBase"},
           f"[F8] foot_pose LeftFoot {fp['bones']['LeftFoot']}, lift {fp['root_lift_m']}")
     roles = {s: [(c["role"], c["bone"]) for c in fp["contacts"][s]] for s in ("left", "right")}
     check(roles["left"] == [("heel", "LeftFoot"), ("ball", "LeftToeBase"), ("toe", "LeftToeBase")]
           and roles["right"] == [("heel", "RightFoot"), ("ball", "RightToeBase"), ("toe", "RightToeBase")],
           f"[F8] contacts {roles['left']}")
-    check(near(rec["sides"]["left"]["toe_room_mm"], -8.55, 0.3), f"[F8] toe room {rec['sides']['left']['toe_room_mm']} mm")
+    check(near(rec["sides"]["left"]["toe_room_mm"], -8.90, 0.3), f"[F8] toe room {rec['sides']['left']['toe_room_mm']} mm")
     pb = np.asarray(rec["sides"]["left"]["placement_bind"], np.float64)
     local = ff._apply(pb, P[i])
     check(np.allclose(local, left.positions[i] - (0, 0.08, -0.10), atol=1e-6), "[F8] placement_bind -> Foot bind frame")

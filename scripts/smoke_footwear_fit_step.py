@@ -17,7 +17,7 @@ Fixture. Demo (human, on the base-body pipeline). Base model = ``foot_body_glb()
 identity bind rotations: Foot at (0, 0.08, +-0.10), ToeBase at (0.13, 0.01, +-0.10), foot x in [-0.06, 0.19],
 width 0.085) with its sidecar and unrigged copy. Item ``heels`` (feet, own mesh) held by Demo; its current
 source folder holds the Task 5 wedge pump as ``prepared.glb`` (``glb_mesh.static_glb``), ``insole.json`` =
-``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 1) — the item steps are
+``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 1, fit version 2: the extension on the skinned ball) — the item steps are
 done, a run only fits. Item ``boots``: the same with the wedge's boot variant (``wedge(shaft=0.2098)``).
 
 Expected, by hand (the numbers are Task 9's, ``smoke_footwear_fit.py`` [F1]–[F8], derived there: the fit reads
@@ -32,17 +32,17 @@ the width stays the full 0.08 raw = 0.08 k = 70.83 mm, as in Task 9 (without tha
 [P1] run_garment(Demo, heels) -> {ok True, ran ["fit"], fit "accepted"}, HUB 0, the assembly not scheduled.
      The fit GLB garments/heels_<F>.glb: exactly two nodes ``garment_footwear_heels_*`` — ``_left`` / ``_right``
      with extras.garment {kind "footwear", item_id "heels", fsig F, side}; its body primitives (garment nodes
-     excluded) are the base model's (same vertex count). Record: method "shoe", kind "footwear", version 1,
-     fit_version 1, accepted, ssig = the current ssig, body_id = bsig, body_sha256 = base_model_sha256 =
+     excluded) are the base model's (same vertex count). Record: method "shoe", kind "footwear", version 2,
+     fit_version 2, accepted, ssig = the current ssig, body_id = bsig, body_sha256 = base_model_sha256 =
      sha(base), base_signature bsig, parents {body_id, body_sha256, base_model_sha256, base_signature, source
      {ssig, empty_sha256 = sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 1}};
-     scale.k_m_per_unit = 0.255 / 0.288062 = 0.88522 (+-2e-4); sides.left.extension.deg = 24.62 (+-0.05) both
-     sides; root_lift_m = 0.07967 + 0.05607 - 0.08 = 0.05574 (+-5e-4); insole_w_ball_mm 0.08 k = 70.83 (+-0.05), width
+     scale.k_m_per_unit = 0.255 / 0.288062 = 0.88522 (+-2e-4); sides.left.extension.deg = 24.29 (+-0.05) both
+     sides; root_lift_m = 0.07967 + 0.05646 - 0.08 = 0.05613 (+-5e-4); insole_w_ball_mm 0.08 k = 70.83 (+-0.05), width
      needed 0.085 / 0.07082 = 1.2003 (+-0.002), applied 1.10, width_cap 1.10; slim_needed
      1 - 0.07790 / 0.085 = 0.0835 (+-0.001); foot_pose
-     bones LeftFoot deg 24.62, root_lift_m 0.05574, source {item_id heels, fsig F, glb_sha256 = sha(fit GLB)};
+     bones LeftFoot deg 24.29, root_lift_m 0.05613, source {item_id heels, fsig F, glb_sha256 = sha(fit GLB)};
      low/heels_<F>.glb exists, record.low.ok. info: steps.fit {status accepted, metrics.width_factor 1.1,
-     metrics.extension_deg_left 24.62}, width_cap 1.1. A second run -> ran [] (nothing to do); a forced Re-fit
+     metrics.extension_deg_left 24.29}, width_cap 1.1. A second run -> ran [] (nothing to do); a forced Re-fit
      (steps "fit", force) -> ran ["fit"], HUB still 0.
 [P2] fit_state(Demo, heels, F, sha(base)) "accepted"; prepared.glb replaced by other bytes -> "outdated"
      (restored -> "accepted"); the base model rewritten with other bytes (same geometry, another asset
@@ -58,7 +58,7 @@ the width stays the full 0.08 raw = 0.08 k = 70.83 mm, as in Task 9 (without tha
      body_fit_state) replaced by raisers, garments.body_fit(…, base_fit=(missing path, {}), build False) ->
      pending True, fit None; garment_footwear.body_fit(build True) -> fit garments/bodies/<A>/heels_<F>.glb +
      low/, record body_id A, body_sha256 sha(A), base_signature bsig, NO base_model_sha256 (neither top level
-     nor in parents) and no base_fit_sha256; extension 24.62, root lift 0.05574 (the same feet); foot_pose
+     nor in parents) and no base_fit_sha256; extension 24.29, root lift 0.05613 (the same feet); foot_pose
      bones "mixamorig:LeftFoot" (the body's own joint names); two shoe nodes. garments.body_fit (build False)
      then returns that file; fit_state(…, sha(A), body=A) accepted, with sha(base) stale; with a wrong body sha
      -> fit None, not pending. HUB 0.
@@ -266,8 +266,8 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 1,
-             "fit_version": 1, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 2,
+             "fit_version": 2, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         check("P1 parents", rec.get("parents"), {
             "body_id": bsig, "body_sha256": base_sha, "base_model_sha256": base_sha, "base_signature": bsig,
@@ -276,15 +276,15 @@ def main() -> int:
         scale = rec.get("scale") or {}
         near("P1 k", scale.get("k_m_per_unit"), 0.88522, 2e-4)
         for side in ("left", "right"):
-            near(f"P1 extension {side}", rec["sides"][side]["extension"]["deg"], 24.62, 0.05)
+            near(f"P1 extension {side}", rec["sides"][side]["extension"]["deg"], 24.29, 0.05)
             near(f"P1 insole width at the ball {side}", rec["sides"][side]["insole_w_ball_mm"], 70.83, 0.05)
             near(f"P1 width needed {side}", scale["width_needed"][side], 1.2003, 0.002)
             near(f"P1 slim needed {side}", scale["slim_needed"][side], 0.0835, 0.001)
-        near("P1 root lift", rec.get("root_lift_m"), 0.05574, 5e-4)
+        near("P1 root lift", rec.get("root_lift_m"), 0.05613, 5e-4)
         check("P1 width factor / cap", (scale.get("width_factor"), scale.get("width_cap")), (1.1, 1.1))
         fp = rec.get("foot_pose") or {}
-        near("P1 foot_pose LeftFoot", fp["bones"]["LeftFoot"]["deg"], 24.62, 0.05)
-        near("P1 foot_pose lift", fp.get("root_lift_m"), 0.05574, 5e-4)
+        near("P1 foot_pose LeftFoot", fp["bones"]["LeftFoot"]["deg"], 24.29, 0.05)
+        near("P1 foot_pose lift", fp.get("root_lift_m"), 0.05613, 5e-4)
         check("P1 foot_pose source", fp.get("source"), {"item_id": heels, "fsig": F, "glb_sha256": sha(fit_path)})
         low = gs.garment_path("Demo", heels, F, "low")
         check("P1 low tier", (low.is_file(), (rec.get("low") or {}).get("ok")), (True, True))
@@ -292,7 +292,7 @@ def main() -> int:
         fstep = info["steps"]["fit"]
         check("P1 info fit", (fstep["status"], fstep["metrics"].get("width_factor"), info.get("width_cap")),
               ("accepted", 1.1, 1.1))
-        near("P1 info extension left", fstep["metrics"].get("extension_deg_left"), 24.62, 0.05)
+        near("P1 info extension left", fstep["metrics"].get("extension_deg_left"), 24.29, 0.05)
         res = garments.run_garment("Demo", heels)
         check("P1 second run", (res.get("ok"), res.get("ran")), (True, []))
         res = garments.run_garment("Demo", heels, steps="fit", force=True)
@@ -389,8 +389,8 @@ def main() -> int:
                             "base_model_sha256" in rec_a, "base_model_sha256" in rec_a.get("parents", {}),
                             "base_fit_sha256" in rec_a),
               ({"body_id": A, "body_sha256": sha_a, "base_signature": bsig}, False, False, False))
-        near("P4 extension", rec_a["sides"]["left"]["extension"]["deg"], 24.62, 0.05)
-        near("P4 root lift", rec_a["root_lift_m"], 0.05574, 5e-4)
+        near("P4 extension", rec_a["sides"]["left"]["extension"]["deg"], 24.29, 0.05)
+        near("P4 root lift", rec_a["root_lift_m"], 0.05613, 5e-4)
         check("P4 foot_pose bones", sorted(rec_a["foot_pose"]["bones"]),
               ["mixamorig:LeftFoot", "mixamorig:LeftToeBase", "mixamorig:RightFoot", "mixamorig:RightToeBase"])
         check("P4 two shoe nodes", sorted(shoe_nodes(body_fit_path.read_bytes(), heels)),
@@ -434,7 +434,7 @@ def main() -> int:
                                                      footwear_insole.BOOT_REFUSED in entry["error"]),
               (None, False, True))
         check("P5 failure on A", (gs.body_failure("Demo", boots, FB, A, body_sha=sha_a, base_fit_sha="",
-                                                  fit_version=1) or {}).get("step"), "fit")
+                                                  fit_version=footwear_fit.FOOTWEAR_FIT_VERSION) or {}).get("step"), "fit")
         gf.body_fit("Demo", boots, body_id=A, body_sha=sha_a, profile=profile, build=True)
         check("P5 no second attempt", len(FIT_CALLS) - calls, 1)
         gs.accepted_fit, gs.newest_accepted_fits, garments.fit_on_body, garments.body_fit_state = saved
