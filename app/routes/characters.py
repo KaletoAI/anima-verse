@@ -1350,11 +1350,13 @@ def _resolve_character_model_snapshot(character_name: str):
                 "source": info.get("source", "generated"),
                 "extension_rig": info.get("extension_rig"),
                 "collision": info.get("collision"),
+                "foot_pose": None,
                 "motion": status["motion"],
                 "model_rev": info["model_rev"], "tiers": info["tiers"],
                 **{key: info[key] for key in ("url", "low_url", "texture_url") if key in info}}
         # The delivered file may be the garment assembly (bare model +
-        # grafted garments): its size and garments come from ITS sidecar.
+        # grafted garments): its size, garments and foot pose (footwear
+        # spec § 6.1; None while the bare file is served) come from ITS sidecar.
         from app.core import garment_assembly
         from app.core.keyed_lock import keyed_lock
         with keyed_lock("model3d_publication", str(path.parent)):
@@ -1362,7 +1364,9 @@ def _resolve_character_model_snapshot(character_name: str):
             if served != path:
                 try:
                     meta["size"] = served.stat().st_size
-                    meta["garments"] = garment_assembly.read_sidecar(served).get("garments") or {}
+                    side = garment_assembly.read_sidecar(served)
+                    meta["garments"] = side.get("garments") or {}
+                    meta["foot_pose"] = side.get("foot_pose") if isinstance(side.get("foot_pose"), dict) else None
                 except OSError:
                     pass
         # FBX case only — a GLB embeds its textures; a stray image next to a

@@ -743,12 +743,25 @@ def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str],
 
 def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[Dict[str, Any]]:
     """``garments``: ``[{item_id, name, kind, method, fsig, current_fsig,
-    served}]`` (``served``: the assembly on disk carries this fit)."""
+    served}]`` (``served``: the assembly on disk carries this fit); a
+    footwear entry (label "Footwear") may add ``lift_m`` (the fit's root
+    lift, shown in mm) and ``cut_stats`` (``{removed_faces, bisected_faces,
+    new_vertices}`` of the body cut)."""
     rows: List[Dict[str, Any]] = []
     for g in garments:
-        label = "Hair" if g.get("kind") == "hair" else "Garment"
+        kind = g.get("kind")
+        label = "Hair" if kind == "hair" else "Footwear" if kind == "footwear" else "Garment"
         parts = [str(g.get("name") or g.get("item_id") or ""), str(g.get("method") or ""),
                  f"fsig {g.get('fsig')}" if g.get("fsig") else ""]
+        if kind == "footwear":
+            lift = _num(g.get("lift_m"))
+            if lift is not None:
+                parts.append(f"lift {1000.0 * lift:.1f} mm")
+            cut = _dict(g.get("cut_stats"))
+            if cut:
+                parts.append(f"cut {int(cut.get('removed_faces') or 0):,} faces removed / "
+                             f"{int(cut.get('bisected_faces') or 0):,} bisected / "
+                             f"{int(cut.get('new_vertices') or 0):,} new")
         if g.get("fsig") and g.get("current_fsig") and g["fsig"] != g["current_fsig"]:
             status, extra = WARNING, "older fit"
         elif not g.get("served"):
@@ -1081,14 +1094,22 @@ def _piece_decision(character_name: str, pieces: Dict[str, str]) -> Tuple[Option
     return wanted, deciders, shown
 
 
-def _assembled_garments(character_name: str, signature: str) -> List[Dict[str, Any]]:
+def _assembled_garments(character_name: str, signature: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """``(garments, warnings)`` for ``_garment_steps``: the wanted garments of
+    the bare model ``signature`` against the assembly on disk, and the
+    warnings the assembly itself raised (its sidecar's ``garment_warnings``
+    beyond the bare sidecar's — a second shoe piece left off)."""
     from app.core import garment_assembly, garment_store as gs
     from app.core.model3d import get_model3d_dir
     from app.core.motion_item_cache import item_snapshot
     directory = get_model3d_dir(character_name)
     wanted = garment_assembly._wanted_for(character_name, directory, signature)
     assembled = garment_assembly.assembled_path(directory, signature, garment_assembly.FULL)
-    carried = _dict(_sidecar(assembled).get("garments")) if assembled.is_file() else {}
+    side = _sidecar(assembled) if assembled.is_file() else {}
+    carried = _dict(side.get("garments"))
+    bare_warnings = [w for w in (_sidecar(garment_assembly.bare_path(directory, signature, garment_assembly.FULL))
+                                 .get("garment_warnings") or []) if isinstance(w, str)]
+    warnings = [w for w in (side.get("garment_warnings") or []) if isinstance(w, str) and w not in bare_warnings]
     items = item_snapshot() or {}
     out = []
     for g in wanted:
@@ -1096,11 +1117,16 @@ def _assembled_garments(character_name: str, signature: str) -> List[Dict[str, A
             current = gs.garment_fsig(character_name, g["item_id"])
         except ValueError:
             current = ""
-        out.append({"item_id": g["item_id"], "kind": g["kind"], "fsig": g["fsig"], "current_fsig": current,
-                    "name": (items.get(g["item_id"]) or {}).get("name") or g["item_id"],
-                    "method": gs.fit_method(g.get("record") or {}),
-                    "served": _dict(carried.get(g["item_id"])).get("fsig") == g["fsig"]})
-    return out
+        record = g.get("record") or {}
+        entry = {"item_id": g["item_id"], "kind": g["kind"], "fsig": g["fsig"], "current_fsig": current,
+                 "name": (items.get(g["item_id"]) or {}).get("name") or g["item_id"],
+                 "method": gs.fit_method(record),
+                 "served": _dict(carried.get(g["item_id"])).get("fsig") == g["fsig"]}
+        if g["kind"] == "footwear":
+            entry["lift_m"] = _num(record.get("root_lift_m"))
+            entry["cut_stats"] = _dict(record.get("cut_stats"))
+        out.append(entry)
+    return out, warnings
 
 
 def outfit_model_overview(character_name: str,
@@ -1134,9 +1160,11 @@ def outfit_model_overview(character_name: str,
     low_tris = _sidecar(low).get("tris") if low else None
     from app.core.motion_item_cache import item_snapshot
     items = item_snapshot() or {}
+    garments, assembly_warnings = _assembled_garments(character_name, path.stem)
+    if assembly_warnings:
+        meta = {**meta, "garment_warnings": [*(meta.get("garment_warnings") or []), *assembly_warnings]}
     steps = outfit_model_steps(meta, base=base, base_meta=base_meta, wanted_variant=wanted, deciders=deciders,
-                               shown=shown, dressed_records=records,
-                               garments=_assembled_garments(character_name, path.stem),
+                               shown=shown, dressed_records=records, garments=garments,
                                tiers=available_tiers(path), low_tris=low_tris,
                                refit_limit=base_body.BACK_REFIT_DELTA_E,
                                covered_missing_text=base_body.COVERED_MISSING,

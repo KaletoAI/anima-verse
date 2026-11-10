@@ -59,6 +59,23 @@ only reads: a layered fit not built yet serves the body fit, the entry says
 ``pending`` and the build (``assemble``) makes the layered fit first — CPU
 work, no hub job. A changed inner fit changes the ``lsig``, so the assembly
 is no longer current and the outer piece is layered again.
+
+A FOOTWEAR piece (spec 2026-11-10-footwear-rigid-shoes § 6.1, § 7.1, § 11)
+is grafted as its TWO shoe nodes ``garment_footwear_<item>_<side>`` read from
+its fit GLB (``garment_footwear.node_name``), and the bare body of that tier
+gets the fit record's ``cut`` applied first (``footwear_cut.apply_cut`` per
+body primitive, written back by ``glb_mesh.rewrite_body_primitives``) — the
+foot inside the shoe is removed from the served file itself, the bare file
+stays whole. On an outfit body the shoe is fitted on that body directly
+(``garment_footwear.body_fit``: from the item's source, never from a base
+fit). At most ONE footwear piece per outfit (slot ``feet`` is single
+occupancy): the piece worn in the feet slot per the bare sidecar's
+``pieces``, else the first by item id, is grafted; another is left off with
+``FOOTWEAR_SECOND`` in the assembly sidecar's ``garment_warnings`` (the bare
+sidecar's warnings first). The assembled sidecar then carries ``foot_pose``:
+the record's payload with ``source {item_id, fsig, glb_sha256}`` of THAT
+tier's assembled bytes (``served_foot_pose`` reads it for the routes; None
+whenever the bare file is served — never a pose without its shoe).
 """
 import json
 import threading
@@ -81,6 +98,9 @@ _again: set = set()
 # (character, signature) -> the input key of a build that failed: the same
 # inputs are not retried on every request (a new bare file, fit or equip is).
 _failed: Dict[Tuple[str, str], str] = {}
+
+#: The ``garment_warnings`` entry of a second footwear piece in one outfit (spec § 11: a data error, left off).
+FOOTWEAR_SECOND = "{item}: a second shoe piece in one outfit — left off"
 
 
 # --- Paths and revisions ------------------------------------------------------
@@ -196,9 +216,24 @@ def effective_mesh_items(bare_meta: Optional[Dict[str, Any]]) -> List[str]:
     return mesh_items_unpainted(bare_meta)
 
 
+def _piece_kind(item: Dict[str, Any]) -> str:
+    """The garment kind of an own-mesh outfit piece the bare model left out
+    of its texture: ``garment_set.garment_kind_of`` — and for a piece whose
+    flag was switched off since (the kind rule then answers None) the same
+    slot rule: ``feet`` alone is footwear, anything else clothing."""
+    from app.core.garment_set import CLOTHING, FOOTWEAR, FOOTWEAR_SLOT, garment_kind_of
+    kind = garment_kind_of(item)
+    if kind is not None:
+        return kind
+    piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
+    slots = piece.get("slots") if isinstance(piece.get("slots"), (list, tuple)) else []
+    return FOOTWEAR if {str(s) for s in slots} == {FOOTWEAR_SLOT} else CLOTHING
+
+
 def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
             bare_meta: Optional[Dict[str, Any]] = None, build_layers: bool = False,
-            left_off: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+            left_off: Optional[Dict[str, str]] = None,
+            warnings: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """The garments to graft, sorted by item id: ``{item_id, kind, fsig, fit,
     low, record}`` per garment with an accepted fit on the current base
     model — the hair of the profile's ``equipped_mesh_pieces``, and with
@@ -218,7 +253,14 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
     body (``garments.body_fit``) instead of the base fit; one still to be made
     is listed with ``fit`` None and ``pending`` True (serving), made first
     with ``build_layers``. ``left_off`` (a dict) collects item -> reason of the
-    garments with a base fit that this body does not carry."""
+    garments with a base fit that this body does not carry.
+
+    Footwear (module docstring): its kind by ``_piece_kind``; at most one
+    piece — the one worn in the feet slot per ``bare_meta['pieces']``, else
+    the first by item id — any other is left off and named in ``warnings``
+    (a list, ``FOOTWEAR_SECOND``). On an outfit body a footwear piece is
+    fitted there from its source (``garment_footwear.body_fit``); no base
+    fit is read for it."""
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
@@ -228,44 +270,59 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
     if not hair and not clothing:
         return []
     from app.core import base_body, garment_store
-    from app.core.garment_set import CLOTHING, FOOTWEAR, garment_kind_of
+    from app.core.garment_set import CLOTHING, FOOTWEAR, FOOTWEAR_SLOT
     from app.models.inventory import get_item
     base = base_body.current_base(character_name, profile=profile)
     if not base or not base[1]:
         return []
     body_id = str((bare_meta or {}).get("body_id") or "")
     on_body = bare_meta is not None and garment_store.is_body_id(body_id)
+    items = {item_id: get_item(item_id) or {} for item_id in hair | clothing}
+    # The bare model was built without these in the texture: graft them even
+    # when the flag was switched off since (that state has a signature of its
+    # own; this model needs its garment).
+    kinds = {item_id: _piece_kind(items[item_id]) for item_id in clothing
+             if items[item_id].get("category") == "outfit_piece"}
+    feet = sorted(item_id for item_id, kind in kinds.items() if kind == FOOTWEAR)
+    worn_feet = str(((bare_meta or {}).get("pieces") or {}).get(FOOTWEAR_SLOT) or "")
+    chosen_feet = worn_feet if worn_feet in feet else (feet[0] if feet else "")
     out: List[Dict[str, Any]] = []
     for item_id in sorted(hair | clothing):
-        item = get_item(item_id) or {}
+        item = items[item_id]
         if item_id in clothing:
-            # The bare model was built without it in the texture: graft it
-            # even when the flag was switched off since (that state has a
-            # signature of its own; this model needs its garment).
-            if item.get("category") != "outfit_piece":
+            kind = kinds.get(item_id)
+            if kind is None:
                 continue
-            if garment_kind_of(item) == FOOTWEAR:
-                # Footwear is left out of every record since Task 16 of plan
-                # 2026-11-10-footwear-rigid-shoes; its fit GLB (the cut body +
-                # two shoe nodes) is grafted by Task 17 — until then it is
-                # not wanted here (``garment_arrays`` wants ONE node).
+            if kind == FOOTWEAR and item_id != chosen_feet:
+                if warnings is not None:
+                    warnings.append(FOOTWEAR_SECOND.format(item=str(item.get("name") or item_id)))
                 continue
-            kind = CLOTHING
         else:
             kind = str((item.get("garment") or {}).get("kind") or "")
             if item.get("category") != "garment" or kind not in garment_store.GARMENT_VERSION:
                 continue
-        # The fit of the CURRENT method (garment_store.accepted_fit): a switched
-        # hair method serves that method's fit, or no hair before it has one.
-        fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
-        parsed = garment_store.parse_name(fit[0]) if fit else None
-        if not parsed:
-            continue
+        if on_body and kind == FOOTWEAR:
+            # Fitted on the outfit body from the shoe source (spec § 5.8):
+            # there is no base fit to derive it from, so none is required.
+            from app.core import garment_footwear
+            entry = garment_footwear.body_fit(character_name, item_id, body_id=body_id,
+                                              body_sha=str(bare_meta.get("body_sha256") or ""),
+                                              profile=profile, build=build_layers)
+            fit = None
+        else:
+            # The fit of the CURRENT method (garment_store.accepted_fit): a switched
+            # hair method serves that method's fit, or no hair before it has one.
+            fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
+            parsed = garment_store.parse_name(fit[0]) if fit else None
+            if not parsed:
+                continue
+            entry = None
         if on_body:
-            from app.core import garments
-            entry = garments.body_fit(character_name, item_id, body_id=body_id,
-                                      body_sha=str(bare_meta.get("body_sha256") or ""), base_fit=fit,
-                                      profile=profile, build=build_layers)
+            if entry is None:
+                from app.core import garments
+                entry = garments.body_fit(character_name, item_id, body_id=body_id,
+                                          body_sha=str(bare_meta.get("body_sha256") or ""), base_fit=fit,
+                                          profile=profile, build=build_layers)
             if entry["pending"]:
                 out.append({"item_id": item_id, "kind": kind, "fsig": entry["fsig"], "fit": None, "low": None,
                             "record": {}, "pending": True})
@@ -413,6 +470,29 @@ def served(character_name: str, path: Optional[Path], tier: str) -> Optional[Pat
         return path
 
 
+def served_foot_pose(character_name: str, path: Optional[Path], tier: str = FULL) -> Optional[Dict[str, Any]]:
+    """The ``foot_pose`` of the file ``served`` for the bare model ``path``
+    at ``tier`` (spec § 6.1): the assembly sidecar's record when the
+    assembly is served, else None — the bare file (an assembly still
+    building, or none wanted) carries no pose, and an assembly without a
+    footwear piece none either. Read under the publication lock, so the
+    sidecar belongs to the file that is served. Never raises."""
+    if path is None:
+        return None
+    try:
+        from app.core.keyed_lock import keyed_lock
+        path = Path(path)
+        with keyed_lock("model3d_publication", str(path.parent.parent if path.parent.name == LOW else path.parent)):
+            file = served(character_name, path, tier)
+            if file is None or Path(file) == path:
+                return None
+            pose = read_sidecar(file).get("foot_pose")
+        return pose if isinstance(pose, dict) else None
+    except Exception:  # noqa: BLE001 — a missing pose never breaks the info
+        logger.exception("Garment assembly %s: foot pose unreadable", character_name)
+        return None
+
+
 # --- Building -----------------------------------------------------------------
 
 def _remove(directory: Path, signature: str, tier: str) -> bool:
@@ -428,12 +508,43 @@ def _remove(directory: Path, signature: str, tier: str) -> bool:
     return removed
 
 
+def _cut_body(blob: bytes, garment: Dict[str, Any], tier: str) -> bytes:
+    """``blob`` (a bare tier) with the footwear fit record's ``cut`` applied
+    to every body primitive (spec § 7.1: the foot inside the shoe goes from
+    the served file; ``footwear_cut.apply_cut`` per primitive — a
+    multi-primitive body is slimmed per primitive, as the fit does —
+    written back by ``glb_mesh.rewrite_body_primitives``). ValueError for a
+    record without a cut (a fit of another version is never grafted)."""
+    from app.core import footwear_cut, glb_mesh
+    record = garment.get("record") or {}
+    cut = record.get("cut")
+    if not isinstance(cut, dict) or not cut.get("sides"):
+        raise ValueError(f"footwear fit {garment['item_id']} {garment['fsig']} carries no cut")
+    joints = glb_mesh.joint_bind_matrices(blob)
+    replaced: Dict[int, glb_mesh.Prim] = {}
+    totals = {"removed_faces": 0, "bisected_faces": 0, "new_vertices": 0}
+    for i, prim in enumerate(glb_mesh.body_primitive_arrays(blob)):
+        replaced[i], stats = footwear_cut.apply_cut(prim, cut, joints)
+        for key in totals:
+            totals[key] += int(stats[key])
+    logger.info("Garment assembly: %s (%s) cut the %s body — %d faces removed / %d bisected / %d new vertices",
+                garment["item_id"], garment["fsig"], tier, totals["removed_faces"], totals["bisected_faces"],
+                totals["new_vertices"])
+    return glb_mesh.rewrite_body_primitives(blob, replaced)
+
+
 def _build(character_name: str, directory: Path, bare: Path,
-           wanted: List[Dict[str, Any]], tier: str) -> Tuple[bytes, Dict[str, Any], list]:
+           wanted: List[Dict[str, Any]], tier: str,
+           warnings: Optional[List[str]] = None) -> Tuple[bytes, Dict[str, Any], list]:
     """Read the bare file + its sidecar under the publication lock (so bytes
-    and revision belong together), graft every garment, validate. Returns
-    (bytes, sidecar, captured revision)."""
+    and revision belong together), cut the body for a footwear piece, graft
+    every garment (a footwear piece as its two shoe nodes), validate.
+    ``warnings``: the assembly's own ``garment_warnings`` (``_wanted``),
+    appended to the bare sidecar's in the assembled sidecar. Returns (bytes,
+    sidecar, captured revision)."""
+    import hashlib
     from app.core import glb_mesh
+    from app.core.garment_set import FOOTWEAR
     from app.core.keyed_lock import keyed_lock
     from app.core.model_validate import rig_frames_preserved
     from app.core.timeutils import utc_now_iso
@@ -445,12 +556,28 @@ def _build(character_name: str, directory: Path, bare: Path,
     if meta.get("base") or meta.get("rig") != "mixamo":
         raise ValueError(f"bare model {bare.name} is no rigged outfit model (rig {meta.get('rig')!r})")
     blob = data
-    for garment in wanted:
-        if garment["fit"] is None:
-            continue  # never in a build (``_wanted`` with build_layers fits first)
-        source = _source(garment, tier)
-        mesh = glb_mesh.garment_arrays(source.read_bytes())
+    grafted = [g for g in wanted if g["fit"] is not None]  # never a pending one (``_wanted`` with build_layers fits first)
+    foot_pose: Optional[Dict[str, Any]] = None
+    for garment in grafted:
+        if garment["kind"] != FOOTWEAR:
+            continue
+        pose = (garment.get("record") or {}).get("foot_pose")
+        if not isinstance(pose, dict):
+            raise ValueError(f"footwear fit {garment['item_id']} {garment['fsig']} carries no foot_pose")
+        blob = _cut_body(blob, garment, tier)
+        foot_pose = {**pose, "source": {"item_id": garment["item_id"], "fsig": garment["fsig"], "glb_sha256": ""}}
+    for garment in grafted:
+        source = _source(garment, tier).read_bytes()
         extras = {"kind": garment["kind"], "item_id": garment["item_id"], "fsig": garment["fsig"]}
+        if garment["kind"] == FOOTWEAR:
+            from app.core.footwear_fit import SIDES
+            from app.core.garment_footwear import node_name
+            for side_name in SIDES:
+                name = node_name(garment["item_id"], side_name)
+                mesh = glb_mesh.garment_arrays(source, node_prefix=name)
+                blob = glb_mesh.graft(blob, mesh, name=name, extras={**extras, "side": side_name})
+            continue
+        mesh = glb_mesh.garment_arrays(source)
         if garment.get("over") and not garment["over"]["pending"]:
             extras["over"] = garment["over"]["items"]
         blob = glb_mesh.graft(blob, mesh, name=f"garment_{garment['kind']}_{garment['item_id']}", extras=extras)
@@ -462,6 +589,11 @@ def _build(character_name: str, directory: Path, bare: Path,
         raise ValueError("assembled model rewrote the rig frames: " + "; ".join(frames.get("errors") or []))
     side = {**meta, "garments": _state(wanted, tier), "bare_revision": revision,
             "assembled_at": utc_now_iso()}
+    if foot_pose is not None:
+        foot_pose["source"]["glb_sha256"] = hashlib.sha256(blob).hexdigest()
+        side["foot_pose"] = foot_pose
+    if warnings:
+        side["garment_warnings"] = [*(meta.get("garment_warnings") or []), *warnings]
     return blob, side, revision
 
 
@@ -487,7 +619,9 @@ def assemble(character_name: str, signature: str, *,
         raise ValueError("Invalid model signature")
     directory = model3d.get_model3d_dir(character_name)
     # The layered fits of pieces worn over each other are built here (CPU, no hub job), never while serving.
-    wanted = _wanted_for(character_name, directory, signature, build_layers=True)
+    warnings: List[str] = []
+    wanted = _wanted(character_name, bare_meta=_read_json(bare_path(directory, signature, FULL).with_suffix(".json")),
+                     build_layers=True, warnings=warnings)
     statuses: Dict[str, str] = {}
     errors: List[str] = []
     changed = False
@@ -506,7 +640,7 @@ def assemble(character_name: str, signature: str, *,
             statuses[tier] = "current"
             continue
         try:
-            blob, side, revision = _build(character_name, directory, bare, wanted, tier)
+            blob, side, revision = _build(character_name, directory, bare, wanted, tier, warnings)
         except Exception as e:  # noqa: BLE001 — one tier's failure is reported, the bare file keeps serving
             logger.warning("Garment assembly %s/%s (%s) failed: %s", character_name, signature, tier, e)
             statuses[tier] = "failed"

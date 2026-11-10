@@ -1146,6 +1146,10 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         except Exception as exc:  # noqa: BLE001 — the info route never fails on it
             logger.warning("Model3D %s: collision capsules unavailable: %s", character_name, exc)
             info["collision"] = None
+        # The foot pose of the SERVED file (footwear spec § 6.1): the assembly
+        # sidecar's record when the assembly is served, None for the bare file.
+        from app.core import garment_assembly
+        info["foot_pose"] = garment_assembly.served_foot_pose(character_name, path, FULL_TIER)
         info["model_rev"] = model_revision(path)
         info["tiers"] = available_tiers(path)
         low = tier_variant(path, LOW_TIER)
