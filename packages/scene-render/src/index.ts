@@ -189,3 +189,7 @@ export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, COLLIDE_GLSL_D
   COLLIDE_GLSL_APPLY, pushOutOfCapsules, capsuleInFrame, patchCollisionVertexShader, garmentKind, garmentCapsules,
   HAIR_REGIONS, collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
 export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry } from './garmentCollision'
+
+export { FOOT_POSE_VERSION, applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches,
+  footContactsNow } from './footPose'
+export type { FootPose, FootContact, FootSide } from './footPose'
