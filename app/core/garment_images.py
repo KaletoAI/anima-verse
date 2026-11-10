@@ -521,7 +521,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
                 record = kind.gate(step, "back", base_rgb=base_rgb, base_mask=base_mask,
                                    source_rgb=None, source_mask=None,
                                    edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
-                                   item_id=item_id, fitted=True)
+                                   item_id=item_id, fitted=True, front_gate=front_gate)
                 extra_reasons = list(kind.back_reasons(front_gate, record))
                 reason = pair_check(record) if pair_check is not None else None
                 if reason:

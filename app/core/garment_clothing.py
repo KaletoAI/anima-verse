@@ -169,18 +169,21 @@ def draft_prompt(character_name: str, step: str, *, profile: Optional[Dict[str, 
 def back_reasons(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> list:
     """The reasons a worn back attempt does not follow the accepted worn
     front (``garment_gates.back_follows_front``: the front opening on the
-    back)."""
+    back, a garment the front does not have)."""
     from app.core.garment_gates import back_follows_front
     return back_follows_front(front_gate, back_gate)
 
 
 def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
-         edit_rgb, edit_mask, item_id: Optional[str] = None, fitted: bool = False) -> Dict[str, Any]:
+         edit_rgb, edit_mask, item_id: Optional[str] = None, fitted: bool = False,
+         front_gate: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The gate record of one attempt (``garment_gates``): ``worn`` against
     the base view — the zones the piece is worn on (its slots,
     ``garment_gates.occupied_zones``: a hat frees the head) are not checked;
     a ``fitted`` view (the drafted back) has the outline limits
-    ``garment_gates.FIT_OUTSIDE_XOR_MAX`` / ``FIT_OUTSIDE_DRIFT_PX``;
+    ``garment_gates.FIT_OUTSIDE_XOR_MAX`` / ``FIT_OUTSIDE_DRIFT_PX``, and
+    with the accepted front's record ``front_gate`` it measures what it puts
+    on outside the front garment's rows (``extra_part``, ``back_reasons``);
     ``ghost`` against the garment region of the accepted worn image
     (``source``). All arrays share the base view's size."""
     from app.core import garment_gates
@@ -191,7 +194,9 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
                                        xor_max=(garment_gates.FIT_OUTSIDE_XOR_MAX if fitted
                                                 else garment_gates.OUTSIDE_XOR_MAX),
                                        drift_px=(garment_gates.FIT_OUTSIDE_DRIFT_PX if fitted
-                                                 else garment_gates.OUTSIDE_DRIFT_PX))
+                                                 else garment_gates.OUTSIDE_DRIFT_PX),
+                                       front_rows=(garment_gates.garment_rows(front_gate)
+                                                   if front_gate else None))
     if step == "ghost":
         region = garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
         return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view)

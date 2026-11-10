@@ -50,6 +50,17 @@ depth v px = v / 999 Hb.
                bottom pixel (512, 300) is torso too) = 223416 -> 0.02238 ->
                0.0224: refused at the edit limit 0.015, accepted at the
                fitted back's 0.04 (record outside_xor_max 0.04).
+  BACK_EXTRA = BACK_OK + green cols [392, 632) rows [800, 900) (the fit put
+               on something the front does not wear — live 2026-11-10: bodysuits
+               and underwear on footwear backs). Front garment rows (320 - 100)
+               / 999 = 0.22022 .. (759 - 100) / 999 = 0.65966, ± 0.02 -> row t
+               <= 0.67966 -> rows <= 778: the jacket lies inside, the added
+               part (rows 800..899, 40 rows below the jacket: its own part)
+               outside: 100 x 240 = 24000 minus the opening's 4 x 3 cut
+               corners = 23988 / 223416 = 0.10737 -> extra_part 0.1074 > 0.02
+               -> refused "back puts on more than the front"; it lies inside
+               the figure, so the outline is unchanged (XOR 0, worn gate ok).
+               BACK_OK with the front: extra_part 0.0 -> follows.
 The other backs change nothing outside the jacket -> worn gate ok (outside 0).
 
 Fit canvas (fit_references(base, draft, size (1, 1), grey)): base 1024 x
@@ -155,6 +166,8 @@ BACK_SHORT = jacket(700, 10)
 BACK_LEGS = BACK_OK.copy()
 BACK_LEGS[850:1100, 392:402] = GREY
 BACK_LEGS[850:1100, 622:632] = GREY
+BACK_EXTRA = BACK_OK.copy()
+BACK_EXTRA[800:900, 392:632] = GREEN
 
 
 def rembg_stub(data, model="u2net", **kwargs):
@@ -271,6 +284,19 @@ def main() -> int:
         check("legs: fitted back limit accepts", (fitted["ok"], fitted["outside_xor"], fitted["outside_xor_max"]),
               (True, 0.0224, 0.04))
         check("front chip gated on the front only", gg.limits("clothing")["worn"]["outside_xor"]["views"], ["front"])
+        def fitted_back(arr):
+            return garment_clothing.gate("worn", "back", base_rgb=BASE, base_mask=mask_of(BASE), source_rgb=None,
+                                         source_mask=None, edit_rgb=arr, edit_mask=mask_of(arr), item_id=jid,
+                                         fitted=True, front_gate=front)
+        extra = fitted_back(BACK_EXTRA)
+        check("extra: worn gate alone passes", (extra["ok"], extra["outside_xor"], extra["extra_part"]),
+              (True, 0.0, 0.1074))
+        check("extra: back puts on more than the front", gg.back_follows_front(front, extra),
+              ["back puts on more than the front: a part of 0.1074 of the body outside the front piece's rows > 0.02"])
+        real = fitted_back(BACK_OK)
+        check("real back: nothing beyond the front rows", (real["extra_part"], gg.back_follows_front(front, real)),
+              (0.0, []))
+        check("garment rows of the front", gg.garment_rows(front), ((320 - 100) / 999, (759 - 100) / 999))
         check("shallow front checks no opening", gg.back_follows_front({**front, "neckline_depth": 0.03}, copy), [])
         check("old record checks nothing", gg.back_follows_front({}, copy), [])
 

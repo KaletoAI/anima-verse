@@ -462,6 +462,22 @@ FIT_OUTSIDE_XOR_MAX = 0.04  # outline change outside the garment of a FITTED vie
 # 0.0339)), the blazer's (1.50) passes.
 OUTSIDE_DRIFT_PX = 1.5      # mean outline drift @1536 an EDITED view may have outside the garment
 FIT_OUTSIDE_DRIFT_PX = 2.0  # ... a FITTED view (drafted back)
+# A FITTED back of a piece that covers little re-renders the bare figure and
+# the fit puts clothes on it the front does not have (Kira, 2026-11-10,
+# footwear: a bra + briefs, a sheer bodysuit, a leather bodysuit — ACCEPTED
+# by the outline at 0.038 < 0.04 and then refused at the ghost —, a camisole
+# + briefs twice). ``extra_part`` = the largest connected part of the back's
+# garment region outside the FRONT garment's rows (as fractions of Hb,
+# ± BACK_ROWS_MARGIN), share of the base body area:
+#   Black Stilettos fits (front rows 0.890-1.008)  0.0544 0.3365 0.2293
+#   business heels fits  (front rows 0.905-1.012)  0.2468 0.1624
+#   Black Blazer fits    (front rows 0.140-0.483)  0.0055 0.0054 (a re-shaded knee / foot)
+# Refused above BACK_EXTRA_MAX (2.7x under the smallest invented garment,
+# 3.6x over the blazer's re-shading). A piece whose back reaches rows its
+# front does not show (a cape seen only from behind) would be refused —
+# known limit.
+BACK_ROWS_MARGIN = 0.02     # ± Hb around the front garment's rows
+BACK_EXTRA_MAX = 0.02       # largest garment part of a back outside them / base body area
 
 
 def garment_region(base_rgb, base_mask, worn_rgb, worn_mask) -> np.ndarray:
@@ -492,7 +508,8 @@ def _margin(region, height: int) -> np.ndarray:
 
 def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
               occupied: Iterable[str] = (), xor_max: float = OUTSIDE_XOR_MAX,
-              drift_px: float = OUTSIDE_DRIFT_PX) -> Dict[str, Any]:
+              drift_px: float = OUTSIDE_DRIFT_PX,
+              front_rows: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
     """Step 1 gate of clothing: the base view with the piece put on.
 
     The garment region G = ``garment_region``; everything of the figure
@@ -515,8 +532,12 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     / Hb) and ``hem_t`` are reported for ``back_follows_front``. ``xor_max``:
     the area limit (a fitted back: ``FIT_OUTSIDE_XOR_MAX``, recorded as
     ``outside_xor_max`` when it differs); ``drift_px``: the drift limit (a
-    fitted back: ``FIT_OUTSIDE_DRIFT_PX``). Limits and their calibration:
-    see the "Clothing" block above."""
+    fitted back: ``FIT_OUTSIDE_DRIFT_PX``). ``front_rows``: the accepted
+    front garment's rows (``garment_rows`` of its record) — then
+    ``extra_part`` = the largest connected part of G outside those rows
+    (± ``BACK_ROWS_MARGIN`` Hb) / base body area is reported for
+    ``back_follows_front``. Limits and their calibration: see the
+    "Clothing" block above."""
     from scipy import ndimage
     _check(base_rgb, base_mask, worn_rgb, worn_mask)
     m0, m1 = np.asarray(base_mask, dtype=bool), np.asarray(worn_mask, dtype=bool)
@@ -541,6 +562,12 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     head &= m0
     head_garment = float((region & head).sum() / max(int(head.sum()), 1))
     box = _bbox(region)
+    extra = None
+    if front_rows is not None:
+        t = (np.arange(height) - y0) / hb
+        band = (t >= front_rows[0] - BACK_ROWS_MARGIN) & (t <= front_rows[1] + BACK_ROWS_MARGIN)
+        labels, count = ndimage.label(region & ~band[:, None])
+        extra = float(np.bincount(labels.ravel())[1:].max() / area) if count else 0.0
     reasons = []
     if not share >= GARMENT_MIN:
         reasons.append(f"nothing put on: garment {_r(share, 4)} < {GARMENT_MIN}")
@@ -562,7 +589,20 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
             "neckline_depth": _r(depth, 4) if depth is not None else None,
             "hem_t": _r((box[3] - y0) / hb, 5) if box else None,
             **({"outside_xor_max": xor_max} if xor_max != OUTSIDE_XOR_MAX else {}),
+            **({"extra_part": _r(extra, 4)} if extra is not None else {}),
             "body_top": y0, "body_h": hb, "ok": not reasons, "reasons": reasons}
+
+
+def garment_rows(record: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """The rows of a worn gate record's garment as fractions of its figure
+    height: ``((garment_top - body_top) / body_h, (garment_bottom -
+    body_top) / body_h)``; None for a record without them."""
+    try:
+        y0, hb = float(record["body_top"]), float(record["body_h"])
+        top, bottom = float(record["garment_top"]), float(record["garment_bottom"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return ((top - y0) / hb, (bottom - y0) / hb) if hb > 0 else None
 
 
 def back_follows_front(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> List[str]:
@@ -572,7 +612,12 @@ def back_follows_front(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) ->
     the back shows the front opening: the front has an opening
     (``neckline_depth`` >= ``BACK_OPENING_MIN``) and the back's reaches
     ``BACK_OPENING_MIN`` and ``BACK_OPENING_SHARE`` of the front's depth —
-    lapels / a V turned onto the back view. The hem is not compared here
+    lapels / a V turned onto the back view.
+
+    the back puts on more than the front: ``extra_part`` (the back's
+    largest garment part outside the front garment's rows, ``worn_gate``
+    with ``front_rows``) > ``BACK_EXTRA_MAX`` — the fit dressed the figure
+    in something the front does not wear. The hem is not compared here
     (see the calibration block: the worn region of a fit runs past the
     cloth); the ghosts compare it.
 
@@ -586,6 +631,10 @@ def back_follows_front(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) ->
             and back >= BACK_OPENING_MIN and back >= BACK_OPENING_SHARE * front):
         reasons.append(f"back shows the front opening: neckline {_r(back, 4)} Hb deep, front {_r(front, 4)} Hb "
                        f"(limit {BACK_OPENING_SHARE} x front from {BACK_OPENING_MIN} Hb)")
+    extra = back_gate.get("extra_part")
+    if isinstance(extra, (int, float)) and extra > BACK_EXTRA_MAX:
+        reasons.append(f"back puts on more than the front: a part of {_r(extra, 4)} of the body outside the "
+                       f"front piece's rows > {BACK_EXTRA_MAX}")
     return reasons
 
 
