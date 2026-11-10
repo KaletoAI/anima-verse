@@ -30,13 +30,12 @@ Hand derivation of the steps (every number from the fixture, the gates are
 the real ones; measured once by a prototype, the values only confirm it):
 - source: 232 x 160 < 1024 -> exactly 1 upscale (x4 NEAREST -> 928 x 640, long
   side < 1024 -> Lanczos top-up to 1024 x 706).
-- empty: the item matte has the leg column reaching row 0 (the throat stands
-  ~120 rows above the ground against a counter of 92 rows, excess far above
-  0.05 L) -> the skip rule refuses -> exactly 1 edit; the edit's matte is the
-  silhouette alone: one component (single_share 1.0), aspect 200/92 = 2.17
-  in 1.1..2.4, no leg, IoU with the item below the counter (92 rows above the
-  ground — the column adds 14 x (92 - wedge height) px in the throat) 0.94
-  >= 0.85 -> accepted at attempt 1.
+- empty: the edit always runs (no shortcut for an item image that is already
+  one shoe) -> exactly 1 edit; the edit's matte is the silhouette alone: one
+  component (single_share 1.0), aspect 200/92 = 2.17 in 1.1..2.4, no leg; IoU
+  with the item below the empty shoe's own top edge: the leg column stands
+  above the wedge's top in every column it crosses and drops out, the rest
+  is the same silhouette -> ~1.0 >= 0.85 -> accepted at attempt 1.
 - cutout: local (no service call).
 - mesh: exactly 1 mesher call; the wedge is one welded component
   (component_share 1.0) and its side silhouette is the cut-out's alpha up to
@@ -87,6 +86,26 @@ So ONE run of an item from nothing costs (upscale, edit, mesh) = (1, 1, 1).
      heels).step == "mesh" (automatic triggers wait for an explicit run).
 [C7] The helper of the pre-Task-6 skip is gone: garments has no
      ``_footwear_unavailable`` / ``FOOTWEAR_NOT_AVAILABLE``.
+[C8] The step record names the real cause and the Wardrobe tells a failed
+     backend from a refusal (P1 fix round):
+     - after the C6 mesher {ok False}: garment_info steps.mesh.status "failed"
+       (a backend failure, not "refused"), error "shoe mesh generation
+       failed: FakeMesh delivered nothing".
+     - the real routing shape of a dead backend: generate_mesh raises
+       NoRouteError("mesh_footwear", FakeMesh* cooling down) chained FROM
+       BackendFailedError(FakeMesh, "FakeMesh: job j1 failed: ComfyUI: node
+       10 UniForge3DGenerate: UniForge3D worker exited with status 1") ->
+       the default run reruns only the mesh (1 mesher call): res.error =
+       "shoe mesh failed: " + the BackendFailedError text (no "cooling
+       down"), no retry_later; steps.mesh {status "failed", error = that
+       text}; the attempt record carries failure "backend".
+     - load: generate_mesh raises BackendBusyError("FakeMesh is busy") ->
+       retry_later True, steps.mesh.status "waiting".
+     - a gate refusal: the mesher delivers the wedge plus a box 0.1 m on a
+       side 5 m away (area 6 * 0.01 = 0.06 m^2, its own component outside the
+       wedge's bbox) -> component_share = wedge / (wedge + 0.06) < 0.98 for
+       any wedge area below 2.94 m^2 (the wedge is a 0.26 m shoe) -> refused
+       after 2 mesher calls; steps.mesh.status "refused".
 """
 import io
 import json
@@ -193,6 +212,7 @@ class Service:
         self.meshes = 0
         self.busy = False
         self.mesh_fails = False
+        self.mesh_raise = None
         self._lock = threading.Lock()
 
     def upscale_image(self, image_bytes, *, character_name="", **_kw):
@@ -218,6 +238,8 @@ class Service:
         time.sleep(0.1)
         with self._lock:
             self.meshes += 1
+        if self.mesh_raise is not None:
+            raise self.mesh_raise
         if self.mesh_fails:
             return {"ok": False, "error": "FakeMesh delivered nothing"}
         Path(output_path).write_bytes(self.mesh_bytes)
@@ -420,6 +442,64 @@ def main() -> int:
                   (False, "mesh", None, ["source", "empty", "cutout"]))
             check("C6 refusal counters", svc.counts(), (3, 3, 4))
             check("C6 refusal persisted", (garments.cached_failure("Kira", heels) or {}).get("step"), "mesh")
+
+            print("[C8] real causes, failed vs refused vs waiting")
+            from app.imagegen.base import BackendBusyError, BackendFailedError
+            from app.imagegen.routing import NoRouteError
+
+            def mesh_step():
+                return (garments.garment_info("Kira", heels).get("steps") or {}).get("mesh") or {}
+
+            m = mesh_step()
+            check("C8 mesher ok False -> failed", (m.get("status"), m.get("error")),
+                  ("failed", "shoe mesh generation failed: FakeMesh delivered nothing"))
+            cause_text = ("FakeMesh: job j1 failed: ComfyUI: node 10 UniForge3DGenerate: "
+                          "UniForge3D worker exited with status 1")
+            failed = BackendFailedError(type("B", (), {"name": "FakeMesh"})(), RuntimeError(cause_text))
+            no_route = NoRouteError("mesh_footwear", [{"spec": "FakeMesh*", "status": "cooldown"}])
+            no_route.__cause__ = failed
+            check("C8 the routing text says cooling down", "cooling down" in str(no_route), True)
+            c0 = svc.counts()
+            svc.mesh_raise = no_route
+            try:
+                res = garments.run_garment("Kira", heels)
+            finally:
+                svc.mesh_raise = None
+            check("C8 one mesher call", tuple(b - a for a, b in zip(c0, svc.counts())), (0, 0, 1))
+            check("C8 result names the real cause", (res.get("ok"), res.get("step"), res.get("error"),
+                                                     res.get("retry_later")),
+                  (False, "mesh", "shoe mesh failed: " + cause_text, None))
+            m = mesh_step()
+            check("C8 mesh failed with the cause", (m.get("status"), m.get("error")), ("failed", cause_text))
+            check("C8 attempt failure backend", [(a.get("failure"), a.get("error")) for a in m.get("attempts") or []],
+                  [("backend", cause_text)])
+            svc.mesh_raise = BackendBusyError("FakeMesh is busy")
+            try:
+                res = garments.run_garment("Kira", heels)
+            finally:
+                svc.mesh_raise = None
+            check("C8 load retry later", (res.get("ok"), res.get("retry_later")), (False, True))
+            check("C8 load -> waiting", mesh_step().get("status"), "waiting")
+            from _footwear_fixtures import wedge
+            from app.core import glb_mesh
+            wp, wf = wedge()
+            far = [(x + 5.0, y, z) for x in (0, 0.1) for y in (0, 0.1) for z in (0, 0.1)]
+            far_f = [(0, 2, 3), (0, 3, 1), (4, 5, 7), (4, 7, 6), (0, 1, 5), (0, 5, 4),
+                     (2, 6, 7), (2, 7, 3), (0, 4, 6), (0, 6, 2), (1, 3, 7), (1, 7, 5)]
+            n = len(wp)
+            good = svc.mesh_bytes
+            svc.mesh_bytes = glb_mesh.static_glb(wp.tolist() + far, wf.tolist() + [(a + n, b + n, c + n)
+                                                                               for a, b, c in far_f],
+                                                 [(0.0, 0.0)] * (n + 8))
+            c0 = svc.counts()
+            try:
+                res = garments.run_garment("Kira", heels)
+            finally:
+                svc.mesh_bytes = good
+            check("C8 gate refusal: 2 mesher calls", tuple(b - a for a, b in zip(c0, svc.counts())), (0, 0, 2))
+            m = mesh_step()
+            check("C8 gate -> refused", (res.get("ok"), m.get("status"), m.get("gates", {}).get("component_share", 1) < 0.98),
+                  (False, "refused", True))
 
         print("[C7] the temporary skip is gone")
         check("C7 no helper", (hasattr(garments, "_footwear_unavailable"),

@@ -13,11 +13,11 @@ Folder ``<world>/footwear/<item>/<ssig>/`` (``source_dir``):
   ``MIN_SIDE`` through the routed ``upscale`` occasion (a failed upscale other
   than load / the media switch falls back to Lanczos, like the garment
   cut-out), topped up with Lanczos to ``MIN_SIDE`` when still smaller.
-- ``empty`` -> ``empty.png``: one empty shoe in side view. Skip rule: when the
-  upscaled item image already passes ``footwear_gates.empty_gate`` it is used
-  as is (``skipped: true``, no hub job). Otherwise the routed image edit
-  ``EDIT_OCCASION`` with the upscaled image as reference, up to
-  ``EMPTY_ATTEMPTS`` times; every attempt keeps ``empty.try{n}.png/.json``.
+- ``empty`` -> ``empty.png``: one empty shoe in side view — always the routed
+  image edit ``EDIT_OCCASION`` with the upscaled image as reference (one image
+  job per item; the side view is part of what the edit makes, an item image
+  is never used as it is), up to ``EMPTY_ATTEMPTS`` times; every attempt keeps
+  ``empty.try{n}.png/.json``.
 - ``cutout`` -> ``cutout.png``: the BiRefNet-DIS cut-out of ``empty.png``
   (local, no hub job), cropped to a square around the shoe like the garment
   cut-out, Lanczos up to ``MIN_SIDE``.
@@ -31,7 +31,11 @@ Folder ``<world>/footwear/<item>/<ssig>/`` (``source_dir``):
   is judged at the fit.
 
 ``record.json`` = ``{steps: {step: {accepted, gates, backend, routing,
-created_at, ...}}}``. A step whose record is accepted and whose output exists
+created_at, ...}}}``. A step that is not accepted names why in ``failure``:
+``gate`` (its gates refused the result), ``backend`` (the backend failed —
+``error`` is the first real cause from the exception chain, the backend's own
+words, never the follow-up "no backend available … (cooling down)" of the
+routing re-run) or ``load`` (busy / the media switch: retry later). A step whose record is accepted and whose output exists
 is done and is not run again unless ``force``; running a step drops its own
 and every later step's outputs first. The item image itself is only ever
 read (anti-goal: it never changes).
@@ -64,8 +68,10 @@ USE_CASE = "footwear_source"
 TARGET_TRIS = 30000
 #: What the mesher is asked for.
 FACE_NUM = 100000
-EMPTY_PROMPT = ("the same shoe, alone and empty, no foot or leg, seen exactly from the side, "
-                "toe pointing to the left, plain white background")
+#: The edit instruction. The exclusion clause comes LAST: the composer's negation guard moves only that clause
+#: (``foot``, ``leg``) into the negative prompt and keeps the instruction before it positive.
+EMPTY_PROMPT = ("the same shoe, alone and empty, seen exactly from the side, toe pointing to the left, "
+                "plain white background, no foot or leg")
 ITEM_STEPS: Tuple[str, ...] = ("source", "empty", "cutout", "mesh", "insole")
 #: Square crop around the shoe in the cut-out (``garment_images.CUTOUT_PAD``).
 CUTOUT_PAD = 1.15
@@ -85,13 +91,46 @@ _RECORD = "record.json"
 _CURRENT = "current.json"
 
 
+#: ``failure`` of a step record that is not accepted.
+GATE, BACKEND, LOAD = "gate", "backend", "load"
+
+
 class StepRefused(RuntimeError):
     """A step's gates refused its result (or an attempt failed outright);
-    ``gates`` rides along into ``run_source``'s answer."""
+    ``gates`` and ``failure`` (``GATE`` / ``BACKEND`` / ``LOAD``) ride along
+    into ``run_source``'s answer."""
 
-    def __init__(self, error: str, gates: Dict[str, Any]):
+    def __init__(self, error: str, gates: Dict[str, Any], failure: str = GATE):
         super().__init__(error)
         self.gates = gates
+        self.failure = failure
+
+
+def _chain(e: BaseException) -> List[BaseException]:
+    """``e`` and its causes, outermost first (``__cause__``, else the context
+    unless suppressed)."""
+    out: List[BaseException] = []
+    cur: Optional[BaseException] = e
+    while cur is not None and all(cur is not seen for seen in out):
+        out.append(cur)
+        cur = cur.__cause__ or (None if cur.__suppress_context__ else cur.__context__)
+    return out
+
+
+def failure_of(e: BaseException) -> Tuple[str, str]:
+    """``(kind, text)`` of a failed attempt. ``kind`` = ``LOAD`` for load or
+    the media switch anywhere in the chain (``BackendBusyError`` /
+    ``MediaGenerationDisabled``: retry later), else ``BACKEND``. ``text`` = the
+    first ``BackendFailedError`` of the chain — the backend's own words
+    ("<backend>: <cause>") — so a routing re-run that ends in ``NoRouteError``
+    ("… (cooling down)") reports what really failed; without one the
+    exception's own text."""
+    from app.imagegen.base import BackendBusyError, BackendFailedError, MediaGenerationDisabled
+    chain = _chain(e)
+    kind = LOAD if any(isinstance(x, (BackendBusyError, MediaGenerationDisabled)) for x in chain) else BACKEND
+    failed = next((x for x in chain if isinstance(x, BackendFailedError)), None)
+    text = str(failed if failed is not None else e) or type(e).__name__
+    return kind, text
 
 
 # --- signature --------------------------------------------------------------------------------------------------------
@@ -290,8 +329,9 @@ def _step_source(iid: str, ssig: str, seed: int, d: Path) -> None:
         except (BackendBusyError, MediaGenerationDisabled):
             raise                         # load / switched off: the step runs again later
         except Exception as e:  # noqa: BLE001 — Lanczos alone is the documented fallback (garment cut-out)
-            logger.warning("Shoe source %s: upscale failed, Lanczos only: %s", iid, e)
-            upscale = {"status": "lanczos", "reason": str(e) or type(e).__name__}
+            reason = failure_of(e)[1]
+            logger.warning("Shoe source %s: upscale failed, Lanczos only: %s", iid, reason)
+            upscale = {"status": "lanczos", "reason": reason}
         else:
             with Image.open(io.BytesIO(result["bytes"])) as up:
                 image = up.convert("RGB")
@@ -348,25 +388,18 @@ def _step_empty(iid: str, ssig: str, seed: int, d: Path) -> None:
     upscaled = d / "upscaled.png"
     if not upscaled.is_file():
         raise FileNotFoundError("the upscaled item image is missing — run the source step first")
-    up_bytes = upscaled.read_bytes()
-    item_matte = _matte(up_bytes)
-    item_gates = empty_gate(item_matte)
-    if item_gates["ok"]:
-        _write_bytes(d / "empty.png", up_bytes)
-        _set_step(d, "empty", _entry(accepted=True, gates=item_gates, skipped=True, attempts=[]))
-        logger.info("Shoe source %s/%s: the item image is already one empty shoe — no edit", iid, ssig)
-        return
+    item_matte = _matte(upscaled.read_bytes())
 
     attempts: List[Dict[str, Any]] = []
     for attempt in range(1, EMPTY_ATTEMPTS + 1):
         try:
             data, used, route = _edit(iid, upscaled, seed, attempt)
         except Exception as e:  # noqa: BLE001 — recorded with the attempts before it, the step fails
-            error = str(e) or type(e).__name__
-            attempts.append({"attempt": attempt, "ok": False, "error": error})
+            failure, error = failure_of(e)
+            attempts.append({"attempt": attempt, "ok": False, "failure": failure, "error": error})
             _set_step(d, "empty", _entry(accepted=False, gates=attempts[-2]["gates"] if len(attempts) > 1 else {},
-                                         skipped=False, attempts=attempts, item_gates=item_gates, error=error))
-            raise StepRefused(f"empty-shoe edit failed: {error}", {"attempts": attempts}) from e
+                                         attempts=attempts, failure=failure, error=error))
+            raise StepRefused(f"empty-shoe edit failed: {error}", {"attempts": attempts}, failure) from e
         try_png = d / f"empty.try{attempt}.png"
         _write_bytes(try_png, data)
         gates = empty_gate(_matte(data), item_matte=item_matte)
@@ -379,14 +412,13 @@ def _step_empty(iid: str, ssig: str, seed: int, d: Path) -> None:
         if gates["ok"]:
             shutil.copyfile(try_png, d / "empty.png")
             _set_step(d, "empty", _entry(accepted=True, gates=gates, backend=entry["backend"],
-                                         routing=entry.get("routing"), skipped=False, attempts=attempts,
-                                         item_gates=item_gates,
+                                         routing=entry.get("routing"), attempts=attempts,
                                          **({"fallback_from": entry["fallback_from"]}
                                             if entry.get("fallback_from") else {})))
             return
     last = attempts[-1]
     _set_step(d, "empty", _entry(accepted=False, gates=last["gates"], backend=last["backend"],
-                                 routing=last.get("routing"), skipped=False, attempts=attempts, item_gates=item_gates))
+                                 routing=last.get("routing"), attempts=attempts, failure=GATE))
     reasons = "; ".join(f"attempt {a['attempt']}: " + ", ".join(a["gates"]["reasons"]) for a in attempts)
     raise StepRefused(f"empty shoe refused after {len(attempts)} attempts ({reasons})", last["gates"])
 
@@ -468,11 +500,11 @@ def _step_mesh(iid: str, ssig: str, seed: int, d: Path) -> None:
             try:
                 entry = _mesh_attempt(iid, cutout, raw, candidate, alpha, attempt)
             except Exception as e:  # noqa: BLE001 — recorded with the attempts before it, the step fails
-                error = str(e) or type(e).__name__
-                attempts.append({"attempt": attempt, "ok": False, "error": error})
+                failure, error = failure_of(e)
+                attempts.append({"attempt": attempt, "ok": False, "failure": failure, "error": error})
                 gated = [a for a in attempts if "gates" in a]
-                _set_step(d, "mesh", _record(gated[-1] if gated else {}, False, error=error))
-                raise StepRefused(f"shoe mesh failed: {error}", {"attempts": attempts}) from e
+                _set_step(d, "mesh", _record(gated[-1] if gated else {}, False, failure=failure, error=error))
+                raise StepRefused(f"shoe mesh failed: {error}", {"attempts": attempts}, failure) from e
             attempts.append(entry)
             logger.info("Shoe source %s/%s: mesh attempt %d %s (component %.4f, iou %.4f)", iid, ssig, attempt,
                         "accepted" if entry["ok"] else "refused", entry["gates"]["component_share"],
@@ -484,7 +516,7 @@ def _step_mesh(iid: str, ssig: str, seed: int, d: Path) -> None:
             os.replace(candidate, prepared)
             _set_step(d, "mesh", _record(last, True))
             return
-        _set_step(d, "mesh", _record(last, False))
+        _set_step(d, "mesh", _record(last, False, failure=GATE))
         reasons = "; ".join(f"attempt {a['attempt']}: " + ", ".join(a["gates"]["reasons"]) for a in attempts)
         raise StepRefused(f"shoe mesh refused after {len(attempts)} attempts ({reasons})", last["gates"])
     finally:
@@ -502,7 +534,7 @@ def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
     # Written refused too: the Wardrobe row shows what the analysis found.
     write_record(d / "insole.json", res)
     _set_step(d, "insole", _entry(accepted=bool(gates["ok"]), gates=gates, version=footwear_insole.INSOLE_VERSION,
-                                  nominal=res["nominal"]))
+                                  nominal=res["nominal"], **({} if gates["ok"] else {"failure": GATE})))
     logger.info("Shoe source %s/%s: insole %s (cover %.3f, vamp %.3f)", iid, ssig,
                 "accepted" if gates["ok"] else "refused", gates["insole_cover"], gates["vamp_cover"])
     if not gates["ok"]:
@@ -528,8 +560,9 @@ def run_source(item_id: str, *, steps: Optional[List[str]] = None, force: bool =
     """Run the item's source steps (all of them, or ``steps``) under the item
     lock; a done step is skipped unless ``force``. ``on_step(step)`` is called
     before a step runs. -> ``{ok True, ssig, ran}`` or ``{ok False, ssig,
-    step, error, gates, error_type, ran}`` (a step whose input is missing
-    fails the same way, naming the step to run first)."""
+    step, error, gates, error_type, failure, ran}`` (``failure`` = ``GATE`` /
+    ``BACKEND`` / ``LOAD``; a step whose input is missing fails the same way,
+    naming the step to run first)."""
     iid = item_dir(item_id).name
     wanted = list(_RUNNERS) if steps is None else list(steps)
     unknown = [s for s in wanted if s not in _RUNNERS]
@@ -551,8 +584,10 @@ def run_source(item_id: str, *, steps: Optional[List[str]] = None, force: bool =
             except Exception as e:  # noqa: BLE001 — the caller gets the step, the error and the gates
                 logger.warning("Shoe source %s/%s: step %s failed: %s", iid, ssig, step, e)
                 cause = e.__cause__ if isinstance(e, StepRefused) and e.__cause__ is not None else e
-                return {"ok": False, "ssig": ssig, "step": step, "error": str(e) or type(e).__name__,
-                        "gates": getattr(e, "gates", {}), "error_type": type(cause).__name__, "ran": ran}
+                failure, error = (e.failure, str(e)) if isinstance(e, StepRefused) else failure_of(e)
+                return {"ok": False, "ssig": ssig, "step": step, "error": error or type(e).__name__,
+                        "gates": getattr(e, "gates", {}), "error_type": type(cause).__name__, "failure": failure,
+                        "ran": ran}
             ran.append(step)
         return {"ok": True, "ssig": ssig, "ran": ran}
 

@@ -983,8 +983,13 @@ class ImageService:
                             application['skin_recolor'] = {'status': 'unsupported', 'reason': SKIN_RECOLOR_UNSUPPORTED}
                         if hub_stage is not None:
                             hub_stage.op.update_state(lambda st: st.update(face_photo_application=application))
-                    blobs = bb.generate("", "", actual_request,
-                                        log_meta={"agent_name": character_name, "media": "mesh"})
+                    from app.imagegen.backends._gateway_job import GatewayJobFailed
+                    try:
+                        blobs = bb.generate("", "", actual_request,
+                                            log_meta={"agent_name": character_name, "media": "mesh"})
+                    except GatewayJobFailed as e:
+                        # A failed job stays what an empty one always was here (no cooldown), with its cause.
+                        raise GatewayRejectedError(f"Face retexture job returned no corrected mesh: {e}") from e
                     if not blobs:
                         raise GatewayRejectedError("Face retexture job returned no corrected mesh")
                     files = list(getattr(bb, "last_result_files", []) or [])
@@ -1083,8 +1088,13 @@ class ImageService:
         def render(b):
             def op(bb):
                 def generate():
-                    blobs = bb.generate("", "", dict(request),
-                                        log_meta={"agent_name": character_name, "media": "mesh"})
+                    from app.imagegen.backends._gateway_job import GatewayJobFailed
+                    try:
+                        blobs = bb.generate("", "", dict(request),
+                                            log_meta={"agent_name": character_name, "media": "mesh"})
+                    except GatewayJobFailed as e:
+                        # A failed job stays what an empty one always was here (no cooldown), with its cause.
+                        raise GatewayRejectedError(f"Hair job returned no files: {e}") from e
                     if not blobs:
                         raise GatewayRejectedError("Hair job returned no files")
                     # Read on THIS (channel worker) thread: last_result_files is
@@ -1439,6 +1449,7 @@ class ImageService:
                 # cancellation and empty blobs through it without a cooldown.
                 # The verdicts and job ID are thread-local on the backend, so they
                 # are read here, on the channel worker that ran the job.
+                from app.imagegen.backends._gateway_job import GatewayJobFailed
                 try:
                     if should_cancel and should_cancel():
                         raise GenerationCancelled("cancelled before submission")
@@ -1447,6 +1458,10 @@ class ImageService:
                             "job_id": getattr(bb, "last_job_id", "")}
                 except GenerationCancelled as e:
                     return {"cancelled": e}
+                except GatewayJobFailed as e:
+                    # A failed job is carried like empty blobs (no cooldown), with the gateway's words.
+                    return {"blobs": [], "results": list(getattr(bb, "last_result_meta", []) or []),
+                            "job_id": getattr(bb, "last_job_id", ""), "error": str(e)}
             return self.run_on_backend_channel(bb, _gen, task_type="pose_animation",
                                                label=label or bb.name)
         try:
@@ -1459,7 +1474,7 @@ class ImageService:
             logger.error("generate_mesh_animation failed: %s", e)
             return {"ok": False, "error": str(e), "results": []}
         if not result["blobs"]:
-            return {"ok": False, "error": "animation backend returned no usable variant",
+            return {"ok": False, "error": result.get("error") or "animation backend returned no usable variant",
                     "results": result["results"]}
         return {"ok": True, "blobs": list(result["blobs"]), "results": result["results"],
                 "backend": used.name, "job_id": result["job_id"], **route_meta(route)}

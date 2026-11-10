@@ -5,8 +5,9 @@
  *
  *   1. Item image — the inventory item image, read-only (edited in the Items
  *      tab), and its upscaled copy; a Lanczos-only upscale is a visible hint;
- *   2. Empty shoe — one empty shoe in side view: thumbnail, gate icon, the
- *      refused attempts, Regenerate (1 image job, shared by every wearer);
+ *   2. Empty shoe — one empty shoe in side view, always an image edit of
+ *      the item image: thumbnail, gate icon, the refused attempts,
+ *      Regenerate (1 image job, shared by every wearer);
  *   3. Cut-out — local;
  *   4. Mesh — a small 3D preview of the shoe alone with the insole (green)
  *      and topline (orange) overlay, Regenerate (1 mesh job, shared by every
@@ -21,6 +22,11 @@
  * to the existing run route and is shared by every wearer. The cell parts
  * (step label, gate icon, attempt thumbnails, run button and marks) are the
  * clothing grid's own (GarmentStepGrid / GarmentSteps).
+ *
+ * A step that is not accepted says why, distinctly: "Refused (gate)" — its
+ * gates refused the result; "Failed (backend)" — the backend failed, with
+ * the backend's own words; "Waiting — retry later" — the backend was busy or
+ * media generation is off.
  */
 import { Fragment } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -46,7 +52,7 @@ const TOPLINE_COLOR = '#f0883e'
 /** What each step makes and what a Regenerate costs (step name tooltips). */
 const STEP_HELP: Record<string, string> = {
   source: 'Item image: the inventory item image, read-only here (it is edited in the Items tab), upscaled when it is small. One shoe source per item, shared by every wearer.',
-  empty: 'Empty shoe: one empty shoe in side view — the item image as it is when it already passes, else an image edit of it. Regenerate: 1 image job, shared by every wearer; the later steps run again.',
+  empty: 'Empty shoe: one empty shoe in side view, made by an image edit of the item image. Regenerate: 1 image job, shared by every wearer; the later steps run again.',
   cutout: 'Cut-out: the empty shoe cut out and squared as the mesh input — local, no hub job.',
   mesh: 'Mesh: a 3D mesh of the shoe alone, built from the cut-out. Regenerate: 1 mesh job, shared by every wearer; the insole is measured again.',
   insole: 'Insole: the shoe mesh measured on the CPU — pitch, heel seat, heel rise, insole cover and the type gates. Local, no hub job.',
@@ -54,8 +60,17 @@ const STEP_HELP: Record<string, string> = {
 
 const STATUS_TEXT: Record<FootwearStepInfo['status'], string> = {
   accepted: 'Accepted',
-  refused: 'Refused',
+  refused: 'Refused (gate)',
+  failed: 'Failed (backend)',
+  waiting: 'Waiting — retry later',
   missing: 'Not made yet',
+}
+
+/** The pill of a step that is not accepted: its colour and tooltip. */
+const PILL: Partial<Record<FootwearStepInfo['status'], { color: string; title: string }>> = {
+  refused: { color: 'var(--danger, #f85149)', title: 'The gates refused the result' },
+  failed: { color: 'var(--danger, #f85149)', title: 'The backend failed — not a verdict about the shoe' },
+  waiting: { color: 'var(--warning, #d29922)', title: 'The backend was busy or media generation is off — the run is tried again later' },
 }
 
 // Record keys: footwear_gates.empty_gate / MESH_GATES, footwear_insole.INSOLE_GATES.
@@ -96,21 +111,31 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun }: {
     when(s),
     s?.error ? `${t('Error')}: ${s.error}` : '',
   ].filter(Boolean)
-  /** The status word beside a step's numbers ('' when refused: the Refused pill says it). */
-  const status = (s: FootwearStepInfo | undefined) => (s?.status === 'refused' ? '' : t(STATUS_TEXT[s?.status || 'missing']))
+  /** The status word beside a step's numbers ('' when a pill says it). */
+  const status = (s: FootwearStepInfo | undefined) => (s && PILL[s.status] ? '' : t(STATUS_TEXT[s?.status || 'missing']))
   const meta = (s: FootwearStepInfo | undefined) => ({ model: s?.backend || null, created_at: s?.created_at, freshness: s?.freshness })
 
-  /** The status pills of a step: refused, the run mark of this panel's own run. */
-  const pills = (step: string, s: FootwearStepInfo | undefined): ReactNode => (
-    <>
-      {s?.status === 'refused' ? (
-        <span className="ga-run-badge" title={s.error || undefined}
-          style={{ borderColor: 'var(--danger, #f85149)', color: 'var(--danger, #f85149)' }}>
-          {t('Refused')}
-        </span>
-      ) : null}
-      <RunBadge mark={runMark(feedback, info, order, step)} />
-    </>
+  /** The status pills of a step: refused (gate) / failed (backend) / waiting, the run mark of this panel's own run. */
+  const pills = (step: string, s: FootwearStepInfo | undefined): ReactNode => {
+    const pill = s ? PILL[s.status] : undefined
+    return (
+      <>
+        {s && pill ? (
+          <span className="ga-run-badge" title={[t(pill.title), s.error || ''].filter(Boolean).join(' — ')}
+            style={{ borderColor: pill.color, color: pill.color }}>
+            {t(STATUS_TEXT[s.status])}
+          </span>
+        ) : null}
+        <RunBadge mark={runMark(feedback, info, order, step)} />
+      </>
+    )
+  }
+
+  /** The cause of a failed or waiting step, visible (a refusal's reasons are in the gate icon). */
+  const cause = (s: FootwearStepInfo | undefined): ReactNode => (
+    s && (s.status === 'failed' || s.status === 'waiting') && s.error
+      ? <span style={s.status === 'failed' ? ERROR_STYLE : WARN_STYLE}>{s.error}</span>
+      : null
   )
 
   /** The outline of a step this panel's own run targets (queued / running / redone / starting). */
@@ -176,7 +201,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun }: {
           ) : null}
           {pills('empty', empty)}
         </div>
-        {empty?.skipped ? <span>{t('The item image is already one empty shoe — used as it is, no edit')}</span> : null}
+        {cause(empty)}
         <RunButton
           feedback={feedback}
           slot={runSlot({ step: 'empty' })}
@@ -237,6 +262,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun }: {
         ) : null}
         {pills('mesh', mesh)}
         <span className="ga-hint" style={{ minWidth: 0 }}>{meshText}</span>
+        {cause(mesh)}
         <RunButton
           feedback={feedback}
           slot={runSlot({ step: 'mesh' })}

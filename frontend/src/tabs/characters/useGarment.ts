@@ -271,9 +271,11 @@ export type GarmentRunState = Pick<GarmentInfo, 'running_step' | 'started_at' | 
 export const FOOTWEAR_STEPS = ['source', 'empty', 'cutout', 'mesh', 'insole', 'fit'] as const
 export type FootwearStep = typeof FOOTWEAR_STEPS[number]
 
-/** One step of the shoe source (`garment_footwear.info` steps). */
+/** One step of the shoe source (`garment_footwear.info` steps). `refused` = its gates refused the
+ *  result, `failed` = the backend failed (`error` = the backend's own words), `waiting` = the backend
+ *  was busy or media generation is off — retry later. */
 export interface FootwearStepInfo {
-  status: 'accepted' | 'refused' | 'missing'
+  status: 'accepted' | 'refused' | 'failed' | 'waiting' | 'missing'
   /** The step's gate record (`ok`, `reasons` and the gated numbers). */
   gates: GateRecord
   /** The step's numbers (gate numbers, sizes, triangle counts). */
@@ -295,6 +297,8 @@ export interface FootwearEmptyAttempt {
   seed: number | null
   backend: string
   error: string | null
+  /** Why an attempt without an image failed: `backend` or `load`. */
+  failure: 'backend' | 'load' | null
   url: string | null
 }
 
@@ -304,6 +308,7 @@ export interface FootwearMeshAttempt {
   ok?: boolean
   gates?: GateRecord
   error?: string
+  failure?: 'backend' | 'load'
 }
 
 /** The insole analysis (`insole.json`, `footwear_insole.analyse`): per-item numbers at the
@@ -336,7 +341,7 @@ export interface FootwearInfo extends GarmentRunState {
   current_ssig: string
   steps: {
     source?: FootwearStepInfo & { upscale?: Record<string, unknown> | null }
-    empty?: FootwearStepInfo & { skipped?: boolean | null; attempts?: FootwearEmptyAttempt[] }
+    empty?: FootwearStepInfo & { attempts?: FootwearEmptyAttempt[] }
     cutout?: FootwearStepInfo
     mesh?: FootwearStepInfo & { attempts?: FootwearMeshAttempt[] }
     insole?: FootwearStepInfo & { version?: number | null }

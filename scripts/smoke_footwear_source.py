@@ -27,13 +27,28 @@ Expected, by hand:
      pixels = shoe(4) on white; record source accepted, backend "FakeUp", routing.occasion "upscale".
      Item BIG: long side 1200 >= 1024 -> 0 upscale calls; upscaled.png = the image itself flattened on
      white (1200 x 1100, pixel-identical), record upscale.status "not_needed".
-[S2] skip rule. A's upscaled matte: one rectangle 768 x 400 -> single_share 1.0, aspect 1.92, no leg ->
-     passes -> empty.png bytes == upscaled.png bytes, 0 edit calls, record empty {accepted, skipped True}.
+[S2] no shortcut. A's upscaled image is already one clean shoe (one rectangle 768 x 400: single_share 1.0,
+     aspect 1.92, no leg), yet the edit runs: exactly 1 edit call (the side view is part of what the edit
+     makes). The stub answers shoe(4) on white -> iou_below_topline: the same rectangle on both sides -> 1.0
+     -> accepted at attempt 1; empty.png == empty.try1.png, record empty {accepted, 1 attempt, failure None},
+     no ``skipped`` key.
+     The prompt the backend gets (use case footwear_source, shipped default, family natural; the style has
+     no {subject} slot -> "style, subject"; the negation guard moves only the trailing clause "no foot or
+     leg" -> foot, leg, already in the use-case negative):
+       prompt   = "product photo, single shoe, plain white background, even studio light, the same shoe,
+                   alone and empty, seen exactly from the side, toe pointing to the left, plain white
+                   background"
+       negative = "foot, leg, skin, person, pair of shoes, second shoe, shadow clutter"
+[S2b] the real cause of a failed upscale: upscale_image raises NoRouteError("upscale", FakeUp* cooling
+     down) chained from BackendFailedError(FakeUp, "FakeUp: job u1 failed: ComfyUI: node 3 IrisUpscale: CUDA
+     out of memory") -> Lanczos fallback (accepted), upscale {status "lanczos", reason = the
+     BackendFailedError text}, no "cooling down" in it (item L = shoe(1)).
 [S3] Item W = worn(1). Upscaled matte: one component 768 wide, rows 0..959 (960 tall). Leg: the middle
      [round(.35*768)=269, round(.65*768)=499) holds the column (offsets 320..479) at height 960 against the
      counter 400 -> excess 560 > .05*768 = 38.4 -> leg; aspect 768/960 = 0.8 also out. -> edit called.
-     The stub answers shoe(4) on white: one 768 x 400 rectangle, no leg; iou_below_topline: counter share
-     400/768, the item cut at 400/768*768 = 400 rows above its ground = the same 768 x 400 rectangle -> 1.0.
+     The stub answers shoe(4) on white: one 768 x 400 rectangle, no leg; iou_below_topline: the item kept
+     below the empty shoe's top edge (400 rows over its 768 columns) = the rectangle, the leg column above it
+     drops out -> 1.0.
      -> accepted at attempt 1: 1 edit call, occasion "footwear_empty", has_ref True, pool = svc.pool,
      params seed 0*1000 + 1 = 1, reference_images {"input_reference_image_1": <upscaled.png>}, the prompt
      carries the use case style "product photo, single shoe" and "the same shoe, alone and empty";
@@ -53,7 +68,8 @@ Expected, by hand:
      largest share = .1334 / .1494 = 0.89290; component_share (B lies inside A's box) = 1.0 >= 0.98.
      mesh_iou: the side silhouette of a box is a filled rectangle, the cut-out alpha a rectangle; both
      are cropped to their bbox and resampled -> 1.0 (+-0.02) >= 0.80. -> accepted, prepared.glb exists.
-     Item X: box B moved OUTSIDE A (x offset 0.5 m) on both attempts -> component_share = 0.89290 <
+     Item X = shoe(1), its empty edit answered with shoe(4) (accepted, 1.0 as in S2): box B moved OUTSIDE A
+     (x offset 0.5 m) on both attempts -> component_share = 0.89290 <
      0.98 -> 2 mesher calls, refused, no prepared.glb.
      The same run goes on to the insole of the two boxes (footwear_insole, L = 0.25, AIR = 0.00625,
      TOL = 0.00875; 240 stations x int(240 * 0.09 / 0.25) = 86 columns): A's top (0.13) faces up with
@@ -265,7 +281,7 @@ def main():
         items = root / "items"
         items.mkdir()
         fixtures = {"shoe_a": shoe(1), "shoe_big": big(), "shoe_w": shoe(1, worn=True),
-                    "shoe_r": shoe(1, worn=True), "shoe_x": shoe(1)}
+                    "shoe_r": shoe(1, worn=True), "shoe_x": shoe(1), "shoe_l": shoe(1)}
         files = {}
         for iid, im in fixtures.items():
             p = items / f"{iid}.png"
@@ -303,8 +319,8 @@ def main():
                   (1, 1024, 2, "footwear_empty", "mesh_footwear", "footwear_source", 30000, 100000,
                    ("source", "empty", "cutout", "mesh", "insole")))
             check("EMPTY_PROMPT", fs.EMPTY_PROMPT,
-                  "the same shoe, alone and empty, no foot or leg, seen exactly from the side, "
-                  "toe pointing to the left, plain white background")
+                  "the same shoe, alone and empty, seen exactly from the side, "
+                  "toe pointing to the left, plain white background, no foot or leg")
 
             print("[S9] item_dir safety")
             try:
@@ -340,15 +356,42 @@ def main():
                   (fs.step_record("shoe_big", fs.current_ssig("shoe_big"), "source").get("upscale") or {})
                   .get("status"), "not_needed")
 
-            print("[S2] skip rule")
+            print("[S2] no shortcut: the edit always runs")
+            edit.answers = [lambda: png(flat(shoe(4)))]
             res = fs.run_source("shoe_a", steps=["empty"])
             check("A empty ok", (res.get("ok"), res.get("ran")), (True, ["empty"]))
-            check("A edit calls", len(edit.calls), 0)
-            check("A empty.png == upscaled.png", (d / "empty.png").read_bytes() == (d / "upscaled.png").read_bytes(),
+            check("A edit calls", len(edit.calls), 1)
+            check("A empty.png == try1", (d / "empty.png").read_bytes() == (d / "empty.try1.png").read_bytes(),
                   True)
             rec = fs.step_record("shoe_a", ssig_a, "empty")
-            check("A empty record", (rec.get("accepted"), rec.get("skipped")), (True, True))
+            check("A empty record", (rec.get("accepted"), len(rec.get("attempts") or []), rec.get("failure"),
+                                     "skipped" in rec), (True, 1, None, False))
             check("A step_done empty", fs.step_done("shoe_a", ssig_a, "empty"), True)
+            check("A prompt", edit.calls[-1]["prompt"],
+                  "product photo, single shoe, plain white background, even studio light, the same shoe, "
+                  "alone and empty, seen exactly from the side, toe pointing to the left, plain white background")
+            check("A negative", edit.calls[-1]["negative"],
+                  "foot, leg, skin, person, pair of shoes, second shoe, shadow clutter")
+
+            print("[S2b] the real cause of a failed upscale")
+            from app.imagegen.base import BackendFailedError
+            from app.imagegen.routing import NoRouteError
+            up_cause = "FakeUp: job u1 failed: ComfyUI: node 3 IrisUpscale: CUDA out of memory"
+            no_route = NoRouteError("upscale", [{"spec": "FakeUp*", "status": "cooldown"}])
+            no_route.__cause__ = BackendFailedError(type("B", (), {"name": "FakeUp"})(), RuntimeError(up_cause))
+            real_upscale = svc.upscale_image
+
+            def dead_upscale(*_a, **_kw):
+                raise no_route
+            svc.upscale_image = dead_upscale
+            try:
+                res = fs.run_source("shoe_l", steps=["source"])
+            finally:
+                svc.upscale_image = real_upscale
+            rec = fs.step_record("shoe_l", fs.current_ssig("shoe_l"), "source")
+            check("L source accepted (Lanczos)", (res.get("ok"), rec.get("accepted")), (True, True))
+            check("L upscale status", rec.get("upscale", {}).get("status"), "lanczos")
+            check("L upscale reason text", rec.get("upscale", {}).get("reason"), up_cause)
 
             print("[S3] edit")
             edit.answers = [lambda: png(flat(shoe(4)))]
@@ -356,7 +399,7 @@ def main():
             ssig_w = fs.current_ssig("shoe_w")
             dw = fs.source_dir("shoe_w", ssig_w)
             check("W ok", (res.get("ok"), res.get("ran")), (True, ["source", "empty"]))
-            check("W edit calls", len(edit.calls), 1)
+            check("W edit calls", len(edit.calls), 2)
             check("W routed", routed[-1], {"occasion": "footwear_empty", "has_ref": True, "pool_is_svc": True})
             call = edit.calls[-1]
             check("W seed", call["params"].get("seed"), 1)
@@ -365,8 +408,8 @@ def main():
             check("W prompt style", "product photo, single shoe" in call["prompt"], True)
             check("W prompt subject", "the same shoe, alone and empty" in call["prompt"], True)
             rec = fs.step_record("shoe_w", ssig_w, "empty")
-            check("W empty record", (rec.get("accepted"), rec.get("skipped"), len(rec.get("attempts") or []),
-                                     (rec.get("routing") or {}).get("position")), (True, False, 1, 1))
+            check("W empty record", (rec.get("accepted"), len(rec.get("attempts") or []),
+                                     (rec.get("routing") or {}).get("position")), (True, 1, 1))
             g = rec.get("gates") or {}
             near("W iou_below_topline", g.get("iou_below_topline"), 1.0, 0.01)
             check("W try files", ((dw / "empty.try1.png").is_file(), (dw / "empty.try1.json").is_file()),
@@ -454,6 +497,7 @@ def main():
             check("W step_done insole", fs.step_done("shoe_w", ssig_w, "insole"), True)
 
             svc.mesh_answer = lambda: two_boxes(False)
+            edit.answers = [lambda: png(flat(shoe(4)))]
             n0 = len(svc.meshes)
             res = fs.run_source("shoe_x")
             ssig_x = fs.current_ssig("shoe_x")

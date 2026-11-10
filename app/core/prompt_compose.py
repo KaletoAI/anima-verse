@@ -17,7 +17,8 @@ This module composes instead of concatenating:
   objects and are rendered per family (prose vs. comma tags), always
   PREPENDED: early tokens steer diffusion.
 - **Negation guard** — standalone negation clauses in the SUBJECT are moved
-  into the negative prompt and reported as a warning. Never a silent
+  into the negative prompt and reported as a warning; a clause ends at the
+  next comma, so what follows it stays positive. Never a silent
   rewrite (that waits for the LLM stage), and never applied to the style:
   the curated styles negate on purpose ("no walls").
 
@@ -149,10 +150,14 @@ _NEG_LEAD = re.compile(
 # The same openers anywhere in a sentence — used for the "warning only" case.
 _NEG_ANY = re.compile(
     r"\b(?:ohne|kein(?:e|en|er|em|es)?|without|no)\b", re.IGNORECASE)
-# A trailing clause: everything from a comma/dash + negation opener to the
-# end of the sentence.
-_NEG_TAIL = re.compile(
-    r"[,;—–-]\s*(?:ohne|kein(?:e|en|er|em|es)?|without|no)\b[^.!?]*$",
+# A negation clause inside a sentence: a separator + negation opener up to
+# the next clause separator (comma, semicolon, dash) or the sentence end. It
+# never reaches past that separator: a clause after it has no opener of its
+# own and is not negated ("no foot or leg, seen from the side" keeps "seen
+# from the side" in the prompt — reading it as a negated item steered the
+# render against the very instruction).
+_NEG_CLAUSE = re.compile(
+    r"[,;—–-]\s*(?:ohne|kein(?:e|en|er|em|es)?|without|no)\b[^,;—–.!?]*",
     re.IGNORECASE)
 # Sentence tokenizer that keeps the terminator with its sentence.
 _SENTENCE = re.compile(r"[^.!?\n]+[.!?]*", re.DOTALL)
@@ -175,9 +180,11 @@ def _negated_items(clause: str) -> List[str]:
 def split_negations(subject: str) -> tuple:
     """(cleaned subject, moved items, mid-sentence negations).
 
-    A negation that IS a sentence, or a trailing clause of one, is removed
-    and its nouns handed back for the negative prompt. A negation word in the
-    middle of a sentence is only reported — cutting there would maim the
+    A negation that IS a sentence, or a clause of one that starts with a
+    negation opener after a comma / semicolon / dash, is removed and its nouns
+    handed back for the negative prompt. Such a clause ends at the next clause
+    separator: the clauses after it stay in the subject. A negation word in
+    the middle of a clause is only reported — cutting there would maim the
     sentence, and rewriting is the LLM stage's job.
     """
     subject = (subject or "").strip()
@@ -194,15 +201,11 @@ def split_negations(subject: str) -> tuple:
         if _NEG_LEAD.match(core):
             moved.extend(_negated_items(core))
             continue
-        # Peel off trailing negation clauses (there may be several).
         term = core[-1] if core[-1:] in ".!?" else ""
-        body = core
-        while True:
-            tail = _NEG_TAIL.search(body.rstrip(".!?").rstrip())
-            if not tail:
-                break
-            moved.extend(_negated_items(tail.group(0)))
-            body = body[:tail.start()].rstrip()
+        body = core.rstrip(".!?").rstrip()
+        for clause in _NEG_CLAUSE.findall(body):
+            moved.extend(_negated_items(clause))
+        body = _NEG_CLAUSE.sub("", body).strip()
         if not body:
             continue
         if term and not body.endswith(term):

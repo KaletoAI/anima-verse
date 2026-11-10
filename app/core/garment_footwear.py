@@ -298,8 +298,9 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
     body None, body_id None}``.
 
     ``steps`` in chain order: ``source``, ``empty``, ``cutout``, ``mesh``, ``insole`` each ``{status
-    accepted|refused|missing, gates, metrics, url, freshness, backend, created_at, error}`` (``empty`` adds
-    ``skipped`` and ``attempts`` with their image URLs, ``mesh`` its ``attempts``, ``source`` its
+    accepted|refused|failed|waiting|missing, gates, metrics, url, freshness, backend, created_at, error}``
+    (``refused`` = its gates refused it, ``failed`` = the backend failed, ``waiting`` = load or the media
+    switch, retry later; ``empty`` adds ``attempts`` with their image URLs, ``mesh`` its ``attempts``, ``source`` its
     ``upscale``); ``freshness`` = ``{state, reason}`` computed here: ``stale`` with ``ITEM_IMAGE_CHANGED``
     when the shown source was made from another item image than the current one (``OLDER_SOURCE`` for the
     same image under an older source version), the insole also ``OLDER_ANALYSIS`` when its analysis version
@@ -336,7 +337,10 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
         if footwear_source.step_done(item_id, shown, step):
             status = "accepted"
         elif record:
-            status = "refused"
+            # Why it is not accepted (footwear_source module docstring): the gates refused it, the backend
+            # failed (its own words in ``error``), or load / the media switch (waiting, retry later).
+            status = {footwear_source.BACKEND: "failed", footwear_source.LOAD: "waiting"}.get(
+                record.get("failure"), "refused")
         else:
             status = "missing"
         reasons = list(source_reasons) if record else []
@@ -362,7 +366,6 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
                 entry["url"] = _url(character_name, item_id, "image/upscaled", _stamp(out))
         elif step == "empty":
             out = folder / "empty.png"
-            entry["skipped"] = record.get("skipped")
             entry["metrics"] = _numbers(record.get("gates"))
             attempts = []
             for a in record.get("attempts") or []:
@@ -373,6 +376,7 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
                 stamp = _stamp(tried)
                 attempts.append({"attempt": n, "ok": a.get("ok"), "gates": a.get("gates") or {},
                                  "seed": a.get("seed"), "backend": a.get("backend") or "", "error": a.get("error"),
+                                 "failure": a.get("failure"),
                                  "url": (_url(character_name, item_id, "image/empty", stamp, f"&attempt={n}")
                                          if stamp is not None else None)})
             entry["attempts"] = attempts

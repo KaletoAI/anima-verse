@@ -14,9 +14,11 @@ Hand-derived from the failure contract in the module docstring:
   [1] status "cancelled"                          -> GenerationCancelled
   [2] status "failed", error "cancelled by user"  -> GenerationCancelled
   [3] status "failed", error "Cancelled"          -> GenerationCancelled
-  [4] status "failed", error "CUDA out of memory" -> [] (a defect: cooldown)
-  [5] status "failed", error "not cancelled: OOM" -> [] (only a LEADING
-      "cancelled" is a cancel)
+  [4] status "failed", error "CUDA out of memory" -> GatewayJobFailed
+      "fixture: job job1 failed: CUDA out of memory" (a defect: cooldown; the
+      gateway's text is the message — footwear P1 fix round)
+  [5] status "failed", error "not cancelled: OOM" -> GatewayJobFailed (only a
+      LEADING "cancelled" is a cancel)
 """
 import sys
 from pathlib import Path
@@ -58,6 +60,8 @@ def outcome(body):
                                poll_interval=0, on_done=lambda sd, s: [b"blob"])
         except GenerationCancelled:
             return "cancelled"
+        except gj.GatewayJobFailed as e:
+            return f"failed: {e}"
 
 
 def check(label, got, want):
@@ -70,7 +74,9 @@ def check(label, got, want):
 check("[1] status cancelled", outcome({"status": "cancelled"}), "cancelled")
 check("[2] failed: cancelled by user", outcome({"status": "failed", "error": "cancelled by user"}), "cancelled")
 check("[3] failed: Cancelled", outcome({"status": "failed", "error": "Cancelled"}), "cancelled")
-check("[4] failed: CUDA out of memory", outcome({"status": "failed", "error": "CUDA out of memory"}), [])
-check("[5] failed: not cancelled: OOM", outcome({"status": "failed", "error": "not cancelled: OOM"}), [])
+check("[4] failed: CUDA out of memory", outcome({"status": "failed", "error": "CUDA out of memory"}),
+      "failed: fixture: job job1 failed: CUDA out of memory")
+check("[5] failed: not cancelled: OOM", outcome({"status": "failed", "error": "not cancelled: OOM"}),
+      "failed: fixture: job job1 failed: not cancelled: OOM")
 print("FAIL: " + ", ".join(FAILS) if FAILS else "ALL OK")
 sys.exit(1 if FAILS else 0)

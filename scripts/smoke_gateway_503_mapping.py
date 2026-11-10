@@ -50,7 +50,9 @@ Hand-derived expectations
     C4 429 (no header), always   → 3 POSTs, waits [10.0, 10.0], BackendBusyError
     C5 502 "park timeout"        → 1 POST, BackendBusyError
     C6 poll_job: job "failed" with error "park timeout" → BackendBusyError;
-       with error "CUDA out of memory" → [] (a defect, as before)
+       with error "CUDA out of memory" → GatewayJobFailed "<backend>: job j1
+       failed: CUDA out of memory" (a defect -> cooldown, the gateway's text
+       is the message; it returned [] before the footwear P1 fix round)
     C7 poll_job, a LOST job (Task 16b, review carry-over of 16a: with image
        routing a failed mesh/video is re-run on the next chain entry, so the
        abandoned job must not keep running on the gateway). Lost = 3
@@ -297,7 +299,8 @@ res = poll_failed("park timeout after 600s")
 check("C6 failed job on park timeout → BackendBusyError",
       isinstance(res, BackendBusyError), repr(res))
 res = poll_failed("CUDA out of memory")
-check("C6 failed job on a real error → [] (defect)", res == [], repr(res))
+check("C6 failed job on a real error → GatewayJobFailed with the gateway's text (defect)",
+      isinstance(res, gj.GatewayJobFailed) and str(res).endswith("job j1 failed: CUDA out of memory"), repr(res))
 
 
 def poll_lost(get_answer, cancel_raises=False):
@@ -350,7 +353,7 @@ check("C7d a failing cancel never raises: []",
       res == [] and posts == CANCEL, f"{res!r} {posts}")
 gets, posts, res = poll_lost(
     lambda: FakeResponse(200, payload={"status": "failed", "error": "CUDA out of memory"}))
-check("C7e a failed job is not cancelled", res == [] and posts == [],
+check("C7e a failed job is not cancelled", isinstance(res, gj.GatewayJobFailed) and posts == [],
       f"{res!r} {posts}")
 
 # ── [D] localai_video ───────────────────────────────────────────────────

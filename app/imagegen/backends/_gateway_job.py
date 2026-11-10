@@ -24,6 +24,11 @@ Failure semantics mirror the busy/cooldown contract in ``base.py``:
     ``failed`` with the error "cancelled by user"
   * a started job fails with "park timeout" / "backend busy" ->
     ``BackendBusyError`` (load, no cooldown)
+  * a started job fails for any other reason -> ``GatewayJobFailed`` with
+    the gateway's own error text (a defect -> cooldown, like an empty
+    result; the text reaches the caller through ``BackendFailedError``
+    instead of dying in the log — the Wardrobe used to show the routing's
+    follow-up "no backend available … (cooling down)" for a CUDA OOM)
   * gateway loses the job (repeated 404) or keeps failing the poll (5xx /
     network) -> ``[]`` (the job is gone/broken -> cooldown is correct); the
     job is cancelled first (best effort), because a routed re-run starts the
@@ -77,6 +82,13 @@ _TERMINAL_JOB_HINT = ("the input mesh has no UVs/texture, so the re-bake step "
 # with this error instead of status "cancelled" (2026-10-31: a user cancel put
 # the backend in cooldown and re-ran the occasion on the next one).
 _CANCELLED_JOB_ERROR = re.compile(r"\s*cancel+ed\b", re.IGNORECASE)
+
+
+class GatewayJobFailed(RuntimeError):
+    """A started gateway job FAILED on the backend (not load, not the input,
+    not a cancel): "<backend>: job <id> failed: <the gateway's error>". A
+    defect — the runner cools the backend down and wraps it into
+    ``BackendFailedError``, exactly like the empty result it replaces."""
 
 
 def submit_job(backend: ImageBackend, url: str, payload: Dict[str, Any],
@@ -233,7 +245,8 @@ def poll_job(backend: ImageBackend, job_id: str, *,
     job runs or waits past its budget (load, no cooldown). A lost job — 3
     consecutive 404s, or more than 10 other failed polls — is cancelled
     (best effort, ``_cancel_lost_job``) and returns ``[]`` (gone/broken ->
-    cooldown is correct).
+    cooldown is correct). A job the gateway reports failed for any other
+    reason raises ``GatewayJobFailed`` with the gateway's error text.
 
     ``attach_since`` (SYSTEM epoch seconds of the original submission)
     switches to ATTACH semantics — collecting a job recorded before a restart
@@ -315,7 +328,7 @@ def poll_job(backend: ImageBackend, job_id: str, *,
                         f"{backend.name}: job {job_id} parked out: {detail[:200]}")
                 logger.error("%s: Job %s failed: %s", backend.name, job_id,
                              detail[:300])
-                return []
+                raise GatewayJobFailed(f"{backend.name}: job {job_id} failed: {detail[:300]}")
             if status == "running" and not started:
                 # The GPU took the job — only now does max_wait start.
                 started = True
@@ -331,7 +344,8 @@ def poll_job(backend: ImageBackend, job_id: str, *,
             if status in ("done", "completed"):
                 return on_done(sd, time.time() - start)
             # queued / running → keep waiting
-        except (GatewayRejectedError, GatewayInputMismatchError, BackendBusyError, GenerationCancelled, GatewayOutputError, HubJobLost):
+        except (GatewayRejectedError, GatewayInputMismatchError, BackendBusyError, GenerationCancelled, GatewayOutputError, HubJobLost,
+                GatewayJobFailed):
             # A verdict about the INPUT (or a job that parked out on load) —
             # raised above or by ``on_done`` — not a failed poll. Counting it
             # as one would keep polling a job that is already decided.

@@ -3,10 +3,9 @@
 ``docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`` § 5.2,
 § 5.3) — numpy on masks and meshes, no storage, no service.
 
-- ``empty_gate`` judges the matte of the empty-shoe image (step ``empty``, and
-  the skip rule on the item image itself): one shoe, no leg, a side view, and
-  — when the item image's own matte is given — the same shoe below the
-  topline.
+- ``empty_gate`` judges the matte of the empty-shoe image (step ``empty``):
+  one shoe, no leg, a side view, and — when the item image's own matte is
+  given — the same shoe below the empty shoe's own top edge.
 - ``side_silhouette`` + ``silhouette_iou`` give the mesh's ``mesh_iou``
   against the cut-out; ``component_shares`` its ``component_share``.
 
@@ -22,7 +21,7 @@ import numpy as np
 EMPTY_GATES: Dict[str, Tuple[str, Any, str]] = {
     "single_share": ("min", 0.98, "area share of the largest matte component"),
     "aspect": ("range", (1.1, 2.4), "side-view length / height of the shoe"),
-    "iou_below_topline": ("min", 0.85, "silhouette IoU with the item image below the counter height"),
+    "iou_below_topline": ("min", 0.85, "silhouette IoU with the item image below the empty shoe's top edge"),
 }
 #: Gates of the prepared shoe mesh. ``component_share`` is the largest
 #: component plus every component inside its bounding box (double outsole and
@@ -46,6 +45,8 @@ LEG_EXCESS_SHARE = 0.05
 LEG_TOP_WIDTH_SHARE = 0.25
 
 LEG_REASON = "leg: something rises above the heel counter (a foot or leg in the image)"
+#: Columns of the length-normalised grid ``iou_below_topline`` compares on.
+ENVELOPE_COLUMNS = 256
 
 
 def check_gates(metrics: Dict[str, Any], gates: Dict[str, Tuple[str, Any, str]], *,
@@ -117,11 +118,41 @@ def _shoe(mask: np.ndarray) -> Optional[Dict[str, Any]]:
             "ground": ground, "top": top, "length": length, "heights": heights, "counter": counter}
 
 
-def _below(shoe: Dict[str, Any], height: float) -> np.ndarray:
-    """The shoe component cut to the rows within ``height`` above its ground."""
-    keep = shoe["comp"].copy()
-    keep[:max(0, shoe["ground"] - int(round(height)) + 1)] = False
-    return keep
+def _ground_grid(shoe: Dict[str, Any], columns: int) -> np.ndarray:
+    """The shoe component on a length-normalised, ground-anchored grid:
+    ``columns`` columns span its length, one row is one column's width
+    (aspect kept), the last row is its ground. Rows = ``round(columns *
+    bbox height / length)``."""
+    from PIL import Image
+    comp = shoe["comp"][shoe["top"]:shoe["ground"] + 1, shoe["x0"]:shoe["x1"] + 1]
+    rows = max(1, int(round(columns * comp.shape[0] / shoe["length"])))
+    img = Image.fromarray(comp.astype(np.uint8) * 255).resize((columns, rows), Image.BILINEAR)
+    return np.asarray(img) >= 128
+
+
+def envelope_iou(empty: Dict[str, Any], item: Dict[str, Any], *, columns: int = ENVELOPE_COLUMNS) -> float:
+    """``iou_below_topline``: the two shoes length-normalised and ground-anchored
+    (``_ground_grid``), the item restricted to what lies at or below the EMPTY
+    shoe's own top edge in each column (its highest filled cell; a column the
+    empty shoe does not fill keeps nothing of the item), then the IoU with the
+    empty shoe — the max over the horizontal flip of the item. A foot or leg in
+    the item image's throat stands above the empty shoe's top edge there and
+    drops out; a shoe the edit changed (another heel, a filled throat, another
+    length) does not."""
+    ge, gi = _ground_grid(empty, columns), _ground_grid(item, columns)
+    rows = max(ge.shape[0], gi.shape[0])
+    pad = lambda g: np.vstack([np.zeros((rows - g.shape[0], columns), bool), g])  # noqa: E731 — ground = last row
+    ge, gi = pad(ge), pad(gi)
+    filled = ge.any(axis=0)
+    top = np.where(filled, np.argmax(ge, axis=0), rows)        # first filled row from the top; none -> below the grid
+    below = np.arange(rows)[:, None] >= top[None, :]
+    best = 0.0
+    for cand in (gi, gi[:, ::-1]):
+        env = cand & below
+        union = int((ge | env).sum())
+        if union:
+            best = max(best, int((ge & env).sum()) / union)
+    return float(best)
 
 
 def empty_gate(matte: np.ndarray, *, item_matte: Optional[np.ndarray] = None) -> Dict[str, Any]:
@@ -136,10 +167,11 @@ def empty_gate(matte: np.ndarray, *, item_matte: Optional[np.ndarray] = None) ->
       the top image row and is narrower than ``LEG_TOP_WIDTH_SHARE`` of the
       length. A leg always refuses.
     - ``iou_below_topline`` (only with ``item_matte``, ``None`` otherwise or
-      when the item matte is empty): both shoes cut at the counter height —
-      the empty shoe's counter as a share of its length, applied to each one's
-      own length, so a leg in the item image does not move the cut — then
-      ``silhouette_iou``.
+      when the item matte is empty): ``envelope_iou`` — the item image's shoe
+      compared with the empty shoe only below the empty shoe's OWN top edge in
+      each column, so the foot and leg filling the item's throat never count
+      (a cut at the heel-counter height kept them: on a pump the counter is the
+      top of the whole shoe).
     """
     mask = _as_mask(matte)
     shoe = _shoe(mask)
@@ -166,8 +198,7 @@ def empty_gate(matte: np.ndarray, *, item_matte: Optional[np.ndarray] = None) ->
     if item_matte is not None:
         item = _shoe(_as_mask(item_matte))
         if item is not None:
-            share = shoe["counter"] / length
-            iou = silhouette_iou(_below(shoe, shoe["counter"]), _below(item, share * item["length"]))
+            iou = envelope_iou(shoe, item)
 
     metrics = {"single_share": single_share, "aspect": aspect, "iou_below_topline": iou}
     ok, reasons = check_gates(metrics, EMPTY_GATES, optional=("iou_below_topline",))

@@ -49,14 +49,35 @@ each end, middle = columns [round(0.35 L), round(0.65 L)) from the left end.
 [G5] component_shares: unit cube (area 6), a cube scaled 0.5 inside its bbox
      (area 6 * 0.25 = 1.5) and a cube scaled sqrt(0.1) far away (area 0.6):
      largest = 6 / 8.1 = 0.7407, enclosed = (6 + 1.5) / 8.1 = 0.9259.
-[G6] iou_below_topline. Empty matte = the G2 shoe without the strip (L = 300,
-     counter 140, bbox height 140 -> aspect 2.143, middle 100 < 140 -> no leg).
-     Item matte = the same shoe mirrored (toe the other way) WITH the strip.
-     Both cropped at the counter height (140 / 300 of their own length = 140
-     rows above the ground): the empty matte keeps all of it (31800 px = 30000
-     + 45 * 40), the item keeps the strip's rows [40, 80) -> 30 * 40 = 1200 px
-     more; same 300 x 140 bbox -> IoU 31800 / 33000 = 0.9636 (+-0.01) >= 0.85
-     -> ok True with iou_below_topline set; without item_matte it is None.
+[G6] iou_below_topline = envelope_iou: both shoes on a length-normalised,
+     ground-anchored grid; the item kept only at or below the EMPTY shoe's
+     own top edge per column; IoU with the empty shoe, max over the item's
+     flip. Shapes (ground = row 179, L = 300, cols [50, 350)):
+     pump P  = vamp rows [140, 180) x cols [50, 350) (40 high, 12000 px) +
+               heel counter rows [40, 180) x cols [305, 350) (45 cols, 140
+               high, 4500 px more) -> 16500 px; ends: left 40, right 140 ->
+               counter 140; middle 40 -> no leg; aspect 300 / 140 = 2.143.
+     item I  = P + a foot filling the throat rows [60, 140) x cols [110, 305)
+               (195 x 80 = 15600) + a leg rows [0, 60) x cols [250, 300)
+               (50 x 60 = 3000), mirrored (toe the other way).
+     [G6a] empty = P: per column the empty top is 40 rows over [50, 305) and
+           140 over [305, 350); below it the (flipped) item holds exactly
+           the vamp and the counter — the foot (rows < 140 there) and the
+           leg drop out -> I' = P -> IoU 16500 / 16500 = 1.0 (+-0.01 for the
+           256-column resampling) -> ok.
+           (The old cut at the counter height, 140 / 300 of each length,
+           kept the foot and the leg's rows [40, 60): 16500 / (16500 + 15600
+           + 1000) = 0.4985 — the 0.556 / 0.629 of the acceptance run.)
+     [G6b] empty = P + a toe cap rows [120, 140) x cols [50, 110) (60 x 20 =
+           1200; left end now 60 high, counter still 140): the item has no
+           cap, so I' = P and the cap is empty-only -> 16500 / 17700 =
+           0.9322 (+-0.01) -> ok.
+     [G6c] empty = a filled block rows [40, 180) x cols [50, 350) (the edit
+           painted the throat shut; 42000 px, every column 140 high -> no
+           leg, aspect 2.143): the envelope is 140 everywhere, so the item
+           keeps P + the foot + the leg's rows [40, 60) = 16500 + 15600 +
+           1000 = 33100, all inside the block -> 33100 / 42000 = 0.7881
+           (+-0.01) < 0.85 -> refused for iou_below_topline.
 [G7] shoe_frame + side_silhouette. Box length 0.26 (X) x height 0.08 (Y) x
      width 0.10 (Z): up = +Y, x = the footprint PCA = +-X, length 0.26.
      Adding a heel block x [0.22, 0.26] up to 0.12 makes the +X end taller ->
@@ -189,13 +210,34 @@ def main():
     check("[G5] single cube -> (1, 1)", fg.component_shares(*big) == (1.0, 1.0), fg.component_shares(*big))
 
     # [G6]
-    empty = shoe(heel=True)
-    item = shoe(heel=True, strip=True)[:, ::-1].copy()
-    r = fg.empty_gate(empty, item_matte=item)
-    check("[G6] aspect 2.143, no leg", near(r["aspect"], 300 / 140, 1e-9) and r["leg"] is False, r)
-    check("[G6] iou_below_topline = 0.9636", near(r["iou_below_topline"], 31800 / 33000, 0.01),
+    pump = canvas()
+    pump[140:180, 50:350] = True
+    pump[40:180, 305:350] = True
+    item = pump.copy()
+    item[60:140, 110:305] = True
+    item[0:60, 250:300] = True
+    item = item[:, ::-1].copy()
+    check("[G6] areas P 16500, I 35100", (int(pump.sum()), int(item.sum())) == (16500, 35100),
+          (int(pump.sum()), int(item.sum())))
+    r = fg.empty_gate(pump, item_matte=item)
+    check("[G6a] aspect 2.143, no leg", near(r["aspect"], 300 / 140, 1e-9) and r["leg"] is False, r)
+    check("[G6a] iou_below_topline = 1.0 (foot and leg drop out)", near(r["iou_below_topline"], 1.0, 0.01),
           r["iou_below_topline"])
-    check("[G6] ok", r["ok"] and r["reasons"] == [], r["reasons"])
+    check("[G6a] ok", r["ok"] and r["reasons"] == [], r["reasons"])
+    capped = pump.copy()
+    capped[120:140, 50:110] = True
+    r = fg.empty_gate(capped, item_matte=item)
+    check("[G6b] toe cap only in the empty shoe -> 0.9322", near(r["iou_below_topline"], 16500 / 17700, 0.01),
+          r["iou_below_topline"])
+    check("[G6b] ok", r["ok"] and r["leg"] is False, r["reasons"])
+    block = canvas()
+    block[40:180, 50:350] = True
+    r = fg.empty_gate(block, item_matte=item)
+    check("[G6c] filled throat -> 0.7881", near(r["iou_below_topline"], 33100 / 42000, 0.01),
+          r["iou_below_topline"])
+    check("[G6c] refused for iou_below_topline", not r["ok"] and r["leg"] is False
+          and any(x.startswith("iou_below_topline") for x in r["reasons"]), r["reasons"])
+    check("[G6] without item_matte -> None", fg.empty_gate(pump)["iou_below_topline"] is None)
 
     # [G7]
     P, F = box((0, 0, -0.05), (0.26, 0.08, 0.05))
