@@ -34,6 +34,18 @@ everywhere else — only names and JSON sidecars matter to the GC.
      (accepted) and NO base fit file garments/pumps_F.glb: ``artefact_graph.collect(Mira, explicit=True)`` keeps the
      body fit ("fit of a kept garment on a live body" — the current fsig group is kept for a held item even
      without a base fit file).
+[G5] A BOOT's four nodes and its layer files vanish with the item (boots spec 2026-11-11 § 12; Task 9 fix 1).
+     Demo gets ``boots`` (own mesh, feet; source ``_footwear_fixtures.flat_boot(shaft=0.16, shaft_to=0.12)``) fitted
+     for real on the CPU: garments/boots_FB.glb holds the FOUR nodes garment_footwear_boots_{left,right}[_shaft]
+     (record split.is_boot). Demo also holds ``trousers`` and ``slip`` (own mesh, bottom / underwear_top) with
+     planted accepted fits on the base, and two planted layered fits of the trousers under its fsig FT:
+     layers/trousers_FT_aaaaaaaaaaaa.glb + .json (+ layers/low/) whose record's ``inner`` names the boots (``shaft``
+     True, ``hem``), and layers/trousers_FT_bbbbbbbbbbbb.glb + .json whose inner names the slip. ``ag.analyse``
+     before: both layer nodes ``layer:trousers_FT_<lsig>`` reachable "layered fit of a kept garment", parents
+     inner [boots] / [slip]. ``delete_item_route(boots)`` -> the item, footwear/boots/ and garments/boots_* (the
+     four-node fit, its record, its low tier) are gone; the layered fit over the boots is gone (3 files: glb, json,
+     low glb — its analysis would read "layered over a deleted piece (boots)"), the one over the slip and the
+     trousers' own fit stay.
 """
 import hashlib
 import json
@@ -140,7 +152,7 @@ def main() -> int:
             check(f"profile {name}", save_character_profile(name, prof), True)
             check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
 
-        def shoe_item(item_id, colour, holder):
+        def shoe_item(item_id, colour, holder, mesh=fx.clog):
             iid = inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                      prompt_fragment=f"black {item_id}",
                                      outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "own_mesh": True})["id"]
@@ -153,7 +165,7 @@ def main() -> int:
             d.mkdir(parents=True, exist_ok=True)
             for n, c in (("upscaled.png", (1, 1, 1)), ("empty.png", (2, 2, 2)), ("cutout.png", (3, 3, 3))):
                 (d / n).write_bytes(png_bytes(c))
-            P, F_ = fx.clog()
+            P, F_ = mesh()
             prepared = glb_mesh.static_glb(P, F_, np.zeros((len(P), 2)))
             (d / "raw.glb").write_bytes(prepared)
             (d / "prepared.glb").write_bytes(prepared)
@@ -271,6 +283,57 @@ def main() -> int:
         report = ag.collect("Mira", explicit=True, reason="smoke G4")
         check("G4 body fit kept", (bodyfit.is_file(), bodyfit.with_suffix(".json").is_file()), (True, True))
         check("G4 source of the pumps kept by the body fit", (fs.collect()["removed"], psrc.is_dir()), ([], True))
+
+        print("[G5] a boot's four nodes and its layer files vanish with the item")
+        boots, BS, bsrc = shoe_item("boots", (60, 40, 20), "Demo", mesh=lambda: fx.flat_boot(shaft=0.16, shaft_to=0.12))
+        FB = gs.garment_fsig("Demo", boots)
+        res = garments.run_garment("Demo", boots)
+        check("G5 boots fitted", (res.get("ok"), res.get("ran"), res.get("fit")), (True, ["fit"], "accepted"))
+        bfit = gs.garment_path("Demo", boots, FB, "fit")
+        from app.core.model_validate import parse_glb
+        names = sorted(n.get("name") for n in parse_glb(bfit.read_bytes())["gltf"]["nodes"]
+                       if str(n.get("name", "")).startswith("garment_footwear_"))
+        check("G5 four nodes", names, sorted(f"garment_footwear_{boots}_{s_}" for s_ in ("left", "right", "left_shaft", "right_shaft")))
+        check("G5 boot record split", gs.read_record(bfit.with_suffix(".json")).get("split", {}).get("is_boot"), True)
+
+        def cloth(item_id, slots):
+            iid = inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
+                                     prompt_fragment=f"a {item_id}",
+                                     outfit_piece={"slots": slots, "outfit_types": ["casual"], "own_mesh": True})["id"]
+            inventory.add_to_inventory("Demo", iid)
+            fsig_c = gs.garment_fsig("Demo", iid)
+            fit_c = touch(gs.garment_path("Demo", iid, fsig_c, "fit"))
+            touch(fit_c.with_suffix(".json"), {"accepted": True, "kind": "clothing", "item_id": iid, "fsig": fsig_c,
+                                               "base_signature": bsig, "base_model_sha256": base_sha})
+            return iid, fsig_c, fit_c
+        trousers, FT, tfit = cloth("trousers", ["bottom"])
+        slip, FS, sfit = cloth("slip", ["underwear_top"])
+        L_BOOT, L_SLIP = "aaaaaaaaaaaa", "bbbbbbbbbbbb"
+        lay_boot = [touch(gs.garment_path("Demo", trousers, FT, "layer", lsig=L_BOOT)),
+                    touch(gs.garment_path("Demo", trousers, FT, "layer", lsig=L_BOOT).with_suffix(".json"),
+                          {"accepted": True, "kind": "clothing", "item_id": trousers, "fsig": FT, "lsig": L_BOOT,
+                           "base_model_sha256": base_sha, "inner": {boots: {"sha256": "s", "shaft": True}},
+                           "hem": {"mode": "over", "built": "over"}}),
+                    touch(gs.garment_path("Demo", trousers, FT, "layer_low", lsig=L_BOOT))]
+        lay_slip = [touch(gs.garment_path("Demo", trousers, FT, "layer", lsig=L_SLIP)),
+                    touch(gs.garment_path("Demo", trousers, FT, "layer", lsig=L_SLIP).with_suffix(".json"),
+                          {"accepted": True, "kind": "clothing", "item_id": trousers, "fsig": FT, "lsig": L_SLIP,
+                           "base_model_sha256": base_sha, "inner": {slip: {"sha256": "t", "fsig": FS}}})]
+        age(lay_boot + lay_slip + [tfit, tfit.with_suffix(".json"), sfit, sfit.with_suffix(".json")], 3600)
+        analysis = ag.analyse("Demo", explicit=True)
+        lnodes = {n.key: n for n in analysis.nodes if n.kind == "layer"}
+        check("G5 two layer nodes, reachable, their inner items",
+              {k: (n.reachable, n.reason, n.parents.get("inner")) for k, n in sorted(lnodes.items())},
+              {f"layer:{trousers}_{FT}_{L_BOOT}": (True, "layered fit of a kept garment", [boots]),
+               f"layer:{trousers}_{FT}_{L_SLIP}": (True, "layered fit of a kept garment", [slip])})
+        gnode = next(n for n in analysis.nodes if n.kind == "garment" and n.key == f"garment:{trousers}_{FT}")
+        check("G5 the garment node holds no layer file", any(p.parent.name == "layers" for p in gnode.files), False)
+        inv_routes.delete_item_route(boots)
+        check("G5 boots gone", (inventory.get_item(boots), fs.item_dir(boots).exists()), (None, False))
+        check("G5 no boots garment file of Demo (the four-node fit included)", sorted(p.name for p in G.rglob(f"{boots}_*")), [])
+        check("G5 the layered fit over the boots gone (3 files)", [p.exists() for p in lay_boot], [False, False, False])
+        check("G5 the layered fit over the slip stays", [p.exists() for p in lay_slip], [True, True])
+        check("G5 the trousers' own fit stays", (tfit.is_file(), tfit.with_suffix(".json").is_file()), (True, True))
 
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))
     return 1 if FAILS else 0

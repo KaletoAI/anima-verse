@@ -29,8 +29,15 @@ NODES (the report key in brackets; a file belongs to exactly one node):
   parent ``base_signature`` in its sidecars.
 * garment ``garment:<item>_<fsig>`` — the shared garment files of one
   fingerprint (images, raw, prepared) and its fit on the BASE body (fit,
-  ``low/``, ``layers/``, ``failed/``); parents item + fsig (fsig contains the
+  ``low/``, ``failed/``); parents item + fsig (fsig contains the
   base signature).
+* layer ``layer:<item>_<fsig>_<lsig>`` — ONE layered fit of that base-body
+  group (``layers/``, ``layers/low/``, its record; ``garment_layers``);
+  parents item, fsig, lsig, the garment key and ``inner`` = the items its
+  record names under it. Reachable with its garment group unless an inner
+  piece no longer exists: a boot's layered trousers go with the boot (boots
+  spec 2026-11-11 § 12, G5). On an outfit body the layers stay inside the
+  body-fit node.
 * body fit ``bodyfit:<body>:<item>_<fsig>`` — the same parts on an outfit
   body: ``garments/bodies/<body>/…``; parents the body and ``garment:<item>_<fsig>``.
 * HairDeck job ``hairdeck:<item>_<hsig>`` — the folder ``garments/raw/<item>_<hsig>/``.
@@ -301,8 +308,25 @@ def scan(character_name: str) -> Tuple[List[Node], List[Path]]:
         for body, body_files in sorted(by_body.items()):
             gkey = ocg._garment_key(item_id, fsig)
             if not body:
-                nodes.append(Node(gkey, "garment", "garments", body_files,
+                layers = garment_store.PART_DIRS["layer"]
+                by_lsig: Dict[str, List[Path]] = {}
+                plain: List[Path] = []
+                for p in body_files:
+                    if p.parent.name == layers or (p.parent.name == "low" and p.parent.parent.name == layers):
+                        by_lsig.setdefault(p.stem[len(f"{item_id}_{fsig}_"):], []).append(p)
+                    else:
+                        plain.append(p)
+                nodes.append(Node(gkey, "garment", "garments", plain,
                                   parents={"item_id": item_id, "fsig": fsig}))
+                for lsig, lfiles in sorted(by_lsig.items()):
+                    inner: List[str] = []
+                    for p in lfiles:
+                        if p.suffix == ".json" and p.parent.name == layers:
+                            rec_inner = _json(p).get("inner")
+                            inner = sorted(str(k) for k in rec_inner) if isinstance(rec_inner, dict) else []
+                    nodes.append(Node(f"layer:{item_id}_{fsig}_{lsig}", "layer", "garments", lfiles,
+                                      parents={"item_id": item_id, "fsig": fsig, "lsig": lsig, "garment": gkey,
+                                               "inner": inner}))
             else:
                 nodes.append(Node(f"bodyfit:{body}:{item_id}_{fsig}", "body_fit", "body_fits", body_files,
                                   dirs=[bodies_root / body],
@@ -627,6 +651,20 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
         if node.kind == "garment" and not node.reachable and node.key in named:
             node.reachable, node.reason = True, "haired views of a kept subtract fit"
             garment_ok[node.key] = True
+    # A layered fit lives with its garment group — and dies with an inner piece (boots spec § 12).
+    from app.models.inventory import get_item
+    for node in nodes:
+        if node.kind != "layer":
+            continue
+        gkey = node.parents["garment"]
+        g_ok = True if roots.garment_keep is None else garment_ok.get(gkey, gkey in roots.garment_keep)
+        gone = [i for i in (node.parents.get("inner") or []) if get_item(i) is None]
+        if not g_ok:
+            node.reachable, node.reason = False, "garment fingerprint gone"
+        elif gone:
+            node.reachable, node.reason = False, f"layered over a deleted piece ({', '.join(gone)})"
+        else:
+            node.reachable, node.reason = True, "layered fit of a kept garment"
     for node in nodes:
         if node.kind != "body_fit":
             continue
@@ -811,7 +849,7 @@ def _delete_node(character_name: str, node: Node, root: Path) -> Tuple[int, int,
         finally:
             for lock in held:
                 lock.release()
-    if node.kind in ("garment", "body_fit", "hairdeck", "hair_source"):
+    if node.kind in ("garment", "layer", "body_fit", "hairdeck", "hair_source"):
         from app.core import garment_store
         garments_root = garment_store._root(character_name)
         held = []
@@ -860,6 +898,8 @@ def _descendants(nodes: List[Node], keys: Set[str]) -> Set[str]:
     out = set(keys)
     for node in nodes:
         if node.kind == "body_fit" and (node.parents.get("garment") in keys or node.parents.get("body_id") in keys):
+            out.add(node.key)
+        elif node.kind == "layer" and node.parents.get("garment") in keys:
             out.add(node.key)
     return out
 

@@ -49,7 +49,9 @@ Expected, by hand:
      half of the moving vertices) -> push_p95_m >= 0.0085; push_max_m in [0.0085, 0.0120]: the row 0.11 sits
      2.4 mm above the box leg's bottom face and the field's gradient there points down, so a vertex at that
      edge can be pushed past the bottom face as well as the side, hypot(8.5, 8.4) = 12.0 mm at most (a real
-     shin has no bottom face; the smoothing passes mix the two) — measured 10.8 / p95 9.3 mm; inside_share 0;
+     shin has no bottom face; the smoothing passes mix the two) — measured 10.3 / p95 8.9 mm since fit version 8
+     (the push on WELDED positions, Task 9 fix 1: the smoothing runs over the connected tube instead of per
+     unshared quad; version 7 read 10.8 / 9.3); inside_share 0;
      every foot-part vertex (s = 0) unmoved: identical bind positions to the 0.03 fit (+-1e-12). (The plan's
      0.0102 took the inner half-width as 0.04 k = 0.0408 without the width factor, which widens the shaft
      too — it is one mesh.)
@@ -140,9 +142,9 @@ def main() -> int:
     from app.core import footwear_insole, garment_footwear, glb_mesh
 
     # [B6]
-    check(ff.FOOTWEAR_FIT_VERSION == 7 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
+    check(ff.FOOTWEAR_FIT_VERSION == 8 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
           and ff.SPLIT_MARGIN_M == 0.01 and ff.SHAFT_CLEAR_M == 0.006 and ff.FOLLOW_RING_MIN == 3
-          and ff.FOLLOW_OPTIONAL == ("shaft_leg_follow_deg",), "[B6] version 7, no boot gate, split constants")
+          and ff.FOLLOW_OPTIONAL == ("shaft_leg_follow_deg",), "[B6] version 8, no boot gate, split constants")
     check(ff.SHAFT_GATES == {"shaft_push_p95_m": ("max", 0.015), "shaft_push_max_m": ("max", 0.030),
                              "shaft_inside_share": ("max", 0.01), "seam_gap_p95_mm": ("max", 2.0),
                              "seam_stretch_max": ("max", 1.5), "shaft_leg_follow_deg": ("max", 1.0)}

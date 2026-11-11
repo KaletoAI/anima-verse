@@ -19,7 +19,7 @@ width 0.085, height 0.02; 1056 faces / 816 vertices: per foot 516 / 384 — sole
 grids — plus 12 / 24 per leg column) with its sidecar and
 unrigged copy. Item ``heels`` (feet, own mesh) held by Demo; its current source folder holds the closed flat
 clog of ``_footwear_fixtures.clog`` as ``prepared.glb`` (``glb_mesh.static_glb``), ``insole.json`` =
-``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 5, fit version 7: the
+``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 5, fit version 8: the
 cut applied and gated, toes conformed, the foot measured below the ankle, a boot split at the ankle) — the item steps are done, a run only fits. Item ``boots``: the
 closed flat boot ``flat_boot(shaft=0.16)`` of the boots round (the clog with a 16-cm tube over x in [0, 0.10]),
 its prepared.glb's material ``doubleSided`` False; item ``pumps``: the wedge pump itself. The clog is the one
@@ -50,7 +50,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      node, fit version 6); its body (garment nodes excluded) is
      the CUT base: 24 faces / 48 vertices (fewer than the bare body's 1056 / 816), and in both sides' cut
      frames no remaining vertex lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9 for
-     every one). Record: method "shoe", kind "footwear", version 7, fit_version 7, accepted, ssig = the current
+     every one). Record: method "shoe", kind "footwear", version 8, fit_version 8, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
      sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 5}}; scale.k_m_per_unit 1.023599
@@ -112,8 +112,8 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      steps.fit.status "refused". The base replaced by the 0.10 m wide feet (foot_body_glb(0.10), sha changes):
      run_garment(Demo, pumps) -> refused BEFORE any cut by the fit's own gate, error containing
      "slim_needed 0.2209 > 0.18" (Task 9's hand value 1 - 0.07790 / 0.10 = 0.2210, +-1e-3; gates.slim_needed
-     {ok False, gating True}). An older fit reads stale: a pumps record of fit_version 6 (and 5), accepted on
-     the current base bytes -> fit_state "stale" (fit_version 7 -> "accepted").
+     {ok False, gating True}). An older fit reads stale: a pumps record of fit_version 7 (and 6), accepted on
+     the current base bytes -> fit_state "stale" (fit_version 8 -> "accepted").
 """
 import hashlib
 import json
@@ -326,8 +326,8 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 7,
-             "fit_version": 7, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 8,
+             "fit_version": 8, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         # a shoe's record: the fit gates + the cut gates without the split-only ones (footwear_cut.SHAFT_CUT_GATES)
         gate_names = list(footwear_fit.FIT_GATES) + [k for k in footwear_cut.CUT_GATES if k not in footwear_cut.SHAFT_CUT_GATES]
@@ -585,7 +585,7 @@ def main() -> int:
         check("P7 no hub", HUB, [])
         old = gs.garment_path("Demo", pumps, FP, "fit")
         shutil.copyfile(fit_path, old)
-        for version, want in ((6, "stale"), (5, "stale"), (7, "accepted")):
+        for version, want in ((7, "stale"), (6, "stale"), (8, "accepted")):
             gs.write_record(old.with_suffix(".json"), {
                 "accepted": True, "kind": "footwear", "item_id": pumps, "fsig": FP, "body_id": bsig,
                 "body_sha256": wide_sha, "base_model_sha256": wide_sha, "fit_version": version,

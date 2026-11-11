@@ -143,11 +143,13 @@ Expected, by hand:
      mm — a shoe is unchanged by version 3.
 [X11] shaft_poke (spec § 7 / § 9, CUT_VERSION 3): of the shin vertices — this side's Leg-weighted body vertices with
      frame height in [y_split + 0.02 = 0.110236, the shaft part's top 0.163776] (the band's top inclusive, 1e-9)
-     — the share in the voxel exterior of foot part + shaft. Boot = flat_boot(shaft=0.16, shaft_to=0.12) WELDED
-     (garment_fit.weld: 3828 faces, 2004 vertices; the tube's front wall at raw 0.12 stands 2 cm in front of the
-     column's front face at frame 0.1011, so a push moves the side walls only — a pushed front wall tilts away
-     from the side walls of this box tube and opens the corner (a fixture artefact: a real shaft is one round
-     sheet); unwelded, the push smooths each quad on its own and cracks the corners likewise). k, lift, y_split as
+     — the share in the voxel exterior of foot part + shaft. Boot = flat_boot(shaft=0.16, shaft_to=0.12) as the
+     fixture comes, UNWELDED (3828 faces, 11484 = 3 x 3828 vertices: every triangle its own, like a mesh's UV-seam
+     duplicates): since fit version 8 the shaft push welds its positions first (Task 9 fix 1, as layer_over does),
+     so the smoothing runs over the connected tube and the pushed tube stays closed. The tube's front wall at raw
+     0.12 stands 2 cm in front of the column's front face at frame 0.1011, so a push moves the side walls only — a
+     pushed front wall tilts away from the side walls of this BOX tube and opens the corner (a fixture artefact: a
+     real shaft is one round sheet; smoke_footwear_split [B3]'s shaft_to 0.10 shows it). k, lift, y_split as
      [X10] (the clog's foot part is the same), width factor 1.0380 -> the shaft's inner half-width 0.04 k 1.038 =
      0.042504.
      (a) foot_body_glb(leg_cell=0.01) (shin half-width 0.03, 12.5 mm inside the shaft, push 0): shin vertices in
@@ -162,14 +164,19 @@ Expected, by hand:
      0.05), of which the 2 x 2 x 6 = 24 at |z| = 0.05 are outside and the 108 at |z| <= 0.04 inside -> 216 shin
      vertices, 108 pokes -> shaft_poke 0.5 > 0.005: refused, the reason names shaft_poke.
      (c) foot_body_glb(leg_half_w=0.045, leg_cell=0.01, leg_bottom=0.07), its OWN fit (the push on: needed 0.045 +
-     0.006 - 0.042504 = 0.0085; push_p95_m >= 0.0085, push_max_m <= 0.012 as smoke_footwear_split.py [B3]; the fit
-     accepted): the shin's rows 0.10 .. 0.15 stand 6 mm inside the pushed wall -> z-faces 84 + x-faces 2 x 10 x
-     6 = 120 = 204 shin vertices, shaft_poke 0, the gates ok.
+     0.006 - 0.042504 = 0.0085; push_p95_m >= 0.0085, push_max_m <= 0.012 as smoke_footwear_split.py [B3] —
+     measured 9.8 / 9.0 mm; the fit accepted): the shin's rows 0.10 .. 0.15 stand 6 mm inside the pushed wall ->
+     z-faces 84 + x-faces 2 x 10 x 6 = 120 = 204 shin vertices, shaft_poke 0 on BOTH sides, the gates ok. The
+     same fit on the fixture welded beforehand (garment_fit.weld) gives the same shaft positions (1e-6: the weld
+     rounds to a micrometre) and 0 pokes — the push no longer depends on how the source is stitched.
      (d) the clog fit (no shaft): the gate dict has no shaft_poke key (SHAFT_CUT_GATES); the 0.16 boot on
      foot_body_glb(leg_bottom=0.02) (one quad per face: the column's vertices sit at body y 0.02 and 0.45, none in
      the range) -> shaft_poke value None, ok None (POKE_OPTIONAL), the gates ok.
 (On 863a2726 — CUT_VERSION 2 — cut_gates takes the foot meshes alone, CUT_GATES has no shaft_poke and (b) passes:
-[X11] fails there.)
+[X11] fails there. On 02a2ff7a — fit version 7, the push on the unwelded tube — (c) reads shaft_poke 118 / 204 =
+0.578 on the LEFT side and 0 on the right: the unwelded push smoothed each quad alone, the side walls' corner
+columns tore away from the back wall and the flood fill entered the tube (the mirrored right side tore where no
+shin vertex looks); (c) fails there on the left share and the fit's own acceptance was a false green.)
 """
 import json
 import math
@@ -646,9 +653,9 @@ def main() -> int:
 
     print("[X11] shaft_poke")
     from app.core.garment_fit import weld
-    Pt, Ft = flat_boot(shaft=0.16, shaft_to=0.12)
-    Pw, Fw, _inv = weld(Pt, Ft)
-    check("welded tube 3828 faces / 2004 vertices", (len(Fw), len(Pw)) == (3828, 2004), f"{len(Fw)} {len(Pw)}")
+    Pw, Fw = flat_boot(shaft=0.16, shaft_to=0.12)
+    check("unwelded tube 3828 faces / 11484 vertices", (len(Fw), len(Pw)) == (3828, 11484), f"{len(Fw)} {len(Pw)}")
+    check("FOOTWEAR_FIT_VERSION 8 (the push welds)", ff.FOOTWEAR_FIT_VERSION == 8)
     inst = fi.analyse_arrays(Pw, Fw)
     glb_a = foot_body_glb(leg_cell=0.01)
     body_a, joints_a = glb_mesh.body_arrays(glb_a), glb_mesh.joint_bind_matrices(glb_a)
@@ -679,8 +686,17 @@ def main() -> int:
     check("(c) the push on: fit ok, p95 >= 0.0085, max <= 0.012", fit_c.ok and 0.0085 <= sh_c["push_p95_m"] and sh_c["push_max_m"] <= 0.012,
           f"{fit_c.reasons} p95 {sh_c['push_p95_m']:.4f} max {sh_c['push_max_m']:.4f}")
     g_c = poke_gates(fit_c, glb_c)
-    check("(c) 204 shin vertices, shaft_poke 0, ok", all(g_c["sides"][s]["shin_n"] == 204 and g_c["sides"][s]["shaft_poke"] == 0.0
-          for s in ("left", "right")) and g_c["ok"], str({s: (g_c["sides"][s]["shin_n"], g_c["sides"][s]["shaft_poke"]) for s in g_c["sides"]}))
+    check("(c) 204 shin vertices, shaft_poke 0 on both sides, ok (02a2ff7a: 118 / 204 left)",
+          all(g_c["sides"][s]["shin_n"] == 204 and g_c["sides"][s]["shaft_poke"] == 0.0 for s in ("left", "right")) and g_c["ok"],
+          str({s: (g_c["sides"][s]["shin_n"], g_c["sides"][s]["shaft_poke_n"]) for s in g_c["sides"]}))
+    Pv, Fv, _inv = weld(Pw, Fw)
+    fit_v = ff.fit_pair(fi.analyse_arrays(Pv, Fv), shoe_garment(Pv, Fv), glb_mesh.body_arrays(glb_c), glb_mesh.joint_bind_matrices(glb_c))
+    g_v = poke_gates(fit_v, glb_c)
+    check("(c) the pre-welded fixture: the same shaft (1e-6), 0 pokes",
+          fit_v.ok and near(fit_v.parts["left"]["shaft"].positions.max(0), fit_c.parts["left"]["shaft"].positions.max(0), 1e-6)
+          and near(fit_v.parts["left"]["shaft"].positions.min(0), fit_c.parts["left"]["shaft"].positions.min(0), 1e-6)
+          and all(g_v["sides"][s]["shaft_poke"] == 0.0 for s in ("left", "right")),
+          str({s: g_v["sides"][s]["shaft_poke_n"] for s in g_v["sides"]}))
     g_d = fc.cut_gates(after_lb, fit_lb.parts, cut_lb, joints=joints_lb, body_before=prim_lb)
     check("(d) no shin vertex in the range: value None, ok None, gates ok",
           g_d["gates"]["shaft_poke"] == {"value": None, "limit": 0.005, "ok": None} and g_d["ok"]

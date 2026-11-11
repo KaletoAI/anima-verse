@@ -238,7 +238,7 @@ def main() -> int:
         check("held_clothing Kira", garment_set.held_clothing("Kira"), sorted([dress, heels]))
         check("held_clothing Mira", garment_set.held_clothing("Mira"), [heels])
         check("layer_order skips footwear", garment_set.layer_order([dress, heels])["order"], [dress])
-        check("FIT_VERSION footwear", garment_fit.FIT_VERSION.get("footwear"), 7)
+        check("FIT_VERSION footwear", garment_fit.FIT_VERSION.get("footwear"), 8)
 
         print("[K2] footwear fsig")
         from app.core import footwear_source, garment_footwear
@@ -248,7 +248,7 @@ def main() -> int:
 
         def fsig_by_hand(cap):
             return md5_12({"kind": "footwear", "ssig": ssig, "insole_version": 5, "width_cap": cap,
-                           "fit_version": 7})
+                           "fit_version": 8})
         fsig = fsig_by_hand(1.1)
         kira_bsig = base_body.base_signature("Kira")
         check("base signatures differ", kira_bsig != base_body.base_signature("Mira"), True)

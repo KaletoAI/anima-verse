@@ -168,8 +168,10 @@ from app.core.footwear_gates import check_gates
 #: 5: the foot below the ankle, each contact band against its own lowest point (step 1);
 #: 6: a boot is split at the wearer's ankle — rigid foot part, clothing-weighted shaft, four nodes (step 9);
 #: 7: the shaft transfer without the Foot column (no Foot / ToeBase above the band) and the follow measure over
-#:    the shaft's upper half when the top ring is empty (P2 Rulings 8a / 8b).
-FOOTWEAR_FIT_VERSION = 7
+#:    the shaft's upper half when the top ring is empty (P2 Rulings 8a / 8b);
+#: 8: the shaft push runs on WELDED positions (seam duplicates move as one vertex, the smoothing over the connected
+#:    tube — an unwelded push tore the tube at its seams; Task 9 fix 1).
+FOOTWEAR_FIT_VERSION = 8
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -803,7 +805,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
 
             # the push: the body skinned to the shod stand, its field over the shaft's bounds; only the band and
             # shaft move, the foot part is pinned (anti-goal: a shoe deformed by anything)
-            from app.core.garment_fit import SDF_MARGIN_M, VOX_M, body_sdf, push_out
+            from app.core.garment_fit import SDF_MARGIN_M, VOX_M, body_sdf, push_out, weld
             mats = {fm.foot_index: w["Bf"], fm.toe_index: w["Bt"]}
             Pposed = _skin(P, body, np.arange(len(P)), mats)
             rows = np.nonzero(moving)[0]
@@ -813,7 +815,14 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             local = np.full(n_v, -1, np.int64)
             local[rows] = np.arange(len(rows))
             fsel = side_idx[np.all(moving[side_idx], axis=1)]
-            Qp, disp = push_out(Pw[rows], local[fsel], sdf, clear=SHAFT_CLEAR_M)
+            # WELDED (fit version 8, Task 9 fix 1 — as ``garment_fit_layers.layer_over``): seam duplicates (a UV
+            # seam, the fixtures' unshared quads) move as ONE vertex and the displacement smoothing runs over the
+            # connected tube; unwelded, every patch was smoothed on its own and the push tore the tube open at
+            # its seams (the flood fill of ``footwear_cut.cut_gates`` then entered the shaft: shaft_poke 0.58 on
+            # an accepted fixture fit).
+            Pwld, Fwld, inv = weld(Pw[rows], local[fsel])
+            Qw, dispw = push_out(Pwld, Fwld, sdf, clear=SHAFT_CLEAR_M)
+            Qp, disp = Qw[inv], dispw[inv]
             Pw = Pw.copy()
             Pw[rows] = Qp
             dn = np.linalg.norm(disp, axis=1)
