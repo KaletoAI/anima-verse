@@ -1806,6 +1806,11 @@ def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, 
                 result["extension_rig"] = meta.get("extension_rig") or {}
             result["noop"] = False
     result["model_rev"] = model_revision(path if tier == FULL_TIER else path.parent.parent / path.name)
+    if tier == FULL_TIER and meta.get("base") and result.get("ok") and path.read_bytes() != original_bytes:
+        # The BASE body's bytes changed (a local Blender rebuild, no hub job): the same follow-up as a face
+        # correction — outfit models stale, the worn garments refit (footwear fit-only, plan
+        # 2026-11-10-footwear-rigid-shoes Task 25).
+        after_base_face_change(character_name, path.stem)
     return result
 
 
