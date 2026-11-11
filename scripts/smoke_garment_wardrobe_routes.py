@@ -59,10 +59,11 @@ Fixture (expected values derived by hand):
     an accepted fit of the current fsig -> {fitted, painted False, reason
     None}; an accepted mesh -> "mesh"; an accepted fit without fsig is not
     fitted.
-[7] Hair keeps its own limits: GET /characters/Demo/garments/hair_demo ->
-    kind hair, own_mesh False, steps [fit, ghost, haired, mesh] with
-    fit.bib_cm2 {le 50.0}; worn hair without a fit is NOT painted (hair is
-    simply absent). (The Hair tab's own limits, incl. hairdeck_fit, stay
+[7] Hair has no step limits here: GET /characters/Demo/garments/hair_demo ->
+    kind hair, own_mesh False, limits {} (the hair edit chain and its gates
+    are gone, hair-from-body spec 2026-11-11 Task 2); worn hair without a fit
+    is NOT painted (hair is simply absent). (The Hair tab's own limits,
+    hairdeck_fit, stay
     pinned by smoke_garment_routes.py [2]; its route probes the image
     backends, so it is not called here.)
 """
@@ -270,12 +271,12 @@ def main() -> int:
             check("fit without fsig", ps({"fsig": None, "steps": {"fit": {"status": "accepted"}}}, worn=True,
                                          base_model_ready=True)["state"], "missing")
 
-            print("[7] hair keeps its own limits")
+            print("[7] hair has no step limits")
             body = client.get("/characters/Demo/garments/hair_demo").json()
             limits = body.get("limits") or {}
             check("hair item", (body.get("kind"), body.get("own_mesh"), sorted(limits),
                                 limits.get("fit", {}).get("bib_cm2"), (body.get("status") or {}).get("painted")),
-                  ("hair", False, ["fit", "ghost", "haired", "mesh"], {"op": "le", "value": 50.0}, False))
+                  ("hair", False, [], None, False))
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

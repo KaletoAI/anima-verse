@@ -5,8 +5,8 @@ R11, R13; spec ``2026-11-08-base-body-outfits-design.md`` § C.4).
 Per owner, under ``characters/<name>/garments/``::
 
     images/{item}_{fsig}_{step}_{view}.png  + .json   the image steps of the kind
-                                                      (hair: haired/ghost/cutout,
-                                                      clothing: worn/ghost/cutout);
+                                                      (clothing: worn/ghost/cutout;
+                                                      hair has none);
     images/{item}_{fsig}_{step}_{view}.try{n}.png     the attempts of a step
     raw/{item}_{fsig}.glb                             generator output
     prepared/{item}_{fsig}.glb                        decimated
@@ -53,9 +53,10 @@ signature and the content of the base front + back view. The base MODEL is not
 in it: a base model regenerated under the same base signature keeps images and
 mesh and only re-fits; the fit record's ``base_model_sha256`` decides that.
 
-Hair has two methods (``garment_hair.hair_method``; plan
-``docs/superpowers/plans/2026-11-09-hairdeck-hair.md``, Task 4): the edit chain
-above, and HairDeck — steps ``("hairdeck", "fit")`` (``steps_for``). HairDeck
+Hair has two methods (``garment_hair.hair_method``; spec
+``2026-11-11-hair-from-body-design.md``): ``body`` — the hair is part of the
+body mesh, no steps, no files — and HairDeck — steps ``("hairdeck", "fit")``
+(``steps_for``). HairDeck
 turns the profile picture into hair cards; its files live in ONE folder per
 ``hsig``::
 
@@ -69,27 +70,10 @@ the backend the ``hair_mesh`` occasion is meant to run on and
 re-fits from the cached job. A character with facial hair adds
 ``garment_beard.hsig_inputs`` (HairDeck gets a beard-free copy of the picture,
 cached in the job folder as ``beard_free.png``). The HairDeck fsig is the
-edit-chain payload plus ``method``, ``hsig``, the colour override (profile ``hair_colour``) and the
-placement (profile ``hair_forward_m`` / ``hair_tilt_deg``); the
-edit-chain fsig carries no ``method`` key, so it stays what it always was.
-The fit is the same ``{item}_{fsig}.glb`` + record (its record says
-``method: "hairdeck"``; a record without ``method`` is an edit-chain fit);
-``prepared/`` is not used by HairDeck.
-
-Hair by SUBTRACT (plan ``docs/superpowers/plans/2026-11-10-hair-subtract-method.md``) — steps
-``("haired", "mesh_source", "cut", "fit")``: the haired views are the edit chain's own (stored under the
-edit-chain fsig, ``image_fsig``), one mesh of the HAIRED character is generated from them
-(occasion ``hair_source_mesh``) and the hair is cut off it on the CPU (``garment_cut``)::
-
-    source/{item}_{ssig}/haired.glb                   the haired character's mesh
-    source/{item}_{ssig}/haired_{view}_cut.png        its inputs (the haired views' cut-outs)
-    source/{item}_{ssig}/record.json                  {accepted, ssig, image_fsig, haired, backend, ...}
-    prepared/{item}_{fsig}.glb + .json                the cut (B's unrigged frame) + its gates
-
-``ssig`` = md5[:12] over the haired views' sha256 and ``SOURCE_VERSION``: the mesh job is redone only for
-new haired views. The subtract fsig is the edit-chain payload plus ``method``, the haired views' sha256,
-the base MODEL's sha256 (a new base model re-cuts on the CPU, never a mesh job), the shape (``cut`` /
-``shell``), the shell thickness and ``garment_cut.CUT_VERSION``.
+edit-chain payload (``_edit_payload``) plus ``method``, ``hsig``, the colour override (profile ``hair_colour``)
+and the placement (profile ``hair_forward_m`` / ``hair_tilt_deg``). The fit is the same ``{item}_{fsig}.glb`` +
+record (its record says ``method: "hairdeck"``; a record without ``method`` is an edit-chain fit — of hair, one of
+the removed method, never served); ``prepared/`` is not used by HairDeck.
 
 The SOURCE of an image group (``garment_source``, refit before re-render)::
 
@@ -125,33 +109,25 @@ logger = get_logger("garment_store")
 GARMENT_VERSION: Dict[str, int] = {"hair": 1, "clothing": 2, "footwear": 1}
 #: The steps of footwear made as a shoe: the first five per item (``footwear_source``), ``fit`` per wearer.
 FOOTWEAR_STEPS: Tuple[str, ...] = ("source", "empty", "cutout", "mesh", "insole", "fit")
-GARMENT_STEPS: Dict[str, Tuple[str, ...]] = {"hair": ("haired", "ghost", "cutout", "mesh", "fit"),
+#: The steps of hair made by HairDeck (``steps_for``) — hair has no image chain.
+HAIRDECK_STEPS: Tuple[str, ...] = ("hairdeck", "fit")
+GARMENT_STEPS: Dict[str, Tuple[str, ...]] = {"hair": HAIRDECK_STEPS,
                                              "clothing": ("worn", "ghost", "cutout", "mesh", "fit"),
                                              "footwear": FOOTWEAR_STEPS}
-#: The steps of hair made by HairDeck (``steps_for``).
-HAIRDECK_STEPS: Tuple[str, ...] = ("hairdeck", "fit")
 #: Bumped when the HairDeck job's inputs change meaning (part of ``hsig``).
 HAIRDECK_VERSION = 1
 #: The record of a HairDeck job folder (``hairdeck_dir``).
 HAIRDECK_RECORD = "record.json"
 EDIT_CHAIN = "edit_chain"
 HAIRDECK = "hairdeck"
-SUBTRACT = "subtract"
 #: Hair inside the body mesh (``garment_hair.BODY_METHOD``): no steps, no fit, nothing served.
 BODY = "body"
 #: The only method of footwear (no method choice for ``feet``).
 SHOE = "shoe"
-#: The steps of hair made by subtraction (``steps_for``; ``haired`` is the edit chain's image step).
-SUBTRACT_STEPS: Tuple[str, ...] = ("haired", "mesh_source", "cut", "fit")
-#: Bumped when the hair source mesh job's inputs change meaning (part of ``ssig``).
-SOURCE_VERSION = 1
-#: Folder of the hair source meshes (one sub-folder per ``(item, ssig)``) and the record in it.
-SOURCE_DIR = "source"
-SOURCE_RECORD = "record.json"
 GARMENT_VIEWS: Tuple[str, ...] = ("front", "back")
 #: Every step of any kind that stores images (the rest store meshes); the
 #: order of one kind is ``image_steps``.
-IMAGE_STEPS: Tuple[str, ...] = ("haired", "worn", "ghost", "cutout")
+IMAGE_STEPS: Tuple[str, ...] = ("worn", "ghost", "cutout")
 #: part -> sub-folder of ``garments/`` ("" = the folder itself).
 PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepared",
                              "fit": "", "low": "low", "failed": "failed",
@@ -293,23 +269,6 @@ def hairdeck_dir(character_name: str, item_id: str, hsig: str) -> Path:
     return path
 
 
-def source_dir(character_name: str, item_id: str, ssig: str) -> Path:
-    """``garments/source/{item}_{ssig}/`` — the hair source mesh of the
-    subtract method (``haired.glb``, the cut-outs it was made from and
-    ``record.json``). ValueError like ``garment_path``. Creates nothing."""
-    from app.models.inventory import safe_item_id
-    iid = safe_item_id(item_id)
-    if not iid or iid != item_id:
-        raise ValueError(f"invalid garment item id {str(item_id)[:80]!r}")
-    if not isinstance(ssig, str) or not _FSIG_RE.fullmatch(ssig):
-        raise ValueError(f"invalid source fingerprint {str(ssig)[:40]!r}")
-    root = _root(character_name)
-    path = root / SOURCE_DIR / f"{iid}_{ssig}"
-    if not path.resolve().is_relative_to(root.resolve()):
-        raise ValueError(f"garment path escapes {root}")
-    return path
-
-
 def parse_name(path: Path) -> Optional[Tuple[str, str]]:
     """``(item_id, fsig)`` of a stored garment file, None for any other name
     (a layered fit belongs to the group of the body fit it was made from)."""
@@ -353,8 +312,8 @@ def stored_groups(character_name: str) -> Dict[Tuple[str, str], List[Path]]:
 # --- Fingerprint --------------------------------------------------------------
 
 def image_steps(kind: str) -> Tuple[str, ...]:
-    """The image steps of ``kind`` in chain order (hair: haired, ghost,
-    cutout; clothing: worn, ghost, cutout). ValueError for an unknown kind."""
+    """The image steps of ``kind`` in chain order (clothing: worn, ghost,
+    cutout; hair and footwear: none). ValueError for an unknown kind."""
     if kind not in GARMENT_STEPS:
         raise ValueError(f"unknown garment kind {kind!r}")
     return tuple(step for step in GARMENT_STEPS[kind] if step in IMAGE_STEPS)
@@ -396,16 +355,17 @@ def steps_for(kind: str, method: str) -> Tuple[str, ...]:
     """The step order of ``kind`` made with ``method``: hair by HairDeck is
     ``HAIRDECK_STEPS``, hair in the body mesh (``BODY``) has none — ``()``,
     nothing ever runs —, footwear only by ``shoe`` (``FOOTWEAR_STEPS``; the
-    edit chain is never run for a feet piece), anything else
-    ``GARMENT_STEPS[kind]``. ValueError for an unknown kind or method."""
+    edit chain is never run for a feet piece), clothing only by the edit
+    chain (``GARMENT_STEPS[kind]``). ValueError for an unknown kind or method
+    (hair by any other method too — only ``body`` and HairDeck remain)."""
     if kind not in GARMENT_STEPS:
         raise ValueError(f"unknown garment kind {kind!r}")
-    if method == BODY and kind == "hair":
-        return ()
-    if method == HAIRDECK and kind == "hair":
-        return HAIRDECK_STEPS
-    if method == SUBTRACT and kind == "hair":
-        return SUBTRACT_STEPS
+    if kind == "hair":
+        if method == BODY:
+            return ()
+        if method == HAIRDECK:
+            return HAIRDECK_STEPS
+        raise ValueError(f"unknown hair method {method!r}")
     if kind == "footwear":
         if method != SHOE:
             raise ValueError(f"unknown footwear method {method!r}")
@@ -506,49 +466,12 @@ def _md5(payload: Dict[str, Any]) -> str:
     return digest.hexdigest()[:12]
 
 
-def image_fsig(character_name: str, item_id: str, *,
-               profile: Optional[Dict[str, Any]] = None) -> str:
-    """The fsig the item's IMAGE steps are stored under: the edit-chain fsig
-    for the subtract method (its haired views are the edit chain's own),
-    ``garment_fsig`` otherwise. ValueError like ``garment_fsig``."""
-    kind = _garment_kind(item_id)
-    profile = _profile_of(character_name, profile)
-    if kind_method(kind, character_name, profile) == SUBTRACT:
-        return _md5(_edit_payload(character_name, item_id, kind, profile))
-    return garment_fsig(character_name, item_id, profile=profile)
-
-
-def haired_shas(character_name: str, item_id: str, ifsig: str) -> Dict[str, str]:
-    """view -> sha256 of the ACCEPTED haired view under ``ifsig`` ("" when
-    there is none)."""
-    from app.core import base_body
-    out: Dict[str, str] = {}
-    for view in GARMENT_VIEWS:
-        path = garment_path(character_name, item_id, ifsig, "image", step="haired", view=view)
-        accepted = path.is_file() and read_record(path.with_suffix(".json")).get("accepted") is True
-        out[view] = base_body.file_sha256(path) if accepted else ""
-    return out
-
-
-def subtract_ssig(character_name: str, item_id: str, *,
-                  profile: Optional[Dict[str, Any]] = None) -> str:
-    """md5[:12] over the accepted haired views' sha256 (always those of the
-    edit-chain fsig — whatever method is selected now) and ``SOURCE_VERSION``
-    — names the hair source mesh folder (``source_dir``)."""
-    kind = _garment_kind(item_id)
-    profile = _profile_of(character_name, profile)
-    ifsig = _md5(_edit_payload(character_name, item_id, kind, profile))
-    return _md5({"haired": haired_shas(character_name, item_id, ifsig), "version": SOURCE_VERSION})
-
-
 def garment_fsig(character_name: str, item_id: str, *,
                  profile: Optional[Dict[str, Any]] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
     (R10); hair made by HairDeck adds ``{method, hsig, colour, placement}``
     (the colour override, "" = automatic; the manual placement
-    ``garment_hair.hair_placement``, None = automatic); hair made by
-    subtraction adds ``{method, haired, base_model, shape, shell_mm,
-    cut_version}`` (module docstring). Footwear is md5[:12] over ``{kind,
+    ``garment_hair.hair_placement``, None = automatic). Footwear is md5[:12] over ``{kind,
     ssig, insole_version, width_cap, fit_version}`` alone
     (``garment_footwear.fsig_inputs``) — no base signature, no base images.
     ValueError when ``item_id`` is no garment of a known kind."""
@@ -564,19 +487,14 @@ def garment_fsig(character_name: str, item_id: str, *,
         payload.update(method=HAIRDECK, hsig=garment_hsig(character_name, item_id, profile=profile),
                        colour=garment_hair.hair_colour_override(profile),
                        placement=garment_hair.hair_placement(profile))
-    elif method == SUBTRACT:
-        from app.core import base_body, garment_cut, garment_hair
-        base = base_body.current_base(character_name, profile=profile)
-        payload.update(method=SUBTRACT, haired=haired_shas(character_name, item_id, _md5(payload)),
-                       base_model=base[1] if base else "",
-                       shape=garment_hair.subtract_shape(character_name, profile=profile),
-                       shell_mm=garment_hair.shell_mm(profile), cut_version=garment_cut.CUT_VERSION)
     return _md5(payload)
 
 
 def fit_method(record: Dict[str, Any]) -> str:
     """The method a fit record was made with; a record without ``method``
-    (every fit from before HairDeck) is an edit-chain fit."""
+    (every fit from before HairDeck) is an edit-chain fit. Hair fits of a
+    removed hair method keep their method name here and are never served
+    (``accepted_fit`` follows the current method)."""
     return str(record.get("method") or EDIT_CHAIN)
 
 

@@ -1008,8 +1008,7 @@ def _image_match_chains() -> Dict[str, List[Dict[str, Any]]]:
     character's own glob left out). An empty ``chain`` means the cheapest
     backend of the right kind. The character mesh and HairDeck matches show
     ``_mesh_match_context`` / ``_hair_match_context`` instead (the mesh one
-    depends on the character's rig); the hair views and subtract source mesh
-    matches read their rows here."""
+    depends on the character's rig)."""
     from app.imagegen.occasions import OCCASIONS
     from app.imagegen.routing import chain_for
     out: Dict[str, List[Dict[str, Any]]] = {}
@@ -1864,14 +1863,6 @@ class HairColourRequest(BaseModel):
     hex: str = ""
 
 
-class HairSubtractRequest(BaseModel):
-    # Plain values, validated by garment_hair.set_hair_subtract (400 with its
-    # message, not a schema 422): shape "" | "cut" | "shell", thickness in mm
-    # or null / "" for the default.
-    shape: Any = ""
-    shell_mm: Any = None
-
-
 class HairPlacementRequest(BaseModel):
     # Numbers or null (automatic); plain Any so garment_hair.set_hair_placement
     # validates (400 with its message, not a schema 422).
@@ -1913,9 +1904,10 @@ def _footwear_gate_limits(gates: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """The gate limits per step of a garment ``kind`` for the chips, read
-    from the gate constants themselves: the image gates
+    from the gate constants themselves: clothing — the image gates
     (``garment_gates.limits``), the mesh component share and the fit gates
-    (hair ``garment_fit.GATES``, clothing ``CLOTHING_GATES``). Footwear: the
+    (``garment_fit.CLOTHING_GATES``); hair — none here (HairDeck's fit gates
+    are the Hair tab's ``hairdeck_fit``). Footwear: the
     empty-shoe, mesh and insole gates of the shoe source (``footwear_gates``,
     ``footwear_insole``, the insole with the boot's ``SHAFT_GATES``) and the
     fit gates (``footwear_fit.FIT_GATES``, the split fit's ``SHAFT_GATES`` —
@@ -1933,9 +1925,11 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
                 "mesh": _footwear_gate_limits(footwear_gates.MESH_GATES),
                 "insole": _footwear_gate_limits({**footwear_insole.INSOLE_GATES, **footwear_insole.SHAFT_GATES}),
                 "fit": _footwear_gate_limits(fit_gates)}
+    if kind != "clothing":
+        return {}
     return {**garment_gates.limits(kind),
             "mesh": {"largest_component_share": {"op": "ge", "value": garment_mesh.MIN_COMPONENT_SHARE}},
-            "fit": _gate_limits(garment_fit.CLOTHING_GATES if kind == "clothing" else garment_fit.GATES)}
+            "fit": _gate_limits(garment_fit.CLOTHING_GATES)}
 
 
 @router.get("/{character_name}/garments")
@@ -2009,10 +2003,9 @@ def get_character_hair(character_name: str,
     else the one the character owns (None: no item yet), ``garment`` its
     ``garments.garment_info`` (None without an item), ``collision`` the
     current base model's capsule set (``collision.ensure``) the preview
-    pushes the hair out of, None without a preview or base model; ``limits`` the gate limits per step for the
-    tab's chips (``garment_gates.limits`` + mesh + fit + ``hairdeck_fit``,
-    from the gate constants themselves; ``hairdeck_fit`` those of the hair's
-    length class, ``garment_hairdeck.gates_for``). ``method`` / ``method_source``
+    pushes the hair out of, None without a preview or base model; ``limits`` the gate limits for the
+    tab's chips: ``hairdeck_fit``, those of the hair's length class
+    (``garment_hairdeck.gates_for``, from the gate constants themselves). ``method`` / ``method_source``
     (``"character"`` | ``"world"``) the hair method in effect, ``world_method``
     the world default; ``hairdeck`` the HairDeck section of the current
     ``hsig`` (``garments.hairdeck_panel``, None without an item) and
@@ -2072,7 +2065,6 @@ def get_character_hair(character_name: str,
                 "method": method, "method_source": method_source,
                 "world_method": garment_hair.world_hair_method(),
                 "hairdeck": hairdeck, "others": others,
-                "subtract": _hair_subtract_settings(character_name, profile) if humanoid else None,
                 "hair_in_body": in_body,
                 "base_prompts": (base_body.base_prompts_freshness(character_name, profile=profile)
                                  if in_body and base_body.is_base_pipeline(character_name, profile=profile)
@@ -2081,49 +2073,12 @@ def get_character_hair(character_name: str,
     return annotate_hair(payload)
 
 
-def _hair_subtract_settings(character_name: str, profile: Dict[str, Any]) -> Dict[str, Any]:
-    """The subtract method's settings for the Hair tab: ``shape`` (``cut`` /
-    ``shell``) and where it comes from (``"character"`` override or the
-    hair's ``"length"`` class), the stored override (``""`` = automatic),
-    the shell thickness in mm with its default and limits."""
-    from app.core import garment_cut, garment_hair
-    shape, source = garment_hair.subtract_shape_source(character_name, profile=profile)
-    return {"shape": shape, "shape_source": source,
-            "shape_override": str(profile.get(garment_hair.SUBTRACT_SHAPE_KEY) or ""),
-            "length_class": garment_hair.hair_length_class(character_name, profile=profile),
-            "shell_mm": garment_hair.shell_mm(profile),
-            "shell_mm_default": round(garment_cut.DEFAULT_SHELL_M * 1000, 2),
-            "shell_mm_min": round(garment_cut.SHELL_MIN_M * 1000, 2),
-            "shell_mm_max": round(garment_cut.SHELL_MAX_M * 1000, 2)}
-
-
-@router.post("/{character_name}/hair/subtract")
-def set_character_hair_subtract(character_name: str, body: HairSubtractRequest,
-                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Set the subtract method's shape (``""`` = from the hair length: very
-    short / short hair is a scalp ``shell``, else a ``cut``) and the shell
-    thickness in mm (null / ``""`` = the default). 400 for anything else.
-    Only the subtract fingerprint changes: the next run re-cuts on the CPU
-    from the cached source mesh (no run starts here)."""
-    from app.core import garment_hair
-    from app.models.character import get_character_profile
-    _require_character(character_name)
-    try:
-        saved = garment_hair.set_hair_subtract(character_name, body.shape, body.shell_mm)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    if not saved:
-        raise HTTPException(status_code=500, detail="Saving the character profile failed")
-    return _hair_subtract_settings(character_name, get_character_profile(character_name) or {})
-
-
 @router.post("/{character_name}/hair/method")
 def set_character_hair_method(character_name: str, body: HairMethodRequest,
                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Choose how the character's hair is made: ``""`` (the world
     default ``base_body.hair_method``), ``"body"`` (in the body mesh),
-    ``"edit_chain"``, ``"hairdeck"`` or ``"subtract"``.
-    400 for anything else. No GPU work starts: the served hair follows the
+    or ``"hairdeck"``. 400 for anything else. No GPU work starts: the served hair follows the
     method's newest accepted fit, so the served model is re-assembled."""
     from app.core import garment_assembly, garment_hair
     _require_character(character_name)
@@ -2320,8 +2275,8 @@ def _fetch_garment_mesh_job(character_name: str, item_id: str, raw_job: str, *, 
 @router.post("/{character_name}/garments/{item_id}/mesh/fetch")
 def fetch_character_garment_mesh_job(character_name: str, item_id: str, body: GarmentMeshFetchRequest,
                                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Collect a FINISHED gateway mesh job by its id as the garment's mesh step (clothing and hair "views →
-    mesh": ``mesh``; hair "subtract": ``mesh_source``) — for a mesh whose run outlived our own poll. The
+    """Collect a FINISHED gateway mesh job by its id as the garment's mesh step (clothing: ``mesh``; hair has
+    no mesh job) — for a mesh whose run outlived our own poll. The
     delivered mesh goes through the step's own prepare + gate and record (``collected_job``); nothing else
     runs (the next run reuses it and runs the fit). A running garment run of the character → 409.
     ``{status, step, fsig, job_id, record?, error?, progress?}`` (``_fetch_garment_mesh_job``)."""
@@ -2497,11 +2452,11 @@ def get_character_garment_model(character_name: str, item_id: str, request: Requ
     the method NOT selected = that method's newest accepted fit (the "Other
     method" preview). 400 for an unknown method; 404 without a fit or for an
     item that is no garment of this character."""
-    from app.core import garment_store as gs
     from app.core import garments
+    from app.core.garment_hair import HAIR_METHODS
     from app.core.http_files import snapshot_response
-    if method not in ("", gs.EDIT_CHAIN, gs.HAIRDECK):
-        raise HTTPException(status_code=400, detail=f"method must be {gs.EDIT_CHAIN} or {gs.HAIRDECK}")
+    if method and method not in HAIR_METHODS:
+        raise HTTPException(status_code=400, detail=f"method must be one of {', '.join(HAIR_METHODS)}")
     _require_character(character_name)
     return snapshot_response(None, request, media_type="model/gltf-binary",
                              version=request.query_params.get("v"),

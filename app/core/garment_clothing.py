@@ -3,8 +3,8 @@ on a base-body character (plan
 ``docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md``, Task 2;
 spec ``2026-11-08-base-body-outfits-design.md``).
 
-The kind module of garment kind ``clothing`` (``garment_set.CLOTHING``), the
-same protocol as ``garment_hair``: ``EDIT_STEPS``, ``edit_prompt``, ``gate``,
+The kind module of garment kind ``clothing`` (``garment_set.CLOTHING``) —
+the image-chain protocol of ``garment_images.kind_module``: ``EDIT_STEPS``, ``edit_prompt``, ``gate``,
 ``position_reference``, ``fsig_inputs`` and the pair hooks the orchestration (``garments``) calls —
 ``PAIR_STEP``, ``pair_agree``, ``pair_reason``, ``PAIR_REFUSED``,
 ``front_hints`` — plus ``SUBJECT`` for messages and ``register_estimate``

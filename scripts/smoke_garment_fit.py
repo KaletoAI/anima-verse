@@ -5,6 +5,9 @@ Usage: ./.venv/bin/python scripts/smoke_garment_fit.py
 
 No world, no server, no external assets: every mesh below is built in this file.
 
+The hair edit chain's parts — ``align_depth``, ``transfer``, the hair metrics (bib, poke, scalp) and ``fit_hair``
+— are gone with that method (hair-from-body spec 2026-11-11, Task 2), and so are their sections (c), (e), (f).
+
 (w) Weld + components.
     Two triangles share an edge through duplicated seam vertices (same position, other UV): 6 vertices weld to 4,
     both faces survive, a face that collapses onto two welded vertices is dropped.
@@ -19,8 +22,6 @@ No world, no server, no external assets: every mesh below is built in this file.
     Vertex (0.5, 1.0, 0): px = 500 + 0.5 / 0.01 = 550, py = 200 - 1.0 / 0.01 = 100
     -> x = 0 + (550 - 500) / 800 = 0.0625, y = 0.5 - (100 - 500) / 800 = 1.0, z = 0.
     The z scale equals the xy scale s_b / s_d = 0.125: vertex (0, 0, 0.1) -> z 0.0125.
-    ``align_depth``: a head of points at z in [-0.05, 0.15] (centre 0.05) everywhere and a garment with its
-    crown band at z in [-0.2, 0.0] (centre -0.1) -> every garment z shifts by +0.15.
 
 (b) Push-out on a double-walled sphere head.
     Body = outer UV sphere R 0.100 at (0, 0.9, 0) + inner sphere R 0.098 with reversed winding (normals and winding
@@ -37,15 +38,6 @@ No world, no server, no external assets: every mesh below is built in this file.
     ~0.975 * 0.0087 = 0.0085 (the first push comes from the voxel EDT inside, ~0.3 voxel short) -> ~0.1155,
     inside the tolerance (6-degree steps would lose 9 %).
 
-(c) Transfer.
-    Unrigged body = the double-walled head of (b) + a closed torso cylinder (radius 0.12, y 0.55..0.8,
-    weighted Spine2); the rigged body = 1.7 * unrigged + (0, 0.05, 0) with identical UVs and topology.
-    - A cap at r 0.110 (clearance 0.010 units = 0.017 m >= clear_m 0.0068 m): every vertex ends at 1.7 * Q + t
-      +- 1e-4, ``scale_k`` = 1.700 +- 0.001, no neighbourhood is bad, the rigged clearance pass moves nothing
-      (max rigged push < 1e-6).
-    - A cap at r 0.101 (clearance 0.001 units = 0.0017 m < 0.0068 m): the rigged pass pushes it out to radius
-      >= 1.7 * 0.1 + 0.0068 - 0.001 = 0.1758 m around the rigged head centre (0, 1.58, 0).
-
 (d) Weights (collision ruling C7, 2026-11-10). Rig Hips, Spine2, Neck, Head, LeftShoulder, RightShoulder:
     Head vertices on a column at x 0, y 1.45..1.70 -> chin 1.45, crown 1.70, ear line 1.45 + 0.25 x 0.25 = 1.5125;
     LeftShoulder-dominated vertices at x 0.10 up to y 1.44, RightShoulder up to 1.42 -> shoulder top (1.44 + 1.42) / 2
@@ -55,29 +47,6 @@ No world, no server, no external assets: every mesh below is built in this file.
     Reduced rig (Hips, Spine2, Head; grid x +-0.05, y 1.00..1.70 step 0.005, Head at y >= 1.45): no Shoulder bone ->
     shoulder top = the highest Spine2 vertex 1.445; no Neck -> Spine2 takes the Neck share: y 1.47875 (t 0.5) ->
     Head 0.25 / Spine2 0.75. Shoulder vertices raised by 0.17 (top 1.60, above the ear line) -> refused.
-
-(e) Metrics (metres).
-    - Bib: chin 1.45, neck cylinder radius 0.05 (front z 0.05). A 5 x 5 cm plate at z 0.07, x [-0.025, 0.025],
-      y [1.37, 1.42] (its top edge 3 cm below the chin) is in front of the neck and inside the bib box
-      (|x| < 0.06, chin - 0.16 < y < chin, z > front - 0.01) -> 25 cm^2 +- 0.5.
-    - Poke: 100 crown bins of 3 vertices each (3-degree bins, directions at bin centres around (0, 1.6, 0); the
-      top bin's radii 0.100/0.101/0.102 set the crown top so the derived centre is exactly (0, 1.6, 0)).
-      Pre radii 0.10/0.11/0.12; in 75 bins all post radii are pre + 0.01 (outermost stays the outermost), in 25
-      bins the 0.10 vertex ends at 0.13 (an inner layer outside) -> poke share 25 / 100 = 0.25.
-    - Scalp: a flat head top (disc radius 0.2 at y 1.6, the only head vertices within 5 cm of the top) and a hair
-      sheet 0.019 above it covering x > 0 only. A scalp vertex at x < 0 is within 2 cm of the sheet only when
-      |x| < sqrt(0.02^2 - 0.019^2) = 0.0062, a strip of share ~ 2 * 0.0062 * 2 * 0.2 / (pi * 0.2^2) / 2 = 0.02 of
-      the disc -> uncovered ~ 0.48, inside 0.5 +- 0.05.
-    - The gate passes the spike's best numbers and names every limit it refuses (R7).
-
-(f) ``fit_hair`` end to end on synthetic GLBs: a hair cap at r 0.108 units is generated in its own frame
-    (x4, shifted by (3, -2, 1)) and placed through the shared image framing (1000 px per unit for both masks),
-    centred in depth on the head, pushed (nothing to push: clearance 0.008 units = 0.0136 m > CLEAR_M 0.0119 m),
-    transferred to the rigged body. The scalp metric counts the inner wall too (r 0.098 -> 0.1666 m): the hair at
-    1.7 * 0.108 = 0.1836 m is 0.017 m from it, within the 2 cm, so nothing is uncovered.
-    every vertex ends within 0.005 m of 1.7 * cap + (0, 0.05, 0), k = 1.700 +- 0.002, the gate passes, all weights
-    are Head (the cap is above the chin 1.7 * 0.8 + 0.05 = 1.41). Masks of different sizes (no shared framing) are
-    refused.
 
 (g) A hollow body is sealed (``body_sdf`` / ``_seal_cavities``, 2026-11-10). A closed cylinder r 0.10 (y 0.80..1.40)
     and inside it a closed cylinder r 0.09 (y 0.81..1.39) — a shell 1 cm thick around a cavity — with both walls
@@ -250,12 +219,6 @@ def test_framing():
     check(abs(Q[9, 2] - 0.0125) < 1e-9, f"framing: z scale = xy scale 0.125 (got {Q[9, 2] / 0.1:.4f})")
     check(abs(np.ptp(Q[:, 0]) - 0.125) < 1e-9, "framing: garment width 1.0 -> 0.125")
 
-    head = np.array([[x, y, z] for x in (-0.05, 0.05) for y in np.linspace(0.9, 1.0, 51) for z in (-0.05, 0.15)])
-    garm = np.array([[x, y, z] for x in (-0.06, 0.06) for y in np.linspace(0.85, 1.01, 81) for z in (-0.2, 0.0)])
-    out = gf.align_depth(garm, head, probe_u=0.04)
-    check(np.allclose(out[:, 2] - garm[:, 2], 0.15), "align_depth: crown band centred on the head band (+0.15)")
-    check(np.array_equal(out[:, :2], garm[:, :2]), "align_depth: x/y untouched")
-
 
 # --- (b) push-out ----------------------------------------------------------------
 
@@ -284,37 +247,6 @@ def test_push():
     check(np.all(np.abs(ro - 0.107) <= 1e-6), f"push without spread: outer shell stays at 0.107 "
           f"(got {ro.min():.6f}..{ro.max():.6f})")
     return sdf
-
-
-# --- (c) transfer --------------------------------------------------------------------
-
-def torso_head_bodies():
-    hP, hF = head_body()
-    tP, tF = cylinder(0.12, 0.55, 0.8)
-    P, F = merge((hP, hF), (tP, tF))
-    head = np.arange(len(P)) < len(hP)
-    bu = body_mesh(P, F, head)
-    br = body_mesh(1.7 * P + np.array([0, 0.05, 0]), F, head)
-    return bu, br
-
-
-def test_transfer():
-    from app.core import garment_fit as gf
-    bu, br = torso_head_bodies()
-    t = np.array([0, 0.05, 0])
-    c = np.array([0, 0.9, 0])
-    Q, Fd = cap(0.110, c)
-    X, rep = gf.transfer(Q, bu, br, faces=Fd, res_max_m=0.006, clear_m=0.0068, vox_m=0.0034)
-    err = np.abs(X - (1.7 * Q + t)).max()
-    check(err <= 1e-4, f"transfer: X = 1.7 Q + t +- 1e-4 (max err {err:.2e})")
-    check(abs(rep["scale_k"] - 1.7) <= 0.001, f"transfer: scale_k 1.700 (got {rep['scale_k']:.4f})")
-    check(rep["bad_neighbourhoods"] == 0 and rep["borrowing"] == 0, "transfer: no bad neighbourhood, no borrowing")
-    check(rep["rigged_push_max_m"] < 1e-6, f"transfer: clearance met -> rigged pass moves nothing "
-          f"({rep['rigged_push_max_m']:.2e})")
-    Q, Fd = cap(0.101, c)
-    X, rep = gf.transfer(Q, bu, br, faces=Fd, res_max_m=0.006, clear_m=0.0068, vox_m=0.0034)
-    r = radii(X, 1.7 * c + t)
-    check(r.min() >= 0.1758, f"transfer: rigged pass restores clear_m (min radius {r.min():.4f} >= 0.1758)")
 
 
 # --- (d) weights -------------------------------------------------------------------------
@@ -367,90 +299,7 @@ def test_weights():
         check(True, "weights: shoulder top above the ear line refused")
 
 
-# --- (e) metrics ---------------------------------------------------------------------------
-
-def grid_sheet(x0, x1, z0, z1, y, n):
-    xs, zs = np.linspace(x0, x1, n + 1), np.linspace(z0, z1, n + 1)
-    P = np.array([[x, y, z] for x in xs for z in zs])
-    F = []
-    for i in range(n):
-        for j in range(n):
-            a, b, c, d = i * (n + 1) + j, (i + 1) * (n + 1) + j, (i + 1) * (n + 1) + j + 1, i * (n + 1) + j + 1
-            F += [(a, b, c), (a, c, d)]
-    return P, np.array(F)
-
-
-def neck_body():
-    head = np.array([[0.08 * math.cos(a), y, 0.08 * math.sin(a)]
-                     for y in np.linspace(1.45, 1.70, 26) for a in np.linspace(0, 2 * np.pi, 48, endpoint=False)])
-    neck = np.array([[0.05 * math.cos(a), y, 0.05 * math.sin(a)]
-                     for y in np.arange(1.25, 1.445, 0.005) for a in np.linspace(0, 2 * np.pi, 48, endpoint=False)])
-    P = np.concatenate([head, neck])
-    return body_mesh(P, np.zeros((0, 3), np.int64), np.arange(len(P)) < len(head))
-
-
-def test_metrics():
-    from app.core import garment_fit as gf
-    br = neck_body()
-    xs, ys = np.linspace(-0.025, 0.025, 11), np.linspace(1.37, 1.42, 11)
-    P = np.array([[x, y, 0.07] for y in ys for x in xs])
-    F = []
-    for i in range(10):
-        for j in range(10):
-            a, b, c, d = i * 11 + j, i * 11 + j + 1, (i + 1) * 11 + j + 1, (i + 1) * 11 + j
-            F += [(a, b, c), (a, c, d)]
-    F = np.array(F)
-    bib = gf.bib_area_cm2(P, F, br)
-    check(abs(bib - 25) <= 0.5, f"metrics: bib plate 25 cm^2 +- 0.5 (got {bib:.2f})")
-
-    centre = np.array([0, 1.6, 0])
-    rng = np.random.default_rng(1)
-    bins = [(el, th) for el in range(12, 34, 3) for th in range(-180, 180, 9)][:99]
-    pre, post = [], []
-    bad = set(rng.choice(99, 25, replace=False).tolist())
-    for k, (el, th) in enumerate(bins):
-        e, t = math.radians(el), math.radians(th)
-        u = np.array([math.cos(e) * math.sin(t), math.sin(e), math.cos(e) * math.cos(t)])
-        for r in (0.10, 0.11, 0.12):
-            pre.append(centre + r * u)
-            post.append(centre + ((0.13 if r == 0.10 else r + 0.01) if k in bad else r + 0.01) * u)
-    for r in (0.100, 0.101, 0.102):
-        pre.append(centre + r * np.array([0, 1.0, 0]))
-        post.append(centre + (r + 0.01) * np.array([0, 1.0, 0]))
-    poke = gf.poke_share(np.array(pre), np.array(post))
-    check(abs(poke - 0.25) < 1e-9, f"metrics: poke share 25 / 100 = 0.25 (got {poke})")
-
-    disc = np.array([[x, 1.6, z] for x in np.arange(-0.2, 0.2001, 0.004) for z in np.arange(-0.2, 0.2001, 0.004)
-                     if x * x + z * z <= 0.04 and abs(x) > 1e-9])
-    below = np.array([[0.1 * math.cos(a), 1.40, 0.1 * math.sin(a)] for a in np.linspace(0, 6.28, 40)])
-    Pb = np.concatenate([disc, below])
-    sb = body_mesh(Pb, np.zeros((0, 3), np.int64), np.ones(len(Pb), bool))
-    hp, hf = grid_sheet(0.0, 0.25, -0.25, 0.25, 1.619, 50)
-    unc = gf.scalp_uncovered_share(hp, hf, sb)
-    check(abs(unc - 0.5) <= 0.05, f"metrics: hair on the x > 0 half -> uncovered ~ 0.5 (got {unc:.3f})")
-
-    m = gf.metrics(P, F, P, P, br)
-    for key in ("bib_cm2", "poke_share", "scalp_uncovered_share", "max_push_m", "moved_share",
-                "largest_component_share", "drop_below_chin_m", "tris"):
-        check(key in m, f"metrics: key {key}")
-    check(m["tris"] == 200 and m["max_push_m"] == 0 and m["moved_share"] == 0, "metrics: tris 200, nothing moved")
-    check(abs(m["drop_below_chin_m"] - (1.45 - 1.37)) < 1e-9, "metrics: drop below chin 0.08")
-
-    best = dict(bib_cm2=8.2, poke_share=0.001, scalp_uncovered_share=0.048, max_push_m=0.118,
-                moved_share=0.789, largest_component_share=0.9919, drop_below_chin_m=0.113, tris=95604)
-    ok, reasons = gf.gate(best)
-    check(ok and reasons == [], f"gate: spike best run passes ({reasons})")
-    worst = dict(best, bib_cm2=60, poke_share=0.03, scalp_uncovered_share=0.2, max_push_m=0.2,
-                 moved_share=0.95, largest_component_share=0.9)
-    ok, reasons = gf.gate(worst)
-    text = " ".join(reasons)
-    check(not ok and len(reasons) == 6 and all(k in text for k in ("bib", "poke", "scalp", "push", "moved",
-                                                                       "component")),
-          f"gate: six refusals named ({reasons})")
-    check(not gf.gate(dict(best, bib_cm2=float("nan")))[0], "gate: a NaN refuses")
-
-
-# --- (f) fit_hair end to end ----------------------------------------------------------
+# --- GLB fixture (also used by the chain smokes) ---------------------------------------
 
 def make_glb(P, F, U, *, image=None, joints=None, weights=None, joint_names=None):
     blob = bytearray()
@@ -501,53 +350,11 @@ def make_glb(P, F, U, *, image=None, joints=None, weights=None, joint_names=None
 
 
 def png(size=16):
+    """A small solid PNG (smoke_garment_clothing_fit's texture image)."""
     from PIL import Image
     out = io.BytesIO()
     Image.new("RGB", (size, size), (120, 80, 40)).save(out, "PNG")
     return out.getvalue()
-
-
-def test_fit_hair():
-    from app.core import garment_fit as gf
-    bu, br = torso_head_bodies()
-    unrigged = make_glb(bu.positions, bu.faces, bu.uvs)
-    rigged = make_glb(br.positions, br.faces, br.uvs, joints=br.joints, weights=br.weights,
-                      joint_names=br.joint_names)
-    c = np.array([0, 0.9, 0])
-    hair, hf = cap(0.108, c, n_el=31, nlon=120)  # 3-degree grid: a ring lies in the +-0.004 probe band at y 0.96,
-    # and the rigged spacing (~1 cm at r 0.187 m) keeps every scalp vertex within 2 cm of hair
-    hu = np.stack([np.linspace(0, 1, len(hair)), np.linspace(1, 0, len(hair))], 1)
-    prepared = make_glb(4 * (hair - c) + np.array([3, -2, 1]), hf, hu, image=png())
-    # 1000 px per unit, column 500 = x 0, row 100 = y 1.0 (the head top)
-    lo, hi = bu.positions.min(0), bu.positions.max(0)
-    bm = np.zeros((1200, 1000), bool)
-    bm[int(round(100 + (1.0 - hi[1]) * 1000)):int(round(100 + (1.0 - lo[1]) * 1000)),
-       int(round(500 + lo[0] * 1000)):int(round(500 + hi[0] * 1000))] = True
-    gm = np.zeros((1200, 1000), bool)
-    hlo, hhi = hair.min(0), hair.max(0)
-    gm[int(round(100 + (1.0 - hhi[1]) * 1000)):int(round(100 + (1.0 - hlo[1]) * 1000)),
-       int(round(500 + hlo[0] * 1000)):int(round(500 + hhi[0] * 1000))] = True
-    res = gf.fit_hair(prepared, unrigged, rigged, bm, gm)
-    g = res.garment
-    expect = 1.7 * hair + np.array([0, 0.05, 0])
-    # the 120 copies of the pole weld into one vertex: every copy stays (each is used by a surviving face), only the
-    # 120 faces with two pole corners collapse
-    check(len(g.positions) == len(hair), f"fit_hair: all {len(hair)} vertices kept (got {len(g.positions)})")
-    err = np.abs(g.positions - expect).max()
-    check(err <= 0.005, f"fit_hair: placed within 5 mm of 1.7 * cap + t (max err {err:.4f})")
-    check(abs(res.report["k"] - 1.7) <= 0.002, f"fit_hair: k 1.700 (got {res.report['k']:.4f})")
-    check(res.ok, f"fit_hair: gate passes ({res.reasons}; {res.metrics})")
-    check(g.joint_names == ["mixamorig:Head", "mixamorig:Spine2"] and np.allclose(g.weights[:, 0], 1),
-          "fit_hair: all weights Head (the cap lies above the ear line)")
-    check(g.image == png() and g.mime == "image/png" and g.material.get("doubleSided") is True,
-          "fit_hair: image + material carried")
-    try:
-        gf.fit_hair(prepared, unrigged, rigged, bm, gm[:1000])
-        check(False, "fit_hair: masks of different sizes refused")
-    except ValueError:
-        check(True, "fit_hair: masks of different sizes refused (no shared framing)")
-    check(len(g.indices) == len(hf) - 120, f"fit_hair: the 120 faces collapsing onto the welded pole are dropped "
-          f"({len(hf)} -> {len(g.indices)})")
 
 
 def test_seal():
@@ -585,10 +392,7 @@ def main():
     test_weld()
     test_framing()
     test_push()
-    test_transfer()
     test_weights()
-    test_metrics()
-    test_fit_hair()
     test_seal()
     if FAILS:
         print(f"\n{len(FAILS)} FAILED")

@@ -384,9 +384,8 @@ def _garment_roots(character_name: str) -> Optional[Tuple[Set[str], Set[str], Se
     equipped mesh piece (hair) and every own-mesh outfit piece the character
     HOLDS or wears (``garment_set.held_clothing``: a dress in the wardrobe
     keeps its fit, plan 2026-11-09-base-body-phase5-mesh-items Task 4) — the
-    current fsig (and the image fsig — the subtract method's haired views),
-    the fit served on the current base model, and per method (hair: edit
-    chain / HairDeck / subtract) the newest accepted fit on the current base
+    current fsig, the fit served on the current base model, and per method
+    (a fit record's ``method``) the newest accepted fit on the current base
     model and the newest accepted fit at all — so switching the hair method
     back never costs a generation (plan 2026-11-09-hairdeck-hair, Review
     Focus 3). An older accepted fit of the same method is stale. ``items``:
@@ -415,9 +414,6 @@ def _garment_roots(character_name: str) -> Optional[Tuple[Set[str], Set[str], Se
             kept_items.add(item_id)
             try:
                 keep.add(_garment_key(item_id, garment_store.garment_fsig(character_name, item_id)))
-                if garment_store.garment_method(character_name, item_id) == garment_store.SUBTRACT:
-                    # Its haired views live in the edit-chain group (the image fsig).
-                    keep.add(_garment_key(item_id, garment_store.image_fsig(character_name, item_id)))
             except ValueError:
                 pass  # no current fingerprint (e.g. the flag is off): the accepted fits below stay
             if garment_set.garment_kind_of(item) == garment_set.HAIR:

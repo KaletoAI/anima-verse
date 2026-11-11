@@ -97,10 +97,10 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "inst")
-        # The hair method this smoke was written for (the default before the hair-from-body spec 2026-11-11 —
-        # the new default "body" makes no hair item).
+        # A hair method with an own hair mesh (the default "body" makes no hair item; the edit chain this smoke
+        # was written for is gone since the hair-from-body spec 2026-11-11).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "edit_chain"}}))
+                                                        "base_body": {"hair_method": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "inst/config.json")
         from app.core import db

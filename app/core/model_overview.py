@@ -1356,12 +1356,11 @@ def _annotate_garment_info(garment: Any) -> None:
 
 
 # The steps of a garment's chain -> row label (``garment_steps``).
-GARMENT_STEP_LABELS = {"haired": "Haired views", "worn": "Worn views", "ghost": "Hair-only views",
-                       "cutout": "Cut-outs", "mesh": "Mesh", "hairdeck": "HairDeck", "fit": "Fit"}
+GARMENT_STEP_LABELS = {"worn": "Worn views", "ghost": "Piece-only views", "cutout": "Cut-outs", "mesh": "Mesh",
+                       "hairdeck": "HairDeck", "fit": "Fit"}
 # Footwear (``garment_footwear.info``): the shoe source rows.
 FOOTWEAR_STEP_LABELS = {"source": "Item image", "empty": "Empty shoe", "cutout": "Cut-out", "mesh": "Mesh",
                         "insole": "Insole", "fit": "Fit"}
-CLOTHING_GHOST_LABEL = "Piece-only views"
 STEP_RUNNING = "running"
 
 
@@ -1375,14 +1374,13 @@ def garment_steps(garment: Dict[str, Any]) -> List[Dict[str, Any]]:
     steps = _dict(garment.get("steps"))
     failed = _dict(garment.get("failed"))
     running = garment.get("running_step")
-    clothing = garment.get("kind") == "clothing"
     footwear = garment.get("kind") == "footwear"
     labels = FOOTWEAR_STEP_LABELS if footwear else GARMENT_STEP_LABELS
     for step_id, data in steps.items():
-        label = CLOTHING_GHOST_LABEL if clothing and step_id == "ghost" else labels.get(step_id, step_id)
+        label = labels.get(step_id, step_id)
         data = _dict(data)
         numbers: Dict[str, Any] = {}
-        if step_id in ("haired", "worn", "ghost", "cutout") and not footwear:
+        if step_id in ("worn", "ghost", "cutout") and not footwear:
             tiles = [_dict(data.get(view)) for view in ("front", "back")]
             status = DONE if all(tile.get("accepted") for tile in tiles) else MISSING
             detail = ""

@@ -218,8 +218,8 @@ export function RecordNumbers({ label, record }: { label: string; record: unknow
 }
 
 /** The gate records of a failure, labelled: per attempt, per view (the
- *  front/back bottoms check) or the single record of the failed step (the
- *  fit, the subtract method's cut) under `stepLabel`. */
+ *  front/back pair check) or the single record of the failed step (the
+ *  fit) under `stepLabel`. */
 function failureRecords(gates: Record<string, unknown> | null, t: (s: string) => string,
   stepLabel: string): Array<[string, unknown]> {
   if (!gates) return []

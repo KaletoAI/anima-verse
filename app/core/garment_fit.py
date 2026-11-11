@@ -29,9 +29,12 @@ The clothing transfer is SKINNED (``transfer_skinned``, 2026-11-09 sleeve fix): 
 posed by linear blend skinning (measured on the e2e base: per-bone rigid fits residual p50 0.6 mm, the whole body as
 LBS p99 9 mm, dual quaternions worse), so the garment is carried by the same motion — one rigid transform per bone
 recovered from the body correspondence, blended with the skin weights of the body under each garment vertex. The
-nearest-donor local-Kabsch transfer (``transfer``, still the hair path) tore a sleeve around the 70-degree A -> T
+nearest-donor local-Kabsch transfer (removed with the hair edit chain) tore a sleeve around the 70-degree A -> T
 rotation of the upper arm (adjacent vertices with different donors landed centimetres apart: sleeve area x1.9) and
 its 25 smoothing passes folded the tear into the puffed shoulder cap (15 % of the sleeve triangles flipped).
+
+Hair: the edit chain's hair fit (``fit_hair``, its gates and metrics) went with that chain (hair-from-body,
+2026-11-11); HairDeck (``garment_hairdeck``) uses the push-out, the SDF and ``hair_weights`` from here.
 """
 from __future__ import annotations
 
@@ -54,21 +57,15 @@ from app.core.glb_mesh import BodyMesh, GarmentMesh
 CLEAR_M = 0.0119
 VOX_M = 0.0034
 SPREAD_M = 0.0085
-# Hair (``fit_hair``) asks for less than CLEAR_M: the hair rides the rigid Head, and the mesher's hair lies INSIDE the
-# bald head after the framing (Kai 2026-11-10, ~/claude-out/kai-hair-gap: 99 % of the vertices, the hair's own outer
-# wall p50 11.8 mm inside), so the push makes ALL of it and the clearance becomes the gap: scalp -> hair p50 15-17 mm
-# at 11.9 mm, 10-11 mm at 6 mm (front 15.7 -> 9.7). 6 mm = the subtract cut's inner sheet
-# (``garment_cut.INNER_OFFSET_M``).
+# The hair clearance (6 mm, less than CLEAR_M: hair rides the rigid Head; measured on the former edit-chain hair fit,
+# Kai 2026-11-10, scalp -> hair p50 15-17 mm at 11.9 mm, 10-11 mm at 6 mm) — the collision capsules' ``chest_hair``
+# margin (``collision.HAIR_CLEARANCE_M`` pins the equality).
 HAIR_CLEAR_M = 0.006
 SPREAD_DEPTH_M = 0.119
-PROBE_M = 0.068
-KABSCH_RES_M = 0.006
 # Hair weights (``hair_weights``): the ear line lies this fraction of the head height (chin -> crown) above the chin
 # — the earlobe / jaw angle (measured on Kira's base: 1.513 m; its Head joint 1.515 m, nose tip 1.503 m).
 HAIR_EAR_LINE_FRACTION = 0.25
 POKE_TOL_M = 0.0034
-# Half height of the depth probe band (spike 0.004 units x 1.70) and the SDF crop margin around the garment.
-PROBE_BAND_M = 0.0068
 SDF_MARGIN_M = 0.05
 # Raw zero level of the voxel SDF outside the true surface, in voxels (see ``body_sdf``).
 SDF_ZERO_OFFSET_VOX = 1.3
@@ -88,9 +85,6 @@ PUSH_SMOOTH_UNTIL = 6
 PUSH_SPREAD_UNTIL = 6
 PUSH_SPREAD_K = 48
 SMOOTH_PASSES = 6
-# Transfer: local Kabsch neighbourhood size, smoothing of the local-minus-global delta, rigged clearance loop.
-KABSCH_K = 24
-DELTA_SMOOTH_PASSES = 25
 RIGGED_ITERATIONS = 10
 RIGGED_SMOOTH_UNTIL = 7
 
@@ -118,16 +112,6 @@ RIGGED_SMOOTH_UNTIL = 7
 #: flood entered the layer-push blend band as a ring round the head at eye level (Rosi, 32.5 mm p50 at 1.55 m).
 #: footwear: its own fit (``footwear_fit``), versioned there.
 FIT_VERSION: Dict[str, int] = {"hair": 7, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
-
-# R7 — mesh gates after the fit, in metres / cm^2 / shares.
-GATES = {
-    "bib_cm2": ("max", 50.0, "bib area in front of the neck"),
-    "poke_share": ("max", 0.02, "poke-through share of the crown"),
-    "scalp_uncovered_share": ("max", 0.10, "scalp share without hair within 2 cm"),
-    "max_push_m": ("max", 0.15, "largest push-out"),
-    "moved_share": ("max", 0.90, "share of vertices moved by the push-out"),
-    "largest_component_share": ("min", 0.98, "area share of the largest component"),
-}
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).
@@ -358,24 +342,6 @@ def place_by_framing(Pd, body_P, body_mask, garment_mask) -> np.ndarray:
     return Q
 
 
-def align_depth(Q, head_P, *, probe_u: float, band_u: Optional[float] = None) -> np.ndarray:
-    """Shift the garment in z so its crown band is centred on the head band at ``ytop - probe_u``.
-
-    ``ytop`` is the head's top; both bands are ``+- band_u`` high (default a tenth of the probe depth, the spike's
-    0.004 at probe 0.04).
-    """
-    Q = np.array(Q, np.float64)
-    head_P = np.asarray(head_P, np.float64)
-    band_u = probe_u * 0.1 if band_u is None else band_u
-    y = head_P[:, 1].max() - probe_u
-    band = head_P[np.abs(head_P[:, 1] - y) < band_u]
-    bq = Q[np.abs(Q[:, 1] - y) < band_u]
-    if len(band) == 0 or len(bq) == 0:
-        raise ValueError("No head or garment vertices at the depth probe height")
-    Q[:, 2] += (band[:, 2].max() + band[:, 2].min()) / 2 - (bq[:, 2].max() + bq[:, 2].min()) / 2
-    return Q
-
-
 # --- body SDF / push-out ---------------------------------------------------------------------------------------------
 
 @dataclass
@@ -457,93 +423,6 @@ def point_triangle_closest(X: np.ndarray, A: np.ndarray, B: np.ndarray, C: np.nd
         pick = np.take_along_axis(np.stack(edge, -2), dist.argmin(-1)[..., None, None], -2)[..., 0, :]
         closest = np.where(degenerate[..., None], pick, closest)
     return closest
-
-
-class BodySurface:
-    """B's surface for exact snapping: ``closest(X)`` -> ``(closest point, outward unit normal there)``, the
-    closest point over the triangles of the ``k`` nearest dense samples (Ericson), the normal B's vertex normals
-    interpolated at it. The voxel SDF moves a point onto its zero level only to within a fraction of a voxel and
-    its gradient turns at a polar fan — the 5 mm hair shell of ``scripts/smoke_garment_cut.py`` came out 6.4 mm
-    at the crown through it (``garment_cut`` snaps with this)."""
-
-    def __init__(self, P: np.ndarray, F: np.ndarray, k: int = 8):
-        from scipy.spatial import cKDTree
-        self.P, self.F, self.k = np.asarray(P, np.float64), np.asarray(F, np.int64), k
-        pts, self.tri_of = _surface_samples(self.P, self.F)
-        self.tree = cKDTree(pts)
-        self.vn = vertex_normals(self.P, self.F)
-
-    def closest(self, X: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        X = np.asarray(X, np.float64)
-        _d, j = self.tree.query(X, k=min(self.k, self.tree.n))
-        tris = self.F[self.tri_of[j.reshape(len(X), -1)]]                    # (n, k, 3)
-        A, B, C = (self.P[tris[..., i]] for i in range(3))
-        cand = point_triangle_closest(X[:, None, :], A, B, C)
-        best = np.linalg.norm(cand - X[:, None, :], axis=-1).argmin(1)
-        rows = np.arange(len(X))
-        Y, tri = cand[rows, best], tris[rows, best]
-        a, b, c = A[rows, best], B[rows, best], C[rows, best]
-        # barycentric coordinates of Y in its triangle -> interpolated vertex normal
-        v0, v1, v2 = b - a, c - a, Y - a
-        d00, d01, d11 = (v0 * v0).sum(1), (v0 * v1).sum(1), (v1 * v1).sum(1)
-        d20, d21 = (v2 * v0).sum(1), (v2 * v1).sum(1)
-        den = np.maximum(d00 * d11 - d01 * d01, 1e-30)
-        wv, ww = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
-        N = (1 - wv - ww)[:, None] * self.vn[tri[:, 0]] + wv[:, None] * self.vn[tri[:, 1]] \
-            + ww[:, None] * self.vn[tri[:, 2]]
-        return Y, _unit(N)
-
-
-def outer_faces(P: np.ndarray, F: np.ndarray, sdf: Sdf) -> np.ndarray:
-    """The faces of the body's OUTER wall: those whose normal agrees with the gradient of the voxel field
-    ``sdf`` at their centre (faces outside its crop count as outer). A double-walled body's inner wall faces
-    inward, a few millimetres below the skin: a hair vertex that lies inside the skin is nearer to it than to the
-    skin (Kai's temple 2026-11-10: a shell snapped onto it sat 8.4 mm under the skin and was pushed out 11 mm)."""
-    P = np.asarray(P, np.float64)
-    F = np.asarray(F, np.int64).reshape(-1, 3)
-    fn = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
-    centre = P[F].mean(1)
-    hi = sdf.lo + (np.array(sdf.field.shape) - 1) * sdf.vox
-    crop = ((centre >= sdf.lo) & (centre <= hi)).all(1)
-    outer = np.ones(len(F), bool)
-    if crop.any():
-        outer[crop] = (fn[crop] * sdf.grad(centre[crop])).sum(1) > 0
-    return outer
-
-
-class ExactNearSdf:
-    """A voxel ``Sdf`` whose values below ``band`` (the units of the field) are replaced by the exact signed
-    distance to the body's outer wall (``outer_faces``; ``BodySurface.closest``: the distance, signed by the
-    interpolated normal) and whose gradient there is that normal. The voxel field is off by up to 1.5 mm near
-    the skin (p95 over Kira's cut, 0.6 mm over Kai's shell) — as much as the placed hair fit's whole clearance
-    (a shell's inner sheet lies 1 mm over the scalp). Used by the placed hair fit (``fit_hair(placed=True)``)
-    only."""
-
-    def __init__(self, sdf: Sdf, P: np.ndarray, F: np.ndarray, band: float):
-        F = np.asarray(F, np.int64).reshape(-1, 3)
-        self.sdf, self.band = sdf, float(band)
-        self.surface = BodySurface(P, F[outer_faces(P, F, sdf)])
-
-    def _exact(self, X: np.ndarray):
-        X = np.asarray(X, np.float64)
-        v = np.array(self.sdf.sample(X), np.float64)
-        near = np.nonzero(v < self.band)[0]
-        N = None
-        if len(near):
-            Y, N = self.surface.closest(X[near])
-            off = X[near] - Y
-            v[near] = np.linalg.norm(off, axis=1) * np.where((off * N).sum(1) < 0, -1.0, 1.0)
-        return v, near, N
-
-    def sample(self, X) -> np.ndarray:
-        return self._exact(X)[0]
-
-    def grad(self, X) -> np.ndarray:
-        g = np.array(self.sdf.grad(X), np.float64)
-        _v, near, N = self._exact(X)
-        if len(near):
-            g[near] = N
-        return g
 
 
 def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = None,
@@ -752,122 +631,6 @@ def uv_correspondence(body_unrigged: BodyMesh, body_rigged: BodyMesh) -> Tuple[n
         raise ValueError("The rigged base does not share the UV atlas of the unrigged base "
                          f"(median UV distance {np.median(dist):.2e})")
     return corr, dist
-
-
-def region_similarity(body_unrigged: BodyMesh, body_rigged: BodyMesh, corr: np.ndarray, mask: np.ndarray):
-    """Similarity unrigged -> rigged over the body vertices in ``mask`` (through the UV correspondence)."""
-    if mask.sum() < 4:
-        raise ValueError("Too few body vertices for a similarity fit")
-    return similarity(body_unrigged.positions[mask], body_rigged.positions[corr[mask]])
-
-
-def transfer(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: int = KABSCH_K,
-             res_max_m: float = KABSCH_RES_M, clear_m: float = CLEAR_M, vox_m: float = VOX_M,
-             margin_m: float = SDF_MARGIN_M, split_y: Optional[float] = None,
-             exact_near_m: Optional[float] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """Carry welded garment positions ``Q`` (unrigged units) into the rigged bind space (metres) -> ``(X, report)``.
-
-    1. Each garment vertex takes the nearest unrigged body vertex that is not arm/hand/shoulder (weight < 0.2).
-       With ``split_y`` (clothing, unrigged units) a garment vertex at or above it excludes only forearm/hand, so a
-       sleeve rides the upper arm through the A -> T motion; below it every arm/shoulder bone is excluded (a skirt
-       next to a hanging hand stays on the hips).
-    2. Per used body vertex a local similarity (Kabsch with scale) over its ``k`` nearest body vertices maps them
-       onto their rigged twins; a neighbourhood whose residual exceeds ``res_max_m`` (it spans two body parts)
-       is bad, and its garment vertices borrow the transform of the nearest garment vertex with a good one.
-    3. The local result minus one global similarity is smoothed 25 passes over the garment mesh and added back:
-       large motions stay, per-vertex jumps go. The global similarity is fit over the body vertices of the good
-       neighbourhoods — the region the garment rides on. (The spike fit a fixed torso band; on a T-pose rig the
-       spine-weighted region deforms with the shoulders and gives scales of 1.15..1.6 instead of 1.70.)
-    4. A clearance pass on the rigged body (SDF in metres, 10 iterations, smoothed in the first 7); with
-       ``exact_near_m`` the field is exact below that distance (``ExactNearSdf``).
-    """
-    from scipy.spatial import cKDTree
-    from app.core.rig_contract import norm_bone_name
-    Q = np.asarray(Q, np.float64)
-    Pb, Pr = body_unrigged.positions, body_rigged.positions
-    adjacency = _adjacency(faces, len(Q))
-    corr, uv_dist = uv_correspondence(body_unrigged, body_rigged)
-    Wb = dense_weights(body_rigged)[corr]
-
-    def eligible(tokens) -> np.ndarray:
-        cols = [i for i, n in enumerate(body_rigged.joint_names) if any(t in norm_bone_name(n) for t in tokens)]
-        ok = Wb[:, cols].sum(1) < 0.2 if cols else np.ones(len(Pb), bool)
-        candidates = np.nonzero(ok)[0]
-        if len(candidates) == 0:
-            raise ValueError("No body vertex is eligible for the garment transfer")
-        return candidates
-
-    def nearest_of(candidates, points) -> np.ndarray:
-        return candidates[cKDTree(Pb[candidates]).query(points)[1]]
-    nearest = nearest_of(eligible(_ARM_TOKENS), Q)
-    if split_y is not None:
-        upper = Q[:, 1] >= split_y
-        if upper.any():
-            nearest[upper] = nearest_of(eligible(_LOWER_ARM_TOKENS), Q[upper])
-
-    used, li = np.unique(nearest, return_inverse=True)
-    # neighbourhoods over UNIQUE body positions: UV-seam and pole duplicates would make one degenerate
-    _, distinct = np.unique(np.round(Pb, 6), axis=0, return_index=True)
-    kk = min(k, len(distinct))
-    _, nb = cKDTree(Pb[distinct]).query(Pb[used], k=kk)
-    nb = distinct[nb.reshape(len(used), kk)]
-    A, B = Pb[nb], Pr[corr[nb]]
-    Am, Bm = A.mean(1, keepdims=True), B.mean(1, keepdims=True)
-    A0, B0 = A - Am, B - Bm
-    U_, S_, Vt = np.linalg.svd(np.einsum("nki,nkj->nij", A0, B0))
-    D = np.sign(np.linalg.det(np.einsum("nij,njk->nik", Vt.transpose(0, 2, 1), U_.transpose(0, 2, 1))))
-    D[D == 0] = 1.0
-    Dm = np.zeros((len(used), 3, 3))
-    Dm[:, 0, 0] = 1
-    Dm[:, 1, 1] = 1
-    Dm[:, 2, 2] = D
-    Rm = np.einsum("nij,njk,nkl->nil", Vt.transpose(0, 2, 1), Dm, U_.transpose(0, 2, 1))
-    sc = (S_ * np.stack([np.ones_like(D), np.ones_like(D), D], 1)).sum(1) / np.maximum((A0 ** 2).sum((1, 2)), 1e-30)
-    res = np.sqrt(((sc[:, None, None] * np.einsum("nij,nkj->nki", Rm, A0) - B0) ** 2).sum(2).mean(1))
-    # a flat-line (rank < 2) neighbourhood has no defined rotation
-    good = (res < res_max_m) & (S_[:, 1] > 1e-9 * np.maximum(S_[:, 0], 1e-30)) & (S_[:, 0] > 0)
-    if not good.any():
-        raise ValueError("No body neighbourhood maps onto the rigged body (all Kabsch residuals too large)")
-    X = Bm[li, 0] + sc[li, None] * np.einsum("nij,nj->ni", Rm[li], Q - Am[li, 0])
-    g = good[li]
-    if (~g).any():
-        gi = np.nonzero(g)[0]
-        _, kn = cKDTree(Q[gi]).query(Q[~g])
-        src = li[gi[kn]]
-        X[~g] = Bm[src, 0] + sc[src, None] * np.einsum("nij,nj->ni", Rm[src], Q[~g] - Am[src, 0])
-
-    # the smooth reference: one similarity over the body region the garment rides on (the good neighbourhoods)
-    region = np.zeros(len(Pb), bool)
-    region[nb[good].ravel()] = True
-    s, R, a, b = region_similarity(body_unrigged, body_rigged, corr, region)
-    Xg = b + s * (Q - a) @ R.T
-    X = Xg + _smooth(X - Xg, adjacency, DELTA_SMOOTH_PASSES)
-
-    lo, hi = X.min(0) - margin_m, X.max(0) + margin_m
-    sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
-    if exact_near_m is not None:
-        sdf = ExactNearSdf(sdf, Pr, body_rigged.faces, exact_near_m)
-    Xd = np.zeros_like(X)
-    for it in range(RIGGED_ITERATIONS):
-        Y = X + Xd
-        Xd = Xd + np.clip(clear_m - sdf.sample(Y), 0, None)[:, None] * _unit(sdf.grad(Y))
-        if it < RIGGED_SMOOTH_UNTIL:
-            Xd = _smooth(Xd, adjacency, SMOOTH_PASSES)
-    X = X + Xd
-    d = sdf.sample(X)
-    report = {
-        "scale_k": float(np.median(sc)),
-        "global_scale": s,
-        "uv_dist_p99": float(np.percentile(uv_dist, 99)),
-        "kabsch_res_median_m": float(np.median(res)),
-        "neighbourhoods": int(len(used)),
-        "bad_neighbourhoods": int((~good).sum()),
-        "borrowing": int((~g).sum()),
-        "rigged_push_max_m": float(np.linalg.norm(Xd, axis=1).max()) if len(Xd) else 0.0,
-        "rigged_clearance_p1_m": float(np.percentile(d, 1)),
-        "rigged_inside_share": float((d < 0).mean()),
-    }
-    return X, report
 
 
 # --- skinned transfer (clothing) ------------------------------------------------------------------------------------------
@@ -1707,126 +1470,6 @@ def skirt_leg_weights(X, W, *, legs, hips: int, crotch: float, smooth_m: float =
 
 # --- metrics + gate -----------------------------------------------------------------------------------------------------
 
-def _head_centre_x(body_rigged: BodyMesh) -> float:
-    head = dense_weights(body_rigged)[:, joint_index(body_rigged, "head")] > 0.5
-    return float(np.median(body_rigged.positions[head, 0]))
-
-
-#: A 1 cm row of the bib box whose garment leaves at least this much of the throat free around the head's centre line
-#: holds strands framing the neck, not a bib (Lirien 2026-11-11: two front strands at 2.7..6 cm either side of the
-#: centre, 188 cm² in the box, the throat free 6.2..10.7 cm wide in every row).
-BIB_FREE_THROAT_M = 0.03
-
-
-def bib_area_cm2(X, Fw, body_rigged: BodyMesh) -> float:
-    """Garment area in front of the neck below the chin (spike ``hair_metrics``): triangles whose centroid is within
-    16 cm below the chin, within 6 cm of the head's centre line and in front of (or less than 1 cm behind) the neck's
-    front surface of its 1 cm height bin. Bodies face +z.
-
-    A bib bridges the throat: per 1 cm height bin, the box's triangles count only when they leave less than
-    ``BIB_FREE_THROAT_M`` free around the centre line — the free interval runs from the nearest vertex x of the
-    triangles left of the line to that of the ones right of it (the box edge, 6 cm, on a side without any), and a
-    triangle spanning the line leaves none. Strands hanging in front of the shoulders either side of the neck are
-    hair, not a bib. Never more than the box area."""
-    X = np.asarray(X, np.float64)
-    Fw = np.asarray(Fw, np.int64).reshape(-1, 3)
-    if len(Fw) == 0:
-        return 0.0
-    chin, xc = chin_height(body_rigged), _head_centre_x(body_rigged)
-    Pr = body_rigged.positions
-    nb = Pr[(np.abs(Pr[:, 0] - xc) < 0.04) & (Pr[:, 1] > chin - 0.17) & (Pr[:, 1] < chin + 0.01)]
-    bins = np.round(nb[:, 1] / 0.01).astype(int)
-    front = {k: nb[bins == k, 2].max() for k in np.unique(bins)}
-    C = X[Fw].mean(1)
-    rows = np.round(C[:, 1] / 0.01).astype(int)
-    fz = np.array([front.get(k, np.inf) for k in rows])
-    box = (C[:, 1] < chin) & (C[:, 1] > chin - 0.16) & (np.abs(C[:, 0] - xc) < 0.06) & (C[:, 2] > fz - 0.01)
-    lo, hi = X[Fw][:, :, 0].min(1) - xc, X[Fw][:, :, 0].max(1) - xc
-    bib = np.zeros(len(Fw), bool)
-    for r in np.unique(rows[box]):
-        s = box & (rows == r)
-        left, right = hi[s][hi[s] < 0], lo[s][lo[s] > 0]
-        free = ((right.min() if len(right) else 0.06) - (left.max() if len(left) else -0.06)
-                if not ((lo[s] <= 0) & (hi[s] >= 0)).any() else 0.0)
-        if free < BIB_FREE_THROAT_M:
-            bib |= s
-    return float(triangle_areas(X, Fw)[bib].sum() * 1e4)
-
-
-def poke_share(Q0_pre, Q_post, *, tol_m: float = POKE_TOL_M) -> float:
-    """Inner-layer poke-through on the crown (spike ``poke.py``), positions in metres.
-
-    Directions from the skull centre (crown top - 0.102 m, x/z medians of the top 0.034 m before the push), 3-degree
-    bins over the directions above the ear line (unit y > 0.2). Per bin with at least 3 vertices: if the vertex
-    outermost AFTER the push was more than ``tol_m`` inside the outermost one BEFORE it, an inner layer came
-    through.
-    """
-    Q0, Q = np.asarray(Q0_pre, np.float64), np.asarray(Q_post, np.float64)
-    top = Q0[:, 1].max()
-    crown = Q0[:, 1] > top - 0.034
-    c = np.array([np.median(Q0[crown, 0]), top - 0.102, np.median(Q0[crown, 2])])
-    v0, v1 = Q0 - c, Q - c
-    r0, r1 = np.linalg.norm(v0, axis=1), np.linalg.norm(v1, axis=1)
-    u = v1 / np.maximum(r1, 1e-12)[:, None]
-    up = u[:, 1] > 0.2
-    theta = np.degrees(np.arctan2(u[:, 0], u[:, 2]))
-    elev = np.degrees(np.arcsin(np.clip(u[:, 1], -1, 1)))
-    key = (np.round(theta / 3).astype(np.int64) + 1000) * 10000 + np.round(elev / 3).astype(np.int64) + 100
-    idx = np.nonzero(up)[0]
-    if len(idx) == 0:
-        return 0.0
-    order = idx[np.argsort(key[idx], kind="stable")]
-    keys = key[order]
-    starts = np.flatnonzero(np.r_[True, keys[1:] != keys[:-1]])
-    ends = np.r_[starts[1:], len(order)]
-    bad = total = 0
-    for s, e in zip(starts, ends):
-        if e - s < 3:
-            continue
-        m = order[s:e]
-        total += 1
-        if r0[m[r1[m].argmax()]] < r0[m].max() - tol_m:
-            bad += 1
-    return bad / max(total, 1)
-
-
-def scalp_uncovered_share(X, Fw, body_rigged: BodyMesh, *, gap_m: float = 0.02, top_m: float = 0.05) -> float:
-    """Share of scalp vertices (Head-weighted, within ``top_m`` of the head top) with no garment surface within
-    ``gap_m`` (garment vertices + 6 seeded random samples per triangle)."""
-    from scipy.spatial import cKDTree
-    X = np.asarray(X, np.float64)
-    Fw = np.asarray(Fw, np.int64).reshape(-1, 3)
-    head = dense_weights(body_rigged)[:, joint_index(body_rigged, "head")] > 0.5
-    H = body_rigged.positions[head]
-    scalp = H[H[:, 1] > H[:, 1].max() - top_m]
-    pts = X
-    if len(Fw):
-        w = np.random.default_rng(0).dirichlet((1, 1, 1), size=(len(Fw), 6))
-        pts = np.concatenate([np.einsum("fkj,fjd->fkd", w, X[Fw]).reshape(-1, 3), X])
-    dist, _ = cKDTree(pts).query(scalp)
-    return float((dist > gap_m).mean())
-
-
-def metrics(X, Fw, Q0_pre, Q_post, body_rigged: BodyMesh) -> Dict[str, Any]:
-    """Mesh gate numbers of a fitted garment (R7). ``X``: welded rigged positions (m); ``Q0_pre``/``Q_post``: the
-    welded unrigged positions before/after the push-out, scaled to metres by ``k``."""
-    X = np.asarray(X, np.float64)
-    Fw = np.asarray(Fw, np.int64).reshape(-1, 3)
-    Q0, Q = np.asarray(Q0_pre, np.float64), np.asarray(Q_post, np.float64)
-    push = np.linalg.norm(Q - Q0, axis=1)
-    _, share = components(X, Fw)
-    return {
-        "bib_cm2": round(bib_area_cm2(X, Fw, body_rigged), 2),
-        "poke_share": round(poke_share(Q0, Q), 4),
-        "scalp_uncovered_share": round(scalp_uncovered_share(X, Fw, body_rigged), 4),
-        "max_push_m": round(float(push.max()) if len(push) else 0.0, 4),
-        "moved_share": round(float((push > MOVED_EPS_M).mean()) if len(push) else 0.0, 4),
-        "largest_component_share": round(float(share.max()) if len(share) else 0.0, 4),
-        "drop_below_chin_m": round(chin_height(body_rigged) - float(X[:, 1].min()), 4),
-        "tris": int(len(Fw)),
-    }
-
-
 def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any]) -> Dict[str, Any]:
     """Mesh gate numbers of a fitted clothing piece (``CLOTHING_GATES``), positions as in ``metrics``."""
     X = np.asarray(X, np.float64)
@@ -1844,11 +1487,11 @@ def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any]) -> 
     }
 
 
-def gate(m: Dict[str, Any], gates: Optional[Dict[str, Tuple[str, float, str]]] = None) -> Tuple[bool, List[str]]:
-    """``(ok, reasons)`` against ``gates`` (default: the R7 limits ``GATES``); a missing or non-finite number
+def gate(m: Dict[str, Any], gates: Dict[str, Tuple[str, float, str]]) -> Tuple[bool, List[str]]:
+    """``(ok, reasons)`` against ``gates`` (``{key: (kind, limit, label)}``); a missing or non-finite number
     refuses."""
     reasons = []
-    for key, (kind, limit, label) in (GATES if gates is None else gates).items():
+    for key, (kind, limit, label) in gates.items():
         value = m.get(key)
         if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
             reasons.append(f"{key}: missing ({label})")
@@ -1935,89 +1578,6 @@ def _prepare(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: byt
     new_of_welded = np.full(len(Pw), -1, np.int64)
     new_of_welded[keep] = np.arange(len(keep))
     return (Pd, Fd, Ud, image, mime, material), (body_u, body_r), (Pw, Fw0, inv), (Pk, Fk, new_of_welded)
-
-
-#: The placed hair fit (subtract method) measures the clearance exactly below this distance (``ExactNearSdf``).
-PLACED_EXACT_M = 0.03
-
-
-def hair_gates(length_class: Optional[str] = None, *, shell: bool = False) -> Dict[str, Tuple[str, float, str]]:
-    """The fit gates of hair of ``length_class`` (``garment_hair.LENGTH_CLASSES``): ``GATES`` without
-    ``moved_share`` for short hair (``garment_hair.SHORT_LENGTH_CLASSES``) and for a scalp ``shell`` — a
-    scalp-hugging layer is pushed almost everywhere by design (hair spike A); ``GATES`` otherwise."""
-    from app.core.garment_hair import SHORT_LENGTH_CLASSES
-    if shell or (length_class or "") in SHORT_LENGTH_CLASSES:
-        return {key: value for key, value in GATES.items() if key != "moved_share"}
-    return dict(GATES)
-
-
-def fit_hair(prepared_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes,
-             bald_front_mask=None, ghost_front_mask=None, *, placed: bool = False,
-             clearance_m: float = HAIR_CLEAR_M, spread_m: float = SPREAD_M,
-             gates: Optional[Dict[str, Tuple[str, float, str]]] = None) -> FitResult:
-    """Fit a prepared (decimated) hair mesh onto the rigged base body.
-
-    ``bald_front_mask`` is the full-frame body mask of the bald front view the unrigged base was generated from,
-    ``ghost_front_mask`` the full-frame hair mask of the hair-only front view (same framing, R6). The R9 constants
-    are converted to unrigged units by ``k`` from a first global similarity pass over the head (Head weight > 0.5).
-
-    ``placed`` (the subtract method, ``garment_cut``): the prepared mesh already lies in the unrigged base's
-    frame — no ``place_by_framing`` / ``align_depth``, the masks are not needed. ``clearance_m`` / ``spread_m``
-    are the push-out's AND the rigged clearance pass's clearance and spread (metres; defaults ``HAIR_CLEAR_M`` /
-    ``SPREAD_M``), ``gates`` the limits
-    the metrics are gated on (default ``GATES``; ``hair_gates`` per length class).
-    """
-    if not placed:
-        bald, ghost = _mask(bald_front_mask), _mask(ghost_front_mask)
-        if bald.shape != ghost.shape:
-            raise ValueError(f"The masks must share one image size (same framing): {bald.shape} vs {ghost.shape}")
-    (Pd, Fd, Ud, image, mime, material), (body_u, body_r), (Pw, Fw0, inv), (Pk, Fk, new_of_welded) = \
-        _prepare(prepared_glb, unrigged_base_glb, rigged_base_glb)
-
-    corr, _ = uv_correspondence(body_u, body_r)
-    Wb = dense_weights(body_r)[corr]
-    head = Wb[:, joint_index(body_r, "head")] > 0.5
-    # k over the head, the hair's carrier: the rigid part of the body between an A-pose source and a T-pose rig
-    k, _, _, _ = region_similarity(body_u, body_r, corr, head)
-    if not (k > 0 and math.isfinite(k)):
-        raise ValueError("Could not measure the unrigged -> rigged scale")
-
-    if placed:
-        Q = np.asarray(Pk, np.float64)
-    else:
-        Q = place_by_framing(Pk, body_u.positions, bald, ghost)
-        head_P = body_u.positions[head]
-        Q = align_depth(Q, head_P, probe_u=PROBE_M / k, band_u=PROBE_BAND_M / k)
-    margin = SDF_MARGIN_M / k
-    sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k, bounds=(Q.min(0) - margin, Q.max(0) + margin))
-    if placed:
-        sdf = ExactNearSdf(sdf, body_u.positions, body_u.faces, PLACED_EXACT_M / k)
-    Qp, disp = push_out(Q, Fk, sdf, clear=clearance_m / k, spread=spread_m / k, spread_depth=SPREAD_DEPTH_M / k)
-    # the rigged clearance pass keeps the fit's own clearance — the default CLEAR_M (11.9 mm) lifted a 1 mm shell to
-    # 12 mm off the scalp (Kai, p50 11.9 mm) and curled its rim where both sheets meet; the edit chain's hair at 6 mm
-    # went back to 15 mm through it (Kai 2026-11-10)
-    X, transfer_report = (transfer(Qp, body_u, body_r, faces=Fk, clear_m=clearance_m, exact_near_m=PLACED_EXACT_M)
-                          if placed else transfer(Qp, body_u, body_r, faces=Fk, clear_m=clearance_m))
-    names, J, W = hair_weights(X, body_r)
-    m = metrics(X, Fk, Q * k, Qp * k, body_r)
-    ok, reasons = gate(m, gates)
-
-    garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material)
-    report = {
-        "k": float(k),
-        "placed": bool(placed), "clearance_m": float(clearance_m), "spread_m": float(spread_m),
-        "vertices": {"prepared": int(len(Pd)), "welded": int(len(Pw)), "kept": int(len(Pk)),
-                     "out": int(len(garment.positions))},
-        "dropped_components_faces": int(len(Fw0) - len(Fk)),
-        "push": {"moved": int((np.linalg.norm(disp, axis=1) > MOVED_EPS_M / k).sum()),
-                 "max_m": float(np.linalg.norm(disp, axis=1).max() * k) if len(disp) else 0.0},
-        "transfer": transfer_report,
-        "chin_y_m": chin_height(body_r),
-        "ear_line_y_m": ear_line_height(body_r),
-        "shoulder_top_y_m": shoulder_top_height(body_r),
-        "share_below_ear": float((W[:, 0] < 1).mean()) if len(W) else 0.0,
-    }
-    return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
 
 
 def _depth_bands(Q, body_P, *, height_u: float, band, half_x: float

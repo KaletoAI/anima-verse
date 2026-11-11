@@ -54,7 +54,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     0.28235·255 = 72.0 -> 48). Image route:
     prep -> the job's prep.png bytes "prep.png-call1", input -> the profile
     picture's bytes, "bogus" -> 400, a traversal name -> 400/404 without the
-    planted secret. others [] (no edit-chain or subtract fit).
+    planted secret. others [] (the only other method, "body", has no fit).
 [6] Colour "#FF8000" -> 200 {target "#ff8000", source "override"}, profile
     "#ff8000". GET: fsig F2 != F1, hairdeck.hsig unchanged, garment.fit
     "missing", stale_reasons ["colour_changed"], served_fsig still F1.
@@ -64,17 +64,18 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     ΔE 20.0 -> 0.0}, stale_reasons [], served_fsig F2. Colour "" ->
     {target None, source "profile"} (Demo's hair is "blonde"); fsig = F1
     again, fit accepted (nothing to run: counts stay (1, 2)).
-[7] Method "edit_chain" (no edit-chain fit exists): GET garment.method
-    "edit_chain", the five edit-chain steps, served_fsig None, preview_url
-    None (the tab says "No hair from this method yet"); others = ONE entry
-    (subtract has no fit): method "hairdeck", on_current_base True, preview_url ends in
-    "&method=hairdeck" and names the F1 fit (what HairDeck would serve with
-    colour "", not the newer F2); the model route ?method=hairdeck returns
-    the F1 bytes, the plain model route and ?method=edit_chain are 404,
-    ?method=bogus is 400. Counts stay (1, 2): the switch generated nothing.
-    Back to "hairdeck" (the Hair tab's "Use this method" button sends the same
-    POST /hair/method): served_fsig F1, others [], counts still (1, 2) — the
-    kept fit is served with 0 jobs.
+[7] Method "body" (the hair is in the body mesh; the edit chain this step
+    switched to before is gone, hair-from-body spec 2026-11-11 Task 2):
+    200 {body, character}, one assembly schedule; GET hair_in_body True,
+    garment / hairdeck None and others [] although the item is still owned
+    (item_id "hair_demo"); the plain model route is 404 (method body serves
+    no fit), ?method=hairdeck still returns the F1 bytes (what HairDeck
+    would serve with colour "", not the newer F2), the removed
+    ?method=edit_chain and ?method=bogus are 400. "edit_chain" and
+    "subtract" as POST /hair/method -> 400, the profile keeps "body".
+    Counts stay (1, 2): the switch generated nothing. Back to "hairdeck":
+    served_fsig F1, others [], counts still (1, 2) — the kept fit is served
+    with 0 jobs.
 [8] Fix round 1 — a forced regenerate gives a NEW result: two POST run
     {step "hairdeck", force true} send seeds 43 and 44 (the next seed after
     the highest the job record has seen: 42 -> 43 -> 44) to generate_hair;
@@ -160,7 +161,6 @@ def main() -> int:
                               sync_topics, users)
         from app.core import garment_store as gs
         from app.core import garments
-        from app.core.http_files import content_version
         from app.core.keyed_lock import keyed_lock
         from app.imagegen import service
         from app.models.character import (get_character_dir, get_character_images_dir, get_character_profile,
@@ -413,29 +413,25 @@ def main() -> int:
                   (f1, "accepted", (1, 2)))
 
             # --- [7] the other method -----------------------------------------------
-            print("[7] switch to edit_chain: HairDeck becomes the other method")
+            print("[7] switch to body: the kept HairDeck fit is not served")
             SCHEDULED.clear()
-            r = client.post("/characters/Demo/hair/method", json={"method": "edit_chain"})
-            check("edit_chain", (r.status_code, r.json(), len(SCHEDULED)),
-                  (200, {"method": "edit_chain", "method_source": "character"}, 1))
+            r = client.post("/characters/Demo/hair/method", json={"method": "body"})
+            check("body", (r.status_code, r.json(), len(SCHEDULED)),
+                  (200, {"method": "body", "method_source": "character"}, 1))
             h = hair()
-            g = h.get("garment") or {}
-            check("edit garment", (g.get("method"), sorted(g.get("steps") or {}), g.get("served_fsig"),
-                                   g.get("preview_url")),
-                  ("edit_chain", sorted(["haired", "ghost", "cutout", "mesh", "fit"]), None, None))
-            others = h.get("others") or []
-            check("one other method", [o.get("method") for o in others], ["hairdeck"])
-            other = others[0] if others else {}
+            check("body tab", (h.get("hair_in_body"), h.get("item_id"), h.get("garment"), h.get("hairdeck"),
+                               h.get("others")), (True, "hair_demo", None, None, []))
             f1_fit = gs.garment_path("Demo", "hair_demo", f1, "fit")
             murl = "/characters/Demo/garments/hair_demo/model"
-            check("other", (other.get("method"), other.get("on_current_base"), other.get("preview_url")),
-                  ("hairdeck", True, f"{murl}?v={content_version(f1_fit)}&method=hairdeck"))
-            r = client.get(f"{murl}?method=hairdeck")
-            check("other model = F1", (r.status_code, hashlib.sha256(r.content).hexdigest()),
-                  (200, hashlib.sha256(f1_fit.read_bytes()).hexdigest()))
             check("plain model 404", client.get(murl).status_code, 404)
-            check("edit_chain model 404", client.get(f"{murl}?method=edit_chain").status_code, 404)
-            check("bogus method 400", client.get(f"{murl}?method=bogus").status_code, 400)
+            r = client.get(f"{murl}?method=hairdeck")
+            check("hairdeck model = F1", (r.status_code, hashlib.sha256(r.content).hexdigest()),
+                  (200, hashlib.sha256(f1_fit.read_bytes()).hexdigest()))
+            for gone in ("edit_chain", "bogus"):
+                check(f"{gone} model 400", client.get(f"{murl}?method={gone}").status_code, 400)
+            for gone in ("edit_chain", "subtract"):
+                r = client.post("/characters/Demo/hair/method", json={"method": gone})
+                check(f"{gone} method 400", (r.status_code, profile().get("hair_method")), (400, "body"))
             check("switch generated nothing", counts(), (1, 2))
             r = client.post("/characters/Demo/hair/method", json={"method": "hairdeck"})
             h = hair()

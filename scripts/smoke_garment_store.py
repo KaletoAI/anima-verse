@@ -30,9 +30,11 @@ the base model is model3d/BSIG.glb with bytes b"model-1".
       (the model is not an fsig input; the fit record decides, R10);
     - the pronouns: female -> ("her", "she"), male -> ("his", "he"), anything
       else -> ("their", "they").
-[2] garment_path (F = current fsig):
-      image, step haired, view front        -> garments/images/H_F_haired_front.png
-      image, haired, back, attempt 2         -> garments/images/H_F_haired_back.try2.png
+[2] garment_path (F = current fsig; the image names use the clothing step
+    "worn" — garment_path checks the step name, not the item's kind, and hair
+    has no image step since the hair edit chain is gone):
+      image, step worn, view front          -> garments/images/H_F_worn_front.png
+      image, worn, back, attempt 2          -> garments/images/H_F_worn_back.try2.png
       raw / prepared / low                   -> garments/{raw,prepared,low}/H_F.glb
       fit                                    -> garments/H_F.glb
     "../x" as item id -> ValueError; "a/b" -> ValueError; fsig "xyz" ->
@@ -41,21 +43,22 @@ the base model is model3d/BSIG.glb with bytes b"model-1".
 [3] read_record/write_record: round trip of {"accepted": True, "n": 1}; no
     "*.tmp" left behind; read of a missing / broken file -> {}.
 [4] accepted_fit with SHA = sha256(b"model-2"), current fsig F, older fsigs
-    OLD_A = "0000000000aa" and OLD_B = "0000000000bb":
+    OLD_A = "0000000000aa" and OLD_B = "0000000000bb" (records of the
+    world's method "hairdeck" — an older fit only serves the current method):
     (a) F, OLD_A both accepted on SHA, OLD_A's GLB 100 s NEWER than F's ->
         F (current wins over newer older ones);
     (b) F's record accepted False -> OLD_A (newest accepted on SHA; OLD_B
         is accepted on SHA too but 50 s older);
     (c) base_model_sha "other" -> None; "" -> None.
-[5] checked_reference_override: garments/images/H_F_haired_front.png ->
+[5] checked_reference_override: garments/images/H_F_worn_front.png ->
     its resolved path; garments/raw/H_F.glb -> "" (not an image of the chain).
-[6] Status: start(Demo, H, "haired") -> running_step "haired", failed None;
+[6] Status: start(Demo, H, "worn") -> running_step "worn", failed None;
     end(..., error="gate", gates={"xor": 0.2}) -> running_step None, failed
-    {step haired, error gate, gates {xor: 0.2}, failed_at <iso>}; end of the
+    {step worn, error gate, gates {xor: 0.2}, failed_at <iso>}; end of the
     same step without error clears it. char_lock(Demo) is the same Lock
     object on every call and differs from char_lock("Other").
 [7] GC (outfit_cache_gc). Groups under garments/ (key "garment:<item>_<fsig>"):
-      CUR  = H_F       : images haired front .png/.json + .try1.png,
+      CUR  = H_F       : images worn front .png/.json + .try1.png,
                          raw .glb, prepared .glb (no fit yet: a run in flight)
       FALL = H_OLD_A   : fit .glb/.json accepted on SHA        -> fallback, kept
       OLDB = H_OLD_B   : images ghost back .png/.json, fit .glb/.json
@@ -126,10 +129,9 @@ def main() -> int:
         os.environ["ANIMATION_RIG_FILE"] = str(root / "reference.fbx")
         from app.core import paths
         paths.init(root / "world")
-        # The hair method this smoke was written for (the default before the hair-from-body spec 2026-11-11 —
-        # the new default "body" makes no hair item).
+        # A hair method with a hair item (the default "body" makes none).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "edit_chain"}}))
+                                                        "base_body": {"hair_method": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -210,10 +212,10 @@ def main() -> int:
         print("[2] garment_path")
         gdir = gs.garments_dir("Demo")
         check("garments dir", gdir, cdir / "garments")
-        check("image", gs.garment_path("Demo", hid, fsig, "image", step="haired", view="front"),
-              gdir / "images" / f"{hid}_{fsig}_haired_front.png")
-        check("attempt", gs.garment_path("Demo", hid, fsig, "image", step="haired", view="back", attempt=2),
-              gdir / "images" / f"{hid}_{fsig}_haired_back.try2.png")
+        check("image", gs.garment_path("Demo", hid, fsig, "image", step="worn", view="front"),
+              gdir / "images" / f"{hid}_{fsig}_worn_front.png")
+        check("attempt", gs.garment_path("Demo", hid, fsig, "image", step="worn", view="back", attempt=2),
+              gdir / "images" / f"{hid}_{fsig}_worn_back.try2.png")
         for part in ("raw", "prepared", "low"):
             check(part, gs.garment_path("Demo", hid, fsig, part), gdir / part / f"{hid}_{fsig}.glb")
         check("fit", gs.garment_path("Demo", hid, fsig, "fit"), gdir / f"{hid}_{fsig}.glb")
@@ -222,7 +224,7 @@ def main() -> int:
         raises("bad fsig", lambda: gs.garment_path("Demo", hid, "xyz", "fit"))
         raises("bad part", lambda: gs.garment_path("Demo", hid, fsig, "bogus"))
         raises("non-image step", lambda: gs.garment_path("Demo", hid, fsig, "image", step="mesh", view="front"))
-        raises("bad view", lambda: gs.garment_path("Demo", hid, fsig, "image", step="haired", view="left"))
+        raises("bad view", lambda: gs.garment_path("Demo", hid, fsig, "image", step="worn", view="left"))
 
         print("[3] records")
         rec = gdir / "probe.json"
@@ -241,7 +243,8 @@ def main() -> int:
 
         def fit(f, accepted, base_sha, offset):
             glb = touch(gs.garment_path("Demo", hid, f, "fit"))
-            gs.write_record(glb.with_suffix(".json"), {"accepted": accepted, "base_model_sha256": base_sha})
+            gs.write_record(glb.with_suffix(".json"), {"accepted": accepted, "base_model_sha256": base_sha,
+                                                       "method": "hairdeck"})
             age(glb, offset)
             return glb
 
@@ -262,7 +265,7 @@ def main() -> int:
             p.with_suffix(".json").unlink()
 
         print("[5] checked_reference_override")
-        img = touch(gs.garment_path("Demo", hid, fsig, "image", step="haired", view="front"))
+        img = touch(gs.garment_path("Demo", hid, fsig, "image", step="worn", view="front"))
         raw = touch(gs.garment_path("Demo", hid, fsig, "raw"))
         check("images accepted", model_refs.checked_reference_override("Demo", str(img)), str(img.resolve()))
         check("raw refused", model_refs.checked_reference_override("Demo", str(raw)), "")
@@ -270,18 +273,18 @@ def main() -> int:
         raw.unlink()
 
         print("[6] status")
-        gs.start("Demo", hid, "haired")
+        gs.start("Demo", hid, "worn")
         st = gs.status("Demo", hid)
-        check("running", (st["running_step"], st["failed"]), ("haired", None))
-        gs.end("Demo", hid, "haired", error="gate", gates={"xor": 0.2})
+        check("running", (st["running_step"], st["failed"]), ("worn", None))
+        gs.end("Demo", hid, "worn", error="gate", gates={"xor": 0.2})
         st = gs.status("Demo", hid)
         check("ended", st["running_step"], None)
         failed = st["failed"] or {}
         check("failed", (failed.get("step"), failed.get("error"), failed.get("gates")),
-              ("haired", "gate", {"xor": 0.2}))
+              ("worn", "gate", {"xor": 0.2}))
         check("failed_at iso", isinstance(failed.get("failed_at"), str) and "T" in failed["failed_at"], True)
-        gs.start("Demo", hid, "haired")
-        gs.end("Demo", hid, "haired")
+        gs.start("Demo", hid, "worn")
+        gs.end("Demo", hid, "worn")
         check("cleared", gs.status("Demo", hid)["failed"], None)
         lock = gs.char_lock("Demo")
         check("lock type", isinstance(lock, type(threading.Lock())), True)
@@ -293,9 +296,9 @@ def main() -> int:
         def gp(item, f, part, **kw):
             return gs.garment_path("Demo", item, f, part, **kw)
 
-        im = gp(hid, fsig, "image", step="haired", view="front")
+        im = gp(hid, fsig, "image", step="worn", view="front")
         cur_files = [touch(im), touch(im.with_suffix(".json")),
-                     touch(gp(hid, fsig, "image", step="haired", view="front", attempt=1)),
+                     touch(gp(hid, fsig, "image", step="worn", view="front", attempt=1)),
                      touch(gp(hid, fsig, "raw")), touch(gp(hid, fsig, "prepared"))]
         fall_glb = touch(gp(hid, old_a, "fit"))
         fall_rec = fall_glb.with_suffix(".json")

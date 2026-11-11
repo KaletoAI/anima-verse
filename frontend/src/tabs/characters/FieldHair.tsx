@@ -1,11 +1,24 @@
 /**
- * FieldHair — the Hair tab: the character's hair as its own mesh (plan
- * docs/superpowers/plans/2026-11-09-base-body-phase4-hair.md). The hair
- * item is a garment worn in the `hair` mesh slot; its chain renders the
- * base views with hair (haired), the hair alone (hair-only / ghost), squares
- * them into cut-outs, builds and decimates a mesh, and fits it onto the
- * rigged base model. Every step is gated; the tab shows each step's numbers
- * against the server's limits so a refusal is visible, never silent.
+ * FieldHair — the Hair tab: how the character's hair is made.
+ *
+ * Two hair methods (spec docs/superpowers/specs/2026-11-11-hair-from-body-design.md):
+ * - From the body mesh (`body`, the world default): the base views are rendered
+ *   with the hair, so the hair is part of the body mesh. The tab then shows only
+ *   the method, the hair description, "Hair comes from the body mesh" and the
+ *   base body's prompt freshness — no steps, no run, no preview.
+ * - HairDeck (plan docs/superpowers/plans/2026-11-09-hairdeck-hair.md): the
+ *   profile picture -> hair cards in one Hub call -> fit onto the rigged base
+ *   model. The hair item is a garment worn in the `hair` mesh slot. Every step
+ *   is gated; the tab shows the fit's numbers against the server's limits so a
+ *   refusal is visible, never silent. The HairDeck colour (POST
+ *   /characters/{n}/hair/colour) and the placement (POST
+ *   /characters/{n}/hair/placement {forward_m, tilt_deg}, null = automatic)
+ *   only re-fit from the stored HairDeck result.
+ *
+ * The method selector at the top stores the character's choice (POST
+ * /characters/{n}/hair/method, "" = world default); the kept result of the
+ * other method is collapsed below with "Use this method". A switch generates
+ * nothing.
  *
  * Backend (app/routes/characters.py, app/core/garments.py):
  * GET /characters/{n}/hair (polled while a step runs — useGarment),
@@ -19,32 +32,9 @@
  * Changing it does not start GPU work (R14): the tab shows "Hair description
  * changed" and the old hair stays served until Regenerate.
  *
- * Layout: three columns — method, description and state; the selected
- * method's steps (small tiles, a click enlarges); the fitted preview with
- * what re-fits it (HairDeck colour and placement), "Run all" and the kept
- * results of the other methods.
- *
- * Two hair methods (plan docs/superpowers/plans/2026-11-09-hairdeck-hair.md,
- * Task 5): Hair views → mesh (the edit chain above), or HairDeck (the profile picture -> hair
- * cards in one Hub call -> fit). The method selector at the top stores the
- * character's choice (POST /characters/{n}/hair/method, "" = world default);
- * the selected method's section is shown, the kept result of every other
- * method is collapsed below with "Use this method". A switch generates nothing. The HairDeck
- * colour (POST /characters/{n}/hair/colour) and the placement (POST
- * /characters/{n}/hair/placement {forward_m, tilt_deg}, null = automatic)
- * only re-fit from the stored HairDeck result.
- *
- * The third method, Subtract (plan docs/superpowers/plans/2026-11-10-hair-subtract-method.md,
- * Task 2 — HairSubtract.tsx): the haired views -> one mesh of the haired
- * character -> the hair cut off it on the CPU -> fit. Its shape and shell
- * thickness (POST /characters/{n}/hair/subtract {shape, shell_mm}) sit beside
- * the preview and re-cut + re-fit from the stored source mesh.
- *
- * The method From the body mesh (`body`, the world default — spec
- * docs/superpowers/specs/2026-11-11-hair-from-body-design.md): the base views
- * are rendered with the hair, so the hair is part of the body mesh. The tab
- * then shows only the method, the hair description, "Hair comes from the body
- * mesh" and the base body's prompt freshness — no steps, no run, no preview.
+ * Layout: three columns — method, description and state; the HairDeck steps
+ * (small tiles, a click enlarges); the fitted preview with what re-fits it
+ * (colour and placement), "Run all" and the kept result of the other method.
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -52,14 +42,11 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import {
-  FitBlock, GarmentFailure, GarmentSteps, GateChips, RecordNumbers, RefitNotice, RunBadge, RunButton, RunStatusLine,
-  StepState,
+  FitBlock, GarmentFailure, GateChips, RecordNumbers, RunBadge, RunButton, RunStatusLine, StepState,
 } from './GarmentSteps'
-import type { ImageStepSpec } from './GarmentSteps'
 import { EMPTY_TILE, ERROR_STYLE, ROW, WARN_STYLE, flatFit, num } from './garmentStyle'
 import { FreshnessBadge } from './FreshnessBadge'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
-import { SubtractSettings, SubtractSteps } from './HairSubtract'
 import { Model3DViewer } from './Model3DViewer'
 import { RefImage } from './RefImage'
 import { garmentRunning, runMark, runSlot, useGarment, useGarmentRun } from './useGarment'
@@ -73,38 +60,26 @@ const HAIRDECK_ORDER = ['hairdeck', 'fit'] as const
 
 const STEP_LABELS: Record<string, string> = {
   queued: 'Queued',
-  haired: 'Haired views',
-  ghost: 'Hair-only views',
-  cutout: 'Cut-outs',
-  mesh: 'Mesh',
   hairdeck: 'HairDeck',
-  mesh_source: 'Source mesh',
-  cut: 'Cut',
   fit: 'Fit',
 }
 
 const METHOD_LABELS: Record<HairMethod, string> = {
   body: 'From the body mesh',
-  edit_chain: 'Hair views → mesh',
   hairdeck: 'HairDeck',
-  subtract: 'Subtract',
 }
 
 /** Every method in the selector's order. */
-const METHODS: HairMethod[] = ['body', 'edit_chain', 'hairdeck', 'subtract']
+const METHODS: HairMethod[] = ['body', 'hairdeck']
 
 const METHOD_HINTS: Record<HairMethod, string> = {
   body: 'The base body is rendered with the hair, so the hair is part of the body mesh — no hair mesh, no hair job.',
-  edit_chain: 'Hair views → mesh renders the hair views and builds one mesh from them.',
   hairdeck: 'HairDeck makes hair cards from the profile picture in one step.',
-  subtract: 'Subtract meshes the haired character once and cuts the hair off it against the bald base body.',
 }
 
 const CREATE_HINTS: Record<HairMethod, string> = {
   body: 'Hair comes from the body mesh',
-  edit_chain: 'Renders the hair views, builds the mesh and fits it onto the base model.',
   hairdeck: 'Makes hair cards from the profile picture and fits them onto the base model.',
-  subtract: 'Renders the haired views, meshes the haired character and cuts the hair off it.',
 }
 
 const HAIRDECK_STATUS: Record<string, string> = {
@@ -127,37 +102,7 @@ const STALE_LABELS: Record<string, string> = {
   hairdeck_changed: 'Profile picture or HairDeck settings changed',
   colour_changed: 'Hair colour changed',
   placement_changed: 'Hair placement changed',
-  shape_changed: 'Hair shape changed',
-  shell_changed: 'Shell thickness changed',
 }
-
-const HAIRED_CHIPS: ChipSpec[] = [
-  { key: 'body_xor', label: 'Body change', scale: 100, unit: '%', digits: 2 },
-  { key: 'body_dRGB', label: 'Colour change', scale: 1, unit: '', digits: 2 },
-  { key: 'chest_dRGB', label: 'Chest', scale: 1, unit: '', digits: 2 },
-]
-
-const GHOST_CHIPS: ChipSpec[] = [
-  { key: 'top_dy', label: 'Top offset', scale: 1, unit: 'px', digits: 0 },
-  { key: 'centre_dx', label: 'Centre offset', scale: 1, unit: 'px', digits: 1 },
-  { key: 'w_ratio', label: 'Width ratio', scale: 1, unit: '', digits: 3 },
-  { key: 'body_left', label: 'Body left', scale: 100, unit: '%', digits: 2 },
-  // The correction applied before the gate (garment_images._register); the offsets
-  // above are its residual. Fractions of the figure height / a factor.
-  { key: 'reg_shift', label: 'Registration shift', scale: 100, unit: '%', digits: 2 },
-  { key: 'reg_scale', label: 'Registration scale', scale: 1, unit: '', digits: 3 },
-]
-
-const FIT_CHIPS: ChipSpec[] = [
-  { key: 'bib_cm2', label: 'Bib', scale: 1, unit: 'cm²', digits: 1 },
-  { key: 'poke_share', label: 'Crown poke', scale: 100, unit: '%', digits: 2 },
-  { key: 'scalp_uncovered_share', label: 'Scalp uncovered', scale: 100, unit: '%', digits: 1 },
-  { key: 'max_push_m', label: 'Max push', scale: 100, unit: 'cm', digits: 1 },
-  { key: 'moved_share', label: 'Moved', scale: 100, unit: '%', digits: 1 },
-  { key: 'largest_component_share', label: 'Largest part', scale: 100, unit: '%', digits: 1 },
-  // Reported, not gated (R7): its plausible range depends on the hair length.
-  { key: 'drop_below_chin_m', label: 'Drop below chin', scale: 100, unit: 'cm', digits: 1 },
-]
 
 const HAIRDECK_FIT_CHIPS: ChipSpec[] = [
   { key: 'max_push_m', label: 'Max push', scale: 100, unit: 'cm', digits: 1 },
@@ -168,13 +113,6 @@ const HAIRDECK_FIT_CHIPS: ChipSpec[] = [
   { key: 'cap_tris', label: 'Scalp cap triangles', scale: 1, unit: '', digits: 0 },
   { key: 'forward_m', label: 'Forward shift', scale: 1000, unit: 'mm', digits: 1 },
   { key: 'tilt_deg', label: 'Forward tilt', scale: 1, unit: '°', digits: 1 },
-]
-
-/** The hair chain's image steps in order, with the chips of their gates. */
-const HAIR_IMAGE_STEPS: ImageStepSpec[] = [
-  { step: 'haired', chips: HAIRED_CHIPS },
-  { step: 'ghost', chips: GHOST_CHIPS },
-  { step: 'cutout' },
 ]
 
 function Swatch({ hex }: { hex: string }) {
@@ -391,7 +329,6 @@ function OtherMethod({ other, limits, busy, onUse }: {
   useClockSettings()
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const hairdeck = other.method === 'hairdeck'
   const kept = other.created_at
     ? t('kept result from {date} — switching back generates nothing')
       .replace('{date}', formatDateTime(other.created_at, clockSettings()))
@@ -414,11 +351,7 @@ function OtherMethod({ other, limits, busy, onUse }: {
           <span className="ga-hint">{other.colour.target}</span>
         </div>
       ) : null}
-      <GateChips
-        specs={hairdeck ? HAIRDECK_FIT_CHIPS : FIT_CHIPS}
-        record={other.metrics}
-        limits={hairdeck ? limits.hairdeck_fit : limits.fit}
-      />
+      <GateChips specs={HAIRDECK_FIT_CHIPS} record={other.metrics} limits={limits.hairdeck_fit} />
       {open && other.preview_url ? (
         <Model3DViewer key={other.preview_url} url={other.preview_url} format="glb" height={300}
           freshness={other.preview_freshness} />
@@ -506,18 +439,6 @@ export function FieldHair({ character, onEditAppearance }: {
     [call, enc, info?.method, itemId],
   )
 
-  // Store shape + shell thickness, then re-cut + re-fit when the source mesh is there (CPU only — a run
-  // without it would start the source mesh job, so it waits for the next run).
-  const applySubtract = useCallback(
-    (shape: '' | 'cut' | 'shell', shellMm: number | null) => call(
-      `/characters/${enc}/hair/subtract`, { shape, shell_mm: shellMm }, () => (
-        itemId && info?.method === 'subtract' && info.garment?.steps.mesh_source?.status === 'accepted'
-          ? apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, {})
-          : undefined
-      )),
-    [call, enc, info?.garment?.steps.mesh_source?.status, info?.method, itemId],
-  )
-
   if (!info) return <div className="ga-hint">{t('Loading…')}</div>
   if (!info.humanoid) {
     return <div className="ga-hint">{t('Hair as its own mesh is for humanoid characters only.')}</div>
@@ -542,30 +463,8 @@ export function FieldHair({ character, onEditAppearance }: {
   const fit = garment?.steps.fit
   const hd = info.hairdeck
   const isHairDeck = info.method === 'hairdeck'
-  const isSubtract = info.method === 'subtract'
   const noHair = !!garment && !garment.served_fsig && !garment.running_step && fit?.status !== 'accepted'
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
-  // "Fetch finished job…" on the mesh step (views → mesh: mesh, subtract: mesh_source).
-  const meshFetchUrl = itemId ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}/mesh/fetch` : null
-  const onMeshFetched = () => startPoll(0)
-
-  const editChainSection = (
-    <GarmentSteps
-      garment={garment}
-      imageSteps={HAIR_IMAGE_STEPS}
-      stepLabels={STEP_LABELS}
-      limits={limits}
-      fitChips={FIT_CHIPS}
-      busy={busy}
-      onRun={onRun}
-      lowFailedText="Distance tier failed — the full hair is used"
-      compact
-      feedback={feedback}
-      meshFetchUrl={meshFetchUrl}
-      onMeshFetched={onMeshFetched}
-    />
-  )
-
   const hairdeckSection = hd ? (
     <>
       <div className="ga-fieldset-title">{t('HairDeck')}</div>
@@ -628,24 +527,6 @@ export function FieldHair({ character, onEditAppearance }: {
     </>
   ) : null
 
-  const subtractSection = (
-    <SubtractSteps garment={garment} limits={limits} hairedChips={HAIRED_CHIPS} fitChips={FIT_CHIPS}
-      busy={busy} onRun={onRun} feedback={feedback} meshFetchUrl={meshFetchUrl} onMeshFetched={onMeshFetched} />
-  )
-
-  // Shape and shell thickness re-cut + re-fit the hair: beside the preview.
-  const sub = info.subtract
-  const subtractLook = isSubtract && sub ? (
-    <SubtractSettings
-      key={`${sub.shape_override}|${sub.shell_mm}`}
-      settings={sub}
-      busy={busy}
-      running={garmentRunning(info)}
-      sourceReady={garment?.steps.mesh_source?.status === 'accepted'}
-      onApply={(shape, mm) => { void applySubtract(shape, mm) }}
-    />
-  ) : null
-
   // Colour and placement re-fit the hair: they sit beside the preview.
   const hairdeckLook = hd && isHairDeck ? (
     <>
@@ -689,7 +570,7 @@ export function FieldHair({ character, onEditAppearance }: {
           <option value="">{t('World default')} ({t(METHOD_LABELS[info.world_method])})</option>
           {METHODS.map((m) => <option key={m} value={m}>{t(METHOD_LABELS[m])}</option>)}
         </select>
-        <span className="ga-hint">{t(METHOD_HINTS[info.method] || METHOD_HINTS.edit_chain)}</span>
+        <span className="ga-hint">{t(METHOD_HINTS[info.method] || METHOD_HINTS.body)}</span>
         {garmentRunning(info) ? (
           <span className="ga-hint" style={WARN_STYLE}>{t('Wait for the running hair job')}</span>
         ) : null}
@@ -738,13 +619,11 @@ export function FieldHair({ character, onEditAppearance }: {
       {!info.item_id ? (
         info.description ? (
           <>
-            {/* No preview yet: the subtract shape is chosen here, before the first run. */}
-            {subtractLook}
             <div style={ROW}>
               <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={posting} onClick={() => { void create() }}>
                 {t('Create hair')}
               </button>
-              <span className="ga-hint">{t(CREATE_HINTS[info.method] || CREATE_HINTS.edit_chain)}</span>
+              <span className="ga-hint">{t(CREATE_HINTS[info.method] || CREATE_HINTS.hairdeck)}</span>
             </div>
           </>
         ) : null
@@ -774,8 +653,6 @@ export function FieldHair({ character, onEditAppearance }: {
             </div>
           ) : null}
 
-          <RefitNotice garment={garment} feedback={feedback} busy={busy} onRun={onRun} />
-
           <GarmentFailure garment={garment} stepLabels={STEP_LABELS} />
 
           {noHair ? (
@@ -792,7 +669,7 @@ export function FieldHair({ character, onEditAppearance }: {
       {info.item_id ? (
         <>
           <div className="ga-split-col">
-            {isHairDeck ? hairdeckSection : isSubtract ? subtractSection : editChainSection}
+            {isHairDeck ? hairdeckSection : null}
           </div>
           <div className="ga-split-col">
             <div className="ga-face-actions-row">
@@ -819,7 +696,6 @@ export function FieldHair({ character, onEditAppearance }: {
                 : t('No capsule set on the base model yet — the hair is shown as skinned')}
             </div>
             {hairdeckLook}
-            {subtractLook}
             <OtherMethods others={info.others} method={info.method} limits={limits} busy={busy}
               onUse={(m) => { void setMethod(m) }} />
           </div>

@@ -9,10 +9,13 @@ Usage:
 Runs against a THROWAWAY storage + instance directory with a copy of the
 repo's ``human`` package — no real world, no hub, no GPU, no Blender, no
 server process. The fixture and the stubs are the ones of
-smoke_garment_chain.py (imported from it: the hair item on the edit chain,
-head sphere + torso cylinder, 1000 px per unit, images W 1024 x H 1200 on
-grey 128, a recorder for every render, a mesh stub writing the hair cap,
-decimate_to copying its input). The one change: every base gets its views
+smoke_garment_chain.py (imported from it: the own-mesh dress on the clothing
+edit chain — written for the hair edit chain, gone since the hair-from-body
+spec 2026-11-11, Task 2 — head sphere + torso cylinder with Hips-weighted
+hips, 1000 px per unit, images W 1024 x H 1200 on grey 128, a recorder for
+every render (the drafted worn back in its own frame), a mesh stub writing
+the dress, decimate_to copying its input; the outfit-render triggers of
+wearing the dress are no-ops). The one change: every base gets its views
 moved DOWN by ``dy`` px (grey fill above), and the render stub moves its
 answer by the dy of the base it renders on, so the images of a base stay
 consistent with it (the chain's gates pass on every base).
@@ -27,7 +30,8 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
   B1 -> B2: shift 20 px = 0.02 Hb  -> within the caps: refit accepted.
   B2 -> B3: shift 60 px = 0.06 Hb  -> beyond the caps: FrameRefused.
 
-[1] Full run on B1 (F1): 4 renders, 1 mesh call; the group F1 keeps the
+[1] Full run on B1 (F1): 5 renders (worn front, the drafted worn back and its
+    fit, ghost back, ghost front), 1 mesh call; the group F1 keeps the
     base views of B1 (``ensure_current``): source_of(F1).bsig = B1,
     base_images = the sha256 of B1's two views; fit record refitted False,
     source.fsig F1.
@@ -35,23 +39,24 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     calls, 1 decimation (the low tier of the new fit; the prepared mesh is a
     copy); fit record F2 accepted on B2, refitted True, source {fsig F1,
     bsig B1, materialized_from F1}, frame.registered True with
-    registration.shift_px [20, 0], scale 1.0, shift_abs 0.02; the haired
+    registration.shift_px [20, 0], scale 1.0, shift_abs 0.02; the worn
     front of F2 is marked copied_from F1; garment_info.refit = {source_bsig
     B1, source_fsig F1, materialized_from F1, registration {shift 0.02,
-    scale 1.0}, first_step "haired"}.
+    scale 1.0}, first_step "worn"}.
 [3] GC (explicit, after [2]): the group F1 (old base, not current, not the
     newest accepted fit) is an orphan; the group F2 — which holds the copied
     source — is not, and its copies are still on disk afterwards; F1's fit
     and base copy are gone; no base copy is an "unknown" file (the image name
     pattern covers ``{item}_{fsig}_base_{view}.png``).
-[4] Manual Re-render (explicit run of "haired", force): the copies go,
-    the chain renders: 4 renders, 1 mesh call; fit record refitted False,
+[4] Manual Re-render (explicit run of "worn", force): the copies go,
+    the chain renders: 5 renders, 1 mesh call; fit record refitted False,
     source.fsig F2 (its own base copy of B2); garment_info.refit None.
 [5] B3 (dy 80): the refit from F2 is refused (0.06 Hb > 0.04) -> the same
-    run renders the chain: 4 renders, 1 mesh call, ok; fit record F3
+    run renders the chain: 5 renders, 1 mesh call, ok; fit record F3
     refitted False, source.fsig F3; no file of F3 carries copied_from.
-[6] The piece's own inputs changed (hair colour; base unchanged): no
-    source names the current inputs -> no refit: 4 renders, 1 mesh call.
+[6] The piece's own inputs changed (the dress text FRAGMENT2; base
+    unchanged): no source names the current inputs -> no refit: 5 renders,
+    1 mesh call.
 [7] Limbs (garment_fit.limb_frames, garment_source.limb_numbers / limb_gate on
     synthetic geometry). Body: per side an arm cylinder r 0.030 along +-x at
     y 1.4, z 0, rings of 24 points every 5 mm from |x| 0.100 to 0.750; weights
@@ -86,7 +91,7 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     LONG numbers) and whose fit hangs off them (limb_numbers stubbed to HANG):
     B4 (dy 60; from the [6] group on B3, dy 80: shift -20 px = 0.02 Hb, inside
     the caps) -> the limb gate refuses the refit, the same run renders the
-    chain: ok, 4 renders, 1 mesh call, the fit refitted False, no file carries
+    chain: ok, 5 renders, 1 mesh call, the fit refitted False, no file carries
     copied_from, no limbs/ file left for F4.
 [9] align_limbs (garment_fit) by hand. Source left arm = [7]'s chain (shoulder
     (0.18, 1.4, 0), elbow 0.43, wrist 0.67, tip 0.75; radii 0.03; frame u
@@ -294,10 +299,7 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        # The hair method this smoke was written for (the default before the hair-from-body spec 2026-11-11 —
-        # the new default "body" makes no hair item).
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "edit_chain"}}))
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -308,11 +310,12 @@ def main() -> int:
         discover_packages(plugins, force=True)
 
         from app.blender import refine
-        from app.core import (artefact_graph, base_body, expression_regen, garment_assembly, garment_hair,
-                              garment_source, garments, sync_topics)
+        from app.core import (artefact_graph, base_body, expression_regen, garment_assembly, garment_source,
+                              garments, model_refs, sync_topics)
         from app.core import garment_store as gs
         from app.imagegen import service
         from app.models import character as charmod
+        from app.models import inventory
         from app.models.character import (get_character_dir, get_character_images_dir, get_character_profile,
                                           save_character_profile)
 
@@ -324,15 +327,19 @@ def main() -> int:
         def recorder(character_name, *, output_stem, **kw):
             g = kw["sidecar_extra"]["garment"]
             RENDERS.append((g["step"], g["view"], g["fsig"]))
-            arr = moved(sc.HAIRED if g["step"] == "haired" else sc.GHOST, state["dy"])
+            arr = moved(sc.WORN if g["step"] == "worn" else sc.GHOST, state["dy"])
             side = kw["override_width"]
-            canvas = np.full((kw["override_height"], side, 3), 128, dtype=np.uint8)
-            dy, dx = (canvas.shape[0] - arr.shape[0]) // 2, (side - arr.shape[1]) // 2
-            canvas[dy:dy + arr.shape[0], dx:dx + arr.shape[1]] = arr
+            if g.get("stage") == "draft":
+                canvas = arr  # the drafted worn back: a fresh render in its own frame
+            else:
+                canvas = np.full((kw["override_height"], side, 3), 128, dtype=np.uint8)
+                dy, dx = (canvas.shape[0] - arr.shape[0]) // 2, (side - arr.shape[1]) // 2
+                canvas[dy:dy + arr.shape[0], dx:dx + arr.shape[1]] = arr
             out = Path(str(output_stem) + ".png")
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(sc.png(canvas))
-            out.with_suffix(".json").write_text(json.dumps({"seed": 1000 + g["attempt"], **kw["sidecar_extra"]}))
+            out.with_suffix(".json").write_text(json.dumps({"seed": 1000 + g.get("attempt", 0),
+                                                            **kw["sidecar_extra"]}))
             return out
 
         expression_regen.render_character_image = recorder
@@ -340,7 +347,7 @@ def main() -> int:
         class FakeService:
             def generate_mesh(self, **kw):
                 MESHES.append(kw)
-                Path(kw["output_path"]).write_bytes(sc.hair_glb())
+                Path(kw["output_path"]).write_bytes(sc.dress_glb())
                 return {"ok": True, "path": kw["output_path"], "backend": "FakeMesh",
                         "routing": {"occasion": kw.get("occasion")}}
 
@@ -365,6 +372,9 @@ def main() -> int:
         refine.decimate_to = decimate_to
         garment_assembly.schedule = lambda name, signature=None: True
         sync_topics.changed_at = lambda *a, **k: None
+        # Wearing the own-mesh dress asks for the outfit renders: not part of this smoke.
+        model_refs.trigger_now = lambda name, kinds=None, **kw: None
+        model_refs.schedule_outfit_render = lambda name: None
 
         # --- fixture -----------------------------------------------------------------
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -392,7 +402,7 @@ def main() -> int:
                 stem = f"tpose_{bsig}" if v == "front" else f"tpose_{v}_{bsig}"
                 (refs / f"{stem}.png").write_bytes(sc.png(moved(sc.BASE, dy)))
                 (refs / f"{stem}.json").write_text(json.dumps({"base_signature": bsig}))
-            unrigged, rigged = sc.base_bodies()
+            unrigged, rigged = sc.base_bodies(hips=True)
             (mdir / "unrigged").mkdir(parents=True, exist_ok=True)
             (mdir / "unrigged" / f"{bsig}.glb").write_bytes(unrigged)
             (mdir / f"{bsig}.glb").write_bytes(rigged)
@@ -402,7 +412,12 @@ def main() -> int:
 
         b1 = use_profile_image(1)
         check("pipeline", base_body.set_pipeline("Demo", True), True)
-        hid = garment_hair.ensure_hair_item("Demo")
+        hid = inventory.add_item(name="Dress", category="outfit_piece", owner="Demo", item_id="dress",
+                                 prompt_fragment=sc.FRAGMENT,
+                                 outfit_piece={"slots": ["top", "bottom"], "outfit_types": ["casual"],
+                                               "own_mesh": True})["id"]
+        inventory.add_to_inventory("Demo", hid)
+        check("dress worn", inventory.equip_piece("Demo", hid, source="smoke").get("status"), "ok")
         write_base(b1, 0)
 
         def counts():
@@ -424,7 +439,7 @@ def main() -> int:
         before = counts()
         res = garments.run_garment("Demo", hid)
         check("ok", (res.get("ok"), res.get("fsig")), (True, f1))
-        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
+        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
         src = garment_source.source_of("Demo", hid, f1)
         check("F1 keeps B1's views", (src.get("bsig"), src.get("base_images")), (b1, view_shas(b1)))
         rec1 = fit_record(f1)
@@ -453,13 +468,13 @@ def main() -> int:
         check("shift_px [20, 0]", [round(v) for v in reg.get("shift_px") or []], [20, 0])
         check("scale 1.0, shift_abs 0.02", (round(reg.get("scale", 0), 3), round(reg.get("shift_abs", 0), 3)),
               (1.0, 0.02))
-        copied = gs.garment_path("Demo", hid, f2, "image", step="haired", view="front")
-        check("haired front copied", gs.read_record(copied.with_suffix(".json")).get("copied_from"), f1)
+        copied = gs.garment_path("Demo", hid, f2, "image", step="worn", view="front")
+        check("worn front copied", gs.read_record(copied.with_suffix(".json")).get("copied_from"), f1)
         info = garments.garment_info("Demo", hid)
         refit = info.get("refit") or {}
         check("garment_info.refit", (refit.get("source_bsig"), refit.get("source_fsig"),
                                      refit.get("materialized_from"), refit.get("first_step")),
-              (b1, f1, f1, "haired"))
+              (b1, f1, f1, "worn"))
         check("garment_info.refit registration",
               {k: round(v, 3) for k, v in (refit.get("registration") or {}).items()}, {"shift": 0.02, "scale": 1.0})
 
@@ -479,13 +494,13 @@ def main() -> int:
         # --- [4] ---------------------------------------------------------------------
         print("[4] manual Re-render: the chain runs")
         before = counts()
-        res = garments.run_garment("Demo", hid, steps=refit.get("first_step") or "haired", force=True)
+        res = garments.run_garment("Demo", hid, steps=refit.get("first_step") or "worn", force=True)
         check("ok", res.get("ok"), True)
-        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
+        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
         rec4 = fit_record(f2)
         check("fit F2 own", (rec4.get("accepted"), rec4.get("refitted"), (rec4.get("source") or {}).get("fsig"),
                              (rec4.get("source") or {}).get("bsig")), (True, False, f2, b2))
-        check("haired front rendered", gs.read_record(copied.with_suffix(".json")).get("copied_from"), None)
+        check("worn front rendered", gs.read_record(copied.with_suffix(".json")).get("copied_from"), None)
         check("garment_info.refit None", garments.garment_info("Demo", hid).get("refit"), None)
 
         # --- [5] ---------------------------------------------------------------------
@@ -496,8 +511,8 @@ def main() -> int:
         check("fsig changed", f3 not in (f1, f2), True)
         before = counts()
         res = garments.run_garment("Demo", hid)
-        check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["haired", "ghost", "cutout", "mesh", "fit"]))
-        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
+        check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["worn", "ghost", "cutout", "mesh", "fit"]))
+        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
         rec5 = fit_record(f3)
         check("fit F3 own", (rec5.get("accepted"), rec5.get("refitted"), (rec5.get("source") or {}).get("fsig")),
               (True, False, f3))
@@ -509,14 +524,12 @@ def main() -> int:
 
         # --- [6] ---------------------------------------------------------------------
         print("[6] the piece's own inputs changed -> no refit")
-        stored = get_character_profile("Demo")
-        stored["body_slots"]["hair"]["color"] = "black"
-        check("hair colour", save_character_profile("Demo", stored), True)
+        check("dress text changed", bool(inventory.update_item(hid, {"prompt_fragment": sc.FRAGMENT2})), True)
         check("bsig unchanged", base_body.base_signature("Demo"), b3)
         before = counts()
         res = garments.run_garment("Demo", hid)
         check("ok", res.get("ok"), True)
-        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
+        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
 
         # --- [7] ---------------------------------------------------------------------
         print("[7] limbs on synthetic geometry")
@@ -559,8 +572,8 @@ def main() -> int:
             res = garments.run_garment("Demo", hid)
         finally:
             garment_source.source_limbs, garment_source.limb_numbers = real_source_limbs, real_limb_numbers
-        check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["haired", "ghost", "cutout", "mesh", "fit"]))
-        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
+        check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["worn", "ghost", "cutout", "mesh", "fit"]))
+        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
         rec8 = fit_record(f4)
         check("fit F4 own", (rec8.get("accepted"), rec8.get("refitted"), (rec8.get("source") or {}).get("fsig")),
               (True, False, f4))

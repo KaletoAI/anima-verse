@@ -9,11 +9,11 @@ thread walks the characters one at a time and refits, for every garment
 whose CURRENT fsig holds an accepted fit on the CURRENT base model with an
 outdated ``fit_version``, the fit step only:
 
-- edit chain: ``garments._fit`` from the cached prepared mesh + images;
+- edit chain (clothing): ``garments._fit`` from the cached prepared mesh + images;
 - HairDeck: the stored seeds (``garments._fit_seed``), the served seed first
   — HairDeck itself never runs again here (a run's fit step would ask for one
   more seed when none passes; the sweep refuses instead);
-- subtract: ``garment_subtract.run_fit`` from the cached cut.
+- footwear: ``garment_footwear.fit`` from the item's cached shoe source.
 
 Per body (plan 2026-11-10-outfit-body-mesh-mode, Task 2): then every fit on
 an OUTFIT BODY (``garments/bodies/<body id>/``) with an outdated
@@ -535,9 +535,6 @@ def refit_character(character_name: str) -> Optional[List[str]]:
             try:
                 if method == gs.HAIRDECK:
                     _refit_hairdeck(character_name, item_id, kind, fsig, base[0], profile)
-                elif method == gs.SUBTRACT:
-                    from app.core import garment_subtract
-                    garment_subtract.run_fit(character_name, item_id, kind, fsig, base[0], profile)
                 elif method == gs.SHOE:
                     # Footwear (plan 2026-11-10-footwear-rigid-shoes Task 25): the shoe source is cached
                     # under the item's ssig — the refit is the fit alone, CPU only, never a hub job; the

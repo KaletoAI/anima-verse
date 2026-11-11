@@ -16,8 +16,10 @@ sidecar rig mixamo, as smoke_improvement_garment_fill). The chain is a
 recorder: ``garments.run_garment`` records ``(name, item_id)`` and answers
 what the case scripts; on success it writes an ACCEPTED fit the way
 ``_fit_state`` reads it (fit + prepared file, record {accepted, kind hair,
-fit_version FIT_VERSION["hair"], base_model_sha256 = the current base,
-inputs.prepared_sha256 = the prepared file's sha256}).
+fit_version FIT_VERSION["hair"], method "hairdeck", base_model_sha256 = the
+current base, inputs {hsig = garment_hsig, seed 1, nohead_sha256 = sha256 of
+``hairdeck/<hsig>/hair_seed1_nohead.glb``}) beside an accepted HairDeck job
+record and the seed's two files (``hair_seed1_nohead.glb`` + ``hair_seed1.glb``).
 ``routing.explain_occasion`` resolves every occasion to "Fake" unless a case
 empties one.
 
@@ -25,23 +27,26 @@ Expectations, derived by hand from § 6.5 and ``garments.HUB_JOBS``:
 
 [H1] Kira has hair text and no hair item. World method body (the default
      since the hair-from-body spec 2026-11-11): the hair is in the body mesh →
-     no candidate. World method edit_chain → exactly one candidate
-     ``character:Kira`` (Bald is no subject: [H6]): label "Kira · hair views", hub_jobs 2 + 2 + 0 + 1 + 0 = 5,
-     note "new hair item: haired 2 + ghost 2 + mesh 1". World
-     ``base_body.hair_method`` "hairdeck" → label "Kira · HairDeck", hub 1;
-     "subtract" → hub 2 + 1 + 0 + 0 = 3. Back to edit_chain.
+     no candidate; so do the removed world values "edit_chain" and
+     "subtract" (they resolve to body, Task 2). World
+     ``base_body.hair_method`` "hairdeck" → exactly one candidate
+     ``character:Kira`` (Bald is no subject: [H6]): label "Kira · HairDeck",
+     hub_jobs ``HUB_JOBS["hair:hairdeck"]`` 1 + 0 = 1, note "new hair item:
+     hairdeck 1" (the fit step costs no job and is left out of the note).
+     The world stays on hairdeck for the rest.
 [H2] through the engine (``handle_step``) → {"ok": True}:
      ``ensure_hair_item`` created and wore the item (``find_hair_item`` not
      None, ``worn_hair_id`` = its id), run_garment called once with that
      item; ``hair_summary`` "ready"; rescan → no candidate; the one-shot
      worked itself off.
 [H3] the fit deleted → hair_summary "missing" → the candidate is back with
-     ``run_estimate``'s cost (nothing cached: 5, note "haired 2 + ghost 2 +
-     mesh 1"); a persisted failure of the item's fsig (step "mesh",
+     ``run_estimate``'s cost (the HairDeck job and its seed are still stored,
+     so only the fit runs: 0, note "no hub job"); a persisted failure of the
+     item's fsig (step "fit",
      ``garment_store.record_failure``) → ``cached_failure`` → no candidate;
      cleared → back.
-[H4] run_garment answers ``{ok False, step "haired", error "busy",
-     retry_later True}`` → apply raises CandidateBusy. ``hair_views_mesh``
+[H4] run_garment answers ``{ok False, step "hairdeck", error "busy",
+     retry_later True}`` → apply raises CandidateBusy. ``hair_mesh``
      resolving to nothing → CandidateBusy before any run (run_garment not
      called).
 [H5] run_garment answers ``{ok False, step "hairdeck", error
@@ -161,10 +166,18 @@ def main() -> int:
             prepared.parent.mkdir(parents=True, exist_ok=True)
             fit.write_bytes(b"fit")
             prepared.write_bytes(b"prepared")
+            hsig = gs.garment_hsig(name, item_id)
+            job = gs.hairdeck_dir(name, item_id, hsig)
+            job.mkdir(parents=True, exist_ok=True)
+            (job / "hair_seed1_nohead.glb").write_bytes(b"hair")
+            (job / "hair_seed1.glb").write_bytes(b"proxy")
+            gs.write_record(job / gs.HAIRDECK_RECORD, {"accepted": True, "seed": 1})
             gs.write_record(fit.with_suffix(".json"), {
                 "accepted": True, "kind": "hair", "item_id": item_id, "fit_version": garment_fit.FIT_VERSION["hair"],
+                "method": "hairdeck",
                 "base_model_sha256": base_body.current_base(name)[1],
-                "inputs": {"prepared_sha256": base_body.file_sha256(prepared)}})
+                "inputs": {"hsig": hsig, "seed": 1,
+                           "nohead_sha256": base_body.file_sha256(job / "hair_seed1_nohead.glb")}})
             return {"ok": True, "ran": ["fit"]}
 
         RESOLVE = {}
@@ -191,14 +204,11 @@ def main() -> int:
             # --- [H1] ---------------------------------------------------------------
             print("[H1] hair text, no item")
             check("body (default): no candidate", rows(), [])
-            world_method("edit_chain")
-            check("edit chain", rows(),
-                  [("character:Kira", "Kira · hair views", 5, "new hair item: haired 2 + ghost 2 + mesh 1")])
+            for gone in ("edit_chain", "subtract"):
+                world_method(gone)
+                check(f"removed {gone} = body: no candidate", rows(), [])
             world_method("hairdeck")
-            check("hairdeck", [(c.label, c.hub_jobs) for c in cands()], [("Kira · HairDeck", 1)])
-            world_method("subtract")
-            check("subtract", [c.hub_jobs for c in cands()], [3])
-            world_method("edit_chain")
+            check("hairdeck", rows(), [("character:Kira", "Kira · HairDeck", 1, "new hair item: hairdeck 1")])
             check("needs_media", typ.needs_media, True)
 
             # --- [H2] ---------------------------------------------------------------
@@ -221,11 +231,11 @@ def main() -> int:
             fit.unlink()
             check("hair_summary missing", (garments.hair_summary("Kira") or {}).get("status"), "missing")
             check("candidate back with run_estimate's cost", rows(),
-                  [("character:Kira", "Kira · hair views", 5, "haired 2 + ghost 2 + mesh 1")])
+                  [("character:Kira", "Kira · HairDeck", 0, "no hub job")])
             fsig = gs.garment_fsig("Kira", item_id)
-            gs.record_failure("Kira", item_id, fsig, step="mesh", error="refused",
+            gs.record_failure("Kira", item_id, fsig, step="fit", error="refused",
                               base_model_sha=base_body.current_base("Kira")[1])
-            check("cached_failure", (garments.cached_failure("Kira", item_id) or {}).get("step"), "mesh")
+            check("cached_failure", (garments.cached_failure("Kira", item_id) or {}).get("step"), "fit")
             check("no candidate", cands(), [])
             gs.clear_failure("Kira", item_id, fsig)
             check("cleared: back", [c.key for c in cands()], ["character:Kira"])
@@ -233,11 +243,11 @@ def main() -> int:
             # --- [H4] ---------------------------------------------------------------
             print("[H4] load is busy")
             RUNS.clear()
-            ANSWER["result"] = {"ok": False, "step": "haired", "error": "busy", "retry_later": True}
+            ANSWER["result"] = {"ok": False, "step": "hairdeck", "error": "busy", "retry_later": True}
             raises("retry_later → CandidateBusy", lambda: typ.apply(cands()[0], typ.validate({}), "t"), CandidateBusy)
             check("one run", len(RUNS), 1)
-            RESOLVE["hair_views_mesh"] = ""
-            raises("hair_views_mesh unresolved → CandidateBusy",
+            RESOLVE["hair_mesh"] = ""
+            raises("hair_mesh unresolved → CandidateBusy",
                    lambda: typ.apply(cands()[0], typ.validate({}), "t"), CandidateBusy)
             check("no further run", len(RUNS), 1)
             RESOLVE.clear()

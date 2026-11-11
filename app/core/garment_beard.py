@@ -120,7 +120,7 @@ CHIN_T = 2.0
 #: resolution / 3.77 pooled ×4; the same edit shifted 6 px 19.1 / 14.6, scaled by 2 % 16.7 / 13.0.
 POOL_HEAD_PX = 128
 #: Gate limits. OUTSIDE: mean |ΔRGB| (pooled) on the figure outside the oval; XOR: silhouette change above
-#: the nose line as a share of the figure area there (``garment_gates.BODY_XOR_MAX``; Kai 0.0037);
+#: the nose line as a share of the figure area there (the limit of the former hair edit gate; Kai 0.0037);
 #: BEARD_CHANGE_MIN: mean |ΔRGB| (pooled) inside the oval, below it the edit removed nothing (Kai 27+).
 OUTSIDE_DRGB_MAX = 7.0
 UPPER_XOR_MAX = 0.015

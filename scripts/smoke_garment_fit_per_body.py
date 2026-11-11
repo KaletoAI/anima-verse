@@ -2,7 +2,8 @@
 """Fits per body (plan docs/superpowers/plans/2026-11-10-outfit-body-mesh-mode.md, Task 2; spec
 docs/superpowers/specs/2026-11-10-outfit-body-mesh-mode-design.md "Fits per body"): an own-mesh garment and the
 hair are fitted per BODY — key (item, fsig, body id) — and an outfit model on an outfit body carries exactly that
-body's fits.
+body's fits. The edit-chain hair H this smoke also carried is gone with that method (hair-from-body spec
+2026-11-11, Task 2): Demo's hair is in the body mesh, and only the two clothing pieces are fitted.
 
 Usage:
     ./.venv/bin/python scripts/smoke_garment_fit_per_body.py
@@ -13,16 +14,16 @@ no hub, no GPU, no Blender, no server process. Synthetic GLBs only.
 Stubs: every generation entry point of the garment chain (``garment_images.run_edit_step`` / ``cut_out``,
 ``garment_mesh.generate``, ``garments._fit`` (the BASE fit), ``service.get_image_service``) raises and counts into
 HUB — a fit on a body must reach none of them; ``garment_images._mask`` (rembg) returns a full mask and records the
-image name; ``garment_fit.fit_clothing`` / ``fit_hair`` record (kind, item, sha256 of the rigged + unrigged body
-they got) into FITS and return a tube around the body they were GIVEN — radius = that body's radius + 0.0125
-(slip), + 0.0080 (coat), + 0.0150 (hair, y 1.45 .. 1.60) — or refuse ("too tight") when the rigged body's sha is in
+image name; ``garment_fit.fit_clothing`` records (item, sha256 of the rigged + unrigged body it got) into FITS
+and returns a tube around the body it was GIVEN — radius = that body's radius + 0.0125 (slip), + 0.0080
+(coat) — or refuses ("too tight") when the rigged body's sha is in
 REFUSE; ``refine.decimate_to`` copies the fit as its distance tier; ``garment_assembly.schedule`` records;
 ``model3d.request_lod`` no-op. Layering (``garment_fit_layers.layer_over``), the assembly, the store and the
 refit sweep are REAL.
 
-Fixture: Demo on the pipeline, hair method edit_chain, hair item H worn; own-mesh pieces slip {underwear_top} and
-coat {outer, covers [top, underwear_top]} held. Base model = closed cylinder R 0.100 (y 0.60 .. 1.60, Spine2);
-base fits of coat, slip, H (records accepted on sha(base), fit_version current) with an accepted prepared mesh
+Fixture: Demo on the pipeline, hair method body (the world default: no hair item); own-mesh pieces slip
+{underwear_top} and coat {outer, covers [top, underwear_top]} held. Base model = closed cylinder R 0.100
+(y 0.60 .. 1.60, Spine2); base fits of coat and slip (records accepted on sha(base), fit_version current) with an accepted prepared mesh
 and ghost front each. Outfit bodies (rigged cylinder + unrigged copy + front view tpose_<id>.png): A =
 outfit_body_id("tex" + "a"*12), R 0.100 but another texture colour (so sha(A) != sha(base)); B =
 outfit_body_id("tex" + "b"*12), R 0.104; C = outfit_body_id("tex" + "c"*12), R 0.100, third colour. Outfit models
@@ -37,22 +38,21 @@ on another body") and the plan's Task 2 bullet:
     layer -> bodies/<A>/layers/coat_<F>_<lsig>.glb; image/prepared ignore the body (shared); body "x" -> ValueError;
     body_of(bodies/<A>/low/x.glb) = A, body_of(garments/x.glb) = "".
 [2] Two bodies -> two fits. Before a build: served(OA) = the bare file + schedule (Demo, OA); _wanted_for(OA) lists
-    coat, H, slip each with fit None + pending. assemble(OA) = {full assembled, low assembled}; FITS = 3 calls
-    (coat, H, slip), each on (sha(A), sha(A unrigged)); every mask read for a body fit is tpose_<A>.png (+ the
-    ghost fronts). bodies/<A>/{coat,H,slip}_<F>.glb exist; the coat record: accepted, body_id A, body_sha256 sha(A),
+    coat, slip each with fit None + pending. assemble(OA) = {full assembled, low assembled}; FITS = 2 calls
+    (coat, slip), each on (sha(A), sha(A unrigged)); every mask read for a body fit is tpose_<A>.png (+ the
+    ghost fronts). bodies/<A>/{coat,slip}_<F>.glb exist; the coat record: accepted, body_id A, body_sha256 sha(A),
     base_signature bsig, base_fit_sha256 sha(base coat fit), fit_version 7 (clothing), no base_model_sha256. Assembled OA:
-    garments.H.sha256 = sha(bodies/<A>/H fit) != sha(base H fit); garments.slip = sha(bodies/<A>/slip); garments.coat
+    garments.slip = sha(bodies/<A>/slip); garments.coat
     over lsigA = md5[:12]({"inner": {"slip": sha(A slip fit)}, "version": 1}); served(OA) = the assembled file.
-    assemble(OB) -> 2 more FITS (coat, H) on (sha(B), sha(B unrigged)); the B coat node r = 0.104 + 0.008 = 0.112,
-    H r = 0.119 (±1e-6); A's files byte-identical. assemble(OA2) (body A again, coat only — two outfits, one body,
+    assemble(OB) -> 1 more FIT (coat) on (sha(B), sha(B unrigged)); the B coat node r = 0.104 + 0.008 = 0.112
+    (±1e-6); A's files byte-identical. assemble(OA2) (body A again, coat only — two outfits, one body,
     Review Focus 4) -> 0 FITS, garments.coat.sha256 = sha(A coat fit) (no ``over``). HUB 0; base fit files
     byte-identical.
 [3] Never on another body: built_on_fit_base(OB meta, A coat record) False; (OA meta, A coat record) True; (OA meta,
     base coat record) False; (OR meta = base sha, A coat record) False; ({base_signature bsig} only, A coat record)
     False. A's coat fit + record copied over B's: body_fit_state(B) "stale"; _wanted_for(OB) coat pending;
     assemble(OB) -> 1 FIT on sha(B); B's coat record body_id B again.
-[4] Hair per body: the H records on A and B have kind hair and their own body_id; the retexture outfit OR wants H =
-    the BASE fit garments/H_<F>.glb (unchanged path).
+[4] (Hair per body — removed with the edit-chain hair.)
 [5] Layering per body: bodies/<A>/layers/coat_<F>_<lsigA>.glb + .json + layers/low/…; record body_id A,
     body_sha256 sha(A), base_fit_sha256 sha(A coat fit), inner.slip.sha256 sha(A slip fit), no base_model_sha256;
     the assembled OA coat node r in [0.1239, 0.1270] over y [1.10, 1.30] (slip on A at 0.1125 + LAYER_CLEAR_M
@@ -61,11 +61,11 @@ on another body") and the plan's Task 2 bullet:
     coat r in [0.1279, 0.1310] (0.1165 + 0.0119 = 0.1284). No garments/layers/ of the base.
 [6] FIT_VERSION per body: FIT_VERSION -> {hair 8, clothing 8}, the base records rewritten with fit_version 8 (the
     base sweep's result, GLBs unchanged): body_fit_state of coat on A and on B "stale"; outdated_fits = [];
-    outdated_body_fits = the 6 body fits {coat, H, slip} x {A, B}; _wanted_for(OA) coat pending. refit_character
-    -> those 6 as "<item>@<body>", 6 FITS each on its own body sha; every body record fit_version 8; afterwards
+    outdated_body_fits = the 4 body fits {coat, slip} x {A, B}; _wanted_for(OA) coat pending. refit_character
+    -> those 4 as "<item>@<body>", 4 FITS each on its own body sha; every body record fit_version 8; afterwards
     outdated_body_fits [] and _wanted_for(OA) has no pending entry. HUB 0. FIT_VERSION restored.
 [7] Refusal per body. C: REFUSE = {sha(C)}: body_fit_warning(OC meta) = NOT_FITTED_ON_BODY with "Coat (fit on the
-    outfit body refused — too tight), Hair (… too tight)"; failed records on C; a second call -> 0 FITS.
+    outfit body refused — too tight)"; a failed record on C; a second call -> 0 FITS.
     _wanted_for(OC) = [] (nothing pending), assemble(OC) builds nothing, served(OC) = bare, no schedule. R11 on B:
     the base coat fit file rewritten (new base_fit_sha), REFUSE = {sha(B)}: assemble(OB) -> 1 FIT refused, the B
     coat fit served is the OLD one (sha unchanged), the failure holds (a second assemble -> 0 FITS, "current").
@@ -79,7 +79,7 @@ on another body") and the plan's Task 2 bullet:
     body_of names their body.
 [10] Tab status: outfit_body_mode mesh, the current outfit's model = OB's copy (body B): garment_info(coat).body =
     {body_id B, status "failed", error "fit on the outfit body refused — too tight"} (the [7] failure), body_id B;
-    garment_info(H).body.status "accepted"; garment_info(slip).body None (not carried); piece_status passes body.
+    garment_info(slip).body None (not carried); piece_status passes body.
     Mode retexture -> garment_info(coat).body None.
 """
 import hashlib
@@ -100,7 +100,7 @@ import numpy as np  # noqa: E402
 
 FAILS = []
 NSEG = 64
-OFFSET = {"slip": 0.0125, "coat": 0.0080, "hair": 0.0150}
+OFFSET = {"slip": 0.0125, "coat": 0.0080}
 
 
 def check(label, got, want):
@@ -176,7 +176,7 @@ def tube(radius, y0, y1, *, nseg=NSEG, colour=(40, 90, 160)):
                        mime="image/png", material={"name": "cloth"})
 
 
-SPAN = {"slip": (1.00, 1.40), "coat": (0.80, 1.40), "hair": (1.45, 1.60)}
+SPAN = {"slip": (1.00, 1.40), "coat": (0.80, 1.40)}
 
 
 def radii(P):
@@ -275,26 +275,20 @@ def main() -> int:
         real_fit_on_body = garments.fit_on_body
 
         def tracking_fit_on_body(character_name, item_id, **kw):
-            CURRENT["item"] = "hair" if item_id == hid else item_id
+            CURRENT["item"] = item_id
             return real_fit_on_body(character_name, item_id, **kw)
         garments.fit_on_body = tracking_fit_on_body
         garment_fit.fit_clothing = fit_clothing
-        HAIR_GATES = []
-
-        def fit_hair(prepared, unrigged, rigged, bald, ghost, *, gates=None):
-            HAIR_GATES.append(sorted(gates or {}))
-            return fake_fit("hair", rigged, unrigged)
-        garment_fit.fit_hair = fit_hair
 
         # --- fixture -----------------------------------------------------------------------
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
-                 "character_appearance": "slender, wavy hair with a side parting", "hair_method": "edit_chain",
+                 "character_appearance": "slender, wavy hair with a side parting",
                  "body_slots": {"skin": {"tone": "olive"}, "eyes": {"color": "green"},
                                 "build": {"type": "athletic"}, "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
-        hid = garment_hair.ensure_hair_item("Demo")
-        check("hair worn", inventory.get_equipped_mesh_pieces("Demo"), {"hair": hid})
+        check("hair in the body mesh: no hair item", (garment_hair.hair_method("Demo"),
+                                                     inventory.get_equipped_mesh_pieces("Demo")), ("body", {}))
 
         def piece(item_id, slots, *, covers=()):
             op = {"slots": list(slots), "covers": list(covers), "outfit_types": ["casual"], "own_mesh": True}
@@ -318,9 +312,9 @@ def main() -> int:
         (refs / f"tpose_back_{bsig}.png").write_bytes(solid_png((205, 175, 155), 16))
         base_sha = sha_bytes(base_bytes)
         check("current base", base_body.current_base("Demo"), (bsig, base_sha))
-        items = {"coat": "coat", "slip": "slip", "hair": hid}
+        items = {"coat": "coat", "slip": "slip"}
         fsig = {k: gs.garment_fsig("Demo", i) for k, i in items.items()}
-        kinds = {"coat": "clothing", "slip": "clothing", "hair": "hair"}
+        kinds = {"coat": "clothing", "slip": "clothing"}
         base_fit = {}
         for key, item_id in items.items():
             f = fsig[key]
@@ -421,14 +415,14 @@ def main() -> int:
         check("scheduled OA", SCHEDULED, [("Demo", "OA")])
         w = wanted("OA")
         check("serve: all pending, no fit", {k: (g["fit"], g.get("pending")) for k, g in w.items()},
-              {"coat": (None, True), hid: (None, True), "slip": (None, True)})
+              {"coat": (None, True), "slip": (None, True)})
         FITS.clear()
         MASKS.clear()
         check("assemble OA", ga.assemble("Demo", "OA"), {"ok": True, "tiers": {"full": "assembled", "low": "assembled"}})
-        check("OA: 3 fits on body A", sorted(FITS), sorted([(k, sha_a, unr_a) for k in ("coat", "hair", "slip")]))
-        check("OA: body masks = A's front view", sorted({m for m in MASKS if not m.startswith(("coat_", "slip_", hid))}),
+        check("OA: 2 fits on body A", sorted(FITS), sorted([(k, sha_a, unr_a) for k in ("coat", "slip")]))
+        check("OA: body masks = A's front view", sorted({m for m in MASKS if not m.startswith(("coat_", "slip_"))}),
               [f"tpose_{A}.png"])
-        check("A fit files", [body_file(k, A).is_file() for k in ("coat", "hair", "slip")], [True] * 3)
+        check("A fit files", [body_file(k, A).is_file() for k in ("coat", "slip")], [True] * 2)
         rec = gs.read_record(body_file("coat", A).with_suffix(".json"))
         check("A coat record parents", {k: rec.get(k) for k in ("accepted", "body_id", "body_sha256", "base_signature",
                                                                 "base_fit_sha256", "fit_version", "item_id", "fsig")},
@@ -436,24 +430,20 @@ def main() -> int:
                "base_fit_sha256": base_fit_sha["coat"], "fit_version": 7, "item_id": "coat", "fsig": fc})
         check("A coat record has no base_model_sha256", "base_model_sha256" in rec, False)
         side = assembled_side("OA")
-        check("OA hair = A's hair fit", side["garments"][hid]["sha256"], sha(body_file("hair", A)))
-        check("OA hair != base hair", side["garments"][hid]["sha256"] != base_fit_sha["hair"], True)
         check("OA slip = A's slip fit", side["garments"]["slip"]["sha256"], sha(body_file("slip", A)))
         lsig_a = hashlib.md5(json.dumps({"version": 1, "inner": {"slip": sha(body_file("slip", A))}},
                                         sort_keys=True).encode()).hexdigest()[:12]
         check("OA coat over lsigA", side["garments"]["coat"].get("over"), lsig_a)
         check("served(OA) = assembled", ga.served("Demo", OA, "full"), mdir / "assembled" / "OA.glb")
-        a_files = {k: sha(body_file(k, A)) for k in ("coat", "hair", "slip")}
+        a_files = {k: sha(body_file(k, A)) for k in ("coat", "slip")}
 
         FITS.clear()
         check("assemble OB", ga.assemble("Demo", "OB")["ok"], True)
-        check("OB: 2 fits on body B", sorted(FITS), sorted([(k, sha_b, unr_b) for k in ("coat", "hair")]))
+        check("OB: 1 fit on body B", sorted(FITS), [("coat", sha_b, unr_b)])
         asm_b = (mdir / "assembled" / "OB.glb").read_bytes()
         rb = radii(node(asm_b, "garment_clothing_coat").positions)
         within("B coat r min", float(rb.min()), 0.112 - 1e-6, 0.112 + 1e-6)
         within("B coat r max", float(rb.max()), 0.112 - 1e-6, 0.112 + 1e-6)
-        rh = radii(node(asm_b, f"garment_hair_{hid}").positions)
-        within("B hair r", float(rh.max()), 0.119 - 1e-6, 0.119 + 1e-6)
         check("A's fits untouched", {k: sha(body_file(k, A)) for k in a_files}, a_files)
         FITS.clear()
         check("assemble OA2 (body A, coat only)", ga.assemble("Demo", "OA2")["ok"], True)
@@ -483,19 +473,7 @@ def main() -> int:
         check("OB: refitted on B", FITS, [("coat", sha_b, unr_b)])
         check("B coat record body_id", gs.read_record(body_file("coat", B).with_suffix(".json")).get("body_id"), B)
 
-        # --- [4] hair per body -------------------------------------------------------------------
-        print("[4] hair per body")
-        for body in (A, B):
-            r = gs.read_record(body_file("hair", body).with_suffix(".json"))
-            check(f"hair record on {body}", (r.get("kind"), r.get("body_id")), ("hair", body))
-        check("retexture outfit wants the BASE hair fit", wanted("OR")[hid]["fit"], base_fit["hair"])
-
         # --- [5] layering per body ---------------------------------------------------------------
-        # The hair's length class decides its gates (medium: every GATES key, moved_share included).
-        check("hair on a body: the medium length class's gates", HAIR_GATES[-1] if HAIR_GATES else None,
-              sorted(garment_fit.hair_gates("medium")))
-        check("medium keeps moved_share", "moved_share" in (HAIR_GATES[-1] if HAIR_GATES else []), True)
-
         print("[5] layering per body")
         layer_a = gs.garment_path("Demo", "coat", fc, "layer", lsig=lsig_a, body=A)
         check("A layer files", (layer_a.is_file(), layer_a.with_suffix(".json").is_file(),
@@ -537,16 +515,16 @@ def main() -> int:
                                           garments.body_fit_state("Demo", "coat", fc, B, sha_b, base_fit_sha["coat"])),
                   ("stale", "stale"))
             check("base fits current", garment_refit.outdated_fits("Demo"), [])
-            want6 = sorted((items[k], kinds[k], fsig[k], b) for k in ("coat", "hair", "slip") for b in (A, B))
+            want6 = sorted((items[k], kinds[k], fsig[k], b) for k in ("coat", "slip") for b in (A, B))
             check("outdated_body_fits", sorted(garment_refit.outdated_body_fits("Demo")), want6)
             check("OA serve: coat pending", wanted("OA")["coat"].get("pending"), True)
             FITS.clear()
             done = garment_refit.refit_character("Demo")
             check("refit_character", sorted(done or []), sorted(f"{i}@{b}" for i, _k, _f, b in want6))
-            check("6 refits, each on its body", sorted((f[0], f[1]) for f in FITS),
-                  sorted((k, s) for k in ("coat", "hair", "slip") for s in (sha_a, sha_b)))
+            check("4 refits, each on its body", sorted((f[0], f[1]) for f in FITS),
+                  sorted((k, s) for k in ("coat", "slip") for s in (sha_a, sha_b)))
             check("body records fit_version 8", sorted({gs.read_record(body_file(k, b).with_suffix(".json"))
-                                                        .get("fit_version") for k in ("coat", "hair", "slip")
+                                                        .get("fit_version") for k in ("coat", "slip")
                                                         for b in (A, B)}), [8])
             check("nothing outdated after", garment_refit.outdated_body_fits("Demo"), [])
             check("OA serve: nothing pending", [k for k, g in wanted("OA").items() if g.get("pending")], [])
@@ -567,10 +545,9 @@ def main() -> int:
         FITS.clear()
         warning = ga.body_fit_warning("Demo", meta_oc)
         reason = "fit on the outfit body refused — too tight"
-        check("C warning", warning, base_body.NOT_FITTED_ON_BODY.format(items=f"Coat ({reason}), Hair ({reason})"))
-        check("C: 2 refused fits", sorted(f[0] for f in FITS), ["coat", "hair"])
-        check("C failure records", [gs.garment_path("Demo", items[k], fsig[k], "failed", body=C).is_file()
-                                    for k in ("coat", "hair")], [True, True])
+        check("C warning", warning, base_body.NOT_FITTED_ON_BODY.format(items=f"Coat ({reason})"))
+        check("C: 1 refused fit", sorted(f[0] for f in FITS), ["coat"])
+        check("C failure record", gs.garment_path("Demo", "coat", fsig["coat"], "failed", body=C).is_file(), True)
         FITS.clear()
         ga.body_fit_warning("Demo", meta_oc)
         check("C: no retry", FITS, [])
@@ -635,7 +612,6 @@ def main() -> int:
         check("coat body", {k: (info["body"] or {}).get(k) for k in ("body_id", "status", "error")},
               {"body_id": B, "status": "failed", "error": reason})
         check("coat body_id", info["body_id"], B)
-        check("hair body accepted", (garments.garment_info("Demo", hid)["body"] or {}).get("status"), "accepted")
         check("slip not carried", garments.garment_info("Demo", "slip")["body"], None)
         chip = garment_set.piece_status(info, worn=False, base_model_ready=True)
         check("piece_status body", chip.get("body"), {"body_id": B, "status": "failed", "error": reason})

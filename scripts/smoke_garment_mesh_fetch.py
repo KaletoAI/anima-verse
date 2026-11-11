@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fetch a finished mesh job by its id for the garment mesh steps (garment_mesh.collect_job,
-garment_subtract.collect_source_job, footwear_source.collect_mesh_job, garments.collect_mesh_job and the
-routes POST /characters/{c}/garments/{item}/mesh/fetch + .../footwear/mesh/fetch).
+footwear_source.collect_mesh_job, garments.collect_mesh_job and the routes POST
+/characters/{c}/garments/{item}/mesh/fetch + .../footwear/mesh/fetch).
 
 Usage:
     ./.venv/bin/python scripts/smoke_garment_mesh_fetch.py
@@ -10,9 +10,8 @@ Throwaway storage + instance (``paths.init(<tmp>/world)`` before any world modul
 ``human`` package — no real world, no hub, no server, no Blender. Stubbed: ``get_image_service()`` = a stand-in
 whose ``fetch_mesh_job`` / ``_store_mesh_files`` are the REAL ``ImageService`` methods over ONE fake mesh
 backend (``list_available_backends``), whose ``fetch_job`` answers from a table by job id;
-``refine.decimate_to`` copies the raw GLB (tris_before = tris = the fixture's triangle count);
-``garment_images._mask_image`` (subtract cut-outs) = a fully opaque mask. The route functions are called
-directly (``_`` = the admin dependency's value).
+``refine.decimate_to`` copies the raw GLB (tris_before = tris = the fixture's triangle count). The route
+functions are called directly (``_`` = the admin dependency's value).
 
 Fixtures (hand-derived):
     GOOD  2 disjoint quads, areas 0.99 + 0.01 -> 4 tris, largest component share 0.99 >= 0.98 (accepted).
@@ -23,14 +22,15 @@ Fixtures (hand-derived):
     Every GLB embeds a 16 x 16 PNG base colour: ``_store_mesh_files`` validates an unrigged delivery
     (``validate_source``: an embedded texture >= 8 px), as for a real gateway result.
     Jobs: "good1" done GOOD (the gateway reports the full id "good1-full"), "bad1" done BAD, "run1" running
-    at progress 0.4, "shoe1" done SHOE, "src1" done GOOD; any other id -> 404 "unknown".
+    at progress 0.4, "shoe1" done SHOE; any other id -> 404 "unknown".
 
-[1] Hair H of Demo (edit chain, fsig F = garment_fsig). A persisted failure {step mesh} + an in-memory one
+[1] Own-mesh dress H of Demo (clothing, edit chain, fsig F = garment_fsig; the hair has no mesh job since the
+    hair-from-body spec 2026-11-11 removed the hair edit chain and the subtract method). A persisted failure {step mesh} + an in-memory one
     exist before. garments.collect_mesh_job(Demo, H, "Job good1") via the route ->
     200 {status accepted, step mesh, job_id "good1-full"}; raw/H_F.glb = prepared/H_F.glb = GOOD bytes;
     record accepted True, collected_job "good1-full", 1 attempt with collected_job, tris_raw 4,
-    tris_prepared 4, target_tris 25000, share 0.99 +- 1e-6, backend "FakeMesh"; the failure record is gone
-    and gs.status(...).failed None; no ".fetch-*" staging left; the next run reuses the pair (R13):
+    tris_prepared 4, target_tris 60000 (clothing: garment_mesh.TARGET_TRIS_BY_KIND), share 0.99 +- 1e-6,
+    backend "FakeMesh"; the failure record is gone and gs.status(...).failed None; no ".fetch-*" staging left; the next run reuses the pair (R13):
     garment_mesh.generate(Demo, H, F) returns the prepared path without a generation (the stand-in has no
     generate_mesh: a call would raise AttributeError).
 [2] "run1" -> 200 {status running, progress 0.4}; NOTHING written: the file list under garments/ (names,
@@ -50,10 +50,6 @@ Fixtures (hand-derived):
     Then an insole is recorded and "shoebad" (box B moved 0.5 m OUTSIDE A: component_share
     0.1334 / 0.1494 = 0.8929 < 0.98) -> refused, kept True; prepared.glb, raw.glb, record.json and
     insole.json byte-identical.
-[7] Subtract source (store level): haired views accepted under an image fsig I, ssig S. "src1" -> accepted:
-    source/H_S/haired.glb = GOOD, both cut-outs written, record accepted True, collected_job "src1",
-    tris 4; garment_subtract.source_glb(...) is that file. "run1" -> running, the source folder is not
-    even created.
 """
 import io
 import json
@@ -179,8 +175,9 @@ def main() -> int:
         from fastapi import HTTPException
         from PIL import Image
         from app.blender import refine
-        from app.core import base_body, footwear_source as fs, garment_assembly, garment_hair, garment_images
-        from app.core import garment_mesh as gm, garment_store as gs, garment_subtract, garments
+        from app.core import base_body, footwear_source as fs, garment_assembly
+        from app.core import garment_mesh as gm, garment_store as gs
+        from app.models import inventory
         from app.core.keyed_lock import keyed_lock
         from app.imagegen import service as service_mod
         from app.imagegen.service import ImageService
@@ -191,7 +188,6 @@ def main() -> int:
         GOOD, BAD, SHOE = quads_glb([0.99, 0.01]), quads_glb([0.97, 0.03]), shoe_glb()
         backend = FakeMeshBackend({"good1": ("done", GOOD, "good1-full"), "bad1": ("done", BAD, "bad1"),
                                    "run1": ("running",), "shoe1": ("done", SHOE, "shoe1"),
-                                   "src1": ("done", GOOD, "src1"),
                                    "shoebad": ("done", shoe_glb(inside=False), "shoebad")})
 
         class Svc:
@@ -222,7 +218,10 @@ def main() -> int:
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
-        hid = garment_hair.ensure_hair_item("Demo")
+        hid = inventory.add_item(name="Dress", category="outfit_piece", prompt_fragment="a green dress",
+                                 outfit_piece={"slots": ["top", "bottom"], "covers": ["legs"],
+                                               "outfit_types": ["casual"], "own_mesh": True})["id"]
+        check("inventory Dress", inventory.add_to_inventory("Demo", hid), True)
         F = gs.garment_fsig("Demo", hid)
         garments_dir = gs.garments_dir("Demo")
 
@@ -248,10 +247,10 @@ def main() -> int:
         check("record accepted / collected_job", (rec.get("accepted"), rec.get("collected_job")), (True, "good1-full"))
         check("one attempt, noted", [(a.get("attempt"), a.get("collected_job")) for a in rec.get("attempts") or []],
               [(1, "good1-full")])
-        check("tris / target", (rec.get("tris_raw"), rec.get("tris_prepared"), rec.get("target_tris")), (4, 4, 25000))
+        check("tris / target", (rec.get("tris_raw"), rec.get("tris_prepared"), rec.get("target_tris")), (4, 4, 60000))
         near("share", rec.get("largest_component_share"), 0.99, 1e-6)
         check("backend", rec.get("backend"), "FakeMesh")
-        check("decimation (target, welded)", decimations[-1], (25000, True))
+        check("decimation (target, welded)", decimations[-1], (60000, True))
         check("failure record gone", gs.garment_path("Demo", hid, F, "failed").exists(), False)
         check("in-memory failure gone", gs.status("Demo", hid).get("failed"), None)
         check("no staging left", [p.name for p in raw.parent.iterdir() if p.name.startswith(".")], [])
@@ -361,7 +360,7 @@ def main() -> int:
         check("mesh record", (rec.get("accepted"), rec.get("collected_job"), rec.get("tris_raw")), (True, "shoe1", 24))
         near("component_share", g.get("component_share"), 1.0, 1e-6)
         near("mesh_iou", g.get("mesh_iou"), 1.0, 0.02)
-        check("decimation (target, welded)", decimations[-1], (30000, True))
+        check("decimation (target, welded)", decimations[-1], (60000, True))
         check("insole dropped", ((d / "insole.json").exists(), "insole" in (fs._read(d)["steps"])), (False, False))
         check("no staging / candidate", sorted(p.name for p in d.iterdir() if p.name.startswith(".")), [])
         (d / "insole.json").write_text('{"insole_cover": 1.0}')
@@ -374,27 +373,6 @@ def main() -> int:
         check("shoe files + insole byte-identical", {n: (d / n).read_bytes() == b for n, b in kept.items()},
               {n: True for n in kept})
 
-        print("[7] subtract source (store level)")
-        I, S = "0000000000a1", "0000000000b2"
-        for view in gs.GARMENT_VIEWS:
-            path = gs.garment_path("Demo", hid, I, "image", step="haired", view=view)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            Image.new("RGB", (64, 64), (200, 180, 160)).save(path, format="PNG")
-            gs.write_record(path.with_suffix(".json"), {"accepted": True})
-        garment_images._mask_image = lambda data, size: Image.new("L", size, 255)
-        folder = gs.source_dir("Demo", hid, S)
-        res = garment_subtract.collect_source_job("Demo", hid, I, S, "run1")
-        check("running: no source folder", (res.get("status"), folder.exists()), ("running", False))
-        res = garment_subtract.collect_source_job("Demo", hid, I, S, "src1")
-        check("source accepted", res.get("status"), "accepted")
-        glb = folder / garment_subtract.SOURCE_GLB
-        check("haired.glb = GOOD", glb.is_file() and glb.read_bytes() == GOOD, True)
-        check("cut-outs", sorted(p.name for p in folder.glob("haired_*_cut.png")),
-              ["haired_back_cut.png", "haired_front_cut.png"])
-        rec = garment_subtract.source_record("Demo", hid, S)
-        check("source record", (rec.get("accepted"), rec.get("collected_job"), rec.get("tris")), (True, "src1", 4))
-        check("source_glb", garment_subtract.source_glb("Demo", hid, S), glb)
-        check("no staging left", [p.name for p in folder.parent.iterdir() if p.name.startswith(".")], [])
 
     print()
     if FAILS:

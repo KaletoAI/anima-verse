@@ -21,7 +21,7 @@ Fixture ``Demo`` (female, base-body pipeline). Item D = "Green Dress",
 outfit piece, slots [top, bottom], covers [legs], own_mesh True, prompt
 fragment "a knee-length green linen dress with short sleeves." — worn by Demo.
 
-Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
+Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
   BASE  head disc centre (512, 200) r 100 + torso cols [392, 632) rows
         [300, 1100) in skin (200, 160, 140) -> base mask rows 100 .. 1099:
         y0 100, Hb 999. Head zone rows < int(100 + 0.13 x 999) = 229 (the
@@ -74,7 +74,8 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
 
 [1] Store: GARMENT_VERSION["clothing"] 2 (the drafted worn back); steps_for("clothing", "edit_chain")
     = (worn, ghost, cutout, mesh, fit); image_steps("clothing") = (worn,
-    ghost, cutout), image_steps("hair") = (haired, ghost, cutout); a "worn"
+    ghost, cutout), image_steps("hair") = () (the hair edit chain is gone,
+    hair-from-body spec 2026-11-11 Task 2); a "worn"
     image path is images/D_F_worn_front.png. fsig_inputs of D =
     {prompt_fragment "a knee-length green linen dress with short sleeves",
     noun "green dress", slots [bottom, top], covers [legs], partially_covers
@@ -113,8 +114,8 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
     good records); limits("clothing") names worn + ghost keys (worn without
     outside_dRGB since gate version 2 — recorded, never refused; ghost incl.
     the registration caps reg_shift / reg_scale,
-    scripts/smoke_garment_ghost_registration.py), limits() is
-    still the hair table (keys fit/ghost/haired… untouched: [haired, ghost]).
+    scripts/smoke_garment_ghost_registration.py), limits() defaults to the
+    clothing table, limits("hair") is a ValueError (no image chain).
     Fix round 1 (slot zones, garment_gates.SLOT_ZONES = {head: (head,)}):
     the clothing module's worn gate with item_id — Hat (slots [head]) on
     HATTED -> ok True, head_gated False, head_garment 1.0; the dress
@@ -381,7 +382,12 @@ def gates_part(gg, kept):
     check("limits clothing", {k: sorted(v) for k, v in gg.limits("clothing").items()},
           {"worn": ["garment_share", "head_garment", "outside_xor"],
            "ghost": ["centre_dx", "outside", "reg_scale", "reg_shift", "skin_left", "top_dy", "w_ratio"]})
-    check("limits hair unchanged", sorted(gg.limits()), ["ghost", "haired"])
+    check("limits() = clothing", gg.limits(), gg.limits("clothing"))
+    try:
+        gg.limits("hair")
+        check("limits hair refused", "no error", "ValueError")
+    except ValueError:
+        check("limits hair refused", "ValueError", "ValueError")
 
     print("[4] hems")
     short, matching = ghost_gate(SHORT), ghost_gate(MATCHING)
@@ -455,7 +461,7 @@ def main() -> int:
         check("version", gs.GARMENT_VERSION.get("clothing"), 2)
         check("steps", gs.steps_for("clothing", gs.EDIT_CHAIN), ("worn", "ghost", "cutout", "mesh", "fit"))
         check("image steps", (gs.image_steps("clothing"), gs.image_steps("hair")),
-              (("worn", "ghost", "cutout"), ("haired", "ghost", "cutout")))
+              (("worn", "ghost", "cutout"), ()))
         fsig = gs.garment_fsig("Demo", did)
         check("worn path", gs.garment_path("Demo", did, fsig, "image", step="worn", view="front").name,
               f"{did}_{fsig}_worn_front.png")

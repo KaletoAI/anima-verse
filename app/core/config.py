@@ -1676,8 +1676,7 @@ def _migrate_tpose_view_routing(config: dict) -> bool:
 #: (target, source) — the garment chains start as copies of the chains whose
 #: backends already serve the same kind of work (base-body phase 4, R4).
 _GARMENT_ROUTING_SEEDS = (("garment_view", "tpose_view"),
-                          ("mesh_garment", "mesh_humanoid"),
-                          ("hair_source_mesh", "mesh_humanoid"))
+                          ("mesh_garment", "mesh_humanoid"))
 
 
 def _seed_routing_copies(config: dict, seeds) -> bool:
@@ -1698,21 +1697,9 @@ def _seed_routing_copies(config: dict, seeds) -> bool:
 
 def _migrate_garment_routing(config: dict) -> bool:
     """Copy the T-pose view chain to ``garment_view`` and the humanoid mesh chain
-    to ``mesh_garment`` and ``hair_source_mesh`` once each; an existing target
-    owns its value and a missing source seeds nothing."""
+    to ``mesh_garment`` once each; an existing target owns its value and a
+    missing source seeds nothing."""
     return _seed_routing_copies(config, _GARMENT_ROUTING_SEEDS)
-
-
-#: (target, source) — the hair views mesh had no chain of its own before; it
-#: ran on mesh_garment, so it starts as a copy of that chain.
-_HAIR_MESH_ROUTING_SEEDS = (("hair_views_mesh", "mesh_garment"),)
-
-
-def _migrate_hair_mesh_routing(config: dict) -> bool:
-    """Copy the garment mesh chain to ``hair_views_mesh`` once; an existing
-    target owns its value and a missing source seeds nothing. Runs after
-    ``_migrate_garment_routing`` (which may seed mesh_garment itself)."""
-    return _seed_routing_copies(config, _HAIR_MESH_ROUTING_SEEDS)
 
 
 #: (target, source) — the footwear shoe mesh starts on the garment mesh chain,
@@ -1839,8 +1826,6 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_tpose_view_routing(config):
         changed = True
     if _migrate_garment_routing(config):
-        changed = True
-    if _migrate_hair_mesh_routing(config):
         changed = True
     if _migrate_footwear_routing(config):
         changed = True

@@ -46,13 +46,13 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
         (0.17, 0.47) LeftUpLeg 0.75 / Hips 0.25; (-0.17, 0.66) RightUpLeg 0.875 / Hips 0.125.
         skirt=False: y 0.66 -> LeftUpLeg 1.
 [2] Sleeves. A point 1 cm above the left upper arm (0.28, 1.39, 0) -> LeftArm 1; above the forearm
-    (0.57, 1.385, 0) -> LeftForeArm 1. ``transfer_skinned`` (the clothing path) and ``transfer`` (the hair path) with
+    (0.57, 1.385, 0) -> LeftForeArm 1. ``transfer_skinned`` (the clothing path) with
     ``split_y`` below the sleeve (only forearm/hand excluded): a sleeve tube r 0.06 m around the A-pose upper arm
     (40..75 % of its length, 2 cm clear of it) lands on the T-pose arm: every vertex within 5 mm of the same tube
     around the rigged arm, weights LeftArm 1. (From 40 %: at 30 % the ring's inner side, centre (0.207, 1.283) - 0.06 *
     (0.707, 0.707) = (0.165, 1.241), is 0.015 from the torso, nearer than the arm, and rides the torso — the armpit;
-    at 40 % it is 0.034 away.) With the hair rule (``split_y=None``: every arm bone excluded) ``transfer`` rides the
-    torso instead and misses by > 3 cm.
+    at 40 % it is 0.034 away.) (The nearest-donor ``transfer`` of the hair edit chain, compared here before, went with
+    that chain — hair-from-body spec 2026-11-11, Task 2.)
 [2b] Long sleeves (Kira's Black Blazer, 2026-11-10: the forearm half of each sleeve stayed at the hips). A rigged
     T-pose sleeve tube r 0.06 around the left arm from 40 % of the upper arm (x 0.258) to x 0.68 on the forearm, turned
     into the A-pose; ``split_y`` at the A-pose elbow (arm length 0.28 from the shoulder: y 1.34 - 0.28 x 0.7071 =
@@ -111,9 +111,8 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
       - the BLEND part (x < 0.12) is off by at most 0.167 x |rot - id| <= 0.167 x 2 sin(22.5 deg) x 0.117 (the
         farthest blend vertex from the pivot) = 15 mm;
       - no edge of the sleeve has its two faces fold against each other (the weights are monotone along the arm).
-    The nearest-donor transfer of 0b532d33 (``transfer``, still the hair path) on the same fixture is off by
-    16.4 mm in the blend part (its 25 smoothing passes of the position delta pull the first rings up: the x = 0.04
-    ring centre rises 5.0 mm, the skinned one 1.7 mm) — the smoke demonstrates that it misses the 15 mm bound.
+    (The nearest-donor transfer of 0b532d33 was off by 16.4 mm in the blend part on the same fixture; it went with
+    the hair edit chain, so the comparison is no longer run.)
     Real numbers (``~/claude-out/sleeves/report.md``): on the e2e dress the old transfer left 591 of 3975 left-sleeve
     triangles flipped against the A-pose mesh and the cap 32 mm above the skin (A-pose 21 mm); skinned: cap max
     20.5 mm, 16 fold edges of 784, all in the armpit band.
@@ -318,14 +317,8 @@ def test_sleeves(unrig, rig):
     X, report = gf.transfer_skinned(Q, unrig, rig, faces=F, k=1.7, split_y=Q[:, 1].min() - 1.0)
     err = np.abs(X - P).max()
     check(err <= 0.005, f"[2] skinned: sleeve follows the arm A -> T within 5 mm (max err {err:.4f}; {report})")
-    Xt, report_t = gf.transfer(Q, unrig, rig, faces=F, split_y=Q[:, 1].min() - 1.0)
-    err_t = np.abs(Xt - P).max()
-    check(err_t <= 0.005, f"[2] hair-path transfer: sleeve within 5 mm too (max err {err_t:.4f})")
     Ds = dense(*gf.clothing_weights(X, rig, skirt=False), names)
     check(np.all(Ds[:, names.index("mixamorig:LeftArm")] > 0.999), "[2] every sleeve vertex weighted LeftArm 1")
-    Xh, _ = gf.transfer(Q, unrig, rig, faces=F)
-    err_h = np.linalg.norm(Xh - P, axis=1).max()
-    check(err_h > 0.03, f"[2] the hair rule (every arm bone excluded) misses the arm (max err {err_h:.3f} m)")
 
 
 def test_long_sleeve(unrig, rig):
@@ -561,14 +554,6 @@ def test_shoulder_blend():
           and report.get("body_lbs_res_p99_m", 1) < 0.006,
           f"[7] both bones fitted, the body re-skinned to p50 < 1 mm, p99 < 6 mm "
           f"({ {k: round(report.get(k, -1), 5) for k in ('bones', 'body_lbs_res_p50_m', 'body_lbs_res_p99_m')} })")
-    first = np.abs(P[:, 0] - 0.04) < 1e-6
-    rise = X[first, 1].mean() - 1.30
-    Xo, _ = gf.transfer(Q, unrig, rig, faces=F, split_y=Q[:, 1].min() - 1.0)
-    err_o = np.linalg.norm(Xo - P, axis=1)
-    rise_o = Xo[first, 1].mean() - 1.30
-    check(err_o[~rigid].max() > 0.015,
-          f"[7] the 0b532d33 transfer misses the bound on the same fixture (max err {err_o[~rigid].max()*1000:.1f} mm, "
-          f"first ring rises {rise_o*1000:.1f} mm vs {rise*1000:.1f} mm skinned)")
 
 
 # --- [6] mesh step target ----------------------------------------------------------------------------------------

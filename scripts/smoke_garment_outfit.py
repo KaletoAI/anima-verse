@@ -142,8 +142,10 @@ Expected, derived by hand from the brief:
     only dress.
 [7] _fit dispatch (Task 3, 0b532d33): garments._fit for kind clothing
     calls garment_fit.fit_clothing (slots [top], masks body + garment) and
-    gates with CLOTHING_GATES; for kind hair fit_hair with GATES. Both
-    stubs refuse -> _Refused(step "fit", "fit refused — stub refusal").
+    gates with CLOTHING_GATES; the stub refuses -> _Refused(step "fit", "fit
+    refused — stub refusal"). Kind hair is a ValueError before any fit (the
+    hair edit chain and its ``fit_hair`` are gone, hair-from-body spec
+    2026-11-11 Task 2).
 """
 import hashlib
 import io
@@ -646,7 +648,6 @@ def main() -> int:
             return stub
 
         garment_fit.fit_clothing = refuse("fit_clothing")
-        garment_fit.fit_hair = refuse("fit_hair")
         hair = inventory.add_item(name="Hair", category="garment", owner="Demo", item_id="hair_demo",
                                   garment={"kind": "hair", "slot": "hair", "body_slot": "hair"})["id"]
         fsig = "0123456789ab"
@@ -660,15 +661,19 @@ def main() -> int:
             ghost.write_bytes(png((90, 60, 30)))
             gs.write_record(ghost.with_suffix(".json"), {"accepted": True})
         profile = get_character_profile("Demo")
-        for item_id, kind, limits in (("dress", "clothing", garment_fit.CLOTHING_GATES),
-                                      (hair, "hair", garment_fit.GATES)):
-            try:
-                garments._fit("Demo", item_id, kind, fsig, b1, profile)
-                check(f"{kind} refused", "no refusal", "_Refused")
-            except garments._Refused as e:
-                check(f"{kind} refusal", (e.step, e.error), ("fit", "fit refused — stub refusal"))
-                check(f"{kind} gate limits", sorted((e.gates or {}).get("limits") or {}), sorted(limits))
-        check("dispatch", CALLS, [("fit_clothing", ["top"], ["body", "garment"]), ("fit_hair", None, [])])
+        try:
+            garments._fit("Demo", "dress", "clothing", fsig, b1, profile)
+            check("clothing refused", "no refusal", "_Refused")
+        except garments._Refused as e:
+            check("clothing refusal", (e.step, e.error), ("fit", "fit refused — stub refusal"))
+            check("clothing gate limits", sorted((e.gates or {}).get("limits") or {}),
+                  sorted(garment_fit.CLOTHING_GATES))
+        try:
+            garments._fit("Demo", hair, "hair", fsig, b1, profile)
+            check("hair: no edit-chain fit", "no error", "ValueError")
+        except ValueError:
+            check("hair: no edit-chain fit", "ValueError", "ValueError")
+        check("dispatch", CALLS, [("fit_clothing", ["top"], ["body", "garment"])])
 
         # --- [8] a failed chain is not retried automatically ------------------------------
         print("[8] cached failure: explicit run / fsig change retry, automatic triggers skip")

@@ -3,12 +3,12 @@
 R13, Task 5).
 
 From the two cut-outs of the garment (front + back) the routed mesh
-occasion (``mesh_occasion``: hair ``hair_views_mesh``, every other kind
-``mesh_garment``) builds a raw mesh (``garments/raw/{item}_{fsig}.glb``,
+occasion (``mesh_occasion``: ``mesh_garment``; hair has no mesh step since the
+hair edit chain was removed) builds a raw mesh (``garments/raw/{item}_{fsig}.glb``,
 asked for ``face_num=100000`` like the spike), Blender's ``lod.py`` reduces it
-to about ``target_tris(kind)`` triangles (hair ``TARGET_TRIS`` 25000, clothing
-60000 — the spike dress worked on its undecimated 71k-vertex mesh, a body-sized
-piece needs more triangles than hair) with UV seams kept (vertices welded at
+to about ``target_tris(kind)`` triangles (clothing 60000 — the spike dress
+worked on its undecimated 71k-vertex mesh, a body-sized piece needs more
+triangles than the 25000 of ``TARGET_TRIS``) with UV seams kept (vertices welded at
 the seams on import, ``merge_vertices``), and the reduced mesh
 becomes ``garments/prepared/{item}_{fsig}.glb`` — the input of the fit. The
 fit and every mesh gate run on this reduced mesh, so the gates measure what
@@ -40,11 +40,11 @@ from app.core.log import get_logger
 
 logger = get_logger("garment_mesh")
 
-#: Triangle budget of a prepared garment mesh (R8) — hair; other kinds in ``TARGET_TRIS_BY_KIND``.
+#: Triangle budget of a prepared garment mesh (R8); kinds with their own in ``TARGET_TRIS_BY_KIND``.
 TARGET_TRIS = 25000
 #: Per-kind triangle budgets that differ from ``TARGET_TRIS`` (phase 5: a clothing piece covers the body).
 TARGET_TRIS_BY_KIND = {"clothing": 60000}
-#: What the generator is asked for (spike ``uniforge_hair.py``).
+#: What the generator is asked for (the hair spike's ``uniforge_hair.py``).
 FACE_NUM = 100000
 #: Gate: share of the surface area the largest connected component must carry (R7).
 MIN_COMPONENT_SHARE = 0.98
@@ -95,9 +95,10 @@ def largest_component_share(path: Path) -> float:
 
 
 def _kind(item_id: str) -> str:
-    """The garment kind whose mesh this module makes; ValueError for footwear
-    (its mesh is the item's shoe source, ``footwear_source``) and for
-    anything that is no garment item."""
+    """The garment kind whose mesh this module makes (clothing); ValueError
+    for footwear (its mesh is the item's shoe source, ``footwear_source``),
+    for hair (no mesh step: HairDeck or the body mesh) and for anything that
+    is no garment item."""
     from app.core import garment_set
     from app.models.inventory import get_item
     item = get_item(item_id) or {}
@@ -106,10 +107,9 @@ def _kind(item_id: str) -> str:
         raise ValueError(f"{item_id!r} is footwear: its mesh is the shoe source's")
     if kind == garment_set.CLOTHING:
         return garment_set.CLOTHING
-    kind = str((item.get("garment") or {}).get("kind") or "")
-    if item.get("category") != "garment" or not kind:
-        raise ValueError(f"{item_id!r} is no garment item")
-    return kind
+    if kind == garment_set.HAIR:
+        raise ValueError(f"{item_id!r} is hair: it has no mesh step")
+    raise ValueError(f"{item_id!r} is no garment item with a mesh step")
 
 
 def target_tris(kind: str) -> int:
@@ -118,10 +118,9 @@ def target_tris(kind: str) -> int:
 
 
 def mesh_occasion(kind: str) -> str:
-    """The routing occasion of a kind's mesh step: hair from its views has its
-    own chain (``hair_views_mesh``), every other kind runs on ``mesh_garment``."""
-    from app.core import garment_set
-    return "hair_views_mesh" if kind == garment_set.HAIR else "mesh_garment"
+    """The routing occasion of a kind's mesh step: ``mesh_garment`` (clothing,
+    the only kind with one)."""
+    return "mesh_garment"
 
 
 def _gate(share: float) -> List[str]:
@@ -347,42 +346,3 @@ def collect_job(name: str, item_id: str, fsig: str, job_id: str) -> Dict[str, An
         return {**refused, "record": record}
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-
-
-#: The subtract hair method's source mesh (plan 2026-11-10-hair-subtract-method): what the generator is
-#: asked for (hair spike A, UniForge3D-Multiview at 100 000 faces).
-SOURCE_FACE_NUM = 100000
-
-
-def generate_hair_source(name: str, cutouts: Dict[str, Path], output: Path) -> Dict[str, Any]:
-    """ONE routed ``hair_source_mesh`` generation from the haired front cut-out (+ the back as extra view)
-    into ``output`` (a GLB of the HAIRED character, undecimated — the cut reads its full resolution).
-
-    Returns ``{backend, routing, fallback_from?, tris}``. ``MeshAttemptFailed`` (records = this one attempt)
-    when the generation fails outright or delivers no readable GLB; chained to the cause (``NoRouteError``,
-    ``BackendBusyError``, ``MediaGenerationDisabled``, …). No retry: the job is one hub job per character."""
-    from app.core import glb_mesh
-    from app.imagegen.service import get_image_service
-    output = Path(output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        res = get_image_service().generate_mesh(
-            source_image_path=str(cutouts["front"]), output_path=str(output),
-            character_name=name, mesh_name=f"{name}-hair-source",
-            view_images={"back": str(cutouts["back"])}, occasion="hair_source_mesh",
-            face_num=SOURCE_FACE_NUM, material="dielectric", alpha="opaque")
-        if not res.get("ok"):
-            raise RuntimeError(f"hair source mesh generation failed: {res.get('error') or 'unknown error'}")
-        delivered = Path(str(res.get("path") or ""))
-        if delivered.suffix.lower() != ".glb" or not delivered.is_file():
-            raise RuntimeError(f"hair source mesh generation delivered no GLB ({delivered.name or 'nothing'})")
-        if delivered != output:
-            os.replace(delivered, output)
-        tris = int(len(glb_mesh.static_arrays(output.read_bytes())[1]))
-    except Exception as e:
-        error = str(e) or type(e).__name__
-        exc = MeshAttemptFailed(error, [{"attempt": 1, "ok": False, "error": error, "reasons": [error]}])
-        exc.step = "mesh_source"
-        raise exc from e
-    return {"backend": res.get("backend", ""), "routing": res.get("routing") or {}, "tris": tris,
-            **({"fallback_from": res["fallback_from"]} if res.get("fallback_from") else {})}

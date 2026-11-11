@@ -92,14 +92,14 @@ def main() -> int:
     check("[2] ref info c", (rc.get("created_at"), rc.get("backend"), "model" in rc), (STAMP_1971, "", False))
 
     gdir = tmp / "garment"
-    write(gdir / "haired_front.png", {**A_SIDECAR, "accepted": True, "attempt": 1})
-    write(gdir / "haired_front.try1.png", {"service": "Flux Dev", "gate": {"ok": True}}, old=True)
+    write(gdir / "worn_front.png", {**A_SIDECAR, "accepted": True, "attempt": 1})
+    write(gdir / "worn_front.try1.png", {"service": "Flux Dev", "gate": {"ok": True}}, old=True)
 
     def fake_image(character_name, item_id, fsig, step, view, attempt=0):
         return gdir / (f"{step}_{view}.try{attempt}.png" if attempt else f"{step}_{view}.png")
 
     garments._image = fake_image
-    fin = garments._image_info("Demo", "item_hair", "f" * 12, "haired", "front")
+    fin = garments._image_info("Demo", "item_hair", "f" * 12, "worn", "front")
     check("[3] final model/time", (fin.get("model"), fin.get("created_at")),
           ("Qwen2.1-Turbo", "2026-11-09T10:00:00+00:00"))
     atts = fin.get("attempts") or []

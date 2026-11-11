@@ -15,9 +15,9 @@ Expected values, derived by hand from the plan:
 R1. Catalog.
     1. `mesh_footwear` and `footwear_empty` are catalog ids, in that order, in
        the garment group after `mesh_garment` (the brief: "two entries after
-       mesh_garment"). `hair_views_mesh` is pinned RIGHT after mesh_garment by
-       smoke_hair_views_mesh_route, so the pair follows it:
-         mesh_garment, hair_views_mesh, mesh_footwear, footwear_empty.
+       mesh_garment"; `hair_views_mesh`, which stood between them, went with
+       the hair edit chain — hair-from-body spec 2026-11-11, Task 2):
+         mesh_garment, mesh_footwear, footwear_empty.
     2. `mesh_footwear` = _mesh(..., "none") world scope:
          (media, category, rig, character_scoped, char_spec_field,
           needs_ref_slot, style_use_cases)
@@ -101,8 +101,7 @@ def main():
         check("footwear_empty in catalog", "footwear_empty" in ids, True)
         if "mesh_garment" in ids and "mesh_footwear" in ids and "footwear_empty" in ids:
             i = ids.index("mesh_garment")
-            check("order after mesh_garment", ids[i:i + 4],
-                  ["mesh_garment", "hair_views_mesh", "mesh_footwear", "footwear_empty"])
+            check("order after mesh_garment", ids[i:i + 3], ["mesh_garment", "mesh_footwear", "footwear_empty"])
 
         def k(media, cat, ref=1):
             return {"media": media, "category": cat, "ref_slot_count": ref}

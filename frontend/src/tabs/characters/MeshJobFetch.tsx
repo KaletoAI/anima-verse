@@ -1,7 +1,6 @@
 /**
  * MeshJobFetch — "Fetch finished job…" on the mesh row of a garment's steps
- * (Wardrobe clothing + footwear, the Hair tab's views → mesh and subtract
- * source mesh): a mesh job that outlived our own poll (a timeout, a server
+ * (Wardrobe clothing + footwear): a mesh job that outlived our own poll (a timeout, a server
  * restart) but finished on the gateway is collected by its id. POST `url`
  * {job_id} (server `garments.collect_mesh_job`): the delivered mesh goes
  * through the step's own prepare + gate and record; nothing else runs — the

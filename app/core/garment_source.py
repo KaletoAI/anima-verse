@@ -1,7 +1,7 @@
 """Refit before re-render — the SOURCE of an own-mesh garment and its framing on another base body.
 
 WHY. The garment fingerprint (``garment_store.garment_fsig``) contains the base signature and the sha256 of the
-base front + back views: new base IMAGES name a new fsig, and the whole chain (worn / haired views, piece-only
+base front + back views: new base IMAGES name a new fsig, and the whole chain (worn views, piece-only
 views, cut-outs, mesh — hub jobs) used to run again although the piece itself had not changed. User decision
 2026-11-10: the piece is first REFITTED from its existing images + mesh onto the new body (CPU, including the
 clothing scale retry, ``garment_fit.scale_retry``); only when the gates refuse is the image -> mesh chain
@@ -23,22 +23,19 @@ fsig ARE the ones in it), by the boot refit sweep for the base views of every ac
 REFIT (``find_source`` + ``materialize``; dispatched by ``garments._run_locked`` on a default run whose current
 image group has none of its own images yet):
 
-1. The last accepted source: the item's newest accepted fit (base body) made with the CURRENT method — edit chain
-   (clothing, edit-chain hair) or subtract hair — whose image group (edit chain: the fit's fsig; subtract: its
-   ``image_fsig``) still holds every accepted image final of the method (``SOURCE_STEPS``), the prepared mesh (edit
-   chain) / the hair source mesh of its haired views (subtract), and its base views; and whose images name the
-   item's CURRENT inputs: ``garment_store.edit_fsig_on`` with the group's own base (``bsig``, ``base_images``)
+1. The last accepted source: the item's newest accepted edit-chain fit (base body; clothing — hair has no edit
+   chain any more, HairDeck needs no refit) whose image group (the fit's fsig) still holds every accepted image
+   final of the kind (``source_steps``), the prepared mesh and its base views; and whose images name the item's
+   CURRENT inputs: ``garment_store.edit_fsig_on`` with the group's own base (``bsig``, ``base_images``)
    must give its ``origin_fsig`` — a changed description, slot list or ``GARMENT_VERSION`` is a re-render.
 2. Materialised: the source's image finals, prepared mesh and base view copies are COPIED into the current image
    group under their usual names (each record marked ``copied_from``, the base record ``materialized_from``).
    Copies, not hard links: an image step publishes its final with ``shutil.copyfile`` (in place). From here every
-   existing reader works unchanged: the image / mesh steps of the current fsig are done, the subtract source mesh
-   is found by the same ``ssig`` (it is keyed by the haired views' content), the fit and the per-body fits read the
-   group as their own, and the old group is no longer named by anything (the GC removes it).
-3. The fit runs as usual (edit chain ``garments._fit``; subtract ``garment_subtract.run_cut`` + ``run_fit`` — the
-   cut against the new base, on the CPU). The FRAME is the group's own base copy (``fit_masks`` / ``place_mask``).
+   existing reader works unchanged: the image / mesh steps of the current fsig are done, the fit and the per-body
+   fits read the group as their own, and the old group is no longer named by anything (the GC removes it).
+3. The fit runs as usual (``garments._fit``, on the CPU). The FRAME is the group's own base copy (``fit_masks``).
 4. Accepted -> the fit record names its source (``source``: origin fsig, ``bsig``, ``base_images``,
-   ``materialized_from``) and ``refitted: true``; the Wardrobe / Hair tab show "Refitted from the previous base"
+   ``materialized_from``) and ``refitted: true``; the Wardrobe shows "Refitted from the previous base"
    with a Re-render action. Refused (gate, frame beyond the caps, a sleeve off its arm — ARMS —, a source file
    missing) -> the copies are dropped (``drop_materialized``) and the same run renders the whole chain, as before.
 
@@ -49,7 +46,7 @@ skip a failed chain anyway (``garment_store.chain_failure``).
 
 FRAME. ``garment_fit.place_by_framing`` maps the garment through ITS mask frame and the body through the body
 mask's frame, so the ghost mask must be in the frame of the view the body was meshed from. A source made on base
-B0 fitted onto B1: the ghost (B0's frame) is padded onto B1's canvas (``garment_cut.pad_into``: crops of one
+B0 fitted onto B1: the ghost (B0's frame) is padded onto B1's canvas (``garment_images.pad_into``: crops of one
 square canvas, centred) and registered by the existing outline registration ``garment_gates.register`` (shift +
 uniform scale, caps |shift| <= 0.04 Hb, scale 0.93..1.07) of B0's base front onto B1's base front — on the TRUNK
 only: columns within ``TRUNK_HALF`` x Hb of the head's centre column (head, neck, shoulder line, the inner leg
@@ -149,10 +146,8 @@ numbers are recorded, not gated (``garment_fit.PLACEMENT_GATE_KEYS``): after the
 push-out moved 0.12 - 0.19 of the blazer more than 3 cm. A fit of an older FIT_VERSION is never served on an outfit
 body once the fit replacing it is refused (``garments.body_fit``): the piece is left off with the reason.
 
-Subtract hair: the cut labels the hair by the haired view against ITS base view (``garment_subtract._views``
-reads the group's base copy) and places the haired mesh through ``place_mask`` — the current base front
-registered into the haired views' frame; ``garment_cut.cut_hair`` refines with its ICP. HairDeck: no rule needed
-— its job is keyed by the profile picture (``hsig``, no base) and a base change only refits from the stored seeds.
+HairDeck hair needs no rule: its job is keyed by the profile picture (``hsig``, no base) and a base change only
+refits from the stored seeds.
 """
 from __future__ import annotations
 
@@ -229,10 +224,10 @@ class FrameRefused(Exception):
 # --- Files ------------------------------------------------------------------------
 
 def source_steps(kind: str, method: str) -> Tuple[str, ...]:
-    """The image steps whose finals make the source of ``method``: every image step of the kind for the edit
-    chain, the haired views for subtract (their own mesh is the hair source mesh, keyed by their content)."""
+    """The image steps whose finals make the source: every image step of the kind (the edit chain; ``method``
+    is the caller's, only the edit chain has a source)."""
     from app.core import garment_store as gs
-    return ("haired",) if method == gs.SUBTRACT else gs.image_steps(kind)
+    return gs.image_steps(kind)
 
 
 def base_copy(character_name: str, item_id: str, fsig: str, view: str) -> Path:
@@ -320,8 +315,8 @@ def ensure_current(character_name: str, item_id: str, fsig: str, bsig: str) -> b
 
 
 def backfill(character_name: str) -> int:
-    """Keep the base views with every image group an accepted base-body fit was made from (the fit's own group;
-    subtract: its ``image_fsig``), where they are still on disk unchanged (the boot refit sweep, so a group made
+    """Keep the base views with every image group an accepted base-body edit-chain fit of a piece was made from
+    (the fit's own group), where they are still on disk unchanged (the boot refit sweep, so a group made
     before this module keeps its frame when the base images are rendered again). Returns the groups copied."""
     from app.core import garment_store as gs
     root = gs._root(character_name)
@@ -332,9 +327,11 @@ def backfill(character_name: str) -> int:
                 continue
             record = gs.read_record(path.with_suffix(".json"))
             inputs = record.get("inputs") if isinstance(record.get("inputs"), dict) else {}
-            if record.get("accepted") is not True or gs.fit_method(record) == gs.HAIRDECK:
+            # Hair has no image chain (HairDeck needs no frame; an older hair method's leftovers are not kept).
+            if (record.get("accepted") is not True or gs.fit_method(record) != gs.EDIT_CHAIN
+                    or record.get("kind") == "hair"):
                 continue
-            group = str(inputs.get("image_fsig") or "") if gs.fit_method(record) == gs.SUBTRACT else fsig
+            group = fsig
             try:
                 if source_of(character_name, item_id, group):
                     continue
@@ -366,17 +363,12 @@ def has_own_images(character_name: str, item_id: str, kind: str, method: str, fs
 
 
 def _complete(character_name: str, item_id: str, kind: str, method: str, group: str) -> bool:
-    """The group holds every accepted image final of the method, its prepared mesh (edit chain) or the hair
-    source mesh of its haired views (subtract)."""
+    """The group holds every accepted image final of the kind and its prepared mesh."""
     from app.core import garment_store as gs
     for step in source_steps(kind, method):
         for view in gs.GARMENT_VIEWS:
             if not _accepted(gs.garment_path(character_name, item_id, group, "image", step=step, view=view)):
                 return False
-    if method == gs.SUBTRACT:
-        from app.core import garment_subtract
-        ssig = gs._md5({"haired": gs.haired_shas(character_name, item_id, group), "version": gs.SOURCE_VERSION})
-        return garment_subtract.source_glb(character_name, item_id, ssig) is not None
     return _accepted(gs.garment_path(character_name, item_id, group, "prepared"))
 
 
@@ -384,9 +376,9 @@ def find_source(character_name: str, item_id: str, kind: str, method: str, profi
                 current: str) -> Optional[Dict[str, Any]]:
     """The last accepted source of the item for ``method`` other than the image group ``current`` (module
     docstring, REFIT 1): ``{fsig (the group), origin_fsig, bsig, base_images, fit (file name)}``, None without
-    one. Edit chain and subtract only."""
+    one. Edit-chain pieces only (no hair: it has no image chain)."""
     from app.core import garment_store as gs
-    if method not in (gs.EDIT_CHAIN, gs.SUBTRACT):
+    if method != gs.EDIT_CHAIN or kind == "hair":
         return None
     root = gs._root(character_name)
     fits = []
@@ -406,7 +398,7 @@ def find_source(character_name: str, item_id: str, kind: str, method: str, profi
     seen = set()
     for _mtime, fsig, path, record in sorted(fits, key=lambda f: f[0], reverse=True):
         inputs = record.get("inputs") if isinstance(record.get("inputs"), dict) else {}
-        group = str(inputs.get("image_fsig") or "") if method == gs.SUBTRACT else fsig
+        group = fsig
         if not group or group == current or group in seen:
             continue
         seen.add(group)
@@ -433,8 +425,8 @@ def find_source(character_name: str, item_id: str, kind: str, method: str, profi
 
 
 def materialize(character_name: str, item_id: str, kind: str, method: str, source: str, target: str) -> None:
-    """Copy the source group's image finals (+ records, marked ``copied_from``), its prepared mesh (edit chain)
-    and its base view copies (the base record last, marked ``materialized_from``) into the group ``target``."""
+    """Copy the source group's image finals (+ records, marked ``copied_from``), its prepared mesh and its base
+    view copies (the base record last, marked ``materialized_from``) into the group ``target``."""
     from app.core import garment_store as gs
     from app.core.timeutils import utc_now_iso
 
@@ -448,9 +440,8 @@ def materialize(character_name: str, item_id: str, kind: str, method: str, sourc
             copy(gs.garment_path(character_name, item_id, source, "image", step=step, view=view),
                  gs.garment_path(character_name, item_id, target, "image", step=step, view=view),
                  {COPIED: source})
-    if method == gs.EDIT_CHAIN:
-        copy(gs.garment_path(character_name, item_id, source, "prepared"),
-             gs.garment_path(character_name, item_id, target, "prepared"), {COPIED: source})
+    copy(gs.garment_path(character_name, item_id, source, "prepared"),
+         gs.garment_path(character_name, item_id, target, "prepared"), {COPIED: source})
     copy(base_copy(character_name, item_id, source, "back"), base_copy(character_name, item_id, target, "back"),
          {COPIED: source})
     copy(base_copy(character_name, item_id, source, "front"), base_copy(character_name, item_id, target, "front"),
@@ -580,35 +571,6 @@ def fit_masks(character_name: str, item_id: str, fsig: str, *, body_front: Path,
     reg = register_frames(source_mask, target)
     ghost_mask = _pad(warp_mask(_pad(gi._mask(ghost, source_size), target.shape), reg), body_mask.shape)
     return body_mask, ghost_mask, {"registered": True, "registration": reg, "source_bsig": source.get("bsig")}
-
-
-def place_registration(character_name: str, item_id: str, fsig: str, base_front: Path,
-                       shape: Tuple[int, int]) -> Optional[Dict[str, Any]]:
-    """The similarity that lays ``base_front`` (the current base front), padded onto the canvas ``shape`` of the
-    group's haired views, onto the group's base copy (trunks, ``register_frames``) — None when the copy IS that
-    view (or there is none). ``FrameRefused`` beyond the caps."""
-    from app.core import base_body, garment_cut
-    copy = base_copy(character_name, item_id, fsig, "front")
-    if not source_of(character_name, item_id, fsig) or \
-            base_body.file_sha256(copy) == base_body.file_sha256(Path(base_front)):
-        return None
-    _rgb, source = garment_cut._figure_mask(copy.read_bytes())
-    _rgb, current = garment_cut._figure_mask(Path(base_front).read_bytes())
-    return register_frames(_pad(current, shape), _pad(source, shape))
-
-
-def place_mask(character_name: str, item_id: str, fsig: str, base_front: Path,
-               shape: Tuple[int, int]) -> Tuple[Optional[np.ndarray], Dict[str, Any]]:
-    """The subtract cut's ``place_mask``: the silhouette of ``base_front`` (the current base front the unrigged
-    body was meshed from) in the frame of the group's haired views (``shape``) — None (the cut's default, the base
-    view of the group) when the group's base copy IS that view (``place_registration``). ``(mask, frame)``;
-    ``FrameRefused`` beyond the caps."""
-    from app.core import garment_cut
-    reg = place_registration(character_name, item_id, fsig, base_front, shape)
-    if reg is None:
-        return None, {"registered": False}
-    _rgb, current = garment_cut._figure_mask(Path(base_front).read_bytes())
-    return warp_mask(_pad(current, shape), reg), {"registered": True, "registration": reg}
 
 
 def warp_mask(mask: np.ndarray, reg: Dict[str, Any]) -> np.ndarray:

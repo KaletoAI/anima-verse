@@ -4,7 +4,8 @@ edit model redrew a little off / a little larger is moved onto the worn
 view's garment region before the position gates, which then measure the
 residual (app/core/garment_gates.py ``register`` / ``warp`` / ``_touching``,
 app/core/garment_images.py ``_register`` / ``_with_registration``, the kind
-hooks ``position_reference`` of garment_clothing / garment_hair).
+hook ``position_reference`` of garment_clothing — hair has no image chain
+since the hair-from-body spec 2026-11-11, Task 2).
 
 Usage:
     ./.venv/bin/python scripts/smoke_garment_ghost_registration.py
@@ -72,9 +73,9 @@ Geometry, W 600 x H 1000 on grey 128:
     at col 100: centre_dx ((140 + 459) − (100 + 459)) / 2 / 799 = 0.02503);
     a patch the ghost overlaps stays (bbox starts at 100 when the ghost
     covers it).
-[8] Hooks + limits: position_reference(ghost) = garment_region (clothing) /
-    hair_ref (hair), None for worn / haired; limits() of both kinds list
-    reg_shift (le 0.04) and reg_scale (range [0.93, 1.07]) under ghost.
+[8] Hook + limits: position_reference(ghost) = garment_region (clothing),
+    None for worn; limits("clothing") lists reg_shift (le 0.04) and
+    reg_scale (range [0.93, 1.07]) under ghost.
 """
 import os
 import sys
@@ -93,7 +94,7 @@ paths.init(_TMP)
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
-from app.core import garment_clothing, garment_gates as gg, garment_hair, garment_images as gi  # noqa: E402
+from app.core import garment_clothing, garment_gates as gg, garment_images as gi  # noqa: E402
 
 FAILS = []
 W, H = 600, 1000
@@ -267,14 +268,9 @@ def main() -> int:
     check("clothing ghost = garment_region",
           bool(np.array_equal(garment_clothing.position_reference("ghost", **none), REGION)), True)
     check("clothing worn = None", garment_clothing.position_reference("worn", **none), None)
-    check("hair ghost = hair_ref", bool(np.array_equal(
-        garment_hair.position_reference("ghost", **none), gg.hair_ref(BASE, mask_of(BASE), WORN, mask_of(WORN)))),
-        True)
-    check("hair haired = None", garment_hair.position_reference("haired", **none), None)
     want = {"reg_shift": {"op": "le", "value": 0.04}, "reg_scale": {"op": "range", "value": [0.93, 1.07]}}
-    for kind in ("clothing", "hair"):
-        ghost_limits = gg.limits(kind)["ghost"]
-        check(f"limits {kind}", {k: ghost_limits[k] for k in want}, want)
+    ghost_limits = gg.limits("clothing")["ghost"]
+    check("limits clothing", {k: ghost_limits[k] for k in want}, want)
 
     if FAILS:
         print(f"FAILED: {', '.join(FAILS)}")

@@ -3,16 +3,13 @@
  *
  * Usage:  node scripts/smoke_setup_choice_labels.mjs   (from the repo root; bundles with node_modules/esbuild)
  *
- * Expected, by hand from the schema field `base_body.hair_method` (choices ["body", "edit_chain", "hairdeck",
- * "subtract"] — `body` first, the default since the hair-from-body spec 2026-11-11 — choice_labels
- * {body: "From the body mesh", edit_chain: "Hair views → mesh (image edits + one mesh)",
- *  hairdeck: "HairDeck (one image → hair cards)", subtract: "Subtract (haired mesh − bald base)"}):
+ * Expected, by hand from the schema field `base_body.hair_method` (choices ["body", "hairdeck"] — `body` first,
+ * the default since the hair-from-body spec 2026-11-11; `edit_chain` and `subtract` removed in its Task 2 —
+ * choice_labels {body: "From the body mesh", hairdeck: "HairDeck (one image → hair cards)"}):
  *   1. The world schema the Setup page receives (config_scope.schema_for(WORLD), read through Python) still
  *      carries exactly those choices and labels.
- *   2. selectOptions(choices, labels) -> [{value "body", label "From the body mesh"}, {value "edit_chain",
- *      label "Hair views → mesh (image edits + one mesh)"}, {value "hairdeck", label "HairDeck (one image →
- *      hair cards)"}, {value "subtract", label "Subtract (haired mesh − bald base)"}] — the VALUE stays the raw
- *      choice.
+ *   2. selectOptions(choices, labels) -> [{value "body", label "From the body mesh"}, {value "hairdeck",
+ *      label "HairDeck (one image → hair cards)"}] — the VALUE stays the raw choice.
  *   3. Without labels (or a choice the labels miss) the label is the choice itself: [1, "b"] with {b: "Bee"}
  *      -> [{1, "1"}, {"b", "Bee"}]; no choices -> [].
  *   4. The Setup field renderer (SchemaNode.tsx) builds its <option>s from selectOptions(field.choices,
@@ -26,12 +23,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const CHOICES = ['body', 'edit_chain', 'hairdeck', 'subtract']
+const CHOICES = ['body', 'hairdeck']
 const LABELS = {
   body: 'From the body mesh',
-  edit_chain: 'Hair views → mesh (image edits + one mesh)',
   hairdeck: 'HairDeck (one image → hair cards)',
-  subtract: 'Subtract (haired mesh − bald base)',
 }
 
 if (!process.env.SETUP_CHOICE_LABELS_BUNDLED) {

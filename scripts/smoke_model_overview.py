@@ -348,12 +348,12 @@ def main() -> int:
     check("model stale", st(out["model"]["freshness"]), (S, "Base views re-rendered since this model"))
 
     hair = {"garment": {"fsig": "f", "preview_url": "p", "stale_reasons": [],
-                        "steps": {"haired": {"front": {"url": "u", "attempts": [{"attempt": 1, "url": "a"}]}},
+                        "steps": {"worn": {"front": {"url": "u", "attempts": [{"attempt": 1, "url": "a"}]}},
                                   "fit": {"status": "accepted"}}},
             "hairdeck": {"images": {"input": {"url": "i"}, "prep": None}},
             "others": [{"on_current_base": False}, {"on_current_base": True}]}
     out = mo.annotate_hair(hair)
-    tile = out["garment"]["steps"]["haired"]["front"]
+    tile = out["garment"]["steps"]["worn"]["front"]
     check("hair tile", (tile["freshness"]["state"], tile["attempts"][0]["freshness"]["state"]), (C, C))
     check("fit untouched", "freshness" in out["garment"]["steps"]["fit"], False)
     check("hair preview", out["garment"]["preview_freshness"]["state"], C)

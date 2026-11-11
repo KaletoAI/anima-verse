@@ -15,9 +15,8 @@ patched where named. Nothing renders: the estimate only READS the step state
 (``garments._done``).
 
 Every number is derived by hand from the first-attempt table ``garments.HUB_JOBS``
-(clothing worn 3 + ghost 2 + cutout 0 + mesh 1 + fit 0; hair edit chain
-haired 2 + ghost 2 + cutout 0 + mesh 1 + fit 0; HairDeck hairdeck 1 + fit 0;
-subtract haired 2 + mesh_source 1 + cut 0 + fit 0; footwear source (1 below
+(clothing worn 3 + ghost 2 + cutout 0 + mesh 1 + fit 0; HairDeck hairdeck
+1 + fit 0; hair in the body mesh: no steps; footwear source (1 below
 MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
 
 [E1] Clothing D (own-mesh dress worn by Demo), nothing cached -> steps all 5,
@@ -28,10 +27,11 @@ MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
      hub_jobs 1, note "mesh 1".
 [E3] The prepared mesh accepted too, the fit missing -> steps ["fit"],
      hub_jobs 0, note "no hub job".
-[E4] Hair H (ensure_hair_item), nothing cached, the world method patched per
-     case: edit_chain -> 5 (haired 2 + ghost 2 + mesh 1, steps 5); hairdeck
-     -> 1 (steps [hairdeck, fit]); subtract -> 3 (haired 2 + mesh_source 1,
-     steps 4).
+[E4] Hair H (ensure_hair_item, world method hairdeck), nothing cached, the
+     world method patched per case: hairdeck -> 1 (steps [hairdeck, fit]);
+     body -> no steps, 0, note "Hair comes from the body mesh"; the removed
+     methods edit_chain / subtract stored as the world value (hair-from-body
+     spec 2026-11-11, Task 2) resolve to body -> the same.
 [E5] Footwear S (feet piece, own_mesh): item image 800 px (longer side <
      1024: the source step upscales) -> 1 + 1 + 0 + 1 + 0 + 0 = 3, steps all
      6; a 1200 px image -> 2 (the source step is free); source..mesh done
@@ -87,10 +87,9 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        # The hair method this smoke was written for (the default before the hair-from-body spec 2026-11-11 —
-        # the new default "body" makes no hair item).
+        # A hair method that makes a hair item (the default "body" makes none).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "edit_chain"}}))
+                                                        "base_body": {"hair_method": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -155,14 +154,16 @@ def main() -> int:
 
         print("[E4] hair per method")
         hid = garment_hair.ensure_hair_item("Demo")
-        with patch.object(garment_hair, "world_hair_method", return_value="edit_chain"):
-            check("edit chain", brief(estimate(hid)),
-                  (["haired", "ghost", "cutout", "mesh", "fit"], 5, "haired 2 + ghost 2 + mesh 1", False))
         with patch.object(garment_hair, "world_hair_method", return_value="hairdeck"):
             check("hairdeck", brief(estimate(hid)), (["hairdeck", "fit"], 1, "hairdeck 1", False))
-        with patch.object(garment_hair, "world_hair_method", return_value="subtract"):
-            check("subtract", brief(estimate(hid)),
-                  (["haired", "mesh_source", "cut", "fit"], 3, "haired 2 + mesh_source 1", False))
+        from app.core import config as config_mod
+        real_get = config_mod.get
+        for method in ("body", "edit_chain", "subtract"):
+            # The stored world value itself: a removed method is read as the default "body" (world_hair_method).
+            with patch.object(config_mod, "get", side_effect=lambda key, default=None, m=method: (
+                    m if key == "base_body.hair_method" else real_get(key, default))):
+                check(f"world {method}: no steps", brief(estimate(hid)),
+                      ([], 0, "Hair comes from the body mesh", False))
 
         print("[E5] footwear")
         sid = inventory.add_item(name="Shoes", category="outfit_piece", prompt_fragment="black shoes",

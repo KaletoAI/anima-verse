@@ -94,12 +94,12 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         ["tpose_back", "tpose_side", "face_view", "tpose_animal_view"],
         {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
          "char_spec_fallback": ""}),
-    # Garment edits (base-body phase 4): the haired and hair-only views are
+    # Garment edits (base-body phase 4): the worn and garment-only views are
     # edits of the stored base view, so a reference slot is mandatory. Kept
     # apart from tpose_view on purpose — that occasion triggers the mesh-input
     # matte, which trims the image sides and breaks the shared framing.
     "garment_view": _image(
-        "Garment & hair edits", "Hair tab: haired and hair-only views",
+        "Garment & hair edits", "Wardrobe: worn and garment-only views; Hair tab: beard-free picture",
         ["garment_edit"],
         {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
          "char_spec_fallback": ""}, needs_ref_slot=True),
@@ -201,14 +201,6 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     "mesh_object": _mesh("3D mesh — object", "Prop mesh", "none"),
     "mesh_building": _mesh("3D mesh — building", "Building/room mesh", "none"),
     "mesh_garment": _mesh("3D mesh — garment", "Garment meshes (clothing pieces)", "none"),
-    # The hair views method (Hair tab, method edit_chain): the hair-only views
-    # become ONE mesh. Its own chain + per-character glob so hair can run on
-    # another backend than the clothing; config._migrate_hair_mesh_routing
-    # seeds the chain from mesh_garment once.
-    "hair_views_mesh": _mesh("3D mesh — hair from views", "Hair tab: hair views method", "none",
-                             {"character_scoped": True,
-                              "char_spec_field": "hair_views_mesh_workflow",
-                              "char_spec_fallback": ""}),
     # Footwear (plan 2026-11-10-footwear-rigid-shoes): one rigid shoe per item,
     # meshed from the empty-shoe edit of the inventory item image. Both are
     # world-scoped — the source belongs to the item, not to whoever wears it;
@@ -225,13 +217,6 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                            "char_spec_fallback": ""}),
                   "category": "img2hair", "requires_chain": False,
                   "hint": "Hair cards from one image of the character (e.g. HairDeck)."},
-    # The subtract hair method (plan 2026-11-10-hair-subtract-method): one mesh of
-    # the HAIRED character from its haired front + back cut-outs; the hair is cut
-    # off it on the CPU (garment_cut).
-    "hair_source_mesh": _mesh("3D mesh — haired source", "Hair tab: subtract method", "none",
-                              {"character_scoped": True,
-                               "char_spec_field": "hair_source_mesh_workflow",
-                               "char_spec_fallback": ""}),
     "pose_animation": {"label": "3D animation — pose clip", "media": "animation",
                        "category": "mesh2anim", "rig": "", "needs_ref_slot": False,
                        "style_use_cases": [], "covers": "Poses tab: generate animation",

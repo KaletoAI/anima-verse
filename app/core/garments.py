@@ -3,30 +3,26 @@ its steps, fits it onto the base body and starts the assembly (plan
 ``docs/superpowers/plans/2026-11-09-base-body-phase4-hair.md``, R3, R8, R10,
 R11, R13, R14, Task 8).
 
-Steps of a kind (``garment_store.GARMENT_STEPS``; hair: ``haired → ghost →
-cutout → mesh → fit``, clothing — an own-mesh outfit piece, plan
-``2026-11-09-base-body-phase5-mesh-items.md``: ``worn → ghost → cutout → mesh
-→ fit``). Every step caches its accepted output on disk under
+Steps of a kind (``garment_store.GARMENT_STEPS``; clothing — an own-mesh
+outfit piece, plan ``2026-11-09-base-body-phase5-mesh-items.md``: ``worn →
+ghost → cutout → mesh → fit``; hair by HairDeck: ``hairdeck → fit``, below;
+hair in the body mesh has no steps). Every step caches its accepted output on disk under
 the garment fingerprint ``fsig`` (R13), so a run starts at the first step
 whose accepted output is missing — or at an explicit step. A step that
 produced new output makes every later step run again (``force`` propagates
 downstream); one that was served from the cache does not.
 
 - image steps (``garment_images``): per view, the BACK first
-  (``EDIT_VIEW_ORDER``): the back view sees how long the hair is, the front
-  only guesses it (its ends hang behind the body) — unless the kind's step
-  names its own order (``EDIT_STEPS[step]["views"]``; clothing ``worn``: the
-  front first, the back is drafted from it). The kind's pair step
-  (``PAIR_STEP`` of its module, ``garment_images.kind_module``; both kinds:
-  ``ghost``) additionally needs front and back to agree (``pair_agree``:
-  hair — the hair ends at the same height, ``bottoms_agree``; clothing — the
-  hems, ``hems_agree``): a front attempt is gated against the accepted back
-  (``_pair_check``), and a pair that still disagrees — a new back, or both
-  views from before — renders the front again against the back, with its own
-  attempts. A disagreeing pair never ends a run without a new attempt. The
-  kind's ``front_hints`` give the front edit what the back shows (hair: where
-  the accepted haired back's hair ends, ``garment_images.haired_length``, as
-  a length phrase in the hair-only front prompt; clothing: nothing);
+  (``EDIT_VIEW_ORDER``) unless the kind's step names its own order
+  (``EDIT_STEPS[step]["views"]``; clothing ``worn``: the front first, the
+  back is drafted from it). The kind's pair step (``PAIR_STEP`` of its
+  module, ``garment_images.kind_module``: ``ghost``) additionally needs front
+  and back to agree (``pair_agree``: the hems, ``hems_agree``): a front
+  attempt is gated against the accepted back (``_pair_check``), and a pair
+  that still disagrees — a new back, or both views from before — renders the
+  front again against the back, with its own attempts. A disagreeing pair
+  never ends a run without a new attempt. The kind's ``front_hints`` give the
+  front edit what the back shows (clothing: nothing);
 - every image step checks after each view that the run's inputs (base views,
   the kind's description: ``garment_fsig``) did not change meanwhile — a base view
   regenerated during the run refuses with ``INPUTS_CHANGED_ERROR`` instead of
@@ -35,9 +31,8 @@ downstream); one that was served from the cache does not.
   accepted image deletes the prepared mesh of the same fsig (it was built
   from the replaced images);
 - ``fit``: the CURRENT base model (rigged + unrigged, read under the
-  publication lock), the kind's fit and gate (hair ``garment_fit.fit_hair`` /
-  ``GATES``, clothing ``garment_fit.fit_clothing`` / ``CLOTHING_GATES`` with
-  the piece's slots). On acceptance the
+  publication lock), ``garment_fit.fit_clothing`` and ``CLOTHING_GATES``
+  with the piece's slots. On acceptance the
   fit GLB ``garments/{item}_{fsig}.glb`` (= the rigged base with the garment
   grafted on) and its record are written, the distance tier is decimated to
   ``low/``, and the assembly of the served outfit model is scheduled.
@@ -46,7 +41,7 @@ Refit before re-render (``garment_source``, user decision 2026-11-10): a
 default run whose current image group has none of its own images yet (new
 base images name a new fsig) first copies in the item's last accepted
 source — images + mesh made on an older base — and fits it onto the current
-base on the CPU (edit chain ``_fit``; subtract hair the cut + fit), its ghost
+base on the CPU (``_fit``), its ghost
 registered from the source's base front onto the current one. Accepted: the
 run ends there (``refit`` in the result, ``refitted`` in the fit record).
 Refused: the copies go and the same run renders the chain. An explicit run of
@@ -317,16 +312,15 @@ def _pair_check(character_name: str, item_id: str, kind: str, fsig: str):
 def _front_hints(character_name: str, item_id: str, fsig: str, kind: str, step: str,
                  view: str) -> Optional[Dict[str, Any]]:
     """The prompt hints of an edit from what the back shows (the kind
-    module's ``front_hints``; hair: the length for the hair-only front)."""
+    module's ``front_hints``)."""
     return _kind_module(kind).front_hints(character_name, item_id, fsig, step, view)
 
 
 def _inputs_unchanged(character_name: str, item_id: str, fsig: str, step: str) -> None:
     """``_Refused`` when the fsig of the run's images is no longer the
-    current one (``garment_store.image_fsig``: the edit-chain fsig of the
-    subtract method's haired views, ``garment_fsig`` otherwise)."""
-    from app.core.garment_store import image_fsig
-    if image_fsig(character_name, item_id) != fsig:
+    current one (``garment_store.garment_fsig``)."""
+    from app.core.garment_store import garment_fsig
+    if garment_fsig(character_name, item_id) != fsig:
         raise _Refused(step, INPUTS_CHANGED_ERROR, None)
 
 
@@ -375,17 +369,11 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
 
 def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, base_model_sha: str,
           method: str = "edit_chain", hsig: str = "") -> bool:
-    from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS, SHOE, SUBTRACT, image_fsig
+    from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS, SHOE
     if method == SHOE and step != "fit":
         # The shoe's item steps: per item under its current ssig (``footwear_source``).
         from app.core import garment_footwear
         return garment_footwear.step_done(item_id, step)
-    if method == SUBTRACT and step != "fit":
-        if step in IMAGE_STEPS:  # the haired views: the edit chain's own, under its fsig
-            fsig = image_fsig(character_name, item_id)
-        else:
-            from app.core import garment_subtract
-            return garment_subtract.step_done(character_name, item_id, step, fsig)
     if step in IMAGE_STEPS:
         if not all(_accepted(_image(character_name, item_id, fsig, step, v)) for v in GARMENT_VIEWS):
             return False
@@ -618,17 +606,15 @@ def _write_atomic(path: Path, data: bytes) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def _hair_fit_gates(character_name: str, profile: Dict[str, Any]) -> Dict[str, Any]:
-    """The fit gates of the edit-chain hair: those of its length class (``garment_fit.hair_gates``)."""
-    from app.core import garment_fit, garment_hair
-    return garment_fit.hair_gates(garment_hair.hair_length_class(character_name, profile=profile))
-
-
 def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
          profile: Dict[str, Any]) -> Path:
-    """Fit the prepared mesh onto the current base model and store it (see
-    the module docstring). ``_Refused`` when the fit gate refuses."""
-    from app.core import base_body, garment_fit
+    """Fit the prepared mesh of an own-mesh outfit piece onto the current
+    base model and store it (see the module docstring). ``_Refused`` when
+    the fit gate refuses; ValueError for any other kind (hair is HairDeck's
+    or the body mesh's)."""
+    from app.core import base_body, garment_fit, garment_set
+    if kind != garment_set.CLOTHING:
+        raise ValueError(f"The edit-chain fit is for clothing, not {kind!r}")
     from app.core.garment_store import GARMENT_VIEWS, garment_path
     from app.core.model_refs import find_ref_image
     from app.core.timeutils import utc_now_iso
@@ -647,7 +633,7 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     prepared_bytes = prepared.read_bytes()
     from app.core import garment_source
     base_images = {v: _sha(p) for v, p in base_views.items()}
-    if fsig == _image_fsig_or_empty(character_name, item_id):
+    if fsig == _fsig_or_empty(character_name, item_id):
         # A group of the current fsig was made on exactly these base views: keep them with it (its frame).
         garment_source.ensure_base_copy(character_name, item_id, fsig, bsig=bsig, expected=base_images)
     # Masks in the frame of the bald front view the unrigged base was built
@@ -660,22 +646,14 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     except garment_source.FrameRefused as e:
         raise _Refused("fit", f"fit refused — {e}", {"ok": False, "reasons": [str(e)],
                                                       "registration": e.registration})
-    from app.core import garment_set
-    if kind == garment_set.CLOTHING:
-        from app.models.inventory import get_item
-        slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
-        # A refit aligns its sleeves / trouser legs onto this body's limbs (``garment_source`` LIMBS).
-        limb_source = garment_source.limb_source(character_name, item_id, fsig) if frame.get("registered") else None
-        result = garment_fit.fit_clothing(prepared_bytes, snapshot["unrigged"], snapshot["rigged"],
-                                          masks={"body": bald_mask, "garment": ghost_mask}, slots=slots,
-                                          limb_source=limb_source)
-        limits = garment_fit.CLOTHING_GATES
-    else:
-        # The gates of the hair's length class: short hair lies on the scalp and is pushed almost everywhere
-        # by design (``hair_gates`` drops ``moved_share`` for it, like the subtract method's fit).
-        limits = _hair_fit_gates(character_name, profile)
-        result = garment_fit.fit_hair(prepared_bytes, snapshot["unrigged"], snapshot["rigged"], bald_mask,
-                                      ghost_mask, gates=limits)
+    from app.models.inventory import get_item
+    slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
+    # A refit aligns its sleeves / trouser legs onto this body's limbs (``garment_source`` LIMBS).
+    limb_source = garment_source.limb_source(character_name, item_id, fsig) if frame.get("registered") else None
+    result = garment_fit.fit_clothing(prepared_bytes, snapshot["unrigged"], snapshot["rigged"],
+                                      masks={"body": bald_mask, "garment": ghost_mask}, slots=slots,
+                                      limb_source=limb_source)
+    limits = garment_fit.CLOTHING_GATES
     gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
     if not result.ok:
@@ -703,11 +681,11 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
 
 
-def _image_fsig_or_empty(character_name: str, item_id: str) -> str:
-    """``garment_store.image_fsig`` ("" when the item has none)."""
+def _fsig_or_empty(character_name: str, item_id: str) -> str:
+    """``garment_store.garment_fsig`` ("" when the item has none)."""
     from app.core import garment_store as gs
     try:
-        return gs.image_fsig(character_name, item_id)
+        return gs.garment_fsig(character_name, item_id)
     except ValueError:
         return ""
 
@@ -1059,12 +1037,7 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
         "body_id": body_id, "body_sha256": body["sha"], "base_signature": bsig,
         "texture_signature": body["meta"]["outfit_body"].get("texture_signature"),
         "base_fit_sha256": base_fit_sha}
-    if gs.fit_method(base_record) == gs.SUBTRACT:
-        from app.core import garment_subtract
-        result, fields = garment_subtract.fit_on_body(character_name, item_id, body_id=body_id, body=body,
-                                                      base_record=base_record, profile=profile)
-        record.update({**fields, "created_at": utc_now_iso()})
-    elif gs.fit_method(base_record) == gs.HAIRDECK:
+    if gs.fit_method(base_record) == gs.HAIRDECK:
         from app.core import garment_hair
         inputs = base_record.get("inputs") or {}
         hsig = str(inputs.get("hsig") or "")
@@ -1094,6 +1067,9 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
                                        result.report.get("colour") or {}),
             "length_class": length_class, "placement": _placement_summary(result.report.get("placement")),
             "created_at": utc_now_iso()})
+    elif kind != garment_set.CLOTHING:
+        # Hair fits of the removed methods (hair views → mesh, subtract): nothing refits them any more.
+        raise ValueError(f"No fit on an outfit body for a {kind} fit by {gs.fit_method(base_record)!r}")
     else:
         prepared = gs.garment_path(character_name, item_id, fsig, "prepared")
         if not _accepted(prepared):
@@ -1117,28 +1093,23 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             raise _Refused("fit", f"fit on the outfit body refused — {e}",
                            {"ok": False, "reasons": [str(e)], "registration": e.registration})
         record["frame"] = frame
+        from app.models.inventory import get_item
+        slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
+        # The outfit body has its own framing, trunk and limbs: place the piece from the base fit of the same
+        # prepared mesh (torso + sleeves / trouser legs, ``garment_source`` — outfit bodies).
         limb_source = None
-        if kind == garment_set.CLOTHING:
-            from app.models.inventory import get_item
-            slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
-            # The outfit body has its own framing, trunk and limbs: place the piece from the base fit of the same
-            # prepared mesh (torso + sleeves / trouser legs, ``garment_source`` — outfit bodies).
-            try:
-                limb_source = garment_source.limb_source_from_fit(
-                    Path(path).read_bytes(), skirt=bool((base_record.get("report") or {}).get("skirt")),
-                    torso=True)
-            except (OSError, ValueError, KeyError) as e:
-                logger.warning("Garment fit %s/%s on %s: base fit unreadable for the limbs: %s", character_name,
-                               item_id, body_id, e)
-                limb_source = None
-            result = garment_fit.fit_clothing(prepared_bytes, body["unrigged"], body["rigged"],
-                                              masks={"body": body_mask, "garment": ghost_mask}, slots=slots,
-                                              limb_source=limb_source)
-            limits = garment_fit.CLOTHING_GATES
-        else:
-            limits = _hair_fit_gates(character_name, profile)
-            result = garment_fit.fit_hair(prepared_bytes, body["unrigged"], body["rigged"], body_mask, ghost_mask,
-                                          gates=limits)
+        try:
+            limb_source = garment_source.limb_source_from_fit(
+                Path(path).read_bytes(), skirt=bool((base_record.get("report") or {}).get("skirt")),
+                torso=True)
+        except (OSError, ValueError, KeyError) as e:
+            logger.warning("Garment fit %s/%s on %s: base fit unreadable for the limbs: %s", character_name,
+                           item_id, body_id, e)
+            limb_source = None
+        result = garment_fit.fit_clothing(prepared_bytes, body["unrigged"], body["rigged"],
+                                          masks={"body": body_mask, "garment": ghost_mask}, slots=slots,
+                                          limb_source=limb_source)
+        limits = garment_fit.CLOTHING_GATES
         gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
                  "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
         if not result.ok:
@@ -1406,17 +1377,15 @@ def cached_failure(character_name: str, item_id: str, *,
 #: Hub jobs per step of a plain run on its FIRST attempt (spec
 #: 2026-11-11-improvements-figure-pipeline § 6.1 / § 6.5), keyed ``<kind>:<method>``:
 #: the clothing ``worn`` = the front edit + the back draft + the back fit; a
-#: two-view image step = one edit per view; ``mesh`` / ``mesh_source`` = one
-#: img2mesh job; HairDeck = its one job. The cut-out, the cut, the insole and
+#: two-view image step = one edit per view; ``mesh`` = one img2mesh job;
+#: HairDeck = its one job. The cut-out, the insole and
 #: every fit are CPU work. Footwear ``source`` is computed per item (the
 #: upscale, only for an item image below ``footwear_source.MIN_SIDE``). A
 #: chain may spend one more per refused attempt (R5) — this is the estimate
 #: ``run_estimate`` hands the improvements queue, not a cap.
 HUB_JOBS: Dict[str, Dict[str, int]] = {
     "clothing:edit_chain": {"worn": 3, "ghost": 2, "cutout": 0, "mesh": 1, "fit": 0},
-    "hair:edit_chain": {"haired": 2, "ghost": 2, "cutout": 0, "mesh": 1, "fit": 0},
     "hair:hairdeck": {"hairdeck": 1, "fit": 0},
-    "hair:subtract": {"haired": 2, "mesh_source": 1, "cut": 0, "fit": 0},
     # Hair in the body mesh: no steps, no job (the base views carry the hair).
     "hair:body": {},
     "footwear:shoe": {"source": 0, "empty": 1, "cutout": 0, "mesh": 1, "insole": 0, "fit": 0},
@@ -1482,10 +1451,9 @@ def run_estimate(character_name: str, item_id: str, *,
     parts = [(s, int(costs.get(s, 0))) for s in steps]
     full = sum(n for _s, n in parts)
     note = " + ".join(f"{s} {n}" for s, n in parts if n) or "no hub job"
-    if first in gs.IMAGE_STEPS and method in (gs.EDIT_CHAIN, gs.SUBTRACT):
-        ifsig = gs.image_fsig(character_name, item_id, profile=profile)
-        if (not garment_source.has_own_images(character_name, item_id, kind, method, ifsig)
-                and garment_source.find_source(character_name, item_id, kind, method, profile, ifsig)
+    if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN:
+        if (not garment_source.has_own_images(character_name, item_id, kind, method, fsig)
+                and garment_source.find_source(character_name, item_id, kind, method, profile, fsig)
                 is not None):
             return {"steps": steps, "hub_jobs": 0, "refit": True,
                     "note": f"refit from the previous base; up to {full} if the refit is refused"}
@@ -1557,8 +1525,6 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         bsig, base_sha = base
         _refresh_description(character_name, item, kind, profile)
         fsig = gs.garment_fsig(character_name, item_id, profile=profile)
-        # The image steps' fsig: the subtract method's haired views are the edit chain's own.
-        ifsig = gs.image_fsig(character_name, item_id, profile=profile)
         if method == gs.HAIRDECK:
             hsig = gs.garment_hsig(character_name, item_id, profile=profile)
         if wanted is None:
@@ -1568,19 +1534,19 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                 return {"ok": True, "fsig": fsig, "ran": []}
             if first in gs.IMAGE_STEPS:
                 # Refit before re-render: the last accepted source onto the new base first (CPU).
-                refit = _refit_from_source(character_name, item_id, kind, method, ifsig, bsig, profile)
+                refit = _refit_from_source(character_name, item_id, kind, method, fsig, bsig, profile)
                 if refit is not None and refit.get("ok"):
                     return refit
         else:
             first = min(wanted, key=order.index)
             if first in gs.IMAGE_STEPS:
                 from app.core import garment_source
-                if garment_source.drop_materialized(character_name, item_id, ifsig):
+                if garment_source.drop_materialized(character_name, item_id, fsig):
                     # Re-render: images of two bases never mix in one group — the chain starts at its first step.
                     first = order[0]
         if first in gs.IMAGE_STEPS:
             from app.core import garment_source
-            garment_source.ensure_current(character_name, item_id, ifsig, bsig)
+            garment_source.ensure_current(character_name, item_id, fsig, bsig)
         pair_step = _kind_module(kind).PAIR_STEP if method == gs.EDIT_CHAIN else None
         dirty = False  # an earlier step produced new output: every later step runs again
         regenerated_seed: Optional[int] = None  # the seed a forced HairDeck regenerate of this run made
@@ -1588,49 +1554,33 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             forced = force and step == first
             gs.start(character_name, item_id, step)
             produced = False
-            if method == gs.SUBTRACT and step not in gs.IMAGE_STEPS:
-                # New haired views name a new subtract fsig (their sha256 is in it).
-                fsig = gs.garment_fsig(character_name, item_id, profile=profile)
-            if method == gs.SUBTRACT and step in ("mesh_source", "cut"):
-                from app.core import garment_subtract
-                ssig = gs.subtract_ssig(character_name, item_id, profile=profile)
-                # The source mesh is keyed by the haired views alone: only a click re-runs it.
-                if forced or not garment_subtract.step_done(character_name, item_id, step, fsig,
-                                                            profile=profile) or (step == "cut" and dirty):
-                    if step == "mesh_source":
-                        garment_subtract.run_source(character_name, item_id, ifsig, ssig, force=forced)
-                    else:
-                        garment_subtract.run_cut(character_name, item_id, fsig, ifsig, ssig, bsig, profile,
-                                                 force=True)
-                    produced = True
-            elif step in gs.IMAGE_STEPS:
+            if step in gs.IMAGE_STEPS:
                 views = (gs.GARMENT_VIEWS if step == "cutout"
                          else _kind_module(kind).EDIT_STEPS[step].get("views", EDIT_VIEW_ORDER))
                 for v in views:
                     f = forced and (view is None or v == view)
                     # Checked per view: a new front of a drafted step (clothing
                     # ``worn``) drops the back it was drafted from.
-                    if not f and _accepted(_image(character_name, item_id, ifsig, step, v)):
+                    if not f and _accepted(_image(character_name, item_id, fsig, step, v)):
                         continue
                     if step == "cutout":
-                        garment_images.cut_out(character_name, item_id, ifsig, v, force=f)
+                        garment_images.cut_out(character_name, item_id, fsig, v, force=f)
                     else:
                         # The pair step's back is accepted before its front starts.
-                        pair = (_pair_check(character_name, item_id, kind, ifsig)
+                        pair = (_pair_check(character_name, item_id, kind, fsig)
                                 if step == pair_step and v == "front" else None)
-                        garment_images.run_edit_step(character_name, item_id, ifsig, step, v, force=f,
+                        garment_images.run_edit_step(character_name, item_id, fsig, step, v, force=f,
                                                      pair_check=pair,
-                                                     prompt_hints=_front_hints(character_name, item_id, ifsig,
+                                                     prompt_hints=_front_hints(character_name, item_id, fsig,
                                                                                kind, step, v))
                     produced = True
                     # Right away: a refusal of the next view must not leave a
                     # mesh behind that was built from the replaced image.
-                    _drop_mesh(character_name, item_id, ifsig)
-                    _inputs_unchanged(character_name, item_id, ifsig, step)
+                    _drop_mesh(character_name, item_id, fsig)
+                    _inputs_unchanged(character_name, item_id, fsig, step)
                 if step == pair_step and not _pair(character_name, item_id, kind, fsig)[0]:
-                    # The back is the reference (the hair's length, the
-                    # hem); the front renders again against it (two
-                    # attempts; GateRefused when both miss).
+                    # The back is the reference (the hem); the front renders
+                    # again against it (two attempts; GateRefused when both miss).
                     garment_images.run_edit_step(character_name, item_id, fsig, step, "front", force=True,
                                                  pair_check=_pair_check(character_name, item_id, kind, fsig),
                                                  prompt_hints=_front_hints(character_name, item_id, fsig,
@@ -1660,9 +1610,6 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                     if method == gs.HAIRDECK:
                         _hairdeck_fit_step(character_name, item_id, kind, fsig, bsig, hsig, profile, ran,
                                            prefer_seed=regenerated_seed)
-                    elif method == gs.SUBTRACT:
-                        from app.core import garment_subtract
-                        garment_subtract.run_fit(character_name, item_id, kind, fsig, bsig, profile)
                     else:
                         _fit(character_name, item_id, kind, fsig, bsig, profile)
                     produced = True
@@ -1696,46 +1643,31 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         return _refusal(character_name, item_id, fsig, step, str(e) or type(e).__name__, None, ran)
 
 
-def _refit_from_source(character_name: str, item_id: str, kind: str, method: str, ifsig: str, bsig: str,
+def _refit_from_source(character_name: str, item_id: str, kind: str, method: str, fsig: str, bsig: str,
                        profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Refit before re-render (``garment_source``): when the image group ``ifsig`` has none of its own images
+    """Refit before re-render (``garment_source``): when the image group ``fsig`` has none of its own images
     and the item has an accepted source made on another base, copy it in and fit it onto the current base on the
-    CPU — edit chain ``_fit``, subtract the cut + fit. ``{ok: True, fsig, ran, refit: {source…}}`` when accepted;
-    ``{ok: False, error, refit}`` when refused (the copies are dropped again, the caller renders the chain); None
-    when there is nothing to refit from."""
+    CPU (``_fit``; edit chain only). ``{ok: True, fsig, ran, refit: {source…}}`` when accepted; ``{ok: False,
+    error, refit}`` when refused (the copies are dropped again, the caller renders the chain); None when there
+    is nothing to refit from."""
     from app.core import garment_source, garment_store as gs
-    if method not in (gs.EDIT_CHAIN, gs.SUBTRACT):
+    if method != gs.EDIT_CHAIN:
         return None
-    if garment_source.has_own_images(character_name, item_id, kind, method, ifsig):
+    if garment_source.has_own_images(character_name, item_id, kind, method, fsig):
         return None
-    source = garment_source.find_source(character_name, item_id, kind, method, profile, ifsig)
+    source = garment_source.find_source(character_name, item_id, kind, method, profile, fsig)
     if source is None:
         return None
     step = "fit"
     gs.start(character_name, item_id, step)
     try:
-        garment_source.materialize(character_name, item_id, kind, method, source["fsig"], ifsig)
-        if method == gs.SUBTRACT:
-            from app.core import garment_subtract
-            fsig = gs.garment_fsig(character_name, item_id, profile=profile)  # names the copied haired views
-            step = "cut"
-            gs.start(character_name, item_id, step)
-            garment_subtract.run_cut(character_name, item_id, fsig, ifsig,
-                                     gs.subtract_ssig(character_name, item_id, profile=profile), bsig, profile,
-                                     force=True)
-            gs.end(character_name, item_id, step)
-            step = "fit"
-            gs.start(character_name, item_id, step)
-            garment_subtract.run_fit(character_name, item_id, kind, fsig, bsig, profile)
-            ran = ["cut", "fit"]
-        else:
-            fsig = ifsig
-            _fit(character_name, item_id, kind, fsig, bsig, profile)
-            ran = ["fit"]
+        garment_source.materialize(character_name, item_id, kind, method, source["fsig"], fsig)
+        _fit(character_name, item_id, kind, fsig, bsig, profile)
+        ran = ["fit"]
     except Exception as e:  # noqa: BLE001 — any refusal or missing source: the chain is rendered instead
         error = e.error if isinstance(e, _Refused) else (str(e) or type(e).__name__)
         try:
-            garment_source.drop_materialized(character_name, item_id, ifsig)
+            garment_source.drop_materialized(character_name, item_id, fsig)
         except (OSError, ValueError):
             logger.exception("Garment %s/%s: dropping the copied source failed", character_name, item_id)
         gs.end(character_name, item_id, step)
@@ -2098,9 +2030,8 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
     The mesh step of the item's CURRENT method, under the lock that step runs under, taken WITHOUT waiting
     (``StepBusy`` while it is held — a collected job never races a running step):
 
-    - edit chain (clothing, hair "views → mesh"): ``garment_mesh.collect_job`` under the character's run lock
+    - edit chain (clothing): ``garment_mesh.collect_job`` under the character's run lock
       (``garment_store.char_lock``), step ``mesh``;
-    - hair ``subtract``: ``garment_subtract.collect_source_job`` under the same lock, step ``mesh_source``;
     - footwear: ``footwear_source.collect_mesh_job`` under the ITEM lock, step ``mesh`` of the shoe source.
 
     Each runs the SAME prepare + gates as a fresh attempt and writes the same record plus ``collected_job``.
@@ -2114,7 +2045,7 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
     Returns the store's answer plus ``step`` (and ``fsig``): ``status`` ``accepted`` / ``refused`` /
     ``step_failed`` / ``queued`` / ``running`` / ``unknown`` / ``forbidden`` / ``failed`` / ``rig_mismatch``
     / ``error``. ValueError for an item that is no garment of the character, a footwear piece on the
-    garment route (or the reverse, ``footwear``), or hair made by HairDeck (no mesh job);
+    garment route (or the reverse, ``footwear``), or hair (HairDeck or the body mesh: no mesh job);
     ``base_body.MissingInput`` / FileNotFoundError when the step's input is missing. Blocking."""
     from app.core import base_body, garment_mesh, garment_store as gs
     from app.models.character import get_character_profile
@@ -2128,7 +2059,7 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
     if method == gs.HAIRDECK:
         raise ValueError("Hair made by HairDeck has no mesh job to fetch")
     _require_steps(kind, order, method)
-    step = "mesh_source" if method == gs.SUBTRACT else "mesh"
+    step = "mesh"
     if kind == _footwear():
         from app.core import footwear_source
         try:
@@ -2142,13 +2073,7 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
             raise StepBusy(RUN_GOING)
         try:
             fsig = gs.garment_fsig(character_name, item_id, profile=profile)
-            if method == gs.SUBTRACT:
-                from app.core import garment_subtract
-                res = garment_subtract.collect_source_job(
-                    character_name, item_id, gs.image_fsig(character_name, item_id, profile=profile),
-                    gs.subtract_ssig(character_name, item_id, profile=profile), job_id)
-            else:
-                res = garment_mesh.collect_job(character_name, item_id, fsig, job_id)
+            res = garment_mesh.collect_job(character_name, item_id, fsig, job_id)
         finally:
             lock.release()
     status = res.get("status")
@@ -2375,7 +2300,7 @@ def image_path(character_name: str, item_id: str, step: str, view: str, attempt:
     outside ``garments/`` (``garment_store.garment_path``)."""
     from app.core import garment_store as gs
     _item(character_name, item_id)
-    return _image(character_name, item_id, gs.image_fsig(character_name, item_id), step, view, attempt)
+    return _image(character_name, item_id, gs.garment_fsig(character_name, item_id), step, view, attempt)
 
 
 def preview_path(character_name: str, item_id: str, method: str = "") -> Optional[Path]:
@@ -2600,14 +2525,6 @@ def hairdeck_panel(character_name: str, item_id: str, *,
             "input_source": "beard_free" if sent is not None and sent != source else "profile"}
 
 
-def _mm(value: Any) -> Optional[float]:
-    """A stored thickness in mm, rounded to 0.01 (None when absent)."""
-    try:
-        return round(float(value), 2)
-    except (TypeError, ValueError):
-        return None
-
-
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     """UI info of one garment (the Hair tab): fsig, the method and its
     source, description, every step's files and gate numbers (the steps of
@@ -2620,10 +2537,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     ``hairdeck_changed`` (another profile picture or HairDeck setting than
     the served fit's job), ``colour_changed`` (another colour override) and
     ``placement_changed`` (another manual forward/tilt, or a fit from before
-    the placement correction). Subtract hair adds ``shape_changed`` (the
-    served fit's cut has another shape than the current cut / shell) and
-    ``shell_changed`` (a shell of another thickness) — the next run re-cuts
-    on the CPU, no mesh job.
+    the placement correction).
     ``failed`` also reports the persisted failure of the current fsig after
     a restart (automatic triggers skip it until an explicit run).
     ``queue_position`` / ``queue_running`` (``queue_state``): the 1-based
@@ -2663,13 +2577,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     base = base_body.current_base(character_name, profile=profile) or ("", "")
     steps: Dict[str, Any] = {}
     if fsig:
-        ifsig = gs.image_fsig(character_name, item_id, profile=profile)
         for step in gs.steps_for(kind, method):
             if step in gs.IMAGE_STEPS:
-                steps[step] = {v: _image_info(character_name, item_id, ifsig, step, v) for v in gs.GARMENT_VIEWS}
-            elif step in ("mesh_source", "cut"):
-                from app.core import garment_subtract
-                steps[step] = garment_subtract.step_info(character_name, item_id, step, fsig, profile=profile)
+                steps[step] = {v: _image_info(character_name, item_id, fsig, step, v) for v in gs.GARMENT_VIEWS}
             elif step == "mesh":
                 steps[step] = _mesh_info(character_name, item_id, fsig)
             elif step == "hairdeck":
@@ -2704,12 +2614,6 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                     stale.append("colour_changed")
                 if used.get("placement") != garment_hair.hair_placement(profile):
                     stale.append("placement_changed")
-            if method == gs.SUBTRACT and gs.fit_method(record) == gs.SUBTRACT:
-                shape = garment_hair.subtract_shape(character_name, profile=profile)
-                if (used.get("shape") or record.get("shape")) != shape:
-                    stale.append("shape_changed")
-                elif shape == "shell" and _mm(used.get("shell_mm")) != _mm(garment_hair.shell_mm(profile)):
-                    stale.append("shell_changed")
     preview = preview_path(character_name, item_id)
     preview_url = None
     if preview is not None:

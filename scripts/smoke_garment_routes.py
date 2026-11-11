@@ -35,15 +35,14 @@ Fixture (expected values derived by hand):
     True, description "medium blonde hair", behind_shoulders True, item_id
     None, equipped False, garment None, collision None (no base model ->
     no capsule set, commit 8a617513), method
-    "edit_chain", method_source "world", world_method "edit_chain",
-    hairdeck None, others [], subtract {shape "cut" from the length class
-    "medium", no override, shell 5.0 mm (default 5.0, 2.0 .. 15.0)},
-    hair_in_body False, base_prompts None} (the method keys: plan
-    2026-11-09-hairdeck-hair Task 5 — the world pins edit_chain, the default
-    before the hair-from-body spec 2026-11-11, whose keys hair_in_body /
-    base_prompts are None/False under any other method; the subtract
-    settings: plan 2026-11-10-hair-subtract-method Task 1; the limits
-    also carry "hairdeck_fit"); Pet: humanoid False, description "", garment
+    "hairdeck", method_source "world", world_method "hairdeck",
+    hairdeck None, others [], hair_in_body False, base_prompts None} (the
+    method keys: plan 2026-11-09-hairdeck-hair Task 5 — the world pins
+    hairdeck, a method with a hair item (the default "body" of the
+    hair-from-body spec 2026-11-11 makes none), whose keys hair_in_body /
+    base_prompts are None/False under any other method); limits =
+    {hairdeck_fit} only (the edit-chain steps and their gates are gone,
+    Task 2 of that spec); Pet: humanoid False, description "", garment
     None; Nobody: 404.
 [3] POST /hair: Pet 400, Offline 400 ("base-body pipeline"), Bald 400
     ("No hair set"); none of them gets an item or a run.
@@ -59,16 +58,19 @@ Fixture (expected values derived by hand):
     never calls garment_store.start), queue_position 1, queue_running
     hair_demo. Released -> idle after exactly 2 runs (the first + the one
     queued run), both (Demo, hair_demo, None, None, False).
-[5] Run validation: step "nope" 400, view "side" 400, Other's item 400, an
-    unknown item 400, Offline's own item 400 ("base-body pipeline"); then
-    {step fit, force true} -> 202 {started True, queued False, position 0,
-    behind None} (idle character) and the recorder gets
-    (steps "fit", view None, force True); {step haired, view back} ->
-    (steps "haired", view "back", force False).
+[5] Run validation: step "nope" 400, the removed edit-chain step "haired"
+    400, view "side" 400, Other's item 400, an unknown item 400, Offline's
+    own item 400 ("base-body pipeline"); then {step fit, force true} -> 202
+    {started True, queued False, position 0, behind None} (idle character)
+    and the recorder gets (steps "fit", view None, force True); {step
+    hairdeck} -> (steps "hairdeck", view None, force False).
 [6] /hair/equipped: false -> 200 {equipped False}, worn map {}; GET /hair
     still names hair_demo with equipped False; true -> {equipped True},
     worn {hair: hair_demo}; Bald (no item) -> 404.
-[7] Image route for the CURRENT fsig F: the planted final haired/front
+[7] Image route for the CURRENT fsig F (route mechanics only: hair has no
+    image step since the edit chain is gone, so the planted files carry the
+    store's clothing step name "worn" — the route checks the step name, not
+    the item's kind): the planted final worn/front
     bytes come back (200, image/png); ?attempt=1 -> the planted try1 bytes;
     ?attempt=2 (absent) -> 404; ghost/back (absent) -> 404; step "mesh" ->
     400; view "side" -> 400; attempt 7 -> 400; Other's item -> 404;
@@ -144,10 +146,9 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        # The hair method this smoke was written for (the default before the hair-from-body spec 2026-11-11 —
-        # the new default "body" makes no hair item).
+        # A hair method with a hair item (the default "body" makes none).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "edit_chain"}}))
+                                                        "base_body": {"hair_method": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -228,7 +229,7 @@ def main() -> int:
                 ("POST", "/characters/Demo/hair", {}),
                 ("POST", "/characters/Demo/hair/equipped", {"equipped": True}),
                 ("POST", "/characters/Demo/garments/hair_demo/run", {}),
-                ("GET", "/characters/Demo/garments/hair_demo/images/haired/front", None),
+                ("GET", "/characters/Demo/garments/hair_demo/images/worn/front", None),
                 ("GET", "/characters/Demo/garments/hair_demo/model", None),
             ]
             for method, url, body in calls:
@@ -246,23 +247,11 @@ def main() -> int:
             check("demo hair", (r.status_code, body if r.status_code == 200 else r.text),
                   (200, {"pipeline": True, "humanoid": True, "description": "medium blonde hair",
                          "behind_shoulders": True, "item_id": None, "equipped": False, "garment": None,
-                         "collision": None, "method": "edit_chain", "method_source": "world",
-                         "world_method": "edit_chain", "hairdeck": None, "others": [],
-                         "subtract": {"shape": "cut", "shape_source": "length", "shape_override": "",
-                                      "length_class": "medium", "shell_mm": 5.0, "shell_mm_default": 5.0,
-                                      "shell_mm_min": 2.0, "shell_mm_max": 15.0},
+                         "collision": None, "method": "hairdeck", "method_source": "world",
+                         "world_method": "hairdeck", "hairdeck": None, "others": [],
                          "hair_in_body": False, "base_prompts": None}))
-            # The chip limits come from the gate constants (R7): haired XOR < 0.015,
-            # ghost |top_dy| <= 0.0052 H, mesh component share >= 0.98, fit bib <= 50 cm².
-            check("hair limits", (sorted(limits), limits.get("haired", {}).get("body_xor"),
-                                  limits.get("ghost", {}).get("top_dy"),
-                                  limits.get("mesh", {}).get("largest_component_share"),
-                                  limits.get("fit", {}).get("bib_cm2"),
-                                  limits.get("fit", {}).get("largest_component_share")),
-                  (["fit", "ghost", "hairdeck_fit", "haired", "mesh"], {"op": "lt", "value": 0.015},
-                   {"op": "abs_le", "value": 0.0052, "per_height": True},
-                   {"op": "ge", "value": 0.98}, {"op": "le", "value": 50.0},
-                   {"op": "ge", "value": 0.98}))
+            # The chip limits: HairDeck's fit gates only (the edit-chain steps are gone).
+            check("hair limits", sorted(limits), ["hairdeck_fit"])
             r = client.get("/characters/Pet/hair")
             body = r.json() if r.status_code == 200 else {}
             check("pet hair", (r.status_code, body.get("humanoid"), body.get("description"), body.get("garment")),
@@ -310,6 +299,7 @@ def main() -> int:
             print("[5] run validation")
             RUNS.clear()
             for label, item, payload in (("unknown step", "hair_demo", {"step": "nope"}),
+                                         ("removed step haired", "hair_demo", {"step": "haired"}),
                                          ("unknown view", "hair_demo", {"view": "side"}),
                                          ("foreign item", "hair_other", {}),
                                          ("unknown item", "no_such_item", {})):
@@ -323,11 +313,11 @@ def main() -> int:
             check("forced fit 202", (r.status_code, r.json()),
                   (202, {"started": True, "queued": False, "position": 0, "behind": None}))
             wait_idle()
-            r = client.post("/characters/Demo/garments/hair_demo/run", json={"step": "haired", "view": "back"})
-            check("haired back 202", r.status_code, 202)
+            r = client.post("/characters/Demo/garments/hair_demo/run", json={"step": "hairdeck"})
+            check("hairdeck 202", r.status_code, 202)
             wait_idle()
             check("recorder args", RUNS, [("Demo", "hair_demo", "fit", None, True),
-                                          ("Demo", "hair_demo", "haired", "back", False)])
+                                          ("Demo", "hair_demo", "hairdeck", None, False)])
 
             # --- [6] equipped -----------------------------------------------------------------
             print("[6] equip / unequip")
@@ -345,26 +335,26 @@ def main() -> int:
             # --- [7] images ----------------------------------------------------------------------
             print("[7] image route")
             fsig = gs.garment_fsig("Demo", "hair_demo")
-            final = gs.garment_path("Demo", "hair_demo", fsig, "image", step="haired", view="front")
-            try1 = gs.garment_path("Demo", "hair_demo", fsig, "image", step="haired", view="front", attempt=1)
+            final = gs.garment_path("Demo", "hair_demo", fsig, "image", step="worn", view="front")
+            try1 = gs.garment_path("Demo", "hair_demo", fsig, "image", step="worn", view="front", attempt=1)
             final.parent.mkdir(parents=True, exist_ok=True)
             final.write_bytes(b"\x89PNG-final")
             try1.write_bytes(b"\x89PNG-try1")
             base = "/characters/Demo/garments/hair_demo/images"
-            r = client.get(f"{base}/haired/front")
+            r = client.get(f"{base}/worn/front")
             check("final", (r.status_code, r.content, r.headers.get("content-type")),
                   (200, b"\x89PNG-final", "image/png"))
-            r = client.get(f"{base}/haired/front?attempt=1")
+            r = client.get(f"{base}/worn/front?attempt=1")
             check("attempt 1", (r.status_code, r.content), (200, b"\x89PNG-try1"))
-            check("attempt 2 absent", client.get(f"{base}/haired/front?attempt=2").status_code, 404)
+            check("attempt 2 absent", client.get(f"{base}/worn/front?attempt=2").status_code, 404)
             check("ghost back absent", client.get(f"{base}/ghost/back").status_code, 404)
             check("step mesh", client.get(f"{base}/mesh/front").status_code, 400)
-            check("view side", client.get(f"{base}/haired/side").status_code, 400)
-            check("attempt 7", client.get(f"{base}/haired/front?attempt=7").status_code, 400)
-            check("foreign item", client.get("/characters/Demo/garments/hair_other/images/haired/front").status_code,
+            check("view side", client.get(f"{base}/worn/side").status_code, 400)
+            check("attempt 7", client.get(f"{base}/worn/front?attempt=7").status_code, 400)
+            check("foreign item", client.get("/characters/Demo/garments/hair_other/images/worn/front").status_code,
                   404)
             for url in (f"{base}/../front", f"{base}/..%2F..%2Fsecret/front",
-                        "/characters/Demo/garments/..%2Fsecret/images/haired/front",
+                        "/characters/Demo/garments/..%2Fsecret/images/worn/front",
                         "/characters/Demo/garments/..%2F..%2FDemo%2Fsecret.png/model"):
                 r = client.get(url)
                 check(f"traversal {url}", (r.status_code in (400, 404), b"SECRET" in r.content), (True, False))

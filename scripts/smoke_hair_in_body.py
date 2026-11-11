@@ -26,9 +26,10 @@ image Demo_1.png, on the base-body pipeline, a ready base model
 EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
 
 [H0] Schema default ``base_body.hair_method`` = "body", choices ["body",
-     "edit_chain", "hairdeck", "subtract"], label "From the body mesh";
-     ``world_hair_method()`` "body"; ``hair_method`` Long "body", Deck
-     "hairdeck"; an unknown world value ("nonsense") resolves to "body";
+     "hairdeck"] (edit_chain and subtract removed by Task 2), label "From the
+     body mesh"; ``world_hair_method()`` "body"; ``hair_method`` Long "body",
+     Deck "hairdeck"; an unknown world value ("nonsense") resolves to "body",
+     and so do the removed "edit_chain" / "subtract";
      ``hair_in_body`` Long True, Deck False.
 [H1] Base views of Long (method body). APPEARANCE = "female, 30 years old,
      green eyes, olive skin, average height, athletic build" (the human build
@@ -233,12 +234,15 @@ def main() -> int:
         print("[H0] the method and its default")
         field = config_scope.schema_for(config_scope.WORLD)["base_body"]["fields"]["hair_method"]
         check("schema default", field["default"], "body")
-        check("schema choices", field["choices"], ["body", "edit_chain", "hairdeck", "subtract"])
+        check("schema choices", field["choices"], ["body", "hairdeck"])
         check("schema label", field["choice_labels"]["body"], "From the body mesh")
         check("world default", garment_hair.world_hair_method(), "body")
         check("methods", (garment_hair.hair_method("Long"), garment_hair.hair_method("Deck")), ("body", "hairdeck"))
         config._CONFIG.setdefault("base_body", {})["hair_method"] = "nonsense"
         check("unknown world value -> body", garment_hair.world_hair_method(), "body")
+        for gone in ("edit_chain", "subtract"):
+            config._CONFIG["base_body"]["hair_method"] = gone
+            check(f"removed world value {gone} -> body", garment_hair.world_hair_method(), "body")
         config._CONFIG.pop("base_body", None)
         check("hair_in_body", (garment_hair.hair_in_body("Long"), garment_hair.hair_in_body("Deck")), (True, False))
 

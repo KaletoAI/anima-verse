@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Hair as its own mesh, task 5: the routed garment mesh and its decimation
-(app/core/garment_mesh.py, app/blender/refine.py::decimate_to).
+"""The routed garment mesh and its decimation (app/core/garment_mesh.py,
+app/blender/refine.py::decimate_to) — written for the hair as its own mesh
+(task 5), on an own-mesh clothing piece since the hair-from-body spec
+2026-11-11 (Task 2) removed the hair edit chain (hair has no mesh step).
 
 Usage:
     ./.venv/bin/python scripts/smoke_garment_mesh.py [--no-blender]
@@ -13,9 +15,9 @@ Blender (5.2) is found; ``--no-blender`` or a missing Blender skips it.
 Every expectation is derived by hand below from plan
 2026-11-09-base-body-phase4-hair (R8, R10, R13, Task 5).
 
-Fixture: ``Demo`` (human-roleplay, on the base-body pipeline, hair slot
-{length: medium, color: blonde}); ensure_hair_item gives H = "hair_demo",
-kind "hair". F = "0123456789ab" (any 12-hex fsig: generate takes it as given).
+Fixture: ``Demo`` (human-roleplay, on the base-body pipeline); H = an
+own-mesh outfit piece "Dress" (kind "clothing") Demo holds.
+F = "0123456789ab" (any 12-hex fsig: generate takes it as given).
 Cut-outs: garments/images/H_F_cutout_{front,back}.png (fake PNG bytes).
 
 Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
@@ -24,19 +26,19 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
     BAD:  quad A area 0.97, quad B area 0.03 -> share 0.97 < 0.98 -> fail.
 
 [1] generate(Demo, H, F) with the service writing GOOD:
-    - ONE generate_mesh call with occasion "hair_views_mesh" (kind hair; a
-      clothing piece runs on "mesh_garment"), face_num 100000,
+    - ONE generate_mesh call with occasion "mesh_garment", face_num 100000,
       view_images {"back": <cutout back>} (keys {"back"}),
       source_image_path = <cutout front>, output_path = garments/raw/H_F.glb,
-      mesh_name "Demo-hair", character_name "Demo", material "dielectric",
+      mesh_name "Demo-clothing", character_name "Demo", material "dielectric",
       alpha "opaque";
     - runner: "measure" on the raw file (4 tris), then "lod" with
-      ratios [min(0.999, 25000/4 = 6250)] = [0.999], keep_uvs True and
+      ratios [min(0.999, 60000/4 = 15000)] = [0.999] (clothing: 60000,
+      ``TARGET_TRIS_BY_KIND``), keep_uvs True and
       merge_vertices True (bug B of the 2026-11-09 end-to-end run);
     - returns garments/prepared/H_F.glb (exists, bytes = GOOD);
     - record prepared/H_F.json: accepted True, tris_raw 4, tris_prepared 4,
-      target_tris 25000, largest_component_share 0.99 (+-1e-6), backend
-      "FakeMesh", routing {"occasion": "hair_views_mesh"} copied from the result,
+      target_tris 60000, largest_component_share 0.99 (+-1e-6), backend
+      "FakeMesh", routing {"occasion": "mesh_garment"} copied from the result,
       1 attempt.
 [2] Cache: a second generate makes NO service call and returns the same path;
     force=True makes exactly one more call.
@@ -237,14 +239,14 @@ class Recorder:
     def generate_mesh(self, **kw):
         self.calls.append(kw)
         if self.raise_at and len(self.calls) == self.raise_at:
-            raise RuntimeError("no backend available for hair_views_mesh: FakeMesh (cooling down)")
+            raise RuntimeError("no backend available for mesh_garment: FakeMesh (cooling down)")
         if self.answer is not None:
             return dict(self.answer)
         blob = self.script[min(len(self.calls) - 1, len(self.script) - 1)]
         out = Path(kw["output_path"])
         out.write_bytes(blob)
         return {"ok": True, "path": str(out), "format": "glb", "backend": "FakeMesh",
-                "routing": {"occasion": "hair_views_mesh"}}
+                "routing": {"occasion": "mesh_garment"}}
 
 
 def main() -> int:
@@ -255,10 +257,7 @@ def main() -> int:
         os.environ["ANIMATION_RIG_FILE"] = str(root / "reference.fbx")
         from app.core import paths
         paths.init(root / "world")
-        # The hair method this smoke was written for (the default before the hair-from-body spec 2026-11-11 —
-        # the new default "body" makes no hair item).
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "edit_chain"}}))
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -269,9 +268,10 @@ def main() -> int:
         discover_packages(plugins, force=True)
 
         from app.blender import refine, runner
-        from app.core import base_body, garment_assembly, garment_hair
+        from app.core import base_body, garment_assembly
         from app.core import garment_store as gs
         from app.imagegen import service as service_mod
+        from app.models import inventory
         from app.models.character import save_character_profile
         garment_assembly.schedule = lambda *a, **k: False
         try:
@@ -288,8 +288,10 @@ def main() -> int:
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
-        hid = garment_hair.ensure_hair_item("Demo")
-        check("hair item id", hid, "hair_demo")
+        hid = inventory.add_item(name="Dress", category="outfit_piece", prompt_fragment="a green dress",
+                                 outfit_piece={"slots": ["top", "bottom"], "covers": ["legs"],
+                                               "outfit_types": ["casual"], "own_mesh": True})["id"]
+        check("inventory Dress", inventory.add_to_inventory("Demo", hid), True)
 
         def cutouts(fsig, views=("front", "back")):
             out = {}
@@ -341,19 +343,19 @@ def main() -> int:
         prepared = gm.generate("Demo", hid, F)
         check("one service call", len(rec.calls), 1)
         kw = rec.calls[0] if rec.calls else {}
-        check("occasion", kw.get("occasion"), "hair_views_mesh")
+        check("occasion", kw.get("occasion"), "mesh_garment")
         check("face_num", kw.get("face_num"), 100000)
         check("view_images keys", set((kw.get("view_images") or {}).keys()), {"back"})
         check("back view path", (kw.get("view_images") or {}).get("back"), str(cut["back"]))
         check("front path", str(kw.get("source_image_path")), str(cut["front"]))
         check("output_path", str(kw.get("output_path")), str(gs.garment_path("Demo", hid, F, "raw")))
-        check("mesh_name", kw.get("mesh_name"), "Demo-hair")
+        check("mesh_name", kw.get("mesh_name"), "Demo-clothing")
         check("character_name", kw.get("character_name"), "Demo")
         check("material", kw.get("material"), "dielectric")
         check("alpha", kw.get("alpha"), "opaque")
         check("runner scripts", [c[0] for c in runner_calls], ["measure", "lod"])
         lod_params = runner_calls[1][1] if len(runner_calls) > 1 else {}
-        check("decimate ratio", lod_params.get("ratios"), [min(0.999, 25000 / 4)])
+        check("decimate ratio", lod_params.get("ratios"), [min(0.999, 60000 / 4)])
         check("ratio is 0.999", lod_params.get("ratios"), [0.999])
         check("keep_uvs", lod_params.get("keep_uvs"), True)
         check("merge_vertices", lod_params.get("merge_vertices"), True)
@@ -363,10 +365,10 @@ def main() -> int:
         check("accepted", record.get("accepted"), True)
         check("tris_raw", record.get("tris_raw"), 4)
         check("tris_prepared", record.get("tris_prepared"), 4)
-        check("target_tris", record.get("target_tris"), 25000)
+        check("target_tris", record.get("target_tris"), 60000)
         near("largest share", record.get("largest_component_share"), 0.99, 1e-6)
         check("backend", record.get("backend"), "FakeMesh")
-        check("routing", record.get("routing"), {"occasion": "hair_views_mesh"})
+        check("routing", record.get("routing"), {"occasion": "mesh_garment"})
         check("attempts", len(record.get("attempts") or []), 1)
         check("TARGET_TRIS", gm.TARGET_TRIS, 25000)
 

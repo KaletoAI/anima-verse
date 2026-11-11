@@ -18,12 +18,11 @@ import type { GarmentRunBody } from './garmentStyle'
 export const GARMENT_VIEWS = ['front', 'back'] as const
 export type GarmentView = typeof GARMENT_VIEWS[number]
 
-/** The image steps of both kinds: hair haired → ghost → cutout, clothing
- *  worn → ghost → cutout (`garment_store.GARMENT_STEPS`). */
-export type GarmentImageStep = 'haired' | 'worn' | 'ghost' | 'cutout'
-export type GarmentStep = GarmentImageStep | 'mesh' | 'hairdeck' | 'mesh_source' | 'cut' | 'fit'
+/** The image steps of clothing: worn → ghost → cutout (`garment_store.GARMENT_STEPS`). */
+export type GarmentImageStep = 'worn' | 'ghost' | 'cutout'
+export type GarmentStep = GarmentImageStep | 'mesh' | 'hairdeck' | 'fit'
 
-/** One gate record (`garment_gates.haired_gate` / `ghost_gate`, a mesh
+/** One gate record (an image step's gate, a mesh
  *  attempt, the fit gates) — numbers plus `ok` and `reasons`. */
 export type GateRecord = Record<string, unknown> & { ok?: boolean; reasons?: string[] }
 
@@ -62,7 +61,7 @@ export interface GarmentFitInfo {
   metrics: Record<string, number>
   /** HairDeck fits: the colour the fit used. */
   colour?: { target: string | null; source: string } | null
-  /** Subtract fits also carry the limits they were gated on (`garment_subtract.run_fit`). */
+  /** A fit may carry the limits it was gated on (`RecordLimits`). */
   gates: { ok?: boolean; reasons?: string[]; limits?: RecordLimits }
   tris: number | null
   low: { ok: boolean; tris?: number; ratio?: number; error?: string } | null
@@ -71,52 +70,10 @@ export interface GarmentFitInfo {
 }
 
 /** How the hair is made (`garment_hair.HAIR_METHODS`); `body` = inside the body mesh, no hair mesh. */
-export type HairMethod = 'body' | 'edit_chain' | 'hairdeck' | 'subtract'
+export type HairMethod = 'body' | 'hairdeck'
 
-/** Gate limits as a record stores them: `{key: ["max" | "min", limit]}`
- *  (`garment_cut.CUT_GATES`, `garment_fit.hair_gates`). */
+/** Gate limits as a record stores them: `{key: ["max" | "min", limit]}`. */
 export type RecordLimits = Record<string, [string, number]>
-
-/** The subtract method's source mesh of the haired character
- *  (`garment_subtract.step_info`, step `mesh_source`). */
-export interface SubtractSourceInfo {
-  status: 'accepted' | 'refused' | 'missing'
-  ssig: string
-  backend: string | null
-  tris: number | null
-  error: string | null
-  /** The routed result's `route_meta()` (routing, fallback_from, …). */
-  routing: Record<string, unknown> | null
-  created_at: string | null
-}
-
-/** The subtract method's cut (`garment_subtract.step_info`, step `cut`):
- *  `stale` = an accepted cut made from another source mesh. */
-export interface SubtractCutInfo {
-  status: 'accepted' | 'stale' | 'refused' | 'missing'
-  shape: 'cut' | 'shell' | null
-  shell_mm: number | null
-  /** registration_p95_cm, hairline_cm, label_holes, hair_area_cm2. */
-  metrics: Record<string, number>
-  gates: { ok?: boolean; reasons?: string[]; limits?: RecordLimits }
-  /** The cut's report sections (registration, hairline, label, edge, closed, shell, cut, seconds). */
-  report: Record<string, unknown>
-  created_at: string | null
-}
-
-/** The subtract settings of the Hair tab (`_hair_subtract_settings`). */
-export interface HairSubtractSettings {
-  /** The shape in effect and where it comes from. */
-  shape: 'cut' | 'shell'
-  shape_source: 'character' | 'length'
-  /** The stored override, "" = automatic (from the hair length). */
-  shape_override: '' | 'cut' | 'shell'
-  length_class: string | null
-  shell_mm: number
-  shell_mm_default: number
-  shell_mm_min: number
-  shell_mm_max: number
-}
 
 /** One HairDeck tile (`garments.hairdeck_panel` images): null = no file. */
 export type HairDeckImage = (ImageTileMeta & { url: string }) | null
@@ -227,18 +184,16 @@ export interface GarmentInfo {
   item_id: string
   kind: string
   fsig: string | null
-  method: HairMethod
+  /** The hair method, or `edit_chain` for an own-mesh outfit piece. */
+  method: HairMethod | 'edit_chain'
   method_source: 'character' | 'world'
   hsig: string | null
   description: string
   steps: {
-    haired?: Partial<Record<GarmentView, GarmentImageInfo>>
     worn?: Partial<Record<GarmentView, GarmentImageInfo>>
     ghost?: Partial<Record<GarmentView, GarmentImageInfo>>
     cutout?: Partial<Record<GarmentView, GarmentImageInfo>>
     mesh?: GarmentMeshInfo
-    mesh_source?: SubtractSourceInfo
-    cut?: SubtractCutInfo
     fit?: GarmentFitInfo
   }
   stale_reasons: Array<'description_changed' | 'base_changed' | 'base_model_changed' | 'hairdeck_changed'
@@ -480,7 +435,7 @@ export interface HairInfo {
   garment: GarmentInfo | null
   /** The current base model's capsule set the preview pushes the hair out of; null without one. */
   collision: CollisionPayload | null
-  limits: Partial<Record<'haired' | 'ghost' | 'mesh' | 'fit' | 'hairdeck_fit', Record<string, GateLimit>>>
+  limits: Partial<Record<'hairdeck_fit', Record<string, GateLimit>>>
   /** The hair method in effect and where it comes from; the world default. */
   method: HairMethod
   method_source: 'character' | 'world'
@@ -489,8 +444,6 @@ export interface HairInfo {
   hairdeck: HairDeckPanel | null
   /** The kept results of the other methods, newest first ([] without one). */
   others: OtherMethodInfo[]
-  /** The subtract method's shape and shell thickness (null off humanoids / an older server). */
-  subtract?: HairSubtractSettings | null
   /** The method is `body`: the hair is part of the body mesh — no steps, no run, no preview. */
   hair_in_body?: boolean
   /** With `hair_in_body`: the stored base's prompt freshness (`base_body.base_prompts_freshness`). */

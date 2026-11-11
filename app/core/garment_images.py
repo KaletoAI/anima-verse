@@ -7,8 +7,8 @@ Task 4).
 gated by the garment kind's gate (``garment_gates``). The accepted attempt
 is copied to the step's final file; two refusals raise ``GateRefused`` with
 both gate records. The edit is an image EDIT of its source on the routed
-``garment_view`` occasion: the base view (the kind's first step — hair
-``haired``, clothing ``worn``) or the accepted image of the step before
+``garment_view`` occasion: the base view (the kind's first step — clothing
+``worn``) or the accepted image of the step before
 (``ghost``), use case ``garment_edit`` (empty style,
 the spike negative), no character LoRAs, and published unprocessed
 (``postprocess=False``) so the gates and the placement see the full frame.
@@ -22,7 +22,7 @@ image (2026-11-09 end-to-end run: body XOR 0.111 narrow vs 0.005–0.007
 square).
 
 A step with a ``position_reference`` (the ghost: the worn view's garment
-region / the haired view's hair) is REGISTERED onto it before its gate
+region) is REGISTERED onto it before its gate
 (``_register``): the edit model may redraw the piece a centimetre off or a
 few per cent larger (Kira's Black Blazer back, 2026-11-10), so a similarity
 (shift + uniform scale, capped: ``garment_gates.REG_SHIFT_MAX`` /
@@ -35,8 +35,9 @@ views) of a waistband piece is scaled by its waistband width and shifted onto th
 waistband top, uncapped (``garment_gates.register_waistband``, rulings 13d/13f;
 record key ``registered``).
 
-The kind's own module (``kind_module``: ``garment_hair``,
-``garment_clothing``) gives the edit steps, prompts and gates.
+The kind's own module (``kind_module``: ``garment_clothing`` — the only kind
+with an image chain; hair has none since the hair-from-body change) gives the
+edit steps, prompts and gates.
 
 A step whose back is DRAFTED (``EDIT_STEPS[step]["back"] == "draft"``:
 clothing ``worn``) does not edit the base back. It takes the outfit's two
@@ -147,10 +148,7 @@ def kind_module(kind: str):
     """The module of a garment kind's image chain (``EDIT_STEPS``,
     ``edit_prompt``, ``gate``, ``position_reference``, ``SUBJECT`` and the pair hooks ``PAIR_STEP``,
     ``pair_agree``, ``pair_reason``, ``PAIR_REFUSED``, ``front_hints``).
-    ValueError for a kind without one."""
-    if kind == "hair":
-        from app.core import garment_hair
-        return garment_hair
+    ValueError for a kind without one (hair, footwear)."""
     if kind == "clothing":
         from app.core import garment_clothing
         return garment_clothing
@@ -345,11 +343,11 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     image ``images/{item}_{fsig}_{step}_{view}.png``.
 
     ``pair_check`` (the orchestration's check against the OTHER view, e.g.
-    the hair-only front against the accepted back's bottom edge) gets every
+    the garment-only front against the accepted back's hem) gets every
     attempt's gate record; a reason it returns refuses that attempt like a
     gate reason does, so the check uses the attempts of this step.
-    ``prompt_hints`` go to the kind's ``edit_prompt`` as keyword arguments
-    (hair: ``length_t``, see ``haired_length``); ``item_id`` always does.
+    ``prompt_hints`` go to the kind's ``edit_prompt`` as keyword arguments;
+    ``item_id`` always does.
 
     Cached: an accepted final of this fsig is returned unless ``force``.
     ``base_body.MissingInput`` when the base view or the source step's
@@ -686,33 +684,9 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     raise GateRefused(step, "back", records)
 
 
-def haired_length(character_name: str, item_id: str, fsig: str, view: str = "back") -> Optional[Dict[str, Any]]:
-    """Where the hair of the accepted ``haired`` image of ``view`` ends
-    against the base figure (``garment_gates.hair_length``: ``{bottom, t}``),
-    on the same masks as the gates; None when the image or the base view is
-    missing or no hair is found."""
-    from app.core import base_body
-    from app.core.garment_gates import hair_length
-    from app.core.garment_store import garment_path
-    from app.core.model_refs import find_ref_image, get_model_refs_dir, neutral_view_reference
-    from app.models.character import get_character_profile
-    haired = garment_path(character_name, item_id, fsig, "image", step="haired", view=view)
-    if not _accepted(haired):
-        return None
-    profile = get_character_profile(character_name) or {}
-    base = find_ref_image(character_name, base_body._kind(view),
-                          base_body.base_signature(character_name, profile=profile))
-    if base is None:
-        return None
-    with neutral_view_reference(base, get_model_refs_dir(character_name)) as flat_base:
-        size = _image_size(flat_base)
-        base_rgb, base_mask = _rgb(flat_base), _mask(flat_base, size)
-    return hair_length(base_rgb, base_mask, _rgb(haired, size), _mask(haired, size))
-
-
 def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: bool = False) -> Path:
     """The generator input of one view, ``images/{item}_{fsig}_cutout_{view}.png``
-    (R6), from the accepted ghost image (hair-only / garment-only).
+    (R6), from the accepted ghost image (garment-only).
 
     RGBA: the BiRefNet-DIS mask as alpha on the original colours, cropped to a
     square of side ``int(1.15 × max(w, h))`` around the mask box (padding
