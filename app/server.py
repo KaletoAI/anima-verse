@@ -1,5 +1,32 @@
 """Main FastAPI application - Refactored modular structure"""
 import logging
+
+
+#: glibc's malloc arena cap for this process. Unset, glibc allows 8 arenas per
+#: core (128 on a 16-core host); a thread that meets a locked arena opens a
+#: new one, and memory freed into one arena never serves another — with the
+#: server's worker, queue and threadpool threads the heap fragments across
+#: dozens of arenas and RSS climbs with the thread count instead of the live
+#: data. The GIL serializes Python's own allocations anyway, so a few arenas
+#: cost no measurable contention; only C extensions (onnxruntime, numpy, PIL)
+#: allocate in parallel.
+MALLOC_ARENA_MAX = 4
+
+
+def _cap_malloc_arenas(limit: int) -> None:
+    """``mallopt(M_ARENA_MAX, limit)`` as early as possible — arenas already
+    open stay, so this runs before the imports below start their threads. A
+    libc that is not glibc (musl, macOS) has no such knob: skipped."""
+    try:
+        import ctypes
+        M_ARENA_MAX = -8
+        if not ctypes.CDLL("libc.so.6").mallopt(M_ARENA_MAX, limit):
+            logging.getLogger("server").warning("mallopt(M_ARENA_MAX) refused")
+    except (OSError, AttributeError):
+        pass
+
+
+_cap_malloc_arenas(MALLOC_ARENA_MAX)
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.core.log import get_logger
