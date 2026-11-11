@@ -899,6 +899,10 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
     status = gs.status(character_name, item_id)
     queue = garments.queue_state(character_name, item_id)
     failed = status["failed"]
+    if failed is not None and failed.get("step") == "fit" and steps["fit"]["status"] == "accepted":
+        # The item's last-run failure is per item, not per fsig: a fit refused under another width cap must
+        # not be shown beside the accepted fit of the current fsig (T27 acceptance: the cap reset).
+        failed = None
     if failed is None and not status["running_step"] and fsig:
         # After a restart: the persisted failure of the current fsig still holds the piece back.
         record = gs.chain_failure(character_name, item_id, fsig, base_model_sha=base[1] or "")

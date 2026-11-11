@@ -252,6 +252,9 @@ def main() -> int:
               ("refused", True))
         check("R2 cap reset", gf.set_width_cap("Demo", heels, None), True)
         check("R2 fsig back", gs.garment_fsig("Demo", heels), F)
+        info = gf.info("Demo", heels, profile=get_character_profile("Demo") or {})
+        check("R2 after the reset: the cap-1.00 refusal is not shown beside the accepted fit",
+              (info["steps"]["fit"]["status"], info["failed"]), ("accepted", None))
         write_base(repack(base_glb, generator="another export"))
         check("R2 back on B1: accepted (the refusal never overwrote the B1 record)", gf.fit_state("Demo", heels, F, B1), "accepted")
 
