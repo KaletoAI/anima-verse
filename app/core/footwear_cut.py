@@ -68,6 +68,23 @@ wall top (the spike read a 2 cm band on the unconformed instep; after the smooth
 front, the band's far end is the instep's own rise — that number is ``throat_step_20mm_p95_mm`` in the
 diagnostics). Diagnostics: rim gap (topline → nearest foot vertex), arch gap (lowest foot vertex per 4 mm cell →
 nearest shoe surface, EDT), overhang above the rim, poke by region (heel / mid / toe by the fit's heel and ball x).
+
+**Calibration (P3 acceptance, Task 21, 2026-11-11).** The cut gates were measured on the one material that reached
+the fit: the spike shoe (Black Stilettos, UniForge mesh of a side-view empty shoe) on Kira's base body at width
+cap 1.10, ``FIT_VERSION`` footwear 3 (Tasks 14/15/17, reproduced by the assembly): ``slim_needed`` 0.066 / 0.115
+(L / R, limit 0.18 — the uncapped per-station need reaches 0.24–0.49 at the shank and toe tip, which is what the
+cap turns into the slimming); ``deep_outside`` 0.45 % / 1.20 % (6 of 1323, 18 of 1503; limit 2 %; 3.8 / 5.3 % before
+the slimming of Task 14); ``visible_poke`` 0 / 0 (of 1705 / 1657); ``throat_ledge_p95_mm`` 0.00 / 0.42 (limit 4;
+the spike read 7.6 / 16.1 before the conform); the fit gates there: ball 0.0 mm, lift asymmetry 0.06 mm,
+``stand_floor`` 0.0 mm, boot −48.5 mm. Walk variation of the cut (the gates on the clip-posed body) was not
+measured: the cut is a bind-space operation and the gates read the bind pose. The limits stay at their start values;
+none was approached on that material. The clone run of the acceptance (Kira, Business Heels) did not reach the cut:
+the item's pre-fix ``empty`` step had accepted the 3/4-view item image as the empty shoe (``skipped``), and every
+UniForge mesh of that cut-out failed the SIDE-silhouette ``mesh_iou`` gate (0.738, 0.697, 0.761, 0.655 over four
+deliveries, limit 0.80; ``component_share`` 1.000 on three, 0.927 on the fourth) — and its insole analysis found no
+cavity (``insole_cover``
+0.07, ``vamp_cover`` 0.53, ``opening_share`` 1.0), so the fit would have refused it as a boot (topline +553 mm). A
+re-run of the ``empty`` step (the edit, since the P1 fix never skipped) is what that item needs, not a threshold.
 """
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
