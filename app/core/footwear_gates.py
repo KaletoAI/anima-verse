@@ -17,10 +17,13 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
-#: Gates of the empty-shoe matte (start values, calibrated in P1).
+#: Gates of the empty-shoe matte (start values, calibrated in P1 of round 1 on pumps; the upper aspect bound
+#: 2.4 -> 2.6 in P1 of the boots round, 2026-11-11: the Qwen side-view edits of the Business Shoes — a cap-toe
+#: Derby, ``item_6cc8e8ae`` — read 2.448 / 2.430 (two deliveries, length 864 / 853 px over height 353 / 351),
+#: a men's flat is long and low; the 3/4-view item image itself reads 2.102. A 3.0 rectangle still refuses).
 EMPTY_GATES: Dict[str, Tuple[str, Any, str]] = {
     "single_share": ("min", 0.98, "area share of the largest matte component"),
-    "aspect": ("range", (1.1, 2.4), "side-view length / height of the shoe"),
+    "aspect": ("range", (1.1, 2.6), "side-view length / height of the shoe"),
     "iou_below_topline": ("min", 0.85, "silhouette IoU with the item image below the empty shoe's top edge"),
 }
 #: Gates of the prepared shoe mesh. ``component_share`` is the largest
@@ -43,8 +46,10 @@ END_SHARE = 0.15
 #: does not depend on which end is the heel).
 MIDDLE = (0.35, 0.65)
 #: A leg: the throat stands taller than the counter by more than this share of
-#: the length ...
-LEG_EXCESS_SHARE = 0.05
+#: the length ... (0.05 -> 0.12, boots round P1, 2026-11-11: on the Derby deliveries above the laced throat
+#: stands 45 / 43 px = 0.052 / 0.050 L above the LOW heel counter of a men's shoe — a pump's counter is its
+#: tallest point, a Derby's is not; a foot or shin in the throat rises a whole ankle, >= 0.2 L on a 26-cm shoe)
+LEG_EXCESS_SHARE = 0.12
 #: ... or a component touches the top image row and is narrower than this
 #: share of the length.
 LEG_TOP_WIDTH_SHARE = 0.25

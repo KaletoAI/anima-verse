@@ -25,15 +25,25 @@ each end, middle = columns [round(0.35 L), round(0.65 L)) from the left end.
      30-px strip from the throat to the top edge (cols [185, 215) = offsets
      [135, 165) inside the middle [105, 195), rows [0, 80)).
      Ends: left max height 100, right 140 -> heel = right, counter = 140.
-     Middle max height = 179 - 0 + 1 = 180; 180 - 140 = 40 > 0.05 * 300 = 15
-     -> leg True, reason "leg".
+     Middle max height = 179 - 0 + 1 = 180; 180 - 140 = 40 > 0.12 * 300 = 36
+     -> leg True, reason "leg" (LEG_EXCESS_SHARE 0.12 since the boots round's
+     P1, see [G9]).
      Without the strip: middle 100 - 140 = -40 -> leg False.
      The strip disconnected (rows [0, 60), shoe = the plain rectangle): it is a
      component touching the top row, 30 px wide < 0.25 * 300 = 75 -> leg True.
-[G3] Side view. Rectangle 300 x 100 -> aspect 300 / 100 = 3.0 > 2.4 -> refused,
+[G3] Side view. Rectangle 300 x 100 -> aspect 300 / 100 = 3.0 > 2.6 -> refused,
      reason "aspect"; rectangle 300 x 180 (rows [10, 190)) -> aspect
      300 / 180 = 1.667, single share 1.0, no leg (every column 180 high,
      excess 0) -> ok, reasons [].
+[G9] A men's Derby (boots round P1 calibration, 2026-11-11; the real numbers in
+     footwear_gates.EMPTY_GATES / LEG_EXCESS_SHARE): rectangle 300 x 105 (rows
+     [75, 180)) with the laced throat 15 px taller over the middle (cols
+     [185, 215), rows [60, 75)): the bbox is 120 high -> aspect 300 / 120 =
+     2.5, inside 1.1..2.6 (the Derby deliveries read 2.43 / 2.45); counter =
+     105 (both ends 105), middle max 120, excess 15 = 0.05 L <= 0.12 L -> no
+     leg, ok, reasons []. The same throat rising to row 0 (cols [185, 215),
+     rows [0, 75)): middle max 180, excess 75 = 0.25 L > 36 -> leg. Rectangle
+     300 x 110 -> aspect 2.727 > 2.6 -> refused.
 [G4] silhouette_iou (both cropped to their bbox, resampled to 256 x 256, max
      over the horizontal flip of b):
      - rectangle 300 x 100 vs its copy shifted by 30 px (10 % of its width):
@@ -87,7 +97,7 @@ each end, middle = columns [round(0.35 L), round(0.65 L)) from the left end.
      0.08 * 255 / 0.26 = 78.5 px -> 78..80 rows, the bbox filled (>= 0.99);
      IoU against a 325 x 100 rectangle matte (same aspect 3.25) >= 0.99.
 [G8] Gate tables: EMPTY_GATES single_share ("min", 0.98), aspect ("range",
-     (1.1, 2.4)), iou_below_topline ("min", 0.85); MESH_GATES component_share
+     (1.1, 2.6)), iou_below_topline ("min", 0.85); MESH_GATES component_share
      ("min", 0.98), mesh_iou ("min", 0.75 — calibrated on the real Business Heels deliveries, 0.77–0.78 against
      their side-view cut-out; 0.80 before the P3 acceptance). check_gates refuses a missing value
      unless it is optional.
@@ -183,6 +193,24 @@ def main():
     check("[G3] aspect 1.667 ok", near(r["aspect"], 300 / 180, 1e-9) and r["ok"] and r["reasons"] == []
           and r["leg"] is False and r["iou_below_topline"] is None, r)
 
+    # [G9]
+    derby = np.zeros((200, 400), bool)
+    derby[75:180, 50:350] = True
+    throat = derby.copy()
+    throat[60:75, 185:215] = True
+    r = fg.empty_gate(throat)
+    check("[G9] Derby 300 x 105 + 15 px throat: aspect 2.5, no leg, ok", near(r["aspect"], 2.5, 1e-9)
+          and r["leg"] is False and r["ok"] and r["reasons"] == [], r)
+    shin = derby.copy()
+    shin[0:75, 185:215] = True
+    r = fg.empty_gate(shin)
+    check("[G9] the throat rising to the top edge (0.25 L) -> leg", r["leg"] is True and not r["ok"], r)
+    low = np.zeros((200, 400), bool)
+    low[70:180, 50:350] = True
+    r = fg.empty_gate(low)
+    check("[G9] 300 x 110 -> aspect 2.727 refused", near(r["aspect"], 300 / 110, 1e-9) and not r["ok"]
+          and any(x.startswith("aspect") for x in r["reasons"]), r)
+
     # [G4]
     a = canvas()
     a[80:180, 50:350] = True
@@ -272,7 +300,7 @@ def main():
 
     # [G8]
     check("[G8] EMPTY_GATES", fg.EMPTY_GATES["single_share"][:2] == ("min", 0.98)
-          and fg.EMPTY_GATES["aspect"][:2] == ("range", (1.1, 2.4))
+          and fg.EMPTY_GATES["aspect"][:2] == ("range", (1.1, 2.6))
           and fg.EMPTY_GATES["iou_below_topline"][:2] == ("min", 0.85), fg.EMPTY_GATES)
     check("[G8] MESH_GATES", fg.MESH_GATES["component_share"][:2] == ("min", 0.98)
           and fg.MESH_GATES["mesh_iou"][:2] == ("min", 0.75), fg.MESH_GATES)
