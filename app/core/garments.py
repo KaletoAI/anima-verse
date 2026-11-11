@@ -1402,6 +1402,90 @@ def cached_failure(character_name: str, item_id: str, *,
     return None
 
 
+#: Hub jobs per step of a plain run on its FIRST attempt (spec
+#: 2026-11-11-improvements-figure-pipeline § 6.1 / § 6.5), keyed ``<kind>:<method>``:
+#: the clothing ``worn`` = the front edit + the back draft + the back fit; a
+#: two-view image step = one edit per view; ``mesh`` / ``mesh_source`` = one
+#: img2mesh job; HairDeck = its one job. The cut-out, the cut, the insole and
+#: every fit are CPU work. Footwear ``source`` is computed per item (the
+#: upscale, only for an item image below ``footwear_source.MIN_SIDE``). A
+#: chain may spend one more per refused attempt (R5) — this is the estimate
+#: ``run_estimate`` hands the improvements queue, not a cap.
+HUB_JOBS: Dict[str, Dict[str, int]] = {
+    "clothing:edit_chain": {"worn": 3, "ghost": 2, "cutout": 0, "mesh": 1, "fit": 0},
+    "hair:edit_chain": {"haired": 2, "ghost": 2, "cutout": 0, "mesh": 1, "fit": 0},
+    "hair:hairdeck": {"hairdeck": 1, "fit": 0},
+    "hair:subtract": {"haired": 2, "mesh_source": 1, "cut": 0, "fit": 0},
+    "footwear:shoe": {"source": 0, "empty": 1, "cutout": 0, "mesh": 1, "insole": 0, "fit": 0},
+}
+
+
+def _unknown_estimate(note: str) -> Dict[str, Any]:
+    return {"steps": [], "hub_jobs": None, "note": note, "refit": False}
+
+
+def run_estimate(character_name: str, item_id: str, *,
+                 profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The hub cost of a plain ``run_garment(character_name, item_id)`` BEFORE
+    it runs: ``{steps, hub_jobs, note, refit}`` — ``steps`` the steps of the
+    item's current method from the first one not ``_done`` under the current
+    fsig (footwear: the item steps under the current ssig, then the fit),
+    ``hub_jobs`` the sum of ``HUB_JOBS`` over them on first attempts (None
+    when it cannot be estimated: an unknown item, a character off the
+    pipeline, a shoe without an item image — ``note`` says why), ``note`` the
+    parts ("worn 3 + ghost 2 + mesh 1"). ``refit`` True when the run would
+    start at an image step but ``garment_source.find_source`` has a source
+    made on another base and the current group holds no own images: the
+    chain refits on the CPU first (``_refit_from_source``), so ``hub_jobs``
+    is 0 and the note names the full cost a refused refit falls back to."""
+    from app.core import base_body, garment_source
+    from app.core import garment_store as gs
+    from app.models.character import get_character_profile
+    try:
+        item, kind, order = _item_order(character_name, item_id, profile)
+    except ValueError as e:
+        return _unknown_estimate(str(e))
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    base = base_body.current_base(character_name, profile=profile)
+    if base is None:
+        return _unknown_estimate(f"{character_name} is not on the base-body pipeline")
+    bsig, base_sha = base
+    method = gs.kind_method(kind, character_name, profile)
+    costs = dict(HUB_JOBS.get(f"{kind}:{method}") or {})
+    if not costs:
+        return _unknown_estimate(f"no cost table for {kind} by {method}")
+    if kind == _footwear():
+        from app.core import footwear_source
+        image = footwear_source._item_image(item_id)
+        if image is None or not image.is_file():
+            return _unknown_estimate(f"{item.get('name') or item_id} has no item image")
+        from PIL import Image
+        with Image.open(image) as im:
+            costs["source"] = 1 if max(im.size) < footwear_source.MIN_SIDE else 0
+    try:
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+        hsig = gs.garment_hsig(character_name, item_id, profile=profile) if method == gs.HAIRDECK else ""
+        first = next((s for s in order
+                      if not _done(character_name, item_id, kind, fsig, s, base_sha, method, hsig)), None)
+    except ValueError as e:
+        return _unknown_estimate(str(e))
+    if first is None:
+        return {"steps": [], "hub_jobs": 0, "note": "nothing to run", "refit": False}
+    steps = list(order[order.index(first):])
+    parts = [(s, int(costs.get(s, 0))) for s in steps]
+    full = sum(n for _s, n in parts)
+    note = " + ".join(f"{s} {n}" for s, n in parts if n) or "no hub job"
+    if first in gs.IMAGE_STEPS and method in (gs.EDIT_CHAIN, gs.SUBTRACT):
+        ifsig = gs.image_fsig(character_name, item_id, profile=profile)
+        if (not garment_source.has_own_images(character_name, item_id, kind, method, ifsig)
+                and garment_source.find_source(character_name, item_id, kind, method, profile, ifsig)
+                is not None):
+            return {"steps": steps, "hub_jobs": 0, "refit": True,
+                    "note": f"refit from the previous base; up to {full} if the refit is refused"}
+    return {"steps": steps, "hub_jobs": full, "note": note, "refit": False}
+
+
 def _clothing() -> str:
     from app.core.garment_set import CLOTHING
     return CLOTHING
