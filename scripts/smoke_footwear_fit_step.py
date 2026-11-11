@@ -19,7 +19,7 @@ width 0.085, height 0.02; 1056 faces / 816 vertices: per foot 516 / 384 — sole
 grids — plus 12 / 24 per leg column) with its sidecar and
 unrigged copy. Item ``heels`` (feet, own mesh) held by Demo; its current source folder holds the closed flat
 clog of ``_footwear_fixtures.clog`` as ``prepared.glb`` (``glb_mesh.static_glb``), ``insole.json`` =
-``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 1, fit version 5: the
+``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 2, fit version 5: the
 cut applied and gated, toes conformed, the foot measured below the ankle) — the item steps are done, a run only fits. Item ``boots``: the same with the Task 5
 wedge's boot variant (``wedge(shaft=0.2098)``); item ``pumps``: the wedge pump itself. The clog is the one
 fixture shoe a RIGID box foot passes the cut gates in: on the wedge the box, pitched 24.29 deg by the chord,
@@ -51,7 +51,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      every one). Record: method "shoe", kind "footwear", version 5, fit_version 5, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
-     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 1}}; scale.k_m_per_unit 1.023599
+     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 2}}; scale.k_m_per_unit 1.023599
      (+-2e-4); sides.left.extension.deg 0 (|deg| <= 1e-6) both sides; root_lift_m 0.010236 (+-1e-5);
      insole_w_ball_mm 81.89 (+-0.05), width needed 1.0380 (+-0.002), applied 1.0380 (+-0.002), width_cap 1.10;
      slim_needed 0 (both sides); cut {version 2, sides left + right with foot_joint LeftFoot / RightFoot,
@@ -328,7 +328,7 @@ def main() -> int:
         check("P1 parents", rec.get("parents"), {
             "body_id": bsig, "body_sha256": base_sha, "base_model_sha256": base_sha, "base_signature": bsig,
             "source": {"ssig": ssig, "empty_sha256": sha(src / "empty.png"),
-                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 1}})
+                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 2}})
         scale = rec.get("scale") or {}
         near("P1 k", scale.get("k_m_per_unit"), 1.023599, 2e-4)
         for side in ("left", "right"):

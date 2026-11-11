@@ -21,7 +21,8 @@ overlay), ``cap`` stations ``[x, y]`` = the shoe's wall top per station — the 
 every shoe point farther than ``WALL_SIDE_M`` from the midline counted (the record's ``insole.wall_top_raw``,
 the spike's rule: behind the throat the side wall's edge, a leaning heel counter's true top included; over the
 vamp its outer surface), gaps interpolated along x; ``footprint`` = the outline polygon of
-``insole["footprint_outline"]`` (its per-station middle and half-width are the upper's midline and inner
+``insole["footprint_outline"]`` — the OUTSOLE footprint since ``INSOLE_VERSION`` 2, the columns whose lowest hit
+is a sole underside, so a flared boot shaft never widens it (its per-station middle and half-width are the upper's midline and inner
 half-width the slimming works against — the tracked insole is only partial in a steep shank);
 ``throat`` ``{x, y}`` = the throat front (the first station with a roof in the front half)
 and the vamp edge (the cap there); ``vamp_inner`` stations ``[x, y]`` = the vamp's INNER surface over the roofed

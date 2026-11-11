@@ -27,8 +27,23 @@ Blender:
   profile ``HEEL_SEAT_M`` (nominal) from the heel end; ball = the profile at ``BALL_SHARE`` L; pitch =
   atan2(profile(``PITCH_HEEL_SHARE`` L) - profile(``BALL_SHARE`` L), (BALL - PITCH_HEEL) L); shank
   slope = the median station slope between the heel seat and the ball (negative: falling to the toe).
-- **Type gates** (``INSOLE_GATES``): ``insole_cover`` = insole cells / footprint cells (refusal
-  ``INSOLE_REFUSED``); ``vamp_cover`` = the share of footprint cells at x >= ``BALL_SHARE`` L whose
+- **Outsole footprint** (``footprint_ground``, INSOLE_VERSION 2 — boots spec
+  ``docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md`` § 6.1): the footprint columns whose
+  LOWEST hit is a sole underside — its face normal's up component <= ``DOWN_MAX`` (``UP_MIN`` mirrored).
+  It is the denominator of ``insole_cover`` (the insole cells counted are the ones within it, so the share
+  stays <= 1) and the polygon of ``footprint_outline`` (what the cut hides under the shoe);
+  ``footprint_ground`` in insole.json is its share of every column with a hit. A flared shaft adds columns
+  whose lowest hit is the leaning wall — neither insole nor underside (spec § 5 F5: a synthetic knee boot
+  read 0.891 under the round-1 rule, a perfectly closed shoe pushed towards the 0.80 refusal, and the cut
+  polygon widened to the flare). The spec's first wording — "within ``GROUND_SHARE`` L of the ground" — was
+  measured on the Business Heels (``item_68c4d249/df44e2fa4177``, 2026-11-11) and rejected: a pump's waist
+  hangs above the ground and its toe springs 2.7 % L up, so only 31.7 % of its columns stand on the ground
+  and the outline lost the toe box (x 0.92 … 1.00 L) — the cut would have stopped hiding the toes. Facing
+  keeps 93.1 % of the heels' columns, x 0.013 … 0.996 L (the round-1 footprint ran 0.004 … 1.0 L), the ball
+  station's width unchanged and the median station 2.1 mm (one rim column of rounded sole edge) narrower;
+  ``insole_cover`` 0.890 -> 0.929. Every synthetic shoe (pump, clog, sandal, shaft) reads 1.0.
+- **Type gates** (``INSOLE_GATES``): ``insole_cover`` = insole cells within the outsole footprint / its
+  cells (refusal ``INSOLE_REFUSED``); ``vamp_cover`` = the share of footprint cells at x >= ``BALL_SHARE`` L whose
   column has a hit above the insole (refusal ``OPEN_REFUSED``); ``opening_share`` = the share of
   profile stations whose topline stands at least ``AIR_SHARE`` L above the insole — a solid mesh (its
   top surface read as the insole, no side walls above it) has none (refusal ``SOLID_REFUSED``, judged
@@ -59,7 +74,7 @@ import numpy as np
 from app.core.footwear_gates import check_gates
 
 #: Bumped when the analysis changes what it measures (part of the footwear fsig).
-INSOLE_VERSION = 1
+INSOLE_VERSION = 2   # 2: insole_cover and footprint_outline over the outsole footprint (footprint_ground)
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -87,8 +102,11 @@ BALL_SHARE = 0.62
 PITCH_HEEL_SHARE = 0.10
 #: Insole-to-roof gap (nominal metres) below which the toe box is too low for the toes.
 CAVITY_MIN_M = 0.015
-#: A lowest hit within this share of the length above the ground stands on the ground.
+#: A lowest hit within this share of the length above the ground stands on the ground (the contacts).
 GROUND_SHARE = 0.01
+#: A column's lowest hit with a face normal up component at or below this is a sole underside: the column
+#: belongs to the outsole footprint (``footprint_ground``). ``UP_MIN`` mirrored.
+DOWN_MAX = -0.3
 #: Contact bands (heel tip, ball) as a share of the length.
 CONTACT_BAND_SHARE = 0.05
 
@@ -454,7 +472,13 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
     footprint = ~np.isnan(H[:, :, 0, 0])
     n_fp = int(footprint.sum())
     found = ~np.isnan(ins)
-    insole_cover = float(found.sum() / n_fp) if n_fp else 0.0
+    # the outsole footprint: the columns whose lowest hit faces down (module docstring); cover and outline over it
+    low = H[:, :, 0, 0]
+    with np.errstate(invalid="ignore"):
+        sole = footprint & (H[:, :, 0, 1] <= DOWN_MAX)
+    n_sole = int(sole.sum())
+    insole_cover = float((found & sole).sum() / n_sole) if n_sole else 0.0
+    footprint_ground = float(n_sole / n_fp) if n_fp else 0.0
 
     prof = np.full(STATIONS, np.nan)
     cav = np.full(STATIONS, np.nan)
@@ -490,10 +514,10 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
 
     top, zp, zn = topline_stations(pf, F, gx)
 
-    # footprint outline: per station the lateral extent of the cells with a hit
+    # footprint outline: per station the lateral extent of the outsole cells
     left, right = [], []
     for i in range(STATIONS):
-        js = np.nonzero(footprint[i])[0]
+        js = np.nonzero(sole[i])[0]
         if len(js):
             left.append([gx[i], gz[js.min()]])
             right.append([gx[i], gz[js.max()]])
@@ -509,7 +533,6 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
                 break
 
     # sole contacts
-    low = H[:, :, 0, 0]
     contacts: Dict[str, Optional[List[float]]] = {"heel_tip": None, "ball": None, "toe_tip": None}
     if n_fp:
         ground = footprint & (low <= np.nanmin(low) + GROUND_SHARE * L)
@@ -585,6 +608,7 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
         "topline": top,
         "cavity": cav,
         "footprint_outline": outline,
+        "footprint_ground": footprint_ground,
         "insole_cover": insole_cover,
         "vamp_cover": vamp_cover,
         "opening_share": opening_share,

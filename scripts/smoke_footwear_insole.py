@@ -50,7 +50,7 @@ Expected, by hand:
      every number equals [I1] (the fin is vertical -> no ray hit; it sits at z = 0 -> no topline side).
 [I8] analyse(static_glb(pump)) equals analyse_arrays(pump) within float32 (1e-5) and is JSON without NaN.
 (Every float in insole.json is rounded to 7 decimals, so the station-count checks hold to 1e-6.)
-[I9] constants: INSOLE_VERSION 1, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
+[I9] constants: INSOLE_VERSION 2 (the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
      INSOLE_GATES insole_cover min 0.80 / vamp_cover min 0.6 / opening_share min 0.5, BOOT_MARGIN_M 0.03,
      the refusal texts (boot, open, solid).
 [I11] the closed solid wedge (sole alone: side faces only up to h(x), no roof): the top faces up with nothing
@@ -61,6 +61,32 @@ Expected, by hand:
 [I10] the pump with every up-facing triangle reversed (nothing faces up any more): no candidate anywhere ->
      no seed -> insole_cover 0.0 -> refused with INSOLE_REFUSED; the nominal numbers are None; no
      exception; JSON without NaN.
+[I12] the OUTSOLE footprint (boots plan docs/superpowers/plans/2026-11-11-footwear-boots-mens.md Task 2, spec
+     docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md § 5 F5, § 6.1; INSOLE_VERSION 2):
+     wedge(shaft=0.16, flare=0.06) — the shaft walls over x in [0, 0.10] rise to 0.16 and two flare walls lean
+     out from z = +-0.04 at y = 0.05 to z = +-0.06 at y = 0.16. The lateral grid now spans the flare: nzc =
+     int(240 x 0.12 / 0.26) = 110 columns over [-0.06, 0.06], spacing 0.12 / 109 = 0.0011009; the sole holds the
+     columns |z| < 0.04: j = 19 .. 90 -> 72 columns (the first beyond 0.04 is j = 18 at -0.04019); the flare the
+     columns |z| in (0.04, 0.06]: 18 per side (j = 91 .. 108) plus the end column at exactly +-0.06, whose ray
+     meets the flare's top edge (the point-in-triangle test is edge-inclusive: it counts) -> 19 per side.
+     Stations over the flare: x_i = i x 0.26 / 239 <= 0.10 -> i = 0 .. 91 = 92 stations. A vertical ray over
+     a flare column hits the leaning wall at 0.05 .. 0.16: the wall's outward normal is (0.11, -0.02) / 0.1118
+     in (z, y) -> normal_up -0.179, above DOWN_MAX -0.3 (not an underside) and below UP_MIN 0.3 (no insole
+     candidate), so those cells are footprint-with-a-hit, no outsole, no insole.
+     On 4e3ce6f6 (the shipped rule, footprint = every column with a hit) insole_cover = 72 x 240 / (72 x 240
+     + 2 x 19 x 92) = 17280 / 20776 = 0.8317 (measured 0.8317289; the continuous value is 1 - 0.004 / 0.0248 =
+     0.8387) and the outline reaches |z| = 0.06 — a flared shaft pushes a perfectly closed shoe towards the
+     0.80 refusal and widens the cut polygon to the flare.
+     The version-2 rule: footprint_ground = the columns whose LOWEST hit faces down (normal_up <= DOWN_MAX)
+     = the 72 sole columns at every station (the sole bottom, normal (0, -1, 0)); insole_cover = insole cells
+     WITHIN it /
+     its cells = 17280 / 17280 = 1.0 (+-1e-9); footprint_ground share = 17280 / 20776 = 0.831729 (+-1e-6);
+     footprint_outline over the ground footprint -> every station's lateral extent is the sole's
+     |z| <= 0.03908 (never the flare's 0.059): max |z| of the outline 0.03908 (+-1e-6, = gz[90]). The plain
+     wedge() reads footprint_ground 1.0, the same cover, outline and gates as [I1]-[I3] (its every column's
+     lowest hit is the sole bottom) — the [I1]-[I3] numbers above are unchanged by this task. (The spec's first
+     wording, "within GROUND_SHARE L of the ground", was rejected on the real Business Heels: a pump's waist
+     and toe spring hang above the ground — footwear_insole's module docstring has the numbers.)
 """
 import json
 import math
@@ -156,8 +182,8 @@ def main():
 
     print("[I9] constants")
     check("constants", (fi.INSOLE_VERSION, fi.NOMINAL_LENGTH_M, fi.STATIONS, fi.AIR_SHARE, fi.TOL_SHARE,
-                        fi.BOOT_MARGIN_M),
-          (1, 0.26, 240, 0.025, 0.035, 0.03))
+                        fi.BOOT_MARGIN_M, fi.DOWN_MAX),
+          (2, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
     check("INSOLE_GATES", {k: v[:2] for k, v in fi.INSOLE_GATES.items()},
           {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6), "opening_share": ("min", 0.5)})
     check("refusal texts", (fi.BOOT_REFUSED, fi.OPEN_REFUSED, fi.SOLID_REFUSED),
@@ -210,7 +236,8 @@ def main():
     near("vamp_cover", pump["vamp_cover"], 0.810, 0.02)
     near("vamp_cover (station count 74/91)", pump["vamp_cover"], 74 / 91, 1e-6)
     check("gates", (pump["gates"]["ok"], pump["gates"]["reasons"], pump["gates"].get("refusal")), (True, [], None))
-    check("version", pump["version"], 1)
+    check("version", pump["version"], 2)
+    near("pump footprint_ground", pump["footprint_ground"], 1.0, 1e-9)
 
     print("[I4] rotated 180 deg about Y")
     Pr, Fr = wedge(rotate_180=True)
@@ -270,6 +297,19 @@ def main():
     check("inside-out nominal None", (inside_out["nominal"]["heel_seat_h_m"], inside_out["nominal"]["pitch_deg"]),
           (None, None))
     check("inside-out JSON strict", strict_json(inside_out), True)
+
+    print("[I12] the outsole footprint under a flared shaft")
+    Pz, Fz = wedge(shaft=0.16, flare=0.06)
+    flared = fi.analyse_arrays(Pz, Fz)
+    check("flare grid", (len(flared["stations"]), len(flared["lateral"])), (240, 110))
+    near("flare insole_cover (insole over the OUTSOLE)", flared["insole_cover"], 1.0, 1e-9)
+    near("flare footprint_ground share", flared["footprint_ground"], 17280 / 20776, 1e-6)
+    oz = np.abs(np.asarray(flared["footprint_outline"], float)[:, 1])
+    near("flare outline max |z| = the sole's edge column", float(oz.max()), 0.0390826, 1e-6)
+    check("flare gates ok", (flared["gates"]["ok"], flared["gates"].get("refusal")), (True, None))
+    near("flare shaft_h_raw", flared["shaft_h_raw"], 0.16, 1e-6)
+    near("flare profile(0.10)", interp(flared, "profile", 0.10), 0.05, 1e-6)
+    check("flare JSON strict", strict_json(flared), True)
 
     if FAILED:
         print(f"\n{len(FAILED)} check(s) failed: {FAILED}")

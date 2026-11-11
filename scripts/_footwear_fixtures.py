@@ -12,6 +12,10 @@ mesher's own coordinates (Y up, x heel -> toe, z lateral), length 0.26, width 0.
   the topline ignores it because it sits at z = 0) that makes the TOE end the taller one for the
   provisional heel rule;
 - ``shaft``: a boot variant — the side walls over x in [0, 0.10] rise to ``shaft``;
+- ``flare``: a flared shaft (boots plan Task 2, spec 2026-11-11 § 5 F5 / § 6.1) — two extra walls over x in
+  [0, 0.10] that lean OUT from z = +-HALF_W at y = 0.05 to z = +-``flare`` at y = 0.16, open at the bottom (a
+  vertical ray over |z| in (0.04, ``flare``) hits the leaning wall at 0.05 .. 0.16, never the ground; its face
+  normal's up component is 0.02 / hypot(0.11, 0.02) = 0.18 < UP_MIN, so it is never an insole candidate);
 - ``solid=True``: the closed solid wedge — the sole alone (side faces from the ground to h(x), no walls above
   it, no roof), i.e. a mesher result whose top surface would be read as the insole.
 
@@ -38,9 +42,10 @@ def h(x: float) -> float:
 
 
 def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = False, solid: bool = False,
-          shaft: float = 0.0):
+          shaft: float = 0.0, flare: float = 0.0):
     """``(positions (N, 3), faces (M, 3))`` of the wedge pump (module docstring); ``shaft`` > 0 raises the
-    side walls over the rear x in [0, 0.10] to that height (a boot shaft; topline there = ``shaft``)."""
+    side walls over the rear x in [0, 0.10] to that height (a boot shaft; topline there = ``shaft``); ``flare``
+    > HALF_W adds the leaning flare walls over the same x (module docstring)."""
     P, F = [], []
 
     def tri(a, b, c, facing):
@@ -73,6 +78,10 @@ def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = Fals
         if not solid and x0 >= roof_from - 1e-9:
             quad((x0, h0 + WALL, -HALF_W), (x1, h1 + WALL, -HALF_W), (x1, h1 + WALL, HALF_W),
                  (x0, h0 + WALL, HALF_W), up)
+        if flare > HALF_W and x1 <= 0.10 + 1e-9:
+            for sgn in (1.0, -1.0):
+                quad((x0, 0.05, sgn * HALF_W), (x1, 0.05, sgn * HALF_W), (x1, 0.16, sgn * flare),
+                     (x0, 0.16, sgn * flare), (0, 0, sgn))
     # end faces of the sole
     quad((0, 0, -HALF_W), (0, h(0), -HALF_W), (0, h(0), HALF_W), (0, 0, HALF_W), (-1, 0, 0))
     quad((LENGTH, 0, -HALF_W), (LENGTH, h(LENGTH), -HALF_W), (LENGTH, h(LENGTH), HALF_W), (LENGTH, 0, HALF_W),

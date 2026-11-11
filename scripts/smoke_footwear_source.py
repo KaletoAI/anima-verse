@@ -87,7 +87,7 @@ Expected, by hand:
      SOLID_REFUSED, insole.json written with gates.refusal SOLID_REFUSED, record insole accepted False.
 [S5b] the wedge pump of scripts/_footwear_fixtures.py written as W's prepared.glb, run_source(W,
      steps=["insole"], force=True) -> ok, ran ["insole"], 0 service calls, record insole accepted with
-     version 1 and nominal pitch 30.61 deg (smoke_footwear_insole [I1]); insole.json heel_seat_h_m 0.09.
+     version 2 and nominal pitch 30.61 deg (smoke_footwear_insole [I1]); insole.json heel_seat_h_m 0.09.
 [S6] second run_source(W) -> ran == [], 0 calls of any kind. regenerate(W, "mesh") -> seed 1, new ssig =
      ssig_for(W, 1) != old; upscaled/empty/cutout copied (bytes equal) with copied_from = old ssig, no
      mesh record in the new folder; the next run_source -> mesh runs (exactly 1 mesher call, 0 upscale,
@@ -472,7 +472,7 @@ def main():
             check("W no candidate left", [p.name for p in dw.iterdir() if "candidate" in p.name], [])
             ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
             check("W insole.json written", (ins.get("version"), (ins.get("gates") or {}).get("refusal")),
-                  (1, fi.SOLID_REFUSED))
+                  (2, fi.SOLID_REFUSED))
             near("W boxes insole_cover", ins.get("insole_cover"), 1.0, 1e-6)
             near("W boxes vamp_cover", ins.get("vamp_cover"), 912 / 7826, 1e-6)
             near("W boxes opening_share", ins.get("opening_share"), 96 / 240, 1e-6)
@@ -491,7 +491,7 @@ def main():
             check("W insole ok", (res.get("ok"), res.get("ran")), (True, ["insole"]))
             check("W insole no service call", svc.counts(), c0)
             rec = fs.step_record("shoe_w", ssig_w, "insole")
-            check("W insole record", (rec.get("accepted"), rec.get("version")), (True, 1))
+            check("W insole record", (rec.get("accepted"), rec.get("version")), (True, 2))
             near("W insole pitch", (rec.get("nominal") or {}).get("pitch_deg"), 30.61, 0.1)
             ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
             near("W insole.json heel seat", (ins.get("nominal") or {}).get("heel_seat_h_m"), 0.09, 1e-5)
