@@ -412,6 +412,13 @@ stops acting autonomously).
   missing assets → Clothing images**, fill missing images for the world's clothing items
   (`outfit_piece`), including references to deleted files. Existing images and the cross-world
   shared library stay untouched; one-shot and standing runs use the normal `item` image routing.
+  The figure pipeline adds five idle-time types, each showing its hub-job cost before start
+  (load waits, a refusal is final until you act in the Wardrobe or the 3D tab):
+  - **Generate missing garment meshes** — own-mesh pieces and shoes that have no mesh yet.
+  - **Refit stale fits (CPU)** — fits a version bump made stale; keeps running with media off.
+  - **Rebuild stale outfit models** — outfit models built on an older base body or body detail.
+  - **Generate hair meshes** — characters with a hair description but no hair mesh.
+  - **Clean up orphaned derived files** — the artefact collector's dry run with sizes, then the cleanup (CPU only).
 - **Content marketplace:** install content and skill packages from one or more configured catalogs
   (each cached per world, optional auth token) — with a thumbnail and the pack's facts (size,
   variants, rooms, identity …) before you install. A catalog is a Git repository whose RELEASES hold

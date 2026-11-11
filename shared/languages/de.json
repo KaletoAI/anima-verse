@@ -4696,6 +4696,8 @@
     "Hub jobs pending: unknown": "Offene Hub-Jobs: unbekannt",
     "≈ {n} hub jobs pending": "≈ {n} Hub-Jobs offen",
     "Refused by its gates — run it explicitly from the Wardrobe or the 3D tab": "Von seinen Prüfungen abgelehnt — explizit über die Garderobe oder den 3D-Tab ausführen",
-    "CPU-only entries keep running": "Reine CPU-Einträge laufen weiter"
+    "CPU-only entries keep running": "Reine CPU-Einträge laufen weiter",
+    "Artefact report": "Artefakt-Bericht",
+    "What the cleanup would remove for this character, and why (a dry run)": "Was die Bereinigung bei diesem Charakter entfernen würde und warum (ein Probelauf)"
   }
 }

@@ -12,6 +12,13 @@
  * answers Retry with 409 "refused". The button stays visible but disabled,
  * with the explicit path beside it — spending that chain again is a person's
  * decision in the Wardrobe or the 3D tab, never the idle engine's.
+ *
+ * Every step shows its note as a second line under the candidate: what the
+ * estimate counts, a dry-run summary, or — once done — what the step did. A
+ * cleanup step of a character (`artefact_cleanup`, key `character:<name>`)
+ * also links the character's artefact report: the server's dry run
+ * (`GET /characters/{name}/artefacts/orphans`) with every orphaned file group
+ * and why it would go or is kept.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -30,6 +37,17 @@ function clockTime(iso: string | null | undefined): string {
 
 const REFUSED_HINT =
   'Refused by its gates — run it explicitly from the Wardrobe or the 3D tab'
+
+const CLEANUP_TYPE = 'artefact_cleanup'
+const CHARACTER_KEY = 'character:'
+
+/** The artefact report (dry run) of the character a cleanup step works on,
+ *  or '' for any other step. */
+function artefactReportUrl(typeId: string, candidateKey: string): string {
+  if (typeId !== CLEANUP_TYPE || !candidateKey.startsWith(CHARACTER_KEY)) return ''
+  const name = candidateKey.slice(CHARACTER_KEY.length)
+  return name ? `/characters/${encodeURIComponent(name)}/artefacts/orphans` : ''
+}
 
 /** Green for a finished step, red for one that ended badly, muted for the
  *  ones that are still on their way. */
@@ -128,44 +146,57 @@ export function EntryDetail({
               </tr>
             </thead>
             <tbody>
-              {steps.map((step) => (
-                <tr key={step.candidate_key}>
-                  <td>{step.candidate_label || step.candidate_key}</td>
-                  <td className={statusClass(stepStatus(step))}>
-                    {statusLabel(stepStatus(step))}
-                  </td>
-                  <td>{step.attempts || 0}</td>
-                  <td>{hubJobsText(step.hub_jobs, t)}</td>
-                  <td className="ga-imp-steps-error"
-                    title={[step.error, step.note].filter(Boolean).join('\n')}>
-                    {step.error || ''}
-                    {step.note ? (
-                      <div className="ga-imp-steps-note">{step.note}</div>
-                    ) : null}
-                  </td>
-                  <td>
-                    {duration(step.duration_s) || clockTime(step.finished_at)}
-                  </td>
-                  <td>
-                    {step.status === 'skipped' && step.refused ? (
-                      <>
-                        <button type="button" className="ga-btn ga-btn-sm" disabled>
+              {steps.map((step) => {
+                const report = artefactReportUrl(improvement.type_id, step.candidate_key)
+                return (
+                  <tr key={step.candidate_key}>
+                    <td>
+                      {step.candidate_label || step.candidate_key}
+                      {step.note || report ? (
+                        <div className="ga-imp-steps-note">
+                          {step.note}
+                          {step.note && report ? ' · ' : null}
+                          {report ? (
+                            <a href={report} target="_blank" rel="noreferrer"
+                              title={t('What the cleanup would remove for this character, and why (a dry run)')}>
+                              {t('Artefact report')}
+                            </a>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className={statusClass(stepStatus(step))}>
+                      {statusLabel(stepStatus(step))}
+                    </td>
+                    <td>{step.attempts || 0}</td>
+                    <td>{hubJobsText(step.hub_jobs, t)}</td>
+                    <td className="ga-imp-steps-error" title={step.error || ''}>
+                      {step.error || ''}
+                    </td>
+                    <td>
+                      {duration(step.duration_s) || clockTime(step.finished_at)}
+                    </td>
+                    <td>
+                      {step.status === 'skipped' && step.refused ? (
+                        <>
+                          <button type="button" className="ga-btn ga-btn-sm" disabled>
+                            {t('Retry')}
+                          </button>
+                          <span className="ga-imp-refused-hint">
+                            {t(REFUSED_HINT)}
+                          </span>
+                        </>
+                      ) : step.status === 'skipped' ? (
+                        <button type="button" className="ga-btn ga-btn-sm"
+                          disabled={busy === step.candidate_key}
+                          onClick={() => retry(step.candidate_key)}>
                           {t('Retry')}
                         </button>
-                        <span className="ga-imp-refused-hint">
-                          {t(REFUSED_HINT)}
-                        </span>
-                      </>
-                    ) : step.status === 'skipped' ? (
-                      <button type="button" className="ga-btn ga-btn-sm"
-                        disabled={busy === step.candidate_key}
-                        onClick={() => retry(step.candidate_key)}>
-                        {t('Retry')}
-                      </button>
-                    ) : null}
-                  </td>
-                </tr>
-              ))}
+                      ) : null}
+                    </td>
+                  </tr>
+                  )
+              })}
             </tbody>
           </table>
         </div>
