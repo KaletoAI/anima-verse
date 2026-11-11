@@ -18,7 +18,7 @@ import {
   findLegChains as findLegChainsData, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes,
   createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox, createGarmentCollision,
-  applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose,
+  applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   GarmentCollision, FootPose } from '@anima/scene-render';
@@ -2116,6 +2116,10 @@ export class Figure {
    *  clip height term of the ground group (`setClipHeight`), so it fades with
    *  the group like the listing's offsets do; seat and lie get 0. */
   private readonly footPose: FootPose | null;
+  /** The floor the OWNER seated this figure on, in world units (`setFloorY`):
+   *  while a `seat` group clip plays, `seatFootLift` keeps the shod heels on
+   *  it (P3b). null = never set, no raise. */
+  private floorY: number | null = null;
   /** World-up calibration expressed in the root's local frame. */
   private readonly heightCorrection = new THREE.Vector3();
   private readonly heightRotation = new THREE.Quaternion();
@@ -2823,6 +2827,13 @@ export class Figure {
    *  own time drifted more than PAIR_RESYNC_S from `t`, so a poll never makes
    *  the figure stutter. Returns false when the half is not bound on this rig
    *  — the caller then falls back to a solo clip. */
+  /** The floor this figure is seated ON, in world units — the owner's stand
+   *  height at the root's xz (`roomStandAt` / `groundY`), set whenever it
+   *  plays a `seat` group clip; read by the seated knee-raise in `update`. */
+  setFloorY(y: number): void {
+    this.floorY = y;
+  }
+
   playPair(clipName: string, t: number, frozen: boolean, loop: boolean, surfaceGroup?: string): boolean {
     const action = this.actions.get(clipName);
     if (!action) return false;
@@ -3075,6 +3086,11 @@ export class Figure {
     }
     // Yaw/lean may change the local representation of the WORLD-up correction.
     if (!this.isStatic) this.applyHeight();
+    // Seated with fitted shoes: the heels the seat group does not lift the
+    // root for come up to the owner's floor through the knee (P3b).
+    if (this.heightGroup === 'seat' && this.footPose && this.floorY !== null) {
+      seatFootLift(THREE, this.root, this.footPose, this.floorY);
+    }
     // Final anchors now include mixer pose, bridge travel, turn and lift.
     // The engine clamps its animation delta; secondary motion uses real time.
     const now = performance.now();

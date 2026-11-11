@@ -21,7 +21,8 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   restCorrections, restPoseOf, rigHipsHeight,
   standingHipsRef, clipHeightOffsetM, clipHeightGroup, createCollisionOverlay, collidingGarmentMeshes,
   createGarmentCollision, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
-  footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose } from '@anima/scene-render'
+  footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose,
+  seatFootLift } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision } from '@anima/scene-render'
 import { applyViewerTexture } from './modelTexture'
@@ -1100,6 +1101,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
          *  and the floor its bare bind soles stand on — measured in the bind
          *  pose, applied after the framing below. */
         let stance: { y: number; floorY: number } | null = null
+        /** The bare bind sole plane in SCENE units once framed (the floor grid's
+         *  height): the floor the seated knee-raise measures against — the
+         *  shipped rest, never a measurement on the cut body (P3b). */
+        let floorWorldY: number | null = null
         const measureStance = async (hipsMedian: number | null,
           heightOffsets?: ClipHeightOffsetsCm): Promise<{ y: number; floorY: number } | null> => {
           if (!clipGroup) return null
@@ -1404,6 +1409,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           if (stance) {
             const floor = new THREE.GridHelper(2, 20, 0x58a6ff, 0x30363d)
             floor.position.y = stance.floorY - center.y
+            floorWorldY = floor.position.y
             scene.add(floor)
             pivot.position.y += stance.y
             pivot.updateMatrixWorld(true)
@@ -2314,6 +2320,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             }
             mixer.update(control.playing ? realDelta * control.speed : 0)
           } else if (mixer) mixer.update(realDelta)
+          // Seated with the fitted shoes: the heels come up to the floor grid
+          // through the knee, after the mixer's pose, before the extension
+          // motion (P3b, `Figure.update` does the same in the world).
+          if (clipGroup === 'seat' && shod && floorWorldY !== null) seatFootLift(THREE, object, shod, floorWorldY)
           if (secondaryRev !== motionRef.current?.rev || secondaryEnabled !== secondaryOnRef.current) {
             secondaryEnabled = secondaryOnRef.current
             secondaryRev = motionRef.current?.rev

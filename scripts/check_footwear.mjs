@@ -50,8 +50,11 @@
  *    bare foot's lowest point within 10 mm of the floor (Task 13's definition; with `--bare` the uncut
  *    bare model's foot over ITS floor) — with their runs on the
  *    loop: `strike` = the first 3 stance frames of a run, `off` = the last 3 (walk target −3 … +13 mm).
- *    Seat / lie clips: the lowest contact of `foot_pose.contacts` per frame (the spec's `seat_floor`,
- *    target −3 … +10 mm once `seatFootLift` lands, P3b) and the hips' height shod − bare (must be 0).
+ *    Seat clips: `seatFootLift` runs per frame against the bind sole plane (the shipped rest — the figure's
+ *    floor), as both renderers do; then the lowest contact of `foot_pose.contacts` per frame (the spec's
+ *    `seat_floor`, target −3 … +10 mm, P3b), the hips' height shod − bare (must be 0), the ankle raise and the
+ *    knee's rise (its world y after − before the IK, max over the clip — the table-top risk). Lie clips: the
+ *    contacts and hips as they come.
  *  - pitch: the total Foot pitch per side = how far the Foot joint → ToeBase joint line pitches down
  *    (ankle above the ball = positive, degrees, world) BEYOND the same line in the bare bind pose — the
  *    plantarflexion over the bare standing foot. Shod = the fit's extension plus the clip's own
@@ -339,7 +342,7 @@ async function main() {
   const SR = await import('../packages/scene-render/src/index.ts')
   const { adaptExternalClips } = await import('../client3d/src/scene/figures.ts')
   const { restPoseOf, restCorrections, rigHipsHeight, normBoneName, inGarment, figureBox, measureClipGround,
-    clipGroundOffset, applyFootPoseToPose, footPoseLiftM, footPoseMatches, footContactsNow } = SR
+    clipGroundOffset, applyFootPoseToPose, footPoseLiftM, footPoseMatches, footContactsNow, seatFootLift } = SR
 
   const arrayBufferOf = (buf) => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
   const loadFbx = (file) => new FBXLoader().parse(arrayBufferOf(fs.readFileSync(file)), '')
@@ -677,6 +680,14 @@ async function main() {
     for (let f = 0; f < n; f++) {
       play(shodClip[k], f / FPS, rootY(k))
       const row = rows[f]
+      if (group === 'seat') {
+        const kneeBefore = Object.fromEntries(SIDES.map((s) => [s, bones.get(`${s}leg`)?.getWorldPosition(new THREE.Vector3()).y ?? null]))
+        const raise = seatFootLift(THREE, fig, fp, floor)
+        updateMats()
+        row.raise = Math.max(raise.left, raise.right) * 1000
+        row.knee_rise = Math.max(...SIDES.map((s) => kneeBefore[s] === null ? 0
+          : (bones.get(`${s}leg`).getWorldPosition(new THREE.Vector3()).y - kneeBefore[s]) * 1000))
+      }
       row.shoe = Object.fromEntries(SIDES.map((s) => [s, lowest(shoeIdx[s])]))
       row.pitch = Object.fromEntries(SIDES.map((s) => [s, footPitch(s)]))
       footContactsNow(THREE, fig, fp, contacts)
@@ -715,6 +726,11 @@ async function main() {
     } else {
       out.lowest_contact_mm = stats(rows.map((r) => r.contact))
       out.hips_delta_mm = hipsBone ? r1(Math.max(...rows.map((r) => Math.abs(r.hips - r.bare_hips))) * 1000) : null
+      if (group === 'seat') {
+        out.seat_floor_mm = out.lowest_contact_mm
+        out.ankle_raise_max_mm = r1(Math.max(...rows.map((r) => r.raise)))
+        out.knee_rise_max_mm = r1(Math.max(...rows.map((r) => r.knee_rise)))
+      }
     }
     // penetration at --samples times
     out.penetration = []
@@ -746,7 +762,8 @@ async function main() {
       }
     } else {
       console.log(`${head} | lowest shoe ${span(out.lower_sole_mm)} mm | lowest contact ${span(out.lowest_contact_mm)} mm `
-        + `| hips shod − bare max ${out.hips_delta_mm} mm | bare ${span(out.lower_bare_mm)}`)
+        + `| hips shod − bare max ${out.hips_delta_mm} mm | bare ${span(out.lower_bare_mm)}`
+        + (group === 'seat' ? ` | seat floor ${span(out.seat_floor_mm)} mm, ankle raise max ${out.ankle_raise_max_mm} mm, knee rise max ${out.knee_rise_max_mm} mm` : ''))
     }
     console.log(`  ${''.padEnd(22)}Foot pitch max L/R ${out.pitch_max_deg.left}° / ${out.pitch_max_deg.right}° `
       + `(bare ${out.bare_pitch_max_deg.left}° / ${out.bare_pitch_max_deg.right}°) `

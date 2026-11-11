@@ -46,6 +46,23 @@
  *      mesh (its sole vertices at −0.02 − 0.032 + 0.052 = 0) and the bare
  *      soles of the body, riding the same Foot, stand the bind gap of 0.02
  *      above it. The bare chain (no foot pose) stores 0 as before.
+ * [C5] Task 23 (P3b): the seat group calls `seatFootLift` with the OWNER's
+ *      floor, the ground group never. A shod Figure on the rig plays the
+ *      `sit` clip in the `seat` group; its Foot bone stands at y_F and its
+ *      lowest sole contact at y_c (both read off the figure with no floor
+ *      set: the seat group's height term is 0 and the IK runs only once a
+ *      floor is set; in this rig's bind space the record's contacts lie
+ *      0.10 under the ankle, [C4]). `setFloorY(y_c + 0.04)` puts the owner's
+ *      floor 0.04 ABOVE the lowest contact → d = 0.04 ≥ 0.015 → r = d: after
+ *      `update` the Foot bone stands at y_F + 0.04 (±1e-6; it keeps its world
+ *      rotation, so the contact lands ON the floor, ±1e-6) and the Leg bone
+ *      (the knee) has risen. The same figure in the `ground` group with that
+ *      floor still set: the Foot stays where the mixer and the lift put it —
+ *      equal to a second shod figure that never had a floor (±1e-9). A floor
+ *      BELOW the contact (y_c − 0.10, a crossed leg) in the seat group:
+ *      nothing moves (±1e-12). (The mixer re-poses the leg every frame, so
+ *      the raise never accumulates; on a pose nobody re-writes, repeated
+ *      calls would creep by r(0) = 3.75 mm, then less, towards 15 mm.)
  */
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -78,7 +95,7 @@ async function loadClient() {
     const entry = [
       `export { adaptExternalClips, Figure, modelFootPose } from '${src}/figures';`,
       `export { clipGroundOffset, measureGroundOffsets } from '${src}/clipGround';`,
-      `export { footPoseLiftM, footPoseMatches } from '${pkg}/footPose';`,
+      `export { footPoseLiftM, footPoseMatches, footContactsNow } from '${pkg}/footPose';`,
       `export { normBoneName } from '${pkg}/clipRetarget';`,
     ].join('\n');
     const built = await esbuild.build({
@@ -97,7 +114,7 @@ async function loadClient() {
 async function main() {
   const THREE = await import('three');
   const { adaptExternalClips, Figure, modelFootPose, clipGroundOffset, measureGroundOffsets,
-          footPoseLiftM } = await loadClient();
+          footPoseLiftM, footContactsNow } = await loadClient();
 
   const fp = {
     version: 1,
@@ -208,6 +225,37 @@ async function main() {
   });
   bareFigure.play('idle', false, 0, 'ground');
   check('a figure without the shoes stands at 0 under ground (lift 0)', near(bareFigure.root.children[0].position.y, 0));
+
+  console.log('\n[C5] the seat group calls seatFootLift with the owner\'s floor, the ground group never');
+  {
+    const seated = (floor) => {
+      const t = rig();
+      const f = new Figure({ name: 'seat', template: t, clips: adaptExternalClips(library(), t, undefined, undefined, shoes), scale: 1,
+        height: 1.70, assignOnly: true, noClips: false, tier: 'full', libraryFits: true, footPose: fp });
+      if (floor !== null) f.setFloorY(floor);
+      return f;
+    };
+    const footY = (f) => f.root.getObjectByName('mixamorigLeftFoot').getWorldPosition(new THREE.Vector3()).y;
+    const kneeY = (f) => f.root.getObjectByName('mixamorigLeftLeg').getWorldPosition(new THREE.Vector3()).y;
+    const lowestContact = (f) => Math.min(...footContactsNow(THREE, f.root, fp).left.map((v) => v.y));
+    const ref = seated(null);
+    ref.play('sit', false, 0, 'seat'); ref.update(1 / 30, { realDelta: 1 / 30 }); ref.root.updateMatrixWorld(true);
+    const yF = footY(ref); const yK = kneeY(ref); const yC = lowestContact(ref);
+    const f5 = seated(yC + 0.04);
+    f5.play('sit', false, 0, 'seat'); f5.update(1 / 30, { realDelta: 1 / 30 }); f5.root.updateMatrixWorld(true);
+    check('seat group: the Foot rises by r = d = 0.04', near(footY(f5), yF + 0.04, 1e-6), `${footY(f5).toFixed(7)} vs ${(yF + 0.04).toFixed(7)}`);
+    check('seat group: the lowest contact lands ON the owner\'s floor', near(lowestContact(f5), yC + 0.04, 1e-6), `${lowestContact(f5).toFixed(7)} vs ${(yC + 0.04).toFixed(7)}`);
+    check('seat group: the knee has risen', kneeY(f5) > yK + 1e-4, `${kneeY(f5).toFixed(5)} > ${yK.toFixed(5)}`);
+    const g5 = seated(yC + 0.04);
+    g5.play('idle', false, 0, 'ground'); g5.update(1 / 30, { realDelta: 1 / 30 }); g5.root.updateMatrixWorld(true);
+    const g0 = seated(null);
+    g0.play('idle', false, 0, 'ground'); g0.update(1 / 30, { realDelta: 1 / 30 }); g0.root.updateMatrixWorld(true);
+    check('ground group: never — the Foot stays where the mixer and the lift put it', near(footY(g5), footY(g0), 1e-9) && near(kneeY(g5), kneeY(g0), 1e-9),
+      `${footY(g5).toFixed(7)} vs ${footY(g0).toFixed(7)}`);
+    const c5 = seated(yC - 0.10);
+    c5.play('sit', false, 0, 'seat'); c5.update(1 / 30, { realDelta: 1 / 30 }); c5.root.updateMatrixWorld(true);
+    check('a floor below the heel (crossed leg): nothing moves', near(footY(c5), yF, 1e-12) && near(kneeY(c5), yK, 1e-12));
+  }
 
   console.log('\n[C4] measureGroundOffsets with the lift: the sole on the floor');
   const probeRig = rig();

@@ -710,6 +710,13 @@ export class NpcManager {
     const figure = npc.figure;
     if (!figure) return;
     const wasBridging = figure.bridging;
+    // A seat: the floor the figure is seated on is the one it was placed with
+    // (the room's standing height at the root, else the ground) — the seated
+    // knee-raise measures the shod heels against it (P3b).
+    if (surfaceGroup === 'seat') {
+      figure.setFloorY(this.roomStandAt(npc.name, npc.root.position.x, npc.root.position.z)
+        ?? this.groundY(npc.root.position.x, npc.root.position.z));
+    }
     figure.play(kind, terrainClip, sink, surfaceGroup);
     if (!wasBridging && figure.bridging && figure.beginBridgeLift(rootYBefore - goalY)) {
       npc.root.position.y = goalY;
@@ -1454,6 +1461,8 @@ export class NpcManager {
     const z = it.anchor.z - root.x * s + root.z * c;
     const target = { x, y: ownAnchor ? ownAnchor.y : seat ? seat.slots[0].y
       : (this.roomStandAt(npc.name, x, z) ?? this.groundY(x, z)), z, yaw: it.anchor.yaw };
+    // Seated by a pair clip: the floor under the seat, same rule (P3b).
+    if (seat?.group === 'seat') npc.figure.setFloorY(this.roomStandAt(npc.name, x, z) ?? this.groundY(x, z));
     const age = it.blend ? (performance.now() - it.blend.at) / 1000 : BLEND_S;
     const shown = it.blend ? pairBlend(it.blend.from, target, age) : target;
     npc.root.position.set(shown.x, shown.y, shown.z);
