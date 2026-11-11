@@ -1041,4 +1041,12 @@ def sweep_all() -> Dict[str, int]:
     if totals["deleted_files"]:
         logger.info("Artefact GC daily sweep: %d file(s), %.1f MB over %d character(s)",
                     totals["deleted_files"], totals["freed_bytes"] / 1e6, totals["characters"])
+    try:
+        # The world shoe sources hang on the items and the kept footwear fits (footwear_source.collect).
+        from app.core import footwear_source
+        shoes = footwear_source.collect()
+        totals["deleted_files"] += shoes["deleted_files"]
+        totals["freed_bytes"] += shoes["freed_bytes"]
+    except Exception:  # noqa: BLE001 — the sweep's own result stands
+        logger.exception("Footwear source GC failed")
     return totals

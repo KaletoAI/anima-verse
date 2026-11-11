@@ -279,6 +279,12 @@ def delete_item_route(
         raise HTTPException(status_code=404, detail="Item not found")
     for name in holders:
         artefact_graph.collect_quietly(name, f"item {item_id} deleted")
+    try:
+        # A deleted feet item takes its world shoe source with it (footwear/<item>/, footwear_source.collect).
+        from app.core import footwear_source
+        footwear_source.collect()
+    except Exception:
+        logger.exception("Item %s: footwear source GC failed", item_id)
     return {"ok": True}
 
 

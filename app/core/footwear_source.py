@@ -768,3 +768,104 @@ def collect_mesh_job(item_id: str, job_id: str) -> Dict[str, Any]:
             shutil.rmtree(staging, ignore_errors=True)
     finally:
         lock.release()
+
+
+# --- GC -------------------------------------------------------------------------------------------------------------
+
+def collect(*, dry_run: bool = False) -> Dict[str, Any]:
+    """GC of the world shoe sources ``<world>/footwear/`` (plan 2026-11-10-footwear-rigid-shoes Task 26). Roots:
+    every EXISTING footwear item (``garment_set.garment_kind_of``) keeps its current ssig folder, and every ssig a
+    kept footwear fit record names (``record.ssig`` of an accepted fit — on the base or an outfit body — of any
+    character, dormant and pooled ones included) stays too; everything else under the root goes: the ssig folders
+    nobody names, the whole folder of an item that no longer exists or is no footwear, and the dot entries of
+    aborted writes (``.<name>.tmp``, ``.staging``) older than ``artefact_graph.TEMP_GRACE_S``. An item whose source
+    chain runs (its ``footwear_source`` lock held) is left for the next sweep. ``{dry_run, roots, removed: [paths],
+    deleted_files, freed_bytes, skipped: [item ids]}``; with ``dry_run`` nothing is deleted. Never raises on a
+    single entry."""
+    import shutil
+    import time
+    from app.core import garment_set, garment_store
+    from app.core.artefact_graph import TEMP_GRACE_S
+    from app.models.character import list_available_characters
+    from app.models.inventory import get_item, list_items
+    report: Dict[str, Any] = {"dry_run": dry_run, "roots": 0, "removed": [], "deleted_files": 0, "freed_bytes": 0,
+                              "skipped": []}
+    base = root()
+    if not base.is_dir():
+        return report
+    keep: Dict[str, set] = {}
+    for item in list_items():
+        iid = str(item.get("id") or "")
+        if iid and garment_set.garment_kind_of(item) == garment_set.FOOTWEAR:
+            try:
+                keep.setdefault(iid, set()).add(current_ssig(iid))
+            except ValueError:
+                continue
+    for name in list_available_characters(include_pooled=True, include_dormant=True):
+        try:
+            groups = garment_store.stored_groups(name)
+        except Exception:  # noqa: BLE001 — one character never blocks the sweep
+            logger.exception("Footwear source GC: garments of %s unreadable", name)
+            continue
+        for (iid, _fsig), files in groups.items():
+            for path in files:
+                # the fit records: ``garments/<item>_<fsig>.json`` and ``bodies/<body>/<item>_<fsig>.json``
+                in_root = path.parent == garment_store._root(name)
+                if path.suffix != ".json" or not (in_root or garment_store.body_of(path)):
+                    continue
+                record = garment_store.read_record(path)
+                if record.get("accepted") is True and record.get("kind") == garment_set.FOOTWEAR and record.get("ssig"):
+                    keep.setdefault(iid, set()).add(str(record["ssig"]))
+    report["roots"] = sum(len(v) for v in keep.values())
+    now = time.time()
+
+    def remove(path: Path) -> None:
+        report["removed"].append(str(path))
+        if dry_run:
+            return
+        files = [p for p in path.rglob("*") if p.is_file()] if path.is_dir() else [path]
+        size = sum(p.stat().st_size for p in files if p.exists())
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+        report["deleted_files"] += len(files)
+        report["freed_bytes"] += size
+
+    for folder in sorted(base.iterdir()):
+        if not folder.is_dir() or folder.is_symlink():
+            continue
+        iid = folder.name
+        if iid not in keep or get_item(iid) is None:
+            try:
+                remove(folder)
+            except OSError as e:
+                logger.warning("Footwear source GC: %s not removed: %s", folder, e)
+            continue
+        lock = _lock(iid)
+        if not lock.acquire(blocking=False):
+            report["skipped"].append(iid)
+            continue
+        try:
+            for entry in sorted(folder.iterdir()):
+                name = entry.name
+                if name.startswith("."):
+                    try:
+                        newest = max([entry.stat().st_mtime] + [p.stat().st_mtime for p in entry.rglob("*")]) \
+                            if entry.is_dir() else entry.stat().st_mtime
+                    except OSError:
+                        continue
+                    if now - newest >= TEMP_GRACE_S:
+                        remove(entry)
+                    continue
+                if entry.is_dir() and _SSIG_RE.match(name) and name not in keep[iid]:
+                    remove(entry)
+        except OSError as e:
+            logger.warning("Footwear source GC: %s not walked: %s", folder, e)
+        finally:
+            lock.release()
+    if report["removed"] and not dry_run:
+        logger.info("Footwear source GC: %d entr%s removed (%d file(s), %.1f MB)", len(report["removed"]),
+                    "y" if len(report["removed"]) == 1 else "ies", report["deleted_files"],
+                    report["freed_bytes"] / 1e6)
+    return report

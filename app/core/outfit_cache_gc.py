@@ -392,6 +392,11 @@ def _garment_roots(character_name: str) -> Optional[Tuple[Set[str], Set[str], Se
     Focus 3). An older accepted fit of the same method is stale. ``items``:
     the kept items (a deleted item keeps nothing); ``hair items``: the kept
     hair garments (their HairDeck jobs are judged by ``artefact_graph``).
+    FOOTWEAR (plan 2026-11-10-footwear-rigid-shoes Task 26): a feet item
+    keeps its current footwear fsig group and the shoe fit served on the
+    current base model — nothing per other method: the clothing edit-chain
+    groups a feet item accumulated before it became footwear (``images/
+    <item>_<fsig>_*``, ``failed/…``, an old edit-chain fit) are unreachable.
     None when the roots cannot be computed (then nothing is judged — never
     delete on a guess)."""
     try:
@@ -422,6 +427,8 @@ def _garment_roots(character_name: str) -> Optional[Tuple[Set[str], Set[str], Se
                 parsed = garment_store.parse_name(fit[0]) if fit else None
                 if parsed:
                     keep.add(_garment_key(*parsed))
+            if garment_set.garment_kind_of(item) == garment_set.FOOTWEAR:
+                continue  # the current fsig and the served shoe fit — never another method's groups
             newest = list(garment_store.newest_accepted_fits(character_name, item_id).values())
             if base and base[1]:
                 newest += garment_store.newest_accepted_fits(
