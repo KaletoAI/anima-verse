@@ -77,10 +77,10 @@ frag text — an unfilled placeholder drops the fragment.
 [8] is_base_pipeline: False by default; True with model_pipeline "base_body";
     False for an animal-template profile with the same field.
 [9] base_body_negative: the parsed slot spec carries "visible marking"; a
-    male profile (same slots) gets BASE + ", visible marking, spot"; the base
-    signature changes when the marking's text changes ("visible marking" ->
-    "bold marking") and is back to the old value once restored — the
-    signature hashes the negatives.
+    male profile (same slots) gets BASE + ", visible marking, spot"; when the
+    marking's text changes ("visible marking" -> "bold marking") the base
+    signature stays (it covers the identity, not the wording — identity split
+    2026-11-11) and the prompt fingerprint changes.
 [10] base_body_prompt: the parsed tail spec carries "{length} tail" (the
     loader strips the blanks), marking/human slots carry "". Demo with tail
     length "long": appearance = APPEARANCE + ", long tail" (appended after the
@@ -388,9 +388,15 @@ def main() -> int:
         male = dict(stored, gender="male")
         check("male negative", base_body.base_negative(name, profile=male), BASE + ", visible marking, spot")
         sig = base_body.base_signature(name, profile=stored)
+        fingerprint = base_body.prompt_fingerprint(name, profile=stored)
         marking.base_body_negative = "bold marking"
         try:
-            check("text change changes signature", base_body.base_signature(name, profile=stored) != sig, True)
+            # Since the base identity split (2026-11-11) a wording change —
+            # a slot negative included — never changes the signature; it
+            # changes the prompt fingerprint (scripts/smoke_base_identity.py).
+            check("text change keeps the signature", base_body.base_signature(name, profile=stored), sig)
+            check("text change changes the prompt fingerprint",
+                  base_body.prompt_fingerprint(name, profile=stored) != fingerprint, True)
             check("changed negative", base_body.base_prompt(name, "front", profile=stored)[1],
                   BASE + ", bold marking")
         finally:

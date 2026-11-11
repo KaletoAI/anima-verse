@@ -39,7 +39,9 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     negative), style_character = base_character(view) (the block for the
     style's {character} slot on the front, None on back/left/right), NO negative_prompt (it would REPLACE the use-case negative),
     equipped {} / [], apply_state_modifiers False, size _tpose_size() =
-    (1024, 1024) (no config override), sidecar_extra {"base_signature": bsig}.
+    (1024, 1024) (no config override), sidecar_extra {"base_signature": bsig,
+    "base_identity": base_identity(Demo), "prompt_fingerprint":
+    prompt_fingerprint(Demo)} (the identity split of 2026-11-11).
     While the front renders, base_info status front.running is True.
     Afterwards find_ref_image(Demo, "tpose", bsig) is model_refs/tpose_<bsig>.png
     and find_ref_image(Demo, "tpose_left", bsig) the left file; the return
@@ -235,7 +237,9 @@ def main() -> int:
                 check(f"{view} equipped", (call["equipped_pieces"], call["equipped_items"]), ({}, []))
                 check(f"{view} no state modifiers", call["apply_state_modifiers"], False)
                 check(f"{view} size", (call["override_width"], call["override_height"]), (1024, 1024))
-                check(f"{view} sidecar_extra", call["sidecar_extra"], {"base_signature": bsig})
+                check(f"{view} sidecar_extra", call["sidecar_extra"],
+                      {"base_signature": bsig, "base_identity": base_body.base_identity("Demo"),
+                       "prompt_fingerprint": base_body.prompt_fingerprint("Demo")})
             check("front was running during its render", CALLS[0]["running"], True)
             check("find_ref_image front", model_refs.find_ref_image("Demo", "tpose", bsig), refs / f"tpose_{bsig}.png")
             check("find_ref_image left", model_refs.find_ref_image("Demo", "tpose_left", bsig),

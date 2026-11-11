@@ -59,6 +59,7 @@ clauses taken out, under the long ``base_back`` / ``base_side`` styles
 """
 import hashlib
 import json
+import os
 import re
 import threading
 from contextlib import contextmanager
@@ -258,25 +259,114 @@ def base_prompt(character_name: str, view: str, *,
     return prompt, base_negative(character_name, profile=profile)
 
 
-def base_signature(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
-    """``"base" + 8 hex`` over everything that shapes the base body: the four
-    views' character blocks, prompts and negatives, the current profile image (file name and
-    size) and ``BASE_BODY_VERSION``."""
-    profile = _profile_of(character_name, profile)
+#: The freshness note of a base view rendered with other prompt texts than
+#: the shipped ones (``prompt_fingerprint``): usable, not regenerated.
+OLDER_PROMPTS = "Built with older prompts — Regenerate to use the new ones"
+_BASE_FRONT_SIDECAR = re.compile(r"^tpose_base[0-9a-f]{8}\.json$")
+
+
+def _profile_image_id(character_name: str, profile: Dict[str, Any]) -> List[Any]:
     from app.core.model_refs import current_profile_image
     image = current_profile_image(character_name, profile=profile)
     try:
-        image_id = [image.name, image.stat().st_size] if image else ["", 0]
+        return [image.name, image.stat().st_size] if image else ["", 0]
     except OSError:
-        image_id = ["", 0]
-    payload = {
-        "version": BASE_BODY_VERSION,
-        "views": {view: [base_character(character_name, view, profile=profile),
-                         *base_prompt(character_name, view, profile=profile)] for view in BASE_VIEWS},
-        "profile_image": image_id,
-    }
+        return ["", 0]
+
+
+def base_identity(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """``"base" + 8 hex`` over what the base body IS: the character's base
+    appearance (gender, age, height, the body slots' base fragments), the
+    current profile image (file name and size) and ``BASE_BODY_VERSION`` —
+    never the prompt wording (pose text, bald head, body text, negatives,
+    styles). A stored base keeps its identity when the prompts are reworded
+    (incident 2026-11-11: the signature used to hash the prompt texts, and
+    one wording change orphaned every base body and every outfit model on
+    it); a wording change only shows as the ``OLDER_PROMPTS`` note."""
+    profile = _profile_of(character_name, profile)
+    payload = {"version": BASE_BODY_VERSION,
+               "appearance": base_appearance(character_name, profile=profile, base_fragments=True),
+               "profile_image": _profile_image_id(character_name, profile)}
     digest = hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     return "base" + digest[:8]
+
+
+def prompt_fingerprint(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """12 hex over the four views' character blocks, prompts and negatives —
+    the texts a base render is made with. Stored in every base view's
+    sidecar; a stored base whose fingerprint differs from the current one is
+    current but carries the ``OLDER_PROMPTS`` note."""
+    profile = _profile_of(character_name, profile)
+    payload = {view: [base_character(character_name, view, profile=profile),
+                      *base_prompt(character_name, view, profile=profile)] for view in BASE_VIEWS}
+    return hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
+
+
+def _front_sidecar(character_name: str, signature: str) -> Dict[str, Any]:
+    """The base front's sidecar (``model_refs/tpose_<sig>.json``), {} without one."""
+    from app.core.model_refs import get_model_refs_dir
+    path = get_model_refs_dir(character_name) / f"tpose_{signature}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _stored_base_for(character_name: str, identity: str, profile_image: str) -> Optional[str]:
+    """The signature of the stored base set that belongs to ``identity``:
+    the newest front sidecar that names it (``base_identity``), else — a set
+    rendered before identities were recorded (no ``base_identity`` key) —
+    the newest one whose reference was the current profile image. None when
+    nothing stored fits. Read-only: nothing is renamed or rewritten."""
+    from app.core.model_refs import get_model_refs_dir
+    refs = get_model_refs_dir(character_name)
+    try:
+        names = [n for n in os.listdir(refs) if _BASE_FRONT_SIDECAR.match(n)]
+    except OSError:
+        return None
+    named: List[Tuple[str, str]] = []
+    legacy: List[Tuple[str, str]] = []
+    for name in names:
+        signature = name[len("tpose_"):-len(".json")]
+        meta = _front_sidecar(character_name, signature)
+        if not meta or not (refs / f"tpose_{signature}.png").is_file():
+            continue
+        stamp = str(meta.get("created_at") or "")
+        if meta.get("base_identity"):
+            if meta.get("base_identity") == identity:
+                named.append((stamp, signature))
+            continue
+        refs_used = meta.get("reference_images")
+        first = refs_used.get("input_reference_image_1") if isinstance(refs_used, dict) else None
+        if profile_image and first == profile_image:
+            legacy.append((stamp, signature))
+    for pool in (named, legacy):
+        if pool:
+            return max(pool)[1]
+    return None
+
+
+def base_signature(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The signature of the base set the character stands on — the key of
+    its files (``model_refs/tpose*_<sig>``, ``model3d/<sig>.glb``, the outfit
+    models' ``base_signature``): the stored set that belongs to the current
+    ``base_identity`` (``_stored_base_for``), else the identity itself (the
+    name the next render gets). Prompt wording is NOT part of it."""
+    profile = _profile_of(character_name, profile)
+    identity = base_identity(character_name, profile=profile)
+    from app.core.model_refs import find_ref_image
+    if find_ref_image(character_name, "tpose", identity) is not None:
+        return identity
+    stored = _stored_base_for(character_name, identity, _profile_image_id(character_name, profile)[0])
+    return stored or identity
+
+
+def prompts_current(character_name: str, signature: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether the stored base ``signature`` was rendered with the current
+    prompt texts (its front sidecar's ``prompt_fingerprint``)."""
+    meta = _front_sidecar(character_name, signature)
+    return bool(meta) and meta.get("prompt_fingerprint") == prompt_fingerprint(character_name, profile=profile)
 
 
 def is_base_pipeline(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
@@ -480,6 +570,8 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
         # profile (image, body slots) current when it starts.
         profile = check_renderable(character_name, view=view)
         bsig = base_signature(character_name, profile=profile)
+        identity = base_identity(character_name, profile=profile)
+        fingerprint = prompt_fingerprint(character_name, profile=profile)
         refs_dir = get_model_refs_dir(character_name)
         wanted = BASE_VIEWS if view is None else (view,)
         todo = [v for v in wanted
@@ -510,7 +602,8 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                 mesh_input_profile=mesh_profile,
                 back_view=v == "back",
                 reference_image=reference,
-                sidecar_extra={"base_signature": bsig},
+                sidecar_extra={"base_signature": bsig, "base_identity": identity,
+                               "prompt_fingerprint": fingerprint},
                 # The character's identity/pose LoRAs as on its tpose
                 # render (tpose_loras, else loras); no slot LoRAs.
                 character_loras=True)
@@ -643,7 +736,14 @@ def base_info(character_name: str) -> Dict[str, Any]:
             stamp = None
         images[view] = (f"/characters/{quote(character_name, safe='')}/base-body/images/{view}?v={stamp}"
                         if stamp is not None else None)
-        image_meta[view] = image_tile_meta(path) if stamp is not None else None
+        if stamp is not None:
+            tile = image_tile_meta(path)
+            # The texts this view was rendered with (model_overview compares
+            # them with the current ones for the OLDER_PROMPTS note).
+            tile["prompt_fingerprint"] = str(_view_sidecar(path).get("prompt_fingerprint") or "")
+            image_meta[view] = tile
+        else:
+            image_meta[view] = None
     from app.core.timeutils import utc_now
     pipeline = is_base_pipeline(character_name, profile=profile)
     hair = None
@@ -655,11 +755,20 @@ def base_info(character_name: str) -> Dict[str, Any]:
             logger.exception("Hair summary of %s failed", character_name)
     return {"pipeline": pipeline, "humanoid": humanoid,
             "signature": signature, "images": images, "image_meta": image_meta,
+            "prompt_fingerprint": prompt_fingerprint(character_name, profile=profile) if humanoid else "",
             "status": base_status(character_name),
             "model": base_model_info(character_name, signature),
             "outfit": outfit_info(character_name, base_sig=signature) if pipeline else None,
             "hair": hair,
             "now": _iso(utc_now())}
+
+
+def _view_sidecar(path: Path) -> Dict[str, Any]:
+    try:
+        data = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def base_image_path(character_name: str, view: str) -> Optional[Path]:

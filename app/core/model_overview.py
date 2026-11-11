@@ -959,15 +959,24 @@ def outfit_body_view_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha
     return freshness(STALE, _join(reasons)) if reasons else freshness(CURRENT)
 
 
-def base_view_freshness(view: str, created: str, front_created: str) -> Dict[str, str]:
+def base_view_freshness(view: str, created: str, front_created: str,
+                        prompts: Optional[Tuple[str, str]] = None) -> Dict[str, str]:
     """A base view other than the front is an edit of the front: one older
     than the stored front was made from a previous front. Stamps are the
-    tile meta's ``created_at`` (aware ISO, comparable as strings in UTC)."""
-    if view == "front":
-        return freshness(CURRENT)
-    if not created or not front_created:
-        return freshness(MISSING, NO_PROVENANCE)
-    return freshness(STALE, OLDER_FRONT_VIEW) if created < front_created else freshness(CURRENT)
+    tile meta's ``created_at`` (aware ISO, comparable as strings in UTC).
+    ``prompts`` = (the view's recorded ``prompt_fingerprint``, the current
+    one): a view rendered with other prompt texts — or before fingerprints
+    were recorded — is current but carries ``base_body.OLDER_PROMPTS``
+    (a wording change never orphans a base, incident 2026-11-11)."""
+    if view != "front":
+        if not created or not front_created:
+            return freshness(MISSING, NO_PROVENANCE)
+        if created < front_created:
+            return freshness(STALE, OLDER_FRONT_VIEW)
+    if prompts is not None and prompts[1] and prompts[0] != prompts[1]:
+        from app.core.base_body import OLDER_PROMPTS
+        return freshness(STALE, OLDER_PROMPTS)
+    return freshness(CURRENT)
 
 
 def base_model_freshness(meta: Dict[str, Any], view_shas: Dict[str, str]) -> Dict[str, str]:
@@ -1101,9 +1110,12 @@ def annotate_base_info(character_name: str, info: Dict[str, Any]) -> Dict[str, A
         bsig = info.get("signature") or ""
         meta = info.get("image_meta") or {}
         front_created = str((meta.get("front") or {}).get("created_at") or "")
+        current_prompts = str(info.get("prompt_fingerprint") or "")
         for view, tile in meta.items():
             if isinstance(tile, dict):
-                tile["freshness"] = base_view_freshness(view, str(tile.get("created_at") or ""), front_created)
+                tile["freshness"] = base_view_freshness(
+                    view, str(tile.get("created_at") or ""), front_created,
+                    prompts=(str(tile.get("prompt_fingerprint") or ""), current_prompts))
         model = info.get("model")
         if bsig and isinstance(model, dict):
             overview = base_model_overview(character_name, bsig)
