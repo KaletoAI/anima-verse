@@ -321,7 +321,10 @@ def get_item_owners_route(
     from app.models.character import list_available_characters
     from app.models.inventory import _load_inventory
     owners = []
-    for char in list_available_characters():
+    # Every stored character, dormant and pooled ones included: an owner
+    # that stands nowhere right now still owns the item (a dormant linked
+    # body's things listed as "Owned by nobody" got deleted, 2026-11-11).
+    for char in list_available_characters(include_pooled=True):
         try:
             inv = _load_inventory(char).get("inventory", []) or []
         except Exception:
@@ -351,7 +354,8 @@ def get_ownership_map_route() -> Dict[str, Any]:
     from app.models.character import list_available_characters
     from app.models.inventory import _load_inventory
     ownership: Dict[str, List[str]] = {}
-    for char in list_available_characters():
+    # Every stored character — see get_item_owners_route.
+    for char in list_available_characters(include_pooled=True):
         try:
             inv = _load_inventory(char).get("inventory", []) or []
         except Exception:
