@@ -8,7 +8,7 @@ same protocol as ``garment_hair``: ``EDIT_STEPS``, ``edit_prompt``, ``gate``,
 ``position_reference``, ``fsig_inputs`` and the pair hooks the orchestration (``garments``) calls —
 ``PAIR_STEP``, ``pair_agree``, ``pair_reason``, ``PAIR_REFUSED``,
 ``front_hints`` — plus ``SUBJECT`` for messages and ``register_estimate``
-(the ghost back of a waistband piece is registered by its waistband).
+(the ghost of a waistband piece is registered by its waistband).
 
 The image chain of the S1 spike (``claude-out/s1-base-body/src/dress_edit.py``),
 shortened and said positively (Qwen2.1-Turbo ignores negatives):
@@ -99,7 +99,7 @@ GHOST = ("The same {noun} in exactly the same position, size, width and framing,
 #: (never rendered before): ``GHOST_KEEP`` with "seen from the front" ×1.19
 #: wide, top -0.142 Hb (``GHOST`` ×1.37, -0.323) — refused under the capped
 #: outline registration; with the waistband registration it would pass
-#: (w_ratio 1.003, outside 0.023), not applied to fronts (ruling pending).
+#: (w_ratio 1.003, outside 0.023) — so it registers the front too (ruling 13f).
 GHOST_KEEP = ("Keep the {noun} exactly as it is, {side}: the same position, outer outline, width and framing, "
               "{stance}, the same background. Remove the person completely so the {noun} keeps its worn "
               "three-dimensional shape on an invisible body (ghost mannequin product photo); the inside is "
@@ -304,15 +304,16 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
     if step == "ghost":
         region = garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
         return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view,
-                                                 length_free=_waistband_back(step, view, item_id))
+                                                 length_free=_waistband_ghost(step, item_id))
     raise ValueError(f"no clothing edit step {step!r}")
 
 
-def _waistband_back(step: str, view: str, item_id: Any) -> bool:
-    """The ghost BACK of a piece whose top edge is a waistband
+def _waistband_ghost(step: str, item_id: Any) -> bool:
+    """A ghost (either view) of a piece whose top edge is a waistband
     (``garment_gates.waistband_piece`` of its slots; ``item_id`` an id or the
-    item itself)."""
-    if step != "ghost" or view != "back" or not item_id:
+    item itself). Ruling 13d registered the back, 13f the front too: the
+    trousers front reframed the same way (×1.19..1.37 wide)."""
+    if step != "ghost" or not item_id:
         return False
     from app.core.garment_gates import waistband_piece
     return waistband_piece((_item_of(item_id).get("outfit_piece") or {}).get("slots") or [])
@@ -321,13 +322,14 @@ def _waistband_back(step: str, view: str, item_id: Any) -> bool:
 def register_estimate(step: str, view: str, reference, ghost_mask, *, body_h: int,
                       item_id: Any = None) -> Optional[Dict[str, Any]]:
     """The correction ``garment_images._register`` applies before the gate:
-    the ghost back of a waistband piece by its waistband
+    the ghost of a waistband piece (both views) by its waistband
     (``garment_gates.register_waistband``: one uniform scale, the top and
     the waistband centre aligned, uncapped — ruling 13d: the edit model
-    turned the trousers' back into a centred product shot, ×1.45..1.59 tall);
+    turned the trousers' back into a centred product shot, ×1.45..1.59 tall;
+    13f: the front, too);
     everything else by its outline (``garment_gates.register``, capped)."""
     from app.core import garment_gates
-    if _waistband_back(step, view, item_id):
+    if _waistband_ghost(step, item_id):
         return garment_gates.register_waistband(reference, ghost_mask, body_h=body_h)
     return garment_gates.register(reference, ghost_mask, body_h=body_h)
 

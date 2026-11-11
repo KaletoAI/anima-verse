@@ -30,9 +30,9 @@ few per cent larger (Kira's Black Blazer back, 2026-11-10), so a similarity
 file is rewritten moved; the gate then measures the residual. The record
 keeps the correction (``registration``, chip keys ``reg_shift`` /
 ``reg_scale``). Everything after the ghost reads the moved file. A kind may
-estimate its own correction (``register_estimate``): the clothing ghost BACK
-of a waistband piece is scaled by its waistband width and shifted onto the
-waistband top, uncapped (``garment_gates.register_waistband``, ruling 13d;
+estimate its own correction (``register_estimate``): the clothing ghost (both
+views) of a waistband piece is scaled by its waistband width and shifted onto the
+waistband top, uncapped (``garment_gates.register_waistband``, rulings 13d/13f;
 record key ``registered``).
 
 The kind's own module (``kind_module``: ``garment_hair``,

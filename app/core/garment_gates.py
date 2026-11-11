@@ -809,7 +809,7 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     The region is measured by its parts the ghost reaches (``_touching``).
     The chain registers the ghost onto the region before this gate
     (``register``), so the offsets are the residual of that correction.
-    ``length_free`` (the back of a waistband piece, registered by
+    ``length_free`` (a waistband piece's ghost, registered by
     ``register_waistband``): ``outside`` leaves out the ghost rows below the
     region's last row grown by the margin — the length is the edit's, not
     measured (ruling 13d); ``skin_left`` still counts there (feet left in the
@@ -1033,15 +1033,16 @@ def warp(array, registration: Dict[str, Any], *, factor: Tuple[float, float] = (
     return np.clip(np.rint(np.stack(channels, -1)), 0, 255).astype(np.uint8)
 
 
-# --- Waistband registration of a bottom's ghost BACK (ruling 13d) -------------
+# --- Waistband registration of a bottom's ghost (ruling 13d back, 13f front) --
 #
 # The edit model turns the ghost back of a bottom into a centred product shot
 # (clone, Kai's "Tailored Black Trousers" item_750811f7, 2026-11-11: the worn
 # back's garment spans rows 612..1407, attempt 1 114..1381 = height x1.59 and
 # width x1.27, attempt 2 243..1399 = x1.45 / x1.34; ``register`` estimated
 # 0.786 and 1.049 — beyond the caps or caught on the wrong outline). A piece
-# whose top edge is a waistband (``waistband_piece``) has its ghost back laid
-# onto the worn back's garment region by ONE uniform scale — the waistband
+# whose top edge is a waistband (``waistband_piece``) has its ghost (13f: the
+# front too — it reframed the same way, ×1.19..1.37 wide) laid onto the worn
+# view's garment region by ONE uniform scale — the waistband
 # width — and a shift that puts the ghost's top row and waistband centre on
 # the region's; no caps, the length is the edit's (``length_ratio`` reported,
 # ``ghost_clothing_gate(length_free=True)``). The waistband width is the

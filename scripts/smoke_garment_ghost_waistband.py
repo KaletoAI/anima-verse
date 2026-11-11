@@ -72,8 +72,7 @@ smoke_garment_ghost_registration.py):
 [6] A top keeps the outline registration: the same 1.5× ghost of P with
     slots ["outer"] -> no ``method``, |shift| 0.375 Hb > 0.04 -> not
     applied ("beyond the correction caps — gated as rendered"), refused
-    for top + width, no ``registered``, no ``length_free``. The ghost FRONT
-    of a bottom is not waistband-registered either (no ``method``).
+    for top + width, no ``registered``, no ``length_free``.
     Negligible: GHOST(P, 1, 0, 0) on the back -> scale 1.0, shift 0 ->
     not applied, the file untouched, no ``registered``.
 [7] Pair check: front hem_t 0.80 against a back hem_t 0.90 (|Δ| 0.10 >
@@ -87,6 +86,13 @@ smoke_garment_ghost_registration.py):
     below the region: rows 885 .. 939 x 2 legs x 60 px = 6600 px over the
     region area 12000 + 2·60·280 = 45600 (+ the corners closing fills):
     outside 0.1447 (± 0.005) > 0.05 -> refused.
+[9] The FRONT of a bottom (ruling 13f): the [2] ghost on the front view ->
+    the same numbers as [3] (the fixture is view-agnostic): method
+    "waistband", scale 0.66667, shift_px [300, −10], ok, ``registered``,
+    ``length_free``. Fails on the old code: garment_clothing.py PINNED at
+    e7bf1124 (``git show`` into a temp module) — its ``register_estimate``
+    for the front gives the outline estimate (no ``method``, |shift| 0.375
+    Hb > 0.04 -> not within the caps) and its gate is not length_free.
 """
 import importlib.util
 import os
@@ -110,6 +116,7 @@ from PIL import Image  # noqa: E402
 from app.core import garment_clothing, garment_gates as gg, garment_images as gi  # noqa: E402
 
 PINNED = "f4c5dc6d0d"
+PINNED_FRONT = "e7bf1124"
 FAILS = []
 W, H = 600, 1000
 GREY = (128, 128, 128)
@@ -194,11 +201,16 @@ def chain(name, rgb, item, view="back"):
 
 def pinned_gates():
     """garment_gates.py at PINNED as a throwaway module."""
-    src = subprocess.run(["git", "-C", str(ROOT), "show", f"{PINNED}:app/core/garment_gates.py"],
+    return pinned(PINNED, "garment_gates")
+
+
+def pinned(commit, name):
+    """app/core/<name>.py at ``commit`` as a throwaway module."""
+    src = subprocess.run(["git", "-C", str(ROOT), "show", f"{commit}:app/core/{name}.py"],
                          check=True, capture_output=True, text=True).stdout
-    path = TMP / "garment_gates_pinned.py"
+    path = TMP / f"{name}_{commit}.py"
     path.write_text(src)
-    spec = importlib.util.spec_from_file_location("garment_gates_pinned", path)
+    spec = importlib.util.spec_from_file_location(f"{name}_{commit}", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -276,8 +288,6 @@ def main() -> int:
                                           any("garment width changed" in x for x in rec["reasons"])),
           (False, True, True))
     check("top: no registered, not length_free", ("registered" in rec, "length_free" in rec), (False, False))
-    _, rec = chain("front", big, BOTTOM, view="front")
-    check("bottom front: outline method", (rec.get("registration") or {}).get("method"), None)
     exact = ghost(trousers())
     path, rec = chain("exact", exact, BOTTOM)
     r = rec.get("registration") or {}
@@ -310,6 +320,22 @@ def main() -> int:
                                 view="back")
     near("old: outside of the long legs", g["outside"], 6600 / 45600, 0.005)
     check("old: refused for it", (g["ok"], any("more than the garment" in x for x in g["reasons"])), (False, True))
+
+    print("[9] the front of a bottom (ruling 13f)")
+    _, rec = chain("front", big.copy(), BOTTOM, view="front")
+    r = rec.get("registration") or {}
+    check("front: waistband, applied", (r.get("method"), r.get("applied")), ("waistband", True))
+    near("front: scale", r.get("scale"), 0.66667, 0.0001)
+    check("front: shift_px", r.get("shift_px"), [300.0, -10.0])
+    check("front: accepted", (rec["ok"], rec["reasons"]), (True, []))
+    check("front: registered + length_free", (bool(rec.get("registered")), rec.get("length_free")), (True, True))
+    old_cl = pinned(PINNED_FRONT, "garment_clothing")
+    est = old_cl.register_estimate("ghost", "front", REGION, mask_of(big), body_h=HB, item_id=BOTTOM)
+    check(f"old ({PINNED_FRONT}) front: outline estimate, beyond the caps",
+          (est.get("method"), est["within_caps"]), (None, False))
+    g = old_cl.gate("ghost", "front", edit_rgb=big, edit_mask=mask_of(big), item_id=BOTTOM, **ARGS)
+    check(f"old ({PINNED_FRONT}) front gate: not length_free, refused", ("length_free" in g, g["ok"]),
+          (False, False))
 
     if FAILS:
         print(f"FAILED: {', '.join(FAILS)}")
