@@ -184,6 +184,21 @@ model (idle / walk, ``--bare``): still sole 0 / 3.3 mm, idle lower sole −1 mm,
 +3.5 / +3.0, heel-off ≥ −1.9 — inside the round-1 bands (idle −3 … +3, walk −3 … +13). The same chain on the live
 Kira body (``base20d5701a`` sha cca1685751b7, which stands heel-up 14.8° / 13.7° with the heel 46 mm up and on which
 the round-1 rule raised) is the next calibration point; the clone body of round 1 is no longer the live one.
+**P4 acceptance (Task 15, 2026-11-11) — a knee-class boot on Kira, REFUSED on the shaft push (fit version 10).**
+``item_knee_high_leather_boots`` (Flux item image 280×512, "black leather knee-high boots, flat heel, side view"):
+Iris upscale, Qwen empty (aspect 0.846, ``iou_below_topline`` 0.951), one UniForge mesh (94 310 → 59 574 tris,
+``mesh_iou`` 0.942), insole v5 (cover 0.910, vamp 0.863, opening 0.960, closed 1.0, ``overknee`` 0.254, class
+``knee``, cap of 19 faces removed). The fit on ``base20d5701a`` (k 0.3083, shoe 27.1 cm; width factor 1.10 = the cap,
+needed 1.186 / 1.098): collar ``collar_bind_m`` 0.3046 / 0.3051, knee 0.5038 / 0.5039 → ``knee_margin_m`` 0.199,
+``shaft_clip_m`` 0 (the image drew a mid-calf shaft, 1.2 × the foot length: the clip is not exercised),
+``shaft_leg_follow_deg`` 0.00 (ring ``top``, 7 508 / 7 402 vertices — the UpLeg share feared in T14 is nil 20 cm
+under the knee), seam gap 0, slim 0.073, every foot gate green — REFUSED on ``shaft_push_p95_m`` **0.0215** / 0.0211
+(gate 0.015) and ``shaft_push_max_m`` **0.0309** (gate 0.03). Where (offline, read-only copies): the band + 3 cm
+(ankle) p95 21–22 mm and the upper shaft p95 20 mm alike; the opening (inner wall, walls ~10 mm thick) is 64 × 122 mm
+(w × d) at the collar against a calf of 87 × 94 mm, and the calf's centre stands 34–42 mm in FRONT of the opening's
+centre there — the shaft stands vertical (frame up = body up) while Kira's shin leans 16.3° forward in bind (Foot
+joint 111 mm behind the knee). The same boot on Kai ``base634402e5`` (k 0.3800, width factor 1.046, collar 0.362):
+push p95 0.0102, max 0.0344 — refused on the max alone. Not a follow / clip problem.
 """
 import math
 from dataclasses import dataclass, field
