@@ -14,8 +14,9 @@ so the cut frame IS the primitive's bind space (x forward, y up, z lateral). ``j
 "lefttoebase": I}; every vertex 100 % LeftFoot.
 
 Expected, by hand:
-[X0] constants: CUT_VERSION 1, THROAT_BAND_M 0.02, LATERAL_BAND_M 0.015, CLEARANCE_M 0.002, FADE_M 0.015,
-     CUT_GATES {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "throat_ledge_p95_mm": ("max", 4.0)}.
+[X0] constants: CUT_VERSION 2 (the toe conform), THROAT_BAND_M 0.02, LATERAL_BAND_M 0.015, CLEARANCE_M 0.002,
+     FADE_M 0.015, TOE_CLEARANCE_M 0.002, TOE_FADE_M 0.015, CUT_GATES {"deep_outside": ("max", 0.02), "visible_poke":
+     ("max", 0.005), "throat_ledge_p95_mm": ("max", 4.0), "toe_conform_m": ("max", 0.025)}.
 [X1] open cylinder r 0.05 about +y, 64 segments x 21 rings (y = 0, 0.01, ..., 0.20), 1344 vertices, 20 bands x
      64 quads x 2 = 2560 triangles; flat cap y = 0.055 over the stations, footprint disc r 0.06 (every vertex inside
      the prism, its half-width 0.06 - 0.002 > 0.05: no slimming), no throat. Rings 0..5 (y <= 0.05) lie below the cap: bands 0..4
@@ -66,8 +67,31 @@ Expected, by hand:
      0.8 * 0.0499 = 0.05008) 0.08008 k = 0.070898 (within 1e-5); the footprint half-width at the ball (the
      slimming's target before the clearance) 0.04 k 1.1 = 0.038955 (within 1e-5); footprint x from 0 to 0.26 k =
      0.230188, z +-0.04 k 1.1 = +-0.038955; conform
-     = the constants verbatim; toe_box = {x_from: the throat front, headroom 0.03, slack 0.015}; the whole cut
-     round-trips through json.
+     = the constants verbatim (slim + toe); toe_box = {x_from: the throat front, headroom 0.03, slack 0.015};
+     vamp_inner = one [x, y] per roofed station with a profile (the wedge: roofed from the throat front on, 240 - 166
+     = 74 stations), y = (profile + cavity) k — ON the cap there (within 1e-9): the fixture's roof is a sheet
+     without thickness, so its inner surface is its outer one; the whole cut round-trips through json.
+[X9] toe conform (CUT_VERSION 2) on a box foot x in [-0.06, 0.19] (10 mm steps), z = +-0.0425, levels 0, 0.01,
+     0.02, 0.03 (the toe height 0.03), every vertex 100 % LeftFoot. Cut: cap 0.02 everywhere (wall top behind the
+     throat and the vamp's outer surface in front), throat front x_t = 0.10 (vamp edge 0.02), vamp_inner 0.017
+     (a 3 mm shell), footprint z = +-0.05 up to x = 0.10 (0.048 after the clearance > 0.0425: no slimming
+     behind) narrowing linearly to +-0.01 at x = 0.19 (half-width hw(x) = 0.05 - 0.04 (x - 0.10) / 0.09), x_min
+     -0.1 / x_max 0.3, the conform constants. By hand, after conform_body (positions before the removal):
+     - vertical, x >= 0.12 (the ramp (x - 0.10) / 0.015 is 1 from 0.115): every vertex above the target 0.017 -
+       0.002 = 0.015 lands on it (0.03 and 0.02 -> 0.015; 0.01 and 0 stay): push 0.03 - 0.015 = 0.015 = toe height -
+       vamp inner + clearance = stats toe_conform.left (<= 0.025, the gate); x = 0.11 (ramp 2/3): 0.03 -> onto the
+       cap 0.02 first (step 2's landing) then 2/3 of (0.02 - 0.015) -> 0.016667, 0.02 -> 0.016667, 0.01 stays;
+       x = 0.10 (the throat front, d = 0): the throat conform lands 0.03 on the edge 0.02, nothing else.
+     - lateral: x = 0.11: hw 0.045556 - 0.002 > 0.0425 -> |z| stays 0.0425; x = 0.12: hw 0.041111 -> target
+       0.039111: the slimming's station factor is linear in x there, so its +-5 mm smoothing returns the station
+       value 0.039111 / 0.0425 = 0.92026 and |z| = 0.039111; the toe clamp has nothing left to do (it agrees:
+       +-1e-6); x = 0.19: the slimming is capped at 1 - 0.18 (|z| 0.03485), the toe clamp takes it the rest of the
+       way to hw - 0.002 = 0.008 (within 1e-9). Stats toe_pull.left > 0.
+     - after apply_cut nothing remains in front of the throat (every conformed toe vertex lies inside the toe box's
+       prism + slack below the cap + headroom); behind it the vertices above the cap 0.02 remain (levels 0.03 and,
+       in the throat band, their conformed heights) -> the box is not empty. On 6faafae0 the vertices from x = 0.17
+       on stayed beyond the slack (|z| 0.03485 > hw + 0.015 once hw < 0.01985, i.e. x > 0.1678: 76 vertices with
+       the bisection points, measured) and the stats had no toe_conform.
 [X7] apply_cut + cut_gates on a CLOSED flat clog (the wedge is open at the toe-box front, so a flood fill
      enters it, and its sloped insole floats the straight box over the arch — neither is hand-derivable): sole
      solid x in [0.01, 0.26] with its top (the insole) at 0.01, a floor plate from x = 0, side walls z = +-0.04
@@ -258,9 +282,10 @@ def accessor_bytes(glb: bytes, index: int) -> bytes:
 
 def main() -> int:
     print("[X0] constants")
-    check("CUT_VERSION 1", fc.CUT_VERSION == 1)
-    check("bands", (fc.THROAT_BAND_M, fc.LATERAL_BAND_M, fc.CLEARANCE_M, fc.FADE_M) == (0.02, 0.015, 0.002, 0.015))
-    check("CUT_GATES", fc.CUT_GATES == {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005),
+    check("CUT_VERSION 2", fc.CUT_VERSION == 2)
+    check("bands", (fc.THROAT_BAND_M, fc.LATERAL_BAND_M, fc.CLEARANCE_M, fc.FADE_M, fc.TOE_CLEARANCE_M, fc.TOE_FADE_M)
+          == (0.02, 0.015, 0.002, 0.015, 0.002, 0.015))
+    check("CUT_GATES", fc.CUT_GATES == {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "toe_conform_m": ("max", 0.025),
                                          "throat_ledge_p95_mm": ("max", 4.0)})
 
     print("[X1] flat cap on the cylinder")
@@ -394,7 +419,7 @@ def main() -> int:
     check("fixture fit ok", fit.ok, str(fit.reasons))
     k = fit.record["scale"]["k_m_per_unit"]
     cut = fc.cut_description(fit, ins)
-    check("version + both sides", cut["version"] == 1 and set(cut["sides"]) == {"left", "right"})
+    check("version + both sides", cut["version"] == 2 and set(cut["sides"]) == {"left", "right"})
     L = cut["sides"]["left"]
     check("joint names", (L["foot_joint"], L["toe_joint"]) == ("LeftFoot", "LeftToeBase"))
     frame = np.asarray(L["frame"], np.float64)
@@ -416,13 +441,49 @@ def main() -> int:
     check("footprint x 0..0.230188, z +-0.038955", near([fp[:, 0].min(), fp[:, 0].max()], [0.0, 0.26 * k], 1e-6)
           and near([fp[:, 1].min(), fp[:, 1].max()], [-0.044 * k, 0.044 * k], 1e-6))
     check("conform constants", L["conform"] == {"throat_band_m": 0.02, "lateral_band_m": 0.015,
-                                                "slim": {"clearance_m": 0.002, "fade_m": 0.015, "max_share": 0.18}})
+                                                "slim": {"clearance_m": 0.002, "fade_m": 0.015, "max_share": 0.18},
+                                                "toe": {"clearance_m": 0.002, "fade_m": 0.015}})
+    vi = np.asarray(L["vamp_inner"], np.float64).reshape(-1, 2)
+    check("vamp_inner: 74 roofed stations, on the cap (the fixture's roof is a sheet: inner = outer)", len(vi) == 74
+          and bool(np.all(vi[:, 0] >= L["throat"]["x"] - 1e-9))
+          and near(vi[:, 1], np.interp(vi[:, 0], np.asarray(L["cap"])[:, 0], np.asarray(L["cap"])[:, 1]), 1e-9), str(len(vi)))
     check("toe box from the throat front, headroom 0.03, slack 0.015",
           L["toe_box"] == {"x_from": L["throat"]["x"], "headroom_m": 0.03, "slack_m": 0.015}, str(L["toe_box"]))
     check("topline polyline present", len(L["topline"]) > 100 and len(L["topline"][0]) == 3)
     check("json round trip", json.loads(json.dumps(cut)) == cut)
     R = cut["sides"]["right"]
     check("right side mirrors to the same cut-frame geometry", near(R["cap"], L["cap"], 1e-9) and near(R["footprint"], L["footprint"], 1e-9))
+
+    print("[X9] toe conform on a box foot")
+    bx9 = box([0.0, 0.01, 0.02, 0.03])
+    fp9 = [[-0.1, -0.05], [0.10, -0.05], [0.19, -0.01], [0.3, -0.01], [0.3, 0.01], [0.19, 0.01], [0.10, 0.05], [-0.1, 0.05]]
+    cut9 = _cut([[-0.1, 0.02], [0.3, 0.02]], footprint=fp9, throat={"x": 0.10, "y": 0.02},
+                stations={"heel_x": -0.1, "ball_x": 0.05, "x_min": -0.1, "x_max": 0.3})
+    cut9["sides"]["left"]["vamp_inner"] = [[0.10, 0.017], [0.3, 0.017]]
+    cut9["sides"]["left"]["toe_box"] = {"x_from": 0.10, "headroom_m": fc.VAMP_HEADROOM_M, "slack_m": fc.VAMP_SLACK_M}
+    con9, info9 = fc.conform_body(bx9, cut9, JOINTS)
+    P0, P9 = bx9.positions, con9.positions
+    at = lambda x_, y_=None: (np.abs(P0[:, 0] - x_) <= 1e-9) & ((np.abs(P0[:, 1] - y_) <= 1e-9) if y_ is not None else True)  # noqa: E731
+    check("x >= 0.12: 0.03 and 0.02 -> 0.015, 0.01 and 0 stay", near(P9[(P0[:, 0] >= 0.12 - 1e-9) & (P0[:, 1] >= 0.02 - 1e-9), 1], 0.015, 1e-9)
+          and near(P9[(P0[:, 0] >= 0.12 - 1e-9) & (P0[:, 1] <= 0.01 + 1e-9), 1], P0[(P0[:, 0] >= 0.12 - 1e-9) & (P0[:, 1] <= 0.01 + 1e-9), 1], 1e-12))
+    check("toe_conform.left 0.015 = toe height - vamp inner + clearance", abs(info9["toe_conform"]["left"] - 0.015) <= 1e-9, str(info9["toe_conform"]))
+    check("x = 0.11 (ramp 2/3): 0.03 and 0.02 -> 0.016667, 0.01 stays", near(P9[at(0.11, 0.03), 1], 0.0166667, 1e-6)
+          and near(P9[at(0.11, 0.02), 1], 0.0166667, 1e-6) and near(P9[at(0.11, 0.01), 1], 0.01, 1e-12))
+    check("x = 0.10 (the front): 0.03 onto the edge 0.02", near(P9[at(0.10, 0.03), 1], 0.02, 1e-9))
+    side9 = at(0.11) & (np.abs(P0[:, 2]) >= 0.0425 - 1e-9)
+    check("x = 0.11: |z| stays 0.0425", near(np.abs(P9[side9, 2]), 0.0425, 1e-9))
+    side9 = at(0.12) & (np.abs(P0[:, 2]) >= 0.0425 - 1e-9)
+    check("x = 0.12: |z| 0.039111 (the slimming's linear station, the clamp agrees)", near(np.abs(P9[side9, 2]), 0.0391111, 1e-6),
+          str(np.abs(P9[side9, 2]).min()) + ".." + str(np.abs(P9[side9, 2]).max()))
+    side9 = at(0.19) & (np.abs(P0[:, 2]) >= 0.0425 - 1e-9)
+    check("x = 0.19: |z| 0.008 (clamp past the slimming's 18 %)", near(np.abs(P9[side9, 2]), 0.008, 1e-9),
+          str(np.abs(P9[side9, 2]).min()) + ".." + str(np.abs(P9[side9, 2]).max()))
+    check("toe_pull.left > 0.02 (0.03485 - 0.008 = 0.02685 at the tip)", abs(info9["toe_pull"]["left"] - 0.02685) <= 1e-4, str(info9["toe_pull"]))
+    check("x untouched", near(P9[:, 0], P0[:, 0], 1e-12))
+    out9, st9 = fc.apply_cut(bx9, cut9, JOINTS)
+    check("stats carry toe_conform / toe_pull", st9["toe_conform"] == info9["toe_conform"] and st9["toe_pull"] == info9["toe_pull"])
+    check("nothing remains in front of the throat", bool(np.all(out9.positions[:, 0] <= 0.10 + 1e-9)), f"max x {out9.positions[:, 0].max():.4f}")
+    check("the box is not empty behind it", len(out9.positions) > 0 and bool(np.any(out9.positions[:, 1] > 0.02 + 1e-9)), str(len(out9.positions)))
 
     print("[X7] apply_cut + cut_gates on the closed clog")
     Pc, Fc = clog()

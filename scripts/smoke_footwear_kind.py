@@ -36,8 +36,8 @@ and wears heels + dress; Mira holds heels.
      Own-mesh set membership: worn_garments(Kira) == sorted([dress, heels]),
      held_clothing(Kira) == sorted([dress, heels]), held_clothing(Mira) ==
      [heels]; layer_order([dress, heels])["order"] == [dress] (footwear takes no
-     part in layering). garment_fit.FIT_VERSION["footwear"] == 3 (7b298358: placed on the skinned ball; Task 15:
-     the cut applied and gated).
+     part in layering). garment_fit.FIT_VERSION["footwear"] == 4 (7b298358: placed on the skinned ball; Task 15:
+     the cut applied and gated; T21 round 4: the toe conform).
 [K2] Footwear fsig — no base in it.
      IMG = sha256 of the heels image bytes.
      ssig = md5(json.dumps({"image": IMG, "version": 2, "seed": 0},
@@ -45,7 +45,7 @@ and wears heels + dress; Mira holds heels.
      round — a pre-fix skipped ``empty`` is unreachable; seed 0 = never
      regenerated) == footwear_source.current_ssig(heels).
      fsig = md5(json.dumps({"kind": "footwear", "ssig": ssig,
-     "insole_version": 1, "width_cap": 1.1, "fit_version": 3},
+     "insole_version": 1, "width_cap": 1.1, "fit_version": 4},
      sort_keys=True))[:12] — the width cap without an override is 1.10.
      base_signature(Kira) != base_signature(Mira) (precondition); Kira gets
      base front/back view files (Mira none) -> garment_fsig(Kira, heels) ==
@@ -64,7 +64,7 @@ and wears heels + dress; Mira holds heels.
      never painted; smoke_footwear_delivery.py has the unfitted cases).
      Kira's base model b"model-2", SHA = its sha256. Both heels and dress get
      an accepted fit record on SHA under their current fsig (dress: kind
-     clothing; heels: kind footwear, method shoe, fit_version 3).
+     clothing; heels: kind footwear, method shoe, fit_version 4).
      Retexture mode, pieces {top: dress, feet: heels}:
        resolve_mesh_items -> {intended sorted([dress, heels]), effective
        sorted([dress, heels]) (the heels' fit is grafted), warnings [], mode
@@ -237,7 +237,7 @@ def main() -> int:
         check("held_clothing Kira", garment_set.held_clothing("Kira"), sorted([dress, heels]))
         check("held_clothing Mira", garment_set.held_clothing("Mira"), [heels])
         check("layer_order skips footwear", garment_set.layer_order([dress, heels])["order"], [dress])
-        check("FIT_VERSION footwear", garment_fit.FIT_VERSION.get("footwear"), 3)
+        check("FIT_VERSION footwear", garment_fit.FIT_VERSION.get("footwear"), 4)
 
         print("[K2] footwear fsig")
         from app.core import footwear_source, garment_footwear
@@ -247,7 +247,7 @@ def main() -> int:
 
         def fsig_by_hand(cap):
             return md5_12({"kind": "footwear", "ssig": ssig, "insole_version": 1, "width_cap": cap,
-                           "fit_version": 3})
+                           "fit_version": 4})
         fsig = fsig_by_hand(1.1)
         kira_bsig = base_body.base_signature("Kira")
         check("base signatures differ", kira_bsig != base_body.base_signature("Mira"), True)

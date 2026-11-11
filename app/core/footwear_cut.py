@@ -24,7 +24,9 @@ vamp its outer surface), gaps interpolated along x; ``footprint`` = the outline 
 ``insole["footprint_outline"]`` (its per-station middle and half-width are the upper's midline and inner
 half-width the slimming works against — the tracked insole is only partial in a steep shank);
 ``throat`` ``{x, y}`` = the throat front (the first station with a roof in the front half)
-and the vamp edge (the cap there); ``toe_box`` ``{x_from, headroom_m, slack_m}``: in front of the throat the vamp
+and the vamp edge (the cap there); ``vamp_inner`` stations ``[x, y]`` = the vamp's INNER surface over the roofed
+stations (the insole profile plus the measured cavity, ``insole.profile + insole.cavity``; the cap over the vamp is
+its outer surface, the difference the shell); ``toe_box`` ``{x_from, headroom_m, slack_m}``: in front of the throat the vamp
 covers the foot, so a foot vertex up to ``VAMP_HEADROOM_M`` above the vamp's surface or ``VAMP_SLACK_M`` beside
 the footprint is a mesh mismatch and goes too (spike v4's HIDE_TOEBOX; a pointed toe box narrows faster than
 the slimming's ``max_share`` can follow, and a toe knuckle may stand above the vamp — hidden, never shown);
@@ -47,6 +49,18 @@ the slimming's ``max_share`` can follow, and a toe knuckle may stand above the v
    step 3, but the cut wall at the throat front takes the height of every crossing edge's removed endpoint,
    and without this it rose above the vamp edge as a row of slivers. (Mostly foot = Foot + ToeBase weight >
    ``FOOT_WEIGHT_MIN``: an auto-weighted knee carries a trace of Foot weight and stands over the toe box.)
+2b. **Toe conform** (``CUT_VERSION`` 2, T21 round 4). In the toe box (throat front … ``x_max``) every vertex with
+   foot weight is conformed INTO the toe box — the shoe keeps the item's look, the toe follows: vertically to
+   ``TOE_CLEARANCE_M`` below the vamp's inner surface (``vamp_inner``, the cap where the insole has no cavity
+   there; the step 2 landing on the cap stays the floor of the move), laterally to the footprint's inner
+   half-width minus the clearance about its midline (the slimming's clamp without its ``max_share`` — a pointed
+   toe box narrows faster than 18 % and the toes stood 16–20 mm beside it, below the vamp, on the real pump). The
+   move ramps in over ``TOE_FADE_M`` in front of the throat front (0 at the front, where the throat conform's own
+   landing holds, 1 from ``TOE_FADE_M`` on) and scales with the vertex's foot weight, like the slimming. The
+   largest vertical push is the record's ``toe_conform_m`` (gate ``CUT_GATES["toe_conform_m"]``, 25 mm: more
+   than that is not a toe under a vamp but a shoe of the wrong height for the foot); the largest lateral pull
+   is the diagnostic ``toe_pull_m``. Beyond ``x_max`` nothing is conformed: a toe in front of the shoe's tip is a
+   shoe too short and stays a visible poke.
 3. **Removal.** ``g = max(y − cap(x), x_min − x, x − x_max, zlo(x) − z, z − zhi(x))`` (in the toe box the cap
    raised by the headroom, the prism widened by the slack): a vertex with ``g < −1e-9`` (inside the footprint
    prism and below the cap) goes; a face with three such vertices goes.
@@ -56,7 +70,7 @@ the slimming's ``max_share`` can follow, and a toe knuckle may stand above the v
    influences (lerped, top 4, renormalised); one kept vertex keeps a triangle, two keep a quad (two triangles).
 5. The normals of touched vertices (moved, or on a bisected face) are recomputed area-weighted on the result.
 
-**cut_gates** = the spike's ``metrics.py`` voxel method at ``VOXEL_M`` (2 mm), in the cut frame: the shoe
+**cut_gates** = ``toe_conform_m`` from the conform plus the spike's ``metrics.py`` voxel method at ``VOXEL_M`` (2 mm), in the cut frame: the shoe
 surface voxelised and dilated once, the opening capped at the lower side-wall top of each slab (the roof range
 = throat front … footprint end stays uncapped), the exterior flood-filled; a foot vertex SHOULD be enclosed when
 it lies below the slab's wall top − ``SHOULD_MARGIN_M`` and in front of the heel; a poke is a should-vertex in the
@@ -102,8 +116,8 @@ from app.core.footwear_gates import check_gates
 from app.core.footwear_insole import HEEL_SEAT_M
 from app.core.glb_mesh import Prim  # noqa: F401  (re-exported: the cut's primitive type)
 
-#: Bumped when the cut changes what it produces (the record's ``cut.version``).
-CUT_VERSION = 1
+#: Bumped when the cut changes what it produces (the record's ``cut.version``). 2: the toe conform (step 2b).
+CUT_VERSION = 2
 #: The throat conform acts this far behind the throat front (metres).
 THROAT_BAND_M = 0.02
 #: The slimming band reaches this far above the cap (metres) ...
@@ -114,17 +128,23 @@ CLEARANCE_M = 0.002
 FADE_M = 0.015
 #: The largest share of the local half-width the slimming takes off (``footwear_fit.SLIM_MAX_SHARE``).
 MAX_SHARE = 0.18
+#: Toe conform: the toe ends this far below the vamp's inner surface and inside the inner half-width (metres) ...
+TOE_CLEARANCE_M = 0.002
+#: ... and the conform ramps in over this distance in front of the throat front (metres).
+TOE_FADE_M = 0.015
 
 #: name -> (kind, limit) — ``footwear_gates.check_gates`` kinds.
 CUT_GATES: Dict[str, Tuple[str, Any]] = {
     "deep_outside": ("max", 0.02),
     "visible_poke": ("max", 0.005),
     "throat_ledge_p95_mm": ("max", 4.0),
+    "toe_conform_m": ("max", 0.025),
 }
 GATE_LABELS = {
     "deep_outside": "share of the slimmed foot's should-be-enclosed vertices > 3 mm outside the shoe, worse side",
     "visible_poke": "share of the remaining foot vertices still below the upper's rim, worse side",
     "throat_ledge_p95_mm": "p95 height of the remaining vertices just behind the throat front above the vamp edge",
+    "toe_conform_m": "largest vertical push of a toe under the vamp's inner surface, worse side",
 }
 
 #: The voxel size of the enclosure test (the spike's 2 mm).
@@ -206,10 +226,15 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
     cap_stations = np.stack([gx[ok_cap] * k, cap[ok_cap] * k], axis=1)
     throat: Optional[Dict[str, float]] = None
     toe_box: Optional[Dict[str, float]] = None
+    vamp_inner = np.zeros((0, 2))
     if roofed.any():
         x_t = float(gx[roofed].min()) * k
         throat = {"x": x_t, "y": float(np.interp(x_t, cap_stations[:, 0], cap_stations[:, 1]))}
         toe_box = {"x_from": x_t, "headroom_m": VAMP_HEADROOM_M, "slack_m": VAMP_SLACK_M}
+        prof_all = _floats(insole["profile"])
+        inner_ok = roofed & ~np.isnan(prof_all)
+        if inner_ok.any():
+            vamp_inner = np.stack([gx[inner_ok] * k, (prof_all[inner_ok] + cav[inner_ok]) * k], axis=1)
 
     outline = np.asarray(insole["footprint_outline"], np.float64).reshape(-1, 2) * np.array([k, k * wf])
     if len(outline) < 3:
@@ -237,11 +262,12 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
             "extension": {"axis_local": rec["extension"]["axis_local"], "deg": rec["extension"]["deg"]},
             "toe_counter": {"axis_local": rec["toe_counter"]["axis_local"], "deg": rec["toe_counter"]["deg"]},
             "topline": topline, "cap": cap_stations, "footprint": outline,
-            "throat": throat, "toe_box": toe_box,
+            "throat": throat, "toe_box": toe_box, "vamp_inner": vamp_inner,
             "stations": {"heel_x": d.get("heel_x_m"), "ball_x": d.get("ball_x_m"),
                          "heel_seat_x": heel_seat_x, "x_min": x_min, "x_max": x_max},
             "conform": {"throat_band_m": THROAT_BAND_M, "lateral_band_m": LATERAL_BAND_M,
-                        "slim": {"clearance_m": CLEARANCE_M, "fade_m": FADE_M, "max_share": MAX_SHARE}},
+                        "slim": {"clearance_m": CLEARANCE_M, "fade_m": FADE_M, "max_share": MAX_SHARE},
+                        "toe": {"clearance_m": TOE_CLEARANCE_M, "fade_m": TOE_FADE_M}},
         }
     return _r({"version": CUT_VERSION, "sides": sides})
 
@@ -279,6 +305,13 @@ class _Side:
         self.clearance = float(slim.get("clearance_m", CLEARANCE_M))
         self.fade = float(slim.get("fade_m", FADE_M))
         self.max_share = float(slim.get("max_share", MAX_SHARE))
+        toe = conform.get("toe") or {}
+        self.toe_clearance = float(toe.get("clearance_m", TOE_CLEARANCE_M))
+        self.toe_fade = float(toe.get("fade_m", TOE_FADE_M))
+        vi = np.asarray(desc.get("vamp_inner") if desc.get("vamp_inner") is not None else np.zeros((0, 2)),
+                        np.float64).reshape(-1, 2)
+        vi = vi[np.argsort(vi[:, 0])] if len(vi) else vi
+        self.inner_x, self.inner_y = (vi[:, 0], vi[:, 1]) if len(vi) else (np.zeros(0), np.zeros(0))
         seat = st.get("heel_seat_x")
         self.heel_seat_x = float(seat) if seat is not None else self.x_min + HEEL_SEAT_M
 
@@ -298,6 +331,14 @@ class _Side:
     def hw(self, x: np.ndarray) -> np.ndarray:
         """The footprint's half-width per station — the upper's inner half-width before the clearance."""
         return 0.5 * (self.zhi(x) - self.zlo(x))
+
+    def inner(self, x: np.ndarray) -> np.ndarray:
+        """The vamp's inner surface per station: the measured one where the insole has a cavity, never above
+        the cap (the outer surface), the cap itself elsewhere."""
+        c = self.cap(x)
+        if not len(self.inner_x):
+            return c
+        return np.minimum(c, np.interp(x, self.inner_x, self.inner_y))
 
     def g(self, X: np.ndarray) -> np.ndarray:
         """Signed removal distance (metres): negative inside the footprint prism below the cap; in front of the
@@ -445,12 +486,13 @@ def conform_body(prim: Prim, cut: Dict[str, Any], joints: Dict[str, np.ndarray])
     ``throat_moved`` and the touched vertex ids (``touched``)."""
     P = np.asarray(prim.positions, np.float64).copy()
     touched = np.zeros(len(P), bool)
-    info: Dict[str, Any] = {"slim_share": {}, "throat_moved": {}, "slim_station_max": {}}
+    info: Dict[str, Any] = {"slim_share": {}, "throat_moved": {}, "slim_station_max": {}, "toe_conform": {},
+                            "toe_pull": {}}
     for name, desc in (cut.get("sides") or {}).items():
         side = _Side(desc)
         m = _Map(desc, joints, prim)
         C = m.to_cut(P)
-        x, y, z = C[:, 0], C[:, 1], C[:, 2]
+        x, y, z = C[:, 0], C[:, 1].copy(), C[:, 2]      # y: the height before any move (the toe push is read against it)
         capx = side.cap(x)
         foot = m.foot > 0
         in_x = (x >= side.x_min) & (x <= side.x_max)
@@ -474,6 +516,7 @@ def conform_body(prim: Prim, cut: Dict[str, Any], joints: Dict[str, np.ndarray])
         # 2. throat conform — on the vertices that are mostly foot: a knee carries a trace of Foot weight in an
         # auto-weighted rig and stands over the toe box in the cut frame
         n_throat = 0
+        toe_conform = toe_pull = 0.0
         mostly = m.foot > FOOT_WEIGHT_MIN
         if side.throat:
             xt, yt = float(side.throat["x"]), float(side.throat["y"])
@@ -489,13 +532,37 @@ def conform_body(prim: Prim, cut: Dict[str, Any], joints: Dict[str, np.ndarray])
             # first: it goes with the toe box anyway, but the cut wall at the throat front inherits the height
             # of the removed endpoint of every crossing edge — without this the wall rises above the vamp edge
             # as a row of slivers
-            fore = mostly & (d < 0.0) & (x <= side.x_max) & (z >= side.zlo(x) - side.toe_slack) \
-                & (z <= side.zhi(x) + side.toe_slack) & (y > capx)
+            zone = (d < 0.0) & (x <= side.x_max)
+            fore = mostly & zone & (z >= side.zlo(x) - side.toe_slack) & (z <= side.zhi(x) + side.toe_slack) \
+                & (y > capx)
             if fore.any():
                 ids = np.nonzero(fore)[0]
                 C[ids, 1] = capx[ids]
                 moved[ids] = True
+            # 2b. toe conform: the toe box narrows and lowers the toes into it (module docstring), ramped in over
+            # TOE_FADE_M in front of the throat front and by foot weight; the landing above stays its floor
+            zone &= foot
+            if zone.any():
+                ids = np.nonzero(zone)[0]
+                ramp = np.clip(-d[ids] / side.toe_fade, 0.0, 1.0) * np.minimum(1.0, m.foot[ids])
+                target = side.inner(x[ids]) - side.toe_clearance
+                y_now = C[ids, 1]
+                drop = ramp * np.maximum(0.0, y_now - target)
+                mid = side.mid(x[ids])
+                off = C[ids, 2] - mid
+                hw_t = np.maximum(side.hw(x[ids]) - side.toe_clearance, 0.0)
+                mag = np.abs(off)
+                squeeze = np.where(mag > hw_t, np.where(mag > 0, hw_t / np.where(mag > 0, mag, 1.0), 1.0), 1.0)
+                new_off = off * (1.0 - ramp * (1.0 - squeeze))
+                change = (drop > 0) | (np.abs(new_off - off) > 0)
+                C[ids, 1] = y_now - drop
+                C[ids, 2] = mid + new_off
+                moved[ids[change]] = True
+                toe_conform = max(toe_conform, float((y[ids] - C[ids, 1]).max()))
+                toe_pull = max(toe_pull, float(np.abs(new_off - off).max()))
         info["throat_moved"][name] = n_throat
+        info["toe_conform"][name] = toe_conform
+        info["toe_pull"][name] = toe_pull
         if moved.any():
             ids = np.nonzero(moved)[0]
             P[ids] = m.to_bind(C[ids], ids)
@@ -681,7 +748,8 @@ def apply_cut(prim: Prim, cut: Dict[str, Any], joints: Dict[str, np.ndarray]) ->
     touched = info["touched"]
     stats: Dict[str, Any] = {"removed_faces": 0, "bisected_faces": 0, "new_vertices": 0,
                              "slim_share": info["slim_share"], "slim_needed": info["slim_station_max"],
-                             "throat_moved": info["throat_moved"], "sides": {}}
+                             "throat_moved": info["throat_moved"], "toe_conform": info["toe_conform"],
+                             "toe_pull": info["toe_pull"], "sides": {}}
     for name, desc in (cut.get("sides") or {}).items():
         out, st, touched = _cut_side(out, desc, joints, touched)
         stats["sides"][name] = dict(st)
@@ -872,13 +940,15 @@ def cut_gates(body_after: Prim, shoes: Dict[str, glb_mesh.GarmentMesh], cut: Dic
     diagnostics}}``. ``body_before`` is the primitive ``apply_cut`` started from (bare); ``deep_outside`` is read on
     it after the conform, the rest on ``body_after``; ``shoes`` = the fit's bind-space shoes; ``joints`` =
     ``glb_mesh.joint_bind_matrices`` of the body."""
-    before, _ = conform_body(body_before, cut, joints)
+    before, cinfo = conform_body(body_before, cut, joints)
     sides: Dict[str, Any] = {}
     for name, desc in (cut.get("sides") or {}).items():
         shoe = shoes.get(name)
         if shoe is None:
             raise ValueError(f"No shoe for the {name} side")
         sides[name] = _side_gates(desc, joints, before, body_after, shoe, body_before)
+        sides[name]["toe_conform_m"] = float(cinfo["toe_conform"].get(name, 0.0))
+        sides[name]["toe_pull_m"] = float(cinfo["toe_pull"].get(name, 0.0))
     metrics = {key: max(s[key] for s in sides.values()) if sides else None for key in CUT_GATES}
     table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in CUT_GATES.items()}
     ok, reasons = check_gates(metrics, table)

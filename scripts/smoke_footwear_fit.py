@@ -17,7 +17,7 @@ The shoe: the Task 5 wedge pump (length 0.26, width 0.08, insole h(x) = 0.09 on 
 footwear_insole.analyse_arrays (frame = the wedge's own coordinates).
 
 Expected, by hand:
-[F0] constants: FOOTWEAR_FIT_VERSION 3, BALL_SOLVE_STEPS 8, BALL_SOLVE_TOL_RAD 1e-7, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
+[F0] constants: FOOTWEAR_FIT_VERSION 4 (the cut's toe conform), BALL_SOLVE_STEPS 8, BALL_SOLVE_TOL_RAD 1e-7, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
      SLIM_MAX_SHARE 0.18, FIT_GATES verbatim; every gate refuses (gating True), there is no ACTIVE_IN_P2 any more
      (fit version 3, Task 15).
 [F9] joint_bind_matrices(glb) = inverse(inverseBindMatrix) per normalised joint name: the fixture's IBMs are
@@ -123,7 +123,7 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 3 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+    check(ff.FOOTWEAR_FIT_VERSION == 4 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
           and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
     check(ff.FIT_GATES == {"ball_placement_mm": ("max", 3.0), "lift_asymmetry_mm": ("max", 10.0),
@@ -203,8 +203,8 @@ def main() -> int:
                                  "worse side)"] and "cut" not in fw.record,
           f"[F5] 0.10 m foot: slim {gw['value']} > 0.18 refuses (ok {fw.ok}, {fw.reasons[:1]}); a refused fit carries no cut")
     check(all(v["gating"] is True for v in g.values()) and set(fit.record["cut"]["sides"]) == {"left", "right"}
-          and fit.record["cut"]["version"] == 1,
-          "[F5] every gate gating; the accepted fit carries the cut description (both sides, cut version 1)")
+          and fit.record["cut"]["version"] == 2,
+          "[F5] every gate gating; the accepted fit carries the cut description (both sides, cut version 2)")
     f105 = ff.fit_pair(insole, shoe, body, joints, width_cap=1.05)
     f150 = ff.fit_pair(insole, shoe, body, joints, width_cap=1.5)
     check(f105.record["scale"]["width_factor"] == 1.05 and f150.record["scale"]["width_factor"] == 1.10,

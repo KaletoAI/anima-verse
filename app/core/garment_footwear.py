@@ -326,13 +326,14 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     prims = glb_mesh.body_primitive_arrays(rigged)
     replaced: Dict[int, glb_mesh.Prim] = {}
     cut_stats: Dict[str, Any] = {"removed_faces": 0, "bisected_faces": 0, "new_vertices": 0,
-                                 "slim_share": {}, "slim_needed": {}, "throat_moved": {}}
+                                 "slim_share": {}, "slim_needed": {}, "throat_moved": {}, "toe_conform": {},
+                                 "toe_pull": {}}
     for i, prim in enumerate(prims):
         replaced[i], stats = footwear_cut.apply_cut(prim, cut, joints)
         for key in ("removed_faces", "bisected_faces", "new_vertices"):
             cut_stats[key] += int(stats[key])
         for side in footwear_fit.SIDES:
-            for key in ("slim_share", "slim_needed"):
+            for key in ("slim_share", "slim_needed", "toe_conform", "toe_pull"):
                 cut_stats[key][side] = max(float(cut_stats[key].get(side, 0.0)), float(stats[key].get(side, 0.0)))
             cut_stats["throat_moved"][side] = int(cut_stats["throat_moved"].get(side, 0)) + int(
                 stats["throat_moved"].get(side, 0))
@@ -344,6 +345,7 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         result.record["diagnostics"][side]["cut"] = footwear_fit._r({
             **(cut_gates["sides"].get(side) or {}),
             **{key: cut_stats[key].get(side) for key in ("slim_share", "slim_needed", "throat_moved")}})
+        # the conform's own numbers of the merged body are already in the side gates (toe_conform_m / toe_pull_m)
     result.record["cut_stats"] = {key: cut_stats[key] for key in ("removed_faces", "bisected_faces", "new_vertices")}
     if not cut_gates["ok"]:
         gates = {"ok": False, "reasons": list(cut_gates["reasons"]), **result.record["gates"]}

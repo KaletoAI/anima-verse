@@ -79,7 +79,7 @@ from app.core.footwear_gates import check_gates
 
 #: Bumped when the fit changes what it produces (part of the footwear fsig and
 #: ``garment_fit.FIT_VERSION["footwear"]``).
-FOOTWEAR_FIT_VERSION = 3
+FOOTWEAR_FIT_VERSION = 4   # 4: the cut's toe conform (footwear_cut CUT_VERSION 2) — the cut is part of the fit
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
