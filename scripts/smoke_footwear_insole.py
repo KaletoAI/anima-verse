@@ -123,6 +123,30 @@ down to max(vamp top, seat + 0.07 / k) — the height a shaft begins to be one.
      SHAFT_GATES shaft_closed_share min 0.9 / overknee max 0.48; the refusal texts.
 (On 2a54cb70 — INSOLE_VERSION 2 — insole.json has no ``shaft`` block, ``strip_cap`` does not exist and
 wedge(shaft=0.60) passes its gates: [I13]-[I16] fail there on the missing key.)
+[I17] a closed ring is a TUBE (INSOLE_VERSION 4, P2 Ruling 8c — on the real P2 material the four-quadrant test read
+     the Work Shoes' tongue and the Leather Boots' pull tab as the shaft top): closed = four quadrants AND the
+     largest angular gap between neighbouring cut points about the bbox centre < RING_GAP_MAX_DEG 90 AND both bbox
+     ranges >= RING_EXTENT_MIN_SHARE 0.10 x L = 0.026. Every slab carries ``gap_deg``.
+     (a) wedge(shaft=0.26, shaft_ends=True) — the tube closed by a back wall (x = 0) and a front wall (x = 0.10):
+     about the centre (0.05, 0) the neighbouring cut points on the -z wall at x = 0.04 and 0.05 stand at
+     atan2(-0.04, -0.01) = -104.04 deg and -90 deg -> gap_deg <= 14.04 on every slab in [0.16, 0.26] (the
+     triangles' diagonals add points in between), closed, closed_share 1.0, top_raw 0.26.
+     (b) wedge(shaft=0.26, shaft_ends=True, open_side=True) — the U whose open side is the LONG one (the -z wall
+     and the two end walls remain): the end walls reach z = +0.04 on both sides of the centre, so all four
+     quadrants hold a point (the version-3 test read it closed), but the opening between the back wall's top
+     corner (0, 0.04) at atan2(0.04, -0.05) = 141.34 deg and the front wall's (0.10, 0.04) at 38.66 deg is one
+     gap of 102.68 deg (+- 0.05) >= 90 -> every slab open, closed_share 0.0, top_raw None, refused
+     SHAFT_OPEN_REFUSED.
+     (c) wedge(shaft=0.26, tab=True) — a 0.02 x 0.02 pull-tab loop on the top ring from 0.26 to 0.29: the slabs
+     run from the mesh top 0.29 down every 0.0026; the 12 slabs above 0.26 (0.29 .. 0.2614) cut the tab alone:
+     four quadrants, gap_deg <= 45 (eight points round a square), but the extent 0.02 < 0.026 -> open; the first
+     shaft slab 0.29 - 12 x 0.0026 = 0.2588 is closed -> top_raw 0.2588 (version 3 read the tab top 0.29),
+     closed_share 1.0 (the tab slabs lie above top_raw and do not count), cap_removed 0 (the tab's walls are
+     vertical), collar_h_raw 0.17 (the tab at |z| <= 0.01 is inside the topline's lateral filter), class ankle.
+     (d) [I14]'s plain wedge(shaft=0.26) — two parallel walls without end walls — stays closed: its gap is the
+     open short side, 2 x atan(0.04 / 0.05) = 77.32 deg < 90 (+- 0.05), extent 0.10 x 0.08.
+(On 7b04e9f5 / 8efc6616 — INSOLE_VERSION 3 — (b) reads closed_share 1.0 and passes, (c) top_raw 0.29, and no slab
+carries gap_deg: [I17] fails there.)
 """
 import json
 import math
@@ -219,7 +243,8 @@ def main():
     print("[I9] constants")
     check("constants", (fi.INSOLE_VERSION, fi.NOMINAL_LENGTH_M, fi.STATIONS, fi.AIR_SHARE, fi.TOL_SHARE,
                         fi.BOOT_MARGIN_M, fi.DOWN_MAX),
-          (3, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
+          (4, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
+    check("ring constants", (fi.RING_GAP_MAX_DEG, fi.RING_EXTENT_MIN_SHARE), (90.0, 0.10))
     check("INSOLE_GATES", {k: v[:2] for k, v in fi.INSOLE_GATES.items()},
           {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6), "opening_share": ("min", 0.5)})
     check("refusal texts", (fi.BOOT_REFUSED, fi.OPEN_REFUSED, fi.SOLID_REFUSED),
@@ -272,7 +297,7 @@ def main():
     near("vamp_cover", pump["vamp_cover"], 0.810, 0.02)
     near("vamp_cover (station count 74/91)", pump["vamp_cover"], 74 / 91, 1e-6)
     check("gates", (pump["gates"]["ok"], pump["gates"]["reasons"], pump["gates"].get("refusal")), (True, [], None))
-    check("version", pump["version"], 3)
+    check("version", pump["version"], 4)
     near("pump footprint_ground", pump["footprint_ground"], 1.0, 1e-9)
 
     print("[I4] rotated 180 deg about Y")
@@ -425,6 +450,43 @@ def main():
     check("shaft refusal texts", (fi.OVERKNEE_REFUSED, fi.SHAFT_OPEN_REFUSED),
           ("Over-knee boots are not supported yet", "The boot shaft is not closed"))
     check("class table", fi.SHAFT_CLASS_M, {"none": 0.07, "ankle": 0.22, "knee": 0.48})
+
+    print("[I17] a closed ring is a tube: angular gap and extent")
+    tube = fi.analyse_arrays(*wedge(shaft=0.26, shaft_ends=True))
+    tube_slabs = [s for s in tube["shaft"]["slabs"] if 0.16 - 1e-9 <= s["y"] <= 0.26 + 1e-9]
+    check("(a) tube slabs", len(tube_slabs) >= 2, True)
+    check("(a) tube slabs closed, gap <= 14.04", all(s["closed"] and s["gap_deg"] <= 14.04 + 0.01 for s in tube_slabs), True)
+    near("(a) tube closed_share", tube["shaft"]["closed_share"], 1.0, 1e-9)
+    near("(a) tube top_raw", tube["shaft"]["top_raw"], 0.26, 1e-9)
+    check("(a) tube gates ok", (tube["gates"]["ok"], tube["gates"].get("refusal")), (True, None))
+    u = fi.analyse_arrays(*wedge(shaft=0.26, shaft_ends=True, open_side=True))
+    u_slabs = [s for s in u["shaft"]["slabs"] if 0.16 - 1e-9 <= s["y"] <= 0.26 + 1e-9]
+    check("(b) U slabs", len(u_slabs) >= 2, True)
+    check("(b) U: four quadrants but one gap of 102.68 deg", all(not s["closed"] and abs(s["gap_deg"] - 102.68) <= 0.05
+                                                                for s in u_slabs), True)
+    # the one-sided U yaws the PCA frame by 2.2 deg: the extents are the tube's to 5 mm, not to the micron
+    check("(b) U: x / z extent of the tube", all(abs(s["x_min"]) <= 0.005 and abs(s["x_max"] - 0.10) <= 0.005
+                                                   and abs(s["z_max"] - s["z_min"] - 0.08) <= 0.005
+                                                   for s in u_slabs), True)
+    near("(b) U closed_share", u["shaft"]["closed_share"], 0.0, 1e-9)
+    check("(b) U top_raw None", u["shaft"]["top_raw"], None)
+    check("(b) U refused", (u["gates"]["ok"], u["gates"].get("refusal")), (False, fi.SHAFT_OPEN_REFUSED))
+    tabbed = fi.analyse_arrays(*wedge(shaft=0.26, tab=True))
+    tab_slabs = [s for s in tabbed["shaft"]["slabs"] if s["y"] > 0.26 + 1e-9]
+    check("(c) 12 tab slabs above 0.26", len(tab_slabs), 12)
+    near("(c) top slab at the tab top", tabbed["shaft"]["slabs"][0]["y"], 0.29, 1e-9)
+    check("(c) tab slabs: closed by gap, open by extent", all(not s["closed"] and s["gap_deg"] <= 45.0 + 0.01
+                                                             and abs(s["x_max"] - s["x_min"] - 0.02) <= 1e-6
+                                                             and abs(s["z_max"] - s["z_min"] - 0.02) <= 1e-6
+                                                             for s in tab_slabs), True)
+    near("(c) top_raw = the first shaft slab 0.2588", tabbed["shaft"]["top_raw"], 0.29 - 12 * 0.0026, 1e-9)
+    near("(c) closed_share", tabbed["shaft"]["closed_share"], 1.0, 1e-9)
+    check("(c) cap_removed 0", tabbed["shaft"]["cap_removed"], 0)
+    near("(c) collar_h_raw", tabbed["shaft"]["collar_h_raw"], 0.17, 1e-6)
+    check("(c) class ankle, gates ok", (tabbed["shaft"]["class"], tabbed["gates"]["ok"]), ("ankle", True))
+    check("(c) JSON strict", strict_json(tabbed), True)
+    check("(d) [I14] plain walls: gap 77.32 deg, closed", all(s["closed"] and abs(s["gap_deg"] - 77.32) <= 0.05
+                                                             for s in slabs), True)
 
     if FAILED:
         print(f"\n{len(FAILED)} check(s) failed: {FAILED}")

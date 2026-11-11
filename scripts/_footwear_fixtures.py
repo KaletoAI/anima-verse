@@ -19,6 +19,11 @@ mesher's own coordinates (Y up, x heel -> toe, z lateral), length 0.26, width 0.
   single-view mesher's closure of the collar it could not see into;
 - ``open_side`` (same task): the +z wall over x in [0, 0.10] stays at the pump's h(x) + WALL instead of rising to
   ``shaft`` — a mesher hole in the shaft: the tube has only its -z wall above the quarter;
+- ``shaft_ends`` (boots P2 fix 1, Ruling 8c): a back wall at x = 0 and a front wall at x = 0.10 over z in
+  [-HALF_W, HALF_W], from the pump's wall top h(x) + WALL up to ``shaft``, on the 0.01 grid — the tube closed at
+  its ends; with ``open_side`` the three remaining walls are a U whose open side is the LONG one;
+- ``tab`` (same): a pull tab — a closed 0.02 x 0.02 loop (four walls, 0.01 grid) over x in [0.04, 0.06] x z in
+  [-0.01, 0.01] standing on the shaft's top ring from y = ``shaft`` to ``shaft`` + 0.03;
 - ``flare``: a flared shaft (boots plan Task 2, spec 2026-11-11 § 5 F5 / § 6.1) — two extra walls over x in
   [0, 0.10] that lean OUT from z = +-HALF_W at y = 0.05 to z = +-``flare`` at y = 0.16, open at the bottom (a
   vertical ray over |z| in (0.04, ``flare``) hits the leaning wall at 0.05 .. 0.16, never the ground; its face
@@ -32,6 +37,8 @@ passes the cut gates in.
 Every quad is two triangles over the 0.01 x-grid; each face is wound so its normal points outward
 (up for the sole top and the roof, down for the bottom, +-z for the walls).
 """
+import math
+
 import numpy as np
 
 LENGTH = 0.26
@@ -49,11 +56,13 @@ def h(x: float) -> float:
 
 
 def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = False, solid: bool = False,
-          shaft: float = 0.0, flare: float = 0.0, cap: bool = False, open_side: bool = False):
+          shaft: float = 0.0, flare: float = 0.0, cap: bool = False, open_side: bool = False,
+          shaft_ends: bool = False, tab: bool = False):
     """``(positions (N, 3), faces (M, 3))`` of the wedge pump (module docstring); ``shaft`` > 0 raises the
     side walls over the rear x in [0, 0.10] to that height (a boot shaft; topline there = ``shaft``); ``flare``
     > HALF_W adds the leaning flare walls over the same x; ``cap`` closes the shaft's top with an up-facing disc,
-    ``open_side`` leaves the +z shaft wall at the pump's wall height (module docstring)."""
+    ``open_side`` leaves the +z shaft wall at the pump's wall height, ``shaft_ends`` closes the shaft's ends with a
+    back and a front wall, ``tab`` puts a pull-tab loop on its top ring (module docstring)."""
     P, F = [], []
 
     def tri(a, b, c, facing):
@@ -106,6 +115,26 @@ def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = Fals
          (1, 0, 0))
     if fin:
         quad((0.24, 0.04, 0), (LENGTH, 0.04, 0), (LENGTH, 0.15, 0), (0.24, 0.15, 0), (0, 0, 1))
+    if shaft and shaft_ends:
+        for x, facing in ((0.0, (-1, 0, 0)), (0.10, (1, 0, 0))):
+            y_from = h(x) + WALL
+            rows = [y_from] + [round(0.01 * j, 10) for j in range(int(math.floor(y_from / 0.01)) + 1,
+                                                                  int(round(shaft / 0.01)) + 1)]
+            if abs(rows[-1] - shaft) > 1e-9:
+                rows.append(shaft)
+            for ya, yb in zip(rows[:-1], rows[1:]):
+                for j in range(8):
+                    z0, z1 = -HALF_W + 0.01 * j, -HALF_W + 0.01 * (j + 1)
+                    quad((x, ya, z0), (x, ya, z1), (x, yb, z1), (x, yb, z0), facing)
+    if shaft and tab:
+        rows = [round(shaft + 0.01 * j, 10) for j in range(4)]
+        for ya, yb in zip(rows[:-1], rows[1:]):
+            for x0, x1 in ((0.04, 0.05), (0.05, 0.06)):
+                quad((x0, ya, -0.01), (x1, ya, -0.01), (x1, yb, -0.01), (x0, yb, -0.01), (0, 0, -1))
+                quad((x0, ya, 0.01), (x1, ya, 0.01), (x1, yb, 0.01), (x0, yb, 0.01), (0, 0, 1))
+            for z0, z1 in ((-0.01, 0.0), (0.0, 0.01)):
+                quad((0.04, ya, z0), (0.04, ya, z1), (0.04, yb, z1), (0.04, yb, z0), (-1, 0, 0))
+                quad((0.06, ya, z0), (0.06, ya, z1), (0.06, yb, z1), (0.06, yb, z0), (1, 0, 0))
     positions = np.asarray(P, np.float64)
     if rotate_180:                        # 180 deg about Y: (x, y, z) -> (-x, y, -z), winding kept
         positions = positions * np.array([-1.0, 1.0, -1.0])

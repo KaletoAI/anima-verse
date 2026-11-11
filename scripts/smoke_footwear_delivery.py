@@ -22,7 +22,7 @@ true, "plain dress"), ``skirt`` ([bottom], no flag, "plain skirt"). Kira holds
 and wears all three. Base model model3d/<bsig>.glb = b"model-2", SHA = its
 sha256. Fits are written by hand: an accepted record of the item's CURRENT
 fsig on SHA (dress: kind clothing, fit_version FIT_VERSION["clothing"]; heels:
-kind footwear, method shoe, fit_version 6).
+kind footwear, method shoe, fit_version 7).
 R(x) = base_body.MESH_ITEM_NOT_READY.format(item=x's name, reason=...),
 P(x) = MESH_ITEM_PAINTED.format(...), NMF = NO_MESH_FIT.
 
@@ -83,7 +83,7 @@ P(x) = MESH_ITEM_PAINTED.format(...), NMF = NO_MESH_FIT.
      footwear record under another fsig "0123456789ab" (kind footwear, method
      shoe, SHA, fit_version 3) -> accepted_fit(Kira, heels, SHA) is None and
      newest_accepted_fits(..., base_model_sha=SHA) has no "shoe" entry; a
-     record of fit_version 6 (the current FOOTWEAR_FIT_VERSION) under that
+     record of fit_version 7 (the current FOOTWEAR_FIT_VERSION) under that
      fsig -> served (the fallback itself stays). The dress's fallback is untouched: its current-fsig fit removed,
      an accepted clothing record under "0123456789cd" (fit_version
      FIT_VERSION["clothing"], SHA) is served. resolve with the version-2 heels
@@ -338,14 +338,14 @@ def main() -> int:
         print("[D7] R11: an older footwear fit version is never served")
         old_fsig = "0123456789ab"
         write_fit(heels, "footwear", fsig=old_fsig, version=3)
-        check("D7 FIT_VERSION footwear", garment_fit.FIT_VERSION["footwear"], 6)
+        check("D7 FIT_VERSION footwear", garment_fit.FIT_VERSION["footwear"], 7)
         check("D7 version 3 not served", gs.accepted_fit("Kira", heels, base_model_sha=sha), None)
         check("D7 newest: no shoe", "shoe" in gs.newest_accepted_fits("Kira", heels, base_model_sha=sha), False)
         d7 = base_body.resolve_mesh_items("Kira", full)
         check("D7 heels missing", (d7.get("effective"), d7.get("missing")), ([dress], {heels: NMF}))
-        write_fit(heels, "footwear", fsig=old_fsig, version=6)
+        write_fit(heels, "footwear", fsig=old_fsig, version=7)
         served = gs.accepted_fit("Kira", heels, base_model_sha=sha)
-        check("D7 version 6 served (fallback)", served and gs.parse_name(served[0])[1], old_fsig)
+        check("D7 version 7 served (fallback)", served and gs.parse_name(served[0])[1], old_fsig)
         drop_fit(heels, old_fsig)
         drop_fit(dress)
         write_fit(dress, "clothing", fsig="0123456789cd")

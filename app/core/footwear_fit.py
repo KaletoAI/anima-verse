@@ -73,9 +73,13 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    and is split; else it is rigid as above (the round-1 ``boot`` refusal is retired, its value is the diagnostic
    ``collar_above_ankle_mm``). Parts by the vertex's frame height: ``foot`` below ``y_split − SPLIT_BAND_M``,
    ``shaft`` above ``y_split + SPLIT_BAND_M``, the band between with ``s`` = smoothstep across it. Weights =
-   (1 − s) × the foot part's Foot / ToeBase + s × ``garment_fit.clothing_weights`` restricted to the side's Foot,
-   Leg and UpLeg (the IDW over the body's own weights: Foot near the ankle, Leg over the shin, UpLeg near the
-   knee); the dense (Foot, ToeBase, Leg, UpLeg) weights are the four skin slots. Bind position of the band and
+   (1 − s) × the foot part's Foot / ToeBase + s × ``garment_fit.clothing_weights`` restricted to the side's Leg
+   and UpLeg (fit version 7, spec § 6.3's anti-double-bend rule, P2 Ruling 8a: the IDW over the body's own
+   weights — Leg over the shin, UpLeg near the knee — WITHOUT the Foot column; a real body carries Foot share far up
+   the shin (0.45 at +2 cm, 0.07 at +7 cm above the ankle on Kai) and the version-6 transfer copied it into the
+   shaft, which then bent twice — once at the band, once with every Foot turn above it. The band's Foot share is
+   the foot part's term alone, so it falls from 1 to exactly 0 across the band and no vertex above the band
+   carries Foot or ToeBase); the dense (Foot, ToeBase, Leg, UpLeg) weights are the four skin slots. Bind position of the band and
    shaft = the EXACT inverse of the blended skin matrix (Leg / UpLeg stand in the bind pose), so the stand pose
    reproduces the fitted position; the foot part keeps the ball blend's blend of inverses (byte-identical to
    version 5). The spec's blend of inverses for the band was measured first: its residual 4 s(1−s) sin²(θ/2) r
@@ -94,10 +98,14 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    the 4-cm band at 6 cm radius
    moves the foot side 2.6 cm against the Leg side: the band compresses to about a third behind the ankle
    and stretches in front — by geometry, which is why this measure is recorded and not gating until P2
-   calibrates it, ``SHAFT_GATING``); ``leg_follow_deg`` = the shaft top ring's (above ``y_split +
-   SHAFT_RING_ABOVE_M``) best-fit turn under a ``FOLLOW_TURN_DEG`` Leg-only skin turn against that turn (the
-   anti-double-bend check; UpLeg and Foot shares drag it). ``foot_pose`` is unchanged — the extension, the
-   toe counter, the root lift and the contacts are the foot part's.
+   calibrates it, ``SHAFT_GATING``); ``leg_follow_deg`` = the shaft top ring's best-fit turn under a
+   ``FOLLOW_TURN_DEG`` Leg-only skin turn against that turn (the anti-double-bend check; UpLeg and Foot shares
+   drag it). The ring (``follow_ring``, P2 Ruling 8b) is the shaft above ``y_split + SHAFT_RING_ABOVE_M``
+   (``"top"``); when fewer than ``FOLLOW_RING_MIN`` vertices stand there (a low collar — the Work Shoes end 2.8 cm
+   above the split) it is the upper half of the shaft part (``"upper_half"``, from the middle between the band's
+   top and the shaft's highest vertex up); with no ring at all the measure is ``None`` — recorded as such, not
+   gated (``check_gates`` optional, ``ok`` None in the record), never a green 0.0. ``foot_pose`` is unchanged —
+   the extension, the toe counter, the root lift and the contacts are the foot part's.
 
 Gates (``FIT_GATES``, every one refuses a fit since version 3): ``ball_placement_mm`` (the
 posed SKINNED ball of step 3 vs the shoe's chord ball point under the heel-anchored placement, before the
@@ -158,8 +166,10 @@ from app.core.footwear_gates import check_gates
 #: Bumped when the fit changes what it produces (part of the footwear fsig and
 #: ``garment_fit.FIT_VERSION["footwear"]``).
 #: 5: the foot below the ankle, each contact band against its own lowest point (step 1);
-#: 6: a boot is split at the wearer's ankle — rigid foot part, clothing-weighted shaft, four nodes (step 9).
-FOOTWEAR_FIT_VERSION = 6
+#: 6: a boot is split at the wearer's ankle — rigid foot part, clothing-weighted shaft, four nodes (step 9);
+#: 7: the shaft transfer without the Foot column (no Foot / ToeBase above the band) and the follow measure over
+#:    the shaft's upper half when the top ring is empty (P2 Rulings 8a / 8b).
+FOOTWEAR_FIT_VERSION = 7
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -184,8 +194,10 @@ FIT_GATES: Dict[str, Tuple[str, Any]] = {
 SPLIT_BAND_M = 0.02
 SPLIT_MARGIN_M = 0.01
 SHAFT_CLEAR_M = 0.006
-#: The top ring the anti-double-bend check reads: shaft vertices this far above the split (§ 6.3).
+#: The top ring the anti-double-bend check reads: shaft vertices this far above the split (§ 6.3); below this
+#: many vertices the ring is empty and the measure falls back to the shaft's upper half, then to ``None``.
 SHAFT_RING_ABOVE_M = 0.06
+FOLLOW_RING_MIN = 3
 #: The ankle flex the seam measures are taken at, and the Leg turn of the follow check (degrees).
 SEAM_FLEX_DEG = 25.0
 FOLLOW_TURN_DEG = 20.0
@@ -203,18 +215,21 @@ SHAFT_GATES: Dict[str, Tuple[str, Any]] = {
 }
 #: P2 numbers (boots round, 2026-11-11, the clone): Work Shoes on Kai (``base634402e5``) ACCEPTED — split 14.6 cm,
 #: collar 28 / 29 mm above the ankle, push p95 8.3 mm / max 17.6 mm, inside 0, seam gap 0, stretch 50 / 58 (recorded),
-#: follow 0.0 deg but VACUOUS: the collar ends 2.8 cm above the split, the ring above ``SHAFT_RING_ABOVE_M`` is empty
-#: (``ring_vertices`` 0); the same Leg-turn measure over the shaft's upper half reads 13.4–13.8 deg because the shaft
-#: carries the body's own Foot share there (0.47 at +2 cm, 0.21 at +4 cm, 0.14 at +5 cm above the ankle — the clothing
-#: transfer copies the skin, whose Foot share is still 0.07 at +7 cm and 0.05 at +8 cm). Leather Boots on Kira
-#: (``base20d5701a``) REFUSED: slim_needed 0.256 (width needed ×1.48 / ×1.43, insole ball width 66 mm against the
-#: foot's 98 / 93 mm, toe room −19 / −22 mm), push p95 22.8 mm, follow 5.9 / 7.2 deg (ring 205 / 106 vertices at
-#: +6 cm), stretch 39 / 20 (recorded). Without the Foot column in the shaft weights (an offline experiment; spec § 6.3:
-#: no vertex above the band carries Foot + ToeBase > 0.05) the follow reads 0.0 on Kira's ring and the stretch 90 / 76.
+#: follow 0.0 deg but VACUOUS under version 6: the collar ends 2.8 cm above the split, the ring above
+#: ``SHAFT_RING_ABOVE_M`` is empty (``ring_vertices`` 0); the same Leg-turn measure over the shaft's upper half read
+#: 13.4–13.8 deg because the version-6 shaft carried the body's own Foot share there (0.47 at +2 cm, 0.21 at +4 cm,
+#: 0.14 at +5 cm above the ankle — the clothing transfer copied the skin, whose Foot share is still 0.07 at +7 cm and
+#: 0.05 at +8 cm). Leather Boots on Kira (``base20d5701a``) REFUSED under version 6: slim_needed 0.256 (width needed
+#: ×1.48 / ×1.43, insole ball width 66 mm against the foot's 98 / 93 mm, toe room −19 / −22 mm), push p95 22.8 mm,
+#: follow 5.9 / 7.2 deg (ring 205 / 106 vertices at +6 cm), stretch 39 / 20 (recorded). Version 7 (Rulings 8a / 8b,
+#: offline on the same material): Kira's follow 0.0 on the +6 cm ring, Kai's 0.0 over the shaft's upper half
+#: (``follow_ring`` "upper_half"), the width and push refusals unchanged — those are the mesh's (fix-1 report).
 SHAFT_GATING: Dict[str, bool] = {
     "shaft_push_p95_m": True, "shaft_push_max_m": True, "shaft_inside_share": True,
     "seam_gap_p95_mm": True, "seam_stretch_max": False, "shaft_leg_follow_deg": True,
 }
+#: The gates whose value may be ``None`` (no ring to measure): not a refusal, the record says ``ok`` None.
+FOLLOW_OPTIONAL = ("shaft_leg_follow_deg",)
 GATE_LABELS = {
     "ball_placement_mm": "the posed ball contact vs the shoe's ball point, worse side",
     "lift_asymmetry_mm": "difference of the two sides' lifts",
@@ -761,8 +776,10 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                 ui: Optional[int] = _skin_index(body, f"{side}upleg")
             except ValueError:
                 ui = None                     # a rig-contract body has it; the synthetic feet of the smokes do not
-            column_of = {fm.foot_index: 0, fm.toe_index: 1, li: 2, **({ui: 3} if ui is not None else {})}
-            columns = [fm.foot_index, li] + ([ui] if ui is not None else [])
+            # the shaft transfer's columns: Leg and UpLeg only (spec § 6.3 anti-double-bend) — the band's Foot
+            # share is the foot part's (1 - s) term, nothing above the band carries Foot or ToeBase
+            column_of = {li: 2, **({ui: 3} if ui is not None else {})}
+            columns = [li] + ([ui] if ui is not None else [])
 
             def shaft_weights(points: np.ndarray) -> np.ndarray:
                 from app.core.garment_fit import clothing_weights
@@ -845,22 +862,35 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                 if okf.any():
                     r = a1[okf] / a0[okf]
                     stretch = max(stretch, float(np.max(np.maximum(r, 1.0 / np.maximum(r, 1e-12)))))
+            # the follow ring: the shaft above y_split + SHAFT_RING_ABOVE_M, else the shaft part's upper half,
+            # else no measure (None — never a vacuous 0.0; Ruling 8b)
             ring = yf > y_split + SHAFT_RING_ABOVE_M
-            follow = 0.0
-            if int(ring.sum()) >= 3:
+            follow_ring: Optional[str] = "top"
+            if int(ring.sum()) < FOLLOW_RING_MIN:
+                shaft_v = yf > y_split + SPLIT_BAND_M
+                follow_ring = None
+                if shaft_v.any():
+                    ring = yf >= 0.5 * (float(yf[shaft_v].max()) + y_split + SPLIT_BAND_M)
+                    follow_ring = "upper_half"
+            follow: Optional[float] = None
+            if follow_ring is not None and int(ring.sum()) >= FOLLOW_RING_MIN:
                 from app.core.garment_fit import similarity
                 Jl = np.asarray(joints[f"{side}leg"], np.float64)[:3, 3]
                 Bl = _about(Jl, w["axis"], math.radians(FOLLOW_TURN_DEG))
                 turned = W4[ring, 2:3] * _apply(Bl, bind[ring]) + (1.0 - W4[ring, 2:3]) * bind[ring]
                 _s, R, _a, _b = similarity(bind[ring], turned)
                 follow = abs(FOLLOW_TURN_DEG - _rotation_angle_deg(R))
+            else:
+                follow_ring = None
             shaft_rec.update({"seam_gap_p95_mm": float(np.percentile(gap, 95)) if len(gap) else 0.0,
-                              "seam_stretch_max": stretch, "leg_follow_deg": follow,
-                              "band_vertices": int(in_band.sum()), "ring_vertices": int(ring.sum())})
+                              "seam_stretch_max": stretch, "leg_follow_deg": follow, "follow_ring": follow_ring,
+                              "band_vertices": int(in_band.sum()),
+                              "ring_vertices": int(ring.sum()) if follow_ring is not None else 0})
             for key, name in (("push_p95_m", "shaft_push_p95_m"), ("push_max_m", "shaft_push_max_m"),
                               ("inside_share", "shaft_inside_share"), ("seam_gap_p95_mm", "seam_gap_p95_mm"),
                               ("seam_stretch_max", "seam_stretch_max"), ("leg_follow_deg", "shaft_leg_follow_deg")):
-                shaft_metrics[name].append(float(shaft_rec[key]))
+                if shaft_rec[key] is not None:
+                    shaft_metrics[name].append(float(shaft_rec[key]))
             centroid_y = yf[side_idx].mean(1)
             foot_faces = side_idx[centroid_y < y_split]
             shaft_faces = side_idx[centroid_y >= y_split]
@@ -921,11 +951,13 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         metrics.update({name: max(values) if values else None for name, values in shaft_metrics.items()})
         table.update({name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in SHAFT_GATES.items()
                       if SHAFT_GATING[name]})
-    ok, reasons = check_gates(metrics, table)
+    # the follow measure is None without a ring (Ruling 8b): recorded, not a refusal, ``ok`` None
+    ok, reasons = check_gates(metrics, table, optional=FOLLOW_OPTIONAL)
     gates: Dict[str, Any] = {}
     for name, value in metrics.items():
         kind, limit = (FIT_GATES.get(name) or SHAFT_GATES[name])
-        passed = check_gates({name: value}, {name: (kind, limit, GATE_LABELS[name])})[0]
+        passed = (None if value is None and name in FOLLOW_OPTIONAL
+                  else check_gates({name: value}, {name: (kind, limit, GATE_LABELS[name])})[0])
         gates[name] = {"value": value, "limit": list(limit) if isinstance(limit, tuple) else limit,
                        "ok": passed, "gating": bool(SHAFT_GATING.get(name, True))}
 

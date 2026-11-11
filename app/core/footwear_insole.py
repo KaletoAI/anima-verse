@@ -58,10 +58,15 @@ Blender:
   begins to be one; a shoe whose walls stay under it has no slabs and its ``closed_share`` is ``None`` (not
   gated). The ceiling is the mesh's highest point, not the topline: the topline is the LOWER side and a shaft
   with one wall missing would otherwise not be looked at. Per slab the ring of edge-cut points: ``x_min`` /
-  ``x_max`` / ``z_min`` / ``z_max`` and ``closed`` = cut points in all four quadrants about the ring's bbox
-  centre (strict). ``top_raw`` = the highest closed slab (``None`` without one), ``closed_share`` = closed
-  slabs / slabs at or below it (0.0 without one) — gate ``shaft_closed_share`` ≥ 0.9, refusal
-  ``SHAFT_OPEN_REFUSED`` (an open-sided shaft is a mesher hole).
+  ``x_max`` / ``z_min`` / ``z_max``, ``gap_deg`` = the largest angular gap between neighbouring cut points about
+  the ring's bbox centre (``None`` for a plane that cuts nothing), and ``closed`` (INSOLE_VERSION 4, P2 Ruling 8c)
+  = cut points in all four quadrants about that centre (strict) AND ``gap_deg`` < ``RING_GAP_MAX_DEG`` (90°: a
+  tube's neighbours sit a few degrees apart, a U or an arc leaves the opening as one gap) AND both bbox ranges
+  ≥ ``RING_EXTENT_MIN_SHARE`` L (a pull tab's own loop is a closed ring 1.5 cm across — not the shaft). The
+  version-3 test was the quadrants alone; on the P2 material it read the Work Shoes' tongue (gap 114–154°) and
+  the Leather Boots' pull tab (1.2 × 1.5 cm) as the shaft top, 2.1 / 1.6 cm above the collar. ``top_raw`` = the
+  highest closed slab (``None`` without one), ``closed_share`` = closed slabs / slabs at or below it (0.0 without
+  one) — gate ``shaft_closed_share`` ≥ 0.9, refusal ``SHAFT_OPEN_REFUSED`` (an open-sided shaft is a mesher hole).
   **Cap**: a single-view mesher closes an opening it cannot see; the faces whose centroid lies within the top
   ``CAP_TOP_SHARE`` of the shaft height — from ``top_raw − CAP_TOP_SHARE × (top_raw − vamp_top_raw)`` up,
   nothing of a shaft lies above its top but a cap — and whose normal's up component is ≥ ``CAP_UP_MIN``
@@ -102,9 +107,9 @@ bbox centre, measured per slab): on the Work Shoes the 8 top "closed" slabs (14.
 the padded collar — a U open at the back, largest gap 114–154 deg, extent 0.7–6.8 cm × 2.0–6.2 cm against the
 tube's 11 × 7 cm below, where the gap is 4.6–10.7 deg; on the Leather Boots the 4 top ones (18.33–19.11 cm) are
 the PULL TAB's own small loop (1.2–1.4 × 1.5 cm, gap 54–72 deg) and two at the collar edge read 132 / 135 deg.
-So ``top_raw`` sits on the tongue / the tab, 2.1 / 1.6 cm above the real collar ring (13.79 / 17.55 cm), and the
-cap band is measured from there. A tube test (gap < 90 deg and an extent of the same order as the slabs below)
-would keep both closed shares at 1.0 and put ``top_raw`` on the collar.
+So ``top_raw`` sat on the tongue / the tab, 2.1 / 1.6 cm above the real collar ring (13.79 / 17.55 cm), and the
+cap band was measured from there. INSOLE_VERSION 4 (the gap and extent rules above) puts ``top_raw`` on the collar
+of both (fix-1 report: the numbers on the stored meshes are in the Task 8 fix-1 report of the SDD folder).
 """
 import math
 from dataclasses import dataclass
@@ -116,8 +121,9 @@ from app.core.footwear_gates import check_gates
 
 #: Bumped when the analysis changes what it measures (part of the footwear fsig).
 #: 2: insole_cover and footprint_outline over the outsole footprint (footprint_ground);
-#: 3: the shaft block (collar height, class, tube slabs, closed share, cap removal).
-INSOLE_VERSION = 3
+#: 3: the shaft block (collar height, class, tube slabs, closed share, cap removal);
+#: 4: a closed slab ring needs a largest angular gap < 90° and an extent ≥ 0.1 L (tongue / pull tab are no shaft).
+INSOLE_VERSION = 4
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -163,6 +169,10 @@ INSOLE_GATES: Dict[str, Tuple[str, Any, str]] = {
 SHAFT_CLASS_M: Dict[str, float] = {"none": 0.07, "ankle": 0.22, "knee": 0.48}
 #: Tube slabs every this share of the length (module docstring).
 SHAFT_SLAB_SHARE = 0.01
+#: A closed slab ring: largest angular gap between neighbouring cut points about the bbox centre below this, and
+#: both bbox ranges at least this share of the length (module docstring, INSOLE_VERSION 4).
+RING_GAP_MAX_DEG = 90.0
+RING_EXTENT_MIN_SHARE = 0.10
 #: The cap band: the top share of the shaft height (top_raw − vamp top) and the up component of a cap face.
 CAP_TOP_SHARE = 0.02
 CAP_UP_MIN = math.cos(math.radians(30.0))
@@ -514,24 +524,25 @@ def _r(v: Any, nd: int = 7) -> Any:
 
 # --- the shaft ----------------------------------------------------------------------------------------------------------
 
-def _slab_rings(p_frame: np.ndarray, faces: np.ndarray, levels: np.ndarray, eps: float) -> List[Dict[str, Any]]:
+def _slab_rings(p_frame: np.ndarray, faces: np.ndarray, levels: np.ndarray, eps: float,
+                min_extent: float = 0.0) -> List[Dict[str, Any]]:
     """The tube slabs (module docstring): per height in ``levels`` the ring of edge-cut points of the plane
-    y = level (an edge lying in the plane gives both ends) -> ``{y, x_min, x_max, z_min, z_max, closed}``;
-    the ranges are ``None`` and ``closed`` False for a plane that cuts nothing."""
+    y = level (an edge lying in the plane gives both ends) -> ``{y, x_min, x_max, z_min, z_max, gap_deg, closed}``;
+    the ranges and ``gap_deg`` are ``None`` and ``closed`` False for a plane that cuts nothing. ``closed`` = four
+    quadrants about the bbox centre AND ``gap_deg`` < ``RING_GAP_MAX_DEG`` AND both bbox ranges ≥ ``min_extent``."""
     P = np.asarray(p_frame, np.float64).reshape(-1, 3)
     E = _edges(np.asarray(faces, np.int64).reshape(-1, 3))
     out: List[Dict[str, Any]] = []
+    empty = {"x_min": None, "x_max": None, "z_min": None, "z_max": None, "gap_deg": None, "closed": False}
     if not len(E):
-        return [{"y": float(y), "x_min": None, "x_max": None, "z_min": None, "z_max": None, "closed": False}
-                for y in levels]
+        return [{"y": float(y), **empty} for y in levels]
     pa, pb = P[E[:, 0]], P[E[:, 1]]
     ylo, yhi = np.minimum(pa[:, 1], pb[:, 1]), np.maximum(pa[:, 1], pb[:, 1])
     dye = pb[:, 1] - pa[:, 1]
     flat = np.abs(dye) <= eps
     for y in levels:
         m = (ylo <= y + eps) & (yhi >= y - eps)
-        slab: Dict[str, Any] = {"y": float(y), "x_min": None, "x_max": None, "z_min": None, "z_max": None,
-                                "closed": False}
+        slab: Dict[str, Any] = {"y": float(y), **empty}
         if m.any():
             cut = m & ~flat
             tt = (y - pa[cut, 1]) / dye[cut]
@@ -543,10 +554,13 @@ def _slab_rings(p_frame: np.ndarray, faces: np.ndarray, levels: np.ndarray, eps:
             lo, hi = q.min(0), q.max(0)
             c = 0.5 * (lo + hi)
             dx, dz = q[:, 0] - c[0], q[:, 1] - c[1]
-            closed = bool(((dx > 0) & (dz > 0)).any() and ((dx > 0) & (dz < 0)).any()
-                          and ((dx < 0) & (dz > 0)).any() and ((dx < 0) & (dz < 0)).any())
+            quadrants = bool(((dx > 0) & (dz > 0)).any() and ((dx > 0) & (dz < 0)).any()
+                             and ((dx < 0) & (dz > 0)).any() and ((dx < 0) & (dz < 0)).any())
+            ang = np.sort(np.degrees(np.arctan2(dz, dx)))
+            gap = float(np.max(np.diff(np.concatenate([ang, ang[:1] + 360.0])))) if len(ang) > 1 else 360.0
+            extent_ok = bool(min(hi[0] - lo[0], hi[1] - lo[1]) >= min_extent)
             slab.update({"x_min": float(lo[0]), "x_max": float(hi[0]), "z_min": float(lo[1]), "z_max": float(hi[1]),
-                         "closed": closed})
+                         "gap_deg": gap, "closed": quadrants and gap < RING_GAP_MAX_DEG and extent_ok})
         out.append(slab)
     return out
 
@@ -617,7 +631,7 @@ def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray
         step = SHAFT_SLAB_SHARE * L
         n = int(math.floor((ymax - y0 + eps) / step)) + 1 if ymax >= y0 - eps else 0
         if n > 0:
-            slabs = _slab_rings(pf, F, ymax - step * np.arange(n), eps)
+            slabs = _slab_rings(pf, F, ymax - step * np.arange(n), eps, min_extent=RING_EXTENT_MIN_SHARE * L)
     closed = [s["closed"] for s in slabs]
     top_raw = next((s["y"] for s in slabs if s["closed"]), None)
     closed_share: Optional[float] = None

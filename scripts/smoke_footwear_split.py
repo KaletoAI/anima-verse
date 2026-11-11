@@ -80,6 +80,29 @@ Expected, by hand:
      entries for the boot and none for the clog.
 (On 2a54cb70 — fit version 5 — FootwearFit has ``shoes`` and no ``parts``, FIT_GATES has ``boot`` and the flat
 boot is refused BOOT_REFUSED: its topline stands 73.5 - 30 = 43.5 mm above the ankle + margin.)
+[B7] fit version 7 (P2 Rulings 8a / 8b): the shaft transfer takes Leg and UpLeg only, and the follow measure has a
+     ring or is None. Body A = ``foot_body_glb(shin_foot_weight=0.3, leg_cell=0.01)``: the leg column carries
+     Foot 0.3 / Leg 0.7 like a real body's shin (Kai: Foot 0.45 at +2 cm, 0.07 at +7 cm above the ankle); the foot
+     boxes are unchanged (the shin's 0.3 is under FOOT_WEIGHT_MIN), so k, lift and y_split are [B1]'s. The flat
+     boot (shaft 0.16) on it: no vertex above the band (yf > 0.110236) carries Foot + ToeBase (max 0, gate 0.05;
+     version 6 copied the shin's 0.3 into the whole shaft); the band rows beside the shin read exactly 1 - s
+     (0.79486 / 0.42941 / 0.10104 as in [B2]; version 6 read 1 - 0.7 s = 0.856 / 0.601 / 0.371); the top row
+     0.16 is Leg 1.0; the top ring (rows 0.15 / 0.16, follow_ring "top") turns 20 deg under the 20 deg Leg turn
+     -> leg_follow_deg 0 (+-1e-6), gate ok (version 6: Leg 0.7 on the ring -> the blend 0.7 e^{i 20 deg} + 0.3
+     has the argument atan2(0.7 sin 20, 0.7 cos 20 + 0.3) = 14.03 deg -> follow 5.97 deg > 1, refused). The fit
+     is accepted; the parts' joints stay [Foot, ToeBase, Leg].
+     Body B = the default body with ``flat_boot(shaft=0.13)``: topline 0.13 k = 0.133068 -> collar +42.83 mm ->
+     split, but nothing stands above y_split + 0.06 = 0.150236 -> the ring is the shaft part's upper half: the
+     shaft part is yf > 0.110236 (rows 0.11 / 0.12 / 0.13 at 0.112596 / 0.122832 / 0.133068), its middle
+     (0.133068 + 0.110236) / 2 = 0.121652 -> rows 0.12 and 0.13, follow_ring "upper_half", ring_vertices > 0,
+     Leg 1.0 -> follow 0, gate ok and gating. ``flat_boot(shaft=0.105)``: topline 0.107478 -> collar +17.24 mm
+     -> split, yet its top row lies UNDER the band's top 0.110236 -> no shaft part vertex -> follow_ring None,
+     leg_follow_deg None, ring_vertices 0, gates.shaft_leg_follow_deg {value None, ok None, gating True} and the
+     fit is still accepted (FOLLOW_OPTIONAL: no measure is not a refusal). FOOTWEAR_FIT_VERSION 7,
+     FOLLOW_RING_MIN 3.
+(On 7b04e9f5 / 8efc6616 — fit version 6 — Body A's shaft carries Foot 0.3 above the band and its ring follows the
+Leg turn by 14 deg, not 20: [B7] fails on both numbers; the 0.13 boot's record has no ``follow_ring`` and its
+follow is a vacuous 0.0 over an empty ring.)
 """
 import json
 import math
@@ -117,8 +140,9 @@ def main() -> int:
     from app.core import footwear_insole, garment_footwear, glb_mesh
 
     # [B6]
-    check(ff.FOOTWEAR_FIT_VERSION == 6 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
-          and ff.SPLIT_MARGIN_M == 0.01 and ff.SHAFT_CLEAR_M == 0.006, "[B6] version 6, no boot gate, split constants")
+    check(ff.FOOTWEAR_FIT_VERSION == 7 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
+          and ff.SPLIT_MARGIN_M == 0.01 and ff.SHAFT_CLEAR_M == 0.006 and ff.FOLLOW_RING_MIN == 3
+          and ff.FOLLOW_OPTIONAL == ("shaft_leg_follow_deg",), "[B6] version 7, no boot gate, split constants")
     check(ff.SHAFT_GATES == {"shaft_push_p95_m": ("max", 0.015), "shaft_push_max_m": ("max", 0.030),
                              "shaft_inside_share": ("max", 0.01), "seam_gap_p95_mm": ("max", 2.0),
                              "seam_stretch_max": ("max", 1.5), "shaft_leg_follow_deg": ("max", 1.0)}
@@ -278,6 +302,59 @@ def main() -> int:
     fp_boot = {k_: v for k_, v in boot.foot_pose.items()}
     fp_clog = {k_: v for k_, v in clog.foot_pose.items()}
     check(fp_boot == fp_clog, "[B5] foot_pose of the boot == the clog's (the split changes no pose)")
+
+    # [B7] Body A: a shin with its own Foot share
+    check(sh.get("follow_ring") == "top", f"[B7] the 0.16 boot's follow ring is the top ring ({sh.get('follow_ring')})")
+    glb_a = fx.foot_body_glb(shin_foot_weight=0.3, leg_cell=0.01)
+    body_a = glb_mesh.body_arrays(glb_a)
+    fit_a = ff.fit_pair(insole_b, fx.shoe_garment(Pb, Fb), body_a, glb_mesh.joint_bind_matrices(glb_a))
+    ra = fit_a.record
+    check(fit_a.ok and near(ra["scale"]["k_m_per_unit"], k, 1e-9) and near(ra["sides"]["left"]["split"]["y_m"], y_split, 1e-7),
+          f"[B7] body A: accepted {fit_a.ok} {fit_a.reasons}, k and y_split as [B1]")
+    fa, sa = fit_a.parts["left"]["foot"], fit_a.parts["left"]["shaft"]
+    Pa = np.concatenate([fa.positions, sa.positions])
+    Wa = np.concatenate([fa.weights, sa.weights])
+    check(fa.joint_names == ["LeftFoot", "LeftToeBase", "LeftLeg"], f"[B7] body A joints {fa.joint_names}")
+    yfa = Pa[:, 1] + lift
+    fta = Wa[:, 0] + Wa[:, 1]
+    above_a = yfa > y_split + 0.02 + 1e-9
+    check(above_a.any() and fta[above_a].max() <= 1e-9,
+          f"[B7] body A: max Foot + ToeBase above the band {fta[above_a].max():.4f} (version 6: 0.3)")
+    wall_a = np.abs(Pa[:, 2] + 0.10) > 0.035
+    for raw in (0.08, 0.09, 0.10):
+        s = smoothstep((raw * 1.023599 - 0.070236) / 0.04)
+        sel = wall_a & (np.abs(yfa - raw * k) < 2e-4) & (Pa[:, 0] >= -0.03) & (Pa[:, 0] <= 0.03)
+        check(sel.any() and np.all(np.abs(fta[sel] - (1.0 - s)) <= 2e-4),
+              f"[B7] body A band row {raw} beside the shin: Foot + ToeBase {fta[sel].min():.5f}..{fta[sel].max():.5f} "
+              f"= 1 - s = {1 - s:.5f} (version 6: {1 - 0.7 * s:.3f})")
+    top_a = wall_a & (np.abs(yfa - 0.16 * k) < 2e-4) & (Pa[:, 0] < 0.032)
+    check(top_a.any() and Wa[top_a, 2].min() >= 1.0 - 1e-9, f"[B7] body A top row: Leg {Wa[top_a, 2].min():.6f}")
+    sha = ra["sides"]["left"]["shaft"]
+    ga = ra["gates"]["shaft_leg_follow_deg"]
+    check(sha["follow_ring"] == "top" and sha["ring_vertices"] > 0 and near(sha["leg_follow_deg"], 0.0, 1e-6)
+          and ga["ok"] is True and ga["gating"] is True,
+          f"[B7] body A follow {sha['leg_follow_deg']} deg over {sha['ring_vertices']} top-ring vertices (version 6: 5.97)")
+    # [B7] Body B: a low collar -> the shaft's upper half; a collar inside the band -> no measure
+    Pl, Fl = fx.flat_boot(shaft=0.13)
+    low = ff.fit_pair(footwear_insole.analyse_arrays(Pl, Fl), fx.shoe_garment(Pl, Fl), body, joints)
+    ls = low.record["sides"]["left"]
+    gl = low.record["gates"]["shaft_leg_follow_deg"]
+    check(low.ok and ls["split"]["is_boot"] is True and near(ls["split"]["collar_above_ankle_mm"], 42.83, 0.1),
+          f"[B7] 0.13 boot: ok {low.ok}, collar {ls['split']['collar_above_ankle_mm']} mm -> split")
+    check(ls["shaft"]["follow_ring"] == "upper_half" and ls["shaft"]["ring_vertices"] > 0
+          and near(ls["shaft"]["leg_follow_deg"], 0.0, 1e-6) and gl["ok"] is True and gl["gating"] is True,
+          f"[B7] 0.13 boot: follow {ls['shaft']['leg_follow_deg']} over the shaft's upper half "
+          f"({ls['shaft']['follow_ring']}, {ls['shaft']['ring_vertices']} vertices)")
+    Pn, Fn = fx.flat_boot(shaft=0.105)
+    none_ = ff.fit_pair(footwear_insole.analyse_arrays(Pn, Fn), fx.shoe_garment(Pn, Fn), body, joints)
+    ns = none_.record["sides"]["left"]
+    gn = none_.record["gates"]["shaft_leg_follow_deg"]
+    check(none_.ok and ns["split"]["is_boot"] is True and near(ns["split"]["collar_above_ankle_mm"], 17.24, 0.1),
+          f"[B7] 0.105 boot: ok {none_.ok} {none_.reasons}, collar {ns['split']['collar_above_ankle_mm']} mm -> split")
+    check(ns["shaft"]["follow_ring"] is None and ns["shaft"]["leg_follow_deg"] is None and ns["shaft"]["ring_vertices"] == 0
+          and gn["value"] is None and gn["ok"] is None and gn["gating"] is True
+          and none_.record["shaft"]["leg_follow_deg"] is None,
+          f"[B7] 0.105 boot: no ring -> follow None, ok None ({ns['shaft']['follow_ring']}, {gn})")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0

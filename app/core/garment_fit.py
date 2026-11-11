@@ -1586,9 +1586,10 @@ def clothing_weights(points, body: BodyMesh, *, skirt: bool,
     ``body.joint_names``; zero-weight slots point at joint 0.
 
     ``columns`` (skin indices; boots spec 2026-11-11 § 6.3) restricts the donor weights of step 1 to those bones and
-    renormalises — a boot shaft takes only its side's Foot / Leg / UpLeg, never a stray Hips or other-leg donor of
-    the IDW; the fallback donors are then the body vertices weighted on those columns and step 3 (extension bones)
-    is skipped. ``None`` = the default behaviour, unchanged.
+    renormalises — a boot shaft takes only its side's Leg / UpLeg (fit version 7; the Foot share of the ankle band is
+    the foot part's own term), never a stray Hips, Foot or other-leg donor of the IDW; the fallback donors are then
+    the body vertices weighted on those columns and step 3 (extension bones) is skipped. ``None`` = the default
+    behaviour, unchanged.
 
     1. Inverse distance over the ``CLOTHING_IDW_K`` (8) nearest rigged body vertices, ``w = 1 / max(d, 1e-4)``
        (spike ``fit_dress.py``), of the body weights RESTRICTED to the rig-contract bones and renormalised. A point

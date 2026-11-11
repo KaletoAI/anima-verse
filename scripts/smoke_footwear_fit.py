@@ -168,7 +168,7 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 6 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+    check(ff.FOOTWEAR_FIT_VERSION == 7 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
           and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
     check(ff.FIT_GATES == {"ball_placement_mm": ("max", 3.0), "lift_asymmetry_mm": ("max", 10.0),
@@ -349,8 +349,8 @@ def main() -> int:
               f"[F11] ok {fit_hu.ok}, reasons {fit_hu.reasons}, foot_pose root lift {fit_hu.foot_pose.get('root_lift_m')}")
 
     # [F12] the version and the two band constants ([F1]-[F8] above are the unchanged regression)
-    check(ff.FOOTWEAR_FIT_VERSION == 6 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
-          "[F12] FOOTWEAR_FIT_VERSION 6, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
+    check(ff.FOOTWEAR_FIT_VERSION == 7 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
+          "[F12] FOOTWEAR_FIT_VERSION 7, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0
