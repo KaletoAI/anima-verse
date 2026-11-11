@@ -1376,7 +1376,22 @@ def cached_failure(character_name: str, item_id: str, *,
     except ValueError:
         return None
     base = base_body.current_base(character_name, profile=profile)
-    return gs.chain_failure(character_name, item_id, fsig, base_model_sha=base[1] if base else "")
+    failure = gs.chain_failure(character_name, item_id, fsig, base_model_sha=base[1] if base else "")
+    if failure is not None:
+        return failure
+    # Footwear: the source is ONE per item, whoever wears it, so a refused
+    # source step blocks every wearer's automatic run — not only the wearer
+    # whose run recorded it (``footwear_source.refused_step``).
+    try:
+        if _item(character_name, item_id)[1] == _footwear():
+            from app.core import footwear_source
+            refused = footwear_source.refused_step(item_id)
+            if refused is not None:
+                return {"item_id": item_id, "fsig": fsig, "step": refused["step"], "error": refused["error"],
+                        "source_refused": True, "ssig": refused["ssig"]}
+    except ValueError:
+        return None
+    return None
 
 
 def _clothing() -> str:
@@ -1635,8 +1650,13 @@ class _Job:
     """One queued run of a character's worker (``_queues``)."""
 
     def __init__(self, item_id: str, steps: Union[None, str, Iterable[str]], view: Optional[str],
-                 force: bool):
+                 force: bool, automatic: bool = False):
         self.item_id, self.steps, self.view, self.force = item_id, steps, view, force
+        #: Queued by a trigger (``enqueue_garment`` / ``run_queued``), not by a
+        #: click: re-checked against ``cached_failure`` when it STARTS, because
+        #: the failure it must honour may have been recorded by the run it
+        #: waited behind (Task 21 fix round).
+        self.automatic = automatic
         self.done = threading.Event()
         self.result: Dict[str, Any] = {}
 
@@ -1694,8 +1714,18 @@ def _worker(character_name: str) -> None:
             return
         error: Optional[str] = None
         try:
-            job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
-                                     force=job.force)
+            failure = cached_failure(character_name, job.item_id) if job.automatic else None
+            if failure is not None:
+                # The run this job waited behind refused the same input: an
+                # automatic run never spends the chain on it again.
+                logger.info("Garment run %s/%s skipped: %s refused for this input (%s) — waits for an"
+                            " explicit run", character_name, job.item_id, failure.get("step"),
+                            str(failure.get("error") or "")[:120])
+                job.result = {"ok": False, "fsig": failure.get("fsig"), "step": failure.get("step"),
+                              "error": failure.get("error"), "cached": True, "ran": []}
+            else:
+                job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
+                                         force=job.force)
         except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
             logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
             error = str(e) or type(e).__name__
@@ -1783,7 +1813,7 @@ def enqueue_garment(character_name: str, item_id: str) -> "_Job":
         for job in queue:
             if job.item_id == item_id and job.plain:
                 return job
-        job = _Job(item_id, None, None, False)
+        job = _Job(item_id, None, None, False, automatic=True)
         queue.append(job)
         if not gs.status(character_name, item_id).get("running_step"):
             gs.start(character_name, item_id, QUEUED)

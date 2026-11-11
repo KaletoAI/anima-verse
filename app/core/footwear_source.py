@@ -54,7 +54,13 @@ from app.core.log import get_logger
 logger = get_logger("footwear_source")
 
 #: Bumped when the source steps change what they produce (part of ``ssig``).
-FOOTWEAR_SOURCE_VERSION = 1
+#: 2 (Task 21 fix round, 2026-11-11): an ``empty`` step recorded under the
+#: pre-5ffbe762 rule — the item image accepted as the empty shoe
+#: (``skipped``, "already empty") — is invalid: the edit always runs since
+#: that fix, and a source whose ``empty`` was skipped fed the mesher a 3/4
+#: view (every mesh of it failed the side-silhouette gate). The new ssig
+#: makes those folders unreachable; the GC removes them as usual.
+FOOTWEAR_SOURCE_VERSION = 2
 #: Long side below which the item image goes through the upscale occasion.
 MIN_SIDE = 1024
 #: Image-edit attempts of the ``empty`` step before it is refused.
@@ -214,6 +220,36 @@ def step_record(item_id: str, ssig: str, step: str) -> Dict[str, Any]:
     """The record entry of ``step`` under ``ssig``, {} without one."""
     entry = _read(source_dir(item_id, ssig))["steps"].get(step)
     return entry if isinstance(entry, dict) else {}
+
+
+def refused_step(item_id: str, ssig: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The first item step of the CURRENT source (``ssig`` None = ``current_ssig``)
+    whose last run was refused or failed — ``{ssig, step, error, failure}`` —
+    or None. ``LOAD`` failures (busy / the media switch) do not count: they
+    retry. What an AUTOMATIC trigger (equip, ``resolve_mesh_items``, any
+    ``garments.run_queued`` / ``enqueue_garment`` path) honours for every
+    wearer alike — the source is one per item — so a refused mesh is never
+    meshed again until an explicit Run / Regenerate from the Wardrobe
+    (``garments.cached_failure``; Task 21 fix round: the clone re-spent two
+    mesher jobs on a refused cut-out through a run the equip had queued)."""
+    try:
+        sig = ssig or current_ssig(item_id)
+        steps = _read(source_dir(item_id, sig))["steps"]
+    except (ValueError, OSError):
+        return None
+    for step in ITEM_STEPS:
+        entry = steps.get(step)
+        if not isinstance(entry, dict) or entry.get("accepted") is not False:
+            continue
+        failure = str(entry.get("failure") or GATE)
+        if failure == LOAD:
+            continue
+        error = str(entry.get("error") or "")
+        if not error:
+            reasons = (entry.get("gates") or {}).get("reasons") if isinstance(entry.get("gates"), dict) else None
+            error = "; ".join(str(r) for r in reasons) if reasons else f"{step} refused"
+        return {"ssig": sig, "step": step, "error": error, "failure": failure}
+    return None
 
 
 def step_done(item_id: str, ssig: str, step: str) -> bool:

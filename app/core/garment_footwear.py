@@ -880,6 +880,11 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
         if record is not None:
             failed = {"step": record.get("step"), "error": record.get("error"), "gates": None,
                       "failed_at": record.get("failed_at")}
+        elif footwear_source.refused_step(item_id) is not None:
+            # The shoe source is one per item: a refusal another wearer's run recorded holds THIS wearer's
+            # automatic runs back too (``garments.cached_failure``), and the chip says so.
+            refused = footwear_source.refused_step(item_id)
+            failed = {"step": refused["step"], "error": refused["error"], "gates": None, "failed_at": None}
     return {
         "item_id": item_id, "kind": KIND, "method": "shoe", "method_source": "world",
         "description": str(item.get("prompt_fragment") or ""), "fsig": fsig, "ssig": shown,

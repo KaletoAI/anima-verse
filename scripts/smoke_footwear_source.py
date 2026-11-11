@@ -91,7 +91,7 @@ Expected, by hand:
      ssig_for(W, 1) != old; upscaled/empty/cutout copied (bytes equal) with copied_from = old ssig, no
      mesh record in the new folder; the next run_source -> mesh runs (exactly 1 mesher call, 0 upscale,
      0 edit) and the two boxes' insole is refused again -> {ok False, ssig new, ran ["mesh"]}.
-[S7] ssig_for(A, 0) == md5(json.dumps({"image": sha256(A file), "version": 1, "seed": 0},
+[S7] ssig_for(A, 0) == md5(json.dumps({"image": sha256(A file), "version": 2, "seed": 0},
      sort_keys=True))[:12]; current(A) == {"ssig": that, "seed": 0} before any regenerate.
 [S8] anti-goal: every item image file's sha256 and mtime_ns are unchanged after S1-S6.
 [S9] item_dir("../evil") -> ValueError (safe_item_id); item_dir(A) lies under root().
@@ -309,14 +309,14 @@ def main():
             from app.core import footwear_source as fs
 
             print("[S7] ssig")
-            want = hashlib.md5(json.dumps({"image": before["shoe_a"][0], "version": 1, "seed": 0},
+            want = hashlib.md5(json.dumps({"image": before["shoe_a"][0], "version": 2, "seed": 0},
                                           sort_keys=True).encode()).hexdigest()[:12]
             check("ssig_for(A, 0)", fs.ssig_for("shoe_a", 0), want)
             check("current(A)", fs.current("shoe_a"), {"ssig": want, "seed": 0})
             check("current_ssig(A)", fs.current_ssig("shoe_a"), want)
             check("constants", (fs.FOOTWEAR_SOURCE_VERSION, fs.MIN_SIDE, fs.EMPTY_ATTEMPTS, fs.EDIT_OCCASION,
                                 fs.MESH_OCCASION, fs.USE_CASE, fs.TARGET_TRIS, fs.FACE_NUM, fs.ITEM_STEPS),
-                  (1, 1024, 2, "footwear_empty", "mesh_footwear", "footwear_source", 30000, 100000,
+                  (2, 1024, 2, "footwear_empty", "mesh_footwear", "footwear_source", 30000, 100000,
                    ("source", "empty", "cutout", "mesh", "insole")))
             check("EMPTY_PROMPT", fs.EMPTY_PROMPT,
                   "the same shoe, alone and empty, seen exactly from the side, "

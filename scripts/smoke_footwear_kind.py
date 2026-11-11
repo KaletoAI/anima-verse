@@ -40,8 +40,9 @@ and wears heels + dress; Mira holds heels.
      the cut applied and gated).
 [K2] Footwear fsig — no base in it.
      IMG = sha256 of the heels image bytes.
-     ssig = md5(json.dumps({"image": IMG, "version": 1, "seed": 0},
-     sort_keys=True))[:12] (FOOTWEAR_SOURCE_VERSION 1, seed 0 = never
+     ssig = md5(json.dumps({"image": IMG, "version": 2, "seed": 0},
+     sort_keys=True))[:12] (FOOTWEAR_SOURCE_VERSION 2 since the Task 21 fix
+     round — a pre-fix skipped ``empty`` is unreachable; seed 0 = never
      regenerated) == footwear_source.current_ssig(heels).
      fsig = md5(json.dumps({"kind": "footwear", "ssig": ssig,
      "insole_version": 1, "width_cap": 1.1, "fit_version": 3},
@@ -241,7 +242,7 @@ def main() -> int:
         print("[K2] footwear fsig")
         from app.core import footwear_source, garment_footwear
         img = hashlib.sha256(image_bytes).hexdigest()
-        ssig = md5_12({"image": img, "version": 1, "seed": 0})
+        ssig = md5_12({"image": img, "version": 2, "seed": 0})
         check("current_ssig", footwear_source.current_ssig(heels), ssig)
 
         def fsig_by_hand(cap):
