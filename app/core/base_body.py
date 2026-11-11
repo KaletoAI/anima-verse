@@ -1171,18 +1171,38 @@ def _outfit_start(character_name: str, signature: str, stage: str) -> None:
         _outfit_running[(character_name, stage)] = signature
 
 
-def _outfit_end(character_name: str, signature: str, stage: str, error: Optional[str]) -> None:
+def _outfit_end(character_name: str, signature: str, stage: str, error: Optional[str], *,
+                interrupted: bool = False) -> None:
     """End a stage: a failure is stored for the signature; a success clears
-    a failure of the same stage (a model success clears every failure)."""
+    a failure of the same stage (a model success clears every failure).
+    ``interrupted`` (load or the media switch stopped the stage): the stage
+    ends without touching any failure record — neither stored nor cleared."""
     from app.core.timeutils import utc_now
     with _status_lock:
         if _outfit_running.get((character_name, stage)) == signature:
             _outfit_running.pop((character_name, stage), None)
+        if interrupted and error is None:
+            return
         key = (character_name, signature)
         if error is not None:
             _outfit_failed[key] = {"stage": stage, "error": error, "failed_at": utc_now()}
         elif stage == "model" or (_outfit_failed.get(key) or {}).get("stage") == stage:
             _outfit_failed.pop(key, None)
+
+
+def _is_load(e: BaseException) -> bool:
+    """Whether ``e`` (or an exception in its ``__cause__`` / ``__context__``
+    chain) is load or the media switch: ``BackendBusyError`` /
+    ``MediaGenerationDisabled`` — what a ``raise_load`` caller gets back
+    instead of a failure."""
+    from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
+    seen = set()
+    while e is not None and id(e) not in seen:
+        if isinstance(e, (BackendBusyError, MediaGenerationDisabled)):
+            return True
+        seen.add(id(e))
+        e = e.__cause__ or e.__context__
+    return False
 
 
 def _ref_sidecar(path: Optional[Path]) -> Dict[str, Any]:
@@ -1911,9 +1931,13 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                 pieces: Optional[Dict[str, str]], items: Optional[list], profile: Dict[str, Any],
                 front: Path, base_views: Dict[str, Optional[Path]], refs_dir: Path,
                 size: Tuple[int, int], mesh_items: Optional[Dict[str, Any]] = None,
-                texture: Optional[Dict[str, Any]] = None) -> Tuple[Optional[Path], Optional[str]]:
+                texture: Optional[Dict[str, Any]] = None,
+                raise_load: bool = False) -> Tuple[Optional[Path], Optional[str]]:
     """A dressed back or side view in two steps. ``(stored path, warning)``;
-    raises ``OutfitError`` with the step that failed. The view follows the
+    raises ``OutfitError`` with the step that failed. ``raise_load``: the
+    draft and the fit renders raise ``BackendBusyError`` /
+    ``MediaGenerationDisabled`` instead of ending in None
+    (``generate_dressed_images``). The view follows the
     dressed front, own-mesh pieces included: what the front left out (its
     ``mesh_items``) is not in the draft's reference either — no outfit text
     is sent — and the record goes into the draft's and the fit's sidecar.
@@ -1943,6 +1967,8 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     drafts = refs_dir / DRAFT_DIR
     drafts.mkdir(exist_ok=True)
     common = _dress_common(view, pieces=pieces, items=items, profile=profile, size=size)
+    if raise_load:
+        common["raise_load"] = True
     draft = render_draft(
         character_name, view, stem=drafts / f"{kind}_{signature}", front=front, refs_dir=refs_dir,
         prompt=draft_prompt(character_name, view, profile=profile), profile=profile, common=common,
@@ -2535,7 +2561,7 @@ def texture_users(character_name: str) -> Dict[str, List[str]]:
 
 def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, str]],
                             items: Optional[list], signature: str, force: bool = False,
-                            view: Optional[str] = None) -> Dict[str, Optional[str]]:
+                            view: Optional[str] = None, raise_load: bool = False) -> Dict[str, Optional[str]]:
     """The outfit's mesh-input images on the base-body pipeline. Blocking —
     called from ``model_refs.generate_model_ref_images`` (kind ``tpose``),
     serial per character on its tpose lane.
@@ -2589,7 +2615,13 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
     also their ``dress_text``).
 
     Missing base images: the status error ``BASE_IMAGES_MISSING``, nothing
-    rendered. Returns ``{kind: path | None}`` for every view it produced."""
+    rendered. Returns ``{kind: path | None}`` for every view it produced.
+
+    ``raise_load`` (the improvements queue's ``outfit_rebuild``): a busy
+    backend or the media switch off (``BackendBusyError`` /
+    ``MediaGenerationDisabled``) during a render is RAISED instead of
+    becoming a view error, and the pass ends without a failure record —
+    load is busy, never a failure. Every other caller keeps the error."""
     import shutil
     from app.core import expression_regen
     from app.core.model_refs import (_tpose_size, find_ref_image, get_model_refs_dir, mesh_items_token,
@@ -2619,6 +2651,8 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
     mesh_profile["equipped_items"] = list(items or [])
     results: Dict[str, Optional[str]] = {}
     errors = []
+    load_kwargs = {"raise_load": True} if raise_load else {}
+    interrupted = False
     _outfit_start(character_name, signature, "images")
     try:
         # Own-mesh pieces: the front settles them (their chains run first);
@@ -2693,10 +2727,13 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
                                            "base_image_sha256": file_sha256(base_views["front"]),
                                            **mesh_extra, "texture_signature": tsig,
                                            "dress_text": texts.get("front", "")},
-                            character_loras=True)
+                            character_loras=True, **load_kwargs)
                     if path is None:
                         errors.append("Dressed front edit failed")
                 except Exception as e:  # noqa: BLE001 — one view never kills the pass
+                    if raise_load and _is_load(e):
+                        interrupted = True
+                        raise
                     path = None
                     errors.append(f"Dressed front edit failed: {e}")
                     logger.warning("Dressed %s front (%s) failed: %s", character_name, signature, e)
@@ -2712,10 +2749,14 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
                             character_name, v, signature=signature, bsig=bsig, pieces=pieces, items=items,
                             profile=mesh_profile, front=front, base_views=base_views, refs_dir=refs_dir,
                             size=(width, height), mesh_items=_ref_sidecar(front).get("mesh_items") or None,
-                            texture={"texture_signature": tsig, "dress_text": texts.get(v, "")})
+                            texture={"texture_signature": tsig, "dress_text": texts.get(v, "")},
+                            **load_kwargs)
                         if warning:
                             logger.warning("Dressed %s %s (%s): %s", v, character_name, signature, warning)
                     except Exception as e:  # noqa: BLE001 — the front stays
+                        if raise_load and _is_load(e):
+                            interrupted = True
+                            raise
                         errors.append(str(e) if isinstance(e, OutfitError) else f"Dressed {v} edit failed: {e}")
                         logger.warning("Dressed %s %s (%s) failed: %s", character_name, v, signature, e)
                 results[_kind(v)] = str(path) if path else None
@@ -2723,7 +2764,8 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
             if rendered:
                 _store_texture_views(character_name, signature, tsig, rendered, texts)
     finally:
-        _outfit_end(character_name, signature, "images", errors[0] if errors else None)
+        _outfit_end(character_name, signature, "images", errors[0] if errors else None,
+                    interrupted=interrupted)
     logger.info("Dressed images %s (%s on %s): %s", character_name, signature, bsig,
                 {k: bool(p) for k, p in results.items()})
     return results

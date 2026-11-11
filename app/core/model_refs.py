@@ -874,7 +874,8 @@ def generate_model_ref_images(character_name: str,
                               pieces: Optional[Dict[str, str]] = None,
                               items: Optional[list] = None,
                               signature: Optional[str] = None,
-                              tpose_view: Optional[str] = None
+                              tpose_view: Optional[str] = None,
+                              raise_load: bool = False
                               ) -> Dict[str, Optional[str]]:
     """Render the reference images sequentially (the image queue serializes
     per backend anyway). Blocking — call from a worker thread.
@@ -909,7 +910,9 @@ def generate_model_ref_images(character_name: str,
     ``base_body.generate_dressed_images`` instead: the dressed front and
     back (and the sides with ``base_body.dressed_side_views``) into the same
     files (``tpose_view`` "main" = front, "back" = the back alone; a side
-    view while the sides are off is a ValueError there)."""
+    view while the sides are off is a ValueError there). ``raise_load`` is
+    handed to that call only (``generate_dressed_images``: load raised, not
+    recorded as a failure); every other render keeps None on failure."""
     from app.core.expression_regen import render_character_image
     from app.core.expression_pose_maps import default_pose_prompt
 
@@ -969,7 +972,8 @@ def generate_model_ref_images(character_name: str,
         if is_base_pipeline(character_name):
             base_results = generate_dressed_images(
                 character_name, pieces=pieces, items=items, signature=signature, force=force,
-                view=None if tpose_view is None else "front" if tpose_view == "main" else tpose_view)
+                view=None if tpose_view is None else "front" if tpose_view == "main" else tpose_view,
+                **({"raise_load": True} if raise_load else {}))
             kinds = tuple(k for k in kinds if k != "tpose")
             if not kinds:
                 return base_results
@@ -1252,7 +1256,7 @@ def schedule_outfit_render(character_name: str) -> None:
 def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
                 tpose_view: Optional[str] = None, force: bool = True,
                 blocking: bool = False, pieces=None, items=None, signature=None,
-                face_render: Optional[dict] = None) -> None:
+                face_render: Optional[dict] = None, raise_load: bool = False) -> None:
     """Manual trigger (UI button): fires the render immediately — no debounce,
     force=True so a fresh render replaces the cached one of the current
     combination. ``kinds`` narrows to specific images (each tab passes its
@@ -1263,7 +1267,9 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
     pass; ``force=False`` then reuses cached views. The optional outfit triple
     captures its intended signature and superseded requests are skipped.
     ``face_render`` (only with ``tpose_view="face"``) carries the image
-    dialog's one-off choices for this run — see ``generate_face_view``."""
+    dialog's one-off choices for this run — see ``generate_face_view``.
+    ``raise_load`` (blocking only): load during the base-body dressed views
+    is raised to the caller (``generate_model_ref_images``)."""
     if blocking:
         selected = tuple(kinds) if kinds is not None else tuple(
             k for k, enabled in get_auto_kinds(character_name).items() if enabled)
@@ -1279,7 +1285,8 @@ def trigger_now(character_name: str, kinds: Optional[tuple] = None, *,
             try:
                 generate_model_ref_images(character_name, kinds=selected, force=force,
                                           tpose_view=tpose_view, pieces=pieces, items=items,
-                                          signature=signature)
+                                          signature=signature,
+                                          **({"raise_load": True} if raise_load else {}))
             finally:
                 with _lock:
                     _running.pop(key, None)

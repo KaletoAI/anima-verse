@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.improvements.base import (Candidate, CandidateBusy, CandidateRefused, ImprovementType,
                                         ParamField)
 from app.core.improvements.types import subjects
+from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
 
 SCOPE_WORN, SCOPE_SAVED = "worn", "saved"
 #: The occasion of the dressed front; the other views add their
@@ -111,17 +112,20 @@ def _render_views(name: str, sig: str) -> None:
     worn combination through its T-pose lane (``trigger_now`` blocking),
     another one the outfit batch's way (``generate_model_ref_images`` with
     the stored model's manifest — ``trigger_now`` renders the worn outfit
-    only)."""
+    only). Both opt in to ``raise_load``: a busy backend or the media switch
+    comes back as the typed exception (``apply`` makes it busy), never as a
+    view failure."""
     from app.core import model3d, model_refs
     pieces, items, worn = model_refs.current_outfit_state(name)
     if worn == sig:
         model_refs.trigger_now(name, ("tpose",), force=False, blocking=True, pieces=pieces, items=items,
-                               signature=sig)
+                               signature=sig, raise_load=True)
         return
     manifest = model3d._stored_manifest(name, sig) or {}
     model_refs.generate_model_ref_images(name, kinds=("tpose",), force=False,
                                          pieces=dict(manifest.get("pieces") or {}),
-                                         items=list(manifest.get("items") or []), signature=sig)
+                                         items=list(manifest.get("items") or []), signature=sig,
+                                         raise_load=True)
 
 
 class OutfitRebuild(ImprovementType):
@@ -200,7 +204,10 @@ class OutfitRebuild(ImprovementType):
             model3d._generating.add(name)
         try:
             if cost.get("views_needed"):
-                _render_views(name, sig)
+                try:
+                    _render_views(name, sig)
+                except (BackendBusyError, MediaGenerationDisabled) as e:
+                    raise CandidateBusy(f"views — {e}") from e
                 bsig = base_body.base_signature(name)
                 missing = [v for v in base_body.dressed_views()
                            if base_body.dressed_image(name, v, sig, bsig) is None]

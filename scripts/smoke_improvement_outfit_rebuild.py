@@ -63,7 +63,36 @@ table (front 1 + 2 per other dressed view; retexture repaint = CPU):
      one trigger_now; the build is never called (it would render the views
      again in mesh mode, or repaint from a partial set).
 
+[B9] (ruling 9a) load during the dressed views is busy, never a failure. The
+     REAL render path: ``model_refs.trigger_now`` (blocking) →
+     ``generate_model_ref_images`` → ``base_body.generate_dressed_images`` →
+     ``expression_regen.render_character_image`` → the service's string
+     facade ``generate_from_input`` (a real ``ImageService`` with no
+     instances, switched on by hand) → the routing, where a fake backend
+     records the occasion and raises ``BackendBusyError``. Views needed, the
+     model stale (cost 3), only the build recorder stays.
+     [B9a] through the engine → {"busy": …}, NOT "refused"; the step
+     pending, attempts 0, refused 0; ONE routed render, occasion
+     "outfit_front" (the front is the first view; the pass stops there); the
+     build never called; ``base_body._outfit_failed`` holds nothing for
+     (Kira, sig), outfit_info still "stale" (the candidate stays listed),
+     the images stage no longer running.
+     [B9b] the media switch off at the facade (``media_generation_enabled``
+     False) → apply raises CandidateBusy, no render reached the routing,
+     nothing recorded as a failure.
+     [B9c] the saved set "Evening" (sig2, B7) stale with its views dropped,
+     scope saved → the non-worn path (``generate_model_ref_images``) →
+     CandidateBusy, one routed render "outfit_front", no failure recorded.
+     [B9d] the worn front current, only the back missing (cost still 3:
+     ``rebuild_cost`` counts the whole view set, an upper bound) → the back's
+     draft (``_dress_view`` → ``render_draft``) meets the
+     busy backend → CandidateBusy, one routed render "outfit_back_draft", no
+     failure recorded, the build never called.
+
 Fails on 505c3076: ModuleNotFoundError — app.core.improvements.types.outfit_rebuild.
+Fails on f4c5dc6d (before fix 9a): [B9a] the facade answers the busy backend
+with an "Error: …" string, the front edit becomes "Dressed front edit
+failed", ``_outfit_failed`` records it and the engine reports "refused".
 """
 import hashlib
 import json
@@ -349,6 +378,80 @@ def main() -> int:
             check("the error names the views", str(e).startswith("views front, back — "), True)
             check("render once, no build", CALLS, [("trigger_now", ("tpose",), True, False, sig)])
             RENDER["write"] = True
+
+        # --- [B9] -------------------------------------------------------------------
+        print("[B9] load during the dressed views is busy, never a failure (ruling 9a)")
+        from app.imagegen import service
+        from app.imagegen.base import BackendBusyError
+        svc = service.ImageService({})
+        svc.enabled = True          # no instances configured: the routing below stands in for the backend
+        routed = []
+
+        def busy_backend(occasion, render, **kw):
+            routed.append(occasion)
+            raise BackendBusyError("gpu busy")
+
+        def failure(s):
+            with base_body._status_lock:
+                return (base_body._outfit_failed.get(("Kira", s)),
+                        base_body._outfit_running.get(("Kira", "images")))
+
+        CALLS.clear()
+        drop_views(sig)
+        write_model(sig, pieces)
+        with patch.object(model3d, "generate_for_current_outfit", build), \
+             patch("app.imagegen.routing.explain_occasion", explain), \
+             patch("app.imagegen.service.get_image_service", lambda: svc), \
+             patch("app.imagegen.routing.run_routed", busy_backend):
+            check("views needed: cost 3", [(c.key, c.hub_jobs) for c in cands()], [(key, 3)])
+            print("[B9a] a busy backend through the engine")
+            entry = store.create(typ.id, "Rebuild", typ.validate({}), "one_shot")["id"]
+            check("scan", engine.scan(entry), {"added": 1, "closed": 0})
+            result = run_step(entry, key)
+            check("busy, not refused", list(result.keys()), ["busy"])
+            step = store.list_steps(entry)[0]
+            check("step pending, no attempt, not refused",
+                  (step["status"], step["attempts"], step["refused"]), ("pending", 0, 0))
+            check("one routed render, the dressed front", routed, ["outfit_front"])
+            check("the build never called", CALLS, [])
+            check("no failure recorded, the stage ended", failure(sig), (None, None))
+            check("still a candidate", [c.key for c in cands()], [key])
+            store.delete(entry)
+
+            print("[B9b] the media switch off")
+            del routed[:]
+            with patch("app.imagegen.service.media_generation_enabled", lambda: False):
+                raises("media off → CandidateBusy", lambda: typ.apply(cands()[0], typ.validate({}), "t"),
+                       CandidateBusy)
+            check("no render reached the routing", routed, [])
+            check("no failure recorded", failure(sig), (None, None))
+
+            print("[B9c] a saved set (the non-worn path)")
+            del routed[:]
+            write_views(sig, pieces)
+            write_model(sig, pieces, base_signature=bsig, base_model_sha256=base_sha)
+            drop_views(sig2)
+            write_model(sig2, {"neck": scarf})
+            found = cands(scope="saved")
+            check("saved scope: Evening, views needed", [(c.key, c.hub_jobs) for c in found],
+                  [(f"outfit:Kira:{sig2}", 3)])
+            raises("busy → CandidateBusy", lambda: typ.apply(found[0], typ.validate({"scope": "saved"}), "t"),
+                   CandidateBusy)
+            check("one routed render, the dressed front", routed, ["outfit_front"])
+            check("no failure recorded", failure(sig2), (None, None))
+            check("the build never called", CALLS, [])
+
+            print("[B9d] the back's draft meets the busy backend")
+            del routed[:]
+            for p in refs.glob(f"tpose_back_{sig}.*"):
+                p.unlink()
+            write_model(sig, pieces)
+            found = cands()
+            check("worn: only the back missing, cost 3 (whole set)", [(c.key, c.hub_jobs) for c in found], [(key, 3)])
+            raises("busy → CandidateBusy", lambda: typ.apply(found[0], typ.validate({}), "t"), CandidateBusy)
+            check("one routed render, the back's draft", routed, ["outfit_back_draft"])
+            check("no failure recorded", failure(sig), (None, None))
+            check("the build never called", CALLS, [])
 
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))
     return 1 if FAILS else 0
