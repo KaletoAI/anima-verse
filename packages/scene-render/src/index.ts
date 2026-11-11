@@ -197,3 +197,13 @@ export type { FootPose, FootContact, FootSide } from './footPose'
 export { GROUND_SAMPLE_FRAMES, GROUND_SAMPLE_VERTICES, SOLE_LEVEL_M, groundOffsetOf, soleGroundOffsetOf,
   clipGroundOffset, measureClipGround } from './clipGround'
 export type { ClipGroundOptions } from './clipGround'
+
+export { BAND_LO_CM, BAND_HI_CM, VY_LO_CM_S, VY_HI_CM_S, GROUND_PCT, MIN_WEIGHT, FULL, CONTACT_POINTS, ramp,
+  groundHeights, contactWeights, footLockPath, maxPlantedDrift } from './footLock'
+export type { Vec3, Tracks } from './footLock'
+
+export { qrot, rotationBetween, twoBoneIk } from './twoBoneIk'
+export type { Quat } from './twoBoneIk'
+
+export { PLANT_FADE_S, PLANT_FALLBACK_FPS, plantSampleTimes, fadeRuns, levelTurn, plantFootPose } from './footPlant'
+export type { FootPlantOptions } from './footPlant'

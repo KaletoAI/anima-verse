@@ -19,9 +19,9 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   installSkinnedNormalCorrection, createSecondaryMotion, bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
   restCorrections, restPoseOf, rigHipsHeight,
-  standingHipsRef, clipHeightOffsetM, createCollisionOverlay, collidingGarmentMeshes,
+  standingHipsRef, clipHeightOffsetM, clipHeightGroup, createCollisionOverlay, collidingGarmentMeshes,
   createGarmentCollision, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
-  footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset } from '@anima/scene-render'
+  footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision } from '@anima/scene-render'
 import { applyViewerTexture } from './modelTexture'
@@ -1197,25 +1197,29 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           // relative to the rest the corrections play, not to the bind
           // (footPose.ts, `transplantedRestPose`).
           const rest = shod ? restPoseOf(THREE, object) : null
-          const bound = applyFootPose(THREE, bindRelativeClip(THREE, clip, corrections), shod, rest,
+          const bare = bindRelativeClip(THREE, clip, corrections)
+          let bound = applyFootPose(THREE, bare, shod, rest,
             rest ? transplantedRestPose(THREE, donor, rest, corrections) : null)
           if (clipGroup) {
             const entry = (await clipIndex()).clips.find((c) => c.url === clipUrl)
             stance = await measureStance(clipHipsMedian, entry?.height_offsets_cm)
             if (disposed) return
             if (stance && shod && clipGroup === 'ground') {
-              // THE SHOD GROUND (scene-render `clipGround.ts`, the shared
-              // rule the 3D client's terrain drop uses too): the sole of a
-              // rigid shoe sinks wherever the clip bends the knees, so the
-              // clip's offset is measured on the sole contacts, with the
-              // placement so far as the root term, on a clone the mixer may
-              // pose — under the same up-axis fix as the figure.
+              // THE SHOD FOOT PLANT, then THE SHOD GROUND (scene-render
+              // `footPlant.ts` / `clipGround.ts`, the shared rules the 3D
+              // client's clip paths use too): per stance frame the sole is
+              // levelled, its forepart held and its lowest contact put on the
+              // floor by the leg; then the clip's residual offset is measured
+              // on the sole contacts, with the placement so far as the root
+              // term — both on a clone the mixer may pose, under the same
+              // up-axis fix as the figure. The model is in metres.
               const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
               if (disposed) return
               const holder = new THREE.Group()
               holder.rotation.copy(pivot.rotation)
               const probe = skclone(object) as Object3D
               holder.add(probe)
+              bound = plantFootPose(THREE, bound, bare, probe, shod, { rootY: stance.y, unitsPerCm: 0.01 })
               measureClipGround(THREE, [bound], probe, { footPose: shod, rootY: stance.y })
               stance.y -= clipGroundOffset(bound)
             }
@@ -1950,8 +1954,22 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 const donor = await donorRest()
                 const corrections = restCorrections(THREE, donor, inst)
                 const restFig = shodFig ? restPoseOf(THREE, inst) : null
-                const bound = applyFootPose(THREE, bindRelativeClip(THREE, anim.clip, corrections),
+                const bareFig = bindRelativeClip(THREE, anim.clip, corrections)
+                let bound = applyFootPose(THREE, bareFig,
                   shodFig, restFig, restFig ? transplantedRestPose(THREE, donor, restFig, corrections) : null)
+                if (shodFig && clipHeightGroup(o.surfaceGroup) === 'ground') {
+                  // The shod foot plant (scene-render `footPlant.ts`), for a
+                  // marker on the ground: the floor is the marker's surface,
+                  // the figure stands `−hipsDrop + offsets + lift` over it.
+                  const { clone: skclone } = await import('three/examples/jsm/utils/SkeletonUtils.js')
+                  if (disposed || figTokenRef.current !== o.token) return
+                  const probe = skclone(inst) as Object3D
+                  bound = plantFootPose(THREE, bound, bareFig, probe, shodFig, {
+                    rootY: -hipsDrop + clipHeightOffsetM(anim.heightOffsets, o.surfaceGroup, o.figH)
+                      + footPoseLiftM(shodFig, o.surfaceGroup, o.figH),
+                    unitsPerCm: 0.01,
+                  })
+                }
                 if (disposed || figTokenRef.current !== o.token) return
                 const mixer = new THREE.AnimationMixer(inst)
                 mixer.clipAction(bound).play()

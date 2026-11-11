@@ -14,10 +14,14 @@ async function modules() {
   if (!loaded) loaded = (async () => {
     const dir = await mkdtemp(join(root, 'client3d/scripts/.smoke-'));
     try {
-      const entry = ['scene/footLock', 'scene/legPin', 'scene/bridgeLift',
+      // `footLock` and `twoBoneIk` live in the shared package since the
+      // footwear strand (both renderers plant shod feet with them).
+      const entry = [...['footLock', 'twoBoneIk']
+        .map((p) => `export * from '${root}packages/scene-render/src/${p}.ts';`),
+      ...['scene/legPin', 'scene/bridgeLift',
         'scene/bridgeTravel', 'scene/bridgeHeading', 'scene/standSettle',
         'scene/footLockMeasure', 'game/stairs', 'game/npcWalk']
-        .map((p) => `export * from '${root}client3d/src/${p}.ts';`).join('\n');
+        .map((p) => `export * from '${root}client3d/src/${p}.ts';`)].join('\n');
       const built = await build({stdin: {contents: entry, resolveDir: root, loader: 'ts'},
         bundle: true, platform: 'node', format: 'esm', write: false,
         external: ['three', 'three/*'], logLevel: 'error'});

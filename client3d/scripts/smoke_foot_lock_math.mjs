@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Smoke check for the FOOT-LOCK maths of the 3D client
- * (`client3d/src/scene/footLock.ts`) — the TypeScript twin of the importer's
+ * (`packages/scene-render/src/footLock.ts`) — the TypeScript twin of the importer's
  * `app/blender/scripts/_root_motion.py`. Pure numbers (§ B5a), no three, no
  * clips, no server.
  *
@@ -96,7 +96,7 @@
  *       [6] stays as derived: both points there are FULL, so the mean of the
  *       full points is the old mean (path z = 3f).
  * [F] SHARED FIXTURE — ``scripts/fixtures/root_motion_cases.json`` is the
- *       parity contract with the TypeScript twin (``client3d/src/scene/footLock.ts``,
+ *       parity contract with the TypeScript twin (``packages/scene-render/src/footLock.ts``,
  *       checked by ``client3d/scripts/smoke_foot_lock_math.mjs``). It holds the
  *       cases [2], [4], [5], [6], [10] and [11] above — the same inputs, the
  *       paths and drifts derived here by hand (each case names its origin in

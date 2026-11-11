@@ -22,7 +22,7 @@
  * forward (sin f, cos f), as in `bridgeTravel.toWorld` and three.js
  * `rotation.y`. With L = left − right, heading = atan2(L.x, L.z) − π/2.
  */
-import type { Vec3 } from './footLock';
+import type { Vec3 } from '@anima/scene-render';
 
 /** Least share of the cross vector that must lie in the ground plane for a
  *  frame to have a heading at all. A pelvis rolled onto its side (lying on

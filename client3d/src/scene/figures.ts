@@ -18,9 +18,10 @@ import {
   findLegChains as findLegChainsData, advanceProceduralPhase, proceduralGaitAmplitudes, proceduralIdleAmplitudes,
   createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox, createGarmentCollision,
+  applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
-  GarmentCollision } from '@anima/scene-render';
+  GarmentCollision, FootPose } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import type { ApiModel } from '../api';
@@ -173,6 +174,10 @@ interface LoadedModel {
   /** The body's collision capsules (`ApiModel.collision`); every figure of
    *  this model pushes its garments out of them (`createGarmentCollision`). */
   collision?: CollisionPayload | null;
+  /** The fitted shoe's foot pose (`ApiModel.footPose`), kept ONLY when the
+   *  template carries the shoes it was fitted for (`modelFootPose`); null
+   *  for a bare figure, a stale fit or a swap to a template without them. */
+  footPose?: FootPose | null;
   name: string;
   template: THREE.Group;
   clips: THREE.AnimationClip[];
@@ -316,6 +321,55 @@ function findSkinnedMesh(root: THREE.Object3D): THREE.SkinnedMesh | null {
   return skin;
 }
 
+/** The foot pose a model KEEPS: the served record only when `template`
+ *  carries the shoes it was fitted for (`footPoseMatches` — kind `footwear`,
+ *  same `fsig` and `item_id`), else null. A model swap to a template without
+ *  those nodes (a rebuild, the bare base) therefore drops the lift and the
+ *  extension with the shoes. Exported for `smoke_foot_pose_client.mjs`. */
+export function modelFootPose(template: THREE.Object3D, fp: FootPose | null | undefined): FootPose | null {
+  return fp && footPoseMatches(template, fp) ? fp : null;
+}
+
+/** What a clip path needs to dress a shod figure's clips (`prepareShoes`). */
+export interface ShodClipOptions {
+  /** The model's foot pose (`LoadedModel.footPose`); null = bare. */
+  footPose: FootPose | null | undefined;
+  /** The reference rig's rest (`restPoseOf`), the donor of the bind-relative
+   *  transplant — with it the extension carries the delta the corrections
+   *  put on the foot (`transplantedRestPose`). Absent on the borrow path. */
+  donorRest?: RestPose;
+  /** Template units per world centimetre, `1 / (100 · scale)` — the contact
+   *  bands of the plant are written in centimetres. */
+  unitsPerCm: number;
+}
+
+/**
+ * THE SHOD CLIP, one step for every clip path: the extension baked right
+ * after the retarget (`applyFootPose`, relative to the rest the transplant
+ * plays), then the per-frame foot plant (`plantFootPose`: stance by the bare
+ * contacts, sole level, lowest contact on the floor, forepart held) on ONE
+ * probe clone of the target, for the ground height group's lift. Null when
+ * the model is bare or the record does not match the shoes it carries —
+ * then every clip passes through untouched, bit for bit.
+ */
+function prepareShoes(target: THREE.Object3D, shoes: ShodClipOptions | undefined,
+                      corrections?: Map<string, RestCorrection>):
+    ((clip: THREE.AnimationClip) => THREE.AnimationClip) | null {
+  const fp = modelFootPose(target, shoes?.footPose);
+  if (!fp || !shoes) return null;
+  const rest = restPoseOf(THREE, target);
+  const clipRest = shoes.donorRest && corrections?.size
+    ? transplantedRestPose(THREE, shoes.donorRest, rest, corrections) : null;
+  const probe = SkeletonUtils.clone(target);
+  probe.updateMatrixWorld(true);
+  const rootY = footPoseLiftM(fp, 'ground');
+  const unitsPerCm = shoes.unitsPerCm;
+  return (clip) => {
+    const posed = applyFootPose(THREE, clip, fp, rest, clipRest);
+    return posed === clip ? clip : plantFootPose(THREE, posed, clip, probe, fp, { rootY, unitsPerCm });
+  };
+}
+
 /**
  * Transfer the clips of a donor model onto another skeleton.
  * SkeletonUtils.retargetClip works over world transforms and therefore
@@ -327,11 +381,16 @@ function findSkinnedMesh(root: THREE.Object3D): THREE.SkinnedMesh | null {
 function retargetClips(
   target: THREE.Object3D,
   donor: THREE.Object3D,
-  clips: THREE.AnimationClip[]
+  clips: THREE.AnimationClip[],
+  shoes?: ShodClipOptions,
 ): THREE.AnimationClip[] {
   const targetSkin = findSkinnedMesh(target);
   const donorSkin = findSkinnedMesh(donor);
   if (!targetSkin || !donorSkin) return [];
+  // The shod figure's extension and plant, on the retargeted clip (no
+  // corrections here: the aim retarget stands the foot at the donor's
+  // absolute direction, so the extension is relative to the bind alone).
+  const shoe = prepareShoes(target, shoes);
 
   // Hierarchical FK retargeting: sample the donor clip frame by frame, then
   // lift the world rotation deltas top-down onto the target skeleton. Unlike
@@ -496,7 +555,8 @@ function retargetClips(
     action.stop();
     mixer.uncacheClip(clip);
     if (tracks.length >= MIN_CLIP_TRACKS) {
-      const retargeted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+      let retargeted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+      if (shoe) retargeted = shoe(retargeted);
       // A donor clip's root travel (donor template units) rides along,
       // rescaled by the SAME hips-height ratio its hips position track above
       // was rescaled with — one length, one scale.
@@ -547,18 +607,28 @@ function donorHipsBone(skin: THREE.SkinnedMesh): THREE.Bone | undefined {
  * (`standingHipsRef`). Absent = no rig served: the idle clip's median stands
  * in, and figures float ~3 cm.
  *
+ * `shoes` (a shod figure): every surviving clip gets the fitted shoe's
+ * extension and the per-frame foot plant right here, before its flags
+ * (`prepareShoes`); `smoke_foot_pose_call_sites.py` keeps every clip path on
+ * that rule.
+ *
  * Exported for the client smokes (`smoke_clip_ground.mjs`,
- * `smoke_bridge_root.mjs`, `smoke_rig_stand_ref.mjs`): what they measure is
+ * `smoke_bridge_root.mjs`, `smoke_rig_stand_ref.mjs`,
+ * `smoke_foot_pose_client.mjs`): what they measure is
  * produced HERE, so the checks walk the real chain rather than a copy of it.
  */
 export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.Object3D,
                                    corrections?: Map<string, RestCorrection>,
-                                   donorHipsY?: number): THREE.AnimationClip[] {
+                                   donorHipsY?: number,
+                                   shoes?: ShodClipOptions): THREE.AnimationClip[] {
   const boneByKey = new Map<string, THREE.Bone>();
   target.traverse((o) => {
     if ((o as THREE.Bone).isBone) boneByKey.set(normBoneName(o.name), o as THREE.Bone);
   });
   if (!boneByKey.size) return [];
+  // The shod figure's extension and plant, baked right after the transplant
+  // (`prepareShoes`); null for a bare figure.
+  const shoe = prepareShoes(target, shoes, corrections);
   const hips = [...boneByKey.entries()].find(([k]) => /hips$/.test(k))?.[1];
 
   // Hips: Mixamo clips are authored for a rig without an armature rotation
@@ -695,7 +765,8 @@ export function adaptExternalClips(clips: THREE.AnimationClip[], target: THREE.O
       }
     }
     if (tracks.length >= MIN_CLIP_TRACKS) {
-      const adapted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+      let adapted = new THREE.AnimationClip(clip.name, clip.duration, tracks);
+      if (shoe) adapted = shoe(adapted);
       if (rootPath) setClipRootPath(adapted, rootPath);
       setClipKeepFacing(adapted, clipKeepsFacing(clip));
       out.push(adapted);
@@ -745,9 +816,9 @@ function warnNoTravelRig(clipName: string): void {
  *  unit (`LoadedModel.scale`). A fallback because the rig has no foot bones
  *  is a warning: that model's feet will slide by the import's measure. */
 function relockOnRig(charName: string, clips: readonly THREE.AnimationClip[],
-                     template: THREE.Object3D, scale: number): void {
+                     template: THREE.Object3D, scale: number, footPose: FootPose | null = null): void {
   let line = '';
-  const reports = relockRootPaths(clips, template, 1 / (100 * scale), (msg) => { line = msg; });
+  const reports = relockRootPaths(clips, template, 1 / (100 * scale), (msg) => { line = msg; }, { footPose });
   if (!line) return;
   if (reports.some((r) => r.reason === 'no foot bones')) console.warn(`[figures] ${charName}: ${line}`);
   else console.info(`[figures] ${charName}: ${line}`);
@@ -1136,7 +1207,8 @@ export class FigureLibrary {
       preparing = true;
       const wanted = this.clipEpoch;
       void this.prepareReloadClips().then(async () => {
-        const fit = await this.fitLibraryAsync(name, model.template, model.ownClips ?? [], model.scale);
+        const fit = await this.fitLibraryAsync(name, model.template, model.ownClips ?? [], model.scale,
+          model.footPose ?? null);
         figure.replaceClips([...(model.ownClips ?? []), ...fit.extra]);
         epoch = wanted;
       }).catch(e => console.warn('[figures] clip refit failed', e)).finally(() => { preparing = false; });
@@ -1222,7 +1294,7 @@ export class FigureLibrary {
       // of the library on top. Its own clips win for their own kinds.
       await nextFrame();
       m.ownClips ??= [...m.clips];
-      const fit = await this.fitLibraryAsync(m.name, m.template, m.clips, m.scale);
+      const fit = await this.fitLibraryAsync(m.name, m.template, m.clips, m.scale, m.footPose ?? null);
       m.libraryFits = fit.fits;
       if (fit.extra.length) {
         const kinds = fit.extra.map((c) => c.name).sort().join(', ');
@@ -1234,13 +1306,14 @@ export class FigureLibrary {
       // Neither its own clips nor a library that fits this skeleton: borrow
       // from the first model that HAS clips and retarget bone by bone.
       if (!donor) continue;
-      m.clips = retargetClips(m.template, donor.template, donor.clips);
+      m.clips = retargetClips(m.template, donor.template, donor.clips,
+        { footPose: m.footPose, unitsPerCm: 1 / (100 * m.scale) });
       carryClipLoops(donor.clips, m.clips);
       if (!m.clips.length) console.warn(`[figures] ${m.name}: clip retargeting failed`);
       else console.info(`[figures] ${m.name}: ${m.clips.length} clips retargeted from ${donor.name}`);
       // A borrowed bridge travel is the DONOR's, rescaled by the hips ratio —
       // re-locked on this skeleton exactly like a library clip.
-      relockOnRig(m.name, m.clips, m.template, m.scale);
+      relockOnRig(m.name, m.clips, m.template, m.scale, m.footPose ?? null);
     }
     return results.filter((r) => r.status === 'fulfilled').length;
   }
@@ -1496,7 +1569,8 @@ export class FigureLibrary {
    * for models without any clips of their own.
    */
   private async fitLibraryAsync(charName: string, template: THREE.Object3D,
-                     own: readonly THREE.AnimationClip[], scale: number
+                     own: readonly THREE.AnimationClip[], scale: number,
+                     footPose: FootPose | null = null
   ): Promise<LibraryFit> {
     let sectionStart = performance.now();
     const candidates = this.clipsFor(charName);
@@ -1525,13 +1599,17 @@ export class FigureLibrary {
       }
     }
     const adapted: THREE.AnimationClip[] = [];
+    // The shod figure: the extension carries the delta the transplant puts
+    // on the foot (`transplantedRestPose` of the donor rest), the plant's
+    // contact bands are in centimetres of the WORLD (`unitsPerCm`).
+    const shoes: ShodClipOptions = { footPose, donorRest: this.donorRest, unitsPerCm: 1 / (100 * scale) };
     // Without a rig, idle/cluster scaling depends on ALL candidates.
     if (!(this.donorHipsY !== undefined && Number.isFinite(this.donorHipsY) && this.donorHipsY > 0)) {
-      adapted.push(...adaptExternalClips(candidates, template, corrections, this.donorHipsY));
+      adapted.push(...adaptExternalClips(candidates, template, corrections, this.donorHipsY, shoes));
     } else {
       markPhase('clip:fit', performance.now() - sectionStart);
       await this.fitSlices(candidates, (slice) => {
-        adapted.push(...adaptExternalClips(slice, template, corrections, this.donorHipsY));
+        adapted.push(...adaptExternalClips(slice, template, corrections, this.donorHipsY, shoes));
       });
       sectionStart = performance.now();
     }
@@ -1561,7 +1639,7 @@ export class FigureLibrary {
       const reports = relockRootPaths(slice, template, 1 / (100 * scale), (line) => {
         // Each slice has the same summary prefix; concatenate only its clip parts.
         lockLines.push(line.slice('foot lock per rig — '.length));
-      });
+      }, { footPose });
       missingFeet ||= reports.some((r) => r.reason === 'no foot bones');
     });
     sectionStart = performance.now();
@@ -1577,7 +1655,11 @@ export class FigureLibrary {
     // no skinning samples.
     markPhase('clip:fit', performance.now() - sectionStart);
     await nextFrame();
-    await this.fitSlices(extra, (slice) => measureGroundOffsets(slice, template));
+    // A SHOD figure measures on the sole, with its standing lift in the
+    // arithmetic (the package's shod rule); the plant has already put every
+    // stance on the floor, so what is stored is the residual.
+    await this.fitSlices(extra, (slice) => measureGroundOffsets(slice, template, footPose,
+      footPoseLiftM(footPose, 'ground')));
     sectionStart = performance.now();
     const floats = extra.filter((c) => clipGroundOffset(c) > 0.05)
       .map((c) => `${c.name} +${clipGroundOffset(c).toFixed(2)} m`);
@@ -1735,14 +1817,23 @@ export class FigureLibrary {
       this.motionState.set(name, motion);
     }
     if (motion.payload === undefined) motion.payload = info.motion;
+    // The fitted shoe's foot pose, kept only with the shoes it was fitted
+    // for on this very template (`modelFootPose`).
+    const footPose = modelFootPose(template, info.footPose);
     const model: LoadedModel = {
       motion,
       collision: info.collision ?? null,
+      footPose,
       name, template,
       clips: info.rig === 'none' ? [] : gltf.animations.filter((c) => c.tracks.length > 0),
       scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
       libraryFits: false,
     };
+    // The model's OWN embedded clips are a clip path too (the third beside
+    // the library and the borrow): a shod figure's takes get the extension
+    // and the plant before their loop flags land on the final clip objects.
+    const shoe = prepareShoes(template, { footPose, unitsPerCm: 1 / (100 * scale) });
+    if (shoe) model.clips = model.clips.map(shoe);
     applyEmbeddedClipLoops(model.clips, info.clips);
     // Clips along the character's set chain (female/male/animal/custom),
     // merged PER KIND: a clip embedded in the mesh wins for its own kind, the
@@ -1755,7 +1846,7 @@ export class FigureLibrary {
       await nextFrame();
       await this.settled;
       model.ownClips ??= [...model.clips];
-      const fit = await this.fitLibraryAsync(name, template, model.clips, model.scale);
+      const fit = await this.fitLibraryAsync(name, template, model.clips, model.scale, footPose);
       buildStart = performance.now();
       model.libraryFits = fit.fits;
       if (fit.extra.length) model.clips = [...model.clips, ...fit.extra];
@@ -2019,6 +2110,10 @@ export class Figure {
   private clipDrop = 0;
   private clipHeight = 0;
   private clipShift: ClipShiftCm | undefined;
+  /** The model's foot pose (`LoadedModel.footPose`): its root lift rides the
+   *  clip height term of the ground group (`setClipHeight`), so it fades with
+   *  the group like the listing's offsets do; seat and lie get 0. */
+  private readonly footPose: FootPose | null;
   /** World-up calibration expressed in the root's local frame. */
   private readonly heightCorrection = new THREE.Vector3();
   private readonly heightRotation = new THREE.Quaternion();
@@ -2060,6 +2155,7 @@ export class Figure {
     this.motionState = model.motion;
     this.height = model.height;
     this.baseScale = model.scale;
+    this.footPose = model.footPose ?? null;
     const inst = SkeletonUtils.clone(model.template);
     inst.scale.setScalar(model.scale);
     inst.traverse((o) => {
@@ -2547,7 +2643,11 @@ export class Figure {
   }
 
   private setClipHeight(clip: THREE.AnimationClip | undefined, group: string) {
-    const height = clipHeightOffsetM(clip && clipHeightOffsets.get(clip), group, this.height);
+    // The shod lift is in the TEMPLATE's metres (the fit's bind space), so it
+    // scales by the instance scale like the clip ground offset does — not by
+    // the figure height the listing's centimetre offsets are written for.
+    const height = clipHeightOffsetM(clip && clipHeightOffsets.get(clip), group, this.height)
+      + footPoseLiftM(this.footPose, group) * this.baseScale;
     const shift = clip && clipShifts.get(clip);
     if (height === this.clipHeight && shift === this.clipShift) return;
     this.clipHeight = height;

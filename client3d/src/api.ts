@@ -12,7 +12,7 @@ import type {
   SceneBoundaryOpening, SceneCorridor, SceneDoorway, SceneExtra, SceneMarker,
   SceneFloor, SceneModelSpec, ScenePayload, ScenePlate, SceneProblem,
   SceneRoom, SceneStairs, SceneWall, TerrainLayerBatch, TerrainLayerIndex,
-  WorldHeightField, CollisionPayload,
+  WorldHeightField, CollisionPayload, FootPose,
 } from '@anima/scene-render';
 // The audio manifest is TYPED and validated in the pure soundtrack module, so
 // the choosing side and the fetching side cannot drift apart (E4-T5).
@@ -715,6 +715,10 @@ export interface ApiModel {
   /** The body's collision capsules (`model.collision`, docs/schnittstellen-3d.md
    *  "Collision capsules"); garments are pushed out of them. Null = none. */
   collision?: CollisionPayload | null;
+  /** The fitted shoe's foot pose (`model.foot_pose`, footPose.ts of
+   *  `@anima/scene-render`): extension, root lift and sole contacts. Null
+   *  without a fitted shoe in the served file. */
+  footPose: FootPose | null;
   url: string;
   lowUrl?: string;
   /** identity of this particular model (changes e.g. with the outfit) */
@@ -770,6 +774,7 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
     modelRev: m.model_rev,
     motion: data.motion,
     collision: m.collision ?? null,
+    footPose: m.foot_pose ?? null,
     format: (m.format ?? 'glb') as 'glb' | 'fbx',
     rig: m.rig ?? data.rig ?? 'mixamo',
     textureUrl: m.texture_url ?? undefined,

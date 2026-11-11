@@ -1,16 +1,15 @@
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
-import { normBoneName } from '@anima/scene-render';
+import {
+  CONTACT_POINTS, FULL, contactWeights, footLockPath, groundHeights, maxPlantedDrift, normBoneName,
+  twoBoneIk, footContactsNow, footPoseMatches, applyFootPoseToPose,
+} from '@anima/scene-render';
+import type { Tracks, Vec3, Quat, FootPose, FootSide } from '@anima/scene-render';
 import { clipRootPath, setClipRootPath, setClipRootTurn, travelAt, clipKeepsFacing } from './bridgeTravel';
 import type { RootPath } from './bridgeTravel';
 import { setClipBridgeLift } from './bridgeLift';
 import { headingTrack } from './bridgeHeading';
-import {
-  CONTACT_POINTS, FULL, contactWeights, footLockPath, groundHeights, maxPlantedDrift,
-} from './footLock';
-import type { Tracks, Vec3 } from './footLock';
-import { pinRuns, soleDown, twoBoneIk } from './legPin';
-import type { Quat } from './legPin';
+import { pinRuns, soleDown } from './legPin';
 
 /**
  * THE FOOT LOCK PER RIG — a bridge clip's root travel rebuilt on each model's
@@ -124,6 +123,18 @@ import type { Quat } from './legPin';
  * its yaw, as before. The fallback 'no foot bones' measures nothing, so it has
  * no turn either.
  *
+ * THE SHOD FIGURE (footwear strand, `options.footPose` matching the shoes
+ * the template carries — `footPoseMatches`): the four contact points are
+ * read on the SOLE instead of the joints — `LeftFoot` is the left heel
+ * contact, `LeftToeBase` the left ball contact (`foot_pose.contacts`, the
+ * collision endpoint rule, `footContactsNow`), the same on the right — and
+ * their rest heights are their heights in the shod STAND pose (the bind pose
+ * with the extension, `applyFootPoseToPose`), over the lowest contact there,
+ * which is the shod rest floor. The leg pin's joints (hip, knee, ankle) stay
+ * joints: a contact is rigid to the Foot, so the ankle target moves it by
+ * the same vector. `endLift` is measured on the lowest CONTACT of the last
+ * frame against that shod floor. Without a foot pose nothing changes.
+ *
  * Side-effect free on the template: the clone is posed, never the template
  * (the `clipGround.measureGroundOffsets` pattern), and every clip is uncached
  * from the probe's mixer again.
@@ -172,6 +183,9 @@ export interface RelockOptions {
    *  hips track and store none — the state before Task C2, the counter-probe
    *  of `smoke_bridge_root.mjs` [B12]/[B14]. Default true. */
   turn?: boolean;
+  /** The figure's foot pose: with one that matches the shoes the template
+   *  carries, the contact points are the sole contacts (module docstring). */
+  footPose?: FootPose | null;
 }
 
 /** How much LESS the rebuilt path must drift than the imported one before it
@@ -535,6 +549,61 @@ function firstFullContact(weights: Record<string, number[]>, times: readonly num
   return duration;
 }
 
+/** The sole contacts standing in for the four joints of `CONTACT_POINTS`
+ *  (module docstring, the shod figure): per point the (side, role) of the
+ *  contact it reads — heel for the Foot, ball for the ToeBase. */
+const CONTACT_ROLES: ReadonlyArray<readonly [FootSide, 'heel' | 'ball']> = [
+  ['left', 'heel'], ['left', 'ball'], ['right', 'heel'], ['right', 'ball'],
+];
+
+/** What a shod figure's contact reading needs: the contacts of the current
+ *  probe pose in CONTACT_POINTS order (template units), every contact of both
+ *  sides, and the shod rest — the stand pose's heights and floor. */
+interface ShodContacts {
+  points: () => Vec3[];
+  all: () => THREE.Vector3[];
+  restY: number[];
+  floorY: number;
+}
+
+/**
+ * The shod contact reader for `probe`, or null when `fp` is absent or does
+ * not match the shoes the probe carries, or a contact the rule needs is not
+ * in the record. The rest is read on a SECOND clone in the shod stand pose
+ * (`applyFootPoseToPose`), so the probe itself stays in its bind pose.
+ */
+function shodContacts(probe: THREE.Object3D, byKey: Map<string, THREE.Object3D>,
+                      fp: FootPose | null | undefined): ShodContacts | null {
+  if (!fp || !footPoseMatches(probe, fp)) return null;
+  // Which contact of the record each kept entry of `footContactsNow` is: the
+  // function drops a contact whose bone the figure lacks, in record order.
+  const kept = (side: FootSide) => (fp.contacts?.[side] ?? []).filter((c) =>
+    byKey.has(normBoneName(c.bone)) && Array.isArray(c.pos) && c.pos.length === 3);
+  const index = CONTACT_ROLES.map(([side, role]) => kept(side).findIndex((c) => c.role === role));
+  if (index.some((i) => i < 0)) return null;
+  const now: Record<FootSide, THREE.Vector3[]> = { left: [], right: [] };
+  const read = (): Record<FootSide, THREE.Vector3[]> => footContactsNow(THREE, probe, fp, now);
+  const still = SkeletonUtils.clone(probe);
+  applyFootPoseToPose(THREE, still, fp);
+  still.updateMatrixWorld(true);
+  const standing = footContactsNow(THREE, still, fp);
+  const stand = CONTACT_ROLES.map(([side], i) => standing[side][index[i]]);
+  if (stand.some((c) => !c)) return null;
+  const floorY = Math.min(...standing.left.map((c) => c.y), ...standing.right.map((c) => c.y));
+  return {
+    points: () => {
+      const c = read();
+      return CONTACT_ROLES.map(([side], i) => {
+        const p = c[side][index[i]];
+        return [p.x, p.y, p.z] as Vec3;
+      });
+    },
+    all: () => { const c = read(); return [...c.left, ...c.right]; },
+    restY: stand.map((c) => c.y),
+    floorY,
+  };
+}
+
 /**
  * Rebuild the travel of every clip that carries one (`clipRootPath`) on
  * `template`'s own skeleton and store it in place of the imported path, then
@@ -562,6 +631,7 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
   });
   const points = CONTACT_POINTS.map((p) => byKey.get(p.toLowerCase()));
   const reports: RelockReport[] = [];
+  const shod = shodContacts(probe, byKey, options.footPose);
 
   if (points.some((b) => !b)) {
     for (const clip of todo) {
@@ -587,25 +657,34 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
 
   // Rest heights, cm: each point's bind-pose height over the lowest foot
   // point of the rest (the four points and the toe ends, as the importer's
-  // `_rest_heights` does).
+  // `_rest_heights` does) — for a shod figure the contacts' heights in the
+  // shod stand pose over the lowest contact there (module docstring).
   const v = new THREE.Vector3();
-  const restY = bones.map((b) => b.getWorldPosition(v).y);
+  const restY = shod ? shod.restY : bones.map((b) => b.getWorldPosition(v).y);
   const mixer = new THREE.AnimationMixer(probe);
-  const floorY = Math.min(...restY,
+  const floorY = shod ? shod.floorY : Math.min(...restY,
     ...TOE_ENDS.map((k) => byKey.get(k)).filter((b): b is THREE.Object3D => !!b)
       .map((b) => b.getWorldPosition(v).y));
   const rest: Record<string, number> = {};
   CONTACT_POINTS.forEach((p, i) => { rest[p] = (restY[i] - floorY) / unitsPerCm; });
 
   // The lowest foot point of a posed probe, template units — the points of
-  // the rest floor above.
+  // the rest floor above (the sole contacts of a shod figure).
   const footPoints = [...bones,
     ...TOE_ENDS.map((k) => byKey.get(k)).filter((b): b is THREE.Object3D => !!b)];
+  const lowestFootPoint = (): number => {
+    if (shod) {
+      let lowest = Infinity;
+      for (const c of shod.all()) lowest = Math.min(lowest, c.y);
+      return lowest;
+    }
+    let lowest = Infinity;
+    for (const b of footPoints) lowest = Math.min(lowest, b.getWorldPosition(v).y);
+    return lowest;
+  };
   const storeLift = (clip: THREE.AnimationClip, times: readonly number[], firstContactS: number) => {
     let lowest = Infinity;
-    sampleOnProbe(mixer, probe, clip, [times[times.length - 1]], () => {
-      for (const b of footPoints) lowest = Math.min(lowest, b.getWorldPosition(v).y);
-    });
+    sampleOnProbe(mixer, probe, clip, [times[times.length - 1]], () => { lowest = lowestFootPoint(); });
     if (Number.isFinite(lowest)) setClipBridgeLift(clip, { endLift: floorY - lowest, firstContactS });
   };
 
@@ -620,8 +699,9 @@ export function relockRootPaths(clips: readonly THREE.AnimationClip[],
   // ground at its rest height — both have to be in one frame.
   const floorCm = floorY / unitsPerCm;
   const readPoints = (into: Tracks) => {
+    const sole = shod?.points();
     bones.forEach((b, i) => {
-      const p = cmOf(b);
+      const p = sole ? sole[i].map((x) => x / unitsPerCm) as Vec3 : cmOf(b);
       into[CONTACT_POINTS[i]].push([p[0], p[1] - floorCm, p[2]]);
     });
   };

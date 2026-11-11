@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Smoke check for the PER-RIG LEG PIN of the 3D client
- * (`client3d/src/scene/legPin.ts`, used by `footLockMeasure.relockRootPaths`):
+ * (`client3d/src/scene/legPin.ts` with `twoBoneIk` of `@anima/scene-render`,
+ * used by `footLockMeasure.relockRootPaths`):
  * a bridge clip's planted feet are nailed to their spot on each model's OWN
  * skeleton by a two-bone leg IK, baked into the adapted clip — the client's
  * counterpart of the importer's foot plant (`app/blender/scripts/_foot_plant.py`,
@@ -198,6 +199,7 @@ async function loadClient() {
     const src = join(ROOT, 'client3d/src/scene');
     const entry = [
       `export * from '${src}/legPin';`,
+      `export { qrot, rotationBetween, twoBoneIk } from '${join(ROOT, 'packages/scene-render/src')}/twoBoneIk';`,
       `export { relockRootPaths } from '${src}/footLockMeasure';`,
       `export { clipRootPath, setClipRootPath } from '${src}/bridgeTravel';`,
     ].join('\n');
