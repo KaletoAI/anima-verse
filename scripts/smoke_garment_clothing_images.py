@@ -179,7 +179,11 @@ W, H = 1024, 1200
 FRAGMENT = "a knee-length green linen dress with short sleeves."
 WORN_FRONT = ("Keep the image exactly as it is. Only change their clothing: they now wear only a knee-length "
               "green linen dress with short sleeves.")
-GHOST_PROMPT = ("The same green dress alone, as if worn by an invisible person (ghost mannequin): no head, no "
+GHOST_PROMPT = ("The same green dress in exactly the same position, size, width and framing, keeping its worn "
+                "three-dimensional shape as if on an invisible body (ghost mannequin product photo): the person "
+                "is removed, the inside of the garment is visible at the neck opening, sleeves and hem, plain "
+                "grey background.")
+_OLD_GHOST_PROMPT = ("The same green dress alone, as if worn by an invisible person (ghost mannequin): no head, no "
                 "arms, no hands, no legs, no feet, no skin; where the neck opening, sleeves and hem are, the "
                 "inside of the garment is visible. Same position, size and framing, plain grey background.")
 WORN_NEG = "loose clothing, baggy, skirt, jacket, shoes, socks, hair"

@@ -194,8 +194,7 @@ FIXTURE = {
 
 POSE_FRONT = ("standing upright facing the camera, A-pose, arms straight and angled about 45 degrees down and "
               "away from the body, not touching the body, all five fingers straight, relaxed and slightly apart, "
-              "each finger clearly separated and visible, hands in natural proportion to the body, legs clearly "
-              "apart with open space visible between them")
+              "legs clearly apart with open space visible between them")
 POSE_BACK = ("the same figure turned around, back view, seen directly from behind, the back of the head, the upper "
              "back and the shoulder blades facing the camera, the head facing straight away from the camera in the "
              "same direction as the body, standing upright in A-pose, arms straight and angled about 45 degrees "
@@ -208,12 +207,13 @@ VIEW_LEFT = ("The same person turned to a strict left side profile view, same A-
              "bald, the whole figure from head to feet in the frame.")
 VIEW_RIGHT = ("The same person turned to a strict right side profile view, same A-pose, same framing, completely "
               "bald, the whole figure from head to feet in the frame.")
-FEET = "both feet entirely inside the frame, with empty margin above the head and below the feet"
-BALD = ("completely bald, smooth clean-shaven head with no hair at all, the bare scalp and the bare back of the "
-        "head fully visible, natural eyebrows")
-BALD_BACK = ("completely bald, smooth clean-shaven head with no hair at all, the bare scalp and the bare back of "
-             "the head fully visible")
-BODY = "a smooth, featureless mannequin-like body without anatomical detail"
+# ONE framing clause per family (review 2026-11-11), on the front only.
+FEET = ("the whole figure from head to feet inside the frame with both hands inside it and empty margin above "
+        "the head and below the feet")
+FEET_KW = "both feet and both hands fully inside the frame, empty margin above the head and below the feet"
+BALD = "completely bald with a smooth bare scalp"
+BODY = "a smooth featureless mannequin-like unclothed body with plain smooth skin"
+BLOCK_HEAD = "sfw, " + BALD + ", " + BODY
 APPEARANCE = "female, 30 years old, green eyes, olive skin, average height, athletic build"
 APPEARANCE_BACK = "female, 30 years old, olive skin, average height, athletic build"
 HAIR_NEG = ("hair, long hair, short hair, ponytail, braid, bun, fringe, bangs, wig, headscarf, hat, hood, "
@@ -224,20 +224,25 @@ BASE = HAIR_NEG + ", clothing, underwear, jewellery, detailed anatomy, " + POSE_
 NEGATIVE = BASE + ", visible marking"
 OUTFIT = ("wearing exactly the same outfit as the person in the reference image, the same garments, lengths, cut, "
           "colours and shoes")
-# [12] The user's shortened base front (2026-11-09), written out by hand with
-# clean separators and the neutral stand-in fragments of frag_a / frag_b.
-TARGET = ("a full-body render of the character as a realistic 3D figure with lifelike skin textures, sfw, no "
-          "clothing, female, 26 years old, blue eyes, light skin, average height, athletic build, slot fragment a, "
-          "slot fragment b, shown from head to toe against a plain neutral background, both feet entirely inside the "
-          "frame, with empty margin above the head and below the feet, the full arm span visible "
-          "with both hands entirely inside the frame, flat even shadowless lighting, the face evenly lit from the "
-          "front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of "
-          "the reference image, uniform illumination, sharp focus, standing upright facing the camera, A-pose, "
-          "arms straight and angled about 45 degrees down and away from the body, not touching the body, all five "
-          "fingers straight, relaxed and slightly apart, each finger clearly separated and visible, hands in "
-          "natural proportion to the body, legs clearly apart with open space visible between them, completely "
-          "bald, smooth clean-shaven head with no hair at all, the bare scalp and the bare back of the head fully "
-          "visible, natural eyebrows, a smooth, featureless mannequin-like body without anatomical detail")
+# [12] The base front after the prompt review (2026-11-11), written out by
+# hand with clean separators and the neutral stand-in fragments of frag_a /
+# frag_b: subject sentence, the character block (sfw, bald, mannequin body,
+# appearance), ONE framing clause, background, ONE lighting clause, focus,
+# then the pose text. Counted by hand: subject 15 words, block head 18 ("sfw"
+# 1, bald 7, body 10), appearance 18 (incl. the two 3-word fixture
+# fragments), framing 25, background 3, lighting 11, focus 2, pose 40 = 132
+# words; "completely" is word 17 and "mannequin-like" word 27 (they were 167
+# and 191 of 199 before).
+TARGET = ("a full-body render of the character as a realistic 3D figure with lifelike skin textures, sfw, "
+          "completely bald with a smooth bare scalp, a smooth featureless mannequin-like unclothed body with plain "
+          "smooth skin, female, 26 years old, blue eyes, light skin, average height, athletic build, slot fragment a, "
+          "slot fragment b, the whole figure from head to feet inside the frame with both hands inside it and empty "
+          "margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the "
+          "whole figure and the face, sharp focus, standing upright facing the camera, A-pose, arms straight and "
+          "angled about 45 degrees down and away from the body, not touching the body, all five fingers straight, "
+          "relaxed and slightly apart, legs clearly apart with open space visible between them")
+DRAFT_BACK = ("The same person turned around, seen directly from behind, back view, same A-pose, same framing, "
+              "completely bald, " + OUTFIT + ", the whole figure from head to feet in the frame.")
 SUBJECT = "a full-body render of the character as a realistic 3D figure with lifelike skin textures"
 #: The commit before the prompt-layout change ([13]) — never HEAD.
 BEFORE = "bda7bd17"
@@ -308,11 +313,12 @@ def main() -> int:
 
         print("[2] front")
         prompt, negative = base_body.base_prompt(name, "front", profile=stored)
-        check("front prompt", prompt, ", ".join([POSE_FRONT, BALD, BODY]))
-        check("front block", base_body.base_character(name, "front", profile=stored),
-              "sfw, no clothing, " + APPEARANCE)
+        check("front prompt", prompt, POSE_FRONT)
+        block = base_body.base_character(name, "front", profile=stored)
+        check("front block", block, BLOCK_HEAD + ", " + APPEARANCE)
         check("pose constant", __import__("app.core.model_refs", fromlist=["x"]).BASE_FRONT_POSE_PROMPT, POSE_FRONT)
-        check("hair only in BALD", prompt.count("hair"), 1)
+        check("no hair word anywhere", "hair" in prompt + block, False)
+        check("no negation in the block", any(w in block for w in ("no ", "without")), False)
         check("no palms clause", "palms" in prompt, False)
         check("no framing sentence", "soles of the feet" in prompt, False)
         check("no ears clause", "ears" in prompt, False)
@@ -356,15 +362,14 @@ def main() -> int:
         overrides = {"tpose_prompt": "custom pose, arms down"}
         model_refs._cfg = lambda key, default=None: overrides.get(key) or real_cfg(key, default)
         try:
-            check("front ignores tpose_prompt", base_body.base_prompt(name, "front", profile=stored)[0],
-                  ", ".join([POSE_FRONT, BALD, BODY]))
+            check("front ignores tpose_prompt", base_body.base_prompt(name, "front", profile=stored)[0], POSE_FRONT)
             check("signature unchanged", base_body.base_signature(name, profile=stored), sig)
             overrides["tpose_back_prompt"] = "custom back pose, arms down, hair tied back"
             check("base back ignores the override", base_body.base_prompt(name, "back", profile=stored)[0],
                   VIEW_BACK)
             check("signature still unchanged", base_body.base_signature(name, profile=stored), sig)
-            check("draft follows the override", base_body.draft_prompt(name, "back", profile=stored)[0],
-                  ", ".join(["custom back pose, arms down", BALD_BACK, OUTFIT]))
+            check("draft ignores the override too", base_body.draft_prompt(name, "back", profile=stored)[0],
+                  DRAFT_BACK)
         finally:
             model_refs._cfg = real_cfg
 
@@ -418,16 +423,16 @@ def main() -> int:
               base_body.base_appearance(name, profile=male_tail).endswith(", pale spot, long tail"), True)
 
         print("[11] back draft")
-        draft_want = ", ".join([POSE_BACK, BALD_BACK, OUTFIT])
         prompt, negative = base_body.draft_prompt(name, "back", profile=stored)
-        check("draft prompt", prompt, draft_want)
-        check("draft block", base_body.draft_character(name, "back", profile=stored), "sfw, " + APPEARANCE_BACK)
+        check("draft prompt", prompt, DRAFT_BACK)
         check("draft negative", negative, HAIR_NEG + ", detailed anatomy, " + POSE_NEG + ", visible marking")
         prompt, _ = base_body.draft_prompt(name, "back", profile=long_tail)
-        block = base_body.draft_character(name, "back", profile=long_tail)
-        check("draft drops base_body_prompt", (prompt, block), (draft_want, "sfw, " + APPEARANCE_BACK))
-        check("no 'no clothing' in the draft", "no clothing" in block + prompt, False)
-        check("no tail, no mannequin", ("long tail" in block + prompt, "mannequin" in block + prompt), (False, False))
+        check("draft ignores the body slots", prompt, DRAFT_BACK)
+        check("no 'no clothing' in the draft", "no clothing" in prompt, False)
+        check("no tail, no mannequin", ("long tail" in prompt, "mannequin" in prompt), (False, False))
+        check("outfit right after the turn", prompt.index(OUTFIT) < len(prompt) / 2, True)
+        check("draft use cases are the empty edit styles", base_body.DRAFT_USE_CASES,
+              {"back": "base_view_back", "left": "base_view_side", "right": "base_view_side"})
 
         print("[12] final prompt")
         target = {"template": "human-default", "gender": "female", "age": 26, "height": 168,
@@ -443,7 +448,10 @@ def main() -> int:
         front_final = final_prompt(config, "base_front", "natural", front_block,
                                    base_body.base_prompt("Target", "front", profile=target)[0])
         check("front final == TARGET", front_final, TARGET)
-        check("block right after the subject", front_final.startswith(SUBJECT + ", sfw, no clothing, female"), True)
+        check("block right after the subject", front_final.startswith(SUBJECT + ", " + BLOCK_HEAD + ", female"), True)
+        words = front_final.split()
+        check("bald at word 17, mannequin at word 27, 132 words",
+              (words.index("completely") + 1, words.index("mannequin-like") + 1, len(words)), (17, 27, 132))
         check("pose right after the style", ", sharp focus, standing upright facing the camera" in front_final, True)
         for view, want in (("back", VIEW_BACK), ("left", VIEW_LEFT), ("right", VIEW_RIGHT)):
             for family in ("natural", "keywords"):
@@ -451,25 +459,25 @@ def main() -> int:
                                      base_body.base_character("Target", view, profile=target),
                                      base_body.base_prompt("Target", view, profile=target)[0])
                 check(f"{view}/{family} final", final, want)
-        draft_final = final_prompt(config, "base_back", "natural",
-                                   base_body.draft_character("Target", "back", profile=target),
+        draft_final = final_prompt(config, base_body.DRAFT_USE_CASES["back"], "natural", None,
                                    base_body.draft_prompt("Target", "back", profile=target)[0])
-        check("draft final", draft_final.startswith(SUBJECT + ", sfw, female, 26 years old, light skin, average "
-                                                    "height, athletic build, shown from head to toe")
-              and draft_final.endswith(", ".join([POSE_BACK, BALD_BACK, OUTFIT])), True)
+        check("draft final is the sentence alone", draft_final, DRAFT_BACK)
         kw = config.get_use_case_prompts("base_front", "sdxl", clothed=False, character=front_block)["prompt_style"]
         check("keywords: block after the subject", kw.startswith(
             "render of a realistic 3D character model, lifelike skin textures, " + front_block + ", full body view"),
             True)
-        check("keywords: feet after head to toe", ", head to toe, " + FEET + ", full arm span" in kw, True)
-        check("natural: feet after the background", "against a plain neutral background, " + FEET + ", the full "
-              "arm span" in front_final, True)
+        check("keywords: feet after head to toe", ", head to toe, " + FEET_KW + ", plain neutral" in kw, True)
+        check("natural: feet right after the block", ", slot fragment b, " + FEET + ", plain neutral background, "
+              in front_final, True)
+        check("natural: lighting said once", (front_final.count("lighting"), "relit" in front_final,
+                                               "uniform illumination" in front_final), (1, False, False))
         for uc in ("base_front", "base_back", "base_side", "base_view_back", "base_view_side"):
             for family in ("natural", "keywords"):
                 style = config.get_use_case_prompts(uc, family, clothed=False)["prompt_style"]
                 check(f"{uc}/{family}: no raw slot without a block",
                       ("{character}" in style, ", ," in style), (False, False))
-                check(f"{uc}/{family}: feet clause only on the front", FEET in style, uc == "base_front")
+                feet = FEET_KW if family == "keywords" else FEET
+                check(f"{uc}/{family}: feet clause only on the front", feet in style, uc == "base_front")
                 if uc.startswith("base_view_"):
                     check(f"{uc}/{family}: empty style", style, "")
         fill, join = config.fill_character_slot, config.join_style_prompt
@@ -478,7 +486,7 @@ def main() -> int:
         check("slot with empty block", fill("a, {character}, b", ""), "a, b")
         check("block without slot opens the style", fill("a, b", "blk"), "blk, a, b")
         check("block in slot", fill("a, {character}, b", "blk"), "a, blk, b")
-        check("join without block", join("style", "prompt", None), "style prompt")
+        check("join without block", join("style", "prompt", None), "style, prompt")
         check("join with block", join("style", "prompt", "blk"), "style, prompt")
 
         print("[13] old T-pose path unchanged (vs " + BEFORE + ")")
@@ -491,11 +499,15 @@ def main() -> int:
         check("new use cases are additions",
               sorted(set(config._DEFAULT_IMAGE_USE_CASES) - set(old_ucs)),
               ["base_back", "base_front", "base_side", "base_view_back", "base_view_side",
-               "footwear_source"])
+               "footwear_source", "outfit_edit"])
+        # Review 2026-11-11: face_view (style emptied) and profile (rules
+        # positive, character slot) changed on purpose; every other old use
+        # case resolves byte-identically.
         diffs = [(uc, fam, clothed) for uc in old_ucs for fam in ("natural", "keywords") for clothed in (True, False)
-                 if old_cfg.get_use_case_prompts(uc, fam, clothed=clothed)
+                 if uc not in ("face_view", "profile")
+                 and old_cfg.get_use_case_prompts(uc, fam, clothed=clothed)
                  != config.get_use_case_prompts(uc, fam, clothed=clothed)]
-        check("every old use case resolves byte-identically", diffs, [])
+        check("every other old use case resolves byte-identically", diffs, [])
         import ast
         tree = ast.parse(old_source("app/core/model_refs.py"))
         wanted = ("TPOSE_FRONT_HAIR_CLAUSE", "TPOSE_CHEST_HAIR_CLAUSE", "TPOSE_REFERENCE_HAIR_CLAUSE",
@@ -511,8 +523,8 @@ def main() -> int:
         style = config.get_use_case_prompts("tpose", "natural", clothed=False)["prompt_style"]
         old_style = old_cfg.get_use_case_prompts("tpose", "natural", clothed=False)["prompt_style"]
         tpose_prompt = model_refs.get_tpose_prompt()
-        check("tpose join is the historic one", config.join_style_prompt(style, tpose_prompt, None),
-              f"{old_style} {tpose_prompt}")
+        check("tpose join: the old style, a comma, the pose", config.join_style_prompt(style, tpose_prompt, None),
+              f"{old_style}, {tpose_prompt}")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

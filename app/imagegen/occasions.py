@@ -122,15 +122,15 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_front": _image(
         "Outfit — front edit", "Pose tab: the dressed front (edit of the base front)",
-        ["tpose"],
+        ["outfit_edit"],
         {"character_scoped": True, "char_spec_field": "outfit_front_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_back_draft": _image(
-        "Outfit — back draft", "Pose tab: back draft rendered from the dressed front",
-        ["base_back"],
+        "Outfit — back draft", "Pose tab: back draft, an edit of the dressed front turned around",
+        ["base_view_back"],
         {"character_scoped": True, "char_spec_field": "outfit_back_draft_workflow",
          "char_spec_fallback": "tpose_view_workflow"},
-        hint="Rendered fresh from the dressed front; only its clothing is used."),
+        hint="An edit of the dressed front turned around; only its clothing is used."),
     "outfit_back": _image(
         "Outfit — back fitted onto the base", "Pose tab: the dressed back (edit of the base back, "
         "the draft as second reference)",
@@ -145,11 +145,11 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     # back to its back-step glob, then the T-pose views glob;
     # config._migrate_outfit_side_routing seeds the chains from the back's.
     "outfit_side_draft": _image(
-        "Outfit — side draft", "Pose tab: left/right draft rendered from the dressed front",
-        ["base_side"],
+        "Outfit — side draft", "Pose tab: left/right draft, an edit of the dressed front in profile",
+        ["base_view_side"],
         {"character_scoped": True, "char_spec_field": "outfit_side_draft_workflow",
          "char_spec_fallback": ("outfit_back_draft_workflow", "tpose_view_workflow")},
-        hint="Rendered fresh from the dressed front in profile; only its clothing is used. "
+        hint="An edit of the dressed front in profile; only its clothing is used. "
              "Runs only with the world setting Dressed side views."),
     "outfit_side": _image(
         "Outfit — side fitted onto the base", "Pose tab: the dressed left/right (edit of the base "
@@ -249,6 +249,22 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
 MESH_INPUT_OCCASIONS: Tuple[str, ...] = (
     "tpose", "tpose_view", "base_front", "base_view",
     "outfit_front", "outfit_back_draft", "outfit_back", "outfit_side_draft", "outfit_side")
+
+#: Image occasions whose negative is NEVER folded into the prompt on a backend
+#: without a negative input (review 2026-11-11): the mesh-input renders and the
+#: garment / footwear edits carry 230–265-word negatives (``_NEG_TPOSE*`` +
+#: ``base_body.BASE_NEGATIVE``), and folding them turned a 27-word edit into
+#: 346 words — Venice refused every such request ("prompt is outside the
+#: model's text length bounds") and the fallback chain was dead. On these
+#: occasions the negative is dropped instead; everything that must hold is
+#: positive text at the front of the prompt.
+NO_FOLD_OCCASIONS: Tuple[str, ...] = MESH_INPUT_OCCASIONS + ("garment_view", "footwear_empty")
+
+
+def folds_negative(occasion_id: str) -> bool:
+    """Whether a backend without a negative input folds the negative of
+    this occasion into the positive prompt (``""`` / unknown: yes)."""
+    return (occasion_id or "").strip() not in NO_FOLD_OCCASIONS
 
 
 def spec_fields(occ: Dict[str, Any]) -> List[str]:

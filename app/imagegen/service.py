@@ -2735,6 +2735,10 @@ class ImageService:
             params = {
                 "width": _ow or cfg.get("width", getattr(backend, 'width', 1024)),
                 "height": _oh or cfg.get("height", getattr(backend, 'height', 1024)),
+                # The handoff (ImageBackend.generate) reads the occasion to
+                # decide whether a backend without a negative input folds the
+                # negative into the prompt (occasions.folds_negative).
+                "occasion": (input_data.get("occasion") or "").strip(),
             }
             logger.info("Size: %sx%s (override_w=%s, override_h=%s)", params["width"], params["height"], _ow, _oh)
             _model_key = "model"
@@ -3058,7 +3062,9 @@ class ImageService:
         input_data = self._parse_input(prompt)
         prompt_text = input_data.get("prompt", "")
         character_name = (input_data.get("agent_name") or "").strip()
-        if not prompt_text or not prompt_text.strip():
+        # A render whose whole description is the character block of the
+        # use-case style (the profile portrait) carries an empty prompt.
+        if not (prompt_text or "").strip() and not str(input_data.get("style_character") or "").strip():
             return "Error: No image description given."
         if not character_name:
             return "Error: Character name missing for storing the image."

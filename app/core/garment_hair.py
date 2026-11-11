@@ -422,16 +422,20 @@ _BEHIND = {
     "back": ("The hair covers the back of {p} head and falls straight down onto {p} upper back between the "
              "shoulder blades; the arms and the shoulders stay free of hair."),
 }
+# The hair-only edits (review 2026-11-11): the outer outline and width lead
+# — the ghost gate measures the width ratio, and the front came out 9–22 %
+# wider in 16 of 22 attempts; the front's old "where the face and the head
+# were, the inner side of the hair is visible" opened the hairstyle and is
+# gone. The removed person is said once, through the wig picture. The front's
+# ``_GHOST_LENGTH`` sentence is inserted after the first sentence.
 _GHOST = {
-    "front": ("Keep the image exactly as it is: the same hair in exactly the same position, size, shape, strands "
-              "and framing, the same background. Remove the person completely: no face, no head, no neck, no ears, "
-              "no skin, no body, no arms. The hair keeps its worn, three-dimensional shape as if on an invisible "
-              "head (ghost mannequin product photo of a wig); where the face and the head were, the inner side of "
-              "the hair is visible."),
-    "back": ("Keep the image exactly as it is: the same hair in exactly the same position, size, shape, strands "
-             "and framing, the same background. Remove the person completely: no head, no neck, no ears, no skin, "
-             "no body, no arms. The hair keeps its worn, three-dimensional shape as if on an invisible head (ghost "
-             "mannequin product photo of a wig)."),
+    "front": ("Keep the hair exactly as it is: the same position, outer outline, width, shape, strands and "
+              "framing, the same background. Remove the person completely so the hair keeps its worn "
+              "three-dimensional shape on an invisible head (ghost mannequin product photo of a wig)."),
+    "back": ("Keep the hair exactly as it is: the same position, outer outline, width, shape, strands and "
+             "framing, the same background. Remove the person completely so the hair keeps its worn "
+             "three-dimensional shape on an invisible head (ghost mannequin product photo of a wig), seen from "
+             "behind."),
 }
 # Where the hair ends, as a share t of the base figure height below its top
 # (garment_gates.hair_length, measured on the haired BACK view): upper band

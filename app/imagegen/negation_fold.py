@@ -23,10 +23,17 @@ from __future__ import annotations
 import re
 from typing import Any, List, Tuple
 
-# Tri-state setting values, tolerant to what the config bridge produces
+# Setting values, tolerant to what the config bridge produces
 # (a real bool, the env string "true"/"false", an empty field, ``None``).
 _TRUE_VALUES = ("yes", "true", "1", "on")
 _FALSE_VALUES = ("no", "false", "0", "off")
+#: The fourth state of ``supports_negative_prompt``: the engine takes a
+#: negative input but runs without CFG (a cfg-1 distillate such as the
+#: Qwen-Image-2.1 Turbo aliases, or P-H3-Image), so the negative would be
+#: sent and ignored — it is neither sent nor folded (review 2026-11-11).
+NEGATIVE_IGNORED = "ignored"
+#: The three ways a backend treats the negative prompt (``negative_mode``).
+NEGATIVE_MODES = ("send", "fold", NEGATIVE_IGNORED)
 
 # A leading negation the caller already wrote into the negative ("no fog") —
 # stripped so the fold does not produce "no no fog".
@@ -60,7 +67,10 @@ def backend_supports_negative(setting: Any, image_family: str = "",
 
     Args:
         setting: The backend's ``supports_negative_prompt`` config field —
-            ``"auto"`` / ``"yes"`` / ``"no"``. Tolerant on purpose: ``None``,
+            ``"auto"`` / ``"yes"`` / ``"no"`` / ``"ignored"`` (the last one
+            resolves to False here: nothing reaches the engine, and
+            :func:`negative_mode` tells the handoff not to fold either).
+            Tolerant on purpose: ``None``,
             ``""``, a real bool and the env strings ``"true"``/``"false"``/
             ``"1"``/``"0"`` all resolve, because the value travels through the
             config -> env bridge as a string and older worlds still hold a bool.
@@ -75,13 +85,25 @@ def backend_supports_negative(setting: Any, image_family: str = "",
         Z-Image **Turbo** is the known exception auto gets wrong — it is
         keyword-family but guidance-free, so it needs an explicit ``"no"``.
     """
+    return negative_mode(setting, image_family, model) == "send"
+
+
+def negative_mode(setting: Any, image_family: str = "", model: str = "") -> str:
+    """How the backend treats the negative prompt — the ONE resolution of the
+    ``supports_negative_prompt`` setting into ``"send"`` (a negative input
+    exists), ``"fold"`` (none: the negative is folded into the prompt) or
+    ``"ignored"`` (an input exists but the engine runs without CFG: nothing
+    is sent and nothing folded). ``auto`` lets the prompt family decide
+    between send and fold, as :func:`backend_supports_negative` documents."""
     value = "" if setting is None else str(setting).strip().lower()
+    if value == NEGATIVE_IGNORED:
+        return NEGATIVE_IGNORED
     if value in _TRUE_VALUES:
-        return True
+        return "send"
     if value in _FALSE_VALUES:
-        return False
+        return "fold"
     # "" / "auto" / anything unknown -> let the prompt family decide.
-    return resolve_family(image_family, model) != "natural"
+    return "fold" if resolve_family(image_family, model) == "natural" else "send"
 
 
 def _already_negated(prompt_lower: str, item_lower: str) -> bool:

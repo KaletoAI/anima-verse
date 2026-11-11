@@ -624,19 +624,37 @@ class ImageBackend(ABC):
         # the prompt — applies to ALL backends/paths as soon as a LoRA is active.
         final_prompt = self._inject_lora_triggers(prompt, params)
 
-        # Backends without a negative input (supports_negative_prompt off):
-        # fold the negative into the prompt as negations instead of handing
-        # the engine a field it throws away.
+        # A backend that addresses its reference images its own way (P-H3:
+        # "<Picture N>") gets the ordinal wording rewritten — the ONE place
+        # every prompt passes on its way to an engine.
+        from app.core.prompt_adapters import reference_wording
+        final_prompt = reference_wording(final_prompt, getattr(self, "model", "") or "")
+
+        # The negative: sent (a negative input exists), folded into the
+        # prompt as negations (no input), or dropped (the engine would ignore
+        # it: "ignored", a cfg-1 distillate). A fold never happens on the
+        # mesh-input and edit occasions (occasions.folds_negative) — their
+        # negatives are hundreds of words and broke the request instead of
+        # helping it.
         negative_folded: List[str] = []
-        if negative_prompt and not self.supports_negative_prompt:
-            from app.imagegen.negation_fold import fold_negatives
-            final_prompt, negative_folded = fold_negatives(
-                final_prompt, negative_prompt, self._prompt_family())
+        mode = self.negative_mode
+        occasion = str((params or {}).get("occasion") or "")
+        if negative_prompt and mode != "send":
+            from app.imagegen.occasions import folds_negative
+            if mode == "fold" and folds_negative(occasion):
+                from app.imagegen.negation_fold import fold_negatives
+                final_prompt, negative_folded = fold_negatives(
+                    final_prompt, negative_prompt, self._prompt_family())
+                if negative_folded:
+                    logger.info("%s: no negative input — folded %d term(s) into "
+                                "the prompt: %s", self.name, len(negative_folded),
+                                ", ".join(negative_folded))
+            else:
+                logger.info("%s: negative prompt dropped (%s; %d term(s))", self.name,
+                            "the engine ignores it" if mode == "ignored"
+                            else f"no negative input, no fold on occasion {occasion!r}",
+                            len([t for t in negative_prompt.split(",") if t.strip()]))
             negative_prompt = ""
-            if negative_folded:
-                logger.info("%s: no negative input — folded %d term(s) into "
-                            "the prompt: %s", self.name, len(negative_folded),
-                            ", ".join(negative_folded))
 
         _t0 = _time.time()
         with self._jobs_lock:
@@ -680,6 +698,14 @@ class ImageBackend(ABC):
         return backend_supports_negative(
             self.negative_prompt_setting, self.image_family,
             getattr(self, "model", "") or "")
+
+    @property
+    def negative_mode(self) -> str:
+        """``"send"`` / ``"fold"`` / ``"ignored"`` — how this backend treats
+        the negative prompt (:func:`app.imagegen.negation_fold.negative_mode`)."""
+        from app.imagegen.negation_fold import negative_mode
+        return negative_mode(self.negative_prompt_setting, self.image_family,
+                             getattr(self, "model", "") or "")
 
     def _prompt_family(self) -> str:
         """Prompt family of this backend: ``"natural"`` or ``"keywords"``."""

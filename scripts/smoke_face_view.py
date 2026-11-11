@@ -99,8 +99,11 @@ def render_contract(refs, profile, sig, meta):
             assert 'skin tone' in payload['prompt'] and 'makeup as the reference' in payload['prompt']
             assert all(w not in payload['prompt'] for w in ('no shadows', 'white', 'albedo', 'matte'))
             # The reference's own side light is not inherited (user: light from the right).
-            assert 'NOT the lighting of the reference' in payload['prompt'] and 'equally bright' in payload['prompt']
+            assert 'relit by soft perfectly uniform' in payload['prompt'] and 'equally bright' in payload['prompt']
             from app.core.config import get_use_case_prompts
+            # Review 2026-11-11: the style is empty, the prompt says everything once (<= 90 words).
+            assert get_use_case_prompts('face_view', 'natural')['prompt_style'] == ''
+            assert len(payload['prompt'].split()) <= 90
             for family in ('natural', 'keywords'):
                 negative = get_use_case_prompts('face_view', family)['prompt_negative']
                 assert all(w in negative for w in ('shadows', 'specular highlights', 'shiny skin', 'catchlights', 'rim light'))

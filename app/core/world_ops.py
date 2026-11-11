@@ -3691,13 +3691,17 @@ def compose_preview_core(data: Dict[str, Any]) -> Dict[str, Any]:
     prompt_out, negative_out = composed.prompt, composed.negative
     folded: List[str] = []
     supports_negative = True
+    mode = "send"
     if backend is not None:
-        supports_negative = bool(
-            getattr(backend, "supports_negative_prompt", True))
-    if negative_out and not supports_negative:
-        from app.imagegen.negation_fold import fold_negatives
-        prompt_out, folded = fold_negatives(
-            prompt_out, negative_out, composed.meta.get("family", "keywords"))
+        mode = str(getattr(backend, "negative_mode", "send") or "send")
+        supports_negative = mode == "send"
+    if negative_out and mode != "send":
+        # The same rule as the handoff (ImageBackend.generate): fold on a
+        # backend without a negative input, drop on one that ignores it.
+        if mode == "fold":
+            from app.imagegen.negation_fold import fold_negatives
+            prompt_out, folded = fold_negatives(
+                prompt_out, negative_out, composed.meta.get("family", "keywords"))
         negative_out = ""
 
     return {"prompt": prompt_out, "negative": negative_out,

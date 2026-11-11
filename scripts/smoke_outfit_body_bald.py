@@ -20,8 +20,7 @@ Expected, by hand:
     -> False; a hair item owned by another character worn in the slot -> False; retexture mode -> False.
 [2] Prompt: dress_prompt(front, bald=True) =
       "Keep the image exactly as it is: the same person, same body shape, same pose, same arm and hand position,
-       same framing and background. Only change their clothing: <text>. Completely bald, smooth clean-shaven head
-       with no hair at all, the bare scalp and the bare back of the head fully visible, natural eyebrows."
+       same framing and background. Only change their clothing: <text>. Completely bald with a smooth bare scalp."
     (the base front's BALD_HEAD words, capitalised, one sentence), negative = the bald=False negative + ", " +
     HAIR_NEGATIVE. bald=False = the same text WITHOUT that last sentence. The back draft's prompt carries
     "completely bald" (base view prompt, unchanged).
@@ -50,8 +49,7 @@ sys.path.insert(0, str(ROOT))
 
 FAILS = []
 
-BALD_SENTENCE = ("Completely bald, smooth clean-shaven head with no hair at all, the bare scalp and the bare back "
-                 "of the head fully visible, natural eyebrows.")
+BALD_SENTENCE = "Completely bald with a smooth bare scalp."
 KEEP = ("Keep the image exactly as it is: the same person, same body shape, same pose, same arm and hand position, "
         "same framing and background.")
 

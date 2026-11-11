@@ -70,9 +70,10 @@ image centred in the canvas (dx 88) -> cropped back at offset (88, 0) it is
 the planned image again.
 
 [1] prompts: draft = base_body.draft_prompt(back, outfit_text = "wearing only
-    a black tailored blazer with silver buttons and no other clothing, the
-    same garment as on the person in the reference image, with the same
-    length, cut and colour") —
+    a black tailored blazer with silver buttons exactly as on the person in
+    the reference image, the same length, cut and colour, and nothing else")
+    — the DRAFT_PROMPTS back sentence with that clause in its slot (review
+    2026-11-11: no style, use case base_view_back, no character block) —
     not the outfit's DRAFT_OUTFIT_TEXT; its negative ends with the worn
     negative "loose clothing, baggy, skirt, dress, shoes, socks, hair" —
     "jacket" is dropped: its pattern (base_body.DRESS_GARMENT_NEGATIVE,
@@ -105,7 +106,7 @@ the planned image again.
 [3] chain run from scratch, fits [BACK_FRONT, BACK_OK]: render order worn f1,
     worn bd (draft), worn b1, worn b2, ghost b1, ghost f1 — the draft once,
     BEFORE the fits, the front before both. Draft call: occasion
-    "outfit_back_draft", use case "base_back", reference = the worn front's
+    "outfit_back_draft", use case "base_view_back", reference = the worn front's
     file name, character_loras True. Fit calls: occasion "outfit_back", use
     case "outfit_fit", bare_prompt = the blazer's fit prompt of [1] and
     bare_prompt_keywords = its keywords form, postprocess False, 1200 x
@@ -147,8 +148,8 @@ SKIN = (200, 160, 140)
 GREEN = (40, 90, 50)
 W, H = 1024, 1200
 FRAGMENT = "a black tailored blazer with silver buttons"
-DRAFT_TEXT = ("wearing only a black tailored blazer with silver buttons and no other clothing, the same garment "
-              "as on the person in the reference image, with the same length, cut and colour")
+DRAFT_TEXT = ("wearing only a black tailored blazer with silver buttons exactly as on the person in the reference "
+              "image, the same length, cut and colour, and nothing else")
 FIT_BLAZER = ("edit the first image with the clothes from the second image: the person wears only a black tailored "
               "blazer with silver buttons, add no other clothing beyond that, the rest of the body stays exactly "
               "as in the first image")
@@ -165,8 +166,8 @@ FIT_MULTI = ("edit the first image with the clothes from the second image: the p
              "of the body stays exactly as in the first image")
 LONG = ("a long black wool coat with a wide shawl collar and deep pockets, double-breasted with six horn buttons, "
         "belted at the waist, ankle length")
-SHOE_DRAFT_TEXT = ("wearing only shiny black leather stiletto heels, high pointed toe and no other clothing, the "
-                   "same garment as on the person in the reference image, with the same length, cut and colour")
+SHOE_DRAFT_TEXT = ("wearing only shiny black leather stiletto heels, high pointed toe exactly as on the person in "
+                   "the reference image, the same length, cut and colour, and nothing else")
 WORN_NEG = "loose clothing, baggy, skirt, dress, shoes, socks, hair"
 FIT_PROMPT = "edit the first image with the clothes from the second image"
 OPENING = "back shows the front opening: neckline 0.1001 Hb deep, front 0.1001 Hb"
@@ -422,7 +423,7 @@ def main() -> int:
         front_final = gs.garment_path("Demo", jid, fsig, "image", step="worn", view="front")
         check("draft call", (kw["occasion"], kw["image_use_case"], kw["character_loras"], kw["bare_prompt"],
                              Path(kw["reference_image"]).name, kw.get("postprocess", True)),
-              ("outfit_back_draft", "base_back", True, draft[0], front_final.name, True))
+              ("outfit_back_draft", "base_view_back", True, draft[0], front_final.name, True))
         fit = dict(calls)["worn b1"]
         draft_file = garment_images.draft_path("Demo", jid, fsig, "worn")
         check("fit call", (fit["occasion"], fit["image_use_case"], fit["bare_prompt"],

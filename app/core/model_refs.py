@@ -122,9 +122,8 @@ TPOSE_PROMPT_DEFAULT = (
 BASE_FRONT_POSE_PROMPT = (
     "standing upright facing the camera, A-pose, arms straight and angled "
     "about 45 degrees down and away from the body, not touching the body, "
-    "all five fingers straight, relaxed and slightly apart, each finger "
-    "clearly separated and visible, hands in natural proportion to the body, "
-    "legs clearly apart with open space visible between them"
+    "all five fingers straight, relaxed and slightly apart, legs clearly "
+    "apart with open space visible between them"
 )
 
 # Animals use a strict profile, not a three-quarter view, to keep the mesh
@@ -200,15 +199,17 @@ TPOSE_SIDE_PROMPT_TEMPLATE = (
 TPOSE_LEFT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="left")
 TPOSE_RIGHT_PROMPT_DEFAULT = TPOSE_SIDE_PROMPT_TEMPLATE.format(side="right")
 
+# The WHOLE face-view prompt (its use-case style is empty since the review of
+# 2026-11-11: style and prompt had said framing, light and skin tone twice,
+# 208 words). Order: subject, identity (bald, the reference's face), view,
+# frame, background, light — everything once.
 FACE_VIEW_PROMPT_DEFAULT = (
-    "the same person as the reference, close-up of the head only, the face seen straight from the front and "
-    "filling most of the frame, head level and facing the camera directly, looking straight into the camera, "
-    "eyes open, neutral relaxed expression, mouth closed, completely bald head with no hair at all, smooth bare "
-    "scalp, the same eyebrows and eyelashes as the reference, ears visible, exactly the same skin tone, "
-    "complexion and makeup as the reference (eye makeup, lashes and lip colour unchanged), natural colour "
-    "saturation, NOT the lighting of the reference: relit by soft, perfectly uniform, colour-neutral ambient "
-    "light from all sides at natural exposure, the left and the right half of the face exactly equally bright, "
-    "the image ends just below the chin"
+    "a realistic 3D portrait of the head only of the same person as the reference, completely bald with a "
+    "smooth bare scalp, the same eyebrows, eyelashes, skin tone, complexion and makeup as the reference, seen "
+    "straight from the front, looking into the camera, eyes open, mouth closed, neutral relaxed "
+    "expression, the face filling most of the frame and the image ending just below the chin, plain neutral "
+    "background, relit by soft perfectly uniform colour-neutral ambient light with both halves of the face "
+    "equally bright, natural colour saturation, sharp focus"
 )
 
 TPOSE_VIEW_PROMPT_DEFAULTS = {

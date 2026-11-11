@@ -15,6 +15,7 @@ Architektur:
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.log import get_logger
@@ -25,6 +26,41 @@ logger = get_logger("prompt_adapters")
 
 # Valid target-model values. Set via the backend config field `image_family`.
 TARGET_MODELS = ("z_image", "qwen", "flux")
+
+#: Backends (by model id substring, lower-case) whose edit model addresses its
+#: reference images as ``<Picture N>`` blocks instead of "the first image":
+#: P-H3-Image (MiniMax-H3) — its edit upsampler and text encoder know the
+#: pictures only by that token (review 2026-11-11). The ordinal wording of
+#: every edit prompt (``base_body.FIT_PROMPT``, ``garment_clothing.FIT`` /
+#: ``DRAFT``, the dressed drafts) is rewritten by ``reference_wording`` at the
+#: central handoff, so the prompt constants stay ONE wording.
+PICTURE_REFERENCE_MODELS = ("p-h3",)
+_PICTURE_WORDING = (
+    (re.compile(r"\bthe first image\b", re.IGNORECASE), "<Picture 1>"),
+    (re.compile(r"\bthe second image\b", re.IGNORECASE), "<Picture 2>"),
+    (re.compile(r"\bthe third image\b", re.IGNORECASE), "<Picture 3>"),
+    (re.compile(r"\bthe reference image\b", re.IGNORECASE), "<Picture 1>"),
+)
+
+
+def uses_picture_references(backend_model: str) -> bool:
+    """Whether the backend's model addresses references as ``<Picture N>``."""
+    bm = (backend_model or "").lower()
+    return any(token in bm for token in PICTURE_REFERENCE_MODELS)
+
+
+def reference_wording(prompt: str, backend_model: str) -> str:
+    """``prompt`` with its reference ordinals in the backend's own wording:
+    "the first image" -> "<Picture 1>", "the second image" -> "<Picture 2>",
+    "the third image" -> "<Picture 3>", "the reference image" ->
+    "<Picture 1>" for a ``PICTURE_REFERENCE_MODELS`` backend; every other
+    backend gets the prompt back untouched."""
+    if not prompt or not uses_picture_references(backend_model):
+        return prompt
+    out = prompt
+    for pattern, token in _PICTURE_WORDING:
+        out = pattern.sub(token, out)
+    return out
 
 
 def get_target_model(image_family: str = "", backend_model: str = "") -> str:
@@ -60,12 +96,12 @@ def get_target_model(image_family: str = "", backend_model: str = "") -> str:
         if "z_image" in bm or "z-image" in bm or "zimage" in bm:
             return "z_image"
         if "qwen" in bm and "image" in bm:
-            # nur Qwen-Image-Modelle (nicht Qwen-Text-LLMs) als qwen-Style
+            # only Qwen-Image models (not Qwen text LLMs) count as the qwen style
             return "qwen"
         if "flux" in bm:
             return "flux"
 
-    return "z_image"  # konservativer Default
+    return "z_image"  # conservative default
 
 
 
@@ -78,7 +114,7 @@ def _person_with_outfit(pv: PromptVariables, idx: int, natural: bool) -> str:
         parts = [p for p in (person_txt, outfit_txt) if p]
         return ", ".join(parts)
 
-    # Natuerlich-sprachlich: Outfit als eigenen Satz
+    # Natural language: the outfit as its own sentence
     if person_txt and outfit_txt:
         return f"{person_txt}. {outfit_txt}"
     return person_txt or outfit_txt
@@ -208,7 +244,7 @@ def _clean_location_for_prompt(loc: str) -> str:
     s = loc.strip()
     # Fuehrendes "setting:" Label entfernen (alte Backfill-Werte)
     s = _re.sub(r"^\s*setting\s*:\s*", "", s, flags=_re.IGNORECASE)
-    # "Name, Description" — wenn Name kurz und Description deutlich laenger
+    # "Name, Description" — when the name is short and the description clearly longer
     parts = s.split(",", 1)
     if len(parts) == 2:
         head, rest = parts[0].strip(), parts[1].strip()
@@ -239,9 +275,9 @@ def _render_labeled_sections(pv: PromptVariables) -> Dict[str, str]:
     """
     sections: list[str] = []
 
-    # --- Style + Summary-Adjektiv aus pv.prompt_style ---
-    # Das ganze Feld geht in die Style-Zeile. Fuer die Summary nehmen wir das
-    # erste Komma-Token als Adjektiv (z.B. "photorealistic" aus
+    # --- Style + summary adjective from pv.prompt_style ---
+    # The whole field goes into the style line. For the summary we take the
+    # first comma token as the adjective (e.g. "photorealistic" from
     # "photorealistic, 8k, cinematic lighting").
     style_full = pv.prompt_style.strip().rstrip(".").strip() or "photorealistic"
     style_word = style_full.split(",", 1)[0].strip() or "photorealistic"
@@ -292,7 +328,7 @@ def _render_labeled_sections(pv: PromptVariables) -> Dict[str, str]:
     if action_parts:
         sections.append("Action: " + ", ".join(action_parts) + ".")
 
-    # --- Mood (eigene Zeile, nicht in Style) ---
+    # --- Mood (its own line, not in the style) ---
     if pv.prompt_mood:
         sections.append(f"Mood: {pv.prompt_mood}.")
 
@@ -341,7 +377,7 @@ def render(pv: PromptVariables, target_model: str) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Optionaler LLM-Enhancer (zentral, nicht pro Character)
+# Optional LLM enhancer (central, not per character)
 # ---------------------------------------------------------------------------
 
 def maybe_enhance_via_llm(

@@ -3238,7 +3238,12 @@ async def generate_profile_image_core(character_name: str, request) -> Dict[str,
         await require_explicit_backend_async(backend_pick)
 
     payload = {
-        "prompt": prompt_text,
+        # The description is the CHARACTER BLOCK of the profile style
+        # (config.get_use_case_prompts: subject sentence, then the block,
+        # then the portrait rules — review 2026-11-11); the prompt stays
+        # empty so nothing follows the rules.
+        "prompt": "",
+        "style_character": prompt_text,
         "agent_name": character_name,
         "user_id": "",
         "auto_enhance": False,

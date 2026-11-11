@@ -50,8 +50,8 @@ WORN = "Keep the image exactly as it is. Only change their clothing: they now we
 #: The body text of the worn back's draft (``base_body.draft_prompt``): the
 #: piece alone in the text, the same fragment as the front — the reference
 #: (the accepted worn front) shows how it looks.
-DRAFT = ("wearing only {fragment} and no other clothing, the same garment as on the person in the reference "
-         "image, with the same length, cut and colour")
+DRAFT = ("wearing only {fragment} exactly as on the person in the reference image, the same length, cut and "
+         "colour, and nothing else")
 #: The FIT of the worn back (``base_body.render_fit``): what the piece puts
 #: on, in its own dress text (``fit_text``), and nothing else. The outfit's
 #: ``base_body.FIT_PROMPT`` alone let the edit model dress the bare draft of
@@ -65,9 +65,14 @@ FIT = ("edit the first image with the clothes from the second image: the person 
 FIT_KEYWORDS = "{fragment}, only these clothes, no other clothing, body unchanged from the first image"
 #: The longest dress text a fit prompt names (``fit_text``).
 FIT_FRAGMENT_MAX = 120
-GHOST = ("The same {noun} alone, as if worn by an invisible person (ghost mannequin): no head, no arms, no "
-         "hands, no legs, no feet, no skin; where the neck opening, sleeves and hem are, the inside of the "
-         "garment is visible. Same position, size and framing, plain grey background.")
+#: Position, size and width first — they are what the ghost gates measure
+#: (centre / width ratio) and they stood as the last clause of 49 words
+#: before the review of 2026-11-11; the removed person is said once,
+#: positively, through the ghost-mannequin picture.
+GHOST = ("The same {noun} in exactly the same position, size, width and framing, keeping its worn "
+         "three-dimensional shape as if on an invisible body (ghost mannequin product photo): the person is "
+         "removed, the inside of the garment is visible at the neck opening, sleeves and hem, plain grey "
+         "background.")
 #: The noun of a piece without a name.
 DEFAULT_NOUN = "garment"
 #: The ghost's extra negative terms (spike ``NEG_GHOST``); the use case

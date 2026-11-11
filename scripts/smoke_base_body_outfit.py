@@ -87,9 +87,9 @@ Expected, derived by hand from the brief:
       back draft  stem tpose_back_<osig> in model_refs/drafts, reference = the
                   dressed front tpose_<osig>.png (opaque stub -> handed as is,
                   pixel = colour_of("tpose_<osig>")), bare_prompt and
-                  extra_negative = draft_prompt(Demo, "back"), style_character
-                  = draft_character(Demo, "back") (no "no clothing"), occasion
-                  outfit_back_draft, use case base_back, back_view;
+                  extra_negative = draft_prompt(Demo, "back"), no character
+                  block (review 2026-11-11), occasion outfit_back_draft, use
+                  case base_view_back, back_view;
       back fit    stem tpose_back_<osig> in the staging dir attempt1,
                   the CUT-OUT pair (user decision 2026-11-09): reference
                   tpose_back_<bsig>.png keeps its own matte (pixel (0,0)
@@ -648,9 +648,8 @@ def main() -> int:
                   (True, True))
             check("draft prompt", draft_r.get("bare_prompt"), base_body.draft_prompt("Demo", "back")[0])
             check("draft extra negative", draft_r.get("extra_negative"), base_body.draft_prompt("Demo", "back")[1])
-            check("draft character block", draft_r.get("style_character"), base_body.draft_character("Demo", "back"))
-            check("character block only on the draft", [r.get("style_character") is not None
-                                                        for r in dressed_renders], [False, True, False])
+            check("no character block on any dressed render", [r.get("style_character") is not None
+                                                               for r in dressed_renders], [False, False, False])
             check("fit prompt", fit_r.get("bare_prompt"), FIT_PROMPT)
             check("occasions", [r.get("occasion") for r in dressed_renders],
                   ["outfit_front", "outfit_back_draft", "outfit_back"])
@@ -660,7 +659,7 @@ def main() -> int:
             check("render sizes", [(r.get("override_width"), r.get("override_height")) for r in dressed_renders],
                   [tsize, tsize, (8, 8)])
             check("use cases", [r.get("image_use_case") for r in dressed_renders],
-                  ["tpose", "base_back", "outfit_fit"])
+                  ["outfit_edit", "base_view_back", "outfit_fit"])
             check("character loras", [r.get("character_loras") for r in dressed_renders], [True] * 3)
             front_sha = hashlib.sha256((refs / f"tpose_{bsig}.png").read_bytes()).hexdigest()
             back_sha = hashlib.sha256((refs / f"tpose_back_{bsig}.png").read_bytes()).hexdigest()

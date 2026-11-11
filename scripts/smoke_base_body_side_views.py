@@ -41,7 +41,7 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
     None; null value -> None; True -> None; proof None -> None.
 [3] Occasions and routing. outfit_side_draft: fields
     [outfit_side_draft_workflow, outfit_back_draft_workflow,
-    tpose_view_workflow], use case base_side, no ref slot; outfit_side:
+    tpose_view_workflow], use case base_view_side, no ref slot; outfit_side:
     [outfit_side_workflow, outfit_back_workflow, tpose_view_workflow], use
     case outfit_fit, ref slot; both mesh-input occasions, both hints name
     "Dressed side views"; the catalog order has them right after
@@ -88,13 +88,12 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
     left draft, left fit, right draft, right fit — dirs [model_refs, drafts,
     attempt1, drafts, attempt1, drafts, attempt1], occasions [outfit_front,
     outfit_back_draft, outfit_back, outfit_side_draft, outfit_side,
-    outfit_side_draft, outfit_side], use cases [tpose, base_back,
-    outfit_fit, base_side, outfit_fit, base_side, outfit_fit], back_view
-    [None, True, True, False, False, False, False]. The left draft: prompt
-    = model_refs.TPOSE_LEFT_PROMPT_DEFAULT without its hair clauses, then
-    BALD_HEAD and DRAFT_OUTFIT_TEXT (the base left view's short edit text
-    is not the draft's),
-    character block "sfw, " + base_appearance(base_fragments=False),
+    outfit_side_draft, outfit_side], use cases [outfit_edit, base_view_back,
+    outfit_fit, base_view_side, outfit_fit, base_view_side, outfit_fit],
+    back_view [None, True, True, False, False, False, False]. The left draft:
+    prompt = DRAFT_PROMPTS["left"] with DRAFT_OUTFIT_TEXT in its slot (review
+    2026-11-11: an edit of the dressed front — the turn, then the outfit,
+    then the frame), no character block (None),
     reference = the dressed front tpose_<sig2>.png. The left fit: reference
     tpose_left_<bsig>.png cut out ((0,0) black, (4,4) BASE_PX left), extra
     = the cut-out left draft ((4,4) = colour_of("tpose_left_<sig2>")),
@@ -262,7 +261,7 @@ def main() -> int:
               ["outfit_side_draft_workflow", "outfit_back_draft_workflow", "tpose_view_workflow"])
         check("side fit fields", occasions.spec_fields(sf),
               ["outfit_side_workflow", "outfit_back_workflow", "tpose_view_workflow"])
-        check("use cases", (sd.get("style_use_cases"), sf.get("style_use_cases")), (["base_side"], ["outfit_fit"]))
+        check("use cases", (sd.get("style_use_cases"), sf.get("style_use_cases")), (["base_view_side"], ["outfit_fit"]))
         check("ref slot", (bool(sd.get("needs_ref_slot")), bool(sf.get("needs_ref_slot"))), (False, True))
         check("mesh input", ("outfit_side_draft" in occasions.MESH_INPUT_OCCASIONS,
                              "outfit_side" in occasions.MESH_INPUT_OCCASIONS), (True, True))
@@ -573,22 +572,21 @@ def main() -> int:
                   ["outfit_front", "outfit_back_draft", "outfit_back", "outfit_side_draft", "outfit_side",
                    "outfit_side_draft", "outfit_side"])
             check("use cases", [r.get("image_use_case") for r in rs],
-                  ["tpose", "base_back", "outfit_fit", "base_side", "outfit_fit", "base_side", "outfit_fit"])
+                  ["outfit_edit", "base_view_back", "outfit_fit", "base_view_side", "outfit_fit", "base_view_side",
+                   "outfit_fit"])
             check("back_view", [r.get("back_view") for r in rs], [None, True, True, False, False, False, False])
             check("stems", [r["stem"] for r in rs],
                   [f"tpose_{sig2}", f"tpose_back_{sig2}", f"tpose_back_{sig2}", f"tpose_left_{sig2}",
                    f"tpose_left_{sig2}", f"tpose_right_{sig2}", f"tpose_right_{sig2}"])
             if len(rs) == 7:
                 ld, lf = rs[3], rs[4]
-                from app.core.model_refs import TPOSE_LEFT_PROMPT_DEFAULT
                 check("left draft prompt", ld.get("bare_prompt"),
-                      ", ".join([base_body._without_hair(TPOSE_LEFT_PROMPT_DEFAULT), base_body.BALD_HEAD,
-                                 base_body.DRAFT_OUTFIT_TEXT]))
-                check("left draft prompt ends with the outfit text",
-                      ld.get("bare_prompt", "").endswith(base_body.BALD_HEAD + ", " + base_body.DRAFT_OUTFIT_TEXT),
+                      base_body.DRAFT_PROMPTS["left"].format(outfit=base_body.DRAFT_OUTFIT_TEXT))
+                check("left draft prompt carries the outfit text after the turn",
+                      ld.get("bare_prompt", "").startswith("The same person turned to a strict left side profile view")
+                      and ", completely bald, " + base_body.DRAFT_OUTFIT_TEXT + ", the whole figure" in ld.get("bare_prompt", ""),
                       True)
-                check("left draft block", ld.get("style_character"),
-                      "sfw, " + base_body.base_appearance("Demo", base_fragments=False))
+                check("left draft block", ld.get("style_character"), None)
                 check("left draft reference", ld["reference_name"], f"tpose_{sig2}.png")
                 check("left fit references", (lf["reference_name"], lf["reference_px"], lf["extra_names"],
                                               lf["extra_px"]),

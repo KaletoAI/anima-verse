@@ -601,14 +601,19 @@ _DEFAULT_IMAGE_USE_CASES = {
     # feed multi-view img2mesh with the main T-pose framing and lighting.
     # _seed_default_use_cases backfills both into existing worlds
     # automatically — no migration needed.
+    # The face view's whole wording lives in the prompt
+    # (model_refs.FACE_VIEW_PROMPT_DEFAULT, admin override
+    # image_generation.face_view_prompt): the review of 2026-11-11 found the
+    # style and the prompt saying the same thing twice (framing, light, skin
+    # tone — 208 words), so the style is empty and the negative stays.
     "face_view": {
         "keywords": {
-            "prompt_style": "realistic 3D character portrait, lifelike skin texture, head only, entire head visible, face filling the frame, straight frontal view, plain neutral background, soft uniform ambient lighting, symmetric illumination, both sides of the face equally bright, colour-neutral light, natural exposure, shadowless, skin tone and makeup true to the reference, natural colour saturation, sharp focus, high detail",
+            "prompt_style": "",
             "prompt_negative": "hair, bangs, fringe, hair strands, ponytail, hat, cap, headscarf, hood, neck below the chin, shoulders, collarbones, chest, bare torso, clothing, jewelry, necklace, choker, earrings, shadows, shadows on the face, shadows under the nose or chin, dark eye sockets, one side darker, half of the face in shadow, side lighting, light from the left, light from the right, split lighting, Rembrandt lighting, chiaroscuro, uneven lighting, directional key light, specular highlights, shiny skin, oily skin, sweat, wet skin, reflections, catchlights, rim light, backlight, dramatic lighting, high contrast, colored light, vignette, pale skin, washed-out skin, bleached skin, ashen skin, desaturated colours, overexposed, smiling, open mouth, teeth, tilted head, three-quarter view, profile, looking away, closed eyes, hands, cropped head",
             "prompt_instruction": "Write comma-separated tags describing the character's head only with a completely bald bare scalp, no hair or accessories. Do not mention pose or expression.",
         },
         "natural": {
-            "prompt_style": "a realistic 3D portrait of the character with lifelike skin texture, framed closely around the head only with the entire head visible and the face filling most of the frame, seen straight from the front against a plain neutral background, lit by soft, perfectly uniform, colour-neutral ambient light from all sides at natural exposure, both halves of the face equally bright and no shadow anywhere, the skin tone and makeup exactly as in the reference with natural colour saturation, sharp focus and high detail",
+            "prompt_style": "",
             "prompt_negative": "hair, bangs, fringe, hair strands, ponytail, hat, cap, headscarf, hood, neck below the chin, shoulders, collarbones, chest, bare torso, clothing, jewelry, necklace, choker, earrings, shadows, shadows on the face, shadows under the nose or chin, dark eye sockets, one side darker, half of the face in shadow, side lighting, light from the left, light from the right, split lighting, Rembrandt lighting, chiaroscuro, uneven lighting, directional key light, specular highlights, shiny skin, oily skin, sweat, wet skin, reflections, catchlights, rim light, backlight, dramatic lighting, high contrast, colored light, vignette, pale skin, washed-out skin, bleached skin, ashen skin, desaturated colours, overexposed, smiling, open mouth, teeth, tilted head, three-quarter view, profile, looking away, closed eyes, hands, cropped head",
             "prompt_instruction": "Describe the character's head only with a completely bald bare scalp, no hair or accessories. Do not mention pose or expression.",
         },
@@ -646,19 +651,23 @@ _DEFAULT_IMAGE_USE_CASES = {
     # T-pose path (animals, characters not on the pipeline) keeps "tpose*".
     # Character details come FIRST (user directive 2026-11-09): the
     # ``{character}`` slot right after the subject clause takes the caller's
-    # character block (``style_character``, filled in get_use_case_prompts),
-    # and the base prompt (pose, bald head, body text) follows the style
-    # after a comma. The front keeps one short feet/margin clause after the
-    # head-to-toe phrase (user test 2026-11-09: without it the feet were cut
-    # off). Negatives as their T-pose counterparts.
+    # character block (``style_character``, filled in get_use_case_prompts) —
+    # since the prompt review of 2026-11-11 the block also carries the bald
+    # head and the mannequin body (base_body.base_character), so the words
+    # that shape the figure sit in the first 30 words instead of at 167/191
+    # of 199. The pose text follows the style after a comma. ONE framing
+    # clause (the feet/margin wording of the user test 2026-11-09: without it
+    # the feet were cut off) and ONE lighting clause — the review measured the
+    # framing three times and the light four times in the old style, each
+    # repeat pushing the body words further back. Negatives as the T-pose.
     "base_front": {
         "keywords": {
-            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, both feet entirely inside the frame, with empty margin above the head and below the feet, full arm span visible with both hands fully inside the frame, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
+            "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, both feet and both hands fully inside the frame, empty margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure and the face, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Write comma-separated tags describing the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
         "natural": {
-            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, {character}, shown from head to toe against a plain neutral background, both feet entirely inside the frame, with empty margin above the head and below the feet, the full arm span visible with both hands entirely inside the frame, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
+            "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, {character}, the whole figure from head to feet inside the frame with both hands inside it and empty margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure and the face, sharp focus",
             "prompt_negative": _NEG_TPOSE,
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
@@ -738,6 +747,18 @@ _DEFAULT_IMAGE_USE_CASES = {
     # style, a view sentence, an outfit text or a negative only cost
     # silhouette fidelity) — so style and negative stay empty.
     "outfit_fit": {
+        "keywords": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
+        "natural": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
+    },
+    # The dressed FRONT edit (occasion outfit_front) and the back/side DRAFTS
+    # (outfit_back_draft / outfit_side_draft, also the worn back draft of an
+    # own-mesh piece): edits of a base view with one short instruction
+    # (base_body.DRESS_KEEP / DRAFT_PROMPTS), like the base views. The review
+    # of 2026-11-11 found the "tpose" style (85 words, "relit instead of
+    # keeping the lighting of the reference image") standing in front of
+    # "Keep the image exactly as it is" and the outfit at word 110 — so no
+    # style; the negative is the caller's (dress_negative / DRAFT_NEGATIVE).
+    "outfit_edit": {
         "keywords": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
         "natural": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
     },
@@ -887,11 +908,11 @@ def fill_character_slot(style: str, character: Optional[str]) -> str:
 
 def join_style_prompt(style: str, prompt: str, character: Optional[str] = None) -> str:
     """The final prompt of a caller-built render: the resolved style, then
-    the prompt. A render with a character block (``character`` not None)
-    reads as ONE comma list — the style's subject, the block, the rest of the
-    style, the prompt; every other render keeps the historic single space."""
-    if character is None:
-        return f"{style} {prompt}"
+    the prompt, as ONE comma list — the style's subject, the character block
+    (when ``character`` is not None), the rest of the style, the prompt. The
+    historic single-space join ("sharp focus Keep the image …", "sharp focus
+    young female") glued two clauses into one; since the review of 2026-11-11
+    every render separates them with a comma."""
     return ", ".join(p for p in (style.strip().rstrip(",").strip(), prompt.strip().lstrip(",").strip()) if p)
 
 
@@ -927,22 +948,29 @@ def get_use_case_prompts(use_case: str, image_model: str = "",
         override = get(f"image_generation.use_cases.{uc}.styles.{family}.{f}", "")
         text = (override or "").strip() or (builtin.get(f, "") or "")
         out[f] = text.replace("{fabric}", fabric)
-    out["prompt_style"] = fill_character_slot(out["prompt_style"], character)
     if uc == "profile":
-        # Basic rules of an identity reference; first, so they outweigh the style.
+        # Basic rules of an identity reference. Order (review 2026-11-11):
+        # the style's subject sentence, then the character block (the face
+        # prompt the caller hands in as ``style_character``), then the rules —
+        # the rules used to open the prompt with eight "no …" negations and the
+        # character came 60 words later without a separator. Every rule is
+        # positive: a CFG-free model draws what a negation names.
         # Even, shadow-free face light (2026-10-15): the portrait is the
         # identity reference of the T-pose render, whose face the face
         # retexture projects onto the mesh — a key-light shadow here ends up
         # baked into the 3D texture. "Relit" also covers a portrait made from
         # the current one as reference.
-        rules = ("front view, facing the camera, neutral expression, "
-                 "head and neck only, shoulders only if the hair is long, "
-                 "complete hairstyle inside the frame, no clothing, "
-                 "no accessories, no jewelry, no headwear, no glasses, no objects, "
-                 "no background, face evenly lit from the front, no shadows on "
-                 "the face, relit instead of keeping the lighting and shadows "
-                 "of the reference image")
-        out["prompt_style"] = f"{rules}, {out['prompt_style']}"
+        rules = ("head and neck only, shoulders only if the hair is long, "
+                 "the complete hairstyle inside the frame, front view facing the camera, "
+                 "neutral relaxed expression, bare skin with nothing worn and nothing held, "
+                 "an empty plain background, the face evenly lit from the front by soft "
+                 "shadow-free light, relit rather than lit as in the reference image")
+        style = out["prompt_style"]
+        if CHARACTER_SLOT not in style:
+            style = f"{style}, {CHARACTER_SLOT}" if style else CHARACTER_SLOT
+        out["prompt_style"] = f"{style}, {rules}"
+    out["prompt_style"] = fill_character_slot(out["prompt_style"], character)
+    if uc == "profile":
         out["prompt_negative"] = (
             f"{out['prompt_negative']}, side view, three-quarter view, looking away, "
             "smiling, open mouth, cropped hair, cut off top of head, chest, torso, "

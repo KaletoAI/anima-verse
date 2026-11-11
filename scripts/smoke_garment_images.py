@@ -55,8 +55,9 @@ The recorder writes them by (step, view, attempt):
     absent (back). Appearance "slender, hair in a ponytail": the description
     names a ponytail -> "ponytail" not in the negative, "braid" still in it.
     Male -> "Only change his head: he now has"; unset gender -> "Only change
-    their head: they now have". Ghost front ends with "the inner side of the
-    hair is visible."; its negative has no step-term removal.
+    their head: they now have". Ghost front opens with "Keep the hair exactly
+    as it is: the same position, outer outline, width" and no longer names
+    the inner side (review 2026-11-11); its negative has no step-term removal.
 [3] ghost/front: reference = a grey-square copy of the accepted haired
     front file (same name; square already, so the pixels are the haired
     image's), override 160x160; accepted at attempt 1, gates.first ok.
@@ -307,7 +308,8 @@ def main() -> int:
         check("they", ("Only change their head: they now have" in p_n, "behind their shoulders" in p_n),
               (True, True))
         p_g, n_g = garment_hair.edit_prompt("Demo", "ghost", "front")
-        check("ghost front", p_g.endswith("the inner side of the hair is visible."), True)
+        check("ghost front", (p_g.startswith("Keep the hair exactly as it is: the same position, outer outline, width"),
+                              "inner side" in p_g), (True, False))
         check("ghost negative", n_g, "person, face, skin, neck, ears, body, shoulders, arms, mannequin head, "
               "wig stand, styrofoam head")
         try:
