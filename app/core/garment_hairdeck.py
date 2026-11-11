@@ -52,6 +52,16 @@ CARD_CLEAR_M = 0.004
 LAYER_BAND_M = 0.006
 LAYER_BLEND_M = 0.03
 LAYER_CLAMP_ITERATIONS = 4
+# The face stays clear (``_clear_face``, after the push), Kira 2026-11-11 (~/claude-out/kira-hairdeck,
+# face_back.py): 100 hair vertices hung in the face box (brow .. chin, the inner FACE_CLEAR_SHARE of the face width
+# at that height, in front of the head's mid plane), p50 54 mm in front of that plane — HairDeck's side strands fall
+# where its own head had no face, over the cheeks and the outer eyes. They move sideways out of the box; the move
+# spreads along the card (FACE_FALLOFF per ring, FACE_FALLOFF_RINGS rings) so the strand bends instead of tearing,
+# and a clamp keeps the clearance to the cheek. Kira: 100 -> 0 in the box, max move 21.6 mm. A front hairline at or
+# below the brows is a fringe from the image and is kept.
+FACE_CLEAR_SHARE = 0.8
+FACE_FALLOFF = 0.85
+FACE_FALLOFF_RINGS = 12
 # Cranium = Head-weighted vertices above chin + CRANIUM_FROM * (top - chin).
 CRANIUM_FROM = 0.6
 ICP_ITERATIONS = 30
@@ -549,7 +559,57 @@ def _push(Q: np.ndarray, F: np.ndarray, U, body) -> Dict[str, Any]:
     w = np.clip((Pw[:, 1] - (Pw[:, 1].max() - SPREAD_DEPTH_M)) / LAYER_BLEND_M, 0.0, 1.0)[:, None]
     disp = _clamp(Pw, w * layered + (1.0 - w) * smooth, sdf, CARD_CLEAR_M, LAYER_CLAMP_ITERATIONS)
     Qp = Pw + disp
-    return {"Pw": Pw, "inv": inv, "sdf": sdf, "d0": d0, "Qp": Qp, "disp": disp}
+    return {"Pw": Pw, "Fw": Fw, "inv": inv, "sdf": sdf, "d0": d0, "Qp": Qp, "disp": disp}
+
+
+def _ring_max(values: np.ndarray, adjacency, falloff: float, rings: int) -> np.ndarray:
+    """``values`` (>= 0) spread over the mesh: per ring a vertex takes ``falloff`` x its largest neighbour."""
+    A = adjacency[0] if isinstance(adjacency, tuple) else adjacency
+    A = A.tocsr().copy()
+    A.data[:] = 1.0   # an edge shared by two faces is counted twice; the spread needs only "is a neighbour"
+    v = np.asarray(values, np.float64).copy()
+    for _ in range(rings):
+        nb = A.multiply(v[None, :]).max(axis=1).toarray().ravel()
+        v = np.maximum(v, falloff * nb)
+    return v
+
+
+def _clear_face(Fw: np.ndarray, Qp: np.ndarray, sdf, body, head_w: np.ndarray,
+                landmarks: Optional[Dict[str, float]], chin: float,
+                hairline_y: Optional[float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """The pushed hair ``Qp`` (welded, faces ``Fw``) with the face kept clear (``FACE_CLEAR_SHARE``) ->
+    ``(Q, report)``. A front hairline at or below the brows (``hairline_y``) is a fringe the image shows: kept."""
+    from app.core.garment_fit import _adjacency
+    Q = np.asarray(Qp, np.float64).copy()
+    P = body.positions
+    head_v = head_w > 0.5
+    if landmarks is None:
+        return Q, {"skipped": "no_landmarks"}
+    brow = float(landmarks["brow_y"])
+    if hairline_y is not None and hairline_y <= brow:
+        return Q, {"skipped": "fringe", "hairline_y": round(float(hairline_y), 5)}
+    band = head_v & (P[:, 1] < brow) & (P[:, 1] > chin)
+    if not band.any():
+        return Q, {"skipped": "no_face_band"}
+    cx = float(np.median(P[head_v, 0]))
+    half = 0.5 * float(np.percentile(P[band, 0], 98) - np.percentile(P[band, 0], 2))
+    mid_z = float(np.median(P[band, 2]))
+    reach = FACE_CLEAR_SHARE * half
+    off = Q[:, 0] - cx
+    inside = (Q[:, 1] < brow) & (Q[:, 1] > chin) & (Q[:, 2] > mid_z) & (np.abs(off) < reach)
+    need = np.where(inside, reach - np.abs(off), 0.0)
+    adjacency = _adjacency(Fw, len(Q))
+    dx = (_ring_max(np.where(off >= 0, need, 0.0), adjacency, FACE_FALLOFF, FACE_FALLOFF_RINGS)
+          - _ring_max(np.where(off < 0, need, 0.0), adjacency, FACE_FALLOFF, FACE_FALLOFF_RINGS))
+    Q[:, 0] += dx
+    if inside.any():
+        # a strand moved aside may now cut the cheek: out to the clearance again
+        Q = Q + _clamp(Q, np.zeros_like(Q), sdf, CARD_CLEAR_M, LAYER_CLAMP_ITERATIONS)
+    return Q, {"in_box": int(inside.sum()), "moved": int((np.abs(dx) > MOVED_EPS_M).sum()),
+               "max_m": round(float(np.abs(dx).max()), 4) if len(dx) else 0.0,
+               "half_width_m": round(half, 4), "mid_z": round(mid_z, 5),
+               "in_box_after": int(((Q[:, 1] < brow) & (Q[:, 1] > chin) & (Q[:, 2] > mid_z)
+                                    & (np.abs(Q[:, 0] - cx) < reach)).sum())}
 
 
 def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, head_v: np.ndarray, chin: float,
@@ -688,6 +748,8 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     pushed, placement = _place_and_push(s * np.asarray(P, np.float64) + t, pivot, F, U, body, head_v, chin, top,
                                         forward_m, tilt_deg, gates)
     Pw, inv, sdf, d0, Qp, disp = (pushed[k] for k in ("Pw", "inv", "sdf", "d0", "Qp", "disp"))
+    Qp, face = _clear_face(pushed["Fw"], Qp, sdf, body, head_w, placement["landmarks"], chin,
+                           placement["hairline_pushed_y"])
     d1 = sdf.sample(Qp)
     mag = np.linalg.norm(disp, axis=1)
     X = Qp[inv]
@@ -746,6 +808,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                  "min_clear_after_m": round(float(d1.min()), 5) if len(d1) else None,
                  "p95_push_m": round(float(np.percentile(mag[mag > MOVED_EPS_M], 95)), 4)
                  if (mag > MOVED_EPS_M).any() else 0.0},
+        "face": face,
         "weights": {"joints": names, "all_head": int((W[:, 0] == 1).sum()),
                     "blended": int(((W[:, 0] < 1) & (W[:, 0] > 0)).sum()), "all_spine2": int((W[:, 0] == 0).sum())},
         "colour": colour_info,

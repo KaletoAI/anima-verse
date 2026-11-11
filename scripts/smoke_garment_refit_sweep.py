@@ -17,7 +17,7 @@ path is a recorder that counts: ``service.get_image_service``,
 ``garment_store.garment_fsig`` / ``garment_method`` / ``garment_hsig`` come
 from fixed tables.
 
-Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 4 clothing 7 footwear 4):
+Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 5 clothing 7 footwear 4):
   item   kind      stored fsig  current fsig  base sha  fit_version  method
   hA     hair      aaaaaaaaaaaa same          SHA       (none)       edit_chain
   cB     clothing  bbbbbbbbbbbb same          SHA       1            edit_chain
@@ -36,8 +36,8 @@ record's inputs.prepared_sha256 = sha256 of those bytes.
 [3] Released: sweep([Demo], pause 0) -> {Demo: [cB, hA]}; _fit called for
     cB then hA (the order of [1]), each once; 0 hub calls; 2 assembly
     schedules (one per published fit); exactly 2 log lines "Garment refit
-    Demo/<item>" ending "ok", naming "fit_version 1 -> 7" (cB) and "None -> 4" (hA);
-    records of hA / cB: accepted, fit_version 2 / 7, base sha SHA; _fit_state
+    Demo/<item>" ending "ok", naming "fit_version 1 -> 7" (cB) and "None -> 5" (hA);
+    records of hA / cB: accepted, fit_version 5 / 7, base sha SHA; _fit_state
     "accepted"; cC: GLB bytes and record byte-identical, mtime unchanged; cD
     and hE records unchanged. A second sweep -> {} (nothing left).
 [4] HairDeck hair hH (method hairdeck, fsig 999999999999, hsig
@@ -119,7 +119,7 @@ def main() -> int:
 
         SHA, OTHER = "s" * 64, "o" * 64
         FV = garment_fit.FIT_VERSION
-        check("FIT_VERSION", FV, {"hair": 4, "clothing": 7, "footwear": 4})
+        check("FIT_VERSION", FV, {"hair": 5, "clothing": 7, "footwear": 4})
         charmod.get_character_dir("Demo", create=True)
         garments_root = gs._root("Demo")
         garments_root.mkdir(parents=True, exist_ok=True)
@@ -234,8 +234,8 @@ def main() -> int:
         refits = [line for line in lines.lines if line.startswith("Garment refit Demo/")]
         check("log lines", len(refits), 2)
         check("log cB", "fit_version 1 -> 7: ok" in refits[0] and "Demo/cB" in refits[0], True)
-        check("log hA", "fit_version None -> 4: ok" in refits[1] and "Demo/hA" in refits[1], True)
-        for item_id, fsig, version in (("hA", "a" * 12, 4), ("cB", "b" * 12, 7)):
+        check("log hA", "fit_version None -> 5: ok" in refits[1] and "Demo/hA" in refits[1], True)
+        for item_id, fsig, version in (("hA", "a" * 12, 5), ("cB", "b" * 12, 7)):
             r = json.loads(rec(item_id, fsig))
             check(f"{item_id} record", (r.get("accepted"), r.get("fit_version"), r.get("base_model_sha256")),
                   (True, version, SHA))

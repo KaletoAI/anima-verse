@@ -73,6 +73,9 @@ Fixture (metres, +y up, the body faces +z)
     -> moved_share = 481 / 1922 = 0.2503 (+- 0.002: the lowest ring may carry that 3 %) <= 0.90. Before, the crown
     spread (the largest displacement within SPREAD_M 0.0085, iterated) carried the inner layer's push across the
     6 mm to the shell and over all of it: 1.0, refused — a correct fit refused for the flood.
+[6] The face stays clear (``_clear_face``, FIT_VERSION hair 5): two hair ribbons in front of a face band move
+    sideways out of the box, bent along the card; a fringe (front hairline at or below the brows) is kept. The
+    numbers are derived in ``face_clear``. The [1]-[5] fixture has no landmarks, so nothing moves there.
 """
 import json
 import math
@@ -265,6 +268,59 @@ def centroid_count(r, hairline):
     return int((P[F].mean(1)[:, 1] > hairline).sum())
 
 
+class _SphereSDF:
+    """Signed distance to a sphere (centre ``c``, radius ``r``) — the stub ``_clamp`` needs."""
+    def __init__(self, c, r):
+        self.c, self.r = np.asarray(c, float), float(r)
+
+    def sample(self, X):
+        return np.linalg.norm(X - self.c, axis=1) - self.r
+
+    def grad(self, X):
+        v = X - self.c
+        return v / np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12)
+
+
+def face_clear(gh):
+    """``_clear_face`` by hand. Face band: a grid x = -0.075..0.075 (51 columns) x y 1.43..1.52 x z -0.05/+0.05,
+    all Head -> centre x 0, mid plane z 0, half width = (p98 - p2)/2 of x = 0.075 - 0.02 * 0.15 = 0.072, reach
+    0.8 * 0.072 = 0.0576. Hair: a ribbon x 0.02 / 0.03 (and its mirror at -0.02 / -0.03), z 0.09, y 1.60 .. 1.40 in
+    0.01 steps. Brow 1.53, chin 1.42: the box holds y 1.43 .. 1.52 (10 rows x 2 columns per ribbon); need = reach -
+    |x| = 0.0376 on the inner column, so it moves to x 0.0576 (the box edge, outside: |x| < reach is strict); the
+    spread is need x 0.85 per ring: the inner column's top vertex y 1.60 lies 8 rings above y 1.52 -> 0.0376 x
+    0.85^8 = 0.010246. The sphere (centre y 1.5, r 0.06) never comes within 4 mm, so the clamp moves nothing.
+    A front hairline at 1.50 (at or below the brow) is a fringe: nothing moves."""
+    from types import SimpleNamespace
+    xs = np.linspace(-0.075, 0.075, 51)
+    G = np.array([[x, y, z] for x in xs for y in np.linspace(1.43, 1.52, 10) for z in (-0.05, 0.05)])
+    body = SimpleNamespace(positions=G)
+    head_w = np.ones(len(G))
+    ys = np.round(np.linspace(1.60, 1.40, 21), 5)
+    V, F = [], []
+    for sx in (1, -1):
+        base = len(V)
+        for y in ys:
+            V += [[sx * 0.02, y, 0.09], [sx * 0.03, y, 0.09]]
+        for i in range(len(ys) - 1):
+            a, b, c2, d = base + 2 * i, base + 2 * i + 1, base + 2 * i + 2, base + 2 * i + 3
+            F += [[a, b, c2], [b, d, c2]]
+    V, F = np.array(V), np.array(F)
+    sdf = _SphereSDF([0, 1.5, 0], 0.06)
+    Q, rep = gh._clear_face(F, V, sdf, body, head_w, {"brow_y": 1.53}, 1.42, None)
+    check(rep["in_box"] == 40 and rep["in_box_after"] == 0, f"40 vertices in the face box, none after ({rep})")
+    check(abs(rep["half_width_m"] - 0.072) < 1e-4, f"half width {rep['half_width_m']} = 0.072")
+    dx = Q[:, 0] - V[:, 0]
+    i_mid = 2 * int(np.nonzero(ys == 1.48)[0][0])
+    check(abs(dx[i_mid] - 0.0376) < 1e-6 and abs(Q[i_mid, 0] - 0.0576) < 1e-6,
+          f"inner column at y 1.48 moves 0.0376 to the box edge ({dx[i_mid]:.6f})")
+    check(abs(dx[0] - 0.0376 * 0.85 ** 8) < 1e-6, f"top vertex y 1.60 bends 0.0376 x 0.85^8 = 0.010246 ({dx[0]:.6f})")
+    j_mid = 2 * len(ys) + i_mid
+    check(abs(dx[j_mid] + 0.0376) < 1e-6, f"the mirrored ribbon moves to -x ({dx[j_mid]:.6f})")
+    check(np.allclose(Q[:, 1:], V[:, 1:]), "only x changes (y, z kept; no clamp)")
+    Qf, repf = gh._clear_face(F, V, sdf, body, head_w, {"brow_y": 1.53}, 1.42, 1.50)
+    check(repf.get("skipped") == "fringe" and np.array_equal(Qf, V), f"a hairline at 1.50 <= brow is a fringe: kept {repf}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="hairdeck-fit-") as tmp:
         root = Path(tmp)
@@ -382,6 +438,9 @@ def main() -> int:
         check(pf.metrics["max_push_m"] == 0 and pf.metrics["moved_share"] == 0 and pf.ok and not pf.reasons,
               f"the plain shell is not pushed and passes ({pf.metrics['max_push_m']}, "
               f"{pf.metrics['moved_share']}, {pf.reasons})")
+
+        print("[6] the face stays clear")
+        face_clear(gh)
 
     print("ALL OK" if not FAILS else "FAILED: " + ", ".join(FAILS))
     return 1 if FAILS else 0
