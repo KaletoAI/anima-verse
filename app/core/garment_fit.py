@@ -1710,10 +1710,22 @@ def _head_centre_x(body_rigged: BodyMesh) -> float:
     return float(np.median(body_rigged.positions[head, 0]))
 
 
+#: A 1 cm row of the bib box whose garment leaves at least this much of the throat free around the head's centre line
+#: holds strands framing the neck, not a bib (Lirien 2026-11-11: two front strands at 2.7..6 cm either side of the
+#: centre, 188 cm² in the box, the throat free 6.2..10.7 cm wide in every row).
+BIB_FREE_THROAT_M = 0.03
+
+
 def bib_area_cm2(X, Fw, body_rigged: BodyMesh) -> float:
     """Garment area in front of the neck below the chin (spike ``hair_metrics``): triangles whose centroid is within
     16 cm below the chin, within 6 cm of the head's centre line and in front of (or less than 1 cm behind) the neck's
-    front surface of its 1 cm height bin. Bodies face +z."""
+    front surface of its 1 cm height bin. Bodies face +z.
+
+    A bib bridges the throat: per 1 cm height bin, the box's triangles count only when they leave less than
+    ``BIB_FREE_THROAT_M`` free around the centre line — the free interval runs from the nearest vertex x of the
+    triangles left of the line to that of the ones right of it (the box edge, 6 cm, on a side without any), and a
+    triangle spanning the line leaves none. Strands hanging in front of the shoulders either side of the neck are
+    hair, not a bib. Never more than the box area."""
     X = np.asarray(X, np.float64)
     Fw = np.asarray(Fw, np.int64).reshape(-1, 3)
     if len(Fw) == 0:
@@ -1724,8 +1736,18 @@ def bib_area_cm2(X, Fw, body_rigged: BodyMesh) -> float:
     bins = np.round(nb[:, 1] / 0.01).astype(int)
     front = {k: nb[bins == k, 2].max() for k in np.unique(bins)}
     C = X[Fw].mean(1)
-    fz = np.array([front.get(k, np.inf) for k in np.round(C[:, 1] / 0.01).astype(int)])
-    bib = (C[:, 1] < chin) & (C[:, 1] > chin - 0.16) & (np.abs(C[:, 0] - xc) < 0.06) & (C[:, 2] > fz - 0.01)
+    rows = np.round(C[:, 1] / 0.01).astype(int)
+    fz = np.array([front.get(k, np.inf) for k in rows])
+    box = (C[:, 1] < chin) & (C[:, 1] > chin - 0.16) & (np.abs(C[:, 0] - xc) < 0.06) & (C[:, 2] > fz - 0.01)
+    lo, hi = X[Fw][:, :, 0].min(1) - xc, X[Fw][:, :, 0].max(1) - xc
+    bib = np.zeros(len(Fw), bool)
+    for r in np.unique(rows[box]):
+        s = box & (rows == r)
+        left, right = hi[s][hi[s] < 0], lo[s][lo[s] > 0]
+        free = ((right.min() if len(right) else 0.06) - (left.max() if len(left) else -0.06)
+                if not ((lo[s] <= 0) & (hi[s] >= 0)).any() else 0.0)
+        if free < BIB_FREE_THROAT_M:
+            bib |= s
     return float(triangle_areas(X, Fw)[bib].sum() * 1e4)
 
 
