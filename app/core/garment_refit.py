@@ -366,47 +366,109 @@ def outdated_footwear_fits(character_name: str, *, profile: Optional[Dict[str, A
     return out
 
 
-def _refit_footwear(character_name: str, profile: Dict[str, Any], base: Tuple[str, str]) -> List[str]:
-    """Refit ``outdated_footwear_fits`` under the current fsig — the base model, then every stored outfit body
-    whose fit of the old fsig was accepted (``garment_footwear.body_fit`` with ``build``). Caller holds the run
-    lock. Returns the item ids (``"<item>@<body id>"`` per body fit)."""
-    from app.core import garment_fit, garment_footwear, garment_set, garments, garment_store as gs
+def outdated_footwear_sources(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Item ids of the character's WORN footwear whose shoe source is through the mesh step under the current
+    ssig while its insole analysis is missing or of another ``footwear_insole.INSOLE_VERSION`` — the re-analysis
+    is CPU work (``footwear_source.run_source(steps=["insole"], force=True)``) that today only happened on the
+    next outfit build; the sweep and the ``fit_refit`` improvement run it (spec 2026-11-11-improvements-figure-
+    pipeline § 6.2). A source without its mesh is ``garment_fill``'s, never listed here."""
+    from app.core import footwear_insole, footwear_source, garment_set, garment_store as gs
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    out: List[str] = []
+    for item_id in garment_set.worn_garments(character_name, profile=profile):
+        try:
+            if gs._garment_kind(item_id) != garment_set.FOOTWEAR:
+                continue
+            ssig = footwear_source.current_ssig(item_id)
+            if not footwear_source.step_done(item_id, ssig, "mesh"):
+                continue
+            version = footwear_source.step_record(item_id, ssig, "insole").get("version")
+        except ValueError:
+            continue
+        if version != footwear_insole.INSOLE_VERSION:
+            out.append(item_id)
+    return out
+
+
+def _fit_footwear(character_name: str, item_id: str, fsig: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    """One footwear fit on the base model under the run lock, reported and noted like every refit; the result."""
+    from app.core import garment_footwear, garments, garment_store as gs
+    gs.start(character_name, item_id, "fit")
+    try:
+        garment_footwear.fit(character_name, item_id, fsig, profile=profile, schedule=False)
+    except garments._Refused as e:
+        result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
+    except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
+        result = garments._refusal(character_name, item_id, fsig, "fit", str(e) or type(e).__name__, None, [])
+    else:
+        gs.end(character_name, item_id, "fit")
+        result = {"ok": True, "fsig": fsig, "ran": ["fit"]}
+    garments._note_outcome(character_name, item_id, result)
+    return result
+
+
+def _refit_footwear_bodies(character_name: str, item_id: str, old_fsig: str, profile: Dict[str, Any]) -> List[str]:
+    """Refit the item on every stored outfit body whose fit of ``old_fsig`` was accepted
+    (``garment_footwear.body_fit`` with ``build``); ``"<item>@<body id>"`` per body fitted."""
+    from app.core import garment_footwear, garments, garment_store as gs
     from app.core.keyed_lock import keyed_lock
     done: List[str] = []
+    for body_id in garment_footwear.stored_outfit_bodies(character_name):
+        old_body = gs.read_record(gs.garment_path(character_name, item_id, old_fsig, "fit", body=body_id)
+                                  .with_suffix(".json"))
+        if old_body.get("accepted") is not True:
+            continue
+        body_sha = garments.body_sha256(character_name, body_id)
+        try:
+            with keyed_lock("garment_body_fit", f"{character_name}:{body_id}"):
+                garment_footwear.body_fit(character_name, item_id, body_id=body_id, body_sha=body_sha,
+                                          profile=profile, build=True)
+        except Exception as e:  # noqa: BLE001 — recorded on that body by body_fit, the sweep goes on
+            logger.info("Garment refit %s/%s (footwear) on outfit body %s: %s", character_name, item_id,
+                        body_id, str(e) or type(e).__name__)
+            continue
+        done.append(f"{item_id}@{body_id}")
+    return done
+
+
+def _refit_footwear(character_name: str, profile: Dict[str, Any], base: Tuple[str, str]) -> List[str]:
+    """The footwear part of the sweep, caller holds the run lock: first ``outdated_footwear_sources`` — the insole
+    re-analysed (CPU), then the fit on the base model and on every stored outfit body that had one, exactly what
+    ``garment_footwear.run_chain`` does for an outdated insole — then ``outdated_footwear_fits`` under the current
+    fsig the same way. Returns the item ids (``"<item>@<body id>"`` per body fit)."""
+    from app.core import footwear_source, garment_fit, garment_set, garments, garment_store as gs
+    done: List[str] = []
+    for item_id in outdated_footwear_sources(character_name, profile=profile):
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+        gs.start(character_name, item_id, "insole")
+        res = footwear_source.run_source(item_id, steps=["insole"], force=True)
+        if not res.get("ok"):
+            result = garments._refusal(character_name, item_id, fsig, str(res.get("step") or "insole"),
+                                       str(res.get("error") or ""), res.get("gates"), [])
+            if res.get("failure") == footwear_source.LOAD:
+                result["retry_later"] = True
+            garments._note_outcome(character_name, item_id, result)
+            logger.info("Garment refit %s/%s (footwear): insole re-analysis refused — %s", character_name, item_id,
+                        result.get("error"))
+            continue
+        gs.end(character_name, item_id, "insole")
+        result = _fit_footwear(character_name, item_id, fsig, profile)
+        logger.info("Garment refit %s/%s (footwear, %s): insole re-analysed, fit: %s", character_name, item_id,
+                    fsig, "ok" if result.get("ok") else f"refused — {result.get('error')}")
+        if result.get("ok"):
+            done.append(item_id)
+            done += _refit_footwear_bodies(character_name, item_id, fsig, profile)
     for item_id, old_fsig, fsig in outdated_footwear_fits(character_name, profile=profile):
         old = gs.read_record(gs.garment_path(character_name, item_id, old_fsig, "fit").with_suffix(".json"))
-        gs.start(character_name, item_id, "fit")
-        try:
-            garment_footwear.fit(character_name, item_id, fsig, profile=profile, schedule=False)
-        except garments._Refused as e:
-            result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
-        except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
-            result = garments._refusal(character_name, item_id, fsig, "fit", str(e) or type(e).__name__, None, [])
-        else:
-            gs.end(character_name, item_id, "fit")
-            result = {"ok": True, "fsig": fsig, "ran": ["fit"]}
-            done.append(item_id)
-        garments._note_outcome(character_name, item_id, result)
+        result = _fit_footwear(character_name, item_id, fsig, profile)
         logger.info("Garment refit %s/%s (footwear, %s -> %s): fit_version %s -> %s: %s", character_name, item_id,
                     old_fsig, fsig, old.get("fit_version"), garment_fit.FIT_VERSION[garment_set.FOOTWEAR],
                     "ok" if result.get("ok") else f"refused — {result.get('error')}")
-        if not result.get("ok"):
-            continue
-        for body_id in garment_footwear.stored_outfit_bodies(character_name):
-            old_body = gs.read_record(gs.garment_path(character_name, item_id, old_fsig, "fit", body=body_id)
-                                      .with_suffix(".json"))
-            if old_body.get("accepted") is not True:
-                continue
-            body_sha = garments.body_sha256(character_name, body_id)
-            try:
-                with keyed_lock("garment_body_fit", f"{character_name}:{body_id}"):
-                    garment_footwear.body_fit(character_name, item_id, body_id=body_id, body_sha=body_sha,
-                                              profile=profile, build=True)
-            except Exception as e:  # noqa: BLE001 — recorded on that body by body_fit, the sweep goes on
-                logger.info("Garment refit %s/%s (footwear) on outfit body %s: %s", character_name, item_id,
-                            body_id, str(e) or type(e).__name__)
-                continue
-            done.append(f"{item_id}@{body_id}")
+        if result.get("ok"):
+            done.append(item_id)
+            done += _refit_footwear_bodies(character_name, item_id, old_fsig, profile)
     return done
 
 

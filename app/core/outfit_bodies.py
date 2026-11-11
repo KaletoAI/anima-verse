@@ -500,22 +500,31 @@ def rebuild_worn_on(character_name: str, body_id: str) -> bool:
     return True
 
 
-def match_stale_postures(character_name: str) -> List[str]:
-    """The boot sweep's part (``garment_refit.sweep``): every stored body of
-    a character in mesh mode whose posture record is stale is matched, its
-    garments are refitted onto the turned body (``refit_body``) and the worn
-    outfit's model on it is rebuilt (``rebuild_worn_on``) — each body inside
-    the character's generation slot. CPU only. Returns the bodies matched."""
-    from app.core import base_body, model3d
+def stale_posture_bodies(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[str]:
+    """The read-only half of ``match_stale_postures``: the stored outfit
+    bodies of a character in mesh mode whose posture record is stale
+    (``outfit_body_posture.is_stale``), sorted; empty off the pipeline or in
+    retexture mode. What the ``fit_refit`` improvement lists."""
+    from app.core import base_body
     from app.core.outfit_body_posture import is_stale
-    profile = _profile(character_name)
+    if profile is None:
+        profile = _profile(character_name)
     if (not base_body.is_base_pipeline(character_name, profile=profile)
             or base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE):
         return []
+    return [body_id for body_id in body_ids(character_name) if is_stale(character_name, body_id)]
+
+
+def match_stale_postures(character_name: str) -> List[str]:
+    """The boot sweep's part (``garment_refit.sweep``): every stored body of
+    a character in mesh mode whose posture record is stale
+    (``stale_posture_bodies``) is matched, its garments are refitted onto the
+    turned body (``refit_body``) and the worn outfit's model on it is rebuilt
+    (``rebuild_worn_on``) — each body inside the character's generation slot.
+    CPU only. Returns the bodies matched."""
+    from app.core import model3d
     done: List[str] = []
-    for body_id in body_ids(character_name):
-        if not is_stale(character_name, body_id):
-            continue
+    for body_id in stale_posture_bodies(character_name):
         with model3d.generation_slot(character_name):
             matched = match_posture(character_name, body_id)
             if not matched.get("changed"):
