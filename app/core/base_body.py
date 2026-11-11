@@ -4109,3 +4109,77 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
                          if path else []) + dressed_warnings(character_name, signature, base_sig),
             "proof": meta.get("retexture_proof") if path else None,
             "url": model3d.signature_model_url(character_name, signature) if status == "ready" else None}
+
+
+# --- Rebuild cost (improvements: ``outfit_rebuild``) -------------------------
+
+#: A stale outfit model's ``stale_reason`` (``outfit_info``) in a rebuild
+#: note or an improvement label.
+STALE_REASON_TEXT = {"older_base": "older base", "before_pipeline": "built before the pipeline",
+                     "detail_changed": "other body detail", "body_mode": "other outfit body mode",
+                     "outfit_body": "older outfit body", "mesh_item_ready": "own-mesh piece ready"}
+#: The img2mesh + rig jobs of one outfit body (mesh mode).
+OUTFIT_BODY_JOBS = 2
+
+
+def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[str, Any]] = None,
+                 stale_reason: Optional[str] = None) -> Dict[str, Any]:
+    """The hub cost of rebuilding the outfit model ``signature`` on the
+    current base (``model_refs.trigger_now`` of its dressed views, then
+    ``model3d.generate_for_current_outfit(force=True)``), counted in FIRST
+    attempts — the back fit's ``FIT_ATTEMPTS`` and the view guard's one
+    re-render may each add one per view: ``{image_jobs, mesh_jobs, hub_jobs,
+    note, views_needed, body_needed}``. Read-only.
+
+    * ``views_needed``: a ``dressed_views()`` view has no ``dressed_image``
+      of the current base, or the stored model left an own-mesh piece
+      painted on that has its fit now (``mesh_items_ready``: the views are
+      re-rendered without it) → the front edit plus draft + fit per other
+      view: 3 with front + back, 7 with the side views on. Counted for the
+      whole set (a view the texture store holds is copied, no job: the
+      estimate stays an upper bound for first attempts).
+    * ``body_needed`` (mesh mode only): views needed (a new texture), or no
+      current outfit body for the texture of the dressed front
+      (``stored_outfit_body``) → img2mesh + rig = 2. An undressed
+      combination stands on the base itself.
+    * Retexture mode with the views current is Blender on the CPU: 0.
+
+    ``stale_reason`` (``outfit_info``'s; None = asked here) opens the note.
+    The base body itself is never rebuilt, nor judged by its prompt wording.
+    Anything unreadable answers ``hub_jobs`` None (unknown, never a silent 0)."""
+    try:
+        from app.core import model3d
+        profile = _profile_of(character_name, profile)
+        bsig = base_signature(character_name, profile=profile)
+        if stale_reason is None:
+            stale_reason = outfit_info(character_name, base_sig=bsig, signature=signature).get("stale_reason")
+        path = model3d.find_model3d(character_name, signature, include_stale=True)
+        meta = model3d._read_sidecar(path) if path else {}
+        views = dressed_views()
+        views_needed = (any(dressed_image(character_name, v, signature, bsig) is None for v in views)
+                        or bool(mesh_items_ready(character_name, meta,
+                                                 base_sha=base_model_sha256(character_name, bsig))))
+        body_needed = False
+        if outfit_body_mode(character_name, profile=profile) == MESH_MODE:
+            if views_needed:
+                body_needed = True
+            else:
+                front = dressed_image(character_name, "front", signature, bsig)
+                texture = _outfit_texture(character_name, front, bsig=bsig, profile=profile)
+                body_needed = bool(texture["dressed"]) and stored_outfit_body(
+                    character_name, outfit_body_id(texture["tsig"]), tsig=texture["tsig"],
+                    view_shas=texture_view_shas(character_name, signature, bsig)) is None
+    except Exception as e:  # noqa: BLE001 — an estimate, never a failure
+        logger.warning("Rebuild cost %s / %s not computable: %s", character_name, signature, e)
+        return {"image_jobs": None, "mesh_jobs": None, "hub_jobs": None, "views_needed": None,
+                "body_needed": None, "note": f"cost unknown — {e}"}
+    image_jobs = 1 + 2 * (len(views) - 1) if views_needed else 0
+    mesh_jobs = OUTFIT_BODY_JOBS if body_needed else 0
+    parts = ([f"views {image_jobs}"] if image_jobs else []) + ([f"body {mesh_jobs}"] if mesh_jobs else [])
+    what = (" + ".join(parts) + " (first attempts)" if parts
+            else "outfit body stored, CPU only" if outfit_body_mode(character_name, profile=profile) == MESH_MODE
+            else "repaint on the CPU")
+    reason = STALE_REASON_TEXT.get(str(stale_reason or ""), "")
+    return {"image_jobs": image_jobs, "mesh_jobs": mesh_jobs, "hub_jobs": image_jobs + mesh_jobs,
+            "views_needed": views_needed, "body_needed": body_needed,
+            "note": f"{reason}: {what}" if reason else what}
