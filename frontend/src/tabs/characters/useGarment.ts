@@ -324,8 +324,60 @@ export interface FootwearInsole {
     shank_slope_deg?: number | null
   } | null
   gates: GateRecord & { refusal?: string | null } | null
-  overlay: { insole?: [number, number, number][]; topline?: [number, number, number][] } | null
+  /** `slabs` = per tube slab of a boot its measured extent as a closed ring (`garment_footwear._insole_view`). */
+  overlay: {
+    insole?: [number, number, number][]
+    topline?: [number, number, number][]
+    slabs?: { points: [number, number, number][]; closed: boolean }[]
+  } | null
   frame: Record<string, unknown> | null
+  /** A boot's shaft (class other than `none`), at the nominal length; null for a shoe. */
+  shaft?: FootwearInsoleShaft | null
+}
+
+/** The shaft summary of the insole analysis (boots spec 2026-11-11 § 6.1). */
+export interface FootwearInsoleShaft {
+  class: 'ankle' | 'knee' | 'overknee' | string
+  /** Collar height above the heel seat (m, nominal). */
+  collar_h_m: number | null
+  /** The top closed tube slab above the ground (m, nominal). */
+  top_m: number | null
+  closed_share: number | null
+  /** Cap faces removed from the prepared mesh (a single-view mesher closes the opening). */
+  cap_removed: number | null
+  slabs: number
+  slabs_closed: number
+}
+
+/** The split of a fit (`garment_footwear._split_view`): a boot splits at the wearer's ankle into a rigid
+ *  foot part and a clothing-weighted shaft — four nodes per pair; a shoe carries `is_boot` false and the
+ *  collar diagnostic. */
+export interface FootwearFitSplit {
+  is_boot: boolean
+  band_m: number | null
+  /** A topline more than this above the ankle makes a boot (m). */
+  margin_m: number | null
+  sides: Record<string, {
+    y_m?: number
+    topline_m?: number
+    collar_above_ankle_mm?: number
+    /** Faces per node part (`foot`, `shaft`). */
+    parts: Record<string, number>
+  }>
+}
+
+/** The shaft summary of a split fit (`garment_footwear._fit_shaft_view`), worse side. */
+export interface FootwearFitShaft {
+  class: string | null
+  push_p95_m?: number
+  push_max_m?: number
+  inside_share?: number
+  seam_gap_p95_mm?: number
+  seam_stretch_max?: number
+  leg_follow_deg?: number
+  clip_m?: number
+  knee_margin_m?: number
+  top_m?: number
 }
 
 /** One fit gate of a footwear fit record (`footwear_fit.fit_pair`): the measured value, its limit
@@ -351,6 +403,9 @@ export interface FootwearFitInfo {
   freshness: Freshness | null
   created_at: string | null
   error: string | null
+  /** The split and the shaft of the accepted record (null without one; `shaft` null for a shoe). */
+  split?: FootwearFitSplit | null
+  shaft?: FootwearFitShaft | null
 }
 
 /** One row of `fits`: the base model first, then (outfit body mode mesh) every stored outfit body. */

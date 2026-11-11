@@ -43,6 +43,24 @@ extension_deg_right 22.2, toe_room_mm_right 18.0, root_lift_m 0.052, k_m_per_uni
      ``preview_url`` stays (the GLB is still the current fsig's fit; the pose of another fit is never
      handed out). The fit GLB removed -> ``preview_url`` None, ``foot_pose`` None, ``fits[0].status``
      "missing".
+[I4] The boot view (boots spec 2026-11-11 § 15; ``_insole_view`` / ``_split_view`` / ``_fit_shaft_view``).
+     A SHOE: insole.json with ``shaft {class "none", slabs []}`` and a fit record with ``split {is_boot False}``
+     and ``sides.left.split.collar_above_ankle_mm -21.0`` -> ``insole.shaft`` None, no ``overlay.slabs``, the
+     row's ``shaft`` None, ``split.is_boot`` False, ``split.sides.left.collar_above_ankle_mm`` -21.0.
+     A BOOT: frame origin (0.1, 0, 0.2), x_axis (0, 0, 1), up (0, 1, 0), z_axis = x x up = (-1, 0, 0), so a
+     frame point (x, y, z) sits at mesh (0.1 - z, y, 0.2 + x); k 0.5; shaft {class "ankle", collar_h_nominal
+     0.14, top_raw 0.5, closed_share 0.95, cap_removed 12, slabs [s1 {y 0.5, x 0.1..0.3, z -0.05..0.05,
+     closed}, s2 {y 0.4, x 0.12..0.28, z -0.04..0.04, open}, s3 {y 0.3, ranges None, open}]} ->
+     ``insole.shaft`` = {class ankle, collar_h_m 0.14, top_m 0.5 * 0.5 = 0.25, closed_share 0.95,
+     cap_removed 12, slabs 3, slabs_closed 1}; ``overlay.slabs`` = two rings (s3 cuts nothing), the first
+     closed with the corners (x0,z0) (x1,z0) (x1,z1) (x0,z1) (x0,z0) at mesh (0.15, 0.5, 0.3) (0.15, 0.5, 0.5)
+     (0.05, 0.5, 0.5) (0.05, 0.5, 0.3) (0.15, 0.5, 0.3), the second open; the round-1 ``insole`` / ``topline``
+     overlay kept. The fit record ``split {is_boot True, band_m 0.02}``, ``sides.left {split {y_m 0.09,
+     topline_m 0.17, collar_above_ankle_mm 72.5}, parts {foot 2200, shaft 1148}}``, ``shaft {class ankle,
+     push_p95_m 0.0093, clip_m None, …}`` -> the row's ``split`` = {is_boot True, band_m 0.02, margin_m 0.01, sides.left {y_m
+     0.09, topline_m 0.17, collar_above_ankle_mm 72.5, parts {foot 2200, shaft 1148}}, right {parts {}}} (the
+     hand record's right side carries neither, so only an empty parts map), ``shaft`` = the
+     numbers verbatim with ``class``, ``clip_m`` absent (None is no number).
 """
 import hashlib
 import json
@@ -146,7 +164,8 @@ def main() -> int:
         source_parents = {"ssig": ssig, "empty_sha256": "", "mesh_sha256": sha(src / "prepared.glb"),
                           "insole_version": footwear_insole.INSOLE_VERSION}
 
-        def write_fit(body_id: str, body_sha: str, *, width_factor: float, on_base: bool) -> Path:
+        def write_fit(body_id: str, body_sha: str, *, width_factor: float, on_base: bool,
+                      extra: dict = None) -> Path:
             body = "" if on_base else body_id
             path = gs.garment_path("Demo", heels, F, "fit", body=body)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,6 +186,8 @@ def main() -> int:
                               "root_lift_m": 0.052, "contacts": {"left": [], "right": []},
                               "source": {"item_id": heels, "fsig": F, "glb_sha256": sha(path)}},
                 "fitted_at": "2026-11-10T12:00:00Z", "created_at": "2026-11-10T12:00:00Z"}
+            for key, value in (extra or {}).items():
+                record[key] = {**record[key], **value} if isinstance(record.get(key), dict) else value
             if on_base:
                 record["base_model_sha256"] = body_sha
                 record["parents"]["base_model_sha256"] = body_sha
@@ -235,6 +256,69 @@ def main() -> int:
         info = garments.garment_info("Demo", heels)
         check("I3 no fit", (info.get("preview_url"), info.get("foot_pose"), info.get("preview_freshness"),
                             info["fits"][0]["status"]), (None, None, None, "missing"))
+
+        # --- [I4] -------------------------------------------------------------------------------------------
+        print("[I4] the boot view: the insole's shaft block and slab rings, the fit's split and shaft")
+        profile = get_character_profile("Demo")
+        profile["outfit_body_mode"] = None
+        check("I4 retexture mode", save_character_profile("Demo", profile), True)
+        overlay = {"insole": [[0.0, 0.01, 0.0], [0.1, 0.01, 0.0]], "topline": [[0.0, 0.05, 0.0]]}
+        frame = {"origin": [0.1, 0.0, 0.2], "x_axis": [0.0, 0.0, 1.0], "up": [0.0, 1.0, 0.0],
+                 "z_axis": [-1.0, 0.0, 0.0], "length": 1.0}
+        gs.write_record(src / "insole.json", {
+            "version": footwear_insole.INSOLE_VERSION, "gates": {"ok": True}, "nominal": {"k": 0.5},
+            "overlay": overlay, "frame": frame, "shaft": {"class": "none", "slabs": [], "cap_removed": 0}})
+        write_fit(bsig, base_sha, width_factor=1.08, on_base=True, extra={
+            "split": {"is_boot": False, "band_m": 0.02, "margin_m": 0.01},
+            "sides": {"left": {"extension": {"deg": 28.0}, "toe_room_mm": 40.0,
+                               "split": {"is_boot": False, "y_m": 0.06, "collar_above_ankle_mm": -21.0},
+                               "parts": {"foot": 2000}}}})
+        info = garments.garment_info("Demo", heels)
+        row = info["fits"][0]
+        check("I4 shoe status", row["status"], "accepted")
+        check("I4 shoe insole shaft", info["insole"]["shaft"], None)
+        check("I4 shoe no slab rings", "slabs" in (info["insole"]["overlay"] or {}), False)
+        check("I4 shoe fit shaft", row.get("shaft"), None)
+        check("I4 shoe split", row.get("split"), {"is_boot": False, "band_m": 0.02, "margin_m": 0.01, "sides": {
+            "left": {"y_m": 0.06, "collar_above_ankle_mm": -21.0, "parts": {"foot": 2000}},
+            "right": {"parts": {}}}})
+
+        gs.write_record(src / "insole.json", {
+            "version": footwear_insole.INSOLE_VERSION, "gates": {"ok": True}, "nominal": {"k": 0.5},
+            "overlay": overlay, "frame": frame,
+            "shaft": {"class": "ankle", "collar_h_nominal": 0.14, "collar_h_raw": 0.28, "top_raw": 0.5,
+                      "vamp_top_raw": 0.2, "closed_share": 0.95, "cap_removed": 12, "slabs": [
+                          {"y": 0.5, "x_min": 0.1, "x_max": 0.3, "z_min": -0.05, "z_max": 0.05, "closed": True},
+                          {"y": 0.4, "x_min": 0.12, "x_max": 0.28, "z_min": -0.04, "z_max": 0.04, "closed": False},
+                          {"y": 0.3, "x_min": None, "x_max": None, "z_min": None, "z_max": None,
+                           "closed": False}]}})
+        shaft_rec = {"class": "ankle", "cap_removed": 12, "closed_share": 0.95, "top_m": 0.17, "clip_m": None,
+                     "knee_margin_m": None, "push_p95_m": 0.0093, "push_max_m": 0.0108, "inside_share": 0.0,
+                     "seam_gap_p95_mm": 0.0, "seam_stretch_max": 13.0, "leg_follow_deg": 0.0}
+        write_fit(bsig, base_sha, width_factor=1.08, on_base=True, extra={
+            "split": {"is_boot": True, "band_m": 0.02, "margin_m": 0.01},
+            "sides": {"left": {"extension": {"deg": 28.0}, "toe_room_mm": 40.0,
+                               "split": {"is_boot": True, "y_m": 0.09, "band_m": 0.02, "margin_m": 0.01,
+                                         "topline_m": 0.17, "collar_above_ankle_mm": 72.5},
+                               "parts": {"foot": 2200, "shaft": 1148}, "shaft": {"push_p95_m": 0.0093}}},
+            "shaft": shaft_rec})
+        info = garments.garment_info("Demo", heels)
+        row = info["fits"][0]
+        check("I4 boot insole shaft", info["insole"]["shaft"], {
+            "class": "ankle", "collar_h_m": 0.14, "top_m": 0.25, "closed_share": 0.95, "cap_removed": 12,
+            "slabs": 3, "slabs_closed": 1})
+        rings = (info["insole"]["overlay"] or {}).get("slabs") or []
+        check("I4 boot rings", [r["closed"] for r in rings], [True, False])
+        check("I4 boot ring 1", rings[0]["points"] if rings else None,
+              [[0.15, 0.5, 0.3], [0.15, 0.5, 0.5], [0.05, 0.5, 0.5], [0.05, 0.5, 0.3], [0.15, 0.5, 0.3]])
+        check("I4 boot round-1 overlay kept", {k: info["insole"]["overlay"].get(k) for k in ("insole", "topline")},
+              overlay)
+        check("I4 boot split", row.get("split"), {"is_boot": True, "band_m": 0.02, "margin_m": 0.01, "sides": {
+            "left": {"y_m": 0.09, "topline_m": 0.17, "collar_above_ankle_mm": 72.5,
+                     "parts": {"foot": 2200, "shaft": 1148}},
+            "right": {"parts": {}}}})
+        check("I4 boot fit shaft", row.get("shaft"),
+              {"class": "ankle", **{k: v for k, v in shaft_rec.items() if k != "class" and v is not None}})
         check("HUB", HUB, [])
     print("PASS" if not FAILS else f"FAIL: {len(FAILS)} — {', '.join(FAILS)}")
     return 1 if FAILS else 0

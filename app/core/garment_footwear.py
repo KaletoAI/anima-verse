@@ -673,7 +673,8 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
     ``gates`` is the record's gate table ``{name: {value, limit, ok, gating}}``; ``metrics`` the record's width
     factor / cap, root lift (SIGNED — negative when the shod root descends, spec 2026-11-11 § 13.2), scale
     (``k_m_per_unit``, shoe ``length_m``) and per side the width needed, the
-    slimming needed, the extension and the toe room."""
+    slimming needed, the extension and the toe room; ``split`` / ``shaft`` = ``_split_view`` / ``_fit_shaft_view``
+    of the accepted record (None without one)."""
     from app.core import garment_store as gs
     from app.core.garment_fit import FIT_VERSION
     from app.core.model_overview import CURRENT, MISSING, STALE, freshness
@@ -717,7 +718,79 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
         fresh = {"accepted": freshness(CURRENT), "stale": freshness(STALE, FIT_BODY_CHANGED),
                  "outdated": freshness(STALE, FIT_SOURCE_CHANGED)}.get(status, freshness(MISSING))
     return {"status": status, "gates": record.get("gates") or {}, "metrics": metrics, "url": None,
-            "freshness": fresh, "created_at": record.get("fitted_at"), "error": error}
+            "freshness": fresh, "created_at": record.get("fitted_at"), "error": error,
+            "split": _split_view(record), "shaft": _fit_shaft_view(record)}
+
+
+def _split_view(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``split`` of a fit row (boots spec 2026-11-11 § 15): ``{is_boot, band_m, margin_m, sides: {side: {y_m, topline_m,
+    collar_above_ankle_mm, parts: {foot, shaft?}}}}`` from the record's ``split`` and ``sides.<side>`` (``parts``
+    = the face count per node part); None for a record without a split (an older fit version, no fit). A shoe
+    carries it too: ``is_boot`` False, ``collar_above_ankle_mm`` the diagnostic."""
+    split = record.get("split")
+    if not isinstance(split, dict):
+        return None
+    sides: Dict[str, Any] = {}
+    for side, data in (record.get("sides") or {}).items():
+        if not isinstance(data, dict):
+            continue
+        own = data.get("split") if isinstance(data.get("split"), dict) else {}
+        sides[side] = {**_numbers({"y_m": own.get("y_m"), "topline_m": own.get("topline_m"),
+                                   "collar_above_ankle_mm": own.get("collar_above_ankle_mm")}),
+                       "parts": _numbers(data.get("parts"))}
+    return {"is_boot": bool(split.get("is_boot")), "band_m": split.get("band_m"), "margin_m": split.get("margin_m"),
+            "sides": sides}
+
+
+def _fit_shaft_view(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``shaft`` of a fit row: the record's ``shaft`` summary (``class``, worse-side push / inside / seam / follow
+    numbers, cap removed, closed share, top, clip, knee margin) for a SPLIT fit; None for a shoe."""
+    split = record.get("split")
+    shaft = record.get("shaft")
+    if not (isinstance(split, dict) and split.get("is_boot") and isinstance(shaft, dict)):
+        return None
+    return {"class": shaft.get("class"), **_numbers(shaft)}
+
+
+def _insole_view(insole: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``insole`` of ``info``: ``insole.json``'s ``{version, nominal, gates, overlay, frame}`` plus ``shaft`` — for a
+    boot (shaft class other than ``none``) ``{class, collar_h_m (nominal), top_m (the top closed slab above the
+    ground, nominal), closed_share, cap_removed, slabs, slabs_closed}``, else None — and ``overlay.slabs``: per tube
+    slab its measured extent as a closed ring ``{points [[x, y, z] x5], closed}`` in the mesh's own coordinates (the
+    third overlay colour of the mesh preview). None without an insole.json."""
+    if not insole:
+        return None
+    from app.core import footwear_insole
+    view = {k: insole.get(k) for k in ("version", "nominal", "gates", "overlay", "frame")}
+    shaft = insole.get("shaft") if isinstance(insole.get("shaft"), dict) else {}
+    if shaft.get("class") in (None, "none"):
+        view["shaft"] = None
+        return view
+    k = (insole.get("nominal") or {}).get("k")
+    slabs = [s for s in shaft.get("slabs") or [] if isinstance(s, dict)]
+    top = shaft.get("top_raw")
+    view["shaft"] = {
+        "class": shaft.get("class"), "collar_h_m": shaft.get("collar_h_nominal"),
+        "top_m": float(top) * float(k) if isinstance(top, (int, float)) and isinstance(k, (int, float)) else None,
+        "closed_share": shaft.get("closed_share"), "cap_removed": shaft.get("cap_removed"),
+        "slabs": len(slabs), "slabs_closed": sum(1 for s in slabs if s.get("closed"))}
+    rings: List[Dict[str, Any]] = []
+    try:
+        frame = footwear_insole.frame_of(insole)
+    except (KeyError, TypeError, ValueError):
+        frame = None
+    if frame is not None:
+        for s in slabs:
+            box = [s.get(key) for key in ("x_min", "x_max", "z_min", "z_max")]
+            if not all(isinstance(v, (int, float)) for v in box) or not isinstance(s.get("y"), (int, float)):
+                continue
+            x0, x1, z0, z1 = (float(v) for v in box)
+            y = float(s["y"])
+            corners = np.array([[x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1], [x0, y, z0]])
+            rings.append({"points": [[round(float(c), 6) for c in p] for p in frame.to_mesh(corners)],
+                          "closed": bool(s.get("closed"))})
+    view["overlay"] = {**(view.get("overlay") or {}), "slabs": rings}
+    return view
 
 
 def stored_outfit_bodies(character_name: str) -> List[str]:
@@ -802,7 +875,9 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
     ``preview_url`` / ``foot_pose`` (``_preview``) = the shod base model of the current fsig and its record's
     ``foot_pose`` (with ``source.fsig``) — the Wardrobe's shod preview; None without an accepted fit there;
     ``preview_freshness`` = the base fit's freshness. ``width_cap`` = the cap the next fit uses (``width_cap``).
-    ``insole`` = ``insole.json``'s ``{version, nominal, gates, overlay, frame}`` (None without one);
+    ``insole`` = ``_insole_view``: ``insole.json``'s ``{version, nominal, gates, overlay, frame}`` plus the boot's
+    ``shaft`` summary and the slab rings ``overlay.slabs`` (None without one); every fit row carries ``split`` and
+    ``shaft`` (``_split_view`` / ``_fit_shaft_view``);
     ``stale_reasons`` codes ``item_image_changed`` / ``source_version_changed`` / ``analysis_updated``."""
     from app.core import base_body, footwear_insole, footwear_source, garment_store as gs, garments
     from app.core.http_files import content_version
@@ -909,8 +984,7 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
     preview_url, foot_pose = _preview(character_name, item_id, fsig)
 
     insole = gs.read_record(folder / "insole.json")
-    insole_view = ({k: insole.get(k) for k in ("version", "nominal", "gates", "overlay", "frame")}
-                   if insole else None)
+    insole_view = _insole_view(insole)
     image = get_item_image_path(item_id)
     image_stamp = _stamp(Path(image)) if image else None
     status = gs.status(character_name, item_id)

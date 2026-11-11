@@ -22,7 +22,7 @@
  * /inventory/items/{item}
  * (the flag; the PUT replaces the whole outfit_piece, so it is read first).
  *
- * A footwear piece (a rigid shoe) shows the shoe source steps and the fit
+ * A footwear piece (a shoe or a boot) shows the shoe source steps and the fit
  * (FootwearSteps) and, on the right, the SHOD PREVIEW: the base model with
  * the fitted shoes (`preview_url`) under the fit's `foot_pose`, played in
  * the stand / walk / sit clips of the library (kinds idle / walk / sit,
@@ -51,8 +51,9 @@ import type { GarmentItemInfo, PieceStatus } from './useGarment'
 /** The item flag's explanation (also the hint of the item editor). */
 const OWN_MESH_HINT = 'Characters on the base-body pipeline get this piece as a fitted 3D mesh of its own instead of painting it onto the body. Applies to every wearer; 2D images stay unchanged.'
 
-/** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a rigid shoe. */
-const OWN_MESH_SHOE_HINT = "Made once per item from the item image; fitted onto each wearer's foot on the CPU. Boots and sandals are not supported yet; socks stay painted."
+/** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
+ *  2026-11-11 § 15; the knee-high words change when P4 lands). */
+const OWN_MESH_SHOE_HINT = 'Made once per item from the item image; fitted onto each wearer on the CPU. Shoes and ankle boots; knee-high boots from P4; sandals and open shoes are not supported yet; socks stay painted.'
 
 const STEP_LABELS: Record<string, string> = {
   queued: 'Queued',
@@ -210,7 +211,7 @@ export function OwnMeshToggle({ itemId, checked, disabled, feet = false, onChang
       title={t(feet ? OWN_MESH_SHOE_HINT : OWN_MESH_HINT)}>
       <input type="checkbox" checked={checked} disabled={disabled || busy}
         onChange={(e) => { void flip(e.target.checked) }} />
-      <span>{feet ? t('Own mesh — shoe (rigid)') : t('Own mesh (every wearer)')}</span>
+      <span>{feet ? t('Own mesh — footwear') : t('Own mesh (every wearer)')}</span>
     </label>
   )
 }
@@ -330,6 +331,12 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
                   </button>
                 ))}
                 <span className="ga-hint">{t("Shod base model with the fit's foot pose")}</span>
+                {footwear.fits?.[0]?.split?.is_boot ? (
+                  <span className="ga-hint"
+                    title={t('Four nodes per pair: per side the foot part and the shaft (triangles each)')}>
+                    {t('Boot: rigid foot part and a shaft on the shin, per side')}
+                  </span>
+                ) : null}
               </div>
               <Model3DViewer key={footwear.preview_url} url={footwear.preview_url} format="glb" height={430}
                 freshness={footwear.preview_freshness} footPose={footwear.foot_pose}

@@ -1913,9 +1913,11 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     (``garment_gates.limits``), the mesh component share and the fit gates
     (hair ``garment_fit.GATES``, clothing ``CLOTHING_GATES``). Footwear: the
     empty-shoe, mesh and insole gates of the shoe source (``footwear_gates``,
-    ``footwear_insole``) and the fit gates (``footwear_fit.FIT_GATES`` plus
-    the body-cut gates ``footwear_cut.CUT_GATES``, which the fit step runs
-    and records under the same ``gates``)."""
+    ``footwear_insole``, the insole with the boot's ``SHAFT_GATES``) and the
+    fit gates (``footwear_fit.FIT_GATES``, the split fit's ``SHAFT_GATES`` —
+    the chips show a recorded-only one as "Reported, not gated" by the
+    record's ``gating`` — plus the body-cut gates ``footwear_cut.CUT_GATES``,
+    which the fit step runs and records under the same ``gates``)."""
     from app.core import garment_fit, garment_gates, garment_mesh
     if kind == "footwear":
         from app.core import footwear_cut, footwear_fit, footwear_gates, footwear_insole
