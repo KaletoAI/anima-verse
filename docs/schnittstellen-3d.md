@@ -2057,6 +2057,11 @@ Basiskörper-Pipeline.
   `scripts/smoke_glb_graft.py` (Fold), Messung
   `node scripts/check_garment_collision.mjs MODEL.glb --motion MOTION.json`
   (Durchscheinen, unten).
+- **Footwear (`kind` `footwear`):** a fitted shoe is grafted as TWO nodes
+  `garment_footwear_<item_id>_<side>` (extras add `side`), rigid on Foot/ToeBase
+  only; the served body is cut under it, and the assembled sidecar carries the
+  `foot_pose` record both renderers apply — see "Footwear (`foot_pose`, garment
+  kind `footwear`)" after the collision capsules.
 - **Lieferung:** der Server baut die Auslieferung als abgeleitete Datei
   (`model3d/assembled/{sig}.glb` = nacktes Outfit-Modell + gepfropfte
   Garments); das gespeicherte `{sig}.glb` bleibt immer nackt. Ändert sich die
@@ -12212,6 +12217,116 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   bind-pose distance). Far LOD, no driven link or no payload → nothing is bound, no per-frame work. Checks:
   `scripts/smoke_extension_collision.mjs` (hand-derived), `scripts/check_extension_collision.mjs` (tip depth and
   tip offset from rest on the real clips, contact off/on).
+
+### Footwear (`foot_pose`, garment kind `footwear`)
+
+A fitted SHOE is a rigid garment, meshed once per item from the item image and fitted per character × body on
+the CPU (spec `docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`). The server decides everything
+geometric — scale, placement, the foot's extension, the lift, the body cut — and delivers it in the served model;
+both renderers apply the one record through `@anima/scene-render` and add nothing of their own.
+
+**Kind.** An `outfit_piece` with `own_mesh: true` whose slots are exactly `feet` is garment kind `footwear`,
+method `shoe` (`garment_set.garment_kind_of`); every other own-mesh piece stays `clothing`, a multi-slot piece
+(tights) included. The clothing edit chain never runs for it. Footwear is NEVER painted onto the body, in either
+outfit body mode: without an accepted fit on the current body it is missing (bare foot) with the warning
+`MESH_ITEM_NOT_READY` (`base_body.py`) until its fit is accepted.
+
+**In the served GLB** (the assembly, § A3a; `garment_assembly.py`):
+- two shoe nodes `garment_footwear_<item_id>_<side>` (`side` `left` / `right`), extras
+  `garment = {kind: "footwear", item_id, fsig, side}`, opaque, skinned on Skin 0 to Foot/ToeBase ONLY — no leg
+  bone ever carries weight. In the bind pose the shoe sits rotated back by the extension (its heel tip points under
+  the floor): a bind measurement must never read it (below).
+- the body CUT under the shoe: the fit record's geometric `cut` (Foot/ToeBase bone space — no vertex indices) is
+  applied per tier to every body primitive (`footwear_cut.apply_cut`, `glb_mesh.rewrite_body_primitives`):
+  forefoot slimmed, faces inside the shoe's footprint and below its cap removed, crossing faces bisected along the
+  topline, throat conformed. Renderers hide nothing; the stored bare `{sig}.glb` stays whole.
+- at most ONE footwear piece per outfit (slot `feet` is single occupancy): the piece worn in the feet slot per the
+  bare sidecar's `pieces`, else the first by item id; another one is left off with `FOOTWEAR_SECOND` in the
+  assembly sidecar's `garment_warnings` only.
+- no collision capsules (`garmentCapsules("footwear")` → `[]`, "Collision capsules" above: a rigid shoe is never
+  pushed) and no layering (neither inner nor outer piece).
+
+**Payload.** `foot_pose` sits in the ASSEMBLED sidecar only, beside `collision` and `extension_rig`, and is
+delivered as `model.foot_pose` by `GET /characters/{name}/model3d` and as `foot_pose` by
+`/characters/{name}/model/meta` (not in the worldmap poll — a client fetches the meta when `model_sig` changes).
+It is `null` whenever the served file is the bare one (no shoe fitted, or the assembly still being rebuilt — a pose
+is never served without its shoe; `garment_assembly.served_foot_pose`).
+
+```
+{"version": 1,
+ "source": {"item_id", "fsig", "glb_sha256"},   // glb_sha256 = the FULL tier's assembled bytes
+ "bones": {"<joint name>": {"axis": [x, y, z], "deg"}},
+                                               // Foot and ToeBase per side: a turn about a unit axis in the
+                                               // bone's LOCAL bind frame (Foot + the extension, ToeBase back)
+ "root_lift_m": 0.0526,                        // metres of the model's bind space
+ "contacts": {"left":  [{"bone", "pos": [x, y, z], "role": "heel" | "ball" | "toe"}, …],
+              "right": […]}}                  // sole points, bind space, fixed to their bone
+```
+
+- Joint names as in the model, compared with `normBoneName`. A record of another `version` is ignored.
+- `contacts` follow the collision ENDPOINT RULE (`jointNowFrom`): a bind-space point that moves like a vertex
+  skinned 100 % to its bone (`footContactsNow`).
+- **Match, not hash.** A renderer cannot cheaply hash what it loaded, so it applies the record only to a figure
+  that carries a node of kind `footwear` with the record's `item_id` and `fsig` (`footPoseMatches`) — the low tier
+  carries the same nodes. A record that does not match is a no-op everywhere, so an outfit switch or the bare file
+  served during a rebuild never extends a bare foot.
+
+**One implementation** (`packages/scene-render`, `three` injected; every function is a no-op for a null or
+non-matching record):
+- `footPose.ts` — `applyFootPose(three, clip, fp, rest?, clipRest?)` bakes the extension into a clip
+  (`q' = q · R(axis, deg)` per key; relative to the transplanted rest when `clipRest` is given, so the sole lands
+  where the fit put it whatever the retarget did to the foot), `applyFootPoseToPose` the same turns once on a figure
+  shown without a clip, `footPoseLiftM(fp, group)` = `root_lift_m` for the `ground` height group (unknown groups
+  included), 0 for `seat` / `lie`, `footPoseMatches`, `footContactsNow`. Both bakes mark what they did
+  (`userData.footPosed = fsig`) and do nothing on marked input — the extension can never be applied twice.
+- `footPlant.ts` — `plantFootPose(three, posed, bare, probe, fp, {rootY, unitsPerCm})`, the per-frame SHOD FOOT
+  PLANT baked into the clip after the extension: stance decided by the BARE clip's ankle/ball joints
+  (`footLock.contactWeights`), the end of each contact run decaying over `PLANT_FADE_S` = 0.15 s; the sole levelled
+  about the fit's Foot axis, the forepart held rigid except an upward flex at the ball, the lowest contact put on
+  the floor (`figureBox(probe).min.y − rootY`) by a two-bone leg IK — lowered by the foot's weight when it floats,
+  raised in full when it pierces. Marked `userData.footPlanted = fsig`.
+- `twoBoneIk.ts` (the leg IK, also used by client3d's leg pin) and `footLock.ts` (the importer's contact rule)
+  live in the package for that reason.
+- `clipGround.ts` — for a matching record the ground is measured ON THE SOLE (the contacts) over the clip's level
+  stance frames and the offset is signed (`soleGroundOffsetOf`); `rootY` = the lift the caller will add.
+
+**The root lift is never baked into a track.** The figure adds `footPoseLiftM(fp, group)` where it already adds
+`clipHeightOffsetM`, so a height-group change fades the lift exactly like the group offset. The 3D client scales
+it by the instance scale (`baseScale` — `root_lift_m` is in the template's metres, not the 1.70-m listing
+convention); the admin preview plays the unscaled model.
+
+**Call-site rule — every clip path of a shod figure, once, right after the retarget / bind-relative step and
+before any measurement:** extension, then plant. client3d: `prepareShoes` (`figures.ts`) runs both on ONE probe
+clone and is called by `adaptExternalClips` (the library), `retargetClips` (the borrow path, no corrections) and
+`buildModel` (the model's embedded clips); `fitLibraryAsync` and `loadManifestModels` forward the pose;
+`modelFootPose` keeps the record only for a template that carries its shoes. The admin viewer (`Model3DViewer`,
+fed by the Wardrobe shoe preview's `foot_pose`) wraps both `bindRelativeClip` sites in `applyFootPose` and plants
+at both — the main clip in the ground group and the floor-plan marker figures in the ground group only. A clip
+baked for the ground group that plays seated keeps the plant but gets lift 0.
+
+**Bind measurements exclude garment subtrees** — `figureBox`, `restSolesOf` and the clip-ground anchor skip every
+mesh inside a garment node, so the rotated-back bind shoe never lowers the floor. They do read the CUT body: on the
+measured material its lowest bind point lies 11.5 mm above the bare soles and its rest soles 25–33 mm higher at the
+heel (Foot/ToeBase rest corrections 6.2° / 9.8° off the bare file's). The plant and the ground measure aim at the
+same floor the figure is anchored on, so a clip stands on the ground; the still pose placed at `root_lift_m`
+over that floor stands 11.5 mm under it (`check_footwear.mjs --bare`, its `still` row). Open point, not a rule.
+
+**Seated and lying:** extension, no lift. A seat clip with planted feet sinks the heel up to about `root_lift_m`
+under the floor (measured −56 … −57 mm); the knee-raise IK (`seatFootLift`, spec § 6.4) is the open P3b step.
+Kneeling, floor sitting and lying are not corrected (spec § 3).
+
+**The proofs (§ B5a).** Hand-derived smokes: `node scripts/smoke_foot_pose.mjs` (bone chain, 28° turn, lift and
+group gating, idempotence, match), `node scripts/smoke_foot_plant.mjs` (level turn, run decay, planted frames, the
+IK reach clamp, pierce), `node scripts/smoke_clip_ground_sole.mjs`, `node client3d/scripts/smoke_foot_pose_client.mjs`
+(the client chain: posed + planted once, lift per group, `modelFootPose`), `./.venv/bin/python
+scripts/smoke_foot_pose_call_sites.py` (every call of `bindRelativeClip` / `adaptExternalClips` / `retargetClips`
+sits in a listed function that forwards the pose), the server side `scripts/smoke_footwear_*.py`. The measurement on
+real clips: `node scripts/check_footwear.mjs MODEL.glb META.json [--bare BARE.glb]` — the client's own chain, CPU
+skinned per frame: the share of shoe vertices more than 5 mm inside the body (boundary loops of the cut body capped),
+the lowest sole point per stance frame against the floor, the total Foot pitch (extension plus the clip's own
+plantarflexion), and for seat clips the lowest contact and the hips. On the spike shoe (Kira, Black Stilettos):
+still sole 0.1 / 0.0 mm, idle −2.2 mm, walk stance −2.2 … +13.0 mm (heel strike ≥ −1.0, the lift-off frame at the
+leg's reach), walk Foot pitch max 45° / 47° (still 28° / 22°).
 
 ### P2 runtime contract: secondary motion
 
