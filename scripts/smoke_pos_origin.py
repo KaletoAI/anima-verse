@@ -227,9 +227,9 @@ set_character_pos("demo", 40.0, 40.0)
 before = get_avatar_sync_snapshot("demo")["pos"]
 with transaction() as conn:
     conn.execute(
-        "INSERT INTO prop_action_runs (execution_id, actor, partner, request_fingerprint, action_id, "
+        "INSERT INTO prop_action_runs (execution_id, actor, members, request_fingerprint, action_id, "
         "definition_revision, status, target, definition, data, created_at, updated_at) "
-        "VALUES ('run1', 'demo', 'npc_other', 'f', 'a', 'r', 'approaching', '{}', '{}', '{}', 't', 't')")
+        "VALUES ('run1', 'demo', '[\"npc_other\"]', 'f', 'a', 'r', 'approaching', '{}', '{}', '{}', 't', 't')")
     conn.execute("INSERT INTO prop_action_claims VALUES (?, 'run1', 'person', ?)",
                  (runs.person_key("demo"), json.dumps({"name": "demo"})))
 moved = dict(x=before["x"] + 0.5, z=before["z"])

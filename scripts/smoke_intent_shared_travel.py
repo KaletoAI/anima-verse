@@ -30,6 +30,7 @@ config.load(ROOT / "world" / "config.json")
 db.init_schema()
 from app.core.game_time import GameDuration, GameTime
 from app.core.keyed_lock import keyed_lock
+from app.core import timeutils
 from app.core.timeutils import game_time, set_game_factor, set_game_time
 from app.core.task_queue import get_task_queue
 from app.core import party_engine as P
@@ -41,6 +42,18 @@ prompt_templates.register_package_template_dirs([
 T.register()
 set_game_factor(0)
 set_game_time(GameTime.parse("Y0001-D010T12:00:00"))
+# Journeys run on the MOTION clock (real seconds the unfrozen world has run),
+# not on game time; pin it so "an hour later" moves the walkers too.
+_MOTION = [1000.0]
+timeutils.motion_time = lambda: _MOTION[0]
+timeutils.motion_rate = lambda: 1.0
+
+
+def advance(duration):
+    """Let ``duration`` pass on both clocks: the calendar (expiry, intents)
+    and the motion clock (journey positions)."""
+    set_game_time(game_time() + duration)
+    _MOTION[0] += duration.seconds
 HOME = W.add_location("Smoke Inn", "A consent test inn.",
                      rooms=[{"id": "taproom", "name": "Taproom"},
                             {"id": "kitchen", "name": "Kitchen"}])["id"]
@@ -101,8 +114,12 @@ assert not T.trip_context(a, "join")
 assert P.resolve_pending_invite(invite(it)["invite_id"], True)["status"] == "accepted"
 assert C.get_character_current_room(a) == C.get_character_current_room(b) == "kitchen"
 assert I.get_intent(it["id"])["status"] == "done"
-assert P.resolve_pending_invite(invite(it)["invite_id"], True)["status"] == "accepted"
-assert P.get_party_of(a)["members"] == [b]
+# The party this consent created ends with the trip (arrival releases the
+# member it added), so a repeated yes no longer names a live membership and
+# must not report "accepted" -- and it never moves anyone again.
+assert P.get_party_of(a) is None and P.get_party_of(b) is None
+assert P.resolve_pending_invite(invite(it)["invite_id"], True)["status"] == "not_found"
+assert C.get_character_current_room(a) == C.get_character_current_room(b) == "kitchen"
 
 a, b = pair()
 it = propose((a, b))
@@ -165,7 +182,7 @@ hooks.emit("world_tick")
 assert travel_engine.get_journey(a) == first
 assert P.resolve_pending_invite(invite(it)["invite_id"], True)["status"] == "accepted"
 assert travel_engine.get_journey(a) == first
-set_game_time(game_time() + GameDuration.of(hours=1))
+advance(GameDuration.of(hours=1))
 travel_engine.advance_all_journeys()
 hooks.emit("world_tick")
 assert all(C.get_character_current_location(n) == AWAY for n in [a, b])
@@ -189,14 +206,15 @@ hooks.emit("world_tick")
 assert travel_engine.get_journey(a) == j
 assert I.cancel_intent(it["id"])
 assert not travel_engine.get_journey(a) and phase(it) == "cancelled"
-assert P.get_party_of(a), "cancel never silently dissolves an existing party"
+# The party was formed by this trip's consent, so the cancel releases it.
+assert not P.get_party_of(a) and not P.get_party_of(b), "cancel releases the party its consent formed"
 
 # A stale ticker snapshot must not revive the journey cancelled above.
 from unittest.mock import patch
 snapshot = [{"name": a, "journey": j, "movement_target": AWAY,
              "current_location": HOME}]
 positions = {name: C.get_character_pos(name) for name in [a, b]}
-set_game_time(game_time() + GameDuration.of(hours=1))
+advance(GameDuration.of(hours=1))
 with patch.object(C, "list_active_journeys", return_value=snapshot):
     travel_engine.advance_all_journeys()
 assert {name: C.get_character_pos(name) for name in [a, b]} == positions
@@ -235,7 +253,7 @@ P.resolve_pending_invite(invite(it)["invite_id"], True)
 R.add_rule({"id": "smoke_trip_arrival", "type": "block", "action": "enter",
             "character": b, "condition": "always", "message": "The destination is closed to the companion.",
             "target": {"scope": "room", "location_id": AWAY, "room_ids": ["hall"]}})
-set_game_time(game_time() + GameDuration.of(hours=1))
+advance(GameDuration.of(hours=1))
 travel_engine.advance_all_journeys()
 assert all(C.get_character_current_location(name) != AWAY for name in [a, b])
 assert I.get_intent(it["id"])["status"] == "cancelled"
@@ -247,20 +265,22 @@ c, _ = pair()
 it = propose((a, b), AWAY, "hall")
 P.resolve_pending_invite(invite(it)["invite_id"], True)
 assert P.add_to_party(a, c)
-set_game_time(game_time() + GameDuration.of(minutes=1))
+advance(GameDuration.of(minutes=1))
 travel_engine.advance_all_journeys()
 assert not travel_engine.get_journey(a)
 assert I.get_intent(it["id"])["status"] == "cancelled"
 assert C.get_character_current_location(c) == HOME
 assert C.get_character_current_room(c) == "taproom"
-assert P.get_party_of(a)["members"] == [b, c]
+# The cancel releases only the member this trip's consent added (b); the
+# companion who joined on its own (c) stays with the leader.
+assert P.get_party_of(a)["members"] == [c] and not P.get_party_of(b)
 
 # An independently moved follower is never dragged back by a managed ticker.
 a, b = pair()
 it = propose((a, b), AWAY, "hall")
 P.resolve_pending_invite(invite(it)["invite_id"], True)
 C.save_character_current_room(b, "kitchen")
-set_game_time(game_time() + GameDuration.of(minutes=1))
+advance(GameDuration.of(minutes=1))
 travel_engine.advance_all_journeys()
 assert C.get_character_current_room(b) == "kitchen"
 assert I.get_intent(it["id"])["status"] == "cancelled"
@@ -270,7 +290,7 @@ a, b = pair()
 it = propose((a, b), AWAY, "hall")
 P.resolve_pending_invite(invite(it)["invite_id"], True)
 get_task_queue().pause_queue("default")
-set_game_time(game_time() + GameDuration.of(hours=1))
+advance(GameDuration.of(hours=1))
 travel_engine.advance_all_journeys()
 assert I.get_intent(it["id"])["status"] == "done"
 assert C.get_character_current_location(a) == C.get_character_current_location(b) == AWAY
@@ -289,7 +309,7 @@ for sleeping in ["world", "participant"]:
     travel_engine.advance_all_journeys()
     assert not travel_engine.get_journey(a)
     assert I.get_intent(it["id"])["status"] == "cancelled"
-    assert P.get_party_of(a)["members"] == [b]
+    assert not P.get_party_of(a), "the cancelled trip releases the party its consent formed"
     W.set_world_sleeping(False)
 
 # Removing the owning package aborts its journey, not ordinary travel.
@@ -302,7 +322,7 @@ assert unmanaged and not reason
 owned_positions = {name: C.get_character_pos(name) for name in [a, b]}
 execution = hooks.get_provider("journey_execution_context")
 hooks.register_provider("journey_execution_context", None)
-set_game_time(game_time() + GameDuration.of(hours=1))
+advance(GameDuration.of(hours=1))
 travel_engine.advance_all_journeys()
 assert not travel_engine.get_journey(a)
 assert {name: C.get_character_pos(name) for name in [a, b]} == owned_positions
