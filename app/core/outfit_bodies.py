@@ -113,6 +113,31 @@ NOT_RETEXTURE_MODE = "Painted bodies are built in the retexture mode only"
 NOT_WORN_TEXTURE = "Not the worn outfit's body — Generate builds the worn outfit only"
 WORN_MODEL_PRESENT = "The worn outfit's model is built and current — Regenerate renders its views and paints it anew"
 PENDING_NO_BODY = "Nothing to regenerate yet — Generate renders the worn outfit's dressed views and paints its body"
+# Why a painted body is kept or may go (``texture_info``'s ``gc``; the artefact graph's texture verdict,
+# ``artefact_graph.texture_verdicts``). ``{outfits}`` / ``{size}`` are filled in by the tab.
+PAINTED_KEPT = ("Kept: {outfits} would be built on it now. It goes once none would — a piece, its text or its "
+                "own-mesh flag changed, or the outfit deleted.")
+PAINTED_OUTDATED = ("Outdated: {outfits} was built on it but would paint a new body now. Its model keeps working "
+                    "without this one (it is a copy).")
+PAINTED_UNUSED = "Not used: no stored outfit is built on it."
+PAINTED_OLDER_BASE = "Made on an older base body — not used any more."
+PAINTED_UNDETERMINED = "Kept: whether an outfit still needs it could not be computed."
+PAINTED_FREES = "Delete frees {size} now; the daily clean-up removes it too."
+# A Regenerate of a painted body no outfit would paint any more (409, ``blocked.regenerate``), and the
+# run that painted another one than it was asked for (the tsig is a content key: the old one can never be
+# painted again, so nothing is published under it).
+PAINTED_CANNOT_REPAINT = ("Outdated: no outfit would paint this body now (a piece, its text or its own-mesh flag "
+                          "changed) — it cannot be painted again; Delete removes it")
+PAINTED_AS_OTHER = ("Painted as another body instead: the outfit's pieces changed (a text or an own-mesh flag), so "
+                    "this one cannot be painted again — it is outdated; Delete removes it")
+# The hard time limit of a painted-body run (``body_retexture.run_timeout_seconds``): past it the run is
+# aborted (its retexture worker killed, no further step) and fails with this message.
+PAINT_TIMED_OUT = ("Timed out: the run passed its time limit and was aborted (Settings: Body retexture → "
+                   "Painted-body run timeout). Retry starts it again.")
+DEFAULT_PAINT_TIMEOUT_S = 1200
+# Delete refused (409) / unknown (404).
+PAINTED_NEEDED = "Not deleted: an outfit would be built on this painted body now — see why it is kept."
+NO_PAINTED_BODY = "No such painted body"
 _OUTFIT_SIG_RE = re.compile(r"[0-9a-f]{12}")
 _FRONT_REF_RE = re.compile(r"tpose_([0-9a-f]{12})")
 
@@ -825,7 +850,9 @@ def texture_source(character_name: str, tsig: str, candidates: List[str], *, pro
                    bsig: str, limit: int = 8) -> str:
     """The first of ``candidates`` whose CURRENT dressed front stands for
     ``tsig`` (what a Regenerate renders the views for), "" when none of the
-    first ``limit`` does."""
+    first ``limit`` does. Current = ``dressed_image`` in this mode AND
+    ``base_body.front_texture_signature`` — a front made before an own-mesh
+    flag of its pieces changed renders another tsig when drawn anew."""
     from app.core import base_body
     seen = set()
     for sig in candidates:
@@ -834,8 +861,8 @@ def texture_source(character_name: str, tsig: str, candidates: List[str], *, pro
         seen.add(sig)
         try:
             front = base_body.dressed_image(character_name, "front", sig, bsig)
-            if front is not None and base_body._outfit_texture(character_name, front, bsig=bsig,
-                                                               profile=profile)["tsig"] == tsig:
+            if front is not None and base_body.front_texture_signature(character_name, sig, bsig=bsig,
+                                                                       profile=profile) == tsig:
                 return sig
         except Exception:  # noqa: BLE001 — a lookup, never a failure
             logger.debug("Texture of %s / %s not computable", character_name, sig, exc_info=True)
@@ -897,21 +924,91 @@ def texture_body_freshness(character_name: str, record: Dict[str, Any], *, paint
     return freshness("stale", " · ".join(reasons)) if reasons else freshness("current")
 
 
+#: character -> (monotonic time, directory fingerprint, verdicts): the tab polls every 3 s while a run goes,
+#: the walk costs ~1 s on a large wardrobe. Reused while the derived directories are unchanged, at most
+#: ``VERDICT_TTL_S`` (an item flag edit changes no file); a delete drops it.
+_verdicts: Dict[str, Tuple[float, Tuple[int, ...], Dict[str, Any]]] = {}
+VERDICT_TTL_S = 20.0
+
+
+def _verdict_fingerprint(character_name: str) -> Tuple[int, ...]:
+    from app.models.character import get_character_dir
+    root = get_character_dir(character_name)
+    out = []
+    for folder in (root / "model3d", root / "model3d" / "texture", root / "model_refs", root / "model_refs" / "texture"):
+        try:
+            out.append(folder.stat().st_mtime_ns)
+        except OSError:
+            out.append(0)
+    return tuple(out)
+
+
+def _texture_verdicts(character_name: str) -> Dict[str, Any]:
+    """``artefact_graph.texture_verdicts``, cached (``_verdicts``); {} when it
+    cannot be computed (every painted body then shows "kept: could not be
+    computed")."""
+    import time
+    from app.core import artefact_graph
+    fingerprint = _verdict_fingerprint(character_name)
+    with _lock:
+        cached = _verdicts.get(character_name)
+    if cached and cached[1] == fingerprint and time.monotonic() - cached[0] < VERDICT_TTL_S:
+        return cached[2]
+    try:
+        verdicts = artefact_graph.texture_verdicts(character_name)
+    except Exception:  # noqa: BLE001 — a display verdict, never a failure
+        logger.exception("Painted body verdicts of %s not computable", character_name)
+        return {}
+    with _lock:
+        _verdicts[character_name] = (time.monotonic(), fingerprint, verdicts)
+    return verdicts
+
+
+def texture_gc(character_name: str, tsig: str, node: Any, *, models: Dict[str, Dict[str, Any]],
+               saved: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Why the painted body ``tsig`` is kept or may go — the artefact
+    graph's verdict (``artefact_graph.texture_verdicts``) as ``{kept,
+    reason, free, outfits, built_on, bytes}``: ``reason`` / ``free`` server
+    English with ``{outfits}`` / ``{size}`` for the tab, ``outfits`` the
+    names of the live outfits that would be built on it now, ``built_on``
+    those whose model was built on it but would paint another body now.
+    ``node`` None (no verdict): kept, ``PAINTED_UNDETERMINED``."""
+    from app.core import artefact_graph
+    if node is None:
+        return {"kept": True, "reason": PAINTED_UNDETERMINED, "free": "", "outfits": [], "built_on": [], "bytes": 0}
+    names = lambda sigs: [outfit_label(character_name, s, models=models, saved=saved) for s in sigs or ()]  # noqa: E731
+    outfits = names(node.parents.get("outfits"))
+    built_on = names(node.parents.get("built_on"))
+    if node.reachable:
+        reason = PAINTED_KEPT
+    elif node.reason == artefact_graph.OUTDATED_TEXTURE:
+        reason = PAINTED_OUTDATED
+    elif node.reason == "older base":
+        reason = PAINTED_OLDER_BASE
+    else:
+        reason = PAINTED_UNUSED
+    return {"kept": bool(node.reachable), "reason": reason, "free": "" if node.reachable else PAINTED_FREES,
+            "outfits": outfits if node.reachable else built_on, "built_on": built_on, "bytes": int(node.size())}
+
+
 def texture_info(character_name: str, tsig: str, *, worn_entry: Optional[Dict[str, Any]],
                  users: List[Tuple[str, bool]], models: Dict[str, Dict[str, Any]], saved: List[Dict[str, Any]],
-                 worn: str, profile: Dict[str, Any], bsig: str, base_reason: str) -> Dict[str, Any]:
+                 worn: str, profile: Dict[str, Any], bsig: str, base_reason: str,
+                 verdict: Any = None) -> Dict[str, Any]:
     """One painted body of the retexture mode (``tsig`` "" = the worn
     outfit's pending entry): ``{key, texture_signature, current, pending,
     outfits: [{signature, name, worn, has_model}], views, image_meta,
     painted, dress_text, created_at, status, error, run_kind,
     queue_position, last_run, worn_outfit, regenerate_from, blocked, url,
-    freshness, outfit_url}``: ``url`` the stored painted body (the texture
+    freshness, outfit_url, gc}``: ``url`` the stored painted body (the texture
     body itself, without own-mesh garments — ``texture_body_url``),
     ``outfit_url`` the worn outfit's served model (garments assembled) on
     the current entry once it is built. ``current`` only for the worn
     outfit's body; ``blocked`` (server English,
     the tab translates): ``generate`` (``paint``) / ``regenerate``
-    (``repaint``), a run of the tab's queue on it first (``Locked: …``).
+    (``repaint``) / ``delete`` (the painted body still needed — ``gc``,
+    the artefact graph's verdict ``verdict``, ``texture_gc`` — or nothing of
+    it stored), a run of the tab's queue on it first (``Locked: …``).
     ``status``: running / queued / failed (its last run) / ready (painted) /
     missing."""
     from app.core import base_body
@@ -950,7 +1047,11 @@ def texture_info(character_name: str, tsig: str, *, worn_entry: Optional[Dict[st
         generate = WORN_MODEL_PRESENT
     else:
         generate = ""
-    regenerate = PENDING_NO_BODY if not tsig else (NO_SOURCE if not source else base_reason)
+    stored = painted or any(views.values())
+    gc = texture_gc(character_name, tsig, verdict, models=models, saved=saved) if tsig and stored else None
+    regenerate = (PENDING_NO_BODY if not tsig else base_reason if source
+                  else PAINTED_CANNOT_REPAINT if gc and not gc["kept"] else NO_SOURCE)
+    delete = PENDING_NO_BODY if not tsig else NOTHING_STORED if gc is None else gc["reason"] if gc["kept"] else ""
     worn_outfit = None
     if current:
         worn_outfit = {"signature": worn_entry["signature"],
@@ -962,7 +1063,8 @@ def texture_info(character_name: str, tsig: str, *, worn_entry: Optional[Dict[st
             "dress_text": dress, "created_at": record.get("created_at") or None,
             "status": status, "error": error, "run_kind": kind, "queue_position": position,
             "last_run": last or None, "worn_outfit": worn_outfit, "regenerate_from": source or None,
-            "blocked": {"generate": lock or generate, "regenerate": lock or regenerate},
+            "blocked": {"generate": lock or generate, "regenerate": lock or regenerate, "delete": lock or delete},
+            "gc": gc,
             "url": texture_body_url(character_name, tsig) if painted else None,
             "freshness": (texture_body_freshness(character_name, record, painted=painted, source=source, bsig=bsig)
                           if tsig else None),
@@ -977,16 +1079,20 @@ def textures(character_name: str, *, profile: Dict[str, Any], bsig: str, models:
     store view, and the worn outfit's — which is ALWAYS listed, first, and
     is the only ``current`` one (pending while its dressed views are
     missing). The others follow, newest first, each with the outfits that
-    use it (model or dressed front)."""
-    from app.core import base_body
+    use it (model or dressed front) and the artefact graph's verdict
+    (``texture_gc``: why it is kept, or that Delete may remove it). A tsig
+    only an outfit model names, with nothing of it stored, is not listed
+    (deleted, or never stored)."""
+    from app.core import artefact_graph, base_body
     from app.models.character import get_character_dir
     worn_entry = worn_texture(character_name, profile=profile, bsig=bsig)
+    verdicts = _texture_verdicts(character_name)
     users: Dict[str, Dict[str, bool]] = {}
     for sig, meta in models.items():
         tsig = meta.get("texture_signature")
         if base_body.is_texture_signature(tsig):
             users.setdefault(str(tsig), {})[sig] = True
-    tsigs = set(users)
+    tsigs = set()
     root = get_character_dir(character_name)
     for folder, pattern in ((root / "model3d" / base_body.TEXTURE_DIR, "tex*.json"),
                             (base_body.texture_refs_dir(character_name), "tpose_tex*.json")):
@@ -1010,7 +1116,8 @@ def textures(character_name: str, *, profile: Dict[str, Any], bsig: str, models:
         try:
             out.append(texture_info(character_name, tsig, worn_entry=worn_entry,
                                     users=sorted((users.get(tsig) or {}).items()), models=models, saved=saved,
-                                    worn=worn, profile=profile, bsig=bsig, base_reason=base_reason))
+                                    worn=worn, profile=profile, bsig=bsig, base_reason=base_reason,
+                                    verdict=verdicts.get(tsig)))
         except Exception as e:  # noqa: BLE001 — one unreadable body does not hide the others
             logger.exception("Painted body %s of %s unreadable", tsig or "(pending)", character_name)
             out.append({"key": tsig or worn, "texture_signature": tsig or None, "current": False,
@@ -1021,14 +1128,15 @@ def textures(character_name: str, *, profile: Dict[str, Any], bsig: str, models:
     return out
 
 
-def paint_worn(character_name: str, key: str) -> Dict[str, Any]:
+def paint_worn(character_name: str, key: str, *, deadline: Optional[float] = None) -> Dict[str, Any]:
     """The ``paint`` run (Generate / Build outfit model): the worn outfit's
     missing dressed views (``generate_dressed_images`` without ``force`` —
     image jobs only for what is missing, a view the texture store holds is
     copied), then its outfit model through ``model3d.generate_for_current_outfit``
     without ``force`` — a stored painted body of its key is reused (CPU),
     else it is painted (CPU worker). Never a hub job. Caller holds the
-    character's generation slot. ``{ok, error}``."""
+    character's generation slot. ``deadline`` (``time.monotonic()``): no
+    model step once it passed (``_run_bounded``). ``{ok, error}``."""
     from app.core import base_body, model3d
     profile = _profile(character_name)
     bsig = base_body.base_signature(character_name, profile=profile)
@@ -1047,18 +1155,24 @@ def paint_worn(character_name: str, key: str) -> Dict[str, Any]:
             with base_body._status_lock:
                 failure = dict(base_body._outfit_failed.get((character_name, signature)) or {})
             return {"ok": False, "error": str(failure.get("error") or "Dressed views missing: " + ", ".join(missing))}
+    if _past(deadline):
+        return {"ok": False, "error": "aborted before the model step"}
     logger.info("Painted body of %s: building the worn outfit's model %s", character_name, signature)
     result = model3d.generate_for_current_outfit(character_name, signature=signature, force=False)
     return {"ok": bool(result.get("ok")), "error": str(result.get("error") or "")}
 
 
-def repaint_texture(character_name: str, tsig: str) -> Dict[str, Any]:
+def repaint_texture(character_name: str, tsig: str, *, deadline: Optional[float] = None) -> Dict[str, Any]:
     """The ``repaint`` run (Regenerate a painted body): an outfit standing
     on ``tsig`` (``texture_source``, the worn outfit first) gets every
     dressed view rendered anew (``generate_dressed_images(force=True)``:
     image jobs, the store follows), then its outfit model built forced — the
     body painted again (CPU worker, no hub job). Caller holds the
-    character's generation slot. ``{ok, error}``."""
+    character's generation slot. ``deadline`` as ``paint_worn``. When the
+    built model stands on ANOTHER tsig (the outfit's pieces changed during
+    the run) the run fails with ``PAINTED_AS_OTHER``: a tsig is the key of
+    its inputs, so nothing is ever published under the asked one with other
+    contents. ``{ok, error}``."""
     from app.core import base_body, model3d
     from app.core.model_refs import current_outfit_state
     profile = _profile(character_name)
@@ -1081,8 +1195,77 @@ def repaint_texture(character_name: str, tsig: str) -> Dict[str, Any]:
         with base_body._status_lock:
             failure = dict(base_body._outfit_failed.get((character_name, source)) or {})
         return {"ok": False, "error": str(failure.get("error") or "Dressed views missing: " + ", ".join(missing))}
+    if _past(deadline):
+        return {"ok": False, "error": "aborted before the model step"}
     result = model3d.generate_for_current_outfit(character_name, signature=source, force=True)
-    return {"ok": bool(result.get("ok")), "error": str(result.get("error") or "")}
+    if not result.get("ok"):
+        return {"ok": False, "error": str(result.get("error") or "")}
+    built = str(_outfit_models(character_name).get(source, {}).get("texture_signature") or "")
+    if built and built != tsig:
+        logger.warning("Painted body %s of %s: outfit %s was painted as %s", tsig, character_name, source, built)
+        return {"ok": False, "error": PAINTED_AS_OTHER}
+    return {"ok": True, "error": ""}
+
+
+def _past(deadline: Optional[float]) -> bool:
+    import time
+    return deadline is not None and time.monotonic() > deadline
+
+
+def paint_timeout_s() -> int:
+    """``body_retexture.run_timeout_seconds`` (``DEFAULT_PAINT_TIMEOUT_S`` when unset or not a positive int)."""
+    from app.core import config
+    try:
+        value = int(config.get("body_retexture.run_timeout_seconds", DEFAULT_PAINT_TIMEOUT_S))
+    except (TypeError, ValueError):
+        return DEFAULT_PAINT_TIMEOUT_S
+    return value if value > 0 else DEFAULT_PAINT_TIMEOUT_S
+
+
+def _run_bounded(character_name: str, job: "_Job") -> Dict[str, Any]:
+    """A ``paint`` / ``repaint`` run under its hard time limit
+    (``paint_timeout_s``): the work runs in its own thread with the deadline
+    (``body_retexture.run_deadline`` kills the retexture worker when it
+    passes; ``paint_worn`` / ``repaint_texture`` take no further step).
+    When the limit passes first, the run is reported failed at once
+    (``PAINT_TIMED_OUT`` in ``_results``, no longer the tab's current run —
+    the tab shows the error and its Retry, its poll ends) and this thread
+    keeps the generation slot until the aborted work has ended (an image job
+    in flight finishes under its own budget), so nothing of it overlaps the
+    next run."""
+    import time
+    from app.core import body_retexture
+    timeout = paint_timeout_s()
+    deadline = time.monotonic() + timeout
+    box: Dict[str, Dict[str, Any]] = {}
+
+    def work() -> None:
+        try:
+            with body_retexture.run_deadline(deadline):
+                box["result"] = (paint_worn if job.kind == "paint" else repaint_texture)(
+                    character_name, job.body_id, deadline=deadline)
+        except Exception as e:  # noqa: BLE001 — reported like any run failure
+            logger.exception("Painted body %s of %s: %s failed", job.body_id, character_name, job.kind)
+            box["result"] = {"ok": False, "error": str(e) or type(e).__name__}
+
+    thread = threading.Thread(target=work, name=f"painted-body-{job.kind}", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if not thread.is_alive():
+        result = box.get("result") or {"ok": False, "error": "Painted body run failed"}
+        if not result.get("ok") and _past(deadline):
+            # The work ended at the limit itself (its worker killed by ``run_deadline``): the same failure.
+            result = {"ok": False, "error": PAINT_TIMED_OUT}
+        return result
+    result = {"ok": False, "error": PAINT_TIMED_OUT}
+    logger.warning("Painted body %s of %s: %s ran past %d s — aborted", job.body_id, character_name, job.kind,
+                   timeout)
+    _record(character_name, job, result)
+    with _lock:
+        if _current.get(character_name) is job:
+            _current.pop(character_name, None)
+    thread.join()
+    return result
 
 
 # --- info ---------------------------------------------------------------------------
@@ -1417,7 +1600,8 @@ def _check_texture_run(character_name: str, kind: str, key: str, item_id: str, v
     users += [sig for sig, meta in _outfit_models(character_name).items() if meta.get("texture_signature") == key]
     users += _texture_front_users(character_name).get(key) or []
     if not texture_source(character_name, key, users, profile=profile, bsig=bsig):
-        raise LookupError(NO_SOURCE)
+        verdict = _texture_verdicts(character_name).get(key)
+        raise LookupError(PAINTED_CANNOT_REPAINT if verdict is not None and not verdict.reachable else NO_SOURCE)
 
 
 def _position_locked(character_name: str, job: _Job) -> Dict[str, Any]:
@@ -1512,16 +1696,22 @@ def _worker(character_name: str) -> None:
             logger.exception("Outfit body %s of %s: %s failed", job.body_id, character_name, job.kind)
             result = {"ok": False, "error": str(e) or type(e).__name__}
         finally:
-            from app.core.timeutils import utc_now_iso
             job.result = result
+            _record(character_name, job, result)
             with _lock:
-                _results[(character_name, job.body_id)] = {
-                    "kind": job.kind, "view": job.view or None, "ok": bool(result.get("ok")),
-                    "error": str(result.get("error") or ""), "finished_at": utc_now_iso(),
-                    "detail": {k: result[k] for k in ("fitted", "failed", "skipped") if k in result}}
                 if _current.get(character_name) is job:
                     _current.pop(character_name, None)
             job.done.set()
+
+
+def _record(character_name: str, job: _Job, result: Dict[str, Any]) -> None:
+    """The run's outcome for the tab (``_results``)."""
+    from app.core.timeutils import utc_now_iso
+    with _lock:
+        _results[(character_name, job.body_id)] = {
+            "kind": job.kind, "view": job.view or None, "ok": bool(result.get("ok")),
+            "error": str(result.get("error") or ""), "finished_at": utc_now_iso(),
+            "detail": {k: result[k] for k in ("fitted", "failed", "skipped") if k in result}}
 
 
 def _tracked(character_name: str, label: str):
@@ -1563,10 +1753,8 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
             result = render_view(character_name, job.body_id, job.view)
         elif job.kind == "views":
             result = render_worn_views(character_name, job.body_id)
-        elif job.kind == "paint":
-            result = paint_worn(character_name, job.body_id)
-        elif job.kind == "repaint":
-            result = repaint_texture(character_name, job.body_id)
+        elif job.kind in TEXTURE_RUN_KINDS:
+            result = _run_bounded(character_name, job)
         elif job.kind == "rerig":
             rigged = model3d.rerig_model(character_name, job.body_id, track_id=task_id)
             result = {"ok": bool(rigged.get("ok")), "error": str(rigged.get("error") or "")}
@@ -1590,13 +1778,37 @@ def _run(character_name: str, job: _Job) -> Dict[str, Any]:
 
 
 def delete(character_name: str, body_id: str) -> Dict[str, Any]:
-    """Delete the body and its chain (``artefact_graph.delete_body``).
+    """Delete the body and its chain (``artefact_graph.delete_body``) — or,
+    for a texture signature, the painted body (``delete_texture``).
     ``LookupError`` while a run of the tab waits for or works on it."""
-    from app.core import artefact_graph
+    from app.core import artefact_graph, base_body
     state, _kind, _position = _run_state(character_name, body_id)
     if state:
         raise LookupError("A run on this outfit body is " + state + " — delete it after the run")
+    if base_body.is_texture_signature(body_id):
+        return delete_texture(character_name, body_id)
     report = artefact_graph.delete_body(character_name, body_id)
     with _lock:
         _results.pop((character_name, body_id), None)
+    return report
+
+
+def delete_texture(character_name: str, tsig: str) -> Dict[str, Any]:
+    """Delete ONE painted body of the retexture mode — the Delete of the
+    painted-body list: the artefact graph's explicit collect of its texture
+    node (``artefact_graph.delete_texture``), only while no live outfit
+    would be built on it. ``UnknownBody`` (404) when nothing of it is
+    stored, ``LookupError`` ``PAINTED_NEEDED`` (409) when it is still
+    needed. Returns the collect report."""
+    from app.core import artefact_graph
+    try:
+        report = artefact_graph.delete_texture(character_name, tsig)
+    except artefact_graph.TextureNeeded as e:
+        logger.info("Painted body %s of %s not deleted: %s", tsig, character_name, e)
+        raise LookupError(PAINTED_NEEDED)
+    except LookupError:
+        raise UnknownBody(NO_PAINTED_BODY)
+    with _lock:
+        _results.pop((character_name, tsig), None)
+        _verdicts.pop(character_name, None)
     return report

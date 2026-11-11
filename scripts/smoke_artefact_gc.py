@@ -10,7 +10,9 @@ no hub, no GPU, no server process. Every file is synthetic bytes; only names and
 
 Fixture (``make(char, s)``, one fresh character per scenario; items ``top<s>`` {top}, ``skirt<s>`` {bottom} painted,
 ``dress<s>`` {outer} own mesh, all in the inventory; hair item worn, hair_method hairdeck; pipeline on, mode mesh;
-profile picture). bsig = base_signature; T1 = "tex111111111111", T2 = "tex222222222222"; B1/B2 =
+profile picture). bsig = base_signature; T1 / T2 = the tsig the pieces of O1 / O2 paint now
+(base_body.predicted_texture_signatures, mesh mode — a texture lives while a live outfit would paint it,
+artefact_graph._current_textures; a made-up tsig would be outdated at once), per character; B1/B2 =
 outfit_body_id(T1/T2). Outfits (sig = model_refs.mesh_signature of the pieces with their recorded variant + token):
   O1 {top, skirt} WORN, on B1 (texture T1);  O3 {top, skirt, dress} on B1 (T1 — Review Focus 4: same painted
   pieces, other own-mesh piece -> one body, two assemblies);  O2 {top, dress} on B2 (T2).
@@ -149,8 +151,6 @@ def main() -> int:
         from app.models.character import (delete_character, get_character_dir, get_character_images_dir,
                                           get_character_profile, save_character_profile)
 
-        T1, T2 = "tex111111111111", "tex222222222222"
-        B1, B2 = base_body.outfit_body_id(T1), base_body.outfit_body_id(T2)
 
         def make(char: str, s: str, *, orphans: bool = False):
             human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -189,6 +189,14 @@ def main() -> int:
                          touch(M / "covered" / f"{bsig}.json", {}), touch(M / "facefix" / f"{bsig}.glb"),
                          touch(M / "facefix" / f"{bsig}.png"), touch(M / "facefix" / f"{bsig}.json", {})]
             base_sha = hashlib.sha256(base_glb).hexdigest()
+            pred = {name: base_body.predicted_texture_signatures(char, pieces, [], bsig=bsig)
+                    for name, pieces in outfits.items()}
+            T1, T2 = pred["O1"]["mesh"], pred["O2"]["mesh"]
+            B1, B2 = base_body.outfit_body_id(T1), base_body.outfit_body_id(T2)
+            # Hand rule (mesh mode, the mode the fixture's models record): the dress is its own mesh with an
+            # accepted fit (Gd) -> left out of the paint, so O3 paints O1's pieces (T1); O2 paints another set.
+            # The retexture predictions differ per mode and are current too (_current_textures takes both).
+            check(f"{char}: O3 paints T1 in mesh mode, T1 != T2", (pred["O3"]["mesh"], T1 != T2), (T1, True))
             sigs, tex_of, body_of = {}, {"O1": T1, "O2": T2, "O3": T1}, {"O1": B1, "O2": B2, "O3": B1}
             for name, pieces in outfits.items():
                 variant, token = mesh_variant(char, pieces), mesh_items_token(char, pieces)
@@ -282,7 +290,8 @@ def main() -> int:
                 tmpw = G / "raw" / f".{hid}_{hsig}.1.2.tmp"
                 L["TMP"] = [touch(tmpw / "x")]
                 age([dead, tmpw], OLD_S)
-            return {"L": L, "sigs": sigs, "ids": ids, "hid": hid, "bsig": bsig, "dir": cdir, "outfits": outfits}
+            return {"L": L, "sigs": sigs, "ids": ids, "hid": hid, "bsig": bsig, "dir": cdir, "outfits": outfits,
+                    "T1": T1, "T2": T2, "B1": B1, "B2": B2}
 
         def walk(char):
             cdir = get_character_dir(char)
@@ -333,9 +342,9 @@ def main() -> int:
         check("[0] unknown reported, kept", report["unknown"], ["model3d/notes.txt"])
         check("[0] second collect deletes 0", ag.collect("Demo0", explicit=True)["deleted_files"], 0)
         check("[0] verify_cache: nothing stale", outfit_cache_gc.verify_cache("Demo0")["stale_signatures"], [])
-        bd1 = next((n for n in ag.analyse("Demo0").nodes if n.key.startswith(f"bodyfit:{B1}:dress0")), None)
+        bd1 = next((n for n in ag.analyse("Demo0").nodes if n.key.startswith(f"bodyfit:{fx['B1']}:dress0")), None)
         check("[0] body fit parents", bd1 and {k: bd1.parents[k] for k in ("body_id", "item_id")},
-              {"body_id": B1, "item_id": "dress0"})
+              {"body_id": fx["B1"], "item_id": "dress0"})
 
         # --- [1] outfit delete ---------------------------------------------------------------------------
         print("[1] outfit delete")
@@ -395,6 +404,7 @@ def main() -> int:
         # --- [6] running protection ----------------------------------------------------------------------
         print("[6] running work is never deleted")
         fx = make("Demo6", "6")
+        B2 = fx["B2"]
         set_mode("Demo6", "retexture")
         rebuild_retexture(fx, "O2")
         retire_body(fx, "B2")

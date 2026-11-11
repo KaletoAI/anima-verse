@@ -2,8 +2,9 @@
  * useOutfitBodies — the character's outfit bodies as
  * `GET /characters/{name}/outfit-bodies` reports them
  * (`app/core/outfit_bodies.py::info`), polled every 3 s while a run of the
- * tab waits or works (slower after ~2 min, like useBaseBody), stopped on
- * unmount / character switch. `refreshKey` reloads once (a template save may
+ * tab waits or works (slower after ~2 min, like useBaseBody), stopped when
+ * the server reports no run (a finished, failed or timed-out run), after
+ * `POLL_MAX` polls at the latest, and on unmount / character switch. `refreshKey` reloads once (a template save may
  * have switched the mode).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -100,7 +101,21 @@ export interface OutfitBody {
 }
 
 /** The actions of a painted body a reason can block (`outfit_bodies.texture_info`). */
-export type PaintedAction = 'generate' | 'regenerate'
+export type PaintedAction = 'generate' | 'regenerate' | 'delete'
+
+/** Why a painted body is kept or may go — the artefact graph's verdict (`outfit_bodies.texture_gc`). */
+export interface PaintedGc {
+  /** A live outfit would be built on it now: Delete is refused. */
+  kept: boolean
+  /** Server English with `{outfits}`, translated by the tab. */
+  reason: string
+  /** Not kept: "Delete frees {size} …", else "". */
+  free: string
+  /** Kept: the outfits that would be built on it; not kept: the outfits whose model was built on it. */
+  outfits: string[]
+  built_on: string[]
+  bytes: number
+}
 
 /** One painted body of the retexture mode (`outfit_bodies.texture_info`). */
 export interface PaintedBody {
@@ -134,6 +149,8 @@ export interface PaintedBody {
   freshness?: Freshness | null
   /** The worn outfit's served model (garments assembled) — current entry with a built model only. */
   outfit_url?: string | null
+  /** Stored painted bodies only; absent from an older server. */
+  gc?: PaintedGc | null
 }
 
 export interface QueueEntry { kind: RunKind; body_id: string; item_id?: string | null; view?: BodyView }
@@ -154,6 +171,9 @@ export interface OutfitBodiesInfo {
 const POLL_MS = 3000
 const POLL_SLOW_MS = 15000
 const POLL_SLOW_AFTER = 40
+/** The poll gives up after ~40 min (40 fast + 150 slow): every run ends long before (a painted-body run is
+ *  aborted at its time limit and reported failed), so a poll still going then waits on nothing. */
+const POLL_MAX = 190
 
 export function useOutfitBodies(character: string, refreshKey = '') {
   const enc = encodeURIComponent(character)
@@ -184,6 +204,7 @@ export function useOutfitBodies(character: string, refreshKey = '') {
         setInfo(d)
         if (!d?.active) return
         n += 1
+        if (n >= POLL_MAX) return
         timerRef.current = setTimeout(tick, n >= POLL_SLOW_AFTER ? POLL_SLOW_MS : POLL_MS)
       }
       timerRef.current = setTimeout(tick, delayMs)

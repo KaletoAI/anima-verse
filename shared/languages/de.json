@@ -4670,6 +4670,23 @@
     "Tucked in": "Hineingesteckt",
     "Trousers:": "Hose:",
     "{trousers}: too wide to tuck into {boot} — worn over it": "{trousers}: zu weit, um sie in {boot} zu stecken — wird darüber getragen",
-    "Trousers tucked into the boots": "Hose in die Stiefel gesteckt"
+    "Trousers tucked into the boots": "Hose in die Stiefel gesteckt",
+    "Delete painted body": "Bemalten Körper löschen",
+    "Deletes the painted body {tsig} ({size}): its dressed views in the texture store and the painted model. Outfit models built on it keep working; a later build of such an outfit paints a new one.": "Löscht den bemalten Körper {tsig} ({size}): seine angezogenen Ansichten im Texturspeicher und das bemalte Modell. Darauf gebaute Outfit-Modelle funktionieren weiter; ein späterer Bau eines solchen Outfits bemalt einen neuen.",
+    "Deletes this painted body: its dressed views in the texture store and the painted model": "Löscht diesen bemalten Körper: seine angezogenen Ansichten im Texturspeicher und das bemalte Modell",
+    "Starts the failed run again": "Startet den fehlgeschlagenen Lauf erneut",
+    "an outfit": "ein Outfit",
+    "not needed any more": "nicht mehr benötigt",
+    "No such painted body": "Kein solcher bemalter Körper",
+    "Painted as another body instead: the outfit's pieces changed (a text or an own-mesh flag), so this one cannot be painted again — it is outdated; Delete removes it": "Stattdessen als anderer Körper bemalt: Die Teile des Outfits haben sich geändert (ein Text oder ein Eigenes-Mesh-Flag), daher kann dieser nicht erneut bemalt werden — er ist veraltet; Löschen entfernt ihn",
+    "Outdated: no outfit would paint this body now (a piece, its text or its own-mesh flag changed) — it cannot be painted again; Delete removes it": "Veraltet: Kein Outfit würde diesen Körper jetzt bemalen (ein Teil, sein Text oder sein Eigenes-Mesh-Flag hat sich geändert) — er kann nicht erneut bemalt werden; Löschen entfernt ihn",
+    "Delete frees {size} now; the daily clean-up removes it too.": "Löschen gibt jetzt {size} frei; die tägliche Aufräumung entfernt ihn ebenfalls.",
+    "Kept: {outfits} would be built on it now. It goes once none would — a piece, its text or its own-mesh flag changed, or the outfit deleted.": "Behalten: {outfits} würde jetzt darauf gebaut. Er geht, sobald keines mehr darauf gebaut würde — ein Teil, sein Text oder sein Eigenes-Mesh-Flag geändert oder das Outfit gelöscht.",
+    "Not deleted: an outfit would be built on this painted body now — see why it is kept.": "Nicht gelöscht: Ein Outfit würde jetzt auf diesem bemalten Körper gebaut — siehe, warum er behalten wird.",
+    "Made on an older base body — not used any more.": "Auf einem älteren Grundkörper bemalt — wird nicht mehr verwendet.",
+    "Outdated: {outfits} was built on it but would paint a new body now. Its model keeps working without this one (it is a copy).": "Veraltet: {outfits} wurde darauf gebaut, würde jetzt aber einen neuen Körper bemalen. Sein Modell funktioniert ohne diesen weiter (es ist eine Kopie).",
+    "Kept: whether an outfit still needs it could not be computed.": "Behalten: Ob ein Outfit ihn noch braucht, ließ sich nicht berechnen.",
+    "Not used: no stored outfit is built on it.": "Nicht verwendet: Kein gespeichertes Outfit ist darauf gebaut.",
+    "Timed out: the run passed its time limit and was aborted (Settings: Body retexture → Painted-body run timeout). Retry starts it again.": "Zeitüberschreitung: Der Lauf hat sein Zeitlimit überschritten und wurde abgebrochen (Settings: Body retexture → Painted-body run timeout). Wiederholen startet ihn erneut."
   }
 }

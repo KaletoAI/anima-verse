@@ -10,13 +10,21 @@ inside :func:`retexture`; the signature and the exceptions stay.
 CPU work: never on a GPU channel, never through the image service. The caller
 serialises runs per character. The instance settings (``body_retexture.*``)
 are read live on every call, so a change in /admin/settings needs no restart.
+
+A caller with a hard time limit for its whole run (the Outfit body tab's
+painted-body runs, ``outfit_bodies._run_bounded``) sets it with
+``run_deadline``: a worker started in that thread waits at most until the
+deadline, then it is killed with everything it started (``RUN_DEADLINE``).
 """
 import json
 import os
 import signal
 import subprocess
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from app.core import config
 from app.core.base_body import BASE_VIEWS
@@ -34,6 +42,29 @@ class RetextureUnavailable(RuntimeError):
 
 class RetextureFailed(RuntimeError):
     """The worker ran and failed: exit code != 0, timeout, or no proof."""
+
+
+RUN_DEADLINE = "Body retexture worker aborted: the painted-body run reached its time limit"
+_scope = threading.local()
+
+
+@contextmanager
+def run_deadline(deadline: float) -> Iterator[None]:
+    """Every worker started in this thread inside the block is killed at
+    ``deadline`` (``time.monotonic()``) at the latest; one that would start
+    after it fails at once (``RetextureFailed`` ``RUN_DEADLINE``)."""
+    previous = getattr(_scope, "deadline", None)
+    _scope.deadline = deadline
+    try:
+        yield
+    finally:
+        _scope.deadline = previous
+
+
+def _run_left() -> Optional[float]:
+    """Seconds left of this thread's ``run_deadline``, None without one."""
+    deadline = getattr(_scope, "deadline", None)
+    return None if deadline is None else deadline - time.monotonic()
 
 
 def _worker_dir() -> Path:
@@ -124,6 +155,10 @@ def retexture(glb_in: Path, views: dict[str, tuple[Path, Path]], out_glb: Path,
     argv = build_argv(python, glb_in, views, out_glb, proof, atlas,
                       side_arm_margin=side_arm_margin, arm_rig_glb=arm_rig_glb)
     timeout = _timeout_seconds()
+    left = _run_left()
+    if left is not None and left <= 0:
+        raise RetextureFailed(RUN_DEADLINE)
+    wait = timeout if left is None else min(timeout, left)
     proof = Path(proof)
     # A proof left by an earlier run must never pass as this run's result.
     proof.unlink(missing_ok=True)
@@ -137,9 +172,13 @@ def retexture(glb_in: Path, views: dict[str, tuple[Path, Path]], out_glb: Path,
     except OSError as exc:
         raise RetextureUnavailable(f"Body retexture worker could not start: {exc}") from exc
     try:
-        _stdout, stderr = proc.communicate(timeout=timeout)
+        _stdout, stderr = proc.communicate(timeout=wait)
     except subprocess.TimeoutExpired:
         _kill_group(proc)
+        if wait < timeout:
+            logger.warning("Body retexture killed at the run's time limit after %d s: %s", round(wait),
+                           Path(glb_in).name)
+            raise RetextureFailed(RUN_DEADLINE) from None
         logger.warning("Body retexture timed out after %d s: %s", timeout, Path(glb_in).name)
         raise RetextureFailed(f"Body retexture worker timed out after {timeout} s") from None
     except BaseException:

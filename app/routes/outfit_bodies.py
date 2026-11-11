@@ -44,6 +44,10 @@ All admin-only (``Depends(require_admin)``) like the base-body actions:
   its run has already started, 404 when none waits.
 * ``POST …/{body_id}/delete`` — the body and its chain through the artefact
   graph (``artefact_graph.delete_body``); 409 while a run of the tab is on it.
+  With a texture signature: the painted body (``outfit_bodies.delete_texture``,
+  the artefact graph's explicit collect of that texture) — 409
+  ``PAINTED_NEEDED`` while a live outfit would be built on it, 404 when
+  nothing of it is stored.
 """
 import mimetypes
 from typing import Any, Dict, Optional
@@ -198,6 +202,8 @@ def delete_outfit_body(character_name: str, body_id: str,
     _require_character(character_name)
     try:
         return outfit_bodies.delete(character_name, body_id)
+    except outfit_bodies.UnknownBody as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except LookupError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:

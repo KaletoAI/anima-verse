@@ -1459,6 +1459,48 @@ def mesh_items_off_rule(character_name: str, record: Dict[str, Any], *, bsig: Op
     return sorted(footwear | (set(missing) - set(_footwear_items(missing))))
 
 
+def _own_mesh_kinds(character_name: str, pieces: Optional[Dict[str, str]], *,
+                    profile: Dict[str, Any]) -> Dict[str, str]:
+    """``{item id: garment kind}`` of the flagged worn own-mesh pieces of
+    ``pieces`` (``garment_set.worn_garments`` ∩ ``OWN_MESH_PIECE_KINDS``), in
+    worn order — the ``intended`` set of ``resolve_mesh_items``."""
+    from app.core import garment_set
+    from app.models.inventory import get_item
+    kinds = {item_id: garment_set.garment_kind_of(get_item(item_id))
+             for item_id in garment_set.worn_garments(character_name, profile=profile, pieces=dict(pieces or {}))}
+    return {item_id: kind for item_id, kind in kinds.items() if kind in garment_set.OWN_MESH_PIECE_KINDS}
+
+
+def _unpainted_rule(kinds: Dict[str, str], effective: Iterable[str], *, mesh_mode: bool) -> List[str]:
+    """The pieces the dress text leaves out (block above): every intended
+    piece in mesh mode; in retexture mode the effective ones plus every
+    footwear piece."""
+    from app.core import garment_set
+    if mesh_mode:
+        return list(kinds)
+    return sorted(set(effective) | {i for i, kind in kinds.items() if kind == garment_set.FOOTWEAR})
+
+
+def predicted_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *, mode: str,
+                         profile: Optional[Dict[str, Any]] = None, bsig: Optional[str] = None) -> Dict[str, Any]:
+    """``resolve_mesh_items`` READ-ONLY, for the outfit body ``mode``: no
+    garment chain runs, ``effective`` = the intended pieces with an accepted
+    fit on the base model of ``bsig`` NOW. ``{intended, effective, mode,
+    unpainted}``, ``{}`` without own-mesh pieces. What a build of ``pieces``
+    would record if no chain changed anything meanwhile — the artefact GC's
+    prediction of an outfit's texture (``predicted_texture_signatures``)."""
+    from app.core import garment_store
+    profile = _profile_of(character_name, profile)
+    kinds = _own_mesh_kinds(character_name, pieces, profile=profile)
+    if not kinds:
+        return {}
+    base_sha = base_model_sha256(character_name, bsig or base_signature(character_name, profile=profile))
+    effective = [item_id for item_id in kinds if base_sha
+                 and garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha) is not None]
+    return {"intended": list(kinds), "effective": effective, "mode": mode,
+            "unpainted": _unpainted_rule(kinds, effective, mesh_mode=mode == MESH_MODE)}
+
+
 def resolve_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *,
                        profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Which worn own-mesh pieces an outfit of ``pieces`` gets as their own
@@ -1498,9 +1540,8 @@ def resolve_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *,
     from app.core import garment_set, garment_store, garments
     from app.models.inventory import get_item
     profile = _profile_of(character_name, profile)
-    kinds = {item_id: garment_set.garment_kind_of(get_item(item_id))
-             for item_id in garment_set.worn_garments(character_name, profile=profile, pieces=dict(pieces or {}))}
-    intended = [item_id for item_id, kind in kinds.items() if kind in garment_set.OWN_MESH_PIECE_KINDS]
+    kinds = _own_mesh_kinds(character_name, pieces, profile=profile)
+    intended = list(kinds)
     if not intended:
         return {}
     mode = outfit_body_mode(character_name, profile=profile)
@@ -1531,8 +1572,7 @@ def resolve_mesh_items(character_name: str, pieces: Optional[Dict[str, str]], *,
             warnings.append(MESH_ITEM_FAILED.format(item=name, reason=f"{result['step']} — {reason}"))
         else:
             warnings.append(MESH_ITEM_PAINTED.format(item=name, reason=reason))
-    unpainted = (list(intended) if mesh_mode
-                 else sorted(set(effective) | {i for i in intended if kinds[i] == garment_set.FOOTWEAR}))
+    unpainted = _unpainted_rule(kinds, effective, mesh_mode=mesh_mode)
     logger.info("Own-mesh pieces of %s (%s mode): intended %s, effective %s, missing %s", character_name,
                 mode, intended, effective, sorted(missing))
     return {"intended": intended, "effective": effective, "warnings": warnings, "mode": mode,
@@ -3523,6 +3563,73 @@ def _outfit_texture(character_name: str, front: Path, *, bsig: str,
                             profile=mesh_profile)
     return {"manifest": manifest, "dressed": dressed, "variant": variant, "inputs": inputs,
             "tsig": texture_signature(inputs), "mesh_profile": mesh_profile}
+
+
+def predicted_texture_signatures(character_name: str, pieces: Optional[Dict[str, str]], items: Optional[list], *,
+                                 bsig: str, profile: Optional[Dict[str, Any]] = None,
+                                 modes: Iterable[str] = OUTFIT_BODY_MODES) -> Dict[str, str]:
+    """``{mode: tsig}`` — the tsig a build of the outfit ``pieces`` /
+    ``items`` would paint NOW in each outfit body mode:
+    ``generate_dressed_images``' computation with ``predicted_mesh_items``
+    (read-only: no garment chain, no image). The artefact GC asks it for
+    every live outfit in BOTH modes (a mode switch must not orphan the other
+    mode's painted bodies); modes that leave out the same pieces share one
+    computation."""
+    profile = _profile_of(character_name, profile)
+    mesh_profile = deepcopy(profile)
+    mesh_profile["equipped_pieces"] = dict(pieces or {})
+    mesh_profile["equipped_items"] = list(items or [])
+    out: Dict[str, str] = {}
+    done: Dict[Tuple[Tuple[str, ...], Tuple[str, ...]], str] = {}
+    for mode in modes:
+        mesh = predicted_mesh_items(character_name, pieces, mode=mode,
+                                    profile={**mesh_profile, "outfit_body_mode": mode}, bsig=bsig)
+        meshed = mesh_items_unpainted({"mesh_items": mesh})
+        key = (tuple(meshed), tuple(mesh_items_intended({"mesh_items": mesh})))
+        if key not in done:
+            dressed = bool(dress_text(character_name, "front", pieces=pieces, items=items, profile=mesh_profile,
+                                      mesh_items=meshed))
+            variant = texture_variant(character_name, pieces, dressed=dressed, mesh=mesh, profile=profile)
+            done[key] = texture_signature(texture_inputs(character_name, pieces=pieces, items=items,
+                                                         mesh_effective=meshed, bsig=bsig, variant=variant,
+                                                         profile=mesh_profile))
+        out[mode] = done[key]
+    return out
+
+
+def front_texture_signature(character_name: str, signature: str, *, bsig: str,
+                            profile: Optional[Dict[str, Any]] = None,
+                            modes: Iterable[str] = OUTFIT_BODY_MODES) -> str:
+    """The tsig the outfit's stored dressed front stands for
+    (``_outfit_texture``) while that front is current for the base
+    (``dressed_image`` without the mode rule: base signature + base view
+    content, no painted piece that has its fit now), follows the own-mesh
+    rule of at least one of ``modes`` (default: both), and was made for the own-mesh
+    flags its pieces carry NOW (recorded ``mesh_items.intended`` = the
+    flagged worn pieces today: a flag set or removed since makes the outfit
+    a new signature, so this front is never built from again) — "" otherwise.
+    Read-only."""
+    from app.core import model3d
+    from app.core.model_refs import find_ref_image
+    profile = _profile_of(character_name, profile)
+    front = find_ref_image(character_name, _kind("front"), signature)
+    if front is None:
+        return ""
+    meta = _ref_sidecar(front)
+    base_front = find_ref_image(character_name, _kind("front"), bsig)
+    if base_front is None or meta.get("base_signature") != bsig \
+            or meta.get("base_image_sha256") != file_sha256(base_front):
+        return ""
+    if mesh_items_ready(character_name, meta, bsig=bsig):
+        return ""
+    if all(mesh_items_off_rule(character_name, meta, bsig=bsig, profile={**profile, "outfit_body_mode": mode})
+           for mode in modes):
+        return ""
+    pieces = model3d._ref_manifest(front).get("pieces") or {}
+    mesh_profile = {**profile, "equipped_pieces": dict(pieces)}
+    if sorted(mesh_items_intended(meta)) != sorted(_own_mesh_kinds(character_name, pieces, profile=mesh_profile)):
+        return ""
+    return str(_outfit_texture(character_name, front, bsig=bsig, profile=profile)["tsig"])
 
 
 def outfit_body_of_outfit(character_name: str, signature: str, *,

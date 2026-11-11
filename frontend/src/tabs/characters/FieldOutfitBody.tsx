@@ -32,6 +32,11 @@
  * a stored painted body is reused on the CPU; every painted body with an
  * outfit standing on it has Regenerate (dressed views anew + painted again).
  * Both queue like the mesh runs, with Cancel, and show why they are locked.
+ * Every stored painted body says why it is kept (the artefact graph's
+ * verdict `gc`: the live outfits that would be built on it now) or that no
+ * outfit needs it any more (outdated after a piece, its text or its own-mesh
+ * flag changed — the model built on it keeps working, it is a copy) with
+ * Delete and the size it frees; Delete is disabled with the kept reason.
  *
  * Backend (app/routes/outfit_bodies.py, app/core/outfit_bodies.py):
  * GET /characters/{n}/outfit-bodies (polled while a run waits or works),
@@ -44,7 +49,9 @@
  * and its chain through the artefact graph (409 while a run is on it);
  * POST …/{body}/generate-views — the worn outfit's missing dressed views
  * (202 queued like the other runs, 404 for a body it does not stand on);
- * retexture mode: POST …/{key}/paint | repaint (202, same queue).
+ * retexture mode: POST …/{key}/paint | repaint (202, same queue);
+ * POST …/{tsig}/delete — the painted body through the artefact graph's
+ * explicit collect (409 while an outfit would be built on it).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -53,6 +60,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
+import { formatBytes } from '../../lib/formatBytes'
 import { FreshnessBadge } from './FreshnessBadge'
 import { meshNotReadyText } from './garmentStyle'
 import { Model3DViewer } from './Model3DViewer'
@@ -224,7 +232,7 @@ function FitRow({ fit, busy, onRefit }: { fit: BodyFit; busy: boolean; onRefit: 
   )
 }
 
-const PAINTED_LABELS: Record<PaintedAction, string> = { generate: 'Generate', regenerate: 'Regenerate' }
+const PAINTED_LABELS: Record<PaintedAction, string> = { generate: 'Generate', regenerate: 'Regenerate', delete: 'Delete' }
 
 function paintedLabel(x: PaintedBody): string {
   return x.outfits.map((o) => o.name || o.signature).join(' · ') || x.worn_outfit?.name || x.texture_signature || x.key
@@ -237,12 +245,13 @@ function paintedDot(x: PaintedBody): string {
   return x.painted ? 'green' : 'grey'
 }
 
-function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
+function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel, onDelete }: {
   textures: PaintedBody[]
   posting: string
   keptBodies: number
   onRun: (key: string, kind: RunKind) => void
   onCancel: (key: string) => void
+  onDelete: (tex: PaintedBody) => void
 }) {
   const { t } = useI18n()
   const [selected, setSelected] = useState('')
@@ -260,9 +269,15 @@ function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
   const busy = tex.status === 'running' || tex.status === 'queued' || posting.startsWith(`${tex.key}:`)
   const blocked = tex.blocked || {}
   const reason = (action: PaintedAction): string => blocked[action] || ''
+  // The artefact graph's verdict names the outfits it is kept for (server English with {outfits} / {size}).
+  const gcText = (text: string): string => t(text)
+    .replace('{outfits}', tex.gc?.outfits.join(', ') || t('an outfit'))
+    .replace('{size}', formatBytes(tex.gc?.bytes) || '0 B')
   const worn = tex.worn_outfit
-  const reasons = (['generate', 'regenerate'] as PaintedAction[])
-    .filter((a) => tex.current || a === 'regenerate')
+  const reasons = (['generate', 'regenerate', 'delete'] as PaintedAction[])
+    .filter((a) => tex.current || a !== 'generate')
+    // The kept reason of Delete is the verdict line below, not repeated here.
+    .filter((a) => a !== 'delete' || (!!tex.gc && reason(a) !== tex.gc.reason))
     .map((a): [PaintedAction, string] => [a, reason(a)]).filter(([, r]) => !!r)
   const generateLabel = tex.pending || worn?.views_missing.length ? t('Generate') : t('Build outfit model')
   const generateTitle = reason('generate') ? t(reason('generate'))
@@ -272,6 +287,10 @@ function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
         .replace('{n}', String(worn.image_jobs))
       : t('Builds the worn outfit\'s model from its dressed views — the stored painted body is reused (CPU, no hub job).')
   const cancelling = posting === `${tex.key}:cancel:`
+  // A failed run (a timeout included) offers Retry: the same run again.
+  const retryKind: RunKind | null = tex.last_run && !tex.last_run.ok
+    && (tex.last_run.kind === 'paint' || tex.last_run.kind === 'repaint') ? tex.last_run.kind : null
+  const retryAction: PaintedAction = retryKind === 'paint' ? 'generate' : 'regenerate'
   return (
     <div className="ga-split ga-split-views">
       <div className="ga-split-col">
@@ -285,6 +304,7 @@ function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
               <span className="ga-model3d-status-text">
                 {x.current ? `${t('Current')} · ` : ''}{paintedLabel(x)}
                 {x.pending ? ` · ${t('dressed views missing')}` : ''}
+                {x.gc && !x.gc.kept ? ` · ${t('not needed any more')}` : ''}
               </span>
             </button>
           ))}
@@ -322,6 +342,12 @@ function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
                 .replace('{outfit}', tex.outfits.find((o) => o.signature === tex.regenerate_from)?.name
                   || tex.regenerate_from || '')}
             onClick={() => onRun(tex.key, 'repaint')}>{t('Regenerate')}</button>
+          {tex.gc ? (
+            <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" disabled={busy || !!reason('delete')}
+              title={reason('delete') ? gcText(reason('delete'))
+                : t('Deletes this painted body: its dressed views in the texture store and the painted model')}
+              onClick={() => onDelete(tex)}>{t('Delete')}</button>
+          ) : null}
         </div>
         {reasons.length ? (
           reasons.length > 1 && reasons.every(([, r]) => r === reasons[0][1])
@@ -330,7 +356,21 @@ function PaintedBodies({ textures, posting, keptBodies, onRun, onCancel }: {
               <div key={a} className="ga-hint" style={REASON_STYLE}>{t(PAINTED_LABELS[a])}: {t(r)}</div>
             ))
         ) : null}
-        {tex.status === 'failed' && tex.error ? <div className="ga-hint" style={ERROR_STYLE}>{tex.error}</div> : null}
+        {tex.gc ? (
+          <div className="ga-hint" style={tex.gc.kept ? REASON_STYLE : WARNING_STYLE}>
+            {gcText(tex.gc.reason)}{tex.gc.free ? ` ${gcText(tex.gc.free)}` : ''}
+          </div>
+        ) : null}
+        {tex.status === 'failed' && tex.error ? (
+          <div className="ga-face-actions-row">
+            <span className="ga-hint" style={ERROR_STYLE}>{t(tex.error)}</span>
+            {retryKind ? (
+              <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !!reason(retryAction)}
+                title={reason(retryAction) ? t(reason(retryAction)) : t('Starts the failed run again')}
+                onClick={() => onRun(tex.key, retryKind)}>{t('Retry')}</button>
+            ) : null}
+          </div>
+        ) : null}
         {tex.last_run && tex.status !== 'failed' ? (
           <div className="ga-hint" style={tex.last_run.ok ? undefined : ERROR_STYLE}>
             {t('Last run')}: {tex.last_run.kind === 'repaint' ? t('Regenerate') : t('Generate')}
@@ -410,6 +450,7 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
   // The clicked action until its request answered ("<body>:<kind>[:item]").
   const [posting, setPosting] = useState('')
   const [pendingDelete, setPendingDelete] = useState<OutfitBody | null>(null)
+  const [pendingPainted, setPendingPainted] = useState<PaintedBody | null>(null)
 
   const runKey = useCallback(
     async (bodyKey: string, kind: RunKind, itemId = '') => {
@@ -519,6 +560,24 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
     }
   }, [enc, pendingDelete, startPoll, t, toast])
 
+  // Delete of a painted body no outfit needs any more (the artefact graph's explicit collect).
+  const removePainted = useCallback(async () => {
+    const tex = pendingPainted
+    setPendingPainted(null)
+    if (!tex?.texture_signature) return
+    setPosting(`${tex.key}:delete:`)
+    try {
+      const d = await apiPost<{ deleted_files: number; freed_bytes: number }>(
+        `/characters/${enc}/outfit-bodies/${tex.texture_signature}/delete`, {})
+      toast(t('Deleted {n} file(s)').replace('{n}', String(d.deleted_files)), 'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + t((e as Error).message), 'error')
+    } finally {
+      setPosting('')
+      startPoll()
+    }
+  }, [enc, pendingPainted, startPoll, t, toast])
+
   if (!info) return <div className="ga-obody"><div className="ga-hint">{t('Loading…')}</div></div>
   if (!info.humanoid) {
     return <div className="ga-obody"><div className="ga-hint">{t('The base body is for humanoid characters only.')}</div></div>
@@ -539,8 +598,20 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
         {info.textures.length ? (
           <PaintedBodies textures={info.textures} posting={posting}
             keptBodies={info.bodies.filter((b) => b.status !== 'missing').length}
-            onRun={(key, kind) => { void runKey(key, kind) }} onCancel={(key) => { void cancel(key) }} />
+            onRun={(key, kind) => { void runKey(key, kind) }} onCancel={(key) => { void cancel(key) }}
+            onDelete={setPendingPainted} />
         ) : <div className="ga-hint">{t('No painted body yet.')}</div>}
+        <ConfirmDialog
+          open={!!pendingPainted}
+          title={t('Delete painted body')}
+          message={t('Deletes the painted body {tsig} ({size}): its dressed views in the texture store and the painted model. Outfit models built on it keep working; a later build of such an outfit paints a new one.')
+            .replace('{tsig}', pendingPainted?.texture_signature || '')
+            .replace('{size}', formatBytes(pendingPainted?.gc?.bytes) || '0 B')}
+          confirmLabel={t('Delete')}
+          danger
+          onConfirm={() => { void removePainted() }}
+          onClose={() => setPendingPainted(null)}
+        />
       </div>
     )
   }

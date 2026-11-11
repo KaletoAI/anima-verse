@@ -27,18 +27,21 @@ The outfit-change trigger, the auto hook, the GC walk, the stale rules and ``app
 Fixture (Demo: humanoid, pipeline on, side views off -> dressed views front + back, no own-mesh piece). Items top
 {top} and skirt {bottom}. O1 = {top, skirt} worn, O2 = {top}, O3 = {skirt}. Base views front/back, base model
 (rigged + unrigged). T1 = the tsig of O1 by the hand rule (no own-mesh piece: unpainted [], variant
-outfit_variant = "rigged"); B1 = outfit_body_id(T1). O2 has a retexture model on T2 = "tex222222222222" with its
+outfit_variant = "rigged"); B1 = outfit_body_id(T1). O2 has a retexture model on T2 = what O2's pieces paint now
+(predicted_texture_signatures, retexture — a made-up tsig is outdated and goes with the first walk) with its
 painted body, but no dressed views.
 
 Expected, by hand:
 [1] retexture, nothing built for O1: textures = [pending entry (key O1, current, pending, worn_outfit {O1,
     "Skirt + Top", views_missing [front, back], image_jobs 1 + 2 = 3, model False}, blocked {generate "",
-    regenerate PENDING_NO_BODY}), T2 (current False, used by O2 with a model, generate NOT_WORN_TEXTURE,
-    regenerate NO_SOURCE — O2 has no dressed front)]. bodies []. Routes: user 403; paint on T2 404; repaint on
+    regenerate PENDING_NO_BODY, delete PENDING_NO_BODY}), T2 (current False, used by O2 with a model, generate
+    NOT_WORN_TEXTURE, regenerate NO_SOURCE — O2 has no dressed front —, delete PAINTED_KEPT: O2 would paint it
+    now)]. bodies []. Routes: user 403; paint on T2 404; repaint on
     T2 409 NO_SOURCE. POST paint O1 -> 202; the run: 1 front edit + 1 back = 3 image jobs, ONE build (O1, not
     forced), 1 worker run (no painted body of T1 yet), 0 hub jobs, image service never called. Then: textures[0]
     key T1 (== the hand tsig), current, not pending, painted, worn_outfit.model True, generate WORN_MODEL_PRESENT,
-    regenerate "" (O1 stands on it); paint again 409 WORN_MODEL_PRESENT; T2 still not current.
+    regenerate "" (O1 stands on it), delete PAINTED_KEPT; paint again 409 WORN_MODEL_PRESENT; T2 still not
+    current.
 [2] retexture -> mesh (no body of T1 yet): the switch queues ONE build (trigger_generation once) — O1's model is
     stale for the mode ("body_mode"), its views are current: 0 image jobs; prepare_outfit_body meshes B1: ONE hub
     job; O1's model now stands on B1. mesh -> retexture: ONE build, 0 image jobs, 0 hub jobs, 0 worker runs — the
@@ -205,7 +208,9 @@ def main() -> int:
             char, pieces=P1, items=[], variant=base_body.outfit_variant(char, P1, profile=prof),
             mesh_effective=[], bsig=bsig, profile={**prof, "equipped_pieces": P1, "equipped_items": []}))
         B1 = base_body.outfit_body_id(T1)
-        T2 = "tex222222222222"
+        # What O2's pieces would paint now (a made-up tsig no outfit paints is outdated and goes with the
+        # first walk — artefact_graph._current_textures).
+        T2 = base_body.predicted_texture_signatures(char, P2, [], bsig=bsig, profile=prof)[base_body.RETEXTURE_MODE]
         B2 = base_body.outfit_body_id(T2)
 
         def manifest(pieces):
@@ -325,12 +330,14 @@ def main() -> int:
         check("[1] worn_outfit", p["worn_outfit"], {"signature": O1, "name": "Skirt + Top",
                                                    "views_missing": ["front", "back"], "image_jobs": 3,
                                                    "model": False})
-        check("[1] pending blocked", p["blocked"], {"generate": "", "regenerate": outfit_bodies.PENDING_NO_BODY})
+        check("[1] pending blocked", p["blocked"], {"generate": "", "regenerate": outfit_bodies.PENDING_NO_BODY,
+                                                    "delete": outfit_bodies.PENDING_NO_BODY})
         o = texs[1]
         check("[1] other body not current", (o["current"], [(x["signature"], x["has_model"]) for x in o["outfits"]]),
               (False, [(O2, True)]))
         check("[1] other blocked", o["blocked"], {"generate": outfit_bodies.NOT_WORN_TEXTURE,
-                                                  "regenerate": outfit_bodies.NO_SOURCE})
+                                                  "regenerate": outfit_bodies.NO_SOURCE,
+                                                  "delete": outfit_bodies.PAINTED_KEPT})
         check("[1] no outfit bodies", info["bodies"], [])
         url = f"/characters/{char}/outfit-bodies"
         check("[1] user -> 403", client.post(f"{url}/{O1}/paint", headers=USER).status_code, 403)
@@ -349,7 +356,8 @@ def main() -> int:
         c = texs[0]
         check("[1] current entry is T1", (c["key"], c["current"], c["pending"], c["painted"]), (T1, True, False, True))
         check("[1] model built", c["worn_outfit"]["model"], True)
-        check("[1] blocked after", c["blocked"], {"generate": outfit_bodies.WORN_MODEL_PRESENT, "regenerate": ""})
+        check("[1] blocked after", c["blocked"], {"generate": outfit_bodies.WORN_MODEL_PRESENT, "regenerate": "",
+                                                  "delete": outfit_bodies.PAINTED_KEPT})
         check("[1] regenerate source", c["regenerate_from"], O1)
         r = client.post(f"{url}/{T1}/paint", headers=ADMIN)
         check("[1] paint again -> 409", (r.status_code, r.json().get("detail")),

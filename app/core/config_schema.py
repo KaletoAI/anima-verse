@@ -210,6 +210,13 @@ SECTIONS = {
                 "description": "A run that takes longer is killed with everything it started and counts as failed. "
                                "Four views take about 1–2 minutes of CPU at default settings.",
             },
+            "run_timeout_seconds": {
+                "type": "int", "label": "Painted-body run timeout (seconds)", "default": 1200, "min": 60,
+                "description": "Hard limit of a whole Generate / Regenerate run of a painted body (Outfit body "
+                               "tab, retexture mode): dressed views, then the outfit model. Past it the run is "
+                               "aborted — its retexture worker killed, no further step — and fails with a "
+                               "message and a Retry. An image job already on the GPU finishes first.",
+            },
         },
     },
     "server": {

@@ -81,9 +81,16 @@ Expected, derived by hand from the plan's Global Constraints:
     and back are byte-equal to A's; the store holds tA's front + back again
     with dress_text; build -> 0 worker runs (tA's body is current). G (skirt
     painted): 3 image jobs (no false adoption).
-[8] GC. Models of A, B, E, F name tA; E2 tE2; C, D the bare tsig; Bp tBp; G
-    tG -> all texture groups valid. Bp's model + views removed -> texture:<tBp>
-    stale; purge_stale removes exactly its files; texture:<tA> kept.
+[8] GC (a texture lives while a live outfit would paint it NOW —
+    artefact_graph._current_textures). Models of A, B, E, F name tA; E2 tE2;
+    C, D the bare tsig; Bp tBp; G tG. Current: tA, the bare tsig, tG, and tBp
+    — B's dress fit lies on the base model from before [6] (the fixture's
+    fits are not refitted), so a retexture build of B paints the dress again,
+    B's own text = tBp's —, but NOT tE2: COVERED is {} again, so E2 would
+    paint the "rigged" variant -> verify_cache: every texture group but one
+    valid, stale exactly [texture:<tE2>]. Bp's model + views removed -> still
+    exactly [texture:<tE2>] (B keeps tBp). purge_stale([tE2, tA]) removes
+    exactly tE2's files, tA skipped.
 [9] Overview: the outfit model of B has the row painted_body, status done,
     detail "<tA> · reused · shared with 4 outfits" (A, B, E, F).
 """
@@ -504,19 +511,21 @@ def main() -> int:
         # --- [8] GC ---------------------------------------------------------------------------
         print("[8] cache GC keeps referenced painted bodies")
         report = outfit_cache_gc.verify_cache("Demo")
-        check("all texture groups valid", report["textures"]["valid"], report["textures"]["total"])
+        check("every texture group but tE2's valid", report["textures"]["valid"], report["textures"]["total"] - 1)
+        check("only E2's texture stale (outdated)",
+              [s for s in report["stale_signatures"] if s.startswith("texture:")], [f"texture:{t_e2}"])
         for p in list(mdir.glob(f"{sig_bp}.*")) + list(refs.glob(f"*_{sig_bp}.*")) \
                 + list((refs / "drafts").glob(f"*_{sig_bp}.*")):
             p.unlink()
         report = outfit_cache_gc.verify_cache("Demo")
         stale = [s for s in report["stale_signatures"] if s.startswith("texture:")]
-        check("only Bp's texture stale", stale, [f"texture:{t_bp}"])
-        files_bp = [p for p in list((mdir / "texture").iterdir()) + list(store.iterdir())
-                    + list((store / "drafts").iterdir()) if t_bp in p.name]
-        result = outfit_cache_gc.purge_stale("Demo", [f"texture:{t_bp}", f"texture:{t_a}"])
-        check("purge removes Bp's files only", (result["deleted_files"], result["skipped"],
-                                                any(p.exists() for p in files_bp), body.is_file()),
-              (len(files_bp), 1, False, True))
+        check("Bp gone: B still paints tBp, only E2's texture stale", stale, [f"texture:{t_e2}"])
+        files_e2 = [p for p in list((mdir / "texture").iterdir()) + list(store.iterdir())
+                    + list((store / "drafts").iterdir()) if t_e2 in p.name]
+        result = outfit_cache_gc.purge_stale("Demo", [f"texture:{t_e2}", f"texture:{t_a}"])
+        check("purge removes E2's texture files only", (bool(files_e2), result["deleted_files"], result["skipped"],
+                                                         any(p.exists() for p in files_e2), body.is_file()),
+              (True, len(files_e2), 1, False, True))
 
         # --- [9] overview --------------------------------------------------------------------
         print("[9] overview row")
