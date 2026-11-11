@@ -85,25 +85,28 @@ nearest shoe surface, EDT), overhang above the rim, poke by region (heel / mid /
 
 **Calibration (P3 acceptance, Task 21, 2026-11-11) — REAL material.** Kira's base body (``base20d5701a``) in the
 Business Heels (UniForge mesh of the Qwen side-view empty shoe, 98 507 → 57 527 tris at ``TARGET_TRIS`` 60 000, width
-cap 1.10, ``FIT_VERSION`` footwear 3), the clone chain plus the same cut run offline on the accepted mesh:
-``slim_needed`` 0.151 (limit 0.18); ``deep_outside`` 0.47 % / 1.72 % (L / R; 8 of 1690, 33 of 1924; limit 2 %);
-``visible_poke`` **0 / 3.12 %** (34 of 1090 remaining right-foot vertices, all in the toe region, below the rim and
-outside the shoe: the right foot is the longer one (0.256 vs 0.242 m) and its toes stand up to 22 mm ABOVE this
-pump's vamp — a visible defect, the gate refused the fit as it should; the left foot is clean) — limit 0.5 %;
-``throat_ledge_p95_mm`` 0.00 / 1.33 (limit 4); the fit gates ball 0.000 mm, lift asymmetry 0.78 mm, ``stand_floor``
-0.0 mm, boot −52.7 mm. Motion (``check_footwear.mjs`` on the offline assembly, the client's chain): still sole 1 / 0 mm,
-idle −3.2 … −2.5 mm, walk stance −2.0 … +15.5 mm (strike ≥ −1.2, heel off ≤ −1.4, the lift-off frames 10.2 / 15.5
-at the leg's reach), Foot pitch max 45 / 47°, sit −52 … −50.5 mm (P3b). The spike shoe (Black Stilettos) read
-slim 0.066 / 0.115, deep_outside 0.45 / 1.20 %, visible_poke 0 / 0, ledge 0.00 / 0.42 mm, ball 0.0, lift asym
-0.06 mm (Tasks 14/15/17). **The cut limits stay at their start values**: three of four gates were met on the real
-material with margin, and the one refusal is a true poke (a toe above the vamp — the case Task 14 left as a
-diagnostic; the cut removes faces below the cap and slims sideways, it does not lower a toe). What the acceptance
-DID calibrate upstream: ``footwear_source.TARGET_TRIS`` 30 000 → 60 000 (30 000 with the seam merge collapsed the
-cavity: insole_cover 0.18 / 0.30 instead of 0.86 raw; 60 000 keeps 0.89) and ``footwear_gates.MESH_GATES``
-``mesh_iou`` 0.80 → 0.75 (0.77–0.78 on both real deliveries, 0.86 on the spike; a 3/4-view cut-out, 0.66–0.76, is
-excluded upstream since ``FOOTWEAR_SOURCE_VERSION`` 2 — the empty edit always runs). The source's own gates on the
-same item: upscale ×2 (Iris), empty ``single_share`` 1.0 / ``aspect`` 1.331 / ``iou_below_topline`` 0.943, insole
-cover 0.890 / vamp 0.647 / opening 0.996 (pitch 36.0°, heel seat 9.8 cm, heel rise 9.1 cm).
+cap 1.10, ``FOOTWEAR_FIT_VERSION`` 4 / ``CUT_VERSION`` 2), the clone chain live: ``slim_needed`` 0.151 (limit 0.18);
+``deep_outside`` 0.12 % / 0.15 % (L / R; limit 2 %); ``visible_poke`` **0 / 0** (limit 0.5 %); ``throat_ledge_p95_mm``
+0.00 / 1.04 (limit 4); ``toe_conform_m`` 4.3 / **20.9 mm** (limit 25) with ``toe_pull_m`` 10.6 / 23.9 mm; the fit
+gates ball 0.000 mm, lift asymmetry 0.78 mm, ``stand_floor`` 0.0 mm, boot −52.7 mm. Before the toe conform (round 3,
+``CUT_VERSION`` 1) the same material read ``visible_poke`` 0 / 3.12 %: 34 of 1090 remaining right-foot vertices, all
+in the toe region 3–7 mm BELOW the cap and 16–20 mm BESIDE the footprint — the right foot is the longer one
+(0.256 vs 0.242 m) and the pointed toe box narrows faster than the slimming's 18 % could follow, so the toes stood out
+of its side; ``deep_outside`` was 0.47 / 1.72 %. The toe conform's lateral clamp is what removed the poke (the
+vertical push, 20.9 mm, is the toe knuckle above the vamp's inner surface, which the step 2 landing already hid).
+Motion (``check_footwear.mjs`` on the SERVED outfit GLB against the bare base): bind floor 0 mm over the bare
+soles, still sole L/R 1 / 0 mm, idle −3.1 … −2.4 mm, walk stance −2.0 … +15.5 mm (strike ≥ −1.2, heel off ≤ −1.4,
+the lift-off frames 10.2 / 15.5 at the leg's reach), Foot pitch max 45 / 47°, sit −52 … −50.5 mm (P3b). The spike
+shoe (Black Stilettos) read slim 0.066 / 0.115, deep_outside 0.45 / 1.20 %, visible_poke 0 / 0, ledge 0.00 /
+0.42 mm, ball 0.0, lift asym 0.06 mm (Tasks 14/15/17). **The cut limits stay at their start values** (every gate met
+with margin on the real material once the toes follow the toe box); ``toe_conform_m`` 25 mm is a start value with
+one data point (20.9). Calibrated upstream by the same acceptance: ``footwear_source.TARGET_TRIS`` 30 000 → 60 000
+(30 000 with the seam merge collapsed the cavity: insole_cover 0.18 / 0.30 instead of 0.86 raw; 60 000 keeps 0.89)
+and ``footwear_gates.MESH_GATES`` ``mesh_iou`` 0.80 → 0.75 (0.77–0.78 on both real deliveries, 0.86 on the spike; a
+3/4-view cut-out, 0.66–0.76, is excluded upstream since ``FOOTWEAR_SOURCE_VERSION`` 2 — the empty edit always runs).
+The source's own gates on the same item: upscale ×2 (Iris), empty ``single_share`` 1.0 / ``aspect`` 1.331 /
+``iou_below_topline`` 0.943, insole cover 0.890 / vamp 0.647 / opening 0.996 (pitch 36.0°, heel seat 9.8 cm, heel
+rise 9.1 cm).
 """
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
