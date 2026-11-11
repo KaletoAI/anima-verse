@@ -41,7 +41,7 @@ Expected, by hand:
      heels, fsig F, glb_sha256 = sha256 of THAT tier's assembled bytes} — the full and the low sidecar differ in
      glb_sha256 only; no garment_warnings. served(bare, full) = the assembled path; GET /characters/Demo/model/meta
      -> foot_pose = the full sidecar's; GET /characters/Demo/model3d -> model.foot_pose the same, and
-     model.steps carries a row garment_heels with label "Footwear" and the detail "Heels · shoe · fsig F ·
+     model.steps carries a row garment_heels with label "Footwear" and the detail "Heels · shoe · fsig F · fit accepted ·
      lift 10.2 mm · cut 1,032 faces removed / 0 bisected / 0 new · served" (thousands separated as the
      overview does). ``_garment_steps`` (pure) with a
      footwear entry without lift / cut -> "Footwear" with name · method · fsig · served.
@@ -368,8 +368,8 @@ def main() -> int:
         rows = {s.get("id"): s for s in (model.get("steps") or []) if isinstance(s, dict)}
         row = rows.get(f"garment_{heels}") or {}
         check("A1 /model3d footwear step", (row.get("label"), row.get("status"), row.get("detail")),
-              ("Footwear", "done", f"Heels · shoe · fsig {F} · lift 10.2 mm · cut 1,032 faces removed / 0 bisected"
-                                   " / 0 new · served"))
+              ("Footwear", "done", f"Heels · shoe · fsig {F} · fit accepted · lift 10.2 mm · cut 1,032 faces removed"
+                                   " / 0 bisected / 0 new · served"))
         pure = mo._garment_steps([{"item_id": "x1", "name": "Pumps", "kind": "footwear", "method": "shoe",
                                    "fsig": "f1", "current_fsig": "f1", "served": True}], [])
         check("A1 _garment_steps footwear without lift / cut", (pure[0]["label"], pure[0]["detail"]),

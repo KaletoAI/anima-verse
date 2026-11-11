@@ -242,6 +242,8 @@ FSIG_CHANGED = "The shoe source or the width cap changed during the run — run 
 #: Fit step freshness reasons (fixed English phrases; the React badge translates them).
 FIT_BODY_CHANGED = "Body changed — refit pending"
 FIT_SOURCE_CHANGED = "Shoe source changed — refit pending"
+FIT_REFITTED = "Refitted from the previous base"
+FIT_REFUSED = "Fit refused on this body: {gate}"
 
 
 def node_name(item_id: str, side: str) -> str:
@@ -373,6 +375,12 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         record["base_model_sha256"] = body_sha
     path = gs.garment_path(character_name, item_id, fsig, "fit", body=body)
     low = gs.garment_path(character_name, item_id, fsig, "low", body=body)
+    # A refit after a body change (the fsig has no base in it: the same path): the record remembers the
+    # body it came from (``refitted.from_body_sha256``, Task 25) — the Wardrobe says so, the GC keeps nothing by it.
+    previous = gs.read_record(path.with_suffix(".json")) if path.is_file() else {}
+    if previous.get("accepted") is True and previous.get("body_sha256") \
+            and previous.get("body_sha256") != body_sha:
+        record["refitted"] = {"from_body_sha256": previous["body_sha256"], "at": now}
     # A distance tier of the previous fit must never pair with the new one.
     low.unlink(missing_ok=True)
     _write_atomic(path, blob)
@@ -630,6 +638,16 @@ def _numbers(values: Any) -> Dict[str, float]:
     return {k: v for k, v in values.items() if isinstance(v, (int, float)) and not isinstance(v, bool)}
 
 
+def _gate_of(error: Any) -> str:
+    """The gate clause of a fit refusal — ``"fit refused — slim_needed 0.22 > 0.18 (…)"`` → ``"slim_needed 0.22
+    > 0.18 (…)"`` (the error's text after the first dash); the whole text when it has none."""
+    text = str(error or "")
+    for sep in (" — ", " - "):
+        if sep in text:
+            return text.split(sep, 1)[1].strip()
+    return text
+
+
 def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: str, *,
               body: str = "") -> Dict[str, Any]:
     """One fit of ``info`` — ``steps.fit`` (the base model, ``body`` "") or a row of ``fits`` (an outfit body id):
@@ -674,8 +692,13 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
             ("slim_needed", slim.get(side) if isinstance(slim, dict) else None),
             ("extension_deg", ((sides.get(side) or {}).get("extension") or {}).get("deg")),
             ("toe_room_mm", (sides.get(side) or {}).get("toe_room_mm")))}})
-    fresh = {"accepted": freshness(CURRENT), "stale": freshness(STALE, FIT_BODY_CHANGED),
-             "outdated": freshness(STALE, FIT_SOURCE_CHANGED)}.get(status, freshness(MISSING))
+    if status == "accepted" and isinstance(record.get("refitted"), dict):
+        fresh = freshness(CURRENT, FIT_REFITTED)
+    elif status == "refused":
+        fresh = freshness(MISSING, FIT_REFUSED.format(gate=_gate_of(error)))
+    else:
+        fresh = {"accepted": freshness(CURRENT), "stale": freshness(STALE, FIT_BODY_CHANGED),
+                 "outdated": freshness(STALE, FIT_SOURCE_CHANGED)}.get(status, freshness(MISSING))
     return {"status": status, "gates": record.get("gates") or {}, "metrics": metrics, "url": None,
             "freshness": fresh, "created_at": record.get("fitted_at"), "error": error}
 

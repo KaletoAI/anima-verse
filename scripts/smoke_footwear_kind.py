@@ -101,9 +101,10 @@ and wears heels + dress; Mira holds heels.
        {started True, …} and the recorder gets (None, False);
        the clothing-chain recorders saw no call for heels at all;
        after_base_model(Kira) (hair creation stubbed off, enqueue_garment
-       wrapped to record its ids and answer a done job): the ids == [dress]
-       (dress has no prepared mesh -> its fit is "outdated"), never heels —
-       a shoe chain starts from the Wardrobe only until Task 25;
+       wrapped to record its ids and answer a done job): the ids == [dress, heels]
+       (dress has no prepared mesh -> its fit is "outdated"; heels have no fit
+       — since Task 25 the trigger queues the worn shoe too: fit-only, its item
+       steps cached under the ssig, a refused source never);
        refit sweep: an old clothing-era fit of heels under fsig
        "0123456789ab" (kind clothing, fit_version 6 < 7, accepted on SHA) and
        a too-small "fit" failure under "0123456789cd" (scale_retry absent,
@@ -387,7 +388,7 @@ def main() -> int:
         finally:
             garments.enqueue_garment = real_enqueue
             garments._ensure_hair = real_ensure_hair
-        check("after_base_model enqueues", ENQUEUED, [dress])
+        check("after_base_model enqueues (footwear too since Task 25: fit-only, its item steps cached)", ENQUEUED, [dress, heels])
         old_fit = gs.garment_path("Kira", heels, "0123456789ab", "fit")
         old_fit.write_bytes(b"clothing-era fit of the heels")
         gs.write_record(old_fit.with_suffix(".json"), {

@@ -2063,10 +2063,14 @@ def after_base_model(character_name: str) -> bool:
     cached under the unchanged fsig). A chain that failed for the current fsig is skipped
     (``garment_store.chain_failure``; a refused fit only on the base model
     it failed on). A character with hair text but no hair item gets one first
-    (``_ensure_hair``). Footwear is not queued here: its fit is a Wardrobe
-    preview until the body cut lands, so a shoe chain starts from the
-    Wardrobe only (plan 2026-11-10-footwear-rigid-shoes Task 25 queues the
-    refit of a shod wearer). True if a run was queued. Never raises."""
+    (``_ensure_hair``). FOOTWEAR (plan 2026-11-10-footwear-rigid-shoes Task
+    25): the worn shoe whose fit is not accepted on the new body is queued
+    like the rest — its default run is FIT-ONLY, because the item steps
+    (upscale, empty, cut-out, mesh, insole) are cached under the item's
+    ssig, which has no base in it: no service call, no hub job; a shoe whose
+    SOURCE was refused is never queued (``cached_failure`` covers the item
+    steps for every wearer, ruling 6cdf6817). True if a run was queued.
+    Never raises."""
     try:
         from app.core import base_body, garment_store as gs
         from app.models.character import get_character_profile
@@ -2079,15 +2083,15 @@ def after_base_model(character_name: str) -> bool:
         started = False
         for item_id in _worn_garments(character_name, profile):
             try:
-                if _item(character_name, item_id)[1] == _footwear():
-                    continue  # started from the Wardrobe only (docstring)
                 fsig = gs.garment_fsig(character_name, item_id, profile=profile)
                 method = gs.garment_method(character_name, item_id, profile=profile)
             except ValueError:
                 continue
             if _fit_state(character_name, item_id, fsig, base[1], method) == "accepted":
                 continue
-            if gs.chain_failure(character_name, item_id, fsig, base_model_sha=base[1]) is not None:
+            # The persisted failure of this fsig on this base — for footwear also a refused SOURCE step
+            # (one per item, every wearer): an automatic trigger never spends the chain on it again.
+            if cached_failure(character_name, item_id, profile=profile) is not None:
                 logger.info("Garment %s/%s: failed for fsig %s — waits for an explicit run",
                             character_name, item_id, fsig)
                 continue

@@ -783,8 +783,10 @@ def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[
     """``garments``: ``[{item_id, name, kind, method, fsig, current_fsig,
     served}]`` (``served``: the assembly on disk carries this fit); a
     footwear entry (label "Footwear") may add ``lift_m`` (the fit's root
-    lift, shown in mm) and ``cut_stats`` (``{removed_faces, bisected_faces,
-    new_vertices}`` of the body cut)."""
+    lift, shown in mm), ``cut_stats`` (``{removed_faces, bisected_faces,
+    new_vertices}`` of the body cut), ``fit_state`` (``garment_footwear.
+    fit_state`` on the current base: "fit accepted" / "fit stale" …, a
+    stale one a WARNING) and ``refitted`` (the fit came from a body change)."""
     rows: List[Dict[str, Any]] = []
     for g in garments:
         kind = g.get("kind")
@@ -792,6 +794,8 @@ def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[
         parts = [str(g.get("name") or g.get("item_id") or ""), str(g.get("method") or ""),
                  f"fsig {g.get('fsig')}" if g.get("fsig") else ""]
         if kind == "footwear":
+            if g.get("fit_state"):
+                parts.append(f"fit {g['fit_state']}" + (" (refitted from the previous base)" if g.get("refitted") else ""))
             lift = _num(g.get("lift_m"))
             if lift is not None:
                 parts.append(f"lift {1000.0 * lift:.1f} mm")
@@ -802,6 +806,8 @@ def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[
                              f"{int(cut.get('new_vertices') or 0):,} new")
         if g.get("fsig") and g.get("current_fsig") and g["fsig"] != g["current_fsig"]:
             status, extra = WARNING, "older fit"
+        elif kind == "footwear" and g.get("fit_state") and g.get("fit_state") != "accepted":
+            status, extra = WARNING, "refit pending"
         elif not g.get("served"):
             status, extra = WARNING, "not assembled yet"
         else:
@@ -1163,6 +1169,16 @@ def _assembled_garments(character_name: str, signature: str) -> Tuple[List[Dict[
         if g["kind"] == "footwear":
             entry["lift_m"] = _num(record.get("root_lift_m"))
             entry["cut_stats"] = _dict(record.get("cut_stats"))
+            # The fit's state on the base model the assembly stands on (Task 25: a body change makes the
+            # footwear fit stale until its refit lands — the fsig has no base in it).
+            try:
+                from app.core import base_body, garment_footwear
+                base = base_body.current_base(character_name)
+                entry["fit_state"] = garment_footwear.fit_state(character_name, g["item_id"], g["fsig"],
+                                                                base[1] if base else "")
+                entry["refitted"] = isinstance(record.get("refitted"), dict)
+            except Exception:  # noqa: BLE001 — the overview never fails on a fit state
+                entry["fit_state"] = None
         out.append(entry)
     return out, warnings
 
