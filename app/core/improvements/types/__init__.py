@@ -11,6 +11,7 @@ from .garment_fill import GarmentFill
 from .image_rerender import ImageRerender
 from .mesh_from_tpose import MeshFromTpose
 from .model_replace import ModelReplace
+from .outfit_rebuild import OutfitRebuild
 from .rig_weight_repair import RigWeightRepair
 from .surface_bake import SurfaceBake
 
@@ -22,10 +23,11 @@ registry.register(ModelReplace())
 registry.register(FillMissing())
 registry.register(FitRefit())
 registry.register(GarmentFill())
+registry.register(OutfitRebuild())
 registry.register(ImageRerender())
 registry.register(SurfaceBake())
 registry.register(MeshFromTpose())
 registry.register(FallbackRerender())
 
-__all__ = ["CollisionCapsules", "FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "FitRefit", "GarmentFill", "ImageRerender", "MeshFromTpose", "ModelReplace",
+__all__ = ["CollisionCapsules", "FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "FitRefit", "GarmentFill", "ImageRerender", "MeshFromTpose", "ModelReplace", "OutfitRebuild",
            "RigWeightRepair", "SurfaceBake"]

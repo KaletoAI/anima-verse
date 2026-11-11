@@ -60,6 +60,35 @@ def pipeline_characters() -> List[str]:
     return out
 
 
+def saved_outfit_signatures(name: str) -> List[Tuple[str, str]]:
+    """``(signature, label)`` of the character's saved outfit sets
+    (``get_character_outfits``) that name pieces — each set's pieces mapped
+    to their first declared slot the way applying the set does (the last
+    piece of a slot wins), signed as the outfit batch signs a combination
+    (``outfit_batch._signature``); the label is the set's name, else the
+    signature's first eight characters. A set without a piece is left out,
+    and a signature is listed once."""
+    from app.core.outfit_batch import _signature
+    from app.models.character import get_character_outfits
+    from app.models.inventory import get_item
+    out: List[Tuple[str, str]] = []
+    seen = set()
+    for outfit in get_character_outfits(name) or []:
+        pieces: Dict[str, str] = {}
+        for item_id in outfit.get("pieces") or []:
+            slots = ((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or []
+            if slots:
+                pieces[str(slots[0])] = str(item_id)
+        if not pieces:
+            continue
+        sig = _signature(pieces, name)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        out.append((sig, str(outfit.get("name") or "").strip() or sig[:8]))
+    return out
+
+
 def item_name(item_id: str) -> str:
     """The display name of an inventory item, the id when it has none."""
     from app.models.inventory import get_item
