@@ -59,8 +59,8 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import (Any, Dict, FrozenSet, Iterable, Iterator, List, Optional,
-                    Sequence, Set, Tuple)
+from typing import (Any, Callable, Dict, FrozenSet, Iterable, Iterator, List,
+                    Optional, Sequence, Set, Tuple, TypeVar)
 
 from app.core.log import get_logger
 from app.core.model_store import DEFAULT_TIER, variant_urls
@@ -5158,9 +5158,10 @@ def _hash_parts(parts: List[str], props_part: str) -> str:
 
 def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
     """Hash over every INPUT :func:`compose_scene` reads for ONE location,
-    with the props taken as the WHOLE library — the cache key of the
-    server-side consumers that compose on their own (``places._compose``,
-    ``room_stand.room_geometry``) and the fallback of :func:`scene_etag`.
+    with the props taken as the WHOLE library — the fallback of
+    :func:`narrowed_fingerprint` (and so of :func:`scene_etag` and of the
+    server-side composers ``places._compose``/``room_stand.room_geometry``)
+    before a compose has recorded which props it reads.
 
     It is deliberately a SUPERSET: an input that is only sometimes read (a
     prop the location does not place, a terrain area nowhere near it) still
@@ -5200,8 +5201,8 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
         :func:`prop_lib_token` — one stat per file in ``<storage>/props/<id>/``
         of EVERY prop: sidecars, meshes, their tier files and their baked
         lattices all live flat in that one directory per prop. Props have no
-        signature of their own. :func:`scene_etag` narrows this to the props
-        the location's last compose really read.
+        signature of their own. :func:`narrowed_fingerprint` narrows this
+        to the props the location's last compose really read.
     ``pack actions``
         ``prop_action_sources.signature()`` — package actions bind to markers
         without a sidecar write (plan-pack-prop-actions.md).
@@ -5277,9 +5278,13 @@ def scene_fingerprint(location: Dict[str, Any], location_id: str) -> str:
 # ``scripts/smoke_scene_fingerprint_churn.py`` [5]/[6] measures cold == warm
 # for every location and the end-to-end cases.
 #
-# ONLY THE SCENE PATH records. ``places`` and ``room_stand`` compose on their
-# own and keep :func:`scene_fingerprint`: a read set they did not record would
-# not cover a prop their own compose reads first.
+# EVERY SERVER-SIDE COMPOSER records its OWN read set. ``places._compose`` and
+# ``room_stand.room_geometry`` compose on their own (``read_only``, a room
+# recipe instead of a whole scene), so they cannot borrow the scene path's
+# set: a prop their compose reads first would not be in it. Each runs its
+# compose through :func:`compose_recorded` and checks a hit with
+# :func:`narrowed_fingerprint` over the set it recorded — the same two halves
+# the scene path uses, so all three caches follow one rule.
 
 _scene_reads_lock = threading.Lock()
 _scene_reads: Dict[Tuple[str, str], FrozenSet[str]] = {}
@@ -5344,14 +5349,56 @@ def scene_etag(location: Dict[str, Any], location_id: str) -> str:
     process it IS :func:`scene_fingerprint`, which can only cause one
     needless recompose, never a stale answer."""
     reads = _remembered_reads(location_id) if location_id else None
-    if reads is None:
-        return scene_fingerprint(location, location_id)
+    return narrowed_fingerprint(location, location_id, reads)
+
+
+def narrowed_fingerprint(location: Dict[str, Any], location_id: str,
+                         reads: Optional[FrozenSet[str]]) -> str:
+    """:func:`scene_fingerprint` with the props narrowed to ``reads`` — the
+    read set a compose of this location recorded (:func:`compose_recorded`).
+
+    ``None`` (nothing recorded yet) and a set holding ``props.ALL_PROPS`` (the
+    compose listed the library) fall back to the library-wide token. For the
+    same inputs this equals the key :func:`compose_recorded` returned, so a
+    cache compares the two to decide a hit."""
     from app.core.props import ALL_PROPS
-    if ALL_PROPS in reads:
+    if reads is None or ALL_PROPS in reads:
         return scene_fingerprint(location, location_id)
     props_part = _fp_safe(lambda: _reads_part(
         reads, {pid: _prop_dir_sig(pid) for pid in reads}, ""))
     return _hash_parts(_fingerprint_parts(location, location_id), props_part)
+
+
+_T = TypeVar("_T")
+
+
+def compose_recorded(location: Dict[str, Any], location_id: str,
+                     compose: Callable[[], _T]) -> Tuple[_T, FrozenSet[str], str]:
+    """Run ``compose`` while recording the props it reads:
+    ``(result, read set, key)``.
+
+    The key is captured BEFORE the first read (the non-prop inputs and a stat
+    snapshot of the whole library), then restricted to the read set — a prop
+    written while ``compose`` runs leaves the key on its OLD stats, so the
+    next :func:`narrowed_fingerprint` differs and the caller composes again
+    instead of keeping a result that mixes the two."""
+    from app.core.props import recording_reads
+    parts = _fingerprint_parts(location, location_id)
+    lib_token = _fp_safe(prop_lib_token)
+    sigs = _library_prop_sigs()
+    with recording_reads() as seen:
+        result = compose()
+    reads = frozenset(seen)
+    return result, reads, _hash_parts(parts, _reads_part(reads, sigs, lib_token))
+
+
+def replay_reads(reads: Iterable[str]) -> None:
+    """Note a cached result's read set in an enclosing ``recording_reads``
+    block: a cache hit resolves no prop directory, and an outer recorder must
+    still see the props the cached result stands for."""
+    from app.core.props import _note_read
+    for pid in reads:
+        _note_read(pid)
 
 
 def invalidate_scene_cache(location_id: str = "") -> None:
@@ -5425,15 +5472,8 @@ def scene_and_etag(location: Dict[str, Any], location_id: str, etag: str = "",
         if hit and hit[0] == etag:
             _scene_cache.move_to_end(location_id)
             return hit[1], etag
-    # The whole key BEFORE the first read of a compose input.
-    parts = _fingerprint_parts(location, location_id)
-    lib_token = _fp_safe(prop_lib_token)
-    sigs = _library_prop_sigs()
-    from app.core.props import recording_reads
-    with recording_reads() as seen:
-        payload = _compose_stored(location, location_id)
-    reads = frozenset(seen)
-    key = _hash_parts(parts, _reads_part(reads, sigs, lib_token))
+    payload, reads, key = compose_recorded(
+        location, location_id, lambda: _compose_stored(location, location_id))
     try:
         reads_key = _reads_key(location_id)
     except Exception:   # noqa: BLE001 — no world: nothing to remember

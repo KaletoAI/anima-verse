@@ -6687,9 +6687,12 @@ Zwei Dinge, additiv, am Payload ändert sich **nichts**:
    Liest eine Komposition die Bibliotheks-LISTE (`props.ALL_PROPS`), fällt
    der ETag auf den bibliotheksweiten Fingerabdruck zurück. Ein `200` trägt
    den ETag, unter dem sein Payload abgelegt wurde. `places` und
-   `room_stand` komponieren selbst und behalten
-   `scene_recipe.scene_fingerprint` (bibliotheksweit) als Schlüssel.
-   Nachgewiesen in `scripts/smoke_scene_fingerprint_churn.py`. Der
+   `room_stand` komponieren selbst und zeichnen dabei ihre **eigene**
+   Lese-Menge auf (`scene_recipe.compose_recorded` /
+   `narrowed_fingerprint`, seit 2026-11-11) — dieselbe Regel, eigene Menge;
+   `places.invalidate()` verwirft die komponierten Plätze nicht mehr.
+   Nachgewiesen in `scripts/smoke_scene_fingerprint_churn.py` und
+   `scripts/smoke_places_read_set.py`. Der
    Fingerabdruck ist absichtlich eine **Obermenge**: eine überflüssige
    Neukomposition ist billig, eine veraltete Szene nicht.
 

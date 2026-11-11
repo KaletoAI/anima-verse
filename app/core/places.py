@@ -35,7 +35,7 @@ an unplaced location — no pin, no world frame — has no places at all.
 import json
 import math
 import threading
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from app.core.keyed_lock import keyed_lock
 from app.core.log import get_logger
@@ -53,7 +53,8 @@ _CACHE_TTL_S = 300.0          # belt and braces — every writer invalidates any
 _lock = threading.Lock()      # guards ``_cache`` only, never held around a compose
 _cache: Dict[str, Tuple[Any, Dict[str, List[Place]], str]] = {}   # location_id -> (stamp, {room_id: places}, pack signature)
 _warned_outside: set = set()  # place ids already reported as lying outside their location
-_composed: Dict[str, Tuple[Any, Dict[str, List[Place]]]] = {}  # location_id -> (fingerprint key, places)
+# location_id -> (fingerprint key, props the compose read, places)
+_composed: Dict[str, Tuple[str, FrozenSet[str], Dict[str, List[Place]]]] = {}
 
 
 class PlaceUnavailable(ValueError):
@@ -61,11 +62,17 @@ class PlaceUnavailable(ValueError):
 
 
 def invalidate() -> None:
-    """Drop the whole inventory cache — called by every layout, prop-sidecar
-    and catalog writer."""
+    """Drop the inventory cache — called by every layout, prop-sidecar and
+    catalog writer.
+
+    The composed markers (``_composed``) stay: their key is the input
+    fingerprint of the location narrowed to the props its compose read
+    (``scene_recipe.narrowed_fingerprint``), so a location whose inputs did
+    not move keeps them, and one whose inputs did recomposes on its own. A
+    sidecar write of a prop nobody here places — every new prop is one — used
+    to recompose every location (~0.5 s each)."""
     with _lock:
         _cache.clear()
-        _composed.clear()
 
 
 def _compose(location_id: str) -> Dict[str, List[Place]]:
@@ -79,23 +86,25 @@ def _compose(location_id: str) -> Dict[str, List[Place]]:
     its recipe-local metres would read as world metres, and a seat there
     would put the sitter somewhere on the map that is not this location."""
     from copy import deepcopy
-    from app.core.scene_recipe import scene_fingerprint
+    from app.core.scene_recipe import (compose_recorded, narrowed_fingerprint,
+                                       replay_reads)
     from app.models.world import get_location_by_id
     loc = get_location_by_id(location_id)
     if not loc or loc.get("pos_x") is None or loc.get("pos_z") is None:
         return {}
     # A compose costs ~0.5 s and an offer poll, a request and every approach
-    # tick each need one. The scene fingerprint covers every compose input
-    # (sidecar writers invalidate the prop token), so equal keys mean equal
-    # places; callers get a private copy.
-    key = (location_id, scene_fingerprint(loc, location_id))
+    # tick each need one. The key covers every compose input, with the props
+    # narrowed to the ones this location's compose read — equal keys mean
+    # equal places; callers get a private copy.
     with _lock:
         hit = _composed.get(location_id)
-    if hit and hit[0] == key:
-        return deepcopy(hit[1])
-    by_room = _compose_fresh(location_id, loc)
+    if hit and narrowed_fingerprint(loc, location_id, hit[1]) == hit[0]:
+        replay_reads(hit[1])
+        return deepcopy(hit[2])
+    by_room, reads, key = compose_recorded(
+        loc, location_id, lambda: _compose_fresh(location_id, loc))
     with _lock:
-        _composed[location_id] = (key, deepcopy(by_room))
+        _composed[location_id] = (key, reads, deepcopy(by_room))
     return by_room
 
 

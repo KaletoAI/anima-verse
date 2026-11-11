@@ -43,13 +43,14 @@ writes the result through ``set_character_pos``.
 """
 import math
 import threading
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from app.core import furnish_geometry as fg
 from app.core.log import get_logger
 
 _geometry_lock = threading.Lock()
-_geometry_cache: Dict[Tuple[str, str], Tuple[Any, Any]] = {}
+# (location_id, room_id) -> (fingerprint key, props the compose read, geometry)
+_geometry_cache: Dict[Tuple[str, str], Tuple[str, FrozenSet[str], Any]] = {}
 
 logger = get_logger("room_stand")
 
@@ -319,21 +320,25 @@ def room_geometry(location_id: str, room_id: str
     what it was.
     """
     from copy import deepcopy
-    from app.core.scene_recipe import scene_fingerprint
+    from app.core.scene_recipe import (compose_recorded, narrowed_fingerprint,
+                                       replay_reads)
     from app.models.world import get_location_by_id
     loc = get_location_by_id(location_id)
     if not loc or loc.get("pos_x") is None or loc.get("pos_z") is None:
         return None
     # The recipe reads a subset of the scene inputs, so the scene fingerprint
-    # is a safe key; planners ask for the same room several times per request.
-    key = (location_id, room_id, scene_fingerprint(loc, location_id))
+    # — narrowed to the props this recipe read — is a safe key; planners ask
+    # for the same room several times per request.
+    slot = (location_id, room_id)
     with _geometry_lock:
-        hit = _geometry_cache.get(key[:2])
-    if hit and hit[0] == key:
-        return deepcopy(hit[1])
-    result = _room_geometry_fresh(loc, room_id)
+        hit = _geometry_cache.get(slot)
+    if hit and narrowed_fingerprint(loc, location_id, hit[1]) == hit[0]:
+        replay_reads(hit[1])
+        return deepcopy(hit[2])
+    result, reads, key = compose_recorded(
+        loc, location_id, lambda: _room_geometry_fresh(loc, room_id))
     with _geometry_lock:
-        _geometry_cache[key[:2]] = (key, deepcopy(result))
+        _geometry_cache[slot] = (key, reads, deepcopy(result))
     return result
 
 
