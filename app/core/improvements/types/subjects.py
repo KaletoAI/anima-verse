@@ -42,6 +42,31 @@ def characters() -> List[str]:
     return sorted(n for n in list_available_characters() if not is_temporary_npc(n))
 
 
+def pipeline_characters() -> List[str]:
+    """``characters()`` narrowed to the base-body pipeline with a READY base
+    model (``base_body.is_base_pipeline`` + ``base_model_info`` status
+    ``ready``) — the roster of the figure-pipeline types; the profile is
+    loaded once per character."""
+    from app.core import base_body
+    from app.models.character import get_character_profile
+    out: List[str] = []
+    for name in characters():
+        profile = get_character_profile(name) or {}
+        if not base_body.is_base_pipeline(name, profile=profile):
+            continue
+        info = base_body.base_model_info(name)
+        if info and info.get("status") == "ready":
+            out.append(name)
+    return out
+
+
+def item_name(item_id: str) -> str:
+    """The display name of an inventory item, the id when it has none."""
+    from app.models.inventory import get_item
+    item = get_item(item_id) or {}
+    return str(item.get("name") or item_id)
+
+
 def character_model(name: str) -> Optional[Dict[str, Any]]:
     """The mesh entry served for this character's CURRENT outfit (carrying
     ``backend`` and ``rig``), or None when there is none."""
