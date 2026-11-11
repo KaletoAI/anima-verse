@@ -114,8 +114,10 @@ RIGGED_SMOOTH_UNTIL = 7
 #: hair 4 (2026-11-11): HairDeck cards on the head pushed layer-keeping (``garment_hairdeck.layer_push``).
 #: hair 5 (2026-11-11): HairDeck side strands moved out of the face (``garment_hairdeck._clear_face``).
 #: hair 6 (2026-11-11): the HairDeck scalp cap takes the hair's median colour (was the 20th percentile).
+#: hair 7 (2026-11-11): the HairDeck smoothed push runs without the crown spread (``garment_hairdeck._push``): its
+#: flood entered the layer-push blend band as a ring round the head at eye level (Rosi, 32.5 mm p50 at 1.55 m).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 6, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 7, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
 
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {
