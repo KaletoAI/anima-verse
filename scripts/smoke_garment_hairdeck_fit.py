@@ -45,22 +45,26 @@ Fixture (metres, +y up, the body faces +z)
     the median) = (0.6038, 0.3185, 0.0732) +- 0.01, alpha 1. The scalp cap's colour is the median (CAP_COLOUR_PERCENTILE
     50, FIT_VERSION hair 6) of the corrected colours = the same value. Without a target the colours stay 0.25 (+- 1e-9) and colour_target None.
 [4] Scalp cap. Front hairline = lowest hair vertex with z > 0.05 and |x| < 0.03: the outer shell's lowest ring
-    h = 0.010 -> y = 0.8 + 2 * (0.4 + 0.010) = 1.62 (its vertex at segment 0 is at x 0, z 0.108). The push may lift
-    it a little (smoothing carries the inner layer's push along the shell) -> hairline in [1.62, 1.625].
+    h = 0.010 -> y = 0.8 + 2 * (0.4 + 0.010) = 1.62 (its vertex at segment 0 is at x 0, z 0.108). The push leaves
+    that ring where the placement put it (FIT_VERSION hair 7): the shell sits at the layer map's fixed point (see
+    [5]) and the smoothed push, which weighs at most 0.033 there, has no crown spread any more, so it is 0 on the
+    shell (0.010 out > CARD_CLEAR_M). -> hairline = icp_scale * 0.41 + icp t_y +- 0.0002 (the observed 1.9999 x 0.41
+    + 0.80002 = 1.61998), and in [1.619, 1.625] (the [1] tolerances on scale and t_y). Until hair 6 the spread lifted
+    the ring 1.3 mm (1.62134).
     Cap = head-sphere triangles (all three vertices Head > 0.5) with centroid above the hairline and a hair vertex
     within 0.03 (the shell is 0.01 away), whose centroid is not deeper than CAP_INNER_DEPTH_M = VOX_M 0.0034 inside
     the body SDF. Centroids of the outer sphere's triangles: band k (polar angles pi k/61 .. pi (k+1)/61) has two
     triangles per segment at y = 1.6 + 0.1 (2 cos a + cos b) / 3 and 1.6 + 0.1 (cos a + 2 cos b) / 3; a chord
     centroid lies < 0.1 mm inside the sphere, so the depth filter keeps all of them. Band 25: 1.62629 / 1.62463,
-    band 26: 1.62129 / 1.61961. With the observed hairline 1.62134 (pushed 1.3 mm up) that is the pole band 120 +
-    bands 1..25 x 240 = 6120 triangles; the smoke recounts it by this rule from the fixture arrays and the reported
-    hairline. cap_tris_below_hairline == 0, every cap centroid above the hairline, inner_wall_dropped 0; the cap
+    band 26: 1.62129 / 1.61961. With the observed hairline 1.61998 that is the pole band 120 + bands 1..25 x 240 +
+    band 26's upper triangles 120 = 6240 triangles; the smoke recounts it by this rule from the fixture arrays and
+    the reported hairline. cap_tris_below_hairline == 0, every cap centroid above the hairline, inner_wall_dropped 0; the cap
     vertices are offset 0.0015 along the outward normal -> radius 0.1015 +- 0.0005; every cap vertex Head 1.
     Two-wall body, ``_scalp_cap`` called with the same hair positions and that body's SDF: the outer sphere's
     triangles are the same set (cap count unchanged, every cap vertex at radius 0.1015); every inner-sphere triangle
     above the hairline passes the other three tests (Head 1, nearest hair >= 0.104 - 0.094 = 0.010 <= 0.03) but
     lies ~0.006 > 0.0034 inside the solid -> all of them are dropped: inner_wall_dropped = their count by the same
-    centroid rule (6120 again: same sampling), > 0.
+    centroid rule (6240 again: same sampling), > 0.
 [5] Gate. GATES = max_push_m <= 0.12, moved_share <= 0.90, icp_resid_p95_m <= 0.012 and no largest-component gate.
     {max_push_m 0.13, moved_share 0.5, icp_resid_p95_m 0.005} refuses with a reason naming max_push_m; at 0.12 it
     passes; fit metrics hold every key of the brief.
@@ -386,7 +390,9 @@ def main() -> int:
         # [4] scalp cap
         print("[4] scalp cap")
         hl = rep["cap"]["hairline_y"]
-        check(1.62 - 1e-6 <= hl <= 1.625, f"hairline {hl} in [1.62, 1.625]")
+        placed_ring = m["icp_scale"] * 0.41 + rep["icp"]["translation"][1]
+        check(abs(hl - placed_ring) <= 0.0002 and 1.619 <= hl <= 1.625,
+              f"hairline {hl} = the placed ring {placed_ring:.5f} +- 0.2 mm (not pushed), in [1.619, 1.625]")
         want = centroid_count(0.1, hl)
         check(m["cap_tris"] == want and want > 0,
               f"cap_tris {m['cap_tris']} == {want} (outer triangles above the hairline)")

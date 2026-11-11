@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from app.core.garment_fit import (MOVED_EPS_M, SDF_MARGIN_M, SPREAD_DEPTH_M, SPREAD_M, VOX_M, FitResult, body_sdf,
+from app.core.garment_fit import (MOVED_EPS_M, SDF_MARGIN_M, SPREAD_DEPTH_M, VOX_M, FitResult, body_sdf,
                                   chin_height, dense_weights, gate as _gate_against, hair_weights, joint_index,
                                   push_out, vertex_normals, weld)
 from app.core.glb_mesh import GarmentMesh, body_arrays, card_arrays
@@ -49,6 +49,11 @@ CARD_CLEAR_M = 0.004
 # distance, so a card above CARD_CLEAR_M + LAYER_BAND_M never moves and the ones below keep their order (no poke:
 # share 0.0 at POKE_TOL_M); below the head (the curtain deep in the upper back, up to 3.8 cm inside) the smoothed
 # push stays — per-vertex there crumples the ends on the shoulders. The two blend over LAYER_BLEND_M in height.
+# The smoothed push runs WITHOUT the crown spread (FIT_VERSION hair 7): with it, the flood it was replaced for came
+# back through the blend. Rosi 2026-11-11 (~/claude-out/rosi-hair): the spread lifted the whole head p50 36-50 mm,
+# (1 - w) of that entered the blend band (1.554 .. 1.584 m) and the mesh smoothing carried it down the cards to
+# ~1.51 -> a ring round the head at eye level, push p50 32.5 mm at 1.55 m against 4.6 mm at 1.58 m and 3.7 above,
+# at every angle round the head (27-35 mm -> 0-10 mm). Without the spread: p50 <= 5.4 mm through the band.
 LAYER_BAND_M = 0.006
 LAYER_BLEND_M = 0.03
 LAYER_CLAMP_ITERATIONS = 4
@@ -550,13 +555,14 @@ def layer_push(P: np.ndarray, sdf, *, clear: float = CARD_CLEAR_M, band: float =
 
 def _push(Q: np.ndarray, F: np.ndarray, U, body) -> Dict[str, Any]:
     """The push-out of the placed hair ``Q`` on the rigged body (welded cards, SDF over the hair's bounds): on the
-    head (the top ``SPREAD_DEPTH_M``) layer-keeping (``layer_push``), below it the smoothed ``push_out``, blended
+    head (the top ``SPREAD_DEPTH_M``) layer-keeping (``layer_push``), below it the smoothed ``push_out`` without
+    its crown spread (the spread's flood would enter the blend band as a ring, see ``LAYER_BLEND_M``), blended
     over ``LAYER_BLEND_M`` and clamped once more."""
     Pw, Fw, inv = weld(Q, F, U)
     sdf = body_sdf(body.positions, body.faces, vox=VOX_M,
                    bounds=(Pw.min(0) - SDF_MARGIN_M, Pw.max(0) + SDF_MARGIN_M))
     d0 = sdf.sample(Pw)
-    _q, smooth = push_out(Pw, Fw, sdf, clear=CARD_CLEAR_M, spread=SPREAD_M, spread_depth=SPREAD_DEPTH_M)
+    _q, smooth = push_out(Pw, Fw, sdf, clear=CARD_CLEAR_M)
     layered = layer_push(Pw, sdf)
     w = np.clip((Pw[:, 1] - (Pw[:, 1].max() - SPREAD_DEPTH_M)) / LAYER_BLEND_M, 0.0, 1.0)[:, None]
     disp = _clamp(Pw, w * layered + (1.0 - w) * smooth, sdf, CARD_CLEAR_M, LAYER_CLAMP_ITERATIONS)
