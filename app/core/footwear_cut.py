@@ -206,7 +206,8 @@ def _fill(values: np.ndarray, xs: np.ndarray) -> np.ndarray:
 def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
     """The record's ``cut`` (module docstring) from a ``footwear_fit.FootwearFit`` that ran and its item's
     ``insole.json``: ``{"version", "sides": {side: {...}}}``, JSON-safe. ValueError for a fit that produced no
-    sides or a record without ``insole.width_raw``."""
+    sides or a record without ``insole.width_raw``. For a split fit (a boot, fit version 6) the side's ``cap`` is
+    ``min(wall top, y_split − band)`` and the description carries ``split {y_m, band_m}``."""
     record = fit.record
     sides_rec = record.get("sides") or {}
     if not sides_rec:
@@ -256,16 +257,25 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
     for side, rec in sides_rec.items():
         placement = np.asarray(rec["placement_bind"], np.float64)
         frame = Dm @ FrameM @ np.linalg.inv(placement)
-        shoe = (fit.shoes or {}).get(side)
+        shoe = ((fit.parts or {}).get(side) or {}).get("foot")
         if shoe is None or len(shoe.joint_names) < 2:
             raise ValueError(f"The fit has no bound shoe for the {side} side")
         foot_joint, toe_joint = str(shoe.joint_names[0]), str(shoe.joint_names[1])
         d = diag.get(side) or {}
+        # a split fit (boots spec § 7): the removal stops at the bottom of the band instead of climbing the
+        # shaft's wall top — the shin stays inside the shaft, the bisected edge lies hidden in it
+        split = rec.get("split") or {}
+        side_cap = cap_stations
+        if split.get("is_boot"):
+            bound = float(split["y_m"]) - float(split.get("band_m", 0.0))
+            side_cap = np.stack([cap_stations[:, 0], np.minimum(cap_stations[:, 1], bound)], axis=1)
         sides[side] = {
             "foot_joint": foot_joint, "toe_joint": toe_joint, "frame": frame,
             "extension": {"axis_local": rec["extension"]["axis_local"], "deg": rec["extension"]["deg"]},
             "toe_counter": {"axis_local": rec["toe_counter"]["axis_local"], "deg": rec["toe_counter"]["deg"]},
-            "topline": topline, "cap": cap_stations, "footprint": outline,
+            "topline": topline, "cap": side_cap, "footprint": outline,
+            **({"split": {"y_m": float(split["y_m"]), "band_m": float(split.get("band_m", 0.0))}}
+               if split.get("is_boot") else {}),
             "throat": throat, "toe_box": toe_box, "vamp_inner": vamp_inner,
             "stations": {"heel_x": d.get("heel_x_m"), "ball_x": d.get("ball_x_m"),
                          "heel_seat_x": heel_seat_x, "x_min": x_min, "x_max": x_max},

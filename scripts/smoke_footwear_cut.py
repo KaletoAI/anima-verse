@@ -423,7 +423,7 @@ def main() -> int:
     L = cut["sides"]["left"]
     check("joint names", (L["foot_joint"], L["toe_joint"]) == ("LeftFoot", "LeftToeBase"))
     frame = np.asarray(L["frame"], np.float64)
-    shoe = fit.shoes["left"]
+    shoe = fit.parts["left"]["foot"]
     rigid = shoe.weights[:, 1] == 0
     Qm = Pw * np.array([k, k, 1.1 * k])
     mapped = (shoe.positions[rigid] @ (frame @ np.linalg.inv(joints["leftfoot"]))[:3, :3].T
@@ -510,7 +510,7 @@ def main() -> int:
     check("no throat move", st7["throat_moved"] == {"left": 0, "right": 0}, str(st7["throat_moved"]))
     check("only the two leg columns remain (24 faces, 48 vertices)", (len(after.faces), len(after.positions)) == (24, 48),
           f"{len(after.faces)} {len(after.positions)}")
-    gates = fc.cut_gates(after, fitc.shoes, cutc, joints=joints, body_before=prim)
+    gates = fc.cut_gates(after, {s_: fitc.parts[s_]["foot"] for s_ in fitc.parts}, cutc, joints=joints, body_before=prim)
     g = gates["gates"]
     check("should-enclosed 384 per side, deep_outside 0", all(gates["sides"][s]["should_enclosed"] == 384
           and gates["sides"][s]["deep_outside"] == 0.0 for s in ("left", "right")),

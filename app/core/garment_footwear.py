@@ -23,9 +23,11 @@ item's CURRENT source (``prepared.glb`` + ``insole.json`` under the current ssig
 that body's primitives (``footwear_cut.apply_cut`` + ``glb_mesh.rewrite_body_primitives``: the foot under the
 shoe is slimmed, conformed to the throat and removed, the cut faces bisected on the topline) and runs the cut
 gates (``footwear_cut.cut_gates``: ``deep_outside``, ``visible_poke``, ``throat_ledge_p95_mm``) on the result
-— they refuse like the fit's own gates. It publishes ``{item}_{fsig}.glb`` = that cut rigged body with two
-grafted shoe nodes ``garment_footwear_<item>_left`` / ``_right`` (``graft`` refuses a repeated name, so one
-node per side; extras ``{kind, item_id, fsig, side}``), its record (the fit's, ``cut`` included, every gate
+— they refuse like the fit's own gates. It publishes ``{item}_{fsig}.glb`` = that cut rigged body with the
+grafted shoe nodes ``garment_footwear_<item>_left`` / ``_right`` — and for a boot (a fit split at the ankle,
+``footwear_fit`` step 9) ``…_left_shaft`` / ``…_right_shaft`` too, four nodes, the shaft's material
+``doubleSided`` (``graft`` refuses a repeated name, so one node per side and part; extras ``{kind, item_id,
+fsig, side, part}``), its record (the fit's, ``cut`` included, every gate
 of both tables under ``gates`` with ``gating`` True, the cut's stats and per-side diagnostics under
 ``diagnostics.<side>.cut``) and the ``low/`` tier decimated from it. The body sha in the record is the
 UNCUT body's (what ``fit_state`` compares to the stored model). A fit is
@@ -246,9 +248,16 @@ FIT_REFITTED = "Refitted from the previous base"
 FIT_REFUSED = "Fit refused on this body: {gate}"
 
 
-def node_name(item_id: str, side: str) -> str:
-    """The grafted shoe node of one side: ``garment_footwear_<item>_<side>``."""
-    return f"garment_{KIND}_{item_id}_{side}"
+#: The parts a fit may publish per side (``footwear_fit.FootwearFit.parts``): a shoe has ``foot`` only.
+PARTS: Tuple[str, ...] = ("foot", "shaft")
+
+
+def node_name(item_id: str, side: str, part: str = "foot") -> str:
+    """The grafted node of one side and part: ``garment_footwear_<item>_<side>`` for the foot part,
+    ``garment_footwear_<item>_<side>_shaft`` for a boot's shaft (boots spec 2026-11-11 § 2 goal 1)."""
+    if part not in PARTS:
+        raise ValueError(f"unknown footwear part {part!r}")
+    return f"garment_{KIND}_{item_id}_{side}" + ("" if part == "foot" else f"_{part}")
 
 
 def source_ready(item_id: str) -> bool:
@@ -276,8 +285,8 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     ``parents.source`` and ``foot_pose`` with its ``source``), and the ``low/`` tier decimated from the fit GLB.
     ``schedule`` asks for the outfit assembly afterwards (P2: never — the served model stays unchanged).
 
-    ``garments._Refused("fit", …)`` when a gate refuses — the fit's (``BOOT_REFUSED`` first for a boot) or the
-    cut's — or the fsig is no longer ``fsig``; ``base_body.MissingInput`` when the source is not ready or the
+    ``garments._Refused("fit", …)`` when a gate refuses — the fit's or the cut's — or the fsig is no longer
+    ``fsig``; ``base_body.MissingInput`` when the source is not ready or the
     outfit body is missing; ``base_body.OutfitError`` without a base model. CPU only: never a hub job."""
     import hashlib
     from app.blender import refine
@@ -339,7 +348,8 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
                 cut_stats[key][side] = max(float(cut_stats[key].get(side, 0.0)), float(stats[key].get(side, 0.0)))
             cut_stats["throat_moved"][side] = int(cut_stats["throat_moved"].get(side, 0)) + int(
                 stats["throat_moved"].get(side, 0))
-    cut_gates = footwear_cut.cut_gates(_merged(list(replaced.values())), result.shoes, cut, joints=joints,
+    foot_parts = {side: result.parts[side]["foot"] for side in footwear_fit.SIDES}
+    cut_gates = footwear_cut.cut_gates(_merged(list(replaced.values())), foot_parts, cut, joints=joints,
                                        body_before=_merged(prims))
     result.record["gates"].update(footwear_fit._r({name: {**gate, "gating": True}
                                                    for name, gate in cut_gates["gates"].items()}))
@@ -355,8 +365,14 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
 
     blob = glb_mesh.rewrite_body_primitives(rigged, replaced)
     for side in footwear_fit.SIDES:
-        blob = glb_mesh.graft(blob, result.shoes[side], name=node_name(item_id, side),
-                              extras={"kind": kind, "item_id": item_id, "fsig": fsig, "side": side})
+        for part in PARTS:
+            mesh = result.parts[side].get(part)
+            if mesh is None:
+                continue
+            # the shaft is an open tube looked into from the collar: both faces of its wall are drawn
+            blob = glb_mesh.graft(blob, mesh, name=node_name(item_id, side, part),
+                                  extras={"kind": kind, "item_id": item_id, "fsig": fsig, "side": side, "part": part},
+                                  material_overrides={"doubleSided": True} if part == "shaft" else None)
     now = utc_now_iso()
     parents: Dict[str, Any] = {"body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
                                "source": _source_parents(item_id, ssig)}

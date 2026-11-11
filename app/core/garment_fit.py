@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -1580,9 +1580,15 @@ def is_skirt(X, body_rigged: BodyMesh, slots) -> bool:
     return bool(garment[:, 2].max() > body[:, 2].max() and garment[:, 2].min() < body[:, 2].min())
 
 
-def clothing_weights(points, body: BodyMesh, *, skirt: bool) -> Tuple[np.ndarray, np.ndarray]:
+def clothing_weights(points, body: BodyMesh, *, skirt: bool,
+                     columns: Optional[Sequence[int]] = None) -> Tuple[np.ndarray, np.ndarray]:
     """Skin weights of rigged clothing positions -> ``(joints (n, 4), weights (n, 4))``, joints indexing
     ``body.joint_names``; zero-weight slots point at joint 0.
+
+    ``columns`` (skin indices; boots spec 2026-11-11 § 6.3) restricts the donor weights of step 1 to those bones and
+    renormalises — a boot shaft takes only its side's Foot / Leg / UpLeg, never a stray Hips or other-leg donor of
+    the IDW; the fallback donors are then the body vertices weighted on those columns and step 3 (extension bones)
+    is skipped. ``None`` = the default behaviour, unchanged.
 
     1. Inverse distance over the ``CLOTHING_IDW_K`` (8) nearest rigged body vertices, ``w = 1 / max(d, 1e-4)``
        (spike ``fit_dress.py``), of the body weights RESTRICTED to the rig-contract bones and renormalised. A point
@@ -1605,6 +1611,10 @@ def clothing_weights(points, body: BodyMesh, *, skirt: bool) -> Tuple[np.ndarray
     Wr = dense_weights(body)
     contract = _contract_columns(body)
     contract = np.concatenate([contract, np.zeros(Wr.shape[1] - len(contract), bool)])
+    if columns is not None:
+        allowed = np.zeros(Wr.shape[1], bool)
+        allowed[list(columns)] = True
+        contract = contract & allowed
     Wc = Wr * contract[None, :]
 
     def neighbours(positions, rows):
@@ -1634,7 +1644,7 @@ def clothing_weights(points, body: BodyMesh, *, skirt: bool) -> Tuple[np.ndarray
                 if contract[i] and any(t in norm_bone_name(n) for t in _LEG_TOKENS)]
         W = skirt_leg_weights(X, W, legs=legs, hips=joint_index(body, "hips"), crotch=crotch_height(body))
 
-    if len(X) and not contract.all():
+    if len(X) and columns is None and not contract.all():
         dist, nn, w = neighbours(body.positions, np.ones(len(X), bool))
         full = Wr / np.maximum(Wr.sum(1, keepdims=True), 1e-12)
         E = np.einsum("nk,nkj->nj", w, full[nn]) * ~contract[None, :]

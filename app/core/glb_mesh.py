@@ -490,13 +490,16 @@ def rewrite_body_primitives(glb: bytes, replaced: Dict[int, Prim]) -> bytes:
     return pack_glb(gltf, bytes(blob))
 
 
-def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX) -> GarmentMesh:
-    """The ONE garment node whose name starts with ``node_prefix``: its single primitive, skin and image."""
+def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX, exact: bool = False) -> GarmentMesh:
+    """The ONE garment node whose name starts with ``node_prefix`` (``exact``: equals it — a boot's foot node
+    ``garment_footwear_<item>_<side>`` is a prefix of its shaft node ``…_<side>_shaft``): its single primitive,
+    skin and image."""
     parsed = _parse(glb, "Garment")
     gltf = parsed["gltf"]
-    nodes = [n for n in gltf.get("nodes") or [] if "mesh" in n and str(n.get("name") or "").startswith(node_prefix)]
+    nodes = [n for n in gltf.get("nodes") or [] if "mesh" in n
+             and (str(n.get("name") or "") == node_prefix if exact else str(n.get("name") or "").startswith(node_prefix))]
     if len(nodes) != 1:
-        raise ValueError(f"Expected exactly one garment node '{node_prefix}*', found {len(nodes)}")
+        raise ValueError(f"Expected exactly one garment node '{node_prefix}{'' if exact else '*'}', found {len(nodes)}")
     node = nodes[0]
     prims = gltf["meshes"][node["mesh"]].get("primitives") or []
     if len(prims) != 1:
@@ -773,12 +776,14 @@ def _check_colors(g: GarmentMesh, n: int) -> Optional[np.ndarray]:
     return np.round(np.clip(C, 0.0, 1.0) * 255).astype("u1")
 
 
-def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -> bytes:
+def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
+          material_overrides: Optional[dict] = None) -> bytes:
     """``target_glb`` + one skinned garment node ``name`` (see the module docstring). A weighted extension joint the
     target lacks hands its weight to its nearest ancestor (``joint_parents``) the target has. Raises ``KeyError``
     naming a WEIGHTED garment joint the target skin lacks and that has no such ancestor (a listed joint without
     weight > 0 maps to target index 0 with weight 0), ``ValueError`` for compressed geometry, a name already present
-    or broken garment arrays."""
+    or broken garment arrays. ``material_overrides`` merges top-level material keys (such as ``doubleSided`` for a
+    boot shaft, boots spec 2026-11-11 § 6.1) into the grafted material after the texture pass-through."""
     from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
     if not name or not isinstance(extras, dict):
         raise ValueError("graft needs a node name and an extras dict")
@@ -895,6 +900,8 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict) -
     material["pbrMetallicRoughness"] = pbr
     material["name"] = name
     material["alphaMode"] = "OPAQUE"
+    for key, value in (material_overrides or {}).items():
+        material[key] = copy.deepcopy(value)
     materials = gltf.setdefault("materials", [])
     materials.append(material)
 

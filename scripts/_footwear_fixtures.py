@@ -11,7 +11,9 @@ mesher's own coordinates (Y up, x heel -> toe, z lateral), length 0.26, width 0.
 - optionally a thin vertical fin at z = 0 over the toe end rising to 0.15 (vertical, so no ray hits it and
   the topline ignores it because it sits at z = 0) that makes the TOE end the taller one for the
   provisional heel rule;
-- ``shaft``: a boot variant — the side walls over x in [0, 0.10] rise to ``shaft``;
+- ``shaft``: a boot variant — the side walls over x in [0, 0.10] rise to ``shaft``, tessellated every 0.01 in y
+  (rows at 0, 0.01, …, ``shaft``; boots plan Task 6 — the split's band needs vertex rows at the ankle), the rest of
+  the wedge keeps its single-quad walls;
 - ``cap`` (boots plan Task 5, spec 2026-11-11 § 6.1): an up-facing disc of quads at y = ``shaft`` over the
   shaft's footprint x in [0, 0.10] x z in [-0.04, 0.04] on the 0.01 grid — 10 x 8 quads = 160 triangles, a
   single-view mesher's closure of the collar it could not see into;
@@ -79,10 +81,14 @@ def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = Fals
         t0, t1 = h0 + wall, h1 + wall
         in_shaft = bool(shaft) and x1 <= 0.10 + 1e-9
         for z, facing in ((HALF_W, (0, 0, 1)), (-HALF_W, (0, 0, -1))):
-            s0, s1 = t0, t1
             if in_shaft and not (open_side and z > 0):
-                s0, s1 = max(t0, shaft), max(t1, shaft)
-            quad((x0, 0, z), (x1, 0, z), (x1, s1, z), (x0, s0, z), facing)
+                rows = [round(0.01 * j, 10) for j in range(int(round(shaft / 0.01)) + 1)]
+                if abs(rows[-1] - shaft) > 1e-9:
+                    rows.append(shaft)
+                for ya, yb in zip(rows[:-1], rows[1:]):
+                    quad((x0, ya, z), (x1, ya, z), (x1, yb, z), (x0, yb, z), facing)
+            else:
+                quad((x0, 0, z), (x1, 0, z), (x1, t1, z), (x0, t0, z), facing)
         if in_shaft and cap:
             for j in range(8):
                 z0, z1 = -HALF_W + 0.01 * j, -HALF_W + 0.01 * (j + 1)
@@ -166,6 +172,58 @@ def clog():
     return np.asarray(P, np.float64), np.asarray(F, np.int64)
 
 
+def flat_boot(shaft: float = 0.16, half_w: float = 0.04):
+    """``(positions, faces)`` of the closed flat boot (boots plan Task 6, spec 2026-11-11 § 6.2–6.4): the ``clog()``
+    with ``half_w`` as its half-width whose side walls over x in [0, 0.10] rise to ``shaft`` (rows every 0.01 in y, so
+    the split's band has vertex rows), a back wall at x = 0 to ``shaft`` and a front wall at x = 0.10 from the clog's
+    wall height W_LO (0.035, above the box foot's top at 0.03 k) to ``shaft`` — a closed tube on the flat clog; in
+    front of x = 0.10 the clog is unchanged (walls 0.035 / 0.04, the roof over [0.1825, 0.26]). Unwelded like the
+    clog (every quad its own vertices)."""
+    L, HW, TOP, X0, STEP, W_LO, W_HI, ROOF = 0.26, half_w, 0.01, 0.01, 0.1825, 0.035, 0.04, 0.04
+    SHAFT_TO = 0.10
+    P, F = [], []
+
+    def tri(a, b, c, facing):
+        a, b, c = (np.asarray(v, np.float64) for v in (a, b, c))
+        if np.dot(np.cross(b - a, c - a), facing) < 0:
+            b, c = c, b
+        base = len(P)
+        P.extend([a, b, c])
+        F.append((base, base + 1, base + 2))
+
+    def quad(p00, p10, p11, p01, facing):
+        tri(p00, p10, p11, facing)
+        tri(p00, p11, p01, facing)
+
+    def wall(x):
+        return W_LO if x < STEP - 1e-9 else W_HI
+
+    rows = [round(0.01 * j, 10) for j in range(int(round(shaft / 0.01)) + 1)]
+    if abs(rows[-1] - shaft) > 1e-9:
+        rows.append(shaft)
+    xs = [round(0.0025 * i, 10) for i in range(105)]
+    for x0, x1 in zip(xs[:-1], xs[1:]):
+        if x0 >= X0 - 1e-9:
+            quad((x0, TOP, -HW), (x1, TOP, -HW), (x1, TOP, HW), (x0, TOP, HW), (0, 1, 0))
+        quad((x0, 0, -HW), (x1, 0, -HW), (x1, 0, HW), (x0, 0, HW), (0, -1, 0))
+        for z, facing in ((HW, (0, 0, 1)), (-HW, (0, 0, -1))):
+            if x1 <= SHAFT_TO + 1e-9:
+                for ya, yb in zip(rows[:-1], rows[1:]):
+                    quad((x0, ya, z), (x1, ya, z), (x1, yb, z), (x0, yb, z), facing)
+            else:
+                quad((x0, 0, z), (x1, 0, z), (x1, wall(x1), z), (x0, wall(x0), z), facing)
+        if x0 >= STEP - 1e-9:
+            quad((x0, ROOF, -HW), (x1, ROOF, -HW), (x1, ROOF, HW), (x0, ROOF, HW), (0, 1, 0))
+    for ya, yb in zip(rows[:-1], rows[1:]):                                                   # back wall
+        quad((0, ya, -HW), (0, yb, -HW), (0, yb, HW), (0, ya, HW), (-1, 0, 0))
+        if yb > W_LO + 1e-9:                                                                  # front wall of the tube
+            quad((SHAFT_TO, max(ya, W_LO), -HW), (SHAFT_TO, yb, -HW), (SHAFT_TO, yb, HW), (SHAFT_TO, max(ya, W_LO), HW),
+                 (1, 0, 0))
+    quad((X0, 0, -HW), (X0, TOP, -HW), (X0, TOP, HW), (X0, 0, HW), (-1, 0, 0))          # sole's rear end
+    quad((L, 0, -HW), (L, ROOF, -HW), (L, ROOF, HW), (L, 0, HW), (1, 0, 0))              # toe box front
+    return np.asarray(P, np.float64), np.asarray(F, np.int64)
+
+
 # --- the synthetic feet (Task 9) ------------------------------------------------------------------------------------
 #
 # A skinned body GLB, Y up, facing +x (lateral z: right = forward x up = +z), joints with identity rotation:
@@ -226,11 +284,16 @@ def heel_raise(x: float, heel_up: float) -> float:
     return heel_up * (HEEL_UP_TO - x) / (HEEL_UP_TO - HEEL_UP_FLAT_X)
 
 
-def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0):
+def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0,
+              leg_half_w: float = 0.03, leg_cell: float = 0.0):
     """``(positions, faces, joints (N, 2), weights (N, 2), joint names)`` of the synthetic feet (block above):
     every vertex has two joint slots, the second one unused (joint 0, weight 0) except on the leg column with a
     ``shin_foot_weight`` > 0 (Foot ``shin_foot_weight`` / Leg the rest) — the default body's GLB bytes are the
-    round-1 fixture's."""
+    round-1 fixture's. ``leg_half_w`` is the leg column's lateral half-width (z in zc +- it; boots plan Task 6: a
+    wider shin for the shaft push-out); ``leg_cell`` > 0 tessellates the leg column's faces in cells of that size
+    (0 = one quad per face, the round-1 column of 24 faces) — the voxel body field of the shaft push needs a
+    surface the sampler closes, and the clothing transfer's 8 nearest body vertices should be the shin, not six
+    corners."""
     names = list(_FOOT_PARENT)
     P, F, J = [], [], []
     for side, zc in FOOT_ZC.items():
@@ -254,28 +317,32 @@ def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight:
                 p[1] += heel_raise(float(p[0]), heel_up)
         leg = (lambda p, fi=fi, li=li: (fi, li, float(shin_foot_weight))) if shin_foot_weight > 0.0 \
             else (lambda p, li=li: (li, 0, 1.0))                                                    # noqa: E731
-        lo = np.array([-0.03, 0.10, zc - 0.03])
+        lo = np.array([-0.03, 0.10, zc - leg_half_w])
+        ext = {0: 0.06, 1: 0.35, 2: 2.0 * leg_half_w}
         for axis_u, axis_v, n_axis in ((0, 2, 1), (0, 1, 2), (2, 1, 0)):
             for top in (False, True):
                 u = np.zeros(3)
-                u[axis_u] = 0.06 if axis_u != 1 else 0.35
+                u[axis_u] = ext[axis_u]
                 v = np.zeros(3)
-                v[axis_v] = 0.06 if axis_v != 1 else 0.35
+                v[axis_v] = ext[axis_v]
                 o = lo.copy()
                 if top:
-                    o[n_axis] += 0.06 if n_axis != 1 else 0.35
+                    o[n_axis] += ext[n_axis]
                 facing = np.zeros(3)
                 facing[n_axis] = 1.0 if top else -1.0
-                _grid(P, F, J, o, u, v, 1, 1, facing, leg)
+                nu = max(1, int(round(ext[axis_u] / leg_cell))) if leg_cell > 0 else 1
+                nv = max(1, int(round(ext[axis_v] / leg_cell))) if leg_cell > 0 else 1
+                _grid(P, F, J, o, u / nu, v / nv, nu, nv, facing, leg)
     ja = np.asarray([(a, b) for a, b, _ in J], np.int64)
     wa = np.asarray([(w, 1.0 - w) for _, _, w in J], np.float64)
     return np.asarray(P), np.asarray(F, np.int64), ja, wa, names
 
 
-def foot_body_glb(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0) -> bytes:
+def foot_body_glb(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0,
+                  leg_half_w: float = 0.03, leg_cell: float = 0.0) -> bytes:
     """The synthetic feet as a skinned GLB (skin 0 = the joints above, inverse bind matrices = -translation)."""
     from app.core.glb_mesh import pack_glb
-    pos, faces, jidx, wgts, names = foot_body(ball_width, heel_up, shin_foot_weight)
+    pos, faces, jidx, wgts, names = foot_body(ball_width, heel_up, shin_foot_weight, leg_half_w, leg_cell)
     blob = bytearray()
     accessors, views = [], []
 

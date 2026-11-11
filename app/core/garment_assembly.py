@@ -61,8 +61,9 @@ work, no hub job. A changed inner fit changes the ``lsig``, so the assembly
 is no longer current and the outer piece is layered again.
 
 A FOOTWEAR piece (spec 2026-11-10-footwear-rigid-shoes § 6.1, § 7.1, § 11)
-is grafted as its TWO shoe nodes ``garment_footwear_<item>_<side>`` read from
-its fit GLB (``garment_footwear.node_name``), and the bare body of that tier
+is grafted as its shoe nodes ``garment_footwear_<item>_<side>`` — and a
+boot's ``…_<side>_shaft`` nodes (fit version 6), the material as the fit GLB
+carries it — read from its fit GLB (``garment_footwear.node_name``), and the bare body of that tier
 gets the fit record's ``cut`` applied first (``footwear_cut.apply_cut`` per
 body primitive, written back by ``glb_mesh.rewrite_body_primitives``) — the
 foot inside the shoe is removed from the served file itself, the bare file
@@ -595,11 +596,18 @@ def _build(character_name: str, directory: Path, bare: Path,
         extras = {"kind": garment["kind"], "item_id": garment["item_id"], "fsig": garment["fsig"]}
         if garment["kind"] == FOOTWEAR:
             from app.core.footwear_fit import SIDES
-            from app.core.garment_footwear import node_name
+            from app.core.garment_footwear import PARTS, node_name
             for side_name in SIDES:
-                name = node_name(garment["item_id"], side_name)
-                mesh = glb_mesh.garment_arrays(source, node_prefix=name)
-                blob = glb_mesh.graft(blob, mesh, name=name, extras={**extras, "side": side_name})
+                for part in PARTS:
+                    name = node_name(garment["item_id"], side_name, part)
+                    try:
+                        # exact: the foot node's name is a prefix of the shaft node's
+                        mesh = glb_mesh.garment_arrays(source, node_prefix=name, exact=True)
+                    except ValueError:
+                        if part == "foot":
+                            raise
+                        continue              # a shoe has no shaft node
+                    blob = glb_mesh.graft(blob, mesh, name=name, extras={**extras, "side": side_name, "part": part})
             continue
         mesh = glb_mesh.garment_arrays(source)
         if garment["kind"] == HAIR:

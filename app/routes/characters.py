@@ -1920,7 +1920,7 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     if kind == "footwear":
         from app.core import footwear_cut, footwear_fit, footwear_gates, footwear_insole
         fit_gates = {key: (kind_, limit, footwear_fit.GATE_LABELS[key])
-                     for key, (kind_, limit) in footwear_fit.FIT_GATES.items()}
+                     for key, (kind_, limit) in {**footwear_fit.FIT_GATES, **footwear_fit.SHAFT_GATES}.items()}
         fit_gates.update({key: (kind_, limit, footwear_cut.GATE_LABELS[key])
                           for key, (kind_, limit) in footwear_cut.CUT_GATES.items()})
         return {"empty": _footwear_gate_limits(footwear_gates.EMPTY_GATES),

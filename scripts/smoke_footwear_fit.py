@@ -79,10 +79,12 @@ Expected, by hand:
      RightToeBase] only, weights in columns 0 and 1 summing to 1 — no Leg anywhere. The ToeBase weight is
      the smoothstep of (x - (x_ball - 0.015 / k)) / (0.03 / k), x_ball = 0.022593 + sqrt(0.17188^2 - 0.07082^2) / k
      = 0.022593 + 0.15663 / k = 0.19952 raw.
-[F7] boot: walls over [0, 0.10] raised to 0.2098 raw -> topline 0.2098 k = 0.18572; the shod ankle stands
-     at 0.08 + 0.05613 = 0.13613 -> 0.18572 - (0.13613 + 0.03) = +0.01959 m = +19.6 mm (+-0.5) > 0 ->
-     ok False, reasons[0] = BOOT_REFUSED, record refusal BOOT_REFUSED. The pump: 0.12 k - 0.16613 =
-     -59.9 mm (+-0.5) -> passes.
+[F7] boot (fit version 6, boots plan Task 6 — the round-1 refusal is retired, the shaft is split at the
+     ankle, scripts/smoke_footwear_split.py has the split's own numbers): walls over [0, 0.10] raised to 0.2098
+     raw -> topline 0.2098 k = 0.18572; the shod ankle stands at y_split = 0.08 + 0.05613 = 0.13613 above the
+     shoe's ground -> collar_above_ankle_mm = 0.18572 - 0.13613 = +49.6 mm (+-0.5; the old boot gate's +19.6
+     plus its 30-mm margin) > SPLIT_MARGIN_M 10 mm -> split: ok True, no refusal, parts foot + shaft, no
+     "boot" gate. The pump: 0.12 k - 0.13613 = -29.9 mm (+-0.5) -> not split, one part, no shaft gates.
 [F8] foot_pose (spec § 6.1 without source): bones["LeftFoot"] = {axis (0, 0, -1), deg 24.29},
      bones["LeftToeBase"].deg = -24.29, root_lift_m 0.05613; contacts per side heel (on Foot), ball and toe
      (on ToeBase). The record's sides carry the same extension, the lift, toe room = the shoe's front 0.26 k
@@ -166,13 +168,12 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 5 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+    check(ff.FOOTWEAR_FIT_VERSION == 6 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
           and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
     check(ff.FIT_GATES == {"ball_placement_mm": ("max", 3.0), "lift_asymmetry_mm": ("max", 10.0),
-                           "slim_needed": ("max", 0.18), "stand_floor_mm": ("range", (-3.0, 3.0)),
-                           "boot": ("max", 0.0)}
-          and not hasattr(ff, "ACTIVE_IN_P2"), "[F0] FIT_GATES, no ACTIVE_IN_P2")
+                           "slim_needed": ("max", 0.18), "stand_floor_mm": ("range", (-3.0, 3.0))}
+          and not hasattr(ff, "ACTIVE_IN_P2"), "[F0] FIT_GATES without boot (fit version 6), no ACTIVE_IN_P2")
 
     # [F9] bind matrices + feet
     glb = fx.foot_body_glb()
@@ -224,7 +225,7 @@ def main() -> int:
           f"[F4] ball placement {g['ball_placement_mm']['value']:.5f} mm <= 0.01 (the shoe's chord point on the skinned ball)")
     check(near(g["stand_floor_mm"]["value"], 0.0, 0.01), f"[F4] stand floor {g['stand_floor_mm']['value']} mm")
     check(fit.ok and fit.reasons == [], f"[F4] ok {fit.ok}, reasons {fit.reasons}")
-    left, right = fit.shoes["left"], fit.shoes["right"]
+    left, right = fit.parts["left"]["foot"], fit.parts["right"]["foot"]
     i = int(np.nonzero(np.all(np.abs(P - (0, 0.09, 0.04)) < 1e-9, axis=1))[0][0])
     theta = math.radians(rec["sides"]["left"]["extension"]["deg"])
     Bf = ff._about(np.array([0.0, 0.08, -0.10]), np.array([0.0, 0.0, -1.0]), theta)
@@ -258,7 +259,7 @@ def main() -> int:
           and np.array_equal(right.indices, left.indices[:, [0, 2, 1]]), "[F6] right = mirror of left, winding flipped")
     vl, vr = signed_volume(left.positions, left.indices), signed_volume(right.positions, right.indices)
     check(abs(vl - vr) <= 1e-12 and abs(vl) > 0, f"[F6] signed volume left {vl:.3e} = right {vr:.3e}")
-    for side, gm in fit.shoes.items():
+    for side, gm in ((s_, fit.parts[s_]["foot"]) for s_ in ("left", "right")):
         Pg, Fg = gm.positions, gm.indices
         fn = np.cross(Pg[Fg[:, 1]] - Pg[Fg[:, 0]], Pg[Fg[:, 2]] - Pg[Fg[:, 0]])
         vn = gm.normals[Fg].sum(axis=1)
@@ -272,14 +273,21 @@ def main() -> int:
     check(np.allclose(left.weights[:, 1], u * u * (3 - 2 * u), atol=1e-9) and near(xb, 0.19952, 1e-4),
           f"[F6] ToeBase weight = smoothstep over +-0.015 m around the ball (x {xb:.5f} raw)")
 
-    # [F7]
+    # [F7] (fit version 6: the shaft wedge is SPLIT, not refused)
     Pb, Fb = fx.wedge(shaft=0.2098)
     boot = ff.fit_pair(footwear_insole.analyse_arrays(Pb, Fb), fx.shoe_garment(Pb, Fb), body, joints)
-    bv = boot.record["gates"]["boot"]["value"]
-    check(not boot.ok and boot.reasons[:1] == [footwear_insole.BOOT_REFUSED]
-          and boot.record.get("refusal") == footwear_insole.BOOT_REFUSED and near(bv, 19.6, 0.5),
-          f"[F7] boot {bv} mm -> refused {boot.reasons[:1]}")
-    check(near(g["boot"]["value"], -59.9, 0.5) and g["boot"]["ok"], f"[F7] the pump: boot {g['boot']['value']} mm")
+    bl = boot.record["sides"]["left"]
+    check(boot.ok and boot.reasons == [] and "refusal" not in boot.record and "boot" not in boot.record["gates"]
+          and bl["split"]["is_boot"] is True and near(bl["split"]["collar_above_ankle_mm"], 49.6, 0.5)
+          and near(boot.record["diagnostics"]["left"]["collar_above_ankle_mm"], 49.6, 0.5)
+          and sorted(boot.parts["left"]) == ["foot", "shaft"] and boot.record["split"]["is_boot"] is True,
+          f"[F7] boot: split (collar {bl['split']['collar_above_ankle_mm']} mm above the ankle), ok {boot.ok}, "
+          f"parts {sorted(boot.parts['left'])}")
+    pl = rec["sides"]["left"]
+    check(pl["split"]["is_boot"] is False and near(pl["split"]["collar_above_ankle_mm"], -29.9, 0.5)
+          and sorted(fit.parts["left"]) == ["foot"] and near(pl["split"]["y_m"], 0.13613, 5e-4)
+          and "shaft_push_p95_m" not in rec["gates"],
+          f"[F7] the pump: collar {pl['split']['collar_above_ankle_mm']} mm, y_split {pl['split']['y_m']}, no split")
 
     # [F8]
     fp = fit.foot_pose
@@ -341,8 +349,8 @@ def main() -> int:
               f"[F11] ok {fit_hu.ok}, reasons {fit_hu.reasons}, foot_pose root lift {fit_hu.foot_pose.get('root_lift_m')}")
 
     # [F12] the version and the two band constants ([F1]-[F8] above are the unchanged regression)
-    check(ff.FOOTWEAR_FIT_VERSION == 5 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
-          "[F12] FOOTWEAR_FIT_VERSION 5, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
+    check(ff.FOOTWEAR_FIT_VERSION == 6 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
+          "[F12] FOOTWEAR_FIT_VERSION 6, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0

@@ -33,7 +33,7 @@ Expected, by hand:
 
 [A1] assemble(Demo, OSIG) -> {full: assembled, low: assembled}. Per tier the assembled GLB holds exactly two
      garment nodes, ``garment_footwear_heels_left`` / ``_right`` (extras.garment {kind footwear, item_id heels,
-     fsig F, side}), each 2676 vertices / 892 faces; its body (garment nodes excluded) is the CUT bare body: 24
+     fsig F, side, part "foot"}), each 2676 vertices / 892 faces; its body (garment nodes excluded) is the CUT bare body: 24
      faces / 48 vertices (fewer than the bare 1056 / 816), and in both sides' cut frames no remaining body vertex
      lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9). rig_frames_preserved(bare,
      assembled) ok. Sidecar: garments {heels: {kind footwear, fsig F, sha256 sha(fit GLB)}}, foot_pose = the
@@ -316,8 +316,8 @@ def main() -> int:
         check("A1 assemble", res, {"ok": True, "tiers": {"full": "assembled", "low": "assembled"}})
         asm = mdir / "assembled" / f"{osig}.glb"
         asm_low = mdir / "assembled" / "low" / f"{osig}.glb"
-        want_nodes = {f"garment_footwear_{heels}_{s}": ({"kind": "footwear", "item_id": heels, "fsig": F, "side": s},
-                                                        2676, 892) for s in ("left", "right")}
+        want_nodes = {f"garment_footwear_{heels}_{s}": ({"kind": "footwear", "item_id": heels, "fsig": F, "side": s,
+                                                         "part": "foot"}, 2676, 892) for s in ("left", "right")}
         want_fp = {**fp_record, "source": {"item_id": heels, "fsig": F, "glb_sha256": ""}}
         for tier, path in (("full", asm), ("low", asm_low)):
             check(f"A1 {tier} exists", path.is_file(), True)

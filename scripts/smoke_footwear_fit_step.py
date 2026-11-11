@@ -19,9 +19,10 @@ width 0.085, height 0.02; 1056 faces / 816 vertices: per foot 516 / 384 — sole
 grids — plus 12 / 24 per leg column) with its sidecar and
 unrigged copy. Item ``heels`` (feet, own mesh) held by Demo; its current source folder holds the closed flat
 clog of ``_footwear_fixtures.clog`` as ``prepared.glb`` (``glb_mesh.static_glb``), ``insole.json`` =
-``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 2, fit version 5: the
-cut applied and gated, toes conformed, the foot measured below the ankle) — the item steps are done, a run only fits. Item ``boots``: the same with the Task 5
-wedge's boot variant (``wedge(shaft=0.2098)``); item ``pumps``: the wedge pump itself. The clog is the one
+``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 3, fit version 6: the
+cut applied and gated, toes conformed, the foot measured below the ankle, a boot split at the ankle) — the item steps are done, a run only fits. Item ``boots``: the
+closed flat boot ``flat_boot(shaft=0.16)`` of the boots round (the clog with a 16-cm tube over x in [0, 0.10]),
+its prepared.glb's material ``doubleSided`` False; item ``pumps``: the wedge pump itself. The clog is the one
 fixture shoe a RIGID box foot passes the cut gates in: on the wedge the box, pitched 24.29 deg by the chord,
 floats over the shank and pokes through the heel counter and the walls (``smoke_footwear_cut.py`` [X7]/[X8]:
 deep_outside 0.28 and visible_poke 0.25 — gate refusals since fit version 3, used in [P7]).
@@ -45,18 +46,20 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
 
 [P1] run_garment(Demo, heels) -> {ok True, ran ["fit"], fit "accepted"}, HUB 0, the assembly not scheduled.
      The fit GLB garments/heels_<F>.glb: exactly two nodes ``garment_footwear_heels_*`` — ``_left`` / ``_right``
-     with extras.garment {kind "footwear", item_id "heels", fsig F, side}; its body (garment nodes excluded) is
+     with extras.garment {kind "footwear", item_id "heels", fsig F, side, part "foot"} (a shoe has no shaft
+     node, fit version 6); its body (garment nodes excluded) is
      the CUT base: 24 faces / 48 vertices (fewer than the bare body's 1056 / 816), and in both sides' cut
      frames no remaining vertex lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9 for
-     every one). Record: method "shoe", kind "footwear", version 5, fit_version 5, accepted, ssig = the current
+     every one). Record: method "shoe", kind "footwear", version 6, fit_version 6, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
      sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 3}}; scale.k_m_per_unit 1.023599
      (+-2e-4); sides.left.extension.deg 0 (|deg| <= 1e-6) both sides; root_lift_m 0.010236 (+-1e-5);
      insole_w_ball_mm 81.89 (+-0.05), width needed 1.0380 (+-0.002), applied 1.0380 (+-0.002), width_cap 1.10;
      slim_needed 0 (both sides); cut {version 2, sides left + right with foot_joint LeftFoot / RightFoot,
-     toe_joint LeftToeBase / RightToeBase}; gates = the nine of footwear_fit.FIT_GATES + footwear_cut.CUT_GATES,
-     every one ok and gating True; deep_outside / visible_poke / throat_ledge_p95_mm / toe_conform_m 0 (the box foot
+     toe_joint LeftToeBase / RightToeBase}; gates = the eight of footwear_fit.FIT_GATES + footwear_cut.CUT_GATES
+     (the round-1 ``boot`` gate is gone since fit version 6; a shoe carries no shaft gate), every one ok and
+     gating True; deep_outside / visible_poke / throat_ledge_p95_mm / toe_conform_m 0 (the box foot
      lies under the clog's roof: no toe to push); cut_stats {removed_faces
      1032, bisected_faces 0, new_vertices 0}; diagnostics.left.cut {should_enclosed 384, visible_n 0, slim_share
      0.047059 (+-1e-4), throat_moved 0}; foot_pose bones LeftFoot deg 0, root_lift_m 0.010236, source {item_id
@@ -83,13 +86,21 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      nodes. garments.body_fit (build False)
      then returns that file; fit_state(…, sha(A), body=A) accepted, with sha(base) stale; with a wrong body sha
      -> fit None, not pending. HUB 0.
-[P5] The boot (topline 0.2098 k = 0.18572 vs the shod ankle 0.13574 + 0.03 -> +20.0 mm > 0): fit(Demo, boots)
-     raises garments._Refused (step "fit", error naming BOOT_REFUSED, gates.reasons[0] = BOOT_REFUSED), no fit
-     file; run_garment -> {ok False, step "fit"}, cached_failure(Demo, boots) = {step "fit", fsig, error with
-     BOOT_REFUSED, base_model_sha256 = sha(base)} — recorded per fsig; info steps.fit.status "refused". On body
-     A a stored boots fit of an older fit version (fit_version 0, accepted on sha(A)) is NOT served:
-     body_fit(build True) refits, is refused, records the failure on A (body_failure holds for (sha(A), "", 1))
-     and returns fit None with the BOOT_REFUSED error; a second build does not fit again (fit_pair calls 1).
+[P5] The boot is SPLIT, not refused (fit version 6, boots plan Task 6; scripts/smoke_footwear_split.py has the
+     split's numbers on the same clog-shaped foot part: k 1.023599, lift 0.010236, y_split 0.090236, topline
+     0.16 k = 0.163776 -> collar_above_ankle_mm +73.5 > SPLIT_MARGIN_M): fit(Demo, boots) publishes
+     garments/boots_<FB>.glb with FOUR nodes garment_footwear_boots_{left,right} (extras.garment.part "foot")
+     + …_shaft (part "shaft"); the shaft nodes' material doubleSided True, the foot nodes' False (the source's);
+     record split.is_boot True, sides.left.split.y_m 0.090236 (+-1e-5), collar 73.5 mm (+-0.1), gates = the
+     8 of P1 + the 6 footwear_fit.SHAFT_GATES (14; seam_stretch_max {ok False, gating False} — recorded, the
+     fit accepted), shaft_push_max_m 0 (the round-1 leg column stands 12.5 mm inside the shaft); the body cut
+     is the clog's (24 faces / 48 vertices: the removal's cap is bounded at the band's bottom y_split - 0.02 =
+     0.0702, under the leg columns at 0.1102, spec § 7); foot_pose (bones, root_lift_m, contacts, rest) equal
+     to the heels' (the split changes no pose); the assembly reads each node by exact name
+     (garment_arrays(exact=True)); run_garment(Demo, boots) afterwards -> ran [] . On body A a stored boots fit of
+     an older fit version (fit_version 0, accepted on sha(A)) is NOT served: body_fit(build True) refits on A
+     (fit_pair calls +1) and publishes bodies/A/boots_<FB>.glb with four nodes, fit_state accepted; a second
+     build does not fit again.
 [P6] Without a base model (Mira: on the pipeline, no model file) run_garment(Mira, heels) -> {ok True, ran [],
      fit "no_base"}; info steps.fit.status "missing".
 [P7] The cut gates refuse (Task 15). fit(Demo, pumps) — the wedge pump, whose fit gates pass (smoke_footwear_fit.py)
@@ -99,8 +110,8 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      steps.fit.status "refused". The base replaced by the 0.10 m wide feet (foot_body_glb(0.10), sha changes):
      run_garment(Demo, pumps) -> refused BEFORE any cut by the fit's own gate, error containing
      "slim_needed 0.2209 > 0.18" (Task 9's hand value 1 - 0.07790 / 0.10 = 0.2210, +-1e-3; gates.slim_needed
-     {ok False, gating True}). An older fit reads stale: a pumps record of fit_version 3 (and 2), accepted on
-     the current base bytes -> fit_state "stale" (fit_version 5 -> "accepted").
+     {ok False, gating True}). An older fit reads stale: a pumps record of fit_version 5 (and 4), accepted on
+     the current base bytes -> fit_state "stale" (fit_version 6 -> "accepted").
 """
 import hashlib
 import json
@@ -230,7 +241,7 @@ def main() -> int:
             check(f"create {name}", save_character_profile(name, dict(human), create_new=True), True)
             check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
 
-        def shoe_item(item_id, shaft=0.0, colour=(20, 20, 20), mesh=None):
+        def shoe_item(item_id, shaft=0.0, colour=(20, 20, 20), mesh=None, material=None):
             iid = inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                      prompt_fragment=f"black {item_id}",
                                      outfit_piece={"slots": ["feet"], "outfit_types": ["casual"],
@@ -246,7 +257,7 @@ def main() -> int:
             for n, colour in (("upscaled.png", (1, 1, 1)), ("empty.png", (2, 2, 2)), ("cutout.png", (3, 3, 3))):
                 (d / n).write_bytes(png_bytes(colour))
             P, F = mesh if mesh is not None else fx.wedge(shaft=shaft)
-            prepared = glb_mesh.static_glb(P, F, np.zeros((len(P), 2)))
+            prepared = glb_mesh.static_glb(P, F, np.zeros((len(P), 2)), material=material)
             (d / "raw.glb").write_bytes(prepared)
             (d / "prepared.glb").write_bytes(prepared)
             insole = footwear_insole.analyse(prepared)
@@ -258,7 +269,8 @@ def main() -> int:
             gs.write_record(d / "record.json", {"steps": steps})
             return iid, ssig, d
         heels, ssig, src = shoe_item("heels", mesh=fx.clog())
-        boots, _bssig, _bsrc = shoe_item("boots", shaft=0.2098, colour=(90, 60, 30))
+        boots, _bssig, _bsrc = shoe_item("boots", mesh=fx.flat_boot(shaft=0.16), colour=(90, 60, 30),
+                                         material={"doubleSided": False})
         pumps, _pssig, _psrc = shoe_item("pumps", colour=(120, 20, 40))
         check("item steps done", all(gf.step_done(heels, s) for s in fs.ITEM_STEPS), True)
 
@@ -290,8 +302,8 @@ def main() -> int:
         blob = fit_path.read_bytes()
         nodes = shoe_nodes(blob, heels)
         check("P1 two shoe nodes", nodes, {
-            f"garment_footwear_{heels}_left": {"kind": "footwear", "item_id": heels, "fsig": F, "side": "left"},
-            f"garment_footwear_{heels}_right": {"kind": "footwear", "item_id": heels, "fsig": F, "side": "right"}})
+            f"garment_footwear_{heels}_left": {"kind": "footwear", "item_id": heels, "fsig": F, "side": "left", "part": "foot"},
+            f"garment_footwear_{heels}_right": {"kind": "footwear", "item_id": heels, "fsig": F, "side": "right", "part": "foot"}})
         bare = glb_mesh.body_arrays(base_glb)
         cut_body = glb_mesh.body_arrays(blob)
         check("P1 bare body 1056 faces / 816 vertices", (len(bare.faces), len(bare.positions)), (1056, 816))
@@ -312,11 +324,11 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 5,
-             "fit_version": 5, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 6,
+             "fit_version": 6, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         gate_names = list(footwear_fit.FIT_GATES) + list(footwear_cut.CUT_GATES)
-        check("P1 nine gates, all ok and gating", {k: (g.get("ok"), g.get("gating")) for k, g in rec["gates"].items()},
+        check("P1 eight gates, all ok and gating", {k: (g.get("ok"), g.get("gating")) for k, g in rec["gates"].items()},
               {k: (True, True) for k in gate_names})
         check("P1 cut gates at 0", {k: rec["gates"][k]["value"] for k in footwear_cut.CUT_GATES},
               {"deep_outside": 0.0, "visible_poke": 0.0, "throat_ledge_p95_mm": 0.0, "toe_conform_m": 0.0})
@@ -464,24 +476,50 @@ def main() -> int:
         check("P4 base fit never read, no hub", (READ_BASE, HUB), ([], []))
 
         # --- [P5] ---------------------------------------------------------------------------------------------
-        print("[P5] a boot is refused at the fit")
+        print("[P5] a boot is split at the ankle: four nodes")
         FB = gs.garment_fsig("Demo", boots)
         check("P5 own fsig (another item image)", FB != F, True)
-        try:
-            gf.fit("Demo", boots, FB, profile=profile)
-            check("P5 fit refused", "published", "_Refused")
-        except garments._Refused as e:
-            check("P5 fit refused", (e.step, footwear_insole.BOOT_REFUSED in e.error, (e.gates or {}).get(
-                "reasons", [None])[0]), ("fit", True, footwear_insole.BOOT_REFUSED))
-        check("P5 no fit file", gs.garment_path("Demo", boots, FB, "fit").exists(), False)
+        boot_path = gf.fit("Demo", boots, FB, profile=profile)
+        check("P5 fit published", boot_path, gs.garment_path("Demo", boots, FB, "fit"))
+        bblob = boot_path.read_bytes()
+        bnodes = shoe_nodes(bblob, boots)
+        check("P5 four nodes", bnodes, {
+            f"garment_footwear_{boots}_left": {"kind": "footwear", "item_id": boots, "fsig": FB, "side": "left", "part": "foot"},
+            f"garment_footwear_{boots}_right": {"kind": "footwear", "item_id": boots, "fsig": FB, "side": "right", "part": "foot"},
+            f"garment_footwear_{boots}_left_shaft": {"kind": "footwear", "item_id": boots, "fsig": FB, "side": "left", "part": "shaft"},
+            f"garment_footwear_{boots}_right_shaft": {"kind": "footwear", "item_id": boots, "fsig": FB, "side": "right", "part": "shaft"}})
+        bgltf = gltf_of(bblob)
+
+        def double_sided(name):
+            node = next(n for n in bgltf["nodes"] if n.get("name") == name)
+            prim = bgltf["meshes"][node["mesh"]]["primitives"][0]
+            return bool(bgltf["materials"][prim["material"]].get("doubleSided", False))
+        check("P5 shaft nodes doubleSided, foot nodes not",
+              tuple(double_sided(f"garment_footwear_{boots}_{s_}") for s_ in ("left_shaft", "right_shaft", "left", "right")),
+              (True, True, False, False))
+        brec = gs.read_record(boot_path.with_suffix(".json"))
+        check("P5 split", (brec["split"]["is_boot"], brec["sides"]["left"]["split"]["is_boot"],
+                           sorted(brec["sides"]["left"]["parts"])), (True, True, ["foot", "shaft"]))
+        near("P5 y_split", brec["sides"]["left"]["split"]["y_m"], 0.090236, 1e-5)
+        near("P5 collar above the ankle", brec["sides"]["left"]["split"]["collar_above_ankle_mm"], 73.5, 0.1)
+        near("P5 diagnostics collar", brec["diagnostics"]["left"]["collar_above_ankle_mm"], 73.5, 0.1)
+        check("P5 fourteen gates", sorted(brec["gates"]), sorted(gate_names + list(footwear_fit.SHAFT_GATES)))
+        check("P5 gates ok except the recorded stretch", {k: (g.get("ok"), g.get("gating")) for k, g in brec["gates"].items()
+                                                          if k != "seam_stretch_max"},
+              {k: (True, True) for k in brec["gates"] if k != "seam_stretch_max"})
+        check("P5 seam_stretch_max recorded, not gating", (brec["gates"]["seam_stretch_max"]["ok"],
+                                                           brec["gates"]["seam_stretch_max"]["gating"], brec["accepted"]),
+              (False, False, True))
+        check("P5 no push (shin 12.5 mm inside the shaft)", brec["shaft"]["push_max_m"], 0.0)
+        check("P5 body cut = the clog's", (len(glb_mesh.body_arrays(bblob).faces), len(glb_mesh.body_arrays(bblob).positions)), (24, 48))
+        check("P5 cut cap bounded at the band", brec["cut"]["sides"]["left"].get("split"), {"y_m": brec["sides"]["left"]["split"]["y_m"], "band_m": 0.02})
+        pose_keys = ("bones", "root_lift_m", "contacts", "rest", "version")
+        check("P5 foot_pose = the heels'", {k: brec["foot_pose"].get(k) for k in pose_keys}, {k: rec["foot_pose"].get(k) for k in pose_keys})
+        exact = glb_mesh.garment_arrays(bblob, node_prefix=f"garment_footwear_{boots}_left", exact=True)
+        check("P5 exact node read", len(exact.indices) == brec["sides"]["left"]["parts"]["foot"], True)
         res = garments.run_garment("Demo", boots)
-        check("P5 run", (res.get("ok"), res.get("step"), footwear_insole.BOOT_REFUSED in str(res.get("error"))),
-              (False, "fit", True))
-        failure = garments.cached_failure("Demo", boots) or {}
-        check("P5 failure per fsig", (failure.get("step"), failure.get("fsig"), failure.get("base_model_sha256"),
-                                      footwear_insole.BOOT_REFUSED in str(failure.get("error"))),
-              ("fit", FB, base_sha, True))
-        check("P5 info refused", garments.garment_info("Demo", boots)["steps"]["fit"]["status"], "refused")
+        check("P5 run after the fit", (res.get("ok"), res.get("ran"), res.get("fit")), (True, [], "accepted"))
+        check("P5 info accepted", garments.garment_info("Demo", boots)["steps"]["fit"]["status"], "accepted")
         old = gs.garment_path("Demo", boots, FB, "fit", body=A)
         old.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(body_fit_path, old)
@@ -490,11 +528,12 @@ def main() -> int:
                                                    "fit_version": 0})
         calls = len(FIT_CALLS)
         entry = gf.body_fit("Demo", boots, body_id=A, body_sha=sha_a, profile=profile, build=True)
-        check("P5 older fit version never served", (entry["fit"], entry["pending"],
-                                                     footwear_insole.BOOT_REFUSED in entry["error"]),
-              (None, False, True))
-        check("P5 failure on A", (gs.body_failure("Demo", boots, FB, A, body_sha=sha_a, base_fit_sha="",
-                                                  fit_version=footwear_fit.FOOTWEAR_FIT_VERSION) or {}).get("step"), "fit")
+        check("P5 older fit version never served: refitted on A", (entry["fit"], entry["pending"], entry["error"]),
+              (old, False, ""))
+        check("P5 refit on A: four nodes", sorted(shoe_nodes(old.read_bytes(), boots)),
+              sorted([f"garment_footwear_{boots}_{s_}" for s_ in ("left", "right", "left_shaft", "right_shaft")]))
+        check("P5 fit_state on A", gf.fit_state("Demo", boots, FB, sha_a, body=A), "accepted")
+        check("P5 one fit call", len(FIT_CALLS) - calls, 1)
         gf.body_fit("Demo", boots, body_id=A, body_sha=sha_a, profile=profile, build=True)
         check("P5 no second attempt", len(FIT_CALLS) - calls, 1)
         gs.accepted_fit, gs.newest_accepted_fits, garments.fit_on_body, garments.body_fit_state = saved
@@ -539,7 +578,7 @@ def main() -> int:
         check("P7 no hub", HUB, [])
         old = gs.garment_path("Demo", pumps, FP, "fit")
         shutil.copyfile(fit_path, old)
-        for version, want in ((4, "stale"), (3, "stale"), (5, "accepted")):
+        for version, want in ((5, "stale"), (4, "stale"), (6, "accepted")):
             gs.write_record(old.with_suffix(".json"), {
                 "accepted": True, "kind": "footwear", "item_id": pumps, "fsig": FP, "body_id": bsig,
                 "body_sha256": wide_sha, "base_model_sha256": wide_sha, "fit_version": version,

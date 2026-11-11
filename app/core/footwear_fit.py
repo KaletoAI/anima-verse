@@ -66,14 +66,46 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    the body, per side in the shoe's frame on the Foot / ToeBase bones. The fit step (``garment_footwear.fit``)
    applies it to the fit GLB's body and runs ``footwear_cut.cut_gates``; the assembly applies it per tier.
 
+9. **The split at the wearer's ankle** (fit version 6; boots spec
+   ``docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md`` § 6.2–6.4). Per side ``y_split`` =
+   ``split_height`` — the Foot joint above the SHOE's ground in the shod stand (F6: 108–157 mm on the measured
+   material). A shoe whose topline (``shaft_h_raw`` × k) stands more than ``SPLIT_MARGIN_M`` above it is a BOOT
+   and is split; else it is rigid as above (the round-1 ``boot`` refusal is retired, its value is the diagnostic
+   ``collar_above_ankle_mm``). Parts by the vertex's frame height: ``foot`` below ``y_split − SPLIT_BAND_M``,
+   ``shaft`` above ``y_split + SPLIT_BAND_M``, the band between with ``s`` = smoothstep across it. Weights =
+   (1 − s) × the foot part's Foot / ToeBase + s × ``garment_fit.clothing_weights`` restricted to the side's Foot,
+   Leg and UpLeg (the IDW over the body's own weights: Foot near the ankle, Leg over the shin, UpLeg near the
+   knee); the dense (Foot, ToeBase, Leg, UpLeg) weights are the four skin slots. Bind position of the band and
+   shaft = the EXACT inverse of the blended skin matrix (Leg / UpLeg stand in the bind pose), so the stand pose
+   reproduces the fitted position; the foot part keeps the ball blend's blend of inverses (byte-identical to
+   version 5). The spec's blend of inverses for the band was measured first: its residual 4 s(1−s) sin²(θ/2) r
+   reaches 2.9 mm (p95) at the heel counter of the 24° pump boot fixture — above the 2 mm the spec allows —
+   so the exact inverse replaced it. The weights are a fixed point of two turns (the bind points depend on the
+   Foot share). Before the weights the band and shaft are pushed off the shin:
+   ``garment_fit.body_sdf`` of the body skinned to the shod stand over the shaft's bounds, ``push_out`` with
+   ``SHAFT_CLEAR_M``; the foot part is pinned. The two served parts are the index buffer split at ``y_split`` by
+   face centroid; a band face's vertices appear in both with identical positions and weights, so the nodes
+   never crack. Measures per side (``sides.<side>.shaft``, worst side under ``shaft`` and ``gates``):
+   ``push_p95_m`` / ``push_max_m`` / ``inside_share``; ``seam_gap_p95_mm`` = p95 over the band vertices of
+   |LBS(bind) in the stand − fitted position| — 0 up to rounding with the exact inverse (a guard on the bind
+   construction; at a flex other than the stand there is no fitted reference, and the two nodes share their
+   vertices, so a gap between them is 0 by construction too); ``seam_stretch_max`` = the largest area ratio (or
+   its inverse) of a band face at ±``SEAM_FLEX_DEG`` about the fit's axis against the stand (a 25° flex over
+   the 4-cm band at 6 cm radius
+   moves the foot side 2.6 cm against the Leg side: the band compresses to about a third behind the ankle
+   and stretches in front — by geometry, which is why this measure is recorded and not gating until P2
+   calibrates it, ``SHAFT_GATING``); ``leg_follow_deg`` = the shaft top ring's (above ``y_split +
+   SHAFT_RING_ABOVE_M``) best-fit turn under a ``FOLLOW_TURN_DEG`` Leg-only skin turn against that turn (the
+   anti-double-bend check; UpLeg and Foot shares drag it). ``foot_pose`` is unchanged — the extension, the
+   toe counter, the root lift and the contacts are the foot part's.
+
 Gates (``FIT_GATES``, every one refuses a fit since version 3): ``ball_placement_mm`` (the
 posed SKINNED ball of step 3 vs the shoe's chord ball point under the heel-anchored placement, before the
 midline step — the residual of the fixed point plus whatever the chord's elevation misses; the spike read
 the ball rigid on Foot, 4–5 mm off on the real material), ``lift_asymmetry_mm``,
 ``slim_needed``, ``stand_floor_mm`` (the lowest shoe point in the shod stand vs the floor — a BIND-pose
 number; floor contact under clips is the renderer's shared ground measure, ``packages/scene-render``
-``clipGround.ts``), ``boot`` (mm by which the shoe's topline stands above the shod ankle +
-``footwear_insole.BOOT_MARGIN_M``; refused with ``footwear_insole.BOOT_REFUSED``).
+``clipGround.ts``); a split fit adds ``SHAFT_GATES`` (step 9), each ``gating`` per ``SHAFT_GATING``.
 
 The record's ``insole`` block also carries ``wall_top_raw`` — the shoe's wall top per station (raw units; the
 lower of the two sides' top edges, every point farther than ``WALL_SIDE_M`` from the midline counted) — which
@@ -116,7 +148,7 @@ the round-1 rule raised) is the next calibration point; the clone body of round 
 """
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -125,7 +157,9 @@ from app.core.footwear_gates import check_gates
 
 #: Bumped when the fit changes what it produces (part of the footwear fsig and
 #: ``garment_fit.FIT_VERSION["footwear"]``).
-FOOTWEAR_FIT_VERSION = 5   # 5: the foot below the ankle, each contact band against its own lowest point (step 1)
+#: 5: the foot below the ankle, each contact band against its own lowest point (step 1);
+#: 6: a boot is split at the wearer's ankle — rigid foot part, clothing-weighted shaft, four nodes (step 9).
+FOOTWEAR_FIT_VERSION = 6
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -143,14 +177,45 @@ FIT_GATES: Dict[str, Tuple[str, Any]] = {
     "lift_asymmetry_mm": ("max", 10.0),
     "slim_needed": ("max", 0.18),
     "stand_floor_mm": ("range", (-3.0, 3.0)),
-    "boot": ("max", 0.0),
+}
+#: The split (boots spec 2026-11-11 § 6.2): band half-width about the ankle, the margin a topline must clear the
+#: ankle by to be a boot (the round-1 ``boot`` refusal at 3 cm is retired; its value is the diagnostic
+#: ``collar_above_ankle_mm``), the shaft's clearance from the shin (§ 6.4: the hair clearance).
+SPLIT_BAND_M = 0.02
+SPLIT_MARGIN_M = 0.01
+SHAFT_CLEAR_M = 0.006
+#: The top ring the anti-double-bend check reads: shaft vertices this far above the split (§ 6.3).
+SHAFT_RING_ABOVE_M = 0.06
+#: The ankle flex the seam measures are taken at, and the Leg turn of the follow check (degrees).
+SEAM_FLEX_DEG = 25.0
+FOLLOW_TURN_DEG = 20.0
+#: The shaft gates of a SPLIT fit (spec § 9 start values); a shoe carries none of them. ``gating`` per gate
+#: (``SHAFT_GATING``): the stretch measure is recorded, not gating, until P2 calibrates it on real boots — a 25°
+#: flex over a 4-cm band at the heel counter's 6 cm radius compresses the band to about a third by geometry, so
+#: the start value 1.5 would refuse every boot (module docstring, step 9).
+SHAFT_GATES: Dict[str, Tuple[str, Any]] = {
+    "shaft_push_p95_m": ("max", 0.015),
+    "shaft_push_max_m": ("max", 0.030),
+    "shaft_inside_share": ("max", 0.01),
+    "seam_gap_p95_mm": ("max", 2.0),
+    "seam_stretch_max": ("max", 1.5),
+    "shaft_leg_follow_deg": ("max", 1.0),
+}
+SHAFT_GATING: Dict[str, bool] = {
+    "shaft_push_p95_m": True, "shaft_push_max_m": True, "shaft_inside_share": True,
+    "seam_gap_p95_mm": True, "seam_stretch_max": False, "shaft_leg_follow_deg": True,
 }
 GATE_LABELS = {
     "ball_placement_mm": "the posed ball contact vs the shoe's ball point, worse side",
     "lift_asymmetry_mm": "difference of the two sides' lifts",
     "slim_needed": "share of the ball width the forefoot slimming must take off, worse side",
     "stand_floor_mm": "lowest shoe point in the shod stand above the floor",
-    "boot": "mm the topline stands above the shod ankle + the boot margin",
+    "shaft_push_p95_m": "p95 push of the shaft and band off the shin, worse side",
+    "shaft_push_max_m": "largest push of the shaft and band off the shin, worse side",
+    "shaft_inside_share": "share of shaft and band vertices still inside the body after the push, worse side",
+    "seam_gap_p95_mm": "p95 residual of the band's blended inverse skinning in the stand, worse side",
+    "seam_stretch_max": "largest area ratio of a band face at +-25 deg ankle flex, worse side",
+    "shaft_leg_follow_deg": "the shaft top ring's turn against a 20 deg Leg turn, worse side",
 }
 
 #: Foot vertices: Foot + ToeBase weight above this (and below the Foot joint's height).
@@ -225,12 +290,13 @@ class FootMeasure:
 @dataclass
 class FootwearFit:
     """``fit_pair``'s result: ``ok`` = every gate passed; ``record`` = spec § 5.7 without ``accepted`` and the
-    parents (``cut`` only when ``ok``); ``shoes[side]`` in bind space; ``foot_pose`` = spec § 6.1 without
-    ``source``."""
+    parents (``cut`` only when ``ok``); ``parts[side]`` = ``{"foot": GarmentMesh, "shaft": GarmentMesh}`` in bind
+    space — ``"shaft"`` only for a split fit (a boot; boots spec 2026-11-11 § 6.2), the two parts share the band's
+    vertices with identical positions and weights; ``foot_pose`` = spec § 6.1 without ``source``."""
     ok: bool
     reasons: List[str]
     record: Dict[str, Any]
-    shoes: Dict[str, glb_mesh.GarmentMesh]
+    parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]]
     foot_pose: Dict[str, Any]
 
 
@@ -482,8 +548,9 @@ def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.
              joints: Dict[str, np.ndarray], *, width_cap: float = WIDTH_CAP) -> FootwearFit:
     """Fit one shoe source (``shoe`` in its mesher coordinates, ``insole`` its analysis) to both feet of
     ``body`` (module docstring). A shoe that cannot be put on at all returns ``ok False`` with the reason
-    and no shoes; a fit that ran returns everything, ``ok`` = every gate of ``FIT_GATES`` passed (the cut
-    gates are the fit step's, ``garment_footwear.fit``). ValueError for a body without the foot joints."""
+    and no parts; a fit that ran returns everything, ``ok`` = every gate of ``FIT_GATES`` (and, for a boot, the
+    gating ``SHAFT_GATES``) passed (the cut gates are the fit step's, ``garment_footwear.fit``). ValueError
+    for a body without the foot joints (a boot also needs the side's Leg and UpLeg)."""
     width_cap = min(WIDTH_CAP, max(WIDTH_CAP_MIN, float(width_cap)))
     feet = measure_feet(body, joints)
     try:
@@ -491,13 +558,39 @@ def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.
     except _Refused as exc:
         reason = str(exc)
         return FootwearFit(ok=False, reasons=[reason], record={"version": FOOTWEAR_FIT_VERSION, "error": reason},
-                           shoes={}, foot_pose={})
+                           parts={}, foot_pose={})
+
+
+def split_height(fm: FootMeasure, lift_m: float, floor: float) -> float:
+    """The wearer's ankle (the Foot joint) above the SHOE's ground in the shod stand (boots spec § 6.2): the
+    joint's height above the body's floor plus the side's lift (the shoe ground sits ``lift_m`` under the floor
+    before the root lift — a heeled shoe stands the ankle higher, a flat insole raises it by its own thickness)."""
+    return float(fm.ankle[1]) - float(floor) + float(lift_m)
+
+
+def _part_mesh(faces: np.ndarray, positions: np.ndarray, normals: Any, uvs: np.ndarray, joints: np.ndarray,
+               weights: np.ndarray, joint_names: List[str], colors: Any, shoe: glb_mesh.GarmentMesh,
+               material: Dict[str, Any]) -> glb_mesh.GarmentMesh:
+    """One served part: the vertices ``faces`` use, re-indexed (a band vertex appears in both parts)."""
+    used, inverse = np.unique(faces.reshape(-1), return_inverse=True)
+    return glb_mesh.GarmentMesh(
+        positions=positions[used].copy(), normals=None if normals is None else normals[used].copy(),
+        uvs=uvs[used].copy(), indices=inverse.reshape(-1, 3).astype(np.int64), joints=joints[used].copy(),
+        weights=weights[used].copy(), joint_names=list(joint_names), image=shoe.image, mime=shoe.mime,
+        material=dict(material), colors=None if colors is None else colors[used].copy())
+
+
+def _tri_area(P: np.ndarray, F: np.ndarray) -> np.ndarray:
+    return 0.5 * np.linalg.norm(np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]]), axis=1)
+
+
+def _rotation_angle_deg(R: np.ndarray) -> float:
+    return math.degrees(math.acos(max(-1.0, min(1.0, (float(np.trace(R)) - 1.0) / 2.0))))
 
 
 def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
          joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float) -> FootwearFit:
-    from app.core.footwear_insole import BOOT_MARGIN_M, BOOT_REFUSED, BALL_SHARE, HEEL_SEAT_M, \
-        PITCH_HEEL_SHARE, insole_map, topline_stations
+    from app.core.footwear_insole import BALL_SHARE, HEEL_SEAT_M, PITCH_HEEL_SHARE, insole_map, topline_stations
     ins = _Insole(insole)
     P = np.asarray(body.positions, np.float64)
     floor = float(P[:, 1].min())
@@ -620,13 +713,15 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     root_lift = max(w["lift"] for w in work.values())
     lifts = {s: w["lift"] for s, w in work.items()}
 
-    # 6./7. mirror + rigid bind; contacts; the stand checks
-    shoes: Dict[str, glb_mesh.GarmentMesh] = {}
+    # 6./7. mirror + rigid bind; contacts; the stand checks; 9. the split (boots spec § 6.2–6.4)
+    parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]] = {}
     bones: Dict[str, Dict[str, Any]] = {}
     contacts_pose: Dict[str, List[Dict[str, Any]]] = {}
     lowest: List[float] = []
-    toplines: List[float] = []
     shaft_raw = insole.get("shaft_h_raw")
+    topline_m = None if shaft_raw is None else float(shaft_raw) * k
+    shaft_metrics: Dict[str, List[float]] = {name: [] for name in SHAFT_GATES}
+    any_split = False
     for side, w in work.items():
         fm = w["fm"]
         M = w["Pf"] @ FrameM                      # mesh coordinates -> posed body
@@ -634,26 +729,146 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         lowest.append(float(Pw[:, 1].min()) + root_lift - floor)
         wt = _smoothstep((Q[:, 0] - (w["xb_final"] - BLEND_M / k)) / (2.0 * BLEND_M / k))
         Bfi, Bti = np.linalg.inv(w["Bf"]), np.linalg.inv(w["Bt"])
-        bind = (1.0 - wt)[:, None] * _apply(Bfi, Pw) + wt[:, None] * _apply(Bti, Pw)
+        n_v = len(S_pos)
+        side_idx = S_idx[:, [0, 2, 1]].copy() if w["mirror"] else S_idx.copy()
+
+        # 9. the split at the wearer's ankle: heights in the shoe frame (metres above the shoe ground)
+        y_split = split_height(fm, w["lift"], floor)
+        yf = Q[:, 1] * k
+        is_boot = topline_m is not None and topline_m > y_split + SPLIT_MARGIN_M
+        collar_above = None if topline_m is None else (topline_m - y_split) * 1000.0
+        s_band = _smoothstep((yf - (y_split - SPLIT_BAND_M)) / (2.0 * SPLIT_BAND_M)) if is_boot else np.zeros(n_v)
+        in_band = (s_band > 0.0) & (s_band < 1.0)
+        moving = s_band > 0.0                     # band + shaft: clothing-weighted, pushed off the shin
+        # dense weights over [Foot, ToeBase, Leg, UpLeg]; a shoe keeps the two foot columns only
+        W4 = np.zeros((n_v, 4))
+        W4[:, 0], W4[:, 1] = 1.0 - wt, wt
+        shaft_rec: Dict[str, Any] = {}
+        if is_boot:
+            any_split = True
+            li = _skin_index(body, f"{side}leg")
+            try:
+                ui: Optional[int] = _skin_index(body, f"{side}upleg")
+            except ValueError:
+                ui = None                     # a rig-contract body has it; the synthetic feet of the smokes do not
+            column_of = {fm.foot_index: 0, fm.toe_index: 1, li: 2, **({ui: 3} if ui is not None else {})}
+            columns = [fm.foot_index, li] + ([ui] if ui is not None else [])
+
+            def shaft_weights(points: np.ndarray) -> np.ndarray:
+                from app.core.garment_fit import clothing_weights
+                J, Wc = clothing_weights(points, body, skirt=False, columns=columns)
+                out = np.zeros((len(points), 4))
+                for slot in range(4):
+                    for j_body, col in column_of.items():
+                        sel = J[:, slot] == j_body
+                        out[sel, col] += Wc[sel, slot]
+                return out / np.maximum(out.sum(1, keepdims=True), 1e-12)
+
+            def blended_bind(X: np.ndarray, Wd: np.ndarray) -> np.ndarray:
+                # the EXACT inverse of the blended skin matrix M = wF Bf + wT Bt + (wL + wU) I (Leg and UpLeg
+                # stand in the bind pose): LBS of the result reproduces the fitted stand position exactly. The
+                # ball blend's blend of inverses leaves a residual of 4 s(1-s) sin^2(theta/2) r at the band — 2.9 mm
+                # at the heel counter of a 24 deg pump boot (scripts/smoke_footwear_split.py [B4]).
+                Mb = (Wd[:, 0, None, None] * w["Bf"][None] + Wd[:, 1, None, None] * w["Bt"][None]
+                      + (Wd[:, 2] + Wd[:, 3])[:, None, None] * np.eye(4)[None])
+                Xh = np.concatenate([X, np.ones((len(X), 1))], axis=1)
+                return np.linalg.solve(Mb, Xh[:, :, None])[:, :3, 0]
+
+            # the push: the body skinned to the shod stand, its field over the shaft's bounds; only the band and
+            # shaft move, the foot part is pinned (anti-goal: a shoe deformed by anything)
+            from app.core.garment_fit import SDF_MARGIN_M, VOX_M, body_sdf, push_out
+            mats = {fm.foot_index: w["Bf"], fm.toe_index: w["Bt"]}
+            Pposed = _skin(P, body, np.arange(len(P)), mats)
+            rows = np.nonzero(moving)[0]
+            lo = Pw[rows].min(0) - SDF_MARGIN_M
+            hi = Pw[rows].max(0) + SDF_MARGIN_M
+            sdf = body_sdf(Pposed, body.faces, vox=VOX_M, bounds=(lo, hi))
+            local = np.full(n_v, -1, np.int64)
+            local[rows] = np.arange(len(rows))
+            fsel = side_idx[np.all(moving[side_idx], axis=1)]
+            Qp, disp = push_out(Pw[rows], local[fsel], sdf, clear=SHAFT_CLEAR_M)
+            Pw = Pw.copy()
+            Pw[rows] = Qp
+            dn = np.linalg.norm(disp, axis=1)
+            inside = sdf.sample(Qp) < 0.0
+            # weights: the shaft's clothing transfer on the bind points — a fixed point of two turns (the bind
+            # points depend on the weights through the Foot share near the ankle)
+            Ws = shaft_weights(Pw[rows])
+            Wd = W4.copy()
+            Wd[rows] = (1.0 - s_band[rows])[:, None] * W4[rows] + s_band[rows][:, None] * Ws
+            bind_1 = blended_bind(Pw[rows], Wd[rows])
+            Ws = shaft_weights(bind_1)
+            W4[rows] = (1.0 - s_band[rows])[:, None] * W4[rows] + s_band[rows][:, None] * Ws
+            shaft_rec = {"push_p95_m": float(np.percentile(dn, 95)) if len(dn) else 0.0,
+                         "push_max_m": float(dn.max()) if len(dn) else 0.0,
+                         "inside_share": float(inside.mean()) if len(inside) else 0.0}
+        bind = (W4[:, 0:1] * _apply(Bfi, Pw) + W4[:, 1:2] * _apply(Bti, Pw) + (W4[:, 2:3] + W4[:, 3:4]) * Pw)
+        if is_boot:
+            bind[rows] = blended_bind(Pw[rows], W4[rows])        # the band and shaft: exact (above)
         normals = None
         if shoe.normals is not None:
             n = np.asarray(shoe.normals, np.float64) @ np.linalg.inv(M[:3, :3])    # inverse transpose
-            n = (1.0 - wt)[:, None] * (n @ Bfi[:3, :3].T) + wt[:, None] * (n @ Bti[:3, :3].T)
+            n = (W4[:, 0:1] * (n @ Bfi[:3, :3].T) + W4[:, 1:2] * (n @ Bti[:3, :3].T) + (W4[:, 2:3] + W4[:, 3:4]) * n)
             ln = np.linalg.norm(n, axis=1, keepdims=True)
             normals = n / np.where(ln > 0, ln, 1.0)
-        n_v = len(S_pos)
-        jw = np.zeros((n_v, 4))
-        jw[:, 0], jw[:, 1] = 1.0 - wt, wt
-        jj = np.zeros((n_v, 4), np.int64)
-        jj[:, 1] = 1
-        shoes[side] = glb_mesh.GarmentMesh(
-            positions=bind, normals=normals, uvs=np.asarray(shoe.uvs, np.float64).copy(),
-            indices=S_idx[:, [0, 2, 1]].copy() if w["mirror"] else S_idx.copy(), joints=jj, weights=jw,
-            joint_names=[fm.foot_joint, fm.toe_joint], image=shoe.image, mime=shoe.mime,
-            material=dict(shoe.material or {}),
-            colors=None if shoe.colors is None else np.asarray(shoe.colors, np.float64).copy())
         Jf = np.asarray(joints[f"{side}foot"], np.float64)
         Jt = np.asarray(joints[f"{side}toebase"], np.float64)
+        if is_boot:
+            joint_names = [fm.foot_joint, fm.toe_joint, body.joint_names[li]] + (
+                [body.joint_names[ui]] if ui is not None else [])
+            jj = np.tile(np.array([0, 1, 2, 3 if ui is not None else 0], np.int64), (n_v, 1))
+            jw = W4
+            # the seam measures (spec § 6.3, § 9): the band's blended-inverse residual in the stand; the band
+            # faces' area ratio at +-SEAM_FLEX_DEG about the fit's axis; the top ring against a Leg turn
+            def posed(theta: float) -> np.ndarray:
+                Bf2, Bt2, _axis, _tt = _pose(fm, theta, w["slope"])
+                return (W4[:, 0:1] * _apply(Bf2, bind) + W4[:, 1:2] * _apply(Bt2, bind)
+                        + (W4[:, 2:3] + W4[:, 3:4]) * bind)
+            stand = posed(w["theta"])
+            gap = np.linalg.norm(stand[in_band] - Pw[in_band], axis=1) * 1000.0
+            band_faces = side_idx[np.any(in_band[side_idx], axis=1)]
+            a0 = _tri_area(stand, band_faces)
+            stretch = 1.0
+            for theta in (w["theta"] + math.radians(SEAM_FLEX_DEG), w["theta"] - math.radians(SEAM_FLEX_DEG)):
+                a1 = _tri_area(posed(theta), band_faces)
+                okf = a0 > 1e-14
+                if okf.any():
+                    r = a1[okf] / a0[okf]
+                    stretch = max(stretch, float(np.max(np.maximum(r, 1.0 / np.maximum(r, 1e-12)))))
+            ring = yf > y_split + SHAFT_RING_ABOVE_M
+            follow = 0.0
+            if int(ring.sum()) >= 3:
+                from app.core.garment_fit import similarity
+                Jl = np.asarray(joints[f"{side}leg"], np.float64)[:3, 3]
+                Bl = _about(Jl, w["axis"], math.radians(FOLLOW_TURN_DEG))
+                turned = W4[ring, 2:3] * _apply(Bl, bind[ring]) + (1.0 - W4[ring, 2:3]) * bind[ring]
+                _s, R, _a, _b = similarity(bind[ring], turned)
+                follow = abs(FOLLOW_TURN_DEG - _rotation_angle_deg(R))
+            shaft_rec.update({"seam_gap_p95_mm": float(np.percentile(gap, 95)) if len(gap) else 0.0,
+                              "seam_stretch_max": stretch, "leg_follow_deg": follow,
+                              "band_vertices": int(in_band.sum()), "ring_vertices": int(ring.sum())})
+            for key, name in (("push_p95_m", "shaft_push_p95_m"), ("push_max_m", "shaft_push_max_m"),
+                              ("inside_share", "shaft_inside_share"), ("seam_gap_p95_mm", "seam_gap_p95_mm"),
+                              ("seam_stretch_max", "seam_stretch_max"), ("leg_follow_deg", "shaft_leg_follow_deg")):
+                shaft_metrics[name].append(float(shaft_rec[key]))
+            centroid_y = yf[side_idx].mean(1)
+            foot_faces = side_idx[centroid_y < y_split]
+            shaft_faces = side_idx[centroid_y >= y_split]
+        else:
+            joint_names = [fm.foot_joint, fm.toe_joint]
+            jj = np.zeros((n_v, 4), np.int64)
+            jj[:, 1] = 1
+            jw = np.zeros((n_v, 4))
+            jw[:, 0], jw[:, 1] = W4[:, 0], W4[:, 1]
+            foot_faces, shaft_faces = side_idx, np.zeros((0, 3), np.int64)
+        uvs = np.asarray(shoe.uvs, np.float64)
+        colors = None if shoe.colors is None else np.asarray(shoe.colors, np.float64)
+        material = dict(shoe.material or {})
+        side_parts = {"foot": _part_mesh(foot_faces, bind, normals, uvs, jj, jw, joint_names, colors, shoe, material)}
+        if len(shaft_faces):
+            side_parts["shaft"] = _part_mesh(shaft_faces, bind, normals, uvs, jj, jw, joint_names, colors, shoe,
+                                             {**material, "doubleSided": True})
+        parts[side] = side_parts
         ax_f, ax_t = _local_axis(Jf, w["axis"]), _local_axis(Jt, w["axis"])
         bones[fm.foot_joint] = {"axis": ax_f, "deg": math.degrees(w["theta"])}
         bones[fm.toe_joint] = {"axis": ax_t, "deg": math.degrees(w["toe_turn"])}
@@ -669,12 +884,8 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             recs.append({"bone": bone, "pos_local": _apply(np.linalg.inv(J), pos), "role": role})
             pose.append({"bone": bone, "pos": pos, "role": role})
         contacts_pose[side] = pose
-        if shaft_raw is not None:
-            # the topline in the shod stand vs the shod ankle (the shoe stays upright: heights scale by k)
-            topline = float(shaft_raw) * k + (root_lift - w["lift"])
-            ankle = float(fm.ankle[1]) + root_lift - floor
-            toplines.append((topline - (ankle + BOOT_MARGIN_M)) * 1000.0)
         placement_bind = np.linalg.inv(Jf) @ Bfi @ M
+        w["collar_above"] = collar_above
         sides[side] = {
             "mirror": w["mirror"], "placement_bind": placement_bind, "blend_m": BLEND_M,
             "extension": {"axis_local": ax_f, "deg": math.degrees(w["theta"])},
@@ -682,26 +893,31 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "forepart_slope_deg": math.degrees(w["slope"]), "lift_m": w["lift"],
             "foot_len_m": fm.length_m, "foot_w_ball_mm": w["fw_ball"] * 1000.0,
             "insole_w_ball_mm": w["iw_ball"] * 1000.0, "toe_room_mm": w["toe_room_mm"], "contacts": recs,
+            "split": {"is_boot": is_boot, "y_m": y_split, "band_m": SPLIT_BAND_M, "margin_m": SPLIT_MARGIN_M,
+                      "topline_m": topline_m, "collar_above_ankle_mm": collar_above},
+            "parts": {name: int(len(mesh.indices)) for name, mesh in side_parts.items()},
+            **({"shaft": shaft_rec} if is_boot else {}),
         }
 
     ball_mm = max(w["ball_err"] for w in work.values()) * 1000.0
-    metrics = {
+    metrics: Dict[str, Any] = {
         "ball_placement_mm": ball_mm,
         "lift_asymmetry_mm": abs(lifts["left"] - lifts["right"]) * 1000.0,
         "slim_needed": max(slim.values()),
         "stand_floor_mm": min(lowest) * 1000.0,
-        "boot": max(toplines) if toplines else None,
     }
     table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in FIT_GATES.items()}
-    ok, reasons = check_gates(metrics, table, optional=("boot",))
-    if metrics["boot"] is not None and metrics["boot"] > FIT_GATES["boot"][1]:
-        reasons.insert(0, BOOT_REFUSED)
+    if any_split:
+        metrics.update({name: max(values) if values else None for name, values in shaft_metrics.items()})
+        table.update({name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in SHAFT_GATES.items()
+                      if SHAFT_GATING[name]})
+    ok, reasons = check_gates(metrics, table)
     gates: Dict[str, Any] = {}
-    for name, (kind, limit) in FIT_GATES.items():
-        value = metrics[name]
-        passed = check_gates({name: value}, {name: (kind, limit, GATE_LABELS[name])}, optional=("boot",))[0]
+    for name, value in metrics.items():
+        kind, limit = (FIT_GATES.get(name) or SHAFT_GATES[name])
+        passed = check_gates({name: value}, {name: (kind, limit, GATE_LABELS[name])})[0]
         gates[name] = {"value": value, "limit": list(limit) if isinstance(limit, tuple) else limit,
-                       "ok": passed, "gating": True}
+                       "ok": passed, "gating": bool(SHAFT_GATING.get(name, True))}
 
     seat = float(ins.z(ins.x0 + HEEL_SEAT_M / k))
     ball_h = float(ins.z(BALL_SHARE * ins.length))
@@ -713,6 +929,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     # wall top, not the analysis' topline whose 75 % lateral filter reads a leaning heel counter 2 cm low
     wall_top = topline_stations(Q, S_idx, gx, side_share=0.0, min_abs=WALL_SIDE_M / k)[0]
     wall_top_raw = [None if math.isnan(v) else float(v) for v in wall_top]
+    shaft_in = insole.get("shaft") or {}
     record = {
         "version": FOOTWEAR_FIT_VERSION,
         "scale": {
@@ -727,9 +944,19 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "pitch_deg": math.degrees(math.atan2(heel_h - ball_h, (BALL_SHARE - PITCH_HEEL_SHARE) * ins.length)),
             "heel_seat_h_m": seat * k, "heel_rise_m": (seat - ball_h) * k, "insole_ball_h_m": ball_h * k,
             "insole_cover": insole.get("insole_cover"), "cavity_end_x_m": x_end * k,
-            "shaft_h_m": None if shaft_raw is None else float(shaft_raw) * k,
+            "shaft_h_m": topline_m,
             "open_share": None if insole.get("vamp_cover") is None else 1.0 - float(insole["vamp_cover"]),
             "wall_top_raw": wall_top_raw,
+        },
+        "split": {"is_boot": any_split, "band_m": SPLIT_BAND_M, "margin_m": SPLIT_MARGIN_M},
+        "shaft": {
+            "class": shaft_in.get("class"), "cap_removed": shaft_in.get("cap_removed"),
+            "closed_share": shaft_in.get("closed_share"), "top_m": topline_m,
+            "clip_m": None, "knee_margin_m": None,
+            **{key: (max(shaft_metrics[name]) if shaft_metrics[name] else None) for key, name in (
+                ("push_p95_m", "shaft_push_p95_m"), ("push_max_m", "shaft_push_max_m"),
+                ("inside_share", "shaft_inside_share"), ("seam_gap_p95_mm", "seam_gap_p95_mm"),
+                ("seam_stretch_max", "seam_stretch_max"), ("leg_follow_deg", "shaft_leg_follow_deg"))},
         },
         "gates": gates,
         "diagnostics": {s: {
@@ -740,13 +967,12 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "arch_gap_p50_mm": w["arch_gap"][0], "arch_gap_p95_mm": w["arch_gap"][1],
             "ball_x_m": w["xb_final"] * k, "heel_x_m": w["xh"] * k,
             "foot_vertices": int(len(w["fm"].vertex_ids)), "plantar_vertices": int(len(w["fm"].plantar)),
+            "collar_above_ankle_mm": w["collar_above"],
         } for s, w in work.items()},
     }
-    if reasons and reasons[0] == BOOT_REFUSED:
-        record["refusal"] = BOOT_REFUSED
     foot_pose = {"version": FOOT_POSE_VERSION, "bones": bones, "root_lift_m": root_lift,
                  "contacts": contacts_pose}
-    result = FootwearFit(ok=ok, reasons=reasons, record=_r(record), shoes=shoes, foot_pose=_r(foot_pose))
+    result = FootwearFit(ok=ok, reasons=reasons, record=_r(record), parts=parts, foot_pose=_r(foot_pose))
     if ok:
         # 8. the cut: derived from the record and the bound shoes of this fit (footwear_cut imports this module,
         # hence the local import); a refused fit carries none — nothing applies it
