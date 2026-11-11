@@ -71,7 +71,13 @@ EDIT_OCCASION = "footwear_empty"
 MESH_OCCASION = "mesh_footwear"
 USE_CASE = "footwear_source"
 #: Decimation target of the prepared shoe mesh (the shoe's share of a figure).
-TARGET_TRIS = 30000
+#: 60 000 since the P3 acceptance (Task 21, 2026-11-11): measured on the real
+#: Business Heels delivery (UniForge, 98 507 tris; insole_cover 0.864 raw),
+#: the 30 000 target with the seam merge collapsed the cavity — the prepared
+#: mesh read insole_cover 0.18 / 0.30 (two deliveries) and its side IoU
+#: dropped 0.782 → 0.732 — while 60 000 keeps it (0.890, IoU 0.778); 30 000
+#: without the merge: 0.570. A pump's thin shell needs the triangles.
+TARGET_TRIS = 60000
 #: What the mesher is asked for.
 FACE_NUM = 100000
 #: The edit instruction. The exclusion clause comes LAST: the composer's negation guard moves only that clause

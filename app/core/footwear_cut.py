@@ -69,22 +69,27 @@ front, the band's far end is the instep's own rise — that number is ``throat_s
 diagnostics). Diagnostics: rim gap (topline → nearest foot vertex), arch gap (lowest foot vertex per 4 mm cell →
 nearest shoe surface, EDT), overhang above the rim, poke by region (heel / mid / toe by the fit's heel and ball x).
 
-**Calibration (P3 acceptance, Task 21, 2026-11-11).** The cut gates were measured on the one material that reached
-the fit: the spike shoe (Black Stilettos, UniForge mesh of a side-view empty shoe) on Kira's base body at width
-cap 1.10, ``FIT_VERSION`` footwear 3 (Tasks 14/15/17, reproduced by the assembly): ``slim_needed`` 0.066 / 0.115
-(L / R, limit 0.18 — the uncapped per-station need reaches 0.24–0.49 at the shank and toe tip, which is what the
-cap turns into the slimming); ``deep_outside`` 0.45 % / 1.20 % (6 of 1323, 18 of 1503; limit 2 %; 3.8 / 5.3 % before
-the slimming of Task 14); ``visible_poke`` 0 / 0 (of 1705 / 1657); ``throat_ledge_p95_mm`` 0.00 / 0.42 (limit 4;
-the spike read 7.6 / 16.1 before the conform); the fit gates there: ball 0.0 mm, lift asymmetry 0.06 mm,
-``stand_floor`` 0.0 mm, boot −48.5 mm. Walk variation of the cut (the gates on the clip-posed body) was not
-measured: the cut is a bind-space operation and the gates read the bind pose. The limits stay at their start values;
-none was approached on that material. The clone run of the acceptance (Kira, Business Heels) did not reach the cut:
-the item's pre-fix ``empty`` step had accepted the 3/4-view item image as the empty shoe (``skipped``), and every
-UniForge mesh of that cut-out failed the SIDE-silhouette ``mesh_iou`` gate (0.738, 0.697, 0.761, 0.655 over four
-deliveries, limit 0.80; ``component_share`` 1.000 on three, 0.927 on the fourth) — and its insole analysis found no
-cavity (``insole_cover``
-0.07, ``vamp_cover`` 0.53, ``opening_share`` 1.0), so the fit would have refused it as a boot (topline +553 mm). A
-re-run of the ``empty`` step (the edit, since the P1 fix never skipped) is what that item needs, not a threshold.
+**Calibration (P3 acceptance, Task 21, 2026-11-11) — REAL material.** Kira's base body (``base20d5701a``) in the
+Business Heels (UniForge mesh of the Qwen side-view empty shoe, 98 507 → 57 527 tris at ``TARGET_TRIS`` 60 000, width
+cap 1.10, ``FIT_VERSION`` footwear 3), the clone chain plus the same cut run offline on the accepted mesh:
+``slim_needed`` 0.151 (limit 0.18); ``deep_outside`` 0.47 % / 1.72 % (L / R; 8 of 1690, 33 of 1924; limit 2 %);
+``visible_poke`` **0 / 3.12 %** (34 of 1090 remaining right-foot vertices, all in the toe region, below the rim and
+outside the shoe: the right foot is the longer one (0.256 vs 0.242 m) and its toes stand up to 22 mm ABOVE this
+pump's vamp — a visible defect, the gate refused the fit as it should; the left foot is clean) — limit 0.5 %;
+``throat_ledge_p95_mm`` 0.00 / 1.33 (limit 4); the fit gates ball 0.000 mm, lift asymmetry 0.78 mm, ``stand_floor``
+0.0 mm, boot −52.7 mm. Motion (``check_footwear.mjs`` on the offline assembly, the client's chain): still sole 1 / 0 mm,
+idle −3.2 … −2.5 mm, walk stance −2.0 … +15.5 mm (strike ≥ −1.2, heel off ≤ −1.4, the lift-off frames 10.2 / 15.5
+at the leg's reach), Foot pitch max 45 / 47°, sit −52 … −50.5 mm (P3b). The spike shoe (Black Stilettos) read
+slim 0.066 / 0.115, deep_outside 0.45 / 1.20 %, visible_poke 0 / 0, ledge 0.00 / 0.42 mm, ball 0.0, lift asym
+0.06 mm (Tasks 14/15/17). **The cut limits stay at their start values**: three of four gates were met on the real
+material with margin, and the one refusal is a true poke (a toe above the vamp — the case Task 14 left as a
+diagnostic; the cut removes faces below the cap and slims sideways, it does not lower a toe). What the acceptance
+DID calibrate upstream: ``footwear_source.TARGET_TRIS`` 30 000 → 60 000 (30 000 with the seam merge collapsed the
+cavity: insole_cover 0.18 / 0.30 instead of 0.86 raw; 60 000 keeps 0.89) and ``footwear_gates.MESH_GATES``
+``mesh_iou`` 0.80 → 0.75 (0.77–0.78 on both real deliveries, 0.86 on the spike; a 3/4-view cut-out, 0.66–0.76, is
+excluded upstream since ``FOOTWEAR_SOURCE_VERSION`` 2 — the empty edit always runs). The source's own gates on the
+same item: upscale ×2 (Iris), empty ``single_share`` 1.0 / ``aspect`` 1.331 / ``iou_below_topline`` 0.943, insole
+cover 0.890 / vamp 0.647 / opening 0.996 (pitch 36.0°, heel seat 9.8 cm, heel rise 9.1 cm).
 """
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple

@@ -88,7 +88,8 @@ each end, middle = columns [round(0.35 L), round(0.65 L)) from the left end.
      IoU against a 325 x 100 rectangle matte (same aspect 3.25) >= 0.99.
 [G8] Gate tables: EMPTY_GATES single_share ("min", 0.98), aspect ("range",
      (1.1, 2.4)), iou_below_topline ("min", 0.85); MESH_GATES component_share
-     ("min", 0.98), mesh_iou ("min", 0.80). check_gates refuses a missing value
+     ("min", 0.98), mesh_iou ("min", 0.75 — calibrated on the real Business Heels deliveries, 0.77–0.78 against
+     their side-view cut-out; 0.80 before the P3 acceptance). check_gates refuses a missing value
      unless it is optional.
 """
 import math
@@ -274,7 +275,7 @@ def main():
           and fg.EMPTY_GATES["aspect"][:2] == ("range", (1.1, 2.4))
           and fg.EMPTY_GATES["iou_below_topline"][:2] == ("min", 0.85), fg.EMPTY_GATES)
     check("[G8] MESH_GATES", fg.MESH_GATES["component_share"][:2] == ("min", 0.98)
-          and fg.MESH_GATES["mesh_iou"][:2] == ("min", 0.80), fg.MESH_GATES)
+          and fg.MESH_GATES["mesh_iou"][:2] == ("min", 0.75), fg.MESH_GATES)
     ok, reasons = fg.check_gates({"component_share": 0.99}, fg.MESH_GATES)
     check("[G8] missing mesh_iou refuses", not ok and reasons and reasons[0].startswith("mesh_iou"), reasons)
     ok, reasons = fg.check_gates({"component_share": 0.99}, fg.MESH_GATES, optional=("mesh_iou",))

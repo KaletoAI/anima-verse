@@ -61,7 +61,8 @@ Expected, by hand:
      the aspect 768/400 = 1.92 (+-0.02). No service call (counters unchanged).
 [S5] mesh of W: generate_mesh called once with occasion "mesh_footwear", face_num 100000, material
      "dielectric", alpha "opaque", no view_images, source = cutout.png, output = raw.glb, mesh_name
-     "footwear-<W>"; decimate_to(raw, 30000, <candidate>, merge_vertices=True).
+     "footwear-<W>"; decimate_to(raw, 60000, <candidate>, merge_vertices=True) (TARGET_TRIS 60 000 since the P3
+     acceptance: 30 000 collapsed a real pump's cavity).
      The GLB: box A 0.25 x 0.13 x 0.09 m, box B 0.10 x 0.02 x 0.05 m centred inside A (24 tris).
      Areas: A = 2(.25*.13 + .25*.09 + .13*.09) = 2(.0325 + .0225 + .0117) = .1334;
             B = 2(.10*.02 + .10*.05 + .02*.05) = 2(.002 + .005 + .001) = .016.
@@ -316,7 +317,7 @@ def main():
             check("current_ssig(A)", fs.current_ssig("shoe_a"), want)
             check("constants", (fs.FOOTWEAR_SOURCE_VERSION, fs.MIN_SIDE, fs.EMPTY_ATTEMPTS, fs.EDIT_OCCASION,
                                 fs.MESH_OCCASION, fs.USE_CASE, fs.TARGET_TRIS, fs.FACE_NUM, fs.ITEM_STEPS),
-                  (2, 1024, 2, "footwear_empty", "mesh_footwear", "footwear_source", 30000, 100000,
+                  (2, 1024, 2, "footwear_empty", "mesh_footwear", "footwear_source", 60000, 100000,
                    ("source", "empty", "cutout", "mesh", "insole")))
             check("EMPTY_PROMPT", fs.EMPTY_PROMPT,
                   "the same shoe, alone and empty, seen exactly from the side, "
@@ -459,7 +460,7 @@ def main():
                   ("mesh_footwear", 100000, "dielectric", "opaque", None, "footwear-shoe_w"))
             check("W mesh paths", (m["source_image_path"], m["output_path"]),
                   (str(dw / "cutout.png"), str(dw / "raw.glb")))
-            check("W decimate", (DECIMATE_CALLS[-1]["target"], DECIMATE_CALLS[-1]["merge_vertices"]), (30000, True))
+            check("W decimate", (DECIMATE_CALLS[-1]["target"], DECIMATE_CALLS[-1]["merge_vertices"]), (60000, True))
             rec = fs.step_record("shoe_w", ssig_w, "mesh")
             g = rec.get("gates") or {}
             check("W mesh accepted", (rec.get("accepted"), rec.get("backend"),

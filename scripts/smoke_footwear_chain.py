@@ -39,7 +39,7 @@ the real ones; measured once by a prototype, the values only confirm it):
 - cutout: local (no service call).
 - mesh: exactly 1 mesher call; the wedge is one welded component
   (component_share 1.0) and its side silhouette is the cut-out's alpha up to
-  resampling (IoU ~1 >= 0.80) -> accepted at attempt 1.
+  resampling (IoU ~1 >= 0.75) -> accepted at attempt 1.
 - insole: the wedge pump's insole is accepted (smoke_footwear_insole [I1]),
   no service call.
 So ONE run of an item from nothing costs (upscale, edit, mesh) = (1, 1, 1).
