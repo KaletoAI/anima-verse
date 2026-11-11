@@ -41,6 +41,17 @@ from app.core.glb_mesh import GarmentMesh, body_arrays, card_arrays
 
 # Clearance of a card from the body surface (the spike's 0.004 m; cards are thin, unlike a generated hair shell).
 CARD_CLEAR_M = 0.004
+# The push-out's crown spread (garment_fit.push_out: per vertex the LARGEST displacement within SPREAD_M, iterated
+# 6 times + smoothing) floods: one card pushed out of the scalp lifts every card on the head with it. Kira
+# 2026-11-11 (~/claude-out/kira-hairdeck): sd before the push p50 5.9 / 11.2 / 9.6 mm (front / sides / back), yet
+# 100 % of the head moved by p50 9 / 5 / 8 mm -> scalp -> innermost strand p50 7.4 mm front, outer layer 17.9 mm;
+# a puffed helmet. On the head the cards are pushed layer-keeping instead (``layer_push``): a monotone map of the
+# distance, so a card above CARD_CLEAR_M + LAYER_BAND_M never moves and the ones below keep their order (no poke:
+# share 0.0 at POKE_TOL_M); below the head (the curtain deep in the upper back, up to 3.8 cm inside) the smoothed
+# push stays — per-vertex there crumples the ends on the shoulders. The two blend over LAYER_BLEND_M in height.
+LAYER_BAND_M = 0.006
+LAYER_BLEND_M = 0.03
+LAYER_CLAMP_ITERATIONS = 4
 # Cranium = Head-weighted vertices above chin + CRANIUM_FROM * (top - chin).
 CRANIUM_FROM = 0.6
 ICP_ITERATIONS = 30
@@ -503,13 +514,41 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
 
 # --- the fit -------------------------------------------------------------------------------------------------------
 
+def _clamp(P: np.ndarray, disp: np.ndarray, sdf, clear: float, iterations: int) -> np.ndarray:
+    """``disp`` plus plain push-out steps along the SDF gradient until ``P + disp`` lies ``clear`` outside."""
+    from app.core.garment_fit import _unit
+    for _ in range(iterations):
+        X = P + disp
+        disp = disp + np.clip(clear - sdf.sample(X), 0, None)[:, None] * _unit(sdf.grad(X))
+    return disp
+
+
+def layer_push(P: np.ndarray, sdf, *, clear: float = CARD_CLEAR_M, band: float = LAYER_BAND_M) -> np.ndarray:
+    """Layer-keeping displacement of ``P``: the signed distance ``d`` maps to ``clear + band * exp((d - T) / band)``
+    below ``T = clear + band`` (continuous at T, increasing, never under ``clear``) and stays above it; moved along
+    the SDF gradient, then clamped exactly (``LAYER_CLAMP_ITERATIONS``)."""
+    from app.core.garment_fit import _unit
+    P = np.asarray(P, np.float64)
+    d0 = sdf.sample(P)
+    top = clear + band
+    target = np.where(d0 < top, clear + band * np.exp(np.minimum(d0 - top, 0.0) / band), d0)
+    disp = (target - d0)[:, None] * _unit(sdf.grad(P))
+    return _clamp(P, disp, sdf, clear, LAYER_CLAMP_ITERATIONS)
+
+
 def _push(Q: np.ndarray, F: np.ndarray, U, body) -> Dict[str, Any]:
-    """The push-out of the placed hair ``Q`` on the rigged body (welded cards, SDF over the hair's bounds)."""
+    """The push-out of the placed hair ``Q`` on the rigged body (welded cards, SDF over the hair's bounds): on the
+    head (the top ``SPREAD_DEPTH_M``) layer-keeping (``layer_push``), below it the smoothed ``push_out``, blended
+    over ``LAYER_BLEND_M`` and clamped once more."""
     Pw, Fw, inv = weld(Q, F, U)
     sdf = body_sdf(body.positions, body.faces, vox=VOX_M,
                    bounds=(Pw.min(0) - SDF_MARGIN_M, Pw.max(0) + SDF_MARGIN_M))
     d0 = sdf.sample(Pw)
-    Qp, disp = push_out(Pw, Fw, sdf, clear=CARD_CLEAR_M, spread=SPREAD_M, spread_depth=SPREAD_DEPTH_M)
+    _q, smooth = push_out(Pw, Fw, sdf, clear=CARD_CLEAR_M, spread=SPREAD_M, spread_depth=SPREAD_DEPTH_M)
+    layered = layer_push(Pw, sdf)
+    w = np.clip((Pw[:, 1] - (Pw[:, 1].max() - SPREAD_DEPTH_M)) / LAYER_BLEND_M, 0.0, 1.0)[:, None]
+    disp = _clamp(Pw, w * layered + (1.0 - w) * smooth, sdf, CARD_CLEAR_M, LAYER_CLAMP_ITERATIONS)
+    Qp = Pw + disp
     return {"Pw": Pw, "inv": inv, "sdf": sdf, "d0": d0, "Qp": Qp, "disp": disp}
 
 

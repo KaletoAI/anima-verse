@@ -111,8 +111,9 @@ RIGGED_SMOOTH_UNTIL = 7
 #: into its cavity, the skin showed through) and a fit placed from the base fit is not gated on the image placement.
 #: hair 3 (2026-11-10): the hair's clearance is ``HAIR_CLEAR_M`` (6 mm, was CLEAR_M 11.9) in the push AND the rigged
 #: pass (the edit chain's hair floated 15-17 mm off the scalp).
+#: hair 4 (2026-11-11): HairDeck cards on the head pushed layer-keeping (``garment_hairdeck.layer_push``).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 3, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 4, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
 
 # R7 — mesh gates after the fit, in metres / cm^2 / shares.
 GATES = {

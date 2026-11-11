@@ -65,10 +65,14 @@ Fixture (metres, +y up, the body faces +z)
     {max_push_m 0.13, moved_share 0.5, icp_resid_p95_m 0.005} refuses with a reason naming max_push_m; at 0.12 it
     passes; fit metrics hold every key of the brief.
     On fits: the plain fixture (outer shell only, clearance 0.010 > 0.004 everywhere) is not pushed at all ->
-    max_push_m 0, moved_share 0, passes. The fixture of [1]-[4] refuses, naming moved_share: the whole shell lies
-    within the crown band (spread_depth 0.119 > its 0.09 height) and is ONE connected mesh smoothed 6 passes in
-    each of the first 6 iterations, so the inner layer's push reaches every shell vertex above MOVED_EPS_M
-    0.00017 m -> moved_share 1.0 > 0.90. (The real spike hair, 97 separate cards: 0.685.)
+    max_push_m 0, moved_share 0, passes. The fixture of [1]-[4] passes since FIT_VERSION hair 4 (the layer-keeping
+    push on the head, ``garment_hairdeck.layer_push``): the outer shell (15 rings x 96 + pole = 1441 vertices)
+    sits at 0.010 = CARD_CLEAR_M + LAYER_BAND_M, the map's fixed point, so the layer push leaves it; the inner layer
+    (5 x 96 + 1 = 481) lies 0.004 inside and is pushed whole. The blended smoothed push weighs at most
+    1 - (1.62 - (1.71 - 0.119)) / LAYER_BLEND_M = 0.033 on the shell's lowest ring (y 1.62, hair top 1.71).
+    -> moved_share = 481 / 1922 = 0.2503 (+- 0.002: the lowest ring may carry that 3 %) <= 0.90. Before, the crown
+    spread (the largest displacement within SPREAD_M 0.0085, iterated) carried the inner layer's push across the
+    6 mm to the shell and over all of it: 1.0, refused — a correct fit refused for the flood.
 """
 import json
 import math
@@ -371,8 +375,8 @@ def main() -> int:
         check(not ok and len(reasons) == 1 and "max_push_m" in reasons[0], f"0.13 refuses: {reasons}")
         ok, reasons = gh.gate({"max_push_m": 0.12, "moved_share": 0.5, "icp_resid_p95_m": 0.005})
         check(ok and not reasons, "0.12 passes")
-        check(not res.ok and len(res.reasons) == 1 and res.reasons[0].startswith("moved_share")
-              and m["moved_share"] > 0.9, f"the inner-layer fit refuses on moved_share: {res.reasons}")
+        check(res.ok and abs(m["moved_share"] - 481 / 1922) <= 0.002,
+              f"the inner-layer fit: only the inner layer moves, {m['moved_share']} = 481/1922 {res.reasons}")
         plain_nohead, plain_proxy = hair_glbs(inner=False)
         pf = gh.fit_hairdeck(plain_nohead, plain_proxy, body, colour_target=None, **NO_PLACEMENT)
         check(pf.metrics["max_push_m"] == 0 and pf.metrics["moved_share"] == 0 and pf.ok and not pf.reasons,

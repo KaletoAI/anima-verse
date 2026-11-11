@@ -113,8 +113,9 @@ measured on Kira's record (``hair_kira_3f3e184afa64.json``) and on her base ``ba
     "short" 0.97, "very short" 1.0, the other two gates unchanged. Kai's metrics {max_push_m 0.0162, moved_share
     0.93, icp_resid_p95_m 0.0074} (seed 43 of the bearded run): refused without a class ("moved_share 0.93 >
     0.9"), passed as "short". _push_passes on 100 displacements, 93 of 0.01 m (> MOVED_EPS_M) and 7 of 0: share
-    0.93 -> False by default, True with gates_for("short"). The [6] fixture's inner layer (moved_share 1, see
-    smoke_garment_hairdeck_fit) is still refused as "short" (1 > 0.97), with the short limit in the reason.
+    0.93 -> False by default, True with gates_for("short"). The [6] fixture's inner layer passes as "short" since
+    FIT_VERSION hair 4: only the inner layer moves (moved_share 481 / 1922 = 0.2503, see smoke_garment_hairdeck_fit
+    [5]) <= 0.97.
 [10] Colour (CIELAB D65, CIE76). White (1, 1, 1) -> (100, 0, 0) (the matrix rows sum to the white point).
     Kai's HairDeck median linear (0.0431, 0.0314, 0.0235): Y = 0.2126729 * 0.0431 + 0.7151522 * 0.0314 +
     0.072175 * 0.0235 = 0.033318 -> L = 116 cbrt(Y) - 16 = 21.33; X / 0.95047 = 0.034977, Z / 1.08883 = 0.024713
@@ -384,9 +385,8 @@ def main() -> int:
         inner_nohead, inner_proxy = fx.hair_glbs(inner=True)
         r9 = gh.fit_hairdeck(inner_nohead, inner_proxy, body_glb, colour_target=None, length_class="short",
                              **fx.NO_PLACEMENT)
-        check(not r9.ok and r9.metrics["moved_share"] == 1 and any(r.startswith("moved_share 1 > 0.97")
-                                                                     for r in r9.reasons),
-              f"inner layer still refused as short: {r9.reasons}")
+        check(r9.ok and abs(r9.metrics["moved_share"] - 481 / 1922) <= 0.002,
+              f"inner layer passes as short, only it moves: {r9.metrics['moved_share']} {r9.reasons}")
 
         # [10]
         print("[10] colour transfer")
