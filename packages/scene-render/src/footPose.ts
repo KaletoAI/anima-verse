@@ -65,8 +65,10 @@
  * `three` is injected, never imported. Every function is a no-op (returns
  * its input / 0 / empty / false) for a null record or one of another version.
  */
-import type { AnimationClip, Box3, KeyframeTrack, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
+import type { AnimationClip, Bone, Box3, KeyframeTrack, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
 import { normBoneName } from './clipRetarget'
+import { twoBoneIk } from './twoBoneIk'
+import type { Quat, Vec3 } from './twoBoneIk'
 import type { RestPose } from './clipRetarget'
 import { jointNowFrom, transformPoint } from './collision'
 import { FIGURE_HEIGHT_M, clipHeightGroup, inGarment } from './figure'
@@ -336,6 +338,87 @@ export function footContactsNow(three: Three, root: Object3D, fp: FootPose | nul
       n += 1
     }
     list.length = n
+  }
+  return res
+}
+
+/** The seated knee-raise fades in over this half-width (metres) around d = 0 (`seatRaise`). */
+export const SEAT_FADE_M = 0.015
+
+/**
+ * The seated raise r(d) of a leg whose lowest sole contact lies `d` BELOW the
+ * floor (d = floorY − lowest contact y): 0 for d ≤ −SEAT_FADE_M (the foot
+ * hangs or rests above the floor — a crossed leg), d for d ≥ SEAT_FADE_M (the
+ * foot through the floor comes up by exactly that), and the C¹ parabola
+ * (d + SEAT_FADE_M)² / (4·SEAT_FADE_M) between — the "fade over 3 cm around
+ * d = 0" ruling: a contact is never left below the floor, and one on the floor
+ * is lifted by at most SEAT_FADE_M / 4 (3.75 mm) above it.
+ */
+export function seatRaise(d: number): number {
+  if (d <= -SEAT_FADE_M) return 0
+  if (d >= SEAT_FADE_M) return d
+  const s = d + SEAT_FADE_M
+  return s * s / (4 * SEAT_FADE_M)
+}
+
+/**
+ * THE SEATED KNEE-RAISE (P3b). While a figure plays a `seat` height-group clip
+ * the root is not lifted for the heels (`footPoseLiftM` gives 0 for `seat`),
+ * so a shod heel reaches below the floor the owner seated the figure on. Per
+ * leg: the lowest sole contact of the current frame (`footContactsNow`) against
+ * `floorY` gives d, the raise r = `seatRaise(d)`; the ankle's target is the
+ * current ankle raised by r, `twoBoneIk` on UpLeg/Leg bends the knee up with
+ * the current knee as the pole (its own bending plane); the Foot keeps its
+ * WORLD rotation, so the sole follows the ankle up parallel to itself. The
+ * hips never move. Returns the raises per side (0 = untouched). A no-op without
+ * a usable record, a side without contacts or a leg whose UpLeg → Leg → Foot
+ * chain the figure lacks. Call AFTER the mixer's update of the frame and the
+ * clip-ground placement, with `floorY` = the floor the figure was seated ON in
+ * world units (the owner's stand height; in the admin viewer the shipped bare
+ * sole plane of `footPoseRest`, never a measurement on the cut body).
+ */
+export function seatFootLift(three: Three, root: Object3D, fp: FootPose | null | undefined,
+  floorY: number): Record<FootSide, number> {
+  const res: Record<FootSide, number> = { left: 0, right: 0 }
+  if (!usable(fp)) return res
+  root.updateMatrixWorld(true)
+  const contacts = footContactsNow(three, root, fp)
+  const bones = new Map<string, Object3D>()
+  root.traverse(o => {
+    if (!(o as Bone).isBone) return
+    const key = normBoneName(o.name)
+    if (!bones.has(key)) bones.set(key, o)
+  })
+  const vec = (v: Vector3): Vec3 => [v.x, v.y, v.z]
+  const quat = (q: Quat): Quaternion => new three.Quaternion(q[1], q[2], q[3], q[0])   // Quat is (w, x, y, z)
+  for (const side of SIDES) {
+    const points = contacts[side]
+    if (!points.length) continue
+    let lowest = Infinity
+    for (const p of points) if (p.y < lowest) lowest = p.y
+    const r = seatRaise(floorY - lowest)
+    if (r <= 0) continue
+    const upper = bones.get(`${side}upleg`)
+    const lower = bones.get(`${side}leg`)
+    const foot = bones.get(`${side}foot`)
+    if (!upper || !lower || !foot || lower.parent !== upper || foot.parent !== lower) continue
+    const hip = upper.getWorldPosition(new three.Vector3())
+    const knee = lower.getWorldPosition(new three.Vector3())
+    const ankle = foot.getWorldPosition(new three.Vector3())
+    const ik = twoBoneIk(vec(hip), vec(knee), vec(ankle), [ankle.x, ankle.y + r, ankle.z], vec(knee))
+    const du = quat(ik.upper)
+    const dl = quat(ik.lower)
+    const wUpper = upper.getWorldQuaternion(new three.Quaternion())
+    const wUpperParent = upper.parent ? upper.parent.getWorldQuaternion(new three.Quaternion()) : new three.Quaternion()
+    const wLower = lower.getWorldQuaternion(new three.Quaternion())
+    const wFoot = foot.getWorldQuaternion(new three.Quaternion())
+    const nUpper = du.clone().multiply(wUpper)
+    const nLower = dl.clone().multiply(du).multiply(wLower)
+    upper.quaternion.copy(wUpperParent.clone().invert().multiply(nUpper))
+    lower.quaternion.copy(nUpper.clone().invert().multiply(nLower))
+    foot.quaternion.copy(nLower.clone().invert().multiply(wFoot))
+    upper.updateMatrixWorld(true)
+    res[side] = r
   }
   return res
 }

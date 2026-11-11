@@ -102,6 +102,28 @@
  *     R(−4°)·R(−10°) = R(+x, −14°) = (−0.1218693, 0, 0, 0.9925462), the Foot
  *     unchanged at 34°. rest alone (no clipRest) → R(28°) as in [1]; a
  *     clipRest lacking the bone → R(28°).
+ * [12] seatFootLift (Task 22, P3b) on a seated leg: root → UpLeg (0, 0.45, 0)
+ *     → Leg local (0, 0, 0.45) → Foot local (0, −0.45, 0), i.e. hip H
+ *     (0, 0.45, 0), knee K (0, 0.45, 0.45), ankle A (0, 0, 0.45); a body
+ *     SkinnedMesh bound at the identity; the record's left heel contact
+ *     (0, −0.04, 0.45) on LeftFoot = 0.04 below the ankle; floor y = 0.
+ *     d = floor − lowest contact = 0.04 ≥ 0.015 → raise r = d = 0.04 →
+ *     ankle target T (0, 0.04, 0.45); |H−T| = √(0.45² + 0.41²) = 0.608769;
+ *     knee interior angle acos((2·0.45² − 0.370600)/(2·0.45²)) = 85.128°;
+ *     the knee stays in the plane of H→T and the old knee (the pole), on
+ *     its side: hip angle cos α = 0.608769/0.9 = 0.676410, t = (0, −0.41,
+ *     0.45)/0.608769, u = the pole's part ⊥ t = (0, 0.739170, 0.673451) →
+ *     K' = H + 0.45·(cos α·t + sin α·u) = (0, 0.489996, 0.448219) (±1e-6);
+ *     the ankle lands on T (±1e-6); the hip (UpLeg position) is unchanged;
+ *     the Foot keeps its WORLD quaternion (given a local R(+y, 20°) before —
+ *     about the vertical, so the heel stays 0.04 below the ankle: the same
+ *     world quaternion after, ±1e-9), so the heel contact follows
+ *     the ankle up by 0.04 and the lowest contact is ON the floor (±1e-6);
+ *     the return is {left 0.04, right 0}. The raise curve `seatRaise`:
+ *     r(0) = 0.015²/0.06 = 0.00375, r(−0.02) = 0, r(−0.015) = 0,
+ *     r(0.015) = 0.015 (C¹ at both ends), r(0.03) = 0.03. A contact 0.10
+ *     ABOVE the floor (floor y = −0.14, a crossed leg): d = −0.10 → r = 0,
+ *     the knee does not move, {0, 0}. null fp → {0, 0}, nothing moves.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -134,7 +156,7 @@ async function main() {
   const F = await import('../packages/scene-render/src/footPose.ts')
   const { restPoseOf, transplantedRestPose } = await import('../packages/scene-render/src/clipRetarget.ts')
   const THREE = await import('three')
-  const { applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches, footContactsNow } = F
+  const { applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches, footContactsNow, seatFootLift, seatRaise } = F
 
   const failures = []
   const check = (label, ok, detail = '') => {
@@ -373,11 +395,54 @@ async function main() {
   const lack = applyFootPose(THREE, clip, fpToe, selfR, lacking).tracks.find((t) => /leftfoot\.quaternion$/i.test(t.name)).values
   check('clipRest lacking the bone → R(28°)', nearV([lack[0], lack[1], lack[2]], [0.2419219, 0, 0]) && near(lack[3], 0.9702957))
 
+  console.log('--- [12] seatFootLift on a seated leg ---')
+  const leg = (footDeg = 0) => {
+    const root = new THREE.Group()
+    const up = new THREE.Bone(); up.name = 'mixamorigLeftUpLeg'; up.position.set(0, 0.45, 0)
+    const lo = new THREE.Bone(); lo.name = 'mixamorigLeftLeg'; lo.position.set(0, 0, 0.45)
+    const ft = new THREE.Bone(); ft.name = 'mixamorigLeftFoot'; ft.position.set(0, -0.45, 0)
+    up.add(lo); lo.add(ft); root.add(up)
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0, 0.1, 0, 0, 0, 0.1], 3))
+    geo.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0], 4))
+    geo.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0], 4))
+    const mesh = new THREE.SkinnedMesh(geo, new THREE.MeshBasicMaterial())
+    root.add(mesh)
+    root.updateMatrixWorld(true)
+    mesh.bind(new THREE.Skeleton([up, lo, ft]))
+    if (footDeg) { ft.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), footDeg * Math.PI / 180); root.updateMatrixWorld(true) }
+    return { root, up, lo, ft }
+  }
+  const fpSeat = { version: 1, source: { item_id: 'i', fsig: 'abc', glb_sha256: 'x' }, bones: {}, root_lift_m: 0.052,
+    contacts: { left: [{ bone: 'mixamorig:LeftFoot', pos: [0, -0.04, 0.45], role: 'heel' }], right: [] } }
+  const worldQ = (o) => { const q = new THREE.Quaternion(); o.getWorldQuaternion(q); return q4(q) }
+  const seat = leg(20)
+  const footQ0 = worldQ(seat.ft)
+  const raised = seatFootLift(THREE, seat.root, fpSeat, 0)
+  seat.root.updateMatrixWorld(true)
+  check('returns {left 0.04, right 0}', near(raised.left, 0.04, 1e-9) && raised.right === 0, JSON.stringify(raised))
+  check('knee → (0, 0.489996, 0.448219)', nearV(worldOf(seat.lo), [0, 0.489996, 0.448219]), fmt(worldOf(seat.lo)))
+  check('ankle → (0, 0.04, 0.45)', nearV(worldOf(seat.ft), [0, 0.04, 0.45]), fmt(worldOf(seat.ft)))
+  check('hip unchanged (0, 0.45, 0)', nearV(worldOf(seat.up), [0, 0.45, 0], 1e-12))
+  check('Foot keeps its world quaternion (±1e-9)', nearQ(new THREE.Quaternion(...worldQ(seat.ft)), footQ0, 1e-9), fmt(worldQ(seat.ft)))
+  const after = footContactsNow(THREE, seat.root, fpSeat)
+  check('lowest contact ON the floor (heel follows the ankle up by 0.04)', near(after.left[0].y, 0, 1e-6), after.left[0].y.toFixed(7))
+  check('seatRaise: r(0) = 0.00375, r(−0.02) = 0, r(−0.015) = 0, r(0.015) = 0.015, r(0.03) = 0.03',
+    near(seatRaise(0), 0.00375, 1e-12) && seatRaise(-0.02) === 0 && seatRaise(-0.015) === 0 && near(seatRaise(0.015), 0.015, 1e-12) && near(seatRaise(0.03), 0.03, 1e-12))
+  const crossed = leg()
+  const r2 = seatFootLift(THREE, crossed.root, fpSeat, -0.14)
+  crossed.root.updateMatrixWorld(true)
+  check('a contact 0.10 above the floor → {0, 0}, knee unchanged', r2.left === 0 && r2.right === 0 && nearV(worldOf(crossed.lo), [0, 0.45, 0.45], 1e-12), fmt(worldOf(crossed.lo)))
+  const bare = leg()
+  const r3 = seatFootLift(THREE, bare.root, null, 0)
+  bare.root.updateMatrixWorld(true)
+  check('null fp → {0, 0}, nothing moves', r3.left === 0 && r3.right === 0 && nearV(worldOf(bare.lo), [0, 0.45, 0.45], 1e-12))
+
   if (failures.length) {
     console.log(`\nFAIL: ${failures.length} check(s) failed`)
     process.exit(1)
   }
-  console.log('\nOK: foot pose — extension, still pose, lift, match, contacts, transplanted rest')
+  console.log('\nOK: foot pose — extension, still pose, lift, match, contacts, transplanted rest, seat lift')
 }
 
 main().catch((err) => { console.error(err); process.exit(1) })

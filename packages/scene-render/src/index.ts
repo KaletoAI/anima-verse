@@ -190,8 +190,8 @@ export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, COLLIDE_GLSL_D
   HAIR_REGIONS, EXTENSION_REGIONS, CLOTH_EXCLUDED_REGIONS, collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
 export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry } from './garmentCollision'
 
-export { FOOT_POSE_VERSION, applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches,
-  footContactsNow, footPoseRest } from './footPose'
+export { FOOT_POSE_VERSION, SEAT_FADE_M, applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches,
+  footContactsNow, footPoseRest, seatRaise, seatFootLift } from './footPose'
 export type { FootPose, FootPoseRest, FootContact, FootSide } from './footPose'
 
 export { GROUND_SAMPLE_FRAMES, GROUND_SAMPLE_VERTICES, SOLE_LEVEL_M, groundOffsetOf, soleGroundOffsetOf,
