@@ -36,7 +36,7 @@ refine.auto_lod_enabled = lambda: False
 refine.auto_bake_vc_enabled = lambda: False
 refine.measure_file = lambda path: None
 runner.is_available = lambda: False
-from app.core import props
+from app.core import prop_actions, props
 from app.models import character as C, world as W
 from jinja2 import meta
 
@@ -146,6 +146,11 @@ class AsyncPrompts(unittest.IsolatedAsyncioTestCase):
         self.assertIn("error", frames[-1])  # deliberately stops before storage apply
 
     async def blocked_geometry(self, operation):
+        # offers() keeps a short result cache (prop_actions, 3 s TTL); the
+        # warm-up render of each test fills it, and a hit never composes the
+        # room -- so the rendezvous below would wait for nothing. Start every
+        # scenario cold so the operation really reaches places._compose.
+        prop_actions.invalidate_offers_cache()
         entered, release = Event(), Event()
         observations = []
         compose = places._compose

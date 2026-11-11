@@ -36,6 +36,31 @@ def thought_user_input(context_hint: str = "", *, presence_line: str = "") -> st
     return f"{presence_line}\n{trigger}" if presence_line else trigger
 
 
+def _presence_context(character_name: str, system_prompt: str) -> Dict[str, Any]:
+    """The variables of ``chat/thought_presence.md`` for a turn whose caller
+    supplied only a system override. Blocking (profile + room reads): async
+    callers run it in a worker thread."""
+    from app.core.thought_context import (room_presence_names, absent_named_people,
+                                          split_away)
+    from app.core.perception import prompt_place
+    from app.models.character import get_character_profile, get_character_language
+    from app.models.world import get_room_name
+    profile = get_character_profile(character_name)
+    loc = profile.get("current_location", "") or ""
+    room = profile.get("current_room", "") or ""
+    presence = room_presence_names(character_name, loc, room)
+    absent, away = split_away(
+        absent_named_people(character_name, loc, room, [system_prompt]))
+    return {
+        "room_presence_names": presence[0] if presence is not None else None,
+        "location_name": prompt_place(character_name, loc)[0],
+        "room_name": get_room_name(loc, room, get_character_language(character_name) or "de")
+                     if loc and room else "",
+        "absent_people": absent,
+        "away_people": away,
+    }
+
+
 _thought_runner: Optional["ThoughtRunner"] = None
 
 
@@ -526,25 +551,8 @@ class ThoughtRunner:
         if ctx is None:
             # A caller supplying only a system override needs presence data,
             # not another full system context (or its skill/tool builders).
-            from app.core.thought_context import (room_presence_names, absent_named_people,
-                                                  split_away)
-            from app.core.perception import prompt_place
-            from app.models.character import get_character_profile, get_character_language
-            from app.models.world import get_room_name
-            profile = get_character_profile(character_name)
-            loc = profile.get("current_location", "") or ""
-            room = profile.get("current_room", "") or ""
-            presence = room_presence_names(character_name, loc, room)
-            absent, away = split_away(
-                absent_named_people(character_name, loc, room, [system_prompt]))
-            ctx = {
-                "room_presence_names": presence[0] if presence is not None else None,
-                "location_name": prompt_place(character_name, loc)[0],
-                "room_name": get_room_name(loc, room, get_character_language(character_name) or "de")
-                             if loc and room else "",
-                "absent_people": absent,
-                "away_people": away,
-            }
+            # Profile and room reads are blocking IO: off the event loop.
+            ctx = await asyncio.to_thread(_presence_context, character_name, system_prompt)
         presence_line = await render_async("chat/thought_presence.md", **ctx)
         user_input = thought_user_input(context_hint, presence_line=presence_line)
         _rut_hint = rut_hint(character_name)
