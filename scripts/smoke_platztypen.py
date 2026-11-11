@@ -607,12 +607,14 @@ check("an occupied stand marker gives its poses back to Anywhere",
       "Anywhere here: standing" in _taken, repr(_taken))
 places.release("Ann")
 places.release("Bob")
-save_character_current_room("Ann", "lounge")
-save_character_current_room("Bob", "lounge")
+# The lounge FIRST, then the walk back: a room the house does not have is
+# not stored (ac62eb83), and write_rooms replaces the whole room list.
 write_rooms([("lounge", "Lounge", room_layout([
     {"id": "couch", "group": "lie", "at": [2.0, 4.0]},
     {"id": "s1", "group": "seat", "at": [1.0, 1.0]},
     {"id": "st1", "group": "stand", "at": [6.0, 1.0]}]))])
+save_character_current_room("Ann", "lounge")
+save_character_current_room("Bob", "lounge")
 save_character_current_room("Kira", "lounge")
 
 # A HELD place of a placeless group is still not named: the rule reads the

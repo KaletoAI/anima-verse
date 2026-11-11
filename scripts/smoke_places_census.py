@@ -27,7 +27,11 @@ whole query is wrong if that ever moves).
 THE FIXTURE, and every expectation derived from it by hand
 ----------------------------------------------------------
 One location ``house`` with the rooms ``lounge`` and ``kitchen``, plus a second
-location ``shed``. Eight rows in ``characters``:
+location ``shed`` with a room of its own that is ALSO called ``lounge`` (room
+ids are per location). Both are real ``locations`` rows: since ac62eb83
+``save_character_current_room`` stores only a room of the character's current
+location, so a fixture without them puts nobody in any room. Eight rows in
+``characters``:
 
     Ann      house/lounge    place {id s1, slot 0, room_id lounge}
     Bob      house/lounge    place {id s2, slot 1, room_id lounge}
@@ -95,6 +99,7 @@ db.init_schema()
 
 from app.core import places  # noqa: E402
 from app.models import character as ch  # noqa: E402
+from app.models.world import upsert_location  # noqa: E402
 
 FAILURES = []
 CHECKED = 0
@@ -122,6 +127,12 @@ PEOPLE = [
     ("Pia", HOUSE, LOUNGE, {"id": "s2", "slot": 0, "room_id": LOUNGE}, "pooled"),
     ("_sys", HOUSE, LOUNGE, {"id": "s2", "slot": 0, "room_id": LOUNGE}, ""),
 ]
+
+# The rooms must exist: a room of another location is refused (ac62eb83).
+upsert_location({"id": HOUSE, "name": "House", "rooms": [
+    {"id": LOUNGE, "name": "Lounge"}, {"id": KITCHEN, "name": "Kitchen"}]}, sync_world=False)
+upsert_location({"id": SHED, "name": "Shed", "rooms": [
+    {"id": LOUNGE, "name": "Lounge"}]}, sync_world=False)
 
 for name, loc, room, place, status in PEOPLE:
     ch.save_character_profile(name, {"character_name": name}, create_new=True)

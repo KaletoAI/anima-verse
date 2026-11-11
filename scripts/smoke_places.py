@@ -214,7 +214,8 @@ Hand-derived expectations:
       inside() before it moves a partner.
   [10] A room change stands the character up (§ 3.5, § 10): Ann on s1,
       save_character_current_room("Ann", "lounge") (same room) keeps the
-      seat; "den" → place None and s1 free; back to the lounge.
+      seat; "den" (a second room of the house, no layout) → place None
+      and s1 free; back to the lounge.
   [11] The "Anywhere" line is capped (controller ruling): a catalog variant
       with 10 stand poses — standing (default) + st01…st09 — lists the
       default, then 7 more in poses_in_group order (alphabetical after the
@@ -324,7 +325,10 @@ pose_catalog.catalog_path = (
 pose_catalog.reload_catalogs()
 
 HOUSE = add_location(name="Smoke House", description="places smoke",
-                     rooms=[{"id": "lounge", "name": "Lounge"}])["id"]
+                     # "den" is the second room [10] steps into: since
+                     # ac62eb83 a room of another location is not stored.
+                     rooms=[{"id": "lounge", "name": "Lounge"},
+                            {"id": "den", "name": "Den"}])["id"]
 update_location_position(HOUSE, 0.0, 0.0)
 
 MARKERS = [
