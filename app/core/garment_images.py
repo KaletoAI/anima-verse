@@ -399,7 +399,9 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
                               "edit_canvas": {"side": side, "offset": list(offset),
                                               "crop": list(source_size)}},
                 character_loras=False,
-                postprocess=False)
+                postprocess=False,
+                # Load is no refusal: the chain answers retry_later, never a record.
+                raise_load=True)
         if path is None:
             record: Dict[str, Any] = {"view": view, "ok": False, "reasons": ["render failed"]}
         else:
@@ -593,7 +595,11 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     # The render arguments of the outfit's draft and fit, nothing worn on
     # the profile (the text names the piece, the reference shows it).
     mesh_profile = {**profile, "equipped_pieces": {}, "equipped_items": []}
-    common = base_body._dress_common("back", pieces={}, items=[], profile=mesh_profile, size=_tpose_size())
+    # ``raise_load``: the draft and the fit are garment steps — load is
+    # retry_later, never a refusal record (the outfit's own dressed views
+    # keep their None-on-failure contract).
+    common = {**base_body._dress_common("back", pieces={}, items=[], profile=mesh_profile, size=_tpose_size()),
+              "raise_load": True}
     draft_stem = draft_path(character_name, item_id, fsig, step).with_suffix("")
     draft = base_body.render_draft(
         character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir,

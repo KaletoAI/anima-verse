@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Optional, Set
 import uuid
 
+from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
 from app.imagegen.routing import ROUTE_META_KEYS
 from app.core.config_schema import field_default
 from app.core.keyed_lock import keyed_lock
@@ -833,7 +834,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            character_loras: bool = False,
                            postprocess: bool = True,
                            extra_reference_images: Optional[List[Path]] = None,
-                           style_character: Optional[str] = None) -> Optional[Path]:
+                           style_character: Optional[str] = None,
+                           raise_load: bool = False) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
@@ -859,6 +861,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``postprocess=False`` publishes the backend's file as delivered: no
     background removal, no side trim — a garment edit keeps the full frame
     of its source (``garment_images``), the gates compare it pixel for pixel.
+    ``raise_load`` (the garment image steps): a ``BackendBusyError`` or
+    ``MediaGenerationDisabled`` of the render is RAISED instead of ending in
+    None — a chain that persists refusals must never record load as one.
+    Every other caller keeps None for every failure.
     """
     from app.core.dependencies import get_skill_manager
     from app.models.character import (
@@ -1151,7 +1157,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
             frozen_reference.write_bytes(reference_bytes)
             payload["reference_image_override"] = str(frozen_reference)
             payload["record_provenance"] = True
-        img_result = image_skill.generate_from_input(json.dumps(payload))
+        # The opt-in is passed only when set: the facade's string contract and
+        # its stand-ins (``generate_from_input(payload)``) stay untouched otherwise.
+        img_result = image_skill.generate_from_input(json.dumps(payload),
+                                                    **({"raise_load": True} if raise_load else {}))
 
         # Extract filename from result
         match = re.search(r'/images/([^?)\n]+)', img_result)
@@ -1291,6 +1300,12 @@ def render_character_image(character_name: str, *, output_stem: Path,
 
         return final_path
 
+    except (BackendBusyError, MediaGenerationDisabled) as e:
+        # Load or the media switch, not a defect of the render.
+        if raise_load:
+            raise
+        logger.error("Expression generation failed: %s", e)
+        return None
     except Exception as e:
         logger.error("Expression generation failed: %s", e)
         return None

@@ -3032,10 +3032,16 @@ class ImageService:
             _log_image_failure(locals(), _name_once(backend.name, str(e)))
             raise
 
-    def generate_from_input(self, prompt: str) -> str:
+    def generate_from_input(self, prompt: str, *, raise_load: bool = False) -> str:
         """String façade of the image pipeline — the TakePhoto tool, Instagram,
         story images, frames, portraits and variants call it with a JSON
         payload (keys: ``_parse_input``).
+
+        ``raise_load`` (opt-in; the garment image steps): load and the media
+        switch — ``BackendBusyError`` / ``MediaGenerationDisabled`` — are
+        RAISED instead of answered as an ``Error: …`` string, so a caller
+        that must tell load from a defect (a chain that persists refusals)
+        can. Every other caller keeps the string contract.
 
         ``backend`` = an EXPLICIT backend: exactly that one renders, no
         routing, no fallback ("switching behind a chosen backend is worse than
@@ -3055,6 +3061,8 @@ class ImageService:
         if not media_generation_enabled():
             logger.info("Image generation refused: media generation is "
                         "disabled for this world")
+            if raise_load:
+                raise MediaGenerationDisabled("Media generation is disabled for this world")
             return "Error: Media generation is disabled for this world"
         if not self.enabled:
             return "Error: Image generation is not available. No instance configured or reachable."
@@ -3142,12 +3150,16 @@ class ImageService:
         except (LoraNotAllowedError, PortraitReferenceError):
             raise
         except MediaGenerationDisabled:
+            if raise_load:
+                raise
             return "Error: Media generation is disabled for this world"
         except (UnknownOccasionError, NoRouteError) as e:
             logger.warning("Image generation refused: %s", e)
             return f"Error: {e}"
         except BackendBusyError as e:
             logger.warning("Image generation: backend busy (%s)", e)
+            if raise_load:
+                raise
             return ("Error: the image backend is busy right now — please try "
                     f"again later ({e}).")
         except Exception as e:  # noqa: BLE001 — the contract is a string

@@ -36,8 +36,26 @@ Every expectation is derived by hand from ``_run_locked``'s rules:
      ``cached_failure`` None; ``garment_mesh.generate`` made exactly one
      attempt (no second attempt after an outright failure).
 
+[L5] The REAL call path (fix round, ruling 3a): ``run_edit_step`` ->
+     ``expression_regen.render_character_image`` -> the service's string
+     facade ``generate_from_input`` (a real ``ImageService`` with no
+     instances, switched on by hand) -> the routing, where a fake backend
+     raises ``BackendBusyError``. The garment step opts in (``raise_load``),
+     so the typed exception comes back up instead of an "Error: …" string
+     and a "render failed" attempt: run_garment -> {ok False, step "worn",
+     retry_later True}, ONE render attempt, nothing persisted.
+[L6] The same path with the media switch off (``media_generation_enabled``
+     False at the facade) -> ``MediaGenerationDisabled`` -> retry_later,
+     nothing persisted.
+[L7] Every other facade caller is unchanged: ``generate_from_input`` WITHOUT
+     the opt-in answers the busy backend as the "Error: the image backend is
+     busy right now …" string, and the switch as "Error: Media generation is
+     disabled for this world".
+
 Fails on 193321cf: [L1] ``cached_failure`` is a record with step "worn"
-(and the result has no ``retry_later``).
+(and the result has no ``retry_later``). Fails on ab0e1a63 (Task 3 before
+the fix round): [L5] the facade swallows the busy backend — two "render
+failed" attempts, a ``GateRefused`` persisted with step "worn".
 """
 import json
 import os
@@ -45,6 +63,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -86,6 +105,7 @@ def main() -> int:
         from app.core import garment_store as gs
         from app.imagegen import service
         from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
+        real_render = expression_regen.render_character_image
         from app.models import character as charmod
         from app.models import inventory
         from app.models.character import get_character_dir, save_character_profile
@@ -183,6 +203,41 @@ def main() -> int:
         check("one mesh attempt", meshes, ["mesh_garment"])
         check("status shows the text", failed_text(), ("mesh", "mesher busy"))
         check("nothing persisted", persisted(), (None, None))
+
+        print("[L5] the real render path: the facade raises load for the garment step")
+        expression_regen.render_character_image = real_render
+        svc = service.ImageService({})
+        svc.enabled = True          # no instances configured: the routing below stands in for the backend
+        routed = []
+
+        def busy_backend(occasion, render, **kw):
+            routed.append(occasion)
+            raise BackendBusyError("gpu busy")
+
+        with patch("app.imagegen.service.get_image_service", lambda: svc), \
+             patch("app.imagegen.routing.run_routed", busy_backend):
+            res = garments.run_garment("Demo", did, steps="worn", force=True)
+            check("result", (res.get("ok"), res.get("step"), res.get("retry_later")), (False, "worn", True))
+            check("one routed render, the garment occasion", routed, ["garment_view"])
+            check("status shows the text", failed_text(), ("worn", "gpu busy"))
+            check("nothing persisted", persisted(), (None, None))
+
+            print("[L6] the real render path with the media switch off")
+            del routed[:]
+            with patch("app.imagegen.service.media_generation_enabled", lambda: False):
+                res = garments.run_garment("Demo", did, steps="worn", force=True)
+            check("result", (res.get("ok"), res.get("step"), res.get("retry_later")), (False, "worn", True))
+            check("no render reached the routing", routed, [])
+            check("status shows the text", failed_text(), ("worn", "Media generation is disabled for this world"))
+            check("nothing persisted", persisted(), (None, None))
+
+            print("[L7] the string contract of every other facade caller is unchanged")
+            payload = json.dumps({"prompt": "a portrait", "agent_name": "Demo"})
+            check("busy -> Error string", svc.generate_from_input(payload).startswith(
+                  "Error: the image backend is busy right now"), True)
+            with patch("app.imagegen.service.media_generation_enabled", lambda: False):
+                check("switch off -> Error string", svc.generate_from_input(payload),
+                      "Error: Media generation is disabled for this world")
 
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))
     return 1 if FAILS else 0
