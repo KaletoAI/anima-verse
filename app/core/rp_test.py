@@ -610,6 +610,12 @@ def summarize(model_full: str, data: Dict[str, Any], results: Dict[str, List[Dic
     }
 
 
+#: Extra tries of a request that failed as an outage (timeout, connection,
+#: 5xx) before the reply is an infrastructure error — which keeps the whole
+#: run unsaved. A 4xx rejection is the model's answer and is never retried.
+OUTAGE_RETRIES = 1
+
+
 def _verdict(overall, dims, caps, missing) -> str:
     """yes / borderline / no — <reason> / incomplete — <dimension> not judged."""
     capped = [name for name in CAPS if caps.get(name)]
@@ -774,16 +780,23 @@ def iter_rp_results(model_full: str, *, settings: dict, cancel_event: Optional[t
     infra = threading.Event()
 
     def safe_call(messages):
-        try:
-            return call(messages)
-        except _QuotaWaitCancelled:
-            raise
-        except Exception as exc:  # noqa: BLE001 — sorted below
-            outage = not _rejected_by_model(exc)
-            if outage:
-                infra.set()
-            return {"content": "", "error": str(exc)[:300], "infra": outage, "duration_s": 0,
-                    "finish_reason": None}
+        # An outage gets ONE more try before the reply counts as one: a
+        # single timeout among ~40 slow cloud replies used to throw the
+        # whole run away unsaved (a gateway model, 2026-11-11: 1 of 41).
+        for attempt in range(1 + OUTAGE_RETRIES):
+            try:
+                return call(messages)
+            except _QuotaWaitCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 — sorted below
+                outage = not _rejected_by_model(exc)
+                if outage and attempt < OUTAGE_RETRIES and not _cancelled(cancel_event):
+                    logger.warning("RP test %s: outage (%s) — retrying the request once", model_full, exc)
+                    continue
+                if outage:
+                    infra.set()
+                return {"content": "", "error": str(exc)[:300], "infra": outage, "duration_s": 0,
+                        "finish_reason": None}
 
     skill_names = _skill_names()
     results: Dict[str, List[Dict[str, Any]]] = {}

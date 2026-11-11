@@ -39,7 +39,14 @@ judged -> "incomplete — prose, character, logic not judged"; repetition is the
 code part alone (71.7), discipline loses its agency part (100), so
 overall = (71.667 + 100) / 2 = 85.8 — and the result is still saved.
 A re-judge whose judge fails calibration or is down: error, stored result kept.
-A model outage (exception without a 4xx status) -> not saved.
+A model outage (exception without a 4xx status) on every call -> each request
+is tried 1 + OUTAGE_RETRIES (1) = 2 times, then not saved: brief, long and
+the conversation's FIRST turn fail (a conversation stops at a failed turn)
+-> 3 requests x 2 = 6 model calls.
+A FLAKY model (the first call of the run times out, every later one answers)
+-> that request is retried once, the run is complete and saved with the same
+overall 76.2 — 5 replies (brief 1, long 1, conv 3) -> 6 model calls. (Fails on a17cef34: the one
+timeout made the run unsaved.)
 A 4xx rejection of every request -> cap "rejected request", verdict
 "no — rejected request".
 Cancel during generation: no "done", at most `limit` (3) model calls.
@@ -109,6 +116,8 @@ class FakeClient:
                 self.cancel.set()
             if self.fail == 'outage':
                 raise ConnectionError('provider down')
+            if self.fail == 'flaky' and CALLS['model'] == 1:
+                raise ConnectionError('Request timed out.')
             if self.fail == 'rejected':
                 raise Rejected('Error code: 400 - context length exceeded')
             system = messages[0]['content']
@@ -221,9 +230,17 @@ with tempfile.TemporaryDirectory() as tmp:
         events = events_of(rp_test.iter_rp_results, judge_mode='down')
         assert events[-1]['type'] == 'error' and CALLS['model'] == 0, events[-1]
 
+        # One timeout: retried once, the run is saved.
+        CALLS['model'] = 0
+        s = run(fail='flaky')
+        assert s['infra'] is False and s['saved'] is True and s['overall'] == 76.2, (s['infra'], s.get('overall'))
+        assert CALLS['model'] == 6, CALLS['model']
+
         # A provider outage: diagnostics kept, result NOT saved.
+        CALLS['model'] = 0
         s = run(fail='outage')
         assert s['infra'] is True and s['saved'] is False
+        assert CALLS['model'] == 6, CALLS['model']
         assert caps.get_all_rp_results()['fake::rp']['overall'] == 76.2
 
         # Every request rejected with a 4xx: a model answer, a hard cap.
