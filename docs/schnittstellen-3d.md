@@ -2058,10 +2058,12 @@ Basiskörper-Pipeline.
   `node scripts/check_garment_collision.mjs MODEL.glb --motion MOTION.json`
   (Durchscheinen, unten).
 - **Footwear (`kind` `footwear`):** a fitted shoe is grafted as TWO nodes
-  `garment_footwear_<item_id>_<side>` (extras add `side`), rigid on Foot/ToeBase
-  only; the served body is cut under it, and the assembled sidecar carries the
-  `foot_pose` record both renderers apply — see "Footwear (`foot_pose`, garment
-  kind `footwear`)" after the collision capsules.
+  `garment_footwear_<item_id>_<side>` (extras add `side` and `part` `foot`), rigid
+  on Foot/ToeBase only; a BOOT adds per side the shaft node
+  `garment_footwear_<item_id>_<side>_shaft` (`part` `shaft`, skinned to the Leg) —
+  four nodes. The served body is cut under the foot part, and the assembled
+  sidecar carries the `foot_pose` record both renderers apply — see "Footwear
+  (`foot_pose`, garment kind `footwear`)" after the collision capsules, Boots.
 - **Lieferung:** der Server baut die Auslieferung als abgeleitete Datei
   (`model3d/assembled/{sig}.glb` = nacktes Outfit-Modell + gepfropfte
   Garments); das gespeicherte `{sig}.glb` bleibt immer nackt. Ändert sich die
@@ -12233,8 +12235,8 @@ outfit body mode: without an accepted fit on the current body it is missing (bar
 
 **In the served GLB** (the assembly, § A3a; `garment_assembly.py`):
 - two shoe nodes `garment_footwear_<item_id>_<side>` (`side` `left` / `right`), extras
-  `garment = {kind: "footwear", item_id, fsig, side}`, opaque, skinned on Skin 0 to Foot/ToeBase ONLY — no leg
-  bone ever carries weight. In the bind pose the shoe sits rotated back by the extension (its heel tip points under
+  `garment = {kind: "footwear", item_id, fsig, side, part: "foot"}`, opaque, skinned on Skin 0 to Foot/ToeBase
+  ONLY — no leg bone ever carries weight (a boot adds a shaft node per side on the Leg: Boots, below). In the bind pose the shoe sits rotated back by the extension (its heel tip points under
   the floor): a bind measurement must never read it (below).
 - the body CUT under the shoe: the fit record's geometric `cut` (Foot/ToeBase bone space — no vertex indices) is
   applied per tier to every body primitive (`footwear_cut.apply_cut`, `glb_mesh.rewrite_body_primitives`):
@@ -12244,7 +12246,36 @@ outfit body mode: without an accepted fit on the current body it is missing (bar
   bare sidecar's `pieces`, else the first by item id; another one is left off with `FOOTWEAR_SECOND` in the
   assembly sidecar's `garment_warnings` only.
 - no collision capsules (`garmentCapsules("footwear")` → `[]`, "Collision capsules" above: a rigid shoe is never
-  pushed) and no layering (neither inner nor outer piece).
+  pushed) and no layering of its own (a boot's shaft is the inner piece of trousers worn over it — Boots, below).
+
+**Boots** (spec `docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md` § 6–§ 8, § 11). A shoe whose
+wall top stands more than `SPLIT_MARGIN_M` (1 cm) above the wearer's ankle is SPLIT in the fit, at that wearer's
+ankle (`y_split` = the Foot joint's height in the shod stand; per fit, never per item):
+- **Parts and nodes.** Per side the foot part (`garment_footwear_<item_id>_<side>`, extras `part: "foot"`) and the
+  shaft (`garment_footwear_<item_id>_<side>_shaft`, `part: "shaft"`, double-sided material) — FOUR nodes, both
+  tiers. The index buffer is split at `y_split` by face centroid; the faces of the band (`y_split ± SPLIT_BAND_M`
+  = 2 cm) straddle the node boundary and their vertices appear in BOTH nodes with identical bind positions and
+  weights, so the two nodes never crack. Below the band the boot is the rigid shoe above (Foot/ToeBase); above
+  the band the shaft carries the side's Leg / UpLeg only (the clothing transfer restricted to them,
+  renormalised) — no vertex above the band has Foot or ToeBase weight; across the band a smoothstep blends the
+  two. `foot_pose` is the foot part's alone and unchanged; nothing in either renderer reads `part` —
+  `figureBox`, `inGarment`, `footPoseMatches` work by `kind` and `fsig`, and a figure applies the record to the
+  four nodes exactly as to two.
+- **No cut under the shaft.** The body cut's removal stops at the band's bottom (`y_split − SPLIT_BAND_M`); the shin
+  under the shaft stays whole (the shaft is pushed off it by `SHAFT_CLEAR_M` 6 mm in the fit), so a camera looking
+  into the collar of a seated figure sees skin or trousers, never the inside of the body shell. The fit's
+  `shaft_poke` (≤ 0.5 %) refuses a shaft the shin pokes through.
+- **The hem mode is assembly state** (`outfit_options`, profile `equipped_options.boot_hem`, saved with an outfit):
+  with own-mesh trousers worn over a boot, `over` (the default) layers the trousers over the two shaft nodes
+  (`garment_layers`, the shaft as the inner piece), `tucked` cuts the trouser leg 3 cm under the shaft top
+  (`footwear_cut.plane_cut`) and falls back to `over` when the leg is too wide (`hem.fallback "too_wide"` in the
+  layer record and the assembled sidecar's `garments`). Painted trousers are always inside the boot. The mode
+  changes only which trousers mesh is grafted — a new assembly and so a new `model_rev`.
+- **Payload unchanged.** No new key in `foot_pose`, `/model/meta` or the worldmap; a boot is visible to a client
+  only as the two extra nodes.
+- **Measured** by `node scripts/check_footwear.mjs` (proofs below): the seam gap per frame, the shaft's turn
+  against the Leg, the shin poking through the shaft, the seated thigh in the shaft's top 5 cm, and the body's
+  open boundary loops under the shaft (anti-goal: 0).
 
 **Payload.** `foot_pose` sits in the ASSEMBLED sidecar only, beside `collision` and `extension_rig`, and is
 delivered as `model.foot_pose` by `GET /characters/{name}/model3d` and as `foot_pose` by
@@ -12346,7 +12377,15 @@ skinned per frame: the share of shoe vertices more than 5 mm inside the body (bo
 the lowest sole point per stance frame against the floor, the total Foot pitch (extension plus the clip's own
 plantarflexion), and for seat clips the lowest contact and the hips. On the spike shoe (Kira, Black Stilettos):
 still sole 0.1 / 0.0 mm, idle −2.2 mm, walk stance −2.2 … +13.0 mm (heel strike ≥ −1.0, the lift-off frame at the
-leg's reach), walk Foot pitch max 45° / 47° (still 28° / 22°).
+leg's reach), walk Foot pitch max 45° / 47° (still 28° / 22°). For a BOOT (four nodes) the script adds, from the GLB
+alone, per frame and side: `seam_gap_mm` (the largest distance between a foot-node vertex and its shaft-node twin at
+the same bind position, after skinning — 0 when the nodes agree), `shaft_leg_follow_deg` (the best-fit turn of the
+shaft's ring against the side's Leg bone), `shaft_poke` (the share of the shin's Leg / UpLeg-dominant vertices in
+the shaft's height range outside the boot volume — both nodes, the collar closed by a fan, voxelised like the body)
+and on seat clips `seat_thigh_in_shaft` (the UpLeg-dominant vertices inside the shaft's top 5 cm, spec ≤ 2 %); once,
+`open_loops_above_split` (body boundary loops under the shaft: 0); penetration counts every footwear node. Numbers in
+`--json` (`boot`, `still.boot`, `clips.<kind>.boot`, `per_frame[].boot`); the fixture run is
+`scripts/smoke_footwear_assembly.py` [K] (a one-key `--clip-json` clip and a control file with known answers).
 
 ### P2 runtime contract: secondary motion
 

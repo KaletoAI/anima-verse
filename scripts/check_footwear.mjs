@@ -14,8 +14,13 @@
  *        [--samples 4]                penetration samples per clip at t = k/N · duration
  *        [--bare BARE.glb]            the UNCUT bare outfit model the assembly was built from (`{sig}.glb`):
  *                                     decides stance on a served body that is cut under the shoe (below)
+ *        [--clip-json KIND=FILE]      a three.js AnimationClip JSON (`AnimationClip.toJSON`: name, duration,
+ *                                     tracks) played as the library clip KIND, in donor space like an FBX;
+ *                                     repeatable, taken before the `--clips` kinds (a fixture clip, e.g. one key)
  *        [--json FILE]                write the numbers as JSON
- *   MODEL.glb = the served (assembled) model: body + the two shoe nodes `garment_footwear_<item>_<side>`.
+ *   MODEL.glb = the served (assembled) model: body + the shoe nodes `garment_footwear_<item>_<side>` — a BOOT adds
+ *   per side the shaft node `garment_footwear_<item>_<side>_shaft` (extras `part: "shaft"`; contract
+ *   `docs/schnittstellen-3d.md` "Footwear", Boots), four nodes in all.
  *   META.json = anything carrying the `foot_pose` record: the assembled sidecar or `/model/meta`
  *   (`foot_pose`), the `/model3d` response (`model.foot_pose`), or the bare record. A record without
  *   `source` (a raw `footwear_fit.fit_pair` result) takes item and fsig from the GLB's shoe nodes.
@@ -72,7 +77,35 @@
  *    before voxelising; `cap_loops` lists them. A sample whose volume still leaks is marked `!`
  *    (`body_volume_closed: false`) and its share is meaningless. On an UNCUT body (the P2 preview model)
  *    the share counts the shoe surface the bare foot pokes through (toes through the vamp), not a
- *    defect of the served file.
+ *    defect of the served file. Every footwear node of a side counts — a boot's shaft as well as its foot part.
+ *
+ * BOOTS (spec `docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md` § 6.3, § 6.4, § 7, § 9; a side with
+ * a shaft node). The record of the fit is not read: everything comes from the GLB. Per side, in BIND space:
+ * `band_top` = the lowest shaft-node vertex without Foot / ToeBase weight (≤ `NO_FOOT_W`) — above the band the
+ * shaft carries Leg / UpLeg only (fit ruling 8a), so this is the first vertex row above `y_split + SPLIT_BAND_M`;
+ * `shaft_top` = the shaft node's highest vertex; the seam pairs = every shaft-node vertex with a foot-node vertex
+ * at the same bind position (the band faces straddle the node boundary with shared positions and weights).
+ * Measured in the still pose and in EVERY clip frame (`per_frame`, the clip's `boot` block; the worse side):
+ *  - `seam_gap_mm`: the largest distance between the two vertices of a seam pair after skinning — 0 up to float
+ *    rounding when the two nodes carry the same weights (a crack at the split shows here).
+ *  - `shaft_leg_follow_deg`: the turn of the shaft's ring against the side's Leg bone — the ring's posed points
+ *    against the same bind points moved by the Leg bone's skin matrix alone, best-fit rotation (Kabsch) angle.
+ *    The ring as the fit reads it: the shaft above `band_top + RING_ABOVE_BAND_M` (= `y_split + 0.06`), with fewer
+ *    than `FOLLOW_RING_MIN` vertices the shaft's upper half (from the middle of `band_top` and `shaft_top` up),
+ *    else null (never a vacuous 0).
+ *  - `shaft_poke`: the share of the side's body vertices whose dominant bone is the side's Leg / UpLeg, with bind
+ *    height in [`band_top`, `shaft_top`], that lie OUTSIDE the boot — the side's footwear nodes posed, every
+ *    boundary loop of them (welded by bind position across both nodes — the collar) closed by a fan from its
+ *    centroid, voxelised like the body (`VOX`, dilated once, flood-filled from the grid border): a vertex in the
+ *    flood (or off the grid) pokes through. Null without such a vertex.
+ *  - `seat_thigh_in_shaft` (seat clips only, after `seatFootLift`): the share of the side's UpLeg-dominant body
+ *    vertices inside that boot volume (not in the flood) AND within the shaft's top 5 cm — along the posed axis
+ *    from the centroid of the shaft vertices `TOP_BAND_LOW_M` below the top (± 5 mm) to the centroid of its top
+ *    5 mm, between 5 cm below the top plane and 5 mm above it. Null without an UpLeg bone.
+ * Once, in the bind pose: `open_loops_above_split` = the body boundary loops (THE CUT above) whose centroid lies
+ * in (`band_top`, `shaft_top`] and whose every vertex is dominated by that side's Foot / ToeBase / Leg / UpLeg —
+ * a hole in the leg shell under the shaft (the anti-goal of spec § 4: the shin is never cut under a shaft). 0 on
+ * a served boot. The sole numbers read the foot part only.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -88,9 +121,16 @@ const FPS = 30
 const STANCE_MM = 10
 const VOX = 0.004
 const DEPTH = 0.005
+// boots (module docstring, BOOTS)
+const NO_FOOT_W = 1e-3
+const RING_ABOVE_BAND_M = 0.04          // footwear_fit SHAFT_RING_ABOVE_M 0.06 − SPLIT_BAND_M 0.02
+const FOLLOW_RING_MIN = 3               // footwear_fit FOLLOW_RING_MIN
+const THIGH_TOP_M = 0.05                // spec § 6.4 step 4: the shaft's top 5 cm
+const TOP_BAND_LOW_M = 0.05
+const BAND_TOL_M = 0.005
 
 function parseArgs(argv) {
-  const opts = { files: [], clips: ['idle', 'walk', 'sit'], set: '', samples: 4, groups: {} }
+  const opts = { files: [], clips: ['idle', 'walk', 'sit'], set: '', samples: 4, groups: {}, clipJson: [] }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--clips') opts.clips = argv[++i].split(',').filter(Boolean)
@@ -98,6 +138,11 @@ function parseArgs(argv) {
     else if (a === '--samples') opts.samples = Math.max(1, Number(argv[++i]))
     else if (a === '--json') opts.json = argv[++i]
     else if (a === '--bare') opts.bare = argv[++i]
+    else if (a === '--clip-json') {
+      const [kind, file] = argv[++i].split('=')
+      if (!kind || !file) throw new Error('--clip-json KIND=FILE')
+      opts.clipJson.push([kind, file])
+    }
     else if (a === '--groups') {
       for (const pair of argv[++i].split(',').filter(Boolean)) {
         const [k, g] = pair.split('=')
@@ -163,8 +208,12 @@ function stripGlbImages(buf) {
 }
 
 // ---------------------------------------------------------------- the body volume (check_garment_collision.mjs)
-/** Body volume + depth field for posed positions `pos` and body faces `bodyFaces` (indices into `pos`). */
-function depthField(pos, bodyFaces) {
+/**
+ * A closed surface `bodyFaces` (indices into the posed positions `pos`) voxelised at `VOX` over its bounds + 3 cm:
+ * the triangles sampled into the grid, dilated once, flood-filled from the grid border. `outside[i]` = reached
+ * by the flood; `isOutside(x, y, z)` the same for a point (off the grid = outside).
+ */
+function voxelSolid(pos, bodyFaces) {
   let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]
   for (let f = 0; f < bodyFaces.length; f++) {
     const i = bodyFaces[f] * 3
@@ -214,6 +263,17 @@ function depthField(pos, bodyFaces) {
     if (y > 0) seed(i - nz); if (y < ny - 1) seed(i + nz)
     if (z > 0) seed(i - 1); if (z < nz - 1) seed(i + 1)
   }
+  const isOutside = (px, py, pz) => {
+    const x = Math.round((px - lo[0]) / VOX), y = Math.round((py - lo[1]) / VOX), z = Math.round((pz - lo[2]) / VOX)
+    if (x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz) return true
+    return outside[at(x, y, z)] === 1
+  }
+  return { lo, nx, ny, nz, N, at, dil, outside, isOutside }
+}
+
+/** Body volume + depth field for posed positions `pos` and body faces `bodyFaces` (indices into `pos`). */
+function depthField(pos, bodyFaces) {
+  const { lo, nx, ny, nz, N, at, dil, outside } = voxelSolid(pos, bodyFaces)
   let shell = 0, inside = 0
   for (let i = 0; i < N; i++) { if (dil[i]) shell++; if (!outside[i]) inside++ }
   const closed = inside - shell > 0.05 * shell
@@ -312,6 +372,58 @@ function boundaryLoops(bindPos, faces, isBody) {
   return loops
 }
 
+/** The eigenvector of the largest eigenvalue of a symmetric 4×4 matrix (cyclic Jacobi). */
+function topEigen4(A) {
+  const a = A.map((r) => r.slice())
+  const V = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+  for (let sweep = 0; sweep < 50; sweep++) {
+    let off = 0
+    for (let p = 0; p < 4; p++) for (let q = p + 1; q < 4; q++) off += a[p][q] * a[p][q]
+    if (off < 1e-30) break
+    for (let p = 0; p < 4; p++) for (let q = p + 1; q < 4; q++) {
+      if (Math.abs(a[p][q]) < 1e-300) continue
+      const theta = (a[q][q] - a[p][p]) / (2 * a[p][q])
+      const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1))
+      const c = 1 / Math.sqrt(t * t + 1), sn = t * c
+      for (let k = 0; k < 4; k++) {
+        const akp = a[k][p], akq = a[k][q]
+        a[k][p] = c * akp - sn * akq; a[k][q] = sn * akp + c * akq
+      }
+      for (let k = 0; k < 4; k++) {
+        const apk = a[p][k], aqk = a[q][k]
+        a[p][k] = c * apk - sn * aqk; a[q][k] = sn * apk + c * aqk
+      }
+      for (let k = 0; k < 4; k++) {
+        const vkp = V[k][p], vkq = V[k][q]
+        V[k][p] = c * vkp - sn * vkq; V[k][q] = sn * vkp + c * vkq
+      }
+    }
+  }
+  let best = 0
+  for (let k = 1; k < 4; k++) if (a[k][k] > a[best][best]) best = k
+  return [V[0][best], V[1][best], V[2][best], V[3][best]]
+}
+
+/** The angle (deg) of the best-fit rotation taking the point set `Q` onto `P` (Horn's quaternion method). */
+function bestFitTurnDeg(Q, P) {
+  const n = Q.length
+  const cq = [0, 0, 0], cp = [0, 0, 0]
+  for (let i = 0; i < n; i++) for (let k = 0; k < 3; k++) { cq[k] += Q[i][k] / n; cp[k] += P[i][k] / n }
+  const S = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+  for (let i = 0; i < n; i++) {
+    for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) S[a][b] += (Q[i][a] - cq[a]) * (P[i][b] - cp[b])
+  }
+  const [[xx, xy, xz], [yx, yy, yz], [zx, zy, zz]] = S
+  const q = topEigen4([
+    [xx + yy + zz, yz - zy, zx - xz, xy - yx],
+    [yz - zy, xx - yy - zz, xy + yx, zx + xz],
+    [zx - xz, xy + yx, -xx + yy - zz, yz + zy],
+    [xy - yx, zx + xz, yz + zy, -xx - yy + zz],
+  ])
+  const w = Math.min(1, Math.abs(q[0]) / Math.hypot(...q))
+  return 2 * Math.acos(w) * 180 / Math.PI
+}
+
 async function main() {
   if (!process.env.SMOKE_BUNDLED) {
     const bundlePath = '/tmp/check_footwear_bundled.mjs'
@@ -325,7 +437,12 @@ async function main() {
       __filename, '--bundle', '--platform=node', '--format=esm', `--outfile=${bundlePath}`, '--log-level=error',
     ], { cwd: REPO, stdio: 'inherit' })
     if (built.status !== 0) process.exit(built.status ?? 1)
-    const args = process.argv.slice(2).map((a) => (/\.(glb|json)$/.test(a) || a.includes('/') ? path.resolve(a) : a))
+    // paths absolute (the bundle runs with cwd = the repo); `KIND=FILE` (--clip-json) resolves its file part
+    const args = process.argv.slice(2).map((a) => {
+      const kv = /^([^=/]+)=(.+)$/.exec(a)
+      if (kv) return `${kv[1]}=${path.resolve(kv[2])}`
+      return /\.(glb|json)$/.test(a) || a.includes('/') ? path.resolve(a) : a
+    })
     const run = spawnSync('node', ['--max-old-space-size=8192', bundlePath, ...args], {
       stdio: 'inherit', env: { ...process.env, SMOKE_BUNDLED: '1' }, cwd: REPO,
     })
@@ -377,7 +494,14 @@ async function main() {
   // ---- clips + donor (read only)
   const library = []
   const clipFiles = {}
+  for (const [kind, file] of opts.clipJson) {
+    const clip = THREE.AnimationClip.parse(JSON.parse(fs.readFileSync(file, 'utf8')))
+    clip.name = kind
+    library.push(clip)
+    clipFiles[kind] = path.relative(REPO, file)
+  }
   for (const kind of opts.clips) {
+    if (clipFiles[kind]) continue
     const file = [opts.set && path.join(clipDir, opts.set, `${kind}.fbx`), path.join(clipDir, `${kind}.fbx`)]
       .find((p) => p && fs.existsSync(p))
     if (!file) { console.log(`(no clip for ${kind} in ${clipDir} — skipped)`); continue }
@@ -476,19 +600,30 @@ async function main() {
     if (!o.isSkinnedMesh) return
     const g = o.geometry
     const garment = inGarment(o)
-    let side = null
+    let side = null, part = null
     if (garment) {
       for (let n = o; n && !side; n = n.parent) {
-        side = n.userData?.garment?.side ?? (/_(left|right)$/.exec(n.name)?.[1] ?? null)
+        const tag = n.userData?.garment
+        const m = /_(left|right)(_shaft)?$/.exec(n.name)
+        side = tag?.side ?? m?.[1] ?? null
+        if (side) part = tag?.part ?? (m?.[2] ? 'shaft' : 'foot')
       }
     }
-    parts.push({ mesh: o, garment, side, pos: g.attributes.position, si: g.attributes.skinIndex,
+    parts.push({ mesh: o, garment, side, part, pos: g.attributes.position, si: g.attributes.skinIndex,
       sw: g.attributes.skinWeight, offset: total, count: g.attributes.position.count })
     total += g.attributes.position.count
   })
+  const SIDES = ['left', 'right']
+  // a shoe: one foot node per side; a boot: a foot node and a shaft node per side (four)
   const shoes = parts.filter((p) => p.garment && p.side)
   const body = parts.filter((p) => !p.garment)
-  if (shoes.length !== 2) throw new Error(`expected 2 sided shoe meshes, got ${shoes.map((p) => p.mesh.name).join(', ')}`)
+  const footParts = shoes.filter((p) => p.part !== 'shaft')
+  const shaftParts = shoes.filter((p) => p.part === 'shaft')
+  if (footParts.length !== 2 || new Set(footParts.map((p) => p.side)).size !== 2 || shaftParts.length > 2
+    || new Set(shaftParts.map((p) => p.side)).size !== shaftParts.length) {
+    throw new Error(`expected one foot node per side (and at most one shaft node per side), got `
+      + shoes.map((p) => `${p.mesh.name} (${p.side}/${p.part})`).join(', '))
+  }
   const faceList = []
   for (const p of parts) {
     const idx = p.mesh.geometry.index
@@ -513,8 +648,11 @@ async function main() {
     for (let k = 0; k < loop.length; k++) capFaces.push(total + li, loop[k], loop[(k + 1) % loop.length])
   })
   const bodyFaces = Uint32Array.from([...faces.filter((_, k) => isBody[faces[k - (k % 3)]]), ...capFaces])
+  // every footwear node of a side (penetration); the foot part alone (the sole numbers)
   const shoeIdx = { left: [], right: [] }
   for (const p of shoes) for (let i = 0; i < p.count; i++) shoeIdx[p.side].push(p.offset + i)
+  const soleIdx = { left: [], right: [] }
+  for (const p of footParts) for (let i = 0; i < p.count; i++) soleIdx[p.side].push(p.offset + i)
   // the bare foot vertices per side (Task 13): bind height < floor + 0.2, dominant bone of that side's foot/leg
   const footVerts = { left: [], right: [] }
   for (const p of body) {
@@ -593,6 +731,146 @@ async function main() {
     return { left: share(shoeIdx.left), right: share(shoeIdx.right), closed: field.closed }
   }
 
+  // ---- boots (module docstring, BOOTS): per side the seam pairs, band top, ring, the poke / thigh sets, the collar
+  const boneNamesOf = new Map()
+  for (const p of parts) boneNamesOf.set(p, p.mesh.skeleton.bones.map((b) => normBoneName(b.name)))
+  const dominantBone = (g) => {
+    const p = partOf[g], i = g - p.offset
+    let best = 0
+    for (let j = 1; j < 4; j++) if (p.sw.getComponent(i, j) > p.sw.getComponent(i, best)) best = j
+    return boneNamesOf.get(p)[p.si.getComponent(i, best)]
+  }
+  const footShare = (g, side) => {
+    const p = partOf[g], i = g - p.offset, names = boneNamesOf.get(p)
+    let w = 0
+    for (let j = 0; j < 4; j++) {
+      if (names[p.si.getComponent(i, j)]?.startsWith(`${side}foot`) || names[p.si.getComponent(i, j)]?.startsWith(`${side}toe`)) {
+        w += p.sw.getComponent(i, j)
+      }
+    }
+    return w
+  }
+  const bindKey = (g) => `${Math.round(bindRaw[g * 3] * 1e6)},${Math.round(bindRaw[g * 3 + 1] * 1e6)},${Math.round(bindRaw[g * 3 + 2] * 1e6)}`
+  const bindY = (g) => bindRaw[g * 3 + 1]
+  const boot = {}
+  for (const side of SIDES) {
+    const shaft = shaftParts.find((p) => p.side === side)
+    if (!shaft) continue
+    const foot = footParts.find((p) => p.side === side)
+    const footAt = new Map()
+    for (let i = 0; i < foot.count; i++) if (!footAt.has(bindKey(foot.offset + i))) footAt.set(bindKey(foot.offset + i), foot.offset + i)
+    const pairs = [], shaftG = []
+    let bandTop = Infinity, shaftTop = -Infinity
+    for (let i = 0; i < shaft.count; i++) {
+      const g = shaft.offset + i
+      shaftG.push(g)
+      shaftTop = Math.max(shaftTop, bindY(g))
+      if (footShare(g, side) <= NO_FOOT_W) bandTop = Math.min(bandTop, bindY(g))
+      const f = footAt.get(bindKey(g))
+      if (f !== undefined) pairs.push([f, g])
+    }
+    if (!Number.isFinite(bandTop)) bandTop = null
+    let ring = bandTop === null ? [] : shaftG.filter((g) => bindY(g) > bandTop + RING_ABOVE_BAND_M)
+    let ringKind = 'top'
+    if (ring.length < FOLLOW_RING_MIN) {
+      ring = bandTop === null ? [] : shaftG.filter((g) => bindY(g) >= 0.5 * (bandTop + shaftTop))
+      ringKind = 'upper_half'
+    }
+    if (ring.length < FOLLOW_RING_MIN) { ring = []; ringKind = null }
+    // the boot's volume: both nodes, every boundary loop (welded across the nodes — the collar) closed by a fan
+    const sideMask = new Uint8Array(total)
+    for (const p of [foot, shaft]) sideMask.fill(1, p.offset, p.offset + p.count)
+    const sideFaces = faces.filter((_, k) => sideMask[faces[k - (k % 3)]])
+    const collar = boundaryLoops(bindRaw, sideFaces, sideMask)
+    const verts = []
+    const localOf = new Int32Array(total).fill(-1)
+    for (const p of [foot, shaft]) for (let i = 0; i < p.count; i++) { localOf[p.offset + i] = verts.length; verts.push(p.offset + i) }
+    const volFaces = Array.from(sideFaces, (g) => localOf[g])
+    collar.forEach((loop, li) => {
+      for (let k = 0; k < loop.length; k++) volFaces.push(verts.length + li, localOf[loop[k]], localOf[loop[(k + 1) % loop.length]])
+    })
+    const legRe = new RegExp(`^${side}(up)?leg$`)
+    const sideRe = new RegExp(`^${side}(foot|toe.*|leg|upleg)$`)
+    const poke = [], thigh = []
+    for (const p of body) for (let i = 0; i < p.count; i++) {
+      const g = p.offset + i, d = dominantBone(g)
+      if (bandTop !== null && legRe.test(d) && bindY(g) >= bandTop && bindY(g) <= shaftTop) poke.push(g)
+      if (d === `${side}upleg`) thigh.push(g)
+    }
+    // the body's boundary loops under the shaft: a hole in the leg shell (spec § 4 anti-goal)
+    const openLoops = bandTop === null ? 0 : loops.filter((loop) => {
+      const cy = loop.reduce((a, v) => a + bindY(v), 0) / loop.length
+      return cy > bandTop && cy <= shaftTop && loop.every((v) => sideRe.test(dominantBone(v)))
+    }).length
+    boot[side] = {
+      shaft, foot, pairs, bandTop, shaftTop, ring, ringKind, verts, collar: collar.map((l) => l.map((g) => localOf[g])),
+      volFaces: Uint32Array.from(volFaces), poke, thigh: bones.has(`${side}upleg`) ? thigh : null, openLoops,
+      legBone: boneNamesOf.get(shaft).indexOf(`${side}leg`),
+      topRim: shaftG.filter((g) => bindY(g) >= shaftTop - BAND_TOL_M),
+      topLow: shaftG.filter((g) => Math.abs(bindY(g) - (shaftTop - TOP_BAND_LOW_M)) <= BAND_TOL_M),
+    }
+  }
+  const isBoot = Object.keys(boot).length > 0
+  const centroidOf = (idx) => {
+    const c = [0, 0, 0]
+    for (const g of idx) for (let k = 0; k < 3; k++) c[k] += pos[g * 3 + k] / idx.length
+    return c
+  }
+  /** The boot measures of the current pose (after `updateMats`): per side seam gap (mm), follow (deg), poke and,
+   *  with `seat`, the thigh share inside the shaft's top 5 cm. */
+  const bootFrame = (seat) => {
+    const out = {}
+    for (const side of SIDES) {
+      const b = boot[side]
+      if (!b) continue
+      for (const g of b.verts) skinV(g)
+      let gap = 0
+      for (const [f, g] of b.pairs) {
+        gap = Math.max(gap, Math.hypot(pos[f * 3] - pos[g * 3], pos[f * 3 + 1] - pos[g * 3 + 1], pos[f * 3 + 2] - pos[g * 3 + 2]))
+      }
+      let follow = null
+      if (b.ring.length && b.legBone >= 0) {
+        const E = mats.get(b.shaft)[b.legBone]
+        const Q = [], P = []
+        for (const g of b.ring) {
+          const x = bindRaw[g * 3], y = bindRaw[g * 3 + 1], z = bindRaw[g * 3 + 2]
+          Q.push([E[0] * x + E[4] * y + E[8] * z + E[12], E[1] * x + E[5] * y + E[9] * z + E[13], E[2] * x + E[6] * y + E[10] * z + E[14]])
+          P.push([pos[g * 3], pos[g * 3 + 1], pos[g * 3 + 2]])
+        }
+        follow = bestFitTurnDeg(Q, P)
+      }
+      // the boot volume of this pose
+      const local = new Float32Array((b.verts.length + b.collar.length) * 3)
+      b.verts.forEach((g, i) => { local[i * 3] = pos[g * 3]; local[i * 3 + 1] = pos[g * 3 + 1]; local[i * 3 + 2] = pos[g * 3 + 2] })
+      b.collar.forEach((loop, li) => {
+        const o = (b.verts.length + li) * 3
+        for (const v of loop) for (let k = 0; k < 3; k++) local[o + k] += local[v * 3 + k] / loop.length
+      })
+      const vol = voxelSolid(local, b.volFaces)
+      let poke = null
+      if (b.poke.length) {
+        let n = 0
+        for (const g of b.poke) { skinV(g); if (vol.isOutside(pos[g * 3], pos[g * 3 + 1], pos[g * 3 + 2])) n++ }
+        poke = n / b.poke.length
+      }
+      let thigh = null
+      if (seat && b.thigh && b.thigh.length && b.topRim.length && b.topLow.length) {
+        const top = centroidOf(b.topRim), low = centroidOf(b.topLow)
+        const ax = [top[0] - low[0], top[1] - low[1], top[2] - low[2]]
+        const len = Math.hypot(...ax) || 1
+        let n = 0
+        for (const g of b.thigh) {
+          skinV(g)
+          const h = ((pos[g * 3] - top[0]) * ax[0] + (pos[g * 3 + 1] - top[1]) * ax[1] + (pos[g * 3 + 2] - top[2]) * ax[2]) / len
+          if (h >= -THIGH_TOP_M && h <= BAND_TOL_M && !vol.isOutside(pos[g * 3], pos[g * 3 + 1], pos[g * 3 + 2])) n++
+        }
+        thigh = n / b.thigh.length
+      }
+      out[side] = { seam_gap_mm: gap * 1000, shaft_leg_follow_deg: follow, shaft_poke: poke, seat_thigh_in_shaft: thigh }
+    }
+    return out
+  }
+
   // skin cross-check against three's own skinning
   updateMats()
   let worst = 0
@@ -609,7 +887,6 @@ async function main() {
   const pc = (x) => `${(x * 100).toFixed(2)}%`
   const stats = (a) => (a.length ? { min: r1(Math.min(...a)), max: r1(Math.max(...a)), n: a.length } : null)
   const span = (s) => (s ? `${s.min} … ${s.max}` : '—')
-  const SIDES = ['left', 'right']
   const report = {
     model: path.relative(REPO, modelPath), meta: path.relative(REPO, metaPath), clip_files: clipFiles,
     rig: path.relative(REPO, rigFile), foot_pose_source: fp.source, root_lift_m: fp.root_lift_m,
@@ -620,11 +897,25 @@ async function main() {
     bind_floor_raise_mm: bareProbe ? r1((floor - bareProbe.floor) * 1000) : null,
     groups, ground_offset_mm: Object.fromEntries(kinds.map((k) => [k, r1(ground[k] * 1000)])),
     chain_ms: chainMs, still: null, clips: {},
+    boot: isBoot ? {
+      sides: Object.fromEntries(Object.entries(boot).map(([side, b]) => [side, {
+        band_top_bind_y: b.bandTop, shaft_top_bind_y: b.shaftTop, seam_pairs: b.pairs.length, ring: b.ringKind,
+        ring_vertices: b.ring.length, poke_vertices: b.poke.length, thigh_vertices: b.thigh ? b.thigh.length : null,
+        collar_loops: b.collar.length, open_loops_above_split: b.openLoops,
+      }])),
+      open_loops_above_split: Object.values(boot).reduce((a, b) => a + b.openLoops, 0),
+    } : null,
   }
   console.log(`== ${path.basename(modelPath)}: ${total} verts (shoes ${shoeIdx.left.length}+${shoeIdx.right.length}), `
     + `foot pose ${fp.source.item_id}/${fp.source.fsig}${sourceNote}, lift ${(fp.root_lift_m * 1000).toFixed(1)} mm, `
     + `skin check ${worst.toExponential(2)} m, body boundary loops ${loops.length} [${loops.map((l) => l.length).join(' ')}], `
     + `client chain ${chainMs} ms, bind Foot→ToeBase line ${r1(bindPitch.left)}° / ${r1(bindPitch.right)}° (pitch 0)`)
+  if (isBoot) {
+    console.log(`  boot: ` + Object.entries(report.boot.sides).map(([side, b]) => `${side} band top ${r1(b.band_top_bind_y * 1000)} mm, `
+      + `shaft top ${r1(b.shaft_top_bind_y * 1000)} mm, ${b.seam_pairs} seam pairs, ring ${b.ring ?? '—'} (${b.ring_vertices}), `
+      + `${b.poke_vertices} shin / ${b.thigh_vertices ?? '—'} thigh vertices, ${b.collar_loops} collar loops`).join(' | ')
+      + ` | open body loops above the split ${report.boot.open_loops_above_split}`)
+  }
   if (bareProbe) {
     console.log(`  --bare ${path.basename(opts.bare)}: stance on its uncut feet; the served bind floor lies `
       + `${report.bind_floor_raise_mm} mm over the bare soles${cutLoops ? ` (body cut under the shoe: ${cutLoops} loops)` : ''}`)
@@ -640,10 +931,14 @@ async function main() {
     applyFootPoseToPose(THREE, fig, fp)
     fig.position.y = footPoseLiftM(fp, 'ground')
     updateMats()
-    const sole = Object.fromEntries(SIDES.map((s) => [s, r1(lowest(shoeIdx[s]))]))
+    const sole = Object.fromEntries(SIDES.map((s) => [s, r1(lowest(soleIdx[s]))]))
     const pen = penetration()
     const pitch = Object.fromEntries(SIDES.map((s) => [s, r1(footPitch(s))]))
     report.still = { sole_mm: sole, penetration: pen, pitch_deg: pitch }
+    if (isBoot) {
+      report.still.boot = bootFrame(false)
+      console.log(`  still boot     ${bootLine(report.still.boot)}`)
+    }
     console.log(`  still          sole L/R ${sole.left} / ${sole.right} mm | pitch L/R ${pitch.left}° / ${pitch.right}° `
       + `| penetration L/R ${pc(pen.left)} / ${pc(pen.right)}${pen.closed ? '' : ' !'}`)
     fig.traverse((o) => { if (saved.has(o)) o.quaternion.copy(saved.get(o)) })
@@ -688,11 +983,12 @@ async function main() {
         row.knee_rise = Math.max(...SIDES.map((s) => kneeBefore[s] === null ? 0
           : (bones.get(`${s}leg`).getWorldPosition(new THREE.Vector3()).y - kneeBefore[s]) * 1000))
       }
-      row.shoe = Object.fromEntries(SIDES.map((s) => [s, lowest(shoeIdx[s])]))
+      row.shoe = Object.fromEntries(SIDES.map((s) => [s, lowest(soleIdx[s])]))
       row.pitch = Object.fromEntries(SIDES.map((s) => [s, footPitch(s)]))
       footContactsNow(THREE, fig, fp, contacts)
       row.contact = Math.min(...SIDES.flatMap((s) => contacts[s].map((v) => (v.y - floor) * 1000)))
       row.hips = hipsBone ? hipsBone.getWorldPosition(new THREE.Vector3()).y : null
+      if (isBoot) row.boot = bootFrame(group === 'seat')
     }
     const out = { group, frames: n, duration_s: +shodClip[k].duration.toFixed(3), ground_offset_mm: r1(ground[k] * 1000),
       root_y_mm: r1(rootY(k) * 1000) }
@@ -744,7 +1040,16 @@ async function main() {
       right: Math.max(...out.penetration.map((p) => p.right)) }
     out.per_frame = rows.map((r) => ({ t: +r.t.toFixed(3), shoe_L: r1(r.shoe.left), shoe_R: r1(r.shoe.right),
       bare_L: r1(r.bare.left), bare_R: r1(r.bare.right), pitch_L: r1(r.pitch.left), pitch_R: r1(r.pitch.right),
-      contact: r1(r.contact) }))
+      contact: r1(r.contact), ...(r.boot ? { boot: r.boot } : {}) }))
+    if (isBoot) {
+      // the worse frame per side and measure (null when a measure has no value in any frame)
+      const worst = (key) => Object.fromEntries(Object.keys(boot).map((side) => {
+        const vals = rows.map((r) => r.boot[side][key]).filter((v) => v !== null && v !== undefined)
+        return [side, vals.length ? Math.max(...vals) : null]
+      }))
+      out.boot = { seam_gap_mm: worst('seam_gap_mm'), shaft_leg_follow_deg: worst('shaft_leg_follow_deg'),
+        shaft_poke: worst('shaft_poke'), ...(group === 'seat' ? { seat_thigh_in_shaft: worst('seat_thigh_in_shaft') } : {}) }
+    }
     report.clips[k] = out
 
     const g = r1(ground[k] * 1000)
@@ -769,8 +1074,18 @@ async function main() {
       + `(bare ${out.bare_pitch_max_deg.left}° / ${out.bare_pitch_max_deg.right}°) `
       + `| penetration L ${out.penetration.map((p) => pc(p.left) + (p.closed ? '' : '!')).join(' ')} `
       + `R ${out.penetration.map((p) => pc(p.right) + (p.closed ? '' : '!')).join(' ')}`)
+    if (isBoot) console.log(`  ${''.padEnd(22)}boot max over ${n} fr: ${bootLine(Object.fromEntries(Object.keys(boot).map((side) => [side,
+      Object.fromEntries(Object.entries(out.boot).map(([key, v]) => [key, v[side]]))])))}`)
   }
   if (opts.json) fs.writeFileSync(opts.json, JSON.stringify(report, null, 1))
+
+  /** One printed line of boot measures ({side: {…}}): seam gap, follow, poke, thigh (seat). */
+  function bootLine(m) {
+    const f = (v, d = 3) => (v === null || v === undefined ? '—' : (+v).toFixed(d))
+    return Object.entries(m).map(([side, b]) => `${side[0].toUpperCase()} seam gap ${f(b.seam_gap_mm, 4)} mm, `
+      + `leg follow ${f(b.shaft_leg_follow_deg, 2)}°, poke ${b.shaft_poke === null ? '—' : pc(b.shaft_poke)}`
+      + (b.seat_thigh_in_shaft !== undefined && b.seat_thigh_in_shaft !== null ? `, thigh in shaft ${pc(b.seat_thigh_in_shaft)}` : '')).join(' | ')
+  }
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })

@@ -80,6 +80,25 @@ Expected, by hand:
      the split changes no pose), source {boots, FB, sha of that tier's bytes}; GET /model/meta -> that foot_pose.
      Back to pieces {feet: heels}, unpainted [heels] -> assemble -> both tiers rebuilt with the TWO heels nodes
      and no boots node (a shoe fit assembles as before).
+[K] (boots plan Task 12) ``node scripts/check_footwear.mjs`` on the A7 boot assembly (full tier + its sidecar), the
+     real reference rig (read only), an EMPTY clip directory and ONE clip from ``--clip-json``: one key at t 0
+     (identity on the seven joints + a hips height — eight tracks, the client's MIN_CLIP_TRACKS), so 1 frame. The
+     script reads four nodes (it refused them with "expected 2 sided shoe meshes" on 193321cf). By hand: the
+     shaft rows are raw 0.01 j, frame 0.010236 j, body y = frame - lift 0.010236 = 0.010236 (j - 1); the band ends
+     at body y_split + 0.02 = 0.08 + 0.02 = 0.10, so the first shaft row without Foot weight is j 11: band top
+     0.102360, the shaft top j 16: 0.153540 (both +- 2e-6, float32). The served body is the cut clog body (the
+     two leg columns, corners at y 0.10 and 0.45 only): no boundary loop, so open_loops_above_split 0, and no shin
+     vertex in [0.10236, 0.15354], so shaft_poke None (as smoke_footwear_cut [X11] (d)). Frame 0: seam gap 0
+     (+- 1e-6 mm: a seam twin pair has one bind position and one set of weights), leg follow 0 (+- 1e-3 deg: the
+     shaft above band top is 100 % Leg). CONTROL file (same nodes): the body plane-cut at y 0.12 (each column
+     ends in an 8-vertex rim, 12 vertices with the bisection's duplicates, at 0.12 in the shaft's range) -> one
+     open loop per side (2); the left rim moved +0.10 in x (x 0.07 / 0.13, past the shaft's front wall at 0.0517)
+     -> shaft_poke left 12 / 12 = 1, right 0 / 12 = 0 (the rim at |x| <= 0.03, |z - zc| <= 0.03 inside the
+     walls at 0.0517 / -0.0711 / 0.0425); the left shaft's ring (bind y > 0.14236) re-weighted 100 % LeftFoot
+     with the META's LeftFoot extension set to 20 deg -> the still pose's follow left = 20 (+- 1e-3: the ring
+     turns rigidly with the Foot, the Leg stays in bind), right 0; the left shaft's band (bind y < 0.10236)
+     re-weighted 100 % LeftToeBase -> the seam twins differ by half the 20 deg turn about axes 4-7 cm away: gap
+     left > 5 mm (measured 14.1), right 0.
 """
 import hashlib
 import json
@@ -176,6 +195,122 @@ def below_cap(glb: bytes, cut: dict) -> float:
             gval = footwear_cut._Side(desc).g(m.to_cut(np.asarray(prim.positions, np.float64)))
             worst = min(worst, float(gval.min()))
     return worst
+
+
+def reweight(blob: bytes, node_name: str, joint: str, *, above: float = -1.0, below: float = 1.0) -> bytes:
+    """``blob`` with the vertices of node ``node_name`` whose bind y lies in (``above``, ``below``) weighted 100 %
+    to ``joint`` (JOINTS_0 slot 0 = its skin index, WEIGHTS_0 = (1, 0, 0, 0)), patched in place in the BIN chunk."""
+    from app.core import glb_mesh
+    from app.core.model_validate import parse_glb
+    parsed = parse_glb(blob)
+    gltf = parsed["gltf"]
+    binary = bytearray(parsed["bin"])
+    node = next(n for n in gltf["nodes"] if n.get("name") == node_name)
+    attrs = gltf["meshes"][node["mesh"]]["primitives"][0]["attributes"]
+    ys = glb_mesh.accessor_array(parsed, attrs["POSITION"])[:, 1]
+    rows = np.nonzero((ys > above) & (ys < below))[0]
+    skin_joints = [gltf["nodes"][j].get("name") for j in gltf["skins"][0]["joints"]]
+
+    def writable(index):
+        acc = gltf["accessors"][index]
+        dtype = np.dtype({5121: "u1", 5123: "<u2", 5125: "<u4", 5126: "<f4"}[acc["componentType"]])
+        view = gltf["bufferViews"][acc["bufferView"]]
+        stride = int(view.get("byteStride", dtype.itemsize * 4))
+        arr = np.ndarray((int(acc["count"]), 4), dtype=dtype, buffer=binary,
+                         offset=int(view.get("byteOffset", 0)) + int(acc.get("byteOffset", 0)),
+                         strides=(stride, dtype.itemsize))
+        return arr, (np.iinfo(dtype).max if dtype.kind == "u" and acc.get("normalized") else 1)
+    jnt, _ = writable(attrs["JOINTS_0"])
+    wgt, one = writable(attrs["WEIGHTS_0"])
+    jnt[rows, 0] = skin_joints.index(joint)
+    wgt[rows] = 0
+    wgt[rows, 0] = one
+    return glb_mesh.pack_glb(gltf, bytes(binary))
+
+
+def run_check_footwear(root: Path, asm: Path) -> None:
+    """[K] (module docstring): ``scripts/check_footwear.mjs`` on the boot assembly, then on the same file with the
+    body plane-cut at y 0.12 (a hole in the leg shell under the shaft)."""
+    import subprocess
+    from app.core import footwear_cut, glb_mesh
+    print("[K] check_footwear.mjs on the four-node boot assembly")
+    work = root / "check"
+    (work / "clips").mkdir(parents=True, exist_ok=True)
+    clip = work / "one_key.json"
+    # one key at t 0: identity on the seven fixture joints + a hips height (the client's adapt keeps a clip of
+    # at least eight tracks, MIN_CLIP_TRACKS); the measures below hold for ANY pose of this fixture
+    tracks = [{"name": f"{b}.quaternion", "type": "quaternion", "times": [0], "values": [0, 0, 0, 1]}
+              for b in ("Hips", "LeftLeg", "LeftFoot", "LeftToeBase", "RightLeg", "RightFoot", "RightToeBase")]
+    tracks.append({"name": "Hips.position", "type": "vector", "times": [0], "values": [0, 100, 0]})
+    clip.write_text(json.dumps({"name": "idle", "duration": 0, "uuid": "one-key", "blendMode": 2500, "tracks": tracks}))
+    blob = asm.read_bytes()
+    meta = asm.with_suffix(".json")
+    # the control: the body plane-cut at y 0.12 (a hole in each leg shell under the shaft), the left rim moved
+    # 0.10 forward (out through the shaft's front wall), the left shaft's ring above band top + 0.04 re-weighted
+    # 100 % LeftFoot (a shaft that turns with the foot), its band (the vertices under band top, the seam twins
+    # among them) 100 % LeftToeBase (a shaft node that no longer shares the foot node's weights; still a foot bone,
+    # so band top stays where it was), and a META whose LeftFoot extension is 20 deg (the flat clog's own is 0 —
+    # the still pose would turn nothing)
+    cut_glb = work / "boot_cut_shin.glb"
+    prims = glb_mesh.body_primitive_arrays(blob)
+    cut = {i: footwear_cut.plane_cut(prim, y_m=0.12)[0] for i, prim in enumerate(prims)}
+    for prim in cut.values():
+        rim = (np.abs(prim.positions[:, 1] - 0.12) < 1e-6) & (prim.positions[:, 2] < 0.0)
+        prim.positions[rim, 0] += 0.10
+    ctl = reweight(glb_mesh.rewrite_body_primitives(blob, cut), "garment_footwear_boots_left_shaft", "LeftFoot",
+                   above=0.102360 + 0.04)
+    cut_glb.write_bytes(reweight(ctl, "garment_footwear_boots_left_shaft", "LeftToeBase", below=0.102360 - 1e-6))
+    side = json.loads(meta.read_text())
+    side["foot_pose"]["bones"]["LeftFoot"]["deg"] = 20.0
+    meta_ctl = work / "control.json"
+    meta_ctl.write_text(json.dumps(side))
+    env = {**os.environ, "ANIMATION_CLIPS_DIR": str(work / "clips"),
+           "ANIMATION_RIG_FILE": str(ROOT / "shared" / "models" / "rig" / "reference.fbx")}
+    reports = {}
+    for name, glb, meta_in in (("served", asm, meta), ("cut", cut_glb, meta_ctl)):
+        out = work / f"{name}.json"
+        run = subprocess.run(["node", str(ROOT / "scripts" / "check_footwear.mjs"), str(glb), str(meta_in),
+                              "--clip-json", f"idle={clip}", "--clips", "", "--samples", "1", "--json", str(out)],
+                             cwd=str(ROOT), env=env, capture_output=True, text=True, timeout=600)
+        print("\n".join("       " + line for line in (run.stdout + run.stderr).splitlines()[:40]))
+        check(f"K {name}: check_footwear ran", run.returncode, 0)
+        reports[name] = json.loads(out.read_text()) if out.is_file() else {}
+    rep = reports["served"]
+    boot = rep.get("boot") or {}
+    sides = boot.get("sides") or {}
+    check("K the boot is read from four nodes: both sides", sorted(sides), ["left", "right"])
+    check("K seam pairs per side > 0", all((sides.get(s_) or {}).get("seam_pairs", 0) > 0 for s_ in ("left", "right")), True)
+    near("K band top (bind y) = the first shaft row above the band", (sides.get("left") or {}).get("band_top_bind_y"),
+         0.102360, 2e-6)
+    near("K shaft top (bind y)", (sides.get("left") or {}).get("shaft_top_bind_y"), 0.153540, 2e-6)
+    check("K open body loops above the split: 0", boot.get("open_loops_above_split"), 0)
+    frame0 = (((rep.get("clips") or {}).get("idle") or {}).get("per_frame") or [{}])[0].get("boot") or {}
+    for s_ in ("left", "right"):
+        near(f"K frame 0 seam gap {s_} (mm)", (frame0.get(s_) or {}).get("seam_gap_mm"), 0.0, 1e-6)
+        near(f"K frame 0 leg follow {s_} (deg)", (frame0.get(s_) or {}).get("shaft_leg_follow_deg"), 0.0, 1e-3)
+        # the round-1 leg column has vertices at y 0.10 and 0.45 only: none in [band top, shaft top] (as [X11] (d))
+        check(f"K frame 0 shaft poke {s_}: no shin vertex in the range -> None", (frame0.get(s_) or {}).get("shaft_poke"), None)
+    check("K one frame", ((rep.get("clips") or {}).get("idle") or {}).get("frames"), 1)
+    ctl = reports["cut"]
+    cut_boot = ctl.get("boot") or {}
+    check("K control: the shin cut at 0.12 -> one open loop per side above the split",
+          ({s_: (cut_boot.get("sides") or {}).get(s_, {}).get("open_loops_above_split") for s_ in ("left", "right")},
+           cut_boot.get("open_loops_above_split")), ({"left": 1, "right": 1}, 2))
+    still = (ctl.get("still") or {}).get("boot") or {}
+    check("K control: 12 rim vertices per side in the shaft's range",
+          [(cut_boot.get("sides") or {}).get(s_, {}).get("poke_vertices") for s_ in ("left", "right")], [12, 12])
+    check("K control: poke left 12 / 12 (moved out), right 0 / 12",
+          [(still.get(s_) or {}).get("shaft_poke") for s_ in ("left", "right")], [1.0, 0.0])
+    near("K control: still leg follow left = the Foot's 20 deg extension (ring on the Foot)",
+         (still.get("left") or {}).get("shaft_leg_follow_deg"), 20.0, 1e-3)
+    near("K control: still leg follow right 0", (still.get("right") or {}).get("shaft_leg_follow_deg"), 0.0, 1e-3)
+    # the band's seam twins sit at the split (s about 0.5: Foot share about 0.5 on the foot node, the whole ToeBase
+    # turn on the re-weighted shaft node), 4.25 .. 7.1 cm from the Foot joint's lateral axis: the half turn of 20 deg
+    # the two twins differ by opens >= ~7 mm
+    gap_l = (still.get("left") or {}).get("seam_gap_mm")
+    check("K control: seam gap left > 5 mm (the shaft's band on the ToeBase alone)", gap_l is not None and gap_l > 5.0, True)
+    near("K control: seam gap right 0", (still.get("right") or {}).get("seam_gap_mm"), 0.0, 1e-6)
+    print(f"       (control seam gap left {gap_l} mm)")
 
 
 def main() -> int:
@@ -536,6 +671,7 @@ def main() -> int:
         status, meta = meta_route()
         check("A7 /model/meta foot_pose = the boot assembly's", (status, meta.get("foot_pose")), (200, ga.read_sidecar(asm)["foot_pose"]))
         check("A7 no hub", HUB, [])
+        run_check_footwear(root, asm)
         write_bare_meta([heels], pieces={"feet": heels})
         check("A7 back to the shoe: both tiers rebuilt", ga.assemble("Demo", osig)["tiers"], {"full": "assembled", "low": "assembled"})
         check("A7 two heels nodes, no boots node", garment_nodes(asm.read_bytes()), want_nodes)

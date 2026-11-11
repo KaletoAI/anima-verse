@@ -328,7 +328,10 @@ export const CLOTH_EXCLUDED_REGIONS: readonly string[] = ['arm', ...HAIR_ONLY_RE
  *  - footwear: none. A fitted shoe is rigid on Foot/ToeBase (footwear spec
  *    `docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`
  *    § 7.2): a push would deform it, so `collidingGarmentMeshes` skips it
- *    and its material is never patched;
+ *    and its material is never patched. A boot's shaft node (kind footwear,
+ *    `part: "shaft"`) is rigid on the Leg between the ankle band and the knee
+ *    and gets none either (boots spec § 10: it never moves deeper into the
+ *    shin capsule than in the bind pose, where the bind rule caps a push at 0);
  *  - every other kind: all regions except `CLOTH_EXCLUDED_REGIONS`.
  */
 export function garmentCapsules<T extends { capsule: { region: string } }>(kind: string | null, bound: readonly T[]): T[] {
