@@ -1925,7 +1925,7 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
                           for key, (kind_, limit) in footwear_cut.CUT_GATES.items()})
         return {"empty": _footwear_gate_limits(footwear_gates.EMPTY_GATES),
                 "mesh": _footwear_gate_limits(footwear_gates.MESH_GATES),
-                "insole": _footwear_gate_limits(footwear_insole.INSOLE_GATES),
+                "insole": _footwear_gate_limits({**footwear_insole.INSOLE_GATES, **footwear_insole.SHAFT_GATES}),
                 "fit": _footwear_gate_limits(fit_gates)}
     return {**garment_gates.limits(kind),
             "mesh": {"largest_component_share": {"op": "ge", "value": garment_mesh.MIN_COMPONENT_SHARE}},

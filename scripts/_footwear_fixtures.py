@@ -12,6 +12,11 @@ mesher's own coordinates (Y up, x heel -> toe, z lateral), length 0.26, width 0.
   the topline ignores it because it sits at z = 0) that makes the TOE end the taller one for the
   provisional heel rule;
 - ``shaft``: a boot variant — the side walls over x in [0, 0.10] rise to ``shaft``;
+- ``cap`` (boots plan Task 5, spec 2026-11-11 § 6.1): an up-facing disc of quads at y = ``shaft`` over the
+  shaft's footprint x in [0, 0.10] x z in [-0.04, 0.04] on the 0.01 grid — 10 x 8 quads = 160 triangles, a
+  single-view mesher's closure of the collar it could not see into;
+- ``open_side`` (same task): the +z wall over x in [0, 0.10] stays at the pump's h(x) + WALL instead of rising to
+  ``shaft`` — a mesher hole in the shaft: the tube has only its -z wall above the quarter;
 - ``flare``: a flared shaft (boots plan Task 2, spec 2026-11-11 § 5 F5 / § 6.1) — two extra walls over x in
   [0, 0.10] that lean OUT from z = +-HALF_W at y = 0.05 to z = +-``flare`` at y = 0.16, open at the bottom (a
   vertical ray over |z| in (0.04, ``flare``) hits the leaning wall at 0.05 .. 0.16, never the ground; its face
@@ -42,10 +47,11 @@ def h(x: float) -> float:
 
 
 def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = False, solid: bool = False,
-          shaft: float = 0.0, flare: float = 0.0):
+          shaft: float = 0.0, flare: float = 0.0, cap: bool = False, open_side: bool = False):
     """``(positions (N, 3), faces (M, 3))`` of the wedge pump (module docstring); ``shaft`` > 0 raises the
     side walls over the rear x in [0, 0.10] to that height (a boot shaft; topline there = ``shaft``); ``flare``
-    > HALF_W adds the leaning flare walls over the same x (module docstring)."""
+    > HALF_W adds the leaning flare walls over the same x; ``cap`` closes the shaft's top with an up-facing disc,
+    ``open_side`` leaves the +z shaft wall at the pump's wall height (module docstring)."""
     P, F = [], []
 
     def tri(a, b, c, facing):
@@ -71,10 +77,16 @@ def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = Fals
         quad((x0, 0, -HALF_W), (x1, 0, -HALF_W), (x1, 0, HALF_W), (x0, 0, HALF_W), down)
         # side walls from the ground to h + WALL (to h for the solid wedge)
         t0, t1 = h0 + wall, h1 + wall
-        if shaft and x1 <= 0.10 + 1e-9:
-            t0, t1 = max(t0, shaft), max(t1, shaft)
+        in_shaft = bool(shaft) and x1 <= 0.10 + 1e-9
         for z, facing in ((HALF_W, (0, 0, 1)), (-HALF_W, (0, 0, -1))):
-            quad((x0, 0, z), (x1, 0, z), (x1, t1, z), (x0, t0, z), facing)
+            s0, s1 = t0, t1
+            if in_shaft and not (open_side and z > 0):
+                s0, s1 = max(t0, shaft), max(t1, shaft)
+            quad((x0, 0, z), (x1, 0, z), (x1, s1, z), (x0, s0, z), facing)
+        if in_shaft and cap:
+            for j in range(8):
+                z0, z1 = -HALF_W + 0.01 * j, -HALF_W + 0.01 * (j + 1)
+                quad((x0, shaft, z0), (x1, shaft, z0), (x1, shaft, z1), (x0, shaft, z1), up)
         if not solid and x0 >= roof_from - 1e-9:
             quad((x0, h0 + WALL, -HALF_W), (x1, h1 + WALL, -HALF_W), (x1, h1 + WALL, HALF_W),
                  (x0, h0 + WALL, HALF_W), up)

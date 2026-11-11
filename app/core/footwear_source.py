@@ -27,8 +27,12 @@ Folder ``<world>/footwear/<item>/<ssig>/`` (``source_dir``):
   attempts like ``garment_mesh.generate``.
 - ``insole`` -> ``insole.json``: ``footwear_insole.analyse`` of ``prepared.glb`` (CPU, no hub job),
   written whether or not it passes; gates ``footwear_insole.INSOLE_GATES`` (``insole_cover``,
-  ``vamp_cover``) — a refusal names ``INSOLE_REFUSED`` / ``OPEN_REFUSED``. ``boot`` needs a body and
-  is judged at the fit.
+  ``vamp_cover``, ``opening_share``) and ``SHAFT_GATES`` (``shaft_closed_share``, ``overknee``) — a refusal
+  names ``INSOLE_REFUSED`` / ``SOLID_REFUSED`` / ``OPEN_REFUSED`` / ``OVERKNEE_REFUSED`` /
+  ``SHAFT_OPEN_REFUSED``. A shaft the mesher capped (``shaft.cap_removed`` > 0, boots spec § 6.1) has the
+  cap taken out of ``prepared.glb`` here (``footwear_insole.strip_cap``; ``raw.glb`` stays), the mesh is
+  measured again without it and the count is kept in ``insole.json`` and the step record; the shaft's
+  material is marked double-sided at the fit, not here.
 
 ``record.json`` = ``{steps: {step: {accepted, gates, backend, routing,
 created_at, ...}}}``. A step that is not accepted names why in ``failure``:
@@ -587,14 +591,34 @@ def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
     prepared = d / "prepared.glb"
     if not prepared.is_file():
         raise FileNotFoundError("the prepared shoe mesh is missing — run the mesh step first")
-    res = footwear_insole.analyse(prepared.read_bytes())
+    import numpy as np
+    from app.core import glb_mesh
+    positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared.read_bytes())
+    res = footwear_insole.analyse_arrays(positions, faces)
+    cap = footwear_insole.cap_faces(positions, faces, res)
+    removed = int(cap.sum())
+    if removed:
+        # A mesher cap on the shaft: prepared.glb goes on without it (the fit and the viewer read this file;
+        # raw.glb keeps the delivery), measured again as it is served, the count carried over.
+        F = np.asarray(faces, np.int64)
+        used, inverse = np.unique(F[~cap].reshape(-1), return_inverse=True)
+        P2, F2 = np.asarray(positions, np.float64)[used], inverse.reshape(-1, 3)
+        _write_bytes(prepared, glb_mesh.static_glb(P2, F2, np.asarray(uvs, np.float64)[used], image=image,
+                                                   mime=mime, material=material))
+        res = footwear_insole.analyse_arrays(P2, F2)
+        res["shaft"]["cap_removed"] = removed
+        logger.info("Shoe source %s/%s: shaft cap of %d faces removed from prepared.glb", iid, ssig, removed)
     gates = res["gates"]
     # Written refused too: the Wardrobe row shows what the analysis found.
     write_record(d / "insole.json", res)
+    shaft = res.get("shaft") or {}
     _set_step(d, "insole", _entry(accepted=bool(gates["ok"]), gates=gates, version=footwear_insole.INSOLE_VERSION,
-                                  nominal=res["nominal"], **({} if gates["ok"] else {"failure": GATE})))
-    logger.info("Shoe source %s/%s: insole %s (cover %.3f, vamp %.3f)", iid, ssig,
-                "accepted" if gates["ok"] else "refused", gates["insole_cover"], gates["vamp_cover"])
+                                  nominal=res["nominal"], shaft_class=shaft.get("class"),
+                                  cap_removed=int(shaft.get("cap_removed") or 0),
+                                  **({} if gates["ok"] else {"failure": GATE})))
+    logger.info("Shoe source %s/%s: insole %s (cover %.3f, vamp %.3f, shaft %s)", iid, ssig,
+                "accepted" if gates["ok"] else "refused", gates["insole_cover"], gates["vamp_cover"],
+                shaft.get("class"))
     if not gates["ok"]:
         raise StepRefused(f"{gates.get('refusal') or 'insole refused'} ({'; '.join(gates['reasons'])})", gates)
 

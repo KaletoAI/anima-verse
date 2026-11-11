@@ -96,8 +96,15 @@ each end, middle = columns [round(0.35 L), round(0.65 L)) from the left end.
      side_silhouette(box, size=256): scale 255 / 0.26 -> 256 columns, height
      0.08 * 255 / 0.26 = 78.5 px -> 78..80 rows, the bbox filled (>= 0.99);
      IoU against a 325 x 100 rectangle matte (same aspect 3.25) >= 0.99.
+[G10] A boot's side view (boots round Task 5, spec 2026-11-11 § 6.1: the aspect
+     range widens to 0.5 .. 2.6 — a knee boot reads about 0.7, the upper bound
+     stays the Derby's 2.6 of [G9]; the plan's label is [G6], taken here):
+     rectangle 300 x 420 on a 500-row canvas -> aspect 300 / 420 = 0.714,
+     single share 1.0, no leg (every column 420 high) -> ok, reasons [];
+     rectangle 300 x 700 (800-row canvas) -> aspect 300 / 700 = 0.429 < 0.5 ->
+     refused, reason "aspect".
 [G8] Gate tables: EMPTY_GATES single_share ("min", 0.98), aspect ("range",
-     (1.1, 2.6)), iou_below_topline ("min", 0.85); MESH_GATES component_share
+     (0.5, 2.6)), iou_below_topline ("min", 0.85); MESH_GATES component_share
      ("min", 0.98), mesh_iou ("min", 0.75 — calibrated on the real Business Heels deliveries, 0.77–0.78 against
      their side-view cut-out; 0.80 before the P3 acceptance). check_gates refuses a missing value
      unless it is optional.
@@ -211,6 +218,18 @@ def main():
     check("[G9] 300 x 110 -> aspect 2.727 refused", near(r["aspect"], 300 / 110, 1e-9) and not r["ok"]
           and any(x.startswith("aspect") for x in r["reasons"]), r)
 
+    # [G10]
+    tall = np.zeros((500, 400), bool)
+    tall[60:480, 50:350] = True
+    r = fg.empty_gate(tall)
+    check("[G10] knee boot 300 x 420 -> aspect 0.714 ok", near(r["aspect"], 300 / 420, 1e-9) and r["ok"]
+          and r["reasons"] == [] and r["leg"] is False, r)
+    taller = np.zeros((800, 400), bool)
+    taller[50:750, 50:350] = True
+    r = fg.empty_gate(taller)
+    check("[G10] 300 x 700 -> aspect 0.429 refused", near(r["aspect"], 300 / 700, 1e-9) and not r["ok"]
+          and any(x.startswith("aspect") for x in r["reasons"]), r)
+
     # [G4]
     a = canvas()
     a[80:180, 50:350] = True
@@ -300,7 +319,7 @@ def main():
 
     # [G8]
     check("[G8] EMPTY_GATES", fg.EMPTY_GATES["single_share"][:2] == ("min", 0.98)
-          and fg.EMPTY_GATES["aspect"][:2] == ("range", (1.1, 2.6))
+          and fg.EMPTY_GATES["aspect"][:2] == ("range", (0.5, 2.6))
           and fg.EMPTY_GATES["iou_below_topline"][:2] == ("min", 0.85), fg.EMPTY_GATES)
     check("[G8] MESH_GATES", fg.MESH_GATES["component_share"][:2] == ("min", 0.98)
           and fg.MESH_GATES["mesh_iou"][:2] == ("min", 0.75), fg.MESH_GATES)

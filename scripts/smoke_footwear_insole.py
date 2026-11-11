@@ -50,7 +50,7 @@ Expected, by hand:
      every number equals [I1] (the fin is vertical -> no ray hit; it sits at z = 0 -> no topline side).
 [I8] analyse(static_glb(pump)) equals analyse_arrays(pump) within float32 (1e-5) and is JSON without NaN.
 (Every float in insole.json is rounded to 7 decimals, so the station-count checks hold to 1e-6.)
-[I9] constants: INSOLE_VERSION 2 (the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
+[I9] constants: INSOLE_VERSION 3 (the shaft block; 2 = the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
      INSOLE_GATES insole_cover min 0.80 / vamp_cover min 0.6 / opening_share min 0.5, BOOT_MARGIN_M 0.03,
      the refusal texts (boot, open, solid).
 [I11] the closed solid wedge (sole alone: side faces only up to h(x), no roof): the top faces up with nothing
@@ -87,6 +87,42 @@ Expected, by hand:
      lowest hit is the sole bottom) — the [I1]-[I3] numbers above are unchanged by this task. (The spec's first
      wording, "within GROUND_SHARE L of the ground", was rejected on the real Business Heels: a pump's waist
      and toe spring hang above the ground — footwear_insole's module docstring has the numbers.)
+
+The SHAFT block (boots plan Task 5, spec 2026-11-11 § 6.1; INSOLE_VERSION 3; the plan's cases [I8]-[I11] are
+[I13]-[I16] here — those labels were taken). The wedge's heel seat (profile at HEEL_SEAT_M / k = 0.04) is
+h(0.04) = 0.09; the throat (the first roofed station in the front half) is x = 0.18; the vamp roof's highest
+point in front of it is h(0.18) + 0.03 = 0.04; a slab is 0.01 L = 0.0026; the slabs run from the mesh's top
+down to max(vamp top, seat + 0.07 / k) — the height a shaft begins to be one.
+[I13] collar + class: wedge(shaft=0.16): the topline behind the throat tops at 0.16 (the shaft walls) ->
+     collar_h_raw = 0.16 - 0.09 = 0.07 (the pump-shaped wedge's insole stands at 0.09 at the heel; measured
+     against the HEEL SEAT, never the station under the wall's top: at station 91, x = 0.099, the insole is
+     0.0508 and a per-station difference would read 0.109 — the heel rise, not the shaft); collar_h_nominal =
+     0.07 x 0.26 / 0.26 = 0.07 -> class none (<= 0.07, the boundary case on purpose; classified on the
+     7-decimal value insole.json stores, 0.16 - 0.09 is 0.07000000000000001 in binary). wedge(shaft=0.26) ->
+     0.17 -> ankle; wedge(shaft=0.45) -> 0.36 -> knee; wedge(shaft=0.60) -> 0.51 -> overknee, refused with
+     OVERKNEE_REFUSED (gate overknee = collar_h_nominal <= 0.48). top_raw = the shaft height in each case
+     (+- one slab, 0.0026): the top slab lies AT the mesh's top and its ring is the walls' top edges.
+[I14] slabs of wedge(shaft=0.26) above the vamp: the slabs start at max(0.04, 0.09 + 0.07) = 0.16 and run to
+     0.26 — every slab between y 0.12 and 0.26 has x in [0, 0.10] (+- 0.005: the shaft walls' extent), z in
+     [-0.04, 0.04], closed True (cut points in all four quadrants about the ring's bbox centre) -> closed_share
+     1.0. wedge(shaft=0.26, open_side=True): above 0.09 (the sole's end face) only the -z wall is cut -> every
+     point at z = -0.04 = the centre -> no quadrant -> every shaft slab open -> closed_share 0.0, top_raw None
+     -> refused SHAFT_OPEN_REFUSED. (The topline of the open-sided wedge is the LOWER side, the pump's
+     h(x) + 0.03: its collar reads 0.03, class none — the slab ceiling is the mesh's top, not the topline,
+     which is how the one-sided wall is seen at all.)
+[I15] wedge(shaft=0.26, cap=True): the cap is 10 x 8 quads = 160 up-facing triangles at y = 0.26 over
+     x in [0, 0.10] x z in [-0.04, 0.04]. strip_cap removes the faces whose centroid lies within the top 2 % of
+     the shaft height, 0.26 - 0.02 x (0.26 - 0.04) = 0.2556 .. up, and whose normal's up component is
+     >= cos 30 deg = 0.866: exactly the 160 cap triangles (the walls are vertical, everything else lies below);
+     cap_removed == 160 in the analysis, 0 after stripping; the insole and topline numbers (profile, topline,
+     nominal, contacts, covers, collar, top_raw, closed_share) are identical with and without the cap — the
+     cap is a candidate hit 0.17 above the heel's insole, farther than TOL from the track, and its edges at
+     z = +-0.03 / 0.04 sit at the walls' own top height.
+[I16] the shaft block of the plain wedge() (no shaft): class none, collar_h_raw = 0.12 - 0.09 = 0.03 (the
+     wall height), slabs == [] (the mesh tops at 0.12 < 0.16), closed_share None (not gated), cap_removed 0;
+     SHAFT_GATES shaft_closed_share min 0.9 / overknee max 0.48; the refusal texts.
+(On 2a54cb70 — INSOLE_VERSION 2 — insole.json has no ``shaft`` block, ``strip_cap`` does not exist and
+wedge(shaft=0.60) passes its gates: [I13]-[I16] fail there on the missing key.)
 """
 import json
 import math
@@ -183,7 +219,7 @@ def main():
     print("[I9] constants")
     check("constants", (fi.INSOLE_VERSION, fi.NOMINAL_LENGTH_M, fi.STATIONS, fi.AIR_SHARE, fi.TOL_SHARE,
                         fi.BOOT_MARGIN_M, fi.DOWN_MAX),
-          (2, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
+          (3, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
     check("INSOLE_GATES", {k: v[:2] for k, v in fi.INSOLE_GATES.items()},
           {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6), "opening_share": ("min", 0.5)})
     check("refusal texts", (fi.BOOT_REFUSED, fi.OPEN_REFUSED, fi.SOLID_REFUSED),
@@ -236,7 +272,7 @@ def main():
     near("vamp_cover", pump["vamp_cover"], 0.810, 0.02)
     near("vamp_cover (station count 74/91)", pump["vamp_cover"], 74 / 91, 1e-6)
     check("gates", (pump["gates"]["ok"], pump["gates"]["reasons"], pump["gates"].get("refusal")), (True, [], None))
-    check("version", pump["version"], 2)
+    check("version", pump["version"], 3)
     near("pump footprint_ground", pump["footprint_ground"], 1.0, 1e-9)
 
     print("[I4] rotated 180 deg about Y")
@@ -310,6 +346,85 @@ def main():
     near("flare shaft_h_raw", flared["shaft_h_raw"], 0.16, 1e-6)
     near("flare profile(0.10)", interp(flared, "profile", 0.10), 0.05, 1e-6)
     check("flare JSON strict", strict_json(flared), True)
+
+    print("[I13] collar height and class")
+    for shaft, collar, cls in ((0.16, 0.07, "none"), (0.26, 0.17, "ankle"), (0.45, 0.36, "knee"),
+                               (0.60, 0.51, "overknee")):
+        res = fi.analyse_arrays(*wedge(shaft=shaft))
+        sh = res["shaft"]
+        near(f"shaft {shaft} collar_h_raw", sh["collar_h_raw"], collar, 1e-6)
+        near(f"shaft {shaft} collar_h_nominal", sh["collar_h_nominal"], collar, 1e-6)
+        check(f"shaft {shaft} class", sh["class"], cls)
+        near(f"shaft {shaft} top_raw", sh["top_raw"], shaft, 0.0026)
+        check(f"shaft {shaft} refusal", (res["gates"]["ok"], res["gates"].get("refusal")),
+              (cls != "overknee", fi.OVERKNEE_REFUSED if cls == "overknee" else None))
+        check(f"shaft {shaft} JSON strict", strict_json(res), True)
+    near("shaft 0.60 overknee metric", fi.analyse_arrays(*wedge(shaft=0.60))["gates"]["overknee"], 0.51, 1e-6)
+
+    print("[I14] tube slabs and the closed share")
+    boot = fi.analyse_arrays(*wedge(shaft=0.26))
+    slabs = [s for s in boot["shaft"]["slabs"] if 0.12 <= s["y"] <= 0.26 + 1e-9]
+    check("boot has slabs above 0.12", len(slabs) >= 2, True)
+    check("boot slabs closed", all(s["closed"] for s in slabs), True)
+    check("boot slabs x in [0, 0.10]", all(abs(s["x_min"]) <= 0.005 and abs(s["x_max"] - 0.10) <= 0.005
+                                           for s in slabs), True)
+    check("boot slabs z in [-0.04, 0.04]", all(abs(s["z_min"] + 0.04) <= 1e-6 and abs(s["z_max"] - 0.04) <= 1e-6
+                                               for s in slabs), True)
+    near("boot closed_share", boot["shaft"]["closed_share"], 1.0, 1e-9)
+    near("boot slab step 0.0026", slabs[0]["y"] - slabs[1]["y"], 0.0026, 1e-9)
+    near("boot top slab at the mesh top", boot["shaft"]["slabs"][0]["y"], 0.26, 1e-9)
+    hole = fi.analyse_arrays(*wedge(shaft=0.26, open_side=True))
+    check("open side: every slab open", (len(hole["shaft"]["slabs"]) >= 2,
+                                         all(not s["closed"] for s in hole["shaft"]["slabs"])), (True, True))
+    near("open side closed_share", hole["shaft"]["closed_share"], 0.0, 1e-9)
+    check("open side top_raw None", hole["shaft"]["top_raw"], None)
+    check("open side refused", (hole["gates"]["ok"], hole["gates"].get("refusal")), (False, fi.SHAFT_OPEN_REFUSED))
+    check("open side class none (the topline is the lower side)", hole["shaft"]["class"], "none")
+    check("open side JSON strict", strict_json(hole), True)
+
+    print("[I15] cap detection and removal")
+    Pcap, Fcap = wedge(shaft=0.26, cap=True)
+    Pb, Fb = wedge(shaft=0.26)
+    check("cap fixture: 160 more faces", len(Fcap) - len(Fb), 160)
+    capped = fi.analyse_arrays(Pcap, Fcap)
+    check("capped cap_removed", capped["shaft"]["cap_removed"], 160)
+    check("uncapped cap_removed", boot["shaft"]["cap_removed"], 0)
+    P2, F2, removed = fi.strip_cap(Pcap, Fcap, capped)
+    check("strip_cap removed", removed, 160)
+    check("strip_cap faces", len(F2), len(Fcap) - 160)
+    n_up = np.cross(P2[F2[:, 1]] - P2[F2[:, 0]], P2[F2[:, 2]] - P2[F2[:, 0]])
+    n_up = n_up[:, 1] / np.linalg.norm(n_up, axis=1)
+    cy = P2[F2].mean(1)[:, 1]
+    check("strip_cap: nothing up-facing left at the top", int(((cy > 0.2556) & (n_up >= 0.866)).sum()), 0)
+    check("strip_cap keeps the walls' top edges", bool(np.isclose(P2[np.unique(F2), 1].max(), 0.26)), True)
+    stripped = fi.analyse_arrays(P2, F2)
+    check("stripped cap_removed 0", stripped["shaft"]["cap_removed"], 0)
+    same_numbers("capped numbers = uncapped", capped, boot, 1e-9)
+    same_numbers("stripped numbers = uncapped", stripped, boot, 1e-9)
+    for key in ("profile", "topline"):
+        same_arrays(f"capped {key}", capped[key], boot[key], 1e-9)
+    for key in ("collar_h_raw", "top_raw", "closed_share"):
+        near(f"capped shaft.{key}", capped["shaft"][key], boot["shaft"][key], 1e-9)
+    check("capped class ankle", capped["shaft"]["class"], "ankle")
+    check("capped gates ok", (capped["gates"]["ok"], capped["gates"].get("refusal")), (True, None))
+    P3, F3, removed3 = fi.strip_cap(Pb, Fb, boot)
+    check("strip_cap on a cap-free boot: nothing", (removed3, len(F3) == len(Fb)), (0, True))
+
+    print("[I16] the plain pump's shaft block")
+    sh = pump["shaft"]
+    check("pump class", sh["class"], "none")
+    near("pump collar_h_raw", sh["collar_h_raw"], 0.03, 1e-6)
+    check("pump slabs", sh["slabs"], [])
+    check("pump closed_share None", sh["closed_share"], None)
+    check("pump top_raw None", sh["top_raw"], None)
+    check("pump cap_removed", sh["cap_removed"], 0)
+    check("pump gates carry the shaft metrics", (pump["gates"]["shaft_closed_share"], pump["gates"]["overknee"]),
+          (None, 0.03))
+    check("SHAFT_GATES", {k: v[:2] for k, v in fi.SHAFT_GATES.items()},
+          {"shaft_closed_share": ("min", 0.9), "overknee": ("max", 0.48)})
+    check("shaft refusal texts", (fi.OVERKNEE_REFUSED, fi.SHAFT_OPEN_REFUSED),
+          ("Over-knee boots are not supported yet", "The boot shaft is not closed"))
+    check("class table", fi.SHAFT_CLASS_M, {"none": 0.07, "ankle": 0.22, "knee": 0.48})
 
     if FAILED:
         print(f"\n{len(FAILED)} check(s) failed: {FAILED}")

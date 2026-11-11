@@ -42,6 +42,32 @@ Blender:
   keeps 93.1 % of the heels' columns, x 0.013 … 0.996 L (the round-1 footprint ran 0.004 … 1.0 L), the ball
   station's width unchanged and the median station 2.1 mm (one rim column of rounded sole edge) narrower;
   ``insole_cover`` 0.890 -> 0.929. Every synthetic shoe (pump, clog, sandal, shaft) reads 1.0.
+- **Shaft block** (``shaft``, INSOLE_VERSION 3 — boots spec § 6.1), measured in the shoe frame:
+  ``collar_h_raw`` = the highest topline over the stations behind the THROAT (the first roofed station in the
+  front half, ``footwear_cut``'s rule; every station without one) minus the insole at the HEEL SEAT. The
+  spec's first wording, a per-station "wall top − insole profile", was dropped on the pump-shaped boot of the
+  smoke fixtures: under a flat-topped shaft the insole falls from the heel seat to the ball, so the per-station
+  difference at the shaft's front reads the shaft PLUS the heel rise (0.109 instead of 0.07 on a 16-cm shaft,
+  one class up); the spec's own example — the pump's 13.1 − 9.1 cm, its counter above its heel seat — is the
+  heel-seat reading. ``collar_h_nominal`` = ``collar_h_raw`` × k; ``class`` from the 7-decimal nominal value
+  insole.json stores (``SHAFT_CLASS_M``: ``none`` ≤ 0.07, ``ankle`` ≤ 0.22, ``knee`` ≤ 0.48, else
+  ``overknee`` — refused, ``OVERKNEE_REFUSED``, gate ``overknee``). The class is a label (Wardrobe, model
+  overview); the fit treats every shaft alike.
+  **Tube slabs**: horizontal planes every ``SHAFT_SLAB_SHARE`` L from the mesh's top down to max(the vamp
+  roof's highest point in front of the throat, heel seat + ``SHAFT_CLASS_M["none"]`` / k) — the height a shaft
+  begins to be one; a shoe whose walls stay under it has no slabs and its ``closed_share`` is ``None`` (not
+  gated). The ceiling is the mesh's highest point, not the topline: the topline is the LOWER side and a shaft
+  with one wall missing would otherwise not be looked at. Per slab the ring of edge-cut points: ``x_min`` /
+  ``x_max`` / ``z_min`` / ``z_max`` and ``closed`` = cut points in all four quadrants about the ring's bbox
+  centre (strict). ``top_raw`` = the highest closed slab (``None`` without one), ``closed_share`` = closed
+  slabs / slabs at or below it (0.0 without one) — gate ``shaft_closed_share`` ≥ 0.9, refusal
+  ``SHAFT_OPEN_REFUSED`` (an open-sided shaft is a mesher hole).
+  **Cap**: a single-view mesher closes an opening it cannot see; the faces whose centroid lies within the top
+  ``CAP_TOP_SHARE`` of the shaft height — from ``top_raw − CAP_TOP_SHARE × (top_raw − vamp_top_raw)`` up,
+  nothing of a shaft lies above its top but a cap — and whose normal's up component is ≥ ``CAP_UP_MIN``
+  (cos 30°) are the cap: ``cap_removed`` counts them, ``strip_cap`` takes them out of the arrays and the insole
+  step rewrites ``prepared.glb`` without them (``footwear_source._step_insole``); the shaft's material is
+  marked double-sided at the fit.
 - **Type gates** (``INSOLE_GATES``): ``insole_cover`` = insole cells within the outsole footprint / its
   cells (refusal ``INSOLE_REFUSED``); ``vamp_cover`` = the share of footprint cells at x >= ``BALL_SHARE`` L whose
   column has a hit above the insole (refusal ``OPEN_REFUSED``); ``opening_share`` = the share of
@@ -74,7 +100,9 @@ import numpy as np
 from app.core.footwear_gates import check_gates
 
 #: Bumped when the analysis changes what it measures (part of the footwear fsig).
-INSOLE_VERSION = 2   # 2: insole_cover and footprint_outline over the outsole footprint (footprint_ground)
+#: 2: insole_cover and footprint_outline over the outsole footprint (footprint_ground);
+#: 3: the shaft block (collar height, class, tube slabs, closed share, cap removal).
+INSOLE_VERSION = 3
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -115,12 +143,27 @@ INSOLE_GATES: Dict[str, Tuple[str, Any, str]] = {
     "vamp_cover": ("min", 0.6, "share of the forefoot footprint under a vamp"),
     "opening_share": ("min", 0.5, "share of the insole stations whose side walls rise above the insole"),
 }
+#: Shaft class by the nominal collar height (metres above the heel seat at NOMINAL_LENGTH_M): a class's upper
+#: bound, inclusive; above the last one the shaft is over-knee (boots spec § 6.1).
+SHAFT_CLASS_M: Dict[str, float] = {"none": 0.07, "ankle": 0.22, "knee": 0.48}
+#: Tube slabs every this share of the length (module docstring).
+SHAFT_SLAB_SHARE = 0.01
+#: The cap band: the top share of the shaft height (top_raw − vamp top) and the up component of a cap face.
+CAP_TOP_SHARE = 0.02
+CAP_UP_MIN = math.cos(math.radians(30.0))
+#: The shaft gates, judged with INSOLE_GATES at the insole step; both are optional for a shoe without a shaft.
+SHAFT_GATES: Dict[str, Tuple[str, Any, str]] = {
+    "shaft_closed_share": ("min", 0.9, "share of the shaft's tube slabs with a closed ring"),
+    "overknee": ("max", SHAFT_CLASS_M["knee"], "nominal collar height above the heel seat (m)"),
+}
 #: The boot gate (judged at the fit): a topline above the ankle joint + this margin.
 BOOT_MARGIN_M = 0.03
 BOOT_REFUSED = "Boots are not supported yet"
 OPEN_REFUSED = "Open shoes and sandals are not supported yet"
 INSOLE_REFUSED = "No insole found in the shoe mesh"
 SOLID_REFUSED = "Solid mesh: no shoe opening found"
+OVERKNEE_REFUSED = "Over-knee boots are not supported yet"
+SHAFT_OPEN_REFUSED = "The boot shaft is not closed"
 
 
 @dataclass
@@ -454,6 +497,123 @@ def _r(v: Any, nd: int = 7) -> Any:
     return v
 
 
+# --- the shaft ----------------------------------------------------------------------------------------------------------
+
+def _slab_rings(p_frame: np.ndarray, faces: np.ndarray, levels: np.ndarray, eps: float) -> List[Dict[str, Any]]:
+    """The tube slabs (module docstring): per height in ``levels`` the ring of edge-cut points of the plane
+    y = level (an edge lying in the plane gives both ends) -> ``{y, x_min, x_max, z_min, z_max, closed}``;
+    the ranges are ``None`` and ``closed`` False for a plane that cuts nothing."""
+    P = np.asarray(p_frame, np.float64).reshape(-1, 3)
+    E = _edges(np.asarray(faces, np.int64).reshape(-1, 3))
+    out: List[Dict[str, Any]] = []
+    if not len(E):
+        return [{"y": float(y), "x_min": None, "x_max": None, "z_min": None, "z_max": None, "closed": False}
+                for y in levels]
+    pa, pb = P[E[:, 0]], P[E[:, 1]]
+    ylo, yhi = np.minimum(pa[:, 1], pb[:, 1]), np.maximum(pa[:, 1], pb[:, 1])
+    dye = pb[:, 1] - pa[:, 1]
+    flat = np.abs(dye) <= eps
+    for y in levels:
+        m = (ylo <= y + eps) & (yhi >= y - eps)
+        slab: Dict[str, Any] = {"y": float(y), "x_min": None, "x_max": None, "z_min": None, "z_max": None,
+                                "closed": False}
+        if m.any():
+            cut = m & ~flat
+            tt = (y - pa[cut, 1]) / dye[cut]
+            pts = [pa[cut] + tt[:, None] * (pb[cut] - pa[cut])]
+            inplane = m & flat
+            if inplane.any():
+                pts += [pa[inplane], pb[inplane]]
+            q = np.concatenate(pts)[:, [0, 2]]
+            lo, hi = q.min(0), q.max(0)
+            c = 0.5 * (lo + hi)
+            dx, dz = q[:, 0] - c[0], q[:, 1] - c[1]
+            closed = bool(((dx > 0) & (dz > 0)).any() and ((dx > 0) & (dz < 0)).any()
+                          and ((dx < 0) & (dz > 0)).any() and ((dx < 0) & (dz < 0)).any())
+            slab.update({"x_min": float(lo[0]), "x_max": float(hi[0]), "z_min": float(lo[1]), "z_max": float(hi[1]),
+                         "closed": closed})
+        out.append(slab)
+    return out
+
+
+def _cap_mask(p_frame: np.ndarray, faces: np.ndarray, top_raw: Optional[float],
+              vamp_top_raw: Optional[float]) -> np.ndarray:
+    """The cap faces (module docstring): centroid height >= ``top_raw − CAP_TOP_SHARE × (top_raw − vamp top)``
+    and the face normal's up component >= ``CAP_UP_MIN``. All False without a closed shaft top."""
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    if top_raw is None or not len(F):
+        return np.zeros(len(F), bool)
+    P = np.asarray(p_frame, np.float64).reshape(-1, 3)
+    base = float(top_raw) if vamp_top_raw is None else float(vamp_top_raw)
+    floor = float(top_raw) - CAP_TOP_SHARE * max(0.0, float(top_raw) - base)
+    n = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
+    norm = np.linalg.norm(n, axis=1)
+    nu = n[:, 1] / np.where(norm > 0, norm, 1.0)
+    cy = P[F][:, :, 1].mean(1)
+    return (cy >= floor) & (nu >= CAP_UP_MIN)
+
+
+def cap_faces(positions: np.ndarray, faces: np.ndarray, insole: Dict[str, Any]) -> np.ndarray:
+    """Boolean mask over ``faces``: the shaft cap of a mesh measured as ``insole`` (``_cap_mask`` in the frame of
+    ``insole`` with its ``shaft.top_raw`` / ``shaft.vamp_top_raw``)."""
+    P = np.asarray(positions, np.float64).reshape(-1, 3)
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    shaft = insole.get("shaft") or {}
+    return _cap_mask(frame_of(insole).to_frame(P), F, shaft.get("top_raw"), shaft.get("vamp_top_raw"))
+
+
+def strip_cap(positions: np.ndarray, faces: np.ndarray, insole: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray, int]:
+    """``(positions, faces, removed)``: the mesh without its shaft cap (``cap_faces``); the vertices the remaining
+    faces use are kept and re-indexed. The arrays come back unchanged (copies) when there is nothing to remove.
+    (``footwear_source._step_insole`` filters the same mask itself to carry the UVs along.)"""
+    P = np.asarray(positions, np.float64).reshape(-1, 3)
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    cap = cap_faces(P, F, insole)
+    removed = int(cap.sum())
+    if not removed:
+        return P.copy(), F.copy(), 0
+    used, inverse = np.unique(F[~cap].reshape(-1), return_inverse=True)
+    return P[used].copy(), inverse.reshape(-1, 3).astype(np.int64), removed
+
+
+def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray, top: np.ndarray,
+                 prof: np.ndarray, cav: np.ndarray, roof: np.ndarray, seat: Optional[float], k: float,
+                 L: float) -> Dict[str, Any]:
+    """The ``shaft`` block of insole.json (module docstring); every length raw but ``collar_h_nominal``."""
+    roofed = ~np.isnan(cav) & (gx > 0.5 * float(gx.max()))
+    behind = gx < float(gx[roofed].min()) if roofed.any() else np.ones(len(gx), bool)
+    vamp_top: Optional[float] = None
+    if roofed.any():
+        front = roof[gx >= float(gx[roofed].min())]
+        if (~np.isnan(front)).any():
+            vamp_top = float(np.nanmax(front))
+    top_behind = top[behind & ~np.isnan(top)]
+    collar = None if seat is None or not len(top_behind) else float(top_behind.max()) - float(seat)
+    nominal = None if collar is None or k != k else collar * k
+    cls = "none"
+    if nominal is not None:
+        rounded = _r(nominal)
+        cls = next((name for name, limit in SHAFT_CLASS_M.items() if rounded <= limit), "overknee")
+    slabs: List[Dict[str, Any]] = []
+    y0 = None if seat is None else max(float(seat) + SHAFT_CLASS_M["none"] / k, vamp_top or -np.inf)
+    eps = 1e-9 * max(L, 1e-12)
+    if y0 is not None and len(used):
+        ymax = float(used[:, 1].max())
+        step = SHAFT_SLAB_SHARE * L
+        n = int(math.floor((ymax - y0 + eps) / step)) + 1 if ymax >= y0 - eps else 0
+        if n > 0:
+            slabs = _slab_rings(pf, F, ymax - step * np.arange(n), eps)
+    closed = [s["closed"] for s in slabs]
+    top_raw = next((s["y"] for s in slabs if s["closed"]), None)
+    closed_share: Optional[float] = None
+    if slabs:
+        below = [c for s, c in zip(slabs, closed) if top_raw is not None and s["y"] <= top_raw + eps]
+        closed_share = float(sum(below) / len(below)) if below else 0.0
+    cap_removed = int(_cap_mask(pf, F, top_raw, vamp_top).sum())
+    return {"collar_h_raw": collar, "collar_h_nominal": nominal, "class": cls, "top_raw": top_raw,
+            "vamp_top_raw": vamp_top, "slabs": slabs, "closed_share": closed_share, "cap_removed": cap_removed}
+
+
 # --- analysis ---------------------------------------------------------------------------------------------------------
 
 def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
@@ -582,13 +742,17 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
     with np.errstate(invalid="ignore"):
         walls = with_prof & (top - prof >= air)
     opening_share = float(walls.sum() / with_prof.sum()) if with_prof.any() else 0.0
-    metrics = {"insole_cover": insole_cover, "vamp_cover": vamp_cover, "opening_share": opening_share}
-    ok, reasons = check_gates(metrics, INSOLE_GATES)
+    shaft = _shaft_block(pf, F, used, gx, top, prof, cav, roof, seat, k, L)
+    metrics = {"insole_cover": insole_cover, "vamp_cover": vamp_cover, "opening_share": opening_share,
+               "shaft_closed_share": shaft["closed_share"], "overknee": shaft["collar_h_nominal"]}
+    ok, reasons = check_gates(metrics, {**INSOLE_GATES, **SHAFT_GATES}, optional=tuple(SHAFT_GATES))
     refusal = None
     if not ok:
         failed = {r.split(" ")[0].rstrip(":") for r in reasons}
-        refusal = (INSOLE_REFUSED if "insole_cover" in failed else SOLID_REFUSED if "opening_share" in failed
-                   else OPEN_REFUSED)
+        refusal = next((text for key, text in (("insole_cover", INSOLE_REFUSED), ("opening_share", SOLID_REFUSED),
+                                               ("vamp_cover", OPEN_REFUSED), ("overknee", OVERKNEE_REFUSED),
+                                               ("shaft_closed_share", SHAFT_OPEN_REFUSED)) if key in failed),
+                       OPEN_REFUSED)
 
     finite_top = top[~np.isnan(top)]
     # overlay polylines in the mesh's own coordinates
@@ -614,6 +778,7 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
         "opening_share": opening_share,
         "cavity_end_x": cavity_end,
         "shaft_h_raw": float(finite_top.max()) if len(finite_top) else None,
+        "shaft": shaft,
         "contacts": contacts,
         "nominal": nominal,
         "gates": {"ok": ok, "reasons": reasons, **metrics, "refusal": refusal},

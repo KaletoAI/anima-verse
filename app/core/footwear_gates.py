@@ -20,10 +20,12 @@ import numpy as np
 #: Gates of the empty-shoe matte (start values, calibrated in P1 of round 1 on pumps; the upper aspect bound
 #: 2.4 -> 2.6 in P1 of the boots round, 2026-11-11: the Qwen side-view edits of the Business Shoes — a cap-toe
 #: Derby, ``item_6cc8e8ae`` — read 2.448 / 2.430 (two deliveries, length 864 / 853 px over height 353 / 351),
-#: a men's flat is long and low; the 3/4-view item image itself reads 2.102. A 3.0 rectangle still refuses).
+#: a men's flat is long and low; the 3/4-view item image itself reads 2.102. A 3.0 rectangle still refuses.
+#: The lower bound 1.1 -> 0.5 in P2 of the boots round (spec 2026-11-11 § 6.1): a knee boot's side view reads
+#: about 0.7; the leg rule and ``single_share`` keep refusing a leg or a pair).
 EMPTY_GATES: Dict[str, Tuple[str, Any, str]] = {
     "single_share": ("min", 0.98, "area share of the largest matte component"),
-    "aspect": ("range", (1.1, 2.6), "side-view length / height of the shoe"),
+    "aspect": ("range", (0.5, 2.6), "side-view length / height of the shoe"),
     "iou_below_topline": ("min", 0.85, "silhouette IoU with the item image below the empty shoe's top edge"),
 }
 #: Gates of the prepared shoe mesh. ``component_share`` is the largest
