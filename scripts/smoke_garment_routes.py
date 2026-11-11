@@ -89,7 +89,17 @@ Fixture (expected values derived by hand):
     prepared.glb, insole.json -> each comes back 200 with its bytes;
     empty?attempt=1 -> the try1 bytes, ?attempt=2 (absent) -> 404; mesh
     model/gltf-binary with ETag "<content_version>", insole
-    application/json. 400: which "nope", attempt 7, cutout?attempt=1.
+    application/json. 400: which "nope", attempt 7, cutout?attempt=1. The
+    panel's limits: empty aspect range 0.5 .. 2.6 (boots plan Task 5, the
+    knee boot's side view), mesh_iou >= 0.75 (round-1 P3 calibration), insole
+    cover >= 0.8 — a stale pin of 1.1 .. 2.4 / 0.8 sat here until Task 10.
+[10] Outfit options (boots plan Task 10, app/core/outfit_options.py): POST
+    /characters/Demo/outfit-options {boot_hem: "sideways"} -> 400; {boot_hem:
+    "tucked"} -> 200 {boot_hem "tucked", applicable {applicable False — Demo
+    wears no boot — , mode "tucked"}}; GET -> boot_hem "tucked". The route is
+    character-scoped like an equip, NOT admin-only: the PLAYER session (Demo
+    among its allowed characters) sets {boot_hem: "over"} -> 200 and null ->
+    200 boot_hem None; Nobody -> 404.
     404: Other's shoe_other for Demo, hair_demo (no footwear) on the
     footwear image route, traversal item "..%2Fsecret".
     GET /characters/Demo/garments/shoe_demo -> 200 {kind "footwear",
@@ -435,12 +445,31 @@ def main() -> int:
             check("footwear limits", (sorted(lim), (lim.get("empty") or {}).get("aspect"),
                                       (lim.get("mesh") or {}).get("mesh_iou"),
                                       (lim.get("insole") or {}).get("insole_cover")),
-                  (["empty", "fit", "insole", "mesh"], {"op": "range", "value": [1.1, 2.4]},
-                   {"op": "ge", "value": 0.8}, {"op": "ge", "value": 0.8}))
+                  (["empty", "fit", "insole", "mesh"], {"op": "range", "value": [0.5, 2.6]},
+                   {"op": "ge", "value": 0.75}, {"op": "ge", "value": 0.8}))
             check("footwear rows", [row.get("label") for row in body.get("steps") or []],
                   ["Item image", "Empty shoe", "Cut-out", "Mesh", "Insole", "Fit"])
             r = client.post("/characters/Demo/garments/shoe_demo/run", json={"view": "front"})
             check("footwear view 400", r.status_code, 400)
+
+            # --- [10] outfit options -----------------------------------------------
+            print("[10] outfit options: the boot hem per outfit")
+            r = client.post("/characters/Demo/outfit-options", json={"boot_hem": "sideways"})
+            check("hem sideways 400", r.status_code, 400)
+            r = client.post("/characters/Demo/outfit-options", json={"boot_hem": "tucked"})
+            body = r.json() if r.status_code == 200 else {}
+            check("hem tucked 200", (r.status_code, body.get("boot_hem"), (body.get("applicable") or {}).get("applicable"),
+                                     (body.get("applicable") or {}).get("mode")), (200, "tucked", False, "tucked"))
+            r = client.get("/characters/Demo/outfit-options")
+            check("hem GET", (r.status_code, (r.json() if r.status_code == 200 else {}).get("boot_hem")), (200, "tucked"))
+            client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_USER])
+            r = client.post("/characters/Demo/outfit-options", json={"boot_hem": "over"})
+            check("player sets the hem (character-scoped, like an equip)", (r.status_code, (r.json() if r.status_code == 200 else {}).get("boot_hem")),
+                  (200, "over"))
+            r = client.post("/characters/Demo/outfit-options", json={"boot_hem": None})
+            check("player null 200", (r.status_code, (r.json() if r.status_code == 200 else {}).get("boot_hem")), (200, None))
+            check("hem Nobody 404", client.get("/characters/Nobody/outfit-options").status_code, 404)
+            client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_ADMIN])
 
         gate.set()
         garments.wait_idle(30)

@@ -4483,6 +4483,8 @@ def _play_set_outfit_sync(user, body: Any):
         apply_equipped_pieces(avatar, pieces=pieces_by_slot,
                               remove_slots=list(target.get("remove_slots") or []),
                               source="play_outfit")
+        from app.core.outfit_options import apply_saved_options
+        apply_saved_options(avatar, target)   # the set's boot hem (boots plan Task 10)
     # Direct action is world-visible: narrator line -> NPCs can react.
     try:
         from app.core.perception import announce_action

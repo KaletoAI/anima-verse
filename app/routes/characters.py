@@ -1850,6 +1850,10 @@ class GarmentEquippedRequest(BaseModel):
     equipped: bool
 
 
+class OutfitOptionsRequest(BaseModel):
+    boot_hem: Optional[str] = None
+
+
 class HairMethodRequest(BaseModel):
     # Plain string, validated by garment_hair.set_hair_method (400, not 422).
     method: str = ""
@@ -2217,6 +2221,39 @@ def set_character_hair_equipped(character_name: str, body: GarmentEquippedReques
     if not saved:
         raise HTTPException(status_code=500, detail="Saving the character profile failed")
     return {"equipped": bool(body.equipped)}
+
+
+@router.get("/{character_name}/outfit-options")
+def get_character_outfit_options(character_name: str) -> Dict[str, Any]:
+    """The per-outfit options (``app.core.outfit_options``, boots spec § 8.2): ``{boot_hem, applicable}`` —
+    ``boot_hem`` the stored choice (``tucked`` / ``over`` / null = over), ``applicable`` what the Wardrobe shows
+    (``hem_applicable``: a worn boot and worn own-mesh trousers). Character-scoped like the equip routes:
+    admin and the character's player."""
+    from app.core.outfit_options import BOOT_HEM_KEY, OPTIONS_KEY, hem_applicable
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    profile = get_character_profile(character_name) or {}
+    stored = (profile.get(OPTIONS_KEY) or {}).get(BOOT_HEM_KEY) if isinstance(profile.get(OPTIONS_KEY), dict) else None
+    return {"boot_hem": stored, "applicable": hem_applicable(character_name, profile=profile)}
+
+
+@router.post("/{character_name}/outfit-options")
+def set_character_outfit_options(character_name: str, body: OutfitOptionsRequest) -> Dict[str, Any]:
+    """Store the boot hem for the worn outfit: ``{boot_hem: "tucked" | "over" | null}`` (null = the default,
+    over) → 200 ``{boot_hem, applicable}``; 400 for another value. The served model is re-assembled (no GPU
+    work: the trousers' layered fit is CPU). Same rights as an equip."""
+    from app.core import garment_assembly
+    from app.core.outfit_options import hem_applicable, normalise_hem, set_boot_hem
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    try:
+        mode = normalise_hem(body.boot_hem)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not set_boot_hem(character_name, mode):
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    garment_assembly.schedule(character_name)
+    return {"boot_hem": mode, "applicable": hem_applicable(character_name, profile=get_character_profile(character_name) or {})}
 
 
 @router.post("/{character_name}/garments/{item_id}/run", status_code=202)

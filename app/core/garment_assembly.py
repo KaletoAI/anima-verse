@@ -342,13 +342,26 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
         out.append({"item_id": item_id, "kind": kind, "fsig": fsig, "fit": fit[0],
                     "low": low if low.is_file() else None, "record": fit[1]})
     layered = [g for g in out if g["kind"] == CLOTHING and g["fit"] is not None]
-    if bare_meta is not None and len(layered) > 1:
+    # The boot hem (``outfit_options``, boots spec § 8): the worn ``bottom`` piece of the signature over the
+    # chosen boot's shaft — the mode is read from the PROFILE (an assembly input, never a signature input).
+    hem: Optional[Dict[str, Any]] = None
+    if bare_meta is not None and layered:
+        from app.core import outfit_options
+        boot = next((g for g in out if g["kind"] == FOOTWEAR and g["fit"] is not None
+                     and outfit_options.is_boot_record(g["record"])), None)
+        trousers_id = str(((bare_meta or {}).get("pieces") or {}).get(outfit_options.TROUSERS_SLOT) or "")
+        trousers = next((g for g in layered if g["item_id"] == trousers_id), None)
+        if boot is not None and trousers is not None \
+                and outfit_options.hem_eligible(boot["record"], trousers["record"])[0]:
+            hem = {"boot": boot["item_id"], "fit": boot["fit"], "trousers": trousers_id,
+                   "mode": outfit_options.boot_hem(profile)}
+    if bare_meta is not None and (len(layered) > 1 or hem is not None):
         from app.core import garment_layers
         from app.core.base_body import mesh_items_intended
         args = dict(base_sha=str(bare_meta.get("body_sha256") or "") if on_body else base[1], profile=profile,
                     intended=mesh_items_intended(bare_meta),
                     fits={g["item_id"]: (g["fit"], g["record"]) for g in layered},
-                    **({"body": body_id} if on_body else {}))
+                    **({"body": body_id} if on_body else {}), hem=hem)
         items = [g["item_id"] for g in layered]
         layers = (garment_layers.ensure if build_layers else garment_layers.plan)(character_name, items, **args)
         for g in layered:
@@ -357,6 +370,9 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
                 g.update(fit=entry["source"], low=entry["low"],
                          over={"lsig": entry["lsig"], "items": sorted(entry["inner"]),
                                "pending": entry["pending"], "without": entry["without"]})
+                if entry.get("hem"):
+                    g["hem"] = {"boot": entry["hem"]["boot"], "mode": entry["hem"]["mode"],
+                                "fallback": entry["hem"]["fallback"]}
     return out
 
 
@@ -408,7 +424,8 @@ def _source(garment: Dict[str, Any], tier: str) -> Path:
 def _state(wanted: List[Dict[str, Any]], tier: str) -> Dict[str, Dict[str, Any]]:
     """The sidecar ``garments`` map an assembly of ``tier`` must carry — a
     layered piece adds ``over`` (its ``lsig``) and, while its layered fit is
-    missing, ``pending`` (so the assembly is rebuilt once it exists)."""
+    missing, ``pending`` (so the assembly is rebuilt once it exists); trousers
+    over a boot add ``hem`` ``{mode, lsig, fallback}`` (boots spec § 8.2)."""
     out: Dict[str, Dict[str, Any]] = {}
     for g in wanted:
         if g["fit"] is None:
@@ -421,6 +438,10 @@ def _state(wanted: List[Dict[str, Any]], tier: str) -> Dict[str, Dict[str, Any]]
             entry["over"] = over["lsig"]
             if over["pending"]:
                 entry["pending"] = True
+        hem = g.get("hem")
+        if hem:
+            # the boot hem (``outfit_options``): a toggle or a fallback changes the state, so ``_current`` rebuilds
+            entry["hem"] = {"mode": hem["mode"], "lsig": over["lsig"] if over else "", "fallback": hem.get("fallback")}
         out[g["item_id"]] = entry
     return out
 

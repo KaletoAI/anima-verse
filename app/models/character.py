@@ -3009,13 +3009,15 @@ def _migrate_outfits(outfits: list) -> list:
     migrated = []
     for o in outfits:
         if "locations" in o:
-            # Already migrated: ensure id, image and excluded_locations exist.
+            # Already migrated: ensure id, image, excluded_locations and options exist.
             if not o.get("id"):
                 o["id"] = uuid.uuid4().hex[:8]
             if "image" not in o:
                 o["image"] = ""
             if "excluded_locations" not in o:
                 o["excluded_locations"] = []
+            if not isinstance(o.get("options"), dict):
+                o["options"] = {}   # a row from before the per-outfit options (boots plan Task 10)
             migrated.append(o)
             continue
         # Old format: {location, activity, outfit}
@@ -3027,6 +3029,7 @@ def _migrate_outfits(outfits: list) -> list:
             "activities": [o["activity"]] if o.get("activity") else [],
             "excluded_locations": [],
             "image": "",
+            "options": {},
         })
     return migrated
 
@@ -3363,11 +3366,28 @@ def _next_outfit_name(outfits: List[Dict]) -> str:
     return f"Outfit{idx}"
 
 
+def _outfit_options(outfit_data: Dict, character_name: str, *, live: bool) -> Dict[str, Any]:
+    """The per-outfit ``options`` of a saved set (``app.core.outfit_options``): what ``outfit_data`` carries
+    (only the known keys), else — for a new set, ``live`` — the character's live value, so a saved outfit
+    reproduces the hem it was saved with."""
+    from app.core.outfit_options import BOOT_HEM_KEY, boot_hem, normalise_hem
+    given = outfit_data.get("options")
+    if isinstance(given, dict):
+        try:
+            return {BOOT_HEM_KEY: normalise_hem(given.get(BOOT_HEM_KEY))}
+        except ValueError:
+            return {BOOT_HEM_KEY: None}
+    if live:
+        return {BOOT_HEM_KEY: boot_hem(get_character_profile(character_name) or {})}
+    return {}
+
+
 def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
     """Add or update an outfit.
 
-    outfit_data: {id?, name, outfit, locations[], activities[]}
-    Return the outfit ID."""
+    outfit_data: {id?, name, outfit, locations[], activities[], pieces[], remove_slots[], options{boot_hem}}
+    (``options``: the per-outfit options of ``app.core.outfit_options``; a new set without them stores the
+    character's live value). Return the outfit ID."""
     outfits = get_character_outfits(character_name)
     outfit_id = outfit_data.get("id", "")
 
@@ -3389,6 +3409,8 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
                     existing["pieces"] = list(outfit_data["pieces"] or [])
                 if "remove_slots" in outfit_data:
                     existing["remove_slots"] = list(outfit_data["remove_slots"] or [])
+                if "options" in outfit_data:
+                    existing["options"] = _outfit_options(outfit_data, character_name, live=False)
                 # Dead key of the abolished per-slot colour override.
                 existing.pop("pieces_colors", None)
                 save_character_outfits(character_name, outfits)
@@ -3410,6 +3432,7 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
         "activities": outfit_data.get("activities", []),
         "excluded_locations": outfit_data.get("excluded_locations", []),
         "image": outfit_data.get("image", ""),
+        "options": _outfit_options(outfit_data, character_name, live=True),
         "created_at": outfit_data.get("created_at", utc_now_iso()),
     })
     save_character_outfits(character_name, outfits)

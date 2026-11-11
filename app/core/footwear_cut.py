@@ -687,10 +687,36 @@ def _cut_side(prim: Prim, desc: Dict[str, Any], joints: Dict[str, np.ndarray],
     side = _Side(desc)
     m = _Map(desc, joints, prim)
     P = np.asarray(prim.positions, np.float64)
+    g = side.g(m.to_cut(P))
+    return _remove_and_bisect(prim, g, lambda a, b, ga, gb: _edge_roots(side, m, P, a, b, ga, gb), touched)
+
+
+def plane_cut(prim: Prim, *, y_m: float) -> Tuple[Prim, Dict[str, Any]]:
+    """``prim`` with everything below the horizontal plane ``y = y_m`` (the primitive's own bind space, metres)
+    removed and the crossing faces bisected ON the plane — the removal + bisection of ``apply_cut`` (steps 3–4)
+    with ``g = y − y_m`` and the exact secant root (``g`` is linear along an edge); attributes, morph targets
+    and skinning lerp as there, the normals of the touched vertices are recomputed. Returns ``(prim, stats)``
+    with ``removed_faces`` / ``bisected_faces`` / ``new_vertices``. Boots spec § 8.1: the trouser leg tucked
+    into a boot is cut at the shaft top minus the reserve (``garment_layers``); the plane rides the bind pose —
+    the cut vertices keep the trousers' own weights (Leg about the shin), so it moves with the leg."""
+    P = np.asarray(prim.positions, np.float64)
+    g = P[:, 1] - float(y_m)
+    out, stats, touched = _remove_and_bisect(prim, g, lambda a, b, ga, gb: ga / (ga - gb),
+                                             np.zeros(len(P), bool))
+    if "NORMAL" in out.attributes and touched.any():
+        _recompute_normals(out.positions, out.faces, out.attributes["NORMAL"], np.nonzero(touched)[0])
+    return out, dict(stats)
+
+
+def _remove_and_bisect(prim: Prim, g: np.ndarray, roots: Any,
+                       touched: np.ndarray) -> Tuple[Prim, Dict[str, int], np.ndarray]:
+    """Removal + bisection of ``prim`` by the signed distance ``g`` per vertex (negative = removed; module
+    docstring steps 3–4): ``roots(a, b, ga, gb)`` gives ``t`` per crossing edge (removed ``a`` → kept ``b``)
+    where ``g`` is 0 — the cut side's secant + bisection in its cut frame, the exact secant for a plane."""
+    P = np.asarray(prim.positions, np.float64)
     F = np.asarray(prim.faces, np.int64)
     J = np.asarray(prim.joints, np.int64)
     W = np.asarray(prim.weights, np.float64)
-    g = side.g(m.to_cut(P))
     removed = g < -REMOVE_EPS_M
     rf = removed[F]
     n_rem = rf.sum(axis=1)
@@ -734,7 +760,7 @@ def _cut_side(prim: Prim, desc: Dict[str, Any], joints: Dict[str, np.ndarray],
             tri_edges[i] = (edge(b, c), edge(a, c))      # n_bc, n_ca
     ea = np.array([e[0] for e in edges], np.int64)
     eb = np.array([e[1] for e in edges], np.int64)
-    t = _edge_roots(side, m, P, ea, eb, g[ea], g[eb]) if len(edges) else np.zeros(0)
+    t = np.asarray(roots(ea, eb, g[ea], g[eb]), np.float64) if len(edges) else np.zeros(0)
     n_old = len(P)
     kept = ~removed
     new_index = np.full(n_old, -1, np.int64)

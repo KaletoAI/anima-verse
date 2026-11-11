@@ -36,12 +36,32 @@ is never valid on another (its record's body sha differs).
 Who builds: the garment assembly (``garment_assembly.assemble`` → ``_wanted(build_layers=True)``) before it
 grafts — serving (``served``) only reads (``plan``): a missing layered fit serves the body fit, marks the
 assembly ``pending`` and asks for a build.
+
+**Trousers over a boot — the hem** (boots spec ``docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md``
+§ 8, plan Task 10; ``app.core.outfit_options``). When the outfit wears a split boot and own-mesh trousers (no
+skirt), the assembly hands ``plan`` / ``ensure`` a ``hem`` = ``{boot, fit, trousers, mode}``: the boot's two SHAFT
+nodes of its fit GLB (``garment_footwear.node_name(item, side, "shaft")`` — never the foot part, whose bind
+geometry is rotated back by the extension) become an inner piece of the trousers, keyed ``inner[boot]`` = the
+sha256 of the shaft nodes' arrays (``shaft_sha``), so a refit of the boot invalidates the file; ``mode`` goes into
+the ``lsig`` (``layer_sig(inner, mode=…, plane_m=…)``) — a toggle is another file, flipping back serves the cached
+one. ``over`` (the default): the trousers are ``layer_over``-ed with the shafts among the inners. ``tucked``: the
+trousers (layered over their inner clothing first) are cut by ``footwear_cut.plane_cut`` at ``plane_m`` = the
+shaft nodes' top (bind space) − ``TUCK_RESERVE_M`` (0.03: the hem ends inside the collar and never shows when the
+knee bends); gate ``tucked_poke`` = of the remaining trouser vertices between the plane and the shaft top, the
+share outside the shaft's cross-section at the plane (``footwear_insole.opening_polygon`` of either shaft) —
+above ``TUCKED_POKE_MAX`` (1 %) the pair cannot be tucked (nor in reality: there is no inward layering), the
+``over`` geometry is built under the tucked ``lsig`` instead and the record says ``hem.fallback = "too_wide"``
+(the Wardrobe warning ``outfit_options.TOO_WIDE_WARNING``). The record's ``hem`` = ``{mode, built, plane_m,
+tucked_poke, fallback, boot, shaft_sha}``; ``plan`` returns it per entry (``hem``) and the assembly's ``_state``
+carries ``{mode, lsig, fallback}``, so a toggle rebuilds the served model.
 """
 import hashlib
 import json
 import threading
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from app.core.log import get_logger
 
@@ -51,6 +71,14 @@ logger = get_logger("garment_layers")
 LAYER_VERSION = 1
 #: Layered fits kept per (item, fsig) — inner sets an outfit switches between.
 LAYER_KEEP = 4
+#: A tucked trouser leg is cut this far under the boot shaft's top (metres; spec § 8.1).
+TUCK_RESERVE_M = 0.03
+#: Tucked: the largest share of the remaining trouser vertices under the shaft top that may stand outside the
+#: shaft — above it the pair falls back to ``over`` (``HEM_FALLBACK_TOO_WIDE``).
+TUCKED_POKE_MAX = 0.01
+HEM_FALLBACK_TOO_WIDE = "too_wide"
+#: ``tucked_poke`` reads the trouser vertices between the plane and the shaft top with this tolerance (metres).
+HEM_BAND_EPS_M = 1e-9
 
 _lock = threading.Lock()
 # (character, item, fsig, lsig, body fit sha256, base model sha256) -> the error of a build that failed: not
@@ -64,10 +92,54 @@ def _failure_key(character_name: str, item_id: str, entry: Dict[str, Any],
     return character_name, item_id, entry["fsig"], entry["lsig"], _sha(entry["fit"]), base_sha
 
 
-def layer_sig(inner: Dict[str, str]) -> str:
-    """``lsig`` of a layered fit over ``inner`` (item -> sha256 of its served full-tier GLB)."""
-    payload = json.dumps({"version": LAYER_VERSION, "inner": dict(sorted(inner.items()))}, sort_keys=True)
-    return hashlib.md5(payload.encode("utf-8")).hexdigest()[:12]
+def layer_sig(inner: Dict[str, str], *, mode: str = "", plane_m: Optional[float] = None) -> str:
+    """``lsig`` of a layered fit over ``inner`` (item -> sha256 of its served full-tier GLB; a boot: its shaft
+    nodes' ``shaft_sha``). ``mode`` (the hem, ``over`` / ``tucked``) and ``plane_m`` (the tucked cut's height,
+    6 decimals) enter the payload only when given, so a plain layer's lsig is unchanged."""
+    payload: Dict[str, Any] = {"version": LAYER_VERSION, "inner": dict(sorted(inner.items()))}
+    if mode:
+        payload["mode"] = str(mode)
+    if plane_m is not None:
+        payload["plane_m"] = round(float(plane_m), 6)
+    return hashlib.md5(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+
+
+def shaft_meshes(fit_bytes: bytes, boot_item: str) -> List[Any]:
+    """The boot's shaft nodes (both sides, ``garment_footwear.node_name(…, "shaft")``) of a footwear fit GLB as
+    ``GarmentMesh`` objects, in side order; [] when the fit has no shaft node (a shoe)."""
+    from app.core import glb_mesh
+    from app.core.footwear_fit import SIDES
+    from app.core.garment_footwear import node_name
+    out = []
+    for side in SIDES:
+        try:
+            out.append(glb_mesh.garment_arrays(fit_bytes, node_prefix=node_name(boot_item, side, "shaft"), exact=True))
+        except ValueError:
+            continue
+    return out
+
+
+def shaft_sha(meshes: Sequence[Any]) -> str:
+    """sha256 over the shaft nodes' arrays (positions, indices, joints, weights, in side order) — what a refit of
+    the boot changes; "" without a shaft."""
+    if not meshes:
+        return ""
+    h = hashlib.sha256()
+    for g in meshes:
+        for arr in (g.positions, g.indices, g.joints, g.weights):
+            a = np.ascontiguousarray(np.asarray(arr))
+            h.update(str(a.dtype).encode()); h.update(str(a.shape).encode()); h.update(a.tobytes())
+    return h.hexdigest()
+
+
+def _hem_inputs(hem: Dict[str, Any]) -> Dict[str, Any]:
+    """The shaft meshes of a ``hem`` (``{boot, fit, trousers, mode}``), their sha and the tucked plane height:
+    ``{meshes, sha, top_m, plane_m}``; ``meshes`` [] when the boot fit carries no shaft node."""
+    meshes = shaft_meshes(Path(hem["fit"]).read_bytes(), str(hem["boot"]))
+    top = max((float(np.asarray(g.positions, np.float64)[:, 1].max()) for g in meshes if len(g.positions)),
+              default=None)
+    return {"meshes": meshes, "sha": shaft_sha(meshes), "top_m": top,
+            "plane_m": None if top is None else top - TUCK_RESERVE_M}
 
 
 def _sha(path: Optional[Path]) -> str:
@@ -93,7 +165,7 @@ def _valid(record: Dict[str, Any], *, lsig: str, base_sha: str, base_fit_sha: st
 def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
          profile: Optional[Dict[str, Any]] = None, intended: Iterable[str] = (),
          fits: Optional[Dict[str, Tuple[Path, Dict[str, Any]]]] = None,
-         body: str = "") -> Dict[str, Dict[str, Any]]:
+         body: str = "", hem: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     """What to serve per own-mesh piece of an outfit — read only, never builds.
 
     ``item_ids``: the pieces worn as meshes (with an accepted body fit on ``base_sha``; ``fits`` may hand those
@@ -104,11 +176,21 @@ def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
     ``low/`` tier, ``low`` None without one), ``lsig`` "" for a piece over nothing, ``inner`` item -> sha256 of the
     inner pieces' served full tier, ``pending`` True when the layered fit is missing, ``without`` the intended
     pieces under it without a fit. ``body``: an outfit body id — ``base_sha`` is then that body's sha256 and
-    ``fits`` MUST be its body fits (``garments.body_fit``; never looked up here), the layered fits are that body's."""
+    ``fits`` MUST be its body fits (``garments.body_fit``; never looked up here), the layered fits are that body's.
+
+    ``hem`` (module docstring): ``{boot, fit, trousers, mode}`` — the boot's shaft nodes become an inner piece of
+    ``trousers`` (``inner[boot]`` = ``shaft_sha``), ``mode`` and the tucked plane enter its ``lsig``, and the entry
+    carries ``hem`` = ``{boot, mode, plane_m, top_m, fit, fallback}`` (``fallback`` from the stored record, None
+    while pending). A boot fit without a shaft node is ignored."""
     from app.core import body_slots, garment_set, garment_store
     pieces = sorted({str(i) for i in item_ids if i})
     if not pieces or not base_sha:
         return {}
+    hem_in: Optional[Dict[str, Any]] = None
+    if hem and str(hem.get("trousers") or "") in pieces and hem.get("fit") and hem.get("boot"):
+        inputs = _hem_inputs(hem)
+        if inputs["meshes"]:
+            hem_in = {**hem, **inputs}
     if fits is None:
         if body:
             raise ValueError("the fits on an outfit body are handed in (garments.body_fit)")
@@ -134,15 +216,25 @@ def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
             "low": body_low if body_low.is_file() else None, "lsig": "", "inner": {}, "pending": False,
             "without": [u for u in layers["under"].get(item_id, []) if u not in fits]}
         below = [u for u in layers["under"].get(item_id, []) if u in out]
-        if below:
-            inner = {u: _sha(out[u]["source"]) for u in below}
-            lsig = layer_sig(inner)
+        inner = {u: _sha(out[u]["source"]) for u in below}
+        mode, plane_m = "", None
+        if hem_in is not None and item_id == str(hem_in["trousers"]):
+            inner[str(hem_in["boot"])] = hem_in["sha"]
+            mode = str(hem_in["mode"])
+            plane_m = hem_in["plane_m"] if mode == "tucked" else None
+            entry["hem"] = {"boot": str(hem_in["boot"]), "mode": mode, "plane_m": plane_m, "top_m": hem_in["top_m"],
+                            "fit": Path(hem_in["fit"]), "fallback": None}
+        if inner:
+            lsig = layer_sig(inner, mode=mode, plane_m=plane_m)
             path = garment_store.garment_path(character_name, item_id, fsig, "layer", lsig=lsig, body=body)
             low = garment_store.garment_path(character_name, item_id, fsig, "layer_low", lsig=lsig, body=body)
             entry.update(lsig=lsig, inner=inner)
-            if path.is_file() and _valid(garment_store.read_record(path.with_suffix(".json")), lsig=lsig,
-                                         base_sha=base_sha, base_fit_sha=_sha(fit), inner=inner, body=body):
+            record = garment_store.read_record(path.with_suffix(".json")) if path.is_file() else {}
+            if path.is_file() and _valid(record, lsig=lsig, base_sha=base_sha, base_fit_sha=_sha(fit), inner=inner,
+                                         body=body):
                 entry.update(source=path, low=low if low.is_file() else None)
+                if "hem" in entry:
+                    entry["hem"]["fallback"] = (record.get("hem") or {}).get("fallback")
             else:
                 entry["pending"] = True
         out[item_id] = entry
@@ -152,18 +244,18 @@ def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
 def ensure(character_name: str, item_ids: Iterable[str], *, base_sha: str,
            profile: Optional[Dict[str, Any]] = None, intended: Iterable[str] = (),
            fits: Optional[Dict[str, Tuple[Path, Dict[str, Any]]]] = None,
-           body: str = "") -> Dict[str, Dict[str, Any]]:
+           body: str = "", hem: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
     """``plan`` after building every missing layered fit, inner → outer (each build changes the inner sha its
     outer pieces are keyed by, so the plan is taken again after it). A build that fails is logged, remembered
-    for its inputs and left ``pending`` (the piece keeps its body fit). Serialised per character. ``body`` as in
-    ``plan``."""
+    for its inputs and left ``pending`` (the piece keeps its body fit). Serialised per character. ``body`` and
+    ``hem`` as in ``plan``."""
     from app.core.keyed_lock import keyed_lock
     pieces = sorted({str(i) for i in item_ids if i})
     intended = sorted({str(i) for i in intended or () if i})
     with keyed_lock("garment_layers", character_name):
         tried: set = set()
         current = plan(character_name, pieces, base_sha=base_sha, profile=profile, intended=intended, fits=fits,
-                       body=body)
+                       body=body, hem=hem)
         _log_cycles(character_name, pieces, intended)
         for _ in range(len(current) + 1):
             todo = next((i for i, e in current.items() if e["pending"] and i not in tried
@@ -173,14 +265,15 @@ def ensure(character_name: str, item_ids: Iterable[str], *, base_sha: str,
             tried.add(todo)
             entry = current[todo]
             try:
-                _build(character_name, todo, entry, {u: current[u] for u in entry["inner"]}, base_sha, body=body)
+                _build(character_name, todo, entry, {u: current[u] for u in entry["inner"] if u in current},
+                       base_sha, body=body)
             except Exception as e:  # noqa: BLE001 — the piece keeps its body fit, the assembly goes on
                 logger.warning("Layered fit %s/%s over %s failed: %s", character_name, todo,
                                sorted(entry["inner"]), e)
                 with _lock:
                     _failed[_failure_key(character_name, todo, entry, base_sha)] = str(e) or type(e).__name__
             current = plan(character_name, pieces, base_sha=base_sha, profile=profile, intended=intended,
-                           fits=fits, body=body)
+                           fits=fits, body=body, hem=hem)
         return current
 
 
@@ -213,10 +306,58 @@ def _rigged_base(character_name: str, record: Dict[str, Any], base_sha: str, bod
     return data
 
 
+def _mesh_prim(g: Any):
+    """A ``GarmentMesh`` as a ``footwear_cut.Prim`` (NORMAL / TEXCOORD_0 / COLOR_0 as attributes) and back."""
+    from app.core.glb_mesh import Prim
+    attributes: Dict[str, np.ndarray] = {"TEXCOORD_0": np.asarray(g.uvs, np.float64)}
+    if g.normals is not None:
+        attributes["NORMAL"] = np.asarray(g.normals, np.float64)
+    if g.colors is not None:
+        attributes["COLOR_0"] = np.asarray(g.colors, np.float64)
+    return Prim(positions=np.asarray(g.positions, np.float64), faces=np.asarray(g.indices, np.int64).reshape(-1, 3),
+                attributes=attributes, joints=np.asarray(g.joints, np.int64), weights=np.asarray(g.weights, np.float64),
+                targets=[], joint_names=list(g.joint_names))
+
+
+def _prim_mesh(prim: Any, like: Any):
+    from dataclasses import replace
+    return replace(like, positions=prim.positions, indices=prim.faces, uvs=prim.attributes["TEXCOORD_0"],
+                   normals=prim.attributes.get("NORMAL"), colors=prim.attributes.get("COLOR_0"),
+                   joints=prim.joints, weights=prim.weights)
+
+
+def tucked_poke(mesh: Any, shafts: Sequence[Any], plane_m: float, top_m: float) -> Dict[str, Any]:
+    """The tucked gate (module docstring): of the trouser vertices with bind height in [``plane_m``, ``top_m``],
+    the share outside every shaft's cross-section at ``plane_m`` (``footwear_insole.opening_polygon``) —
+    ``{"tucked_poke", "n", "outside"}``; 0 with no vertex in the band (nothing reaches into the shaft)."""
+    from app.core.footwear_insole import inside_polygon, opening_polygon
+    P = np.asarray(mesh.positions, np.float64)
+    band = (P[:, 1] >= plane_m - HEM_BAND_EPS_M) & (P[:, 1] <= top_m + HEM_BAND_EPS_M)
+    n = int(band.sum())
+    if not n:
+        return {"tucked_poke": 0.0, "n": 0, "outside": 0}
+    inside = np.zeros(n, bool)
+    for shaft in shafts:
+        poly = opening_polygon(shaft.positions, shaft.indices, plane_m)
+        inside |= inside_polygon(P[band][:, [0, 2]], poly)
+    outside = int((~inside).sum())
+    return {"tucked_poke": outside / n, "n": n, "outside": outside}
+
+
+def _tuck(outer: Any, shafts: Sequence[Any], plane_m: float, top_m: float) -> Tuple[Any, Dict[str, Any]]:
+    """The trousers cut at ``plane_m`` (``footwear_cut.plane_cut``) with the ``tucked_poke`` gate's numbers."""
+    from app.core.footwear_cut import plane_cut
+    prim, stats = plane_cut(_mesh_prim(outer), y_m=plane_m)
+    cut = _prim_mesh(prim, outer)
+    return cut, {**tucked_poke(cut, shafts, plane_m, top_m), "cut": stats}
+
+
 def _build(character_name: str, item_id: str, entry: Dict[str, Any], inner: Dict[str, Dict[str, Any]],
            base_sha: str, *, body: str = "") -> Path:
     """Push the body fit of ``item_id`` over the served meshes of ``inner`` (both tiers), graft it onto the
-    rigged base and store it under its ``lsig`` with its record; prune the item's older layered fits."""
+    rigged base and store it under its ``lsig`` with its record; prune the item's older layered fits. With a
+    ``hem`` entry (module docstring) the boot's shaft nodes join the inners (``over``) or the trousers are cut
+    at the plane (``tucked``; the ``over`` geometry with ``fallback`` when the leg does not fit)."""
     from app.core import garment_fit_layers as gfl
     from app.core import garment_store, glb_mesh
     from app.core.garments import _write_atomic
@@ -238,18 +379,45 @@ def _build(character_name: str, item_id: str, entry: Dict[str, Any], inner: Dict
         inner_full.append(glb_mesh.garment_arrays(data))
     inner_low = [glb_mesh.garment_arrays(Path(inner[u]["low"]).read_bytes()) if inner[u].get("low") else g
                  for u, g in zip(sorted(inner), inner_full)]
+    hem = entry.get("hem")
+    shafts: List[Any] = []
+    hem_record: Optional[Dict[str, Any]] = None
+    if hem:
+        shafts = shaft_meshes(Path(hem["fit"]).read_bytes(), str(hem["boot"]))
+        if shaft_sha(shafts) != entry["inner"].get(str(hem["boot"])):
+            raise ValueError(f"the fit of {hem['boot']} changed during the build")
+        hem_record = {"mode": hem["mode"], "built": "over", "plane_m": hem.get("plane_m"), "top_m": hem.get("top_m"),
+                      "tucked_poke": None, "fallback": None, "boot": str(hem["boot"]),
+                      "shaft_sha": entry["inner"].get(str(hem["boot"]))}
     # One body field for both tiers.
-    sdf = gfl.layer_sdf(body_mesh, [outer_full, *inner_full, *([outer_low] if outer_low else []), *inner_low])
-    full, report = gfl.layer_over(outer_full, body_mesh, inner_full, sdf=sdf)
+    sdf = gfl.layer_sdf(body_mesh, [outer_full, *inner_full, *shafts, *([outer_low] if outer_low else []), *inner_low])
+    tucked = bool(hem_record and hem["mode"] == "tucked" and hem.get("plane_m") is not None)
+    full, report = gfl.layer_over(outer_full, body_mesh, inner_full if tucked else [*inner_full, *shafts], sdf=sdf)
+    low = low_report = None
+    if outer_low is not None:
+        low, low_report = gfl.layer_over(outer_low, body_mesh, inner_low if tucked else [*inner_low, *shafts], sdf=sdf)
+    if tucked:
+        cut_full, poke = _tuck(full, shafts, float(hem["plane_m"]), float(hem["top_m"]))
+        hem_record.update(tucked_poke=poke["tucked_poke"], tucked_n=poke["n"], tucked_outside=poke["outside"],
+                          cut=poke["cut"])
+        if poke["tucked_poke"] > TUCKED_POKE_MAX:
+            # too wide to tuck: the over geometry under the tucked lsig, the record says so (the Wardrobe warning)
+            hem_record["fallback"] = HEM_FALLBACK_TOO_WIDE
+            full, report = gfl.layer_over(outer_full, body_mesh, [*inner_full, *shafts], sdf=sdf)
+            if outer_low is not None:
+                low, low_report = gfl.layer_over(outer_low, body_mesh, [*inner_low, *shafts], sdf=sdf)
+        else:
+            hem_record["built"] = "tucked"
+            full = cut_full
+            if low is not None:
+                low, _low_poke = _tuck(low, shafts, float(hem["plane_m"]), float(hem["top_m"]))
     name = f"garment_{CLOTHING}_{item_id}"
-    extras = {"kind": CLOTHING, "item_id": item_id, "fsig": fsig, "over": sorted(inner)}
+    extras = {"kind": CLOTHING, "item_id": item_id, "fsig": fsig, "over": sorted(entry["inner"])}
+    if hem_record:
+        extras["hem"] = hem_record["built"]
     path = garment_store.garment_path(character_name, item_id, fsig, "layer", lsig=lsig, body=body)
     low_path = garment_store.garment_path(character_name, item_id, fsig, "layer_low", lsig=lsig, body=body)
-    low_report = None
-    low_blob = None
-    if outer_low is not None:
-        low, low_report = gfl.layer_over(outer_low, body_mesh, inner_low, sdf=sdf)
-        low_blob = glb_mesh.graft(rigged, low, name=name, extras=extras)
+    low_blob = glb_mesh.graft(rigged, low, name=name, extras=extras) if low is not None else None
     blob = glb_mesh.graft(rigged, full, name=name, extras=extras)
     record = {
         "accepted": True, "kind": CLOTHING, "item_id": item_id, "fsig": fsig, "lsig": lsig,
@@ -259,8 +427,11 @@ def _build(character_name: str, item_id: str, entry: Dict[str, Any], inner: Dict
            else {"base_model_sha256": base_sha, "body_id": entry["record"].get("base_signature"),
                  "body_sha256": base_sha}),
         "base_fit_sha256": base_fit_sha,
-        "inner": {u: {"fsig": inner[u]["fsig"], "sha256": entry["inner"][u], "lsig": inner[u]["lsig"] or None}
-                  for u in sorted(inner)},
+        "inner": {**{u: {"fsig": inner[u]["fsig"], "sha256": entry["inner"][u], "lsig": inner[u]["lsig"] or None}
+                     for u in sorted(inner)},
+                  **({str(hem["boot"]): {"fsig": None, "sha256": entry["inner"][str(hem["boot"])], "lsig": None,
+                                         "shaft": True}} if hem_record else {})},
+        **({"hem": hem_record} if hem_record else {}),
         "report": {"full": report, "low": low_report}, "low": low_blob is not None,
         "created_at": utc_now_iso()}
     # The low tier first: a reader that sees the record also finds its tier (or none, then the full one).

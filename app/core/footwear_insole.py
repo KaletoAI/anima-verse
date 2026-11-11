@@ -637,6 +637,23 @@ def _inside_polygon(pts: np.ndarray, poly: np.ndarray) -> np.ndarray:
     return inside
 
 
+def opening_polygon(positions: np.ndarray, faces: np.ndarray, y: float) -> np.ndarray:
+    """The cross-section of a mesh at height ``y`` (its own coordinates, y up) as the inner-loop polygon (n, 2)
+    of (x, z) — ``_ring_cut`` + ``_opening_polygon``; (0, 2) when the plane cuts fewer than 3 points. Used by the
+    cap rule here and by ``garment_layers`` (a trouser leg tucked into a boot shaft)."""
+    P = np.asarray(positions, np.float64).reshape(-1, 3)
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    if not len(P) or not len(F):
+        return np.zeros((0, 2))
+    extent = float(np.ptp(P[:, 1]))
+    return _opening_polygon(_ring_cut(P, F, float(y), 1e-9 * max(extent, 1e-12)))
+
+
+def inside_polygon(points_xz: np.ndarray, polygon: np.ndarray) -> np.ndarray:
+    """Even-odd test of (x, z) points against a polygon from ``opening_polygon`` (all False for an empty one)."""
+    return _inside_polygon(points_xz, polygon)
+
+
 def _cap_mask(p_frame: np.ndarray, faces: np.ndarray, top_raw: Optional[float],
               vamp_top_raw: Optional[float]) -> np.ndarray:
     """The cap faces (module docstring): centroid height >= ``top_raw − CAP_TOP_SHARE × (top_raw − vamp top)``
@@ -656,8 +673,7 @@ def _cap_mask(p_frame: np.ndarray, faces: np.ndarray, top_raw: Optional[float],
     band = (centroid[:, 1] >= floor) & (nu >= CAP_UP_MIN)
     if not band.any():
         return band
-    extent = float(np.ptp(P[:, 1])) if len(P) else 0.0
-    poly = _opening_polygon(_ring_cut(P, F, floor, 1e-9 * max(extent, 1e-12)))
+    poly = opening_polygon(P, F, floor)
     if not len(poly):
         return np.zeros(len(F), bool)
     return band & _inside_polygon(centroid[:, [0, 2]], poly)

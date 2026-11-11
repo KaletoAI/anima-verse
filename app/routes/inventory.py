@@ -1202,6 +1202,9 @@ def _apply_outfit_set_route_sync(character_name: str,
             pieces=pieces_by_slot,
             remove_slots=list(target.get("remove_slots") or []),
             source="outfit_preset")
+        # The set's per-outfit options come with it (boots plan Task 10): a row without them applies null.
+        from app.core.outfit_options import apply_saved_options
+        apply_saved_options(character_name, target)
     return {
         "status": "ok",
         "outfit_id": target.get("id"),
