@@ -139,7 +139,17 @@ export function limitText(limit: GateLimit, spec: ChipSpec, height: number | nul
 
 /** One chip of a gate record: the shown number, its limit text and whether
  *  it passes (null = reported only / not computable). */
-export interface ChipResult { key: string; label: string; shown: string; lim: string; ok: boolean | null }
+export interface ChipResult {
+  key: string
+  label: string
+  shown: string
+  lim: string
+  ok: boolean | null
+  /** The record carries the key with a null value: the measure could not be taken on this
+   *  fit (footwear_fit: a boot shaft with no ring above the band) — shown as "n/a", never
+   *  as a passing number. */
+  na?: boolean
+}
 
 /** The chips of `record` under `specs` and the server's `limits` — the
  *  numbers GateChips shows and the tile status icon sums up. */
@@ -157,7 +167,11 @@ export function chipResults(specs: ChipSpec[], record: Record<string, unknown> |
     const limit = general && own !== null ? { ...general, value: own } : general
     // A limit gated on other views only (the chest on the back) is not shown.
     if (limit?.views && view && !limit.views.includes(view)) continue
-    if (value === null) continue
+    if (value === null) {
+      if (!(spec.key in record) || record[spec.key] !== null) continue
+      out.push({ key: spec.key, label: spec.label, shown: 'n/a', lim: limit ? limitText(limit, spec, height) : '', ok: null, na: true })
+      continue
+    }
     out.push({
       key: spec.key,
       label: spec.label,

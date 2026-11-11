@@ -180,7 +180,8 @@ export function GateChips({ specs, record, limits, view }: {
         return (
           <span
             key={c.key}
-            title={c.lim ? `${t('Limit')}: ${c.lim}` : t('Reported, not gated')}
+            title={c.na ? t('Not measurable on this fit (no shaft ring above the ankle band)')
+              : c.lim ? `${t('Limit')}: ${c.lim}` : t('Reported, not gated')}
             style={{
               display: 'inline-block',
               padding: '1px 6px',
@@ -191,7 +192,7 @@ export function GateChips({ specs, record, limits, view }: {
               whiteSpace: 'nowrap',
             }}
           >
-            {t(c.label)} {c.shown}{c.lim ? ` (${c.lim})` : ''}
+            {t(c.label)} {c.na ? t('n/a') : c.shown}{c.lim ? ` (${c.lim})` : ''}
           </span>
         )
       })}

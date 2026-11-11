@@ -4149,6 +4149,7 @@
     "Refused": "Abgelehnt",
     "Renders the hair views, builds the mesh and fits it onto the base model.": "Rendert die Haaransichten, baut das Mesh und passt es auf das Basismodell an.",
     "Reported, not gated": "Nur berichtet, nicht geprüft",
+    "Not measurable on this fit (no shaft ring above the ankle band)": "Auf diesem Fit nicht messbar (kein Schaftring über dem Knöchelband)",
     "Run all": "Alles ausführen",
     "Run the previous step first": "Zuerst den vorigen Schritt ausführen",
     "Runs every step that is missing or out of date": "Führt jeden fehlenden oder veralteten Schritt aus",
