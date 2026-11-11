@@ -7,7 +7,8 @@ The kind module of garment kind ``clothing`` (``garment_set.CLOTHING``), the
 same protocol as ``garment_hair``: ``EDIT_STEPS``, ``edit_prompt``, ``gate``,
 ``position_reference``, ``fsig_inputs`` and the pair hooks the orchestration (``garments``) calls —
 ``PAIR_STEP``, ``pair_agree``, ``pair_reason``, ``PAIR_REFUSED``,
-``front_hints`` — plus ``SUBJECT`` for messages.
+``front_hints`` — plus ``SUBJECT`` for messages and ``register_estimate``
+(the ghost back of a waistband piece is registered by its waistband).
 
 The image chain of the S1 spike (``claude-out/s1-base-body/src/dress_edit.py``),
 shortened and said positively (Qwen2.1-Turbo ignores negatives):
@@ -68,7 +69,12 @@ FIT_FRAGMENT_MAX = 120
 #: Position, size and width first — they are what the ghost gates measure
 #: (centre / width ratio) and they stood as the last clause of 49 words
 #: before the review of 2026-11-11; the removed person is said once,
-#: positively, through the ghost-mannequin picture.
+#: positively, through the ghost-mannequin picture. Front and back get the
+#: same text and one reference (the worn view of that side). Trousers
+#: (clone, Kai, item_750811f7, 2026-11-11): the ghost BACK came out as a
+#: centred product shot, ×1.59 / ×1.45 tall, attempt 1 showing the FRONT
+#: (fly placket) — corrected by the waistband registration
+#: (``register_estimate``), the straight legs still refuse (width 0.85).
 GHOST = ("The same {noun} in exactly the same position, size, width and framing, keeping its worn "
          "three-dimensional shape as if on an invisible body (ghost mannequin product photo): the person is "
          "removed, the inside of the garment is visible at the neck opening, sleeves and hem, plain grey "
@@ -253,8 +259,33 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
                                                    if front_gate else None))
     if step == "ghost":
         region = garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
-        return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view)
+        return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view,
+                                                 length_free=_waistband_back(step, view, item_id))
     raise ValueError(f"no clothing edit step {step!r}")
+
+
+def _waistband_back(step: str, view: str, item_id: Any) -> bool:
+    """The ghost BACK of a piece whose top edge is a waistband
+    (``garment_gates.waistband_piece`` of its slots; ``item_id`` an id or the
+    item itself)."""
+    if step != "ghost" or view != "back" or not item_id:
+        return False
+    from app.core.garment_gates import waistband_piece
+    return waistband_piece((_item_of(item_id).get("outfit_piece") or {}).get("slots") or [])
+
+
+def register_estimate(step: str, view: str, reference, ghost_mask, *, body_h: int,
+                      item_id: Any = None) -> Optional[Dict[str, Any]]:
+    """The correction ``garment_images._register`` applies before the gate:
+    the ghost back of a waistband piece by its waistband
+    (``garment_gates.register_waistband``: one uniform scale, the top and
+    the waistband centre aligned, uncapped — ruling 13d: the edit model
+    turned the trousers' back into a centred product shot, ×1.45..1.59 tall);
+    everything else by its outline (``garment_gates.register``, capped)."""
+    from app.core import garment_gates
+    if _waistband_back(step, view, item_id):
+        return garment_gates.register_waistband(reference, ghost_mask, body_h=body_h)
+    return garment_gates.register(reference, ghost_mask, body_h=body_h)
 
 
 def position_reference(step: str, *, base_rgb, base_mask, source_rgb, source_mask):
@@ -269,16 +300,20 @@ def position_reference(step: str, *, base_rgb, base_mask, source_rgb, source_mas
 
 
 def pair_agree(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> bool:
-    """Front and back ghost end at the same height (``garment_gates.hems_agree``)."""
+    """Front and back ghost end at the same height (``garment_gates.hems_agree``)
+    — always True against a back registered by its waistband (``registered``):
+    its hem is the edit's length scaled by the waistband, not a measurement
+    (ruling 13d: the length does not matter)."""
     from app.core.garment_gates import hems_agree
-    return hems_agree(front_gate, back_gate)
+    return bool(back_gate.get("registered")) or hems_agree(front_gate, back_gate)
 
 
 def pair_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[str]:
     """The refusal reason of a front ghost attempt against the accepted back
-    (``garment_gates.hems_reason``)."""
+    (``garment_gates.hems_reason``); None against a back registered by its
+    waistband (``pair_agree``)."""
     from app.core.garment_gates import hems_reason
-    return hems_reason(front_gate, back_gate)
+    return None if back_gate.get("registered") else hems_reason(front_gate, back_gate)
 
 
 def front_hints(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Optional[Dict[str, Any]]:

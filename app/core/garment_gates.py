@@ -788,7 +788,7 @@ def _touching(region, ghost, height: int) -> np.ndarray:
 
 
 def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask, *,
-                        view: str) -> Dict[str, Any]:
+                        view: str, length_free: bool = False) -> Dict[str, Any]:
     """Step 2 gate of clothing: the piece alone against the garment region of
     the accepted worn view (``garment_region``).
 
@@ -809,6 +809,11 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     The region is measured by its parts the ghost reaches (``_touching``).
     The chain registers the ghost onto the region before this gate
     (``register``), so the offsets are the residual of that correction.
+    ``length_free`` (the back of a waistband piece, registered by
+    ``register_waistband``): ``outside`` leaves out the ghost rows below the
+    region's last row grown by the margin — the length is the edit's, not
+    measured (ruling 13d); ``skin_left`` still counts there (feet left in the
+    image), ``h_ratio`` / ``hem_t`` are reported.
     Calibration: the "Clothing" block above."""
     _check(base_rgb, base_mask, ghost_rgb, ghost_mask)
     m0 = np.asarray(base_mask, dtype=bool)
@@ -836,11 +841,16 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     area = max(int(region.sum()), 1)
     beyond = ghost & ~_margin(region, height)
     skin = skin_colour(base_rgb, base_mask)
+    skin_beyond = beyond
+    if length_free:
+        # Below the region's last row (plus the margin) only skin counts: the length is free.
+        beyond = beyond.copy()
+        beyond[a[3] + 1 + _iterations(GARMENT_MARGIN, height):] = False
     if skin is None:
         skin_left = 0.0
     else:
         near = np.abs(np.asarray(ghost_rgb, dtype=np.float32)[..., :3] - skin).mean(2) <= SKIN_DRGB
-        skin_left = float((beyond & near).sum() / area)
+        skin_left = float((skin_beyond & near).sum() / area)
     neck = neckline(region)
     depth = neck["depth"] / hb
     has_neckline = depth >= NECKLINE_MIN_DEPTH and bool(neck["notch"].any())
@@ -864,6 +874,7 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
             "h_ratio": round(h_ratio, 3), "iou": round(iou, 3), "skin_left": _r(skin_left, 5),
             "outside": _r(outside, 5), "neckline_depth": _r(depth, 4), "neck_fill": _r(neck_fill, 3),
             "bottom": b[3], "hem_t": _r((b[3] - y0) / hb, 5),
+            **({"length_free": True} if length_free else {}),
             "ok": not reasons, "reasons": reasons}
 
 
@@ -1020,6 +1031,102 @@ def warp(array, registration: Dict[str, Any], *, factor: Tuple[float, float] = (
     channels = [ndimage.affine_transform(arr[..., k].astype(np.float32), matrix, offset=offset, order=1,
                                          mode="constant", cval=float(fill[k])) for k in range(3)]
     return np.clip(np.rint(np.stack(channels, -1)), 0, 255).astype(np.uint8)
+
+
+# --- Waistband registration of a bottom's ghost BACK (ruling 13d) -------------
+#
+# The edit model turns the ghost back of a bottom into a centred product shot
+# (clone, Kai's "Tailored Black Trousers" item_750811f7, 2026-11-11: the worn
+# back's garment spans rows 612..1407, attempt 1 114..1381 = height x1.59 and
+# width x1.27, attempt 2 243..1399 = x1.45 / x1.34; ``register`` estimated
+# 0.786 and 1.049 — beyond the caps or caught on the wrong outline). A piece
+# whose top edge is a waistband (``waistband_piece``) has its ghost back laid
+# onto the worn back's garment region by ONE uniform scale — the waistband
+# width — and a shift that puts the ghost's top row and waistband centre on
+# the region's; no caps, the length is the edit's (``length_ratio`` reported,
+# ``ghost_clothing_gate(length_free=True)``). The waistband width is the
+# median row span over the rows WAIST_BAND·Hb below the top — the ghost's rows
+# scaled by the estimate (WAIST_ITERATIONS fixed-point steps from the bbox
+# width ratio). Measured on the two refused attempts (BiRefNet masks, Hb
+# 1389): region waistband 240 px; ghost 359 / 382 px -> scale 0.6685 /
+# 0.6283 (band 0.005..0.03: 0.6671 / 0.6234, 0.02..0.06: 0.6725 / 0.6294).
+# Gated after it: top_dy 0.0 / 0.0, centre_dx -0.0004 / +0.0004,
+# length_ratio 1.065 / 0.913, w_ratio 0.850 / 0.844, outside 0.159 / 0.039 —
+# both still refused for their WIDTH: the product shot draws the legs
+# straight down (span at 0.95 of the garment height / waistband: 407 / 359
+# = 1.13, 438 / 382 = 1.15) where the worn legs stand apart (318 / 240 =
+# 1.33), and attempt 1's straight legs lie in the worn region's
+# gap between the ankles (its ``outside``). Neither a scale nor the length
+# explains that; the width gate keeps checking the shape.
+# Tops keep ``register``: under a collar the band runs into the shoulder
+# slope, its width changes fast with the row — the accepted Black Blazer back
+# (Kira) measured 0.656 with this band (0.954 / 0.992 with the other two)
+# where ``register`` found 0.997.
+WAIST_BAND = (0.01, 0.04)   # rows below the garment top whose median span is the waistband width, × Hb
+WAIST_ITERATIONS = 4
+#: Slots whose piece has a waistband as its top edge — unless it also has an upper-body slot.
+WAIST_SLOTS = frozenset({"bottom", "underwear_bottom", "legs"})
+UPPER_SLOTS = frozenset({"top", "underwear_top", "outer", "neck", "head"})
+
+
+def waistband_piece(slots: Iterable[str]) -> bool:
+    """Whether a piece with ``slots`` is registered by its waistband: a
+    bottom slot (``WAIST_SLOTS``) and no upper-body one (``UPPER_SLOTS``)."""
+    found = {str(s) for s in slots or ()}
+    return bool(found & WAIST_SLOTS) and not found & UPPER_SLOTS
+
+
+def _waist(mask: np.ndarray, top: int, body_h: int, scale: float) -> Optional[Tuple[float, float]]:
+    """``(median span, median centre column)`` of the mask's rows
+    ``top + WAIST_BAND·Hb / scale``; None when no row there has a pixel."""
+    lo, hi = (int(round(top + t * body_h / scale)) for t in WAIST_BAND)
+    widths, centres = [], []
+    for row in range(max(lo, 0), min(hi, mask.shape[0] - 1) + 1):
+        xs = np.nonzero(mask[row])[0]
+        if len(xs):
+            widths.append(xs.max() - xs.min() + 1)
+            centres.append((xs.min() + xs.max()) / 2.0)
+    if not widths:
+        return None
+    return float(np.median(widths)), float(np.median(centres))
+
+
+def register_waistband(reference_mask, ghost_mask, *, body_h: int) -> Optional[Dict[str, Any]]:
+    """The uniform scale + shift that lays a waistband piece's ghost onto
+    ``reference_mask`` (the worn view's garment region; see the block above),
+    in ``register``'s form for ``warp``: ``centre`` = the ghost's top row and
+    waistband centre, ``shift_px`` = the region's minus the ghost's, ``scale``
+    = region waistband / ghost waistband; plus ``method`` "waistband",
+    ``waist_px`` [region, ghost], ``length_ratio`` (scaled ghost height /
+    region height), ``within_caps`` always True (uncapped), ``negligible``
+    as in ``register``. None when either mask is empty or has no waistband
+    row."""
+    ref = np.asarray(reference_mask, dtype=bool)
+    ghost = np.asarray(ghost_mask, dtype=bool)
+    if ref.shape != ghost.shape:
+        raise ValueError("reference and ghost masks differ in size")
+    a, b = _bbox(ref), _bbox(ghost)
+    if a is None or b is None or body_h <= 0:
+        return None
+    ref_waist = _waist(ref, a[1], body_h, 1.0)
+    if ref_waist is None:
+        return None
+    scale = (a[2] - a[0] + 1) / (b[2] - b[0] + 1)
+    ghost_waist = None
+    for _ in range(WAIST_ITERATIONS):
+        ghost_waist = _waist(ghost, b[1], body_h, scale)
+        if ghost_waist is None:
+            return None
+        scale = ref_waist[0] / ghost_waist[0]
+    dy, dx = float(a[1] - b[1]), ref_waist[1] - ghost_waist[1]
+    reach = max(abs(b[0] - ghost_waist[1]), abs(b[2] - ghost_waist[1]), b[3] - b[1])
+    moved_px = float(np.hypot(dx, dy)) + abs(scale - 1.0) * float(reach) * np.sqrt(2.0)
+    return {"method": "waistband", "centre": [float(b[1]), round(ghost_waist[1], 3)],
+            "shift_px": [round(dy, 3), round(dx, 3)], "scale": round(scale, 5),
+            "shift": [_r(dx / body_h, 5), _r(dy / body_h, 5)], "shift_abs": _r(np.hypot(dx, dy) / body_h, 5),
+            "waist_px": [round(ref_waist[0], 1), round(ghost_waist[0], 1)],
+            "length_ratio": _r((b[3] - b[1] + 1) * scale / (a[3] - a[1] + 1), 4),
+            "within_caps": True, "negligible": bool(moved_px < REG_NEGLIGIBLE_PX)}
 
 
 def gate_summary(records: Sequence[Dict[str, Any]]) -> str:

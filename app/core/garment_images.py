@@ -29,7 +29,11 @@ few per cent larger (Kira's Black Blazer back, 2026-11-10), so a similarity
 ``REG_SCALE_MIN..MAX``) is estimated from the silhouettes and the attempt
 file is rewritten moved; the gate then measures the residual. The record
 keeps the correction (``registration``, chip keys ``reg_shift`` /
-``reg_scale``). Everything after the ghost reads the moved file.
+``reg_scale``). Everything after the ghost reads the moved file. A kind may
+estimate its own correction (``register_estimate``): the clothing ghost BACK
+of a waistband piece is scaled by its waistband width and shifted onto the
+waistband top, uncapped (``garment_gates.register_waistband``, ruling 13d;
+record key ``registered``).
 
 The kind's own module (``kind_module``: ``garment_hair``,
 ``garment_clothing``) gives the edit steps, prompts and gates.
@@ -509,8 +513,9 @@ POSITION_KEYS = ("top_dy", "centre_dx", "w_ratio")
 def _register(kind, step: str, view: str, path: Path, base_size: Tuple[int, int], reference, *,
               gate_args: Dict[str, Any], edit_rgb, edit_mask) -> Tuple[Any, Any, Optional[Dict[str, Any]]]:
     """Register an attempt of a step with a ``position_reference`` (the
-    ghost) onto that reference (``garment_gates.register``) BEFORE its gate:
-    within the caps and not negligible, the attempt file at ``path`` is
+    ghost) onto that reference (the kind's ``register_estimate``, else
+    ``garment_gates.register``) BEFORE its gate: within the caps and not
+    negligible, the attempt file at ``path`` is
     rewritten moved (``garment_gates.warp``, in the file's own pixels) — the
     cut-out, the mesh views and the fit's framing all read that file — and
     the returned arrays are the moved image (re-read) and the moved mask.
@@ -524,7 +529,9 @@ def _register(kind, step: str, view: str, path: Path, base_size: Tuple[int, int]
     zones = garment_gates._zones(gate_args["base_mask"])
     if zones is None or zones[1] <= 0:
         return edit_rgb, edit_mask, None
-    estimate = garment_gates.register(reference, edit_mask, body_h=zones[1])
+    estimate_of = getattr(kind, "register_estimate", None)
+    estimate = (estimate_of(step, view, reference, edit_mask, body_h=zones[1], item_id=gate_args.get("item_id"))
+                if estimate_of is not None else garment_gates.register(reference, edit_mask, body_h=zones[1]))
     if estimate is None:
         return edit_rgb, edit_mask, None
     before = kind.gate(step, view, edit_rgb=edit_rgb, edit_mask=edit_mask, **gate_args)
@@ -547,10 +554,20 @@ def _register(kind, step: str, view: str, path: Path, base_size: Tuple[int, int]
 def _with_registration(record: Dict[str, Any], registration: Dict[str, Any]) -> Dict[str, Any]:
     """The gate record with its registration: ``registration`` (+ the
     ``residual`` = the record's position numbers) and the chip keys
-    ``reg_shift`` (|centroid shift| / Hb) and ``reg_scale``."""
+    ``reg_shift`` (|centroid shift| / Hb) and ``reg_scale``. A waistband
+    registration (``garment_gates.register_waistband``, uncapped) has no
+    chip keys — their chips show the outline registration's caps — but
+    ``registered`` = ``{scale, dx, dy, length_ratio}`` (dx / dy in px of the
+    gate frame) when it was applied."""
     residual = {k: record.get(k) for k in POSITION_KEYS}
-    return {**record, "reg_shift": registration.get("shift_abs"), "reg_scale": registration.get("scale"),
-            "registration": {**registration, "residual": residual}}
+    out = {**record, "registration": {**registration, "residual": residual}}
+    if registration.get("method") != "waistband":
+        return {**out, "reg_shift": registration.get("shift_abs"), "reg_scale": registration.get("scale")}
+    if registration.get("applied"):
+        dy, dx = registration.get("shift_px") or (None, None)
+        out["registered"] = {"scale": registration.get("scale"), "dx": dx, "dy": dy,
+                             "length_ratio": registration.get("length_ratio")}
+    return out
 
 
 def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind, *,
