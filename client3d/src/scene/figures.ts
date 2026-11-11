@@ -1583,7 +1583,9 @@ export class FigureLibrary {
     // hand the copy is not what happens — every value is re-expressed against
     // this rig's own bind pose, which is precisely the compensation the gate
     // used to give up on.
-    const corrections = restCorrections(THREE, this.donorRest, template);
+    // A shod figure's rest soles come with the record (the loaded body is
+    // cut under the shoe, `footPoseRest`).
+    const corrections = restCorrections(THREE, this.donorRest, template, undefined, footPose);
     if (!this.donorRest.world.size) {
       const dev = restFrameDeviation(candidates, template);
       if (dev.mean > MAX_REST_FRAME_DEV_DEG) {
@@ -1796,14 +1798,17 @@ export class FigureLibrary {
     // The FIGURE's box (`figureBox`): garment meshes grafted onto the body
     // (hair, § A3a — `extras.garment`, name `garment_<kind>_<item>`) do not
     // count, so hair over the crown changes neither `model.height` nor,
-    // through it, `clipHeightOffsetM` or the gait amplitude.
-    const b = figureBox(THREE, template);
+    // through it, `clipHeightOffsetM` or the gait amplitude. A shod figure's
+    // box is the BARE body's, shipped in the record (the served body is cut
+    // under the shoe, `footPoseRest`) — kept only with the fitted shoes.
+    const footPose = modelFootPose(template, info.footPose);
+    const b = figureBox(THREE, template, footPose);
     const s = b.getSize(new THREE.Vector3());
     if (s.z > s.y * 1.5) {                       // stand a Z-up export upright
       template.rotation.x = -Math.PI / 2;
       template.updateMatrixWorld(true);
     }
-    const bbox = figureBox(THREE, template);
+    const bbox = figureBox(THREE, template, footPose);
     const rawHeight = Math.max(bbox.max.y - bbox.min.y, 0.01);
     // A server-normalised file already stands its real height on the ground;
     // rescaling it by the box would shrink a figure by its hair/hat again
@@ -1817,9 +1822,6 @@ export class FigureLibrary {
       this.motionState.set(name, motion);
     }
     if (motion.payload === undefined) motion.payload = info.motion;
-    // The fitted shoe's foot pose, kept only with the shoes it was fitted
-    // for on this very template (`modelFootPose`).
-    const footPose = modelFootPose(template, info.footPose);
     const model: LoadedModel = {
       motion,
       collision: info.collision ?? null,
@@ -2169,7 +2171,7 @@ export class Figure {
     // measured on the figure without its garments (hair hanging behind the
     // back must not pull the XZ centre).
     inst.updateMatrixWorld(true);
-    const box = figureBox(THREE, inst);
+    const box = figureBox(THREE, inst, this.footPose);
     if (!box.isEmpty()) {
       const center = box.getCenter(new THREE.Vector3());
       inst.position.x -= center.x;

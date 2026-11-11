@@ -191,8 +191,8 @@ export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, COLLIDE_GLSL_D
 export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry } from './garmentCollision'
 
 export { FOOT_POSE_VERSION, applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches,
-  footContactsNow } from './footPose'
-export type { FootPose, FootContact, FootSide } from './footPose'
+  footContactsNow, footPoseRest } from './footPose'
+export type { FootPose, FootPoseRest, FootContact, FootSide } from './footPose'
 
 export { GROUND_SAMPLE_FRAMES, GROUND_SAMPLE_VERTICES, SOLE_LEVEL_M, groundOffsetOf, soleGroundOffsetOf,
   clipGroundOffset, measureClipGround } from './clipGround'

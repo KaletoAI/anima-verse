@@ -389,8 +389,9 @@ async function main() {
   const donorHipsY = rigHipsHeight(THREE, rig)
 
   // ---- the client's chain: bare (stance) and shod (extension + plant inside `adaptExternalClips`)
-  const floor = figureBox(THREE, fig).min.y
-  const corrections = restCorrections(THREE, donorRest, fig)
+  // the record's shipped rest (Task 20b): the bare body's box and soles — the served body is cut
+  const floor = figureBox(THREE, fig, fp).min.y
+  const corrections = restCorrections(THREE, donorRest, fig, undefined, fp)
   const bareClip = Object.fromEntries(adaptExternalClips(library.map((c) => c.clone()), fig, corrections, donorHipsY)
     .map((c) => [c.name, c]))
   const t0 = Date.now()

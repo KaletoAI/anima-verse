@@ -50,6 +50,8 @@
  * catalog's groups).
  */
 import type { Box3, BufferGeometry, Object3D } from 'three'
+import { footPoseRest } from './footPose'
+import type { FootPose } from './footPose'
 import { normBoneName } from './clipRetarget'
 
 /** The figure of this contract: 1.70 m, everywhere and always (§ A3). */
@@ -240,7 +242,16 @@ export function inGarment(o: Object3D): boolean {
  * measured the way `Box3.expandByObject` measures it (its own or its
  * geometry's bounding box in world space; a skinned mesh's own box).
  */
-export function figureBox(THREE: typeof import('three'), root: Object3D): Box3 {
+export function figureBox(THREE: typeof import('three'), root: Object3D,
+                          footPose?: FootPose | null): Box3 {
+  // The SHOD figure's box is the BARE body's, shipped in the record
+  // (`footPoseRest`, Task 20b): the loaded body is cut under the shoe and
+  // its own box would float the floor. In the frame `root` is measured in.
+  const shipped = footPoseRest(THREE, footPose, root)
+  if (shipped) {
+    root.updateWorldMatrix(true, false)
+    return shipped.box.applyMatrix4(root.matrixWorld)
+  }
   let garments = false
   root.traverse((o) => { if (isGarmentNode(o)) garments = true })
   const box = new THREE.Box3()
@@ -288,11 +299,12 @@ export function figureBox(THREE: typeof import('three'), root: Object3D): Box3 {
  */
 export function anchorFigureBind(THREE: typeof import('three'),
                                  pivot: Object3D,
-                                 figureHeight: number): number {
+                                 figureHeight: number,
+                                 footPose?: FootPose | null): number {
   pivot.scale.setScalar(1)
   pivot.position.set(0, 0, 0)
   pivot.updateMatrixWorld(true)
-  const box = figureBox(THREE, pivot)
+  const box = figureBox(THREE, pivot, footPose)
   const size = box.getSize(new THREE.Vector3())
   const centre = box.getCenter(new THREE.Vector3())
   const k = figureHeight / (size.y || 1)

@@ -279,7 +279,7 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     outfit body is missing; ``base_body.OutfitError`` without a base model. CPU only: never a hub job."""
     import hashlib
     from app.blender import refine
-    from app.core import base_body, footwear_cut, footwear_fit, footwear_source, garment_fit, glb_mesh
+    from app.core import base_body, footwear_cut, footwear_fit, footwear_rest, footwear_source, garment_fit, glb_mesh
     from app.core import garment_store as gs
     from app.core.garments import _Refused, _snapshot_body, _write_atomic
     from app.core.timeutils import utc_now_iso
@@ -360,8 +360,11 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         "method": "shoe", "kind": kind, "item_id": item_id, "fsig": fsig, "ssig": ssig, **result.record,
         "parents": parents, "accepted": True, "fit_version": garment_fit.FIT_VERSION[kind],
         "body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
-        "foot_pose": {**result.foot_pose, "source": {"item_id": item_id, "fsig": fsig,
-                                                     "glb_sha256": hashlib.sha256(blob).hexdigest()}},
+        # ``rest``: the BARE body's figure box and rest soles (``footwear_rest``) for the shod preview
+        # (whose body is cut); the assembly re-measures its own bare file.
+        "foot_pose": {**result.foot_pose, "rest": footwear_rest.rest_measurement(rigged),
+                      "source": {"item_id": item_id, "fsig": fsig,
+                                 "glb_sha256": hashlib.sha256(blob).hexdigest()}},
         "fitted_at": now, "created_at": now}
     if not body:
         parents["base_model_sha256"] = body_sha

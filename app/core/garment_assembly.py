@@ -565,7 +565,13 @@ def _build(character_name: str, directory: Path, bare: Path,
         if not isinstance(pose, dict):
             raise ValueError(f"footwear fit {garment['item_id']} {garment['fsig']} carries no foot_pose")
         blob = _cut_body(blob, garment, tier)
-        foot_pose = {**pose, "source": {"item_id": garment["item_id"], "fsig": garment["fsig"], "glb_sha256": ""}}
+        # The BARE body's rest measurements ride with the record (``footwear_rest``, Task 20b): the served
+        # body is cut under the shoe, so the renderers' bind-pose anchor and rest soles must not read it.
+        # Measured on ``data`` — the very bare file this assembly is built from — and overriding what the fit
+        # measured on its own (the same) body.
+        from app.core.footwear_rest import rest_measurement
+        foot_pose = {**pose, "rest": rest_measurement(data),
+                     "source": {"item_id": garment["item_id"], "fsig": garment["fsig"], "glb_sha256": ""}}
     for garment in grafted:
         source = _source(garment, tier).read_bytes()
         extras = {"kind": garment["kind"], "item_id": garment["item_id"], "fsig": garment["fsig"]}

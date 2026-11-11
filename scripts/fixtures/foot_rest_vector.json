@@ -1,0 +1,17 @@
+{
+  "_doc": "Hand-derived expectations of scripts/smoke_foot_rest.py (Python, app/core/footwear_rest.py) and scripts/smoke_foot_rest.mjs (TypeScript, @anima/scene-render figureBox / restSolesOf / restCorrections) on scripts/fixtures/foot_rest_bare.glb and foot_rest_cut.glb; metres, the glTF scene frame (the root bone frame equals it). corrections_deg = the foot stance turn Rx(-tilt) per Foot the bare soles trigger (restCorrections with the fixture as its own donor).",
+  "bare": {
+    "box": {"min": [-0.1, -0.005, -0.08], "max": [0.1, 1.7, 0.17]},
+    "soles": {
+      "left": {"heel": [0.1, 0.03, -0.05], "toe": [0.1, 0.0, 0.17]},
+      "right": {"heel": [-0.1, 0.033, -0.05], "toe": [-0.1, 0.0, 0.17]}
+    }
+  },
+  "cut": {
+    "box": {"min": [-0.1, 0.02, -0.08], "max": [0.1, 1.7, 0.15]},
+    "soles": {
+      "left": {"heel": [0.1, 0.04, -0.08], "toe": [0.1, 0.02, 0.15]}
+    }
+  },
+  "corrections_deg": {"leftfoot": 7.765166, "rightfoot": 8.530766}
+}

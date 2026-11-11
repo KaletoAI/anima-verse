@@ -46,7 +46,8 @@
  *    plane, the Foot keeps its turned world rotation): lowered by the foot's
  *    weight when it floats, raised IN FULL when it pierces — a floor is solid
  *    whatever the contact weight. The floor is the figure's bind-sole plane
- *    (`figureBox(probe).min.y`, garments excluded) lowered by `rootY`, the
+ *    (`figureBox(probe, fp).min.y` — the BARE body's box the record ships,
+ *    garments excluded) lowered by `rootY`, the
  *    root lift the caller adds when it plays the clip (`footPoseLiftM` of
  *    the ground group); the clip is baked for the ground height group.
  *
@@ -283,7 +284,7 @@ export function plantFootPose(three: Three, posed: AnimationClip, bare: Animatio
   // Bind readings: the floor, the rest heights of ankle and ball (cm over the
   // bind soles) and, per side, the STAND pose — the toe's local under the fit
   // and the insole slope α of its ball→toe line.
-  const bindMinY = figureBox(three, probe).min.y
+  const bindMinY = figureBox(three, probe, fp).min.y
   const floorY = bindMinY - rootY
   const worldOf = (o: Object3D): Vector3 => o.getWorldPosition(new three.Vector3())
   const contactWorld = (c: ContactLocal): Vector3 => c.local.clone().applyMatrix4(c.bone.matrixWorld)

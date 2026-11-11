@@ -50,10 +50,22 @@
  * (`jointNowFrom` in `collision.ts`), so `footContactsNow` reads them the
  * same way the capsules are read.
  *
+ * THE REST (Task 20b, 2026-11-11). The served model carries the body CUT
+ * under the shoe, so a bind measurement that skips garments still reads the
+ * cut foot: on the measured material the figure box's floor sat 11.5 mm
+ * above the bare soles and the rest soles 25–33 mm higher at the heel (the
+ * Foot/ToeBase rest corrections 6.2° / 9.8° off). The server therefore
+ * measures the figure box (`figureBox`) and the rest soles (`restSolesOf`)
+ * on the BARE file of the same body when it writes the record and ships
+ * them as `rest` (`app/core/footwear_rest.py`, the same definitions);
+ * `footPoseRest` reads them, `figureBox` and `restCorrections` take the
+ * record and use them whenever it matches. Nothing is guessed on the
+ * client; a record without `rest` (or none) measures as before.
+ *
  * `three` is injected, never imported. Every function is a no-op (returns
  * its input / 0 / empty / false) for a null record or one of another version.
  */
-import type { AnimationClip, KeyframeTrack, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
+import type { AnimationClip, Box3, KeyframeTrack, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
 import { normBoneName } from './clipRetarget'
 import type { RestPose } from './clipRetarget'
 import { jointNowFrom, transformPoint } from './collision'
@@ -70,6 +82,16 @@ export interface FootContact {
   role: 'heel' | 'ball' | 'toe'
 }
 
+type Triple = [number, number, number]
+
+/** The BARE figure's rest measurements the server ships with the record
+ *  (module docstring, "the rest"): the figure box in the scene frame and
+ *  the rest soles per side in the root bone's rest frame. */
+export interface FootPoseRest {
+  box: { min: Triple; max: Triple }
+  soles: Partial<Record<FootSide, { heel: Triple; toe: Triple }>>
+}
+
 /** The `foot_pose` record of the served model sidecar. */
 export interface FootPose {
   version: 1
@@ -78,6 +100,8 @@ export interface FootPose {
   bones: Record<string, { axis: [number, number, number]; deg: number }>
   root_lift_m: number
   contacts: Record<FootSide, FootContact[]>
+  /** Absent on a record written before Task 20b: the renderers measure the loaded body then. */
+  rest?: FootPoseRest
 }
 
 /** The record version this module understands; anything else is ignored. */
@@ -87,6 +111,32 @@ const SIDES: FootSide[] = ['left', 'right']
 
 function usable(fp: FootPose | null | undefined): fp is FootPose {
   return !!fp && fp.version === FOOT_POSE_VERSION && !!fp.source && typeof fp.source.fsig === 'string'
+}
+
+const triple = (v: unknown): v is Triple =>
+  Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x))
+
+/**
+ * The shipped rest of `fp` as three objects — the figure box (`Box3`, the
+ * scene frame of the loaded file) and the rest soles (`RestPose['soles']`)
+ * — or null for a null record, one of another version, one without a
+ * well-formed `rest`, or (with `root` given) one that does not match the
+ * shoes `root` carries (`footPoseMatches`). A side whose heel or toe is not
+ * a finite triple is left out of the soles.
+ */
+export function footPoseRest(three: Three, fp: FootPose | null | undefined, root?: Object3D | null):
+    { box: Box3; soles: Map<string, { heel: Vector3; toe: Vector3 }> } | null {
+  if (!usable(fp) || !fp.rest || typeof fp.rest !== 'object') return null
+  const { box, soles } = fp.rest
+  if (!box || !triple(box.min) || !triple(box.max)) return null
+  if (root && !footPoseMatches(root, fp)) return null
+  const out = new Map<string, { heel: Vector3; toe: Vector3 }>()
+  for (const side of SIDES) {
+    const s = soles?.[side]
+    if (!s || !triple(s.heel) || !triple(s.toe)) continue
+    out.set(side, { heel: new three.Vector3(...s.heel), toe: new three.Vector3(...s.toe) })
+  }
+  return { box: new three.Box3(new three.Vector3(...box.min), new three.Vector3(...box.max)), soles: out }
 }
 
 /** normalised bone name → the local turn of `fp` (bones with a degenerate axis or angle left out). */

@@ -12260,7 +12260,15 @@ is never served without its shoe; `garment_assembly.served_foot_pose`).
                                                // bone's LOCAL bind frame (Foot + the extension, ToeBase back)
  "root_lift_m": 0.0526,                        // metres of the model's bind space
  "contacts": {"left":  [{"bone", "pos": [x, y, z], "role": "heel" | "ball" | "toe"}, …],
-              "right": […]}}                  // sole points, bind space, fixed to their bone
+              "right": […]},                 // sole points, bind space, fixed to their bone
+ "rest": {"box":   {"min": [x, y, z], "max": [x, y, z]},
+                                               // the BARE body's figure box (`figureBox`: every non-garment
+                                               // primitive's raw AABB through its node's world matrix), the
+                                               // glTF scene frame; min.y is the floor the figure is anchored on
+          "soles": {"left":  {"heel": [x, y, z], "toe": [x, y, z]},
+                    "right": {…}}}}            // the BARE body's rest soles (`restSolesOf`: lowest dominant-
+                                               // Foot/Toe* vertex behind the ankle / ahead of the ball, in the
+                                               // ROOT BONE's rest frame); a side the body lacks is left out
 ```
 
 - Joint names as in the model, compared with `normBoneName`. A record of another `version` is ignored.
@@ -12270,6 +12278,14 @@ is never served without its shoe; `garment_assembly.served_foot_pose`).
   that carries a node of kind `footwear` with the record's `item_id` and `fsig` (`footPoseMatches`) — the low tier
   carries the same nodes. A record that does not match is a no-op everywhere, so an outfit switch or the bare file
   served during a rebuild never extends a bare foot.
+- **`rest` is measured by the SERVER on the bare file of the same body** (`app/core/footwear_rest.py`, the
+  TypeScript definitions repeated in Python; the assembly measures the very bare `{sig}.glb` it builds from, the
+  fit the body it fitted on) and read by `footPoseRest`. `figureBox(three, root, fp)` returns the shipped box (moved
+  by `root.matrixWorld`) and `restCorrections(three, donor, target, eps, fp)` reads the shipped soles whenever the
+  record matches `root`; the clip-ground anchor and the plant's floor go through `figureBox` with the record. A
+  record without `rest` measures the loaded body as before; no renderer guesses anything. One vector for both
+  languages: `scripts/fixtures/foot_rest_vector.json` on `foot_rest_bare.glb` / `foot_rest_cut.glb`
+  (`scripts/smoke_foot_rest.py`, `scripts/smoke_foot_rest.mjs`).
 
 **One implementation** (`packages/scene-render`, `three` injected; every function is a no-op for a null or
 non-matching record):
@@ -12304,12 +12320,14 @@ fed by the Wardrobe shoe preview's `foot_pose`) wraps both `bindRelativeClip` si
 at both — the main clip in the ground group and the floor-plan marker figures in the ground group only. A clip
 baked for the ground group that plays seated keeps the plant but gets lift 0.
 
-**Bind measurements exclude garment subtrees** — `figureBox`, `restSolesOf` and the clip-ground anchor skip every
-mesh inside a garment node, so the rotated-back bind shoe never lowers the floor. They do read the CUT body: on the
-measured material its lowest bind point lies 11.5 mm above the bare soles and its rest soles 25–33 mm higher at the
-heel (Foot/ToeBase rest corrections 6.2° / 9.8° off the bare file's). The plant and the ground measure aim at the
-same floor the figure is anchored on, so a clip stands on the ground; the still pose placed at `root_lift_m`
-over that floor stands 11.5 mm under it (`check_footwear.mjs --bare`, its `still` row). Open point, not a rule.
+**Bind measurements exclude garment subtrees and, for a shod figure, come from the record** — `figureBox`,
+`restSolesOf` and the clip-ground anchor skip every mesh inside a garment node, so the rotated-back bind shoe never
+lowers the floor; and because the served body is CUT under the shoe (on the measured material its lowest bind point
+lies 11.5 mm above the bare soles, its rest soles 25–33 mm higher at the heel, the Foot/ToeBase rest corrections
+6.2° / 9.8° off), a figure whose record matches anchors on `rest.box` and transplants with `rest.soles` — the bare
+body's, measured by the server (above). Measured on T17's cut assembly with the shipped rest: the bind floor 0 mm over
+the bare soles, still sole 0.1 / 0.0 mm, idle −1.3, walk stance −2.2 … +13.0 with the strike / off rows of the uncut
+model (`check_footwear.mjs --bare`); `model.height` and a seat's hips relate to the bare floor again.
 
 **Seated and lying:** extension, no lift. A seat clip with planted feet sinks the heel up to about `root_lift_m`
 under the floor (measured −56 … −57 mm); the knee-raise IK (`seatFootLift`, spec § 6.4) is the open P3b step.
@@ -12320,7 +12338,9 @@ group gating, idempotence, match), `node scripts/smoke_foot_plant.mjs` (level tu
 IK reach clamp, pierce), `node scripts/smoke_clip_ground_sole.mjs`, `node client3d/scripts/smoke_foot_pose_client.mjs`
 (the client chain: posed + planted once, lift per group, `modelFootPose`), `./.venv/bin/python
 scripts/smoke_foot_pose_call_sites.py` (every call of `bindRelativeClip` / `adaptExternalClips` / `retargetClips`
-sits in a listed function that forwards the pose), the server side `scripts/smoke_footwear_*.py`. The measurement on
+sits in a listed function that forwards the pose), `./.venv/bin/python scripts/smoke_foot_rest.py` + `node
+scripts/smoke_foot_rest.mjs` (the shipped rest: one hand-laid fixture and one vector for Python and TypeScript, the
+cut body's box and soles taken from the record), the server side `scripts/smoke_footwear_*.py`. The measurement on
 real clips: `node scripts/check_footwear.mjs MODEL.glb META.json [--bare BARE.glb]` — the client's own chain, CPU
 skinned per frame: the share of shoe vertices more than 5 mm inside the body (boundary loops of the cut body capped),
 the lowest sole point per stance frame against the floor, the total Foot pitch (extension plus the clip's own

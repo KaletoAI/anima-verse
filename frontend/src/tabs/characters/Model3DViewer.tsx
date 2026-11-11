@@ -1111,8 +1111,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           const standRef = hipsMedian !== null ? await standHipsRef() : null
           pivot.updateMatrixWorld(true)
           // The FIGURE's box — the shoes are garments and do not count, so the
-          // floor is where the bare soles stand in the bind pose.
-          const box = figureBox(THREE, object)
+          // floor is where the bare soles stand in the bind pose; a shod
+          // figure's box is the BARE body's the record ships (the served
+          // body is cut under the shoe, `footPoseRest`).
+          const box = figureBox(THREE, object, shod)
           const hips = hipsOf(object)
           const hipsBindY = hips ? hips.getWorldPosition(new THREE.Vector3()).y - box.min.y : null
           const figH = box.max.y - box.min.y
@@ -1188,7 +1190,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           // character's stance — a model whose T-pose stands with the feet
           // splayed 18° showed 18° of extra toe-in on every clip.
           const donor = await donorRest()
-          const corrections = restCorrections(THREE, donor, object)
+          const corrections = restCorrections(THREE, donor, object, undefined, shod)
           if (disposed) return
           // The shoe's extension, baked ONCE right after the bind-relative
           // step into this load's own (unposed) clip; a bone the clip has no
@@ -1929,7 +1931,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               // every clip in the library matches the figure's up axis and
               // `bestRx` is 0; the day one does not, the anchor has to be
               // taken before the tilt (or the tilt applied to a parent).
-              anchorFigureBind(THREE, fpivot, o.figH)
+              // A shod figure anchors on the BARE body's box the record ships
+              // (`figureBox` with the record; matched against this instance).
+              anchorFigureBind(THREE, fpivot, o.figH, footPoseRef.current)
               // The clip's OWN hips height, put back. Every clip is played in
               // place (the hips position track is dropped above), which also
               // drops the height that track carried: without this, sit, sleep
@@ -1952,7 +1956,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                 // and the shoe's extension right after it, from the unposed
                 // cached clip.
                 const donor = await donorRest()
-                const corrections = restCorrections(THREE, donor, inst)
+                const corrections = restCorrections(THREE, donor, inst, undefined, shodFig)
                 const restFig = shodFig ? restPoseOf(THREE, inst) : null
                 const bareFig = bindRelativeClip(THREE, anim.clip, corrections)
                 let bound = applyFootPose(THREE, bareFig,

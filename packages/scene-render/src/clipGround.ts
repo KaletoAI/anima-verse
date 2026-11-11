@@ -54,8 +54,10 @@
  * THE MEASUREMENT IS THE SKINNING, not the skeleton: vertices through
  * `SkinnedMesh.getVertexPosition` over `GROUND_SAMPLE_FRAMES` frames, spread
  * over all skinned meshes with one stride (`GROUND_SAMPLE_VERTICES`). The
- * anchor is `figureBox(probe).min.y` — the bind box WITHOUT garment
- * subtrees: the shoes hang off the un-extended bind foot and would lower it.
+ * anchor is `figureBox(probe, fp).min.y` — the bind box WITHOUT garment
+ * subtrees: the shoes hang off the un-extended bind foot and would lower it;
+ * for a matching record the BARE body's box the server shipped (the served
+ * body is cut under the shoe).
  * The caller hands in a PROBE it does not mind posing (a `SkeletonUtils`
  * clone in the client; the preview's own figure before it plays), because
  * the mixer poses a skeleton. `three` is injected, never imported.
@@ -145,7 +147,7 @@ export function measureClipGround(three: Three, clips: readonly AnimationClip[],
   // The anchor the consumer uses: the figure's BIND box, garments excluded
   // (`figureBox` reads a skinned mesh's geometry box, the bind pose whatever
   // the bones are doing) — the same y = 0 the figure stands on.
-  const bindMinY = figureBox(three, probe).min.y
+  const bindMinY = figureBox(three, probe, fp).min.y
   const total = skins.reduce((n, s) => n + s.geometry.attributes.position.count, 0)
   const stride = Math.max(1, Math.ceil(total / GROUND_SAMPLE_VERTICES))
   const mixer = new three.AnimationMixer(probe)

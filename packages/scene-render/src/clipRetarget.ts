@@ -84,6 +84,8 @@
  * three is a PARAMETER, never an import — the admin loads it lazily.
  */
 import type { AnimationClip, KeyframeTrack, Matrix4, Object3D, Quaternion, SkinnedMesh, Vector3 } from 'three'
+import { footPoseRest } from './footPose'
+import type { FootPose } from './footPose'
 // figure.ts imports normBoneName from here: a cycle that is safe because
 // both sides only call each other inside functions, never at module load.
 import { inGarment } from './figure'
@@ -498,11 +500,17 @@ function footStance(three: THREE, self: RestPose,
 export function restCorrections(three: THREE,
                                 donor: RestPose,
                                 target: Object3D | RestPose,
-                                epsDeg = 0.05): Map<string, RestCorrection> {
+                                epsDeg = 0.05,
+                                footPose?: FootPose | null): Map<string, RestCorrection> {
   const out = new Map<string, RestCorrection>()
   if (!donor.world.size) return out
   const self = 'world' in target ? target : restPoseOf(three, target)
-  if (!('world' in target)) self.soles = restSolesOf(three, target, self)
+  // A SHOD figure's rest soles are the BARE body's, shipped in the record
+  // (`footPoseRest`, Task 20b): the loaded body is cut under the shoe and
+  // the foot stance rule would read the cut foot.
+  if (!('world' in target)) {
+    self.soles = footPoseRest(three, footPose, target)?.soles ?? restSolesOf(three, target, self)
+  }
   // Both rests, read in their own rig's ROOT BONE frame — that is what divides
   // the figure's standing attitude out of the comparison.
   const rootRest = (pose: RestPose): Quaternion | undefined => {
