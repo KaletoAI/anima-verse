@@ -81,8 +81,14 @@ Footwear (kind ``footwear``, method ``shoe``; plan
 the per-item source steps ``source → empty → cutout → mesh → insole`` under
 the ITEM lock — two wearers never run a step twice, the later one finds it
 done — then the wearer's ``fit`` (not wired yet; the chain ends after the
-insole). Same queue, status and cancel as every garment; a failure that is
-load or the media switch (``retry_later``) is not persisted.
+insole). Same queue, status and cancel as every garment.
+
+Load is never a failure record (every chain): a step that ends in a
+``BackendBusyError`` or ``MediaGenerationDisabled`` — directly, or as the
+cause of a ``MeshAttemptFailed`` — answers ``{ok: False, …, retry_later:
+True}``, the in-memory status shows it and nothing is persisted, so
+``cached_failure`` stays None and automatic triggers try again. A refusal by
+a gate, and any other defect, is persisted as before.
 
 The served fit follows the CURRENT method (``garment_store.accepted_fit``): a
 switch never generates anything, and a method without an accepted fit yet
@@ -1321,9 +1327,11 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
 
     Returns ``{ok: True, fsig, ran: [steps that produced output]}`` or
     ``{ok: False, fsig, step, error, gates}`` (also recorded as the item's
-    failed status; not persisted for a footwear failure that is load,
-    ``retry_later``). ValueError for an invalid item, step or view (any view
-    of footwear)."""
+    failed status; a failure that is load or the media switch — a
+    ``BackendBusyError`` / ``MediaGenerationDisabled`` in the exception chain
+    of any step, footwear's ``RETRY_LATER_ERRORS`` — carries ``retry_later:
+    True`` and is not persisted). ValueError for an invalid item, step or
+    view (any view of footwear)."""
     item, kind, order = _item_order(character_name, item_id)
     wanted = _steps(steps, order)
     _check_view(kind, view)
@@ -1346,8 +1354,8 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
 def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> None:
     """Persist a failed run's step + error under its fsig (automatic
     triggers skip it, ``cached_failure``); a successful run clears it. A
-    failure that is load or the media switch (``retry_later``, footwear) is
-    not persisted: automatic triggers try again."""
+    failure that is load or the media switch (``retry_later``, every chain)
+    is not persisted: automatic triggers try again."""
     from app.core import base_body, garment_store as gs
     fsig = str(result.get("fsig") or "")
     if not fsig:
@@ -1567,11 +1575,16 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
     except garment_mesh.MeshAttemptFailed as e:
         # An attempt failed outright (no backend, worker crash, decimation):
         # the failure carries every attempt, an earlier refusal's numbers too.
+        # Chained to load or the media switch it is neither: retry later.
+        if _is_load(e):
+            return _retry_later(character_name, item_id, fsig, e.step, e, ran)
         logger.warning("Garment run %s/%s failed at %s: %s", character_name, item_id, e.step, e)
         return _refusal(character_name, item_id, fsig, e.step, str(e), {"attempts": e.records}, ran)
     except _Refused as e:
         return _refusal(character_name, item_id, fsig, e.step, e.error, e.gates, ran)
     except Exception as e:  # noqa: BLE001 — reported as the step's failure
+        if _is_load(e):
+            return _retry_later(character_name, item_id, fsig, step, e, ran)
         logger.warning("Garment run %s/%s failed at %s: %s", character_name, item_id, step, e)
         return _refusal(character_name, item_id, fsig, step, str(e) or type(e).__name__, None, ran)
 
@@ -1634,6 +1647,31 @@ def _refusal(character_name: str, item_id: str, fsig: str, step: str, error: str
     logger.info("Garment run %s/%s refused at %s: %s", character_name, item_id, step, error)
     gs.end(character_name, item_id, step, error=error, gates=gates)
     return {"ok": False, "fsig": fsig, "step": step, "error": error, "gates": gates, "ran": ran}
+
+
+def _is_load(e: BaseException) -> bool:
+    """Whether a failed step is load or the media switch — a ``BackendBusyError``
+    or ``MediaGenerationDisabled`` anywhere in the exception chain
+    (``footwear_source.failure_of``'s walk of ``__cause__`` / ``__context__``)
+    — and so no defect of the item: nothing to persist, try again later."""
+    from app.core import footwear_source
+    return footwear_source.failure_of(e)[0] == footwear_source.LOAD
+
+
+def _retry_later(character_name: str, item_id: str, fsig: str, step: str, e: BaseException,
+                 ran: List[str]) -> Dict[str, Any]:
+    """The result of a step that met load or the media switch: ``retry_later``
+    — the item's status shows the text (the Wardrobe), ``_note_outcome``
+    persists nothing, so automatic triggers (the outfit build, the
+    improvements queue) try again instead of honouring a failure record. The
+    footwear chain answers the same way (``garment_footwear.RETRY_LATER_ERRORS``)."""
+    from app.core import footwear_source, garment_store as gs
+    error = footwear_source.failure_of(e)[1]
+    logger.info("Garment run %s/%s deferred at %s (load or the media switch): %s",
+                character_name, item_id, step, error)
+    gs.end(character_name, item_id, step, error=error, gates=None)
+    return {"ok": False, "fsig": fsig, "step": step, "error": error, "gates": None, "ran": ran,
+            "retry_later": True}
 
 
 def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
