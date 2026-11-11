@@ -86,11 +86,25 @@ Geometry (the canvas of smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
       they now wear only a knee-length green linen dress with short sleeves."
     worn back  = no edit prompt: ValueError "drafted from the worn front"
       (the draft + fit back: scripts/smoke_garment_clothing_back.py)
-    ghost (both views) = "The same green dress alone, as if worn by an
-      invisible person (ghost mannequin): no head, no arms, no hands, no legs,
-      no feet, no skin; where the neck opening, sleeves and hem are, the
-      inside of the garment is visible. Same position, size and framing,
-      plain grey background."
+    ghost front (the dress has a top slot: no waistband piece) = GHOST:
+      "The same green dress in exactly the same position, size, width and
+      framing, keeping its worn three-dimensional shape as if on an
+      invisible body (ghost mannequin product photo): the person is removed,
+      the inside of the garment is visible at the neck opening, sleeves and
+      hem, plain grey background."
+    ghost back (ruling 13e: every back says GHOST_KEEP; not a waistband
+      piece -> sleeves, neck opening) = "Keep the green dress exactly as it
+      is, seen from behind: the same position, outer outline, width and
+      framing, the sleeves at exactly the same angle as in the image, the
+      same background. Remove the person completely so the green dress
+      keeps its worn three-dimensional shape on an invisible body (ghost
+      mannequin product photo); the inside is visible at the neck opening,
+      sleeves and hem."
+    A waistband piece ("Grey Trousers", slots [bottom]) says GHOST_KEEP on
+      both views, the legs and the waistband: front "Keep the grey trousers
+      exactly as it is, seen from the front: … the legs apart at exactly the
+      same angle as in the image, … the inside is visible at the waistband
+      and the leg openings."; the back the same with "seen from behind".
     negatives: worn = DRESS_GARMENT_NEGATIVE minus "dress" -> "loose
       clothing, baggy, skirt, jacket, shoes, socks, hair"; ghost = that +
       ", person, skin, head, arms, hands, legs, feet, mannequin, hanger".
@@ -183,6 +197,20 @@ GHOST_PROMPT = ("The same green dress in exactly the same position, size, width 
                 "three-dimensional shape as if on an invisible body (ghost mannequin product photo): the person "
                 "is removed, the inside of the garment is visible at the neck opening, sleeves and hem, plain "
                 "grey background.")
+GHOST_BACK_PROMPT = ("Keep the green dress exactly as it is, seen from behind: the same position, outer outline, "
+                     "width and framing, the sleeves at exactly the same angle as in the image, the same background. "
+                     "Remove the person completely so the green dress keeps its worn three-dimensional shape on an "
+                     "invisible body (ghost mannequin product photo); the inside is visible at the neck opening, "
+                     "sleeves and hem.")
+
+
+def trousers_ghost(side):
+    return ("Keep the grey trousers exactly as it is, " + side + ": the same position, outer outline, width and "
+            "framing, the legs apart at exactly the same angle as in the image, the same background. Remove the "
+            "person completely so the grey trousers keeps its worn three-dimensional shape on an invisible body "
+            "(ghost mannequin product photo); the inside is visible at the waistband and the leg openings.")
+
+
 _OLD_GHOST_PROMPT = ("The same green dress alone, as if worn by an invisible person (ghost mannequin): no head, no "
                 "arms, no hands, no legs, no feet, no skin; where the neck opening, sleeves and hem are, the "
                 "inside of the garment is visible. Same position, size and framing, plain grey background.")
@@ -449,7 +477,13 @@ def main() -> int:
                ValueError, "drafted from the worn front")
         check("ghost front", garment_clothing.edit_prompt("Demo", "ghost", "front", item_id=did),
               (GHOST_PROMPT, GHOST_NEG))
-        check("ghost back", garment_clothing.edit_prompt("Demo", "ghost", "back", item_id=did)[0], GHOST_PROMPT)
+        check("ghost back", garment_clothing.edit_prompt("Demo", "ghost", "back", item_id=did)[0], GHOST_BACK_PROMPT)
+        tid = inventory.add_item(name="Grey Trousers", category="outfit_piece", prompt_fragment="grey trousers",
+                                 outfit_piece={"slots": ["bottom"]})["id"]
+        check("trousers ghost front", garment_clothing.edit_prompt("Demo", "ghost", "front", item_id=tid)[0],
+              trousers_ghost("seen from the front"))
+        check("trousers ghost back", garment_clothing.edit_prompt("Demo", "ghost", "back", item_id=tid)[0],
+              trousers_ghost("seen from behind"))
         raises("no fragment", lambda: garment_clothing.edit_prompt("Demo", "worn", "front", item_id=bare),
                ValueError, "has no prompt fragment")
 
