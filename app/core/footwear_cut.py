@@ -119,6 +119,12 @@ gaps 115–270°) × k 0.3111 = **0.1741 m** in the frame (bind 0.1640 / 0.1674)
 −1.1–1.6 mm, seat floor 3.1–7.4 mm, thigh in shaft 0 %, and ``shaft_poke`` **0.00 %** in every frame (version 3:
 76–85 %; the collar range alone still read 55–70 % — the script's boot volume had no lid on a shell mesh, fixed
 there).
+With the REAL own-mesh trousers instead (Task 13 round 2, the served outfit ``5808b890ad9a`` on the clone,
+retexture mode, three garments) the boot reads the same: the live refit (version 9, 0 hub jobs) has ``shaft_poke``
+0 / 0 (33 / 41 shin vertices), seam p95 0, and push p95 7.6 / 7.8 mm. ``check_footwear.mjs --bare`` gives seam gap
+0.0000 mm, leg follow 0.00°, and ``shaft_poke`` 0.00 % in still / idle / walk / sit; open loops 0; penetration
+1.59–1.74 %; idle sole −2.1 mm; walk stance −3.0 … +2.2 mm; strike −0.3 … 1.8 mm and off −3.0 … −0.3 mm; seat
+floor 3.1–7.4 mm; thigh in shaft 0 %.
 
 **Calibration (P3 acceptance, Task 21, 2026-11-11) — REAL material.** Kira's base body (``base20d5701a``) in the
 Business Heels (UniForge mesh of the Qwen side-view empty shoe, 98 507 → 57 527 tris at ``TARGET_TRIS`` 60 000, width

@@ -70,6 +70,15 @@ the shaft) — the same under version 9 (the over layering never read ``top_m``)
 ankle — the collar stands 2.8 cm above the split): 3 mm → **0.783** (501 / 640, 1280 faces removed), 25 mm →
 **0.869** (556 / 640) — every case falls back ``too_wide``. On an ankle shoe whose collar ends this close to the
 band the fallback is right, its word ("too wide") is not.
+
+Real trousers (Task 13 round 2, 2026-11-11, on the clone, server at 019a995a): Kai's own-mesh Tailored Black
+Trousers (``item_750811f7``; UniForge mesh 95 531 → 59 895 tris, fit accepted on ``base634402e5`` with max push
+50.6 mm, deep push 0.094, rigged inside 0) worn over the Work Shoes (fit version 9, ``top_m`` 0.1640, ``plane_m``
+0.1340). ``over``: ``gap_min_m`` **+10.3 mm** (low tier +10.2), p1 11.8 mm, 2749 vertices moved, max 40.3 mm.
+``tucked``: the plane cut removes 3037 faces and bisects 434; ``tucked_poke`` is **0.891** (960 / 1077), so the
+fallback is ``too_wide`` and the build is ``over``. The real piece gets the same verdict as the stand-in. Every
+toggle gives a new ``model_rev`` and leaves the queue log empty (no track, no GPU task); flipping back to ``over``
+reuses the cached ``lsig`` without a new layered fit.
 """
 import hashlib
 import json
