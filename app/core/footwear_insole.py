@@ -69,10 +69,18 @@ Blender:
   one) — gate ``shaft_closed_share`` ≥ 0.9, refusal ``SHAFT_OPEN_REFUSED`` (an open-sided shaft is a mesher hole).
   **Cap**: a single-view mesher closes an opening it cannot see; the faces whose centroid lies within the top
   ``CAP_TOP_SHARE`` of the shaft height — from ``top_raw − CAP_TOP_SHARE × (top_raw − vamp_top_raw)`` up,
-  nothing of a shaft lies above its top but a cap — and whose normal's up component is ≥ ``CAP_UP_MIN``
-  (cos 30°) are the cap: ``cap_removed`` counts them, ``strip_cap`` takes them out of the arrays and the insole
-  step rewrites ``prepared.glb`` without them (``footwear_source._step_insole``); the shaft's material is
-  marked double-sided at the fit.
+  nothing of a shaft lies above its top but a cap — whose normal's up component is ≥ ``CAP_UP_MIN`` (cos 30°)
+  AND whose centroid lies INSIDE the opening (INSOLE_VERSION 5, P2 carry to Task 9) are the cap: ``cap_removed``
+  counts them, ``strip_cap`` takes them out of the arrays and the insole step rewrites ``prepared.glb`` without
+  them (``footwear_source._step_insole``); the shaft's material is marked double-sided at the fit. The opening
+  is the ring the plane at the cap band's floor cuts out of the mesh (``_ring_cut``), reduced to its INNER loop —
+  per ``CAP_RING_BINS`` angular bin about the ring's bbox centre the cut point of smallest radius — and read as a
+  polygon (even-odd test on the centroid's (x, z)). The height-band rule alone (version 3 / 4) ate the collar
+  RIM of a real mesh: a mesh has a wall thickness, its rounded rim's top faces are up-facing and inside the band
+  (161 of 161 faces on the P2 Work Shoes, 10 cm²; 142 on the Leather Boots) and were stripped with the disc; the
+  rim's faces lie BETWEEN the inner and the outer wall surface, i.e. outside the inner loop, and stay now. A
+  tongue or pull tab standing above the collar inside the opening still counts as a cap where it faces up.
+  Without a ring at the floor (fewer than 3 cut points) nothing is a cap.
 - **Type gates** (``INSOLE_GATES``): ``insole_cover`` = insole cells within the outsole footprint / its
   cells (refusal ``INSOLE_REFUSED``); ``vamp_cover`` = the share of footprint cells at x >= ``BALL_SHARE`` L whose
   column has a hit above the insole (refusal ``OPEN_REFUSED``); ``opening_share`` = the share of
@@ -122,8 +130,9 @@ from app.core.footwear_gates import check_gates
 #: Bumped when the analysis changes what it measures (part of the footwear fsig).
 #: 2: insole_cover and footprint_outline over the outsole footprint (footprint_ground);
 #: 3: the shaft block (collar height, class, tube slabs, closed share, cap removal);
-#: 4: a closed slab ring needs a largest angular gap < 90° and an extent ≥ 0.1 L (tongue / pull tab are no shaft).
-INSOLE_VERSION = 4
+#: 4: a closed slab ring needs a largest angular gap < 90° and an extent ≥ 0.1 L (tongue / pull tab are no shaft);
+#: 5: a cap face lies inside the opening's inner loop (the collar rim of a real mesh is no cap).
+INSOLE_VERSION = 5
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -176,6 +185,8 @@ RING_EXTENT_MIN_SHARE = 0.10
 #: The cap band: the top share of the shaft height (top_raw − vamp top) and the up component of a cap face.
 CAP_TOP_SHARE = 0.02
 CAP_UP_MIN = math.cos(math.radians(30.0))
+#: The opening's inner loop: angular bins about the ring's bbox centre, the nearest cut point per bin (3°).
+CAP_RING_BINS = 120
 #: The shaft gates, judged with INSOLE_GATES at the insole step; both are optional for a shoe without a shaft.
 SHAFT_GATES: Dict[str, Tuple[str, Any, str]] = {
     "shaft_closed_share": ("min", 0.9, "share of the shaft's tube slabs with a closed ring"),
@@ -565,10 +576,73 @@ def _slab_rings(p_frame: np.ndarray, faces: np.ndarray, levels: np.ndarray, eps:
     return out
 
 
+def _ring_cut(P: np.ndarray, F: np.ndarray, y: float, eps: float) -> np.ndarray:
+    """The (x, z) points where the plane ``y`` cuts the edges of ``F`` (an edge lying in the plane gives both
+    ends) — the ring of ``_slab_rings`` for one level, as points; (0, 2) when the plane cuts nothing."""
+    E = _edges(F)
+    if not len(E):
+        return np.zeros((0, 2))
+    pa, pb = P[E[:, 0]], P[E[:, 1]]
+    ylo, yhi = np.minimum(pa[:, 1], pb[:, 1]), np.maximum(pa[:, 1], pb[:, 1])
+    m = (ylo <= y + eps) & (yhi >= y - eps)
+    if not m.any():
+        return np.zeros((0, 2))
+    dye = pb[:, 1] - pa[:, 1]
+    flat = np.abs(dye) <= eps
+    cut = m & ~flat
+    tt = (y - pa[cut, 1]) / dye[cut]
+    pts = [pa[cut] + tt[:, None] * (pb[cut] - pa[cut])]
+    inplane = m & flat
+    if inplane.any():
+        pts += [pa[inplane], pb[inplane]]
+    return np.concatenate(pts)[:, [0, 2]]
+
+
+def _opening_polygon(ring: np.ndarray) -> np.ndarray:
+    """The inner loop of a ring of cut points (module docstring): per ``CAP_RING_BINS`` angular bin about the
+    ring's bbox centre the point of smallest radius, sorted by angle — the opening as a polygon (n, 2); (0, 2)
+    for fewer than 3 points."""
+    q = np.asarray(ring, np.float64).reshape(-1, 2)
+    if len(q) < 3:
+        return np.zeros((0, 2))
+    c = 0.5 * (q.min(0) + q.max(0))
+    d = q - c
+    ang = np.arctan2(d[:, 1], d[:, 0])
+    r = np.hypot(d[:, 0], d[:, 1])
+    b = np.clip(((ang + math.pi) / (2.0 * math.pi) * CAP_RING_BINS).astype(int), 0, CAP_RING_BINS - 1)
+    order = np.lexsort((r, b))
+    first = np.concatenate([[True], b[order][1:] != b[order][:-1]])
+    pick = order[first]
+    pick = pick[np.argsort(ang[pick])]
+    return q[pick] if len(pick) >= 3 else np.zeros((0, 2))
+
+
+def _inside_polygon(pts: np.ndarray, poly: np.ndarray) -> np.ndarray:
+    """Even-odd point-in-polygon test of ``pts`` (n, 2) against ``poly`` (m, 2)."""
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    inside = np.zeros(len(pts), bool)
+    if len(poly) < 3 or not len(pts):
+        return inside
+    x, z = pts[:, 0], pts[:, 1]
+    px, pz = poly[:, 0], poly[:, 1]
+    qx, qz = np.roll(px, -1), np.roll(pz, -1)
+    for i in range(len(poly)):
+        crosses = (pz[i] > z) != (qz[i] > z)
+        if not crosses.any():
+            continue
+        xi = px[i] + (z[crosses] - pz[i]) / (qz[i] - pz[i]) * (qx[i] - px[i])
+        hit = np.zeros(len(pts), bool)
+        hit[crosses] = x[crosses] < xi
+        inside ^= hit
+    return inside
+
+
 def _cap_mask(p_frame: np.ndarray, faces: np.ndarray, top_raw: Optional[float],
               vamp_top_raw: Optional[float]) -> np.ndarray:
     """The cap faces (module docstring): centroid height >= ``top_raw − CAP_TOP_SHARE × (top_raw − vamp top)``
-    and the face normal's up component >= ``CAP_UP_MIN``. All False without a closed shaft top."""
+    (the cap band's floor), the face normal's up component >= ``CAP_UP_MIN``, and the centroid's (x, z) inside
+    the opening — the inner loop of the ring the plane at the floor cuts out of the mesh. All False without a
+    closed shaft top or without a ring at the floor."""
     F = np.asarray(faces, np.int64).reshape(-1, 3)
     if top_raw is None or not len(F):
         return np.zeros(len(F), bool)
@@ -578,8 +652,15 @@ def _cap_mask(p_frame: np.ndarray, faces: np.ndarray, top_raw: Optional[float],
     n = np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])
     norm = np.linalg.norm(n, axis=1)
     nu = n[:, 1] / np.where(norm > 0, norm, 1.0)
-    cy = P[F][:, :, 1].mean(1)
-    return (cy >= floor) & (nu >= CAP_UP_MIN)
+    centroid = P[F].mean(1)
+    band = (centroid[:, 1] >= floor) & (nu >= CAP_UP_MIN)
+    if not band.any():
+        return band
+    extent = float(np.ptp(P[:, 1])) if len(P) else 0.0
+    poly = _opening_polygon(_ring_cut(P, F, floor, 1e-9 * max(extent, 1e-12)))
+    if not len(poly):
+        return np.zeros(len(F), bool)
+    return band & _inside_polygon(centroid[:, [0, 2]], poly)
 
 
 def cap_faces(positions: np.ndarray, faces: np.ndarray, insole: Dict[str, Any]) -> np.ndarray:

@@ -247,8 +247,8 @@ def main() -> int:
                                  "worse side)"] and "cut" not in fw.record,
           f"[F5] 0.10 m foot: slim {gw['value']} > 0.18 refuses (ok {fw.ok}, {fw.reasons[:1]}); a refused fit carries no cut")
     check(all(v["gating"] is True for v in g.values()) and set(fit.record["cut"]["sides"]) == {"left", "right"}
-          and fit.record["cut"]["version"] == 2,
-          "[F5] every gate gating; the accepted fit carries the cut description (both sides, cut version 2)")
+          and fit.record["cut"]["version"] == 3,
+          "[F5] every gate gating; the accepted fit carries the cut description (both sides, cut version 3)")
     f105 = ff.fit_pair(insole, shoe, body, joints, width_cap=1.05)
     f150 = ff.fit_pair(insole, shoe, body, joints, width_cap=1.5)
     check(f105.record["scale"]["width_factor"] == 1.05 and f150.record["scale"]["width_factor"] == 1.10,

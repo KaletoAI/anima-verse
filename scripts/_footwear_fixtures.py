@@ -24,6 +24,9 @@ mesher's own coordinates (Y up, x heel -> toe, z lateral), length 0.26, width 0.
   its ends; with ``open_side`` the three remaining walls are a U whose open side is the LONG one;
 - ``tab`` (same): a pull tab — a closed 0.02 x 0.02 loop (four walls, 0.01 grid) over x in [0.04, 0.06] x z in
   [-0.01, 0.01] standing on the shaft's top ring from y = ``shaft`` to ``shaft`` + 0.03;
+- ``rim`` (boots P3 Task 9, the P2 carry): a flat collar rim — up-facing quads at y = ``shaft`` from |z| = HALF_W out
+  to HALF_W + ``rim`` along both shaft walls over x in [0, 0.10] on the 0.01 grid, 10 x 2 quads = 40 triangles: the
+  top of a real mesh's wall thickness, which lies OUTSIDE the opening and is no cap;
 - ``flare``: a flared shaft (boots plan Task 2, spec 2026-11-11 § 5 F5 / § 6.1) — two extra walls over x in
   [0, 0.10] that lean OUT from z = +-HALF_W at y = 0.05 to z = +-``flare`` at y = 0.16, open at the bottom (a
   vertical ray over |z| in (0.04, ``flare``) hits the leaning wall at 0.05 .. 0.16, never the ground; its face
@@ -57,12 +60,13 @@ def h(x: float) -> float:
 
 def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = False, solid: bool = False,
           shaft: float = 0.0, flare: float = 0.0, cap: bool = False, open_side: bool = False,
-          shaft_ends: bool = False, tab: bool = False):
+          shaft_ends: bool = False, tab: bool = False, rim: float = 0.0):
     """``(positions (N, 3), faces (M, 3))`` of the wedge pump (module docstring); ``shaft`` > 0 raises the
     side walls over the rear x in [0, 0.10] to that height (a boot shaft; topline there = ``shaft``); ``flare``
     > HALF_W adds the leaning flare walls over the same x; ``cap`` closes the shaft's top with an up-facing disc,
     ``open_side`` leaves the +z shaft wall at the pump's wall height, ``shaft_ends`` closes the shaft's ends with a
-    back and a front wall, ``tab`` puts a pull-tab loop on its top ring (module docstring)."""
+    back and a front wall, ``tab`` puts a pull-tab loop on its top ring, ``rim`` > 0 a flat collar rim of that
+    width outside both shaft walls (module docstring)."""
     P, F = [], []
 
     def tri(a, b, c, facing):
@@ -101,6 +105,10 @@ def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = Fals
         if in_shaft and cap:
             for j in range(8):
                 z0, z1 = -HALF_W + 0.01 * j, -HALF_W + 0.01 * (j + 1)
+                quad((x0, shaft, z0), (x1, shaft, z0), (x1, shaft, z1), (x0, shaft, z1), up)
+        if in_shaft and rim > 0.0:
+            for sgn in (1.0, -1.0):
+                z0, z1 = sgn * HALF_W, sgn * (HALF_W + rim)
                 quad((x0, shaft, z0), (x1, shaft, z0), (x1, shaft, z1), (x0, shaft, z1), up)
         if not solid and x0 >= roof_from - 1e-9:
             quad((x0, h0 + WALL, -HALF_W), (x1, h1 + WALL, -HALF_W), (x1, h1 + WALL, HALF_W),
@@ -201,15 +209,16 @@ def clog():
     return np.asarray(P, np.float64), np.asarray(F, np.int64)
 
 
-def flat_boot(shaft: float = 0.16, half_w: float = 0.04):
+def flat_boot(shaft: float = 0.16, half_w: float = 0.04, shaft_to: float = 0.10):
     """``(positions, faces)`` of the closed flat boot (boots plan Task 6, spec 2026-11-11 § 6.2–6.4): the ``clog()``
-    with ``half_w`` as its half-width whose side walls over x in [0, 0.10] rise to ``shaft`` (rows every 0.01 in y, so
-    the split's band has vertex rows), a back wall at x = 0 to ``shaft`` and a front wall at x = 0.10 from the clog's
-    wall height W_LO (0.035, above the box foot's top at 0.03 k) to ``shaft`` — a closed tube on the flat clog; in
-    front of x = 0.10 the clog is unchanged (walls 0.035 / 0.04, the roof over [0.1825, 0.26]). Unwelded like the
-    clog (every quad its own vertices)."""
+    with ``half_w`` as its half-width whose side walls over x in [0, ``shaft_to``] (0.10) rise to ``shaft`` (rows every
+    0.01 in y, so the split's band has vertex rows), a back wall at x = 0 to ``shaft`` and a front wall at x =
+    ``shaft_to`` from the clog's wall height W_LO (0.035, above the box foot's top at 0.03 k) to ``shaft`` — a closed
+    tube on the flat clog; in front of ``shaft_to`` the clog is unchanged (walls 0.035 / 0.04, the roof over [0.1825,
+    0.26]). Unwelded like the clog (every quad its own vertices); ``garment_fit.weld`` joins them (boots plan Task 9:
+    the shaft push smooths over the mesh's connectivity, an unwelded tube cracks at its corners)."""
     L, HW, TOP, X0, STEP, W_LO, W_HI, ROOF = 0.26, half_w, 0.01, 0.01, 0.1825, 0.035, 0.04, 0.04
-    SHAFT_TO = 0.10
+    SHAFT_TO = shaft_to
     P, F = [], []
 
     def tri(a, b, c, facing):
@@ -314,7 +323,7 @@ def heel_raise(x: float, heel_up: float) -> float:
 
 
 def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0,
-              leg_half_w: float = 0.03, leg_cell: float = 0.0):
+              leg_half_w: float = 0.03, leg_cell: float = 0.0, leg_bottom: float = 0.10):
     """``(positions, faces, joints (N, 2), weights (N, 2), joint names)`` of the synthetic feet (block above):
     every vertex has two joint slots, the second one unused (joint 0, weight 0) except on the leg column with a
     ``shin_foot_weight`` > 0 (Foot ``shin_foot_weight`` / Leg the rest) — the default body's GLB bytes are the
@@ -322,7 +331,8 @@ def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight:
     wider shin for the shaft push-out); ``leg_cell`` > 0 tessellates the leg column's faces in cells of that size
     (0 = one quad per face, the round-1 column of 24 faces) — the voxel body field of the shaft push needs a
     surface the sampler closes, and the clothing transfer's 8 nearest body vertices should be the shin, not six
-    corners."""
+    corners. ``leg_bottom`` is the column's lowest y (0.10 = the round-1 gap above the foot box; boots plan Task 9:
+    0.02 stands the column ON the foot box, so a boot's cut has an edge to bisect at the ankle band)."""
     names = list(_FOOT_PARENT)
     P, F, J = [], [], []
     for side, zc in FOOT_ZC.items():
@@ -346,8 +356,8 @@ def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight:
                 p[1] += heel_raise(float(p[0]), heel_up)
         leg = (lambda p, fi=fi, li=li: (fi, li, float(shin_foot_weight))) if shin_foot_weight > 0.0 \
             else (lambda p, li=li: (li, 0, 1.0))                                                    # noqa: E731
-        lo = np.array([-0.03, 0.10, zc - leg_half_w])
-        ext = {0: 0.06, 1: 0.35, 2: 2.0 * leg_half_w}
+        lo = np.array([-0.03, leg_bottom, zc - leg_half_w])
+        ext = {0: 0.06, 1: 0.45 - leg_bottom, 2: 2.0 * leg_half_w}
         for axis_u, axis_v, n_axis in ((0, 2, 1), (0, 1, 2), (2, 1, 0)):
             for top in (False, True):
                 u = np.zeros(3)
@@ -368,10 +378,10 @@ def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight:
 
 
 def foot_body_glb(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0,
-                  leg_half_w: float = 0.03, leg_cell: float = 0.0) -> bytes:
+                  leg_half_w: float = 0.03, leg_cell: float = 0.0, leg_bottom: float = 0.10) -> bytes:
     """The synthetic feet as a skinned GLB (skin 0 = the joints above, inverse bind matrices = -translation)."""
     from app.core.glb_mesh import pack_glb
-    pos, faces, jidx, wgts, names = foot_body(ball_width, heel_up, shin_foot_weight, leg_half_w, leg_cell)
+    pos, faces, jidx, wgts, names = foot_body(ball_width, heel_up, shin_foot_weight, leg_half_w, leg_cell, leg_bottom)
     blob = bytearray()
     accessors, views = [], []
 

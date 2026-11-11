@@ -50,7 +50,7 @@ Expected, by hand:
      every number equals [I1] (the fin is vertical -> no ray hit; it sits at z = 0 -> no topline side).
 [I8] analyse(static_glb(pump)) equals analyse_arrays(pump) within float32 (1e-5) and is JSON without NaN.
 (Every float in insole.json is rounded to 7 decimals, so the station-count checks hold to 1e-6.)
-[I9] constants: INSOLE_VERSION 3 (the shaft block; 2 = the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
+[I9] constants: INSOLE_VERSION 5 (the cap inside the opening; 4 = the tube ring rules, 3 = the shaft block, 2 = the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
      INSOLE_GATES insole_cover min 0.80 / vamp_cover min 0.6 / opening_share min 0.5, BOOT_MARGIN_M 0.03,
      the refusal texts (boot, open, solid).
 [I11] the closed solid wedge (sole alone: side faces only up to h(x), no roof): the top faces up with nothing
@@ -147,6 +147,22 @@ wedge(shaft=0.60) passes its gates: [I13]-[I16] fail there on the missing key.)
      open short side, 2 x atan(0.04 / 0.05) = 77.32 deg < 90 (+- 0.05), extent 0.10 x 0.08.
 (On 7b04e9f5 / 8efc6616 — INSOLE_VERSION 3 — (b) reads closed_share 1.0 and passes, (c) top_raw 0.29, and no slab
 carries gap_deg: [I17] fails there.)
+[I18] a cap face lies INSIDE the opening (INSOLE_VERSION 5, the P2 carry to Task 9: on the real P2 material the
+     height-band rule stripped the collar RIM — 161 of 161 faces on the Work Shoes, 142 on the Leather Boots, the
+     rounded top of the wall thickness). wedge(shaft=0.26, cap=True, rim=0.01): the capped shaft of [I15] plus a flat
+     collar rim — up-facing quads at y = 0.26 from |z| = 0.04 out to 0.05 along both walls over x in [0, 0.10],
+     10 x 2 quads = 40 triangles (1428 faces = [I15]'s 1388 + 40). The cap band's floor is 0.26 - 0.02 x (0.26 -
+     0.04) = 0.2556; the plane there cuts the two walls at z = +-0.04 over x in [0, 0.10] (no end walls: the ring
+     is the two parallel lines), its inner loop sorted by angle about (0.05, 0) is the rectangle [0, 0.10] x
+     [-0.04, 0.04]. The disc's 160 centroids (x in (0, 0.10), |z| <= 0.035) lie inside it -> cap_removed 160;
+     the rim's 40 centroids at |z| = 0.045 lie outside -> kept: strip_cap removes 160, 40 up-facing faces remain
+     at the top (centroid y > 0.2556, up component >= cos 30), their centroids at |z| = 0.04 + 0.01 / 3 and
+     0.04 + 0.02 / 3 (the two triangles of each rim quad: 0.043333 / 0.046667, +- 1e-9); top_raw 0.26
+     (the top slab's in-plane rim edges widen the bbox to +-0.05, the ring stays closed), closed_share 1.0,
+     collar_h_raw 0.17 and class ankle as [I15]; the plain cap of [I15] still reads exactly 160 (every disc
+     centroid inside, nothing else up-facing in the band) and the cap-free [I14] / [I17] fixtures 0.
+(On 162963ca / 863a2726 — INSOLE_VERSION 4 — the same fixture reads cap_removed 200 and strip_cap takes the rim
+with the disc: [I18] fails there.)
 """
 import json
 import math
@@ -243,7 +259,7 @@ def main():
     print("[I9] constants")
     check("constants", (fi.INSOLE_VERSION, fi.NOMINAL_LENGTH_M, fi.STATIONS, fi.AIR_SHARE, fi.TOL_SHARE,
                         fi.BOOT_MARGIN_M, fi.DOWN_MAX),
-          (4, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
+          (5, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
     check("ring constants", (fi.RING_GAP_MAX_DEG, fi.RING_EXTENT_MIN_SHARE), (90.0, 0.10))
     check("INSOLE_GATES", {k: v[:2] for k, v in fi.INSOLE_GATES.items()},
           {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6), "opening_share": ("min", 0.5)})
@@ -297,7 +313,7 @@ def main():
     near("vamp_cover", pump["vamp_cover"], 0.810, 0.02)
     near("vamp_cover (station count 74/91)", pump["vamp_cover"], 74 / 91, 1e-6)
     check("gates", (pump["gates"]["ok"], pump["gates"]["reasons"], pump["gates"].get("refusal")), (True, [], None))
-    check("version", pump["version"], 4)
+    check("version", pump["version"], 5)
     near("pump footprint_ground", pump["footprint_ground"], 1.0, 1e-9)
 
     print("[I4] rotated 180 deg about Y")
@@ -487,6 +503,27 @@ def main():
     check("(c) JSON strict", strict_json(tabbed), True)
     check("(d) [I14] plain walls: gap 77.32 deg, closed", all(s["closed"] and abs(s["gap_deg"] - 77.32) <= 0.05
                                                              for s in slabs), True)
+
+    print("[I18] a cap face lies inside the opening: the collar rim stays")
+    Prim_, Frim = wedge(shaft=0.26, cap=True, rim=0.01)
+    check("rim fixture: 40 more faces than the capped shaft", len(Frim) - len(Fcap), 40)
+    rimmed = fi.analyse_arrays(Prim_, Frim)
+    check("rim cap_removed 160 (the disc only)", rimmed["shaft"]["cap_removed"], 160)
+    P4, F4, removed4 = fi.strip_cap(Prim_, Frim, rimmed)
+    check("rim strip_cap removed 160", (removed4, len(F4)), (160, len(Frim) - 160))
+    n4 = np.cross(P4[F4[:, 1]] - P4[F4[:, 0]], P4[F4[:, 2]] - P4[F4[:, 0]])
+    n4 = n4[:, 1] / np.linalg.norm(n4, axis=1)
+    c4 = P4[F4].mean(1)
+    top_up = (c4[:, 1] > 0.2556) & (n4 >= 0.866)
+    check("rim: 40 up-facing faces remain at the top", int(top_up.sum()), 40)
+    rz = np.sort(np.unique(np.round(np.abs(c4[top_up, 2]), 9)))
+    check("rim: the remaining top faces' centroids at |z| 0.043333 / 0.046667", rz.tolist(), [0.043333333, 0.046666667])
+    check("rim top_raw 0.26, closed 1.0, class ankle", (rimmed["shaft"]["top_raw"], rimmed["shaft"]["closed_share"],
+                                                        rimmed["shaft"]["class"]), (0.26, 1.0, "ankle"))
+    near("rim collar_h_raw", rimmed["shaft"]["collar_h_raw"], 0.17, 1e-6)
+    check("rim gates ok", (rimmed["gates"]["ok"], rimmed["gates"].get("refusal")), (True, None))
+    check("the plain cap still reads 160", capped["shaft"]["cap_removed"], 160)
+    check("CAP_RING_BINS 120", fi.CAP_RING_BINS, 120)
 
     if FAILED:
         print(f"\n{len(FAILED)} check(s) failed: {FAILED}")

@@ -84,6 +84,21 @@ front, the band's far end is the instep's own rise — that number is ``throat_s
 diagnostics). Diagnostics: rim gap (topline → nearest foot vertex), arch gap (lowest foot vertex per 4 mm cell →
 nearest shoe surface, EDT), overhang above the rim, poke by region (heel / mid / toe by the fit's heel and ball x).
 
+**Boots** (``CUT_VERSION`` 3; boots spec ``docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md`` § 7,
+§ 9). The fit's parts per side are ``foot`` and, for a split fit, ``shaft`` (``footwear_fit`` step 9). The cut
+under the foot part is the round-1 cut with ONE change: the removal cap is ``min(wall top, y_split − band)``
+(``cut_description``, the side carries ``split {y_m, band_m}``), so the removal stops at the bottom of the ankle
+band instead of climbing the shaft's wall top and the bisected edge lies inside the shaft, hidden. Under the shaft
+there is NO cut — the shin stays inside the shaft at the push-out's clearance. ``cut_gates`` takes every part: the
+voxel surface is foot ∪ shaft, each vertex taken into the cut frame by its OWN Foot / ToeBase share (a band vertex
+carries a Leg share; the round-1 ``(1 − w) Foot + w Toe`` assumed the two sum to 1), so the lid closes the collar and
+the shin inside the tube is enclosed. Gate ``shaft_poke`` (``CUT_GATES``, a split fit only — a shoe's record has no
+such key, like the fit's ``SHAFT_GATES``): of the SHIN vertices — body vertices carrying this side's Leg or UpLeg
+weight whose cut-frame height lies in [``y_split + band``, the shaft part's top] (the band's top inclusive within
+1e-9) — the share in the voxel exterior; ≤ 0.5 %. The other leg carries none of this side's Leg weight and the
+shin above the shaft top is above the lid. With no shin vertex in the range the value is None and the gate is not
+judged (``POKE_OPTIONAL``, never a vacuous 0 — P2 Ruling 8b).
+
 **Calibration (P3 acceptance, Task 21, 2026-11-11) — REAL material.** Kira's base body (``base20d5701a``) in the
 Business Heels (UniForge mesh of the Qwen side-view empty shoe, 98 507 → 57 527 tris at ``TARGET_TRIS`` 60 000, width
 cap 1.10, ``FOOTWEAR_FIT_VERSION`` 4 / ``CUT_VERSION`` 2), the clone chain live: ``slim_needed`` 0.151 (limit 0.18);
@@ -120,8 +135,9 @@ from app.core.footwear_gates import check_gates
 from app.core.footwear_insole import HEEL_SEAT_M
 from app.core.glb_mesh import Prim  # noqa: F401  (re-exported: the cut's primitive type)
 
-#: Bumped when the cut changes what it produces (the record's ``cut.version``). 2: the toe conform (step 2b).
-CUT_VERSION = 2
+#: Bumped when the cut changes what it produces (the record's ``cut.version``). 2: the toe conform (step 2b);
+#: 3: the boot's removal cap bounded at the ankle band (pulled forward in 7b04e9f5) and the ``shaft_poke`` gate.
+CUT_VERSION = 3
 #: The throat conform acts this far behind the throat front (metres).
 THROAT_BAND_M = 0.02
 #: The slimming band reaches this far above the cap (metres) ...
@@ -143,12 +159,18 @@ CUT_GATES: Dict[str, Tuple[str, Any]] = {
     "visible_poke": ("max", 0.005),
     "throat_ledge_p95_mm": ("max", 4.0),
     "toe_conform_m": ("max", 0.025),
+    "shaft_poke": ("max", 0.005),
 }
+#: The gates of ``CUT_GATES`` that exist for a split fit (a shaft part) only — absent from a shoe's record.
+SHAFT_CUT_GATES: Tuple[str, ...] = ("shaft_poke",)
+#: Gates whose value may be None (no shin vertex in the shaft's height range): recorded, not judged.
+POKE_OPTIONAL: Tuple[str, ...] = ("shaft_poke",)
 GATE_LABELS = {
     "deep_outside": "share of the slimmed foot's should-be-enclosed vertices > 3 mm outside the shoe, worse side",
     "visible_poke": "share of the remaining foot vertices still below the upper's rim, worse side",
     "throat_ledge_p95_mm": "p95 height of the remaining vertices just behind the throat front above the vamp edge",
     "toe_conform_m": "largest vertical push of a toe under the vamp's inner surface, worse side",
+    "shaft_poke": "share of the shin vertices within the shaft's height that stand outside the shaft, worse side",
 }
 
 #: The voxel size of the enclosure test (the spike's 2 mm).
@@ -182,6 +204,8 @@ SLIM_WINDOW_M = 0.003
 SLIM_SMOOTH_M = 0.005
 #: A vertex is removed below this signed distance (metres): a vertex ON the cap stays.
 REMOVE_EPS_M = 1e-9
+#: The shaft's height range for ``shaft_poke`` is read with this tolerance (a vertex row ON the band's top counts).
+RANGE_EPS_M = 1e-9
 #: Bisection: the cut parameter is refined until |g| is under this (metres) or this many halvings.
 ROOT_TOL_M = 1e-12
 ROOT_STEPS = 60
@@ -799,25 +823,54 @@ def _voxel_surface(Sc: np.ndarray, SF: np.ndarray, lo: np.ndarray, shape: np.nda
     return ndimage.binary_dilation(surf)
 
 
+def _shin_mask(prim: Prim, shaft: glb_mesh.GarmentMesh) -> np.ndarray:
+    """The body vertices carrying any weight of the side's Leg / UpLeg — the joints the shaft part names beyond
+    Foot and ToeBase (``footwear_fit`` step 9: ``[foot, toe, leg, (upleg)]``)."""
+    from app.core.rig_contract import norm_bone_name
+    w = np.zeros(len(prim.positions))
+    for name in list(shaft.joint_names)[2:]:
+        w += _weight_of(prim, norm_bone_name(str(name)))
+    return w > 0.0
+
+
 def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Prim, after: Prim,
-                shoe: glb_mesh.GarmentMesh, raw: Prim) -> Dict[str, Any]:
+                shoe: glb_mesh.GarmentMesh, raw: Prim,
+                shaft: Optional[glb_mesh.GarmentMesh] = None) -> Dict[str, Any]:
     """The spike's voxel metrics for one side (module docstring), spike axes (x, lateral, up); ``before`` = the
-    conformed bare body, ``raw`` = the bare body as it came (the toes against the vamp are read there)."""
+    conformed bare body, ``raw`` = the bare body as it came (the toes against the vamp are read there); ``shoe`` =
+    the foot part, ``shaft`` = the shaft part of a split fit (its surface joins the enclosure, ``shaft_poke`` is
+    read against it)."""
     from scipy import ndimage
     from scipy.spatial import cKDTree
     side = _Side(desc)
     mb, ma = _Map(desc, joints, before), _Map(desc, joints, after)
     fb = mb.foot > FOOT_WEIGHT_MIN
     fa = ma.foot > FOOT_WEIGHT_MIN
+    Ca = ma.to_cut(np.asarray(after.positions, np.float64))
     Fb = mb.to_cut(np.asarray(before.positions, np.float64))[fb][:, [0, 2, 1]]
-    Fa = ma.to_cut(np.asarray(after.positions, np.float64))[fa][:, [0, 2, 1]]
+    Fa = Ca[fa][:, [0, 2, 1]]
     Fr = mb.to_cut(np.asarray(raw.positions, np.float64))[fb][:, [0, 2, 1]]
-    # the shoe: bind -> posed by its own Foot / ToeBase weights -> cut frame
-    w = np.asarray(shoe.weights, np.float64)[:, 1:2]
-    Sb = np.asarray(shoe.positions, np.float64)
-    Sc = ((1.0 - w) * _apply(mb.Tf, Sb) + w * _apply(mb.Tt, Sb))[:, [0, 2, 1]]
-    SF = np.asarray(shoe.indices, np.int64).reshape(-1, 3)
-    pts = [Sc, Fb] + ([Fa] if len(Fa) else [])
+    # the shoe (foot part + shaft): bind -> posed by each vertex's own Foot / ToeBase share -> cut frame
+    parts = [shoe] + ([shaft] if shaft is not None else [])
+    Sc_list, SF_list, base = [], [], 0
+    for part in parts:
+        W = np.asarray(part.weights, np.float64)
+        Sb = np.asarray(part.positions, np.float64)
+        Sc_list.append(mb.to_cut(Sb, W[:, 0], W[:, 1])[:, [0, 2, 1]])
+        SF_list.append(np.asarray(part.indices, np.int64).reshape(-1, 3) + base)
+        base += len(Sb)
+    Sc = np.concatenate(Sc_list)
+    SF = np.concatenate(SF_list)
+    # the shin inside the shaft: this side's Leg / UpLeg vertices between the band's top and the shaft's top
+    shin = np.zeros(0, bool)
+    Sh = np.zeros((0, 3))
+    if shaft is not None:
+        split = desc.get("split") or {}
+        y_lo = float(split.get("y_m", 0.0)) + float(split.get("band_m", 0.0))
+        y_hi = float(Sc_list[-1][:, 2].max())
+        shin = _shin_mask(after, shaft) & (Ca[:, 1] >= y_lo - RANGE_EPS_M) & (Ca[:, 1] <= y_hi + RANGE_EPS_M)
+        Sh = Ca[shin][:, [0, 2, 1]]
+    pts = [Sc, Fb] + ([Fa] if len(Fa) else []) + ([Sh] if len(Sh) else [])
     lo = np.min([p.min(0) for p in pts], axis=0) - 0.01
     hi = np.max([p.max(0) for p in pts], axis=0) + 0.01
     shape = np.ceil((hi - lo) / VOXEL_M).astype(int) + 1
@@ -926,7 +979,17 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
     low_ids = order[first]
     arch = depth[low_ids] * 1000.0 if len(low_ids) else np.zeros(0)
     pct = lambda a, p: float(np.percentile(a, p)) if len(a) else None  # noqa: E731
+    shaft_out: Dict[str, Any] = {}
+    if shaft is not None:
+        if len(Sh):
+            si = vox(Sh)
+            poke_s = exterior[si[:, 0], si[:, 1], si[:, 2]] & ~surf[si[:, 0], si[:, 1], si[:, 2]]
+            shaft_out = {"shaft_poke": float(poke_s.mean()), "shin_n": int(len(Sh)), "shaft_poke_n": int(poke_s.sum())}
+        else:
+            shaft_out = {"shaft_poke": None, "shin_n": 0, "shaft_poke_n": 0}
+        shaft_out["shaft_top_m"] = float(Sc_list[-1][:, 2].max())
     return {
+        **shaft_out,
         "deep_outside": float(deep.sum() / n_should) if n_should else 0.0,
         "should_enclosed": n_should, "poke_n": int(poke.sum()), "deep_n": int(deep.sum()),
         "poke_depth_p95_mm": float(np.percentile(depth[poke], 95) * 1000.0) if poke.any() else 0.0,
@@ -948,25 +1011,39 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
     }
 
 
-def cut_gates(body_after: Prim, shoes: Dict[str, glb_mesh.GarmentMesh], cut: Dict[str, Any], *,
+def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]], cut: Dict[str, Any], *,
               joints: Dict[str, np.ndarray], body_before: Prim) -> Dict[str, Any]:
     """The cut's gates (module docstring): ``{"ok", "reasons", "gates": {name: {value, limit, ok}}, "sides": {side:
     diagnostics}}``. ``body_before`` is the primitive ``apply_cut`` started from (bare); ``deep_outside`` is read on
-    it after the conform, the rest on ``body_after``; ``shoes`` = the fit's bind-space shoes; ``joints`` =
-    ``glb_mesh.joint_bind_matrices`` of the body."""
+    it after the conform, the rest on ``body_after``; ``parts`` = the fit's bind-space parts per side
+    (``footwear_fit.FootwearFit.parts``: ``foot``, and ``shaft`` for a split fit — then ``shaft_poke`` is judged,
+    None and ``ok`` None without a shin vertex in its range); ``joints`` = ``glb_mesh.joint_bind_matrices`` of
+    the body."""
     before, cinfo = conform_body(body_before, cut, joints)
     sides: Dict[str, Any] = {}
+    any_shaft = False
     for name, desc in (cut.get("sides") or {}).items():
-        shoe = shoes.get(name)
+        side_parts = parts.get(name) or {}
+        shoe = side_parts.get("foot")
         if shoe is None:
             raise ValueError(f"No shoe for the {name} side")
-        sides[name] = _side_gates(desc, joints, before, body_after, shoe, body_before)
+        shaft = side_parts.get("shaft")
+        any_shaft |= shaft is not None
+        sides[name] = _side_gates(desc, joints, before, body_after, shoe, body_before, shaft)
         sides[name]["toe_conform_m"] = float(cinfo["toe_conform"].get(name, 0.0))
         sides[name]["toe_pull_m"] = float(cinfo["toe_pull"].get(name, 0.0))
-    metrics = {key: max(s[key] for s in sides.values()) if sides else None for key in CUT_GATES}
-    table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in CUT_GATES.items()}
-    ok, reasons = check_gates(metrics, table)
-    gates = {name: {"value": metrics[name], "limit": limit,
-                    "ok": check_gates({name: metrics[name]}, {name: (kind, limit, GATE_LABELS[name])})[0]}
-             for name, (kind, limit) in CUT_GATES.items()}
+    active = {name: spec for name, spec in CUT_GATES.items() if any_shaft or name not in SHAFT_CUT_GATES}
+
+    def worst(key: str) -> Optional[float]:
+        values = [s[key] for s in sides.values() if key in s and s[key] is not None]
+        return max(values) if values else None
+
+    metrics = {key: worst(key) for key in active}
+    table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in active.items()}
+    ok, reasons = check_gates(metrics, table, optional=POKE_OPTIONAL)
+    gates = {}
+    for name, (kind, limit) in active.items():
+        passed: Optional[bool] = None if metrics[name] is None and name in POKE_OPTIONAL else \
+            check_gates({name: metrics[name]}, {name: (kind, limit, GATE_LABELS[name])})[0]
+        gates[name] = {"value": metrics[name], "limit": limit, "ok": passed}
     return {"ok": ok, "reasons": reasons, "gates": gates, "sides": sides}

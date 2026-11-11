@@ -348,8 +348,8 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
                 cut_stats[key][side] = max(float(cut_stats[key].get(side, 0.0)), float(stats[key].get(side, 0.0)))
             cut_stats["throat_moved"][side] = int(cut_stats["throat_moved"].get(side, 0)) + int(
                 stats["throat_moved"].get(side, 0))
-    foot_parts = {side: result.parts[side]["foot"] for side in footwear_fit.SIDES}
-    cut_gates = footwear_cut.cut_gates(_merged(list(replaced.values())), foot_parts, cut, joints=joints,
+    # every part: a boot's shaft joins the enclosure and is judged by ``shaft_poke`` (spec § 7, § 9)
+    cut_gates = footwear_cut.cut_gates(_merged(list(replaced.values())), result.parts, cut, joints=joints,
                                        body_before=_merged(prims))
     result.record["gates"].update(footwear_fit._r({name: {**gate, "gating": True}
                                                    for name, gate in cut_gates["gates"].items()}))

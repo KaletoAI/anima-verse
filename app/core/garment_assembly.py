@@ -556,7 +556,8 @@ def _build(character_name: str, directory: Path, bare: Path,
            warnings: Optional[List[str]] = None) -> Tuple[bytes, Dict[str, Any], list]:
     """Read the bare file + its sidecar under the publication lock (so bytes
     and revision belong together), cut the body for a footwear piece, graft
-    every garment (a footwear piece as its two shoe nodes), validate.
+    every garment (a footwear piece as its shoe nodes — the two foot nodes,
+    and a boot's two shaft nodes, each read by its exact name), validate.
     ``warnings``: the assembly's own ``garment_warnings`` (``_wanted``),
     appended to the bare sidecar's in the assembled sidecar. Returns (bytes,
     sidecar, captured revision)."""

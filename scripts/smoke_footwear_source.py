@@ -84,11 +84,11 @@ Expected, by hand:
      0.03 at B's stations 72..167 (x in [0.0753, 0.1747]) and 0.13 elsewhere -> walls >= AIR above the
      insole at 96 of 240 stations -> opening_share 0.4 < 0.5 -> the closed box is SOLID (that reason wins
      over vamp_cover) -> run_source {ok False, step "insole", ran ["mesh"]}, the error starts with
-     SOLID_REFUSED, insole.json (version 4) written with gates.refusal SOLID_REFUSED, record insole accepted
+     SOLID_REFUSED, insole.json (version 5) written with gates.refusal SOLID_REFUSED, record insole accepted
      False.
 [S5b] the wedge pump of scripts/_footwear_fixtures.py written as W's prepared.glb, run_source(W,
      steps=["insole"], force=True) -> ok, ran ["insole"], 0 service calls, record insole accepted with
-     version 4 and nominal pitch 30.61 deg (smoke_footwear_insole [I1]); insole.json heel_seat_h_m 0.09.
+     version 5 and nominal pitch 30.61 deg (smoke_footwear_insole [I1]); insole.json heel_seat_h_m 0.09.
 [S6] second run_source(W) -> ran == [], 0 calls of any kind. regenerate(W, "mesh") -> seed 1, new ssig =
      ssig_for(W, 1) != old; upscaled/empty/cutout copied (bytes equal) with copied_from = old ssig, no
      mesh record in the new folder; the next run_source -> mesh runs (exactly 1 mesher call, 0 upscale,
@@ -103,7 +103,7 @@ Expected, by hand:
      -> ok, 0 service calls; the insole step finds the cap (shaft.cap_removed 160: the up-facing faces in the
      top 2 % of the shaft, smoke_footwear_insole [I15]), rewrites prepared.glb WITHOUT them — static_arrays of
      the new file has exactly 160 faces fewer and no up-facing face above 0.2556 — and records cap_removed 160
-     in insole.json and the step record (version 4, class "ankle", collar 0.17); raw.glb is untouched. A second
+     in insole.json and the step record (version 5, class "ankle", collar 0.17); raw.glb is untouched. A second
      run_source(W) -> ran == [], 0 calls, prepared.glb byte-identical (the step is done, the cap is not looked
      for again).
 """
@@ -482,7 +482,7 @@ def main():
             check("W no candidate left", [p.name for p in dw.iterdir() if "candidate" in p.name], [])
             ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
             check("W insole.json written", (ins.get("version"), (ins.get("gates") or {}).get("refusal")),
-                  (4, fi.SOLID_REFUSED))
+                  (5, fi.SOLID_REFUSED))
             near("W boxes insole_cover", ins.get("insole_cover"), 1.0, 1e-6)
             near("W boxes vamp_cover", ins.get("vamp_cover"), 912 / 7826, 1e-6)
             near("W boxes opening_share", ins.get("opening_share"), 96 / 240, 1e-6)
@@ -501,7 +501,7 @@ def main():
             check("W insole ok", (res.get("ok"), res.get("ran")), (True, ["insole"]))
             check("W insole no service call", svc.counts(), c0)
             rec = fs.step_record("shoe_w", ssig_w, "insole")
-            check("W insole record", (rec.get("accepted"), rec.get("version")), (True, 4))
+            check("W insole record", (rec.get("accepted"), rec.get("version")), (True, 5))
             near("W insole pitch", (rec.get("nominal") or {}).get("pitch_deg"), 30.61, 0.1)
             ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
             near("W insole.json heel seat", (ins.get("nominal") or {}).get("heel_seat_h_m"), 0.09, 1e-5)
@@ -526,11 +526,11 @@ def main():
             check("W raw.glb untouched", (dw / "raw.glb").read_bytes() == raw_before, True)
             ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
             check("W insole.json shaft", (ins.get("version"), (ins.get("shaft") or {}).get("cap_removed"),
-                                          (ins.get("shaft") or {}).get("class")), (4, 160, "ankle"))
+                                          (ins.get("shaft") or {}).get("class")), (5, 160, "ankle"))
             near("W insole.json collar", (ins.get("shaft") or {}).get("collar_h_raw"), 0.17, 1e-6)
             rec = fs.step_record("shoe_w", ssig_w, "insole")
             check("W insole record cap_removed", (rec.get("accepted"), rec.get("version"), rec.get("cap_removed")),
-                  (True, 4, 160))
+                  (True, 5, 160))
             prepared_after = (dw / "prepared.glb").read_bytes()
             c0 = svc.counts()
             res = fs.run_source("shoe_w")

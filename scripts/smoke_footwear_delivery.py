@@ -377,7 +377,8 @@ def main() -> int:
               sorted(["ball_placement_mm", "lift_asymmetry_mm", "slim_needed", "stand_floor_mm",
                       "shaft_push_p95_m", "shaft_push_max_m", "shaft_inside_share", "seam_gap_p95_mm",
                       "seam_stretch_max", "shaft_leg_follow_deg",
-                      "deep_outside", "visible_poke", "throat_ledge_p95_mm", "toe_conform_m"]))
+                      "deep_outside", "visible_poke", "throat_ledge_p95_mm", "toe_conform_m", "shaft_poke"]))
+        check("D8 shaft_poke limit (CUT_VERSION 3)", limits["fit"].get("shaft_poke"), {"op": "le", "value": 0.005})
         fitted = {k: v for k, v in garment_set.piece_status(
             {"kind": "footwear", "fsig": "f", "steps": {"fit": {"status": "accepted"}}}, worn=True,
             base_model_ready=True).items() if k in ("state", "painted", "missing", "reason")}

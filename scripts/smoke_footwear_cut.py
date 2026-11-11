@@ -14,9 +14,10 @@ so the cut frame IS the primitive's bind space (x forward, y up, z lateral). ``j
 "lefttoebase": I}; every vertex 100 % LeftFoot.
 
 Expected, by hand:
-[X0] constants: CUT_VERSION 2 (the toe conform), THROAT_BAND_M 0.02, LATERAL_BAND_M 0.015, CLEARANCE_M 0.002,
-     FADE_M 0.015, TOE_CLEARANCE_M 0.002, TOE_FADE_M 0.015, CUT_GATES {"deep_outside": ("max", 0.02), "visible_poke":
-     ("max", 0.005), "throat_ledge_p95_mm": ("max", 4.0), "toe_conform_m": ("max", 0.025)}.
+[X0] constants: CUT_VERSION 3 (2 = the toe conform, 3 = the boot's cap bound + shaft_poke), THROAT_BAND_M 0.02,
+     LATERAL_BAND_M 0.015, CLEARANCE_M 0.002, FADE_M 0.015, TOE_CLEARANCE_M 0.002, TOE_FADE_M 0.015, CUT_GATES
+     {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "throat_ledge_p95_mm": ("max", 4.0),
+     "toe_conform_m": ("max", 0.025), "shaft_poke": ("max", 0.005)}, SHAFT_CUT_GATES = POKE_OPTIONAL = ("shaft_poke",).
 [X1] open cylinder r 0.05 about +y, 64 segments x 21 rings (y = 0, 0.01, ..., 0.20), 1344 vertices, 20 bands x
      64 quads x 2 = 2560 triangles; flat cap y = 0.055 over the stations, footprint disc r 0.06 (every vertex inside
      the prism, its half-width 0.06 - 0.002 > 0.05: no slimming), no throat. Rings 0..5 (y <= 0.05) lie below the cap: bands 0..4
@@ -119,6 +120,56 @@ Expected, by hand:
      (|g| <= 1e-9 in that side's cut frame) or on the throat-front wall x = x_t, where g jumps by the toe-box
      headroom and the bisection converges onto the jump (the last n_right vertices are the right side's, the
      n_left before them the left's); faces valid, no dangling vertex; the new vertices' weights sum to 1.
+[X10] the cut under a BOOT stops at the ankle band (boots spec 2026-11-11 § 7; CUT_VERSION 3 — the bound itself
+     landed with Task 6 in 7b04e9f5). foot_body_glb() + flat_boot(shaft=0.16), the fit of smoke_footwear_split.py
+     [B1]: k 1.023599, lift 0.010236, y_split 0.090236, split. The description's side carries split {y_m 0.090236,
+     band_m 0.02} and its cap over the shaft's x-range (every station up to the front wall at 0.10: the last behind
+     it at raw 0.0990, the first in front at 0.10008 already reads the clog's wall) is min(0.16 k = 0.163776,
+     0.090236 - 0.02) = 0.070236 (read at raw 0.05 and 0.09, within 1e-6); past the front wall the clog's wall top
+     0.035 k = 0.035826 (raw 0.12). The default body has nothing between the foot box's
+     top (frame 0.030236) and the leg column's bottom (0.110236): apply_cut removes the 1032 foot faces, bisects
+     nothing, makes no vertex -> 24 faces / 48 vertices = [X7]'s cut (positions equal within 1e-12). The same
+     boot on foot_body_glb(leg_bottom=0.02): the leg column (100 % Leg, body x in [-0.03, 0.03] -> frame 0.0411 ..
+     0.1011 inside the shaft's x-range, |z| <= 0.03 inside the footprint's 0.0425) stands ON the foot box, one
+     quad per face. Its bottom face (frame 0.030236) goes; each of its four side quads (one quad from body y 0.02
+     to 0.45) crosses the cap -> per quad 2 bisected triangles, 3 new vertices (two verticals + the diagonal) and
+     3 kept triangles; the top face stays -> per side removed 516 + 2 = 518, bisected 8, new 12, kept 2 + 12 = 14
+     faces / 4 + 8 + 12 = 24 vertices -> totals 1036 / 16 / 24, 28 faces / 48 vertices, and every new vertex lies
+     at frame y 0.070236 = body y 0.06 (+- 1e-7: the description stores y_split to 7 decimals), the band's bottom
+     — not at the wall top 0.163776 (body 0.15354) an unbounded cap would cut at. The plain clog() on the
+     leg_bottom body: 1036 / 16 / 24 as well, its new vertices at the clog's OWN wall top 0.035 k - lift =
+     0.025590 body (+- 1e-6) on the column's side faces, up to 0.0259 on its back face at raw 0.0402, where the
+     station interpolation from the heel counter's 0.05 (station 0.0392) down to 0.035 (0.0403) still adds 0.3
+     mm — a shoe is unchanged by version 3.
+[X11] shaft_poke (spec § 7 / § 9, CUT_VERSION 3): of the shin vertices — this side's Leg-weighted body vertices with
+     frame height in [y_split + 0.02 = 0.110236, the shaft part's top 0.163776] (the band's top inclusive, 1e-9)
+     — the share in the voxel exterior of foot part + shaft. Boot = flat_boot(shaft=0.16, shaft_to=0.12) WELDED
+     (garment_fit.weld: 3828 faces, 2004 vertices; the tube's front wall at raw 0.12 stands 2 cm in front of the
+     column's front face at frame 0.1011, so a push moves the side walls only — a pushed front wall tilts away
+     from the side walls of this box tube and opens the corner (a fixture artefact: a real shaft is one round
+     sheet); unwelded, the push smooths each quad on its own and cracks the corners likewise). k, lift, y_split as
+     [X10] (the clog's foot part is the same), width factor 1.0380 -> the shaft's inner half-width 0.04 k 1.038 =
+     0.042504.
+     (a) foot_body_glb(leg_cell=0.01) (shin half-width 0.03, 12.5 mm inside the shaft, push 0): shin vertices in
+     range = the column's rows body y 0.10 .. 0.15 (frame 0.110236 .. 0.160236; the row 0.16 at 0.170236 is
+     above the top): the two z-faces 2 x 7 x 6 = 84, the two x-faces 2 x 7 x 6 = 84 (7 z-columns), the bottom
+     face 7 x 7 = 49 -> 217 per side, all inside the tube -> shaft_poke 0, gate ok and gating True (the fit record,
+     garment_footwear.fit, is smoke_footwear_fit_step.py's business; here the gate dict).
+     (b) the SAME fit's parts (unpushed: the wall at 0.042504) judged against foot_body_glb(leg_half_w=0.05,
+     leg_cell=0.01, leg_bottom=0.07) — the brief's "push disabled" without a hook: the column's bottom face at
+     body 0.07 lies under the range, so the rows 0.10 .. 0.15 count: z-faces 84 (all at |z| = 0.05, 7.5 mm
+     outside the wall and beyond the 3 mm dilation -> exterior), x-faces 2 x 11 x 6 = 132 (11 z-columns -0.05 ..
+     0.05), of which the 2 x 2 x 6 = 24 at |z| = 0.05 are outside and the 108 at |z| <= 0.04 inside -> 216 shin
+     vertices, 108 pokes -> shaft_poke 0.5 > 0.005: refused, the reason names shaft_poke.
+     (c) foot_body_glb(leg_half_w=0.045, leg_cell=0.01, leg_bottom=0.07), its OWN fit (the push on: needed 0.045 +
+     0.006 - 0.042504 = 0.0085; push_p95_m >= 0.0085, push_max_m <= 0.012 as smoke_footwear_split.py [B3]; the fit
+     accepted): the shin's rows 0.10 .. 0.15 stand 6 mm inside the pushed wall -> z-faces 84 + x-faces 2 x 10 x
+     6 = 120 = 204 shin vertices, shaft_poke 0, the gates ok.
+     (d) the clog fit (no shaft): the gate dict has no shaft_poke key (SHAFT_CUT_GATES); the 0.16 boot on
+     foot_body_glb(leg_bottom=0.02) (one quad per face: the column's vertices sit at body y 0.02 and 0.45, none in
+     the range) -> shaft_poke value None, ok None (POKE_OPTIONAL), the gates ok.
+(On 863a2726 — CUT_VERSION 2 — cut_gates takes the foot meshes alone, CUT_GATES has no shaft_poke and (b) passes:
+[X11] fails there.)
 """
 import json
 import math
@@ -282,11 +333,12 @@ def accessor_bytes(glb: bytes, index: int) -> bytes:
 
 def main() -> int:
     print("[X0] constants")
-    check("CUT_VERSION 2", fc.CUT_VERSION == 2)
+    check("CUT_VERSION 3", fc.CUT_VERSION == 3)
     check("bands", (fc.THROAT_BAND_M, fc.LATERAL_BAND_M, fc.CLEARANCE_M, fc.FADE_M, fc.TOE_CLEARANCE_M, fc.TOE_FADE_M)
           == (0.02, 0.015, 0.002, 0.015, 0.002, 0.015))
     check("CUT_GATES", fc.CUT_GATES == {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "toe_conform_m": ("max", 0.025),
-                                         "throat_ledge_p95_mm": ("max", 4.0)})
+                                         "throat_ledge_p95_mm": ("max", 4.0), "shaft_poke": ("max", 0.005)})
+    check("SHAFT_CUT_GATES / POKE_OPTIONAL", fc.SHAFT_CUT_GATES == ("shaft_poke",) and fc.POKE_OPTIONAL == ("shaft_poke",))
 
     print("[X1] flat cap on the cylinder")
     cyl = cylinder()
@@ -419,7 +471,7 @@ def main() -> int:
     check("fixture fit ok", fit.ok, str(fit.reasons))
     k = fit.record["scale"]["k_m_per_unit"]
     cut = fc.cut_description(fit, ins)
-    check("version + both sides", cut["version"] == 2 and set(cut["sides"]) == {"left", "right"})
+    check("version + both sides", cut["version"] == 3 and set(cut["sides"]) == {"left", "right"})
     L = cut["sides"]["left"]
     check("joint names", (L["foot_joint"], L["toe_joint"]) == ("LeftFoot", "LeftToeBase"))
     frame = np.asarray(L["frame"], np.float64)
@@ -510,7 +562,7 @@ def main() -> int:
     check("no throat move", st7["throat_moved"] == {"left": 0, "right": 0}, str(st7["throat_moved"]))
     check("only the two leg columns remain (24 faces, 48 vertices)", (len(after.faces), len(after.positions)) == (24, 48),
           f"{len(after.faces)} {len(after.positions)}")
-    gates = fc.cut_gates(after, {s_: fitc.parts[s_]["foot"] for s_ in fitc.parts}, cutc, joints=joints, body_before=prim)
+    gates = fc.cut_gates(after, fitc.parts, cutc, joints=joints, body_before=prim)
     g = gates["gates"]
     check("should-enclosed 384 per side, deep_outside 0", all(gates["sides"][s]["should_enclosed"] == 384
           and gates["sides"][s]["deep_outside"] == 0.0 for s in ("left", "right")),
@@ -520,6 +572,7 @@ def main() -> int:
     check("throat ledge 0", g["throat_ledge_p95_mm"]["value"] == 0.0)
     check("all gates ok", gates["ok"] is True and gates["reasons"] == [], str(gates["reasons"]))
     check("no poke in any region", all(gates["sides"][s]["poke_by_region"] == {"heel": 0, "mid": 0, "toe": 0} for s in ("left", "right")))
+    check("a shoe's gates carry no shaft_poke", "shaft_poke" not in g and "shaft_poke" not in gates["sides"]["left"])
 
     print("[X8] the wedge (pitched, counter-turned, floating box): structure")
     after8, st8 = fc.apply_cut(prim, cut, joints)
@@ -543,6 +596,95 @@ def main() -> int:
     check("faces valid, no dangling vertex", bool(used.all()) and int(after8.faces.max()) < len(after8.positions))
     check("weights of new vertices sum to 1 on Foot / ToeBase", near(after8.weights[ids["left"]].sum(1), 1.0, 1e-9)
           and near(after8.weights[ids["right"]].sum(1), 1.0, 1e-9))
+
+    print("[X10] the cut under a boot stops at the ankle band")
+    from _footwear_fixtures import flat_boot
+    Pb, Fb = flat_boot(shaft=0.16)
+    insb = fi.analyse_arrays(Pb, Fb)
+    fitb = ff.fit_pair(insb, shoe_garment(Pb, Fb), body, joints)
+    check("boot fit ok + split", fitb.ok and fitb.record["sides"]["left"]["split"]["is_boot"] is True, str(fitb.reasons))
+    kb = fitb.record["scale"]["k_m_per_unit"]
+    cutb = fc.cut_description(fitb, insb)
+    Lb = cutb["sides"]["left"]
+    check("split in the description", near([Lb["split"]["y_m"], Lb["split"]["band_m"]], [0.090236, 0.02], 1e-5), str(Lb.get("split")))
+    capb = np.asarray(Lb["cap"], np.float64)
+    check("cap over the shaft 0.070236 (= y_split - band), not the wall top 0.163776",
+          abs(float(np.interp(0.05 * kb, capb[:, 0], capb[:, 1])) - 0.070236) <= 1e-6
+          and abs(float(np.interp(0.09 * kb, capb[:, 0], capb[:, 1])) - 0.070236) <= 1e-6,
+          f"{float(np.interp(0.05 * kb, capb[:, 0], capb[:, 1])):.6f}")
+    check("cap past the front wall = the clog's wall top 0.035826", abs(float(np.interp(0.12 * kb, capb[:, 0], capb[:, 1])) - 0.035 * kb) <= 1e-6)
+    afterb, stb = fc.apply_cut(prim, cutb, joints)
+    check("default body: 1032 / 0 / 0, 24 faces / 48 vertices = [X7]",
+          (stb["removed_faces"], stb["bisected_faces"], stb["new_vertices"], len(afterb.faces), len(afterb.positions)) == (1032, 0, 0, 24, 48)
+          and near(afterb.positions, after.positions, 1e-12), str(stb))
+    glb_lb = foot_body_glb(leg_bottom=0.02)
+    prim_lb = glb_mesh.body_primitive_arrays(glb_lb)[0]
+    joints_lb = glb_mesh.joint_bind_matrices(glb_lb)
+    fit_lb = ff.fit_pair(insb, shoe_garment(Pb, Fb), glb_mesh.body_arrays(glb_lb), joints_lb)
+    check("leg_bottom body: the same fit (k, lift, y_split)", fit_lb.ok and near(fit_lb.record["scale"]["k_m_per_unit"], kb, 1e-9)
+          and near(fit_lb.record["sides"]["left"]["split"]["y_m"], 0.090236, 1e-5), str(fit_lb.reasons))
+    cut_lb = fc.cut_description(fit_lb, insb)
+    after_lb, st_lb = fc.apply_cut(prim_lb, cut_lb, joints_lb)
+    check("leg_bottom body: 1036 / 16 / 24, 28 faces / 48 vertices",
+          (st_lb["removed_faces"], st_lb["bisected_faces"], st_lb["new_vertices"], len(after_lb.faces), len(after_lb.positions)) == (1036, 16, 24, 28, 48),
+          str((st_lb, len(after_lb.faces), len(after_lb.positions))))
+    new_lb = after_lb.positions[-24:]
+    check("every new vertex at body y 0.06 (frame 0.070236, the band's bottom)", near(new_lb[:, 1], 0.06, 1e-7),
+          f"{np.unique(np.round(new_lb[:, 1], 9))}")
+    for s in ("left", "right"):
+        m_lb = fc._Map(cut_lb["sides"][s], joints_lb, after_lb)
+        ids_s = np.nonzero(np.abs(after_lb.positions[-24:, 2] - (-0.10 if s == "left" else 0.10)) < 0.05)[0] + len(after_lb.positions) - 24
+        C_lb = m_lb.to_cut(after_lb.positions[ids_s], m_lb.wF[ids_s], m_lb.wT[ids_s])
+        check(f"{s}: the new vertices' frame height 0.070236", near(C_lb[:, 1], 0.070236, 1e-6), f"{C_lb[:, 1].min():.6f}..{C_lb[:, 1].max():.6f}")
+    fitc_lb = ff.fit_pair(insc, shoe_garment(Pc, Fc), glb_mesh.body_arrays(glb_lb), joints_lb)
+    afterc_lb, stc_lb = fc.apply_cut(prim_lb, fc.cut_description(fitc_lb, insc), joints_lb)
+    yc_lb = afterc_lb.positions[-24:, 1]
+    check("the clog on the leg_bottom body: 1036 / 16 / 24, new vertices at its own wall top (body 0.025590 .. 0.0259)",
+          (stc_lb["removed_faces"], stc_lb["bisected_faces"], stc_lb["new_vertices"]) == (1036, 16, 24)
+          and abs(float(yc_lb.min()) - (0.035 * kc - 0.010236)) <= 1e-6 and float(yc_lb.max()) <= 0.0259,
+          f"{stc_lb['removed_faces']}/{stc_lb['bisected_faces']}/{stc_lb['new_vertices']} y {yc_lb.min():.6f}..{yc_lb.max():.6f}")
+
+    print("[X11] shaft_poke")
+    from app.core.garment_fit import weld
+    Pt, Ft = flat_boot(shaft=0.16, shaft_to=0.12)
+    Pw, Fw, _inv = weld(Pt, Ft)
+    check("welded tube 3828 faces / 2004 vertices", (len(Fw), len(Pw)) == (3828, 2004), f"{len(Fw)} {len(Pw)}")
+    inst = fi.analyse_arrays(Pw, Fw)
+    glb_a = foot_body_glb(leg_cell=0.01)
+    body_a, joints_a = glb_mesh.body_arrays(glb_a), glb_mesh.joint_bind_matrices(glb_a)
+    fit_a = ff.fit_pair(inst, shoe_garment(Pw, Fw), body_a, joints_a)
+    check("(a) fit ok, no push, width 1.0380", fit_a.ok and fit_a.record["sides"]["left"]["shaft"]["push_max_m"] == 0.0
+          and near(fit_a.record["scale"]["width_factor"], 1.0380, 2e-3), str(fit_a.reasons))
+
+    def poke_gates(fit, glb, parts=None):
+        j = glb_mesh.joint_bind_matrices(glb)
+        pr = glb_mesh.body_primitive_arrays(glb)[0]
+        c = fc.cut_description(fit, inst)
+        a, _st = fc.apply_cut(pr, c, j)
+        return fc.cut_gates(a, parts or fit.parts, c, joints=j, body_before=pr)
+    g_a = poke_gates(fit_a, glb_a)
+    check("(a) 217 shin vertices per side, shaft_poke 0, ok", all(g_a["sides"][s]["shin_n"] == 217 and g_a["sides"][s]["shaft_poke"] == 0.0
+          for s in ("left", "right")) and g_a["gates"]["shaft_poke"] == {"value": 0.0, "limit": 0.005, "ok": True} and g_a["ok"],
+          str({s: (g_a["sides"][s]["shin_n"], g_a["sides"][s]["shaft_poke"]) for s in g_a["sides"]}))
+    check("(a) shaft top 0.163776 in the cut frame", near(g_a["sides"]["left"]["shaft_top_m"], 0.163776, 1e-5))
+    glb_b = foot_body_glb(leg_half_w=0.05, leg_cell=0.01, leg_bottom=0.07)
+    g_b = poke_gates(fit_a, glb_b, parts=fit_a.parts)
+    check("(b) unpushed shaft on the 0.05 shin: 216 shin vertices, 108 pokes -> 0.5, refused",
+          all(g_b["sides"][s]["shin_n"] == 216 and g_b["sides"][s]["shaft_poke_n"] == 108 and g_b["sides"][s]["shaft_poke"] == 0.5
+              for s in ("left", "right")) and g_b["ok"] is False and any("shaft_poke" in r for r in g_b["reasons"]),
+          str({s: (g_b["sides"][s]["shin_n"], g_b["sides"][s]["shaft_poke_n"]) for s in g_b["sides"]}) + str(g_b["reasons"]))
+    glb_c = foot_body_glb(leg_half_w=0.045, leg_cell=0.01, leg_bottom=0.07)
+    fit_c = ff.fit_pair(inst, shoe_garment(Pw, Fw), glb_mesh.body_arrays(glb_c), glb_mesh.joint_bind_matrices(glb_c))
+    sh_c = fit_c.record["sides"]["left"]["shaft"]
+    check("(c) the push on: fit ok, p95 >= 0.0085, max <= 0.012", fit_c.ok and 0.0085 <= sh_c["push_p95_m"] and sh_c["push_max_m"] <= 0.012,
+          f"{fit_c.reasons} p95 {sh_c['push_p95_m']:.4f} max {sh_c['push_max_m']:.4f}")
+    g_c = poke_gates(fit_c, glb_c)
+    check("(c) 204 shin vertices, shaft_poke 0, ok", all(g_c["sides"][s]["shin_n"] == 204 and g_c["sides"][s]["shaft_poke"] == 0.0
+          for s in ("left", "right")) and g_c["ok"], str({s: (g_c["sides"][s]["shin_n"], g_c["sides"][s]["shaft_poke"]) for s in g_c["sides"]}))
+    g_d = fc.cut_gates(after_lb, fit_lb.parts, cut_lb, joints=joints_lb, body_before=prim_lb)
+    check("(d) no shin vertex in the range: value None, ok None, gates ok",
+          g_d["gates"]["shaft_poke"] == {"value": None, "limit": 0.005, "ok": None} and g_d["ok"]
+          and all(g_d["sides"][s]["shin_n"] == 0 for s in ("left", "right")), str(g_d["gates"]["shaft_poke"]))
 
     print(f"\n{'ALL PASS' if not FAILS else f'{FAILS} FAILED'}")
     return 1 if FAILS else 0

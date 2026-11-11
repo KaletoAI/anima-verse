@@ -64,6 +64,22 @@ Expected, by hand:
      by the build: CPU, HUB 0): sidecar garments {heels: {sha256 sha(body fit)}}, foot_pose.bones keyed
      mixamorig:LeftFoot / LeftToeBase / RightFoot / RightToeBase, the body cut to 24 faces, the base-fit readers
      never read.
+[A7] A BOOT (boots plan Task 9; spec 2026-11-11 § 11): item ``boots`` = ``fx.flat_boot(shaft=0.16)`` (the clog whose
+     walls over x in [0, 0.10] rise to 0.16: 3348 faces, unwelded 10044 vertices), fitted on the CPU like the clog
+     (scripts/smoke_footwear_split.py [B1]: split at y_split 0.090236, foot part 2200 faces / shaft part 1148 — the
+     faces by centroid height; unwelded, so 3 vertices per face: 6600 / 3444; shaft_poke 0 over the round-1 leg
+     column's 12 bottom corners per side). Bare sidecar pieces {feet: boots}, unpainted [boots] -> assemble ->
+     {full: assembled, low: assembled}; per tier the assembled GLB holds FOUR garment nodes:
+     garment_footwear_boots_{left,right} (part "foot", 6600 / 2200) and …_{left,right}_shaft (part "shaft", 3444 /
+     1148), extras {kind footwear, item_id boots, fsig FB, side, part}; the shaft nodes' material doubleSided true
+     (graft's override), the foot nodes' the source material's as the fit GLB carries it (this fixture's static_glb
+     default: true as well — smoke_footwear_fit_step.py [P5] writes false and sees it kept); the body cut is the
+     clog's (24 faces / 48 vertices:
+     the removal cap stops at the band's bottom 0.0702, under the leg columns at 0.1102); sidecar foot_pose has the
+     SAME bones / root_lift_m / contacts / rest / version as the heels' record (the boot's foot part IS the clog;
+     the split changes no pose), source {boots, FB, sha of that tier's bytes}; GET /model/meta -> that foot_pose.
+     Back to pieces {feet: heels}, unpainted [heels] -> assemble -> both tiers rebuilt with the TWO heels nodes
+     and no boots node (a shoe fit assembles as before).
 """
 import hashlib
 import json
@@ -229,7 +245,7 @@ def main() -> int:
         check("create Demo", save_character_profile("Demo", dict(human), create_new=True), True)
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
 
-        def shoe_item(item_id, colour):
+        def shoe_item(item_id, colour, mesh=fx.clog):
             iid = inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                      prompt_fragment=f"black {item_id}",
                                      outfit_piece={"slots": ["feet"], "outfit_types": ["casual"],
@@ -243,7 +259,7 @@ def main() -> int:
             d.mkdir(parents=True, exist_ok=True)
             for n, c in (("upscaled.png", (1, 1, 1)), ("empty.png", (2, 2, 2)), ("cutout.png", (3, 3, 3))):
                 (d / n).write_bytes(png_bytes(c))
-            P, F = fx.clog()
+            P, F = mesh()
             prepared = glb_mesh.static_glb(P, F, np.zeros((len(P), 2)))
             (d / "raw.glb").write_bytes(prepared)
             (d / "prepared.glb").write_bytes(prepared)
@@ -257,6 +273,7 @@ def main() -> int:
             return iid
         heels = shoe_item("heels", (20, 20, 20))
         clogs = shoe_item("clogs", (120, 70, 30))
+        boots = shoe_item("boots", (60, 40, 20), mesh=lambda: fx.flat_boot(shaft=0.16))
         check("clog fixture", tuple(len(a) for a in fx.clog()), (2676, 892))
 
         cdir = get_character_dir("Demo")
@@ -477,6 +494,51 @@ def main() -> int:
               [f"garment_footwear_{heels}_left", f"garment_footwear_{heels}_right"])
         check("A6 rig frames preserved", rig_frames_preserved(body_a, blob2).get("ok"), True)
         check("A6 bare2 unchanged", sha(bare2), sha_a)
+
+        print("[A7] a boot: four nodes grafted, the shaft double-sided, foot_pose = the shoe's")
+        check("A7 boot fixture", tuple(len(a) for a in fx.flat_boot(shaft=0.16)), (10044, 3348))
+        FB = gs.garment_fsig("Demo", boots)
+        res = garments.run_garment("Demo", boots)
+        check("A7 boots fitted on the CPU", (res.get("ok"), res.get("ran"), res.get("fit"), HUB), (True, ["fit"], "accepted", []))
+        brec = gs.read_record(gs.garment_path("Demo", boots, FB, "fit").with_suffix(".json"))
+        check("A7 boot record: split, parts 2200 / 1148, shaft_poke 0",
+              (brec["split"]["is_boot"], brec["sides"]["left"]["parts"], brec["gates"]["shaft_poke"]["value"],
+               brec["gates"]["shaft_poke"]["ok"]), (True, {"foot": 2200, "shaft": 1148}, 0.0, True))
+        write_bare_meta([boots], pieces={"feet": boots})
+        check("A7 assemble", ga.assemble("Demo", osig)["tiers"], {"full": "assembled", "low": "assembled"})
+        want_boot = {}
+        for s_ in ("left", "right"):
+            want_boot[f"garment_footwear_{boots}_{s_}"] = ({"kind": "footwear", "item_id": boots, "fsig": FB, "side": s_, "part": "foot"}, 6600, 2200)
+            want_boot[f"garment_footwear_{boots}_{s_}_shaft"] = ({"kind": "footwear", "item_id": boots, "fsig": FB, "side": s_, "part": "shaft"}, 3444, 1148)
+
+        def double_sided(glb: bytes, name: str) -> bool:
+            gltf = gltf_of(glb)
+            node = next(n for n in gltf["nodes"] if n.get("name") == name)
+            prim = gltf["meshes"][node["mesh"]]["primitives"][0]
+            return bool(gltf["materials"][prim["material"]].get("doubleSided", False))
+        pose_keys = ("bones", "root_lift_m", "contacts", "rest", "version")
+        for tier, path in (("full", asm), ("low", asm_low)):
+            blob = path.read_bytes()
+            check(f"A7 {tier} four nodes", garment_nodes(blob), want_boot)
+            fit_glb = gs.garment_path("Demo", boots, FB, "fit").read_bytes()
+            check(f"A7 {tier} shaft nodes doubleSided, foot nodes as the fit GLB's",
+                  tuple(double_sided(blob, f"garment_footwear_{boots}_{s_}") for s_ in ("left_shaft", "right_shaft", "left", "right")),
+                  (True, True) + tuple(double_sided(fit_glb, f"garment_footwear_{boots}_{s_}") for s_ in ("left", "right")))
+            body = glb_mesh.body_arrays(blob)
+            check(f"A7 {tier} body cut = the clog's (24 / 48)", (len(body.faces), len(body.positions)), (24, 48))
+            side = ga.read_sidecar(path)
+            check(f"A7 {tier} foot_pose = the heels' shape", {k: side["foot_pose"].get(k) for k in pose_keys},
+                  {k: fp_record.get(k) for k in pose_keys})
+            check(f"A7 {tier} foot_pose source", side["foot_pose"]["source"],
+                  {"item_id": boots, "fsig": FB, "glb_sha256": hashlib.sha256(blob).hexdigest()})
+            check(f"A7 {tier} sidecar garments", side.get("garments"),
+                  {boots: {"kind": "footwear", "fsig": FB, "sha256": sha(gs.garment_path("Demo", boots, FB, "fit" if tier == "full" else "low"))}})
+        status, meta = meta_route()
+        check("A7 /model/meta foot_pose = the boot assembly's", (status, meta.get("foot_pose")), (200, ga.read_sidecar(asm)["foot_pose"]))
+        check("A7 no hub", HUB, [])
+        write_bare_meta([heels], pieces={"feet": heels})
+        check("A7 back to the shoe: both tiers rebuilt", ga.assemble("Demo", osig)["tiers"], {"full": "assembled", "low": "assembled"})
+        check("A7 two heels nodes, no boots node", garment_nodes(asm.read_bytes()), want_nodes)
         client.close()
 
     if FAILS:
