@@ -4665,6 +4665,11 @@
     "Nodes foot + shaft": "Knoten Fuß + Schaft",
     "Boot: rigid foot part and a shaft on the shin, per side": "Stiefel: starres Fußteil und ein Schaft am Schienbein, je Seite",
     "Made once per item from the item image; fitted onto each wearer on the CPU. Shoes and ankle boots; knee-high boots from P4; sandals and open shoes are not supported yet; socks stay painted.": "Einmal pro Gegenstand aus dem Gegenstandsbild erzeugt; auf der CPU an jeden Träger angepasst. Schuhe und Stiefeletten; kniehohe Stiefel ab P4; Sandalen und offene Schuhe werden noch nicht unterstützt; Socken bleiben aufgemalt.",
-    "Own mesh — footwear": "Eigenes Mesh — Schuhwerk"
+    "Own mesh — footwear": "Eigenes Mesh — Schuhwerk",
+    "Over the boot (default)": "Über dem Stiefel (Standard)",
+    "Tucked in": "Hineingesteckt",
+    "Trousers:": "Hose:",
+    "{trousers}: too wide to tuck into {boot} — worn over it": "{trousers}: zu weit, um sie in {boot} zu stecken — wird darüber getragen",
+    "Trousers tucked into the boots": "Hose in die Stiefel gesteckt"
   }
 }

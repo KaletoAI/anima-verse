@@ -779,6 +779,10 @@ def _mesh_items_step(meta: Dict[str, Any], names: Dict[str, str],
                 {"intended": len(intended), "effective": len(effective), "missing": len(lacking) or None})
 
 
+#: The overview's words for a boot's shaft class (``footwear_insole.SHAFT_CLASS_M``).
+_BOOT_CLASS_LABELS = {"ankle": "ankle boot", "knee": "knee-high boot", "overknee": "over-knee boot"}
+
+
 def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[Dict[str, Any]]:
     """``garments``: ``[{item_id, name, kind, method, fsig, current_fsig,
     served}]`` (``served``: the assembly on disk carries this fit); a
@@ -786,7 +790,10 @@ def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[
     lift, shown in mm), ``cut_stats`` (``{removed_faces, bisected_faces,
     new_vertices}`` of the body cut), ``fit_state`` (``garment_footwear.
     fit_state`` on the current base: "fit accepted" / "fit stale" …, a
-    stale one a WARNING) and ``refitted`` (the fit came from a body change)."""
+    stale one a WARNING) and ``refitted`` (the fit came from a body change);
+    a boot adds ``boot_class`` (the shaft class: ``ankle`` / ``knee`` /
+    ``overknee``) and, with own-mesh trousers worn over it, ``hem``
+    ``{mode, fallback}`` (boots spec § 8.3: "ankle boot · trousers tucked")."""
     rows: List[Dict[str, Any]] = []
     for g in garments:
         kind = g.get("kind")
@@ -794,6 +801,12 @@ def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[
         parts = [str(g.get("name") or g.get("item_id") or ""), str(g.get("method") or ""),
                  f"fsig {g.get('fsig')}" if g.get("fsig") else ""]
         if kind == "footwear":
+            if g.get("boot_class"):
+                parts.append(_BOOT_CLASS_LABELS.get(g["boot_class"], f"{g['boot_class']} boot"))
+            hem = _dict(g.get("hem"))
+            if hem.get("mode"):
+                parts.append("trousers over (too wide to tuck)" if hem.get("fallback") == "too_wide"
+                             else f"trousers {hem['mode']}")
             if g.get("fit_state"):
                 parts.append(f"fit {g['fit_state']}" + (" (refitted from the previous base)" if g.get("refitted") else ""))
             lift = _num(g.get("lift_m"))
@@ -1181,6 +1194,13 @@ def _assembled_garments(character_name: str, signature: str) -> Tuple[List[Dict[
         if g["kind"] == "footwear":
             entry["lift_m"] = _num(record.get("root_lift_m"))
             entry["cut_stats"] = _dict(record.get("cut_stats"))
+            # A boot (split fit with a shaft): its class, and the hem the trousers over it take (boots spec § 8.3).
+            from app.core.outfit_options import is_boot_record
+            if is_boot_record(record):
+                entry["boot_class"] = str(_dict(record.get("shaft")).get("class") or "")
+                hem = next((w["hem"] for w in wanted if w.get("hem") and w["hem"].get("boot") == g["item_id"]), None)
+                if hem:
+                    entry["hem"] = {"mode": hem.get("mode"), "fallback": hem.get("fallback")}
             # The fit's state on the base model the assembly stands on (Task 25: a body change makes the
             # footwear fit stale until its refit lands — the fsig has no base in it).
             try:

@@ -7,10 +7,12 @@
  * GET/POST /characters/{c}/outfit-lock for the "keep this outfit" switch.
  * Own-mesh pieces (WardrobeGarment): GET /characters/{c}/garments for the
  * row toggles, chips and the layer-order warning; one expandable chain panel.
+ * Boot hem (BootHemControl): GET/POST /characters/{c}/outfit-options, shown
+ * under the worn boot when own-mesh trousers are worn with it.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost, apiDelete } from '../../lib/api'
+import { apiGet, apiPost, apiDelete, setOutfitOptions, type BootHemMode, type BootHemState } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
@@ -74,6 +76,63 @@ interface OutfitPreview {
   outfit: string
   pieces: Array<{ item_id: string; name: string; image: boolean; missing: boolean }>
   remove_slots: string[]
+  /** The saved boot hem: "tucked" / "over" / null (= over). */
+  boot_hem?: BootHemMode | null
+}
+
+/**
+ * Boot hem — "Trousers: Over the boot (default) · Tucked in" (boots spec
+ * § 8.3). Shown under the worn boot only when own-mesh trousers that are no
+ * skirt are worn with it (`hem.applicable`); painted trousers always stay
+ * inside the boot. Saves on click; the served model re-assembles on the CPU.
+ * A tucked pair whose leg is wider than the shaft is worn over it — the
+ * warning chip says so.
+ */
+function BootHemControl({ character, hem, itemName, onSaved }: {
+  character: string; hem: BootHemState; itemName: (id: string) => string; onSaved: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [mode, setMode] = useState<BootHemMode>(hem.mode)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { setMode(hem.mode) }, [hem.mode])
+  const choose = async (next: BootHemMode) => {
+    if (busy || next === mode) return
+    setBusy(true)
+    try {
+      // "over" is the default: stored as null so the outfit follows the default.
+      const d = await setOutfitOptions(character, next === 'over' ? null : next)
+      setMode(d.applicable.mode)
+      onSaved()
+    } catch (error) {
+      toast((error as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const options: Array<[BootHemMode, string]> = [['over', t('Over the boot (default)')], ['tucked', t('Tucked in')]]
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, paddingLeft: 50 }}>
+      <span style={{ fontSize: '0.75em', opacity: 0.7 }}>{t('Trousers:')}</span>
+      <span role="group" aria-label={t('Trousers:')} style={{ display: 'inline-flex', gap: 4 }}>
+        {options.map(([value, label]) => (
+          <button key={value} type="button" aria-pressed={mode === value} disabled={busy}
+            className={`ga-btn ga-btn-sm${mode === value ? ' ga-btn-primary' : ''}`}
+            onClick={() => { void choose(value) }}>{label}</button>
+        ))}
+      </span>
+      {hem.fallback === 'too_wide' && mode === 'tucked' ? (
+        <span role="status" style={{
+          fontSize: '0.72em', padding: '1px 6px', borderRadius: 8,
+          border: '1px solid var(--warning, #d29922)', color: 'var(--warning, #d29922)',
+        }}>
+          {t('{trousers}: too wide to tuck into {boot} — worn over it')
+            .replace('{trousers}', itemName(hem.trousers_item || ''))
+            .replace('{boot}', itemName(hem.boot_item || ''))}
+        </span>
+      ) : null}
+    </div>
+  )
 }
 
 
@@ -401,6 +460,10 @@ export function WardrobeTab({ character }: { character: string }) {
                   ) : null}
                 </div>
               ) : null}
+              {it.equipped && garments?.hem?.applicable && garments.hem.boot_item === it.item_id ? (
+                <BootHemControl character={character} hem={garments.hem} itemName={itemName}
+                  onSaved={() => { void reloadGarments() }} />
+              ) : null}
               {open ? (
                 <GarmentPieceDialog character={character} itemId={it.item_id} name={it.name}
                   onStatus={setGarmentStatus} onClose={closeGarment} />
@@ -443,6 +506,9 @@ export function WardrobeTab({ character }: { character: string }) {
                       </div>
                     ))}
                     {outfitPreview.outfit && <span className="ga-form-hint">{outfitPreview.outfit}</span>}
+                    {outfitPreview.boot_hem === 'tucked' && (
+                      <span className="ga-form-hint">{t('Trousers tucked into the boots')}</span>
+                    )}
                     {outfitPreview.remove_slots.length > 0 && (
                       <span className="ga-form-hint">
                         {t('Clears slots: {slots}').replace('{slots}', outfitPreview.remove_slots

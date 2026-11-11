@@ -391,4 +391,30 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
                 if pipeline else [])
     queue = garments.queue_state(character_name)
     return {"pipeline": pipeline, "items": items, "overlaps": overlaps,
-            "queue_running": queue["queue_running"], "queue": queue["queue"]}
+            "queue_running": queue["queue_running"], "queue": queue["queue"],
+            "hem": _wardrobe_hem(character_name, profile, pipeline)}
+
+
+def _wardrobe_hem(character_name: str, profile: Dict[str, Any], pipeline: bool) -> Dict[str, Any]:
+    """The Wardrobe's boot hem control (boots spec § 8.3): ``outfit_options.hem_applicable`` — ``{applicable,
+    boot_item, trousers_item, reason, mode}`` — plus ``fallback`` (``too_wide`` when the tucked pair is worn
+    over the boot: the assembly's layered fit, ``garment_assembly.hem_state``; None otherwise or while it is
+    built). Off the pipeline nothing applies."""
+    from app.core import outfit_options
+    if not pipeline:
+        return {"applicable": False, "boot_item": None, "trousers_item": None, "reason": "off the base body pipeline",
+                "mode": outfit_options.boot_hem(profile), "fallback": None}
+    try:
+        hem = outfit_options.hem_applicable(character_name, profile=profile)
+    except Exception:  # noqa: BLE001 — the control is left out, the Wardrobe still loads
+        from app.core.log import get_logger
+        get_logger("garment_set").exception("Wardrobe %s: boot hem unreadable", character_name)
+        return {"applicable": False, "boot_item": None, "trousers_item": None, "reason": "unreadable",
+                "mode": outfit_options.boot_hem(profile), "fallback": None}
+    hem["fallback"] = None
+    if hem["applicable"]:
+        from app.core import garment_assembly
+        state = garment_assembly.hem_state(character_name)
+        if state and state["trousers"] == hem["trousers_item"] and state["mode"] == hem["mode"]:
+            hem["fallback"] = state["fallback"]
+    return hem

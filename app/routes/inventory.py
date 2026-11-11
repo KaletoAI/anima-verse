@@ -1129,6 +1129,8 @@ def preview_outfit_set_route(character_name: str, outfit_id: str,
         "outfit": target.get("outfit", ""),
         "pieces": pieces,
         "remove_slots": list(target.get("remove_slots") or []),
+        # The saved boot hem (``outfit_options``, boots spec § 8.2): "tucked" / "over" / null (= over).
+        "boot_hem": (target.get("options") or {}).get("boot_hem") if isinstance(target.get("options"), dict) else None,
     }
 
 

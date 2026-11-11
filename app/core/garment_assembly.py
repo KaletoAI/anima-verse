@@ -415,6 +415,29 @@ def wanted_garments(character_name: str, *,
     return {g["item_id"]: (g["fit"], g["low"], g["record"]) for g in _wanted(character_name, profile)}
 
 
+def hem_state(character_name: str, signature: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The boot hem the assembly of the outfit model ``signature`` (default: the one worn now) applies (boots
+    spec § 8): ``{boot, trousers, mode, fallback, pending}`` — ``mode`` the profile's choice, ``fallback`` the
+    stored layered fit's (``too_wide``: a tucked pair that did not fit into the shaft, worn over it), ``pending``
+    while that layered fit is still to be built (``fallback`` then None). None when no hem applies to that model
+    (no boot with own-mesh trousers, no bare model yet). Read-only (``garment_layers.plan``); never raises."""
+    try:
+        from app.core.model3d import get_model3d_dir
+        if signature is None:
+            from app.core.model_refs import current_outfit_state
+            signature = current_outfit_state(character_name)[2]
+        if not signature:
+            return None
+        for g in _wanted_for(character_name, get_model3d_dir(character_name), signature):
+            hem = g.get("hem")
+            if hem:
+                return {"boot": hem["boot"], "trousers": g["item_id"], "mode": hem["mode"],
+                        "fallback": hem.get("fallback"), "pending": bool((g.get("over") or {}).get("pending"))}
+    except Exception:  # noqa: BLE001 — a status read never breaks its caller
+        logger.exception("Garment assembly %s: hem state unreadable", character_name)
+    return None
+
+
 def _source(garment: Dict[str, Any], tier: str) -> Path:
     """The GLB a tier takes the garment node from: the low tier's own garment
     when it was built, else the full fit (never a bald distance figure)."""

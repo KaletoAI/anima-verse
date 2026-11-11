@@ -83,7 +83,16 @@ Expected, by hand:
      apply-outfit-set (the route's body) sets equipped_options.boot_hem "tucked"; a row written WITHOUT options
      (an old set; ``get_character_outfits`` reads it with options {}) applies null; a new set saved without
      options stores the live value ("over" after the null).
+[H7] (Task 11) the Wardrobe and the overview read the hem: in the [H3] state (tucked, r 0.05, too wide)
+     ``garment_assembly.hem_state`` -> {boot boots, trousers trousers, mode tucked, fallback too_wide, pending
+     False}; ``garment_set.wardrobe(...)["hem"]`` -> applicable True, boot_item boots, trousers_item trousers, mode
+     tucked, fallback too_wide; the model overview's footwear entry adds boot_class "ankle" (the insole class of
+     the 0.16 shaft) and hem {mode tucked, fallback too_wide}, its row reads "… · ankle boot · trousers over (too
+     wide to tuck) · …". With over (r 0.035) the fallback is None and the row reads "trousers over"; with the
+     painted bottom piece worn ``wardrobe`` says applicable False, fallback None. The saved set's preview
+     (GET …/outfit-sets/{id}) carries boot_hem "tucked" ([H6]).
 (On 02a2ff7a — Task 9 — ``app.core.outfit_options`` does not exist: [H1] fails on the import.)
+(On 193321cf — Task 10 fix — ``garment_assembly.hem_state`` does not exist: [H7] fails on the attribute.)
 """
 import hashlib
 import json
@@ -532,7 +541,45 @@ def main() -> int:
                   gl._mesh_prim(tube_05), y_m=plane)[0], tube_05), shafts, plane, top_m),
               {"tucked_poke": 110 / 320, "n": 320, "outside": 110})
         check("old layered fits of another body fit pruned (foreign)", layer_files(), [f"{trousers}_{FT}_{lsig_t}.glb"])
+
+        # --- [H7] the Wardrobe + the overview read the hem (Task 11) --------------------------------------
+        print("[H7] the Wardrobe payload and the overview row")
+        from app.core import garment_set, model_overview as mo
+        check("[H7] hem_state too wide", ga.hem_state("Demo"),
+              {"boot": boots, "trousers": trousers, "mode": "tucked", "fallback": gl.HEM_FALLBACK_TOO_WIDE,
+               "pending": False})
+        hem_wr = garment_set.wardrobe("Demo")["hem"]
+        check("[H7] wardrobe hem", {k: hem_wr.get(k) for k in ("applicable", "boot_item", "trousers_item", "mode",
+                                                               "fallback")},
+              {"applicable": True, "boot_item": boots, "trousers_item": trousers, "mode": "tucked",
+               "fallback": gl.HEM_FALLBACK_TOO_WIDE})
+
+        def boot_row():
+            entries, _w = mo._assembled_garments("Demo", osig)
+            boot = next(e for e in entries if e["item_id"] == boots)
+            row = next(r for r in mo._garment_steps(entries, []) if r["id"] == f"garment_{boots}")
+            return boot, row["detail"]
+        boot_e, detail = boot_row()
+        check("[H7] overview entry", (boot_e.get("boot_class"), boot_e.get("hem")),
+              ("ankle", {"mode": "tucked", "fallback": gl.HEM_FALLBACK_TOO_WIDE}))
+        check("[H7] overview row", "· ankle boot · trousers over (too wide to tuck) ·" in detail, True)
         write_trousers(0.035)
+        check("[H7] over", oo.set_boot_hem("Demo", "over"), True)
+        check("[H7] assemble over", ga.assemble("Demo", osig)["tiers"], {"full": "assembled", "low": "assembled"})
+        check("[H7] wardrobe fallback None over", garment_set.wardrobe("Demo")["hem"]["fallback"], None)
+        boot_e, detail = boot_row()
+        check("[H7] overview row over", (boot_e.get("hem"), "· ankle boot · trousers over ·" in detail),
+              ({"mode": "over", "fallback": None}, True))
+        p7 = get_character_profile("Demo")
+        p7["equipped_pieces"] = {"feet": boots, "bottom": painted}
+        check("[H7] wear the painted bottom", save_character_profile("Demo", p7), True)
+        hem_p = garment_set.wardrobe("Demo")["hem"]
+        check("[H7] painted: no control", (hem_p["applicable"], hem_p["fallback"]), (False, None))
+        p7 = get_character_profile("Demo")
+        p7["equipped_pieces"] = {"feet": boots, "bottom": trousers}
+        check("[H7] trousers again", save_character_profile("Demo", p7), True)
+        check("[H7] back to tucked", oo.set_boot_hem("Demo", "tucked"), True)
+        check("[H7] assemble tucked r 0.035", ga.assemble("Demo", osig)["tiers"], {"full": "assembled", "low": "assembled"})
 
         # --- [H5] refits ----------------------------------------------------------------------------------
         print("[H5] a refitted boot: new shaft bytes, new lsig; LAYER_KEEP sweeps the oldest")
@@ -569,6 +616,9 @@ def main() -> int:
         oid = add_character_outfit("Demo", {"name": "Boots day", "pieces": [boots, trousers], "options": {"boot_hem": "tucked"}})
         saved = next(o for o in get_character_outfits("Demo") if o["id"] == oid)
         check("stored options", saved.get("options"), {"boot_hem": "tucked"})
+        from app.routes.inventory import preview_outfit_set_route
+        check("[H7] the preview carries boot_hem", preview_outfit_set_route("Demo", oid, _admin=None).get("boot_hem"),
+              "tucked")
         check("live over before the apply", oo.boot_hem(get_character_profile("Demo")), "over")
         res = _apply_outfit_set_route_sync("Demo", {"outfit_id": oid})
         check("apply: pieces equipped", (res["status"], sorted(get_character_profile("Demo")["equipped_pieces"].items())),

@@ -9,7 +9,7 @@
  * (another character or item; null = nothing to load).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiGet, apiPost } from '../../lib/api'
+import { apiGet, apiPost, type BootHemState } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
 import type { Freshness } from './FreshnessBadge'
 import type { CollisionPayload, FootPose } from '@anima/scene-render'
@@ -524,6 +524,8 @@ export interface WardrobeGarments {
   items: Record<string, PieceStatus>
   /** Worn own-mesh pieces that are over each other: layered in slot order (inner first). */
   overlaps: Array<{ items: string[]; slots: string[] }>
+  /** The boot hem control under the worn feet piece (boots spec § 8.3). */
+  hem?: BootHemState
 }
 
 /** GET /characters/{n}/garments/{item} — the Wardrobe's own-mesh panel. */
