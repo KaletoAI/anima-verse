@@ -1,6 +1,7 @@
 """Importing this package registers every built-in improvement type."""
 from app.core.improvements import registry
 
+from .artefact_cleanup import ArtefactCleanup
 from .collision_capsules import CollisionCapsules
 from .extension_rig_rebuild import ExtensionRigRebuild
 from .face_retexture import FaceRetexture
@@ -30,6 +31,7 @@ registry.register(ImageRerender())
 registry.register(SurfaceBake())
 registry.register(MeshFromTpose())
 registry.register(FallbackRerender())
+registry.register(ArtefactCleanup())
 
-__all__ = ["CollisionCapsules", "FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "FitRefit", "GarmentFill", "HairFill", "ImageRerender", "MeshFromTpose", "ModelReplace", "OutfitRebuild",
+__all__ = ["ArtefactCleanup", "CollisionCapsules", "FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "FitRefit", "GarmentFill", "HairFill", "ImageRerender", "MeshFromTpose", "ModelReplace", "OutfitRebuild",
            "RigWeightRepair", "SurfaceBake"]

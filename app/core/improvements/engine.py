@@ -383,7 +383,7 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         # The step's own generations must not end the user's idle window.
         with user_activity.suppressed():
-            improvement_type.apply(candidate, improvement["params"], task_id)
+            result_note = improvement_type.apply(candidate, improvement["params"], task_id)
     except (BackendBusyError, CandidateBusy, HubOpBusy, MediaGenerationDisabled) as e:
         # Load, not a defect (HubOpBusy: another hub operation holds this
         # target — it is in flight, not broken; MediaGenerationDisabled: the
@@ -428,6 +428,8 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": str(e)}
 
     store.mark_result(improvement_id, key, status="done", count_attempt=False)
+    if isinstance(result_note, str) and result_note:
+        store.set_note(improvement_id, key, result_note)
     store.update(improvement_id, done_count=int(improvement["done_count"]) + 1)
     _close_if_finished(improvement_id)
     return {"ok": True}

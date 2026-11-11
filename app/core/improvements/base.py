@@ -68,9 +68,12 @@ class ImprovementType:
         closed as done."""
         raise NotImplementedError
 
-    def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
+    def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> Optional[str]:
         """Synchronous; returns only after the asset is persisted.  May raise
-        BackendBusyError (step stays pending) or any other Exception (attempt)."""
+        BackendBusyError (step stays pending) or any other Exception (attempt).
+        A non-empty string returned is the step's result note: it replaces
+        the candidate's note once the step is done (a cleanup reports what it
+        freed); None keeps the note as scanned."""
         raise NotImplementedError
 
 

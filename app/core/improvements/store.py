@@ -253,6 +253,16 @@ def mark_running(improvement_id: str, key: str) -> None:
         )
 
 
+def set_note(improvement_id: str, key: str, note: str) -> None:
+    """Replace a step's note (a type's result note after the step is done —
+    ``ImprovementType.apply``). A rescan refreshes only PENDING notes."""
+    with transaction() as conn:
+        conn.execute(
+            "UPDATE improvement_steps SET note=? WHERE improvement_id=? AND candidate_key=?",
+            (note or "", improvement_id, key),
+        )
+
+
 def mark_result(improvement_id: str, key: str, *, status: str,
                 error: str = "", count_attempt: bool = True,
                 refused: bool = False) -> None:
