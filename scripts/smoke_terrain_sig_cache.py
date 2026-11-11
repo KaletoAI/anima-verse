@@ -123,7 +123,10 @@ with patch.object(types, '_shared_path', return_value=seed):
     with patch.object(heightfield, 'current_sig', return_value='fixture'), patch.object(terrain, 'list_areas', wraps=terrain.list_areas) as area_reads:
         build_worldmap_payload(show_all=True)
         assert area_reads.call_count == 1, area_reads.call_count
-    facts = {'name': 'Rock', 'variant_maps': [{'full': '/rock'}], 'max_list': [1], 'sink_list': [0], 'fix_euler': {}}
+    # The shape of wp._prop_facts since f192c580 (one rotation + entry per
+    # published variant) and 20ad3c08 (the entry names its store variant).
+    facts = {'name': 'Rock', 'variant_maps': [{'full': '/rock'}], 'max_list': [1], 'sink_list': [0],
+             'entries': [{'variant': 0, 'dims': {}}], 'bbox': None, 'rotations': [{}]}
     def prop_signatures():
         return terrain.terrain_sig(), wp.world_props_sig()
     with patch.object(wp, '_prop_facts', return_value=facts) as reads, patch.object(wp, 'prop_boxes', side_effect=lambda: wp.list_world_props()):

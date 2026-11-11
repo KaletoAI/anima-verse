@@ -42,7 +42,8 @@ Hand-derived expectations
 [0] at rest. Each location is composed until its ETag stops moving (the
     first read of a hand-written sidecar migrates it once — a write into the
     very directory the ETag stats, so the first compose is followed by one
-    more; ``smoke_scene_cache.py`` [1] records the same on the old code).
+    more — the variant-uid migration of 3ffb21a8; ``smoke_scene_cache.py``
+    settles it at seed time instead).
     Then: the read set of Warehouse is exactly {"crate"} and of Shed exactly
     {"barrel", "crate"} — the rooms name no other prop, and the lamp is read
     only inside ``terrain_sig``, which is not recorded (see [5]). The held ETag answers 304.

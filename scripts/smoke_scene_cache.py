@@ -171,6 +171,11 @@ def write_crate(tags) -> None:
         "name": "Crate", "category": "furniture",
         "width_m": 0.8, "depth_m": 0.8, "height_m": 0.6,
         "tags": list(tags)}), encoding="utf-8")
+    # A hand-written sidecar is migrated by its first read (the variant list
+    # gains its uid, 3ffb21a8) — a write into the very directory the
+    # fingerprint stats. Settle it here, so [1] starts from a stored record
+    # and "nothing changed in between" holds.
+    prop_store.read_sidecar(CRATE)
     scene_recipe.invalidate_prop_lib_token()
 
 
