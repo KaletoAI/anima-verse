@@ -509,12 +509,12 @@ def fit_source(character_name: str, item_id: str, fsig: str, base_images: Dict[s
 # --- Frames ---------------------------------------------------------------------------
 
 def _pad(mask: np.ndarray, shape: Tuple[int, int]) -> np.ndarray:
-    """A full-frame mask moved onto another view's canvas (``garment_cut.pad_into``)."""
-    from app.core import garment_cut
+    """A full-frame mask moved onto another view's canvas (``garment_images.pad_into``)."""
+    from app.core import garment_images
     mask = np.asarray(mask, bool)
     if mask.shape == tuple(shape):
         return mask
-    return garment_cut.pad_into(np.zeros(mask.shape + (3,), np.float32), mask, shape)[1]
+    return garment_images.pad_into(np.zeros(mask.shape + (3,), np.float32), mask, shape)[1]
 
 
 def trunk(mask: np.ndarray) -> Tuple[np.ndarray, int]:

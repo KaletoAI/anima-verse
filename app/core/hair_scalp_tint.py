@@ -125,13 +125,31 @@ def _repack(parsed: Dict[str, Any], images: Dict[int, bytes]) -> bytes:
             + struct.pack("<I4s", len(binary), b"BIN\0") + bytes(binary))
 
 
+def _surface_samples(P: np.ndarray, F: np.ndarray, step_m: float) -> np.ndarray:
+    """Points on the triangles ``F`` of ``P`` no farther apart than about ``step_m`` (barycentric grids)."""
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    if not len(F):
+        return np.zeros((0, 3))
+    T = P[F]
+    edge = np.max(np.linalg.norm(T - np.roll(T, 1, axis=1), axis=2), axis=1)
+    n_of = np.clip(np.ceil(edge / step_m).astype(int), 1, 64)
+    out = [P[np.unique(F)]]
+    for n in np.unique(n_of):
+        a, b = np.meshgrid(np.arange(n + 1), np.arange(n + 1))
+        keep = a + b <= n
+        a, b = a[keep] / n, b[keep] / n
+        t = T[n_of == n]
+        out.append((t[:, None, 0] * (1 - a - b)[None, :, None] + t[:, None, 1] * a[None, :, None]
+                    + t[:, None, 2] * b[None, :, None]).reshape(-1, 3))
+    return np.concatenate(out)
+
+
 def tint_scalp(glb: bytes, hair) -> Tuple[bytes, Dict[str, Any]]:
     """``(glb with the scalp tinted under ``hair``, report)`` — module docstring. ``hair``: the fitted hair
     ``GarmentMesh`` in the body's bind space (what ``garment_assembly`` grafts)."""
     from PIL import Image
     from scipy.ndimage import distance_transform_edt, maximum_filter
     from app.core import glb_mesh
-    from app.core.garment_cut import _surface_samples
     from app.core.garment_fit import chin_height, dense_weights, joint_index
     from app.core.garment_hairdeck import FALLBACK_BROW_RATIO, placement_landmarks
     from app.core.model_validate import texture_image_index

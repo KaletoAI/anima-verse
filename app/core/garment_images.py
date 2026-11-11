@@ -115,6 +115,34 @@ def render_size(size: Tuple[int, int]) -> Tuple[int, int]:
     return tuple(-(-int(v) // SIZE_STEP) * SIZE_STEP for v in size)  # type: ignore[return-value]
 
 
+def pad_into(rgb, mask, shape: Tuple[int, int]):
+    """An image + mask moved into another view's frame of ``shape`` (h, w): both are crops of the same square
+    edit canvas (side = max(w, h)), each centred horizontally, so the shift is the difference of the two centring
+    offsets; a different height is scaled to ``shape`` first (pure scale). ``(rgb float32, mask bool)``."""
+    import numpy as np
+    hh, wh = int(shape[0]), int(shape[1])
+    rgb = np.asarray(rgb, np.float32)
+    mask = np.asarray(mask, bool)
+    if rgb.shape[0] != hh:
+        from PIL import Image
+        f = hh / rgb.shape[0]
+        size = (max(1, int(round(rgb.shape[1] * f))), hh)
+        rgb = np.asarray(Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).resize(
+            size, Image.Resampling.LANCZOS), np.float32)
+        mask = np.asarray(Image.fromarray((mask * 255).astype(np.uint8)).resize(
+            size, Image.Resampling.BILINEAR)) >= 128
+    wb = rgb.shape[1]
+    side = max(hh, wh)
+    shift = (side - wb) // 2 - (side - wh) // 2
+    out_rgb = np.full((hh, wh, 3), 128.0, np.float32)
+    out_mask = np.zeros((hh, wh), bool)
+    x0, x1 = max(shift, 0), min(wh, shift + wb)
+    if x1 > x0:
+        out_rgb[:, x0:x1] = rgb[:, x0 - shift:x1 - shift, :3]
+        out_mask[:, x0:x1] = mask[:, x0 - shift:x1 - shift]
+    return out_rgb, out_mask
+
+
 def kind_module(kind: str):
     """The module of a garment kind's image chain (``EDIT_STEPS``,
     ``edit_prompt``, ``gate``, ``position_reference``, ``SUBJECT`` and the pair hooks ``PAIR_STEP``,

@@ -208,31 +208,7 @@ class View:
     base_mask: np.ndarray       # (h, w) bool
 
 
-def pad_into(rgb: np.ndarray, mask: np.ndarray, shape: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
-    """An image + mask moved into another view's frame of ``shape`` (h, w): both are crops of the same square
-    edit canvas (side = max(w, h)), each centred horizontally, so the shift is the difference of the two centring
-    offsets; a different height is scaled to ``shape`` first (pure scale)."""
-    hh, wh = int(shape[0]), int(shape[1])
-    rgb = np.asarray(rgb, np.float32)
-    mask = np.asarray(mask, bool)
-    if rgb.shape[0] != hh:
-        from PIL import Image
-        f = hh / rgb.shape[0]
-        size = (max(1, int(round(rgb.shape[1] * f))), hh)
-        rgb = np.asarray(Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).resize(
-            size, Image.Resampling.LANCZOS), np.float32)
-        mask = np.asarray(Image.fromarray((mask * 255).astype(np.uint8)).resize(
-            size, Image.Resampling.BILINEAR)) >= 128
-    wb = rgb.shape[1]
-    side = max(hh, wh)
-    shift = (side - wb) // 2 - (side - wh) // 2
-    out_rgb = np.full((hh, wh, 3), 128.0, np.float32)
-    out_mask = np.zeros((hh, wh), bool)
-    x0, x1 = max(shift, 0), min(wh, shift + wb)
-    if x1 > x0:
-        out_rgb[:, x0:x1] = rgb[:, x0 - shift:x1 - shift, :3]
-        out_mask[:, x0:x1] = mask[:, x0 - shift:x1 - shift]
-    return out_rgb, out_mask
+from app.core.garment_images import pad_into  # noqa: E402 — moved (hair-from-body Task 2)
 
 
 def _figure_mask(data: bytes) -> Tuple[np.ndarray, np.ndarray]:
@@ -720,23 +696,7 @@ def label_hair(Q: np.ndarray, sd: np.ndarray, adj, *, outer: np.ndarray, head: n
         "hairline_y_m": None if hairline_y is None else round(float(hairline_y) * k, 4)}}
 
 
-def _surface_samples(P: np.ndarray, F: np.ndarray, step_m: float) -> np.ndarray:
-    """Points on the triangles ``F`` of ``P`` no farther apart than about ``step_m`` (barycentric grids)."""
-    F = np.asarray(F, np.int64).reshape(-1, 3)
-    if not len(F):
-        return np.zeros((0, 3))
-    T = P[F]
-    edge = np.max(np.linalg.norm(T - np.roll(T, 1, axis=1), axis=2), axis=1)
-    n_of = np.clip(np.ceil(edge / step_m).astype(int), 1, 64)
-    out = [P[np.unique(F)]]
-    for n in np.unique(n_of):
-        a, b = np.meshgrid(np.arange(n + 1), np.arange(n + 1))
-        keep = a + b <= n
-        a, b = a[keep] / n, b[keep] / n
-        t = T[n_of == n]
-        out.append((t[:, None, 0] * (1 - a - b)[None, :, None] + t[:, None, 1] * a[None, :, None]
-                    + t[:, None, 2] * b[None, :, None]).reshape(-1, 3))
-    return np.concatenate(out)
+from app.core.hair_scalp_tint import _surface_samples  # noqa: E402 — moved (hair-from-body Task 2)
 
 
 def side_coverage(Pb_m: np.ndarray, Fb: np.ndarray, head: np.ndarray, Ph_m: np.ndarray,
