@@ -79,7 +79,9 @@ CAP_INNER_DEPTH_M = VOX_M
 # triangles below that hairline). The centre strip (+-2.5 cm) finds the forehead hairline at the parting (1.645).
 HAIRLINE_FRONT_DEPTH = 0.25
 HAIRLINE_HALF_WIDTH = 0.15
-CAP_COLOUR_PERCENTILE = 20
+# The scalp cap takes the hair's median colour: the 20th percentile (until 2026-11-11) showed as a darker cap at the
+# parting and the crown (Kira's HairDeck renders).
+CAP_COLOUR_PERCENTILE = 50
 
 # Placement correction (user test 2026-11-09, finding 5). The proxy is a near-sphere, the cranium is longer (Kira:
 # depth 0.20 m, width 0.17 m) and its back dominates the ICP point set, so the placed proxy sits ~1.2 cm to the back

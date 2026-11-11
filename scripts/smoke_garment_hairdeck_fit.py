@@ -42,8 +42,8 @@ Fixture (metres, +y up, the body faces +z)
       0.6 -> 0.62085^2.4 = exp(2.4 * -0.47666) = 0.3185
       0.3 -> 0.33649^2.4 = exp(2.4 * -1.08920) = 0.0732
     The median of COLOR_0 is 0.25 per channel, gains 2.415 / 1.274 / 0.293 -> every corrected hair colour (hence
-    the median) = (0.6038, 0.3185, 0.0732) +- 0.01, alpha 1. The scalp cap's colour is the 20th percentile of the
-    corrected colours = the same value. Without a target the colours stay 0.25 (+- 1e-9) and colour_target None.
+    the median) = (0.6038, 0.3185, 0.0732) +- 0.01, alpha 1. The scalp cap's colour is the median (CAP_COLOUR_PERCENTILE
+    50, FIT_VERSION hair 6) of the corrected colours = the same value. Without a target the colours stay 0.25 (+- 1e-9) and colour_target None.
 [4] Scalp cap. Front hairline = lowest hair vertex with z > 0.05 and |x| < 0.03: the outer shell's lowest ring
     h = 0.010 -> y = 0.8 + 2 * (0.4 + 0.010) = 1.62 (its vertex at segment 0 is at x 0, z 0.108). The push may lift
     it a little (smoothing carries the inner layer's push along the shell) -> hairline in [1.62, 1.625].
@@ -372,7 +372,8 @@ def main() -> int:
         check(bool(np.all(Ch[:, 3] == 1)), "alpha 1")
         check(m["colour_target"] == list(target), f"colour_target recorded {m['colour_target']}")
         Cc = np.asarray(g.colors[n_hair:])
-        check(len(Cc) > 0 and bool(np.all(np.abs(Cc[:, :3] - lin) <= 0.01)), "cap colour = 20th percentile = target")
+        check(len(Cc) > 0 and bool(np.all(np.abs(Cc[:, :3] - lin) <= 0.01)), "cap colour = median = target")
+        check(gh.CAP_COLOUR_PERCENTILE == 50, "the cap takes the median colour (CAP_COLOUR_PERCENTILE 50)")
         plain = gh.fit_hairdeck(nohead, proxy, body, colour_target=None, **NO_PLACEMENT)
         check(bool(np.all(np.abs(np.asarray(plain.garment.colors[:n_hair])[:, :3] - 0.25) <= 1e-9))
               and plain.metrics["colour_target"] is None, "no target: colours untouched, colour_target None")

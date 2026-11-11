@@ -52,7 +52,8 @@ rigged, ``k_h`` the same for H's own units):
    ``CAP_LOOP_MAX_M`` is capped with a fan (a groove between strands, not an island of vertices).
 6. Gates (``CUT_GATES``, numbers § B5a style): registration p95 of the non-hair outer wall of the head below
    1 cm (the top 35 cm are reported as ``top_p95_cm``), the hairline (front centre strip, 3D label vs 2D mask) within 1.5 cm, no small hole left in the hair
-   sheet (boundary loops shorter than ``HOLE_LOOP_MAX_M``), hair area at least 1 cm².
+   sheet (boundary loops shorter than ``HOLE_LOOP_MAX_M``), hair area at least 1 cm², the cut edge's rim near the
+   scalp, and the temples covered in the side views (``side_coverage``, both sides).
 
 ``CUT_VERSION`` is part of the subtract fsig: bump it whenever the cut's output changes.
 """
@@ -73,9 +74,10 @@ from app.core.log import get_logger
 logger = get_logger("garment_cut")
 
 #: Bump whenever the cut's output changes (part of the subtract fsig, ``garment_store``).
-CUT_VERSION = 6   # 2: colour mend, shell rim seated on the outer scalp; 3: pale texels mended; 4: geometry label;
+CUT_VERSION = 7   # 2: colour mend, shell rim seated on the outer scalp; 3: pale texels mended; 4: geometry label;
                   # 5: colour label from H's texture, the cut's inner sheet at the fit's clearance;
-                  # 6: temples / sideburns by colour into the face zone, the cut's edge rolled onto the scalp
+                  # 6: temples / sideburns by colour into the face zone, the cut's edge rolled onto the scalp;
+                  # 7: the side-coverage gate (``side_coverage``)
 
 SHAPES: Tuple[str, ...] = ("cut", "shell")
 #: Default / allowed shell thickness (profile ``hair_shell_mm``).
@@ -156,6 +158,14 @@ TINT_MIN_N = 20             # vertices each reference needs
 TEMPLE_RINGS = 15
 SIDEBURN_M = 0.03           # ... down to this far below the eye row (a sideburn ends about mid-ear)
 
+# Side coverage (``side_coverage``): the temple band of the base's side views. Calibration below at the gate.
+SIDE_CELL_M = 0.002
+SIDE_EAR_BAND_M = (0.06, 0.16)   # the ear lies between these depths below the head top
+SIDE_EAR_DEPTH_M = 0.008         # the ear = the surface within this of the outermost point there
+SIDE_BAND_FROM_M = 0.005         # the band starts this far above the ear top (the ear's rim is not hair's) ...
+SIDE_BAND_M = 0.03               # ... and is this high
+SIDE_BAND_FRONT_M = 0.025        # ... from the ear's back edge to this far in front of its front edge (the temple)
+SIDE_INSIDE_M = 0.003            # a hair point up to this far inside the skin's outermost point still shows
 #: The cut's gates: (kind, limit, label) like ``garment_fit.GATES``.
 CUT_GATES: Dict[str, Tuple[str, float, str]] = {
     "registration_p95_cm": ("max", 1.0, "registration p95 of the non-hair head"),
@@ -163,7 +173,13 @@ CUT_GATES: Dict[str, Tuple[str, float, str]] = {
     "label_holes": ("max", 0, "holes left in the hair sheet"),
     "hair_area_cm2": ("min", 1.0, "hair area"),
     "rim_p95_mm": ("max", 3.0, "cut edge above the scalp (open hairline)"),
+    "side_coverage": ("min", 0.4, "hair over the temples in the side views"),
 }
+# side_coverage (``side_coverage``, the smaller side), calibrated 2026-11-11 on the stored cuts
+# (~/claude-out/hair-side-gate/tools/calib.py): Kai's subtract before CUT_VERSION 6 (bald temples in the render)
+# cut 0.126 / shell 0.030; since then cut 0.798 / shell 0.715; Kira's subtract 1.0 before and after; the spike
+# cases (CUT_VERSION 6) kira_e2e 1.0 / 1.0, kira_spike 1.0 / 1.0, kai_spike 0.933 / 0.962 (cut / shell). 0.4
+# lies about midway between the refused 0.126 and the accepted 0.715.
 # rim_p95_mm: ring 0 of the edge near the scalp (``SNAP_MAX_M``), its distance to B's outer wall, p95. The open
 # edge of CUT_VERSION 5 stood at INNER_OFFSET_M (6 mm); the rolled one at RIM_M (1 mm), the shell's at SHELL_INNER_M.
 
@@ -703,6 +719,75 @@ def label_hair(Q: np.ndarray, sd: np.ndarray, adj, *, outer: np.ndarray, head: n
         "hairline_y_m": None if hairline_y is None else round(float(hairline_y) * k, 4)}}
 
 
+def _surface_samples(P: np.ndarray, F: np.ndarray, step_m: float) -> np.ndarray:
+    """Points on the triangles ``F`` of ``P`` no farther apart than about ``step_m`` (barycentric grids)."""
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    if not len(F):
+        return np.zeros((0, 3))
+    T = P[F]
+    edge = np.max(np.linalg.norm(T - np.roll(T, 1, axis=1), axis=2), axis=1)
+    n_of = np.clip(np.ceil(edge / step_m).astype(int), 1, 64)
+    out = [P[np.unique(F)]]
+    for n in np.unique(n_of):
+        a, b = np.meshgrid(np.arange(n + 1), np.arange(n + 1))
+        keep = a + b <= n
+        a, b = a[keep] / n, b[keep] / n
+        t = T[n_of == n]
+        out.append((t[:, None, 0] * (1 - a - b)[None, :, None] + t[:, None, 1] * a[None, :, None]
+                    + t[:, None, 2] * b[None, :, None]).reshape(-1, 3))
+    return np.concatenate(out)
+
+
+def side_coverage(Pb_m: np.ndarray, Fb: np.ndarray, head: np.ndarray, Ph_m: np.ndarray,
+                  Fh: np.ndarray) -> Dict[str, Any]:
+    """The hair's coverage of the temple band in the base's left and right side views (orthographic along x,
+    metres, B's frame). Per side: the ear = the head surface within ``SIDE_EAR_DEPTH_M`` of the outermost point
+    between ``SIDE_EAR_BAND_M`` below the top; the band = ``SIDE_BAND_M`` above the ear top (from ``SIDE_BAND_FROM_M``), from
+    the ear's back edge to ``SIDE_BAND_FRONT_M`` in front of its front edge, on ``SIDE_CELL_M`` cells; a cell is
+    covered when a hair surface point lies in it no more than ``SIDE_INSIDE_M`` inside the skin's outermost point
+    there (the skin the side view shows). ``{"left": share, "right": share, "min": share, ...}``."""
+    Fb = np.asarray(Fb, np.int64).reshape(-1, 3)
+    on_head = Fb[np.asarray(head, bool)[Fb].all(1)]
+    S = _surface_samples(Pb_m, on_head, SIDE_CELL_M / 2)
+    H = _surface_samples(Ph_m, Fh, SIDE_CELL_M / 2)
+    out: Dict[str, Any] = {}
+    if not len(S) or not len(H):
+        return {"left": 0.0, "right": 0.0, "min": 0.0}
+    top = float(S[:, 1].max())
+    upper = S[S[:, 1] > top - SIDE_EAR_BAND_M[1]]
+    cx = 0.5 * float(np.percentile(upper[:, 0], 0.5) + np.percentile(upper[:, 0], 99.5))
+    for side, name in ((1.0, "left"), (-1.0, "right")):
+        lat = side * (S[:, 0] - cx)
+        band = (S[:, 1] < top - SIDE_EAR_BAND_M[0]) & (S[:, 1] > top - SIDE_EAR_BAND_M[1]) & (lat > 0)
+        if not band.any():
+            out[name] = 0.0
+            continue
+        ear = band & (lat >= lat[band].max() - SIDE_EAR_DEPTH_M)
+        ear_top = float(S[ear, 1].max())
+        z0, z1 = (float(v) for v in np.percentile(S[ear, 2], [2, 98]))
+        y_lo, y_hi = ear_top + SIDE_BAND_FROM_M, ear_top + SIDE_BAND_FROM_M + SIDE_BAND_M
+        # the face is +z: "in front" of the ear = larger z
+        z_lo = z0
+        z_hi = z_lo + math.ceil((z1 + SIDE_BAND_FRONT_M - z0) / SIDE_CELL_M) * SIDE_CELL_M   # whole cells only
+        def cells(X, latx):
+            m = (X[:, 1] >= y_lo) & (X[:, 1] < y_hi) & (X[:, 2] >= z_lo) & (X[:, 2] < z_hi) & (latx > 0)
+            iy = ((X[m, 1] - y_lo) / SIDE_CELL_M).astype(int)
+            iz = ((X[m, 2] - z_lo) / SIDE_CELL_M).astype(int)
+            grid = np.full((int(round((y_hi - y_lo) / SIDE_CELL_M)) + 1,
+                            int(round((z_hi - z_lo) / SIDE_CELL_M)) + 1), -np.inf)
+            np.maximum.at(grid, (iy, iz), latx[m])
+            return grid
+        skin = cells(S, lat)
+        hair = cells(H, side * (H[:, 0] - cx))
+        cell = np.isfinite(skin)
+        covered = cell & (hair >= skin - SIDE_INSIDE_M)
+        out[name] = round(float(covered.sum() / cell.sum()), 4) if cell.any() else 0.0
+        out[name + "_band"] = {"ear_top_y": round(ear_top, 4), "z": [round(z_lo, 4), round(z_hi, 4)],
+                               "cells": int(cell.sum())}
+    out["min"] = min(out["left"], out["right"])
+    return out
+
+
 # --- result -----------------------------------------------------------------------------------------------------------
 
 @dataclass
@@ -1176,7 +1261,7 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     report["edge_caps"] = {"capped": len(caps), "perimeters_cm": sorted(round(p * 100, 1) for _e, _v, p in caps)}
     if len(Fo) == 0:
         metrics = {"registration_p95_cm": _finite(reg_p95, 3), "hairline_cm": None, "label_holes": 0,
-                   "hair_area_cm2": 0.0}
+                   "hair_area_cm2": 0.0, "side_coverage": 0.0}
         ok, reasons = gf.gate(metrics, CUT_GATES)
         clear, spread = fit_params(shape)
         report["seconds"] = round(time.monotonic() - started, 2)
@@ -1306,9 +1391,11 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
     rim_mm = (np.linalg.norm(rim_pts - surface.closest(rim_pts)[0], axis=1) * k * 1000 if rim_at.any()
               else np.zeros(0))
     report["rim"] = {"n": int(rim_at.sum()), "p50_mm": round(float(np.median(rim_mm)), 2) if len(rim_mm) else None}
+    report["side"] = side_coverage(Pb * k, Fb, head_b, P_out * k, F_all)
     metrics = {"registration_p95_cm": _finite(reg_p95, 3), "hairline_cm": _finite(hairline_cm, 2),
                "label_holes": len(holes), "hair_area_cm2": round(hair_area_cm2, 1),
-               "rim_p95_mm": round(float(np.percentile(rim_mm, 95)), 2) if len(rim_mm) else 0.0}
+               "rim_p95_mm": round(float(np.percentile(rim_mm, 95)), 2) if len(rim_mm) else 0.0,
+               "side_coverage": report["side"]["min"]}
     ok, reasons = gf.gate(metrics, CUT_GATES)
     glb = static_glb(P_out, F_all, U_out, image=image, mime=mime, material=material, name="hair_subtract")
     clear, spread = fit_params(shape)

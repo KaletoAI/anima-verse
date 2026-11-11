@@ -105,6 +105,22 @@ EXPECTED, BY HAND
     (medians over the vertices off the edge, +-0.2 mm: chordal grid), every snapped vertex lifted. The temple
     flood (CUT_VERSION 6) takes none of the 25 hair-coloured face-zone vertices: they face forward (front-facing
     theta-60 ring, B's normal z > PROTECT_FACING) -> temple 0.
+[p] side_coverage (CUT_VERSION 7), metres: head sphere R 0.1 at (0, 1.6, 0) (top 1.7), ear spheres r 0.02 at
+    (+-0.105, 1.55, -0.01). The ear search band y 1.54 .. 1.64: the outermost point is the ear's (lateral 0.125;
+    the head reaches 0.1), the ear = lateral >= 0.117 = the ear sphere's disc x - 0.105 >= 0.012, radius
+    sqrt(0.02^2 - 0.012^2) = 0.016 -> ear top 1.566 (+-1 mm: 1 mm samples), z within -0.026 .. 0.006. Band y
+    1.571 .. 1.601 (15 rows of 2 mm), z from the ear's back edge to 25 mm in front of its front edge; the head
+    sphere is there at every cell (|z| <= 0.031 < its xz radius >= 0.0957). Hair = a sphere cap R 0.106 above y_c:
+    y_c 1.50 -> 1.0 both sides; y_c 1.62 (above the band) -> 0.0; y_c 1.588 keeps the faces from the latitude -6
+    ring up (rings every 2 degrees; -8 is y 1.5852): y 1.6 - 0.106 sin 6 = 1.5889 -> rows floor((1.5889 - 1.571) /
+    0.002) = 9 .. 14 = 6 / 15 = 0.4 (+- 1/15, the ear top's 1 mm); the y_c 1.50 cap on x < 0 only -> left 0.0,
+    right 1.0, min 0.0. The band holds whole cells only (its z end rounded up to the cell).
+    The [d]/[e]/[o]/[k] fixtures (a cap down to theta 60 only, the head sphere R 0.17 m) are refused by this gate
+    alone: their search band (1.54 .. 1.64 m) holds no ear (the ear sphere tops out at 1.513 m), the head's
+    outermost point is at the band's foot (y 1.54, lateral 0.1697), within 8 mm up to y 1.53 + sqrt(0.17^2 -
+    0.1617^2) = 1.582 -> band 1.587 .. 1.617; the cap's lowest edge on the scalp (theta 60) is at 1.53 + 0.17 x 0.5
+    = 1.615 (+1 mm rim; the chordal seat may reach row 13, 1.6134 .. 1.6154) -> side_coverage <= 2/15; every
+    other gate passes.
 """
 import io
 import math
@@ -292,7 +308,8 @@ def test_cut():
     res = gc.cut_hair(haired_glb, unrigged, rigged, views(), shape="cut")
     print(f"       metrics {res.metrics}; label {res.report['label']}; edge {res.report['edge']}")
     print(f"       hairline {res.report['hairline']}; closed {res.report['closed']}")
-    check("ok", (res.ok, res.reasons), (True, []))
+    check("gates: only the side coverage refuses ([p])", (res.ok, [r for r in res.reasons if not r.startswith("side_coverage")]), (False, []))
+    check("side coverage <= 2/15 (the cap ends in the band's top rows, [p])", res.metrics["side_coverage"] <= 2 / 15 + 1e-9, True)
     near("registration p95 (cm)", res.metrics["registration_p95_cm"], 0.0, 0.05)
     check("label = 2401 cap vertices - 25 in the face zone", res.report["label"]["vertices"], 2376)
     near("hairline (cm)", res.metrics["hairline_cm"], 0.68, 0.1)
@@ -324,7 +341,7 @@ def test_shell():
     res = gc.cut_hair(fx.make_glb(Hfile, Ft, U, image=cx.solid_png(HAIR)), unrigged, rigged, views(),
                       shape="shell", thickness_m=0.005)
     print(f"       metrics {res.metrics}; shell {res.report.get('shell')}; closed {res.report['closed']}")
-    check("ok", (res.ok, res.reasons), (True, []))
+    check("gates: only the side coverage refuses ([p])", (res.ok, [r for r in res.reasons if not r.startswith("side_coverage")]), (False, []))
     P, F, _U, image, mime, _mat = static_arrays(res.glb)
     half = len(P) // 2
     d_out = (np.linalg.norm(P[:half] - C, axis=1) - 0.1) * K * 1000
@@ -449,7 +466,7 @@ def test_geometry_label():
     vs = {"front": gc.View(haired, haired_mask, bald, bald_mask), "back": gc.View(blonde, haired_mask, bald, bald_mask)}
     res = gc.cut_hair(haired_glb, unrigged, rigged, vs, shape="cut")
     print(f"       metrics {res.metrics}; label {res.report['label']}")
-    check("ok", (res.ok, res.reasons), (True, []))
+    check("gates: only the side coverage refuses ([p])", (res.ok, [r for r in res.reasons if not r.startswith("side_coverage")]), (False, []))
     check("label = 2401 cap vertices - 25 front-facing theta-60 vertices", res.report["label"]["vertices"], 2376)
     check("geometry seeds beyond the votes", res.report["label"]["geo_only"] > 0, True)
     check("holes", res.metrics["label_holes"], 0)
@@ -565,7 +582,7 @@ def test_flat_hair():
     res = gc.cut_hair(haired_glb, unrigged, rigged, vs, shape="cut")
     lab_rep = res.report["label"]
     print(f"       metrics {res.metrics}; label {lab_rep}; cut {res.report['cut']}")
-    check("ok", (res.ok, res.reasons), (True, []))
+    check("gates: only the side coverage refuses ([p])", (res.ok, [r for r in res.reasons if not r.startswith("side_coverage")]), (False, []))
     check("no geometry seed (5.1 mm < 12 mm)", lab_rep["geo_seeds"], 0)
     check("colour label used", lab_rep["tint"]["used"], True)
     check("temple flood: none of the forward-facing face-zone vertices", lab_rep["temple"], 0)
@@ -590,6 +607,38 @@ def test_flat_hair():
     check("without the colour label the front votes only", off.report["label"]["vertices"] < 2376, True)
 
 
+def test_side_coverage():
+    print("[p] side coverage of the temple band")
+    from app.core import garment_cut as gc
+    import smoke_garment_fit as fx
+    hP, hF = fx.uv_sphere(0.1, (0.0, 1.6, 0.0), nlat=90, nlon=180)
+    parts = [(hP, hF)]
+    for sx in (1, -1):
+        parts.append(fx.uv_sphere(0.02, (sx * 0.105, 1.55, -0.01), nlat=24, nlon=48))
+    P = np.vstack([q for q, _ in parts])
+    F = np.vstack([f + sum(len(q) for q, _ in parts[:i]) for i, (_, f) in enumerate(parts)])
+    head = np.ones(len(P), bool)
+    cP, cF = fx.uv_sphere(0.106, (0.0, 1.6, 0.0), nlat=90, nlon=180)
+
+    def cap(y_c, side=None):
+        keep = (cP[cF, 1] >= y_c).all(1)
+        if side is not None:
+            keep &= (side * cP[cF, 0] > 0).all(1)
+        return cP, cF[keep]
+    full = gc.side_coverage(P, F, head, *cap(1.50))
+    print(f"       full cap {full}")
+    near("ear top (m)", full["left_band"]["ear_top_y"], 1.566, 0.0011)
+    check("cap from y 1.50: both sides 1.0", (full["left"], full["right"]), (1.0, 1.0))
+    above = gc.side_coverage(P, F, head, *cap(1.62))
+    check("cap from y 1.62 (above the band): 0.0", (above["left"], above["right"]), (0.0, 0.0))
+    half = gc.side_coverage(P, F, head, *cap(1.588))
+    near("cap from the y 1.5889 ring: 6 / 15 rows (left)", half["left"], 6 / 15, 1 / 15)
+    near("cap from the y 1.5889 ring: 6 / 15 rows (right)", half["right"], 6 / 15, 1 / 15)
+    one = gc.side_coverage(P, F, head, *cap(1.50, side=-1))
+    check("cap on x < 0 only: left 0, right 1, min 0", (one["left"], one["right"], one["min"]), (0.0, 1.0, 0.0))
+    check("gate side_coverage", gc.CUT_GATES["side_coverage"], ("min", 0.4, "hair over the temples in the side views"))
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="garment-cut-") as tmp:
         os.environ["STORAGE_DIR"] = str(Path(tmp) / "world")
@@ -610,6 +659,7 @@ def main() -> int:
         test_tinted()
         test_flat_hair()
         test_args()
+        test_side_coverage()
     print(f"\n{'FAILED: ' + ', '.join(FAILS) if FAILS else 'all checks passed'}")
     return 1 if FAILS else 0
 

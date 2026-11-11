@@ -533,6 +533,23 @@ def _cut_body(blob: bytes, garment: Dict[str, Any], tier: str) -> bytes:
     return glb_mesh.rewrite_body_primitives(blob, replaced)
 
 
+def _tint_scalp(blob: bytes, mesh, garment: Dict[str, Any], tier: str, tints: Dict[str, Any]) -> bytes:
+    """``blob`` with the scalp under the hair ``mesh`` tinted in the body texture (``hair_scalp_tint``; the bare
+    and base files stay untouched — this is the assembly's copy). A failure keeps the untinted body: the tint is a
+    finish, never a reason to withhold the assembly."""
+    from app.core.hair_scalp_tint import tint_scalp
+    try:
+        tinted, report = tint_scalp(blob, mesh)
+    except Exception as e:  # noqa: BLE001 — a finishing step; the assembly goes on without it
+        logger.warning("Garment assembly: scalp tint under %s (%s, %s) failed: %s", garment["item_id"],
+                       garment["fsig"], tier, e)
+        tints[garment["item_id"]] = {"error": str(e)}
+        return blob
+    tints[garment["item_id"]] = {k: report[k] for k in ("skipped", "covered_cells", "images", "colour_srgb")
+                                 if k in report}
+    return tinted
+
+
 def _build(character_name: str, directory: Path, bare: Path,
            wanted: List[Dict[str, Any]], tier: str,
            warnings: Optional[List[str]] = None) -> Tuple[bytes, Dict[str, Any], list]:
@@ -544,7 +561,7 @@ def _build(character_name: str, directory: Path, bare: Path,
     sidecar, captured revision)."""
     import hashlib
     from app.core import glb_mesh
-    from app.core.garment_set import FOOTWEAR
+    from app.core.garment_set import FOOTWEAR, HAIR
     from app.core.keyed_lock import keyed_lock
     from app.core.model_validate import rig_frames_preserved
     from app.core.timeutils import utc_now_iso
@@ -572,6 +589,7 @@ def _build(character_name: str, directory: Path, bare: Path,
         from app.core.footwear_rest import rest_measurement
         foot_pose = {**pose, "rest": rest_measurement(data),
                      "source": {"item_id": garment["item_id"], "fsig": garment["fsig"], "glb_sha256": ""}}
+    scalp_tints: Dict[str, Any] = {}
     for garment in grafted:
         source = _source(garment, tier).read_bytes()
         extras = {"kind": garment["kind"], "item_id": garment["item_id"], "fsig": garment["fsig"]}
@@ -584,6 +602,8 @@ def _build(character_name: str, directory: Path, bare: Path,
                 blob = glb_mesh.graft(blob, mesh, name=name, extras={**extras, "side": side_name})
             continue
         mesh = glb_mesh.garment_arrays(source)
+        if garment["kind"] == HAIR:
+            blob = _tint_scalp(blob, mesh, garment, tier, scalp_tints)
         if garment.get("over") and not garment["over"]["pending"]:
             extras["over"] = garment["over"]["items"]
         blob = glb_mesh.graft(blob, mesh, name=f"garment_{garment['kind']}_{garment['item_id']}", extras=extras)
@@ -595,6 +615,8 @@ def _build(character_name: str, directory: Path, bare: Path,
         raise ValueError("assembled model rewrote the rig frames: " + "; ".join(frames.get("errors") or []))
     side = {**meta, "garments": _state(wanted, tier), "bare_revision": revision,
             "assembled_at": utc_now_iso()}
+    if scalp_tints:
+        side["scalp_tint"] = scalp_tints
     if foot_pose is not None:
         foot_pose["source"]["glb_sha256"] = hashlib.sha256(blob).hexdigest()
         side["foot_pose"] = foot_pose
