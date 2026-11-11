@@ -2032,8 +2032,11 @@ gemessen NACH Fix → Yaw → Skalierung; Offsets als letzter Schritt.
 Seit Phase 4 des Basiskörper-Programms (Plan
 `docs/superpowers/plans/2026-11-09-base-body-phase4-hair.md`, R11/R12) kann das
 AUSGELIEFERTE Charakter-GLB (`url` und `low_url` aus § A7) neben dem Körper
-weitere Meshes tragen — heute die Haare eines Charakters auf der
-Basiskörper-Pipeline.
+weitere Meshes tragen — heute Kleidungsstücke mit eigenem Mesh, Schuhe und die
+Haare eines Charakters auf der Basiskörper-Pipeline mit der Haar-Methode
+HairDeck. Unter der Standard-Methode `body` (Spec
+`docs/superpowers/specs/2026-11-11-hair-from-body-design.md`) sind die Haare
+Teil des Körper-Meshes selbst — kein Garment, kein `garment_hair_*`-Knoten.
 
 - **Form:** jedes Garment ist ein zusätzliches **Skinned Mesh auf Skin 0**
   (dieselben Knochen wie der Körper, Gewichte auf `Head` → `Spine2`). Knoten-

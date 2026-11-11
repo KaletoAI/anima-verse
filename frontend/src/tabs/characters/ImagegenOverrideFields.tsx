@@ -11,8 +11,8 @@ import './imagegenOverride.css'
  * `imagegen_override`. ALL of them live on the Image tab, one template
  * section per pipeline stage (`slot_keys` names the keys of the stage):
  * Pictures (renders, portrait, character LoRAs) → T-pose (main reference,
- * its views + hair edits, T-pose LoRAs) → Base body → Outfit views → 3D
- * (character mesh, the three hair meshes). The grouping is a template edit
+ * its views + garment edits, T-pose LoRAs) → Base body → Outfit views → 3D
+ * (character mesh, the HairDeck hair mesh). The grouping is a template edit
  * (base-character.json, tab `image_settings`), not code.
  *
  * A glob is position 0 in front of its occasion chain of the image routing

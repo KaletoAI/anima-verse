@@ -294,7 +294,7 @@ stops acting autonomously).
   complete World set overrides are not automatically rebased onto the changed Shared definition.
 - **Portrait controls:** *Game-Admin → Characters → Image* holds every per-character backend glob
   and LoRA list, grouped in pipeline order: Pictures (renders, portrait, character LoRAs) → T-pose
-  (main reference, views + hair edits, T-pose LoRAs) → Base body → Outfit views → 3D (mesh, HairDeck).
+  (main reference, views + garment edits, T-pose LoRAs) → Base body → Outfit views → 3D (mesh, HairDeck).
   An empty glob's status line names what runs instead (its fallback glob, else the occasion chain).
   Backend activation is global; character overrides select backend matches, not separate
   enable/disable switches. Retired backend `enabled` flags of a world's old skills/image_generation.json
@@ -347,6 +347,13 @@ stops acting autonomously).
   face retexture: one head-only, hairless view per character rendered from the current profile
   picture, independent of outfit. It never feeds mesh generation.
   Hub-side light balance, skin tone match, skin colour correction and face brightness controls are remembered per character with an approximate photo preview; older backends fall back to local light balance and brightness.
+- **Hair on the base-body pipeline:** Game-Admin → Setup → Gameplay → Base body → *Hair method* sets the world
+  default, Characters → Hair overrides it per character. *From the body mesh* (the default) renders
+  the base views with the character's hair, so the hair is part of the base body and every outfit
+  body — no hair mesh, no hair job. *HairDeck* turns the profile picture into hair cards in one hub
+  job and fits them onto the bald base model. Switching changes the base prompts: the Hair tab shows
+  the base's prompt freshness, and a base marked "Built with older prompts" is rebuilt with
+  **Regenerate** in the Base body tab or the Improvements type below.
 - **Local quadruped rig:** five base takes with a per-animal tail mode.
 - **Location and prop models** are generated from gallery images, with front/back/left/right views
   feeding multi-view mesh aliases.
@@ -412,12 +419,15 @@ stops acting autonomously).
   missing assets → Clothing images**, fill missing images for the world's clothing items
   (`outfit_piece`), including references to deleted files. Existing images and the cross-world
   shared library stay untouched; one-shot and standing runs use the normal `item` image routing.
-  The figure pipeline adds five idle-time types, each showing its hub-job cost before start
+  The figure pipeline adds six idle-time types, each showing its hub-job cost before start
   (load waits, a refusal is final until you act in the Wardrobe or the 3D tab):
   - **Generate missing garment meshes** — own-mesh pieces and shoes that have no mesh yet.
   - **Refit stale fits (CPU)** — fits a version bump made stale; keeps running with media off.
   - **Rebuild stale outfit models** — outfit models built on an older base body or body detail.
-  - **Generate hair meshes** — characters with a hair description but no hair mesh.
+  - **Generate hair meshes** — HairDeck characters with a hair description but no hair mesh.
+  - **Rebuild base bodies made with older prompts** — the base views and base model of a character
+    whose base predates the current prompts (e.g. a bald base under the hair method *From the body
+    mesh*); its outfit models then turn stale.
   - **Clean up orphaned derived files** — the artefact collector's dry run with sizes, then the cleanup (CPU only).
 - **Content marketplace:** install content and skill packages from one or more configured catalogs
   (each cached per world, optional auth token) — with a thumbnail and the pack's facts (size,

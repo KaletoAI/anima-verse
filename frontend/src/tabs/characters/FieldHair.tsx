@@ -16,9 +16,11 @@
  *   only re-fit from the stored HairDeck result.
  *
  * The method selector at the top stores the character's choice (POST
- * /characters/{n}/hair/method, "" = world default); the kept result of the
- * other method is collapsed below with "Use this method". A switch generates
- * nothing.
+ * /characters/{n}/hair/method, "" = world default). A switch generates
+ * nothing: a kept HairDeck result is served again on the way back. With
+ * `body`, a base rendered with older prompts (`base_prompts` stale) points to
+ * its rebuild — Regenerate in the Base body tab or the Improvements type
+ * `base_refresh`.
  *
  * Backend (app/routes/characters.py, app/core/garments.py):
  * GET /characters/{n}/hair (polled while a step runs — useGarment),
@@ -34,7 +36,7 @@
  *
  * Layout: three columns — method, description and state; the HairDeck steps
  * (small tiles, a click enlarges); the fitted preview with what re-fits it
- * (colour and placement), "Run all" and the kept result of the other method.
+ * (colour and placement) and "Run all".
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -77,10 +79,8 @@ const METHOD_HINTS: Record<HairMethod, string> = {
   hairdeck: 'HairDeck makes hair cards from the profile picture in one step.',
 }
 
-const CREATE_HINTS: Record<HairMethod, string> = {
-  body: 'Hair comes from the body mesh',
-  hairdeck: 'Makes hair cards from the profile picture and fits them onto the base model.',
-}
+/** "Create hair" exists for HairDeck only — `body` makes no hair item. */
+const CREATE_HINT = 'Makes hair cards from the profile picture and fits them onto the base model.'
 
 const HAIRDECK_STATUS: Record<string, string> = {
   accepted: 'Accepted',
@@ -296,24 +296,18 @@ function HairPlacementForm({ placement, busy, running, onApply }: {
 
 /** The kept results of the methods not selected (newest first), each collapsed
  *  with "Use this method" (the same save as the selector above — the switch
- *  generates nothing), then one line per method without a result. */
-function OtherMethods({ others, method, limits, busy, onUse }: {
+ *  generates nothing). Only HairDeck keeps a result: `body` has no hair mesh of
+ *  its own, so nothing is listed for it. */
+function OtherMethods({ others, limits, busy, onUse }: {
   others: OtherMethodInfo[]
-  method: HairMethod
   limits: HairInfo['limits']
   busy: boolean
   onUse: (method: HairMethod) => void
 }) {
-  const { t } = useI18n()
-  const listed = new Set(others.map((o) => o.method))
-  const empty = METHODS.filter((m) => m !== method && !listed.has(m))
   return (
     <>
       {others.map((o) => (
         <OtherMethod key={o.method} other={o} limits={limits} busy={busy} onUse={() => onUse(o.method)} />
-      ))}
-      {empty.map((m) => (
-        <div key={m} className="ga-hint">{t(METHOD_LABELS[m])}: {t('no result yet')}</div>
       ))}
     </>
   )
@@ -603,8 +597,12 @@ export function FieldHair({ character, onEditAppearance }: {
             <span className="ga-hint">{t('Base body prompts')}</span>
             <FreshnessBadge freshness={prompts} compact />
           </div>
-          {prompts && prompts.state !== 'current' ? (
-            <div className="ga-hint">{t('Regenerate the base body in the Base body tab to render it with the hair.')}</div>
+          {prompts?.state === 'stale' ? (
+            <div className="ga-hint" style={WARN_STYLE}>
+              {t('This base body was rendered with older prompts, so its mesh may carry no hair. Rebuild it: Regenerate in the Base body tab, or the Improvements type “Rebuild base bodies made with older prompts”, which runs when the queue is idle.')}
+            </div>
+          ) : prompts?.state === 'missing' ? (
+            <div className="ga-hint">{t('No base body yet — generate it in the Base body tab; it is rendered with the hair.')}</div>
           ) : null}
         </div>
       </div>
@@ -623,7 +621,7 @@ export function FieldHair({ character, onEditAppearance }: {
               <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={posting} onClick={() => { void create() }}>
                 {t('Create hair')}
               </button>
-              <span className="ga-hint">{t(CREATE_HINTS[info.method] || CREATE_HINTS.hairdeck)}</span>
+              <span className="ga-hint">{t(CREATE_HINT)}</span>
             </div>
           </>
         ) : null
@@ -696,7 +694,7 @@ export function FieldHair({ character, onEditAppearance }: {
                 : t('No capsule set on the base model yet — the hair is shown as skinned')}
             </div>
             {hairdeckLook}
-            <OtherMethods others={info.others} method={info.method} limits={limits} busy={busy}
+            <OtherMethods others={info.others} limits={limits} busy={busy}
               onUse={(m) => { void setMethod(m) }} />
           </div>
         </>
