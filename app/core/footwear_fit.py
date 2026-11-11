@@ -97,6 +97,22 @@ cut's slimming share smaller. Kai ``base634402e5`` (ankle 136 / 139 mm): foot le
 ball vertices" on him (spec § 5 F1; his heel's underside is above ``PLANTAR_BAND_M``). Rosi ``baseed6cab12``
 (no offline copy; spec § 5, measured there with the same rule): 245 / 246 mm, 14.3° / 18.1°, 53 mm up. The
 synthetic numbers are in ``scripts/smoke_footwear_fit.py`` [F9]–[F12].
+**P1 acceptance of the boots round (Task 4, 2026-11-11) — Kai in the Business Shoes, REAL chain on the clone.**
+``item_6cc8e8ae`` (a cap-toe Derby, 220×256 item image) through the item chain: Iris upscale ×2, the Qwen side-view
+empty edit (accepted at aspect 2.418, no leg, ``iou_below_topline`` 0.919 — after the empty gate was calibrated for a
+men's shoe, ``footwear_gates``: aspect upper bound 2.4 → 2.6, ``LEG_EXCESS_SHARE`` 0.05 → 0.12; the first two
+deliveries read 2.448 / 2.430 and a throat 0.052 / 0.050 L above the low counter), cut-out 979 px, one UniForge
+mesh (95 788 → 59 082 tris, ``mesh_iou`` 0.919, component 1.0), insole v2 (cover 0.930, vamp 0.809, opening 0.956,
+pitch 6.9°, heel seat 2.5 cm, rise 1.5 cm). The fit on ``base634402e5`` (0 hub jobs): k 0.3161 (shoe 32.3 cm long,
+11.2 wide), width factor 1.030 (needed 0.990 / 1.030, slim 0 / 0), extension **−2.70° / −3.18°** (rest pitch 9.99 /
+10.41°, chord 7.05 / 6.88°, forepart slope 7.4 / 8.5° → toe turn −4.66 / −5.27°), lift **−3.8 / −7.1 mm**, root lift
+**−3.8 mm** — the sign the spec's F3 predicted (−5.8 on the synthetic Oxford), toe room 27.3 / 24.2 mm, every gate
+green: ball 0.000 mm, lift asymmetry 3.3 mm, ``stand_floor`` 0.0, boot −54.7 mm, ``deep_outside`` 0.40 %,
+``visible_poke`` 0, ``throat_ledge`` 0.0 mm, ``toe_conform`` 17.6 mm. ``check_footwear.mjs`` on the served shod base
+model (idle / walk, ``--bare``): still sole 0 / 3.3 mm, idle lower sole −1 mm, walk stance −1.9 … +3.5 mm, strikes
++3.5 / +3.0, heel-off ≥ −1.9 — inside the round-1 bands (idle −3 … +3, walk −3 … +13). The same chain on the live
+Kira body (``base20d5701a`` sha cca1685751b7, which stands heel-up 14.8° / 13.7° with the heel 46 mm up and on which
+the round-1 rule raised) is the next calibration point; the clone body of round 1 is no longer the live one.
 """
 import math
 from dataclasses import dataclass, field
