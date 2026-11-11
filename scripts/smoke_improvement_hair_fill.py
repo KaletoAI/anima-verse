@@ -23,9 +23,10 @@ empties one.
 
 Expectations, derived by hand from § 6.5 and ``garments.HUB_JOBS``:
 
-[H1] Kira has hair text and no hair item → exactly one candidate
-     ``character:Kira`` (Bald is no subject: [H6]). World method edit_chain
-     (the default): label "Kira · hair views", hub_jobs 2 + 2 + 0 + 1 + 0 = 5,
+[H1] Kira has hair text and no hair item. World method body (the default
+     since the hair-from-body spec 2026-11-11): the hair is in the body mesh →
+     no candidate. World method edit_chain → exactly one candidate
+     ``character:Kira`` (Bald is no subject: [H6]): label "Kira · hair views", hub_jobs 2 + 2 + 0 + 1 + 0 = 5,
      note "new hair item: haired 2 + ghost 2 + mesh 1". World
      ``base_body.hair_method`` "hairdeck" → label "Kira · HairDeck", hub 1;
      "subtract" → hub 2 + 1 + 0 + 0 = 3. Back to edit_chain.
@@ -189,6 +190,8 @@ def main() -> int:
 
             # --- [H1] ---------------------------------------------------------------
             print("[H1] hair text, no item")
+            check("body (default): no candidate", rows(), [])
+            world_method("edit_chain")
             check("edit chain", rows(),
                   [("character:Kira", "Kira · hair views", 5, "new hair item: haired 2 + ghost 2 + mesh 1")])
             world_method("hairdeck")

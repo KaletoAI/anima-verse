@@ -67,8 +67,15 @@ def resolve_negative_prompt(input_data: Dict[str, Any], use_case_negative: str) 
     REPLACES the use case's (the image dialog shows and edits the effective
     one); ``negative_prompt_extra`` is APPENDED to whichever applies — a
     caller that brings its own subject negatives (the base-body views) keeps
-    the use case's framing and lighting negatives."""
-    negative = input_data.get("negative_prompt") or use_case_negative or ""
+    the use case's framing and lighting negatives. ``negative_prompt_drop``
+    (a list of comma terms) is taken out of the USE CASE's negative only —
+    the face view of a character whose hair is in its body mesh keeps the
+    hair (``model_refs.face_view_drop_negative``)."""
+    negative = input_data.get("negative_prompt") or ""
+    if not negative:
+        drop = {str(t).strip().casefold() for t in input_data.get("negative_prompt_drop") or ()}
+        negative = ", ".join(term for term in (part.strip() for part in (use_case_negative or "").split(","))
+                             if term and term.casefold() not in drop) if drop else (use_case_negative or "")
     extra = str(input_data.get("negative_prompt_extra") or "").strip()
     return ", ".join(part for part in (negative, extra) if part)
 
@@ -2230,6 +2237,8 @@ class ImageService:
             "negative_prompt": ctx.get("negative_prompt", ""),
             # Appended to the effective negative (resolve_negative_prompt).
             "negative_prompt_extra": ctx.get("negative_prompt_extra", ""),
+            # Comma terms the use case's negative loses (resolve_negative_prompt).
+            "negative_prompt_drop": ctx.get("negative_prompt_drop") or [],
             "skip_gallery": ctx.get("skip_gallery", False),
             "appearances": ctx.get("appearances", None),
             "auto_enhance": ctx.get("auto_enhance", True),

@@ -11,7 +11,9 @@ and the rules of ``app/core/base_body.py``.
 
 Fixture character ``Demo`` (template human-default): gender female, age 30,
 height 168, body slots skin.tone olive, eyes.color green, build.type athletic,
-hair long brunette, character_appearance "wears a red scarf". Fixture package
+hair long brunette, character_appearance "wears a red scarf"; the world's hair
+method is ``hairdeck`` (the bald base — the haired ``body`` base is
+scripts/smoke_hair_in_body.py's). Fixture package
 ``fixture_marks`` (apply_to human-default) declares the slot ``marking``
 (always "{shade} marking", NOT flagged ``base_body``, ``base_body_negative``
 "  visible marking  ") and the slot ``spot`` (applies_to gender male only,
@@ -267,7 +269,10 @@ def main() -> int:
         os.environ["ANIMATION_RIG_FILE"] = str(root / "reference.fbx")
         from app.core import paths
         paths.init(root / "world")
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human,fixture_marks"}}))
+        # The world's hair method is pinned to a mesh method (``hairdeck``): since the hair-from-body
+        # spec (2026-11-11) the default ``body`` renders a haired base and never makes a hair item.
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human,fixture_marks"},
+                                                       "base_body": {"hair_method": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db

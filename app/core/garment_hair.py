@@ -105,17 +105,24 @@ def pronouns(profile: Dict[str, Any]) -> Tuple[str, str]:
 
 # --- The hair method (plan 2026-11-09-hairdeck-hair, Task 4) -------------------
 
-#: How the hair mesh is made: the edit chain (haired -> ghost -> cutout ->
-#: mesh -> fit), HairDeck (one profile picture -> hair cards -> fit) or
-#: subtract (haired -> one mesh of the haired character -> the hair cut off
-#: it -> fit; plan 2026-11-10-hair-subtract-method).
-HAIR_METHODS: Tuple[str, ...] = ("edit_chain", "hairdeck", "subtract")
-DEFAULT_HAIR_METHOD = "edit_chain"
+#: How the hair mesh is made: ``body`` (no hair mesh at all — the base views
+#: are rendered WITH the character's hair, so the hair is part of the base
+#: body and of every outfit body; spec 2026-11-11-hair-from-body, the world
+#: default), the edit chain (haired -> ghost -> cutout -> mesh -> fit),
+#: HairDeck (one profile picture -> hair cards -> fit) or subtract (haired ->
+#: one mesh of the haired character -> the hair cut off it -> fit; plan
+#: 2026-11-10-hair-subtract-method).
+HAIR_METHODS: Tuple[str, ...] = ("body", "edit_chain", "hairdeck", "subtract")
+#: The method whose hair lives inside the body mesh (``hair_in_body``).
+BODY_METHOD = "body"
+DEFAULT_HAIR_METHOD = BODY_METHOD
+#: Why a ``body`` character has no hair item and no hair run.
+HAIR_IN_BODY = "Hair comes from the body mesh"
 _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
 
 def world_hair_method() -> str:
-    """The world default ``base_body.hair_method`` (an unknown value = ``edit_chain``)."""
+    """The world default ``base_body.hair_method`` (an unknown or removed value = ``DEFAULT_HAIR_METHOD``)."""
     from app.core import config
     from app.core.config_schema import field_default
     value = str(config.get("base_body.hair_method", field_default("base_body", "hair_method")) or "")
@@ -126,7 +133,7 @@ def hair_method_source(character_name: str, *, profile: Optional[Dict[str, Any]]
     """``(method, source)``: the character's own ``hair_method`` when it names
     a method (source ``"character"``), else the world's
     ``base_body.hair_method`` (source ``"world"``; an unknown world value is
-    the default ``edit_chain``). ``""`` or an unknown profile value = the world."""
+    ``DEFAULT_HAIR_METHOD``). ``""`` or an unknown profile value = the world."""
     profile = _profile_of(character_name, profile)
     own = str(profile.get("hair_method") or "")
     if own in HAIR_METHODS:
@@ -135,8 +142,15 @@ def hair_method_source(character_name: str, *, profile: Optional[Dict[str, Any]]
 
 
 def hair_method(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
-    """``"edit_chain"``, ``"hairdeck"`` or ``"subtract"`` — see ``hair_method_source``."""
+    """One of ``HAIR_METHODS`` — see ``hair_method_source``."""
     return hair_method_source(character_name, profile=profile)[0]
+
+
+def hair_in_body(character_name: str, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether the character's hair is part of its body mesh (method ``body``):
+    the base views are rendered with the hair (``base_body.base_character`` /
+    ``base_prompt``), and no hair item is ever created or run."""
+    return hair_method(character_name, profile=profile) == BODY_METHOD
 
 
 # --- The subtract method's shape and shell (plan 2026-11-10-hair-subtract-method) ---
@@ -681,6 +695,8 @@ def ensure_hair_item(character_name: str) -> str:
             raise ValueError("Hair as its own mesh is for humanoid characters only")
         if not is_base_pipeline(character_name, profile=profile):
             raise ValueError(f"{character_name} is not on the base-body pipeline")
+        if hair_in_body(character_name, profile):
+            raise ValueError(f"{HAIR_IN_BODY} — no hair item for the method {BODY_METHOD!r}")
         slot = _hair_slot(character_name, profile)
         if slot is None:
             raise ValueError(f"No hair slot is declared for {character_name}")

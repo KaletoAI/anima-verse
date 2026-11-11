@@ -70,8 +70,8 @@ export interface GarmentFitInfo {
   created_at: string | null
 }
 
-/** How the hair mesh is made (`garment_hair.HAIR_METHODS`). */
-export type HairMethod = 'edit_chain' | 'hairdeck' | 'subtract'
+/** How the hair is made (`garment_hair.HAIR_METHODS`); `body` = inside the body mesh, no hair mesh. */
+export type HairMethod = 'body' | 'edit_chain' | 'hairdeck' | 'subtract'
 
 /** Gate limits as a record stores them: `{key: ["max" | "min", limit]}`
  *  (`garment_cut.CUT_GATES`, `garment_fit.hair_gates`). */
@@ -491,6 +491,10 @@ export interface HairInfo {
   others: OtherMethodInfo[]
   /** The subtract method's shape and shell thickness (null off humanoids / an older server). */
   subtract?: HairSubtractSettings | null
+  /** The method is `body`: the hair is part of the body mesh — no steps, no run, no preview. */
+  hair_in_body?: boolean
+  /** With `hair_in_body`: the stored base's prompt freshness (`base_body.base_prompts_freshness`). */
+  base_prompts?: Freshness | null
 }
 
 const POLL_MS = 3000

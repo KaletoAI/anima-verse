@@ -10,7 +10,8 @@ current base for the current method (``garments.hair_summary`` status
 own trigger handles it). A hair item the character owns but took off in the
 Hair tab is no subject (``garments._ensure_hair``'s rule). The method is the
 character's (``garment_hair.hair_method``, the world default) — read, never
-set.
+set. A character whose hair is in the body mesh (method ``body``,
+``garment_hair.hair_in_body``) is never a subject: it has no hair mesh.
 
 The cost before start is ``garments.run_estimate`` of the worn item; without
 an item yet, the full chain of the method (``garments.HUB_JOBS``: edit chain
@@ -31,11 +32,13 @@ from app.core.improvements.types.garment_fill import _in_flight, _judge
 
 #: The occasions each hair method renders on (spec § 5.3); HairDeck's job
 #: runs on the ``hair_mesh`` occasion (``ImageService.generate_hair``).
-OCCASIONS: Dict[str, Tuple[str, ...]] = {"edit_chain": ("garment_view", "hair_views_mesh"),
+OCCASIONS: Dict[str, Tuple[str, ...]] = {"body": (),
+                                         "edit_chain": ("garment_view", "hair_views_mesh"),
                                          "subtract": ("garment_view", "hair_source_mesh"),
                                          "hairdeck": ("hair_mesh",)}
 #: The method as the Hair tab names it.
-METHOD_LABEL = {"edit_chain": "hair views", "hairdeck": "HairDeck", "subtract": "subtract"}
+METHOD_LABEL = {"body": "from the body mesh", "edit_chain": "hair views", "hairdeck": "HairDeck",
+                "subtract": "subtract"}
 
 
 def _profile(name: str) -> Dict[str, Any]:
@@ -52,6 +55,8 @@ def _subject(name: str, profile: Dict[str, Any]) -> Optional[Tuple[Optional[str]
     if not garment_hair.hair_description(name, profile=profile):
         return None
     method = garment_hair.hair_method(name, profile=profile)
+    if method == garment_hair.BODY_METHOD:
+        return None  # the hair is in the body mesh: no hair item, no run
     summary = garments.hair_summary(name, profile=profile)
     if summary is None:
         # No worn hair item: a subject only when it owns none either (an

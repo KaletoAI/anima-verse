@@ -26,14 +26,15 @@ records and the serving are REAL.
 EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
 [1] Player session: POST /hair/method, POST /hair/colour, the HairDeck image
     route and the model route with ?method= answer 403; nothing is stored.
-[2] GET /hair before any item: method "edit_chain", method_source "world",
-    world_method "edit_chain" (schema default), hairdeck None, others [];
+[2] GET /hair before any item: method "body", method_source "world",
+    world_method "body" (schema default since the hair-from-body spec
+    2026-11-11), hairdeck None, others [];
     limits.hairdeck_fit = the HairDeck gate constants as "le" chips:
     max_push_m 0.12, moved_share 0.90, icp_resid_p95_m 0.012.
 [3] Method: "bogus" -> 400, profile key absent; "hairdeck" -> 200 {method
     "hairdeck", method_source "character"}, profile hair_method "hairdeck",
     one assembly schedule (the served hair follows the method); GET says
-    the same. "" -> {edit_chain, world} (falls back to the world), profile
+    the same. "" -> {body, world} (falls back to the world), profile
     "". The world set to "hairdeck": "" -> {hairdeck, world}, GET
     world_method "hairdeck". World back to absent, character "hairdeck".
 [4] Colour: "#12345", "red", "#GGGGGG", "ff8000" -> 400 each; the profile
@@ -308,7 +309,7 @@ def main() -> int:
             h = hair()
             check("method keys", (h.get("method"), h.get("method_source"), h.get("world_method"),
                                   h.get("hairdeck"), h.get("others"), h.get("item_id")),
-                  ("edit_chain", "world", "edit_chain", None, [], None))
+                  ("body", "world", "body", None, [], None))
             check("hairdeck limits", (h.get("limits") or {}).get("hairdeck_fit"),
                   {"max_push_m": {"op": "le", "value": 0.12}, "moved_share": {"op": "le", "value": 0.90},
                    "icp_resid_p95_m": {"op": "le", "value": 0.012}})
@@ -323,7 +324,7 @@ def main() -> int:
             h = hair()
             check("GET hairdeck", (h.get("method"), h.get("method_source")), ("hairdeck", "character"))
             r = client.post("/characters/Demo/hair/method", json={"method": ""})
-            check("'' -> world", (r.status_code, r.json()), (200, {"method": "edit_chain", "method_source": "world"}))
+            check("'' -> world", (r.status_code, r.json()), (200, {"method": "body", "method_source": "world"}))
             check("stored ''", profile().get("hair_method"), "")
             config._CONFIG["base_body"] = {"hair_method": "hairdeck"}
             r = client.post("/characters/Demo/hair/method", json={"method": ""})

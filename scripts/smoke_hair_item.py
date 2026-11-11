@@ -9,8 +9,9 @@ package plus ONE fixture package — no real world, no private pack, no server.
 Every expectation is derived by hand below from the human manifest, the
 fixture and the rules of plan 2026-11-09-base-body-phase4-hair (R2, R3).
 
-Fixture character ``Demo`` (template human-roleplay, female, 30, 168 cm, on
-the base-body pipeline): hair slot {length: medium, color: blonde},
+World hair method ``hairdeck`` (a mesh method: the default ``body`` makes no
+hair item). Fixture character ``Demo`` (template human-roleplay, female, 30,
+168 cm, on the base-body pipeline): hair slot {length: medium, color: blonde},
 character_appearance "slender, wavy hair with a side parting, green eyes",
 two equipped outfit pieces (top "blouse", bottom "jeans"). ``Pet`` uses the
 animal template (humanoid: false). ``Bald`` is a pipeline human with no hair
@@ -118,7 +119,10 @@ def main() -> int:
         os.environ["ANIMATION_RIG_FILE"] = str(root / "reference.fbx")
         from app.core import paths
         paths.init(root / "world")
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human,fixture_mesh"}}))
+        # The world's hair method is pinned to a mesh method (``hairdeck``): since the hair-from-body
+        # spec (2026-11-11) the default ``body`` renders a haired base and never makes a hair item.
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human,fixture_mesh"},
+                                                       "base_body": {"hair_method": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db

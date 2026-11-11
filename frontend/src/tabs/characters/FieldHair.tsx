@@ -39,6 +39,12 @@
  * character -> the hair cut off it on the CPU -> fit. Its shape and shell
  * thickness (POST /characters/{n}/hair/subtract {shape, shell_mm}) sit beside
  * the preview and re-cut + re-fit from the stored source mesh.
+ *
+ * The method From the body mesh (`body`, the world default — spec
+ * docs/superpowers/specs/2026-11-11-hair-from-body-design.md): the base views
+ * are rendered with the hair, so the hair is part of the body mesh. The tab
+ * then shows only the method, the hair description, "Hair comes from the body
+ * mesh" and the base body's prompt freshness — no steps, no run, no preview.
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -51,6 +57,7 @@ import {
 } from './GarmentSteps'
 import type { ImageStepSpec } from './GarmentSteps'
 import { EMPTY_TILE, ERROR_STYLE, ROW, WARN_STYLE, flatFit, num } from './garmentStyle'
+import { FreshnessBadge } from './FreshnessBadge'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { SubtractSettings, SubtractSteps } from './HairSubtract'
 import { Model3DViewer } from './Model3DViewer'
@@ -77,21 +84,24 @@ const STEP_LABELS: Record<string, string> = {
 }
 
 const METHOD_LABELS: Record<HairMethod, string> = {
+  body: 'From the body mesh',
   edit_chain: 'Hair views → mesh',
   hairdeck: 'HairDeck',
   subtract: 'Subtract',
 }
 
 /** Every method in the selector's order. */
-const METHODS: HairMethod[] = ['edit_chain', 'hairdeck', 'subtract']
+const METHODS: HairMethod[] = ['body', 'edit_chain', 'hairdeck', 'subtract']
 
 const METHOD_HINTS: Record<HairMethod, string> = {
+  body: 'The base body is rendered with the hair, so the hair is part of the body mesh — no hair mesh, no hair job.',
   edit_chain: 'Hair views → mesh renders the hair views and builds one mesh from them.',
   hairdeck: 'HairDeck makes hair cards from the profile picture in one step.',
   subtract: 'Subtract meshes the haired character once and cuts the hair off it against the bald base body.',
 }
 
 const CREATE_HINTS: Record<HairMethod, string> = {
+  body: 'Hair comes from the body mesh',
   edit_chain: 'Renders the hair views, builds the mesh and fits it onto the base model.',
   hairdeck: 'Makes hair cards from the profile picture and fits them onto the base model.',
   subtract: 'Renders the haired views, meshes the haired character and cuts the hair off it.',
@@ -663,9 +673,8 @@ export function FieldHair({ character, onEditAppearance }: {
     </>
   ) : null
 
-  return (
-    <div className="ga-split ga-split-hair">
-      <div className="ga-split-col">
+  const methodBlock = (
+    <>
       <div className="ga-fieldset-title">{t('Hair method')}</div>
       <div style={ROW}>
         <select
@@ -698,6 +707,33 @@ export function FieldHair({ character, onEditAppearance }: {
           {editButton}
         </div>
       )}
+    </>
+  )
+
+  if (info.hair_in_body) {
+    // The hair is part of the base body / outfit body mesh: nothing to run here.
+    const prompts = info.base_prompts
+    return (
+      <div className="ga-split ga-split-hair">
+        <div className="ga-split-col">
+          {methodBlock}
+          <div style={ROW}><span>{t('Hair comes from the body mesh')}</span></div>
+          <div style={ROW}>
+            <span className="ga-hint">{t('Base body prompts')}</span>
+            <FreshnessBadge freshness={prompts} compact />
+          </div>
+          {prompts && prompts.state !== 'current' ? (
+            <div className="ga-hint">{t('Regenerate the base body in the Base body tab to render it with the hair.')}</div>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="ga-split ga-split-hair">
+      <div className="ga-split-col">
+      {methodBlock}
 
       {!info.item_id ? (
         info.description ? (

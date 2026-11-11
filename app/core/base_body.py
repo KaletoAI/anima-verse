@@ -39,6 +39,18 @@ What describes the body:
   clothes and hair), never hair, never a slot without the flag — anatomy
   packs stay out unless they opt in.
 
+Hair (spec ``docs/superpowers/specs/2026-11-11-hair-from-body-design.md``):
+under the hair method ``body`` (``garment_hair.hair_in_body``, the world
+default) the base is NOT bald — the views carry the character's hair text
+(``garment_hair.hair_description``) where the bald head stood, the front keeps
+the hair off the chest (``model_refs.TPOSE_FRONT_HAIR_CLAUSE``), hair that
+falls behind the shoulders says so (``HAIR_BEHIND_SHOULDERS``), and the
+negatives forbid headwear only (``HEADWEAR_NEGATIVE``). The outfit drafts and
+the dressed edits keep that hair. Every other method — and a character
+without any hair text — keeps the bald wording byte for byte. The method is
+not part of ``base_identity``: a switch only changes ``prompt_fingerprint``
+(the ``OLDER_PROMPTS`` note), never rebuilds a base.
+
 The prompt layout (user directive 2026-11-09, "character details always
 first"): the front's style (``base_front``) opens with its subject
 clause, then its ``{character}`` slot takes the CHARACTER BLOCK
@@ -134,6 +146,19 @@ POSE_NEGATIVE = ("hands touching body, fists, curled fingers, fused fingers, mit
                  "feet cut off, cropped legs, close-up, portrait crop")
 BASE_NEGATIVE = ", ".join((HAIR_NEGATIVE, BODY_NEGATIVE, POSE_NEGATIVE))
 
+# Hair from the body mesh (module docstring "Hair"). The words of the bald
+# head in BASE_VIEW_PROMPTS / DRAFT_PROMPTS that a haired edit replaces with
+# the hair text and the reference clause.
+_BALD_WORDS = "completely bald"
+#: Said only of hair that falls behind the shoulders
+#: (``garment_hair.hair_behind_shoulders``) — said to short hair, a direction
+#: tempts the model into growing it (``model_refs``, 2026-10-25).
+HAIR_BEHIND_SHOULDERS = "the hair falls behind the shoulders"
+#: The hair negative of a haired base view: headwear only.
+HEADWEAR_NEGATIVE = "hat, hood, headscarf, wig"
+#: ``BASE_NEGATIVE`` of a haired base.
+HAIRED_BASE_NEGATIVE = ", ".join((HEADWEAR_NEGATIVE, BODY_NEGATIVE, POSE_NEGATIVE))
+
 _HAIR_RE = re.compile(r"\bhair", re.IGNORECASE)
 # The shape of ``base_signature`` — never an outfit signature (pure hex).
 BASE_SIG_RE = re.compile(r"base[0-9a-f]{8}")
@@ -227,6 +252,42 @@ def base_negative(character_name: str, *, profile: Optional[Dict[str, Any]] = No
     return ", ".join([head, *extra])
 
 
+def hair_text(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The hair text a haired base is rendered with: the character's
+    ``garment_hair.hair_description`` under the method ``body``; "" under any
+    other method or without hair text (a bald character) — the bald wording."""
+    from app.core import garment_hair
+    profile = _profile_of(character_name, profile)
+    if not garment_hair.hair_in_body(character_name, profile):
+        return ""
+    return garment_hair.hair_description(character_name, profile=profile)
+
+
+def _haired_head(character_name: str, hair: str, profile: Dict[str, Any]) -> str:
+    """What stands in an edit view's prompt where ``_BALD_WORDS`` stood: the
+    hair text, the reference clause, and ``HAIR_BEHIND_SHOULDERS`` when the
+    hair falls behind them."""
+    from app.core.garment_hair import hair_behind_shoulders
+    from app.core.model_refs import TPOSE_REFERENCE_HAIR_CLAUSE
+    parts = [hair, TPOSE_REFERENCE_HAIR_CLAUSE]
+    if hair_behind_shoulders(character_name, profile=profile):
+        parts.append(HAIR_BEHIND_SHOULDERS)
+    return ", ".join(parts)
+
+
+def _haired_front_pose(character_name: str, profile: Dict[str, Any]) -> str:
+    """The base front's pose text of a haired base: the A-pose, then the hair
+    off the chest (``TPOSE_FRONT_HAIR_CLAUSE``: the extension rig must not
+    weight hair to the chest), then ``HAIR_BEHIND_SHOULDERS`` when it falls
+    behind them."""
+    from app.core.garment_hair import hair_behind_shoulders
+    from app.core.model_refs import TPOSE_FRONT_HAIR_CLAUSE
+    parts = [_pose_text("front"), TPOSE_FRONT_HAIR_CLAUSE]
+    if hair_behind_shoulders(character_name, profile=profile):
+        parts.append(HAIR_BEHIND_SHOULDERS)
+    return ", ".join(parts)
+
+
 def base_character(character_name: str, view: str, *,
                    profile: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """The CHARACTER BLOCK of one base view, for the style's ``{character}``
@@ -235,14 +296,16 @@ def base_character(character_name: str, view: str, *,
     style's subject sentence (review 2026-11-11). None on back/left/right —
     an edit of the front takes the body from the image, and its prompt is the
     short ``BASE_VIEW_PROMPTS`` text alone (user test 2026-11-09: the block
-    changed nothing)."""
+    changed nothing). A haired base (``hair_text``) names its hair in
+    ``BALD_HEAD``'s place."""
     if view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
     if view != "front":
         return None
-    appearance = base_appearance(character_name, profile=_profile_of(character_name, profile),
-                                 base_fragments=True)
-    return ", ".join(p for p in (BASE_BLOCK_HEAD, BALD_HEAD, BODY_TEXT, appearance) if p)
+    profile = _profile_of(character_name, profile)
+    appearance = base_appearance(character_name, profile=profile, base_fragments=True)
+    head = hair_text(character_name, profile=profile) or BALD_HEAD
+    return ", ".join(p for p in (BASE_BLOCK_HEAD, head, BODY_TEXT, appearance) if p)
 
 
 def base_prompt(character_name: str, view: str, *,
@@ -251,12 +314,22 @@ def base_prompt(character_name: str, view: str, *,
     what follows the style (``base_character`` is the block inside it).
     Back/left/right: the ``BASE_VIEW_PROMPTS`` text, the whole prompt of the
     edit. The negative is ``base_negative`` (``BASE_NEGATIVE`` + the slots'
-    texts)."""
+    texts). A haired base (``hair_text``): the front's pose text keeps the
+    hair off the chest (``_haired_front_pose``), an edit view names the hair
+    where it said "completely bald" (``_haired_head``), and the negative
+    starts with ``HAIRED_BASE_NEGATIVE``."""
     if view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
     profile = _profile_of(character_name, profile)
-    prompt = _pose_text("front") if view == "front" else BASE_VIEW_PROMPTS[view]
-    return prompt, base_negative(character_name, profile=profile)
+    hair = hair_text(character_name, profile=profile)
+    if not hair:
+        prompt = _pose_text("front") if view == "front" else BASE_VIEW_PROMPTS[view]
+        return prompt, base_negative(character_name, profile=profile)
+    if view == "front":
+        prompt = _haired_front_pose(character_name, profile)
+    else:
+        prompt = BASE_VIEW_PROMPTS[view].replace(_BALD_WORDS, _haired_head(character_name, hair, profile), 1)
+    return prompt, base_negative(character_name, profile=profile, head=HAIRED_BASE_NEGATIVE)
 
 
 #: The freshness note of a base view rendered with other prompt texts than
@@ -367,6 +440,24 @@ def prompts_current(character_name: str, signature: str, *, profile: Optional[Di
     prompt texts (its front sidecar's ``prompt_fingerprint``)."""
     meta = _front_sidecar(character_name, signature)
     return bool(meta) and meta.get("prompt_fingerprint") == prompt_fingerprint(character_name, profile=profile)
+
+
+def base_prompts_freshness(character_name: str, *,
+                           profile: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """``{state, reason}`` of the stored base front against the current
+    prompt texts (the Hair tab of a character whose hair is in the body
+    mesh): ``missing`` without a stored front, ``stale`` with
+    ``OLDER_PROMPTS`` when it was rendered with other texts
+    (``prompts_current``), else ``current``."""
+    from app.core.model_overview import CURRENT, MISSING, STALE, freshness
+    from app.core.model_refs import find_ref_image
+    profile = _profile_of(character_name, profile)
+    signature = base_signature(character_name, profile=profile)
+    if find_ref_image(character_name, _kind("front"), signature) is None:
+        return freshness(MISSING, BASE_IMAGES_MISSING)
+    if not prompts_current(character_name, signature, profile=profile):
+        return freshness(STALE, OLDER_PROMPTS)
+    return freshness(CURRENT)
 
 
 def is_base_pipeline(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
@@ -928,13 +1019,18 @@ def set_pipeline(character_name: str, enabled: bool) -> bool:
 # front.json): keep everything, change only the clothing.
 DRESS_KEEP = ("Keep the image exactly as it is: the same person, same body shape, same pose, same arm and hand "
               "position, same framing and background.")
+#: ``DRESS_KEEP`` of a haired base (``hair_text``): the hair is named, so the
+#: retexture worker never paints skin onto the hair geometry.
+DRESS_KEEP_HAIR = ("Keep the image exactly as it is: the same person, same hair, same body shape, same pose, same "
+                   "arm and hand position, same framing and background.")
 DRESS_STYLE_NEGATIVE = ("illustration, anime, cgi, 3d render, painting, airbrushed skin, plastic skin, smooth "
                         "flawless skin, overexposed, glossy, fantasy, studio lighting, cartoon, drawing, sketch, "
                         "watermark, signature, text, logo, deformed, blurry, low quality")
 # The spike's garment words, each with the words that mean the outfit itself
 # names it — such a term leaves the negative (a skirt must not be forbidden
 # from an outfit that IS a skirt). "hair": the base body is bald until the
-# hair mesh (phase 4); the edit must not grow any.
+# hair mesh (phase 4); the edit must not grow any — a haired base
+# (``hair_text``) leaves it out (``dress_negative(keep_hair=True)``).
 DRESS_GARMENT_NEGATIVE = (
     ("loose clothing", r"loose"),
     ("baggy", r"baggy"),
@@ -1025,6 +1121,8 @@ DRAFT_OUTFIT_TEXT = ("wearing exactly the same outfit as the person in the refer
 DRESS_USE_CASE = "outfit_edit"
 #: The draft keeps the base negative minus its no-clothing words.
 DRAFT_NEGATIVE = ", ".join((HAIR_NEGATIVE, "detailed anatomy", POSE_NEGATIVE))
+#: ``DRAFT_NEGATIVE`` of a haired base (``hair_text``): headwear only.
+HAIRED_DRAFT_NEGATIVE = ", ".join((HEADWEAR_NEGATIVE, "detailed anatomy", POSE_NEGATIVE))
 #: The whole fit prompt — no style, view sentence, outfit text or negative
 #: (measured 2026-11-09: silhouette IoU vs the base back 0.92-0.93 against
 #: 0.905 with the long edit prompt). "and nothing else" since 2026-11-11
@@ -1119,11 +1217,18 @@ def dress_text(character_name: str, view: str, *, pieces: Optional[Dict[str, str
     return ""
 
 
-def dress_negative(text: str) -> str:
-    """The spike's negative minus the garment terms ``text`` names."""
-    kept = [term for term, pattern in DRESS_GARMENT_NEGATIVE
-            if not re.search(rf"\b(?:{pattern})\b", text or "", re.IGNORECASE)]
-    return ", ".join([DRESS_STYLE_NEGATIVE, *kept])
+def dress_garment_terms(text: str, *, keep_hair: bool = False) -> List[str]:
+    """The ``DRESS_GARMENT_NEGATIVE`` terms ``text`` does not name;
+    ``keep_hair`` (a haired base) leaves "hair" out as well."""
+    return [term for term, pattern in DRESS_GARMENT_NEGATIVE
+            if not (keep_hair and term == "hair")
+            and not re.search(rf"\b(?:{pattern})\b", text or "", re.IGNORECASE)]
+
+
+def dress_negative(text: str, *, keep_hair: bool = False) -> str:
+    """The spike's negative minus the garment terms ``text`` names
+    (``dress_garment_terms``)."""
+    return ", ".join([DRESS_STYLE_NEGATIVE, *dress_garment_terms(text, keep_hair=keep_hair)])
 
 
 def dress_prompt(character_name: str, view: str, *, pieces: Optional[Dict[str, str]],
@@ -1137,22 +1242,28 @@ def dress_prompt(character_name: str, view: str, *, pieces: Optional[Dict[str, s
     (that one copies the base images, there is nothing to edit).
     ``mesh_items`` as in ``dress_text``. ``bald`` (``outfit_body_bald``: the
     mesh mode under an own hair mesh) closes the edit with the base body's
-    bald head (``BALD_HEAD``) and adds its hair negative (``HAIR_NEGATIVE``)."""
+    bald head (``BALD_HEAD``) and adds its hair negative (``HAIR_NEGATIVE``).
+    A haired base (``hair_text``) keeps its hair: ``DRESS_KEEP_HAIR`` and no
+    "hair" in the negative."""
     if view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
+    profile = _profile_of(character_name, profile)
     text = dress_text(character_name, view, pieces=pieces, items=items, profile=profile,
                       mesh_items=mesh_items)
     if not text:
         raise ValueError("An undressed combination has no dressed edit")
-    negative = dress_negative(text)
-    return _edit_prompt(view, text, bald=bald), (f"{negative}, {HAIR_NEGATIVE}" if bald else negative)
+    haired = bool(hair_text(character_name, profile=profile))
+    negative = dress_negative(text, keep_hair=haired)
+    return (_edit_prompt(view, text, bald=bald, haired=haired),
+            (f"{negative}, {HAIR_NEGATIVE}" if bald else negative))
 
 
-def _edit_prompt(view: str, text: str, *, bald: bool = False) -> str:
+def _edit_prompt(view: str, text: str, *, bald: bool = False, haired: bool = False) -> str:
     """The dressed edit's prompt of one view for the dress text ``text``;
     ``bald`` appends the base body's bald head (``BALD_HEAD``, the same
-    words the base front is rendered with)."""
-    edit = f"{DRESS_KEEP} Only change their clothing: {text}."
+    words the base front is rendered with); ``haired`` opens with
+    ``DRESS_KEEP_HAIR`` instead of ``DRESS_KEEP``."""
+    edit = f"{DRESS_KEEP_HAIR if haired else DRESS_KEEP} Only change their clothing: {text}."
     if bald:
         edit = f"{edit} {BALD_HEAD[:1].upper()}{BALD_HEAD[1:]}."
     view_sentence = DRESS_VIEW.get(view)
@@ -1693,11 +1804,17 @@ def draft_prompt(character_name: str, view: str, *, profile: Optional[Dict[str, 
     slot (an outfit: ``DRAFT_OUTFIT_TEXT``; an own-mesh piece's worn back:
     ``garment_clothing.DRAFT``) — the whole prompt of the edit, no style and
     no character block (the dressed front is the reference). Negative:
-    ``DRAFT_NEGATIVE`` + the slots' ``base_body_negative`` texts."""
+    ``DRAFT_NEGATIVE`` + the slots' ``base_body_negative`` texts. A haired
+    base (``hair_text``) keeps the reference's hair where the sentence said
+    "completely bald" (``_haired_head``), negative ``HAIRED_DRAFT_NEGATIVE``."""
     profile = _profile_of(character_name, profile)
     text = (outfit_text or "").strip().rstrip(".").strip()
-    return (DRAFT_PROMPTS[_draft_view(view)].format(outfit=text),
-            base_negative(character_name, profile=profile, head=DRAFT_NEGATIVE))
+    prompt = DRAFT_PROMPTS[_draft_view(view)].format(outfit=text)
+    hair = hair_text(character_name, profile=profile)
+    if not hair:
+        return prompt, base_negative(character_name, profile=profile, head=DRAFT_NEGATIVE)
+    return (prompt.replace(_BALD_WORDS, _haired_head(character_name, hair, profile), 1),
+            base_negative(character_name, profile=profile, head=HAIRED_DRAFT_NEGATIVE))
 
 
 def cut_out(path: Path):
@@ -2349,7 +2466,7 @@ def _adopt_texture_views(character_name: str, *, tsig: str, bsig: str, texts: Di
     front_text = texts.get("front") or ""
     if not front_text:
         return None
-    prompt = _edit_prompt("front", front_text)
+    prompt = _edit_prompt("front", front_text, haired=bool(hair_text(character_name)))
     refs = get_model_refs_dir(character_name)
     best: Optional[Tuple[str, str, Path]] = None
     for sidecar in refs.glob("tpose_*.json"):
@@ -3557,7 +3674,9 @@ def outfit_body_bald(character_name: str, *, profile: Optional[Dict[str, Any]] =
         return False
     if not is_base_pipeline(character_name, profile=profile):
         return False
-    from app.core.garment_hair import worn_hair_id
+    from app.core.garment_hair import hair_in_body, worn_hair_id
+    if hair_in_body(character_name, profile):
+        return False  # the hair is in the body: a leftover hair item is never served
     return bool(worn_hair_id(character_name, profile))
 
 

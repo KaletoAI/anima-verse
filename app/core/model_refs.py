@@ -212,6 +212,16 @@ FACE_VIEW_PROMPT_DEFAULT = (
     "equally bright, natural colour saturation, sharp focus"
 )
 
+# The face view of a base on the hair method ``body`` (spec
+# 2026-11-11-hair-from-body § Design 1): the mesh carries the hair, so the
+# face view keeps it — Face Retexture's skin mask then leaves the bangs out
+# instead of painting them as skin. FACE_VIEW_BALD is the bald clause of the
+# shipped prompt (an admin override without it is used as it is); the
+# negative loses its hair terms (``face_view_drop_negative``).
+FACE_VIEW_BALD = "completely bald with a smooth bare scalp"
+FACE_VIEW_HAIR = "the same hairstyle, hair length and hair colour as the reference"
+FACE_VIEW_HAIR_NEGATIVE = ("hair", "bangs", "fringe", "hair strands", "ponytail")
+
 TPOSE_VIEW_PROMPT_DEFAULTS = {
     "back": TPOSE_BACK_PROMPT_DEFAULT,
     "left": TPOSE_LEFT_PROMPT_DEFAULT,
@@ -289,9 +299,32 @@ def get_tpose_prompt() -> str:
     return override or TPOSE_PROMPT_DEFAULT
 
 
-def get_face_view_prompt() -> str:
-    """Face view prompt: admin override (image_generation.face_view_prompt) or built-in."""
-    return str(_cfg("face_view_prompt", "") or "").strip() or FACE_VIEW_PROMPT_DEFAULT
+def get_face_view_prompt(character_name: Optional[str] = None) -> str:
+    """Face view prompt: admin override (image_generation.face_view_prompt) or built-in.
+    For a character whose face view keeps its hair (``face_keeps_hair``) the
+    bald clause becomes ``FACE_VIEW_HAIR``."""
+    text = str(_cfg("face_view_prompt", "") or "").strip() or FACE_VIEW_PROMPT_DEFAULT
+    if character_name and face_keeps_hair(character_name):
+        text = text.replace(FACE_VIEW_BALD, FACE_VIEW_HAIR)
+    return text
+
+
+def face_keeps_hair(character_name: str, *, profile: Optional[dict] = None) -> bool:
+    """Whether the face view keeps the hair: a character on the base-body
+    pipeline whose hair is in the body mesh (``garment_hair.hair_in_body``).
+    Every other character keeps the bald face view."""
+    from app.core.base_body import is_base_pipeline
+    from app.core.garment_hair import hair_in_body
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    return is_base_pipeline(character_name, profile=profile) and hair_in_body(character_name, profile)
+
+
+def face_view_drop_negative(character_name: str) -> tuple:
+    """The terms the face view's use-case negative loses for this character:
+    ``FACE_VIEW_HAIR_NEGATIVE`` when it keeps its hair, else none."""
+    return FACE_VIEW_HAIR_NEGATIVE if face_keeps_hair(character_name) else ()
 
 
 def get_animal_pose_prompt() -> str:
@@ -1348,7 +1381,7 @@ def face_view_info(character_name: str) -> dict:
             "url": f"/characters/{quote(character_name, safe='')}/model-refs/face_view",
             # Prefill of the image dialog: the prompt a render would use and
             # the reference it slots.
-            "prompt": get_face_view_prompt(),
+            "prompt": get_face_view_prompt(character_name),
             "profile_url": (f"/characters/{quote(character_name, safe='')}/images/"
                             f"{quote(profile.name, safe='')}" if profile else "")}
     if path:
@@ -1389,7 +1422,8 @@ def generate_face_view(character_name: str, force: bool = False,
         try:
             return render_character_image(
                 character_name, equipped_pieces={}, equipped_items=[], pose_prompt="", expression_prompt="",
-                bare_prompt=str(render.get("prompt") or "").strip() or get_face_view_prompt(),
+                bare_prompt=str(render.get("prompt") or "").strip() or get_face_view_prompt(character_name),
+                drop_negative=face_view_drop_negative(character_name),
                 image_use_case="face_view", occasion="tpose_view",
                 override_width=1024, override_height=1024,
                 output_stem=get_model_refs_dir(character_name) / "face_view",

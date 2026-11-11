@@ -37,10 +37,12 @@ Fixture (expected values derived by hand):
     no capsule set, commit 8a617513), method
     "edit_chain", method_source "world", world_method "edit_chain",
     hairdeck None, others [], subtract {shape "cut" from the length class
-    "medium", no override, shell 5.0 mm (default 5.0, 2.0 .. 15.0)}} (the
-    method keys: plan 2026-11-09-hairdeck-hair Task 5, schema default
-    edit_chain; the subtract settings: plan 2026-11-10-hair-subtract-method
-    Task 1; the limits
+    "medium", no override, shell 5.0 mm (default 5.0, 2.0 .. 15.0)},
+    hair_in_body False, base_prompts None} (the method keys: plan
+    2026-11-09-hairdeck-hair Task 5 — the world pins edit_chain, the default
+    before the hair-from-body spec 2026-11-11, whose keys hair_in_body /
+    base_prompts are None/False under any other method; the subtract
+    settings: plan 2026-11-10-hair-subtract-method Task 1; the limits
     also carry "hairdeck_fit"); Pet: humanoid False, description "", garment
     None; Nobody: 404.
 [3] POST /hair: Pet 400, Offline 400 ("base-body pipeline"), Bald 400
@@ -142,7 +144,10 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
+        # The hair method this smoke was written for (the default before the hair-from-body spec 2026-11-11 —
+        # the new default "body" makes no hair item).
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
+                                                        "base_body": {"hair_method": "edit_chain"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -245,7 +250,8 @@ def main() -> int:
                          "world_method": "edit_chain", "hairdeck": None, "others": [],
                          "subtract": {"shape": "cut", "shape_source": "length", "shape_override": "",
                                       "length_class": "medium", "shell_mm": 5.0, "shell_mm_default": 5.0,
-                                      "shell_mm_min": 2.0, "shell_mm_max": 15.0}}))
+                                      "shell_mm_min": 2.0, "shell_mm_max": 15.0},
+                         "hair_in_body": False, "base_prompts": None}))
             # The chip limits come from the gate constants (R7): haired XOR < 0.015,
             # ghost |top_dy| <= 0.0052 H, mesh component share >= 0.98, fit bib <= 50 cm².
             check("hair limits", (sorted(limits), limits.get("haired", {}).get("body_xor"),

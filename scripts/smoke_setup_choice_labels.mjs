@@ -3,12 +3,16 @@
  *
  * Usage:  node scripts/smoke_setup_choice_labels.mjs   (from the repo root; bundles with node_modules/esbuild)
  *
- * Expected, by hand from the schema field `base_body.hair_method` (choices ["edit_chain", "hairdeck"],
- * choice_labels {edit_chain: "Edit chain (image edits + mesh)", hairdeck: "HairDeck (one image → hair cards)"}):
+ * Expected, by hand from the schema field `base_body.hair_method` (choices ["body", "edit_chain", "hairdeck",
+ * "subtract"] — `body` first, the default since the hair-from-body spec 2026-11-11 — choice_labels
+ * {body: "From the body mesh", edit_chain: "Hair views → mesh (image edits + one mesh)",
+ *  hairdeck: "HairDeck (one image → hair cards)", subtract: "Subtract (haired mesh − bald base)"}):
  *   1. The world schema the Setup page receives (config_scope.schema_for(WORLD), read through Python) still
  *      carries exactly those choices and labels.
- *   2. selectOptions(choices, labels) -> [{value "edit_chain", label "Edit chain (image edits + mesh)"},
- *      {value "hairdeck", label "HairDeck (one image → hair cards)"}] — the VALUE stays the raw choice.
+ *   2. selectOptions(choices, labels) -> [{value "body", label "From the body mesh"}, {value "edit_chain",
+ *      label "Hair views → mesh (image edits + one mesh)"}, {value "hairdeck", label "HairDeck (one image →
+ *      hair cards)"}, {value "subtract", label "Subtract (haired mesh − bald base)"}] — the VALUE stays the raw
+ *      choice.
  *   3. Without labels (or a choice the labels miss) the label is the choice itself: [1, "b"] with {b: "Bee"}
  *      -> [{1, "1"}, {"b", "Bee"}]; no choices -> [].
  *   4. The Setup field renderer (SchemaNode.tsx) builds its <option>s from selectOptions(field.choices,
@@ -22,7 +26,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const LABELS = { edit_chain: 'Edit chain (image edits + mesh)', hairdeck: 'HairDeck (one image → hair cards)' }
+const CHOICES = ['body', 'edit_chain', 'hairdeck', 'subtract']
+const LABELS = {
+  body: 'From the body mesh',
+  edit_chain: 'Hair views → mesh (image edits + one mesh)',
+  hairdeck: 'HairDeck (one image → hair cards)',
+  subtract: 'Subtract (haired mesh − bald base)',
+}
 
 if (!process.env.SETUP_CHOICE_LABELS_BUNDLED) {
   const tmp = mkdtempSync(join(tmpdir(), 'setup-choice-labels-'))
@@ -35,7 +45,7 @@ if (!process.env.SETUP_CHOICE_LABELS_BUNDLED) {
     ].join('\n')], { encoding: 'utf8', env: { ...process.env, STORAGE_DIR: tmp, INSTANCE_DIR: tmp } })
     assert.equal(py.status, 0, py.stderr)
     const field = JSON.parse(py.stdout.trim().split('\n').pop())
-    assert.deepEqual(field, { choices: ['edit_chain', 'hairdeck'], choice_labels: LABELS })
+    assert.deepEqual(field, { choices: CHOICES, choice_labels: LABELS })
     const output = join(tmp, 'smoke.mjs')
     const built = spawnSync('node_modules/esbuild/bin/esbuild', [fileURLToPath(import.meta.url), '--bundle',
       '--platform=node', '--format=esm', `--outfile=${output}`], { stdio: 'inherit' })
@@ -47,8 +57,8 @@ if (!process.env.SETUP_CHOICE_LABELS_BUNDLED) {
 } else {
   const { selectOptions } = await import('../frontend/src/tabs/setup/schemaValues.ts')
   const field = JSON.parse(process.env.SETUP_FIELD)
-  assert.deepEqual(selectOptions(field.choices, field.choice_labels), [
-    { value: 'edit_chain', label: LABELS.edit_chain }, { value: 'hairdeck', label: LABELS.hairdeck }])
+  assert.deepEqual(selectOptions(field.choices, field.choice_labels),
+    CHOICES.map(value => ({ value, label: LABELS[value] })))
   assert.deepEqual(selectOptions([1, 'b'], { b: 'Bee' }), [{ value: 1, label: '1' }, { value: 'b', label: 'Bee' }])
   assert.deepEqual(selectOptions(['x']), [{ value: 'x', label: 'x' }])
   assert.deepEqual(selectOptions(undefined, LABELS), [])

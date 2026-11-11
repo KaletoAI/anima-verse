@@ -29,7 +29,6 @@ shortened and said positively (Qwen2.1-Turbo ignores negatives):
 Unlike hair, nothing about the piece is derived from the character: the item
 is the same for every wearer, the fit is per wearer (``garment_store``).
 """
-import re
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.garment_gates import WORN_GATE_VERSION
@@ -171,12 +170,12 @@ def fsig_inputs(character_name: str, item: Dict[str, Any], *,
             "pronouns": list(pronouns(_profile_of(character_name, profile)))}
 
 
-def _worn_negative(text: str) -> str:
+def _worn_negative(text: str, *, keep_hair: bool = False) -> str:
     """The spike's garment terms (``base_body.DRESS_GARMENT_NEGATIVE``) minus
-    the ones the piece's text names."""
-    from app.core.base_body import DRESS_GARMENT_NEGATIVE
-    return ", ".join(term for term, pattern in DRESS_GARMENT_NEGATIVE
-                     if not re.search(rf"\b(?:{pattern})\b", text or "", re.IGNORECASE))
+    the ones the piece's text names; ``keep_hair`` (the worn edit of a haired
+    base, ``base_body.hair_text``) leaves "hair" out too."""
+    from app.core.base_body import dress_garment_terms
+    return ", ".join(dress_garment_terms(text, keep_hair=keep_hair))
 
 
 def edit_prompt(character_name: str, step: str, view: str, *,
@@ -199,7 +198,9 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     item = _item_of(item_id)
     text = _fragment_of(item)
     if step == "worn":
-        return WORN.format(fragment=text), _worn_negative(text)
+        from app.core.base_body import hair_text
+        haired = bool(hair_text(character_name, profile=_profile_of(character_name, profile)))
+        return WORN.format(fragment=text), _worn_negative(text, keep_hair=haired)
     negative = ", ".join(t for t in (_worn_negative(text), *GHOST_NEGATIVE) if t)
     slots = (item.get("outfit_piece") or {}).get("slots") or []
     return ghost_prompt(garment_noun(item), slots, view), negative

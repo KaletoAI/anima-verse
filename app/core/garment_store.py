@@ -137,6 +137,8 @@ HAIRDECK_RECORD = "record.json"
 EDIT_CHAIN = "edit_chain"
 HAIRDECK = "hairdeck"
 SUBTRACT = "subtract"
+#: Hair inside the body mesh (``garment_hair.BODY_METHOD``): no steps, no fit, nothing served.
+BODY = "body"
 #: The only method of footwear (no method choice for ``feet``).
 SHOE = "shoe"
 #: The steps of hair made by subtraction (``steps_for``; ``haired`` is the edit chain's image step).
@@ -392,11 +394,14 @@ def kind_method(kind: str, character_name: str, profile: Dict[str, Any]) -> str:
 
 def steps_for(kind: str, method: str) -> Tuple[str, ...]:
     """The step order of ``kind`` made with ``method``: hair by HairDeck is
-    ``HAIRDECK_STEPS``, footwear only by ``shoe`` (``FOOTWEAR_STEPS``; the
+    ``HAIRDECK_STEPS``, hair in the body mesh (``BODY``) has none — ``()``,
+    nothing ever runs —, footwear only by ``shoe`` (``FOOTWEAR_STEPS``; the
     edit chain is never run for a feet piece), anything else
     ``GARMENT_STEPS[kind]``. ValueError for an unknown kind or method."""
     if kind not in GARMENT_STEPS:
         raise ValueError(f"unknown garment kind {kind!r}")
+    if method == BODY and kind == "hair":
+        return ()
     if method == HAIRDECK and kind == "hair":
         return HAIRDECK_STEPS
     if method == SUBTRACT and kind == "hair":
@@ -638,7 +643,8 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     with the CURRENT method (``fit_method``; a switched method never serves
     the other method's hair), else None. An empty ``base_model_sha`` (no base
     model) has no fit. A footwear fit of an older fit version is never
-    served (``_accepted_on``)."""
+    served (``_accepted_on``). Hair whose method is ``BODY`` is never
+    served: the hair is part of the body mesh."""
     if not base_model_sha:
         return None
     profile = _profile_of(character_name, profile)
@@ -647,6 +653,8 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
         method = garment_method(character_name, item_id, profile=profile)
     except ValueError:
         current, method = None, EDIT_CHAIN
+    if method == BODY:
+        return None
     if current is not None:
         path = garment_path(character_name, item_id, current, "fit")
         record = read_record(path.with_suffix(".json"))

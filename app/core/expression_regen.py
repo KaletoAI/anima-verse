@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 from types import MappingProxyType
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 import uuid
 
 from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
@@ -830,6 +830,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            framing: str = "",
                            expression_set_loras: Optional[list] = None,
                            extra_negative: str = "",
+                           drop_negative: Iterable[str] = (),
                            sidecar_extra: Optional[Dict[str, Any]] = None,
                            character_loras: bool = False,
                            postprocess: bool = True,
@@ -842,7 +843,9 @@ def render_character_image(character_name: str, *, output_stem: Path,
     Ordinary expressions pass a frozen neutral profile and publish separately.
 
     ``negative_prompt`` REPLACES the use case's negative; ``extra_negative``
-    is appended to it instead (``service.resolve_negative_prompt``).
+    is appended to it instead (``service.resolve_negative_prompt``);
+    ``drop_negative`` names comma terms the USE CASE's negative loses (an
+    explicit ``negative_prompt`` is kept as it is).
     ``sidecar_extra`` adds keys to the sidecar JSON of the render.
     ``character_loras`` lets a ``bare_prompt`` render carry the character's
     own LoRAs (``outfit_imagegen.loras``, replaced by ``tpose_loras`` on the
@@ -1092,6 +1095,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
         payload["negative_prompt"] = negative_prompt
     if extra_negative:
         payload["negative_prompt_extra"] = extra_negative
+    if drop_negative:
+        payload["negative_prompt_drop"] = [str(term) for term in drop_negative]
     if model_override:
         payload["model_override"] = model_override
     # LoRAs: character override + slot-override LoRAs of ACTIVE (empty,

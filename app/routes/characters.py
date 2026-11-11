@@ -2004,7 +2004,7 @@ def get_character_hair(character_name: str,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Hair tab: ``{pipeline, humanoid, description, behind_shoulders,
     item_id, equipped, garment, collision, limits, method, method_source,
-    world_method, hairdeck, others}`` — ``description`` is
+    world_method, hairdeck, others, hair_in_body, base_prompts}`` — ``description`` is
     derived (Appearance + hair slot, R3), ``item_id`` the worn hair item or
     else the one the character owns (None: no item yet), ``garment`` its
     ``garments.garment_info`` (None without an item), ``collision`` the
@@ -2018,20 +2018,26 @@ def get_character_hair(character_name: str,
     ``hsig`` (``garments.hairdeck_panel``, None without an item) and
     ``others`` the kept results of the methods not selected, newest first
     (``garments.other_methods_info``, ``[]`` without an item). Every image carries a ``freshness`` and both previews a
-    ``preview_freshness`` (``model_overview.annotate_hair``)."""
+    ``preview_freshness`` (``model_overview.annotate_hair``). ``hair_in_body``: the method is ``body`` — the hair
+    is part of the body mesh, ``garment`` / ``hairdeck`` stay None and ``others`` empty even with a leftover item,
+    and ``base_prompts`` is the stored base's prompt freshness (``base_body.base_prompts_freshness``; None off
+    the pipeline or for another method)."""
     from app.core import base_body, garment_hair, garment_hairdeck, garments
     from app.core.model_refs import is_humanoid
     from app.models.character import get_character_profile
     _require_character(character_name)
     profile = get_character_profile(character_name) or {}
     humanoid = bool(is_humanoid(character_name, profile=profile))
+    in_body = bool(humanoid and garment_hair.hair_in_body(character_name, profile))
     item = garment_hair.find_hair_item(character_name, profile) if humanoid else None
     item_id = item["id"] if item else None
     worn = profile.get("equipped_mesh_pieces")
     equipped = bool(item_id and isinstance(worn, dict) and worn.get(garment_hair.HAIR_KIND) == item_id)
     info = hairdeck = None
     others: List[Dict[str, Any]] = []
-    if item_id:
+    # Hair in the body mesh: no hair item is run or served — the tab shows the
+    # method and the base body's prompt freshness instead of the steps.
+    if item_id and not in_body:
         try:
             info = garments.garment_info(character_name, item_id)
             hairdeck = garments.hairdeck_panel(character_name, item_id, profile=profile)
@@ -2066,7 +2072,11 @@ def get_character_hair(character_name: str,
                 "method": method, "method_source": method_source,
                 "world_method": garment_hair.world_hair_method(),
                 "hairdeck": hairdeck, "others": others,
-                "subtract": _hair_subtract_settings(character_name, profile) if humanoid else None}
+                "subtract": _hair_subtract_settings(character_name, profile) if humanoid else None,
+                "hair_in_body": in_body,
+                "base_prompts": (base_body.base_prompts_freshness(character_name, profile=profile)
+                                 if in_body and base_body.is_base_pipeline(character_name, profile=profile)
+                                 else None)}
     from app.core.model_overview import annotate_hair
     return annotate_hair(payload)
 
@@ -2110,9 +2120,9 @@ def set_character_hair_subtract(character_name: str, body: HairSubtractRequest,
 @router.post("/{character_name}/hair/method")
 def set_character_hair_method(character_name: str, body: HairMethodRequest,
                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Choose how the character's hair mesh is made: ``""`` (the world
-    default ``base_body.hair_method``), ``"edit_chain"``, ``"hairdeck"`` or
-    ``"subtract"``.
+    """Choose how the character's hair is made: ``""`` (the world
+    default ``base_body.hair_method``), ``"body"`` (in the body mesh),
+    ``"edit_chain"``, ``"hairdeck"`` or ``"subtract"``.
     400 for anything else. No GPU work starts: the served hair follows the
     method's newest accepted fit, so the served model is re-assembled."""
     from app.core import garment_assembly, garment_hair

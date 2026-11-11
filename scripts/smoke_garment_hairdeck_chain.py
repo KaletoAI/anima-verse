@@ -25,8 +25,9 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
 [1] hair_method: the profile key ``hair_method`` wins when it names a method
     ("edit_chain"/"hairdeck", source "character"); "" or an unknown value
     falls to the world key ``base_body.hair_method`` (source "world"); an
-    absent or unknown world value is the default "edit_chain". Schema:
-    field_default("base_body", "hair_method") == "edit_chain", the path is
+    absent or unknown world value is the default "body" (since the
+    hair-from-body spec 2026-11-11; this smoke's world pins "edit_chain").
+    Schema: field_default("base_body", "hair_method") == "body", the path is
     world-scope (config_scope.scope_of) and the section names a world_group
     that is one of WORLD_GROUPS (so Game-Admin -> Setup shows it).
 [2] steps_for("hair", "edit_chain") == ("haired", "ghost", "cutout", "mesh",
@@ -200,7 +201,10 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
+        # The hair method this smoke was written for (the default before the hair-from-body spec 2026-11-11 —
+        # the new default "body" makes no hair item).
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
+                                                        "base_body": {"hair_method": "edit_chain"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -354,9 +358,9 @@ def main() -> int:
         check("character unknown -> world",
               garment_hair.hair_method("Demo", profile={**profile, "hair_method": "bogus"}), "hairdeck")
         config._CONFIG["base_body"] = {"hair_method": "bogus"}
-        check("world unknown -> default", garment_hair.hair_method("Demo", profile=profile), "edit_chain")
+        check("world unknown -> default", garment_hair.hair_method("Demo", profile=profile), "body")
         config._CONFIG.pop("base_body", None)
-        check("schema default", field_default("base_body", "hair_method"), "edit_chain")
+        check("schema default", field_default("base_body", "hair_method"), "body")
         check("world scope", config_scope.scope_of("base_body.hair_method"), "world")
         check("world group listed", SECTIONS["base_body"].get("world_group") in {g["id"] for g in WORLD_GROUPS},
               True)

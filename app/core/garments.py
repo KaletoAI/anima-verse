@@ -1333,6 +1333,7 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     True`` and is not persisted). ValueError for an invalid item, step or
     view (any view of footwear)."""
     item, kind, order = _item_order(character_name, item_id)
+    _require_steps(kind, order)
     wanted = _steps(steps, order)
     _check_view(kind, view)
     from app.core import garment_store as gs
@@ -1416,6 +1417,8 @@ HUB_JOBS: Dict[str, Dict[str, int]] = {
     "hair:edit_chain": {"haired": 2, "ghost": 2, "cutout": 0, "mesh": 1, "fit": 0},
     "hair:hairdeck": {"hairdeck": 1, "fit": 0},
     "hair:subtract": {"haired": 2, "mesh_source": 1, "cut": 0, "fit": 0},
+    # Hair in the body mesh: no steps, no job (the base views carry the hair).
+    "hair:body": {},
     "footwear:shoe": {"source": 0, "empty": 1, "cutout": 0, "mesh": 1, "insole": 0, "fit": 0},
 }
 
@@ -1452,6 +1455,9 @@ def run_estimate(character_name: str, item_id: str, *,
         return _unknown_estimate(f"{character_name} is not on the base-body pipeline")
     bsig, base_sha = base
     method = gs.kind_method(kind, character_name, profile)
+    if not order:
+        # Hair in the body mesh (``garment_store.BODY``): nothing to run, ever.
+        return {"steps": [], "hub_jobs": 0, "note": _no_steps_note(kind, method), "refit": False}
     costs = dict(HUB_JOBS.get(f"{kind}:{method}") or {})
     if not costs:
         return _unknown_estimate(f"no cost table for {kind} by {method}")
@@ -1496,6 +1502,20 @@ def _grafted_kinds() -> Tuple[str, ...]:
     return GRAFTED_PIECE_KINDS
 
 
+def _no_steps_note(kind: str, method: str) -> str:
+    """Why a garment of ``kind`` made with ``method`` has no steps (hair in the body mesh)."""
+    from app.core import garment_hair
+    return garment_hair.HAIR_IN_BODY if method == garment_hair.BODY_METHOD else f"no steps for {kind} by {method}"
+
+
+def _require_steps(kind: str, order: Tuple[str, ...], method: str = "") -> None:
+    """ValueError when the item's current method has no steps — hair in the
+    body mesh never runs (no click, no trigger, no improvement)."""
+    if not order:
+        from app.core import garment_hair
+        raise ValueError(_no_steps_note(kind, method or garment_hair.BODY_METHOD))
+
+
 def _item_order(character_name: str, item_id: str,
                 profile: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], str, Tuple[str, ...]]:
     """``(item, kind, steps of the current method)``; ValueError like ``_item``."""
@@ -1521,6 +1541,9 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
     profile = get_character_profile(character_name) or {}
     method = gs.kind_method(kind, character_name, profile)
     order = gs.steps_for(kind, method)
+    if not order:
+        # The method changed to one without steps (hair in the body mesh) while the run waited.
+        return {"ok": False, "fsig": "", "step": "", "error": _no_steps_note(kind, method), "ran": []}
     step = order[0]  # a failure before the first step is that step's
     fsig = ""
     hsig = ""
@@ -1764,6 +1787,7 @@ def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iter
     the character and ``steps`` / ``view`` name steps of its current method
     and a view of it (footwear has none)."""
     _item_, kind, order = _item_order(character_name, item_id)
+    _require_steps(kind, order)
     _steps(steps, order)
     _check_view(kind, view)
 
@@ -2103,6 +2127,7 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
     order = gs.steps_for(kind, method)
     if method == gs.HAIRDECK:
         raise ValueError("Hair made by HairDeck has no mesh job to fetch")
+    _require_steps(kind, order, method)
     step = "mesh_source" if method == gs.SUBTRACT else "mesh"
     if kind == _footwear():
         from app.core import footwear_source
@@ -2158,8 +2183,11 @@ def _ensure_hair(character_name: str, profile: Dict[str, Any]) -> bool:
     hair text but no hair item at all — so the chain below starts without a
     click (R14; the phase-6 migration relies on it). A bald character gets
     no item; an item the character owns but does not wear (taken off in the
-    Hair tab) is left off. True when an item was created."""
+    Hair tab) is left off. Hair in the body mesh (``garment_hair.hair_in_body``)
+    never gets an item. True when an item was created."""
     from app.core import garment_hair
+    if garment_hair.hair_in_body(character_name, profile):
+        return False
     if garment_hair.find_hair_item(character_name, profile) is not None:
         return False
     if not garment_hair.hair_description(character_name, profile=profile):
@@ -2209,6 +2237,8 @@ def after_base_model(character_name: str) -> bool:
                 method = gs.garment_method(character_name, item_id, profile=profile)
             except ValueError:
                 continue
+            if method == gs.BODY:
+                continue  # a leftover hair item of a character whose hair is in the body mesh: never run
             if _fit_state(character_name, item_id, fsig, base[1], method) == "accepted":
                 continue
             # The persisted failure of this fsig on this base — for footwear also a refused SOURCE step
@@ -2704,7 +2734,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
             refit = {"source_bsig": source.get("bsig"), "source_fsig": source.get("fsig"),
                      "materialized_from": source.get("materialized_from"),
                      "registration": {"shift": reg.get("shift_abs"), "scale": reg.get("scale")} if reg else None,
-                     "first_step": gs.steps_for(kind, method)[0], "created_at": fit_record.get("created_at")}
+                     "first_step": next(iter(gs.steps_for(kind, method)), None),
+                     "created_at": fit_record.get("created_at")}
     status = gs.status(character_name, item_id)
     queue = queue_state(character_name, item_id)
     failed = status["failed"]
@@ -2730,7 +2761,8 @@ def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     """``{item_id, status}`` of the worn hair item for ``base_body.base_info``
     — status ``running`` / ``failed`` / ``ready`` (current fit accepted on
     the current base model) / ``stale`` (an older fit is served) /
-    ``missing``; None without a worn hair item or off the pipeline."""
+    ``missing``; None without a worn hair item, off the pipeline, or with
+    the hair in the body mesh (``garment_hair.hair_in_body``)."""
     from app.core import base_body, garment_store as gs
     from app.core.garment_hair import HAIR_KIND
     if profile is None:
@@ -2741,6 +2773,9 @@ def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     base = base_body.current_base(character_name, profile=profile)
     if not item_id or base is None:
         return None
+    from app.core.garment_hair import hair_in_body
+    if hair_in_body(character_name, profile):
+        return None  # the hair is in the body mesh: no hair mesh is wanted or served
     try:
         _item(character_name, item_id)
     except ValueError:

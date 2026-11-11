@@ -128,19 +128,24 @@ SECTIONS = {
             "hair_method": {
                 "type": "select",
                 "label": "Hair method",
-                "choices": ["edit_chain", "hairdeck", "subtract"],
-                "choice_labels": {"edit_chain": "Hair views → mesh (image edits + one mesh)",
+                "choices": ["body", "edit_chain", "hairdeck", "subtract"],
+                "choice_labels": {"body": "From the body mesh",
+                                  "edit_chain": "Hair views → mesh (image edits + one mesh)",
                                   "hairdeck": "HairDeck (one image → hair cards)",
                                   "subtract": "Subtract (haired mesh − bald base)"},
-                "default": "edit_chain",
-                "description": "How a base-body character's hair mesh is made. Hair views → mesh: the base views are "
+                "default": "body",
+                "description": "How a base-body character's hair is made. From the body mesh: the base views are "
+                               "rendered with the character's hair, so the hair is part of the base body and of "
+                               "every outfit body — no hair mesh, no hair job. Hair views → mesh: the base views are "
                                "edited into hair-only images, which become a mesh (several image edits and one "
                                "mesh job, occasion hair_views_mesh). HairDeck: one job turns the profile picture into hair cards (needs an "
                                "img2hair backend, occasion hair_mesh). Subtract: the haired views become one mesh "
                                "of the haired character (occasion hair_source_mesh) and the hair is cut off it "
-                               "against the bald base on the CPU — short hair as a thin scalp shell. All are "
-                               "fitted onto the base body. A character can override this in its Hair tab; "
-                               "switching costs no generation when the other method already has an accepted fit.",
+                               "against the bald base on the CPU — short hair as a thin scalp shell. The last three are "
+                               "fitted onto the bald base body. A character can override this in its Hair tab; "
+                               "switching costs no generation when the other method already has an accepted fit. "
+                               "Switching to or from From the body mesh changes the base body's prompts: its "
+                               "views show \"Built with older prompts\" until they are regenerated.",
             },
             "dressed_side_views": {
                 "type": "bool",

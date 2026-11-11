@@ -213,7 +213,10 @@ def run_arm(arm: str) -> dict:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
+        # The hair method this smoke was written for (the default before the hair-from-body spec 2026-11-11 —
+        # the new default "body" makes no hair item).
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
+                                                        "base_body": {"hair_method": "edit_chain"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
