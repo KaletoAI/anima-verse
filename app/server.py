@@ -680,6 +680,19 @@ async def lifespan(app: FastAPI):
     except Exception as _lfe:
         logger.warning("Linked family repair at boot failed: %s", _lfe)
 
+    # Migration (hair-from-body spec 2026-11-11, § Design 6): the hair a
+    # character no longer uses goes — every hair item, fit and HairDeck job of
+    # a character whose hair method is ``body``, and every edit-chain /
+    # subtract leftover. Once per world, world_kv-marked. Synchronous on
+    # purpose and AFTER the packages loaded (species hair slots): it must be
+    # done before the garment refit sweep and the hub-job resumer below start
+    # on the same items; only characters with hair files cost time.
+    try:
+        from app.core.hair_migration import delete_all_hair_once
+        delete_all_hair_once()
+    except Exception as _hme:
+        logger.warning("Hair migration failed (retried at the next start): %s", _hme)
+
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
 
