@@ -6,11 +6,19 @@
  * human can act on (the step ran out of attempts, or its subject was busy
  * every time), so it is the only one that gets a Retry button. `pending` will
  * run on its own, `running` is running, and `done`/`failed` are history.
+ *
+ * A REFUSED skip is the exception: its subject's own gates said no (or its
+ * chain recorded a failure the automatic triggers honour), so the server
+ * answers Retry with 409 "refused". The button stays visible but disabled,
+ * with the explicit path beside it — spending that chain again is a person's
+ * decision in the Wardrobe or the 3D tab, never the idle engine's.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { useToast } from '../../lib/Toast'
+import { ApiError } from '../../lib/api'
 import { fetchSteps, retryStep } from './api'
+import { hubJobsText, stepStatus } from './types'
 import type { Improvement, Step } from './types'
 import { clockSettings, formatTime, useClockSettings } from '../../lib/clockFormat'
 
@@ -20,11 +28,16 @@ function clockTime(iso: string | null | undefined): string {
   return formatTime(iso, clockSettings())
 }
 
+const REFUSED_HINT =
+  'Refused by its gates — run it explicitly from the Wardrobe or the 3D tab'
+
 /** Green for a finished step, red for one that ended badly, muted for the
  *  ones that are still on their way. */
 function statusClass(status: string): string {
   if (status === 'done') return 'ga-status-ok'
-  if (status === 'failed' || status === 'skipped') return 'ga-status-danger'
+  if (status === 'failed' || status === 'skipped' || status === 'refused') {
+    return 'ga-status-danger'
+  }
   return 'ga-status-paused'
 }
 
@@ -74,7 +87,13 @@ export function EntryDetail({
       await load()
       onChanged()
     } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      if (e instanceof ApiError && e.status === 409 && e.detail === 'refused') {
+        // The step was refused after this log was loaded — show it as such.
+        toast(t(REFUSED_HINT), 'error')
+        await load()
+      } else {
+        toast(t('Error') + ': ' + (e as Error).message, 'error')
+      }
     } finally {
       setBusy('')
     }
@@ -102,6 +121,7 @@ export function EntryDetail({
                 <th>{t('Candidate')}</th>
                 <th>{t('Status')}</th>
                 <th>{t('Attempts')}</th>
+                <th>{t('Cost')}</th>
                 <th>{t('Error')}</th>
                 <th>{t('Duration')}</th>
                 <th />
@@ -111,18 +131,32 @@ export function EntryDetail({
               {steps.map((step) => (
                 <tr key={step.candidate_key}>
                   <td>{step.candidate_label || step.candidate_key}</td>
-                  <td className={statusClass(step.status)}>
-                    {statusLabel(step.status)}
+                  <td className={statusClass(stepStatus(step))}>
+                    {statusLabel(stepStatus(step))}
                   </td>
                   <td>{step.attempts || 0}</td>
-                  <td className="ga-imp-steps-error" title={step.error || ''}>
+                  <td>{hubJobsText(step.hub_jobs, t)}</td>
+                  <td className="ga-imp-steps-error"
+                    title={[step.error, step.note].filter(Boolean).join('\n')}>
                     {step.error || ''}
+                    {step.note ? (
+                      <div className="ga-imp-steps-note">{step.note}</div>
+                    ) : null}
                   </td>
                   <td>
                     {duration(step.duration_s) || clockTime(step.finished_at)}
                   </td>
                   <td>
-                    {step.status === 'skipped' ? (
+                    {step.status === 'skipped' && step.refused ? (
+                      <>
+                        <button type="button" className="ga-btn ga-btn-sm" disabled>
+                          {t('Retry')}
+                        </button>
+                        <span className="ga-imp-refused-hint">
+                          {t(REFUSED_HINT)}
+                        </span>
+                      </>
+                    ) : step.status === 'skipped' ? (
                       <button type="button" className="ga-btn ga-btn-sm"
                         disabled={busy === step.candidate_key}
                         onClick={() => retry(step.candidate_key)}>

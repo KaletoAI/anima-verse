@@ -87,6 +87,22 @@ recorded from a run.  A mini FastAPI app carries only this router, and
      activity → the stamp keeps its age too, so watching the queue panel cannot
      push away the idle window the panel is waiting for.
 
+ 13. The hub cost and the refused state, as the tab consumes them (spec § 5.1,
+     § 5.2).  Three candidates priced by hand: Ann 6 ("worn 3 + ghost 2 +
+     mesh 1"), Bob unknown (None), Cid 2.
+     [R1] ``POST /preview`` sums the KNOWN estimates and counts the unknown
+          ones: hub_jobs 6 + 2 = 8, unknown 1, and every sample row is an
+          object {label, hub_jobs, note} in candidate order.
+     [R3] ``GET /improvements`` carries ``pending_hub_jobs`` per row: with Bob
+          pending it is None (one unknown step makes the total unknown, never a
+          silent 8); once Bob is refused (skipped + refused) and Cid skipped,
+          only Ann is pending → 6.  ``GET /status`` sums the OPEN entries the
+          same way; the only other open entry ("Keep") has no steps → 6 too.
+          ``GET /{id}/steps`` hands each step's hub_jobs/note/refused through.
+     [R2] Retry on the refused step answers 409 with detail "refused" and
+          leaves it skipped + refused; a plain skip of Cid still answers 200
+          and becomes pending again (pending_hub_jobs back to 6 + 2 = 8).
+
 Additional expectations: zero candidates delete a one-shot during create, so
 the response has removed=true and its id has no stored row. One skipped step
 keeps the entry done; retry reopens it. Clear-finished removes the single done
@@ -150,7 +166,8 @@ class FakeType(ImprovementType):
     candidates = [("k1", "Zeta"), ("k2", "Alpha")]
 
     def find_candidates(self, params):
-        return [Candidate(key, label) for key, label in FakeType.candidates]
+        # (key, label) or (key, label, hub_jobs, note) — section 13 prices them.
+        return [Candidate(*c) for c in FakeType.candidates]
 
     def is_done(self, candidate, params):
         return False
@@ -471,6 +488,58 @@ check("clear finished removes exactly one", client.post("/improvements/clear-fin
 check("clear finished cancels queued work", status_of(queued), "cancelled")
 check("clear finished deletes steps", store.list_steps(entry_id), [])
 check("clear finished preserves open entry", store.get(other)["status"], "open")
+
+# ── 13. hub cost + refused ───────────────────────────────────────────────────
+print("\n13. hub cost in preview/entries/status, retry on a refused step")
+FakeType.candidates = [("a", "Ann", 6, "worn 3 + ghost 2 + mesh 1"),
+                       ("b", "Bob", None, ""),
+                       ("c", "Cid", 2, "")]
+r = client.post("/improvements/preview",
+                json={"type_id": "fake", "params": {"backend": "x"}})
+check("[R1] preview sums the known estimates and counts the unknown", r.json(),
+      {"count": 3, "hub_jobs": 8, "unknown": 1,
+       "sample": [{"label": "Ann", "hub_jobs": 6,
+                   "note": "worn 3 + ghost 2 + mesh 1"},
+                  {"label": "Bob", "hub_jobs": None, "note": ""},
+                  {"label": "Cid", "hub_jobs": 2, "note": ""}]})
+H = client.post("/improvements", json={"type_id": "fake", "label": "H",
+                                       "mode": "standing",
+                                       "params": {"backend": "x"}}).json()["id"]
+
+
+def entry_row(entry_id):
+    return next(i for i in client.get("/improvements").json()
+                if i["id"] == entry_id)
+
+
+check("[R3] an unknown pending step makes the entry's total unknown",
+      entry_row(H)["pending_hub_jobs"], None)
+check("[R3] …and the panel's total too",
+      client.get("/improvements/status").json()["pending_hub_jobs"], None)
+store.mark_result(H, "b", status="skipped", error="gate said no",
+                  count_attempt=True, refused=True)
+store.mark_result(H, "c", status="skipped", error="out of attempts",
+                  count_attempt=True)
+check("[R3] with Bob refused and Cid skipped only Ann is pending",
+      entry_row(H)["pending_hub_jobs"], 6)
+check("[R3] the panel sums the open entries the same way",
+      client.get("/improvements/status").json()["pending_hub_jobs"], 6)
+steps = {s["candidate_key"]: s for s in client.get(f"/improvements/{H}/steps").json()}
+check("[R3] a step carries its hub_jobs, note and refused flag",
+      (steps["a"]["hub_jobs"], steps["a"]["note"], steps["a"]["refused"],
+       steps["b"]["hub_jobs"], steps["b"]["refused"]),
+      (6, "worn 3 + ghost 2 + mesh 1", 0, None, 1))
+r = client.post(f"/improvements/{H}/steps/b/retry")
+check("[R2] retry on a refused step is 409 refused",
+      (r.status_code, r.json().get("detail")), (409, "refused"))
+check("[R2] …and the step stays skipped + refused",
+      {s["candidate_key"]: (s["status"], s["refused"])
+       for s in client.get(f"/improvements/{H}/steps").json()}["b"],
+      ("skipped", 1))
+check("[R2] a plain skip still retries",
+      client.post(f"/improvements/{H}/steps/c/retry").status_code, 200)
+check("[R2] …and its cost counts again: 6 + 2",
+      entry_row(H)["pending_hub_jobs"], 8)
 
 print(f"\n{CHECKED} checks, {len(FAILURES)} failed")
 if FAILURES:

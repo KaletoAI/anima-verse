@@ -50,6 +50,9 @@ export interface Improvement {
   done: number
   failed: number
   skipped: number
+  /** The hub jobs its PENDING steps would still submit (first attempts);
+   *  null when any of them could not be estimated. */
+  pending_hub_jobs: number | null
 }
 
 /** One candidate of one entry. */
@@ -64,6 +67,13 @@ export interface Step {
   started_at?: string | null
   finished_at?: string | null
   duration_s?: number | null
+  /** Estimated hub jobs of this step (first attempts); null = unknown. */
+  hub_jobs?: number | null
+  /** One line: what the estimate counts, or the dry-run summary. */
+  note?: string
+  /** A skipped step its subject's own gates refused — terminal, Retry answers
+   *  409 "refused" (SQLite hands the flag over as 0/1). */
+  refused?: number | boolean
 }
 
 /** A step in the running order, carrying its entry's label/type/mode. */
@@ -98,6 +108,8 @@ export interface EngineStatus {
   forced: boolean
   running_step: Step | null
   pending_total: number
+  /** The hub jobs the open entries still owe; null when any is unknown. */
+  pending_hub_jobs: number | null
   estimate_s: number | null
 }
 
@@ -106,9 +118,20 @@ export interface Settings {
   idle_minutes: number
 }
 
+/** One candidate of a preview, with its hub cost (null = unknown). */
+export interface PreviewSample {
+  label: string
+  hub_jobs: number | null
+  note: string
+}
+
 export interface PreviewResult {
   count: number
-  sample: string[]
+  /** The sum of the known estimates over ALL candidates, not just the sample. */
+  hub_jobs: number
+  /** How many candidates could not be estimated. */
+  unknown: number
+  sample: PreviewSample[]
 }
 
 /**
@@ -123,4 +146,20 @@ export const STEP_STATUS_LABELS: Record<string, string> = {
   done: 'Done',
   failed: 'Failed',
   skipped: 'Skipped',
+  // Not a status of its own: a skipped step with the `refused` flag. The
+  // views ask `stepStatus(step)` for the key, so both read it the same way.
+  refused: 'Refused',
+}
+
+/** The label key of a step: `refused` for a refused skip, else its status. */
+export function stepStatus(step: Pick<Step, 'status' | 'refused'>): string {
+  return step.refused ? 'refused' : step.status
+}
+
+/** A step's hub cost as a short UI string: "{n} hub jobs" / "hub jobs unknown". */
+export function hubJobsText(n: number | null | undefined,
+                            t: (s: string) => string): string {
+  return n === null || n === undefined
+    ? t('hub jobs unknown')
+    : t('{n} hub jobs').replace('{n}', String(n))
 }

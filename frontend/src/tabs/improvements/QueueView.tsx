@@ -5,6 +5,10 @@
  * The order is the SERVER's (`GET /improvements/queue` numbers every row from
  * 1) — this view never sorts. Both feeds poll through the shared hub, so the
  * queue and its status head refresh together without two timers of their own.
+ *
+ * Every row carries its estimated HUB cost and the foot the total the open
+ * entries still owe, so what the idle engine is about to spend is on screen
+ * before it spends it.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
@@ -15,7 +19,7 @@ import { FilterChipRow } from '../../components/FilterChipRow'
 import { clockSettings, formatDateTime, formatTime,
   useClockSettings } from '../../lib/clockFormat'
 import { fetchQueue, fetchStatus, fetchTypes, saveSettings } from './api'
-import { STEP_STATUS_LABELS } from './types'
+import { STEP_STATUS_LABELS, hubJobsText, stepStatus } from './types'
 import type {
   EngineStatus, ImprovementType, QueueSnapshot, Settings,
 } from './types'
@@ -237,7 +241,9 @@ export function QueueView() {
       return t('Run now active')
     }
     switch (status.reason) {
-      case 'media_off': return t('Media generation off')
+      // CPU-only types (needs_media false) are not held by the media switch.
+      case 'media_off':
+        return `${t('Media generation off')} — ${t('CPU-only entries keep running')}`
       case 'disabled': return t('Engine off')
       case 'frozen': return t('World frozen')
       case 'paused': return t('Task queue paused')
@@ -325,6 +331,9 @@ export function QueueView() {
               <span className="ga-list-row-sub">
                 {row.candidate_label || row.candidate_key}
               </span>
+              <span className="ga-list-row-sub" title={row.note || ''}>
+                {hubJobsText(row.hub_jobs, t)}
+              </span>
             </span>
             <span className={row.status === 'running'
               ? 'ga-status-ok' : 'ga-status-paused'}>
@@ -337,6 +346,12 @@ export function QueueView() {
       <div className="ga-imp-foot">
         <span>{t('{n} steps pending').replace('{n}',
           String(status.pending_total))}</span>
+        <span>
+          {status.pending_hub_jobs === null
+            ? t('hub jobs unknown')
+            : t('≈ {n} hub jobs').replace('{n}',
+              String(status.pending_hub_jobs))}
+        </span>
         {estimateHours
           ? <span>{t('~{h} h estimated').replace('{h}', estimateHours)}</span>
           : null}
@@ -360,7 +375,7 @@ export function QueueView() {
                 </span>
                 <span className={row.status === 'done'
                   ? 'ga-status-ok' : 'ga-status-paused'}>
-                  {statusLabel(row.status)} {clockDateTime(row.finished_at)}
+                  {statusLabel(stepStatus(row))} {clockDateTime(row.finished_at)}
                 </span>
               </li>
             ))}

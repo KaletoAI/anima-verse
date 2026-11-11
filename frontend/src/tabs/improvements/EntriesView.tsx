@@ -218,6 +218,15 @@ export function EntriesView() {
                   {entry.failed
                     ? ` · ${entry.failed} ${statusLabel('failed')}` : ''}
                 </span>
+                {entry.pending ? (
+                  <span className="ga-imp-cost"
+                    title={t('Estimated hub jobs of the pending steps, first attempts only')}>
+                    {entry.pending_hub_jobs === null
+                      ? t('Hub jobs pending: unknown')
+                      : t('≈ {n} hub jobs pending').replace('{n}',
+                        String(entry.pending_hub_jobs))}
+                  </span>
+                ) : null}
                 <span className="ga-list-row-sub">
                   {t('Last scan')} {clockTime(entry.last_scan_at) || t('Never')}
                 </span>

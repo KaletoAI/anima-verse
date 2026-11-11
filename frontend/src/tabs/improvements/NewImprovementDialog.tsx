@@ -11,7 +11,10 @@ import { isGeneratorBackend } from '../../lib/imageBackends'
  * Before creating, "Preview candidates" asks the server what the entry would
  * actually work on. An entry whose parameters match nothing is the expensive
  * mistake here (it looks fine and does nothing), so the count is one click
- * away rather than a surprise after the first scan.
+ * away rather than a surprise after the first scan. The preview also carries
+ * the HUB cost (first attempts, summed over every candidate, plus how many
+ * could not be estimated) — what the entry will spend is decided here, before
+ * anything starts.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -20,6 +23,7 @@ import { useToast } from '../../lib/Toast'
 import { apiGet } from '../../lib/api'
 import { Field } from '@anima/player-ui'
 import { createImprovement, previewImprovement } from './api'
+import { hubJobsText } from './types'
 import type { ImprovementType, ParamField, PreviewResult } from './types'
 
 /** The bits of GET /world/imagegen-options this dialog needs. */
@@ -325,12 +329,26 @@ export function NewImprovementDialog({
                         {t('{n} candidates').replace('{n}',
                           String(preview.count))}
                       </div>
+                      {preview.count ? (
+                        <div className="ga-form-hint">
+                          {t('≈ {n} hub jobs').replace('{n}',
+                            String(preview.hub_jobs))}
+                          {preview.unknown
+                            ? ` ${t('+ {m} unknown').replace('{m}',
+                              String(preview.unknown))}`
+                            : ''}
+                        </div>
+                      ) : null}
                       {preview.sample.length ? (
                         <ul className="ga-imp-preview-list">
                           {/* Candidate labels are not unique (two characters
                               may share a name) — the position is. */}
                           {preview.sample.map((s, i) => (
-                            <li key={`${i}:${s}`}>{s}</li>
+                            <li key={`${i}:${s.label}`}>
+                              {s.label}
+                              {' · '}{hubJobsText(s.hub_jobs, t)}
+                              {s.note ? ` · ${s.note}` : ''}
+                            </li>
                           ))}
                         </ul>
                       ) : null}

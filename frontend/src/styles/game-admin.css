@@ -2885,6 +2885,34 @@ a.ga-btn {
   color: var(--danger, #f85149);
 }
 
+/* The hub cost of an entry's pending steps — a chip, so it reads as a total
+   apart from the step counters beside it. */
+.ga-imp-cost {
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 6px;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 999px;
+  color: var(--text-muted, #8b949e);
+  white-space: nowrap;
+}
+
+/* What a step's estimate counts — under the error, muted, wrapping. */
+.ga-imp-steps-note {
+  color: var(--text-muted, #8b949e);
+  white-space: normal;
+}
+
+/* Why a refused step has no working Retry — visible text, since a disabled
+   button shows no tooltip in every browser. */
+.ga-imp-refused-hint {
+  display: block;
+  min-width: 200px;
+  margin-top: 2px;
+  white-space: normal;
+  color: var(--text-muted, #8b949e);
+}
+
 /* Drag handle of .ga-list rows inside a SortableList. */
 .ga-sortable-handle {
   cursor: grab;
