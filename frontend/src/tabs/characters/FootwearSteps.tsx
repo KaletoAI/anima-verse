@@ -103,6 +103,7 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'deep_outside', label: 'Foot outside the shoe (cut)', scale: 100, unit: '%', digits: 2 },
   { key: 'visible_poke', label: 'Foot poking through (cut)', scale: 100, unit: '%', digits: 2 },
   { key: 'throat_ledge_p95_mm', label: 'Throat ledge (cut)', scale: 1, unit: 'mm', digits: 1 },
+  { key: 'toe_conform_m', label: 'Toe conform (cut)', scale: 1000, unit: 'mm', digits: 1 },
 ]
 
 const FIT_STATUS_TEXT: Record<FootwearFitRow['status'], string> = {
