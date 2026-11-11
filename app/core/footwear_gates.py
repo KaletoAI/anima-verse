@@ -22,7 +22,12 @@ import numpy as np
 #: Derby, ``item_6cc8e8ae`` — read 2.448 / 2.430 (two deliveries, length 864 / 853 px over height 353 / 351),
 #: a men's flat is long and low; the 3/4-view item image itself reads 2.102. A 3.0 rectangle still refuses.
 #: The lower bound 1.1 -> 0.5 in P2 of the boots round (spec 2026-11-11 § 6.1): a knee boot's side view reads
-#: about 0.7; the leg rule and ``single_share`` keep refusing a leg or a pair).
+#: about 0.7; the leg rule and ``single_share`` keep refusing a leg or a pair). P2 numbers (boots round,
+#: 2026-11-11, Qwen side-view edits of two 3/4-view item images, each accepted at the first attempt): Leather
+#: Boots (``item_946db709``, a Chelsea ankle boot) single_share 1.0, aspect 1.193, iou_below_topline 0.961, no
+#: leg; Work Shoes (``item_fede24fa``, the item image a PAIR in 3/4 view) single_share 1.0 — the edit drew one
+#: boot — aspect 1.455, iou_below_topline 0.877 (the lowest accepted real value so far, 0.027 over the bound),
+#: no leg.
 EMPTY_GATES: Dict[str, Tuple[str, Any, str]] = {
     "single_share": ("min", 0.98, "area share of the largest matte component"),
     "aspect": ("range", (0.5, 2.6), "side-view length / height of the shoe"),

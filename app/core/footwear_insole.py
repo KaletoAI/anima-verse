@@ -90,6 +90,21 @@ port on the spike's raw mesh (93k tris, 0.4 s): profile within 0.6 mm of the Ble
 cover 0.918, nominal heel seat 9.62 cm, ball 1.37 cm, heel rise 8.25 cm, pitch 33.84 deg (the spike's
 own profile gives 33.81 / 9.63 by these definitions), shank -35.7 deg, vamp cover 0.613, cavity end
 0.222 m (spike 0.217 with the foot's 1.63 cm toes), shaft (max lower topline) 14.0 cm, opening share 0.915.
+
+Boots round P2 (2026-11-11, the clone, UniForge3D-Multiview meshes of Qwen side-view edits of two 3/4-view item
+images; nominal values at 26 cm): **Leather Boots** (``item_946db709``, a Chelsea ankle boot) — insole cover 0.932,
+vamp 0.970, opening 0.996, pitch 14.6 deg, heel seat 3.58 cm, rise 3.37 cm; shaft ``ankle``, collar 13.97 cm,
+``top_raw`` 19.11 cm, closed share 1.0 (26 of 27 slabs), cap 46 faces. **Work Shoes** (``item_fede24fa``, a laced
+work boot) — insole cover 0.941, vamp 0.836, opening 0.954, pitch 5.4 deg, heel seat 3.54 cm, rise 1.23 cm; shaft
+``ankle``, collar 10.28 cm, ``top_raw`` 15.87 cm, closed share 1.0 (21 of 22), cap 6 faces. Both pass, but the
+four-quadrant ``closed`` test reads non-tube rings as closed on both (the cut points' largest angular gap about the
+bbox centre, measured per slab): on the Work Shoes the 8 top "closed" slabs (14.05–15.87 cm) are the TONGUE above
+the padded collar — a U open at the back, largest gap 114–154 deg, extent 0.7–6.8 cm × 2.0–6.2 cm against the
+tube's 11 × 7 cm below, where the gap is 4.6–10.7 deg; on the Leather Boots the 4 top ones (18.33–19.11 cm) are
+the PULL TAB's own small loop (1.2–1.4 × 1.5 cm, gap 54–72 deg) and two at the collar edge read 132 / 135 deg.
+So ``top_raw`` sits on the tongue / the tab, 2.1 / 1.6 cm above the real collar ring (13.79 / 17.55 cm), and the
+cap band is measured from there. A tube test (gap < 90 deg and an extent of the same order as the slabs below)
+would keep both closed shares at 1.0 and put ``top_raw`` on the collar.
 """
 import math
 from dataclasses import dataclass

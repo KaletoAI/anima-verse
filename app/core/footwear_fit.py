@@ -201,6 +201,16 @@ SHAFT_GATES: Dict[str, Tuple[str, Any]] = {
     "seam_stretch_max": ("max", 1.5),
     "shaft_leg_follow_deg": ("max", 1.0),
 }
+#: P2 numbers (boots round, 2026-11-11, the clone): Work Shoes on Kai (``base634402e5``) ACCEPTED — split 14.6 cm,
+#: collar 28 / 29 mm above the ankle, push p95 8.3 mm / max 17.6 mm, inside 0, seam gap 0, stretch 50 / 58 (recorded),
+#: follow 0.0 deg but VACUOUS: the collar ends 2.8 cm above the split, the ring above ``SHAFT_RING_ABOVE_M`` is empty
+#: (``ring_vertices`` 0); the same Leg-turn measure over the shaft's upper half reads 13.4–13.8 deg because the shaft
+#: carries the body's own Foot share there (0.47 at +2 cm, 0.21 at +4 cm, 0.14 at +5 cm above the ankle — the clothing
+#: transfer copies the skin, whose Foot share is still 0.07 at +7 cm and 0.05 at +8 cm). Leather Boots on Kira
+#: (``base20d5701a``) REFUSED: slim_needed 0.256 (width needed ×1.48 / ×1.43, insole ball width 66 mm against the
+#: foot's 98 / 93 mm, toe room −19 / −22 mm), push p95 22.8 mm, follow 5.9 / 7.2 deg (ring 205 / 106 vertices at
+#: +6 cm), stretch 39 / 20 (recorded). Without the Foot column in the shaft weights (an offline experiment; spec § 6.3:
+#: no vertex above the band carries Foot + ToeBase > 0.05) the follow reads 0.0 on Kira's ring and the stretch 90 / 76.
 SHAFT_GATING: Dict[str, bool] = {
     "shaft_push_p95_m": True, "shaft_push_max_m": True, "shaft_inside_share": True,
     "seam_gap_p95_mm": True, "seam_stretch_max": False, "shaft_leg_follow_deg": True,
