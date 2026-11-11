@@ -54,6 +54,16 @@ above ``TUCKED_POKE_MAX`` (1 %) the pair cannot be tucked (nor in reality: there
 (the Wardrobe warning ``outfit_options.TOO_WIDE_WARNING``). The record's ``hem`` = ``{mode, built, plane_m,
 tucked_poke, fallback, boot, shaft_sha}``; ``plan`` returns it per entry (``hem``) and the assembly's ``_state``
 carries ``{mode, lsig, fallback}``, so a toggle rebuilds the served model.
+
+Real material (boots plan Task 13, 2026-11-11, offline, 0 hub jobs): Kai's Work Shoes fit (``FOOTWEAR_FIT_VERSION``
+8) with a STAND-IN trouser mesh — per leg a welded tube from bind y 0.08 to 0.70 following the leg's own section
+(16 angular bins of the skin radius + a clearance), weighted by ``clothing_weights``; the real trousers' chain was
+refused at the ghost back step. ``top_m`` 0.1968 (the pull tab, see ``footwear_cut``), ``plane_m`` 0.1668.
+``over``: clearance 25 mm (mean radius 64 mm at y 0.17) → ``gap_min_m`` **+10.4 mm**, p1 11.8 mm, 2099 vertices
+moved, max 61 mm; clearance 3 mm (42 mm) → ``gap_min_m`` **−15.3 mm** with p1 +9.5 mm (a few vertices stay inside
+the shaft). ``tucked``: 3 mm → ``tucked_poke`` 0.405 (259 / 640), 25 mm → 0.998 — both fall back ``too_wide``.
+The plane lies at the collar's own height, so even a leg-tight tube pokes: on an ankle shoe whose collar ends at
+the band the fallback is right, its word ("too wide") is not.
 """
 import hashlib
 import json

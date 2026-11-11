@@ -98,6 +98,19 @@ weight whose cut-frame height lies in [``y_split + band``, the shaft part's top]
 1e-9) — the share in the voxel exterior; ≤ 0.5 %. The other leg carries none of this side's Leg weight and the
 shin above the shaft top is above the lid. With no shin vertex in the range the value is None and the gate is not
 judged (``POKE_OPTIONAL``, never a vacuous 0 — P2 Ruling 8b).
+Real material (boots plan Task 13, 2026-11-11, offline on a copy of the clone, 0 hub jobs): Kai's base
+(``base634402e5``) in the Work Shoes (``item_fede24fa``, insole v5 ``class`` ankle, ``collar_h_raw`` 0.417 vs
+``top_raw`` 0.560 vs ``vamp_top_raw`` 0.421), refitted at ``FOOTWEAR_FIT_VERSION`` 8 / ``CUT_VERSION`` 3:
+``shaft_poke`` **0.708 / 0.686** (L / R; 155 of 219 and 133 of 194 shin vertices) — REFUSED, although the fit
+gates hold (``shaft_inside_share`` 0, follow 0.00°, push p95 7.8 mm). The shin is not through the wall (6–26 mm
+from the shaft surface, p5–p95): the range's top is the shaft part's HIGHEST vertex, here the back pull tab
+(bind 0.193 / 0.197 m), while the closed collar ring ends near 0.17 m — above it the section is the heel
+counter alone and every shin vertex there reads exterior. Disabling the lid's throat skip changes nothing.
+Open: read the range's top at the collar (the insole's ``collar_h``), not at the tab. The same fit assembled with
+the stand-in trousers (four boot nodes, ``scripts/check_footwear.mjs --bare``): seam gap 0.0000 mm and leg follow
+0.00° in still / idle / walk / sit, ``open_loops_above_split`` 0, penetration 1.6–1.7 % per side (round 1: 2.7–3.6),
+walk strike 1.6–3.7 / off −1.1–1.6 mm, seat floor 3.1–7.4 mm, thigh in shaft 0 % — and ``shaft_poke`` 76–85 %, the
+same pull-tab reading.
 
 **Calibration (P3 acceptance, Task 21, 2026-11-11) — REAL material.** Kira's base body (``base20d5701a``) in the
 Business Heels (UniForge mesh of the Qwen side-view empty shoe, 98 507 → 57 527 tris at ``TARGET_TRIS`` 60 000, width
