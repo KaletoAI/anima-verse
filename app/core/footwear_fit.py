@@ -7,14 +7,25 @@ Blender. Every length is in the body's bind space (metres, Y up); the shoe comes
 coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``: ``x`` heel -> toe,
 ``height`` up, ``z`` = x × up, i.e. to the shoe's right).
 
-1. **Foot on the MESH** (``measure_feet``): the vertices weighted > ``FOOT_WEIGHT_MIN`` to a side's
-   Foot + ToeBase. The foot axis ``forward`` = the horizontal direction Foot head -> ToeBase head (the
-   ToeBase tail is not in a GLB; the spike's tail sat 7 cm beyond the toes anyway). Length = the extent
-   along it; plantar vertices = normal up component < ``PLANTAR_NORMAL_MAX`` within ``PLANTAR_BAND_M``
-   of the floor (the body's lowest vertex); heel contact = the mean of the plantar vertices in the rear
-   ``HEEL_BAND_M`` (height = their lowest), ball contact = the plantar vertices within ``BALL_BAND_M``
-   of the ToeBase head along the axis; toe height = the height range of the vertices within
-   ``TOE_BAND_M`` of the toe tip; rest pitch = the slope heel contact -> ball contact along the axis.
+1. **Foot on the MESH** (``measure_feet``, fit version 5 — the rule of the boots spec
+   ``docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md`` § 13.1): the vertices weighted >
+   ``FOOT_WEIGHT_MIN`` to a side's Foot + ToeBase **and below the Foot joint's height** — the auto-weighted
+   shins of the generated male bodies carry Foot weight up the leg (spec § 5 F2: 87–157 vertices above the
+   ankle, the rearmost "foot" vertex 8 cm behind the ankle on Kai), and a heel band anchored there held
+   nothing. The foot axis ``forward`` = the horizontal direction Foot head -> ToeBase head (the ToeBase tail
+   is not in a GLB; the spike's tail sat 7 cm beyond the toes anyway). Length = the extent along it.
+   Down-facing = normal up component < ``PLANTAR_NORMAL_MAX``. **Each contact band is read against its OWN
+   lowest point**, never against the body's floor: heel contact = the down-facing vertices of the rear
+   ``HEEL_BAND_M`` within ``CONTACT_BAND_H_M`` of the lowest of them (mean, height = their lowest), ball
+   contact the same among the down-facing vertices within ``BALL_BAND_M`` of the ToeBase head along the
+   axis. (Round 1 took the plantar vertices within ``PLANTAR_BAND_M`` of the floor — spec § 5 F1: the
+   generated male bodies stand on the forefoot in the bind pose, the heel's underside 3.9–5.3 cm up, and
+   no shoe could be measured on them.) ``plantar`` — the arch-gap diagnostic only — = the down-facing
+   vertices within ``PLANTAR_BAND_M`` of the lower of the two contacts. Toe height = the height range of
+   the vertices within ``TOE_BAND_M`` of the toe tip; rest pitch = the slope heel contact -> ball contact
+   along the axis — POSITIVE for a heel-up bind pose, and the extension of step 3 (chord minus rest
+   pitch) and the lift of step 5 are then legally NEGATIVE: a flat insole dorsiflexes such a foot and the
+   root descends (spec § 13.2; Kai −3.7° / −5.8 mm, Rosi −12.4° / −20.8 mm on the synthetic Oxford).
 2. **Scale** (one per pair): k = (the longer foot + ``ALLOW_M``) / the insole arc from the heel end to
    the cavity end, where the cavity end is recomputed at the real scale: the last profile station whose
    insole-to-roof gap (``insole["cavity"]`` x k) holds the taller toes; an unroofed station counts as
@@ -67,6 +78,25 @@ number; floor contact under clips is the renderer's shared ground measure, ``pac
 The record's ``insole`` block also carries ``wall_top_raw`` — the shoe's wall top per station (raw units; the
 lower of the two sides' top edges, every point farther than ``WALL_SIDE_M`` from the midline counted) — which
 ``footwear_cut.cut_description`` turns into the cut's cap; insole.json keeps only the analysis' topline.
+
+**Calibration of the step-1 rule (fit version 5, 2026-11-11) — REAL material, offline, no hub.** Measured with
+this module on read-only copies of the base bodies (mm above the body's lowest vertex; L / R). Kira
+``base20d5701a`` (the clone body the round-1 heels were accepted on; ankle 111 / 107 mm): ``measure_feet`` reads
+foot length 241.8 / 255.7, ``ball_width_m`` 91.4 / 99.7, rest pitch 7.22° / 9.96° (the shipped round-1 rule,
+ad341e95: 91.4 / 99.7 and 7.31° / 10.28°), the heel's underside 23.2 / 27.2 mm up, ``d_heel_m`` 20.6 / 30.0
+(23.4 / 34.3). The WHOLE ``fit_pair`` of the Business Heels source (``item_68c4d249/df44e2fa4177``) on her,
+new vs shipped: k 0.227580 both, extension 28.705° / 23.858° vs 28.860° / 23.783° (−0.16° / +0.07°), lift
+46.08 / 47.01 mm vs 46.19 / 46.97 (−0.11 / +0.04 mm), root lift 47.01 vs 46.97 (+0.04 mm), ball placement
+0.000 both, ``stand_floor`` 0.0 both, boot −52.8 vs −52.7; the fit's ``foot_w_ball_mm`` (the foot's width in the
+shoe frame at the solved ball) 90.8 / 99.9 vs 93.0 / 101.0 — the tighter ball band (within ``CONTACT_BAND_H_M``
+of its lowest vertex instead of everything under 3 cm) moves the solved ball 6 mm back on the left — so
+``slim_needed`` 0.107 vs 0.151 (limit 0.18), every gate passing in both. Kira's heels therefore refit on the CPU
+(``garment_refit``) to the same shoe within 0.2° / 0.2 mm; the width at the ball is 2.2 / 1.0 mm narrower, the
+cut's slimming share smaller. Kai ``base634402e5`` (ankle 136 / 139 mm): foot length 291.3 / 292.7, ball
+107.2 / 109.0, rest pitch 9.99° / 10.41°, heel 38.7 / 42.6 mm up — the shipped rule raised "no plantar heel or
+ball vertices" on him (spec § 5 F1; his heel's underside is above ``PLANTAR_BAND_M``). Rosi ``baseed6cab12``
+(no offline copy; spec § 5, measured there with the same rule): 245 / 246 mm, 14.3° / 18.1°, 53 mm up. The
+synthetic numbers are in ``scripts/smoke_footwear_fit.py`` [F9]–[F12].
 """
 import math
 from dataclasses import dataclass, field
@@ -79,7 +109,7 @@ from app.core.footwear_gates import check_gates
 
 #: Bumped when the fit changes what it produces (part of the footwear fsig and
 #: ``garment_fit.FIT_VERSION["footwear"]``).
-FOOTWEAR_FIT_VERSION = 4   # 4: the cut's toe conform (footwear_cut CUT_VERSION 2) — the cut is part of the fit
+FOOTWEAR_FIT_VERSION = 5   # 5: the foot below the ankle, each contact band against its own lowest point (step 1)
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -107,15 +137,17 @@ GATE_LABELS = {
     "boot": "mm the topline stands above the shod ankle + the boot margin",
 }
 
-#: Foot vertices: Foot + ToeBase weight above this.
+#: Foot vertices: Foot + ToeBase weight above this (and below the Foot joint's height).
 FOOT_WEIGHT_MIN = 0.5
-#: Plantar vertices: normal up component below this ...
+#: Down-facing vertices: normal up component below this.
 PLANTAR_NORMAL_MAX = -0.4
-#: ... within this height above the floor (metres).
+#: A contact band's vertices: the down-facing vertices within this height (metres) of the band's lowest one.
+CONTACT_BAND_H_M = 0.01
+#: The arch diagnostic's plantar set: the down-facing vertices within this height (metres) of the lower contact.
 PLANTAR_BAND_M = 0.03
-#: Heel contact: the plantar vertices this far in front of the heel back (metres).
+#: Heel contact: the down-facing vertices this far in front of the heel back (metres).
 HEEL_BAND_M = 0.045
-#: Ball contact: the plantar vertices within this of the ToeBase head along the foot axis (metres).
+#: Ball contact: the down-facing vertices within this of the ToeBase head along the foot axis (metres).
 BALL_BAND_M = 0.012
 #: Toe height: the vertices within this of the toe tip (metres).
 TOE_BAND_M = 0.006
@@ -159,8 +191,8 @@ class FootMeasure:
     rest_pitch_deg: float        # slope heel contact -> ball contact along the axis (heel higher = positive)
     ankle: np.ndarray            # the Foot joint (head)
     ball_joint: np.ndarray       # the ToeBase joint (head)
-    plantar: np.ndarray          # vertex ids of the plantar vertices
-    vertex_ids: np.ndarray       # vertex ids of the foot (Foot + ToeBase weight > FOOT_WEIGHT_MIN)
+    plantar: np.ndarray          # vertex ids of the plantar vertices (the arch diagnostic's set)
+    vertex_ids: np.ndarray       # vertex ids of the foot (Foot + ToeBase weight > FOOT_WEIGHT_MIN, below the ankle)
     heel_contact: np.ndarray = field(default_factory=lambda: np.zeros(3))
     ball_contact: np.ndarray = field(default_factory=lambda: np.zeros(3))
     forward: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0]))
@@ -169,7 +201,7 @@ class FootMeasure:
     toe_joint: str = ""
     foot_index: int = -1         # skin indices
     toe_index: int = -1
-    # vertex ids behind the two contacts: the plantar heel band and ball band (``measure_feet``)
+    # vertex ids behind the two contacts: the down-facing heel band and ball band (``measure_feet``)
     heel_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
     ball_ids: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
 
@@ -276,13 +308,20 @@ def _skin_index(body: glb_mesh.BodyMesh, key: str) -> int:
     raise ValueError(f"The body has no joint '{key}'")
 
 
+def _contact_band(P: np.ndarray, band: np.ndarray) -> np.ndarray:
+    """The contact vertices of a down-facing band: those within ``CONTACT_BAND_H_M`` of the band's lowest one
+    (module docstring, step 1). Empty for an empty band."""
+    if not len(band):
+        return band
+    return band[P[band, 1] < float(P[band, 1].min()) + CONTACT_BAND_H_M]
+
+
 def measure_feet(body: glb_mesh.BodyMesh, joints: Dict[str, np.ndarray]) -> Dict[str, FootMeasure]:
     """Both feet measured on the MESH (module docstring, step 1); ``joints`` = ``glb_mesh.joint_bind_matrices``.
     ValueError when a side lacks its Foot / ToeBase joint or its heel / ball contact vertices."""
     P = np.asarray(body.positions, np.float64)
     F = np.asarray(body.faces, np.int64)
     N = _vertex_normals(P, F)
-    floor = float(P[:, 1].min())
     out: Dict[str, FootMeasure] = {}
     for side in SIDES:
         cap = side.capitalize()
@@ -295,22 +334,25 @@ def measure_feet(body: glb_mesh.BodyMesh, joints: Dict[str, np.ndarray]) -> Dict
         fwd = _unit(np.array([b[0] - a[0], 0.0, b[2] - a[2]]))
         lat = np.cross(fwd, _UP)
         wf = _joint_weight(body, fi) + _joint_weight(body, ti)
-        idx = np.nonzero(wf > FOOT_WEIGHT_MIN)[0]
+        # the foot = Foot/ToeBase-weighted AND below the ankle: the auto-weighted shins carry Foot weight
+        idx = np.nonzero((wf > FOOT_WEIGHT_MIN) & (P[:, 1] < a[1]))[0]
         if len(idx) < 8:
-            raise ValueError(f"The {side} foot has no skinned vertices")
+            raise ValueError(f"The {side} foot has no skinned vertices below the ankle")
         sc = (P[idx] - a) @ fwd
         smin, smax = float(sc.min()), float(sc.max())
-        plantar = idx[(N[idx, 1] < PLANTAR_NORMAL_MAX) & (P[idx, 1] < floor + PLANTAR_BAND_M)]
-        ps = (P[plantar] - a) @ fwd
-        hsel = plantar[ps < smin + HEEL_BAND_M]
+        down = idx[N[idx, 1] < PLANTAR_NORMAL_MAX]
+        ds = (P[down] - a) @ fwd
         bs = float((b - a) @ fwd)
-        bsel = plantar[np.abs(ps - bs) < BALL_BAND_M]
+        # each contact band against its OWN lowest point (a heel-up bind pose stands the heel off the floor)
+        hsel = _contact_band(P, down[ds < smin + HEEL_BAND_M])
+        bsel = _contact_band(P, down[np.abs(ds - bs) < BALL_BAND_M])
         if not len(hsel) or not len(bsel):
-            raise ValueError(f"The {side} foot has no plantar heel or ball vertices")
+            raise ValueError(f"The {side} foot has no down-facing heel or ball vertices")
         H = P[hsel].mean(0)
         H[1] = P[hsel, 1].min()
         B = P[bsel].mean(0)
         B[1] = P[bsel, 1].min()
+        plantar = down[P[down, 1] < min(float(H[1]), float(B[1])) + PLANTAR_BAND_M]
         tsel = idx[sc > smax - TOE_BAND_M]
         near_ball = idx[np.abs(sc - bs) < BALL_WIDTH_BAND_M]
         lw = (P[near_ball] - a) @ lat

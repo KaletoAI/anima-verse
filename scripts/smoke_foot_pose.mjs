@@ -124,6 +124,16 @@
  *     r(0.015) = 0.015 (C¹ at both ends), r(0.03) = 0.03. A contact 0.10
  *     ABOVE the floor (floor y = −0.14, a crossed leg): d = −0.10 → r = 0,
  *     the knee does not move, {0, 0}. null fp → {0, 0}, nothing moves.
+ * [N1] A NEGATIVE turn and a NEGATIVE lift pass through unchanged (boots plan
+ *     Task 1, spec 2026-11-11 § 13.2: a flat shoe dorsiflexes a foot whose
+ *     bind pose stands heel-up and the root goes DOWN). The chain of [1] with
+ *     fp bones {LeftFoot {axis [1,0,0], deg −10}}, root_lift_m −0.0136:
+ *       applyFootPose + mixer frame 0 → ball rel (0, −0.06, 0.13) turned −10°:
+ *       y = 0.08 − 0.06·cos10° + 0.13·sin10° = 0.08 − 0.0590885 + 0.0225738
+ *         = 0.0434853,
+ *       z = −0.06·sin(−10°) + 0.13·cos10° = 0.0104189 + 0.1280250 = 0.1384439
+ *       → (0, 0.043486, 0.138444) (±1e-6); applyFootPoseToPose the same;
+ *     footPoseLiftM(fp, 'ground') = −0.0136 (signed, no clamp), 'seat' → 0.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -437,6 +447,19 @@ async function main() {
   const r3 = seatFootLift(THREE, bare.root, null, 0)
   bare.root.updateMatrixWorld(true)
   check('null fp → {0, 0}, nothing moves', r3.left === 0 && r3.right === 0 && nearV(worldOf(bare.lo), [0, 0.45, 0.45], 1e-12))
+
+  console.log('--- [N1] a negative turn and a negative lift ---')
+  const fpNeg = { ...fp, bones: { 'mixamorig:LeftFoot': { axis: [1, 0, 0], deg: -10 } }, root_lift_m: -0.0136 }
+  const figN = chain()
+  play(figN, applyFootPose(THREE, clip, fpNeg))
+  const ballN = worldOf(figN.toe)
+  check('−10° → ball world = (0, 0.043486, 0.138444)', nearV(ballN, [0, 0.043486, 0.138444]), fmt(ballN))
+  const figN2 = chain()
+  applyFootPoseToPose(THREE, figN2.root, fpNeg)
+  figN2.root.updateMatrixWorld(true)
+  check('still pose the same', nearV(worldOf(figN2.toe), [0, 0.043486, 0.138444]), fmt(worldOf(figN2.toe)))
+  check("ground → −0.0136 (signed)", near(footPoseLiftM(fpNeg, 'ground'), -0.0136, 1e-12), String(footPoseLiftM(fpNeg, 'ground')))
+  check("seat → 0", footPoseLiftM(fpNeg, 'seat') === 0)
 
   if (failures.length) {
     console.log(`\nFAIL: ${failures.length} check(s) failed`)

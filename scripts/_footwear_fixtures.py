@@ -153,6 +153,15 @@ def clog():
 # each face its own welded grid (x every 0.01, z in 4 columns, y one row) so every vertex normal is its face's:
 # x <= 0.13 weighted 100 % Foot, x > 0.13 100 % ToeBase; plus a leg column x in [-0.03, 0.03], z in zc +- 0.03,
 # y in [0.10, 0.45] weighted 100 % Leg. Joint names without a prefix ("LeftFoot").
+#
+# Two knobs make the heel-up male bodies of the boots plan (spec 2026-11-11 § 5, F1 / F2):
+# ``heel_up`` raises the rear of the foot box (every face of it, so the box stays FOOT_H thick): the heel band
+# x <= HEEL_UP_FLAT_X (-0.02) by the full ``heel_up``, then linearly down to 0 at x = HEEL_UP_TO (0.03); the
+# forefoot x >= 0.03 stays on y = 0. The plateau under the heel band is what gives the heel contact one height
+# (the rule reads the lowest down-facing vertex of the rear 0.045 and everything within 0.01 of it) and the
+# ramp's 38.7 deg keeps the sole down-facing (normal up -0.78 < -0.4).
+# ``shin_foot_weight`` gives the leg column's vertices that share of Foot weight (the rest Leg), as the
+# auto-weighted male shins carry it: with it > FOOT_WEIGHT_MIN the shipped rule counted the shin as foot.
 FOOT_H = 0.02
 FOOT_ZC = {"Left": -0.10, "Right": 0.10}
 FOOT_JOINTS = {"Hips": (0.0, 0.90, 0.0)}
@@ -182,15 +191,33 @@ def _grid(P, F, J, origin, u, v, nu, nv, facing, joint_of):
                 F.append((t[0], t[2], t[1]) if flip else t)
 
 
-def foot_body(ball_width: float = 0.085):
-    """``(positions, faces, joint index per vertex, joint names)`` of the synthetic feet (block above)."""
+HEEL_UP_FLAT_X = -0.02
+HEEL_UP_TO = 0.03
+
+
+def heel_raise(x: float, heel_up: float) -> float:
+    """The ``heel_up`` raise of the foot box at ``x`` (block above): ``heel_up`` behind HEEL_UP_FLAT_X, a linear
+    ramp to 0 at HEEL_UP_TO, 0 in front of it."""
+    if heel_up <= 0.0 or x >= HEEL_UP_TO - 1e-9:
+        return 0.0
+    if x <= HEEL_UP_FLAT_X + 1e-9:
+        return heel_up
+    return heel_up * (HEEL_UP_TO - x) / (HEEL_UP_TO - HEEL_UP_FLAT_X)
+
+
+def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0):
+    """``(positions, faces, joints (N, 2), weights (N, 2), joint names)`` of the synthetic feet (block above):
+    every vertex has two joint slots, the second one unused (joint 0, weight 0) except on the leg column with a
+    ``shin_foot_weight`` > 0 (Foot ``shin_foot_weight`` / Leg the rest) — the default body's GLB bytes are the
+    round-1 fixture's."""
     names = list(_FOOT_PARENT)
     P, F, J = [], [], []
     for side, zc in FOOT_ZC.items():
         fi, ti, li = names.index(f"{side}Foot"), names.index(f"{side}ToeBase"), names.index(f"{side}Leg")
+        n_box = len(P)
 
         def foot_joint(p, fi=fi, ti=ti):
-            return fi if p[0] <= 0.13 + 1e-9 else ti
+            return (fi, 0, 1.0) if p[0] <= 0.13 + 1e-9 else (ti, 0, 1.0)
 
         x0, x1, z0, w = -0.06, 0.19, zc - ball_width / 2, ball_width
         nx = 25
@@ -201,7 +228,11 @@ def foot_body(ball_width: float = 0.085):
         _grid(P, F, J, (x0, 0, z0 + w), (dx, 0, 0), (0, FOOT_H, 0), nx, 1, (0, 0, 1), foot_joint)
         _grid(P, F, J, (x0, 0, z0), (0, 0, dz), (0, FOOT_H, 0), 4, 1, (-1, 0, 0), foot_joint)      # heel
         _grid(P, F, J, (x1, 0, z0), (0, 0, dz), (0, FOOT_H, 0), 4, 1, (1, 0, 0), foot_joint)       # toe
-        leg = lambda p, li=li: li                                                                   # noqa: E731
+        if heel_up > 0.0:
+            for p in P[n_box:]:
+                p[1] += heel_raise(float(p[0]), heel_up)
+        leg = (lambda p, fi=fi, li=li: (fi, li, float(shin_foot_weight))) if shin_foot_weight > 0.0 \
+            else (lambda p, li=li: (li, 0, 1.0))                                                    # noqa: E731
         lo = np.array([-0.03, 0.10, zc - 0.03])
         for axis_u, axis_v, n_axis in ((0, 2, 1), (0, 1, 2), (2, 1, 0)):
             for top in (False, True):
@@ -215,13 +246,15 @@ def foot_body(ball_width: float = 0.085):
                 facing = np.zeros(3)
                 facing[n_axis] = 1.0 if top else -1.0
                 _grid(P, F, J, o, u, v, 1, 1, facing, leg)
-    return np.asarray(P), np.asarray(F, np.int64), np.asarray(J, np.int64), names
+    ja = np.asarray([(a, b) for a, b, _ in J], np.int64)
+    wa = np.asarray([(w, 1.0 - w) for _, _, w in J], np.float64)
+    return np.asarray(P), np.asarray(F, np.int64), ja, wa, names
 
 
-def foot_body_glb(ball_width: float = 0.085) -> bytes:
+def foot_body_glb(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0) -> bytes:
     """The synthetic feet as a skinned GLB (skin 0 = the joints above, inverse bind matrices = -translation)."""
     from app.core.glb_mesh import pack_glb
-    pos, faces, jidx, names = foot_body(ball_width)
+    pos, faces, jidx, wgts, names = foot_body(ball_width, heel_up, shin_foot_weight)
     blob = bytearray()
     accessors, views = [], []
 
@@ -242,9 +275,9 @@ def foot_body_glb(ball_width: float = 0.085) -> bytes:
         return len(accessors) - 1
 
     jnt = np.zeros((len(pos), 4), "<u2")
-    jnt[:, 0] = jidx
+    jnt[:, :2] = jidx
     wgt = np.zeros((len(pos), 4), "<f4")
-    wgt[:, 0] = 1.0
+    wgt[:, :2] = wgts
     prim = {"attributes": {"POSITION": add(pos.astype("<f4"), 5126, "VEC3", 34962),
                            "JOINTS_0": add(jnt, 5123, "VEC4", 34962),
                            "WEIGHTS_0": add(wgt, 5126, "VEC4", 34962)},

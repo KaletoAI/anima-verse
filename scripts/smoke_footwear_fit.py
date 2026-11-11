@@ -17,17 +17,22 @@ The shoe: the Task 5 wedge pump (length 0.26, width 0.08, insole h(x) = 0.09 on 
 footwear_insole.analyse_arrays (frame = the wedge's own coordinates).
 
 Expected, by hand:
-[F0] constants: FOOTWEAR_FIT_VERSION 4 (the cut's toe conform), BALL_SOLVE_STEPS 8, BALL_SOLVE_TOL_RAD 1e-7, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
+[F0] constants: FOOTWEAR_FIT_VERSION 5 (the foot below the ankle, per-band contacts), BALL_SOLVE_STEPS 8, BALL_SOLVE_TOL_RAD 1e-7, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
      SLIM_MAX_SHARE 0.18, FIT_GATES verbatim; every gate refuses (gating True), there is no ACTIVE_IN_P2 any more
      (fit version 3, Task 15).
 [F9] joint_bind_matrices(glb) = inverse(inverseBindMatrix) per normalised joint name: the fixture's IBMs are
      the negated joint translations -> "leftfoot" = translation (0, 0.08, -0.10), "righttoebase" =
      (0.13, 0.01, 0.10), identity rotation. A GLB without a skin -> ValueError.
-     measure_feet: plantar = the sole grid (normal (0, -1, 0), y = 0 < 0.03). Foot axis = horizontal Foot ->
-     ToeBase = +x; extent x in [-0.06, 0.19] -> length 0.25; heel contact = the sole vertices with x <
-     -0.06 + 0.045 = -0.015, i.e. x in {-0.06 .. -0.02} -> mean -0.04 (height 0); d_heel = -0.04 - (-0.06)
-     = 0.02; ball contact = |x - 0.13| < 0.012 -> {0.12, 0.13, 0.14} -> 0.13; heel_ball = 0.17; rest pitch
-     0; toe height = the y range at x = 0.19 = 0.02; ball width 0.085.
+     measure_feet (fit version 5, the rule of spec 2026-11-11 § 13.1): the foot = the Foot + ToeBase-weighted
+     vertices BELOW the Foot joint's height 0.08 (the leg column at y >= 0.10 is out whatever it weighs);
+     down-facing = normal up < -0.4 = the sole grid (normal (0, -1, 0)). Foot axis = horizontal Foot ->
+     ToeBase = +x; extent x in [-0.06, 0.19] -> length 0.25; heel contact = the down-facing vertices of the
+     rear 0.045 (x < -0.06 + 0.045 = -0.015, i.e. x in {-0.06 .. -0.02}) within CONTACT_BAND_H_M 0.01 of
+     their lowest (y = 0: all of them) -> mean -0.04 (height 0); d_heel = -0.04 - (-0.06) = 0.02; ball
+     contact = the down-facing vertices with |x - 0.13| < 0.012 -> {0.12, 0.13, 0.14}, within 0.01 of their
+     lowest -> 0.13 (height 0); heel_ball = 0.17; rest pitch 0; toe height = the y range at x = 0.19 = 0.02;
+     ball width 0.085; plantar (the arch diagnostic) = the down-facing vertices within PLANTAR_BAND_M 0.03 of
+     the lower contact (0) = the whole sole grid.
 [F1] scale: the toes (0.02) fit under the roof (insole -> roof 0.03 raw x k ~ 0.0266) over [0.18, 0.26]; the
      unroofed stations in [0.156, 0.18] count as closed (front of 0.6 L) -> the cavity end is the last
      station, 0.26. Insole arc to it = 0.05 + sqrt(0.10^2 + 0.08^2) + 0.11 = 0.288062 ->
@@ -87,6 +92,44 @@ Expected, by hand:
      sits 0.02 behind the shoe's heel end -> toe room 0.23016 - 0.02 - 0.21871 = -8.55 mm (+-0.3; the box
      toes poke out: the rigid foot is straight where the insole arc is curved). placement_bind maps the
      source vertex (0, 0.09, 0.04) to its bind position in the Foot's bind frame (bind - the ankle).
+
+The heel-up foot (boots plan docs/superpowers/plans/2026-11-11-footwear-boots-mens.md Task 1; spec
+docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md § 5 F1-F3, § 13.1-13.2): ``foot_body_glb(heel_up=0.04,
+shin_foot_weight=0.6)`` — the foot box's heel band x <= -0.02 stands 0.04 up, a ramp runs down to y = 0 at x = 0.03,
+the forefoot is on the floor, and the leg column (x in [-0.03, 0.03], y in [0.10, 0.45]) carries Foot weight 0.6 >
+FOOT_WEIGHT_MIN like the auto-weighted male shins.
+[F10] On ad341e95 (the shipped rule) measure_feet raises "no plantar heel or ball vertices": the heel band's
+     underside at 0.04 lies above PLANTAR_BAND_M 0.03 over the floor (F1), and the Foot-weighted leg column counts
+     as foot (F2). The rule of fit version 5 measures it: the leg column (y >= 0.10 > the ankle 0.08) is excluded
+     -> the foot is the box, length_m 0.25 (+-1e-6), no foot vertex at or above y = 0.08; heel band = the
+     down-facing rows x in {-0.06 .. -0.02}, all at y = 0.04 = their lowest -> heel contact (-0.04, 0.04); ball
+     band rows {0.12, 0.13, 0.14} at y = 0 -> ball contact (0.13, 0); d_heel 0.02; heel_ball = hypot(0.17, 0.04)
+     = 0.174642; rest_pitch_deg = atan2(0.04, 0.17) = 13.24 (+-0.05); ball_width_m 0.085; toe height 0.02;
+     plantar = the down-facing vertices within 0.03 of the lower contact (0): the ramp rows with
+     0.04 (0.03 - x) / 0.05 < 0.03, i.e. x >= 0 (the row x = -0.01 sits at 0.032) -> x in {0.00 .. 0.19}.
+[F11] That foot in the closed flat clog (``clog()``: insole flat at 0.01 raw over [0.01, 0.26], roof 0.04 over
+     [0.1825, 0.26] -> cavity 0.03 k >= the toes 0.02 -> cavity end 0.26; the analysis' first profile station is
+     0.0108787 on its 240-station grid (smoke_footwear_fit_step.py), so the arc is 0.26 - 0.0108787 = 0.2491213 ->
+     k = (0.25 + 0.005) / 0.2491213 = 1.023599 (+-1e-5), insole height 0.01 k = 0.010236). The chord of a flat
+     insole is 0 -> the rigid start theta = 0 - 13.24 = -13.24 deg; the fixed point then levels the posed heel
+     with the LOWEST vertex of the skinned ball band (rows 0.12 / 0.13 on Foot, 0.14 on ToeBase; [F2]) — under a
+     toes-UP turn that is the rear row x = 0.12 (the box tilts heel-down about the ankle; the ToeBase row keeps
+     its orientation and rides on the posed ball joint, higher), so it converges on heel (-0.04, 0.04) level
+     with (0.12, 0): theta = -atan2(0.04, 0.16) = -14.036 deg (+-0.05) both sides (0.8 deg beyond the chord
+     minus rest pitch, the same 1-cm effect [F2] carries toe-down), toe turn +14.036 (the forepart is flat, slope
+     0), the toes level again. Lift by hand: the heel contact relative to the ankle is (-0.04, -0.04); the toes
+     turned UP by phi = 14.036 deg (sin 0.24254, cos 0.97014; a negative turn about the axis (0, 0, -1) = a
+     positive one about +z) gives y' = -0.04 sin - 0.04 cos = -0.048507 -> the posed heel stands at 0.08 -
+     0.048507 = 0.031493 (check: the row x = 0.12 at (0.12, -0.08) lands at 0.12 sin - 0.08 cos = -0.048507 too,
+     level); the shoe ground is one insole height lower, 0.021257 above the body floor (y = 0, the forefoot) ->
+     lift_m = 0 - 0.021257 = -0.02126 (+-0.3 mm) per side, root_lift_m -0.02126, lift_asymmetry_mm 0,
+     stand_floor_mm 0 (by construction: the clog's floor plate is the shoe ground), width needed 0.085 /
+     (0.08 x 1.023599 = 0.081888) = 1.0380 -> slim 0; the fit ok. foot_pose.root_lift_m carries the NEGATIVE
+     number (spec § 13.2: the root descends because the bare body stands on its forefoot).
+[F12] Regression: ``foot_body()`` (heel_up 0, the shins 100 % Leg) through [F1]-[F8] gives the SAME numbers as
+     before this task — the constants in this docstring (k 0.88522, extension 24.29, lift 0.05613, ...) are
+     unchanged, the version-5 rule changes nothing on a foot whose heel is on the floor; FOOTWEAR_FIT_VERSION 5,
+     CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03 (the arch diagnostic keeps it).
 """
 import math
 import sys
@@ -123,7 +166,7 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 4 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+    check(ff.FOOTWEAR_FIT_VERSION == 5 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
           and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
     check(ff.FIT_GATES == {"ball_placement_mm": ("max", 3.0), "lift_asymmetry_mm": ("max", 10.0),
@@ -253,6 +296,53 @@ def main() -> int:
     pb = np.asarray(rec["sides"]["left"]["placement_bind"], np.float64)
     local = ff._apply(pb, P[i])
     check(np.allclose(local, left.positions[i] - (0, 0.08, -0.10), atol=1e-6), "[F8] placement_bind -> Foot bind frame")
+
+    # [F10] the heel-up foot with Foot-weighted shins
+    hu = fx.foot_body_glb(heel_up=0.04, shin_foot_weight=0.6)
+    hb, hj = glb_mesh.body_arrays(hu), glb_mesh.joint_bind_matrices(hu)
+    Ph = np.asarray(hb.positions, np.float64)
+    try:
+        feet_hu = ff.measure_feet(hb, hj)
+    except ValueError as exc:
+        feet_hu = None
+        check(False, f"[F10] measure_feet on the heel-up foot raises: {exc}")
+    for side in ("left", "right") if feet_hu else ():
+        f = feet_hu[side]
+        zc = -0.10 if side == "left" else 0.10
+        check(near(f.length_m, 0.25, 1e-6) and float(Ph[f.vertex_ids, 1].max()) < 0.08
+              and np.allclose(f.heel_contact, (-0.04, 0.04, zc), atol=1e-6)
+              and np.allclose(f.ball_contact, (0.13, 0.0, zc), atol=1e-6) and near(f.d_heel_m, 0.02, 1e-6)
+              and near(f.heel_ball_m, 0.174642, 1e-6) and near(f.rest_pitch_deg, 13.24, 0.05)
+              and near(f.ball_width_m, 0.085, 1e-6) and near(f.toe_height_m, 0.02, 1e-6),
+              f"[F10] {side}: length {f.length_m:.5f}, heel {np.round(f.heel_contact, 4)}, ball {np.round(f.ball_contact, 4)}, "
+              f"d_heel {f.d_heel_m:.4f}, heel_ball {f.heel_ball_m:.6f}, rest {f.rest_pitch_deg:.3f}, width {f.ball_width_m:.4f}")
+        px = np.round((Ph[f.plantar] - f.ankle) @ f.forward, 6)
+        check(near(px.min(), 0.0, 1e-6) and near(px.max(), 0.19, 1e-6) and len(f.plantar) == 20 * 5,
+              f"[F10] {side}: plantar = the down-facing rows x in [{px.min():.2f}, {px.max():.2f}] ({len(f.plantar)} vertices)")
+
+    # [F11] the heel-up foot in the flat clog
+    if feet_hu:
+        Pc, Fc = fx.clog()
+        fit_hu = ff.fit_pair(footwear_insole.analyse_arrays(Pc, Fc), fx.shoe_garment(Pc, Fc), hb, hj)
+        rh = fit_hu.record
+        check(near(rh["scale"]["k_m_per_unit"], 1.023599, 1e-5), f"[F11] k {rh['scale']['k_m_per_unit']:.6f} = 0.255 / 0.2491213")
+        for side in ("left", "right"):
+            sd = rh["sides"][side]
+            check(near(sd["extension"]["deg"], -14.036, 0.05) and near(sd["toe_counter"]["deg"], 14.036, 0.05)
+                  and near(sd["lift_m"], -0.021257, 3e-4),
+                  f"[F11] {side}: extension {sd['extension']['deg']:.3f}, toe turn {sd['toe_counter']['deg']:.3f}, lift {sd['lift_m']:.6f}")
+        gh = rh["gates"]
+        check(near(rh["root_lift_m"], -0.021257, 3e-4) and near(gh["lift_asymmetry_mm"]["value"], 0.0, 1e-6)
+              and near(gh["stand_floor_mm"]["value"], 0.0, 0.01) and near(gh["slim_needed"]["value"], 0.0, 1e-9)
+              and near(rh["scale"]["width_needed"]["left"], 1.0380, 1e-3),
+              f"[F11] root lift {rh['root_lift_m']:.6f}, asymmetry {gh['lift_asymmetry_mm']['value']:.3f}, "
+              f"stand floor {gh['stand_floor_mm']['value']:.3f}, width needed {rh['scale']['width_needed']['left']:.4f}")
+        check(fit_hu.ok and fit_hu.reasons == [] and near(fit_hu.foot_pose["root_lift_m"], -0.021257, 3e-4),
+              f"[F11] ok {fit_hu.ok}, reasons {fit_hu.reasons}, foot_pose root lift {fit_hu.foot_pose.get('root_lift_m')}")
+
+    # [F12] the version and the two band constants ([F1]-[F8] above are the unchanged regression)
+    check(ff.FOOTWEAR_FIT_VERSION == 5 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
+          "[F12] FOOTWEAR_FIT_VERSION 5, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0
