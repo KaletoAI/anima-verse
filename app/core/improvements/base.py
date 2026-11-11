@@ -7,6 +7,11 @@ from typing import Any, Dict, List, Optional
 class Candidate:
     key: str      # stable + unique per type, e.g. "character:Mira"
     label: str    # display
+    # Estimated hub jobs the step will submit on its FIRST attempts (a chain
+    # may spend one more per refused attempt — the note says so where it
+    # applies). None = unknown: listed as such, never silently as 0.
+    hub_jobs: Optional[int] = 0
+    note: str = ""    # one line: what the estimate counts, or a dry-run summary
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,10 @@ class ImprovementType:
     id: str = ""
     label: str = ""
     params_schema: List[ParamField] = []
+    # Whether a step of this type generates media (images, meshes, bakes).
+    # With the world's media switch off the engine submits only steps of
+    # types that say False here — the CPU-only work keeps running.
+    needs_media: bool = True
 
     def validate(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Return normalised params or raise ValueError(message)."""
@@ -67,3 +76,10 @@ class ImprovementType:
 
 class CandidateBusy(Exception):
     """The subject is being generated elsewhere right now — treat like busy."""
+
+
+class CandidateRefused(Exception):
+    """The subject's own gates refused it, or its chain recorded a failure
+    automatic triggers honour — terminal.  The engine skips the step after
+    this ONE attempt and marks it refused; only an explicit action (the
+    Wardrobe, the 3D tab) may spend the subject again."""

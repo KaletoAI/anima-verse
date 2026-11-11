@@ -1076,6 +1076,13 @@ ALTER_MIGRATIONS = [
     # past the idle window, the engine switch, a freeze and a queue pause, and
     # the engine clears the flag once nothing is left to run.
     ("improvements", "forced", "INTEGER NOT NULL DEFAULT 0"),
+    # improvement_steps: the candidate's estimated hub cost (NULL = unknown)
+    # and its one-line note, written by every scan; `refused` marks a step
+    # whose subject's own gates refused it — terminal, never retried by the
+    # engine or the tab's Retry button.
+    ("improvement_steps", "hub_jobs", "INTEGER"),
+    ("improvement_steps", "note", "TEXT NOT NULL DEFAULT ''"),
+    ("improvement_steps", "refused", "INTEGER NOT NULL DEFAULT 0"),
     # Destination-bound invitations refer to the existing intent store.
     ("party_invites", "intent_id", "TEXT NOT NULL DEFAULT ''"),
     # How often the invitee was asked in an answer turn

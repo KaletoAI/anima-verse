@@ -134,8 +134,14 @@ def preview(body: PreviewBody) -> Dict[str, Any]:
     """What the type would work on with these params — asked before creating."""
     params = _validated(body.type_id, body.params)
     candidates = _type_or_400(body.type_id).find_candidates(params)
+    known = [c.hub_jobs for c in candidates if c.hub_jobs is not None]
     return {"count": len(candidates),
-            "sample": [c.label for c in candidates[:20]]}
+            # The hub cost BEFORE anything starts: the sum of the known
+            # estimates, and how many candidates could not be estimated.
+            "hub_jobs": sum(known),
+            "unknown": len(candidates) - len(known),
+            "sample": [{"label": c.label, "hub_jobs": c.hub_jobs, "note": c.note}
+                       for c in candidates[:20]]}
 
 
 @router.patch("/order")
@@ -234,6 +240,14 @@ def retry_step(improvement_id: str, candidate_key: str) -> Dict[str, Any]:
     improvement = _improvement_or_404(improvement_id)
     # Reopen only when a step really became runnable again — an open entry
     # with nothing pending would never close.
-    if store.retry_step(improvement_id, candidate_key) and improvement["status"] == "done":
-        store.update(improvement_id, status="open")
+    if store.retry_step(improvement_id, candidate_key):
+        if improvement["status"] == "done":
+            store.update(improvement_id, status="open")
+        return {"ok": True}
+    # A refused step is terminal: its subject's gates said no, and only an
+    # explicit action (the Wardrobe, the 3D tab) may spend it again.
+    step = next((s for s in store.list_steps(improvement_id)
+                 if s["candidate_key"] == candidate_key), None)
+    if step is not None and step.get("refused"):
+        raise HTTPException(409, "refused")
     return {"ok": True}

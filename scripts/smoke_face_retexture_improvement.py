@@ -140,7 +140,8 @@ def main():
                 once = store.create(typ.id, 'Smoke', params, 'one_shot')['id']
                 engine.scan(once)
                 engine.handle_step({'improvement_id': once, 'candidate_key': regenerated.key})
-                assert store.get(once)['status'] == 'done'
+                # A clean finished one-shot removes itself (engine._close_if_finished).
+                assert store.get(once) is None
                 standing = store.create(typ.id, 'Smoke', params, 'standing')['id']
                 engine.scan(standing)
                 seed(sigs[0], 'applied', 'source-2')

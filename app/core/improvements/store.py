@@ -32,24 +32,44 @@ def _row_to_improvement(row) -> Dict[str, Any]:
     d["forced"] = bool(d.get("forced"))
     for s in _STEP_STATUSES:
         d.setdefault(s, 0)
+    d.setdefault("pending_hub_jobs", 0)
     return d
 
 
-def _counters() -> Dict[str, Dict[str, int]]:
-    """One GROUP BY for every improvement: {improvement_id: {status: count}}."""
+# The per-entry hub estimate: the SUM over its PENDING steps, and whether any
+# of them is unknown (NULL).  ``_hub_total`` folds the pair into one value —
+# an unknown step makes the whole estimate unknown, never a silent 0.
+_PENDING_HUB_SQL = ("SELECT improvement_id, SUM(hub_jobs) AS total, "
+                    "SUM(hub_jobs IS NULL) AS unknown FROM improvement_steps "
+                    "WHERE status='pending'")
+
+
+def _hub_total(total: Any, unknown: Any) -> Optional[int]:
+    if unknown:
+        return None
+    return int(total or 0)
+
+
+def _counters() -> Dict[str, Dict[str, Any]]:
+    """One GROUP BY for every improvement: {improvement_id: {status: count}},
+    plus ``pending_hub_jobs`` per entry (None when a pending step is unknown)."""
     conn = get_connection()
-    out: Dict[str, Dict[str, int]] = {}
+    out: Dict[str, Dict[str, Any]] = {}
     for r in conn.execute(
         "SELECT improvement_id, status, COUNT(*) AS n "
         "FROM improvement_steps GROUP BY improvement_id, status"
     ).fetchall():
         out.setdefault(r["improvement_id"], {})[r["status"]] = r["n"]
+    for r in conn.execute(_PENDING_HUB_SQL + " GROUP BY improvement_id").fetchall():
+        out.setdefault(r["improvement_id"], {})["pending_hub_jobs"] = (
+            _hub_total(r["total"], r["unknown"]))
     return out
 
 
-def _apply_counters(row: Dict[str, Any], counts: Dict[str, int]) -> Dict[str, Any]:
+def _apply_counters(row: Dict[str, Any], counts: Dict[str, Any]) -> Dict[str, Any]:
     for s in _STEP_STATUSES:
         row[s] = int(counts.get(s, 0))
+    row["pending_hub_jobs"] = counts.get("pending_hub_jobs", 0)
     return row
 
 
@@ -79,19 +99,22 @@ def get(improvement_id: str) -> Optional[Dict[str, Any]]:
     ).fetchone()
     if not row:
         return None
-    counts: Dict[str, int] = {}
+    counts: Dict[str, Any] = {}
     for r in conn.execute(
         "SELECT status, COUNT(*) AS n FROM improvement_steps "
         "WHERE improvement_id=? GROUP BY status", (improvement_id,)
     ).fetchall():
         counts[r["status"]] = r["n"]
+    hub = conn.execute(_PENDING_HUB_SQL + " AND improvement_id=?",
+                       (improvement_id,)).fetchone()
+    counts["pending_hub_jobs"] = _hub_total(hub["total"], hub["unknown"]) if hub else 0
     return _apply_counters(_row_to_improvement(row), counts)
 
 
 def list_all() -> List[Dict[str, Any]]:
     """ORDER BY position, created_at; each row gets counters pending/running/
-    done/failed/skipped from improvement_steps (one GROUP BY query);
-    `params` already json-decoded."""
+    done/failed/skipped and ``pending_hub_jobs`` from improvement_steps (one
+    GROUP BY query each); `params` already json-decoded."""
     conn = get_connection()
     counts = _counters()
     return [
@@ -141,27 +164,40 @@ def set_order(ids: List[str]) -> None:
 
 
 def replace_steps_scan(improvement_id: str,
-                       candidates: List[Tuple[str, str]]) -> Dict[str, int]:
-    """candidates = [(key, label)].  INSERT OR IGNORE new keys as pending;
-    pending/skipped steps whose key is no longer listed -> done (is_done elsewhere);
-    running/done/failed rows untouched.  Returns {"added": n, "closed": m}."""
-    listed = {str(key) for key, _label in candidates}
+                       candidates: List[Tuple[str, str, Optional[int], str]]
+                       ) -> Dict[str, int]:
+    """candidates = [(key, label, hub_jobs, note)].  INSERT OR IGNORE new keys
+    as pending; a key that is already pending gets its ``hub_jobs``/``note``
+    refreshed (the estimate shrinks as the chain's steps get cached);
+    PENDING steps whose key is no longer listed -> done (is_done elsewhere).
+    A skipped step stays skipped — a refused candidate drops off the list
+    because the type excludes it, and "done" would then claim an asset that
+    does not exist.  running/done/failed rows untouched.
+    Returns {"added": n, "closed": m}."""
+    listed = {str(key) for key, _label, _hub, _note in candidates}
     now = utc_now_iso()
     added = 0
     closed = 0
     with transaction() as conn:
-        for key, label in candidates:
+        for key, label, hub_jobs, note in candidates:
             cur = conn.execute(
                 "INSERT OR IGNORE INTO improvement_steps "
-                "(improvement_id, candidate_key, candidate_label, status) "
-                "VALUES (?, ?, ?, 'pending')",
-                (improvement_id, str(key), label or ""),
+                "(improvement_id, candidate_key, candidate_label, status, "
+                "hub_jobs, note) VALUES (?, ?, ?, 'pending', ?, ?)",
+                (improvement_id, str(key), label or "", hub_jobs, note or ""),
             )
-            added += cur.rowcount if cur.rowcount > 0 else 0
+            if cur.rowcount > 0:
+                added += 1
+                continue
+            conn.execute(
+                "UPDATE improvement_steps SET hub_jobs=?, note=? "
+                "WHERE improvement_id=? AND candidate_key=? AND status='pending'",
+                (hub_jobs, note or "", improvement_id, str(key)),
+            )
         open_keys = [
             r["candidate_key"] for r in conn.execute(
                 "SELECT candidate_key FROM improvement_steps "
-                "WHERE improvement_id=? AND status IN ('pending', 'skipped')",
+                "WHERE improvement_id=? AND status='pending'",
                 (improvement_id,),
             ).fetchall()
         ]
@@ -218,9 +254,11 @@ def mark_running(improvement_id: str, key: str) -> None:
 
 
 def mark_result(improvement_id: str, key: str, *, status: str,
-                error: str = "", count_attempt: bool) -> None:
+                error: str = "", count_attempt: bool = True,
+                refused: bool = False) -> None:
     """status in done|pending|skipped; sets finished_at + duration_s (from
-    started_at) on done/skipped; attempts += 1 when count_attempt."""
+    started_at) on done/skipped; attempts += 1 when count_attempt; ``refused``
+    marks a skip as terminal (``retry_step`` refuses it)."""
     if status not in ("done", "pending", "skipped"):
         raise ValueError(f"improvements.mark_result: bad status '{status}'")
     with transaction() as conn:
@@ -238,22 +276,24 @@ def mark_result(improvement_id: str, key: str, *, status: str,
             duration_s = _duration(row["started_at"], finished_at)
         conn.execute(
             "UPDATE improvement_steps SET status=?, error=?, "
-            "attempts = attempts + ?, finished_at=?, duration_s=? "
+            "attempts = attempts + ?, finished_at=?, duration_s=?, refused=? "
             "WHERE improvement_id=? AND candidate_key=?",
             (status, error or "", 1 if count_attempt else 0,
-             finished_at, duration_s, improvement_id, key),
+             finished_at, duration_s, 1 if refused else 0, improvement_id, key),
         )
 
 
 def retry_step(improvement_id: str, key: str) -> bool:
     """The user's undo of a skip: a skipped step becomes runnable again, with a
     clean slate (attempts back to 0, error and finish stamps gone).  True when
-    a skipped step was actually reset."""
+    a skipped step was actually reset.  A REFUSED step is never reset here:
+    its subject's gates said no, and only an explicit action may spend it."""
     with transaction() as conn:
         cur = conn.execute(
             "UPDATE improvement_steps SET status='pending', attempts=0, "
             "error='', finished_at=NULL, duration_s=NULL "
-            "WHERE improvement_id=? AND candidate_key=? AND status='skipped'",
+            "WHERE improvement_id=? AND candidate_key=? AND status='skipped' "
+            "AND refused=0",
             (improvement_id, key),
         )
         return cur.rowcount > 0
@@ -305,6 +345,20 @@ def pending_count_by_type(open_only: bool = True) -> Dict[str, int]:
         "FROM improvement_steps s JOIN improvements i ON i.id = s.improvement_id "
         f"WHERE s.status='pending'{entry_filter} GROUP BY i.type_id"
     ).fetchall()}
+
+
+def pending_hub_jobs_total(open_only: bool = True) -> Optional[int]:
+    """The hub jobs every pending step still owes, summed; None when any of
+    them is unknown.  ``open_only`` as in ``pending_count_by_type``: a paused
+    entry runs nothing, so its steps do not count."""
+    conn = get_connection()
+    entry_filter = " AND i.status='open'" if open_only else ""
+    row = conn.execute(
+        "SELECT SUM(s.hub_jobs) AS total, SUM(s.hub_jobs IS NULL) AS unknown "
+        "FROM improvement_steps s JOIN improvements i ON i.id = s.improvement_id "
+        f"WHERE s.status='pending'{entry_filter}"
+    ).fetchone()
+    return _hub_total(row["total"], row["unknown"]) if row else 0
 
 
 def get_settings() -> Dict[str, Any]:

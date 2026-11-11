@@ -12,12 +12,13 @@ from typing import Any, Dict, List, Set, Tuple
 
 from app.core import user_activity
 from app.core.improvements import registry, store
-from app.core.improvements.base import Candidate, CandidateBusy
+from app.core.improvements.base import Candidate, CandidateBusy, CandidateRefused
 from app.core.hub_ops import HubOpBusy
 from app.core.log import get_logger
 from app.core.task_queue import get_task_queue
 from app.core.timeutils import parse_iso, utc_now, utc_now_iso
-from app.imagegen.base import BackendBusyError, HubJobLost, media_generation_enabled
+from app.imagegen.base import (BackendBusyError, HubJobLost, MediaGenerationDisabled,
+                               media_generation_enabled)
 from app.models.world import is_world_frozen
 
 logger = get_logger("improvements.engine")
@@ -84,7 +85,8 @@ def scan(improvement_id: str) -> Dict[str, int]:
         return {"added": 0, "closed": 0}
     candidates = improvement_type.find_candidates(improvement["params"])
     result = store.replace_steps_scan(
-        improvement_id, [(c.key, c.label) for c in candidates])
+        improvement_id,
+        [(c.key, c.label, c.hub_jobs, c.note) for c in candidates])
     store.update(improvement_id, last_scan_at=utc_now_iso())
     # A one_shot whose scan finds nothing has nothing to do — ever. Without
     # this it would sit 'open' with 0/0 steps forever, because the only other
@@ -141,13 +143,16 @@ def ordered_queue() -> List[Dict[str, Any]]:
 # The gates
 # ---------------------------------------------------------------------------
 
-def submit_allowed() -> Tuple[bool, str]:
+def submit_allowed(needs_media: bool = True) -> Tuple[bool, str]:
     """(may a step be submitted right now, why not) — the reason is what the
-    admin panel shows: media_off | disabled | frozen | busy | active | ok."""
-    # Every improvement type generates media (models, images, bakes), so the
-    # world's media master switch stops the whole pipeline — checked first
-    # because it is the cheapest read and needs no DB at all.
-    if not media_generation_enabled():
+    admin panel shows: media_off | disabled | frozen | busy | active | ok.
+
+    ``needs_media`` False asks for the gates BEHIND the media switch — what a
+    CPU-only type (``ImprovementType.needs_media`` False) is held by."""
+    # Most improvement types generate media (models, images, bakes), so the
+    # world's media master switch stops them — checked first because it is
+    # the cheapest read and needs no DB at all.
+    if needs_media and not media_generation_enabled():
         return False, "media_off"
     settings = store.get_settings()
     if not settings["enabled"]:
@@ -176,14 +181,22 @@ def stop_run_now(improvement_id: str) -> None:
     store.update(improvement_id, forced=False)
 
 
+def _needs_media(type_id: str) -> bool:
+    """Whether a step of this type is held by the media switch.  An unknown
+    type is held: it cannot run anyway, and the handler skips it."""
+    improvement_type = registry.get(type_id)
+    return True if improvement_type is None else bool(improvement_type.needs_media)
+
+
 def run_now(improvement_id: str) -> Dict[str, Any]:
     """The admin's "Run now": force the entry and submit its next pending step
     NOW — the following ones go out tick by tick, all past the idle window,
     the engine switch, a freeze and a queue pause.
 
-    Only the media switch stops it, and an improvement step already in flight
-    makes it wait: the entry stays forced and the next tick submits its step
-    as soon as that one is done (one step at a time is the engine's rule).
+    Only the media switch stops it (and only a type that ``needs_media``), and
+    an improvement step already in flight makes it wait: the entry stays
+    forced and the next tick submits its step as soon as that one is done
+    (one step at a time is the engine's rule).
     Reasons: ``started`` | ``queued`` | ``media_off`` | ``paused`` | ``done`` |
     ``empty``."""
     improvement = store.get(improvement_id)
@@ -191,7 +204,7 @@ def run_now(improvement_id: str) -> Dict[str, Any]:
         return {"ok": False, "reason": "gone"}
     if improvement["status"] != "open":
         return {"ok": False, "reason": improvement["status"]}
-    if not media_generation_enabled():
+    if not media_generation_enabled() and _needs_media(improvement["type_id"]):
         return {"ok": False, "reason": "media_off"}
     row = next((r for r in ordered_queue()
                 if r["improvement_id"] == improvement_id
@@ -273,6 +286,12 @@ def tick() -> Dict[str, Any]:
 
     # 3. One step.
     allowed, reason = submit_allowed()
+    # With the media switch off the CPU-only types keep running: the gates
+    # BEHIND the switch decide for them, and the loop below passes over every
+    # step of a type that needs media.
+    media_off = not allowed and reason == "media_off"
+    if media_off:
+        allowed, reason = submit_allowed(needs_media=False)
     # A forced entry passes the gates it overrides — but never an in-flight
     # step, which ``submit_allowed`` does not reach when an earlier gate failed.
     override = (not allowed and reason in RUN_NOW_OVERRIDES and bool(forced)
@@ -282,6 +301,7 @@ def tick() -> Dict[str, Any]:
 
     now = utc_now()
     deferred = 0
+    held = 0
     # Forced entries go first even when the gates are open: the admin asked
     # for them. Stable sort, so each group keeps the queue order.
     rows = sorted(ordered_queue(), key=lambda r: r["improvement_id"] not in forced)
@@ -289,6 +309,9 @@ def tick() -> Dict[str, Any]:
         if row["status"] != "pending":
             continue
         if override and row["improvement_id"] not in forced:
+            continue
+        if media_off and _needs_media(row["type_id"]):
+            held += 1
             continue
         # A step that just came back busy waits out BUSY_DEFER_S so the steps
         # behind it get their turn — forced or not, or a dead backend would be
@@ -302,10 +325,12 @@ def tick() -> Dict[str, Any]:
             return {"scanned": scanned, "submitted": "", "reason": "dedup"}
         return {"scanned": scanned, "submitted": task_id, "reason": "ok"}
 
-    # "deferred": pending steps exist, but every one of them came back busy
-    # within the last BUSY_DEFER_S — nothing is submitted this tick.
+    # "media_off": the switch held back every runnable step; "deferred":
+    # pending steps exist, but every one of them came back busy within the
+    # last BUSY_DEFER_S — nothing is submitted this tick.
     return {"scanned": scanned, "submitted": "",
-            "reason": "deferred" if deferred else "empty"}
+            "reason": ("media_off" if held else
+                       "deferred" if deferred else "empty")}
 
 
 def periodic_tick() -> None:
@@ -353,19 +378,35 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
         _close_if_finished(improvement_id)
         return {"skipped": message}
 
-    candidate = Candidate(key, step["candidate_label"])
+    candidate = Candidate(key, step["candidate_label"],
+                          hub_jobs=step.get("hub_jobs"), note=step.get("note") or "")
     try:
         # The step's own generations must not end the user's idle window.
         with user_activity.suppressed():
             improvement_type.apply(candidate, improvement["params"], task_id)
-    except (BackendBusyError, CandidateBusy, HubOpBusy) as e:
+    except (BackendBusyError, CandidateBusy, HubOpBusy, MediaGenerationDisabled) as e:
         # Load, not a defect (HubOpBusy: another hub operation holds this
-        # target — it is in flight, not broken) — the candidate keeps both its attempts, and sits
-        # out BUSY_DEFER_S so it does not block the steps behind it.
+        # target — it is in flight, not broken; MediaGenerationDisabled: the
+        # switch flipped mid-run — it is the switch, not the subject) — the
+        # candidate keeps both its attempts, and sits out BUSY_DEFER_S so it
+        # does not block the steps behind it.
         store.mark_result(improvement_id, key, status="pending", error=str(e),
                           count_attempt=False)
         _defer(improvement_id, key)
         return {"busy": str(e)}
+    except CandidateRefused as e:
+        # The subject's own gates said no, or its chain recorded a failure
+        # automatic triggers honour. Terminal after this ONE attempt: a second
+        # attempt would re-spend a refused source, which is a person's
+        # decision (the Wardrobe, the 3D tab), never ours — and Retry refuses
+        # it too (``store.retry_step``).
+        logger.info("improvement step %s/%s refused: %s", improvement_id, key, e)
+        store.mark_result(improvement_id, key, status="skipped", error=str(e),
+                          count_attempt=True, refused=True)
+        store.update(improvement_id,
+                     failed_count=int(improvement["failed_count"]) + 1)
+        _close_if_finished(improvement_id)
+        return {"refused": str(e)}
     except Exception as e:  # noqa: BLE001 — every defect is one attempt
         logger.warning("improvement step %s/%s failed: %s",
                        improvement_id, key, e, exc_info=True)
@@ -443,5 +484,8 @@ def status() -> Dict[str, Any]:
                       for i in store.list_all()),
         "running_step": running[0] if running else None,
         "pending_total": sum(pending.values()),
+        # The hub jobs the open entries still owe; None when any pending step
+        # could not be estimated.
+        "pending_hub_jobs": store.pending_hub_jobs_total(open_only=True),
         "estimate_s": estimate,
     }

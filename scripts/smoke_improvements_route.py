@@ -259,7 +259,10 @@ check("…and nothing was created",
 print("\n3. POST /improvements/preview asks without creating")
 r = client.post("/improvements/preview",
                 json={"type_id": "fake", "params": {"backend": "x"}})
-check("count + sample", r.json(), {"count": 2, "sample": ["Zeta", "Alpha"]})
+check("count + hub cost + sample", r.json(),
+      {"count": 2, "hub_jobs": 0, "unknown": 0,
+       "sample": [{"label": "Zeta", "hub_jobs": 0, "note": ""},
+                  {"label": "Alpha", "hub_jobs": 0, "note": ""}]})
 check("…and still exactly one entry", len(client.get("/improvements").json()), 1)
 
 # ── 4. the queue view ────────────────────────────────────────────────────────

@@ -264,15 +264,15 @@ check("a fresh improvement has no steps", counters(store.get(A)),
 # ── 2. scan = diff ───────────────────────────────────────────────────────────
 print("\n2. replace_steps_scan is a diff")
 check("first scan adds both candidates",
-      store.replace_steps_scan(A, [("k1", "Zeta"), ("k2", "Alpha")]),
+      store.replace_steps_scan(A, [("k1", "Zeta", 0, ""), ("k2", "Alpha", 0, "")]),
       {"added": 2, "closed": 0})
 check("next_pending follows the label order",
       store.next_pending(A)["candidate_key"], "k2")
 check("re-scanning the same list changes nothing",
-      store.replace_steps_scan(A, [("k1", "Zeta"), ("k2", "Alpha")]),
+      store.replace_steps_scan(A, [("k1", "Zeta", 0, ""), ("k2", "Alpha", 0, "")]),
       {"added": 0, "closed": 0})
 check("a vanished candidate is closed",
-      store.replace_steps_scan(A, [("k1", "Zeta")]),
+      store.replace_steps_scan(A, [("k1", "Zeta", 0, "")]),
       {"added": 0, "closed": 1})
 check("…as done", {s["candidate_key"]: s["status"]
                    for s in store.list_steps(A)},
@@ -810,7 +810,7 @@ worker_done(result["task_id"])
 store.update(H, status="paused")
 drop_step_tasks()
 R = store.create("fake", "R", {}, "one_shot")["id"]
-store.replace_steps_scan(R, [("ra", "Ra")])
+store.replace_steps_scan(R, [("ra", "Ra", 0, "")])
 store.set_settings(False, 15)
 engine.get_task_queue().submit(engine.TASK_TYPE, {"improvement_id": "other",
                                                   "candidate_key": "x"},
@@ -835,7 +835,7 @@ store.update(R, status="paused")
 set_world_frozen(True)
 user_activity._set_for_test(60)
 S = store.create("fake", "S", {}, "one_shot")["id"]
-store.replace_steps_scan(S, [("sa", "Sa"), ("sb", "Sb")])
+store.replace_steps_scan(S, [("sa", "Sa", 0, ""), ("sb", "Sb", 0, "")])
 FakeType.behaviour = ""             # every step succeeds
 first = engine.run_now(S)
 check("frozen: the click starts the first step",
@@ -859,7 +859,7 @@ check("the admin tick runs the engine while frozen/paused",
 legacy = store.create("fake", "Legacy", {}, "one_shot")["id"]
 store.update(legacy, status="done")
 failed = store.create("fake", "Failed", {}, "one_shot")["id"]
-store.replace_steps_scan(failed, [("bad", "Bad")])
+store.replace_steps_scan(failed, [("bad", "Bad", 0, "")])
 # mark_result only writes producer results; failed is a persisted legacy state.
 with db.transaction() as conn:
     conn.execute("UPDATE improvement_steps SET status='failed' WHERE improvement_id=?", (failed,))
