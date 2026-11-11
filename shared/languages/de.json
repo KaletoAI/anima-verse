@@ -1698,6 +1698,7 @@
     "prop deleted": "Prop gelöscht",
     "The prop behind this placement is gone — it renders nothing and can only be removed.": "Das Prop hinter dieser Platzierung existiert nicht mehr — sie zeigt nichts und kann nur entfernt werden.",
     "Lift": "Anhebung",
+    "The root descends: this body stands heel-up in its rest pose": "Die Wurzel senkt sich ab: dieser Körper steht in seiner Ruhepose mit angehobener Ferse",
     "Variant": "Variante",
     "Auto lets the placement id pick a mesh, so a row of the same prop is not the same mesh twice. A pinned variant may have its own size — the footprint rectangle follows it once the change is saved.": "Auto lässt die Platzierungs-ID das Mesh wählen, damit eine Reihe desselben Props nicht zweimal dasselbe Mesh zeigt. Eine festgelegte Variante kann eine eigene Größe haben — das Grundflächen-Rechteck folgt ihr, sobald die Änderung gespeichert ist.",
     "Auto ({v})": "Auto ({v})",

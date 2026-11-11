@@ -337,7 +337,9 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
   // ── 5. Insole ──
   const insoleStep = steps.insole
   const nominal = info.insole?.nominal
-  const cm = (v: number | null | undefined) => (num(v) != null ? `${((v as number) * 100).toFixed(1)} cm` : '–')
+  // Signed: a shod root can DESCEND (a bare body standing heel-up in its rest pose put into a flat shoe) — the
+  // minus is the typographic one, as the chips print it.
+  const cm = (v: number | null | undefined) => (num(v) != null ? `${((v as number) * 100).toFixed(1).replace('-', '−')} cm` : '–')
   const deg = (v: number | null | undefined) => (num(v) != null ? `${(v as number).toFixed(1)}°` : '–')
   const insoleGates = insoleStep && insoleStep.status !== 'missing' ? insoleStep.gates : null
   const cover = num(insoleGates?.insole_cover)
@@ -402,10 +404,20 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
       num(m.width_factor) != null
         ? `${t('Width')} ×${m.width_factor.toFixed(2)} ${t('applied')} · ${t('needed')} ${
           pair(m, 'width_needed', (v) => `×${v.toFixed(2)}`)}` : '',
-      `${t('Foot extension')} ${pair(m, 'extension_deg', (v) => `${v.toFixed(1)}°`)}`,
-      num(m.root_lift_m) != null ? `${t('Lift')} ${cm(m.root_lift_m)}` : '',
-      `${t('Toe room')} ${pair(m, 'toe_room_mm', (v) => mmText(v))}`,
+      `${t('Foot extension')} ${pair(m, 'extension_deg', (v) => `${v.toFixed(1).replace('-', '−')}°`)}`,
     ].filter((x) => x && !x.endsWith(' ')) : []
+    const liftM = fitted ? num(m.root_lift_m) : null
+    const toeRoom = fitted ? `${t('Toe room')} ${pair(m, 'toe_room_mm', (v) => mmText(v))}` : ''
+    const parts: ReactNode[] = [
+      ...numbers,
+      liftM != null ? (
+        <span key="lift"
+          title={liftM < 0 ? t('The root descends: this body stands heel-up in its rest pose') : undefined}>
+          {t('Lift')} {cm(liftM)}
+        </span>
+      ) : null,
+      toeRoom.endsWith(' ') ? null : toeRoom,
+    ].filter((x) => x !== null && x !== '')
     const slim = fitted ? pair(m, 'slim_needed', (v) => `${(v * 100).toFixed(1)} %`) : ''
     const chips = fitChips(row)
     const pill = row.status === 'refused' ? PILL.refused : undefined
@@ -435,7 +447,9 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
             />
           ) : null}
         </div>
-        {numbers.length ? <span>{numbers.join(' · ')}</span> : null}
+        {parts.length ? (
+          <span>{parts.map((part, i) => <Fragment key={i}>{i ? ' · ' : ''}{part}</Fragment>)}</span>
+        ) : null}
         {slim ? (
           <span title={t('Share of the ball width the forefoot slimming must take off — not applied yet')}>
             {t('Slimming needed')} {slim}

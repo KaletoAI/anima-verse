@@ -655,7 +655,8 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
     ``refused`` when the persisted failure of the fsig holds on this body (the base: ``chain_failure`` of a
     ``fit`` step on ``body_sha``; an outfit body: ``body_failure`` on ``body_sha`` by the current fit version).
     ``gates`` is the record's gate table ``{name: {value, limit, ok, gating}}``; ``metrics`` the record's width
-    factor / cap, root lift, scale (``k_m_per_unit``, shoe ``length_m``) and per side the width needed, the
+    factor / cap, root lift (SIGNED — negative when the shod root descends, spec 2026-11-11 § 13.2), scale
+    (``k_m_per_unit``, shoe ``length_m``) and per side the width needed, the
     slimming needed, the extension and the toe room."""
     from app.core import garment_store as gs
     from app.core.garment_fit import FIT_VERSION
