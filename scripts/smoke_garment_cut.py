@@ -121,6 +121,19 @@ EXPECTED, BY HAND
     0.1617^2) = 1.582 -> band 1.587 .. 1.617; the cap's lowest edge on the scalp (theta 60) is at 1.53 + 0.17 x 0.5
     = 1.615 (+1 mm rim; the chordal seat may reach row 13, 1.6134 .. 1.6154) -> side_coverage <= 2/15; every
     other gate passes.
+[q] the hairline gate in H's own frame (Kai 2026-11-11: his outfit body's head, meshed on its own, registered
+    7.8 deg pitched vs 3.0 on the base; the old gate read 1.53 cm against 0.26 cm in the haired view): the [d] H
+    and views, B's HEAD (sphere + nose + ear, not the torso) pitched -10 deg about x through C (chin up: the
+    forehead rises), y' = y cos 10 + z sin 10 rel. C. The sphere is the same surface, so H still stands 2.04 cm
+    over it; the nose and the ear give the ICP the pitch back -> registration p95 0.0 cm (+-0.05). The front
+    theta-60 ring (rel. y 0.112 cos 60 = 0.0560, z 0.112 sin 60 = 0.0970) rises to 0.0560 x 0.98481 + 0.0970 x
+    0.17365 = 0.0720, above the face-zone line carried into B (the same lever) -> no face zone, label = all 2401 cap
+    vertices; the lowest hair in the front strip is that ring.
+    NEW (H's frame, where the 2D mask row lives): ring y 0.956 vs 2D 0.957 -> 0.001 x 1.7 = 0.17 cm (+-0.1).
+    OLD (699f278b, the line as ONE point (0, 0.957, z_l) on the head's centre plane, then the registration): y'
+    = 0.057 x 0.98481 + z_l x 0.17365 = 0.0561 + 0.174 z_l; |z_l| <= 0.112 sin 10 (ytop's lever, 0.0194) + the
+    median shift of B's rotated head z (each point moves by <= 0.1 x (sin 10 + 1 - cos 10) = 0.0189) = 0.0383
+    -> delta >= (0.0720 - 0.0561 - 0.174 x 0.0383) x 1.7 = 1.57 cm >= 1.5: refused on the old code.
 """
 import io
 import math
@@ -639,6 +652,63 @@ def test_side_coverage():
     check("gate side_coverage", gc.CUT_GATES["side_coverage"], ("min", 0.4, "hair over the temples in the side views"))
 
 
+#: HEAD when the hairline gate moved into H's own frame (the [q] fails-on-the-old-code proof)
+PITCH_PROOF_COMMIT = "699f278b5475fa00a1951961584ca09b09db9030"
+
+
+def _old_garment_cut():
+    """``app/core/garment_cut.py`` of ``PITCH_PROOF_COMMIT`` as a module, None without git / the commit."""
+    import subprocess
+    import types
+    try:
+        src = subprocess.run(["git", "-C", str(ROOT), "show", f"{PITCH_PROOF_COMMIT}:app/core/garment_cut.py"],
+                             capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    mod = types.ModuleType("garment_cut_pitch_proof")
+    sys.modules[mod.__name__] = mod          # dataclasses resolve their module
+    exec(compile(src, f"{PITCH_PROOF_COMMIT[:8]}:garment_cut.py", "exec"), mod.__dict__)
+    return mod
+
+
+def test_pitched_body():
+    print("[q] hairline in H's own frame: B's head pitched -10 deg")
+    from app.core import garment_cut as gc
+    from app.core.rig_contract import BASE_JOINT_NAMES
+    import smoke_garment_chain as cx
+    import smoke_garment_fit as fx
+    P, F, head = bodies()
+    P[head] = (P[head] - C) @ rot("x", -10.0).T + C
+    n = len(P)
+    U = np.stack([(np.arange(n) % 1000) / 1000.0, (np.arange(n) // 1000) / 1000.0], 1)
+    names = list(BASE_JOINT_NAMES)
+    J = np.zeros((n, 4), np.int64)
+    J[:, 0] = np.where(head, names.index("Head"), names.index("Spine2"))
+    Wt = np.zeros((n, 4))
+    Wt[:, 0] = 1.0
+    unrigged = fx.make_glb(P, F, U, image=cx.solid_png((90, 90, 90)))
+    rigged = cx.rigged_glb(K * P + np.array([0, 0.05, 0]), F, U, J, Wt, cx.solid_png(SKIN))
+    Pt, Ft, _cap = haired_truth()
+    Uh = np.stack([(np.arange(len(Pt)) % 997) / 997.0, (np.arange(len(Pt)) // 997) / 997.0], 1)
+    haired_glb = fx.make_glb(2.0 * Pt + np.array([0.3, -0.2, 0.1]), Ft, Uh, image=cx.solid_png(HAIR))
+    res = gc.cut_hair(haired_glb, unrigged, rigged, views(), shape="cut")
+    print(f"       metrics {res.metrics}; hairline {res.report['hairline']}")
+    near("registration p95 (cm): the pitch recovered", res.metrics["registration_p95_cm"], 0.0, 0.05)
+    check("label = all 2401 cap vertices", res.report["label"]["vertices"], 2401)
+    near("hairline (cm), H's frame: theta-60 ring 0.956 vs 0.957", res.metrics["hairline_cm"], 0.17, 0.1)
+    check("hairline frame", res.report["hairline"]["frame"], "haired view")
+    check("gates: only the side coverage refuses ([p])",
+          [r for r in res.reasons if not r.startswith("side_coverage")], [])
+    old = _old_garment_cut()
+    if old is None:
+        print(f"       (no git / {PITCH_PROOF_COMMIT[:8]}: the old-code proof skipped)")
+        return
+    was = old.cut_hair(haired_glb, unrigged, rigged, views(), shape="cut")
+    print(f"       {PITCH_PROOF_COMMIT[:8]}: hairline {was.metrics['hairline_cm']} cm, reasons {was.reasons}")
+    check("old code: hairline >= 1.5 cm (the line swung with the pitch)", was.metrics["hairline_cm"] >= 1.5, True)
+    check("old code: refused by the hairline gate", any(r.startswith("hairline_cm") for r in was.reasons), True)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="garment-cut-") as tmp:
         os.environ["STORAGE_DIR"] = str(Path(tmp) / "world")
@@ -660,6 +730,7 @@ def main() -> int:
         test_flat_hair()
         test_args()
         test_side_coverage()
+        test_pitched_body()
     print(f"\n{'FAILED: ' + ', '.join(FAILS) if FAILS else 'all checks passed'}")
     return 1 if FAILS else 0
 

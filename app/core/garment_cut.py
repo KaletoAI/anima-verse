@@ -51,9 +51,10 @@ rigged, ``k_h`` the same for H's own units):
    cut edge (the spike's rims along UV seams were its white streaks). A hole in the hair sheet shorter than
    ``CAP_LOOP_MAX_M`` is capped with a fan (a groove between strands, not an island of vertices).
 6. Gates (``CUT_GATES``, numbers § B5a style): registration p95 of the non-hair outer wall of the head below
-   1 cm (the top 35 cm are reported as ``top_p95_cm``), the hairline (front centre strip, 3D label vs 2D mask) within 1.5 cm, no small hole left in the hair
-   sheet (boundary loops shorter than ``HOLE_LOOP_MAX_M``), hair area at least 1 cm², the cut edge's rim near the
-   scalp, and the temples covered in the side views (``side_coverage``, both sides).
+   1 cm (the top 35 cm are reported as ``top_p95_cm``), the hairline (front centre strip, 3D label vs 2D mask,
+   both in H's own frame — the haired front view's, never through the registration) within 1.5 cm, no small hole
+   left in the hair sheet (boundary loops shorter than ``HOLE_LOOP_MAX_M``), hair area at least 1 cm², the cut
+   edge's rim near the scalp, and the temples covered in the side views (``side_coverage``, both sides).
 
 ``CUT_VERSION`` is part of the subtract fsig: bump it whenever the cut's output changes.
 """
@@ -1208,18 +1209,26 @@ def cut_hair(haired_glb: bytes, unrigged_glb: bytes, rigged_glb: bytes, views: D
                               if top.any() else None,
                               "scale_h_to_b": round(float(T_hq[0]), 5)}
 
-    # hairline: 2D (front centre strip, mapped into B's frame) vs the 3D label
+    # hairline: 2D (front centre strip) vs the 3D label, both in H's OWN frame — the haired front view's, which H
+    # was meshed from, so a mask row IS an H height (``Frame``) whatever body H is registered onto. Carried into
+    # B's frame as one point on the head's centre plane, the 2D line swung against the forehead (~10 cm in front
+    # of that plane) with the registration's pitch: Kai's outfit body (H registered 7.8 deg pitched vs 3.0 on the
+    # base body, same H, same views, same label row) measured 1.53 cm where H's own frame gives 0.26 cm
     zc_q = float(np.median(Pb[head_b, 2])) if head_b.any() else float(np.median(Q[:, 2]))
     zc_h = float(to_h(np.array([[0.0, ytop, zc_q]]))[0, 2])
     line = _hairline(views, masks, frames_h["front"], k_h, to_q, zc_h)
-    hair_q = Q[hair_v]
-    strip = ((np.abs(hair_q[:, 0] - line["x"]) * k < CENTRE_BAND_M) & (hair_q[:, 2] > zc_q)
-             & (hair_q[:, 1] > line["y_eye"]))
-    y3d = float(hair_q[strip, 1].min()) if strip.any() else float("nan")
-    hairline_cm = abs(y3d - line["y"]) * k * 100 if line["y"] is not None and strip.any() else float("nan")
-    report["hairline"] = {"row_2d": line["row"], "eye_row": line["eye_row"],
-                          "y_2d_m": None if line["y"] is None else round(line["y"] * k, 4),
-                          "y_3d_m": None if not strip.any() else round(y3d * k, 4), "n_strip": int(strip.sum()),
+    fr_h = frames_h["front"]
+    m_h = float(T_hq[0]) * k            # metres per H unit (the registration's scale, as the label's distances)
+    x_line = fr_h.x_of_col(line["face_centre_px"])
+    y_line = None if line["row"] is None else fr_h.y_of_row(line["row"])
+    hair_p = Ph[hair_v]
+    strip = ((np.abs(hair_p[:, 0] - x_line) * m_h < CENTRE_BAND_M) & (hair_p[:, 2] > zc_h)
+             & (hair_p[:, 1] > fr_h.y_of_row(line["eye_row"])))
+    y3d = float(hair_p[strip, 1].min()) if strip.any() else float("nan")
+    hairline_cm = abs(y3d - y_line) * m_h * 100 if y_line is not None and strip.any() else float("nan")
+    report["hairline"] = {"row_2d": line["row"], "eye_row": line["eye_row"], "frame": "haired view",
+                          "y_2d_m": None if y_line is None else round(y_line * m_h, 4),
+                          "y_3d_m": None if not strip.any() else round(y3d * m_h, 4), "n_strip": int(strip.sum()),
                           "delta_cm": None if not math.isfinite(hairline_cm) else round(hairline_cm, 2)}
 
     # 5. build: the hair faces of the ORIGINAL H (UV seams kept), the topology from the welded one
