@@ -495,13 +495,10 @@ def addressable_for(character_name: str) -> List[str]:
     """
     if not character_name:
         return []
-    from app.models.character import (get_character_current_location,
-                                      get_character_current_room,
-                                      get_character_pos)
-    loc = get_character_current_location(character_name) or ""
-    room = (get_character_current_room(character_name) or "") if loc else ""
-    return _addressable(loc, room, get_character_pos(character_name),
-                        character_name)
+    from app.models.character import get_character_place
+    # One state read — the location/room readers each load the full profile.
+    loc, room, pos = get_character_place(character_name)
+    return _addressable(loc, room if loc else "", pos, character_name)
 
 
 def addressable_at_location(location: str, room_id: str = "") -> List[str]:

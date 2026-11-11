@@ -1948,6 +1948,23 @@ def get_character_pos(character_name: str = "", *, strict: bool = False) -> Opti
     return {"x": float(row[0]), "z": float(row[1])}
 
 
+def json_or_null_sql(column: str) -> str:
+    """SQL for ``column`` when it holds parsable JSON text, else ``NULL``.
+
+    ``json_extract`` RAISES on malformed JSON, and a raising row aborts the
+    whole statement — one broken ``profile_json`` used to stop every journey
+    on the map, because the travel ticker's one query failed for the whole
+    cast. Wrapping the column makes that row read as "no JSON" (the empty
+    default profile ``get_character_profile`` falls back to), the others
+    unaffected. JSON5 (flag 2) is the superset that, like Python's ``json``,
+    accepts the ``NaN``/``Infinity`` that ``json.dumps`` writes."""
+    return f"(CASE WHEN json_valid({column}, 2) THEN {column} END)"
+
+
+_PROFILE_JSON = json_or_null_sql("c.profile_json")
+_STATE_META = json_or_null_sql("s.meta")
+
+
 def get_avatar_sync_snapshot(character_name: str) -> Dict[str, Any]:
     """Read position, report origin and validated journey in one SQL snapshot.
 
@@ -1958,9 +1975,9 @@ def get_avatar_sync_snapshot(character_name: str) -> Dict[str, Any]:
 
     row = get_connection().execute(
         "SELECT s.pos_x, s.pos_z, s.pos_session, s.pos_seq, s.pos_yaw, "
-        "json_extract(c.profile_json, '$.journey'), "
-        "COALESCE(json_extract(s.meta, '$.movement_target'), "
-        "json_extract(c.profile_json, '$.movement_target'), '') "
+        f"json_extract({_PROFILE_JSON}, '$.journey'), "
+        f"COALESCE(json_extract({_STATE_META}, '$.movement_target'), "
+        f"json_extract({_PROFILE_JSON}, '$.movement_target'), '') "
         "FROM characters c LEFT JOIN character_state s ON s.character_name = c.name "
         "WHERE c.name = ?", (character_name,)).fetchone()
     if not row:
@@ -3824,6 +3841,47 @@ def list_character_places() -> Dict[str, Tuple[str, str]]:
             if _is_real_character(name) and not is_out_of_world(status)}
 
 
+def get_character_place(character_name: str
+                        ) -> Tuple[str, str, Optional[Dict[str, float]]]:
+    """``(location_id, room, pos)`` of ONE character — one query.
+
+    The single-character twin of :func:`list_character_places`, plus the
+    metre point: the same answer as :func:`get_character_current_location`,
+    :func:`get_character_current_room` and :func:`get_character_pos` asked
+    one after the other, value for value (``smoke_room_occupancy_bulk.py``
+    [4]) — without the two full profile loads the first two cost. Same rules
+    as the bulk reader: the ``character_state`` row decides, a
+    ``profile_json`` that is not a JSON object answers no place. No roster
+    filter: like the per-character readers it answers for any name.
+
+    A name without a ``characters`` row reads its point straight from
+    ``character_state``, as :func:`get_character_pos` does. A DB error is
+    logged at ERROR and answers "nowhere".
+    """
+    if not character_name:
+        return "", "", None
+    profile_ok = ("CASE WHEN COALESCE(c.profile_json, '') = '' THEN 1 "
+                  "WHEN json_valid(c.profile_json, 2) "
+                  "THEN json_type(c.profile_json) = 'object' ELSE 0 END")
+    try:
+        row = get_connection().execute(
+            f"SELECT CASE WHEN {profile_ok} THEN COALESCE(s.current_location, '') ELSE '' END, "
+            f"       CASE WHEN {profile_ok} THEN COALESCE(s.current_room, '') ELSE '' END, "
+            "       s.pos_x, s.pos_z "
+            "FROM characters c "
+            "LEFT JOIN character_state s ON s.character_name = c.name "
+            "WHERE c.name = ?", (character_name,)).fetchone()
+    except Exception as e:
+        logger.error("get_character_place DB error for %s: %s", character_name, e,
+                     exc_info=True)
+        return "", "", None
+    if not row:
+        return "", "", get_character_pos(character_name)
+    location, room, x, z = row
+    pos = {"x": float(x), "z": float(z)} if x is not None and z is not None else None
+    return location or "", room or "", pos
+
+
 def list_active_journeys() -> List[Dict[str, Any]]:
     """Who is on the road right now — ONE query for the whole cast.
 
@@ -3836,7 +3894,9 @@ def list_active_journeys() -> List[Dict[str, Any]]:
     The two fields live in DIFFERENT places, which is why this needs a join:
     ``journey`` is an ordinary ``profile_json`` key, ``movement_target`` is a
     ``character_state.meta`` key (see ``_STATE_META_KEYS``). Both are read
-    with ``json_extract`` so SQLite does the parsing.
+    with ``json_extract`` so SQLite does the parsing — each through
+    :func:`json_or_null_sql`, so one unparsable row cannot fail the query for
+    the whole cast.
 
     Each hit is ``{"name", "journey", "movement_target", "current_location"}``
     — enough for ``travel_engine.get_journey(name, profile=…)``, which reads
@@ -3848,20 +3908,21 @@ def list_active_journeys() -> List[Dict[str, Any]]:
     try:
         rows = get_connection().execute(
             "SELECT c.name, "
-            "       json_extract(c.profile_json, '$.journey'), "
-            "       COALESCE(json_extract(s.meta, '$.movement_target'), "
-            "                json_extract(c.profile_json, '$.movement_target')), "
+            f"       json_extract({_PROFILE_JSON}, '$.journey'), "
+            f"       COALESCE(json_extract({_STATE_META}, '$.movement_target'), "
+            f"                json_extract({_PROFILE_JSON}, '$.movement_target')), "
             "       COALESCE(s.current_location, ''), "
             "       COALESCE(c.status, '') "
             "FROM characters c "
             "LEFT JOIN character_state s ON s.character_name = c.name "
-            "WHERE json_extract(c.profile_json, '$.journey') IS NOT NULL "
-            "   OR COALESCE(json_extract(s.meta, '$.movement_target'), '') <> '' "
-            "   OR COALESCE(json_extract(c.profile_json, '$.movement_target'), '') <> '' "
+            f"WHERE json_extract({_PROFILE_JSON}, '$.journey') IS NOT NULL "
+            f"   OR COALESCE(json_extract({_STATE_META}, '$.movement_target'), '') <> '' "
+            f"   OR COALESCE(json_extract({_PROFILE_JSON}, '$.movement_target'), '') <> '' "
             "ORDER BY c.name ASC"
         ).fetchall()
     except Exception as e:
-        logger.debug("list_active_journeys: %s", e)
+        # Nobody moves while this fails — never a quiet debug line.
+        logger.error("list_active_journeys DB error: %s", e, exc_info=True)
         return []
     out: List[Dict[str, Any]] = []
     for name, journey_raw, target_raw, current_location, status in rows:

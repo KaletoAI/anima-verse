@@ -365,11 +365,13 @@ def _fog_inputs() -> Dict[str, dict]:
     """Read only the fields needed to decide NPC visibility, in one query."""
     import json
     from app.core.db import get_connection
+    from app.models.character import json_or_null_sql
+    profile, meta = json_or_null_sql("c.profile_json"), json_or_null_sql("s.meta")
     rows = get_connection().execute(
         "SELECT c.name, COALESCE(s.current_location, ''), "
-        "json_extract(c.profile_json, '$.journey'), "
-        "COALESCE(json_extract(s.meta, '$.movement_target'), "
-        "json_extract(c.profile_json, '$.movement_target'), '') "
+        f"json_extract({profile}, '$.journey'), "
+        f"COALESCE(json_extract({meta}, '$.movement_target'), "
+        f"json_extract({profile}, '$.movement_target'), '') "
         "FROM characters c LEFT JOIN character_state s ON s.character_name = c.name"
     ).fetchall()
     out = {}

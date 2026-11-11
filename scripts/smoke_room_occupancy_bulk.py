@@ -78,6 +78,27 @@ names, no pooled, no dormant row, ordered by name (SQLite BINARY).
     of [2] and loads at least one profile per roster character for the
     first query (>= 13). Skipped with a notice when git is unavailable.
 
+[4] ``get_character_place(n)`` (one query, used by
+    ``perception.addressable_for``) equals ``(get_character_current_location(n),
+    get_character_current_room(n), get_character_pos(n))`` for EVERY row of
+    ``characters`` — the roster plus hal, ivy, _frame and admin, which the
+    single-character readers answer too — and for "nobody" (no row at all:
+    ``("", "", None)``). Hand-derived spot values: jon ("", "", None) — the
+    broken profile answers no place, and jon was never positioned; gus
+    ("", "", (0, 30)) — the ticker moved it out of every footprint.
+
+[5] the travel ticker's query survives the unparsable rows. With jon
+    ('{broken'), kim ('[1]') and lou (NaN) in the table:
+    ``list_active_journeys()`` names == ["fin", "gus"] (both still travel,
+    see above; the broken rows have no journey). Then a THIRD traveller,
+    "oli", starts the gus route at t = 2 s - 28 s = -26 s relative to START,
+    i.e. at t = 2 s its point is 28 m along: (0, 28) — outside INN; one
+    ticker pass writes location "" for it. On 193321cf (before the
+    ``json_valid`` guard) the same query raised "malformed JSON", answered
+    [] and nobody moved. ``get_avatar_sync_snapshot("jon")`` answers
+    (pos None, journey None, movement_target "") instead of raising, and
+    the worldmap's ``world_ops._fog_inputs()`` lists jon with journey None.
+
 The per-character readers log jon and kim at ERROR with a traceback — that is
 their documented reaction to an unreadable profile, not a failure here.
 
@@ -114,10 +135,11 @@ from app.core.timeutils import set_game_factor, set_game_time  # noqa: E402
 from app.models import character as character_mod  # noqa: E402
 from app.models.account import get_active_character, set_active_character  # noqa: E402
 from app.models.character import (  # noqa: E402
-    get_character_current_location, get_character_current_room,
-    get_character_profile, list_available_characters, list_character_places,
-    save_character_current_location, save_character_current_room,
-    save_character_profile)
+    get_avatar_sync_snapshot, get_character_current_location,
+    get_character_current_room, get_character_place, get_character_pos,
+    get_character_profile, list_active_journeys, list_available_characters,
+    list_character_places, save_character_current_location,
+    save_character_current_room, save_character_profile)
 from app.models.world import (  # noqa: E402
     _load_world_data, _save_world_data, add_location, update_location_position)
 
@@ -233,10 +255,8 @@ travel_engine.advance_all_journeys()
 check("fin still on its journey", bool(get_character_profile("fin").get("journey")), True)
 check("gus still on its journey", bool(get_character_profile("gus").get("journey")), True)
 
-# The rows no setter writes come LAST: ``list_active_journeys`` (the ticker's
-# "who travels" query) runs ``json_extract`` over every ``profile_json``, and
-# a malformed one fails that whole query — with jon already in the table the
-# travellers above would not move at all.
+# The rows no setter writes come after the first ticker pass; [5] runs the
+# ticker again with them in the table.
 raw_character("_frame", "{}", INN, "lounge")
 raw_character("admin", "{}", INN, "lounge")
 raw_character("jon", "{broken", INN, "lounge")
@@ -329,6 +349,42 @@ else:
                   f"{old_n} (expected >= {len(ROSTER)})")
             if not ok:
                 FAILURES.append(f"{BASE} profile loads")
+
+# ── [4] the single-character place reader ──────────────────────────────
+print("[4] get_character_place")
+ALL_ROWS = [r[0] for r in db.get_connection().execute(
+    "SELECT name FROM characters ORDER BY name").fetchall()]
+for n in ALL_ROWS + ["nobody"]:
+    check(f"get_character_place({n}) == the three readers",
+          get_character_place(n),
+          (get_character_current_location(n), get_character_current_room(n),
+           get_character_pos(n)))
+check("jon (broken profile)", get_character_place("jon"), ("", "", None))
+check("gus (moved out by the ticker)", get_character_place("gus"),
+      ("", "", {"x": 0.0, "z": 30.0}))
+check("nobody", get_character_place("nobody"), ("", "", None))
+
+# ── [5] the ticker with unparsable rows in the table ────────────────────
+print("[5] list_active_journeys with jon/kim/lou in the table")
+check("travellers", [j["name"] for j in list_active_journeys()], ["fin", "gus"])
+person("oli", INN, "lounge")
+_prof = get_character_profile("oli")
+_prof["movement_target"] = MARKET
+_prof["journey"] = {"target": MARKET, "waypoints": [list(w) for w in ROUTE],
+                    "started_at_s": START - 26.0, "speed_m_s": 1.0,
+                    "entry_edge": 2}
+save_character_profile("oli", _prof)
+check("oli is listed", [j["name"] for j in list_active_journeys()],
+      ["fin", "gus", "oli"])
+travel_engine.advance_all_journeys()
+check("oli moved: point", get_character_pos("oli"), {"x": 0.0, "z": 28.0})
+check("oli moved: location", get_character_current_location("oli"), "")
+snap = get_avatar_sync_snapshot("jon")
+check("snapshot of jon", (snap["pos"], snap["journey"], snap["movement_target"]),
+      (None, None, ""))
+from app.core import world_ops  # noqa: E402
+fog = world_ops._fog_inputs()
+check("worldmap fog inputs list jon", fog.get("jon", {}).get("journey", "absent"), None)
 
 print()
 if FAILURES:
