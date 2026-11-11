@@ -369,9 +369,12 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
             mesh = result.parts[side].get(part)
             if mesh is None:
                 continue
-            # the shaft is an open tube looked into from the collar: both faces of its wall are drawn
-            blob = glb_mesh.graft(blob, mesh, name=node_name(item_id, side, part),
-                                  extras={"kind": kind, "item_id": item_id, "fsig": fsig, "side": side, "part": part},
+            # the shaft is an open tube looked into from the collar: both faces of its wall are drawn; its node names
+            # the collar's bind height (footwear_fit step 9) — the shaft's top for every reader of the GLB
+            extras = {"kind": kind, "item_id": item_id, "fsig": fsig, "side": side, "part": part}
+            if part == "shaft":
+                extras["collar_bind_m"] = result.record["sides"][side]["split"]["collar_bind_m"]
+            blob = glb_mesh.graft(blob, mesh, name=node_name(item_id, side, part), extras=extras,
                                   material_overrides={"doubleSided": True} if part == "shaft" else None)
     now = utc_now_iso()
     parents: Dict[str, Any] = {"body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,

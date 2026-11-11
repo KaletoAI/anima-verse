@@ -84,7 +84,7 @@ front, the band's far end is the instep's own rise — that number is ``throat_s
 diagnostics). Diagnostics: rim gap (topline → nearest foot vertex), arch gap (lowest foot vertex per 4 mm cell →
 nearest shoe surface, EDT), overhang above the rim, poke by region (heel / mid / toe by the fit's heel and ball x).
 
-**Boots** (``CUT_VERSION`` 3; boots spec ``docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md`` § 7,
+**Boots** (``CUT_VERSION`` 3, 4; boots spec ``docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md`` § 7,
 § 9). The fit's parts per side are ``foot`` and, for a split fit, ``shaft`` (``footwear_fit`` step 9). The cut
 under the foot part is the round-1 cut with ONE change: the removal cap is ``min(wall top, y_split − band)``
 (``cut_description``, the side carries ``split {y_m, band_m}``), so the removal stops at the bottom of the ankle
@@ -94,23 +94,31 @@ voxel surface is foot ∪ shaft, each vertex taken into the cut frame by its OWN
 carries a Leg share; the round-1 ``(1 − w) Foot + w Toe`` assumed the two sum to 1), so the lid closes the collar and
 the shin inside the tube is enclosed. Gate ``shaft_poke`` (``CUT_GATES``, a split fit only — a shoe's record has no
 such key, like the fit's ``SHAFT_GATES``): of the SHIN vertices — body vertices carrying this side's Leg or UpLeg
-weight whose cut-frame height lies in [``y_split + band``, the shaft part's top] (the band's top inclusive within
-1e-9) — the share in the voxel exterior; ≤ 0.5 %. The other leg carries none of this side's Leg weight and the
-shin above the shaft top is above the lid. With no shin vertex in the range the value is None and the gate is not
-judged (``POKE_OPTIONAL``, never a vacuous 0 — P2 Ruling 8b).
+weight whose cut-frame height lies in [``y_split + band``, the COLLAR ``split.collar_m``] (the band's top inclusive
+within 1e-9; ``CUT_VERSION`` 4: the collar = the closed rim of the opening, ``footwear_fit`` step 9, fit version 9 —
+version 3 read the shaft part's highest vertex, which on a real boot is a pull tab) — the share in the voxel
+exterior; ≤ 0.5 %. The other leg carries none of this side's Leg weight and the shin above the collar is above the
+lid. ``shaft_top_m`` (the part's highest vertex) and ``collar_m`` stay in the side's diagnostics. With no shin
+vertex in the range the value is None and the gate is not judged (``POKE_OPTIONAL``, never a vacuous 0 — P2 Ruling
+8b).
 Real material (boots plan Task 13, 2026-11-11, offline on a copy of the clone, 0 hub jobs): Kai's base
 (``base634402e5``) in the Work Shoes (``item_fede24fa``, insole v5 ``class`` ankle, ``collar_h_raw`` 0.417 vs
 ``top_raw`` 0.560 vs ``vamp_top_raw`` 0.421), refitted at ``FOOTWEAR_FIT_VERSION`` 8 / ``CUT_VERSION`` 3:
 ``shaft_poke`` **0.708 / 0.686** (L / R; 155 of 219 and 133 of 194 shin vertices) — REFUSED, although the fit
 gates hold (``shaft_inside_share`` 0, follow 0.00°, push p95 7.8 mm). The shin is not through the wall (6–26 mm
-from the shaft surface, p5–p95): the range's top is the shaft part's HIGHEST vertex, here the back pull tab
-(bind 0.193 / 0.197 m), while the closed collar ring ends near 0.17 m — above it the section is the heel
-counter alone and every shin vertex there reads exterior. Disabling the lid's throat skip changes nothing.
-Open: read the range's top at the collar (the insole's ``collar_h``), not at the tab. The same fit assembled with
-the stand-in trousers (four boot nodes, ``scripts/check_footwear.mjs --bare``): seam gap 0.0000 mm and leg follow
-0.00° in still / idle / walk / sit, ``open_loops_above_split`` 0, penetration 1.6–1.7 % per side (round 1: 2.7–3.6),
-walk strike 1.6–3.7 / off −1.1–1.6 mm, seat floor 3.1–7.4 mm, thigh in shaft 0 % — and ``shaft_poke`` 76–85 %, the
-same pull-tab reading.
+from the shaft surface, p5–p95): the range's top was the shaft part's HIGHEST vertex, here the back pull tab
+(frame 0.2035 m, bind 0.193 / 0.197 m), while the closed collar ring ends near 0.17 m — above it the section is
+the heel counter alone and every shin vertex there reads exterior. Disabling the lid's throat skip changes
+nothing. **Fixed (Task 9 fix 2, fit version 9 / ``CUT_VERSION`` 4)**: the range ends at the collar — the insole's
+``top_raw`` 0.5597 (its highest closed slab; the nine above it, 0.5702–0.6546, cut the tab and the open counter,
+gaps 115–270°) × k 0.3111 = **0.1741 m** in the frame (bind 0.1640 / 0.1674) — and the same material reads
+``shaft_poke`` **0 / 0** (33 / 41 shin vertices), the fit ACCEPTED, its shaft geometry byte-identical to version 8
+(``shaft_sha`` deebfd6b…). The same fit assembled with the stand-in trousers (four boot nodes,
+``scripts/check_footwear.mjs --bare``): seam gap 0.0000 mm and leg follow 0.00° in still / idle / walk / sit,
+``open_loops_above_split`` 0, penetration 1.6–1.7 % per side (round 1: 2.7–3.6), walk strike 1.6–3.7 / off
+−1.1–1.6 mm, seat floor 3.1–7.4 mm, thigh in shaft 0 %, and ``shaft_poke`` **0.00 %** in every frame (version 3:
+76–85 %; the collar range alone still read 55–70 % — the script's boot volume had no lid on a shell mesh, fixed
+there).
 
 **Calibration (P3 acceptance, Task 21, 2026-11-11) — REAL material.** Kira's base body (``base20d5701a``) in the
 Business Heels (UniForge mesh of the Qwen side-view empty shoe, 98 507 → 57 527 tris at ``TARGET_TRIS`` 60 000, width
@@ -149,8 +157,9 @@ from app.core.footwear_insole import HEEL_SEAT_M
 from app.core.glb_mesh import Prim  # noqa: F401  (re-exported: the cut's primitive type)
 
 #: Bumped when the cut changes what it produces (the record's ``cut.version``). 2: the toe conform (step 2b);
-#: 3: the boot's removal cap bounded at the ankle band (pulled forward in 7b04e9f5) and the ``shaft_poke`` gate.
-CUT_VERSION = 3
+#: 3: the boot's removal cap bounded at the ankle band (pulled forward in 7b04e9f5) and the ``shaft_poke`` gate;
+#: 4: ``shaft_poke``'s range ends at the collar (``split.collar_m``), not at the shaft part's highest vertex.
+CUT_VERSION = 4
 #: The throat conform acts this far behind the throat front (metres).
 THROAT_BAND_M = 0.02
 #: The slimming band reaches this far above the cap (metres) ...
@@ -244,7 +253,8 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
     """The record's ``cut`` (module docstring) from a ``footwear_fit.FootwearFit`` that ran and its item's
     ``insole.json``: ``{"version", "sides": {side: {...}}}``, JSON-safe. ValueError for a fit that produced no
     sides or a record without ``insole.width_raw``. For a split fit (a boot, fit version 6) the side's ``cap`` is
-    ``min(wall top, y_split − band)`` and the description carries ``split {y_m, band_m}``."""
+    ``min(wall top, y_split − band)`` and the description carries ``split {y_m, band_m, collar_m}`` (the collar:
+    ``footwear_fit`` step 9, fit version 9)."""
     record = fit.record
     sides_rec = record.get("sides") or {}
     if not sides_rec:
@@ -311,7 +321,8 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
             "extension": {"axis_local": rec["extension"]["axis_local"], "deg": rec["extension"]["deg"]},
             "toe_counter": {"axis_local": rec["toe_counter"]["axis_local"], "deg": rec["toe_counter"]["deg"]},
             "topline": topline, "cap": side_cap, "footprint": outline,
-            **({"split": {"y_m": float(split["y_m"]), "band_m": float(split.get("band_m", 0.0))}}
+            **({"split": {"y_m": float(split["y_m"]), "band_m": float(split.get("band_m", 0.0)),
+                          "collar_m": float(split["collar_m"])}}
                if split.get("is_boot") else {}),
             "throat": throat, "toe_box": toe_box, "vamp_inner": vamp_inner,
             "stations": {"heel_x": d.get("heel_x_m"), "ball_x": d.get("ball_x_m"),
@@ -900,13 +911,14 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
         base += len(Sb)
     Sc = np.concatenate(Sc_list)
     SF = np.concatenate(SF_list)
-    # the shin inside the shaft: this side's Leg / UpLeg vertices between the band's top and the shaft's top
+    # the shin inside the shaft: this side's Leg / UpLeg vertices between the band's top and the COLLAR (the closed
+    # rim, ``footwear_fit`` step 9 — never the shaft part's highest vertex: a pull tab stands above the rim)
     shin = np.zeros(0, bool)
     Sh = np.zeros((0, 3))
     if shaft is not None:
         split = desc.get("split") or {}
         y_lo = float(split.get("y_m", 0.0)) + float(split.get("band_m", 0.0))
-        y_hi = float(Sc_list[-1][:, 2].max())
+        y_hi = float(split["collar_m"])
         shin = _shin_mask(after, shaft) & (Ca[:, 1] >= y_lo - RANGE_EPS_M) & (Ca[:, 1] <= y_hi + RANGE_EPS_M)
         Sh = Ca[shin][:, [0, 2, 1]]
     pts = [Sc, Fb] + ([Fa] if len(Fa) else []) + ([Sh] if len(Sh) else [])
@@ -1027,6 +1039,7 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
         else:
             shaft_out = {"shaft_poke": None, "shin_n": 0, "shaft_poke_n": 0}
         shaft_out["shaft_top_m"] = float(Sc_list[-1][:, 2].max())
+        shaft_out["collar_m"] = float(split["collar_m"])
     return {
         **shaft_out,
         "deep_outside": float(deep.sum() / n_should) if n_should else 0.0,

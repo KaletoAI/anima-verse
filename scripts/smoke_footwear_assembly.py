@@ -71,7 +71,9 @@ Expected, by hand:
      column's 12 bottom corners per side). Bare sidecar pieces {feet: boots}, unpainted [boots] -> assemble ->
      {full: assembled, low: assembled}; per tier the assembled GLB holds FOUR garment nodes:
      garment_footwear_boots_{left,right} (part "foot", 6600 / 2200) and …_{left,right}_shaft (part "shaft", 3444 /
-     1148), extras {kind footwear, item_id boots, fsig FB, side, part}; the shaft nodes' material doubleSided true
+     1148), extras {kind footwear, item_id boots, fsig FB, side, part} and on the shaft nodes ``collar_bind_m`` (the
+     fit record's ``sides.<side>.split.collar_bind_m``, fit version 9: the tube's flat rim raw 0.16 is the highest
+     closed slab, 0.16 k - lift = 0.163776 - 0.010236 = 0.153540 +- 1e-6); the shaft nodes' material doubleSided true
      (graft's override), the foot nodes' the source material's as the fit GLB carries it (this fixture's static_glb
      default: true as well — smoke_footwear_fit_step.py [P5] writes false and sees it kept); the body cut is the
      clog's (24 faces / 48 vertices:
@@ -86,7 +88,9 @@ Expected, by hand:
      script reads four nodes (it refused them with "expected 2 sided shoe meshes" on 193321cf). By hand: the
      shaft rows are raw 0.01 j, frame 0.010236 j, body y = frame - lift 0.010236 = 0.010236 (j - 1); the band ends
      at body y_split + 0.02 = 0.08 + 0.02 = 0.10, so the first shaft row without Foot weight is j 11: band top
-     0.102360, the shaft top j 16: 0.153540 (both +- 2e-6, float32). The served body is the cut clog body (the
+     0.102360, the shaft top j 16: 0.153540 (both +- 2e-6, float32), the collar = the shaft node's extras
+     ``collar_bind_m`` 0.153540 (the flat rim IS the top here; with a pull tab it is not — smoke_footwear_cut
+     [X12]). The served body is the cut clog body (the
      two leg columns, corners at y 0.10 and 0.45 only): no boundary loop, so open_loops_above_split 0, and no shin
      vertex in [0.10236, 0.15354], so shaft_poke None (as smoke_footwear_cut [X11] (d)). Frame 0: seam gap 0
      (+- 1e-6 mm: a seam twin pair has one bind position and one set of weights), leg follow 0 (+- 1e-3 deg: the
@@ -283,6 +287,7 @@ def run_check_footwear(root: Path, asm: Path) -> None:
     near("K band top (bind y) = the first shaft row above the band", (sides.get("left") or {}).get("band_top_bind_y"),
          0.102360, 2e-6)
     near("K shaft top (bind y)", (sides.get("left") or {}).get("shaft_top_bind_y"), 0.153540, 2e-6)
+    near("K collar (bind y) = the shaft node's collar_bind_m", (sides.get("left") or {}).get("collar_bind_y"), 0.153540, 2e-6)
     check("K open body loops above the split: 0", boot.get("open_loops_above_split"), 0)
     frame0 = (((rep.get("clips") or {}).get("idle") or {}).get("per_frame") or [{}])[0].get("boot") or {}
     for s_ in ("left", "right"):
@@ -654,7 +659,15 @@ def main() -> int:
         pose_keys = ("bones", "root_lift_m", "contacts", "rest", "version")
         for tier, path in (("full", asm), ("low", asm_low)):
             blob = path.read_bytes()
-            check(f"A7 {tier} four nodes", garment_nodes(blob), want_boot)
+            got_nodes = garment_nodes(blob)
+            collars = {n: extras.pop("collar_bind_m", None) for n, (extras, _nv, _nf) in got_nodes.items()}
+            for s_ in ("left", "right"):
+                # the collar from the fit record (footwear_fit step 9): the tube's flat rim, 0.16 k - lift
+                near(f"A7 {tier} {s_} shaft extras collar_bind_m", collars.get(f"garment_footwear_{boots}_{s_}_shaft"),
+                     0.153540, 1e-6)
+            check(f"A7 {tier} foot nodes carry no collar", [collars.get(f"garment_footwear_{boots}_{s_}") for s_ in ("left", "right")],
+                  [None, None])
+            check(f"A7 {tier} four nodes", got_nodes, want_boot)
             fit_glb = gs.garment_path("Demo", boots, FB, "fit").read_bytes()
             check(f"A7 {tier} shaft nodes doubleSided, foot nodes as the fit GLB's",
                   tuple(double_sided(blob, f"garment_footwear_{boots}_{s_}") for s_ in ("left_shaft", "right_shaft", "left", "right")),

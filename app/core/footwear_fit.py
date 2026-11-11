@@ -106,6 +106,18 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    top and the shaft's highest vertex up); with no ring at all the measure is ``None`` — recorded as such, not
    gated (``check_gates`` optional, ``ok`` None in the record), never a green 0.0. ``foot_pose`` is unchanged —
    the extension, the toe counter, the root lift and the contacts are the foot part's.
+   **The collar** (fit version 9, boots plan Task 9 fix 2): the shaft's top as every consumer reads it is the closed
+   rim of the opening — the insole analysis' ``shaft.top_raw`` (its highest CLOSED slab ring: a pull tab, a loop or
+   a tongue above the rim is no closed ring, INSOLE_VERSION 4), else, without a closed slab (a shaft too low for
+   slabs), the topline ``shaft_h_raw`` that made it a boot. Per side ``split.collar_m`` = that height × k in the
+   shoe frame (metres above the shoe ground — the cut frame of ``footwear_cut``) and ``split.collar_bind_m`` = its
+   height in BIND space: the placement maps the frame's up onto the body's up (``P4``'s basis ``[d, UP, ±right]``,
+   ``d`` horizontal), so a frame height h stands at ``Pf · (0, h, 0)`` everywhere, and above the band the bind
+   position IS the posed one (Leg / UpLeg stand in the bind pose). ``footwear_cut.cut_gates`` reads ``shaft_poke``
+   up to ``collar_m``; the hem (``garment_layers``) and ``scripts/check_footwear.mjs`` (the shaft node's extras
+   ``collar_bind_m``, contract ``docs/schnittstellen-3d.md``) read ``collar_bind_m``. The shaft part's highest
+   vertex is no longer read as its top: on the P2 Work Shoes it is the back pull tab, 2.9 cm above the collar,
+   and every shin vertex between the two read as a poke (``footwear_cut`` module docstring).
 
 Gates (``FIT_GATES``, every one refuses a fit since version 3): ``ball_placement_mm`` (the
 posed SKINNED ball of step 3 vs the shoe's chord ball point under the heel-anchored placement, before the
@@ -170,8 +182,10 @@ from app.core.footwear_gates import check_gates
 #: 7: the shaft transfer without the Foot column (no Foot / ToeBase above the band) and the follow measure over
 #:    the shaft's upper half when the top ring is empty (P2 Rulings 8a / 8b);
 #: 8: the shaft push runs on WELDED positions (seam duplicates move as one vertex, the smoothing over the connected
-#:    tube — an unwelded push tore the tube at its seams; Task 9 fix 1).
-FOOTWEAR_FIT_VERSION = 8
+#:    tube — an unwelded push tore the tube at its seams; Task 9 fix 1);
+#: 9: the COLLAR per side (``split.collar_m`` / ``collar_bind_m``, step 9) — the shaft's top for ``shaft_poke``, the
+#:    hem and ``check_footwear.mjs`` (a pull tab above the rim is no shaft top; Task 9 fix 2).
+FOOTWEAR_FIT_VERSION = 9
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -747,6 +761,10 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     lowest: List[float] = []
     shaft_raw = insole.get("shaft_h_raw")
     topline_m = None if shaft_raw is None else float(shaft_raw) * k
+    # the collar (step 9, fit version 9): the highest closed slab ring of the analysis, else the topline
+    collar_raw = (insole.get("shaft") or {}).get("top_raw")
+    if collar_raw is None:
+        collar_raw = shaft_raw
     shaft_metrics: Dict[str, List[float]] = {name: [] for name in SHAFT_GATES}
     any_split = False
     for side, w in work.items():
@@ -943,7 +961,10 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "foot_len_m": fm.length_m, "foot_w_ball_mm": w["fw_ball"] * 1000.0,
             "insole_w_ball_mm": w["iw_ball"] * 1000.0, "toe_room_mm": w["toe_room_mm"], "contacts": recs,
             "split": {"is_boot": is_boot, "y_m": y_split, "band_m": SPLIT_BAND_M, "margin_m": SPLIT_MARGIN_M,
-                      "topline_m": topline_m, "collar_above_ankle_mm": collar_above},
+                      "topline_m": topline_m, "collar_above_ankle_mm": collar_above,
+                      "collar_m": float(collar_raw) * k if is_boot else None,
+                      "collar_bind_m": float(_apply(w["Pf"], np.array([0.0, float(collar_raw), 0.0]))[1])
+                      if is_boot else None},
             "parts": {name: int(len(mesh.indices)) for name, mesh in side_parts.items()},
             **({"shaft": shaft_rec} if is_boot else {}),
         }

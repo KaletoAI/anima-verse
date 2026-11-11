@@ -83,7 +83,11 @@
  * a shaft node). The record of the fit is not read: everything comes from the GLB. Per side, in BIND space:
  * `band_top` = the lowest shaft-node vertex without Foot / ToeBase weight (≤ `NO_FOOT_W`) — above the band the
  * shaft carries Leg / UpLeg only (fit ruling 8a), so this is the first vertex row above `y_split + SPLIT_BAND_M`;
- * `shaft_top` = the shaft node's highest vertex; the seam pairs = every shaft-node vertex with a foot-node vertex
+ * `shaft_top` = the shaft node's highest vertex; `collar` = the shaft node's extras `collar_bind_m` — the closed
+ * rim of the opening as the fit placed it (`footwear_fit` step 9, fit version 9; contract
+ * `docs/schnittstellen-3d.md`), NOT re-derived here: a pull tab or loop above the rim makes `shaft_top` the tab's
+ * tip (the P2 Work Shoes: 2.9 cm above the collar), so the poke and thigh ranges end at the collar; a shaft node
+ * without it is refused (a fit before version 9 — refit it); the seam pairs = every shaft-node vertex with a foot-node vertex
  * at the same bind position (the band faces straddle the node boundary with shared positions and weights).
  * Measured in the still pose and in EVERY clip frame (`per_frame`, the clip's `boot` block; the worse side):
  *  - `seam_gap_mm`: the largest distance between the two vertices of a seam pair after skinning — 0 up to float
@@ -94,14 +98,19 @@
  *    than `FOLLOW_RING_MIN` vertices the shaft's upper half (from the middle of `band_top` and `shaft_top` up),
  *    else null (never a vacuous 0).
  *  - `shaft_poke`: the share of the side's body vertices whose dominant bone is the side's Leg / UpLeg, with bind
- *    height in [`band_top`, `shaft_top`], that lie OUTSIDE the boot — the side's footwear nodes posed, every
- *    boundary loop of them (welded by bind position across both nodes — the collar) closed by a fan from its
- *    centroid, voxelised like the body (`VOX`, dilated once, flood-filled from the grid border): a vertex in the
+ *    height in [`band_top`, `collar`], that lie OUTSIDE the boot — the side's footwear nodes posed, every
+ *    boundary loop of them (welded by bind position across both nodes) closed by a fan from its centroid, and the
+ *    LID at the collar — the points where the plane bind y = `collar` cuts the shaft node's edges, in angular
+ *    order about their bind centroid, fanned from their posed centroid (a real mesh is a shell with a wall
+ *    thickness whose opening is no boundary loop — the P2 Work Shoes' 712 loops are all small holes, none at the
+ *    rim — and a closed ring may keep a gap < 90°; without the lid the flood entered the tube from above and read
+ *    the shin inside it as poking: 55–70 % with the collar range alone, 21–52 % with a fan per cut segment) —
+ *    voxelised like the body (`VOX`, dilated once, flood-filled from the grid border): a vertex in the
  *    flood (or off the grid) pokes through. Null without such a vertex.
  *  - `seat_thigh_in_shaft` (seat clips only, after `seatFootLift`): the share of the side's UpLeg-dominant body
  *    vertices inside that boot volume (not in the flood) AND within the shaft's top 5 cm — along the posed axis
- *    from the centroid of the shaft vertices `TOP_BAND_LOW_M` below the top (± 5 mm) to the centroid of its top
- *    5 mm, between 5 cm below the top plane and 5 mm above it. Null without an UpLeg bone.
+ *    from the centroid of the shaft vertices `TOP_BAND_LOW_M` below the collar (± 5 mm) to the centroid of its
+ *    5 mm under the collar, between 5 cm below that plane and 5 mm above it. Null without an UpLeg bone.
  * Once, in the bind pose: `open_loops_above_split` = the body boundary loops (THE CUT above) whose centroid lies
  * in (`band_top`, `shaft_top`] and whose every vertex is dominated by that side's Foot / ToeBase / Leg / UpLeg —
  * a hole in the leg shell under the shaft (the anti-goal of spec § 4: the shin is never cut under a shaft). 0 on
@@ -600,16 +609,16 @@ async function main() {
     if (!o.isSkinnedMesh) return
     const g = o.geometry
     const garment = inGarment(o)
-    let side = null, part = null
+    let side = null, part = null, collarY = null
     if (garment) {
       for (let n = o; n && !side; n = n.parent) {
         const tag = n.userData?.garment
         const m = /_(left|right)(_shaft)?$/.exec(n.name)
         side = tag?.side ?? m?.[1] ?? null
-        if (side) part = tag?.part ?? (m?.[2] ? 'shaft' : 'foot')
+        if (side) { part = tag?.part ?? (m?.[2] ? 'shaft' : 'foot'); collarY = tag?.collar_bind_m ?? null }
       }
     }
-    parts.push({ mesh: o, garment, side, part, pos: g.attributes.position, si: g.attributes.skinIndex,
+    parts.push({ mesh: o, garment, side, part, collarY, pos: g.attributes.position, si: g.attributes.skinIndex,
       sw: g.attributes.skinWeight, offset: total, count: g.attributes.position.count })
     total += g.attributes.position.count
   })
@@ -770,6 +779,10 @@ async function main() {
       if (f !== undefined) pairs.push([f, g])
     }
     if (!Number.isFinite(bandTop)) bandTop = null
+    const collarY = shaft.collarY
+    if (typeof collarY !== 'number' || !Number.isFinite(collarY)) {
+      throw new Error(`shaft node ${shaft.mesh.name} carries no extras collar_bind_m (a fit before FOOTWEAR_FIT_VERSION 9 — refit it)`)
+    }
     let ring = bandTop === null ? [] : shaftG.filter((g) => bindY(g) > bandTop + RING_ABOVE_BAND_M)
     let ringKind = 'top'
     if (ring.length < FOLLOW_RING_MIN) {
@@ -789,12 +802,32 @@ async function main() {
     collar.forEach((loop, li) => {
       for (let k = 0; k < loop.length; k++) volFaces.push(verts.length + li, localOf[loop[k]], localOf[loop[(k + 1) % loop.length]])
     })
+    // the lid at the collar: the points where the plane bind y = collar cuts the shaft node's edges, in angular
+    // order about their bind centroid, fanned from their posed centroid — a real mesh's opening is no boundary
+    // loop (a shell with a wall thickness) and its ring may keep a gap (a CLOSED ring's largest gap is < 90°,
+    // footwear_insole), so without the lid the flood enters the tube from above (module docstring)
+    const lidPts = []
+    const sIdx = shaft.mesh.geometry.index
+    const sFace = (k) => shaft.offset + (sIdx ? sIdx.getX(k) : k)
+    for (let k = 0; k + 2 < (sIdx ? sIdx.count : shaft.count); k += 3) {
+      const tri = [sFace(k), sFace(k + 1), sFace(k + 2)]
+      for (const [a, c] of [[0, 1], [1, 2], [2, 0]]) {
+        const sa = bindY(tri[a]) - collarY, sc = bindY(tri[c]) - collarY
+        if ((sa < 0) !== (sc < 0)) lidPts.push([tri[a], tri[c], sa / (sa - sc)])
+      }
+    }
+    const lidXZ = lidPts.map(([ga, gc, t]) => [0, 2].map((k) => bindRaw[ga * 3 + k] + t * (bindRaw[gc * 3 + k] - bindRaw[ga * 3 + k])))
+    const lidC = [0, 1].map((k) => lidXZ.reduce((acc, q) => acc + q[k] / Math.max(1, lidXZ.length), 0))
+    const lid = lidPts.map((q, i) => [q, Math.atan2(lidXZ[i][1] - lidC[1], lidXZ[i][0] - lidC[0])])
+      .sort((u, v) => u[1] - v[1]).map(([q]) => q)
+    const lidBase = verts.length + collar.length, lidCentre = lidBase + lid.length
+    if (lid.length >= 3) for (let i = 0; i < lid.length; i++) volFaces.push(lidCentre, lidBase + i, lidBase + (i + 1) % lid.length)
     const legRe = new RegExp(`^${side}(up)?leg$`)
     const sideRe = new RegExp(`^${side}(foot|toe.*|leg|upleg)$`)
     const poke = [], thigh = []
     for (const p of body) for (let i = 0; i < p.count; i++) {
       const g = p.offset + i, d = dominantBone(g)
-      if (bandTop !== null && legRe.test(d) && bindY(g) >= bandTop && bindY(g) <= shaftTop) poke.push(g)
+      if (bandTop !== null && legRe.test(d) && bindY(g) >= bandTop && bindY(g) <= collarY) poke.push(g)
       if (d === `${side}upleg`) thigh.push(g)
     }
     // the body's boundary loops under the shaft: a hole in the leg shell (spec § 4 anti-goal)
@@ -803,11 +836,11 @@ async function main() {
       return cy > bandTop && cy <= shaftTop && loop.every((v) => sideRe.test(dominantBone(v)))
     }).length
     boot[side] = {
-      shaft, foot, pairs, bandTop, shaftTop, ring, ringKind, verts, collar: collar.map((l) => l.map((g) => localOf[g])),
-      volFaces: Uint32Array.from(volFaces), poke, thigh: bones.has(`${side}upleg`) ? thigh : null, openLoops,
+      shaft, foot, pairs, bandTop, shaftTop, collarY, ring, ringKind, verts, collar: collar.map((l) => l.map((g) => localOf[g])),
+      volFaces: Uint32Array.from(volFaces), lid, poke, thigh: bones.has(`${side}upleg`) ? thigh : null, openLoops,
       legBone: boneNamesOf.get(shaft).indexOf(`${side}leg`),
-      topRim: shaftG.filter((g) => bindY(g) >= shaftTop - BAND_TOL_M),
-      topLow: shaftG.filter((g) => Math.abs(bindY(g) - (shaftTop - TOP_BAND_LOW_M)) <= BAND_TOL_M),
+      topRim: shaftG.filter((g) => bindY(g) >= collarY - BAND_TOL_M && bindY(g) <= collarY),
+      topLow: shaftG.filter((g) => Math.abs(bindY(g) - (collarY - TOP_BAND_LOW_M)) <= BAND_TOL_M),
     }
   }
   const isBoot = Object.keys(boot).length > 0
@@ -840,11 +873,20 @@ async function main() {
         follow = bestFitTurnDeg(Q, P)
       }
       // the boot volume of this pose
-      const local = new Float32Array((b.verts.length + b.collar.length) * 3)
+      const local = new Float32Array((b.verts.length + b.collar.length + b.lid.length + 1) * 3)
       b.verts.forEach((g, i) => { local[i * 3] = pos[g * 3]; local[i * 3 + 1] = pos[g * 3 + 1]; local[i * 3 + 2] = pos[g * 3 + 2] })
       b.collar.forEach((loop, li) => {
         const o = (b.verts.length + li) * 3
         for (const v of loop) for (let k = 0; k < 3; k++) local[o + k] += local[v * 3 + k] / loop.length
+      })
+      // the collar lid: the posed cut points (the posed edge at the bind parameter) and their centroid
+      const lidBase = b.verts.length + b.collar.length, lidCentre = (lidBase + b.lid.length) * 3
+      b.lid.forEach(([ga, gc, t], i) => {
+        const o = (lidBase + i) * 3
+        for (let k = 0; k < 3; k++) {
+          local[o + k] = pos[ga * 3 + k] + t * (pos[gc * 3 + k] - pos[ga * 3 + k])
+          local[lidCentre + k] += local[o + k] / b.lid.length
+        }
       })
       const vol = voxelSolid(local, b.volFaces)
       let poke = null
@@ -899,9 +941,9 @@ async function main() {
     chain_ms: chainMs, still: null, clips: {},
     boot: isBoot ? {
       sides: Object.fromEntries(Object.entries(boot).map(([side, b]) => [side, {
-        band_top_bind_y: b.bandTop, shaft_top_bind_y: b.shaftTop, seam_pairs: b.pairs.length, ring: b.ringKind,
+        band_top_bind_y: b.bandTop, shaft_top_bind_y: b.shaftTop, collar_bind_y: b.collarY, seam_pairs: b.pairs.length, ring: b.ringKind,
         ring_vertices: b.ring.length, poke_vertices: b.poke.length, thigh_vertices: b.thigh ? b.thigh.length : null,
-        collar_loops: b.collar.length, open_loops_above_split: b.openLoops,
+        collar_loops: b.collar.length, lid_points: b.lid.length, open_loops_above_split: b.openLoops,
       }])),
       open_loops_above_split: Object.values(boot).reduce((a, b) => a + b.openLoops, 0),
     } : null,
@@ -912,7 +954,7 @@ async function main() {
     + `client chain ${chainMs} ms, bind Foot→ToeBase line ${r1(bindPitch.left)}° / ${r1(bindPitch.right)}° (pitch 0)`)
   if (isBoot) {
     console.log(`  boot: ` + Object.entries(report.boot.sides).map(([side, b]) => `${side} band top ${r1(b.band_top_bind_y * 1000)} mm, `
-      + `shaft top ${r1(b.shaft_top_bind_y * 1000)} mm, ${b.seam_pairs} seam pairs, ring ${b.ring ?? '—'} (${b.ring_vertices}), `
+      + `shaft top ${r1(b.shaft_top_bind_y * 1000)} mm, collar ${r1(b.collar_bind_y * 1000)} mm, ${b.seam_pairs} seam pairs, ring ${b.ring ?? '—'} (${b.ring_vertices}), `
       + `${b.poke_vertices} shin / ${b.thigh_vertices ?? '—'} thigh vertices, ${b.collar_loops} collar loops`).join(' | ')
       + ` | open body loops above the split ${report.boot.open_loops_above_split}`)
   }

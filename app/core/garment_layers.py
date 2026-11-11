@@ -46,8 +46,10 @@ sha256 of the shaft nodes' arrays (``shaft_sha``), so a refit of the boot invali
 the ``lsig`` (``layer_sig(inner, mode=…, plane_m=…)``) — a toggle is another file, flipping back serves the cached
 one. ``over`` (the default): the trousers are ``layer_over``-ed with the shafts among the inners. ``tucked``: the
 trousers (layered over their inner clothing first) are cut by ``footwear_cut.plane_cut`` at ``plane_m`` = the
-shaft nodes' top (bind space) − ``TUCK_RESERVE_M`` (0.03: the hem ends inside the collar and never shows when the
-knee bends); gate ``tucked_poke`` = of the remaining trouser vertices between the plane and the shaft top, the
+COLLAR (bind space; the lower side's ``split.collar_bind_m`` of the boot fit record, ``footwear_fit`` step 9 — never
+the shaft nodes' highest vertex, a pull tab stands above the rim) − ``TUCK_RESERVE_M`` (0.03: the hem ends inside
+the collar and never shows when the knee bends); gate ``tucked_poke`` = of the remaining trouser vertices between
+the plane and the collar (``top_m``), the
 share outside the shaft's cross-section at the plane (``footwear_insole.opening_polygon`` of either shaft) —
 above ``TUCKED_POKE_MAX`` (1 %) the pair cannot be tucked (nor in reality: there is no inward layering), the
 ``over`` geometry is built under the tucked ``lsig`` instead and the record says ``hem.fallback = "too_wide"``
@@ -58,12 +60,16 @@ carries ``{mode, lsig, fallback}``, so a toggle rebuilds the served model.
 Real material (boots plan Task 13, 2026-11-11, offline, 0 hub jobs): Kai's Work Shoes fit (``FOOTWEAR_FIT_VERSION``
 8) with a STAND-IN trouser mesh — per leg a welded tube from bind y 0.08 to 0.70 following the leg's own section
 (16 angular bins of the skin radius + a clearance), weighted by ``clothing_weights``; the real trousers' chain was
-refused at the ghost back step. ``top_m`` 0.1968 (the pull tab, see ``footwear_cut``), ``plane_m`` 0.1668.
+refused at the ghost back step. Fit version 8: ``top_m`` 0.1968 (the pull tab, see ``footwear_cut``), ``plane_m``
+0.1668; fit version 9 (Task 9 fix 2, the collar): ``top_m`` **0.1640** (the left collar, the lower one; right
+0.1674), ``plane_m`` **0.1340**.
 ``over``: clearance 25 mm (mean radius 64 mm at y 0.17) → ``gap_min_m`` **+10.4 mm**, p1 11.8 mm, 2099 vertices
 moved, max 61 mm; clearance 3 mm (42 mm) → ``gap_min_m`` **−15.3 mm** with p1 +9.5 mm (a few vertices stay inside
-the shaft). ``tucked``: 3 mm → ``tucked_poke`` 0.405 (259 / 640), 25 mm → 0.998 — both fall back ``too_wide``.
-The plane lies at the collar's own height, so even a leg-tight tube pokes: on an ankle shoe whose collar ends at
-the band the fallback is right, its word ("too wide") is not.
+the shaft) — the same under version 9 (the over layering never read ``top_m``). ``tucked``: version 8 at 0.1668
+(the collar's own height): 3 mm → ``tucked_poke`` 0.405 (259 / 640), 25 mm → 0.998; version 9 at 0.1340 (the
+ankle — the collar stands 2.8 cm above the split): 3 mm → **0.783** (501 / 640, 1280 faces removed), 25 mm →
+**0.869** (556 / 640) — every case falls back ``too_wide``. On an ankle shoe whose collar ends this close to the
+band the fallback is right, its word ("too wide") is not.
 """
 import hashlib
 import json
@@ -144,11 +150,18 @@ def shaft_sha(meshes: Sequence[Any]) -> str:
 
 def _hem_inputs(hem: Dict[str, Any]) -> Dict[str, Any]:
     """The shaft meshes of a ``hem`` (``{boot, fit, trousers, mode}``), their sha and the tucked plane height:
-    ``{meshes, sha, top_m, plane_m}``; ``meshes`` [] when the boot fit carries no shaft node."""
-    meshes = shaft_meshes(Path(hem["fit"]).read_bytes(), str(hem["boot"]))
-    top = max((float(np.asarray(g.positions, np.float64)[:, 1].max()) for g in meshes if len(g.positions)),
-              default=None)
-    return {"meshes": meshes, "sha": shaft_sha(meshes), "top_m": top,
+    ``{meshes, sha, top_m, plane_m}``; ``meshes`` [] when the boot fit carries no shaft node. ``top_m`` = the LOWER
+    of the two sides' collars in bind space (the boot fit record's ``sides.<side>.split.collar_bind_m``,
+    ``footwear_fit`` step 9 — the closed rim, never the shaft node's highest vertex: a pull tab stands above it), so
+    the tucked hem ends inside both collars; None (no hem) when the record names no collar (a fit before version 9)."""
+    from app.core.garment_store import read_record
+    fit = Path(hem["fit"])
+    meshes = shaft_meshes(fit.read_bytes(), str(hem["boot"]))
+    sides = (read_record(fit.with_suffix(".json")) or {}).get("sides") or {}
+    collars = [float(c) for c in ((s.get("split") or {}).get("collar_bind_m") for s in sides.values()
+                                  if isinstance(s, dict)) if c is not None]
+    top = min(collars) if meshes and collars else None
+    return {"meshes": meshes if top is not None else [], "sha": shaft_sha(meshes), "top_m": top,
             "plane_m": None if top is None else top - TUCK_RESERVE_M}
 
 

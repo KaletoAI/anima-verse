@@ -652,7 +652,12 @@ def _build(character_name: str, directory: Path, bare: Path,
                         if part == "foot":
                             raise
                         continue              # a shoe has no shaft node
-                    blob = glb_mesh.graft(blob, mesh, name=name, extras={**extras, "side": side_name, "part": part})
+                    node_extras = {**extras, "side": side_name, "part": part}
+                    if part == "shaft":
+                        # the collar's bind height (footwear_fit step 9): the shaft's top for the GLB's readers
+                        side_rec = ((garment.get("record") or {}).get("sides") or {}).get(side_name) or {}
+                        node_extras["collar_bind_m"] = (side_rec.get("split") or {}).get("collar_bind_m")
+                    blob = glb_mesh.graft(blob, mesh, name=name, extras=node_extras)
             continue
         mesh = glb_mesh.garment_arrays(source)
         if garment["kind"] == HAIR:

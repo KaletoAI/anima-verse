@@ -19,7 +19,7 @@ width 0.085, height 0.02; 1056 faces / 816 vertices: per foot 516 / 384 — sole
 grids — plus 12 / 24 per leg column) with its sidecar and
 unrigged copy. Item ``heels`` (feet, own mesh) held by Demo; its current source folder holds the closed flat
 clog of ``_footwear_fixtures.clog`` as ``prepared.glb`` (``glb_mesh.static_glb``), ``insole.json`` =
-``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 5, fit version 8: the
+``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 5, fit version 9: the
 cut applied and gated, toes conformed, the foot measured below the ankle, a boot split at the ankle) — the item steps are done, a run only fits. Item ``boots``: the
 closed flat boot ``flat_boot(shaft=0.16)`` of the boots round (the clog with a 16-cm tube over x in [0, 0.10]),
 its prepared.glb's material ``doubleSided`` False; item ``pumps``: the wedge pump itself. The clog is the one
@@ -50,7 +50,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      node, fit version 6); its body (garment nodes excluded) is
      the CUT base: 24 faces / 48 vertices (fewer than the bare body's 1056 / 816), and in both sides' cut
      frames no remaining vertex lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9 for
-     every one). Record: method "shoe", kind "footwear", version 8, fit_version 8, accepted, ssig = the current
+     every one). Record: method "shoe", kind "footwear", version 9, fit_version 9, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
      sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 5}}; scale.k_m_per_unit 1.023599
@@ -90,14 +90,16 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      split's numbers on the same clog-shaped foot part: k 1.023599, lift 0.010236, y_split 0.090236, topline
      0.16 k = 0.163776 -> collar_above_ankle_mm +73.5 > SPLIT_MARGIN_M): fit(Demo, boots) publishes
      garments/boots_<FB>.glb with FOUR nodes garment_footwear_boots_{left,right} (extras.garment.part "foot")
-     + …_shaft (part "shaft"); the shaft nodes' material doubleSided True, the foot nodes' False (the source's);
+     + …_shaft (part "shaft", and ``collar_bind_m`` = the collar in bind space, fit version 9: the tube's flat
+     rim at raw 0.16 is the highest closed slab, so frame 0.16 k = 0.163776 minus the lift 0.010236 = 0.153540,
+     +-1e-6); the shaft nodes' material doubleSided True, the foot nodes' False (the source's);
      record split.is_boot True, sides.left.split.y_m 0.090236 (+-1e-5), collar 73.5 mm (+-0.1), gates = the
      8 of P1 + the 6 footwear_fit.SHAFT_GATES + footwear_cut's shaft_poke (15; seam_stretch_max {ok False, gating
      False} — recorded, the fit accepted; shaft_poke 0 over the 12 shin vertices per side in the shaft's height
      range — the round-1 column's bottom corners at body y 0.10, 12.5 mm inside the tube; boots plan Task 9,
-     CUT_VERSION 3), shaft_push_max_m 0 (the round-1 leg column stands 12.5 mm inside the shaft); the body cut
+     CUT_VERSION 4: the range ends at the collar 0.163776 — here the tube's top), shaft_push_max_m 0 (the round-1 leg column stands 12.5 mm inside the shaft); the body cut
      is the clog's (24 faces / 48 vertices: the removal's cap is bounded at the band's bottom y_split - 0.02 =
-     0.0702, under the leg columns at 0.1102, spec § 7); foot_pose (bones, root_lift_m, contacts, rest) equal
+     0.0702, under the leg columns at 0.1102, spec § 7; the description's split carries collar_m 0.163776); foot_pose (bones, root_lift_m, contacts, rest) equal
      to the heels' (the split changes no pose); the assembly reads each node by exact name
      (garment_arrays(exact=True)); run_garment(Demo, boots) afterwards -> ran [] . On body A a stored boots fit of
      an older fit version (fit_version 0, accepted on sha(A)) is NOT served: body_fit(build True) refits on A
@@ -112,8 +114,8 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      steps.fit.status "refused". The base replaced by the 0.10 m wide feet (foot_body_glb(0.10), sha changes):
      run_garment(Demo, pumps) -> refused BEFORE any cut by the fit's own gate, error containing
      "slim_needed 0.2209 > 0.18" (Task 9's hand value 1 - 0.07790 / 0.10 = 0.2210, +-1e-3; gates.slim_needed
-     {ok False, gating True}). An older fit reads stale: a pumps record of fit_version 7 (and 6), accepted on
-     the current base bytes -> fit_state "stale" (fit_version 8 -> "accepted").
+     {ok False, gating True}). An older fit reads stale: a pumps record of fit_version 8 (and 7), accepted on
+     the current base bytes -> fit_state "stale" (fit_version 9 -> "accepted").
 """
 import hashlib
 import json
@@ -314,7 +316,7 @@ def main() -> int:
         cut = rec.get("cut") or {}
         check("P1 cut description", (cut.get("version"), sorted(cut.get("sides") or {}),
                                      {s: (d.get("foot_joint"), d.get("toe_joint")) for s, d in (cut.get("sides") or {}).items()}),
-              (3, ["left", "right"], {"left": ("LeftFoot", "LeftToeBase"), "right": ("RightFoot", "RightToeBase")}))
+              (4, ["left", "right"], {"left": ("LeftFoot", "LeftToeBase"), "right": ("RightFoot", "RightToeBase")}))
         worst = 0.0
         prims = glb_mesh.body_primitive_arrays(blob)
         for prim in prims:
@@ -326,8 +328,8 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 8,
-             "fit_version": 8, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 9,
+             "fit_version": 9, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         # a shoe's record: the fit gates + the cut gates without the split-only ones (footwear_cut.SHAFT_CUT_GATES)
         gate_names = list(footwear_fit.FIT_GATES) + [k for k in footwear_cut.CUT_GATES if k not in footwear_cut.SHAFT_CUT_GATES]
@@ -486,6 +488,11 @@ def main() -> int:
         check("P5 fit published", boot_path, gs.garment_path("Demo", boots, FB, "fit"))
         bblob = boot_path.read_bytes()
         bnodes = shoe_nodes(bblob, boots)
+        collars = {n: bnodes.get(n, {}).pop("collar_bind_m", None) for n in list(bnodes)}
+        near("P5 left shaft collar_bind_m (0.16 k - lift)", collars.get(f"garment_footwear_{boots}_left_shaft"), 0.153540, 1e-6)
+        near("P5 right shaft collar_bind_m", collars.get(f"garment_footwear_{boots}_right_shaft"), 0.153540, 1e-6)
+        check("P5 foot nodes carry no collar", (collars.get(f"garment_footwear_{boots}_left"),
+                                                collars.get(f"garment_footwear_{boots}_right")), (None, None))
         check("P5 four nodes", bnodes, {
             f"garment_footwear_{boots}_left": {"kind": "footwear", "item_id": boots, "fsig": FB, "side": "left", "part": "foot"},
             f"garment_footwear_{boots}_right": {"kind": "footwear", "item_id": boots, "fsig": FB, "side": "right", "part": "foot"},
@@ -519,7 +526,9 @@ def main() -> int:
               (False, False, True))
         check("P5 no push (shin 12.5 mm inside the shaft)", brec["shaft"]["push_max_m"], 0.0)
         check("P5 body cut = the clog's", (len(glb_mesh.body_arrays(bblob).faces), len(glb_mesh.body_arrays(bblob).positions)), (24, 48))
-        check("P5 cut cap bounded at the band", brec["cut"]["sides"]["left"].get("split"), {"y_m": brec["sides"]["left"]["split"]["y_m"], "band_m": 0.02})
+        check("P5 cut cap bounded at the band", brec["cut"]["sides"]["left"].get("split"),
+              {"y_m": brec["sides"]["left"]["split"]["y_m"], "band_m": 0.02, "collar_m": brec["sides"]["left"]["split"]["collar_m"]})
+        near("P5 collar_m 0.16 k", brec["sides"]["left"]["split"]["collar_m"], 0.163776, 1e-6)
         pose_keys = ("bones", "root_lift_m", "contacts", "rest", "version")
         check("P5 foot_pose = the heels'", {k: brec["foot_pose"].get(k) for k in pose_keys}, {k: rec["foot_pose"].get(k) for k in pose_keys})
         exact = glb_mesh.garment_arrays(bblob, node_prefix=f"garment_footwear_{boots}_left", exact=True)
@@ -585,7 +594,7 @@ def main() -> int:
         check("P7 no hub", HUB, [])
         old = gs.garment_path("Demo", pumps, FP, "fit")
         shutil.copyfile(fit_path, old)
-        for version, want in ((7, "stale"), (6, "stale"), (8, "accepted")):
+        for version, want in ((8, "stale"), (7, "stale"), (9, "accepted")):
             gs.write_record(old.with_suffix(".json"), {
                 "accepted": True, "kind": "footwear", "item_id": pumps, "fsig": FP, "body_id": bsig,
                 "body_sha256": wide_sha, "base_model_sha256": wide_sha, "fit_version": version,

@@ -2060,8 +2060,8 @@ Basiskörper-Pipeline.
 - **Footwear (`kind` `footwear`):** a fitted shoe is grafted as TWO nodes
   `garment_footwear_<item_id>_<side>` (extras add `side` and `part` `foot`), rigid
   on Foot/ToeBase only; a BOOT adds per side the shaft node
-  `garment_footwear_<item_id>_<side>_shaft` (`part` `shaft`, skinned to the Leg) —
-  four nodes. The served body is cut under the foot part, and the assembled
+  `garment_footwear_<item_id>_<side>_shaft` (`part` `shaft`, skinned to the Leg, extras
+  `collar_bind_m` = the collar's bind height) — four nodes. The served body is cut under the foot part, and the assembled
   sidecar carries the `foot_pose` record both renderers apply — see "Footwear
   (`foot_pose`, garment kind `footwear`)" after the collision capsules, Boots.
 - **Lieferung:** der Server baut die Auslieferung als abgeleitete Datei
@@ -12256,7 +12256,10 @@ wall top stands more than `SPLIT_MARGIN_M` (1 cm) above the wearer's ankle is SP
 ankle (`y_split` = the Foot joint's height in the shod stand; per fit, never per item):
 - **Parts and nodes.** Per side the foot part (`garment_footwear_<item_id>_<side>`, extras `part: "foot"`) and the
   shaft (`garment_footwear_<item_id>_<side>_shaft`, `part: "shaft"`, double-sided material) — FOUR nodes, both
-  tiers. The index buffer is split at `y_split` by face centroid; the faces of the band (`y_split ± SPLIT_BAND_M`
+  tiers. The shaft node's extras carry `collar_bind_m`: the bind-space height of the COLLAR, the closed rim of the
+  opening (`footwear_fit` step 9, fit version 9 — the shoe analysis' highest closed slab ring, placed by the fit).
+  It is the shaft's top for every reader — `shaft_poke`, the tucked hem, `check_footwear.mjs`; the node's highest
+  vertex is not: a pull tab, a loop or a tongue stands above the rim (the P2 Work Shoes' back tab, 2.9 cm). The index buffer is split at `y_split` by face centroid; the faces of the band (`y_split ± SPLIT_BAND_M`
   = 2 cm) straddle the node boundary and their vertices appear in BOTH nodes with identical bind positions and
   weights, so the two nodes never crack. Below the band the boot is the rigid shoe above (Foot/ToeBase); above
   the band the shaft carries the side's Leg / UpLeg only (the clothing transfer restricted to them,
@@ -12267,10 +12270,11 @@ ankle (`y_split` = the Foot joint's height in the shod stand; per fit, never per
 - **No cut under the shaft.** The body cut's removal stops at the band's bottom (`y_split − SPLIT_BAND_M`); the shin
   under the shaft stays whole (the shaft is pushed off it by `SHAFT_CLEAR_M` 6 mm in the fit), so a camera looking
   into the collar of a seated figure sees skin or trousers, never the inside of the body shell. The fit's
-  `shaft_poke` (≤ 0.5 %) refuses a shaft the shin pokes through.
+  `shaft_poke` (≤ 0.5 %, the shin between the band's top and the collar) refuses a shaft the shin pokes through.
 - **The hem mode is assembly state** (`outfit_options`, profile `equipped_options.boot_hem`, saved with an outfit):
   with own-mesh trousers worn over a boot, `over` (the default) layers the trousers over the two shaft nodes
-  (`garment_layers`, the shaft as the inner piece), `tucked` cuts the trouser leg 3 cm under the shaft top
+  (`garment_layers`, the shaft as the inner piece), `tucked` cuts the trouser leg 3 cm under the collar (the lower
+  side's `collar_bind_m`)
   (`footwear_cut.plane_cut`) and falls back to `over` when the leg is too wide (`hem.fallback "too_wide"` in the
   layer record and the assembled sidecar's `garments`). Painted trousers are always inside the boot. The mode
   changes only which trousers mesh is grafted — a new assembly and so a new `model_rev`.
@@ -12383,9 +12387,11 @@ still sole 0.1 / 0.0 mm, idle −2.2 mm, walk stance −2.2 … +13.0 mm (heel s
 leg's reach), walk Foot pitch max 45° / 47° (still 28° / 22°). For a BOOT (four nodes) the script adds, from the GLB
 alone, per frame and side: `seam_gap_mm` (the largest distance between a foot-node vertex and its shaft-node twin at
 the same bind position, after skinning — 0 when the nodes agree), `shaft_leg_follow_deg` (the best-fit turn of the
-shaft's ring against the side's Leg bone), `shaft_poke` (the share of the shin's Leg / UpLeg-dominant vertices in
-the shaft's height range outside the boot volume — both nodes, the collar closed by a fan, voxelised like the body)
-and on seat clips `seat_thigh_in_shaft` (the UpLeg-dominant vertices inside the shaft's top 5 cm, spec ≤ 2 %); once,
+shaft's ring against the side's Leg bone), `shaft_poke` (the share of the shin's Leg / UpLeg-dominant vertices
+between the band's top and the shaft node's `collar_bind_m` outside the boot volume — both nodes, their boundary
+loops closed by fans and a lid at the collar plane, voxelised like the body; a shaft node without `collar_bind_m`
+is refused) and on seat clips `seat_thigh_in_shaft` (the UpLeg-dominant vertices inside the 5 cm under the collar,
+spec ≤ 2 %); once,
 `open_loops_above_split` (body boundary loops under the shaft: 0); penetration counts every footwear node. Numbers in
 `--json` (`boot`, `still.boot`, `clips.<kind>.boot`, `per_frame[].boot`); the fixture run is
 `scripts/smoke_footwear_assembly.py` [K] (a one-key `--clip-json` clip and a control file with known answers).

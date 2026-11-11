@@ -14,7 +14,8 @@ so the cut frame IS the primitive's bind space (x forward, y up, z lateral). ``j
 "lefttoebase": I}; every vertex 100 % LeftFoot.
 
 Expected, by hand:
-[X0] constants: CUT_VERSION 3 (2 = the toe conform, 3 = the boot's cap bound + shaft_poke), THROAT_BAND_M 0.02,
+[X0] constants: CUT_VERSION 4 (2 = the toe conform, 3 = the boot's cap bound + shaft_poke, 4 = shaft_poke up to the
+     collar), THROAT_BAND_M 0.02,
      LATERAL_BAND_M 0.015, CLEARANCE_M 0.002, FADE_M 0.015, TOE_CLEARANCE_M 0.002, TOE_FADE_M 0.015, CUT_GATES
      {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "throat_ledge_p95_mm": ("max", 4.0),
      "toe_conform_m": ("max", 0.025), "shaft_poke": ("max", 0.005)}, SHAFT_CUT_GATES = POKE_OPTIONAL = ("shaft_poke",).
@@ -172,6 +173,26 @@ Expected, by hand:
      (d) the clog fit (no shaft): the gate dict has no shaft_poke key (SHAFT_CUT_GATES); the 0.16 boot on
      foot_body_glb(leg_bottom=0.02) (one quad per face: the column's vertices sit at body y 0.02 and 0.45, none in
      the range) -> shaft_poke value None, ok None (POKE_OPTIONAL), the gates ok.
+[X12] a pull tab above a closed collar is no shaft top (boots plan Task 9 fix 2, ruling 13c; CUT_VERSION 4, fit
+     version 9). Boot = flat_boot(shaft=0.16, shaft_to=0.12, pull_tab=0.026): [X11]'s tube plus one flat panel at
+     the back wall x = 0, z in [-0.01, 0.01], y 0.16 .. 0.186 (rows 0.16 / 0.17 / 0.18 / 0.186: 3 quads, 6
+     triangles) -> 3834 faces / 11502 vertices, mesh top 0.186. The analysis (frame = the mesher's axes, L 0.26):
+     slabs every 0.01 L = 0.0026 from 0.186 down; the ten at 0.186 .. 0.1626 cut the tab alone (every cut point at
+     x = 0, z in [-0.01, 0.01]: x extent 0 < 0.1 L) -> open; the eleventh, 0.186 - 10 x 0.0026 = 0.16, holds the
+     tube's flat rim (its top edges lie in the plane: the rectangle x 0 .. 0.12, z +-0.04) -> closed: top_raw 0.16
+     (+-1e-9) = the collar; cap_removed 0 (the tab is vertical). The fit on foot_body_glb(leg_cell=0.01) = [X11]
+     (a)'s (k 1.023599, lift 0.010236, push 0): split.collar_m = 0.16 k = 0.163776 (+-1e-6), collar_bind_m =
+     0.163776 - 0.010236 = 0.153540 (+-1e-6) on both sides; the shaft part's highest vertex is the tab's top:
+     0.186 k = 0.190389 in the cut frame (the diagnostic shaft_top_m, +-1e-5) and 0.190389 - 0.010236 = 0.180153 in
+     bind space. shaft_poke reads the shin up to the COLLAR: the rows body 0.10 .. 0.15 as [X11] (a) -> 217 shin
+     vertices per side, 0 pokes, the gates ok. The tab ignored is the whole point: up to the tab's top the range
+     would add the rows body 0.16 / 0.17 / 0.18 (frame 0.170236 / 0.180236 / 0.190236 <= 0.190389), 28 vertices
+     each (the z-faces 2 x 7 and the x-faces 2 x 7 of a row), all above the lid at the tube's rim and so in the
+     exterior: 84 pokes of 301 = 0.279070 > 0.005, refused — ON d78da2f9 (CUT_VERSION 3, the range up to the
+     shaft part's highest vertex) this case reads exactly that (shin_n 301, shaft_poke_n 84 per side) and fails.
+     The hem reads the same collar: garment_layers._hem_inputs on a fit GLB carrying the two shaft parts with this
+     record beside it -> top_m 0.153540 (the lower of the two sides' collar_bind_m), plane_m 0.153540 - 0.03 =
+     0.123540, while the shaft nodes' highest bind vertex is 0.180153.
 (On 863a2726 — CUT_VERSION 2 — cut_gates takes the foot meshes alone, CUT_GATES has no shaft_poke and (b) passes:
 [X11] fails there. On 02a2ff7a — fit version 7, the push on the unwelded tube — (c) reads shaft_poke 118 / 204 =
 0.578 on the LEFT side and 0 on the right: the unwelded push smoothed each quad alone, the side walls' corner
@@ -340,7 +361,7 @@ def accessor_bytes(glb: bytes, index: int) -> bytes:
 
 def main() -> int:
     print("[X0] constants")
-    check("CUT_VERSION 3", fc.CUT_VERSION == 3)
+    check("CUT_VERSION 4", fc.CUT_VERSION == 4)
     check("bands", (fc.THROAT_BAND_M, fc.LATERAL_BAND_M, fc.CLEARANCE_M, fc.FADE_M, fc.TOE_CLEARANCE_M, fc.TOE_FADE_M)
           == (0.02, 0.015, 0.002, 0.015, 0.002, 0.015))
     check("CUT_GATES", fc.CUT_GATES == {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "toe_conform_m": ("max", 0.025),
@@ -478,7 +499,7 @@ def main() -> int:
     check("fixture fit ok", fit.ok, str(fit.reasons))
     k = fit.record["scale"]["k_m_per_unit"]
     cut = fc.cut_description(fit, ins)
-    check("version + both sides", cut["version"] == 3 and set(cut["sides"]) == {"left", "right"})
+    check("version + both sides", cut["version"] == 4 and set(cut["sides"]) == {"left", "right"})
     L = cut["sides"]["left"]
     check("joint names", (L["foot_joint"], L["toe_joint"]) == ("LeftFoot", "LeftToeBase"))
     frame = np.asarray(L["frame"], np.float64)
@@ -655,7 +676,7 @@ def main() -> int:
     from app.core.garment_fit import weld
     Pw, Fw = flat_boot(shaft=0.16, shaft_to=0.12)
     check("unwelded tube 3828 faces / 11484 vertices", (len(Fw), len(Pw)) == (3828, 11484), f"{len(Fw)} {len(Pw)}")
-    check("FOOTWEAR_FIT_VERSION 8 (the push welds)", ff.FOOTWEAR_FIT_VERSION == 8)
+    check("FOOTWEAR_FIT_VERSION 9 (the push welds, the collar)", ff.FOOTWEAR_FIT_VERSION == 9)
     inst = fi.analyse_arrays(Pw, Fw)
     glb_a = foot_body_glb(leg_cell=0.01)
     body_a, joints_a = glb_mesh.body_arrays(glb_a), glb_mesh.joint_bind_matrices(glb_a)
@@ -701,6 +722,51 @@ def main() -> int:
     check("(d) no shin vertex in the range: value None, ok None, gates ok",
           g_d["gates"]["shaft_poke"] == {"value": None, "limit": 0.005, "ok": None} and g_d["ok"]
           and all(g_d["sides"][s]["shin_n"] == 0 for s in ("left", "right")), str(g_d["gates"]["shaft_poke"]))
+
+    print("[X12] a pull tab above the closed collar is no shaft top")
+    Pt, Ft = flat_boot(shaft=0.16, shaft_to=0.12, pull_tab=0.026)
+    check("tab fixture 3834 faces / 11502 vertices, top 0.186", (len(Ft), len(Pt)) == (3834, 11502)
+          and abs(float(Pt[:, 1].max()) - 0.186) <= 1e-12, f"{len(Ft)} {len(Pt)}")
+    ins_t = fi.analyse_arrays(Pt, Ft)
+    slabs_t = ins_t["shaft"]["slabs"]
+    check("the ten slabs on the tab are open, the 11th (0.16) closed: top_raw 0.16, cap 0",
+          [s_["closed"] for s_ in slabs_t[:11]] == [False] * 10 + [True]
+          and abs(ins_t["shaft"]["top_raw"] - 0.16) <= 1e-9 and ins_t["shaft"]["cap_removed"] == 0,
+          str([(round(s_["y"], 6), s_["closed"]) for s_ in slabs_t[:11]]))
+    fit_t = ff.fit_pair(ins_t, shoe_garment(Pt, Ft), body_a, joints_a)
+    sp_t = {s_: fit_t.record["sides"][s_]["split"] for s_ in ("left", "right")}
+    check("fit ok, collar_m 0.163776 / collar_bind_m 0.153540 on both sides",
+          fit_t.ok and all(near(sp_t[s_]["collar_m"], 0.163776, 1e-6) and near(sp_t[s_]["collar_bind_m"], 0.153540, 1e-6)
+                           for s_ in sp_t), str(sp_t))
+    check("the shaft part's highest bind vertex is the tab: 0.180153",
+          all(near(float(fit_t.parts[s_]["shaft"].positions[:, 1].max()), 0.180153, 1e-6) for s_ in ("left", "right")))
+    pr_t = glb_mesh.body_primitive_arrays(glb_a)[0]
+    cut_t = fc.cut_description(fit_t, ins_t)
+    check("the description carries the collar", all(near(cut_t["sides"][s_]["split"]["collar_m"], 0.163776, 1e-6)
+                                                   for s_ in ("left", "right")))
+    after_t, _st = fc.apply_cut(pr_t, cut_t, joints_a)
+    g_t = fc.cut_gates(after_t, fit_t.parts, cut_t, joints=joints_a, body_before=pr_t)
+    check("217 shin vertices per side up to the collar, 0 pokes, ok (d78da2f9: 84 / 301 up to the tab, refused)",
+          all(g_t["sides"][s_]["shin_n"] == 217 and g_t["sides"][s_]["shaft_poke_n"] == 0 for s_ in ("left", "right"))
+          and g_t["gates"]["shaft_poke"] == {"value": 0.0, "limit": 0.005, "ok": True} and g_t["ok"],
+          str({s_: (g_t["sides"][s_]["shin_n"], g_t["sides"][s_]["shaft_poke_n"]) for s_ in g_t["sides"]}))
+    check("diagnostics: shaft_top_m = the tab 0.190389, collar_m 0.163776",
+          near(g_t["sides"]["left"]["shaft_top_m"], 0.190389, 1e-5) and near(g_t["sides"]["left"]["collar_m"], 0.163776, 1e-6))
+    import tempfile
+    from app.core import garment_layers
+    with tempfile.TemporaryDirectory(prefix="footwear-cut-x12-") as tmp:
+        blob_t = glb_a
+        for s_ in ("left", "right"):
+            blob_t = glb_mesh.graft(blob_t, fit_t.parts[s_]["shaft"], name=f"garment_footwear_boots_{s_}_shaft",
+                                    extras={"kind": "footwear", "item_id": "boots", "side": s_, "part": "shaft"})
+        fit_path = Path(tmp) / "boots_fit.glb"
+        fit_path.write_bytes(blob_t)
+        fit_path.with_suffix(".json").write_text(json.dumps({"sides": fit_t.record["sides"]}))
+        hem_t = garment_layers._hem_inputs({"boot": "boots", "fit": str(fit_path)})
+        check("the hem: top_m = the collar 0.153540, plane_m 0.123540 (the tab's 0.180153 ignored)",
+              len(hem_t["meshes"]) == 2 and near(hem_t["top_m"], 0.153540, 1e-6) and near(hem_t["plane_m"], 0.123540, 1e-6)
+              and near(max(float(m.positions[:, 1].max()) for m in hem_t["meshes"]), 0.180153, 1e-6),
+              f"{hem_t['top_m']} {hem_t['plane_m']}")
 
     print(f"\n{'ALL PASS' if not FAILS else f'{FAILS} FAILED'}")
     return 1 if FAILS else 0

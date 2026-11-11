@@ -209,14 +209,17 @@ def clog():
     return np.asarray(P, np.float64), np.asarray(F, np.int64)
 
 
-def flat_boot(shaft: float = 0.16, half_w: float = 0.04, shaft_to: float = 0.10):
+def flat_boot(shaft: float = 0.16, half_w: float = 0.04, shaft_to: float = 0.10, pull_tab: float = 0.0):
     """``(positions, faces)`` of the closed flat boot (boots plan Task 6, spec 2026-11-11 § 6.2–6.4): the ``clog()``
     with ``half_w`` as its half-width whose side walls over x in [0, ``shaft_to``] (0.10) rise to ``shaft`` (rows every
     0.01 in y, so the split's band has vertex rows), a back wall at x = 0 to ``shaft`` and a front wall at x =
     ``shaft_to`` from the clog's wall height W_LO (0.035, above the box foot's top at 0.03 k) to ``shaft`` — a closed
     tube on the flat clog; in front of ``shaft_to`` the clog is unchanged (walls 0.035 / 0.04, the roof over [0.1825,
     0.26]). Unwelded like the clog (every quad its own vertices); ``garment_fit.weld`` joins them (boots plan Task 9:
-    the shaft push smooths over the mesh's connectivity, an unwelded tube cracks at its corners)."""
+    the shaft push smooths over the mesh's connectivity, an unwelded tube cracks at its corners). ``pull_tab`` > 0
+    (boots plan Task 9 fix 2): a back pull tab — one flat panel at x = 0 over z in [-0.01, 0.01] from y = ``shaft`` to
+    ``shaft`` + ``pull_tab``, rows every 0.01 (and its top), facing -x: the shaft's highest vertex stands above the
+    closed collar, which stays the tube's rim at ``shaft``."""
     L, HW, TOP, X0, STEP, W_LO, W_HI, ROOF = 0.26, half_w, 0.01, 0.01, 0.1825, 0.035, 0.04, 0.04
     SHAFT_TO = shaft_to
     P, F = [], []
@@ -257,6 +260,12 @@ def flat_boot(shaft: float = 0.16, half_w: float = 0.04, shaft_to: float = 0.10)
         if yb > W_LO + 1e-9:                                                                  # front wall of the tube
             quad((SHAFT_TO, max(ya, W_LO), -HW), (SHAFT_TO, yb, -HW), (SHAFT_TO, yb, HW), (SHAFT_TO, max(ya, W_LO), HW),
                  (1, 0, 0))
+    if pull_tab > 0.0:                                                                        # the back pull tab
+        tab_rows = [round(shaft + 0.01 * j, 10) for j in range(int(math.floor(pull_tab / 0.01 + 1e-9)) + 1)]
+        if abs(tab_rows[-1] - (shaft + pull_tab)) > 1e-9:
+            tab_rows.append(shaft + pull_tab)
+        for ya, yb in zip(tab_rows[:-1], tab_rows[1:]):
+            quad((0, ya, -0.01), (0, yb, -0.01), (0, yb, 0.01), (0, ya, 0.01), (-1, 0, 0))
     quad((X0, 0, -HW), (X0, TOP, -HW), (X0, TOP, HW), (X0, 0, HW), (-1, 0, 0))          # sole's rear end
     quad((L, 0, -HW), (L, ROOF, -HW), (L, ROOF, HW), (L, 0, HW), (1, 0, 0))              # toe box front
     return np.asarray(P, np.float64), np.asarray(F, np.int64)
