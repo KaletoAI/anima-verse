@@ -2827,6 +2827,38 @@ def _ensure_covered_variant(character_name: str) -> None:
         logger.warning("Model3D %s: covered variant not prepared: %s", character_name, exc)
 
 
+def face_before_rig_planned(character_name: str, rig: Optional[str] = None) -> bool:
+    """Whether a fresh mesh run of the character corrects the face before the
+    rig: a humanoid rig (``mixamo``) and the character's "Improve face before
+    rigging" option. The run itself decides with this (``_generate_for_current_outfit``)
+    and so does its cost estimate (``mesh_hub_stages``)."""
+    rig = rig if rig is not None else required_rig(character_name)
+    return rig == "mixamo" and bool(get_model3d_options(character_name)["face_before_rig"])
+
+
+def mesh_hub_stages(character_name: str, signature: str) -> List[str]:
+    """The hub stages a FRESH mesh run of ``signature``
+    (``generate_for_current_outfit``, the base body included) submits on its
+    first attempts, in run order — what a cost estimate counts
+    (``base_body.base_rebuild_cost``): ``mesh``; with the face correction
+    before the rig (``face_before_rig_planned``) and a face route
+    (``face_retexture.runnable`` — without one the run records it as skipped)
+    ``upscale`` when the reference is the front view
+    (``face_retexture.use_upscale``) and ``face``; then ``rig``. The dark-face
+    gate may add one ``face`` retry. Texture re-encode, normalize, the
+    extension rig and the measurement run in Blender on the CPU: no hub stage.
+    Read-only."""
+    from app.core import face_retexture
+    stages = ["mesh"]
+    if face_before_rig_planned(character_name) and face_retexture.runnable(character_name)["ok"]:
+        reference = face_retexture.reference_info(character_name, signature, {})["reference"]
+        if face_retexture.use_upscale(reference, None):
+            stages.append("upscale")
+        stages.append("face")
+    stages.append("rig")
+    return stages
+
+
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "",
                                 prefer_cheapest: bool = False,
@@ -3011,7 +3043,7 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
             # busy, the trigger threads log it).
             face_inputs = {"face_before_rig": False}
             face_photo = None
-            if rig == "mixamo" and get_model3d_options(character_name)["face_before_rig"]:
+            if face_before_rig_planned(character_name, rig):
                 from app.core import face_retexture
                 ready = face_retexture.runnable(character_name)
                 face_snapshot = {}

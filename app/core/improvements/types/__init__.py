@@ -2,6 +2,7 @@
 from app.core.improvements import registry
 
 from .artefact_cleanup import ArtefactCleanup
+from .base_refresh import BaseRefresh
 from .collision_capsules import CollisionCapsules
 from .extension_rig_rebuild import ExtensionRigRebuild
 from .face_retexture import FaceRetexture
@@ -26,6 +27,7 @@ registry.register(FillMissing())
 registry.register(FitRefit())
 registry.register(GarmentFill())
 registry.register(OutfitRebuild())
+registry.register(BaseRefresh())
 registry.register(HairFill())
 registry.register(ImageRerender())
 registry.register(SurfaceBake())
@@ -33,5 +35,5 @@ registry.register(MeshFromTpose())
 registry.register(FallbackRerender())
 registry.register(ArtefactCleanup())
 
-__all__ = ["ArtefactCleanup", "CollisionCapsules", "FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "FitRefit", "GarmentFill", "HairFill", "ImageRerender", "MeshFromTpose", "ModelReplace", "OutfitRebuild",
+__all__ = ["ArtefactCleanup", "BaseRefresh", "CollisionCapsules", "FaceRetexture", "ExtensionRigRebuild", "FallbackRerender", "FillMissing", "FitRefit", "GarmentFill", "HairFill", "ImageRerender", "MeshFromTpose", "ModelReplace", "OutfitRebuild",
            "RigWeightRepair", "SurfaceBake"]

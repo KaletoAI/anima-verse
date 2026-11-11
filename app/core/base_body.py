@@ -617,7 +617,7 @@ def _publish_staged(staged: Path, final_stem: Path, record: Dict[str, Any],
 
 
 def generate_base_images(character_name: str, *, view: Optional[str] = None,
-                         force: bool = False) -> Dict[str, Optional[str]]:
+                         force: bool = False, raise_load: bool = False) -> Dict[str, Optional[str]]:
     """Render the base-body views. Blocking — call from a worker thread.
 
     Front first (the ``tpose`` render path: use case ``base_front``, occasion
@@ -652,7 +652,14 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
     is APPENDED to it (``extra_negative``), never a replacement.
 
     Returns ``{view: path | None}`` for every view it rendered (None =
-    failed); a front that fails stops the run — the views need it."""
+    failed); a front that fails stops the run — the views need it.
+
+    ``raise_load`` (the improvements queue's ``base_refresh``): a
+    ``BackendBusyError`` or ``MediaGenerationDisabled`` of a render is RAISED
+    (``_is_load``) instead of becoming the view's failure — the run stops
+    there, nothing is recorded as failed, the views rendered before it stay
+    stored. A front re-render of the hand gate that meets load ends the
+    attempts with what was rendered, as any later attempt's error does."""
     import tempfile
     from app.core import base_body_gates, expression_regen
     from app.core.model_refs import _tpose_size, find_ref_image, get_model_refs_dir, neutral_view_reference
@@ -697,7 +704,7 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                                "prompt_fingerprint": fingerprint},
                 # The character's identity/pose LoRAs as on its tpose
                 # render (tpose_loras, else loras); no slot LoRAs.
-                character_loras=True)
+                character_loras=True, **({"raise_load": True} if raise_load else {}))
 
         def draw_front(final: Path) -> Tuple[Optional[Path], Optional[str]]:
             """``(stored path, warning)`` of the gated front attempts."""
@@ -747,6 +754,8 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                     path = draw(v, final, reference)
                 error = None if path else "render failed"
             except Exception as e:  # noqa: BLE001 — one view never kills the run
+                if raise_load and _is_load(e):
+                    raise  # load: no failure record (the finally releases the view)
                 path, error = None, str(e) or type(e).__name__
                 logger.warning("Base body %s %s (%s) failed: %s", character_name, v, bsig, e)
             finally:
@@ -892,7 +901,8 @@ def check_model_ready(character_name: str, *,
     return profile, bsig
 
 
-def generate_base_model(character_name: str, *, force: bool = False) -> Dict[str, Any]:
+def generate_base_model(character_name: str, *, force: bool = False,
+                        raise_load: bool = False) -> Dict[str, Any]:
     """Build the rigged base model from the base images. Blocking (minutes)
     — call from a worker thread.
 
@@ -902,8 +912,15 @@ def generate_base_model(character_name: str, *, force: bool = False) -> Dict[str
     occasion; after the rig no anatomy parts and no distance tier, the
     sidecar records ``"base": true`` and the unrigged checkpoint
     ``model3d/unrigged/<bsig>.glb`` stays. Cached per base signature unless
-    ``force``."""
+    ``force``.
+
+    ``raise_load`` (the improvements queue's ``base_refresh``): load — a
+    ``BackendBusyError`` / ``MediaGenerationDisabled`` (``_is_load``) or a
+    ``HubOpBusy`` (the target in flight) — propagates WITHOUT the failure
+    record, so the stored base model stays ``ready`` and the step comes back
+    later; every other caller records load like any error."""
     from app.core import model3d
+    from app.core.hub_ops import HubOpBusy
     from app.core.timeutils import utc_now
     bsig = ""
     error: Optional[str] = None
@@ -926,7 +943,8 @@ def generate_base_model(character_name: str, *, force: bool = False) -> Dict[str
             artefact_graph.collect_quietly(character_name, "base model generated")
         return result
     except Exception as e:
-        error = str(e) or type(e).__name__
+        if not (raise_load and (_is_load(e) or isinstance(e, HubOpBusy))):
+            error = str(e) or type(e).__name__
         raise
     finally:
         with _status_lock:
@@ -4344,3 +4362,122 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
     return {"image_jobs": image_jobs, "mesh_jobs": mesh_jobs, "hub_jobs": image_jobs + mesh_jobs,
             "views_needed": views_needed, "body_needed": body_needed,
             "note": f"{reason}: {what}" if reason else what}
+
+
+# --- Base refresh (the improvements type ``base_refresh``) -----------------
+# Spec docs/superpowers/specs/2026-11-11-hair-from-body-design.md § Design 5:
+# a base rendered with older prompt texts (``OLDER_PROMPTS`` — e.g. a bald
+# base of a character whose hair is now in the body mesh) is rebuilt at idle
+# time by the same calls the Base body tab's buttons make: the views
+# (``generate_base_images``, force) and the model (``generate_base_model``,
+# force). The base signature stays (prompts are not identity), so every file
+# is replaced in place under its own name.
+
+#: ``base_refresh_plan`` reason → the text the improvement step shows.
+REFRESH_REASON_TEXT = {"older_prompts": "older prompts",
+                       "views": "views not refreshed yet",
+                       "model": "model built from older views"}
+#: Hub jobs of one base view render on its first attempt (the front's hand
+#: gate may render it up to ``HAND_GATE_ATTEMPTS`` times).
+BASE_VIEW_JOBS = 1
+
+
+def base_view_states(character_name: str, *, profile: Optional[Dict[str, Any]] = None
+                     ) -> Dict[str, Dict[str, str]]:
+    """``{view: freshness}`` of the stored base views — what the Base body
+    tab shows on each tile (``model_overview.base_view_freshness`` with the
+    view's recorded ``prompt_fingerprint`` against the current one, as
+    ``annotate_base_info`` calls it); ``missing`` for a view without a file."""
+    from app.core import model_overview
+    from app.core.model_refs import find_ref_image, image_tile_meta
+    profile = _profile_of(character_name, profile)
+    bsig = base_signature(character_name, profile=profile)
+    current = prompt_fingerprint(character_name, profile=profile)
+    tiles: Dict[str, Optional[Tuple[str, str]]] = {}
+    for view in BASE_VIEWS:
+        path = find_ref_image(character_name, _kind(view), bsig)
+        tiles[view] = ((str(image_tile_meta(path).get("created_at") or ""),
+                        str(_view_sidecar(path).get("prompt_fingerprint") or "")) if path else None)
+    front_created = (tiles.get("front") or ("", ""))[0]
+    out: Dict[str, Dict[str, str]] = {}
+    for view, tile in tiles.items():
+        out[view] = (model_overview.freshness(model_overview.MISSING) if tile is None else
+                     model_overview.base_view_freshness(view, tile[0], front_created, prompts=(tile[1], current)))
+    return out
+
+
+def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What a base refresh of the character runs now: ``{signature, views,
+    model, reason}`` (``views`` in ``BASE_VIEWS`` order). Read-only.
+
+    * ``older_prompts`` — the stored front carries ``OLDER_PROMPTS``
+      (``base_prompts_freshness``, the Hair tab's note): every view, then
+      the model (the Base body tab's "Regenerate all" + the model's
+      "Regenerate").
+    * ``views`` — the front is current, another view is not
+      (``base_view_states``: older prompts, older than the front, missing):
+      those views, then the model. A refresh that stopped between the views
+      (load) goes on where it stopped.
+    * ``model`` — every view current, the stored base model not built from
+      them (``model_overview.base_model_freshness`` stale): the model alone
+      — a refresh that stopped before the model.
+    * ``""`` — nothing to do, or no stored front (a missing base is not an
+      older one)."""
+    from app.core import model3d, model_overview
+    profile = _profile_of(character_name, profile)
+    bsig = base_signature(character_name, profile=profile)
+    plan: Dict[str, Any] = {"signature": bsig, "views": [], "model": False, "reason": ""}
+    prompts = base_prompts_freshness(character_name, profile=profile)
+    if prompts["state"] == model_overview.MISSING:
+        return plan
+    if prompts["state"] == model_overview.STALE:
+        return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "older_prompts"}
+    states = base_view_states(character_name, profile=profile)
+    views = [v for v in BASE_VIEWS if v != "front" and states[v]["state"] != model_overview.CURRENT]
+    if views:
+        return {**plan, "views": views, "model": True, "reason": "views"}
+    path = model3d.find_model3d(character_name, bsig)
+    if path is not None and model_overview.base_model_freshness(
+            model3d._read_sidecar(path),
+            model_overview._base_view_shas(character_name, bsig))["state"] == model_overview.STALE:
+        return {**plan, "model": True, "reason": "model"}
+    return plan
+
+
+def base_rebuild_steps(character_name: str, plan: Dict[str, Any]) -> List[Tuple[str, int]]:
+    """``(step, hub jobs on the first attempt)`` of what ``plan``
+    (``base_refresh_plan``) runs, in run order: ``view <name>`` per view to
+    render, then — with the model — the hub stages of a fresh base mesh run
+    (``model3d.mesh_hub_stages``: mesh, [upscale, face], rig; normalize and
+    the other Blender steps are CPU work)."""
+    from app.core import model3d
+    steps: List[Tuple[str, int]] = [(f"view {v}", BASE_VIEW_JOBS) for v in plan.get("views") or ()]
+    if plan.get("model"):
+        steps += [(stage, 1) for stage in model3d.mesh_hub_stages(character_name, plan["signature"])]
+    return steps
+
+
+def base_rebuild_cost(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                      plan: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The hub cost of the base refresh ``plan`` (``base_refresh_plan`` when
+    None), counted in FIRST attempts over ``base_rebuild_steps`` — the list
+    the refresh runs, so the count cannot drift from it: ``{hub_jobs, steps,
+    note, plan}``. The hand gate may render the front up to
+    ``HAND_GATE_ATTEMPTS - 1`` more times, the dark-face gate retry the face
+    once — the note says so where it applies. Anything unreadable answers
+    ``hub_jobs`` None (unknown, never a silent 0)."""
+    try:
+        plan = plan if plan is not None else base_refresh_plan(character_name, profile=profile)
+        steps = base_rebuild_steps(character_name, plan)
+    except Exception as e:  # noqa: BLE001 — an estimate, never a failure
+        logger.warning("Base rebuild cost %s not computable: %s", character_name, e)
+        return {"hub_jobs": None, "steps": [], "note": f"cost unknown — {e}", "plan": plan or {}}
+    total = sum(jobs for _step, jobs in steps)
+    views = sum(jobs for step, jobs in steps if step.startswith("view "))
+    parts = ([f"views {views}"] if views else []) + [step for step, _jobs in steps if not step.startswith("view ")]
+    extra = ([f"the hand gate may render the front up to {HAND_GATE_ATTEMPTS - 1} more times"] if "front" in (plan.get("views") or ()) else []) \
+        + (["the dark-face gate may retry the face once"] if any(step == "face" for step, _jobs in steps) else [])
+    reason = REFRESH_REASON_TEXT.get(str(plan.get("reason") or ""), "")
+    what = (" + ".join(parts) + f" = {total} hub jobs (first attempts"
+            + ("; " + "; ".join(extra) if extra else "") + ")") if steps else "nothing to rebuild"
+    return {"hub_jobs": total, "steps": steps, "note": f"{reason}: {what}" if reason else what, "plan": plan}
