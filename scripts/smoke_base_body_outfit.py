@@ -358,8 +358,8 @@ VIEW = {
     "right": ("This is a strict right side profile view, the whole body in profile facing the right edge of the "
               "frame; keep it a side profile view, do not turn the figure toward the camera."),
 }
-# The whole fit prompt (user decision 2026-11-09).
-FIT_PROMPT = "edit the first image with the clothes from the second image"
+# The whole fit prompt (user decision 2026-11-09; "and nothing else" since 2026-11-11).
+FIT_PROMPT = "edit the first image with what the person in the second image wears, and nothing else"
 BASE_PX = {"front": (200, 10, 10), "back": (10, 200, 10), "left": (10, 10, 200), "right": (200, 200, 10)}
 
 

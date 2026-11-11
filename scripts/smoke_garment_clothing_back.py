@@ -85,7 +85,8 @@ the planned image again.
     first image"; its keywords form (FIT_KEYWORDS) = "a black tailored
     blazer with silver buttons, only these clothes, no other clothing, body
     unchanged from the first image" — not the outfit's bare FIT_PROMPT (live
-    2026-11-10, Black Stilettos: the fit put a body suit or a top and briefs
+    2026-11-10, Black Stilettos: its then wording "edit the first image with
+    the clothes from the second image" put a body suit or a top and briefs
     on the bare draft in 5 of 5 fits). A shoe ("Black Stilettos", slots
     [feet], fragment "shiny black leather stiletto heels, high pointed toe")
     -> that fragment in the same two sentences; its draft text "wearing only
@@ -169,7 +170,7 @@ LONG = ("a long black wool coat with a wide shawl collar and deep pockets, doubl
 SHOE_DRAFT_TEXT = ("wearing only shiny black leather stiletto heels, high pointed toe exactly as on the person in "
                    "the reference image, the same length, cut and colour, and nothing else")
 WORN_NEG = "loose clothing, baggy, skirt, dress, shoes, socks, hair"
-FIT_PROMPT = "edit the first image with the clothes from the second image"
+FIT_PROMPT = "edit the first image with what the person in the second image wears, and nothing else"
 OPENING = "back shows the front opening: neckline 0.1001 Hb deep, front 0.1001 Hb"
 
 

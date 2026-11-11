@@ -1027,8 +1027,10 @@ DRESS_USE_CASE = "outfit_edit"
 DRAFT_NEGATIVE = ", ".join((HAIR_NEGATIVE, "detailed anatomy", POSE_NEGATIVE))
 #: The whole fit prompt — no style, view sentence, outfit text or negative
 #: (measured 2026-11-09: silhouette IoU vs the base back 0.92-0.93 against
-#: 0.905 with the long edit prompt).
-FIT_PROMPT = "edit the first image with the clothes from the second image"
+#: 0.905 with the long edit prompt). "and nothing else" since 2026-11-11
+#: (Qwen2.1 Turbo, shoes only: invented clothing 0.27 -> 0.014 of the image;
+#: full-outfit IoU unchanged within seed noise).
+FIT_PROMPT = "edit the first image with what the person in the second image wears, and nothing else"
 #: Use case of the fit: empty style and negative (config).
 FIT_USE_CASE = "outfit_fit"
 #: Alpha from which a pixel belongs to the figure of a fit reference.

@@ -30,8 +30,9 @@ written, 1-based, split on whitespace).
     300 words — with the no-fold rule it stays 27 words.
 [2] Reference wording (prompt_adapters.reference_wording): on a model whose
     id contains "p-h3" the ordinals become <Picture N> ("edit the first image
-    with the clothes from the second image" -> "edit <Picture 1> with the
-    clothes from <Picture 2>", "the reference image" -> "<Picture 1>"); on
+    with what the person in the second image wears, and nothing else" ->
+    "edit <Picture 1> with what the person in <Picture 2> wears, and nothing
+    else", "the reference image" -> "<Picture 1>"); on
     "Qwen2.1-Turbo" the text is unchanged.
 [3] Style join: join_style_prompt("style", "prompt", None) == "style, prompt"
     (the historic single space is gone).
@@ -174,7 +175,7 @@ def main() -> int:
         print("[2] reference wording")
         from app.core.prompt_adapters import reference_wording
         check("P-H3 fit", reference_wording(base_body.FIT_PROMPT, "P-H3-Image"),
-              "edit <Picture 1> with the clothes from <Picture 2>")
+              "edit <Picture 1> with what the person in <Picture 2> wears, and nothing else")
         check("P-H3 reference image", reference_wording("as in the reference image, the third image", "p-h3-x"),
               "as in <Picture 1>, <Picture 3>")
         check("Qwen untouched", reference_wording(base_body.FIT_PROMPT, "Qwen2.1-Turbo"), base_body.FIT_PROMPT)
