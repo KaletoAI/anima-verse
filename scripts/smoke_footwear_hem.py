@@ -91,6 +91,18 @@ Expected, by hand:
      wide to tuck) · …". With over (r 0.035) the fallback is None and the row reads "trousers over"; with the
      painted bottom piece worn ``wardrobe`` says applicable False, fallback None. The saved set's preview
      (GET …/outfit-sets/{id}) carries boot_hem "tucked" ([H6]).
+[H8] (Task 14) a shaft too low to tuck into. After [H5] the boot is ``flat_boot(shaft=0.13, shaft_to=0.12)``:
+     its collar at bind 0.13 k - lift = 0.133068 - 0.010236 = 0.122832 -> plane_m 0.092832; its split y_m 0.090236
+     + band 0.02 = 0.110236 above the shoe ground (frame) -> bind 0.110236 + (collar_bind_m 0.122832 - collar_m
+     0.133068) = 0.110236 - 0.010236 = **0.10** = ``floor_m`` (both sides alike). plane 0.092832 < floor 0.10 -> the
+     plane lies in the ankle band: tucked builds the OVER geometry with no cut attempted, the record's hem {mode
+     tucked, built over, fallback "shaft_too_low", plane_m 0.092832, floor_m 0.10, tucked_poke None} (r 0.035 —
+     narrow enough to tuck by width: the word is the shaft's, not the trousers'); 3776 vertices / 7424 faces;
+     ``hem_state`` / ``wardrobe`` fallback "shaft_too_low"; the overview row "… · ankle boot · trousers over (shaft
+     too low to tuck) · …"; SHAFT_TOO_LOW_WARNING = "{boot}: the shaft is too low to tuck {trousers} into — worn
+     over it". [H2]'s 0.16 boot: floor_m 0.10 too, its plane 0.12354 above it -> tucked as before.
+(On faf0cba2 — before Task 14 — the [H8] record says fallback "too_wide" with a tucked_poke; ``floor_m`` and
+SHAFT_TOO_LOW_WARNING do not exist.)
 (On 02a2ff7a — Task 9 — ``app.core.outfit_options`` does not exist: [H1] fails on the import.)
 (On 193321cf — Task 10 fix — ``garment_assembly.hem_state`` does not exist: [H7] fails on the attribute.)
 """
@@ -433,6 +445,7 @@ def main() -> int:
         check("record hem mode / built / fallback", (hem_t.get("mode"), hem_t.get("built"), hem_t.get("fallback")),
               ("tucked", "tucked", None))
         near("record plane_m 0.123540", hem_t.get("plane_m"), 0.123540, 2e-5)
+        near("[H8] record floor_m 0.10 (the band's top in bind space) under the plane", hem_t.get("floor_m"), 0.10, 2e-6)
         near("record plane_m = top - 0.03 (float32 shaft top)", hem_t.get("plane_m"), plane, 1e-6)
         plane_rec = float(hem_t.get("plane_m"))
         check("record tucked_poke 0 over 320 vertices", (hem_t.get("tucked_poke"), hem_t.get("tucked_n"), hem_t.get("tucked_outside")), (0.0, 320, 0))
@@ -636,6 +649,30 @@ def main() -> int:
         oid2 = add_character_outfit("Demo", {"name": "Plain", "pieces": [boots, trousers]})
         check("a new set without options stores the live value", next(o for o in get_character_outfits("Demo") if o["id"] == oid2).get("options"),
               {"boot_hem": "over"})
+        # --- [H8] a shaft too low to tuck into (Task 14) -----------------------------------------------------
+        print("[H8] tucked into the 0.13 boot: the plane lies in the ankle band — shaft_too_low, worn over")
+        check("[H8] SHAFT_TOO_LOW_WARNING", oo.SHAFT_TOO_LOW_WARNING.format(trousers="Trousers", boot="Boots"),
+              "Boots: the shaft is too low to tuck Trousers into — worn over it")
+        check("[H8] tucked", oo.set_boot_hem("Demo", "tucked"), True)
+        check("[H8] assemble", ga.assemble("Demo", osig)["tiers"], {"full": "assembled", "low": "assembled"})
+        wanted_l = ga._wanted("Demo", get_character_profile("Demo"), bare_meta=ga._read_json(bare.with_suffix(".json")))
+        tl = next(g for g in wanted_l if g["item_id"] == trousers)
+        hem_l = layer_record(tl["over"]["lsig"]).get("hem") or {}
+        check("[H8] record: tucked, built over, fallback shaft_too_low, no poke measured",
+              (hem_l.get("mode"), hem_l.get("built"), hem_l.get("fallback"), hem_l.get("tucked_poke")),
+              ("tucked", "over", gl.HEM_FALLBACK_SHAFT_TOO_LOW, None))
+        check("[H8] HEM_FALLBACK_SHAFT_TOO_LOW", gl.HEM_FALLBACK_SHAFT_TOO_LOW, "shaft_too_low")
+        near("[H8] plane_m 0.092832", hem_l.get("plane_m"), 0.092832, 2e-5)
+        near("[H8] floor_m 0.10", hem_l.get("floor_m"), 0.10, 2e-6)
+        node_l = trousers_node(asm.read_bytes())
+        check("[H8] the over geometry (nothing cut)", (len(node_l.positions), len(node_l.indices)), (3776, 7424))
+        check("[H8] hem_state", ga.hem_state("Demo"),
+              {"boot": boots, "trousers": trousers, "mode": "tucked", "fallback": gl.HEM_FALLBACK_SHAFT_TOO_LOW,
+               "pending": False})
+        check("[H8] wardrobe fallback", garment_set.wardrobe("Demo")["hem"]["fallback"], gl.HEM_FALLBACK_SHAFT_TOO_LOW)
+        boot_e, detail = boot_row()
+        check("[H8] overview", (boot_e.get("hem"), "· ankle boot · trousers over (shaft too low to tuck) ·" in detail),
+              ({"mode": "tucked", "fallback": gl.HEM_FALLBACK_SHAFT_TOO_LOW}, True))
         check("no hub", HUB, [])
         client.close()
 

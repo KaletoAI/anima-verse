@@ -37,6 +37,9 @@ HEM_DEFAULT = "over"
 TROUSERS_SLOT = "bottom"
 #: The Wardrobe warning when a tucked pair did not fit into the shaft (``garment_layers`` fallback ``too_wide``).
 TOO_WIDE_WARNING = "{trousers}: too wide to tuck into {boot} — worn over it"
+#: The Wardrobe warning when the boot's shaft ends too close to the ankle to tuck into (``garment_layers`` fallback
+#: ``shaft_too_low``).
+SHAFT_TOO_LOW_WARNING = "{boot}: the shaft is too low to tuck {trousers} into — worn over it"
 
 
 def boot_hem(profile: Optional[Dict[str, Any]]) -> str:

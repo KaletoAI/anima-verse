@@ -118,6 +118,25 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    ``collar_bind_m``, contract ``docs/schnittstellen-3d.md``) read ``collar_bind_m``. The shaft part's highest
    vertex is no longer read as its top: on the P2 Work Shoes it is the back pull tab, 2.9 cm above the collar,
    and every shin vertex between the two read as a poke (``footwear_cut`` module docstring).
+10. **The knee edge** (fit version 10, boots plan Task 14, spec § 6.4 step 3). Per side of a split fit, after the push:
+   ``shaft.shaft_top_m`` = the collar of step 9 in BIND space (the same value as ``collar_bind_m`` — never the shaft's
+   highest vertex; above the band the bind position is the stand before the root lift, which raises knee and shaft
+   alike), ``shaft.knee_m`` = the side's Leg joint (the knee) in bind space. A collar above ``knee − KNEE_MARGIN_M``
+   is CLIPPED there: ``footwear_cut.plane_cut(…, keep="below")`` on the built shaft part — the horizontal plane in
+   bind space, everything above removed, the crossing faces bisected ON the plane (exact secant root); the new ring
+   lerps the shaft's own Leg / UpLeg weights, so it rides the Leg bone like the rest of the shaft (the spec's "plane
+   in the Leg bone's frame": the plane is not turned with a bone because above the band nothing is). Recorded per
+   side: ``clip_m`` (collar − plane, 0 without a clip), ``clip_y_m`` (the plane, None without one), ``clip`` (the
+   cut's stats), ``knee_margin_m`` (knee − the collar after the clip, rounded to ``KNEE_MARGIN_ROUND`` decimals: a
+   clipped collar sits on the plane and the float difference reads 0.04 ± 1e-17); ``split.collar_m`` /
+   ``collar_bind_m`` are the collar AFTER the clip (the plane), so ``shaft_poke``, the hem and
+   ``check_footwear.mjs`` read the served top. The follow ring (step 9) stops at the plane. Gates (``SHAFT_GATES``,
+   worse side; the margin's worse side is the smaller): ``shaft_clip_m`` ≤ ``SHAFT_CLIP_MAX_M`` (more is another
+   boot than the image) and ``knee_margin_m`` ≥ ``KNEE_MARGIN_M`` — a guard of the clip, true by construction for
+   every collar it leaves (an ankle boot reads its whole margin, ~30 cm on the fixture). The record's ``shaft``
+   summary carries the worse sides' ``clip_m`` / ``knee_margin_m``. Fixture numbers: ``scripts/smoke_footwear_split.py``
+   [B8] / [B9]; the seated check (``seat_thigh_in_shaft`` ≤ 2 % per frame) is ``scripts/check_footwear.mjs``'s, not a
+   fit gate.
 
 Gates (``FIT_GATES``, every one refuses a fit since version 3): ``ball_placement_mm`` (the
 posed SKINNED ball of step 3 vs the shoe's chord ball point under the heel-anchored placement, before the
@@ -184,8 +203,11 @@ from app.core.footwear_gates import check_gates
 #: 8: the shaft push runs on WELDED positions (seam duplicates move as one vertex, the smoothing over the connected
 #:    tube — an unwelded push tore the tube at its seams; Task 9 fix 1);
 #: 9: the COLLAR per side (``split.collar_m`` / ``collar_bind_m``, step 9) — the shaft's top for ``shaft_poke``, the
-#:    hem and ``check_footwear.mjs`` (a pull tab above the rim is no shaft top; Task 9 fix 2).
-FOOTWEAR_FIT_VERSION = 9
+#:    hem and ``check_footwear.mjs`` (a pull tab above the rim is no shaft top; Task 9 fix 2);
+#: 10: the knee edge (step 10) — a knee-high shaft clipped at ``knee − KNEE_MARGIN_M``, the collar after the clip,
+#:    the gates ``shaft_clip_m`` / ``knee_margin_m`` on every split fit (Task 14). A stored v9 boot fit differs (no
+#:    knee gates in its record, a knee-high one unclipped); a shoe's output is unchanged and refits to the same bytes.
+FOOTWEAR_FIT_VERSION = 10
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -217,6 +239,15 @@ FOLLOW_RING_MIN = 3
 #: The ankle flex the seam measures are taken at, and the Leg turn of the follow check (degrees).
 SEAM_FLEX_DEG = 25.0
 FOLLOW_TURN_DEG = 20.0
+#: The knee edge (step 10, spec § 6.4 step 3): the collar stays this far under the Leg joint — a shaft above it is
+#: clipped at ``knee − KNEE_MARGIN_M``; more than ``SHAFT_CLIP_MAX_M`` clipped off is another boot than the image
+#: (gate ``shaft_clip_m``). The margin is rounded to this many decimals (metres): a clipped collar sits ON the plane
+#: and ``knee − (knee − 0.04)`` reads 0.04 ± 1e-17 in floats.
+KNEE_MARGIN_M = 0.04
+SHAFT_CLIP_MAX_M = 0.05
+KNEE_MARGIN_ROUND = 9
+#: Shaft measures whose worse side is the SMALLER value.
+WORST_IS_MIN = ("knee_margin_m",)
 #: The shaft gates of a SPLIT fit (spec § 9 start values); a shoe carries none of them. ``gating`` per gate
 #: (``SHAFT_GATING``): the stretch measure is recorded, not gating, until P2 calibrates it on real boots — a 25°
 #: flex over a 4-cm band at the heel counter's 6 cm radius compresses the band to about a third by geometry, so
@@ -228,6 +259,8 @@ SHAFT_GATES: Dict[str, Tuple[str, Any]] = {
     "seam_gap_p95_mm": ("max", 2.0),
     "seam_stretch_max": ("max", 1.5),
     "shaft_leg_follow_deg": ("max", 1.0),
+    "shaft_clip_m": ("max", SHAFT_CLIP_MAX_M),
+    "knee_margin_m": ("min", KNEE_MARGIN_M),
 }
 #: P2 numbers (boots round, 2026-11-11, the clone): Work Shoes on Kai (``base634402e5``) ACCEPTED — split 14.6 cm,
 #: collar 28 / 29 mm above the ankle, push p95 8.3 mm / max 17.6 mm, inside 0, seam gap 0, stretch 50 / 58 (recorded),
@@ -243,6 +276,7 @@ SHAFT_GATES: Dict[str, Tuple[str, Any]] = {
 SHAFT_GATING: Dict[str, bool] = {
     "shaft_push_p95_m": True, "shaft_push_max_m": True, "shaft_inside_share": True,
     "seam_gap_p95_mm": True, "seam_stretch_max": False, "shaft_leg_follow_deg": True,
+    "shaft_clip_m": True, "knee_margin_m": True,
 }
 #: The gates whose value may be ``None`` (no ring to measure): not a refusal, the record says ``ok`` None.
 FOLLOW_OPTIONAL = ("shaft_leg_follow_deg",)
@@ -257,6 +291,8 @@ GATE_LABELS = {
     "seam_gap_p95_mm": "p95 residual of the band's blended inverse skinning in the stand, worse side",
     "seam_stretch_max": "largest area ratio of a band face at +-25 deg ankle flex, worse side",
     "shaft_leg_follow_deg": "the shaft top ring's turn against a 20 deg Leg turn, worse side",
+    "shaft_clip_m": "height clipped off the shaft under the knee, worse side",
+    "knee_margin_m": "the Leg joint (knee) above the collar after the clip, worse side",
 }
 
 #: Foot vertices: Foot + ToeBase weight above this (and below the Foot joint's height).
@@ -856,6 +892,17 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             shaft_rec = {"push_p95_m": float(np.percentile(dn, 95)) if len(dn) else 0.0,
                          "push_max_m": float(dn.max()) if len(dn) else 0.0,
                          "inside_share": float(inside.mean()) if len(inside) else 0.0}
+            # 10. the knee edge (fit version 10): the collar in bind space against the Leg joint; above
+            # knee - KNEE_MARGIN_M the shaft is clipped there (the cut itself runs on the built shaft part below)
+            frame0 = float(w["Pf"][1, 3])              # bind height of the shoe ground (frame height 0)
+            knee_y = float(np.asarray(joints[f"{side}leg"], np.float64)[1, 3])
+            top_bind = frame0 + float(collar_raw) * k
+            clip_y = knee_y - KNEE_MARGIN_M
+            clip_m = max(0.0, top_bind - clip_y)
+            collar_bind = clip_y if clip_m > 0.0 else top_bind
+            shaft_rec.update({"shaft_top_m": top_bind, "knee_m": knee_y, "clip_m": clip_m,
+                              "clip_y_m": clip_y if clip_m > 0.0 else None,
+                              "knee_margin_m": round(knee_y - collar_bind, KNEE_MARGIN_ROUND)})
         bind = (W4[:, 0:1] * _apply(Bfi, Pw) + W4[:, 1:2] * _apply(Bti, Pw) + (W4[:, 2:3] + W4[:, 3:4]) * Pw)
         if is_boot:
             bind[rows] = blended_bind(Pw[rows], W4[rows])        # the band and shaft: exact (above)
@@ -890,14 +937,16 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                     r = a1[okf] / a0[okf]
                     stretch = max(stretch, float(np.max(np.maximum(r, 1.0 / np.maximum(r, 1e-12)))))
             # the follow ring: the shaft above y_split + SHAFT_RING_ABOVE_M, else the shaft part's upper half,
-            # else no measure (None — never a vacuous 0.0; Ruling 8b)
-            ring = yf > y_split + SHAFT_RING_ABOVE_M
+            # else no measure (None — never a vacuous 0.0; Ruling 8b); a clipped shaft is measured up to the clip
+            # (what is served — the clipped-off top no longer exists)
+            served = yf <= clip_y - frame0 + 1e-9 if clip_m > 0.0 else np.ones(n_v, bool)
+            ring = (yf > y_split + SHAFT_RING_ABOVE_M) & served
             follow_ring: Optional[str] = "top"
             if int(ring.sum()) < FOLLOW_RING_MIN:
-                shaft_v = yf > y_split + SPLIT_BAND_M
+                shaft_v = (yf > y_split + SPLIT_BAND_M) & served
                 follow_ring = None
                 if shaft_v.any():
-                    ring = yf >= 0.5 * (float(yf[shaft_v].max()) + y_split + SPLIT_BAND_M)
+                    ring = (yf >= 0.5 * (float(yf[shaft_v].max()) + y_split + SPLIT_BAND_M)) & served
                     follow_ring = "upper_half"
             follow: Optional[float] = None
             if follow_ring is not None and int(ring.sum()) >= FOLLOW_RING_MIN:
@@ -915,7 +964,8 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                               "ring_vertices": int(ring.sum()) if follow_ring is not None else 0})
             for key, name in (("push_p95_m", "shaft_push_p95_m"), ("push_max_m", "shaft_push_max_m"),
                               ("inside_share", "shaft_inside_share"), ("seam_gap_p95_mm", "seam_gap_p95_mm"),
-                              ("seam_stretch_max", "seam_stretch_max"), ("leg_follow_deg", "shaft_leg_follow_deg")):
+                              ("seam_stretch_max", "seam_stretch_max"), ("leg_follow_deg", "shaft_leg_follow_deg"),
+                              ("clip_m", "shaft_clip_m"), ("knee_margin_m", "knee_margin_m")):
                 if shaft_rec[key] is not None:
                     shaft_metrics[name].append(float(shaft_rec[key]))
             centroid_y = yf[side_idx].mean(1)
@@ -935,6 +985,16 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         if len(shaft_faces):
             side_parts["shaft"] = _part_mesh(shaft_faces, bind, normals, uvs, jj, jw, joint_names, colors, shoe,
                                              {**material, "doubleSided": True})
+            if is_boot and shaft_rec["clip_m"] > 0.0:
+                # 10. the knee clip: everything of the shaft part above the plane goes, the crossing faces are
+                # bisected ON it (``footwear_cut.plane_cut``, exact secant root); above the band the bind position
+                # IS the stand (Leg / UpLeg stand in the bind pose), and the clipped ring keeps the shaft's Leg /
+                # UpLeg weights — it rides the Leg bone like the rest of the shaft
+                from app.core.footwear_cut import plane_cut
+                from app.core.garment_layers import _mesh_prim, _prim_mesh
+                cut_prim, cut_stats = plane_cut(_mesh_prim(side_parts["shaft"]), y_m=clip_y, keep="below")
+                side_parts["shaft"] = _prim_mesh(cut_prim, side_parts["shaft"])
+                shaft_rec["clip"] = dict(cut_stats)
         parts[side] = side_parts
         ax_f, ax_t = _local_axis(Jf, w["axis"]), _local_axis(Jt, w["axis"])
         bones[fm.foot_joint] = {"axis": ax_f, "deg": math.degrees(w["theta"])}
@@ -962,9 +1022,12 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "insole_w_ball_mm": w["iw_ball"] * 1000.0, "toe_room_mm": w["toe_room_mm"], "contacts": recs,
             "split": {"is_boot": is_boot, "y_m": y_split, "band_m": SPLIT_BAND_M, "margin_m": SPLIT_MARGIN_M,
                       "topline_m": topline_m, "collar_above_ankle_mm": collar_above,
-                      "collar_m": float(collar_raw) * k if is_boot else None,
-                      "collar_bind_m": float(_apply(w["Pf"], np.array([0.0, float(collar_raw), 0.0]))[1])
-                      if is_boot else None},
+                      # the collar AFTER the knee clip (step 10): a clipped shaft's top is the clip plane
+                      "collar_m": (None if not is_boot else float(collar_raw) * k if not shaft_rec["clip_m"]
+                                   else shaft_rec["clip_y_m"] - frame0),
+                      "collar_bind_m": (None if not is_boot
+                                        else float(_apply(w["Pf"], np.array([0.0, float(collar_raw), 0.0]))[1])
+                                        if not shaft_rec["clip_m"] else shaft_rec["clip_y_m"])},
             "parts": {name: int(len(mesh.indices)) for name, mesh in side_parts.items()},
             **({"shaft": shaft_rec} if is_boot else {}),
         }
@@ -978,7 +1041,9 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     }
     table = {name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in FIT_GATES.items()}
     if any_split:
-        metrics.update({name: max(values) if values else None for name, values in shaft_metrics.items()})
+        # the worse side: the largest value, except the knee margin (the smaller one)
+        metrics.update({name: ((min if name in WORST_IS_MIN else max)(values) if values else None)
+                        for name, values in shaft_metrics.items()})
         table.update({name: (kind, limit, GATE_LABELS[name]) for name, (kind, limit) in SHAFT_GATES.items()
                       if SHAFT_GATING[name]})
     # the follow measure is None without a ring (Ruling 8b): recorded, not a refusal, ``ok`` None
@@ -1024,11 +1089,12 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         "shaft": {
             "class": shaft_in.get("class"), "cap_removed": shaft_in.get("cap_removed"),
             "closed_share": shaft_in.get("closed_share"), "top_m": topline_m,
-            "clip_m": None, "knee_margin_m": None,
-            **{key: (max(shaft_metrics[name]) if shaft_metrics[name] else None) for key, name in (
+            **{key: (((min if name in WORST_IS_MIN else max)(shaft_metrics[name])) if shaft_metrics[name] else None)
+               for key, name in (
                 ("push_p95_m", "shaft_push_p95_m"), ("push_max_m", "shaft_push_max_m"),
                 ("inside_share", "shaft_inside_share"), ("seam_gap_p95_mm", "seam_gap_p95_mm"),
-                ("seam_stretch_max", "seam_stretch_max"), ("leg_follow_deg", "shaft_leg_follow_deg"))},
+                ("seam_stretch_max", "seam_stretch_max"), ("leg_follow_deg", "shaft_leg_follow_deg"),
+                ("clip_m", "shaft_clip_m"), ("knee_margin_m", "knee_margin_m"))},
         },
         "gates": gates,
         "diagnostics": {s: {

@@ -806,6 +806,7 @@ def _garment_steps(garments: List[Dict[str, Any]], warnings: List[str]) -> List[
             hem = _dict(g.get("hem"))
             if hem.get("mode"):
                 parts.append("trousers over (too wide to tuck)" if hem.get("fallback") == "too_wide"
+                             else "trousers over (shaft too low to tuck)" if hem.get("fallback") == "shaft_too_low"
                              else f"trousers {hem['mode']}")
             if g.get("fit_state"):
                 parts.append(f"fit {g['fit_state']}" + (" (refitted from the previous base)" if g.get("refitted") else ""))

@@ -418,7 +418,8 @@ def wanted_garments(character_name: str, *,
 def hem_state(character_name: str, signature: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The boot hem the assembly of the outfit model ``signature`` (default: the one worn now) applies (boots
     spec § 8): ``{boot, trousers, mode, fallback, pending}`` — ``mode`` the profile's choice, ``fallback`` the
-    stored layered fit's (``too_wide``: a tucked pair that did not fit into the shaft, worn over it), ``pending``
+    stored layered fit's (``too_wide``: a tucked pair that did not fit into the shaft; ``shaft_too_low``: a shaft
+    that ends too close to the ankle to tuck into — both worn over it), ``pending``
     while that layered fit is still to be built (``fallback`` then None). None when no hem applies to that model
     (no boot with own-mesh trousers, no bare model yet). Read-only (``garment_layers.plan``); never raises."""
     try:

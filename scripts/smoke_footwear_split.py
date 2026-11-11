@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Smoke: the split of a boot at the wearer's ankle (app/core/footwear_fit.py step 9, fit version 6; boots plan
+"""Smoke: the split of a boot at the wearer's ankle (app/core/footwear_fit.py step 9, fit version 6; the knee edge,
+step 10, fit version 10; boots plan
 docs/superpowers/plans/2026-11-11-footwear-boots-mens.md Task 6, spec
 docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md § 6.2–6.4, § 9).
 
@@ -76,9 +77,10 @@ Expected, by hand:
      False (the source material says so); glb_mesh.garment_arrays(prefix) raises on the foot name (two
      matches), exact=True returns it. foot_pose of the boot fit == foot_pose of the clog fit on the same foot
      (bones, root_lift_m, contacts: the split changes no pose; the boot's foot part IS the clog).
-[B6] FOOTWEAR_FIT_VERSION 9; FIT_GATES has no "boot"; SHAFT_GATES = push p95 0.015 / max 0.030 / inside 0.01 /
-     seam gap 2 mm / stretch 1.5 / follow 1 deg, SHAFT_GATING seam_stretch_max False and the rest True;
-     SPLIT_BAND_M 0.02, SPLIT_MARGIN_M 0.01, SHAFT_CLEAR_M 0.006; the record's gates carry the six shaft
+[B6] FOOTWEAR_FIT_VERSION 10; FIT_GATES has no "boot"; SHAFT_GATES = push p95 0.015 / max 0.030 / inside 0.01 /
+     seam gap 2 mm / stretch 1.5 / follow 1 deg (+ the knee gates of [B9]), SHAFT_GATING seam_stretch_max False and
+     the rest True;
+     SPLIT_BAND_M 0.02, SPLIT_MARGIN_M 0.01, SHAFT_CLEAR_M 0.006; the record's gates carry the eight shaft
      entries for the boot and none for the clog.
 (On 2a54cb70 — fit version 5 — FootwearFit has ``shoes`` and no ``parts``, FIT_GATES has ``boot`` and the flat
 boot is refused BOOT_REFUSED: its topline stands 73.5 - 30 = 43.5 mm above the ankle + margin.)
@@ -105,6 +107,37 @@ boot is refused BOOT_REFUSED: its topline stands 73.5 - 30 = 43.5 mm above the a
 (On 7b04e9f5 / 8efc6616 — fit version 6 — Body A's shaft carries Foot 0.3 above the band and its ring follows the
 Leg turn by 14 deg, not 20: [B7] fails on both numbers; the 0.13 boot's record has no ``follow_ring`` and its
 follow is a vacuous 0.0 over an empty ring.)
+[B8] fit version 10 (boots plan Task 14, spec § 6.4 step 3): the knee edge. The Leg joint of ``foot_body()`` stands at
+     y 0.45 — read from the GLB as float32 0.449999988 — so the clip plane knee - KNEE_MARGIN_M = 0.409999988 (the
+     plan's "0.41"; every number below carries that 1.2e-8). Heights are BIND heights = the stand before the root
+     lift (above the band the shaft carries Leg only, which stands in the bind pose; the root lift raises knee and
+     shaft alike): frame height - lift, frame0 = -0.010236. The SHAFT TOP is the COLLAR (Task 9 fix 2, a17cef34:
+     ``collar_bind_m``, the highest closed cut ring, not the highest vertex); on ``flat_boot`` the tube's rim is
+     both, the insole's ``shaft.top_raw`` = the shaft height. ``flat_boot(shaft=0.42)`` (class knee): collar raw 0.42
+     -> frame 0.42 k = 0.429912 -> bind 0.429912 - 0.010236 = **0.419676** = ``shaft_top_m`` (the plan's 0.4182 took
+     k as 1.02: 0.4284 - 0.0102; the exact k 1.023599 is [B1]'s) > 0.41 -> clipped, ``clip_m`` = 0.419676 - 0.41 =
+     **0.009676** (+-2e-5; the plan's 0.0082 is the same rounding), ``knee_margin_m`` = **0.04** after the clip
+     (rounded to 1e-9: the collar sits ON the plane). The cut: the top wall row raw 0.41 -> 0.42 (bind 0.409440 ..
+     0.419676) straddles the plane — 2 x 40 side-wall quads + the back and front wall quads = 82 quads = 164
+     triangles bisected, 0 removed (the row below ends at 0.409440 < 0.41), 2 new vertices per triangle (the fixture
+     is unwelded) = 328, all at y = the plane (+-1e-12, the exact secant root); the served shaft's highest vertex IS
+     the plane, nothing above it. ``split.collar_bind_m`` = the plane, ``split.collar_m`` = plane - frame0 = 0.420236
+     (the cut gates' ``shaft_poke`` range and ``check_footwear.mjs`` read the clipped collar). The ring's new
+     vertices carry Leg 1.0 (the top row's weights). The fit is accepted: gates ``shaft_clip_m`` {0.009676, ok, gating}
+     and ``knee_margin_m`` {0.04, ok, gating}; the record's ``shaft`` summary carries clip_m 0.009676 and
+     knee_margin_m 0.04; the follow ring stops at the plane (0 deg, Leg 1.0).
+[B9] ``flat_boot(shaft=0.47)`` (class knee — the insole passes, collar_h_nominal 0.46 <= 0.48): bind top
+     0.47 k - 0.010236 = 0.470855 -> ``clip_m`` 0.060855 > SHAFT_CLIP_MAX_M 0.05 -> refused, reason "shaft_clip_m
+     0.06085 > 0.05 (…)" — the only reason. ``flat_boot(shaft=0.50)`` (the plan's case): top 0.501563, clip 0.091563
+     -> refused the same way (its insole already refuses it ``overknee``: the chain never fits it; ``fit_pair``
+     does not read the insole gates). ``flat_boot(shaft=0.30)``: top 0.307080 - 0.010236 = **0.296844**, margin
+     0.45 - 0.296844 = **0.153156**, ``clip_m`` 0, no ``clip`` stats, the shaft part's highest vertex 0.296844,
+     ``split.collar_bind_m`` 0.296844, accepted. The [B1] ankle boot carries the two knee gates too (margin 0.29646,
+     clip 0) and a shoe (the clog) neither.
+     [B6] FOOTWEAR_FIT_VERSION 10, KNEE_MARGIN_M 0.04, SHAFT_CLIP_MAX_M 0.05; SHAFT_GATES + shaft_clip_m ("max", 0.05)
+     and knee_margin_m ("min", 0.04), both gating.
+(On faf0cba2 — fit version 9 — nothing is clipped: the 0.42 shaft's top stays at 0.419676, the record's clip_m and
+knee_margin_m are None and the gates have no knee entries; [B8] and [B9] fail.)
 """
 import json
 import math
@@ -142,14 +175,17 @@ def main() -> int:
     from app.core import footwear_insole, garment_footwear, glb_mesh
 
     # [B6]
-    check(ff.FOOTWEAR_FIT_VERSION == 9 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
+    check(ff.FOOTWEAR_FIT_VERSION == 10 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
           and ff.SPLIT_MARGIN_M == 0.01 and ff.SHAFT_CLEAR_M == 0.006 and ff.FOLLOW_RING_MIN == 3
-          and ff.FOLLOW_OPTIONAL == ("shaft_leg_follow_deg",), "[B6] version 9, no boot gate, split constants")
+          and ff.FOLLOW_OPTIONAL == ("shaft_leg_follow_deg",) and ff.KNEE_MARGIN_M == 0.04
+          and ff.SHAFT_CLIP_MAX_M == 0.05, "[B6] version 10, no boot gate, split + knee constants")
     check(ff.SHAFT_GATES == {"shaft_push_p95_m": ("max", 0.015), "shaft_push_max_m": ("max", 0.030),
                              "shaft_inside_share": ("max", 0.01), "seam_gap_p95_mm": ("max", 2.0),
-                             "seam_stretch_max": ("max", 1.5), "shaft_leg_follow_deg": ("max", 1.0)}
+                             "seam_stretch_max": ("max", 1.5), "shaft_leg_follow_deg": ("max", 1.0),
+                             "shaft_clip_m": ("max", 0.05), "knee_margin_m": ("min", 0.04)}
           and ff.SHAFT_GATING == {"shaft_push_p95_m": True, "shaft_push_max_m": True, "shaft_inside_share": True,
-                                  "seam_gap_p95_mm": True, "seam_stretch_max": False, "shaft_leg_follow_deg": True},
+                                  "seam_gap_p95_mm": True, "seam_stretch_max": False, "shaft_leg_follow_deg": True,
+                                  "shaft_clip_m": True, "knee_margin_m": True},
           "[B6] SHAFT_GATES + SHAFT_GATING")
 
     glb = fx.foot_body_glb(leg_cell=0.01)
@@ -267,7 +303,7 @@ def main() -> int:
     check(sh["leg_follow_deg"] <= 1.0 and g["shaft_leg_follow_deg"]["ok"] and g["shaft_leg_follow_deg"]["gating"]
           and sh["ring_vertices"] > 0, f"[B4] leg follow {sh['leg_follow_deg']} deg over {sh['ring_vertices']} ring vertices")
     check(g["seam_gap_p95_mm"]["ok"] and g["seam_gap_p95_mm"]["gating"], "[B4] seam gap gates and passes")
-    check(sorted(k_ for k_ in g if k_ in ff.SHAFT_GATES) == sorted(ff.SHAFT_GATES), "[B6] the record carries the six shaft gates")
+    check(sorted(k_ for k_ in g if k_ in ff.SHAFT_GATES) == sorted(ff.SHAFT_GATES), "[B6] the record carries the eight shaft gates")
 
     # [B5]
     item = "demo_boot"
@@ -357,6 +393,71 @@ def main() -> int:
           and gn["value"] is None and gn["ok"] is None and gn["gating"] is True
           and none_.record["shaft"]["leg_follow_deg"] is None,
           f"[B7] 0.105 boot: no ring -> follow None, ok None ({ns['shaft']['follow_ring']}, {gn})")
+
+    # [B8] the knee clip
+    knee = float(joints["leftleg"][1, 3])
+    plane = knee - 0.04
+    check(near(knee, 0.45, 2e-8) and near(plane, 0.41, 2e-8), f"[B8] knee {knee!r} (float32 0.45), plane {plane!r}")
+    Pk, Fk = fx.flat_boot(shaft=0.42)
+    ins_k = footwear_insole.analyse_arrays(Pk, Fk)
+    check(ins_k["gates"]["ok"] and ins_k["shaft"]["class"] == "knee" and near(ins_k["shaft"]["top_raw"], 0.42, 1e-9),
+          f"[B8] 0.42 boot: insole ok, class {ins_k['shaft']['class']}, collar raw {ins_k['shaft']['top_raw']}")
+    kf = ff.fit_pair(ins_k, fx.shoe_garment(Pk, Fk), body, joints)
+    kr = kf.record
+    for side in ("left", "right"):
+        ks = kr["sides"][side]["shaft"]
+        ksp = kr["sides"][side]["split"]
+        check(near(ks["shaft_top_m"], 0.419676, 2e-5) and near(ks["clip_m"], 0.009676, 2e-5)
+              and near(ks["clip_m"], ks["shaft_top_m"] - plane, 1e-7) and ks["knee_margin_m"] == 0.04
+              and near(ks["clip_y_m"], plane, 1e-7) and near(ks["knee_m"], knee, 1e-7),
+              f"[B8] {side}: top {ks['shaft_top_m']}, clip {ks['clip_m']}, margin {ks['knee_margin_m']}, "
+              f"plane {ks['clip_y_m']}")
+        check(ks.get("clip") == {"removed_faces": 0, "bisected_faces": 164, "new_vertices": 328},
+              f"[B8] {side}: the cut {ks.get('clip')}")
+        check(near(ksp["collar_bind_m"], plane, 1e-7) and near(ksp["collar_m"], 0.420236, 2e-5),
+              f"[B8] {side}: collar after the clip bind {ksp['collar_bind_m']}, frame {ksp['collar_m']}")
+        sm = kf.parts[side]["shaft"]
+        ys = np.asarray(sm.positions, np.float64)[:, 1]
+        on = np.abs(ys - plane) <= 1e-12
+        check(abs(float(ys.max()) - plane) <= 1e-12 and int(on.sum()) == 328 and bool(np.all(ys <= plane + 1e-12)),
+              f"[B8] {side}: the clipped ring at the plane (max {float(ys.max())!r}, {int(on.sum())} vertices on it)")
+        # the cut lerps the skin as a union of the two ends' joints (slot order may change): Leg by joint index
+        wleg = np.where(np.asarray(sm.joints)[on] == sm.joint_names.index("LeftLeg" if side == "left" else "RightLeg"),
+                        np.asarray(sm.weights)[on], 0.0).sum(1)
+        check(len(wleg) and float(wleg.min()) >= 1.0 - 1e-9, f"[B8] {side}: the ring's Leg weight {float(wleg.min()):.6f}")
+    kg = kr["gates"]
+    check(kf.ok and kf.reasons == [] and near(kg["shaft_clip_m"]["value"], 0.009676, 2e-5) and kg["shaft_clip_m"]["ok"]
+          and kg["shaft_clip_m"]["gating"] and kg["knee_margin_m"]["value"] == 0.04 and kg["knee_margin_m"]["ok"]
+          and kg["knee_margin_m"]["gating"] and kg["knee_margin_m"]["limit"] == 0.04,
+          f"[B8] the 0.42 fit is accepted: {kf.reasons}, clip gate {kg['shaft_clip_m']}, margin gate {kg['knee_margin_m']}")
+    check(near(kr["shaft"]["clip_m"], 0.009676, 2e-5) and kr["shaft"]["knee_margin_m"] == 0.04
+          and kr["sides"]["left"]["shaft"]["follow_ring"] == "top" and near(kr["shaft"]["leg_follow_deg"], 0.0, 1e-6),
+          f"[B8] record shaft clip {kr['shaft']['clip_m']}, margin {kr['shaft']['knee_margin_m']}, "
+          f"follow {kr['shaft']['leg_follow_deg']}")
+
+    # [B9] too much clipped -> refused; a knee-high under the edge -> no clip
+    for height, top, clip in ((0.47, 0.470855, 0.060855), (0.50, 0.501563, 0.091563)):
+        Pr, Fr = fx.flat_boot(shaft=height)
+        ins_r = footwear_insole.analyse_arrays(Pr, Fr)
+        rf = ff.fit_pair(ins_r, fx.shoe_garment(Pr, Fr), body, joints)
+        rs = rf.record["sides"]["left"]["shaft"]
+        check(not rf.ok and len(rf.reasons) == 1 and rf.reasons[0].startswith("shaft_clip_m ")
+              and "> 0.05" in rf.reasons[0] and near(rs["shaft_top_m"], top, 2e-5) and near(rs["clip_m"], clip, 2e-5)
+              and rf.record["gates"]["shaft_clip_m"]["ok"] is False and rf.record["gates"]["knee_margin_m"]["ok"],
+              f"[B9] {height} boot (insole class {ins_r['shaft']['class']}, ok {ins_r['gates']['ok']}): top "
+              f"{rs['shaft_top_m']}, clip {rs['clip_m']} -> refused {rf.reasons}")
+    Pt, Ft = fx.flat_boot(shaft=0.30)
+    tf = ff.fit_pair(footwear_insole.analyse_arrays(Pt, Ft), fx.shoe_garment(Pt, Ft), body, joints)
+    ts = tf.record["sides"]["left"]["shaft"]
+    ty = np.asarray(tf.parts["left"]["shaft"].positions, np.float64)[:, 1]
+    check(tf.ok and near(ts["shaft_top_m"], 0.296844, 2e-5) and near(ts["knee_margin_m"], 0.153156, 2e-5)
+          and ts["clip_m"] == 0.0 and ts["clip_y_m"] is None and ts.get("clip") is None
+          and near(float(ty.max()), ts["shaft_top_m"], 1e-6)
+          and near(tf.record["sides"]["left"]["split"]["collar_bind_m"], 0.296844, 2e-5),
+          f"[B9] 0.30 boot: top {ts['shaft_top_m']}, margin {ts['knee_margin_m']}, clip {ts['clip_m']}, ok {tf.ok}")
+    check(near(sh["knee_margin_m"], 0.29646, 2e-5) and sh["clip_m"] == 0.0 and g["knee_margin_m"]["ok"]
+          and g["shaft_clip_m"]["ok"] and not any(k_ in clog.record["gates"] for k_ in ("knee_margin_m", "shaft_clip_m")),
+          f"[B9] the 0.16 ankle boot: margin {sh['knee_margin_m']}, clip {sh['clip_m']}; the clog carries no knee gate")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0

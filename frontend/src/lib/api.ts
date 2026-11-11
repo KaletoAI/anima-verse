@@ -7,7 +7,8 @@ export * from '@anima/player-ui/api';
 
 /** The boot hem of the worn outfit (`outfit_options.hem_applicable`, boots spec § 8): whether the control
  *  applies (a worn boot + worn own-mesh trousers that are no skirt), the stored mode, and — in the Wardrobe
- *  payload — `fallback` `too_wide` when a tucked pair is worn over the boot. */
+ *  payload — `fallback` when a tucked pair is worn over the boot: `too_wide` (the trousers do not fit into the
+ *  shaft) or `shaft_too_low` (the shaft ends too close to the ankle to tuck into). */
 export type BootHemMode = 'tucked' | 'over'
 export interface BootHemState {
   applicable: boolean
@@ -16,7 +17,7 @@ export interface BootHemState {
   reason: string
   /** The mode in effect (a stored null reads as `over`). */
   mode: BootHemMode
-  fallback?: 'too_wide' | null
+  fallback?: 'too_wide' | 'shaft_too_low' | null
 }
 export interface OutfitOptions {
   /** The stored choice: null = the default (over). */

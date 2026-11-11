@@ -52,8 +52,8 @@ import type { GarmentItemInfo, PieceStatus } from './useGarment'
 const OWN_MESH_HINT = 'Characters on the base-body pipeline get this piece as a fitted 3D mesh of its own instead of painting it onto the body. Applies to every wearer; 2D images stay unchanged.'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
- *  2026-11-11 § 15; the knee-high words change when P4 lands). */
-const OWN_MESH_SHOE_HINT = 'Made once per item from the item image; fitted onto each wearer on the CPU. Shoes and ankle boots; knee-high boots from P4; sandals and open shoes are not supported yet; socks stay painted.'
+ *  2026-11-11 § 15). */
+const OWN_MESH_SHOE_HINT = 'Made once per item from the item image; fitted onto each wearer on the CPU. Shoes, ankle boots and knee-high boots; sandals and open shoes are not supported yet; socks stay painted.'
 
 const STEP_LABELS: Record<string, string> = {
   queued: 'Queued',

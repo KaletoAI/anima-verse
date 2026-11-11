@@ -121,12 +121,14 @@ function BootHemControl({ character, hem, itemName, onSaved }: {
             onClick={() => { void choose(value) }}>{label}</button>
         ))}
       </span>
-      {hem.fallback === 'too_wide' && mode === 'tucked' ? (
+      {(hem.fallback === 'too_wide' || hem.fallback === 'shaft_too_low') && mode === 'tucked' ? (
         <span role="status" style={{
           fontSize: '0.72em', padding: '1px 6px', borderRadius: 8,
           border: '1px solid var(--warning, #d29922)', color: 'var(--warning, #d29922)',
         }}>
-          {t('{trousers}: too wide to tuck into {boot} — worn over it')
+          {(hem.fallback === 'shaft_too_low'
+            ? t('{boot}: the shaft is too low to tuck {trousers} into — worn over it')
+            : t('{trousers}: too wide to tuck into {boot} — worn over it'))
             .replace('{trousers}', itemName(hem.trousers_item || ''))
             .replace('{boot}', itemName(hem.boot_item || ''))}
         </span>

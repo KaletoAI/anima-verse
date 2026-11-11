@@ -53,8 +53,12 @@ the plane and the collar (``top_m``), the
 share outside the shaft's cross-section at the plane (``footwear_insole.opening_polygon`` of either shaft) —
 above ``TUCKED_POKE_MAX`` (1 %) the pair cannot be tucked (nor in reality: there is no inward layering), the
 ``over`` geometry is built under the tucked ``lsig`` instead and the record says ``hem.fallback = "too_wide"``
-(the Wardrobe warning ``outfit_options.TOO_WIDE_WARNING``). The record's ``hem`` = ``{mode, built, plane_m,
-tucked_poke, fallback, boot, shaft_sha}``; ``plan`` returns it per entry (``hem``) and the assembly's ``_state``
+(the Wardrobe warning ``outfit_options.TOO_WIDE_WARNING``). Before any cut, a plane under ``floor_m`` — the top of
+the boot's split band in bind space (``_hem_inputs``) — means the SHAFT is too low to tuck into (a low shoe whose
+collar ends a few centimetres above the ankle): the ``over`` geometry, ``hem.fallback = "shaft_too_low"``
+(``outfit_options.SHAFT_TOO_LOW_WARNING``, boots plan Task 14), ``tucked_poke`` None. The record's ``hem`` =
+``{mode, built, plane_m, top_m, floor_m, tucked_poke, fallback, boot, shaft_sha}``; ``plan`` returns it per entry
+(``hem``) and the assembly's ``_state``
 carries ``{mode, lsig, fallback}``, so a toggle rebuilds the served model.
 
 Real material (boots plan Task 13, 2026-11-11, offline, 0 hub jobs): Kai's Work Shoes fit (``FOOTWEAR_FIT_VERSION``
@@ -69,7 +73,10 @@ the shaft) — the same under version 9 (the over layering never read ``top_m``)
 (the collar's own height): 3 mm → ``tucked_poke`` 0.405 (259 / 640), 25 mm → 0.998; version 9 at 0.1340 (the
 ankle — the collar stands 2.8 cm above the split): 3 mm → **0.783** (501 / 640, 1280 faces removed), 25 mm →
 **0.869** (556 / 640) — every case falls back ``too_wide``. On an ankle shoe whose collar ends this close to the
-band the fallback is right, its word ("too wide") is not.
+band the fallback is right, its word ("too wide") was not: since Task 14 the plane 0.1340 lies under the band's top
+(the collar stands about 2.8 cm above the split, so the plane 3 cm under it is at or under the split itself, 2 cm
+under the band's top), so the verdict is ``shaft_too_low`` and no cut is attempted. A stored layered record keeps
+its old word until its ``lsig`` changes (the geometry is the same ``over`` either way).
 
 Real trousers (Task 13 round 2, 2026-11-11, on the clone, server at 019a995a): Kai's own-mesh Tailored Black
 Trousers (``item_750811f7``; UniForge mesh 95 531 → 59 895 tris, fit accepted on ``base634402e5`` with max push
@@ -102,6 +109,10 @@ TUCK_RESERVE_M = 0.03
 #: shaft — above it the pair falls back to ``over`` (``HEM_FALLBACK_TOO_WIDE``).
 TUCKED_POKE_MAX = 0.01
 HEM_FALLBACK_TOO_WIDE = "too_wide"
+#: Tucked, but the plane (collar − ``TUCK_RESERVE_M``) falls under the shaft's rigid part — below the top of the
+#: split band (``footwear_fit`` step 9), where the boot bends with the foot: a low shoe's collar ends too close to
+#: the ankle to tuck into, whatever the trousers' width. Worn over, no cut attempted (boots plan Task 14).
+HEM_FALLBACK_SHAFT_TOO_LOW = "shaft_too_low"
 #: ``tucked_poke`` reads the trouser vertices between the plane and the shaft top with this tolerance (metres).
 HEM_BAND_EPS_M = 1e-9
 
@@ -159,10 +170,15 @@ def shaft_sha(meshes: Sequence[Any]) -> str:
 
 def _hem_inputs(hem: Dict[str, Any]) -> Dict[str, Any]:
     """The shaft meshes of a ``hem`` (``{boot, fit, trousers, mode}``), their sha and the tucked plane height:
-    ``{meshes, sha, top_m, plane_m}``; ``meshes`` [] when the boot fit carries no shaft node. ``top_m`` = the LOWER
-    of the two sides' collars in bind space (the boot fit record's ``sides.<side>.split.collar_bind_m``,
-    ``footwear_fit`` step 9 — the closed rim, never the shaft node's highest vertex: a pull tab stands above it), so
-    the tucked hem ends inside both collars; None (no hem) when the record names no collar (a fit before version 9)."""
+    ``{meshes, sha, top_m, plane_m, floor_m}``; ``meshes`` [] when the boot fit carries no shaft node. ``top_m`` = the
+    LOWER of the two sides' collars in bind space (the boot fit record's ``sides.<side>.split.collar_bind_m``,
+    ``footwear_fit`` step 9 — the closed rim, never the shaft node's highest vertex: a pull tab stands above it; a
+    knee-high's knee clip since fit version 10), so the tucked hem ends inside both collars; None (no hem) when the
+    record names no collar (a fit before version 9). ``floor_m`` = the HIGHER of the two sides' band tops in bind
+    space — ``split.y_m + split.band_m`` are frame heights (above the shoe ground), shifted into bind space by the
+    side's ``collar_bind_m − collar_m`` (the placement maps a frame height h to bind height h + that constant): a
+    tucked plane under it lies in the band, which bends with the foot (``HEM_FALLBACK_SHAFT_TOO_LOW``); None when a
+    side's record lacks one of the four numbers."""
     from app.core.garment_store import read_record
     fit = Path(hem["fit"])
     meshes = shaft_meshes(fit.read_bytes(), str(hem["boot"]))
@@ -170,8 +186,15 @@ def _hem_inputs(hem: Dict[str, Any]) -> Dict[str, Any]:
     collars = [float(c) for c in ((s.get("split") or {}).get("collar_bind_m") for s in sides.values()
                                   if isinstance(s, dict)) if c is not None]
     top = min(collars) if meshes and collars else None
+    floors: List[float] = []
+    for s in sides.values():
+        sp = (s.get("split") or {}) if isinstance(s, dict) else {}
+        vals = [sp.get(key) for key in ("y_m", "band_m", "collar_bind_m", "collar_m")]
+        if all(isinstance(v, (int, float)) for v in vals):
+            floors.append(float(vals[0]) + float(vals[1]) + float(vals[2]) - float(vals[3]))
     return {"meshes": meshes if top is not None else [], "sha": shaft_sha(meshes), "top_m": top,
-            "plane_m": None if top is None else top - TUCK_RESERVE_M}
+            "plane_m": None if top is None else top - TUCK_RESERVE_M,
+            "floor_m": max(floors) if floors and len(floors) == len(collars) else None}
 
 
 def _sha(path: Optional[Path]) -> str:
@@ -255,7 +278,7 @@ def plan(character_name: str, item_ids: Iterable[str], *, base_sha: str,
             mode = str(hem_in["mode"])
             plane_m = hem_in["plane_m"] if mode == "tucked" else None
             entry["hem"] = {"boot": str(hem_in["boot"]), "mode": mode, "plane_m": plane_m, "top_m": hem_in["top_m"],
-                            "fit": Path(hem_in["fit"]), "fallback": None}
+                            "floor_m": hem_in.get("floor_m"), "fit": Path(hem_in["fit"]), "fallback": None}
         if inner:
             lsig = layer_sig(inner, mode=mode, plane_m=plane_m)
             path = garment_store.garment_path(character_name, item_id, fsig, "layer", lsig=lsig, body=body)
@@ -419,11 +442,15 @@ def _build(character_name: str, item_id: str, entry: Dict[str, Any], inner: Dict
         if shaft_sha(shafts) != entry["inner"].get(str(hem["boot"])):
             raise ValueError(f"the fit of {hem['boot']} changed during the build")
         hem_record = {"mode": hem["mode"], "built": "over", "plane_m": hem.get("plane_m"), "top_m": hem.get("top_m"),
-                      "tucked_poke": None, "fallback": None, "boot": str(hem["boot"]),
+                      "floor_m": hem.get("floor_m"), "tucked_poke": None, "fallback": None, "boot": str(hem["boot"]),
                       "shaft_sha": entry["inner"].get(str(hem["boot"]))}
     # One body field for both tiers.
     sdf = gfl.layer_sdf(body_mesh, [outer_full, *inner_full, *shafts, *([outer_low] if outer_low else []), *inner_low])
     tucked = bool(hem_record and hem["mode"] == "tucked" and hem.get("plane_m") is not None)
+    if tucked and hem.get("floor_m") is not None and float(hem["plane_m"]) < float(hem["floor_m"]):
+        # the shaft is too low to tuck into: the plane lies in the ankle band — worn over, no cut attempted
+        hem_record["fallback"] = HEM_FALLBACK_SHAFT_TOO_LOW
+        tucked = False
     full, report = gfl.layer_over(outer_full, body_mesh, inner_full if tucked else [*inner_full, *shafts], sdf=sdf)
     low = low_report = None
     if outer_low is not None:

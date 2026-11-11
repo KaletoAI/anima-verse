@@ -676,7 +676,7 @@ def main() -> int:
     from app.core.garment_fit import weld
     Pw, Fw = flat_boot(shaft=0.16, shaft_to=0.12)
     check("unwelded tube 3828 faces / 11484 vertices", (len(Fw), len(Pw)) == (3828, 11484), f"{len(Fw)} {len(Pw)}")
-    check("FOOTWEAR_FIT_VERSION 9 (the push welds, the collar)", ff.FOOTWEAR_FIT_VERSION == 9)
+    check("FOOTWEAR_FIT_VERSION 10 (the push welds, the collar, the knee clip)", ff.FOOTWEAR_FIT_VERSION == 10)
     inst = fi.analyse_arrays(Pw, Fw)
     glb_a = foot_body_glb(leg_cell=0.01)
     body_a, joints_a = glb_mesh.body_arrays(glb_a), glb_mesh.joint_bind_matrices(glb_a)

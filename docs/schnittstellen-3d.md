@@ -12257,7 +12257,10 @@ ankle (`y_split` = the Foot joint's height in the shod stand; per fit, never per
 - **Parts and nodes.** Per side the foot part (`garment_footwear_<item_id>_<side>`, extras `part: "foot"`) and the
   shaft (`garment_footwear_<item_id>_<side>_shaft`, `part: "shaft"`, double-sided material) — FOUR nodes, both
   tiers. The shaft node's extras carry `collar_bind_m`: the bind-space height of the COLLAR, the closed rim of the
-  opening (`footwear_fit` step 9, fit version 9 — the shoe analysis' highest closed slab ring, placed by the fit).
+  opening (`footwear_fit` step 9, fit version 9 — the shoe analysis' highest closed slab ring, placed by the fit;
+  since fit version 10 a knee-high shaft whose collar stands above the Leg joint (knee) − `KNEE_MARGIN_M` (4 cm) is
+  CLIPPED there by a horizontal plane in bind space and `collar_bind_m` is that plane — at most `SHAFT_CLIP_MAX_M`
+  (5 cm) is clipped off, more refuses the fit, gate `shaft_clip_m`; `knee_margin_m` ≥ 4 cm after the clip).
   It is the shaft's top for every reader — `shaft_poke`, the tucked hem, `check_footwear.mjs`; the node's highest
   vertex is not: a pull tab, a loop or a tongue stands above the rim (the P2 Work Shoes' back tab, 2.9 cm). The index buffer is split at `y_split` by face centroid; the faces of the band (`y_split ± SPLIT_BAND_M`
   = 2 cm) straddle the node boundary and their vertices appear in BOTH nodes with identical bind positions and
@@ -12391,7 +12394,8 @@ shaft's ring against the side's Leg bone), `shaft_poke` (the share of the shin's
 between the band's top and the shaft node's `collar_bind_m` outside the boot volume — both nodes, their boundary
 loops closed by fans and a lid at the collar plane, voxelised like the body; a shaft node without `collar_bind_m`
 is refused) and on seat clips `seat_thigh_in_shaft` (the UpLeg-dominant vertices inside the 5 cm under the collar,
-spec ≤ 2 %); once,
+spec ≤ 2 % per frame; a summary line and `boot.seat_thigh_in_shaft {max, reference, clips, ok}` in the JSON take the
+worst frame over every seat clip per side against that reference — a check, not a fit gate); once,
 `open_loops_above_split` (body boundary loops under the shaft: 0); penetration counts every footwear node. Numbers in
 `--json` (`boot`, `still.boot`, `clips.<kind>.boot`, `per_frame[].boot`); the fixture run is
 `scripts/smoke_footwear_assembly.py` [K] (a one-key `--clip-json` clip and a control file with known answers).

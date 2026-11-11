@@ -110,7 +110,11 @@
  *  - `seat_thigh_in_shaft` (seat clips only, after `seatFootLift`): the share of the side's UpLeg-dominant body
  *    vertices inside that boot volume (not in the flood) AND within the shaft's top 5 cm — along the posed axis
  *    from the centroid of the shaft vertices `TOP_BAND_LOW_M` below the collar (± 5 mm) to the centroid of its
- *    5 mm under the collar, between 5 cm below that plane and 5 mm above it. Null without an UpLeg bone.
+ *    5 mm under the collar, between 5 cm below that plane and 5 mm above it. Null without an UpLeg bone. The summary
+ *    line after the clips (and `boot.seat_thigh_in_shaft` in the JSON: `{max: {side}, reference, clips, ok}`) takes
+ *    the worst frame over every seat clip per side against the spec's reference `SEAT_THIGH_MAX` 2 % per frame (a
+ *    check, not a fit gate; `ok` null with no seat clip measured). A knee-high's collar is the knee CLIP when the fit
+ *    clipped it (`footwear_fit` step 10, fit version 10: `collar_bind_m` = `knee − KNEE_MARGIN_M`).
  * Once, in the bind pose: `open_loops_above_split` = the body boundary loops (THE CUT above) whose centroid lies
  * in (`band_top`, `shaft_top`] and whose every vertex is dominated by that side's Foot / ToeBase / Leg / UpLeg —
  * a hole in the leg shell under the shaft (the anti-goal of spec § 4: the shin is never cut under a shaft). 0 on
@@ -135,6 +139,7 @@ const NO_FOOT_W = 1e-3
 const RING_ABOVE_BAND_M = 0.04          // footwear_fit SHAFT_RING_ABOVE_M 0.06 − SPLIT_BAND_M 0.02
 const FOLLOW_RING_MIN = 3               // footwear_fit FOLLOW_RING_MIN
 const THIGH_TOP_M = 0.05                // spec § 6.4 step 4: the shaft's top 5 cm
+const SEAT_THIGH_MAX = 0.02             // spec § 6.4 step 4: the reference per frame (start value, P4 calibrates)
 const TOP_BAND_LOW_M = 0.05
 const BAND_TOL_M = 0.005
 
@@ -1118,6 +1123,22 @@ async function main() {
       + `R ${out.penetration.map((p) => pc(p.right) + (p.closed ? '' : '!')).join(' ')}`)
     if (isBoot) console.log(`  ${''.padEnd(22)}boot max over ${n} fr: ${bootLine(Object.fromEntries(Object.keys(boot).map((side) => [side,
       Object.fromEntries(Object.entries(out.boot).map(([key, v]) => [key, v[side]]))])))}`)
+  }
+  // the seated knee-high check (spec § 6.4 step 4; a check, not a fit gate): the worst frame over every seat clip
+  // per side against the 2 % reference — null without a seat clip or an UpLeg bone
+  if (isBoot) {
+    const seatKinds = Object.keys(report.clips).filter((k) => report.clips[k].boot?.seat_thigh_in_shaft)
+    const seatMax = Object.fromEntries(Object.keys(boot).map((side) => {
+      const vals = seatKinds.map((k) => report.clips[k].boot.seat_thigh_in_shaft[side]).filter((v) => v !== null && v !== undefined)
+      return [side, vals.length ? Math.max(...vals) : null]
+    }))
+    const known = Object.values(seatMax).filter((v) => v !== null)
+    report.boot.seat_thigh_in_shaft = { max: seatMax, reference: SEAT_THIGH_MAX, clips: seatKinds,
+      ok: known.length ? known.every((v) => v <= SEAT_THIGH_MAX) : null }
+    console.log(`  seated thigh in the shaft's top ${THIGH_TOP_M * 100} cm, worst frame of ${seatKinds.length} seat clip(s): `
+      + Object.entries(seatMax).map(([side, v]) => `${side[0].toUpperCase()} ${v === null ? '—' : pc(v)}`).join(' / ')
+      + ` (reference ≤ ${pc(SEAT_THIGH_MAX)} per frame: `
+      + `${report.boot.seat_thigh_in_shaft.ok === null ? 'not measured' : report.boot.seat_thigh_in_shaft.ok ? 'ok' : 'OVER'})`)
   }
   if (opts.json) fs.writeFileSync(opts.json, JSON.stringify(report, null, 1))
 

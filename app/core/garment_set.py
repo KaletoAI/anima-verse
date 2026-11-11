@@ -397,8 +397,8 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
 
 def _wardrobe_hem(character_name: str, profile: Dict[str, Any], pipeline: bool) -> Dict[str, Any]:
     """The Wardrobe's boot hem control (boots spec § 8.3): ``outfit_options.hem_applicable`` — ``{applicable,
-    boot_item, trousers_item, reason, mode}`` — plus ``fallback`` (``too_wide`` when the tucked pair is worn
-    over the boot: the assembly's layered fit, ``garment_assembly.hem_state``; None otherwise or while it is
+    boot_item, trousers_item, reason, mode}`` — plus ``fallback`` (``too_wide`` / ``shaft_too_low`` when the tucked
+    pair is worn over the boot: the assembly's layered fit, ``garment_assembly.hem_state``; None otherwise or while it is
     built). Off the pipeline nothing applies."""
     from app.core import outfit_options
     if not pipeline:

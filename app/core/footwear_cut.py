@@ -721,16 +721,21 @@ def _cut_side(prim: Prim, desc: Dict[str, Any], joints: Dict[str, np.ndarray],
     return _remove_and_bisect(prim, g, lambda a, b, ga, gb: _edge_roots(side, m, P, a, b, ga, gb), touched)
 
 
-def plane_cut(prim: Prim, *, y_m: float) -> Tuple[Prim, Dict[str, Any]]:
+def plane_cut(prim: Prim, *, y_m: float, keep: str = "above") -> Tuple[Prim, Dict[str, Any]]:
     """``prim`` with everything below the horizontal plane ``y = y_m`` (the primitive's own bind space, metres)
     removed and the crossing faces bisected ON the plane — the removal + bisection of ``apply_cut`` (steps 3–4)
     with ``g = y − y_m`` and the exact secant root (``g`` is linear along an edge); attributes, morph targets
     and skinning lerp as there, the normals of the touched vertices are recomputed. Returns ``(prim, stats)``
     with ``removed_faces`` / ``bisected_faces`` / ``new_vertices``. Boots spec § 8.1: the trouser leg tucked
     into a boot is cut at the shaft top minus the reserve (``garment_layers``); the plane rides the bind pose —
-    the cut vertices keep the trousers' own weights (Leg about the shin), so it moves with the leg."""
+    the cut vertices keep the trousers' own weights (Leg about the shin), so it moves with the leg.
+    ``keep="below"`` keeps the other half (``g = y_m − y``): the knee clip of a knee-high shaft (spec § 6.4 step 3,
+    ``footwear_fit`` step 10) removes everything ABOVE ``knee − KNEE_MARGIN_M``; the clipped ring keeps the shaft's
+    Leg / UpLeg weights, so it rides the Leg bone like the rest of the shaft."""
+    if keep not in ("above", "below"):
+        raise ValueError(f"plane_cut keeps 'above' or 'below', not {keep!r}")
     P = np.asarray(prim.positions, np.float64)
-    g = P[:, 1] - float(y_m)
+    g = P[:, 1] - float(y_m) if keep == "above" else float(y_m) - P[:, 1]
     out, stats, touched = _remove_and_bisect(prim, g, lambda a, b, ga, gb: ga / (ga - gb),
                                              np.zeros(len(P), bool))
     if "NORMAL" in out.attributes and touched.any():

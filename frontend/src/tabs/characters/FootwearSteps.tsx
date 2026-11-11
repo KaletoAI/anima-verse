@@ -114,6 +114,9 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'seam_gap_p95_mm', label: 'Seam gap at the ankle', scale: 1, unit: 'mm', digits: 2 },
   { key: 'seam_stretch_max', label: 'Seam stretch at ±25°', scale: 1, unit: '×', digits: 1 },
   { key: 'shaft_leg_follow_deg', label: 'Shaft follows the shin', scale: 1, unit: '°', digits: 2 },
+  // The knee edge (footwear_fit step 10): the collar under the knee after the clip, and how much was clipped off.
+  { key: 'knee_margin_m', label: 'Knee margin', scale: 100, unit: 'cm', digits: 1 },
+  { key: 'shaft_clip_m', label: 'Clipped under the knee', scale: 1000, unit: 'mm', digits: 1 },
   { key: 'deep_outside', label: 'Foot outside the shoe (cut)', scale: 100, unit: '%', digits: 2 },
   { key: 'visible_poke', label: 'Foot poking through (cut)', scale: 100, unit: '%', digits: 2 },
   { key: 'throat_ledge_p95_mm', label: 'Throat ledge (cut)', scale: 1, unit: 'mm', digits: 1 },
@@ -523,6 +526,8 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
               `${t('Split height')} ${sideNum('y_m', (v) => cm(v))}`,
               num(split.band_m) != null ? `${t('Band')} ±${cm(split.band_m)}` : '',
               row.shaft?.class ? t(SHAFT_CLASS_TEXT[row.shaft.class] || row.shaft.class) : '',
+              (num(row.shaft?.clip_m) ?? 0) > 0
+                ? `${t('Clipped under the knee')} ${((row.shaft?.clip_m as number) * 1000).toFixed(1)} mm` : '',
             ].filter(Boolean).join(' · ')}
           </span>
         ) : null}
