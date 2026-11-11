@@ -222,7 +222,6 @@ shared/models/clips-trial/**
 # Import inbox: foreign animation files dropped in (or uploaded) for import —
 # licensed material by default, so only its README travels.
 shared/models/clips-inbox/**
-!shared/models/clips-inbox/README.md
 # animation studio: build output is scratch; the catalog's flock file is runtime state
 animation-studio/out/
 shared/templates/*/*.json.lock

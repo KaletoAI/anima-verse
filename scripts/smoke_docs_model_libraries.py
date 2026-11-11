@@ -49,8 +49,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 MODELS = REPO / "shared" / "models"
-READMES = ["clips", "clips-inbox", "clips-licensed", "clips-trial", "figure",
-           "mocap-src", "rig"]
+# The inbox has no README since 36ebf80d (removed on purpose); [C] still
+# checks that nothing in it is tracked.
+READMES = ["clips", "clips-licensed", "clips-trial", "figure", "mocap-src", "rig"]
 
 _failures = []
 _checks = 0
@@ -113,7 +114,9 @@ def main():
     check("the FREE clip library is tracked (binaries, not just the README)",
           len([f for f in free if f.endswith(".fbx")]) > 5,
           f"{len(free)} files")
-    for d in ("clips-licensed", "clips-trial", "mocap-src", "clips-inbox"):
+    files = tracked("shared/models/clips-inbox")
+    check("clips-inbox: nothing tracked", files == [], str(files))
+    for d in ("clips-licensed", "clips-trial", "mocap-src"):
         files = tracked(f"shared/models/{d}")
         check(f"{d}: nothing tracked but the README",
               files == [f"shared/models/{d}/README.md"], str(files))
