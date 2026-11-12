@@ -210,7 +210,8 @@ in the cut frame go into ``shaft.collar_plane`` / ``shaft.opening`` — the cut 
 plane and conforms the leg's edge into the opening (``footwear_cut`` version 5). What the cut body cannot show stops
 gating: ``shaft_push_p95_m`` / ``shaft_push_max_m`` / ``shaft_inside_share`` read the shaft vertices from
 ``COLLAR_BAND_M`` under the plane up (the visible collar band; the whole-shaft values stay as ``push_all_*`` /
-``inside_all_share``). The push's body field is hole-filled slice by slice (``garment_fit.body_sdf(fill_slices=)``):
+``inside_all_share``). The push's body field is hole-filled slice by slice (``garment_fit.body_sdf``; since
+fit-sdf-speed-drape Task 1 every body field is, along x, y and z — the shaft push needed the horizontal slices):
 the clone's base bodies rebuilt 2026-11-12 (Kira ``base20d5701a``, Kai ``base634402e5``) are leg SHELLS whose
 calf cavity the 3D fill and the seal read as outside, so the push left the shaft's side walls inside the leg
 (pushed toward the cavity). Measured on copies (knee-high leather boots, width cap 1.10, turn + calf centring of
@@ -1359,7 +1360,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             rows = np.nonzero(moving)[0]
             lo = Pw[rows].min(0) - SDF_MARGIN_M
             hi = Pw[rows].max(0) + SDF_MARGIN_M
-            sdf = body_sdf(Pposed, body.faces, vox=VOX_M, bounds=(lo, hi), fill_slices=True)
+            sdf = body_sdf(Pposed, body.faces, vox=VOX_M, bounds=(lo, hi))
             local = np.full(n_v, -1, np.int64)
             local[rows] = np.arange(len(rows))
             fsel = side_idx[np.all(moving[side_idx], axis=1)]

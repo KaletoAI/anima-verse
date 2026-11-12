@@ -55,12 +55,15 @@ The hair edit chain's parts — ``align_depth``, ``transfer``, the hair metrics 
     outside, the next segment's from 11.7 mm — go, a slit ~2 cm wide). vox 0.004: the dilated surface (one
     voxel) leaves ~1.2 cm of it open, so the hole fill keeps only the wall. The probe (0.05, 1.30, 0) lies in the
     cavity and off every axis line through the slit (the slit is at x ~ 0, y 1.00..1.20).
-    - Without the seal (``_seal_cavities`` replaced by the identity): the probe reads OUTSIDE, sdf > 0 (it lies
-      0.09 - 0.05 = 0.04 from the inner wall).
+    - Without the seal (``_seal_cavities`` AND ``fit_kernels.fill_slices`` replaced by the identity — since
+      fit-sdf-speed-drape Task 1 every slice along x, y and z is hole-filled in 2D too, and the probe's y-slice at
+      1.30 is two complete rings that fill alone): the probe reads OUTSIDE, sdf > 0 (it lies 0.09 - 0.05 = 0.04
+      from the inner wall).
     - With it: the cavity (18 cm across, > 2 x 10 + 1 voxels = 8.4 cm) is enclosed along all six axis directions ->
       inside; the nearest outside is the outer surface 0.10 - 0.05 = 0.05 away (the slit's column at x ~ 0 lies
       sqrt(0.05^2 + 0.1^2) = 0.11 away) -> sdf < -0.03.
-    - The closed double-walled head of (b) gains nothing: the field with and without the seal is identical.
+    - The closed double-walled head of (b) gains nothing: the field with and without the seal (and the slice
+      fill) is identical.
 """
 import io
 import json
@@ -368,23 +371,24 @@ def test_seal():
     check(int(slit.sum()) > 0, f"seal: the slit removes faces ({int(slit.sum())})")
     probe = np.array([[0.05, 1.30, 0.0]])
     bounds = (np.array([-0.15, 0.75, -0.15]), np.array([0.15, 1.45, 0.15]))
-    real = gf._seal_cavities
-    try:
-        gf._seal_cavities = lambda surf, inside, **_kw: inside
-        unsealed = float(gf.body_sdf(P, F, vox=0.004, bounds=bounds).sample(probe)[0])
-    finally:
-        gf._seal_cavities = real
+    from app.core import fit_kernels
+    real, real_slices = gf._seal_cavities, fit_kernels.fill_slices
+
+    def unsealed_field(*args, **kwargs):
+        try:
+            gf._seal_cavities = lambda surf, inside, **_kw: inside
+            fit_kernels.fill_slices = lambda surf, axis: surf
+            return gf.body_sdf(*args, **kwargs)
+        finally:
+            gf._seal_cavities, fit_kernels.fill_slices = real, real_slices
+    unsealed = float(unsealed_field(P, F, vox=0.004, bounds=bounds).sample(probe)[0])
     sealed = float(gf.body_sdf(P, F, vox=0.004, bounds=bounds).sample(probe)[0])
     check(unsealed > 0, f"seal: without it the cavity reads outside (sdf {unsealed:+.4f} > 0)")
     check(sealed < -0.03, f"seal: with it the cavity is inside (sdf {sealed:+.4f} < -0.03)")
     Pb, Fb = head_body()
     c = np.array([0, 0.9, 0])
     with_seal = gf.body_sdf(Pb, Fb, vox=0.002, bounds=(c - 0.15, c + 0.15)).field
-    try:
-        gf._seal_cavities = lambda surf, inside, **_kw: inside
-        without = gf.body_sdf(Pb, Fb, vox=0.002, bounds=(c - 0.15, c + 0.15)).field
-    finally:
-        gf._seal_cavities = real
+    without = unsealed_field(Pb, Fb, vox=0.002, bounds=(c - 0.15, c + 0.15)).field
     check(np.array_equal(with_seal, without), "seal: the closed double-walled head is unchanged")
 
 
