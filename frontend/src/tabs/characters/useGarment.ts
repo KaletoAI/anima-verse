@@ -1,6 +1,6 @@
 /**
  * useGarment — one garment info route, polled while a garment run goes:
- * the Hair tab's `GET /characters/{name}/hair` or the Wardrobe's
+ * the hair row's `GET /characters/{name}/hair` or the Wardrobe's
  * `GET /characters/{name}/garments/{item}` (`app/routes/characters.py` →
  * `garments.garment_info` under the payload's `garment`). Same poll pattern
  * as useBaseBody: one load, then a 3 s tick while a step runs (no give-up —

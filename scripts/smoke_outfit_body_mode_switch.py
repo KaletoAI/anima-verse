@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Outfit body mode switch — the worn outfit's body is always listed and marked current in BOTH modes, a mode
-switch spends nothing (Build current outfit builds the model of the new mode), bodies survive the switch, and the
-3D tab says when it serves a stand-in (app/core/outfit_bodies.py ``worn_texture`` / ``textures`` / ``paint_worn`` /
-``body_info``'s ``current``, app/core/model3d_pipeline.py ``build_current_outfit`` / ``fallback_state``,
-app/core/artefact_graph.py body rule).
+"""Outfit body mode switch — the worn outfit's body and texture are marked current in the Figure tab's stored list
+(``figure.stored``), a mode switch spends nothing (Build current outfit builds the model of the new mode), bodies
+survive the switch, and the 3D tab says when it serves a stand-in (app/core/model3d_pipeline.py
+``build_current_outfit`` / ``fallback_state``, app/core/artefact_graph.py body rule).
+
+Since Task 11 of plan 2026-11-12-unified-worn-pieces the outfit-body tab and its runs are gone: every build below
+is the Build (``POST /characters/{c}/model3d/build-current``, now in app/routes/figure.py), and "current" is read
+from ``figure.stored`` (was: the tab's ``textures`` / ``bodies`` lists, its paint / regenerate runs and the painted
+body preview route — replaced cases name what they were).
 
 Since Task 6 of plan 2026-11-12-unified-worn-pieces there is no body mode: each worn piece's item mode decides, and
 the outfit model is built as the figure DELIVERED now (``figure.delivered_figure``, the interim rule: a wanted shape
@@ -25,7 +29,7 @@ outfit is ``STORED_NOT_NEEDED``, and an AUTOMATIC walk (``artefact_graph.collect
 Usage:
     ./.venv/bin/python scripts/smoke_outfit_body_mode_switch.py
 
-Throwaway storage + instance directory with a copy of the repo's ``human`` package; the outfit_bodies router on a
+Throwaway storage + instance directory with a copy of the repo's ``human`` package; the figure router on a
 bare FastAPI app with a TestClient, session lookup stubbed (header ``x-role``: admin / user). No hub, no GPU, no
 Blender:
 * ``app.imagegen.service.get_image_service`` raises (nothing may reach it);
@@ -61,25 +65,19 @@ tsig is outdated and goes with the first walk) with its painted body, but no dre
 made-up shape inputs (another outfit's body, [4]).
 
 Expected, by hand:
-[1] retexture, nothing built for O1: textures = [pending entry (key O1, current, pending, worn_outfit {O1,
-    "Skirt + Top", views_missing [front, back], image_jobs 1 + 2 = 3, model False}, blocked {generate "",
-    regenerate PENDING_NO_BODY, delete PENDING_NO_BODY}), T2 (current False, used by O2 with a model, generate
-    NOT_WORN_TEXTURE, regenerate NO_SOURCE — O2 has no dressed front —, delete PAINTED_KEPT: O2 would paint it
-    now)]. bodies []. Routes: user 403; paint on T2 404; repaint on
-    T2 409 NO_SOURCE. POST paint O1 -> 202; the run: 1 front edit + 1 back = 3 image jobs, ONE build (O1, not
-    forced), 1 worker run (no painted body of T1 yet), 0 hub jobs, image service never called. Then: textures[0]
-    key T1 (== the hand tsig), current, not pending, painted, worn_outfit.model True, generate WORN_MODEL_PRESENT,
-    regenerate "" (O1 stands on it), delete PAINTED_KEPT; paint again 409 WORN_MODEL_PRESENT; T2 still not
-    current.
+[1] retexture, nothing built for O1: the Build's plan is [texture, assemble]; build-current -> "started": the
+    texture step renders O1's views (1 front edit + 1 back = 3 image jobs), the assemble step ONE build (O1, not
+    forced), 1 worker run (no painted body of T1 yet), 0 hub jobs, image service never called (was: the tab's
+    paint run of the worn entry, with the same counts). Then figure.stored: T1 (texture, current) and T2
+    (texture, not current, not deletable — O2 would paint it now); no shape. A user -> 403 on build-current.
+    (Was also: the tab's pending entry and its blocked reasons, 404/409 of paint/repaint — removed with it.)
 [2] painted -> in_body (no shape B1 yet): the switch spends nothing (0 builds, 0 jobs). The delivered figure is
     the plain body with top + skirt painted meanwhile — texture T1, exactly O1's model (was: stale "body_mode");
-    pending_changes names top and skirt {wanted in_body, delivered painted}; build-current -> {status "current"},
-    the Build's plan names steps [interim (O1's model records no interim notes yet — 0 jobs), shape, assemble]
-    (Task 8: build-current runs the Build; was: {status "current"}, nothing spent). The worn body's Regenerate (POST
-    outfit-bodies/<B1>/regenerate) renders the shape's views (front edit tpose_<B1> + back = 3 image jobs) and
-    meshes B1: ONE hub job; O1 is stale "figure" now (delivered: B1, nothing painted). build-current ->
-    "started" (the plan is [assemble] now): O1's views copies of B1's (0 image jobs), ONE build, 0 jobs, no
-    T-pose pass (was: "views", then "generating"); O1
+    pending_changes names top and skirt {wanted in_body, delivered painted}; the Build's plan names steps [interim (O1's model records no interim notes yet — 0 jobs), shape, assemble].
+    build-current -> "started": the interim step's build call (cached — O1's model is that interim figure already,
+    T1 painted: 0 jobs), the shape step renders B1's views (front edit tpose_<B1> + back = 3 image jobs) and
+    meshes B1 (ONE hub job), the assemble step one more build call: O1's views copies of B1's (0 image jobs) —
+    TWO build calls, 0 worker runs, no T-pose pass (was: the tab's Regenerate of B1, then build-current); O1
     stands on B1 with texture "". in_body -> painted: the switch spends nothing; O1 stale "figure"; build-current
     -> "started": T1's views back from the texture store (0 image jobs), ONE build, 0 hub
     jobs, 0 worker runs — T1's painted body reused; O1 has no body_id and names T1. B1 still stored after an
@@ -92,11 +90,10 @@ Expected, by hand:
     delete B1: dry run (explicit=True) lists B1 as an orphan with reason STORED_NOT_NEEDED, not protected.
     build-current once more -> {status "current"}, no build.
 [4] other outfits' bodies are never current. in_body (build-current "started": ONE build, 0 jobs — B1 is stored), a
-    body B2 with O2's model on it AND O1's model
-    rewritten to name B2 (an outdated model of the worn outfit on another body): bodies: B1 current True
-    (listed first, the worn outfit's views stand for it), B2 current False although O1 (worn) is listed on it.
-    painted, not built: the worn outfit's pending entry (key O1) leads as current, T1 not current (O1's views are
-    B1's copies until the views pass; was "T1 current"), T2 not.
+    body B2 with O2's model on it: figure.stored lists the shapes B1 current True (the worn figure's shape, listed
+    first), B2 current False. Painted, not built yet: T1 current (the WANTED texture of the worn O1 — figure.stored
+    marks wanted and delivered keys), T2 not. (Was: the tab's bodies / textures lists, where the worn outfit's
+    pending entry led and T1 was not current until built; and O1's model rewritten onto B2.)
 [5] 3D tab, O3 worn (no model, no views: its name from the worn pieces). fallback_state: {model None,
     signature O3} -> {current O3 "Skirt", served ""}; {model nearest O1} ->
     served O1 "Skirt + Top"; an exact model -> None. User 403. Base model missing: the Build's plan starts
@@ -104,15 +101,11 @@ Expected, by hand:
     -> 200 {status "started"} (was "views" with a T-pose pass): O3's views (front edit + back = 3 image jobs),
     ONE build, ONE worker run (O3's texture painted for the first time), 0 hub jobs, no T-pose pass. Wear O1
     again (painted since [4], its model still on B1 -> stale
-    "figure", was "body_mode"): build-current -> "started": ONE build, 0 jobs (T1 reused); T1 current, O3's T3
-    and T2 not (the check moved here from [4]); again -> {status "current"}, no build.
-[6] painted body preview. T1: url /characters/Demo/outfit-bodies/T1/model?v=<first 16 hex of sha256(GLB)>,
-    freshness current (record names the base model's sha and O1's view shas), outfit_url /characters/Demo/
-    model3d/file (worn, built). T2: url set, stale "Made from an older base body" (its record names no base
-    model sha), outfit_url None. GET -> the GLB, ETag "<v>", immutable; If-None-Match -> 304; another v ->
-    no-cache; user 403; tex999999999999 / B1 -> 404. New GLB bytes -> new v; O1's back re-rendered -> stale
-    "Dressed views re-rendered since this model". Wearing O4 (a hat, never built; was O3, which [5]'s Build
-    builds now): the pending entry has no url, no badge.
+    "figure", was "body_mode"): build-current -> "started": ONE build, 0 jobs (T1 reused); figure.stored: T1
+    current, O3's T3 and T2 not (the check moved here from [4]); again -> {status "current"}, no build.
+(Was [6]: the painted body preview route GET /characters/{c}/outfit-bodies/{tsig}/model and the tab's url /
+freshness of each painted body — removed with the tab in Task 11; the Figure tab previews the served model,
+/characters/{c}/model3d/file.)
 """
 import hashlib
 import json
@@ -181,13 +174,13 @@ def main() -> int:
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from app.core import (artefact_graph, auth_dependency, base_body, expression_regen, model3d,
-                              model3d_pipeline, model_refs, outfit_bodies, outfit_body_posture)
+                              model3d_pipeline, model_refs, outfit_body_posture)
         from app.core.model_refs import mesh_items_token, mesh_signature, mesh_variant
         from app.imagegen import service as image_service
         from app.models import inventory
         from app.models.character import get_character_dir, get_character_images_dir, get_character_profile, \
             save_character_profile
-        from app.routes import outfit_bodies as outfit_bodies_routes
+        from app.routes import figure as figure_routes
 
         image_calls = []
 
@@ -200,7 +193,7 @@ def main() -> int:
                  "user": {"id": "u", "username": "player", "role": "user", "allowed_characters": ["Demo"]}}
         auth_dependency._get_session_user = lambda request: users.get(request.headers.get("x-role", ""))
         app = FastAPI()
-        app.include_router(outfit_bodies_routes.router)
+        app.include_router(figure_routes.router)
         client = TestClient(app)
         ADMIN, USER = {"x-role": "admin"}, {"x-role": "user"}
 
@@ -228,7 +221,6 @@ def main() -> int:
             return mesh_signature(pieces, [], char, mesh_variant(char, pieces), mesh_items_token(char, pieces))
 
         P1, P2, P3 = {"top": "top", "bottom": "skirt"}, {"top": "top"}, {"bottom": "skirt"}
-        P4 = {"head": "hat"}   # never built: [6]'s pending entry (O3 is built by [5]'s Build since Task 8)
         wear(P1)
         prof = get_character_profile(char)
         O1, O2, O3 = sig_of(P1), sig_of(P2), sig_of(P3)
@@ -247,7 +239,6 @@ def main() -> int:
         (M / "unrigged").mkdir(parents=True, exist_ok=True)
         (M / "unrigged" / f"{bsig}.glb").write_bytes(b"BASE-UNRIGGED")
         base_sha = sha(M / f"{bsig}.glb")
-        outfit_bodies.stale_posture = lambda c, meta: ""
         outfit_body_posture.is_stale = lambda c, b: False
         base_body._guard_dressed_views = lambda *a, **k: ({}, [])
 
@@ -375,8 +366,9 @@ def main() -> int:
             model_refs.generate_model_ref_images(name, kinds=("tpose",))
         model_refs.trigger_now = fake_pass
 
-        def tab():
-            return client.get(f"/characters/{char}/outfit-bodies", headers=ADMIN).json()
+        def stored(kind):
+            """``figure.stored`` of one kind: [(key, current)] in its order (current first, then newest)."""
+            return [(e["key"], e["current"]) for e in figure.stored(char) if e["kind"] == kind]
 
         def counts():
             return {"images": len(renders) + 2 * len(backs), "hub": len(hub_jobs), "workers": len(workers),
@@ -414,48 +406,17 @@ def main() -> int:
         STARTED = (200, {"status": "started"})
 
         # --- [1] ---------------------------------------------------------------------------------------------
-        print("[1] retexture: the worn outfit's pending entry, Generate")
-        info = tab()
-        texs = info["textures"]
-        check("[1] keys", [t["key"] for t in texs], [O1, T2])
-        p = texs[0]
-        check("[1] pending entry", (p["current"], p["pending"], p["texture_signature"]), (True, True, None))
-        check("[1] worn_outfit", p["worn_outfit"], {"signature": O1, "name": "Skirt + Top",
-                                                   "views_missing": ["front", "back"], "image_jobs": 3,
-                                                   "model": False})
-        check("[1] pending blocked", p["blocked"], {"generate": "", "regenerate": outfit_bodies.PENDING_NO_BODY,
-                                                    "delete": outfit_bodies.PENDING_NO_BODY})
-        o = texs[1]
-        check("[1] other body not current", (o["current"], [(x["signature"], x["has_model"]) for x in o["outfits"]]),
-              (False, [(O2, True)]))
-        check("[1] other blocked", o["blocked"], {"generate": outfit_bodies.NOT_WORN_TEXTURE,
-                                                  "regenerate": outfit_bodies.NO_SOURCE,
-                                                  "delete": outfit_bodies.PAINTED_KEPT})
-        check("[1] no outfit bodies", info["bodies"], [])
-        url = f"/characters/{char}/outfit-bodies"
-        check("[1] user -> 403", client.post(f"{url}/{O1}/paint", headers=USER).status_code, 403)
-        r = client.post(f"{url}/{T2}/paint", headers=ADMIN)
-        check("[1] paint other -> 404", (r.status_code, r.json().get("detail")), (404, outfit_bodies.NOT_WORN_TEXTURE))
-        r = client.post(f"{url}/{T2}/repaint", headers=ADMIN)
-        check("[1] repaint without source -> 409", (r.status_code, r.json().get("detail")),
-              (409, outfit_bodies.NO_SOURCE))
-        r = client.post(f"{url}/{O1}/paint", headers=ADMIN)
-        check("[1] paint -> 202", (r.status_code, r.json().get("kind")), (202, "paint"))
-        check("[1] run ended", wait_for(lambda: not outfit_bodies._active), True)
+        print("[1] retexture: the Build paints the worn outfit")
+        check("[1] the Build's plan", [st.name for st in figure_build.plan(char)], ["texture", "assemble"])
+        check("[1] user -> 403", client.post(build, headers=USER).status_code, 403)
+        check("[1] build-current", build_current(), STARTED)
         check("[1] front edit + back", (renders, backs), ([(f"tpose_{O1}", "outfit_front")], [("back", O1)]))
         check("[1] one build, not forced", builds, [(O1, False)])
         check("[1] jobs", (len(renders) + 2 * len(backs), len(hub_jobs), workers, image_calls), (3, 0, [T1], []))
-        texs = tab()["textures"]
-        c = texs[0]
-        check("[1] current entry is T1", (c["key"], c["current"], c["pending"], c["painted"]), (T1, True, False, True))
-        check("[1] model built", c["worn_outfit"]["model"], True)
-        check("[1] blocked after", c["blocked"], {"generate": outfit_bodies.WORN_MODEL_PRESENT, "regenerate": "",
-                                                  "delete": outfit_bodies.PAINTED_KEPT})
-        check("[1] regenerate source", c["regenerate_from"], O1)
-        r = client.post(f"{url}/{T1}/paint", headers=ADMIN)
-        check("[1] paint again -> 409", (r.status_code, r.json().get("detail")),
-              (409, outfit_bodies.WORN_MODEL_PRESENT))
-        check("[1] T2 still not current", [(t["key"], t["current"]) for t in texs], [(T1, True), (T2, False)])
+        check("[1] stored textures: T1 current, T2 not", stored("texture"), [(T1, True), (T2, False)])
+        check("[1] T2 kept: O2 would paint it now",
+              next(e["deletable"] for e in figure.stored(char) if e["key"] == T2), False)
+        check("[1] no shape", stored("shape"), [])
 
         # --- [2] ---------------------------------------------------------------------------------------------
         print("[2] painted -> in the body -> painted")
@@ -472,18 +433,11 @@ def main() -> int:
         check("[2] the Build would mesh the shape", [st.name for st in figure_build.plan(char)],
               ["interim", "shape", "assemble"])
         check("[2] nothing spent", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 0})
-        r = client.post(f"{url}/{B1}/regenerate", headers=ADMIN)
-        check("[2] Regenerate the worn body -> 202", r.status_code, 202)
-        check("[2] run ended", wait_for(lambda: not outfit_bodies._active), True)
-        check("[2] the shape's views, then ONE hub job", (counts(), renders, backs, hub_jobs),
-              ({"images": 3, "hub": 1, "workers": 0, "builds": 0}, [(f"tpose_{B1}", "outfit_front")],
-               [("back", B1)], [B1]))
-        check("[2] O1 stale (figure)", base_body.outfit_info(char).get("stale_reason"), "figure")
-        reset()
-        check("[2] now only the assembly", [st.name for st in figure_build.plan(char)], ["assemble"])
         check("[2] build-current", build_current(), STARTED)
-        check("[2] in the body: views copied from B1's, one build, no job, no T-pose pass", (counts(), passes),
-              ({"images": 0, "hub": 0, "workers": 0, "builds": 1}, []))
+        check("[2] the shape's views, ONE hub job, two builds, no T-pose pass",
+              (counts(), renders, backs, hub_jobs, passes),
+              ({"images": 3, "hub": 1, "workers": 0, "builds": 2}, [(f"tpose_{B1}", "outfit_front")],
+               [("back", B1)], [B1], []))
         o1 = json.loads((M / f"{O1}.json").read_text())
         check("[2] O1 stands on B1, nothing painted", (o1.get("body_id"), (o1.get("figure") or {}).get("texture")),
               (B1, ""))
@@ -540,23 +494,12 @@ def main() -> int:
         base_body.outfit_body_path(char, B2).write_bytes(b"BODY-B2")
         write_json(M / f"{B2}.json", {"rig": "mixamo", "outfit_body": rec, "created_at": "2026-11-10T09:00:00+00:00"})
         o2 = json.loads((M / f"{O2}.json").read_text())
-        o2.update(outfit_body_mode="mesh", body_id=B2, body_sha256=sha(M / f"{B2}.glb"))
+        o2.update(body_id=B2, body_sha256=sha(M / f"{B2}.glb"))
         write_json(M / f"{O2}.json", o2)
-        o1 = json.loads((M / f"{O1}.json").read_text())
-        o1.update(body_id=B2, body_sha256=sha(M / f"{B2}.glb"))
-        write_json(M / f"{O1}.json", o1)
-        bodies = tab()["bodies"]
-        check("[4] mesh: B1 current first", [(b["body_id"], b["current"]) for b in bodies], [(B1, True), (B2, False)])
-        b2 = bodies[1]
-        check("[4] B2 lists the worn O1 (outdated) and O2, still not current",
-              (sorted((x["signature"], x["worn"]) for x in b2["outfits"]), b2["current"]),
-              (sorted([(O1, True), (O2, False)]), False))
-        o1["body_id"] = B1
-        o1["body_sha256"] = sha(base_body.outfit_body_path(char, B1))
-        write_json(M / f"{O1}.json", o1)
+        check("[4] mesh: B1 current first, B2 not", stored("shape"), [(B1, True), (B2, False)])
         set_mode("retexture")
-        check("[4] painted, not built yet: the worn outfit's pending entry leads, T1 and T2 not current",
-              [(t["key"], t["current"]) for t in tab()["textures"]], [(O1, True), (T1, False), (T2, False)])
+        check("[4] painted, not built yet: T1 current (wanted), T2 not",
+              [k for k in stored("texture") if k[0] in (T1, T2)], [(T1, True), (T2, False)])
 
         # --- [5] ---------------------------------------------------------------------------------------------
         print("[5] 3D tab: stand-in banner, Build current outfit")
@@ -584,49 +527,11 @@ def main() -> int:
         check("[5] O1 worn, its model on B1: rebuilt", build_current(), STARTED)
         check("[5] one build, T1 reused", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 1})
         T3 = figure.predicted_keys(char, P3, [], bsig=bsig)[1]   # what O3 paints, built by the Build above
-        check("[5] painted: T1 current, T2 and O3's T3 not", [(t["key"], t["current"]) for t in tab()["textures"]],
-              [(T1, True), (T3, False), (T2, False)])
+        check("[5] painted: T1 current, T2 and O3's T3 not", sorted(stored("texture")),
+              sorted([(T1, True), (T3, False), (T2, False)]))
         r = client.post(build, headers=ADMIN)
         check("[5] again: current", (r.status_code, r.json()), (200, {"status": "current"}))
         check("[5] no further build", counts()["builds"], 1)
-
-        # --- [6] ---------------------------------------------------------------------------------------------
-        print("[6] painted body preview: url, freshness, the model route")
-        from app.core.model_overview import DRESSED_VIEWS_CHANGED, OLDER_BASE_BODY
-        texs = {t["key"]: t for t in tab()["textures"]}
-        t1_path = base_body.texture_body_path(char, T1)
-        v1 = hashlib.sha256(t1_path.read_bytes()).hexdigest()[:16]
-        model_url = f"/characters/{char}/outfit-bodies/{T1}/model"
-        check("[6] T1 url", texs[T1]["url"], f"{model_url}?v={v1}")
-        check("[6] T1 current", texs[T1]["freshness"], {"state": "current", "reason": ""})
-        check("[6] T1 outfit_url (worn, built)", texs[T1]["outfit_url"], f"/characters/{char}/model3d/file")
-        check("[6] T2 painted, older base, not worn", (bool(texs[T2]["url"]), texs[T2]["freshness"],
-                                                       texs[T2]["outfit_url"]),
-              (True, {"state": "stale", "reason": OLDER_BASE_BODY}, None))
-        r = client.get(texs[T1]["url"], headers=ADMIN)
-        check("[6] GET -> the painted GLB, immutable", (r.status_code, r.content, r.headers.get("etag"),
-                                                        r.headers.get("cache-control")),
-              (200, t1_path.read_bytes(), f'"{v1}"', "public, max-age=31536000, immutable"))
-        r = client.get(model_url, headers={**ADMIN, "if-none-match": f'"{v1}"'})
-        check("[6] If-None-Match -> 304", r.status_code, 304)
-        check("[6] other v -> no-cache", client.get(f"{model_url}?v=0", headers=ADMIN).headers.get("cache-control"),
-              "no-cache")
-        check("[6] user -> 403", client.get(model_url, headers=USER).status_code, 403)
-        check("[6] unknown tsig -> 404", client.get(f"/characters/{char}/outfit-bodies/tex999999999999/model",
-                                                    headers=ADMIN).status_code, 404)
-        check("[6] not a tsig -> 404", client.get(f"/characters/{char}/outfit-bodies/{B1}/model",
-                                                  headers=ADMIN).status_code, 404)
-        t1_path.write_bytes(b"PAINTED-AGAIN")
-        url2 = next(t for t in tab()["textures"] if t["key"] == T1)["url"]
-        check("[6] content changed -> new version", url2,
-              f"{model_url}?v={hashlib.sha256(b'PAINTED-AGAIN').hexdigest()[:16]}")
-        png(R / f"tpose_back_{O1}.png", (1, 2, 3))   # O1's dressed back re-rendered
-        check("[6] views re-rendered -> stale", next(t for t in tab()["textures"] if t["key"] == T1)["freshness"],
-              {"state": "stale", "reason": DRESSED_VIEWS_CHANGED})
-        wear(P4)
-        p = next(t for t in tab()["textures"] if t["current"])
-        check("[6] pending entry: no url, no badge", (p["pending"], p["url"], p["freshness"], p["outfit_url"]),
-              (True, None, None, None))
 
     print()
     if FAILS:

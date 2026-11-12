@@ -54,7 +54,8 @@ Interfaces block.
 [5] Code and template:
     no dict anywhere in shared/templates/character/base-character.json has
     "key" == "outfit_body_mode" or a key "outfit_body_mode"; no section id
-    "outfit_body" (the Outfit bodies section "outfit_bodies" stays).
+    "outfit_body" — and, since Task 11 (the Figure tab replaced the Outfit
+    body tab), no section id "outfit_bodies" either (was: it stays).
     The FLAG is read nowhere in app/ but the boot migration
     ``app/core/figure_migration.py`` (Task 3): the lines of
     ``git grep --untracked -n own_mesh -- app`` that name it as a key —
@@ -251,8 +252,8 @@ def main() -> int:
     print("[5] code and template")
     template = json.loads((ROOT / "shared/templates/character/base-character.json").read_text(encoding="utf-8"))
     check("template names no outfit_body_mode / outfit_body section", template_names_mode(template), False)
-    check("outfit bodies section stays",
-          any(s.get("id") == "outfit_bodies" for s in template.get("sections") or []), True)
+    check("outfit bodies section gone (Task 11)",
+          any(s.get("id") == "outfit_bodies" for s in template.get("sections") or []), False)
     check("own_mesh key read only in figure_migration.py", flag_readers(), ["app/core/figure_migration.py"])
     from app.core import model3d_pipeline
     check("after_mode_switch gone", hasattr(model3d_pipeline, "after_mode_switch"), False)

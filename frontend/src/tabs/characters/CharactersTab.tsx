@@ -24,11 +24,8 @@ import { StatsPanel } from './StatsPanel'
 import { FieldModel3D } from './FieldModel3D'
 import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
-import { FieldBaseBody } from './FieldBaseBody'
 import { FieldFigure } from './FieldFigure'
-import { FieldOutfitBody } from './FieldOutfitBody'
 import { FieldPose } from './FieldPose'
-import { FieldHair } from './FieldHair'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from '@anima/player-ui'
 import { SecretsEditor } from './SecretsEditor'
@@ -140,7 +137,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'figure', 'base_body', 'outfit_body', 'hair',
+  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'figure',
   'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
   'imagegen_override',
 ])
@@ -1157,31 +1154,18 @@ export function CharactersTab() {
                           onOpenWardrobe={subTabs.some((s) => s.id === 'wardrobe')
                             ? () => setSubTab('wardrobe') : undefined} />
                       ),
-                      // Base body (bald A-pose views + rigged base model with
-                      // its face, rig and collision actions) in its own tab
-                      // before Pose; the outfit model sits in the Pose tab.
-                      base_body: <FieldBaseBody key={selected} character={selected} />,
-                      // The outfit bodies of the mesh mode (own tab after Base body);
-                      // the mode field sits above it, a save reloads the panel.
-                      outfit_body: <FieldOutfitBody key={selected} character={selected}
-                        refreshKey={String(savedSignal)} />,
-                      // Hair as its own mesh (garment chain); the description
-                      // is derived from Appearance, so the tab links there.
-                      hair: (
-                        <FieldHair key={selected} character={selected}
-                          onEditAppearance={fieldTabs.some((g) => g.id === 'tab:aussehen')
-                            ? () => setSubTab('tab:aussehen') : undefined} />
-                      ),
                       // Pose renders left, the outfit model built from them right.
                       model_refs: (
                         <FieldPose key={selected} character={selected}
                           onOpen3D={fieldTabs.some((g) => g.id === 'tab:model3d_tab')
-                            ? () => setSubTab('tab:model3d_tab') : undefined} />
+                            ? () => setSubTab('tab:model3d_tab') : undefined}
+                          onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
+                            ? () => setSubTab('tab:figure_tab') : undefined} />
                       ),
                       model3d_gen: (
                         <FieldModel3D key={selected} character={selected}
-                          onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
-                            ? () => setSubTab('tab:base_body_tab') : undefined} />
+                          onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
+                            ? () => setSubTab('tab:figure_tab') : undefined} />
                       ),
                       // The 3D tab's side panels share the compact model-panel text size.
                       model3d_animations: <div className="ga-model3d-side"><Model3DAnimations character={selected} /></div>,

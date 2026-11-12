@@ -164,7 +164,6 @@ from app.routes import game_audio
 from app.routes import poses as poses_route
 from app.routes import secrets
 from app.routes import character_panels as character_panels_route
-from app.routes import outfit_bodies as outfit_bodies_route
 from app.routes import figure as figure_route
 from app.routes import inventory
 from app.routes import account
@@ -696,8 +695,8 @@ async def lifespan(app: FastAPI):
 
     # Migration (plan 2026-11-12-unified-worn-pieces Task 3, ruling 4): every
     # stored outfit piece gets its mode (outfit_piece.mesh_mode) from the
-    # removed own_mesh flag and its wearers' outfit_body_mode, then both keys
-    # leave the items and profiles. Once per world, world_kv-marked; before
+    # removed own-mesh flag and its wearers' removed body mode, then both keys
+    # leave the items and profiles (figure_migration names them). Once per world, world_kv-marked; before
     # the garment refit sweep below reads the modes.
     try:
         from app.core.figure_migration import migrate_modes_once
@@ -1017,7 +1016,6 @@ app.include_router(game_audio.router)
 app.include_router(poses_route.router)
 app.include_router(characters.router)
 app.include_router(character_panels_route.router)
-app.include_router(outfit_bodies_route.router)
 app.include_router(figure_route.router)
 app.include_router(npc_route.router)
 app.include_router(extension_motion_route.router)

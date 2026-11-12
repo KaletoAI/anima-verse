@@ -55,7 +55,7 @@ re-apply" block:
 [6] Old path, Plain "0aaaaaaa": rerig_model(Plain, "0aaaaaaa").
 [7] clean_face raises "boom": result {ok False, error "Face cleanup failed:
     boom"}, the source bytes unchanged, no follow-up, guard released.
-[8] GET extras: ``_base_body_model_extras`` gives face_cleanup.signature
+[8] GET extras: ``routes/figure._plain_body_extras`` (GET /figure?plain=1) gives face_cleanup.signature
     BSIG, collision_scales = collision.default_scales() (nothing saved),
     and the base model the face fields
     (face_retexture key) and a collision key.
@@ -301,9 +301,10 @@ def main() -> int:
                 check("guard released", "Demo" in model3d._generating, False)
             clean_raises["on"] = False
 
-        print("[8] base-body extras")
-        info = routes._base_body_model_extras("Demo", {"signature": bsig, "humanoid": True,
-                                                       "model": {"status": "ready", "signature": bsig}})
+        print("[8] plain-body extras")
+        from app.routes import figure as figure_routes
+        info = figure_routes._plain_body_extras("Demo", {"signature": bsig, "humanoid": True,
+                                                            "model": {"status": "ready", "signature": bsig}})
         check("cleanup signature", (info.get("face_cleanup") or {}).get("signature"), bsig)
         check("scales", info.get("collision_scales"), collision.default_scales())
         check("face fields", "face_retexture" in info["model"], True)

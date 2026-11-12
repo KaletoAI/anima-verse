@@ -1,6 +1,6 @@
 /**
- * HairDeckPlacement — the HairDeck hair placement block (moved out of the
- * Hair tab into the Wardrobe's hair row, plan
+ * HairDeckPlacement — the HairDeck hair placement block (in the Wardrobe's
+ * hair row since plan
  * docs/superpowers/plans/2026-11-12-unified-worn-pieces.md Task 9; ruling 5).
  * Self-contained: it saves its own values and asks for the re-fit, so later
  * placement controls land here and nowhere else.

@@ -1,11 +1,11 @@
 /**
  * FieldPose — the Pose tab (template section `model_refs`): the current
- * outfit's pose renders, the image-to-3D input, in two columns like the
- * Base body tab — the views stacked and small on the left (FieldModelRefs,
+ * outfit's pose renders, the image-to-3D input, in two columns — the views
+ * stacked and small on the left (FieldModelRefs,
  * `layout="stack"`; a click enlarges a tile), the model built from them on
  * the right: its 3D preview with the step checklist beside it, and on the
  * base-body pipeline the outfit model's status with "Rebuild outfit model"
- * (BaseBodyOutfitStatus) under it.
+ * and a link to the Figure tab (BaseBodyOutfitStatus) under it.
  *
  * The model is the 3D tab's (GET /characters/{n}/model3d, useModel3DStatus):
  * the current outfit's own model, or the stored stand-in with the most similar
@@ -19,7 +19,11 @@ import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import { useModel3DStatus } from './useModel3DStatus'
 
-function PoseOutfitModel({ character, onOpen3D }: { character: string; onOpen3D?: () => void }) {
+function PoseOutfitModel({ character, onOpen3D, onOpenFigure }: {
+  character: string
+  onOpen3D?: () => void
+  onOpenFigure?: () => void
+}) {
   const { t } = useI18n()
   const enc = encodeURIComponent(character)
   const { st, startPoll } = useModel3DStatus(character)
@@ -48,15 +52,18 @@ function PoseOutfitModel({ character, onOpen3D }: { character: string; onOpen3D?
               : t('No 3D model for this outfit yet — upload one or generate it from the pose render.')}
         </div>
       )}
-      <BaseBodyOutfitStatus key={character} character={character} onStarted={() => startPoll(800)} />
+      <BaseBodyOutfitStatus key={character} character={character} onStarted={() => startPoll(800)}
+        onOpenFigure={onOpenFigure} />
     </>
   )
 }
 
-export function FieldPose({ character, onOpen3D }: {
+export function FieldPose({ character, onOpen3D, onOpenFigure }: {
   character: string
   /** Switches to the 3D tab (generation off the pipeline, upload, clips). */
   onOpen3D?: () => void
+  /** Switches to the Figure tab (the Build, the plain body). */
+  onOpenFigure?: () => void
 }) {
   return (
     <div className="ga-split ga-split-views">
@@ -64,7 +71,7 @@ export function FieldPose({ character, onOpen3D }: {
         <FieldModelRefs character={character} kinds={['tpose']} layout="stack" />
       </div>
       <div className="ga-split-col">
-        <PoseOutfitModel character={character} onOpen3D={onOpen3D} />
+        <PoseOutfitModel character={character} onOpen3D={onOpen3D} onOpenFigure={onOpenFigure} />
       </div>
     </div>
   )

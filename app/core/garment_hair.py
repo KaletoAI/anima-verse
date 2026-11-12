@@ -212,7 +212,7 @@ def _placement_range(name: str) -> Tuple[float, float]:
 
 
 def placement_limits() -> Dict[str, Any]:
-    """The bounds of the manual values for the Hair tab: ``|forward_m|``, ``|tilt_deg|`` and ``[lo, hi]`` of
+    """The bounds of the manual values for the hair placement (``HairDeckPlacement``): ``|forward_m|``, ``|tilt_deg|`` and ``[lo, hi]`` of
     ``width_scale``."""
     from app.core import garment_hairdeck
     return {"forward_m": garment_hairdeck.FORWARD_LIMIT_M, "tilt_deg": garment_hairdeck.TILT_LIMIT_DEG,

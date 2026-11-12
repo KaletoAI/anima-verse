@@ -99,7 +99,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     # apart from tpose_view on purpose — that occasion triggers the mesh-input
     # matte, which trims the image sides and breaks the shared framing.
     "garment_view": _image(
-        "Garment & hair edits", "Wardrobe: worn and garment-only views; Hair tab: beard-free picture",
+        "Garment & hair edits", "Wardrobe: worn and garment-only views; HairDeck hair: beard-free picture",
         ["garment_edit"],
         {"character_scoped": True, "char_spec_field": "tpose_view_workflow",
          "char_spec_fallback": ""}, needs_ref_slot=True),
@@ -212,7 +212,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                              ["footwear_source"], _WORLD, needs_ref_slot=True),
     # HairDeck (plan 2026-11-09-hairdeck-hair): hair cards straight from one
     # character image — its own category so no img2mesh occasion ever picks it.
-    "hair_mesh": {**_mesh("3D mesh — hair cards", "Hair tab: HairDeck method", "none",
+    "hair_mesh": {**_mesh("3D mesh — hair cards", "Hair mode HairDeck", "none",
                           {"character_scoped": True, "char_spec_field": "hair_mesh_workflow",
                            "char_spec_fallback": ""}),
                   "category": "img2hair", "requires_chain": False,

@@ -28,8 +28,8 @@ leg lines -16° -> -7° (base -9°), ball-of-foot pitch 50° -> 41° (base 40°)
 
 RECORD. The body's sidecar keeps ``blender.posture_match`` =
 ``{version, base_signature, base_sha256, target, before, after,
-applied_deg, axis, status, error, at}``; the Outfit body tab shows it as the
-step "Posture matched to base" (``model_overview``). The record is STALE
+applied_deg, axis, status, error, at}``; ``model_overview`` shows it as the
+step "Posture matched to base". The record is STALE
 (``stale_reason``) when it is missing, has another ``version`` than
 ``POSTURE_MATCH_VERSION``, recorded an error or was matched to another base
 model — such a

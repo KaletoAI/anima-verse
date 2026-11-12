@@ -611,7 +611,7 @@ def main() -> int:
               (B, A, ""))
 
         # --- [10] tab status ------------------------------------------------------------------------
-        print("[10] Wardrobe / Hair tab: the fit of the body worn now")
+        print("[10] Wardrobe / hair row: the fit of the body worn now")
         # A worn piece in the body (Task 6 of plan 2026-11-12-unified-worn-pieces: no per-character mode).
         from app.core import figure
         trousers = inventory.add_item(name="Trousers", category="outfit_piece", item_id="trousers",

@@ -1,6 +1,6 @@
 /**
  * Shared styles, chip specs and helpers of the garment step views
- * (GarmentSteps, FieldHair, WardrobeGarment, WardrobeHairRow) — kept out of the component
+ * (GarmentSteps, WardrobeGarment, WardrobeHairRow) — kept out of the component
  * modules so fast refresh keeps working.
  */
 import type { CSSProperties } from 'react'
@@ -55,7 +55,7 @@ export interface ChipSpec {
   gatedKey?: string
 }
 
-/** The HairDeck fit's chips (the Wardrobe's hair row, the Hair tab's kept results). */
+/** The HairDeck fit's chips (the Wardrobe's hair row). */
 export const HAIRDECK_FIT_CHIPS: ChipSpec[] = [
   { key: 'max_push_m', label: 'Max push', scale: 100, unit: 'cm', digits: 1 },
   { key: 'moved_share', label: 'Moved', scale: 100, unit: '%', digits: 1 },

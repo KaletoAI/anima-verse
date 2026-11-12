@@ -1,6 +1,6 @@
 /**
  * GarmentSteps — the generic steps of a garment's edit chain, shared by the
- * Hair tab (FieldHair) and the Wardrobe's own-mesh panel (WardrobeGarment):
+ * Wardrobe's hair row (WardrobeHairRow) and own-mesh panel (WardrobeGarment):
  * the image steps (front + back tile each, gate chips, attempts,
  * Regenerate per view), the mesh and the fit (chips, Re-fit), plus the
  * failure block. Every chip's LIMIT comes from the server (the gate

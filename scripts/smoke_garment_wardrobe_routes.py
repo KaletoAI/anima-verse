@@ -63,7 +63,7 @@ Fixture (expected values derived by hand):
 [7] Hair has no step limits here: GET /characters/Demo/garments/hair_demo ->
     kind hair, mesh_mode None (hair is no outfit piece), limits {} (the hair edit chain and its gates
     are gone, hair-from-body spec 2026-11-11 Task 2); worn hair without a fit
-    is NOT painted (hair is simply absent). (The Hair tab's own limits,
+    is NOT painted (hair is simply absent). (The hair payload's own limits,
     hairdeck_fit, stay
     pinned by smoke_garment_routes.py [2]; its route probes the image
     backends, so it is not called here.)

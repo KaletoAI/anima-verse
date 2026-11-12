@@ -517,7 +517,7 @@ STORED_NOT_NEEDED = "stored, not needed now"
 #: ``Node.protected`` of such a body, its fits and an outdated painted body
 #: in an automatic collect (Ruling 5a).
 STORED = "stored"
-#: Texture reasons (``_judge`` step 4) — the Outfit body tab shows them.
+#: Texture reasons (``_judge`` step 4) — the Figure tab's stored list shows them (``figure.stored``).
 CURRENT_TEXTURE = "current texture of a live outfit"
 OUTDATED_TEXTURE = "outdated: a live outfit was built on it, none would paint it now"
 
@@ -1049,7 +1049,7 @@ def body_chain(nodes: List[Node], root: Path, body_id: str) -> Set[str]:
 
 def delete_body(character_name: str, body_id: str, *, reason: str = "outfit body deleted") -> Dict[str, Any]:
     """Explicit delete of ONE outfit body and its whole chain (``body_chain``)
-    — the Outfit body tab's Delete. Unlike ``collect`` the chain goes
+    — the Figure tab's Delete (``figure.delete_stored``). Unlike ``collect`` the chain goes
     although a root may still reach it (the user asked for it): the outfit
     models on it are rebuilt on their next build, which meshes the body
     again. The texture (dressed views + painted body) is the body's INPUT,
@@ -1092,7 +1092,7 @@ def delete_body(character_name: str, body_id: str, *, reason: str = "outfit body
 
 
 def texture_verdicts(character_name: str) -> Dict[str, Node]:
-    """``{tsig: judged texture node}`` for the Outfit body tab: the walk of
+    """``{tsig: judged texture node}`` of the painted bodies: the walk of
     ``collect`` (explicit) WITHOUT the reachable-set enumeration — an outfit
     entry without a manifest is kept ("producibility undetermined"), so a
     texture shown deletable here is deletable by ``collect`` too. Read-only,

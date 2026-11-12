@@ -17,7 +17,8 @@
  *   state ("✓ ready", "⏳ mesh · 3 hub jobs" + "shown painted until ready",
  *   "left out: …", "failed — reason" with Retry = the Build); an own-mesh
  *   piece's details open its chain dialog (GarmentPieceDialog — a WORN
- *   piece's only entry, the Wardrobe hides its "Mesh steps");
+ *   piece's only entry, the Wardrobe hides its "Mesh steps"; opened here
+ *   without its "Run all", Ruling 10a);
  * - "Body:" (plain body · shape · texture) with the plain body's own views
  *   and model collapsed (FigureBodyDetails, each action single) and the
  *   stored bodies and textures collapsed (FigureStored, Delete).
@@ -139,7 +140,7 @@ export function FieldFigure({ character, onOpenWardrobe }: {
         <BodySection data={data} character={character} onChanged={reload} />
       </div>
       {openPiece ? (
-        <GarmentPieceDialog character={character} itemId={openPiece.id} name={openPiece.name}
+        <GarmentPieceDialog character={character} itemId={openPiece.id} name={openPiece.name} noRunAll
           onStatus={noop} onClose={() => { setOpenPiece(null); reload() }} />
       ) : null}
     </div>

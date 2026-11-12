@@ -2333,7 +2333,7 @@ def image_path(character_name: str, item_id: str, step: str, view: str, attempt:
 
 
 def preview_path(character_name: str, item_id: str, method: str = "") -> Optional[Path]:
-    """The GLB the Hair tab shows: the current-fsig fit when it exists, else
+    """The hair preview GLB: the current-fsig fit when it exists, else
     the fit served on the current base model, else the newest accepted fit
     of the current method. None when there is no fit at all.
 
@@ -2386,7 +2386,7 @@ def _other_fit(character_name: str, item_id: str, method: str,
 
 def other_methods_info(character_name: str, item_id: str, *,
                        profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """The Hair tab's collapsed "Other methods": one entry per hair method NOT
+    """The hair GET's "Other methods": one entry per hair method NOT
     selected that has a result — ``{method, preview_url, created_at, metrics,
     colour, on_current_base}`` of the accepted fit it would serve if selected
     (``_other_fit``) — newest first; ``[]`` when none has one (or the item is
@@ -2416,7 +2416,7 @@ def other_methods_info(character_name: str, item_id: str, *,
     return out
 
 
-#: The HairDeck images the Hair tab shows: the input (the profile picture
+#: The HairDeck images the hair row shows: the input (the profile picture
 #: the job was made from) and two files of the job.
 HAIRDECK_IMAGES: Tuple[str, ...] = ("input", "prep", "model_input")
 
@@ -2465,7 +2465,7 @@ def _hairdeck_input(folder: Path, source: Optional[Path]) -> Optional[Path]:
 
 def hairdeck_panel(character_name: str, item_id: str, *,
                    profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """The Hair tab's HairDeck section for the CURRENT ``hsig`` (whichever
+    """The hair row's HairDeck details for the CURRENT ``hsig`` (whichever
     method is selected): ``{hsig, status, attempt, seed, job_seed,
     seeds_tried, backend, created_at, error, notes, attempts, images, colour,
     placement}``.
@@ -2558,7 +2558,7 @@ def hairdeck_panel(character_name: str, item_id: str, *,
 
 
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
-    """UI info of one garment (the Hair tab): fsig, the method and its
+    """UI info of one garment (the hair row, the own-mesh dialog): fsig, the method and its
     source, description, every step's files and gate numbers (the steps of
     the CURRENT method; HairDeck adds ``hsig``), why the served fit is not
     the current one (``stale_reasons``), the run status and the preview URL.

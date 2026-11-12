@@ -53,7 +53,7 @@ REFUSED = ("{action} does not apply on the base-body pipeline — the outfit mod
 NO_BACKEND = ("The base-body pipeline uses no mesh backend — the outfit model is built from "
               "the base body (no backend, face count or texture size)")
 #: Detail when the rigged base model is missing (route 409).
-BASE_MODEL_FIRST = "Generate the rigged base model first (Base body tab)"
+BASE_MODEL_FIRST = "Generate the rigged base model first (Figure tab)"
 
 _lock = threading.Lock()
 _rebuilding: set = set()

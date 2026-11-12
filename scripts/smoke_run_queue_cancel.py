@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """Cancel a QUEUED explicit run (user decision 2026-11-10): the garment queue
 (``garments.cancel_garment``, ``POST /characters/{c}/garments/{item}/cancel``;
-hair and own-mesh pieces share it) and the Outfit body tab's queue
-(``outfit_bodies.cancel``, ``POST /characters/{c}/outfit-bodies/{body}/cancel``).
+hair and own-mesh pieces share it). (The per-body run queue of the removed
+outfit-body tab and its cancel — formerly [7]–[10] — went with that tab in plan
+2026-11-12-unified-worn-pieces Task 11; the Build has no per-body queue.)
 
 Usage:
     ./.venv/bin/python scripts/smoke_run_queue_cancel.py
 
 Runs against a THROWAWAY storage + instance directory (``paths.init`` before
-any world module) — no world, no hub, no GPU, no server. The two routers are
-mounted on a bare FastAPI app with a TestClient; the session lookup is stubbed
-(header ``x-role``: admin / user / none). Stubs: ``garments.check_run`` and
-``outfit_bodies.check_run`` (everything valid), ``garments.run_garment`` and
-``outfit_bodies._run`` (recorders; the first run of each queue blocks on an
-event). Real: both FIFOs and their worker threads, the in-memory garment run
+any world module) — no world, no hub, no GPU, no server. The characters router
+is mounted on a bare FastAPI app with a TestClient; the session lookup is stubbed
+(header ``x-role``: admin / user / none). Stubs: ``garments.check_run``
+(everything valid), ``garments.run_garment`` (a recorder; the first run blocks
+on an event). Real: the FIFO and its worker thread, the in-memory garment run
 status (``garment_store.start`` / ``end`` / ``status``), the generation guard.
 
-Expected values (derived by hand from the rules in ``cancel_garment`` /
-``cancel``: a waiting entry goes, the one in flight never does):
+Expected values (derived by hand from the rules in ``cancel_garment``: a
+waiting entry goes, the one in flight never does):
 
 GARMENTS (character Demo; items A, B, C)
 [1] start_garment(A) -> started (the recorder holds A). B through the trigger
@@ -38,18 +38,6 @@ GARMENTS (character Demo; items A, B, C)
 [5] Auth: user -> 403 on C's cancel, anonymous -> 401; C still queued.
 [6] Released: the runs are exactly A then C (B never ran), idle afterwards.
 
-OUTFIT BODIES (character Demo; body ids X, Y, Z = ob11111111, ob22222222, ob33333333)
-[7] start(regenerate X) -> started; X is in flight (the recorder holds it);
-    start(rerig Y), start(refit Z) -> positions 1 and 2.
-[8] POST …/outfit-bodies/Y/cancel -> 200 {body_id Y, cancelled 1, queue
-    {running {regenerate, X}, waiting [refit Z]}}; _run_state(Z) =
-    ("queued", "refit", 1); _run_state(X) = ("running", "regenerate", None);
-    Y's job done {ok False, cancelled True, error CANCELLED}; _run_state(Y) =
-    ("", None, None).
-[9] Cancel X -> 409 (detail ALREADY_RUNNING); cancel ob99999999 -> 404;
-    user -> 403, anonymous -> 401.
-[10] Released: the runs are X (regenerate) then Z (refit); no last result
-    recorded for Y.
 """
 import json
 import os
@@ -99,17 +87,16 @@ def main() -> int:
 
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from app.core import auth_dependency, garments, outfit_bodies
+        from app.core import auth_dependency, garments
         from app.core import garment_store as gs
         from app.models.character import save_character_profile
-        from app.routes import characters as characters_routes, outfit_bodies as outfit_bodies_routes
+        from app.routes import characters as characters_routes
 
         users = {"admin": {"id": "a", "username": "admin", "role": "admin"},
                  "user": {"id": "u", "username": "player", "role": "user", "allowed_characters": ["Demo"]}}
         auth_dependency._get_session_user = lambda request: users.get(request.headers.get("x-role", ""))
         app = FastAPI()
         app.include_router(characters_routes.router)
-        app.include_router(outfit_bodies_routes.router)
         client = TestClient(app)
         ADMIN, USER = {"x-role": "admin"}, {"x-role": "user"}
         check("character saved", save_character_profile("Demo", {"gender": "female"}, create_new=True), True)
@@ -165,54 +152,6 @@ def main() -> int:
         check("idle", garments.wait_idle(30), True)
         check("runs", runs, [("A", None, False), ("C", None, False)])
         check("queue empty", garments.queue_state("Demo"), {"queue_running": None, "queue": []})
-
-        # --- outfit bodies ------------------------------------------------------
-        X, Y, Z = "ob11111111", "ob22222222", "ob33333333"
-        body_runs = []
-        gate_x = threading.Event()
-
-        def body_recorder(character_name, job):
-            body_runs.append((job.kind, job.body_id))
-            if job.body_id == X:
-                gate_x.wait(30)
-            return {"ok": True}
-
-        outfit_bodies.check_run = lambda character_name, kind, body_id, item_id="", view="": None
-        outfit_bodies._run = body_recorder
-
-        print("[7] X runs, Y and Z wait")
-        check("start X", outfit_bodies.start("Demo", "regenerate", X)["started"], True)
-        check("X in flight", wait_for(lambda: bool(body_runs)), True)
-        check("start Y", outfit_bodies.start("Demo", "rerig", Y)["position"], 1)
-        check("start Z", outfit_bodies.start("Demo", "refit", Z)["position"], 2)
-        with outfit_bodies._lock:
-            job_y = next(j for j in outfit_bodies._queues["Demo"] if j.body_id == Y)
-
-        print("[8] cancel Y: Z moves up, X untouched")
-        r = client.post(f"/characters/Demo/outfit-bodies/{Y}/cancel", headers=ADMIN)
-        check("cancel Y", (r.status_code, r.json()),
-              (200, {"body_id": Y, "cancelled": 1, "queue": {
-                  "running": {"kind": "regenerate", "body_id": X, "item_id": None},
-                  "waiting": [{"kind": "refit", "body_id": Z, "item_id": None}]}}))
-        check("Z state", outfit_bodies._run_state("Demo", Z), ("queued", "refit", 1))
-        check("X state", outfit_bodies._run_state("Demo", X), ("running", "regenerate", None))
-        check("Y state", outfit_bodies._run_state("Demo", Y), ("", None, None))
-        check("Y waiter", (job_y.done.is_set(), job_y.result),
-              (True, {"ok": False, "cancelled": True, "error": outfit_bodies.CANCELLED}))
-
-        print("[9] 409 / 404 / auth")
-        r = client.post(f"/characters/Demo/outfit-bodies/{X}/cancel", headers=ADMIN)
-        check("cancel X", (r.status_code, r.json().get("detail")), (409, outfit_bodies.ALREADY_RUNNING))
-        check("cancel unknown",
-              client.post("/characters/Demo/outfit-bodies/ob99999999/cancel", headers=ADMIN).status_code, 404)
-        check("user", client.post(f"/characters/Demo/outfit-bodies/{Z}/cancel", headers=USER).status_code, 403)
-        check("anonymous", client.post(f"/characters/Demo/outfit-bodies/{Z}/cancel").status_code, 401)
-
-        print("[10] released")
-        gate_x.set()
-        check("idle", wait_for(lambda: not outfit_bodies._active, 30), True)
-        check("runs", body_runs, [("regenerate", X), ("refit", Z)])
-        check("no result for Y", ("Demo", Y) in outfit_bodies._results, False)
 
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))
     return 1 if FAILS else 0

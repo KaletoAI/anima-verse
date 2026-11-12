@@ -353,12 +353,18 @@ stops acting autonomously).
   picture, independent of outfit. It never feeds mesh generation.
   Hub-side light balance, skin tone match, skin colour correction and face brightness controls are remembered per character with an approximate photo preview; older backends fall back to local light balance and brightness.
 - **Hair on the base-body pipeline:** Game-Admin → Setup → Gameplay → Base body → *Hair method* sets the world
-  default, Characters → Hair overrides it per character. *From the body mesh* (the default) renders
-  the base views with the character's hair, so the hair is part of the base body and every outfit
-  body — no hair mesh, no hair job. *HairDeck* turns the profile picture into hair cards in one hub
-  job and fits them onto the bald base model. Switching changes the base prompts: the Hair tab shows
-  the base's prompt freshness, and a base marked "Built with older prompts" is rebuilt with
-  **Regenerate** in the Base body tab or the Improvements type below.
+  default; the hair row at the top of Characters → Wardrobe overrides its mode per character. *In the
+  body* (the default) renders the base views with the character's hair, so the hair is part of the
+  base body and every body shape — no hair mesh, no hair job. *HairDeck* turns the profile picture
+  into hair cards in one hub job and fits them onto the bald base model; the row creates and wears
+  the hair item. A mode change spends nothing and changes the base prompts: the row's details show
+  the base's prompt freshness, and a base marked "Built with older prompts" is rebuilt by the
+  character's **Build** (Characters → Figure) or the Improvements type below.
+- **Figure tab:** Characters → Figure shows the one figure a character's worn pieces make — the plain
+  base body (views, base model, face and tip details), the pieces worn in or on it, and what is
+  stored (body shapes, painted bodies) with Delete. Each worn piece has one mode in the Wardrobe
+  (*own mesh* · *painted* · *in the body*, `outfit_piece.mesh_mode`); **Build** makes everything the
+  figure still needs and is the only action that spends jobs.
 - **Local quadruped rig:** five base takes with a per-animal tail mode.
 - **Location and prop models** are generated from gallery images, with front/back/left/right views
   feeding multi-view mesh aliases.

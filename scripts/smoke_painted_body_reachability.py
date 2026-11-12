@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Painted bodies go by reachability, Delete in the Outfit body tab, and the bounded painted-body run
-(app/core/artefact_graph.py ``_current_textures`` / ``delete_texture``, app/core/outfit_bodies.py
-``texture_gc`` / ``delete_texture`` / ``_run_bounded`` / ``repaint_texture``, app/core/body_retexture.py
-``run_deadline``).
+"""Painted bodies go by reachability, and their Delete in the Figure tab's stored list
+(app/core/artefact_graph.py ``_current_textures`` / ``delete_texture``, app/core/figure.py ``delete_stored`` ->
+app/core/outfit_bodies.py ``delete_texture``).
+
+Since Task 11 of plan 2026-11-12-unified-worn-pieces the Outfit body tab is gone with its runs: its verdict line,
+the repaint pre-check, the repaint publishing another tsig (was [5]) and the bounded painted-body run with its time
+limit (was [6], ``body_retexture.run_timeout_seconds`` / ``run_deadline``) are removed with it; the Delete goes
+through ``figure.delete_stored`` (was the tab's DELETE route).
 
 Usage:
     ./.venv/bin/python scripts/smoke_painted_body_reachability.py
@@ -37,15 +41,12 @@ A piece change is applied with ``inventory._invalidate_renders_for_item`` switch
 outfits' fronts and models outlived the stilettos' own-mesh flag; with the purge the old rule already saw no name.
 
 Expected, by hand (the rule above):
-[1] text change (retexture). O1 {top, skirt} on T1: T1 kept, reason CURRENT_TEXTURE, outfits [O1]. Delete route on
-    T1 -> 409 PAINTED_NEEDED; on tex000000000000 -> 404 NO_PAINTED_BODY. Repaint pre-check on T1 -> 409 NO_SOURCE
-    (the stored front carries no base view sha, so no outfit is a source — still current, not "cannot repaint").
+[1] text change (retexture). O1 {top, skirt} on T1: T1 kept, reason CURRENT_TEXTURE, outfits [O1]. Delete
+    (figure.delete_stored) on T1 -> LookupError PAINTED_NEEDED; on tex000000000000 -> UnknownBody.
     Skirt text "a skirt" -> "a long pleated skirt": the dress text of O1 changes, so O1 paints T1' != T1; O1 stays
     live (the text is not part of its signature) -> T1 outdated: not reachable, reason OUTDATED_TEXTURE, built_on
-    [O1], no outfits. Tab: T1's gc {kept False, reason
-    PAINTED_OUTDATED, 1 outfit}, blocked.delete "", blocked.regenerate PAINTED_CANNOT_REPAINT; repaint pre-check
-    409 PAINTED_CANNOT_REPAINT. Delete route -> 8 files deleted, none of T1 left; O1's model + refs untouched; the
-    tab no longer lists T1.
+    [O1], no outfits; figure.stored lists T1 deletable. Delete -> 8 files deleted, none of T1 left; O1's model +
+    refs untouched; figure.stored no longer lists T1.
 [2] own-mesh flag removed (retexture). O2 {top, dress} on T2 (dress its own mesh with an accepted fit, so left
     out: worn_sets own {dress}, painted {top}). Flag off: the dress is painted now
     -> T2' != T2; O2 stays live (recorded token) -> T2 outdated. collect(explicit)
@@ -57,16 +58,6 @@ Expected, by hand (the rule above):
     change: the front now stands for T1' != T1 and the in-body set has another shape key -> T1 outdated, its 8
     files go; the served model of O1 (a self-contained copy) and B1 stay — B1 is named as body_id by the live O1
     model (the body clause's second half).
-[5] repaint publishing another tsig (retexture). A repaint of T1 whose build stands on tex999999999999 (the pieces
-    changed meanwhile) -> {ok False, error PAINTED_AS_OTHER} (the log names both tsigs): never published under T1.
-[6] time limit. body_retexture.run_timeout_seconds = 2:
-    a) the run's work ignores the limit (pure-Python 4 s): at 3 s the run is failed for the tab — last result
-       PAINT_TIMED_OUT, no current run (the tab's ``active`` ends, the poll stops) — while ``_run_bounded`` still
-       holds the slot; it returns PAINT_TIMED_OUT after the work ended (~4 s).
-    b) the work starts the retexture worker (a fake that sleeps 60 s with a child): the worker is killed at the
-       deadline (RetextureFailed RUN_DEADLINE, both pids gone), ``_run_bounded`` returns PAINT_TIMED_OUT in < 10 s.
-    c) the tab's poll (useOutfitBodies.ts) stops when the server reports no run and after POLL_MAX polls; the tab
-       shows a Retry for a failed painted-body run.
 """
 import hashlib
 import json
@@ -74,8 +65,6 @@ import os
 import shutil
 import sys
 import tempfile
-import threading
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,14 +84,6 @@ def touch(path: Path, data=b"x" * 16) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data if isinstance(data, bytes) else json.dumps(data).encode())
     return path
-
-
-def alive(pid: int) -> bool:
-    try:
-        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-    except (OSError, IndexError):
-        return False
-    return state != "Z"
 
 
 def main() -> int:
@@ -125,18 +106,15 @@ def main() -> int:
         from app.plugins.loader import discover_packages
         discover_packages(plugins, force=True)
 
-        from fastapi import HTTPException
 
-        from app.core import artefact_graph as ag, base_body, body_retexture as br, garment_store as gs
+        from app.core import artefact_graph as ag, base_body, garment_store as gs
         from app.core import figure, model3d, outfit_bodies as ob
         from app.core.model_refs import mesh_items_token, mesh_signature, mesh_variant
         from app.models import inventory
         from app.models.character import (get_character_dir, get_character_images_dir, get_character_profile,
                                           save_character_profile)
-        from app.routes.outfit_bodies import delete_outfit_body
         # A piece change WITHOUT the render purge (module docstring).
         inventory._invalidate_renders_for_item = lambda item_id: None
-        ob._base_ready = lambda c, b: ""  # the fixture's base is synthetic bytes; readiness is not under test
 
         def make(char: str, mode: str):
             human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -199,7 +177,7 @@ def main() -> int:
             refs = [touch(R / f"{k}_{sig}{e}", manifest if e == ".json" else b"png")
                     for k in ("tpose", "tpose_back") for e in (".png", ".json")]
             meta = {"pieces": pieces, "items": [], "mesh_variant": variant, "mesh_token": token, "base_signature": bsig,
-                    "base_model_sha256": fx["base_sha"], "texture_signature": tsig, "outfit_body_mode": fx["mode"],
+                    "base_model_sha256": fx["base_sha"], "texture_signature": tsig,
                     "rig": "mixamo"}
             body = ""
             if fx["mode"] == "mesh":
@@ -230,23 +208,17 @@ def main() -> int:
         def set_text(item_id, text):
             assert inventory.update_item(item_id, {"prompt_fragment": text})
 
-        def tab_entry(char, tsig):
-            ob._verdicts.clear()  # a DB edit moves no file mtime; the display cache would hold it ≤ 20 s
-            return next((t for t in ob.info(char)["textures"] if t.get("key") == tsig), None)
+        def listed(char, tsig):
+            return next((e for e in figure.stored(char) if e.get("key") == tsig), None)
 
         def route_delete(char, tsig):
+            """The Figure tab's Delete (routes/figure.py maps UnknownBody -> 404, LookupError -> 409)."""
             try:
-                return 200, delete_outfit_body(char, tsig, {})
-            except HTTPException as e:
-                return e.status_code, e.detail
-
-        def precheck(char, tsig):
-            ob._verdicts.clear()
-            try:
-                ob.check_run(char, "repaint", tsig)
-                return ""
+                return 200, figure.delete_stored(char, tsig)
+            except ob.UnknownBody as e:
+                return 404, str(e) or ob.NO_PAINTED_BODY
             except LookupError as e:
-                return str(e)
+                return 409, str(e)
 
         exists = lambda files: [p.exists() for p in files]  # noqa: E731
 
@@ -260,24 +232,17 @@ def main() -> int:
         check("[1] T1 current", node(ag, char, t1), (True, ag.CURRENT_TEXTURE, [], [o1["sig"]]))
         check("[1] delete current -> 409", route_delete(char, t1), (409, ob.PAINTED_NEEDED))
         check("[1] delete unknown -> 404", route_delete(char, "tex000000000000"), (404, ob.NO_PAINTED_BODY))
-        check("[1] repaint pre-check while current", precheck(char, t1), ob.NO_SOURCE)
         set_text(ids["skirt"], "a long pleated skirt")
         t1n = predicted(char, fx, {"top": ids["top"], "bottom": ids["skirt"]})
         check("[1] O1 paints another tsig now", t1n != t1, True)
         check("[1] T1 outdated", node(ag, char, t1), (False, ag.OUTDATED_TEXTURE, [o1["sig"]], []))
-        entry = tab_entry(char, t1) or {}
-        gc = entry.get("gc") or {}
-        check("[1] tab verdict", (gc.get("kept"), gc.get("reason"), len(gc.get("outfits") or []), bool(gc.get("free"))),
-              (False, ob.PAINTED_OUTDATED, 1, True))
-        check("[1] tab blocked", {k: (entry.get("blocked") or {}).get(k) for k in ("delete", "regenerate")},
-              {"delete": "", "regenerate": ob.PAINTED_CANNOT_REPAINT})
-        check("[1] repaint pre-check outdated", precheck(char, t1), ob.PAINTED_CANNOT_REPAINT)
+        check("[1] listed deletable", (listed(char, t1) or {}).get("deletable"), True)
         status, report = route_delete(char, t1)
         check("[1] delete outdated", (status, report.get("deleted_files") if status == 200 else report),
               (200, len(o1["store"])))
         check("[1] T1's files gone", exists(o1["store"]), [False] * len(o1["store"]))
         check("[1] O1 model + refs stay", exists(o1["model"] + o1["refs"]), [True] * (len(o1["model"] + o1["refs"])))
-        check("[1] tab no longer lists T1", tab_entry(char, t1), None)
+        check("[1] no longer listed", listed(char, t1), None)
 
         # --- [2] own-mesh flag removed ----------------------------------------------------------------------
         print("[2] own-mesh flag removed -> outdated")
@@ -333,101 +298,6 @@ def main() -> int:
         check("[4] T1's files gone", exists(o1["store"]), [False] * len(o1["store"]))
         check("[4] served model + B1 stay", exists(o1["model"] + o1["refs"]), [True] * len(o1["model"] + o1["refs"]))
         check("[4] O1 still served", model3d.find_model3d(char, o1["sig"]) is not None, True)
-
-        # --- [5] repaint publishing another tsig -------------------------------------------------------------
-        print("[5] a repaint that paints another tsig fails, nothing under the old key")
-        char = "Demo5"
-        fx = make(char, "retexture")
-        ids = fx["ids"]
-        o1 = outfit(char, fx, {"top": ids["top"], "bottom": ids["skirt"]})
-        saved = (ob.texture_source, base_body.generate_dressed_images, base_body.dressed_image,
-                 model3d.generate_for_current_outfit)
-        other = "tex999999999999"
-
-        def fake_build(character_name, *, signature, force):
-            sidecar = fx["M"] / f"{signature}.json"
-            meta = json.loads(sidecar.read_text())
-            meta["texture_signature"] = other
-            sidecar.write_text(json.dumps(meta))
-            return {"ok": True}
-        ob.texture_source = lambda c, t, users, **k: o1["sig"]
-        base_body.generate_dressed_images = lambda *a, **k: None
-        base_body.dressed_image = lambda c, view, sig, bsig: fx["R"] / f"tpose_{o1['sig']}.png"
-        model3d.generate_for_current_outfit = fake_build
-        try:
-            result = ob.repaint_texture(char, o1["tsig"])
-        finally:
-            (ob.texture_source, base_body.generate_dressed_images, base_body.dressed_image,
-             model3d.generate_for_current_outfit) = saved
-        check("[5] PAINTED_AS_OTHER", result, {"ok": False, "error": ob.PAINTED_AS_OTHER})
-
-        # --- [6] time limit ---------------------------------------------------------------------------------
-        print("[6] the painted-body run has a hard time limit")
-        config._CONFIG.setdefault("body_retexture", {})["run_timeout_seconds"] = 2
-        check("[6] limit read", ob.paint_timeout_s(), 2)
-        real_paint = ob.paint_worn
-        char = "Demo5"
-        key = o1["tsig"]
-        # a) work that ignores the limit
-        ob.paint_worn = lambda c, k, deadline=None: (time.sleep(4), {"ok": True, "error": ""})[1]
-        job = ob._Job("paint", key)
-        with ob._lock:
-            ob._current[char] = job
-        out, t0 = {}, time.monotonic()
-        runner = threading.Thread(target=lambda: out.update(r=ob._run_bounded(char, job), t=time.monotonic() - t0))
-        runner.start()
-        time.sleep(3)
-        with ob._lock:
-            last = dict(ob._results.get((char, key)) or {})
-        check("[6a] at 3 s: failed for the tab, no current run, slot still held",
-              (last.get("error"), ob._run_state(char, key)[0], runner.is_alive()), (ob.PAINT_TIMED_OUT, "", True))
-        runner.join(10)
-        check("[6a] returns PAINT_TIMED_OUT after the work ended", (out.get("r"), out.get("t", 0) >= 3.9),
-              ({"ok": False, "error": ob.PAINT_TIMED_OUT}, True))
-        # b) the retexture worker is killed at the limit
-        fake = root / "sleep"
-        (fake / ".venv" / "bin").mkdir(parents=True)
-        (fake / ".venv" / "bin" / "python").symlink_to(Path(sys.executable).resolve())
-        (fake / "body_core").mkdir()
-        (fake / "body_core" / "__init__.py").write_text("")
-        pidfile = root / "pids.json"
-        (fake / "body_core" / "__main__.py").write_text(
-            "import json, os, subprocess, sys, time\n"
-            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
-            f"json.dump({{'worker': os.getpid(), 'child': child.pid}}, open({str(pidfile)!r}, 'w'))\n"
-            "time.sleep(60)\n")
-        config._CONFIG["body_retexture"].update(worker_dir=str(fake), timeout_seconds=1800)
-        raised = []
-
-        def paint_with_worker(c, k, deadline=None):
-            v = {"front": (touch(root / "d.png"), touch(root / "r.png"))}
-            try:
-                br.retexture(touch(root / "in.glb"), v, root / "out.glb", proof=root / "proof.json",
-                             atlas=root / "atlas.png")
-            except br.RetextureFailed as e:
-                raised.append(str(e))
-                return {"ok": False, "error": str(e)}
-            return {"ok": True, "error": ""}
-        ob.paint_worn = paint_with_worker
-        job = ob._Job("paint", key)
-        t0 = time.monotonic()
-        result = ob._run_bounded(char, job)
-        took = time.monotonic() - t0
-        ob.paint_worn = real_paint
-        check("[6b] PAINT_TIMED_OUT within 10 s", (result, took < 10), ({"ok": False, "error": ob.PAINT_TIMED_OUT}, True))
-        check("[6b] worker killed at the run's limit", raised, [br.RUN_DEADLINE])
-        pids = json.loads(pidfile.read_text()) if pidfile.is_file() else {}
-        until = time.monotonic() + 3
-        while time.monotonic() < until and any(alive(p) for p in pids.values()):
-            time.sleep(0.05)
-        check("[6b] worker + child gone", (sorted(pids), [alive(p) for p in pids.values()]),
-              (["child", "worker"], [False, False]))
-        # c) the client side
-        hook = (ROOT / "frontend/src/tabs/characters/useOutfitBodies.ts").read_text()
-        field = (ROOT / "frontend/src/tabs/characters/FieldOutfitBody.tsx").read_text()
-        check("[6c] poll stops on no run and after POLL_MAX",
-              ("if (!d?.active) return" in hook, "if (n >= POLL_MAX) return" in hook), (True, True))
-        check("[6c] a failed painted-body run offers Retry", "t('Retry')" in field, True)
 
     print()
     if FAILS:

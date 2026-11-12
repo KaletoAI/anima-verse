@@ -89,14 +89,15 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     whitelist; a payload without the key parses to None). For the base_front
     use case the merged negative starts with config._NEG_TPOSE (the same
     shipped negative as tpose) and ends with BASE_NEGATIVE.
-[6] Routes (characters router on a bare FastAPI app, real sessions):
-    player GET /characters/Demo/base-body -> 403; admin -> 200 with signature
-    bsig; POST .../pipeline {enabled: true} for DemoFox -> 400 and the profile
+[6] Routes (characters + figure routers on a bare FastAPI app, real sessions):
+    player GET /characters/Demo/figure?plain=1 -> 403; admin -> 200 with
+    plain_body.signature bsig (since Task 11 of plan 2026-11-12-unified-worn-pieces
+    the plain body's payload rides on the figure GET; was GET .../base-body); POST .../pipeline {enabled: true} for DemoFox -> 400 and the profile
     is unchanged; for Demo -> 200 {pipeline: true}; POST .../images
     {view: "left", force: true} -> 202 {started: true} and, once the worker
     is done, exactly one render (left); {view: "sideways"} -> 422; DemoFox
     images -> 400; DemoBare images -> 409; GET .../images/front -> 200 with
-    the PNG; unknown character -> 404.
+    the PNG; unknown character (figure?plain=1) -> 404.
 """
 import json
 import os
@@ -393,6 +394,7 @@ def main() -> int:
         from fastapi.testclient import TestClient
         from app.core import sessions, users
         from app.routes.characters import router
+        from app.routes.figure import router as figure_router
         tokens = {}
         for role in (users.ROLE_ADMIN, users.ROLE_USER):
             uid = users.create_user("demo-" + role, "temporary-smoke-password", role,
@@ -400,15 +402,16 @@ def main() -> int:
             tokens[role] = sessions.create_session(uid)
         app = FastAPI()
         app.include_router(router)
+        app.include_router(figure_router)
         expression_regen.render_character_image = recorder
         CALLS.clear()
         try:
             with TestClient(app, raise_server_exceptions=False) as client:
                 client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_USER])
-                check("player GET", client.get("/characters/Demo/base-body").status_code, 403)
+                check("player GET", client.get("/characters/Demo/figure?plain=1").status_code, 403)
                 client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_ADMIN])
-                r = client.get("/characters/Demo/base-body")
-                check("admin GET", (r.status_code, r.json().get("signature")), (200, bsig))
+                r = client.get("/characters/Demo/figure?plain=1")
+                check("admin GET", (r.status_code, (r.json().get("plain_body") or {}).get("signature")), (200, bsig))
                 before = get_character_profile("DemoFox")
                 r = client.post("/characters/DemoFox/base-body/pipeline", json={"enabled": True})
                 check("animal pipeline", r.status_code, 400)
@@ -429,7 +432,7 @@ def main() -> int:
                                                       json={}).status_code, 409)
                 r = client.get("/characters/Demo/base-body/images/front")
                 check("serve front", (r.status_code, r.content[:4]), (200, b"\x89PNG"))
-                check("unknown character", client.get("/characters/Nobody/base-body").status_code, 404)
+                check("unknown character", client.get("/characters/Nobody/figure?plain=1").status_code, 404)
         finally:
             expression_regen.render_character_image = real_render
 

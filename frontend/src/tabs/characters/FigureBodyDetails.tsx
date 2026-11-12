@@ -2,9 +2,8 @@
  * FigureBodyDetails — the plain body's own views and model, collapsed under
  * the Figure tab's "Body:" line (plan 2026-11-12-unified-worn-pieces Task 10,
  * spec ruling 8: "the body's own views, Regenerate and face cleanup move into
- * the Figure tab's collapsed Body details, each a single action"). Moved
- * from the Base body tab (FieldBaseBody, which renders it under its
- * pipeline switch until that tab is removed).
+ * the Figure tab's collapsed Body details, each a single action"); it is
+ * what the base-body tab showed until Task 11 removed that tab.
  *
  * Layout: two columns — the four views stacked and small on the left (a
  * click enlarges one), the base model's 3D preview with everything that
@@ -27,8 +26,8 @@
  * Build rebuilds it (ruling 8a) — written under the button with its cost.
  *
  * Backend (app/routes/characters.py, app/core/base_body.py):
- * GET /characters/{n}/base-body (views, model, face fields, collision, face
- * cleanup; polled while something runs), POST .../base-body/images {view,
+ * GET /characters/{n}/figure?plain=1 (`plain_body`: views, model, face fields,
+ * collision, face cleanup; polled while something runs — useBaseBody), POST .../base-body/images {view,
  * force} (409 without a profile picture or, for a side view, the front),
  * POST .../base-body/model {force} (409 while another 3D run of the
  * character is going), POST .../base-body/skin-step (the front's skin
@@ -155,7 +154,7 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
 
 export function FigureBodyDetails({ character, jobs, autoBuild = false, onChanged }: {
   character: string
-  /** The single actions' costs; without them (the old Base body tab) no cost lines are written. */
+  /** The single actions' costs; without them no cost lines are written. */
   jobs?: PlainBodyJobs
   /** "Build automatically" is on: a new base model starts the Build. */
   autoBuild?: boolean

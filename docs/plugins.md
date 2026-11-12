@@ -608,7 +608,7 @@ search). A rounded stub is baked after source re-planning.
 
 Per model the position can be moved (`model3d_opts.extension_rig_models[sig]
 [group].tip`, part of the extension fingerprint; `app/core/extension_tip.py`,
-Base body tab): per side an offset in mm, `up` (+Z) and `out` (away from the
+Figure tab, the plain body's details): per side an offset in mm, `up` (+Z) and `out` (away from the
 midline), each within ±30. The tip walks that far along the surface in 0.5 mm
 steps — each step in the direction up·e_up + out·e_out of the local tangent
 frame (Z and ±X projected into the tangent plane), projected back onto the mesh —

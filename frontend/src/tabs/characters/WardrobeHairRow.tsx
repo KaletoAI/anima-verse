@@ -9,15 +9,19 @@
  * listed disabled, "not built yet" written under it), saved at once and
  * spending nothing (POST /characters/{n}/hair/method) — after a change the
  * row shows the character's pending changes and its Build (GET
- * /characters/{n}/figure, POST …/figure/build). Collapsed "Details": for
- * HairDeck the colour, the placement (HairDeckPlacement) and the HairDeck
- * steps with seed and run; in the body the base body's prompt freshness.
+ * /characters/{n}/figure, POST …/figure/build). In HairDeck mode without a
+ * hair item the row offers "Create hair" (POST …/hair: create + wear the
+ * item, start its chain — the Build would make it too). Collapsed "Details":
+ * for HairDeck "Wear hair", the colour, the placement (HairDeckPlacement) and
+ * the HairDeck steps with seed and run; in the body the base body's prompt
+ * freshness. (Create and Wear moved here in plan Task 11.)
  *
- * Backend (app/routes/characters.py, unchanged): GET /characters/{n}/hair
- * (polled while a step runs — useGarment), POST …/hair/method {method},
- * POST …/hair/colour {hex}, POST …/hair/placement, POST
- * /characters/{n}/garments/{item}/run {step?, force?} (useGarmentRun; a colour
- * or placement change re-fits from the stored HairDeck result).
+ * Backend (app/routes/characters.py): GET /characters/{n}/hair (polled while
+ * a step runs — useGarment), POST …/hair/method {method}, POST …/hair
+ * (create), POST …/hair/equipped {equipped}, POST …/hair/colour {hex}, POST
+ * …/hair/placement, POST /characters/{n}/garments/{item}/run {step?, force?}
+ * (useGarmentRun; a colour or placement change re-fits from the stored
+ * HairDeck result).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -41,6 +45,9 @@ import {
 import type { HairMode } from './figureModel'
 import { garmentRunning, runMark, runSlot, useGarment, useGarmentRun } from './useGarment'
 import type { HairDeckPanel, HairInfo, RunFeedback } from './useGarment'
+
+/** "Create hair" exists for HairDeck only — `body` makes no hair item. */
+const CREATE_HINT = 'Makes hair cards from the profile picture and fits them onto the base model.'
 
 /** HairDeck's three image tiles: small, a click enlarges. */
 const HAIRDECK_TILE = 120
@@ -320,6 +327,22 @@ export function WardrobeHairRow({ character, onEditAppearance }: {
   const itemId = info?.item_id || ''
   const { feedback, start, cancel } = useGarmentRun(character, itemId, info, startPoll)
 
+  const create = useCallback(
+    () => call(`/characters/${enc}/hair`, {}, (d) => {
+      // A run behind the character's other garment runs is queued (the status line shows it).
+      const answer = d as { started?: boolean; queued?: boolean } | null
+      if (answer?.started === false && !answer.queued) {
+        toast(t('A hair run is already going for this character'))
+      }
+    }),
+    [call, enc, t, toast],
+  )
+
+  const setEquipped = useCallback(
+    (equipped: boolean) => call(`/characters/${enc}/hair/equipped`, { equipped }),
+    [call, enc],
+  )
+
   const setMode = useCallback(async (mode: HairMode) => {
     if (hairModeDisabled(mode)) return
     if (await call(`/characters/${enc}/hair/method`, { method: mode })) setChanged((v) => v + 1)
@@ -351,6 +374,15 @@ export function WardrobeHairRow({ character, onEditAppearance }: {
       <div className="ga-hint">{t('No hair item yet — the Build makes it.')}</div>
     ) : (
       <>
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={info.equipped}
+            disabled={posting}
+            onChange={(e) => { void setEquipped(e.target.checked) }}
+          />
+          <span>{t('Wear hair')}</span>
+        </label>
         <RunStatusLine garment={garment} feedback={feedback} stepLabels={HAIR_STEP_LABELS}
           onCancel={() => { void cancel() }} />
         <GarmentFailure garment={garment} stepLabels={HAIR_STEP_LABELS} />
@@ -450,6 +482,15 @@ export function WardrobeHairRow({ character, onEditAppearance }: {
         </span>
         <span className="ga-hint" style={{ fontSize: '0.72em', flex: '1 1 160px' }}>{t(HAIR_MODE_HINTS[mode])}</span>
       </div>
+      {mode === 'hairdeck' && info.pipeline && !info.item_id && info.description ? (
+        <div style={{ ...ROW, paddingLeft: 50, fontSize: '0.75em' }}>
+          <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={posting}
+            onClick={() => { void create() }}>
+            {t('Create hair')}
+          </button>
+          <span className="ga-hint">{t(CREATE_HINT)}</span>
+        </div>
+      ) : null}
       {changed > 0 ? (
         <div style={{ paddingLeft: 50 }}>
           <FigureBuildLine character={character} version={changed} />

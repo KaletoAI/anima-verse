@@ -40,7 +40,7 @@ front, a view = that view; face is no edit of the base body":
 [7] Side views (2026-11-09: only front and back are dressed): Demo view
     left -> 409 SIDE_VIEW_NOT_DRESSED "On the base-body pipeline only the
     front and the back are dressed — the side views belong to the base body
-    (Base body tab)", view right the same, no trigger; with a dressed front
+    (Figure tab)", view right the same, no trigger; with a dressed front
     of the current outfit (tpose_<osig>.png, sidecar base_signature BSIG,
     base_image_sha256 = sha256 of tpose_BSIG.png) view back -> 200, trigger
     (Demo, ("tpose",), "back"). Plain view left -> never the side-view 409
@@ -115,7 +115,7 @@ def main() -> int:
         app = FastAPI()
         app.include_router(routes.router)
         url = "/characters/{}/model-refs/generate"
-        want_msg = "Render the base body first (Base body tab) — the outfit views are edits of it"
+        want_msg = "Render the base body first (Figure tab) — the outfit views are edits of it"
         check("message", getattr(routes, "BASE_FIRST", None), want_msg)
 
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -168,7 +168,7 @@ def main() -> int:
 
             print("[7] side views")
             side = ("On the base-body pipeline only the front and the back are dressed — the side views "
-                    "belong to the base body (Base body tab)")
+                    "belong to the base body (Figure tab)")
             check("left", post("Demo", {"kinds": ["tpose"], "view": "left"}), (409, side))
             check("right", post("Demo", {"kinds": ["tpose"], "view": "right"}), (409, side))
             check("no side trigger", TRIGGERS, [])

@@ -127,7 +127,7 @@ PLACEMENT_ROUNDS = 4
 HAIRLINE_TOL_M = 0.001
 #: Step of the auto tilts tried when the hairline tilt fails the push gate (``_place_and_push``).
 GATE_TILT_STEP_DEG = 1.5
-#: Bounds of the manual values (the Hair tab's inputs; ``garment_hair.set_hair_placement``).
+#: Bounds of the manual values (the hair row's placement inputs; ``garment_hair.set_hair_placement``).
 TILT_LIMIT_DEG = 15.0
 FORWARD_LIMIT_M = 0.03
 #: Hair width (``narrow_sides``, per character, profile ``hair_width_scale``; None = 1, HairDeck's own width): the

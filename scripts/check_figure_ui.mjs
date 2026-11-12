@@ -75,6 +75,10 @@
  *      `post()` helper — `apiPost` named twice: import + that call: figure/build, figure/auto-build,
  *      base-body/pipeline); the template has tab `figure_tab` {Figure, Figur} with the
  *      humanoid-only section `figure` (special "figure"), and CharactersTab renders the slot `figure`.
+ * [13] Task 11 source greps: the Figure tab opens GarmentPieceDialog with `noRunAll`, and the dialog's
+ *      "Run all" renders only `!noRunAll` (Ruling 10a: there only Build and Retry start chains); the
+ *      Wardrobe's hair row has "Create hair" (POST `/characters/${enc}/hair` with `{}`) and "Wear hair"
+ *      (POST …/hair/equipped) — the hair tab they lived in is gone (T9 concern 4).
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -267,6 +271,17 @@ check('[12] template tab', [tab.label, tab.label_de, (tab.columns || []).include
 check('[12] template section', [section.special, section.visible_when], ['figure', { feature: 'humanoid' }]);
 check('[12] CharactersTab slot', /figure:\s*\(?\s*<FieldFigure/.test(src('frontend/src/tabs/characters/CharactersTab.tsx')),
   true);
+
+// [13]
+check('[13] Figure tab: piece dialog without Run all', /<GarmentPieceDialog[^>]*\bnoRunAll\b/.test(fieldFigure), true);
+const garmentSrc = src('frontend/src/tabs/characters/WardrobeGarment.tsx');
+const runAll = garmentSrc.split("label={t('Run all')}")[0].split('\n').slice(-10).join('\n');
+check('[13] dialog: Run all only without noRunAll', /info\?\.pipeline && !noRunAll \?/.test(runAll), true);
+const hairRow = src('frontend/src/tabs/characters/WardrobeHairRow.tsx');
+check('[13] hair row: Create hair posts /hair', [hairRow.includes("t('Create hair')"),
+  /call\(`\/characters\/\$\{enc\}\/hair`, \{\}/.test(hairRow)], [true, true]);
+check('[13] hair row: Wear hair posts /hair/equipped', [hairRow.includes("t('Wear hair')"),
+  hairRow.includes('/hair/equipped`')], [true, true]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

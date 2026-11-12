@@ -465,8 +465,8 @@ def stored_base_haired(character_name: str, bsig: str) -> Optional[bool]:
 def base_prompts_freshness(character_name: str, *,
                            profile: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     """``{state, reason}`` of the stored base front against the current
-    prompt texts (the Hair tab of a character whose hair is in the body
-    mesh): ``missing`` without a stored front, ``stale`` with
+    prompt texts (the Wardrobe's hair row of a character whose hair is in
+    the body mesh): ``missing`` without a stored front, ``stale`` with
     ``OLDER_PROMPTS`` when it was rendered with other texts
     (``prompts_current``), else ``current``."""
     from app.core.model_overview import CURRENT, MISSING, STALE, freshness
@@ -1139,7 +1139,7 @@ DRESS_OCCASIONS = {"back": ("outfit_back_draft", "outfit_back"),
 SIDE_ARM_MARGIN_DEFAULT = 0.03
 SIDE_ARM_MARGIN_MAX = 0.2
 SIDE_VIEW_NOT_DRESSED = ("On the base-body pipeline only the front and the back are dressed — "
-                         "the side views belong to the base body (Base body tab)")
+                         "the side views belong to the base body (Figure tab)")
 DRESSED_FRONT_FIRST = "Render the dressed front first — the back draft is made from it"
 
 
@@ -1216,7 +1216,7 @@ BACK_REFIT_DELTA_E = 4.0
 #: them as refs of their own; the reference gate still accepts them.
 DRAFT_DIR = "drafts"
 
-BASE_IMAGES_MISSING = "Base body images missing — render them in the Base body tab"
+BASE_IMAGES_MISSING = "Base body images missing — render them in the Figure tab"
 BASE_MODEL_MISSING = "Base body model missing — generate it in the 3D tab"
 DRESSED_IMAGES_MISSING = "Dressed images missing — render the outfit's pose images"
 OLDER_BASE = "Built on an older base body"
@@ -1235,7 +1235,7 @@ NO_MESH_FIT = "no accepted fit on the current base model"
 #: Outfit body mode ``mesh`` (ruling 2026-11-10): a flagged piece without an
 #: accepted fit is never painted (meshed) into the outfit body — it is
 #: missing from the outfit model until its mesh is accepted. The same English
-#: text is a React key (Outfit body tab, Wardrobe), built there from the parts.
+#: text is a React key (Wardrobe), built there from the parts.
 MESH_ITEM_NOT_READY = "{item}: own mesh not ready — not shown until its mesh is accepted ({reason})"
 #: ... the reason of a piece whose garment chain failed for its fsig (only
 #: Regenerate in the Wardrobe retries it, ``garments.cached_failure``).
@@ -4326,7 +4326,7 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
 # Spec docs/superpowers/specs/2026-11-11-hair-from-body-design.md § Design 5:
 # a base rendered with older prompt texts (``OLDER_PROMPTS`` — e.g. a bald
 # base of a character whose hair is now in the body mesh) is rebuilt at idle
-# time by the same calls the Base body tab's buttons make: the views
+# time by the same calls the Figure tab's plain-body actions make: the views
 # (``generate_base_images``, force) and the model (``generate_base_model``,
 # force). The base signature stays (prompts are not identity), so every file
 # is replaced in place under its own name.
@@ -4378,9 +4378,9 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
       view current but no base model → the model alone.
 
     * ``older_prompts`` — the stored front carries ``OLDER_PROMPTS``
-      (``base_prompts_freshness``, the Hair tab's note): every view, then
-      the model (the Base body tab's "Regenerate all" + the model's
-      "Regenerate").
+      (``base_prompts_freshness``, the hair row's note): every view, then
+      the model (each view's and the model's "Regenerate" in the Figure
+      tab's plain-body details).
     * ``views`` — the front is current, another view is not
       (``base_view_states``: older prompts, older than the front, missing):
       those views, then the model. A refresh that stopped between the views

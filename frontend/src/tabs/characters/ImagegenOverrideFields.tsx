@@ -104,7 +104,7 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   },
   tpose_view_workflow: {
     kind: 'image', label: 'Views + garment edits', ref: 'T-pose views', placeholder: 'Flux*',
-    tip: 'The extra T-pose reference views (back, side, face) AND the garment edits (the Wardrobe\'s worn and garment-only views, the Hair tab\'s beard-free picture). The base-body back/side views and every outfit view fall back to it. Empty = the T-pose views chain (garment edits: the garment-edit chain).',
+    tip: 'The extra T-pose reference views (back, side, face) AND the garment edits (the Wardrobe\'s worn and garment-only views, the HairDeck hair\'s beard-free picture). The base-body back/side views and every outfit view fall back to it. Empty = the T-pose views chain (garment edits: the garment-edit chain).',
   },
   base_front_workflow: {
     kind: 'image', label: 'Front', placeholder: 'Qwen*', fallback: ['tpose_workflow', 'workflow'],
@@ -144,7 +144,7 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   },
   hair_mesh_workflow: {
     kind: 'hair', label: 'Hair mesh (HairDeck)', placeholder: 'HairDeck*',
-    tip: 'Tried first for the hair cards made from one image of the character (Hair tab, method HairDeck). Empty = the hair-cards chain.',
+    tip: 'Tried first for the hair cards made from one image of the character (hair mode HairDeck). Empty = the hair-cards chain.',
   },
   loras: {
     kind: 'loras', label: 'Character LoRAs', target: 'render', empty: 'None',

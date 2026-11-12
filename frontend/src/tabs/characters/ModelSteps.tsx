@@ -3,7 +3,7 @@
  * each step came out, one row per step, rendered beside the 3D preview
  * (Model3DViewer's `statusPanel`). The list is built on the server
  * (`app/core/model_overview.py`) as `[{id, label, status, detail, numbers}]`
- * — the base model in the Base body tab, an outfit model of the base-body
+ * — the base model in the Figure tab, an outfit model of the base-body
  * pipeline in the 3D tab — so both tabs render the same component. The
  * 3D tab keeps its own overview for a model of the old path (no `steps`).
  *

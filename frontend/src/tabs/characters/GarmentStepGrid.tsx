@@ -10,7 +10,7 @@
  * The step names carry a tooltip with what the step makes and what a
  * Regenerate costs (hub jobs). Run clicks go through the caller (`onRun`,
  * useGarmentRun) and keep their immediate feedback (RunButton, runMark).
- * The Hair tab keeps its own layout (GarmentSteps).
+ * The hair row keeps its own layout (GarmentSteps).
  */
 import { Fragment } from 'react'
 import type { CSSProperties, ReactNode } from 'react'

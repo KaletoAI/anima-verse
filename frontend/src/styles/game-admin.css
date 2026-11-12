@@ -2986,8 +2986,6 @@ a.ga-btn {
 .ga-face-actions { display: flex; flex-direction: column; gap: 6px; }
 .ga-face-actions-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ga-face-actions-state { min-width: 0; }
-/* Base body tab: preview + checklist/tilt, then a column with the collision
-   sliders over the face/rig actions (under the preview when narrow). */
 /* The 3D tab's side panels (animations, extension bones, generation). */
 .ga-model3d-side { font-size: 13px; }
 .ga-model3d-side .ga-hint { font-size: 12px; color: var(--text-muted, #8b949e); margin: 0; }
@@ -2995,19 +2993,20 @@ a.ga-btn {
 .ga-inline-pick { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
 .ga-inline-pick > .ga-input { width: auto; max-width: 24em; }
 .ga-model3d-actions-row { display: flex; flex-wrap: wrap; gap: 6px 28px; align-items: flex-start; }
+/* The Figure tab's plain body: preview + checklist/tilt, then a column with the collision
+   sliders over the face/rig actions (under the preview when narrow). */
 .ga-basebody-model { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
 .ga-basebody-model > .ga-model3d-fit { flex: 0 1 680px; min-width: 0; }
 .ga-basebody-side { flex: 1 1 260px; min-width: 240px; max-width: 380px; display: flex; flex-direction: column; gap: 12px; }
 /* Collision sliders in the viewer's side toolbar: label · slider · value. */
 .ga-collision-grid { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto; gap: 2px 6px; align-items: center; font-size: 11px; }
 .ga-collision-grid input[type="range"] { width: 100%; margin: 0; }
-/* Two-column character tabs (Base body, Pose, Hair): images left, the 3D
+/* Two-column character tabs (Pose, Figure): images left, the 3D
    preview with its controls right. */
 .ga-split { display: grid; gap: 16px; align-items: start; }
 .ga-split-views { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); }
-.ga-split-hair { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(340px, 440px); }
 .ga-split > * { min-width: 0; }
-/* The split tabs (Base body, Pose, Hair) and the face actions are dense: one
+/* The split tabs (Pose, Figure) and the face actions are dense: one
    text size for everything, hints muted and a step smaller. */
 .ga-split, .ga-face-actions, .ga-model3d-tab { font-size: 13px; }
 .ga-split .ga-hint, .ga-face-actions .ga-hint, .ga-model3d-tab .ga-hint {
@@ -3026,27 +3025,8 @@ a.ga-btn {
 .ga-ext-actions { display: inline-flex; gap: 6px; align-items: center; }
 .ga-view-stack { display: flex; flex-direction: column; gap: 8px; }
 .ga-view-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-/* Outfit body tab: dense text in every state (the hints of the retexture and empty states too). */
-.ga-obody { font-size: 13px; }
-.ga-obody .ga-hint { font-size: 12px; color: var(--text-muted, #8b949e); margin: 0; }
-/* Outfit body tab: the bodies one line each (a button per row), the selected
-   one marked; fit and outfit rows one line with a mini action. */
-.ga-obody-list { display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
-.ga-obody-row { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; font-size: 12px;
-  text-align: left; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 4px;
-  cursor: pointer; }
-.ga-obody-row:hover { background: rgba(255, 255, 255, 0.05); }
-.ga-obody-row--sel { border-color: var(--accent, #58a6ff); background: rgba(88, 166, 255, 0.08); }
-.ga-obody-line { font-size: 12px; align-items: center; }
-.ga-obody-line > .ga-model3d-status-text { flex: 1 1 auto; }
-.ga-obody-mini { padding: 0 6px; font-size: 11px; line-height: 18px; }
-.ga-obody-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-@media (max-width: 1300px) {
-  .ga-split-hair { grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); }
-  .ga-split-hair > :first-child { grid-column: 1 / -1; }
-}
 @media (max-width: 1000px) {
-  .ga-split-views, .ga-split-hair { grid-template-columns: minmax(0, 1fr); }
+  .ga-split-views { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Building hull: compact groups with captions above their controls. */

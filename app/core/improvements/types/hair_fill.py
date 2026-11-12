@@ -8,7 +8,7 @@ hair item at all, or wears its hair item without an accepted fit on the
 current base for the current method (``garments.hair_summary`` status
 ``missing``; a served older fit is ``stale`` — ``fit_refit`` or the chain's
 own trigger handles it). A hair item the character owns but took off in the
-Hair tab is no subject (``garments._ensure_hair``'s rule). The method is the
+Wardrobe's hair row is no subject (``garments._ensure_hair``'s rule). The method is the
 character's (``garment_hair.hair_method``, the world default) — read, never
 set. A character whose hair is in the body mesh (method ``body``,
 ``garment_hair.hair_in_body``) is never a subject: it has no hair mesh.
@@ -33,7 +33,7 @@ from app.core.improvements.types.garment_fill import _in_flight, _judge
 #: The occasions each hair method renders on (spec § 5.3); HairDeck's job
 #: runs on the ``hair_mesh`` occasion (``ImageService.generate_hair``).
 OCCASIONS: Dict[str, Tuple[str, ...]] = {"body": (), "hairdeck": ("hair_mesh",)}
-#: The method as the Hair tab names it.
+#: The method as the hair row names it.
 METHOD_LABEL = {"body": "from the body mesh", "hairdeck": "HairDeck"}
 
 
@@ -56,7 +56,7 @@ def _subject(name: str, profile: Dict[str, Any]) -> Optional[Tuple[Optional[str]
     summary = garments.hair_summary(name, profile=profile)
     if summary is None:
         # No worn hair item: a subject only when it owns none either (an
-        # item taken off in the Hair tab stays off).
+        # item taken off in the hair row stays off).
         return None if garment_hair.find_hair_item(name, profile) is not None else (None, method)
     if summary.get("status") != "missing":
         return None

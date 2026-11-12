@@ -1,5 +1,5 @@
 /**
- * ViewRenderTile — one view image of the Base body and Outfit body tabs with
+ * ViewRenderTile — one view image of the Figure tab's plain body with
  * its own render action: the view's name and a Generate / Regenerate button
  * above the tile (RefImage — the freshness badge comes with its `meta`, the
  * server decides it), below it the run state ("Generating…", a caller's

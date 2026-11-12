@@ -1,7 +1,7 @@
 """Model overview and image freshness — what the character tabs show beside
 a 3D model or an image, decided here on the server.
 
-1. STEPS — the side overview of a model (3D tab, Base body tab): one generic
+1. STEPS — the side overview of a model (3D tab, Figure tab): one generic
    list per model, ``[{id, label, status, detail, numbers}]``, built from the
    model's sidecar and the records next to it, so both tabs render the same
    component. ``status``: ``done`` / ``skipped`` / ``warning`` / ``failed`` /
@@ -48,7 +48,7 @@ a 3D model or an image, decided here on the server.
    behind an old-path model, the profile picture behind the face view.
 
 The ``annotate_*`` functions add both to the payloads of the info routes
-(``GET /characters/{n}/base-body``, ``/model3d``, ``/model-refs``,
+(``GET /characters/{n}/figure?plain=1``, ``/model3d``, ``/model-refs``,
 ``/hair``); they only read (sidecars, file hashes cached by stat) and never
 raise — a payload without the extras is still a valid payload.
 """
@@ -97,7 +97,7 @@ MODEL_STALE_REASONS = {"older_base": "Built on an older base body",
                        "detail_changed": "Built for another body detail under the clothing",
                        "figure": FIGURE_CHANGED,
                        "outfit_body": "Built on an older outfit body"}
-# garments.garment_info ``stale_reasons`` -> phrase (the Hair tab's labels).
+# garments.garment_info ``stale_reasons`` -> phrase (the hair labels).
 HAIR_STALE_REASONS = {"description_changed": "Hair description changed",
                       "base_changed": "Base body changed",
                       "base_model_changed": "Base model changed",
@@ -957,7 +957,7 @@ def draft_freshness(meta: Dict[str, Any], *, bsig: str, front_sha: str) -> Dict[
 def outfit_body_view_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str,
                                mesh_ready: bool = False, follows_front: Optional[bool] = None,
                                text_now: Optional[str] = None) -> Dict[str, str]:
-    """A dressed view of an outfit body (the Outfit body tab, mesh mode):
+    """A dressed view of an outfit body (a stored body shape):
     the reasons of ``dressed_freshness`` (base body, base view, own-mesh
     piece), plus ``DRESS_TEXT_CHANGED`` when the view's recorded
     ``dress_text`` is not ``text_now`` (what the body's outfits compute for
@@ -1038,7 +1038,7 @@ def model3d_freshness(model: Dict[str, Any], *, views_newer: bool = False) -> Di
 
 
 def garment_preview_freshness(garment: Dict[str, Any]) -> Dict[str, str]:
-    """A garment preview (the Hair tab, the Wardrobe's own-mesh panel): the
+    """A garment preview (the hair GET, the own-mesh dialog): the
     current-fsig fit, or an older one and why (labels per ``kind``)."""
     if not garment.get("preview_url"):
         return freshness(MISSING, NO_PROVENANCE)
@@ -1438,7 +1438,7 @@ def annotate_garment(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def annotate_hair(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """The Hair tab payload + ``freshness`` on every image (all of them
+    """The hair GET payload + ``freshness`` on every image (all of them
     belong to the current fsig / hsig / profile picture: current when
     present), ``garment.preview_freshness`` and the
     ``preview_freshness`` of every entry of ``others``. Never raises."""

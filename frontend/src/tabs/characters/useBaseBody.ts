@@ -1,6 +1,8 @@
 /**
- * useBaseBody — the character's base body as `GET /characters/{name}/base-body`
- * reports it (`app/core/base_body.py::base_info`), polled while anything of it
+ * useBaseBody — the character's plain (base) body as the `plain_body` of
+ * `GET /characters/{name}/figure?plain=1` reports it
+ * (`app/core/base_body.py::base_info` + the model extras, app/routes/figure.py
+ * `_plain_body`), polled while anything of it
  * runs: a base view render, the base model, or the current outfit's model on
  * the pipeline. Same poll pattern as FieldModelRefs: one load, then a 3 s
  * tick while active (no give-up — a render may wait minutes in the queue;
@@ -43,7 +45,7 @@ export interface BaseModelInfo {
   /** Built from the base views stored now? */
   freshness?: Freshness | null
   /** The base body's capsule set — the one every outfit model inherits
-   *  (characters.py `_base_body_model_extras`, `collision.ensure`). */
+   *  (figure.py `_plain_body_extras`, `collision.ensure`). */
   collision?: CollisionPayload | null
 }
 
@@ -149,7 +151,7 @@ export interface BaseBodyInfo {
   face_cleanup?: FaceCleanupState | null
   /** The stored collision region scales (`model3d_opts.collision_scales`). */
   collision_scales?: Record<string, number>
-  /** The base model's pair tip groups (characters.py `_base_body_model_extras`). */
+  /** The base model's pair tip groups (figure.py `_plain_body_extras`). */
   extension_tips?: ExtensionTipPanelInfo[]
   /** The front's skin detail step (null for a non-humanoid). */
   skin?: BaseSkinInfo | null
@@ -197,7 +199,7 @@ export function useBaseBody(character: string) {
         timerRef.current = null
         let d: BaseBodyInfo | null = null
         try {
-          d = await apiGet<BaseBodyInfo>(`/characters/${enc}/base-body`)
+          d = (await apiGet<{ plain_body?: BaseBodyInfo }>(`/characters/${enc}/figure?plain=1`)).plain_body ?? null
         } catch {
           d = null
         }

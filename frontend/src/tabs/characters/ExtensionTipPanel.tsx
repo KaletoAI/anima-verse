@@ -1,11 +1,11 @@
 /**
  * ExtensionTipPanel — one pair tip extension group of the base model, in the
- * Base body tab's side column next to the viewer: where its tips sit (the
+ * Figure tab's plain-body details, the side column next to the viewer: where its tips sit (the
  * colour marker or, without one, the geometry crest as a suggestion), an
  * offset per side (up / away from the midline, mm), mirror, and a colour
  * disc painted into the texture around each tip.
  *
- * Backend: `extension_tips[]` of GET /characters/{c}/base-body
+ * Backend: `extension_tips[]` of `plain_body` in GET /characters/{c}/figure?plain=1
  * (`app/core/extension_tip.py::tip_panels`); Apply/Reset POST
  * /characters/{c}/model3d/extension-tip {signature, group, tip} — the server
  * stores the override and rebuilds the model's extension rig in the

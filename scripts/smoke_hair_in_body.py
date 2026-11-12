@@ -77,7 +77,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
 [H2] base_identity(Long) == base_identity(Long as hairdeck) (the method is no
      identity input); prompt_fingerprint differs. base_prompts_freshness(Long):
      no stored front -> missing "Base body images missing — render them in
-     the Base body tab"; a front sidecar with the hairdeck fingerprint ->
+     the Figure tab"; a front sidecar with the hairdeck fingerprint ->
      stale OLDER_PROMPTS; with Long's own fingerprint -> current.
 [H3] garments.after_base_model(Long) asks the Build ("body_change",
      ``figure_build.request`` recorded — Task 8 of plan
@@ -99,7 +99,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      coat in mode in_body, so the shape is meshed — Task 6 of plan
      2026-11-12-unified-worn-pieces replaced outfit_body_bald in mesh mode by
      ``base_body._bald_edit`` of the wanted shape): True under hairdeck
-     (wears its own hair item), False under body. The Hair tab payload (route function
+     (wears its own hair item), False under body. The hair payload (the Wardrobe hair row's; route function
      called directly): hair_in_body True, garment None, others [],
      base_prompts = H2's freshness; under hairdeck hair_in_body False,
      base_prompts None.
@@ -338,7 +338,7 @@ def main() -> int:
         fp_deck = base_body.prompt_fingerprint("Long", profile=as_deck)
         check("fingerprint differs", fp_body != fp_deck, True)
         check("freshness without a front", base_body.base_prompts_freshness("Long"),
-              {"state": "missing", "reason": "Base body images missing — render them in the Base body tab"})
+              {"state": "missing", "reason": "Base body images missing — render them in the Figure tab"})
         refs = model_refs.get_model_refs_dir("Long")
         refs.mkdir(parents=True, exist_ok=True)
         bsig = base_body.base_signature("Long")

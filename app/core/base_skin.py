@@ -478,7 +478,7 @@ def after_front_render(character_name: str, front: Path, *, bsig: str, profile: 
 
 def apply_skin_step(character_name: str) -> Dict[str, Any]:
     """Re-run the step on the stored neutral front of the CURRENT base,
-    without re-rendering it (the Base body tab's "Re-run skin step"); a
+    without re-rendering it (the Figure tab's "Run skin step"); a
     front without a stored neutral (rendered with the switch off) is taken
     as the neutral first. Blocking — call from a worker thread. Returns the
     ``skin_step`` record; ``MissingInput`` without a front. The front keeps
@@ -530,7 +530,7 @@ def start_skin_step(character_name: str) -> None:
 
 
 def info(character_name: str, bsig: str) -> Dict[str, Any]:
-    """``{enabled, neutral_url, neutral_meta, step}`` for the Base body tab's
+    """``{enabled, neutral_url, neutral_meta, step}`` for the plain body's
     front tile: the stored neutral front (URL with its mtime) and the front's
     ``skin_step`` record (outcome, error)."""
     from urllib.parse import quote

@@ -97,7 +97,7 @@ export function Model3DGeneration({ character }: { character: string }) {
   // Base-body pipeline: every outfit model is built from the base body on
   // its own (no backend, no GPU) — nothing to choose here. The face options
   // (face cleanup, face before rigging) live with the model they act on:
-  // ModelFaceActions, in the Base body tab on the pipeline, beside the
+  // ModelFaceActions, in the Figure tab's plain-body details on the pipeline, beside the
   // preview in the 3D tab off it.
   if (st.pipeline) return <div className="ga-hint">{t('Outfit models are built from the base body automatically.')}</div>
   return (

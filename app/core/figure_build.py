@@ -48,10 +48,13 @@ shape = views (when missing) + ``model3d.mesh_hub_stages``; pieces / hair =
 ``run_estimate``; fits / assemble = 0. ``hub_jobs`` None as soon as one step
 is unknown (the note says which).
 
-The run (``start``): one FIFO per character (a deque + one worker thread, like
-``outfit_bodies._worker``). A ``start`` while a run goes keeps ONE follow-up
-(repeated calls keep one); every run re-plans at its start, so a follow-up
-with nothing left ends at once. Model work (plain body, interim, shape,
+The run (``start``): one FIFO per character (a deque + one worker thread). A
+``start`` while a run goes keeps ONE follow-up (repeated calls keep one);
+every run re-plans at its start, so a follow-up with nothing left ends at
+once. Each run, from its plan to its last step, holds the character's
+``build_lock``: the Figure tab's Delete of a stored body or texture
+(``figure.delete_stored``) takes it too and re-judges deletability under it,
+so a Build never plans on a body that is deleted under it (Ruling 10a). Model work (plain body, interim, shape,
 texture, assemble) holds ``model3d.generation_slot``. A failed step is
 recorded (``failed[step]``; for ``pieces`` the first failing piece, every
 failing piece under ``items``) and skips only the steps whose ``DEPENDS``
@@ -318,6 +321,15 @@ _queues: Dict[str, Deque[Tuple[str, bool]]] = {}  # character -> follow-up (reas
 _active: set = set()                      # characters whose worker thread is alive
 _current: Dict[str, Dict[str, Any]] = {}  # character -> the run in flight
 _last: Dict[str, Dict[str, Any]] = {}     # character -> the last run that had steps
+_build_locks: Dict[str, threading.Lock] = {}  # character -> held by a run from its plan to its last step
+
+
+def build_lock(character_name: str) -> threading.Lock:
+    """The character's Build lock: a run holds it from its plan to its last
+    step (``_worker``); ``figure.delete_stored`` takes it without waiting and
+    refuses while a Build holds it (Ruling 10a)."""
+    with _lock:
+        return _build_locks.setdefault(character_name, threading.Lock())
 
 
 def _keep_followup_locked(character_name: str, reason: str, automatic: bool) -> None:
@@ -449,7 +461,8 @@ def _worker(character_name: str) -> None:
             reason, automatic = queue.popleft()
             _current[character_name] = {"reason": reason, "step": None, "steps": []}
         try:
-            _run(character_name, reason, automatic=automatic)
+            with build_lock(character_name):
+                _run(character_name, reason, automatic=automatic)
         except Exception:  # noqa: BLE001 — a worker reports, never raises
             logger.exception("Build %s (%s) failed", character_name, reason)
 

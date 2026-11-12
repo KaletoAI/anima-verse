@@ -201,7 +201,7 @@ def main():
             "Main view", "Front view", "Back view", "Right view",
             "T-pose views", "Views + garment edits",
             "The extra T-pose reference views (back, side, face) AND the garment edits (the Wardrobe's worn "
-            "and garment-only views, the Hair tab's beard-free picture). The base-body back/side views and every "
+            "and garment-only views, the HairDeck hair's beard-free picture). The base-body back/side views and every "
             "outfit view fall back to it. Empty = the T-pose views chain (garment edits: the garment-edit "
             "chain).")))
         print("all checks passed")

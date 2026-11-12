@@ -22,7 +22,7 @@ An outfit model on the base body inherits the base model's tip override
 the base's, disc included.
 
 This module also runs "Apply" in the background (``apply_tip_override``: the
-existing CPU extension rebuild, no hub job) and builds the Base body tab's
+existing CPU extension rebuild, no hub job) and builds the plain body's tip
 panel data (``tip_panels``). It never names a group or a package.
 """
 from __future__ import annotations
@@ -301,7 +301,7 @@ def _frame(normal, side: int) -> Tuple[List[float], List[float]]:
 
 
 def tip_panels(character_name: str, signature: str) -> List[Dict[str, Any]]:
-    """The Base body tab's panel per ``pair_tip`` group of the stored model
+    """The plain-body details' panel per ``pair_tip`` group of the stored model
     ``signature`` (all positions in the model's glTF frame, metres):
 
     ``{id, label, enabled, active, status, reason, tip_source, sides: [{side: left|right,

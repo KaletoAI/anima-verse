@@ -511,7 +511,7 @@ def fit_method(record: Dict[str, Any]) -> str:
 
 def finite_json(value: Any) -> Any:
     """A copy of a JSON value with every non-finite float (NaN, +-inf) as None. A refused cut whose hairline
-    could not be measured stored NaN (Python's json writes it), and the Hair tab's GET could not encode the
+    could not be measured stored NaN (Python's json writes it), and the hair GET could not encode the
     record: every record is written and read through this."""
     if isinstance(value, float):
         return value if math.isfinite(value) else None

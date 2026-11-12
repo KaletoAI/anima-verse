@@ -28,7 +28,7 @@ REFUSE, whose chain fails at step "worn" with "back refused" (persisted like
 a real failure). ``garments.fit_on_body``: writes an accepted body fit (the
 quad grafted onto the body bytes) and records the call. The figure
 resolver, dress texts, texture store, shape chain, staleness, assembly,
-Wardrobe status, Outfit body tab, overview and artefact GC are REAL.
+Wardrobe status, missing-items rule, overview and artefact GC are REAL.
 
 Fixture: Demo (human-roleplay, on the pipeline, side views OFF -> dressed
 views front + back). Items: under {[underwear_bottom] "plain grey
@@ -57,7 +57,8 @@ Expected, derived by hand from the rulings:
     figure; was unpainted [jacket], missing {jacket}). outfit_info ready with
     that one warning. No assembly. Wardrobe jacket {painted True, no
     "missing", reason "worn — back refused"} (was painted False, missing).
-    Outfit body tab row missing_mesh_items [] (was [jacket]). Overview row
+    base_body.mesh_items_missing of K's model [] (was [jacket]; the removed outfit-body tab's row showed exactly
+    that list). Overview row
     mesh_items ("warning", "painted on: Jacket").
 [2] Retexture mode (both painted), jacket still refused: K stale "figure"
     (was "body_mode"); the figure now is tP on the plain body — its views are
@@ -82,7 +83,7 @@ Expected, derived by hand from the rulings:
     runs, 0 mesh/rig jobs, ONE body fit (jacket on bK), the assembly carries
     the jacket; figure {shape bK, texture "", painted [], own [jacket],
     interim {}}; bK untouched and K's model = bK's bytes; ready, no warning;
-    tab row missing_mesh_items [].
+    base_body.mesh_items_missing of K's model [].
 [5] A piece moved out of the body (was: a model of the old rule that meshed
     a refused vest into its body): vest in_body -> L built: 3 image jobs,
     ONE mesh + ONE rig job on bOld (its in-body dress text has the vest, so
@@ -146,7 +147,7 @@ def main() -> int:
         import smoke_outfit_body_mesh as obm
         from app.core import (artefact_graph, base_body, body_retexture, collision, expression_regen,
                               extension_rig, garment_assembly, garment_fit, garment_set, garments, glb_delivery,
-                              glb_mesh, model3d, model_overview, model_refs, outfit_bodies, sync_topics)
+                              glb_mesh, model3d, model_overview, model_refs, sync_topics)
         from app.core import garment_store as gs
         from app.imagegen import service
         from app.models import character as charmod
@@ -366,13 +367,9 @@ def main() -> int:
         def wardrobe_entry(item_id):
             return garment_set.wardrobe("Demo")["items"].get(item_id) or {}
 
-        def tab_row(body_id, sig):
-            for body in outfit_bodies.info("Demo")["bodies"]:
-                if body.get("body_id") == body_id:
-                    for row in body.get("outfits") or []:
-                        if row.get("signature") == sig:
-                            return row
-            return {}
+        def missing_items(sig):
+            """What the removed outfit-body tab listed per outfit model as ``missing_mesh_items``."""
+            return [item_id for item_id, _reason in base_body.mesh_items_missing("Demo", meta_of(sig))]
 
         painted_on = base_body.MESH_ITEM_FAILED.format(item="Jacket", reason="worn — back refused")
         K = {"underwear_bottom": "under", "feet": "shoes", "top": "jacket"}
@@ -411,7 +408,7 @@ def main() -> int:
         entry = wardrobe_entry("jacket")
         check("K: Wardrobe jacket", {k: entry.get(k) for k in ("painted", "missing", "reason")},
               {"painted": True, "missing": None, "reason": "worn — back refused"})
-        check("K: Outfit body tab row", tab_row(b_k, sig_k).get("missing_mesh_items"), [])
+        check("K: missing mesh items", missing_items(sig_k), [])
         rows = model_overview.outfit_model_overview("Demo", mdir / f"{sig_k}.glb")[0]
         row = next((r for r in rows if r["id"] == "mesh_items"), {})
         check("K: overview row", (row.get("status"), row.get("detail")), ("warning", "painted on: Jacket"))
@@ -483,7 +480,7 @@ def main() -> int:
               (sha(body_k), sha(mdir / f"{sig_k}.glb")), (body_before, body_before))
         info = base_body.outfit_info("Demo")
         check("accept, rebuilt: ready, no warning", (info["status"], info["warnings"]), ("ready", []))
-        check("accept, rebuilt: Outfit body tab row", tab_row(b_k, sig_k).get("missing_mesh_items"), [])
+        check("accept, rebuilt: missing mesh items", missing_items(sig_k), [])
 
         # --- [5] a model of the old rule -> unreachable body -> GC ----------------------------
         print("[5] the vest moved out of the body: L rebuilt on bK, GC removes the old body")

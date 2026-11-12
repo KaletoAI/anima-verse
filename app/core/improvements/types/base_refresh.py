@@ -24,7 +24,7 @@ models turn stale by the base model's bytes).
 No automatic re-spend: a character whose last base attempt failed (a base
 view's failure record, the base model's ``failed`` status) is not a
 candidate, and a view or a model run that fails raises ``CandidateRefused``
-— terminal, the Base body tab is where a person spends it again. A base
+— terminal, the Figure tab is where a person spends it again. A base
 render or model run in progress elsewhere is not a candidate either; met at
 apply time it is busy. Load — the generation guard held, an occasion that
 resolves to nothing right now, a busy backend, the media switch,
@@ -130,7 +130,7 @@ def _render_views(name: str, views: List[str]) -> None:
 
 def _build_model(name: str) -> None:
     """The base model, forced, under the character's model lock (as the
-    Base body tab's run). Load is busy; any other end is terminal."""
+    Figure tab's plain-body run). Load is busy; any other end is terminal."""
     from app.core import base_body, model3d
     from app.core.hub_ops import HubOpBusy
     try:

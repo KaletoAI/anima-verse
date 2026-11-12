@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The Hair tab chooses the hair method (plan
+"""The hair method (the Wardrobe hair row's mode since Task 11 of plan 2026-11-12-unified-worn-pieces; plan
 docs/superpowers/plans/2026-11-09-hairdeck-hair.md, Task 5): the routes
 POST /characters/{n}/hair/method, POST /characters/{n}/hair/colour,
 GET /characters/{n}/garments/{item}/hairdeck/{image}, the ``method`` query of

@@ -73,8 +73,10 @@ Expected, by hand from the spec + plan rulings (module docstring of artefact_gra
     figure.stored lists B1 B2 (shape, unneeded, deletable, not current; B1 built_for O1) and T1 T2 (texture, live
     by their fronts -> not deletable; T1 current = the worn O1's texture on the plain body). delete_stored: T2 ->
     LookupError PAINTED_NEEDED, "obdeadbeef" -> UnknownBody (404), "../x" -> ValueError (400), nothing changed;
-    back in mesh B1 is the worn shape -> LookupError SHAPE_NEEDED, nothing changed; retexture again -> B1 Bd1
-    Bh1 go (delete_body: the body and its fits), then the explicit collect takes B2 Bd2 Bh2.
+    back in mesh B1 is the worn shape -> LookupError SHAPE_NEEDED, nothing changed; retexture again: while the
+    character's Build lock is held (figure_build.build_lock, Ruling 10a / Task 11) B1 and T2 -> LookupError
+    BUILD_RUNNING, nothing changed; after it B1 Bd1 Bh1 go (delete_body: the body and its fits), then the
+    explicit collect takes B2 Bd2 Bh2.
 [5] character delete: delete_character -> the directory is gone; collect afterwards mints nothing.
 [6] running: B2 made unreachable (retexture: no in-body set has its key; O2m rebuilt: no model names it) but a
     live stage
@@ -473,6 +475,12 @@ def main() -> int:
         check("[4] delete_stored worn shape B1 -> 409", refused(fx["B1"]), ("LookupError", figure.SHAPE_NEEDED))
         same("[4] B1 kept", "Demo4", fx, ALL)
         check("[4] retexture again", set_mode(fx, "retexture"), "retexture")
+        from app.core import figure_build
+        with figure_build.build_lock("Demo4"):
+            check("[4] delete_stored B1 while a Build holds the lock -> 409", refused(fx["B1"]),
+                  ("LookupError", figure.BUILD_RUNNING))
+            check("[4] … a texture too", refused(fx["T2"]), ("LookupError", figure.BUILD_RUNNING))
+        same("[4] refused under the Build lock: nothing changed", "Demo4", fx, ALL)
         check("[4] delete_stored B1 (stored, not needed)", refused(fx["B1"]), ("deleted", ""))
         same("[4] the Figure tab's Delete takes B1 and its fits", "Demo4", fx, without("B1", "Bd1", "Bh1"))
         ag.collect("Demo4", explicit=True, reason="smoke")

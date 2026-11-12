@@ -16,7 +16,8 @@
  * reports `stale` (or was built before the character joined the pipeline), and "Rebuild outfit model" starts the rebuild
  * of the current outfit (POST /characters/{n}/model3d/generate — the route
  * FieldModel3D's "Rebuild from base body" uses: stale dressed views first,
- * then the outfit model anew from the current base body).
+ * then the outfit model anew from the current base body). "Open Figure tab"
+ * leads to the character's Build and its plain body.
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -34,10 +35,12 @@ function texelShare(proof: Record<string, unknown> | null, key: string): number 
 
 const pct = (v: number) => `${(v * 100).toFixed(1)} %`
 
-export function BaseBodyOutfitStatus({ character, onStarted }: {
+export function BaseBodyOutfitStatus({ character, onStarted, onOpenFigure }: {
   character: string
   /** A rebuild was started (the caller re-reads its model preview). */
   onStarted?: () => void
+  /** Switches to the Figure tab. */
+  onOpenFigure?: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -99,6 +102,9 @@ export function BaseBodyOutfitStatus({ character, onStarted }: {
         >
           {t('Rebuild outfit model')}
         </button>
+        {onOpenFigure ? (
+          <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenFigure}>{t('Open Figure tab')}</button>
+        ) : null}
       </div>
       {outfit.status === 'failed' && outfit.error ? (
         <div className="ga-hint" style={{ color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }}>

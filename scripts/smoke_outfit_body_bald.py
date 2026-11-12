@@ -6,13 +6,14 @@ texture key, the body id and every stale judgement stay what they were.
 Usage:
     ./.venv/bin/python scripts/smoke_outfit_body_bald.py
 
-Throwaway storage + instance directory with a copy of the repo's ``human`` package; the outfit_bodies router on a
-bare FastAPI app with a TestClient (session lookup stubbed, header ``x-role: admin``). No hub, no GPU:
+Throwaway storage + instance directory with a copy of the repo's ``human`` package. No hub, no GPU:
 ``expression_regen.render_character_image`` is a recorder that writes a PNG + sidecar (one call = one image job).
 
 Since Task 6 of plan 2026-11-12-unified-worn-pieces there is no body mode: the rule is
-``base_body._bald_edit(meshed=…)``, meshed = the worn pieces want a shape (``figure.wanted_figure``), and the tab's
-view run renders the SHAPE's own view (``tpose_<B0>``), not the outfit's.
+``base_body._bald_edit(meshed=…)``, meshed = the worn pieces want a shape (``figure.wanted_figure``), and a shape
+view render (``base_body.render_shape_views`` — what the Build's shape step runs) renders the SHAPE's own view
+(``tpose_<B0>``), not the outfit's. Since Task 11 the render is called directly (was: the removed outfit-body tab's
+view run, POST outfit-bodies/<B0>/views/front/regenerate, which called the same producer with ``force``).
 
 Fixture (character Demo: humanoid, pipeline on, side views off = the default; appearance with hair, so
 ``garment_hair.ensure_hair_item`` creates and WEARS its own hair item H). Items top / skirt, in mode in_body (both
@@ -34,14 +35,13 @@ Expected, by hand:
     "completely bald" (base view prompt, unchanged).
 [3] Key unchanged: T0 = "tex" + sha256(canonical JSON of texture_inputs)[:12] with the own hair worn, and the
     SAME with it taken off (the rule is not an input); texture_inputs has no "bald" key.
-[4] Nothing stale: outfit_body_of_outfit(O1) = B0, figure_stale(O1 model) "", outfit_info not stale; the tab's
-    B0: freshness not stale, can_regenerate True. (After a re-render of its views B0 says
-    DRESSED_VIEWS_CHANGED, as after any re-render, and B0 is no longer current for its views: the delivered
-    figure stands on the plain body, so O1's model is stale "figure" and outfit_info "stale" — marked only, the
-    view run builds nothing; was "not stale", judged by body_sha256.) O1's old front
+[4] Nothing stale: outfit_body_of_outfit(O1) = B0, figure_stale(O1 model) "", outfit_info not stale. (After a
+    re-render of its views B0 is no longer current for its views: the delivered figure stands on the plain body,
+    so O1's model is stale "figure" and outfit_info "stale" — marked only, the view render builds nothing; was
+    "not stale", judged by body_sha256. The removed tab's own B0 freshness line is no longer checked.) O1's old front
     (edited from the plain body ``bsig``) no longer counts: on the stored shape B0 the delivered figure's views
     stand on B0 (``dressed_image`` None — replaces "the old front counts", which judged it by the texture key).
-[5] A new front render: POST views/front/regenerate on B0 -> ONE image job (tpose_<B0>, the shape's own front,
+[5] A new front render: render_shape_views(wanted figure of O1, ["front"], force) -> ok, ONE image job (tpose_<B0>, the shape's own front,
     occasion outfit_front — was tpose_<O1>) whose bare prompt is [2]'s bald prompt and whose negative ends with
     HAIR_NEGATIVE; its sidecar: texture_signature "" (nothing painted on a shape view; was T0), no "bald", the
     dress text of the shape's inputs; outfit_body_of_outfit(O1) still B0; O1's model stale "figure" (above).
@@ -54,7 +54,6 @@ import os
 import shutil
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,15 +71,6 @@ def check(label, got, want):
     print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}"[:300] + ("" if ok else f" — expected {want!r}"[:300]))
     if not ok:
         FAILS.append(label)
-
-
-def wait_for(cond, timeout=10.0):
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        if cond():
-            return True
-        time.sleep(0.02)
-    return False
 
 
 def png(path: Path, colour, size=(64, 128)) -> Path:
@@ -123,24 +113,13 @@ def main() -> int:
         from app.plugins.loader import discover_packages
         discover_packages(plugins, force=True)
 
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-        from app.core import (artefact_graph, auth_dependency, base_body, expression_regen, garment_assembly,
-                              garment_hair, garment_store, garments, outfit_bodies)
+        from app.core import base_body, expression_regen, garment_hair
         from app.core.model_refs import mesh_items_token, mesh_signature, mesh_variant
         from app.models import inventory
         from app.models.character import get_character_dir, get_character_images_dir, get_character_profile, \
             save_character_profile
-        from app.routes import outfit_bodies as outfit_bodies_routes
         from app.core import glb_delivery
         glb_delivery.delivery_path = lambda path, **kw: path
-
-        auth_dependency._get_session_user = lambda request: (
-            {"id": "a", "username": "admin", "role": "admin"} if request.headers.get("x-role") == "admin" else None)
-        app = FastAPI()
-        app.include_router(outfit_bodies_routes.router)
-        client = TestClient(app)
-        ADMIN = {"x-role": "admin"}
 
         char = "Demo"
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -290,7 +269,6 @@ def main() -> int:
         check("fixture: O1 delivered on B0", o1_model["figure"].get("shape"), B0)
         write_json(M / f"{O1}.json", o1_model)
         (M / f"{O1}.glb").write_bytes(b"OUTFIT-ON-B0")
-        outfit_bodies.stale_posture = lambda c, meta: ""
 
         renders = []
 
@@ -306,18 +284,9 @@ def main() -> int:
             return out
         expression_regen.render_character_image = fake_render
 
-        def tab_body(body_id):
-            data = client.get(f"/characters/{char}/outfit-bodies", headers=ADMIN).json()
-            return next((b for b in data["bodies"] if b["body_id"] == body_id), None)
-
         def not_stale(label, rerendered=False):
-            """Nothing stale for the bald rule; after a re-render the body and the outfit model say only what any
-            re-render of a shape view makes them say (``outfit_bodies.DRESSED_VIEWS_CHANGED``; the model "figure")."""
-            b = tab_body(B0)
-            f = b["freshness"] or {}
-            want = ("stale", outfit_bodies.DRESSED_VIEWS_CHANGED) if rerendered else (None, None)
-            got = (f.get("state"), f.get("reason")) if f.get("state") == "stale" else (None, None)
-            check(f"{label}: tab B0 freshness", (got, b["can_regenerate"]), (want, True))
+            """Nothing stale for the bald rule; after a re-render the outfit model says only what any re-render of
+            a shape view makes it say (the model "figure")."""
             # A re-rendered view of B0 makes B0 outdated for its views: the delivered figure stands on the plain
             # body until B0 is meshed again, so O1's model is stale "figure" — marked only, nothing rebuilt.
             check(f"{label}: outfit model", base_body.figure_stale(char, o1_model), "figure" if rerendered else "")
@@ -333,9 +302,10 @@ def main() -> int:
 
         def front_run():
             n = len(renders)
-            r = client.post(f"/characters/{char}/outfit-bodies/{B0}/views/front/regenerate", headers=ADMIN)
-            check("front run accepted", r.status_code, 202)
-            check("front run ended", wait_for(lambda: not outfit_bodies._active), True)
+            wanted = figure.wanted_figure(char, profile=profile())
+            check("front render: the wanted shape is B0", wanted.shape, B0)
+            result = base_body.render_shape_views(char, wanted, ["front"], force=True)
+            check("front render ok", (result.get("ok"), result.get("error") or ""), (True, ""))
             return renders[n:]
 
         # --- [5] ---------------------------------------------------------------------------------------------

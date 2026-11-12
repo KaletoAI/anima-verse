@@ -70,28 +70,10 @@
       "columns": [30]
     },
     {
-      "id": "base_body_tab",
-      "label": "Base body",
-      "label_de": "Grundkörper",
-      "columns": [28]
-    },
-    {
-      "id": "outfit_body_tab",
-      "label": "Outfit body",
-      "label_de": "Outfit-Körper",
-      "columns": [29]
-    },
-    {
       "id": "tpose_tab",
       "label": "Pose",
       "label_de": "Pose",
       "columns": [26]
-    },
-    {
-      "id": "hair_tab",
-      "label": "Hair",
-      "label_de": "Haare",
-      "columns": [27]
     },
     {
       "id": "model3d_tab",
@@ -181,36 +163,6 @@
       "column": 30,
       "row": 0,
       "special": "figure",
-      "fields": [],
-      "visible_when": { "feature": "humanoid" }
-    },
-    {
-      "id": "base_body",
-      "label": "Base body",
-      "label_de": "Basiskörper",
-      "column": 28,
-      "row": 0,
-      "special": "base_body",
-      "fields": [],
-      "visible_when": { "feature": "humanoid" }
-    },
-    {
-      "id": "outfit_bodies",
-      "label": "Outfit bodies",
-      "label_de": "Outfit-Körper",
-      "column": 29,
-      "row": 1,
-      "special": "outfit_body",
-      "fields": [],
-      "visible_when": { "feature": "humanoid" }
-    },
-    {
-      "id": "hair",
-      "label": "Hair",
-      "label_de": "Haare",
-      "column": 27,
-      "row": 0,
-      "special": "hair",
       "fields": [],
       "visible_when": { "feature": "humanoid" }
     },

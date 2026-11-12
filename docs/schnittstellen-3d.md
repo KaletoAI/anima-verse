@@ -2034,7 +2034,9 @@ Seit Phase 4 des Basiskörper-Programms (Plan
 AUSGELIEFERTE Charakter-GLB (`url` und `low_url` aus § A7) neben dem Körper
 weitere Meshes tragen — heute Kleidungsstücke mit eigenem Mesh, Schuhe und die
 Haare eines Charakters auf der Basiskörper-Pipeline mit der Haar-Methode
-HairDeck. Unter der Standard-Methode `body` (Spec
+HairDeck (`hair_method`, gewählt in der Haar-Zeile der Garderobe; seit Task 11
+von Plan `2026-11-12-unified-worn-pieces` gibt es keinen eigenen Haar-Tab
+mehr). Unter der Standard-Methode `body` (Spec
 `docs/superpowers/specs/2026-11-11-hair-from-body-design.md`) sind die Haare
 Teil des Körper-Meshes selbst — kein Garment, kein `garment_hair_*`-Knoten.
 
@@ -12254,8 +12256,8 @@ both renderers apply the one record through `@anima/scene-render` and add nothin
 
 **Kind.** An `outfit_piece` in mode `own_mesh` (`outfit_piece.mesh_mode`) whose slots are exactly `feet` is garment kind `footwear`,
 method `shoe` (`garment_set.garment_kind_of`); every other own-mesh piece stays `clothing`, a multi-slot piece
-(tights) included. The clothing edit chain never runs for it. Footwear is NEVER painted onto the body, in either
-outfit body mode: without an accepted fit on the current body it is missing (bare foot) with the warning
+(tights) included. The clothing edit chain never runs for it. Footwear is NEVER painted onto the body, whatever
+its mode: without an accepted fit on the current body it is missing (bare foot) with the warning
 `MESH_ITEM_NOT_READY` (`base_body.py`) until its fit is accepted.
 
 **In the served GLB** (the assembly, § A3a; `garment_assembly.py`):

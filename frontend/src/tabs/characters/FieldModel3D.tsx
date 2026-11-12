@@ -217,11 +217,11 @@ export interface Model3DStatus {
   blender?: { enabled?: boolean; executable?: string; version?: string; usable?: boolean }
 }
 
-export function FieldModel3D({ character, onOpenBaseBody }: {
+export function FieldModel3D({ character, onOpenFigure }: {
   character: string
-  /** Switches to the Base body tab (where the base body's face, rig and
-   *  collision live on the pipeline). */
-  onOpenBaseBody?: () => void
+  /** Switches to the Figure tab (where the plain body's face, rig and
+   *  collision live on the pipeline, in its "Plain body" details). */
+  onOpenFigure?: () => void
 }) {
   // Subscribe to the shared clock settings so the stamps above re-render
   // once the server-configured format and timezone arrive.
@@ -811,7 +811,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
 
   // Collision capsules beside the viewer, so a slider's effect shows while it
   // moves. On the pipeline the set belongs to the base body (outfit models
-  // inherit it) and is edited in the Base body tab.
+  // inherit it) and is edited in the Figure tab.
   const collisionPanel = model && mixamo && model.format === 'glb' && model.collision !== undefined ? (
     pipeline ? (
       <div className="ga-hint" title={t('Outfit models on the base body inherit its capsule set.')}>
@@ -829,7 +829,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
 
   const fallback = pipeline?.fallback || null
   const buildBlocked = pending ? t('Locked: a 3D model job is running for this character')
-    : !baseReady ? t('Generate the rigged base model first (Base body tab)') : ''
+    : !baseReady ? t('Generate the rigged base model first (Figure tab)') : ''
   const fallbackBanner = fallback ? (
     <div role="status" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div className="ga-hint" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
@@ -1066,7 +1066,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
                 className="ga-btn ga-btn-sm"
                 disabled={pending || !baseReady}
                 onClick={rebuildFromBase}
-                title={!baseReady ? t('Generate the rigged base model first (Base body tab)')
+                title={!baseReady ? t('Generate the rigged base model first (Figure tab)')
                   : t('Builds the outfit model anew from the current base body. Dressed views that no longer match the base body are rendered first; no mesh backend is involved.')}
               >
                 {pending ? t('Generating…') : t('Rebuild from base body')}
@@ -1154,12 +1154,12 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
         </div>
         {/* Face cleanup, face retexture and the rig act on the model with
             the retained source: off the pipeline this outfit's model, on it
-            the base body — whose actions live in the Base body tab. */}
+            the base body — whose actions live in the Figure tab. */}
         {pipeline ? (
           <div className="ga-face-actions-row">
             <span className="ga-hint">{t('Face cleanup, face retexture, re-rig and collision capsules act on the base body.')}</span>
-            {onOpenBaseBody ? (
-              <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>{t('Open Base body tab')}</button>
+            {onOpenFigure ? (
+              <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenFigure}>{t('Open Figure tab')}</button>
             ) : null}
           </div>
         ) : (

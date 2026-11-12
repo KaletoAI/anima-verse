@@ -94,7 +94,10 @@ Expected values, derived by hand from the fixtures below:
     annotate_model3d_info with filename "../x": no steps (path refused),
     freshness current. Garbage payloads come back without raising.
 [5] Wiring: the four info routes in app/routes/characters.py call their
-    annotate_* function (AST).
+    annotate_* function, and the plain-body payload of app/routes/figure.py
+    (``_plain_body``, GET /characters/{c}/figure?plain=1 since Task 11 of plan
+    2026-11-12-unified-worn-pieces; was GET …/base-body in characters.py)
+    calls annotate_base_info (AST).
 """
 import ast
 import hashlib
@@ -376,7 +379,8 @@ def main() -> int:
 
     print("[5] route wiring")
     tree = ast.parse((ROOT / "app" / "routes" / "characters.py").read_text(encoding="utf-8"))
-    want = {"get_character_base_body": "annotate_base_info", "get_character_model3d": "annotate_model3d_info",
+    tree.body += ast.parse((ROOT / "app" / "routes" / "figure.py").read_text(encoding="utf-8")).body
+    want = {"_plain_body": "annotate_base_info", "get_character_model3d": "annotate_model3d_info",
             "get_character_model_refs": "annotate_model_refs_info", "get_character_hair": "annotate_hair",
             "get_character_garment": "annotate_garment"}
     for node in tree.body:

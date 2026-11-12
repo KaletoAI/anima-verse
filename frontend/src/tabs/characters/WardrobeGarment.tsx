@@ -324,8 +324,10 @@ export function WearersLine({ itemId, version }: {
  *  place or running step), Run all and close; left the chain as a compact
  *  grid (GarmentStepGrid), right the fitted preview with its fit numbers,
  *  the failure and the hints. Escape or a click beside it closes it; a run
- *  goes on without it (the row chip keeps showing it). */
-export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose }: {
+ *  goes on without it (the row chip keeps showing it). Opened from the
+ *  Figure tab (`noRunAll`) it has no Run all: there only Build and Retry
+ *  start chains (Ruling 10a). */
+export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose, noRunAll = false }: {
   character: string
   itemId: string
   /** The piece's display name. */
@@ -333,6 +335,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
   /** The row chip follows the dialog's polls. */
   onStatus: (itemId: string, status: PieceStatus) => void
   onClose: () => void
+  /** Hide "Run all" (the Figure tab: its Build runs the chain). */
+  noRunAll?: boolean
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -397,7 +401,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
   if (!info) {
     body = <div className="ga-hint">{t('Loading…')}</div>
   } else if (!info.pipeline) {
-    body = <div className="ga-hint">{t('Own meshes need the base body pipeline — switch it on in the Base body tab')}</div>
+    body = <div className="ga-hint">{t('Own meshes need the base body pipeline — switch it on in the Figure tab')}</div>
   } else if (footwear) {
     body = (
       <div className="ga-garment-dialog-body">
@@ -535,7 +539,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose 
                 onCancel={() => { void cancel() }} />
               : info?.status ? <PieceStatusChip status={info.status} name={info.name || name} /> : null}
           </div>
-          {info?.pipeline ? (
+          {info?.pipeline && !noRunAll ? (
             <RunButton
               feedback={feedback}
               slot="all"

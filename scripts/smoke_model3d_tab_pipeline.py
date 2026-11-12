@@ -323,7 +323,7 @@ def main() -> int:
 
             print("[8] re-rig")
             check("Demo no base source", detail(call("POST", f"/characters/Demo/model3d/rerig?signature={osig}")),
-                  (409, "The base body has no retained unrigged mesh. Generate the base model again (Base body tab)."))
+                  (409, "The base body has no retained unrigged mesh. Generate the base model again (Figure tab)."))
             (models / "unrigged").mkdir(exist_ok=True)
             (models / "unrigged" / f"{bsig}.glb").write_bytes(b"glTF-unrigged")
             check("Demo re-rig", call("POST", f"/characters/Demo/model3d/rerig?signature={osig}")[0], 200)

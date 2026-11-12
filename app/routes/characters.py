@@ -1553,7 +1553,7 @@ async def generate_character_model_refs(character_name: str,
 
 
 #: 409 of a pose render on the base-body pipeline without the base views.
-BASE_FIRST = "Render the base body first (Base body tab) — the outfit views are edits of it"
+BASE_FIRST = "Render the base body first (Figure tab) — the outfit views are edits of it"
 
 
 def _require_dressable_view(character_name: str, view: str, *, base_ready: bool) -> None:
@@ -1723,46 +1723,6 @@ class BaseBodyPipelineRequest(BaseModel):
 def _require_character(character_name: str) -> None:
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
-
-
-@router.get("/{character_name}/base-body")
-def get_character_base_body(character_name: str,
-                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """``{pipeline, humanoid, signature, images, status, model, now}`` of the
-    character's base body (see ``base_body.base_info``), with the base
-    model's ``steps`` / ``freshness`` and a ``freshness`` per view
-    (``model_overview.annotate_base_info``)."""
-    from app.core.base_body import base_info
-    from app.core.model_overview import annotate_base_info
-    _require_character(character_name)
-    info = annotate_base_info(character_name, base_info(character_name))
-    return _base_body_model_extras(character_name, info)
-
-
-def _base_body_model_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, Any]:
-    """What the Base body tab acts on besides the views: the base model's
-    face fields (``model3d.face_info``) and collision capsules
-    (``collision.ensure`` — the set the outfit models inherit), the stored
-    region scales (``collision_scales``), the face cleanup of the base
-    source (``face_cleanup``, ``model3d.face_cleanup_state``) and the tip
-    panels of its ``pair_tip`` groups (``extension_tips``,
-    ``extension_tip.tip_panels``). Never raises."""
-    from app.core import collision, extension_tip
-    from app.core.model3d import face_cleanup_state, face_info, find_model3d, get_model3d_options
-    try:
-        bsig = info.get("signature") or ""
-        info["collision_scales"] = get_model3d_options(character_name).get("collision_scales") or {}
-        info["face_cleanup"] = face_cleanup_state(character_name, bsig) if bsig and info.get("humanoid") else None
-        model = info.get("model")
-        path = find_model3d(character_name, bsig) if bsig and isinstance(model, dict) else None
-        info["extension_tips"] = []
-        if path is not None and model.get("status") != "running":
-            model.update(face_info(character_name, path))
-            model["collision"] = collision.ensure(character_name, bsig)
-            info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
-    except Exception:  # noqa: BLE001 — the poll never fails on the extras
-        logger.exception("Base body extras of %s failed", character_name)
-    return info
 
 
 @router.post("/{character_name}/base-body/images", status_code=202)
@@ -1944,7 +1904,7 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
     from the gate constants themselves: clothing — the image gates
     (``garment_gates.limits``), the mesh component share and the fit gates
     (``garment_fit.CLOTHING_GATES``); hair — none here (HairDeck's fit gates
-    are the Hair tab's ``hairdeck_fit``). Footwear: the
+    are the hair GET's ``hairdeck_fit``). Footwear: the
     empty-shoe, mesh and insole gates of the shoe source (``footwear_gates``,
     ``footwear_insole``, the insole with the boot's ``SHAFT_GATES``) and the
     fit gates (``footwear_fit.FIT_GATES``, the split fit's ``SHAFT_GATES`` —
@@ -2037,7 +1997,7 @@ def get_character_garment(character_name: str, item_id: str,
 @router.get("/{character_name}/hair")
 def get_character_hair(character_name: str,
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """The Hair tab: ``{pipeline, humanoid, description, behind_shoulders,
+    """The hair GET (the Wardrobe's hair row): ``{pipeline, humanoid, description, behind_shoulders,
     item_id, equipped, garment, collision, limits, method, method_source,
     world_method, hairdeck, others, hair_in_body, base_prompts}`` — ``description`` is
     derived (Appearance + hair slot, R3), ``item_id`` the worn hair item or
@@ -2092,7 +2052,7 @@ def get_character_hair(character_name: str,
             if current:
                 hair_collision = collision.ensure(character_name, current[0])
         except Exception:
-            logger.exception("Hair tab: no capsule set for %s", character_name)
+            logger.exception("Hair GET: no capsule set for %s", character_name)
     payload = {"pipeline": base_body.is_base_pipeline(character_name, profile=profile),
                 "humanoid": humanoid,
                 "description": garment_hair.hair_description(character_name, profile=profile) if humanoid else "",
@@ -2526,7 +2486,7 @@ def get_character_garment_hairdeck_image(character_name: str, item_id: str, imag
 @router.get("/{character_name}/garments/{item_id}/model")
 def get_character_garment_model(character_name: str, item_id: str, request: Request, method: str = "",
                                 _: Dict[str, Any] = Depends(require_admin)):
-    """The Hair tab's preview GLB (the rigged base with the garment grafted
+    """The hair preview GLB (the rigged base with the garment grafted
     on, ``garments.preview_path``), versioned by content; ``method`` naming
     the method NOT selected = that method's newest accepted fit (the "Other
     method" preview). 400 for an unknown method; 404 without a fit or for an
@@ -2826,7 +2786,7 @@ def rerig_character_model3d(
         signature = pipeline["base_signature"]
         if not pipeline["rerig_source"]:
             raise HTTPException(409, "The base body has no retained unrigged mesh. "
-                                     "Generate the base model again (Base body tab).")
+                                     "Generate the base model again (Figure tab).")
     if not signature:
         served = find_model3d_serving(character_name)[0]
         signature = served.stem if served else ""
@@ -3326,7 +3286,7 @@ def get_character_model3d_file(character_name: str, request: Request,
 
     ``signature`` accepts exactly three kinds of value: the current outfit
     signature (served as without it), the character's CURRENT base-body
-    signature and an outfit body id (``ob…``, the Outfit body tab) of the
+    signature and an outfit body id (``ob…``, a stored body shape) of the
     character — the latter two admin only, that stored model itself, full
     tier. Anything else is 404."""
     if signature:

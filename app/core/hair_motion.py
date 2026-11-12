@@ -353,7 +353,7 @@ def motion_groups(chains: Optional[Dict[str, Any]], settings: Dict[str, Any], *,
 
 def panel(character_name: str, profile: Dict[str, Any], newest: Optional[Dict[str, Any]],
           path: Optional[Path] = None) -> Dict[str, Any]:
-    """The Hair tab's spring-chain block for the newest HairDeck fit record ``newest`` (None without a fit) stored
+    """The hair GET's spring-chain block for the newest HairDeck fit record ``newest`` (None without a fit) stored
     at ``path`` (its GLB; its joints in the head capsule do not count as swinging links, as in ``served_chains``):
     ``{count, links, swing, stiffness, limits, fitted}`` — ``count`` the bound chains of the fit (None when
     ``fitted`` is False: no fit, or one from before the spring chains), ``links`` how many joints swing (the motion

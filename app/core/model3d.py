@@ -1245,7 +1245,7 @@ def face_info(character_name: str, face_path: Path) -> Dict[str, Any]:
     """The face-retexture fields of the stored model ``face_path``:
     ``{face_retexture, face_retexture_snapshot, face_retexture_revert,
     face_retexture_compare_url?, face_reference}`` — the 3D tab's model (the
-    base model's on the pipeline) and the Base body tab's base model."""
+    base model's on the pipeline) and the Figure tab's plain-body model."""
     from app.core.face_retexture import snapshot_info
     out: Dict[str, Any] = {"face_retexture": _read_sidecar(face_path).get("face_retexture")}
     snapshot = snapshot_info(face_path.parent, face_path.stem)
@@ -3790,7 +3790,7 @@ def trigger_generation(character_name: str, *, force: bool = False,
 def generation_slot(character_name: str, *, poll_s: float = 1.0):
     """Hold the character's 3D generation guard — the one ``trigger_generation``
     takes — for an explicit run that QUEUES behind the running one instead of
-    being refused (the Outfit body tab's runs, ``app/core/outfit_bodies.py``):
+    being refused (the Build's model steps, ``app/core/figure_build.py``):
     waits until no other 3D run of the character goes, then holds the guard
     and the character lock for the block."""
     import time

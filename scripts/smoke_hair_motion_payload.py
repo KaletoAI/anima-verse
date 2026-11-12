@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """HairDeck hair chains as a core motion source (plan docs/superpowers/plans/2026-11-12-hairdeck-spring-chains.md,
-Task 5): ``app/core/hair_motion.py``, its merge into ``extension_rig.motion_payload``, the Hair tab's
+Task 5): ``app/core/hair_motion.py``, its merge into ``extension_rig.motion_payload``, the hair payload's
 ``hairdeck.chains`` block and ``POST /characters/{n}/hair/motion``.
 
 Usage:

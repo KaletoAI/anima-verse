@@ -709,7 +709,7 @@ _DEFAULT_IMAGE_USE_CASES = {
         "keywords": {"prompt_style": "", "prompt_negative": _NEG_TPOSE_SIDE, "prompt_instruction": ""},
         "natural": {"prompt_style": "", "prompt_negative": _NEG_TPOSE_SIDE, "prompt_instruction": ""},
     },
-    # Garment edits of the base-body views (Hair tab, base-body phase 4). The
+    # Garment edits of the base-body views (HairDeck hair, base-body phase 4). The
     # step prompt carries the whole instruction and the framing comes from the
     # reference view, so the style stays empty; the negative is the spike's
     # NEG (the measured hair chain, base-body phase-4 plan R4). The step

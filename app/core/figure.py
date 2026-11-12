@@ -702,6 +702,8 @@ def stored_unneeded(character_name: str) -> List[Dict[str, Any]]:
 SHAPE_NEEDED = "Not deleted: an outfit would be built on this body now — see why it is kept."
 #: ``delete_stored`` (409): a run works on it.
 STORED_RUNNING = "Not deleted: a run works on it now — delete it after the run."
+#: ``delete_stored`` (409): a Build of the character runs (it holds ``figure_build.build_lock``).
+BUILD_RUNNING = "Not deleted: a Build runs now — delete it after the Build."
 #: ``stored`` reasons that mean "stored, not needed now" (Ruling 5a: only an explicit Delete removes them).
 _UNNEEDED_REASONS = ("stored, not needed now", "outdated: a live outfit was built on it, none would paint it now")
 
@@ -778,17 +780,29 @@ def delete_stored(character_name: str, key: str) -> Dict[str, Any]:
     ``stored`` calls it deletable — ``LookupError`` ``SHAPE_NEEDED`` while an
     outfit would be built on it, ``STORED_RUNNING`` while a run works on it;
     then ``outfit_bodies.delete`` (the body and its fits, ``artefact_graph.delete_body``).
+    Both are judged and deleted under the character's Build lock
+    (``figure_build.build_lock``, Ruling 10a), taken without waiting:
+    ``LookupError`` ``BUILD_RUNNING`` while a Build holds it — so no Build
+    plans on the body between the check and the delete.
     ``ValueError`` for a key of neither shape. Returns the delete report."""
-    from app.core import base_body, outfit_bodies
-    if base_body.is_texture_signature(key):
-        return outfit_bodies.delete_texture(character_name, key)
-    if not base_body.is_outfit_body_signature(key):
+    from app.core import base_body, figure_build, outfit_bodies
+    texture = base_body.is_texture_signature(key)
+    if not texture and not base_body.is_outfit_body_signature(key):
         raise ValueError(f"not a stored body or texture key: {str(key)[:40]!r}")
-    entry = next((e for e in stored(character_name) if e["kind"] == "shape" and e["key"] == key), None)
-    if entry is None:
-        raise outfit_bodies.UnknownBody(f"No stored body {key}")
-    if not entry["deletable"]:
-        raise LookupError(STORED_RUNNING if entry["running"] else SHAPE_NEEDED)
-    report = outfit_bodies.delete(character_name, key)
+    lock = figure_build.build_lock(character_name)
+    if not lock.acquire(blocking=False):
+        raise LookupError(BUILD_RUNNING)
+    try:
+        if texture:
+            report = outfit_bodies.delete_texture(character_name, key)
+        else:
+            entry = next((e for e in stored(character_name) if e["kind"] == "shape" and e["key"] == key), None)
+            if entry is None:
+                raise outfit_bodies.UnknownBody(f"No stored body {key}")
+            if not entry["deletable"]:
+                raise LookupError(STORED_RUNNING if entry["running"] else SHAPE_NEEDED)
+            report = outfit_bodies.delete(character_name, key)
+    finally:
+        lock.release()
     invalidate()
     return report
