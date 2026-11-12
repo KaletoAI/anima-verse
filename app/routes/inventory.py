@@ -1160,6 +1160,7 @@ def _apply_equipped_route_sync(character_name: str,
 def preview_outfit_set_route(character_name: str, outfit_id: str,
                              _admin=Depends(require_admin)) -> Dict[str, Any]:
     """Preview a saved outfit without equipping or granting any pieces."""
+    from app.core.outfit_options import clean_piece_state_map
     from app.models.character import get_character_outfits
     target = next((o for o in get_character_outfits(character_name)
                    if o.get("id") == outfit_id), None)
@@ -1182,6 +1183,9 @@ def preview_outfit_set_route(character_name: str, outfit_id: str,
         "remove_slots": list(target.get("remove_slots") or []),
         # The saved boot hem (``outfit_options``, boots spec § 8.2): "tucked" / "over" / null (= over).
         "boot_hem": (target.get("options") or {}).get("boot_hem") if isinstance(target.get("options"), dict) else None,
+        # The saved open pieces (``outfit_options.piece_state``, Addendum A): {item_id: "open"}; {} = all closed.
+        "piece_state": (clean_piece_state_map((target.get("options") or {}).get("piece_state"))
+                        if isinstance(target.get("options"), dict) else {}),
     }
 
 

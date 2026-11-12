@@ -194,10 +194,15 @@ def _signature(pieces: Dict[str, str], character_name: str = "") -> str:
     empty combination without the name would file the pre-warmed render under
     md5("") while the world looks for md5("wearing: …") — a cache miss, a
     second GPU render, and a GC that reports the batch's own entry stale on
-    every pass."""
-    from app.core.model_refs import mesh_items_token, mesh_signature, mesh_variant
+    every pass.
+
+    The open pieces (``piece_state``) are the character's live ones among
+    ``pieces`` — the mesh-input render reads them from the same live profile
+    (``model_refs.generate_model_refs``)."""
+    from app.core.model_refs import live_piece_state, mesh_items_token, mesh_signature, mesh_variant
     return mesh_signature(pieces, [], character_name, mesh_variant(character_name, pieces),
-                          mesh_items_token(character_name, pieces))
+                          mesh_items_token(character_name, pieces),
+                          piece_state=live_piece_state(character_name, pieces) if character_name else None)
 
 
 def _combo_label(pieces: Dict[str, str],

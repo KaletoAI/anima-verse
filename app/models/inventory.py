@@ -420,6 +420,20 @@ def _clean_mesh_mode(raw, slots: List[str]) -> str:
     return raw if raw in MESH_MODES else default_mesh_mode(slots)
 
 
+def _clean_closable(raw, slots: List[str]) -> bool:
+    """``outfit_piece.closable``: whether the piece can be worn open (plan
+    2026-11-12-unified-worn-pieces Addendum A). A bool is kept, anything else
+    becomes the kind default of ``slots`` (``garment_set.default_closable``);
+    footwear (slots exactly ``feet``) is never closable whatever is given
+    (D-A3). An item property like the mode: never part of a 2D key
+    (``_render_relevant_fields``) — only the WORN state (``piece_state``)
+    changes a render."""
+    from app.core.garment_set import FOOTWEAR_SLOT, default_closable
+    if set(slots or ()) == {FOOTWEAR_SLOT}:
+        return False
+    return raw if isinstance(raw, bool) else default_closable(slots)
+
+
 def _clean_exposed_detail(raw) -> bool:
     """``outfit_piece.exposed_detail``: a sheer piece — a body detail that
     only exists while its slot is uncovered (a package rig declaring
@@ -635,6 +649,7 @@ def add_item(name: str,
             # An ``own_mesh`` key in the input is ignored (the mode replaced
             # that flag, plan 2026-11-12-unified-worn-pieces Task 2).
             "mesh_mode": _clean_mesh_mode(outfit_piece.get("mesh_mode"), slots),
+            "closable": _clean_closable(outfit_piece.get("closable"), slots),
             "exposed_detail": _clean_exposed_detail(outfit_piece.get("exposed_detail")),
         }
         lift = _lift(outfit_piece.get("lift"))
@@ -739,6 +754,8 @@ def update_item(item_id: str,
         # ``app/core/figure_migration.py`` judged it into the mode).
         prev_piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
         prev_mesh_mode = prev_piece.get("mesh_mode")
+        # Same for ``closable``: kept when the update does not name it.
+        prev_closable = prev_piece.get("closable")
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
         # Same for ``lift``; an explicit null resets it to the slot default.
         prev_lift = (item.get("outfit_piece") or {}).get("lift")
@@ -771,6 +788,10 @@ def update_item(item_id: str,
                 item["outfit_piece"]["mesh_mode"] = _clean_mesh_mode(op.get("mesh_mode"), slots)
             elif prev_mesh_mode is not None:
                 item["outfit_piece"]["mesh_mode"] = _clean_mesh_mode(prev_mesh_mode, slots)
+            if "closable" in op:
+                item["outfit_piece"]["closable"] = _clean_closable(op.get("closable"), slots)
+            elif prev_closable is not None:
+                item["outfit_piece"]["closable"] = _clean_closable(prev_closable, slots)
             lift = _lift(op.get("lift") if "lift" in op else prev_lift)
             if lift is not None:
                 item["outfit_piece"]["lift"] = lift
@@ -2208,6 +2229,11 @@ def equip_piece(character_name: str, item_id: str,
     for s in slots:
         eq[s] = item_id
     profile["equipped_pieces"] = eq
+    # A newly worn piece is closed (plan 2026-11-12-unified-worn-pieces D-A2):
+    # its stored open state goes in the same profile write. A saved set applies
+    # its own state after its pieces (``outfit_options.apply_saved_options``).
+    from app.core.outfit_options import drop_piece_state
+    drop_piece_state(profile, item_id)
 
     # Dead key from the abolished per-slot colour override: drop it here so an
     # old profile blob cleans itself up on its next outfit change.

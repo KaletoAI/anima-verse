@@ -1244,7 +1244,7 @@ MESH_ITEM_CHAIN_FAILED = "{step} — {error} — Regenerate in the Wardrobe"
 
 def dress_text(character_name: str, view: str, *, pieces: Optional[Dict[str, str]],
                items: Optional[list], profile: Optional[Dict[str, Any]] = None,
-               mesh_items: Iterable[str] = ()) -> str:
+               mesh_items: Iterable[str] = (), piece_state: Optional[Dict[str, str]] = None) -> str:
     """What the dressed edit says the figure now wears — "" for an undressed
     combination (nothing worn, or an undressed free-text wardrobe).
 
@@ -1260,16 +1260,21 @@ def dress_text(character_name: str, view: str, *, pieces: Optional[Dict[str, str
     BEFORE the renderer resolves ``covers`` / ``partially_covers``, so what
     lies under them is painted (plan 2026-11-09-base-body-phase5 Task 4).
     Pieces that are ALL mesh items leave nothing to paint: "" (never the
-    free-text wardrobe)."""
+    free-text wardrobe).
+
+    ``piece_state``: the open pieces (``{item_id: "open"}``); None → the
+    profile's (``outfit_options.piece_states``). An open piece says
+    ``", worn open"``; a closed one adds nothing (mesh input, D-A1)."""
     from app.core.outfit_renderer import render_outfit
     meshed = {str(i) for i in mesh_items or ()}
     worn = {slot: iid for slot, iid in (pieces or {}).items() if iid and str(iid) not in meshed}
     profile = dict(_profile_of(character_name, profile))
     profile["equipped_pieces"] = dict(worn)
     profile["equipped_items"] = list(items or [])
+    state = None if piece_state is None else {i: s for i, s in piece_state.items() if i in set(worn.values())}
     rendered = render_outfit(profile=profile, equipped_pieces=dict(worn),
                              equipped_items=list(items or []), back_view=view == "back",
-                             mesh_input=True)
+                             mesh_input=True, piece_state=state)
     wear = (rendered.get("pieces") or "").strip()
     if not wear and not (pieces or items):
         free = rendered.get("full") or ""
@@ -1857,7 +1862,8 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
         from app.core.model3d import _ref_manifest
         manifest = _ref_manifest(path)
         fig = figure_mod.delivered_figure_cached(character_name, pieces=dict(manifest.get("pieces") or {}),
-                                                 items=list(manifest.get("items") or []))
+                                                 items=list(manifest.get("items") or []),
+                                                 piece_state=dict(manifest.get("piece_state") or {}))
     if fig.bsig != bsig or fig.shape != on or mesh_items_unpainted(meta) != sorted({*fig.own, *fig.left_out}):
         return None  # made for another figure
     return path
@@ -2198,7 +2204,7 @@ TEXTURE_SIG_RE = re.compile(r"tex[0-9a-f]{12}")
 #: Sidecar keys of a dressed view that describe its OUTFIT, not its texture:
 #: left out of the store's copy, written per outfit.
 _OUTFIT_VIEW_KEYS = ("equipped_pieces", "equipped_items", "mesh_variant", "mesh_token", "mesh_items",
-                     "texture_signature", "created_at")
+                     "texture_signature", "created_at", "piece_state")
 
 
 def is_texture_signature(value: Optional[str]) -> bool:
@@ -2371,6 +2377,11 @@ def _outfit_view_meta(character_name: str, record: Dict[str, Any], *, pieces: Op
     token = mesh_items_token(character_name, dict(pieces or {}), profile)
     if token:
         meta["mesh_token"] = token
+    # The outfit's open pieces (plan 2026-11-12-unified-worn-pieces D-A1) — only when one is open.
+    from app.core.model_refs import live_piece_state
+    open_state = live_piece_state(character_name, dict(pieces or {}), profile)
+    if open_state:
+        meta["piece_state"] = open_state
     if mesh:
         meta["mesh_items"] = mesh
     return meta
@@ -2673,8 +2684,9 @@ def figure_texts(character_name: str, fig, items: Optional[list], *,
     ``figure.texture_key``)."""
     profile = _worn_profile(_profile_of(character_name, profile), fig.pieces, items)
     left = sorted({*fig.own, *fig.left_out})
+    state = {i: "open" for i in fig.open}
     return {v: dress_text(character_name, v, pieces=dict(fig.pieces), items=list(items or []), profile=profile,
-                          mesh_items=left) for v in dressed_views()}
+                          mesh_items=left, piece_state=state) for v in dressed_views()}
 
 
 def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, str]],
@@ -3730,14 +3742,16 @@ def outfit_body_path(character_name: str, body_id: str) -> Path:
 
 
 def _outfit_manifest(character_name: str, signature: str) -> Dict[str, Any]:
-    """``{pieces, items}`` of the outfit ``signature``: the worn state when
-    it is the worn combination, else what its stored T-pose / model records
-    (``model3d._stored_manifest``); ``{}`` when nothing knows."""
+    """``{pieces, items, piece_state}`` of the outfit ``signature``: the worn
+    state when it is the worn combination, else what its stored T-pose /
+    model records (``model3d._stored_manifest``; ``piece_state`` ``{}`` when
+    it records none = all closed); ``{}`` when nothing knows."""
     from app.core import model3d
-    from app.core.model_refs import current_outfit_state
+    from app.core.model_refs import current_outfit_state, live_piece_state
     pieces, items, worn = current_outfit_state(character_name)
     if worn and worn == signature:
-        return {"pieces": dict(pieces or {}), "items": list(items or [])}
+        return {"pieces": dict(pieces or {}), "items": list(items or []),
+                "piece_state": live_piece_state(character_name, dict(pieces or {}))}
     return dict(model3d._stored_manifest(character_name, signature) or {})
 
 
@@ -3754,7 +3768,8 @@ def front_texture_signature(character_name: str, signature: str, *, bsig: str,
         return ""
     manifest = model3d._ref_manifest(front)
     fig = figure.delivered_figure(character_name, profile=_profile_of(character_name, profile),
-                                  pieces=dict(manifest.get("pieces") or {}), items=list(manifest.get("items") or []))
+                                  pieces=dict(manifest.get("pieces") or {}), items=list(manifest.get("items") or []),
+                                  piece_state=dict(manifest.get("piece_state") or {}))
     if dressed_image(character_name, "front", signature, bsig, fig=fig) is None:
         return ""
     return fig.texture if is_texture_signature(fig.texture) else ""
@@ -3773,7 +3788,8 @@ def outfit_body_of_outfit(character_name: str, signature: str, *,
             return ""
         fig = figure.wanted_figure(character_name, profile=_profile_of(character_name, profile),
                                    pieces=dict(manifest.get("pieces") or {}),
-                                   items=list(manifest.get("items") or []))
+                                   items=list(manifest.get("items") or []),
+                                   piece_state=dict(manifest.get("piece_state") or {}))
         return "" if figure.is_plain(fig.shape) else fig.shape
     except Exception:  # noqa: BLE001 — a lookup, never a failure
         logger.debug("Outfit body of %s / %s not computable", character_name, signature, exc_info=True)
@@ -3797,7 +3813,8 @@ def figure_stale(character_name: str, meta: Dict[str, Any], *,
     if built is None:
         return "figure"
     now = figure.delivered_figure_cached(character_name, profile=profile, pieces=dict(meta.get("pieces") or {}),
-                                         items=list(meta.get("items") or []))
+                                         items=list(meta.get("items") or []),
+                                         piece_state={i: "open" for i in built.open})
     if (built.shape, built.texture) != (now.shape, now.texture):
         return "figure"
     if not figure.is_plain(built.shape) and (
@@ -4059,7 +4076,7 @@ def prepare_outfit_figure(character_name: str, signature: Optional[str] = None, 
         return None
     items = list(manifest.get("items") or [])
     wanted = figure.wanted_figure(character_name, profile=profile, pieces=dict(manifest.get("pieces") or {}),
-                                  items=items)
+                                  items=items, piece_state=dict(manifest.get("piece_state") or {}))
     prepared = prepare_shape(character_name, wanted, items=items, signature=signature)
     if prepared is None:
         return None

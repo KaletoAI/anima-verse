@@ -3385,24 +3385,27 @@ def _next_outfit_name(outfits: List[Dict]) -> str:
 
 def _outfit_options(outfit_data: Dict, character_name: str, *, live: bool) -> Dict[str, Any]:
     """The per-outfit ``options`` of a saved set (``app.core.outfit_options``): what ``outfit_data`` carries
-    (only the known keys), else — for a new set, ``live`` — the character's live value, so a saved outfit
-    reproduces the hem it was saved with."""
-    from app.core.outfit_options import BOOT_HEM_KEY, boot_hem, normalise_hem
+    (only the known keys — the boot hem and the open / closed map ``piece_state``), else — for a new set, ``live``
+    — the character's live values, so a saved outfit reproduces the hem and the open pieces it was saved with."""
+    from app.core.outfit_options import (BOOT_HEM_KEY, PIECE_STATE_KEY, boot_hem, clean_piece_state_map,
+                                         normalise_hem, piece_states)
     given = outfit_data.get("options")
     if isinstance(given, dict):
         try:
-            return {BOOT_HEM_KEY: normalise_hem(given.get(BOOT_HEM_KEY))}
+            hem = normalise_hem(given.get(BOOT_HEM_KEY))
         except ValueError:
-            return {BOOT_HEM_KEY: None}
+            hem = None
+        return {BOOT_HEM_KEY: hem, PIECE_STATE_KEY: clean_piece_state_map(given.get(PIECE_STATE_KEY))}
     if live:
-        return {BOOT_HEM_KEY: boot_hem(get_character_profile(character_name) or {})}
+        profile = get_character_profile(character_name) or {}
+        return {BOOT_HEM_KEY: boot_hem(profile), PIECE_STATE_KEY: piece_states(profile)}
     return {}
 
 
 def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
     """Add or update an outfit.
 
-    outfit_data: {id?, name, outfit, locations[], activities[], pieces[], remove_slots[], options{boot_hem}}
+    outfit_data: {id?, name, outfit, locations[], activities[], pieces[], remove_slots[], options{boot_hem, piece_state}}
     (``options``: the per-outfit options of ``app.core.outfit_options``; a new set without them stores the
     character's live value). Return the outfit ID."""
     outfits = get_character_outfits(character_name)

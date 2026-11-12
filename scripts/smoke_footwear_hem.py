@@ -85,7 +85,9 @@ Expected, by hand:
 [H6] saved outfit: add_character_outfit({name, pieces [boots, trousers], options {boot_hem: tucked}}) ->
      apply-outfit-set (the route's body) sets equipped_options.boot_hem "tucked"; a row written WITHOUT options
      (an old set; ``get_character_outfits`` reads it with options {}) applies null; a new set saved without
-     options stores the live value ("over" after the null).
+     options stores the live value ("over" after the null). Since plan 2026-11-12-unified-worn-pieces Task 11a
+     the stored options carry the open / closed map beside the hem: ``piece_state`` {} (no piece worn open) — was
+     ``{boot_hem}`` alone.
 [H7] (Task 11) the Wardrobe and the overview read the hem: in the [H3] state (tucked, r 0.05, too wide)
      ``garment_assembly.hem_state`` -> {boot boots, trousers trousers, mode tucked, fallback too_wide, pending
      False}; ``garment_set.wardrobe(...)["hem"]`` -> applicable True, boot_item boots, trousers_item trousers, mode
@@ -631,7 +633,7 @@ def main() -> int:
         from app.routes.inventory import _apply_outfit_set_route_sync
         oid = add_character_outfit("Demo", {"name": "Boots day", "pieces": [boots, trousers], "options": {"boot_hem": "tucked"}})
         saved = next(o for o in get_character_outfits("Demo") if o["id"] == oid)
-        check("stored options", saved.get("options"), {"boot_hem": "tucked"})
+        check("stored options", saved.get("options"), {"boot_hem": "tucked", "piece_state": {}})
         from app.routes.inventory import preview_outfit_set_route
         check("[H7] the preview carries boot_hem", preview_outfit_set_route("Demo", oid, _admin=None).get("boot_hem"),
               "tucked")
@@ -651,7 +653,7 @@ def main() -> int:
         check("null reads over", oo.boot_hem(get_character_profile("Demo")), "over")
         oid2 = add_character_outfit("Demo", {"name": "Plain", "pieces": [boots, trousers]})
         check("a new set without options stores the live value", next(o for o in get_character_outfits("Demo") if o["id"] == oid2).get("options"),
-              {"boot_hem": "over"})
+              {"boot_hem": "over", "piece_state": {}})
         # --- [H8] a shaft too low to tuck into (Task 14) -----------------------------------------------------
         print("[H8] tucked into the 0.13 boot: the plane lies in the ankle band — shaft_too_low, worn over")
         check("[H8] SHAFT_TOO_LOW_WARNING", oo.SHAFT_TOO_LOW_WARNING.format(trousers="Trousers", boot="Boots"),

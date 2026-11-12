@@ -1911,6 +1911,11 @@ def _save_uploaded_model(character_name: str, original_filename: str,
     token = mesh_items_token(character_name, pieces)
     if token:
         meta["mesh_token"] = token
+    # The open pieces the combination is signed with (plan 2026-11-12-unified-worn-pieces D-A1) — only when one is.
+    from app.core.model_refs import live_piece_state
+    open_state = live_piece_state(character_name, pieces)
+    if open_state:
+        meta["piece_state"] = open_state
     # An upload takes the same route as a generated model: re-encode and
     # normalise first, then measure, so the numbers describe what will be
     # served.
@@ -2625,6 +2630,10 @@ def _ref_manifest(ref_image: Path) -> Dict[str, Any]:
         manifest["mesh_token"] = str(meta["mesh_token"])
     if isinstance(meta.get("mesh_items"), dict):
         manifest["mesh_items"] = meta["mesh_items"]
+    # The open pieces of the render (plan 2026-11-12-unified-worn-pieces D-A1) ride beside ``pieces``: the cache
+    # GC re-signs the model with them. Only when recorded (a closed render records none).
+    if isinstance(meta.get("piece_state"), dict) and meta["piece_state"]:
+        manifest["piece_state"] = {str(k): str(v) for k, v in meta["piece_state"].items()}
     return manifest
 
 
@@ -3496,7 +3505,8 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
         source_meta = _read_sidecar(out_dir / "unrigged" / f"{signature}.glb")
         meta = {k: v for k, v in source_meta.items() if k in (
             "mesh_backend", "mesh_route_meta", "source_image", "source_image_sha256",
-            "view_images", "view_images_sha256", "pieces", "items", "mesh_variant", "job_id", "single_view",
+            "view_images", "view_images_sha256", "pieces", "items", "piece_state", "mesh_variant", "job_id",
+            "single_view",
             "base", "face_cleanup",
             # An outfit body's parent record (base_body.prepare_shape) survives every re-rig.
             "outfit_body", "base_variant")}

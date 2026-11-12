@@ -521,7 +521,8 @@ def neutral_signature(signature: str) -> str:
 
 def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
                          equipped_items: Optional[list],
-                         character_name: str = "", *, profile: Optional[Dict[str, Any]] = None) -> str:
+                         character_name: str = "", *, profile: Optional[Dict[str, Any]] = None,
+                         piece_state: Optional[Dict[str, str]] = None) -> str:
     """The RAW string that identifies one worn outfit — what
     :func:`outfit_signature` hashes, and the ONE description of "the same
     outfit combination" in this codebase.
@@ -542,9 +543,14 @@ def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
 
     Expression snapshots use this same raw outfit identity together with their
     selected set/member and fixed render contract.
+
+    ``piece_state`` (``{item_id: "open"}``): the open pieces of the outfit
+    (plan 2026-11-12-unified-worn-pieces D-A1) — None = all closed, never read
+    from a profile here; callers pass ``outfit_options.piece_states(profile,
+    pieces)``. Only an open piece changes the string (``open:<ids>``).
     """
     from app.core.expression_regen import _equipped_signature
-    raw = _equipped_signature(equipped_pieces, equipped_items)
+    raw = _equipped_signature(equipped_pieces, equipped_items, piece_state)
     if not raw and character_name:
         try:
             from app.core.outfit_renderer import render_outfit
@@ -558,16 +564,18 @@ def outfit_signature_raw(equipped_pieces: Optional[Dict[str, str]],
 
 def outfit_signature(equipped_pieces: Optional[Dict[str, str]],
                      equipped_items: Optional[list],
-                     character_name: str = "") -> str:
+                     character_name: str = "",
+                     piece_state: Optional[Dict[str, str]] = None) -> str:
     """The 12-hex outfit key of the per-outfit render caches — the ONE rule
     both caches (``model_refs/``, ``model3d/``) and the cache GC judge an
     entry by.
 
     md5[:12] of :func:`outfit_signature_raw`, and nothing else: the bare case
-    keeps its historical md5("") key.
+    keeps its historical md5("") key. ``piece_state`` as in
+    :func:`outfit_signature_raw` (None = all closed).
     """
     import hashlib
-    raw = outfit_signature_raw(equipped_pieces, equipped_items, character_name)
+    raw = outfit_signature_raw(equipped_pieces, equipped_items, character_name, piece_state=piece_state)
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -631,12 +639,14 @@ def mesh_items_token(character_name, pieces=None, profile=None) -> str:
             + ";".join(f"{slot}={worn[slot]}" for slot in sorted(worn)))
 
 
-def mesh_signature(pieces, items, character_name, variant, mesh_items=""):
+def mesh_signature(pieces, items, character_name, variant, mesh_items="", piece_state=None):
     """Hash the ordinary outfit plus a recorded mesh variant and mesh-items
     token (``mesh_items_token``; "" keeps every key from before own-mesh
-    pieces), including for cache GC."""
+    pieces), including for cache GC. ``piece_state`` as in
+    :func:`outfit_signature_raw` (None = all closed)."""
     import hashlib
-    raw = outfit_signature_raw(pieces, items, character_name) + variant + (mesh_items or "")
+    raw = (outfit_signature_raw(pieces, items, character_name, piece_state=piece_state)
+           + variant + (mesh_items or ""))
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
@@ -650,8 +660,20 @@ def current_outfit_state(character_name: str) -> tuple:
     pieces = get_equipped_pieces(character_name)
     items = get_equipped_items(character_name)
     sig = mesh_signature(pieces, items, character_name, mesh_variant(character_name, pieces),
-                         mesh_items_token(character_name, pieces))
+                         mesh_items_token(character_name, pieces),
+                         piece_state=live_piece_state(character_name, pieces))
     return pieces, items, sig
+
+
+def live_piece_state(character_name: str, pieces: Optional[Dict[str, str]] = None,
+                     profile: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """The character's open pieces among ``pieces`` (default: the worn ones) — what the signers take as
+    ``piece_state`` for the LIVE outfit (``outfit_options.piece_states``)."""
+    from app.core.outfit_options import piece_states
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    return piece_states(profile, pieces)
 
 
 def pose_reference_signature(character_name: str, signature: str) -> str:
@@ -687,7 +709,8 @@ def find_ref_image(character_name: str, kind: str,
         try:
             pieces, items, sig = current_outfit_state(character_name)
             if kind == "pose":
-                sig = outfit_signature(pieces, items, character_name)
+                sig = outfit_signature(pieces, items, character_name,
+                                       piece_state=live_piece_state(character_name, pieces))
         except Exception:
             return None
         candidates = [pose_reference_signature(character_name, sig), sig] if kind == "pose" else [sig]
@@ -980,7 +1003,8 @@ def generate_model_ref_images(character_name: str,
     if (any(slot.mesh_part for slot in slots_for_character(character_name, profile=mesh_profile))
             and mesh_signature(pieces, items, character_name,
                                mesh_variant(character_name, pieces, mesh_profile),
-                               mesh_items_token(character_name, pieces, mesh_profile)) != signature):
+                               mesh_items_token(character_name, pieces, mesh_profile),
+                               piece_state=live_piece_state(character_name, pieces, mesh_profile)) != signature):
         logger.info("Skipping superseded mesh input for %s (%s)", character_name, signature)
         return {}
     neutral = signature
@@ -1051,7 +1075,9 @@ def generate_model_ref_images(character_name: str,
             modifier_scope.close()
             if kind == "pose":
                 modifier_scope.enter_context(image_modifier_snapshot(character_name))
-            signature = (pose_reference_signature(character_name, outfit_signature(pieces, items, character_name))
+            signature = (pose_reference_signature(
+                character_name, outfit_signature(pieces, items, character_name,
+                                                 piece_state=live_piece_state(character_name, pieces, mesh_profile)))
                          if kind == "pose" else neutral)
             if kind == "pose" and not force and find_ref_image(character_name, kind, signature):
                 continue

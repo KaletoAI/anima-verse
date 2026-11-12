@@ -1,5 +1,7 @@
-"""Per-outfit options beside the worn pieces — today one: the boot hem (boots spec
-``docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md`` § 8, § 20; plan Task 10).
+"""Per-outfit options beside the worn pieces — two: the boot hem (boots spec
+``docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md`` § 8, § 20; plan Task 10) and the open / closed
+state of the worn closable pieces (``piece_state``, unified-worn-pieces spec Addendum A, plan Task 11a; below the
+boot hem sections).
 
 **Live state**: the profile key ``equipped_options`` = ``{"boot_hem": "tucked" | "over" | null}`` beside
 ``equipped_pieces``. ``null`` means ``over`` for every shaft class (§ 20.2: no per-class default) — the trousers
@@ -20,7 +22,20 @@ is layered over the shaft by the ordinary layer order and has no mode.
 The mode is an ASSEMBLY input, not an outfit-signature input (§ 8.2): it changes neither the bare outfit model nor
 the painted body — only the trousers' layered fit — so ``garment_assembly._wanted`` reads it from the profile and
 ``_state`` carries it, and a toggle rebuilds the assembly in seconds.
+
+**Open / closed** (``piece_state``, plan 2026-11-12-unified-worn-pieces Task 11a, D-A1 / D-A2): an outfit piece
+whose item is ``closable`` (``garment_set.closable_of``) is worn ``closed`` (the default) or ``open``. The profile
+stores only the open set — ``equipped_options.piece_state = {item_id: "open"}``; "closed" pops the key. A stored
+"open" counts only while the item is worn AND closable (``piece_states`` filters), so turning ``closable`` off on
+the item falls back to closed without a write. ``inventory.equip_piece`` pops the equipped item's entry (a newly
+worn piece is closed). Closed is the identity state: every key and every mesh-input text is unchanged by it; only
+"open" adds — ``OPEN_WORDS`` to the piece text (``outfit_renderer.piece_text``) and ``open:<ids>`` to the outfit
+signature. ``CLOSED_WORDS`` go only into 2D image prompts and the chat outfit line (``mesh_input=False``). A toggle
+is a worn-state change (``set_piece_state`` + ``inventory._notify_outfit_changed`` in the route: history, SSE, the
+automatic Build), never an item edit. Saved sets carry ``options.piece_state`` beside ``boot_hem``;
+``apply_saved_options`` restores both (a set without ``piece_state`` applies ``{}`` = all closed).
 """
+import re
 from typing import Any, Dict, Optional, Tuple
 
 from app.core.log import get_logger
@@ -75,15 +90,165 @@ def set_boot_hem(character_name: str, mode: Optional[str]) -> bool:
 
 
 def apply_saved_options(character_name: str, outfit: Dict[str, Any]) -> bool:
-    """Apply a saved set's ``options`` to the profile — the boot hem; a set without them (or with an unknown
-    value) stores null = the default. Called by the apply-outfit-set routes inside their profile lock (the lock
-    is re-entrant). True when saved."""
+    """Apply a saved set's ``options`` to the profile — the boot hem and the open / closed state; a set without
+    them (or with an unknown hem) stores null = the default hem, a set without ``piece_state`` applies ``{}`` = every
+    piece closed. Called by the apply-outfit-set routes inside their profile lock (the lock is re-entrant), AFTER
+    the pieces (an equip closes the piece it puts on). True when saved."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
     options = outfit.get("options") if isinstance(outfit.get("options"), dict) else {}
     try:
         mode = normalise_hem(options.get(BOOT_HEM_KEY))
     except ValueError:
         mode = None
-    return set_boot_hem(character_name, mode)
+    state = clean_piece_state_map(options.get(PIECE_STATE_KEY))
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        if not profile:
+            return False
+        stored = dict(profile.get(OPTIONS_KEY) or {}) if isinstance(profile.get(OPTIONS_KEY), dict) else {}
+        stored[BOOT_HEM_KEY] = mode
+        stored[PIECE_STATE_KEY] = state
+        profile[OPTIONS_KEY] = stored
+        return bool(save_character_profile(character_name, profile))
+
+
+# ---------------------------------------------------------------------------
+# Open / closed (module docstring, last section)
+# ---------------------------------------------------------------------------
+
+#: The key of the open / closed map inside ``OPTIONS_KEY``.
+PIECE_STATE_KEY = "piece_state"
+OPEN, CLOSED = "open", "closed"
+PIECE_STATES: Tuple[str, ...] = (OPEN, CLOSED)
+#: The state words of a piece's text (rulings A1 / A6: neutral words). ``OPEN_WORDS`` reach every text (mesh inputs
+#: included); ``CLOSED_WORDS`` only 2D image prompts and the chat outfit line (D-A1: closed changes no key).
+OPEN_WORDS = "worn open"
+CLOSED_WORDS = "worn closed"
+#: Words in a prompt fragment that already name the state (ruling A6: the Wardrobe hints that the toggle adds to
+#: them; the fragment is never edited automatically).
+_STATE_WORDS_RE = re.compile(r"\b(?:open|opened|closed|unbuttoned|buttoned|unzipped|zipped)\b", re.IGNORECASE)
+
+
+def normalise_piece_state(state: Any) -> str:
+    """``open`` / ``closed`` for a value that is one of those; ValueError otherwise."""
+    if isinstance(state, str) and state in PIECE_STATES:
+        return state
+    raise ValueError(f"state must be one of {', '.join(PIECE_STATES)}")
+
+
+def clean_piece_state_map(raw: Any) -> Dict[str, str]:
+    """The stored shape of a state map: ``{item_id: "open"}`` — every other value (closed, unknown) dropped."""
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): OPEN for k, v in raw.items() if k and v == OPEN}
+
+
+def _stored_map(profile: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    options = (profile or {}).get(OPTIONS_KEY)
+    return clean_piece_state_map(options.get(PIECE_STATE_KEY) if isinstance(options, dict) else None)
+
+
+def piece_states(profile: Optional[Dict[str, Any]],
+                 pieces: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """``{item_id: "open"}`` for the worn (``pieces``, else the profile's ``equipped_pieces``) closable items the
+    profile stores open — a stored "open" of an item not worn now, or no longer closable, does not count."""
+    from app.core.garment_set import closable_of
+    from app.models.inventory import get_item
+    stored = _stored_map(profile)
+    if not stored:
+        return {}
+    if pieces is None:
+        pieces = (profile or {}).get("equipped_pieces")
+    worn = {str(v) for v in (pieces or {}).values() if v} if isinstance(pieces, dict) else set()
+    return {iid: OPEN for iid in sorted(stored) if iid in worn and closable_of(get_item(iid))}
+
+
+def piece_state_of(profile: Optional[Dict[str, Any]], item_id: str) -> str:
+    """``open`` or ``closed`` — the state a worn piece has now (``piece_states``); closed for anything else."""
+    return OPEN if piece_states(profile).get(str(item_id or "")) == OPEN else CLOSED
+
+
+def drop_piece_state(profile: Dict[str, Any], item_id: str) -> None:
+    """Remove ``item_id`` from the profile's stored open set IN PLACE (``inventory.equip_piece``: a newly worn
+    piece is closed). The caller saves the profile."""
+    options = profile.get(OPTIONS_KEY)
+    if not isinstance(options, dict):
+        return
+    stored = options.get(PIECE_STATE_KEY)
+    if isinstance(stored, dict) and item_id in stored:
+        options = dict(options)
+        options[PIECE_STATE_KEY] = {k: v for k, v in stored.items() if k != item_id}
+        profile[OPTIONS_KEY] = options
+
+
+def set_piece_state(character_name: str, item_id: str, state: str) -> bool:
+    """Store the open / closed state of a worn closable piece (``closed`` pops the key) under the profile lock;
+    True when saved. ValueError for a bad state, an item that is not closable, or a piece not worn now. The caller
+    notifies the worn-state change (``inventory._notify_outfit_changed``)."""
+    from app.core.garment_set import closable_of
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    from app.models.inventory import get_item
+    value = normalise_piece_state(state)
+    item_id = str(item_id or "").strip()
+    if not closable_of(get_item(item_id)):
+        raise ValueError(f"{item_id or 'item'}: not closable")
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name)
+        if not profile:
+            return False
+        pieces = profile.get("equipped_pieces") if isinstance(profile.get("equipped_pieces"), dict) else {}
+        if item_id not in {str(v) for v in pieces.values() if v}:
+            raise ValueError(f"{item_id}: not worn now")
+        options = dict(profile.get(OPTIONS_KEY) or {}) if isinstance(profile.get(OPTIONS_KEY), dict) else {}
+        stored = clean_piece_state_map(options.get(PIECE_STATE_KEY))
+        if value == OPEN:
+            stored[item_id] = OPEN
+        else:
+            stored.pop(item_id, None)
+        options[PIECE_STATE_KEY] = stored
+        profile[OPTIONS_KEY] = options
+        return bool(save_character_profile(character_name, profile))
+
+
+def with_piece_state(profile: Dict[str, Any], piece_state: Optional[Dict[str, str]]) -> Dict[str, Any]:
+    """A copy of ``profile`` whose stored state map is ``piece_state`` (open entries only) — for a caller that
+    renders or keys a state other than the live one (a saved set, a figure's delivered state). The input is not
+    changed; only the ``equipped_options`` level is copied."""
+    out = dict(profile or {})
+    options = dict(out.get(OPTIONS_KEY) or {}) if isinstance(out.get(OPTIONS_KEY), dict) else {}
+    options[PIECE_STATE_KEY] = clean_piece_state_map(piece_state)
+    out[OPTIONS_KEY] = options
+    return out
+
+
+def fragment_names_state(fragment: Any) -> bool:
+    """Whether a prompt fragment already names an open / closed state (ruling A6: the Wardrobe hints "the
+    description already says open/closed — the toggle adds to it")."""
+    return bool(isinstance(fragment, str) and _STATE_WORDS_RE.search(fragment))
+
+
+def closable_worn(profile: Optional[Dict[str, Any]]) -> list:
+    """The worn closable pieces of a profile: ``[{item_id, name, state, names_state}]`` in slot order of first
+    appearance — what the outfit-options GET shows beside the stored map."""
+    from app.core.garment_set import closable_of
+    from app.models.inventory import get_item
+    pieces = (profile or {}).get("equipped_pieces")
+    states = piece_states(profile)
+    out, seen = [], set()
+    for iid in ((pieces or {}).values() if isinstance(pieces, dict) else ()):
+        iid = str(iid or "")
+        if not iid or iid in seen:
+            continue
+        seen.add(iid)
+        item = get_item(iid)
+        if not closable_of(item):
+            continue
+        out.append({"item_id": iid, "name": (item or {}).get("name") or iid,
+                    "state": states.get(iid, CLOSED),
+                    "names_state": fragment_names_state((item or {}).get("prompt_fragment"))})
+    return out
 
 
 def is_boot_record(record: Optional[Dict[str, Any]]) -> bool:

@@ -579,13 +579,16 @@ def _current_textures(character_name: str, live: Set[str], roots: Roots, named: 
             manifest = _outfit_manifest(root, sig)
             if manifest is None and roots.worn and sig == neutral_signature(roots.worn):
                 pieces, items, _worn = current_outfit_state(character_name)
-                manifest = {"pieces": dict(pieces or {}), "items": list(items or [])}
+                from app.core.model_refs import live_piece_state
+                manifest = {"pieces": dict(pieces or {}), "items": list(items or []),
+                            "piece_state": live_piece_state(character_name, dict(pieces or {}), profile)}
             if manifest is None:
                 tsigs |= named_of.get(sig, set())  # nothing to predict from: kept by name
                 unsure.add(sig)
             else:
                 shape, texture = figure.predicted_keys(character_name, manifest["pieces"], manifest["items"],
-                                                       bsig=roots.base, profile=profile)
+                                                       bsig=roots.base, profile=profile,
+                                                       piece_state=dict(manifest.get("piece_state") or {}))
                 if texture:
                     tsigs.add(texture)
                 if base_body.is_outfit_body_signature(shape):

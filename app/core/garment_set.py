@@ -93,6 +93,34 @@ def mesh_mode_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
     return mode if mode in MESH_MODES else default_mesh_mode(_slots_of(piece))
 
 
+#: The slot that makes a piece closable (worn open / closed) by default (``default_closable``).
+_CLOSABLE_SLOT = "outer"
+
+
+def default_closable(slots: Iterable[str]) -> bool:
+    """The kind default of the open / closed option (plan Addendum A): ``outer`` among the slots → True;
+    footwear (slots exactly ``feet``) is never closable — its chain reads the item image, not the text, so open
+    and closed would be one mesh (D-A3)."""
+    worn = {str(s) for s in (slots or ()) if s}
+    if worn == {FOOTWEAR_SLOT}:
+        return False
+    return _CLOSABLE_SLOT in worn
+
+
+def closable_of(item: Optional[Dict[str, Any]]) -> bool:
+    """Whether an outfit piece can be worn open: its stored ``outfit_piece.closable`` (bool), else the kind
+    default of its slots (``default_closable`` — an item without the key needs no migration). False for anything
+    that is not an ``outfit_piece`` and for footwear (slots exactly ``feet``) whatever is stored."""
+    if not isinstance(item, dict) or item.get("category") != "outfit_piece":
+        return False
+    piece = _piece_of(item)
+    slots = _slots_of(piece)
+    if set(slots) == {FOOTWEAR_SLOT}:
+        return False
+    stored = piece.get("closable")
+    return stored if isinstance(stored, bool) else default_closable(slots)
+
+
 def garment_kind_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
     """``"hair"`` for a hair garment; for an outfit piece in mode
     ``own_mesh`` ``"footwear"`` when its slots are ``feet`` alone (a

@@ -65,6 +65,17 @@ class WornSets:
     #: The worn ``{slot: item id}`` the sets were resolved from — the dress
     #: texts of ``shape_inputs`` / ``texture_key`` are composed from it.
     pieces: Dict[str, str] = field(default_factory=dict)
+    #: Sorted worn closable item ids worn OPEN, any mode (plan Task 11a,
+    #: ``outfit_options.piece_states``) — "worn open" in their dress text, so
+    #: an open in-body / painted piece has its own shape / texture key; all
+    #: closed keys every text as before (D-A1).
+    open: Tuple[str, ...] = ()
+
+
+def _open_map(open_ids) -> Dict[str, str]:
+    """``{item_id: "open"}`` of a set of open ids (the shape ``outfit_options`` stores)."""
+    from app.core.outfit_options import OPEN
+    return {str(i): OPEN for i in open_ids or ()}
 
 
 def _profile_of(character_name: str, profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -79,7 +90,8 @@ def _canonical(data: Dict[str, Any]) -> bytes:
 
 
 def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
-              profile: Optional[Dict[str, Any]] = None) -> WornSets:
+              profile: Optional[Dict[str, Any]] = None,
+              piece_state: Optional[Dict[str, str]] = None) -> WornSets:
     """The worn pieces of ``pieces`` (``{slot: item id}``, default: the
     profile's ``equipped_pieces``) by mode. A multi-slot piece counts once.
     Own-mesh pieces are the worn garments (``garment_set.worn_garments``,
@@ -87,8 +99,11 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
     pipeline as well; everything else — mode painted, or no outfit piece at
     all — is painted. ``hair_item``: the worn own hair item when the hair is
     NOT in the body (a leftover hair item is never served with in-body
-    hair), else ``""``."""
+    hair), else ``""``. ``open``: the worn closable pieces worn open —
+    ``piece_state`` (``{item_id: "open"}``), None → the profile's
+    (``outfit_options.piece_states``)."""
     from app.core import base_body, garment_hair, garment_set
+    from app.core.outfit_options import OPEN, piece_states
     from app.models.inventory import get_item
     profile = _profile_of(character_name, profile)
     if pieces is None:
@@ -105,10 +120,12 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
                      if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.IN_BODY)
     painted = sorted(ids - set(own) - set(in_body))
     hair_in = garment_hair.hair_in_body(character_name, profile)
+    state = piece_states(profile, worn) if piece_state is None else (piece_state or {})
+    opened = sorted(i for i in ids if state.get(i) == OPEN and garment_set.closable_of(get_item(i)))
     return WornSets(in_body=tuple(in_body), painted=tuple(painted), own=dict(sorted(own.items())),
                     hair_in_body=hair_in,
                     hair_item="" if hair_in else garment_hair.worn_hair_id(character_name, profile),
-                    pieces=dict(worn))
+                    pieces=dict(worn), open=tuple(opened))
 
 
 def _dress_texts(character_name: str, sets: WornSets, *, left_out, items: Optional[list],
@@ -124,8 +141,10 @@ def _dress_texts(character_name: str, sets: WornSets, *, left_out, items: Option
 
 def _dressed_profile(profile: Dict[str, Any], sets: WornSets, items: Optional[list]) -> Dict[str, Any]:
     """The profile wearing ``sets.pieces`` / ``items`` (as
-    ``base_body._worn_profile``)."""
-    dressed = dict(profile)
+    ``base_body._worn_profile``) with ``sets.open`` as its open pieces — the
+    dress texts say "worn open" for exactly those (``outfit_renderer``)."""
+    from app.core.outfit_options import with_piece_state
+    dressed = with_piece_state(profile, _open_map(sets.open))
     dressed["equipped_pieces"] = dict(sets.pieces)
     dressed["equipped_items"] = list(items or [])
     return dressed
@@ -226,7 +245,8 @@ def _painted_now(character_name: str, sets: WornSets, *, bsig: str) -> WornSets:
 
 
 def predicted_keys(character_name: str, pieces: Optional[Dict[str, str]], items: Optional[list], *,
-                   bsig: str, profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
+                   bsig: str, profile: Optional[Dict[str, Any]] = None,
+                   piece_state: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
     """``(shape key, texture key)`` a figure of the outfit ``pieces`` /
     ``items`` stands on NOW — ``worn_sets`` under the items' modes, the
     variant of ``predicted_variant``, ``shape_key``, and ``texture_key`` of
@@ -234,9 +254,10 @@ def predicted_keys(character_name: str, pieces: Optional[Dict[str, str]], items:
     without its fit is painted meanwhile, so on the plain body this is the
     tsig today's build paints). Read-only (no garment chain, no image): the
     artefact GC asks it for every live outfit. The texture key is ``""`` on
-    a meshed shape with nothing painted."""
+    a meshed shape with nothing painted. ``piece_state``: the outfit's open
+    pieces (a saved set's), None → the profile's."""
     profile = _profile_of(character_name, profile)
-    sets = worn_sets(character_name, pieces=dict(pieces or {}), profile=profile)
+    sets = worn_sets(character_name, pieces=dict(pieces or {}), profile=profile, piece_state=piece_state)
     variant = predicted_variant(character_name, sets, items, profile=profile)
     shape = shape_key(character_name, sets, bsig=bsig, variant=variant, profile=profile)
     return shape, texture_key(character_name, _painted_now(character_name, sets, bsig=bsig), shape=shape,
@@ -340,13 +361,20 @@ class Figure:
     #: The worn ``{slot: item id}`` the figure was resolved from (the dress
     #: texts of its shape and texture are composed from it).
     pieces: Dict[str, str] = field(default_factory=dict)
+    #: The worn closable pieces worn open (``WornSets.open``), sorted.
+    open: Tuple[str, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
-        """The JSON form an outfit model sidecar records as ``figure``."""
-        return {"signature": self.signature, "bsig": self.bsig, "shape": self.shape, "texture": self.texture,
-                "in_body": list(self.in_body), "painted": list(self.painted), "own": list(self.own),
-                "left_out": dict(self.left_out), "interim": dict(self.interim), "notes": dict(self.notes),
-                "hair": self.hair, "pieces": dict(self.pieces)}
+        """The JSON form an outfit model sidecar records as ``figure`` —
+        ``open`` only when a piece is open (an all-closed figure records
+        what it recorded before the open / closed option, D-A1)."""
+        out = {"signature": self.signature, "bsig": self.bsig, "shape": self.shape, "texture": self.texture,
+               "in_body": list(self.in_body), "painted": list(self.painted), "own": list(self.own),
+               "left_out": dict(self.left_out), "interim": dict(self.interim), "notes": dict(self.notes),
+               "hair": self.hair, "pieces": dict(self.pieces)}
+        if self.open:
+            out["open"] = list(self.open)
+        return out
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Figure":
@@ -361,7 +389,7 @@ class Figure:
                    shape=str(data.get("shape") or ""), texture=str(data.get("texture") or ""),
                    in_body=ids("in_body"), painted=ids("painted"), own=ids("own"), left_out=texts("left_out"),
                    interim=texts("interim"), notes=texts("notes"), hair=str(data.get("hair") or HAIR_BODY),
-                   pieces=texts("pieces"))
+                   pieces=texts("pieces"), open=ids("open"))
 
     def state_of(self, item_id: str) -> str:
         """Where a worn piece is in this figure: ``in_body`` / ``painted`` /
@@ -384,7 +412,8 @@ def shape_plan(character_name: str, fig: "Figure", items: Optional[list], *,
     compares ``shape_key_of(inputs)`` with ``fig.shape`` (the worn modes may
     have changed since ``fig`` was resolved)."""
     profile = _profile_of(character_name, profile)
-    sets, _notes = _refused_sets(worn_sets(character_name, pieces=dict(fig.pieces), profile=profile))
+    sets, _notes = _refused_sets(worn_sets(character_name, pieces=dict(fig.pieces), profile=profile,
+                                           piece_state=_open_map(fig.open)))
     variant = predicted_variant(character_name, sets, _items_of(profile, items), profile=profile)
     if not sets.in_body:
         return sets, variant, None
@@ -405,12 +434,15 @@ def _items_of(profile: Dict[str, Any], items: Optional[list]) -> list:
     return list(worn) if isinstance(worn, list) else []
 
 
-def _signature(character_name: str, pieces: Dict[str, str], items: list, profile: Dict[str, Any]) -> str:
-    """The mesh-input signature of ``pieces`` / ``items`` (``model_refs.current_outfit_state``'s rule)."""
+def _signature(character_name: str, pieces: Dict[str, str], items: list, profile: Dict[str, Any],
+               open_ids=()) -> str:
+    """The mesh-input signature of ``pieces`` / ``items`` with the open pieces ``open_ids``
+    (``model_refs.current_outfit_state``'s rule)."""
     from app.core import model_refs
     return model_refs.mesh_signature(dict(pieces), list(items), character_name,
                                      model_refs.mesh_variant(character_name, dict(pieces), profile),
-                                     model_refs.mesh_items_token(character_name, dict(pieces), profile))
+                                     model_refs.mesh_items_token(character_name, dict(pieces), profile),
+                                     piece_state=_open_map(open_ids) or None)
 
 
 def _refused_sets(sets: WornSets) -> Tuple[WornSets, Dict[str, str]]:
@@ -424,32 +456,37 @@ def _refused_sets(sets: WornSets) -> Tuple[WornSets, Dict[str, str]]:
 
 
 def _wanted(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Dict[str, str]],
-            items: Optional[list]) -> Tuple[Figure, WornSets, str]:
-    """``(wanted figure, its worn sets, variant)``."""
+            items: Optional[list], piece_state: Optional[Dict[str, str]] = None) -> Tuple[Figure, WornSets, str]:
+    """``(wanted figure, its worn sets, variant)``; ``piece_state`` None → the profile's open pieces."""
     from app.core import base_body
     if pieces is None:
         pieces = profile.get("equipped_pieces") or {}
     items = _items_of(profile, items)
-    sets, notes = _refused_sets(worn_sets(character_name, pieces=dict(pieces), profile=profile))
+    sets, notes = _refused_sets(worn_sets(character_name, pieces=dict(pieces), profile=profile,
+                                          piece_state=piece_state))
     bsig = base_body.base_signature(character_name, profile=profile)
     variant = predicted_variant(character_name, sets, items, profile=profile)
     shape = shape_key(character_name, sets, bsig=bsig, variant=variant, profile=profile)
     texture = ("" if notes and not is_plain(shape)
                else texture_key(character_name, sets, shape=shape, bsig=bsig, variant=variant, items=items,
                                 profile=profile))
-    figure = Figure(signature=_signature(character_name, sets.pieces, items, profile), bsig=bsig, shape=shape,
-                    texture=texture, in_body=sets.in_body, painted=sets.painted, own=tuple(sorted(sets.own)),
-                    notes=notes if not is_plain(shape) else {},
-                    hair=HAIR_BODY if sets.hair_in_body else HAIR_HAIRDECK, pieces=dict(sets.pieces))
+    figure = Figure(signature=_signature(character_name, sets.pieces, items, profile, sets.open), bsig=bsig,
+                    shape=shape, texture=texture, in_body=sets.in_body, painted=sets.painted,
+                    own=tuple(sorted(sets.own)), notes=notes if not is_plain(shape) else {},
+                    hair=HAIR_BODY if sets.hair_in_body else HAIR_HAIRDECK, pieces=dict(sets.pieces),
+                    open=sets.open)
     return figure, sets, variant
 
 
 def wanted_figure(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
-                  pieces: Optional[Dict[str, str]] = None, items: Optional[list] = None) -> Figure:
+                  pieces: Optional[Dict[str, str]] = None, items: Optional[list] = None,
+                  piece_state: Optional[Dict[str, str]] = None) -> Figure:
     """The figure the worn pieces (``pieces`` / ``items``, default the
     profile's ``equipped_pieces`` / ``equipped_items``) call for under their
-    item modes — nothing judged as built or not. Read-only."""
-    return _wanted(character_name, profile=_profile_of(character_name, profile), pieces=pieces, items=items)[0]
+    item modes and open pieces (``piece_state``, None → the profile's) —
+    nothing judged as built or not. Read-only."""
+    return _wanted(character_name, profile=_profile_of(character_name, profile), pieces=pieces, items=items,
+                   piece_state=piece_state)[0]
 
 
 def _shape_stored(character_name: str, shape: str, bsig: str) -> bool:
@@ -496,12 +533,15 @@ def _fit_on(character_name: str, item_id: str, *, shape: str, base_sha: str,
 
 
 def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Dict[str, str]] = None,
-               items: Optional[list] = None) -> Tuple[Figure, Figure]:
-    """``(wanted, delivered)`` (block above)."""
+               items: Optional[list] = None,
+               piece_state: Optional[Dict[str, str]] = None) -> Tuple[Figure, Figure]:
+    """``(wanted, delivered)`` (block above). The open pieces are a text
+    input, so the delivered figure has the wanted ``open``."""
     from dataclasses import replace
     from app.core import base_body, garment_set
     items = _items_of(profile, items)
-    wanted, sets, variant = _wanted(character_name, profile=profile, pieces=pieces, items=items)
+    wanted, sets, variant = _wanted(character_name, profile=profile, pieces=pieces, items=items,
+                                    piece_state=piece_state)
     bsig = wanted.bsig
     base_sha = base_body.base_model_sha256(character_name, bsig)
     # 1. The shape.
@@ -555,17 +595,20 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
                               profile=profile)
     delivered = Figure(signature=wanted.signature, bsig=bsig, shape=shape, texture=texture,
                        in_body=tuple(sorted(in_body)), painted=left_painted, own=tuple(own),
-                       left_out=left_out, interim=interim, notes=notes, hair=hair, pieces=dict(sets.pieces))
+                       left_out=left_out, interim=interim, notes=notes, hair=hair, pieces=dict(sets.pieces),
+                       open=sets.open)
     return wanted, delivered
 
 
 def delivered_figure(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
-                     pieces: Optional[Dict[str, str]] = None, items: Optional[list] = None) -> Figure:
+                     pieces: Optional[Dict[str, str]] = None, items: Optional[list] = None,
+                     piece_state: Optional[Dict[str, str]] = None) -> Figure:
     """The figure that would be delivered NOW for the worn pieces (default:
-    the profile's; ``pieces`` / ``items`` judge another outfit, e.g. a stored
-    model's manifest) — the interim rule applied (block above). Read-only:
-    no chain, no fit, no image runs here."""
-    return _delivered(character_name, profile=_profile_of(character_name, profile), pieces=pieces, items=items)[1]
+    the profile's; ``pieces`` / ``items`` / ``piece_state`` judge another
+    outfit, e.g. a stored model's manifest) — the interim rule applied
+    (block above). Read-only: no chain, no fit, no image runs here."""
+    return _delivered(character_name, profile=_profile_of(character_name, profile), pieces=pieces, items=items,
+                      piece_state=piece_state)[1]
 
 
 # --- Memo for serving paths (Ruling 6b) ------------------------------------------
@@ -600,21 +643,22 @@ def invalidate() -> None:
 
 
 def delivered_figure_cached(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
-                            pieces: Optional[Dict[str, str]] = None, items: Optional[list] = None) -> "Figure":
+                            pieces: Optional[Dict[str, str]] = None, items: Optional[list] = None,
+                            piece_state: Optional[Dict[str, str]] = None) -> "Figure":
     """``delivered_figure`` memoised for serving paths (block above)."""
     from app.models.inventory import get_item
     profile = _profile_of(character_name, profile)
     worn = pieces if pieces is not None else (profile.get("equipped_pieces") or {})
     ids = sorted({str(v) for v in (worn or {}).values() if v})
     key = (character_name, _generation[0], hashlib.sha1(_canonical(profile)).hexdigest(),
-           _canonical({"pieces": pieces, "items": items}),
+           _canonical({"pieces": pieces, "items": items, "piece_state": piece_state}),
            hashlib.sha1(_canonical({i: get_item(i) for i in ids})).hexdigest())
     now = time.monotonic()
     with _memo_lock:
         hit = _memo.get(key)
         if hit is not None and now - hit[0] < MEMO_TTL_S:
             return hit[1]
-    fig = delivered_figure(character_name, profile=profile, pieces=pieces, items=items)
+    fig = delivered_figure(character_name, profile=profile, pieces=pieces, items=items, piece_state=piece_state)
     with _memo_lock:
         if key[1] == _generation[0]:
             if len(_memo) >= _MEMO_MAX:
@@ -631,7 +675,12 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
     delivered as wanted), then ``body`` when the plain body is missing or was
     rendered with older prompts (``base_body.OLDER_PROMPTS``; its ``note`` =
     ``BASE_MISSING`` / ``BASE_OUTDATED``, ruling 8a), then ``hair``
-    when the hair is not delivered as its method says. Read-only."""
+    when the hair is not delivered as its method says. Read-only.
+
+    Open / closed (plan Task 11a): ``{key: "<item_id>:state", name, wanted,
+    delivered}`` (``"open"`` / ``"closed"``) for a worn closable piece whose
+    state differs between the wanted figure and the figure the served model
+    was built as (``served_figure``) — after the piece-list changes."""
     from app.core import base_body
     from app.models.inventory import get_item
     profile = _profile_of(character_name, profile)
@@ -642,6 +691,7 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
         if want != have:
             out.append({"key": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
                         "wanted": want, "delivered": have})
+    out.extend(_state_changes(character_name, wanted))
     from app.core.model_refs import find_ref_image
     if (find_ref_image(character_name, "tpose", wanted.bsig) is None
             or not base_body.base_model_sha256(character_name, wanted.bsig)):
@@ -652,6 +702,48 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
                     "delivered": base_body.OLDER_PROMPTS, "note": BASE_OUTDATED})
     if wanted.hair != delivered.hair:
         out.append({"key": HAIR_KEY, "name": "Hair", "wanted": wanted.hair, "delivered": delivered.hair})
+    return out
+
+
+#: The suffix of a piece's open / closed entry in ``pending_changes``.
+STATE_KEY_SUFFIX = ":state"
+
+
+def served_figure(character_name: str) -> Optional[Figure]:
+    """The figure the model served for the worn outfit was built as
+    (``model3d.find_model3d_serving`` — exact or the nearest stand-in — and
+    its sidecar ``figure``); None without a model or a record."""
+    from app.core import model3d
+    try:
+        path, _match = model3d.find_model3d_serving(character_name)
+    except Exception:  # noqa: BLE001 — a pending change, never a failure
+        return None
+    return built_figure(model3d._read_sidecar(path)) if path is not None else None
+
+
+def _state_changes(character_name: str, wanted: Figure) -> List[Dict[str, str]]:
+    """The open / closed entries of ``pending_changes``: worn closable pieces
+    of ``wanted`` whose state the served model's figure does not show (a
+    piece that model does not wear is not a state change)."""
+    from app.core import garment_set
+    from app.core.outfit_options import CLOSED, OPEN
+    from app.models.inventory import get_item
+    closable = sorted(i for i in {str(v) for v in wanted.pieces.values() if v}
+                      if garment_set.closable_of(get_item(i)))
+    if not closable:
+        return []
+    built = served_figure(character_name)
+    if built is None:
+        return []
+    worn_there = {str(v) for v in built.pieces.values() if v}
+    out: List[Dict[str, str]] = []
+    for item_id in closable:
+        want = OPEN if item_id in wanted.open else CLOSED
+        have = OPEN if item_id in built.open else CLOSED
+        if item_id in worn_there and want != have:
+            out.append({"key": item_id + STATE_KEY_SUFFIX,
+                        "name": str((get_item(item_id) or {}).get("name") or item_id),
+                        "wanted": want, "delivered": have})
     return out
 
 

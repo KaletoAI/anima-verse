@@ -144,7 +144,7 @@ def reachable_signatures(character_name: str, deadline: Optional[float] = None) 
 
 
 def _sign(pieces: Dict[str, str], items: Optional[List[str]],
-          character_name: str = "") -> str:
+          character_name: str = "", piece_state: Optional[Dict[str, str]] = None) -> str:
     """Re-sign a manifest with TODAY's rule (visibility normalisation
     included — that is what makes normalisation orphans detectable).
 
@@ -153,13 +153,17 @@ def _sign(pieces: Dict[str, str], items: Optional[List[str]],
     ``outfit_description`` (a temporary NPC), and the rule hashes that text
     (``model_refs.outfit_signature``). Without the name every empty manifest
     would re-sign to md5("") and the entries left behind by an edited outfit
-    text would count as valid forever."""
+    text would count as valid forever. ``piece_state``: the manifest's open
+    pieces (None / {} = all closed)."""
     from app.core.model_refs import outfit_signature
-    return outfit_signature(pieces, items or [], character_name)
+    return outfit_signature(pieces, items or [], character_name, piece_state=piece_state or None)
 
 
 def read_manifest(sidecar: Path) -> Optional[Dict[str, Any]]:
-    """``{pieces, items}`` of a sidecar, or None when it records none.
+    """``{pieces, items, mesh_variant, mesh_token, piece_state}`` of a
+    sidecar, or None when it records no pieces. ``piece_state`` is the open
+    map the render was made with (``{}`` when the sidecar records none — a
+    closed render, plan 2026-11-12-unified-worn-pieces D-A1).
 
     Two key spellings are accepted on purpose: the reference renders have
     always written ``equipped_pieces``/``equipped_items`` (the expression
@@ -180,10 +184,13 @@ def read_manifest(sidecar: Path) -> Optional[Dict[str, Any]]:
         pieces = meta.get(pkey)
         if isinstance(pieces, dict):
             items = meta.get(ikey)
+            state = meta.get("piece_state")
             return {"pieces": {str(k): str(v) for k, v in pieces.items() if v},
                     "items": [str(i) for i in (items or []) if i],
                     "mesh_variant": meta.get("mesh_variant", ""),
-                    "mesh_token": meta.get("mesh_token", "")}
+                    "mesh_token": meta.get("mesh_token", ""),
+                    "piece_state": ({str(k): str(v) for k, v in state.items() if k and v}
+                                    if isinstance(state, dict) else {})}
     return None
 
 
@@ -208,7 +215,11 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
     Retired -s forks are always unreachable. Ordinary pose-state references
     (-p) are judged by their outfit base, independently of mesh inputs. A
     base that is not shaped like a signature (a hand-named test file) can
-    never be produced — decided without the enumeration."""
+    never be produced — decided without the enumeration.
+
+    A manifest's open pieces (``piece_state``) re-sign with it; an entry is
+    invalid when one of them is no longer ``closable`` (that render cannot be
+    worn again)."""
     from app.core.model_refs import is_state_fork, neutral_signature
     if is_state_fork(signature):
         return False
@@ -219,9 +230,16 @@ def _entry_valid(signature: str, manifest: Optional[Dict[str, Any]],
         used = set(manifest["pieces"].values()) | set(manifest["items"])
         if not used.issubset(owned):
             return False
+        state = manifest.get("piece_state") or {}
+        if state:
+            from app.core.garment_set import closable_of
+            from app.models.inventory import get_item
+            if not all(closable_of(get_item(iid)) for iid, st in state.items() if st == "open"):
+                return False
         from app.core.model_refs import mesh_signature
         return mesh_signature(manifest["pieces"], manifest["items"], character_name,
-                              manifest.get("mesh_variant", ""), manifest.get("mesh_token", "")) == base
+                              manifest.get("mesh_variant", ""), manifest.get("mesh_token", ""),
+                              piece_state=state or None) == base
     return base in reachable()
 
 

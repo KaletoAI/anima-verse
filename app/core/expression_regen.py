@@ -239,6 +239,7 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
     from app.core.expression_sets import catalog_snapshot, set_for_character, ExpressionSetError
     from app.core.expression_pose_maps import resolve_expression_key
     from app.core.model_refs import outfit_signature_raw
+    from app.core.outfit_options import piece_states
     from app.core.prompt_builder import person_description
     while True:
         with keyed_lock("character_profile", character):
@@ -251,7 +252,8 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
             items = list(get_equipped_items(character) if equipped_items is None else equipped_items)
             profile["equipped_pieces"] = pieces
             profile["equipped_items"] = items
-            outfit = outfit_signature_raw(pieces, items, character, profile=profile)
+            outfit = outfit_signature_raw(pieces, items, character, profile=profile,
+                                          piece_state=piece_states(profile, pieces))
             appearance = person_description(character, body_profile=profile, apply_state_modifiers=False, neutral_state=True)
             epoch = mutation_epoch(character)
         expression = resolve_expression_key(mood, set_id=spec.id, wait=wait)
@@ -264,7 +266,8 @@ def expression_snapshot(character: str, mood: str = "", *, equipped_pieces=None,
             current_items = list(get_equipped_items(character) if equipped_items is None else equipped_items)
             current["equipped_pieces"], current["equipped_items"] = current_pieces, current_items
             current_set = set_for_character(character, profile=current, catalog=latest)
-            current_outfit = outfit_signature_raw(current_pieces, current_items, character, profile=current)
+            current_outfit = outfit_signature_raw(current_pieces, current_items, character, profile=current,
+                                                  piece_state=piece_states(current, current_pieces))
             current_appearance = person_description(character, body_profile=current, apply_state_modifiers=False, neutral_state=True)
             if (latest.revision != cat.revision or current_set.id != spec.id
                     or current_outfit != outfit or current_appearance != appearance
@@ -750,11 +753,17 @@ def invalidate_variants_for_item(item_id):
 
 
 def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
-                        equipped_items: Optional[list] = None) -> str:
+                        equipped_items: Optional[list] = None,
+                        piece_state: Optional[Dict[str, str]] = None) -> str:
     """Stable signature of the worn items (pieces + other equipment).
 
     Slot order is sorted so the same equip set always produces the same hash;
-    items alphabetically.
+    items alphabetically. ``piece_state`` (``{item_id: "open"}``, None = all
+    closed — the caller passes ``outfit_options.piece_states``, never read
+    from a profile here) adds ``open:<sorted ids>`` as the last part for the
+    open pieces among the visible ones; an open piece hides nothing, so the
+    pieces under it count as visible. All closed = the signature from before
+    the open / closed option (plan 2026-11-12-unified-worn-pieces D-A1).
     """
     parts = []
     if equipped_pieces:
@@ -766,7 +775,7 @@ def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
         # entries stay valid.
         try:
             from app.core.outfit_renderer import visible_equipped_pieces
-            equipped_pieces = visible_equipped_pieces(equipped_pieces)
+            equipped_pieces = visible_equipped_pieces(equipped_pieces, piece_state)
         except Exception:
             pass  # unreadable items must not break signing — hash raw then
         for slot in sorted(equipped_pieces.keys()):
@@ -777,6 +786,11 @@ def _equipped_signature(equipped_pieces: Optional[Dict[str, str]] = None,
         cleaned = sorted({(i or "").strip() for i in equipped_items if i})
         if cleaned:
             parts.append("items:" + ",".join(cleaned))
+    if equipped_pieces and piece_state:
+        visible = {(v or "").strip() for v in equipped_pieces.values() if v}
+        opened = sorted(i for i, st in piece_state.items() if st == "open" and i in visible)
+        if opened:
+            parts.append("open:" + ",".join(opened))
     return "|".join(parts)
 
 def _invalidate_outfit_caches_for_item(character_name: str, item_id: str) -> Set[str]:
@@ -1278,6 +1292,12 @@ def render_character_image(character_name: str, *, output_stem: Path,
             "equipped_items": equipped_items or [],
             "state_fingerprint": _state_fp,
         }
+        # The open pieces it was rendered with (plan 2026-11-12-unified-worn-pieces D-A1): the cache GC re-signs
+        # the entry with them. Only recorded when one is open — a closed render's sidecar is unchanged.
+        from app.core.outfit_options import piece_states as _piece_states
+        _open_state = _piece_states(_render_profile, equipped_pieces or {}) if equipped_pieces else {}
+        if _open_state:
+            _expr_meta["piece_state"] = _open_state
         # The routing record of the render — a fallback variant stays
         # recognisable (plan-image-routing.md, meta at every writer).
         for _rk in ROUTE_META_KEYS:

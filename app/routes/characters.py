@@ -1843,6 +1843,12 @@ class OutfitOptionsRequest(BaseModel):
     boot_hem: Optional[str] = None
 
 
+class PieceStateRequest(BaseModel):
+    # Plain strings, validated by outfit_options.set_piece_state (400 with its message, not a schema 422).
+    item_id: str = ""
+    state: Any = None
+
+
 class HairMethodRequest(BaseModel):
     # Plain string, validated by garment_hair.set_hair_method (400, not 422).
     method: str = ""
@@ -2229,16 +2235,48 @@ def set_character_hair_equipped(character_name: str, body: GarmentEquippedReques
 
 @router.get("/{character_name}/outfit-options")
 def get_character_outfit_options(character_name: str) -> Dict[str, Any]:
-    """The per-outfit options (``app.core.outfit_options``, boots spec § 8.2): ``{boot_hem, applicable}`` —
-    ``boot_hem`` the stored choice (``tucked`` / ``over`` / null = over), ``applicable`` what the Wardrobe shows
-    (``hem_applicable``: a worn boot and worn own-mesh trousers). Character-scoped like the equip routes:
-    admin and the character's player."""
+    """The per-outfit options (``app.core.outfit_options``, boots spec § 8.2, unified-worn-pieces Addendum A):
+    ``{boot_hem, applicable, piece_state, closable}`` — ``boot_hem`` the stored choice (``tucked`` / ``over`` / null
+    = over), ``applicable`` what the Wardrobe shows (``hem_applicable``: a worn boot and worn own-mesh trousers),
+    ``piece_state`` the stored open map ``{item_id: "open"}``, ``closable`` the worn closable pieces
+    ``[{item_id, name, state, names_state}]``. Character-scoped like the equip routes: admin and the character's
+    player."""
     from app.core.outfit_options import BOOT_HEM_KEY, OPTIONS_KEY, hem_applicable
     from app.models.character import get_character_profile
     _require_character(character_name)
     profile = get_character_profile(character_name) or {}
     stored = (profile.get(OPTIONS_KEY) or {}).get(BOOT_HEM_KEY) if isinstance(profile.get(OPTIONS_KEY), dict) else None
-    return {"boot_hem": stored, "applicable": hem_applicable(character_name, profile=profile)}
+    return {"boot_hem": stored, "applicable": hem_applicable(character_name, profile=profile),
+            **_piece_state_payload(profile)}
+
+
+def _piece_state_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """``{piece_state, closable}`` of the outfit-options payload (see the GET)."""
+    from app.core.outfit_options import OPTIONS_KEY, PIECE_STATE_KEY, clean_piece_state_map, closable_worn
+    options = profile.get(OPTIONS_KEY) if isinstance(profile.get(OPTIONS_KEY), dict) else {}
+    return {"piece_state": clean_piece_state_map(options.get(PIECE_STATE_KEY)), "closable": closable_worn(profile)}
+
+
+@router.post("/{character_name}/outfit-options/piece-state")
+def set_character_piece_state(character_name: str, body: PieceStateRequest) -> Dict[str, Any]:
+    """Wear a closable piece open or closed: ``{item_id, state: "open" | "closed"}`` → 200 ``{piece_state,
+    applicable}`` (the GET's shape, ``closable`` included); 400 with the reason for a bad state, an item that is not
+    closable or not worn now. A worn-state change like an equip (plan 2026-11-12-unified-worn-pieces D-A5): history,
+    SSE and the automatic Build through ``inventory._notify_outfit_changed``. Same rights as an equip."""
+    from app.core.outfit_options import hem_applicable, set_piece_state
+    from app.models import inventory
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    item_id = str(body.item_id or "").strip()
+    try:
+        saved = set_piece_state(character_name, item_id, body.state)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    inventory._notify_outfit_changed(character_name, "piece_state", action=str(body.state), item_ids=[item_id])
+    profile = get_character_profile(character_name) or {}
+    return {"applicable": hem_applicable(character_name, profile=profile), **_piece_state_payload(profile)}
 
 
 @router.post("/{character_name}/outfit-options")

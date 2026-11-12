@@ -78,6 +78,9 @@ B) THE CHARACTER FILTER (SEC-6) — the pure helpers
      /characters/Mara/profile      chars=['Mara'], allowed -> 200
      /characters/list              not character-scoped -> 200
      /inventory/items              shared item catalog, not character data -> 200
+     POST /characters/Kira/outfit-options/piece-state  (Task 11a: wearing a piece
+       open / closed is a worn-state write like an equip) sensitive=True -> 403
+     POST /characters/Mara/outfit-options/piece-state  allowed -> 200
 
 C) THE LOGIN THROTTLE (SEC-5b) — ``auth.login_retry_after``, pure. With
    LOGIN_FAIL_LIMIT=5 and LOGIN_FAIL_WINDOW_SECONDS=900, and `now` given
@@ -554,6 +557,12 @@ check("user GET /secrets/Mara", status("GET", "/secrets/Mara", "user"), 200)
 check("user GET /inventory/items", status("GET", "/inventory/items", "user"), 200)
 check("admin GET /characters/Kira/export",
       status("GET", "/characters/Kira/export", "admin"), 200)
+check("sensitive /characters/Kira/outfit-options/piece-state",
+      sens("/characters/Kira/outfit-options/piece-state"), True)
+check("user POST /characters/Kira/outfit-options/piece-state",
+      status("POST", "/characters/Kira/outfit-options/piece-state", "user"), 403)
+check("user POST /characters/Mara/outfit-options/piece-state",
+      status("POST", "/characters/Mara/outfit-options/piece-state", "user"), 200)
 
 print()
 print("C) login throttle (SEC-5b)")

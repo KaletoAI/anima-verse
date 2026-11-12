@@ -13,6 +13,11 @@ Key design decisions:
   VALID_PIECE_SLOTS order).
 - Cover logic: `covers` swallows slots entirely, `partially_covers` phrases
   "X underneath Y".
+- Open / closed (plan 2026-11-12-unified-worn-pieces Addendum A, D-A1 / D-A4):
+  a closable piece worn open says so (`piece_text`, ``OPEN_WORDS``) and covers
+  nothing — its `covers` count as `partially_covers`, so the piece under it
+  shows in the opening. A closed closable piece says ``CLOSED_WORDS`` only in
+  2D / chat text (`mesh_input=False`): every mesh input stays byte-identical.
 """
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -141,11 +146,34 @@ def free_text_outfit(profile: Optional[Dict[str, Any]]) -> str:
     return "wearing: " + described if described else ""
 
 
-def collect_covered_slots(equipped_pieces: Dict[str, str]) -> Set[str]:
-    """All slots another piece hides entirely via `covers`."""
+def _is_open(iid: str, piece_state: Optional[Dict[str, str]]) -> bool:
+    from app.core.outfit_options import OPEN
+    return bool(piece_state) and piece_state.get(iid) == OPEN
+
+
+def piece_text(item: Dict[str, Any], state: str, *, mesh_input: bool) -> str:
+    """The text of one worn piece in ``state`` (``open`` / ``closed``): its ``prompt_fragment``, plus
+    ``", worn open"`` when open, plus ``", worn closed"`` when closed, closable and not a mesh input (D-A1: a closed
+    piece changes no mesh input). A piece that is not closable is its fragment in every case; an empty fragment
+    stays empty."""
+    from app.core.garment_set import closable_of
+    from app.core.outfit_options import CLOSED_WORDS, OPEN, OPEN_WORDS
+    frag = ((item or {}).get("prompt_fragment") or "").strip()
+    if not frag or not closable_of(item):
+        return frag
+    if state == OPEN:
+        return f"{frag}, {OPEN_WORDS}"
+    return frag if mesh_input else f"{frag}, {CLOSED_WORDS}"
+
+
+def collect_covered_slots(equipped_pieces: Dict[str, str],
+                          piece_state: Optional[Dict[str, str]] = None) -> Set[str]:
+    """All slots another piece hides entirely via `covers`. A piece worn open
+    (``piece_state``, None = all closed) hides nothing — its `covers` count as
+    `partially_covers` (D-A4)."""
     covered: Set[str] = set()
     for slot, iid in (equipped_pieces or {}).items():
-        if not iid:
+        if not iid or _is_open(iid, piece_state):
             continue
         item = _get_item(iid)
         if not item:
@@ -158,7 +186,8 @@ def collect_covered_slots(equipped_pieces: Dict[str, str]) -> Set[str]:
     return covered
 
 
-def visible_equipped_pieces(equipped_pieces: Dict[str, str]) -> Dict[str, str]:
+def visible_equipped_pieces(equipped_pieces: Dict[str, str],
+                            piece_state: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """The VISUALLY EFFECTIVE subset of an equipped-piece set.
 
     Slots fully hidden via ``covers`` are dropped — a piece nobody can see
@@ -168,9 +197,10 @@ def visible_equipped_pieces(equipped_pieces: Dict[str, str]) -> Dict[str, str]:
 
     This is the normalisation the render cache keys on
     (``_equipped_signature``): boxers under trousers and no boxers at all
-    are ONE cache entry, one T-pose render, one mesh.
+    are ONE cache entry, one T-pose render, one mesh. A piece worn open
+    (``piece_state``, None = all closed) hides nothing.
     """
-    covered = collect_covered_slots(equipped_pieces)
+    covered = collect_covered_slots(equipped_pieces, piece_state)
     return {slot: iid for slot, iid in (equipped_pieces or {}).items()
             if iid and slot not in covered}
 
@@ -178,8 +208,14 @@ def visible_equipped_pieces(equipped_pieces: Dict[str, str]) -> Dict[str, str]:
 def _resolve_partial_covers(
     equipped_pieces: Dict[str, str],
     slot_order: List[str],
+    piece_state: Optional[Dict[str, str]] = None,
+    *,
+    mesh_input: bool = False,
 ) -> Tuple[Dict[str, Tuple[str, str]], Set[str]]:
     """Returns (partially_covered_map, suppressed_slots).
+
+    A piece worn open (``piece_state``) partially covers its `covers` too
+    (D-A4); the covering fragment is the piece's ``piece_text``.
 
     - partially_covered_map: {target_slot → (covering_fragment, covering_slot)}
       means "covering_slot partially covers target_slot, its fragment reads ..."
@@ -197,8 +233,12 @@ def _resolve_partial_covers(
         if not item:
             continue
         op = item.get("outfit_piece") or {}
-        cov_frag = (item.get("prompt_fragment") or "").strip()
-        for c in (op.get("partially_covers") or []):
+        is_open = _is_open(iid, piece_state)
+        cov_frag = piece_text(item, "open" if is_open else "closed", mesh_input=mesh_input)
+        targets = list(op.get("partially_covers") or [])
+        if is_open:
+            targets += list(op.get("covers") or [])
+        for c in targets:
             cs = str(c).strip().lower()
             if cs and cov_frag:
                 partial[cs] = (cov_frag, slot)
@@ -243,6 +283,7 @@ def render_outfit(
     back_view: bool = False,
     mesh_input: bool = False,
     portrait_only: bool = False,
+    piece_state: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
     """Builds the outfit description — pieces + items + fallback for empty slots.
 
@@ -259,6 +300,9 @@ def render_outfit(
             None → from the profile.
         back_view: a render seen from behind — only LoRAs of body slots
             that declare `back: true` (see app/core/body_slots.py).
+        piece_state: the open pieces ``{item_id: "open"}`` to render; None →
+            the profile's (``outfit_options.piece_states`` over the rendered
+            pieces). Every fragment goes through ``piece_text``.
 
     Returns:
         {
@@ -294,8 +338,12 @@ def render_outfit(
     if is_free_text_wardrobe(profile):
         pieces, items = {}, []
 
-    covered = collect_covered_slots(pieces)
-    partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS))
+    if piece_state is None:
+        from app.core.outfit_options import piece_states
+        piece_state = piece_states(profile, pieces)
+    covered = collect_covered_slots(pieces, piece_state)
+    partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS), piece_state,
+                                                  mesh_input=mesh_input)
 
     # 1) Piece fragments
     shown_slots = None
@@ -308,7 +356,7 @@ def render_outfit(
     ):
         if shown_slots is not None and slot not in shown_slots:
             continue
-        frag = (item.get("prompt_fragment") or "").strip()
+        frag = piece_text(item, "open" if _is_open(iid, piece_state) else "closed", mesh_input=mesh_input)
         if not frag:
             continue
         if slot in partial:
