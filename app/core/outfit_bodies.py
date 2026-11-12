@@ -61,7 +61,9 @@ key is reused on the CPU) and ``repaint`` (Regenerate a painted body —
 on it, then that outfit's model built forced, the body painted again). In
 both modes a body is ``current`` only when the worn outfit stands on it;
 an outfit body stays stored while a live outfit would stand on its shape key
-or a live outfit model names it (artefact GC).
+or a live outfit model names it (artefact GC), and — switching stays free,
+Ruling 5a — no automatic collect deletes it while the outfit it was built for
+is live ("stored, not needed now", ``figure.stored_unneeded``).
 """
 from __future__ import annotations
 

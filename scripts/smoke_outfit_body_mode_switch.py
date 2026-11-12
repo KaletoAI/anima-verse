@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Outfit body mode switch — the worn outfit's body is always listed and marked current in BOTH modes, a mode
-switch spends nothing (Build current outfit builds the model of the new mode), and the
+switch spends nothing (Build current outfit builds the model of the new mode), bodies survive the switch, and the
 3D tab says when it serves a stand-in (app/core/outfit_bodies.py ``worn_texture`` / ``textures`` / ``paint_worn`` /
 ``body_info``'s ``current``, app/core/model3d_pipeline.py ``build_current_outfit`` / ``fallback_state``,
 app/core/artefact_graph.py body rule).
@@ -11,11 +11,11 @@ a worn piece is in mode ``in_body``; the profile field ``outfit_body_mode`` and 
 the mesh mode meshed into the outfit body), "switch to retexture" = both set to ``painted``; a mode change is never
 an automatic trigger (plan Global Constraints), so every build below is an explicit POST build-current.
 
-Since Task 5 of that plan the artefact GC predicts each live outfit under its pieces' CURRENT modes only (the
-mode loop of ``predicted_texture_signatures`` is gone, ``figure.predicted_keys``): an outfit body is kept while a
-live outfit's in-body set has its shape key or a live outfit model names it. So a body whose pieces were all
-switched to painted, and whose outfit model was rebuilt painted, is an orphan and goes with the next walk;
-switching back meshes it again (ONE hub job, the same shape key). [2]-[4] below say so.
+Since Task 5 of that plan the artefact GC predicts each live outfit under its pieces' CURRENT modes only
+(``figure.predicted_keys``): a body whose pieces were all switched to painted, and whose outfit model was rebuilt
+painted, is unreachable — but Ruling 5a keeps switching free: an outfit body of the current base built for a live
+outfit is ``STORED_NOT_NEEDED``, and an AUTOMATIC walk (``artefact_graph.collect_quietly``) never deletes it
+(protected "stored", listed by ``figure.stored_unneeded``); only an explicit collect would ([3]'s dry run).
 
 Usage:
     ./.venv/bin/python scripts/smoke_outfit_body_mode_switch.py
@@ -59,14 +59,16 @@ Expected, by hand:
     stale for the mode ("body_mode"). POST build-current -> {status "generating"}: ONE build (trigger_generation
     once), its views are current: 0 image jobs; prepare_outfit_body meshes B1: ONE hub job; O1's model now stands
     on B1. mesh -> retexture: the switch 0 builds; build-current: ONE build, 0 image jobs, 0 hub jobs, 0 worker runs
-    — the painted body of T1 is reused. A GC walk (artefact_graph.collect_quietly) REMOVES B1: no live outfit has
-    a piece in the body any more and O1's model now names T1, not B1.
-[3] retexture -> mesh -> retexture again, a build-current after each switch: ONE build each; in total ONE hub job
-    (B1 was collected in [2], so mesh mode meshes it again — under the same shape key), 0 worker runs (T1 reused),
-    0 image jobs. After the walk B1 is gone again (same reason as [2]), T1's painted body stays (O1 paints T1 now).
-    build-current once more -> {status "current"}, no build.
-[4] other outfits' bodies are never current. mesh mode (build-current: ONE build, ONE hub job — B1 was collected
-    in [3] — 0 image jobs), a body B2 with O2's model on it AND O1's model
+    — the painted body of T1 is reused. B1 still stored after an automatic GC walk (artefact_graph.collect_quietly):
+    no live outfit has a piece in the body and O1's model names T1, but B1 was built for O1, which is live ->
+    STORED_NOT_NEEDED, protected "stored"; figure.stored_unneeded(Demo) lists exactly B1 (kind "shape",
+    built_for O1, bytes = its file sizes, last_used an ISO stamp).
+[3] retexture -> mesh -> retexture again, a build-current after each switch: ONE build each; in total 0 hub jobs
+    (B1 is current: cached), 0 worker runs (T1 reused), 0 image jobs. B1 and T1's painted body still stored after
+    an automatic walk (Ruling 5a). An EXPLICIT collect would delete B1: dry run (explicit=True) lists B1 as an
+    orphan with reason STORED_NOT_NEEDED, not protected. build-current once more -> {status "current"}, no build.
+[4] other outfits' bodies are never current. mesh mode (build-current: ONE build, 0 jobs — B1 is stored), a body
+    B2 with O2's model on it AND O1's model
     rewritten to name B2 (an outdated model of the worn outfit on another body): bodies: B1 current True
     (listed first, the worn outfit's views stand for it), B2 current False although O1 (worn) is listed on it.
     retexture: T1 current, T2 not.
@@ -411,25 +413,33 @@ def main() -> int:
         check("[2] build-current", build_current(), (200, {"status": "generating"}))
         check("[2] retexture: one build, 0 jobs (painted body reused)", counts(),
               {"images": 0, "hub": 0, "workers": 0, "builds": 1})
-        artefact_graph.collect_quietly(char, "smoke")
-        check("[2] B1 collected by the walk (no live in-body outfit, no model names it)",
-              base_body.outfit_body_path(char, B1).is_file(), False)
+        report = artefact_graph.collect_quietly(char, "smoke")
+        check("[2] B1 kept by the automatic walk (stored, not needed now)",
+              (base_body.outfit_body_path(char, B1).is_file(),
+               sorted({s["why"] for s in (report or {}).get("skipped", []) if s["key"] == B1})),
+              (True, [artefact_graph.STORED]))
+        unneeded = figure.stored_unneeded(char)
+        check("[2] stored_unneeded lists B1",
+              [(e["key"], e["kind"], e["built_for"], e["bytes"] > 0, bool(e["last_used"])) for e in unneeded],
+              [(B1, "shape", O1, True, True)])
 
         # --- [3] ---------------------------------------------------------------------------------------------
         print("[3] back and forth: no hub job for bodies that exist")
         reset()
         set_mode("mesh")
         check("[3] mesh again: build-current", build_current(), (200, {"status": "generating"}))
-        check("[3] mesh again: one build, one hub job (B1 meshed again)", counts(),
-              {"images": 0, "hub": 1, "workers": 0, "builds": 1})
-        check("[3] the same shape key", hub_jobs, [B1])
+        check("[3] mesh again: one build, 0 hub jobs", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 1})
         set_mode("retexture")
         check("[3] retexture again: build-current", build_current(), (200, {"status": "generating"}))
-        check("[3] retexture again: 2 builds in total, no further job", counts(),
-              {"images": 0, "hub": 1, "workers": 0, "builds": 2})
+        check("[3] retexture again: 2 builds in total, 0 jobs", counts(),
+              {"images": 0, "hub": 0, "workers": 0, "builds": 2})
         artefact_graph.collect_quietly(char, "smoke")
-        check("[3] B1 collected, painted T1 stored", (base_body.outfit_body_path(char, B1).is_file(),
-                                                      base_body.texture_body_path(char, T1).is_file()), (False, True))
+        check("[3] B1 + painted T1 stored", (base_body.outfit_body_path(char, B1).is_file(),
+                                             base_body.texture_body_path(char, T1).is_file()), (True, True))
+        dry = artefact_graph.collect(char, dry_run=True, explicit=True, reason="smoke")
+        check("[3] an explicit collect would delete B1",
+              sorted({(e["reason"], e["protected"]) for e in dry["orphans"] if e["key"] == B1}),
+              [(artefact_graph.STORED_NOT_NEEDED, "")])
         reset()
         check("[3] built: current", build_current(), (200, {"status": "current"}))
         check("[3] no further build", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 0})
@@ -439,7 +449,7 @@ def main() -> int:
         set_mode("mesh")
         reset()
         check("[4] mesh: build-current", build_current(), (200, {"status": "generating"}))
-        check("[4] mesh: one build, B1 meshed again", counts(), {"images": 0, "hub": 1, "workers": 0, "builds": 1})
+        check("[4] mesh: one build on the stored B1", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 1})
         rec = {"body_id": B2, "shape_key": B2, "version": figure.SHAPE_VERSION, "shape_inputs": B2_INPUTS,
                "base_signature": bsig, "built_for": O2, "views": {}, "used_views": ["front"]}
         base_body.outfit_body_path(char, B2).write_bytes(b"BODY-B2")

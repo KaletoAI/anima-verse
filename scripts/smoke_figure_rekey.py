@@ -57,7 +57,10 @@ EXPECTED, BY HAND
     record) -> None.
 [5] artefact_graph.analyse(Kai): K reachable "shape of a live outfit" (O1 predicts K); its body fit goes with
     its garment only — "garment fingerprint gone" (the fixture's "hat" is held by no one), never "body gone";
-    OLD2 unreachable "no live outfit on it"; OLD3 reachable "named by a live outfit model" (O3's model); OLD4
+    OLD2 unreachable "stored, not needed now" (Ruling 5a: current base, built for O2 — whose front refs and the
+    held shirt keep it live — but nothing predicts or names it; an automatic analysis protects it "stored",
+    figure.stored_unneeded lists it with built_for O2 — a body the re-key left stale stays until an explicit
+    cleanup); OLD3 reachable "named by a live outfit model" (O3's model); OLD4
     unreachable "older base". analyse(Kira): texture TK reachable CURRENT_TEXTURE; predicted_keys(Kira, K1) =
     (bsigK, TK).
 [6] All or nothing: a body OLD5 = ob0000eeee (refs, model, fit, an outfit model aaaabbbbcccc naming it) re-keyed to
@@ -367,7 +370,12 @@ def main() -> int:
         check("[5] K", verdicts.get(K), (True, ag.SHAPE_OF_LIVE_OUTFIT))
         check("[5] K's fit judged by its garment, not its body",
               verdicts.get(f"bodyfit:{K}:hat_abcdefabcdef"), (False, "garment fingerprint gone"))
-        check("[5] OLD2", verdicts.get(OLD2), (False, "no live outfit on it"))
+        check("[5] OLD2", verdicts.get(OLD2), (False, ag.STORED_NOT_NEEDED))
+        auto = {n.protected for n in ag.analyse("Kai", automatic=True).nodes if n.key == OLD2}
+        check("[5] OLD2 protected in an automatic collect", sorted(auto), [ag.STORED])
+        check("[5] stored_unneeded names OLD2",
+              [(e["key"], e["built_for"]) for e in figure.stored_unneeded("Kai") if e["key"] == OLD2],
+              [(OLD2, sig2)])
         check("[5] OLD3", verdicts.get(OLD3), (True, "named by a live outfit model"))
         check("[5] OLD4", verdicts.get(OLD4), (False, "older base"))
         check("[5] Kira's keys", figure.predicted_keys("Kira", O2, [], bsig=bsigK), (bsigK, TK))

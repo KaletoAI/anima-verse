@@ -38,7 +38,7 @@ under the old texture-keyed ids are re-keyed once at boot
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 #: Bumped when a shape is meshed differently for the same inputs.
 SHAPE_VERSION = 2
@@ -254,3 +254,46 @@ def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) ->
             or record.get("version") != SHAPE_VERSION or record.get("views") != view_shas):
         return None
     return meta
+
+
+def stored_unneeded(character_name: str) -> List[Dict[str, Any]]:
+    """What is stored but not needed now (Ruling 5a; the Figure tab lists
+    it, only an explicit Delete removes it): every outfit body the artefact
+    GC calls ``STORED_NOT_NEEDED`` (of the current base, built for a live
+    outfit, no live outfit predicts or names it — old-id bodies the boot
+    re-key left stale included) and every painted body it calls
+    ``OUTDATED_TEXTURE``. Per entry ``{key, kind ("shape" | "texture"),
+    bytes (with the fits on a body), built_for, outfits, last_used}``:
+    ``built_for`` = the record's outfit (a texture: the first live outfit
+    built on it), ``last_used`` = the record's ``last_used`` if recorded,
+    else the newest file mtime (UTC ISO). Read-only, newest first."""
+    from datetime import datetime, timezone
+    from app.core import artefact_graph
+    analysis = artefact_graph.analyse(character_name, explicit=True, automatic=True)
+    groups: Dict[Tuple[str, str], List[Any]] = {}   # (kind, key) -> the nodes freed with it
+    for node in analysis.nodes:
+        if node.kind == "body" and node.reason == artefact_graph.STORED_NOT_NEEDED:
+            groups.setdefault(("shape", node.key), []).insert(0, node)
+        elif node.kind == "texture" and node.reason == artefact_graph.OUTDATED_TEXTURE:
+            groups.setdefault(("texture", str(node.parents.get("texture_signature") or node.key)), []).append(node)
+        elif node.kind == "body_fit" and node.protected == artefact_graph.STORED:
+            groups.setdefault(("shape", str(node.parents.get("body_id") or "")), []).append(node)
+    root = artefact_graph._char_dir(character_name)
+    out: List[Dict[str, Any]] = []
+    for (kind, key), group in groups.items():
+        head = group[0]
+        if kind == "shape" and head.kind != "body":
+            continue  # fits of a body that is not listed
+        if kind == "shape":
+            record = artefact_graph._body_record(root, key)
+            outfits = [str(head.parents.get("built_for") or "")]
+        else:
+            record, outfits = {}, list(head.parents.get("built_on") or [])
+        mtime = max(n.newest_mtime() for n in group)
+        last = record.get("last_used") if isinstance(record.get("last_used"), str) else ""
+        out.append({"key": key, "kind": kind, "bytes": sum(n.size() for n in group),
+                    "built_for": outfits[0] if outfits else "", "outfits": outfits,
+                    "last_used": last or datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds"),
+                    "_mtime": mtime})
+    out.sort(key=lambda e: e["_mtime"], reverse=True)
+    return [{k: v for k, v in e.items() if k != "_mtime"} for e in out]

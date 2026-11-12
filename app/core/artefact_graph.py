@@ -105,7 +105,17 @@ RULINGS.
   an older fingerprint follow R11 (served until the new fit is accepted).
 * MODE: a piece's mode is part of the predicted keys. A mode change makes
   the shape (and texture) the outfit stood on unreachable once no live
-  outfit model names it any more — it is rebuilt by the next Build.
+  outfit model names it any more — but switching back and forth stays FREE
+  (Ruling 5a, plan 2026-11-12-unified-worn-pieces; ruling 2026-11-10 and the
+  spec's "Reuse, not rebuild"): an outfit body of the current base whose
+  outfit (``built_for``) is still live is ``STORED_NOT_NEEDED``, and a
+  painted body only a live outfit names is ``OUTDATED_TEXTURE``. An
+  AUTOMATIC collect (``collect_quietly``: the hooks and the daily sweep,
+  ``automatic=True``) never deletes those, nor the fits on such a body
+  (protected ``"stored"``); only a collect a person asked for does (the
+  improvements cleanup, the admin route, the Figure tab's Delete). Bodies
+  the boot re-key left stale under their old ids follow the same rule.
+  ``figure.stored_unneeded`` lists them.
 
 SAFETY. Never deleted: what is running — a live model stage of the
 signature, an open hub operation on it (``hub_ops`` subject
@@ -116,7 +126,8 @@ a run or a queued run, the fits of a body being fitted
 (``keyed_lock("garment_body_fit", …)``) —, the worn combination (the model
 served for it; a "nearest" stand-in served for an outfit without a model is
 judged like any outfit — gone, the serving chain picks the next nearest), and
-(sweep only) any node with a file younger than ``GRACE_S``. Every judgement that cannot
+(sweep only) any node with a file younger than ``GRACE_S``, and (automatic
+collects only) what is stored but not needed now (MODE above). Every judgement that cannot
 be computed (an exception in the inventory, the base, the garment roots, a
 reachable set over ``REACHABLE_BUDGET_S``) keeps everything it would have
 judged. An outfit entry WITHOUT a manifest is the only one that needs the
@@ -499,6 +510,13 @@ def _check_deadline(deadline: Optional[float], character_name: str) -> None:
 
 #: Body reason (``_judge`` step 3): a live outfit predicts this shape key now.
 SHAPE_OF_LIVE_OUTFIT = "shape of a live outfit"
+#: Body reason (step 3, unreachable): of the current base, built for an
+#: outfit that is still live, but no live outfit predicts or names it now
+#: (e.g. its pieces were switched to painted). Kept by automatic collects.
+STORED_NOT_NEEDED = "stored, not needed now"
+#: ``Node.protected`` of such a body, its fits and an outdated painted body
+#: in an automatic collect (Ruling 5a).
+STORED = "stored"
 #: Texture reasons (``_judge`` step 4) — the Outfit body tab shows them.
 CURRENT_TEXTURE = "current texture of a live outfit"
 OUTDATED_TEXTURE = "outdated: a live outfit was built on it, none would paint it now"
@@ -657,6 +675,8 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
                 verdict = (True, "named by a live outfit model")
             elif isinstance(built_for, str) and built_for and neutral_signature(built_for) in unsure:
                 verdict = (True, "shape of its outfit not computable")
+            elif isinstance(built_for, str) and built_for and neutral_signature(built_for) in live:
+                verdict = (False, STORED_NOT_NEEDED)
             else:
                 verdict = (False, "no live outfit on it")
             body_verdicts[node.key] = (*verdict, parents)
@@ -671,17 +691,19 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
         built_on = sorted(named_tsigs.get(tsig, set()) - current_tsigs.get(tsig, set()))
         if built_on:
             node.parents["built_on"] = built_on
-        if tsig not in live_tsigs:
-            node.reachable, node.reason = False, (OUTDATED_TEXTURE if built_on else "no live outfit names it")
-            continue
-        node.parents["outfits"] = sorted(current_tsigs[tsig])
         bases = {(_json(p).get("base_signature")) for p in node.files if p.suffix.lower() == ".json"}
         bases.discard(None)
         bases.discard("")
         if roots.base is not None and any(b != roots.base for b in bases):
+            # Judged first: an older base's painted body goes even from an automatic collect (Ruling 5a
+            # keeps only what is merely not predicted now).
             node.reachable, node.reason = False, "older base"
-        else:
-            node.reachable, node.reason = True, CURRENT_TEXTURE
+            continue
+        if tsig not in live_tsigs:
+            node.reachable, node.reason = False, (OUTDATED_TEXTURE if built_on else "no live outfit names it")
+            continue
+        node.parents["outfits"] = sorted(current_tsigs[tsig])
+        node.reachable, node.reason = True, CURRENT_TEXTURE
     # 5. Garments, their fits per body, HairDeck jobs.
     garment_ok: Dict[str, bool] = {}
     for node in nodes:
@@ -767,10 +789,13 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
             node.reachable, node.reason = True, "profile picture"
 
 
-def _protect(nodes: List[Node], roots: Roots, *, explicit: bool) -> None:
-    """Mark unreachable nodes that must not go now (``protected``)."""
+def _protect(nodes: List[Node], roots: Roots, *, explicit: bool, automatic: bool = False) -> None:
+    """Mark unreachable nodes that must not go now (``protected``).
+    ``automatic`` (hooks, sweep): what is stored but not needed now stays
+    (``STORED``, module docstring MODE)."""
     from app.core.timeutils import utc_now
     now = utc_now().timestamp()
+    stored_bodies = {n.key for n in nodes if n.kind == "body" and n.reason == STORED_NOT_NEEDED}
     for node in nodes:
         if node.reachable:
             continue
@@ -782,20 +807,25 @@ def _protect(nodes: List[Node], roots: Roots, *, explicit: bool) -> None:
             node.protected = "running"
         elif item and item in roots.running_items:
             node.protected = "running"
+        elif automatic and (node.reason in (STORED_NOT_NEEDED, OUTDATED_TEXTURE)
+                            or (node.kind == "body_fit" and node.reason == "body gone"
+                                and node.parents.get("body_id") in stored_bodies)):
+            node.protected = STORED
         elif not explicit and node.kind != "temp" and now - node.newest_mtime() < GRACE_S:
             node.protected = "grace"
 
 
 def analyse(character_name: str, *, roots: Optional[Roots] = None, explicit: bool = True,
-            deadline: Optional[float] = None) -> Analysis:
+            deadline: Optional[float] = None, automatic: bool = False) -> Analysis:
     """The judged graph of a character (read-only). ``deadline``
-    (``time.monotonic()``): raises ``GcOverBudget`` once it passes."""
+    (``time.monotonic()``): raises ``GcOverBudget`` once it passes.
+    ``automatic``: ``_protect``'s stored rule."""
     nodes, unknown = scan(character_name)
     _check_deadline(deadline, character_name)
     roots = roots if roots is not None else compute_roots(character_name)
     _check_deadline(deadline, character_name)
     _judge(character_name, nodes, roots, deadline)
-    _protect(nodes, roots, explicit=explicit)
+    _protect(nodes, roots, explicit=explicit, automatic=automatic)
     return Analysis(character_name, roots, nodes, unknown)
 
 
@@ -938,11 +968,14 @@ def _entry(node: Node) -> Dict[str, Any]:
 
 def collect(character_name: str, *, dry_run: bool = False, explicit: bool = False,
             keys: Optional[Iterable[str]] = None, reason: str = "",
-            roots: Optional[Roots] = None, budget_s: Optional[float] = None) -> Dict[str, Any]:
+            roots: Optional[Roots] = None, budget_s: Optional[float] = None,
+            automatic: bool = False) -> Dict[str, Any]:
     """Delete every unreachable node of the character (``keys``: only those
     and the body fits hanging from them) — or, with ``dry_run``, only list
     them. ``explicit`` (a delete path, a click) skips the grace window; what
-    is running is never deleted. Returns ``{character, reason, dry_run,
+    is running is never deleted. ``automatic`` (``collect_quietly``: hooks,
+    sweep) keeps what is stored but not needed now (module docstring MODE,
+    Ruling 5a) — only a collect a person asked for deletes it. Returns ``{character, reason, dry_run,
     explicit, orphans: [...], deleted_files, freed_bytes, skipped: [...],
     unknown: [...], totals: {category: {total, reachable, orphans, bytes}},
     seconds, aborted}``. ``budget_s``: a judgement that runs past it is
@@ -958,7 +991,7 @@ def collect(character_name: str, *, dry_run: bool = False, explicit: bool = Fals
     started = time.monotonic()
     try:
         analysis = analyse(character_name, roots=roots, explicit=explicit,
-                           deadline=started + budget_s if budget_s is not None else None)
+                           deadline=started + budget_s if budget_s is not None else None, automatic=automatic)
     except GcOverBudget as exc:
         report["aborted"] = str(exc)
         report["seconds"] = round(time.monotonic() - started, 2)
@@ -1110,10 +1143,11 @@ class TextureNeeded(LookupError):
 
 def collect_quietly(character_name: str, reason: str, *, explicit: bool = True) -> Optional[Dict[str, Any]]:
     """``collect`` for a delete path and the daily sweep: never raises (a
-    failed sweep must not fail the delete that asked for it) and gives up
-    after ``HOOK_BUDGET_S`` without deleting anything."""
+    failed sweep must not fail the delete that asked for it), gives up
+    after ``HOOK_BUDGET_S`` without deleting anything, and is AUTOMATIC:
+    what is stored but not needed now stays (``STORED``, Ruling 5a)."""
     try:
-        return collect(character_name, explicit=explicit, reason=reason, budget_s=HOOK_BUDGET_S)
+        return collect(character_name, explicit=explicit, reason=reason, budget_s=HOOK_BUDGET_S, automatic=True)
     except Exception:
         logger.exception("Artefact GC %s after %s failed", character_name, reason)
         return None

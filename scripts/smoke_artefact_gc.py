@@ -59,13 +59,15 @@ Expected, by hand from the spec + plan rulings (module docstring of artefact_gra
     base), T1 T2 (sidecars name the old base), B1 B2 Bd1 Bd2 Bh1 Bh2 (record names the old base — ruling
     "immediately"). Kept: O1..O3 (producible; rebuilt later), Gd Gh (R11: newest accepted fit at all), HD (the
     hsig changed with the picture, but the kept hair fit names it), NEWBASE refs, FACE UNK LIVE YOUNG.
-[4] mode switch (top and skirt painted) + collect: 0 deletions — no live outfit has a piece in the body any more,
-    but the models O1m O3m (B1) and O2m (B2) still NAME their bodies; T1 T2 live by the fronts (current under both
-    modes' own-mesh rule). O1m + O3m rebuilt in retexture (sidecar without body_id) -> collect: B1 Bd1 Bh1 go (no
-    live in-body set has B1's key, no live model names it — the old "a body hangs on its texture in BOTH modes"
-    rule went with the mode loop of predicted_texture_signatures, plan Task 5 Step 3; switching back meshes B1
-    again under the same key); T1 stays. O2m rebuilt -> B2 Bd2 Bh2 go the same way. Mode back to mesh + collect
-    -> 0 deletions (nothing of them is left to go; T1 T2 stay by the fronts).
+[4] mode switch (top and skirt painted) + AUTOMATIC collect (collect_quietly): 0 deletions — no live outfit has a
+    piece in the body any more, but the models O1m O3m (B1) and O2m (B2) still NAME their bodies; T1 T2 live by
+    the fronts (current under both modes' own-mesh rule). O1m + O3m rebuilt in retexture (sidecar without body_id)
+    -> collect_quietly: 0 deletions — B1 is unreachable now (no live in-body set has its key, no live model names
+    it) but built for O1, which is live: STORED_NOT_NEEDED, and Ruling 5a (switching back and forth stays free)
+    protects it and its fits Bd1 Bh1 ("stored") in every automatic collect. O2m rebuilt -> B2 Bd2 Bh2 kept the same
+    way; figure.stored_unneeded lists exactly B1 and B2 (kind "shape", built_for O1 / O2). Mode back to mesh +
+    collect_quietly -> 0 deletions (B1 B2 are live shapes again). Mode to retexture once more + an EXPLICIT collect
+    (a person asked: admin route / improvements cleanup) -> exactly B1 Bd1 Bh1 B2 Bd2 Bh2 go.
 [5] character delete: delete_character -> the directory is gone; collect afterwards mints nothing.
 [6] running: B2 made unreachable (retexture: no in-body set has its key; O2m rebuilt: no model names it) but a
     live stage
@@ -411,18 +413,27 @@ def main() -> int:
         fx = make("Demo4", "4")
         check("[4] fixture in mesh mode", base_body.outfit_body_mode("Demo4"), "mesh")
         check("[4] switch to retexture", set_mode(fx, "retexture"), "retexture")
-        check("[4] after switch: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
+        check("[4] after switch: 0 deletions", ag.collect_quietly("Demo4", "smoke")["deleted_files"], 0)
         same("[4] after switch", "Demo4", fx, ALL)
         rebuild_retexture(fx, "O1")
         rebuild_retexture(fx, "O3")
-        ag.collect("Demo4", explicit=True)
-        same("[4] O1+O3 rebuilt: B1 + its fits go", "Demo4", fx, without("B1", "Bd1", "Bh1"))
+        rep4 = ag.collect_quietly("Demo4", "smoke")
+        check("[4] O1+O3 rebuilt: 0 deletions, B1 stored", (rep4["deleted_files"], sorted(
+            {s["why"] for s in rep4["skipped"] if fx["B1"] in s["key"]})), (0, [ag.STORED]))
+        same("[4] O1+O3 rebuilt", "Demo4", fx, ALL)
         rebuild_retexture(fx, "O2")
-        ag.collect("Demo4", explicit=True)
-        same("[4] O2 rebuilt: B2 + its fits go", "Demo4", fx, without("B1", "Bd1", "Bh1", "B2", "Bd2", "Bh2"))
+        check("[4] O2 rebuilt: 0 deletions", ag.collect_quietly("Demo4", "smoke")["deleted_files"], 0)
+        same("[4] O2 rebuilt", "Demo4", fx, ALL)
+        from app.core import figure
+        check("[4] stored_unneeded", sorted((e["key"], e["kind"], e["built_for"]) for e in figure.stored_unneeded("Demo4")),
+              sorted([(fx["B1"], "shape", fx["sigs"]["O1"]), (fx["B2"], "shape", fx["sigs"]["O2"])]))
         check("[4] back to mesh", set_mode(fx, "mesh"), "mesh")
-        check("[4] back to mesh: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
-        same("[4] back to mesh", "Demo4", fx, without("B1", "Bd1", "Bh1", "B2", "Bd2", "Bh2"))
+        check("[4] back to mesh: 0 deletions", ag.collect_quietly("Demo4", "smoke")["deleted_files"], 0)
+        same("[4] back to mesh", "Demo4", fx, ALL)
+        check("[4] retexture again", set_mode(fx, "retexture"), "retexture")
+        ag.collect("Demo4", explicit=True, reason="smoke")
+        same("[4] explicit collect deletes the stored bodies", "Demo4", fx,
+             without("B1", "Bd1", "Bh1", "B2", "Bd2", "Bh2"))
 
         # --- [5] character delete ------------------------------------------------------------------------
         print("[5] character delete")
