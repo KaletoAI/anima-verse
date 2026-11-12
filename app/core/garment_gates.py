@@ -84,7 +84,7 @@ def _iterations(base: int, height: int) -> int:
 # masks as ``garment_images._mask``; base figure y0 30 / 27, Hb 1452 / 1427):
 #
 # worn                    front     back      limit
-#   garment_share         0.701     0.7102    >= 0.01   (something was put on)
+#   garment_share         0.701     0.7102    >= 0.002  (something was put on; 0.01 before worn gate v3)
 #   outside_dRGB          5.26      4.30      (recorded, no refusal since gate version 2)
 #   outside_xor           0.0074    0.0048    < 0.015
 #   head_garment          0.0       0.0       <= 0.05
@@ -151,14 +151,23 @@ GARMENT_OPEN = 2            # opening iterations @1536 (thin outline fringes go)
 GARMENT_CLOSE = 4           # closing iterations @1536
 GARMENT_MIN_COMPONENT = 0.002   # smallest kept part, share of the base body area
 GARMENT_MARGIN = 8          # px @1536 around the garment region that belong to its edge
-GARMENT_MIN = 0.01          # garment region / base body area, at least
+# Worn gate version 3 (2026-11-12, gate audit ``~/claude-out/gate-audit``,
+# ruling: a gate refuses only what would put something wrong into the
+# figure). ``garment_share`` refused Kira's choker (item_1ae56416, worn
+# front 0.0049 / 0.0068 — the choker sits right in both images) at the old
+# 0.01; a worn view with nothing put on measures 0.0 (Kai, 4 attempts), the
+# smallest accepted piece 0.0187. Every part the region keeps is at least
+# GARMENT_MIN_COMPONENT (0.002) of the body area, so a share >= 0.002 means
+# exactly "one part survived": GARMENT_MIN = GARMENT_MIN_COMPONENT.
+GARMENT_MIN = 0.002         # garment region / base body area, at least (= one kept part)
 #: The version of ``worn_gate``; every worn record carries it as
 #: ``gate_version`` (missing = 1). A refused worn view whose stored attempts
 #: were gated by an older version is re-gated from its files before anything
 #: renders again (``garment_images``, ``kind.GATE_VERSIONS``). 2: the colour
 #: outside the garment is recorded, not refused; the head zone ends at the
-#: neck's narrowest row (``head_zone``).
-WORN_GATE_VERSION = 2
+#: neck's narrowest row (``head_zone``). 3: ``GARMENT_MIN`` 0.002 and an
+#: edit's ``OUTSIDE_DRIFT_PX`` 2.0 (the gate audit, see both constants).
+WORN_GATE_VERSION = 3
 OUTSIDE_XOR_MAX = 0.015     # outline change outside the garment region / base body area
 HEAD_ZONE = CHIN_ROW        # fallback end of the head: base figure rows above y0 + 0.13·Hb
 HEAD_GARMENT_MAX = 0.05     # share of the head zone inside the garment region
@@ -217,7 +226,45 @@ def occupied_zones(slots: Iterable[str]) -> Tuple[str, ...]:
 # (1 / 0.80) above. Wider ghosts beyond the garment are ``outside``'s
 # (the S1 "s52 + legs" 1.207, Glut's harness 1.236, Rosi's 1.221 all have
 # outside >= 0.13 or skin_left >= 0.2).
-GHOST_GATE_VERSION = 2
+#
+# Ghost gate version 3 (2026-11-12, gate audit ``~/claude-out/gate-audit``:
+# every stored ghost attempt of the live world re-gated, BiRefNet-DIS masks).
+# ``outside`` was the AREA of every ghost pixel beyond the region's 8 px
+# margin over the region's area: a piece's own hem, waistband and visible
+# inside lie a few cm beyond its worn region and, over a small piece, that
+# rim alone is 0.1..0.3. Rosi's corset back (item_67e702f2) measured 0.1417 /
+# 0.1215 — 0.125 / 0.115 of it on the region's own rows, hip and hem rim,
+# farthest pixel 0.026 Hb (p95 0.022) from the region; the corset covers 13 %
+# of the body. The old rule refused 5 correct images (corset 2x, Glut's slip
+# 2x, Kira's skirt 1x). Now ``outside`` = the LARGEST CONNECTED part of the
+# ghost pixels lying more than CLOTH_FAR·Hb (0.02 Hb, ≈ 3.4 cm on 1.70 m)
+# from the region (Euclidean distance), over the region's area, <= 0.05;
+# the whole area beyond the margin is ``outside_near`` — a warning above
+# 0.05, never a refusal. Re-gated with this version (``garment_images``
+# re-registers an attempt that no registration had moved):
+#   correct    Rosi corset 0.0077 / 0.0055, Glut slip (glut_schurz) 0 / 0,
+#              Rosi skirt back 0 / 0 and front 0 (registered by its
+#              waistband now), Kira skirt 0.0055 (0.0294 with the old hem,
+#              below), Kira blazer 0..0.0007, Kai jacket 0..0.0002
+#   defects    Glut's boots drawn as a bodysuit 1.43 / 1.33, Lirien's belt
+#              drawn as the figure 23.4 / 23.3, Glut's harness back 0.104
+# -> 0.05 sits 6.5x over the highest correct one and 2x under the lowest
+# defect. Two defects are refused by other gates: Kira's skirt with the legs
+# (0.26 to the old hem; the length is free below the new one) for its skin
+# (0.40), Rosi's skirt drawn as a dress (1.07 unregistered) for its width
+# (1.649 registered by the waistband). Glut's harness back attempt 1 passes
+# (0.0, near 0.088): the ghost follows its worn back, and that worn back
+# shows the front (``BACK_OPENING_MIN``) — a gap of the worn gate.
+#
+# ``length_free`` (a waistband piece): the ghost rows below the region's HEM
+# are not counted. The hem was the last row of the region's bbox; Kira's
+# skirt (item_3024cbe4, back) has a slit and the worn region runs through it
+# as a 5..8 px strand of the re-shaded leg edge from the hem (row ~945) down
+# to row 1042 — the correct attempt 2 (0.163, ghost down to row 1010) counted
+# its own slit tips as "more". The hem is now ``_hem_row``: the last row of
+# the region opened by the margin (a strand narrower than twice the margin
+# is no cloth) without its small parts (``_main_parts``) — 951 there.
+GHOST_GATE_VERSION = 3
 CLOTH_TOP_DY_WARN = 0.0055   # |top edge offset| / Hb from which it is recorded as a warning
 CLOTH_CENTRE_DX_WARN = 0.007  # |centre offset| / Hb from which it is recorded as a warning
 CLOTH_W_RATIO_MIN = 0.80
@@ -232,7 +279,8 @@ CLOTH_W_RATIO_MAX = 1.25
 SKIN_SAMPLE_ROWS = (0.60, 0.66)
 SKIN_DRGB = 30.0            # a ghost pixel this close to the sampled skin is skin
 SKIN_LEFT_MAX = 0.005       # skin outside the garment region / garment area
-CLOTH_OUTSIDE_MAX = 0.05    # ghost pixels outside the garment region / garment area
+CLOTH_OUTSIDE_MAX = 0.05    # largest ghost part beyond CLOTH_FAR / garment area (and the near warning)
+CLOTH_FAR = 0.02            # Hb: ghost pixels farther than this from the region form ``outside``'s parts
 NECKLINE_MIN_DEPTH = 0.012  # notch depth / Hb from which the garment has a neckline
 NECKLINE_BAND = 0.03        # ± this share of the garment width around its centre column
 HEM_AGREE = 0.02            # |hem_t front − hem_t back|, fractions of Hb
@@ -266,6 +314,15 @@ HEM_AGREE = 0.02            # |hem_t front − hem_t back|, fractions of Hb
 # edited views keep OUTSIDE_XOR_MAX.
 BACK_OPENING_MIN = 0.04     # back neckline depth / Hb from which the back has an opening
 BACK_OPENING_SHARE = 0.5    # ... refused when it reaches this share of the front's depth
+# Known gap (gate audit, 2026-11-12): Glut's harness worn back was ACCEPTED
+# showing cups and cleavage — the front. Back depth 0.0369, front 0.0165:
+# the rule needs the FRONT to have an opening, so no lower minimum down to
+# 0.0165 catches it (0.03 would not). At <= 0.0165 the correct accepted
+# backs come within reach: Glut's slip back 0.0213 (front 0.051, kept only
+# by the share rule, 0.0213 < 0.0255), Rosi's corset back 0.0205 (front
+# 0.0097), Glut's boots back 0.0609 (front 0.0 — two boots leave a notch at
+# the centre, the depth is no opening there). Not changed: the depth alone
+# does not tell this front copy from a correct back.
 FIT_OUTSIDE_XOR_MAX = 0.04  # outline change outside the garment of a FITTED view (drafted back)
 # The outline XOR is an AREA share, so what it measures grows with how much
 # of the outline lies outside the garment: the same drift costs a small
@@ -299,7 +356,16 @@ FIT_OUTSIDE_XOR_MAX = 0.04  # outline change outside the garment of a FITTED vie
 # 2 px (1.90) or a 1 % re-frame (1.94) still fails an edit; the stiletto fits
 # (2.85 / 3.04) still fail a fit (limit max(0.04, 2.0 · 5127 / 302309 =
 # 0.0339)), the blazer's (1.50) passes.
-OUTSIDE_DRIFT_PX = 1.5      # mean outline drift @1536 an EDITED view may have outside the garment
+# Worn gate version 3 (the gate audit): an EDIT's drift limit 1.5 -> 2.0 px.
+# Glut's boots, worn front attempt 1 (2026-11-12): XOR 0.0218 against the
+# limit 0.0178, drift 1.84 px — the overlay is a uniform 1-2 px seam around
+# the whole figure, the boots are right (attempt 2: 0.52). Accepted edits
+# measured 0.29..1.36 px. Kira's skirt (item_3024cbe4) worn front attempt 1,
+# 2.40 px, moved the legs (and pulled them into the garment region): still
+# refused. A whole-figure shift of 2 px (1.90) or a 1 % re-frame (1.94)
+# passes now: the garment region compares colour, so a seam outside the
+# piece never becomes garment, and the ghost is registered onto the region.
+OUTSIDE_DRIFT_PX = 2.0      # mean outline drift @1536 an EDITED view may have outside the garment
 FIT_OUTSIDE_DRIFT_PX = 2.0  # ... a FITTED view (drafted back)
 # A FITTED back of a piece that covers little re-renders the bare figure and
 # the fit puts clothes on it the front does not have (Kira, 2026-11-10,
@@ -407,7 +473,7 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     and must not pass as garment) — measured always,
     gated only when the piece does not occupy the head (``occupied``, from
     its slots via ``occupied_zones``; ``head_gated`` says which). ``garment_share`` =
-    G / base body area (>= 0.01: the edit put something on). ``garment_top``
+    G / base body area (>= ``GARMENT_MIN`` 0.002: the edit put something on). ``garment_top``
     / ``garment_bottom`` are G's rows; ``neckline_depth`` (G's ``neckline``
     / Hb) and ``hem_t`` are reported for ``back_follows_front``. ``xor_max``:
     the area limit (a fitted back: ``FIT_OUTSIDE_XOR_MAX``, recorded as
@@ -638,11 +704,14 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     ghost pixels outside the region grown by 8 px @1536 whose mean |ΔRGB| to
     the base's skin (``skin_colour``, the thighs) is <= 30, over the region's
     area (<= 0.005: no head, arm, leg or foot left; a skin-coloured garment
-    is not counted inside its own region); ``outside`` = every ghost pixel
-    out there except in the neckline opening and the body openings
+    is not counted inside its own region); ``outside_near`` = every ghost
+    pixel out there except in the neckline opening and the body openings
     (``body_openings``: the inside of the garment shows there, e.g. through
-    an open jacket), over the region's area (<= 0.05: no stand, hanger or
-    wider garment). When the region has a neckline (``neckline`` depth >= 0.012·Hb)
+    an open jacket), over the region's area — a warning above 0.05 (the
+    piece's own rim, gate version 3); ``outside`` = the largest connected
+    part of those pixels farther than ``CLOTH_FAR``·Hb from the region, over
+    the region's area (<= 0.05: no legs, figure, stand or other garment
+    drawn on). When the region has a neckline (``neckline`` depth >= 0.012·Hb)
     ``neck_fill`` = the share of its opening the ghost mask covers — reported,
     not gated (a filled notch still meshes into an open neckline, see the
     calibration block).
@@ -651,11 +720,13 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     The chain registers the ghost onto the region before this gate
     (``register``), so the offsets are the residual of that correction.
     ``length_free`` (a waistband piece's ghost, registered by
-    ``register_waistband``): ``outside`` leaves out the ghost rows below the
-    region's last row grown by the margin — the length is the edit's, not
+    ``register_waistband``): ``outside`` / ``outside_near`` leave out the
+    ghost rows below the region's hem (``_hem_row``, recorded as
+    ``hem_row``) grown by the margin — the length is the edit's, not
     measured (ruling 13d); ``skin_left`` still counts there (feet left in the
     image), ``h_ratio`` / ``hem_t`` are reported.
     Calibration: the "Clothing" block above."""
+    from scipy import ndimage
     _check(base_rgb, base_mask, ghost_rgb, ghost_mask)
     m0 = np.asarray(base_mask, dtype=bool)
     region = np.asarray(garment_mask, dtype=bool)
@@ -684,10 +755,12 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     beyond = ghost & ~_margin(region, height)
     skin = skin_colour(base_rgb, base_mask)
     skin_beyond = beyond
+    hem = None
     if length_free:
-        # Below the region's last row (plus the margin) only skin counts: the length is free.
+        # Below the region's hem (plus the margin) only skin counts: the length is free.
+        hem = _hem_row(region, height)
         beyond = beyond.copy()
-        beyond[a[3] + 1 + _iterations(GARMENT_MARGIN, height):] = False
+        beyond[hem + 1 + _iterations(GARMENT_MARGIN, height):] = False
     if skin is None:
         skin_left = 0.0
     else:
@@ -701,7 +774,11 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     inside = body_openings(region, ghost, m0)
     if has_neckline:
         inside |= neck["notch"]
-    outside = float((beyond & ~inside).sum() / area)
+    rest = beyond & ~inside
+    outside_near = float(rest.sum() / area)
+    far = rest & (ndimage.distance_transform_edt(~region) > CLOTH_FAR * hb)
+    labels, count = ndimage.label(far)
+    outside = float(np.bincount(labels.ravel())[1:].max() / area) if count else 0.0
     opening_seen = float((beyond & inside).sum() / area)
     neck_fill = float((ghost & neck["notch"]).sum() / neck["notch"].sum()) if has_neckline else None
     iou = float((region & ghost).sum() / max((region | ghost).sum(), 1))
@@ -710,6 +787,9 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
         warnings.append(f"garment top moved: {_r(top_dy, 4)} Hb (recorded from {CLOTH_TOP_DY_WARN})")
     if abs(centre_dx) > CLOTH_CENTRE_DX_WARN:
         warnings.append(f"garment centre moved: {_r(centre_dx, 4)} Hb (recorded from {CLOTH_CENTRE_DX_WARN})")
+    if outside_near > CLOTH_OUTSIDE_MAX:
+        warnings.append(f"garment rim beyond the worn piece: {_r(outside_near, 4)} "
+                        f"(recorded from {CLOTH_OUTSIDE_MAX}, within {CLOTH_FAR} Hb)")
     reasons = []
     if not CLOTH_W_RATIO_MIN <= w_ratio <= CLOTH_W_RATIO_MAX:
         reasons.append(f"garment width changed: ratio {round(w_ratio, 3)} outside "
@@ -717,15 +797,30 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     if skin_left > SKIN_LEFT_MAX:
         reasons.append(f"skin left in the image: {_r(skin_left, 4)} > {SKIN_LEFT_MAX}")
     if outside > CLOTH_OUTSIDE_MAX:
-        reasons.append(f"more than the garment in the image: {_r(outside, 4)} > {CLOTH_OUTSIDE_MAX}")
+        reasons.append(f"more than the garment in the image: a part of {_r(outside, 4)} more than "
+                       f"{CLOTH_FAR} Hb beyond the worn piece > {CLOTH_OUTSIDE_MAX}")
     return {**out, "top_dy": _r(top_dy, 5), "centre_dx": _r(centre_dx, 5), "w_ratio": round(w_ratio, 3),
             "h_ratio": round(h_ratio, 3), "iou": round(iou, 3), "skin_left": _r(skin_left, 5),
-            "outside": _r(outside, 5), "opening_seen": _r(opening_seen, 5),
+            "outside": _r(outside, 5), "outside_near": _r(outside_near, 5), "opening_seen": _r(opening_seen, 5),
             "neckline_depth": _r(depth, 4), "neck_fill": _r(neck_fill, 3),
             "bottom": b[3], "hem_t": _r((b[3] - y0) / hb, 5),
-            **({"length_free": True} if length_free else {}),
+            **({"length_free": True, "hem_row": hem} if length_free else {}),
             "gate_version": GHOST_GATE_VERSION, "warnings": warnings,
             "ok": not reasons, "reasons": reasons}
+
+
+def _hem_row(region: np.ndarray, height: int) -> int:
+    """The hem of a garment region for ``length_free``: the last row of the
+    region opened by ``GARMENT_MARGIN`` iterations @1536 (a strand narrower
+    than twice the margin — the re-shaded edge of a leg in a slit — is no
+    cloth) without its parts below ``WAIST_PART_MIN`` of the largest
+    (``_main_parts``: a foot). The region's own last row when the opening
+    leaves nothing (a piece narrower than that everywhere)."""
+    from scipy import ndimage
+    region = np.asarray(region, dtype=bool)
+    opened = _main_parts(ndimage.binary_opening(region, iterations=_iterations(GARMENT_MARGIN, height)))
+    box = _bbox(opened) or _bbox(region)
+    return int(box[3])
 
 
 def hems_gap(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[tuple]:

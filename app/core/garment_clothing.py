@@ -119,7 +119,11 @@ GHOST_NEGATIVE = ("person", "skin", "head", "arms", "hands", "legs", "feet", "ma
 #: older version before it renders again). ``ghost`` 2 (2026-11-12): the
 #: position is recorded, the width widened, skin sampled on the thighs —
 #: a refused ghost view whose stored attempts pass now is published from
-#: its files on the next run (Retry), without an image job.
+#: its files on the next run (Retry), without an image job. ``worn`` 3 /
+#: ``ghost`` 3 (2026-11-12, the gate audit): the worn piece share and an
+#: edit's outline drift widened, the ghost's ``outside`` counts only parts
+#: beyond 0.02·Hb and the waistband hem leaves strands out; a registered
+#: ghost attempt is re-gated from its raw sibling (``garment_images``).
 GATE_VERSIONS: Dict[str, int] = {"worn": WORN_GATE_VERSION, "ghost": GHOST_GATE_VERSION}
 #: The pair check: the front ghost against the accepted back ghost.
 PAIR_STEP = "ghost"

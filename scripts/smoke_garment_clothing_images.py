@@ -50,7 +50,7 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
   WORN_FACE  = WORN with the head (rows < 300) in (150, 120, 100):
         |ΔRGB| 43.3 > 20 -> the head joins G -> head_garment 1.0 > 0.05 ->
         refused ("head changed").
-  WORN_NONE  = BASE: G empty -> garment_share 0.0 < 0.01 -> refused
+  WORN_NONE  = BASE: G empty -> garment_share 0.0 < 0.002 -> refused
         ("nothing put on").
   GHOST(bottom) = grey + the dress cols [380, 644) rows [320, bottom],
         neckline rows [320, 340) grey (open), rows [340, 350) cols [472, 552)
@@ -68,8 +68,12 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
         inside the widened [0.80, 1.25] (ghost gate version 2), but cols
         356..373 and 650..667 lie beyond G grown by 6 (374..649): 2 x 18 x
         440 rows = 15840 px over G's area 264 x 440 - 30 x 80 = 113760 (less
-        a few cut corners) -> outside 0.139 > 0.05 -> refused ("more than
-        the garment in the image"), not for its width.
+        a few cut corners) -> outside_near 0.139. Ghost gate version 3
+        (gate audit): ``outside`` counts only the parts more than 0.02 x
+        999 = 19.98 px from G — cols 356..360 and 663..667 (380 - c >= 20,
+        c - 643 >= 20), 5 x 440 = 2200 px each, two parts -> 2200 / 113760
+        = 0.019 <= 0.05 -> ACCEPTED, the rim a warning ("garment rim beyond
+        the worn piece"); not refused for its width either.
   GHOST_NARROW = GHOST(759) with cols [380, 560) — a cut-off piece: w_ratio
         (559 - 380) / (643 - 380) = 0.681 < 0.80 -> refused ("garment width
         changed"); its centre offset ((380 + 559) - (380 + 643)) / 2 / 999 =
@@ -78,7 +82,8 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
         |..| > 0.0055 -> RECORDED ("garment top moved" in ``warnings``),
         not refused; rows 310..313 lie beyond the 6-row margin, less its
         open neckline cols [472, 552): 4 x (264 - 80) = 736 px, plus the few
-        pixels above G's cut top corners -> outside 0.0066 <= 0.05 -> ok.
+        pixels above G's cut top corners -> outside_near 0.0066; nothing
+        19.98 px away -> outside 0.0 -> ok.
   HATTED = BASE with the head (rows < 300, figure pixels) in hat brown
         (90, 60, 40): |ΔRGB| 103.3 > 20 -> G = the head, everything else
         unchanged -> outside 0, head_garment 1.0.
@@ -145,16 +150,18 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
     outline (mask minus its erosion) outside the grown G: the top row 100
     (120 px) + the left and right columns rows 101..1033 (933 each) =
     outside_outline 1986. outside_xor_limit = max(0.015, 1.5 x 1200/1536 x
-    1986 / 120000) = max(0.015, 0.019395) = 0.0194.
+    1986 / 120000) = max(0.015, 0.019395) = 0.0194 — worn gate version 3
+    (gate audit: an edit's drift limit 2.0 px): max(0.015, 2.0 x 1200/1536 x
+    1986 / 120000) = max(0.015, 0.025859) = 0.0259.
       SHOE_ON: worn = FIG + SHOE -> outside_xor 0.0, drift 0.0, ok.
       SHOE_SHIFT1: the whole worn picture 1 px right -> XOR outside the grown
         G = rows 100..1033 x (col 452 + col 572) = 1868 px = 0.0156 — over
-        the old 0.015, under 0.0194 -> ok; drift 1868 / 1986 x 1536/1200 =
+        the old 0.015, under 0.0259 -> ok; drift 1868 / 1986 x 1536/1200 =
         1.20 px.
-      SHOE_SHIFT2: 2 px right -> 3736 px = 0.0311 >= 0.0194, drift 2.41 px
+      SHOE_SHIFT2: 2 px right -> 3736 px = 0.0311 >= 0.0259, drift 2.41 px
         -> refused ("body outline outside the garment changed").
       SHOE_TORSO: rows [300, 700) of the figure moved 4 px right (the shoe
-        stays) -> 2 x 4 x 400 = 3200 px = 0.0267 >= 0.0194, drift 2.06 px
+        stays) -> 2 x 4 x 400 = 3200 px = 0.0267 >= 0.0259, drift 2.06 px
         -> refused (the 4 px strip outside the base is no garment: the
         opening removes it).
       The dress (WORN_SHIFT, 6 px) keeps being refused; limits("clothing")
@@ -361,14 +368,14 @@ def gates_part(gg, kept):
         rec = gg.worn_gate(SHOE_BASE, mask_of(SHOE_BASE), arr, mask_of(arr), view="front")
         return (rec["ok"], rec["outside_xor"], rec["outside_outline"], rec["outside_xor_limit"],
                 rec["outside_drift_px"], rec["outside_dRGB"])
-    check("shoe on", shoe(SHOE_ON), (True, 0.0, 1986, 0.0194, 0.0, 0.0))
+    check("shoe on", shoe(SHOE_ON), (True, 0.0, 1986, 0.0259, 0.0, 0.0))
     check("shoe, figure 1 px right: under the drift limit", shoe(SHOE_SHIFT1),
-          (True, 0.0156, 1986, 0.0194, 1.2, 0.0))
-    check("shoe, figure 2 px right: refused", shoe(SHOE_SHIFT2), (False, 0.0311, 1986, 0.0194, 2.41, 0.0))
-    check("shoe, torso 4 px right: refused", shoe(SHOE_TORSO), (False, 0.0267, 1986, 0.0194, 2.06, 0.0))
+          (True, 0.0156, 1986, 0.0259, 1.2, 0.0))
+    check("shoe, figure 2 px right: refused", shoe(SHOE_SHIFT2), (False, 0.0311, 1986, 0.0259, 2.41, 0.0))
+    check("shoe, torso 4 px right: refused", shoe(SHOE_TORSO), (False, 0.0267, 1986, 0.0259, 2.06, 0.0))
     torso = gg.worn_gate(SHOE_BASE, mask_of(SHOE_BASE), SHOE_TORSO, mask_of(SHOE_TORSO), view="front")
     check("torso reason", torso["reasons"],
-          ["body outline outside the garment changed: XOR 0.0267 >= 0.0194 (drift 2.06 px >= 1.5 px)"])
+          ["body outline outside the garment changed: XOR 0.0267 >= 0.0259 (drift 2.06 px >= 2.0 px)"])
     check("limits: own record limit", gg.limits("clothing")["worn"]["outside_xor"].get("record_key"),
           "outside_xor_limit")
 
@@ -390,18 +397,19 @@ def gates_part(gg, kept):
                                                      closed["outside"]), (True, [], 1.0, 0.0))
     check("legs refused", reason(ghost_gate(GHOST_LEGS), "skin left in the image"), (False, True))
     wide = ghost_gate(GHOST_WIDE)
-    check("wide refused for outside, not width",
-          (reason(wide, "more than the garment"), any("garment width changed" in x for x in wide["reasons"]),
-           wide["w_ratio"], round(wide["outside"], 3)), ((False, True), False, 1.183, 0.139))
+    check("wide: accepted, its rim a warning (ghost gate version 3)",
+          (wide["ok"], wide["w_ratio"], round(wide["outside_near"], 3), round(wide["outside"], 3),
+           any("garment rim beyond the worn piece" in x for x in wide["warnings"])), (True, 1.183, 0.139, 0.019, True))
     narrow = ghost_gate(GHOST_NARROW)
     check("narrow (cut off) refused for width", (reason(narrow, "garment width changed"), narrow["w_ratio"],
                                                  narrow["centre_dx"],
                                                  any("garment centre moved" in x for x in narrow["warnings"])),
           ((False, True), 0.681, -0.04204, True))
     raised = ghost_gate(GHOST_RAISED)
-    check("raised recorded, accepted", (raised["ok"], raised["top_dy"], round(raised["outside"], 4),
-                                        [x.split(":")[0] for x in raised["warnings"]], raised["gate_version"]),
-          (True, -0.01001, 0.0066, ["garment top moved"], 2))
+    check("raised recorded, accepted", (raised["ok"], raised["top_dy"], round(raised["outside_near"], 4),
+                                        raised["outside"], [x.split(":")[0] for x in raised["warnings"]],
+                                        raised["gate_version"]),
+          (True, -0.01001, 0.0066, 0.0, ["garment top moved"], gg.GHOST_GATE_VERSION))
     check("limits clothing", {k: sorted(v) for k, v in gg.limits("clothing").items()},
           {"worn": ["garment_share", "head_garment", "outside_xor"],
            "ghost": ["outside", "reg_scale", "reg_shift", "skin_left", "w_ratio"]})

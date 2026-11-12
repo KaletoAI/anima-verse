@@ -66,6 +66,10 @@ attempt was fitted from the current front (``front_sha256``). The first
 that passes is published like a fresh accepted attempt; the others keep
 their new records. Nothing passes: the step renders as before. That runs on
 the next chain run of the piece and on the step's Regenerate / Run all.
+A registered attempt is re-gated from the image AS RENDERED: its raw
+sibling (``raw_path``, written before the registration rewrites the file),
+or the file itself when no registration moved it — and registered again;
+a file moved before raw siblings were kept (2026-11-12) is gated as stored.
 
 ``cut_out`` turns an accepted ghost image into the generator input
 (R6): BiRefNet-DIS mask on the original colours, a square of side
@@ -395,14 +399,40 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     if source != base:
         source_rgb = _rgb(source, base_size)
         source_mask = _mask(source, base_size)
+    position = (kind.position_reference(step, base_rgb=base_rgb, base_mask=base_mask,
+                                        source_rgb=source_rgb, source_mask=source_mask)
+                if source_rgb is not None else None)
+    gate_args = {"base_rgb": base_rgb, "base_mask": base_mask, "source_rgb": source_rgb,
+                 "source_mask": source_mask, "item_id": item_id}
+
+    def gate_file(path: Path) -> Dict[str, Any]:
+        """Register the attempt file at ``path`` onto ``position`` (a step
+        with one; ``_register`` rewrites the file and keeps the rendered
+        bytes as its raw sibling) and gate it."""
+        edit_rgb, edit_mask = _rgb(path, base_size), _mask(path, base_size)
+        registration = None
+        if position is not None:
+            edit_rgb, edit_mask, registration = _register(kind, step, view, path, base_size, position,
+                                                          gate_args=gate_args, edit_rgb=edit_rgb,
+                                                          edit_mask=edit_mask)
+        record = kind.gate(step, view, edit_rgb=edit_rgb, edit_mask=edit_mask, **gate_args)
+        return _with_registration(record, registration) if registration is not None else record
 
     if not _accepted(final):
         def regate(path: Path, old: Dict[str, Any]) -> Dict[str, Any]:
-            record = kind.gate(step, view, base_rgb=base_rgb, base_mask=base_mask, source_rgb=source_rgb,
-                               source_mask=source_mask, edit_rgb=_rgb(path, base_size),
-                               edit_mask=_mask(path, base_size), item_id=item_id)
-            # A registered attempt file is already moved: its correction stays recorded
-            # (``registered`` too: ``pair_agree`` reads it on a waistband back).
+            raw = raw_path(path)
+            moved = bool((old.get("registration") or {}).get("applied"))
+            if position is not None and (raw.is_file() or not moved):
+                # The file as rendered is at hand (its raw sibling, or the
+                # file itself when nothing moved it): registered anew.
+                if raw.is_file():
+                    shutil.copyfile(raw, path)
+                return _with_pair(gate_file(path), pair_check)
+            record = kind.gate(step, view, edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
+                               **gate_args)
+            # A file moved before raw siblings were kept stays as it is: its
+            # correction stays recorded (``registered`` too: ``pair_agree``
+            # reads it on a waistband back).
             record.update({k: old[k] for k in ("registration", "reg_shift", "reg_scale", "registered")
                            if k in old})
             return _with_pair(record, pair_check)
@@ -439,23 +469,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
             record: Dict[str, Any] = {"view": view, "ok": False, "reasons": ["render failed"]}
         else:
             path = _crop_back(Path(path), target, side, offset, source_size)
-            edit_rgb, edit_mask = _rgb(path, base_size), _mask(path, base_size)
-            reference = (kind.position_reference(step, base_rgb=base_rgb, base_mask=base_mask,
-                                                 source_rgb=source_rgb, source_mask=source_mask)
-                         if source_rgb is not None else None)
-            registration = None
-            if reference is not None:
-                edit_rgb, edit_mask, registration = _register(
-                    kind, step, view, path, base_size, reference,
-                    gate_args={"base_rgb": base_rgb, "base_mask": base_mask, "source_rgb": source_rgb,
-                               "source_mask": source_mask, "item_id": item_id},
-                    edit_rgb=edit_rgb, edit_mask=edit_mask)
-            record = kind.gate(step, view, base_rgb=base_rgb, base_mask=base_mask,
-                               source_rgb=source_rgb, source_mask=source_mask,
-                               edit_rgb=edit_rgb, edit_mask=edit_mask, item_id=item_id)
-            if registration is not None:
-                record = _with_registration(record, registration)
-            record = _with_pair(record, pair_check)
+            record = _with_pair(gate_file(path), pair_check)
         record["attempt"] = attempt
         records.append(record)
         if path is not None:
@@ -539,6 +553,16 @@ def _regate_stored(character_name: str, item_id: str, fsig: str, step: str, view
 POSITION_KEYS = ("top_dy", "centre_dx", "w_ratio")
 
 
+def raw_path(path: Path) -> Path:
+    """The raw sibling of an attempt file — ``….try{n}.raw.png``: the bytes
+    as rendered, kept while the attempt file itself holds the registered
+    (moved) image, so a re-gate registers from the rendering again
+    (``run_edit_step``) instead of from an earlier registration's result.
+    Kai's "Jeans" back (2026-11-12) was rewritten as a 20 px jeans by a
+    failed waistband estimate and could never pass again."""
+    return path.with_name(f"{path.stem}.raw.png")
+
+
 def _register(kind, step: str, view: str, path: Path, base_size: Tuple[int, int], reference, *,
               gate_args: Dict[str, Any], edit_rgb, edit_mask) -> Tuple[Any, Any, Optional[Dict[str, Any]]]:
     """Register an attempt of a step with a ``position_reference`` (the
@@ -551,17 +575,23 @@ def _register(kind, step: str, view: str, path: Path, base_size: Tuple[int, int]
     Returns ``(edit_rgb, edit_mask, registration)``; the registration
     record carries the estimate, ``applied``, a ``note`` when not applied,
     and ``before`` = the position numbers of the image as rendered. None
-    when nothing can be estimated (no figure, empty masks)."""
+    when nothing can be estimated (no figure, empty masks). The rendered
+    bytes are kept as ``raw_path`` before the file is rewritten; a raw
+    sibling left from an earlier rendering goes whenever the file stays as
+    it is (it is then its own raw)."""
     import numpy as np
     from PIL import Image
     from app.core import garment_gates
+    raw = raw_path(path)
     zones = garment_gates._zones(gate_args["base_mask"])
     if zones is None or zones[1] <= 0:
+        raw.unlink(missing_ok=True)
         return edit_rgb, edit_mask, None
     estimate_of = getattr(kind, "register_estimate", None)
     estimate = (estimate_of(step, view, reference, edit_mask, body_h=zones[1], item_id=gate_args.get("item_id"))
                 if estimate_of is not None else garment_gates.register(reference, edit_mask, body_h=zones[1]))
     if estimate is None:
+        raw.unlink(missing_ok=True)
         return edit_rgb, edit_mask, None
     before = kind.gate(step, view, edit_rgb=edit_rgb, edit_mask=edit_mask, **gate_args)
     applied = estimate["within_caps"] and not estimate["negligible"]
@@ -570,10 +600,12 @@ def _register(kind, step: str, view: str, path: Path, base_size: Tuple[int, int]
     if not applied:
         info["note"] = ("negligible" if estimate["within_caps"]
                         else "beyond the correction caps — gated as rendered")
+        raw.unlink(missing_ok=True)
         return edit_rgb, edit_mask, info
     with Image.open(path) as im:
         rgb = np.asarray(im.convert("RGB"))
     factor = (rgb.shape[0] / base_size[1], rgb.shape[1] / base_size[0])
+    shutil.copyfile(path, raw)
     tmp = path.with_name(f".{path.name}.tmp")
     Image.fromarray(garment_gates.warp(rgb, estimate, factor=factor)).save(tmp, format="PNG")
     tmp.replace(path)

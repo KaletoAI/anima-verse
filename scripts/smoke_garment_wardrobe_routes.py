@@ -24,7 +24,7 @@ Fixture (expected values derived by hand):
     True, pipeline True. Limits come from the gate constants of the
     CLOTHING kind (garment_gates.limits("clothing"), garment_mesh,
     garment_fit.CLOTHING_GATES): steps [fit, ghost, mesh, worn] — no
-    "haired", no "hairdeck_fit"; worn.garment_share {ge 0.01}; ghost.w_ratio
+    "haired", no "hairdeck_fit"; worn.garment_share {ge 0.002}; ghost.w_ratio
     {range [0.8, 1.25]} and no ghost.top_dy (recorded only since ghost gate
     version 2; no per_height: clothing records are fractions of Hb);
     mesh.largest_component_share {ge 0.90}; fit.max_push_m {le 0.10},
@@ -184,7 +184,7 @@ def main() -> int:
                                       limits.get("fit", {}).get("max_push_m"),
                                       limits.get("fit", {}).get("rigged_inside_share"),
                                       limits.get("fit", {}).get("largest_component_share")),
-                  (["fit", "ghost", "mesh", "worn"], {"op": "ge", "value": 0.01},
+                  (["fit", "ghost", "mesh", "worn"], {"op": "ge", "value": 0.002},
                    {"op": "range", "value": [0.8, 1.25]}, False, {"op": "ge", "value": 0.90},
                    {"op": "le", "value": 0.10}, {"op": "le", "value": 0.01}, {"op": "ge", "value": 0.90}))
             check("status, no base model", body.get("status"),

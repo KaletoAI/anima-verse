@@ -67,7 +67,10 @@ Fixture, W 1024 x H 1200 on grey 128, skin (200, 160, 140):
 
 [1] head_zone + gate numbers as derived above; limits("clothing") worn has
     no outside_dRGB limit (its chip is information); every worn record
-    carries gate_version 2; GATE_VERSIONS["worn"] = WORN_GATE_VERSION = 2.
+    carries the current gate_version; GATE_VERSIONS["worn"] =
+    WORN_GATE_VERSION = 3 (2 + the gate audit's GARMENT_MIN / drift,
+    smoke_garment_gate_audit.py); the re-gate below re-judges a version-1
+    record into the current version.
 [2] Drafted back, the next chain run (garments.run_garment, no steps): the
     worn front is accepted (COLLAR, record of the current gate), the back has
     two stored fit attempts — try1 HIGH, try2 TINTED — with version-1 records
@@ -225,7 +228,7 @@ def main() -> int:
               (tinted["ok"], tinted["outside_dRGB"], tinted["outside_xor"], tinted["head_garment"], tinted["reasons"]),
               (True, 16.0, 0.0, 0.0, []))
         check("record version", (collar["gate_version"], gg.WORN_GATE_VERSION,
-                                 garment_clothing.GATE_VERSIONS["worn"]), (2, 2, 2))
+                                 garment_clothing.GATE_VERSIONS["worn"]), (3, 3, 3))
         check("no colour limit (chip is information)", "outside_dRGB" in gg.limits("clothing")["worn"], False)
         check("outline limit unchanged", gg.limits("clothing")["worn"]["outside_xor"]["value"], 0.015)
 
@@ -311,13 +314,14 @@ def main() -> int:
             check(f"{label}: try1 refused for the head, try2 ok",
                   (first.get("ok"), first.get("reasons"), first.get("regated_from"),
                    second.get("ok"), second.get("regated_from"), second.get("gate_version"), second.get("outside_dRGB")),
-                  (False, ["head changed: 0.089 of the head > 0.05"], 1, True, 1, 2, 16.0))
+                  (False, ["head changed: 0.089 of the head > 0.05"], 1, True, 1, gg.WORN_GATE_VERSION, 16.0))
             check(f"{label}: follows the front", (record.get("front_sha256"), record.get("draft"),
                                                   record.get("draft_sha256")),
                   (base_body.file_sha256(front), draft_name, "d" * 64))
             check(f"{label}: try sidecar rewritten",
                   (gs.read_record(image("worn", "back", 1).with_suffix(".json"))["gate"].get("gate_version"),
-                   gs.read_record(image("worn", "back", 2).with_suffix(".json"))["gate"].get("ok")), (2, True))
+                   gs.read_record(image("worn", "back", 2).with_suffix(".json"))["gate"].get("ok")),
+                  (gg.WORN_GATE_VERSION, True))
 
         print("[2] next chain run re-gates the stored back")
         stage([HIGH, TINTED])
@@ -345,7 +349,7 @@ def main() -> int:
 
         print("[5] current-version refusals render again")
         del renders[:]
-        stage([HIGH, TINTED], version=2)
+        stage([HIGH, TINTED], version=gg.WORN_GATE_VERSION)
         res = garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
         check("draft + fit rendered", [k for k in renders if k.startswith("worn")], ["worn bd", "worn b1"])
 

@@ -91,10 +91,26 @@ smoke_garment_ghost_registration.py). Margin at H 1000: round(8 x 1000 /
     ``git show`` into a temp module): [1] refused "skin left in the image";
     [2] refused "garment top moved"; [3] refused "more than the garment in
     the image"; [5] scale 0.1 within the caps.
-[7] Re-gate: garment_clothing.GATE_VERSIONS["ghost"] = 2; a stored ghost
-    record without gate_version is stale (re-gated from its file on the next
-    run), one of version 2 is not; limits("clothing")["ghost"] has no
-    top_dy / centre_dx (their chips are information).
+[7] Re-gate: garment_clothing.GATE_VERSIONS["ghost"] = GHOST_GATE_VERSION
+    (3 since the gate audit); a stored ghost record without gate_version is
+    stale (re-gated from its file on the next run), one of the current
+    version is not; limits("clothing")["ghost"] has no top_dy / centre_dx
+    (their chips are information).
+
+Ghost gate version 3 (smoke_garment_gate_audit.py): the area numbers above
+are ``outside_near`` now (a warning above 0.05); ``outside`` is the largest
+part of those pixels more than 0.02 x 799 = 15.98 px (Euclidean) from the
+region:
+  [1] the inside below the hem, rows r - 599 >= 16 = 615..619 x 280 = 1400
+      -> 1400 / 127996 = 0.01094.
+  [2] the raised jacket: at most 10 px from the region -> 0.0.
+  [3] legs drawn together: gap cols with min(c - 259, 340 - c) >= 16 =
+      275..324 (50), rows r - 599 >= 16 = 615..879 (265) -> 13250 px over
+      45600 (+ the crotch fills) = 0.2906 (± 0.005) -> still refused.
+  [4] the ±12 % jacket: cols 140 - c >= 16 -> 121..124 and c - 459 >= 16
+      -> 475..478, 4 x 400 = 1600 px each side, two parts -> 1600 / 127996
+      = 0.0125 -> ACCEPTED (warning: near 0.08753): a uniformly wider ghost
+      is the fit's to correct, not more garment.
 """
 import importlib.util
 import os
@@ -223,13 +239,15 @@ def main() -> int:
     print("[1] skin sampled on the thighs")
     check("skin sample", [float(v) for v in gg.skin_colour(BASE, mask_of(BASE))], [200.0, 160.0, 140.0])
     hem = gate(gg, BASE, WORN_J, GHOST_HEM)
-    check("hem inside: ok, no skin", (hem["ok"], hem["skin_left"], hem["outside"]), (True, 0.0, 0.03281))
+    check("hem inside: ok, no skin", (hem["ok"], hem["skin_left"], hem["outside_near"], hem["outside"]),
+          (True, 0.0, 0.03281, 0.01094))
 
     print("[2] position recorded")
     up = gate(gg, BASE, WORN_J, GHOST_UP)
-    check("raised: ok, warning", (up["ok"], up["top_dy"], up["outside"], has(up, "warnings", "garment top moved"),
+    check("raised: ok, warning", (up["ok"], up["top_dy"], up["outside_near"], up["outside"],
+                                  has(up, "warnings", "garment top moved"),
                                   has(up, "reasons", "garment top moved"), up["gate_version"]),
-          (True, -0.01252, 0.01252, True, False, 2))
+          (True, -0.01252, 0.01252, 0.0, True, False, gg.GHOST_GATE_VERSION))
 
     print("[3] open front")
     region_o = gg.garment_region(BASE, mask_of(BASE), WORN_OPEN, mask_of(WORN_OPEN))
@@ -239,7 +257,8 @@ def main() -> int:
                                                 opened["skin_left"], opened["w_ratio"]),
           (True, 0.0, 0.19236, 0.0, 1.0))
     shut = gate(gg, BASE_LEGS, WORN_P, GHOST_SHUT)
-    near("legs drawn together: outside", shut["outside"], 19250 / 45600, 0.005)
+    near("legs drawn together: outside_near", shut["outside_near"], 19250 / 45600, 0.005)
+    near("legs drawn together: outside (far part)", shut["outside"], 13250 / 45600, 0.005)
     check("legs drawn together: refused, no opening", (shut["ok"], has(shut, "reasons", "more than the garment"),
                                                        shut["opening_seen"]), (False, True, 0.0))
 
@@ -249,9 +268,10 @@ def main() -> int:
           (half["ok"], half["w_ratio"], has(half, "reasons", "garment width changed"), half["centre_dx"],
            has(half, "warnings", "garment centre moved")), (False, 0.687, True, -0.06258, True))
     w112 = gate(gg, BASE, WORN_J, GHOST_W112)
-    check("±12 %: not for its width, for outside",
+    check("±12 %: not for its width; its rim a warning (gate version 3)",
           (w112["ok"], w112["w_ratio"], has(w112, "reasons", "garment width changed"),
-           has(w112, "reasons", "more than the garment"), w112["outside"]), (False, 1.119, False, True, 0.08753))
+           w112["outside_near"], w112["outside"], has(w112, "warnings", "garment rim beyond the worn piece")),
+          (True, 1.119, False, 0.08753, 0.0125, True))
 
     print("[5] waistband registration on a region with a patch")
     region_p = gg.garment_region(BASE_LEGS, mask_of(BASE_LEGS), WORN_P, mask_of(WORN_P))
@@ -283,9 +303,10 @@ def main() -> int:
           (True, 0.19236))
 
     print("[7] re-gate + limits")
-    check("GATE_VERSIONS ghost", garment_clothing.GATE_VERSIONS.get("ghost"), 2)
+    check("GATE_VERSIONS ghost", (garment_clothing.GATE_VERSIONS.get("ghost"), gg.GHOST_GATE_VERSION), (3, 3))
     check("record without version stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False}), True)
-    check("version 2 not stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 2}), False)
+    check("current version not stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 3}),
+          False)
     ghost_limits = gg.limits("clothing")["ghost"]
     check("no position limits", ("top_dy" in ghost_limits, "centre_dx" in ghost_limits), (False, False))
     check("width limit", ghost_limits["w_ratio"], {"op": "range", "value": [0.8, 1.25]})

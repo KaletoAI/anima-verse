@@ -48,7 +48,9 @@ Geometry, W 600 x H 1000 on grey 128:
     -> first row 184, q − 368.326 < 1.04·(599.5 − 377.326) = 231.061 -> last
     row 599. top_dy (184 − 200) / 799 = −0.02003, centre_dx ((146 + 477) −
     (140 + 459)) / 2 / 799 = 0.01502, w_ratio (477 − 146) / (459 − 140) =
-    331 / 319 = 1.038 -> refused as rendered (top, centre).
+    331 / 319 = 1.038 -> as rendered the top / centre are only warnings
+    (ghost gate version 2) and nothing lies 0.02 x 799 = 15.98 px beyond
+    G (version 3) -> ok as rendered too; the correction still applies.
     after: the attempt file rewritten moved; residual |top_dy|, |centre_dx|
     <= 2 / 799 = 0.0025, |w_ratio − 1| <= 0.01 -> ok; the record carries
     registration.applied True, before.ok False, reg_shift = shift_abs,
@@ -63,14 +65,25 @@ Geometry, W 600 x H 1000 on grey 128:
     version 2: "garment centre moved" in ``warnings``), and the piece lies
     beside its region: torso cols 284..443 against G's 220..379 grown by 5
     -> cols 385..443 (59) beyond on rows 200..599 (sleeves 465..523, also
-    59), less the rows the sleeve margin covers — outside > 0.3 > 0.05 ->
-    refused "more than the garment in the image"; whatever the estimate, a
-    correction is applied only within the caps.
+    59), less the rows the sleeve margin covers — outside_near > 0.3.
+    Ghost gate version 3: the far part (> 15.98 px from G) = torso cols
+    c - 379 >= 16 -> 395..443 (49) on rows r - 259 >= 16 -> 275..599 (325;
+    above, the shifted torso lies on G's sleeve) = 15925 px -> outside
+    15925 / 73600 = 0.21637 > 0.05 -> refused "more than the garment in the
+    image" (the shifted sleeve's far part, cols 476..523, is its own, smaller
+    part); whatever the estimate, a correction is applied only within the
+    caps.
     GHOST(1.10, 0, 0) (10 % larger): scale 1/1.10 = 0.909 < 0.93 -> not
     applied ("beyond the correction caps"); w_ratio ≈ 1.10 lies in the
     widened [0.80, 1.25], but 16 px of each side and 20 rows top and bottom
-    lie beyond the 5 px margin: outside >= 2·11·440 / 73600 = 0.13 > 0.05
-    -> refused "more than the garment in the image".
+    lie beyond the 5 px margin: outside_near >= 2·11·440 / 73600 = 0.13.
+    Ghost gate version 3: the far part is the hem band — rows from c +
+    1.10·(599.5 − c) = 621.7 back to 599 + 16 = 615 (7 rows) across the
+    scaled torso cols 299.5 ± 1.10·80 -> 212..387 (176) = 1232 px, plus a
+    few px beside the torso's corners (± 0.001) -> outside 1232 / 73600 =
+    0.01674 <= 0.05; the sleeve ends (col 124 / 475, 16 px out) are parts of
+    66 px -> ACCEPTED, the rim a warning: a uniformly 10 % larger piece is
+    the fit's to correct.
 [6] Negligible: GHOST(1, 0, 0) = T itself -> registration negligible, the
     file is NOT rewritten (bytes equal), ok, residual 0.
 [7] _touching: G + a separate patch cols [100, 120) rows [300, 340) (a
@@ -211,7 +224,7 @@ def main() -> int:
     r = rec.get("registration") or {}
     before = r.get("before") or {}
     check("before bbox numbers", (before.get("top_dy"), before.get("centre_dx"), before.get("w_ratio"),
-                                  before.get("ok")), (-0.02003, 0.01502, 1.038, False))
+                                  before.get("ok")), (-0.02003, 0.01502, 1.038, True))
     check("accepted after registration", (rec["ok"], rec["reasons"]), (True, []))
     check("applied", r.get("applied"), True)
     near("residual top_dy", rec["top_dy"], 0.0, 2 / HB)
@@ -241,17 +254,18 @@ def main() -> int:
     check("0.08 Hb: centre recorded, refused for outside",
           (rec["ok"], any("garment centre moved" in x for x in rec["warnings"]),
            any("garment centre moved" in x for x in rec["reasons"]),
-           any("more than the garment" in x for x in rec["reasons"]), rec["outside"] > 0.3),
+           any("more than the garment" in x for x in rec["reasons"]), rec["outside_near"] > 0.3),
           (False, True, False, True, True))
+    near("0.08 Hb: the far part", rec["outside"], 15925 / 73600, 0.0005)
     check("applied only within the caps", (not r.get("applied")) or bool(r.get("within_caps")), True)
     _, rec, _ = chain("big10", ghost(1.10, 0, 0))
     r = rec.get("registration") or {}
     near("10 % larger: scale", r.get("scale"), 1 / 1.10, 0.006)
     check("not applied", (r.get("applied"), r.get("note")), (False, "beyond the correction caps — gated as rendered"))
-    check("refused for outside, not its width",
-          (rec["ok"], any("more than the garment" in x for x in rec["reasons"]),
-           any("garment width changed" in x for x in rec["reasons"]), rec["outside"] >= 0.13),
-          (False, True, False, True))
+    check("accepted, its rim a warning (gate version 3)",
+          (rec["ok"], rec["outside_near"] >= 0.13,
+           any("garment rim beyond the worn piece" in x for x in rec["warnings"])), (True, True, True))
+    near("10 % larger: the far part", rec["outside"], 1232 / 73600, 0.001)
 
     print("[6] negligible")
     exact = ghost()
