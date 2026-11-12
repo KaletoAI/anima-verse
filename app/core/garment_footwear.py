@@ -401,27 +401,68 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
                 item_id: str, fsig: str, out: str) -> Dict[str, Any]:
     """The pure part of ``fit`` (a refit-pool worker runs it — ``refit_pool``): fit the prepared shoe
     (``footwear_fit.fit_pair``) on the rigged body, cut every body primitive (``footwear_cut.apply_cut``), judge
-    the cut (``cut_gates``) and graft the shoe parts. Reads nothing but its arguments; writes the fit GLB to the
+    the cut (``cut_gates``) and graft the shoe parts — once more with the upper fitted to the foot's height when the
+    first attempt is refused and the shoe is a closed toe box ready for it (fit version 15, ``footwear_fit`` module
+    docstring "Shoe height"). Reads nothing but its arguments; writes the fit GLB to the
     private temp path ``out`` only when accepted. ``{ok: False, reasons, gates}`` when a gate refuses, else
     ``{ok: True, record, foot_pose, cut_stats, rest, glb_sha256, tris}`` (``record`` = the fit's own record part
     with the cut gates and diagnostics)."""
     import hashlib
-    from app.core import footwear_cut, footwear_fit, footwear_rest, glb_mesh
+    from app.core import footwear_fit, footwear_rest, glb_mesh
     positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared)
     n = len(positions)
     shoe = glb_mesh.GarmentMesh(positions=positions, normals=None, uvs=uvs, indices=faces,
                                 joints=np.zeros((n, 4), np.int64), weights=np.zeros((n, 4)), joint_names=[],
                                 image=image, mime=mime, material=material)
-    result = footwear_fit.fit_pair(insole, shoe, glb_mesh.body_arrays(rigged), glb_mesh.joint_bind_matrices(rigged),
-                                   width_cap=cap)
+    body, joints = glb_mesh.body_arrays(rigged), glb_mesh.joint_bind_matrices(rigged)
+    prims = glb_mesh.body_primitive_arrays(rigged)
+    # Two attempts (fit version 15, boots plan Ruling 15i): the fit as it is; only when that is refused — by the fit's
+    # gates or the cut's — and the shoe has a closed toe box to raise (``scale.height_ready``), once more with the
+    # upper fitted to the foot's height. An accepted first attempt is the whole answer (an accepted look never
+    # changes); the second attempt's outcome stands, a toe box it cannot raise enough names the mesh as the defect.
+    att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap), prims, joints)
+    if not att.get("ok") and (att["result"].record.get("scale") or {}).get("height_ready"):
+        att = _fit_attempt(footwear_fit.fit_pair(insole, shoe, body, joints, width_cap=cap, fit_height=True),
+                           prims, joints)
+        flat = footwear_fit.too_flat_reason(att["result"].record)
+        if not att["ok"] and flat:
+            att["reasons"] = [flat] + att["reasons"]
+            att["gates"]["reasons"] = [flat] + list(att["gates"].get("reasons") or [])
+    if not att["ok"]:
+        return {"ok": False, "reasons": att["reasons"], "gates": att["gates"]}
+    result, replaced, cut_stats = att["result"], att["replaced"], att["cut_stats"]
+
+    blob = glb_mesh.rewrite_body_primitives(rigged, replaced)
+    for side in footwear_fit.SIDES:
+        for part in PARTS:
+            mesh = result.parts[side].get(part)
+            if mesh is None:
+                continue
+            # the shaft is an open tube looked into from the collar: both faces of its wall are drawn; its node names
+            # the collar's bind height (footwear_fit step 9) — the shaft's top for every reader of the GLB
+            extras = {"kind": kind, "item_id": item_id, "fsig": fsig, "side": side, "part": part}
+            if part == "shaft":
+                extras["collar_bind_m"] = result.record["sides"][side]["split"]["collar_bind_m"]
+            blob = glb_mesh.graft(blob, mesh, name=node_name(item_id, side, part), extras=extras,
+                                  material_overrides={"doubleSided": True} if part == "shaft" else None)
+    path = Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(blob)
+    return {"ok": True, "record": result.record, "foot_pose": result.foot_pose, "cut_stats": cut_stats,
+            "rest": footwear_rest.rest_measurement(rigged), "glb_sha256": hashlib.sha256(blob).hexdigest(),
+            "tris": len(glb_mesh.static_arrays(blob)[1])}
+
+
+def _fit_attempt(result: Any, prims: List["glb_mesh.Prim"], joints: Dict[str, np.ndarray]) -> Dict[str, Any]:
+    """One attempt of ``fit_compute``: a fit that ran (``footwear_fit.fit_pair``) cut on every body primitive and
+    judged by the cut gates. ``{ok, result, reasons, gates}`` + ``replaced`` / ``cut_stats`` when the fit ran."""
+    from app.core import footwear_cut, footwear_fit, glb_mesh
     if not result.ok:
-        return {"ok": False, "reasons": list(result.reasons),
+        return {"ok": False, "result": result, "reasons": list(result.reasons),
                 "gates": {"ok": False, "reasons": list(result.reasons), **(result.record.get("gates") or {})}}
 
     # The cut on every body primitive, then the cut gates on the body as a whole (spec § 7.1, § 8).
     cut = result.record["cut"]
-    joints = glb_mesh.joint_bind_matrices(rigged)
-    prims = glb_mesh.body_primitive_arrays(rigged)
     replaced: Dict[int, glb_mesh.Prim] = {}
     cut_stats: Dict[str, Any] = {"removed_faces": 0, "bisected_faces": 0, "new_vertices": 0,
                                  "slim_share": {}, "slim_needed": {}, "throat_moved": {}, "toe_conform": {},
@@ -447,28 +488,9 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
         # the conform's own numbers of the merged body are already in the side gates (toe_conform_m / toe_pull_m)
     result.record["cut_stats"] = {key: cut_stats[key] for key in ("removed_faces", "bisected_faces", "new_vertices")}
     if not cut_gates["ok"]:
-        return {"ok": False, "reasons": list(cut_gates["reasons"]),
+        return {"ok": False, "result": result, "reasons": list(cut_gates["reasons"]),
                 "gates": {"ok": False, "reasons": list(cut_gates["reasons"]), **result.record["gates"]}}
-
-    blob = glb_mesh.rewrite_body_primitives(rigged, replaced)
-    for side in footwear_fit.SIDES:
-        for part in PARTS:
-            mesh = result.parts[side].get(part)
-            if mesh is None:
-                continue
-            # the shaft is an open tube looked into from the collar: both faces of its wall are drawn; its node names
-            # the collar's bind height (footwear_fit step 9) — the shaft's top for every reader of the GLB
-            extras = {"kind": kind, "item_id": item_id, "fsig": fsig, "side": side, "part": part}
-            if part == "shaft":
-                extras["collar_bind_m"] = result.record["sides"][side]["split"]["collar_bind_m"]
-            blob = glb_mesh.graft(blob, mesh, name=node_name(item_id, side, part), extras=extras,
-                                  material_overrides={"doubleSided": True} if part == "shaft" else None)
-    path = Path(out)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(blob)
-    return {"ok": True, "record": result.record, "foot_pose": result.foot_pose, "cut_stats": cut_stats,
-            "rest": footwear_rest.rest_measurement(rigged), "glb_sha256": hashlib.sha256(blob).hexdigest(),
-            "tris": len(glb_mesh.static_arrays(blob)[1])}
+    return {"ok": True, "result": result, "replaced": replaced, "cut_stats": cut_stats}
 
 
 def _merged(prims: List["glb_mesh.Prim"]) -> "glb_mesh.Prim":

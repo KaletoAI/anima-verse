@@ -246,6 +246,19 @@ foot as should-be-enclosed; the pokes are lateral at mid-foot, 35–80 mm high),
 toe box) -> x1.5: still refused, lift asymmetry 10.46 mm unchanged, deep_outside 47.3 %, toe_conform 127 mm (was 137),
 throat ledge 53.4 mm (was 39.5); the Business Heels on Kira need 1.51 / 1.53 -> x1.5, still accepted, toe_conform
 10.8 -> 1.4 mm — the accepted pair's upper stands 50 % taller.
+
+Since fit version 15 (boots plan Ruling 15i) the height fit changes no accepted look and stretches no open shoe:
+``fit_pair`` only measures it (``scale.height_needed``, ``height_ready``) unless ``fit_height`` is set, and
+``garment_footwear.fit_compute`` sets it only for a second attempt when the first one is refused — by the fit's
+gates or the cut's — and the shoe is ready for it: a CLOSED toe box (``INSTEP_ROOF_SHARE`` of the instep stations
+roofed at least ``CAVITY_MIN_M`` over the insole; a pump or a heel exposes the instep by design) widened to the
+foot (``SHOE_WIDTH_CAP``, no Wardrobe cap, no shaft) that needs more than its own height. A second attempt that is
+refused while the toe box needs more than ``HEIGHT_CAP`` names the mesh first (``too_flat_reason``): the shoe has
+to be regenerated. Measured on copies 2026-11-12: the Business Heels on Kira (instep roof share 0) come out
+byte-identical to fit version 13 again (x1.124 wide, no height, GLB sha256 269e8c6f…); the Sneekers on Kai (share 1)
+stay refused, "Shoe mesh too flat for the foot: toe box 24 mm, instep needs ~89 mm — regenerate the shoe" ahead of
+deep_outside 29.5 % and toe_conform 39.6 mm; the Black Stilettos on Kira (share 0.02) stay refused by the fit's lift
+asymmetry 10.46 mm, no second attempt.
 """
 import math
 from dataclasses import dataclass, field
@@ -276,8 +289,10 @@ from app.core.footwear_gates import check_gates
 #:    ``collar_flex_poke`` (``footwear_cut`` version 6) — a stored v11 boot fit's body and gates differ (Task 9 fix 5,
 #:    Ruling 15f);
 #: 13: a shoe without a shaft is widened to the foot up to ``SHOE_WIDTH_CAP`` (Ruling 15g);
-#: 14: ... and its upper fitted to the foot's height up to ``HEIGHT_CAP`` (``upper_height_map``, Ruling 15h).
-FOOTWEAR_FIT_VERSION = 14
+#: 14: ... and its upper fitted to the foot's height up to ``HEIGHT_CAP`` (``upper_height_map``, Ruling 15h);
+#: 15: ... only for a closed toe box and only when the fit without it is refused (``fit_pair(fit_height=)``, Ruling
+#:    15i) — an accepted v13 shoe comes out as at v13, a v14 one fitted in height (an open pump) differs.
+FOOTWEAR_FIT_VERSION = 15
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -303,9 +318,19 @@ WIDTH_CAP_MIN = 1.00
 #: ``footwear_cut.TOE_CLEARANCE_M`` above the insole; the sole and heel (the insole plane, heel rise and pitch) do not
 #: move. The factor ramps in from the heel seat to the throat front (the heel counter keeps its height) and is the
 #: needed one (``scale.height_needed``, the worse roofed station of the worse side) capped here. A boot and a shoe
-#: under a Wardrobe width cap keep their height. The delivered gates decide. Measured: module docstring, "Shoe
+#: under a Wardrobe width cap keep their height. The delivered gates decide. Since fit version 15 (Ruling 15i) only a
+#: CLOSED toe box (``INSTEP_ROOF_SHARE``) takes it, and only on the second attempt of ``garment_footwear.fit_compute``
+#: — when the fit without it was refused (an accepted look never changes). Measured: module docstring, "Shoe
 #: height".
 HEIGHT_CAP = 1.5
+#: A closed toe box = a vamp roof over the instep: at least this share of the stations from ``INSTEP_FROM_SHARE`` of
+#: the insole length to ``footwear_insole.BALL_SHARE`` carry a cavity (a roof above the insole in the middle columns)
+#: of at least ``footwear_insole.CAVITY_MIN_M`` at the fit's scale. A pump or heel exposes the instep by design (no
+#: roof there, or a lining a few millimetres over the insole — the Black Stilettos' 7–8 mm) and never gets the height
+#: scale (Ruling 15i). Measured shares: Sneekers 1.00, Black Stilettos 0.02, Business Heels 0.00.
+INSTEP_ROOF_SHARE = 0.8
+#: Where the instep starts, as a share of the insole length (``INSTEP_ROOF_SHARE``).
+INSTEP_FROM_SHARE = 0.45
 #: The largest share of the ball width the forefoot slimming may take off (gate ``slim_needed``).
 SLIM_MAX_SHARE = 0.18
 
@@ -741,7 +766,8 @@ def _local_axis(J: np.ndarray, axis_w: np.ndarray) -> np.ndarray:
 
 
 def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
-             joints: Dict[str, np.ndarray], *, width_cap: Optional[float] = None) -> FootwearFit:
+             joints: Dict[str, np.ndarray], *, width_cap: Optional[float] = None,
+             fit_height: bool = False) -> FootwearFit:
     """Fit one shoe source (``shoe`` in its mesher coordinates, ``insole`` its analysis) to both feet of
     ``body`` (module docstring). A shoe that cannot be put on at all returns ``ok False`` with the reason
     and no parts; a fit that ran returns everything, ``ok`` = every gate of ``FIT_GATES`` (and, for a boot, the
@@ -749,12 +775,14 @@ def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.
     for a body without the foot joints (a boot also needs the side's Leg and UpLeg). ``width_cap`` None = the
     default (``applied_width_cap``: a shoe without a shaft widens to the foot up to ``SHOE_WIDTH_CAP``, a boot to
     ``WIDTH_CAP``; recorded as ``scale.width_cap`` ``WIDTH_CAP``, the fingerprint's default); a number = the
-    Wardrobe's cap, clamped to ``WIDTH_CAP_MIN`` .. ``WIDTH_CAP``, applied as it is."""
+    Wardrobe's cap, clamped to ``WIDTH_CAP_MIN`` .. ``WIDTH_CAP``, applied as it is. ``fit_height`` True fits the upper
+    to the foot's height (step 4b) where ``scale.height_ready`` holds; False (the default) only measures it — the
+    first attempt of ``garment_footwear.fit_compute``, byte-identical to fit version 13."""
     applied = applied_width_cap(insole, width_cap)
     width_cap = WIDTH_CAP if width_cap is None else min(WIDTH_CAP, max(WIDTH_CAP_MIN, float(width_cap)))
     feet = measure_feet(body, joints)
     try:
-        return _fit(insole, shoe, body, joints, feet, width_cap, applied)
+        return _fit(insole, shoe, body, joints, feet, width_cap, applied, fit_height)
     except _Refused as exc:
         reason = str(exc)
         return FootwearFit(ok=False, reasons=[reason], record={"version": FOOTWEAR_FIT_VERSION, "error": reason},
@@ -945,6 +973,22 @@ def applied_width_cap(insole: Dict[str, Any], width_cap: Optional[float] = None)
     return SHOE_WIDTH_CAP if shaft.get("has_shaft", True) is False else WIDTH_CAP
 
 
+def too_flat_reason(record: Dict[str, Any]) -> Optional[str]:
+    """The Wardrobe's reason for a closed shoe whose toe box the height fit cannot raise enough (``height_ready`` and
+    ``height_needed`` above ``HEIGHT_CAP``): the mesh is the defect — "Shoe mesh too flat for the foot: toe box 27 mm,
+    instep needs ~90 mm — regenerate the shoe" (the worse side's worst station); None otherwise."""
+    scale = record.get("scale") or {}
+    needed = [v for v in (scale.get("height_needed") or {}).values() if v is not None]
+    if not scale.get("height_ready") or not needed or max(needed) <= HEIGHT_CAP:
+        return None
+    worst = [v for v in (scale.get("height_worst") or {}).values() if v]
+    if not worst:
+        return None
+    w = max(worst, key=lambda v: v["need_mm"] / max(v["roof_mm"], 1e-9))
+    return (f"Shoe mesh too flat for the foot: toe box {w['roof_mm']:.0f} mm, instep needs ~{w['need_mm']:.0f} mm "
+            f"— regenerate the shoe")
+
+
 def upper_scale(x: np.ndarray, height: Optional[Dict[str, Any]]) -> np.ndarray:
     """The upper's vertical factor at the shoe-frame stations ``x`` (raw units) for the record's ``scale.height``:
     1 up to ``x_from_raw`` (the heel seat), ``factor`` from ``x_full_raw`` (the throat front) on, smoothstep between;
@@ -991,7 +1035,7 @@ def upper_height_map(Q: np.ndarray, insole: Dict[str, Any], height: Optional[Dic
 
 def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
          joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float,
-         cap_applied: float) -> FootwearFit:
+         cap_applied: float, fit_height: bool = False) -> FootwearFit:
     from app.core.footwear_insole import BALL_SHARE, HEEL_SEAT_M, PITCH_HEEL_SHARE, insole_map, topline_stations
     ins = _Insole(insole)
     P = np.asarray(body.positions, np.float64)
@@ -1116,10 +1160,12 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     from app.core.footwear_cut import TOE_CLEARANCE_M
     roofed = ~np.isnan(ins.cav) & (gx > 0.5 * float(np.nanmax(gx)))
     height_needed: Dict[str, Optional[float]] = {}
+    height_worst: Dict[str, Optional[Dict[str, float]]] = {}
     half = 0.5 * float(gx[1] - gx[0]) if len(gx) > 1 else 0.0
     for side, w in work.items():
         Cf = _apply(np.linalg.inv(w["Pf"]), w["Xf"])
         worst = None
+        height_worst[side] = None
         for i in np.nonzero(roofed)[0]:
             _, jj = insole_cols(float(gx[i]))
             if len(jj) < 2 or ins.cav[i] <= 0.0:
@@ -1128,12 +1174,22 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             if not sel.any():
                 continue
             base = float(ins.z(gx[i]))
-            ratio = (float(Cf[sel, 1].max()) - base + TOE_CLEARANCE_M / k) / float(ins.cav[i])
-            worst = ratio if worst is None else max(worst, ratio)
+            need = float(Cf[sel, 1].max()) - base + TOE_CLEARANCE_M / k
+            ratio = need / float(ins.cav[i])
+            if worst is None or ratio > worst:
+                worst = ratio
+                height_worst[side] = {"x_share": float(gx[i]) / float(np.nanmax(gx)),
+                                      "roof_mm": float(ins.cav[i]) * k * 1000.0, "need_mm": need * k * 1000.0}
         height_needed[side] = worst
-    fits_height = cap_applied >= SHOE_WIDTH_CAP - 1e-9 and roofed.any()
+    # a closed toe box (Ruling 15i): a roof of at least CAVITY_MIN_M over the instep stations
+    from app.core.footwear_insole import CAVITY_MIN_M
+    span = ins.ok & (gx >= INSTEP_FROM_SHARE * ins.length) & (gx < BALL_SHARE * ins.length)
+    roof_ok = np.where(np.isnan(ins.cav), False, ins.cav * k >= CAVITY_MIN_M)
+    instep_roof = float(roof_ok[span].mean()) if span.any() else 0.0
     wanted = [v for v in height_needed.values() if v is not None]
-    height_factor = min(HEIGHT_CAP, max(1.0, max(wanted))) if fits_height and wanted else 1.0
+    height_ready = bool(cap_applied >= SHOE_WIDTH_CAP - 1e-9 and roofed.any() and instep_roof >= INSTEP_ROOF_SHARE
+                        and wanted and max(wanted) > 1.0)
+    height_factor = min(HEIGHT_CAP, max(wanted)) if fit_height and height_ready else 1.0
     height: Optional[Dict[str, Any]] = None
     if height_factor > 1.0:
         height = {"factor": height_factor, "cap": HEIGHT_CAP, "x_from_raw": ins.x0 + HEEL_SEAT_M / k,
@@ -1491,6 +1547,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "height_m": float(np.ptp(used[:, 1])) * k, "width_factor": width_factor,
             "width_needed": needed, "width_cap": width_cap, "width_cap_applied": cap_applied, "slim_needed": slim,
             "height_factor": height_factor, "height_needed": height_needed, "height": height,
+            "height_ready": height_ready, "instep_roof_share": instep_roof, "height_worst": height_worst,
             "insole_arc_m": ins.arc_at(x_end) * k, "foot_len_m": foot_len, "toe_h_m": toe_h,
         },
         "sides": sides,
