@@ -20,10 +20,12 @@ commit 8e67362b (Task 1 and its fix round, the last ``body_sdf`` before this tas
      at least the 50 planted pairs are degenerate — the random triangles add their own, a triangle drawing one of
      the 400 vertices twice: 1 - 399 * 398 / 400^2 = 0.75 % of the other 79 950, about 600. The 50 planted ones
      are also compared alone (k = 1), so no nearer triangle of their row hides them.
-[K3] ``garment_fit.body_sdf`` of smoke_body_field's [F1] body (open double-walled tube along x, outer r 0.05, inner r
-     0.04 reversed, x -0.20 .. +0.20; vox 0.004, bounds +-(0.25, 0.08, 0.08)) equals the field of
-     ``app/core/garment_fit.py`` at 8e67362b, loaded as its own module: ``np.array_equal`` of ``field``, equal ``lo``
-     and ``vox``. The field holds the label fill (``fill_holes``) and the exact band (``band_distance``).
+[K3] ``body_sdf`` of commit 20ebbd27 (this task's, loaded as its own module) on smoke_body_field's [F1] body (open
+     double-walled tube along x, outer r 0.05, inner r 0.04 reversed, x -0.20 .. +0.20; vox 0.004, bounds
+     +-(0.25, 0.08, 0.08)) equals the field of ``app/core/garment_fit.py`` at 8e67362b, loaded as its own module:
+     ``np.array_equal`` of ``field``, equal ``lo`` and ``vox``. The field holds the label fill (``fill_holes``) and the
+     exact band (``band_distance``). Pinned to 20ebbd27 since Task 5 (the body field moved to ``body_field`` on a body
+     lattice with pykdtree — small differences on purpose, checked by ``smoke_body_field_cache.py`` [C4]).
 [K4] ``set_threads(1)`` and ``set_threads(4)`` give equal ``band_distance`` output (bits) on 200 000 rows: the rows are
      independent, the thread count only splits them. ``threads()`` reads back 1 and 4.
 [K5] ``refit_pool._initializer(None, 3)`` leaves ``fit_kernels.threads() == 3`` — in a child process, since the
@@ -42,6 +44,7 @@ sys.path.insert(0, str(ROOT))
 import numpy as np  # noqa: E402
 
 T1 = "8e67362b"
+T2 = "20ebbd27"
 FAILS = []
 
 
@@ -205,15 +208,16 @@ def module_at(rev):
 
 def test_k3(gf):
     old = module_at(T1)
+    t2 = module_at(T2)
     P, F = open_tube_x(0.05, 0.04, -0.20, 0.20)
     bounds = (np.array([-0.25, -0.08, -0.08]), np.array([0.25, 0.08, 0.08]))
-    new = gf.body_sdf(P, F, vox=0.004, bounds=bounds)
+    new = t2.body_sdf(P, F, vox=0.004, bounds=bounds)
     ref = old.body_sdf(P, F, vox=0.004, bounds=bounds)
     band = int(((ref.field > 0) & (ref.field <= gf.SDF_EXACT_BAND_VOX * 0.004)).sum())
     check(np.array_equal(new.lo, ref.lo) and new.vox == ref.vox and new.field.shape == ref.field.shape,
-          f"[K3] [F1] body: same grid as {T1} ({ref.field.shape})")
+          f"[K3] [F1] body: {T2}'s grid is {T1}'s ({ref.field.shape})")
     check(np.array_equal(new.field, ref.field),
-          f"[K3] [F1] body: body_sdf field == {T1}'s (np.array_equal; {band} exact-band cells, "
+          f"[K3] [F1] body: {T2}'s body_sdf field == {T1}'s (np.array_equal; {band} exact-band cells, "
           f"{int((ref.field < 0).sum())} inside)")
 
 

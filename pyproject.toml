@@ -50,5 +50,8 @@ dependencies = [
     # Garment / footwear / hair fits: grids, KD-trees and the exact-band kernel (app/core/fit_kernels.py).
     "numpy>=2.0",
     "scipy>=1.11",
-    "numba>=0.68"
+    "numba>=0.68",
+    # The body field's EDT and its exact band's KD query (app/core/body_field.py).
+    "edt>=3.1",
+    "pykdtree>=1.4"
 ]

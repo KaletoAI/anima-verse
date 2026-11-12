@@ -453,120 +453,14 @@ def point_triangle_closest(X: np.ndarray, A: np.ndarray, B: np.ndarray, C: np.nd
 
 def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = None,
              exact_band_vox: float = SDF_EXACT_BAND_VOX) -> Sdf:
-    """Signed distance field of the body solid on a grid cropped to ``bounds = (lo, hi)``.
-
-    Surface voxelisation at the 5 x 5 barycentric samples, one dilation, hole fill, EDT difference (spike), with:
-    - The solid (dilated surface + hole fill) is decided on a grid over the WHOLE body plus the bounds, aligned
-      with the crop; only the distance fields are cropped. A fill on the crop alone leaks wherever the crop cuts
-      the body (the cut cross-section is open), and the neck would read as outside.
-    - Each EDT is taken half a voxel back (it measures to the nearest voxel CENTRE of the other set), so the field
-      is continuous across the boundary instead of jumping by two voxels within one cell.
-    - The zero level is put ON the surface: the dilation and the voxel rounding put it ``SDF_ZERO_OFFSET_VOX``
-      (1.3) voxels outside (measured on spheres of 10 to 75 voxels radius: 1.25..1.39, spread +- 0.15), so that
-      much is added and a clearance means distance from the real surface. A median over the surface samples
-      would be pulled inward by the inner wall of a double-walled body. ``zero_offset_vox=0`` keeps the raw
-      level.
-    - A hollow body is sealed (``_seal_cavities``): an outfit body meshed from its dressed views can be a SHELL — an
-      outer and an inner wall, the inner one facing into a cavity — whose cavity is reached from outside through a
-      slit or an opening of 1 - 3 cm (Kira's outfit bodies 22354b972aef / 3b3a0adaf672 / 62aad0dac21c 2026-11-10:
-      the trunk axis read as OUTSIDE, 4 - 7 cm from the "surface"). The hole fill then keeps only the wall, and
-      a garment vertex placed under the skin is pushed AWAY from the inner wall, deeper into the body — the skin
-      shows through the piece wherever that happened.
-    - Outside the body, within ``exact_band_vox`` voxels, the field is the EXACT distance to the surface (nearest
-      of the triangles of the 8 nearest surface samples). The voxel EDT is up to 0.6 voxel short along diagonal
-      directions, and the clearance is decided exactly in this band. Inside, the corrected EDT stays (it only
-      sets how far the first push goes; the iterations converge outside). The nearest outside triangles are the
-      outer wall, so a double wall does not disturb the band.
-    - Every slice of the full grid along x, y AND z is hole-filled in 2D too (``fit_kernels.fill_slices``; plan
-      2026-11-12 fit-sdf-speed-drape, Task 1). A limb meshed as a shell — an outer and an inner wall of either
-      winding, open to the outside somewhere along the limb — escapes both the 3D fill and the seal (whose region
-      must be ``2 · SDF_SEAL_THICK_VOX + 1`` voxels, 7 cm, thick); its cross-section is a ring the 2D fill closes.
-      A leg is vertical, so its y-slices are rings (the footwear shaft push, boots plan Task 9 fix 4: the clone's
-      bases rebuilt 2026-11-12, Kira ``base20d5701a``, Kai ``base634402e5``, read the calf's cavity as OUTSIDE);
-      a T-pose arm is a horizontal tube whose y-slice is a strip open at the cuff and towards the torso, so only
-      its x-slices close it (the arm's core read as outside, -2..+11 mm along a line through Kai's upper arm). A
-      gap between two shells opened by a hole elsewhere is closed by the slices that miss the hole. A concavity
-      open along at least one direction in every slice through it (the gap between the legs) stays outside.
-    Inside distances near the crop faces may be overestimated (the nearest outside voxel can lie beyond the
-    crop); the crop margin keeps that away from the garment.
-    """
-    from scipy import ndimage
-    P = np.asarray(P, np.float64)
-    F = np.asarray(F, np.int64).reshape(-1, 3)
-    lo, hi = (np.asarray(b, np.float64) for b in bounds)
-    shape = np.ceil((hi - lo) / vox).astype(np.int64) + 1
-    if (shape < 3).any():
-        raise ValueError("SDF bounds are too small")
-    if len(F) == 0:
-        raise ValueError("The body has no triangles")
-    # full grid, aligned with the crop: whole voxels before lo and after the crop's end
-    before = np.maximum(np.ceil((lo - (P.min(0) - 2 * vox)) / vox), 0).astype(np.int64)
-    after = np.maximum(np.ceil(((P.max(0) + 2 * vox) - (lo + (shape - 1) * vox)) / vox), 0).astype(np.int64)
-    full_lo = lo - before * vox
-    full_shape = shape + before + after
-    pts, tri_of = _surface_samples(P, F)
-    idx = np.clip(np.round((pts - full_lo) / vox).astype(np.int64), 0, full_shape - 1)
-    surf = np.zeros(tuple(full_shape), bool)
-    surf[idx[:, 0], idx[:, 1], idx[:, 2]] = True
-    surf = ndimage.binary_dilation(surf, iterations=1)
-    inside_full = _seal_cavities(surf, fit_kernels.fill_holes(surf))
-    for axis in range(3):
-        # every slice of the full grid along x, y and z filled in 2D as well (docstring)
-        inside_full |= fit_kernels.fill_slices(surf, axis)
-    del surf
-    crop = tuple(slice(int(b), int(b + n)) for b, n in zip(before, shape))
-    inside = np.ascontiguousarray(inside_full[crop])
-    del inside_full
-    offset = SDF_ZERO_OFFSET_VOX if zero_offset_vox is None else zero_offset_vox
-    # each EDT measures to the nearest voxel CENTRE of the other set; half a voxel off each side makes the field
-    # continuous with slope ~1 across the boundary (the plain difference jumps by 2 voxels within one cell)
-    field = np.where(inside, 0.5 - ndimage.distance_transform_edt(inside),
-                     ndimage.distance_transform_edt(~inside) - 0.5)
-    field = (field + offset) * vox
-    if exact_band_vox > 0:
-        _exact_outside_band(field, lo, vox, P, F, pts, tri_of, exact_band_vox)
-    return Sdf(field=field, lo=lo, vox=float(vox))
-
-
-def _seal_cavities(surf: np.ndarray, inside: np.ndarray, thick_vox: int = SDF_SEAL_THICK_VOX) -> np.ndarray:
-    """``inside`` plus the cavities the hole fill left open (``body_sdf``): voxels that are not inside but have a
-    surface voxel before AND after them along each of the three axes (enclosed by the body in all six directions —
-    an opening of a few centimetres only leaves the voxels in line with it), kept where they belong to a region at
-    least ``2 * thick_vox + 1`` voxels thick (eroded by ``thick_vox``, grown back within the candidates). Kira's
-    base bodies, the bodies whose fill holds and every unrigged body but one: nothing added."""
-    from scipy import ndimage
-    enclosed = ~inside
-    for axis in range(3):
-        before = np.cumsum(surf, axis=axis, dtype=np.int16)
-        total = np.take(before, [-1], axis=axis)
-        enclosed &= (before - surf) > 0
-        enclosed &= (total - before) > 0
-        del before
-    core = ndimage.binary_erosion(enclosed, iterations=thick_vox)
-    if not core.any():
-        return inside
-    return inside | ndimage.binary_dilation(core, iterations=thick_vox + 1, mask=enclosed)
-
-
-def _exact_outside_band(field: np.ndarray, lo: np.ndarray, vox: float, P: np.ndarray, F: np.ndarray,
-                        pts: np.ndarray, tri_of: np.ndarray, band_vox: float, k: int = 8) -> None:
-    """Replace the outside band ``0 < field <= band_vox`` voxels by the exact distance to the nearest of the
-    triangles of their ``k`` nearest surface samples (in place; ``fit_kernels.band_distance``, the numba port of
-    ``point_triangle_distance``)."""
-    from scipy.spatial import cKDTree
-    band = (field > 0) & (field <= band_vox * vox)
-    cells = np.argwhere(band)
-    if len(cells) == 0:
-        return
-    X = lo + cells * vox
-    reach = (band_vox + 2) * vox
-    near = ((pts >= X.min(0) - reach) & (pts <= X.max(0) + reach)).all(1)
-    if not near.any():
-        return
-    _, nn = cKDTree(pts[near]).query(X, k=min(k, int(near.sum())), workers=fit_kernels.threads())
-    nn = nn.reshape(len(X), -1)
-    tris = F[tri_of[near][nn]]                                  # (n, k, 3)
-    field[tuple(cells.T)] = fit_kernels.band_distance(X, P, tris)
+    """Signed distance field of the body solid on a grid cropped to ``bounds = (lo, hi)``, snapped outward to the
+    body's lattice: ``body_field.field(body_field.body_solid(P, F, vox=vox), bounds, ...)`` — the solid (surface
+    voxelisation, hole fill, seal, three-axis slice fill) is built once per body content and cached per process;
+    the crop's EDT, zero-level offset and exact outside band are taken from it (``app/core/body_field.py``, plan
+    2026-11-12 fit-sdf-speed-drape, Task 5)."""
+    from app.core import body_field
+    return body_field.field(body_field.body_solid(P, F, vox=vox), bounds, zero_offset_vox=zero_offset_vox,
+                            exact_band_vox=exact_band_vox)
 
 
 def _adjacency(F: np.ndarray, n: int):
