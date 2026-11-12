@@ -5,8 +5,12 @@
  * Source: GET /characters/{c}/belongings (same shape as /play/belongings).
  * Setters: POST /inventory/characters/{c}/{equip,unequip,apply-outfit-set},
  * GET/POST /characters/{c}/outfit-lock for the "keep this outfit" switch.
- * Own-mesh pieces (WardrobeGarment): GET /characters/{c}/garments for the
- * row toggles, chips and the layer-order warning; one expandable chain panel.
+ * Modes (WardrobeGarment; plan 2026-11-12-unified-worn-pieces Task 9): GET
+ * /characters/{c}/garments for the mode select on every outfit-piece row
+ * (`modes`), the own-mesh chips and the layer-order warning; after a mode
+ * change the row's wearers line ("worn by K characters now" · "Build for them
+ * (cost)"); one chain dialog per own-mesh piece ("Mesh steps"). The hair row
+ * on top (WardrobeHairRow): the hair's mode and its settings.
  * Boot hem (BootHemControl): GET/POST /characters/{c}/outfit-options, shown
  * under the worn boot when own-mesh trousers are worn with it.
  */
@@ -16,7 +20,9 @@ import { apiGet, apiPost, apiDelete, setOutfitOptions, type BootHemMode, type Bo
 import { useToast } from '../../lib/Toast'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
-import { GarmentPieceDialog, OwnMeshToggle, PieceStatusChip } from './WardrobeGarment'
+import { GarmentPieceDialog, MeshModeSelect, PieceStatusChip, WearersLine } from './WardrobeGarment'
+import { WardrobeHairRow } from './WardrobeHairRow'
+import { meshModeOf } from './figureModel'
 import { useWardrobeGarments } from './useGarment'
 import { ConfirmDialog, PromptPreview } from '@anima/player-ui'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
@@ -189,7 +195,11 @@ function OutfitLockSwitch({ character }: { character: string }) {
   )
 }
 
-export function WardrobeTab({ character }: { character: string }) {
+export function WardrobeTab({ character, onEditAppearance }: {
+  character: string
+  /** Opens the Appearance tab (the hair row's description is edited there). */
+  onEditAppearance?: () => void
+}) {
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
@@ -251,6 +261,8 @@ export function WardrobeTab({ character }: { character: string }) {
   const { data: garments, reload: reloadGarments, setStatus: setGarmentStatus } = useWardrobeGarments(character)
   const [openGarment, setOpenGarment] = useState('')
   const closeGarment = useCallback(() => setOpenGarment(''), [])
+  // Rows whose mode was changed here: item id -> a counter the wearers line reloads on.
+  const [modeChanged, setModeChanged] = useState<Record<string, number>>({})
   const load = useCallback(async () => {
     if (!character) { setData(EMPTY); return }
     try { setData(await apiGet<Belongings>(`/characters/${enc}/belongings`)) } catch { /* ignore */ }
@@ -407,6 +419,9 @@ export function WardrobeTab({ character }: { character: string }) {
           </div>
         ))}
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {!slotFilter || slotFilter === 'head' ? (
+            <WardrobeHairRow character={character} onEditAppearance={onEditAppearance} />
+          ) : null}
           {filtered.length === 0 && <div className="ga-placeholder">{t('No outfit pieces')}</div>}
           {filtered.map((it) => {
             const sub = it.description || it.slots.map((s) => data.slot_labels[s] || s).join(', ')
@@ -450,9 +465,13 @@ export function WardrobeTab({ character }: { character: string }) {
               </div>
               {garments ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 50, minWidth: 0 }}>
-                  <OwnMeshToggle itemId={it.item_id} checked={!!garmentStatus} disabled={busy}
+                  <MeshModeSelect itemId={it.item_id} pipeline={garments.pipeline} disabled={busy}
+                    mode={garments.modes?.[it.item_id] || meshModeOf('', it.slots)}
                     feet={it.slots.length > 0 && it.slots.every((s) => s === 'feet')}
-                    onChanged={() => { void load() }} />
+                    onChanged={() => {
+                      setModeChanged((prev) => ({ ...prev, [it.item_id]: (prev[it.item_id] || 0) + 1 }))
+                      void load()
+                    }} />
                   {garmentStatus ? <PieceStatusChip status={garmentStatus} name={it.name} /> : null}
                   {garmentStatus ? (
                     <button style={{ ...btn(), marginLeft: 'auto' }} aria-haspopup="dialog"
@@ -460,6 +479,11 @@ export function WardrobeTab({ character }: { character: string }) {
                       {t('Mesh steps')}
                     </button>
                   ) : null}
+                </div>
+              ) : null}
+              {modeChanged[it.item_id] ? (
+                <div style={{ paddingLeft: 50 }}>
+                  <WearersLine itemId={it.item_id} version={modeChanged[it.item_id]} />
                 </div>
               ) : null}
               {it.equipped && garments?.hem?.applicable && garments.hem.boot_item === it.item_id ? (

@@ -14,6 +14,7 @@ import type { ImageTileMeta } from './RefImage'
 import type { Freshness } from './FreshnessBadge'
 import type { CollisionPayload, FootPose } from '@anima/scene-render'
 import type { GarmentRunBody } from './garmentStyle'
+import type { MeshMode } from './figureModel'
 
 export const GARMENT_VIEWS = ['front', 'back'] as const
 export type GarmentView = typeof GARMENT_VIEWS[number]
@@ -483,6 +484,9 @@ export interface WardrobeGarments {
   pipeline: boolean
   /** Every own-mesh piece the character holds or wears. */
   items: Record<string, PieceStatus>
+  /** The mode of EVERY outfit piece the character holds or wears (`garment_set.held_outfit_pieces`) — the
+   *  row's mode select; the mode lives on the item, the same for every wearer. */
+  modes: Record<string, MeshMode>
   /** Worn own-mesh pieces that are over each other: layered in slot order (inner first). */
   overlaps: Array<{ items: string[]; slots: string[] }>
   /** The boot hem control under the worn feet piece (boots spec § 8.3). */
@@ -495,7 +499,7 @@ export interface GarmentItemInfo {
   item_id: string
   name: string
   kind: string
-  mesh_mode: string
+  mesh_mode: MeshMode
   worn: boolean
   status: PieceStatus
   garment: GarmentInfo | null
@@ -552,9 +556,28 @@ export function useGarment<T extends { garment?: GarmentInfo | null }>(url: stri
   return { info, setInfo, startPoll }
 }
 
+/** One wearer of an item (GET /inventory/items/{id}/wearers): its pending changes, "Build automatically",
+ *  and what its own Build would cost and run (`figure_build.cost`, a manual Build). */
+export interface ItemWearer {
+  name: string
+  changes: number
+  auto_build: boolean
+  hub_jobs: number | null
+  steps: string[]
+}
+
+/** GET /inventory/items/{id}/wearers — the characters on the figure pipeline wearing the item now. */
+export interface ItemWearers {
+  item_id: string
+  mode: MeshMode | ''
+  wearers: ItemWearer[]
+  /** The sum of every wearer's Build cost; `hub_jobs` null as soon as one is unknown. */
+  cost: { hub_jobs: number | null; note: string }
+}
+
 /** The Wardrobe's own-mesh overview of a character (GET
  *  /characters/{n}/garments), loaded by `reload` — the Wardrobe calls it with
- *  its belongings; null before, and when it failed (the toggles then stay
+ *  its belongings; null before, and when it failed (the mode selects then stay
  *  hidden). */
 export function useWardrobeGarments(character: string) {
   const [data, setData] = useState<WardrobeGarments | null>(null)

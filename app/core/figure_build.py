@@ -102,6 +102,12 @@ OFF_PIPELINE = "Off the figure pipeline — the character is not on the base-bod
 TRACK_TYPE = "figure_build"
 
 
+#: The plan label's tail of a chain that failed for its current fsig (ruling 7a).
+FAILED_SUFFIX = " — failed — Retry"
+#: What replaces it while a manual Build retries that chain (T8 concern 7).
+RETRY_SUFFIX = " — retrying"
+
+
 @dataclass(frozen=True)
 class Step:
     name: str            # one of STEP_ORDER
@@ -117,6 +123,13 @@ class Step:
     def as_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "label": self.label, "jobs": self.jobs, "item_id": self.item_id,
                 "failed": self.failed, "manual": self.manual}
+
+    def running_label(self, explicit: bool) -> str:
+        """The label while the step runs: a cached chain failure that a manual
+        Build retries reads "… — retrying", not "… — failed — Retry"."""
+        if explicit and self.failed and self.label.endswith(FAILED_SUFFIX):
+            return self.label[:-len(FAILED_SUFFIX)] + RETRY_SUFFIX
+        return self.label
 
 
 # --- Plan ---------------------------------------------------------------------------
@@ -169,7 +182,7 @@ def _chain_step(character_name: str, name: str, item_id: str, label: str,
         error = str(failure.get("error") or "chain failed")
         if failure.get("step"):
             error = f"{failure['step']} — {error}"
-        return Step(name, f"{label} — failed — Retry", 0, item_id, failed=error)
+        return Step(name, f"{label}{FAILED_SUFFIX}", 0, item_id, failed=error)
     estimate = garments.run_estimate(character_name, item_id, profile=profile)
     if estimate.get("hub_jobs") is None:
         return Step(name, f"{label} ({estimate.get('note') or 'cost unknown'})", None, item_id)
@@ -472,9 +485,11 @@ def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
     skipped: List[str] = []
     try:
         for index, step in enumerate(steps, 1):
-            label = f"Build · {character_name} ({index}/{len(steps)} {step.label})"
+            shown = step.running_label(explicit)
+            label = f"Build · {character_name} ({index}/{len(steps)} {shown})"
             with _lock:
-                _current[character_name]["step"] = {**step.as_dict(), "index": index, "count": len(steps)}
+                _current[character_name]["step"] = {**step.as_dict(), "label": shown, "index": index,
+                                                    "count": len(steps)}
             if queue is not None and task_id:
                 try:
                     queue.track_update_label(task_id, label)

@@ -349,18 +349,24 @@ def get_item_wearers_route(item_id: str, _admin=Depends(require_admin)) -> Dict[
     """The characters on the figure pipeline wearing the item (dormant and
     pooled ones included, ``figure_build.wearers``) — admin-only, it names
     other characters. ``{item_id, mode, wearers: [{name, changes,
-    auto_build}], cost: {hub_jobs, note}}``: ``mode`` the item's mesh mode,
-    ``changes`` the count of ``figure.pending_changes``, ``cost`` the sum of
-    every wearer's Build cost (``hub_jobs`` None as soon as one is unknown)."""
+    auto_build, hub_jobs, steps}], cost: {hub_jobs, note}}``: ``mode`` the
+    item's mesh mode, ``changes`` the count of ``figure.pending_changes``,
+    ``hub_jobs`` / ``steps`` the wearer's own Build cost and the labels of
+    the steps it would run (``figure_build.cost``: a manual Build — a plain
+    body made with older prompts and a "failed — Retry" piece included),
+    ``cost`` the sum of every wearer's Build cost (``hub_jobs`` None as soon
+    as one is unknown)."""
     from app.core import figure, figure_build, garment_set
     item = get_item(item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
     rows, total, unknown = [], 0, []
     for name in figure_build.wearers(item_id):
+        own = figure_build.cost(name)
+        jobs = own.get("hub_jobs")
         rows.append({"name": name, "changes": len(figure.pending_changes(name)),
-                     "auto_build": figure_build.auto_build_on(name)})
-        jobs = figure_build.cost(name).get("hub_jobs")
+                     "auto_build": figure_build.auto_build_on(name), "hub_jobs": jobs,
+                     "steps": [str(s.get("label") or "") for s in own.get("steps") or []]})
         if jobs is None:
             unknown.append(name)
         else:

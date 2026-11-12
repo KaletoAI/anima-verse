@@ -104,7 +104,9 @@ export interface DraftItem {
   covers: string[]
   motion_damping: number
   partially_covers: string[]
-  /** '' = not stored yet (the server picks the kind default). */
+  /** '' = not stored yet (the server picks the kind default). Shown read-only: the mode is set in a
+   *  wearer's Wardrobe, and draftToBody never sends it (`inventory.update_item` keeps the stored one), so a
+   *  form opened before a Wardrobe change cannot overwrite it. */
   mesh_mode: string
   exposed_detail: boolean
   lift: number | null
@@ -327,7 +329,6 @@ export function draftToBody(d: DraftItem): Record<string, unknown> {
       covers: d.covers,
       motion_damping: d.motion_damping,
       partially_covers: d.partially_covers,
-      ...(d.mesh_mode ? { mesh_mode: d.mesh_mode } : {}),
       exposed_detail: d.exposed_detail,
       // null resets the piece to the slot default.
       lift: d.lift,

@@ -170,6 +170,25 @@ def held_clothing(character_name: str, *,
     return _flagged(ids)
 
 
+def held_outfit_pieces(character_name: str, *,
+                       profile: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """``{item_id: mode}`` of EVERY outfit piece the character holds
+    (inventory) or wears (``equipped_pieces``), whatever its mode
+    (``mesh_mode_of``) — the Wardrobe's mode select per row. Not gated on
+    the pipeline (the select is disabled off it, the mode still shows)."""
+    from app.models.inventory import _load_inventory, get_item
+    entries = _load_inventory(character_name).get("inventory") or []
+    ids = {str(e.get("item_id") or "").strip() for e in entries}
+    ids.update(_ids(_profile_of(character_name, profile).get("equipped_pieces")))
+    ids.discard("")
+    out: Dict[str, str] = {}
+    for item_id in sorted(ids):
+        mode = mesh_mode_of(get_item(item_id))
+        if mode is not None:
+            out[item_id] = mode
+    return out
+
+
 # --- The Wardrobe (plan Task 5): row status and overlap warning ---------------------
 
 #: Progress states of an own-mesh piece (``piece_status``), in chain order.
@@ -411,9 +430,11 @@ def worn_layers(character_name: str, *, profile: Optional[Dict[str, Any]] = None
 
 def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The Wardrobe's own-mesh overview of a character: ``{pipeline,
-    items: {item_id: piece_status}, overlaps}`` — ``items`` covers every
-    own-mesh piece the character holds or wears (``held_clothing``; a worn
-    piece over others names them, ``worn_layers``), ``overlaps`` the worn
+    items: {item_id: piece_status}, modes: {item_id: mode}, overlaps}`` —
+    ``items`` covers every own-mesh piece the character holds or wears
+    (``held_clothing``; a worn piece over others names them,
+    ``worn_layers``), ``modes`` the mode of EVERY outfit piece it holds or
+    wears (``held_outfit_pieces``, the row's mode select), ``overlaps`` the worn
     ones whose layer order is a guess (``mesh_overlaps``: a cycle, put in
     slot rank order; [] off the pipeline, where the mode is ignored),
     ``queue_running`` / ``queue`` the character's garment queue
@@ -441,7 +462,8 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
     overlaps = (mesh_overlaps(pieces, slot_order=body_slots.piece_slots_for_character(character_name))
                 if pipeline else [])
     queue = garments.queue_state(character_name)
-    return {"pipeline": pipeline, "items": items, "overlaps": overlaps,
+    return {"pipeline": pipeline, "items": items,
+            "modes": held_outfit_pieces(character_name, profile=profile), "overlaps": overlaps,
             "queue_running": queue["queue_running"], "queue": queue["queue"],
             "hem": _wardrobe_hem(character_name, profile, pipeline)}
 

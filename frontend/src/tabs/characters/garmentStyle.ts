@@ -1,6 +1,6 @@
 /**
  * Shared styles, chip specs and helpers of the garment step views
- * (GarmentSteps, FieldHair, WardrobeGarment) — kept out of the component
+ * (GarmentSteps, FieldHair, WardrobeGarment, WardrobeHairRow) — kept out of the component
  * modules so fast refresh keeps working.
  */
 import type { CSSProperties } from 'react'
@@ -53,6 +53,26 @@ export interface ChipSpec {
   /** A boolean of the record that says whether this number is gated
    *  (false = reported only, e.g. `head_gated` of a piece worn on the head). */
   gatedKey?: string
+}
+
+/** The HairDeck fit's chips (the Wardrobe's hair row, the Hair tab's kept results). */
+export const HAIRDECK_FIT_CHIPS: ChipSpec[] = [
+  { key: 'max_push_m', label: 'Max push', scale: 100, unit: 'cm', digits: 1 },
+  { key: 'moved_share', label: 'Moved', scale: 100, unit: '%', digits: 1 },
+  { key: 'icp_resid_p95_m', label: 'Head match (p95)', scale: 1000, unit: 'mm', digits: 1 },
+  // Reported, not gated.
+  { key: 'icp_scale', label: 'Scale', scale: 1, unit: '', digits: 3 },
+  { key: 'cap_tris', label: 'Scalp cap triangles', scale: 1, unit: '', digits: 0 },
+  { key: 'forward_m', label: 'Forward shift', scale: 1000, unit: 'mm', digits: 1 },
+  { key: 'tilt_deg', label: 'Forward tilt', scale: 1, unit: '°', digits: 1 },
+  { key: 'width_scale', label: 'Hair width', scale: 1, unit: '×', digits: 2 },
+]
+
+/** The step names of a hair chain (`garment_store.steps_for` of HairDeck). */
+export const HAIR_STEP_LABELS: Record<string, string> = {
+  queued: 'Queued',
+  hairdeck: 'HairDeck',
+  fit: 'Fit',
 }
 
 /** The step names of a footwear piece (FootwearSteps, the dialog's run status line). */

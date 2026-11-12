@@ -1,26 +1,30 @@
 /**
- * WardrobeGarment — own-mesh outfit pieces in the Wardrobe (plan
- * docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md, Task 5).
+ * WardrobeGarment — the 3D side of outfit pieces in the Wardrobe (plans
+ * docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md Task 5,
+ * docs/superpowers/plans/2026-11-12-unified-worn-pieces.md Task 9).
  *
- * A piece in mode `own_mesh` (`outfit_piece.mesh_mode`) becomes a fitted 3D
- * mesh of its own on characters of the base-body pipeline instead of being
- * painted onto the body; the flag lives on the ITEM, so the toggle applies
- * to every wearer (2D images stay unchanged). Per row: the toggle, the
- * status chip (server: `garment_set.piece_status`) and "Mesh steps", which
- * opens the piece's dialog (GarmentPieceDialog): the clothing chain (worn →
- * piece-only → cut-outs → mesh → fit) as a compact grid — thumbnails, one
- * gate icon per image with the chips in its tooltip, Regenerate per view —
- * beside the fitted preview with its freshness badge, its fit numbers and
- * the step overview (ModelSteps).
+ * Every outfit piece has ONE mode on its ITEM (`outfit_piece.mesh_mode`), the
+ * same for every wearer: Own mesh (a finished mesh fitted on top), Painted (on
+ * the body's texture) or In the body (meshed as part of the body). Per row:
+ * the mode select (MeshModeSelect — saved at once, spends nothing; disabled
+ * off the figure pipeline), after a change the wearers line (WearersLine —
+ * "worn by K characters now" and one "Build for them (cost)"), and for an
+ * own-mesh piece its status chip (server: `garment_set.piece_status`) and
+ * "Mesh steps", which opens the piece's dialog (GarmentPieceDialog): the
+ * clothing chain (worn → piece-only → cut-outs → mesh → fit) as a compact grid
+ * — thumbnails, one gate icon per image with the chips in its tooltip,
+ * Regenerate per view — beside the fitted preview with its freshness badge,
+ * its fit numbers and the step overview (ModelSteps).
  *
- * Backend: GET /characters/{n}/garments (overview: pipeline, row status
- * incl. the pieces it is fitted over, worn pieces over each other), GET
- * /characters/{n}/garments/{item} (the dialog, polled while a step runs —
- * useGarment), POST /characters/{n}/garments/{item}/run {step?, view?,
- * force?} (a run behind the character's other garment runs is queued; the
- * click answers on its button and tile — useGarmentRun), GET + PUT
- * /inventory/items/{item}
- * (the flag; the PUT replaces the whole outfit_piece, so it is read first).
+ * Backend: GET /characters/{n}/garments (overview: pipeline, the mode of every
+ * held/worn piece, row status incl. the pieces it is fitted over, worn pieces
+ * over each other), GET /characters/{n}/garments/{item} (the dialog, polled
+ * while a step runs — useGarment), POST /characters/{n}/garments/{item}/run
+ * {step?, view?, force?} (a run behind the character's other garment runs is
+ * queued; the click answers on its button and tile — useGarmentRun), GET + PUT
+ * /inventory/items/{item} (the mode; the PUT replaces the whole outfit_piece,
+ * so it is read first), GET /inventory/items/{item}/wearers + POST
+ * …/build-wearers (the wearers line).
  *
  * A footwear piece (a shoe or a boot) shows the shoe source steps and the fit
  * (FootwearSteps) and, on the right, the SHOD PREVIEW: the base model with
@@ -29,7 +33,7 @@
  * height groups ground / ground / seat); POST …/footwear/width-cap saves the
  * width cap the slider sets.
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -46,10 +50,9 @@ import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
 import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
-import type { GarmentItemInfo, PieceStatus } from './useGarment'
-
-/** The item flag's explanation (also the hint of the item editor). */
-const OWN_MESH_HINT = 'Characters on the base-body pipeline get this piece as a fitted 3D mesh of its own instead of painting it onto the body. Applies to every wearer; 2D images stay unchanged.'
+import type { GarmentItemInfo, ItemWearers, PieceStatus } from './useGarment'
+import { BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, wearersLine } from './figureModel'
+import type { MeshMode } from './figureModel'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
  *  2026-11-11 § 15). */
@@ -179,40 +182,140 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
   )
 }
 
-/** The item flag. The PUT replaces the whole outfit_piece, so the stored
- *  one is read first and only `mesh_mode` changes (off = painted). */
-export function OwnMeshToggle({ itemId, checked, disabled, feet = false, onChanged }: {
+/** The mode select of one outfit piece (ruling 3): Own mesh · Painted · In the
+ *  body, saved at once on the ITEM (every wearer) and spending nothing — the
+ *  PUT replaces the whole outfit_piece, so the stored one is read first and
+ *  only `mesh_mode` changes. Off the figure pipeline it is disabled with the
+ *  reason under it. `onChanged` gets the saved mode (the row then shows its
+ *  wearers line). */
+export function MeshModeSelect({ itemId, mode, pipeline, disabled, feet = false, onChanged }: {
   itemId: string
-  checked: boolean
+  mode: MeshMode
+  /** The character is on the figure pipeline (`GET …/garments` pipeline). */
+  pipeline: boolean
   disabled?: boolean
-  /** A piece worn in slot feet alone: a rigid shoe (own label and hint). */
+  /** A piece worn in slot feet alone: a rigid shoe (its own-mesh hint). */
   feet?: boolean
-  onChanged: () => void
+  onChanged: (mode: MeshMode) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const [busy, setBusy] = useState(false)
-  const flip = async (own: boolean) => {
-    if (busy) return
+  const choose = async (next: MeshMode) => {
+    if (busy || next === mode) return
     setBusy(true)
     try {
       const url = `/inventory/items/${encodeURIComponent(itemId)}`
       const { item } = await apiGet<{ item: { outfit_piece?: Record<string, unknown> } }>(url)
-      await apiPut(url, { outfit_piece: { ...(item.outfit_piece || {}), mesh_mode: own ? 'own_mesh' : 'painted' } })
-      onChanged()
+      await apiPut(url, { outfit_piece: { ...(item.outfit_piece || {}), mesh_mode: next } })
+      onChanged(next)
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
       setBusy(false)
     }
   }
+  const hint = [t(MESH_MODE_HINTS[mode]), mode === 'own_mesh' && feet ? t(OWN_MESH_SHOE_HINT) : '',
+    t('Applies to every wearer; 2D images stay unchanged. Changing it spends nothing.')].filter(Boolean).join(' ')
   return (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: '0.75em' }}
-      title={t(feet ? OWN_MESH_SHOE_HINT : OWN_MESH_HINT)}>
-      <input type="checkbox" checked={checked} disabled={disabled || busy}
-        onChange={(e) => { void flip(e.target.checked) }} />
-      <span>{feet ? t('Own mesh — footwear') : t('Own mesh (every wearer)')}</span>
-    </label>
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75em' }} title={hint}>
+        <span style={{ opacity: 0.7 }}>{t('Mode')}</span>
+        <select className="ga-input" style={{ width: 'auto', padding: '1px 4px', fontSize: '1em' }}
+          value={mode} disabled={!pipeline || disabled || busy} aria-label={t('Mode')}
+          onChange={(e) => { void choose(e.target.value as MeshMode) }}>
+          {MESH_MODES.map((m) => <option key={m} value={m}>{t(MESH_MODE_LABELS[m])}</option>)}
+        </select>
+      </label>
+      {!pipeline ? (
+        <span className="ga-hint" style={{ fontSize: '0.7em' }}>
+          {t('Only characters on the figure pipeline use modes')}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+/** The labels of the steps one Build would run, collapsed (what "Build" spends, before the click). */
+export function BuildSteps({ summary, steps }: { summary: string; steps: string[] }) {
+  const { t } = useI18n()
+  if (!steps.length) return null
+  return (
+    <details style={{ fontSize: '0.72em' }}>
+      <summary className="ga-hint" style={{ cursor: 'pointer' }}>{summary}</summary>
+      <ul style={{ margin: '2px 0 0 0', paddingLeft: 18 }}>
+        {steps.map((s, i) => <li key={i} className="ga-hint">{t(s)}</li>)}
+      </ul>
+    </details>
+  )
+}
+
+/** The line under a piece whose mode was just changed (ruling 3): "worn by K
+ *  characters now" (each wearer with its pending changes), ONE "Build for
+ *  them (cost)" button — one Build per wearer, POST
+ *  /inventory/items/{id}/build-wearers — and the reason under it when there
+ *  is nobody to build for. What each wearer's Build runs is listed collapsed
+ *  (a plain body made with older prompts and a "failed — Retry" piece
+ *  included: a manual Build runs them). */
+export function WearersLine({ itemId, version }: {
+  itemId: string
+  /** Bumped by the row on every mode change: the line reloads. */
+  version: number
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [data, setData] = useState<ItemWearers | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const url = `/inventory/items/${encodeURIComponent(itemId)}`
+  const load = useCallback(async () => {
+    try {
+      setData(await apiGet<ItemWearers>(`${url}/wearers`))
+      setError('')
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }, [url])
+  useEffect(() => { void load() }, [load, version])
+  if (error) return <div className="ga-hint" style={{ ...WARN_STYLE, fontSize: '0.72em' }}>{error}</div>
+  if (!data) return <div className="ga-hint" style={{ fontSize: '0.72em' }}>{t('Loading…')}</div>
+  const line = wearersLine(data.wearers.length, data.cost.hub_jobs)
+  const build = async () => {
+    setBusy(true)
+    try {
+      const d = await apiPost<{ started: Record<string, string> }>(`${url}/build-wearers`, {})
+      const parts = Object.entries(d.started || {}).map(([name, status]) => `${name}: ${t(BUILD_STATUS[status] || status)}`)
+      toast(parts.join(' · ') || t('Nobody wears it now'), 'success')
+      await load()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const who = data.wearers.map((w) => `${w.name} (${w.changes === 1 ? t('1 change')
+    : t('{n} changes').replace('{n}', String(w.changes))})`).join(', ')
+  const plural = (n: number) => (n === 1 ? t('worn by 1 character now') : t('worn by {n} characters now')
+    .replace('{n}', String(n)))
+  const jobs = (n: number | null) => (n === null ? t('cost unknown')
+    : n === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(n)))
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: '0.75em' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span>{plural(data.wearers.length)}{who ? `: ${who}` : ''}</span>
+        {line.button ? (
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy} title={t(data.cost.note)}
+            onClick={() => { void build() }}>
+            {t('Build for them ({cost})').replace('{cost}', jobs(data.cost.hub_jobs))}
+          </button>
+        ) : null}
+      </div>
+      {line.reason ? <span className="ga-hint">{t(line.reason)}</span> : null}
+      {data.wearers.map((w) => (
+        <BuildSteps key={w.name} steps={w.steps}
+          summary={t('{name}: what the Build runs ({cost})').replace('{name}', w.name).replace('{cost}', jobs(w.hub_jobs))} />
+      ))}
+    </div>
   )
 }
 

@@ -9,18 +9,15 @@
  * - HairDeck (plan docs/superpowers/plans/2026-11-09-hairdeck-hair.md): the
  *   profile picture -> hair cards in one Hub call -> fit onto the rigged base
  *   model. The hair item is a garment worn in the `hair` mesh slot. Every step
- *   is gated; the tab shows the fit's numbers against the server's limits so a
- *   refusal is visible, never silent. The HairDeck colour (POST
- *   /characters/{n}/hair/colour) and the placement (POST
- *   /characters/{n}/hair/placement {forward_m, tilt_deg, width_scale}, null = automatic)
- *   only re-fit from the stored HairDeck result.
+ *   is gated.
  *
- * The method selector at the top stores the character's choice (POST
- * /characters/{n}/hair/method, "" = world default). A switch generates
- * nothing: a kept HairDeck result is served again on the way back. With
- * `body`, a base rendered with older prompts (`base_prompts` stale) points to
- * its rebuild — Regenerate in the Base body tab or the Improvements type
- * `base_refresh`.
+ * The mode select, the HairDeck colour, the placement and the HairDeck steps
+ * (with seed and run) moved to the Wardrobe's hair row (WardrobeHairRow,
+ * HairDeckPlacement; plan docs/superpowers/plans/2026-11-12-unified-worn-pieces.md
+ * Task 9) — one place edits them. This tab keeps what the Figure tab (Task 10)
+ * takes over: wearing the hair, creating the item, the run state, the fitted
+ * preview with "Run all", and the kept results of other methods. With `body`, a
+ * base rendered with older prompts (`base_prompts` stale) points to its rebuild.
  *
  * Backend (app/routes/characters.py, app/core/garments.py):
  * GET /characters/{n}/hair (polled while a step runs — useGarment),
@@ -34,65 +31,35 @@
  * Changing it does not start GPU work (R14): the tab shows "Hair description
  * changed" and the old hair stays served until Regenerate.
  *
- * Layout: three columns — method, description and state; the HairDeck steps
- * (small tiles, a click enlarges); the fitted preview with what re-fits it
- * (colour and placement) and "Run all".
+ * Layout: two columns — method, description and state; the fitted preview
+ * with "Run all".
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
-import {
-  FitBlock, GarmentFailure, GateChips, RecordNumbers, RunBadge, RunButton, RunStatusLine, StepState,
-} from './GarmentSteps'
-import { EMPTY_TILE, ERROR_STYLE, ROW, WARN_STYLE, flatFit, num } from './garmentStyle'
+import { GarmentFailure, GateChips, RunButton, RunStatusLine } from './GarmentSteps'
+import { HAIRDECK_FIT_CHIPS, HAIR_STEP_LABELS, ROW, WARN_STYLE } from './garmentStyle'
 import { FreshnessBadge } from './FreshnessBadge'
-import type { ChipSpec, GarmentRunBody } from './garmentStyle'
+import type { GarmentRunBody } from './garmentStyle'
 import { Model3DViewer } from './Model3DViewer'
-import { RefImage } from './RefImage'
-import { garmentRunning, runMark, runSlot, useGarment, useGarmentRun } from './useGarment'
-import type { HairDeckPanel, HairInfo, HairMethod, HairPlacement, OtherMethodInfo } from './useGarment'
+import { Swatch } from './WardrobeHairRow'
+import { garmentRunning, useGarment, useGarmentRun } from './useGarment'
+import type { HairInfo, HairMethod, OtherMethodInfo } from './useGarment'
 
-/** HairDeck's three image tiles: small, a click enlarges. */
-const HAIRDECK_TILE = 140
-
-/** The HairDeck method's steps (`garment_store.steps_for`). */
-const HAIRDECK_ORDER = ['hairdeck', 'fit'] as const
-
-const STEP_LABELS: Record<string, string> = {
-  queued: 'Queued',
-  hairdeck: 'HairDeck',
-  fit: 'Fit',
-}
+const STEP_LABELS = HAIR_STEP_LABELS
 
 const METHOD_LABELS: Record<HairMethod, string> = {
   body: 'From the body mesh',
   hairdeck: 'HairDeck',
 }
 
-/** Every method in the selector's order. */
-const METHODS: HairMethod[] = ['body', 'hairdeck']
-
-const METHOD_HINTS: Record<HairMethod, string> = {
-  body: 'The base body is rendered with the hair, so the hair is part of the body mesh — no hair mesh, no hair job.',
-  hairdeck: 'HairDeck makes hair cards from the profile picture in one step.',
-}
+/** Where the hair's settings are edited now (plan 2026-11-12-unified-worn-pieces, Task 9). */
+const MOVED_HINT = "Mode, colour, placement and the HairDeck steps are set in the Wardrobe's hair row."
 
 /** "Create hair" exists for HairDeck only — `body` makes no hair item. */
 const CREATE_HINT = 'Makes hair cards from the profile picture and fits them onto the base model.'
-
-const HAIRDECK_STATUS: Record<string, string> = {
-  accepted: 'Accepted',
-  refused: 'Refused',
-  missing: 'Not run yet',
-}
-
-const HAIRDECK_TILES: Array<['input' | 'prep' | 'model_input', string]> = [
-  ['input', 'Input (profile picture)'],
-  ['prep', 'Prepared'],
-  ['model_input', 'Model input'],
-]
 
 const STALE_LABELS: Record<string, string> = {
   description_changed: 'Hair description changed',
@@ -102,224 +69,6 @@ const STALE_LABELS: Record<string, string> = {
   hairdeck_changed: 'Profile picture or HairDeck settings changed',
   colour_changed: 'Hair colour changed',
   placement_changed: 'Hair placement changed',
-}
-
-const HAIRDECK_FIT_CHIPS: ChipSpec[] = [
-  { key: 'max_push_m', label: 'Max push', scale: 100, unit: 'cm', digits: 1 },
-  { key: 'moved_share', label: 'Moved', scale: 100, unit: '%', digits: 1 },
-  { key: 'icp_resid_p95_m', label: 'Head match (p95)', scale: 1000, unit: 'mm', digits: 1 },
-  // Reported, not gated.
-  { key: 'icp_scale', label: 'Scale', scale: 1, unit: '', digits: 3 },
-  { key: 'cap_tris', label: 'Scalp cap triangles', scale: 1, unit: '', digits: 0 },
-  { key: 'forward_m', label: 'Forward shift', scale: 1000, unit: 'mm', digits: 1 },
-  { key: 'tilt_deg', label: 'Forward tilt', scale: 1, unit: '°', digits: 1 },
-  { key: 'width_scale', label: 'Hair width', scale: 1, unit: '×', digits: 2 },
-]
-
-function Swatch({ hex }: { hex: string }) {
-  return (
-    <span
-      aria-hidden
-      style={{
-        display: 'inline-block', width: 18, height: 18, borderRadius: 4, background: hex,
-        border: '1px solid var(--border, #30363d)', verticalAlign: 'middle',
-      }}
-    />
-  )
-}
-
-/** The HairDeck hair colour: automatic (the profile's named hair colour, else
- *  HairDeck's own) or a manual one; the last fit's colour distance (ΔE).
- *  Keyed by the server values, so the draft starts from them after a save. */
-function HairColour({ colour, busy, running, onApply }: {
-  colour: HairDeckPanel['colour']
-  busy: boolean
-  /** A hair run is active: the colour waits for it. */
-  running: boolean
-  onApply: (hex: string) => void
-}) {
-  const { t } = useI18n()
-  const [draft, setDraft] = useState(colour.target || colour.profile?.hex || colour.auto || '#7f6248')
-  const fitted = colour.fitted
-  return (
-    <>
-      <div style={ROW}>
-        <span className="ga-hint">{t('Automatic')}:</span>
-        {colour.profile ? <Swatch hex={colour.profile.hex} /> : null}
-        {colour.profile ? <span className="ga-hint">{`${t('Profile colour')} (${colour.profile.name})`}</span> : null}
-        {colour.auto ? <Swatch hex={colour.auto} /> : null}
-        <span className="ga-hint">{colour.auto ? t("HairDeck's own colours") : t('HairDeck has not run yet')}</span>
-        <span className="ga-hint">·</span>
-        <span className="ga-hint">{t('In use')}:</span>
-        {colour.target ? <Swatch hex={colour.target} /> : null}
-        <span className="ga-hint">
-          {colour.target ? `${t('Manual')} ${colour.target}`
-            : colour.profile ? `${t('Profile colour')} (${colour.profile.name})` : t('Automatic')}
-        </span>
-      </div>
-      {fitted && fitted.delta_e_before != null ? (
-        <div className="ga-hint">
-          {t('Last fit')}: {fitted.source === 'profile' && !fitted.applied
-            ? `${t("HairDeck's own colours kept")} (ΔE ${fitted.delta_e_before})`
-            : `ΔE ${fitted.delta_e_before} → ${fitted.delta_e_after ?? '–'}`}
-        </div>
-      ) : null}
-      <div style={ROW}>
-        <input
-          type="color"
-          value={draft}
-          disabled={busy}
-          aria-label={t('Hair colour')}
-          onChange={(e) => setDraft(e.target.value.toLowerCase())}
-        />
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={busy || draft === colour.target}
-          onClick={() => onApply(draft)}
-        >
-          {t('Apply')}
-        </button>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={busy || !colour.target}
-          onClick={() => onApply('')}
-        >
-          {t('Reset to automatic')}
-        </button>
-        {running ? <span className="ga-hint" style={WARN_STYLE}>{t('Wait for the running hair job')}</span> : null}
-      </div>
-      <div className="ga-hint">
-        {t('A colour change re-fits the hair from the stored HairDeck result — HairDeck does not run again.')}
-      </div>
-    </>
-  )
-}
-
-/** A placement draft field as a number; '' = automatic (null), NaN = invalid. */
-function draftNumber(text: string, scale: number): number | null {
-  const trimmed = text.trim()
-  if (!trimmed) return null
-  const n = Number(trimmed.replace(',', '.'))
-  return Number.isFinite(n) ? n / scale : NaN
-}
-
-const draftText = (v: number | null, scale: number) => (v === null ? '' : String(Math.round(v * scale * 100) / 100))
-
-/** The HairDeck placement: forward shift (shown in mm), forward tilt (°) and
- *  hair width (a factor on the sides' reach beyond the head). Empty =
- *  automatic (width: 1). Keyed by the server values, so the drafts restart
- *  from them after a save. */
-function HairPlacementForm({ placement, busy, running, onApply }: {
-  placement: HairPlacement
-  busy: boolean
-  /** A hair run is active: the placement waits for it. */
-  running: boolean
-  onApply: (forward_m: number | null, tilt_deg: number | null, width_scale: number | null) => void
-}) {
-  const { t } = useI18n()
-  const [forward, setForward] = useState(draftText(placement.forward_m, 1000))
-  const [tilt, setTilt] = useState(draftText(placement.tilt_deg, 1))
-  const [width, setWidth] = useState(draftText(placement.width_scale, 1))
-  const f = draftNumber(forward, 1000)
-  const a = draftNumber(tilt, 1)
-  const w = draftNumber(width, 1)
-  const [wLo, wHi] = placement.limits.width_scale
-  const valid = (v: number | null, limit: number) => v === null || (!Number.isNaN(v) && Math.abs(v) <= limit)
-  const ok = valid(f, placement.limits.forward_m) && valid(a, placement.limits.tilt_deg)
-    && (w === null || (!Number.isNaN(w) && w >= wLo && w <= wHi))
-  const same = f === placement.forward_m && a === placement.tilt_deg && w === placement.width_scale
-  const manual = placement.forward_m !== null || placement.tilt_deg !== null || placement.width_scale !== null
-  const fitted = placement.fitted
-  const src = (s: string | null | undefined) => (s === 'manual' ? t('Manual') : t('Automatic'))
-  return (
-    <>
-      <div style={ROW}>
-        <label className="ga-hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {t('Forward shift (mm)')}
-          <input
-            className="ga-input"
-            type="number"
-            step="1"
-            style={{ width: 90 }}
-            value={forward}
-            placeholder={t('Auto')}
-            disabled={busy}
-            onChange={(e) => setForward(e.target.value)}
-          />
-        </label>
-        <label className="ga-hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          {t('Forward tilt (°)')}
-          <input
-            className="ga-input"
-            type="number"
-            step="0.5"
-            style={{ width: 90 }}
-            value={tilt}
-            placeholder={t('Auto')}
-            disabled={busy}
-            onChange={(e) => setTilt(e.target.value)}
-          />
-        </label>
-        <label
-          className="ga-hint"
-          style={{ display: 'flex', gap: 6, alignItems: 'center' }}
-          title={t('Scales how far the hair reaches out beyond the sides of the head; 1 = as generated.')}
-        >
-          {t('Hair width (×)')}
-          <input
-            className="ga-input"
-            type="number"
-            step="0.05"
-            min={wLo}
-            max={wHi}
-            style={{ width: 90 }}
-            value={width}
-            placeholder="1"
-            disabled={busy}
-            onChange={(e) => setWidth(e.target.value)}
-          />
-        </label>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={busy || !ok || same}
-          title={!ok ? t('Value out of range') : undefined}
-          onClick={() => onApply(f, a, w)}
-        >
-          {t('Apply')}
-        </button>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={busy || !manual}
-          onClick={() => onApply(null, null, null)}
-        >
-          {t('Reset to automatic')}
-        </button>
-        {running ? <span className="ga-hint" style={WARN_STYLE}>{t('Wait for the running hair job')}</span> : null}
-      </div>
-      {fitted && fitted.forward_m !== null && fitted.tilt_deg !== null ? (
-        <div className="ga-hint">
-          {t('Last fit')}: {t('Forward shift')} {(fitted.forward_m * 1000).toFixed(1)} mm ({src(fitted.forward_source)})
-          {' · '}{t('Forward tilt')} {fitted.tilt_deg.toFixed(1)}° ({src(fitted.tilt_source)})
-          {typeof fitted.width_scale === 'number' ? ` · ${t('Hair width')} ${fitted.width_scale.toFixed(2)}×` : ''}
-          {fitted.hairline_y !== null
-            ? ` · ${t('Hairline')} ${fitted.hairline_y.toFixed(3)} m`
-              + (fitted.hairline_target_y !== null ? ` (${t('target')} ${fitted.hairline_target_y.toFixed(3)} m)` : '')
-            : ''}
-        </div>
-      ) : null}
-      <div className="ga-hint">
-        {t('Empty = automatic: a small forward shift and the tilt that brings the front hairline down to the brow line.')}
-        {' '}
-        {t('Hair width below 1 brings the sides closer to the head; the hairline stays.')}
-        {' '}
-        {t('A placement change re-fits the hair from the stored HairDeck result — HairDeck does not run again.')}
-      </div>
-    </>
-  )
 }
 
 /** The kept results of the methods not selected (newest first), each collapsed
@@ -440,27 +189,6 @@ export function FieldHair({ character, onEditAppearance }: {
     [call, enc],
   )
 
-  // Store the colour, then re-fit (only the fit runs: the HairDeck result is cached).
-  const applyColour = useCallback(
-    (hex: string) => call(`/characters/${enc}/hair/colour`, { hex }, () => (
-      itemId && info?.method === 'hairdeck'
-        ? apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, {})
-        : undefined
-    )),
-    [call, enc, info?.method, itemId],
-  )
-
-  // Store the placement, then re-fit (like the colour: only the fit runs).
-  const applyPlacement = useCallback(
-    (forward_m: number | null, tilt_deg: number | null, width_scale: number | null) => call(
-      `/characters/${enc}/hair/placement`, { forward_m, tilt_deg, width_scale }, () => (
-        itemId && info?.method === 'hairdeck'
-          ? apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, {})
-          : undefined
-      )),
-    [call, enc, info?.method, itemId],
-  )
-
   if (!info) return <div className="ga-hint">{t('Loading…')}</div>
   if (!info.humanoid) {
     return <div className="ga-hint">{t('Hair as its own mesh is for humanoid characters only.')}</div>
@@ -483,119 +211,14 @@ export function FieldHair({ character, onEditAppearance }: {
   const busy = posting || feedback.pending !== null || garmentRunning(info)
   const limits = info.limits || {}
   const fit = garment?.steps.fit
-  const hd = info.hairdeck
-  const isHairDeck = info.method === 'hairdeck'
   const noHair = !!garment && !garment.served_fsig && !garment.running_step && fit?.status !== 'accepted'
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
-  const hairdeckSection = hd ? (
-    <>
-      <div className="ga-fieldset-title">{t('HairDeck')}</div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        {HAIRDECK_TILES.map(([key, tileLabel]) => {
-          const img = hd.images[key]
-          // A character with facial hair sends HairDeck the picture with the beard removed.
-          const label = key === 'input' && hd.input_source === 'beard_free' ? 'Input (beard removed)' : tileLabel
-          return (
-            <div key={key} style={{ flex: 1, minWidth: 0 }}>
-              <div className="ga-hint">{t(label)}</div>
-              {img ? (
-                <RefImage key={img.url} src={img.url} height={HAIRDECK_TILE} label={t(label)} meta={img} compact />
-              ) : (
-                <div className="ga-hint" style={{ ...EMPTY_TILE, height: HAIRDECK_TILE }}>
-                  {key === 'input' ? t('No profile picture') : t('No render yet')}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-      <div style={ROW}>
-        <RunBadge mark={runMark(feedback, garment, HAIRDECK_ORDER, 'hairdeck')} />
-        <span className="ga-hint">
-          {t(HAIRDECK_STATUS[hd.status] || hd.status)}
-          {hd.attempt ? ` · ${t('Attempt')} ${hd.attempt}` : ''}
-          {hd.seed != null ? ` · ${t('Seed')} ${hd.seed}` : ''}
-          {hd.seed != null && hd.seeds_tried > 0 ? ` (${t('of {n} tried').replace('{n}', String(hd.seeds_tried))})` : ''}
-          {hd.backend ? ` · ${hd.backend}` : ''}
-          {hd.created_at ? ` · ${formatDateTime(hd.created_at, clockSettings())}` : ''}
-        </span>
-        <RunButton
-          feedback={feedback}
-          slot={runSlot({ step: 'hairdeck' })}
-          disabled={busy || !garment || !hd.images.input}
-          title={!hd.images.input ? t('Set a profile picture first') : undefined}
-          onClick={() => onRun({ step: 'hairdeck', force: true })}
-          label={t('Regenerate hair (HairDeck)')}
-        />
-      </div>
-      {hd.notes.length ? <div className="ga-hint">{t('Notes')}: {hd.notes.join(' · ')}</div> : null}
-      {hd.status === 'refused' && hd.error ? <div className="ga-hint" style={ERROR_STYLE}>{hd.error}</div> : null}
-      {garment ? <StepState garment={garment} step="hairdeck" /> : null}
-
-      <FitBlock garment={garment} chips={HAIRDECK_FIT_CHIPS} limits={limits.hairdeck_fit}
-        ready={hd.status === 'accepted'} busy={busy} onRun={onRun}
-        lowFailedText="Distance tier failed — the full hair is used"
-        feedback={feedback} order={HAIRDECK_ORDER} />
-      {hd.attempts.length ? (
-        <details>
-          <summary className="ga-hint" style={{ cursor: 'pointer' }}>
-            {t('Refused fit attempts')} ({hd.attempts.length})
-          </summary>
-          {hd.attempts.map((g, i) => (
-            <RecordNumbers key={i} label={`${t('Attempt')} ${num(g.attempt) ?? i + 1}`} record={flatFit(g)} />
-          ))}
-        </details>
-      ) : null}
-    </>
-  ) : null
-
-  // Colour and placement re-fit the hair: they sit beside the preview.
-  const hairdeckLook = hd && isHairDeck ? (
-    <>
-      <div className="ga-fieldset-title">{t('Hair colour')}</div>
-      <HairColour
-        key={`${hd.colour.target || ''}|${hd.colour.profile?.hex || ''}|${hd.colour.auto || ''}`}
-        colour={hd.colour}
-        busy={busy}
-        running={garmentRunning(info)}
-        onApply={(hex) => { void applyColour(hex) }}
-      />
-
-      {hd.placement ? (
-        <>
-          <div className="ga-fieldset-title">{t('Hair placement')}</div>
-          <HairPlacementForm
-            key={`${hd.placement.forward_m ?? ''}|${hd.placement.tilt_deg ?? ''}|${hd.placement.width_scale ?? ''}`}
-            placement={hd.placement}
-            busy={busy}
-            running={garmentRunning(info)}
-            onApply={(forward, tilt, width) => { void applyPlacement(forward, tilt, width) }}
-          />
-        </>
-      ) : null}
-    </>
-  ) : null
-
   const methodBlock = (
     <>
       <div className="ga-fieldset-title">{t('Hair method')}</div>
       <div style={ROW}>
-        <select
-          className="ga-input"
-          style={{ width: 'auto', maxWidth: '100%' }}
-          value={info.method_source === 'character' ? info.method : ''}
-          disabled={busy}
-          title={garmentRunning(info) ? t('Wait for the running hair job') : undefined}
-          aria-label={t('Hair method')}
-          onChange={(e) => { void setMethod(e.target.value as '' | HairMethod) }}
-        >
-          <option value="">{t('World default')} ({t(METHOD_LABELS[info.world_method])})</option>
-          {METHODS.map((m) => <option key={m} value={m}>{t(METHOD_LABELS[m])}</option>)}
-        </select>
-        <span className="ga-hint">{t(METHOD_HINTS[info.method] || METHOD_HINTS.body)}</span>
-        {garmentRunning(info) ? (
-          <span className="ga-hint" style={WARN_STYLE}>{t('Wait for the running hair job')}</span>
-        ) : null}
+        <span>{t(METHOD_LABELS[info.method] || info.method)}</span>
+        <span className="ga-hint">{t(MOVED_HINT)}</span>
       </div>
 
       <div className="ga-fieldset-title">{t('Hair description')}</div>
@@ -638,7 +261,7 @@ export function FieldHair({ character, onEditAppearance }: {
   }
 
   return (
-    <div className="ga-split ga-split-hair">
+    <div className="ga-split ga-split-views">
       <div className="ga-split-col">
       {methodBlock}
 
@@ -695,9 +318,6 @@ export function FieldHair({ character, onEditAppearance }: {
       {info.item_id ? (
         <>
           <div className="ga-split-col">
-            {isHairDeck ? hairdeckSection : null}
-          </div>
-          <div className="ga-split-col">
             <div className="ga-face-actions-row">
               <span className="ga-fieldset-title" style={{ margin: 0 }}>{t('Preview')}</span>
               <RunButton
@@ -721,7 +341,6 @@ export function FieldHair({ character, onEditAppearance }: {
                 ? t('Collides with the base body\'s torso, arm and head capsules — “Garment collision” in the viewer compares')
                 : t('No capsule set on the base model yet — the hair is shown as skinned')}
             </div>
-            {hairdeckLook}
             <OtherMethods others={info.others} limits={limits} busy={busy}
               onUse={(m) => { void setMethod(m) }} />
           </div>

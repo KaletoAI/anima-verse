@@ -75,7 +75,10 @@ Expected, derived by hand:
     - GC grouping: parse_name(layer file) == parse_name(layer low) == (coat, F); stored_groups[(coat, F)]
       contains them.
 [4] Wardrobe (Demo wears {underwear_top: slip, outer: coat}, both fits on B2): worn_layers -> {coat: {over
-    [Slip], without []}}; wardrobe items coat over [Slip], slip without the keys (nothing under it); overlaps []. Slip's fit file moved away
+    [Slip], without []}}; wardrobe items coat over [Slip], slip without the keys (nothing under it); overlaps [].
+    Plain (painted) added to Demo's inventory: wardrobe ``modes`` = every outfit piece Demo holds or wears
+    {blouse, coat, skirt, slip: own_mesh; plain: painted} (plan 2026-11-12-unified-worn-pieces T9), ``items``
+    still the own-mesh four. Slip's fit file moved away
     -> coat {over [], without [Slip]} (the outfit paints the slip on; the coat is fitted against the body
     there). Demo wears {top: blouse, bottom: skirt}: overlaps == the [2] cycle.
 [5] Cycle warning: ensure over [blouse, skirt] logs one warning naming both and "slot order".
@@ -527,6 +530,12 @@ def main() -> int:
         check("wardrobe chips", ({k: wr["items"][k].get("over") for k in ("coat", "slip")},
                                  wr["items"]["coat"]["without"], wr["overlaps"]),
               ({"coat": ["Slip"], "slip": None}, [], []))
+        inventory.add_to_inventory("Demo", "plain")
+        wr = garment_set.wardrobe("Demo")
+        check("wardrobe modes: every held/worn outfit piece (T9)", wr["modes"],
+              {"blouse": "own_mesh", "coat": "own_mesh", "plain": "painted", "skirt": "own_mesh",
+               "slip": "own_mesh"})
+        check("wardrobe items: own-mesh pieces only", sorted(wr["items"]), ["blouse", "coat", "skirt", "slip"])
         moved = slip_fit.with_name("moved.glb")
         os.replace(slip_fit, moved)
         check("worn_layers without the slip fit", garment_set.worn_layers("Demo", base_model_sha=base2),

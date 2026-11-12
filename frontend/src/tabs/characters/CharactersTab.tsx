@@ -1251,7 +1251,9 @@ export function CharactersTab() {
                 }}
               />
             ) : subTab === 'wardrobe' ? (
-              <WardrobeTab key={selected} character={selected} />
+              <WardrobeTab key={selected} character={selected}
+                onEditAppearance={fieldTabs.some((g) => g.id === 'tab:aussehen')
+                  ? () => setSubTab('tab:aussehen') : undefined} />
             ) : subTab === 'secrets' ? (
               <SecretsEditor character={selected} />
             ) : (

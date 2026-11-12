@@ -3,6 +3,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import { Field } from '@anima/player-ui'
 import { EffectsEditor } from '../../components/EffectsEditor'
+import { MESH_MODE_LABELS, meshModeOf } from '../characters/figureModel'
 import {
   CATEGORIES,
   RARITIES,
@@ -599,13 +600,12 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
         />
       </Field>
 
-      {isOutfit && <Field label={t('3D mesh')}
-        hint={t('Characters on the base-body pipeline get this piece as a fitted 3D mesh of its own instead of painting it onto the body. Applies to every wearer; 2D images stay unchanged.')}>
-        <label className="ga-form-check" style={{ marginTop: 6 }}>
-          <input type="checkbox" checked={draft.mesh_mode === 'own_mesh'}
-            onChange={(e) => onUpdate('mesh_mode', e.target.checked ? 'own_mesh' : 'painted')} />
-          {t('Own 3D mesh (base-body characters)')}
-        </label>
+      {isOutfit && <Field label={t('3D figure')}
+        hint={t('How the piece reaches the 3D figure of every wearer on the figure pipeline: Own mesh, Painted or In the body. 2D images stay unchanged.')}>
+        <span className="ga-form-hint" style={{ display: 'block', marginTop: 6 }}>
+          {t("Mode: {mode} — set in a wearer's Wardrobe")
+            .replace('{mode}', t(MESH_MODE_LABELS[meshModeOf(draft.mesh_mode, draft.slots)]))}
+        </span>
       </Field>}
       {isOutfit ? (
         <OutfitPieceFields

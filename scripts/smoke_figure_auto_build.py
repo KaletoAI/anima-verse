@@ -44,7 +44,9 @@ Expected, by hand from the brief:
     → no new run, no render invalidation, Kai still running with 0
     follow-ups; each wearer has exactly one more pending change, keyed
     ``blouse`` with wanted ``own_mesh``. ``GET …/wearers`` (admin) → both,
-    each ``changes >= 1``, mode ``own_mesh``; ``POST …/build-wearers`` →
+    each ``changes >= 1``, mode ``own_mesh``, each row with its own
+    ``hub_jobs`` and ``steps`` (labels) whose sum is the total (T9; None
+    when one is unknown); ``POST …/build-wearers`` →
     ``{Kai: "queued", Kira: "started"}``.
 [5] An item nobody wears → ``wearers == []``, GET cost ``hub_jobs == 0``.
 [6] Auth through the real gate (stubbed session): a player allowed to see
@@ -57,7 +59,11 @@ Expected, by hand from the brief:
     jobs 0 → cost 0; an automatic ``start`` → "current"; GET status
     ``failed``, hair row ``failed``; ``plan(explicit=True)`` (the default:
     the Build button's plan) = hair, fits, assemble; a manual Build runs ``run_queued(…, explicit=True)``, then the
-    refit and the assembly. The cached hair failure next to other work (the
+    refit and the assembly. While it retries the chain its track label reads
+    "Build · Kira (1/3 Hair · HairDeck — retrying)" (step 1 of hair, fits,
+    assemble; T8 concern 7 — not "… — failed — Retry"), and
+    ``running_label(False)`` keeps the plan label (an automatic Build never
+    runs it). The cached hair failure next to other work (the
     blouse painted, no outfit model), automatic: texture views, the model and
     the assembly run, the hair chain does NOT run, ``failed["hair"]`` is the
     cached error. (Was: base older there, the plain body ran — ruling 8a.)
@@ -326,6 +332,13 @@ def world_section():
     check("[4] wearers keys", sorted(body), ["cost", "item_id", "mode", "wearers"])
     check("[4] mode", body.get("mode"), "own_mesh")
     check("[4] cost keys", sorted(body.get("cost") or {}), ["hub_jobs", "note"])
+    rows = body.get("wearers") or []
+    check("[4] wearer row keys (T9: own cost + step labels)", [sorted(w) for w in rows],
+          [["auto_build", "changes", "hub_jobs", "name", "steps"]] * 2)
+    known = [w["hub_jobs"] for w in rows if w["hub_jobs"] is not None]
+    check("[4] total = sum of the rows", (body.get("cost") or {}).get("hub_jobs"),
+          sum(known) if len(known) == len(rows) else None)
+    check("[4] steps are labels", all(isinstance(x, str) and x for w in rows for x in w["steps"]), True)
     r = client.post(f"/inventory/items/{blouse}/build-wearers", headers=admin)
     check("[4] POST build-wearers", (r.status_code, r.json()), (200, {"started": {"Kai": "queued", "Kira": "started"}}))
     release.set()
@@ -386,12 +399,27 @@ def failure_section():
     check("[7] hair row", (info["hair"]["state"], info["hair"]["note"]), ("failed", "hairdeck — no hair found"))
     check("[7] explicit plan", fbp.names(fb.plan("Kira", profile={}, explicit=True)),
           [("hair", "hair_kira", 0), ("fits", 0), ("assemble", 0)])
+    check("[7] automatic running label", steps[0].running_label(False), "Hair · HairDeck — failed — Retry")
+    from app.core import task_queue
+    track_labels = []
+
+    class RecordingTracks:
+        def track_start(self, *a, **k):
+            return "t7"
+
+        def track_update_label(self, tid, label):
+            track_labels.append(label)
+
+        def track_finish(self, tid, error=""):
+            pass
+    task_queue.get_task_queue = lambda: RecordingTracks()
     check("[7] manual start", fb.start("Kira", reason="manual")["status"], "started")
     check("[7] manual run ended", fbp.wait_idle(fb), True)
     check("[7] run_queued explicit", explicit_calls, [(("hair_kira",), True)])
     check("[7] manual run: chain, refit, assembly", [c for c in fbp.W.calls if c != "slot"],
           ["hair_item", "chain hair_kira", "refit", "model no-prepare", "schedule"])
     check("[7] manual run: no failure", fb.state("Kira")["failed"], {})
+    check("[7] retried chain shown running", track_labels[:1], ["Build · Kira (1/3 Hair · HairDeck — retrying)"])
 
     print("[7] automatic run with a cached failure next to other work")
     cached["hair_kira"] = {"item_id": "hair_kira", "fsig": "f1", "step": "hairdeck", "error": "no hair found"}
