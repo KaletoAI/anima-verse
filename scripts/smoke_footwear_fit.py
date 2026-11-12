@@ -18,7 +18,7 @@ footwear_insole.analyse_arrays (frame = the wedge's own coordinates).
 
 Expected, by hand:
 [F0] constants: FOOTWEAR_FIT_VERSION 5 (the foot below the ankle, per-band contacts), BALL_SOLVE_STEPS 8, BALL_SOLVE_TOL_RAD 1e-7, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
-     SHOE_WIDTH_CAP 1.65 (fit version 13), SLIM_MAX_SHARE 0.18, FIT_GATES verbatim; every gate refuses (gating True), there is no ACTIVE_IN_P2 any more
+     SHOE_WIDTH_CAP 1.65 (fit version 13), HEIGHT_CAP 1.5 (fit version 14), SLIM_MAX_SHARE 0.18, FIT_GATES verbatim; every gate refuses (gating True), there is no ACTIVE_IN_P2 any more
      (fit version 3, Task 15).
 [F9] joint_bind_matrices(glb) = inverse(inverseBindMatrix) per normalised joint name: the fixture's IBMs are
      the negated joint translations -> "leftfoot" = translation (0, 0.08, -0.10), "righttoebase" =
@@ -152,6 +152,26 @@ FOOT_WEIGHT_MIN like the auto-weighted male shins.
          the fit ok.
      (d) the flat boot (flat_boot(), a shaft) on the w 0.12 foot: width_factor 1.10 (the boot's cap),
          slim 0.2494 -> refused, as before.
+     On these flat feet (FOOT_H 0.02 everywhere) the clog's toe box is tall enough: height_needed = (0.02 +
+     0.002) / (0.03 x 1.023599) = 0.71643 per side -> height_factor 1, scale.height None (the fit unchanged).
+[F14] the upper fitted to the foot's height (fit version 14, boots plan Ruling 15h). The clog on foot_body_glb()
+     whose top (y = FOOT_H) is raised to Ht for x <= 0.15 (the instep and the toe joints; the last 0.04 to the tip
+     keep 0.02, so toe_height_m stays 0.02 and the scale step's k 1.023599 with it). The foot's sole stands on the
+     insole (y 0.01 raw), the clog's inner roof is 0.03 raw above it from the throat (x 0.1825) on, so per side
+     height_needed = (Ht + TOE_CLEARANCE_M 0.002) / (0.03 k = 0.030708):
+     (a) Ht 0.04: 0.042 / 0.030708 = 1.36772 -> height_factor 1.36772 (< 1.5), the fit ok; scale.height
+         {factor, cap 1.5, x_from_raw = insole start + HEEL_SEAT_M / k, x_full_raw = the throat station};
+         upper_height_map takes the roof point (0.26, 0.04, 0) to (0.26, 0.01 + 0.03 x 1.36772 = 0.051032, 0), a sole
+         point (0.1, 0.005, 0) and the heel counter's top (0.0, 0.05, 0) (behind x_from) stay. The shoe's highest
+         bind vertex is the roof: 0.051032 k = 0.052236 m above its lowest (the heel counter 0.05 k = 0.051180
+         before). The cut's vamp_inner over the toe box = 0.03 x 1.36772 x k = 0.042 m above the insole -> the
+         raised foot (0.04) lies TOE_CLEARANCE_M under it: toe_conform 0 (<= 1e-6), every cut gate ok. (On 7025e482
+         — fit version 13 — the factor is 1: the toe conform pushes the instep 0.04 - (0.030708 - 0.002) =
+         0.011292 m down.)
+     (b) Ht 0.05: needed 0.052 / 0.030708 = 1.69337 -> capped at 1.5 (never past it): vamp_inner 0.03 x 1.5 x k =
+         0.046062 m, toe_conform = 0.05 - (0.046062 - 0.002) = 0.005938 m (+-2e-4).
+     (c) Ht 0.04 under the Wardrobe width cap 1.05: height_factor 1 (the item keeps its look); the flat boot
+         (a shaft) on the Ht 0.04 feet: height_factor 1.
 """
 import math
 import sys
@@ -188,7 +208,7 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 13 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+    check(ff.FOOTWEAR_FIT_VERSION == 14 and ff.HEIGHT_CAP == 1.5 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
           and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10 and ff.SHOE_WIDTH_CAP == 1.65
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
     check(ff.FIT_GATES == {"ball_placement_mm": ("max", 3.0), "lift_asymmetry_mm": ("max", 10.0),
@@ -369,8 +389,8 @@ def main() -> int:
               f"[F11] ok {fit_hu.ok}, reasons {fit_hu.reasons}, foot_pose root lift {fit_hu.foot_pose.get('root_lift_m')}")
 
     # [F12] the version and the two band constants ([F1]-[F8] above are the unchanged regression)
-    check(ff.FOOTWEAR_FIT_VERSION == 13 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
-          "[F12] FOOTWEAR_FIT_VERSION 13, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
+    check(ff.FOOTWEAR_FIT_VERSION == 14 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
+          "[F12] FOOTWEAR_FIT_VERSION 14, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
 
     # [F13] a shoe without a shaft is widened to the foot
     from app.core import footwear_cut
@@ -418,6 +438,70 @@ def main() -> int:
           and near(fd_.record["gates"]["slim_needed"]["value"], 0.2494, 1e-3),
           f"[F13] (d) the flat boot on w 0.12: x{fd_.record['scale']['width_factor']} (boot cap), slim "
           f"{fd_.record['gates']['slim_needed']['value']:.4f} refused")
+
+    # [F14] the upper fitted to the foot's height
+    from app.core.footwear_cut import TOE_CLEARANCE_M
+    real_body = fx.foot_body
+
+    def tall_glb(ht):
+        def tall(*a, **kw):
+            Pt, Ft, Jt, Wt, Nt = real_body(*a, **kw)
+            Pt = np.array(Pt, np.float64)
+            Pt[(np.abs(Pt[:, 1] - fx.FOOT_H) < 1e-9) & (Pt[:, 0] <= 0.15 + 1e-9), 1] = ht
+            return Pt, Ft, Jt, Wt, Nt
+        fx.foot_body = tall
+        try:
+            return fx.foot_body_glb()
+        finally:
+            fx.foot_body = real_body
+
+    def tall_fit(ht, Pt_, Ft_, ins_, cap=None):
+        g_ = tall_glb(ht)
+        j_ = glb_mesh.joint_bind_matrices(g_)
+        return ff.fit_pair(ins_, fx.shoe_garment(Pt_, Ft_), glb_mesh.body_arrays(g_), j_, width_cap=cap), g_, j_
+
+    def cut_of(fit_, g_, j_, ins_):
+        pr_ = glb_mesh.body_primitive_arrays(g_)[0]
+        cd_ = footwear_cut.cut_description(fit_, ins_)
+        after_, _st_ = footwear_cut.apply_cut(pr_, cd_, j_)
+        return cd_, footwear_cut.cut_gates(after_, fit_.parts, cd_, joints=j_, body_before=pr_)
+
+    check(fa.record["scale"]["height_factor"] == 1.0 and fa.record["scale"]["height"] is None
+          and near(fa.record["scale"]["height_needed"]["left"], 0.022 / (0.03 * 1.023599), 1e-4),
+          f"[F13] flat feet: height_needed {fa.record['scale']['height_needed']['left']:.5f} = 0.71643, factor 1")
+    kh = 1.023599
+    fh, gh, jh = tall_fit(0.04, Pc, Fc, ins_c)
+    sh = fh.record["scale"]
+    hd = sh["height"] or {}
+    check(fh.ok and near(sh["k_m_per_unit"], kh, 2e-6) and near(sh["height_needed"]["left"], 0.042 / (0.03 * kh), 2e-4)
+          and near(sh["height_factor"], 0.042 / (0.03 * kh), 2e-4) and hd.get("cap") == 1.5
+          and near(hd.get("x_full_raw"), 0.1825, 0.0025) and hd.get("x_from_raw", 1) < hd.get("x_full_raw", 0),
+          f"[F14] (a) Ht 0.04: needed {sh['height_needed']['left']:.5f}, factor {sh['height_factor']:.5f} = 1.36772, "
+          f"ramp {hd.get('x_from_raw')}..{hd.get('x_full_raw')}, ok {fh.ok}")
+    Qm = ff.upper_height_map(np.array([[0.26, 0.04, 0.0], [0.1, 0.005, 0.0], [0.0, 0.05, 0.0]]), ins_c, hd)[0]
+    check(np.allclose(Qm, [[0.26, 0.01 + 0.03 * sh["height_factor"], 0.0], [0.1, 0.005, 0.0], [0.0, 0.05, 0.0]],
+                      atol=1e-9), f"[F14] (a) upper_height_map: roof -> {Qm[0, 1]:.6f}, sole and heel counter stay")
+    yb = fh.parts["left"]["foot"].positions[:, 1]
+    check(near(float(np.ptp(yb)), 0.01 * kh + 0.042, 1e-5),
+          f"[F14] (a) the shoe's height {float(np.ptp(yb)):.6f} = the fitted roof 0.052236 m")
+    cdh, gth = cut_of(fh, gh, jh, ins_c)
+    vi = np.asarray(cdh["sides"]["left"]["vamp_inner"])
+    check(near(float(vi[-1, 1]) - 0.01 * kh, 0.042, 1e-5) and gth["ok"]
+          and gth["gates"]["toe_conform_m"]["value"] <= 1e-6,
+          f"[F14] (a) vamp_inner {float(vi[-1, 1]) - 0.01 * kh:.6f} m above the insole, toe_conform "
+          f"{gth['gates']['toe_conform_m']['value']:.2e} (7025e482: 0.011292), gates ok {gth['ok']}")
+    fb5, gb5, jb5 = tall_fit(0.05, Pc, Fc, ins_c)
+    _cd5, gt5 = cut_of(fb5, gb5, jb5, ins_c)
+    check(fb5.record["scale"]["height_factor"] == 1.5
+          and near(fb5.record["scale"]["height_needed"]["left"], 0.052 / (0.03 * kh), 2e-4)
+          and near(gt5["gates"]["toe_conform_m"]["value"], 0.05 - (0.03 * 1.5 * kh - TOE_CLEARANCE_M), 2e-4),
+          f"[F14] (b) Ht 0.05: needed {fb5.record['scale']['height_needed']['left']:.5f} -> 1.5, toe_conform "
+          f"{gt5['gates']['toe_conform_m']['value']:.6f} = 0.005938")
+    fc5, _g, _j = tall_fit(0.04, Pc, Fc, ins_c, cap=1.05)
+    fbt, _g, _j = tall_fit(0.04, Pb2, Fb2, ins_b)
+    check(fc5.record["scale"]["height_factor"] == 1.0 and fc5.record["scale"]["height"] is None
+          and fbt.record["scale"]["height_factor"] == 1.0,
+          "[F14] (c) Wardrobe cap 1.05 and the boot: height factor 1")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0

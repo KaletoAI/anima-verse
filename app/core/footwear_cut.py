@@ -215,7 +215,7 @@ import numpy as np
 
 from app.core import glb_mesh
 from app.core.footwear_fit import (FOOT_WEIGHT_MIN, SEAM_FLEX_DEG, WALL_SIDE_M, _about, _apply, _frame_matrix, _r,
-                                   _smoothstep, _unit)
+                                   _smoothstep, _unit, upper_height_map, upper_scale)
 from app.core.footwear_gates import check_gates
 from app.core.footwear_insole import HEEL_SEAT_M
 from app.core.glb_mesh import Prim  # noqa: F401  (re-exported: the cut's primitive type)
@@ -362,6 +362,9 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("The fit record carries no insole.wall_top_raw (fit it again)")
     k = float(record["scale"]["k_m_per_unit"])
     wf = float(record["scale"]["width_factor"])
+    # the upper fitted in height (fit version 14): the wall top comes from the fitted shoe already; the vamp's inner
+    # surface and the topline ring go through the same map
+    height = record["scale"].get("height")
     scale3 = np.array([k, k, k * wf])
     Dm = np.diag([k, k, k * wf, 1.0])
     FrameM = _frame_matrix(insole)
@@ -384,7 +387,8 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
         prof_all = _floats(insole["profile"])
         inner_ok = roofed & ~np.isnan(prof_all)
         if inner_ok.any():
-            vamp_inner = np.stack([gx[inner_ok] * k, (prof_all[inner_ok] + cav[inner_ok]) * k], axis=1)
+            vamp_inner = np.stack([gx[inner_ok] * k, (prof_all[inner_ok] + cav[inner_ok]
+                                                       * upper_scale(gx[inner_ok], height)) * k], axis=1)
 
     outline = np.asarray(insole["footprint_outline"], np.float64).reshape(-1, 2) * np.array([k, k * wf])
     if len(outline) < 3:
@@ -394,7 +398,7 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("The insole has no profile")
     heel_seat_x = float(gx[~np.isnan(prof)].min()) * k + HEEL_SEAT_M
     ring = np.asarray((insole.get("overlay") or {}).get("topline") or np.zeros((0, 3)), np.float64).reshape(-1, 3)
-    topline = _apply(FrameM, ring) * scale3 if len(ring) else np.zeros((0, 3))
+    topline = upper_height_map(_apply(FrameM, ring), insole, height)[0] * scale3 if len(ring) else np.zeros((0, 3))
     x_min, x_max = (float(outline[:, 0].min()), float(outline[:, 0].max())) if len(outline) else (0.0, 0.0)
     diag = record.get("diagnostics") or {}
 

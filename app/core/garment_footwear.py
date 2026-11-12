@@ -748,14 +748,16 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
     sides = record.get("sides") or {}
     needed = scale.get("width_needed") or {}
     slim = scale.get("slim_needed") or {}
+    tall = scale.get("height_needed") or {}
     metrics = _numbers({
         "width_factor": scale.get("width_factor"), "width_cap": scale.get("width_cap"),
-        "width_cap_applied": scale.get("width_cap_applied"),
+        "width_cap_applied": scale.get("width_cap_applied"), "height_factor": scale.get("height_factor"),
         "root_lift_m": record.get("root_lift_m"), "k_m_per_unit": scale.get("k_m_per_unit"),
         "length_m": scale.get("length_m"),
         **{f"{key}_{side}": value for side in ("left", "right") for key, value in (
             ("width_needed", needed.get(side) if isinstance(needed, dict) else None),
             ("slim_needed", slim.get(side) if isinstance(slim, dict) else None),
+            ("height_needed", tall.get(side) if isinstance(tall, dict) else None),
             ("extension_deg", ((sides.get(side) or {}).get("extension") or {}).get("deg")),
             ("toe_room_mm", (sides.get(side) or {}).get("toe_room_mm")))}})
     if status == "accepted" and isinstance(record.get("refitted"), dict):

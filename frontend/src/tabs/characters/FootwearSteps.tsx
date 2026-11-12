@@ -460,15 +460,17 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
     ].filter((x) => x && !x.endsWith(' ')) : []
     const liftM = fitted ? num(m.root_lift_m) : null
     const toeRoom = fitted ? `${t('Toe room')} ${pair(m, 'toe_room_mm', (v) => mmText(v))}` : ''
-    // fit version 13: a shoe without a shaft may be widened to the foot past the slider's ×1.10
+    // fit version 13/14: a shoe without a shaft may be widened past the slider's ×1.10 and its upper raised
     const widened = fitted && (num(m.width_factor) ?? 0) > CAP_MAX + 1e-6
+    const raised = fitted && (num(m.height_factor) ?? 1) > 1 + 1e-6
     const parts: ReactNode[] = [
       ...numbers,
-      widened ? (
+      widened || raised ? (
         <span key="widened" className="ga-run-badge"
-          title={t("The mesher guesses a shoe's width from one picture: a shoe without a shaft is widened to the wearer's foot, up to ×{cap}")
+          title={t("The mesher guesses a shoe's size from one picture: a shoe without a shaft is fitted to the wearer's foot, up to ×{cap} wide and ×1.50 high (the sole and heel stay)")
             .replace('{cap}', (num(m.width_cap_applied) ?? 1.65).toFixed(2))}>
-          {t('Widened to the foot')} ×{m.width_factor.toFixed(2)} / ×{(num(m.width_cap_applied) ?? 1.65).toFixed(2)}
+          {t('Fitted to the foot')} ×{(num(m.width_factor) ?? 1).toFixed(2)} {t('wide')}
+          {raised ? ` · ×${m.height_factor.toFixed(2)} ${t('high')}` : ''}
         </span>
       ) : null,
       liftM != null ? (
@@ -577,7 +579,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
             onClick={() => onWidthCap(null)}>{t('Default')}</button>
         ) : (
           <span className="ga-hint">
-            {t("Default: a shoe without a shaft is widened to the foot up to ×1.65; a lower cap keeps the item's look")}
+            {t("Default: a shoe without a shaft is fitted to the foot up to ×1.65 wide and ×1.50 high; a lower cap keeps the item's look")}
           </span>
         )}
       </div>
