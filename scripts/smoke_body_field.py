@@ -34,6 +34,24 @@ the same probes through it.
      PI open at the bottom, the y-slice is two separate discs, the x-slice at 0 misses both cylinders (inner walls
      at |x| 0.01), and the seal finds the gap open downwards. It lies in the exact band, 1 cm from each inner wall
      (a cylinder vertex sits exactly at x = +-0.01, z 0) -> +0.010 +- 0.002.
+[F6] The clothing push keeps a vertex on its side (``push_kept``; Task 1 fix round 1). Body = [F2]'s closed sphere
+     with the inverted inner shell, vox 0.004 (the cavity is solid). Garment = a fan: vertex A in the cavity near
+     the FRONT wall, (0, 0, +0.07) — 1 cm inside the inner wall, 3 cm under the outer surface, the front (+z) its
+     nearest exit (the back is 17 cm away) — and 12 vertices B on a ring of radius 0.01 around (0, 0, -0.01) near the
+     centre (8.6 cm deep), every triangle (A, B_j, B_j+1).
+     - ``push_kept`` with the rigged loop's numbers (10 iterations, smoothed in the first 7) and the unrigged one's
+       (8 / 6): A's own push runs along +z to the clearance, and the smoothing may not carry it elsewhere ->
+       A ends at (0, 0, 0.10 + CLEAR_M = 0.1119) +- 0.001 (z) / 0.002 (x, y): outside the FRONT. Every vertex ends
+       at least CLEAR_M - 0.0005 outside.
+     - The clothing push at commit 9b5dcb20 (``push_out``, 8 / 6, the fit's unrigged push then; its rigged loop was the
+       same rule): the twelve deep neighbours drag A along — it does NOT end in front (z < 0.10).
+[F7] A vertex the transfer buried leaves by its own side (``push_kept`` ``toward``, the rigged push's
+     ``_transfer_sides``). [F2]'s body, vox 0.004; a triangle at the centre, (0, 0, 0), (0, 0.004, 0), (0, 0, 0.004)
+     — 10 cm deep, every direction equally near — with ``toward`` = +x for all three. The march takes voxel steps of
+     0.004 along +x until the field reaches CLEAR_M: sqrt(x^2 + 0.004^2) - 0.10 >= 0.0119 -> x >= 0.11183 -> the
+     28th step, x = 0.112; y / z stay. The loop then has nothing to push (clear) and the smoothing nothing to move
+     (one displacement for all three) -> each vertex ends at x = 0.112 +- 0.001 with its own y / z (+- 0.001).
+     Without ``toward`` no march is made: the triangle does not end out at +x (x < 0.10).
 [F5] ``fill_slices(surf, axis)`` equals ``ndimage.binary_fill_holes`` of every slice ⟂ axis: a random 40^3 mask (seed
      7, 30 % filled, then dilated once) for axis 0, 1 and 2 -> ``np.array_equal``.
 """
@@ -141,11 +159,11 @@ def box(lo, hi, step=0.01):
 
 # --- the field at BASE --------------------------------------------------------
 
-def base_module():
-    """``app/core/garment_fit.py`` of commit BASE, loaded as its own module."""
-    src = subprocess.check_output(["git", "-C", str(ROOT), "show", f"{BASE}:app/core/garment_fit.py"])
-    mod = types.ModuleType(f"garment_fit_{BASE}")
-    mod.__file__ = f"<{BASE}:app/core/garment_fit.py>"
+def base_module(rev=BASE):
+    """``app/core/garment_fit.py`` of commit ``rev``, loaded as its own module."""
+    src = subprocess.check_output(["git", "-C", str(ROOT), "show", f"{rev}:app/core/garment_fit.py"])
+    mod = types.ModuleType(f"garment_fit_{rev}")
+    mod.__file__ = f"<{rev}:app/core/garment_fit.py>"
     sys.modules[mod.__name__] = mod
     exec(compile(src, mod.__file__, "exec"), mod.__dict__)
     return mod
@@ -207,6 +225,51 @@ def test_f4(gf):
     check(abs(v - 0.010) <= 0.002, f"[F4] concavity: the gap stays outside (sdf {v:+.4f} = +0.010 +- 0.002)")
 
 
+def fan():
+    """[F6]'s garment: A near the front wall, a ring of 12 around (0, 0, -0.01), triangles (A, B_j, B_j+1)."""
+    th = np.arange(12) * 2 * np.pi / 12
+    B = np.stack([0.01 * np.cos(th), 0.01 * np.sin(th), np.full(12, -0.01)], 1)
+    Q = np.concatenate([[[0.0, 0.0, 0.07]], B])
+    F = np.array([(0, 1 + j, 1 + (j + 1) % 12) for j in range(12)])
+    return Q, F
+
+
+def test_f6(gf):
+    P, F = spheres()
+    sdf = gf.body_sdf(P, F, vox=0.004, bounds=(np.full(3, -0.13), np.full(3, 0.13)))
+    Q, Fg = fan()
+    adjacency = gf._adjacency(Fg, len(Q))
+    for label, iters, until in (("rigged 10/7", gf.RIGGED_ITERATIONS, gf.RIGGED_SMOOTH_UNTIL),
+                                ("unrigged 8/6", gf.PUSH_ITERATIONS, gf.PUSH_SMOOTH_UNTIL)):
+        X = Q + gf.push_kept(Q, adjacency, sdf, clear=gf.CLEAR_M, iterations=iters, smooth_until=until,
+                             margin=gf.SIDE_MARGIN_M)
+        a = X[0]
+        check(abs(a[2] - 0.1119) <= 0.001 and abs(a[0]) <= 0.002 and abs(a[1]) <= 0.002,
+              f"[F6] push_kept {label}: A ends outside the FRONT ({a[0]:+.4f}, {a[1]:+.4f}, {a[2]:+.4f}) "
+              "= (0, 0, 0.1119) +- 0.001 / 0.002")
+        d = sdf.sample(X)
+        check(d.min() >= gf.CLEAR_M - 0.0005, f"[F6] push_kept {label}: every vertex outside (min sdf {d.min():+.4f})")
+    old = base_module("9b5dcb20")
+    Xo, _ = old.push_out(Q, Fg, sdf, clear=old.CLEAR_M)
+    check(Xo[0, 2] < 0.10, f"[F6] 9b5dcb20 push_out: A is dragged away from the front (z {Xo[0, 2]:+.4f} < 0.10; "
+                           f"at ({Xo[0, 0]:+.3f}, {Xo[0, 1]:+.3f}))")
+
+
+def test_f7(gf):
+    P, F = spheres()
+    sdf = gf.body_sdf(P, F, vox=0.004, bounds=(np.full(3, -0.13), np.full(3, 0.13)))
+    Q = np.array([[0.0, 0.0, 0.0], [0.0, 0.004, 0.0], [0.0, 0.0, 0.004]])
+    adjacency = gf._adjacency(np.array([[0, 1, 2]]), 3)
+    kw = dict(clear=gf.CLEAR_M, iterations=gf.RIGGED_ITERATIONS, smooth_until=gf.RIGGED_SMOOTH_UNTIL,
+              margin=gf.SIDE_MARGIN_M)
+    X = Q + gf.push_kept(Q, adjacency, sdf, toward=np.tile([1.0, 0.0, 0.0], (3, 1)), **kw)
+    ok = np.all(np.abs(X[:, 0] - 0.112) <= 0.001) and np.all(np.abs(X[:, 1:] - Q[:, 1:]) <= 0.001)
+    check(ok, f"[F7] toward +x: the buried triangle leaves along +x (x {X[:, 0].round(4).tolist()} = 0.112 +- 0.001, "
+              f"y/z kept)")
+    Xg = Q + gf.push_kept(Q, adjacency, sdf, **kw)
+    check(np.all(Xg[:, 0] < 0.10), f"[F7] without toward no march along +x (x {Xg[:, 0].round(4).tolist()} < 0.10)")
+
+
 def test_f5():
     from scipy import ndimage
     from app.core import fit_kernels
@@ -231,6 +294,8 @@ def main():
     test_f3(gf, old)
     test_f4(gf)
     test_f5()
+    test_f6(gf)
+    test_f7(gf)
     if FAILS:
         print(f"\n{len(FAILS)} FAILED")
         sys.exit(1)

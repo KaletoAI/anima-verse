@@ -89,6 +89,18 @@ PUSH_SPREAD_K = 48
 SMOOTH_PASSES = 6
 RIGGED_ITERATIONS = 10
 RIGGED_SMOOTH_UNTIL = 7
+#: The clothing pushes keep every vertex on its side of the body (``push_kept``): a smoothed displacement may carry
+#: a vertex at most its own start depth + the clearance + this far (metres) before it keeps its own push (the plain
+#: loop carries Kai's jacket / jeans and Kira's blazer at most 25 mm beyond depth + clearance).
+SIDE_MARGIN_M = 0.03
+#: Samples along a smoothed displacement checked for a crossing of the body (``push_kept``).
+SIDE_PATH_SAMPLES = 12
+#: A vertex the transfer put inside the rigged body leaves by the side it had before (``_transfer_sides``) when that
+#: side is more than acos(SIDE_COS) = 60 deg from the field's gradient, marching at most this far (metres).
+SIDE_COS = 0.5
+SIDE_MARCH_M = 0.30
+#: ... and only when it lies deeper than this (metres): the transfer left it in the body's interior.
+SIDE_DEEP_M = 0.03
 
 #: Fit algorithm version per garment kind, written into every fit record (``fit_version``, ``garments._publish_fit``).
 #: A record with an older or missing version is stale (``garments._fit_state``): the chain re-runs the FIT only — CPU,
@@ -619,6 +631,90 @@ def push_out(Q0, Fd, sdf: Sdf, *, clear: float, spread: float = 0.0, spread_dept
     return Q0 + disp, disp
 
 
+def push_kept(Q0, adjacency, sdf: Sdf, *, clear: float, iterations: int, smooth_until: int,
+              margin: float, passes: int = SMOOTH_PASSES, toward: Optional[np.ndarray] = None) -> np.ndarray:
+    """The clothing push (unrigged ``fit_clothing`` and rigged ``transfer_skinned``) -> the displacement of ``Q0``.
+
+    ``push_out``'s loop without the crown spread — each iteration adds ``max(clear - d, 0)`` along the field's
+    gradient, smoothed over the mesh (``passes``) while ``it < smooth_until``, the last iterations enforce the
+    clearance exactly — except that the smoothing may not carry a vertex across the body. Since fit-sdf-speed-drape
+    Task 1 the body field is solid (``body_sdf``: double walls filled), and a vertex the transfer leaves deep in the
+    trunk is pushed out through solid body, where BASE's leaky field had stopped it in the cavity; its neighbours
+    were dragged along (Kai's jacket 2026-11-12: up to 30 cm, front to back, the obf torso-hole gate failed).
+    - A vertex's own step follows the gradient at its current position, which leads out on the near side: a step
+      of ``clear - d`` from depth ``-d`` lands outside on that side and never crosses a medial plane by itself.
+    - After each smoothing, a vertex whose smoothed displacement crosses the body — its straight path from the
+      start (``SIDE_PATH_SAMPLES`` samples) goes deeper than ``min(start depth, 0)`` by more than a voxel — or ends
+      further from the start than its own depth + ``clear`` + ``margin``, keeps its OWN displacement of this
+      iteration (the unsmoothed one) instead. Every other vertex keeps the smoothed sheet exactly as before: where
+      nothing is carried the result equals the plain loop bit for bit.
+    - ``toward`` (rows of unit vectors, zero rows = none): the side a vertex had BEFORE this push's body put it
+      inside (``_transfer_sides``). Such a vertex starts at the first point along that direction that is ``clear``
+      outside (within ``SIDE_MARCH_M``), not at the nearest exit of the solid it was dropped into.
+    """
+    Q0 = np.asarray(Q0, np.float64)
+    s0 = sdf.sample(Q0)
+    floor = np.minimum(s0, 0.0) - sdf.vox
+    reach = np.maximum(-s0, 0.0) + clear + margin
+    D = np.zeros_like(Q0)
+    if toward is not None:
+        rows = np.nonzero(np.any(toward != 0, axis=1))[0]
+        if len(rows):
+            D[rows] = _march_out(sdf, Q0[rows], toward[rows], clear)
+    for it in range(iterations):
+        Y = Q0 + D
+        D = D + np.clip(clear - sdf.sample(Y), 0, None)[:, None] * _unit(sdf.grad(Y))
+        if it < smooth_until:
+            S = _smooth(D, adjacency, passes)
+            carried = np.linalg.norm(S, axis=1) > reach
+            for t in np.linspace(0.0, 1.0, SIDE_PATH_SAMPLES + 1)[1:]:
+                carried |= sdf.sample(Q0 + t * S) < floor
+            D = np.where(carried[:, None], D, S)
+    return D
+
+
+def _march_out(sdf: Sdf, X: np.ndarray, u: np.ndarray, clear: float) -> np.ndarray:
+    """Per row: ``t * u`` for the first ``t`` (voxel steps up to ``SIDE_MARCH_M``) where the field reaches ``clear``;
+    zero where it never does (the vertex keeps its gradient push)."""
+    steps = np.arange(1, int(math.ceil(SIDE_MARCH_M / sdf.vox)) + 1) * sdf.vox
+    out = np.zeros_like(X)
+    for start in range(0, len(X), 4096):
+        sl = slice(start, start + 4096)
+        P = X[sl, None, :] + steps[None, :, None] * u[sl, None, :]
+        ok = sdf.sample(P.reshape(-1, 3)).reshape(len(P), len(steps)) >= clear
+        hit = ok.any(1)
+        out[sl][hit] = steps[ok[hit].argmax(1)][:, None] * u[sl][hit]
+    return out
+
+
+def _transfer_sides(Q, X, body_unrigged: BodyMesh, bones, W, sdf: Sdf) -> np.ndarray:
+    """The side of the body each garment vertex had BEFORE the transfer, for the ones the transfer put inside the
+    rigged body on another side (``push_kept`` ``toward``): rows of unit vectors, zero rows = none.
+
+    A vertex counts when it is deeper than ``SIDE_DEEP_M`` (nearer the surface the gradient's side is the right
+    one: a shallow vertex is pushed as the plain loop always did) and the direction of its unrigged side — the
+    outward direction from the nearest unrigged surface sample to its unrigged position ``Q`` (pushed out there, so
+    outside), carried into the bind space by the linear part of its own blend skinning — is more than
+    acos(``SIDE_COS``) away from the rigged field's gradient. Kai's jacket 2026-11-12: the side panel below the
+    armpit (outside the unrigged body, facing +x) is skinned into the chest's medial plane, 9 - 10 cm deep; its
+    gradient leads out by the front OR the back, which left the side bare (the obf torso-hole gate, 22 - 36 cm2).
+    """
+    from scipy.spatial import cKDTree
+    out = np.zeros_like(X)
+    s = sdf.sample(X)
+    rows = np.nonzero(s < -SIDE_DEEP_M)[0]
+    if len(rows) == 0:
+        return out
+    pts, _ = _surface_samples(body_unrigged.positions, body_unrigged.faces)
+    _, nn = cKDTree(pts).query(Q[rows])
+    n = _unit(Q[rows] - pts[nn])
+    side = _unit(bones.apply(n, W[rows]) - bones.apply(np.zeros_like(n), W[rows]))
+    g = _unit(sdf.grad(X[rows]))
+    off = (side * g).sum(1) < SIDE_COS
+    out[rows[off]] = side[off]
+    return out
+
+
 # --- transfer into the rigged bind space ----------------------------------------------------------------------------
 
 def similarity(A: np.ndarray, B: np.ndarray) -> Tuple[float, np.ndarray, np.ndarray, np.ndarray]:
@@ -834,7 +930,7 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
        that bridged the closed armpit of the A-pose spans the open one in T-pose; ``relax_stretched`` spreads that
        stretch over its band.
     4. The clearance pass on the rigged body (SDF in metres, ``rigged_iterations`` iterations, smoothed in the
-       first ``RIGGED_SMOOTH_UNTIL``), as in ``transfer``.
+       first ``RIGGED_SMOOTH_UNTIL``), side-kept (``push_kept``).
     """
     from scipy.spatial import cKDTree
     from app.core.rig_contract import norm_bone_name
@@ -901,18 +997,16 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
 
     lo, hi = X.min(0) - margin_m, X.max(0) + margin_m
     sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
-    Xd = np.zeros_like(X)
-    for it in range(rigged_iterations):
-        Y = X + Xd
-        Xd = Xd + np.clip(clear_m - sdf.sample(Y), 0, None)[:, None] * _unit(sdf.grad(Y))
-        if it < RIGGED_SMOOTH_UNTIL:
-            Xd = _smooth(Xd, adjacency, SMOOTH_PASSES)
+    toward = _transfer_sides(Q, X, body_unrigged, bones, Wg, sdf)
+    Xd = push_kept(X, adjacency, sdf, clear=clear_m, iterations=rigged_iterations,
+                   smooth_until=RIGGED_SMOOTH_UNTIL, margin=SIDE_MARGIN_M, toward=toward)
     X = X + Xd
     d = sdf.sample(X)
     arm_cols = [i for i, n in enumerate(body_rigged.joint_names) if "arm" in norm_bone_name(n)]
     report = {
         "method": "skinned",
         "scale_k": float(k),
+        "side_marched": int(np.any(toward != 0, axis=1).sum()),
         "uv_dist_p99": float(np.percentile(uv_dist, 99)),
         **bones.report,
         "sleeve_share": float((Wg[:, arm_cols].sum(1) > 0.5).mean()) if arm_cols and len(Wg) else 0.0,
@@ -1724,11 +1818,11 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     cut-out). ``slots``: the piece's outfit slots (a skirt blend needs a ``SKIRT_SLOTS`` slot).
 
     ``k`` = rigged height / unrigged height. Placement by the shared framing, depth by the torso band
-    (``align_band_depth``), push-out to ``CLEAR_M`` without the crown spread (6 smoothing passes in the first 6 of 8
-    iterations), the skinned transfer (``transfer_skinned``) with the waist at the garment top minus
-    ``CLOTHING_WAIST_DROP`` of the body height (sleeves ride the arms above it), ``clothing_weights`` (skirt when
-    ``is_skirt``), the gate ``CLOTHING_GATES``. The output joints are the bones the weights use (contract bones and,
-    over their tissue, extension bones), in skin order.
+    (``align_band_depth``), push-out to ``CLEAR_M`` without the crown spread, side-kept (``push_kept``; 6 smoothing
+    passes in the first 6 of 8 iterations), the skinned transfer (``transfer_skinned``) with the waist at the
+    garment top minus ``CLOTHING_WAIST_DROP`` of the body height (sleeves ride the arms above it),
+    ``clothing_weights`` (skirt when ``is_skirt``), the gate ``CLOTHING_GATES``. The output joints are the bones the
+    weights use (contract bones and, over their tissue, extension bones), in skin order.
 
     A fit refused only because the piece is too small (``too_small``) is fitted again widened about the torso axis
     (``scale_retry``, ``widen``, steps ``SCALE_RETRY_STEPS``); the push numbers of a widened fit are measured from
@@ -1774,7 +1868,9 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     def push(Qs):
         sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k,
                        bounds=(Qs.min(0) - margin, Qs.max(0) + margin))
-        Qp, disp = push_out(Qs, Fk, sdf, clear=CLEAR_M / k)
+        disp = push_kept(Qs, _adjacency(Fk, len(Qs)), sdf, clear=CLEAR_M / k, iterations=PUSH_ITERATIONS,
+                         smooth_until=PUSH_SMOOTH_UNTIL, margin=SIDE_MARGIN_M / k)
+        Qp = Qs + disp
         return Qp, disp, push_numbers(Qs * k, Qp * k)
 
     def finish(Qs, Qp, disp) -> FitResult:
