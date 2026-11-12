@@ -896,8 +896,10 @@ def _bind_chains(P: np.ndarray, F: np.ndarray, chains_json: Optional[bytes], car
     match the mesh (``match`` ``"count"`` / ``"offset"`` / ``"invalid"``), a malformed chains file or no chain that
     binds a card. ``chains``: the loaded chains (``hair_chains.load_chains``), which ``binding.chain`` and
     ``binding.kept`` index."""
+    from app.core.hair_chains import SETTLE_TOL_M
     info: Dict[str, Any] = {"count": 0, "dropped": 0, "cards_bound": 0, "cards_rigid": 0, "match": None,
-                            "chains": []}
+                            "chains": [], "joint_depth_max_m": 0.0, "joint_depth_before_max_m": 0.0,
+                            "repair": {"tol_m": SETTLE_TOL_M, "moved_joints": 0, "unbound_chains": []}}
     if chains_json is None or cards_json is None:
         return None, [], info
     from app.core import hair_chains
@@ -921,6 +923,16 @@ def _bind_chains(P: np.ndarray, F: np.ndarray, chains_json: Optional[bytes], car
     if not binding.kept:
         return None, [], info
     return binding, loaded, info
+
+
+def _repair_report(kept: List[Any], unbound: List[int], depth: Dict[str, Any]) -> Dict[str, Any]:
+    """``report.chains.repair`` of ``hair_chains.repair_depth`` over the ``kept`` chains: the tolerance, the joints
+    moved onto their card-centroid line and the chains unbound (HairDeck index, reason, depth before)."""
+    from app.core.hair_chains import SETTLE_TOL_M
+    return {"tol_m": SETTLE_TOL_M, "moved_joints": int(depth["moved_joints"]),
+            "unbound_chains": [{"index": int(kept[i].index), "reason": depth["chains"][i]["reason"],
+                                "depth_before_max_m": round(float(depth["chains"][i]["depth_before"].max()), 5)}
+                               for i in unbound]}
 
 
 def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
@@ -948,8 +960,12 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     through the push and the face clearing (``hair_chains.follow``); the chain-bound vertices are skinned to Head
     and their chain bones (``hair_chains.chain_weights``), ``garment.joint_parents`` names the chain joints and
     ``report.chains`` summarises them. The positions are those of the fit without chains (Ruling H8: no settle).
-    Without the files, a card file that does not match the mesh, or no chain that binds a card: today's fit,
-    ``report.chains.count`` 0.
+    The followed joints get a rest depth check against the body SDF (``hair_chains.repair_depth``): a joint more
+    than ``SETTLE_TOL_M`` inside moves onto its card-centroid line at the nearest point outside the body, a chain
+    without one is unbound and its cards keep today's rigid weights — reported in ``report.chains``
+    (``joint_depth_before_max_m`` / ``joint_depth_max_m`` over the chains in the figure, ``repair``, per chain
+    ``depth_before_max_m`` / ``depth_max_m`` / ``moved``), never gated. Without the files, a card file that does
+    not match the mesh, no chain that binds a card or every chain unbound: today's fit, ``report.chains.count`` 0.
     """
     from scipy.spatial import cKDTree
     _check_manual(forward_m, tilt_deg, width_scale)
@@ -997,14 +1013,34 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
         from app.core import hair_chains
         sizes = np.cumsum([len(c.joints) for c in kept])[:-1]
         placed_joints = np.split(pushed["chain_points"], sizes)
-        fitted = hair_chains.follow(placed_joints, Pw, Qp, hair_chains.bound_vertices(binding, inv))
-        placed_chains = [hair_chains.Chain(index=c.index, joints=Jf, stiffness=c.stiffness)
-                         for c, Jf in zip(kept, fitted)]
-        names, J, W = hair_chains.chain_weights(names, J, W, binding, chains)
-        joint_parents = hair_chains.joint_parents(placed_chains)
+        bound = hair_chains.bound_vertices(binding, inv)
+        fitted = hair_chains.follow(placed_joints, Pw, Qp, bound)
+        # rest depth check against the body surface: a deep joint moves onto its card-centroid line, a chain
+        # without an outside point there is unbound (Ruling H8 — a repair, never a refusal; the cards stay)
+        fitted, unbound, depth = hair_chains.repair_depth(fitted, Qp, bound, sdf)
+        chain_info["repair"] = _repair_report(kept, unbound, depth)
+        chain_info["joint_depth_before_max_m"] = round(float(max(d["depth_before"].max() for d in depth["chains"])),
+                                                       5)
+        if unbound:
+            binding = hair_chains.unbind(binding, [binding.kept[i] for i in unbound])
+            bound_n, rigid_n = hair_chains.card_counts(binding)
+            chain_info.update(count=len(binding.kept), cards_bound=bound_n, cards_rigid=rigid_n)
+        gone = set(unbound)
+        keep = [i for i in range(len(kept)) if i not in gone]
+        kept = [kept[i] for i in keep]
+        placed_chains = [hair_chains.Chain(index=c.index, joints=fitted[i], stiffness=c.stiffness)
+                         for c, i in zip(kept, keep)]
+        after = [depth["chains"][i] for i in keep]
+        chain_info["joint_depth_max_m"] = round(float(max((d["depth_after"].max() for d in after), default=0.0)), 5)
+        if kept:
+            names, J, W = hair_chains.chain_weights(names, J, W, binding, chains)
+            joint_parents = hair_chains.joint_parents(placed_chains)
         chain_info["chains"] = [{"index": c.index, "bones": hair_chains.joint_names(c),
                                  "weighted": hair_chains.weighted_bones(names, J, W, c),
-                                 "stiffness": round(float(c.stiffness), 4), "rigid": []} for c in placed_chains]
+                                 "stiffness": round(float(c.stiffness), 4), "rigid": [],
+                                 "depth_before_max_m": round(float(d["depth_before"].max()), 5),
+                                 "depth_max_m": round(float(d["depth_after"].max()), 5),
+                                 "moved": list(d["moved"])} for c, d in zip(placed_chains, after)]
     normals = vertex_normals(X, F)
 
     if colour_target is None and colour_profile is not None:

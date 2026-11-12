@@ -58,7 +58,7 @@ Fixture
     - with the files: the positions are those of the fit without (Ruling H8: no settle); joint names = BASE's + the
       3 chain names; joint_parents as in [5]; report.chains = count 1, dropped 2 (3 listed, chain 0 kept), cards
       bound 1 / rigid 1, match "ok", chains [{index 0, bones [_00, _01, _end], weighted [_00, _01], stiffness 0.4,
-      rigid []}]; card a's rows weighted as in [5] (Head 1 - w; the chain columns w * alpha, w * (1 - alpha));
+      rigid []}] (those keys; Task 3's rest depth keys are checked in smoke_hair_chains_depth.py); card a's rows weighted as in [5] (Head 1 - w; the chain columns w * alpha, w * (1 - alpha));
       card b's rows and the cap rows identical to the fit without chains;
     - ``_place_and_push(chain_points=…)`` returns ``chain_points`` = adjust_placement(s * J + t, pivot, 0.01, 5)
       (x 0 lies inside the head's half width: ``narrow_sides`` leaves it) +- 1e-12;
@@ -300,7 +300,9 @@ def main() -> int:
         check(g1.joint_parents == PARENTS, f"with chains: joint_parents {g1.joint_parents}")
         check(rep["count"] == 1 and rep["dropped"] == 2 and rep["cards_bound"] == 1 and rep["cards_rigid"] == 1
               and rep["match"] == "ok", "report.chains: count 1, dropped 2, cards bound 1 / rigid 1, match ok")
-        check(rep["chains"] == [{"index": 0, "bones": NAMES, "weighted": NAMES[:2], "stiffness": 0.4, "rigid": []}],
+        t2_keys = ("index", "bones", "weighted", "stiffness", "rigid")   # Task 3 adds the depth keys
+        check([{k: c[k] for k in t2_keys} for c in rep["chains"]]
+              == [{"index": 0, "bones": NAMES, "weighted": NAMES[:2], "stiffness": 0.4, "rigid": []}],
               f"report.chains.chains {rep['chains']}")
         nh = len(P)
         k0 = len(g0.joint_names)

@@ -18,6 +18,13 @@ similarity and placement correction (``garment_hairdeck._place_and_push(chain_po
 per-vertex push / face-clearing field of their own cards (``follow``, IDW over the ``FOLLOW_K`` nearest bound
 vertices). There is no rest-pose settle; the static fit stays as it was, the chains only add motion.
 
+Rest depth (``repair_depth``, Task 3 in its Ruling H8 form): the followed joints are checked against the body
+surface (the fit's body SDF). A joint more than ``SETTLE_TOL_M`` inside the body is moved onto its chain's
+card-centroid line (``card_centroid_line``: per joint the centroid of the ``FOLLOW_K`` fitted bound vertices
+nearest to it) at the nearest point of that line outside the body (``nearest_outside``). A chain with a deep joint
+that has no such point — or whose repair would collapse a segment — is unbound (``unbind``): its cards keep today's
+rigid Head -> Neck -> Spine2 weights. A repair, never a refusal; the cards themselves are never moved.
+
 Skin (``chain_weights``): a chain-bound vertex rides Head with ``1 - w`` and its two segment bones with ``w * alpha``
 and ``w * (1 - alpha)``; a rigid card keeps ``garment_fit.hair_weights``' Head -> Neck -> Spine2 row. Joint names:
 ``HairGen_c<CC>_<KK>`` (``CC`` = HairDeck's chain index in the file, ``KK`` = segment) plus a leaf
@@ -36,6 +43,7 @@ expressed as glTF skin columns (``chain_weights``) and the joints are placed and
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -63,6 +71,13 @@ LOWER_FROM = 0.4
 SEGMENT_EPS = 1e-6
 #: IDW distance floor of ``follow``.
 FOLLOW_EPS = 1e-6
+#: A rest joint deeper than this inside the body is repaired (spike Ruling H1a ``SETTLE_TOL_M``; Ruling H8 keeps
+#: it as the rest-depth tolerance of ``repair_depth`` — a joint within it stays where ``follow`` put it).
+SETTLE_TOL_M = 0.005
+#: Sampling step along a card-centroid line when ``nearest_outside`` looks for the body boundary.
+REPAIR_STEP_M = 0.001
+#: Bisection steps that refine a boundary crossing found by the sampling (0.001 m / 2**30 ~ 1e-12 m).
+REPAIR_BISECT = 30
 
 
 @dataclass
@@ -303,6 +318,129 @@ def follow(joints: List[np.ndarray], X0: np.ndarray, X1: np.ndarray, bound: List
         wt /= wt.sum(1, keepdims=True)
         out.append(J + (wt[..., None] * D[idx][nn]).sum(1))
     return out
+
+
+# --- rest depth -----------------------------------------------------------------------------------------------------
+
+def joint_depth(joints: List[np.ndarray], sdf) -> List[np.ndarray]:
+    """Per chain the depth of each joint inside the body: ``max(0, -sdf)`` (``sdf``: negative inside, ``.sample``)."""
+    return [np.maximum(-np.asarray(sdf.sample(np.asarray(J, np.float64).reshape(-1, 3)), np.float64), 0.0)
+            for J in joints]
+
+
+def card_centroid_line(J: np.ndarray, X: np.ndarray, idx: np.ndarray, k: int = FOLLOW_K) -> np.ndarray:
+    """The chain's card-centroid line: per joint of ``J`` the mean of the ``k`` vertices ``X[idx]`` (its bound,
+    fitted vertices) nearest to it — the same neighbourhood ``follow`` moves the joint with. (n, 3), or an empty
+    array without bound vertices."""
+    from scipy.spatial import cKDTree
+    J = np.asarray(J, np.float64).reshape(-1, 3)
+    idx = np.asarray(idx, np.int64)
+    if not len(idx) or k <= 0:
+        return np.zeros((0, 3))
+    V = np.asarray(X, np.float64)[idx]
+    kk = min(int(k), len(idx))
+    _d, nn = cKDTree(V).query(J, k=kk)
+    nn = np.asarray(nn).reshape(len(J), kk)
+    return V[nn].mean(1)
+
+
+def nearest_outside(p: np.ndarray, line: np.ndarray, sdf, *, step: float = REPAIR_STEP_M) -> Optional[np.ndarray]:
+    """The point of the polyline ``line`` nearest to ``p`` that lies outside the body (``sdf >= 0``), None when no
+    point of it does. Per segment the candidates are the projection of ``p`` (when outside), the outside end
+    points and every boundary crossing found by sampling the segment at ``step`` and refining by bisection
+    (``REPAIR_BISECT``, keeping the outside end, so the result always samples ``>= 0``) — the distance along a
+    segment is unimodal around the projection, so the nearest outside point is one of them."""
+    p = np.asarray(p, np.float64)
+    L = np.asarray(line, np.float64).reshape(-1, 3)
+    if not len(L):
+        return None
+    cands: List[np.ndarray] = []
+    segs = [(L[0], L[0])] if len(L) == 1 else list(zip(L[:-1], L[1:]))
+    for a, b in segs:
+        ab = b - a
+        ln = float(np.linalg.norm(ab))
+        if ln <= SEGMENT_EPS:
+            if float(sdf.sample(a[None])[0]) >= 0:
+                cands.append(a.copy())
+            continue
+        tp = float(np.clip(np.dot(p - a, ab) / (ln * ln), 0.0, 1.0))
+        t = np.unique(np.r_[np.linspace(0.0, 1.0, max(2, int(math.ceil(ln / step)) + 1)), tp])
+        out = np.asarray(sdf.sample(a + t[:, None] * ab)) >= 0
+        for i in np.flatnonzero(out):
+            if t[i] == tp or i == 0 or i == len(t) - 1:
+                cands.append(a + t[i] * ab)
+        for i in np.flatnonzero(out[:-1] != out[1:]):
+            lo, hi = (t[i], t[i + 1]) if out[i + 1] else (t[i + 1], t[i])   # lo inside, hi outside
+            for _ in range(REPAIR_BISECT):
+                mid = 0.5 * (lo + hi)
+                if float(sdf.sample((a + mid * ab)[None])[0]) >= 0:
+                    hi = mid
+                else:
+                    lo = mid
+            cands.append(a + hi * ab)
+    if not cands:
+        return None
+    C = np.array(cands)
+    return C[int(np.linalg.norm(C - p, axis=1).argmin())].copy()
+
+
+def repair_depth(joints: List[np.ndarray], X: np.ndarray, bound: List[np.ndarray], sdf, *,
+                 tol: float = SETTLE_TOL_M, k: int = FOLLOW_K) -> Tuple[List[np.ndarray], List[int], Dict[str, Any]]:
+    """``(joints, unbound, info)``: the rest depth check of the followed joints (Ruling H8). ``bound[i]`` = the
+    vertex indices into ``X`` (fitted hair) bound to chain i. A joint deeper than ``tol`` inside the body moves onto
+    the chain's ``card_centroid_line`` at its ``nearest_outside`` point; every other joint keeps its exact
+    position. A chain is unbound (its position listed in ``unbound``, its joints returned unchanged) when a deep
+    joint has no outside point on the line, or when the moved joints would leave a segment shorter than
+    ``SEGMENT_EPS``. ``info``: ``moved_joints``, per chain ``depth_before`` / ``depth_after`` / ``moved`` (joint
+    positions in the chain) / ``reason`` (``"unreachable"`` / ``"collapsed"`` / None)."""
+    before = joint_depth(joints, sdf)
+    out: List[np.ndarray] = []
+    unbound: List[int] = []
+    per: List[Dict[str, Any]] = []
+    moved_total = 0
+    for i, (J, dep, idx) in enumerate(zip(joints, before, bound)):
+        J = np.asarray(J, np.float64)
+        deep = np.flatnonzero(dep > tol)
+        rec: Dict[str, Any] = {"depth_before": dep, "depth_after": dep, "moved": [], "reason": None}
+        if not len(deep):
+            out.append(J)
+            per.append(rec)
+            continue
+        line = card_centroid_line(J, X, idx, k)
+        J2 = J.copy()
+        reason = None
+        for j in deep:
+            q = nearest_outside(J[j], line, sdf)
+            if q is None:
+                reason = "unreachable"
+                break
+            J2[j] = q
+        if reason is None and (np.linalg.norm(np.diff(J2, axis=0), axis=1) <= SEGMENT_EPS).any():
+            reason = "collapsed"
+        if reason is not None:
+            unbound.append(i)
+            rec["reason"] = reason
+            out.append(J)
+            per.append(rec)
+            continue
+        rec["moved"] = deep.tolist()
+        rec["depth_after"] = joint_depth([J2], sdf)[0]
+        moved_total += len(deep)
+        out.append(J2)
+        per.append(rec)
+    return out, unbound, {"moved_joints": moved_total, "chains": per}
+
+
+def unbind(binding: Binding, chains: List[int]) -> Binding:
+    """``binding`` with the chains at positions ``chains`` (of the list ``bind`` got) taken off: their vertices
+    become rigid (chain -1, w 0, alpha 1, seg / seg2 0), ``kept`` recomputed."""
+    drop = np.isin(binding.chain, np.asarray(list(chains), np.int64))
+    ch, seg, seg2 = binding.chain.copy(), binding.seg.copy(), binding.seg2.copy()
+    w, alpha = binding.w.copy(), binding.alpha.copy()
+    ch[drop], seg[drop], seg2[drop], w[drop], alpha[drop] = -1, 0, 0, 0.0, 1.0
+    kept = sorted(set(ch[ch >= 0].tolist()))
+    return Binding(card=binding.card, chain=ch, seg=seg, w=w, seg2=seg2, alpha=alpha, kept=kept,
+                   mismatch=binding.mismatch, cards=binding.cards)
 
 
 # --- joints and skin -----------------------------------------------------------------------------------------------
