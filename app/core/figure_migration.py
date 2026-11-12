@@ -34,21 +34,40 @@ written and leaves the flag unset (the boot logs it, the next start retries).
 The shared library is ``shared/items/items.json`` in the repository: the
 first boot of any world rewrites that tracked file.
 
-RE-DEFAULT (Rulings A10 / A12) — ``redefault_modes_once``, once per world
-(world_kv ``REDEFAULT_FLAG``), after the mode migration and only once that
-has run. Since A10 the default mode of a piece is ``in_body`` and a mode is
-stored only when someone picks it; the mode migration above had written a
-mode into EVERY piece (most of them ``painted`` by its rule 4). Every outfit
-piece — the world's and the shared library's — that no TEST character wears
-(``equipped_pieces`` of any character row: dormant and pooled ones too)
-loses its stored ``outfit_piece.mesh_mode`` and follows the default; a piece
-worn by at least one test character keeps its mode untouched. A test
-character (``is_test_character``) is a humanoid whose STORED profile carries
-``model_pipeline: "base_body"``. One INFO line per cleared item, one summary
-line. Failure handling as above: a character list, a profile or an item list
-that cannot be read raises before anything is written and leaves the flag
-unset; a failed write is logged as a WARNING, the item keeps its mode, the
-flag is set anyway. Items are written with the plain savers — no outfit
+RE-DEFAULT (Rulings A10 / A12, fix round 1) — ``redefault_modes_once``,
+after the mode migration and only once that has run. Since A10 the default
+mode of a piece is ``in_body`` and a mode is stored only when someone picks
+it; the mode migration above had written a mode into EVERY piece (most of
+them ``painted`` by its rule 4). An outfit piece that belongs to no TEST
+character — none wears it (``equipped_pieces``) and none owns it (its
+inventory) — loses its stored ``outfit_piece.mesh_mode`` and follows the
+default; a piece a test character wears or owns keeps its mode untouched.
+A test character (``is_test_character``) is a humanoid whose STORED profile
+carries ``model_pipeline: "base_body"``; every character row counts (dormant
+and pooled ones too).
+
+Two scopes, two markers:
+
+- the WORLD's items: once per world (world_kv ``REDEFAULT_FLAG``);
+- the SHARED library (``shared/items/items.json``, one per repository): once
+  for ALL worlds — the marker ``SHARED_REDEFAULT_KEY`` is a top-level key of
+  that file, written in the same write as the cleared items
+  (``inventory._save_shared_items(meta=…)``, which keeps library meta across
+  every later save), so it travels with the library. Only a world WITH test
+  characters runs it, and it keeps every shared piece that world's test
+  characters wear or own. A world without test characters (hotopia, say)
+  that boots first leaves the shared library untouched and the marker unset
+  — it cannot know which shared pieces another world's test characters
+  wear, so clearing anything there could change their figures; the first
+  boot of a world with test characters does it.
+
+One INFO line per cleared item, one summary line. Failure handling as above:
+a character list, a profile, an inventory or an item list that cannot be
+read raises before anything is written and leaves both markers unset; a
+failed world write is logged as a WARNING, the item keeps its mode, the
+world flag is set anyway; a failed shared write is logged and leaves the
+shared marker unset (the next boot retries — the write carries the marker,
+so no half state). Items are written with the plain savers — no outfit
 notification, no Build, no hub job: a test character's pieces keep their
 modes (its wanted figure is unchanged), and off the pipeline the modes are
 ignored (``garment_set.worn_garments`` is empty, ``figure.worn_sets`` puts
@@ -97,8 +116,11 @@ logger = get_logger("figure_migration")
 FLAG = "migrated_worn_piece_modes"
 #: world_kv key of the re-key's done flag.
 REKEY_FLAG = "rekeyed_figure_bodies"
-#: world_kv key of the re-default's done flag (Ruling A12).
+#: world_kv key of the re-default's done flag for the world's items (Ruling A12).
 REDEFAULT_FLAG = "redefaulted_unworn_piece_modes"
+#: Top-level key of the SHARED items file: the shared library's re-default ran
+#: (once for every world; ``inventory.get_shared_items_meta``).
+SHARED_REDEFAULT_KEY = "redefaulted_unworn_piece_modes"
 #: A body's decision when it keeps its old id.
 STALE = "stale"
 #: The removed per-item flag (``outfit_piece`` key).
@@ -254,21 +276,27 @@ def is_test_character(name: str, profile: Dict[str, Any]) -> bool:
     return bool(is_humanoid(name, profile=profile))
 
 
-def _tested_pieces(names: Sequence[str]) -> Dict[str, List[str]]:
-    """``{item id: [test character, ...]}`` — the outfit pieces a test
-    character wears (``equipped_pieces``). A profile that cannot be read
-    raises (``strict``): clearing a tester's piece would cost a rebuild."""
+def _tested_pieces(names: Sequence[str]) -> Tuple[List[str], Dict[str, List[str]]]:
+    """``(test characters, {item id: [test character, ...]})`` — the items a
+    test character wears (``equipped_pieces``) or owns (inventory). A
+    profile or inventory that cannot be read raises (``strict``): clearing a
+    tester's piece would change its figure."""
     from app.models.character import get_character_profile
+    from app.models.inventory import _load_inventory
+    testers: List[str] = []
     tested: Dict[str, List[str]] = {}
     for name in names:
         profile = get_character_profile(name, strict=True) or {}
         if not is_test_character(name, profile):
             continue
+        testers.append(name)
         pieces = profile.get("equipped_pieces")
-        for item_id in sorted({str(v).strip() for v in (pieces.values() if isinstance(pieces, dict) else ())
-                               if v and str(v).strip()}):
+        ids = {str(v).strip() for v in (pieces.values() if isinstance(pieces, dict) else ())}
+        ids.update(str(e.get("item_id") or "").strip()
+                   for e in _load_inventory(name, strict=True).get("inventory") or [])
+        for item_id in sorted(i for i in ids if i):
             tested.setdefault(item_id, []).append(name)
-    return tested
+    return testers, tested
 
 
 def _redefault(items: List[Dict[str, Any]], tested: Dict[str, List[str]], where: str
@@ -288,49 +316,66 @@ def _redefault(items: List[Dict[str, Any]], tested: Dict[str, List[str]], where:
             continue
         cleared[item_id] = str(piece.pop("mesh_mode"))
         changed.append(item)
-        logger.info("Mode re-default: item %s (%s, %s) %s -> default (worn by no test character)",
+        logger.info("Mode re-default: item %s (%s, %s) %s -> default (no test character wears or owns it)",
                     item_id, item.get("name") or "-", where, cleared[item_id])
     return cleared, kept, changed
 
 
-def redefault_modes_once() -> Optional[Dict[str, Dict[str, str]]]:
-    """The re-default (module docstring). None when it already ran or the
-    mode migration has not run yet (it would write rule-4 modes again),
-    else ``{cleared: {item id: old mode}, kept: {item id: mode}}`` — world
-    and shared items together, ``cleared`` only what was written."""
+def redefault_modes_once() -> Optional[Dict[str, Any]]:
+    """The re-default (module docstring). None when both scopes are done or
+    the mode migration has not run yet (it would write rule-4 modes again),
+    else ``{cleared: {item id: old mode}, kept: {item id: mode}, world:
+    "done" | "already", shared: "done" | "already" | "waits" | "failed"}``
+    — ``cleared`` only what was written, both scopes together."""
+    from app.core.timeutils import utc_now_iso
     from app.models import inventory
     from app.models.character import list_available_characters
     from app.models.world import get_world_setting, set_world_setting
-    if get_world_setting(REDEFAULT_FLAG, strict=True):
+    world_done = bool(get_world_setting(REDEFAULT_FLAG, strict=True))
+    shared_done = bool(inventory.get_shared_items_meta(strict=True).get(SHARED_REDEFAULT_KEY))
+    if world_done and shared_done:
         return None
     if not get_world_setting(FLAG, strict=True):
         logger.warning("Mode re-default waits: the worn-piece mode migration has not run yet")
         return None
     names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)
-    tested = _tested_pieces(names)
-    world_items = inventory._load_items(strict=True)
-    shared_items = inventory._load_shared_items(strict=True)
+    testers, tested = _tested_pieces(names)
+    world_items = [] if world_done else inventory._load_items(strict=True)
+    shared_items = [] if shared_done or not testers else inventory._load_shared_items(strict=True)
 
-    cleared, kept, changed = _redefault(world_items, tested, "world")
-    for item in changed:
-        if not inventory._save_items([item]):
+    cleared: Dict[str, str] = {}
+    kept: Dict[str, str] = {}
+    out: Dict[str, Any] = {"cleared": cleared, "kept": kept,
+                           "world": "already" if world_done else "done",
+                           "shared": "already" if shared_done else "done"}
+    if not world_done:
+        world_cleared, world_kept, changed = _redefault(world_items, tested, "world")
+        kept.update(world_kept)
+        for item in changed:
             item_id = str(item.get("id") or "")
-            logger.warning("Mode re-default: world item %s not saved — keeps %s", item_id, cleared.pop(item_id, "-"))
-    shared_cleared, shared_kept, shared_changed = _redefault(shared_items, tested, "shared")
-    kept.update(shared_kept)
-    if shared_changed:
+            if inventory._save_items([item]):
+                cleared[item_id] = world_cleared[item_id]
+            else:
+                logger.warning("Mode re-default: world item %s not saved — keeps %s", item_id, world_cleared[item_id])
+        set_world_setting(REDEFAULT_FLAG, "1")
+    if not shared_done and not testers:
+        out["shared"] = "waits"
+        logger.info("Mode re-default: the shared library waits for a world with test characters "
+                    "(this one has none — it cannot tell which shared pieces another world's test characters use)")
+    elif not shared_done:
+        shared_cleared, shared_kept, _changed = _redefault(shared_items, tested, "shared")
+        kept.update(shared_kept)
         try:
-            inventory._save_shared_items(shared_items)
+            inventory._save_shared_items(shared_items, meta={SHARED_REDEFAULT_KEY: utc_now_iso()})
             cleared.update(shared_cleared)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — the marker is in the same write: the next boot retries
+            out["shared"] = "failed"
             logger.warning("Mode re-default: shared items not saved, they keep their modes (%s): %s",
-                           ", ".join(str(i.get("id")) for i in shared_changed), e)
-
-    set_world_setting(REDEFAULT_FLAG, "1")
-    logger.info("Mode re-default done: %d item(s) back to the default, %d kept (worn by %s)",
-                len(cleared), len(kept),
-                ", ".join(sorted({n for ns in tested.values() for n in ns})) or "no test character")
-    return {"cleared": cleared, "kept": kept}
+                           ", ".join(sorted(shared_cleared)) or "-", e)
+    logger.info("Mode re-default done (world %s, shared %s): %d item(s) back to the default, %d kept "
+                "(test characters: %s)", out["world"], out["shared"], len(cleared), len(kept),
+                ", ".join(testers) or "none")
+    return out
 
 
 # --- Re-keying the stored outfit bodies (module docstring) ------------------------------

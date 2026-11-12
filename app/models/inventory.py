@@ -129,11 +129,40 @@ def _load_shared_items(*, strict: bool = False) -> List[Dict[str, Any]]:
         return []
 
 
-def _save_shared_items(items: List[Dict[str, Any]]):
+#: The keys of the shared items file that ``_save_shared_items`` writes itself;
+#: every other top-level key is library meta (``get_shared_items_meta``).
+_SHARED_FILE_OWN_KEYS = ("items", "last_updated")
+
+
+def get_shared_items_meta(*, strict: bool = False) -> Dict[str, Any]:
+    """The top-level keys of the shared items file other than the item list
+    and its stamp — markers that belong to the LIBRARY, not to a world (the
+    one-time mode re-default, ``figure_migration.SHARED_REDEFAULT_KEY``).
+    ``{}`` without a file; an unreadable file raises with ``strict``."""
     path = _get_shared_items_file()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        if strict:
+            raise
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items() if k not in _SHARED_FILE_OWN_KEYS}
+
+
+def _save_shared_items(items: List[Dict[str, Any]], *, meta: Optional[Dict[str, Any]] = None):
+    """Write the shared item list. The library meta already in the file is
+    kept (every writer of the list would otherwise drop it); ``meta`` adds or
+    replaces keys in the SAME write."""
+    path = _get_shared_items_file()
+    kept = get_shared_items_meta()
+    kept.update(meta or {})
     path.write_text(
-        json.dumps({"items": items, "last_updated": utc_now_iso()},
-                    ensure_ascii=False, indent=2),
+        json.dumps({"items": items, **kept, "last_updated": utc_now_iso()},
+                   ensure_ascii=False, indent=2),
         encoding="utf-8")
     from app.core.motion_item_cache import invalidate
     invalidate()
@@ -1304,8 +1333,10 @@ def find_item_location(item_id: str,
 # 3. CHARACTER INVENTORY
 # ============================================================
 
-def _load_inventory(character_name: str) -> Dict[str, Any]:
-    """Load a character inventory from the database."""
+def _load_inventory(character_name: str, *, strict: bool = False) -> Dict[str, Any]:
+    """Load a character inventory from the database. A DB error is logged
+    and reads as an empty inventory — or raises with ``strict`` (a boot
+    migration that must not take "unreadable" for "owns nothing")."""
     try:
         conn = get_connection()
         rows = conn.execute(
@@ -1341,6 +1372,8 @@ def _load_inventory(character_name: str) -> Dict[str, Any]:
             pass
         return {"inventory": inventory, "max_slots": max_slots, "last_updated": None}
     except Exception as e:
+        if strict:
+            raise
         # No JSON fallback reader: the DB is the only source of character data.
         logger.warning("_load_inventory DB error for %s: %s", character_name, e)
         return {"inventory": [], "max_slots": 20, "last_updated": None}

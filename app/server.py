@@ -726,10 +726,11 @@ async def lifespan(app: FastAPI):
 
     # Migration (same plan, Rulings A10 / A12): the default mode is "in the
     # body" now and a mode is stored only when someone picks it — every outfit
-    # piece no test character (stored model_pipeline base_body) wears loses
-    # the mode the migration above wrote. Once per world, after the figure
-    # migrations; item writes only (no Build, no hub job), before the garment
-    # refit sweep below reads the modes.
+    # piece no test character (stored model_pipeline base_body) wears or owns
+    # loses the mode the migration above wrote. The world's items once per
+    # world, the shared library once for all worlds (by the first world with
+    # test characters); after the figure migrations; item writes only (no
+    # Build, no hub job), before the garment refit sweep below reads the modes.
     try:
         from app.core.figure_migration import redefault_modes_once
         redefault_modes_once()
