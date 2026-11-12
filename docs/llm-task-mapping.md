@@ -141,7 +141,7 @@ Overview page all show the same answer:
 | `intent_*`, `thought_*`, `extraction_*` | `intent` / `thought` / `extraction` |
 | `building_layout`, `furnish`, `prop_mount_classify`, `room_description_sync`, `pose_animation_prompt` | `intent` |
 | `npc_*` | `chat_stream` |
-| `image_pose_check`, `piece_back_text` | `image_prompt` |
+| `image_pose_check`, `image_prompt_shorten`, `piece_back_text` | `image_prompt` |
 | anything else | none — the task simply has no LLM |
 
 A fallback is a convenience, not a recommendation: an unrouted `npc_action`
@@ -223,7 +223,7 @@ mutations of the UI model.
 
 ## Task catalog
 
-31 tasks, in the order they stand in
+32 tasks, in the order they stand in
 [`app/core/llm_tasks.py`](../app/core/llm_tasks.py).
 
 ### Streaming / RP
@@ -314,6 +314,7 @@ exist as routing tasks — only as template file names.
 |---|---|---|---|---|---|
 | `image_prompt` | Image Prompt Enhancer | helper | `image_generation.enabled` | `core/prompt_adapters.py`, `core/scene_photo.py` | Turns a short scene description into a detailed image prompt, in the image family of the selected backend. |
 | `image_pose_check` | Image Pose Check | helper | `image_generation.enabled` | `imagegen/pose_check.py` (render hooks + `POST /world/imagegen-enhance-prompt` `mode: "pose"`) | Repairs the body logic of a subject prompt before it renders — limb budget, framing vs. pose, arrangement of several people — without changing what it shows. Runs per image-routing occasion when `image_generation.pose_check.<occasion>` is on, or from the regenerate/photo dialogs. Route it at a model that handles the world's content. |
+| `image_prompt_shorten` | Image Prompt Shorten | helper | `image_generation.enabled` | `imagegen/prompt_limit.py` (via `ImageService.run_on_backend_channel`, before the submission) | Condenses a final prompt that is longer than the backend's prompt character limit (backend field `prompt_char_limit`, else the AI hub's alias schema `prompt_limit.max_chars`): keeps reference wording, appearance and clothing, condenses the style prefix and filler first. The result is checked hard against the limit and cut at a comma or sentence boundary when needed; an LLM failure means the cut alone. Cached by prompt + limit. |
 | `piece_back_text` | Outfit Piece Back Text | helper | — | `core/piece_back_text.py` (Items editor "Suggest", `POST /inventory/items/suggest-back-text`; the one-time back-text migration at `Priority.LOW`) | Rewrites an outfit piece's front description for its back and side renders: keeps colour, material, length, cut and fit, drops front-only details (neckline, front buttons, what an opening shows), scene words and poses — or answers that the front text needs no change. The result goes into the optional item field `prompt_fragment_back`, never behind a render. |
 | `instagram_caption` | Instagram Caption | image | `skills.instagram.enabled` | `routes/instagram.py`, `core/character_ops.py`, `plugins/instagram/skill_post.py` | Post caption in the character's voice; also the image-to-video motion prompt. Vision model. |
 | `image_recognition` | Vision (analysis · comments · recognition) | image | `image_generation.enabled` | `imagegen/service.py`, `routes/chat.py`, `plugins/instagram/social_reactions.py` | The ONE vision task — every image call resolves it. Objective analysis after a generation, the character's own comment on the picture, and the look at a photo before other characters react to it. `image_analysis` and `image_comment` are queue labels and metadata keys, not routing tasks. |

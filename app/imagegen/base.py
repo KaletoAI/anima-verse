@@ -391,6 +391,15 @@ class ImageBackend(ABC):
         # backend on one physical GPU.
         self.serialize_group = os.environ.get(f"{env_prefix}SERIALIZE_GROUP", "").strip()
 
+        # Manual prompt character limit (config field prompt_char_limit,
+        # 0/empty = none — then the hub's alias schema decides). Read through
+        # app/imagegen/prompt_limit.resolve_limit, which owns the rule.
+        try:
+            self.prompt_char_limit = max(0, int(
+                os.environ.get(f"{env_prefix}PROMPT_CHAR_LIMIT", "").strip() or 0))
+        except ValueError:
+            self.prompt_char_limit = 0
+
     @classmethod
     def config_ref_slot_count(cls, category: str, configured: Any) -> int:
         """How many reference slots an entry of this type gets — the ONE rule
@@ -656,6 +665,16 @@ class ImageBackend(ABC):
                             len([t for t in negative_prompt.split(",") if t.strip()]))
             negative_prompt = ""
 
+        # The backend's prompt character limit (manual field, else the hub's
+        # alias schema): an over-limit prompt is shortened here — inside a
+        # channel worker only from a decision run_on_backend_channel made
+        # BEFORE the submission (app/imagegen/prompt_limit.py). No limit =
+        # the prompt stays byte-identical.
+        from app.imagegen.prompt_limit import fit_prompt
+        fit = fit_prompt(self, final_prompt,
+                         character=str((log_meta or {}).get("agent_name") or ""))
+        final_prompt = fit.prompt
+
         _t0 = _time.time()
         with self._jobs_lock:
             self._active_jobs += 1
@@ -686,7 +705,7 @@ class ImageBackend(ABC):
             log_meta["final_prompt"] = final_prompt
             self._log_generation(final_prompt, negative_prompt, params,
                                  _time.time() - _t0, log_meta,
-                                 negative_folded=negative_folded)
+                                 negative_folded=negative_folded, fit=fit)
         return result
 
     @property
@@ -720,7 +739,8 @@ class ImageBackend(ABC):
     def _log_generation(self, final_prompt: str, negative_prompt: str,
                         params: Dict[str, Any], duration_s: float,
                         log_meta: Dict[str, Any],
-                        negative_folded: Optional[List[str]] = None) -> None:
+                        negative_folded: Optional[List[str]] = None,
+                        fit: Any = None) -> None:
         """Writes the image-prompt log line with the FINAL prompt + engine-/
         prompt-side fields; ``log_meta`` contributes the caller context.
         ``negative_folded`` lists the terms this run moved from the negative
@@ -744,6 +764,14 @@ class ImageBackend(ABC):
             )
             if negative_folded:
                 fields["negative_folded"] = list(negative_folded)
+            if fit is not None:
+                # The prompt limit this send ran under and what it did; a
+                # shortened prompt keeps its full text beside the sent one.
+                fields["prompt_char_limit"] = fit.limit or 0
+                fields["shorten_method"] = fit.method
+                fields.setdefault("original_prompt", fit.unshortened)
+                if fit.method != "none":
+                    fields["unshortened_prompt"] = fit.unshortened
             if "seed" not in fields and params.get("seed") is not None:
                 fields["seed"] = int(params.get("seed") or 0)
             log_image_prompt(**fields)

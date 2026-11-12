@@ -675,6 +675,21 @@ def _drive_image_pose_check(agent: str, avatar: str) -> PreviewResult:
                     "with an over-allocated limb budget."}
 
 
+def _drive_image_prompt_shorten(agent: str, avatar: str) -> PreviewResult:
+    from app.imagegen.prompt_limit import shorten
+    prompt = (f"Keep the image exactly as it is, the same person as in the first image: "
+              f"{agent}, standing upright facing the camera, A-pose, arms angled about "
+              "45 degrees away from the body, palms down, plain neutral studio "
+              "background, soft even light, no shadows, full body visible from head "
+              "to feet, wearing a dark blue wool coat with brass buttons, grey "
+              "trousers and brown leather boots. ") * 3
+    task, sys, user = _capture_render(
+        lambda: shorten(prompt, 600, character=agent))
+    return {"ok": True, "output": _format(task, sys, user),
+            "note": "Production: imagegen.prompt_limit.shorten on a sample prompt "
+                    "over a 600-character limit."}
+
+
 def _drive_video_prompt_improver(agent: str, avatar: str) -> PreviewResult:
     from app.skills.image_regenerate import enhance_prompt
     task, sys, user = _capture_render(
@@ -865,6 +880,7 @@ _PREVIEW_DRIVERS: Dict[str, PreviewDriver] = {
     "tasks/video_prompt_improver.md": _drive_video_prompt_improver,
     "tasks/image_prompt_enhance.md": _drive_image_prompt_enhance,
     "tasks/image_pose_check.md": _drive_image_pose_check,
+    "tasks/image_prompt_shorten.md": _drive_image_prompt_shorten,
     "tasks/image_analysis.md": _drive_image_analysis,
     "tasks/instagram_caption.md": _drive_instagram_caption,
     "tasks/animation_prompt.md": _drive_animation_prompt,

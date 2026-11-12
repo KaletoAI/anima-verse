@@ -50,7 +50,10 @@ def log_image_prompt(
     negative_folded: Optional[List[str]] = None,
     media: str = "",
     error: str = "",
-    pose_checked_from: str = ""):
+    pose_checked_from: str = "",
+    prompt_char_limit: Optional[int] = None,
+    shorten_method: str = "",
+    unshortened_prompt: str = ""):
     """Log one image-generation prompt as a JSONL line.
 
     Args:
@@ -79,6 +82,12 @@ def log_image_prompt(
             up in the log.
         pose_checked_from: the subject prompt BEFORE the LLM pose check
             (app/imagegen/pose_check.py) rewrote it; empty = no rewrite.
+        prompt_char_limit: the backend's prompt character limit the send ran
+            under (0 = none known; app/imagegen/prompt_limit.py).
+        shorten_method: ``none`` / ``llm`` / ``cut`` — how the final prompt
+            was fitted to that limit. Empty = not a central send (no field).
+        unshortened_prompt: the final prompt BEFORE shortening (only when
+            it was shortened; ``final_prompt`` is what was sent).
     """
     end_time = utc_now()
     start_time = end_time - timedelta(seconds=duration_s) if duration_s > 0 else end_time
@@ -136,6 +145,11 @@ def log_image_prompt(
         entry["error"] = error
     if pose_checked_from:
         entry["pose_checked_from"] = pose_checked_from
+    if shorten_method:
+        entry["prompt_char_limit"] = int(prompt_char_limit or 0)
+        entry["shorten_method"] = shorten_method
+    if unshortened_prompt:
+        entry["unshortened_prompt"] = unshortened_prompt
 
     # JSONL schreiben
     with _lock:

@@ -141,6 +141,10 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # Body-logic pass before a render (app/imagegen/pose_check.py). Unrouted
     # it borrows image_prompt; route it at a model that handles the world's content.
     "image_pose_check":   {"label": "Image Pose Check",         "priority": Priority.NORMAL, "category": "helper", "gate": "image_generation.enabled"},
+    # Condenses a final prompt that is longer than the backend's prompt
+    # character limit, before it is sent (app/imagegen/prompt_limit.py).
+    # Unrouted it borrows image_prompt; a failure falls back to a cut.
+    "image_prompt_shorten": {"label": "Image Prompt Shorten",   "priority": Priority.NORMAL, "category": "helper", "gate": "image_generation.enabled"},
     # The back description of an outfit piece (app/core/piece_back_text.py):
     # the Items editor's "Suggest" and the one-time back-text migration (which
     # passes Priority.LOW). Unrouted it borrows image_prompt.
@@ -592,6 +596,12 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
     "image_pose_check": {
         "tools": False, "vision": False, "json": False, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
+        "creative": False, "language_de": False, "latency_sensitive": True,
+    },
+    # Plain-text rewrite of one prompt to a character budget; a render waits on it.
+    "image_prompt_shorten": {
+        "tools": False, "vision": False, "json": False, "min_context": 4096,
+        "model_class": "small", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": False, "latency_sensitive": True,
     },
     # One short English line for an image backend — never shown as prose.

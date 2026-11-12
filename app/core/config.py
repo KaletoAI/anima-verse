@@ -2852,7 +2852,7 @@ def _flatten_to_env(config: dict) -> None:
                      "supports_negative_prompt", "timeout",
                      "max_concurrent", "serialize_group", "accepts_overflow",
                      "response_format", "extra_params", "category", "prompt",
-                     "ref_slot_count",
+                     "ref_slot_count", "prompt_char_limit",
                      "full_mask", "mask_grow", "inner_crop",
                      "mask_format", "lora_url", "lora_filter",
                      # Video backends (localai_video / together_video / civitai_video)

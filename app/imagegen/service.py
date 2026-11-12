@@ -626,18 +626,49 @@ class ImageService:
         image, video and mesh generation crosses this one handoff, the switch is
         checked here — BEFORE the task is queued and before a GPU slot is taken,
         so a world with media generation off does not collect a queue full of
-        jobs that fail one by one in a worker."""
+        jobs that fail one by one in a worker.
+
+        It is also where an over-limit prompt gets shortened
+        (app/imagegen/prompt_limit.py): the backend's prompt limit is resolved
+        HERE, before the submission; ``generate()`` inside the worker only
+        measures and, for an over-limit prompt without a decision, bounces
+        before sending anything. The shortening (LLM + cut) then runs on THIS
+        thread — no GPU slot held — and the job is submitted once more with
+        the decision attached, one priority step ahead so it does not queue
+        behind the jobs it already waited for."""
         if not media_generation_enabled():
             raise MediaGenerationDisabled(
                 "Media generation is disabled for this world")
         from app.core.llm_queue import get_llm_queue, Priority
-        return get_llm_queue().submit_gpu_task(
-            provider_name=backend.name,
-            task_type=task_type,
-            priority=(Priority.IMAGE_GEN if priority < 0 else priority),
-            callable_fn=gen_fn,
-            agent_name=agent_name, label=(label or backend.name),
-            gpu_type=backend.api_type)
+        from app.imagegen import prompt_limit
+        prio = Priority.IMAGE_GEN if priority < 0 else priority
+        ctx = prompt_limit.ChannelContext(limit=prompt_limit.resolve_limit(backend))
+
+        def _in_channel(ctx=ctx):
+            token = prompt_limit.CHANNEL.set(ctx)
+            try:
+                return gen_fn()
+            except prompt_limit.PromptOverLimit as over:
+                return over  # a result, not a failure: nothing was sent
+            finally:
+                prompt_limit.CHANNEL.reset(token)
+
+        for _pass in range(2):
+            result = get_llm_queue().submit_gpu_task(
+                provider_name=backend.name,
+                task_type=task_type,
+                priority=prio,
+                callable_fn=_in_channel,
+                agent_name=agent_name, label=(label or backend.name),
+                gpu_type=backend.api_type)
+            if not isinstance(result, prompt_limit.PromptOverLimit):
+                return result
+            ctx.decisions[result.key] = prompt_limit.shorten(
+                result.prompt, result.limit, character=result.character)
+            ctx.may_bounce = False
+            prio = max(0, prio - 1)
+        # Unreachable: the second pass cuts in place instead of bouncing.
+        raise RuntimeError(f"{backend.name}: prompt shortening did not settle")
 
     # -- hub operations (app/core/hub_ops.py) --------------------------------
     @staticmethod

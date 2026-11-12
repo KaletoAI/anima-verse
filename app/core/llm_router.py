@@ -405,7 +405,8 @@ def fallback_parent(task: str) -> Optional[str]:
         → "intent"
         (strict-JSON tool work; the tool-class anchor)
       * npc_* → "chat_stream" (character writing; the chat anchor)
-      * image_pose_check → "image_prompt" (the image-prompt anchor)
+      * image_pose_check, image_prompt_shorten → "image_prompt" (the
+        image-prompt anchor)
       * piece_back_text → "image_prompt": it writes image-prompt wording too —
         one short English clothing description for an image backend, no JSON,
         no tools — so the small prompt model that already handles the world's
@@ -423,7 +424,7 @@ def fallback_parent(task: str) -> Optional[str]:
         return "intent"
     if task.startswith("npc_"):
         return "chat_stream"
-    if task in ("image_pose_check", "piece_back_text"):
+    if task in ("image_pose_check", "image_prompt_shorten", "piece_back_text"):
         return "image_prompt"
     return None
 
