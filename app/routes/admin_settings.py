@@ -1868,21 +1868,16 @@ def llm_suitability_test_status(job_id: str = "", user=Depends(require_admin)):
 
 @router.get("/settings/llm-suitability-test/jobs")
 def llm_suitability_test_jobs(user=Depends(require_admin)):
-    """The test queue: waiting and running jobs, plus jobs that ended in the
-    last ten minutes. Saved results live in the model table, not here."""
+    """The test queue: waiting, running and interrupted jobs, and every ended
+    one (done, error, cancelled) with how it ended, until it is dismissed.
+    A test that ended unseen used to drop out after ten minutes — an unsaved
+    run then looked as if it had never happened (2026-11-12)."""
     from app.core.model_suitability import list_jobs
-    from app.core.model_capabilities import current_suitability
-    from app.core.model_capabilities import current_rp_result
     jobs = []
     for j in list_jobs():
         s = j.get("summary") or {}
         kind = j.get("kind", "tools")
-        current = current_suitability(s) if kind == "tools" else current_rp_result(s)
-        if j.get("status") == "done" and not current:
-            continue
         ago = j.get("finished_ago_s")
-        if j.get("status") not in ("queued", "running", "interrupted") and (ago is None or ago > 600):
-            continue
         jobs.append({
             "job_id": j["job_id"],
             "position": j["position"],
@@ -1895,11 +1890,30 @@ def llm_suitability_test_jobs(user=Depends(require_admin)):
             "settings": j.get("settings", {}),
             "concurrency": j.get("concurrency"),
             "finished_ago_s": ago,
-            "score": s.get("score", "") if kind == "tools" else s.get("overall"),
-            "verdict": s.get("verdict") or "",
+            "finished_at": j.get("finished_at"),
+            "outcome": j.get("outcome"),
+            "saved": j.get("saved"),
+            "score": j.get("score") if j.get("score") is not None else (
+                s.get("score", "") if kind == "tools" else s.get("overall")),
+            "verdict": j.get("verdict") or s.get("verdict") or "",
             "kind": kind,
         })
     return {"jobs": jobs}
+
+
+@router.post("/settings/llm-suitability-test/dismiss")
+async def llm_suitability_dismiss(request: Request, user=Depends(require_admin)):
+    """Remove one ended test (done, error or cancelled) from the queue list."""
+    from app.core.model_suitability import dismiss_job
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(400, "body must be valid JSON") from exc
+    if not isinstance(body, dict) or not isinstance(body.get("job_id"), str) or not body["job_id"]:
+        raise HTTPException(400, "job_id required")
+    if not await asyncio.to_thread(dismiss_job, body["job_id"]):
+        raise HTTPException(404, "No ended test with this id")
+    return {"dismissed": True}
 
 
 # ── Roleplay test (same queue, kind "rp" / "rp_judge") ─────────────────

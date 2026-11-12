@@ -192,6 +192,15 @@ SECTIONS = {
                 "min": 0,
                 "description": "Projected non-RP seconds per thought turn a suitable model may need",
             },
+            "case_timeout_seconds": {
+                "type": "int", "label": "Request timeout per case (seconds)", "default": 300,
+                "min": 10,
+                "description": "A tools-test request that gets no answer in this time fails its case "
+                               "(\"no answer within N s\") instead of holding the whole test for the "
+                               "provider's own timeout. When more requests in a row time out than run "
+                               "in parallel, the provider has stopped answering and the test ends as "
+                               "failed with that reason.",
+            },
         },
     },
     "body_retexture": {

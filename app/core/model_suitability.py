@@ -10,7 +10,11 @@ argument and semantic dimension passes and no refusal is detected. Uncurated
 semantics remain not_tested. Case verdicts require a strict majority; invalid input
 (missing image, invalid fixture, infrastructure error) excludes the case from score
 denominators. A truncated answer (finish_reason=length) FAILS without being called a
-refusal or hallucination. A prompt conflict (a JSON-contract tool whose example in the
+refusal or hallucination. A request that gets no answer within
+model_test.case_timeout_seconds (a read timeout) FAILS its run as "no answer within
+N s"; a connect/pool timeout, a 5xx or a refused connection stays an infrastructure
+error. More answer timeouts in a row than requests run in parallel end the whole run
+as an error: the provider has stopped answering. A prompt conflict (a JSON-contract tool whose example in the
 same prompt is not JSON) is flagged and suspends only that tool's argument check. The
 aggregate tool threshold remains 85% with no invented tools, and requires at
 least one curated semantic case with evidence; otherwise it is not_tested.
@@ -23,16 +27,19 @@ candidate is verified as one fixed setting; ties prefer off. Deciding-stage
 checks remain separate from recommended-setting scores and timing. Group stops
 and estimated reasoning counts remain visible in the stored evidence.
 
-Queue: unfinished requests persist in the instance-wide suitability_queue.json,
-shared by all worlds. Restarted jobs load as interrupted and require explicit
-resume (repeating a running test from the start) or discard; finished jobs live
-only in the capability table. List order preserves FIFO within each provider.
+Queue: requests persist in the instance-wide suitability_queue.json, shared by
+all worlds. Restarted unfinished jobs load as interrupted and require explicit
+resume (repeating a running test from the start) or discard. An ended job (done,
+error, cancelled) keeps its row — status, outcome text, score — until it is
+dismissed, across restarts too; a test never leaves the list on its own. Its
+full report lives in memory (and, when saved, in the capability table).
+List order preserves FIFO within each provider.
 """
 import json
 import re
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from statistics import median
 from pathlib import Path
@@ -340,6 +347,9 @@ def iter_suitability_results(
         return
     clients = {}
     clients_lock = threading.Lock()
+    # The test's own deadline per request, not the provider's (Evo-X2: 900 s):
+    # one hung request used to hold the whole run for that long (2026-11-12).
+    case_timeout = _case_timeout_seconds()
 
     def client_for(group, budget):
         with clients_lock:
@@ -347,7 +357,7 @@ def iter_suitability_results(
             if key not in clients:
                 clients[key] = inst.create_llm(
                     temperature=settings["temperature"][group], thinking=bool(budget),
-                    thinking_budget=budget or None,
+                    thinking_budget=budget or None, request_timeout=case_timeout,
                     **{k: v for k, v in settings.items() if k not in ("temperature", "thinking_max")})
             return clients[key]
     try:
@@ -437,8 +447,27 @@ def iter_suitability_results(
 
     yield {"type": "start", "model": model_full, "total": len(cases)}
 
+    # Answer timeouts in a row (any case). More of them than requests run in
+    # parallel means a request sent AFTER the first ones timed out hung too:
+    # the provider has stopped answering, and the run ends as failed instead
+    # of waiting out every remaining request.
+    abort = threading.Event()
+    abort_reason: List[str] = []
+    timeouts = {"in_row": 0}
+    timeouts_lock = threading.Lock()
+
+    def note_answer(timed_out: bool) -> None:
+        with timeouts_lock:
+            timeouts["in_row"] = timeouts["in_row"] + 1 if timed_out else 0
+            if timed_out and timeouts["in_row"] > concurrency and not abort.is_set():
+                abort_reason.append(
+                    f"The provider stopped answering: {timeouts['in_row']} requests in a row got no "
+                    f"answer within {case_timeout:g} s. Nothing was saved; the cases finished so far "
+                    "are shown below.")
+                abort.set()
+
     def attempt(case, budget):
-        if cancel_event is not None and cancel_event.is_set():
+        if (cancel_event is not None and cancel_event.is_set()) or abort.is_set():
             return None
         attempt_start = time.monotonic()
         try:
@@ -449,10 +478,25 @@ def iter_suitability_results(
                                  "budget_hit": False, "usage": {}, "duration_s": 0}, 0, 0
             else:
                 raw, dt, ctok = ask(case, budget)
+                note_answer(False)
             evidence = score_case(case, raw["content"], finish_reason=raw.get("finish_reason"))
         except _QuotaWaitCancelled:
             return None
         except Exception as exc:
+            if _answer_timeout(exc):
+                # No answer in time: the model (or its server) failed this
+                # run. Not an infrastructure error, so it neither hides the
+                # case nor keeps an otherwise clean run unsaved.
+                note_answer(True)
+                dt = time.monotonic() - attempt_start
+                evidence = score_case(case, "")
+                evidence.update(ok=False, hallucinated=False, timed_out=True,
+                                detail=f"no answer within {case_timeout:g} s (request timed out)")
+                raw = {"content": "", "reasoning": None, "finish_reason": None, "budget_hit": False,
+                       "usage": {}, "duration_s": dt, "error": f"no answer within {case_timeout:g} s: {exc}",
+                       "timed_out": True}
+                # The wait is no answer time: it stays out of the speed figures.
+                return evidence, raw, 0, 0
             missing = (case["group"] == "vision" and isinstance(exc, FileNotFoundError)
                        and not (ROOT / case["image"]).is_file())
             # A request the server refuses for this model (400 "at most 0
@@ -502,6 +546,7 @@ def iter_suitability_results(
                "budget_hits": sum(bool(r.get("budget_hit")) for r in outputs),
                "budget_overruns": sum(bool(r.get("budget_overrun")) for r in outputs),
                "truncated_runs": sum(r.get("finish_reason") == "length" for r in outputs),
+               "timed_out_runs": sum(bool(r.get("timed_out")) for r in outputs),
                "reasoning_tokens": [(r.get("usage") or {}).get("reasoning_tokens") for r in outputs],
                "dimensions": {k: (dimensions[0][k] if all(d[k] == dimensions[0][k] for d in dimensions) else "mixed") for k in DIMENSIONS},
                "run_checks": dimensions}
@@ -528,10 +573,29 @@ def iter_suitability_results(
     recommended_records = []
     thinking = {}
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        def collect(futures):
+            """The attempts of one case, or None as soon as the run is
+            cancelled or aborted (not after the last hung request ends)."""
+            while True:
+                finished, _ = wait(futures, timeout=_COLLECT_SLICE_S)
+                if len(finished) == len(futures):
+                    attempts = [future.result() for future in futures]
+                    return None if any(a is None for a in attempts) else attempts
+                if abort.is_set() or (cancel_event is not None and cancel_event.is_set()):
+                    return None
+
+        def failed():
+            """The run's end when the provider stopped answering: an error
+            that carries every case finished so far (never saved)."""
+            pool.shutdown(wait=False, cancel_futures=True)
+            reported = {r["id"] for r in results}
+            partial = results + [rec for case_id, rec in off.items() if case_id not in reported]
+            return {"type": "error", "message": abort_reason[0], "checks": partial}
+
         def run_stage(case, budget):
             futures = [pool.submit(attempt, case, budget) for _ in range(int(case.get("repeats", 1)) or 1)]
-            attempts = [future.result() for future in futures]
-            if any(a is None for a in attempts):
+            attempts = collect(futures)
+            if attempts is None:
                 return None
             rec = record(case, attempts)
             stage_records[(case["id"], budget)] = rec
@@ -541,8 +605,11 @@ def iter_suitability_results(
         pending = [[pool.submit(attempt, case, 0) for _ in range(int(case.get("repeats", 1)) or 1)]
                    for case in cases]
         for idx, case in enumerate(cases):
-            attempts = [f.result() for f in pending[idx]]
+            attempts = collect(pending[idx])
             if cancel_event is not None and cancel_event.is_set():
+                return
+            if attempts is None:
+                yield failed()
                 return
             rec = record(case, attempts)
             off[case["id"]] = rec
@@ -571,6 +638,8 @@ def iter_suitability_results(
                         yield {"type": "progress", "phase": f"{group}: {case['id']} with thinking up to {budget}"}
                         rec = run_stage(case, budget)
                         if rec is None:
+                            if abort.is_set():
+                                yield failed()
                             return
                         stages.append(stage_info(rec, budget))
                         reason = stop_reason(rec)
@@ -596,6 +665,8 @@ def iter_suitability_results(
                         yield {"type": "progress", "phase": f"{group}: verifying {case['id']} at {candidate}"}
                         check = run_stage(case, candidate)
                         if check is None:
+                            if abort.is_set():
+                                yield failed()
                             return
                         rec["verification"] = stage_info(check, candidate)
                         verified[case["id"]] = check
@@ -641,6 +712,13 @@ def iter_suitability_results(
         summary["checks"] = results
         summary["thinking"] = thinking
         summary["infra"] = any(r["infra"] for r in stage_records.values())
+        all_runs = [(run, check) for r in stage_records.values()
+                    for run, check in zip(r["runs"], r["run_checks"])]
+        infra_errors = [str(run.get("error") or "")[:160] for run, check in all_runs if check.get("infra")]
+        summary["requests"] = len(all_runs)
+        summary["infra_runs"] = len(infra_errors)
+        summary["infra_examples"] = list(dict.fromkeys(infra_errors))[:3]
+        summary["timed_out_runs"] = sum(bool(run.get("timed_out")) for run, _ in all_runs)
         if any(c["group"] == "vision" for c in cases) and not any(r["group"] == "vision" for r in recommended_records):
             summary["vision"] = "not_supported"
             # Unsupported image input does not disqualify a text model.
@@ -655,6 +733,34 @@ def iter_suitability_results(
 
 
 _MAX_REMOTE_RATE_LIMITS = 5
+_COLLECT_SLICE_S = 0.5
+_DEFAULT_CASE_TIMEOUT_S = 300
+
+
+def _case_timeout_seconds() -> float:
+    """model_test.case_timeout_seconds: the test's deadline per request."""
+    from app.core import config
+    value = config.get("model_test.case_timeout_seconds", _DEFAULT_CASE_TIMEOUT_S)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not value > 0:
+        return float(_DEFAULT_CASE_TIMEOUT_S)
+    return float(value)
+
+
+def _answer_timeout(exc: BaseException) -> bool:
+    """True when the request was sent and no answer came in time (a read
+    timeout); False for a connect/pool timeout — the provider was not reached
+    — and for every other error. Walks the cause chain, because the OpenAI
+    SDK re-raises httpx's ReadTimeout as ``APITimeoutError ... from err``."""
+    seen = set()
+    names = []
+    current: Optional[BaseException] = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        names.extend(cls.__name__ for cls in type(current).__mro__)
+        current = current.__cause__ or current.__context__
+    if "ConnectTimeout" in names or "PoolTimeout" in names:
+        return False
+    return any(name in ("ReadTimeout", "APITimeoutError", "TimeoutError") for name in names)
 
 
 class _QuotaWaitCancelled(Exception):
@@ -878,7 +984,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
     # committed results file.
     stored_checks = [{k: r.get(k) for k in
                       ("id", "label", "category", "group", "task", "ok", "hallucinated", "detail",
-                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "reasoning_tokens", "budget_hits", "budget_overruns", "stage", "stages", "verification",
+                       "duration_s", "tok_s", "dimensions", "run_checks", "truncated_runs", "timed_out_runs", "reasoning_tokens", "budget_hits", "budget_overruns", "stage", "stages", "verification",
                        "recommended_budget", "recommended_ok")} for r in results]
     raw_outputs = {"scorer_version": summary.get("scorer_version"),
                    "fixture_version": summary.get("fixture_version"),
@@ -890,8 +996,20 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
         summary["diagnostic_run_id"] = get_suitability_outputs(model_full).get("run_id")
     except Exception as exc:
         logger.error("Failed to persist local suitability diagnostics: %s", exc)
+        summary["not_saved_reason"] = f"Could not write the diagnostics file: {exc}"
         return False
     if summary.get("infra") or any(r.get("infra") for r in results):
+        # The rule stays (an outage says nothing about the model); the reason
+        # is reported so a finished, unsaved test is never a silent one.
+        count, total = summary.get("infra_runs"), summary.get("requests")
+        examples = "; ".join(summary.get("infra_examples") or [])
+        summary["not_saved_reason"] = (
+            (f"{count} of {total} requests" if count and total else "Some requests")
+            + " failed at the provider (outage, 5xx, connection error)"
+            + (f" — {examples}" if examples else "")
+            + ". Results are saved only from a run without infrastructure errors;"
+              " the answers are kept in the diagnostics below.")
+        logger.warning("Suitability for %s not saved: %s", model_full, summary["not_saved_reason"])
         return False
     # Keyed by full Provider::Model; identical models on different hardware
     # do not overwrite one another.
@@ -925,6 +1043,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
         return True
     except Exception as e:
         logger.error("Failed to persist suitability for %s: %s", model_full, e)
+        summary["not_saved_reason"] = f"Could not write the capability table: {e}"
         return False
 
 
@@ -935,8 +1054,14 @@ _JOBS: Dict[str, Dict[str, Any]] = {}
 _JOBS_LOCK = threading.RLock()
 _ACTIVE_PROVIDERS: set[str] = set()
 _QUEUE_LOADED = False
-_PERSISTED_STATUSES = ("queued", "running", "interrupted")
+# Waiting/running (or interrupted by a restart) vs. ended. Both persist; an
+# ended job stays listed until it is dismissed (dismiss_job).
+_ACTIVE_STATUSES = ("queued", "running", "interrupted")
+_ENDED_STATUSES = ("done", "error", "cancelled")
 _QUEUE_FIELDS = ("job_id", "model", "provider", "settings", "concurrency", "status", "enqueued_at", "kind")
+# What an ended row keeps on disk: enough to say how the test ended. The
+# full report (checks, answers) stays in memory and in the diagnostics.
+_ENDED_FIELDS = ("outcome", "finished_at", "done", "total", "saved", "score", "verdict")
 # Test kinds sharing this queue: validate(settings) and iterate(model, ...).
 # "rp" / "rp_judge" live in app.core.rp_test (imported lazily — it imports this module).
 JOB_KINDS = ("tools", "rp", "rp_judge")
@@ -962,14 +1087,43 @@ def job_provider(kind: str, model_full: str, settings: dict) -> str:
     return model_full.partition("::")[0]
 
 
+def _disk_row(job: Dict[str, Any]) -> Dict[str, Any]:
+    row = {key: job[key] for key in _QUEUE_FIELDS}
+    if job["status"] in _ACTIVE_STATUSES and job["_cancel"].is_set():
+        # A cancel still winding down: a restart must not revive it.
+        row.update(status="cancelled", outcome="Cancelled", finished_at=utc_now().isoformat(),
+                   done=job.get("done", 0), total=job.get("total", 0), saved=False, score="", verdict="")
+    elif job["status"] in _ENDED_STATUSES:
+        row.update({key: job.get(key) for key in _ENDED_FIELDS})
+    return row
+
+
 def _persist_queue() -> None:
     """Called under _JOBS_LOCK; config's atomic writer has no import-time I/O."""
     from app.core.config import _atomic_write_json
     path = get_instance_dir() / "suitability_queue.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_write_json(path, {"jobs": [
-        {key: job[key] for key in _QUEUE_FIELDS} for job in _JOBS.values()
-        if job["status"] in _PERSISTED_STATUSES and not job["_cancel"].is_set()]})
+    _atomic_write_json(path, {"jobs": [_disk_row(job) for job in _JOBS.values()]})
+
+
+def _end(job: Dict[str, Any], status: str, outcome: str) -> None:
+    """Mark a job ended, with the sentence the queue shows for it."""
+    job["status"] = status
+    job["outcome"] = outcome
+    if not job.get("finished_at"):
+        job["finished_at"] = utc_now().isoformat()
+
+
+def _done_outcome(summary: Dict[str, Any]) -> str:
+    if summary.get("saved"):
+        return "Result saved"
+    reason = summary.get("not_saved_reason")
+    if reason:
+        return "Not saved: " + reason
+    if summary.get("infra"):
+        return ("Not saved: a request failed at the provider (infrastructure error); "
+                "results are saved only from a run without one.")
+    return "Not saved"
 
 
 def _load_queue() -> None:
@@ -1002,16 +1156,27 @@ def _load_queue() -> None:
             if (any(not isinstance(job[k], str) or not job[k] for k in
                     ("job_id", "model", "provider", "enqueued_at"))
                     or job["provider"] != job_provider(job["kind"], job["model"], job["settings"])
-                    or job["status"] not in _PERSISTED_STATUSES
+                    or job["status"] not in _ACTIVE_STATUSES + _ENDED_STATUSES
                     or type(job["concurrency"]) is not int or job["concurrency"] < 1
                     or job["job_id"] in _JOBS):
                 raise ValueError("invalid job metadata")
             from app.core.timeutils import parse_iso
             if parse_iso(job["enqueued_at"]) is None:
                 raise ValueError("invalid enqueued_at")
-            job.update(status="interrupted", total=0, done=0, checks=[], summary=None,
-                       error=None, _request=(job["settings"], job["concurrency"]),
-                       _cancel=threading.Event())
+            job.update(total=0, done=0, checks=[], summary=None, error=None,
+                       _request=(job["settings"], job["concurrency"]), _cancel=threading.Event())
+            if job["status"] in _ACTIVE_STATUSES:
+                job["status"] = "interrupted"
+            else:
+                ended = {key: entry.get(key) for key in _ENDED_FIELDS}
+                counts_ok = all(type(ended[k]) is int and ended[k] >= 0 for k in ("done", "total"))
+                if (not isinstance(ended["outcome"], str) or not counts_ok
+                        or not isinstance(ended["finished_at"], str) or parse_iso(ended["finished_at"]) is None
+                        or ended["saved"] not in (True, False, None)
+                        or any(ended[k] is not None and not isinstance(ended[k], (str, int, float))
+                               for k in ("score", "verdict"))):
+                    raise ValueError("invalid ended job")
+                job.update(ended, error=ended["outcome"] if job["status"] == "error" else None)
             _JOBS[job["job_id"]] = job
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Skipping invalid suitability queue entry: %s", exc)
@@ -1029,6 +1194,18 @@ def interrupted_jobs() -> List[Dict[str, Any]]:
     with _JOBS_LOCK:
         _load_queue()
         return [_snapshot(j) for j in _JOBS.values() if j["status"] == "interrupted"]
+
+
+def dismiss_job(job_id: str) -> bool:
+    """Remove an ended job from the list (the only way one leaves it)."""
+    with _JOBS_LOCK:
+        _load_queue()
+        job = _JOBS.get(job_id)
+        if job is None or job["status"] not in _ENDED_STATUSES:
+            return False
+        del _JOBS[job_id]
+        _persist_queue()
+        return True
 
 
 def resume_interrupted() -> int:
@@ -1069,8 +1246,12 @@ def _snapshot(job: Dict[str, Any]) -> Dict[str, Any]:
     waiting = [j["job_id"] for j in _JOBS.values() if j["status"] == "queued"
                and j["provider"] == job["provider"]]
     result["position"] = waiting.index(job["job_id"]) + 1 if job["status"] == "queued" else 0
-    finished = job.get("_finished")
-    result["finished_ago_s"] = round(time.monotonic() - finished, 1) if finished else None
+    finished = job.get("finished_at")
+    if finished:
+        from app.core.timeutils import parse_iso
+        result["finished_ago_s"] = round((utc_now() - parse_iso(finished)).total_seconds(), 1)
+    else:
+        result["finished_ago_s"] = None
     return result
 
 
@@ -1093,26 +1274,36 @@ def _run_job(job: Dict[str, Any]) -> None:
                     job["checks"].append({k: v for k, v in ev.items() if k not in ("type", "index")})
                     job["done"] = max(job.get("done", 0), len(job["checks"]))
                 elif kind == "done":
-                    job["summary"] = ev.get("summary")
-                    job["status"] = "done"
+                    summary = ev.get("summary") or {}
+                    job["summary"] = summary
+                    job.update(saved=bool(summary.get("saved")),
+                               score=summary.get("score") if job.get("kind", "tools") == "tools" else summary.get("overall"),
+                               verdict=summary.get("verdict") or "")
+                    _end(job, "done", _done_outcome(summary))
                     _persist_queue()
                 elif kind == "error":
-                    job["error"] = ev.get("message")
-                    job["status"] = "error"
+                    job["error"] = ev.get("message") or "Test failed"
+                    if isinstance(ev.get("checks"), list):
+                        # The cases finished before the failure stay visible.
+                        job["checks"] = list(ev["checks"])
+                    job["saved"] = False
+                    _end(job, "error", job["error"])
                     _persist_queue()
     except Exception as exc:
         logger.error("suitability job %s crashed: %s", job["model"], exc)
         with _JOBS_LOCK:
-            job["error"] = str(exc)
-            job["status"] = "error"
+            job["error"] = f"The test crashed: {exc}"
+            job["saved"] = False
+            _end(job, "error", job["error"])
     finally:
         with _JOBS_LOCK:
             if job["_cancel"].is_set():
-                job["status"] = "cancelled"
+                job["saved"] = False
+                _end(job, "cancelled", "Cancelled")
             elif job["status"] == "running":
-                job["status"] = "error"
-                job["error"] = "Runner ended without a result"
-            job["_finished"] = time.monotonic()
+                job["error"] = "The test ended without a result"
+                job["saved"] = False
+                _end(job, "error", job["error"])
             _persist_queue()
 
 
@@ -1131,7 +1322,10 @@ def _worker(provider: str) -> None:
     except OSError as exc:
         # A failed write must not leave a dead worker registered forever.
         with _JOBS_LOCK:
-            job["status"] = "cancelled" if job["_cancel"].is_set() else "interrupted"
+            if job["_cancel"].is_set():
+                _end(job, "cancelled", "Cancelled")
+            else:
+                job["status"] = "interrupted"
             _ACTIVE_PROVIDERS.discard(provider)
             logger.error("Suitability queue write failed for %s; worker stopped: %s", provider, exc)
             try:
@@ -1154,7 +1348,7 @@ def enqueue_test(model_full: str, *, settings: dict,
     with _JOBS_LOCK:
         _load_queue()
         for job in _JOBS.values():
-            if (job["model"] == model_full and job["status"] in _PERSISTED_STATUSES
+            if (job["model"] == model_full and job["status"] in _ACTIVE_STATUSES
                     and job.get("kind", "tools") == kind and job["_request"] == request):
                 return _snapshot(job)
         job = {"job_id": uuid4().hex, "model": model_full, "provider": provider, "kind": kind,
@@ -1172,7 +1366,7 @@ def cancel_test(job_id: str) -> bool:
     with _JOBS_LOCK:
         _load_queue()
         job = _JOBS.get(job_id)
-        if job is None or job["status"] not in _PERSISTED_STATUSES:
+        if job is None or job["status"] not in _ACTIVE_STATUSES:
             return False
         if job["status"] == "interrupted":
             del _JOBS[job_id]
@@ -1180,8 +1374,8 @@ def cancel_test(job_id: str) -> bool:
             return True
         job["_cancel"].set()
         if job["status"] == "queued":
-            job["status"] = "cancelled"
-            job["_finished"] = time.monotonic()
+            job["saved"] = False
+            _end(job, "cancelled", "Cancelled before it started")
         _persist_queue()
         return True
 
@@ -1201,5 +1395,5 @@ def list_jobs() -> List[Dict[str, Any]]:
         ordered = ([j for j in jobs if j["status"] == "running"]
                    + [j for j in jobs if j["status"] == "queued"]
                    + [j for j in jobs if j["status"] == "interrupted"]
-                   + [j for j in jobs if j["status"] not in _PERSISTED_STATUSES])
+                   + [j for j in jobs if j["status"] not in _ACTIVE_STATUSES])
         return [_snapshot(j) for j in ordered]

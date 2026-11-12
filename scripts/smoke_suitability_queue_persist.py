@@ -4,8 +4,9 @@
 Hand-derived expectations: A1/A2 share one FIFO worker, B1 has its own.
 Blocking A1 and B1 leaves three records in enqueue order: running/queued/running.
 Restart restores exactly three interrupted jobs without starting workers; an
-identical request adds zero. Resume runs A1 before A2 and completion removes
-all three disk records. Discard removes three; cancel removes one interrupted
+identical request adds zero. Resume runs A1 before A2 and completion turns all
+three disk records into ended "done" rows (no active row left); an ended row
+leaves only through dismiss. Discard removes three; cancel removes one interrupted
 record. Corrupt JSON restores zero; one invalid settings entry beside a valid
 entry restores exactly one and logs a warning. Write failures at start/finish
 release the provider registration and leave one recoverable interrupted job.
@@ -47,6 +48,9 @@ with tempfile.TemporaryDirectory() as directory:
     def stored():
         return json.loads(target.read_text())['jobs']
 
+    def active():
+        return [j for j in stored() if j['status'] in ('queued', 'running', 'interrupted')]
+
     def restart(content):
         target.write_text(content)
         suit._reset_for_tests()
@@ -65,7 +69,7 @@ with tempfile.TemporaryDirectory() as directory:
         original = target.read_text()
         gate.set()
         wait_for(lambda: not suit._ACTIVE_PROVIDERS)
-        assert stored() == []
+        assert active() == [] and [j['status'] for j in stored()] == ['done'] * 3
         restored = restart(original)
         assert len(restored) == 3 and all(j['status'] == 'interrupted' for j in restored)
         assert target.read_text() == original
@@ -77,17 +81,17 @@ with tempfile.TemporaryDirectory() as directory:
         gates.update({model: threading.Event() for model in ('A::one', 'A::two', 'B::one')})
         assert suit.resume_interrupted() == 3
         wait_for(lambda: len(started) == 2)
-        assert len(stored()) == 3
+        assert len(active()) == 3
         gates['A::one'].set()
         wait_for(lambda: 'A::two' in started)
-        assert [j['model'] for j in stored()] == ['A::two', 'B::one']
+        assert [j['model'] for j in active()] == ['A::two', 'B::one']
         gates['B::one'].set()
-        wait_for(lambda: len(stored()) == 1)
-        assert stored()[0]['model'] == 'A::two'
+        wait_for(lambda: len(active()) == 1)
+        assert active()[0]['model'] == 'A::two'
         gates['A::two'].set()
         wait_for(lambda: not suit._ACTIVE_PROVIDERS)
         assert [m for m in started if m.startswith('A::')] == ['A::one', 'A::two']
-        assert stored() == []
+        assert active() == [] and len(stored()) == 3
         restart(original)
         # Hand-derived: jobs HTTP adapter must retain all three interrupted rows.
         from app.routes import admin_settings as routes
@@ -170,6 +174,9 @@ with tempfile.TemporaryDirectory() as directory:
             assert suit.get_job(new['job_id'])['status'] == 'done'
             assert suit.resume_interrupted() == 1
             wait_for(lambda: not suit._ACTIVE_PROVIDERS)
+            assert active() == [] and {j['model'] for j in stored()} == {'IO::old', 'IO::new'}
+            for job in suit.list_jobs():
+                assert suit.dismiss_job(job['job_id'])
             assert stored() == []
         suit._reset_for_tests()
 print('PASS: suitability queue persistence, restart, FIFO, resume, discard, validation and cancel')

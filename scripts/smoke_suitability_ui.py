@@ -86,8 +86,9 @@ with tempfile.TemporaryDirectory() as directory:
         status = routes.llm_suitability_test_status("live", user=None)
         assert status["checks"][0]["prompt"]["system"] == "live system"
         assert status["checks"][0]["runs"][0]["content"] == "live answer"
-    # The queue lists waiting/running jobs and those ended within ten minutes;
-    # saved results are no queue rows (they open from the model table).
+    # The queue lists waiting/running jobs and every ended one, however long
+    # ago, until it is dismissed (an ended test used to drop out after ten
+    # minutes and looked as if it had never run).
     jobs = [{"job_id": j, "position": 0, "model": "m", "status": st, "finished_ago_s": ago,
              "summary": {"scorer_version": "suitability-5"} if st == "done" else {}}
             for j, st, ago in (("run", "running", None), ("wait", "queued", None),
@@ -96,7 +97,7 @@ with tempfile.TemporaryDirectory() as directory:
     with patch("app.core.model_suitability.list_jobs", return_value=jobs), patch.object(
             caps, "get_all_suitability", return_value={"P::m": {"tested_suitability": summary}}):
         listed = [j["job_id"] for j in routes.llm_suitability_test_jobs(user=None)["jobs"]]
-    assert listed == ["run", "wait", "fresh", "err"], listed
+    assert listed == ["run", "wait", "fresh", "stale", "err"], listed
     # Model table: what a llama-swap /models entry reports, name-derived
     # parameter size, and the fill order stored > last test > provider.
     from app.core.provider import _reported_capabilities, _parameter_size_from_name

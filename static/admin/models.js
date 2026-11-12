@@ -595,16 +595,49 @@ async function suitJobsRefresh() {
                 const rp = kind !== 'tools' && typeof rpSettingsText === 'function';
                 return '<div class="suit-job"><span class="kind-badge kind-' + esc(kind) + '">' + esc(suitKindLabel(kind)) + '</span> '
                 + '<button type="button" class="btn" onclick="' + (rp ? 'rpSelectJob' : 'suitSelectJob') + '(\'' + escJs(j.job_id) + '\')">'
-                + esc(j.model) + '</button> · ' + (j.status === 'interrupted' ? '<span class="suit-interrupted">Interrupted</span>' : esc(j.status)) + ' · ' + esc(j.done || 0) + '/' + esc(j.total || '?') + (j.phase ? ' · ' + esc(j.phase) : '')
+                + esc(j.model) + '</button> · ' + suitStatusLabel(j) + ' · ' + esc(j.done || 0) + '/' + esc(j.total || '?') + (j.phase ? ' · ' + esc(j.phase) : '')
                 + (j.status === 'queued' ? ' · position ' + esc(j.position) : '')
+                + (j.status === 'done' && j.score ? ' · score ' + esc(j.score) + (j.verdict ? ' (' + esc(j.verdict) + ')' : '') : '')
+                + (j.finished_at ? ' · ended ' + esc(suitWhen(j.finished_at)) : '')
+                + (j.outcome ? '<div class="suit-outcome suit-outcome-' + esc(suitOutcomeKind(j)) + '">' + esc(j.outcome) + '</div>' : '')
                 + '<div class="info-text">' + esc(rp ? rpSettingsText(j.settings) : suitSettingsText(j.settings)) + '</div>'
                 + (['queued', 'running', 'interrupted'].includes(j.status) ? '<button type="button" class="btn" onclick="suitCancel(\''
-                    + escJs(j.job_id) + '\',this)">Cancel</button>' : '') + '</div>';
+                    + escJs(j.job_id) + '\',this)">Cancel</button>' : '')
+                + (['done', 'error', 'cancelled'].includes(j.status) ? '<button type="button" class="btn" onclick="suitDismiss(\''
+                    + escJs(j.job_id) + '\',this)">Dismiss</button>' : '') + '</div>';
             }).join('')).join('');
     } catch (error) {
         document.getElementById('suitQueueSummary').textContent = 'Could not load queue';
     }
     suitJobsTimer = setTimeout(suitJobsRefresh, 2000);
+}
+
+// An ended test stays in the queue with how it ended until it is dismissed.
+function suitStatusLabel(job) {
+    if (job.status === 'interrupted') return '<span class="suit-interrupted">Interrupted</span>';
+    return esc({done: 'finished', error: 'failed', cancelled: 'cancelled'}[job.status] || job.status);
+}
+function suitOutcomeKind(job) {
+    if (job.status === 'error') return 'bad';
+    if (job.status === 'done') return job.saved ? 'good' : 'warn';
+    return 'muted';
+}
+function suitWhen(iso) {
+    const date = new Date(iso);
+    return isNaN(date) ? iso : date.toLocaleString();
+}
+async function suitDismiss(jobId, button) {
+    button.disabled = true;
+    try {
+        const response = await fetch('/admin/settings/llm-suitability-test/dismiss', {
+            method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({job_id: jobId}),
+        });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        suitJobsRefresh();
+    } catch (error) {
+        document.getElementById('suitStatus').textContent = 'Dismiss failed: ' + error.message;
+        button.disabled = false;
+    }
 }
 
 // Show a selected job in the detail view.
@@ -936,7 +969,14 @@ function suitRenderJob(job) {
     const summary = job.summary || {};
     let checks = summary.checks || job.checks || [];
     if (job.status === 'done') {
-        if (!suitCurrent(summary)) { status.textContent = ''; prog.innerHTML = ''; return; }
+        if (!suitCurrent(summary)) {
+            // Restored after a restart: only how it ended is kept.
+            status.innerHTML = '<b>' + esc(job.model || '') + '</b> · Finished'
+                + (job.outcome ? '<div class="suit-outcome suit-outcome-' + esc(suitOutcomeKind(job)) + '">' + esc(job.outcome) + '</div>' : '')
+                + (job.saved ? '<div>The saved result opens from the model table.</div>' : '');
+            prog.innerHTML = '';
+            return;
+        }
         const speed = summary.speed || {};
         const vision = summary.vision || {};
         const limit = job.max_turn_seconds == null ? 20 : job.max_turn_seconds;
@@ -956,7 +996,9 @@ function suitRenderJob(job) {
             + '<div>Projected non-RP time per thought turn: ' + esc(number(summary.projected_turn_s))
             + ' s / maximum ' + esc(limit) + ' s</div>'
             + '<div>Suitable as the single helper model: <b>' + esc(summary.verdict || 'not tested') + '</b></div>'
-            + (summary.saved === false || summary.infra ? '<div>Quality result not saved; inspect diagnostics.</div>' : '')
+            + (summary.saved === false || summary.infra ? '<div class="suit-outcome suit-outcome-warn">Not saved: '
+                + esc(summary.not_saved_reason || 'a request failed at the provider; inspect the diagnostics below.') + '</div>' : '')
+            + (summary.timed_out_runs ? '<div>' + esc(summary.timed_out_runs) + ' request(s) got no answer in time and failed their case.</div>' : '')
             + (summary.curated_only ? '<div>Curated cases only; no logged cases.</div>' : '')
             + suitDeleteControls(job.model || summary.model || '', job.result_saved);
         if (!summary.thinking) checks = checks.filter(check => check.ok === false);
@@ -966,8 +1008,12 @@ function suitRenderJob(job) {
             + ' (' + (job.done || 0) + '/' + (job.total || '?') + (job.phase ? ' · ' + job.phase : '') + ')';
     } else if (job.status === 'queued') {
         status.textContent = 'Queued · position ' + job.position;
+    } else if (job.status === 'error') {
+        status.innerHTML = '<b>' + esc(job.model || '') + '</b> · Failed'
+            + '<div class="suit-outcome suit-outcome-bad">' + esc(job.error || job.outcome || 'unknown error') + '</div>'
+            + (checks.length ? '<div>Cases finished before the failure (not saved):</div>' : '');
     } else {
-        status.textContent = job.status === 'error' ? 'Error: ' + (job.error || '') : job.status;
+        status.textContent = job.status === 'cancelled' ? (job.outcome || 'Cancelled') : job.status;
     }
     prog.innerHTML = checks.map(check => {
         const prompt = check.prompt || {};

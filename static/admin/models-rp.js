@@ -518,6 +518,12 @@ function rpRenderReport(job) {
         report.innerHTML = head + '<div class="rp-banner rp-banner-bad">' + esc(job.status === 'cancelled' ? 'Cancelled.' : 'Test failed: ' + (job.error || 'unknown error')) + '</div>';
         return;
     }
+    if (!job.summary) {
+        // An ended job restored after a restart keeps only how it ended.
+        report.innerHTML = head + '<div class="rp-banner ' + (job.saved ? 'rp-banner-warn' : 'rp-banner-bad') + '">'
+            + esc(job.outcome || 'Finished') + (job.saved ? ' — the saved report opens from the results table.' : '') + '</div>';
+        return;
+    }
     const s = job.summary || {};
     const notes = [];
     if (s.infra) notes.push('<div class="rp-banner rp-banner-bad">Not saved: a provider error interrupted the run, so the result says nothing about the model. The answers are kept for inspection.</div>');
