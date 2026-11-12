@@ -124,7 +124,9 @@ def _scan(name):
             if sid != spec.id or key not in spec.members:
                 row.update(action="remove", reason="Not in the selected expression set")
                 continue
-            contract = er.member_contract(cat, spec, key, er.expression_framing(profile), profile)
+            # The contract holds the exposure under the RENDERED outfit, not the current one.
+            rendered = er.render_profile_of(profile, meta)
+            contract = er.member_contract(cat, spec, key, er.expression_framing(rendered), rendered)
             if contract_proof != contract or meta["neutral_state"] is not True:
                 row.update(action="remove", reason="Obsolete expression render contract")
                 continue

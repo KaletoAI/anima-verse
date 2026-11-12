@@ -180,6 +180,9 @@ INTENTIONAL_REAL_INSTANCE = {
     "marketplace_publish.py":
         "CLI tool: publishes to a catalog whose URL + auth_token are instance "
         "config; --instance, default <repo>/instance",
+    "migrate_expression_exposure.py":
+        "one-time migration CLI (server stopped): the expression render contract "
+        "reads the instance's image size; --instance, default <repo>/instance",
     "smoke_scripts_storage_lint.py":
         "this lint: part 4 calls init_instance() without an argument on purpose "
         "(INSTANCE_DIR popped) to prove it raises, and restores INSTANCE_DIR",

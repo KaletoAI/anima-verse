@@ -137,17 +137,45 @@ def expression_image_size() -> tuple:
     return _px("expression_image_width"), _px("expression_image_height")
 
 
+def framing_slots(profile, framing: str) -> list:
+    """The body slots in the frame of an expression render: declared ``face``,
+    or ``portrait`` in an ``upper_body`` framing."""
+    from app.core.body_slots import slots_for_character
+    return [s for s in slots_for_character("", profile=dict(profile or {}))
+            if s.face or (framing == "upper_body" and s.portrait)]
+
+
 def _framing_basis(profile, framing: str) -> dict:
     """What the species packages let into the frame: the clothing slots and
-    body slots (with their prompt texts) declared ``portrait``/``face``. A
-    package changing that declaration changes the composed prompt, so it
-    belongs into the render contract."""
-    from app.core.body_slots import slots_for_character, portrait_piece_slots
+    body slots (with their prompt texts) declared ``portrait``/``face``, and
+    which of those body slots are EXPOSED in this render — the effect of
+    their ``covered_by`` under the profile's worn pieces and open / closed
+    states (``body_slots.is_slot_exposed``), never the declaration list
+    itself: a declaration change that leaves this render's exposure alone
+    keeps the contract and the image; one that changes it renders anew."""
+    from app.core.body_slots import is_slot_exposed, portrait_piece_slots
     profile = dict(profile or {})
-    slots = [s for s in slots_for_character("", profile=profile)
-             if s.face or (framing == "upper_body" and s.portrait)]
+    slots = framing_slots(profile, framing)
     return {"pieces": list(portrait_piece_slots(profile)) if framing == "upper_body" else [],
-            "slots": sorted([s.id, s.covered_by, s.prompt] for s in slots)}
+            "slots": sorted([s.id, s.prompt] for s in slots),
+            "exposed": sorted(s.id for s in slots if is_slot_exposed(s, profile))}
+
+
+def render_profile_of(profile, meta) -> dict:
+    """``profile`` wearing what a stored expression image was rendered with:
+    its sidecar's ``equipped_pieces`` / ``equipped_items`` and the open pieces
+    its ``outfit_raw`` names (``open:<ids>``, ``_equipped_signature``) — the
+    profile its render contract was computed from (the exposure in
+    ``_framing_basis`` depends on the outfit)."""
+    rendered = dict(profile or {})
+    rendered["equipped_pieces"] = dict((meta or {}).get("equipped_pieces") or {})
+    rendered["equipped_items"] = list((meta or {}).get("equipped_items") or [])
+    opened = next((part[len("open:"):] for part in str((meta or {}).get("outfit_raw") or "").split("|")
+                   if part.startswith("open:")), "")
+    options = dict(rendered.get("equipped_options") or {})
+    options["piece_state"] = {iid: "open" for iid in opened.split(",") if iid}
+    rendered["equipped_options"] = options
+    return rendered
 
 
 def _matte_model() -> str:
