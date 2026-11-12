@@ -197,8 +197,68 @@ def _rgb(path: Path, size: Optional[Tuple[int, int]] = None):
     return np.asarray(rgb)
 
 
-def _mask_image(data: bytes, size: Tuple[int, int]):
-    """BiRefNet-DIS mask of an encoded image as an L image of ``size``."""
+#: The mask cache keeps at most this many files; a write beyond it deletes the oldest by mtime (a hit touches its
+#: file, so "oldest" is the least recently used).
+MASK_CACHE_MAX = 4000
+
+
+def mask_cache_dir() -> Path:
+    """Where ``_mask_image`` keeps its masks: ``<storage>/.cache/masks`` (``StorageNotInitialised`` without a
+    storage root)."""
+    from app.core import paths
+    return paths.get_storage_dir() / ".cache" / "masks"
+
+
+def _read_cached_mask(path: Path, size: Tuple[int, int]):
+    """The cached L mask at ``path``, or None when it is missing or unreadable (a truncated file is re-matted)."""
+    import os
+    from PIL import Image
+    try:
+        with Image.open(path) as im:
+            im.load()
+            if im.mode != "L" or im.size != tuple(size):
+                return None
+            mask = im.copy()
+    except Exception:  # noqa: BLE001 — missing, truncated, not a PNG: re-matte
+        return None
+    try:
+        os.utime(path)
+    except OSError:
+        pass
+    return mask
+
+
+def _write_cached_mask(path: Path, mask) -> None:
+    """Write ``mask`` as an L PNG atomically (temp file + ``os.replace``), then trim the cache to
+    ``MASK_CACHE_MAX`` files. A failed write only logs: the caller has its mask."""
+    import os
+    import threading
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        mask.save(tmp, "PNG")
+        os.replace(tmp, path)
+    except OSError as e:
+        logger.warning("Mask cache: could not write %s: %s", path.name, e)
+        tmp.unlink(missing_ok=True)
+        return
+    try:
+        entries = []
+        for p in path.parent.glob("*.png"):
+            try:
+                entries.append((p.stat().st_mtime_ns, p))
+            except OSError:
+                pass
+        excess = len(entries) - MASK_CACHE_MAX
+        if excess > 0:
+            for _mtime, p in sorted(entries)[:excess]:
+                p.unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("Mask cache: trimming failed: %s", e)
+
+
+def _matte(data: bytes, size: Tuple[int, int]):
+    """BiRefNet-DIS mask of an encoded image as an L image of ``size`` (uncached)."""
     from PIL import Image
     from app.models.character import MESH_INPUT_REMBG_MODEL, run_rembg
     raw = run_rembg(data, MESH_INPUT_REMBG_MODEL, only_mask=True)
@@ -207,6 +267,33 @@ def _mask_image(data: bytes, size: Tuple[int, int]):
     if mask.size != tuple(size):
         mask = mask.resize(tuple(size), Image.Resampling.BILINEAR)
     return mask
+
+
+def _mask_image(data: bytes, size: Tuple[int, int]):
+    """BiRefNet-DIS mask of an encoded image as an L image of ``size``, cached by image hash: the key is
+    ``sha256(data)`` + ``MESH_INPUT_REMBG_MODEL`` + ``w×h``, the file ``mask_cache_dir()/<key>.png`` (lossless L,
+    so a hit is the very mask a miss returns). The fit's masks are those the ghost gate already matted.
+    ``keyed_lock("mask_cache", key)`` is taken before the matte, so a second asker of the same image waits for
+    the first and reads its file — a hit never queues on the process-wide rembg lock. Without a storage root the
+    mask is matted uncached."""
+    import hashlib
+    from app.core import paths
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import MESH_INPUT_REMBG_MODEL
+    w, h = (int(v) for v in size)
+    try:
+        folder = mask_cache_dir()
+    except paths.StorageNotInitialised:
+        return _matte(data, size)
+    key = f"{hashlib.sha256(data).hexdigest()}_{MESH_INPUT_REMBG_MODEL}_{w}x{h}"
+    path = folder / f"{key}.png"
+    with keyed_lock("mask_cache", key):
+        mask = _read_cached_mask(path, (w, h))
+        if mask is not None:
+            return mask
+        mask = _matte(data, size)
+        _write_cached_mask(path, mask)
+        return mask
 
 
 def _mask(path: Path, size: Tuple[int, int]):
