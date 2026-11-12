@@ -290,7 +290,7 @@ def main() -> int:
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         hid = inventory.add_item(name="Dress", category="outfit_piece", prompt_fragment="a green dress",
                                  outfit_piece={"slots": ["top", "bottom"], "covers": ["legs"],
-                                               "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                               "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         check("inventory Dress", inventory.add_to_inventory("Demo", hid), True)
 
         def cutouts(fsig, views=("front", "back")):

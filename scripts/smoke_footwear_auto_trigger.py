@@ -142,7 +142,7 @@ def main() -> int:
                 "template": "human-roleplay", "gender": "female", "age": 30, "height": 168}, create_new=True),
                 True)
         heels = inventory.add_item(name="Heels", category="outfit_piece", prompt_fragment="black heels",
-                                   outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                   outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         folder = inventory._get_item_dir(heels, create=True)
         shoe(crop, True).save(folder / "image.png", format="PNG")
         check("image set", inventory.set_item_image(heels, "image.png"), True)

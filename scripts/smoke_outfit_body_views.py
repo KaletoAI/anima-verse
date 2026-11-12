@@ -14,8 +14,9 @@ GPU: ``expression_regen.render_character_image`` is a recorder that writes a PNG
 job), ``base_body.prepare_outfit_body`` a recorder (one call = one mesh run). The tsig and body id are the real
 ones (``base_body._outfit_texture`` of the outfit's dressed front), so ``source_outfit`` is not stubbed.
 
-Fixture (character Demo: humanoid, pipeline on, outfit_body_mode mesh, side views off = the default). Items top
-{top} and skirt {bottom}, painted. Base views front/back (PNG) of bsig, base model. Outfit O1 {top, skirt} WORN:
+Fixture (character Demo: humanoid, pipeline on, outfit body mode mesh, side views off = the default). Items top
+{top} and skirt {bottom}, in the body (mode in_body — the outfit body mode follows the worn pieces, interim rule of
+plan 2026-11-12-unified-worn-pieces Task 2). Base views front/back (PNG) of bsig, base model. Outfit O1 {top, skirt} WORN:
 dressed front + back made from the current base views (sidecar base_signature = bsig, base_image_sha256 = sha of
 the base view, dress_text = TEXTS[view]), the back's draft (front_sha256 = sha of O1's front) — TEXTS = the dress
 texts ``_outfit_texture`` computes for O1 at fixture time ("the render"). T = its tsig, B = outfit_body_id(T). The
@@ -133,7 +134,7 @@ def main() -> int:
 
         char = "Demo"
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
-                 "character_appearance": "slender", "outfit_body_mode": "mesh"}
+                 "character_appearance": "slender"}
         assert save_character_profile(char, human, create_new=True)
         png(get_character_images_dir(char) / f"{char}_1.png", (200, 180, 160))
         prof = get_character_profile(char)
@@ -141,7 +142,7 @@ def main() -> int:
         assert save_character_profile(char, prof)
         assert base_body.set_pipeline(char, True)
         for key, slots in (("top", ["top"]), ("skirt", ["bottom"])):
-            op = {"slots": slots, "covers": [], "outfit_types": ["casual"]}
+            op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "mesh_mode": "in_body"}
             inventory.add_item(name=key.title(), category="outfit_piece", item_id=key,
                                prompt_fragment=f"a plain {key}", outfit_piece=op)
             inventory.add_to_inventory(char, key)

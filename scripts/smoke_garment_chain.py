@@ -460,7 +460,7 @@ def main() -> int:
         hid = inventory.add_item(name="Dress", category="outfit_piece", owner="Demo", item_id="dress",
                                  prompt_fragment=FRAGMENT,
                                  outfit_piece={"slots": ["top", "bottom"], "outfit_types": ["casual"],
-                                               "own_mesh": True})["id"]
+                                               "mesh_mode": "own_mesh"})["id"]
         inventory.add_to_inventory("Demo", hid)
         check("dress worn", inventory.equip_piece("Demo", hid, source="smoke").get("status"), "ok")
         check("no hair item (method body)", garment_hair.find_hair_item("Demo", get_character_profile("Demo")),

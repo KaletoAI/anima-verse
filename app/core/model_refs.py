@@ -598,15 +598,17 @@ def mesh_items_token(character_name, pieces=None, profile=None) -> str:
 
     ``""`` — the signature stays byte-identical to the one before own-mesh
     pieces — unless the character is on the base-body pipeline and at least
-    one worn piece carries ``outfit_piece.own_mesh``. Then
-    ``|meshitems:<sorted flagged ids>|worn:<slot>=<id>;…`` over the FULL
+    one worn piece has the item mode ``own_mesh``
+    (``outfit_piece.mesh_mode``, ``garment_set.mesh_mode_of``). Then
+    ``|meshitems:<sorted own-mesh ids>|worn:<slot>=<id>;…`` over the FULL
     pieces: a piece hidden under a mesh dress (``covers``) shows as texture
     once the dress is a mesh, so it must count even though the outfit
-    signature's visibility normalisation drops it. A flag flip changes the
-    token, so the mesh-input images and the outfit model of the new state
-    get keys of their own (never a painted dress under a mesh dress).
+    signature's visibility normalisation drops it. A mode change to or from
+    ``own_mesh`` changes the token, so the mesh-input images and the outfit
+    model of the new state get keys of their own (never a painted dress
+    under a mesh dress).
 
-    Cheap first pass: without a flagged piece (item definitions from the
+    Cheap first pass: without an own-mesh piece (item definitions from the
     cached snapshot) no profile is read."""
     from app.core.garment_set import OWN_MESH_PIECE_KINDS, garment_kind_of
     from app.core.motion_item_cache import item_snapshot

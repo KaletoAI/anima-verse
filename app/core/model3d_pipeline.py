@@ -36,8 +36,7 @@ job). The 3D tab's actions therefore split three ways (audit 2026-11-09):
   not current cost an image job) whose end runs the auto hook
   (``model3d.maybe_auto_generate_for_outfit``), or the hook alone when the
   views are current. A stored body of the outfit's key is reused (painted
-  body / outfit body: CPU, no hub job). A switch of ``outfit_body_mode``
-  runs the same function (``after_mode_switch``).
+  body / outfit body: CPU, no hub job).
 
 Everything else (download, delete, measure/diagnose, shrink textures,
 distance mesh, extension bones, motion sliders) works on the served outfit
@@ -151,16 +150,14 @@ def refusal(character_name: str, action: str) -> str:
     return REFUSED.format(action=action) if is_base_pipeline(character_name) else ""
 
 
-def build_current_outfit(character_name: str, *, respect_auto: bool = False) -> Dict[str, Any]:
+def build_current_outfit(character_name: str) -> Dict[str, Any]:
     """Build the CURRENT outfit's model the way an outfit change does (the
     module docstring's "Build current outfit"), never forced. ``{"status":
     …}``: ``current`` (its model is stored and current — nothing to do),
     ``views`` (dressed views not current: the T-pose pass runs, its end runs
     the auto hook), ``generating`` (the model run started), ``queued`` (a
-    model job of the character runs; the hook runs again once it ended),
-    ``off`` (``respect_auto`` and the automatic T-pose render is off — world
-    switch or the character's toggle; the outfit change would not render
-    either). ``ValueError`` off the
+    model job of the character runs; the hook runs again once it ended).
+    ``ValueError`` off the
     pipeline, ``LookupError`` (``BASE_MODEL_FIRST``) without a ready base
     model."""
     from app.core import model3d, model_refs
@@ -173,29 +170,10 @@ def build_current_outfit(character_name: str, *, respect_auto: bool = False) -> 
     if not signature or model3d.find_model3d(character_name, signature):
         return {"status": "current"}
     if not state["dressed_current"]:
-        if respect_auto and not (model_refs._enabled() and model_refs.get_auto_kinds(character_name).get("tpose")):
-            return {"status": "off"}
         model_refs.trigger_now(character_name, ("tpose",), force=False)
         return {"status": "views"}
     started = model3d.maybe_auto_generate_for_outfit(character_name)
     return {"status": "generating" if started else "queued"}
-
-
-def after_mode_switch(character_name: str) -> Dict[str, Any]:
-    """A changed ``outfit_body_mode`` (``character_ops.apply_profile_update``,
-    after its artefact walk): the current outfit's model in the new mode,
-    through the outfit-change trigger (``build_current_outfit`` with
-    ``respect_auto``). Never raises; ``{"status": …}`` (``skipped`` off the
-    pipeline or without a ready base model)."""
-    try:
-        result = build_current_outfit(character_name, respect_auto=True)
-    except (ValueError, LookupError) as exc:
-        result = {"status": "skipped", "reason": str(exc)}
-    except Exception:  # noqa: BLE001 — the profile save stays saved
-        logger.exception("Model3D %s: outfit build after the mode switch failed", character_name)
-        result = {"status": "skipped", "reason": "error"}
-    logger.info("Model3D %s: outfit body mode switched — current outfit: %s", character_name, result["status"])
-    return result
 
 
 def rebuild_from_base(character_name: str) -> Dict[str, Any]:

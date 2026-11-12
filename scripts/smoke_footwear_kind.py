@@ -14,14 +14,15 @@ expectation is derived by hand below from the Global Constraints and Task 1.
 Fixture: ``Kira`` (human-roleplay, female, 168 cm, on the base-body pipeline)
 and ``Mira`` (human-roleplay, male, 190 cm, on the pipeline — another base
 signature). Items, inserted through ``app.models.inventory``:
-``heels`` (slots [feet], own_mesh true, item image = 64 fixed bytes),
-``dress`` (slots [top], own_mesh true), ``boots`` (slots [feet], own_mesh
-absent = false), ``tights`` (slots [feet, legs], own_mesh true). Kira holds
-and wears heels + dress; Mira holds heels.
+``heels`` (slots [feet], mode own_mesh, item image = 64 fixed bytes),
+``dress`` (slots [top], own_mesh), ``boots`` (slots [feet], mode painted),
+``tights`` (slots [feet, legs], own_mesh), ``cloak`` (slots [outer], mode
+in_body — worn only for the mesh mode of [K4]). Kira holds and wears heels +
+dress; Mira holds heels.
 
 [K1] Kind and steps.
      garment_kind_of: heels -> "footwear" (own_mesh, slots exactly [feet]);
-     dress -> "clothing" (own_mesh, no feet); boots -> None (no own_mesh);
+     dress -> "clothing" (own_mesh, no feet); boots -> None (painted);
      tights -> "clothing" (own_mesh, feet among other slots — controller
      ruling 2026-11-10: footwear is a piece worn in feet ALONE).
      OWN_MESH_PIECE_KINDS == ("clothing", "footwear") == GRAFTED_PIECE_KINDS
@@ -73,7 +74,9 @@ and wears heels + dress; Mira holds heels.
        "retexture", unpainted sorted([dress, heels]), missing {}};
        run_queued was asked for sorted([dress, heels]) (the shoe chain is
        part of the outfit build, spec § 12).
-     Mesh mode (profile outfit_body_mode "mesh"): the same but mode "mesh".
+     Mesh mode (the cloak worn: a piece in the body — interim rule of plan
+     2026-11-12-unified-worn-pieces Task 2): the same but mode "mesh"; the
+     cloak taken off again -> retexture mode.
      A retexture-mode record that painted heels (intended [dress, heels],
      effective [dress], no unpainted): mesh_items_ready(Kira, record,
      base_sha=SHA) == [heels] (its fit landed: the rebuild drops it from the
@@ -195,8 +198,7 @@ def main() -> int:
 
         def piece(name, slots, own_mesh=None):
             op = {"slots": slots, "outfit_types": ["casual"]}
-            if own_mesh is not None:
-                op["own_mesh"] = own_mesh
+            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
             return inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"plain {name.lower()}",
                                       outfit_piece=op)["id"]
 
@@ -204,6 +206,9 @@ def main() -> int:
         dress = piece("Dress", ["top"], True)
         boots = piece("Boots", ["feet"])
         tights = piece("Tights", ["feet", "legs"], True)
+        cloak = inventory.add_item(name="Cloak", category="outfit_piece", prompt_fragment="plain cloak",
+                                   outfit_piece={"slots": ["outer"], "outfit_types": ["casual"],
+                                                 "mesh_mode": "in_body"})["id"]
         image_bytes = bytes(range(64))
         item_dir = inventory._get_item_dir(heels, create=True)
         (item_dir / "image.png").write_bytes(image_bytes)
@@ -313,9 +318,10 @@ def main() -> int:
         check("retexture record", out, {"intended": both, "effective": both, "warnings": [],
                                         "mode": base_body.RETEXTURE_MODE, "unpainted": both, "missing": {}})
         check("run_queued: both grafted kinds", QUEUED, [both])
-        profile = get_character_profile("Kira")
-        profile["outfit_body_mode"] = base_body.MESH_MODE
-        check("mesh mode on", save_character_profile("Kira", profile), True)
+        # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
+        check("Kira holds the cloak", inventory.add_to_inventory("Kira", cloak), True)
+        check("mesh mode on: cloak worn", inventory.equip_piece("Kira", cloak, source="smoke")["status"], "ok")
+        check("mesh mode", base_body.outfit_body_mode("Kira"), base_body.MESH_MODE)
         out = base_body.resolve_mesh_items("Kira", pieces)
         check("mesh record", out, {"intended": both, "effective": both, "warnings": [],
                                    "mode": base_body.MESH_MODE, "unpainted": both, "missing": {}})
@@ -324,9 +330,8 @@ def main() -> int:
         left_out = {"mesh_items": {"intended": both, "effective": [dress], "unpainted": both,
                                    "missing": {heels: "other"}}, "base_signature": kira_bsig}
         check("mesh_items_missing", base_body.mesh_items_missing("Kira", left_out, base_sha=sha), [])
-        profile = get_character_profile("Kira")
-        profile["outfit_body_mode"] = base_body.RETEXTURE_MODE
-        check("retexture mode on", save_character_profile("Kira", profile), True)
+        check("retexture mode on: cloak off", inventory.unequip_piece("Kira", "outer", source="smoke")["status"], "ok")
+        check("retexture mode", base_body.outfit_body_mode("Kira"), base_body.RETEXTURE_MODE)
         check("off rule: painted heels", base_body.mesh_items_off_rule("Kira", painted, base_sha=sha), [heels])
         check("off rule: left out", base_body.mesh_items_off_rule("Kira", left_out, base_sha=sha), [])
 

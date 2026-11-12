@@ -1620,9 +1620,12 @@ def mesh_item_warnings(missing: Iterable[Tuple[str, str]]) -> List[str]:
 
 
 def mesh_items_off_rule(character_name: str, record: Dict[str, Any], *, bsig: Optional[str] = None,
-                        base_sha: Optional[str] = None, profile: Optional[Dict[str, Any]] = None) -> List[str]:
+                        base_sha: Optional[str] = None, profile: Optional[Dict[str, Any]] = None,
+                        mode: Optional[str] = None) -> List[str]:
     """The own-mesh pieces a dressed view / outfit model handled under the
-    OTHER outfit body mode's rule (block above) — such a record is stale. In
+    OTHER outfit body mode's rule (block above) — such a record is stale.
+    ``mode`` judges under that outfit body mode instead of the character's
+    (``outfit_body_mode``). In
     mesh mode: the pieces it painted on (``_mesh_items_pending``; made in
     retexture mode, or in mesh mode before the ruling of 2026-11-10 — they
     are in its outfit body's mesh). In retexture mode: the CLOTHING pieces a
@@ -1635,7 +1638,7 @@ def mesh_items_off_rule(character_name: str, record: Dict[str, Any], *, bsig: Op
     if not mesh_items_intended(record):
         return []
     pending = _mesh_items_pending(record)
-    if outfit_body_mode(character_name, profile=profile) == MESH_MODE:
+    if (mode or outfit_body_mode(character_name, profile=profile)) == MESH_MODE:
         return pending
     footwear = set(_footwear_items(pending))
     missing = [item_id for item_id, _reason in mesh_items_missing(character_name, record, bsig=bsig,
@@ -3735,10 +3738,21 @@ def is_outfit_body_signature(value: Optional[str]) -> bool:
     return bool(value) and OUTFIT_BODY_RE.fullmatch(str(value)) is not None
 
 
-def outfit_body_mode(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
-    """The character's ``outfit_body_mode`` (``retexture`` for anything else)."""
-    mode = _profile_of(character_name, profile).get("outfit_body_mode")
-    return mode if mode in OUTFIT_BODY_MODES else RETEXTURE_MODE
+def outfit_body_mode(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                     pieces: Optional[Dict[str, str]] = None) -> str:
+    """INTERIM (plan 2026-11-12-unified-worn-pieces Task 2, deleted in Task
+    6): ``mesh`` when a worn piece — of ``pieces`` (``{slot: item id}``),
+    default the profile's ``equipped_pieces`` — has the item mode
+    ``in_body`` (``garment_set.mesh_mode_of``), else ``retexture``. No
+    profile key decides it any more."""
+    from app.core import garment_set
+    from app.models.inventory import get_item
+    if pieces is None:
+        pieces = _profile_of(character_name, profile).get("equipped_pieces")
+    worn = {str(v).strip() for v in (pieces.values() if isinstance(pieces, dict) else ()) if v and str(v).strip()}
+    if any(garment_set.mesh_mode_of(get_item(item_id)) == garment_set.IN_BODY for item_id in sorted(worn)):
+        return MESH_MODE
+    return RETEXTURE_MODE
 
 
 def outfit_body_id(tsig: str) -> str:
@@ -3796,8 +3810,7 @@ def predicted_texture_signatures(character_name: str, pieces: Optional[Dict[str,
     out: Dict[str, str] = {}
     done: Dict[Tuple[Tuple[str, ...], Tuple[str, ...]], str] = {}
     for mode in modes:
-        mesh = predicted_mesh_items(character_name, pieces, mode=mode,
-                                    profile={**mesh_profile, "outfit_body_mode": mode}, bsig=bsig)
+        mesh = predicted_mesh_items(character_name, pieces, mode=mode, profile=mesh_profile, bsig=bsig)
         meshed = mesh_items_unpainted({"mesh_items": mesh})
         key = (tuple(meshed), tuple(mesh_items_intended({"mesh_items": mesh})))
         if key not in done:
@@ -3836,8 +3849,7 @@ def front_texture_signature(character_name: str, signature: str, *, bsig: str,
         return ""
     if mesh_items_ready(character_name, meta, bsig=bsig):
         return ""
-    if all(mesh_items_off_rule(character_name, meta, bsig=bsig, profile={**profile, "outfit_body_mode": mode})
-           for mode in modes):
+    if all(mesh_items_off_rule(character_name, meta, bsig=bsig, profile=profile, mode=mode) for mode in modes):
         return ""
     pieces = model3d._ref_manifest(front).get("pieces") or {}
     mesh_profile = {**profile, "equipped_pieces": dict(pieces)}

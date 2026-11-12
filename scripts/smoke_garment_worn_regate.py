@@ -237,7 +237,7 @@ def main() -> int:
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         jid = inventory.add_item(name="Black Jacket", category="outfit_piece",
                                  prompt_fragment="a black leather jacket with a stand-up collar",
-                                 outfit_piece={"slots": ["outer"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                 outfit_piece={"slots": ["outer"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         check("inventory", inventory.add_to_inventory("Demo", jid), True)
         refs = get_character_dir("Demo") / "model_refs"
         refs.mkdir(parents=True, exist_ok=True)

@@ -15,12 +15,12 @@ Fixture (expected values derived by hand):
   Demo    human, pipeline on. Holds and wears ``dress`` (slots top+bottom,
           own mesh) and ``coat`` (slot outer, covers [top], own mesh); holds
           ``cape`` (outer, own mesh, not worn — the coat sits in outer) and
-          ``shirt`` (underwear_top, NO flag); owns the hair item ``hair_demo``.
+          ``shirt`` (underwear_top, mode painted); owns the hair item ``hair_demo``.
   Offline human, pipeline OFF, holds and wears ``dress``.
   Other   human, pipeline on, holds nothing of the above.
 
 [1] Player session: GET /garments and GET /garments/dress are 403.
-[2] GET /characters/Demo/garments/dress: kind clothing, own_mesh True, worn
+[2] GET /characters/Demo/garments/dress: kind clothing, mesh_mode "own_mesh", worn
     True, pipeline True. Limits come from the gate constants of the
     CLOTHING kind (garment_gates.limits("clothing"), garment_mesh,
     garment_fit.CLOTHING_GATES): steps [fit, ghost, mesh, worn] — no
@@ -33,7 +33,7 @@ Fixture (expected values derived by hand):
     preview_freshness {missing, "No provenance recorded"}. ``steps`` (the
     ModelSteps rows) = the clothing chain in order, all "missing", the ghost
     row labelled "Piece-only views".
-    404: shirt (no flag), a flagged piece Other does not hold
+    404: shirt (painted), an own-mesh piece Other does not hold
     (Other/garments/dress), an unknown item; 404 for an unknown character.
 [3] A planted base model -> reason base_body.NO_MESH_FIT. A planted ACCEPTED
     worn/front final (record {"accepted": true}) with attempt 1 -> the tile
@@ -45,7 +45,7 @@ Fixture (expected values derived by hand):
     status reason "ghost — gate refused"; the ghost row is "failed" with the
     error as detail, the worn row stays "missing" (only the front is
     accepted).
-[5] GET /characters/Demo/garments: pipeline True, items = the flagged pieces
+[5] GET /characters/Demo/garments: pipeline True, items = the own-mesh pieces
     Demo holds [cape, coat, dress] (not shirt, not the hair); dress painted
     with reason "ghost — gate refused"; cape not worn -> painted False,
     reason None; overlaps: the coat covers top, the dress is worn on top —
@@ -60,7 +60,7 @@ Fixture (expected values derived by hand):
     None}; an accepted mesh -> "mesh"; an accepted fit without fsig is not
     fitted.
 [7] Hair has no step limits here: GET /characters/Demo/garments/hair_demo ->
-    kind hair, own_mesh False, limits {} (the hair edit chain and its gates
+    kind hair, mesh_mode None (hair is no outfit piece), limits {} (the hair edit chain and its gates
     are gone, hair-from-body spec 2026-11-11 Task 2); worn hair without a fit
     is NOT painted (hair is simply absent). (The Hair tab's own limits,
     hairdeck_fit, stay
@@ -127,7 +127,7 @@ def main() -> int:
             check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
 
         def piece(item_id, slots, own_mesh, covers=()):
-            op = {"slots": slots, "outfit_types": ["casual"], "own_mesh": own_mesh, "covers": list(covers)}
+            op = {"slots": slots, "outfit_types": ["casual"], "mesh_mode": "own_mesh" if own_mesh else "painted", "covers": list(covers)}
             return inventory.add_item(name=item_id.title(), category="outfit_piece", item_id=item_id,
                                       prompt_fragment=f"a plain {item_id}", outfit_piece=op)["id"]
 
@@ -173,8 +173,8 @@ def main() -> int:
             r = client.get(url)
             body = r.json() if r.status_code == 200 else {}
             check("200", r.status_code, 200)
-            check("head", {k: body.get(k) for k in ("pipeline", "item_id", "name", "kind", "own_mesh", "worn")},
-                  {"pipeline": True, "item_id": "dress", "name": "Dress", "kind": "clothing", "own_mesh": True,
+            check("head", {k: body.get(k) for k in ("pipeline", "item_id", "name", "kind", "mesh_mode", "worn")},
+                  {"pipeline": True, "item_id": "dress", "name": "Dress", "kind": "clothing", "mesh_mode": "own_mesh",
                    "worn": True})
             limits = body.get("limits") or {}
             check("clothing limits", (sorted(limits), limits.get("worn", {}).get("garment_share"),
@@ -274,9 +274,9 @@ def main() -> int:
             print("[7] hair has no step limits")
             body = client.get("/characters/Demo/garments/hair_demo").json()
             limits = body.get("limits") or {}
-            check("hair item", (body.get("kind"), body.get("own_mesh"), sorted(limits),
+            check("hair item", (body.get("kind"), body.get("mesh_mode"), sorted(limits),
                                 limits.get("fit", {}).get("bib_cm2"), (body.get("status") or {}).get("painted")),
-                  ("hair", False, [], None, False))
+                  ("hair", None, [], None, False))
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

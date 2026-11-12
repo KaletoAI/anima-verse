@@ -1,4 +1,4 @@
-"""Clothing as its own mesh — an outfit piece flagged ``outfit_piece.own_mesh``
+"""Clothing as its own mesh — an outfit piece in mode ``own_mesh`` (``outfit_piece.mesh_mode``)
 on a base-body character (plan
 ``docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md``, Task 2;
 spec ``2026-11-08-base-body-outfits-design.md``).

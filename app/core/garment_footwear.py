@@ -1,4 +1,4 @@
-"""Footwear as its own mesh — an outfit piece flagged ``outfit_piece.own_mesh``
+"""Footwear as its own mesh — an outfit piece in mode ``own_mesh`` (``outfit_piece.mesh_mode``)
 worn in slot ``feet`` (plan ``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md``;
 spec ``docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`` § 5.1, § 5.6).
 

@@ -409,12 +409,15 @@ def _normalize_outfit_types(raw) -> List[str]:
     return normalize_outfit_types(raw)
 
 
-def _clean_own_mesh(raw) -> bool:
-    """``outfit_piece.own_mesh``: the piece becomes its own fitted garment
-    mesh on base-body characters (``app/core/garment_set.py``). Only a real
-    ``true`` counts. Never part of a 2D key (``_render_relevant_fields``,
-    outfit signature): a flip changes no 2D render."""
-    return raw is True
+def _clean_mesh_mode(raw, slots: List[str]) -> str:
+    """``outfit_piece.mesh_mode``: how the piece reaches a base-body
+    character's 3D model — ``own_mesh`` / ``painted`` / ``in_body``
+    (``app/core/garment_set.py``). A value outside those becomes the kind
+    default of ``slots`` (``garment_set.default_mesh_mode``). Never part of a
+    2D key (``_render_relevant_fields``, outfit signature): a change of mode
+    changes no 2D render."""
+    from app.core.garment_set import MESH_MODES, default_mesh_mode
+    return raw if raw in MESH_MODES else default_mesh_mode(slots)
 
 
 def _clean_exposed_detail(raw) -> bool:
@@ -629,7 +632,9 @@ def add_item(name: str,
             # the coherence rule can rely on them.
             "outfit_types": _normalize_outfit_types(outfit_piece.get("outfit_types")),
             "lora": _clean_piece_lora(outfit_piece.get("lora") or outfit_piece.get("loras")),
-            "own_mesh": _clean_own_mesh(outfit_piece.get("own_mesh")),
+            # An ``own_mesh`` key in the input is ignored (the mode replaced
+            # that flag, plan 2026-11-12-unified-worn-pieces Task 2).
+            "mesh_mode": _clean_mesh_mode(outfit_piece.get("mesh_mode"), slots),
             "exposed_detail": _clean_exposed_detail(outfit_piece.get("exposed_detail")),
         }
         lift = _lift(outfit_piece.get("lift"))
@@ -726,9 +731,17 @@ def update_item(item_id: str,
     } | spell_only
 
     def _apply_updates(item: Dict[str, Any]) -> Dict[str, Any]:
-        # An outfit_piece update that does not name ``own_mesh`` (an older
-        # client, a partial edit) keeps the stored flag.
-        prev_own_mesh = _clean_own_mesh((item.get("outfit_piece") or {}).get("own_mesh"))
+        # An outfit_piece update that does not name ``mesh_mode`` (a partial
+        # edit) keeps the stored mode. A stored item WITHOUT a mode (written
+        # before the mode existed) stays without one, and its stored
+        # ``own_mesh`` flag is carried through unchanged: both are read only
+        # by the boot migration (Task 3 of plan 2026-11-12-unified-worn-pieces),
+        # which judges exactly the items without a mode and then drops the
+        # flag. An ``own_mesh`` key in the INPUT is ignored.
+        prev_piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
+        prev_mesh_mode = prev_piece.get("mesh_mode")
+        prev_own_mesh_stored = "own_mesh" in prev_piece
+        prev_own_mesh = prev_piece.get("own_mesh")
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
         # Same for ``lift``; an explicit null resets it to the slot default.
         prev_lift = (item.get("outfit_piece") or {}).get("lift")
@@ -754,11 +767,15 @@ def update_item(item_id: str,
                 # able to smuggle a tag past the rule.
                 "outfit_types": _normalize_outfit_types(op.get("outfit_types")),
                 "lora": _clean_piece_lora(op.get("lora")),
-                "own_mesh": (_clean_own_mesh(op.get("own_mesh")) if "own_mesh" in op
-                             else prev_own_mesh),
                 "exposed_detail": (_clean_exposed_detail(op.get("exposed_detail")) if "exposed_detail" in op
                                    else prev_exposed_detail),
             }
+            if "mesh_mode" in op:
+                item["outfit_piece"]["mesh_mode"] = _clean_mesh_mode(op.get("mesh_mode"), slots)
+            elif prev_mesh_mode is not None:
+                item["outfit_piece"]["mesh_mode"] = _clean_mesh_mode(prev_mesh_mode, slots)
+            if prev_own_mesh_stored:
+                item["outfit_piece"]["own_mesh"] = prev_own_mesh
             lift = _lift(op.get("lift") if "lift" in op else prev_lift)
             if lift is not None:
                 item["outfit_piece"]["lift"] = lift

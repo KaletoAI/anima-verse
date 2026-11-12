@@ -117,7 +117,7 @@ def main() -> int:
         def dress(name):
             iid = inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"a green {name.lower()}",
                                      outfit_piece={"slots": ["top", "bottom"], "covers": ["legs"],
-                                                   "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                                   "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
             check(f"inventory {name}", inventory.add_to_inventory("Demo", iid), True)
             return iid
 
@@ -167,7 +167,7 @@ def main() -> int:
 
         print("[E5] footwear")
         sid = inventory.add_item(name="Shoes", category="outfit_piece", prompt_fragment="black shoes",
-                                 outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                 outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         check("inventory shoes", inventory.add_to_inventory("Demo", sid), True)
         folder = inventory._get_item_dir(sid, create=True)
         (folder / "image.png").write_bytes(png_bytes(800))

@@ -31,11 +31,14 @@ chain, staleness, assembly, Wardrobe status, Outfit body tab, overview and
 artefact GC are REAL.
 
 Fixture: Demo (human-roleplay, on the pipeline, side views OFF -> dressed
-views front + back, ``outfit_body_mode: "mesh"``). Items: under
-{[underwear_bottom] "plain grey underwear"}, shoes {[feet] "white
-sneakers"}, jacket {[top], own_mesh, "a brown leather jacket"}, vest {[top],
-own_mesh, "a knitted green vest"}. Outfits: K {under, shoes, jacket};
-L {under, shoes, vest}.
+views front + back). Items: under {[underwear_bottom] "plain grey
+underwear"}, shoes {[feet] "white sneakers"} (both mode painted), jacket
+{[top], own_mesh, "a brown leather jacket"}, vest {[top], own_mesh, "a
+knitted green vest"}. Outfits: K {under, shoes, jacket}; L {under, shoes,
+vest}. The outfit body mode follows the worn pieces (interim rule of plan
+2026-11-12-unified-worn-pieces Task 2: mesh iff a worn piece is "in_body"):
+"mesh mode" below = under and shoes switched to "in_body" (exactly what the
+mesh mode meshed into the outfit body), "retexture mode" = both painted.
 
 Expected, derived by hand from the ruling (task 2026-11-10) and the outfit
 body spec:
@@ -275,18 +278,9 @@ def main() -> int:
         check("profile image", save_character_profile("Demo", stored), True)
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
 
-        def set_mode(mode):
-            stored = get_character_profile("Demo")
-            stored["outfit_body_mode"] = mode
-            save_character_profile("Demo", stored)
-            return base_body.outfit_body_mode("Demo")
-
-        check("mode mesh", set_mode("mesh"), "mesh")
-
         def piece(item_id, slots, *, own_mesh=False):
             op = {"slots": list(slots), "covers": [], "outfit_types": ["casual"]}
-            if own_mesh:
-                op["own_mesh"] = True
+            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
             return inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                       prompt_fragment=FRAG[item_id], outfit_piece=op)["id"]
 
@@ -295,6 +289,15 @@ def main() -> int:
               ["under", "shoes", "jacket", "vest"])
         for item in FRAG:
             inventory.add_to_inventory("Demo", item)
+
+        def set_mode(mode):
+            """The fixture's painted pieces go in the body for "mesh", back to painted for "retexture"."""
+            for item_id in ("under", "shoes"):
+                op = dict(inventory.get_item(item_id)["outfit_piece"])
+                op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
+                inventory.update_item(item_id, {"outfit_piece": op})
+
+        set_mode("mesh")
 
         def wear(pieces):
             stored = get_character_profile("Demo")
@@ -353,6 +356,7 @@ def main() -> int:
         # --- [1] mesh mode, refused piece ---------------------------------------------
         print("[1] mesh mode: a refused own-mesh piece is left out of the body")
         sig_k = wear(K)
+        check("mode mesh", base_body.outfit_body_mode("Demo"), "mesh")
         jobs, runs, hub, result = render_and_build()
         meta_k = meta_of(sig_k)
         t_k = meta_k.get("texture_signature")
@@ -383,6 +387,7 @@ def main() -> int:
         # --- [2] retexture mode unchanged -------------------------------------------------
         print("[2] retexture mode: the refused piece is painted on (rule P1)")
         set_mode("retexture")
+        check("mode retexture", base_body.outfit_body_mode("Demo"), "retexture")
         check("retexture: K stale (body_mode)", base_body.outfit_info("Demo").get("stale_reason"), "body_mode")
         jobs, runs, hub, result = render_and_build()
         meta_r = meta_of(sig_k)

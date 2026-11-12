@@ -287,7 +287,7 @@ def main() -> int:
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         jid = inventory.add_item(name="Black Blazer", category="outfit_piece", prompt_fragment=FRAGMENT,
                                  outfit_piece={"slots": ["top"], "outfit_types": ["casual"],
-                                               "own_mesh": True})["id"]
+                                               "mesh_mode": "own_mesh"})["id"]
         check("inventory", inventory.add_to_inventory("Demo", jid), True)
         refs = get_character_dir("Demo") / "model_refs"
         refs.mkdir(parents=True, exist_ok=True)
@@ -309,14 +309,14 @@ def main() -> int:
         check("blazer fit prompt", garment_clothing.fit_prompt("worn", item_id=jid), (FIT_BLAZER, KW_BLAZER))
         sid = inventory.add_item(name="Black Stilettos", category="outfit_piece",
                                  prompt_fragment="shiny black leather stiletto heels, high pointed toe",
-                                 outfit_piece={"slots": ["feet"], "outfit_types": ["formal"], "own_mesh": True})["id"]
+                                 outfit_piece={"slots": ["feet"], "outfit_types": ["formal"], "mesh_mode": "own_mesh"})["id"]
         check("shoe fit prompt", garment_clothing.fit_prompt("worn", item_id=sid), (FIT_SHOE, KW_SHOE))
         shoe_draft = garment_clothing.draft_prompt("Demo", "worn", item_id=sid)[0]
         check("shoe draft text", (SHOE_DRAFT_TEXT in shoe_draft,
                                   shoe_draft == base_body.draft_prompt("Demo", "back", outfit_text=SHOE_DRAFT_TEXT)[0]),
               (True, True))
         mid = inventory.add_item(name="Black Lederjacket", category="outfit_piece", prompt_fragment=MULTI,
-                                 outfit_piece={"slots": ["outer"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                 outfit_piece={"slots": ["outer"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         multi = garment_clothing.fit_prompt("worn", item_id=mid)
         check("multi-garment piece: the fragment, not the name", (multi[0], "lederjacket" in " ".join(multi).lower()),
               (FIT_MULTI, False))

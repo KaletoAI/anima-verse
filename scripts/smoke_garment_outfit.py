@@ -356,8 +356,7 @@ def main() -> int:
 
         def piece(item_id, slots, *, covers=(), own_mesh=False):
             op = {"slots": list(slots), "covers": list(covers), "outfit_types": ["casual"]}
-            if own_mesh:
-                op["own_mesh"] = True
+            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
             return inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                       prompt_fragment=FRAG[item_id], outfit_piece=op)["id"]
 
@@ -371,7 +370,7 @@ def main() -> int:
         def flag(item_id, on):
             item = inventory.get_item(item_id)
             op = dict(item.get("outfit_piece") or {})
-            op["own_mesh"] = on
+            op["mesh_mode"] = "own_mesh" if on else "painted"
             inventory.update_item(item_id, {"outfit_piece": op})
 
         def wear(name, pieces):

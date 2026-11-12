@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Own-mesh outfit pieces, task 1: the item flag and the worn-garment set.
+"""Own-mesh outfit pieces, task 1: the item mode and the worn-garment set
+(the ``own_mesh`` flag became ``outfit_piece.mesh_mode``, plan
+2026-11-12-unified-worn-pieces Task 2; ``smoke_mesh_mode_item.py`` pins the
+mode itself).
 
 Usage:
     ./.venv/bin/python scripts/smoke_garment_set.py
@@ -10,33 +13,35 @@ derived by hand below from the rules of plan
 2026-11-09-base-body-phase5-mesh-items (Global Constraints, task 1).
 
 Fixture: ``Demo`` (template human-roleplay, on the base-body pipeline) holds
-and wears ``dress`` (slots top+bottom, flagged ``own_mesh``) and ``shoes``
-(slot feet, NOT flagged), holds but does not wear ``cape`` (slot outer,
-flagged), and wears a hair garment (category garment, kind hair, owner Demo)
-through ``equipped_mesh_pieces``. ``coat`` (slot outer, flagged) is held by
+and wears ``dress`` (slots top+bottom, mode ``own_mesh``) and ``shoes``
+(slot feet, mode ``painted`` — set explicitly, the feet default would be own
+mesh), holds but does not wear ``cape`` (slot outer, own mesh), and wears a
+hair garment (category garment, kind hair, owner Demo) through
+``equipped_mesh_pieces``. ``coat`` (slot outer, own mesh) is held by
 nobody. ``Offline`` is a human off the pipeline wearing the dress; ``Pet``
 uses the animal template with ``model_pipeline: base_body`` (an animal is
 never on the pipeline). ``Other`` owns a second hair garment.
 
-[1] Flag storage. add_item stores ``outfit_piece.own_mesh`` as a bool:
-    True for dress/cape/coat, False for shoes (key absent on create). An
-    update of an unrelated field (name) keeps True; an update that sends an
-    ``outfit_piece`` WITHOUT the key keeps the stored value (True); an
-    explicit ``own_mesh: false`` stores False and ``true`` stores True again.
-[2] 2D invariance. Flipping the dress flag off and on again changes neither
+[1] Mode storage. add_item stores ``outfit_piece.mesh_mode``: "own_mesh"
+    for dress/cape/coat, "painted" for shoes. An update of an unrelated
+    field (name) keeps "own_mesh"; an update that sends an ``outfit_piece``
+    WITHOUT the key keeps the stored value ("own_mesh"); an explicit
+    ``mesh_mode: "painted"`` stores "painted" and "own_mesh" stores
+    "own_mesh" again.
+[2] 2D invariance. Switching the dress to painted and back changes neither
     outfit_signature(Demo's pieces), render_outfit()["full"] nor
     inventory._render_relevant_fields(dress) — and therefore never calls
     invalidate_variants_for_item.
 [3] worn_garments(Demo) = sorted({hair, dress}): the dress occupies top AND
-    bottom but appears once, shoes are unflagged. With pieces={"feet": shoes}
+    bottom but appears once, shoes are painted. With pieces={"feet": shoes}
     only the hair stays. Offline wearing the dress -> []; Pet (animal) with
     pieces={"top": dress} -> []. held_clothing(Demo) = sorted({cape, dress})
-    (coat is held by nobody, shoes unflagged); holds(Demo, cape) True,
+    (coat is held by nobody, shoes painted); holds(Demo, cape) True,
     holds(Demo, hair) True (worn mesh piece, not in the inventory),
     holds(Demo, coat) False. garment_kind_of: dress "clothing", shoes None,
     hair "hair", a garment of kind "wings" None.
 [4] Gates. garments._item(Demo, dress) -> (item, "clothing"); shoes
-    (unflagged) and coat (flagged, not held) -> ValueError; the hair item of
+    (painted) and coat (own mesh, not held) -> ValueError; the hair item of
     Demo -> (item, "hair"); Other's hair -> ValueError (the owner rule stays).
     garment_store._garment_kind(dress) and garment_mesh._kind(dress) ->
     "clothing", shoes -> ValueError. garment_images._kind_module(dress) ->
@@ -113,8 +118,7 @@ def main() -> int:
 
         def piece(name, slots, own_mesh=None):
             op = {"slots": slots, "outfit_types": ["casual"]}
-            if own_mesh is not None:
-                op["own_mesh"] = own_mesh
+            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
             return inventory.add_item(name=name, category="outfit_piece",
                                       prompt_fragment=f"a plain {name}", outfit_piece=op)["id"]
 
@@ -138,21 +142,21 @@ def main() -> int:
                                    garment={"kind": "wings", "slot": "wings", "body_slot": "wings"})["id"]
         check("equip hair", inventory.equip_mesh_piece("Demo", hair), True)
 
-        def own(item_id):
-            return (inventory.get_item(item_id).get("outfit_piece") or {}).get("own_mesh")
+        def mode(item_id):
+            return (inventory.get_item(item_id).get("outfit_piece") or {}).get("mesh_mode")
 
-        print("[1] flag storage")
-        check("dress create", own(dress), True)
-        check("shoes create (absent -> False)", own(shoes), False)
+        print("[1] mode storage")
+        check("dress create", mode(dress), "own_mesh")
+        check("shoes create", mode(shoes), "painted")
         inventory.update_item(dress, {"name": "summer dress"})
-        check("unrelated update keeps", own(dress), True)
+        check("unrelated update keeps", mode(dress), "own_mesh")
         inventory.update_item(dress, {"outfit_piece": {"slots": ["top", "bottom"], "outfit_types": ["casual"]}})
-        check("outfit_piece without key keeps", own(dress), True)
+        check("outfit_piece without key keeps", mode(dress), "own_mesh")
         check("slots still there", inventory.get_item(dress)["outfit_piece"]["slots"], ["top", "bottom"])
-        inventory.update_item(dress, {"outfit_piece": {"slots": ["top", "bottom"], "own_mesh": False}})
-        check("explicit false", own(dress), False)
-        inventory.update_item(dress, {"outfit_piece": {"slots": ["top", "bottom"], "own_mesh": True}})
-        check("explicit true", own(dress), True)
+        inventory.update_item(dress, {"outfit_piece": {"slots": ["top", "bottom"], "mesh_mode": "painted"}})
+        check("explicit painted", mode(dress), "painted")
+        inventory.update_item(dress, {"outfit_piece": {"slots": ["top", "bottom"], "mesh_mode": "own_mesh"}})
+        check("explicit own_mesh", mode(dress), "own_mesh")
 
         print("[2] 2D invariance")
         pieces = inventory.get_equipped_pieces("Demo")
@@ -168,14 +172,14 @@ def main() -> int:
         purged.clear()
         on = twod()
         check("full text non-empty", bool(on[1]), True)
-        inventory.update_item(dress, {"outfit_piece": {"slots": ["top", "bottom"], "own_mesh": False}})
+        inventory.update_item(dress, {"outfit_piece": {"slots": ["top", "bottom"], "mesh_mode": "painted"}})
         off = twod()
-        check("flag off: signature", off[0], on[0])
-        check("flag off: render_outfit full", off[1], on[1])
-        check("flag off: render-relevant fields", off[2], on[2])
-        inventory.update_item(dress, {"outfit_piece": {"slots": ["top", "bottom"], "own_mesh": True}})
-        check("flag on again", twod(), on)
-        check("no render purge on a flip", purged, [])
+        check("painted: signature", off[0], on[0])
+        check("painted: render_outfit full", off[1], on[1])
+        check("painted: render-relevant fields", off[2], on[2])
+        inventory.update_item(dress, {"outfit_piece": {"slots": ["top", "bottom"], "mesh_mode": "own_mesh"}})
+        check("own mesh again", twod(), on)
+        check("no render purge on a mode switch", purged, [])
 
         print("[3] worn and held garments")
         from app.core import garment_set

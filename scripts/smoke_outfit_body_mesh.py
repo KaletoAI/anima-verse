@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Outfit body as mesh (plan docs/superpowers/plans/2026-11-10-outfit-body-mesh-mode.md,
 Task 1; spec docs/superpowers/specs/2026-11-10-outfit-body-mesh-mode-design.md):
-with ``outfit_body_mode: "mesh"`` the body under the own-mesh garments is the
+in outfit body mode mesh the body under the own-mesh garments is the
 dressed views of the texture ``tsig`` meshed and rigged through the old
 path's staged chain — one outfit body per tsig.
 
@@ -26,12 +26,17 @@ The staged chain, hub-op records, view guard, texture store, signature rules,
 assembly, status and overview are REAL.
 
 Fixture: Demo (human-roleplay, profile image, on the pipeline, side views OFF
--> dressed views front + back, ``outfit_body_mode: "mesh"``), base images
+-> dressed views front + back, outfit body mode mesh), base images
 tpose[_<view>]_<B1>, base model of smoke_garment_chain. Items: under
 {[underwear_bottom] "plain grey underwear"}, shoes {[feet] "white sneakers"},
 dress {[top], covers [bottom], own_mesh, "a long red dress"}, skirt {[bottom]
 "a blue pleated skirt"}. Outfits: A {under, shoes}; B = A + dress; C {dress};
-G = A + skirt.
+G = A + skirt. The outfit body mode follows the worn pieces (interim rule of
+plan 2026-11-12-unified-worn-pieces Task 2: mesh iff a worn piece is
+"in_body"): "mesh mode" = under, shoes and skirt in mode in_body (what the
+mesh mode meshed into the outfit body), "retexture mode" = all three painted.
+C wears no piece in the body, so its outfit is judged in retexture mode — the
+same base body either way (empty dress text).
 
 Expected, derived by hand from the spec and the plan's Global Constraints:
 
@@ -312,19 +317,11 @@ def main() -> int:
         check("profile image", save_character_profile("Demo", stored), True)
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
 
-        def set_mode(mode):
-            stored = get_character_profile("Demo")
-            stored["outfit_body_mode"] = mode
-            save_character_profile("Demo", stored)
-            return base_body.outfit_body_mode("Demo")
-
         check("mode default retexture", base_body.outfit_body_mode("Demo"), "retexture")
-        check("mode mesh", set_mode("mesh"), "mesh")
 
         def piece(item_id, slots, *, covers=(), own_mesh=False):
             op = {"slots": list(slots), "covers": list(covers), "outfit_types": ["casual"]}
-            if own_mesh:
-                op["own_mesh"] = True
+            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
             return inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                       prompt_fragment=FRAG[item_id], outfit_piece=op)["id"]
 
@@ -333,6 +330,16 @@ def main() -> int:
               ["under", "shoes", "dress", "skirt"])
         for item in FRAG:
             inventory.add_to_inventory("Demo", item)
+
+        def set_mode(mode):
+            """The fixture's painted pieces go in the body for "mesh", back to painted for "retexture"."""
+            for item_id in ("under", "shoes", "skirt"):
+                op = dict(inventory.get_item(item_id)["outfit_piece"])
+                op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
+                inventory.update_item(item_id, {"outfit_piece": op})
+            return base_body.outfit_body_mode("Demo")
+
+        set_mode("mesh")
 
         def wear(pieces):
             stored = get_character_profile("Demo")
@@ -395,6 +402,7 @@ def main() -> int:
         # --- [2] the first body --------------------------------------------------------
         print("[2] mesh mode: one body per tsig through the staged chain, in order")
         sig_a = wear(A)
+        check("mode mesh", base_body.outfit_body_mode("Demo"), "mesh")
         jobs, runs, steps, result = render_and_build()
         t_a = model_meta(sig_a).get("texture_signature")
         b_a = base_body.outfit_body_id(t_a) if base_body.is_texture_signature(t_a) else None

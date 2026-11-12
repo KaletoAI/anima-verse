@@ -32,7 +32,8 @@ extension_deg_right 22.2, toe_room_mm_right 18.0, root_lift_m 0.052, k_m_per_uni
      content_version(fit GLB); ``foot_pose`` = the record's foot_pose (source.fsig F);
      ``preview_freshness.state`` "current"; ``garments.preview_path(Demo, heels)`` = the fit GLB (the model
      route serves what the URL names). HUB 0.
-[I2] Mesh mode with three stored outfit bodies (model3d/<id>.glb, ids sorted A < B < C by construction:
+[I2] Mesh mode (Demo wears a coat in mode in_body — the interim rule of plan 2026-11-12-unified-worn-pieces
+     Task 2; taken off again for [I4]) with three stored outfit bodies (model3d/<id>.glb, ids sorted A < B < C by construction:
      ``outfit_body_id`` of three texture signatures, then sorted): A carries an accepted record of F on
      sha(A) -> status accepted, metrics width_factor 1.05 (its own hand value); B has nothing -> missing;
      C has a recorded body failure of F on sha(C) (base_fit_sha "", the current fit version, error "fit refused — x")
@@ -122,7 +123,7 @@ def main() -> int:
         from app.core.http_files import content_version
         from app.imagegen import service
         from app.models import inventory
-        from app.models.character import get_character_dir, get_character_profile, save_character_profile
+        from app.models.character import get_character_dir, save_character_profile
 
         HUB = []
 
@@ -139,7 +140,7 @@ def main() -> int:
         heels = inventory.add_item(name="Heels", category="outfit_piece", item_id="heels",
                                    prompt_fragment="black heels",
                                    outfit_piece={"slots": ["feet"], "outfit_types": ["casual"],
-                                                 "own_mesh": True})["id"]
+                                                 "mesh_mode": "own_mesh"})["id"]
         inventory.add_to_inventory("Demo", heels)
         ssig = fs.current_ssig(heels)
         src = fs.source_dir(heels, ssig)
@@ -223,9 +224,13 @@ def main() -> int:
 
         # --- [I2] -------------------------------------------------------------------------------------------
         print("[I2] mesh mode: one row per stored outfit body")
-        profile = get_character_profile("Demo")
-        profile["outfit_body_mode"] = base_body.MESH_MODE
-        check("I2 mesh mode", save_character_profile("Demo", profile), True)
+        # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
+        coat = inventory.add_item(name="Coat", category="outfit_piece", item_id="coat", prompt_fragment="a coat",
+                                  outfit_piece={"slots": ["outer"], "outfit_types": ["casual"],
+                                                "mesh_mode": "in_body"})["id"]
+        inventory.add_to_inventory("Demo", coat)
+        check("I2 coat worn", inventory.equip_piece("Demo", coat, source="smoke")["status"], "ok")
+        check("I2 mesh mode", base_body.outfit_body_mode("Demo"), base_body.MESH_MODE)
         ids = sorted(base_body.outfit_body_id(f"tex{c * 12}") for c in "abc")
         A, B, C = ids
         shas = {}
@@ -259,9 +264,8 @@ def main() -> int:
 
         # --- [I4] -------------------------------------------------------------------------------------------
         print("[I4] the boot view: the insole's shaft block and slab rings, the fit's split and shaft")
-        profile = get_character_profile("Demo")
-        profile["outfit_body_mode"] = None
-        check("I4 retexture mode", save_character_profile("Demo", profile), True)
+        check("I4 coat off", inventory.unequip_piece("Demo", "outer", source="smoke")["status"], "ok")
+        check("I4 retexture mode", base_body.outfit_body_mode("Demo"), base_body.RETEXTURE_MODE)
         overlay = {"insole": [[0.0, 0.01, 0.0], [0.1, 0.01, 0.0]], "topline": [[0.0, 0.05, 0.0]]}
         frame = {"origin": [0.1, 0.0, 0.2], "x_axis": [0.0, 0.0, 1.0], "up": [0.0, 1.0, 0.0],
                  "z_axis": [-1.0, 0.0, 0.0], "length": 1.0}

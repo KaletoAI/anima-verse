@@ -181,7 +181,7 @@ def main() -> int:
             return get_character_dir(char)
 
         def dress(char: str, item_id: str):
-            op = {"slots": ["outer"], "covers": [], "outfit_types": ["casual"], "own_mesh": True}
+            op = {"slots": ["outer"], "covers": [], "outfit_types": ["casual"], "mesh_mode": "own_mesh"}
             inventory.add_item(name=item_id, category="outfit_piece", item_id=item_id, prompt_fragment="a dress",
                                outfit_piece=op)
             inventory.add_to_inventory(char, item_id)

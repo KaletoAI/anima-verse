@@ -8,7 +8,9 @@ Usage:
     ./.venv/bin/python scripts/smoke_footwear_gc.py
 
 Throwaway storage + instance (``paths.init`` first), the ``human`` package copied in; no hub, no GPU, no server.
-Fixture: character Demo on the base-body pipeline, outfit body mode mesh; item ``heels`` (own mesh, feet) with the
+Fixture: character Demo on the base-body pipeline (outfit body mode: as the worn pieces say — retexture here, no piece
+in mode in_body, interim rule of plan 2026-11-12-unified-worn-pieces Task 2; the GC's body rule is the same in both
+modes); item ``heels`` (own mesh, feet) with the
 closed flat clog of ``_footwear_fixtures.clog`` as its finished shoe source under its current ssig S (every item
 step accepted); the base model ``_footwear_fixtures.foot_body_glb()``; Demo wears the heels. Synthetic bytes
 everywhere else — only names and JSON sidecars matter to the GC.
@@ -28,7 +30,7 @@ everywhere else — only names and JSON sidecars matter to the GC.
      A folder of an item that does not exist (footwear/item_gone/…) goes whole.
 [G3] ``routes.inventory.delete_item_route(heels)`` → the item is gone, ``footwear/heels/`` is gone (every
      character's holder GC ran: no garments/heels_* file of Demo remains, F's fit included).
-[G4] A second character Mira on the pipeline, mode mesh, wearing ``pumps`` (own mesh, feet, a source like the
+[G4] A second character Mira on the pipeline, wearing ``pumps`` (own mesh, feet, a source like the
      heels') in a worn outfit whose model stands on a LIVE outfit body B1 (texture T1 of the worn outfit's refs
      and model, as ``smoke_artefact_gc`` plants it) with a footwear body fit bodies/B1/pumps_F.glb + .json
      (accepted) and NO base fit file garments/pumps_F.glb: ``artefact_graph.collect(Mira, explicit=True)`` keeps the
@@ -143,7 +145,7 @@ def main() -> int:
 
         def person(name):
             human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
-                     "character_appearance": "slender", "outfit_body_mode": "mesh",
+                     "character_appearance": "slender",
                      "body_slots": {"skin": {"tone": "olive"}}}
             check(f"create {name}", save_character_profile(name, dict(human), create_new=True), True)
             touch(get_character_images_dir(name) / f"{name}_1.png", b"\x89PNG" + name.encode() * 8)
@@ -155,7 +157,7 @@ def main() -> int:
         def shoe_item(item_id, colour, holder, mesh=fx.clog):
             iid = inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                      prompt_fragment=f"black {item_id}",
-                                     outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                     outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
             folder = inventory._get_item_dir(iid, create=True)
             (folder / "image.png").write_bytes(png_bytes(colour))
             check(f"{iid} image", inventory.set_item_image(iid, "image.png"), True)
@@ -299,7 +301,7 @@ def main() -> int:
         def cloth(item_id, slots):
             iid = inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                      prompt_fragment=f"a {item_id}",
-                                     outfit_piece={"slots": slots, "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                     outfit_piece={"slots": slots, "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
             inventory.add_to_inventory("Demo", iid)
             fsig_c = gs.garment_fsig("Demo", iid)
             fit_c = touch(gs.garment_path("Demo", iid, fsig_c, "fit"))

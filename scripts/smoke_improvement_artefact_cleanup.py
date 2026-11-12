@@ -257,7 +257,7 @@ def main() -> int:
         print("[A6] the world shoe sources")
         heels = inventory.add_item(name="Heels", category="outfit_piece", item_id="heels",
                                    prompt_fragment="black heels",
-                                   outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                   outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         S = fs.current_ssig(heels)
         current = touch(fs.source_dir(heels, S) / "upscaled.png", b"png")
         stale = fs.source_dir(heels, "000000000000")

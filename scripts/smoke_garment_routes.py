@@ -107,7 +107,7 @@ Fixture (expected values derived by hand):
     404: Other's shoe_other for Demo, hair_demo (no footwear) on the
     footwear image route, traversal item "..%2Fsecret".
     GET /characters/Demo/garments/shoe_demo -> 200 {kind "footwear",
-    own_mesh True, garment.kind "footwear", garment.ssig S}; limits
+    mesh_mode "own_mesh", garment.kind "footwear", garment.ssig S}; limits
     {empty, mesh, insole, fit} with empty.aspect {op "range", value [1.1,
     2.4]}, mesh.mesh_iou {op "ge", value 0.8}, insole.insole_cover {op "ge",
     value 0.8}; the ModelSteps rows' labels "Item image", "Empty shoe",
@@ -383,7 +383,7 @@ def main() -> int:
             for iid, holder in (("shoe_demo", "Demo"), ("shoe_other", "Other")):
                 inventory.add_item(name="Heels", category="outfit_piece", prompt_fragment="black heels",
                                    item_id=iid, outfit_piece={"slots": ["feet"], "outfit_types": ["casual"],
-                                                              "own_mesh": True})
+                                                              "mesh_mode": "own_mesh"})
                 check(f"{holder} holds {iid}", inventory.add_to_inventory(holder, iid), True)
             folder = inventory._get_item_dir("shoe_demo", create=True)
             (folder / "image.png").write_bytes(b"\x89PNG-item")
@@ -435,8 +435,8 @@ def main() -> int:
             r = client.get("/characters/Demo/garments/shoe_demo")
             body = r.json() if r.status_code == 200 else {}
             g = body.get("garment") or {}
-            check("footwear panel", (r.status_code, body.get("kind"), body.get("own_mesh"), g.get("kind"),
-                                     g.get("ssig")), (200, "footwear", True, "footwear", S))
+            check("footwear panel", (r.status_code, body.get("kind"), body.get("mesh_mode"), g.get("kind"),
+                                     g.get("ssig")), (200, "footwear", "own_mesh", "footwear", S))
             lim = body.get("limits") or {}
             check("footwear limits", (sorted(lim), (lim.get("empty") or {}).get("aspect"),
                                       (lim.get("mesh") or {}).get("mesh_iou"),

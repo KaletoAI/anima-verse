@@ -160,7 +160,7 @@ def main() -> int:
         def shoe_item(name):
             iid = inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"black {name.lower()}",
                                      outfit_piece={"slots": ["feet"], "outfit_types": ["casual"],
-                                                   "own_mesh": True})["id"]
+                                                   "mesh_mode": "own_mesh"})["id"]
             folder = inventory._get_item_dir(iid, create=True)
             shoe(crop, True).save(folder / "image.png", format="PNG")
             check(f"{name} image set", inventory.set_item_image(iid, "image.png"), True)
@@ -310,7 +310,7 @@ def main() -> int:
             print("[G7] clothing per wearer")
             dress = inventory.add_item(name="Dress", category="outfit_piece", prompt_fragment="a green dress",
                                        outfit_piece={"slots": ["top", "bottom"], "covers": ["legs"],
-                                                     "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                                     "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
             wear("Kira", dress)
             wear("Nora", dress)
             fsig = gs.garment_fsig("Kira", dress)

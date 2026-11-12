@@ -318,7 +318,7 @@ def main() -> int:
         def shoe_item(name):
             iid = inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"black {name.lower()}",
                                      outfit_piece={"slots": ["feet"], "outfit_types": ["casual"],
-                                                   "own_mesh": True})["id"]
+                                                   "mesh_mode": "own_mesh"})["id"]
             folder = inventory._get_item_dir(iid, create=True)
             shoe(crop, True).save(folder / "image.png", format="PNG")
             check(f"{name} image set", inventory.set_item_image(iid, "image.png"), True)

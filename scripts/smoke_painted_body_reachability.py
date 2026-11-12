@@ -18,7 +18,8 @@ outfit would PAINT it now (``base_body.predicted_texture_signatures`` in both ou
 current dressed front); one only named is outdated (``OUTDATED_TEXTURE``, parent ``built_on``).
 
 Fixture (``make(char, mode)``, a fresh character per scenario): items top {top}, skirt {bottom}, skirt2 {bottom}
-painted, dress {outer} own mesh with an accepted fit on the base model (so both modes leave it out of the paint), all
+painted (mode "mesh": in the body — the outfit body mode follows the worn pieces, interim rule of plan
+2026-11-12-unified-worn-pieces Task 2), dress {outer} own mesh with an accepted fit on the base model (so both modes leave it out of the paint), all
 in the inventory; pipeline on; base refs + model. ``outfit(char, pieces)`` worn and stored like a build leaves it:
 front/back refs + model sidecar naming T = the tsig its pieces paint now in the character's mode, the texture store
 of T (8 files: store tpose/tpose_back .png/.json, drafts/tpose_back .png/.json, model3d/texture/<T>.glb/.json); in
@@ -144,7 +145,7 @@ def main() -> int:
 
         def make(char: str, mode: str):
             human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
-                     "character_appearance": "slender", "outfit_body_mode": mode}
+                     "character_appearance": "slender"}
             assert save_character_profile(char, human, create_new=True)
             touch(get_character_images_dir(char) / f"{char}_1.png", b"\x89PNG" + char.encode() * 8)
             prof = get_character_profile(char)
@@ -152,9 +153,12 @@ def main() -> int:
             assert save_character_profile(char, prof)
             assert base_body.set_pipeline(char, True)
             ids = {}
+            # The outfit body mode follows the worn pieces (interim rule, plan 2026-11-12-unified-worn-pieces
+            # Task 2): mesh mode = the painted pieces in the body.
+            painted = "in_body" if mode == "mesh" else "painted"
             for key, slots, own in (("top", ["top"], False), ("skirt", ["bottom"], False),
                                     ("skirt2", ["bottom"], False), ("dress", ["outer"], True)):
-                op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "own_mesh": own}
+                op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "mesh_mode": "own_mesh" if own else painted}
                 ids[key] = inventory.add_item(name=f"{key} {char}", category="outfit_piece", item_id=f"{key}_{char.lower()}",
                                               prompt_fragment=f"a {key}", outfit_piece=op)["id"]
                 inventory.add_to_inventory(char, ids[key])
@@ -286,7 +290,7 @@ def main() -> int:
               ([ids["dress"]], [ids["dress"]]))
         check("[2] T2 current", node(ag, char, t2)[:2], (True, ag.CURRENT_TEXTURE))
         op = dict(inventory.get_item(ids["dress"])["outfit_piece"])
-        op["own_mesh"] = False
+        op["mesh_mode"] = "painted"
         assert inventory.update_item(ids["dress"], {"outfit_piece": op})
         check("[2] painted now -> other tsig", predicted(char, fx, {"top": ids["top"], "outer": ids["dress"]}) != t2,
               True)

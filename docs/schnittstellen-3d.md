@@ -12233,7 +12233,7 @@ the CPU (spec `docs/superpowers/specs/2026-11-10-footwear-rigid-shoes-design.md`
 geometric — scale, placement, the foot's extension, the lift, the body cut — and delivers it in the served model;
 both renderers apply the one record through `@anima/scene-render` and add nothing of their own.
 
-**Kind.** An `outfit_piece` with `own_mesh: true` whose slots are exactly `feet` is garment kind `footwear`,
+**Kind.** An `outfit_piece` in mode `own_mesh` (`outfit_piece.mesh_mode`) whose slots are exactly `feet` is garment kind `footwear`,
 method `shoe` (`garment_set.garment_kind_of`); every other own-mesh piece stays `clothing`, a multi-slot piece
 (tights) included. The clothing edit chain never runs for it. Footwear is NEVER painted onto the body, in either
 outfit body mode: without an accepted fit on the current body it is missing (bare foot) with the warning

@@ -1982,14 +1982,15 @@ def get_character_garments(character_name: str,
 def get_character_garment(character_name: str, item_id: str,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Wardrobe's panel of one own-mesh piece (or any garment of the
-    character): ``{pipeline, item_id, name, kind, own_mesh, worn, status,
-    garment, limits}`` — ``garment`` is ``garments.garment_info`` (a
+    character): ``{pipeline, item_id, name, kind, mesh_mode, worn, status,
+    garment, limits}`` (``mesh_mode``: the item's mode,
+    ``garment_set.mesh_mode_of``; None for hair) — ``garment`` is ``garments.garment_info`` (a
     footwear piece: ``garment_footwear.info``, the shoe source steps; every
     image with its ``freshness``, the preview with ``preview_freshness``,
     ``failed`` also after a restart), ``limits`` the chip limits of the
     item's kind (``_garment_limits``), ``status`` the row chip
     (``garment_set.piece_status``). 404 for an item that is no garment of
-    this character (an outfit piece without the own-mesh flag, a piece it
+    this character (an outfit piece not in mode ``own_mesh``, a piece it
     does not hold, another character's hair)."""
     from app.core import base_body, garment_set, garments
     from app.models.character import get_character_profile
@@ -2013,7 +2014,7 @@ def get_character_garment(character_name: str, item_id: str,
     worn_piece = bool(pipeline and worn and kind in garment_set.OWN_MESH_PIECE_KINDS)
     mesh_mode = bool(pipeline and base_body.outfit_body_mode(character_name, profile=profile) == base_body.MESH_MODE)
     payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
-               "kind": kind, "own_mesh": kind in garment_set.OWN_MESH_PIECE_KINDS, "worn": bool(worn),
+               "kind": kind, "mesh_mode": garment_set.mesh_mode_of(item), "worn": bool(worn),
                "status": garment_set.piece_status(
                    info, worn=worn_piece, base_model_ready=bool(base and base[1]),
                    layers=garment_set.worn_layers(character_name, profile=profile,

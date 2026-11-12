@@ -10,8 +10,10 @@ Throwaway storage + instance directory with a copy of the repo's ``human`` packa
 bare FastAPI app with a TestClient (session lookup stubbed, header ``x-role: admin``). No hub, no GPU:
 ``expression_regen.render_character_image`` is a recorder that writes a PNG + sidecar (one call = one image job).
 
-Fixture (character Demo: humanoid, pipeline on, outfit_body_mode mesh, side views off = the default; appearance
-with hair, so ``garment_hair.ensure_hair_item`` creates and WEARS its own hair item H). Items top / skirt, painted.
+Fixture (character Demo: humanoid, pipeline on, outfit body mode mesh, side views off = the default; appearance
+with hair, so ``garment_hair.ensure_hair_item`` creates and WEARS its own hair item H). Items top / skirt, in mode
+in_body — the outfit body mode follows the worn pieces (interim rule of plan 2026-11-12-unified-worn-pieces Task 2:
+mesh iff a worn piece is in the body); "retexture mode" in [1] = both switched to painted.
 Base views front/back of bsig, base model. Outfit O1 {top, skirt} WORN with a dressed front + back made BEFORE the
 rule, texture T0 = its tsig, its body B0 = outfit_body_id(T0) (refs + rigged GLB) and the outfit model of O1 on B0.
 
@@ -131,7 +133,7 @@ def main() -> int:
 
         char = "Demo"
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
-                 "character_appearance": "slender, wavy hair with a side parting", "outfit_body_mode": "mesh",
+                 "character_appearance": "slender, wavy hair with a side parting",
                  "body_slots": {"hair": {"length": "medium", "color": "blonde"}}}
         assert save_character_profile(char, human, create_new=True)
         png(get_character_images_dir(char) / f"{char}_1.png", (200, 180, 160))
@@ -142,7 +144,7 @@ def main() -> int:
         hair_id = garment_hair.ensure_hair_item(char)
         check("fixture: hair worn", inventory.get_equipped_mesh_pieces(char), {"hair": hair_id})
         for key, slots in (("top", ["top"]), ("skirt", ["bottom"])):
-            op = {"slots": slots, "covers": [], "outfit_types": ["casual"]}
+            op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "mesh_mode": "in_body"}
             inventory.add_item(name=key.title(), category="outfit_piece", item_id=key,
                                prompt_fragment=f"a plain {key}", outfit_piece=op)
             inventory.add_to_inventory(char, key)
@@ -153,6 +155,13 @@ def main() -> int:
 
         def profile():
             return get_character_profile(char)
+
+        def set_mode(mode):
+            for key in ("top", "skirt"):
+                op = dict(inventory.get_item(key)["outfit_piece"])
+                op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
+                inventory.update_item(key, {"outfit_piece": op})
+            check(f"mode {mode}", base_body.outfit_body_mode(char), mode)
 
         def set_profile(**changes):
             p = profile()
@@ -184,9 +193,10 @@ def main() -> int:
                                      garment={"kind": "hair", "slot": "hair", "body_slot": "hair"})["id"]
         set_profile(equipped_mesh_pieces={"hair": foreign})
         check("[1] foreign hair item", base_body.outfit_body_bald(char), False)
-        set_profile(equipped_mesh_pieces={"hair": hair_id}, outfit_body_mode="retexture")
+        set_profile(equipped_mesh_pieces={"hair": hair_id})
+        set_mode("retexture")
         check("[1] retexture mode", base_body.outfit_body_bald(char), False)
-        set_profile(outfit_body_mode="mesh")
+        set_mode("mesh")
         check("[1] back on", base_body.outfit_body_bald(char), True)
 
         # --- [2] ---------------------------------------------------------------------------------------------

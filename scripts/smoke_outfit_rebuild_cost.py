@@ -28,7 +28,10 @@ draft + fit; an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
      (first attempts)".
 [O2] the world setting ``base_body.dressed_side_views`` on (dressed views
      front, back, left, right) → image 1 + 2·3 = 7, hub 7.
-[O3] side views off again; mesh mode (profile ``outfit_body_mode`` "mesh"),
+[O3] side views off again; mesh mode (the Dress switched to mode in_body —
+     the outfit body mode follows the worn pieces, interim rule of plan
+     2026-11-12-unified-worn-pieces Task 2; "retexture mode" = the Dress
+     painted),
      no dressed view → views needed → a new texture → body 2: {image 3,
      mesh 2, hub 5}, note "older base: views 3 + body 2 (first attempts)".
 [O4] mesh mode, the dressed front + back current: no body stored → views 0,
@@ -100,9 +103,8 @@ def main() -> int:
         discover_packages(plugins, force=True)
 
         from app.core import base_body, glb_delivery, model_refs
-        from app.core.keyed_lock import keyed_lock
         from app.models import inventory
-        from app.models.character import get_character_dir, get_character_profile, save_character_profile
+        from app.models.character import get_character_dir, save_character_profile
 
         model_refs.schedule_outfit_render = lambda *a, **k: None
         glb_delivery.delivery_path = lambda path, **kw: path   # no background meshopt copy of fixture bytes
@@ -133,10 +135,12 @@ def main() -> int:
         pieces, items, sig = model_refs.current_outfit_state("Kira")
 
         def set_mode(mode):
-            with keyed_lock("character_profile", "Kira"):
-                profile = get_character_profile("Kira")
-                profile["outfit_body_mode"] = mode
-                save_character_profile("Kira", profile)
+            """The outfit body mode follows the worn pieces (interim rule, plan 2026-11-12-unified-worn-pieces
+            Task 2): the dress goes in the body for "mesh", back to painted for "retexture"."""
+            op = dict(inventory.get_item(dress)["outfit_piece"])
+            op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
+            inventory.update_item(dress, {"outfit_piece": op})
+            check(f"mode {mode}", base_body.outfit_body_mode("Kira"), mode)
 
         def write_model(**extra):
             (mdir / f"{sig}.glb").write_bytes(b"outfit-model")

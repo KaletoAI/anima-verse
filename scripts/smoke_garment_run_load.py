@@ -120,7 +120,7 @@ def main() -> int:
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         did = inventory.add_item(name="Green Dress", category="outfit_piece", prompt_fragment=FRAGMENT,
                                  outfit_piece={"slots": ["top", "bottom"], "covers": ["legs"],
-                                               "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                               "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         check("inventory dress", inventory.add_to_inventory("Demo", did), True)
         check("equip dress", inventory.equip_piece("Demo", did, source="smoke")["status"], "ok")
         refs = get_character_dir("Demo") / "model_refs"

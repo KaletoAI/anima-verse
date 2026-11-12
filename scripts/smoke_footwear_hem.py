@@ -279,7 +279,7 @@ def main() -> int:
             gs.write_record(d / "record.json", {"steps": steps})
             return insole
         boots = inventory.add_item(name="Boots", category="outfit_piece", item_id="boots", prompt_fragment="boots",
-                                   outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                   outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         folder = inventory._get_item_dir(boots, create=True)
         (folder / "image.png").write_bytes(png_bytes((20, 20, 20)))
         check("boots image", inventory.set_item_image(boots, "image.png"), True)
@@ -288,7 +288,7 @@ def main() -> int:
         check("boot insole ok, class ankle", (insole_b["gates"]["ok"], insole_b["shaft"]["class"]), (True, "ankle"))
         trousers = inventory.add_item(name="Trousers", category="outfit_piece", item_id="trousers",
                                       prompt_fragment="trousers",
-                                      outfit_piece={"slots": ["bottom"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                      outfit_piece={"slots": ["bottom"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         painted = inventory.add_item(name="Painted", category="outfit_piece", item_id="painted", prompt_fragment="jeans",
                                      outfit_piece={"slots": ["bottom"], "outfit_types": ["casual"]})["id"]
         for iid in (trousers, painted):

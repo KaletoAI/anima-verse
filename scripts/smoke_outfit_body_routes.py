@@ -11,8 +11,9 @@ the session lookup stubbed (header ``x-role``: admin / user / none). No hub, no 
 ``rerig_model`` and ``garments.fit_on_body`` are stubs that record their calls; the tsig computation
 (``base_body.outfit_body_of_outfit``) is stubbed to the fixture's mapping (Task 1's smokes test the real one).
 
-Fixture (character Demo: humanoid, base-body pipeline on, outfit_body_mode mesh, profile picture; items top {top}
-and skirt {bottom} painted, dress {outer} own mesh, all held). bsig = base_signature; T1/T2 = tex111…/tex222…;
+Fixture (character Demo: humanoid, base-body pipeline on, outfit body mode mesh, profile picture; items top {top}
+and skirt {bottom} in the body (mode in_body — the outfit body mode follows the worn pieces, interim rule of plan
+2026-11-12-unified-worn-pieces Task 2), dress {outer} own mesh, all held). bsig = base_signature; T1/T2 = tex111…/tex222…;
 B1/B2 = outfit_body_id(T1/T2). Outfits: O1 {top, skirt} WORN on B1, O2 {top, dress} on B2 (model sidecars name
 body_id; O2's carries mesh_items.effective [dress]). Body files per Bn: refs tpose[_back]_<Bn> (+.json with the
 parent record {body_id, texture_signature Tn, base_signature bsig, version OUTFIT_BODY_VERSION, built_for On,
@@ -133,7 +134,7 @@ def main() -> int:
         T1, T2 = "tex111111111111", "tex222222222222"
         B1, B2 = base_body.outfit_body_id(T1), base_body.outfit_body_id(T2)
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
-                 "character_appearance": "slender", "outfit_body_mode": "mesh"}
+                 "character_appearance": "slender"}
         assert save_character_profile(char, human, create_new=True)
         touch(get_character_images_dir(char) / f"{char}_1.png", b"\x89PNG" + b"demo" * 8)
         prof = get_character_profile(char)
@@ -142,7 +143,7 @@ def main() -> int:
         assert base_body.set_pipeline(char, True)
         ids = {}
         for key, slots, own in (("top", ["top"], False), ("skirt", ["bottom"], False), ("dress", ["outer"], True)):
-            op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "own_mesh": own}
+            op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "mesh_mode": "own_mesh" if own else "in_body"}
             ids[key] = inventory.add_item(name=f"{key.title()}", category="outfit_piece", item_id=key,
                                           prompt_fragment=f"a {key}", outfit_piece=op)["id"]
             inventory.add_to_inventory(char, ids[key])

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Base body phase 5, task 2: the clothing image chain — an outfit piece
-flagged ``outfit_piece.own_mesh`` runs ``worn -> ghost -> cutout`` with its
+in mode own_mesh (``outfit_piece.mesh_mode``) runs ``worn -> ghost -> cutout`` with its
 own gates (app/core/garment_clothing.py, garment_gates.py worn_gate /
 ghost_clothing_gate / hems_agree, garment_store.py, garment_images.py,
 garments.py — plan docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md).
@@ -18,7 +18,7 @@ not under test). The gate limits are the calibrated constants of
 ``garment_gates`` (spike numbers in its "Clothing" block).
 
 Fixture ``Demo`` (female, base-body pipeline). Item D = "Green Dress",
-outfit piece, slots [top, bottom], covers [legs], own_mesh True, prompt
+outfit piece, slots [top, bottom], covers [legs], mode own_mesh, prompt
 fragment "a knee-length green linen dress with short sleeves." — worn by Demo.
 
 Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200 on grey:
@@ -437,9 +437,9 @@ def main() -> int:
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         did = inventory.add_item(name="Green Dress", category="outfit_piece", prompt_fragment=FRAGMENT,
                                  outfit_piece={"slots": ["top", "bottom"], "covers": ["legs"],
-                                               "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                               "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         bare = inventory.add_item(name="Plain Shirt", category="outfit_piece", prompt_fragment="",
-                                  outfit_piece={"slots": ["top"], "own_mesh": True})["id"]
+                                  outfit_piece={"slots": ["top"], "mesh_mode": "own_mesh"})["id"]
         check("inventory dress", inventory.add_to_inventory("Demo", did), True)
         check("equip dress", inventory.equip_piece("Demo", did, source="smoke")["status"], "ok")
         refs = get_character_dir("Demo") / "model_refs"
@@ -497,7 +497,7 @@ def main() -> int:
         gates_part(gg, kept)
         print("[3b] slot zones")
         hat = inventory.add_item(name="Straw Hat", category="outfit_piece", prompt_fragment="a straw hat",
-                                 outfit_piece={"slots": ["head"], "own_mesh": True})["id"]
+                                 outfit_piece={"slots": ["head"], "mesh_mode": "own_mesh"})["id"]
 
         def module_worn(arr, item_id):
             return garment_clothing.gate("worn", "front", base_rgb=BASE, base_mask=mask_of(BASE),

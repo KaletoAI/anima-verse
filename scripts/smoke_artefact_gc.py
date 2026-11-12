@@ -9,7 +9,9 @@ Runs against a THROWAWAY storage + instance directory with a copy of the repo's 
 no hub, no GPU, no server process. Every file is synthetic bytes; only names and JSON sidecars matter to the GC.
 
 Fixture (``make(char, s)``, one fresh character per scenario; items ``top<s>`` {top}, ``skirt<s>`` {bottom} painted,
-``dress<s>`` {outer} own mesh, all in the inventory; hair item worn, hair_method hairdeck; pipeline on, mode mesh;
+``dress<s>`` {outer} own mesh, all in the inventory; hair item worn, hair_method hairdeck; pipeline on, mode mesh
+= top and skirt in mode in_body (the outfit body mode follows the worn pieces, interim rule of plan
+2026-11-12-unified-worn-pieces Task 2; "switch to retexture" = both set to painted, which spends and walks nothing);
 profile picture). bsig = base_signature; T1 / T2 = the tsig the pieces of O1 / O2 paint now
 (base_body.predicted_texture_signatures, mesh mode — a texture lives while a live outfit would paint it,
 artefact_graph._current_textures; a made-up tsig would be outdated at once), per character; B1/B2 =
@@ -48,11 +50,11 @@ Expected, by hand from the spec + plan rulings (module docstring of artefact_gra
     base), T1 T2 (sidecars name the old base), B1 B2 Bd1 Bd2 Bh1 Bh2 (record names the old base — ruling
     "immediately"). Kept: O1..O3 (producible; rebuilt later), Gd Gh (R11: newest accepted fit at all), HD (the
     hsig changed with the picture, but the kept hair fit names it), NEWBASE refs, FACE UNK LIVE YOUNG.
-[4] mode switch (apply_profile_update outfit_body_mode retexture): 0 deletions. O1m + O3m rebuilt in retexture
+[4] mode switch (top and skirt painted) + collect: 0 deletions. O1m + O3m rebuilt in retexture
     (sidecar without body_id) -> collect: 0 deletions — B1 Bd1 Bh1 stay, their texture T1 is live (ruling
     2026-11-10: a body hangs on its texture in BOTH modes, the spec's anti-goal "switching the mode back and forth
-    -> no hub job for bodies that exist"); O2m rebuilt -> B2 Bd2 Bh2 stay the same way. Mode back to mesh -> 0
-    deletions (T1 T2 B1 B2 stay: mode back = no render, no mesh job).
+    -> no hub job for bodies that exist"); O2m rebuilt -> B2 Bd2 Bh2 stay the same way. Mode back to mesh + collect
+    -> 0 deletions (T1 T2 B1 B2 stay: mode back = no render, no mesh job).
 [5] character delete: delete_character -> the directory is gone; collect afterwards mints nothing.
 [6] running: B2 made unreachable (retexture, O2m rebuilt, B2's record pointed at a dead texture) but a live stage
     on B2 -> B2, Bd2, Bh2 skipped "running";
@@ -143,7 +145,7 @@ def main() -> int:
         from app.plugins.loader import discover_packages
         discover_packages(plugins, force=True)
 
-        from app.core import (artefact_graph as ag, base_body, character_ops, garment_hair, garment_store as gs,
+        from app.core import (artefact_graph as ag, base_body, garment_hair, garment_store as gs,
                               hub_ops, model3d, outfit_cache_gc)
         from app.core.keyed_lock import keyed_lock
         from app.core.model_refs import mesh_items_token, mesh_signature, mesh_variant
@@ -155,7 +157,6 @@ def main() -> int:
         def make(char: str, s: str, *, orphans: bool = False):
             human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
                      "character_appearance": "slender, wavy hair with a side parting", "hair_method": "hairdeck",
-                     "outfit_body_mode": "mesh",
                      "body_slots": {"hair": {"length": "medium", "color": "blonde"}}}
             assert save_character_profile(char, human, create_new=True)
             touch(get_character_images_dir(char) / f"{char}_1.png", b"\x89PNG" + char.encode() * 8)
@@ -166,7 +167,7 @@ def main() -> int:
             hid = garment_hair.ensure_hair_item(char)
             ids = {}
             for key, slots, own in (("top", ["top"], False), ("skirt", ["bottom"], False), ("dress", ["outer"], True)):
-                op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "own_mesh": own}
+                op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "mesh_mode": "own_mesh" if own else "in_body"}
                 ids[key] = inventory.add_item(name=f"{key}{s}", category="outfit_piece", item_id=f"{key}{s}",
                                               prompt_fragment=f"a {key}", outfit_piece=op)["id"]
                 inventory.add_to_inventory(char, ids[key])
@@ -291,7 +292,7 @@ def main() -> int:
                 L["TMP"] = [touch(tmpw / "x")]
                 age([dead, tmpw], OLD_S)
             return {"L": L, "sigs": sigs, "ids": ids, "hid": hid, "bsig": bsig, "dir": cdir, "outfits": outfits,
-                    "T1": T1, "T2": T2, "B1": B1, "B2": B2}
+                    "T1": T1, "T2": T2, "B1": B1, "B2": B2, "char": char}
 
         def walk(char):
             cdir = get_character_dir(char)
@@ -329,8 +330,12 @@ def main() -> int:
                         meta["outfit_body"]["texture_signature"] = "tex000000000000"
                         path.write_text(json.dumps(meta))
 
-        def set_mode(char, mode):
-            return character_ops.apply_profile_update(char, {"fields": {"outfit_body_mode": mode}})
+        def set_mode(fx, mode):
+            for key in ("top", "skirt"):
+                op = dict(inventory.get_item(fx["ids"][key])["outfit_piece"])
+                op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
+                assert inventory.update_item(fx["ids"][key], {"outfit_piece": op})
+            return base_body.outfit_body_mode(fx["char"])
 
         # --- [0] initial tree with planted orphans -------------------------------------------------------
         print("[0] initial collect removes exactly the planted orphans")
@@ -381,7 +386,9 @@ def main() -> int:
         # --- [4] mode switch -----------------------------------------------------------------------------
         print("[4] mode switch mesh -> retexture -> mesh")
         fx = make("Demo4", "4")
-        check("[4] switch to retexture", set_mode("Demo4", "retexture")["status"], "success")
+        check("[4] fixture in mesh mode", base_body.outfit_body_mode("Demo4"), "mesh")
+        check("[4] switch to retexture", set_mode(fx, "retexture"), "retexture")
+        check("[4] after switch: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
         same("[4] after switch", "Demo4", fx, ALL)
         rebuild_retexture(fx, "O1")
         rebuild_retexture(fx, "O3")
@@ -390,7 +397,8 @@ def main() -> int:
         rebuild_retexture(fx, "O2")
         check("[4] O2 rebuilt: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
         same("[4] O2 rebuilt", "Demo4", fx, ALL)
-        set_mode("Demo4", "mesh")
+        check("[4] back to mesh", set_mode(fx, "mesh"), "mesh")
+        check("[4] back to mesh: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
         same("[4] back to mesh", "Demo4", fx, ALL)
 
         # --- [5] character delete ------------------------------------------------------------------------
@@ -405,7 +413,7 @@ def main() -> int:
         print("[6] running work is never deleted")
         fx = make("Demo6", "6")
         B2 = fx["B2"]
-        set_mode("Demo6", "retexture")
+        check("[6] retexture", set_mode(fx, "retexture"), "retexture")
         rebuild_retexture(fx, "O2")
         retire_body(fx, "B2")
         stage = fx["dir"] / "model3d" / ".process-b2"

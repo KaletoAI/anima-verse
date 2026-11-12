@@ -156,7 +156,7 @@ def main() -> int:
 
         dress = inventory.add_item(name="Dress", category="outfit_piece", prompt_fragment="a green dress",
                                    outfit_piece={"slots": ["top", "bottom"], "covers": ["legs"],
-                                                 "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                                 "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         for name in ("Kira", "Nora"):
             check(f"{name} holds the dress", inventory.add_to_inventory(name, dress), True)
             check(f"{name} wears the dress", inventory.equip_piece(name, dress, source="smoke")["status"], "ok")

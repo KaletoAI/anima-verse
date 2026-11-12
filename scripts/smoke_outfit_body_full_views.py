@@ -22,8 +22,9 @@ fit gate, the view guard, the texture store, ``prepare_outfit_body``, the
 hub-op records and the registered resume entry are REAL.
 
 Fixture: Demo (on the pipeline, side views OFF -> dressed views front + back,
-``outfit_body_mode: "mesh"``); items under {[underwear_bottom]}, shoes
-{[feet]}, skirt {[bottom]}. Outfits: A {under, shoes}; G {under, shoes,
+outfit body mode mesh: every item is in mode in_body — the interim rule of
+plan 2026-11-12-unified-worn-pieces Task 2, mesh iff a worn piece is in the
+body); items under {[underwear_bottom]}, shoes {[feet]}, skirt {[bottom]}. Outfits: A {under, shoes}; G {under, shoes,
 skirt}; H {under, skirt}; K {shoes, skirt}; L {shoes} — five different dress
 texts, so five tsigs and five bodies.
 
@@ -237,16 +238,15 @@ def main() -> int:
         (images / "Demo_1.png").write_bytes(png((50, 60, 70)))
         stored = get_character_profile("Demo")
         stored["profile_image"] = "Demo_1.png"
-        stored["outfit_body_mode"] = "mesh"
         check("profile", save_character_profile("Demo", stored), True)
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
-        check("mode mesh", base_body.outfit_body_mode("Demo"), "mesh")
         check("dressed views", base_body.dressed_views(), ("front", "back"))
 
         for item_id, slot in (("under", "underwear_bottom"), ("shoes", "feet"), ("skirt", "bottom")):
             inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,
                                prompt_fragment=FRAG[item_id],
-                               outfit_piece={"slots": [slot], "covers": [], "outfit_types": ["casual"]})
+                               outfit_piece={"slots": [slot], "covers": [], "outfit_types": ["casual"],
+                                             "mesh_mode": "in_body"})
             inventory.add_to_inventory("Demo", item_id)
 
         def wear(pieces):
@@ -307,6 +307,7 @@ def main() -> int:
         # --- [1] front only -> the back first, then ONE mesh job ---------------------------
         print("[1] front only: the back is rendered first, then one mesh job with images=2")
         sig_a = wear({"underwear_bottom": "under", "feet": "shoes"})
+        check("mode mesh", base_body.outfit_body_mode("Demo"), "mesh")
         jobs = render_views("main")
         check("A main view: 1 image job, front only", (len(jobs), dressed(sig_a, "front"), dressed(sig_a, "back")),
               (1, True, False))

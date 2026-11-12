@@ -1,16 +1,26 @@
 """Which items a character wears or holds as their own garment mesh
-(plan ``docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md``).
+(plan ``docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md``),
+and the mode of every worn outfit piece (plan
+``docs/superpowers/plans/2026-11-12-unified-worn-pieces.md`` Task 2).
+
+The mode is a property of the ITEM — ``outfit_piece.mesh_mode`` (``mesh_mode_of``),
+the same for every wearer: ``own_mesh`` (a finished mesh fitted on top),
+``painted`` (on the body's texture) or ``in_body`` (meshed as part of the
+body). An item without a valid stored mode has its kind default
+(``default_mesh_mode``: slots exactly ``feet`` → own mesh; ``outer`` among
+the slots, or both ``top`` and ``bottom`` → in the body; everything else →
+painted).
 
 Two kinds of item become a fitted garment mesh on a base-body character:
 
 - ``hair`` — the hair garment (category ``garment``, ``garment.kind ==
   "hair"``), worn through the profile state key ``equipped_mesh_pieces`` and
   owned through ``item.owner`` (``garment_hair``);
-- ``clothing`` — an ordinary ``outfit_piece`` whose ``outfit_piece.own_mesh``
-  flag is set. It stays an outfit piece worn through ``equipped_pieces`` (2D
-  renders, the outfit signature and the chat prompts never see the flag);
-  the flag lives on the ITEM, so it applies to every wearer, and a wearer is
-  whoever holds it (inventory) or wears it. Its fits are per wearer, under
+- ``clothing`` — an ordinary ``outfit_piece`` whose mode is ``own_mesh``.
+  It stays an outfit piece worn through ``equipped_pieces`` (2D renders, the
+  outfit signature and the chat prompts never see the mode); the mode lives
+  on the ITEM, so it applies to every wearer, and a wearer is whoever holds
+  it (inventory) or wears it. Its fits are per wearer, under
   ``characters/<n>/garments/`` like the hair fits;
 - ``footwear`` — an own-mesh outfit piece worn in slot ``feet`` ONLY (plan
   ``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md``): a rigid
@@ -23,41 +33,79 @@ Two kinds of item become a fitted garment mesh on a base-body character:
   the current body it is missing (bare feet) until the fit is accepted.
 
 ``OWN_MESH_PIECE_KINDS`` answers "is this an own-mesh outfit piece" (the
-flag, the worn set, the mesh-items token); ``GRAFTED_PIECE_KINDS`` the kinds
+mode, the worn set, the mesh-items token); ``GRAFTED_PIECE_KINDS`` the kinds
 whose accepted fit is grafted into the served model (clothing and, since
 Task 16 of the footwear plan, footwear).
 
 Only characters on the base-body pipeline (``base_body.is_base_pipeline``)
-wear garments; everyone else ignores the flag (``worn_garments`` is empty).
+wear garments; everyone else ignores the mode (``worn_garments`` is empty).
 """
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 HAIR = "hair"
 CLOTHING = "clothing"
 FOOTWEAR = "footwear"
-#: The kinds of an outfit piece with the own-mesh flag.
+#: The kinds of an outfit piece in mode ``own_mesh``.
 OWN_MESH_PIECE_KINDS: Tuple[str, ...] = (CLOTHING, FOOTWEAR)
 #: The own-mesh piece kinds whose accepted fit is grafted into the served model.
 GRAFTED_PIECE_KINDS: Tuple[str, ...] = (CLOTHING, FOOTWEAR)
 #: The slot an own-mesh piece is worn in ALONE to be footwear.
 FOOTWEAR_SLOT = "feet"
 
+#: The modes of an outfit piece (``outfit_piece.mesh_mode``, module docstring).
+OWN_MESH, PAINTED, IN_BODY = "own_mesh", "painted", "in_body"
+MESH_MODES: Tuple[str, ...] = (OWN_MESH, PAINTED, IN_BODY)
+#: Slots that make a piece "in the body" by default (``default_mesh_mode``).
+_IN_BODY_SLOT = "outer"
+_IN_BODY_PAIR = frozenset({"top", "bottom"})
+
+
+def default_mesh_mode(slots: Iterable[str]) -> str:
+    """The kind default of an outfit piece worn on ``slots``: exactly
+    ``feet`` → ``own_mesh``; ``outer`` among them, or both ``top`` and
+    ``bottom`` → ``in_body``; everything else → ``painted``."""
+    worn = {str(s) for s in (slots or ()) if s}
+    if worn == {FOOTWEAR_SLOT}:
+        return OWN_MESH
+    if _IN_BODY_SLOT in worn or _IN_BODY_PAIR <= worn:
+        return IN_BODY
+    return PAINTED
+
+
+def _piece_of(item: Dict[str, Any]) -> Dict[str, Any]:
+    return item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
+
+
+def _slots_of(piece: Dict[str, Any]) -> List[str]:
+    slots = piece.get("slots")
+    return [str(s) for s in slots] if isinstance(slots, (list, tuple)) else []
+
+
+def mesh_mode_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The mode of an outfit piece: its stored ``outfit_piece.mesh_mode``,
+    or the kind default of its slots (``default_mesh_mode``) when that is
+    missing or not one of ``MESH_MODES``. None for anything that is not an
+    ``outfit_piece``."""
+    if not isinstance(item, dict) or item.get("category") != "outfit_piece":
+        return None
+    piece = _piece_of(item)
+    mode = piece.get("mesh_mode")
+    return mode if mode in MESH_MODES else default_mesh_mode(_slots_of(piece))
+
 
 def garment_kind_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
-    """``"hair"`` for a hair garment; for an outfit piece with the own-mesh
-    flag ``"footwear"`` when its slots are ``feet`` alone (a multi-slot piece
-    with ``feet`` stays clothing), else ``"clothing"``; None for anything
-    else."""
+    """``"hair"`` for a hair garment; for an outfit piece in mode
+    ``own_mesh`` ``"footwear"`` when its slots are ``feet`` alone (a
+    multi-slot piece with ``feet`` stays clothing), else ``"clothing"``;
+    None for anything else."""
     if not isinstance(item, dict):
         return None
     category = item.get("category")
     if category == "garment":
         kind = str((item.get("garment") or {}).get("kind") or "")
         return HAIR if kind == HAIR else None
-    piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
-    if category == "outfit_piece" and piece.get("own_mesh") is True:
-        slots = piece.get("slots") if isinstance(piece.get("slots"), (list, tuple)) else []
-        return FOOTWEAR if {str(s) for s in slots} == {FOOTWEAR_SLOT} else CLOTHING
+    if mesh_mode_of(item) == OWN_MESH:
+        return FOOTWEAR if set(_slots_of(_piece_of(item))) == {FOOTWEAR_SLOT} else CLOTHING
     return None
 
 
@@ -367,7 +415,7 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
     own-mesh piece the character holds or wears (``held_clothing``; a worn
     piece over others names them, ``worn_layers``), ``overlaps`` the worn
     ones whose layer order is a guess (``mesh_overlaps``: a cycle, put in
-    slot rank order; [] off the pipeline, where the flag is ignored),
+    slot rank order; [] off the pipeline, where the mode is ignored),
     ``queue_running`` / ``queue`` the character's garment queue
     (``garments.queue_state``: the item id in flight, the waiting ones)."""
     from app.core import base_body, body_slots, garments

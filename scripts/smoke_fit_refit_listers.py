@@ -19,7 +19,8 @@ any call, ``model_refs.trigger_now`` / ``schedule_outfit_render`` and
 ``garment_assembly.schedule`` are recorders, ``refine.decimate_to`` a copy.
 For the stale posture body: a stored body ``model3d/ob12345678.glb`` with a
 sidecar that has no posture record (``stale_reason`` "missing"), the
-character in mesh mode; ``match_posture`` / ``refit_body`` /
+character in mesh mode (it wears a coat in mode in_body — interim rule of plan
+2026-11-12-unified-worn-pieces Task 2); ``match_posture`` / ``refit_body`` /
 ``rebuild_worn_on`` are recorders, the first writing the posture record.
 
 Derived by hand from the listers' rules (versions read from the constants,
@@ -106,7 +107,7 @@ def main() -> int:
         from app.core import outfit_body_posture as posture
         from app.imagegen import service
         from app.models import inventory
-        from app.models.character import get_character_dir, get_character_profile, save_character_profile
+        from app.models.character import get_character_dir, save_character_profile
 
         SERVICE = []
 
@@ -131,7 +132,7 @@ def main() -> int:
 
         heels = inventory.add_item(name="Heels", category="outfit_piece", item_id="heels",
                                    prompt_fragment="black heels",
-                                   outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "own_mesh": True})["id"]
+                                   outfit_piece={"slots": ["feet"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         folder = inventory._get_item_dir(heels, create=True)
         (folder / "image.png").write_bytes(png_bytes((20, 20, 20)))
         check("heels image", inventory.set_item_image(heels, "image.png"), True)
@@ -193,9 +194,13 @@ def main() -> int:
         body_path.write_bytes(base_glb)
         model3d._publish_sidecar(body_path, {"rig": "mixamo", "outfit_body": parent, "signature": bid})
         check("retexture mode: nothing", outfit_bodies.stale_posture_bodies("Demo"), [])
-        profile = get_character_profile("Demo")
-        profile["outfit_body_mode"] = base_body.MESH_MODE
-        check("mesh mode on", save_character_profile("Demo", profile), True)
+        # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
+        coat = inventory.add_item(name="Coat", category="outfit_piece", item_id="coat", prompt_fragment="a coat",
+                                  outfit_piece={"slots": ["outer"], "outfit_types": ["casual"],
+                                                "mesh_mode": "in_body"})["id"]
+        check("Demo holds the coat", inventory.add_to_inventory("Demo", coat), True)
+        check("mesh mode on: coat worn", inventory.equip_piece("Demo", coat, source="smoke")["status"], "ok")
+        check("mesh mode", base_body.outfit_body_mode("Demo"), base_body.MESH_MODE)
         check("the stored body is stale (missing)", posture.is_stale("Demo", bid), True)
         check("listed", outfit_bodies.stale_posture_bodies("Demo"), [bid])
         calls = []

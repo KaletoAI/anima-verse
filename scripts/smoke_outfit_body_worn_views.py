@@ -14,8 +14,9 @@ render_character_image`` is a recorder that writes a PNG + sidecar (one call = t
 ``base_body._dress_view`` a recorder that writes the dressed back (one call = draft + fit, two image jobs),
 ``base_body.prepare_outfit_body`` a recorder (one call = one mesh run).
 
-Fixture (character Demo: humanoid, pipeline on, outfit_body_mode mesh, side views off = the default). Items top
-{top} and skirt {bottom}, painted (no own-mesh flag), both WORN = outfit O1. Base views front/back of bsig, base
+Fixture (character Demo: humanoid, pipeline on, outfit body mode mesh, side views off = the default). Items top
+{top} and skirt {bottom}, in the body (mode in_body — the outfit body mode follows the worn pieces, interim rule of
+plan 2026-11-12-unified-worn-pieces Task 2), both WORN = outfit O1. Base views front/back of bsig, base
 model. NO dressed view of O1, no outfit model, no outfit body.
 
 Expected, by hand:
@@ -147,7 +148,7 @@ def main() -> int:
 
         char = "Demo"
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
-                 "character_appearance": "slender", "outfit_body_mode": "mesh"}
+                 "character_appearance": "slender"}
         assert save_character_profile(char, human, create_new=True)
         png(get_character_images_dir(char) / f"{char}_1.png", (200, 180, 160))
         prof = get_character_profile(char)
@@ -155,7 +156,7 @@ def main() -> int:
         assert save_character_profile(char, prof)
         assert base_body.set_pipeline(char, True)
         for key, slots in (("top", ["top"]), ("skirt", ["bottom"])):
-            op = {"slots": slots, "covers": [], "outfit_types": ["casual"]}
+            op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "mesh_mode": "in_body"}
             inventory.add_item(name=key.title(), category="outfit_piece", item_id=key,
                                prompt_fragment=f"a plain {key}", outfit_piece=op)
             inventory.add_to_inventory(char, key)

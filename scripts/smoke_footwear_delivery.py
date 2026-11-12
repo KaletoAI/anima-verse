@@ -16,10 +16,12 @@ the test sets, default ok), ``garment_assembly.schedule`` and
 (no-op). Every expectation is derived by hand below from the spec.
 
 Fixture: ``Kira`` (human-roleplay, female, 168 cm, on the base-body pipeline,
-retexture mode by default). Items: ``heels`` (slots [feet], own_mesh true,
-prompt "plain heels", item image = 64 fixed bytes), ``dress`` ([top], own_mesh
-true, "plain dress"), ``skirt`` ([bottom], no flag, "plain skirt"). Kira holds
-and wears all three. Base model model3d/<bsig>.glb = b"model-2", SHA = its
+retexture mode by default). Items: ``heels`` (slots [feet], mode own_mesh,
+prompt "plain heels", item image = 64 fixed bytes), ``dress`` ([top], own_mesh,
+"plain dress"), ``skirt`` ([bottom], painted, "plain skirt"). Kira holds
+and wears all three. The outfit body mode follows the worn pieces (interim
+rule of plan 2026-11-12-unified-worn-pieces Task 2): "mesh mode" below = the
+skirt switched to mode in_body, "retexture mode" = the skirt painted. Base model model3d/<bsig>.glb = b"model-2", SHA = its
 sha256. Fits are written by hand: an accepted record of the item's CURRENT
 fsig on SHA (dress: kind clothing, fit_version FIT_VERSION["clothing"]; heels:
 kind footwear, method shoe, fit_version 9).
@@ -55,7 +57,7 @@ P(x) = MESH_ITEM_PAINTED.format(...), NMF = NO_MESH_FIT.
      R(heels, NMF)] (1 painted + 1 not-ready); mesh_items_ready == [] (no
      dress fit). Switched to mesh mode the same record is off-rule [dress]
      (painted belongs unpainted there), never [heels].
-[D4] Mesh mode (profile outfit_body_mode "mesh"), dress fitted, heels not:
+[D4] Mesh mode (the skirt in the body), dress fitted, heels not:
      resolve == {intended [dress, heels], effective [dress], warnings
      [R(heels, NMF)], mode "mesh", unpainted [dress, heels], missing {heels:
      NMF}} — unchanged from the ruling of 2026-11-10 (smoke_garment_outfit.py
@@ -64,10 +66,10 @@ P(x) = MESH_ITEM_PAINTED.format(...), NMF = NO_MESH_FIT.
      retexture, unpainted [dress, heels], missing {heels: NMF}}; the [D3]
      record is now mesh_items_ready == [dress] (MESH_ITEM_READY) and
      off_rule == [] (the dress has its fit; the heels are not painted in it).
-[D5] Flag off (Review Focus 4): heels own_mesh False -> garment_kind_of None,
+[D5] Own mesh off (Review Focus 4): heels painted -> garment_kind_of None,
      resolve_mesh_items({feet: heels, bottom: skirt}) == {} (not intended),
      mesh_items_token == "" and dress_text names the heels ("plain heels" in:
-     an ordinary painted piece). Flag back on afterwards.
+     an ordinary painted piece). Own mesh again afterwards.
 [D6] after_mesh_item_ready for footwear in retexture mode. The current
      outfit model model3d/<sig>.glb (sig = current_outfit_state(Kira)[2])
      with a sidecar whose mesh_items left the heels out ({intended [dress,
@@ -144,7 +146,7 @@ def main() -> int:
         from app.core import base_body, garment_assembly, garment_fit, garment_set, garments, model_refs
         from app.core import garment_store as gs
         from app.models import inventory
-        from app.models.character import get_character_dir, get_character_profile, save_character_profile
+        from app.models.character import get_character_dir, save_character_profile
 
         model_refs.schedule_outfit_render = lambda *a, **k: None
         SCHEDULED, TRIGGERED, QUEUED = [], [], []
@@ -165,8 +167,7 @@ def main() -> int:
 
         def piece(name, slots, own_mesh=None):
             op = {"slots": slots, "outfit_types": ["casual"]}
-            if own_mesh is not None:
-                op["own_mesh"] = own_mesh
+            op["mesh_mode"] = "own_mesh" if own_mesh else "painted"
             return inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"plain {name.lower()}",
                                       outfit_piece=op)["id"]
 
@@ -181,14 +182,17 @@ def main() -> int:
             check(f"Kira wears {item}", inventory.equip_piece("Kira", item, source="smoke")["status"], "ok")
 
         def set_mode(mode):
-            profile = get_character_profile("Kira")
-            profile["outfit_body_mode"] = mode
-            check(f"mode {mode}", save_character_profile("Kira", profile), True)
+            """Interim rule (plan 2026-11-12-unified-worn-pieces Task 2): the outfit body mode follows the worn
+            pieces — the painted skirt goes in the body for mesh mode, back to painted for retexture."""
+            op = dict(inventory.get_item(skirt)["outfit_piece"])
+            op["mesh_mode"] = "in_body" if mode == MESH else "painted"
+            inventory.update_item(skirt, {"outfit_piece": op})
+            check(f"mode {mode}", base_body.outfit_body_mode("Kira"), mode)
 
         def flag(item_id, on):
             item = inventory.get_item(item_id)
             op = dict(item.get("outfit_piece") or {})
-            op["own_mesh"] = on
+            op["mesh_mode"] = "own_mesh" if on else "painted"
             inventory.update_item(item_id, {"outfit_piece": op})
 
         bsig = base_body.base_signature("Kira")

@@ -193,7 +193,7 @@ def main() -> int:
         hid = inventory.add_item(name="Dress", category="outfit_piece", owner="Demo", item_id="dress",
                                  prompt_fragment="a green dress",
                                  outfit_piece={"slots": ["top", "bottom"], "outfit_types": ["casual"],
-                                               "own_mesh": True})["id"]
+                                               "mesh_mode": "own_mesh"})["id"]
         inventory.add_to_inventory("Demo", hid)
         check("dress worn", inventory.equip_piece("Demo", hid, source="smoke").get("status"), "ok")
         cdir = get_character_dir("Demo")

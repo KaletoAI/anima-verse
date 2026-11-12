@@ -123,7 +123,7 @@ def hem_applicable(character_name: str, *, profile: Optional[Dict[str, Any]] = N
     character wears NOW — the feet piece with a boot fit on the current base model and the own-mesh ``bottom``
     piece with an accepted, non-skirt fit there. ``mode`` is the stored choice (``boot_hem``) either way."""
     from app.core import base_body, garment_store
-    from app.core.garment_set import FOOTWEAR_SLOT
+    from app.core.garment_set import FOOTWEAR_SLOT, OWN_MESH, mesh_mode_of
     from app.models.inventory import get_item
     if profile is None:
         from app.models.character import get_character_profile
@@ -141,9 +141,7 @@ def hem_applicable(character_name: str, *, profile: Optional[Dict[str, Any]] = N
     def own_mesh_fit(item_id: str) -> Optional[Dict[str, Any]]:
         if not item_id:
             return None
-        item = get_item(item_id) or {}
-        piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
-        if not piece.get("own_mesh"):
+        if mesh_mode_of(get_item(item_id)) != OWN_MESH:
             return None
         try:
             fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
