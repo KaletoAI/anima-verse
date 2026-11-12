@@ -2,7 +2,7 @@
  * WardrobeGarment — own-mesh outfit pieces in the Wardrobe (plan
  * docs/superpowers/plans/2026-11-09-base-body-phase5-mesh-items.md, Task 5).
  *
- * A piece with the item flag `outfit_piece.own_mesh` becomes a fitted 3D
+ * A piece in mode `own_mesh` (`outfit_piece.mesh_mode`) becomes a fitted 3D
  * mesh of its own on characters of the base-body pipeline instead of being
  * painted onto the body; the flag lives on the ITEM, so the toggle applies
  * to every wearer (2D images stay unchanged). Per row: the toggle, the
@@ -180,7 +180,7 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
 }
 
 /** The item flag. The PUT replaces the whole outfit_piece, so the stored
- *  one is read first and only `own_mesh` changes. */
+ *  one is read first and only `mesh_mode` changes (off = painted). */
 export function OwnMeshToggle({ itemId, checked, disabled, feet = false, onChanged }: {
   itemId: string
   checked: boolean
@@ -198,7 +198,7 @@ export function OwnMeshToggle({ itemId, checked, disabled, feet = false, onChang
     try {
       const url = `/inventory/items/${encodeURIComponent(itemId)}`
       const { item } = await apiGet<{ item: { outfit_piece?: Record<string, unknown> } }>(url)
-      await apiPut(url, { outfit_piece: { ...(item.outfit_piece || {}), own_mesh: own } })
+      await apiPut(url, { outfit_piece: { ...(item.outfit_piece || {}), mesh_mode: own ? 'own_mesh' : 'painted' } })
       onChanged()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')

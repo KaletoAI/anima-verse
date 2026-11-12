@@ -495,7 +495,7 @@ export interface GarmentItemInfo {
   item_id: string
   name: string
   kind: string
-  own_mesh: boolean
+  mesh_mode: string
   worn: boolean
   status: PieceStatus
   garment: GarmentInfo | null

@@ -19,8 +19,8 @@ export interface OutfitPieceMeta {
   covers?: string[]
   motion_damping?: number
   partially_covers?: string[]
-  // Own fitted 3D mesh on base-body characters (every wearer); never a 2D key.
-  own_mesh?: boolean
+  // How the piece reaches the 3D figure: own_mesh / painted / in_body (absent = the kind default).
+  mesh_mode?: string
   exposed_detail?: boolean
   // How much the piece carries the body under it in 3D (0..1); absent = the
   // slot default a package declares.
@@ -104,7 +104,8 @@ export interface DraftItem {
   covers: string[]
   motion_damping: number
   partially_covers: string[]
-  own_mesh: boolean
+  /** '' = not stored yet (the server picks the kind default). */
+  mesh_mode: string
   exposed_detail: boolean
   lift: number | null
   effects: string
@@ -243,7 +244,7 @@ export const EMPTY_DRAFT: DraftItem = {
   covers: [],
   motion_damping: 1,
   partially_covers: [],
-  own_mesh: false,
+  mesh_mode: '',
   exposed_detail: false,
   lift: null,
   effects: '',
@@ -284,7 +285,7 @@ export function itemToDraft(it: Item): DraftItem {
     covers: [...(op.covers || [])],
     motion_damping: op.motion_damping ?? 1,
     partially_covers: [...(op.partially_covers || [])],
-    own_mesh: op.own_mesh === true,
+    mesh_mode: typeof op.mesh_mode === 'string' ? op.mesh_mode : '',
     exposed_detail: op.exposed_detail === true,
     lift: typeof op.lift === 'number' ? op.lift : null,
     effects: effectsToText(it.effects),
@@ -326,7 +327,7 @@ export function draftToBody(d: DraftItem): Record<string, unknown> {
       covers: d.covers,
       motion_damping: d.motion_damping,
       partially_covers: d.partially_covers,
-      own_mesh: d.own_mesh,
+      ...(d.mesh_mode ? { mesh_mode: d.mesh_mode } : {}),
       exposed_detail: d.exposed_detail,
       // null resets the piece to the slot default.
       lift: d.lift,
