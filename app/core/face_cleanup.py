@@ -17,7 +17,7 @@ Two defects of the image-to-mesh step, both inherited from what the image model 
    ``INSET_MM`` under the lid along the lid normal, assigned by a breadth-first walk from the root ring so a
    flap never tears across the eye. The flap's triangles end with no area (or sub-millimetre, under the skin);
    the eyeball, the lids, the sockets and the brow keep their exact bytes, because only the flap set moves.
-   Topology, UVs, normals and the texture stay byte-identical.
+   Topology, UVs and the texture stay byte-identical (normals: see 3).
 
 2. MOUTH — crimson lips in the raw texture. The mesher paints the mouth far more saturated than every input
    image (lips/skin HSV saturation ratio 1.64 against 1.17-1.24 in the photos and renders). The face retexture
@@ -26,6 +26,29 @@ Two defects of the image-to-mesh step, both inherited from what the image model 
    ``LIP_SATURATION_RATIO`` times the skin's, luminance ``LIP_LUMINANCE_RATIO`` of the skin's, a fixed natural
    lip chroma direction) under a soft-edged mask; the texture detail inside the lips is kept at reduced
    contrast. UVs and geometry are untouched; only the base-colour image bytes change.
+
+3. EYE AND MOUTH GEOMETRY after the fold (version 4, user request 2026-11-12): hollow pockets and spikes. Some
+   meshers leave the eye opening (and on Kai the mouth) as a pit the front looks into — Glut, Kai, Kira and
+   Lirien's raw meshes hold 15-214 mm^2 of visible surface more than ``POCKET_MM`` (3.5 mm) below the surface the
+   ring around it spans — and single nodes that stand out of their neighbourhood. ``_smooth_face`` works per region
+   (both eye regions of the fold, the mouth region of ``_mouth_region``) on the VISIBLE outer surface only: a
+   height map cast along the region's view normal (``_DepthMap``) decides what the front sees, so the inner shells
+   UniForge meshes carry under the skin are never pulled onto it. A pocket — a depression of the height map deeper
+   than ``POCKET_MM`` below the harmonic membrane its ring spans, and enclosed by the region — is closed by lifting
+   its visible vertices along the view normal onto the membrane of the pocket's own ring; the eyeball (Lirien's
+   2.2 mm under the lid, a convex cap) stays shallower than ``POCKET_MM`` and keeps its bytes. A spike — a node whose
+   dihedral exceeds ``SPIKE_DEG`` or whose umbrella curvature exceeds ``SPIKE_RATIO`` of its edge length on visible
+   triangles (the fold's own collapsed triangles excluded) — is smoothed by Taubin's volume-preserving filter, that
+   node alone, in ``SMOOTH_ROUNDS`` detect/smooth rounds. Every shift is clamped to ``MOVE_CAP_SEPARATION`` of the
+   eye separation; vertices outside the regions, the fold's own vertices and the brow/nose bands are never smoothed.
+   Only POSITION and the NORMAL of vertices around moved triangles change (recomputed area-weighted over welded
+   nodes, as the mesher stores them); vertex count and order, indices, UVs, materials and the texture stay as they
+   are. The record (``record["smooth"]``) carries moved vertices, displacement max/p95, spikes and pocket area /
+   vertices before and after, per region and in total — the Figure tab's model info and the overview row show it.
+   Not reached (2026-11-12, reported with the evidence sheets): the shards the FOLD itself leaves (its flap
+   triangles spanning anchor positions — raw meshes 2-14 nodes over 120 degrees per eye, after the fold 28-80) stay,
+   because the fold's vertices are fixed here; and holes deeper than the cap (Lirien, Kira 5c5f: openings through to
+   an inner shell 33-38 mm deep) are counted (``beyond_cap_vertices``), not closed.
 
 Where in the chain: ``model3d._store_unrigged_model`` runs ``clean_face`` on the validated mesher result before
 it is published as ``unrigged/<signature>.glb`` — the file the face retexture is frozen from, the rig reads and
@@ -50,7 +73,10 @@ proportional to the figure, never to the file's unit.
 Numbers gate (``smoke_face_cleanup.py``, hand-derived on a synthetic head): after the cleanup no vertex the eye
 step moved stands above the lid it was folded onto (its height against the lid refitted on the result is at most
 ``EYE_LIMIT_MM`` = 1.0 mm — the inset puts it below), vertices the step did not move keep their exact bytes, and the
-lips/skin saturation ratio ends at most ``LIP_RATIO_LIMIT`` (1.3) when the mouth was corrected.
+lips/skin saturation ratio ends at most ``LIP_RATIO_LIMIT`` (1.3) when the mouth was corrected. Version 4's gate
+(``smoke_face_cleanup_smooth.py``): a pocket behind the lid ring is lifted onto the ring's membrane, a single-node
+dent on the lid ring is smoothed (Taubin, 3 mm -> 0.21 mm), a convex eyeball cap keeps its exact bytes, everything
+outside the regions keeps POSITION and NORMAL bytes, vertex order and UVs are unchanged.
 """
 from __future__ import annotations
 
@@ -61,10 +87,11 @@ import numpy as np
 
 from app.core.timeutils import utc_now_iso
 
-# 1 pressed the flaps back, 2 folds them onto their root, 3 locates the eyes in the face's frame (haired heads). A
-# source cleaned at an older version may be re-applied ("Re-apply face cleanup"); nothing re-runs on its own — a
-# skipped cleanup runs again with the next mesher result anyway (every base build cleans its fresh mesh).
-VERSION = 3
+# 1 pressed the flaps back, 2 folds them onto their root, 3 locates the eyes in the face's frame (haired heads), 4 closes
+# the eye/mouth pockets and smooths the spikes after the fold. A source cleaned at an older version may be re-applied
+# ("Re-apply face cleanup", or the improvement "Re-run face cleanup"); nothing re-runs on its own — a skipped cleanup
+# runs again with the next mesher result anyway (every base build cleans its fresh mesh).
+VERSION = 4
 REFERENCE_HEIGHT_MM = 1700.0
 
 # Eyes.
@@ -123,6 +150,34 @@ ANCHOR_DEPTH_MM = 1.0           # an anchor lies at lid height: at most EYE_FREE
                                 # (Lirien's left visor: its only lid contact were 5 occluded nodes at 0.0-0.3 mm); the
                                 # eyeball under the visor (1.2-2.2 mm deep), the rim of the eye opening and the inner
                                 # wall of the double-walled shell lie deeper and never anchor
+
+# Smoothing and pockets (version 4, ``_smooth_face``). Measured 2026-11-12 on six raw mesher results (Kira x3, Kai,
+# Lirien, Glut; read-only copies) after the version-3 fold, scripts in the face-cleanup-smooth report.
+SMOOTH_CELL_MM = 1.0            # the visible-surface height map (as FIT_CELL_MM)
+DEPRESSION_CLOSE_MM = 5.0       # a pit narrower than this disc's diameter is a depression (eye slits 2-8 mm tall, the
+                                # crease around the eyeball 1-3 mm wide)
+DEPRESSION_MM = 0.5             # ... raised by the closing by more than this
+POCKET_MM = 3.5                 # a pocket: this far below the membrane its ring spans. The eyeball is a convex cap above
+                                # it: Lirien's sits 2.2 mm below the lid; the lit iris/sclera cells of Kira 20d5 lie
+                                # -0.1..2.9 mm (p10..p90) below the membrane — 0.6 mm margin over that p90
+SPIKE_DEG = 120.0               # a fold: a dihedral angle above this. Smooth face skin (forehead + cheeks, 6 meshes): p99
+                                # 23-105 degrees; the raw eye regions p95 85-111 with 2-14 nodes above 120; after the
+                                # version-3 fold 28-80 nodes per eye above 120 — its shards and turned slivers
+SPIKE_RATIO = 0.75              # a cone: umbrella curvature over the ring's edge length above this. Smooth skin max 0.43,
+                                # the raw eye regions max 0.69 (lid margins); a vertex pulled 4 mm out of a 2 mm ring: 2.1
+DEGENERATE_MM = 0.05            # a triangle under this squared edge scale has no normal (the fold's collapsed ones)
+TAUBIN_LAMBDA = 0.5             # Taubin's lambda/mu filter (pass band k = 1/lambda + 1/mu = 0.11): a single-node spike
+TAUBIN_MU = -0.53               # keeps (1 - 0.5)(1 + 0.53) = 0.765 of its height per pass ...
+TAUBIN_PASSES = 10              # ... 0.765^10 = 0.07 after all passes, the volume of a smooth surface stays
+SMOOTH_ROUNDS = 3               # detect -> smooth rounds (a shard's neighbour may stand out only once the shard is gone)
+MOVE_CAP_SEPARATION = 0.15      # the per-vertex displacement cap of step 3: this share of the eye separation (lash-paint
+                                # centres 71-100 mm -> 10.7-15.0 mm). An eye pocket is never deeper than half an eyeball
+                                # (~12 mm); a deeper visible floor is a hole into the head shell (Kira 5c5f: 33 mm)
+MOUTH_DROP_MM = 74.0            # the mouth's centre under the eye line when the lip paint does not locate it (measured:
+                                # Glut 72.7, Kai 70.9, Kira 72.7, Lirien 78.0 mm)
+MOUTH_HALF_WIDTH_MM = 30.0      # the mouth region: lips 18-70 mm wide (LIP_WIDTH_MM) ...
+MOUTH_HALF_HEIGHT_MM = 16.0     # ... the lips and the opening between them, not the nostrils (~25 mm above the centre)
+MOUTH_DEPTH_WINDOW_MM = 20.0
 
 # Mouth.
 LIP_SATURATION_FACTOR = 1.3     # a lip texel: saturation above this multiple of the skin's ...
@@ -523,11 +578,14 @@ def _fold_flaps(adjacency, proud: np.ndarray, anchor: np.ndarray, Q: np.ndarray)
     return target, records
 
 
-def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray, mm: float) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
-    """Returns ``(positions, moved mask, record)``; ``positions`` is ``P`` itself when nothing changed."""
+def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray,
+                mm: float) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any], np.ndarray]:
+    """Returns ``(positions, moved mask, record, protected mask)``; ``positions`` is ``P`` itself when nothing
+    changed; the protected mask marks the region vertices inside a fit's brow/nose band (step 3 keeps them too)."""
     eyes, reason, frame = _locate_eyes(P, lum, mm)
+    protect_all = np.zeros(len(P), bool)
     if eyes is None:
-        return P, np.zeros(len(P), bool), {"status": "skipped", "reason": reason, "limit_mm": EYE_LIMIT_MM}
+        return P, np.zeros(len(P), bool), {"status": "skipped", "reason": reason, "limit_mm": EYE_LIMIT_MM}, protect_all
     head, front = frame["head"], frame["front"]
     dark = lum < DARK_LUMINANCE
     out = P.copy()
@@ -552,6 +610,7 @@ def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray, mm: float) -> Tup
         h = fit.height(P[idx]) / mm
         outer = fit.outer(P, P[idx], mm)
         protect = fit.protected(P[idx]) > 0.5
+        protect_all[idx[protect]] = True
         record["protected_vertices"] = int(protect.sum())
         record["brow_from_mm"] = round(float(fit.brow_from / mm), 1)
         record["outer_vertices"] = int(outer.sum())
@@ -622,7 +681,7 @@ def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray, mm: float) -> Tup
               "eyes": records}
     if status == "skipped":
         record["reason"] = "; ".join(r.get("reason", "") for r in records if r.get("reason"))
-    return (out if moved_all.any() else P), moved_all, record
+    return (out if moved_all.any() else P), moved_all, record, protect_all
 
 
 # --- mouth ------------------------------------------------------------------------------------------------------------
@@ -788,6 +847,410 @@ def _neutralise_mouth(texture: np.ndarray, U: np.ndarray, F: np.ndarray, P: np.n
     return result, record
 
 
+# --- smoothing and pockets (version 4) ----------------------------------------------------------------------------------
+
+def _frame(centre: np.ndarray, head_centre: np.ndarray, front: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(normal, t1, t2)`` of a face region: the normal radial from the head centre (half of the sideways part, as
+    ``_LidSurface``), the tangents from world up."""
+    normal = np.array([0.5 * (centre[0] - head_centre[0]), 0.0, front * max(abs(centre[2] - head_centre[2]), 1e-6)])
+    normal = normal / np.linalg.norm(normal)
+    t1 = np.cross(np.array([0.0, 1.0, 0.0]), normal)
+    t1 = t1 / np.linalg.norm(t1)
+    return normal, t1, np.cross(normal, t1)
+
+
+class _DepthMap:
+    """The VISIBLE surface over one face region as a height field: on a SMOOTH_CELL_MM grid in the region's plane a
+    ray from outside measures the height (along the normal) of the first triangle it meets — what the face projection
+    paints. ``ellipse`` marks the cells of the region itself; the grid reaches DEPRESSION_CLOSE_MM + 2 cells beyond
+    it so the closing sees the ring around the region's edge."""
+
+    def __init__(self, P: np.ndarray, F: np.ndarray, centre: np.ndarray, normal: np.ndarray, t1: np.ndarray,
+                 t2: np.ndarray, half_a: float, half_b: float, mm: float):
+        self.origin, self.normal, self.t1, self.t2, self.mm = centre, normal, t1, t2, mm
+        self.cell = SMOOTH_CELL_MM * mm
+        margin = (DEPRESSION_CLOSE_MM + 2 * SMOOTH_CELL_MM) * mm
+        self.a0, self.b0 = -(half_a + margin), -(half_b + margin)
+        na = int(np.ceil(2 * (half_a + margin) / self.cell)) + 1
+        nb = int(np.ceil(2 * (half_b + margin) / self.cell)) + 1
+        self.ga, self.gb = np.meshgrid(self.a0 + np.arange(na) * self.cell, self.b0 + np.arange(nb) * self.cell, indexing="ij")
+        self.ellipse = (self.ga / half_a) ** 2 + (self.gb / half_b) ** 2 < 1.0
+        self.F = F
+        self.half = (half_a + margin, half_b + margin)
+
+    def local(self, Q: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        R = Q - self.origin
+        return R @ self.t1, R @ self.t2, R @ self.normal
+
+    def measure(self, P: np.ndarray) -> np.ndarray:
+        """The height map (mesh units; NaN where a ray meets nothing). Only triangles whose footprint overlaps the
+        grid and that lie within 2 * RAY_START_MM of the centre can be met first."""
+        a, b, _h = self.local(P)
+        fa, fb = a[self.F], b[self.F]
+        near = ((fa.max(1) >= -self.half[0]) & (fa.min(1) <= self.half[0]) & (fb.max(1) >= -self.half[1])
+                & (fb.min(1) <= self.half[1])
+                & (np.linalg.norm(P[self.F[:, 0]] - self.origin, axis=1) < 2 * RAY_START_MM * self.mm))
+        plane = np.stack([self.ga.reshape(-1), self.gb.reshape(-1)], 1)
+        return _ray_heights(self.origin, self.t1, self.t2, self.normal, plane, P, self.F[near],
+                            RAY_START_MM * self.mm).reshape(self.ga.shape)
+
+    def sample(self, field: np.ndarray, a: np.ndarray, b: np.ndarray, order: int = 1) -> np.ndarray:
+        from scipy import ndimage
+        coords = np.stack([(a - self.a0) / self.cell, (b - self.b0) / self.cell])
+        return ndimage.map_coordinates(field, coords, order=order, mode="nearest")
+
+
+def _harmonic_fill(field: np.ndarray, fill: np.ndarray) -> np.ndarray:
+    """``field`` with the cells of ``fill`` replaced by the membrane spanned by the cells around them: the discrete
+    harmonic surface (5-point Laplacian = 0 inside, every cell outside ``fill`` a fixed boundary value, the grid's own
+    edge free). Solved directly — deterministic, no iteration count. Every component of ``fill`` must touch a cell
+    outside it (callers fill only cells inside the region ellipse, which the grid surrounds)."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.linalg import spsolve
+    out = field.copy()
+    idx = np.flatnonzero(fill.ravel())
+    if not len(idx):
+        return out
+    shape = field.shape
+    flat = field.ravel()
+    pos = np.full(field.size, -1)
+    pos[idx] = np.arange(len(idx))
+    ia, ib = np.unravel_index(idx, shape)
+    rows, cols, vals = [], [], []
+    rhs = np.zeros(len(idx))
+    degree = np.zeros(len(idx))
+    for da, db in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        ja, jb = ia + da, ib + db
+        k = np.flatnonzero((ja >= 0) & (ja < shape[0]) & (jb >= 0) & (jb < shape[1]))
+        j = np.ravel_multi_index((ja[k], jb[k]), shape)
+        degree[k] += 1
+        unknown = pos[j] >= 0
+        rows.append(k[unknown])
+        cols.append(pos[j[unknown]])
+        vals.append(-np.ones(int(unknown.sum())))
+        np.add.at(rhs, k[~unknown], flat[j[~unknown]])
+    rows.append(np.arange(len(idx)))
+    cols.append(np.arange(len(idx)))
+    vals.append(degree)
+    matrix = coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))),
+                        shape=(len(idx), len(idx))).tocsc()
+    out.ravel()[idx] = spsolve(matrix, rhs)
+    return out
+
+
+def _unseen(depth: np.ndarray) -> np.ndarray:
+    """A height map for the visibility test: a cell no ray met hides every vertex (an endless height in front)."""
+    return np.where(np.isfinite(depth), depth, 1e9)
+
+
+def _disc(radius: int) -> np.ndarray:
+    y, x = np.mgrid[-radius:radius + 1, -radius:radius + 1]
+    return (x * x + y * y) <= radius * radius
+
+
+def _pockets(depth_mm: np.ndarray, ellipse: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """``(pocket cells, membrane, target)`` of a height map in mm (NaN = nothing met).
+
+    The DEPRESSIONS are the cells a grey closing with a disc of DEPRESSION_CLOSE_MM raises by more than
+    DEPRESSION_MM — every pit, crease or opening narrower than the disc, whatever its depth. The MEMBRANE is spanned
+    over each depression by the ring around it (``_harmonic_fill``): the lid or lip surface that would close it. A
+    POCKET is a depression cell more than POCKET_MM below that membrane, in a component the region encloses (one
+    touching the region's edge has no ring: the temple's fall-off, an ear, hair). The eyeball is a convex cap at most
+    ~3 mm below the membrane (Lirien 2.2 mm below the lid; Kira's lit iris cells: p90 2.7-2.9 mm) and never a pocket.
+    The TARGET of a pocket is the membrane spanned by the pocket's OWN ring — lid, eyeball or lip around it, so a
+    crevice beside the eyeball closes onto the slope between lid and eyeball, an empty socket onto the lid itself."""
+    from scipy import ndimage
+    finite = np.isfinite(depth_mm)
+    if not finite.any():
+        empty = np.zeros_like(ellipse)
+        return empty, depth_mm, depth_mm
+    # A ray that met nothing went through a hole: as deep as the deepest cell met.
+    D = np.where(finite, depth_mm, np.nanmin(depth_mm))
+    closed = ndimage.grey_closing(D, footprint=_disc(int(round(DEPRESSION_CLOSE_MM / SMOOTH_CELL_MM))))
+    depression = ((closed - D) > DEPRESSION_MM) & ellipse
+    membrane = _harmonic_fill(D, depression)
+    pocket = depression & ((membrane - D) > POCKET_MM)
+    if pocket.any():
+        labels, _count = ndimage.label(pocket, structure=np.ones((3, 3), bool))
+        open_ = np.unique(labels[ndimage.binary_dilation(~ellipse) & pocket])
+        pocket &= ~np.isin(labels, open_[open_ > 0])
+    target = np.maximum(_harmonic_fill(D, pocket), D)
+    return pocket, membrane, target
+
+
+def _node_graph(node: np.ndarray, F: np.ndarray, faces: np.ndarray):
+    """The symmetric node adjacency (CSR, 0/1) of the triangles ``faces`` (indices into ``F``), on welded nodes."""
+    from scipy.sparse import coo_matrix
+    G = node[F[faces]]
+    n = int(node.max()) + 1
+    i = np.concatenate([G[:, 0], G[:, 1], G[:, 2], G[:, 1], G[:, 2], G[:, 0]])
+    j = np.concatenate([G[:, 1], G[:, 2], G[:, 0], G[:, 0], G[:, 1], G[:, 2]])
+    keep = i != j
+    graph = coo_matrix((np.ones(int(keep.sum())), (i[keep], j[keep])), shape=(n, n)).tocsr()
+    graph.data[:] = 1.0
+    return graph
+
+
+def _spikes(Q: np.ndarray, node: np.ndarray, F: np.ndarray, faces: np.ndarray, graph, mm: float) -> np.ndarray:
+    """Per welded node (positions ``Q``): True where it STANDS OUT of the visible surface ``faces``:
+
+    - a FOLD: the largest dihedral angle (between the normals of the two triangles on an edge, manifold edges of
+      non-degenerate triangles only) above SPIKE_DEG — a shard, a turned sliver, a flap edge folded over;
+    - a CONE: the umbrella curvature |x - mean(ring)| along the node normal, over the mean ring edge length, above
+      SPIKE_RATIO — a single vertex pulled out of its ring."""
+    G = node[F[faces]]
+    n = len(Q)
+    out = np.zeros(n, bool)
+    if not len(G):
+        return out
+    normals = np.cross(Q[G[:, 1]] - Q[G[:, 0]], Q[G[:, 2]] - Q[G[:, 0]])
+    area = np.linalg.norm(normals, axis=1)
+    ok = (area > (DEGENERATE_MM * mm) ** 2) & (G[:, 0] != G[:, 1]) & (G[:, 1] != G[:, 2]) & (G[:, 0] != G[:, 2])
+    vertex_normal = np.zeros((n, 3))
+    for k in range(3):
+        np.add.at(vertex_normal, G[ok, k], normals[ok])
+    vertex_normal /= np.maximum(np.linalg.norm(vertex_normal, axis=1), 1e-30)[:, None]
+    G, unit = G[ok], normals[ok] / area[ok][:, None]
+    edges = np.sort(np.concatenate([G[:, [0, 1]], G[:, [1, 2]], G[:, [2, 0]]]), 1)
+    owner = np.tile(np.arange(len(G)), 3)
+    key = edges[:, 0].astype(np.int64) * n + edges[:, 1]
+    order = np.argsort(key, kind="stable")
+    key, owner, edges = key[order], owner[order], edges[order]
+    _unique, start, count = np.unique(key, return_index=True, return_counts=True)
+    pair = start[count == 2]
+    angle = np.degrees(np.arccos(np.clip((unit[owner[pair]] * unit[owner[pair + 1]]).sum(1), -1.0, 1.0)))
+    dihedral = np.zeros(n)
+    np.maximum.at(dihedral, edges[pair, 0], angle)
+    np.maximum.at(dihedral, edges[pair, 1], angle)
+    out |= dihedral > SPIKE_DEG
+    degree = np.asarray(graph.sum(1)).ravel()
+    has = degree > 0
+    mean = (graph @ Q) / np.maximum(degree, 1)[:, None]
+    coo = graph.tocoo()
+    edge_sum = np.bincount(coo.row, np.linalg.norm(Q[coo.row] - Q[coo.col], axis=1), n)
+    ring = edge_sum / np.maximum(degree, 1)
+    curvature = np.abs(((Q - mean) * vertex_normal).sum(1)) / np.maximum(ring, 1e-30)
+    out |= has & (curvature > SPIKE_RATIO)
+    return out
+
+
+def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np.ndarray, centre: np.ndarray,
+                   normal: np.ndarray, t1: np.ndarray, t2: np.ndarray, half_a: float, half_b: float, cap: float,
+                   fixed: np.ndarray, protect: np.ndarray, mm: float) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Close the pockets and smooth the spikes of one region. ``P_in``: the positions so far (after the fold);
+    ``region``: the vertices this step may move; ``node``: welded nodes (of the mesher's positions); ``fixed``: per
+    vertex, never moved here (the fold's own vertices, folded under the skin on purpose); ``protect``: never smoothed
+    (the brow/nose bands of the eye fit — a pocket there is still closed: lifting carves nothing); ``cap``: the
+    largest displacement of a vertex (mesh units). Returns ``(positions, record)``; only region vertices change.
+
+    1. POCKETS (``_pockets`` on the visible height map): a visible region vertex inside a pocket cell rises along the
+       normal onto the pocket's target, when that lift stays within ``cap`` (deeper: a hole through the head, left
+       as it is and counted). Visible = not behind the first surface the ray of its own cell meets (nearest cell:
+       a bilinear read beside a deep cell would call the rim's occluded underside visible). Only what the front
+       sees through the opening rises — an inner shell under the skin is never pulled onto it.
+    2. SPIKES (``_spikes`` on the visible surface after step 1 — triangles whose three vertices the rays see and
+       that hold no folded vertex): the
+       spike nodes alone are smoothed by Taubin's volume-preserving filter (TAUBIN_PASSES of lambda/mu steps of the
+       umbrella Laplacian over the visible surface; every other node holds still); the shift is clamped to ``cap``
+       counted from ``P_in`` together with step 1."""
+    out = P_in.copy()
+    idx = np.flatnonzero(region)
+    record: Dict[str, Any] = {"region_vertices": int(len(idx)), "cap_mm": round(float(cap / mm), 1)}
+    if len(idx) < EYE_MIN_VERTICES:
+        record.update(status="skipped", reason="the region holds too few vertices")
+        return out, record
+    depth = _DepthMap(P_in, F, centre, normal, t1, t2, half_a, half_b, mm)
+    before = depth.measure(P_in)
+    if int(np.isfinite(before[depth.ellipse]).sum()) < FIT_MIN_POINTS:
+        record.update(status="skipped", reason="the rays meet too little surface over the region")
+        return out, record
+    pocket, membrane, target = _pockets(before / mm, depth.ellipse)
+    a, b, h = depth.local(P_in[idx])
+    seen = depth.sample(_unseen(before), a, b, order=0) - h < OUTER_TOLERANCE_MM * mm
+    in_pocket = depth.sample(pocket.astype(np.float64), a, b, order=0) > 0.5
+    lift = depth.sample(target, a, b) * mm - h
+    want = seen & in_pocket & ~fixed[idx] & (lift > 0)
+    within = want & (lift <= cap)
+    out[idx[within]] += np.outer(lift[within], normal)
+    cell_area = SMOOTH_CELL_MM ** 2
+    record["pockets"] = {"before": {"area_mm2": round(float(pocket.sum() * cell_area), 1), "vertices": int((seen & in_pocket).sum())},
+                         "beyond_cap_vertices": int((want & ~within).sum()), "lifted_vertices": int(within.sum())}
+    # Spikes on the visible surface after the lift.
+    mid = depth.measure(out)
+    a, b, h = depth.local(out[idx])
+    visible = np.zeros(len(P_in), bool)
+    visible[idx] = depth.sample(_unseen(mid), a, b, order=0) - h < OUTER_TOLERANCE_MM * mm
+    # The fold's own triangles are collapsed under the skin by design (version 2): not part of the surface a spike
+    # is judged on, or every anchor would read as a fold against the slivers 0.6 mm beneath it.
+    faces = np.flatnonzero(visible[F].all(1) & ~fixed[F].any(1))
+    n_nodes = int(node.max()) + 1
+    graph = _node_graph(node, F, faces)
+    Q = np.zeros((n_nodes, 3))
+    Q[node] = out
+    spike = _spikes(Q, node, F, faces, graph, mm)
+    movable = np.zeros(n_nodes, bool)
+    movable[node[idx[~(fixed | protect)[idx]]]] = True
+    movable[node[fixed | protect]] = False
+    movable[node[~region]] = False
+    record["spikes"] = {"before": int(spike[np.unique(node[idx])].sum())}
+    start = np.zeros((n_nodes, 3))
+    start[node] = P_in
+    degree = np.maximum(np.asarray(graph.sum(1)).ravel(), 1)[:, None]
+    smoothed = np.zeros(n_nodes, bool)
+    # SMOOTH_ROUNDS of detect -> smooth: a shard whose neighbour stood out only against the shard itself is found
+    # in the next round; a node that no longer stands out is never touched again.
+    for _round in range(SMOOTH_ROUNDS):
+        smooth = spike & movable
+        if not smooth.any():
+            break
+        smoothed |= smooth
+        weight = smooth.astype(np.float64)[:, None]
+        X = Q.copy()
+        for _ in range(TAUBIN_PASSES):
+            for factor in (TAUBIN_LAMBDA, TAUBIN_MU):
+                X = X + factor * weight * ((graph @ X) / degree - X)
+        moved_nodes = np.flatnonzero(smooth)
+        shift = X[moved_nodes] - start[moved_nodes]
+        length = np.linalg.norm(shift, axis=1)
+        scale = np.where(length > cap, cap / np.maximum(length, 1e-30), 1.0)
+        X[moved_nodes] = start[moved_nodes] + shift * scale[:, None]
+        verts = idx[smooth[node[idx]]]
+        out[verts] = X[node[verts]]
+        Q[node] = out
+        spike = _spikes(Q, node, F, faces, graph, mm)
+    record["spikes"]["after"] = int(spike[np.unique(node[idx])].sum())
+    # Of those, on nodes this step never moves (the fold's own, the protected bands).
+    record["spikes"]["held"] = int((spike & ~movable)[np.unique(node[idx])].sum())
+    record["spikes"]["smoothed_nodes"] = int(smoothed.sum())
+    # The numbers after, against the SAME membrane.
+    after = depth.measure(out)
+    a, b, h = depth.local(out[idx])
+    seen_after = depth.sample(_unseen(after), a, b, order=0) - h < OUTER_TOLERANCE_MM * mm
+    D_after = np.where(np.isfinite(after), after / mm, np.nanmin(after / mm) if np.isfinite(after).any() else 0.0)
+    left = pocket & ((membrane - D_after) > POCKET_MM)
+    in_left = depth.sample(left.astype(np.float64), a, b, order=0) > 0.5
+    record["pockets"]["after"] = {"area_mm2": round(float(left.sum() * cell_area), 1), "vertices": int((seen_after & in_left).sum())}
+    shift = np.linalg.norm(out[idx] - P_in[idx], axis=1) / mm
+    moved = shift > 0
+    record["moved_vertices"] = int(moved.sum())
+    record["displacement_mm"] = {"max": round(float(shift.max()), 2) if moved.any() else 0.0,
+                                 "p95": round(float(np.percentile(shift[moved], 95)), 2) if moved.any() else 0.0}
+    record["status"] = "applied" if moved.any() else "skipped"
+    if not moved.any():
+        record["reason"] = "no pocket and no spike in the region"
+    return out, record
+
+
+def _mouth_region(P: np.ndarray, eyes: List[Dict[str, Any]], frame: Dict[str, Any], mouth: Optional[Dict[str, Any]],
+                  mm: float) -> Tuple[np.ndarray, np.ndarray, float, float, str]:
+    """``(region mask, centre, half_a, half_b, located_by)`` of the mouth for the geometry step: centred on the lip
+    paint when ``_locate_mouth`` found it, else MOUTH_DROP_MM under the eye line on the face's mid-plane (the lips sit
+    71-78 mm under the eye line on the measured bases, 2026-11-12); in both cases the front-most surface there gives
+    the depth."""
+    eye_y = (eyes[0]["centre"][1] + eyes[1]["centre"][1]) / 2
+    mid_x = (eyes[0]["centre"][0] + eyes[1]["centre"][0]) / 2
+    half_a, half_b = MOUTH_HALF_WIDTH_MM * mm, MOUTH_HALF_HEIGHT_MM * mm
+    head, front = frame["head"], frame["front"]
+    if mouth is not None:
+        centre = np.array(mouth["centre"], np.float64)
+        located = "paint"
+    else:
+        centre = np.array([mid_x, eye_y - MOUTH_DROP_MM * mm, 0.0])
+        located = "window"
+    d2 = ((P[:, 0] - centre[0]) / half_a) ** 2 + ((P[:, 1] - centre[1]) / half_b) ** 2
+    column = (d2 < 1.0) & head & (front * (P[:, 2] - frame["centre"][2]) > 0)
+    # The depth always from the front-most surface: the paint's own centre may sit on the lip paint INSIDE the mouth
+    # (Kai: 7.5 mm above GLBFaceRegions' lip landmarks, the rays then started behind the skin and met the inner shell).
+    centre[2] = float(front * np.percentile(front * P[column, 2], 95)) if column.sum() >= EYE_MIN_VERTICES else frame["nose"][2]
+    region = column & (np.abs(P[:, 2] - centre[2]) < MOUTH_DEPTH_WINDOW_MM * mm)
+    return region, centre, half_a, half_b, located
+
+
+def _smooth_face(P: np.ndarray, P_in: np.ndarray, F: np.ndarray, colours: np.ndarray, lum: np.ndarray,
+                 fixed: np.ndarray, protect: np.ndarray, mm: float) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
+    """Step 3 on the folded positions ``P_in`` (``P``: the input's, for locating and welding): both eye regions and
+    the mouth region (``_smooth_region``). ``fixed``: the fold's vertices; ``protect``: the eye fits' brow/nose bands.
+    Returns ``(positions, record, regions mask)`` — the mask is where normals may be recomputed."""
+    eyes, reason, frame = _locate_eyes(P, lum, mm)
+    inside = np.zeros(len(P), bool)
+    if eyes is None:
+        return P_in, {"status": "skipped", "reason": "eyes not found: " + reason}, inside
+    separation = float(abs(eyes[0]["centre"][0] - eyes[1]["centre"][0]))
+    cap = MOVE_CAP_SEPARATION * separation
+    node, _welded = _weld(P, F, mm)
+    out = P_in
+    regions: List[Dict[str, Any]] = []
+    head, front = frame["head"], frame["front"]
+    for eye in eyes:
+        region = _eye_region(P, eye, head, mm)
+        normal, t1, t2 = _frame(eye["centre"], frame["centre"], front)
+        half_a = eye["half_width"] + EYE_REGION_MARGIN_MM * mm
+        half_b = EYE_REGION_ASPECT * eye["half_width"] + EYE_REGION_MARGIN_MM * mm
+        inside |= region
+        out, rec = _smooth_region(out, F, region, node, eye["centre"], normal, t1, t2, half_a, half_b, cap,
+                                  fixed, protect, mm)
+        regions.append({"region": "eye_" + eye["side"], **rec})
+    mouth, _why = _locate_mouth(P, colours, eyes, frame, mm)
+    region, centre, half_a, half_b, located = _mouth_region(P, eyes, frame, mouth, mm)
+    inside |= region
+    normal, t1, t2 = _frame(centre, frame["centre"], front)
+    out, rec = _smooth_region(out, F, region, node, centre, normal, t1, t2, half_a, half_b, cap, fixed,
+                              np.zeros(len(P), bool), mm)
+    regions.append({"region": "mouth", "located_by": located, **rec})
+    applied = [r for r in regions if r.get("status") == "applied"]
+    record: Dict[str, Any] = {"status": "applied" if applied else "skipped", "cap_mm": round(cap / mm, 1),
+                              "limits": {"pocket_mm": POCKET_MM, "spike_deg": SPIKE_DEG, "spike_ratio": SPIKE_RATIO},
+                              "regions": regions}
+    record.update(_smooth_totals(regions))
+    if not applied:
+        record["reason"] = "no pocket and no spike in the eye and mouth regions"
+    return out, record, inside
+
+
+def _smooth_totals(regions: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The record's summary numbers over the regions (the overview row and the one-line summary read these)."""
+    def total(*path):
+        value = 0.0
+        for r in regions:
+            v: Any = r
+            for p in path:
+                v = v.get(p) if isinstance(v, dict) else None
+            value += float(v or 0)
+        return value
+    return {"moved_vertices": int(total("moved_vertices")),
+            "displacement_max_mm": max((float((r.get("displacement_mm") or {}).get("max") or 0) for r in regions), default=0.0),
+            "displacement_p95_mm": max((float((r.get("displacement_mm") or {}).get("p95") or 0) for r in regions), default=0.0),
+            "spikes_before": int(total("spikes", "before")), "spikes_after": int(total("spikes", "after")),
+            "pocket_area_before_mm2": round(total("pockets", "before", "area_mm2"), 1),
+            "pocket_area_after_mm2": round(total("pockets", "after", "area_mm2"), 1),
+            "pocket_vertices_before": int(total("pockets", "before", "vertices")),
+            "pocket_vertices_after": int(total("pockets", "after", "vertices"))}
+
+
+def _recompute_normals(N: np.ndarray, P: np.ndarray, P_new: np.ndarray, F: np.ndarray, node: np.ndarray,
+                       inside: np.ndarray) -> np.ndarray:
+    """The normals after a position change, by the mesher's own rule (area-weighted triangle normals summed over the
+    welded node — the stored normals of the measured bases match it to 0.02 degrees): only for vertices in ``inside``
+    whose node touches a triangle that moved; every other normal keeps its bytes."""
+    changed = np.any(P_new != P, axis=1)
+    touched_faces = changed[F].any(1)
+    n = int(node.max()) + 1
+    touched = np.zeros(n, bool)
+    touched[node[F[touched_faces]].reshape(-1)] = True
+    redo = inside & touched[node]
+    if not redo.any():
+        return N
+    normals = np.cross(P_new[F[:, 1]] - P_new[F[:, 0]], P_new[F[:, 2]] - P_new[F[:, 0]])
+    acc = np.zeros((n, 3))
+    for k in range(3):
+        np.add.at(acc, node[F[:, k]], normals)
+    length = np.linalg.norm(acc, axis=1)
+    out = N.copy()
+    ok = redo & (length[node] > 0)
+    out[ok] = acc[node[ok]] / length[node[ok]][:, None]
+    return out
+
+
 # --- GLB IO -----------------------------------------------------------------------------------------------------------
 
 def _body(parsed: dict) -> Tuple[List[dict], np.ndarray, np.ndarray, np.ndarray, Optional[np.ndarray], List[int]]:
@@ -896,10 +1359,12 @@ def _replace_image(parsed: dict, binary: bytearray, image_index: int, payload: b
 
 # --- entry points -----------------------------------------------------------------------------------------------------
 
-def clean_face(glb: bytes) -> Tuple[bytes, Dict[str, Any]]:
+def clean_face(glb: bytes, *, lips: bool = True) -> Tuple[bytes, Dict[str, Any]]:
     """The cleanup of one unrigged humanoid mesh. Returns ``(bytes, record)`` — the input bytes themselves
-    when nothing was changed. Raises ValueError for a mesh it cannot read; the caller decides what a failure
-    means (``model3d._store_unrigged_model`` records it and keeps the mesher's file)."""
+    when nothing was changed. ``lips=False`` leaves the lip colour alone (a source whose texture this step already
+    corrected once: "Re-run face cleanup" on a stored source without the mesher's original, version 4). Raises
+    ValueError for a mesh it cannot read; the caller decides what a failure means (``model3d._store_unrigged_model``
+    records it and keeps the mesher's file)."""
     from app.core.glb_mesh import pack_glb, _parse
     parsed = _parse(glb, "Source")
     primitives, P, F, U, N, offsets = _body(parsed)
@@ -912,26 +1377,33 @@ def clean_face(glb: bytes) -> Tuple[bytes, Dict[str, Any]]:
     lum = (colours.astype(np.float64) @ _LUMA) / 255.0
     record: Dict[str, Any] = {"status": "skipped", "version": VERSION, "at": utc_now_iso(),
                               "mm_per_unit": round(1.0 / mm, 1)}
-    new_P, moved, eye_record = _clean_eyes(P, F, lum, mm)
+    new_P, moved, eye_record, protect = _clean_eyes(P, F, lum, mm)
     record["eyes"] = eye_record
+    new_P, smooth_record, inside = _smooth_face(P, new_P, F, colours, lum, moved, protect, mm)
+    record["smooth"] = smooth_record
     eyes, reason, frame = _locate_eyes(P, lum, mm)
-    if eyes is None:
+    new_texture = None
+    if not lips:
+        record["mouth"] = {"status": "skipped", "reason": "lip colour left as stored (corrected before)"}
+    elif eyes is None:
         record["mouth"] = {"status": "skipped", "reason": "eyes not found: " + reason}
-        new_texture = None
     else:
         mouth, reason = _locate_mouth(P, colours, eyes, frame, mm)
         if mouth is None:
             record["mouth"] = {"status": "skipped", "reason": reason}
-            new_texture = None
         else:
             new_texture, mouth_record = _neutralise_mouth(texture, U, F, P, mouth, mm)
             record["mouth"] = mouth_record
-    changed = moved.any() or new_texture is not None
-    if not changed:
+    geometry = bool(np.any(new_P != P))
+    if not geometry and new_texture is None:
         return glb, record
     binary = bytearray(parsed["bin"])
-    if moved.any():
+    if geometry:
         _write_vertices(parsed, binary, primitives, offsets, "POSITION", new_P, bounds=True)
+        if N is not None:
+            node, _welded = _weld(P, F, mm)
+            _write_vertices(parsed, binary, primitives, offsets, "NORMAL",
+                            _recompute_normals(N, P, new_P, F, node, inside), bounds=False)
     if new_texture is not None:
         binary = _replace_image(parsed, binary, image_index, _encode(new_texture, mime))
     record["status"] = "applied"
@@ -1018,6 +1490,9 @@ def summary(record: Dict[str, Any]) -> str:
                      + (f", {flips} turned faces" if flips else "") + ")")
     elif eyes.get("status") == "skipped":
         parts.append("eyes: " + str(eyes.get("reason") or "skipped"))
+    smooth = smooth_line(record.get("smooth") or {})
+    if smooth:
+        parts.append(smooth)
     mouth = record.get("mouth") or {}
     if mouth.get("status") == "applied":
         parts.append(f"lips/skin saturation {mouth.get('ratio_before')} → {mouth.get('ratio_after')}")
@@ -1026,4 +1501,18 @@ def summary(record: Dict[str, Any]) -> str:
     return " · ".join(parts)
 
 
-__all__ = ["clean_face", "measure_face", "enabled_for", "summary", "EYE_LIMIT_MM", "LIP_RATIO_LIMIT", "VERSION"]
+def smooth_line(smooth: Dict[str, Any]) -> str:
+    """The smoothing/pocket part of the summary (version 4): moved vertices, max/p95 displacement, spikes and
+    pockets before → after; '' for a record without the step."""
+    if smooth.get("status") == "applied":
+        return (f"smoothing: {smooth.get('moved_vertices', 0)} vertices moved (max {smooth.get('displacement_max_mm', 0)}"
+                f" mm, p95 {smooth.get('displacement_p95_mm', 0)} mm), spikes {smooth.get('spikes_before', 0)} → "
+                f"{smooth.get('spikes_after', 0)}, pockets {smooth.get('pocket_area_before_mm2', 0)} → "
+                f"{smooth.get('pocket_area_after_mm2', 0)} mm² ({smooth.get('pocket_vertices_before', 0)} → "
+                f"{smooth.get('pocket_vertices_after', 0)} vertices)")
+    if smooth.get("status") == "skipped":
+        return "smoothing: " + str(smooth.get("reason") or "skipped")
+    return ""
+
+
+__all__ = ["clean_face", "measure_face", "enabled_for", "summary", "smooth_line", "EYE_LIMIT_MM", "LIP_RATIO_LIMIT", "VERSION"]

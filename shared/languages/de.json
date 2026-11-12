@@ -2945,6 +2945,7 @@
     "{n} vertices repaired": "{n} Vertices repariert",
     "clean": "fehlerfrei",
     "Repair rig weights": "Rig-Gewichte reparieren",
+    "Re-run face cleanup": "Gesichtsbereinigung erneut ausführen",
     "{watcher} catches {reader} reading {item}.": "{watcher} ertappt {reader} beim Lesen in {item}.",
     "I caught {reader} reading {item}.": "Ich habe {reader} beim Lesen in {item} ertappt.",
     "{owner} caught me reading {item}.": "{owner} hat mich beim Lesen in {item} ertappt.",

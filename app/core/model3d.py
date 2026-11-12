@@ -4480,12 +4480,18 @@ def face_cleanup_state(character_name: str, signature: str) -> Dict[str, Any]:
 
 
 @_serial_model
-def _reclean_face_source(character_name: str, signature: str) -> Dict[str, Any]:
+def _reclean_face_source(character_name: str, signature: str, *, from_stored: bool = False) -> Dict[str, Any]:
     """Clean the retained source ``unrigged/<signature>.glb`` in place (staged
     by ``_serial_model``, published on return), starting from the mesher's
     own bytes (``MESHER_DIR``; retained here on the first cleanup of a source
     that was never cleaned). The rigged model is not touched here — the caller
-    rebuilds it from the cleaned source."""
+    rebuilds it from the cleaned source.
+
+    ``from_stored`` ("Re-run face cleanup", face_cleanup version 4): a source
+    cleaned by an older version whose mesher original is NOT retained is
+    cleaned again from its own stored bytes — the fold finds nothing left to
+    fold, the smoothing and pocket step runs, the lip colour (corrected once
+    already) is left alone."""
     from app.core import face_cleanup
     from app.core.mesh_source import validate_source
     root = get_model3d_dir(character_name)
@@ -4495,8 +4501,11 @@ def _reclean_face_source(character_name: str, signature: str) -> Dict[str, Any]:
     meta = _read_sidecar(source)
     previous = meta.get("face_cleanup") if isinstance(meta.get("face_cleanup"), dict) else {}
     mesher = _mesher_source(root, signature)
+    lips = True
     if mesher.is_file():
         blob = mesher.read_bytes()
+    elif previous.get("status") == "applied" and from_stored:
+        blob, lips = source.read_bytes(), False
     elif previous.get("status") == "applied":
         return {"ok": False, "error": MESHER_MISSING}
     else:
@@ -4505,7 +4514,7 @@ def _reclean_face_source(character_name: str, signature: str) -> Dict[str, Any]:
         mesher.parent.mkdir(parents=True, exist_ok=True)
         _publish_model_bytes(mesher, blob)
     try:
-        cleaned, record = face_cleanup.clean_face(blob)
+        cleaned, record = face_cleanup.clean_face(blob) if lips else face_cleanup.clean_face(blob, lips=False)
         if record.get("status") == "applied":
             verdict = validate_source(cleaned)
             if not verdict.get("ok"):
@@ -4513,6 +4522,12 @@ def _reclean_face_source(character_name: str, signature: str) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — reported, the stored source stays as it was
         return {"ok": False, "error": f"Face cleanup failed: {exc}"}
     record["reapplied"] = True
+    if not lips:
+        # Cleaned from the stored (already cleaned) source: the earlier record's mouth result still describes the
+        # texture, and the version it was cleaned with stays on record.
+        record["from_stored"] = {"version": previous.get("version"), "at": previous.get("at")}
+        if isinstance(previous.get("mouth"), dict):
+            record["mouth"] = previous["mouth"]
     meta["face_cleanup"] = record
     if cleaned != source.read_bytes():
         _publish_model_bytes(source, cleaned)
@@ -4525,7 +4540,7 @@ def _reclean_face_source(character_name: str, signature: str) -> Dict[str, Any]:
 
 
 MESHER_MISSING = ("The stored mesh was cleaned by an older version and the mesher's original mesh is not retained "
-                  "— regenerate the model.")
+                  "— regenerate the model, or run the improvement \"Re-run face cleanup\" (cleans the stored mesh).")
 
 
 def trigger_face_cleanup(character_name: str, signature: str) -> Dict[str, Any]:
@@ -4570,15 +4585,7 @@ def trigger_face_cleanup(character_name: str, signature: str) -> Dict[str, Any]:
     def run():
         result: Dict[str, Any] = {"ok": False, "error": "Face cleanup failed"}
         try:
-            with _char_lock(character_name):
-                result = _reclean_face_source(character_name, signature)
-                if result.get("ok"):
-                    if follow_up == "face_retexture":
-                        result = face_retexture_model(character_name, signature, track_id=task_id)
-                    else:
-                        result = rerig_model(character_name, signature, track_id=task_id)
-            if result.get("ok"):
-                after_base_face_change(character_name, signature)
+            result = run_face_cleanup(character_name, signature, follow_up, track_id=task_id)
         except Exception as exc:
             result = {"ok": False, "error": str(exc)}
             logger.exception("Face cleanup re-apply failed for %s", character_name)
@@ -4593,6 +4600,45 @@ def trigger_face_cleanup(character_name: str, signature: str) -> Dict[str, Any]:
                     _generating.discard(character_name)
     threading.Thread(target=run, daemon=True).start()
     return {"status": "generating", "task_id": task_id, "follow_up": follow_up, "jobs": state["jobs"]}
+
+
+def run_face_cleanup(character_name: str, signature: str, follow_up: str, *, from_stored: bool = False,
+                     track_id: str = "") -> Dict[str, Any]:
+    """The work of a face-cleanup re-run, synchronously, for a caller that
+    already holds the character's generation guard (``trigger_face_cleanup``'s
+    thread, the improvement "Re-run face cleanup"): clean the retained source
+    (``_reclean_face_source``), rebuild the model from it (``follow_up``: the
+    face retexture or a re-rig — the hub jobs of ``FACE_CLEANUP_JOBS``), then
+    mark the outfit models stale on the base-body pipeline."""
+    with _char_lock(character_name):
+        result = _reclean_face_source(character_name, signature, from_stored=from_stored)
+        if result.get("ok"):
+            if follow_up == "face_retexture":
+                result = face_retexture_model(character_name, signature, track_id=track_id)
+            else:
+                result = rerig_model(character_name, signature, track_id=track_id)
+    if result.get("ok"):
+        after_base_face_change(character_name, signature)
+    return result
+
+
+def face_cleanup_rerun_state(character_name: str) -> Optional[Dict[str, Any]]:
+    """What the improvement "Re-run face cleanup" may do for a character:
+    None when nothing (no humanoid source, the switch off, a run going, the
+    source not cleaned or already at ``face_cleanup.VERSION``), else
+    ``{signature, from_stored, follow_up, jobs, version}`` — ``from_stored``
+    when the mesher's original is not retained (the cleanup starts from the
+    stored, already cleaned source)."""
+    signature = face_cleanup_signature(character_name)
+    if not signature:
+        return None
+    state = face_cleanup_state(character_name, signature)
+    if not (state["humanoid"] and state["stored"] and state["enabled"]) or state["running"]:
+        return None
+    if state["status"] != "applied" or state["version"] == state["current_version"]:
+        return None
+    return {"signature": signature, "from_stored": not state["mesher_retained"], "follow_up": state["follow_up"],
+            "jobs": state["jobs"], "version": state["version"]}
 
 
 # ── Resume registration (app/core/hub_ops.py) ─────────────────────────────

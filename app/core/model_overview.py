@@ -380,6 +380,13 @@ def _face_cleanup_step(meta: Dict[str, Any]) -> Dict[str, Any]:
                "moved_vertices": sum(int(e.get("moved_vertices") or 0) for e in rows) or None,
                "lip_ratio_before": _num(mouth.get("ratio_before")), "lip_ratio_after": _num(mouth.get("ratio_after")),
                "lip_ratio_limit": _num(mouth.get("limit"))}
+    # Version 4: the smoothing of spikes and the closing of pockets after the fold.
+    smooth = _dict(record.get("smooth"))
+    if smooth.get("status") == "applied":
+        numbers.update({key: _num(smooth.get(key)) for key in (
+            "displacement_max_mm", "displacement_p95_mm", "spikes_before", "spikes_after",
+            "pocket_area_before_mm2", "pocket_area_after_mm2", "pocket_vertices_before", "pocket_vertices_after")})
+        numbers["smooth_moved_vertices"] = _num(smooth.get("moved_vertices"))
     if status == "failed":
         return step("face_cleanup", "Face cleanup", FAILED, str(record.get("error") or ""), numbers)
     parts = []
@@ -389,6 +396,9 @@ def _face_cleanup_step(meta: Dict[str, Any]) -> Dict[str, Any]:
                         if residual_max is not None and numbers["unanchored_vertices"] else ""))
     elif eyes.get("status") == "skipped":
         parts.append("eyes: " + str(eyes.get("reason") or "skipped"))
+    if smooth.get("status") == "applied":
+        from app.core.face_cleanup import smooth_line
+        parts.append(smooth_line(smooth))
     if mouth.get("status") == "applied":
         parts.append(f"lips/skin saturation {mouth.get('ratio_before')} → {mouth.get('ratio_after')}")
     elif mouth.get("status") == "skipped":
