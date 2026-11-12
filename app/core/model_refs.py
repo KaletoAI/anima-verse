@@ -608,9 +608,16 @@ def mesh_items_token(character_name, pieces=None, profile=None) -> str:
     model of the new state get keys of their own (never a painted dress
     under a mesh dress).
 
-    Cheap first pass: without an own-mesh piece (item definitions from the
-    cached snapshot) no profile is read."""
-    from app.core.garment_set import OWN_MESH_PIECE_KINDS, garment_kind_of
+    In-body pieces (item mode ``in_body``, plan
+    ``2026-11-12-unified-worn-pieces.md`` Task 4): with at least one worn,
+    the token is ``|meshitems:<sorted own-mesh ids>|inbody:<sorted in-body
+    ids>|worn:…`` (the own list may be empty) — the shape they are meshed
+    into is a figure of its own (``figure.shape_key``). Without one the
+    token stays the string from before.
+
+    Cheap first pass: without an own-mesh or in-body piece (item definitions
+    from the cached snapshot) no profile is read."""
+    from app.core.garment_set import IN_BODY, OWN_MESH_PIECE_KINDS, garment_kind_of, mesh_mode_of
     from app.core.motion_item_cache import item_snapshot
     if pieces is None:
         if profile is None:
@@ -622,12 +629,14 @@ def mesh_items_token(character_name, pieces=None, profile=None) -> str:
         return ""
     items = item_snapshot() or {}
     flagged = sorted({iid for iid in worn.values() if garment_kind_of(items.get(iid)) in OWN_MESH_PIECE_KINDS})
-    if not flagged:
+    in_body = sorted({iid for iid in worn.values() if mesh_mode_of(items.get(iid)) == IN_BODY})
+    if not flagged and not in_body:
         return ""
     from app.core.base_body import is_base_pipeline
     if not is_base_pipeline(character_name, profile=profile):
         return ""
-    return (MESH_ITEMS_PREFIX + ",".join(flagged) + "|worn:"
+    inbody = ("|inbody:" + ",".join(in_body)) if in_body else ""
+    return (MESH_ITEMS_PREFIX + ",".join(flagged) + inbody + "|worn:"
             + ";".join(f"{slot}={worn[slot]}" for slot in sorted(worn)))
 
 

@@ -74,11 +74,14 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
 [4] C {dress}: empty dress text -> the base body: 0 image jobs, no mesh/rig
     job, 0 worker runs; model dressed False, no body_id.
 [5] A rebuilt with force in mesh mode: no mesh/rig job (the body is current).
-[6] Mode -> retexture: A stale, stale_reason "body_mode"; build -> 0 image
-    jobs, 0 mesh/rig jobs, 1 worker run; the sidecar has no outfit_body_mode
-    / body_id key and names tA (the retexture path unchanged). Mode -> mesh:
-    A stale "body_mode"; build -> 0 mesh/rig jobs, 0 worker runs, body file
-    bytes + mtime unchanged.
+[6] Mode -> retexture. Since plan 2026-11-12-unified-worn-pieces Task 4 the
+    in-body pieces are part of the mesh-items token (``|inbody:``), so the
+    switch makes A a NEW signature R != sigA (A itself is not current in
+    retexture: find_model3d(sigA) None). Build -> 0 image jobs, 0 mesh/rig
+    jobs, 1 worker run; R's sidecar has no outfit_body_mode / body_id key and
+    names tA (the retexture path unchanged). Mode -> mesh: the signature is
+    sigA again and A's model is current (stale_reason None); build -> 0
+    mesh/rig jobs, 0 worker runs, body file bytes + mtime unchanged.
 [7] The body file rewritten (as a re-rig would): A stale "outfit_body";
     build -> 0 mesh/rig jobs; A's bytes = the new body bytes. A re-rig of the
     body (rerig_model(Demo, bA)): ok, ONE rig job on bA, the body sidecar
@@ -481,18 +484,21 @@ def main() -> int:
         # --- [6] mode back and forth ------------------------------------------------------------
         print("[6] retexture mode unchanged; mode back -> the body is reused")
         set_mode("retexture")
-        check("retexture: A stale (body_mode)", (model3d.find_model3d("Demo", sig_a), stale_reason()),
-              (None, "body_mode"))
+        sig_r = model_refs.current_outfit_state("Demo")[2]
+        check("retexture: a signature of its own (|inbody: token)", sig_r != sig_a, True)
+        check("retexture: A not current, R missing", (model3d.find_model3d("Demo", sig_a),
+                                                      base_body.outfit_info("Demo").get("status")), (None, "missing"))
         jobs, runs, steps, result = render_and_build()
-        meta_r = model_meta(sig_a)
+        meta_r = model_meta(sig_r)
         check("retexture: ok, 0 image jobs, 0 mesh/rig jobs, 1 worker run",
               (result.get("ok"), jobs, jobs_of(steps), runs), (True, 0, [], 1))
         check("retexture: sidecar as before", ("outfit_body_mode" in meta_r, "body_id" in meta_r,
                                                 meta_r.get("texture_signature")), (False, False, t_a))
         body_stat = (sha(body), body.stat().st_mtime_ns)
         set_mode("mesh")
-        check("mesh again: A stale (body_mode)", (model3d.find_model3d("Demo", sig_a), stale_reason()),
-              (None, "body_mode"))
+        check("mesh again: the signature is sigA again", model_refs.current_outfit_state("Demo")[2], sig_a)
+        check("mesh again: A current", (model3d.find_model3d("Demo", sig_a) is not None, stale_reason()),
+              (True, None))
         jobs, runs, steps, result = render_and_build()
         check("mesh again: ok, no mesh/rig job, 0 runs", (result.get("ok"), jobs_of(steps), runs), (True, [], 0))
         check("mesh again: body untouched", (sha(body), body.stat().st_mtime_ns), body_stat)

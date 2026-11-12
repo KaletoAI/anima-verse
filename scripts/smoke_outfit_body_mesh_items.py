@@ -58,17 +58,18 @@ body spec:
     refused"}. Outfit body tab: bK's outfit row K has missing_mesh_items
     [{jacket, "Jacket", <the reason above>}]. Overview row mesh_items:
     warning, detail "missing own-mesh pieces: Jacket".
-[2] Retexture mode, jacket still refused (unchanged rule P1): K stale
-    (body_mode); the mesh-mode front is off-rule (the jacket belongs painted
-    on) -> rendered again WITH the jacket: 3 image jobs, 1 worker run, 0
-    mesh/rig jobs; dress_text names "leather jacket"; mesh_items has no
-    "unpainted"; warnings = ["Jacket stays painted on: worn — back refused —
-    Regenerate in the Wardrobe"] (MESH_ITEM_FAILED); Wardrobe: painted True,
-    no "missing" key.
-[3] Mesh mode again (jacket refused): K stale (body_mode); the retexture
-    front painted the jacket -> off-rule -> rendered again without it: the
-    texture store of tK holds front + back -> 0 image jobs; body bK is
-    current -> 0 mesh/rig jobs, 0 worker runs; K stands on bK again.
+[2] Retexture mode, jacket still refused (unchanged rule P1). Since plan
+    2026-11-12-unified-worn-pieces Task 4 the in-body pieces are part of the
+    mesh-items token (``|inbody:``), so switching under/shoes to painted
+    makes the outfit a NEW signature R != K: its model is "missing" (not
+    "stale"), K stays untouched. R is rendered WITH the jacket: 3 image jobs,
+    1 worker run, 0 mesh/rig jobs; R's dress_text names "leather jacket";
+    R's mesh_items: mode retexture, unpainted []; warnings = ["Jacket stays
+    painted on: worn — back refused — Regenerate in the Wardrobe"]
+    (MESH_ITEM_FAILED); Wardrobe: painted True, no "missing" key.
+[3] Mesh mode again (jacket refused): the signature is K again and K's model
+    is "ready" (the switch back finds it untouched) -> 0 image jobs, 0
+    mesh/rig jobs, 0 worker runs; K stands on bK, tsig tK.
 [4] The jacket's chain is run explicitly and accepted (run_garment):
     after_mesh_item_ready assembles it onto bK: 0 image jobs, 0 mesh/rig
     jobs, 0 worker runs, ONE body fit (jacket on bK), assembled/<sigK>.glb
@@ -388,12 +389,14 @@ def main() -> int:
         print("[2] retexture mode: the refused piece is painted on (rule P1)")
         set_mode("retexture")
         check("mode retexture", base_body.outfit_body_mode("Demo"), "retexture")
-        check("retexture: K stale (body_mode)", base_body.outfit_info("Demo").get("stale_reason"), "body_mode")
+        sig_r = model_refs.current_outfit_state("Demo")[2]
+        check("retexture: a signature of its own (|inbody: token)", sig_r != sig_k, True)
+        check("retexture: R missing", base_body.outfit_info("Demo").get("status"), "missing")
         jobs, runs, hub, result = render_and_build()
-        meta_r = meta_of(sig_k)
+        meta_r = meta_of(sig_r)
         check("retexture: ok, 3 image jobs, 1 worker run, 0 mesh/rig jobs", (result.get("ok"), jobs, runs, hub),
               (True, 3, 1, []))
-        check("retexture: dress text paints the jacket", "leather jacket" in front_text(sig_k), True)
+        check("retexture: dress text paints the jacket", "leather jacket" in front_text(sig_r), True)
         # 58ec6c82 (footwear delivery rule): a retexture record carries mode + unpainted = effective (none) +
         # intended footwear (none) = [] — the painted jacket is never unpainted.
         check("retexture: nothing unpainted", ((meta_r.get("mesh_items") or {}).get("mode"),
@@ -406,7 +409,8 @@ def main() -> int:
         # --- [3] mesh mode again: the body of the painted pieces is reused ---------------
         print("[3] mesh mode again: store views + the same body, no job")
         set_mode("mesh")
-        check("mesh: K stale (body_mode)", base_body.outfit_info("Demo").get("stale_reason"), "body_mode")
+        check("mesh: the signature is K again", model_refs.current_outfit_state("Demo")[2], sig_k)
+        check("mesh: K ready", base_body.outfit_info("Demo").get("status"), "ready")
         jobs, runs, hub, result = render_and_build()
         check("mesh: ok, 0 image jobs, 0 mesh/rig jobs, 0 worker runs", (result.get("ok"), jobs, hub, runs),
               (True, 0, [], 0))
