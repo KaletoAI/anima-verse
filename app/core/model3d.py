@@ -2863,9 +2863,16 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 face_num: Any = None,
                                 texture_size: Any = None,
                                 base: bool = False,
-                                outfit_body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                                outfit_body: Optional[Dict[str, Any]] = None,
+                                prepare: bool = True) -> Dict[str, Any]:
     """Generates the mesh for the currently worn outfit — or a given
     combination — from its T-pose render.
+
+    ``prepare`` False skips ``base_body.prepare_outfit_figure`` (the Build,
+    ``figure_build``: its own steps make the shape and the views, so an
+    outfit model run never meshes a shape outside the Build's shape step —
+    the interim model and the assembly are built from the figure delivered
+    then).
 
     ``outfit_body`` (with ``signature`` = an outfit body id,
     ``base_body.prepare_shape``) builds a MESHED SHAPE instead: the sidecar
@@ -2912,7 +2919,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
             raise ValueError("An outfit body needs its body id")
     else:
         from app.core.base_body import prepare_outfit_figure
-        prepared = None if base else prepare_outfit_figure(character_name, signature, force=force)
+        prepared = None if base or not prepare else prepare_outfit_figure(character_name, signature, force=force)
         if prepared is not None and not prepared.get("ok"):
             return prepared
     op = hub_ops.find_open(_OP_MESH, _op_match(character_name, signature, base=base,

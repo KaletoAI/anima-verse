@@ -1157,6 +1157,14 @@ def dressed_views() -> Tuple[str, ...]:
     return CORE_DRESSED_VIEWS + SIDE_DRESSED_VIEWS if side_views_dressed() else CORE_DRESSED_VIEWS
 
 
+def dressed_view_jobs() -> int:
+    """Hub jobs of ONE set of dressed views on its first attempts: the front
+    edit plus a draft and a fit per other ``dressed_views()`` view — 3 with
+    front + back, 7 with the side views on (``rebuild_cost`` and the Build's
+    plan, ``figure_build``, count with it)."""
+    return 1 + 2 * (len(dressed_views()) - 1)
+
+
 def side_arm_margin() -> float:
     """The world setting ``base_body.side_arm_margin``, clamped to
     0..``SIDE_ARM_MARGIN_MAX``; an unreadable value is the default."""
@@ -4339,8 +4347,7 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
         logger.warning("Rebuild cost %s / %s not computable: %s", character_name, signature, e)
         return {"image_jobs": None, "mesh_jobs": None, "hub_jobs": None, "views_needed": None,
                 "body_needed": None, "note": f"cost unknown — {e}"}
-    one_set = 1 + 2 * (len(views) - 1)
-    image_jobs = one_set * (int(views_needed) + int(shape_views_needed))
+    image_jobs = dressed_view_jobs() * (int(views_needed) + int(shape_views_needed))
     mesh_jobs = OUTFIT_BODY_JOBS if body_needed else 0
     parts = ([f"views {image_jobs}"] if image_jobs else []) + ([f"body {mesh_jobs}"] if mesh_jobs else [])
     what = (" + ".join(parts) + " (first attempts)" if parts
@@ -4363,7 +4370,8 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
 #: ``base_refresh_plan`` reason → the text the improvement step shows.
 REFRESH_REASON_TEXT = {"older_prompts": "older prompts",
                        "views": "views not refreshed yet",
-                       "model": "model built from older views"}
+                       "model": "model built from older views",
+                       "missing": "missing"}
 #: Hub jobs of one base view render on its first attempt (the front's hand
 #: gate may render it up to ``HAND_GATE_ATTEMPTS`` times).
 BASE_VIEW_JOBS = 1
@@ -4395,9 +4403,15 @@ def base_view_states(character_name: str, *, profile: Optional[Dict[str, Any]] =
     return out
 
 
-def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                      missing: bool = False) -> Dict[str, Any]:
     """What a base refresh of the character runs now: ``{signature, views,
     model, reason}`` (``views`` in ``BASE_VIEWS`` order). Read-only.
+
+    * ``missing`` (only with ``missing=True`` — the Build's plain-body step,
+      ``figure_build``; the ``base_refresh`` improvement never builds a
+      missing base): no stored front → every view, then the model; every
+      view current but no base model → the model alone.
 
     * ``older_prompts`` — the stored front carries ``OLDER_PROMPTS``
       (``base_prompts_freshness``, the Hair tab's note): every view, then
@@ -4410,15 +4424,15 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
     * ``model`` — every view current, the stored base model not built from
       them (``model_overview.base_model_freshness`` stale): the model alone
       — a refresh that stopped before the model.
-    * ``""`` — nothing to do, or no stored front (a missing base is not an
-      older one)."""
+    * ``""`` — nothing to do, or (without ``missing``) no stored front (a
+      missing base is not an older one)."""
     from app.core import model3d, model_overview
     profile = _profile_of(character_name, profile)
     bsig = base_signature(character_name, profile=profile)
     plan: Dict[str, Any] = {"signature": bsig, "views": [], "model": False, "reason": ""}
     prompts = base_prompts_freshness(character_name, profile=profile)
     if prompts["state"] == model_overview.MISSING:
-        return plan
+        return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "missing"} if missing else plan
     if prompts["state"] == model_overview.STALE:
         return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "older_prompts"}
     states = base_view_states(character_name, profile=profile)
@@ -4426,6 +4440,8 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
     if views:
         return {**plan, "views": views, "model": True, "reason": "views"}
     path = model3d.find_model3d(character_name, bsig)
+    if missing and (path is None or not base_model_sha256(character_name, bsig)):
+        return {**plan, "model": True, "reason": "missing"}
     if path is not None and model_overview.base_model_freshness(
             model3d._read_sidecar(path),
             model_overview._base_view_shas(character_name, bsig))["state"] == model_overview.STALE:
