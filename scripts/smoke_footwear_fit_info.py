@@ -34,7 +34,7 @@ extension_deg_right 22.2, toe_room_mm_right 18.0, root_lift_m 0.052, k_m_per_uni
      route serves what the URL names). HUB 0.
 [I2] Mesh mode (Demo wears a coat in mode in_body — the interim rule of plan 2026-11-12-unified-worn-pieces
      Task 2; taken off again for [I4]) with three stored outfit bodies (model3d/<id>.glb, ids sorted A < B < C by construction:
-     ``outfit_body_id`` of three texture signatures, then sorted): A carries an accepted record of F on
+     ``ob_id`` of three texture signatures, then sorted): A carries an accepted record of F on
      sha(A) -> status accepted, metrics width_factor 1.05 (its own hand value); B has nothing -> missing;
      C has a recorded body failure of F on sha(C) (base_fit_sha "", the current fit version, error "fit refused — x")
      -> status refused, error "fit refused — x". ``fits`` = [base, then the three in sorted id order], each
@@ -78,6 +78,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import _footwear_fixtures as fx  # noqa: E402
 
 FAILS = []
+
+
+def ob_id(seed: str) -> str:
+    """A fixture outfit body id ("ob" + 8 hex): the formula of the retired ``base_body.outfit_body_id`` over a
+    texture-signature-shaped seed, kept so the ids (and their order) this smoke derives stay as they were."""
+    raw = json.dumps({"mode": "mesh", "texture_signature": seed, "version": 1}, sort_keys=True, ensure_ascii=False,
+                     separators=(",", ":"))
+    return "ob" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
 
 
 def check(label, got, want):
@@ -231,7 +239,7 @@ def main() -> int:
         inventory.add_to_inventory("Demo", coat)
         check("I2 coat worn", inventory.equip_piece("Demo", coat, source="smoke")["status"], "ok")
         check("I2 mesh mode", base_body.outfit_body_mode("Demo"), base_body.MESH_MODE)
-        ids = sorted(base_body.outfit_body_id(f"tex{c * 12}") for c in "abc")
+        ids = sorted(ob_id(f"tex{c * 12}") for c in "abc")
         A, B, C = ids
         shas = {}
         for body_id in ids:

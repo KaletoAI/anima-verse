@@ -55,8 +55,14 @@ EXPECTED, BY HAND FROM THE SPEC § Design 6 AND THE CORRECTION
     migrated dict -> False (idempotent).
 [2] Proof the migration is new work: at 8f4f306c (the start of Task 3)
     app/core/hair_migration.py does not exist and config.py names no
-    _migrate_removed_hair_methods; artefact_graph.py and outfit_cache_gc.py are
-    unchanged since 8f4f306c, and a dry-run collect(explicit) there keeps
+    _migrate_removed_hair_methods; the GC rules that judge garment groups are
+    unchanged since 8f4f306c — byte-identical there and in the work tree:
+    artefact_graph ``scan`` (node kinds, "unknown" = source/), ``_hair_hsig``,
+    ``_judge``'s garments block ("# 5. Garments" up to "# 6. Temp work
+    folders.") and outfit_cache_gc ``_garment_roots`` (the whole two files
+    changed since for other chains: 27248e39 the ref prefixes, plan
+    2026-11-12-unified-worn-pieces Task 5 the body/texture rules) — and a
+    dry-run collect(explicit) here keeps
     Bea's B_EC and B_SUB groups (the GC keeps the newest fit of EVERY method a
     record names) and never lists source/ — without the migration they stay.
 [3] delete_all_hair_once() -> characters Ana: method body, items deleted
@@ -106,6 +112,29 @@ def touch(path: Path, data=b"x" * 16) -> Path:
 
 def git(*args) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True)
+
+
+def gc_garment_rules(rev):
+    """The GC's garment-group rules (module docstring [2]) as source text, at
+    ``rev`` (None = the work tree); a part missing is None."""
+    import ast
+
+    def text(path):
+        return (ROOT / path).read_text() if rev is None else git("show", f"{rev}:{path}").stdout
+
+    def function(src, name):
+        node = next((n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == name), None)
+        return ast.get_source_segment(src, node) if node else None
+
+    def block(src, start, end):
+        i = src.find(start)
+        j = src.find(end, i) if i >= 0 else -1
+        return src[i:j] if j > i else None
+    ag_src, ocg_src = text("app/core/artefact_graph.py"), text("app/core/outfit_cache_gc.py")
+    return {"artefact_graph.scan": function(ag_src, "scan"),
+            "artefact_graph._hair_hsig": function(ag_src, "_hair_hsig"),
+            "artefact_graph._judge garments": block(ag_src, "    # 5. Garments", "    # 6. Temp work folders."),
+            "outfit_cache_gc._garment_roots": function(ocg_src, "_garment_roots")}
 
 
 def main() -> int:
@@ -298,9 +327,10 @@ def main() -> int:
         old_cfg = git("show", f"{BASELINE}:app/core/config.py").stdout
         check(f"[2] {BASELINE}: config.py readable, no hair config migration",
               ("_apply_file_migrations" in old_cfg, "_migrate_removed_hair_methods" in old_cfg), (True, False))
-        check(f"[2] GC unchanged since {BASELINE}",
-              git("diff", "--quiet", BASELINE, "--", "app/core/artefact_graph.py",
-                  "app/core/outfit_cache_gc.py").returncode, 0)
+        old_rules, now_rules = gc_garment_rules(BASELINE), gc_garment_rules(None)
+        check(f"[2] GC garment rules unchanged since {BASELINE}",
+              {k: (old_rules[k] is not None, old_rules[k] == now_rules[k]) for k in old_rules},
+              {k: (True, True) for k in old_rules})
         dry = ag.collect("Bea", dry_run=True, explicit=True)
         listed = {e["key"] for e in dry["orphans"]}
         check("[2] plain GC keeps Bea's edit-chain + subtract fits",

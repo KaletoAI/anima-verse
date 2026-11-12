@@ -32,7 +32,7 @@ Expectations, by hand from § 6.6 and artefact_graph's module docstring:
      nothing was deleted (X still there). Budget back, the entry and X removed by hand.
 [A5] Painted bodies — a consumer of the painted-body reachability fix (commit 72e260fb: a texture lives
      while a live outfit would paint it NOW; a tsig a live outfit only names is outdated). TK =
-     ``base_body.predicted_texture_signatures(demo, {top: dress}, [], bsig)["retexture"]`` (what the worn
+     ``figure.predicted_keys(demo, {top: dress}, [], bsig=bsig)[1]`` (what the worn
      outfit would paint now), named by W's model sidecar (``texture_signature``); TO =
      ``tex000000000000`` named by nobody. Both as ``model3d/texture/<tsig>.glb`` + ``.json`` (sidecar
      ``texture_signature``, the current ``base_signature``), aged 11 min. The dry run lists
@@ -220,7 +220,8 @@ def main() -> int:
         # --- [A5] ---------------------------------------------------------------
         print("[A5] painted bodies (commit 72e260fb's rule, through collect's report)")
         bsig = base_body.base_signature("demo")
-        TK = base_body.predicted_texture_signatures("demo", {"top": dress}, [], bsig=bsig)["retexture"]
+        from app.core import figure
+        TK = figure.predicted_keys("demo", {"top": dress}, [], bsig=bsig)[1]
         TO = "tex000000000000"
         check("TK is a texture signature, not TO", (base_body.is_texture_signature(TK), TK != TO), (True, True))
         worn[1].write_text(json.dumps({"pieces": {"top": dress}, "items": [], "texture_signature": TK}))

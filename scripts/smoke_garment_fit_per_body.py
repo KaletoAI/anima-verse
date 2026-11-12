@@ -25,8 +25,8 @@ Fixture: Demo on the pipeline, hair method body (the world default: no hair item
 {underwear_top} and coat {outer, covers [top, underwear_top]} held. Base model = closed cylinder R 0.100
 (y 0.60 .. 1.60, Spine2); base fits of coat and slip (records accepted on sha(base), fit_version current) with an accepted prepared mesh
 and ghost front each. Outfit bodies (rigged cylinder + unrigged copy + front view tpose_<id>.png): A =
-outfit_body_id("tex" + "a"*12), R 0.100 but another texture colour (so sha(A) != sha(base)); B =
-outfit_body_id("tex" + "b"*12), R 0.104; C = outfit_body_id("tex" + "c"*12), R 0.100, third colour. Outfit models
+ob_id("tex" + "a"*12), R 0.100 but another texture colour (so sha(A) != sha(base)); B =
+ob_id("tex" + "b"*12), R 0.104; C = ob_id("tex" + "c"*12), R 0.100, third colour. Outfit models
 (bare = a copy of their body, sidecar body_id + body_sha256, outfit_body_mode mesh): OA on A {coat, slip}; OA2 on A
 {coat}; OB on B {coat}; OB2 on B {coat, slip}; OC on C {coat}; OR on the base (retexture, no body_id) {}.
 
@@ -102,6 +102,14 @@ import numpy as np  # noqa: E402
 FAILS = []
 NSEG = 64
 OFFSET = {"slip": 0.0125, "coat": 0.0080}
+
+
+def ob_id(seed: str) -> str:
+    """A fixture outfit body id ("ob" + 8 hex): the formula of the retired ``base_body.outfit_body_id`` over a
+    texture-signature-shaped seed, kept so the ids (and their order) this smoke derives stay as they were."""
+    raw = json.dumps({"mode": "mesh", "texture_signature": seed, "version": 1}, sort_keys=True, ensure_ascii=False,
+                     separators=(",", ":"))
+    return "ob" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
 
 
 def check(label, got, want):
@@ -340,7 +348,7 @@ def main() -> int:
         base_fit_sha = {k: sha(p) for k, p in base_fit.items()}
 
         def make_body(tsig_char, radius, colour):
-            bid = base_body.outfit_body_id("tex" + tsig_char * 12)
+            bid = ob_id("tex" + tsig_char * 12)
             data = body_glb(radius, colour)
             (mdir / f"{bid}.glb").write_bytes(data)
             (mdir / f"{bid}.json").write_text(json.dumps({

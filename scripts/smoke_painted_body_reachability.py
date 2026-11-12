@@ -11,19 +11,28 @@ Runs against a THROWAWAY storage + instance directory with a copy of the repo's 
 no hub, no GPU, no server process. Files are synthetic bytes; only names and JSON sidecars matter to the GC.
 
 THE BUG (2026-11-11): a painted body (``model_refs/texture/[drafts/]tpose[_back]_<T>`` + ``model3d/texture/<T>``)
-stayed for good once a piece of its outfit changed. The old rule (pinned: commit 193321cf) kept a texture while a
+stayed for good once a piece of its outfit changed. The old rule (commit 193321cf) kept a texture while a
 live outfit's sidecars NAMED it; an outfit stays live through its recorded manifest (the outfit rule re-signs with
-the recorded mesh token), so its old sidecars kept naming the old tsig. The new rule: a texture lives while a live
-outfit would PAINT it now (``base_body.predicted_texture_signatures`` in both outfit body modes, plus the tsig of a
-current dressed front); one only named is outdated (``OUTDATED_TEXTURE``, parent ``built_on``).
+the recorded mesh token), so its old sidecars kept naming the old tsig. The rule: a texture lives while a live
+outfit would PAINT it now (since plan 2026-11-12-unified-worn-pieces Task 5: ``figure.predicted_keys``' texture key
+under the items' modes now, plus the tsig of a current dressed front — ``base_body.front_texture_signature``); one
+only named is outdated (``OUTDATED_TEXTURE``, parent ``built_on``).
+
+The fails-on-old-code proof (``git show 193321cf:app/core/artefact_graph.py`` executed beside today's core) is left
+out since Task 5: that module no longer runs against today's core (it reads ``garment_store.SOURCE_DIR``, gone since
+— it was red at 54cea23e already), and pinning it to a newer commit would prove nothing about the name rule.
 
 Fixture (``make(char, mode)``, a fresh character per scenario): items top {top}, skirt {bottom}, skirt2 {bottom}
 painted (mode "mesh": in the body — the outfit body mode follows the worn pieces, interim rule of plan
 2026-11-12-unified-worn-pieces Task 2), dress {outer} own mesh with an accepted fit on the base model (so both modes leave it out of the paint), all
 in the inventory; pipeline on; base refs + model. ``outfit(char, pieces)`` worn and stored like a build leaves it:
-front/back refs + model sidecar naming T = the tsig its pieces paint now in the character's mode, the texture store
-of T (8 files: store tpose/tpose_back .png/.json, drafts/tpose_back .png/.json, model3d/texture/<T>.glb/.json); in
-mesh mode also the outfit body B = outfit_body_id(T) (refs + model + unrigged) and the model's ``body_id`` B.
+front/back refs + model sidecar naming T, the texture store of T (8 files: store tpose/tpose_back .png/.json,
+drafts/tpose_back .png/.json, model3d/texture/<T>.glb/.json). Retexture mode: T = the texture key its pieces paint
+now (``figure.predicted_keys(...)[1]``), the front carries no base view sha. Mesh mode: nothing is painted (texture
+key ""), so T = the tsig of the outfit's dressed front, made current for the base (base_image_sha256 of the base
+front; ``base_body.front_texture_signature``) — the views the shape is meshed from; plus the outfit body B = the
+shape key of its in-body set (``figure.predicted_keys(...)[0]``; refs + model + unrigged, shape record) and the
+model's ``body_id`` B.
 A piece change is applied with ``inventory._invalidate_renders_for_item`` switched off — as on the clone, where the
 outfits' fronts and models outlived the stilettos' own-mesh flag; with the purge the old rule already saw no name.
 
@@ -33,17 +42,19 @@ Expected, by hand (the rule above):
     (the stored front carries no base view sha, so no outfit is a source — still current, not "cannot repaint").
     Skirt text "a skirt" -> "a long pleated skirt": the dress text of O1 changes, so O1 paints T1' != T1; O1 stays
     live (the text is not part of its signature) -> T1 outdated: not reachable, reason OUTDATED_TEXTURE, built_on
-    [O1], no outfits. OLD rule (193321cf): T1 reachable (the proof). Tab: T1's gc {kept False, reason
+    [O1], no outfits. Tab: T1's gc {kept False, reason
     PAINTED_OUTDATED, 1 outfit}, blocked.delete "", blocked.regenerate PAINTED_CANNOT_REPAINT; repaint pre-check
     409 PAINTED_CANNOT_REPAINT. Delete route -> 8 files deleted, none of T1 left; O1's model + refs untouched; the
     tab no longer lists T1.
-[2] own-mesh flag removed (retexture). O2 {top, dress} on T2 (dress left out). Flag off: the dress is painted now
-    -> T2' != T2; O2 stays live (recorded token) -> T2 outdated; OLD rule: reachable (the proof). collect(explicit)
+[2] own-mesh flag removed (retexture). O2 {top, dress} on T2 (dress its own mesh with an accepted fit, so left
+    out: worn_sets own {dress}, painted {top}). Flag off: the dress is painted now
+    -> T2' != T2; O2 stays live (recorded token) -> T2 outdated. collect(explicit)
     deletes T2's 8 files; O2's model stays.
 [3] piece swapped (retexture). O1 {top, skirt} on T1, then skirt2 worn instead (O4, nothing built): O1 is still
     producible (skirt in the inventory) -> T1 stays current (worn again it paints T1). collect deletes 0 of T1. Skirt
     out of the inventory -> O1 no longer producible -> T1 named by no live outfit -> collect deletes its 8 files.
-[4] served model (mesh). O1 on B1 (model body_id B1, texture T1), then the skirt text change: T1 outdated -> its 8
+[4] served model (mesh). O1 on B1 (model body_id B1, texture T1 of its current front), then the skirt text
+    change: the front now stands for T1' != T1 and the in-body set has another shape key -> T1 outdated, its 8
     files go; the served model of O1 (a self-contained copy) and B1 stay — B1 is named as body_id by the live O1
     model (the body clause's second half).
 [5] repaint publishing another tsig (retexture). A repaint of T1 whose build stands on tex999999999999 (the pieces
@@ -58,11 +69,9 @@ Expected, by hand (the rule above):
        shows a Retry for a failed painted-body run.
 """
 import hashlib
-import importlib.util
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import threading
@@ -72,7 +81,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-OLD_COMMIT = "193321cf"  # the last artefact_graph with the name rule
 FAILS = []
 
 
@@ -95,18 +103,6 @@ def alive(pid: int) -> bool:
     except (OSError, IndexError):
         return False
     return state != "Z"
-
-
-def load_old_graph():
-    """artefact_graph.py as of ``OLD_COMMIT``, as its own module (the fails-on-old-code proof)."""
-    src = subprocess.run(["git", "-C", str(ROOT), "show", f"{OLD_COMMIT}:app/core/artefact_graph.py"],
-                         capture_output=True, check=True).stdout
-    spec = importlib.util.spec_from_loader("app.core._artefact_graph_old", loader=None)
-    mod = importlib.util.module_from_spec(spec)
-    mod.__package__ = "app.core"
-    sys.modules[spec.name] = mod  # dataclasses look their module up there
-    exec(compile(src, f"artefact_graph.py@{OLD_COMMIT}", "exec"), mod.__dict__)
-    return mod
 
 
 def main() -> int:
@@ -132,13 +128,12 @@ def main() -> int:
         from fastapi import HTTPException
 
         from app.core import artefact_graph as ag, base_body, body_retexture as br, garment_store as gs
-        from app.core import model3d, outfit_bodies as ob
+        from app.core import figure, model3d, outfit_bodies as ob
         from app.core.model_refs import mesh_items_token, mesh_signature, mesh_variant
         from app.models import inventory
         from app.models.character import (get_character_dir, get_character_images_dir, get_character_profile,
                                           save_character_profile)
         from app.routes.outfit_bodies import delete_outfit_body
-        old_ag = load_old_graph()
         # A piece change WITHOUT the render purge (module docstring).
         inventory._invalidate_renders_for_item = lambda item_id: None
         ob._base_ready = lambda c, b: ""  # the fixture's base is synthetic bytes; readiness is not under test
@@ -191,9 +186,16 @@ def main() -> int:
             M, R, bsig = fx["M"], fx["R"], fx["bsig"]
             variant, token = mesh_variant(char, pieces), mesh_items_token(char, pieces)
             sig = mesh_signature(pieces, [], char, variant, token)
-            tsig = base_body.predicted_texture_signatures(char, pieces, [], bsig=bsig)[fx["mode"]]
             manifest = {"equipped_pieces": pieces, "equipped_items": [], "mesh_variant": variant, "mesh_token": token,
-                        "texture_signature": tsig, "base_signature": bsig}
+                        "base_signature": bsig}
+            shape, tsig = figure.predicted_keys(char, pieces, [], bsig=bsig)
+            if fx["mode"] == "mesh":
+                # Nothing painted on the shape: T = what the current dressed front stands for (module docstring).
+                manifest["base_image_sha256"] = hashlib.sha256((R / f"tpose_{bsig}.png").read_bytes()).hexdigest()
+                touch(R / f"tpose_{sig}.png", b"png")
+                touch(R / f"tpose_{sig}.json", manifest)
+                tsig = base_body.front_texture_signature(char, sig, bsig=bsig)
+            manifest["texture_signature"] = tsig
             refs = [touch(R / f"{k}_{sig}{e}", manifest if e == ".json" else b"png")
                     for k in ("tpose", "tpose_back") for e in (".png", ".json")]
             meta = {"pieces": pieces, "items": [], "mesh_variant": variant, "mesh_token": token, "base_signature": bsig,
@@ -201,9 +203,9 @@ def main() -> int:
                     "rig": "mixamo"}
             body = ""
             if fx["mode"] == "mesh":
-                body = base_body.outfit_body_id(tsig)
-                rec = {"outfit_body": {"body_id": body, "mode": "mesh", "texture_signature": tsig,
-                                       "base_signature": bsig}}
+                body = shape
+                rec = {"outfit_body": {"body_id": body, "shape_key": body, "version": figure.SHAPE_VERSION,
+                                       "base_signature": bsig, "built_for": sig}}
                 refs += [touch(R / f"tpose_{body}.png"), touch(R / f"tpose_{body}.json", rec),
                          touch(M / f"{body}.glb"), touch(M / f"{body}.json", {**rec, "rig": "mixamo"}),
                          touch(M / "unrigged" / f"{body}.glb"), touch(M / "unrigged" / f"{body}.json", rec)]
@@ -222,7 +224,8 @@ def main() -> int:
             return n and (n.reachable, n.reason, n.parents.get("built_on", []), n.parents.get("outfits", []))
 
         def predicted(char, fx, pieces):
-            return base_body.predicted_texture_signatures(char, pieces, [], bsig=fx["bsig"])[fx["mode"]]
+            # Retexture scenarios only: the texture key the pieces paint now.
+            return figure.predicted_keys(char, pieces, [], bsig=fx["bsig"])[1]
 
         def set_text(item_id, text):
             assert inventory.update_item(item_id, {"prompt_fragment": text})
@@ -262,7 +265,6 @@ def main() -> int:
         t1n = predicted(char, fx, {"top": ids["top"], "bottom": ids["skirt"]})
         check("[1] O1 paints another tsig now", t1n != t1, True)
         check("[1] T1 outdated", node(ag, char, t1), (False, ag.OUTDATED_TEXTURE, [o1["sig"]], []))
-        check(f"[1] OLD rule ({OLD_COMMIT}) keeps T1", (node(old_ag, char, t1) or (None,))[0], True)
         entry = tab_entry(char, t1) or {}
         gc = entry.get("gc") or {}
         check("[1] tab verdict", (gc.get("kept"), gc.get("reason"), len(gc.get("outfits") or []), bool(gc.get("free"))),
@@ -284,10 +286,9 @@ def main() -> int:
         ids = fx["ids"]
         o2 = outfit(char, fx, {"top": ids["top"], "outer": ids["dress"]})
         t2 = o2["tsig"]
-        mi = base_body.predicted_mesh_items(char, {"top": ids["top"], "outer": ids["dress"]}, mode="retexture",
-                                            bsig=fx["bsig"])
-        check("[2] the dress is left out (accepted fit)", (mi.get("effective"), mi.get("unpainted")),
-              ([ids["dress"]], [ids["dress"]]))
+        sets = figure.worn_sets(char, pieces={"top": ids["top"], "outer": ids["dress"]})
+        check("[2] the dress is left out (own mesh, accepted fit)", (sorted(sets.own), sets.painted),
+              ([ids["dress"]], (ids["top"],)))
         check("[2] T2 current", node(ag, char, t2)[:2], (True, ag.CURRENT_TEXTURE))
         op = dict(inventory.get_item(ids["dress"])["outfit_piece"])
         op["mesh_mode"] = "painted"
@@ -295,7 +296,6 @@ def main() -> int:
         check("[2] painted now -> other tsig", predicted(char, fx, {"top": ids["top"], "outer": ids["dress"]}) != t2,
               True)
         check("[2] T2 outdated", node(ag, char, t2), (False, ag.OUTDATED_TEXTURE, [o2["sig"]], []))
-        check(f"[2] OLD rule ({OLD_COMMIT}) keeps T2", (node(old_ag, char, t2) or (None,))[0], True)
         report = ag.collect(char, explicit=True, reason="smoke")
         check("[2] collect deletes T2", ([e["key"] for e in report["orphans"] if e["kind"] == "texture"],
                                          exists(o2["store"])), ([f"texture:{t2}"], [False] * len(o2["store"])))
@@ -323,8 +323,10 @@ def main() -> int:
         fx = make(char, "mesh")
         ids = fx["ids"]
         o1 = outfit(char, fx, {"top": ids["top"], "bottom": ids["skirt"]})
-        check("[4] T1 current, B1 named", (node(ag, char, o1["tsig"])[:2], bool(o1["body"])),
-              ((True, ag.CURRENT_TEXTURE), True))
+        check("[4] T1 current, B1 a shape key", (node(ag, char, o1["tsig"])[:2],
+                                                  base_body.is_texture_signature(o1["tsig"]),
+                                                  base_body.is_outfit_body_signature(o1["body"])),
+              ((True, ag.CURRENT_TEXTURE), True, True))
         set_text(ids["skirt"], "a long pleated skirt")
         report = ag.collect(char, explicit=True, reason="smoke")
         check("[4] only T1 collected", sorted(e["key"] for e in report["orphans"]), [f"texture:{o1['tsig']}"])

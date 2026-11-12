@@ -130,6 +130,14 @@ import _footwear_fixtures as fx  # noqa: E402
 FAILS = []
 
 
+def ob_id(seed: str) -> str:
+    """A fixture outfit body id ("ob" + 8 hex): the formula of the retired ``base_body.outfit_body_id`` over a
+    texture-signature-shaped seed, kept so the ids (and their order) this smoke derives stay as they were."""
+    raw = json.dumps({"mode": "mesh", "texture_signature": seed, "version": 1}, sort_keys=True, ensure_ascii=False,
+                     separators=(",", ":"))
+    return "ob" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+
+
 def check(label, got, want):
     ok = got == want
     print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}"[:300] + ("" if ok else f" — expected {want!r}"[:300]))
@@ -595,7 +603,7 @@ def main() -> int:
         check("A5 /model3d foot_pose None", (status, "foot_pose" in model, model.get("foot_pose")), (200, True, None))
 
         print("[A6] mesh mode: the body fit is grafted, never the base fit")
-        A = base_body.outfit_body_id("tex" + "a" * 12)
+        A = ob_id("tex" + "a" * 12)
         body_a = repack(base_glb, generator="outfit body A", prefix="mixamorig:")
         sha_a = hashlib.sha256(body_a).hexdigest()
         (mdir / f"{A}.glb").write_bytes(body_a)

@@ -656,7 +656,7 @@ def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
     (``base_body.variant_current``: a piece's ``exposed_detail`` changed),
     or left an own-mesh piece painted on that has its garment mesh now
     (``base_body.mesh_items_ready``). The base model itself is never stale
-    here, nor is an outfit body (``base_body.outfit_body_id``); an outfit
+    here, nor is an outfit body (``figure.shape_key``); an outfit
     model built for the other outfit body mode, or on an outfit body that
     was rebuilt since, is (``base_body.outfit_body_stale``)."""
     if not base:

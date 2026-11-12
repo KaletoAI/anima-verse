@@ -12,10 +12,19 @@ Fixture (``make(char, s)``, one fresh character per scenario; items ``top<s>`` {
 ``dress<s>`` {outer} own mesh, all in the inventory; hair item worn, hair_method hairdeck; pipeline on, mode mesh
 = top and skirt in mode in_body (the outfit body mode follows the worn pieces, interim rule of plan
 2026-11-12-unified-worn-pieces Task 2; "switch to retexture" = both set to painted, which spends and walks nothing);
-profile picture). bsig = base_signature; T1 / T2 = the tsig the pieces of O1 / O2 paint now
-(base_body.predicted_texture_signatures, mesh mode — a texture lives while a live outfit would paint it,
-artefact_graph._current_textures; a made-up tsig would be outdated at once), per character; B1/B2 =
-outfit_body_id(T1/T2). Outfits (sig = model_refs.mesh_signature of the pieces with their recorded variant + token):
+profile picture). bsig = base_signature. Keys since plan 2026-11-12-unified-worn-pieces Task 5 (GC by shape and
+texture keys, artefact_graph._current_textures):
+  B1 / B2 = the SHAPE keys of O1 / O2 under the items' modes now (figure.predicted_keys(...)[0]: the in-body set
+            {top, skirt} / {top}; O3's in-body set is O1's -> B1, the dress is its own mesh — Review Focus 4: one
+            body, two assemblies). A shape lives while a live outfit's in-body set has its key, or while a live
+            outfit model names it (body_id).
+  T1 / T2 = the tsig the stored dressed fronts of O1 / O2 stand for (base_body.front_texture_signature: each front
+            is current — base_signature + base_image_sha256 of the base front, O2/O3 record mesh_items {intended,
+            effective, unpainted: [dress], mode mesh}, so the dress is left out of the paint and O3's front stands
+            for T1 too). A texture lives while a live outfit's current front stands for it or while the outfit
+            would paint it now (figure.predicted_keys(...)[1] — "" here in mesh mode: a meshed shape with nothing
+            painted); a made-up tsig would be outdated at once.
+Outfits (sig = model_refs.mesh_signature of the pieces with their recorded variant + token):
   O1 {top, skirt} WORN, on B1 (texture T1);  O3 {top, skirt, dress} on B1 (T1 — Review Focus 4: same painted
   pieces, other own-mesh piece -> one body, two assemblies);  O2 {top, dress} on B2 (T2).
 Labels (file groups the oracle knows):
@@ -24,7 +33,7 @@ Labels (file groups the oracle knows):
   O1r/O2r/O3r  refs tpose_, tpose_back_, drafts/tpose_back_, pose_ (.png+.json); the sidecars name texture + manifest
   T1/T2     model_refs/texture/tpose[_back]_<T>, texture/drafts/tpose_back_<T>, model3d/texture/<T>.glb/.json
   B1/B2     refs tpose[_back]_<B>, model3d <B>.glb/.json, unrigged/, prerig/, raw/, facefix/, rollback/<B>/<B>.glb
-            (record outfit_body {body_id, texture_signature, base_signature})
+            (shape record outfit_body {body_id = shape_key, version SHAPE_VERSION, base_signature, built_for})
   Gd        dress, current fsig Fd: images worn/ghost front, raw/, prepared/ (+.json), fit + .json (accepted on
             sha(base glb)), low/
   Gh        hair, current fsig Fh: fit + .json (accepted, method hairdeck, inputs.hsig = H), low/
@@ -42,7 +51,7 @@ Expected, by hand from the spec + plan rulings (module docstring of artefact_gra
 [0] collect(explicit): exactly OLDB, GOLD, BdOLD, HDOLD, DEAD, TMP go; the walk of model3d/ model_refs/ garments/ is
     EVERYTHING else (incl. UNK, LIVE, YOUNG). A second collect deletes 0 files. verify_cache: stale_signatures [].
 [1] outfit delete: route DELETE model3d (current outfit O1) -> O1m gone; collect: nothing else (O1r live = worn ->
-    T1 live -> B1 reachable in mesh mode). Outfit set deleted (route) -> nothing.
+    T1 live by its front; O1's in-body set has B1's key). Outfit set deleted (route) -> nothing.
 [2] item delete: route DELETE /items/dress<s> -> gone: O2m O2r O3m O3r (invalidation + not producible), T2 (no live
     outfit), B2 + Bd2 + Bh2 (body of a dead texture, Review Focus 2: fits on ALL bodies), Gd, Bd1. Kept: base O1m O1r
     T1 B1 Bh1 Gh HD FACE UNK LIVE YOUNG.
@@ -50,13 +59,16 @@ Expected, by hand from the spec + plan rulings (module docstring of artefact_gra
     base), T1 T2 (sidecars name the old base), B1 B2 Bd1 Bd2 Bh1 Bh2 (record names the old base — ruling
     "immediately"). Kept: O1..O3 (producible; rebuilt later), Gd Gh (R11: newest accepted fit at all), HD (the
     hsig changed with the picture, but the kept hair fit names it), NEWBASE refs, FACE UNK LIVE YOUNG.
-[4] mode switch (top and skirt painted) + collect: 0 deletions. O1m + O3m rebuilt in retexture
-    (sidecar without body_id) -> collect: 0 deletions — B1 Bd1 Bh1 stay, their texture T1 is live (ruling
-    2026-11-10: a body hangs on its texture in BOTH modes, the spec's anti-goal "switching the mode back and forth
-    -> no hub job for bodies that exist"); O2m rebuilt -> B2 Bd2 Bh2 stay the same way. Mode back to mesh + collect
-    -> 0 deletions (T1 T2 B1 B2 stay: mode back = no render, no mesh job).
+[4] mode switch (top and skirt painted) + collect: 0 deletions — no live outfit has a piece in the body any more,
+    but the models O1m O3m (B1) and O2m (B2) still NAME their bodies; T1 T2 live by the fronts (current under both
+    modes' own-mesh rule). O1m + O3m rebuilt in retexture (sidecar without body_id) -> collect: B1 Bd1 Bh1 go (no
+    live in-body set has B1's key, no live model names it — the old "a body hangs on its texture in BOTH modes"
+    rule went with the mode loop of predicted_texture_signatures, plan Task 5 Step 3; switching back meshes B1
+    again under the same key); T1 stays. O2m rebuilt -> B2 Bd2 Bh2 go the same way. Mode back to mesh + collect
+    -> 0 deletions (nothing of them is left to go; T1 T2 stay by the fronts).
 [5] character delete: delete_character -> the directory is gone; collect afterwards mints nothing.
-[6] running: B2 made unreachable (retexture, O2m rebuilt, B2's record pointed at a dead texture) but a live stage
+[6] running: B2 made unreachable (retexture: no in-body set has its key; O2m rebuilt: no model names it) but a
+    live stage
     on B2 -> B2, Bd2, Bh2 skipped "running";
     another thread holds keyed_lock("outfit_body", B2) -> skipped; open hub op model3d:<char>:<B2> -> skipped;
     nothing of them deleted. All released -> they go. Garment run of dress (status running) + dress out of the
@@ -190,21 +202,40 @@ def main() -> int:
                          touch(M / "covered" / f"{bsig}.json", {}), touch(M / "facefix" / f"{bsig}.glb"),
                          touch(M / "facefix" / f"{bsig}.png"), touch(M / "facefix" / f"{bsig}.json", {})]
             base_sha = hashlib.sha256(base_glb).hexdigest()
-            pred = {name: base_body.predicted_texture_signatures(char, pieces, [], bsig=bsig)
-                    for name, pieces in outfits.items()}
-            T1, T2 = pred["O1"]["mesh"], pred["O2"]["mesh"]
-            B1, B2 = base_body.outfit_body_id(T1), base_body.outfit_body_id(T2)
-            # Hand rule (mesh mode, the mode the fixture's models record): the dress is its own mesh with an
-            # accepted fit (Gd) -> left out of the paint, so O3 paints O1's pieces (T1); O2 paints another set.
-            # The retexture predictions differ per mode and are current too (_current_textures takes both).
-            check(f"{char}: O3 paints T1 in mesh mode, T1 != T2", (pred["O3"]["mesh"], T1 != T2), (T1, True))
-            sigs, tex_of, body_of = {}, {"O1": T1, "O2": T2, "O3": T1}, {"O1": B1, "O2": B2, "O3": B1}
+            from app.core import figure
+            dress_id = ids["dress"]
+            gs_fit = {"intended": [dress_id], "effective": [dress_id], "unpainted": [dress_id], "mode": "mesh"}
+            sigs, manifests = {}, {}
             for name, pieces in outfits.items():
                 variant, token = mesh_variant(char, pieces), mesh_items_token(char, pieces)
                 sig = mesh_signature(pieces, [], char, variant, token)
                 sigs[name] = sig
-                manifest = {"equipped_pieces": pieces, "equipped_items": [], "mesh_variant": variant,
-                            "mesh_token": token, "texture_signature": tex_of[name], "base_signature": bsig}
+                manifests[name] = {"equipped_pieces": pieces, "equipped_items": [], "mesh_variant": variant,
+                                   "mesh_token": token, "base_signature": bsig,
+                                   "base_image_sha256": hashlib.sha256(b"x" * 16).hexdigest(),
+                                   **({"mesh_items": gs_fit} if "outer" in pieces else {})}
+                touch(R / f"tpose_{sig}.png", b"png")
+                touch(R / f"tpose_{sig}.json", manifests[name])
+            # The dress needs its accepted base fit (Gd, below) before the fronts are judged: written here first.
+            fd0 = gs.garment_fsig(char, dress_id)
+            touch(gs.garment_path(char, dress_id, fd0, "fit"))
+            touch(gs.garment_path(char, dress_id, fd0, "fit").with_suffix(".json"),
+                  {"accepted": True, "base_model_sha256": base_sha, "body_id": bsig, "base_signature": bsig,
+                   "item_id": dress_id, "fsig": fd0})
+            pred = {name: figure.predicted_keys(char, pieces, [], bsig=bsig) for name, pieces in outfits.items()}
+            B1, B2 = pred["O1"][0], pred["O2"][0]
+            check(f"{char}: shapes: O3 on B1, B1 != B2, nothing painted in mesh mode",
+                  (pred["O3"][0], B1 != B2, base_body.is_outfit_body_signature(B1), [t for _s, t in pred.values()]),
+                  (B1, True, True, ["", "", ""]))
+            front_t = {name: base_body.front_texture_signature(char, sigs[name], bsig=bsig) for name in outfits}
+            T1, T2 = front_t["O1"], front_t["O2"]
+            check(f"{char}: fronts: O3 stands for T1, T1 != T2",
+                  (front_t["O3"], T1 != T2, base_body.is_texture_signature(T1)), (T1, True, True))
+            tex_of, body_of = {"O1": T1, "O2": T2, "O3": T1}, {"O1": B1, "O2": B2, "O3": B1}
+            for name, pieces in outfits.items():
+                sig = sigs[name]
+                variant, token = manifests[name]["mesh_variant"], manifests[name]["mesh_token"]
+                manifest = {**manifests[name], "texture_signature": tex_of[name]}
                 L[name + "r"] = [touch(R / f"{k}_{sig}{e}", manifest if e == ".json" else b"png")
                                  for k in ("tpose", "tpose_back", "pose") for e in (".png", ".json")]
                 L[name + "r"] += [touch(R / "drafts" / f"tpose_back_{sig}.png"),
@@ -227,7 +258,8 @@ def main() -> int:
                             touch(R / "texture" / "drafts" / f"tpose_back_{t}.json", tm),
                             touch(M / "texture" / f"{t}.glb"), touch(M / "texture" / f"{t}.json", tm)]
             for label, b, t in (("B1", B1, T1), ("B2", B2, T2)):
-                rec = {"outfit_body": {"body_id": b, "mode": "mesh", "texture_signature": t, "base_signature": bsig}}
+                rec = {"outfit_body": {"body_id": b, "shape_key": b, "version": figure.SHAPE_VERSION,
+                                       "base_signature": bsig, "built_for": sigs["O1" if b == B1 else "O2"]}}
                 L[label] = [touch(R / f"tpose_{b}.png"), touch(R / f"tpose_{b}.json", rec),
                             touch(R / f"tpose_back_{b}.png"), touch(R / f"tpose_back_{b}.json", rec),
                             touch(M / f"{b}.glb"), touch(M / f"{b}.json", {**rec, "rig": "mixamo"}),
@@ -321,15 +353,6 @@ def main() -> int:
             meta["outfit_body_mode"] = "retexture"
             sidecar.write_text(json.dumps(meta))
 
-        def retire_body(fx, label):
-            # Points every parent record of the body at a texture no outfit names: unreachable in any mode.
-            for path in fx["L"][label]:
-                if path.suffix == ".json" and path.is_file():
-                    meta = json.loads(path.read_text() or "{}")
-                    if isinstance(meta.get("outfit_body"), dict):
-                        meta["outfit_body"]["texture_signature"] = "tex000000000000"
-                        path.write_text(json.dumps(meta))
-
         def set_mode(fx, mode):
             for key in ("top", "skirt"):
                 op = dict(inventory.get_item(fx["ids"][key])["outfit_piece"])
@@ -392,14 +415,14 @@ def main() -> int:
         same("[4] after switch", "Demo4", fx, ALL)
         rebuild_retexture(fx, "O1")
         rebuild_retexture(fx, "O3")
-        check("[4] O1+O3 rebuilt: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
-        same("[4] O1+O3 rebuilt", "Demo4", fx, ALL)
+        ag.collect("Demo4", explicit=True)
+        same("[4] O1+O3 rebuilt: B1 + its fits go", "Demo4", fx, without("B1", "Bd1", "Bh1"))
         rebuild_retexture(fx, "O2")
-        check("[4] O2 rebuilt: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
-        same("[4] O2 rebuilt", "Demo4", fx, ALL)
+        ag.collect("Demo4", explicit=True)
+        same("[4] O2 rebuilt: B2 + its fits go", "Demo4", fx, without("B1", "Bd1", "Bh1", "B2", "Bd2", "Bh2"))
         check("[4] back to mesh", set_mode(fx, "mesh"), "mesh")
         check("[4] back to mesh: 0 deletions", ag.collect("Demo4", explicit=True)["deleted_files"], 0)
-        same("[4] back to mesh", "Demo4", fx, ALL)
+        same("[4] back to mesh", "Demo4", fx, without("B1", "Bd1", "Bh1", "B2", "Bd2", "Bh2"))
 
         # --- [5] character delete ------------------------------------------------------------------------
         print("[5] character delete")
@@ -415,7 +438,6 @@ def main() -> int:
         B2 = fx["B2"]
         check("[6] retexture", set_mode(fx, "retexture"), "retexture")
         rebuild_retexture(fx, "O2")
-        retire_body(fx, "B2")
         stage = fx["dir"] / "model3d" / ".process-b2"
         stage.mkdir()
         model3d._active_stages[str(stage.resolve())] = ("Demo6", B2)

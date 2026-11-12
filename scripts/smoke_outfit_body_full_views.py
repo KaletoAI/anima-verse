@@ -288,9 +288,8 @@ def main() -> int:
             return base_body.dressed_image("Demo", view, sig, b1) is not None
 
         def body_of(sig):
-            front = base_body.dressed_image("Demo", "front", sig, b1)
-            tsig = base_body._outfit_texture("Demo", front, bsig=b1, profile=get_character_profile("Demo"))["tsig"]
-            return base_body.outfit_body_id(tsig)
+            # The shape key the outfit's dressed views stand for (plan 2026-11-12-unified-worn-pieces Task 5).
+            return base_body.outfit_body_of_outfit("Demo", sig, profile=get_character_profile("Demo"))
 
         def kinds(events):
             return [e[0] for e in events]

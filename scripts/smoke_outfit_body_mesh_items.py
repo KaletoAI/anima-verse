@@ -47,7 +47,8 @@ body spec:
     refused"). The dress text leaves the jacket out: the front sidecar's
     dress_text names "plain grey underwear" and "white sneakers", NOT
     "leather jacket". 3 image jobs (front edit, back draft, back fit), ONE
-    mesh + ONE rig job, both on bK = outfit_body_id(tK), 0 worker runs. The
+    mesh + ONE rig job, both on bK = the body K's model names (its shape key, plan 2026-11-12-unified-worn-pieces
+    Task 5: the in-body pieces' dress text, the jacket left out), 0 worker runs. The
     model's mesh_items = {intended [jacket], effective [], unpainted
     [jacket], missing {jacket: "worn — back refused — Regenerate in the
     Wardrobe"}}. outfit_info: status ready, warnings contain
@@ -78,8 +79,9 @@ body spec:
     fitted; Outfit body tab: missing_mesh_items [].
 [5] Old rule (a model built in mesh mode before the ruling): L built with
     the old resolver (no "unpainted": the refused vest painted in) -> tsig
-    tL != tK, 3 image jobs, ONE mesh + ONE rig job on bOld =
-    outfit_body_id(tL). With the new resolver: L stale ("outfit_body"),
+    tL != tK, 3 image jobs, ONE mesh + ONE rig job on bOld = the body L's
+    model names (its dress text has the vest, so another shape key than bK).
+    With the new resolver: L stale ("outfit_body"),
     its dressed front off-rule; the rebuild leaves the vest out -> dress text
     = K's painted set -> tsig tK: 0 image jobs (store), 0 mesh/rig jobs, L
     stands on bK. Artefact GC (explicit): bOld is an orphan and its files
@@ -360,7 +362,7 @@ def main() -> int:
         jobs, runs, hub, result = render_and_build()
         meta_k = meta_of(sig_k)
         t_k = meta_k.get("texture_signature")
-        b_k = base_body.outfit_body_id(t_k) if base_body.is_texture_signature(t_k) else None
+        b_k = meta_k.get("body_id")
         text = front_text(sig_k)
         check("K: dress text without the jacket", ("plain grey underwear" in text, "white sneakers" in text,
                                                    "leather jacket" in text), (True, True, False))
@@ -463,10 +465,10 @@ def main() -> int:
         jobs, runs, hub, result = render_and_build()
         meta_l = meta_of(sig_l)
         t_l = meta_l.get("texture_signature")
-        b_old = base_body.outfit_body_id(t_l) if base_body.is_texture_signature(t_l) else None
-        check("old L: vest painted into its own body", (result.get("ok"), jobs, hub, t_l != t_k,
+        b_old = meta_l.get("body_id")
+        check("old L: vest painted into its own body", (result.get("ok"), jobs, hub, t_l != t_k, b_old != b_k,
                                                         "knitted green vest" in front_text(sig_l)),
-              (True, 3, [("mesh", b_old), ("rig", b_old)], True, True))
+              (True, 3, [("mesh", b_old), ("rig", b_old)], True, True, True))
         base_body.resolve_mesh_items = real_resolve
         base_body.mesh_items_off_rule = real_off_rule
         check("new rule: L stale (outfit_body)", (model3d.find_model3d("Demo", sig_l),

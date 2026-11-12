@@ -21,9 +21,9 @@ NODES (the report key in brackets; a file belongs to exactly one node):
   ``assembled/`` (the garment assembly) and ``rollback/<sig>/``. Category
   ``refs`` / ``meshes`` (two nodes, one key).
 * base ``base<8hex>`` — a base body, same layout (+ ``covered/``).
-* body ``ob<8hex>`` — an outfit body of the mesh mode, same layout; parent
-  record ``outfit_body {body_id, texture_signature, base_signature, …}`` in
-  its sidecars.
+* body ``ob<8hex>`` — an outfit body (a stored SHAPE, ``figure.shape_key``),
+  same layout; parent record ``outfit_body {body_id, shape_key,
+  base_signature, built_for, …}`` in its sidecars.
 * texture ``texture:<tsig>`` — the texture store: dressed views
   ``model_refs/texture/[drafts/]`` + the painted body ``model3d/texture/``;
   parent ``base_signature`` in its sidecars.
@@ -54,7 +54,8 @@ inventory, else the reachable set over it; what the outfit batch pre-builds,
 saved outfit sets included); the CURRENT base signature (none for a
 non-humanoid; unknown = nothing base-derived is judged); the equipped / held
 own-mesh garments with their current fsig (``outfit_cache_gc._garment_roots``,
-R11 served fit included); the character's outfit body mode.
+R11 served fit included). No mode: a worn piece's mode is on its item and
+enters the predicted keys below.
 
 REACHABILITY (one function each, ``_judge``):
 
@@ -62,24 +63,23 @@ REACHABILITY (one function each, ``_judge``):
 * base: exactly the current base signature.
 * texture: the CURRENT texture of a live outfit (``_current_textures``:
   the tsig its stored dressed front still builds — base view, fits and
-  own-mesh flags unchanged since — or the tsig its pieces predict now) and
-  no sidecar of it names another base than the current one. A tsig a live
-  outfit's sidecars only NAME is outdated (``OUTDATED_TEXTURE``, parent
-  ``built_on``): the piece text, an own-mesh flag or a fit changed, so its
-  next build paints another one, and the served model never reads the store
-  (it is a copy of the painted body; in mesh mode it stands on the outfit
-  body, which its ``body_id`` keeps below). Both modes are predicted: the
-  dressed views are the mesher input of the outfit body too, and the
-  painted body is small and CPU-made — mode back never re-renders (Task 5).
-* body: its record names the CURRENT base AND either its texture is one a
-  live outfit would stand on in MESH mode (``_current_textures``; judged in
-  BOTH outfit body modes — ruling 2026-11-10, mode switch: the spec's
-  anti-goal "switching the mode back and forth → no hub job for bodies that
-  exist"; a body is a mesh + rig of hub jobs, its texture keeps it exactly
-  as long as an outfit can still stand on it, so retexture → mesh reuses it
-  with 0 hub jobs), or a live outfit model still names it as ``body_id``
-  (its assembly still needs the body fits). Off the pipeline only the
-  second holds.
+  own-mesh flags unchanged since — or the texture key its pieces predict
+  now, ``figure.predicted_keys``) and no sidecar of it names another base
+  than the current one. A tsig a live outfit's sidecars only NAME is
+  outdated (``OUTDATED_TEXTURE``, parent ``built_on``): the piece text, a
+  piece's mode or a fit changed, so its next build paints another one, and
+  the served model never reads the store (it is a copy of the painted body;
+  on a shape it stands on the outfit body, which its ``body_id`` keeps
+  below).
+* body: its record names the CURRENT base AND either its key is the shape
+  key a live outfit predicts NOW (``figure.predicted_keys`` under the items'
+  modes — plan 2026-11-12-unified-worn-pieces Task 5), or a live outfit
+  model still names it as ``body_id`` (its assembly still needs the body
+  fits), or the shape of the outfit it was built for cannot be computed
+  (kept, never deleted on a guess). A body still under its old
+  texture-keyed id (not re-keyed at boot, ``figure_migration``) is
+  predicted by nothing: stale, it goes unless a live model names it. Off
+  the pipeline nothing is in a body, so only the named clause holds.
 * garment: ``_garment_roots`` (current fsig, served fit, newest accepted per
   method). Body fit: its body AND its garment group are reachable.
 * HairDeck job: its item is kept and the hsig is the item's current one or
@@ -103,9 +103,9 @@ RULINGS.
   MODEL regenerated under the same signature keeps the bodies (own mesh +
   rig, Task 1 ruling); fits are refitted in place (same names). Base fits of
   an older fingerprint follow R11 (served until the new fit is accepted).
-* MODE: a switch runs the walk (``character_ops.apply_profile_update``), but
-  neither textures nor bodies hang on the mode (body/texture above): what
-  the switch makes unreachable is only what no live outfit reaches anyway.
+* MODE: a piece's mode is part of the predicted keys. A mode change makes
+  the shape (and texture) the outfit stood on unreachable once no live
+  outfit model names it any more — it is rebuilt by the next Build.
 
 SAFETY. Never deleted: what is running — a live model stage of the
 signature, an open hub operation on it (``hub_ops`` subject
@@ -202,8 +202,6 @@ class Roots:
     worn: str = ""
     #: the current base signature; "" = none (non-humanoid), None = unknown
     base: Optional[str] = None
-    #: "mesh" | "retexture" | "off" | "" (unknown: bodies are not judged)
-    mode: str = ""
     #: item ids in the inventory; None = unreadable (no outfit is judged then)
     owned: Optional[Set[str]] = field(default_factory=set)
     #: garment keys kept (``garment:<item>_<fsig>``), None = not computable
@@ -405,17 +403,6 @@ def compute_roots(character_name: str) -> Roots:
     roots.worn = ocg._worn_signature(character_name)
     roots.base = ocg._current_base_signature(character_name)
     try:
-        from app.core import base_body
-        from app.models.character import get_character_profile
-        profile = get_character_profile(character_name) or {}
-        if not base_body.is_base_pipeline(character_name, profile=profile):
-            roots.mode = "off"
-        else:
-            roots.mode = base_body.outfit_body_mode(character_name, profile=profile)
-    except Exception:
-        logger.exception("Artefact GC %s: outfit body mode unavailable", character_name)
-        roots.mode = ""
-    try:
         from app.models.inventory import get_character_inventory
         entries = (get_character_inventory(character_name) or {}).get("inventory") or []
         roots.owned = {str(e.get("item_id") or "") for e in entries if e.get("item_id")}
@@ -510,6 +497,8 @@ def _check_deadline(deadline: Optional[float], character_name: str) -> None:
         raise GcOverBudget(f"artefact GC of {character_name} over its time budget")
 
 
+#: Body reason (``_judge`` step 3): a live outfit predicts this shape key now.
+SHAPE_OF_LIVE_OUTFIT = "shape of a live outfit"
 #: Texture reasons (``_judge`` step 4) — the Outfit body tab shows them.
 CURRENT_TEXTURE = "current texture of a live outfit"
 OUTDATED_TEXTURE = "outdated: a live outfit was built on it, none would paint it now"
@@ -527,26 +516,25 @@ def _outfit_manifest(root: Path, signature: str) -> Optional[Dict[str, Any]]:
 
 
 def _current_textures(character_name: str, live: Set[str], roots: Roots, named: Dict[str, Set[str]],
-                      deadline: Optional[float] = None) -> Tuple[Dict[str, Set[str]], Set[str]]:
-    """``({tsig: {outfit signature, ...}}, mesh tsigs)`` — the painted bodies
-    the live outfits would be built on NOW, in either outfit body mode, and
-    the tsigs among them a MESH-mode build would stand on (an outfit body is
-    reused only there). Per live outfit (pose states and the worn
-    combination by their neutral signature): the tsig of its stored dressed
-    front while that front is still the build's input
-    (``base_body.front_texture_signature``) and the tsig its pieces predict
-    in BOTH outfit body modes (``base_body.predicted_texture_signatures``,
-    read-only — a mode switch must not orphan the other mode's bodies). A
-    tsig its sidecars only NAME (the stale model of an outfit whose piece
-    text, own-mesh flag or fit changed since) is not current: the served
-    model is a copy of its body (``base_body.build_outfit_model``), never
-    reads the store again, and its rebuild paints the new tsig. What cannot
-    be computed keeps what the outfit's sidecars name (the base unknown or
+                      deadline: Optional[float] = None) -> Tuple[Dict[str, Set[str]], Set[str], Set[str]]:
+    """``({tsig: {outfit signature, ...}}, shapes, unsure)`` — the painted
+    bodies and the shapes (outfit body keys) the live outfits would be built
+    on NOW, and the live outfits whose keys could not be computed. Per live
+    outfit (pose states and the worn combination by their neutral
+    signature): the tsig of its stored dressed front while that front is
+    still the build's input (``base_body.front_texture_signature``) and the
+    ``figure.predicted_keys`` of its pieces (read-only, under the items'
+    modes). A tsig its sidecars only NAME (the stale model of an outfit whose
+    piece text, mode or fit changed since) is not current: the served model
+    is a copy of its body (``base_body.build_outfit_model``), never reads
+    the store again, and its rebuild paints the new key. What cannot be
+    computed keeps what the outfit's sidecars name (the base unknown or
     none: all of ``named``; one outfit failing or without a manifest: its
-    own), in both lists."""
+    own, and it is unsure)."""
     if not roots.base:
-        return {tsig: set(sigs) for tsig, sigs in named.items()}, set(named)
-    from app.core import base_body
+        # The base unknown keeps every body, none means every body is of an older base.
+        return {tsig: set(sigs) for tsig, sigs in named.items()}, set(), set()
+    from app.core import base_body, figure
     from app.core.model_refs import current_outfit_state, neutral_signature
     from app.models.character import get_character_profile
     root = _char_dir(character_name)
@@ -558,9 +546,11 @@ def _current_textures(character_name: str, live: Set[str], roots: Roots, named: 
         profile = get_character_profile(character_name) or {}
     except Exception:  # noqa: BLE001 — unknown profile: nothing is judged stale
         logger.exception("Artefact GC %s: profile unreadable — textures judged by name", character_name)
-        return {tsig: set(sigs) for tsig, sigs in named.items()}, set(named)
+        return ({tsig: set(sigs) for tsig, sigs in named.items()}, set(),
+                {neutral_signature(s) for s in live})
     out: Dict[str, Set[str]] = {}
-    mesh: Set[str] = set()
+    shapes: Set[str] = set()
+    unsure: Set[str] = set()
     for sig in sorted({neutral_signature(s) for s in live}):
         _check_deadline(deadline, character_name)
         tsigs: Set[str] = set()
@@ -568,30 +558,29 @@ def _current_textures(character_name: str, live: Set[str], roots: Roots, named: 
             front = base_body.front_texture_signature(character_name, sig, bsig=roots.base, profile=profile)
             if front:
                 tsigs.add(front)
-                if base_body.front_texture_signature(character_name, sig, bsig=roots.base, profile=profile,
-                                                     modes=(base_body.MESH_MODE,)) == front:
-                    mesh.add(front)
             manifest = _outfit_manifest(root, sig)
             if manifest is None and roots.worn and sig == neutral_signature(roots.worn):
                 pieces, items, _worn = current_outfit_state(character_name)
                 manifest = {"pieces": dict(pieces or {}), "items": list(items or [])}
             if manifest is None:
                 tsigs |= named_of.get(sig, set())  # nothing to predict from: kept by name
-                mesh |= named_of.get(sig, set())
+                unsure.add(sig)
             else:
-                predicted = base_body.predicted_texture_signatures(
-                    character_name, manifest["pieces"], manifest["items"], bsig=roots.base, profile=profile)
-                tsigs |= set(predicted.values())
-                mesh.add(predicted[base_body.MESH_MODE])
+                shape, texture = figure.predicted_keys(character_name, manifest["pieces"], manifest["items"],
+                                                       bsig=roots.base, profile=profile)
+                if texture:
+                    tsigs.add(texture)
+                if base_body.is_outfit_body_signature(shape):
+                    shapes.add(shape)
         except GcOverBudget:
             raise
         except Exception:  # noqa: BLE001 — never delete on a guess
-            logger.exception("Artefact GC %s: texture of outfit %s not computable — kept by name", character_name, sig)
+            logger.exception("Artefact GC %s: keys of outfit %s not computable — kept by name", character_name, sig)
             tsigs |= named_of.get(sig, set())
-            mesh |= named_of.get(sig, set())
+            unsure.add(sig)
         for tsig in tsigs:
             out.setdefault(tsig, set()).add(sig)
-    return out, mesh
+    return out, shapes, unsure
 
 
 def _judge(character_name: str, nodes: List[Node], roots: Roots,
@@ -632,10 +621,11 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
             body = meta.get("body_id")
             if sidecar.parent.name == "model3d" and isinstance(body, str) and body:
                 named_bodies.add(body)
-    # What every live outfit would paint NOW (``_current_textures``); the
-    # tsigs its sidecars name are only what it was built from.
-    current_tsigs, mesh_tsigs = (_current_textures(character_name, live, roots, named_tsigs, deadline)
-                                 if any(n.kind in ("texture", "body") for n in nodes) else ({}, set()))
+    # What every live outfit would be built on NOW (``_current_textures``);
+    # the tsigs its sidecars name are only what it was built from.
+    current_tsigs, live_shapes, unsure = (_current_textures(character_name, live, roots, named_tsigs, deadline)
+                                          if any(n.kind in ("texture", "body") for n in nodes)
+                                          else ({}, set(), set()))
     live_tsigs = set(current_tsigs)
     # 2. Base bodies.
     for node in nodes:
@@ -647,27 +637,28 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
             node.reachable, node.reason = True, "current base"
         else:
             node.reachable, node.reason = False, "older base"
-    # 3. Outfit bodies (refs + model group judged once per id).
+    # 3. Outfit bodies = stored shapes (refs + model group judged once per id).
+    from app.core.model_refs import neutral_signature
     body_verdicts: Dict[str, Tuple[bool, str, Dict[str, Any]]] = {}
     for node in nodes:
         if node.kind != "body":
             continue
         if node.key not in body_verdicts:
             record = _body_record(root, node.key)
-            parents = {k: record.get(k) for k in ("body_id", "texture_signature", "base_signature")}
-            if roots.base is None or not roots.mode:
-                verdict = (True, "base or mode unknown")
+            parents = {k: record.get(k) for k in ("body_id", "shape_key", "base_signature", "built_for")}
+            built_for = record.get("built_for")
+            if roots.base is None:
+                verdict = (True, "base unknown")
             elif not roots.base or record.get("base_signature") != roots.base:
                 verdict = (False, "older base")
-            elif roots.mode in ("mesh", "retexture") and record.get("texture_signature") in mesh_tsigs:
-                # Both modes (ruling 2026-11-10): mode back to mesh reuses it, no hub job — while a live
-                # outfit would be built on its texture IN MESH MODE (the only mode that uses a body).
-                verdict = (True, "texture of a live outfit")
+            elif node.key in live_shapes:
+                verdict = (True, SHAPE_OF_LIVE_OUTFIT)
             elif node.key in named_bodies:
                 verdict = (True, "named by a live outfit model")
+            elif isinstance(built_for, str) and built_for and neutral_signature(built_for) in unsure:
+                verdict = (True, "shape of its outfit not computable")
             else:
-                verdict = (False, "no live outfit on it" if roots.mode in ("mesh", "retexture")
-                           else f"not used in {roots.mode} mode")
+                verdict = (False, "no live outfit on it")
             body_verdicts[node.key] = (*verdict, parents)
         node.reachable, node.reason, parents = body_verdicts[node.key]
         node.parents = dict(parents)

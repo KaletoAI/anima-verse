@@ -3,9 +3,10 @@ explicit runs on one body (plan
 ``docs/superpowers/plans/2026-11-10-outfit-body-mesh-mode.md``, Task 4; spec
 ``docs/superpowers/specs/2026-11-10-outfit-body-mesh-mode-design.md``).
 
-An outfit body (``ob<8hex>``, ``base_body.outfit_body_id``) is the meshed and
-rigged body of one texture signature: the dressed views of the painted pieces
-→ mesher → rig → normalize → extension rig → collision capsules
+An outfit body (``ob<8hex>``, its shape key — ``base_body.outfit_shape`` /
+``figure.shape_key``) is the meshed and rigged body of one shape: the dressed
+views of the pieces in the body → mesher → rig → normalize → extension rig →
+collision capsules
 (``base_body.prepare_outfit_body``). Own-mesh garments and hair are fitted onto
 it (``garments.body_fit``, keyed ``(item, fsig, body id)``), and every outfit
 model that wears those painted pieces is a copy of it.
@@ -59,8 +60,8 @@ key is reused on the CPU) and ``repaint`` (Regenerate a painted body —
 ``repaint_texture``: every dressed view rendered anew for an outfit standing
 on it, then that outfit's model built forced, the body painted again). In
 both modes a body is ``current`` only when the worn outfit stands on it;
-an outfit body of the other mode stays stored (artefact GC: a body hangs on
-its texture in both modes, so switching back costs no hub job).
+an outfit body stays stored while a live outfit would stand on its shape key
+or a live outfit model names it (artefact GC).
 """
 from __future__ import annotations
 
@@ -753,10 +754,14 @@ def worn_body(character_name: str, *, profile: Dict[str, Any], bsig: str) -> Opt
                                                 profile=mesh_profile, mesh_items=intended))
             variant = base_body.texture_variant(character_name, pieces, dressed=dressed,
                                                 mesh={"intended": intended}, profile=profile)
-            tsig = base_body.texture_signature(base_body.texture_inputs(
-                character_name, pieces=pieces, items=items, variant=variant, mesh_effective=intended, bsig=bsig,
-                profile=mesh_profile))
-            body_id = base_body.outfit_body_id(tsig)
+            inputs = base_body.texture_inputs(character_name, pieces=pieces, items=items, variant=variant,
+                                              mesh_effective=intended, bsig=bsig, profile=mesh_profile)
+            tsig = base_body.texture_signature(inputs)
+            shape = base_body.outfit_shape(character_name, pieces, bsig=bsig, variant=variant,
+                                           dress_text=inputs["dress_text"], profile=profile) if dressed else None
+            if shape is None:
+                return None  # no piece in the body (or undressed): the outfit stands on the base body
+            body_id = shape["key"]
         if not dressed:
             return None
         missing = [v for v in base_body.dressed_views()
@@ -1355,26 +1360,36 @@ def body_info(character_name: str, body_id: str, *, profile: Dict[str, Any], bsi
     body (``worn_entry`` names it). ``orphaned``: never built, no outfit standing on its
     views, no outfit model on it, not the worn one (ruling 2026-11-10: listed
     collapsed, never hidden — the artefact GC keeps such a body while a live
-    outfit names its texture). ``blocked``: ``_blocked``."""
-    from app.core import base_body, model3d
+    outfit would stand on its shape key). ``blocked``: ``_blocked``."""
+    from app.core import base_body, figure, model3d
     from app.core.model_overview import freshness, outfit_body_overview
+    from app.core.model_refs import find_ref_image
     if worn_entry is not None and worn_entry.get("body_id") != body_id:
         worn_entry = None
     path = base_body.outfit_body_path(character_name, body_id)
     meta = _json(path.with_suffix(".json")) if path.is_file() else {}
     record = _body_record(character_name, body_id)
-    tsig = str(record.get("texture_signature") or "") or (str(worn_entry["tsig"]) if worn_entry else "")
+    # The texture whose dressed views the body was meshed from: a shape record names none (plan
+    # 2026-11-12-unified-worn-pieces Task 5), its mesher inputs do (``base_body._write_body_refs``).
+    tsig = (str(record.get("texture_signature") or "")
+            or str(base_body._ref_sidecar(find_ref_image(character_name, "tpose", body_id)).get("texture_signature")
+                   or "")
+            or (str(worn_entry["tsig"]) if worn_entry else ""))
+    shape_inputs = record.get("shape_inputs")
+    shape_texts = shape_inputs.get("dress_text") if isinstance(shape_inputs, dict) else None
     on_body = _outfits_on_body(character_name, body_id, models, saved, worn)
     views, view_meta = _view_urls(character_name, body_id)
     source = source_outfit(character_name, body_id, profile=profile, outfit_models=models)
     dress = ""
-    if base_body.is_texture_signature(tsig):
+    if isinstance(shape_texts, dict) and isinstance(shape_texts.get("front"), str):
+        dress = shape_texts["front"]  # what the shape was meshed from (its record)
+    elif base_body.is_texture_signature(tsig):
         dress = str(base_body._ref_sidecar(base_body._texture_view(character_name, "front", tsig))
                     .get("dress_text") or "")
     reasons = []
     if record.get("base_signature") and bsig and record.get("base_signature") != bsig:
         reasons.append(base_body.OLDER_BASE)
-    if record and record.get("version") != base_body.OUTFIT_BODY_VERSION:
+    if record and record.get("version") != figure.SHAPE_VERSION:
         reasons.append(OLDER_BODY_VERSION)
     if source and record.get("views") != base_body.texture_view_shas(character_name, source, bsig):
         reasons.append(DRESSED_VIEWS_CHANGED)

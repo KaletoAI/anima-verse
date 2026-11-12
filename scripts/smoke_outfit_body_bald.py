@@ -15,7 +15,9 @@ with hair, so ``garment_hair.ensure_hair_item`` creates and WEARS its own hair i
 in_body — the outfit body mode follows the worn pieces (interim rule of plan 2026-11-12-unified-worn-pieces Task 2:
 mesh iff a worn piece is in the body); "retexture mode" in [1] = both switched to painted.
 Base views front/back of bsig, base model. Outfit O1 {top, skirt} WORN with a dressed front + back made BEFORE the
-rule, texture T0 = its tsig, its body B0 = outfit_body_id(T0) (refs + rigged GLB) and the outfit model of O1 on B0.
+rule, texture T0 = its tsig, its body B0 = its shape key (figure.shape_key of {top, skirt} in the body — the dress
+text of its shape inputs is T0's, nothing painted next to them; plan 2026-11-12-unified-worn-pieces Task 5) with a
+shape record (refs + rigged GLB) and the outfit model of O1 on B0.
 
 Expected, by hand:
 [1] Rule: outfit_body_bald(Demo) True (mesh mode + worn own hair item); hair taken off (equipped_mesh_pieces {})
@@ -229,7 +231,11 @@ def main() -> int:
                                           profile=profile())
         check("[3] same key without own hair", base_body.texture_signature(off_in), T0)
         set_profile(equipped_mesh_pieces={"hair": hair_id})
-        B0 = base_body.outfit_body_id(T0)
+        from app.core import figure
+        sets0 = figure.worn_sets(char, pieces=pieces, profile=profile())
+        shape0 = figure.shape_inputs(char, sets0, bsig=bsig, variant=variant, profile=profile())
+        check("fixture: the shape's dress text is T0's", shape0["dress_text"], plain_in["dress_text"])
+        B0 = figure.shape_key(char, sets0, bsig=bsig, variant=variant, profile=profile())
 
         # --- fixture: O1 with views, body B0 and model from before the rule ------------------------------------
         variant_o, token = mesh_variant(char, pieces), mesh_items_token(char, pieces)
@@ -248,7 +254,7 @@ def main() -> int:
                                                   "back_draft": o1_draft.name, "back_draft_sha256": sha(o1_draft),
                                                   "texture_signature": T0, "dress_text": TEXTS.get("back", "")})
         base_body._store_texture_views(char, O1, T0, ["front", "back"], TEXTS)
-        rec0 = {"body_id": B0, "mode": "mesh", "version": base_body.OUTFIT_BODY_VERSION, "texture_signature": T0,
+        rec0 = {"body_id": B0, "shape_key": B0, "version": figure.SHAPE_VERSION, "shape_inputs": shape0,
                 "base_signature": bsig, "built_for": O1, "used_views": ["front", "back"],
                 "views": {"front": sha(o1_front), "back": sha(o1_back)}}
         for kind, view in (("tpose", o1_front), ("tpose_back", o1_back)):

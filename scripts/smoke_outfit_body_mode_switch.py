@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Outfit body mode switch — the worn outfit's body is always listed and marked current in BOTH modes, a mode
-switch spends nothing (Build current outfit builds the model of the new mode), bodies survive the switch, and the
+switch spends nothing (Build current outfit builds the model of the new mode), and the
 3D tab says when it serves a stand-in (app/core/outfit_bodies.py ``worn_texture`` / ``textures`` / ``paint_worn`` /
 ``body_info``'s ``current``, app/core/model3d_pipeline.py ``build_current_outfit`` / ``fallback_state``,
 app/core/artefact_graph.py body rule).
@@ -10,6 +10,12 @@ a worn piece is in mode ``in_body``; the profile field ``outfit_body_mode`` and 
 ``model3d_pipeline.after_mode_switch`` are gone). "Switch to mesh" below = top and skirt set to ``in_body`` (what
 the mesh mode meshed into the outfit body), "switch to retexture" = both set to ``painted``; a mode change is never
 an automatic trigger (plan Global Constraints), so every build below is an explicit POST build-current.
+
+Since Task 5 of that plan the artefact GC predicts each live outfit under its pieces' CURRENT modes only (the
+mode loop of ``predicted_texture_signatures`` is gone, ``figure.predicted_keys``): an outfit body is kept while a
+live outfit's in-body set has its shape key or a live outfit model names it. So a body whose pieces were all
+switched to painted, and whose outfit model was rebuilt painted, is an orphan and goes with the next walk;
+switching back meshes it again (ONE hub job, the same shape key). [2]-[4] below say so.
 
 Usage:
     ./.venv/bin/python scripts/smoke_outfit_body_mode_switch.py
@@ -33,9 +39,10 @@ The outfit-change trigger, the auto hook, the GC walk, the stale rules and ``app
 Fixture (Demo: humanoid, pipeline on, side views off -> dressed views front + back, no own-mesh piece). Items top
 {top} and skirt {bottom}, both painted (retexture mode). O1 = {top, skirt} worn, O2 = {top}, O3 = {skirt}. Base views front/back, base model
 (rigged + unrigged). T1 = the tsig of O1 by the hand rule (no own-mesh piece: unpainted [], variant
-outfit_variant = "rigged"); B1 = outfit_body_id(T1). O2 has a retexture model on T2 = what O2's pieces paint now
-(predicted_texture_signatures, retexture — a made-up tsig is outdated and goes with the first walk) with its
-painted body, but no dressed views.
+outfit_variant = "rigged"); B1 = O1's shape key once top + skirt are in the body (figure.predicted_keys, taken in
+[2]). O2 has a retexture model on T2 = what O2's pieces paint now (figure.predicted_keys' texture key — a made-up
+tsig is outdated and goes with the first walk) with its painted body, but no dressed views. B2 = shape_key_of of
+made-up shape inputs (another outfit's body, [4]).
 
 Expected, by hand:
 [1] retexture, nothing built for O1: textures = [pending entry (key O1, current, pending, worn_outfit {O1,
@@ -52,12 +59,14 @@ Expected, by hand:
     stale for the mode ("body_mode"). POST build-current -> {status "generating"}: ONE build (trigger_generation
     once), its views are current: 0 image jobs; prepare_outfit_body meshes B1: ONE hub job; O1's model now stands
     on B1. mesh -> retexture: the switch 0 builds; build-current: ONE build, 0 image jobs, 0 hub jobs, 0 worker runs
-    — the painted body of T1 is reused. B1 still stored after a GC walk (artefact_graph.collect_quietly).
-[3] retexture -> mesh -> retexture again, a build-current after each switch: ONE build each; in total 0 hub jobs
-    (B1 is current: cached), 0 worker runs (T1 reused), 0 image jobs. B1 and T1's painted body still stored after
-    a GC walk (ruling: a body hangs on its live texture in both modes). build-current once more -> {status
-    "current"}, no build.
-[4] other outfits' bodies are never current. mesh mode (build-current: ONE build, 0 jobs — B1 is stored), a body B2 of T2 with O2's model on it AND O1's model
+    — the painted body of T1 is reused. A GC walk (artefact_graph.collect_quietly) REMOVES B1: no live outfit has
+    a piece in the body any more and O1's model now names T1, not B1.
+[3] retexture -> mesh -> retexture again, a build-current after each switch: ONE build each; in total ONE hub job
+    (B1 was collected in [2], so mesh mode meshes it again — under the same shape key), 0 worker runs (T1 reused),
+    0 image jobs. After the walk B1 is gone again (same reason as [2]), T1's painted body stays (O1 paints T1 now).
+    build-current once more -> {status "current"}, no build.
+[4] other outfits' bodies are never current. mesh mode (build-current: ONE build, ONE hub job — B1 was collected
+    in [3] — 0 image jobs), a body B2 with O2's model on it AND O1's model
     rewritten to name B2 (an outdated model of the worn outfit on another body): bodies: B1 current True
     (listed first, the worn outfit's views stand for it), B2 current False although O1 (worn) is listed on it.
     retexture: T1 current, T2 not.
@@ -214,11 +223,13 @@ def main() -> int:
         T1 = base_body.texture_signature(base_body.texture_inputs(
             char, pieces=P1, items=[], variant=base_body.outfit_variant(char, P1, profile=prof),
             mesh_effective=[], bsig=bsig, profile={**prof, "equipped_pieces": P1, "equipped_items": []}))
-        B1 = base_body.outfit_body_id(T1)
+        from app.core import figure
+        B1 = None   # O1's shape key: computable once its pieces are in the body ([2])
         # What O2's pieces would paint now (a made-up tsig no outfit paints is outdated and goes with the
         # first walk — artefact_graph._current_textures).
-        T2 = base_body.predicted_texture_signatures(char, P2, [], bsig=bsig, profile=prof)[base_body.RETEXTURE_MODE]
-        B2 = base_body.outfit_body_id(T2)
+        T2 = figure.predicted_keys(char, P2, [], bsig=bsig, profile=prof)[1]
+        B2_INPUTS = {"version": figure.SHAPE_VERSION, "base_signature": bsig, "dress_text": {"front": "O2 elsewhere"}}
+        B2 = figure.shape_key_of(B2_INPUTS)
 
         def manifest(pieces):
             return {"pieces": dict(pieces), "items": [], "mesh_variant": mesh_variant(char, pieces),
@@ -283,7 +294,8 @@ def main() -> int:
                 prepared = base_body.prepare_outfit_body(character_name, signature, force=force)
                 if prepared is not None and not prepared.get("ok"):
                     return prepared
-                body_id = base_body.outfit_body_id(tsig)
+                body_id = prepared.get("body_id") if prepared else base_body.outfit_body_of_outfit(
+                    character_name, signature)
                 meta.update(outfit_body_mode="mesh", body_id=body_id,
                             body_sha256=sha(base_body.outfit_body_path(character_name, body_id)))
             else:
@@ -385,6 +397,8 @@ def main() -> int:
         print("[2] retexture -> mesh -> retexture")
         reset()
         check("[2] switch to mesh", set_mode("mesh"), "mesh")
+        B1 = figure.predicted_keys(char, P1, [], bsig=bsig)[0]
+        check("[2] B1 = O1's shape key", base_body.is_outfit_body_signature(B1), True)
         check("[2] the switch spends nothing", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 0})
         check("[2] build-current", build_current(), (200, {"status": "generating"}))
         check("[2] mesh: one build, one hub job (no body yet), no image job", counts(),
@@ -398,21 +412,24 @@ def main() -> int:
         check("[2] retexture: one build, 0 jobs (painted body reused)", counts(),
               {"images": 0, "hub": 0, "workers": 0, "builds": 1})
         artefact_graph.collect_quietly(char, "smoke")
-        check("[2] B1 kept by the walk", base_body.outfit_body_path(char, B1).is_file(), True)
+        check("[2] B1 collected by the walk (no live in-body outfit, no model names it)",
+              base_body.outfit_body_path(char, B1).is_file(), False)
 
         # --- [3] ---------------------------------------------------------------------------------------------
         print("[3] back and forth: no hub job for bodies that exist")
         reset()
         set_mode("mesh")
         check("[3] mesh again: build-current", build_current(), (200, {"status": "generating"}))
-        check("[3] mesh again: one build, 0 hub jobs", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 1})
+        check("[3] mesh again: one build, one hub job (B1 meshed again)", counts(),
+              {"images": 0, "hub": 1, "workers": 0, "builds": 1})
+        check("[3] the same shape key", hub_jobs, [B1])
         set_mode("retexture")
         check("[3] retexture again: build-current", build_current(), (200, {"status": "generating"}))
-        check("[3] retexture again: 2 builds in total, 0 jobs", counts(),
-              {"images": 0, "hub": 0, "workers": 0, "builds": 2})
+        check("[3] retexture again: 2 builds in total, no further job", counts(),
+              {"images": 0, "hub": 1, "workers": 0, "builds": 2})
         artefact_graph.collect_quietly(char, "smoke")
-        check("[3] B1 + painted T1 stored", (base_body.outfit_body_path(char, B1).is_file(),
-                                             base_body.texture_body_path(char, T1).is_file()), (True, True))
+        check("[3] B1 collected, painted T1 stored", (base_body.outfit_body_path(char, B1).is_file(),
+                                                      base_body.texture_body_path(char, T1).is_file()), (False, True))
         reset()
         check("[3] built: current", build_current(), (200, {"status": "current"}))
         check("[3] no further build", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 0})
@@ -422,8 +439,8 @@ def main() -> int:
         set_mode("mesh")
         reset()
         check("[4] mesh: build-current", build_current(), (200, {"status": "generating"}))
-        check("[4] mesh: one build on the stored B1", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 1})
-        rec = {"body_id": B2, "mode": "mesh", "version": base_body.OUTFIT_BODY_VERSION, "texture_signature": T2,
+        check("[4] mesh: one build, B1 meshed again", counts(), {"images": 0, "hub": 1, "workers": 0, "builds": 1})
+        rec = {"body_id": B2, "shape_key": B2, "version": figure.SHAPE_VERSION, "shape_inputs": B2_INPUTS,
                "base_signature": bsig, "built_for": O2, "views": {}, "used_views": ["front"]}
         base_body.outfit_body_path(char, B2).write_bytes(b"BODY-B2")
         write_json(M / f"{B2}.json", {"rig": "mixamo", "outfit_body": rec, "created_at": "2026-11-10T09:00:00+00:00"})

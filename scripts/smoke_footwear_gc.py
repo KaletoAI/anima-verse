@@ -69,6 +69,14 @@ import _footwear_fixtures as fx  # noqa: E402
 FAILS = []
 
 
+def ob_id(seed: str) -> str:
+    """A fixture outfit body id ("ob" + 8 hex): the formula of the retired ``base_body.outfit_body_id`` over a
+    texture-signature-shaped seed, kept so the ids (and their order) this smoke derives stay as they were."""
+    raw = json.dumps({"mode": "mesh", "texture_signature": seed, "version": 1}, sort_keys=True, ensure_ascii=False,
+                     separators=(",", ":"))
+    return "ob" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+
+
 def check(label, got, want):
     ok = got == want
     print(("ok   " if ok else "FAIL ") + f"{label}: {got!r}" + ("" if ok else f" (want {want!r})"))
@@ -254,7 +262,7 @@ def main() -> int:
         cdir = get_character_dir("Mira")
         M, R = cdir / "model3d", cdir / "model_refs"
         T1 = "tex111111111111"
-        B1 = base_body.outfit_body_id(T1)
+        B1 = ob_id(T1)
         pieces = dict((get_character_profile("Mira") or {}).get("equipped_pieces") or {})
         check("G4 Mira wears the pumps in feet", pieces.get("feet"), pumps)
         variant, token = mesh_variant("Mira", pieces), mesh_items_token("Mira", pieces)

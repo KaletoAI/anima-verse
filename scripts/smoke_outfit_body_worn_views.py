@@ -22,8 +22,9 @@ model. NO dressed view of O1, no outfit model, no outfit body.
 Expected, by hand:
 [1] GET: exactly one body, the worn outfit's PENDING entry P. P is the body the views will stand on: no own-mesh
     piece, so the unpainted set is empty and the tsig is ``texture_signature(texture_inputs(pieces, items,
-    variant=outfit_variant(pieces), mesh_effective=[], bsig))`` — P = outfit_body_id(that), computed here through
-    the public functions. status "missing", orphaned False, worn_outfit = {signature O1, predicted True,
+    variant=outfit_variant(pieces), mesh_effective=[], bsig))`` — P = the shape key of those dress texts
+    (``base_body.outfit_shape``: both pieces in the body, nothing painted — plan 2026-11-12-unified-worn-pieces
+    Task 5), computed here through the public functions. status "missing", orphaned False, worn_outfit = {signature O1, predicted True,
     views_missing [front, back], image_jobs 3} (side views off: the front is ONE edit, the back a draft plus a
     fit = 2 → 1 + 2 = 3). blocked: regenerate WORN_VIEWS_MISSING (no outfit stands on P's views), rerig
     NO_UNRIGGED, refit NO_MODEL (no glb), delete NOTHING_STORED (no file of P at all), views "" (it can run).
@@ -49,7 +50,8 @@ Expected, by hand:
     recorder gets (Demo, O1, rebuild=True) — the mesh step is the body's own run.
 [4] A 3D model job builds P (``model3d.active_stages`` names (Demo, P)): GET -> status "running", run_kind
     "build", every action blocked with LOCKED_BUILD.
-[5] Orphan: refs of a body Q = outfit_body_id("tex0123456789ab") whose record names another texture and an outfit
+[5] Orphan: refs of a body Q = figure.shape_key_of({"dress_text": {"front": "elsewhere"}}) whose record names
+    other shape inputs and an outfit
     that does not exist (built_for "0000deadbeef"), never built. GET: Q listed AFTER P, orphaned True, status
     "missing", worn_outfit None, blocked.regenerate NO_SOURCE, blocked.delete "" (its refs are stored),
     view front blocked NO_SOURCE. P: orphaned False. POST generate-views on Q -> 404.
@@ -181,10 +183,14 @@ def main() -> int:
 
         O1 = mesh_signature(pieces, [], char, mesh_variant(char, pieces), mesh_items_token(char, pieces))
         # The hand rule of [1]: no own-mesh piece -> nothing unpainted, variant = outfit_variant(pieces).
-        T = base_body.texture_signature(base_body.texture_inputs(
-            char, pieces=pieces, items=[], variant=base_body.outfit_variant(char, pieces, profile=prof),
-            mesh_effective=[], bsig=bsig, profile={**prof, "equipped_pieces": pieces, "equipped_items": []}))
-        P = base_body.outfit_body_id(T)
+        from app.core import figure
+        variant_p = base_body.outfit_variant(char, pieces, profile=prof)
+        inputs_t = base_body.texture_inputs(
+            char, pieces=pieces, items=[], variant=variant_p,
+            mesh_effective=[], bsig=bsig, profile={**prof, "equipped_pieces": pieces, "equipped_items": []})
+        T = base_body.texture_signature(inputs_t)
+        P = base_body.outfit_shape(char, pieces, bsig=bsig, variant=variant_p, dress_text=inputs_t["dress_text"],
+                                   profile={**prof, "equipped_pieces": pieces, "equipped_items": []})["key"]
 
         renders, backs, meshes = [], [], []
 
@@ -322,10 +328,10 @@ def main() -> int:
 
         # --- [5] ---------------------------------------------------------------------------------------------
         print("[5] an orphaned body")
-        Q = base_body.outfit_body_id("tex0123456789ab")
-        rec = {"body_id": Q, "mode": "mesh", "version": base_body.OUTFIT_BODY_VERSION,
-               "texture_signature": "tex0123456789ab", "base_signature": bsig, "built_for": "0000deadbeef",
-               "used_views": ["front"], "views": {}}
+        q_inputs = {"dress_text": {"front": "elsewhere"}}
+        Q = figure.shape_key_of(q_inputs)
+        rec = {"body_id": Q, "shape_key": Q, "version": figure.SHAPE_VERSION, "shape_inputs": q_inputs,
+               "base_signature": bsig, "built_for": "0000deadbeef", "used_views": ["front"], "views": {}}
         png(R / f"tpose_{Q}.png", (5, 5, 5))
         write_json(R / f"tpose_{Q}.json", {"outfit_body": rec})
         listed = bodies()

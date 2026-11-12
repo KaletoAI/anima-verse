@@ -940,7 +940,7 @@ def _hairdeck_fit_step(character_name: str, item_id: str, kind: str, fsig: str, 
 #
 # The chain's ``fit`` step fits onto the BASE model (the body of the retexture
 # mode, body id = the base signature). An outfit model of the mesh mode stands
-# on an OUTFIT BODY (``base_body.outfit_body_id``) whose geometry and head
+# on an OUTFIT BODY (``figure.shape_key``) whose geometry and head
 # differ: every own-mesh piece and the hair it carries get a fit of their own
 # on that body — key ``(item, fsig, body id)``, files under
 # ``garments/bodies/<body id>/`` (``garment_store.body_root``). Such a fit is

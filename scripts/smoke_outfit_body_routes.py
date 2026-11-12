@@ -14,10 +14,11 @@ the session lookup stubbed (header ``x-role``: admin / user / none). No hub, no 
 Fixture (character Demo: humanoid, base-body pipeline on, outfit body mode mesh, profile picture; items top {top}
 and skirt {bottom} in the body (mode in_body — the outfit body mode follows the worn pieces, interim rule of plan
 2026-11-12-unified-worn-pieces Task 2), dress {outer} own mesh, all held). bsig = base_signature; T1/T2 = tex111…/tex222…;
-B1/B2 = outfit_body_id(T1/T2). Outfits: O1 {top, skirt} WORN on B1, O2 {top, dress} on B2 (model sidecars name
+S1/S2 = shape inputs {version SHAPE_VERSION, base_signature bsig, dress_text {front: "a top and a skirt" / "a top"}};
+B1/B2 = figure.shape_key_of(S1/S2) (plan 2026-11-12-unified-worn-pieces Task 5). Outfits: O1 {top, skirt} WORN on B1, O2 {top, dress} on B2 (model sidecars name
 body_id; O2's carries mesh_items.effective [dress]). Body files per Bn: refs tpose[_back]_<Bn> (+.json with the
-parent record {body_id, texture_signature Tn, base_signature bsig, version OUTFIT_BODY_VERSION, built_for On,
-views = texture_view_shas(On)}), model3d <Bn>.glb/.json (rig mixamo, collision with one capsule), unrigged/ (B1
+parent record {body_id = shape_key = Bn, shape_inputs Sn, base_signature bsig, version SHAPE_VERSION, built_for On,
+views = texture_view_shas(On)}; the ref sidecars name texture_signature Tn), model3d <Bn>.glb/.json (rig mixamo, collision with one capsule), unrigged/ (B1
 only), prerig/, rollback/<Bn>/. Base fit Gd of dress (accepted on sha(base glb)); body fits Bd1/Bd2 of dress on
 B1/B2 (record accepted, body_sha256 = sha(Bn glb), base_fit_sha256 = sha(Gd fit), fit_version current) + Bd1
 layers/ + Bd2 failed/. Texture stores T1/T2 (front view sidecar dress_text "a top and a skirt" / "a top").
@@ -131,8 +132,11 @@ def main() -> int:
         ADMIN, USER = {"x-role": "admin"}, {"x-role": "user"}
 
         char = "Demo"
+        from app.core import figure
         T1, T2 = "tex111111111111", "tex222222222222"
-        B1, B2 = base_body.outfit_body_id(T1), base_body.outfit_body_id(T2)
+        shape_of = {"O1": {"version": figure.SHAPE_VERSION, "dress_text": {"front": "a top and a skirt"}},
+                    "O2": {"version": figure.SHAPE_VERSION, "dress_text": {"front": "a top"}}}
+        B1, B2 = figure.shape_key_of(shape_of["O1"]), figure.shape_key_of(shape_of["O2"])
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
                  "character_appearance": "slender"}
         assert save_character_profile(char, human, create_new=True)
@@ -154,6 +158,9 @@ def main() -> int:
         cdir = get_character_dir(char)
         M, R = cdir / "model3d", cdir / "model_refs"
         bsig = base_body.base_signature(char)
+        for shape in shape_of.values():
+            shape["base_signature"] = bsig
+        B1, B2 = figure.shape_key_of(shape_of["O1"]), figure.shape_key_of(shape_of["O2"])
         base_glb = b"BASE-GLB-demo"
         base_front = touch(R / f"tpose_{bsig}.png", b"base-front")
         touch(R / f"tpose_{bsig}.json", {"base_signature": bsig})
@@ -190,13 +197,13 @@ def main() -> int:
         capsule = {"version": 1, "capsules": [{"bone": "Spine", "radius": 0.1}], "skipped": [], "scales": {}}
         for name in ("O1", "O2"):
             b, t = body_of[name], tex_of[name]
-            rec = {"body_id": b, "mode": "mesh", "version": base_body.OUTFIT_BODY_VERSION, "texture_signature": t,
+            rec = {"body_id": b, "shape_key": b, "version": figure.SHAPE_VERSION, "shape_inputs": shape_of[name],
                    "base_signature": bsig, "built_for": sigs[name], "used_views": ["front", "back"],
                    "views": base_body.texture_view_shas(char, sigs[name], bsig)}
             touch(R / f"tpose_{b}.png", f"{b}-front".encode())
-            touch(R / f"tpose_{b}.json", {"outfit_body": rec})
+            touch(R / f"tpose_{b}.json", {"texture_signature": t, "outfit_body": rec})
             touch(R / f"tpose_back_{b}.png", f"{b}-back".encode())
-            touch(R / f"tpose_back_{b}.json", {"outfit_body": rec})
+            touch(R / f"tpose_back_{b}.json", {"texture_signature": t, "outfit_body": rec})
             body_glb = touch(M / f"{b}.glb", f"BODY-{b}".encode())
             touch(M / f"{b}.json", {"outfit_body": rec, "rig": "mixamo", "created_at": "2026-11-10T10:00:00+00:00",
                                     "collision": capsule,

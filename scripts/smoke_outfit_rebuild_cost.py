@@ -36,7 +36,7 @@ draft + fit; an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
      mesh 2, hub 5}, note "older base: views 3 + body 2 (first attempts)".
 [O4] mesh mode, the dressed front + back current: no body stored → views 0,
      body 2 → hub 2 ("older base: body 2 (first attempts)");
-     ``stored_outfit_body`` patched to answer a body → hub 0, note
+     ``figure.stored_shape`` patched to answer a body → hub 0, note
      "older base: outfit body stored, CPU only".
 [O5] retexture mode, views current, the model built on the CURRENT base but
      ``variant_current`` patched False → outfit_info stale_reason
@@ -199,7 +199,8 @@ def main() -> int:
         got, full = cost()
         check("no body stored: body only", (got, full["views_needed"], full["note"]),
               ({"image_jobs": 0, "mesh_jobs": 2, "hub_jobs": 2}, False, "older base: body 2 (first attempts)"))
-        with patch.object(base_body, "stored_outfit_body", return_value={"rig": "mixamo"}):
+        from app.core import figure
+        with patch.object(figure, "stored_shape", return_value={"rig": "mixamo"}):
             got, full = cost()
         check("body stored: nothing", (got, full["note"]),
               ({"image_jobs": 0, "mesh_jobs": 0, "hub_jobs": 0}, "older base: outfit body stored, CPU only"))

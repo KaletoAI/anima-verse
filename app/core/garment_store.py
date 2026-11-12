@@ -28,7 +28,7 @@ Per owner, under ``characters/<name>/garments/``::
 Fits per BODY (plan ``2026-11-10-outfit-body-mesh-mode.md``, Task 2): a fit
 is keyed by ``(item, fsig, body id)``. The body of the retexture mode is the
 base model — body id = the base signature — and its fits keep the paths
-above unchanged. An OUTFIT BODY of the mesh mode (``base_body.outfit_body_id``,
+above unchanged. An OUTFIT BODY of the mesh mode (``figure.shape_key``,
 ``ob`` + 8 hex) has the per-body parts in a folder of its own, same names::
 
     bodies/<body id>/{item}_{fsig}.glb + .json        the fit on that body

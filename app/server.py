@@ -704,6 +704,17 @@ async def lifespan(app: FastAPI):
     except Exception as _fme:
         logger.warning("Worn-piece mode migration failed (retried at the next start): %s", _fme)
 
+    # Migration (same plan, Task 5, ruling 4): the stored outfit bodies are
+    # re-keyed onto their shape keys under the migrated modes where their
+    # records match exactly, else left stale (rebuilt on the next Build).
+    # Once per world, only after the mode migration; renames only, before the
+    # garment refit sweep and the hub-job resumer below touch the bodies.
+    try:
+        from app.core.figure_migration import rekey_bodies_once
+        rekey_bodies_once()
+    except Exception as _fre:
+        logger.warning("Outfit body re-key failed (retried at the next start): %s", _fre)
+
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
 

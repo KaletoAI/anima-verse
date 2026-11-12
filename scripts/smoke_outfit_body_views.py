@@ -19,7 +19,9 @@ Fixture (character Demo: humanoid, pipeline on, outfit body mode mesh, side view
 plan 2026-11-12-unified-worn-pieces Task 2). Base views front/back (PNG) of bsig, base model. Outfit O1 {top, skirt} WORN:
 dressed front + back made from the current base views (sidecar base_signature = bsig, base_image_sha256 = sha of
 the base view, dress_text = TEXTS[view]), the back's draft (front_sha256 = sha of O1's front) — TEXTS = the dress
-texts ``_outfit_texture`` computes for O1 at fixture time ("the render"). T = its tsig, B = outfit_body_id(T). The
+texts ``_outfit_texture`` computes for O1 at fixture time ("the render"). T = its tsig, B = the shape key its views
+stand for (``base_body.outfit_shape``: both pieces in the body, nothing painted — plan 2026-11-12-unified-worn-pieces
+Task 5), whose refs name T (``_write_body_refs``) and whose record is a shape record. The
 texture store holds exact copies of O1's views and draft under T (what ``_store_texture_views`` publishes). Body
 B: refs tpose[_back]_<B> + model3d/<B>.glb with the parent record {views = texture_view_shas(O1)}.
 
@@ -172,7 +174,10 @@ def main() -> int:
         write_json(o1_front.with_suffix(".json"), {**manifest, "base_image_sha256": sha(base_views["front"])})
         texture = base_body._outfit_texture(char, o1_front, bsig=bsig, profile=prof)
         T, TEXTS = texture["tsig"], texture["inputs"]["dress_text"]
-        B = base_body.outfit_body_id(T)
+        from app.core import figure
+        shape = base_body.outfit_shape(char, pieces, bsig=bsig, variant=texture["variant"], dress_text=TEXTS,
+                                       profile=prof)
+        B = shape["key"]
         write_json(o1_front.with_suffix(".json"), {**manifest, "base_image_sha256": sha(base_views["front"]),
                                                    "texture_signature": T, "dress_text": TEXTS["front"]})
         o1_draft = png(R / "drafts" / f"tpose_back_{O1}.png", (0, 100, 0))
@@ -185,12 +190,12 @@ def main() -> int:
         # The texture store: exact copies, the outfit's own keys dropped (base_body._store_texture_views).
         base_body._store_texture_views(char, O1, T, ["front", "back"], TEXTS)
         check("fixture: O1 stands on B", base_body.outfit_body_of_outfit(char, O1), B)
-        rec = {"body_id": B, "mode": "mesh", "version": base_body.OUTFIT_BODY_VERSION, "texture_signature": T,
+        rec = {"body_id": B, "shape_key": B, "version": figure.SHAPE_VERSION, "shape_inputs": shape["inputs"],
                "base_signature": bsig, "built_for": O1, "used_views": ["front", "back"],
                "views": base_body.texture_view_shas(char, O1, bsig)}
         for kind, colour in (("tpose", (1, 1, 1)), ("tpose_back", (2, 2, 2))):
             png(R / f"{kind}_{B}.png", colour)
-            write_json(R / f"{kind}_{B}.json", {"outfit_body": rec})
+            write_json(R / f"{kind}_{B}.json", {"texture_signature": T, "outfit_body": rec})
         (M / f"{B}.glb").write_bytes(b"BODY-GLB")
         write_json(M / f"{B}.json", {"outfit_body": rec, "rig": "mixamo", "created_at": "2026-11-10T10:00:00+00:00"})
         write_json(M / f"{O1}.json", {"pieces": pieces, "items": [], "base_signature": bsig,

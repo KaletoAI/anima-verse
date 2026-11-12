@@ -94,7 +94,7 @@ REF_PREFIXES = ("tpose_animal_", "tpose_front_", "tpose_right_", "tpose_back_", 
 _MESH_SIG_RE = re.compile(r"[0-9a-f]{12}(-s[0-9a-f]{8})?|base[0-9a-f]{8}|ob[0-9a-f]{8}")
 #: The shape of a base-body signature (``base_body.base_signature``).
 _BASE_SIG_RE = re.compile(r"base[0-9a-f]{8}")
-#: The shape of an outfit body id (``base_body.outfit_body_id``).
+#: The shape of an outfit body id (``figure.shape_key``).
 _OUTFIT_BODY_RE = re.compile(r"ob[0-9a-f]{8}")
 
 
