@@ -77,6 +77,11 @@ Expected, derived by hand from the brief's delivered rule:
     None. Blouse switched painted -> own_mesh (no fit, nothing built) ->
     pending_changes == [{key "blouse", name "Blouse", wanted "own_mesh",
     delivered "painted"}].
+[7] Fails on the old code: the per-character outfit body mode is gone —
+    ``git show bcba4ce3:app/core/base_body.py`` (BASE of the task) holds
+    exactly one ``def outfit_body_mode``; the file now holds none, and
+    ``base_body`` has no ``outfit_body_mode`` / ``MESH_MODE`` /
+    ``RETEXTURE_MODE`` / ``mesh_items_off_rule`` any more.
 """
 import copy
 import os
@@ -275,6 +280,16 @@ def main() -> int:
         check("the model's figure is not the delivered one now",
               figure.built_figure(meta) == figure.delivered_figure("Demo", profile=profile()), False)
         set_mode("blouse", "painted")
+
+        print("[7] the outfit body mode is gone")
+        import subprocess
+        old = subprocess.run(["git", "show", "bcba4ce3:app/core/base_body.py"], cwd=ROOT, capture_output=True,
+                             text=True).stdout
+        check("BASE has outfit_body_mode", old.count("def outfit_body_mode"), 1)
+        check("now none", (ROOT / "app/core/base_body.py").read_text(encoding="utf-8").count("def outfit_body_mode"),
+              0)
+        check("no mode names left", [n for n in ("outfit_body_mode", "MESH_MODE", "RETEXTURE_MODE",
+                                                 "mesh_items_off_rule") if hasattr(base_body, n)], [])
 
     if FAILS:
         print(f"\nFAILED ({len(FAILS)}): " + ", ".join(FAILS))

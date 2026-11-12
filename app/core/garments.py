@@ -951,7 +951,7 @@ def _hairdeck_fit_step(character_name: str, item_id: str, kind: str, fsig: str, 
 # on that body — key ``(item, fsig, body id)``, files under
 # ``garments/bodies/<body id>/`` (``garment_store.body_root``). Such a fit is
 # DERIVED from the fit served on the base model (``garment_store.accepted_fit``
-# — the piece is a mesh at all only when it has one, ``base_body.resolve_mesh_items``):
+# — the piece is a mesh at all only when it has one, ``base_body.resolve_figure``):
 # the same fsig, the same garment source (edit chain: the cached prepared mesh +
 # ghost front; HairDeck: the seed of the base fit), fitted by the same fit and
 # gates onto the body's rigged + unrigged GLB with the body's front view as the
@@ -963,7 +963,7 @@ def _hairdeck_fit_step(character_name: str, item_id: str, kind: str, fsig: str, 
 # recorded per body (``garment_store.record_body_failure``) and not retried
 # while those three keys hold; an older fit accepted on the same body keeps
 # being served meanwhile (R11). Who fits: the outfit model build on the body
-# (``base_body._build_on_outfit_body`` → ``garment_assembly.body_fit_warning``)
+# (``base_body.build_outfit_model`` → ``garment_assembly.body_fit_warning``)
 # and lazily every assembly build (``garment_assembly._wanted`` with
 # ``build_layers``: hair worn later, a new base fit); the boot sweep
 # (``garment_refit``) refits an older ``fit_version`` on every stored body.
@@ -1251,10 +1251,10 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
 def body_fit_info(character_name: str, item_id: str, *,
                   profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """The fit of ``item_id`` on the body the CURRENT outfit model stands on
-    (mesh mode): ``{body_id, status, error, fsig, created_at, metrics,
+    (a meshed shape): ``{body_id, status, error, fsig, created_at, metrics,
     gates}`` — ``status`` ``body_fit_state`` (``failed`` for a recorded
     refusal that holds, ``missing`` too without a base fit to derive from).
-    None in retexture mode, for an outfit model on the base body, or when the
+    None off the pipeline, for an outfit model on the plain body, or when the
     current outfit model does not carry the item (neither its worn hair nor
     one of its own-mesh pieces)."""
     from app.core import base_body, garment_fit, garment_store as gs, model3d
@@ -1264,7 +1264,7 @@ def body_fit_info(character_name: str, item_id: str, *,
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
     base = base_body.current_base(character_name, profile=profile)
-    if base is None or base_body.outfit_body_mode(character_name, profile=profile) != base_body.MESH_MODE:
+    if base is None:
         return None
     path = model3d.find_model3d(character_name, current_outfit_state(character_name)[2], include_stale=True)
     meta = model3d._read_sidecar(path) if path is not None else {}

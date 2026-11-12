@@ -26,8 +26,9 @@ worn through ``inventory.equip_piece``; the base model =
      once more (B1'), ``after_base_model`` → False, no fit call, ``cached_failure(Demo, heels)`` names ``empty``;
      the step restored.
 [R2] Refused refit. A width cap of 1.00 on the wide-foot base (``foot_body_glb(0.10)``, sha B2) → the run is
-     refused by ``slim_needed`` (fit_step [P7]'s hand value 0.2209 > 0.18). ``resolve_mesh_items(Demo, {feet:
-     heels})`` → heels in ``missing`` with the gate text ("slim_needed …"), ``effective`` [], no
+     refused by ``slim_needed`` (fit_step [P7]'s hand value 0.2209 > 0.18). ``resolve_figure(Demo, {feet:
+     heels})`` (Task 6 of plan 2026-11-12-unified-worn-pieces: it replaced ``resolve_mesh_items``; its record) →
+     heels in ``missing`` with the gate text ("slim_needed …"), ``effective`` [], no
      ``MESH_ITEM_PAINTED`` warning, ``trigger_now`` not called; info: status "refused", freshness "Fit refused on
      this body: slim_needed …". The cap reset (None) and the base back on B1 → ``after_base_model`` refits
      (accepted again, refitted.from_body_sha256 = B2? no — the record under the fsig was last ACCEPTED on B1,
@@ -243,7 +244,7 @@ def main() -> int:
         res = garments.run_garment("Demo", heels)
         check("R2 refused by slim_needed", (res.get("ok"), res.get("step"), str(res.get("error") or "").startswith("fit refused — slim_needed")),
               (False, "fit", True))
-        d = base_body.resolve_mesh_items("Demo", {"feet": heels})
+        d = base_body.resolve_figure("Demo", {"feet": heels})[1]
         check("R2 heels missing with the gate", (d.get("effective"), list(d.get("missing") or {}),
                                                   "slim_needed" in str((d.get("missing") or {}).get(heels))), ([], [heels], True))
         check("R2 no MESH_ITEM_PAINTED, no texture job", ([w for w in d.get("warnings") or [] if "stays painted" in w], TEXTURE), ([], []))

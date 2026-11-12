@@ -242,7 +242,7 @@ def refused_step(item_id: str, ssig: Optional[str] = None) -> Optional[Dict[str,
     """The first item step of the CURRENT source (``ssig`` None = ``current_ssig``)
     whose last run was refused or failed — ``{ssig, step, error, failure}`` —
     or None. ``LOAD`` failures (busy / the media switch) do not count: they
-    retry. What an AUTOMATIC trigger (equip, ``resolve_mesh_items``, any
+    retry. What an AUTOMATIC trigger (equip, ``resolve_figure``, any
     ``garments.run_queued`` / ``enqueue_garment`` path) honours for every
     wearer alike — the source is one per item — so a refused mesh is never
     meshed again until an explicit Run / Regenerate from the Wardrobe

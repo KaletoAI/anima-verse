@@ -91,10 +91,11 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      run_estimate -> {steps [], hub_jobs 0, note "Hair comes from the body
      mesh", refit False}; hair_summary None; accepted_fit None (a fit record
      of the current fsig is written first: served under hairdeck, not under
-     body); outfit_body_bald in mesh mode (the profile wears a coat in mode
-     in_body — interim rule of plan 2026-11-12-unified-worn-pieces Task 2):
-     True under hairdeck (wears its own
-     hair item), False under body. The Hair tab payload (route function
+     body); the bald edit of the wanted figure's shape (the profile wears a
+     coat in mode in_body, so the shape is meshed — Task 6 of plan
+     2026-11-12-unified-worn-pieces replaced outfit_body_bald in mesh mode by
+     ``base_body._bald_edit`` of the wanted shape): True under hairdeck
+     (wears its own hair item), False under body. The Hair tab payload (route function
      called directly): hair_in_body True, garment None, others [],
      base_prompts = H2's freshness; under hairdeck hair_in_body False,
      base_prompts None.
@@ -386,13 +387,20 @@ def main() -> int:
                                                     "method": "hairdeck", "base_model_sha256": base_sha})
         check("hairdeck serves its fit", (gs.accepted_fit("Deck", deck_item, base_model_sha=base_sha) or (None,))[0],
               fit)
-        # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
+        # A worn piece in the body: the wanted figure stands on a meshed shape (Task 6 of plan
+        # 2026-11-12-unified-worn-pieces; the per-character mode and outfit_body_bald are gone).
+        from app.core import figure
         from app.models import inventory
+
+        def bald_edit(profile):
+            """Whether the dressed edit of the wanted figure's shape closes with the bald head."""
+            shape = figure.wanted_figure("Deck", profile=profile).shape
+            return base_body._bald_edit("Deck", profile, meshed=not figure.is_plain(shape))
         coat = inventory.add_item(name="Coat", category="outfit_piece", prompt_fragment="a coat",
                                   outfit_piece={"slots": ["outer"], "mesh_mode": "in_body"})["id"]
         mesh = dict(deck, equipped_pieces={"outer": coat})
-        check("mesh mode", base_body.outfit_body_mode("Deck", profile=mesh), base_body.MESH_MODE)
-        check("outfit_body_bald hairdeck", base_body.outfit_body_bald("Deck", profile=mesh), True)
+        check("a shape", figure.is_plain(figure.wanted_figure("Deck", profile=mesh).shape), False)
+        check("bald edit hairdeck", bald_edit(mesh), True)
         hair_route = __import__("app.routes.characters", fromlist=["x"]).get_character_hair
         tab = hair_route("Deck", _={})
         check("tab hairdeck", (tab["hair_in_body"], tab["base_prompts"]), (False, None))
@@ -408,8 +416,8 @@ def main() -> int:
               {"steps": [], "hub_jobs": 0, "note": "Hair comes from the body mesh", "refit": False})
         check("hair_summary", garments.hair_summary("Deck"), None)
         check("accepted_fit body", gs.accepted_fit("Deck", deck_item, base_model_sha=base_sha), None)
-        check("outfit_body_bald body", base_body.outfit_body_bald(
-            "Deck", profile=dict(get_character_profile("Deck"), equipped_pieces={"outer": coat})), False)
+        check("bald edit body", bald_edit(dict(get_character_profile("Deck"), equipped_pieces={"outer": coat})),
+              False)
         tab = hair_route("Deck", _={})
         check("tab body", (tab["hair_in_body"], tab["method"], tab["garment"], tab["others"],
                            tab["base_prompts"]["state"]),

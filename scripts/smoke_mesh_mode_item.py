@@ -41,14 +41,16 @@ Interfaces block.
     the mode) and writes NO "mesh_mode"; an outfit_piece update without a
     mode (slots ["top"]) still writes neither; mesh_mode_of(vest) ==
     "painted" (the top default), garment_kind_of None.
-[4] base_body.outfit_body_mode (interim until Task 6): "mesh" iff a worn
-    piece has mode "in_body"; no profile key is read.
+[4] The wanted figure (Task 6 replaced the interim base_body.outfit_body_mode,
+    which is gone): its shape is meshed iff a worn piece has mode "in_body";
+    no profile key is read. meshed = (in_body, shape not plain); Demo is on
+    the base-body pipeline (off it every piece is painted).
     Demo's profile carries outfit_body_mode "mesh" and wears Shirt (top,
-    painted) + Trousers (bottom, painted) -> "retexture". Equip the Coat
-    (outer, in_body) -> "mesh". pieces={"outer": coat} -> "mesh",
-    pieces={"top": shirt} -> "retexture", pieces={} -> "retexture".
-    Coat updated to mesh_mode "painted" -> Demo "retexture"; back to
-    "in_body" -> "mesh".
+    painted) + Trousers (bottom, painted) -> ([], False) (was "retexture").
+    Equip the Coat (outer, in_body) -> ([coat], True) (was "mesh").
+    pieces={"outer": coat} -> ([coat], True), pieces={"top": shirt} -> ([],
+    False), pieces={} -> ([], False). Coat updated to mesh_mode "painted" ->
+    ([], False); back to "in_body" -> ([coat], True).
 [5] Code and template:
     no dict anywhere in shared/templates/character/base-character.json has
     "key" == "outfit_body_mode" or a key "outfit_body_mode"; no section id
@@ -212,12 +214,13 @@ def main() -> int:
         check("legacy: mode meanwhile = top default", garment_set.mesh_mode_of(inventory.get_item(vest)), "painted")
         check("legacy: kind", kind(vest), None)
 
-        print("[4] interim outfit body mode")
-        from app.core import base_body
+        print("[4] the wanted figure's shape follows the worn modes")
+        from app.core import base_body, figure
         from app.models.character import get_character_profile, save_character_profile
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
                  "outfit_body_mode": "mesh"}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
+        check("pipeline Demo (the figure is a pipeline notion)", base_body.set_pipeline("Demo", True), True)
         shirt = add("Shirt", {"slots": ["top"]})
         trousers = add("Trousers", {"slots": ["bottom"]})
         check("shirt/trousers painted", (piece(shirt).get("mesh_mode"), piece(trousers).get("mesh_mode")),
@@ -226,20 +229,24 @@ def main() -> int:
             check(f"inventory {item}", inventory.add_to_inventory("Demo", item), True)
         for item in (shirt, trousers):
             check(f"equip {item}", inventory.equip_piece("Demo", item, source="smoke")["status"], "ok")
+        def meshed(**kw):
+            """(in-body pieces, shape meshed) of the wanted figure."""
+            fig = figure.wanted_figure("Demo", **kw)
+            return list(fig.in_body), not figure.is_plain(fig.shape)
+
+        check("the per-character mode is gone", hasattr(base_body, "outfit_body_mode"), False)
         check("profile key still says mesh", get_character_profile("Demo").get("outfit_body_mode"), "mesh")
-        check("painted only -> retexture", base_body.outfit_body_mode("Demo"), "retexture")
+        check("painted only -> plain body", meshed(), ([], False))
         check("equip coat", inventory.equip_piece("Demo", coat, source="smoke")["status"], "ok")
-        check("coat worn -> mesh", base_body.outfit_body_mode("Demo"), "mesh")
-        check("coat worn (profile passed) -> mesh",
-              base_body.outfit_body_mode("Demo", profile=get_character_profile("Demo")), "mesh")
-        check("pieces outer coat -> mesh", base_body.outfit_body_mode("Demo", pieces={"outer": coat}), "mesh")
-        check("pieces top shirt -> retexture", base_body.outfit_body_mode("Demo", pieces={"top": shirt}),
-              "retexture")
-        check("pieces {} -> retexture", base_body.outfit_body_mode("Demo", pieces={}), "retexture")
+        check("coat worn -> a shape", meshed(), ([coat], True))
+        check("coat worn (profile passed) -> a shape", meshed(profile=get_character_profile("Demo")), ([coat], True))
+        check("pieces outer coat -> a shape", meshed(pieces={"outer": coat}), ([coat], True))
+        check("pieces top shirt -> plain body", meshed(pieces={"top": shirt}), ([], False))
+        check("pieces {} -> plain body", meshed(pieces={}), ([], False))
         inventory.update_item(coat, {"outfit_piece": {"slots": ["outer"], "mesh_mode": "painted"}})
-        check("coat painted -> retexture", base_body.outfit_body_mode("Demo"), "retexture")
+        check("coat painted -> plain body", meshed(), ([], False))
         inventory.update_item(coat, {"outfit_piece": {"slots": ["outer"], "mesh_mode": "in_body"}})
-        check("coat in the body again -> mesh", base_body.outfit_body_mode("Demo"), "mesh")
+        check("coat in the body again -> a shape", meshed(), ([coat], True))
 
     print("[5] code and template")
     template = json.loads((ROOT / "shared/templates/character/base-character.json").read_text(encoding="utf-8"))

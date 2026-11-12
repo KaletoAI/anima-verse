@@ -45,7 +45,7 @@ export interface BodyOutfit {
   name: string
   worn: boolean
   /** Why this outfit's model is older than the body (`outfit_body_stale`). */
-  stale_reason: 'body_mode' | 'outfit_body' | null
+  stale_reason: 'figure' | 'outfit_body' | null
   /** Own-mesh pieces it wears that are missing from it: no accepted fit yet, never meshed into the body
    *  (`base_body.mesh_items_missing`, ruling 2026-11-10). Absent from an older server. */
   missing_mesh_items?: { item_id: string; name: string; reason: string }[]

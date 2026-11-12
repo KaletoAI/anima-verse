@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -545,6 +546,113 @@ def rekey_bodies_once() -> Optional[Dict[str, Dict[str, str]]]:
             result[name] = decisions
     set_world_setting(REKEY_FLAG, "1")
     logger.info("Outfit body re-key done: %d re-keyed, %d stale",
+                sum(1 for d in result.values() for v in d.values() if v != STALE),
+                sum(1 for d in result.values() for v in d.values() if v == STALE))
+    return result
+
+
+# --- Figure stamp (Task 6, Ruling 6a) -------------------------------------------
+#
+# Since Task 6 an outfit model is current when its recorded ``figure`` is the
+# figure delivered now (``base_body.figure_stale``). A model built before
+# records none. ``stamp_figures_once`` judges every such model ONCE by the
+# rule that was in force before (``legacy_current``: the current base, the
+# variant its pieces call for, and the removed outfit-body-mode check — the
+# mode it was built in against the mode the character's worn pieces call
+# for, on an outfit body the body's current content and no own-mesh piece
+# painted into it, and no own-mesh piece left painted on that has its fit
+# now). A model that rule calls current gets the figure delivered now
+# stamped into its sidecar, so it stays current and nothing is rebuilt; a
+# stale one keeps no figure (stale, as before). Once per world (world_kv
+# ``STAMP_FLAG``), after the re-key; it writes sidecars only.
+
+#: world_kv key of the figure stamp's done flag.
+STAMP_FLAG = "stamped_outfit_model_figures"
+_OUTFIT_SIG_RE = re.compile(r"[0-9a-f]{12}")
+
+
+def legacy_current(character_name: str, meta: Dict[str, Any], *, profile: Dict[str, Any],
+                   base: Tuple[str, str]) -> bool:
+    """Whether an outfit model without a recorded figure was current by the
+    rule before Task 6 (block above). Read-only."""
+    from app.core import base_body, garment_set
+    from app.models.inventory import get_item
+    if not base_body.built_on_current_base(meta, base):
+        return False
+    if not base_body.variant_current(character_name, meta, profile=profile):
+        return False
+    if meta.get("dressed") is not False:
+        worn = profile.get("equipped_pieces") if isinstance(profile.get("equipped_pieces"), dict) else {}
+        in_body = any(garment_set.mesh_mode_of(get_item(str(i))) == garment_set.IN_BODY
+                      for i in sorted({str(v) for v in worn.values() if v}))
+        built = str(meta.get("outfit_body_mode") or "retexture")
+        if built != ("mesh" if in_body else "retexture"):
+            return False
+        if built == "mesh":
+            body_id = str(meta.get("body_id") or "")
+            if (not base_body.is_outfit_body_signature(body_id)
+                    or base_body.file_sha256(base_body.outfit_body_path(character_name, body_id))
+                    != meta.get("body_sha256")):
+                return False
+            if set(base_body.mesh_items_intended(meta)) - set(base_body.mesh_items_unpainted(meta)):
+                return False
+    return not base_body.mesh_items_ready(character_name, meta, base_sha=base[1])
+
+
+def stamp_character(character_name: str) -> Dict[str, str]:
+    """The stamp for one character: ``{signature: "stamped" | "stale"}`` of
+    its outfit models without a recorded figure (off the pipeline: {})."""
+    from app.core import base_body, figure, model3d
+    from app.models.character import get_character_dir, get_character_profile
+    profile = get_character_profile(character_name) or {}
+    base = base_body.current_base(character_name, profile=profile)
+    if base is None:
+        return {}
+    out: Dict[str, str] = {}
+    directory = get_character_dir(character_name) / "model3d"
+    for sidecar in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+        path = sidecar.with_suffix(".glb")
+        if not _OUTFIT_SIG_RE.fullmatch(sidecar.stem) or not path.is_file():
+            continue
+        meta = model3d._read_sidecar(path)
+        if meta.get("source") != "base_body" or not meta.get("base_signature") or "figure" in meta:
+            continue
+        if not legacy_current(character_name, meta, profile=profile, base=base):
+            out[sidecar.stem] = STALE
+            continue
+        fig = figure.delivered_figure(character_name, profile=profile, pieces=dict(meta.get("pieces") or {}),
+                                      items=list(meta.get("items") or []))
+        model3d._publish_sidecar(path, {**meta, "figure": fig.as_dict()})
+        out[sidecar.stem] = "stamped"
+    return out
+
+
+def stamp_figures_once() -> Optional[Dict[str, Dict[str, str]]]:
+    """The figure stamp (block above). None when it already ran or the
+    re-key has not run yet, else ``{character: {signature: "stamped" |
+    "stale"}}``. A character list that cannot be read raises before anything
+    is written and leaves the flag unset; a character that fails is logged
+    (its models stay without a figure: stale) and the flag is set anyway."""
+    from app.models.character import list_available_characters
+    from app.models.world import get_world_setting, set_world_setting
+    if get_world_setting(STAMP_FLAG, strict=True):
+        return None
+    if not get_world_setting(REKEY_FLAG, strict=True):
+        logger.warning("Outfit model figure stamp waits: the outfit body re-key has not run yet")
+        return None
+    names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)
+    result: Dict[str, Dict[str, str]] = {}
+    for name in names:
+        try:
+            decisions = stamp_character(name)
+        except Exception as e:  # noqa: BLE001 — its models keep no figure (stale)
+            logger.warning("Figure stamp %s failed, its outfit models stay unstamped: %s", name, e)
+            continue
+        if decisions:
+            result[name] = decisions
+            logger.info("Figure stamp %s: %s", name, decisions)
+    set_world_setting(STAMP_FLAG, "1")
+    logger.info("Outfit model figure stamp done: %d stamped, %d stale",
                 sum(1 for d in result.values() for v in d.values() if v != STALE),
                 sum(1 for d in result.values() for v in d.values() if v == STALE))
     return result

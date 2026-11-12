@@ -10,18 +10,22 @@ Throwaway storage + instance directory with a copy of the repo's ``human`` packa
 bare FastAPI app with a TestClient (session lookup stubbed, header ``x-role: admin``). No hub, no GPU:
 ``expression_regen.render_character_image`` is a recorder that writes a PNG + sidecar (one call = one image job).
 
-Fixture (character Demo: humanoid, pipeline on, outfit body mode mesh, side views off = the default; appearance
-with hair, so ``garment_hair.ensure_hair_item`` creates and WEARS its own hair item H). Items top / skirt, in mode
-in_body — the outfit body mode follows the worn pieces (interim rule of plan 2026-11-12-unified-worn-pieces Task 2:
-mesh iff a worn piece is in the body); "retexture mode" in [1] = both switched to painted.
+Since Task 6 of plan 2026-11-12-unified-worn-pieces there is no body mode: the rule is
+``base_body._bald_edit(meshed=…)``, meshed = the worn pieces want a shape (``figure.wanted_figure``), and the tab's
+view run renders the SHAPE's own view (``tpose_<B0>``), not the outfit's.
+
+Fixture (character Demo: humanoid, pipeline on, side views off = the default; appearance with hair, so
+``garment_hair.ensure_hair_item`` creates and WEARS its own hair item H). Items top / skirt, in mode in_body (both
+in the shape); "retexture mode" in [1] = both switched to painted (no shape wanted).
 Base views front/back of bsig, base model. Outfit O1 {top, skirt} WORN with a dressed front + back made BEFORE the
 rule, texture T0 = its tsig, its body B0 = its shape key (figure.shape_key of {top, skirt} in the body — the dress
 text of its shape inputs is T0's, nothing painted next to them; plan 2026-11-12-unified-worn-pieces Task 5) with a
-shape record (refs + rigged GLB) and the outfit model of O1 on B0.
+shape record (refs + rigged GLB) and the outfit model of O1 on B0, its ``figure`` the one delivered now (shape B0,
+nothing painted).
 
 Expected, by hand:
-[1] Rule: outfit_body_bald(Demo) True (mesh mode + worn own hair item); hair taken off (equipped_mesh_pieces {})
-    -> False; a hair item owned by another character worn in the slot -> False; retexture mode -> False.
+[1] Rule: True (a shape wanted + worn own hair item); hair taken off (equipped_mesh_pieces {}) -> False; a hair
+    item owned by another character worn in the slot -> False; both pieces painted (no shape) -> False.
 [2] Prompt: dress_prompt(front, bald=True) =
       "Keep the image exactly as it is: the same person, same body shape, same pose, same arm and hand position,
        same framing and background. Only change their clothing: <text>. Completely bald with a smooth bare scalp."
@@ -30,14 +34,19 @@ Expected, by hand:
     "completely bald" (base view prompt, unchanged).
 [3] Key unchanged: T0 = "tex" + sha256(canonical JSON of texture_inputs)[:12] with the own hair worn, and the
     SAME with it taken off (the rule is not an input); texture_inputs has no "bald" key.
-[4] Nothing stale: O1's old front counts (dressed_image = the file), outfit_body_of_outfit(O1) = B0,
-    outfit_body_stale(O1 model) "", outfit_info not stale; the tab's B0: freshness not stale, can_regenerate True.
-    (After a re-render of its views B0 says only DRESSED_VIEWS_CHANGED, as after any re-render.)
-[5] A new front render: POST views/front/regenerate on B0 -> ONE image job (tpose_<O1>, occasion outfit_front)
-    whose bare prompt is [2]'s bald prompt and whose negative ends with HAIR_NEGATIVE; its sidecar names
-    texture_signature T0 and no "bald"; outfit_body_of_outfit(O1) still B0; the tab's B0 still not stale.
+[4] Nothing stale: outfit_body_of_outfit(O1) = B0, figure_stale(O1 model) "", outfit_info not stale; the tab's
+    B0: freshness not stale, can_regenerate True. (After a re-render of its views B0 says
+    DRESSED_VIEWS_CHANGED, as after any re-render, and B0 is no longer current for its views: the delivered
+    figure stands on the plain body, so O1's model is stale "figure" and outfit_info "stale" — marked only, the
+    view run builds nothing; was "not stale", judged by body_sha256.) O1's old front
+    (edited from the plain body ``bsig``) no longer counts: on the stored shape B0 the delivered figure's views
+    stand on B0 (``dressed_image`` None — replaces "the old front counts", which judged it by the texture key).
+[5] A new front render: POST views/front/regenerate on B0 -> ONE image job (tpose_<B0>, the shape's own front,
+    occasion outfit_front — was tpose_<O1>) whose bare prompt is [2]'s bald prompt and whose negative ends with
+    HAIR_NEGATIVE; its sidecar: texture_signature "" (nothing painted on a shape view; was T0), no "bald", the
+    dress text of the shape's inputs; outfit_body_of_outfit(O1) still B0; O1's model stale "figure" (above).
 [6] No own hair -> unchanged: hair taken off -> the next front render's prompt is [2]'s plain prompt, its
-    negative the plain negative; texture T0, body B0.
+    negative the plain negative; the sidecar's texture_signature "", body B0.
 """
 import hashlib
 import json
@@ -163,7 +172,16 @@ def main() -> int:
                 op = dict(inventory.get_item(key)["outfit_piece"])
                 op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
                 inventory.update_item(key, {"outfit_piece": op})
-            check(f"mode {mode}", base_body.outfit_body_mode(char), mode)
+            from app.core import figure as figure_mod
+            check(f"mode {mode}", sorted(figure_mod.wanted_figure(char, profile=profile()).in_body),
+                  ["skirt", "top"] if mode == "mesh" else [])
+
+        def bald():
+            # The rule of a meshed shape's views (``base_body._bald_edit``): meshed = the worn pieces want a shape.
+            from app.core import figure as figure_mod
+            p = profile()
+            return base_body._bald_edit(char, p, meshed=not figure_mod.is_plain(
+                figure_mod.wanted_figure(char, profile=p).shape))
 
         def set_profile(**changes):
             p = profile()
@@ -188,18 +206,18 @@ def main() -> int:
 
         # --- [1] ---------------------------------------------------------------------------------------------
         print("[1] the rule")
-        check("[1] mesh mode + own hair", base_body.outfit_body_bald(char), True)
+        check("[1] mesh mode + own hair", bald(), True)
         set_profile(equipped_mesh_pieces={})
-        check("[1] hair taken off", base_body.outfit_body_bald(char), False)
+        check("[1] hair taken off", bald(), False)
         foreign = inventory.add_item(name="Other hair", category="garment", owner="Someone",
                                      garment={"kind": "hair", "slot": "hair", "body_slot": "hair"})["id"]
         set_profile(equipped_mesh_pieces={"hair": foreign})
-        check("[1] foreign hair item", base_body.outfit_body_bald(char), False)
+        check("[1] foreign hair item", bald(), False)
         set_profile(equipped_mesh_pieces={"hair": hair_id})
         set_mode("retexture")
-        check("[1] retexture mode", base_body.outfit_body_bald(char), False)
+        check("[1] retexture mode", bald(), False)
         set_mode("mesh")
-        check("[1] back on", base_body.outfit_body_bald(char), True)
+        check("[1] back on", bald(), True)
 
         # --- [2] ---------------------------------------------------------------------------------------------
         print("[2] the prompt")
@@ -265,9 +283,11 @@ def main() -> int:
         (M / f"{B0}.glb").write_bytes(b"BODY-0")
         write_json(M / f"{B0}.json", {"outfit_body": rec0, "rig": "mixamo", "created_at": "2026-11-10T10:00:00+00:00"})
         o1_model = {"pieces": pieces, "items": [], "base_signature": bsig, "base_model_sha256": sha(M / f"{bsig}.glb"),
-                    "texture_signature": T0, "outfit_body_mode": "mesh", "body_id": B0,
+                    "texture_signature": T0, "body_id": B0,
                     "body_sha256": sha(M / f"{B0}.glb"), "rig": "mixamo", "source": "base_body", "dressed": True,
                     "character": char}
+        o1_model["figure"] = figure.delivered_figure(char, profile=profile(), pieces=pieces, items=[]).as_dict()
+        check("fixture: O1 delivered on B0", o1_model["figure"].get("shape"), B0)
         write_json(M / f"{O1}.json", o1_model)
         (M / f"{O1}.glb").write_bytes(b"OUTFIT-ON-B0")
         outfit_bodies.stale_posture = lambda c, meta: ""
@@ -291,21 +311,24 @@ def main() -> int:
             return next((b for b in data["bodies"] if b["body_id"] == body_id), None)
 
         def not_stale(label, rerendered=False):
-            """Not stale for the rule; after a re-render the body says only what any re-render makes it say
-            (``outfit_bodies.DRESSED_VIEWS_CHANGED``: its mesher inputs differ from the outfit's views now)."""
+            """Nothing stale for the bald rule; after a re-render the body and the outfit model say only what any
+            re-render of a shape view makes them say (``outfit_bodies.DRESSED_VIEWS_CHANGED``; the model "figure")."""
             b = tab_body(B0)
             f = b["freshness"] or {}
             want = ("stale", outfit_bodies.DRESSED_VIEWS_CHANGED) if rerendered else (None, None)
             got = (f.get("state"), f.get("reason")) if f.get("state") == "stale" else (None, None)
             check(f"{label}: tab B0 freshness", (got, b["can_regenerate"]), (want, True))
-            check(f"{label}: outfit model not stale", base_body.outfit_body_stale(char, o1_model), "")
-            check(f"{label}: outfit_info not stale", base_body.outfit_info(char, signature=O1)["status"] != "stale",
-                  True)
+            # A re-rendered view of B0 makes B0 outdated for its views: the delivered figure stands on the plain
+            # body until B0 is meshed again, so O1's model is stale "figure" — marked only, nothing rebuilt.
+            check(f"{label}: outfit model", base_body.figure_stale(char, o1_model), "figure" if rerendered else "")
+            check(f"{label}: outfit_info stale", base_body.outfit_info(char, signature=O1)["status"] == "stale",
+                  rerendered)
             check(f"{label}: O1 stands on B0", base_body.outfit_body_of_outfit(char, O1), B0)
 
         # --- [4] ---------------------------------------------------------------------------------------------
         print("[4] nothing becomes stale")
-        check("[4] old front counts", base_body.dressed_image(char, "front", O1, bsig), o1_front)
+        check("[4] the old front (edited from the plain body) is made for another figure",
+              base_body.dressed_image(char, "front", O1, bsig), None)
         not_stale("[4]")
 
         def front_run():
@@ -318,12 +341,13 @@ def main() -> int:
         # --- [5] ---------------------------------------------------------------------------------------------
         print("[5] a new front render carries the bald rule")
         jobs = front_run()
-        check("[5] one image job", [(x["stem"], x["occasion"]) for x in jobs], [(f"tpose_{O1}", "outfit_front")])
+        check("[5] one image job", [(x["stem"], x["occasion"]) for x in jobs], [(f"tpose_{B0}", "outfit_front")])
         check("[5] its prompt is the bald prompt", jobs[0]["prompt"], bald_prompt)
         check("[5] its negative ends with the hair negative",
               (jobs[0]["negative"] or "").endswith(base_body.HAIR_NEGATIVE), True)
-        meta = json.loads(o1_front.with_suffix(".json").read_text())
-        check("[5] sidecar: T0, no bald key", (meta.get("texture_signature"), "bald" in meta), (T0, False))
+        meta = json.loads((R / f"tpose_{B0}.json").read_text())
+        check("[5] shape front sidecar: nothing painted, no bald key, the shape's dress text",
+              (meta.get("texture_signature"), "bald" in meta, meta.get("dress_text")), ("", False, TEXTS["front"]))
         not_stale("[5]", rerendered=True)
 
         # --- [6] ---------------------------------------------------------------------------------------------
@@ -332,8 +356,8 @@ def main() -> int:
         jobs = front_run()
         check("[6] plain prompt", jobs[0]["prompt"] if jobs else None, plain_prompt)
         check("[6] plain negative", jobs[0]["negative"] if jobs else None, plain_neg)
-        meta = json.loads(o1_front.with_suffix(".json").read_text())
-        check("[6] sidecar T0", meta.get("texture_signature"), T0)
+        meta = json.loads((R / f"tpose_{B0}.json").read_text())
+        check("[6] shape front sidecar: nothing painted", meta.get("texture_signature"), "")
         not_stale("[6]", rerendered=True)
 
     print(f"\n{len(FAILS)} failure(s)" if FAILS else "\nOK")

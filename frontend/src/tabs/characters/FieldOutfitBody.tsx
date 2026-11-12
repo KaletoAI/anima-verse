@@ -783,7 +783,7 @@ export function FieldOutfitBody({ character, refreshKey = '' }: { character: str
                 <div key={o.signature}>
                   <div className="ga-model3d-status-row ga-obody-line"
                     title={[o.signature, o.stale_reason === 'outfit_body' ? t('Built on an older outfit body')
-                      : o.stale_reason === 'body_mode' ? t('Built for the other outfit body mode') : ''].filter(Boolean).join('\n')}>
+                      : o.stale_reason === 'figure' ? t('Built as another figure than the worn pieces show now — rebuild it') : ''].filter(Boolean).join('\n')}>
                     <span className={`ga-model3d-status-dot ga-model3d-status-${o.stale_reason ? 'yellow' : 'green'}`} />
                     <span className="ga-model3d-status-text">
                       {o.name || o.signature}{o.worn ? ` · ${t('worn')}` : ''}{o.stale_reason ? ` · ${t('outdated')}` : ''}

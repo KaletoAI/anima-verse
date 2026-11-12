@@ -12,37 +12,39 @@ bare FastAPI app with a TestClient, session lookup stubbed (header ``x-role``: a
 GPU: ``app.imagegen.service.get_image_service`` raises (nothing may reach it), ``expression_regen.
 render_character_image`` is a recorder that writes a PNG + sidecar (one call = the front edit, one image job),
 ``base_body._dress_view`` a recorder that writes the dressed back (one call = draft + fit, two image jobs),
-``base_body.prepare_outfit_body`` a recorder (one call = one mesh run).
+``base_body.prepare_shape`` a recorder (one call = one mesh run).
 
-Fixture (character Demo: humanoid, pipeline on, outfit body mode mesh, side views off = the default). Items top
-{top} and skirt {bottom}, in the body (mode in_body — the outfit body mode follows the worn pieces, interim rule of
-plan 2026-11-12-unified-worn-pieces Task 2), both WORN = outfit O1. Base views front/back of bsig, base
+Fixture (character Demo: humanoid, pipeline on, side views off = the default). Items top {top} and skirt {bottom},
+in the body (mode in_body), both WORN = outfit O1. Since Task 6 of plan 2026-11-12-unified-worn-pieces a shape's
+views are its OWN (``model_refs/tpose[_<view>]_<shape>``: edits of the plain body wearing only the in-body
+pieces, ``base_body.render_shape_views``) — never the outfit's dressed views nor the texture store. Base views front/back of bsig, base
 model. NO dressed view of O1, no outfit model, no outfit body.
 
 Expected, by hand:
-[1] GET: exactly one body, the worn outfit's PENDING entry P. P is the body the views will stand on: no own-mesh
-    piece, so the unpainted set is empty and the tsig is ``texture_signature(texture_inputs(pieces, items,
-    variant=outfit_variant(pieces), mesh_effective=[], bsig))`` — P = the shape key of those dress texts
-    (``base_body.outfit_shape``: both pieces in the body, nothing painted — plan 2026-11-12-unified-worn-pieces
-    Task 5), computed here through the public functions. status "missing", orphaned False, worn_outfit = {signature O1, predicted True,
+[1] GET: exactly one body, the worn outfit's PENDING entry P. P = the shape O1's wanted figure calls for
+    (both pieces in the body): ``figure.shape_key_of`` of its ``figure.shape_plan`` inputs. status "missing", orphaned False, worn_outfit = {signature O1, predicted True,
     views_missing [front, back], image_jobs 3} (side views off: the front is ONE edit, the back a draft plus a
-    fit = 2 → 1 + 2 = 3). blocked: regenerate WORN_VIEWS_MISSING (no outfit stands on P's views), rerig
-    NO_UNRIGGED, refit NO_MODEL (no glb), delete NOTHING_STORED (no file of P at all), views "" (it can run).
-    view_info: front + back listed (dressed views), url None, blocked WORN_VIEWS_MISSING (not NO_SOURCE).
+    fit = 2 → 1 + 2 = 3). blocked: regenerate "" (O1 WANTS P, so it is P's source before any view exists — a
+    Regenerate renders the missing views first, ``base_body.prepare_shape``; Task 6 replaced WORN_VIEWS_MISSING,
+    which is gone), rerig NO_UNRIGGED, refit NO_MODEL (no glb), delete NOTHING_STORED (no file of P at all),
+    views "" (it can run). view_info: front + back listed (dressed views), url None, blocked front "" and back
+    DRESSED_FRONT_FIRST (its draft needs P's front).
 [1b] A pending entry never shows another image as its current dressed view: the texture store holds a front
-    and back of T (made for some other outfit, current base, sidecar dressed) -> P's front/back tiles serve them
-    (url names T, source "texture") but WITHOUT a freshness badge (meta.freshness None) and with pending_note
-    PENDING_TEXTURE_VIEW; blocked stays WORN_VIEWS_MISSING. Store removed, an older mesher input
-    tpose_back_<P> planted instead -> the back tile serves it (source "body"), freshness None, pending_note
-    PENDING_BODY_VIEW; the front has no image (url None, no note). Both removed again (so [3] renders, [6] holds).
+    and back of T (made for some other outfit, current base, sidecar dressed) -> P's front/back tiles stay empty
+    (url None, no note: the store never backs a shape since Task 6 — replaces "served WITHOUT a badge, note
+    PENDING_TEXTURE_VIEW", that note is gone); blocked as in [1]. Store removed, an older mesher input
+    tpose_back_<P> planted instead -> the back tile serves it (source "body") judged like any view of P: freshness
+    missing "No provenance recorded", no pending_note (replaces "freshness None, PENDING_BODY_VIEW": the worn
+    outfit always stands on P now, so no tile is pending); the front has no image (url None, no note). Both
+    removed again (so [3] renders, [6] holds).
 [2] Routes: user -> 403, anonymous -> 401; generate-views on another body id -> 404 NOT_WORN_BODY. Another 3D run
     holds the generation guard: POST generate-views -> 202 started True (the worker took it and waits);
     a second POST -> 202 queued position 1 (the running one is not in the waiting list). GET: P status "running",
     run_kind "views"; EVERY action blocked with LOCKED_RUNNING (the lock comes before the static reasons).
     cancel {} -> 200 cancelled 1 (the waiting one); cancel {} again -> 409 (only the running one is left).
     Nothing rendered while the guard is held.
-[3] Guard released -> the run ends: exactly ONE front edit (output_stem tpose_<O1>, occasion outfit_front) and
-    ONE back (``_dress_view`` view back, signature O1) — 3 image jobs as predicted; ZERO mesh runs (no
+[3] Guard released -> the run ends: exactly ONE front edit (output_stem tpose_<P> — the shape's own front, was
+    tpose_<O1> —, occasion outfit_front) and ONE back (``_dress_view`` view back, signature P) — 3 image jobs as predicted; ZERO mesh runs (no
     auto-chain), get_image_service never called. last_run {kind views, ok True}. GET: P is now O1's real body
     (``base_body.outfit_body_of_outfit(O1) == P`` — the prediction held), still one body, worn_outfit.predicted
     False, views_missing [], blocked.views WORN_VIEWS_PRESENT, blocked.regenerate "" (O1 stands on it), front +
@@ -55,9 +57,10 @@ Expected, by hand:
     that does not exist (built_for "0000deadbeef"), never built. GET: Q listed AFTER P, orphaned True, status
     "missing", worn_outfit None, blocked.regenerate NO_SOURCE, blocked.delete "" (its refs are stored),
     view front blocked NO_SOURCE. P: orphaned False. POST generate-views on Q -> 404.
-[6] Nothing worn (undressed): no worn entry any more. P drops out of the list — nothing of P itself is stored (the
-    mesh recorder wrote no body file; O1's dressed views live in the outfit's refs and the texture store, not
-    under P's id) and no worn outfit names it; Q stays, orphaned.
+[6] Nothing worn (undressed): no worn entry any more. P stays listed, orphaned: its own views (from [3]) are
+    stored under its id, but nothing wants it now (never built, no record naming an outfit — the views carry the
+    parent record only once a mesh run marks them —, no outfit model on it, not worn); was "P drops out", when
+    the views lived under O1's id. Q stays, orphaned; with no worn body to lead, the list is in id order.
 """
 import hashlib
 import json
@@ -182,15 +185,12 @@ def main() -> int:
         outfit_bodies.stale_posture = lambda c, meta: ""
 
         O1 = mesh_signature(pieces, [], char, mesh_variant(char, pieces), mesh_items_token(char, pieces))
-        # The hand rule of [1]: no own-mesh piece -> nothing unpainted, variant = outfit_variant(pieces).
+        # The hand rule of [1]: both pieces in the body -> the wanted figure's shape, keyed by its inputs.
         from app.core import figure
-        variant_p = base_body.outfit_variant(char, pieces, profile=prof)
-        inputs_t = base_body.texture_inputs(
-            char, pieces=pieces, items=[], variant=variant_p,
-            mesh_effective=[], bsig=bsig, profile={**prof, "equipped_pieces": pieces, "equipped_items": []})
-        T = base_body.texture_signature(inputs_t)
-        P = base_body.outfit_shape(char, pieces, bsig=bsig, variant=variant_p, dress_text=inputs_t["dress_text"],
-                                   profile={**prof, "equipped_pieces": pieces, "equipped_items": []})["key"]
+        wanted = figure.wanted_figure(char, pieces=pieces, items=[])
+        P = figure.shape_key_of(figure.shape_plan(char, wanted, [])[2])
+        check("fixture: P is the wanted shape", (P, base_body.is_outfit_body_signature(P)), (wanted.shape, True))
+        T = "tex" + "7" * 12   # some other outfit's texture (planted in [1b])
 
         renders, backs, meshes = [], [], []
 
@@ -206,7 +206,7 @@ def main() -> int:
         expression_regen.render_character_image = fake_render
 
         def fake_dress_view(character_name, view, *, signature, bsig, pieces, items, profile, front, base_views,
-                            refs_dir, size, mesh_items=None, texture=None):
+                            refs_dir, size, mesh_items=None, texture=None, **kw):
             backs.append((view, signature))
             out = png(refs_dir / f"{base_body._kind(view)}_{signature}.png", (0, 0, 120))
             write_json(out.with_suffix(".json"), {"equipped_pieces": dict(pieces or {}),
@@ -216,10 +216,10 @@ def main() -> int:
             return out, None
         base_body._dress_view = fake_dress_view
 
-        def fake_prepare(c, signature=None, *, force=False, rebuild=False):
+        def fake_prepare(c, fig, *, items=None, rebuild=False, signature=""):
             meshes.append((c, signature, rebuild))
-            return {"ok": True, "cached": False, "body_id": P}
-        base_body.prepare_outfit_body = fake_prepare
+            return {"ok": True, "cached": False, "body_id": fig.shape}
+        base_body.prepare_shape = fake_prepare
 
         def bodies():
             return client.get(f"/characters/{char}/outfit-bodies", headers=ADMIN).json()["bodies"]
@@ -238,11 +238,11 @@ def main() -> int:
         check("[1] status / orphaned", (b["status"], b["orphaned"]), ("missing", False))
         check("[1] worn_outfit", b["worn_outfit"], {"signature": O1, "name": "Skirt + Top", "predicted": True,
                                                    "views_missing": ["front", "back"], "image_jobs": 3})
-        check("[1] blocked", b["blocked"], {"regenerate": outfit_bodies.WORN_VIEWS_MISSING,
+        check("[1] blocked", b["blocked"], {"regenerate": "",
                                             "rerig": outfit_bodies.NO_UNRIGGED, "refit": outfit_bodies.NO_MODEL,
                                             "delete": outfit_bodies.NOTHING_STORED, "views": ""})
         check("[1] view tiles", {v: (e["url"], e["blocked"]) for v, e in b["view_info"].items()},
-              {"front": (None, outfit_bodies.WORN_VIEWS_MISSING), "back": (None, outfit_bodies.WORN_VIEWS_MISSING)})
+              {"front": (None, ""), "back": (None, base_body.DRESSED_FRONT_FIRST)})
 
         # --- [1b] --------------------------------------------------------------------------------------------
         print("[1b] images in a pending entry are not its current dressed views")
@@ -254,18 +254,17 @@ def main() -> int:
                                                   "base_image_sha256": sha(base_views[v]), "dress_text": "x"})
             planted += [img, img.with_suffix(".json")]
         vi = body(P)["view_info"]
-        check("[1b] store views served", [(vi[v]["source"], f"/outfit-bodies/{T}/views/{v}?" in (vi[v]["url"] or ""))
-                                          for v in ("front", "back")], [("texture", True)] * 2)
-        check("[1b] no badge, honest note", [((vi[v]["meta"] or {}).get("freshness"), vi[v].get("pending_note"),
-                                              vi[v]["blocked"]) for v in ("front", "back")],
-              [(None, outfit_bodies.PENDING_TEXTURE_VIEW, outfit_bodies.WORN_VIEWS_MISSING)] * 2)
+        check("[1b] the store never backs a shape", [(vi[v]["url"], vi[v]["source"], vi[v].get("pending_note"),
+                                                      vi[v]["blocked"]) for v in ("front", "back")],
+              [(None, None, None, ""), (None, None, None, base_body.DRESSED_FRONT_FIRST)])
         for f in planted:
             f.unlink()
         img = png(R / f"tpose_back_{P}.png", (3, 3, 3))
         write_json(img.with_suffix(".json"), {"outfit_body": {"body_id": P, "texture_signature": T}})
         vi = body(P)["view_info"]
-        check("[1b] older mesher input", (vi["back"]["source"], (vi["back"]["meta"] or {}).get("freshness"),
-                                          vi["back"].get("pending_note")), ("body", None, outfit_bodies.PENDING_BODY_VIEW))
+        check("[1b] older mesher input: the body's view, judged", (vi["back"]["source"], (vi["back"]["meta"] or {})
+                                                                    .get("freshness"), vi["back"].get("pending_note")),
+              ("body", {"state": "missing", "reason": "No provenance recorded"}, None))
         check("[1b] front without image", (vi["front"]["url"], vi["front"].get("pending_note")), (None, None))
         img.unlink()
         img.with_suffix(".json").unlink()
@@ -297,8 +296,8 @@ def main() -> int:
 
         # --- [3] ---------------------------------------------------------------------------------------------
         print("[3] the views exist: P is O1's real body")
-        check("[3] one front edit", renders, [(f"tpose_{O1}", "outfit_front")])
-        check("[3] one back (draft + fit)", backs, [("back", O1)])
+        check("[3] one front edit", renders, [(f"tpose_{P}", "outfit_front")])
+        check("[3] one back (draft + fit)", backs, [("back", P)])
         check("[3] no mesh run, no image service", (meshes, image_calls), ([], []))
         check("[3] prediction held", base_body.outfit_body_of_outfit(char, O1), P)
         listed = bodies()
@@ -350,8 +349,8 @@ def main() -> int:
         prof["equipped_pieces"] = {}
         assert save_character_profile(char, prof)
         listed = bodies()
-        check("[6] only Q, orphaned, no worn entry", [(x["body_id"], x["orphaned"], x["worn_outfit"]) for x in listed],
-              [(Q, True, None)])
+        check("[6] P and Q, both orphaned, no worn entry",
+              [(x["body_id"], x["orphaned"], x["worn_outfit"]) for x in listed], [(b, True, None) for b in sorted([P, Q])])
 
     print(f"\n{len(FAILS)} failure(s)" if FAILS else "\nOK")
     return 1 if FAILS else 0

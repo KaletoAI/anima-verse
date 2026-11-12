@@ -37,6 +37,8 @@ under the old texture-keyed ids are re-keyed once at boot
 """
 import hashlib
 import json
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -116,7 +118,7 @@ def _dress_texts(character_name: str, sets: WornSets, *, left_out, items: Option
 
 def _dressed_profile(profile: Dict[str, Any], sets: WornSets, items: Optional[list]) -> Dict[str, Any]:
     """The profile wearing ``sets.pieces`` / ``items`` (as
-    ``base_body._outfit_texture`` builds its ``mesh_profile``)."""
+    ``base_body._worn_profile``)."""
     dressed = dict(profile)
     dressed["equipped_pieces"] = dict(sets.pieces)
     dressed["equipped_items"] = list(items or [])
@@ -202,7 +204,7 @@ def _painted_now(character_name: str, sets: WornSets, *, bsig: str) -> WornSets:
     own-mesh CLOTHING piece without an accepted fit on the base model of
     ``bsig`` is painted meanwhile; footwear is never painted (left out until
     its fit exists). Read-only — the same rule as today's build
-    (``base_body.resolve_mesh_items``: left out = the fitted pieces plus all
+    (``base_body.resolve_figure``: left out = the fitted pieces plus all
     footwear)."""
     from dataclasses import replace
     from app.core import base_body, garment_set, garment_store
@@ -324,13 +326,16 @@ class Figure:
     interim: Dict[str, str] = field(default_factory=dict)    # item -> INTERIM_PAINTED text
     notes: Dict[str, str] = field(default_factory=dict)      # item -> PAINT_NEEDS_PLAIN
     hair: str = HAIR_BODY           # "body" | "hairdeck" | "bald"
+    #: The worn ``{slot: item id}`` the figure was resolved from (the dress
+    #: texts of its shape and texture are composed from it).
+    pieces: Dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
         """The JSON form an outfit model sidecar records as ``figure``."""
         return {"signature": self.signature, "bsig": self.bsig, "shape": self.shape, "texture": self.texture,
                 "in_body": list(self.in_body), "painted": list(self.painted), "own": list(self.own),
                 "left_out": dict(self.left_out), "interim": dict(self.interim), "notes": dict(self.notes),
-                "hair": self.hair}
+                "hair": self.hair, "pieces": dict(self.pieces)}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Figure":
@@ -344,7 +349,8 @@ class Figure:
         return cls(signature=str(data.get("signature") or ""), bsig=str(data.get("bsig") or ""),
                    shape=str(data.get("shape") or ""), texture=str(data.get("texture") or ""),
                    in_body=ids("in_body"), painted=ids("painted"), own=ids("own"), left_out=texts("left_out"),
-                   interim=texts("interim"), notes=texts("notes"), hair=str(data.get("hair") or HAIR_BODY))
+                   interim=texts("interim"), notes=texts("notes"), hair=str(data.get("hair") or HAIR_BODY),
+                   pieces=texts("pieces"))
 
     def state_of(self, item_id: str) -> str:
         """Where a worn piece is in this figure: ``in_body`` / ``painted`` /
@@ -357,6 +363,21 @@ class Figure:
         if item_id in self.painted:
             return garment_set.PAINTED
         return LEFT_OUT if item_id in self.left_out else ""
+
+
+def shape_plan(character_name: str, fig: "Figure", items: Optional[list], *,
+               profile: Optional[Dict[str, Any]] = None) -> Tuple[WornSets, str, Optional[Dict[str, Any]]]:
+    """``(worn sets, variant, shape inputs)`` the meshed shape of the WANTED
+    figure ``fig`` is made of (``_wanted``'s rule for its pieces and held
+    ``items``); the inputs are None when no piece is in the body. The caller
+    compares ``shape_key_of(inputs)`` with ``fig.shape`` (the worn modes may
+    have changed since ``fig`` was resolved)."""
+    profile = _profile_of(character_name, profile)
+    sets, _notes = _refused_sets(worn_sets(character_name, pieces=dict(fig.pieces), profile=profile))
+    variant = predicted_variant(character_name, sets, _items_of(profile, items), profile=profile)
+    if not sets.in_body:
+        return sets, variant, None
+    return sets, variant, shape_inputs(character_name, sets, bsig=fig.bsig, variant=variant, profile=profile)
 
 
 def built_figure(meta: Dict[str, Any]) -> Optional[Figure]:
@@ -408,7 +429,7 @@ def _wanted(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Di
     figure = Figure(signature=_signature(character_name, sets.pieces, items, profile), bsig=bsig, shape=shape,
                     texture=texture, in_body=sets.in_body, painted=sets.painted, own=tuple(sorted(sets.own)),
                     notes=notes if not is_plain(shape) else {},
-                    hair=HAIR_BODY if sets.hair_in_body else HAIR_HAIRDECK)
+                    hair=HAIR_BODY if sets.hair_in_body else HAIR_HAIRDECK, pieces=dict(sets.pieces))
     return figure, sets, variant
 
 
@@ -523,7 +544,7 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
                               profile=profile)
     delivered = Figure(signature=wanted.signature, bsig=bsig, shape=shape, texture=texture,
                        in_body=tuple(sorted(in_body)), painted=left_painted, own=tuple(own),
-                       left_out=left_out, interim=interim, notes=notes, hair=hair)
+                       left_out=left_out, interim=interim, notes=notes, hair=hair, pieces=dict(sets.pieces))
     return wanted, delivered
 
 
@@ -534,6 +555,61 @@ def delivered_figure(character_name: str, *, profile: Optional[Dict[str, Any]] =
     model's manifest) — the interim rule applied (block above). Read-only:
     no chain, no fit, no image runs here."""
     return _delivered(character_name, profile=_profile_of(character_name, profile), pieces=pieces, items=items)[1]
+
+
+# --- Memo for serving paths (Ruling 6b) ------------------------------------------
+#
+# ``delivered_figure`` reads fits, stored shapes and their views; the serving
+# paths (stale checks, model info, the Wardrobe, tile freshness) ask it per
+# request. ``delivered_figure_cached`` memoises it per (character, profile
+# content — the base signature, the worn pieces and the hair method follow
+# from it —, the judged pieces and items, the content of the worn items —
+# their modes and texts —, the disk generation). The disk generation
+# (``invalidate``) moves with every write that can change a figure: a garment
+# record (``garment_store.write_record``: fits, refusals), a model or
+# sidecar publication (``model3d._publish_model_bytes``: shapes, the base),
+# a base-body ref write and a render pass (``base_body._atomic_write`` /
+# ``_render_views``). Deletions are not counted: an entry lives at most
+# ``MEMO_TTL_S``. Producers (builds, triggers, the GC) call
+# ``delivered_figure`` itself, never the memo.
+
+#: The longest a memoised figure is served.
+MEMO_TTL_S = 30.0
+_MEMO_MAX = 512
+_memo: Dict[Tuple[Any, ...], Tuple[float, "Figure"]] = {}
+_memo_lock = threading.Lock()
+_generation = [0]
+
+
+def invalidate() -> None:
+    """A write that can change a delivered figure happened (block above)."""
+    with _memo_lock:
+        _generation[0] += 1
+        _memo.clear()
+
+
+def delivered_figure_cached(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                            pieces: Optional[Dict[str, str]] = None, items: Optional[list] = None) -> "Figure":
+    """``delivered_figure`` memoised for serving paths (block above)."""
+    from app.models.inventory import get_item
+    profile = _profile_of(character_name, profile)
+    worn = pieces if pieces is not None else (profile.get("equipped_pieces") or {})
+    ids = sorted({str(v) for v in (worn or {}).values() if v})
+    key = (character_name, _generation[0], hashlib.sha1(_canonical(profile)).hexdigest(),
+           _canonical({"pieces": pieces, "items": items}),
+           hashlib.sha1(_canonical({i: get_item(i) for i in ids})).hexdigest())
+    now = time.monotonic()
+    with _memo_lock:
+        hit = _memo.get(key)
+        if hit is not None and now - hit[0] < MEMO_TTL_S:
+            return hit[1]
+    fig = delivered_figure(character_name, profile=profile, pieces=pieces, items=items)
+    with _memo_lock:
+        if key[1] == _generation[0]:
+            if len(_memo) >= _MEMO_MAX:
+                _memo.clear()
+            _memo[key] = (now, fig)
+    return fig
 
 
 def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:

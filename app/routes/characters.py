@@ -2009,17 +2009,20 @@ def get_character_garment(character_name: str, item_id: str,
     mesh_pieces = profile.get("equipped_mesh_pieces") if isinstance(profile.get("equipped_mesh_pieces"), dict) else {}
     worn = item_id in pieces.values() or item_id in mesh_pieces.values()
     # Only clothing is painted on while it has no fit (hair is simply absent);
-    # in outfit body mode mesh it is missing instead (ruling 2026-11-10), and
-    # footwear is missing in either mode (``piece_status``, spec § 9.1).
+    # the delivered figure leaves it out instead in the refusal branch on a
+    # meshed shape, and footwear is always missing (``piece_status``, spec § 9.1).
     worn_piece = bool(pipeline and worn and kind in garment_set.OWN_MESH_PIECE_KINDS)
-    mesh_mode = bool(pipeline and base_body.outfit_body_mode(character_name, profile=profile) == base_body.MESH_MODE)
+    left_out = False
+    if worn_piece:
+        from app.core import figure
+        left_out = item_id in figure.delivered_figure_cached(character_name, profile=profile).left_out
     payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
                "kind": kind, "mesh_mode": garment_set.mesh_mode_of(item), "worn": bool(worn),
                "status": garment_set.piece_status(
                    info, worn=worn_piece, base_model_ready=bool(base and base[1]),
                    layers=garment_set.worn_layers(character_name, profile=profile,
                                                   base_model_sha=base[1] if base else "").get(item_id),
-                   mesh_mode=mesh_mode),
+                   left_out=left_out),
                "garment": info, "limits": _garment_limits(kind)}
     from app.core.model_overview import annotate_garment
     return annotate_garment(payload)

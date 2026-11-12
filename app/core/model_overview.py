@@ -26,11 +26,11 @@ a 3D model or an image, decided here on the server.
      until their fit is accepted), the garments assembled
      onto it, measurement and distance mesh. A model of the old
      path gets no list: the 3D tab keeps its own overview for it. On an
-     OUTFIT BODY (``outfit_body_mode: "mesh"``) the painted-body, back-refit,
-     retexture-proof and face-texel rows give way to one ``outfit_body`` row
-     (body id, texture signature).
-   - ``outfit_body_steps``: an outfit body ``model3d/<body id>.glb`` of the
-     mesh mode — parent record (texture signature, views meshed), mesh, face
+     MESHED SHAPE with nothing painted on it (sidecar ``body_id``, no
+     ``texture_signature``) the painted-body, back-refit, retexture-proof and
+     face-texel rows give way to one ``outfit_body`` row (body id).
+   - ``outfit_body_steps``: an outfit body ``model3d/<body id>.glb`` (a
+     meshed shape) — parent record (shape inputs, views meshed), mesh, face
      cleanup, face retexture, black-eye check, rig, head twist, normalize,
      posture matched to the base body (``outfit_body_posture.py``), limb
      weights, extension rig, collision capsules, texture re-encode,
@@ -44,7 +44,7 @@ a 3D model or an image, decided here on the server.
    dressed front a draft was made from (and a dressed back/side of an
    outfit body, ``outfit_body_view_freshness``, plus its dress text), the
    base views a base model was built from, an own-mesh piece painted on that has its garment mesh now
-   (``mesh_item_ready``) or that the outfit body mode handles otherwise now (``mesh_items_off_rule``), the garment fsig and the hair stale reasons, the pose render
+   (``mesh_item_ready``), a view made for another figure than the one delivered now (``FIGURE_CHANGED``), the garment fsig and the hair stale reasons, the pose render
    behind an old-path model, the profile picture behind the face view.
 
 The ``annotate_*`` functions add both to the payloads of the info routes
@@ -87,13 +87,15 @@ NO_PROVENANCE = "No provenance recorded"
 # The same phrase as base_body.MESH_ITEM_READY: an own-mesh piece this image or
 # model left painted on has an accepted garment fit now.
 MESH_ITEM_READY = "An own-mesh piece painted on here has its garment mesh now"
-# The same phrases as base_body.OLDER_BASE / BEFORE_PIPELINE / DETAIL_CHANGED / MESH_ITEM_READY.
+# The same phrase as base_body.FIGURE_CHANGED: an image or model made for
+# another figure than the one delivered now.
+FIGURE_CHANGED = "Built for another figure"
+# The same phrases as base_body.OLDER_BASE / BEFORE_PIPELINE / DETAIL_CHANGED /
+# FIGURE_CHANGED / OUTFIT_BODY_CHANGED.
 MODEL_STALE_REASONS = {"older_base": "Built on an older base body",
                        "before_pipeline": "Built before the base body pipeline",
                        "detail_changed": "Built for another body detail under the clothing",
-                       "mesh_item_ready": MESH_ITEM_READY,
-                       # base_body.BODY_MODE_CHANGED / OUTFIT_BODY_CHANGED
-                       "body_mode": "Built for the other outfit body mode",
+                       "figure": FIGURE_CHANGED,
                        "outfit_body": "Built on an older outfit body"}
 # garments.garment_info ``stale_reasons`` -> phrase (the Hair tab's labels).
 HAIR_STALE_REASONS = {"description_changed": "Hair description changed",
@@ -566,10 +568,10 @@ def _painted_body_step(meta: Dict[str, Any], shared: Optional[int]) -> Optional[
 
 
 def _outfit_body_step(meta: Dict[str, Any], body_meta: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """The outfit body a mesh-mode outfit model is a copy of (sidecar
-    ``body_id``, ``texture_signature``): WARNING when the body file is gone
-    (``body_meta`` None). A body rebuilt since is the model's stale reason
-    ``outfit_body`` (``base_body.outfit_body_stale``), not this row."""
+    """The meshed shape an outfit model is a copy of (sidecar ``body_id``):
+    WARNING when the body file is gone (``body_meta`` None). A body rebuilt
+    since is the model's stale reason ``outfit_body``
+    (``base_body.figure_stale``), not this row."""
     body_id = str(meta.get("body_id") or "")
     numbers = {"body_id": body_id or None, "texture_signature": meta.get("texture_signature")}
     if body_meta is None:
@@ -614,7 +616,7 @@ def _posture_match_step(blender: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _body_parent_step(meta: Dict[str, Any]) -> Dict[str, Any]:
-    """The parent record of an outfit body (``base_body.prepare_outfit_body``)."""
+    """The parent record of an outfit body (``base_body.prepare_shape``)."""
     record = _dict(meta.get("outfit_body"))
     if not record:
         return step("outfit_body", "Outfit body", NOT_RECORDED, "No parent record")
@@ -856,11 +858,12 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
     ``_garment_steps``; ``tiers`` / ``low_tris``: the distance mesh;
     ``item_names``: item id -> name for the own-mesh pieces row;
     ``texture_shared``: how many stored outfit models use its painted body;
-    ``body_meta``: the sidecar of the outfit body it names (mesh mode; None
-    when gone or in retexture mode); ``missing_items``: the own-mesh pieces
-    it left out that have no accepted fit now (mesh mode,
-    ``base_body.mesh_items_missing``)."""
-    on_body = meta.get("outfit_body_mode") == "mesh"
+    ``body_meta``: the sidecar of the meshed shape it names (None when gone
+    or on the plain body); ``missing_items``: the own-mesh pieces it left out
+    that have no accepted fit now (``base_body.mesh_items_missing``). A copy
+    of a meshed shape (nothing painted on it) shows the shape row instead of
+    the painted-body rows."""
+    on_body = bool(meta.get("body_id")) and not meta.get("texture_signature")
     proof = _dict(meta.get("retexture_proof"))
     guards = _dict(meta.get("view_guard"))
     used = {"front"} | set(_dict(meta.get("view_images")))
@@ -917,12 +920,13 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
 
 def dressed_freshness(meta: Dict[str, Any], *, bsig: str, base_view_sha: str,
                       mesh_ready: bool = False, off_rule: str = "") -> Dict[str, str]:
-    """A dressed view on the pipeline: made from the current base view?
-    ``mesh_ready``: an own-mesh piece it left painted on has its garment
-    mesh now (``base_body.mesh_items_ready``); ``off_rule``: the reason
-    when its own-mesh pieces follow the other outfit body mode's rule
-    (``base_body.mesh_items_off_rule``: ``MESH_ITEM_PAINTED_IN`` in mesh
-    mode, ``BODY_MODE_CHANGED`` in retexture mode), "" when they do not."""
+    """A dressed view on the pipeline: made from the current view of the
+    shape it was edited from (``bsig`` = that shape — the plain body's
+    signature or the meshed shape's id — and ``base_view_sha`` its view's
+    content)? ``mesh_ready``: an own-mesh piece it left painted on has its
+    garment mesh now (``base_body.mesh_items_ready``); ``off_rule``: the
+    reason when it was made for another figure than the one delivered now
+    (``FIGURE_CHANGED``, ``base_body.dressed_image``), "" when not."""
     if not meta.get("base_signature"):
         return freshness(MISSING, NO_PROVENANCE)
     if meta["base_signature"] != bsig:
@@ -1231,7 +1235,7 @@ def outfit_model_overview(character_name: str,
     bsig = str(meta.get("base_signature") or "")
     base_meta = _sidecar(_base_model_path(character_name, bsig)) if bsig else None
     body_meta = None
-    if meta.get("outfit_body_mode") == "mesh" and base_body.is_outfit_body_signature(meta.get("body_id")):
+    if base_body.is_outfit_body_signature(meta.get("body_id")):
         body_path = base_body.outfit_body_path(character_name, str(meta["body_id"]))
         body_meta = _sidecar(body_path) if body_path.is_file() else None
     wanted, deciders, shown = _piece_decision(character_name, _dict(meta.get("pieces")))
@@ -1297,6 +1301,19 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
         pipeline = bool(info.get("pipeline"))
         bsig = base_body.base_signature(character_name) if pipeline else ""
         shas = _base_view_shas(character_name, bsig) if bsig else {}
+        figure_of: Dict[str, Any] = {}
+
+        def delivered():
+            """The figure delivered now for the outfit's pieces (its front's manifest), once."""
+            if "fig" not in figure_of:
+                from app.core import figure
+                from app.core.model3d import _ref_manifest
+                front = find_ref_image(character_name, "tpose", signature) if signature else None
+                manifest = _ref_manifest(front) if front is not None else {}
+                figure_of["fig"] = figure.delivered_figure_cached(
+                    character_name, pieces=dict(manifest.get("pieces") or {}),
+                    items=list(manifest.get("items") or []))
+            return figure_of["fig"]
 
         def mark(tile: Any, view: str) -> None:
             if not isinstance(tile, dict):
@@ -1310,12 +1327,16 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
                 return
             path = find_ref_image(character_name, base_body._kind(view), signature) if signature else None
             record = _sidecar(path)
+            on = str(record.get("base_signature") or "")
+            meshed = base_body.is_outfit_body_signature(on)
+            view_sha = (base_body.file_sha256(find_ref_image(character_name, base_body._kind(view), on))
+                        if meshed else shas.get(view, ""))
             off_rule = ""
-            if base_body.mesh_items_off_rule(character_name, record, bsig=bsig):
-                off_rule = (base_body.MESH_ITEM_PAINTED_IN if base_body.outfit_body_mode(character_name)
-                            == base_body.MESH_MODE else base_body.BODY_MODE_CHANGED)
+            if path is not None and on and base_body.dressed_image(character_name, view, signature, bsig,
+                                                                   fig=delivered()) is None:
+                off_rule = FIGURE_CHANGED
             tile["freshness"] = dressed_freshness(
-                record, bsig=bsig, base_view_sha=shas.get(view, ""),
+                record, bsig=on if meshed else bsig, base_view_sha=view_sha,
                 mesh_ready=bool(base_body.mesh_items_ready(character_name, record, bsig=bsig)), off_rule=off_rule)
 
         mark(info.get("tpose"), "front")

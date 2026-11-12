@@ -9,9 +9,10 @@ Runs against a THROWAWAY storage + instance directory with a copy of the repo's 
 no hub, no GPU, no server process. Every file is synthetic bytes; only names and JSON sidecars matter to the GC.
 
 Fixture (``make(char, s)``, one fresh character per scenario; items ``top<s>`` {top}, ``skirt<s>`` {bottom} painted,
-``dress<s>`` {outer} own mesh, all in the inventory; hair item worn, hair_method hairdeck; pipeline on, mode mesh
-= top and skirt in mode in_body (the outfit body mode follows the worn pieces, interim rule of plan
-2026-11-12-unified-worn-pieces Task 2; "switch to retexture" = both set to painted, which spends and walks nothing);
+``dress<s>`` {outer} own mesh, all in the inventory; hair item worn, hair_method hairdeck; pipeline on, "mode mesh"
+= top and skirt in mode in_body (the worn outfit's wanted figure has them in the body — Task 6 of plan
+2026-11-12-unified-worn-pieces removed the per-character mode; "switch to retexture" = both set to painted, which
+spends and walks nothing);
 profile picture). bsig = base_signature. Keys since plan 2026-11-12-unified-worn-pieces Task 5 (GC by shape and
 texture keys, artefact_graph._current_textures):
   B1 / B2 = the SHAPE keys of O1 / O2 under the items' modes now (figure.predicted_keys(...)[0]: the in-body set
@@ -355,12 +356,18 @@ def main() -> int:
             meta["outfit_body_mode"] = "retexture"
             sidecar.write_text(json.dumps(meta))
 
+        def worn_mode(fx):
+            """"mesh" while the worn outfit's wanted figure has a piece in the body, else "retexture" (Task 6
+            of plan 2026-11-12-unified-worn-pieces: the per-character outfit_body_mode is gone)."""
+            from app.core import figure
+            return "mesh" if figure.wanted_figure(fx["char"]).in_body else "retexture"
+
         def set_mode(fx, mode):
             for key in ("top", "skirt"):
                 op = dict(inventory.get_item(fx["ids"][key])["outfit_piece"])
                 op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
                 assert inventory.update_item(fx["ids"][key], {"outfit_piece": op})
-            return base_body.outfit_body_mode(fx["char"])
+            return worn_mode(fx)
 
         # --- [0] initial tree with planted orphans -------------------------------------------------------
         print("[0] initial collect removes exactly the planted orphans")
@@ -411,7 +418,7 @@ def main() -> int:
         # --- [4] mode switch -----------------------------------------------------------------------------
         print("[4] mode switch mesh -> retexture -> mesh")
         fx = make("Demo4", "4")
-        check("[4] fixture in mesh mode", base_body.outfit_body_mode("Demo4"), "mesh")
+        check("[4] fixture in mesh mode", worn_mode(fx), "mesh")
         check("[4] switch to retexture", set_mode(fx, "retexture"), "retexture")
         check("[4] after switch: 0 deletions", ag.collect_quietly("Demo4", "smoke")["deleted_files"], 0)
         same("[4] after switch", "Demo4", fx, ALL)

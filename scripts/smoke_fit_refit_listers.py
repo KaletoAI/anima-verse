@@ -18,9 +18,9 @@ the footwear FIT are REAL. Stubs: ``service.get_image_service`` RAISES on
 any call, ``model_refs.trigger_now`` / ``schedule_outfit_render`` and
 ``garment_assembly.schedule`` are recorders, ``refine.decimate_to`` a copy.
 For the stale posture body: a stored body ``model3d/ob12345678.glb`` with a
-sidecar that has no posture record (``stale_reason`` "missing"), the
-character in mesh mode (it wears a coat in mode in_body — interim rule of plan
-2026-11-12-unified-worn-pieces Task 2); ``match_posture`` / ``refit_body`` /
+sidecar that has no posture record (``stale_reason`` "missing"); the
+character wears a coat in mode in_body (its figure wants a meshed shape);
+``match_posture`` / ``refit_body`` /
 ``rebuild_worn_on`` are recorders, the first writing the posture record.
 
 Derived by hand from the listers' rules (versions read from the constants,
@@ -32,8 +32,9 @@ never pinned):
      reads the current version (the real analysis on the clog, accepted).
 [R2] mesh NOT done (the mesh step dropped from the record while the insole
      is old) → [] — a source without its mesh is ``garment_fill``'s.
-[R3] ``stale_posture_bodies(Demo)`` lists the fixture body; in retexture
-     mode it lists nothing; ``match_stale_postures`` (recorders) returns the
+[R3] ``stale_posture_bodies(Demo)`` lists the fixture body whatever is worn
+     (no outfit body mode any more, plan 2026-11-12-unified-worn-pieces
+     Task 6: a stored body is a body); ``match_stale_postures`` (recorders) returns the
      body, calls match → refit → rebuild once each, and the lister is empty
      afterwards (the recorder wrote the record).
 [R4] The insole old again: ``refit_character(Demo)`` → [heels] with the
@@ -193,14 +194,15 @@ def main() -> int:
         body_path = mdir / f"{bid}.glb"
         body_path.write_bytes(base_glb)
         model3d._publish_sidecar(body_path, {"rig": "mixamo", "outfit_body": parent, "signature": bid})
-        check("retexture mode: nothing", outfit_bodies.stale_posture_bodies("Demo"), [])
+        check("nothing in the body worn: listed too", outfit_bodies.stale_posture_bodies("Demo"), [bid])
         # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
         coat = inventory.add_item(name="Coat", category="outfit_piece", item_id="coat", prompt_fragment="a coat",
                                   outfit_piece={"slots": ["outer"], "outfit_types": ["casual"],
                                                 "mesh_mode": "in_body"})["id"]
         check("Demo holds the coat", inventory.add_to_inventory("Demo", coat), True)
-        check("mesh mode on: coat worn", inventory.equip_piece("Demo", coat, source="smoke")["status"], "ok")
-        check("mesh mode", base_body.outfit_body_mode("Demo"), base_body.MESH_MODE)
+        check("coat worn", inventory.equip_piece("Demo", coat, source="smoke")["status"], "ok")
+        from app.core import figure
+        check("the coat is in the body", figure.wanted_figure("Demo").in_body, (coat,))
         check("the stored body is stale (missing)", posture.is_stale("Demo", bid), True)
         check("listed", outfit_bodies.stale_posture_bodies("Demo"), [bid])
         calls = []

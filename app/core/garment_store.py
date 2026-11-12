@@ -536,6 +536,8 @@ def write_record(path: Path, record: Dict[str, Any]) -> None:
     finally:
         if tmp.exists():
             tmp.unlink()
+        from app.core import figure
+        figure.invalidate()   # a fit or a refusal can change a delivered figure
 
 
 def _accepted_on(record: Dict[str, Any], base_model_sha: str) -> bool:

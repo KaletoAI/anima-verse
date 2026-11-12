@@ -14,7 +14,9 @@ the four base views ``tpose[_<view>]_<bsig>.png`` (sidecar base_signature),
 wearing a plain Dress (slot top) → the worn signature ``sig``. "The views
 current" = ``tpose_<sig>.png`` / ``tpose_back_<sig>.png`` with sidecar
 ``base_signature`` = bsig, ``base_image_sha256`` = sha256 of the base view,
-``dressed`` true and the equipped Dress (``dressed_image`` returns them).
+``dressed`` true, the equipped Dress and ``texture_signature`` = the texture
+of the figure delivered now (``dressed_image`` returns them; plan
+2026-11-12-unified-worn-pieces Task 6: a view counts for its figure only).
 The outfit model ``model3d/<sig>.glb``: sidecar base_signature
 "base00000000" (an older base) unless a case says otherwise. Nothing is
 rendered — the function only reads.
@@ -28,24 +30,24 @@ draft + fit; an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
      (first attempts)".
 [O2] the world setting ``base_body.dressed_side_views`` on (dressed views
      front, back, left, right) → image 1 + 2·3 = 7, hub 7.
-[O3] side views off again; mesh mode (the Dress switched to mode in_body —
-     the outfit body mode follows the worn pieces, interim rule of plan
-     2026-11-12-unified-worn-pieces Task 2; "retexture mode" = the Dress
-     painted),
-     no dressed view → views needed → a new texture → body 2: {image 3,
-     mesh 2, hub 5}, note "older base: views 3 + body 2 (first attempts)".
-[O4] mesh mode, the dressed front + back current: no body stored → views 0,
-     body 2 → hub 2 ("older base: body 2 (first attempts)");
-     ``figure.stored_shape`` patched to answer a body → hub 0, note
-     "older base: outfit body stored, CPU only".
+[O3] side views off again; the Dress switched to mode in_body ("mesh"; back
+     to painted = "retexture"): the wanted figure stands on a meshed shape
+     that is not stored → body 2, plus the shape's own views (none stored)
+     3; nothing is painted on the shape (the Dress is in it: texture "") so
+     the outfit's views are copies, 0 → {image 3, mesh 2, hub 5}, note
+     "older base: views 3 + body 2 (first attempts)".
+[O4] "mesh", the outfit's dressed front + back current (made on the plain
+     body meanwhile): the shape is still missing with its views → still
+     {image 3, mesh 2, hub 5}; ``figure.stored_shape`` patched to answer a
+     body → no body, and the outfit's views on the shape are copies → hub 0,
+     note "older base: outfit body stored, CPU only".
 [O5] retexture mode, views current, the model built on the CURRENT base but
      ``variant_current`` patched False → outfit_info stale_reason
      "detail_changed" → hub 0, note "other body detail: repaint on the CPU".
-[O6] the model's sidecar records an own-mesh piece ``own1`` painted on
-     (mesh_items intended [own1], unpainted []) and
-     ``garment_store.accepted_fit`` patched to know a fit of own1 →
-     ``mesh_items_ready`` [own1] → views needed although the views
-     themselves are current: retexture 3 (mesh 0), mesh mode 3 + 2 = 5.
+[O6] "retexture", views current, the model on the current base records a
+     figure whose texture is another one ("tex000000000000") → outfit_info
+     stale_reason "figure" → hub 0, note "other figure: repaint on the
+     CPU"; switched to "mesh" → the shape with its views: 3 + 2 = 5.
 [O7] ``dressed_views`` patched to raise → hub_jobs None, image/mesh None,
      note starts "cost unknown".
 
@@ -140,7 +142,8 @@ def main() -> int:
             op = dict(inventory.get_item(dress)["outfit_piece"])
             op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
             inventory.update_item(dress, {"outfit_piece": op})
-            check(f"mode {mode}", base_body.outfit_body_mode("Kira"), mode)
+            from app.core import figure
+            check(f"mode {mode}", "mesh" if figure.wanted_figure("Kira").in_body else "retexture", mode)
 
         def write_model(**extra):
             (mdir / f"{sig}.glb").write_bytes(b"outfit-model")
@@ -148,13 +151,16 @@ def main() -> int:
                 "character": "Kira", "signature": sig, "pieces": dict(pieces), "items": list(items),
                 "dressed": True, "base_signature": "base00000000", "base_model_sha256": "old", **extra}))
 
+        from app.core import figure
+
         def write_views():
             for v in ("front", "back"):
                 stem = f"tpose_{sig}" if v == "front" else f"tpose_{v}_{sig}"
                 (refs / f"{stem}.png").write_bytes(png((99, 1 if v == "front" else 2, 3)))
                 (refs / f"{stem}.json").write_text(json.dumps({
                     "base_signature": bsig, "base_image_sha256": shas[v], "dressed": True,
-                    "equipped_pieces": dict(pieces), "equipped_items": list(items), "mesh_variant": ""}))
+                    "equipped_pieces": dict(pieces), "equipped_items": list(items), "mesh_variant": "",
+                    "texture_signature": figure.delivered_figure("Kira").texture}))
 
         def drop_views():
             for p in refs.glob(f"tpose*_{sig}.*"):
@@ -197,9 +203,8 @@ def main() -> int:
         write_views()
         check("dressed front current", base_body.dressed_image("Kira", "front", sig, bsig) is not None, True)
         got, full = cost()
-        check("no body stored: body only", (got, full["views_needed"], full["note"]),
-              ({"image_jobs": 0, "mesh_jobs": 2, "hub_jobs": 2}, False, "older base: body 2 (first attempts)"))
-        from app.core import figure
+        check("no body stored: the shape and its views", (got, full["note"]),
+              ({"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5}, "older base: views 3 + body 2 (first attempts)"))
         with patch.object(figure, "stored_shape", return_value={"rig": "mixamo"}):
             got, full = cost()
         check("body stored: nothing", (got, full["note"]),
@@ -217,21 +222,17 @@ def main() -> int:
               ({"image_jobs": 0, "mesh_jobs": 0, "hub_jobs": 0}, "other body detail: repaint on the CPU"))
 
         # --- [O6] -------------------------------------------------------------------
-        print("[O6] an own-mesh piece painted on has its fit now")
-        write_model(mesh_items={"intended": ["own1"], "effective": [], "unpainted": []})
-        from app.core import garment_store
-        fit = lambda name, item_id, **kw: {"accepted": True} if item_id == "own1" else None  # noqa: E731
-        with patch.object(garment_store, "accepted_fit", side_effect=fit):
-            check("mesh_items_ready", base_body.mesh_items_ready(
-                "Kira", json.loads((mdir / f"{sig}.json").read_text()),
-                base_sha=base_body.base_model_sha256("Kira", bsig)), ["own1"])
-            check("views themselves current", base_body.dressed_image("Kira", "back", sig, bsig) is not None, True)
-            got, full = cost()
-            check("retexture: views 3", (got, full["views_needed"]),
-                  ({"image_jobs": 3, "mesh_jobs": 0, "hub_jobs": 3}, True))
-            set_mode("mesh")
-            got, _ = cost()
-            check("mesh mode: views 3 + body 2", got, {"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5})
+        print("[O6] the model was built as another figure")
+        other = {**figure.delivered_figure("Kira").as_dict(), "texture": "tex000000000000"}
+        write_model(base_signature=bsig, base_model_sha256=base_body.base_model_sha256("Kira", bsig), figure=other)
+        check("stale figure", base_body.outfit_info("Kira", signature=sig)["stale_reason"], "figure")
+        check("views themselves current", base_body.dressed_image("Kira", "back", sig, bsig) is not None, True)
+        got, full = cost()
+        check("repaint on the CPU", (got, full["note"]),
+              ({"image_jobs": 0, "mesh_jobs": 0, "hub_jobs": 0}, "other figure: repaint on the CPU"))
+        set_mode("mesh")
+        got, _ = cost()
+        check("in the body: views 3 + body 2", got, {"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5})
         set_mode("retexture")
 
         # --- [O7] -------------------------------------------------------------------

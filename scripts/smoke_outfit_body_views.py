@@ -11,24 +11,23 @@ Usage:
 Throwaway storage + instance directory with a copy of the repo's ``human`` package; the outfit_bodies router on a
 bare FastAPI app with a TestClient, session lookup stubbed (header ``x-role``: admin / user / none). No hub, no
 GPU: ``expression_regen.render_character_image`` is a recorder that writes a PNG + sidecar (one call = one image
-job), ``base_body.prepare_outfit_body`` a recorder (one call = one mesh run). The tsig and body id are the real
-ones (``base_body._outfit_texture`` of the outfit's dressed front), so ``source_outfit`` is not stubbed.
+job), ``base_body.prepare_shape`` a recorder (one call = one mesh run). The shape key is the real one
+(``figure.wanted_figure`` / ``figure.shape_plan`` of O1), so ``source_outfit`` is not stubbed.
 
-Fixture (character Demo: humanoid, pipeline on, outfit body mode mesh, side views off = the default). Items top
-{top} and skirt {bottom}, in the body (mode in_body — the outfit body mode follows the worn pieces, interim rule of
-plan 2026-11-12-unified-worn-pieces Task 2). Base views front/back (PNG) of bsig, base model. Outfit O1 {top, skirt} WORN:
-dressed front + back made from the current base views (sidecar base_signature = bsig, base_image_sha256 = sha of
-the base view, dress_text = TEXTS[view]), the back's draft (front_sha256 = sha of O1's front) — TEXTS = the dress
-texts ``_outfit_texture`` computes for O1 at fixture time ("the render"). T = its tsig, B = the shape key its views
-stand for (``base_body.outfit_shape``: both pieces in the body, nothing painted — plan 2026-11-12-unified-worn-pieces
-Task 5), whose refs name T (``_write_body_refs``) and whose record is a shape record. The
-texture store holds exact copies of O1's views and draft under T (what ``_store_texture_views`` publishes). Body
-B: refs tpose[_back]_<B> + model3d/<B>.glb with the parent record {views = texture_view_shas(O1)}.
+Fixture (character Demo: humanoid, pipeline on, side views off = the default). Items top {top} and skirt {bottom},
+in the body (mode in_body). Base views front/back (PNG) of bsig, base model. Outfit O1 {top, skirt} WORN. Since
+Task 6 of plan 2026-11-12-unified-worn-pieces a shape is meshed from its OWN views (edits of the plain body
+wearing only the in-body pieces, ``base_body.render_shape_views``; the texture store and the outfit's dressed views
+no longer back it): B = the shape O1 wants, TEXTS = its shape inputs' dress texts. B's views tpose[_back]_<B>
+were made from the current base views (sidecar base_signature = bsig, base_image_sha256 = sha of the base view,
+dress_text = TEXTS[view]), the back from its draft drafts/tpose_back_<B> (front_sha256 = sha of B's front);
+model3d/<B>.glb with the parent record {views = {front: sha(B front), back: sha(B back)}}; O1's model sidecar
+names B and records the figure delivered now.
 
 Expected, by hand:
 [1] GET (admin) -> B's view_info has front + back (side views off, no side image) and no left/right; both
-    urls serve the STORE copies (key T); front and back freshness "current" (base provenance matches, recorded
-    text = text now, back's draft follows the store front); blocked "" for both; status "".
+    urls name B and serve B's own views (source "body" — was the texture store's copies under T); front and back
+    freshness "current" (base provenance matches, recorded text = text now, back's draft follows B's front); blocked "" for both; status "".
     Body freshness "current".
 [2] Base back re-rendered (bytes changed): back -> stale "Made from an older base view"; front stays current;
     blocked still "" (the back's base view exists, O1's front is current). Restored afterwards.
@@ -38,14 +37,14 @@ Expected, by hand:
     took it, waits for the guard; recorder not called after 0.4 s); POST views/back -> 202 queued position 1;
     GET: back status "queued" queue_position 1, front "running". cancel {view: back} -> 200 cancelled 1; again ->
     404; cancel {view: front} -> 409 (running). Guard released -> the front run ends.
-[5] Exactly ONE image job (render recorder called once: output_stem tpose_<O1>, occasion outfit_front), ZERO mesh
-    runs; last_run {kind view, view front, ok True}. GET: front url changed and freshness "current" (the render
+[5] Exactly ONE image job (render recorder called once: output_stem tpose_<B> — the shape's own front, was
+    tpose_<O1> —, occasion outfit_front), ZERO mesh runs; last_run {kind view, view front, ok True}. GET: front url changed and freshness "current" (the render
     recorded the current base front and the dress text); back stale "Made from an older dressed front" (its
     draft names the old front — no cascade, the back was not rendered); body freshness stale with reason
     "Dressed views changed" (its record names the old view shas).
-[6] The mesh step is its own explicit run: POST regenerate -> prepare_outfit_body called once (Demo, O1,
+[6] The mesh step is its own explicit run: POST regenerate -> prepare_shape called once (Demo, signature O1,
     rebuild=True), still no further image job.
-[7] Dress text changed: the skirt's prompt fragment is edited -> O1 now stands on another texture, so B has no
+[7] Dress text changed: the skirt's prompt fragment is edited -> O1 now wants another shape, so B has no
     source: front and back freshness carry "Dress text changed", both blocked = outfit_bodies.NO_SOURCE, POST
     views/front -> 409 NO_SOURCE.
 """
@@ -168,40 +167,34 @@ def main() -> int:
 
         variant, token = mesh_variant(char, pieces), mesh_items_token(char, pieces)
         O1 = mesh_signature(pieces, [], char, variant, token)
-        manifest = {"equipped_pieces": pieces, "equipped_items": [], "mesh_variant": variant,
-                    "base_signature": bsig, "dressed": True}
-        o1_front = png(R / f"tpose_{O1}.png", (100, 0, 0))
-        write_json(o1_front.with_suffix(".json"), {**manifest, "base_image_sha256": sha(base_views["front"])})
-        texture = base_body._outfit_texture(char, o1_front, bsig=bsig, profile=prof)
-        T, TEXTS = texture["tsig"], texture["inputs"]["dress_text"]
         from app.core import figure
-        shape = base_body.outfit_shape(char, pieces, bsig=bsig, variant=texture["variant"], dress_text=TEXTS,
-                                       profile=prof)
-        B = shape["key"]
-        write_json(o1_front.with_suffix(".json"), {**manifest, "base_image_sha256": sha(base_views["front"]),
-                                                   "texture_signature": T, "dress_text": TEXTS["front"]})
-        o1_draft = png(R / "drafts" / f"tpose_back_{O1}.png", (0, 100, 0))
-        write_json(o1_draft.with_suffix(".json"), {**manifest, "back_draft": True, "front_sha256": sha(o1_front),
-                                                   "texture_signature": T})
-        o1_back = png(R / f"tpose_back_{O1}.png", (0, 0, 100))
-        write_json(o1_back.with_suffix(".json"), {**manifest, "base_image_sha256": sha(base_views["back"]),
-                                                  "back_draft": o1_draft.name, "back_draft_sha256": sha(o1_draft),
-                                                  "texture_signature": T, "dress_text": TEXTS.get("back", "")})
-        # The texture store: exact copies, the outfit's own keys dropped (base_body._store_texture_views).
-        base_body._store_texture_views(char, O1, T, ["front", "back"], TEXTS)
-        check("fixture: O1 stands on B", base_body.outfit_body_of_outfit(char, O1), B)
-        rec = {"body_id": B, "shape_key": B, "version": figure.SHAPE_VERSION, "shape_inputs": shape["inputs"],
+        # The shape O1 wants (Task 6 of plan 2026-11-12-unified-worn-pieces: the real rule) and its own views.
+        wanted = figure.wanted_figure(char, pieces=pieces, items=[])
+        inputs = figure.shape_plan(char, wanted, [])[2]
+        B, TEXTS = wanted.shape, inputs["dress_text"]
+        check("fixture: B keyed by its inputs", B, figure.shape_key_of(inputs))
+        b_front = png(R / f"tpose_{B}.png", (1, 1, 1))
+        write_json(b_front.with_suffix(".json"), {"base_signature": bsig, "base_image_sha256": sha(base_views["front"]),
+                                                  "dress_text": TEXTS["front"], "dressed": True})
+        b_draft = png(R / "drafts" / f"tpose_back_{B}.png", (0, 100, 0))
+        write_json(b_draft.with_suffix(".json"), {"back_draft": True, "front_sha256": sha(b_front)})
+        b_back = png(R / f"tpose_back_{B}.png", (2, 2, 2))
+        write_json(b_back.with_suffix(".json"), {"base_signature": bsig, "base_image_sha256": sha(base_views["back"]),
+                                                 "back_draft": b_draft.name, "back_draft_sha256": sha(b_draft),
+                                                 "dress_text": TEXTS.get("back", ""), "dressed": True})
+        rec = {"body_id": B, "shape_key": B, "version": figure.SHAPE_VERSION, "shape_inputs": inputs,
                "base_signature": bsig, "built_for": O1, "used_views": ["front", "back"],
-               "views": base_body.texture_view_shas(char, O1, bsig)}
-        for kind, colour in (("tpose", (1, 1, 1)), ("tpose_back", (2, 2, 2))):
-            png(R / f"{kind}_{B}.png", colour)
-            write_json(R / f"{kind}_{B}.json", {"texture_signature": T, "outfit_body": rec})
+               "views": {"front": sha(b_front), "back": sha(b_back)}}
+        for view_png in (b_front, b_back):
+            meta = json.loads(view_png.with_suffix(".json").read_text())
+            write_json(view_png.with_suffix(".json"), {**meta, "outfit_body": rec})
         (M / f"{B}.glb").write_bytes(b"BODY-GLB")
         write_json(M / f"{B}.json", {"outfit_body": rec, "rig": "mixamo", "created_at": "2026-11-10T10:00:00+00:00"})
+        check("fixture: O1 stands on B", base_body.outfit_body_of_outfit(char, O1), B)
         write_json(M / f"{O1}.json", {"pieces": pieces, "items": [], "base_signature": bsig,
-                                      "texture_signature": T, "outfit_body_mode": "mesh", "body_id": B,
-                                      "body_sha256": sha(M / f"{B}.glb"), "rig": "mixamo",
-                                      "source": "base_body", "dressed": True})
+                                      "body_id": B, "body_sha256": sha(M / f"{B}.glb"), "rig": "mixamo",
+                                      "source": "base_body", "dressed": True,
+                                      "figure": figure.delivered_figure(char, pieces=pieces, items=[]).as_dict()})
         (M / f"{O1}.glb").write_bytes(b"OUTFIT")
         # No posture record: the body would be stale for POSTURE_NOT_MATCHED, which is not this smoke's topic.
         outfit_bodies.stale_posture = lambda c, meta: ""
@@ -219,10 +212,10 @@ def main() -> int:
             return out
         expression_regen.render_character_image = fake_render
 
-        def fake_prepare(c, signature=None, *, force=False, rebuild=False):
+        def fake_prepare(c, fig, *, items=None, rebuild=False, signature=""):
             meshes.append((c, signature, rebuild))
-            return {"ok": True, "cached": False, "body_id": B}
-        base_body.prepare_outfit_body = fake_prepare
+            return {"ok": True, "cached": False, "body_id": fig.shape}
+        base_body.prepare_shape = fake_prepare
 
         def body():
             data = client.get(f"/characters/{char}/outfit-bodies", headers=ADMIN).json()
@@ -236,11 +229,11 @@ def main() -> int:
         print("[1] views of the body")
         b = body()
         check("[1] views listed", sorted(b["view_info"]), ["back", "front"])
-        check("[1] urls name the texture store", [f"/outfit-bodies/{T}/views/{v}?" in (b["view_info"][v]["url"] or "")
-                                                  for v in ("front", "back")], [True, True])
+        check("[1] urls name the body", [f"/outfit-bodies/{B}/views/{v}?" in (b["view_info"][v]["url"] or "")
+                                         for v in ("front", "back")], [True, True])
+        check("[1] source body", [b["view_info"][v]["source"] for v in ("front", "back")], ["body", "body"])
         r = client.get(b["view_info"]["front"]["url"], headers=ADMIN)
-        check("[1] front url serves the store copy", (r.status_code, r.content),
-              (200, base_body._texture_view(char, "front", T).read_bytes()))
+        check("[1] front url serves the body's own view", (r.status_code, r.content), (200, b_front.read_bytes()))
         check("[1] front fresh", fresh(b, "front"), ("current", ""))
         check("[1] back fresh", fresh(b, "back"), ("current", ""))
         check("[1] blocked", [b["view_info"][v]["blocked"] for v in ("front", "back")], ["", ""])
@@ -298,7 +291,7 @@ def main() -> int:
 
         # --- [5] ---------------------------------------------------------------------------------------------
         print("[5] one image job, back and body stale, no cascade")
-        check("[5] exactly one image job", renders, [(f"tpose_{O1}", "outfit_front")])
+        check("[5] exactly one image job", renders, [(f"tpose_{B}", "outfit_front")])
         check("[5] no mesh run", meshes, [])
         b = body()
         check("[5] last run", {k: (b["last_run"] or {}).get(k) for k in ("kind", "view", "ok")},

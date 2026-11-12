@@ -7,18 +7,22 @@ Usage:
 
 Throwaway storage + instance directory with a copy of the repo's ``human`` package; the routers
 (outfit_bodies + characters, for the model file route) are mounted on a bare FastAPI app with a TestClient and
-the session lookup stubbed (header ``x-role``: admin / user / none). No hub, no GPU: ``prepare_outfit_body``,
-``rerig_model`` and ``garments.fit_on_body`` are stubs that record their calls; the tsig computation
-(``base_body.outfit_body_of_outfit``) is stubbed to the fixture's mapping (Task 1's smokes test the real one).
+the session lookup stubbed (header ``x-role``: admin / user / none). No hub, no GPU: ``base_body.prepare_shape``,
+``rerig_model`` and ``garments.fit_on_body`` are stubs that record their calls. Since Task 6 of plan
+2026-11-12-unified-worn-pieces the shapes are the REAL ones the outfits want (``figure.wanted_figure`` /
+``figure.shape_plan``; the former stub of ``base_body.outfit_body_of_outfit`` is gone), a shape's views are its
+own edits of the base views, and every outfit model records the figure delivered now.
 
 Fixture (character Demo: humanoid, base-body pipeline on, outfit body mode mesh, profile picture; items top {top}
 and skirt {bottom} in the body (mode in_body — the outfit body mode follows the worn pieces, interim rule of plan
 2026-11-12-unified-worn-pieces Task 2), dress {outer} own mesh, all held). bsig = base_signature; T1/T2 = tex111…/tex222…;
-S1/S2 = shape inputs {version SHAPE_VERSION, base_signature bsig, dress_text {front: "a top and a skirt" / "a top"}};
-B1/B2 = figure.shape_key_of(S1/S2) (plan 2026-11-12-unified-worn-pieces Task 5). Outfits: O1 {top, skirt} WORN on B1, O2 {top, dress} on B2 (model sidecars name
-body_id; O2's carries mesh_items.effective [dress]). Body files per Bn: refs tpose[_back]_<Bn> (+.json with the
-parent record {body_id = shape_key = Bn, shape_inputs Sn, base_signature bsig, version SHAPE_VERSION, built_for On,
-views = texture_view_shas(On)}; the ref sidecars name texture_signature Tn), model3d <Bn>.glb/.json (rig mixamo, collision with one capsule), unrigged/ (B1
+S1/S2 = shape inputs {version SHAPE_VERSION, base_signature bsig, dress_text of the in-body pieces (O1: top and
+skirt, O2: top)};
+B1/B2 = the shapes O1/O2 want = figure.shape_key_of(S1/S2), S1/S2 = their real shape inputs (fixture check). Outfits: O1 {top, skirt} WORN on B1, O2 {top, dress} on B2 (model sidecars name
+body_id; O2's carries mesh_items.effective [dress]). Body files per Bn: refs tpose[_back]_<Bn> (+.json naming
+base_signature bsig and base_image_sha256 = sha of the base view, with the parent record {body_id = shape_key = Bn,
+shape_inputs Sn, base_signature bsig, version SHAPE_VERSION, built_for On, views = {front: sha("<Bn>-front"),
+back: sha("<Bn>-back")} — the shas of those view files}), model3d <Bn>.glb/.json (rig mixamo, collision with one capsule), unrigged/ (B1
 only), prerig/, rollback/<Bn>/. Base fit Gd of dress (accepted on sha(base glb)); body fits Bd1/Bd2 of dress on
 B1/B2 (record accepted, body_sha256 = sha(Bn glb), base_fit_sha256 = sha(Gd fit), fit_version current) + Bd1
 layers/ + Bd2 failed/. Texture stores T1/T2 (front view sidecar dress_text "a top and a skirt" / "a top").
@@ -28,8 +32,8 @@ Expected, by hand:
 [1] GET /characters/Demo/outfit-bodies (admin) -> 200: mode "mesh", pipeline True; body ids {B1, B2}, B1 first (the
     worn outfit stands on it); B1 outfits = [O1, worn True], B2 outfits = [O2, worn False]; O1's name = its piece
     names in alphabetical order "Skirt + Top" (no saved outfit has exactly those pieces); B1 dress_text
-    "a top and a skirt"; both freshness "current" (record base = bsig, version current, views = shas of the
-    source outfit's dressed views, a current posture record — outfit_body_posture.py); B1 without its posture
+    the front text of S1; both freshness "current" (record base = bsig, version current, views = shas of the
+    body's own current views, a current posture record — outfit_body_posture.py); B1 without its posture
     record: freshness "stale", reason POSTURE_NOT_MATCHED; both status "ready"; url names signature=<Bn>; steps non-empty (first row
     = the parent record, id "outfit_body", model_overview.outfit_body_steps); collision capsules 1; B1 can_rerig
     True, B2 False; regenerate_from On; B1 fits = [dress: accepted]; B2 fits = [dress: accepted] (its failure
@@ -42,8 +46,8 @@ Expected, by hand:
     False, position 0}; the stub is NOT called while the guard is held (0.4 s); GET shows B1 status "running"
     (the worker took it) and generation_running True. POST regenerate B2 = 202 {started False, queued True,
     position 1, behind {kind regenerate, body_id B1}}; posting it again does not add it twice (position 1,
-    waiting length 1). POST delete B1 -> 409 (a run on it). Guard released, stub released -> prepare_outfit_body
-    called (Demo, O1, rebuild=True) then (Demo, O2, rebuild=True); last_run ok.
+    waiting length 1). POST delete B1 -> 409 (a run on it). Guard released, stub released -> prepare_shape
+    called (Demo, signature O1, rebuild=True) then (Demo, O2, rebuild=True); last_run ok.
 [4] Re-rig: B2 (no unrigged mesh) -> 409; B1 -> 202, rerig_model called with (Demo, B1).
 [5] Refit: POST refit B1 -> fit_on_body called once for (dress, body_id B1); POST refit B1 {item_id: "nope"} ->
     400; {item_id: dress} -> one more call.
@@ -134,9 +138,6 @@ def main() -> int:
         char = "Demo"
         from app.core import figure
         T1, T2 = "tex111111111111", "tex222222222222"
-        shape_of = {"O1": {"version": figure.SHAPE_VERSION, "dress_text": {"front": "a top and a skirt"}},
-                    "O2": {"version": figure.SHAPE_VERSION, "dress_text": {"front": "a top"}}}
-        B1, B2 = figure.shape_key_of(shape_of["O1"]), figure.shape_key_of(shape_of["O2"])
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
                  "character_appearance": "slender"}
         assert save_character_profile(char, human, create_new=True)
@@ -158,9 +159,12 @@ def main() -> int:
         cdir = get_character_dir(char)
         M, R = cdir / "model3d", cdir / "model_refs"
         bsig = base_body.base_signature(char)
-        for shape in shape_of.values():
-            shape["base_signature"] = bsig
-        B1, B2 = figure.shape_key_of(shape_of["O1"]), figure.shape_key_of(shape_of["O2"])
+        # The shapes the outfits want (Task 6: the real rule, figure.wanted_figure / shape_plan).
+        wanted = {n: figure.wanted_figure(char, pieces=p, items=[]) for n, p in outfits.items()}
+        shape_of = {n: figure.shape_plan(char, wanted[n], [])[2] for n in outfits}
+        B1, B2 = wanted["O1"].shape, wanted["O2"].shape
+        check("fixture: shapes keyed by their inputs", (B1, B2), (figure.shape_key_of(shape_of["O1"]),
+                                                                figure.shape_key_of(shape_of["O2"])))
         base_glb = b"BASE-GLB-demo"
         base_front = touch(R / f"tpose_{bsig}.png", b"base-front")
         touch(R / f"tpose_{bsig}.json", {"base_signature": bsig})
@@ -197,13 +201,17 @@ def main() -> int:
         capsule = {"version": 1, "capsules": [{"bone": "Spine", "radius": 0.1}], "skipped": [], "scales": {}}
         for name in ("O1", "O2"):
             b, t = body_of[name], tex_of[name]
+            # The shape's own views (Task 6): edits of the CURRENT base views; the record's views = their shas.
             rec = {"body_id": b, "shape_key": b, "version": figure.SHAPE_VERSION, "shape_inputs": shape_of[name],
                    "base_signature": bsig, "built_for": sigs[name], "used_views": ["front", "back"],
-                   "views": base_body.texture_view_shas(char, sigs[name], bsig)}
+                   "views": {"front": hashlib.sha256(f"{b}-front".encode()).hexdigest(),
+                             "back": hashlib.sha256(f"{b}-back".encode()).hexdigest()}}
             touch(R / f"tpose_{b}.png", f"{b}-front".encode())
-            touch(R / f"tpose_{b}.json", {"texture_signature": t, "outfit_body": rec})
+            touch(R / f"tpose_{b}.json", {"base_signature": bsig, "base_image_sha256": sha(base_front),
+                                          "outfit_body": rec})
             touch(R / f"tpose_back_{b}.png", f"{b}-back".encode())
-            touch(R / f"tpose_back_{b}.json", {"texture_signature": t, "outfit_body": rec})
+            touch(R / f"tpose_back_{b}.json", {"base_signature": bsig, "base_image_sha256": sha(base_back),
+                                               "outfit_body": rec})
             body_glb = touch(M / f"{b}.glb", f"BODY-{b}".encode())
             touch(M / f"{b}.json", {"outfit_body": rec, "rig": "mixamo", "created_at": "2026-11-10T10:00:00+00:00",
                                     "collision": capsule,
@@ -236,12 +244,17 @@ def main() -> int:
         touch(gs.garment_path(char, dress, fd, "layer", lsig="abcdefabcdef", body=B1))
         touch(gs.garment_path(char, dress, fd, "failed", body=B2), {"error": "too tight", "fit_version": -1})
 
+        # Every outfit model records the figure it was built as (Task 6) — the one delivered now.
+        for name in ("O1", "O2"):
+            delivered = figure.delivered_figure(char, pieces=outfits[name], items=[])
+            check(f"fixture: {name} delivered on its shape", (delivered.shape, list(delivered.own)),
+                  (body_of[name], [dress] if name == "O2" else []))
+            mpath = M / f"{sigs[name]}.json"
+            mpath.write_text(json.dumps({**json.loads(mpath.read_text()), "figure": delivered.as_dict()}))
+
         def walk():
             return {p.relative_to(cdir).as_posix() for d in ("model3d", "model_refs", "garments")
                     if (cdir / d).is_dir() for p in (cdir / d).rglob("*") if p.is_file()}
-
-        # The tsig computation of an outfit -> its body (Task 1's smokes test the real one).
-        base_body.outfit_body_of_outfit = lambda c, s, profile=None: {O1: B1, O2: B2}.get(s, "")
 
         # --- [1] list ---------------------------------------------------------------------------------
         print("[1] list")
@@ -254,7 +267,7 @@ def main() -> int:
         check("[1] B1 outfits", [(o["signature"], o["worn"]) for o in bodies[B1]["outfits"]], [(O1, True)])
         check("[1] B2 outfits", [(o["signature"], o["worn"]) for o in bodies[B2]["outfits"]], [(O2, False)])
         check("[1] outfit name from the pieces", bodies[B1]["outfits"][0]["name"], "Skirt + Top")
-        check("[1] B1 dress text", bodies[B1]["dress_text"], "a top and a skirt")
+        check("[1] B1 dress text", bodies[B1]["dress_text"], shape_of["O1"]["dress_text"]["front"])
         check("[1] freshness", [bodies[b]["freshness"]["state"] for b in (B1, B2)], ["current", "current"])
         b1_meta = M / f"{B1}.json"
         kept = b1_meta.read_text()
@@ -302,12 +315,12 @@ def main() -> int:
         calls, gate = [], threading.Event()
         entered = threading.Event()
 
-        def fake_prepare(c, signature=None, *, force=False, rebuild=False):
+        def fake_prepare(c, fig, *, items=None, rebuild=False, signature=""):
             calls.append((c, signature, rebuild))
             entered.set()
             gate.wait(10)
-            return {"ok": True, "cached": False, "body_id": {O1: B1, O2: B2}[signature]}
-        base_body.prepare_outfit_body = fake_prepare
+            return {"ok": True, "cached": False, "body_id": fig.shape}
+        base_body.prepare_shape = fake_prepare
         with model3d._lock:
             model3d._generating.add(char)   # another 3D run of the character holds the guard
         r = client.post(f"/characters/{char}/outfit-bodies/{B1}/regenerate", headers=ADMIN)

@@ -4,8 +4,9 @@ docs/superpowers/specs/2026-11-11-improvements-figure-pipeline-design.md § 6.4)
 
 A subject is an outfit model ``model3d/<sig>.glb`` the serving chain calls
 stale (``base_body.outfit_info`` status ``stale``: an older base, before the
-pipeline, another body detail, the other outfit body mode or a rebuilt
-outfit body, an own-mesh piece painted on that has its fit now). Scope
+pipeline, another body detail, another figure than the one delivered now —
+a mode changed, a shape or an own mesh built since — or a rebuilt outfit
+body). Scope
 ``worn`` (default) looks at the worn combination of every character,
 ``saved`` adds the character's saved outfit sets (``subjects.
 saved_outfit_signatures``) — only a set that HAS a stored model: this type
@@ -36,7 +37,7 @@ SCOPE_WORN, SCOPE_SAVED = "worn", "saved"
 #: The occasion of the dressed front; the other views add their
 #: ``base_body.DRESS_OCCASIONS`` (draft + fit).
 FRONT_OCCASION = "outfit_front"
-#: The occasions of an outfit body (mesh mode): img2mesh + rig.
+#: The occasions of an outfit body (a meshed shape): img2mesh + rig.
 BODY_OCCASIONS = ("mesh_humanoid", "rig_humanoid")
 
 
@@ -96,7 +97,8 @@ def _require_routes(name: str, cost: Dict[str, Any]) -> None:
     available is load — the step waits."""
     from app.core import base_body
     occasions: List[str] = []
-    if cost.get("views_needed"):
+    if cost.get("views_needed") or cost.get("body_needed"):
+        # The outfit's views, and a shape's own views before it is meshed.
         occasions.append(FRONT_OCCASION)
         for view in base_body.dressed_views():
             occasions += [o for o in base_body.DRESS_OCCASIONS.get(view, ()) if o not in occasions]

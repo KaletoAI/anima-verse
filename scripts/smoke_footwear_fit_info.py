@@ -27,18 +27,20 @@ info copies these numbers through unchanged, so the expected values ARE the hand
 width_factor 1.08, width_needed_right 1.13, slim_needed_right 0.026549, extension_deg_left 28.0,
 extension_deg_right 22.2, toe_room_mm_right 18.0, root_lift_m 0.052, k_m_per_unit 0.9, length_m 0.254.
 
-[I1] Retexture mode: ``fits`` = exactly one row, the base: {body_id bsig, base True, status accepted} and
+[I1] Nothing in the body, no outfit body stored: ``fits`` = exactly one row, the base: {body_id bsig, base True, status accepted} and
      the same metrics as ``steps.fit``; ``preview_url`` = "/characters/Demo/garments/heels/model?v=" +
      content_version(fit GLB); ``foot_pose`` = the record's foot_pose (source.fsig F);
      ``preview_freshness.state`` "current"; ``garments.preview_path(Demo, heels)`` = the fit GLB (the model
      route serves what the URL names). HUB 0.
-[I2] Mesh mode (Demo wears a coat in mode in_body — the interim rule of plan 2026-11-12-unified-worn-pieces
-     Task 2; taken off again for [I4]) with three stored outfit bodies (model3d/<id>.glb, ids sorted A < B < C by construction:
+[I2] Demo wears a coat in mode in_body (wanted figure in_body [coat]; taken off again for [I4]) with three stored
+     outfit bodies (model3d/<id>.glb, ids sorted A < B < C by construction:
      ``ob_id`` of three texture signatures, then sorted): A carries an accepted record of F on
      sha(A) -> status accepted, metrics width_factor 1.05 (its own hand value); B has nothing -> missing;
      C has a recorded body failure of F on sha(C) (base_fit_sha "", the current fit version, error "fit refused — x")
      -> status refused, error "fit refused — x". ``fits`` = [base, then the three in sorted id order], each
-     ``base`` False. A model3d/ file that is NOT an outfit body id (the base GLB, an outfit model "o…") is no
+     ``base`` False. Since Task 6 of plan 2026-11-12-unified-worn-pieces no per-character mode gates the rows
+     (the old "retexture mode: base row only" case): with the coat taken off in [I4] the rows are still [bsig,
+     A, B, C]. A model3d/ file that is NOT an outfit body id (the base GLB, an outfit model "o…") is no
      row.
 [I3] The base record's foot_pose.source.fsig rewritten to "000000000000" -> ``foot_pose`` None, the
      ``preview_url`` stays (the GLB is still the current fsig's fit; the pose of another fit is never
@@ -231,14 +233,16 @@ def main() -> int:
         check("I1 model route resolves the fit", garments.preview_path("Demo", heels), fit_path)
 
         # --- [I2] -------------------------------------------------------------------------------------------
-        print("[I2] mesh mode: one row per stored outfit body")
-        # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
+        print("[I2] one row per stored outfit body")
+        # A worn piece in the body (Task 6 of plan 2026-11-12-unified-worn-pieces: no per-character mode gates
+        # the rows any more; the coat stays the fixture's in-body piece).
         coat = inventory.add_item(name="Coat", category="outfit_piece", item_id="coat", prompt_fragment="a coat",
                                   outfit_piece={"slots": ["outer"], "outfit_types": ["casual"],
                                                 "mesh_mode": "in_body"})["id"]
         inventory.add_to_inventory("Demo", coat)
         check("I2 coat worn", inventory.equip_piece("Demo", coat, source="smoke")["status"], "ok")
-        check("I2 mesh mode", base_body.outfit_body_mode("Demo"), base_body.MESH_MODE)
+        from app.core import figure
+        check("I2 coat in the body", list(figure.wanted_figure("Demo").in_body), [coat])
         ids = sorted(ob_id(f"tex{c * 12}") for c in "abc")
         A, B, C = ids
         shas = {}
@@ -273,7 +277,7 @@ def main() -> int:
         # --- [I4] -------------------------------------------------------------------------------------------
         print("[I4] the boot view: the insole's shaft block and slab rings, the fit's split and shaft")
         check("I4 coat off", inventory.unequip_piece("Demo", "outer", source="smoke")["status"], "ok")
-        check("I4 retexture mode", base_body.outfit_body_mode("Demo"), base_body.RETEXTURE_MODE)
+        check("I4 nothing in the body", list(figure.wanted_figure("Demo").in_body), [])
         overlay = {"insole": [[0.0, 0.01, 0.0], [0.1, 0.01, 0.0]], "topline": [[0.0, 0.05, 0.0]]}
         frame = {"origin": [0.1, 0.0, 0.2], "x_axis": [0.0, 0.0, 1.0], "up": [0.0, 1.0, 0.0],
                  "z_axis": [-1.0, 0.0, 0.0], "length": 1.0}
@@ -287,6 +291,7 @@ def main() -> int:
                                "parts": {"foot": 2000}}}})
         info = garments.garment_info("Demo", heels)
         row = info["fits"][0]
+        check("I4 rows whatever is worn", [r.get("body_id") for r in info["fits"]], [bsig, A, B, C])
         check("I4 shoe status", row["status"], "accepted")
         check("I4 shoe insole shaft", info["insole"]["shaft"], None)
         check("I4 shoe no slab rings", "slabs" in (info["insole"]["overlay"] or {}), False)

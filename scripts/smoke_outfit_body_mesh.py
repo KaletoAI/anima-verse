@@ -31,12 +31,13 @@ tpose[_<view>]_<B1>, base model of smoke_garment_chain. Items: under
 {[underwear_bottom] "plain grey underwear"}, shoes {[feet] "white sneakers"},
 dress {[top], covers [bottom], own_mesh, "a long red dress"}, skirt {[bottom]
 "a blue pleated skirt"}. Outfits: A {under, shoes}; B = A + dress; C {dress};
-G = A + skirt. The outfit body mode follows the worn pieces (interim rule of
-plan 2026-11-12-unified-worn-pieces Task 2: mesh iff a worn piece is
-"in_body"): "mesh mode" = under, shoes and skirt in mode in_body (what the
-mesh mode meshed into the outfit body), "retexture mode" = all three painted.
-C wears no piece in the body, so its outfit is judged in retexture mode — the
-same base body either way (empty dress text).
+G = A + skirt. Since Task 6 of plan 2026-11-12-unified-worn-pieces there is
+no body mode: each worn piece's item mode decides. "mesh mode" below = under,
+shoes and skirt in mode in_body (meshed into the shape), "retexture mode" =
+all three painted (on the plain body). Nothing is painted next to the in-body
+pieces here, so a meshed outfit's texture is "" and its dressed views are the
+shape's own views (copies, no job). C wears no piece in the body: the plain
+body (empty dress text). Replaced cases are named "(was …)" below.
 
 Expected, derived by hand from the spec and the plan's Global Constraints:
 
@@ -46,10 +47,10 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
     "f", "back": "b"}} the hash of the literal string '{"base_signature":"base01234567","base_variant":"rigged",
     "dress_text":{"back":"b","front":"f"},"hair_in_body":true,"side_views":false,"version":2}' (keys sorted, no
     spaces); is_outfit_body_signature("ob" + 8 hex) True, a base signature / an outfit signature False.
-[2] Mesh mode, A: 3 image jobs (front edit, back draft, back fit); the
+[2] Mesh mode, A: 3 image jobs (the shape's front edit, back draft, back fit); the
     chain runs ONCE on the body id bA = "ob" + sha256(canonical JSON of the record's shape_inputs)[:8], whose
-    dress_text is exactly what the texture store of tA names per view (the body is meshed from those views; no
-    painted piece next to the in-body ones here, so it is figure.shape_key), in this order:
+    dress_text is exactly what the shape's own views tpose[_back]_<bA> name per view (was: the texture store
+    of tA — nothing is painted, so there is no texture), in this order:
     mesh(bA), rig(bA), retexture(bA), normalize(bA), extension(bA),
     collision(bA) — then the outfit copy: extension(sigA), collision(sigA);
     0 worker runs. The mesh job gets source tpose_<bA>.png, views {back},
@@ -60,14 +61,15 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
     [front, back], views {front: sha(tpose_<sigA>.png), back:
     sha(tpose_back_<sigA>.png)}} and no mode / texture_signature; the unrigged sidecar records the face
     cleanup step (status "skipped": off per character by default). Refs
-    tpose[_back]_<bA>.png are byte copies of A's dressed views, their sidecars
-    carry outfit_body and NO equipped_pieces. Outfit model A: bytes = the
-    body's; sidecar outfit_body_mode "mesh", body_id bA, body_sha256 =
-    sha(body), texture_signature tA, source "base_body", no "outfit_body";
+    tpose[_back]_<bA>.png and A's dressed views are byte-equal (A's are copies
+    of the shape's), the shape's sidecars carry outfit_body and NO
+    equipped_pieces. Outfit model A: bytes = the body's; sidecar without
+    outfit_body_mode (was "mesh"), its ``figure`` shape bA and texture "",
+    body_id bA, body_sha256 = sha(body), source "base_body", no "outfit_body";
     distance tier requested for sigA only (build_lod [sigA]); outfit_info
     ready; find_model3d(Demo, bA) is the body (an outfit body is never
     stale); find_model3d_serving(Demo) = (sigA, "exact").
-[3] B = A + dress (own mesh): tsig tA again -> 0 image jobs, 0 chain steps
+[3] B = A + dress (own mesh): the same shape bA -> 0 image jobs, 0 chain steps
     on a body (no mesh, no rig), 0 worker runs; B's model names body bA; the
     dress has an accepted (base) fit but no prepared mesh in this fixture, so
     its fit on bA (Task 2, garments.body_fit) cannot be made: garment_warnings
@@ -78,18 +80,20 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
 [4] C {dress}: empty dress text -> the base body: 0 image jobs, no mesh/rig
     job, 0 worker runs; model dressed False, no body_id.
 [5] A rebuilt with force in mesh mode: no mesh/rig job (the body is current).
-[6] Mode -> retexture: A stale, stale_reason "body_mode"; build -> 0 image
-    jobs, 0 mesh/rig jobs, 1 worker run; the sidecar has no outfit_body_mode
-    / body_id key and names tA (the retexture path unchanged). Mode -> mesh:
-    A stale "body_mode"; build -> 0 mesh/rig jobs, 0 worker runs, body file
-    bytes + mtime unchanged.
+[6] Items -> painted: A stale, stale_reason "figure" (was "body_mode"); build
+    -> 0 image jobs, 0 mesh/rig jobs, 1 worker run; the sidecar has no
+    outfit_body_mode / body_id key, names a texture signature (was tA — A's
+    meshed build painted nothing) and its figure stands on the plain body B1.
+    Items -> in_body: A stale "figure" (was "body_mode"); build -> 0 mesh/rig
+    jobs, 0 worker runs, body file bytes + mtime unchanged.
 [7] The body file rewritten (as a re-rig would): A stale "outfit_body";
     build -> 0 mesh/rig jobs; A's bytes = the new body bytes. A re-rig of the
     body (rerig_model(Demo, bA)): ok, ONE rig job on bA, the body sidecar
     still carries the parent record (body_id bA) and figure.stored_shape
     still calls it current (no new mesh on the next outfit build).
-[8] G = A + skirt: other dress text -> tsig tG != tA -> 3 image jobs, ONE
-    mesh + ONE rig job, on another body bG != bA (other dress text, other shape key).
+[8] G = A + skirt: other in-body dress text -> 3 image jobs, ONE mesh + ONE
+    rig job, on another body bG != bA (other shape key); its texture "" as A's
+    (was tG != tA: the skirt is in the body, nothing painted).
 [9] GC: verify_cache calls neither body stale (meshes or refs).
 [10] Overview: A's steps have the row outfit_body (done) and no
     painted_body / retexture / face_texels rows; outfit_body_overview(bA)
@@ -321,7 +325,8 @@ def main() -> int:
         check("profile image", save_character_profile("Demo", stored), True)
         check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
 
-        check("mode default retexture", base_body.outfit_body_mode("Demo"), "retexture")
+        from app.core import figure
+        check("nothing worn: no shape wanted", figure.is_plain(figure.wanted_figure("Demo").shape), True)
 
         def piece(item_id, slots, *, covers=(), own_mesh=False):
             op = {"slots": list(slots), "covers": list(covers), "outfit_types": ["casual"]}
@@ -341,7 +346,6 @@ def main() -> int:
                 op = dict(inventory.get_item(item_id)["outfit_piece"])
                 op["mesh_mode"] = "in_body" if mode == "mesh" else "painted"
                 inventory.update_item(item_id, {"outfit_piece": op})
-            return base_body.outfit_body_mode("Demo")
 
         set_mode("mesh")
 
@@ -391,7 +395,6 @@ def main() -> int:
 
         # --- [1] the id rule ----------------------------------------------------------
         print("[1] body id rule")
-        from app.core import figure
         x = {"version": 2, "base_signature": "base01234567", "base_variant": "rigged", "hair_in_body": True,
              "side_views": False, "dress_text": {"front": "f", "back": "b"}}
         literal = ('{"base_signature":"base01234567","base_variant":"rigged","dress_text":{"back":"b","front":"f"},'
@@ -403,7 +406,7 @@ def main() -> int:
         # --- [2] the first body --------------------------------------------------------
         print("[2] mesh mode: one body per tsig through the staged chain, in order")
         sig_a = wear(A)
-        check("mode mesh", base_body.outfit_body_mode("Demo"), "mesh")
+        check("A: in the body", sorted(figure.wanted_figure("Demo").in_body), ["shoes", "under"])
         jobs, runs, steps, result = render_and_build()
         t_a = model_meta(sig_a).get("texture_signature")
         b_a = model_meta(sig_a).get("body_id")
@@ -412,7 +415,7 @@ def main() -> int:
         check("A: body id = hash of the recorded shape inputs", b_a,
               "ob" + hashlib.sha256(json.dumps(shape_inputs, sort_keys=True, ensure_ascii=False,
                                                separators=(",", ":")).encode("utf-8")).hexdigest()[:8])
-        store_texts = {v: json.loads((refs / "texture" / f"{k}_{t_a}.json").read_text()).get("dress_text")
+        store_texts = {v: json.loads((refs / f"{k}_{b_a}.json").read_text()).get("dress_text")
                        for v, k in (("front", "tpose"), ("back", "tpose_back"))}
         check("A: shape inputs", {k: shape_inputs.get(k) for k in ("version", "base_signature", "dress_text")},
               {"version": 2, "base_signature": b1, "dress_text": store_texts})
@@ -447,8 +450,10 @@ def main() -> int:
         check("A: outfit model = body bytes", sha(mdir / f"{sig_a}.glb") == sha(body), True)
         check("A: outfit sidecar", {k: meta_a.get(k) for k in ("outfit_body_mode", "body_id", "body_sha256",
                                                               "source", "dressed")},
-              {"outfit_body_mode": "mesh", "body_id": b_a, "body_sha256": sha(body), "source": "base_body",
+              {"outfit_body_mode": None, "body_id": b_a, "body_sha256": sha(body), "source": "base_body",
                "dressed": True})
+        check("A: its figure = the shape, nothing painted", ((meta_a.get("figure") or {}).get("shape"),
+                                                             (meta_a.get("figure") or {}).get("texture")), (b_a, ""))
         check("A: no parent record on the outfit", "outfit_body" in meta_a, False)
         check("A: distance tier for the outfit only", LOD, [sig_a])
         check("A: outfit_info ready", base_body.outfit_info("Demo")["status"], "ready")
@@ -491,18 +496,20 @@ def main() -> int:
         # --- [6] mode back and forth ------------------------------------------------------------
         print("[6] retexture mode unchanged; mode back -> the body is reused")
         set_mode("retexture")
-        check("retexture: A stale (body_mode)", (model3d.find_model3d("Demo", sig_a), stale_reason()),
-              (None, "body_mode"))
+        check("retexture: A stale (figure)", (model3d.find_model3d("Demo", sig_a), stale_reason()),
+              (None, "figure"))
         jobs, runs, steps, result = render_and_build()
         meta_r = model_meta(sig_a)
         check("retexture: ok, 0 image jobs, 0 mesh/rig jobs, 1 worker run",
               (result.get("ok"), jobs, jobs_of(steps), runs), (True, 0, [], 1))
-        check("retexture: sidecar as before", ("outfit_body_mode" in meta_r, "body_id" in meta_r,
-                                                meta_r.get("texture_signature")), (False, False, t_a))
+        check("retexture: painted on the plain body", ("outfit_body_mode" in meta_r, "body_id" in meta_r,
+                                                      base_body.is_texture_signature(meta_r.get("texture_signature")),
+                                                      (meta_r.get("figure") or {}).get("shape")),
+              (False, False, True, b1))
         body_stat = (sha(body), body.stat().st_mtime_ns)
         set_mode("mesh")
-        check("mesh again: A stale (body_mode)", (model3d.find_model3d("Demo", sig_a), stale_reason()),
-              (None, "body_mode"))
+        check("mesh again: A stale (figure)", (model3d.find_model3d("Demo", sig_a), stale_reason()),
+              (None, "figure"))
         jobs, runs, steps, result = render_and_build()
         check("mesh again: ok, no mesh/rig job, 0 runs", (result.get("ok"), jobs_of(steps), runs), (True, [], 0))
         check("mesh again: body untouched", (sha(body), body.stat().st_mtime_ns), body_stat)
@@ -533,8 +540,8 @@ def main() -> int:
         b_g = model_meta(sig_g).get("body_id")
         check("G: ok, 3 image jobs, one mesh + one rig job on its own body",
               (result.get("ok"), jobs, jobs_of(steps)), (True, 3, [("mesh", b_g), ("rig", b_g)]))
-        check("G: other tsig, other body", (t_g != t_a, b_g != b_a, base_body.is_outfit_body_signature(b_g)),
-              (True, True, True))
+        check("G: nothing painted either, other body", (t_g, t_a, b_g != b_a, base_body.is_outfit_body_signature(b_g)),
+              ("", "", True, True))
 
         # --- [9] GC ------------------------------------------------------------------------------
         print("[9] the cache GC keeps the bodies")

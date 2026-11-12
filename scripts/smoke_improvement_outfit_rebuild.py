@@ -20,13 +20,17 @@ and the four base views, wearing a plain Dress (slot top) → worn signature
   ``(kinds, force, pieces, signature)`` and writes the same views;
 * ``model3d.generate_for_current_outfit`` records ``(force, signature)`` and
   writes the model's sidecar naming the CURRENT base (``base_signature`` bsig,
-  ``base_model_sha256``) → ``{"ok": True}``; in [B5] it answers
+  ``base_model_sha256``) and the figure delivered now (``figure``, as a real
+  build records it since Task 6 of plan 2026-11-12-unified-worn-pieces) →
+  ``{"ok": True}``; in [B5] it answers
   ``{"ok": False, "error": "worker"}`` without writing.
 * ``routing.explain_occasion`` resolves every occasion to "Fake" unless a
   case empties one.
 
 "Stale model" = ``model3d/<sig>.glb`` whose sidecar names ``base00000000``
-(an older base). Expectations derived by hand from § 6.4 and rebuild_cost's
+(an older base); every hand-written model records the figure its pieces are
+delivered as now (Task 6: a model without one is stale "figure" — the boot
+stamp of smoke_figure_stamp.py gives the pre-Task-6 ones theirs). Expectations derived by hand from § 6.4 and rebuild_cost's
 table (front 1 + 2 per other dressed view; retexture repaint = CPU):
 
 [B1] the worn model stale, no dressed view → one candidate
@@ -157,7 +161,7 @@ def main() -> int:
         from app.plugins.loader import discover_packages
         discover_packages(plugins, force=True)
 
-        from app.core import base_body, glb_delivery, model3d, model_refs, outfit_batch
+        from app.core import base_body, figure, glb_delivery, model3d, model_refs, outfit_batch
         from app.core.improvements import engine, registry, store
         from app.core.improvements.base import CandidateBusy, CandidateRefused
         from app.core.improvements.types.outfit_rebuild import OutfitRebuild
@@ -206,7 +210,9 @@ def main() -> int:
             (mdir / f"{s}.glb").write_bytes(b"outfit-model")
             (mdir / f"{s}.json").write_text(json.dumps({
                 "character": "Kira", "signature": s, "pieces": dict(model_pieces), "items": [],
-                "dressed": True, "base_signature": "base00000000", "base_model_sha256": "old", **extra}))
+                "dressed": True, "base_signature": "base00000000", "base_model_sha256": "old",
+                "figure": figure.delivered_figure("Kira", pieces=dict(model_pieces), items=[]).as_dict(),
+                **extra}))
 
         def write_views(s, view_pieces):
             for v in ("front", "back"):
@@ -240,7 +246,9 @@ def main() -> int:
             if BUILD["fail"]:
                 return {"ok": False, "error": "worker"}
             meta = json.loads((mdir / f"{signature}.json").read_text())
-            meta.update(base_signature=bsig, base_model_sha256=base_sha)
+            meta.update(base_signature=bsig, base_model_sha256=base_sha,
+                        figure=figure.delivered_figure("Kira", pieces=dict(meta.get("pieces") or {}),
+                                                       items=list(meta.get("items") or [])).as_dict())
             (mdir / f"{signature}.json").write_text(json.dumps(meta))
             return {"ok": True}
 

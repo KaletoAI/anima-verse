@@ -715,6 +715,15 @@ async def lifespan(app: FastAPI):
     except Exception as _fre:
         logger.warning("Outfit body re-key failed (retried at the next start): %s", _fre)
 
+    # Migration (same plan, Task 6, Ruling 6a): every outfit model built before
+    # the figure records none; the rule before Task 6 judges it once and a
+    # current one gets the figure delivered now stamped in (no rebuild).
+    try:
+        from app.core.figure_migration import stamp_figures_once
+        stamp_figures_once()
+    except Exception as _fse:
+        logger.warning("Outfit model figure stamp failed (retried at the next start): %s", _fse)
+
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
 

@@ -68,24 +68,33 @@ dress; Mira holds heels.
      Kira's base model b"model-2", SHA = its sha256. Both heels and dress get
      an accepted fit record on SHA under their current fsig (dress: kind
      clothing; heels: kind footwear, method shoe, fit_version 6).
-     Retexture mode, pieces {top: dress, feet: heels}:
-       resolve_mesh_items -> {intended sorted([dress, heels]), effective
-       sorted([dress, heels]) (the heels' fit is grafted), warnings [], mode
-       "retexture", unpainted sorted([dress, heels]), missing {}};
-       run_queued was asked for sorted([dress, heels]) (the shoe chain is
-       part of the outfit build, spec § 12).
-     Mesh mode (the cloak worn: a piece in the body — interim rule of plan
-     2026-11-12-unified-worn-pieces Task 2): the same but mode "mesh"; the
-     cloak taken off again -> retexture mode.
-     A retexture-mode record that painted heels (intended [dress, heels],
-     effective [dress], no unpainted): mesh_items_ready(Kira, record,
-     base_sha=SHA) == [heels] (its fit landed: the rebuild drops it from the
-     texture) and, in retexture mode, mesh_items_off_rule == [heels] too
-     (footwear is never painted). A mesh-mode record that left both out
+     Since Task 6 of plan 2026-11-12-unified-worn-pieces the per-character
+     mode is gone: the figure decides (``resolve_figure`` replaced
+     ``resolve_mesh_items``; its record carries ``figure`` instead of
+     ``mode`` — compared without it, the figure on its own).
+     On the plain body, pieces {top: dress, feet: heels}: record {intended
+       sorted([dress, heels]), effective sorted([dress, heels]) (the heels'
+       fit is grafted), warnings [], unpainted sorted([dress, heels]),
+       missing {}}; the figure's shape = Kira's bsig, own = both, and the
+       record's figure is that figure; run_queued was asked for
+       sorted([dress, heels]) (the shoe chain is part of the outfit build,
+       spec § 12).
+     The cloak worn (mode in_body — replaces the old "mesh mode" case): the
+       wanted figure has in_body [cloak] on a meshed shape (not plain); no
+       shape is built, so the delivered figure stays on the plain body with
+       the cloak painted meanwhile (interim {cloak: "Shown painted until its
+       body shape is built"}) and the same record. The cloak taken off
+       again -> the plain body, nothing in it.
+     A record that painted heels (intended [dress, heels], effective
+     [dress], no unpainted): mesh_items_ready(Kira, record, base_sha=SHA)
+     == [heels] (its fit landed: the rebuild drops it from the texture) and
+     its unpainted list [] differs from the delivered figure's own + left
+     out (both) — a view of another figure (replaces mesh_items_off_rule ==
+     [heels]: footwear is never painted). A record that left both out
      (unpainted [dress, heels], missing {heels: "other"}):
      mesh_items_missing(Kira, record, base_sha=SHA) == [] (both have their
-     fit — judged now, whatever the record says) and mesh_items_off_rule in
-     retexture mode == [] (nothing of it belongs painted on).
+     fit — judged now, whatever the record says) and its unpainted list
+     equals the figure's (replaces mesh_items_off_rule == []).
 [K5] Every entry point runs the SHOE chain for footwear, never the clothing
      chain (Task 6 replaced the temporary skip; the REAL queue functions,
      run_queued restored). ``garment_footwear.run_chain`` is a recorder
@@ -176,6 +185,7 @@ def main() -> int:
         from app.core import (base_body, garment_assembly, garment_fit, garment_mesh, garment_set, garments,
                               model_refs)
         from app.core import garment_store as gs
+        from app.core import figure
         from app.models import inventory
         from app.models.character import get_character_dir, get_character_profile, save_character_profile
 
@@ -314,26 +324,36 @@ def main() -> int:
         check("no FOOTWEAR_PREVIEW_ONLY", hasattr(base_body, "FOOTWEAR_PREVIEW_ONLY"), False)
         both = sorted([dress, heels])
         QUEUED.clear()
-        out = base_body.resolve_mesh_items("Kira", pieces)
-        check("retexture record", out, {"intended": both, "effective": both, "warnings": [],
-                                        "mode": base_body.RETEXTURE_MODE, "unpainted": both, "missing": {}})
+        fig, out = base_body.resolve_figure("Kira", pieces)
+        check("plain-body record", {k: v for k, v in out.items() if k != "figure"},
+              {"intended": both, "effective": both, "warnings": [], "unpainted": both, "missing": {}})
+        check("plain-body figure: both grafted", (fig.shape, list(fig.own), out.get("figure")),
+              (kira_bsig, both, fig.as_dict()))
         check("run_queued: both grafted kinds", QUEUED, [both])
         # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
         check("Kira holds the cloak", inventory.add_to_inventory("Kira", cloak), True)
         check("mesh mode on: cloak worn", inventory.equip_piece("Kira", cloak, source="smoke")["status"], "ok")
-        check("mesh mode", base_body.outfit_body_mode("Kira"), base_body.MESH_MODE)
-        out = base_body.resolve_mesh_items("Kira", pieces)
-        check("mesh record", out, {"intended": both, "effective": both, "warnings": [],
-                                   "mode": base_body.MESH_MODE, "unpainted": both, "missing": {}})
+        wanted = figure.wanted_figure("Kira")
+        check("wanted: cloak in the body, on a shape", (list(wanted.in_body), figure.is_plain(wanted.shape)),
+              ([cloak], False))
+        fig, out = base_body.resolve_figure("Kira", {**pieces, "outer": cloak})
+        check("delivered: no shape built, the cloak painted meanwhile",
+              (fig.shape, fig.interim), (kira_bsig, {cloak: figure.INTERIM_PAINTED.format(what=figure.WHAT_SHAPE)}))
+        check("shape record", {k: v for k, v in out.items() if k != "figure"},
+              {"intended": both, "effective": both, "warnings": [], "unpainted": both, "missing": {}})
         painted = {"mesh_items": {"intended": both, "effective": [dress]}, "base_signature": kira_bsig}
         check("mesh_items_ready painted heels", base_body.mesh_items_ready("Kira", painted, base_sha=sha), [heels])
         left_out = {"mesh_items": {"intended": both, "effective": [dress], "unpainted": both,
                                    "missing": {heels: "other"}}, "base_signature": kira_bsig}
         check("mesh_items_missing", base_body.mesh_items_missing("Kira", left_out, base_sha=sha), [])
         check("retexture mode on: cloak off", inventory.unequip_piece("Kira", "outer", source="smoke")["status"], "ok")
-        check("retexture mode", base_body.outfit_body_mode("Kira"), base_body.RETEXTURE_MODE)
-        check("off rule: painted heels", base_body.mesh_items_off_rule("Kira", painted, base_sha=sha), [heels])
-        check("off rule: left out", base_body.mesh_items_off_rule("Kira", left_out, base_sha=sha), [])
+        fig = figure.delivered_figure("Kira")
+        check("plain body again", (fig.shape, list(fig.in_body)), (kira_bsig, []))
+        unpainted_now = sorted({*fig.own, *fig.left_out})
+        check("a record that painted heels is of another figure",
+              base_body.mesh_items_unpainted(painted) != unpainted_now, True)
+        check("a record that left both out is of this figure",
+              base_body.mesh_items_unpainted(left_out) == unpainted_now, True)
 
         print("[K5] footwear runs the shoe chain, never the clothing chain")
         from app.core import garment_footwear, garment_images, garment_refit

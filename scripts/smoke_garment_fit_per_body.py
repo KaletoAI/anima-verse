@@ -77,11 +77,13 @@ on another body") and the plan's Task 2 bullet:
     assemble(OA) -> 0 FITS (nothing is fitted on a body whose stored bytes are no longer the model's).
 [9] Groups: stored_groups[(coat, F)] holds bodies/<A>/coat_<F>.glb, bodies/<B>/coat_<F>.glb and the layered files;
     body_of names their body.
-[10] Tab status: outfit body mode mesh (Demo wears trousers in mode in_body — the interim rule of plan
-    2026-11-12-unified-worn-pieces Task 2), the current outfit's model = OB's copy (body B): garment_info(coat).body =
+[10] Tab status: Demo wears trousers in mode in_body (wanted figure in_body [trousers]; Task 6 of plan
+    2026-11-12-unified-worn-pieces replaced the per-character "mesh mode"), the current outfit's model = OB's copy
+    (body B): garment_info(coat).body =
     {body_id B, status "failed", error "fit on the outfit body refused — too tight"} (the [7] failure), body_id B;
     garment_info(slip).body None (not carried); piece_status passes body.
-    Mode retexture (trousers taken off) -> garment_info(coat).body None.
+    Trousers taken off (in_body [], was "mode retexture") -> the outfit worn now has no model ->
+    garment_info(coat).body None.
 """
 import hashlib
 import io
@@ -610,14 +612,15 @@ def main() -> int:
 
         # --- [10] tab status ------------------------------------------------------------------------
         print("[10] Wardrobe / Hair tab: the fit of the body worn now")
-        # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
+        # A worn piece in the body (Task 6 of plan 2026-11-12-unified-worn-pieces: no per-character mode).
+        from app.core import figure
         trousers = inventory.add_item(name="Trousers", category="outfit_piece", item_id="trousers",
                                       prompt_fragment="a trousers",
                                       outfit_piece={"slots": ["bottom"], "outfit_types": ["casual"],
                                                     "mesh_mode": "in_body"})["id"]
         inventory.add_to_inventory("Demo", trousers)
         check("trousers worn", inventory.equip_piece("Demo", trousers, source="smoke")["status"], "ok")
-        check("mode mesh", base_body.outfit_body_mode("Demo"), "mesh")
+        check("trousers in the body", list(figure.wanted_figure("Demo").in_body), [trousers])
         osig = current_outfit_state("Demo")[2]
         shutil.copyfile(OB, mdir / f"{osig}.glb")
         shutil.copyfile(OB.with_suffix(".json"), mdir / f"{osig}.json")
@@ -629,8 +632,8 @@ def main() -> int:
         chip = garment_set.piece_status(info, worn=False, base_model_ready=True)
         check("piece_status body", chip.get("body"), {"body_id": B, "status": "failed", "error": reason})
         check("trousers off", inventory.unequip_piece("Demo", "bottom", source="smoke")["status"], "ok")
-        check("mode retexture", base_body.outfit_body_mode("Demo"), "retexture")
-        check("retexture: no body", garments.garment_info("Demo", "coat")["body"], None)
+        check("nothing in the body", list(figure.wanted_figure("Demo").in_body), [])
+        check("no model of the outfit worn now: no body", garments.garment_info("Demo", "coat")["body"], None)
         check("HUB at the end", HUB, [])
 
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))

@@ -79,7 +79,13 @@ Expected, derived by hand from the brief:
       (none of the four fragments); every view's sidecar carries the
       front's mesh_items (the side views follow the front too);
     - after_mesh_item_ready was asked for dress (its fit was accepted in
-      the run) and found nothing to rebuild (no front named it pending).
+      the run) and found nothing to rebuild (no model of X and no front
+      made for another figure yet — Task 6: the figure decides).
+    Task 6 (plan 2026-11-12-unified-worn-pieces): the record's ``mode``
+    ("retexture") is replaced by ``figure`` (the delivered figure it was
+    made for: own [dress], painted [coat, shoes, skirt] — coat painted by
+    the interim rule); the records are compared without it, the figure on
+    its own; the side views carry the front's record unchanged.
     Baseline, flag OFF (signature of X without token) — the SECOND outfit
     render after the coat failed: no chain runs at all (coat's failure is
     cached for its fsig, dress is not flagged); the front prompt names "a
@@ -99,7 +105,8 @@ Expected, derived by hand from the brief:
     after_mesh_item_ready(Demo, coat) asks trigger_now(kinds ("tpose",),
     force False) once; dressed_image(front) of X is None (stale);
     model3d._on_older_base(model) True; outfit_info status "stale",
-    stale_reason "mesh_item_ready"; dressed_freshness of the front: stale,
+    stale_reason "figure" (Task 6: the model's recorded figure painted the
+    coat, the delivered one grafts it — replaces "mesh_item_ready"); dressed_freshness of the front: stale,
     reason "An own-mesh piece painted on here has its garment mesh now".
     A new generate_dressed_images pass: the front prompt names skirt and
     sneakers, neither dress nor coat; mesh_items effective [coat, dress],
@@ -126,12 +133,13 @@ Expected, derived by hand from the brief:
     after_base_model again -> True, queue [dress, coat] (dress reused, the
     running coat queued again); released -> runs coat, dress, coat in that
     order, max concurrency 1, idle afterwards. Off pipeline:
-    after_base_model(Offline) False, resolve_mesh_items(Offline, X) {} and
-    resolve_mesh_items(Pet, {top: dress}) {} without a run (Review Focus 4).
+    after_base_model(Offline) False, resolve_figure(Offline, X) record {}
+    and resolve_figure(Pet, {top: dress}) record {} without a run (Review
+    Focus 4; Task 6 replaced resolve_mesh_items by resolve_figure).
 [8] Fix round 1 (a failed chain is not retried automatically): coat
     ``fail``, X worn. start_garment twice -> two runs (explicit runs ignore
     the cache). In-memory status cleared (= restart): cached_failure step
-    "fit", garment_info failed.error "fit refused — stub"; resolve_mesh_items
+    "fit", garment_info failed.error "fit refused — stub"; resolve_figure
     runs only dress (done chain), not coat, and coat's accepted fit from [6]
     still serves (effective [coat, dress]); run_queued -> cached. Coat's
     prompt fragment changed -> new fsig -> not cached, run_queued runs coat,
@@ -178,6 +186,19 @@ def check(label, got, want):
     print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}"[:300] + ("" if ok else f" — expected {want!r}"[:300]))
     if not ok:
         FAILS.append(label)
+
+
+def record(meta):
+    """A ``mesh_items`` record without its ``figure`` (checked on its own,
+    ``fig_of``) — Task 6 of plan 2026-11-12-unified-worn-pieces replaced the
+    record's ``mode`` by the figure it was made for."""
+    return {k: v for k, v in (meta or {}).items() if k != "figure"}
+
+
+def fig_of(meta):
+    """(own, painted) of the figure a ``mesh_items`` record names."""
+    fig = (meta or {}).get("figure") or {}
+    return list(fig.get("own") or []), list(fig.get("painted") or [])
 
 
 def png(rgb, size=8) -> bytes:
@@ -461,9 +482,11 @@ def main() -> int:
         check("front names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
               {"dress": False, "skirt": True, "coat": True, "shoes": True})
         want_mesh = {"intended": ["coat", "dress"], "effective": ["dress"],
-                     "warnings": [COAT_WARN], "mode": "retexture", "unpainted": ["dress"], "missing": {}}
+                     "warnings": [COAT_WARN], "unpainted": ["dress"], "missing": {}}
         front_meta = json.loads((refs / f"tpose_{sig_x}.json").read_text())
-        check("front mesh_items", front_meta.get("mesh_items"), want_mesh)
+        check("front mesh_items", record(front_meta.get("mesh_items")), want_mesh)
+        check("front figure: dress grafted, coat painted (interim)", fig_of(front_meta.get("mesh_items")),
+              (["dress"], ["coat", "shoes", "skirt"]))
         check("front mesh_token", front_meta.get("mesh_token"), token_x)
         others = [r for r in RENDERS if r["occasion"] != "outfit_front"]
         check("draft + fit occasions", sorted({r["occasion"] for r in others}),
@@ -472,9 +495,9 @@ def main() -> int:
                                                  if any(f in r["prompt"] for f in FRAG.values())], [])
         for v in ("back", "left", "right"):
             meta = json.loads((refs / f"tpose_{v}_{sig_x}.json").read_text())
-            check(f"{v} carries the front's record", meta.get("mesh_items"), want_mesh)
+            check(f"{v} carries the front's record", meta.get("mesh_items"), front_meta.get("mesh_items"))
             draft = json.loads((refs / "drafts" / f"tpose_{v}_{sig_x}.json").read_text())
-            check(f"{v} draft record", draft.get("mesh_items"), want_mesh)
+            check(f"{v} draft record", draft.get("mesh_items"), front_meta.get("mesh_items"))
         fail_rec = gs.read_record(gs.garment_path("Demo", "coat", gs.garment_fsig("Demo", "coat"), "failed"))
         check("coat failure on disk", (fail_rec.get("step"), fail_rec.get("error")), ("fit", "fit refused — stub"))
         check("dress has none", gs.garment_path("Demo", "dress", gs.garment_fsig("Demo", "dress"),
@@ -493,8 +516,8 @@ def main() -> int:
               {"dress": True, "skirt": False, "coat": True, "shoes": True})
         check("off: second render starts no chain (coat failed)", [r[1] for r in RUNS], [])
         off_meta = json.loads((refs / f"tpose_{sig_off}.json").read_text())
-        check("off: coat painted, dress not intended", off_meta.get("mesh_items"),
-              {"intended": ["coat"], "effective": [], "warnings": [COAT_WARN], "mode": "retexture",
+        check("off: coat painted, dress not intended", record(off_meta.get("mesh_items")),
+              {"intended": ["coat"], "effective": [], "warnings": [COAT_WARN],
                "unpainted": [], "missing": {}})
         flag("dress", True)
         check("flag on: key of X", model_refs.current_outfit_state("Demo")[2], sig_x)
@@ -506,7 +529,8 @@ def main() -> int:
         bare = mdir / f"{sig_x}.glb"
         assembled = mdir / "assembled" / f"{sig_x}.glb"
         meta = model3d._read_sidecar(bare)
-        check("bare mesh_items", meta.get("mesh_items"), want_mesh)
+        check("bare mesh_items", record(meta.get("mesh_items")), want_mesh)
+        check("bare figure = the front's", meta.get("figure"), (front_meta.get("mesh_items") or {}).get("figure"))
         check("bare mesh_token", meta.get("mesh_token"), token_x)
         check("garment_warnings[0]", (meta.get("garment_warnings") or [None])[0], want_mesh["warnings"][0])
         check("outfit_info warning", want_mesh["warnings"][0] in base_body.outfit_info("Demo")["warnings"], True)
@@ -537,7 +561,7 @@ def main() -> int:
         check("front stale", base_body.dressed_image("Demo", "front", sig_x, b1), None)
         check("model stale", model3d._on_older_base(bare, model3d._current_base("Demo")), True)
         info = base_body.outfit_info("Demo")
-        check("outfit_info", (info["status"], info["stale_reason"]), ("stale", "mesh_item_ready"))
+        check("outfit_info", (info["status"], info["stale_reason"]), ("stale", "figure"))
         check("front freshness", model_overview.dressed_freshness(
             front_meta, bsig=b1, base_view_sha=base_body.file_sha256(refs / f"tpose_{b1}.png"),
             mesh_ready=bool(base_body.mesh_items_ready("Demo", front_meta, bsig=b1))),
@@ -548,8 +572,8 @@ def main() -> int:
         prompt = fronts[0]["prompt"] if fronts else ""
         check("re-render names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
               {"dress": False, "skirt": True, "coat": False, "shoes": True})
-        check("re-render record", json.loads((refs / f"tpose_{sig_x}.json").read_text()).get("mesh_items"),
-              {"intended": ["coat", "dress"], "effective": ["coat", "dress"], "warnings": [], "mode": "retexture",
+        check("re-render record", record(json.loads((refs / f"tpose_{sig_x}.json").read_text()).get("mesh_items")),
+              {"intended": ["coat", "dress"], "effective": ["coat", "dress"], "warnings": [],
                "unpainted": ["coat", "dress"], "missing": {}})
         check("back re-rendered too", any(r["occasion"] == "outfit_back" for r in RENDERS), True)
 
@@ -632,8 +656,8 @@ def main() -> int:
         del gates["coat"]
         RUNS.clear()
         check("Offline: no run", garments.after_base_model("Offline"), False)
-        check("Offline: resolve", base_body.resolve_mesh_items("Offline", X), {})
-        check("Pet: resolve", base_body.resolve_mesh_items("Pet", {"top": "dress"}), {})
+        check("Offline: resolve", base_body.resolve_figure("Offline", X)[1], {})
+        check("Pet: resolve", base_body.resolve_figure("Pet", {"top": "dress"})[1], {})
         check("no run off the pipeline", RUNS, [])
 
         # --- [7] _fit dispatch ---------------------------------------------------------------
@@ -689,7 +713,7 @@ def main() -> int:
         check("garment_info reports it", (garments.garment_info("Demo", "coat").get("failed") or {}).get("error"),
               "fit refused — stub")
         RUNS.clear()
-        res = base_body.resolve_mesh_items("Demo", X)
+        res = base_body.resolve_figure("Demo", X)[1]
         check("automatic: no coat run (dress's done chain answers at once)", [r[1] for r in RUNS], ["dress"])
         check("automatic: result", (garments.run_queued("Demo", ["coat"])["coat"].get("cached")), True)
         check("coat's accepted fit (from [6]) still serves", res.get("effective"), ["coat", "dress"])

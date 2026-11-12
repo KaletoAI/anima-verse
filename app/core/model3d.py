@@ -654,15 +654,13 @@ def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
     or none recorded (a whole-body model from before the switch) — or built
     from the other base model than its pieces call for now
     (``base_body.variant_current``: a piece's ``exposed_detail`` changed),
-    or left an own-mesh piece painted on that has its garment mesh now
-    (``base_body.mesh_items_ready``). The base model itself is never stale
-    here, nor is an outfit body (``figure.shape_key``); an outfit
-    model built for the other outfit body mode, or on an outfit body that
-    was rebuilt since, is (``base_body.outfit_body_stale``)."""
+    or built as another figure than the one delivered now, or on a meshed
+    shape rebuilt since (``base_body.figure_stale``). The base model itself
+    is never stale here, nor is an outfit body (``figure.shape_key``)."""
     if not base:
         return False
-    from app.core.base_body import (built_on_current_base, is_base_signature, is_outfit_body_signature,
-                                    mesh_items_ready, outfit_body_stale, variant_current)
+    from app.core.base_body import (built_on_current_base, figure_stale, is_base_signature,
+                                    is_outfit_body_signature, variant_current)
     if is_base_signature(path.stem) or is_outfit_body_signature(path.stem):
         return False
     meta = _read_sidecar(path)
@@ -670,9 +668,7 @@ def _on_older_base(path: Path, base: Optional[tuple]) -> bool:
         return True
     if not meta.get("character"):
         return False
-    return (not variant_current(meta["character"], meta)
-            or bool(outfit_body_stale(meta["character"], meta))
-            or bool(mesh_items_ready(meta["character"], meta, base_sha=base[1])))
+    return not variant_current(meta["character"], meta) or bool(figure_stale(meta["character"], meta))
 
 
 def _stored_manifest(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
@@ -1077,17 +1073,16 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         # stand-in). It is still THE file on screen, so its details stay; the
         # flag tells the tab to ask for a rebuild. ``stale_reason``:
         # ``older_base`` / ``before_pipeline`` (no base recorded) /
-        # ``detail_changed`` / ``body_mode`` / ``outfit_body`` /
-        # ``mesh_item_ready``.
+        # ``detail_changed`` / ``figure`` / ``outfit_body``.
         current_base = _current_base(character_name)
         info["stale_base"] = _on_older_base(path, current_base)
         if info["stale_base"]:
-            from app.core.base_body import built_on_current_base, outfit_body_stale, variant_current
+            from app.core.base_body import built_on_current_base, figure_stale, variant_current
             stale_meta = _read_sidecar(path)
             info["stale_reason"] = ("before_pipeline" if not stale_meta.get("base_signature")
                                     else "older_base" if not built_on_current_base(stale_meta, current_base)
                                     else "detail_changed" if not variant_current(character_name, stale_meta)
-                                    else outfit_body_stale(character_name, stale_meta) or "mesh_item_ready")
+                                    else figure_stale(character_name, stale_meta) or "figure")
         info["has_unrigged_source"] = (path.parent / "unrigged" / f"{path.stem}.glb").is_file()
         info["unrigged_source_reason"] = "" if info["has_unrigged_source"] else "No retained unrigged mesh source. Generate a new model to enable re-rigging."
         info["source"] = "generated"  # default for legacy sidecars
@@ -1400,6 +1395,8 @@ def _publish_model_bytes(target: Path, contents: bytes) -> None:
     finally:
         if staged is not None:
             staged.unlink(missing_ok=True)
+        from app.core import figure
+        figure.invalidate()   # a shape, the base or an outfit model: delivered figures may change
 
 
 def _publish_sidecar(path: Path, meta: Dict[str, Any]) -> None:
@@ -2097,7 +2094,7 @@ def match_outfit_body_posture(character_name: str, signature: str, *, force: boo
     on the turned body), any other body is matched in place. Collision
     capsules and measurement follow. ``{ok, noop?, posture_match, error}``;
     a failure publishes nothing. The outfit models on the body turn stale by
-    its new sha (``base_body.outfit_body_stale``), its garment fits refit."""
+    its new sha (``base_body.figure_stale``), its garment fits refit."""
     from app.core import outfit_body_posture as posture
     from app.core.base_body import is_outfit_body_signature
     if not is_outfit_body_signature(signature):
@@ -2871,14 +2868,15 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     combination — from its T-pose render.
 
     ``outfit_body`` (with ``signature`` = an outfit body id,
-    ``base_body.prepare_outfit_body``) builds an OUTFIT BODY of the mesh
-    mode instead: the sidecar manifest to freeze (``{"outfit_body": <parent
-    record>, "base_variant": …}``) replaces the outfit manifest, every
-    stored view of the body id goes in (like the base), the anatomy-part
-    batches and the distance tier are skipped (``outfit_body`` in the
-    sidecar). Before an outfit run in mesh mode the outfit's body is made
-    sure of first (``prepare_outfit_body``, outside this function's stage);
-    its failure is this run's result.
+    ``base_body.prepare_shape``) builds a MESHED SHAPE instead: the sidecar
+    manifest to freeze (``{"outfit_body": <parent record>, "base_variant":
+    …}``) replaces the outfit manifest, every stored view of the body id
+    goes in (like the base), the anatomy-part batches and the distance tier
+    are skipped (``outfit_body`` in the sidecar). Before an outfit run the
+    shape of the outfit's wanted figure is made sure of first, and the
+    outfit's views follow the figure then delivered
+    (``base_body.prepare_outfit_figure``, outside this function's stage);
+    the shape's failure is this run's result.
 
     ``base=True`` (with ``signature`` = the base signature,
     ``base_body.generate_base_model``) builds the base body instead: every
@@ -2913,8 +2911,8 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
         if base or not is_outfit_body_signature(signature):
             raise ValueError("An outfit body needs its body id")
     else:
-        from app.core.base_body import prepare_outfit_body
-        prepared = None if base else prepare_outfit_body(character_name, signature, force=force)
+        from app.core.base_body import prepare_outfit_figure
+        prepared = None if base else prepare_outfit_figure(character_name, signature, force=force)
         if prepared is not None and not prepared.get("ok"):
             return prepared
     op = hub_ops.find_open(_OP_MESH, _op_match(character_name, signature, base=base,
@@ -3493,7 +3491,7 @@ def _rig_from_source(character_name: str, signature: str, source: Path, *,
             "mesh_backend", "mesh_route_meta", "source_image", "source_image_sha256",
             "view_images", "view_images_sha256", "pieces", "items", "mesh_variant", "job_id", "single_view",
             "base", "face_cleanup",
-            # An outfit body's parent record (base_body.prepare_outfit_body) survives every re-rig.
+            # An outfit body's parent record (base_body.prepare_shape) survives every re-rig.
             "outfit_body", "base_variant")}
         meta.update(created_at=utc_now_iso(), source="generated", signature=signature,
                     character=character_name, rig=rig, format=path.suffix.lstrip("."),

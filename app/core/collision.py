@@ -42,8 +42,8 @@ copy of that body, so the base's set is its set — the base sidecar's record is
 meta (``base_body.build_outfit_model``), and when it is missing or outdated the outfit's own file is fitted
 under the same identity (body nodes only — ``glb_mesh.body_arrays`` skips grafted garments). A rebuilt or
 retextured base never leaves a stale set on the outfit served: the outfit's record names the base sha it was
-built on, so it always describes the body actually in the file. An outfit model on an OUTFIT BODY (mesh mode,
-``outfit_body_mode: "mesh"``) carries that body's set the same way (``source "body"``, ``sha256`` = its
+built on, so it always describes the body actually in the file. An outfit model on a MESHED SHAPE (an outfit
+body, sidecar ``body_id`` = ``ob…``) carries that body's set the same way (``source "body"``, ``sha256`` = its
 ``body_sha256``).
 
 A record is CURRENT when ``version``, ``sha256`` (the identity above) and ``scales`` (the character's region
@@ -484,10 +484,12 @@ def _file_sha256(path: Path) -> str:
 
 def identity(path: Path, meta: Dict[str, Any]) -> Tuple[str, str]:
     """``(source, sha256)`` the record of the model ``path`` must carry (module docstring). An outfit model on
-    an OUTFIT BODY (``outfit_body_mode: "mesh"``, ``base_body._build_on_outfit_body``) carries the set of that
-    body (``source "body"``, ``sha256`` = the body file it copied, ``body_sha256``) — the body's own set comes
-    along with its meta."""
-    if meta.get("source") == "base_body" and meta.get("outfit_body_mode") == "mesh" and meta.get("body_sha256"):
+    a MESHED SHAPE (sidecar ``body_id`` an outfit body id, ``base_body.build_outfit_model``) carries the set
+    of that body (``source "body"``, ``sha256`` = the body file it copied or painted, ``body_sha256``) — the
+    body's own set comes along with its meta."""
+    from app.core.base_body import is_outfit_body_signature
+    if (meta.get("source") == "base_body" and is_outfit_body_signature(meta.get("body_id"))
+            and meta.get("body_sha256")):
         return "body", str(meta["body_sha256"])
     if meta.get("source") == "base_body" and not meta.get("base") and meta.get("base_model_sha256"):
         return "base", str(meta["base_model_sha256"])
