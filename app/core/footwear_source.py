@@ -32,7 +32,13 @@ Folder ``<world>/footwear/<item>/<ssig>/`` (``source_dir``):
   ``SHAFT_OPEN_REFUSED``. A shaft the mesher capped (``shaft.cap_removed`` > 0, boots spec § 6.1) has the
   cap taken out of ``prepared.glb`` here (``footwear_insole.strip_cap``; ``raw.glb`` stays), the mesh is
   measured again without it and the count is kept in ``insole.json`` and the step record; the shaft's
-  material is marked double-sided at the fit, not here.
+  material is marked double-sided at the fit, not here. The insole always measures the MESH STEP's
+  ``prepared.glb``: the mesh record keeps its ``prepared_sha256``, and a ``prepared.glb`` that differs from it —
+  stripped by an earlier insole run, or written before the mesh record carried the hash — is re-made from
+  ``raw.glb`` first by the mesh step's own decimation (``refine.decimate_to``, CPU, deterministic; the mesh
+  gates are not run again: same raw, same mesh) and the hash recorded (``_restore_prepared``, INSOLE_VERSION 7,
+  boots plan Ruling 15g: the version-5 cap rule had cut 169 faces out of a sneaker's tongue and 105 out of a
+  pump's counter; the version-7 run brings them back). Without ``raw.glb`` the file is measured as it is.
 
 ``record.json`` = ``{steps: {step: {accepted, gates, backend, routing,
 created_at, ...}}}``. A step that is not accepted names why in ``failure``:
@@ -576,7 +582,7 @@ def _step_mesh(iid: str, ssig: str, seed: int, d: Path) -> None:
         last = attempts[-1]
         if last["ok"]:
             os.replace(candidate, prepared)
-            _set_step(d, "mesh", _record(last, True))
+            _set_step(d, "mesh", _record(last, True, prepared_sha256=_sha256(prepared)))
             return
         _set_step(d, "mesh", _record(last, False, failure=GATE))
         reasons = "; ".join(f"attempt {a['attempt']}: " + ", ".join(a["gates"]["reasons"]) for a in attempts)
@@ -585,12 +591,46 @@ def _step_mesh(iid: str, ssig: str, seed: int, d: Path) -> None:
         candidate.unlink(missing_ok=True)
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _restore_prepared(iid: str, ssig: str, d: Path) -> bool:
+    """``prepared.glb`` as the mesh step made it (module docstring, INSOLE_VERSION 7): when it differs from the
+    mesh record's ``prepared_sha256`` (or the record has none) and ``raw.glb`` exists, it is decimated again from
+    ``raw.glb`` exactly as ``_prepare_mesh`` does and the hash goes into the mesh record. True when it was
+    re-made. A failed decimation raises (the insole step fails, the file is untouched)."""
+    prepared, raw = d / "prepared.glb", d / "raw.glb"
+    mesh = _read(d)["steps"].get("mesh")
+    mesh = mesh if isinstance(mesh, dict) else {}
+    if mesh.get("prepared_sha256") == _sha256(prepared):
+        return False
+    if not raw.is_file():
+        logger.warning("Shoe source %s/%s: prepared.glb differs from the mesh step's and raw.glb is missing — "
+                       "measured as it is", iid, ssig)
+        return False
+    from app.blender import refine
+    candidate = d / ".prepared.candidate.glb"
+    try:
+        dec = refine.decimate_to(raw, TARGET_TRIS, candidate, merge_vertices=True)
+        if not dec.get("ok"):
+            raise RuntimeError(f"shoe mesh decimation failed: {dec.get('error') or 'unknown error'}")
+        os.replace(candidate, prepared)
+    finally:
+        candidate.unlink(missing_ok=True)
+    _set_step(d, "mesh", {**mesh, "prepared_sha256": _sha256(prepared), "tris_prepared": dec.get("tris"),
+                          "prepared_restored_at": _entry(accepted=True, gates={})["created_at"]})
+    logger.info("Shoe source %s/%s: prepared.glb re-made from raw.glb (%s tris)", iid, ssig, dec.get("tris"))
+    return True
+
+
 def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
     from app.core import footwear_insole
     from app.core.garment_store import write_record
     prepared = d / "prepared.glb"
     if not prepared.is_file():
         raise FileNotFoundError("the prepared shoe mesh is missing — run the mesh step first")
+    restored = _restore_prepared(iid, ssig, d)
     import numpy as np
     from app.core import glb_mesh
     positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared.read_bytes())
@@ -614,7 +654,7 @@ def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
     shaft = res.get("shaft") or {}
     _set_step(d, "insole", _entry(accepted=bool(gates["ok"]), gates=gates, version=footwear_insole.INSOLE_VERSION,
                                   nominal=res["nominal"], shaft_class=shaft.get("class"),
-                                  cap_removed=int(shaft.get("cap_removed") or 0),
+                                  cap_removed=int(shaft.get("cap_removed") or 0), prepared_restored=restored,
                                   **({} if gates["ok"] else {"failure": GATE})))
     logger.info("Shoe source %s/%s: insole %s (cover %.3f, vamp %.3f, shaft %s)", iid, ssig,
                 "accepted" if gates["ok"] else "refused", gates["insole_cover"], gates["vamp_cover"],
@@ -775,7 +815,8 @@ def collect_mesh_job(item_id: str, job_id: str) -> Dict[str, Any]:
                 _drop_from(d, "mesh")
                 os.replace(delivered, d / "raw.glb")
                 os.replace(candidate, d / "prepared.glb")
-                record = _mesh_record(entry, [entry], True, collected_job=full)
+                record = _mesh_record(entry, [entry], True, collected_job=full,
+                                      prepared_sha256=_sha256(d / "prepared.glb"))
                 _set_step(d, "mesh", record)
                 return {"status": "accepted", "ssig": ssig, "job_id": full, "record": record}
             refused = {"status": "refused", "ssig": ssig, "job_id": full, "gates": entry["gates"],

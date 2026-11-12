@@ -460,8 +460,17 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
     ].filter((x) => x && !x.endsWith(' ')) : []
     const liftM = fitted ? num(m.root_lift_m) : null
     const toeRoom = fitted ? `${t('Toe room')} ${pair(m, 'toe_room_mm', (v) => mmText(v))}` : ''
+    // fit version 13: a shoe without a shaft may be widened to the foot past the slider's ×1.10
+    const widened = fitted && (num(m.width_factor) ?? 0) > CAP_MAX + 1e-6
     const parts: ReactNode[] = [
       ...numbers,
+      widened ? (
+        <span key="widened" className="ga-run-badge"
+          title={t("The mesher guesses a shoe's width from one picture: a shoe without a shaft is widened to the wearer's foot, up to ×{cap}")
+            .replace('{cap}', (num(m.width_cap_applied) ?? 1.65).toFixed(2))}>
+          {t('Widened to the foot')} ×{m.width_factor.toFixed(2)} / ×{(num(m.width_cap_applied) ?? 1.65).toFixed(2)}
+        </span>
+      ) : null,
       liftM != null ? (
         <span key="lift"
           title={liftM < 0 ? t('The root descends: this body stands heel-up in its rest pose') : undefined}>
@@ -566,7 +575,11 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
         {info.width_cap < CAP_MAX - 1e-6 ? (
           <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
             onClick={() => onWidthCap(null)}>{t('Default')}</button>
-        ) : null}
+        ) : (
+          <span className="ga-hint">
+            {t("Default: a shoe without a shaft is widened to the foot up to ×1.65; a lower cap keeps the item's look")}
+          </span>
+        )}
       </div>
     </div>
   )

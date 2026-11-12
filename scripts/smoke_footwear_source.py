@@ -84,11 +84,11 @@ Expected, by hand:
      0.03 at B's stations 72..167 (x in [0.0753, 0.1747]) and 0.13 elsewhere -> walls >= AIR above the
      insole at 96 of 240 stations -> opening_share 0.4 < 0.5 -> the closed box is SOLID (that reason wins
      over vamp_cover) -> run_source {ok False, step "insole", ran ["mesh"]}, the error starts with
-     SOLID_REFUSED, insole.json (version 6) written with gates.refusal SOLID_REFUSED, record insole accepted
+     SOLID_REFUSED, insole.json (version 7) written with gates.refusal SOLID_REFUSED, record insole accepted
      False.
 [S5b] the wedge pump of scripts/_footwear_fixtures.py written as W's prepared.glb, run_source(W,
      steps=["insole"], force=True) -> ok, ran ["insole"], 0 service calls, record insole accepted with
-     version 6 and nominal pitch 30.61 deg (smoke_footwear_insole [I1]); insole.json heel_seat_h_m 0.09.
+     version 7 and nominal pitch 30.61 deg (smoke_footwear_insole [I1]); insole.json heel_seat_h_m 0.09.
 [S6] second run_source(W) -> ran == [], 0 calls of any kind. regenerate(W, "mesh") -> seed 1, new ssig =
      ssig_for(W, 1) != old; upscaled/empty/cutout copied (bytes equal) with copied_from = old ssig, no
      mesh record in the new folder; the next run_source -> mesh runs (exactly 1 mesher call, 0 upscale,
@@ -103,9 +103,20 @@ Expected, by hand:
      -> ok, 0 service calls; the insole step finds the cap (shaft.cap_removed 160: the up-facing faces in the
      top 2 % of the shaft, smoke_footwear_insole [I15]), rewrites prepared.glb WITHOUT them — static_arrays of
      the new file has exactly 160 faces fewer and no up-facing face above 0.2556 — and records cap_removed 160
-     in insole.json and the step record (version 6, class "ankle", collar 0.17); raw.glb is untouched. A second
+     in insole.json and the step record (version 7, class "ankle", collar 0.17); raw.glb is untouched. A second
      run_source(W) -> ran == [], 0 calls, prepared.glb byte-identical (the step is done, the cap is not looked
-     for again).
+     for again). (Since S11 every hand-written mesh goes into raw.glb AND prepared.glb, as the mesh step leaves
+     them: the insole step re-makes a prepared.glb that is not the mesh step's.)
+[S11] the faces an older insole cut out come back (INSOLE_VERSION 7, boots plan Ruling 15g). W's mesh = the wedge
+     with a raised tongue (wedge(tongue=True), 372 faces) as raw.glb + prepared.glb; the insole run records the
+     mesh step's prepared_sha256 (= sha256 of prepared.glb), class none, cap 0. prepared.glb then replaced by the
+     same mesh without its last 24 faces (the tongue box's two end walls, 2 x 3 x 2 quads — which faces went does
+     not matter, only that they come back; a version-5 insole cut 24 of the lid, smoke_footwear_insole [I19])
+     -> 348 faces. run_source(W, ["insole"], force) -> exactly ONE decimate_to(raw.glb, 60000, merged)
+     (the fake copies raw.glb), prepared.glb 372 faces again, step record prepared_restored True, version 7,
+     accepted, the mesh record's prepared_sha256 = the new file's, raw.glb untouched, no service call. A second
+     forced insole run: no decimation, prepared_restored False. (On 80cdcd96 the stripped 348 faces stay and the
+     record has no prepared_restored.)
 """
 import hashlib
 import io
@@ -482,7 +493,7 @@ def main():
             check("W no candidate left", [p.name for p in dw.iterdir() if "candidate" in p.name], [])
             ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
             check("W insole.json written", (ins.get("version"), (ins.get("gates") or {}).get("refusal")),
-                  (6, fi.SOLID_REFUSED))
+                  (7, fi.SOLID_REFUSED))
             near("W boxes insole_cover", ins.get("insole_cover"), 1.0, 1e-6)
             near("W boxes vamp_cover", ins.get("vamp_cover"), 912 / 7826, 1e-6)
             near("W boxes opening_share", ins.get("opening_share"), 96 / 240, 1e-6)
@@ -495,13 +506,20 @@ def main():
             from _footwear_fixtures import wedge
             from app.core import glb_mesh
             wp, wf = wedge()
-            (dw / "prepared.glb").write_bytes(glb_mesh.static_glb(wp, wf, np.zeros((len(wp), 2))))
+
+            def put_mesh(P_, F_):
+                # a mesh step's output, written by hand: raw.glb AND prepared.glb (the fake decimation copies raw,
+                # so the insole step's re-make from raw.glb — INSOLE_VERSION 7 — gives the same file)
+                blob_ = glb_mesh.static_glb(P_, F_, np.zeros((len(P_), 2)))
+                (dw / "raw.glb").write_bytes(blob_)
+                (dw / "prepared.glb").write_bytes(blob_)
+            put_mesh(wp, wf)
             c0 = svc.counts()
             res = fs.run_source("shoe_w", steps=["insole"], force=True)
             check("W insole ok", (res.get("ok"), res.get("ran")), (True, ["insole"]))
             check("W insole no service call", svc.counts(), c0)
             rec = fs.step_record("shoe_w", ssig_w, "insole")
-            check("W insole record", (rec.get("accepted"), rec.get("version")), (True, 6))
+            check("W insole record", (rec.get("accepted"), rec.get("version")), (True, 7))
             near("W insole pitch", (rec.get("nominal") or {}).get("pitch_deg"), 30.61, 0.1)
             ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
             near("W insole.json heel seat", (ins.get("nominal") or {}).get("heel_seat_h_m"), 0.09, 1e-5)
@@ -511,7 +529,7 @@ def main():
             bp, bf = wedge(shaft=0.26, cap=True)
             n_uncapped = len(wedge(shaft=0.26)[1])
             check("cap fixture 160 faces more", len(bf) - n_uncapped, 160)
-            (dw / "prepared.glb").write_bytes(glb_mesh.static_glb(bp, bf, np.zeros((len(bp), 2))))
+            put_mesh(bp, bf)
             raw_before = (dw / "raw.glb").read_bytes()
             c0 = svc.counts()
             res = fs.run_source("shoe_w", steps=["insole"], force=True)
@@ -526,19 +544,53 @@ def main():
             check("W raw.glb untouched", (dw / "raw.glb").read_bytes() == raw_before, True)
             ins = json.loads((dw / "insole.json").read_text(encoding="utf-8"))
             check("W insole.json shaft", (ins.get("version"), (ins.get("shaft") or {}).get("cap_removed"),
-                                          (ins.get("shaft") or {}).get("class")), (6, 160, "ankle"))
+                                          (ins.get("shaft") or {}).get("class")), (7, 160, "ankle"))
             near("W insole.json collar", (ins.get("shaft") or {}).get("collar_h_raw"), 0.17, 1e-6)
             rec = fs.step_record("shoe_w", ssig_w, "insole")
             check("W insole record cap_removed", (rec.get("accepted"), rec.get("version"), rec.get("cap_removed")),
-                  (True, 6, 160))
+                  (True, 7, 160))
             prepared_after = (dw / "prepared.glb").read_bytes()
             c0 = svc.counts()
             res = fs.run_source("shoe_w")
             check("W capped rerun", (res.get("ok"), res.get("ran"), svc.counts() == c0), (True, [], True))
             check("W prepared.glb unchanged on rerun", (dw / "prepared.glb").read_bytes() == prepared_after, True)
-            (dw / "prepared.glb").write_bytes(glb_mesh.static_glb(wp, wf, np.zeros((len(wp), 2))))
+            put_mesh(wp, wf)
             res = fs.run_source("shoe_w", steps=["insole"], force=True)
             check("W pump insole restored", (res.get("ok"), res.get("ran")), (True, ["insole"]))
+
+            print("[S11] a prepared.glb an older insole stripped is re-made from raw.glb")
+            tp, tf = wedge(tongue=True)
+            put_mesh(tp, tf)
+            res = fs.run_source("shoe_w", steps=["insole"], force=True)
+            check("W tongue insole ok, nothing stripped", (res.get("ok"), fs.step_record("shoe_w", ssig_w, "insole").get("cap_removed")),
+                  (True, 0))
+            raw_t = (dw / "raw.glb").read_bytes()
+            check("W tongue mesh record hash = prepared.glb", fs.step_record("shoe_w", ssig_w, "mesh").get("prepared_sha256"),
+                  hashlib.sha256((dw / "prepared.glb").read_bytes()).hexdigest())
+            # what a version-5 insole left: 24 triangles cut out of prepared.glb (here the tongue box's end walls)
+            (dw / "prepared.glb").write_bytes(glb_mesh.static_glb(tp, tf[:-24], np.zeros((len(tp), 2))))
+            check("W stripped prepared.glb 348 faces", len(glb_mesh.static_arrays((dw / "prepared.glb").read_bytes())[1]), 348)
+            n_dec = len(DECIMATE_CALLS)
+            c0 = svc.counts()
+            res = fs.run_source("shoe_w", steps=["insole"], force=True)
+            back = glb_mesh.static_arrays((dw / "prepared.glb").read_bytes())[1]
+            rec_i = fs.step_record("shoe_w", ssig_w, "insole")
+            check("W re-made from raw.glb: one decimation (60000, merged), 372 faces, recorded, no service call "
+                  "(80cdcd96: 348 faces kept, no prepared_restored)",
+                  (len(DECIMATE_CALLS) - n_dec, DECIMATE_CALLS[-1]["target"], DECIMATE_CALLS[-1]["merge_vertices"], len(back),
+                   rec_i.get("prepared_restored"), rec_i.get("version"), rec_i.get("accepted"), svc.counts() == c0),
+                  (1, 60000, True, 372, True, 7, True, True))
+            check("W raw.glb untouched by the re-make", (dw / "raw.glb").read_bytes() == raw_t, True)
+            check("W mesh record hash updated", fs.step_record("shoe_w", ssig_w, "mesh").get("prepared_sha256"),
+                  hashlib.sha256((dw / "prepared.glb").read_bytes()).hexdigest())
+            n_dec = len(DECIMATE_CALLS)
+            res = fs.run_source("shoe_w", steps=["insole"], force=True)
+            check("W second insole run: no re-make", (res.get("ok"), len(DECIMATE_CALLS) - n_dec,
+                                                       fs.step_record("shoe_w", ssig_w, "insole").get("prepared_restored")),
+                  (True, 0, False))
+            put_mesh(wp, wf)
+            res = fs.run_source("shoe_w", steps=["insole"], force=True)
+            check("W pump insole back", (res.get("ok"), res.get("ran")), (True, ["insole"]))
 
             svc.mesh_answer = lambda: two_boxes(False)
             edit.answers = [lambda: png(flat(shoe(4)))]

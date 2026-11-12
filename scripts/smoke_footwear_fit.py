@@ -18,7 +18,7 @@ footwear_insole.analyse_arrays (frame = the wedge's own coordinates).
 
 Expected, by hand:
 [F0] constants: FOOTWEAR_FIT_VERSION 5 (the foot below the ankle, per-band contacts), BALL_SOLVE_STEPS 8, BALL_SOLVE_TOL_RAD 1e-7, ALLOW_M 0.005, BLEND_M 0.015, WIDTH_CAP 1.10, WIDTH_CAP_MIN 1.00,
-     SLIM_MAX_SHARE 0.18, FIT_GATES verbatim; every gate refuses (gating True), there is no ACTIVE_IN_P2 any more
+     SHOE_WIDTH_CAP 1.65 (fit version 13), SLIM_MAX_SHARE 0.18, FIT_GATES verbatim; every gate refuses (gating True), there is no ACTIVE_IN_P2 any more
      (fit version 3, Task 15).
 [F9] joint_bind_matrices(glb) = inverse(inverseBindMatrix) per normalised joint name: the fixture's IBMs are
      the negated joint translations -> "leftfoot" = translation (0, 0.08, -0.10), "righttoebase" =
@@ -67,11 +67,14 @@ Expected, by hand:
      weight 100 % Foot) lands 0.02 behind the posed heel contact (x_h k = d_heel = 0.02) at its height, at
      the foot's centre + 0.04 k x 1.10 to the right: (-0.06937 - 0.02, 0.08 - 0.05646, -0.10 + 0.038950) =
      (-0.08937, 0.02354, -0.06105) (+-1e-4).
+[F1]-[F8] run at the Wardrobe width cap 1.10 given EXPLICITLY (fit_pair(width_cap=1.10)): since fit version 13 the
+     DEFAULT (None) widens a shoe without a shaft to the foot ([F13]) — the wedge to 1.2003 — and these numbers are
+     the capped fit's.
 [F5] width: foot 0.085 vs insole 0.08 k = 0.07082 at the ball -> needed 0.085 / 0.07082 = 1.2003 (+-0.002)
      both sides, applied min(1.10, 1.2003) = 1.10, slim_needed = 1 - 0.07082 x 1.10 / 0.085 = 1 - 0.07790 /
      0.085 = 0.0835 (+-0.001). A 0.10 m wide foot: needed 1.4120, slim_needed 1 - 0.07790 / 0.10 = 0.2210
-     > 0.18 -> the gate reads not ok but is not active in P2 -> the fit stays ok. A width cap of 1.05 ->
-     width_factor 1.05; a cap of 1.5 is clamped to 1.10.
+     > 0.18 -> refused (at the cap 1.10). A width cap of 1.05 -> width_factor 1.05; a cap of 1.5 is clamped to
+     1.10 (a Wardrobe cap never goes past WIDTH_CAP; only the default widens past it, [F13]).
 [F6] mirror: the bodies are mirror images about z = 0 and the right shoe is the left's mirror, so in bind
      space right.positions = left.positions x (1, 1, -1) (1e-9) and right.indices = left.indices with
      the winding flipped -> the signed volume (sum det(a, b, c) / 6) is equal; every shoe's vertex normals
@@ -132,6 +135,23 @@ FOOT_WEIGHT_MIN like the auto-weighted male shins.
      before this task — the constants in this docstring (k 0.88522, extension 24.29, lift 0.05613, ...) are
      unchanged, the version-5 rule changes nothing on a foot whose heel is on the floor; FOOTWEAR_FIT_VERSION 5,
      CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03 (the arch diagnostic keeps it).
+[F13] a shoe without a shaft is widened to the foot (fit version 13, boots plan Ruling 15g). The closed clog
+     (scripts/_footwear_fixtures.clog, class none: insole shaft.has_shaft False) on foot_body_glb(ball_width=w):
+     k 1.023599, the insole's ball width 0.08 k = 0.081888, so needed = w / 0.081888 (the foot box is w wide).
+     applied_width_cap(clog insole) = 1.65 (default), (…, 1.05) = 1.05, (…, 1.5) = 1.10; the flat boot's
+     (class ankle, has_shaft True) = 1.10; an insole dict without has_shaft = 1.10.
+     (a) w 0.12: needed 0.12 / 0.081888 = 1.46542 (+-1e-4) -> width_factor = needed, slim 0, width_cap 1.10
+         recorded (the fingerprint's default), width_cap_applied 1.65, the fit ok; the cut: every gate 0
+         (deep_outside, visible_poke, throat_ledge_p95_mm, toe_conform_m), ok. The right shoe's widest bind
+         x-section: the clog's walls z +-0.04 raw -> +-0.04 k 1.46542 = +-0.060000 about the foot's midline
+         (z 0.10; +-1e-5) — exactly the foot box's +-0.06. (On 80cdcd96 — fit version 12 — the factor stays
+         1.10 and the fit is refused: slim_needed 1 - 1.10 / 1.46542 = 0.2494 > 0.18.)
+     (b) the same at the Wardrobe cap 1.05: width_factor 1.05, slim 1 - 1.05 / 1.46542 = 0.2835 -> refused
+         (a set cap still keeps the item's look).
+     (c) w 0.14: needed 1.70966 > 1.65 -> width_factor 1.65 (never past it), slim 1 - 1.65 / 1.70966 = 0.0349,
+         the fit ok.
+     (d) the flat boot (flat_boot(), a shaft) on the w 0.12 foot: width_factor 1.10 (the boot's cap),
+         slim 0.2494 -> refused, as before.
 """
 import math
 import sys
@@ -168,8 +188,8 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 12 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
-          and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10
+    check(ff.FOOTWEAR_FIT_VERSION == 13 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+          and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10 and ff.SHOE_WIDTH_CAP == 1.65
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
     check(ff.FIT_GATES == {"ball_placement_mm": ("max", 3.0), "lift_asymmetry_mm": ("max", 10.0),
                            "slim_needed": ("max", 0.18), "stand_floor_mm": ("range", (-3.0, 3.0))}
@@ -199,7 +219,7 @@ def main() -> int:
     P, F = fx.wedge()
     insole = footwear_insole.analyse_arrays(P, F)
     shoe = fx.shoe_garment(P, F)
-    fit = ff.fit_pair(insole, shoe, body, joints)
+    fit = ff.fit_pair(insole, shoe, body, joints, width_cap=1.10)   # [F1]-[F8]: the capped fit (docstring)
     rec = fit.record
     k = rec["scale"]["k_m_per_unit"]
 
@@ -240,7 +260,7 @@ def main() -> int:
           and near(g["slim_needed"]["value"], 0.0835, 1e-3) and g["slim_needed"]["ok"],
           f"[F5] width needed {sc['width_needed']['left']}, applied {sc['width_factor']}, slim {sc['slim_needed']}")
     wide = fx.foot_body_glb(0.10)
-    fw = ff.fit_pair(insole, shoe, glb_mesh.body_arrays(wide), glb_mesh.joint_bind_matrices(wide))
+    fw = ff.fit_pair(insole, shoe, glb_mesh.body_arrays(wide), glb_mesh.joint_bind_matrices(wide), width_cap=1.10)
     gw = fw.record["gates"]["slim_needed"]
     check(near(gw["value"], 0.2210, 1e-3) and not gw["ok"] and gw["gating"] and not fw.ok
           and fw.reasons[:1] == ["slim_needed 0.2209 > 0.18 (share of the ball width the forefoot slimming must take off, "
@@ -349,8 +369,55 @@ def main() -> int:
               f"[F11] ok {fit_hu.ok}, reasons {fit_hu.reasons}, foot_pose root lift {fit_hu.foot_pose.get('root_lift_m')}")
 
     # [F12] the version and the two band constants ([F1]-[F8] above are the unchanged regression)
-    check(ff.FOOTWEAR_FIT_VERSION == 12 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
-          "[F12] FOOTWEAR_FIT_VERSION 12, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
+    check(ff.FOOTWEAR_FIT_VERSION == 13 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
+          "[F12] FOOTWEAR_FIT_VERSION 13, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
+
+    # [F13] a shoe without a shaft is widened to the foot
+    from app.core import footwear_cut
+    Pc, Fc = fx.clog()
+    ins_c = footwear_insole.analyse_arrays(Pc, Fc)
+    Pb2, Fb2 = fx.flat_boot()
+    ins_b = footwear_insole.analyse_arrays(Pb2, Fb2)
+    check((ins_c["shaft"].get("has_shaft"), ins_b["shaft"].get("has_shaft"), ff.applied_width_cap(ins_c),
+           ff.applied_width_cap(ins_c, 1.05), ff.applied_width_cap(ins_c, 1.5), ff.applied_width_cap(ins_b),
+           ff.applied_width_cap({"shaft": {"class": "none"}}))
+          == (False, True, 1.65, 1.05, 1.10, 1.10, 1.10),
+          "[F13] applied_width_cap: clog 1.65 / 1.05 / 1.5 -> 1.10, boot 1.10, no has_shaft 1.10")
+
+    def wide_fit(w, Pw_, Fw_, ins_, cap=None):
+        g_ = fx.foot_body_glb(w)
+        j_ = glb_mesh.joint_bind_matrices(g_)
+        return ff.fit_pair(ins_, fx.shoe_garment(Pw_, Fw_), glb_mesh.body_arrays(g_), j_, width_cap=cap), g_, j_
+    fa, ga, ja = wide_fit(0.12, Pc, Fc, ins_c)
+    sa = fa.record["scale"]
+    check(fa.ok and near(sa["k_m_per_unit"], 1.023599, 2e-6) and near(sa["width_needed"]["left"], 0.12 / 0.081888, 1e-4)
+          and near(sa["width_factor"], 1.46542, 1e-4) and sa["slim_needed"] == {"left": 0.0, "right": 0.0}
+          and sa["width_cap"] == 1.10 and sa["width_cap_applied"] == 1.65,
+          f"[F13] (a) w 0.12: widened x{sa['width_factor']:.5f} = needed, slim 0, cap 1.10 recorded, 1.65 applied "
+          f"(80cdcd96: x1.10, slim 0.2494 refused) — ok {fa.ok} {fa.reasons}")
+    pr_a = glb_mesh.body_primitive_arrays(ga)[0]
+    cut_a = footwear_cut.cut_description(fa, ins_c)
+    after_a, _st = footwear_cut.apply_cut(pr_a, cut_a, ja)
+    ga_ = footwear_cut.cut_gates(after_a, fa.parts, cut_a, joints=ja, body_before=pr_a)
+    check(ga_["ok"] and all(v["value"] == 0.0 for v in ga_["gates"].values()),
+          f"[F13] (a) the cut: every gate 0 — {({k: v['value'] for k, v in ga_['gates'].items()})}")
+    zr = fa.parts["right"]["foot"].positions[:, 2]
+    check(near(zr.min(), 0.10 - 0.06, 1e-5) and near(zr.max(), 0.10 + 0.06, 1e-5),
+          f"[F13] (a) the right shoe z {zr.min():.6f}..{zr.max():.6f} = 0.10 +- 0.04 k x1.46542 = +-0.06 (the foot box)")
+    fb_, _g, _j = wide_fit(0.12, Pc, Fc, ins_c, cap=1.05)
+    check(not fb_.ok and fb_.record["scale"]["width_factor"] == 1.05
+          and near(fb_.record["gates"]["slim_needed"]["value"], 1 - 1.05 / 1.46542, 1e-3),
+          f"[F13] (b) Wardrobe cap 1.05: x1.05, slim {fb_.record['gates']['slim_needed']['value']:.4f} = 0.2835 refused")
+    fc_, _g, _j = wide_fit(0.14, Pc, Fc, ins_c)
+    check(fc_.ok and fc_.record["scale"]["width_factor"] == 1.65
+          and near(fc_.record["gates"]["slim_needed"]["value"], 1 - 1.65 / (0.14 / 0.081888), 1e-3),
+          f"[F13] (c) w 0.14: needed {fc_.record['scale']['width_needed']['left']:.5f} -> x1.65, slim "
+          f"{fc_.record['gates']['slim_needed']['value']:.4f} = 0.0349, ok {fc_.ok}")
+    fd_, _g, _j = wide_fit(0.12, Pb2, Fb2, ins_b)
+    check(not fd_.ok and fd_.record["scale"]["width_factor"] == 1.10
+          and near(fd_.record["gates"]["slim_needed"]["value"], 0.2494, 1e-3),
+          f"[F13] (d) the flat boot on w 0.12: x{fd_.record['scale']['width_factor']} (boot cap), slim "
+          f"{fd_.record['gates']['slim_needed']['value']:.4f} refused")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0

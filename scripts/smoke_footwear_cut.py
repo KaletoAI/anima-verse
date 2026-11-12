@@ -64,7 +64,7 @@ Expected, by hand:
      per vertex 12 + 12 + 8 + 8 + 16 + 12 (target) = 68 bytes, per face 12 -> old 1344*68 + 2560*12 = 122112, new
      1088*68 + 1984*12 = 97792, difference 24320 (every view is a multiple of 4, no padding changes); the file is
      shorter.
-[X6] cut_description on the fixture fit (foot_body_glb + the wedge pump, fit_pair at cap 1.10; k = 0.8853366,
+[X6] cut_description on the fixture fit (foot_body_glb + the wedge pump, fit_pair(width_cap=1.10) — explicit since fit version 13; k = 0.8853366,
      width factor 1.10): both sides present with the body's joint names; the frame round trip: the fit's Foot-rigid
      shoe vertices (ToeBase weight 0) mapped by frame @ inv(J_LeftFoot) land on the raw wedge scaled by (k, k,
      1.1 k) within 1e-6 (the wedge's own frame is the identity); the throat front = the first station with a roof
@@ -524,7 +524,9 @@ def main() -> int:
     bglb = foot_body_glb()
     body = glb_mesh.body_arrays(bglb)
     joints = glb_mesh.joint_bind_matrices(bglb)
-    fit = ff.fit_pair(ins, shoe_garment(Pw, Fw), body, joints)
+    # at the Wardrobe cap 1.10 given explicitly: the default widens the wedge (a shoe without a shaft) to the foot,
+    # x1.2003 (fit version 13, smoke_footwear_fit [F13]); [X6] / [X8] are the capped fit's numbers
+    fit = ff.fit_pair(ins, shoe_garment(Pw, Fw), body, joints, width_cap=1.10)
     check("fixture fit ok", fit.ok, str(fit.reasons))
     k = fit.record["scale"]["k_m_per_unit"]
     cut = fc.cut_description(fit, ins)
@@ -713,7 +715,7 @@ def main() -> int:
     from app.core.garment_fit import weld
     Pw, Fw = flat_boot(shaft=0.16, shaft_to=0.12)
     check("unwelded tube 3828 faces / 11484 vertices", (len(Fw), len(Pw)) == (3828, 11484), f"{len(Fw)} {len(Pw)}")
-    check("FOOTWEAR_FIT_VERSION 12 (the turn, the widen, the collar plane; the push recorded)", ff.FOOTWEAR_FIT_VERSION == 12)
+    check("FOOTWEAR_FIT_VERSION 13 (the turn, the widen, the collar plane; the push recorded; a shoe widened to the foot)", ff.FOOTWEAR_FIT_VERSION == 13)
     inst = fi.analyse_arrays(Pw, Fw)
     glb_a = foot_body_glb(leg_cell=0.01)
     body_a, joints_a = glb_mesh.body_arrays(glb_a), glb_mesh.joint_bind_matrices(glb_a)

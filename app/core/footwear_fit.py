@@ -50,8 +50,10 @@ coordinates and is read in the frame of its ``insole.json`` (``footwear_insole``
    right foot its mirror (the shoe's lateral axis negated). Then the footprint midline goes onto the
    insole midline (the spike's v2: a line fitted to (foot slab middle - insole middle) over
    ``MIDLINE_SLABS`` slabs from the heel contact to ``MIDLINE_PAST_BALL_M`` past the ball, the shoe turned
-   and shifted by it) and the shoe is widened by ONE width factor for the pair, ``min(width_cap,
-   max(1, needed))`` with needed = foot width / insole width at the ball (each side's needed is recorded;
+   and shifted by it) and the shoe is widened by ONE width factor for the pair, ``min(cap,
+   max(1, needed))`` with needed = foot width / insole width at the ball and cap = ``applied_width_cap`` (the
+   Wardrobe's width cap; a shoe without a shaft at the default ``SHOE_WIDTH_CAP`` 1.65, fit version 13; each
+   side's needed is recorded;
    what the cap leaves is ``slim_needed`` = the share of the ball width the forefoot slimming of Task 14
    must take off). No vertical rest step (the spike's 3rd-percentile plantar rest moved 1 mm).
 5. **Root lift** = the largest per-side lift that puts that side's shoe ground on the floor; the gate
@@ -214,6 +216,18 @@ fix 3): Kira band push p95 26.6 / max 30.9 mm (whole shaft 21.6 / 31.1), Kai 36.
 push: the image's shaft is 64 mm wide at the collar against an 87-mm calf (a flattened single-view tube), the
 spec's "too narrow for this calf". The Work Shoes on Kai read 16.2 / 23.4 mm (refused on p95 by 1.2 mm; on the
 pre-rebuild Kai 13.5 / 20.9, accepted).
+
+Shoe width (fit version 13, boots plan Ruling 15g). A shoe's width is the mesher's guess from one picture, so a shoe
+WITHOUT a shaft (insole ``shaft.has_shaft`` False) may be widened to the wearer's foot: the width factor is the
+needed one up to ``SHOE_WIDTH_CAP`` 1.65 instead of ``WIDTH_CAP`` 1.10, the forefoot slimming takes only what is left
+over. A Wardrobe cap below 1.10 still caps; a boot keeps 1.10. The record carries ``scale.width_cap_applied``; the
+delivered gates (cut deep_outside / visible_poke / throat / toe conform, the penetration of the delivered check)
+decide. Measured on copies 2026-11-12 (clone base bodies Kai ``base634402e5``, Kira ``base20d5701a``): the Sneekers
+on Kai needed 1.604 / 1.466 (was 1.10 + slim 0.314, refused) -> widened x1.604, slim 0, but the cut still refuses
+(deep_outside 25.3 / 18.0 %, toe_conform 52.0 / 49.9 mm — the mesh's toe box is too LOW for Kai's toes, not too
+narrow); the Black Stilettos on Kira needed 1.317 -> x1.317, slim 0, refused by lift asymmetry 10.46 mm (> 10, as at
+1.10) and the cut (deep_outside 31.0 %, toe_conform 137 mm); the Business Heels on Kira widen from 1.10 + slim 0.022
+to x1.124, slim 0, still accepted (visible_poke 0.0028 -> 0.0017).
 """
 import math
 from dataclasses import dataclass, field
@@ -242,14 +256,26 @@ from app.core.footwear_gates import check_gates
 #:    only, the push's body field hole-filled per slice (Task 9 fix 4, Ruling 15e);
 #: 12: the shaft push recorded, not gating (``SHAFT_GATING``); the boot body cut's collar weights and the gate
 #:    ``collar_flex_poke`` (``footwear_cut`` version 6) — a stored v11 boot fit's body and gates differ (Task 9 fix 5,
-#:    Ruling 15f).
-FOOTWEAR_FIT_VERSION = 12
+#:    Ruling 15f);
+#: 13: a shoe without a shaft is widened to the foot up to ``SHOE_WIDTH_CAP`` (Ruling 15g).
+FOOTWEAR_FIT_VERSION = 13
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
 BLEND_M = 0.015
-#: The largest width factor a fit may apply (spec § 5.5), also the default cap.
+#: The largest width factor a fit may apply (spec § 5.5), also the default cap — the cap of a boot (an item whose
+#: insole has a shaft: its shaft must not grow past the look of the item) and the Wardrobe slider's maximum.
 WIDTH_CAP = 1.10
+#: A shoe WITHOUT a shaft (the insole's ``shaft.has_shaft`` False) at the default cap is widened to the wearer's
+#: foot up to this (fit version 13, boots plan Ruling 15g): its width is the mesher's guess from one side view of
+#: the item image, not a measured fact — a real shoe is as wide as the foot in it. The factor is the ball width of
+#: the wider foot over the insole's (``width_needed``); the margin is the cut's own (``footwear_cut.CLEARANCE_M``: the
+#: forefoot slimming takes the foot that far inside the widened walls). A width cap set in the Wardrobe (below
+#: ``WIDTH_CAP``: the slider's maximum IS the default, ``garment_footwear.set_width_cap``) still caps the shoe — the
+#: user keeps the item's look; a boot keeps ``WIDTH_CAP`` for the whole item, its shaft its own
+#: ``SHAFT_WIDTH_CAP_*``. The applied cap is the record's ``scale.width_cap_applied``. Measured: module
+#: docstring, "Shoe width".
+SHOE_WIDTH_CAP = 1.65
 #: The smallest per-fit width cap override.
 WIDTH_CAP_MIN = 1.00
 #: The largest share of the ball width the forefoot slimming may take off (gate ``slim_needed``).
@@ -687,16 +713,20 @@ def _local_axis(J: np.ndarray, axis_w: np.ndarray) -> np.ndarray:
 
 
 def fit_pair(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
-             joints: Dict[str, np.ndarray], *, width_cap: float = WIDTH_CAP) -> FootwearFit:
+             joints: Dict[str, np.ndarray], *, width_cap: Optional[float] = None) -> FootwearFit:
     """Fit one shoe source (``shoe`` in its mesher coordinates, ``insole`` its analysis) to both feet of
     ``body`` (module docstring). A shoe that cannot be put on at all returns ``ok False`` with the reason
     and no parts; a fit that ran returns everything, ``ok`` = every gate of ``FIT_GATES`` (and, for a boot, the
     gating ``SHAFT_GATES``) passed (the cut gates are the fit step's, ``garment_footwear.fit``). ValueError
-    for a body without the foot joints (a boot also needs the side's Leg and UpLeg)."""
-    width_cap = min(WIDTH_CAP, max(WIDTH_CAP_MIN, float(width_cap)))
+    for a body without the foot joints (a boot also needs the side's Leg and UpLeg). ``width_cap`` None = the
+    default (``applied_width_cap``: a shoe without a shaft widens to the foot up to ``SHOE_WIDTH_CAP``, a boot to
+    ``WIDTH_CAP``; recorded as ``scale.width_cap`` ``WIDTH_CAP``, the fingerprint's default); a number = the
+    Wardrobe's cap, clamped to ``WIDTH_CAP_MIN`` .. ``WIDTH_CAP``, applied as it is."""
+    applied = applied_width_cap(insole, width_cap)
+    width_cap = WIDTH_CAP if width_cap is None else min(WIDTH_CAP, max(WIDTH_CAP_MIN, float(width_cap)))
     feet = measure_feet(body, joints)
     try:
-        return _fit(insole, shoe, body, joints, feet, width_cap)
+        return _fit(insole, shoe, body, joints, feet, width_cap, applied)
     except _Refused as exc:
         reason = str(exc)
         return FootwearFit(ok=False, reasons=[reason], record={"version": FOOTWEAR_FIT_VERSION, "error": reason},
@@ -876,8 +906,20 @@ def _shaft_turn(Pw: np.ndarray, yf: np.ndarray, s_band: np.ndarray, *, y_lo: flo
             "shift_m": float(np.linalg.norm(t)), "calf_centre": calf_c, "slabs": len(ys), "rim": rim_t}
 
 
+def applied_width_cap(insole: Dict[str, Any], width_cap: Optional[float] = None) -> float:
+    """The width factor's cap for ``insole``'s item: a Wardrobe cap (a number) clamped to ``WIDTH_CAP_MIN`` ..
+    ``WIDTH_CAP``; without one (None, the default) ``SHOE_WIDTH_CAP`` for a shoe without a shaft, ``WIDTH_CAP``
+    for a boot (``SHOE_WIDTH_CAP`` docstring). An insole without ``shaft.has_shaft`` (before INSOLE_VERSION 6)
+    counts as a shaft: the old cap."""
+    if width_cap is not None:
+        return min(WIDTH_CAP, max(WIDTH_CAP_MIN, float(width_cap)))
+    shaft = insole.get("shaft") if isinstance(insole.get("shaft"), dict) else {}
+    return SHOE_WIDTH_CAP if shaft.get("has_shaft", True) is False else WIDTH_CAP
+
+
 def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
-         joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float) -> FootwearFit:
+         joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float,
+         cap_applied: float) -> FootwearFit:
     from app.core.footwear_insole import BALL_SHARE, HEEL_SEAT_M, PITCH_HEEL_SHARE, insole_map, topline_stations
     ins = _Insole(insole)
     P = np.asarray(body.positions, np.float64)
@@ -967,7 +1009,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
 
     # one width factor for the pair
     needed = {s: w["fw_ball"] / w["iw_ball"] for s, w in work.items()}
-    width_factor = min(width_cap, max(1.0, max(needed.values())))
+    width_factor = min(cap_applied, max(1.0, max(needed.values())))
     slim = {s: max(0.0, 1.0 - w["iw_ball"] * width_factor / w["fw_ball"]) for s, w in work.items()}
 
     for side, w in work.items():
@@ -1342,7 +1384,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         "scale": {
             "k_m_per_unit": k, "length_m": float(np.ptp(used[:, 0])) * k, "width_m": float(np.ptp(used[:, 2])) * k,
             "height_m": float(np.ptp(used[:, 1])) * k, "width_factor": width_factor,
-            "width_needed": needed, "width_cap": width_cap, "slim_needed": slim,
+            "width_needed": needed, "width_cap": width_cap, "width_cap_applied": cap_applied, "slim_needed": slim,
             "insole_arc_m": ins.arc_at(x_end) * k, "foot_len_m": foot_len, "toe_h_m": toe_h,
         },
         "sides": sides,

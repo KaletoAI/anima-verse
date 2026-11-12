@@ -186,10 +186,10 @@ def main() -> int:
     from app.core import footwear_insole, garment_footwear, glb_mesh
 
     # [B6]
-    check(ff.FOOTWEAR_FIT_VERSION == 12 and ff.COLLAR_BAND_M == 0.03 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
+    check(ff.FOOTWEAR_FIT_VERSION == 13 and ff.COLLAR_BAND_M == 0.03 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
           and ff.SPLIT_MARGIN_M == 0.01 and ff.SHAFT_CLEAR_M == 0.006 and ff.FOLLOW_RING_MIN == 3
           and ff.FOLLOW_OPTIONAL == ("shaft_leg_follow_deg",) and ff.KNEE_MARGIN_M == 0.04
-          and ff.SHAFT_CLIP_MAX_M == 0.05, "[B6] version 12, no boot gate, split + knee + collar band constants")
+          and ff.SHAFT_CLIP_MAX_M == 0.05, "[B6] version 13, no boot gate, split + knee + collar band constants")
     check(ff.SHAFT_GATES == {"shaft_push_p95_m": ("max", 0.015), "shaft_push_max_m": ("max", 0.030),
                              "shaft_inside_share": ("max", 0.01), "seam_gap_p95_mm": ("max", 2.0),
                              "seam_stretch_max": ("max", 1.5), "shaft_leg_follow_deg": ("max", 1.0),

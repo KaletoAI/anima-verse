@@ -141,8 +141,11 @@ from app.core.footwear_gates import check_gates
 #: 3: the shaft block (collar height, class, tube slabs, closed share, cap removal);
 #: 4: a closed slab ring needs a largest angular gap < 90° and an extent ≥ 0.1 L (tongue / pull tab are no shaft);
 #: 5: a cap face lies inside the opening's inner loop (the collar rim of a real mesh is no cap);
-#: 6: a class-``none`` shoe has no shaft: its slabs recorded, the shaft gates not judged, no cap (Task 9 fix 5).
-INSOLE_VERSION = 6
+#: 6: a class-``none`` shoe has no shaft: its slabs recorded, the shaft gates not judged, no cap (Task 9 fix 5);
+#: 7: the insole step measures the mesh step's own ``prepared.glb`` — one an older insole step stripped (a version-5
+#:    "cap" cut out of a sneaker's tongue or a pump's counter) is re-made from ``raw.glb`` first
+#:    (``footwear_source._step_insole``, Ruling 15g); the bump makes every stored insole run once more.
+INSOLE_VERSION = 7
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26

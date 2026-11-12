@@ -19,7 +19,7 @@ width 0.085, height 0.02; 1056 faces / 816 vertices: per foot 516 / 384 — sole
 grids — plus 12 / 24 per leg column) with its sidecar and
 unrigged copy. Item ``heels`` (feet, own mesh) held by Demo; its current source folder holds the closed flat
 clog of ``_footwear_fixtures.clog`` as ``prepared.glb`` (``glb_mesh.static_glb``), ``insole.json`` =
-``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 6, fit version 12: the
+``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 7, fit version 13: the
 cut applied and gated, toes conformed, the foot measured below the ankle, a boot split at the ankle) — the item steps are done, a run only fits. Item ``boots``: the
 closed flat boot ``flat_boot(shaft=0.16)`` of the boots round (the clog with a 16-cm tube over x in [0, 0.10]),
 its prepared.glb's material ``doubleSided`` False; item ``pumps``: the wedge pump itself. The clog is the one
@@ -50,10 +50,10 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      node, fit version 6); its body (garment nodes excluded) is
      the CUT base: 24 faces / 48 vertices (fewer than the bare body's 1056 / 816), and in both sides' cut
      frames no remaining vertex lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9 for
-     every one). Record: method "shoe", kind "footwear", version 12, fit_version 12, accepted, ssig = the current
+     every one). Record: method "shoe", kind "footwear", version 13, fit_version 13, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
-     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 6}}; scale.k_m_per_unit 1.023599
+     sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 7}}; scale.k_m_per_unit 1.023599
      (+-2e-4); sides.left.extension.deg 0 (|deg| <= 1e-6) both sides; root_lift_m 0.010236 (+-1e-5);
      insole_w_ball_mm 81.89 (+-0.05), width needed 1.0380 (+-0.002), applied 1.0380 (+-0.002), width_cap 1.10;
      slim_needed 0 (both sides); cut {version 3, sides left + right with foot_joint LeftFoot / RightFoot,
@@ -114,10 +114,13 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      entries: deep_outside {ok False, gating True}, slim_needed {ok True}), no fit file; run_garment -> {ok False,
      step "fit", error_type "GateRefused"}, cached_failure(Demo, pumps) = {step "fit", fsig} and info
      steps.fit.status "refused". The base replaced by the 0.10 m wide feet (foot_body_glb(0.10), sha changes):
-     run_garment(Demo, pumps) -> refused BEFORE any cut by the fit's own gate, error containing
-     "slim_needed 0.2209 > 0.18" (Task 9's hand value 1 - 0.07790 / 0.10 = 0.2210, +-1e-3; gates.slim_needed
-     {ok False, gating True}). An older fit reads stale: a pumps record of fit_version 9 (and 8, 7), accepted on
-     the current base bytes -> fit_state "stale" (fit_version 12 -> "accepted").
+     run_garment(Demo, pumps) at the DEFAULT cap (fit version 13): the pump has no shaft, so it is widened to the
+     feet, x 0.10 / 0.070824 = 1.4119, slim_needed 0 (ok) -> refused by the cut (deep_outside, as on the 0.085
+     feet). With the Wardrobe cap 1.05 (set_width_cap) -> refused BEFORE any cut by the fit's own gate, error
+     containing "slim_needed 0.2563 > 0.18" (1 - 1.05 / 1.4119 = 0.2563, +-1e-3; gates.slim_needed {ok False,
+     gating True}); on 80cdcd96 the default cap 1.10 already refused it there (slim 0.2209). The cap back to the
+     default. An older fit reads stale: a pumps record of fit_version 12 (and 11, 10), accepted on the current
+     base bytes -> fit_state "stale" (fit_version 13 -> "accepted").
 """
 import hashlib
 import json
@@ -330,8 +333,8 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 12,
-             "fit_version": 12, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 13,
+             "fit_version": 13, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         # a shoe's record: the fit gates + the cut gates without the split-only ones (footwear_cut.SHAFT_CUT_GATES)
         gate_names = list(footwear_fit.FIT_GATES) + [k for k in footwear_cut.CUT_GATES if k not in footwear_cut.SHAFT_CUT_GATES]
@@ -347,7 +350,7 @@ def main() -> int:
         check("P1 parents", rec.get("parents"), {
             "body_id": bsig, "body_sha256": base_sha, "base_model_sha256": base_sha, "base_signature": bsig,
             "source": {"ssig": ssig, "empty_sha256": sha(src / "empty.png"),
-                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 6}})
+                       "mesh_sha256": sha(src / "prepared.glb"), "insole_version": 7}})
         scale = rec.get("scale") or {}
         near("P1 k", scale.get("k_m_per_unit"), 1.023599, 2e-4)
         for side in ("left", "right"):
@@ -591,15 +594,23 @@ def main() -> int:
         wide_sha = write_base(fx.foot_body_glb(0.10))
         check("P7 wide feet", (wide_sha != base_sha, base_body.current_base("Demo")), (True, (bsig, wide_sha)))
         res = garments.run_garment("Demo", pumps)
-        check("P7 slim gate refuses", (res.get("ok"), res.get("step"), "slim_needed 0.2209 > 0.18" in str(res.get("error")),
+        # fit version 13: by default the pump (no shaft) widens to the wide feet (x1.4119, slim 0) -> the cut judges
+        gw = (res.get("gates") or {}).get("slim_needed") or {}
+        check("P7 wide feet, default cap: widened, slim 0 ok, the cut refuses",
+              (res.get("ok"), res.get("step"), "deep_outside" in str(res.get("error")), gw.get("value"), gw.get("ok")),
+              (False, "fit", True, 0.0, True))
+        check("P7 Wardrobe cap 1.05", gf.set_width_cap("Demo", pumps, 1.05), True)
+        res = garments.run_garment("Demo", pumps)
+        check("P7 slim gate refuses", (res.get("ok"), res.get("step"), "slim_needed 0.2563 > 0.18" in str(res.get("error")),
                                        "deep_outside" in str(res.get("error"))), (False, "fit", True, False))
         gw = (res.get("gates") or {}).get("slim_needed") or {}
-        near("P7 slim_needed", gw.get("value"), 0.2210, 1e-3)
+        near("P7 slim_needed", gw.get("value"), 1 - 1.05 / 1.41189, 1e-3)
         check("P7 slim_needed refuses", (gw.get("ok"), gw.get("gating")), (False, True))
+        check("P7 cap back to the default", gf.set_width_cap("Demo", pumps, None), True)
         check("P7 no hub", HUB, [])
         old = gs.garment_path("Demo", pumps, FP, "fit")
         shutil.copyfile(fit_path, old)
-        for version, want in ((11, "stale"), (10, "stale"), (9, "stale"), (12, "accepted")):
+        for version, want in ((12, "stale"), (11, "stale"), (10, "stale"), (13, "accepted")):
             gs.write_record(old.with_suffix(".json"), {
                 "accepted": True, "kind": "footwear", "item_id": pumps, "fsig": FP, "body_id": bsig,
                 "body_sha256": wide_sha, "base_model_sha256": wide_sha, "fit_version": version,

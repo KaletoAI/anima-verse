@@ -55,20 +55,32 @@ WIDTH_CAP_KEY = "footwear_width_cap"
 
 
 def width_cap(profile: Dict[str, Any], item_id: str) -> float:
-    """The width cap of the character's fit of ``item_id``: the profile
-    override (``WIDTH_CAP_KEY``) clamped to ``footwear_fit.WIDTH_CAP_MIN`` ..
-    ``footwear_fit.WIDTH_CAP``, the cap itself without a valid one."""
+    """The width cap of the character's fit of ``item_id`` as the fingerprint and the Wardrobe slider read it:
+    the profile override (``width_cap_override``), ``footwear_fit.WIDTH_CAP`` without one — the default, which
+    for a shoe without a shaft means "widened to the foot up to ``footwear_fit.SHOE_WIDTH_CAP``"
+    (``footwear_fit.applied_width_cap``, fit version 13)."""
+    from app.core import footwear_fit
+    value = width_cap_override(profile, item_id)
+    return footwear_fit.WIDTH_CAP if value is None else value
+
+
+def width_cap_override(profile: Dict[str, Any], item_id: str) -> Optional[float]:
+    """The profile override (``WIDTH_CAP_KEY``) clamped to ``footwear_fit.WIDTH_CAP_MIN`` ..
+    ``footwear_fit.WIDTH_CAP``; None without a valid one or at ``WIDTH_CAP`` itself (the slider's maximum is the
+    default) — what the fit gets (``footwear_fit.fit_pair``'s ``width_cap``)."""
     from app.core import footwear_fit
     caps = profile.get(WIDTH_CAP_KEY) if isinstance(profile, dict) else None
     value = caps.get(item_id) if isinstance(caps, dict) else None
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
-        return footwear_fit.WIDTH_CAP
-    return round(min(footwear_fit.WIDTH_CAP, max(footwear_fit.WIDTH_CAP_MIN, float(value))), 4)
+        return None
+    value = round(min(footwear_fit.WIDTH_CAP, max(footwear_fit.WIDTH_CAP_MIN, float(value))), 4)
+    return None if value >= footwear_fit.WIDTH_CAP else value
 
 
 def set_width_cap(character_name: str, item_id: str, cap: Optional[float]) -> bool:
     """Store the per-fit width cap override of ``item_id`` (profile key ``WIDTH_CAP_KEY``, ``{item_id: cap}``);
-    None removes it (back to ``footwear_fit.WIDTH_CAP``). ValueError for a value that is no number or lies
+    None — or ``footwear_fit.WIDTH_CAP`` itself, the slider's maximum — removes it (back to the default,
+    ``width_cap_override``). ValueError for a value that is no number or lies
     outside ``footwear_fit.WIDTH_CAP_MIN`` .. ``footwear_fit.WIDTH_CAP``, and for an item that is no footwear
     piece of the character — nothing is stored then. One read-modify-write under the profile lock; returns
     ``save_character_profile``'s bool (True without a change). Only the fit fingerprint changes: the next run
@@ -85,6 +97,8 @@ def set_width_cap(character_name: str, item_id: str, cap: Optional[float]) -> bo
         if not footwear_fit.WIDTH_CAP_MIN <= value <= footwear_fit.WIDTH_CAP:
             raise ValueError(f"The width cap must lie between {footwear_fit.WIDTH_CAP_MIN:.2f} and "
                              f"{footwear_fit.WIDTH_CAP:.2f}")
+        if value >= footwear_fit.WIDTH_CAP:
+            value = None  # the slider's maximum is the default (a shoe without a shaft widens to the foot)
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         caps = dict(profile.get(WIDTH_CAP_KEY)) if isinstance(profile.get(WIDTH_CAP_KEY), dict) else {}
@@ -328,8 +342,8 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     from app.core import refit_pool
     tmp = refit_pool.temp_path(path)
     try:
-        out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap(profile, item_id), kind, item_id, fsig,
-                             str(tmp))
+        out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap_override(profile, item_id), kind,
+                             item_id, fsig, str(tmp))
         if not out["ok"]:
             raise _Refused("fit", "fit refused — " + "; ".join(out["reasons"]), out["gates"])
         fit_record, cut_stats = out["record"], out["cut_stats"]
@@ -383,8 +397,8 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     return path
 
 
-def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: float, kind: str, item_id: str,
-                fsig: str, out: str) -> Dict[str, Any]:
+def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Optional[float], kind: str,
+                item_id: str, fsig: str, out: str) -> Dict[str, Any]:
     """The pure part of ``fit`` (a refit-pool worker runs it — ``refit_pool``): fit the prepared shoe
     (``footwear_fit.fit_pair``) on the rigged body, cut every body primitive (``footwear_cut.apply_cut``), judge
     the cut (``cut_gates``) and graft the shoe parts. Reads nothing but its arguments; writes the fit GLB to the
@@ -736,6 +750,7 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
     slim = scale.get("slim_needed") or {}
     metrics = _numbers({
         "width_factor": scale.get("width_factor"), "width_cap": scale.get("width_cap"),
+        "width_cap_applied": scale.get("width_cap_applied"),
         "root_lift_m": record.get("root_lift_m"), "k_m_per_unit": scale.get("k_m_per_unit"),
         "length_m": scale.get("length_m"),
         **{f"{key}_{side}": value for side in ("left", "right") for key, value in (
