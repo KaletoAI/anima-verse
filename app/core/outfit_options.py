@@ -28,9 +28,10 @@ whose item is ``closable`` (``garment_set.closable_of``) is worn ``closed`` (the
 stores only the open set — ``equipped_options.piece_state = {item_id: "open"}``; "closed" pops the key. A stored
 "open" counts only while the item is worn AND closable (``piece_states`` filters), so turning ``closable`` off on
 the item falls back to closed without a write. ``inventory.equip_piece`` pops the equipped item's entry (a newly
-worn piece is closed). Closed is the identity state: every key and every text is unchanged by it — 2D image
-prompts and the chat outfit line included (ruling A7: closed says nothing); only "open" adds — ``OPEN_WORDS`` to
-the piece text (``outfit_renderer.piece_text``) and ``open:<ids>`` to the outfit signature. An open piece covers
+worn piece is closed). Closed is the identity state: every key and every image / mesh text is unchanged by it
+(ruling A7: closed says nothing there); only "open" adds — ``OPEN_WORDS`` to the piece text
+(``outfit_renderer.piece_text``) and ``open:<ids>`` to the outfit signature. The text an LLM reads names both
+states (ruling A9): ``render_outfit(for_llm=True)`` adds ``CLOSED_WORDS`` to a closed closable piece. An open piece covers
 nothing in front (D-A4, ruling A8): ``outfit_renderer.covering_pieces`` is the one rule every coverage check reads
 (the bare-slot summary, the outfit-decision hint, body-slot exposure and with it the image prompts). A toggle
 is a worn-state change (``set_piece_state`` + ``inventory._notify_outfit_changed`` in the route: history, SSE, the
@@ -124,8 +125,11 @@ PIECE_STATE_KEY = "piece_state"
 OPEN, CLOSED = "open", "closed"
 PIECE_STATES: Tuple[str, ...] = (OPEN, CLOSED)
 #: The state words of a piece's text (rulings A1 / A6: neutral words) — they reach every text, mesh inputs
-#: included. Closed has none (ruling A7): a closed piece reads as it did before the option existed.
+#: included. Closed has none there (ruling A7): a closed piece reads as it did before the option existed.
 OPEN_WORDS = "worn open"
+#: The closed words — ONLY in the text an LLM reads (ruling A9: ``outfit_renderer.render_outfit(for_llm=True)``
+#: names the state of every worn closable piece); image and mesh prompts never carry them (A7).
+CLOSED_WORDS = "worn closed"
 #: Words in a prompt fragment that already name the state (ruling A6: the Wardrobe hints that the toggle adds to
 #: them; the fragment is never edited automatically).
 _STATE_WORDS_RE = re.compile(r"\b(?:open|opened|closed|unbuttoned|buttoned|unzipped|zipped)\b", re.IGNORECASE)

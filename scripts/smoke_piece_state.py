@@ -2,8 +2,8 @@
 """Open / closed pieces (plan ``docs/superpowers/plans/2026-11-12-unified-worn-pieces.md`` Task 11a; spec
 ``docs/superpowers/specs/2026-11-12-unified-worn-pieces-design.md`` Addendum A; rulings A1–A8): the item flag
 ``outfit_piece.closable``, the worn state ``equipped_options.piece_state``, the state words in the texts, the
-outfit signature, the figure keys, the cache GC, the piece-state route and (Task 11b, ruling A8) the coverage of
-an open piece.
+outfit signature, the figure keys, the cache GC, the piece-state route, (Task 11b, ruling A8) the coverage of
+an open piece and (ruling A9) the closed words in the text an LLM reads.
 
 Usage:
     ./.venv/bin/python scripts/smoke_piece_state.py
@@ -74,6 +74,33 @@ the option; was: "black jacket, worn closed" in 2D / chat text):
     barefoot" (the open jacket covers neither outer nor top); the [top, outer] body slot IS exposed; a slot
     covered_by [bottom] stays covered either way. The decency hint reads the same summary ("You are currently
     topless under an open layer, barefoot. …" — checked through _bare_slots_summary, its only coverage input).
+[11] LLM text (ruling A9: every worn closable piece names its state where an LLM reads the outfit; image and mesh
+    texts keep A7). Demo wears {outer: jacket, top: blouse}, jacket CLOSED (set explicitly; the blouse is not
+    closable since [1], the jacket is by kind default).
+    piece_text(jacket, closed, for_llm) == "black jacket, worn closed"; (closed) == "black jacket"; (open,
+    for_llm) == "black jacket, worn open" == (open). Blouse, both states, for_llm: "white blouse".
+    state_words: jacket closed for_llm "worn closed", closed "" ; blouse closed for_llm "".
+    render_outfit(pieces={outer: jacket, top: blouse}, piece_state {})["pieces"]: for_llm "black jacket, worn
+    closed" (blouse covered), image "black jacket"; jacket open: both "white blouse underneath black jacket, worn
+    open". A coat {slots: [outer], partially_covers: [top]} "long coat" (closable by kind) over the blouse, closed:
+    for_llm "white blouse underneath long coat, worn closed", image "white blouse underneath long coat".
+    LLM call sites, real functions (Demo dressed, nothing in hand, no equipped_items):
+      thought_context._build_outfit_block(Demo, "Your outfit") starts "Your outfit: black jacket, worn closed";
+      act_engine._subject_outfit_text(Demo) == "wearing: black jacket, worn closed" (the "full" text: no fallback
+      parts, no items); act_engine._build_present_people_block([Demo]) == "- Demo — wearing: black jacket, worn
+      closed"; person_description(Demo, include_outfit, include_exposed False, no state modifiers, for_llm) ends
+      "wearing: black jacket, worn closed", the same call without for_llm ends "wearing: black jacket";
+      thought_context.present_people_details([(Demo, Demo)]) contains "black jacket, worn closed".
+      OutfitChangeSkill.decision_menu(Demo) == ["Blouse (top, worn)", "Boots (feet)", "Jacket (outer, worn
+      closed)", "Tee (top)"] (sorted by name; the blouse is worn but not closable); jacket open -> "Jacket (outer,
+      worn open)".
+      OutfitCreationSkill existing_block (render_task stubbed to capture it) holds "- [outer] [EQUIPPED, worn
+      closed] Jacket: black jacket" and "- [top] [EQUIPPED] Blouse: white blouse" — the state in the marker, the
+      fragment untouched.
+    Call-site scan (AST): every render_outfit call in app/routes/chat.py, app/routes/story.py,
+    app/core/act_engine.py and app/core/thought_context.py passes for_llm=True; no render_outfit /
+    person_description call in the image / mesh files (prompt_builder, scene_render, scene_photo,
+    imagegen/service, model_refs, expression_regen, base_body, character_ops, routes/play) passes for_llm=True.
 """
 import ast
 import hashlib
@@ -229,7 +256,8 @@ def main() -> int:
         check("open mesh render", ro({jacket: "open"}), "white blouse underneath black jacket, worn open")
         check("closed 2D render (A7)", ro({}, False), "black jacket")
         check("open 2D render", ro({jacket: "open"}, False), "white blouse underneath black jacket, worn open")
-        check("no closed words left", hasattr(oo, "CLOSED_WORDS"), False)
+        # A9 brought CLOSED_WORDS back for the LLM text only; the image / mesh texts above stay A7.
+        check("closed words are LLM-only (A9)", getattr(oo, "CLOSED_WORDS", None), "worn closed")
 
         # --- [4] signature -----------------------------------------------------------------------------------
         print("[4] signature")
@@ -406,6 +434,99 @@ def main() -> int:
         check("open: summary", thought_context._bare_slots_summary("Bare"), "topless under an open layer, barefoot")
         check("open: upper exposed", body_slots.is_slot_exposed(upper_spec, bare()), True)
         check("open: lower still covered", body_slots.is_slot_exposed(lower_spec, bare()), False)
+
+        # --- [11] the LLM text names both states (A9) --------------------------------------------------------
+        print("[11] LLM text (A9)")
+        from app.core import act_engine
+        from app.core.prompt_builder import person_description
+        from app.skills.outfit_change_skill import OutfitChangeSkill
+        from app.skills.outfit_creation_skill import OutfitCreationSkill
+        oo.set_piece_state("Demo", jacket, "closed")
+        J, B = inventory.get_item(jacket), inventory.get_item(blouse)
+        check("piece closed llm", outfit_renderer.piece_text(J, "closed", for_llm=True), "black jacket, worn closed")
+        check("piece closed image", outfit_renderer.piece_text(J, "closed"), "black jacket")
+        check("piece open llm", outfit_renderer.piece_text(J, "open", for_llm=True), "black jacket, worn open")
+        check("piece open image", outfit_renderer.piece_text(J, "open"), "black jacket, worn open")
+        for st in ("open", "closed"):
+            check(f"blouse {st} llm", outfit_renderer.piece_text(B, st, for_llm=True), "white blouse")
+        check("words closed llm", outfit_renderer.state_words(J, "closed", for_llm=True), "worn closed")
+        check("words closed image", outfit_renderer.state_words(J, "closed"), "")
+        check("words blouse llm", outfit_renderer.state_words(B, "closed", for_llm=True), "")
+        rl = lambda pieces, state, llm: outfit_renderer.render_outfit(  # noqa: E731
+            profile={}, equipped_pieces=dict(pieces), equipped_items=[], piece_state=state, for_llm=llm)["pieces"]
+        check("render closed llm", rl(worn, {}, True), "black jacket, worn closed")
+        check("render closed image", rl(worn, {}, False), "black jacket")
+        for llm in (True, False):
+            check(f"render open llm={llm}", rl(worn, {jacket: "open"}, llm),
+                  "white blouse underneath black jacket, worn open")
+        coat = piece("Coat", ["outer"], "long coat", partially_covers=["top"])
+        check("coat closed llm", rl({"outer": coat, "top": blouse}, {}, True),
+              "white blouse underneath long coat, worn closed")
+        check("coat closed image", rl({"outer": coat, "top": blouse}, {}, False), "white blouse underneath long coat")
+
+        check("thought outfit block",
+              thought_context._build_outfit_block("Demo", "Your outfit").startswith(
+                  "Your outfit: black jacket, worn closed"), True)
+        check("storyteller subject", act_engine._subject_outfit_text("Demo"), "wearing: black jacket, worn closed")
+        check("storyteller present", act_engine._build_present_people_block(["Demo"]),
+              "- Demo — wearing: black jacket, worn closed")
+        pd = lambda llm: person_description("Demo", include_outfit=True, include_exposed=False,  # noqa: E731
+                                            apply_state_modifiers=False, for_llm=llm)
+        check("person_description llm", pd(True).endswith("wearing: black jacket, worn closed"), True)
+        check("person_description image", pd(False).endswith("wearing: black jacket"), True)
+        check("present_people_details", "black jacket, worn closed" in thought_context.present_people_details(
+            [("Demo", "Demo")]), True)
+
+        change = OutfitChangeSkill.__new__(OutfitChangeSkill)
+        check("decision menu closed", change.decision_menu("Demo"),
+              ["Blouse (top, worn)", "Boots (feet)", "Jacket (outer, worn closed)", "Tee (top)"])
+        oo.set_piece_state("Demo", jacket, "open")
+        check("decision menu open", "Jacket (outer, worn open)" in change.decision_menu("Demo"), True)
+        oo.set_piece_state("Demo", jacket, "closed")
+
+        from app.core import prompt_templates
+        captured = {}
+
+        class _Captured(Exception):
+            pass
+
+        def _capture(task, **kw):
+            captured.update(kw)
+            raise _Captured()
+        real_render_task, prompt_templates.render_task = prompt_templates.render_task, _capture
+        create = OutfitCreationSkill.__new__(OutfitCreationSkill)
+        owned = [e for e in inventory.get_character_inventory("Demo", include_equipped=True).get("inventory", [])
+                 if e.get("item_category") == "outfit_piece"]
+        try:
+            create._generate_pieces_via_llm("Demo", "", "", "", "", "", "", owned, "", "en", 3)
+        except _Captured:
+            pass
+        finally:
+            prompt_templates.render_task = real_render_task
+        lines = (captured.get("existing_block") or "").splitlines()
+        check("creation marker jacket", "- [outer] [EQUIPPED, worn closed] Jacket: black jacket" in lines, True)
+        check("creation marker blouse", "- [top] [EQUIPPED] Blouse: white blouse" in lines, True)
+
+        def calls(path, func):
+            tree = ast.parse((ROOT / path).read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    f = node.func
+                    name = f.id if isinstance(f, ast.Name) else getattr(f, "attr", "")
+                    if name == func:
+                        kw = {k.arg: k.value for k in node.keywords}
+                        v = kw.get("for_llm")
+                        yield node.lineno, isinstance(v, ast.Constant) and v.value is True
+        for path in ("app/routes/chat.py", "app/routes/story.py", "app/core/act_engine.py",
+                     "app/core/thought_context.py"):
+            found = list(calls(path, "render_outfit"))
+            check(f"LLM site {path}", bool(found) and all(llm for _, llm in found), True)
+        for path in ("app/core/prompt_builder.py", "app/core/scene_render.py", "app/core/scene_photo.py",
+                     "app/imagegen/service.py", "app/core/model_refs.py", "app/core/expression_regen.py",
+                     "app/core/base_body.py", "app/core/character_ops.py", "app/routes/play.py"):
+            bad = [ln for func in ("render_outfit", "person_description")
+                   for ln, llm in calls(path, func) if llm]
+            check(f"image site {path}", bad, [])
 
     if FAILS:
         print(f"\nFAILED ({len(FAILS)}): " + ", ".join(FAILS))

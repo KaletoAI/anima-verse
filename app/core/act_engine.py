@@ -511,7 +511,7 @@ def _subject_outfit_text(actor: str) -> str:
     try:
         from app.core.outfit_renderer import render_outfit, undressed_line
         raw = (undressed_line(actor)
-               or render_outfit(character_name=actor).get("full", "") or "")
+               or render_outfit(character_name=actor, for_llm=True).get("full", "") or "")
         return raw.strip()
     except Exception:
         return ""
@@ -578,7 +578,7 @@ def _build_present_people_block(names: List[str]) -> str:
     for n in names:
         try:
             outfit = (undressed_line(n)
-                      or render_outfit(character_name=n).get("full", "") or "").strip()
+                      or render_outfit(character_name=n, for_llm=True).get("full", "") or "").strip()
         except Exception:
             outfit = ""
         if outfit:

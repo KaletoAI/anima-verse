@@ -918,7 +918,8 @@ def _build_outfit_block(character_name: str, label: str) -> str:
     learns it is naked (root cause of the days-long-naked NPCs)."""
     try:
         from app.core.outfit_renderer import render_outfit
-        out = render_outfit(character_name=character_name)
+        # LLM text: every worn closable piece names its state (ruling A9).
+        out = render_outfit(character_name=character_name, for_llm=True)
         raw = (out.get("pieces") or "").strip()
         bare = _bare_slots_summary(character_name)
         if not raw:
@@ -1094,7 +1095,7 @@ def present_people_details(entries, location_id: str = "",
             # text persons; the state replacements rewrite it the same way.
             from app.core.prompt_builder import person_description
             desc = person_description(n, include_outfit=True, include_exposed=False,
-                                      apply_state_modifiers=False)
+                                      apply_state_modifiers=False, for_llm=True)
             desc = " ".join(apply_image_replacements(desc, replacements).split()).strip()
             if desc:
                 if len(desc) > 180:

@@ -244,7 +244,8 @@ def person_description(name: str, *,
                        mesh_input: bool = False,
                        body_profile: Optional[Dict[str, Any]] = None,
                        include_exposed: bool = True,
-                       neutral_state: bool = False) -> str:
+                       neutral_state: bool = False,
+                       for_llm: bool = False) -> str:
     """THE text description of a person for image prompts.
 
     Every path that describes a person — PromptBuilder (chat images,
@@ -260,7 +261,12 @@ def person_description(name: str, *,
     image_modifier directives over the composed text (with the outfit
     included, a replacement may rewrite outfit text too — scene-render
     semantics) → in a ``back_view`` render, every segment naming a facial
-    feature dropped (``strip_face_terms``)."""
+    feature dropped (``strip_face_terms``).
+
+    ``for_llm``: the description is read by an LLM (``thought_context.
+    present_people_details``), so the outfit line names the state of every
+    worn closable piece (``render_outfit(for_llm=True)``, ruling A9) — never
+    set for an image or mesh prompt."""
     from app.models.character import get_character_appearance, get_character_profile
     from app.models.character_template import get_template, resolve_profile_tokens
     appearance = ((body_profile or {}).get("character_appearance", "")
@@ -292,7 +298,8 @@ def person_description(name: str, *,
         try:
             from app.core.outfit_renderer import render_outfit
             # render_outfit 'full' already carries its own 'wearing:' prefix
-            outfit = (render_outfit(character_name=name, mesh_input=mesh_input).get("full", "") or "").strip()
+            outfit = (render_outfit(character_name=name, mesh_input=mesh_input,
+                                    for_llm=for_llm).get("full", "") or "").strip()
         except Exception:
             outfit = ""
         if outfit:
@@ -865,7 +872,7 @@ class PromptBuilder:
         mood_parts = []
         for person in persons:
             if person.is_user:
-                continue  # User hat kein Mood-Tracking
+                continue  # the user has no mood tracking
             feeling = get_character_current_feeling(person.name) or ""
             if feeling:
                 mood_parts.append(f"{person.actor_label} looks {feeling}")
@@ -1169,11 +1176,11 @@ class PromptBuilder:
             # A concrete tool-LLM scene already specifies its own outfit, so
             # DB state fields are irrelevant to THIS image:
             # - prompt_activity: "sitting at desk" contradicts a gym scene.
-            # - prompt_mood: the DB mood expression overrides the tool-LLM expression.
-            #                explizit beschriebene Expression ("shy smile")
+            # - prompt_mood: the DB mood expression overrides the tool-LLM's
+            #                explicitly described expression ("shy smile")
             # - prompt_location: an office contradicts a gym setting.
-            # Keep scene details (pose, expression and setting) in
-            # bereinigten scene_prompt erhalten und gehen so ins Bild.
+            # Scene details (pose, expression and setting) stay in the
+            # cleaned scene_prompt and reach the image through it.
             if variables.prompt_activity:
                 logger.info(
                     "scene_prompt: Outfit-Override -> DB-Activity '%s' geloescht "

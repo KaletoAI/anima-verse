@@ -1147,7 +1147,7 @@ def _build_chat_prompt(character_name: str,
                 get_character_inventory, get_equipped_item_ids)
             undressed = undressed_line(_cname)
             wearing = "" if undressed else _strip_wearing_prefix(
-                render_outfit(character_name=_cname).get("full", ""))
+                render_outfit(character_name=_cname, for_llm=True).get("full", ""))
             lines: list = []
             _is_self = (_label == "You")
             _v_wear = "are" if _is_self else "is"
@@ -1208,7 +1208,8 @@ def _build_chat_prompt(character_name: str,
                 appearance, char_profile, template=char_template,
                 target_key="character_appearance")
         char_profile["character_appearance"] = appearance
-        current_outfit = (render_outfit(character_name=character_name).get("full", "") or "").removeprefix("wearing: ")
+        current_outfit = (render_outfit(character_name=character_name, for_llm=True)
+                          .get("full", "") or "").removeprefix("wearing: ")
         if current_outfit:
             char_profile["default_outfit"] = current_outfit
         loc_id = char_profile.get("current_location", "")

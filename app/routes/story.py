@@ -458,7 +458,8 @@ def _build_story_system_prompt(character_name: str,
             char_profile["character_appearance"] = resolve_profile_tokens(
                 appearance, char_profile, template=char_template,
                 target_key="character_appearance")
-        current_outfit = (render_outfit(character_name=character_name).get("full", "") or "").removeprefix("wearing: ")
+        current_outfit = (render_outfit(character_name=character_name, for_llm=True)
+                          .get("full", "") or "").removeprefix("wearing: ")
         if current_outfit:
             char_profile["default_outfit"] = current_outfit
 

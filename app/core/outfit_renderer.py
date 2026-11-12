@@ -16,8 +16,10 @@ Key design decisions:
 - Open / closed (plan 2026-11-12-unified-worn-pieces Addendum A, D-A1 / D-A4):
   a closable piece worn open says so (`piece_text`, ``OPEN_WORDS``) and covers
   nothing — its `covers` count as `partially_covers`, so the piece under it
-  shows in the opening. A closed piece says nothing (ruling A7): every text is
-  byte-identical to before the option. `covering_pieces` is the one coverage
+  shows in the opening. A closed piece says nothing (ruling A7): every image
+  and mesh text is byte-identical to before the option. The text an LLM reads
+  names both states (ruling A9, ``render_outfit(for_llm=True)``): a closed
+  closable piece says ", worn closed". `covering_pieces` is the one coverage
   rule outside the text (ruling A8): an open piece covers no front slot.
 """
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -152,16 +154,27 @@ def _is_open(iid: str, piece_state: Optional[Dict[str, str]]) -> bool:
     return bool(piece_state) and piece_state.get(iid) == OPEN
 
 
-def piece_text(item: Dict[str, Any], state: str) -> str:
+def state_words(item: Optional[Dict[str, Any]], state: str, *, for_llm: bool = False) -> str:
+    """The words naming a worn piece's ``state`` (``open`` / ``closed``): ``OPEN_WORDS`` when open, and — only
+    ``for_llm`` (ruling A9) — ``CLOSED_WORDS`` when closed; ``""`` for an item that is not closable, and for a
+    closed piece in an image / mesh text (ruling A7)."""
+    from app.core.garment_set import closable_of
+    from app.core.outfit_options import CLOSED_WORDS, OPEN, OPEN_WORDS
+    if not closable_of(item):
+        return ""
+    if state == OPEN:
+        return OPEN_WORDS
+    return CLOSED_WORDS if for_llm else ""
+
+
+def piece_text(item: Dict[str, Any], state: str, *, for_llm: bool = False) -> str:
     """The text of one worn piece in ``state`` (``open`` / ``closed``): its ``prompt_fragment``, plus
     ``", worn open"`` when open and the item is closable. Closed is the fragment alone (ruling A7: no words, every
-    text as before the option); an empty fragment stays empty."""
-    from app.core.garment_set import closable_of
-    from app.core.outfit_options import OPEN, OPEN_WORDS
+    image / mesh text as before the option) — except ``for_llm`` (ruling A9): the text an LLM reads says
+    ``", worn closed"`` for a closed closable piece. An empty fragment stays empty."""
     frag = ((item or {}).get("prompt_fragment") or "").strip()
-    if frag and state == OPEN and closable_of(item):
-        return f"{frag}, {OPEN_WORDS}"
-    return frag
+    words = state_words(item, state, for_llm=for_llm) if frag else ""
+    return f"{frag}, {words}" if words else frag
 
 
 def covering_pieces(profile: Optional[Dict[str, Any]],
@@ -223,11 +236,12 @@ def _resolve_partial_covers(
     equipped_pieces: Dict[str, str],
     slot_order: List[str],
     piece_state: Optional[Dict[str, str]] = None,
+    for_llm: bool = False,
 ) -> Tuple[Dict[str, Tuple[str, str]], Set[str]]:
     """Returns (partially_covered_map, suppressed_slots).
 
     A piece worn open (``piece_state``) partially covers its `covers` too
-    (D-A4); the covering fragment is the piece's ``piece_text``.
+    (D-A4); the covering fragment is the piece's ``piece_text`` (``for_llm`` passed on).
 
     - partially_covered_map: {target_slot → (covering_fragment, covering_slot)}
       means "covering_slot partially covers target_slot, its fragment reads ..."
@@ -246,7 +260,7 @@ def _resolve_partial_covers(
             continue
         op = item.get("outfit_piece") or {}
         is_open = _is_open(iid, piece_state)
-        cov_frag = piece_text(item, "open" if is_open else "closed")
+        cov_frag = piece_text(item, "open" if is_open else "closed", for_llm=for_llm)
         targets = list(op.get("partially_covers") or [])
         if is_open:
             targets += list(op.get("covers") or [])
@@ -296,6 +310,7 @@ def render_outfit(
     mesh_input: bool = False,
     portrait_only: bool = False,
     piece_state: Optional[Dict[str, str]] = None,
+    for_llm: bool = False,
 ) -> Dict[str, str]:
     """Builds the outfit description — pieces + items + fallback for empty slots.
 
@@ -315,6 +330,10 @@ def render_outfit(
         piece_state: the open pieces ``{item_id: "open"}`` to render; None →
             the profile's (``outfit_options.piece_states`` over the rendered
             pieces). Every fragment goes through ``piece_text``.
+        for_llm: the text is for an LLM (ruling A9) — every worn closable
+            piece names its state, a closed one ", worn closed" too. Never
+            for an image or mesh prompt: there closed stays silent (A7) and
+            the default (False) keeps every such text byte for byte.
 
     Returns:
         {
@@ -354,7 +373,7 @@ def render_outfit(
         from app.core.outfit_options import piece_states
         piece_state = piece_states(profile, pieces)
     covered = collect_covered_slots(pieces, piece_state)
-    partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS), piece_state)
+    partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS), piece_state, for_llm)
 
     # 1) Piece fragments
     shown_slots = None
@@ -367,7 +386,7 @@ def render_outfit(
     ):
         if shown_slots is not None and slot not in shown_slots:
             continue
-        frag = piece_text(item, "open" if _is_open(iid, piece_state) else "closed")
+        frag = piece_text(item, "open" if _is_open(iid, piece_state) else "closed", for_llm=for_llm)
         if not frag:
             continue
         if slot in partial:

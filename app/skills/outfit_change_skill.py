@@ -301,14 +301,23 @@ class OutfitChangeSkill(BaseSkill):
         """The character's clothes for the tool decision: the name this verb
         matches, the slots, and "worn" — what goes on, what it replaces,
         what can come off, sorted by name so the block stays the same from
-        turn to turn. Ids and prompt text stay out; the tool LLM only
-        copies a name."""
+        turn to turn. A worn closable piece says "worn open" / "worn closed"
+        instead (ruling A9: the LLM text names the state). Ids and prompt
+        text stay out; the tool LLM only copies a name."""
+        from app.core.outfit_options import CLOSED, piece_states
+        from app.core.outfit_renderer import state_words
+        from app.models.character import get_character_profile
+        opened = piece_states(get_character_profile(character_name) or {})
         lines = []
         for entry in self._inventory_item_index(character_name):
             if entry.get("item_category") != "outfit_piece":
                 continue
             slots = "+".join((entry.get("outfit_piece") or {}).get("slots") or [])
-            detail = ", ".join(part for part in (slots, "worn" if entry.get("equipped") else "") if part)
+            worn = ""
+            if entry.get("equipped"):
+                iid = entry.get("item_id") or ""
+                worn = state_words(get_item(iid), opened.get(iid, CLOSED), for_llm=True) or "worn"
+            detail = ", ".join(part for part in (slots, worn) if part)
             lines.append(f"{entry.get('item_name')}" + (f" ({detail})" if detail else ""))
         return sorted(lines, key=str.lower)
 

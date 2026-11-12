@@ -239,15 +239,29 @@ class OutfitCreationSkill(BaseSkill):
             equipped_iids = set()
 
         # Existing pieces as context (the LLM should avoid duplicates).
-        # Slots + an [EQUIPPED] marker per piece (no outfit_types any more).
+        # Slots + an [EQUIPPED] marker per piece (no outfit_types any more);
+        # a worn closable piece names its state in the marker (ruling A9) —
+        # never in the fragment, which the LLM copies as the format of new ones.
+        from app.core.outfit_options import CLOSED, piece_states
+        from app.core.outfit_renderer import state_words
+        from app.models.character import get_character_profile
+        from app.models.inventory import get_item
+        try:
+            opened = piece_states(get_character_profile(character_name) or {})
+        except Exception:
+            opened = {}
         existing_lines = []
-        for p in existing_pieces[-20:]:  # letzte 20 reichen als Kontext
+        for p in existing_pieces[-20:]:  # the last 20 are context enough
             op = p.get("outfit_piece") or {}
             slot_list = op.get("slots") or []
             slot_str = "+".join(slot_list) if slot_list else "?"
             frag = (p.get("item_prompt_fragment") or "").strip()
             name = p.get("item_name") or p.get("item_id") or "?"
-            equipped_marker = " [EQUIPPED]" if p.get("item_id") in equipped_iids else ""
+            equipped_marker = ""
+            if p.get("item_id") in equipped_iids:
+                words = state_words(get_item(p.get("item_id")), opened.get(p.get("item_id"), CLOSED),
+                                    for_llm=True)
+                equipped_marker = f" [EQUIPPED, {words}]" if words else " [EQUIPPED]"
             line = f"- [{slot_str}]{equipped_marker} {name}"
             if frag:
                 line += f": {frag}"
