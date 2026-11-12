@@ -1675,76 +1675,40 @@ def resolve_figure(character_name: str, pieces: Optional[Dict[str, str]], *, ite
 
 
 def after_mesh_item_ready(character_name: str, item_id: str) -> bool:
-    """A garment run accepted a fit of the own-mesh piece ``item_id``.
-
-    When the CURRENT outfit model's figure (``figure.built_figure``) keeps
-    its shape and texture under the figure delivered now
-    (``figure.delivered_figure`` — the piece was left out, e.g. footwear, or
-    was on its shape already), the piece is only assembled onto it
-    (``garment_assembly.schedule``: its fit on the body, CPU, then the
-    graft) — no dressed view, no rebuild, no hub job. Otherwise (it was
-    painted meanwhile, interim rule) the outfit's mesh inputs are rendered
-    again (``dressed_image`` calls them stale now) and the model is rebuilt
-    after them (``model_refs`` → ``model3d.maybe_auto_generate_for_outfit``).
-    With no model of the outfit yet and no front made for another figure
-    (a first render whose chains run now) nothing is asked for: the views
-    and the build to come use the fit. True when either was asked for.
-    Never raises."""
+    """A garment run accepted a fit of the own-mesh piece ``item_id``: when
+    the character on the pipeline wears it, a "piece ready" request of its
+    Build (``figure_build.request(name, "piece_ready")``, plan
+    2026-11-12-unified-worn-pieces Task 8). The Build plans from the figure
+    delivered now: a model whose shape and texture stay gets the piece
+    assembled on (no dressed view, no hub job); a piece that was painted
+    meanwhile (interim rule) changes the texture, so its views come first.
+    With "Build automatically" off the piece only shows as a pending change.
+    True when a Build was started or kept as the follow-up. Never raises."""
     try:
-        from app.core import figure, model3d
-        from app.core.model_refs import current_outfit_state, find_ref_image, trigger_now
+        from app.core import figure_build
+        from app.core.model_refs import current_outfit_state
         profile = _profile_of(character_name, None)
         if not is_base_pipeline(character_name, profile=profile):
             return False
-        pieces, items, signature = current_outfit_state(character_name)
+        pieces, _items, _signature = current_outfit_state(character_name)
         if item_id not in (pieces or {}).values():
             return False
-        path = model3d.find_model3d(character_name, signature, include_stale=True)
-        model_meta = model3d._read_sidecar(path) if path is not None else {}
-        built = figure.built_figure(model_meta)
-        now = figure.delivered_figure(character_name, profile=profile, pieces=dict(pieces or {}),
-                                      items=list(items or []))
-        if built is not None and (built.shape, built.texture) == (now.shape, now.texture):
-            if item_id not in now.own:
-                return False
-            from app.core import garment_assembly
-            logger.info("Own-mesh piece %s of %s has a fit now: assembled onto the model of outfit %s "
-                        "(same shape and texture, no rebuild)", item_id, character_name, signature)
-            garment_assembly.schedule(character_name, signature)
-            return True
-        bsig = base_signature(character_name, profile=profile)
-        front = find_ref_image(character_name, _kind("front"), signature)
-        if path is None and (front is None or dressed_image(character_name, "front", signature, bsig,
-                                                            fig=now) is not None):
-            return False  # no model yet and no front made for another figure: the build to come uses it
-        logger.info("Own-mesh piece %s of %s has a fit now: outfit %s is rendered again for its figure",
-                    item_id, character_name, signature)
-        trigger_now(character_name, kinds=("tpose",), force=False)
-        return True
+        return figure_build.request(character_name, "piece_ready")
     except Exception:  # noqa: BLE001 — a trigger never breaks the garment run
-        logger.exception("Outfit rebuild after the fit of %s/%s failed", character_name, item_id)
+        logger.exception("Build request after the fit of %s/%s failed", character_name, item_id)
         return False
 
 
 def after_piece_detail_change(item_id: str) -> List[str]:
     """A piece's ``exposed_detail`` changed: every character on the pipeline
-    wearing it gets its outfit model rebuilt (``variant_current`` now calls
-    the stored one stale; ``model3d.maybe_auto_generate_for_outfit``). 2D
-    renders stay. Returns the characters whose rebuild was asked for."""
-    from app.core import model3d
-    from app.models.character import get_character_profile, list_available_characters
+    wearing it (``figure_build.wearers``) gets a "detail change" request of
+    its Build (``variant_current`` calls the stored outfit model stale now).
+    2D renders stay. Returns the characters whose Build was started or kept."""
+    from app.core import figure_build
     started = []
-    for name in list_available_characters():
-        try:
-            profile = get_character_profile(name) or {}
-            if item_id not in (profile.get("equipped_pieces") or {}).values():
-                continue
-            if not is_base_pipeline(name, profile=profile):
-                continue
-            model3d.maybe_auto_generate_for_outfit(name)
+    for name in figure_build.wearers(item_id):
+        if figure_build.request(name, "detail_change"):
             started.append(name)
-        except Exception as e:  # noqa: BLE001 — one character never blocks the rest
-            logger.warning("Outfit rebuild after a detail change failed for %s: %s", name, e)
     return started
 
 

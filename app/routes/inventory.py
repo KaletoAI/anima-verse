@@ -344,6 +344,47 @@ def get_item_owners_route(
     return {"owners": owners, "item_id": item_id}
 
 
+@router.get("/items/{item_id}/wearers")
+def get_item_wearers_route(item_id: str, _admin=Depends(require_admin)) -> Dict[str, Any]:
+    """The characters on the figure pipeline wearing the item (dormant and
+    pooled ones included, ``figure_build.wearers``) — admin-only, it names
+    other characters. ``{item_id, mode, wearers: [{name, changes,
+    auto_build}], cost: {hub_jobs, note}}``: ``mode`` the item's mesh mode,
+    ``changes`` the count of ``figure.pending_changes``, ``cost`` the sum of
+    every wearer's Build cost (``hub_jobs`` None as soon as one is unknown)."""
+    from app.core import figure, figure_build, garment_set
+    item = get_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    rows, total, unknown = [], 0, []
+    for name in figure_build.wearers(item_id):
+        rows.append({"name": name, "changes": len(figure.pending_changes(name)),
+                     "auto_build": figure_build.auto_build_on(name)})
+        jobs = figure_build.cost(name).get("hub_jobs")
+        if jobs is None:
+            unknown.append(name)
+        else:
+            total += int(jobs)
+    if unknown:
+        cost = {"hub_jobs": None, "note": "cost unknown — " + ", ".join(unknown)}
+    else:
+        cost = {"hub_jobs": total, "note": f"{total} hub jobs (first attempts)" if rows else "nobody wears it"}
+    return {"item_id": item_id, "mode": garment_set.mesh_mode_of(item) or "", "wearers": rows, "cost": cost}
+
+
+@router.post("/items/{item_id}/build-wearers")
+def build_item_wearers_route(item_id: str, _admin=Depends(require_admin)) -> Dict[str, Any]:
+    """"Build for them": one Build per wearer (``figure_build.start``, a
+    click). ``{started: {name: status}}`` — ``started`` / ``queued`` (its
+    one follow-up while a Build runs) / ``current``. Admin-only (also by the
+    ``/inventory/items`` write prefix)."""
+    from app.core import figure_build
+    if not get_item(item_id):
+        raise HTTPException(status_code=404, detail="Item not found")
+    return {"started": {name: str(figure_build.start(name, reason="build_wearers").get("status") or "")
+                        for name in figure_build.wearers(item_id)}}
+
+
 @router.get("/ownership")
 def get_ownership_map_route() -> Dict[str, Any]:
     """Map item ids to owning characters for the item filter.

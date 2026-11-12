@@ -79,10 +79,14 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      no stored front -> missing "Base body images missing — render them in
      the Base body tab"; a front sidecar with the hairdeck fingerprint ->
      stale OLDER_PROMPTS; with Long's own fingerprint -> current.
-[H3] garments.after_base_model(Long) (enqueue_garment = recorder) -> False,
-     no hair item (find_hair_item None), nothing queued; ensure_hair_item(Long)
-     -> ValueError starting "Hair comes from the body mesh". Contrast:
-     after_base_model(Deck) creates Deck's hair item and queues it once.
+[H3] garments.after_base_model(Long) asks the Build ("body_change",
+     ``figure_build.request`` recorded — Task 8 of plan
+     2026-11-12-unified-worn-pieces), and the Build of Long has no chain step
+     (``build_chains`` False; was: after_base_model -> False; enqueue_garment =
+     recorder): no hair item (find_hair_item None), nothing queued;
+     ensure_hair_item(Long) -> ValueError starting "Hair comes from the body
+     mesh". Contrast: the Build's hair step of Deck (was: after_base_model)
+     creates Deck's hair item and queues it once.
 [H4] hair_fill.find_candidates({}) lists Deck only (Long and Short are body,
      Bald has no hair text); world method "hairdeck" -> Long, Short and Deck.
 [H5] garment_store.steps_for("hair", "body") == () (never a ValueError);
@@ -187,7 +191,9 @@ def main() -> int:
         from app.core import (base_body, config_scope, garment_assembly, garment_clothing, garment_hair, garments,
                               glb_delivery, model_refs)
         from app.core import garment_store as gs
+        from app.core import figure_build
         from app.core.improvements.types.hair_fill import HairFill
+        from _figure_build_fixtures import build_chains
         from app.imagegen import service
         from app.models.character import (get_character_dir, get_character_images_dir, get_character_profile,
                                           save_character_profile)
@@ -348,8 +354,19 @@ def main() -> int:
         # --- [H3] -----------------------------------------------------------------
         print("[H3] no hair item after the base model")
         QUEUED = []
-        with patch.object(garments, "enqueue_garment", lambda name, item_id: QUEUED.append((name, item_id))):
-            check("after_base_model Long", garments.after_base_model("Long"), False)
+        REQUESTS = []
+
+        def enqueue(name, item_id, automatic=True):
+            QUEUED.append((name, item_id))
+            job = garments._Job(item_id, None, None, False)
+            job.result = {"ok": True, "ran": []}
+            job.done.set()
+            return job
+        with patch.object(garments, "enqueue_garment", enqueue), \
+                patch.object(figure_build, "request", lambda name, trigger: REQUESTS.append((name, trigger)) or True):
+            check("after_base_model Long asks the Build", (garments.after_base_model("Long"), REQUESTS),
+                  (True, [("Long", "body_change")]))
+            check("the Build of Long has no chain step", build_chains("Long"), False)
             check("Long has no hair item", garment_hair.find_hair_item("Long", get_character_profile("Long")), None)
             check("nothing queued", QUEUED, [])
             try:
@@ -357,7 +374,7 @@ def main() -> int:
                 check("ensure_hair_item refused", "no error", "ValueError")
             except ValueError as e:
                 check("ensure_hair_item refused", str(e).startswith("Hair comes from the body mesh"), True)
-            check("after_base_model Deck", garments.after_base_model("Deck"), True)
+            check("the Build of Deck runs its hair step", build_chains("Deck"), True)
             deck_item = (garment_hair.find_hair_item("Deck", get_character_profile("Deck")) or {}).get("id")
             check("Deck item queued", QUEUED, [("Deck", deck_item)])
 

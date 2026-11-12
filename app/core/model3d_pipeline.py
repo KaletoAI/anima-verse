@@ -31,12 +31,9 @@ job). The 3D tab's actions therefore split three ways (audit 2026-11-09):
   and the next trigger replaces as stale.
 * **Build current outfit** (``build_current_outfit``) when the tab serves a
   stand-in (``annotate``'s ``fallback``: another outfit's model, or none):
-  the outfit-change trigger itself, never forced — the T-pose pass
-  (``model_refs.trigger_now(("tpose",), force=False)``: only views that are
-  not current cost an image job) whose end runs the auto hook
-  (``model3d.maybe_auto_generate_for_outfit``), or the hook alone when the
-  views are current. A stored body of the outfit's key is reused (painted
-  body / outfit body: CPU, no hub job).
+  the character's Build (``figure_build.start``) — only missing views cost an
+  image job, a stored body of the outfit's key is reused (painted body /
+  outfit body: CPU, no hub job).
 
 Everything else (download, delete, measure/diagnose, shrink textures,
 distance mesh, extension bones, motion sliders) works on the served outfit
@@ -151,29 +148,17 @@ def refusal(character_name: str, action: str) -> str:
 
 
 def build_current_outfit(character_name: str) -> Dict[str, Any]:
-    """Build the CURRENT outfit's model the way an outfit change does (the
-    module docstring's "Build current outfit"), never forced. ``{"status":
-    …}``: ``current`` (its model is stored and current — nothing to do),
-    ``views`` (dressed views not current: the T-pose pass runs, its end runs
-    the auto hook), ``generating`` (the model run started), ``queued`` (a
-    model job of the character runs; the hook runs again once it ended).
-    ``ValueError`` off the
-    pipeline, ``LookupError`` (``BASE_MODEL_FIRST``) without a ready base
-    model."""
-    from app.core import model3d, model_refs
-    state = pipeline_state(character_name)
-    if state is None:
+    """Build the CURRENT outfit's figure: the character's Build
+    (``figure_build.start(reason="build_current_outfit")``, a click — it
+    retries chains that failed for their input, plan
+    2026-11-12-unified-worn-pieces ruling 7a). ``{"status": …}``:
+    ``started``, ``queued`` (a Build runs — this is its one follow-up),
+    ``current`` (nothing to build). ``ValueError`` off the pipeline."""
+    from app.core import figure_build
+    result = figure_build.start(character_name, reason="build_current_outfit")
+    if result.get("status") == "off":
         raise ValueError("The character is not on the base-body pipeline")
-    if state["base_model"] != "ready":
-        raise LookupError(BASE_MODEL_FIRST)
-    signature = model_refs.current_outfit_state(character_name)[2]
-    if not signature or model3d.find_model3d(character_name, signature):
-        return {"status": "current"}
-    if not state["dressed_current"]:
-        model_refs.trigger_now(character_name, ("tpose",), force=False)
-        return {"status": "views"}
-    started = model3d.maybe_auto_generate_for_outfit(character_name)
-    return {"status": "generating" if started else "queued"}
+    return {"status": str(result.get("status") or "")}
 
 
 def rebuild_from_base(character_name: str) -> Dict[str, Any]:

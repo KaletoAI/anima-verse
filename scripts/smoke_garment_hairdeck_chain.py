@@ -51,7 +51,10 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     ["hairdeck", "fit"], hairdeck status "accepted", fit "accepted",
     served_fsig = fsig. A second run: ran [], no call.
 [3] Review Focus 2 — the base model rewritten under the same B1 (another
-    texture colour -> another sha): after_base_model re-runs the fit only:
+    texture colour -> another sha): after_base_model asks the Build
+    ("body_change", recorded — Task 8 of plan 2026-11-12-unified-worn-pieces)
+    and the Build's hair step (``build_chains``; was: after_base_model
+    queued the chain itself) re-runs the fit only:
     generate_hair calls stay 1, fit calls 2, the record's base_model_sha256
     = the new sha, fsig and hsig unchanged. R2 — hair_colour "#FF8000":
     hsig unchanged, fsig changes; run_garment -> ran ["fit"], generate_hair
@@ -276,6 +279,10 @@ def main() -> int:
         refine.decimate_to = decimate_to
         garment_assembly.schedule = lambda name, signature=None: SCHEDULED.append((name, signature)) or True
         sync_topics.changed_at = lambda *a, **k: None
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): every hook is a Build request now — recorded, so no
+        # automatic Build runs beside the chain; the body change runs the Build's chain steps (build_chains).
+        from _figure_build_fixtures import build_chains, record_requests
+        REQUESTS = record_requests()
 
         # --- fixture (smoke_garment_chain's Demo) ------------------------------
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -402,7 +409,9 @@ def main() -> int:
         write_model(b1, (120, 90, 80))
         new_sha = base_body.current_base("Demo")[1]
         check("base sha changed", new_sha != r.get("base_model_sha256"), True)
-        check("after_base_model started", garments.after_base_model("Demo"), True)
+        check("after_base_model asks the Build", (garments.after_base_model("Demo"), REQUESTS[-1:]),
+              (True, [("Demo", "body_change")]))
+        check("the Build's hair step runs", build_chains("Demo"), True)
         check("idle", garments.wait_idle(60), True)
         check("calls", counts(), (1, 2))
         check("fsig/hsig unchanged", (gs.garment_fsig("Demo", hid), gs.garment_hsig("Demo", hid)), (f_hd, h1))

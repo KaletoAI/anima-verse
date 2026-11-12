@@ -37,8 +37,8 @@ All admin-only (``Depends(require_admin)``) like the base-body actions:
   Both 202 in the same queue, Cancel included.
 * ``POST /characters/{c}/model3d/build-current`` — the 3D tab's "Build current
   outfit" while it serves a stand-in (``model3d_pipeline.build_current_outfit``:
-  the outfit-change trigger, never forced); 400 off the pipeline, 409
-  without a ready base model.
+  the character's Build, a click — ``{status: started | queued | current}``);
+  400 off the pipeline.
 * ``POST …/{body_id}/cancel`` ``{view?}`` — take the body's waiting runs (or
   only that view's) out of the queue (``outfit_bodies.cancel``); 409 when
   its run has already started, 404 when none waits.

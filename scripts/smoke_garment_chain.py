@@ -89,7 +89,12 @@ FRAGMENT. Demo has hair text, the world's hair method is the default
     held by the smoke): status running_step "queued" and failed None at
     once. Released, the run rebuilds the mesh: failure None, prepared back.
 [5] Base model rewritten under the same B1 (other texture colour ->
-    new sha): after_base_model starts fit only: renders 0, mesh calls 0,
+    new sha): after_base_model asks the Build (``figure_build.request``
+    "body_change", recorded — since Task 8 of plan
+    2026-11-12-unified-worn-pieces every hook is a Build request); the
+    Build's chain step (``build_chains``: its ``pieces`` steps through
+    ``run_queued``; was: after_base_model queued the chain itself) runs the
+    fit only: renders 0, mesh calls 0,
     the fit record's base_model_sha256 = the new sha. Then, with the run
     lock held by the smoke: start_garment -> started (status "queued" at
     once); a second start_garment (the item is IN FLIGHT, waiting on the
@@ -100,7 +105,8 @@ FRAGMENT. Demo has hair text, the world's hair method is the default
 [5b] The fit record of [5] carries fit_version =
     garment_fit.FIT_VERSION["clothing"]. Rewritten without it: _fit_state
     "stale", garment_info stale_reasons ["fit_algorithm_updated"] (inputs,
-    base and base model unchanged); after_base_model queues the item and
+    base and base model unchanged); the Build's chain step (was:
+    after_base_model) queues the item and
     the run re-fits ONLY: 0 renders, 0 mesh calls, 1 decimation (the low
     tier of the new fit; the prepared mesh stays cached); the new record
     accepted, fit_version current, base sha unchanged; "accepted" again. A
@@ -108,7 +114,8 @@ FRAGMENT. Demo has hair text, the world's hair method is the default
 [6] New profile image -> B2 (base images + base model for B2 written):
     refit before re-render (garment_source, 2026-11-10): F2's group has no
     images, F1's accepted source names the current dress inputs on B1, so
-    after_base_model copies it into F2 and fits it on the CPU: 0 renders,
+    the Build's chain step (was: after_base_model) copies it into F2 and
+    fits it on the CPU: 0 renders,
     0 mesh calls; fit record base_signature B2, source.fsig F1, refitted
     False (B2's views are byte-identical to B1's, so no registration
     either: frame.registered False); the worn front of F2 is a copy
@@ -134,7 +141,8 @@ FRAGMENT. Demo has hair text, the world's hair method is the default
     once; a failed one does not.
 [11] Hair in the body mesh (the world default "body"): Neo, pipeline human,
     hair slot {short, black} (hair text), base images + model written ->
-    after_base_model False, no hair item, worn {}, 0 renders, 0 mesh calls.
+    the Build has no chain step (``build_chains`` False; was:
+    after_base_model False), no hair item, worn {}, 0 renders, 0 mesh calls.
 [12] The base views change during a run (moved here from the removed
     smoke_garment_ghost_pair.py [4]): a forced worn front whose FIRST render
     rewrites the base front view (one torso pixel: same base signature,
@@ -442,6 +450,10 @@ def main() -> int:
         # Wearing the own-mesh dress asks for the outfit renders (pose / tpose): not part of this smoke.
         model_refs.trigger_now = lambda name, kinds=None, **kw: None
         model_refs.schedule_outfit_render = lambda name: None
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): every hook is a Build request now — recorded, so no
+        # automatic Build runs beside the chain; the body change runs the Build's chain steps (build_chains).
+        from _figure_build_fixtures import build_chains, record_requests
+        REQUESTS = record_requests()
 
         # --- fixture -----------------------------------------------------------
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -612,13 +624,15 @@ def main() -> int:
         new_sha = hashlib.sha256(rigged2).hexdigest()
         check("sha changed", new_sha != rec.get("base_model_sha256"), True)
         before = counts()
-        check("after_base_model starts", garments.after_base_model("Demo"), True)
+        check("after_base_model asks the Build", (garments.after_base_model("Demo"), REQUESTS[-1:]),
+              (True, [("Demo", "body_change")]))
+        check("the Build's chain step runs", build_chains("Demo"), True)
         check("idle", garments.wait_idle(120), True)
         after = counts()
         check("no render, no mesh", (after[0] - before[0], after[1] - before[1]), (0, 0))
         rec5 = fit_record(f1)
         check("new fit record sha", (rec5.get("accepted"), rec5.get("base_model_sha256")), (True, new_sha))
-        check("nothing more to do", garments.after_base_model("Demo"), False)
+        check("nothing more to do", build_chains("Demo"), False)
         lock = gs.char_lock("Demo")
         lock.acquire()
         try:
@@ -642,7 +656,7 @@ def main() -> int:
         check("stale", garments._fit_state("Demo", hid, f1, new_sha), "stale")
         check("stale reason", garments.garment_info("Demo", hid)["stale_reasons"], ["fit_algorithm_updated"])
         before = counts()
-        check("after_base_model starts", garments.after_base_model("Demo"), True)
+        check("the Build's chain step runs (after the body change)", build_chains("Demo"), True)
         check("idle", garments.wait_idle(120), True)
         after = counts()
         check("no render, no mesh, refit (prepared kept, low rebuilt)",
@@ -667,7 +681,7 @@ def main() -> int:
         f2 = gs.garment_fsig("Demo", hid)
         check("fsig changed", f2 != f1, True)
         before = counts()
-        check("after_base_model starts", garments.after_base_model("Demo"), True)
+        check("the Build's chain step runs (after the body change)", build_chains("Demo"), True)
         check("idle", garments.wait_idle(120), True)
         after = counts()
         check("0 renders, 0 mesh", (after[0] - before[0], after[1] - before[1]), (0, 0))
@@ -787,7 +801,7 @@ def main() -> int:
         write_base_for("Neo")
         garments.wait_idle(30)
         before = counts()
-        check("Neo not started", garments.after_base_model("Neo"), False)
+        check("Neo: the Build has no chain step", build_chains("Neo"), False)
         check("idle", garments.wait_idle(30), True)
         check("Neo no item", (inventory.get_equipped_mesh_pieces("Neo"),
                               garment_hair.find_hair_item("Neo", get_character_profile("Neo"))), ({}, None))

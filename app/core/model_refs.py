@@ -1243,18 +1243,29 @@ def _cancel_timers(character_name: str, kinds: tuple) -> None:
                 old.timer.cancel()
 
 
+#: The debounce timer of a pipeline character's Build (``_pending_timers`` key
+#: ``(character, BUILD_TIMER)``): it fires ``figure_build.request(name,
+#: "outfit_change")`` instead of a render.
+BUILD_TIMER = "figure_build"
+
+
 def _fire_kind(character_name: str, kind: str) -> None:
     """Timer body. Fires only if THIS timer is still the armed one: a timer
     cancelled a moment too late (its body already started) must not render —
     the newer timer, or the manual trigger that cancelled it, covers the
     latest state. The auto toggle is re-read: switched off since arming means
-    nothing to render."""
+    nothing to render. The Build timer asks the Build (``figure_build.request``
+    re-reads "Build automatically" itself)."""
     key = (character_name, kind)
     with _lock:
         entry = _pending_timers.get(key)
         if entry is None or entry.timer is not threading.current_thread():
             return
         _pending_timers.pop(key, None)
+    if kind == BUILD_TIMER:
+        from app.core import figure_build
+        figure_build.request(character_name, "outfit_change")
+        return
     if not get_auto_kinds(character_name).get(kind):
         return
     _fire_kinds(character_name, (kind,))
@@ -1264,11 +1275,21 @@ def schedule_outfit_render(character_name: str) -> None:
     """Debounced trigger after an outfit mutation (trailing edge, latest
     state wins): one timer per auto-enabled kind, re-armed by every
     mutation. No-op when disabled in config or when every per-image toggle
-    of this character is off."""
+    of this character is off.
+
+    On the base-body pipeline the ``tpose`` kind is not scheduled: its
+    dressed views are a step of the character's Build, and the Build has
+    its own timer (``BUILD_TIMER`` → ``figure_build.request(name,
+    "outfit_change")``; "Build automatically" decides, plan
+    2026-11-12-unified-worn-pieces Task 8)."""
     if not _enabled():
         return
+    from app.core.base_body import is_base_pipeline
     auto = get_auto_kinds(character_name)
-    kinds = tuple(k for k in REF_KINDS if auto.get(k))
+    pipeline = is_base_pipeline(character_name)
+    kinds = tuple(k for k in REF_KINDS if auto.get(k) and not (pipeline and k == "tpose"))
+    if pipeline:
+        kinds += (BUILD_TIMER,)
     if not kinds:
         return
     from app.core.timeutils import utc_now

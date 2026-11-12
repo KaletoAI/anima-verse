@@ -240,7 +240,7 @@ export function FieldModelRefs({
     try {
       // An explicit view ignores the auto toggles and replaces only that
       // image. The general Generate button still fires this tab's checked kinds.
-      const wanted = view ? ['tpose'] : kindList.filter((k) => info.auto?.[k] !== false)
+      const wanted = view ? ['tpose'] : kindList.filter((k) => (!!info.pipeline && k === 'tpose') || info.auto?.[k] !== false)
       setGenError('')
       await apiPost(`/characters/${enc}/model-refs/generate`, { kinds: wanted, view })
       toast(t('Generating…'))
@@ -252,7 +252,7 @@ export function FieldModelRefs({
       setGenError((e as Error).message)
       setBusy(false)
     }
-  }, [busy, enc, kindList, info.auto, startPoll, t, toast])
+  }, [busy, enc, kindList, info.auto, info.pipeline, startPoll, t, toast])
 
   // The face view renders through the image dialog: its backend, LoRAs and
   // prompt apply to this one run only (the automatic render stays routed).
@@ -324,7 +324,12 @@ export function FieldModelRefs({
   )
 
   const autoOn = (kind: RefKind) => info.auto?.[kind] !== false
-  const anyAuto = kindList.some((k) => autoOn(k))
+  // On the figure pipeline the T-pose pass is a step of the Build: the Figure tab's
+  // "Build automatically" decides (one switch per thing), so this toggle is off-limits.
+  const buildDecides = (kind: RefKind) => !!info.pipeline && kind === 'tpose'
+  // What Generate fires: the checked kinds, and on the pipeline always the T-pose pass.
+  const fires = (kind: RefKind) => buildDecides(kind) || autoOn(kind)
+  const anyAuto = kindList.some((k) => fires(k))
 
   // Server-reported state of OUR kinds, with how long it has persisted
   // (server clock, as of the last poll). -1 = not in that state.
@@ -542,7 +547,9 @@ export function FieldModelRefs({
       </div>
       )}
       <div className="ga-hint">
-        {kindList.includes('tpose')
+        {kindList.includes('tpose') && info.pipeline
+          ? t('On the figure pipeline, the Figure tab\'s Build automatically decides')
+          : kindList.includes('tpose')
           ? t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination. The pose render feeds the image-to-3D pipeline.')
           : t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination.')}
       </div>
@@ -565,12 +572,15 @@ export function FieldModelRefs({
         {kindList.map((kind) => (
           <label
             key={kind}
-            style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
-            title={t('Render this image automatically after outfit changes')}
+            style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: buildDecides(kind) ? 'not-allowed' : 'pointer' }}
+            title={buildDecides(kind)
+              ? t('On the figure pipeline, the Figure tab\'s Build automatically decides')
+              : t('Render this image automatically after outfit changes')}
           >
             <input
               type="checkbox"
               checked={autoOn(kind)}
+              disabled={buildDecides(kind)}
               onChange={(e) => setAuto(kind, e.target.checked)}
             />
             <span>

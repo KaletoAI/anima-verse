@@ -15,10 +15,15 @@ body actions):
 * ``POST /characters/{c}/figure/build`` — 202 ``figure_build.start(reason=
   "manual")``: ``{"status": "started" | "queued" | "current"}``; 409 off the
   pipeline with the reason.
+* ``POST /characters/{c}/figure/auto-build {enabled}`` — "Build
+  automatically" (``figure_build.set_auto_build``): ``{"auto_build":
+  figure_build.auto_build_on(c)}`` (off as well while the world switch of
+  the automatic renders is off). Switching it off never stops a run.
 """
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from app.core.auth_dependency import require_admin
 from app.models.character import get_character_dir
@@ -46,3 +51,17 @@ def build_figure(character_name: str, _: Dict[str, Any] = Depends(require_admin)
     if result.get("status") == "off":
         raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))
     return result
+
+
+class AutoBuildRequest(BaseModel):
+    enabled: bool
+
+
+@router.post("/{character_name}/figure/auto-build")
+def set_auto_build(character_name: str, body: AutoBuildRequest,
+                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import figure_build
+    _require_character(character_name)
+    if not figure_build.set_auto_build(character_name, body.enabled):
+        raise HTTPException(status_code=500, detail="The setting was not saved")
+    return {"auto_build": figure_build.auto_build_on(character_name)}

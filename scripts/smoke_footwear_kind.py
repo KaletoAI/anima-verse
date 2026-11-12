@@ -114,8 +114,11 @@ dress; Mira holds heels.
        the Wardrobe run route run_character_garment(Kira, heels, {}) answers
        {started True, …} and the recorder gets (None, False);
        the clothing-chain recorders saw no call for heels at all;
-       after_base_model(Kira) (hair creation stubbed off, enqueue_garment
-       wrapped to record its ids and answer a done job): the ids == [dress, heels]
+       after_base_model(Kira) asks the Build ("body_change", recorded — Task 8
+       of plan 2026-11-12-unified-worn-pieces), and the Build's chain steps
+       (``build_chains``; was: after_base_model enqueued them; hair creation
+       stubbed off, enqueue_garment wrapped to record its ids and answer a
+       done job): the ids == [dress, heels]
        (dress has no prepared mesh -> its fit is "outdated"; heels have no fit
        — since Task 25 the trigger queues the worn shoe too: fit-only, its item
        steps cached under the ssig, a refused source never);
@@ -185,9 +188,10 @@ def main() -> int:
         from app.core import (base_body, garment_assembly, garment_fit, garment_mesh, garment_set, garments,
                               model_refs)
         from app.core import garment_store as gs
-        from app.core import figure
+        from app.core import figure, figure_build, garment_hair
         from app.models import inventory
         from app.models.character import get_character_dir, get_character_profile, save_character_profile
+        from _figure_build_fixtures import build_chains
 
         model_refs.schedule_outfit_render = lambda *a, **k: None
         garment_assembly.schedule = lambda name, signature=None: True
@@ -400,22 +404,32 @@ def main() -> int:
             garments._fit, garment_images.run_edit_step, garment_images.cut_out, garment_mesh.generate = saved
         ENQUEUED = []
         real_enqueue = garments.enqueue_garment
-        real_ensure_hair = garments._ensure_hair
+        real_ensure_hair = garment_hair.ensure_hair_item
+        real_request = figure_build.request
 
-        def recording_enqueue(character_name, item_id):
+        def recording_enqueue(character_name, item_id, automatic=True):
             ENQUEUED.append(item_id)
             done = garments._Job(item_id, None, None, False)
             done.result = {"ok": True, "ran": []}
             done.done.set()
             return done
+
+        def no_hair_item(name):
+            raise ValueError("hair creation stubbed off")
         garments.enqueue_garment = recording_enqueue
-        garments._ensure_hair = lambda name, profile: False
+        garment_hair.ensure_hair_item = no_hair_item
+        REQUESTS = []
+        figure_build.request = lambda name, trigger: REQUESTS.append((name, trigger)) or True
         try:
-            garments.after_base_model("Kira")
+            check("after_base_model asks the Build", garments.after_base_model("Kira"), True)
+            check("request body_change", REQUESTS, [("Kira", "body_change")])
+            build_chains("Kira")
         finally:
             garments.enqueue_garment = real_enqueue
-            garments._ensure_hair = real_ensure_hair
-        check("after_base_model enqueues (footwear too since Task 25: fit-only, its item steps cached)", ENQUEUED, [dress, heels])
+            garment_hair.ensure_hair_item = real_ensure_hair
+            figure_build.request = real_request
+        check("the Build's chain steps enqueue (footwear too since Task 25: fit-only, its item steps cached)",
+              ENQUEUED, [dress, heels])
         old_fit = gs.garment_path("Kira", heels, "0123456789ab", "fit")
         old_fit.write_bytes(b"clothing-era fit of the heels")
         gs.write_record(old_fit.with_suffix(".json"), {

@@ -97,15 +97,16 @@ per-character FIFO (``_queues``; the run in flight is ``_current``):
 ``start_garment`` (a click) appends the explicit run behind the character's
 running one — an identical pending run is not added twice, a pending default
 run of the item becomes the explicit one in its place — and
-``enqueue_garment`` (the triggers: ``after_base_model``, the outfit build's
-``run_queued``) appends a default run behind the others. Several garments of
+``enqueue_garment`` (the Build's ``run_queued`` — every automatic trigger
+reaches the chains through the Build, ``after_base_model`` included)
+appends a default run behind the others. Several garments of
 one character run one after the other, each request once; a failed run never
 holds the queue (the next one starts). ``queue_state`` is the UI view;
 ``cancel_garment`` takes an item's waiting runs out (never the one in flight).
 
 An own-mesh outfit piece (kind ``clothing``) whose fit was accepted by a run
-asks ``base_body.after_mesh_item_ready``: an outfit model that left it
-painted on (no fit then) is rebuilt without it.
+asks ``base_body.after_mesh_item_ready``: a "piece ready" request of the
+character's Build, which builds the figure with the piece grafted.
 
 Pieces worn over each other (plan
 ``docs/superpowers/plans/2026-11-10-texture-body-reuse-and-layering.md``,
@@ -1329,9 +1330,8 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
         result = _run_locked(character_name, item, kind, wanted, view, bool(force))
         _note_outcome(character_name, item_id, result)
     if result.get("ok") and "fit" in (result.get("ran") or []) and kind in _grafted_kinds():
-        # Outside the run lock: an outfit whose model left this piece painted
-        # on (no fit then) is rebuilt without it (``mesh_item_ready``); a
-        # piece it left out (footwear, mesh mode) is only assembled onto it.
+        # Outside the run lock: the piece is ready — a "piece_ready" request of the
+        # character's Build (``after_mesh_item_ready``) grafts it onto the figure.
         try:
             from app.core import base_body
             base_body.after_mesh_item_ready(character_name, item_id)
@@ -1453,8 +1453,11 @@ def run_estimate(character_name: str, item_id: str, *,
         if image is None or not image.is_file():
             return _unknown_estimate(f"{item.get('name') or item_id} has no item image")
         from PIL import Image
-        with Image.open(image) as im:
-            costs["source"] = 1 if max(im.size) < footwear_source.MIN_SIDE else 0
+        try:
+            with Image.open(image) as im:
+                costs["source"] = 1 if max(im.size) < footwear_source.MIN_SIDE else 0
+        except OSError as e:  # PIL's UnidentifiedImageError included: an estimate never raises on a bad file
+            return _unknown_estimate(f"{item.get('name') or item_id}: item image unreadable ({e})")
     try:
         fsig = gs.garment_fsig(character_name, item_id, profile=profile)
         hsig = gs.garment_hsig(character_name, item_id, profile=profile) if method == gs.HAIRDECK else ""
@@ -1933,20 +1936,23 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     return position
 
 
-def enqueue_garment(character_name: str, item_id: str) -> "_Job":
+def enqueue_garment(character_name: str, item_id: str, *, automatic: bool = True) -> "_Job":
     """Queue a default run (first missing step on) of ``item_id`` behind the
     character's other runs — the per-character FIFO the triggers use
-    (``after_base_model``, the outfit build). A default run of the same
-    item that has not started yet is reused, never queued twice. Returns
-    the job (``done`` / ``result``). ValueError like ``check_run``."""
+    (the Build's ``run_queued``). A default run of the same item that has
+    not started yet is reused, never queued twice (``automatic`` False — a
+    manual Build — makes it explicit: it no longer honours a cached
+    failure). Returns the job (``done`` / ``result``). ValueError like
+    ``check_run``."""
     from app.core import garment_store as gs
     check_run(character_name, item_id)
     with _lock:
         queue = _queues.setdefault(character_name, deque())
         for job in queue:
             if job.item_id == item_id and job.plain:
+                job.automatic = job.automatic and automatic
                 return job
-        job = _Job(item_id, None, None, False, automatic=True)
+        job = _Job(item_id, None, None, False, automatic=automatic)
         queue.append(job)
         if not gs.status(character_name, item_id).get("running_step"):
             gs.start(character_name, item_id, QUEUED)
@@ -2017,16 +2023,29 @@ def queue_state(character_name: str, item_id: Optional[str] = None) -> Dict[str,
     return out
 
 
-def run_queued(character_name: str, item_ids: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+def run_queued(character_name: str, item_ids: Iterable[str], *,
+               explicit: bool = False) -> Dict[str, Dict[str, Any]]:
     """Run the chains of ``item_ids`` through the character's FIFO and wait
-    for every one (blocking — the outfit build calls it). item id ->
+    for every one (blocking — the Build calls it). item id ->
     ``run_garment``'s result, or ``{ok: False, error}`` for an item that
     could not be queued. An automatic trigger: an item whose chain failed
     for its current fsig (``cached_failure``) is not run — its result is
-    that failure with ``cached: True``."""
+    that failure with ``cached: True``. ``explicit`` (a manual Build, ruling
+    7a of plan 2026-11-12-unified-worn-pieces): the persisted failure of the
+    item's current fsig is cleared and the default run goes as an explicit
+    one — from the failed step (the first without accepted output; the
+    chain re-judges stored attempts under the current gate versions
+    first)."""
     jobs: Dict[str, Any] = {}
     out: Dict[str, Dict[str, Any]] = {}
     for item_id in item_ids:
+        if explicit:
+            _clear_cached_failure(character_name, item_id)
+            try:
+                jobs[item_id] = enqueue_garment(character_name, item_id, automatic=False)
+            except ValueError as e:
+                out[item_id] = {"ok": False, "error": str(e)}
+            continue
         failure = cached_failure(character_name, item_id)
         if failure is not None:
             # An automatic trigger: a chain that failed for this fsig waits
@@ -2042,6 +2061,16 @@ def run_queued(character_name: str, item_ids: Iterable[str]) -> Dict[str, Dict[s
         job.done.wait()
         out[item_id] = dict(job.result or {"ok": False, "error": "the run ended without a result"})
     return out
+
+
+def _clear_cached_failure(character_name: str, item_id: str) -> None:
+    """Drop the persisted failure of the item's CURRENT fsig (a manual Build retries it)."""
+    from app.core import garment_store as gs
+    try:
+        fsig = gs.garment_fsig(character_name, item_id)
+    except ValueError:
+        return
+    gs.clear_failure(character_name, item_id, fsig)
 
 
 def wait_idle(timeout: float = 60.0) -> bool:
@@ -2153,85 +2182,26 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
 
 # --- Triggers -------------------------------------------------------------------
 
-def _worn_garments(character_name: str, profile: Dict[str, Any]) -> List[str]:
-    """Hair + the own-mesh outfit pieces worn (``garment_set.worn_garments``)."""
-    from app.core import garment_set
-    return garment_set.worn_garments(character_name, profile=profile)
-
-
-def _ensure_hair(character_name: str, profile: Dict[str, Any]) -> bool:
-    """Create and wear the hair item of a character on the pipeline that has
-    hair text but no hair item at all — so the chain below starts without a
-    click (R14; the phase-6 migration relies on it). A bald character gets
-    no item; an item the character owns but does not wear (taken off in the
-    Hair tab) is left off. Hair in the body mesh (``garment_hair.hair_in_body``)
-    never gets an item. True when an item was created."""
-    from app.core import garment_hair
-    if garment_hair.hair_in_body(character_name, profile):
-        return False
-    if garment_hair.find_hair_item(character_name, profile) is not None:
-        return False
-    if not garment_hair.hair_description(character_name, profile=profile):
-        return False
-    try:
-        item_id = garment_hair.ensure_hair_item(character_name)
-    except (ValueError, RuntimeError) as e:
-        logger.info("No hair item for %s after the base model: %s", character_name, e)
-        return False
-    logger.info("Hair item %s created for %s after the base model", item_id, character_name)
-    return True
-
-
 def after_base_model(character_name: str) -> bool:
-    """R14: after a successful base model run, every worn garment (hair and
-    the own-mesh outfit pieces worn) whose fit is not accepted on the
-    current base model gets a run through the character's FIFO
-    (``enqueue_garment``; a run in progress may have used the old model, its
-    item is queued again behind it) — when its fsig changed (new base
-    signature or base images) a refit of its last accepted source first and
-    the whole chain only when that is refused (``_refit_from_source``), the
-    fit only when just the base model bytes changed (its images and mesh are
-    cached under the unchanged fsig). A chain that failed for the current fsig is skipped
-    (``garment_store.chain_failure``; a refused fit only on the base model
-    it failed on). A character with hair text but no hair item gets one first
-    (``_ensure_hair``). FOOTWEAR (plan 2026-11-10-footwear-rigid-shoes Task
-    25): the worn shoe whose fit is not accepted on the new body is queued
-    like the rest — its default run is FIT-ONLY, because the item steps
-    (upscale, empty, cut-out, mesh, insole) are cached under the item's
-    ssig, which has no base in it: no service call, no hub job; a shoe whose
-    SOURCE was refused is never queued (``cached_failure`` covers the item
-    steps for every wearer, ruling 6cdf6817). True if a run was queued.
-    Never raises."""
+    """R14: a successful base model run changed the body every worn garment
+    is fitted on — a BODY CHANGE for the character's Build (plan
+    2026-11-12-unified-worn-pieces Task 8, ``figure_build.request(name,
+    "body_change")``). With "Build automatically" on, the Build plans and
+    runs what the new body needs: the chains of the worn garments (hair and
+    own-mesh pieces, footwear fit-only: its item steps are cached under its
+    ssig) whose fit is not accepted on it — a refit of the last accepted
+    source first when the fsig changed — through the character's FIFO
+    (``run_queued``; a chain that failed for its current fsig is skipped,
+    ``cached_failure``), the hair item of a character with hair text but none
+    (the hair step's ``ensure_hair_item``), the CPU refits, the assembly.
+    Off, nothing runs and the change stays marked
+    (``figure.pending_changes``). A request during a running Build becomes
+    its one follow-up. True when a Build was started or kept. Never raises."""
     try:
-        from app.core import base_body, garment_store as gs
-        from app.models.character import get_character_profile
-        profile = get_character_profile(character_name) or {}
-        base = base_body.current_base(character_name, profile=profile)
-        if base is None:
+        from app.core import base_body, figure_build
+        if base_body.current_base(character_name) is None:
             return False
-        if _ensure_hair(character_name, profile):
-            profile = get_character_profile(character_name) or {}
-        started = False
-        for item_id in _worn_garments(character_name, profile):
-            try:
-                fsig = gs.garment_fsig(character_name, item_id, profile=profile)
-                method = gs.garment_method(character_name, item_id, profile=profile)
-            except ValueError:
-                continue
-            if method == gs.BODY:
-                continue  # a leftover hair item of a character whose hair is in the body mesh: never run
-            if _fit_state(character_name, item_id, fsig, base[1], method) == "accepted":
-                continue
-            # The persisted failure of this fsig on this base — for footwear also a refused SOURCE step
-            # (one per item, every wearer): an automatic trigger never spends the chain on it again.
-            if cached_failure(character_name, item_id, profile=profile) is not None:
-                logger.info("Garment %s/%s: failed for fsig %s — waits for an explicit run",
-                            character_name, item_id, fsig)
-                continue
-            enqueue_garment(character_name, item_id)
-            logger.info("Garment %s/%s: base model changed, chain queued", character_name, item_id)
-            started = True
-        return started
+        return figure_build.request(character_name, "body_change")
     except Exception:  # noqa: BLE001 — a trigger never breaks the base model run
         logger.exception("Garment trigger after the base model of %s failed", character_name)
         return False

@@ -3842,33 +3842,27 @@ def maybe_auto_generate_for_outfit(character_name: str) -> bool:
     run is active. Uses the CHEAPEST matching mesh backend (user decision
     2026-07-18). Returns True when a generation was started.
 
-    Base-body pipeline: no ``auto_generate`` needed (the outfit model costs
-    no GPU — ``base_body.build_outfit_model``); the input is the dressed
-    front made from the current base body. A run already in progress marks
-    a follow-up: when it ends, this hook runs again for the outfit worn
-    then."""
+    Base-body pipeline: no outfit build here (plan
+    2026-11-12-unified-worn-pieces Task 8) — the hook is an "outfit change"
+    request of the character's Build (``figure_build.request``), which
+    builds the outfit model as one of its steps when "Build automatically"
+    is on; True when a Build was started or kept as its follow-up."""
     try:
-        from app.core.base_body import base_signature, dressed_image, is_base_pipeline
-        pipeline = is_base_pipeline(character_name)
-        if not pipeline and not get_model3d_options(character_name).get("auto_generate"):
+        from app.core.base_body import is_base_pipeline
+        if is_base_pipeline(character_name):
+            from app.core import figure_build
+            return figure_build.request(character_name, "outfit_change")
+        if not get_model3d_options(character_name).get("auto_generate"):
             return False
         _, _, signature = current_outfit_state(character_name)
         if not signature or find_model3d(character_name, signature):
             return False
-        if pipeline:
-            if not dressed_image(character_name, "front", signature, base_signature(character_name)):
-                return False  # the dressed edits failed / are not there yet
-        elif not find_ref_image(character_name, "tpose", signature):
+        if not find_ref_image(character_name, "tpose", signature):
             return False  # render failed / not there yet — wait for the next pass
     except Exception as e:
         logger.debug("Model3D auto check for %s failed: %s",
                      character_name, e)
         return False
-    if pipeline:
-        started = trigger_generation(character_name, followup=True)
-        logger.info("Model3D %s: outfit model on the base body %s", character_name,
-                    "started" if started else "queued behind the running generation")
-        return started
     started = trigger_generation(character_name, prefer_cheapest=True)
     if started:
         logger.info("Model3D %s: auto generation started (T-pose present, "

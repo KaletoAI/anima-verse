@@ -254,6 +254,10 @@ def main() -> int:
         model3d._auto_extension_rig = lambda *a, **k: None
         model3d.request_lod = lambda name, path: False
         model3d.maybe_auto_generate_for_outfit = lambda *a, **k: False
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): every hook is a Build request now — recorded, so no
+        # automatic Build runs beside the measured producers.
+        from _figure_build_fixtures import record_requests
+        record_requests()
         extension_rig.rig_groups_for = lambda *a, **k: []
         extension_rig.resolved_extension_groups = lambda *a, **k: []
         extension_rig.extension_bone_names = lambda *a, **k: {}

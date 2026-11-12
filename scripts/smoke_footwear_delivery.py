@@ -82,18 +82,19 @@ P(x) = MESH_ITEM_PAINTED.format(...), NMF = NO_MESH_FIT.
      with a sidecar that left the heels out ({intended [dress, heels],
      effective [dress], unpainted [dress, heels], missing {heels: NMF}}) and
      records the figure delivered then (dress grafted, heels left out); the
-     heels' fit written (the one the hook reports) -> True, schedule called
-     once with (Kira, sig), trigger_now NOT called: the figure delivered now
-     grafts the heels on the same shape with the same texture (footwear is
-     in the texture's own set either way, figure rule 5). For the dress
-     (grafted on that model already): True, schedule once, no trigger — the
-     same shape and texture, its fit assembled again (Task 6: one rule for
-     every own-mesh piece; replaces "False, nothing called"). A sidecar built
-     while the dress had no fit (its figure painted the dress meanwhile;
-     {intended [dress, heels], effective [], unpainted [heels], …}), the
-     dress fit back -> after_mesh_item_ready(dress) == True with trigger_now
-     called (tpose) and schedule not called (another texture: the rebuild
-     path).
+     heels' fit written (the one the hook reports) -> True: the hook asks
+     the Build ("piece_ready", ``figure_build.request`` recorded — Task 8 of
+     plan 2026-11-12-unified-worn-pieces; was: it scheduled the assembly
+     itself) and calls neither schedule nor trigger_now; the Build's plan
+     needs no new texture: the figure delivered now grafts the heels on the
+     same shape with the same texture as the model's recorded figure (footwear is in the texture's own set either way, figure
+     rule 5). For the dress (grafted on that model already): True, the
+     Build asked, nothing called. A sidecar built while the dress had no
+     fit (its figure painted the dress meanwhile; {intended [dress, heels],
+     effective [], unpainted [heels], …}), the dress fit back ->
+     after_mesh_item_ready(dress) == True, the Build asked, and the
+     delivered texture differs from the model's (the Build's ``texture``
+     step renders its views; was: trigger_now tpose).
 [D7] R11 carry (Task 10): the heels' current fsig has no fit; an accepted
      footwear record under another fsig "0123456789ab" (kind footwear, method
      shoe, SHA, fit_version 3) -> accepted_fit(Kira, heels, SHA) is None and
@@ -167,6 +168,9 @@ def main() -> int:
         SCHEDULED, TRIGGERED, QUEUED = [], [], []
         garment_assembly.schedule = lambda name, signature=None: SCHEDULED.append((name, signature)) or True
         model_refs.trigger_now = lambda name, **k: TRIGGERED.append((name, k.get("kinds")))
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): every hook is a Build request now — recorded.
+        from _figure_build_fixtures import record_requests
+        REQUESTS = record_requests()
         ANSWERS = {}
 
         def run_queued(character_name, item_ids):
@@ -350,20 +354,33 @@ def main() -> int:
         write_fit(heels, "footwear")   # the fit the hook reports
         SCHEDULED.clear()
         TRIGGERED.clear()
-        check("D6 footwear -> True", base_body.after_mesh_item_ready("Kira", heels), True)
-        check("D6 schedule called", SCHEDULED, [("Kira", sig)])
-        check("D6 trigger_now not called", TRIGGERED, [])
-        SCHEDULED.clear()
-        check("D6 dress grafted on the model -> assembled", base_body.after_mesh_item_ready("Kira", dress), True)
-        check("D6 dress: schedule only", (SCHEDULED, TRIGGERED), ([("Kira", sig)], []))
-        SCHEDULED.clear()
+        REQUESTS.clear()
+
+        def same_shape_and_texture():
+            """What the Build's ``texture`` step turns on besides missing views (``figure_build.plan``): the
+            stored model built on the shape and texture the figure delivered now has (the fixture stores no
+            views, so the plan itself would ask for them in every case)."""
+            built = figure.built_figure(json.loads(outfit_model.with_suffix(".json").read_text()))
+            now = figure.delivered_figure("Kira")
+            return (built.shape, built.texture) == (now.shape, now.texture)
+        check("D6 footwear -> True (the Build asked)", (base_body.after_mesh_item_ready("Kira", heels), REQUESTS),
+              (True, [("Kira", "piece_ready")]))
+        check("D6 the hook itself schedules nothing, no trigger_now", (SCHEDULED, TRIGGERED), ([], []))
+        check("D6 same shape and texture: the Build only assembles", same_shape_and_texture(), True)
+        REQUESTS.clear()
+        check("D6 dress grafted on the model -> the Build asked",
+              (base_body.after_mesh_item_ready("Kira", dress), REQUESTS), (True, [("Kira", "piece_ready")]))
+        check("D6 dress: nothing called by the hook", (SCHEDULED, TRIGGERED), ([], []))
+        REQUESTS.clear()
         drop_fit(heels)
         drop_fit(dress)
         sidecar({"intended": sorted([dress, heels]), "effective": [], "unpainted": [heels],
                  "missing": {heels: NMF}, "warnings": [P("Dress", NMF)]})
         write_fit(dress, "clothing")
-        check("D6 painted dress -> True", base_body.after_mesh_item_ready("Kira", dress), True)
-        check("D6 painted dress: rebuild", (SCHEDULED, TRIGGERED), ([], [("Kira", ("tpose",))]))
+        check("D6 painted dress -> True (the Build asked)",
+              (base_body.after_mesh_item_ready("Kira", dress), REQUESTS), (True, [("Kira", "piece_ready")]))
+        check("D6 painted dress: nothing called by the hook", (SCHEDULED, TRIGGERED), ([], []))
+        check("D6 painted dress: another texture, the Build renders its views", same_shape_and_texture(), False)
         TRIGGERED.clear()
         outfit_model.unlink()
         outfit_model.with_suffix(".json").unlink()

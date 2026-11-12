@@ -110,7 +110,10 @@ Expected, derived by hand from the brief:
     No left/right edits. The front edit carries [2]'s negative; character_loras
     True. find_ref_image(tpose_back, osig) = the stored fit (the draft lives
     in drafts/, invisible to it). Then the auto hook (auto_generate is OFF)
-    starts the model: one worker call whose --glb has the UNRIGGED accessor
+    asks the Build ("outfit_change", ``figure_build.request`` recorded —
+    Task 8 of plan 2026-11-12-unified-worn-pieces) and the Build's assemble
+    step (``build_model``; was: the hook started the model run itself)
+    builds the model: one worker call whose --glb has the UNRIGGED accessor
     bytes and the RIGGED image; two --view pairs (front, back) whose dressed
     files equal the dressed refs and registration files equal the base
     images. The published model3d/<osig>.glb: nodes/skins/accessors JSON =
@@ -139,13 +142,14 @@ Expected, derived by hand from the brief:
     retexture worker not configured", file unchanged.
 [6] Outfit changes while a run is running (mode slow): a forced run for
     osig starts and waits in the worker; Demo then puts on the scarf (sig2),
-    its tpose pass renders front edit, back draft and back fit anew and the hook finds the run busy
-    (follow-up marked). Released: osig's model carries colour_of(
-    "tpose_<osig>"), the follow-up builds <sig2>.glb with colour_of(
+    its tpose pass renders front edit, back draft and back fit anew and the hook asks the Build
+    ("outfit_change", recorded — Task 8: a Build request during a run is its one follow-up, see
+    smoke_figure_build_plan [5]; was: model3d's follow-up marked). Released: osig's model carries
+    colour_of("tpose_<osig>"), the follow-up Build's assemble step builds <sig2>.glb with colour_of(
     "tpose_<sig2>") — two models, each with its own atlas.
 [7] Undressed (nothing worn, osig0): the tpose pass copies the base front
     and back (no side copies; no render call; bytes equal; sidecar dressed false,
-    base_signature bsig); the model run calls NO worker; <osig0>.glb image =
+    base_signature bsig); the Build's assemble step (was: the hook) calls NO worker; <osig0>.glb image =
     the RIGGED image, retexture_proof null, base_signature bsig.
 [8] Parts for this outfit (declarations [part attached_part, jiggle]):
     forced osig rebuild -> apply_script batches attached_part [part] then
@@ -161,7 +165,9 @@ Expected, derived by hand from the brief:
         apply_script batch; retexture_proof face_texels_restored 0 with
         face_texels_skipped "no face mask" (no face correction); current.
     (b) update_item(dress, outfit_piece {..., exposed_detail: true}) -> stored
-        true, maybe_auto_generate_for_outfit asked for ["Demo"];
+        true, the Build of ["Demo"] asked (``figure_build.request``
+        "detail_change" — Task 8 of plan 2026-11-12-unified-worn-pieces; was:
+        maybe_auto_generate_for_outfit);
         find_model3d(Demo, osig) None; outfit_info stale / DETAIL_CHANGED /
         "detail_changed", model info stale_reason "detail_changed"; forced
         run -> base_variant rigged, accessor bytes = the rigged base (seed
@@ -584,6 +590,17 @@ def main() -> int:
             {**g, "enabled": True, "flip": False} for g in GROUPS["default"]]
         glb_delivery.delivery_path = lambda path, **kw: path
 
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): the auto hook after a T-pose pass is a Build request
+        # now — recorded; the outfit model the hook used to start is the Build's assemble step (build_model).
+        from _figure_build_fixtures import record_requests
+        from app.core import figure_build
+        REQUESTS = record_requests()
+
+        def build_model(name):
+            """The Build's assemble step (``figure_build._run_step``: under the generation slot): the outfit
+            model of the figure delivered now, then the garment assembly. "" or the error."""
+            return figure_build._run_step(name, figure_build.Step("assemble", "Assemble the figure", 0), False)
+
         def wait_idle(name, timeout=30.0):
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline and (name in model3d._generating
@@ -618,8 +635,11 @@ def main() -> int:
             check("auto_generate off", model3d.get_model3d_options("Demo")["auto_generate"], False)
             equip("Demo", dress)
             osig = model_refs.current_outfit_state("Demo")[2]
+            REQUESTS.clear()
             model_refs._run_generation("Demo", "tpose")
             wait_idle("Demo")
+            check("the pass asks the Build", REQUESTS, [("Demo", "outfit_change")])
+            check("the Build's assemble step", build_model("Demo"), "")
             dressed_renders = [r for r in RENDERS if r["character"] == "Demo"]
             check("front edit, back draft, back fit", [(r["stem"], r["dir"]) for r in dressed_renders],
                   [(f"tpose_{osig}", "model_refs"), (f"tpose_back_{osig}", "drafts"),
@@ -819,13 +839,12 @@ def main() -> int:
             equip("Demo", scarf)
             sig2 = model_refs.current_outfit_state("Demo")[2]
             check("new signature", sig2 != osig, True)
+            REQUESTS.clear()
             model_refs._run_generation("Demo", "tpose")
-            check("follow-up marked", "Demo" in model3d._outfit_followups, True)
+            check("the pass asks the Build (its follow-up while a run goes)", REQUESTS, [("Demo", "outfit_change")])
             (root / "release").write_text("1")
             wait_idle("Demo")
-            deadline = time.monotonic() + 20
-            while time.monotonic() < deadline and not (model_dir / f"{sig2}.glb").is_file():
-                time.sleep(0.05)
+            check("the follow-up Build's assemble step", build_model("Demo"), "")
             wait_idle("Demo")
             check("osig atlas", pixel(parts(model.read_bytes())[2]), colour_of(f"tpose_{osig}"))
             model2 = model_dir / f"{sig2}.glb"
@@ -843,6 +862,7 @@ def main() -> int:
             n_renders, n_calls = len(RENDERS), len(calls())
             model_refs._run_generation("Demo", "tpose")
             wait_idle("Demo")
+            check("undressed: the Build's assemble step", build_model("Demo"), "")
             check("no render for undressed", len(RENDERS), n_renders)
             check("no side copies", [(refs / f"tpose_{v}_{osig0}.png").exists() for v in ("left", "right")],
                   [False, False])
@@ -912,8 +932,9 @@ def main() -> int:
             # stale (detail_changed); a rebuild uses the full base (seed 1.0)
             # and rebuilds [jiggle, tip] from the prerig, atlas kept.
             asked = []
-            auto_original = model3d.maybe_auto_generate_for_outfit
-            model3d.maybe_auto_generate_for_outfit = lambda name: asked.append(name) or True
+            auto_original = figure_build.request
+            # Task 8: a detail change is a "detail_change" request of each wearer's Build (was: the auto hook).
+            figure_build.request = lambda name, trigger: asked.append(name) or trigger == "detail_change"
             try:
                 piece = {"slots": ["top"], "covers": [], "outfit_types": ["casual"], "exposed_detail": True}
                 updated = inventory.update_item(dress, {"outfit_piece": piece})
@@ -960,7 +981,7 @@ def main() -> int:
                 check("flag off: covered again", (result.get("ok"), model3d._read_sidecar(model).get("base_variant")),
                       (True, "covered"))
             finally:
-                model3d.maybe_auto_generate_for_outfit = auto_original
+                figure_build.request = auto_original
             # (d) covered variant gone and not rebuildable -> full base with the
             # warning, covered_missing; that model stays current (no rebuild
             # loop) until a newer covered variant exists.

@@ -70,8 +70,10 @@ Expected, derived by hand from the rulings:
     on bK with tK, the jacket painted on again (was: left out).
 [4] The jacket's chain is run explicitly and accepted (run_garment): the
     figure now grafts it (a base fit, nothing refused on bK) and paints
-    nothing, so K's texture changes: after_mesh_item_ready asks for the
-    outfit's views again (TRIGGERS [(Demo, (tpose,))]); during the run 0
+    nothing, so K's texture changes: after_mesh_item_ready asks the Build
+    ("piece_ready", recorded — Task 8 of plan 2026-11-12-unified-worn-pieces;
+    the Build renders the outfit's views; was: TRIGGERS [(Demo, (tpose,))]),
+    no T-pose pass of its own; during the run 0
     image jobs, 0 mesh/rig jobs, 0 worker runs, no body fit yet; K stale
     "figure", its front made for another figure (dressed_image None);
     Wardrobe {state fitted, painted False}. (Was: assembled at once, K
@@ -261,6 +263,10 @@ def main() -> int:
         model3d._attach_measurement = lambda *a, **k: None
         model3d._auto_lod_enabled = lambda: False
         model3d.maybe_auto_generate_for_outfit = lambda *a, **k: False
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): every hook is a Build request now — recorded, so no
+        # automatic Build runs beside the measured producers.
+        from _figure_build_fixtures import record_requests
+        REQUESTS = record_requests()
         extension_rig.rig_groups_for = lambda *a, **k: []
         extension_rig.resolved_extension_groups = lambda *a, **k: []
         extension_rig.extension_bone_names = lambda *a, **k: {}
@@ -445,6 +451,7 @@ def main() -> int:
         body_k = base_body.outfit_body_path("Demo", b_k)
         body_before = sha(body_k)
         r0, w0, c0, t0 = len(RENDERS), len(WORKER), len(CHAIN), len(TRIGGERS)
+        REQUESTS.clear()
         REFUSE.discard("jacket")
         ran = garments.run_garment("Demo", "jacket", force=True)
         garments.wait_idle(30)
@@ -453,7 +460,8 @@ def main() -> int:
         check("accept: 0 image jobs, 0 mesh/rig jobs, 0 worker runs, no body fit yet",
               (len(RENDERS) - r0, [s for s in CHAIN[c0:] if s[0] in ("mesh", "rig")], len(WORKER) - w0, BODY_FITS),
               (0, [], 0, []))
-        check("accept: the outfit's views asked for again", TRIGGERS[t0:], [("Demo", ("tpose",))])
+        check("accept: the Build asked (it renders the outfit's views), no T-pose pass of the hook",
+              (REQUESTS, TRIGGERS[t0:]), ([("Demo", "piece_ready")], []))
         check("accept: K stale (figure), its front made for another figure",
               (model3d.find_model3d("Demo", sig_k), base_body.outfit_info("Demo").get("stale_reason"),
                base_body.dressed_image("Demo", "front", sig_k, b1)), (None, "figure", None))

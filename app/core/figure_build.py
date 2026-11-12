@@ -48,12 +48,34 @@ recorded (``failed[step]``; for ``pieces`` the first failing piece, every
 failing piece under ``items``) and skips only the steps whose ``DEPENDS``
 name it; the others run. The run shows as one tracked task "Build · <name>
 (<i>/<n> <label>)".
+
+Automatic (Task 8; rulings 7a, 7b): ``request(character, trigger)`` is how the
+triggers of today reach the Build — the outfit change (``model_refs``'s
+debounce timer), the body change (``garments.after_base_model``), a piece
+ready (``base_body.after_mesh_item_ready``), a detail change
+(``base_body.after_piece_detail_change``), the auto hook
+(``model3d.maybe_auto_generate_for_outfit``). It starts an AUTOMATIC Build
+only on the pipeline with "Build automatically" on (``auto_build_on``:
+profile ``figure_auto_build``, absent = on, and the world switch
+``model_refs._enabled()``); otherwise the change only stays marked
+(``figure.pending_changes``). A trigger during a run coalesces into the ONE
+follow-up (``start``), never interleaving steps. A mode change of an item
+(``inventory.update_item``) calls nothing — its wearers are listed by
+``wearers`` and built on request (the Items' "Build for them").
+
+A garment chain that failed for its current fsig (``garments.cached_failure``)
+is listed as "failed — Retry" with 0 counted jobs (``Step.failed``). An
+automatic Build never runs it (the failure is reported, nothing spent); a
+manual one (``start(…, automatic=False)``: the Build button / Retry, "Build
+for them", "Build current outfit") clears that failure and runs the chain
+from the failed step (``garments.run_queued(explicit=True)``; the chain
+re-judges stored attempts under the current gate versions first).
 """
 import logging
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +99,13 @@ class Step:
     label: str           # "Plain body: views 4 + mesh + rig", "Own mesh · Tailored Black"
     jobs: Optional[int]  # first-attempt hub jobs, None = unknown
     item_id: str = ""
+    #: A garment chain that failed for its current fsig (ruling 7a): the cached
+    #: error; an automatic Build skips the step, a manual one retries it.
+    failed: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"name": self.name, "label": self.label, "jobs": self.jobs, "item_id": self.item_id}
+        return {"name": self.name, "label": self.label, "jobs": self.jobs, "item_id": self.item_id,
+                "failed": self.failed}
 
 
 # --- Plan ---------------------------------------------------------------------------
@@ -124,8 +150,15 @@ def _views_label(what: str, views: int) -> str:
 def _chain_step(character_name: str, name: str, item_id: str, label: str,
                 profile: Dict[str, Any]) -> Optional[Step]:
     """A garment chain step (``pieces`` / ``hair``) when its chain has something to run or
-    its cost is unknown (``run_estimate``)."""
+    its cost is unknown (``run_estimate``); a chain that failed for its current fsig
+    (``garments.cached_failure``) as "failed — Retry" with 0 jobs (ruling 7a)."""
     from app.core import garments
+    failure = garments.cached_failure(character_name, item_id, profile=profile)
+    if failure is not None:
+        error = str(failure.get("error") or "chain failed")
+        if failure.get("step"):
+            error = f"{failure['step']} — {error}"
+        return Step(name, f"{label} — failed — Retry", 0, item_id, failed=error)
     estimate = garments.run_estimate(character_name, item_id, profile=profile)
     if estimate.get("hub_jobs") is None:
         return Step(name, f"{label} ({estimate.get('note') or 'cost unknown'})", None, item_id)
@@ -143,16 +176,26 @@ def _hair_step(character_name: str, profile: Dict[str, Any]) -> Optional[Step]:
     item = garment_hair.find_hair_item(character_name, profile)
     if item and item.get("id"):
         return _chain_step(character_name, "hair", str(item["id"]), label, profile)
+    if not garment_hair.hair_description(character_name, profile=profile):
+        return None  # bald: no hair item to make (``ensure_hair_item`` refuses it), nothing to build
     costs = garments.HUB_JOBS.get(f"hair:{method}")
     if costs is None:
         return Step("hair", f"{label} (no cost table for {method})", None)
     return Step("hair", label, sum(costs.values())) if costs else None
 
 
-def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[Step]:
+def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
+    """The steps that do work: a cached chain failure only in a manual Build."""
+    return [s for s in steps if explicit or not s.failed]
+
+
+def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+         explicit: bool = False) -> List[Step]:
     """The steps a Build runs now, in ``STEP_ORDER`` (module docstring).
     ``[]`` off the pipeline or when the delivered figure is the wanted one and
-    built. Read-only."""
+    built. A chain that failed for its fsig is listed with ``failed`` and 0
+    jobs; it makes the fits and the assembly follow only when ``explicit``
+    (a manual Build retries it). Read-only."""
     from app.core import base_body, figure, garment_refit, model3d
     profile = _profile_of(character_name, profile)
     if not base_body.is_base_pipeline(character_name, profile=profile):
@@ -204,11 +247,12 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Li
             steps.append(Step("texture", _views_label("Texture", views), views))
 
     grafted = bool(wanted.own) or wanted.hair == figure.HAIR_HAIRDECK
-    if grafted and (any(s.name in ("plain_body", "shape", "pieces", "hair") for s in steps)
+    work = _runnable(steps, explicit)
+    if grafted and (any(s.name in ("plain_body", "shape", "pieces", "hair") for s in work)
                     or garment_refit.work_count(character_name, profile=profile) > 0):
         steps.append(Step("fits", "Fits on the CPU", 0))
 
-    if steps or built is None or built.as_dict() != delivered.as_dict():
+    if _runnable(steps, explicit) or built is None or built.as_dict() != delivered.as_dict():
         steps.append(Step("assemble", "Assemble the figure", 0))
     return steps
 
@@ -236,40 +280,112 @@ def cost(character_name: str, steps: Optional[List[Step]] = None) -> Dict[str, A
 # --- Run ----------------------------------------------------------------------------
 
 _lock = threading.Lock()
-_queues: Dict[str, Deque[str]] = {}       # character -> follow-up reasons (at most one)
+_queues: Dict[str, Deque[Tuple[str, bool]]] = {}  # character -> follow-up (reason, automatic), at most one
 _active: set = set()                      # characters whose worker thread is alive
 _current: Dict[str, Dict[str, Any]] = {}  # character -> the run in flight
 _last: Dict[str, Dict[str, Any]] = {}     # character -> the last run that had steps
 
 
-def start(character_name: str, *, reason: str) -> Dict[str, Any]:
+def _keep_followup_locked(character_name: str, reason: str, automatic: bool) -> None:
+    """Keep ONE follow-up (caller holds ``_lock``): a manual request replaces an
+    automatic one (it may retry cached failures), never the other way round."""
+    queue = _queues.setdefault(character_name, deque())
+    if not queue:
+        queue.append((reason, automatic))
+    elif queue[0][1] and not automatic:
+        queue[0] = (reason, automatic)
+
+
+def start(character_name: str, *, reason: str, automatic: bool = False) -> Dict[str, Any]:
     """Start a Build of the character: ``{"status": "started"}`` (the worker
     took it), ``"queued"`` (a run goes — ONE follow-up is kept, repeated calls
-    keep one; it re-plans when it starts), ``"current"`` (nothing to build),
-    ``"off"`` (off the pipeline, with ``reason``)."""
+    keep one; it re-plans when it starts), ``"current"`` (nothing to build —
+    for an ``automatic`` Build also when only cached chain failures are left,
+    which only a manual Build retries), ``"off"`` (off the pipeline, with
+    ``reason``). ``automatic``: started by a trigger (``request``), not by a
+    click (ruling 7a)."""
     if not on_pipeline(character_name):
         return {"status": "off", "reason": OFF_PIPELINE}
     with _lock:
         if character_name in _active:
-            queue = _queues.setdefault(character_name, deque())
-            if not queue:
-                queue.append(reason)
+            _keep_followup_locked(character_name, reason, automatic)
             return {"status": "queued"}
-    if not plan(character_name):
+    if not _runnable(plan(character_name, explicit=not automatic), not automatic):
         return {"status": "current"}
     with _lock:
         if character_name in _active:  # another start won the race
-            queue = _queues.setdefault(character_name, deque())
-            if not queue:
-                queue.append(reason)
+            _keep_followup_locked(character_name, reason, automatic)
             return {"status": "queued"}
-        _queues[character_name] = deque([reason])
+        _queues[character_name] = deque([(reason, automatic)])
         _active.add(character_name)
         _current[character_name] = {"reason": reason, "step": None, "steps": []}
     threading.Thread(target=_worker, args=(character_name,), daemon=True,
                      name=f"figure-build-{character_name}").start()
-    logger.info("Build %s started (%s)", character_name, reason)
+    logger.info("Build %s started (%s%s)", character_name, reason, ", automatic" if automatic else "")
     return {"status": "started"}
+
+
+# --- Automatic ------------------------------------------------------------------------
+
+#: Profile key of the Figure tab's "Build automatically" (absent = on).
+AUTO_BUILD_KEY = "figure_auto_build"
+
+
+def auto_build_on(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether triggers start the character's Build: the profile's
+    ``figure_auto_build`` (absent = on) and the world switch of the automatic
+    outfit renders (``model_refs._enabled()``, as for the T-pose pass before)."""
+    from app.core import model_refs
+    if not model_refs._enabled():
+        return False
+    return _profile_of(character_name, profile).get(AUTO_BUILD_KEY) is not False
+
+
+def set_auto_build(character_name: str, enabled: bool) -> bool:
+    """Store "Build automatically" (profile read-modify-write under the
+    character's profile lock). Switching it off never stops a run going.
+    The save's bool."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        profile[AUTO_BUILD_KEY] = bool(enabled)
+        return bool(save_character_profile(character_name, profile))
+
+
+def request(character_name: str, trigger: str) -> bool:
+    """A trigger's way to the Build (module docstring): on the pipeline with
+    ``auto_build_on`` → an automatic ``start(reason=trigger)``; True when it
+    started or was kept as the follow-up. Else False — the change stays in
+    ``figure.pending_changes``. Never raises."""
+    try:
+        profile = _profile_of(character_name, None)
+        if not on_pipeline(character_name, profile=profile) or not auto_build_on(character_name, profile=profile):
+            logger.debug("Build %s not requested (%s): off the pipeline or not automatic", character_name, trigger)
+            return False
+        return start(character_name, reason=trigger, automatic=True).get("status") in ("started", "queued")
+    except Exception:  # noqa: BLE001 — a trigger never breaks its caller
+        logger.exception("Build request of %s (%s) failed", character_name, trigger)
+        return False
+
+
+def wearers(item_id: str) -> List[str]:
+    """The characters on the pipeline whose ``equipped_pieces`` hold
+    ``item_id`` — every stored character, dormant and pooled ones included
+    (they keep their figure). Sorted by name."""
+    from app.models.character import get_character_profile, list_available_characters
+    out: List[str] = []
+    for name in list_available_characters(include_pooled=True):
+        try:
+            profile = get_character_profile(name) or {}
+        except Exception:  # noqa: BLE001 — one unreadable profile never hides the rest
+            logger.warning("Profile of %s unreadable for the wearers of %s", name, item_id, exc_info=True)
+            continue
+        if item_id not in (profile.get("equipped_pieces") or {}).values():
+            continue
+        if on_pipeline(name, profile=profile):
+            out.append(name)
+    return sorted(out, key=str.lower)
 
 
 def state(character_name: str) -> Dict[str, Any]:
@@ -296,10 +412,10 @@ def _worker(character_name: str) -> None:
                 _active.discard(character_name)
                 _current.pop(character_name, None)
                 return
-            reason = queue.popleft()
+            reason, automatic = queue.popleft()
             _current[character_name] = {"reason": reason, "step": None, "steps": []}
         try:
-            _run(character_name, reason)
+            _run(character_name, reason, automatic=automatic)
         except Exception:  # noqa: BLE001 — a worker reports, never raises
             logger.exception("Build %s (%s) failed", character_name, reason)
 
@@ -315,12 +431,14 @@ def _tracked(character_name: str, label: str):
         return None, ""
 
 
-def _run(character_name: str, reason: str) -> None:
-    """One Build: re-plan, then every step in order (module docstring)."""
-    from app.core import model3d
+def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
+    """One Build: re-plan, then every step in order (module docstring). An
+    ``automatic`` run reports a cached chain failure without running it; a
+    manual one retries it."""
     from app.core.timeutils import utc_now_iso
-    steps = plan(character_name)
-    if not steps:
+    explicit = not automatic
+    steps = plan(character_name, explicit=explicit)
+    if not _runnable(steps, explicit):
         logger.info("Build %s (%s): nothing to build", character_name, reason)
         return
     with _lock:
@@ -344,15 +462,11 @@ def _run(character_name: str, reason: str) -> None:
                 logger.info("Build %s: %s skipped — it needs %s", character_name, step.label,
                             sorted(DEPENDS[step.name] & (set(failed) | set(skipped))))
                 continue
-            try:
-                if step.name in SLOT_STEPS:
-                    with model3d.generation_slot(character_name):
-                        error = _RUNNERS[step.name](character_name, step)
-                else:
-                    error = _RUNNERS[step.name](character_name, step)
-            except Exception as e:  # noqa: BLE001 — the step failed, the run goes on
-                logger.exception("Build %s: %s failed", character_name, step.label)
-                error = str(e) or type(e).__name__
+            if step.failed and automatic:
+                # Ruling 7a: an automatic Build never spends a chain that failed for this input.
+                error = step.failed
+            else:
+                error = _run_step(character_name, step, explicit)
             if error:
                 logger.warning("Build %s: %s failed: %s", character_name, step.label, error)
                 entry = failed.get(step.name)
@@ -375,6 +489,19 @@ def _run(character_name: str, reason: str) -> None:
 
 # --- Steps (each returns "" or the error) --------------------------------------------
 
+def _run_step(character_name: str, step: Step, explicit: bool) -> str:
+    """Run one step: "" or its error (an exception is the error)."""
+    from app.core import model3d
+    try:
+        if step.name in SLOT_STEPS:
+            with model3d.generation_slot(character_name):
+                return _RUNNERS[step.name](character_name, step, explicit)
+        return _RUNNERS[step.name](character_name, step, explicit)
+    except Exception as e:  # noqa: BLE001 — the step failed, the run goes on
+        logger.exception("Build %s: %s failed", character_name, step.label)
+        return str(e) or type(e).__name__
+
+
 def _now(character_name: str):
     """``(profile, wanted, delivered, items)`` judged now."""
     from app.core import figure
@@ -383,7 +510,7 @@ def _now(character_name: str):
     return profile, wanted, delivered, figure._items_of(profile, None)
 
 
-def _run_plain_body(character_name: str, step: Step) -> str:
+def _run_plain_body(character_name: str, step: Step, explicit: bool = False) -> str:
     """The plain body's views (all four in one run when the front is among them — the
     others edit the new front — else each view alone), then its model; forced."""
     from app.core import base_body
@@ -409,10 +536,13 @@ def _run_plain_body(character_name: str, step: Step) -> str:
 
 
 def _outfit_model(character_name: str, signature: str) -> str:
-    """The outfit model of the figure delivered now, forced, without the shape
-    preparation (the Build's own steps make shapes)."""
+    """The outfit model of the figure delivered now, without the shape
+    preparation (the Build's own steps make shapes). Not forced: a model of
+    exactly this figure is kept, and a texture painted before is reused
+    (``base_body.stored_texture_body``) — an automatic Build runs on every
+    trigger, it must not repaint what is stored (Task 8)."""
     from app.core import model3d
-    result = model3d.generate_for_current_outfit(character_name, force=True, signature=signature, prepare=False)
+    result = model3d.generate_for_current_outfit(character_name, signature=signature, prepare=False)
     return "" if result.get("ok") else str(result.get("error") or "Outfit model build failed")
 
 
@@ -424,7 +554,7 @@ def _dressed(character_name: str, wanted) -> None:
                                       signature=wanted.signature)
 
 
-def _run_interim(character_name: str, step: Step) -> str:
+def _run_interim(character_name: str, step: Step, explicit: bool = False) -> str:
     """The interim figure: its views, then its outfit model — served while the
     shape / own meshes are built (ruling 2)."""
     _profile, wanted, _delivered, _items = _now(character_name)
@@ -432,7 +562,7 @@ def _run_interim(character_name: str, step: Step) -> str:
     return _outfit_model(character_name, wanted.signature)
 
 
-def _run_shape(character_name: str, step: Step) -> str:
+def _run_shape(character_name: str, step: Step, explicit: bool = False) -> str:
     from app.core import base_body, figure
     _profile, wanted, _delivered, items = _now(character_name)
     if figure.is_plain(wanted.shape):
@@ -443,36 +573,40 @@ def _run_shape(character_name: str, step: Step) -> str:
     return str(result.get("error") or "Body shape build failed")
 
 
-def _chain(character_name: str, item_id: str) -> str:
+def _chain(character_name: str, item_id: str, explicit: bool) -> str:
+    """The item's chain through the character's garment FIFO; ``explicit`` (a
+    manual Build) clears a cached failure first and retries it (ruling 7a)."""
     from app.core import garments
-    result = garments.run_queued(character_name, [item_id]).get(item_id) or {}
+    runs = garments.run_queued(character_name, [item_id], explicit=True) if explicit else \
+        garments.run_queued(character_name, [item_id])
+    result = runs.get(item_id) or {}
     if result.get("ok"):
         return ""
     error = str(result.get("error") or "chain failed")
     return f"{result['step']} — {error}" if result.get("step") else error
 
 
-def _run_pieces(character_name: str, step: Step) -> str:
-    return _chain(character_name, step.item_id)
+def _run_pieces(character_name: str, step: Step, explicit: bool = False) -> str:
+    return _chain(character_name, step.item_id, explicit)
 
 
-def _run_hair(character_name: str, step: Step) -> str:
+def _run_hair(character_name: str, step: Step, explicit: bool = False) -> str:
     from app.core import garment_hair
     try:
         item_id = garment_hair.ensure_hair_item(character_name)
     except (ValueError, RuntimeError) as e:
         return str(e)
-    return _chain(character_name, item_id)
+    return _chain(character_name, item_id, explicit)
 
 
-def _run_texture(character_name: str, step: Step) -> str:
+def _run_texture(character_name: str, step: Step, explicit: bool = False) -> str:
     """The views of the painted set on the shape delivered now (the paint is the assembly's)."""
     _profile, wanted, _delivered, _items = _now(character_name)
     _dressed(character_name, wanted)
     return ""
 
 
-def _run_fits(character_name: str, step: Step) -> str:
+def _run_fits(character_name: str, step: Step, explicit: bool = False) -> str:
     from app.core import garment_refit
     done = garment_refit.tracked(character_name, lambda: garment_refit.refit_character(character_name))
     if done is None:
@@ -480,7 +614,7 @@ def _run_fits(character_name: str, step: Step) -> str:
     return ""
 
 
-def _run_assemble(character_name: str, step: Step) -> str:
+def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> str:
     """The outfit model of the figure delivered now (whatever is built), then the assembly."""
     from app.core import base_body, garment_assembly
     _profile, wanted, _delivered, _items = _now(character_name)
@@ -493,7 +627,7 @@ def _run_assemble(character_name: str, step: Step) -> str:
     return error
 
 
-_RUNNERS: Dict[str, Callable[[str, Step], str]] = {
+_RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
     "plain_body": _run_plain_body, "interim": _run_interim, "shape": _run_shape, "pieces": _run_pieces,
     "hair": _run_hair, "texture": _run_texture, "fits": _run_fits, "assemble": _run_assemble}
 
@@ -551,6 +685,24 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
     return rows
 
 
+def _with_cached_failures(failed: Dict[str, Dict[str, Any]], steps: List[Step]) -> Dict[str, Dict[str, Any]]:
+    """The last run's ``failed`` plus the planned chains that failed for their
+    current fsig (``Step.failed``), in the same shape — a cached failure shows
+    as "failed — Retry" before any Build ran."""
+    out = {name: {**entry, **({"items": dict(entry["items"])} if entry.get("items") else {})}
+           for name, entry in failed.items()}
+    for step in steps:
+        if not step.failed:
+            continue
+        entry = out.get(step.name)
+        if entry is None:
+            out[step.name] = {"error": step.failed, "item_id": step.item_id}
+        elif step.item_id != entry.get("item_id"):
+            entry.setdefault("items", {entry.get("item_id"): entry.get("error")}).setdefault(step.item_id,
+                                                                                           step.failed)
+    return out
+
+
 def _served_url(character_name: str) -> Optional[str]:
     from urllib.parse import quote
     from app.core import model3d
@@ -567,25 +719,26 @@ def figure_info(character_name: str) -> Dict[str, Any]:
     status, changes, cost, build, wanted, delivered, served_url, worn, hair,
     body}``. ``status``: ``building`` while a run goes, else ``failed`` /
     ``changes`` when the plan has steps (failed: the last run recorded a
-    failure), else ``up_to_date``."""
+    failure, or a planned chain failed for its input — ``Step.failed``),
+    else ``up_to_date``. ``auto_build`` = ``auto_build_on``."""
     from app.core import figure, model_refs
     profile = _profile_of(character_name, None)
     pipeline = on_pipeline(character_name, profile=profile)
     build = state(character_name)
     out: Dict[str, Any] = {
         "pipeline": pipeline, "humanoid": model_refs.is_humanoid(character_name, profile=profile),
-        # T8 replaces this with ``auto_build_on`` (the world switch included).
-        "auto_build": profile.get("figure_auto_build") is not False,
+        "auto_build": auto_build_on(character_name, profile=profile),
         "build": build, "served_url": _served_url(character_name)}
     if not pipeline:
         return {**out, "status": "up_to_date", "changes": [], "cost": cost(character_name, []),
                 "wanted": None, "delivered": None, "worn": [], "hair": None, "body": None}
     wanted, delivered = figure._delivered(character_name, profile=profile)
     steps = plan(character_name, profile=profile)
+    failures = _with_cached_failures(build["failed"], steps)
     if build["running"]:
         status = "building"
     elif steps:
-        status = "failed" if build["failed"] else "changes"
+        status = "failed" if failures else "changes"
     else:
         status = "up_to_date"
     changes = figure.pending_changes(character_name, profile=profile)
@@ -604,6 +757,6 @@ def figure_info(character_name: str) -> Dict[str, Any]:
                                   and built.shape == wanted.shape else "missing") if wanted.texture else "none"}}
     return {**out, "status": status, "changes": changes, "cost": cost(character_name, steps),
             "wanted": wanted.as_dict(), "delivered": delivered.as_dict(),
-            "worn": _worn_rows(character_name, wanted, delivered, build["failed"], build["running"]),
-            "hair": _hair_row(character_name, profile, wanted, delivered, build["failed"], build["running"]),
+            "worn": _worn_rows(character_name, wanted, delivered, failures, build["running"]),
+            "hair": _hair_row(character_name, profile, wanted, delivered, failures, build["running"]),
             "body": body}

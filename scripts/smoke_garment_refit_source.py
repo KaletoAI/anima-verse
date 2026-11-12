@@ -35,7 +35,10 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     base views of B1 (``ensure_current``): source_of(F1).bsig = B1,
     base_images = the sha256 of B1's two views; fit record refitted False,
     source.fsig F1.
-[2] New profile image -> B2 (dy 20): after_base_model -> 0 renders, 0 mesh
+[2] New profile image -> B2 (dy 20): after_base_model asks the Build
+    ("body_change", recorded — Task 8 of plan 2026-11-12-unified-worn-pieces)
+    and the Build's chain step runs (``build_chains``; was: after_base_model
+    queued it) -> 0 renders, 0 mesh
     calls, 1 decimation (the low tier of the new fit; the prepared mesh is a
     copy); fit record F2 accepted on B2, refitted True, source {fsig F1,
     bsig B1, materialized_from F1}, frame.registered True with
@@ -375,6 +378,10 @@ def main() -> int:
         # Wearing the own-mesh dress asks for the outfit renders: not part of this smoke.
         model_refs.trigger_now = lambda name, kinds=None, **kw: None
         model_refs.schedule_outfit_render = lambda name: None
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): every hook is a Build request now — recorded, so no
+        # automatic Build runs beside the chain; the body change runs the Build's chain steps (build_chains).
+        from _figure_build_fixtures import build_chains, record_requests
+        REQUESTS = record_requests()
 
         # --- fixture -----------------------------------------------------------------
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -454,7 +461,9 @@ def main() -> int:
         f2 = gs.garment_fsig("Demo", hid)
         check("fsig changed", f2 != f1, True)
         before = counts()
-        check("after_base_model starts", garments.after_base_model("Demo"), True)
+        check("after_base_model asks the Build", (garments.after_base_model("Demo"), REQUESTS[-1:]),
+              (True, [("Demo", "body_change")]))
+        check("the Build's chain step runs", build_chains("Demo"), True)
         check("idle", garments.wait_idle(120), True)
         check("0 renders, 0 mesh, 1 decimation (low)", delta(before), (0, 0, 1))
         rec2 = fit_record(f2)

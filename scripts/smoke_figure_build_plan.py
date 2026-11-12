@@ -235,7 +235,7 @@ def install_stubs():
         return {"ok": True, "body_id": fig.shape}
     base_body.prepare_shape = prepare
 
-    def run_queued(c, ids):
+    def run_queued(c, ids, explicit=False):
         out = {}
         for i in ids:
             err = W.record("chain", i)

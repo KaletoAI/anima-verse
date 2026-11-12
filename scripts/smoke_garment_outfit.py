@@ -79,8 +79,8 @@ Expected, derived by hand from the brief:
       (none of the four fragments); every view's sidecar carries the
       front's mesh_items (the side views follow the front too);
     - after_mesh_item_ready was asked for dress (its fit was accepted in
-      the run) and found nothing to rebuild (no model of X and no front
-      made for another figure yet — Task 6: the figure decides).
+      the run) and asked the Build ("piece_ready", ``figure_build.request``
+      recorded — Task 8; was: it found nothing to rebuild), no T-pose pass.
     Task 6 (plan 2026-11-12-unified-worn-pieces): the record's ``mode``
     ("retexture") is replaced by ``figure`` (the delivered figure it was
     made for: own [dress], painted [coat, shoes, skirt] — coat painted by
@@ -102,8 +102,9 @@ Expected, derived by hand from the brief:
 [3b] Later fit (coat -> ok): run_queued(Demo, [coat]) is automatic ->
     {cached True}, no run; start_garment(Demo, coat) (explicit) runs it
     once and clears the failure record -> the hook
-    after_mesh_item_ready(Demo, coat) asks trigger_now(kinds ("tpose",),
-    force False) once; dressed_image(front) of X is None (stale);
+    after_mesh_item_ready(Demo, coat) asks the Build once ("piece_ready";
+    was: trigger_now(kinds ("tpose",), force False) — Task 8: the Build
+    makes the views); dressed_image(front) of X is None (stale);
     model3d._on_older_base(model) True; outfit_info status "stale",
     stale_reason "figure" (Task 6: the model's recorded figure painted the
     coat, the delivered one grafts it — replaces "mesh_item_ready"); dressed_freshness of the front: stale,
@@ -129,8 +130,10 @@ Expected, derived by hand from the brief:
     manifest without mesh_token False.
 [6] FIFO (several garments of one character): X worn, base model bytes
     rewritten (new sha -> both fits stale), coat ``ok`` with a gate:
-    after_base_model True; while coat runs, Demo's queue holds [dress];
-    after_base_model again -> True, queue [dress, coat] (dress reused, the
+    after_base_model asks the Build ("body_change"); the Build's chain entry
+    ``run_queued(Demo, [coat, dress])`` in a thread (was: after_base_model
+    queued them itself); while coat runs, Demo's queue holds [dress]; a
+    second run_queued at once -> queue [dress, coat] (dress reused, the
     running coat queued again); released -> runs coat, dress, coat in that
     order, max concurrency 1, idle afterwards. Off pipeline:
     after_base_model(Offline) False, resolve_figure(Offline, X) record {}
@@ -146,8 +149,9 @@ Expected, derived by hand from the brief:
     the new failure is recorded. A fit failure holds on its base model sha
     only (another sha -> None: the fit depends on the base model, which the
     fsig leaves out); a mesh failure holds on any. Base model rewritten (new
-    sha) with coat's mesh failure recorded: after_base_model True, runs
-    only dress.
+    sha) with coat's mesh failure recorded: the Build's chain steps
+    (``build_chains``; was: after_base_model) run only dress — the plan
+    lists coat as failed (ruling 7a).
 [7] _fit dispatch (Task 3, 0b532d33): garments._fit for kind clothing
     calls garment_fit.fit_clothing (slots [top], masks body + garment) and
     gates with CLOTHING_GATES; the stub refuses -> _Refused(step "fit", "fit
@@ -347,6 +351,10 @@ def main() -> int:
         sync_topics.changed_at = lambda *a, **k: None
         model_refs.trigger_now = lambda name, kinds=None, **kw: TRIGGERS.append((name, kinds, kw)) or None
         model_refs.schedule_outfit_render = lambda name: None
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): every hook is a Build request now — recorded, so no
+        # automatic Build runs beside the chains; the body change runs the Build's chain steps (build_chains).
+        from _figure_build_fixtures import build_chains, record_requests
+        REQUESTS = record_requests()
         real_hook = base_body.after_mesh_item_ready
 
         def hook(name, item_id):
@@ -502,8 +510,9 @@ def main() -> int:
         check("coat failure on disk", (fail_rec.get("step"), fail_rec.get("error")), ("fit", "fit refused — stub"))
         check("dress has none", gs.garment_path("Demo", "dress", gs.garment_fsig("Demo", "dress"),
                                                 "failed").exists(), False)
-        check("hook asked for dress, nothing to rebuild", HOOKS, [("Demo", "dress", False)])
-        check("no rebuild triggered", TRIGGERS, [])
+        check("hook asked the Build for dress", (HOOKS, REQUESTS), ([("Demo", "dress", True)],
+                                                                    [("Demo", "piece_ready")]))
+        check("no T-pose pass triggered", TRIGGERS, [])
         print("[2] baseline: flag off")
         flag("dress", False)
         RUNS.clear()
@@ -548,6 +557,7 @@ def main() -> int:
         mode["coat"] = "ok"
         HOOKS.clear()
         TRIGGERS.clear()
+        REQUESTS.clear()
         RUNS.clear()
         res = garments.run_queued("Demo", ["coat"])
         check("automatic: cached failure, no run", (res["coat"].get("cached"), RUNS), (True, []))
@@ -557,7 +567,8 @@ def main() -> int:
         check("failure cleared", gs.garment_path("Demo", "coat", gs.garment_fsig("Demo", "coat"),
                                                  "failed").exists(), False)
         check("hook found the painted coat", HOOKS, [("Demo", "coat", True)])
-        check("rebuild asked once", TRIGGERS, [("Demo", ("tpose",), {"force": False})])
+        check("the Build asked once (no T-pose pass of its own)", (REQUESTS, TRIGGERS),
+              ([("Demo", "piece_ready")], []))
         check("front stale", base_body.dressed_image("Demo", "front", sig_x, b1), None)
         check("model stale", model3d._on_older_base(bare, model3d._current_base("Demo")), True)
         info = base_body.outfit_info("Demo")
@@ -637,7 +648,12 @@ def main() -> int:
         RUNS.clear()
         live["max"] = 0
         gates["coat"] = threading.Event()
-        check("after_base_model", garments.after_base_model("Demo"), True)
+        REQUESTS.clear()
+        check("after_base_model asks the Build", (garments.after_base_model("Demo"), REQUESTS),
+              (True, [("Demo", "body_change")]))
+        # The Build's chain entry, twice at once (two Builds' worth of requests on one character's FIFO).
+        first = threading.Thread(target=garments.run_queued, args=("Demo", ["coat", "dress"]), daemon=True)
+        first.start()
         for _ in range(200):
             if RUNS:
                 break
@@ -645,11 +661,19 @@ def main() -> int:
         with garments._lock:
             queued = [j.item_id for j in garments._queues.get("Demo") or []]
         check("queue while coat runs", queued, ["dress"])
-        check("after_base_model again", garments.after_base_model("Demo"), True)
+        second = threading.Thread(target=garments.run_queued, args=("Demo", ["coat", "dress"]), daemon=True)
+        second.start()
+        for _ in range(200):
+            with garments._lock:
+                if len(garments._queues.get("Demo") or []) >= 2:
+                    break
+            threading.Event().wait(0.02)
         with garments._lock:
             queued = [j.item_id for j in garments._queues.get("Demo") or []]
         check("queue: dress reused, coat again", queued, ["dress", "coat"])
         gates["coat"].set()
+        first.join(30)
+        second.join(30)
         check("idle", garments.wait_idle(30), True)
         check("runs", [r[1] for r in RUNS], ["coat", "dress", "coat"])
         check("serial", live["max"], 1)
@@ -737,9 +761,9 @@ def main() -> int:
               (gs.chain_failure("Demo", "coat", fsig_b, base_model_sha="0" * 64) or {}).get("step"), "mesh")
         RUNS.clear()
         write_model((40, 120, 140))  # new base sha: the dress's fit is stale, coat's mesh failure holds
-        check("after_base_model", garments.after_base_model("Demo"), True)
+        check("the Build's chain steps run", build_chains("Demo"), True)
         garments.wait_idle(30)
-        check("after_base_model skips the failed coat", [r[1] for r in RUNS], ["dress"])
+        check("the Build skips the failed coat", [r[1] for r in RUNS], ["dress"])
 
         garments.wait_idle(30)
         garment_assembly.wait_idle(30)

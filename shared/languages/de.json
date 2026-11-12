@@ -1177,6 +1177,7 @@
     "Render this image automatically after outfit changes": "Dieses Bild nach Outfit-Wechseln automatisch rendern",
     "Rendered automatically after outfit changes (debounced); Generate re-renders the current combination.": "Wird nach Outfit-Wechseln automatisch gerendert (gebündelt); Generieren rendert die aktuelle Kombination neu.",
     "Rendered automatically after outfit changes (debounced); Generate re-renders the current combination. The pose render feeds the image-to-3D pipeline.": "Wird nach Outfit-Wechseln automatisch gerendert (gebündelt); Generieren rendert die aktuelle Kombination neu. Der Pose-Render ist der Input für die Bild→3D-Pipeline.",
+    "On the figure pipeline, the Figure tab's Build automatically decides": "Auf der Figur-Pipeline entscheidet „Automatisch bauen“ im Figur-Tab",
     "Rendered expression images cleared": "Gerenderte Ausdrucksbilder gelöscht",
     "Rendering": "Rendert",
     "Renders the pose reference and the mesh for every saved outfit — the character keeps wearing what it wears.": "Rendert für jedes gespeicherte Outfit die Pose-Referenz und das Mesh — der Charakter behält an, was er trägt.",

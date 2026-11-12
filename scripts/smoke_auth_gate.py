@@ -124,6 +124,13 @@ E) WORLD-LEVEL WRITES ARE ADMIN-ONLY (user decision 2026-09-21) — the table
         /queue/tasks/{task_id} share a shape, so these two are EXACT matches,
         never a prefix.
 
+   Task 8 of plan 2026-11-12-unified-worn-pieces: POST
+   /inventory/items/{id}/build-wearers is True by rule 3; GET
+   /inventory/items/{id}/wearers stays False here (a read) and is refused
+   for a player by its own ``require_admin`` — checked through the real
+   routers together with POST /characters/{c}/figure/auto-build (player
+   403, anonymous 401).
+
    Prefix neighbours: ``_under`` is segment-wise, so /worldly, /rulesx,
    /eventsful, /intentsful and /inventory/itemsy are NOT under the rules above
    and stay False even for a write.
@@ -607,6 +614,10 @@ WRITE_RULE_CASES = [
     ("DELETE", "/inventory/items/apple", True),
     ("POST", "/inventory/items/import", True),
     ("POST", "/inventory/items/apple/generate-image", True),
+    # "Build for them" (plan 2026-11-12-unified-worn-pieces Task 8): a write under the catalogue
+    ("POST", "/inventory/items/apple/build-wearers", True),
+    # ... its read names other characters — admin-only by its own require_admin, not by this rule
+    ("GET", "/inventory/items/apple/wearers", False),
     ("POST", "/inventory/rooms/tavern/bar", True),
     ("DELETE", "/inventory/rooms/tavern/bar/apple", True),
     ("GET", "/inventory/items", False),
@@ -650,6 +661,23 @@ for _m, _p in [("POST", "/world/imagegen-enhance-prompt"),
                ("GET", "/world/locations"), ("GET", "/rules"),
                ("GET", "/events"), ("GET", "/inventory/items")]:
     check(f"user {_m} {_p}", status(_m, _p, "user"), 200)
+
+# The figure routes of Task 8 through the REAL routers: the wearers read is refused for a player by its
+# require_admin (the gate lets reads under /inventory/items through), the build-wearers write by the gate,
+# the auto-build switch by its require_admin; an anonymous request is 401 everywhere.
+from app.routes import figure as figure_route, inventory as inventory_route  # noqa: E402
+figure_app = FastAPI()
+figure_app.middleware("http")(auth_dependency.auth_gate_middleware)
+figure_app.middleware("http")(auth_dependency.user_context_middleware)
+figure_app.include_router(inventory_route.router)
+figure_app.include_router(figure_route.router)
+figure_client = TestClient(figure_app)
+for _m, _p in [("GET", "/inventory/items/apple/wearers"), ("POST", "/inventory/items/apple/build-wearers"),
+               ("POST", "/characters/Mara/figure/auto-build")]:
+    _kw = {"json": {"enabled": False}} if _p.endswith("auto-build") else {}
+    check(f"user {_m} {_p} (real route)",
+          figure_client.request(_m, _p, headers={"x-test-user": "user"}, **_kw).status_code, 403)
+    check(f"anon {_m} {_p} (real route)", figure_client.request(_m, _p, **_kw).status_code, 401)
 
 print()
 print("F) no player surface writes to an admin-only path")

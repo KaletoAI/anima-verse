@@ -18,12 +18,15 @@ worn through ``inventory.equip_piece``; the base model =
 
 [R1] Body change. The first run fits heels on B0 (accepted, 1 fit call). The base bytes are replaced by the same
      geometry re-exported (sha B1 ≠ B0): ``fit_state`` "stale", info freshness "Body changed — refit pending".
-     ``after_base_model(Demo)`` → True; the FIFO runs the heels item ONCE, fit only: fit calls 2 in total, the
+     ``after_base_model(Demo)`` asks the Build ("body_change", recorded — Task 8 of plan
+     2026-11-12-unified-worn-pieces) and the Build's chain step (``build_chains``; was: after_base_model queued it)
+     runs the heels item ONCE, fit only: fit calls 2 in total, the
      service stub never reached, ``trigger_now`` / ``schedule_outfit_render`` not called; the record is accepted on
      B1 (``base_model_sha256`` B1, ``fit_version`` = ``FIT_VERSION["footwear"]``) and carries
      ``refitted.from_body_sha256`` = B0; ``fit_state`` "accepted"; info freshness "Refitted from the previous
      base". A refused SOURCE is never queued: with the heels' ``empty`` step recorded refused and the base changed
-     once more (B1'), ``after_base_model`` → False, no fit call, ``cached_failure(Demo, heels)`` names ``empty``;
+     once more (B1'), the Build has no chain step to run (``build_chains`` False: the plan lists it failed; was:
+     ``after_base_model`` → False), no fit call, ``cached_failure(Demo, heels)`` names ``empty``;
      the step restored.
 [R2] Refused refit. A width cap of 1.00 on the wide-foot base (``foot_body_glb(0.10)``, sha B2) → the run is
      refused by ``slim_needed`` (fit_step [P7]'s hand value 0.2209 > 0.18). ``resolve_figure(Demo, {feet:
@@ -123,6 +126,10 @@ def main() -> int:
         model_refs.trigger_now = lambda *a, **k: TEXTURE.append(("trigger_now", a, k)) or False
         model_refs.schedule_outfit_render = lambda *a, **k: TEXTURE.append(("schedule_outfit_render", a, k))
         garment_assembly.schedule = lambda name, signature=None: SCHEDULED.append(name) or True
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): every hook is a Build request now — recorded, so no
+        # automatic Build runs beside the chain; the body change runs the Build's chain steps (build_chains).
+        from _figure_build_fixtures import build_chains, record_requests
+        REQUESTS = record_requests()
 
         def decimate(src, target, dst):
             Path(dst).parent.mkdir(parents=True, exist_ok=True)
@@ -169,7 +176,9 @@ def main() -> int:
         heels, src = shoe_item("heels", (20, 20, 20))
         from app.models.character import get_character_profile
         check("Demo wears heels", inventory.equip_piece("Demo", heels, source="smoke")["status"], "ok")
-        check("worn garments = [heels]", garments._worn_garments("Demo", get_character_profile("Demo") or {}), [heels])
+        from app.core import garment_set
+        check("worn garments = [heels]", garment_set.worn_garments("Demo", profile=get_character_profile("Demo") or {}),
+              [heels])
 
         mdir = get_character_dir("Demo") / "model3d"
         (mdir / "unrigged").mkdir(parents=True, exist_ok=True)
@@ -206,8 +215,9 @@ def main() -> int:
         check("R1 freshness before", (info["steps"]["fit"]["status"], info["steps"]["fit"]["freshness"]["reason"]),
               ("stale", "Body changed — refit pending"))
         TEXTURE.clear()   # equip_piece scheduled an outfit render at setup: not the refit's doing
-        queued = garments.after_base_model("Demo")
-        check("R1 after_base_model queued", queued, True)
+        check("R1 after_base_model asks the Build", (garments.after_base_model("Demo"), REQUESTS[-1:]),
+              (True, [("Demo", "body_change")]))
+        check("R1 the Build's chain step runs", build_chains("Demo"), True)
         check("R1 queue idle again", wait_idle(), True)
         check("R1 fit calls 2 (one refit)", len(FIT_CALLS), 2)
         check("R1 0 service calls, no texture job", (SERVICE, TEXTURE), ([], []))
@@ -228,7 +238,7 @@ def main() -> int:
         write_base(repack(base_glb, generator="a third export"))
         n1 = len(FIT_CALLS)
         check("R1 refused source: cached_failure names empty", (garments.cached_failure("Demo", heels) or {}).get("step"), "empty")
-        check("R1 refused source: after_base_model queues nothing", garments.after_base_model("Demo"), False)
+        check("R1 refused source: the Build runs no chain step", build_chains("Demo"), False)
         check("R1 refused source: no fit call", len(FIT_CALLS), n1)
         steps_rec["steps"]["empty"] = good_empty
         gs.write_record(src / "record.json", steps_rec)

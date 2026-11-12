@@ -302,6 +302,10 @@ def main() -> int:
         model3d._auto_lod_enabled = lambda: True
         model3d.build_lod = lambda name, signature=None, **k: LOD.append(signature) or {"ok": True}
         model3d.maybe_auto_generate_for_outfit = lambda *a, **k: False
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): every hook is a Build request now — recorded, so no
+        # automatic Build runs beside the measured producers.
+        from _figure_build_fixtures import record_requests
+        record_requests()
         extension_rig.rig_groups_for = lambda *a, **k: []
         extension_rig.resolved_extension_groups = lambda *a, **k: []
         extension_rig.extension_bone_names = lambda *a, **k: {}
