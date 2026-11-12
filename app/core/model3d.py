@@ -3740,16 +3740,9 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
             _generating.discard(character_name)
 
 
-# Characters on the base-body pipeline whose outfit-change trigger found a
-# generation running: once it ends, the auto hook runs again for the outfit
-# worn THEN (a newer combination gets its own run, never a mixed one).
-_outfit_followups: set = set()
-
-
 def _run(character_name: str, force: bool, backend_glob: str = "",
          prefer_cheapest: bool = False, face_num: Any = None,
          texture_size: Any = None, base: bool = False) -> None:
-    followup = False
     with _char_lock(character_name):
         try:
             if base:
@@ -3768,10 +3761,6 @@ def _run(character_name: str, force: bool, backend_glob: str = "",
         finally:
             with _lock:
                 _generating.discard(character_name)
-                followup = character_name in _outfit_followups
-                _outfit_followups.discard(character_name)
-    if followup:
-        maybe_auto_generate_for_outfit(character_name)
 
 
 def trigger_generation(character_name: str, *, force: bool = False,
@@ -3779,19 +3768,15 @@ def trigger_generation(character_name: str, *, force: bool = False,
                        prefer_cheapest: bool = False,
                        face_num: Any = None,
                        texture_size: Any = None,
-                       base: bool = False, followup: bool = False) -> bool:
+                       base: bool = False) -> bool:
     """Starts the mesh generation in the background.
     ``backend_glob`` picks the mesh backend (empty = the rig's mesh occasion
     chain of the image routing; ``prefer_cheapest`` always cheapest of the
     rig — the auto hook). ``base`` builds the base body
     (``base_body.generate_base_model``) instead of the outfit's model.
-    False when one is already running for this character; ``followup``
-    then marks the auto hook to run again once it has ended (base-body
-    outfit trigger)."""
+    False when one is already running for this character."""
     with _lock:
         if character_name in _generating:
-            if followup:
-                _outfit_followups.add(character_name)
             return False
         _generating.add(character_name)
     threading.Thread(target=_run,
@@ -3807,8 +3792,7 @@ def generation_slot(character_name: str, *, poll_s: float = 1.0):
     takes — for an explicit run that QUEUES behind the running one instead of
     being refused (the Outfit body tab's runs, ``app/core/outfit_bodies.py``):
     waits until no other 3D run of the character goes, then holds the guard
-    and the character lock for the block. A follow-up an auto trigger asked
-    for meanwhile runs once the block ended (as after ``_run``)."""
+    and the character lock for the block."""
     import time
     while True:
         with _lock:
@@ -3822,10 +3806,6 @@ def generation_slot(character_name: str, *, poll_s: float = 1.0):
     finally:
         with _lock:
             _generating.discard(character_name)
-            followup = character_name in _outfit_followups
-            _outfit_followups.discard(character_name)
-        if followup:
-            maybe_auto_generate_for_outfit(character_name)
 
 
 def generation_running(character_name: str) -> bool:

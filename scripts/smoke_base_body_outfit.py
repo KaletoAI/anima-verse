@@ -603,8 +603,7 @@ def main() -> int:
 
         def wait_idle(name, timeout=30.0):
             deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline and (name in model3d._generating
-                                                   or name in model3d._outfit_followups):
+            while time.monotonic() < deadline and name in model3d._generating:
                 time.sleep(0.05)
             check(f"{name} generation finished", name in model3d._generating, False)
 

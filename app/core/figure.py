@@ -308,6 +308,11 @@ WHAT_OWN_MESH = "its own mesh"
 HAIR_BODY, HAIR_HAIRDECK, HAIR_BALD = "body", "hairdeck", "bald"
 #: ``pending_changes`` keys of the body and the hair.
 BODY_KEY, HAIR_KEY = "body", "hair"
+#: The plain body's pending change (plan 2026-11-12-unified-worn-pieces ruling 8a): only a manual Build
+#: (or the base_refresh improvement) spends its hub jobs — the ``note`` of the ``body`` change and
+#: ``figure_build.Step.manual``.
+BASE_OUTDATED = "Base body outdated — Build to refresh"
+BASE_MISSING = "No base body yet — Build to create"
 #: The wanted / delivered words of a piece in ``pending_changes``.
 LEFT_OUT = "left_out"
 
@@ -618,7 +623,8 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
     state differs from what its mode calls for (interim painting, a shape not
     built, footwear left out; a piece meshed in by the refusal branch is
     delivered as wanted), then ``body`` when the plain body is missing or was
-    rendered with older prompts (``base_body.OLDER_PROMPTS``), then ``hair``
+    rendered with older prompts (``base_body.OLDER_PROMPTS``; its ``note`` =
+    ``BASE_MISSING`` / ``BASE_OUTDATED``, ruling 8a), then ``hair``
     when the hair is not delivered as its method says. Read-only."""
     from app.core import base_body
     from app.models.inventory import get_item
@@ -633,10 +639,11 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
     from app.core.model_refs import find_ref_image
     if (find_ref_image(character_name, "tpose", wanted.bsig) is None
             or not base_body.base_model_sha256(character_name, wanted.bsig)):
-        out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built", "delivered": "missing"})
+        out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built", "delivered": "missing",
+                    "note": BASE_MISSING})
     elif not base_body.prompts_current(character_name, wanted.bsig, profile=profile):
         out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built",
-                    "delivered": base_body.OLDER_PROMPTS})
+                    "delivered": base_body.OLDER_PROMPTS, "note": BASE_OUTDATED})
     if wanted.hair != delivered.hair:
         out.append({"key": HAIR_KEY, "name": "Hair", "wanted": wanted.hair, "delivered": delivered.hair})
     return out

@@ -458,6 +458,11 @@ def main() -> int:
         from app.models import inventory
         from app.models.character import get_character_dir, save_character_profile
         garment_assembly.schedule = lambda *a, **k: False
+        # A chain's piece_ready asks the character's Build (plan 2026-11-12-unified-worn-pieces Task 8):
+        # recorded, so no automatic Build writes into the world while this smoke measures or cleans up.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from _figure_build_fixtures import record_requests
+        record_requests()
         charmod.run_rembg = rembg_stub
 
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,

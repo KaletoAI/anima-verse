@@ -144,6 +144,11 @@ def main() -> int:
         model_refs.trigger_now = lambda *a, **k: False
         model_refs.schedule_outfit_render = lambda *a, **k: None
         garment_assembly.schedule = lambda name, signature=None: True
+        # A chain's piece_ready asks the character's Build (plan 2026-11-12-unified-worn-pieces Task 8):
+        # recorded, so no automatic Build writes into the world while this smoke measures or cleans up.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from _figure_build_fixtures import record_requests
+        record_requests()
 
         def decimate(src, target, dst):
             Path(dst).parent.mkdir(parents=True, exist_ok=True)

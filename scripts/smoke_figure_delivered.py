@@ -70,7 +70,8 @@ Expected, derived by hand from the brief's delivered rule:
 [5] Review Focus 2: worn {top: blouse}, hair_method hairdeck, hair_demo worn,
     no HairDeck fit; base haired -> hair "body"; base bald -> "bald".
     With the plain body's prompts older (CURRENT False) pending_changes ==
-    [{key body, name "Plain body", wanted "built", delivered OLDER_PROMPTS},
+    [{key body, name "Plain body", wanted "built", delivered OLDER_PROMPTS, note BASE_OUTDATED
+    "Base body outdated — Build to refresh" (ruling 8a)},
      {key hair, name "Hair", wanted "hairdeck", delivered "body"}].
 [6] [1]'s state: a model sidecar {"figure": delivered.as_dict()} ->
     built_figure == delivered; pending_changes == []; built_figure({}) is
@@ -264,7 +265,8 @@ def main() -> int:
         HAIRED["value"] = True
         CURRENT["value"] = False
         check("pending_changes", figure.pending_changes("Demo", profile=hairdeck),
-              [{"key": "body", "name": "Plain body", "wanted": "built", "delivered": base_body.OLDER_PROMPTS},
+              [{"key": "body", "name": "Plain body", "wanted": "built", "delivered": base_body.OLDER_PROMPTS,
+                "note": figure.BASE_OUTDATED},
                {"key": "hair", "name": "Hair", "wanted": "hairdeck", "delivered": "body"}])
         CURRENT["value"] = True
 

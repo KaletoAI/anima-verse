@@ -212,10 +212,4 @@ class BaseRefresh(ImprovementType):
         finally:
             with model3d._lock:
                 model3d._generating.discard(name)
-                followup = name in model3d._outfit_followups
-                model3d._outfit_followups.discard(name)
-            if followup:
-                # An outfit trigger refused while the guard was held runs now
-                # (as after ``model3d._run`` / ``generation_slot``).
-                model3d.maybe_auto_generate_for_outfit(name)
         return None

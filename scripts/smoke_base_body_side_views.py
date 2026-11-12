@@ -55,7 +55,9 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
 [4] OFF (the default) — byte-identical to the front+back pipeline. Demo
     wears the dress (osig), delta plan [2.9]: the tpose pass renders front
     edit, back draft, back fit (dirs model_refs, drafts, attempt1;
-    occasions outfit_front, outfit_back_draft, outfit_back); one worker call
+    occasions outfit_front, outfit_back_draft, outfit_back); the Build's
+    assemble step (Task 8 of plan 2026-11-12-unified-worn-pieces; was: the
+    auto hook after the pass) makes one worker call
     whose argv has views [back, front] and neither --side-arm-margin nor
     --arm-rig-glb; dE 2.9 <= 4 -> no refit, the model sidecar has no
     back_refit; model_refs info: views {back, face}, drafts {back} only;
@@ -84,7 +86,7 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
         render, ONE worker call, attempts[1].error "turned toward the
         camera", chosen 1.
 [6] ON (dressed_side_views true, margin 0.05). Demo puts on the scarf
-    (sig2), plan [2.0]: the pass renders front edit, back draft, back fit,
+    (sig2), plan [2.0] (the model by the Build's assemble step, as in [4]): the pass renders front edit, back draft, back fit,
     left draft, left fit, right draft, right fit — dirs [model_refs, drafts,
     attempt1, drafts, attempt1, drafts, attempt1], occasions [outfit_front,
     outfit_back_draft, outfit_back, outfit_side_draft, outfit_side,
@@ -416,10 +418,20 @@ def main() -> int:
         glb_delivery.delivery_path = lambda path, **kw: path
         base_body.view_guard = guard
 
+        # Task 8 (plan 2026-11-12-unified-worn-pieces): the auto hook after a T-pose pass is a Build request
+        # now — recorded; the outfit model the hook used to start is the Build's assemble step (build_model).
+        from _figure_build_fixtures import record_requests
+        from app.core import figure_build
+        record_requests()
+
+        def build_model():
+            """The Build's assemble step (``figure_build._run_step``, under the generation slot): the outfit
+            model of the figure delivered now, then the garment assembly."""
+            return figure_build._run_step("Demo", figure_build.Step("assemble", "Assemble the figure", 0), False)
+
         def wait_idle(timeout=30.0):
             deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline and ("Demo" in model3d._generating
-                                                   or "Demo" in model3d._outfit_followups):
+            while time.monotonic() < deadline and "Demo" in model3d._generating:
                 time.sleep(0.05)
             check("generation finished", "Demo" in model3d._generating, False)
 
@@ -452,6 +464,7 @@ def main() -> int:
             osig = model_refs.current_outfit_state("Demo")[2]
             model_refs._run_generation("Demo", "tpose")
             wait_idle()
+            check("the Build's assemble step", build_model(), "")
             check("three renders", [(r["dir"], r.get("occasion")) for r in RENDERS],
                   [("model_refs", "outfit_front"), ("drafts", "outfit_back_draft"), ("attempt1", "outfit_back")])
             runs = calls()
@@ -565,6 +578,7 @@ def main() -> int:
             sig2 = model_refs.current_outfit_state("Demo")[2]
             model_refs._run_generation("Demo", "tpose")
             wait_idle()
+            check("the Build's assemble step", build_model(), "")
             rs = RENDERS[start_renders:]
             check("seven renders", [r["dir"] for r in rs],
                   ["model_refs", "drafts", "attempt1", "drafts", "attempt1", "drafts", "attempt1"])

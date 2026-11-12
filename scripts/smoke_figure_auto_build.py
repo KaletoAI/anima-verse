@@ -16,8 +16,10 @@ real queue of ``figure_build.start`` and the real inventory; only the Build's
 run body (``figure_build._run``) is a recorder (it can be held in flight per
 character), the render threads (``model_refs._fire_kinds``,
 ``model_refs.trigger_now``) are recorders and the debounce is 0.1 s. Kira and
-Kai are on the base-body pipeline without any built body, so their real plan
-always has steps (the plain body is missing); Mara is off the pipeline.
+Kai are on the base-body pipeline with nothing of their outfits built, so their
+real plan always has steps an automatic Build runs; their plain body counts as
+current (``base_body.base_refresh_plan`` stubbed: an automatic Build never
+builds it — ruling 8a, section [9]); Mara is off the pipeline.
 
 Expected, by hand from the brief:
 
@@ -51,17 +53,39 @@ Expected, by hand from the brief:
     ``{"auto_build": false}`` and the profile key stored False.
 [7] Ruling 7a (the stubbed world of ``smoke_figure_build_plan``: hair wanted
     HairDeck, its chain failed for its fsig, the model built as delivered):
-    ``plan`` = ``[hair]`` with ``failed`` set, label "… — failed — Retry",
+    ``plan(explicit=False)`` (automatic) = ``[hair]`` with ``failed`` set, label "… — failed — Retry",
     jobs 0 → cost 0; an automatic ``start`` → "current"; GET status
-    ``failed``, hair row ``failed``; ``plan(explicit=True)`` = hair, fits,
-    assemble; a manual Build runs ``run_queued(…, explicit=True)``, then the
-    refit and the assembly. Base older + the cached hair failure, automatic:
-    the plain body runs, the hair chain does NOT run, ``failed["hair"]`` is
-    the cached error.
+    ``failed``, hair row ``failed``; ``plan(explicit=True)`` (the default:
+    the Build button's plan) = hair, fits, assemble; a manual Build runs ``run_queued(…, explicit=True)``, then the
+    refit and the assembly. The cached hair failure next to other work (the
+    blouse painted, no outfit model), automatic: texture views, the model and
+    the assembly run, the hair chain does NOT run, ``failed["hair"]`` is the
+    cached error. (Was: base older there, the plain body ran — ruling 8a.)
+[9] Ruling 8a — an automatic Build never spends base-body hub jobs (the
+    stubbed world of ``smoke_figure_build_plan``; plain body 6 hub jobs =
+    views 4 + mesh + rig):
+    (a) base older (``older_prompts``), the blouse painted, its views missing
+        (they read the stale base): the manual plan = plain_body (6, manual
+        "Base body outdated — Build to refresh"), texture (3), assemble (0)
+        → 9; the automatic plan lists the same plain_body (the UI's pending
+        change) then texture (3), assemble (0); its runnable steps are
+        texture + assemble. ``request(Kira, "outfit_change")`` (auto on) →
+        True; the run calls dressed, model, schedule — NO base_images /
+        base_model; failed {}, skipped []. GET: status "changes", cost
+        steps[0] = plain_body with that manual note and jobs 6, hub_jobs 9;
+        the body change's note (``figure.BASE_OUTDATED``) is the same text.
+        A manual ``start`` then → base_images, base_model, dressed, model,
+        schedule.
+    (b) no base (``missing``), the blouse painted, no model: the automatic
+        plan = [plain_body (6, manual "No base body yet — Build to create")]
+        alone (nothing to build on); ``start(automatic)`` → "current", no
+        producer called; the manual plan = plain_body, texture (3), assemble
+        → 9.
 [8] Fails on the old code: at 8076597d ``figure_build.py`` has no
     ``def request(`` / ``def wearers(``, ``routes/inventory.py`` no
     ``/wearers`` route, ``schedule_outfit_render`` no Build timer, and
-    ``garments.after_base_model`` enqueues chains itself.
+    ``garments.after_base_model`` enqueues chains itself. At e949c4e1 (before
+    ruling 8a) ``_runnable`` knows no ``manual`` step.
 """
 import json
 import os
@@ -78,6 +102,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 BASELINE = "8076597d"
+RULING_8A_BASE = "e949c4e1"
 FAILS = []
 
 
@@ -161,6 +186,10 @@ def world_section():
     from app.routes import figure as figure_route, inventory as inventory_route
 
     install_world_stubs()
+    # Ruling 8a: the plain body is never built by an automatic Build — it counts as current here (section [9]
+    # covers it), so the real plan of an outfit change has runnable steps.
+    base_body.base_refresh_plan = lambda c, profile=None, missing=False: {
+        "signature": "", "views": [], "model": False, "reason": ""}
     human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168}
     for name in ("Kira", "Kai", "Mara"):
         check(f"create {name}", save_character_profile(name, dict(human), create_new=True), True)
@@ -346,8 +375,8 @@ def failure_section():
     garments.run_queued = run_queued
 
     fbp.W = fbp.World(hair="hairdeck", hair_done=False)
-    steps = fb.plan("Kira", profile={})
-    check("[7] plan", fbp.names(steps), [("hair", "hair_kira", 0)])
+    steps = fb.plan("Kira", profile={}, explicit=False)
+    check("[7] automatic plan", fbp.names(steps), [("hair", "hair_kira", 0)])
     check("[7] failed text", steps[0].failed, "hairdeck — no hair found")
     check("[7] label", steps[0].label, "Hair · HairDeck — failed — Retry")
     check("[7] cost", fb.cost("Kira", steps)["hub_jobs"], 0)
@@ -367,15 +396,54 @@ def failure_section():
     print("[7] automatic run with a cached failure next to other work")
     cached["hair_kira"] = {"item_id": "hair_kira", "fsig": "f1", "step": "hairdeck", "error": "no hair found"}
     explicit_calls.clear()
-    fbp.W = fbp.World(base="older", hair="hairdeck", hair_done=False)
+    fbp.W = fbp.World(painted=("blouse",), hair="hairdeck", hair_done=False, model=False)
     check("[7] automatic start", fb.start("Kira", reason="body_change", automatic=True)["status"], "started")
     check("[7] automatic run ended", fbp.wait_idle(fb), True)
     ran = [c for c in fbp.W.calls if c != "slot"]
-    check("[7] the plain body ran", ran[:2], ["base_images", "base_model"])
+    check("[7] the other work ran", ran, ["dressed", "model no-prepare", "schedule"])
     check("[7] the hair chain did not run", [c for c in ran if c.startswith("chain") or c == "hair_item"], [])
     check("[7] run_queued not called", explicit_calls, [])
     check("[7] failed hair = the cached error", fb.state("Kira")["failed"].get("hair"),
           {"error": "hairdeck — no hair found", "item_id": "hair_kira"})
+
+    print("[9] ruling 8a: an automatic Build never spends base-body hub jobs")
+    from app.core import figure
+    cached.clear()
+    fbp.W = fbp.World(base="older", painted=("blouse",))
+    manual = fb.plan("Kira", profile={}, explicit=True)
+    check("[9a] manual plan", fbp.names(manual), [("plain_body", 6), ("texture", 3), ("assemble", 0)])
+    check("[9a] plain body marked", manual[0].manual, "Base body outdated — Build to refresh")
+    auto = fb.plan("Kira", profile={}, explicit=False)
+    check("[9a] automatic plan lists the plain body", fbp.names(auto),
+          [("plain_body", 6), ("texture", 3), ("assemble", 0)])
+    check("[9a] automatic runnable: no base step", [st.name for st in fb._runnable(auto, False)],
+          ["texture", "assemble"])
+    check("[9a] a trigger (auto on)", fb.request("Kira", "outfit_change"), True)
+    check("[9a] automatic run ended", fbp.wait_idle(fb), True)
+    check("[9a] no base job: dressed, model, assembly only", [c for c in fbp.W.calls if c != "slot"],
+          ["dressed", "model no-prepare", "schedule"])
+    check("[9a] nothing failed or skipped", (fb.state("Kira")["failed"], fb.state("Kira")["skipped"]), ({}, []))
+    info = fb.figure_info("Kira")
+    first = (info["cost"]["steps"] or [{}])[0]
+    check("[9a] GET: the pending base step with its cost",
+          (info["status"], first.get("name"), first.get("manual"), first.get("jobs"), info["cost"]["hub_jobs"]),
+          ("changes", "plain_body", "Base body outdated — Build to refresh", 6, 9))
+    check("[9a] the body change's note (figure.pending_changes; smoke_figure_delivered [5])", figure.BASE_OUTDATED,
+          manual[0].manual)
+    fbp.W.calls.clear()
+    check("[9a] manual start", fb.start("Kira", reason="manual")["status"], "started")
+    check("[9a] manual run ended", fbp.wait_idle(fb), True)
+    check("[9a] manual: the plain body first", [c for c in fbp.W.calls if c != "slot"],
+          ["base_images", "base_model", "dressed", "model no-prepare", "schedule"])
+
+    fbp.W = fbp.World(base="missing", painted=("blouse",), model=False)
+    auto = fb.plan("Kira", profile={}, explicit=False)
+    check("[9b] automatic plan: the plain body alone", fbp.names(auto), [("plain_body", 6)])
+    check("[9b] marked", auto[0].manual, "No base body yet — Build to create")
+    check("[9b] automatic start", fb.start("Kira", reason="body_change", automatic=True)["status"], "current")
+    check("[9b] no producer called", fbp.W.calls, [])
+    check("[9b] manual plan", fbp.names(fb.plan("Kira", profile={}, explicit=True)),
+          [("plain_body", 6), ("texture", 3), ("assemble", 0)])
 
 
 def baseline_section():
@@ -393,6 +461,13 @@ def baseline_section():
     body = gar[gar.index("def after_base_model("):]
     body = body[:body.index("\n# --- ")]
     check(f"[8] after_base_model enqueues chains at {BASELINE}", "enqueue_garment(" in body, True)
+    # Ruling 8a (fix round 1 of e949c4e1): there an automatic Build still ran the plain body.
+    old = subprocess.run(["git", "-C", str(ROOT), "show", f"{RULING_8A_BASE}:app/core/figure_build.py"],
+                         capture_output=True, text=True).stdout
+    runnable = old[old.index("def _runnable("):]
+    runnable = runnable[:runnable.index("\ndef ")]
+    check(f"[8] {RULING_8A_BASE}: _runnable keeps the plain body in an automatic Build",
+          ("def _runnable(" in old, "s.manual" in runnable), (True, False))
 
 
 def main() -> int:

@@ -29,8 +29,17 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
    (``garment_assembly.schedule``).
 
 A rebuilt plain body re-renders the views every other image is edited from:
-with ``plain_body`` in the plan every view counts as missing and a stored
+with ``plain_body`` in a MANUAL plan every view counts as missing and a stored
 shape as not stored.
+
+Ruling 8a: an AUTOMATIC Build never spends base-body hub jobs. The
+``plain_body`` step is listed in every plan that needs it, marked ``manual``
+("Base body outdated — Build to refresh" / "No base body yet — Build to
+create", ``figure.BASE_OUTDATED`` / ``figure.BASE_MISSING``) with its cost, and only a
+manual Build (or the ``base_refresh`` improvement) runs it. An automatic plan
+builds the rest on the stored plain body (no view counts as missing because
+of it); without any plain body it has nothing to build on and plans nothing
+else.
 
 Cost (``cost``) reuses the producers' own arithmetic, never a second table:
 the plain body = ``base_rebuild_steps``; interim / texture =
@@ -102,10 +111,12 @@ class Step:
     #: A garment chain that failed for its current fsig (ruling 7a): the cached
     #: error; an automatic Build skips the step, a manual one retries it.
     failed: str = ""
+    #: Base-body work (ruling 8a): why it is listed; only a manual Build runs it.
+    manual: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "label": self.label, "jobs": self.jobs, "item_id": self.item_id,
-                "failed": self.failed}
+                "failed": self.failed, "manual": self.manual}
 
 
 # --- Plan ---------------------------------------------------------------------------
@@ -185,17 +196,21 @@ def _hair_step(character_name: str, profile: Dict[str, Any]) -> Optional[Step]:
 
 
 def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
-    """The steps that do work: a cached chain failure only in a manual Build."""
-    return [s for s in steps if explicit or not s.failed]
+    """The steps that do work: a cached chain failure (ruling 7a) and the
+    plain body (ruling 8a) only in a manual Build."""
+    return [s for s in steps if explicit or not (s.failed or s.manual)]
 
 
 def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
-         explicit: bool = False) -> List[Step]:
+         explicit: bool = True) -> List[Step]:
     """The steps a Build runs now, in ``STEP_ORDER`` (module docstring).
     ``[]`` off the pipeline or when the delivered figure is the wanted one and
-    built. A chain that failed for its fsig is listed with ``failed`` and 0
-    jobs; it makes the fits and the assembly follow only when ``explicit``
-    (a manual Build retries it). Read-only."""
+    built. ``explicit`` (default — what the Build button runs, the plan the UI
+    shows): a manual Build; False: an automatic one. A chain that failed for
+    its fsig is listed with ``failed`` and 0 jobs; it makes the fits and the
+    assembly follow only when ``explicit`` (a manual Build retries it). The
+    plain body is listed with ``manual`` in both; only an explicit plan builds
+    on its refresh (ruling 8a). Read-only."""
     from app.core import base_body, figure, garment_refit, model3d
     profile = _profile_of(character_name, profile)
     if not base_body.is_base_pipeline(character_name, profile=profile):
@@ -205,14 +220,20 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     steps: List[Step] = []
 
     refresh = base_body.base_refresh_plan(character_name, profile=profile, missing=True)
-    rebased = bool(refresh.get("views") or refresh.get("model"))
-    if rebased:
+    stale = bool(refresh.get("views") or refresh.get("model"))
+    if stale:
         rebuild = base_body.base_rebuild_steps(character_name, refresh)
         views = sum(jobs for step, jobs in rebuild if step.startswith("view "))
         parts = ([f"views {views}"] if views else []) + [step for step, _jobs in rebuild
                                                          if not step.startswith("view ")]
+        no_base = refresh.get("reason") == "missing"   # no stored front or no base model
         steps.append(Step("plain_body", "Plain body: " + " + ".join(parts),
-                          sum(jobs for _step, jobs in rebuild)))
+                          sum(jobs for _step, jobs in rebuild),
+                          manual=figure.BASE_MISSING if no_base else figure.BASE_OUTDATED))
+        if no_base and not explicit:
+            return steps  # ruling 8a: nothing to build on until a manual Build makes it
+    # Ruling 8a: only a manual Build refreshes the plain body; an automatic one builds on the stored one.
+    rebased = stale and explicit
 
     built = _model_figure(character_name, signature)
     set_jobs = base_body.dressed_view_jobs()
@@ -438,6 +459,9 @@ def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
     from app.core.timeutils import utc_now_iso
     explicit = not automatic
     steps = plan(character_name, explicit=explicit)
+    if automatic:
+        # Ruling 8a: the plain body stays listed (the UI's pending change), an automatic run never builds it.
+        steps = [s for s in steps if not s.manual]
     if not _runnable(steps, explicit):
         logger.info("Build %s (%s): nothing to build", character_name, reason)
         return

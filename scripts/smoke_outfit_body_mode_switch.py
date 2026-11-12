@@ -361,7 +361,7 @@ def main() -> int:
             return {"ok": True}
         model3d.generate_for_current_outfit = fake_generate
 
-        def fake_trigger(character_name, *, force=False, followup=False, **kw):
+        def fake_trigger(character_name, *, force=False, **kw):
             triggers.append((character_name, force))
             fake_generate(character_name, force=force)
             return True
