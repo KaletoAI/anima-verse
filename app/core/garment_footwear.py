@@ -37,6 +37,7 @@ a body fit from the base fit (``body_fit`` fits the source on the outfit body di
 ``garments._note_outcome``; an outfit body: ``garment_store.record_body_failure``) and a fit of another body or
 an older ``garment_fit.FIT_VERSION`` is never served in its place (R11 ruling; the fsig holds the fit version).
 """
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -290,9 +291,9 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     outfit body is missing; ``base_body.OutfitError`` without a base model. CPU only: never a hub job."""
     import hashlib
     from app.blender import refine
-    from app.core import base_body, footwear_cut, footwear_fit, footwear_rest, footwear_source, garment_fit, glb_mesh
+    from app.core import base_body, footwear_source, garment_fit
     from app.core import garment_store as gs
-    from app.core.garments import _Refused, _snapshot_body, _write_atomic
+    from app.core.garments import _Refused, _snapshot_body
     from app.core.timeutils import utc_now_iso
     _item_, kind = _item_kind(character_name, item_id)
     if _fsig(character_name, item_id, profile) != fsig:
@@ -319,17 +320,89 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         body_sha = hashlib.sha256(rigged).hexdigest()
         body_id = bsig
 
+    path = gs.garment_path(character_name, item_id, fsig, "fit", body=body)
+    low = gs.garment_path(character_name, item_id, fsig, "low", body=body)
+    # The compute (``fit_compute``: shoe fit, cut, gates, graft — pure, bytes and plain values in) runs on the refit
+    # pool when it is on (``refit_pool``) and writes the fit GLB to a private temp path beside it; the record, the
+    # rename into place and the distance tier are published here.
+    from app.core import refit_pool
+    tmp = refit_pool.temp_path(path)
+    try:
+        out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap(profile, item_id), kind, item_id, fsig,
+                             str(tmp))
+        if not out["ok"]:
+            raise _Refused("fit", "fit refused — " + "; ".join(out["reasons"]), out["gates"])
+        fit_record, cut_stats = out["record"], out["cut_stats"]
+        now = utc_now_iso()
+        parents: Dict[str, Any] = {"body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
+                                   "source": _source_parents(item_id, ssig)}
+        record: Dict[str, Any] = {
+            "method": "shoe", "kind": kind, "item_id": item_id, "fsig": fsig, "ssig": ssig, **fit_record,
+            "parents": parents, "accepted": True, "fit_version": garment_fit.FIT_VERSION[kind],
+            "body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
+            # ``rest``: the BARE body's figure box and rest soles (``footwear_rest``) for the shod preview
+            # (whose body is cut); the assembly re-measures its own bare file.
+            "foot_pose": {**out["foot_pose"], "rest": out["rest"],
+                          "source": {"item_id": item_id, "fsig": fsig, "glb_sha256": out["glb_sha256"]}},
+            "fitted_at": now, "created_at": now}
+        if not body:
+            parents["base_model_sha256"] = body_sha
+            record["base_model_sha256"] = body_sha
+        # A refit after a body change (the fsig has no base in it: the same path): the record remembers the
+        # body it came from (``refitted.from_body_sha256``, Task 25) — the Wardrobe says so, the GC keeps nothing by it.
+        previous = gs.read_record(path.with_suffix(".json")) if path.is_file() else {}
+        if previous.get("accepted") is True and previous.get("body_sha256") \
+                and previous.get("body_sha256") != body_sha:
+            record["refitted"] = {"from_body_sha256": previous["body_sha256"], "at": now}
+        # A distance tier of the previous fit must never pair with the new one.
+        low.unlink(missing_ok=True)
+        os.replace(tmp, path)
+        gs.write_record(path.with_suffix(".json"), record)
+        logger.info("Footwear fit %s/%s (%s): accepted on %s, width x%.3f, lift %.1f mm, cut %d faces removed / %d "
+                    "bisected", character_name, item_id, fsig, body or bsig, fit_record["scale"]["width_factor"],
+                    1000.0 * fit_record["root_lift_m"], cut_stats["removed_faces"], cut_stats["bisected_faces"])
+    finally:
+        tmp.unlink(missing_ok=True)
+    tris = out["tris"]
+    target = max(1, int(round(refine.lod_ratio("character") * tris)))
+    try:
+        dec = refine.decimate_to(path, target, low)
+    except Exception as e:  # noqa: BLE001 — the distance tier falls back to the full fit
+        dec = {"ok": False, "error": str(e) or type(e).__name__}
+    if dec.get("ok"):
+        record["low"] = {"ok": True, "tris": dec.get("tris"), "ratio": dec.get("ratio")}
+    else:
+        logger.warning("Footwear fit %s/%s: distance tier failed: %s", character_name, item_id, dec.get("error"))
+        record["low"] = {"ok": False, "error": dec.get("error") or "decimation failed"}
+    gs.write_record(path.with_suffix(".json"), record)
+    if body:
+        gs.clear_failure_on_body(character_name, item_id, fsig, body)
+    if schedule:
+        from app.core import garment_assembly
+        garment_assembly.schedule(character_name)
+    return path
+
+
+def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: float, kind: str, item_id: str,
+                fsig: str, out: str) -> Dict[str, Any]:
+    """The pure part of ``fit`` (a refit-pool worker runs it — ``refit_pool``): fit the prepared shoe
+    (``footwear_fit.fit_pair``) on the rigged body, cut every body primitive (``footwear_cut.apply_cut``), judge
+    the cut (``cut_gates``) and graft the shoe parts. Reads nothing but its arguments; writes the fit GLB to the
+    private temp path ``out`` only when accepted. ``{ok: False, reasons, gates}`` when a gate refuses, else
+    ``{ok: True, record, foot_pose, cut_stats, rest, glb_sha256, tris}`` (``record`` = the fit's own record part
+    with the cut gates and diagnostics)."""
+    import hashlib
+    from app.core import footwear_cut, footwear_fit, footwear_rest, glb_mesh
     positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared)
     n = len(positions)
     shoe = glb_mesh.GarmentMesh(positions=positions, normals=None, uvs=uvs, indices=faces,
                                 joints=np.zeros((n, 4), np.int64), weights=np.zeros((n, 4)), joint_names=[],
                                 image=image, mime=mime, material=material)
-    cap = width_cap(profile, item_id)
     result = footwear_fit.fit_pair(insole, shoe, glb_mesh.body_arrays(rigged), glb_mesh.joint_bind_matrices(rigged),
                                    width_cap=cap)
     if not result.ok:
-        gates = {"ok": False, "reasons": list(result.reasons), **(result.record.get("gates") or {})}
-        raise _Refused("fit", "fit refused — " + "; ".join(result.reasons), gates)
+        return {"ok": False, "reasons": list(result.reasons),
+                "gates": {"ok": False, "reasons": list(result.reasons), **(result.record.get("gates") or {})}}
 
     # The cut on every body primitive, then the cut gates on the body as a whole (spec § 7.1, § 8).
     cut = result.record["cut"]
@@ -360,8 +433,8 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         # the conform's own numbers of the merged body are already in the side gates (toe_conform_m / toe_pull_m)
     result.record["cut_stats"] = {key: cut_stats[key] for key in ("removed_faces", "bisected_faces", "new_vertices")}
     if not cut_gates["ok"]:
-        gates = {"ok": False, "reasons": list(cut_gates["reasons"]), **result.record["gates"]}
-        raise _Refused("fit", "fit refused — " + "; ".join(cut_gates["reasons"]), gates)
+        return {"ok": False, "reasons": list(cut_gates["reasons"]),
+                "gates": {"ok": False, "reasons": list(cut_gates["reasons"]), **result.record["gates"]}}
 
     blob = glb_mesh.rewrite_body_primitives(rigged, replaced)
     for side in footwear_fit.SIDES:
@@ -376,55 +449,12 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
                 extras["collar_bind_m"] = result.record["sides"][side]["split"]["collar_bind_m"]
             blob = glb_mesh.graft(blob, mesh, name=node_name(item_id, side, part), extras=extras,
                                   material_overrides={"doubleSided": True} if part == "shaft" else None)
-    now = utc_now_iso()
-    parents: Dict[str, Any] = {"body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
-                               "source": _source_parents(item_id, ssig)}
-    record: Dict[str, Any] = {
-        "method": "shoe", "kind": kind, "item_id": item_id, "fsig": fsig, "ssig": ssig, **result.record,
-        "parents": parents, "accepted": True, "fit_version": garment_fit.FIT_VERSION[kind],
-        "body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
-        # ``rest``: the BARE body's figure box and rest soles (``footwear_rest``) for the shod preview
-        # (whose body is cut); the assembly re-measures its own bare file.
-        "foot_pose": {**result.foot_pose, "rest": footwear_rest.rest_measurement(rigged),
-                      "source": {"item_id": item_id, "fsig": fsig,
-                                 "glb_sha256": hashlib.sha256(blob).hexdigest()}},
-        "fitted_at": now, "created_at": now}
-    if not body:
-        parents["base_model_sha256"] = body_sha
-        record["base_model_sha256"] = body_sha
-    path = gs.garment_path(character_name, item_id, fsig, "fit", body=body)
-    low = gs.garment_path(character_name, item_id, fsig, "low", body=body)
-    # A refit after a body change (the fsig has no base in it: the same path): the record remembers the
-    # body it came from (``refitted.from_body_sha256``, Task 25) — the Wardrobe says so, the GC keeps nothing by it.
-    previous = gs.read_record(path.with_suffix(".json")) if path.is_file() else {}
-    if previous.get("accepted") is True and previous.get("body_sha256") \
-            and previous.get("body_sha256") != body_sha:
-        record["refitted"] = {"from_body_sha256": previous["body_sha256"], "at": now}
-    # A distance tier of the previous fit must never pair with the new one.
-    low.unlink(missing_ok=True)
-    _write_atomic(path, blob)
-    gs.write_record(path.with_suffix(".json"), record)
-    logger.info("Footwear fit %s/%s (%s): accepted on %s, width x%.3f, lift %.1f mm, cut %d faces removed / %d "
-                "bisected", character_name, item_id, fsig, body or bsig, result.record["scale"]["width_factor"],
-                1000.0 * result.record["root_lift_m"], cut_stats["removed_faces"], cut_stats["bisected_faces"])
-    tris = len(glb_mesh.static_arrays(blob)[1])
-    target = max(1, int(round(refine.lod_ratio("character") * tris)))
-    try:
-        dec = refine.decimate_to(path, target, low)
-    except Exception as e:  # noqa: BLE001 — the distance tier falls back to the full fit
-        dec = {"ok": False, "error": str(e) or type(e).__name__}
-    if dec.get("ok"):
-        record["low"] = {"ok": True, "tris": dec.get("tris"), "ratio": dec.get("ratio")}
-    else:
-        logger.warning("Footwear fit %s/%s: distance tier failed: %s", character_name, item_id, dec.get("error"))
-        record["low"] = {"ok": False, "error": dec.get("error") or "decimation failed"}
-    gs.write_record(path.with_suffix(".json"), record)
-    if body:
-        gs.clear_failure_on_body(character_name, item_id, fsig, body)
-    if schedule:
-        from app.core import garment_assembly
-        garment_assembly.schedule(character_name)
-    return path
+    path = Path(out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(blob)
+    return {"ok": True, "record": result.record, "foot_pose": result.foot_pose, "cut_stats": cut_stats,
+            "rest": footwear_rest.rest_measurement(rigged), "glb_sha256": hashlib.sha256(blob).hexdigest(),
+            "tris": len(glb_mesh.static_arrays(blob)[1])}
 
 
 def _merged(prims: List["glb_mesh.Prim"]) -> "glb_mesh.Prim":

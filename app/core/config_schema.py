@@ -257,6 +257,20 @@ SECTIONS = {
                                "never limited, and background tasks of the persistent "
                                "queue do not count. 0 = unlimited.",
             },
+            "refit_workers": {
+                "type": "int",
+                "label": "CPU workers for refits",
+                "default": 0,
+                "min": 0,
+                "max": 64,
+                "description": "How many characters are refitted at the same time (garment, footwear, HairDeck, "
+                               "outfit-body and layered fits — pure CPU work, never a hub job). Each runs in its "
+                               "own worker process, so the refits use several cores instead of one; one "
+                               "character's fits still run one after the other. 0 = automatic: the number of "
+                               "cores minus 2, at most 8. 1 = no worker processes, everything in the server "
+                               "process, one character at a time. Every refit shows as a running job in the "
+                               "header (provider CPU).",
+            },
             "cors_origins": {
                 "type": "text",
                 "label": "Allowed CORS origins",

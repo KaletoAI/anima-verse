@@ -89,6 +89,7 @@ reuses the cached ``lsig`` without a new layered fit.
 """
 import hashlib
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -413,37 +414,99 @@ def _build(character_name: str, item_id: str, entry: Dict[str, Any], inner: Dict
     rigged base and store it under its ``lsig`` with its record; prune the item's older layered fits. With a
     ``hem`` entry (module docstring) the boot's shaft nodes join the inners (``over``) or the trousers are cut
     at the plane (``tucked``; the ``over`` geometry with ``fallback`` when the leg does not fit)."""
-    from app.core import garment_fit_layers as gfl
-    from app.core import garment_store, glb_mesh
-    from app.core.garments import _write_atomic
+    from app.core import garment_store
     from app.core.garment_set import CLOTHING
     from app.core.timeutils import utc_now_iso
     fsig, lsig = entry["fsig"], entry["lsig"]
     fit_bytes = Path(entry["fit"]).read_bytes()
     base_fit_sha = hashlib.sha256(fit_bytes).hexdigest()
     rigged = _rigged_base(character_name, entry["record"], base_sha, body)
-    body_mesh = glb_mesh.body_arrays(rigged)
-    outer_full = glb_mesh.garment_arrays(fit_bytes)
-    outer_low = glb_mesh.garment_arrays(Path(entry["low"]).read_bytes()) if entry.get("low") else None
-    inner_full = []
+    low_bytes = Path(entry["low"]).read_bytes() if entry.get("low") else None
+    inner_bytes: List[bytes] = []
     for u in sorted(inner):
         data = Path(inner[u]["source"]).read_bytes()
         # The key names the inner fit the plan saw: one replaced meanwhile is layered over on the next build.
         if hashlib.sha256(data).hexdigest() != entry["inner"][u]:
             raise ValueError(f"the fit of {u} changed during the build")
-        inner_full.append(glb_mesh.garment_arrays(data))
-    inner_low = [glb_mesh.garment_arrays(Path(inner[u]["low"]).read_bytes()) if inner[u].get("low") else g
-                 for u, g in zip(sorted(inner), inner_full)]
+        inner_bytes.append(data)
+    inner_low_bytes = [Path(inner[u]["low"]).read_bytes() if inner[u].get("low") else None for u in sorted(inner)]
     hem = entry.get("hem")
+    hem_in: Optional[Dict[str, Any]] = None
+    if hem:
+        hem_in = {"boot": str(hem["boot"]), "mode": hem["mode"], "plane_m": hem.get("plane_m"),
+                  "top_m": hem.get("top_m"), "floor_m": hem.get("floor_m"),
+                  "fit_bytes": Path(hem["fit"]).read_bytes(), "shaft_sha": entry["inner"].get(str(hem["boot"]))}
+    path = garment_store.garment_path(character_name, item_id, fsig, "layer", lsig=lsig, body=body)
+    low_path = garment_store.garment_path(character_name, item_id, fsig, "layer_low", lsig=lsig, body=body)
+    # The compute (``_layer_compute``: layering, the hem, the grafts — pure, bytes in) runs on the refit pool when it
+    # is on (``refit_pool``) and writes both tiers to private temp paths; the renames and the record are published
+    # here.
+    from app.core import refit_pool
+    tmp, tmp_low = refit_pool.temp_path(path), refit_pool.temp_path(low_path)
+    try:
+        out = refit_pool.run(_layer_compute, rigged, fit_bytes, low_bytes, inner_bytes, inner_low_bytes, hem_in,
+                             item_id, fsig, sorted(entry["inner"]), str(tmp), str(tmp_low))
+        report, low_report, hem_record = out["report"], out["low_report"], out["hem"]
+        # The low tier first: a reader that sees the record also finds its tier (or none, then the full one).
+        if out["low"]:
+            os.replace(tmp_low, low_path)
+        else:
+            low_path.unlink(missing_ok=True)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+        tmp_low.unlink(missing_ok=True)
+    record = {
+        "accepted": True, "kind": CLOTHING, "item_id": item_id, "fsig": fsig, "lsig": lsig,
+        "layer_version": LAYER_VERSION,
+        "base_signature": entry["record"].get("base_signature"),
+        **({"body_id": body, "body_sha256": base_sha} if body
+           else {"base_model_sha256": base_sha, "body_id": entry["record"].get("base_signature"),
+                 "body_sha256": base_sha}),
+        "base_fit_sha256": base_fit_sha,
+        "inner": {**{u: {"fsig": inner[u]["fsig"], "sha256": entry["inner"][u], "lsig": inner[u]["lsig"] or None}
+                     for u in sorted(inner)},
+                  **({str(hem["boot"]): {"fsig": None, "sha256": entry["inner"][str(hem["boot"])], "lsig": None,
+                                         "shaft": True}} if hem_record else {})},
+        **({"hem": hem_record} if hem_record else {}),
+        "report": {"full": report, "low": low_report}, "low": bool(out["low"]),
+        "created_at": utc_now_iso()}
+    garment_store.write_record(path.with_suffix(".json"), record)
+    logger.info("Layered fit %s/%s over %s (%s): moved %s vertices, max %.1f mm, gap p1 %s", character_name,
+                item_id, sorted(inner), lsig, report.get("moved"), 1000 * float(report.get("max_m") or 0.0),
+                report.get("gap_p1_m"))
+    _prune(character_name, item_id, fsig, base_fit_sha, keep=lsig, body=body)
+    return path
+
+
+def _layer_compute(rigged: bytes, fit_bytes: bytes, low_bytes: Optional[bytes], inner_bytes: List[bytes],
+                   inner_low_bytes: List[Optional[bytes]], hem: Optional[Dict[str, Any]], item_id: str, fsig: str,
+                   over: List[str], out: str, out_low: str) -> Dict[str, Any]:
+    """The pure part of ``_build`` (a refit-pool worker runs it — ``refit_pool``): push the body fit
+    ``fit_bytes`` (its low tier ``low_bytes``) over the inner pieces' served meshes (``inner_bytes``, their low
+    tiers ``inner_low_bytes`` — None = the full one), with ``hem`` (``{boot, mode, plane_m, top_m, floor_m,
+    fit_bytes, shaft_sha}``) the boot's shafts too or the tuck cut, and graft both tiers onto ``rigged``. Reads
+    nothing but its arguments; writes the full tier to ``out`` and the low one (when there is one) to
+    ``out_low``. ``{report, low_report, hem, low}`` (``hem`` the record's hem part or None, ``low`` whether a
+    low tier was written). ValueError when the boot's shafts are not the ones keyed (``shaft_sha``)."""
+    from app.core import garment_fit_layers as gfl
+    from app.core import glb_mesh
+    from app.core.garment_set import CLOTHING
+    body_mesh = glb_mesh.body_arrays(rigged)
+    outer_full = glb_mesh.garment_arrays(fit_bytes)
+    outer_low = glb_mesh.garment_arrays(low_bytes) if low_bytes is not None else None
+    inner_full = [glb_mesh.garment_arrays(data) for data in inner_bytes]
+    inner_low = [glb_mesh.garment_arrays(data) if data is not None else g
+                 for data, g in zip(inner_low_bytes, inner_full)]
     shafts: List[Any] = []
     hem_record: Optional[Dict[str, Any]] = None
     if hem:
-        shafts = shaft_meshes(Path(hem["fit"]).read_bytes(), str(hem["boot"]))
-        if shaft_sha(shafts) != entry["inner"].get(str(hem["boot"])):
+        shafts = shaft_meshes(hem["fit_bytes"], str(hem["boot"]))
+        if shaft_sha(shafts) != hem["shaft_sha"]:
             raise ValueError(f"the fit of {hem['boot']} changed during the build")
         hem_record = {"mode": hem["mode"], "built": "over", "plane_m": hem.get("plane_m"), "top_m": hem.get("top_m"),
                       "floor_m": hem.get("floor_m"), "tucked_poke": None, "fallback": None, "boot": str(hem["boot"]),
-                      "shaft_sha": entry["inner"].get(str(hem["boot"]))}
+                      "shaft_sha": hem["shaft_sha"]}
     # One body field for both tiers.
     sdf = gfl.layer_sdf(body_mesh, [outer_full, *inner_full, *shafts, *([outer_low] if outer_low else []), *inner_low])
     tucked = bool(hem_record and hem["mode"] == "tucked" and hem.get("plane_m") is not None)
@@ -471,40 +534,16 @@ def _build(character_name: str, item_id: str, entry: Dict[str, Any], inner: Dict
             if low is not None:
                 low, _low_poke = _tuck(low, shafts, float(hem["plane_m"]), float(hem["top_m"]))
     name = f"garment_{CLOTHING}_{item_id}"
-    extras = {"kind": CLOTHING, "item_id": item_id, "fsig": fsig, "over": sorted(entry["inner"])}
+    extras = {"kind": CLOTHING, "item_id": item_id, "fsig": fsig, "over": list(over)}
     if hem_record:
         extras["hem"] = hem_record["built"]
-    path = garment_store.garment_path(character_name, item_id, fsig, "layer", lsig=lsig, body=body)
-    low_path = garment_store.garment_path(character_name, item_id, fsig, "layer_low", lsig=lsig, body=body)
     low_blob = glb_mesh.graft(rigged, low, name=name, extras=extras) if low is not None else None
     blob = glb_mesh.graft(rigged, full, name=name, extras=extras)
-    record = {
-        "accepted": True, "kind": CLOTHING, "item_id": item_id, "fsig": fsig, "lsig": lsig,
-        "layer_version": LAYER_VERSION,
-        "base_signature": entry["record"].get("base_signature"),
-        **({"body_id": body, "body_sha256": base_sha} if body
-           else {"base_model_sha256": base_sha, "body_id": entry["record"].get("base_signature"),
-                 "body_sha256": base_sha}),
-        "base_fit_sha256": base_fit_sha,
-        "inner": {**{u: {"fsig": inner[u]["fsig"], "sha256": entry["inner"][u], "lsig": inner[u]["lsig"] or None}
-                     for u in sorted(inner)},
-                  **({str(hem["boot"]): {"fsig": None, "sha256": entry["inner"][str(hem["boot"])], "lsig": None,
-                                         "shaft": True}} if hem_record else {})},
-        **({"hem": hem_record} if hem_record else {}),
-        "report": {"full": report, "low": low_report}, "low": low_blob is not None,
-        "created_at": utc_now_iso()}
-    # The low tier first: a reader that sees the record also finds its tier (or none, then the full one).
-    if low_blob is not None:
-        _write_atomic(low_path, low_blob)
-    else:
-        low_path.unlink(missing_ok=True)
-    _write_atomic(path, blob)
-    garment_store.write_record(path.with_suffix(".json"), record)
-    logger.info("Layered fit %s/%s over %s (%s): moved %s vertices, max %.1f mm, gap p1 %s", character_name,
-                item_id, sorted(inner), lsig, report.get("moved"), 1000 * float(report.get("max_m") or 0.0),
-                report.get("gap_p1_m"))
-    _prune(character_name, item_id, fsig, base_fit_sha, keep=lsig, body=body)
-    return path
+    for data, target in ((low_blob, out_low), (blob, out)):
+        if data is not None:
+            Path(target).parent.mkdir(parents=True, exist_ok=True)
+            Path(target).write_bytes(data)
+    return {"report": report, "low_report": low_report, "hem": hem_record, "low": low_blob is not None}
 
 
 def _prune(character_name: str, item_id: str, fsig: str, base_fit_sha: str, *, keep: str,

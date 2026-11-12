@@ -650,9 +650,12 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
     # A refit aligns its sleeves / trouser legs onto this body's limbs (``garment_source`` LIMBS).
     limb_source = garment_source.limb_source(character_name, item_id, fsig) if frame.get("registered") else None
-    result = garment_fit.fit_clothing(prepared_bytes, snapshot["unrigged"], snapshot["rigged"],
-                                      masks={"body": bald_mask, "garment": ghost_mask}, slots=slots,
-                                      limb_source=limb_source)
+    # The compute (pure: bytes, masks, slots in — the fit out) runs on the refit pool when it is on
+    # (``refit_pool``); everything around it reads and publishes here, under the caller's locks.
+    from app.core import refit_pool
+    result = refit_pool.run(garment_fit.fit_clothing, prepared_bytes, snapshot["unrigged"], snapshot["rigged"],
+                            masks={"body": bald_mask, "garment": ghost_mask}, slots=slots,
+                            limb_source=limb_source)
     limits = garment_fit.CLOTHING_GATES
     gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
@@ -698,21 +701,26 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
     ``low/`` and schedule the assembly (unless ``schedule`` is False: the
     assembly build itself fits). Shared by both hair methods and every body."""
     from app.blender import refine
-    from app.core import garment_fit, glb_mesh
+    from app.core import garment_fit, refit_pool
     from app.core.garment_store import garment_path, write_record
     record["fit_version"] = garment_fit.FIT_VERSION[kind]
-    blob = glb_mesh.graft(rigged, result.garment, name=f"garment_{kind}_{item_id}",
-                          extras={"kind": kind, "item_id": item_id, "fsig": fsig})
     fit = garment_path(character_name, item_id, fsig, "fit", body=body)
     low = garment_path(character_name, item_id, fsig, "low", body=body)
-    # A distance tier of the previous fit must never pair with the new one.
-    low.unlink(missing_ok=True)
-    _write_atomic(fit, blob)
+    # The graft is compute (``refit_pool.graft_file``: a worker writes it to a private temp path beside the fit);
+    # the rename into place, the record and the distance tier are published here.
+    tmp = refit_pool.temp_path(fit)
+    try:
+        tris = refit_pool.run(refit_pool.graft_file, rigged, result.garment, f"garment_{kind}_{item_id}",
+                              {"kind": kind, "item_id": item_id, "fsig": fsig}, str(tmp))
+        # A distance tier of the previous fit must never pair with the new one.
+        low.unlink(missing_ok=True)
+        os.replace(tmp, fit)
+    finally:
+        tmp.unlink(missing_ok=True)
     write_record(fit.with_suffix(".json"), record)
     logger.info("Garment fit %s/%s (%s): accepted on %s, %s tris", character_name, item_id, fsig, body or bsig,
                 result.metrics.get("tris"))
 
-    tris = len(glb_mesh.static_arrays(blob)[1])
     target = max(1, int(round(refine.lod_ratio("character") * tris)))
     try:
         dec = refine.decimate_to(fit, target, low)
@@ -761,11 +769,13 @@ def _fit_seed(character_name: str, item_id: str, hsig: str, seed: int, attempt: 
     override = garment_hair.hair_colour_override(profile)
     named = garment_hair.profile_hair_colour(character_name, profile=profile)
     length_class = garment_hair.hair_length_class(character_name, profile=profile)
-    result = garment_hairdeck.fit_hairdeck(hair_bytes, proxy_bytes, rigged,
-                                           colour_target=garment_hair.colour_target(override),
-                                           colour_profile=garment_hair.colour_target(named["hex"]) if named else None,
-                                           length_class=length_class,
-                                           **garment_hair.hair_placement(profile))
+    # The compute runs on the refit pool when it is on (``refit_pool``): bytes and plain values in, the fit out.
+    from app.core import refit_pool
+    result = refit_pool.run(garment_hairdeck.fit_hairdeck, hair_bytes, proxy_bytes, rigged,
+                            colour_target=garment_hair.colour_target(override),
+                            colour_profile=garment_hair.colour_target(named["hex"]) if named else None,
+                            length_class=length_class,
+                            **garment_hair.hair_placement(profile))
     gates = {"attempt": attempt, "seed": seed, "ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": _hairdeck_limits(length_class), "metrics": result.metrics}
     return {"seed": seed, "result": result, "hair_bytes": hair_bytes, "proxy_bytes": proxy_bytes, "gates": gates}
@@ -1106,9 +1116,10 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             logger.warning("Garment fit %s/%s on %s: base fit unreadable for the limbs: %s", character_name,
                            item_id, body_id, e)
             limb_source = None
-        result = garment_fit.fit_clothing(prepared_bytes, body["unrigged"], body["rigged"],
-                                          masks={"body": body_mask, "garment": ghost_mask}, slots=slots,
-                                          limb_source=limb_source)
+        from app.core import refit_pool
+        result = refit_pool.run(garment_fit.fit_clothing, prepared_bytes, body["unrigged"], body["rigged"],
+                                masks={"body": body_mask, "garment": ghost_mask}, slots=slots,
+                                limb_source=limb_source)
         limits = garment_fit.CLOTHING_GATES
         gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
                  "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
@@ -1737,6 +1748,8 @@ class _Job:
         self.automatic = automatic
         self.done = threading.Event()
         self.result: Dict[str, Any] = {}
+        #: The tracked CPU task of a fit-only run (``refit_pool.track``), "" for any other run.
+        self.track = ""
 
     @property
     def plain(self) -> bool:
@@ -1749,6 +1762,25 @@ class _Job:
         if steps is not None and not isinstance(steps, str):
             steps = tuple(steps)
         return self.item_id, steps, self.view, bool(self.force)
+
+
+def _fit_only(steps: Union[None, str, Iterable[str]]) -> bool:
+    """A run of the fit step alone (the Wardrobe's fit-only run): a CPU refit, tracked."""
+    if steps is None:
+        return False
+    return ([steps] if isinstance(steps, str) else list(steps)) == ["fit"]
+
+
+def _end_track(job: "_Job", error: str = "", *, discard: bool = False) -> None:
+    """Finish (or, for a run that never ran, discard) the job's tracked CPU task."""
+    if not job.track:
+        return
+    from app.core import refit_pool
+    if discard:
+        refit_pool.discard(job.track)
+    else:
+        refit_pool.finish(job.track, error=error)
+    job.track = ""
 
 
 def _spawn_locked(character_name: str) -> None:
@@ -1773,6 +1805,7 @@ def _abort_spawn_locked(character_name: str, item_id: str) -> None:
     from app.core import garment_store as gs
     for job in _queues.pop(character_name, None) or ():
         gs.end(character_name, job.item_id, QUEUED)
+        _end_track(job, discard=True)
     _active.discard(character_name)
     gs.end(character_name, item_id, QUEUED)
 
@@ -1791,6 +1824,9 @@ def _worker(character_name: str) -> None:
                 _active.discard(character_name)
             return
         error: Optional[str] = None
+        if job.track:
+            from app.core import refit_pool
+            refit_pool.activate(job.track)
         try:
             failure = cached_failure(character_name, job.item_id) if job.automatic else None
             if failure is not None:
@@ -1808,6 +1844,7 @@ def _worker(character_name: str) -> None:
             logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
             error = str(e) or type(e).__name__
             job.result = {"ok": False, "error": error}
+        _end_track(job, "" if job.result.get("ok") else str(job.result.get("error") or "the fit was refused"))
         with _lock:
             # Ends the ``queued`` mark of a run that had nothing to do or
             # failed before its first step (a step replaces the mark).
@@ -1855,6 +1892,11 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     from app.core import garment_store as gs
     check_run(character_name, item_id, steps=steps, view=view)
     wanted = _Job(item_id, steps, view, bool(force))
+    # A fit-only run is a CPU refit: tracked from the click on (pending while it waits behind other runs).
+    track = ""
+    if _fit_only(steps):
+        from app.core import refit_pool
+        track = refit_pool.track(character_name, refit_pool.fits_label(character_name, 1), pending=True)
     with _lock:
         queue = _queues.setdefault(character_name, deque())
         job = next((j for j in queue if j.key() == wanted.key()), None)
@@ -1866,6 +1908,8 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
         if job is None:
             job = wanted
             queue.append(job)
+        if track and not job.track:
+            job.track, track = track, ""
         if not gs.status(character_name, item_id).get("running_step"):
             gs.start(character_name, item_id, QUEUED)
         if character_name not in _active:
@@ -1875,7 +1919,12 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
             except Exception:
                 _abort_spawn_locked(character_name, item_id)
                 raise
-        return _position_locked(character_name, job)
+        position = _position_locked(character_name, job)
+    if track:
+        # An identical fit-only run already waits with its own track.
+        from app.core import refit_pool
+        refit_pool.discard(track)
+    return position
 
 
 def enqueue_garment(character_name: str, item_id: str) -> "_Job":
@@ -1940,6 +1989,7 @@ def cancel_garment(character_name: str, item_id: str) -> Dict[str, Any]:
         for job in dropped:
             job.result = {"ok": False, "cancelled": True, "error": CANCELLED, "ran": []}
             job.done.set()
+            _end_track(job, discard=True)
         waiting = [j.item_id for j in queue]
     logger.info("Garment %s/%s: %d waiting run(s) cancelled", character_name, item_id, len(dropped))
     return {"item_id": item_id, "cancelled": len(dropped),

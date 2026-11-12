@@ -771,6 +771,10 @@ async def lifespan(app: FastAPI):
     # are refitted in the background, one character at a time, CPU only —
     # asset maintenance, so a world freeze does not hold it back.
     try:
+        # The CPU refits compute on a process pool (server.refit_workers;
+        # app/core/refit_pool.py), created on the first refit.
+        from app.core import refit_pool
+        refit_pool.enable()
         from app.core.garment_refit import start_sweep
         start_sweep()
     except Exception as _gre:
@@ -867,6 +871,11 @@ async def lifespan(app: FastAPI):
 
     event_loop_watchdog.stop()
     _consolidation_task.cancel()
+    try:
+        from app.core import refit_pool
+        refit_pool.shutdown()
+    except Exception as _rpe:
+        logger.debug("Refit pool shutdown failed: %s", _rpe)
     try:
         from app.core import periodic_jobs
         await periodic_jobs.stop()

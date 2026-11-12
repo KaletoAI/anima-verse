@@ -920,6 +920,7 @@ class TaskQueue:
         the entry after its visibility work. Unlike track_cancel, this does
         not record a user cancellation. Return True when a row was deleted.
         """
+        self._held_tracks.discard(task_id)
         self._track_start_times.pop(task_id, None)
         with self._write_lock, self._connect() as conn:
             cur = conn.execute(

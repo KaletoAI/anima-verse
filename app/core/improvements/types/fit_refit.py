@@ -153,7 +153,10 @@ class FitRefit(ImprovementType):
         if garment_refit._busy(name):
             raise CandidateBusy(f"{name}: garment run in progress")
         # The sweep's order: stale postures first (the bodies are turned and
-        # their garments refitted inside), then the character's fits.
-        outfit_bodies.match_stale_postures(name)
-        if garment_refit.refit_character(name) is None:
+        # their garments refitted inside), then the character's fits — one
+        # tracked CPU task, like the sweep's (Game-Admin's header).
+        def run():
+            outfit_bodies.match_stale_postures(name)
+            return garment_refit.refit_character(name)
+        if garment_refit.tracked(name, run) is None:
             raise CandidateBusy(f"{name}: garment run in progress")

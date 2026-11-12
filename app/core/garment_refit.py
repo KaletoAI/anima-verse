@@ -570,55 +570,221 @@ def refit_character(character_name: str) -> Optional[List[str]]:
     return done
 
 
+def work_count(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> int:
+    """How many units a run of the character would refit (the tracked task's label): every lister of
+    ``refit_character`` plus the stale outfit-body postures. Read-only; 0 when nothing is to do."""
+    from app.core import outfit_bodies
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    base = set(outdated_fits(character_name, profile=profile)) | set(refused_fits(character_name, profile=profile))
+    bodies = set(outdated_body_fits(character_name, profile=profile)) \
+        | set(refused_body_fits(character_name, profile=profile))
+    shoes = {i for i, _old, _new in outdated_footwear_fits(character_name, profile=profile)} \
+        | set(outdated_footwear_sources(character_name, profile=profile))
+    postures = outfit_bodies.stale_posture_bodies(character_name, profile=profile)
+    return len(base) + len(bodies) + len(shoes) + len(postures)
+
+
+def _count(character_name: str) -> Optional[int]:
+    """``work_count``, None when it cannot be read (the run goes ahead, untracked count)."""
+    try:
+        return work_count(character_name)
+    except Exception:  # noqa: BLE001 — the label only
+        logger.exception("Garment refit %s: work count unreadable", character_name)
+        return None
+
+
+#: ``_attempt``'s status for a character whose garment chain runs.
+BUSY = "busy"
+
+
+def _posture(name: str) -> List[str]:
+    """``outfit_bodies.match_stale_postures`` as the sweep words it; never raises."""
+    try:
+        # Outfit bodies from before the posture match get their base's posture first
+        # (outfit_body_posture.py; CPU, refits the fits on a turned body itself).
+        from app.core.outfit_bodies import match_stale_postures
+        return [f"posture@{body_id}" for body_id in match_stale_postures(name)]
+    except Exception:  # noqa: BLE001 — one character never stops the sweep
+        logger.exception("Garment refit sweep: posture match of %s failed", name)
+        return []
+
+
+def tracked(character_name: str, run: Any) -> Optional[List[str]]:
+    """``run()`` (a refit of the character: returns what it refitted, None when a garment chain runs) as a
+    tracked CPU task (``refit_pool.track``, label ``Refit · <name> (n fits)``) — the manual refits (the
+    ``fit_refit`` improvement) are registered like the sweep's, in-process or not. None: the track is discarded
+    (nothing was done); an exception finishes it failed and propagates."""
+    from app.core import refit_pool
+    tid = refit_pool.track(character_name, refit_pool.fits_label(character_name, _count(character_name)),
+                           pending=False)
+    try:
+        done = run()
+    except Exception as e:  # noqa: BLE001 — finished failed, then raised to the caller
+        refit_pool.finish(tid, error=str(e) or type(e).__name__)
+        raise
+    if done is None:
+        refit_pool.discard(tid)
+    else:
+        refit_pool.finish(tid)
+    return done
+
+
+def _sweep_one(name: str, *, task_id: str, pause: float, retries: int, retry_s: float) -> List[str]:
+    """The serial sweep's unit (today's order): posture once, then ``refit_character`` retried while busy."""
+    from app.core import refit_pool
+    if refit_pool.cancelled(task_id):
+        logger.info("Garment refit sweep: %s cancelled while it waited", name)
+        refit_pool.release(task_id)
+        return []
+    if task_id:
+        refit_pool.activate(task_id, refit_pool.fits_label(name, _count(name)))
+    out = _posture(name)
+    try:
+        for attempt in range(retries + 1):
+            done = refit_character(name)
+            if done is not None:
+                break
+            if attempt < retries:
+                time.sleep(retry_s)
+        else:
+            logger.info("Garment refit sweep: %s stayed busy — left for the next start", name)
+            refit_pool.finish(task_id, error="garment run in progress — left for the next start")
+            return out
+        refit_pool.finish(task_id)
+        return out + done
+    except Exception as e:  # noqa: BLE001 — one character never stops the sweep
+        logger.exception("Garment refit sweep: %s failed", name)
+        refit_pool.finish(task_id, error=str(e) or type(e).__name__)
+        return out
+    finally:
+        if pause:
+            time.sleep(pause)
+
+
+def _attempt(name: str, task_id: str, first: bool, pause: float) -> Tuple[str, List[str]]:
+    """The parallel sweep's unit, on an orchestrator thread: posture on the ``first`` attempt, then one
+    ``refit_character``. ``(BUSY, posture part)`` when the garment chain runs (the track stays pending, the
+    scheduler retries later), else ``("done", what was refitted)``; a failure finishes the track failed and
+    returns the posture part as done."""
+    from app.core import refit_pool
+    if first and refit_pool.cancelled(task_id):
+        logger.info("Garment refit sweep: %s cancelled while it waited", name)
+        refit_pool.release(task_id)
+        return "done", []
+    if _busy(name):
+        return BUSY, []
+    if task_id:
+        refit_pool.activate(task_id, refit_pool.fits_label(name, _count(name)))
+    out = _posture(name) if first else []
+    try:
+        done = refit_character(name)
+    except Exception as e:  # noqa: BLE001 — fails this character only
+        logger.exception("Garment refit sweep: %s failed", name)
+        refit_pool.finish(task_id, error=str(e) or type(e).__name__)
+        return "done", out
+    finally:
+        if pause:
+            time.sleep(pause)
+    if done is None:
+        return BUSY, out
+    refit_pool.finish(task_id)
+    return "done", out + done
+
+
+def _nice_thread() -> None:
+    try:
+        # Low priority: a per-thread nice value (Linux; elsewhere it stays normal).
+        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)
+    except (AttributeError, OSError):
+        pass
+
+
+def _sweep_parallel(names: List[str], tracks: Dict[str, str], workers: int, *, pause: float, retries: int,
+                    retry_s: float) -> Dict[str, List[str]]:
+    """Up to ``workers`` characters at once, each on its own orchestrator thread (its fits in order, under its
+    run lock); the compute goes to the refit pool. A busy character goes back to the end and is tried again
+    ``retry_s`` later (at most ``retries`` times) without holding a slot."""
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+    from app.core import refit_pool
+    out: Dict[str, List[str]] = {}
+    later: List[Tuple[float, str, int]] = []  # (due, name, attempt)
+    partial: Dict[str, List[str]] = {}
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="garment-refit",
+                            initializer=_nice_thread) as ex:
+        running = {ex.submit(_attempt, name, tracks.get(name, ""), True, pause): (name, 0) for name in names}
+        while running or later:
+            now = time.monotonic()
+            for item in [x for x in later if x[0] <= now]:
+                later.remove(item)
+                _due, name, attempt = item
+                running[ex.submit(_attempt, name, tracks.get(name, ""), False, pause)] = (name, attempt)
+            if not running:
+                time.sleep(max(0.0, min(x[0] for x in later) - time.monotonic()))
+                continue
+            timeout = max(0.0, min(x[0] for x in later) - time.monotonic()) if later else None
+            finished, _ = wait(list(running), timeout=timeout, return_when=FIRST_COMPLETED)
+            for fut in finished:
+                name, attempt = running.pop(fut)
+                try:
+                    status, items = fut.result()
+                except Exception:  # noqa: BLE001 — _attempt never raises; defensive
+                    logger.exception("Garment refit sweep: %s failed", name)
+                    refit_pool.finish(tracks.get(name, ""), error="refit failed")
+                    continue
+                if status == BUSY:
+                    partial[name] = partial.get(name, []) + items
+                    if attempt < retries:
+                        later.append((time.monotonic() + retry_s, name, attempt + 1))
+                    else:
+                        logger.info("Garment refit sweep: %s stayed busy — left for the next start", name)
+                        refit_pool.finish(tracks.get(name, ""),
+                                          error="garment run in progress — left for the next start")
+                        if partial.get(name):
+                            out[name] = partial[name]
+                    continue
+                done = partial.get(name, []) + items
+                if done:
+                    out[name] = done
+    return out
+
+
 def sweep(characters: Optional[Iterable[str]] = None, *, pause: float = SWEEP_PAUSE_S,
-          retries: int = BUSY_RETRIES, retry_s: float = BUSY_RETRY_S) -> Dict[str, List[str]]:
-    """Refit every character's outdated fits, one character at a time
-    (default: every character, dormant and pooled ones included). A busy
-    character is retried ``retries`` times ``retry_s`` apart, then left for
-    the next start. Character -> item ids refitted (characters with none
-    left out). Never raises."""
+          retries: int = BUSY_RETRIES, retry_s: float = BUSY_RETRY_S,
+          workers: Optional[int] = None) -> Dict[str, List[str]]:
+    """Refit every character's outdated fits (default: every character, dormant and pooled ones included).
+    ``workers`` characters at once (default ``refit_pool.workers()``: the ``server.refit_workers`` setting in the
+    server, 1 elsewhere); 1 = one character after the other, in-process — the order and pauses of before. Every
+    character with work is a tracked CPU task from the start (``pending`` until its turn, ``running`` while it
+    refits — Game-Admin's header). A busy character is retried ``retries`` times ``retry_s`` apart, then left
+    for the next start. Character -> item ids refitted (characters with none left out). Never raises."""
+    from app.core import refit_pool
     out: Dict[str, List[str]] = {}
     try:
         if characters is None:
             from app.models.character import list_available_characters
             characters = list_available_characters(include_pooled=True, include_dormant=True)
-        for name in characters:
-            try:
-                # Outfit bodies from before the posture match get their base's posture first
-                # (outfit_body_posture.py; CPU, refits the fits on a turned body itself).
-                from app.core.outfit_bodies import match_stale_postures
-                matched = match_stale_postures(name)
-                if matched:
-                    out[name] = [f"posture@{body_id}" for body_id in matched]
-            except Exception:  # noqa: BLE001 — one character never stops the sweep
-                logger.exception("Garment refit sweep: posture match of %s failed", name)
-            try:
-                for attempt in range(retries + 1):
-                    done = refit_character(name)
-                    if done is not None:
-                        break
-                    if attempt < retries:
-                        time.sleep(retry_s)
-                else:
-                    logger.info("Garment refit sweep: %s stayed busy — left for the next start", name)
-                    continue
-                if done:
-                    out[name] = out.get(name, []) + done
-            except Exception:  # noqa: BLE001 — one character never stops the sweep
-                logger.exception("Garment refit sweep: %s failed", name)
-            if pause:
-                time.sleep(pause)
+        names = list(characters)
+        n = refit_pool.workers() if workers is None else max(1, int(workers))
+        tracks: Dict[str, str] = {}
+        for name in names:
+            count = _count(name)
+            if count is None or count > 0:
+                tracks[name] = refit_pool.track(name, refit_pool.fits_label(name, count), pending=True)
+        if n > 1 and len(names) > 1:
+            return _sweep_parallel(names, tracks, min(n, len(names)), pause=pause, retries=retries, retry_s=retry_s)
+        for name in names:
+            done = _sweep_one(name, task_id=tracks.get(name, ""), pause=pause, retries=retries, retry_s=retry_s)
+            if done:
+                out[name] = done
     except Exception:  # noqa: BLE001
         logger.exception("Garment refit sweep failed")
     return out
 
 
 def _run_sweep(delay: float) -> None:
-    try:
-        # Low priority: a per-thread nice value (Linux; elsewhere it stays normal).
-        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)
-    except (AttributeError, OSError):
-        pass
+    _nice_thread()
     time.sleep(delay)
     done = sweep()
     if done:
