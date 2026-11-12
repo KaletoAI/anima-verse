@@ -259,6 +259,15 @@ byte-identical to fit version 13 again (x1.124 wide, no height, GLB sha256 269e8
 stay refused, "Shoe mesh too flat for the foot: toe box 24 mm, instep needs ~89 mm — regenerate the shoe" ahead of
 deep_outside 29.5 % and toe_conform 39.6 mm; the Black Stilettos on Kira (share 0.02) stay refused by the fit's lift
 asymmetry 10.46 mm, no second attempt.
+
+Since fit version 16 (2026-11-12) the toe box is measured against the SLIMMED foot: ``footwear_cut`` presses the
+hidden foot towards the insole down to the toe box (step 1b, never under ``FOOT_FLOOR_SHARES``), so ``height_needed``
+is ``min(foot top, floor) + TOE_CLEARANCE_M`` over the cavity — slimming first, the height fit only for the rest.
+Together with the insole's sole layers (``footwear_insole`` version 8; the numbers above were read on the hollow sole
+plate, a 17-mm "cavity") the Sneekers on Kai's base need x1.12 and are ACCEPTED at the first attempt (width x1.0,
+deep_outside 0, toe_conform 3.6 mm); on his outfit body ``obf6474c3b`` x1.438 at the second (deep_outside 1.9 %,
+toe_conform 3.8 mm); on Kira x1.0 (toe_conform 6.7 mm). ``too_flat_reason`` names the mesh only when the mesh
+disagrees with its own image (``footwear_gates.image_agreement``); otherwise the foot is too high for this shoe.
 """
 import math
 from dataclasses import dataclass, field
@@ -292,7 +301,11 @@ from app.core.footwear_gates import check_gates
 #: 14: ... and its upper fitted to the foot's height up to ``HEIGHT_CAP`` (``upper_height_map``, Ruling 15h);
 #: 15: ... only for a closed toe box and only when the fit without it is refused (``fit_pair(fit_height=)``, Ruling
 #:    15i) — an accepted v13 shoe comes out as at v13, a v14 one fitted in height (an open pump) differs.
-FOOTWEAR_FIT_VERSION = 15
+#: 16: the foot is slimmed vertically in the toe box before the upper is raised (``FOOT_FLOOR_SHARES``,
+#:    ``footwear_cut`` version 7): ``height_needed`` reads the slimmed foot, the side records its toe tip
+#:    (``toe_x_m``) for the cut, and a toe box the height fit cannot raise enough names the mesh only when the mesh
+#:    disagrees with its image (``too_flat_reason``).
+FOOTWEAR_FIT_VERSION = 16
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -333,6 +346,31 @@ INSTEP_ROOF_SHARE = 0.8
 INSTEP_FROM_SHARE = 0.45
 #: The largest share of the ball width the forefoot slimming may take off (gate ``slim_needed``).
 SLIM_MAX_SHARE = 0.18
+#: The vertical forefoot slimming's floor (fit version 16, ``footwear_cut`` version 7): ``(u, share)`` — the
+#: thinnest a foot may be pressed at ``u`` = the share of its own length from the toe tip, as a share of that length
+#: (piecewise linear, the ends held). The foot inside a closed toe box is hidden, so the cut presses it towards the
+#: insole down to the toe box's inner height minus ``footwear_cut.TOE_CLEARANCE_M`` — the lateral slimming's rule
+#: turned vertical — but never thinner than a real foot: a generated mesh foot is 30–60 % too thick (measured on
+#: copies 2026-11-12, foot top over the sole at u 0.10 / 0.20 / 0.36 / 0.45 / 0.55: Kai ``base634402e5`` 37 / 48 /
+#: 71 / 79 / 102 mm at 291 mm long, his outfit body ``obf6474c3b`` 38 / 51 / 74 / 102 / 116 mm at 344 mm, Kira
+#: ``base20d5701a`` 33 / 37 / 59 / 70 / 90 mm at 243 mm), a real one is not. Derivation, adult anthropometry of
+#: a ~27-cm foot standing (foot top over the floor): the toes (u ≈ 0.10, hallux height) 20–25 mm, the ball (the
+#: first metatarsal head, u ≈ 0.27–0.36) 40–45 mm, the instep at half the foot length (u ≈ 0.5–0.55, "instep
+#: height") 65–70 mm, and the dorsum rises on to the ankle (u ≈ 0.70, the navicular / ankle front) at about 80 mm.
+#: The floor is the LOW end of each range over the 270-mm length — 20 / 270 = 0.074, 40 / 270 = 0.148, 65 / 270 =
+#: 0.241, 81 / 270 = 0.30 — and the toe tip's 11 mm (0.04, the nail's edge); a share of the foot's own length, so a
+#: foot generated too long gets a proportionally higher floor (it is still a foot of that length). Between the
+#: points the floor is linear; whatever the floor leaves above the toe box is the height fit's (``HEIGHT_CAP``).
+FOOT_FLOOR_SHARES: Tuple[Tuple[float, float], ...] = ((0.0, 0.04), (0.10, 0.074), (0.36, 0.148), (0.55, 0.241),
+                                                      (0.70, 0.30))
+
+
+def foot_floor_m(u: Any, length_m: float) -> np.ndarray:
+    """The vertical slimming's floor (``FOOT_FLOOR_SHARES``) at ``u`` = shares of the foot length from the toe tip,
+    in metres for a foot ``length_m`` long."""
+    us = np.array([p[0] for p in FOOT_FLOOR_SHARES])
+    shares = np.array([p[1] for p in FOOT_FLOOR_SHARES])
+    return np.interp(np.asarray(u, np.float64), us, shares) * float(length_m)
 
 #: name -> (kind, limit) — ``footwear_gates.check_gates`` kinds.
 FIT_GATES: Dict[str, Tuple[str, Any]] = {
@@ -973,10 +1011,25 @@ def applied_width_cap(insole: Dict[str, Any], width_cap: Optional[float] = None)
     return SHOE_WIDTH_CAP if shaft.get("has_shaft", True) is False else WIDTH_CAP
 
 
+#: ``too_flat_reason``: the station names by the share of the foot length from the toe tip (upper bounds).
+STATION_NAMES: Tuple[Tuple[float, str], ...] = ((0.15, "the toes"), (0.40, "the ball"), (1.01, "the instep"))
+
+
+def _station_name(u: Optional[float]) -> str:
+    if u is None:
+        return "the toe box"
+    return next((name for bound, name in STATION_NAMES if float(u) < bound), "the instep")
+
+
 def too_flat_reason(record: Dict[str, Any]) -> Optional[str]:
-    """The Wardrobe's reason for a closed shoe whose toe box the height fit cannot raise enough (``height_ready`` and
-    ``height_needed`` above ``HEIGHT_CAP``): the mesh is the defect — "Shoe mesh too flat for the foot: toe box 27 mm,
-    instep needs ~90 mm — regenerate the shoe" (the worse side's worst station); None otherwise."""
+    """The Wardrobe's reason for a closed shoe whose toe box the height fit cannot raise enough even for the slimmed
+    foot (``height_ready`` and ``height_needed`` above ``HEIGHT_CAP``; the worse side's worst station); None
+    otherwise. Only a mesh that disagrees with its own image (``record.insole.image.agrees`` False —
+    ``footwear_gates.image_agreement``: the mesher flattened what the picture shows) names the mesh: "Shoe mesh too
+    flat for the foot: toe box 27 mm, instep needs ~90 mm — regenerate the shoe". A mesh that matches its image is the
+    shoe the image shows, and regenerating it gives the same toe box: "Foot too high for this shoe even after
+    slimming (foot 51 mm, shoe 30 mm at the ball)" — the slimmed foot over the insole against the toe box's inner
+    height there (fit version 16). An insole without the comparison (before INSOLE_VERSION 8) reads as agreeing."""
     scale = record.get("scale") or {}
     needed = [v for v in (scale.get("height_needed") or {}).values() if v is not None]
     if not scale.get("height_ready") or not needed or max(needed) <= HEIGHT_CAP:
@@ -985,8 +1038,13 @@ def too_flat_reason(record: Dict[str, Any]) -> Optional[str]:
     if not worst:
         return None
     w = max(worst, key=lambda v: v["need_mm"] / max(v["roof_mm"], 1e-9))
-    return (f"Shoe mesh too flat for the foot: toe box {w['roof_mm']:.0f} mm, instep needs ~{w['need_mm']:.0f} mm "
-            f"— regenerate the shoe")
+    image = (record.get("insole") or {}).get("image") or {}
+    if image.get("agrees") is False:
+        return (f"Shoe mesh too flat for the foot: toe box {w['roof_mm']:.0f} mm, instep needs ~{w['need_mm']:.0f} mm "
+                f"— regenerate the shoe")
+    foot = w.get("foot_mm", w["need_mm"])
+    return (f"Foot too high for this shoe even after slimming (foot {foot:.0f} mm, shoe {w['roof_mm']:.0f} mm at "
+            f"{_station_name(w.get('toe_share'))})")
 
 
 def upper_scale(x: np.ndarray, height: Optional[Dict[str, Any]]) -> np.ndarray:
@@ -1164,6 +1222,8 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
     half = 0.5 * float(gx[1] - gx[0]) if len(gx) > 1 else 0.0
     for side, w in work.items():
         Cf = _apply(np.linalg.inv(w["Pf"]), w["Xf"])
+        # the foot's toe tip in the shoe frame: the vertical slimming's floor is read from it (fit version 16)
+        w["toe_x_raw"] = float(Cf[:, 0].max())
         worst = None
         height_worst[side] = None
         for i in np.nonzero(roofed)[0]:
@@ -1174,12 +1234,19 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             if not sel.any():
                 continue
             base = float(ins.z(gx[i]))
-            need = float(Cf[sel, 1].max()) - base + TOE_CLEARANCE_M / k
+            # the foot as the cut leaves it: slimmed vertically down to the toe box, never under the floor — what
+            # is left over the roof is what the upper must be raised by (FOOT_FLOOR_SHARES)
+            top = float(Cf[sel, 1].max()) - base
+            u = (w["toe_x_raw"] - float(gx[i])) * k / w["fm"].length_m
+            floor_raw = float(foot_floor_m(u, w["fm"].length_m)) / k
+            foot = min(top, floor_raw)
+            need = foot + TOE_CLEARANCE_M / k
             ratio = need / float(ins.cav[i])
             if worst is None or ratio > worst:
                 worst = ratio
-                height_worst[side] = {"x_share": float(gx[i]) / float(np.nanmax(gx)),
-                                      "roof_mm": float(ins.cav[i]) * k * 1000.0, "need_mm": need * k * 1000.0}
+                height_worst[side] = {"x_share": float(gx[i]) / float(np.nanmax(gx)), "toe_share": u,
+                                      "roof_mm": float(ins.cav[i]) * k * 1000.0, "need_mm": need * k * 1000.0,
+                                      "foot_mm": foot * k * 1000.0, "foot_raw_mm": top * k * 1000.0}
         height_needed[side] = worst
     # a closed toe box (Ruling 15i): a roof of at least CAVITY_MIN_M over the instep stations
     from app.core.footwear_insole import CAVITY_MIN_M
@@ -1489,7 +1556,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "extension": {"axis_local": ax_f, "deg": math.degrees(w["theta"])},
             "toe_counter": {"axis_local": ax_t, "deg": math.degrees(w["toe_turn"])},
             "forepart_slope_deg": math.degrees(w["slope"]), "lift_m": w["lift"],
-            "foot_len_m": fm.length_m, "foot_w_ball_mm": w["fw_ball"] * 1000.0,
+            "foot_len_m": fm.length_m, "toe_x_m": w["toe_x_raw"] * k, "foot_w_ball_mm": w["fw_ball"] * 1000.0,
             "insole_w_ball_mm": w["iw_ball"] * 1000.0, "toe_room_mm": w["toe_room_mm"], "contacts": recs,
             "split": {"is_boot": is_boot, "y_m": y_split, "band_m": SPLIT_BAND_M, "margin_m": SPLIT_MARGIN_M,
                       "topline_m": topline_m, "collar_above_ankle_mm": collar_above,
@@ -1559,6 +1626,8 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "shaft_h_m": topline_m,
             "open_share": None if insole.get("vamp_cover") is None else 1.0 - float(insole["vamp_cover"]),
             "wall_top_raw": wall_top_raw,
+            # the mesh against its own image (``footwear_gates.image_agreement``, insole step): ``too_flat_reason``
+            "image": insole.get("image"),
         },
         "split": {"is_boot": any_split, "band_m": SPLIT_BAND_M, "margin_m": SPLIT_MARGIN_M},
         "shaft": {

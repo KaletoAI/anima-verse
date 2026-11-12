@@ -43,6 +43,21 @@ the slimming's ``max_share`` can follow, and a toe knuckle may stand above the v
    offset from the footprint midline scaled by ``1 − (1 − s(x))·fade(y)·w``, ``fade`` = 1 up to ``cap +
    LATERAL_BAND_M``, linear to 0 over ``FADE_M`` above that, ``w`` = its Foot + ToeBase weight (the ankle, where
    the leg takes over, follows smoothly instead of stepping).
+1b. **Vertical slimming** (``CUT_VERSION`` 7, ``footwear_fit`` version 16) — the lateral slimming's rule turned
+   vertical. In the toe box (x from the throat front to ``x_max``; skipped for a boot side, whose foot is cut away
+   whole) per station (``SLIM_WINDOW_M``) the foot top over the insole ``t`` (the vertices that are mostly foot) is
+   compared with the room the toe box leaves — the vamp's inner surface (``vamp_inner``) minus the insole minus
+   ``TOE_CLEARANCE_M`` — and with the floor of a real foot (``footwear_fit.FOOT_FLOOR_SHARES``, a share of the foot
+   length at the station's share from the toe tip): factor ``min(1, max(room, floor) / t)``, smoothed like step 1.
+   Every vertex with foot weight in that range has its height over the insole scaled by ``1 − (1 − f(x))·ramp·w``,
+   ``ramp`` 0 at the throat front -> 1 over ``toe_fade`` in front of it (the foot behind the throat shows and does
+   not move), ``w`` its Foot + ToeBase weight. A generated foot is 30–60 % thicker than a real one in the toe box
+   (the floor's docstring): pressed down it needs no taller upper and no push of the toes under the vamp. Whatever
+   the floor leaves over the toe box is the height fit's (``footwear_fit.HEIGHT_CAP``) — the fit's ``height_needed``
+   reads the same slimmed foot. Every later step, the toe conform and the gates read the slimmed foot. Measured on
+   copies 2026-11-12 (the Sneekers ``item_3c60cf62``): Kai's base pressed 22 % of the zone's height, 6 / 7 stations
+   at the floor, toe_conform 3.0 / 3.6 mm (without the step: 13 mm); his outfit body ``obf6474c3b`` 34 / 31 % with
+   the height fit x1.438, toe_conform 1.9 / 3.8 mm; the Black Stilettos on Kira 37 / 32 %, toe_conform 2.9 / 6.6 mm.
 2. **Throat conform.** Vertices that are mostly foot within ``THROAT_BAND_M`` behind the throat front and above
    the vamp edge move down by their height above it times ``1 − smoothstep(d / THROAT_BAND_M)``, ``d`` = the
    distance behind the front (so a vertex at the front lands on the edge, one at the band's end stays). In
@@ -215,7 +230,7 @@ import numpy as np
 
 from app.core import glb_mesh
 from app.core.footwear_fit import (FOOT_WEIGHT_MIN, SEAM_FLEX_DEG, WALL_SIDE_M, _about, _apply, _frame_matrix, _r,
-                                   _smoothstep, _unit, upper_height_map, upper_scale)
+                                   _smoothstep, _unit, foot_floor_m, upper_height_map, upper_scale)
 from app.core.footwear_gates import check_gates
 from app.core.footwear_insole import HEEL_SEAT_M
 from app.core.glb_mesh import Prim  # noqa: F401  (re-exported: the cut's primitive type)
@@ -226,8 +241,11 @@ from app.core.glb_mesh import Prim  # noqa: F401  (re-exported: the cut's primit
 #: 5: under a boot the foot AND the lower leg go up to the collar plane, the leg ring conformed into the opening,
 #: ``shaft_poke`` read on that ring, ``collar_conform_m`` (boots plan Task 9 fix 4, Ruling 15e);
 #: 6: the leg at the collar rides the Leg like the shaft (step 2d: its Foot / ToeBase share moved to the Leg, faded
-#: out above the plane; the cut edge carries none) and the gate ``collar_flex_poke`` (Task 9 fix 5, Ruling 15f).
-CUT_VERSION = 6
+#: out above the plane; the cut edge carries none) and the gate ``collar_flex_poke`` (Task 9 fix 5, Ruling 15f);
+#: 7: the vertical forefoot slimming (step 1b) — the foot in the toe box pressed towards the insole down to the toe
+#: box's inner height, never under ``footwear_fit.FOOT_FLOOR_SHARES``; the toe conform and its gate read the slimmed
+#: foot. The description carries ``insole`` and ``foot``; a boot side is not slimmed (its foot is cut away whole).
+CUT_VERSION = 7
 #: The throat conform acts this far behind the throat front (metres).
 THROAT_BAND_M = 0.02
 #: The slimming band reaches this far above the cap (metres) ...
@@ -397,6 +415,9 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
     if not (~np.isnan(prof)).any():
         raise ValueError("The insole has no profile")
     heel_seat_x = float(gx[~np.isnan(prof)].min()) * k + HEEL_SEAT_M
+    # the insole surface in the cut frame (the vertical slimming presses the foot towards it, step 1b); the height
+    # fit never moves it
+    insole_line = np.stack([gx[~np.isnan(prof)] * k, prof[~np.isnan(prof)] * k], axis=1)
     ring = np.asarray((insole.get("overlay") or {}).get("topline") or np.zeros((0, 3)), np.float64).reshape(-1, 3)
     topline = upper_height_map(_apply(FrameM, ring), insole, height)[0] * scale3 if len(ring) else np.zeros((0, 3))
     x_min, x_max = (float(outline[:, 0].min()), float(outline[:, 0].max())) if len(outline) else (0.0, 0.0)
@@ -438,7 +459,9 @@ def cut_description(fit: Any, insole: Dict[str, Any]) -> Dict[str, Any]:
             **({"split": {"y_m": float(split["y_m"]), "band_m": float(split.get("band_m", 0.0)),
                           "collar_m": float(split["collar_m"])}}
                if split.get("is_boot") else {}),
-            "throat": throat, "toe_box": toe_box, "vamp_inner": vamp_inner,
+            "throat": throat, "toe_box": toe_box, "vamp_inner": vamp_inner, "insole": insole_line,
+            "foot": ({"toe_x_m": float(rec["toe_x_m"]), "length_m": float(rec["foot_len_m"])}
+                     if rec.get("toe_x_m") is not None and rec.get("foot_len_m") else None),
             "stations": {"heel_x": d.get("heel_x_m"), "ball_x": d.get("ball_x_m"),
                          "heel_seat_x": heel_seat_x, "x_min": x_min, "x_max": x_max},
             "conform": {"throat_band_m": THROAT_BAND_M, "lateral_band_m": LATERAL_BAND_M,
@@ -556,6 +579,15 @@ class _Side:
         self.inner_x, self.inner_y = (vi[:, 0], vi[:, 1]) if len(vi) else (np.zeros(0), np.zeros(0))
         seat = st.get("heel_seat_x")
         self.heel_seat_x = float(seat) if seat is not None else self.x_min + HEEL_SEAT_M
+        il = np.asarray(desc.get("insole") if desc.get("insole") is not None else np.zeros((0, 2)),
+                        np.float64).reshape(-1, 2)
+        il = il[np.argsort(il[:, 0])] if len(il) else il
+        self.ins_x, self.ins_y = (il[:, 0], il[:, 1]) if len(il) else (np.zeros(0), np.zeros(0))
+        foot = desc.get("foot") or {}
+        self.toe_x = None if foot.get("toe_x_m") is None else float(foot["toe_x_m"])
+        self.foot_len = None if not foot.get("length_m") else float(foot["length_m"])
+        #: a boot side (a split fit): its foot is cut away whole, it is not slimmed vertically
+        self.is_boot = bool(desc.get("split"))
         collar = desc.get("collar") or {}
         self.plane = collar.get("plane")
         opening = collar.get("opening") or {}
@@ -581,6 +613,10 @@ class _Side:
     def hw(self, x: np.ndarray) -> np.ndarray:
         """The footprint's half-width per station — the upper's inner half-width before the clearance."""
         return 0.5 * (self.zhi(x) - self.zlo(x))
+
+    def insole(self, x: np.ndarray) -> np.ndarray:
+        """The insole surface per station (the ends held)."""
+        return np.interp(x, self.ins_x, self.ins_y)
 
     def inner(self, x: np.ndarray) -> np.ndarray:
         """The vamp's inner surface per station: the measured one where the insole has a cavity, never above
@@ -786,6 +822,50 @@ def _slim_factors(side: _Side, C: np.ndarray, cand: np.ndarray, meas: np.ndarray
     return per_vertex, info
 
 
+def _vslim_factors(side: _Side, C: np.ndarray, cand: np.ndarray, meas: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Step 1b's per-station factor (module docstring): stations every ``SLIM_WINDOW_M`` over the candidates' x range;
+    the station's foot top ``t`` over the insole read on ``meas`` (the vertices that are mostly foot) within
+    ±``SLIM_WINDOW_M``; the room ``r`` = the toe box's inner surface − the toe clearance − the insole; the floor ``f``
+    = ``footwear_fit.foot_floor_m`` at the station's share of the foot length from its toe tip. A foot higher than
+    its room is pressed to ``max(r, f)`` — factor ``max(r, f) / t`` — else 1; smoothed over ±``SLIM_SMOOTH_M`` like
+    the lateral factor. ``(per-vertex factor of cand, info)``, info ``{"vslim_share": 1 − the smallest factor,
+    "vslim_floor_stations": the stations the floor held above their room}``."""
+    none = {"vslim_share": 0.0, "vslim_floor_stations": 0}
+    if not cand.any() or not meas.any():
+        return np.ones(int(cand.sum())), none
+    X = C[cand]
+    xs = np.arange(float(X[:, 0].min()), float(X[:, 0].max()) + SLIM_WINDOW_M, SLIM_WINDOW_M)
+    f = np.full(len(xs), np.nan)
+    held = 0
+    Xm = C[meas]
+    order = np.argsort(Xm[:, 0])
+    bx, by = Xm[order, 0], Xm[order, 1]
+    lo = np.searchsorted(bx, xs - SLIM_WINDOW_M, side="left")
+    hi = np.searchsorted(bx, xs + SLIM_WINDOW_M, side="right")
+    base = side.insole(xs)
+    room = side.inner(xs) - side.toe_clearance - base
+    floor = foot_floor_m((side.toe_x - xs) / side.foot_len, side.foot_len)
+    for i in range(len(xs)):
+        if hi[i] <= lo[i]:
+            continue
+        t = float(by[lo[i]:hi[i]].max()) - float(base[i])
+        f[i] = 1.0
+        if t > room[i] and t > 0.0:
+            f[i] = min(1.0, max(float(room[i]), float(floor[i])) / t)
+            held += int(floor[i] > room[i])
+    if np.isnan(f).all():
+        return np.ones(int(cand.sum())), none
+    valid = ~np.isnan(f)
+    vx, vs = xs[valid], f[valid]
+    lo = np.searchsorted(vx, xs - SLIM_SMOOTH_M, side="left")
+    hi = np.searchsorted(vx, xs + SLIM_SMOOTH_M, side="right")
+    cs = np.concatenate([[0.0], np.cumsum(vs)])
+    n = hi - lo
+    f_sm = _fill(np.where(n > 0, (cs[hi] - cs[lo]) / np.maximum(n, 1), np.nan), xs)
+    return np.interp(C[cand, 0], xs, f_sm), {"vslim_share": float(1.0 - f_sm[valid].min()),
+                                              "vslim_floor_stations": held}
+
+
 def _collar_conform(side: "_Side", m: "_Map", C: np.ndarray, moved: np.ndarray) -> Dict[str, float]:
     """Step 2c (module docstring) in place on the cut-frame positions ``C``: per angular bin of the opening the leg's
     reach (the largest in-plane radius about the opening's centre of the vertices within ``±fade`` of the collar
@@ -867,12 +947,13 @@ def conform_body(prim: Prim, cut: Dict[str, Any], joints: Dict[str, np.ndarray])
                 joint_names=list(prim.joint_names))
     touched = np.zeros(len(P), bool)
     info: Dict[str, Any] = {"slim_share": {}, "throat_moved": {}, "slim_station_max": {}, "toe_conform": {},
-                            "toe_pull": {}, "collar_pull": {}, "collar_squeeze": {}, "collar_weights": {}}
+                            "toe_pull": {}, "collar_pull": {}, "collar_squeeze": {}, "collar_weights": {},
+                            "vslim_share": {}, "vslim_floor_stations": {}}
     for name, desc in (cut.get("sides") or {}).items():
         side = _Side(desc)
         m = _Map(desc, joints, view)
         C = m.to_cut(P)
-        x, y, z = C[:, 0], C[:, 1].copy(), C[:, 2]      # y: the height before any move (the toe push is read against it)
+        x, y, z = C[:, 0], C[:, 1].copy(), C[:, 2]      # y: the height before any move; re-read after step 1b
         capx = side.cap(x)
         foot = m.foot > 0
         in_x = (x >= side.x_min) & (x <= side.x_max)
@@ -893,6 +974,28 @@ def conform_body(prim: Prim, cut: Dict[str, Any], joints: Dict[str, np.ndarray])
             moved[ids[change]] = True
         info["slim_share"][name] = sinfo["slim_share"]
         info["slim_station_max"][name] = sinfo["slim_station_max"]
+        # 1b. vertical slimming (CUT_VERSION 7): in the toe box the hidden foot is pressed towards the insole, down to
+        # the toe box's inner height, never under the floor of a real foot; ramped in over the toe fade in front of
+        # the throat front (nothing behind it moves: that foot shows) and by foot weight, like the toe conform
+        vinfo = {"vslim_share": 0.0, "vslim_floor_stations": 0}
+        if side.throat and len(side.ins_x) and side.toe_x is not None and side.foot_len and not side.is_boot:
+            xt = float(side.throat["x"])
+            zone = foot & (x >= xt) & (x <= side.x_max)
+            f_v, vinfo = _vslim_factors(side, C, zone, zone & (m.foot > FOOT_WEIGHT_MIN))
+            if zone.any() and (f_v < 1.0).any():
+                ids = np.nonzero(zone)[0]
+                ramp = np.clip((x[ids] - xt) / side.toe_fade, 0.0, 1.0) * np.minimum(1.0, m.foot[ids])
+                factor = 1.0 - (1.0 - f_v) * ramp
+                b = side.insole(x[ids])
+                y_now = C[ids, 1]
+                newy = np.where(y_now > b, b + (y_now - b) * factor, y_now)
+                change = np.abs(newy - y_now) > 0
+                C[ids[change], 1] = newy[change]
+                moved[ids[change]] = True
+        info["vslim_share"][name] = vinfo["vslim_share"]
+        info["vslim_floor_stations"][name] = vinfo["vslim_floor_stations"]
+        # every later step reads the slimmed foot: the toe push is measured from here
+        y = C[:, 1].copy()
         # 2. throat conform — on the vertices that are mostly foot: a knee carries a trace of Foot weight in an
         # auto-weighted rig and stands over the toe box in the cut frame
         n_throat = 0
@@ -1544,6 +1647,8 @@ def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]
         sides[name] = _side_gates(desc, joints, before, body_after, shoe, body_before, shaft)
         sides[name]["toe_conform_m"] = float(cinfo["toe_conform"].get(name, 0.0))
         sides[name]["toe_pull_m"] = float(cinfo["toe_pull"].get(name, 0.0))
+        sides[name]["vslim_share"] = float(cinfo["vslim_share"].get(name, 0.0))
+        sides[name]["vslim_floor_stations"] = int(cinfo["vslim_floor_stations"].get(name, 0))
         if shaft is not None:
             sides[name]["collar_conform_m"] = float(cinfo["collar_pull"].get(name, 0.0))
             sides[name]["collar_squeeze"] = float(cinfo["collar_squeeze"].get(name, 0.0))

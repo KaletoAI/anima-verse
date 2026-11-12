@@ -50,7 +50,7 @@ Expected, by hand:
      every number equals [I1] (the fin is vertical -> no ray hit; it sits at z = 0 -> no topline side).
 [I8] analyse(static_glb(pump)) equals analyse_arrays(pump) within float32 (1e-5) and is JSON without NaN.
 (Every float in insole.json is rounded to 7 decimals, so the station-count checks hold to 1e-6.)
-[I9] constants: INSOLE_VERSION 7 (the insole measures the mesh step's prepared.glb, re-made from raw.glb when an older insole stripped it; 6 = a class-none shoe has no shaft; 5 = the cap inside the opening; 4 = the tube ring rules, 3 = the shaft block, 2 = the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
+[I9] constants: INSOLE_VERSION 8 (8 = the sole layers: the flip on 1 % L, the open seed, MAX_HITS 48; 7 = the insole measures the mesh step's prepared.glb, re-made from raw.glb when an older insole stripped it; 6 = a class-none shoe has no shaft; 5 = the cap inside the opening; 4 = the tube ring rules, 3 = the shaft block, 2 = the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
      INSOLE_GATES insole_cover min 0.80 / vamp_cover min 0.6 / opening_share min 0.5, BOOT_MARGIN_M 0.03,
      the refusal texts (boot, open, solid).
 [I11] the closed solid wedge (sole alone: side faces only up to h(x), no roof): the top faces up with nothing
@@ -281,7 +281,7 @@ def main():
     print("[I9] constants")
     check("constants", (fi.INSOLE_VERSION, fi.NOMINAL_LENGTH_M, fi.STATIONS, fi.AIR_SHARE, fi.TOL_SHARE,
                         fi.BOOT_MARGIN_M, fi.DOWN_MAX),
-          (7, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
+          (8, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
     check("ring constants", (fi.RING_GAP_MAX_DEG, fi.RING_EXTENT_MIN_SHARE), (90.0, 0.10))
     check("INSOLE_GATES", {k: v[:2] for k, v in fi.INSOLE_GATES.items()},
           {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6), "opening_share": ("min", 0.5)})
@@ -292,7 +292,7 @@ def main():
     print("[I6] vertical_hits on one triangle")
     tri_p = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 1.0]])   # frame (x, height, z)
     hits = fi.vertical_hits(tri_p, np.array([[0, 1, 2]]), np.array([0.25, 0.75]), np.array([0.25, 0.75]))
-    check("shape", hits.shape, (2, 2, 12, 2))
+    check("shape", hits.shape, (2, 2, fi.MAX_HITS, 2))
     near("(0.25, 0.25) height", hits[0, 0, 0, 0], 0.25, 1e-12)
     near("(0.25, 0.25) |normal_up|", abs(hits[0, 0, 0, 1]), 1 / math.sqrt(2), 1e-12)
     check("(0.25, 0.25) one hit", int(np.sum(~np.isnan(hits[0, 0, :, 0]))), 1)
@@ -335,7 +335,7 @@ def main():
     near("vamp_cover", pump["vamp_cover"], 0.810, 0.02)
     near("vamp_cover (station count 74/91)", pump["vamp_cover"], 74 / 91, 1e-6)
     check("gates", (pump["gates"]["ok"], pump["gates"]["reasons"], pump["gates"].get("refusal")), (True, [], None))
-    check("version", pump["version"], 7)
+    check("version", pump["version"], 8)
     near("pump footprint_ground", pump["footprint_ground"], 1.0, 1e-9)
 
     print("[I4] rotated 180 deg about Y")

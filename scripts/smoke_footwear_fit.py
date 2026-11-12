@@ -155,7 +155,9 @@ FOOT_WEIGHT_MIN like the auto-weighted male shins.
      On these flat feet (FOOT_H 0.02 everywhere) the clog's toe box is tall enough: height_needed = (0.02 +
      0.002) / (0.03 x 1.023599) = 0.71643 per side -> height_factor 1, scale.height None (the fit unchanged).
 [F14] the upper fitted to the foot's height (fit version 14, boots plan Ruling 15h), since fit version 15 (Ruling
-     15i) only for a CLOSED toe box and only when the fit without it is refused. The feet: foot_body_glb() whose top
+     15i) only for a CLOSED toe box and only when the fit without it is refused. Measured on fit version 15's foot:
+     ``FOOT_FLOOR_SHARES`` is patched to 1.0 (a floor as tall as the foot is long), which switches the vertical
+     slimming of fit version 16 off in the fit and in the cut alike (scripts/smoke_footwear_sole_layers.py has it on). The feet: foot_body_glb() whose top
      (y = FOOT_H) is raised to Ht for x <= 0.15 (the instep and the toe joints; the last 0.04 to the tip keep 0.02,
      so toe_height_m stays 0.02 and the scale step's k = 1.023599 with it). The foot's sole stands on the insole
      (y 0.01 raw); per roofed station height_needed = (Ht + TOE_CLEARANCE_M 0.002) / (cavity x k), the worst one.
@@ -181,8 +183,11 @@ FOOT_WEIGHT_MIN like the auto-weighted male shins.
          = 0.07 - 0.055577 = 0.014423 -> accepted, height_factor 1.5.
      (e) S 1.0, Ht 0.065: needed at the instep roof 0.067 / (0.025 k = 0.025590) = 2.61822 > 1.5; the second
          attempt (x1.5) leaves toe_conform 0.065 - (0.025 x 1.5 x k - 0.002) = 0.065 - 0.036385 = 0.028615 > 0.025,
-         refused, and the first reason names the mesh: "Shoe mesh too flat for the foot: toe box 26 mm, instep needs
-         ~67 mm — regenerate the shoe" (26 = 25.590 mm, 67 = 67.0 mm). (At Ht 0.055 the x1.5 second attempt passes,
+         refused, and the first reason is the toe box's (fit version 16: the insole has no image comparison, so the
+         mesh reads as the shoe its image shows): "Foot too high for this shoe even after slimming (foot 65 mm, shoe
+         26 mm at the instep)" (65 = Ht, the slimming off; 26 = 25.590 mm; the worst station is the first of the
+         instep roof the height map reads, station 127 at x 0.138159 raw, the foot's toe tip at 0.261135 m in the
+         shoe frame -> u = (0.261135 - 0.138159 k) / 0.25 = 0.479 >= 0.40: "the instep"). (At Ht 0.055 the x1.5 second attempt passes,
          0.018615: a needed factor past the cap is no refusal by itself — the gates decide.)
      (f) S 1.5, Ht 0.07 under the Wardrobe width cap 1.05: height_ready False (the item keeps its look) -> refused
          as in (d)'s first attempt, no mesh reason; the flat boot (a shaft) on the Ht 0.04 feet: height_ready False.
@@ -222,7 +227,7 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 15 and ff.HEIGHT_CAP == 1.5 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+    check(ff.FOOTWEAR_FIT_VERSION == 16 and ff.HEIGHT_CAP == 1.5 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
           and ff.INSTEP_ROOF_SHARE == 0.8 and ff.INSTEP_FROM_SHARE == 0.45
           and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10 and ff.SHOE_WIDTH_CAP == 1.65
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
@@ -302,8 +307,8 @@ def main() -> int:
                                  "worse side)"] and "cut" not in fw.record,
           f"[F5] 0.10 m foot: slim {gw['value']} > 0.18 refuses (ok {fw.ok}, {fw.reasons[:1]}); a refused fit carries no cut")
     check(all(v["gating"] is True for v in g.values()) and set(fit.record["cut"]["sides"]) == {"left", "right"}
-          and fit.record["cut"]["version"] == 6,
-          "[F5] every gate gating; the accepted fit carries the cut description (both sides, cut version 6)")
+          and fit.record["cut"]["version"] == 7,
+          "[F5] every gate gating; the accepted fit carries the cut description (both sides, cut version 7)")
     f105 = ff.fit_pair(insole, shoe, body, joints, width_cap=1.05)
     f150 = ff.fit_pair(insole, shoe, body, joints, width_cap=1.5)
     check(f105.record["scale"]["width_factor"] == 1.05 and f150.record["scale"]["width_factor"] == 1.10,
@@ -404,8 +409,8 @@ def main() -> int:
               f"[F11] ok {fit_hu.ok}, reasons {fit_hu.reasons}, foot_pose root lift {fit_hu.foot_pose.get('root_lift_m')}")
 
     # [F12] the version and the two band constants ([F1]-[F8] above are the unchanged regression)
-    check(ff.FOOTWEAR_FIT_VERSION == 15 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
-          "[F12] FOOTWEAR_FIT_VERSION 15, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
+    check(ff.FOOTWEAR_FIT_VERSION == 16 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
+          "[F12] FOOTWEAR_FIT_VERSION 16, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
 
     # [F13] a shoe without a shaft is widened to the foot
     from app.core import footwear_cut
@@ -454,8 +459,11 @@ def main() -> int:
           f"[F13] (d) the flat boot on w 0.12: x{fd_.record['scale']['width_factor']} (boot cap), slim "
           f"{fd_.record['gates']['slim_needed']['value']:.4f} refused")
 
-    # [F14] the upper fitted to the foot's height
+    # [F14] the upper fitted to the foot's height — on fit version 15's foot: the vertical slimming (fit version 16,
+    # footwear_cut step 1b) is switched off by a floor as tall as the foot is long (smoke_footwear_sole_layers.py has it on)
     from app.core.footwear_cut import TOE_CLEARANCE_M
+    real_floor = ff.FOOT_FLOOR_SHARES
+    ff.FOOT_FLOOR_SHARES = ((0.0, 1.0), (1.0, 1.0))
     real_body = fx.foot_body
 
     def tall_glb(ht):
@@ -573,8 +581,8 @@ def main() -> int:
           f"{conform(od) if od['ok'] else od['reasons']} = 0.014423 accepted")
     P10, F10 = closed_clog(1.0)
     oe = compute(0.065, P10, F10, footwear_insole.analyse_arrays(P10, F10))
-    check(not oe["ok"] and oe["reasons"][0] == ("Shoe mesh too flat for the foot: toe box 26 mm, instep needs ~67 mm "
-                                                "— regenerate the shoe")
+    check(not oe["ok"] and oe["reasons"][0] == ("Foot too high for this shoe even after slimming (foot 65 mm, shoe "
+                                                "26 mm at the instep)")
           and oe["gates"]["reasons"][0] == oe["reasons"][0]
           and oe["reasons"][1].startswith("toe_conform_m 0.0286"),
           f"[F14] (e) closed S 1.0 Ht 0.065 refused: {oe.get('reasons', ['accepted'])[:2]}")
@@ -585,6 +593,7 @@ def main() -> int:
           and not any("too flat" in r for r in of_["reasons"])
           and not fbt.record["scale"]["height_ready"] and fbt.record["scale"]["height_factor"] == 1.0,
           f"[F14] (f) Wardrobe cap 1.05 and the boot: not ready, {of_['reasons'][:1]}")
+    ff.FOOT_FLOOR_SHARES = real_floor
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0

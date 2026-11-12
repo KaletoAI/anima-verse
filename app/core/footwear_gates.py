@@ -8,6 +8,8 @@
   given — the same shoe below the empty shoe's own top edge.
 - ``side_silhouette`` + ``silhouette_iou`` give the mesh's ``mesh_iou``
   against the cut-out; ``component_shares`` its ``component_share``.
+- ``image_agreement`` (insole step, INSOLE_VERSION 8) says whether the mesh is the shoe its image shows: the
+  Wardrobe sends the user to regenerate a shoe only when it is not (``footwear_fit.too_flat_reason``).
 
 Gate tables are ``{metric: (kind, limit, label)}`` with kind ``min`` /
 ``max`` / ``range`` (limit ``(lo, hi)``); ``check_gates`` applies one.
@@ -304,3 +306,65 @@ def component_shares(positions: np.ndarray, faces: np.ndarray) -> Tuple[float, f
     eps = 1e-9 * max(1.0, float(np.linalg.norm(hi[best] - lo[best])))
     inside = np.all(lo >= lo[best] - eps, axis=1) & np.all(hi <= hi[best] + eps, axis=1)
     return float(share[best]), float(share[inside].sum())
+
+
+# --- the mesh against its image -----------------------------------------------------------------------------------------
+
+#: ``image_agreement``: a mesh agrees with its image when its side-silhouette IoU is at least ``mesh_iou`` and its
+#: upper over the toe half (``TOE_HALF`` of the length from the toe) stands, in the median column, at least
+#: ``toe_profile_ratio`` of the image's height there (both silhouettes cropped and normalised by their own length).
+#: Measured on copies 2026-11-12, the toe half's median ratio / IoU: Sneekers (``item_3c60cf62``) 0.903 / 0.944, Black
+#: Stilettos 0.926 / 0.919, Work Shoes 0.874 / 0.902, knee-high boots 0.872 / 0.892 and 0.900 / 0.938 — every one a
+#: mesh that matches its picture to a few millimetres (the systematic 7–13 % is the cut-out's soft edge and the
+#: orthographic projection) — against the Business Heels' 0.726 / 0.774, a mesh whose toe box is a third lower than
+#: its image (−21 … −34 mm at 26 cm).
+IMAGE_AGREE: Dict[str, float] = {"mesh_iou": 0.85, "toe_profile_ratio": 0.80}
+#: The toe half the profile is compared over: shares of the length from the toe (the tip's rounding left out).
+TOE_HALF = (0.05, 0.50)
+#: Columns of the profile comparison.
+PROFILE_COLUMNS = 40
+
+
+def _top_profile(mask: np.ndarray, columns: int) -> np.ndarray:
+    """Per column of the cropped silhouette its top edge over its bottom row, as a share of the crop's length (NaN for
+    an empty column)."""
+    c = _crop(_as_mask(mask))
+    out = np.full(columns, np.nan)
+    if c is None:
+        return out
+    H, W = c.shape
+    for i in range(columns):
+        a = int(i * W / columns)
+        b = max(int((i + 1) * W / columns), a + 1)
+        rows = np.nonzero(c[:, a:b].any(axis=1))[0]
+        if len(rows):
+            out[i] = (H - rows[0]) / W
+    return out
+
+
+def image_agreement(positions: np.ndarray, faces: np.ndarray, alpha: Any, *, toe_first: bool = False,
+                    size: int = 512) -> Dict[str, Any]:
+    """Whether a shoe mesh is the shoe its cut-out shows (``IMAGE_AGREE``): ``{"mesh_iou", "toe_profile_ratio",
+    "agrees", "limits"}``. ``alpha`` = the cut-out's alpha (or a boolean matte); ``toe_first`` = the toe lies at the
+    START of ``side_silhouette``'s length axis (the insole analysis flipped the silhouette's frame). The image's
+    orientation is the one whose profile matches the mesh's better (mean |log| ratio over all columns). The ratio is
+    None (and ``agrees`` follows the IoU alone) when no column of the toe half has both profiles."""
+    sil = side_silhouette(positions, faces, size=size)
+    matte = _as_mask(alpha)
+    iou = silhouette_iou(sil, matte)
+    pm = _top_profile(sil, PROFILE_COLUMNS)
+    centre = (np.arange(PROFILE_COLUMNS) + 0.5) / PROFILE_COLUMNS
+    u = centre if toe_first else 1.0 - centre
+    sel = (u >= TOE_HALF[0]) & (u <= TOE_HALF[1])
+    best = None
+    for cand in (matte, matte[:, ::-1]):
+        pi = _top_profile(np.ascontiguousarray(cand), PROFILE_COLUMNS)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            score = float(np.nanmean(np.abs(np.log(pm / pi))))
+            ratio = pm[sel] / pi[sel]
+        if best is None or score < best[0]:
+            best = (score, ratio)
+    ratio = best[1][np.isfinite(best[1])] if best is not None else np.zeros(0)
+    median = float(np.median(ratio)) if len(ratio) else None
+    agrees = iou >= IMAGE_AGREE["mesh_iou"] and (median is None or median >= IMAGE_AGREE["toe_profile_ratio"])
+    return {"mesh_iou": float(iou), "toe_profile_ratio": median, "agrees": bool(agrees), "limits": dict(IMAGE_AGREE)}

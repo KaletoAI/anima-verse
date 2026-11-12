@@ -648,6 +648,14 @@ def _step_insole(iid: str, ssig: str, seed: int, d: Path) -> None:
         res = footwear_insole.analyse_arrays(P2, F2)
         res["shaft"]["cap_removed"] = removed
         logger.info("Shoe source %s/%s: shaft cap of %d faces removed from prepared.glb", iid, ssig, removed)
+        positions, faces = P2, F2
+    # the mesh against its own image (INSOLE_VERSION 8): the fit names the mesh as the defect only when it is not the
+    # shoe the image shows (footwear_gates.image_agreement, footwear_fit.too_flat_reason)
+    cutout = d / "cutout.png"
+    if cutout.is_file():
+        from app.core.footwear_gates import image_agreement
+        res["image"] = image_agreement(positions, faces, _cutout_alpha(cutout),
+                                       toe_first=bool(res["frame"]["flipped"]))
     gates = res["gates"]
     # Written refused too: the Wardrobe row shows what the analysis found.
     write_record(d / "insole.json", res)

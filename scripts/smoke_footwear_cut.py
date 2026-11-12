@@ -14,7 +14,7 @@ so the cut frame IS the primitive's bind space (x forward, y up, z lateral). ``j
 "lefttoebase": I}; every vertex 100 % LeftFoot.
 
 Expected, by hand:
-[X0] constants: CUT_VERSION 6 (2 = the toe conform, 3 = the boot's cap bound + shaft_poke, 4 = shaft_poke up to the
+[X0] constants: CUT_VERSION 7 (2 = the toe conform, 3 = the boot's cap bound + shaft_poke, 4 = shaft_poke up to the
      collar, 5 = the boot body cut at the collar plane + the collar conform, 6 = the collar weights + the gate
      collar_flex_poke), THROAT_BAND_M 0.02,
      LATERAL_BAND_M 0.015, CLEARANCE_M 0.002, FADE_M 0.015, TOE_CLEARANCE_M 0.002, TOE_FADE_M 0.015, CUT_GATES
@@ -384,7 +384,7 @@ def accessor_bytes(glb: bytes, index: int) -> bytes:
 def main() -> int:
     print("[X0] constants")
     from app.core import footwear_fit as ff
-    check("CUT_VERSION 6", fc.CUT_VERSION == 6)
+    check("CUT_VERSION 7", fc.CUT_VERSION == 7)
     check("bands", (fc.THROAT_BAND_M, fc.LATERAL_BAND_M, fc.CLEARANCE_M, fc.FADE_M, fc.TOE_CLEARANCE_M, fc.TOE_FADE_M)
           == (0.02, 0.015, 0.002, 0.015, 0.002, 0.015))
     check("CUT_GATES", fc.CUT_GATES == {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "toe_conform_m": ("max", 0.025),
@@ -530,7 +530,7 @@ def main() -> int:
     check("fixture fit ok", fit.ok, str(fit.reasons))
     k = fit.record["scale"]["k_m_per_unit"]
     cut = fc.cut_description(fit, ins)
-    check("version + both sides", cut["version"] == 6 and set(cut["sides"]) == {"left", "right"})
+    check("version + both sides", cut["version"] == 7 and set(cut["sides"]) == {"left", "right"})
     L = cut["sides"]["left"]
     check("joint names", (L["foot_joint"], L["toe_joint"]) == ("LeftFoot", "LeftToeBase"))
     frame = np.asarray(L["frame"], np.float64)
@@ -715,7 +715,7 @@ def main() -> int:
     from app.core.garment_fit import weld
     Pw, Fw = flat_boot(shaft=0.16, shaft_to=0.12)
     check("unwelded tube 3828 faces / 11484 vertices", (len(Fw), len(Pw)) == (3828, 11484), f"{len(Fw)} {len(Pw)}")
-    check("FOOTWEAR_FIT_VERSION 15 (the turn, the widen, the collar plane; the push recorded; a closed shoe fitted to the foot in height when needed)", ff.FOOTWEAR_FIT_VERSION == 15)
+    check("FOOTWEAR_FIT_VERSION 16 (the turn, the widen, the collar plane; the push recorded; a closed shoe fitted to the foot in height when needed)", ff.FOOTWEAR_FIT_VERSION == 16)
     inst = fi.analyse_arrays(Pw, Fw)
     glb_a = foot_body_glb(leg_cell=0.01)
     body_a, joints_a = glb_mesh.body_arrays(glb_a), glb_mesh.joint_bind_matrices(glb_a)

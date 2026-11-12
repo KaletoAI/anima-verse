@@ -7,15 +7,18 @@ Blender:
 
 - **Frame** (``shoe_frame``): up = the mesher's +Y, x = the principal axis of the footprint, the
   provisional heel = the end whose rear ``HEEL_END_SHARE`` stands taller. After tracking, the frame is
-  flipped when the insole at 0.10 L is lower than at 0.90 L — toe and heel come from the insole height.
+  flipped when the insole at 0.90 L stands at least ``FLIP_MIN_SHARE`` L above the insole at 0.10 L — a heel
+  decides toe and heel by its rise; a flat shoe keeps the silhouette's heel (INSOLE_VERSION 8).
 - **Vertical rays** (``vertical_hits``) on ``STATIONS`` stations x the lateral columns: every triangle's
   xz bounding box is binned into the station grid and each (triangle, ray) pair is tested with the 2D
   barycentric point-in-triangle test (vertical rays need no Möller–Trumbore); the height is the
   barycentric interpolation, ``normal_up`` the face normal's up component. Hits closer than 1e-5 L in
   one column are one hit (the spike's BVH restarted its ray 1e-5 L above the last hit).
 - **Tracking** (the spike's ``insole.py`` verbatim): a candidate is an up-facing hit (``normal_up >
-  0.3``) with at least ``AIR_SHARE`` L of air above it or nothing above; seeded at 0.55 of the stations
-  (the lowest candidate), followed both ways with the slope-extrapolated prediction within ``TOL_SHARE``
+  0.3``) with at least ``AIR_SHARE`` L of air above it or nothing above; seeded on the surface OPEN to the
+  shaft opening (``_seed_open``, INSOLE_VERSION 8: the station with the most open candidates, per column its
+  highest open one) — without an open station at 0.55 of the stations, the lowest candidate (the spike's
+  seed) — followed both ways with the slope-extrapolated prediction within ``TOL_SHARE``
   L; a second pass gives each lost cell the candidate nearest its station's median within 2 TOL.
   Profile = the median over the middle 50 % of a station's insole columns.
 - **Topline** per station (tessellation-independent): every triangle edge is cut by the station plane;
@@ -127,6 +130,28 @@ the PULL TAB's own small loop (1.2–1.4 × 1.5 cm, gap 54–72 deg) and two at 
 So ``top_raw`` sat on the tongue / the tab, 2.1 / 1.6 cm above the real collar ring (13.79 / 17.55 cm), and the
 cap band was measured from there. INSOLE_VERSION 4 (the gap and extent rules above) puts ``top_raw`` on the collar
 of both (fix-1 report: the numbers on the stored meshes are in the Task 8 fix-1 report of the SDD folder).
+
+**Sole layers (INSOLE_VERSION 8, 2026-11-12).** The live Sneekers (``item_3c60cf62/7016df7faf79``, a flat low-top
+sneaker) were measured in their sole: every column of the forefoot stacks 9–13 surfaces up to the footbed (an outsole
+1–6 mm, a HOLLOW sole plate whose floor faces up at 5–6 mm with 17 mm of air above it, a footbed of three sheets at
+23–27 mm, all at 26 cm) and the vamp roof is the 10th–14th hit. Three rules read it wrong together: (A) the insole at
+0.10 L and 0.90 L differed by 1.1 mm (heel rise 0.57 mm), so the frame flipped and overrode the silhouette — the foot
+stood backwards in the shoe; (B) the seed took the LOWEST candidate, the plate's floor; (C) ``MAX_HITS`` 12 dropped
+the roof, so the footbed's top read as having nothing above. The stored "cavity" was the plate's 17–20 mm
+everywhere, and the fit refused Kai's base ("The toe box is lower than the toes everywhere") and his outfit body
+("toe box 22 mm, instep needs ~112 mm — regenerate the shoe") although the mesh matches its image to 2–6 mm. Now:
+flip only on ``FLIP_MIN_SHARE``; seed on the open surface — a candidate at least ``AIR_SHARE`` L under the station's
+topline whose air reaches up to it (nothing above, or the next hit within ``AIR_SHARE`` L of the topline): the
+footbed seen through the collar is open, the plate's floor (the footbed's underside 17 mm above it) is not;
+``MAX_HITS`` 48. Measured on copies (mm at 26 cm, share of the length from the toe 0.10 / 0.20 / 0.36 / 0.45 / 0.55):
+the Sneekers' insole 29 / 27 / 26 / 26 / 27 (was 7 / 6 / 6 / 6 / 6) and cavity 10 / 17 / 23 / 34 / 46 (was 20 / 20 /
+17 / 17 / 17), not flipped, insole cover 0.935, vamp cover 0.640 (the sole's rim outside the upper now has no roof;
+was 0.968), opening 0.671 (was 1.0) — gates pass. The Black Stilettos (``item_7d91cd7a/a5671420fb76``) had the same
+fault under the waist: insole at the ball 3.8 -> 12.5 mm, heel seat 10.4 -> 11.7 cm, insole cover 0.836 -> 0.932,
+the "lining a few millimetres over the insole" (``footwear_fit.INSTEP_ROOF_SHARE``) was the insole itself. Unchanged
+within 0.2 mm / 0.5 deg: the Business Heels, the Work Shoes and both knee-high boots (cavity +1.6 / +4 mm at 0.36 /
+0.45 on the Work Shoes, the rest equal). The analysis takes 0.4–0.8 s per shoe (was 0.45–1.7 s); the most hits in
+one column on this material is 44 (the clone's knee-high boots).
 """
 import math
 from dataclasses import dataclass
@@ -145,7 +170,10 @@ from app.core.footwear_gates import check_gates
 #: 7: the insole step measures the mesh step's own ``prepared.glb`` — one an older insole step stripped (a version-5
 #:    "cap" cut out of a sneaker's tongue or a pump's counter) is re-made from ``raw.glb`` first
 #:    (``footwear_source._step_insole``, Ruling 15g); the bump makes every stored insole run once more.
-INSOLE_VERSION = 7
+#: 8: the frame flips only on a clear insole rise (``FLIP_MIN_SHARE``), the tracking is seeded on the surface open to
+#:    the shaft opening (``_seed_open``) and every ray keeps ``MAX_HITS`` 48 hits — a flat sneaker's hollow sole plate
+#:    is no longer read as its insole (module docstring, "Sole layers"); stored insoles re-run on the CPU.
+INSOLE_VERSION = 8
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -157,10 +185,22 @@ AIR_SHARE = 0.025
 TOL_SHARE = 0.035
 #: Up component of a hit's face normal above which it faces up.
 UP_MIN = 0.3
-#: Station (share of the count) where the tracking is seeded: the open forepart.
+#: Station (share of the count) where the tracking is seeded when no station shows a surface open to the shaft
+#: opening (``_seed_open``; a mesher cap still on the shaft): the forepart, its lowest candidate (the spike's rule).
 SEED_SHARE = 0.55
-#: Recorded hits per ray.
-MAX_HITS = 12
+#: The open seed (``_seed_open``) needs at least this many open cells at its station; fewer is the spike's seed.
+SEED_OPEN_MIN = 3
+#: Recorded hits per ray. 12 (the spike's) truncated the column of a multi-layer sole: the live sneakers'
+#: (``item_3c60cf62``) sole stacks 9–13 surfaces and the vamp roof above them is the 10th–14th hit (module docstring,
+#: "Sole layers"). 48 keeps every hit of every material measured (the most in one column: 44, the clone's knee-high
+#: boots; 36 on the sneakers); the hit search does not depend on it (every hit is computed, then ranked), only the
+#: (stations, columns, MAX_HITS, 2) array — 240 x 93 x 48 x 2 floats = 17 MB on the sneakers.
+MAX_HITS = 48
+#: The frame is flipped (the insole says the heel is the other end) only when the insole at 0.90 L stands at least
+#: this share of the length above the insole at 0.10 L; a smaller difference leaves the silhouette's heel
+#: (``shoe_frame``). A heel's rise is 4.7–35 % of the length (Work Shoes 1.2 cm, Business Heels 9.1 cm at 26 cm); a
+#: flat sneaker's two ends differ by its sole's noise — 1.1 mm (0.4 %) on ``item_3c60cf62``, which flipped it.
+FLIP_MIN_SHARE = 0.01
 #: Share of the length at each end whose height decides the provisional heel.
 HEEL_END_SHARE = 0.15
 #: Topline: cut points per side with |z| >= this share of the side's max |z| at the station.
@@ -461,15 +501,60 @@ def topline_stations(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray, *,
 
 # --- tracking ---------------------------------------------------------------------------------------------------------
 
-def _track(H: np.ndarray, length: float) -> Tuple[np.ndarray, np.ndarray]:
+def _seed_open(cand_mask: np.ndarray, hz: np.ndarray, above: np.ndarray, top: Optional[np.ndarray],
+               air: float, tol: float) -> Optional[Tuple[int, np.ndarray]]:
+    """The open seed (INSOLE_VERSION 8, module docstring "Sole layers"): ``(station, per-column seed index)`` —
+    the index into the column's hits, -1 where the column gets no seed — or None when no station has
+    ``SEED_OPEN_MIN`` open cells (the caller keeps the spike's seed).
+
+    A candidate is OPEN when it lies at least ``air`` under its station's topline (inside the walls) and the air
+    above it reaches up to the topline: nothing above it, or the next hit at most ``air`` under the topline — the
+    footbed seen through the collar, or under a vamp whose underside is the roof. The floor of a hollow sole plate
+    is a candidate too (its sheet above is more than ``air`` higher), but the footbed's underside closes it far under
+    the walls' top: it is not open. The seed station is the one with the most open cells (ties: the one nearest
+    ``SEED_SHARE``); per column the HIGHEST open candidate there, else the candidate nearest the station's median open
+    height within 2 ``tol`` (a column whose ray hits a lace or a strap first), else -1: ``_track`` gives that
+    column the spike's seed (its lowest candidate)."""
+    if top is None:
+        return None
+    nx = hz.shape[0]
+    t = np.asarray(top, np.float64).reshape(-1)[:, None, None]
+    with np.errstate(invalid="ignore"):
+        is_open = cand_mask & (hz <= t - air) & (np.isnan(above) | (above >= t - air))
+    counts = is_open.any(axis=2).sum(axis=1)
+    if int(counts.max()) < SEED_OPEN_MIN:
+        return None
+    best = np.nonzero(counts == counts.max())[0]
+    i = int(best[np.argmin(np.abs(best - SEED_SHARE * nx))])
+    heights = hz[i][is_open[i]]
+    ref = float(np.median(heights))
+    nz, K = hz.shape[1], hz.shape[2]
+    pick = np.full(nz, -1, np.int64)
+    for j in range(nz):
+        ks = np.nonzero(is_open[i, j])[0]
+        if len(ks):
+            pick[j] = int(ks[np.argmax(hz[i, j, ks])])
+            continue
+        ks = np.nonzero(cand_mask[i, j])[0]
+        if len(ks):
+            k = int(ks[np.argmin(np.abs(hz[i, j, ks] - ref))])
+            if abs(float(hz[i, j, k]) - ref) < 2 * tol:
+                pick[j] = k
+    return i, pick
+
+
+def _track(H: np.ndarray, length: float, top: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
     """The spike's ``insole.py``: ``(ins, roof)`` (nx, nz) — the tracked insole height per cell and the
-    next hit above it (NaN where none)."""
+    next hit above it (NaN where none). ``top`` (the topline per station, ``topline_stations``) seeds the
+    tracking on the surface open to the shaft opening (``_seed_open``, INSOLE_VERSION 8); without it, or
+    without an open station, the spike's seed: the lowest candidate at ``SEED_SHARE`` of the stations."""
     nx, nz, K = H.shape[:3]
     air, tol = AIR_SHARE * length, TOL_SHARE * length
     hz, hn = H[..., 0], H[..., 1]
     above = np.full_like(hz, np.nan)
     above[..., :-1] = hz[..., 1:]
-    cand_mask = (hn > UP_MIN) & (np.isnan(above) | (above - hz > air))
+    with np.errstate(invalid="ignore"):
+        cand_mask = (hn > UP_MIN) & (np.isnan(above) | (above - hz > air))
     cand = np.where(cand_mask, hz, np.nan)
     ins = np.full((nx, nz), np.nan)
     pick = np.full((nx, nz), -1, np.int64)
@@ -478,14 +563,18 @@ def _track(H: np.ndarray, length: float) -> Tuple[np.ndarray, np.ndarray]:
         k = np.nonzero(~np.isnan(cand[i, j]))[0]
         return cand[i, j, k], k
 
-    seed = int(SEED_SHARE * nx)
+    opened = _seed_open(cand_mask, hz, above, top, air, tol)
+    seed = int(SEED_SHARE * nx) if opened is None else opened[0]
     for j in range(nz):
-        c, ks = candidates(seed, j)
-        if not len(c):
-            continue
-        k0 = int(np.argmin(c))
-        z0 = float(c[k0])
-        ins[seed, j], pick[seed, j] = z0, ks[k0]
+        k0 = -1 if opened is None else int(opened[1][j])
+        if k0 < 0:
+            # the spike's seed: the lowest candidate (a column the open seed leaves empty keeps it too)
+            c, ks = candidates(seed, j)
+            if not len(c):
+                continue
+            k0 = int(ks[int(np.argmin(c))])
+        z0 = float(hz[seed, j, k0])
+        ins[seed, j], pick[seed, j] = z0, k0
         for step in (-1, 1):
             prev = [z0]
             i = seed + step
@@ -788,7 +877,11 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
     nzc = max(8, int(STATIONS * (zhi - zlo) / L)) if L > 0 else 8
     gz = np.linspace(zlo, zhi, nzc)
     H = vertical_hits(pf, F, gx, gz)
-    ins, roof = _track(H, L)
+    # the topline first: it seeds the tracking (``_seed_open``); rounded as insole.json stores it, so ``insole_map``
+    # rebuilds the same map from the stored topline
+    top_hi = np.full(len(gx), np.nan)
+    top, zp, zn = topline_stations(pf, F, gx, upper=top_hi)
+    ins, roof = _track(H, L, _stored(top))
     air = AIR_SHARE * L
 
     footprint = ~np.isnan(H[:, :, 0, 0])
@@ -819,7 +912,8 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
     k = NOMINAL_LENGTH_M / L if L > 0 else float("nan")
     p_heel = _interp(PITCH_HEEL_SHARE * L, gx, prof)
     p_toe = _interp((1.0 - PITCH_HEEL_SHARE) * L, gx, prof)
-    flip = p_heel is not None and p_toe is not None and p_heel < p_toe
+    # the insole overrides the silhouette's heel only on a clear rise (FLIP_MIN_SHARE, INSOLE_VERSION 8)
+    flip = p_heel is not None and p_toe is not None and p_toe - p_heel >= FLIP_MIN_SHARE * L
 
     # vamp cover: forefoot footprint cells with a hit above the insole (a cell without its own
     # insole is judged against the station profile, interpolated where the station has none)
@@ -833,9 +927,6 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
         covered = np.any(H[..., 0] > (ref + 0.25 * air)[..., None], axis=2)
     n_fore = int(fore.sum())
     vamp_cover = float((covered & fore).sum() / n_fore) if n_fore else 0.0
-
-    top_hi = np.full(len(gx), np.nan)
-    top, zp, zn = topline_stations(pf, F, gx, upper=top_hi)
 
     # footprint outline: per station the lateral extent of the outsole cells
     left, right = [], []
@@ -995,13 +1086,22 @@ def frame_of(insole: Dict[str, Any]) -> ShoeFrame:
                      length=float(f["length"]))
 
 
+def _stored(values: Any) -> np.ndarray:
+    """``values`` as ``insole.json`` stores them (``_r``: 7 decimals, NaN for None), back as a float array."""
+    return np.array([np.nan if v is None else float(v) for v in _r(np.asarray(values, np.float64))], np.float64)
+
+
 def insole_map(positions: np.ndarray, faces: np.ndarray, insole: Dict[str, Any]) -> np.ndarray:
     """The tracked insole height per cell, ``(stations, lateral)`` in the frame of ``insole`` (raw units, NaN
-    where none) — the map ``analyse_arrays`` measured from, rebuilt from the same mesh, frame and grid (the
-    fit reads the insole's lateral extent per station from it; ``insole.json`` keeps only the profile)."""
+    where none) — the map ``analyse_arrays`` measured from, rebuilt from the same mesh, frame, grid and stored
+    topline (the open seed, INSOLE_VERSION 8) — the fit reads the insole's lateral extent per station from it;
+    ``insole.json`` keeps only the profile."""
     frame = frame_of(insole)
     gx = np.asarray(insole["stations"], np.float64)
     gz = np.asarray(insole["lateral"], np.float64)
     pf = frame.to_frame(np.asarray(positions, np.float64).reshape(-1, 3))
-    hits = vertical_hits(pf, np.asarray(faces, np.int64).reshape(-1, 3), gx, gz)
-    return _track(hits, frame.length)[0]
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    hits = vertical_hits(pf, F, gx, gz)
+    stored = insole.get("topline")
+    top = _stored(stored) if stored is not None and len(stored) == len(gx) else _stored(topline_stations(pf, F, gx)[0])
+    return _track(hits, frame.length, top)[0]
