@@ -280,6 +280,21 @@ SECTIONS = {
                                "process, one character at a time. Every refit shows as a running job in the "
                                "header (provider CPU).",
             },
+            "blender_max_concurrent": {
+                "type": "int",
+                "label": "Max. concurrent Blender processes",
+                "default": 2,
+                "min": 1,
+                "max": 64,
+                "description": "How many Blender processes may run on this server at the same time — every "
+                               "Blender run counts (decimation / distance tiers of refits, rigging, quadruped "
+                               "rig, meshopt delivery, clip import, doors, houses, ...), from the server and "
+                               "from the refit worker processes alike. Each Blender process takes a lot of "
+                               "RAM; a run that finds every slot taken waits for one (a refit in the header "
+                               "then says \"waiting for Blender\"). A change applies to the next Blender run "
+                               "of the server; running refit worker processes keep the value they were "
+                               "started with.",
+            },
             "cors_origins": {
                 "type": "text",
                 "label": "Allowed CORS origins",

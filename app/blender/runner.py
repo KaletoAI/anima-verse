@@ -22,7 +22,18 @@ Two deliberate choices:
 ``--factory-startup`` drops user preferences and third-party add-ons, so a
 result does not depend on how the host's Blender happens to be set up. The
 bundled glTF/FBX importers stay enabled (they are on in factory settings).
+
+**How many run at once** is capped by ``server.blender_max_concurrent``
+(instance scope, read at every acquire) across EVERY process of the
+installation — server threads, refit pool workers, scripts: ``blender_slot``
+holds one of N slot files (``<instance>/.blender-slots/slot-<i>.lock``) under
+an exclusive ``flock`` while the subprocess runs. The kernel drops the lock
+when the holder's descriptor closes, so a killed process frees its slot by
+itself; a caller that finds every slot taken polls until one is free. Only
+the Blender subprocess holds the slot, not the input copies around it.
 """
+import contextlib
+import contextvars
 import json
 import os
 import re
@@ -31,7 +42,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -156,6 +167,147 @@ def is_available() -> bool:
     return status()["usable"]
 
 
+# --- the cross-process limit ---------------------------------------------------
+
+#: How often a caller that found every slot taken tries again.
+SLOT_POLL_S = 0.25
+#: Name of the slot folder under the instance directory.
+SLOT_DIR_NAME = ".blender-slots"
+
+#: Set in a process without a loaded config (a refit pool worker, at spawn):
+#: ``{"dir": <slot folder>, "limit": <n>}`` — see ``pin_slots``.
+_pinned: Dict[str, Any] = {}
+
+#: ``callback(waiting: bool)`` of the caller's context: True when this run has
+#: to wait for a slot, False once it got one after waiting (``wait_notice``).
+_wait_listener: contextvars.ContextVar[Optional[Callable[[bool], None]]] = \
+    contextvars.ContextVar("blender_wait_listener", default=None)
+
+
+def max_concurrent() -> int:
+    """``server.blender_max_concurrent`` resolved live (at least 1); the value
+    pinned at spawn in a process without a config, else the schema default."""
+    if "limit" in _pinned:
+        return max(1, int(_pinned["limit"]))
+    try:
+        from app.core.config_schema import SECTIONS
+        default = int(SECTIONS["server"]["fields"]["blender_max_concurrent"]["default"])
+    except Exception:  # noqa: BLE001 — the limit never stops a run
+        default = 2
+    try:
+        return max(1, int(_config("server.blender_max_concurrent", default)))
+    except (TypeError, ValueError):
+        return max(1, default)
+
+
+def slot_dir() -> Path:
+    """The folder of the slot files: pinned at spawn, else
+    ``<instance>/.blender-slots``, else (a script without an instance) one
+    per user in the system temp folder."""
+    if _pinned.get("dir"):
+        return Path(_pinned["dir"])
+    try:
+        from app.core import paths
+        if paths.instance_initialised():
+            return paths.get_instance_dir() / SLOT_DIR_NAME
+    except Exception:  # noqa: BLE001
+        pass
+    uid = os.getuid() if hasattr(os, "getuid") else 0
+    return Path(tempfile.gettempdir()) / f"anima-blender-slots-{uid}"
+
+
+def pin_slots(directory: Optional[str], limit: Optional[int]) -> None:
+    """Fix folder and limit for this process (a spawned worker without config
+    or instance gets the server's values at spawn; they stay until it ends)."""
+    _pinned.clear()
+    if directory:
+        _pinned["dir"] = str(directory)
+    if limit:
+        _pinned["limit"] = int(limit)
+
+
+def spawn_slots() -> Tuple[str, int]:
+    """What ``pin_slots`` needs in a child process: ``(folder, limit)`` now."""
+    return str(slot_dir()), max_concurrent()
+
+
+@contextlib.contextmanager
+def wait_notice(callback: Callable[[bool], None]) -> Iterator[None]:
+    """Run the block with ``callback(True)`` / ``callback(False)`` called when
+    a Blender run in it starts / stops waiting for a slot (this thread/context
+    only). A failing callback is logged and ignored."""
+    token = _wait_listener.set(callback)
+    try:
+        yield
+    finally:
+        _wait_listener.reset(token)
+
+
+def _notify(waiting: bool) -> None:
+    cb = _wait_listener.get()
+    if cb is None:
+        return
+    try:
+        cb(waiting)
+    except Exception:  # noqa: BLE001 — visibility only
+        logger.exception("Blender wait notice failed")
+
+
+def _try_slots(folder: Path, limit: int) -> Optional[int]:
+    """An open descriptor holding one of slots ``0..limit-1`` exclusively, else None."""
+    import fcntl
+    for i in range(limit):
+        fd = os.open(str(folder / f"slot-{i}.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            continue
+        return fd
+    return None
+
+
+@contextlib.contextmanager
+def blender_slot(label: str = "") -> Iterator[None]:
+    """Hold one of the ``max_concurrent()`` slots for the block — waiting,
+    polled every ``SLOT_POLL_S``, while all are taken. The limit is re-read on
+    every try, so a changed setting applies to callers that already wait. A
+    slot folder that cannot be created runs the block unlimited (logged)."""
+    folder = slot_dir()
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.warning("Blender limit: slot folder %s unusable (%s) — running unlimited", folder, e)
+        yield
+        return
+    fd: Optional[int] = None
+    waited = False
+    started = time.monotonic()
+    try:
+        while True:
+            fd = _try_slots(folder, max_concurrent())
+            if fd is not None:
+                break
+            if not waited:
+                waited = True
+                logger.info("Blender %s: waiting for a free slot (limit %d)", label or "run", max_concurrent())
+                _notify(True)
+            time.sleep(SLOT_POLL_S)
+        if waited:
+            logger.info("Blender %s: slot free after %.1fs", label or "run", time.monotonic() - started)
+            _notify(False)
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)  # closing the descriptor drops the flock
+
+
+def _spawn(cmd: List[str], timeout: int, env: Dict[str, str]) -> subprocess.CompletedProcess:
+    """The one Blender subprocess (a seam the limit smoke stubs)."""
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                          env=env, start_new_session=True)
+
+
 def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
         params: Optional[Dict[str, Any]] = None,
         out_dir: Optional[Path] = None,
@@ -228,9 +380,9 @@ def run(script: str, *, inputs: Optional[Dict[str, Path]] = None,
         env["TMPDIR"] = str(tmp_dir)
         logger.debug("Blender: %s (timeout %ds)", script, timeout)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout, env=env,
-                                  start_new_session=True)
+            # The timeout covers Blender itself, not the wait for a slot.
+            with blender_slot(script):
+                proc = _spawn(cmd, timeout, env)
         except subprocess.TimeoutExpired:
             logger.error("Blender %s: timeout after %ds", script, timeout)
             return {"ok": False, "error": f"timeout after {timeout}s",

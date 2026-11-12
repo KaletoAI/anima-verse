@@ -617,10 +617,11 @@ def tracked(character_name: str, run: Any) -> Optional[List[str]]:
     ``fit_refit`` improvement) are registered like the sweep's, in-process or not. None: the track is discarded
     (nothing was done); an exception finishes it failed and propagates."""
     from app.core import refit_pool
-    tid = refit_pool.track(character_name, refit_pool.fits_label(character_name, _count(character_name)),
-                           pending=False)
+    label = refit_pool.fits_label(character_name, _count(character_name))
+    tid = refit_pool.track(character_name, label, pending=False)
     try:
-        done = run()
+        with refit_pool.blender_wait_label(tid, label):
+            done = run()
     except Exception as e:  # noqa: BLE001 — finished failed, then raised to the caller
         refit_pool.finish(tid, error=str(e) or type(e).__name__)
         raise
@@ -638,12 +639,15 @@ def _sweep_one(name: str, *, task_id: str, pause: float, retries: int, retry_s: 
         logger.info("Garment refit sweep: %s cancelled while it waited", name)
         refit_pool.release(task_id)
         return []
+    label = refit_pool.fits_label(name, _count(name)) if task_id else ""
     if task_id:
-        refit_pool.activate(task_id, refit_pool.fits_label(name, _count(name)))
-    out = _posture(name)
+        refit_pool.activate(task_id, label)
+    with refit_pool.blender_wait_label(task_id, label):
+        out = _posture(name)
     try:
         for attempt in range(retries + 1):
-            done = refit_character(name)
+            with refit_pool.blender_wait_label(task_id, label):
+                done = refit_character(name)
             if done is not None:
                 break
             if attempt < retries:
@@ -675,11 +679,14 @@ def _attempt(name: str, task_id: str, first: bool, pause: float) -> Tuple[str, L
         return "done", []
     if _busy(name):
         return BUSY, []
+    label = refit_pool.fits_label(name, _count(name)) if task_id else ""
     if task_id:
-        refit_pool.activate(task_id, refit_pool.fits_label(name, _count(name)))
-    out = _posture(name) if first else []
+        refit_pool.activate(task_id, label)
+    with refit_pool.blender_wait_label(task_id, label):
+        out = _posture(name) if first else []
     try:
-        done = refit_character(name)
+        with refit_pool.blender_wait_label(task_id, label):
+            done = refit_character(name)
     except Exception as e:  # noqa: BLE001 — fails this character only
         logger.exception("Garment refit sweep: %s failed", name)
         refit_pool.finish(task_id, error=str(e) or type(e).__name__)

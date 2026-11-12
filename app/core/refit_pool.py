@@ -123,10 +123,15 @@ def _no_database(*_args: Any, **_kwargs: Any) -> Any:
     raise WorkerDatabaseAccess("a refit worker process never opens a database")
 
 
-def _initializer() -> None:
-    """Runs first in every worker: no database, low priority, one BLAS thread."""
+def _initializer(blender_slots: Optional[tuple] = None) -> None:
+    """Runs first in every worker: no database, low priority, one BLAS thread;
+    ``blender_slots`` (``runner.spawn_slots()`` of the server) pins the Blender
+    limit's slot folder and count — a worker has no instance and no config."""
     global _IN_WORKER
     _IN_WORKER = True
+    if blender_slots:
+        from app.blender import runner
+        runner.pin_slots(*blender_slots)
     # numpy is not imported yet in a fresh spawned worker: these take effect.
     for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
         os.environ[var] = "1"
@@ -142,8 +147,9 @@ def _initializer() -> None:
 def _new_pool(size: int) -> Any:
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
+    from app.blender import runner
     return ProcessPoolExecutor(max_workers=size, mp_context=multiprocessing.get_context("spawn"),
-                               initializer=_initializer)
+                               initializer=_initializer, initargs=(runner.spawn_slots(),))
 
 
 def _get_pool(size: int) -> Any:
@@ -316,6 +322,25 @@ def cancelled(task_id: str) -> bool:
         return get_task_queue().task_status(task_id) == "cancelled"
     except Exception:  # noqa: BLE001
         return False
+
+
+#: Appended to a tracked refit's label while one of its Blender runs waits for a slot.
+BLENDER_WAIT_SUFFIX = " · waiting for Blender"
+
+
+def blender_wait_label(task_id: str, label: str) -> Any:
+    """Context manager: while a Blender run of the block (this thread) waits for a slot
+    (``runner.blender_slot``), the tracked refit's label reads ``<label> · waiting for Blender``."""
+    from contextlib import nullcontext
+    from app.blender import runner
+    if not task_id:
+        return nullcontext()
+
+    def notice(waiting: bool) -> None:
+        from app.core.task_queue import get_task_queue
+        get_task_queue().track_update_label(task_id, label + BLENDER_WAIT_SUFFIX if waiting else label)
+
+    return runner.wait_notice(notice)
 
 
 def fits_label(character_name: str, n: Optional[int] = None) -> str:
