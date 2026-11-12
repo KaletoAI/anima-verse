@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Face cleanup version 4 — pockets closed, spikes smoothed, the eyeball kept (``face_cleanup._smooth_face``) — on a
+"""Face cleanup version 4/5 — pockets closed, spikes smoothed, the eyeball kept (``face_cleanup._smooth_face``) — on a
 synthetic head, expectations derived by hand.
 
 Usage: ./.venv/bin/python scripts/smoke_face_cleanup_smooth.py
@@ -17,9 +17,11 @@ separation below the eye line) WITHOUT its lash ridge, carrying three defects:
   IN — a dent. (A single vertex standing OUT of the lid surface is a flap the fold of version 2 already folds; the
   smoothing is for what the fold leaves.)
 
-The fold runs first, unchanged since b6476661: around the pocket's rim it folds a few vertices (the lid surface it
-fits dips into the pit, so the rim reads proud) — the expectations below are therefore stated against the OLD code's
-output, which is exactly what the fold alone does.
+The fold runs first: around the pocket's rim it folds the rim vertices (the lid surface it fits dips into the pit, so
+the rim reads proud; version 5 settles them on the membrane of their anchors, which lies on the sphere: 0.6 mm under
+it, and in the lid plane at the mean of their neighbours — the floor among them, so the settled rim leans a little
+over the pit). The expectations below are therefore stated against the fold's own output (``_clean_eyes``, the step
+before ``_smooth_face``, called exactly as ``clean_face`` calls it).
 
 Hand-derived expectations (constants of face_cleanup):
 - POCKET: the closing disc (DEPRESSION_CLOSE_MM 5) is wider than the 8 mm pit, so the pit is a depression; the
@@ -30,8 +32,11 @@ Hand-derived expectations (constants of face_cleanup):
   3.5 mm under the sphere — plus half a millimetre for the 1 mm cells (SMOOTH_CELL_MM) the membrane is sampled on —
   so >= -4.0 mm, and rose at least 7.4 - 4.0 = 3.4 mm; the lift (<= 8 mm) is under the cap MOVE_CAP_SEPARATION *
   69.7 mm = 10.5 mm. The rays see a floor vertex through its NEAREST cell; a floor vertex at the very foot of the wall
-  whose nearest cell centre already lies outside the floor polygon reads the rim, counts as unseen and stays where it
-  is (at most one of the 16 here). Re-measured against the same membrane no visible vertex is left in a pocket.
+  whose nearest cell centre already lies outside the floor polygon reads the rim, and a floor vertex the settled rim
+  overhangs is hidden behind it: both count as unseen and stay where they are (at most three of the 16 here — the
+  rim rows settle up to 0.5 mm inward over the pit's 4 mm edge, a 0.5 mm band of a 4 mm disc holds ~25 % of its
+  area, 16 x 0.25 = 4, of which the rays still reach about one through the cell rounding); every such vertex lies
+  under a triangle with a settled corner, in front of it along the view axis. Re-measured against the same membrane no visible vertex is left in a pocket.
 - EYEBALL: the cap lies 2.2 .. 3.0 mm below the sphere; the membrane over it never rises above its ring on the
   sphere (maximum principle), so no cell reads more than 3.0 + 0.19 (sag over 12 mm) = 3.19 mm < 3.5 below it: not a
   pocket, and its smooth surface (dihedral at the 3 mm rim step atan(3 / 1.9) = 58 degrees < SPIKE_DEG 120,
@@ -42,10 +47,12 @@ Hand-derived expectations (constants of face_cleanup):
   depth below the fixed ring mean, 10 passes 0.765^10 = 0.069 -> 3 * 0.069 = 0.21 mm below the ring mean (which lies
   ~0.02 mm under the sphere): -0.40 .. -0.15 mm after, moved 2.6 .. 2.9 mm; then it no longer stands out, so the
   next round smooths nothing. Spikes: the right eye counts 1 before, 0 after.
-- NOTHING ELSE: against the old code's output the moved vertices are exactly the lifted pocket floor plus the dent;
+- NOTHING ELSE: against the fold's output the moved vertices are exactly the lifted pocket floor plus the dent (the
+  settled rim does not stand out, so version 5's smoothing, which may move fold vertices, moves none here);
   every vertex outside the eye and mouth regions keeps its exact POSITION and NORMAL bytes; vertex count, order (index
   buffer) and UVs are unchanged; normals are recomputed (unit length) only where a triangle moved; the result passes
-  ``validate_source``; the mouth region (a smooth sphere) is skipped; a second run gives the same bytes.
+  ``validate_source``; the mouth region (a smooth sphere) is skipped; a second run gives the same bytes; the
+  record says version 5.
 - OLD CODE: ``app/core/face_cleanup.py`` at b6476661 (the base of this change) leaves the pocket floor and the dent
   where they are — the proof that this smoke tests the new step.
 """
@@ -123,6 +130,30 @@ def build():
     return base.pack(P, N, U, F, base.texture_png(True)), P, F, U, masks
 
 
+def fold_only(fc, glb):
+    """The positions after the fold alone (``clean_face`` up to ``_smooth_face``), as the GLB would store them."""
+    from app.core.glb_mesh import _parse
+    parsed = _parse(glb, "Source")
+    primitives, P, F, _U, _N, _o = fc._body(parsed)
+    mm = (P.max(0)[1] - P.min(0)[1]) / fc.REFERENCE_HEIGHT_MM
+    _i, texture, _m = fc._texture(parsed, primitives[0])
+    lum = (fc._sample(texture[..., :3], _U).astype(np.float64) @ fc._LUMA) / 255.0
+    new_P, *_rest = fc._clean_eyes(P, F, lum, mm)
+    return new_P.astype(np.float32).astype(np.float64)
+
+
+def covered(Q, F, faces_of, point):
+    """True when ``point`` lies, seen along the view axis (-z), behind a triangle of ``faces_of`` in ``Q``."""
+    for t in F[faces_of]:
+        (ax, ay), (bx, by), (cx, cy) = Q[t, :2]
+        d1 = (point[0] - bx) * (ay - by) - (ax - bx) * (point[1] - by)
+        d2 = (point[0] - cx) * (by - cy) - (bx - cx) * (point[1] - cy)
+        d3 = (point[0] - ax) * (cy - ay) - (cx - ax) * (point[1] - ay)
+        if not (min(d1, d2, d3) < 0 < max(d1, d2, d3)) and Q[t, 2].mean() > point[2]:
+            return True
+    return False
+
+
 def sphere_height_mm(Q):
     """Radial height of each point above the undisturbed sphere, in mm."""
     return (np.linalg.norm(Q - np.array([0, HEAD_Y, 0]), axis=1) - R) / MM
@@ -156,16 +187,16 @@ def main():
     old = old_module()
     out_old, record_old = old.clean_face(glb)
     smooth = record.get("smooth") or {}
-    check(record["version"] == 4 and smooth.get("status") == "applied", f"version 4, smoothing applied: {smooth.get('status')}")
+    check(record["version"] == 5 and smooth.get("status") == "applied", f"version 5, smoothing applied: {smooth.get('status')}")
     regions = {r["region"]: r for r in smooth.get("regions") or []}
     left, right, mouth = regions.get("eye_left") or {}, regions.get("eye_right") or {}, regions.get("mouth") or {}
     P1, F1, U1, _img1, *_ = static_arrays(out)
     P0, F0, U0, _img0, *_ = static_arrays(glb)
-    Po, *_ = static_arrays(out_old)
+    Pold, *_ = static_arrays(out_old)
+    Po = fold_only(fc, glb)
     folded = np.any(Po != P0, axis=1)
     check(not (folded & (pocket | cap | apex)).any(),
-          f"the fold (old code) moves {int(folded.sum())} rim vertices, none of the pocket floor, cap or dent")
-    check(np.array_equal(P1[folded], Po[folded]), "the folded vertices keep the fold's positions")
+          f"the fold moves {int(folded.sum())} rim vertices, none of the pocket floor, cap or dent")
     h0, h1 = sphere_height_mm(P0), sphere_height_mm(P1)
     new = np.any(P1 != Po, axis=1)
 
@@ -173,7 +204,10 @@ def main():
     lifted = pocket & new
     pb = (left.get("pockets") or {}).get("before") or {}
     pa = (left.get("pockets") or {}).get("after") or {}
-    check(lifted.sum() >= pocket.sum() - 1, f"pocket floor lifted: {int(lifted.sum())} of {int(pocket.sum())} (at most one unseen)")
+    check(lifted.sum() >= pocket.sum() - 3, f"pocket floor lifted: {int(lifted.sum())} of {int(pocket.sum())} (at most three unseen)")
+    rim_faces = folded[F0].any(1)
+    hidden = [k for k in np.flatnonzero(pocket & ~lifted) if not covered(Po, F0, rim_faces, P0[k])]
+    check(not hidden, f"every floor vertex left in place lies behind the settled rim ({len(hidden)} in sight)")
     check(pb.get("vertices") == int(lifted.sum()) and pb.get("area_mm2", 0) > 30,
           f"left eye: pocket before {pb.get('vertices')} visible vertices, {pb.get('area_mm2')} mm^2 (> 30)")
     check(pa.get("vertices") == 0, f"left eye: no visible vertex left in a pocket ({pa.get('vertices')}, {pa.get('area_mm2')} mm^2)")
@@ -217,7 +251,7 @@ def main():
     check(again == out, "deterministic: a second run gives the same bytes")
 
     # Old code: nothing of this happens.
-    check(np.array_equal(Po[pocket], P0[pocket]) and np.array_equal(Po[apex], P0[apex]) and "smooth" not in record_old,
+    check(np.array_equal(Pold[pocket], P0[pocket]) and np.array_equal(Pold[apex], P0[apex]) and "smooth" not in record_old,
           f"face_cleanup at {BASE_COMMIT} leaves the pocket floor and the dent where they are")
 
     print()

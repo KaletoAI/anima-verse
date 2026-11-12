@@ -27,19 +27,20 @@ Hand-derived expectations:
   relief feature whose cells lie within 1.5 mm of its edge, so the envelope rises at most 1.5 mm into it and the
   ridge reads 8 - 1.5 .. 8 mm (+ the grid's 1 mm blur) = 6 .. 8.6 mm proud BEFORE; the opening (-3 mm) is a pit
   and never proud;
-- AFTER (version 2 folds a flap onto its root instead of pressing it back in place): every ridge vertex stands
-  more than EYE_FREE_MM = 2.5 mm proud, so the whole band is the flap set, and nothing else is (the rim of the
-  opening reads 1.5-2.0 mm, under the threshold); its rows touch the unmoved sphere rows above (y - cy = -5.x mm)
-  and below (-9.x mm), which read ~0 mm against the envelope and are the anchors — and, where the top row at
-  x = cx has only the opening's rim as a neighbour (hypot 4.9 mm < 5), that rim at -3 mm. Each ridge vertex takes
-  the position of an anchor INSET_MM = 0.6 mm under it along the fit normal (radial on the sphere within a few
-  degrees): its radius ends between R - 0.9 mm and R - 0.3 mm on a sphere anchor, R - 3.9 .. R - 3.3 on a rim
-  anchor, i.e. it moved 8 + 0.6 (+ 3 on the rim) mm straight back — 5 .. 12 mm along the radius is the tolerant
-  gate; against the same lid the folded vertices read at most EYE_LIMIT_MM = 2.0 mm (an anchor is at most 2.5 mm
-  proud, the fold ends 0.6 mm under it); the ridge's triangles end collapsed (no area) or flat under the surface,
-  at most 8 faces turned over (regression guard); the opening's vertices keep their exact bytes; vertices outside
-  both eye regions keep their exact positions; nothing but the ridge moves (moved == ridge vertices); indices,
-  UVs and the triangle count are unchanged; the result still passes ``validate_source``;
+- AFTER (version 5 settles a flap onto the lid by a harmonic map of its lid-plane positions): every ridge vertex
+  stands more than EYE_FREE_MM = 2.5 mm proud, so the whole band is the flap set, and nothing else is — the rim
+  of the opening reads 1.5-2.0 mm against the lid (which follows the opening down) but sits ON the smooth base,
+  so it is no flap foot (FLAP_FOOT_MM needs both); its rows touch the unmoved sphere rows above (y - cy = -5.x mm)
+  and below (-9.x mm), which read ~0 mm against the envelope and are the anchors. Each ridge node takes the mean
+  lid-plane position of its neighbours (the band between its anchor rows: in the plane it hardly moves) and the
+  height of the membrane its anchors span (the sphere, ~0; the opening's rim, -3 mm, where the top row touches
+  it), never above the lid, INSET_MM = 0.6 mm under it: its radius ends 0.3 .. 3.9 mm under the sphere, i.e. it
+  moved 8 + 0.6 (+ up to 3 near the rim) mm back — 5 .. 12 mm along the radius is the tolerant gate; against the
+  same lid the settled vertices read at most EYE_LIMIT_MM = 2.0 mm; no non-degenerate triangle with a moved
+  corner faces into the head (a map of a band between its two anchor rows keeps every triangle upright); the
+  opening's vertices keep their exact bytes; vertices outside both eye regions keep their exact positions;
+  nothing but the ridge moves (moved == ridge vertices); indices, UVs and the triangle count are unchanged; the
+  result still passes ``validate_source``;
 - MOUTH: HSV saturation (max - min) / max — skin (200-130)/200 = 0.35, lips (197-50)/197 = 0.746 -> ratio 2.13
   before (> 1.3, applied);
   after at most LIP_RATIO_LIMIT = 1.3 on the same texels; the eye-paint texels and a far skin texel are untouched;
@@ -252,12 +253,13 @@ def main():
           f"ridge vertices folded back 5 .. 12 mm (min {back[ridge].min():.2f}, max {back[ridge].max():.2f})")
     radius = np.linalg.norm(P1[ridge] - np.array([0, HEAD_Y, 0]), axis=1)
     under = (R - radius) / MM
-    on_sphere = (under >= 0.3) & (under <= 0.9)
-    on_rim = (under >= 3.3) & (under <= 3.9)
-    check(np.all(on_sphere | on_rim) and on_sphere.sum() >= 0.8 * len(under),
-          f"folded ridge vertices lie 0.3 .. 0.9 mm under the sphere ({int(on_sphere.sum())}) or 3.3 .. 3.9 under the opening's rim ({int(on_rim.sum())}) of {len(under)}")
-    turned = max(int((e.get("flipped_faces") or {}).get("after") or 0) for e in record["eyes"]["eyes"])
-    check(turned <= 8, f"turned faces left after the fold: {turned} (regression guard)")
+    check(np.all(under >= 0.3) and np.all(under <= 3.9),
+          f"settled ridge vertices lie 0.3 .. 3.9 mm under the sphere ({under.min():.2f} .. {under.max():.2f})")
+    faces = F0[(moved[F0] > 0).any(1)]
+    normal = np.cross(P1[faces[:, 1]] - P1[faces[:, 0]], P1[faces[:, 2]] - P1[faces[:, 0]])
+    area = np.linalg.norm(normal, axis=1)
+    inward = ((normal * (P1[faces].mean(1) - np.array([0, HEAD_Y, 0]))).sum(1) < 0) & (area > (fc.DEGENERATE_MM * MM) ** 2)
+    check(int(inward.sum()) == 0, f"no triangle with a moved corner faces into the head ({int(inward.sum())})")
     check(int((moved > 0).sum()) == int(ridge.sum()), f"exactly the ridge moved ({int((moved > 0).sum())} of {int(ridge.sum())} vertices)")
     check(np.array_equal(P1[opening], P0[opening]), "eye-opening vertices (below the lid) keep their exact bytes")
     outside = np.ones(len(P0), bool)

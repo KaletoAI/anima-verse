@@ -17,7 +17,16 @@ Two defects of the image-to-mesh step, both inherited from what the image model 
    ``INSET_MM`` under the lid along the lid normal, assigned by a breadth-first walk from the root ring so a
    flap never tears across the eye. The flap's triangles end with no area (or sub-millimetre, under the skin);
    the eyeball, the lids, the sockets and the brow keep their exact bytes, because only the flap set moves.
-   Topology, UVs and the texture stay byte-identical (normals: see 3).
+   Topology, UVs and the texture stay byte-identical (normals: see 3). Version 5 (2026-11-12) keeps the fold's
+   decision (which sets go) but no longer stacks a flap onto its anchors — that left crumpled triangles spanning
+   anchors on both sides of the eye, 28-80 nodes over ``SPIKE_DEG`` per eye against 2-14 on the raw mesh. It
+   SETTLES the flap: a harmonic (Tutte) map of the flap nodes' lid-plane positions with everything around them held,
+   at the height of the membrane the lid anchors span, ``INSET_MM`` under it (``_settle_flaps``). The flap set grows
+   by its foot (connected nodes more than ``FLAP_FOOT_MM`` proud of the lid AND of the smooth base) and by the
+   corners of triangles that face into the head (``UPSIDE_DOWN_COS``) at lid height, outside the eye opening —
+   a visor's underside near its root reads below ``EYE_FREE_MM`` yet lies the wrong way round. The eye opening
+   (deeper than ``ANCHOR_DEPTH_MM`` under the smooth base) and the ring around it are PINNED: neither the
+   settling nor step 3 moves them, so the eyeball keeps its bytes.
 
 2. MOUTH — crimson lips in the raw texture. The mesher paints the mouth far more saturated than every input
    image (lips/skin HSV saturation ratio 1.64 against 1.17-1.24 in the photos and renders). The face retexture
@@ -38,17 +47,21 @@ Two defects of the image-to-mesh step, both inherited from what the image model 
    its visible vertices along the view normal onto the membrane of the pocket's own ring; the eyeball (Lirien's
    2.2 mm under the lid, a convex cap) stays shallower than ``POCKET_MM`` and keeps its bytes. A spike — a node whose
    dihedral exceeds ``SPIKE_DEG`` or whose umbrella curvature exceeds ``SPIKE_RATIO`` of its edge length on visible
-   triangles (the fold's own collapsed triangles excluded) — is smoothed by Taubin's volume-preserving filter, that
-   node alone, in ``SMOOTH_ROUNDS`` detect/smooth rounds. Every shift is clamped to ``MOVE_CAP_SEPARATION`` of the
-   eye separation; vertices outside the regions, the fold's own vertices and the brow/nose bands are never smoothed.
+   triangles (version 5 counts the settled flap's triangles too; version 4 excluded the fold's) — is smoothed by
+   Taubin's volume-preserving filter, that node alone, in ``SMOOTH_ROUNDS`` detect/smooth rounds. Every shift is
+   clamped to ``MOVE_CAP_SEPARATION`` of the eye separation; vertices outside the regions, the pinned eye opening
+   and the brow/nose bands are never smoothed (version 4 also kept the fold's own vertices fixed; version 5 smooths
+   them like the lid around them).
    Only POSITION and the NORMAL of vertices around moved triangles change (recomputed area-weighted over welded
    nodes, as the mesher stores them); vertex count and order, indices, UVs, materials and the texture stay as they
    are. The record (``record["smooth"]``) carries moved vertices, displacement max/p95, spikes and pocket area /
    vertices before and after, per region and in total — the Figure tab's model info and the overview row show it.
-   Not reached (2026-11-12, reported with the evidence sheets): the shards the FOLD itself leaves (its flap
-   triangles spanning anchor positions — raw meshes 2-14 nodes over 120 degrees per eye, after the fold 28-80) stay,
-   because the fold's vertices are fixed here; and holes deeper than the cap (Lirien, Kira 5c5f: openings through to
-   an inner shell 33-38 mm deep) are counted (``beyond_cap_vertices``), not closed.
+   Not reached (2026-11-12, reported with the evidence sheets): version 5 brings the version-3/4 shards (28-80
+   nodes over 120 degrees per eye) down to 0-64, at or under the raw count (2-14) only on Kira 20d5 — what stays
+   are in-plane fold-overs of the settling map: a flap that is no disc (Kai's lash arches, attached at both eye
+   corners: Euler characteristic 0 and -1) or a non-convex border has no overlap-free harmonic map. Holes deeper
+   than the cap (Lirien, Kira 5c5f: openings through to an inner shell 33-38 mm deep) are counted
+   (``beyond_cap_vertices``), not closed; the settled membrane does not reach over them.
 
 Where in the chain: ``model3d._store_unrigged_model`` runs ``clean_face`` on the validated mesher result before
 it is published as ``unrigged/<signature>.glb`` — the file the face retexture is frozen from, the rig reads and
@@ -76,7 +89,9 @@ step moved stands above the lid it was folded onto (its height against the lid r
 lips/skin saturation ratio ends at most ``LIP_RATIO_LIMIT`` (1.3) when the mouth was corrected. Version 4's gate
 (``smoke_face_cleanup_smooth.py``): a pocket behind the lid ring is lifted onto the ring's membrane, a single-node
 dent on the lid ring is smoothed (Taubin, 3 mm -> 0.21 mm), a convex eyeball cap keeps its exact bytes, everything
-outside the regions keeps POSITION and NORMAL bytes, vertex order and UVs are unchanged.
+outside the regions keeps POSITION and NORMAL bytes, vertex order and UVs are unchanged. Version 5's gate
+(``smoke_face_cleanup_visor.py``): a folded visor over each eye ends under the sphere, with no triangle facing into
+the head, no more spikes than the same head without the visor, and the eyeball's exact bytes.
 """
 from __future__ import annotations
 
@@ -88,10 +103,11 @@ import numpy as np
 from app.core.timeutils import utc_now_iso
 
 # 1 pressed the flaps back, 2 folds them onto their root, 3 locates the eyes in the face's frame (haired heads), 4 closes
-# the eye/mouth pockets and smooths the spikes after the fold. A source cleaned at an older version may be re-applied
+# the eye/mouth pockets and smooths the spikes after the fold, 5 settles the flaps by a harmonic map instead of stacking
+# them on their anchors (and smooths over them). A source cleaned at an older version may be re-applied
 # ("Re-apply face cleanup", or the improvement "Re-run face cleanup"); nothing re-runs on its own — a skipped cleanup
 # runs again with the next mesher result anyway (every base build cleans its fresh mesh).
-VERSION = 4
+VERSION = 5
 REFERENCE_HEIGHT_MM = 1700.0
 
 # Eyes.
@@ -143,8 +159,11 @@ EYE_FREE_MM = 2.5               # a vertex proud of the fit up to this is lid, a
                                 # pulls down; synthetic head: 1.5-2.0 mm at the rim) — that skin must stay
 EYE_LIMIT_MM = 2.0              # a folded vertex against the lid after the cleanup: never more than this (it ends INSET_MM
                                 # under an anchor of at most EYE_FREE_MM, so 1.9 at the most)
-INSET_MM = 0.6                  # a folded vertex ends this far BELOW its anchor's lid height (under the skin, never
-                                # fighting the lid for the same depth)
+UPSIDE_DOWN_COS = 0.5           # version 5: a triangle facing into the head by more than 60 degrees off the lid normal
+                                # (a step's wall stands at ~90 degrees: not upside down)
+FLAP_FOOT_MM = 1.0              # version 5: a flap's foot — connected to the flap and this proud of the lid joins it
+INSET_MM = 0.6                  # a settled vertex ends this far BELOW the membrane of its anchors (under the skin,
+                                # never fighting the lid for the same depth)
 ANCHOR_DEPTH_MM = 1.0           # an anchor lies at lid height: at most EYE_FREE_MM proud, at most this deep — visible
                                 # or not, because the root ring of a visor that overhangs the eye is hidden under it
                                 # (Lirien's left visor: its only lid contact were 5 occluded nodes at 0.0-0.3 mm); the
@@ -411,7 +430,7 @@ class _LidSurface:
         self.cells, self.hits = int(depth.size), int(hit.sum())
         self.ok = self.hits >= FIT_MIN_POINTS
         if not self.ok:
-            self.visible = self.lid = np.zeros_like(depth)
+            self.visible = self.lid = self.base = np.zeros_like(depth)
             return
         if not hit.all():
             # A cell without a hit (silhouette, a hole) takes the nearest measured height.
@@ -430,7 +449,8 @@ class _LidSurface:
             # The slope is height per lid-plane length: per grid cell that is slope * cell (mesh units).
             one = base + np.minimum(_cone_erosion(relief, slope * cell, reach), np.where(hit, depth - base, 0.0))
             envelope = np.minimum(envelope, one)
-            fine = one if fine is None else fine
+            if fine is None:
+                fine, self.base = one, base
         # Protected bands: the brow (from BROW_MARGIN_MM under its crest upward) and the nose flank (beyond
         # NOSE_SHARE of the eye half width toward the mid-line) keep the visible surface — the coarse scale would
         # otherwise carve them. Found on the FINE envelope (flaps already removed there, the broad brow not): the
@@ -477,6 +497,13 @@ class _LidSurface:
         """How protected each point is (1 = brow band or nose flank: never moved)."""
         a, b, _h = self.local(Q)
         return self._grid(self.protect, a, b)
+
+    def below_base(self, Q: np.ndarray) -> np.ndarray:
+        """How far each point lies under the smooth base of the fine scale (BASE_SIGMAS_MM[0]) — the eye opening and
+        the eyeball in it read millimetres under it, the lid at or above it (the lid surface itself follows the
+        opening down: a pit is never carved, so ``height`` reads ~0 on the eyeball)."""
+        a, b, h = self.local(Q)
+        return self._grid(self.base, a, b) - h
 
     def height(self, Q: np.ndarray) -> np.ndarray:
         """Signed height of each point above the lid without flaps (along the lid normal)."""
@@ -544,7 +571,8 @@ def _fold_flaps(adjacency, proud: np.ndarray, anchor: np.ndarray, Q: np.ndarray)
     anchor). Returns ``(target, flaps)``: ``target[v]`` = the anchor node (-1 for a node not folded) and one record
     per connected flap set. A breadth-first walk from the root ring (flap nodes next to an anchor, each with its
     nearest adjacent anchor) assigns every reachable flap node the anchor of the neighbour it was reached from —
-    contiguous, so a flap never tears across the eye; a set without an anchor is left alone."""
+    contiguous, so a flap never tears across the eye; a set without an anchor is left alone. Version 5 uses only
+    WHICH nodes are reached (``_settle_flaps`` places them), not the anchor each got."""
     from collections import deque
     from scipy.sparse.csgraph import connected_components
     n = len(proud)
@@ -578,14 +606,63 @@ def _fold_flaps(adjacency, proud: np.ndarray, anchor: np.ndarray, Q: np.ndarray)
     return target, records
 
 
+def _settle_flaps(adjacency, flap: np.ndarray, anchor: np.ndarray, Q: np.ndarray, fit: "_LidSurface",
+                  mm: float) -> np.ndarray:
+    """Where the flap nodes go (version 5): onto the membrane the lid anchors span, INSET_MM under it, spread over the
+    lid by a harmonic map. ``adjacency``: the region's welded node graph; ``flap``: the nodes to place (each set reaches an
+    anchor); ``Q``: the node positions. Every flap node takes the mean lid-plane position (a, b) of its neighbours;
+    every other node holds its own — a Tutte embedding with the flap's surroundings (its anchors, the lid skin, the
+    rim it grows out of) as the fixed border: the flap's top side and underside unfold into the lid between their
+    roots instead of landing on one anchor each. Version 2 stacked a whole visor onto a few anchor points — crumpled
+    triangles spanning anchors on both sides of the eye that read as 28-80 shards (> SPIKE_DEG) per eye against
+    2-14 on the raw mesh. The height is a second harmonic map over the flap with the ``anchor`` nodes' lid heights
+    held (no other node holds: the eye opening, an inner wall or a protected band beside the flap pull nothing
+    down), INSET_MM under it — between the anchors by the maximum principle, so never above the lid skin the flap
+    grows out of; a set without an anchor-held node takes the lid's height at its new (a, b). A flap that is a tube (a lash
+    arch attached at both eye corners — Kai) has no such map without overlap: part of its underside ends upside
+    down under the top side (counted as turned faces). Returns the positions of all nodes (only the flap's
+    differ from ``Q``)."""
+    from scipy.sparse import diags
+    from scipy.sparse.linalg import spsolve
+    out = Q.copy()
+    f_idx = np.flatnonzero(flap)
+    if not len(f_idx):
+        return out
+    a, b, _h = fit.local(Q)
+    uv = np.stack([a, b], 1)
+    degree = np.asarray(adjacency.sum(1)).ravel()
+    L = (diags(degree) - adjacency).tocsr()
+    rest = np.flatnonzero(~flap)
+    rhs = -(L[f_idx][:, rest] @ uv[rest])
+    solved = np.column_stack([spsolve(L[f_idx][:, f_idx].tocsc(), rhs[:, k]) for k in range(2)])
+    # The height: a membrane spanned by the anchors alone (the lid skin the flap grows out of; the eye opening, an
+    # inner wall or a protected band beside the flap hold nothing), never above the lid without flaps.
+    hold = flap | anchor
+    adjacency_h = adjacency.multiply(hold[:, None].astype(np.float64)).multiply(hold[None, :].astype(np.float64)).tocsr()
+    L_h = (diags(np.asarray(adjacency_h.sum(1)).ravel()) - adjacency_h).tocsr()
+    anchors = np.flatnonzero(anchor)
+    lid_here = fit._grid(fit.lid, solved[:, 0], solved[:, 1])
+    try:
+        membrane = spsolve(L_h[f_idx][:, f_idx].tocsc(), -(L_h[f_idx][:, anchors] @ _h[anchors]))
+        membrane = np.where(np.isfinite(membrane), membrane, lid_here)
+    except Exception:  # noqa: BLE001 — a flap set without any anchor-held node: the lid alone
+        membrane = lid_here
+    height = membrane - INSET_MM * mm
+    out[f_idx] = fit.origin + np.outer(solved[:, 0], fit.t1) + np.outer(solved[:, 1], fit.t2) + np.outer(height, fit.normal)
+    return out
+
+
 def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray,
-                mm: float) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any], np.ndarray]:
-    """Returns ``(positions, moved mask, record, protected mask)``; ``positions`` is ``P`` itself when nothing
-    changed; the protected mask marks the region vertices inside a fit's brow/nose band (step 3 keeps them too)."""
+                mm: float) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any], np.ndarray, np.ndarray]:
+    """Returns ``(positions, moved mask, record, protected mask, pinned mask)``; ``positions`` is ``P`` itself when
+    nothing changed; the protected mask marks the region vertices inside a fit's brow/nose band, the pinned mask the
+    eye opening and its ring (version 5) — step 3 keeps both."""
     eyes, reason, frame = _locate_eyes(P, lum, mm)
     protect_all = np.zeros(len(P), bool)
+    pin_all = np.zeros(len(P), bool)
     if eyes is None:
-        return P, np.zeros(len(P), bool), {"status": "skipped", "reason": reason, "limit_mm": EYE_LIMIT_MM}, protect_all
+        return (P, np.zeros(len(P), bool), {"status": "skipped", "reason": reason, "limit_mm": EYE_LIMIT_MM},
+                protect_all, pin_all)
     head, front = frame["head"], frame["front"]
     dark = lum < DARK_LUMINANCE
     out = P.copy()
@@ -634,6 +711,32 @@ def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray,
         proud_n[node[idx[proud_v]]] = True
         anchor_n[node[idx[anchor_v]]] = True
         anchor_n &= ~proud_n
+        # Version 5: a flap's foot. The lid envelope rises into a flap (CONE_SLOPES), so the flap's lower parts read
+        # less than EYE_FREE_MM proud; left standing they keep the fold-over the flap made (a visor's underside near
+        # its root). Every node more than FLAP_FOOT_MM proud that is connected to the flap through such nodes joins it.
+        opening_v = fit.below_base(P[idx]) > ANCHOR_DEPTH_MM * mm      # the eye opening and the eyeball in it
+        foot_n = np.zeros(n_nodes, bool)
+        above_base = -fit.below_base(P[idx]) / mm
+        foot_n[node[idx[(h > FLAP_FOOT_MM) & (above_base > FLAP_FOOT_MM) & ~protect & ~opening_v]]] = True
+        # ... and so does every node of an upside-down triangle (facing into the head in the lid's view) at lid
+        # height or above, outside the eye opening: a flap's underside that hangs low still lies the wrong way round
+        # (hidden under the flap's top side, so never "outer"); an inner shell lies deeper and stays.
+        region_faces = np.flatnonzero(region[F].all(1))
+        cross = np.cross(P[F[region_faces, 1]] - P[F[region_faces, 0]], P[F[region_faces, 2]] - P[F[region_faces, 0]])
+        facing = (cross @ fit.normal) / np.maximum(np.linalg.norm(cross, axis=1), 1e-30)
+        down_n = np.zeros(n_nodes, bool)
+        down_n[node[F[region_faces[facing < -UPSIDE_DOWN_COS]].reshape(-1)]] = True
+        level_n = np.zeros(n_nodes, bool)
+        level_n[node[idx[~protect & (h >= -ANCHOR_DEPTH_MM) & ~opening_v]]] = True
+        foot_n |= down_n & level_n
+        grow = proud_n.copy()
+        while True:
+            more = ((welded @ grow.astype(np.float64)) > 0) & foot_n & ~grow
+            if not more.any():
+                break
+            grow |= more
+        proud_n = grow
+        anchor_n &= ~proud_n
         q = np.zeros((n_nodes, 3))
         q[node[idx]] = P[idx]
         # Only the region's nodes take part: an edge out of the region leads nowhere.
@@ -655,7 +758,24 @@ def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray,
             record.setdefault("after_mm", record["before_mm"])
             records.append(record)
             continue
-        out[idx[fold]] = q[target[fold]] - INSET_MM * mm * fit.normal
+        # The eye opening and what lies in it (the eyeball): the vertices deeper than an anchor under the lid, and the
+        # ring of nodes around them — never moved by the settling nor smoothed by step 3 (version 4 dragged the
+        # opening's rim 0.8-2.5 mm inward toward the fold beside it). The fold's own vertices are not part of it.
+        flap_n = np.zeros(n_nodes, bool)
+        flap_n[sub_nodes[target_l >= 0]] = True
+        open_n = np.zeros(n_nodes, bool)
+        open_n[node[idx[opening_v]]] = True
+        pit_n = open_n | ((welded @ open_n.astype(np.float64)) > 0)
+        pit_n &= ~flap_n
+        node_pos = np.zeros((n_nodes, 3))
+        # The membrane's height is held by the anchors on the lid, not by those down in the opening (the lid follows
+        # the opening down, so its floor reads "at lid height" too).
+        node_pos[sub_nodes] = _settle_flaps(local, flap_n[sub_nodes], (anchor_n & ~open_n)[sub_nodes], q[sub_nodes],
+                                            fit, mm)
+        out[idx[fold]] = node_pos[node[idx[fold]]]
+        pinned = pit_n[node[idx]]
+        pin_all[idx[pinned]] = True
+        record["pinned_vertices"] = int(pinned.sum())
         # The numbers after, against the SAME lid (a refit on the result is no reference: once a visor is gone the
         # depth map sees the socket under it and the base drops by millimetres). The folded vertices sit INSET_MM
         # under anchors of at most EYE_FREE_MM; what the fold could not reach (a proud set without lid contact)
@@ -681,7 +801,7 @@ def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray,
               "eyes": records}
     if status == "skipped":
         record["reason"] = "; ".join(r.get("reason", "") for r in records if r.get("reason"))
-    return (out if moved_all.any() else P), moved_all, record, protect_all
+    return (out if moved_all.any() else P), moved_all, record, protect_all, pin_all
 
 
 # --- mouth ------------------------------------------------------------------------------------------------------------
@@ -847,7 +967,7 @@ def _neutralise_mouth(texture: np.ndarray, U: np.ndarray, F: np.ndarray, P: np.n
     return result, record
 
 
-# --- smoothing and pockets (version 4) ----------------------------------------------------------------------------------
+# --- smoothing and pockets (versions 4-5) -----------------------------------------------------------------------------
 
 def _frame(centre: np.ndarray, head_centre: np.ndarray, front: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """``(normal, t1, t2)`` of a face region: the normal radial from the head centre (half of the sideways part, as
@@ -1039,7 +1159,8 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
                    fixed: np.ndarray, protect: np.ndarray, mm: float) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Close the pockets and smooth the spikes of one region. ``P_in``: the positions so far (after the fold);
     ``region``: the vertices this step may move; ``node``: welded nodes (of the mesher's positions); ``fixed``: per
-    vertex, never moved here (the fold's own vertices, folded under the skin on purpose); ``protect``: never smoothed
+    vertex, never smoothed here (version 5: the pinned eye opening and its ring; version 4 held the fold's own
+    vertices; a pocket inside it is still lifted); ``protect``: never smoothed
     (the brow/nose bands of the eye fit — a pocket there is still closed: lifting carves nothing); ``cap``: the
     largest displacement of a vertex (mesh units). Returns ``(positions, record)``; only region vertices change.
 
@@ -1048,8 +1169,8 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
        as it is and counted). Visible = not behind the first surface the ray of its own cell meets (nearest cell:
        a bilinear read beside a deep cell would call the rim's occluded underside visible). Only what the front
        sees through the opening rises — an inner shell under the skin is never pulled onto it.
-    2. SPIKES (``_spikes`` on the visible surface after step 1 — triangles whose three vertices the rays see and
-       that hold no folded vertex): the
+    2. SPIKES (``_spikes`` on the visible surface after step 1 — triangles whose three vertices the rays see; the
+       settled flap's triangles count since version 5): the
        spike nodes alone are smoothed by Taubin's volume-preserving filter (TAUBIN_PASSES of lambda/mu steps of the
        umbrella Laplacian over the visible surface; every other node holds still); the shift is clamped to ``cap``
        counted from ``P_in`` together with step 1."""
@@ -1069,7 +1190,7 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
     seen = depth.sample(_unseen(before), a, b, order=0) - h < OUTER_TOLERANCE_MM * mm
     in_pocket = depth.sample(pocket.astype(np.float64), a, b, order=0) > 0.5
     lift = depth.sample(target, a, b) * mm - h
-    want = seen & in_pocket & ~fixed[idx] & (lift > 0)
+    want = seen & in_pocket & (lift > 0)
     within = want & (lift <= cap)
     out[idx[within]] += np.outer(lift[within], normal)
     cell_area = SMOOTH_CELL_MM ** 2
@@ -1080,9 +1201,9 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
     a, b, h = depth.local(out[idx])
     visible = np.zeros(len(P_in), bool)
     visible[idx] = depth.sample(_unseen(mid), a, b, order=0) - h < OUTER_TOLERANCE_MM * mm
-    # The fold's own triangles are collapsed under the skin by design (version 2): not part of the surface a spike
-    # is judged on, or every anchor would read as a fold against the slivers 0.6 mm beneath it.
-    faces = np.flatnonzero(visible[F].all(1) & ~fixed[F].any(1))
+    # Every visible triangle counts, the settled flap's too (version 5: they lie under the membrane, not as slivers
+    # stacked on an anchor; version 4 left the fold's own triangles out).
+    faces = np.flatnonzero(visible[F].all(1))
     n_nodes = int(node.max()) + 1
     graph = _node_graph(node, F, faces)
     Q = np.zeros((n_nodes, 3))
@@ -1119,7 +1240,7 @@ def _smooth_region(P_in: np.ndarray, F: np.ndarray, region: np.ndarray, node: np
         Q[node] = out
         spike = _spikes(Q, node, F, faces, graph, mm)
     record["spikes"]["after"] = int(spike[np.unique(node[idx])].sum())
-    # Of those, on nodes this step never moves (the fold's own, the protected bands).
+    # Of those, on nodes this step never moves (the pinned eye opening, the protected bands).
     record["spikes"]["held"] = int((spike & ~movable)[np.unique(node[idx])].sum())
     record["spikes"]["smoothed_nodes"] = int(smoothed.sum())
     # The numbers after, against the SAME membrane.
@@ -1169,7 +1290,8 @@ def _mouth_region(P: np.ndarray, eyes: List[Dict[str, Any]], frame: Dict[str, An
 def _smooth_face(P: np.ndarray, P_in: np.ndarray, F: np.ndarray, colours: np.ndarray, lum: np.ndarray,
                  fixed: np.ndarray, protect: np.ndarray, mm: float) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
     """Step 3 on the folded positions ``P_in`` (``P``: the input's, for locating and welding): both eye regions and
-    the mouth region (``_smooth_region``). ``fixed``: the fold's vertices; ``protect``: the eye fits' brow/nose bands.
+    the mouth region (``_smooth_region``). ``fixed``: the pinned eye openings (``_clean_eyes``); ``protect``: the eye
+    fits' brow/nose bands.
     Returns ``(positions, record, regions mask)`` — the mask is where normals may be recomputed."""
     eyes, reason, frame = _locate_eyes(P, lum, mm)
     inside = np.zeros(len(P), bool)
@@ -1377,9 +1499,9 @@ def clean_face(glb: bytes, *, lips: bool = True) -> Tuple[bytes, Dict[str, Any]]
     lum = (colours.astype(np.float64) @ _LUMA) / 255.0
     record: Dict[str, Any] = {"status": "skipped", "version": VERSION, "at": utc_now_iso(),
                               "mm_per_unit": round(1.0 / mm, 1)}
-    new_P, moved, eye_record, protect = _clean_eyes(P, F, lum, mm)
+    new_P, moved, eye_record, protect, pinned = _clean_eyes(P, F, lum, mm)
     record["eyes"] = eye_record
-    new_P, smooth_record, inside = _smooth_face(P, new_P, F, colours, lum, moved, protect, mm)
+    new_P, smooth_record, inside = _smooth_face(P, new_P, F, colours, lum, pinned, protect, mm)
     record["smooth"] = smooth_record
     eyes, reason, frame = _locate_eyes(P, lum, mm)
     new_texture = None
