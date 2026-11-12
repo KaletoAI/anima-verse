@@ -27,8 +27,8 @@ Fixture (expected values derived by hand):
     "haired", no "hairdeck_fit"; worn.garment_share {ge 0.01}; ghost.w_ratio
     {range [0.8, 1.25]} and no ghost.top_dy (recorded only since ghost gate
     version 2; no per_height: clothing records are fractions of Hb);
-    mesh.largest_component_share {ge 0.98}; fit.max_push_m {le 0.10},
-    fit.rigged_inside_share {le 0.01}, fit.largest_component_share {ge 0.98}.
+    mesh.largest_component_share {ge 0.90}; fit.max_push_m {le 0.10},
+    fit.rigged_inside_share {le 0.01}, fit.largest_component_share {ge 0.90}.
     No base model is stored -> status {missing, step None, painted True,
     reason base_body.BASE_MODEL_MISSING}. preview_url None ->
     preview_freshness {missing, "No provenance recorded"}. ``steps`` (the
@@ -185,8 +185,8 @@ def main() -> int:
                                       limits.get("fit", {}).get("rigged_inside_share"),
                                       limits.get("fit", {}).get("largest_component_share")),
                   (["fit", "ghost", "mesh", "worn"], {"op": "ge", "value": 0.01},
-                   {"op": "range", "value": [0.8, 1.25]}, False, {"op": "ge", "value": 0.98},
-                   {"op": "le", "value": 0.10}, {"op": "le", "value": 0.01}, {"op": "ge", "value": 0.98}))
+                   {"op": "range", "value": [0.8, 1.25]}, False, {"op": "ge", "value": 0.90},
+                   {"op": "le", "value": 0.10}, {"op": "le", "value": 0.01}, {"op": "ge", "value": 0.90}))
             check("status, no base model", body.get("status"),
                   {"state": "missing", "step": None, "painted": True, "reason": base_body.BASE_MODEL_MISSING,
                    "queue_position": None})

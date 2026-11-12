@@ -14,17 +14,30 @@ becomes ``garments/prepared/{item}_{fsig}.glb`` — the input of the fit. The
 fit and every mesh gate run on this reduced mesh, so the gates measure what
 ships (R8).
 
-Gate of this step: the largest connected component must carry at least
-``MIN_COMPONENT_SHARE`` of the surface area (R7). A generator that splits the
-garment into floating pieces is refused. Two attempts, each a fresh backend
-call with the backend's own random seed (R5); two refusals raise
-``MeshGateRefused`` with both records and leave no prepared mesh.
+Gate of this step (R7, ``component_numbers``): crumbs — detached components
+below ``garment_fit.MIN_COMPONENT_SHARE`` (0.002) of the area, the ones the
+fit's weld step drops anyway (R8) — leave the measurement; of the rest the
+largest connected component must carry at least ``MIN_COMPONENT_SHARE`` of
+the area. Only a truly fragmented mesh (a torn or split surface) is refused;
+a few crumbs or a detached strip beside the body are not worth a new mesher
+run. Two attempts, each a fresh backend call with the backend's own random
+seed (R5); two refusals raise ``MeshGateRefused`` with both records and leave
+no prepared mesh. The prepared GLB is the decimation's output unchanged — the
+crumbs stay in it and the fit drops them, so the gate measures what the fit
+ships.
+
+A stored raw mesh refused under an older gate (``GATE_VERSION``) is judged
+again before the mesher is asked (``generate``): a better gate must not cost
+a new mesher run for a mesh it accepts.
 
 Record ``prepared/{item}_{fsig}.json``: ``accepted``, ``tris_raw``,
 ``tris_prepared``, ``target_tris``, ``ratio``, ``backend``, ``routing`` (the
-route meta of the result), ``largest_component_share``,
-``min_component_share`` and ``attempts`` (one entry per attempt with the
-same numbers plus ``ok`` / ``reasons``). The prepared GLB exists only when its
+route meta of the result), ``largest_component_share`` (after the crumbs),
+``largest_component_share_all`` (with them), ``dropped_share`` /
+``dropped_components`` (the crumbs), ``crumb_share``, ``min_component_share``,
+``gate_version`` and ``attempts`` (one entry per attempt with the same
+numbers plus ``ok`` / ``reasons``; ``stored_raw`` on a re-judged stored
+raw). The prepared GLB exists only when its
 record is accepted; an accepted pair is reused unless ``force`` (R13).
 
 Runs on the caller's worker thread (the orchestration holds
@@ -34,7 +47,7 @@ decimation is a Blender process on the CPU.
 """
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.core.log import get_logger
 
@@ -46,8 +59,25 @@ TARGET_TRIS = 25000
 TARGET_TRIS_BY_KIND = {"clothing": 60000}
 #: What the generator is asked for (the hair spike's ``uniforge_hair.py``).
 FACE_NUM = 100000
-#: Gate: share of the surface area the largest connected component must carry (R7).
-MIN_COMPONENT_SHARE = 0.98
+#: Gate: share of the surface area the largest connected component must carry, measured after the crumbs
+#: (``garment_fit.drop_small``, components below 0.002 of the area) are left out (R7).
+#:
+#: Was 0.98 on the whole mesh, crumbs included (spike value). Measured 2026-11-12 on the prepared (decimated)
+#: meshes, every detached component within 0.008 of the garment height of the main one (seam strips and slivers
+#: the mesher split off, none floating) — share with crumbs / without / crumbs dropped:
+#:   Kira's Black Blazer (accepted)     0.9968 / 0.9971 /  7 crumbs 0.03 %
+#:   spike dress (accepted, phase 5)    0.9859 / 0.9886 / 31 crumbs 0.27 %
+#:   Kai's Black Lederjacket            0.9619 / 0.9672 / 57 crumbs 0.55 %, 7 strips kept (1.5 %, 0.5 %, < 0.3 %)
+#: The jacket looks right (user ruling 2026-11-12) and the fit handles kept strips per vertex — the spike dress
+#: shipped with two of them. What the gate stops is a torn or split surface: the hair mesh decimated without
+#: welding its UV seams fell to 0.724 (commit 32249153), the seam-split sphere of ``smoke_garment_mesh`` to
+#: 0.50. 0.90 lies between 0.967 and 0.724: it tolerates three times the jacket's detached area and refuses a
+#: mesh whose second piece is the size of a sleeve or a panel (10 % of the area). The fit gates the same number
+#: with the same limit (``garment_fit.CLOTHING_GATES``).
+MIN_COMPONENT_SHARE = 0.90
+#: Version of the gate rule, stamped on the step record: a stored raw refused under an older version is judged
+#: again before the mesher is asked (``generate``). 2 = crumbs left out, limit 0.90 (2026-11-12).
+GATE_VERSION = 2
 #: Fresh backend calls before the step is refused (R5).
 MAX_ATTEMPTS = 2
 
@@ -82,16 +112,35 @@ class MeshGateRefused(RuntimeError):
                          f"(largest component share {shares})")
 
 
-def largest_component_share(path: Path) -> float:
-    """Share of the surface area carried by the largest connected component
-    of a static GLB, after welding coincident vertices (``garment_fit``)."""
+def component_numbers(path: Path) -> Dict[str, Any]:
+    """The component numbers of a static GLB after welding coincident
+    vertices (``garment_fit.weld``): ``largest_component_share`` = the
+    largest component's share of the area WITHOUT the crumbs (the gate
+    number), ``largest_component_share_all`` = its share of the whole area,
+    ``dropped_share`` / ``dropped_components`` = the crumbs (components below
+    ``garment_fit.MIN_COMPONENT_SHARE`` of the whole area — the rule of the
+    fit's ``drop_small``, so the fit sees exactly the kept components) and
+    ``components_kept``."""
     import numpy as np
     from app.core import garment_fit, glb_mesh
     positions, faces, uvs = glb_mesh.static_arrays(Path(path).read_bytes())[:3]
     welded, welded_faces, _inv = garment_fit.weld(positions, faces, uvs)
     _labels, shares = garment_fit.components(welded, welded_faces)
     shares = np.asarray(shares, dtype=float).ravel()
-    return float(shares.max()) if shares.size else 0.0
+    crumb = shares < garment_fit.MIN_COMPONENT_SHARE
+    kept = float(shares[~crumb].sum())
+    largest = float(shares.max()) if shares.size else 0.0
+    return {"largest_component_share": largest / kept if kept > 0 else 0.0,
+            "largest_component_share_all": largest,
+            "dropped_share": float(shares[crumb].sum()),
+            "dropped_components": int(crumb.sum()),
+            "components_kept": int((~crumb).sum())}
+
+
+def largest_component_share(path: Path) -> float:
+    """The gate number of ``component_numbers``: the largest connected
+    component's share of the area without the crumbs."""
+    return component_numbers(path)["largest_component_share"]
 
 
 def _kind(item_id: str) -> str:
@@ -124,15 +173,21 @@ def mesh_occasion(kind: str) -> str:
 
 
 def _gate(share: float) -> List[str]:
+    """The refusal reasons of the gate number (``component_numbers``)."""
     if share < MIN_COMPONENT_SHARE:
-        return [f"largest component share {share:.4f} < {MIN_COMPONENT_SHARE}"]
+        return [f"largest component share {share:.4f} < {MIN_COMPONENT_SHARE} (crumbs left out)"]
     return []
 
 
 def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path:
     """The prepared (decimated) garment mesh of ``item_id`` under ``fsig``.
 
-    Reuses an accepted prepared mesh unless ``force``. Otherwise up to
+    Reuses an accepted prepared mesh unless ``force``. Without ``force`` a
+    stored raw mesh that the current gate has not judged yet (no record, or
+    a record of an older ``GATE_VERSION``; newer than both cut-outs — new
+    images drop the raw anyway) is decimated and gated again first
+    (``_stored_attempt``): accepted, it becomes the prepared mesh without a
+    mesher call; refused, the fresh attempts follow. Otherwise up to
     ``MAX_ATTEMPTS`` times: ``generate_mesh`` on the kind's occasion
     (``mesh_occasion``) from the front cut-out with the back cut-out as extra view, then
     ``refine.decimate_to(raw, target_tris(kind), …)`` and the component gate.
@@ -173,6 +228,18 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
 
     attempts: List[Dict[str, Any]] = []
     try:
+        if not force:
+            old = gs.read_record(record_path)
+            stored = _stored_attempt(name, item_id, kind, cut, raw, candidate, old)
+            if stored is not None:
+                record = _record(kind, item_id, fsig, stored, [stored], accepted=True)
+                if stored.get("collected_job"):
+                    record["collected_job"] = stored["collected_job"]
+                if old.get("attempts"):
+                    record["earlier_attempts"] = old["attempts"]  # what the older gate made of them
+                os.replace(candidate, prepared)
+                gs.write_record(record_path, record)
+                return prepared
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 entry = _attempt(name, kind, cut, raw, candidate, attempt)
@@ -211,18 +278,63 @@ def _record(kind: str, item_id: str, fsig: str, last: Dict[str, Any], attempts: 
             accepted: bool, error: str = "") -> Dict[str, Any]:
     """The step record; the numbers are those of ``last`` (a gated attempt)."""
     from app.core.timeutils import utc_now_iso
+    from app.core.garment_fit import MIN_COMPONENT_SHARE as CRUMB_SHARE
     record = {"accepted": accepted, "kind": kind, "item_id": item_id, "fsig": fsig,
               "target_tris": target_tris(kind), "face_num": FACE_NUM,
-              "min_component_share": MIN_COMPONENT_SHARE,
+              "min_component_share": MIN_COMPONENT_SHARE, "crumb_share": CRUMB_SHARE,
+              "gate_version": GATE_VERSION,
               "tris_raw": last["tris_raw"], "tris_prepared": last["tris_prepared"],
               "ratio": last["ratio"], "backend": last["backend"], "routing": last["routing"],
               "largest_component_share": last["largest_component_share"],
+              **{key: last[key] for key in _CRUMB_KEYS if key in last},
               "attempts": attempts, "created_at": utc_now_iso()}
     if "fallback_from" in last:
         record["fallback_from"] = last["fallback_from"]
     if error:
         record["error"] = error
     return record
+
+
+#: The crumb numbers of ``component_numbers`` an attempt entry and the step record carry.
+_CRUMB_KEYS = ("largest_component_share_all", "dropped_share", "dropped_components", "components_kept")
+
+
+def _stored_attempt(name: str, item_id: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: Path,
+                    old: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The stored raw mesh judged again by the current gate — the accepted
+    attempt entry (``stored_raw`` True, ``candidate`` written) or None.
+
+    Only when the current gate has not judged it yet: ``old`` (the step
+    record) is missing or of another ``GATE_VERSION``, and the raw is newer
+    than both cut-outs. The entry keeps the stored attempt's number,
+    backend, routing and collected job (those of ``old``'s last gated
+    attempt). A refusal or a failed decimation returns None: the fresh
+    attempts follow, as without a stored raw."""
+    if not raw.is_file() or old.get("gate_version") == GATE_VERSION:
+        return None
+    if raw.stat().st_mtime < max(path.stat().st_mtime for path in cut.values()):
+        return None
+    gated = [a for a in old.get("attempts") or [] if "largest_component_share" in a]
+    last = gated[-1] if gated else {}
+    res = {"backend": last.get("backend", old.get("backend", "")),
+           "routing": last.get("routing") or old.get("routing") or {},
+           "fallback_from": last.get("fallback_from")}
+    try:
+        entry = _prepare(kind, raw, candidate, int(last.get("attempt") or 1), res)
+    except Exception as e:  # noqa: BLE001 — the fresh attempts decide
+        logger.info("garment mesh %s/%s: stored raw not judged again: %s", name, item_id, e)
+        return None
+    logger.info("garment mesh %s/%s: stored raw judged again (gate %d, was %s): largest component %.4f%s",
+                name, item_id, GATE_VERSION, old.get("gate_version", 1 if old else "unjudged"),
+                entry["largest_component_share"], "" if entry["ok"] else " (refused)")
+    if not entry["ok"]:
+        candidate.unlink(missing_ok=True)
+        return None
+    entry["stored_raw"] = True
+    collected = last.get("collected_job") or old.get("collected_job")
+    if collected:
+        entry["collected_job"] = collected
+    return entry
 
 
 def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: Path,
@@ -256,14 +368,14 @@ def _prepare(kind: str, raw: Path, candidate: Path, attempt: int, res: Dict[str,
     dec = refine.decimate_to(raw, target_tris(kind), candidate, merge_vertices=True)
     if not dec.get("ok"):
         raise RuntimeError(f"garment mesh decimation failed: {dec.get('error') or 'unknown error'}")
-    share = largest_component_share(candidate)
-    reasons = _gate(share)
+    numbers = component_numbers(candidate)
+    reasons = _gate(numbers["largest_component_share"])
     entry = {"attempt": attempt, "ok": not reasons, "reasons": reasons,
              "backend": res.get("backend", ""),
              "routing": res.get("routing") or {},
              **({"fallback_from": res["fallback_from"]} if res.get("fallback_from") else {}),
              "tris_raw": dec.get("tris_before"), "tris_prepared": dec.get("tris"),
-             "ratio": dec.get("ratio"), "largest_component_share": share}
+             "ratio": dec.get("ratio"), **numbers}
     return entry
 
 

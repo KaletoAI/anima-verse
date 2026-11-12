@@ -22,8 +22,11 @@ Cut-outs: garments/images/H_F_cutout_{front,back}.png (fake PNG bytes).
 
 Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
     GOOD: quad A side sqrt(0.99) -> area 0.99, quad B side 0.1 -> area 0.01;
-          largest component share = 0.99 / 1.00 = 0.99 >= 0.98 -> pass.
-    BAD:  quad A area 0.97, quad B area 0.03 -> share 0.97 < 0.98 -> fail.
+          no crumb (0.01 >= 0.002, ``garment_fit.MIN_COMPONENT_SHARE``), so
+          largest component share = 0.99 / 1.00 = 0.99 >= 0.90 -> pass.
+    BAD:  quad A area 0.85, quad B area 0.15 -> share 0.85 < 0.90 -> fail
+          (``garment_mesh.MIN_COMPONENT_SHARE`` 0.90 since 2026-11-12; the
+          crumb rule itself: ``smoke_garment_mesh_crumbs.py``).
 
 [1] generate(Demo, H, F) with the service writing GOOD:
     - ONE generate_mesh call with occasion "mesh_garment", face_num 100000,
@@ -44,11 +47,11 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
     force=True makes exactly one more call.
 [3] BAD on both attempts (fsig G = "00000000bad0"): 2 service calls, then
     MeshGateRefused with 2 records; record accepted False,
-    largest_component_share 0.97 (+-1e-6), attempts [0.97, 0.97], both ok
+    largest_component_share 0.85 (+-1e-6), attempts [0.85, 0.85], both ok
     False with a reason naming "largest component"; no prepared GLB left,
     no candidate file left in prepared/.
 [4] BAD then GOOD (fsig M = "0000000000c4"): 2 calls, accepted at attempt 2;
-    record attempts[0].ok False (0.97), attempts[1].ok True (0.99).
+    record attempts[0].ok False (0.85), attempts[1].ok True (0.99).
 [5] A missing back cut-out (fsig N = "0000000000d5", front only) ->
     FileNotFoundError, no service call.
 [6] The service answering {"ok": False, "error": "down"} (fsig E =
@@ -56,9 +59,9 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
 [6b] BAD on attempt 1, then the service RAISING "no backend available ..."
     on attempt 2 (fsig R = "0000000000f7"; bug C1 of the 2026-11-09 end-to-end
     run): MeshAttemptFailed (a RuntimeError) with 2 records — [attempt 1 ok
-    False, share 0.97; attempt 2 ok False, error naming "no backend"]; the
+    False, share 0.85; attempt 2 ok False, error naming "no backend"]; the
     message names the error and "attempt 1 refused"; record accepted False
-    with both attempts, share 0.97 (the gated attempt), error set; no
+    with both attempts, share 0.85 (the gated attempt), error set; no
     prepared GLB, no candidate. The service raising on attempt 1 (fsig
     S = "0000000000f6"): MeshAttemptFailed with ONE record, no step record.
 [7] decimate_to with stubbed runner:
@@ -78,8 +81,8 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
     surface: largest component share 1.0. decimate_to(..., 240,
     merge_vertices=True) -> ratio 240/960 = 0.25; the import welds the
     bands back into one surface, so the result is still one component:
-    share >= 0.98 (the garment gate). Control: merge_vertices=False on the
-    same file must tear (share < 0.98 — each band shrinks on its own), or
+    share >= 0.90 (the garment gate). Control: merge_vertices=False on the
+    same file must tear (share < 0.90 — each band shrinks on its own), or
     the fixture does not exercise the bug. Old lod.py ignores the param ->
     the merged run tears too and fails.
 """
@@ -224,7 +227,7 @@ def glb_from_arrays(pos, uv, idx) -> bytes:
 
 
 GOOD = make_glb([(0.0, math.sqrt(0.99)), (5.0, 0.1)])
-BAD = make_glb([(0.0, math.sqrt(0.97)), (5.0, math.sqrt(0.03))])
+BAD = make_glb([(0.0, math.sqrt(0.85)), (5.0, math.sqrt(0.15))])
 
 
 class Recorder:
@@ -396,9 +399,9 @@ def main() -> int:
         prep_g = gs.garment_path("Demo", hid, G, "prepared")
         rec_g = gs.read_record(prep_g.with_suffix(".json"))
         check("failure record accepted", rec_g.get("accepted"), False)
-        near("failure share", rec_g.get("largest_component_share"), 0.97, 1e-6)
+        near("failure share", rec_g.get("largest_component_share"), 0.85, 1e-6)
         shares = [round(a.get("largest_component_share", -1), 6) for a in rec_g.get("attempts") or []]
-        check("attempt shares", shares, [0.97, 0.97])
+        check("attempt shares", shares, [0.85, 0.85])
         check("attempts not ok", [a.get("ok") for a in rec_g.get("attempts") or []], [False, False])
         check("reason names the gate",
               all("largest component" in " ".join(a.get("reasons") or []) for a in rec_g.get("attempts") or []),
@@ -418,7 +421,7 @@ def main() -> int:
         check("accepted at 2", rec_m.get("accepted"), True)
         check("attempt oks", [a.get("ok") for a in rec_m.get("attempts") or []], [False, True])
         check("attempt shares", [round(a.get("largest_component_share", -1), 6)
-                                 for a in rec_m.get("attempts") or []], [0.97, 0.99])
+                                 for a in rec_m.get("attempts") or []], [0.85, 0.99])
 
         print("[5] missing cut-out")
         N = "0000000000d5"
@@ -461,7 +464,7 @@ def main() -> int:
         check("two records", [r.get("attempt") for r in records], [1, 2])
         if len(records) == 2:
             check("record 1 = gate", (records[0].get("ok"), round(records[0].get("largest_component_share", -1), 6)),
-                  (False, 0.97))
+                  (False, 0.85))
             check("record 2 = error", (records[1].get("ok"), "no backend" in (records[1].get("error") or "")),
                   (False, True))
         check("message names both", ("no backend" in str(failed), "attempt 1 refused" in str(failed)), (True, True))
@@ -469,7 +472,7 @@ def main() -> int:
         rec_r = gs.read_record(prep_r.with_suffix(".json"))
         check("record refused with both", (rec_r.get("accepted"), len(rec_r.get("attempts") or []),
                                            "no backend" in (rec_r.get("error") or "")), (False, 2, True))
-        near("record share = gated attempt", rec_r.get("largest_component_share"), 0.97, 1e-6)
+        near("record share = gated attempt", rec_r.get("largest_component_share"), 0.85, 1e-6)
         check("no prepared / candidate", (prep_r.exists(),
                                           sorted(p.name for p in prep_r.parent.iterdir() if p.name.startswith("."))),
               (False, []))
@@ -554,9 +557,9 @@ def main() -> int:
             check("sphere tris_before / ratio", (res_m.get("tris_before"), res_m.get("ratio")), (960, 0.25))
             share_m = gm.largest_component_share(merged) if merged.is_file() else 0.0
             share_t = gm.largest_component_share(torn) if torn.is_file() else 1.0
-            check(f"merged stays one surface (share {share_m:.4f} >= 0.98)", share_m >= gm.MIN_COMPONENT_SHARE,
+            check(f"merged stays one surface (share {share_m:.4f} >= 0.90)", share_m >= gm.MIN_COMPONENT_SHARE,
                   True)
-            check(f"control: unmerged tears (share {share_t:.4f} < 0.98)", share_t < gm.MIN_COMPONENT_SHARE, True)
+            check(f"control: unmerged tears (share {share_t:.4f} < 0.90)", share_t < gm.MIN_COMPONENT_SHARE, True)
 
     if FAILS:
         print("FAILED: " + ", ".join(FAILS))

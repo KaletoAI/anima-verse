@@ -289,7 +289,7 @@ def main() -> int:
         # --- [5] too-small refusals before the scale retry ------------------------------
         print("[5] a too-small clothing refusal from before the scale retry is fitted once more")
         small = "fit refused — deep_push_share 0.1329 > 0.12 (share of vertices pushed out more than 3 cm)"
-        other = ("fit refused — largest_component_share 0.9 < 0.98 (area share of the largest component); "
+        other = ("fit refused — largest_component_share 0.85 < 0.9 (area share of the largest component); "
                  "deep_push_share 0.13 > 0.12 (share of vertices pushed out more than 3 cm)")
         KIND = {"cR": "clothing", "cS": "clothing", "cT": "clothing", "cU": "clothing", "cW": "clothing",
                 "hV": "hair"}

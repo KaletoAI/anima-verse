@@ -14,8 +14,8 @@ backend (``list_available_backends``), whose ``fetch_job`` answers from a table 
 functions are called directly (``_`` = the admin dependency's value).
 
 Fixtures (hand-derived):
-    GOOD  2 disjoint quads, areas 0.99 + 0.01 -> 4 tris, largest component share 0.99 >= 0.98 (accepted).
-    BAD   areas 0.97 + 0.03 -> share 0.97 < 0.98 (refused).
+    GOOD  2 disjoint quads, areas 0.99 + 0.01 -> 4 tris, largest component share 0.99 >= 0.90 (accepted).
+    BAD   areas 0.85 + 0.15 -> share 0.85 < 0.90 (refused; ``garment_mesh.MIN_COMPONENT_SHARE`` since 2026-11-12).
     SHOE  box A 0.25 x 0.13 x 0.09 m with box B inside it (smoke_footwear_source S5): 24 tris,
           component_share 1.0 >= 0.98; cut-out alpha = one 192 x 100 rectangle (aspect 1.92 = 0.25 / 0.13)
           -> mesh_iou 1.0 +- 0.02 >= 0.80 (accepted).
@@ -40,7 +40,7 @@ Fixtures (hand-derived):
     component"}; NOTHING written: raw, prepared and the record byte-identical, no failure record, no
     in-memory failure (a wrong pasted id must never destroy a good mesh).
 [4b] The accepted pair removed (no accepted mesh) -> "bad1" is recorded like a refused step: record
-    accepted False, share 0.97, collected_job "bad1", no prepared GLB, the persisted failure names "mesh".
+    accepted False, share 0.85, collected_job "bad1", no prepared GLB, the persisted failure names "mesh".
 [5] gs.char_lock(Demo) held (a mesh step running) -> 409, fetch_job not asked, nothing written.
 [6] Footwear item "shoe_w" (store level, item lock): cut-out recorded as accepted under the current ssig.
     The item lock held by another thread -> SourceBusy, nothing asked. "run1" -> running, no raw/prepared.
@@ -185,7 +185,7 @@ def main() -> int:
         from app.routes import characters as routes
         garment_assembly.schedule = lambda *a, **k: False
 
-        GOOD, BAD, SHOE = quads_glb([0.99, 0.01]), quads_glb([0.97, 0.03]), shoe_glb()
+        GOOD, BAD, SHOE = quads_glb([0.99, 0.01]), quads_glb([0.85, 0.15]), shoe_glb()
         backend = FakeMeshBackend({"good1": ("done", GOOD, "good1-full"), "bad1": ("done", BAD, "bad1"),
                                    "run1": ("running",), "shoe1": ("done", SHOE, "shoe1"),
                                    "shoebad": ("done", shoe_glb(inside=False), "shoebad")})
@@ -294,7 +294,7 @@ def main() -> int:
         check("200 refused, not kept", (code, res.get("status"), res.get("kept")), (200, "refused", False))
         rec = gs.read_record(prepared.with_suffix(".json"))
         check("record refused / collected_job", (rec.get("accepted"), rec.get("collected_job")), (False, "bad1"))
-        near("refused share", rec.get("largest_component_share"), 0.97, 1e-6)
+        near("refused share", rec.get("largest_component_share"), 0.85, 1e-6)
         check("older prepared gone", prepared.exists(), False)
         check("failure persisted at mesh", gs.read_record(gs.garment_path("Demo", hid, F, "failed")).get("step"), "mesh")
 

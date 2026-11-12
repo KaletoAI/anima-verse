@@ -70,17 +70,18 @@ FRAGMENT. Demo has hair text, the world's hair method is the default
     step of both views goes (``garment_images._drop_later``): the same 5
     renders as [1]; the old prepared mesh is deleted and rebuilt (1 mesh
     call), the fit is re-fitted (2 decimations).
-[4] Forced mesh refused (stub adds a cylinder r 0.03, y 0.1 .. 0.2 at
-    x 0.5: area share of the largest = (2 pi 0.125 x 0.44 + 2 pi 0.125^2) /
-    (that + 2 pi 0.03 x 0.1 + 2 pi 0.03^2) = 0.4438 / 0.4683 = 0.948 <
-    0.98): 2 mesh calls, result {ok False, step "mesh"}, gates.attempts 2,
+[4] Forced mesh refused (stub adds a cylinder r 0.06, y 0.0 .. 0.3 at
+    x 0.5, no crumb: 0.1357 of 0.5795 > 0.002): area share of the largest =
+    (2 pi 0.125 x 0.44 + 2 pi 0.125^2) / (that + 2 pi 0.06 x 0.3 +
+    2 pi 0.06^2) = 0.4438 / 0.5795 = 0.766 < 0.90 (``garment_mesh``
+    since 2026-11-12)): 2 mesh calls, result {ok False, step "mesh"}, gates.attempts 2,
     status failed.step "mesh", NO prepared GLB — but the accepted fit of F1
     is still the served one (accepted_fit). Then a plain run (good stub):
     starts at mesh (1 call), re-fits; failure cleared.
 [4b] Forced mesh, attempt 1 refused (the two-part stub) and attempt 2
     raising "no backend available ..." (bug C1 of the 2026-11-09 end-to-end
     run): result {ok False, step "mesh"}, 2 calls, gates.attempts =
-    [attempt 1 ok False with its share < 0.98, attempt 2 ok False with the
+    [attempt 1 ok False with its share < 0.90, attempt 2 ok False with the
     error]; the status failure carries both and its error names the backend
     error AND "attempt 1 refused"; the step record (accepted False) keeps
     both.
@@ -297,11 +298,11 @@ def base_bodies(colour=(200, 160, 140), hips=False):
 def dress_glb(bad=False) -> bytes:
     """The mesh stub's dress: a closed cylinder r 0.125, y 0.34 .. 0.78
     (unrigged frame), generated in its own frame (x4, shifted by (3, -2, 1));
-    ``bad`` adds a separate cylinder r 0.03, y 0.1 .. 0.2 at x 0.5."""
+    ``bad`` adds a separate cylinder r 0.06, y 0.0 .. 0.3 at x 0.5."""
     import smoke_garment_fit as fx
     P, F = fx.cylinder(0.125, 0.34, 0.78)
     if bad:
-        P2, F2 = fx.cylinder(0.03, 0.1, 0.2)
+        P2, F2 = fx.cylinder(0.06, 0.0, 0.3)
         P, F = fx.merge((P, F), (P2 + np.array([0.5, 0, 0]), F2))
     c = np.array([0, 0.5, 0])
     U = np.stack([np.linspace(0, 1, len(P)), np.linspace(1, 0, len(P))], 1)
@@ -581,7 +582,7 @@ def main() -> int:
         check("failed at mesh", (res.get("ok"), res.get("step"), len(MESHES)), (False, "mesh", 2))
         check("both attempts kept", [a.get("attempt") for a in attempts], [1, 2])
         check("attempt 1 = gate numbers",
-              (attempts[0].get("ok"), (attempts[0].get("largest_component_share") or 1) < 0.98) if attempts else None,
+              (attempts[0].get("ok"), (attempts[0].get("largest_component_share") or 1) < 0.90) if attempts else None,
               (False, True))
         check("attempt 2 = the error",
               (attempts[1].get("ok"), "no backend available" in (attempts[1].get("error") or ""))

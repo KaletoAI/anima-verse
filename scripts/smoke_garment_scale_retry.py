@@ -131,8 +131,8 @@ def main() -> int:
         return gf.gate({**base, **over}, gf.CLOTHING_GATES)[1]
     check("deep push", gf.too_small(reasons(deep_push_share=0.133)), True)
     check("max push", gf.too_small(reasons(max_push_m=0.12)), True)
-    check("deep push + component", gf.too_small(reasons(deep_push_share=0.133, largest_component_share=0.9)), False)
-    check("component", gf.too_small(reasons(largest_component_share=0.9)), False)
+    check("deep push + component", gf.too_small(reasons(deep_push_share=0.133, largest_component_share=0.85)), False)
+    check("component", gf.too_small(reasons(largest_component_share=0.85)), False)
     check("none", gf.too_small(reasons()), False)
 
     print("[3] tube rho 0.2209 inside r 0.25: widened until 1.06")
@@ -155,7 +155,7 @@ def main() -> int:
     check("calls", (len(calls["push"]), calls["finish"]), (1, [1.0]))
 
     print("[5] another gate fails too: not retried")
-    result, info, calls = run(0.2209, lambda s: {"largest_component_share": 0.9})
+    result, info, calls = run(0.2209, lambda s: {"largest_component_share": 0.85})
     check("refused / factor / max", (result.ok, info["factor"], info["max_tried"], info["attempts"]),
           (False, 1.0, 1.0, []))
     check("reasons", [r.split(" ")[0] for r in result.reasons], ["deep_push_share", "largest_component_share"])

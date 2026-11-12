@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from app.core.footwear_fit import FOOTWEAR_FIT_VERSION
+from app.core.garment_mesh import MIN_COMPONENT_SHARE as MESH_MIN_COMPONENT_SHARE
 from app.core.glb_mesh import BodyMesh, GarmentMesh
 
 # R9 — fit constants in METRES (the spike's unit constants x 1.70)
@@ -198,8 +199,10 @@ SKIRT_CENTRE_M = 0.02
 # (spike script: 0.0293 units x 1.70 = 0.0498 m), moved share 0.929 (spike 38720 / 44950 = 0.861 — the product asks
 # its clearance from the real surface, see ``CLEAR_M``), largest component 0.9888 after ``drop_small``, rigged inside
 # share 0.0 (spike 0.0). Limits: twice the measured push; the moved share refuses only a piece pushed nearly
-# everywhere (a loose dress moves 0.93, a tight piece legitimately more); one component as for hair; at most 1 % of
-# the vertices left inside the rigged body.
+# everywhere (a loose dress moves 0.93, a tight piece legitimately more); the largest component as the mesh step
+# gates it (``garment_mesh.MIN_COMPONENT_SHARE``, 0.90 since 2026-11-12 — was 0.98 "one component as for hair": the
+# kept seam strips beside the body are fitted per vertex like the rest, only a torn or split piece is refused); at
+# most 1 % of the vertices left inside the rigged body.
 #
 # ``moved_share`` is REPORTED, no longer gated (2026-11-10, Kira's Black Blazer refused at 0.991): it counts every
 # vertex the push moved by more than 0.17 mm, and the displacement smoothing carries any push to the whole piece, so a
@@ -217,7 +220,7 @@ DEEP_PUSH_M = 0.03
 CLOTHING_GATES = {
     "max_push_m": ("max", 0.10, "largest push-out"),
     "deep_push_share": ("max", 0.12, "share of vertices pushed out more than 3 cm"),
-    "largest_component_share": ("min", 0.98, "area share of the largest component"),
+    "largest_component_share": ("min", MESH_MIN_COMPONENT_SHARE, "area share of the largest component"),
     "rigged_inside_share": ("max", 0.01, "share of vertices inside the rigged body after the transfer"),
 }
 
