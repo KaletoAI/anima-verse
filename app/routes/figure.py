@@ -19,6 +19,15 @@ body actions):
   automatically" (``figure_build.set_auto_build``): ``{"auto_build":
   figure_build.auto_build_on(c)}`` (off as well while the world switch of
   the automatic renders is off). Switching it off never stops a run.
+* ``GET  /characters/{c}/figure/stored`` — the stored body shapes and painted
+  bodies (``figure.stored``): ``{"stored": [{key, kind, bytes, built_for,
+  built_for_name, outfits, last_used, reason, unneeded, deletable, running,
+  current}]}``.
+* ``DELETE /characters/{c}/figure/stored/{key}`` — delete ONE of them
+  (``figure.delete_stored``, an explicit collect, Ruling 5a): 409 while an
+  outfit would be built on it (a shape: ``figure.SHAPE_NEEDED``, a painted
+  body: ``outfit_bodies.PAINTED_NEEDED``) or a run works on it, 404 when
+  nothing of it is stored, 400 for a key of neither shape.
 """
 from typing import Any, Dict
 
@@ -65,3 +74,25 @@ def set_auto_build(character_name: str, body: AutoBuildRequest,
     if not figure_build.set_auto_build(character_name, body.enabled):
         raise HTTPException(status_code=500, detail="The setting was not saved")
     return {"auto_build": figure_build.auto_build_on(character_name)}
+
+
+@router.get("/{character_name}/figure/stored")
+def get_figure_stored(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import figure
+    _require_character(character_name)
+    return {"stored": figure.stored(character_name)}
+
+
+@router.delete("/{character_name}/figure/stored/{key}")
+def delete_figure_stored(character_name: str, key: str,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import figure, outfit_bodies
+    _require_character(character_name)
+    try:
+        return figure.delete_stored(character_name, key)
+    except outfit_bodies.UnknownBody as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

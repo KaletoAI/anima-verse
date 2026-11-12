@@ -2,167 +2,32 @@
  * FieldBaseBody — the Base body tab (template tab `base_body_tab`, before
  * Pose; spec
  * docs/superpowers/specs/2026-11-08-base-body-outfits-design.md): the
- * per-character switch onto the base-body pipeline, the four bald A-pose
- * views of the base body, and the rigged base model built from them.
+ * per-character switch onto the base-body pipeline, then the plain body's
+ * views and rigged model (FigureBodyDetails — moved into the Figure tab's
+ * Body details by plan 2026-11-12-unified-worn-pieces Task 10; this tab goes
+ * with Task 11).
  *
- * Layout: two columns — the four views stacked and small on the left (a
- * click enlarges one), the base model's 3D preview with everything that
- * acts on it on the right: its steps beside the preview, the collision
- * capsule sliders beside it too (live preview while dragging — the outfit
- * models inherit the base body's set), one panel per pair tip extension
- * group (ExtensionTipPanel: tip offsets and colour disc, the tips shown as
- * dots on the model while dragging), and the face/rig actions under it
- * (ModelFaceActions: face cleanup switch + re-apply, face before rigging,
- * face retexture, re-rig) — on the pipeline they all act on the base body.
- *
- * Backend (app/routes/characters.py, app/core/base_body.py):
- * GET /characters/{n}/base-body (info + base model face fields, collision,
- * face cleanup state; polled while something runs),
- * POST .../base-body/pipeline {enabled} (400 for a non-humanoid),
- * POST .../base-body/images {view?, force?} (409 without a profile picture),
- * POST .../base-body/model {force?} (409 while another 3D run of the
- * character is going — base and outfit share one guard);
- * POST .../base-body/skin-step (re-runs the front's skin detail step on the
- * stored neutral front; GET .../images/front?variant=neutral serves it);
- * GET .../model3d (options, backends, run results — useModel3DStatus).
+ * Backend: GET /characters/{n}/base-body (useBaseBody), POST
+ * .../base-body/pipeline {enabled} (400 for a non-humanoid).
  *
  * The section is humanoid-only in the template (`visible_when`); should a
- * non-humanoid still reach it, it shows only a hint. The outfit model's
- * retexture status lives in the Pose tab (BaseBodyOutfitStatus).
+ * non-humanoid still reach it, it shows only a hint.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CSSProperties } from 'react'
+import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
-import { Model3DViewer } from './Model3DViewer'
-import { ModelSteps } from './ModelSteps'
-import { ViewRenderTile } from './ViewRenderTile'
-import { RefImage } from './RefImage'
-import { CollisionScales } from './CollisionScales'
-import { ExtensionTipPanel } from './ExtensionTipPanel'
-import type { TipDots } from './ExtensionTipPanel'
-import { ModelFaceActions } from './ModelFaceActions'
-import { useModel3DStatus } from './useModel3DStatus'
-import type { CollisionPayload } from '@anima/scene-render'
-import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
-import type { BaseBodyInfo, BaseView } from './useBaseBody'
-
-const TILE_HEIGHT = 128
-
-const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
-
-/** Under the front tile: the neutral render the skin detail step started
- *  from (small, click enlarges), one line on what the step did, and the
- *  button that runs it again on the stored neutral front (base_skin). */
-function SkinStepLine({ info, busy, onRun }: {
-  info: BaseBodyInfo
-  busy: boolean
-  onRun: () => void
-}) {
-  const { t } = useI18n()
-  const skin = info.skin
-  if (!skin || !info.images?.front || info.status?.front?.running) return null
-  const step = skin.step
-  const label = !step ? t('Rendered without the skin detail step')
-    : step.applied ? t('Skin detail added — the neutral render on the left')
-    : step.outcome === 'off' ? t('Skin detail step off — the neutral render is the front')
-    : step.outcome === 'busy' ? t('Skin detail not added (backend busy) — the neutral render is the front')
-    : t('Skin detail not added — the neutral render is the front')
-  return (
-    <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 6, marginTop: 4 }}>
-      {skin.neutral_url ? (
-        <div style={{ width: 52, flex: '0 0 auto' }}>
-          <RefImage key={skin.neutral_url} src={skin.neutral_url} height={72} label={t('Neutral front')}
-            meta={skin.neutral_meta} compact />
-        </div>
-      ) : null}
-      <span className="ga-hint" style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}
-        title={step?.error || undefined}>{label}</span>
-      {skin.enabled ? (
-        <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={onRun}
-          title={t('Runs the skin detail edit again on the stored neutral front (one image job); the front is not re-rendered.')}>
-          {t('Run skin step')}
-        </button>
-      ) : null}
-    </div>
-  )
-}
-
-function ViewTile({ info, view, label, busy, onRender, onSkinStep }: {
-  info: BaseBodyInfo
-  view: BaseView
-  label: string
-  busy: boolean
-  onRender: (view: BaseView, force: boolean) => void
-  onSkinStep: () => void
-}) {
-  const { t } = useI18n()
-  const url = info.images?.[view] || null
-  const st = info.status?.[view]
-  // A side/back view edits the front: it cannot render before the front exists.
-  const needsFront = view !== 'front' && !info.images?.front
-  return (
-    <ViewRenderTile label={label} url={url} meta={info.image_meta?.[view]} height={TILE_HEIGHT}
-      running={!!st?.running} failed={!!st?.failed} error={st?.error} warning={st?.warning}
-      disabled={busy || needsFront} disabledTitle={needsFront ? t('Render the front view first') : undefined}
-      status={view === 'front' ? <SkinStepLine info={info} busy={busy || viewsRunning(info)} onRun={onSkinStep} /> : undefined}
-      onRender={() => onRender(view, !!url)} />
-  )
-}
+import { useBaseBody } from './useBaseBody'
+import { FigureBodyDetails } from './FigureBodyDetails'
 
 export function FieldBaseBody({ character }: { character: string }) {
-  useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
   const { info, setInfo, startPoll } = useBaseBody(character)
-  // Options, backends and run results of the model actions (face, rig).
-  const { st, load: loadStatus, startPoll: pollStatus } = useModel3DStatus(character)
-  // The user's own click, until the request answered (the poll then shows
-  // the server's running state).
   const [posting, setPosting] = useState(false)
-  /** Slider preview of the collision scales — shown instead of the stored set. */
-  const [collisionPreview, setCollisionPreview] = useState<CollisionPayload | null>(null)
-  /** Tip dots per pair tip group (ExtensionTipPanel), drawn on the model. */
-  const [tipDots, setTipDots] = useState<Record<string, TipDots>>({})
-  const onTipPreview = useCallback((group: string, dots: TipDots | null) => {
-    setTipDots((previous) => {
-      if (!dots && !(group in previous)) return previous
-      const next = { ...previous }
-      if (dots) next[group] = dots
-      else delete next[group]
-      return next
-    })
-  }, [])
-  const surfacePoints = useMemo(() => Object.values(tipDots).flat(), [tipDots])
-
-  // A model run (face, rig) ended: re-read the base body (new model URL,
-  // steps, face cleanup state).
-  const wasPending = useRef(false)
-  useEffect(() => {
-    const pending = !!st?.pending
-    if (wasPending.current && !pending) startPoll()
-    wasPending.current = pending
-  }, [st?.pending, startPoll])
-
-  const post = useCallback(
-    async (path: string, body: unknown) => {
-      if (posting) return
-      setPosting(true)
-      try {
-        await apiPost(`/characters/${enc}/base-body/${path}`, body)
-        startPoll(500)
-      } catch (e) {
-        toast(t('Error') + ': ' + (e as Error).message, 'error')
-        startPoll()
-      } finally {
-        setPosting(false)
-      }
-    },
-    [enc, posting, startPoll, t, toast],
-  )
+  // Bumped by a pipeline switch: the details remount and read the new state.
+  const [version, setVersion] = useState(0)
 
   const setPipeline = useCallback(
     async (enabled: boolean) => {
@@ -173,158 +38,30 @@ export function FieldBaseBody({ character }: { character: string }) {
           `/characters/${enc}/base-body/pipeline`, { enabled })
         setInfo((prev) => (prev ? { ...prev, pipeline: d.pipeline } : prev))
         startPoll()
-        void loadStatus()
+        setVersion((v) => v + 1)
       } catch (e) {
         toast(t('Error') + ': ' + (e as Error).message, 'error')
       } finally {
         setPosting(false)
       }
     },
-    [enc, loadStatus, posting, setInfo, startPoll, t, toast],
+    [enc, posting, setInfo, startPoll, t, toast],
   )
-
-  const reloadAll = useCallback(async () => {
-    startPoll()
-    await loadStatus()
-  }, [loadStatus, startPoll])
-  const onModelRunStarted = useCallback(() => {
-    pollStatus(800)
-    startPoll(800)
-  }, [pollStatus, startPoll])
-
-  const viewLabel = (view: BaseView) =>
-    view === 'front' ? t('Front view') : view === 'back' ? t('Back view') : view === 'left' ? t('Left view') : t('Right view')
 
   if (!info) return <div className="ga-hint">{t('Loading…')}</div>
   if (!info.humanoid) {
     return <div className="ga-hint">{t('The base body is for humanoid characters only.')}</div>
   }
-
-  const imagesBusy = posting || viewsRunning(info)
-  const allPresent = BASE_VIEWS.every((v) => !!info.images?.[v])
-  const model = info.model
-  const modelBusy = posting || modelRunning(info) || !!st?.pending || tipsRunning(info)
-  const ready = model?.status === 'ready'
-
-  const pipelineSwitch = (
-    <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}
-      title={t('A bald, neutral A-pose base body built from the profile picture. Outfits are rendered as edits of its views and painted onto its rigged model.')}>
-      <input
-        type="checkbox"
-        checked={info.pipeline}
-        disabled={posting}
-        onChange={(e) => setPipeline(e.target.checked)}
-      />
-      <span>{t('Use base body pipeline')}</span>
-    </label>
-  )
-  if (!info.pipeline) {
-    return (
-      <div className="ga-form">
-        {pipelineSwitch}
-        <div className="ga-hint">
-          {t('A bald, neutral A-pose base body built from the profile picture. Outfits are rendered as edits of its views and painted onto its rigged model.')}
-        </div>
-      </div>
-    )
-  }
-
-  const collision = collisionPreview ?? model?.collision
-  const tipPanels = model?.url && ready ? info.extension_tips ?? [] : []
-  const asideTools = model?.url && ready && (model.collision !== undefined || tipPanels.length) ? (
-    <>
-      {model.collision !== undefined ? (
-        <CollisionScales character={character} collision={model.collision}
-          scales={info.collision_scales} disabled={modelBusy}
-          onPreview={setCollisionPreview} onSaved={reloadAll} />
-      ) : null}
-      {/* Pair tip groups: position, mirror and colour disc; the dots on the
-          model follow the sliders. */}
-      {tipPanels.map((panel) => (
-        <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
-          panel={panel} disabled={modelBusy} onPreview={onTipPreview}
-          onStarted={() => startPoll(800)} />
-      ))}
-    </>
-  ) : undefined
-
+  const hint = t('A bald, neutral A-pose base body built from the profile picture. Outfits are rendered as edits of its views and painted onto its rigged model.')
   return (
-    <div className="ga-split ga-split-views">
-      <div className="ga-split-col">
-        {pipelineSwitch}
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          style={{ alignSelf: 'flex-start' }}
-          disabled={imagesBusy}
-          // Missing views only — or every view anew once all four exist.
-          onClick={() => post('images', { force: allPresent })}
-        >
-          {viewsRunning(info) ? t('Generating…') : allPresent ? t('Regenerate all') : t('Render all')}
-        </button>
-        <div className="ga-view-stack">
-          {BASE_VIEWS.map((view) => (
-            <ViewTile key={view} info={info} view={view} label={viewLabel(view)}
-              busy={posting} onRender={(v, force) => post('images', { view: v, force })}
-              onSkinStep={() => post('skin-step', {})} />
-          ))}
-        </div>
-      </div>
-
-      <div className="ga-split-col">
-        <div className="ga-face-actions-row">
-          <span className="ga-fieldset-title" style={{ margin: 0 }}>{t('Base model')}</span>
-          <span className="ga-hint">
-            {!model ? t('No base model yet')
-              : model.status === 'running' ? t('Generating…')
-              : model.status === 'failed' ? t('Failed')
-              : model.status === 'unrigged' ? t('Static mesh without a rig')
-              : t('Ready')}
-            {model?.created_at && model.status !== 'running'
-              ? ` · ${formatDateTime(model.created_at, clockSettings())}` : ''}
-          </span>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            disabled={modelBusy || !info.images?.front}
-            title={!info.images?.front ? t('Render the base body views first')
-              : t('Builds the base model anew from the four views: mesher, then face cleanup, face retexture and rig as switched on below.')}
-            onClick={() => post('model', { force: !!model })}
-          >
-            {model ? t('Regenerate') : t('Generate model')}
-          </button>
-        </div>
-        {model?.status === 'failed' && model.error ? (
-          <div className="ga-hint" style={ERROR_STYLE}>{model.error}</div>
-        ) : null}
-        {/* Left to right: the preview; the step checklist and tilt beside
-            it; then a column with the collision sliders on top (the viewer
-            shows the draft capsules while a slider moves) and the face and
-            rig actions below. */}
-        <div className="ga-basebody-model">
-          {model?.url ? (
-            <div className="ga-model3d-fit">
-              <Model3DViewer key={model.url} url={model.url} format="glb" height={480} previewTilt
-                freshness={model.freshness}
-                statusPanel={model.steps?.length ? <ModelSteps steps={model.steps} /> : undefined}
-                collision={collision} showCollision={!!collisionPreview}
-                surfacePoints={surfacePoints} />
-            </div>
-          ) : null}
-          {asideTools || (st && model) ? (
-            <div className="ga-basebody-side">
-              {asideTools}
-              {st && model ? (
-                <ModelFaceActions character={character} st={st} face={model}
-                  signature={info.signature} cleanup={info.face_cleanup ?? st.face_cleanup}
-                  hasModel={!!model.url} canRerig={!!st.pipeline?.rerig_source}
-                  rerigBlocked={t('The base body has no retained unrigged mesh — regenerate the base model (Regenerate beside “Base model”).')}
-                  onReload={reloadAll} onStarted={onModelRunStarted} />
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
+    <div className="ga-form">
+      <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }} title={hint}>
+        <input type="checkbox" checked={info.pipeline} disabled={posting}
+          onChange={(e) => setPipeline(e.target.checked)} />
+        <span>{t('Use base body pipeline')}</span>
+      </label>
+      {info.pipeline ? <FigureBodyDetails key={version} character={character} />
+        : <div className="ga-hint">{hint}</div>}
     </div>
   )
 }

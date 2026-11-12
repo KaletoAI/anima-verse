@@ -104,3 +104,183 @@ export const BUILD_STATUS: Record<string, string> = {
   current: 'Nothing to build',
   off: 'Off the figure pipeline',
 }
+
+// --- The Figure tab (Task 10; spec "The UI", rules for the buttons, ruling 8) ---------------------------
+
+/** `t()` of the caller; the helpers default to English (the check reads that). */
+type Tr = (s: string) => string
+const EN: Tr = (s) => s
+
+export type FigureStatus = 'up_to_date' | 'changes' | 'building' | 'failed'
+
+/** One planned Build step (`figure_build.Step.as_dict`). */
+export interface FigureStep {
+  name: string
+  label: string
+  jobs: number | null
+  item_id: string
+  /** A chain that failed for its current input (ruling 7a): its error. */
+  failed: string
+  /** Base-body work only a manual Build runs (ruling 8a): why it is listed. */
+  manual: string
+}
+
+/** A worn piece of the Figure tab (`figure_build._worn_rows`). */
+export interface FigureWornRow {
+  slot: string
+  item_id: string
+  name: string
+  mode: MeshMode
+  state: 'ready' | 'failed' | 'building' | 'left_out' | 'interim' | 'pending'
+  note: string
+  interim: boolean
+  left_out: string
+  failure: string
+  /** Hub jobs its chain step plans (0 = none planned, null = unknown). */
+  jobs: number | null
+}
+
+export interface FigureHairRow {
+  mode: string
+  state: 'ready' | 'failed' | 'building' | 'pending'
+  note: string
+  jobs: number | null
+}
+
+export interface FigureBodyPart {
+  key: string
+  state: string
+  note?: string
+}
+
+/** GET /characters/{c}/figure (`figure_build.figure_info`). */
+export interface FigurePayload {
+  pipeline: boolean
+  humanoid: boolean
+  auto_build: boolean
+  status: FigureStatus
+  changes: Array<{ key: string; name: string; wanted: string; delivered: string; note?: string }>
+  cost: { hub_jobs: number | null; note: string; steps: FigureStep[] }
+  build: {
+    running: boolean
+    /** The step in flight; `index` counts from 1. */
+    step: (FigureStep & { index?: number; count?: number }) | null
+    queued: number
+    failed: Record<string, { error: string; item_id?: string; items?: Record<string, string> }>
+    skipped: string[]
+    reason: string | null
+    finished_at: string | null
+  }
+  served_url: string | null
+  /** The saved outfit worn now, "" when none matches. */
+  outfit: string
+  worn: FigureWornRow[]
+  hair: FigureHairRow | null
+  body: {
+    plain: FigureBodyPart & {
+      jobs?: { view: number | null; front: number | null; model: number | null; after_front: number | null }
+    }
+    /** `state`: ready · missing · plain (nothing in the body). */
+    shape: FigureBodyPart
+    /** `state`: ready · missing · none (nothing painted). */
+    texture: FigureBodyPart
+  } | null
+}
+
+/** "1 change" / "N changes". */
+export function changesText(n: number, t: Tr = EN): string {
+  return n === 1 ? t('1 change') : t('{n} changes').replace('{n}', String(n))
+}
+
+function jobsTr(hubJobs: number | null, t: Tr): string {
+  if (hubJobs === null) return t('cost unknown')
+  return hubJobs === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(hubJobs))
+}
+
+function imageJobsTr(jobs: number | null, t: Tr): string {
+  if (jobs === null) return t('cost unknown')
+  return jobs === 1 ? t('1 image job') : t('{n} image jobs').replace('{n}', String(jobs))
+}
+
+/** The header's status line (spec sketch): "Status: up to date" or "2 changes · Build (7 hub jobs)". */
+export function headerLine(status: FigureStatus, changes: number, hubJobs: number | null, t: Tr = EN): string {
+  if (status === 'up_to_date') return t('Status: up to date')
+  if (status === 'building') {
+    return changes > 0 ? `${t('Status: building')} · ${changesText(changes, t)}` : t('Status: building')
+  }
+  const build = t('Build ({cost})').replace('{cost}', jobsTr(hubJobs, t))
+  const head = changes > 0 ? changesText(changes, t) : t('Out of date')
+  return status === 'failed' ? `${head} · ${t('a step failed')} · ${build}` : `${head} · ${build}`
+}
+
+/** The ONE primary button (rule 2): its label with the cost, and why it is disabled — written under it.
+ *  A running Build does NOT disable it: a click queues the next one (`BUILD_RUNNING_NOTE`). */
+export function buildButton(f: Pick<FigurePayload, 'pipeline' | 'cost' | 'build'>, t: Tr = EN): {
+  label: string; disabled: string | null
+} {
+  const label = t('Build ({cost})').replace('{cost}', jobsTr(f.cost.hub_jobs, t))
+  if (!f.pipeline) return { label, disabled: t('Off the figure pipeline') }
+  if (!f.cost.steps.length && !f.build.running) return { label, disabled: t('Nothing to build') }
+  return { label, disabled: null }
+}
+
+/** Written under Build while one runs — not a disable. */
+export const BUILD_RUNNING_NOTE = 'A Build is running — the next one is queued'
+/** Written under a single action whose result starts the automatic Build (Build automatically on). */
+export const AUTO_BUILD_NOTE = 'then Build runs automatically'
+
+/** What a single action of the Body details does and costs (rule 3: one thing, said before the click). */
+export function singleAction(kind: 'view' | 'model' | 'face', jobs: number | null, t: Tr = EN): string {
+  if (kind === 'view') return t('Regenerate this view — {cost}').replace('{cost}', imageJobsTr(jobs, t))
+  if (kind === 'model') return t("Regenerate the plain body's mesh — {cost}").replace('{cost}', jobsTr(jobs, t))
+  return t("Redo the plain body's face — {cost}").replace('{cost}', jobsTr(jobs, t))
+}
+
+/** Under "Run skin step" (and a new front): the base model is stale then, and only the next Build
+ *  (a manual one, ruling 8a) rebuilds it — what that costs. */
+export function staleBaseNote(jobs: number | null, t: Tr = EN): string {
+  return t('Makes the base model stale — the next Build rebuilds it ({cost})').replace('{cost}', jobsTr(jobs, t))
+}
+
+/** The state column of a worn row (spec sketch) and the line under it. */
+export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | 'failure' | 'left_out' | 'note' | 'interim'>,
+  t: Tr = EN): { text: string; sub: string | null } {
+  const sub = row.interim ? t('shown painted until ready') : null
+  switch (row.state) {
+    case 'ready': return { text: t('✓ ready'), sub: null }
+    case 'failed': return { text: t('failed — {reason}').replace('{reason}', row.failure || row.note), sub: null }
+    case 'left_out': return { text: t('left out: {reason}').replace('{reason}', row.left_out || row.note), sub: null }
+    case 'building': return { text: t('⏳ building'), sub }
+    default:
+      return {
+        text: row.mode === 'own_mesh'
+          ? t('⏳ mesh · {cost}').replace('{cost}', jobsTr(row.jobs, t))
+          : t('⏳ waiting for the Build'),
+        sub,
+      }
+  }
+}
+
+/** The state column of the hair row. */
+export function hairState(hair: FigureHairRow, t: Tr = EN): { text: string; sub: string | null } {
+  const sub = hair.note && hair.state !== 'failed' ? t(hair.note) : null
+  switch (hair.state) {
+    case 'ready': return { text: t('✓ ready'), sub: null }
+    case 'failed': return { text: t('failed — {reason}').replace('{reason}', hair.note), sub: null }
+    case 'building': return { text: t('⏳ building'), sub }
+    default: return { text: t('⏳ HairDeck · {cost}').replace('{cost}', jobsTr(hair.jobs, t)), sub }
+  }
+}
+
+/** The "Body:" line — plain body · shape · texture (spec sketch), with the pieces' names. */
+export function bodyLine(body: NonNullable<FigurePayload['body']>, shapeNames: string[], textureNames: string[],
+  t: Tr = EN): string {
+  const named = (what: string, names: string[]) => names.length ? `${what} "${names.join(', ')}"` : what
+  const plain = body.plain.state === 'ready' ? t('plain body ✓')
+    : body.plain.state === 'missing' ? t('plain body: none yet') : t('plain body: older prompts')
+  const shape = body.shape.state === 'plain' ? t('no shape (nothing in the body)')
+    : `${named(t('shape'), shapeNames)} ${body.shape.state === 'ready' ? '✓' : '⏳'}`
+  const texture = body.texture.state === 'none' ? t('nothing painted')
+    : `${named(t('texture'), textureNames)} ${body.texture.state === 'ready' ? '✓' : '⏳'}`
+  return [plain, shape, texture].join(' · ')
+}

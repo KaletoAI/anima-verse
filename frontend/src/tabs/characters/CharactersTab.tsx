@@ -25,6 +25,7 @@ import { FieldModel3D } from './FieldModel3D'
 import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FieldBaseBody } from './FieldBaseBody'
+import { FieldFigure } from './FieldFigure'
 import { FieldOutfitBody } from './FieldOutfitBody'
 import { FieldPose } from './FieldPose'
 import { FieldHair } from './FieldHair'
@@ -139,7 +140,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'base_body', 'outfit_body', 'hair',
+  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'figure', 'base_body', 'outfit_body', 'hair',
   'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
   'imagegen_override',
 ])
@@ -1149,6 +1150,13 @@ export function CharactersTab() {
                           savedSignal={savedSignal}
                         />
                       ),
+                      // The Figure tab: one preview, one Build, the worn pieces
+                      // and the body; the modes are edited in the Wardrobe.
+                      figure: (
+                        <FieldFigure key={selected} character={selected}
+                          onOpenWardrobe={subTabs.some((s) => s.id === 'wardrobe')
+                            ? () => setSubTab('wardrobe') : undefined} />
+                      ),
                       // Base body (bald A-pose views + rigged base model with
                       // its face, rig and collision actions) in its own tab
                       // before Pose; the outfit model sits in the Pose tab.
@@ -1253,7 +1261,9 @@ export function CharactersTab() {
             ) : subTab === 'wardrobe' ? (
               <WardrobeTab key={selected} character={selected}
                 onEditAppearance={fieldTabs.some((g) => g.id === 'tab:aussehen')
-                  ? () => setSubTab('tab:aussehen') : undefined} />
+                  ? () => setSubTab('tab:aussehen') : undefined}
+                onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
+                  ? () => setSubTab('tab:figure_tab') : undefined} />
             ) : subTab === 'secrets' ? (
               <SecretsEditor character={selected} />
             ) : (

@@ -9,7 +9,9 @@
  * /characters/{c}/garments for the mode select on every outfit-piece row
  * (`modes`), the own-mesh chips and the layer-order warning; after a mode
  * change the row's wearers line ("worn by K characters now" · "Build for them
- * (cost)"); one chain dialog per own-mesh piece ("Mesh steps"). The hair row
+ * (cost)"); one chain dialog per own-mesh piece ("Mesh steps") while it is only
+ * held — a piece WORN on the figure pipeline has its one entry in the Figure
+ * tab (plan Task 10; the row links there instead). The hair row
  * on top (WardrobeHairRow): the hair's mode and its settings.
  * Boot hem (BootHemControl): GET/POST /characters/{c}/outfit-options, shown
  * under the worn boot when own-mesh trousers are worn with it.
@@ -195,10 +197,12 @@ function OutfitLockSwitch({ character }: { character: string }) {
   )
 }
 
-export function WardrobeTab({ character, onEditAppearance }: {
+export function WardrobeTab({ character, onEditAppearance, onOpenFigure }: {
   character: string
   /** Opens the Appearance tab (the hair row's description is edited there). */
   onEditAppearance?: () => void
+  /** Opens the Figure tab — a worn own-mesh piece's chain details live there. */
+  onOpenFigure?: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -473,10 +477,16 @@ export function WardrobeTab({ character, onEditAppearance }: {
                       void load()
                     }} />
                   {garmentStatus ? <PieceStatusChip status={garmentStatus} name={it.name} /> : null}
-                  {garmentStatus ? (
+                  {garmentStatus && !(it.equipped && garments.pipeline) ? (
                     <button style={{ ...btn(), marginLeft: 'auto' }} aria-haspopup="dialog"
                       onClick={() => setOpenGarment(it.item_id)}>
                       {t('Mesh steps')}
+                    </button>
+                  ) : garmentStatus && onOpenFigure ? (
+                    // A WORN own-mesh piece's chain lives in the Figure tab (its one entry, Task 10).
+                    <button style={{ ...btn(), marginLeft: 'auto' }} onClick={onOpenFigure}
+                      title={t('A worn piece’s mesh steps are in the Figure tab')}>
+                      ↗ {t('Figure')}
                     </button>
                   ) : null}
                 </div>

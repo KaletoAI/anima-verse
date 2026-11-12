@@ -34,6 +34,12 @@ used_views, view_guard, view_warnings}``. ``stored_shape`` judges one;
 ``predicted_keys`` is what the artefact GC asks per live outfit. Bodies stored
 under the old texture-keyed ids are re-keyed once at boot
 (``figure_migration.rekey_bodies_once``) or left stale.
+
+What is stored (Task 10, Ruling 5a): ``stored`` lists every stored shape and
+painted body with the artefact graph's verdict; ``delete_stored`` is the
+Figure tab's explicit Delete of one of them (never one an outfit would be
+built on now). ``stored_unneeded`` is the subset an automatic collect keeps
+although nothing predicts it.
 """
 import hashlib
 import json
@@ -690,3 +696,99 @@ def stored_unneeded(character_name: str) -> List[Dict[str, Any]]:
                     "_mtime": mtime})
     out.sort(key=lambda e: e["_mtime"], reverse=True)
     return [{k: v for k, v in e.items() if k != "_mtime"} for e in out]
+
+
+#: ``delete_stored`` (409): the body is the shape a live outfit would be built on now.
+SHAPE_NEEDED = "Not deleted: an outfit would be built on this body now — see why it is kept."
+#: ``delete_stored`` (409): a run works on it.
+STORED_RUNNING = "Not deleted: a run works on it now — delete it after the run."
+#: ``stored`` reasons that mean "stored, not needed now" (Ruling 5a: only an explicit Delete removes them).
+_UNNEEDED_REASONS = ("stored, not needed now", "outdated: a live outfit was built on it, none would paint it now")
+
+
+def stored(character_name: str) -> List[Dict[str, Any]]:
+    """Every stored body shape (``ob…``) and painted body (texture key) of
+    the character — the Figure tab's "Stored bodies and textures" (plan
+    2026-11-12-unified-worn-pieces Task 10). Per entry ``{key, kind ("shape"
+    | "texture"), bytes (a body: with its fits), built_for (an outfit
+    signature, "" when none), built_for_name, outfits, last_used, reason
+    (the artefact graph's verdict), unneeded (Ruling 5a: stored, not needed
+    now), deletable (``delete_stored`` would remove it: nothing would be
+    built on it now and no run works on it), running (a run works on it), current (the worn figure's
+    shape or texture, wanted or delivered)}``. The current ones first, then
+    newest first. Read-only; the plain body (a base) is not listed."""
+    from datetime import datetime, timezone
+    from app.core import artefact_graph, outfit_bodies
+    analysis = artefact_graph.analyse(character_name, explicit=True, automatic=True)
+    heads: Dict[Tuple[str, str], Any] = {}
+    groups: Dict[Tuple[str, str], List[Any]] = {}
+    for node in analysis.nodes:
+        if node.kind == "body":
+            heads.setdefault(("shape", node.key), node)
+            groups.setdefault(("shape", node.key), []).append(node)
+        elif node.kind == "texture":
+            key = ("texture", str(node.parents.get("texture_signature") or node.key))
+            heads.setdefault(key, node)
+            groups.setdefault(key, []).append(node)
+    for node in analysis.nodes:
+        if node.kind == "body_fit" and ("shape", str(node.parents.get("body_id") or "")) in groups:
+            groups[("shape", str(node.parents["body_id"]))].append(node)
+    current: set = set()
+    try:
+        wanted, delivered = _delivered(character_name, profile=_profile_of(character_name, None))
+        current = {k for k in (wanted.shape, wanted.texture, delivered.shape, delivered.texture) if k}
+    except Exception:  # noqa: BLE001 — a marker, never a failure
+        pass
+    root = artefact_graph._char_dir(character_name)
+    saved = outfit_bodies._saved_outfits(character_name)
+    out: List[Dict[str, Any]] = []
+    for (kind, key), head in heads.items():
+        group = groups[(kind, key)]
+        if kind == "shape":
+            record = artefact_graph._body_record(root, key)
+            outfits = [str(head.parents.get("built_for") or "")] if head.parents.get("built_for") else []
+        else:
+            record = {}
+            outfits = list(head.parents.get("outfits") or head.parents.get("built_on") or [])
+        mtime = max(n.newest_mtime() for n in group)
+        last = record.get("last_used") if isinstance(record.get("last_used"), str) else ""
+        reachable = any(n.reachable for n in group if n.kind == head.kind)
+        running = any(n.protected == "running" for n in group)
+        built_for = outfits[0] if outfits else ""
+        out.append({"key": key, "kind": kind, "bytes": sum(n.size() for n in group),
+                    "built_for": built_for,
+                    "built_for_name": outfit_bodies.outfit_label(character_name, built_for, saved=saved)
+                    if built_for else "",
+                    "outfits": outfits,
+                    "last_used": last or (datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+                                          if mtime else ""),
+                    "reason": head.reason, "unneeded": head.reason in _UNNEEDED_REASONS,
+                    "deletable": not reachable and not running, "running": running, "current": key in current,
+                    "_mtime": mtime})
+    out.sort(key=lambda e: e["_mtime"], reverse=True)
+    out.sort(key=lambda e: not e["current"])
+    return [{k: v for k, v in e.items() if k != "_mtime"} for e in out]
+
+
+def delete_stored(character_name: str, key: str) -> Dict[str, Any]:
+    """The Figure tab's Delete of ONE stored body shape or painted body — an
+    explicit collect (Ruling 5a). A texture key: ``outfit_bodies.delete_texture``
+    (``LookupError`` ``PAINTED_NEEDED`` while a live outfit would be built on it,
+    ``UnknownBody`` when nothing of it is stored). A shape (``ob…``): only while
+    ``stored`` calls it deletable — ``LookupError`` ``SHAPE_NEEDED`` while an
+    outfit would be built on it, ``STORED_RUNNING`` while a run works on it;
+    then ``outfit_bodies.delete`` (the body and its fits, ``artefact_graph.delete_body``).
+    ``ValueError`` for a key of neither shape. Returns the delete report."""
+    from app.core import base_body, outfit_bodies
+    if base_body.is_texture_signature(key):
+        return outfit_bodies.delete_texture(character_name, key)
+    if not base_body.is_outfit_body_signature(key):
+        raise ValueError(f"not a stored body or texture key: {str(key)[:40]!r}")
+    entry = next((e for e in stored(character_name) if e["kind"] == "shape" and e["key"] == key), None)
+    if entry is None:
+        raise outfit_bodies.UnknownBody(f"No stored body {key}")
+    if not entry["deletable"]:
+        raise LookupError(STORED_RUNNING if entry["running"] else SHAPE_NEEDED)
+    report = outfit_bodies.delete(character_name, key)
+    invalidate()
+    return report

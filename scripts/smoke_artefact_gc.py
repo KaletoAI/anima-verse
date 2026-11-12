@@ -69,6 +69,12 @@ Expected, by hand from the spec + plan rulings (module docstring of artefact_gra
     way; figure.stored_unneeded lists exactly B1 and B2 (kind "shape", built_for O1 / O2). Mode back to mesh +
     collect_quietly -> 0 deletions (B1 B2 are live shapes again). Mode to retexture once more + an EXPLICIT collect
     (a person asked: admin route / improvements cleanup) -> exactly B1 Bd1 Bh1 B2 Bd2 Bh2 go.
+    The Figure tab (plan 2026-11-12-unified-worn-pieces Task 10, figure.stored / delete_stored): in retexture
+    figure.stored lists B1 B2 (shape, unneeded, deletable, not current; B1 built_for O1) and T1 T2 (texture, live
+    by their fronts -> not deletable; T1 current = the worn O1's texture on the plain body). delete_stored: T2 ->
+    LookupError PAINTED_NEEDED, "obdeadbeef" -> UnknownBody (404), "../x" -> ValueError (400), nothing changed;
+    back in mesh B1 is the worn shape -> LookupError SHAPE_NEEDED, nothing changed; retexture again -> B1 Bd1
+    Bh1 go (delete_body: the body and its fits), then the explicit collect takes B2 Bd2 Bh2.
 [5] character delete: delete_character -> the directory is gone; collect afterwards mints nothing.
 [6] running: B2 made unreachable (retexture: no in-body set has its key; O2m rebuilt: no model names it) but a
     live stage
@@ -434,10 +440,41 @@ def main() -> int:
         from app.core import figure
         check("[4] stored_unneeded", sorted((e["key"], e["kind"], e["built_for"]) for e in figure.stored_unneeded("Demo4")),
               sorted([(fx["B1"], "shape", fx["sigs"]["O1"]), (fx["B2"], "shape", fx["sigs"]["O2"])]))
+        # The Figure tab's list (figure.stored, Task 10 of plan 2026-11-12-unified-worn-pieces): both shapes
+        # stored-not-needed and deletable; both textures live by their fronts (not deletable), T1 the worn one's.
+        listed = {(e["kind"], e["key"]): e for e in figure.stored("Demo4")}
+        check("[4] stored: the four keys", sorted(listed), sorted([("shape", fx["B1"]), ("shape", fx["B2"]),
+                                                                  ("texture", fx["T1"]), ("texture", fx["T2"])]))
+        check("[4] stored: shapes unneeded + deletable", sorted(
+            (k, e["unneeded"], e["deletable"], e["current"]) for (kind, k), e in listed.items() if kind == "shape"),
+            sorted([(fx["B1"], True, True, False), (fx["B2"], True, True, False)]))
+        check("[4] stored: textures kept", sorted(
+            (k, e["deletable"], e["current"]) for (kind, k), e in listed.items() if kind == "texture"),
+            sorted([(fx["T1"], False, True), (fx["T2"], False, False)]))
+        check("[4] stored: built_for", listed[("shape", fx["B1"])]["built_for"], fx["sigs"]["O1"])
+
+        def refused(key):
+            try:
+                figure.delete_stored("Demo4", key)
+            except LookupError as e:
+                return type(e).__name__, str(e)
+            except ValueError as e:
+                return "ValueError", ""
+            return "deleted", ""
+        from app.core import outfit_bodies
+        check("[4] delete_stored live texture T2 -> 409", refused(fx["T2"]),
+              ("LookupError", outfit_bodies.PAINTED_NEEDED))
+        check("[4] delete_stored unknown shape -> 404", refused("obdeadbeef")[0], "UnknownBody")
+        check("[4] delete_stored bad key -> 400", refused("../x"), ("ValueError", ""))
+        same("[4] refused deletes changed nothing", "Demo4", fx, ALL)
         check("[4] back to mesh", set_mode(fx, "mesh"), "mesh")
         check("[4] back to mesh: 0 deletions", ag.collect_quietly("Demo4", "smoke")["deleted_files"], 0)
         same("[4] back to mesh", "Demo4", fx, ALL)
+        check("[4] delete_stored worn shape B1 -> 409", refused(fx["B1"]), ("LookupError", figure.SHAPE_NEEDED))
+        same("[4] B1 kept", "Demo4", fx, ALL)
         check("[4] retexture again", set_mode(fx, "retexture"), "retexture")
+        check("[4] delete_stored B1 (stored, not needed)", refused(fx["B1"]), ("deleted", ""))
+        same("[4] the Figure tab's Delete takes B1 and its fits", "Demo4", fx, without("B1", "Bd1", "Bh1"))
         ag.collect("Demo4", explicit=True, reason="smoke")
         same("[4] explicit collect deletes the stored bodies", "Demo4", fx,
              without("B1", "Bd1", "Bh1", "B2", "Bd2", "Bh2"))

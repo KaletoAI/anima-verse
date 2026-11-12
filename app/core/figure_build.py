@@ -753,10 +753,56 @@ def _served_url(character_name: str) -> Optional[str]:
         return None
 
 
+def _item_jobs(steps: List[Step], name: str, item_id: str) -> Optional[int]:
+    """The planned hub jobs of a piece's (``pieces``, by item) or the hair's
+    chain step: 0 when nothing of it is planned, None when unknown."""
+    for step in steps:
+        if step.name == name and (not item_id or step.item_id == item_id):
+            return step.jobs
+    return 0
+
+
+def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
+    """What the single actions on the plain body cost (the Figure tab's Body
+    details write it under each button): ``view`` (a side or back view),
+    ``front`` (with the skin detail step while it is on), ``model`` (its mesh
+    run, ``model3d.mesh_hub_stages``) and ``after_front`` (what the next
+    Build then rebuilds after a new front or skin step: the three other
+    views, which edit the front, and the model). None when not computable."""
+    from app.core import base_body, base_skin, model3d
+    try:
+        others = [v for v in base_body.BASE_VIEWS if v != "front"]
+        return {"view": base_body.BASE_VIEW_JOBS,
+                "front": base_body.BASE_VIEW_JOBS + (base_body.SKIN_STEP_JOBS if base_skin.enabled() else 0),
+                "model": len(model3d.mesh_hub_stages(character_name, bsig)),
+                "after_front": sum(jobs for _step, jobs in base_body.base_rebuild_steps(
+                    character_name, {"signature": bsig, "views": others, "model": True}))}
+    except Exception:  # noqa: BLE001 — an estimate, never a failure
+        logger.debug("Plain body job counts of %s not computable", character_name, exc_info=True)
+        return {"view": None, "front": None, "model": None, "after_front": None}
+
+
+def _outfit_name(character_name: str, pieces: Dict[str, str]) -> str:
+    """The saved outfit whose pieces are exactly the worn ones, else ""."""
+    ids = sorted({str(v) for v in (pieces or {}).values() if v})
+    if not ids:
+        return ""
+    try:
+        from app.models.character import get_character_outfits
+        for outfit in get_character_outfits(character_name) or []:
+            if sorted({str(i) for i in outfit.get("pieces") or [] if i}) == ids:
+                return str(outfit.get("name") or "")
+    except Exception:  # noqa: BLE001 — a label, never a failure
+        logger.debug("Saved outfits of %s unreadable", character_name, exc_info=True)
+    return ""
+
+
 def figure_info(character_name: str) -> Dict[str, Any]:
     """``GET /characters/{c}/figure``: ``{pipeline, humanoid, auto_build,
-    status, changes, cost, build, wanted, delivered, served_url, worn, hair,
-    body}``. ``status``: ``building`` while a run goes, else ``failed`` /
+    status, changes, cost, build, wanted, delivered, served_url, outfit (the
+    saved outfit worn now, "" when none matches), worn (each row with the
+    ``jobs`` its chain step plans), hair (with ``jobs``), body (``plain.jobs``:
+    ``_plain_jobs``)}``. ``status``: ``building`` while a run goes, else ``failed`` /
     ``changes`` when the plan has steps (failed: the last run recorded a
     failure, or a planned chain failed for its input — ``Step.failed``),
     else ``up_to_date``. ``auto_build`` = ``auto_build_on``."""
@@ -770,7 +816,7 @@ def figure_info(character_name: str) -> Dict[str, Any]:
         "build": build, "served_url": _served_url(character_name)}
     if not pipeline:
         return {**out, "status": "up_to_date", "changes": [], "cost": cost(character_name, []),
-                "wanted": None, "delivered": None, "worn": [], "hair": None, "body": None}
+                "wanted": None, "delivered": None, "outfit": "", "worn": [], "hair": None, "body": None}
     wanted, delivered = figure._delivered(character_name, profile=profile)
     steps = plan(character_name, profile=profile)
     failures = _with_cached_failures(build["failed"], steps)
@@ -794,8 +840,13 @@ def figure_info(character_name: str) -> Dict[str, Any]:
             "texture": {"key": wanted.texture,
                         "state": ("ready" if built is not None and built.texture == wanted.texture
                                   and built.shape == wanted.shape else "missing") if wanted.texture else "none"}}
+    body["plain"]["jobs"] = _plain_jobs(character_name, wanted.bsig)
+    worn = _worn_rows(character_name, wanted, delivered, failures, build["running"])
+    hair = _hair_row(character_name, profile, wanted, delivered, failures, build["running"])
+    for row in worn:
+        row["jobs"] = _item_jobs(steps, "pieces", row["item_id"])
+    hair["jobs"] = _item_jobs(steps, "hair", "")
     return {**out, "status": status, "changes": changes, "cost": cost(character_name, steps),
             "wanted": wanted.as_dict(), "delivered": delivered.as_dict(),
-            "worn": _worn_rows(character_name, wanted, delivered, failures, build["running"]),
-            "hair": _hair_row(character_name, profile, wanted, delivered, failures, build["running"]),
-            "body": body}
+            "outfit": _outfit_name(character_name, wanted.pieces),
+            "worn": worn, "hair": hair, "body": body}
