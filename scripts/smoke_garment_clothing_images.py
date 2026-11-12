@@ -110,8 +110,9 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
       the inside of the garment is visible at the neck opening, sleeves and
       hem, plain grey background."
     ghost back (ruling 13e: every back says GHOST_KEEP; not a waistband
-      piece -> sleeves, neck opening) = "Keep the green dress exactly as it
-      is, seen from behind: the same position, outer outline, width and
+      piece -> sleeves, neck opening; Task 11e: the back names its view) =
+      "Keep the green dress exactly as it is, seen from behind, the back
+      view stays a back view: the same position, outer outline, width and
       framing, the sleeves at exactly the same angle as in the image, the
       same background. Remove the person completely so the green dress
       keeps its worn three-dimensional shape on an invisible body (ghost
@@ -121,7 +122,8 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
       both views, the legs and the waistband: front "Keep the grey trousers
       exactly as it is, seen from the front: … the legs apart at exactly the
       same angle as in the image, … the inside is visible at the waistband
-      and the leg openings."; the back the same with "seen from behind".
+      and the leg openings."; the back the same with "seen from behind, the
+      back view stays a back view".
     negatives: worn = DRESS_GARMENT_NEGATIVE minus "dress" -> "loose
       clothing, baggy, skirt, jacket, shoes, socks, hair"; ghost = that +
       ", person, skin, head, arms, hands, legs, feet, mannequin, hanger".
@@ -217,7 +219,8 @@ GHOST_PROMPT = ("The same green dress in exactly the same position, size, width 
                 "three-dimensional shape as if on an invisible body (ghost mannequin product photo): the person "
                 "is removed, the inside of the garment is visible at the neck opening, sleeves and hem, plain "
                 "grey background.")
-GHOST_BACK_PROMPT = ("Keep the green dress exactly as it is, seen from behind: the same position, outer outline, "
+GHOST_BACK_PROMPT = ("Keep the green dress exactly as it is, seen from behind, the back view stays a back view: "
+                     "the same position, outer outline, "
                      "width and framing, the sleeves at exactly the same angle as in the image, the same background. "
                      "Remove the person completely so the green dress keeps its worn three-dimensional shape on an "
                      "invisible body (ghost mannequin product photo); the inside is visible at the neck opening, "
@@ -525,7 +528,7 @@ def main() -> int:
         check("trousers ghost front", garment_clothing.edit_prompt("Demo", "ghost", "front", item_id=tid)[0],
               trousers_ghost("seen from the front"))
         check("trousers ghost back", garment_clothing.edit_prompt("Demo", "ghost", "back", item_id=tid)[0],
-              trousers_ghost("seen from behind"))
+              trousers_ghost("seen from behind, the back view stays a back view"))
         raises("no fragment", lambda: garment_clothing.edit_prompt("Demo", "worn", "front", item_id=bare),
                ValueError, "has no prompt fragment")
 
@@ -630,9 +633,9 @@ def main() -> int:
                                                      prompts["worn b1"].get("bare_prompt_keywords")),
               ("edit the first image with the clothes from the second image: the person wears only a knee-length "
                "green linen dress with short sleeves, add no other clothing beyond that, the rest of the body "
-               "stays exactly as in the first image",
-               "a knee-length green linen dress with short sleeves, only these clothes, no other clothing, body "
-               "unchanged from the first image"))
+               "stays exactly as in the first image; a back view seen from behind, the back view stays a back view",
+               "back view, seen from behind, a knee-length green linen dress with short sleeves, only these "
+               "clothes, no other clothing, body unchanged from the first image"))
         check("A ghost prompt", prompts["ghost f1"]["bare_prompt"], GHOST_PROMPT)
         check("A fragment untouched", inventory.get_item(did).get("prompt_fragment"), FRAGMENT)
         del renders[:]

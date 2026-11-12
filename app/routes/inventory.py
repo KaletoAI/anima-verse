@@ -214,11 +214,32 @@ def _create_item_route_sync(body: Any) -> Dict[str, Any]:
         "success_chance", "copy_on_give",
         "success_text", "fail_text", "cast_activity",
         "anchor_item_id", "teleport_subject", "cost",
-        "tracks_character",
+        "tracks_character", "prompt_fragment_back",
     ) if k in body}
     if _extras:
         item = update_item(item["id"], _extras) or item
     return {"ok": True, "item": item}
+
+
+@router.post("/items/suggest-back-text")
+def suggest_back_text_route(body: Dict[str, Any], _admin=Depends(require_admin)) -> Dict[str, Any]:
+    """The Items editor's "Suggest" for an outfit piece's "Description
+    (back)" (Task 11e, ``piece_back_text.suggest``): ``{prompt_fragment,
+    name}`` of the form as it stands (saved or not) → ``{text, changed}``.
+    Saves NOTHING — the editor puts the text into the field and the user
+    saves it. ``changed`` False: the front text has no front-only or scene
+    words, the field may stay empty. 400 without a front text, 502 when the
+    LLM fails, is not routed or answers unusably. Admin-only (also by the
+    ``/inventory/items`` write prefix)."""
+    from app.core.piece_back_text import normalise, suggest
+    front = normalise((body or {}).get("prompt_fragment"))
+    if not front:
+        raise HTTPException(status_code=400, detail="Fill in the description (front) first")
+    try:
+        return suggest(front, name=str((body or {}).get("name") or ""))
+    except Exception as e:  # noqa: BLE001 — any LLM failure is one answer for the editor
+        logger.warning("Back text suggestion failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"No suggestion: {e}")
 
 
 @router.put("/items/{item_id}")

@@ -82,7 +82,9 @@ the planned image again.
     "edit the first image with the clothes from the second image: the
     person wears only a black tailored blazer with silver buttons, add no
     other clothing beyond that, the rest of the body stays exactly as in the
-    first image"; its keywords form (FIT_KEYWORDS) = "a black tailored
+    first image; a back view seen from behind, the back view stays a back
+    view" (Task 11e: the fit names its view); its keywords form
+    (FIT_KEYWORDS) = "back view, seen from behind, a black tailored
     blazer with silver buttons, only these clothes, no other clothing, body
     unchanged from the first image" — not the outfit's bare FIT_PROMPT (live
     2026-11-10, Black Stilettos: its then wording "edit the first image with
@@ -153,18 +155,19 @@ DRAFT_TEXT = ("wearing only a black tailored blazer with silver buttons exactly 
               "image, the same length, cut and colour, and nothing else")
 FIT_BLAZER = ("edit the first image with the clothes from the second image: the person wears only a black tailored "
               "blazer with silver buttons, add no other clothing beyond that, the rest of the body stays exactly "
-              "as in the first image")
-KW_BLAZER = ("a black tailored blazer with silver buttons, only these clothes, no other clothing, body unchanged "
+              "as in the first image; a back view seen from behind, the back view stays a back view")
+KW_BLAZER = ("back view, seen from behind, a black tailored blazer with silver buttons, only these clothes, no other clothing, body unchanged "
              "from the first image")
 FIT_SHOE = ("edit the first image with the clothes from the second image: the person wears only shiny black "
             "leather stiletto heels, high pointed toe, add no other clothing beyond that, the rest of the body "
-            "stays exactly as in the first image")
-KW_SHOE = ("shiny black leather stiletto heels, high pointed toe, only these clothes, no other clothing, body "
+            "stays exactly as in the first image; a back view seen from behind, the back view stays a back view")
+KW_SHOE = ("back view, seen from behind, shiny black leather stiletto heels, high pointed toe, only these clothes, no other clothing, body "
            "unchanged from the first image")
 MULTI = "blue t-shirt, jeans, black lether jacket, slim fit, zipper, Sneekers"
 FIT_MULTI = ("edit the first image with the clothes from the second image: the person wears only blue t-shirt, "
              "jeans, black lether jacket, slim fit, zipper, Sneekers, add no other clothing beyond that, the rest "
-             "of the body stays exactly as in the first image")
+             "of the body stays exactly as in the first image; a back view seen from behind, the back view stays "
+             "a back view")
 LONG = ("a long black wool coat with a wide shawl collar and deep pockets, double-breasted with six horn buttons, "
         "belted at the waist, ankle length")
 SHOE_DRAFT_TEXT = ("wearing only shiny black leather stiletto heels, high pointed toe exactly as on the person in "

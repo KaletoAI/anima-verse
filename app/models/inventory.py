@@ -749,6 +749,27 @@ def _after_exposed_detail_change(item_id: str) -> None:
         logger.warning("Outfit rebuild after the exposed_detail change of %s failed: %s", item_id, e)
 
 
+def item_write_lock():
+    """The lock every item read-modify-write of ``update_item`` holds (one for
+    all items: the shared library is ONE file, rewritten whole). Re-entrant —
+    a caller that checks the stored item before its update holds it around
+    both (``piece_back_text``). Never held across an LLM / HTTP / image call."""
+    from app.core.keyed_lock import keyed_lock
+    return keyed_lock("item_write", "items")
+
+
+def _clean_back_text(item: Dict[str, Any]) -> None:
+    """``prompt_fragment_back`` (``piece_back_text.FIELD``, Task 11e): an outfit
+    piece's optional back description — whitespace collapsed, no trailing full
+    stop; an empty value and every non-outfit item drop the key."""
+    from app.core.piece_back_text import FIELD, normalise
+    text = normalise(item.get(FIELD)) if item.get("category") == "outfit_piece" else ""
+    if text:
+        item[FIELD] = text
+    else:
+        item.pop(FIELD, None)
+
+
 def update_item(item_id: str,
     updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update a world or shared item; callers must be admin-only.
@@ -757,6 +778,8 @@ def update_item(item_id: str,
     renders of every combination this item is part of (see
     ``_render_relevant_fields``) — here rather than in the route, so that a
     piece edit through any path leaves no stale T-pose or mesh behind.
+    The read-modify-write runs under ``item_write_lock``; the follow-ups
+    (render invalidation, outfit rebuilds) after it.
     """
     if "properties" in updates:
         _validate_passive_bonuses(updates["properties"])
@@ -775,7 +798,7 @@ def update_item(item_id: str,
         "category", "image", "image_prompt",
         "rarity", "stackable", "max_stack", "properties",
         "transferable", "consumable", "reveals_secret",
-        "prompt_fragment", "outfit_piece", "effects", "garment",
+        "prompt_fragment", "prompt_fragment_back", "outfit_piece", "effects", "garment",
         # Tracker: while carried, the carrier sees the target's location in the prompt.
         "tracks_character",
     } | spell_only
@@ -849,42 +872,44 @@ def update_item(item_id: str,
         if item.get("category") != "spell":
             for key in spell_only:
                 item.pop(key, None)
+        _clean_back_text(item)
         return item
 
-    # Write shared items to shared/items/items.json.
-    if is_shared_item(item_id):
-        shared = _load_shared_items()
-        for idx, item in enumerate(shared):
-            if item.get("id") == item_id:
-                # The _shared flag is a runtime marker, not persisted data.
-                item.pop("_shared", None)
-                _before = _render_relevant_fields(item)
-                _detail_before = _exposed_detail_of(item)
-                shared[idx] = _apply_updates(item)
-                _save_shared_items(shared)
-                logger.info("Shared-Item aktualisiert: %s", item_id)
-                if _render_relevant_fields(shared[idx]) != _before:
-                    _invalidate_renders_for_item(item_id)
-                if _exposed_detail_of(shared[idx]) != _detail_before:
-                    _after_exposed_detail_change(item_id)
-                return {**shared[idx], "_shared": True}
+    found: Optional[Dict[str, Any]] = None
+    with item_write_lock():
+        # Write shared items to shared/items/items.json.
+        if is_shared_item(item_id):
+            shared = _load_shared_items()
+            for idx, item in enumerate(shared):
+                if item.get("id") == item_id:
+                    # The _shared flag is a runtime marker, not persisted data.
+                    item.pop("_shared", None)
+                    _before = _render_relevant_fields(item)
+                    _detail_before = _exposed_detail_of(item)
+                    shared[idx] = _apply_updates(item)
+                    _save_shared_items(shared)
+                    logger.info("Shared item updated: %s", item_id)
+                    found = {**shared[idx], "_shared": True}
+                    break
+        else:
+            # World items: DB / items.json — only this row is written (a
+            # snapshot of every item would clobber a concurrent edit).
+            for item in _load_items():
+                if item.get("id") == item_id:
+                    _before = _render_relevant_fields(item)
+                    _detail_before = _exposed_detail_of(item)
+                    _apply_updates(item)
+                    _save_items([item])
+                    logger.info("Item updated: %s", item_id)
+                    found = item
+                    break
+    if found is None:
         return None
-
-    # World items: DB / items.json
-    items = _load_items()
-    for item in items:
-        if item.get("id") == item_id:
-            _before = _render_relevant_fields(item)
-            _detail_before = _exposed_detail_of(item)
-            _apply_updates(item)
-            _save_items(items)
-            logger.info("Item aktualisiert: %s", item_id)
-            if _render_relevant_fields(item) != _before:
-                _invalidate_renders_for_item(item_id)
-            if _exposed_detail_of(item) != _detail_before:
-                _after_exposed_detail_change(item_id)
-            return item
-    return None
+    if _render_relevant_fields(found) != _before:
+        _invalidate_renders_for_item(item_id)
+    if _exposed_detail_of(found) != _detail_before:
+        _after_exposed_detail_change(item_id)
+    return found
 
 
 def delete_item(item_id: str) -> bool:

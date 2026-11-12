@@ -824,6 +824,16 @@ async def lifespan(app: FastAPI):
     except Exception as _gre:
         logger.warning("Garment refit sweep not started: %s", _gre)
 
+    # One-time back texts of the outfit pieces (plan 2026-11-12-unified-worn-pieces
+    # Task 11e): queued LLM calls at background priority in a daemon thread —
+    # never blocking the start, also in a frozen world (no simulation); the
+    # world's items once per world, the shared library once for all worlds.
+    try:
+        from app.core.piece_back_text import start_migration
+        start_migration()
+    except Exception as _pbt:
+        logger.warning("Back text migration not started (retried at the next start): %s", _pbt)
+
     # Hub jobs that outlived the previous process (docs/hub-job-resume.md):
     # AFTER every handler is registered, BEFORE the AgentLoop and the queue
     # workers start — the resumer takes the guards of the operations it

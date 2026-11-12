@@ -4680,6 +4680,16 @@
     "The description already says open/closed — the toggle adds to it": "Die Beschreibung nennt schon offen/geschlossen — der Schalter ergänzt sie",
     "Only this piece’s chain; the Build makes only the worn state’s mesh": "Nur die Kette dieses Teils; der Build baut nur das Mesh des getragenen Zustands",
     "Open / closed: yes — set in a wearer's Wardrobe": "Offen / geschlossen: ja — wird in der Garderobe eines Trägers eingestellt",
-    "Open / closed: no — set in a wearer's Wardrobe": "Offen / geschlossen: nein — wird in der Garderobe eines Trägers eingestellt"
+    "Open / closed: no — set in a wearer's Wardrobe": "Offen / geschlossen: nein — wird in der Garderobe eines Trägers eingestellt",
+    "Description (front)": "Beschreibung (vorne)",
+    "Description (back)": "Beschreibung (hinten)",
+    "Optional. Used instead of the front text when the 3D figure is rendered from behind or from the side. Leave out what only the front shows (neckline, front buttons) and scene words. Empty: the front text is used.": "Optional. Wird statt des Vordertexts verwendet, wenn die 3D-Figur von hinten oder von der Seite gerendert wird. Lass weg, was nur die Vorderseite zeigt (Ausschnitt, Knöpfe vorne), und Szenenwörter. Leer: Der Vordertext wird verwendet.",
+    "e.g. 'black leather jacket, slim fit'": "z. B. 'schwarze Lederjacke, schmal geschnitten'",
+    "Ask the LLM for a back description of the front text. Nothing is saved.": "Das LLM um eine Rückseiten-Beschreibung des Vordertexts bitten. Es wird nichts gespeichert.",
+    "Suggesting…": "Schlage vor …",
+    "Suggestion filled in — check it and save the item.": "Vorschlag eingetragen — prüfe ihn und speichere das Item.",
+    "The front text needs no change for the back — the field can stay empty.": "Der Vordertext braucht für die Rückseite keine Änderung — das Feld kann leer bleiben.",
+    "Fill in the description (front) first.": "Fülle zuerst die Beschreibung (vorne) aus.",
+    "No suggestion: the LLM failed or is not routed.": "Kein Vorschlag: Das LLM ist fehlgeschlagen oder nicht geroutet."
   }
 }

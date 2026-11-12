@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet } from '../../lib/api'
+import { ApiError, apiGet, apiPost } from '../../lib/api'
 import { Field } from '@anima/player-ui'
 import { EffectsEditor } from '../../components/EffectsEditor'
 import { MESH_MODE_LABELS, meshModeOf } from '../characters/figureModel'
@@ -118,6 +118,57 @@ function BodyUnderPieceFields({ draft, onUpdate }: {
         <LiftInput value={draft.lift} fallback={liftDefault} onCommit={value => onUpdate('lift', value)} />
       </Field>}
     </div>
+  )
+}
+
+/** "Description (back)" of an outfit piece: optional, quoted by the back and side renders of its 3D figure
+ *  instead of the front text. "Suggest" asks the LLM for a proposal from the front text as it stands in the form
+ *  and puts it into the field WITHOUT saving — the user edits it and saves the item. */
+function BackTextField({ draft, onUpdate }: {
+  draft: DraftItem
+  onUpdate: <K extends keyof DraftItem>(key: K, value: DraftItem[K]) => void
+}) {
+  const { t } = useI18n()
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const front = draft.prompt_fragment.trim()
+  useEffect(() => setNote(''), [draft.id])
+  const runSuggest = () => {
+    setBusy(true)
+    setNote('')
+    apiPost<{ text: string; changed: boolean }>('/inventory/items/suggest-back-text',
+      { prompt_fragment: front, name: draft.name })
+      .then(r => {
+        if (r.changed && r.text) {
+          onUpdate('prompt_fragment_back', r.text)
+          setNote(t('Suggestion filled in — check it and save the item.'))
+        } else {
+          setNote(t('The front text needs no change for the back — the field can stay empty.'))
+        }
+      })
+      .catch(e => setNote(e instanceof ApiError && e.status === 400
+        ? t('Fill in the description (front) first.')
+        : t('No suggestion: the LLM failed or is not routed.')))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <Field label={t('Description (back)')}
+      hint={t('Optional. Used instead of the front text when the 3D figure is rendered from behind or from the side. Leave out what only the front shows (neckline, front buttons) and scene words. Empty: the front text is used.')}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input
+          className="ga-input"
+          style={{ flex: 1 }}
+          value={draft.prompt_fragment_back}
+          placeholder={front || t("e.g. 'black leather jacket, slim fit'")}
+          onChange={(e) => onUpdate('prompt_fragment_back', e.target.value)}
+        />
+        <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !front} onClick={runSuggest}
+          title={t('Ask the LLM for a back description of the front text. Nothing is saved.')}>
+          {busy ? t('Suggesting…') : t('Suggest')}
+        </button>
+      </div>
+      {note && <span className="ga-form-hint" style={{ display: 'block', marginTop: 4 }}>{note}</span>}
+    </Field>
   )
 }
 
@@ -591,7 +642,7 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
           onChange={(e) => onUpdate('image_prompt', e.target.value)}
         />
       </Field>
-      <Field label={t('Prompt fragment')} help="image_prompt" hint={t('Used in the character image when this item is held or worn.')}>
+      <Field label={isOutfit ? t('Description (front)') : t('Prompt fragment')} help="image_prompt" hint={t('Used in the character image when this item is held or worn.')}>
         <input
           className="ga-input"
           value={draft.prompt_fragment}
@@ -599,6 +650,7 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
           onChange={(e) => onUpdate('prompt_fragment', e.target.value)}
         />
       </Field>
+      {isOutfit && <BackTextField draft={draft} onUpdate={onUpdate} />}
 
       {isOutfit && <Field label={t('3D figure')}
         hint={t('How the piece reaches the 3D figure of every wearer on the figure pipeline: Own mesh, Painted or In the body. 2D images stay unchanged.')}>

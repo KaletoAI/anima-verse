@@ -99,7 +99,9 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
     reference = the dressed front tpose_<sig2>.png. The left fit: reference
     tpose_left_<bsig>.png cut out ((0,0) black, (4,4) BASE_PX left), extra
     = the cut-out left draft ((4,4) = colour_of("tpose_left_<sig2>")),
-    prompt FIT_PROMPT, size 8 x 8, sidecar_extra {base_signature, dressed,
+    prompt FIT_PROMPT + "; a left side profile view, the side view stays a
+    side view" (Task 11e: the fit names its view; the back refit FIT_BACK),
+    size 8 x 8, sidecar_extra {base_signature, dressed,
     base_image_sha256 = sha(tpose_left_<bsig>.png), left_draft = its name,
     left_draft_sha256}. Stored: tpose_left/right_<sig2> with fit_gate ok,
     the drafts in drafts/. One worker call: views [back, front, left,
@@ -123,7 +125,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from smoke_base_body_outfit import (BASE_PX, FIT_PROMPT, colour_of, make_glb,  # noqa: E402
+from smoke_base_body_outfit import (BASE_PX, FIT_BACK, FIT_PROMPT, colour_of, make_glb,  # noqa: E402
                                     pixel, png)
 
 FAILS = []
@@ -510,7 +512,7 @@ def main() -> int:
             if new_renders:
                 fr = new_renders[0]
                 check("(a) refit references", (fr["reference_name"], fr["extra_names"], fr.get("bare_prompt")),
-                      (f"tpose_back_{bsig}.png", [f"tpose_back_{osig}.png"], FIT_PROMPT))
+                      (f"tpose_back_{bsig}.png", [f"tpose_back_{osig}.png"], FIT_BACK))
             check("(a) two worker calls", len(new_calls), 2)
             if len(new_calls) == 2:
                 n2 = int(new_calls[1].name)
@@ -607,7 +609,8 @@ def main() -> int:
                       (f"tpose_left_{bsig}.png", ((0, 0, 0), BASE_PX["left"]), [f"tpose_left_{sig2}.png"],
                        [((0, 0, 0), colour_of(f"tpose_left_{sig2}"))]))
                 check("left fit prompt + size", (lf.get("bare_prompt"), lf.get("override_width"),
-                                                 lf.get("override_height")), (FIT_PROMPT, 8, 8))
+                                                 lf.get("override_height")),
+                      (FIT_PROMPT + "; a left side profile view, the side view stays a side view", 8, 8))
                 left_draft = refs / "drafts" / f"tpose_left_{sig2}.png"
                 # Texture fields (plan 2026-11-10) checked by smoke_texture_body_reuse.
                 check("left fit sidecar extra", {k: v for k, v in (lf.get("sidecar_extra") or {}).items()

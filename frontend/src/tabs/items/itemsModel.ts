@@ -50,6 +50,8 @@ export interface Item {
   consumable?: boolean
   image_prompt?: string
   prompt_fragment?: string
+  /** Outfit pieces only: the optional back description (back and side renders); absent = the front text. */
+  prompt_fragment_back?: string
   outfit_piece?: OutfitPieceMeta
   // Effects stored as a dict on the server (same as activities). The form
   // edits a "key: value" text representation; we (de)serialize on edit.
@@ -101,6 +103,8 @@ export interface DraftItem {
   consumable: boolean
   image_prompt: string
   prompt_fragment: string
+  /** '' = none: back and side renders quote the front text (`prompt_fragment`). */
+  prompt_fragment_back: string
   outfit_types: string[]
   slots: string[]
   covers: string[]
@@ -247,6 +251,7 @@ export const EMPTY_DRAFT: DraftItem = {
   consumable: false,
   image_prompt: '',
   prompt_fragment: '',
+  prompt_fragment_back: '',
   outfit_types: [],
   slots: [],
   covers: [],
@@ -289,6 +294,7 @@ export function itemToDraft(it: Item): DraftItem {
     consumable: !!it.consumable,
     image_prompt: it.image_prompt || '',
     prompt_fragment: it.prompt_fragment || '',
+    prompt_fragment_back: it.prompt_fragment_back || '',
     outfit_types: [...(op.outfit_types || [])],
     slots: [...(op.slots || [])],
     covers: [...(op.covers || [])],
@@ -331,6 +337,8 @@ export function draftToBody(d: DraftItem): Record<string, unknown> {
     body.id = d.id.trim()
   }
   if (d.category === 'outfit_piece') {
+    // '' clears it (the server drops an empty back text).
+    body.prompt_fragment_back = d.prompt_fragment_back.trim()
     body.outfit_piece = {
       outfit_types: d.outfit_types,
       slots: d.slots,

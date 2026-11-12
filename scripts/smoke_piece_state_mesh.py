@@ -46,8 +46,10 @@ Expected, derived by hand from the brief:
     black jacket, worn open at the front (unzipped / unbuttoned), its front
     edges apart so the body or the layer underneath shows between them."
     (F15 i-2); ``fit_prompt("worn", item_id=jacket,
-    state="open")[0]`` contains "the person wears only black jacket, worn
-    open"; closed: neither contains "worn open" nor "worn closed" (A7).
+    state="open")[0]`` — the BACK — has no "worn open" and equals the closed
+    fit (Task 11e / F15 i-1: from behind an open piece looks closed; was:
+    contained "worn open"); closed: neither contains "worn open" nor "worn
+    closed" (A7).
 [3] Fits on "basesha": F_c (record without ``state``) at the closed fsig, F_o
     (``state: "open"``) at the open fsig. Profile closed -> F_c, open -> F_o;
     explicit ``state`` overrides the profile. Only F_c (F_o removed) + open ->
@@ -217,7 +219,9 @@ def main() -> int:
                 "or the layer underneath shows between them.")
         check("edit prompt open", text.startswith(want), True)
         fit_text = garment_clothing.fit_prompt("worn", item_id=jacket, state="open")[0]
-        check("fit prompt open", "the person wears only black jacket, worn open" in fit_text, True)
+        # Task 11e (Ruling V1, F15 i-1): the back never says the open words — the open fit is the closed one.
+        check("fit prompt open", ("worn open" in fit_text,
+                                  fit_text == garment_clothing.fit_prompt("worn", item_id=jacket)[0]), (False, True))
         closed_text = garment_clothing.edit_prompt("Demo", "worn", "front", profile=prof(), item_id=jacket)
         closed_text = closed_text[0] if isinstance(closed_text, tuple) else closed_text
         closed_fit = garment_clothing.fit_prompt("worn", item_id=jacket)[0]

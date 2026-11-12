@@ -1204,6 +1204,12 @@ HAIRED_DRAFT_NEGATIVE = ", ".join((HEADWEAR_NEGATIVE, "detailed anatomy", POSE_N
 #: (Qwen2.1 Turbo, shoes only: invented clothing 0.27 -> 0.014 of the image;
 #: full-outfit IoU unchanged within seed noise).
 FIT_PROMPT = "edit the first image with what the person in the second image wears, and nothing else"
+#: The view words a dressed fit of a non-front view closes with (Task 11e,
+#: Ruling V1: every back / side edit names its view; the fit never did) —
+#: ``fit_prompt``. The same words for every image family.
+FIT_VIEW = {"back": "a back view seen from behind, the back view stays a back view",
+            "left": "a left side profile view, the side view stays a side view",
+            "right": "a right side profile view, the side view stays a side view"}
 #: Use case of the fit: empty style and negative (config).
 FIT_USE_CASE = "outfit_fit"
 #: Alpha from which a pixel belongs to the figure of a fit reference.
@@ -1964,6 +1970,13 @@ def render_draft(character_name: str, view: str, *, stem: Path, front: Path, ref
                "crop_back_to": (side, offset, source_size)})
 
 
+def fit_prompt(view: str) -> str:
+    """The dressed fit's prompt of ``view``: ``FIT_PROMPT`` and the view's
+    ``FIT_VIEW`` words (``FIT_PROMPT`` alone for a view without any)."""
+    words = FIT_VIEW.get(view)
+    return f"{FIT_PROMPT}; {words}" if words else FIT_PROMPT
+
+
 def render_fit(character_name: str, view: str, *, stem: Path, base_reference: Path,
                draft_reference: Path, canvas: Tuple[int, int], extra: Dict[str, Any],
                common: Dict[str, Any], postprocess: bool = True, prompt: str = FIT_PROMPT,
@@ -2005,6 +2018,7 @@ def _fit_attempt(character_name: str, view: str, *, stem: Path, base_reference: 
     base_view = base_views[view]
     path = render_fit(character_name, view, stem=stem, base_reference=base_reference,
                       draft_reference=draft_reference, canvas=canvas, extra=extra, common=common,
+                      prompt=fit_prompt(view),
                       crop_back_to=fit_crop(canvas, image_size(base_view)) if base_view is not None else None)
     if path is None:
         return None
@@ -2052,7 +2066,8 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     2. FIT (occasion ``outfit_back`` / ``outfit_side``, use case
        ``FIT_USE_CASE``): an edit of the cut-out base view (image 1) with the
        cut-out draft scaled onto it (image 2, ``fit_references``), prompt
-       ``FIT_PROMPT`` and nothing else (user decision 2026-11-09), rendered
+       ``fit_prompt(view)`` — ``FIT_PROMPT`` (user decision 2026-11-09) and
+       the view words (``FIT_VIEW``, Task 11e) — rendered
        on the square canvas (``SQUARE``: the base view's height) and cut
        back to the base view's frame (``fit_crop``); the draft renders on
        the square canvas of the dressed front and is cut back to its frame.

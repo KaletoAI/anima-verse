@@ -141,6 +141,10 @@ TASK_TYPES: Dict[str, Dict[str, object]] = {
     # Body-logic pass before a render (app/imagegen/pose_check.py). Unrouted
     # it borrows image_prompt; route it at a model that handles the world's content.
     "image_pose_check":   {"label": "Image Pose Check",         "priority": Priority.NORMAL, "category": "helper", "gate": "image_generation.enabled"},
+    # The back description of an outfit piece (app/core/piece_back_text.py):
+    # the Items editor's "Suggest" and the one-time back-text migration (which
+    # passes Priority.LOW). Unrouted it borrows image_prompt.
+    "piece_back_text":    {"label": "Outfit Piece Back Text",   "priority": Priority.NORMAL, "category": "helper"},
     "instagram_caption":  {"label": "Instagram Caption",        "priority": Priority.NORMAL, "category": "image",  "gate": "skills.instagram.enabled"},
 
     # Vision
@@ -589,6 +593,12 @@ TASK_REQUIREMENTS: Dict[str, Dict[str, object]] = {
         "tools": False, "vision": False, "json": False, "min_context": 2048,
         "model_class": "medium", "arch": "any", "hallucination_risk": "medium",
         "creative": False, "language_de": False, "latency_sensitive": True,
+    },
+    # One short English line for an image backend — never shown as prose.
+    "piece_back_text": {
+        "tools": False, "vision": False, "json": False, "min_context": 2048,
+        "model_class": "small", "arch": "any", "hallucination_risk": "medium",
+        "creative": False, "language_de": False, "latency_sensitive": False,
     },
     "instagram_caption": {
         "tools": False, "vision": True, "json": False, "min_context": 2048,

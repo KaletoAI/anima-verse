@@ -102,7 +102,9 @@ Expected, derived by hand from the brief:
                   stub (one call, model birefnet-dis; 2 px transparent
                   border), its 4x4 figure scaled to the base figure's height
                   1 and centred on x 4.5 -> pixel (4,4) = the draft colour,
-                  (0,0) transparent; bare_prompt = FIT_PROMPT, no
+                  (0,0) transparent; bare_prompt = FIT_BACK (FIT_PROMPT
+                  + "; a back view seen from behind, the back view stays a
+                  back view" — Task 11e: the fit names its view), no
                   extra_negative, occasion outfit_back, use case outfit_fit,
                   rendered at the canvas size 8 x 8 (the base back's; front
                   edit and draft at their square canvas 16 x 16, F14 g),
@@ -371,6 +373,8 @@ VIEW = {
 }
 # The whole fit prompt (user decision 2026-11-09; "and nothing else" since 2026-11-11).
 FIT_PROMPT = "edit the first image with what the person in the second image wears, and nothing else"
+# The back fit names its view (Task 11e, base_body.FIT_VIEW["back"]).
+FIT_BACK = FIT_PROMPT + "; a back view seen from behind, the back view stays a back view"
 BASE_PX = {"front": (200, 10, 10), "back": (10, 200, 10), "left": (10, 10, 200), "right": (200, 200, 10)}
 
 
@@ -678,7 +682,7 @@ def main() -> int:
             check("draft extra negative", draft_r.get("extra_negative"), base_body.draft_prompt("Demo", "back")[1])
             check("no character block on any dressed render", [r.get("style_character") is not None
                                                                for r in dressed_renders], [False, False, False])
-            check("fit prompt", fit_r.get("bare_prompt"), FIT_PROMPT)
+            check("fit prompt", fit_r.get("bare_prompt"), FIT_BACK)
             check("occasions", [r.get("occasion") for r in dressed_renders],
                   ["outfit_front", "outfit_back_draft", "outfit_back"])
             # The fit renders at the canvas size = the 8x8 base back (square
