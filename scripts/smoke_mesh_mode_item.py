@@ -36,12 +36,11 @@ Interfaces block.
     ({"name": "silk blouse"}) keeps "painted".
     Legacy: a Vest stored RAW (SQL into ``items.pieces``) as {"slots":
     ["top"], "own_mesh": true} — written before the mode existed. An
-    update_item of its name keeps outfit_piece == {..., "own_mesh": True} and
-    writes NO "mesh_mode" (the boot migration of Task 3 judges exactly the
-    items without a mode, then drops the flag); an outfit_piece update
-    without a mode (slots ["top"]) keeps "own_mesh": True and still no mode;
-    mesh_mode_of(vest) == "painted" meanwhile (the top default — the flag is
-    read by nothing but the migration), garment_kind_of None.
+    update_item of its name drops the flag (no carry-through since Task 3:
+    the boot migration ``figure_migration`` judged every stored flag into
+    the mode) and writes NO "mesh_mode"; an outfit_piece update without a
+    mode (slots ["top"]) still writes neither; mesh_mode_of(vest) ==
+    "painted" (the top default), garment_kind_of None.
 [4] base_body.outfit_body_mode (interim until Task 6): "mesh" iff a worn
     piece has mode "in_body"; no profile key is read.
     Demo's profile carries outfit_body_mode "mesh" and wears Shirt (top,
@@ -54,11 +53,12 @@ Interfaces block.
     no dict anywhere in shared/templates/character/base-character.json has
     "key" == "outfit_body_mode" or a key "outfit_body_mode"; no section id
     "outfit_body" (the Outfit bodies section "outfit_bodies" stays).
-    The FLAG is read nowhere in app/ but inventory.py's carry-through: the
-    lines of ``git grep -n own_mesh -- app`` that name it as a key —
+    The FLAG is read nowhere in app/ but the boot migration
+    ``app/core/figure_migration.py`` (Task 3): the lines of
+    ``git grep --untracked -n own_mesh -- app`` that name it as a key —
     ``"own_mesh"`` / ``'own_mesh'`` in quotes or ``.own_mesh`` — other than
     the mode constant ``OWN_MESH, PAINTED, IN_BODY = "own_mesh", …`` of
-    garment_set.py, are all in app/models/inventory.py. (A bare
+    garment_set.py, are all in app/core/figure_migration.py. (A bare
     ``git grep -c own_mesh`` cannot be the check: ``own_mesh`` is also the
     name of the mode value, so docstrings and identifiers about own-mesh
     pieces keep it.) Fails on the old code: the same scan at 136313bb (the
@@ -95,7 +95,7 @@ _MODE_CONSTANT = 'OWN_MESH, PAINTED, IN_BODY = "own_mesh", "painted", "in_body"'
 
 def flag_readers(rev=None):
     """Files under app/ whose lines name ``own_mesh`` as a key (block [5])."""
-    cmd = ["git", "grep", "-n", "own_mesh"] + ([rev] if rev else []) + ["--", "app"]
+    cmd = ["git", "grep"] + ([] if rev else ["--untracked"]) + ["-n", "own_mesh"] + ([rev] if rev else []) + ["--", "app"]
     out = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True).stdout
     files = set()
     for line in out.splitlines():
@@ -203,11 +203,11 @@ def main() -> int:
         invalidate()
         check("legacy fixture stored raw", (piece(vest).get("own_mesh"), "mesh_mode" in piece(vest)), (True, False))
         inventory.update_item(vest, {"name": "Old vest"})
-        check("legacy: name update keeps own_mesh", piece(vest).get("own_mesh"), True)
+        check("legacy: name update drops own_mesh", "own_mesh" in piece(vest), False)
         check("legacy: name update writes no mode", "mesh_mode" in piece(vest), False)
         check("legacy: name stored", inventory.get_item(vest).get("name"), "Old vest")
         inventory.update_item(vest, {"outfit_piece": {"slots": ["top"]}})
-        check("legacy: piece update keeps own_mesh", piece(vest).get("own_mesh"), True)
+        check("legacy: piece update writes no own_mesh", "own_mesh" in piece(vest), False)
         check("legacy: piece update writes no mode", "mesh_mode" in piece(vest), False)
         check("legacy: mode meanwhile = top default", garment_set.mesh_mode_of(inventory.get_item(vest)), "painted")
         check("legacy: kind", kind(vest), None)
@@ -246,7 +246,7 @@ def main() -> int:
     check("template names no outfit_body_mode / outfit_body section", template_names_mode(template), False)
     check("outfit bodies section stays",
           any(s.get("id") == "outfit_bodies" for s in template.get("sections") or []), True)
-    check("own_mesh key read only in inventory.py", flag_readers(), ["app/models/inventory.py"])
+    check("own_mesh key read only in figure_migration.py", flag_readers(), ["app/core/figure_migration.py"])
     from app.core import model3d_pipeline
     check("after_mode_switch gone", hasattr(model3d_pipeline, "after_mode_switch"), False)
     base_readers = flag_readers(BASE)

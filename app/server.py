@@ -693,6 +693,17 @@ async def lifespan(app: FastAPI):
     except Exception as _hme:
         logger.warning("Hair migration failed (retried at the next start): %s", _hme)
 
+    # Migration (plan 2026-11-12-unified-worn-pieces Task 3, ruling 4): every
+    # stored outfit piece gets its mode (outfit_piece.mesh_mode) from the
+    # removed own_mesh flag and its wearers' outfit_body_mode, then both keys
+    # leave the items and profiles. Once per world, world_kv-marked; before
+    # the garment refit sweep below reads the modes.
+    try:
+        from app.core.figure_migration import migrate_modes_once
+        migrate_modes_once()
+    except Exception as _fme:
+        logger.warning("Worn-piece mode migration failed (retried at the next start): %s", _fme)
+
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
 

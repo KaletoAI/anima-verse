@@ -732,16 +732,13 @@ def update_item(item_id: str,
 
     def _apply_updates(item: Dict[str, Any]) -> Dict[str, Any]:
         # An outfit_piece update that does not name ``mesh_mode`` (a partial
-        # edit) keeps the stored mode. A stored item WITHOUT a mode (written
-        # before the mode existed) stays without one, and its stored
-        # ``own_mesh`` flag is carried through unchanged: both are read only
-        # by the boot migration (Task 3 of plan 2026-11-12-unified-worn-pieces),
-        # which judges exactly the items without a mode and then drops the
-        # flag. An ``own_mesh`` key in the INPUT is ignored.
+        # edit) keeps the stored mode; a stored item WITHOUT a mode (an
+        # imported one) stays without one and reads its kind default. The
+        # removed ``own_mesh`` flag is never written: neither from the INPUT
+        # nor carried through from the stored piece (the boot migration
+        # ``app/core/figure_migration.py`` judged it into the mode).
         prev_piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
         prev_mesh_mode = prev_piece.get("mesh_mode")
-        prev_own_mesh_stored = "own_mesh" in prev_piece
-        prev_own_mesh = prev_piece.get("own_mesh")
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
         # Same for ``lift``; an explicit null resets it to the slot default.
         prev_lift = (item.get("outfit_piece") or {}).get("lift")
@@ -774,8 +771,6 @@ def update_item(item_id: str,
                 item["outfit_piece"]["mesh_mode"] = _clean_mesh_mode(op.get("mesh_mode"), slots)
             elif prev_mesh_mode is not None:
                 item["outfit_piece"]["mesh_mode"] = _clean_mesh_mode(prev_mesh_mode, slots)
-            if prev_own_mesh_stored:
-                item["outfit_piece"]["own_mesh"] = prev_own_mesh
             lift = _lift(op.get("lift") if "lift" in op else prev_lift)
             if lift is not None:
                 item["outfit_piece"]["lift"] = lift
