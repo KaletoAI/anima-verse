@@ -126,15 +126,17 @@ export interface HairDeckFitColour {
   delta_e_after?: number | null
 }
 
-/** HairDeck placement: forward shift (metres, +z) and forward tilt (degrees). */
+/** HairDeck placement: forward shift (metres, +z), forward tilt (degrees) and
+ *  hair width (scale of the sides' reach beyond the head, 1 = HairDeck's own). */
 export interface HairPlacement {
-  /** The manual values; null = automatic. */
+  /** The manual values; null = automatic (width: 1). */
   forward_m: number | null
   tilt_deg: number | null
+  width_scale: number | null
   /** The forward shift used when none is set. */
   default_forward_m: number
-  /** |value| bounds of a manual value. */
-  limits: { forward_m: number; tilt_deg: number }
+  /** |value| bounds of forward/tilt; [lo, hi] of the width. */
+  limits: { forward_m: number; tilt_deg: number; width_scale: [number, number] }
   /** What the newest HairDeck fit applied; null without one (or from before the correction). */
   fitted: {
     forward_m: number | null
@@ -142,6 +144,8 @@ export interface HairPlacement {
     tilt_deg: number | null
     tilt_source: 'auto' | 'manual' | null
     tilt_solve: string | null
+    width_scale?: number | null
+    width_source?: 'default' | 'manual' | null
     hairline_target_y: number | null
     hairline_y: number | null
   } | null

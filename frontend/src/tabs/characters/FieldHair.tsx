@@ -12,7 +12,7 @@
  *   is gated; the tab shows the fit's numbers against the server's limits so a
  *   refusal is visible, never silent. The HairDeck colour (POST
  *   /characters/{n}/hair/colour) and the placement (POST
- *   /characters/{n}/hair/placement {forward_m, tilt_deg}, null = automatic)
+ *   /characters/{n}/hair/placement {forward_m, tilt_deg, width_scale}, null = automatic)
  *   only re-fit from the stored HairDeck result.
  *
  * The method selector at the top stores the character's choice (POST
@@ -113,6 +113,7 @@ const HAIRDECK_FIT_CHIPS: ChipSpec[] = [
   { key: 'cap_tris', label: 'Scalp cap triangles', scale: 1, unit: '', digits: 0 },
   { key: 'forward_m', label: 'Forward shift', scale: 1000, unit: 'mm', digits: 1 },
   { key: 'tilt_deg', label: 'Forward tilt', scale: 1, unit: '°', digits: 1 },
+  { key: 'width_scale', label: 'Hair width', scale: 1, unit: '×', digits: 2 },
 ]
 
 function Swatch({ hex }: { hex: string }) {
@@ -206,25 +207,30 @@ function draftNumber(text: string, scale: number): number | null {
 
 const draftText = (v: number | null, scale: number) => (v === null ? '' : String(Math.round(v * scale * 100) / 100))
 
-/** The HairDeck placement: forward shift (shown in mm) and forward tilt (°).
- *  Empty = automatic. Keyed by the server values, so the drafts restart
+/** The HairDeck placement: forward shift (shown in mm), forward tilt (°) and
+ *  hair width (a factor on the sides' reach beyond the head). Empty =
+ *  automatic (width: 1). Keyed by the server values, so the drafts restart
  *  from them after a save. */
 function HairPlacementForm({ placement, busy, running, onApply }: {
   placement: HairPlacement
   busy: boolean
   /** A hair run is active: the placement waits for it. */
   running: boolean
-  onApply: (forward_m: number | null, tilt_deg: number | null) => void
+  onApply: (forward_m: number | null, tilt_deg: number | null, width_scale: number | null) => void
 }) {
   const { t } = useI18n()
   const [forward, setForward] = useState(draftText(placement.forward_m, 1000))
   const [tilt, setTilt] = useState(draftText(placement.tilt_deg, 1))
+  const [width, setWidth] = useState(draftText(placement.width_scale, 1))
   const f = draftNumber(forward, 1000)
   const a = draftNumber(tilt, 1)
+  const w = draftNumber(width, 1)
+  const [wLo, wHi] = placement.limits.width_scale
   const valid = (v: number | null, limit: number) => v === null || (!Number.isNaN(v) && Math.abs(v) <= limit)
   const ok = valid(f, placement.limits.forward_m) && valid(a, placement.limits.tilt_deg)
-  const same = f === placement.forward_m && a === placement.tilt_deg
-  const manual = placement.forward_m !== null || placement.tilt_deg !== null
+    && (w === null || (!Number.isNaN(w) && w >= wLo && w <= wHi))
+  const same = f === placement.forward_m && a === placement.tilt_deg && w === placement.width_scale
+  const manual = placement.forward_m !== null || placement.tilt_deg !== null || placement.width_scale !== null
   const fitted = placement.fitted
   const src = (s: string | null | undefined) => (s === 'manual' ? t('Manual') : t('Automatic'))
   return (
@@ -256,12 +262,31 @@ function HairPlacementForm({ placement, busy, running, onApply }: {
             onChange={(e) => setTilt(e.target.value)}
           />
         </label>
+        <label
+          className="ga-hint"
+          style={{ display: 'flex', gap: 6, alignItems: 'center' }}
+          title={t('Scales how far the hair reaches out beyond the sides of the head; 1 = as generated.')}
+        >
+          {t('Hair width (×)')}
+          <input
+            className="ga-input"
+            type="number"
+            step="0.05"
+            min={wLo}
+            max={wHi}
+            style={{ width: 90 }}
+            value={width}
+            placeholder="1"
+            disabled={busy}
+            onChange={(e) => setWidth(e.target.value)}
+          />
+        </label>
         <button
           type="button"
           className="ga-btn ga-btn-sm"
           disabled={busy || !ok || same}
           title={!ok ? t('Value out of range') : undefined}
-          onClick={() => onApply(f, a)}
+          onClick={() => onApply(f, a, w)}
         >
           {t('Apply')}
         </button>
@@ -269,7 +294,7 @@ function HairPlacementForm({ placement, busy, running, onApply }: {
           type="button"
           className="ga-btn ga-btn-sm"
           disabled={busy || !manual}
-          onClick={() => onApply(null, null)}
+          onClick={() => onApply(null, null, null)}
         >
           {t('Reset to automatic')}
         </button>
@@ -279,6 +304,7 @@ function HairPlacementForm({ placement, busy, running, onApply }: {
         <div className="ga-hint">
           {t('Last fit')}: {t('Forward shift')} {(fitted.forward_m * 1000).toFixed(1)} mm ({src(fitted.forward_source)})
           {' · '}{t('Forward tilt')} {fitted.tilt_deg.toFixed(1)}° ({src(fitted.tilt_source)})
+          {typeof fitted.width_scale === 'number' ? ` · ${t('Hair width')} ${fitted.width_scale.toFixed(2)}×` : ''}
           {fitted.hairline_y !== null
             ? ` · ${t('Hairline')} ${fitted.hairline_y.toFixed(3)} m`
               + (fitted.hairline_target_y !== null ? ` (${t('target')} ${fitted.hairline_target_y.toFixed(3)} m)` : '')
@@ -287,6 +313,8 @@ function HairPlacementForm({ placement, busy, running, onApply }: {
       ) : null}
       <div className="ga-hint">
         {t('Empty = automatic: a small forward shift and the tilt that brings the front hairline down to the brow line.')}
+        {' '}
+        {t('Hair width below 1 brings the sides closer to the head; the hairline stays.')}
         {' '}
         {t('A placement change re-fits the hair from the stored HairDeck result — HairDeck does not run again.')}
       </div>
@@ -424,8 +452,8 @@ export function FieldHair({ character, onEditAppearance }: {
 
   // Store the placement, then re-fit (like the colour: only the fit runs).
   const applyPlacement = useCallback(
-    (forward_m: number | null, tilt_deg: number | null) => call(
-      `/characters/${enc}/hair/placement`, { forward_m, tilt_deg }, () => (
+    (forward_m: number | null, tilt_deg: number | null, width_scale: number | null) => call(
+      `/characters/${enc}/hair/placement`, { forward_m, tilt_deg, width_scale }, () => (
         itemId && info?.method === 'hairdeck'
           ? apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, {})
           : undefined
@@ -537,11 +565,11 @@ export function FieldHair({ character, onEditAppearance }: {
         <>
           <div className="ga-fieldset-title">{t('Hair placement')}</div>
           <HairPlacementForm
-            key={`${hd.placement.forward_m ?? ''}|${hd.placement.tilt_deg ?? ''}`}
+            key={`${hd.placement.forward_m ?? ''}|${hd.placement.tilt_deg ?? ''}|${hd.placement.width_scale ?? ''}`}
             placement={hd.placement}
             busy={busy}
             running={garmentRunning(info)}
-            onApply={(forward, tilt) => { void applyPlacement(forward, tilt) }}
+            onApply={(forward, tilt, width) => { void applyPlacement(forward, tilt, width) }}
           />
         </>
       ) : null}
