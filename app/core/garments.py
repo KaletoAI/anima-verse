@@ -759,13 +759,19 @@ def _fit_seed(character_name: str, item_id: str, hsig: str, seed: int, attempt: 
     manual forward/tilt, else automatic) without publishing anything:
     ``{seed, result, hair_bytes, proxy_bytes, gates}`` — ``gates`` the
     verdict ``{attempt, seed, ok, reasons, limits, metrics}`` (``attempt`` =
-    the seed's position among the stored seeds, 1-based)."""
+    the seed's position among the stored seeds, 1-based). The seed's spring
+    chains (``chains_seed<s>.json`` + ``cards_seed<s>.json``) go to the fit
+    only when both files are there."""
     from app.core import garment_hair, garment_hairdeck
     from app.core import garment_store as gs
-    hair, proxy = _seed_files(gs.hairdeck_dir(character_name, item_id, hsig), seed)
+    folder = gs.hairdeck_dir(character_name, item_id, hsig)
+    hair, proxy = _seed_files(folder, seed)
     if hair is None or proxy is None:
         raise RuntimeError(f"HairDeck seed {seed} has no hair/proxy file")
     hair_bytes, proxy_bytes = hair.read_bytes(), proxy.read_bytes()
+    chains_file, cards_file = folder / f"chains_seed{seed}.json", folder / f"cards_seed{seed}.json"
+    chains = ({"chains_json": chains_file.read_bytes(), "cards_json": cards_file.read_bytes()}
+              if chains_file.is_file() and cards_file.is_file() else {})
     override = garment_hair.hair_colour_override(profile)
     named = garment_hair.profile_hair_colour(character_name, profile=profile)
     length_class = garment_hair.hair_length_class(character_name, profile=profile)
@@ -775,7 +781,7 @@ def _fit_seed(character_name: str, item_id: str, hsig: str, seed: int, attempt: 
                             colour_target=garment_hair.colour_target(override),
                             colour_profile=garment_hair.colour_target(named["hex"]) if named else None,
                             length_class=length_class,
-                            **garment_hair.hair_placement(profile))
+                            **garment_hair.hair_placement(profile), **chains)
     gates = {"attempt": attempt, "seed": seed, "ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": _hairdeck_limits(length_class), "metrics": result.metrics}
     return {"seed": seed, "result": result, "hair_bytes": hair_bytes, "proxy_bytes": proxy_bytes, "gates": gates}

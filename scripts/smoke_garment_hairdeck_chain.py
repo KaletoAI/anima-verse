@@ -243,7 +243,7 @@ def main() -> int:
         service.get_image_service = lambda: FakeService()
 
         def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target, forward_m=None, tilt_deg=None,
-                     colour_profile=None, length_class=None):
+                     colour_profile=None, length_class=None, chains_json=None, cards_json=None):
             import smoke_garment_fit as fx
             FIT_CALLS.append({"nohead": nohead_glb, "proxy": proxy_glb, "colour_target": colour_target,
                               "colour_profile": colour_profile, "length_class": length_class})

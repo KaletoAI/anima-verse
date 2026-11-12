@@ -769,7 +769,8 @@ def _clear_face(Fw: np.ndarray, Qp: np.ndarray, sdf, body, head_w: np.ndarray,
 def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, head_v: np.ndarray, chin: float,
                     top: float, forward_m: Optional[float], tilt_deg: Optional[float],
                     gates: Optional[Dict[str, Tuple[str, float, str]]] = None,
-                    width_scale: Optional[float] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                    width_scale: Optional[float] = None,
+                    chain_points: Optional[np.ndarray] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Apply the placement correction to the placed hair ``Q0`` and push it out: ``(push, placement report)``.
 
     ``forward_m`` None = ``DEFAULT_FORWARD_M``. ``tilt_deg`` None = auto: the hairline target comes from
@@ -788,7 +789,11 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
     A manual tilt is never searched: it is fitted as set, and the gate decides.
 
     ``width_scale`` (None = 1) narrows or widens the placed hair's sides (``narrow_sides``) after the forward /
-    tilt and before the push; the hairline the tilt aims with lies inside the head's width, so it is not moved."""
+    tilt and before the push; the hairline the tilt aims with lies inside the head's width, so it is not moved.
+
+    ``chain_points`` (HairDeck's spring-chain joints, already mapped with the hair's ``s, t`` like ``Q0``) get the
+    same correction with the FINAL forward / tilt / width (gate search included): returned as
+    ``push["chain_points"]``. They take no part in the push or in any decision here."""
     gates = GATES if gates is None else gates
     box = _head_box(body.positions, head_v)
     width = 1.0 if width_scale is None else float(width_scale)
@@ -801,9 +806,12 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
             pass
         side_profile = _side_profile(body.positions, side_v, box[0])
 
-    def placed(tilt: float) -> np.ndarray:
-        Q = adjust_placement(Q0, pivot, forward, tilt) if (forward or tilt) else Q0
+    def placed_points(X: np.ndarray, tilt: float) -> np.ndarray:
+        Q = adjust_placement(X, pivot, forward, tilt) if (forward or tilt) else X
         return narrow_sides(Q, side_profile, box[0], width) if width != 1.0 else Q
+
+    def placed(tilt: float) -> np.ndarray:
+        return placed_points(Q0, tilt)
 
     forward = DEFAULT_FORWARD_M if forward_m is None else float(forward_m)
     landmarks, landmark_source, rejected = placement_landmarks(body.positions, head_v, chin, top)
@@ -844,6 +852,10 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
                 break
         gate_search = {"tried": tried, "picked": picked}
 
+    if chain_points is not None:
+        cp = np.asarray(chain_points, np.float64).reshape(-1, 3)
+        pushed = dict(pushed, chain_points=np.array(placed_points(cp, tilt) if len(cp) else cp, np.float64))
+
     def r5(v: Optional[float]) -> Optional[float]:
         return None if v is None else round(float(v), 5)
 
@@ -877,11 +889,46 @@ def _push_passes(pushed: Dict[str, Any], gates: Optional[Dict[str, Tuple[str, fl
             and round(float((mag > MOVED_EPS_M).mean()), 4) <= gates["moved_share"][1])
 
 
+def _bind_chains(P: np.ndarray, F: np.ndarray, chains_json: Optional[bytes], cards_json: Optional[bytes]
+                 ) -> Tuple[Any, List[Any], Dict[str, Any]]:
+    """``(binding, chains, report.chains)`` of the hair ``P`` / ``F`` (HairDeck's space) on the seed's spring
+    chains (``hair_chains``): ``(None, [], …)`` — today's fit — without both files, for a card file that does not
+    match the mesh (``match`` ``"count"`` / ``"offset"`` / ``"invalid"``), a malformed chains file or no chain that
+    binds a card. ``chains``: the loaded chains (``hair_chains.load_chains``), which ``binding.chain`` and
+    ``binding.kept`` index."""
+    info: Dict[str, Any] = {"count": 0, "dropped": 0, "cards_bound": 0, "cards_rigid": 0, "match": None,
+                            "chains": []}
+    if chains_json is None or cards_json is None:
+        return None, [], info
+    from app.core import hair_chains
+    try:
+        loaded = hair_chains.load_chains(chains_json)
+        given = hair_chains.chain_count(chains_json)
+    except ValueError as e:
+        info.update(match="invalid", error=str(e)[:200])
+        return None, [], info
+    centrelines, match = hair_chains.card_centrelines(cards_json, P, F)
+    info["match"] = match["match"]
+    if match.get("centroid_max") is not None:
+        info["centroid_max"] = match["centroid_max"]
+    info["dropped"] = given
+    if centrelines is None:
+        return None, [], info
+    binding = hair_chains.bind(P, F, centrelines, loaded)
+    bound, rigid = hair_chains.card_counts(binding)
+    info.update(count=len(binding.kept), dropped=given - len(binding.kept), cards_bound=bound, cards_rigid=rigid,
+                cards_mismatch=binding.mismatch)
+    if not binding.kept:
+        return None, [], info
+    return binding, loaded, info
+
+
 def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                  colour_target: Optional[Tuple[float, float, float]],
                  forward_m: Optional[float] = None, tilt_deg: Optional[float] = None,
                  colour_profile: Optional[Tuple[float, float, float]] = None,
-                 length_class: Optional[str] = None, width_scale: Optional[float] = None) -> FitResult:
+                 length_class: Optional[str] = None, width_scale: Optional[float] = None,
+                 chains_json: Optional[bytes] = None, cards_json: Optional[bytes] = None) -> FitResult:
     """Fit HairDeck hair onto the rigged base body.
 
     ``nohead_glb``: the hair (node ``hair_cards``, ``COLOR_0``); ``proxy_glb``: the result file with the
@@ -894,6 +941,15 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     the head scaled (``narrow_sides``), None = 1. ValueError for a manual value beyond ``FORWARD_LIMIT_M`` /
     ``TILT_LIMIT_DEG`` / ``WIDTH_SCALE_LIMITS``. Returns the hair plus scalp cap as ONE garment (rigged bind space,
     Head -> Spine2 weights, cap all Head, ``COLOR_0``, double-sided), the metrics and the gates' verdict.
+
+    ``chains_json`` / ``cards_json``: the seed's ``chains_seed<s>.json`` / ``cards_seed<s>.json`` (both or none).
+    With both, the cards are bound to HairDeck's spring chains (``hair_chains.bind``, in HairDeck's space before the
+    placement), the joints get the hair's placement (``_place_and_push(chain_points=…)``) and follow their cards
+    through the push and the face clearing (``hair_chains.follow``); the chain-bound vertices are skinned to Head
+    and their chain bones (``hair_chains.chain_weights``), ``garment.joint_parents`` names the chain joints and
+    ``report.chains`` summarises them. The positions are those of the fit without chains (Ruling H8: no settle).
+    Without the files, a card file that does not match the mesh, or no chain that binds a card: today's fit,
+    ``report.chains.count`` 0.
     """
     from scipy.spatial import cKDTree
     _check_manual(forward_m, tilt_deg, width_scale)
@@ -918,9 +974,15 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     s, t, icp = place_proxy(proxy, cranium)
     resid = icp.pop("resid")
     pivot = s * (proxy.min(0) + proxy.max(0)) / 2 + t
+    # spring chains (HairDeck's space, before the placement)
+    binding, chains, chain_info = _bind_chains(P, F, chains_json, cards_json)
+    kept = [chains[i] for i in binding.kept] if binding is not None else []
+    chain_points = None
+    if kept:
+        chain_points = s * np.concatenate([c.joints for c in kept]) + t
     # placement correction + push-out on the rigged body
     pushed, placement = _place_and_push(s * np.asarray(P, np.float64) + t, pivot, F, U, body, head_v, chin, top,
-                                        forward_m, tilt_deg, gates, width_scale)
+                                        forward_m, tilt_deg, gates, width_scale, chain_points=chain_points)
     Pw, inv, sdf, d0, Qp, disp = (pushed[k] for k in ("Pw", "inv", "sdf", "d0", "Qp", "disp"))
     push_mag = np.linalg.norm(pushed["push"], axis=1)
     Qp, face = _clear_face(pushed["Fw"], Qp, sdf, body, head_w, placement["landmarks"], chin,
@@ -929,6 +991,20 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     mag = np.linalg.norm(disp, axis=1)
     X = Qp[inv]
     names, J, W = hair_weights(X, body)
+    joint_parents: Dict[str, str] = {}
+    if kept:
+        # the joints follow their own cards from the placed (welded ``Pw``) to the fitted hair (``Qp``)
+        from app.core import hair_chains
+        sizes = np.cumsum([len(c.joints) for c in kept])[:-1]
+        placed_joints = np.split(pushed["chain_points"], sizes)
+        fitted = hair_chains.follow(placed_joints, Pw, Qp, hair_chains.bound_vertices(binding, inv))
+        placed_chains = [hair_chains.Chain(index=c.index, joints=Jf, stiffness=c.stiffness)
+                         for c, Jf in zip(kept, fitted)]
+        names, J, W = hair_chains.chain_weights(names, J, W, binding, chains)
+        joint_parents = hair_chains.joint_parents(placed_chains)
+        chain_info["chains"] = [{"index": c.index, "bones": hair_chains.joint_names(c),
+                                 "weighted": hair_chains.weighted_bones(names, J, W, c),
+                                 "stiffness": round(float(c.stiffness), 4), "rigid": []} for c in placed_chains]
     normals = vertex_normals(X, F)
 
     if colour_target is None and colour_profile is not None:
@@ -952,7 +1028,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                           uvs=np.vstack([np.asarray(U, np.float64), np.zeros((nc, 2))]),
                           indices=np.vstack([F, Fc + len(X)]), joints=np.vstack([J, Jc]),
                           weights=np.vstack([W, Wc]), joint_names=names, image=b"", mime="", material=material,
-                          colors=np.vstack([colours, np.tile(cap_colour, (nc, 1))]))
+                          colors=np.vstack([colours, np.tile(cap_colour, (nc, 1))]), joint_parents=joint_parents)
 
     m = {
         # the push-out after the drape (``_push_max``); the drape is reported in ``report.push.drape``
@@ -995,5 +1071,6 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                     cranium_without_hair_within_2cm=round(float((near_hair > 0.02).mean()), 4)
                     if len(near_hair) else None),
         "vertices": {"hair": int(len(X)), "cap": int(nc)},
+        "chains": chain_info,
     }
     return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
