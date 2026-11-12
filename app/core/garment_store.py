@@ -323,9 +323,12 @@ def image_steps(kind: str) -> Tuple[str, ...]:
 
 
 def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any],
-                 item_id: Optional[str] = None) -> Dict[str, Any]:
+                 item_id: Optional[str] = None, state: Optional[str] = None) -> Dict[str, Any]:
     """The kind's own fingerprint inputs; clothing and footwear need
-    ``item_id`` (their inputs are the item's)."""
+    ``item_id`` (their inputs are the item's). ``state`` (clothing only, plan
+    2026-11-12-unified-worn-pieces Task 11b): the open / closed state the
+    inputs are for, None → the profile's worn state
+    (``garment_clothing.fsig_inputs``)."""
     if kind == "hair":
         from app.core import garment_hair
         return garment_hair.fsig_inputs(character_name, profile=profile)
@@ -338,7 +341,7 @@ def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any],
             from app.core import garment_footwear
             return garment_footwear.fsig_inputs(character_name, item, profile=profile)
         from app.core import garment_clothing
-        return garment_clothing.fsig_inputs(character_name, item, profile=profile)
+        return garment_clothing.fsig_inputs(character_name, item, profile=profile, state=state)
     raise ValueError(f"unknown garment kind {kind!r}")
 
 
@@ -440,18 +443,19 @@ def garment_hsig(character_name: str, item_id: str, *,
 
 
 def _edit_payload(character_name: str, item_id: str, kind: str, profile: Dict[str, Any], *,
-                  bsig: Optional[str] = None, base_images: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+                  bsig: Optional[str] = None, base_images: Optional[Dict[str, str]] = None,
+                  state: Optional[str] = None) -> Dict[str, Any]:
     """The edit-chain fingerprint payload (R10) — on the current base, or on
     the base ``bsig`` with the base view sha256 ``base_images`` (both given:
     the payload a group of images made on that base has with the item's
-    CURRENT inputs, ``edit_fsig_on``)."""
+    CURRENT inputs, ``edit_fsig_on``). ``state``: ``_kind_inputs``."""
     from app.core import base_body
     from app.core.model_refs import find_ref_image
     if bsig is None or base_images is None:
         bsig = base_body.base_signature(character_name, profile=profile)
         base_images = {view: base_body.file_sha256(find_ref_image(character_name, base_body._kind(view), bsig))
                        for view in GARMENT_VIEWS}
-    return {"kind": kind, **_kind_inputs(kind, character_name, profile, item_id),
+    return {"kind": kind, **_kind_inputs(kind, character_name, profile, item_id, state),
             "version": GARMENT_VERSION[kind], "bsig": bsig, "base_images": dict(base_images)}
 
 
@@ -470,7 +474,7 @@ def _md5(payload: Dict[str, Any]) -> str:
 
 
 def garment_fsig(character_name: str, item_id: str, *,
-                 profile: Optional[Dict[str, Any]] = None) -> str:
+                 profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
     (R10); hair made by HairDeck adds ``{method, hsig, colour, placement}``
     (the colour override, "" = automatic; the manual placement
@@ -480,13 +484,18 @@ def garment_fsig(character_name: str, item_id: str, *,
     was a fit input). Footwear is md5[:12] over ``{kind,
     ssig, insole_version, width_cap, fit_version}`` alone
     (``garment_footwear.fsig_inputs``) — no base signature, no base images.
-    ValueError when ``item_id`` is no garment of a known kind."""
+    A clothing piece worn OPEN is another garment (plan
+    2026-11-12-unified-worn-pieces Task 11b): ``state`` (``open`` /
+    ``closed``; None → the profile's worn state) enters its inputs —
+    ``"state": "open"`` and the ", worn open" fragment; a closed piece's fsig
+    is the one it had before the option. ValueError when ``item_id`` is no
+    garment of a known kind (or for a bad ``state``)."""
     kind = _garment_kind(item_id)
     profile = _profile_of(character_name, profile)
     if kind == "footwear":
         # No base in it (spec § 5.6): a base change makes the fit stale, never the source.
         return _md5({"kind": kind, **_kind_inputs(kind, character_name, profile, item_id)})
-    payload = _edit_payload(character_name, item_id, kind, profile)
+    payload = _edit_payload(character_name, item_id, kind, profile, state=state)
     method = kind_method(kind, character_name, profile)
     if method == HAIRDECK:
         from app.core import garment_hair
@@ -564,8 +573,34 @@ def _accepted_on(record: Dict[str, Any], base_model_sha: str) -> bool:
     return True
 
 
+def fit_state(record: Dict[str, Any]) -> str:
+    """The open / closed state a fit record was made for: ``"open"`` when it says so (plan Task 11b), else
+    ``"closed"`` — every record from before the option, and every non-clothing fit."""
+    return "open" if record.get("state") == "open" else "closed"
+
+
+def item_state(character_name: str, item_id: str, profile: Dict[str, Any], state: Optional[str] = None) -> str:
+    """The state a garment item is judged in: ``state`` when given, else the profile's worn state of a closable
+    clothing piece (``garment_clothing.state_of``); ``closed`` for every other garment (hair, footwear, an
+    unknown item)."""
+    from app.core import garment_clothing
+    from app.models.inventory import get_item
+    item = get_item(item_id)
+    if not item or _garment_kind_or_none(item_id) != "clothing":
+        return "closed"
+    return garment_clothing.state_of(item, profile, state)
+
+
+def _garment_kind_or_none(item_id: str) -> Optional[str]:
+    try:
+        return _garment_kind(item_id)
+    except ValueError:
+        return None
+
+
 def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
-                 profile: Optional[Dict[str, Any]] = None) -> Optional[Tuple[Path, Dict[str, Any]]]:
+                 profile: Optional[Dict[str, Any]] = None,
+                 state: Optional[str] = None) -> Optional[Tuple[Path, Dict[str, Any]]]:
     """The fit to serve for a garment item on the base model ``base_model_sha``
     (R11): the current-fsig fit when its record is accepted on that model,
     else the newest (GLB mtime) accepted fit of the item on that model made
@@ -573,30 +608,38 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     the other method's hair), else None. An empty ``base_model_sha`` (no base
     model) has no fit. A footwear fit of an older fit version is never
     served (``_accepted_on``). Hair whose method is ``BODY`` is never
-    served: the hair is part of the body mesh."""
+    served: the hair is part of the body mesh. Per open / closed state (plan
+    2026-11-12-unified-worn-pieces Task 11b, ruling A2): ``state`` (None →
+    the profile's worn state, ``item_state``) names the fsig and filters the
+    fallback — a piece worn open is never served its closed fit, nor the
+    other way round."""
     if not base_model_sha:
         return None
     profile = _profile_of(character_name, profile)
     try:
-        current: Optional[str] = garment_fsig(character_name, item_id, profile=profile)
+        state = item_state(character_name, item_id, profile, state)
+        current: Optional[str] = garment_fsig(character_name, item_id, profile=profile, state=state)
         method = garment_method(character_name, item_id, profile=profile)
     except ValueError:
         current, method = None, EDIT_CHAIN
+        state = state if state in ("open", "closed") else "closed"
     if method == BODY:
         return None
     if current is not None:
         path = garment_path(character_name, item_id, current, "fit")
         record = read_record(path.with_suffix(".json"))
-        if path.is_file() and _accepted_on(record, base_model_sha):
+        if path.is_file() and _accepted_on(record, base_model_sha) and fit_state(record) == state:
             return path, record
-    return newest_accepted_fits(character_name, item_id, base_model_sha=base_model_sha).get(method)
+    return newest_accepted_fits(character_name, item_id, base_model_sha=base_model_sha, state=state).get(method)
 
 
-def newest_accepted_fits(character_name: str, item_id: str, *,
-                         base_model_sha: str = "") -> Dict[str, Tuple[Path, Dict[str, Any]]]:
+def newest_accepted_fits(character_name: str, item_id: str, *, base_model_sha: str = "",
+                         state: Optional[str] = None) -> Dict[str, Tuple[Path, Dict[str, Any]]]:
     """method -> ``(fit GLB, record)`` of the item's newest (GLB mtime)
     accepted fit made with that method (``fit_method``); with
-    ``base_model_sha`` only fits accepted on that base model. Read-only:
+    ``base_model_sha`` only fits accepted on that base model; with ``state``
+    (``open`` / ``closed``) only fits made for that state (``fit_state``: a
+    record without ``state`` is closed), None = every state. Read-only:
     never creates ``garments/``."""
     best: Dict[str, Tuple[int, Path, Dict[str, Any]]] = {}
     root = _root(character_name)
@@ -610,6 +653,8 @@ def newest_accepted_fits(character_name: str, item_id: str, *,
             if record.get("accepted") is not True:
                 continue
             if base_model_sha and not _accepted_on(record, base_model_sha):
+                continue
+            if state is not None and fit_state(record) != state:
                 continue
             try:
                 mtime = path.stat().st_mtime_ns

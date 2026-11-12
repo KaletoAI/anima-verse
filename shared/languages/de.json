@@ -4659,6 +4659,19 @@
     "⏳ building": "⏳ wird gebaut",
     "⏳ mesh · {cost}": "⏳ Mesh · {cost}",
     "⏳ waiting for the Build": "⏳ wartet auf den Build",
-    "✓ ready": "✓ fertig"
+    "✓ ready": "✓ fertig",
+    "Footwear has no open/closed state": "Schuhwerk hat keinen offenen/geschlossenen Zustand",
+    "Open mesh built": "Offenes Mesh gebaut",
+    "Closed mesh built": "Geschlossenes Mesh gebaut",
+    "Build the open mesh": "Offenes Mesh bauen",
+    "Build the closed mesh": "Geschlossenes Mesh bauen",
+    "Worn open or closed": "Offen oder geschlossen getragen",
+    "How the piece is worn now — saved at once, like putting it on": "Wie das Teil jetzt getragen wird — sofort gespeichert, wie beim Anziehen",
+    "A jacket, coat or shirt that can be worn open: its wearers get a Closed / Open toggle. Applies to every wearer; changing it spends nothing.": "Eine Jacke, ein Mantel oder Hemd, das offen getragen werden kann: seine Träger bekommen einen Schalter Geschlossen / Offen. Gilt für alle Träger; die Änderung kostet nichts.",
+    "Can be worn open": "Kann offen getragen werden",
+    "The description already says open/closed — the toggle adds to it": "Die Beschreibung nennt schon offen/geschlossen — der Schalter ergänzt sie",
+    "Only this piece’s chain; the Build makes only the worn state’s mesh": "Nur die Kette dieses Teils; der Build baut nur das Mesh des getragenen Zustands",
+    "Open / closed: yes — set in a wearer's Wardrobe": "Offen / geschlossen: ja — wird in der Garderobe eines Trägers eingestellt",
+    "Open / closed: no — set in a wearer's Wardrobe": "Offen / geschlossen: nein — wird in der Garderobe eines Trägers eingestellt"
   }
 }

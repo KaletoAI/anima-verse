@@ -171,7 +171,7 @@ def main() -> int:
                 Path(output_path).write_bytes(rigged_bytes)
                 return {"ok": True, "path": output_path, "backend": "fake-rig", "rig": rig}
 
-        def run_locked(character_name, item, kind, wanted, view, force):
+        def run_locked(character_name, item, kind, wanted, view, force, state=None):
             item_id = item["id"]
             fsig = gs.garment_fsig(character_name, item_id)
             if item_id in REFUSE:

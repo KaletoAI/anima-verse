@@ -9,7 +9,10 @@ body actions):
   ("up_to_date" | "changes" | "building" | "failed"), changes
   (``figure.pending_changes``), cost (``figure_build.cost``), build
   (``figure_build.state``), wanted, delivered, served_url, worn: [{slot,
-  item_id, name, mode, state, note, interim, left_out, failure}], hair:
+  item_id, name, mode, state, note, interim, left_out, failure, piece_state
+  ("open" | "closed" | null — null: not closable; ``state`` is the
+  readiness), other_state_jobs (own mesh only: the hub jobs of the other
+  state's mesh, null unknown)}], hair:
   {mode, state, note}, body: {plain, shape, texture}}``. 404 for an unknown
   character. With ``?plain=1`` it also carries ``plain_body``: the plain
   (base) body's own payload — ``{pipeline, humanoid, signature, images,

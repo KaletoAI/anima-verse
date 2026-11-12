@@ -414,6 +414,10 @@ def _garment_roots(character_name: str) -> Optional[Tuple[Set[str], Set[str], Se
     current base model — nothing per other method: the clothing edit-chain
     groups a feet item accumulated before it became footwear (``images/
     <item>_<fsig>_*``, ``failed/…``, an old edit-chain fit) are unreachable.
+    OPEN / CLOSED (plan 2026-11-12-unified-worn-pieces Task 11b): a closable
+    own-mesh clothing piece keeps the above for BOTH states — the fsig and
+    the served fit of each, and the newest accepted fits per (method, state)
+    — so toggling back never costs a job.
     None when the roots cannot be computed (then nothing is judged — never
     delete on a guess)."""
     try:
@@ -430,23 +434,31 @@ def _garment_roots(character_name: str) -> Optional[Tuple[Set[str], Set[str], Se
             if item is None:
                 continue  # a deleted item keeps nothing
             kept_items.add(item_id)
-            try:
-                keep.add(_garment_key(item_id, garment_store.garment_fsig(character_name, item_id)))
-            except ValueError:
-                pass  # no current fingerprint (e.g. the flag is off): the accepted fits below stay
-            if garment_set.garment_kind_of(item) == garment_set.HAIR:
+            kind = garment_set.garment_kind_of(item)
+            # Both states of a closable clothing piece; None = the worn state of every other garment.
+            states = (("closed", "open") if kind == garment_set.CLOTHING and garment_set.closable_of(item)
+                      else (None,))
+            for state in states:
+                try:
+                    keep.add(_garment_key(item_id, garment_store.garment_fsig(character_name, item_id,
+                                                                              state=state)))
+                except ValueError:
+                    pass  # no current fingerprint (e.g. the flag is off): the accepted fits below stay
+                if base and base[1]:
+                    fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1], state=state)
+                    parsed = garment_store.parse_name(fit[0]) if fit else None
+                    if parsed:
+                        keep.add(_garment_key(*parsed))
+            if kind == garment_set.HAIR:
                 hair.add(item_id)
-            if base and base[1]:
-                fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1])
-                parsed = garment_store.parse_name(fit[0]) if fit else None
-                if parsed:
-                    keep.add(_garment_key(*parsed))
-            if garment_set.garment_kind_of(item) == garment_set.FOOTWEAR:
+            if kind == garment_set.FOOTWEAR:
                 continue  # the current fsig and the served shoe fit — never another method's groups
-            newest = list(garment_store.newest_accepted_fits(character_name, item_id).values())
-            if base and base[1]:
-                newest += garment_store.newest_accepted_fits(
-                    character_name, item_id, base_model_sha=base[1]).values()
+            newest = []
+            for state in states:
+                newest += garment_store.newest_accepted_fits(character_name, item_id, state=state).values()
+                if base and base[1]:
+                    newest += garment_store.newest_accepted_fits(
+                        character_name, item_id, base_model_sha=base[1], state=state).values()
             for path, _record in newest:
                 parsed = garment_store.parse_name(path)
                 if parsed:

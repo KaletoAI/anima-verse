@@ -29,6 +29,13 @@ export interface OutfitOptions {
 export const getOutfitOptions = (character: string) =>
   apiGet<OutfitOptions>(`/characters/${encodeURIComponent(character)}/outfit-options`)
 
+/** POST /characters/{name}/outfit-options/piece-state — wear a closable piece open or closed (unified-worn-pieces
+ *  Addendum A): saved at once like an equip (history, the automatic Build when it is on); 400 with the reason for
+ *  a piece that is not closable or not worn. */
+export const setPieceState = (character: string, itemId: string, state: 'open' | 'closed') =>
+  apiPost<{ piece_state: Record<string, 'open'> }>(
+    `/characters/${encodeURIComponent(character)}/outfit-options/piece-state`, { item_id: itemId, state })
+
 /** POST /characters/{name}/outfit-options — `null` stores the default (over); the served model re-assembles. */
 export const setOutfitOptions = (character: string, bootHem: BootHemMode | null) =>
   apiPost<OutfitOptions>(`/characters/${encodeURIComponent(character)}/outfit-options`, { boot_hem: bootHem })

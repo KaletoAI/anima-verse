@@ -224,13 +224,20 @@ def predicted_variant(character_name: str, sets: WornSets, items: Optional[list]
                                      mesh={"intended": sorted(sets.own)}, profile=profile)
 
 
+def _state_in(sets: WornSets, item_id: str) -> str:
+    """``"open"`` / ``"closed"``: the state ``sets`` wear a piece in (``WornSets.open``)."""
+    from app.core.outfit_options import CLOSED, OPEN
+    return OPEN if item_id in sets.open else CLOSED
+
+
 def _painted_now(character_name: str, sets: WornSets, *, bsig: str) -> WornSets:
     """``sets`` as a build paints them NOW (ruling 2, the interim rule): an
     own-mesh CLOTHING piece without an accepted fit on the base model of
     ``bsig`` is painted meanwhile; footwear is never painted (left out until
     its fit exists). Read-only — the same rule as today's build
     (``base_body.resolve_figure``: left out = the fitted pieces plus all
-    footwear)."""
+    footwear). Per state (plan Task 11b): a piece worn open needs its OPEN
+    fit, the closed one never stands in."""
     from dataclasses import replace
     from app.core import base_body, garment_set, garment_store
     if not sets.own:
@@ -238,7 +245,7 @@ def _painted_now(character_name: str, sets: WornSets, *, bsig: str) -> WornSets:
     base_sha = base_body.base_model_sha256(character_name, bsig)
     own = {item_id: kind for item_id, kind in sets.own.items()
            if kind == garment_set.FOOTWEAR or (base_sha and garment_store.accepted_fit(
-               character_name, item_id, base_model_sha=base_sha) is not None)}
+               character_name, item_id, base_model_sha=base_sha, state=_state_in(sets, item_id)) is not None)}
     if own == sets.own:
         return sets
     return replace(sets, own=own, painted=tuple(sorted({*sets.painted, *(set(sets.own) - set(own))})))
@@ -304,7 +311,9 @@ def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) ->
 #    piece needs that base fit (its garment mesh exists) and no fit refused on
 #    the shape (``garments.body_fit``: an accepted or still-to-be-made CPU fit
 #    of the Build's fits step counts — the interim rule waits for MESHES, not
-#    for CPU work).
+#    for CPU work). Per state (plan Task 11b): a clothing piece worn OPEN
+#    needs its OPEN fit — without it, it is painted ("its open mesh", the
+#    painted text says "…, worn open"), never served with the closed mesh.
 # 3. Hair: HairDeck without a fit on the delivered shape is shown as the
 #    plain body has it — ``"body"`` when that body is haired
 #    (``base_body.stored_base_haired``), else ``"bald"``.
@@ -331,6 +340,8 @@ PAINT_NEEDS_PLAIN = "In the body here: painting needs the plain body"
 INTERIM_PAINTED = "Shown painted until {what} is built"
 WHAT_SHAPE = "its body shape"
 WHAT_OWN_MESH = "its own mesh"
+#: A piece worn open whose OPEN mesh is missing (plan Task 11b: never served with the closed mesh).
+WHAT_OPEN_MESH = "its open mesh"
 #: ``Figure.hair``.
 HAIR_BODY, HAIR_HAIRDECK, HAIR_BALD = "body", "hairdeck", "bald"
 #: ``pending_changes`` keys of the body and the hair.
@@ -497,13 +508,14 @@ def _shape_stored(character_name: str, shape: str, bsig: str) -> bool:
         is not None
 
 
-def _not_fitted_reason(character_name: str, item_id: str, *, base_sha: str, profile: Dict[str, Any]) -> str:
-    """Why an own-mesh piece has no fit: its chain's persisted failure
+def _not_fitted_reason(character_name: str, item_id: str, *, base_sha: str, profile: Dict[str, Any],
+                       state: Optional[str] = None) -> str:
+    """Why an own-mesh piece has no fit (in ``state``, None: the worn one): its chain's persisted failure
     (``base_body.MESH_ITEM_CHAIN_FAILED``), else ``NO_MESH_FIT`` /
     ``BASE_MODEL_MISSING``."""
     from app.core import base_body, garments
     try:
-        failure = garments.cached_failure(character_name, item_id, profile=profile)
+        failure = garments.cached_failure(character_name, item_id, profile=profile, state=state)
     except Exception:  # noqa: BLE001 — a reason, never a failure of the resolver
         failure = None
     if failure and failure.get("step") and failure.get("error"):
@@ -512,16 +524,20 @@ def _not_fitted_reason(character_name: str, item_id: str, *, base_sha: str, prof
 
 
 def _fit_on(character_name: str, item_id: str, *, shape: str, base_sha: str,
-            profile: Dict[str, Any]) -> Tuple[bool, str]:
+            profile: Dict[str, Any], state: Optional[str] = None) -> Tuple[bool, str]:
     """``(fitted, reason)`` of a garment (own-mesh piece or HairDeck hair) on
-    the delivered ``shape`` (rule 2 of the block above)."""
+    the delivered ``shape`` (rule 2 of the block above) — for a clothing
+    piece in ``state`` (the figure's open set; None: the profile's): a piece
+    worn open needs its OPEN fit (plan Task 11b)."""
     from app.core import garment_store, garments
     if not item_id:
         return False, ""
-    base_fit = (garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha, profile=profile)
+    base_fit = (garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha, profile=profile,
+                                           state=state)
                 if base_sha else None)
     if base_fit is None:
-        return False, _not_fitted_reason(character_name, item_id, base_sha=base_sha, profile=profile)
+        return False, _not_fitted_reason(character_name, item_id, base_sha=base_sha, profile=profile,
+                                         state=state)
     if is_plain(shape):
         return True, ""
     on_shape = garments.body_fit(character_name, item_id, body_id=shape,
@@ -565,7 +581,9 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     left_out: Dict[str, str] = {}
     footwear: List[str] = []
     for item_id, kind in sorted(sets.own.items()):
-        fitted, reason = _fit_on(character_name, item_id, shape=shape, base_sha=base_sha, profile=profile)
+        state = _state_in(sets, item_id)
+        fitted, reason = _fit_on(character_name, item_id, shape=shape, base_sha=base_sha, profile=profile,
+                                 state=state)
         if fitted:
             own.append(item_id)
         elif kind == garment_set.FOOTWEAR:
@@ -575,7 +593,7 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
             left_out[item_id] = reason   # 4. Ruling P6: never painted on a meshed shape
         else:
             painted.add(item_id)
-            interim[item_id] = INTERIM_PAINTED.format(what=WHAT_OWN_MESH)
+            interim[item_id] = INTERIM_PAINTED.format(what=WHAT_OPEN_MESH if state == "open" else WHAT_OWN_MESH)
     # 3. Hair.
     hair = wanted.hair
     if hair == HAIR_HAIRDECK and not _fit_on(character_name, sets.hair_item, shape=shape, base_sha=base_sha,

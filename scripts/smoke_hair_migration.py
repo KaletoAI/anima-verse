@@ -56,7 +56,11 @@ EXPECTED, BY HAND FROM THE SPEC § Design 6 AND THE CORRECTION
 [2] Proof the migration is new work: at 8f4f306c (the start of Task 3)
     app/core/hair_migration.py does not exist and config.py names no
     _migrate_removed_hair_methods; the GC rules that judge garment groups are
-    unchanged since 8f4f306c — byte-identical there and in the work tree:
+    unchanged since 8f4f306c — byte-identical there and at c7f0a002 (the
+    last commit before plan 2026-11-12-unified-worn-pieces Task 11b, which
+    made ``_garment_roots`` keep the groups of BOTH open / closed states of a
+    closable piece — more kept, never less; the dry run below checks the work
+    tree):
     artefact_graph ``scan`` (node kinds, "unknown" = source/), ``_hair_hsig``,
     ``_judge``'s garments block ("# 5. Garments" up to "# 6. Temp work
     folders.") and outfit_cache_gc ``_garment_roots`` (the whole two files
@@ -94,6 +98,8 @@ sys.path.insert(0, str(ROOT))
 
 #: The commit Task 3 started from — the old code of the proof in [2].
 BASELINE = "8f4f306c"
+#: The rules compared with BASELINE: the commit before Task 11b changed ``_garment_roots`` (see [2]).
+RULES_AT = "c7f0a002"
 FAILS = []
 
 
@@ -327,8 +333,8 @@ def main() -> int:
         old_cfg = git("show", f"{BASELINE}:app/core/config.py").stdout
         check(f"[2] {BASELINE}: config.py readable, no hair config migration",
               ("_apply_file_migrations" in old_cfg, "_migrate_removed_hair_methods" in old_cfg), (True, False))
-        old_rules, now_rules = gc_garment_rules(BASELINE), gc_garment_rules(None)
-        check(f"[2] GC garment rules unchanged since {BASELINE}",
+        old_rules, now_rules = gc_garment_rules(BASELINE), gc_garment_rules(RULES_AT)
+        check(f"[2] GC garment rules unchanged from {BASELINE} to {RULES_AT}",
               {k: (old_rules[k] is not None, old_rules[k] == now_rules[k]) for k in old_rules},
               {k: (True, True) for k in old_rules})
         dry = ag.collect("Bea", dry_run=True, explicit=True)

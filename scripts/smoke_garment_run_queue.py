@@ -73,7 +73,7 @@ def main() -> int:
         live_lock = threading.Lock()
         gate_a = threading.Event()
 
-        def recorder(character_name, item_id, *, steps=None, view=None, force=False):
+        def recorder(character_name, item_id, *, steps=None, view=None, force=False, state=None):
             with live_lock:
                 live["now"] += 1
                 live["max"] = max(live["max"], live["now"])
@@ -90,7 +90,7 @@ def main() -> int:
                 with live_lock:
                     live["now"] -= 1
 
-        garments.check_run = lambda character_name, item_id, steps=None, view=None: None
+        garments.check_run = lambda character_name, item_id, steps=None, view=None, state=None: None
         garments.run_garment = recorder
 
         def wait_for(pred, timeout=10.0):

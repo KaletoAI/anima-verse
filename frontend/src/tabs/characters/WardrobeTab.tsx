@@ -22,9 +22,11 @@ import { apiGet, apiPost, apiDelete, setOutfitOptions, type BootHemMode, type Bo
 import { useToast } from '../../lib/Toast'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
-import { GarmentPieceDialog, MeshModeSelect, PieceStatusChip, WearersLine } from './WardrobeGarment'
+import {
+  ClosableCheckbox, GarmentPieceDialog, MeshModeSelect, PieceStateToggle, PieceStatusChip, WearersLine,
+} from './WardrobeGarment'
 import { WardrobeHairRow } from './WardrobeHairRow'
-import { meshModeOf } from './figureModel'
+import { closableDisabled, meshModeOf } from './figureModel'
 import { useWardrobeGarments } from './useGarment'
 import { ConfirmDialog, PromptPreview } from '@anima/player-ui'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
@@ -468,7 +470,8 @@ export function WardrobeTab({ character, onEditAppearance, onOpenFigure }: {
                   onClick={() => removeItem(it.item_id)}>✕</button>
               </div>
               {garments ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 50, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: 50, minWidth: 0,
+                  flexWrap: 'wrap' }}>
                   <MeshModeSelect itemId={it.item_id} pipeline={garments.pipeline} disabled={busy}
                     mode={garments.modes?.[it.item_id] || meshModeOf('', it.slots)}
                     feet={it.slots.length > 0 && it.slots.every((s) => s === 'feet')}
@@ -476,6 +479,15 @@ export function WardrobeTab({ character, onEditAppearance, onOpenFigure }: {
                       setModeChanged((prev) => ({ ...prev, [it.item_id]: (prev[it.item_id] || 0) + 1 }))
                       void load()
                     }} />
+                  <ClosableCheckbox itemId={it.item_id} closable={!!garments.closable?.[it.item_id]}
+                    slots={it.slots} namesState={!!garments.names_state?.[it.item_id]} disabled={busy}
+                    onChanged={() => { void reloadGarments() }} />
+                  {it.equipped && garments.closable?.[it.item_id] && !closableDisabled(it.slots) ? (
+                    <PieceStateToggle character={character} itemId={it.item_id} disabled={busy}
+                      state={garments.piece_state?.[it.item_id] === 'open' ? 'open' : 'closed'}
+                      autoBuild={!!garments.auto_build}
+                      onChanged={() => { void reloadGarments(); void load() }} />
+                  ) : null}
                   {garmentStatus ? <PieceStatusChip status={garmentStatus} name={it.name} /> : null}
                   {garmentStatus && !(it.equipped && garments.pipeline) ? (
                     <button style={{ ...btn(), marginLeft: 'auto' }} aria-haspopup="dialog"

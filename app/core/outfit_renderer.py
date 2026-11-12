@@ -16,8 +16,9 @@ Key design decisions:
 - Open / closed (plan 2026-11-12-unified-worn-pieces Addendum A, D-A1 / D-A4):
   a closable piece worn open says so (`piece_text`, ``OPEN_WORDS``) and covers
   nothing — its `covers` count as `partially_covers`, so the piece under it
-  shows in the opening. A closed closable piece says ``CLOSED_WORDS`` only in
-  2D / chat text (`mesh_input=False`): every mesh input stays byte-identical.
+  shows in the opening. A closed piece says nothing (ruling A7): every text is
+  byte-identical to before the option. `covering_pieces` is the one coverage
+  rule outside the text (ruling A8): an open piece covers no front slot.
 """
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -151,19 +152,32 @@ def _is_open(iid: str, piece_state: Optional[Dict[str, str]]) -> bool:
     return bool(piece_state) and piece_state.get(iid) == OPEN
 
 
-def piece_text(item: Dict[str, Any], state: str, *, mesh_input: bool) -> str:
+def piece_text(item: Dict[str, Any], state: str) -> str:
     """The text of one worn piece in ``state`` (``open`` / ``closed``): its ``prompt_fragment``, plus
-    ``", worn open"`` when open, plus ``", worn closed"`` when closed, closable and not a mesh input (D-A1: a closed
-    piece changes no mesh input). A piece that is not closable is its fragment in every case; an empty fragment
-    stays empty."""
+    ``", worn open"`` when open and the item is closable. Closed is the fragment alone (ruling A7: no words, every
+    text as before the option); an empty fragment stays empty."""
     from app.core.garment_set import closable_of
-    from app.core.outfit_options import CLOSED_WORDS, OPEN, OPEN_WORDS
+    from app.core.outfit_options import OPEN, OPEN_WORDS
     frag = ((item or {}).get("prompt_fragment") or "").strip()
-    if not frag or not closable_of(item):
-        return frag
-    if state == OPEN:
+    if frag and state == OPEN and closable_of(item):
         return f"{frag}, {OPEN_WORDS}"
-    return frag if mesh_input else f"{frag}, {CLOSED_WORDS}"
+    return frag
+
+
+def covering_pieces(profile: Optional[Dict[str, Any]],
+                    equipped_pieces: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """The worn ``{slot: item id}`` that COVER the body in front: every worn piece except the ones worn open
+    (``outfit_options.piece_states`` of ``profile`` over ``equipped_pieces``, default the profile's
+    ``equipped_pieces``). Ruling A8: an open piece covers neither the slot it is worn on nor its ``covers`` — an
+    open jacket over nothing leaves the upper body bare. The one rule behind every coverage check outside the
+    outfit text: the bare-slot summary and the outfit-decision hint (``thought_context``), the wardrobe's free
+    slots and body-slot exposure (``body_slots.is_slot_exposed``, and with it the exposed fragments and LoRAs of
+    the image prompts). With nothing open it is the worn set itself (closed reads as before)."""
+    from app.core.outfit_options import OPEN, piece_states
+    pieces = (profile or {}).get("equipped_pieces") if equipped_pieces is None else equipped_pieces
+    worn = {str(slot): str(iid) for slot, iid in (pieces or {}).items() if iid} if isinstance(pieces, dict) else {}
+    opened = piece_states(profile, worn) if worn else {}
+    return {slot: iid for slot, iid in worn.items() if opened.get(iid) != OPEN}
 
 
 def collect_covered_slots(equipped_pieces: Dict[str, str],
@@ -209,8 +223,6 @@ def _resolve_partial_covers(
     equipped_pieces: Dict[str, str],
     slot_order: List[str],
     piece_state: Optional[Dict[str, str]] = None,
-    *,
-    mesh_input: bool = False,
 ) -> Tuple[Dict[str, Tuple[str, str]], Set[str]]:
     """Returns (partially_covered_map, suppressed_slots).
 
@@ -234,7 +246,7 @@ def _resolve_partial_covers(
             continue
         op = item.get("outfit_piece") or {}
         is_open = _is_open(iid, piece_state)
-        cov_frag = piece_text(item, "open" if is_open else "closed", mesh_input=mesh_input)
+        cov_frag = piece_text(item, "open" if is_open else "closed")
         targets = list(op.get("partially_covers") or [])
         if is_open:
             targets += list(op.get("covers") or [])
@@ -342,8 +354,7 @@ def render_outfit(
         from app.core.outfit_options import piece_states
         piece_state = piece_states(profile, pieces)
     covered = collect_covered_slots(pieces, piece_state)
-    partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS), piece_state,
-                                                  mesh_input=mesh_input)
+    partial, suppressed = _resolve_partial_covers(pieces, list(VALID_PIECE_SLOTS), piece_state)
 
     # 1) Piece fragments
     shown_slots = None
@@ -356,7 +367,7 @@ def render_outfit(
     ):
         if shown_slots is not None and slot not in shown_slots:
             continue
-        frag = piece_text(item, "open" if _is_open(iid, piece_state) else "closed", mesh_input=mesh_input)
+        frag = piece_text(item, "open" if _is_open(iid, piece_state) else "closed")
         if not frag:
             continue
         if slot in partial:
@@ -397,9 +408,15 @@ def render_outfit(
         from app.core.body_slots import exposed_slot_loras
         # profile + effective pieces: the variant path calls render_outfit
         # WITHOUT character_name and may override the equipped state
-        # (outfit-set previews) — exposure must follow what is RENDERED.
+        # (outfit-set previews) — exposure must follow what is RENDERED,
+        # the open pieces included (an open piece covers nothing, A8).
+        exposure_profile = profile
+        options = profile.get("equipped_options") if isinstance(profile, dict) else None
+        if piece_state or (isinstance(options, dict) and options.get("piece_state")):
+            from app.core.outfit_options import with_piece_state
+            exposure_profile = with_piece_state(profile, piece_state)
         slot_loras = exposed_slot_loras(character_name or "",
-                                        profile=profile,
+                                        profile=exposure_profile,
                                         equipped_pieces=dict(pieces or {}),
                                         back_view=back_view, mesh_input=mesh_input,
                                         scope="portrait" if portrait_only else "")

@@ -343,9 +343,15 @@ def _accepted(path: Path) -> bool:
 def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view: str, *,
                   force: bool = False,
                   pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
-                  prompt_hints: Optional[Dict[str, Any]] = None) -> Path:
+                  prompt_hints: Optional[Dict[str, Any]] = None,
+                  state: Optional[str] = None) -> Path:
     """Render, gate and store one edit step of one view; returns the final
     image ``images/{item}_{fsig}_{step}_{view}.png``.
+
+    ``state`` (plan 2026-11-12-unified-worn-pieces Task 11b): the open /
+    closed state of the run's piece — the prompts read the profile with the
+    piece in that state (``outfit_options.with_item_state``); None = the
+    state it is worn in.
 
     ``pair_check`` (the orchestration's check against the OTHER view, e.g.
     the garment-only front against the accepted back's hem) gets every
@@ -372,6 +378,9 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     if step not in kind.EDIT_STEPS:
         raise ValueError(f"no edit step {step!r}")
     profile = get_character_profile(character_name) or {}
+    if state is not None:
+        from app.core.outfit_options import with_item_state
+        profile = with_item_state(profile, item_id, state)
     bsig = base_body.base_signature(character_name, profile=profile)
     base = find_ref_image(character_name, base_body._kind(view), bsig)
     if base is None:
@@ -644,7 +653,8 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     from app.core.base_body import file_sha256
     from app.core.garment_store import garment_path, read_record, write_record
     from app.core.model_refs import VIEW_REFERENCE_BACKGROUND, _tpose_size, neutral_view_reference
-    fit_text, fit_keywords = kind.fit_prompt(step, item_id=item_id)
+    from app.core.outfit_options import piece_state_of
+    fit_text, fit_keywords = kind.fit_prompt(step, item_id=item_id, state=piece_state_of(profile, item_id))
     front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
     front_gate = accepted_record(front)
     if front_gate is None:

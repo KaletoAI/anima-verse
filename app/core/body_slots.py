@@ -245,16 +245,18 @@ def set_slot_value(character_name: str, slot_id: str, attr: str, value: Any) -> 
 # ---------------------------------------------------------------------------
 
 def is_slot_exposed(spec, profile: Dict[str, Any]) -> bool:
-    """Exposed = none of the covering clothing slots holds a piece.
+    """Exposed = none of the covering clothing slots holds a piece that
+    covers (``outfit_renderer.covering_pieces``: a piece worn open covers
+    nothing in front, ruling A8 of plan 2026-11-12-unified-worn-pieces).
     Slots without ``covered_by`` count as exposed (always visible). A
     free-text wardrobe has no pieces: there the binary dressed state decides
     (``outfit_worn`` off = every covered slot is exposed)."""
     if not spec.covered_by:
         return True
-    from app.core.outfit_renderer import is_free_text_wardrobe, is_outfit_worn
+    from app.core.outfit_renderer import covering_pieces, is_free_text_wardrobe, is_outfit_worn
     if is_free_text_wardrobe(profile):
         return not is_outfit_worn(profile)
-    equipped = dict(profile.get("equipped_pieces") or {})
+    equipped = covering_pieces(profile, dict(profile.get("equipped_pieces") or {}))
     return not any(equipped.get(slot) for slot in spec.covered_by)
 
 

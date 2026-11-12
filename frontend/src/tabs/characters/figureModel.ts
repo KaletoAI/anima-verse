@@ -68,6 +68,36 @@ export function meshModeOf(stored: string | null | undefined, slots: readonly st
   return isMeshMode(stored) ? stored : defaultMeshMode(slots)
 }
 
+// --- Open / closed (Task 11b, spec Addendum A) ---------------------------------------------------------------
+
+/** How a closable piece is worn (`outfit_options.PIECE_STATES`); a piece without the option is always closed. */
+export type PieceState = 'open' | 'closed'
+
+/** The toggle's order: Closed first (the default). */
+export const PIECE_STATES: PieceState[] = ['closed', 'open']
+
+export const PIECE_STATE_LABELS: Record<PieceState, string> = {
+  open: 'Open',
+  closed: 'Closed',
+}
+
+/** Why "Can be worn open" cannot be ticked (written under it), null = it can: footwear (exactly feet) has no
+ *  open/closed state (spec D-A3). */
+export function closableDisabled(slots: readonly string[]): string | null {
+  const worn = new Set(slots.filter(Boolean))
+  return worn.size === 1 && worn.has('feet') ? 'Footwear has no open/closed state' : null
+}
+
+/** The piece details' single action that builds the OTHER state's own mesh (never built automatically):
+ *  "Build the open mesh — 6 hub jobs" / "… — cost unknown"; with nothing left to run "Open mesh built". */
+export function stateMeshAction(state: PieceState, jobs: number | null, t: (s: string) => string = (s) => s): string {
+  if (jobs === 0) return state === 'open' ? t('Open mesh built') : t('Closed mesh built')
+  const what = state === 'open' ? t('Build the open mesh') : t('Build the closed mesh')
+  const cost = jobs === null ? t('cost unknown')
+    : jobs === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(jobs))
+  return `${what} — ${cost}`
+}
+
 /** "7 hub jobs" / "1 hub job" / "cost unknown". */
 export function jobsText(hubJobs: number | null): string {
   if (hubJobs === null) return 'cost unknown'
@@ -138,6 +168,10 @@ export interface FigureWornRow {
   failure: string
   /** Hub jobs its chain step plans (0 = none planned, null = unknown). */
   jobs: number | null
+  /** Open / closed of a closable piece; null = not closable (NOT the readiness above). */
+  piece_state: PieceState | null
+  /** Own mesh + closable only: hub jobs of the OTHER state's mesh (0 = built, null = unknown / n.a.). */
+  other_state_jobs: number | null
 }
 
 export interface FigureHairRow {

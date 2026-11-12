@@ -40,7 +40,7 @@ from app.models.character import (
     get_effective_activity,
     get_character_current_feeling,
     get_character_current_room)
-from app.core.outfit_renderer import render_outfit, collect_covered_slots
+from app.core.outfit_renderer import render_outfit
 from app.models.account import (
     get_user_profile,
     get_user_gender,

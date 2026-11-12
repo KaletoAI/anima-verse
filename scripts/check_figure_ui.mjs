@@ -73,12 +73,27 @@
  *      concern 2 — a worn piece's only entry is the Figure tab); FigureBodyDetails writes staleBaseNote
  *      under "Run skin step"; FieldFigure starts nothing but the Build (its POSTs, all through its one
  *      `post()` helper — `apiPost` named twice: import + that call: figure/build, figure/auto-build,
- *      base-body/pipeline); the template has tab `figure_tab` {Figure, Figur} with the
+ *      base-body/pipeline, and since Task 11b the other state's single action garments/{item}/run — a
+ *      template-literal path, written with its `${…}` as `{}`); the template has tab `figure_tab` {Figure, Figur} with the
  *      humanoid-only section `figure` (special "figure"), and CharactersTab renders the slot `figure`.
  * [13] Task 11 source greps: the Figure tab opens GarmentPieceDialog with `noRunAll`, and the dialog's
  *      "Run all" renders only `!noRunAll` (Ruling 10a: there only Build and Retry start chains); the
  *      Wardrobe's hair row has "Create hair" (POST `/characters/${enc}/hair` with `{}`) and "Wear hair"
  *      (POST …/hair/equipped) — the hair tab they lived in is gone (T9 concern 4).
+ *
+ * Task 11b — open / closed (spec Addendum A, plan Task 11b "Interfaces", rulings A6/A7):
+ * [14] PIECE_STATE_LABELS open → "Open", closed → "Closed"; PIECE_STATES = [closed, open] (the toggle's order).
+ *      closableDisabled(['feet']) → "Footwear has no open/closed state"; ['outer'], ['top'], ['legs','feet']
+ *      (not feet alone) → null.
+ *      stateMeshAction('open', 6) → "Build the open mesh — 6 hub jobs"; ('open', null) → "Build the open mesh —
+ *      cost unknown"; ('open', 0) → "Open mesh built"; ('closed', 1) → "Build the closed mesh — 1 hub job";
+ *      ('closed', 0) → "Closed mesh built".
+ * [15] Source greps: the Wardrobe row renders ClosableCheckbox next to MeshModeSelect and PieceStateToggle only on
+ *      an equipped closable row; the Figure tab renders PieceStateToggle on a row with `piece_state` and its
+ *      state-mesh button through stateMeshAction; both toggles reach the server only through `setPieceState`
+ *      (lib/api.ts: POST `/outfit-options/piece-state` with {item_id, state}); the checkbox PUTs the whole
+ *      outfit_piece with `closable`; ItemForm shows "Open / closed: yes — set in a wearer's Wardrobe" and
+ *      itemsModel's draftToBody does not send `closable` (like `mesh_mode`).
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -259,10 +274,10 @@ const skin = details.split("t('Run skin step')")[1] || '';
 check('[12] skin step: stale-base note under the button', /staleBaseNote\(/.test(skin.slice(0, 600)), true);
 const fieldFigure = src('frontend/src/tabs/characters/FieldFigure.tsx');
 // Every POST of the tab goes through its one `post(path, …)` helper (one apiPost call).
-const posts = [...fieldFigure.matchAll(/\bpost\(\s*'([^']+)'/g)].map((x) => x[1]);
-check('[12] FieldFigure starts only the Build', [[...new Set(posts)].sort(),
+const posts = [...fieldFigure.matchAll(/\bpost\(\s*['`]([^'`]+)['`]/g)].map((x) => x[1].replace(/\$\{[^}]*\}/g, '{}'));
+check('[12] FieldFigure starts only the Build (+ the other state\'s mesh)', [[...new Set(posts)].sort(),
   (fieldFigure.match(/\bapiPost\b/g) || []).length],
-  [['base-body/pipeline', 'figure/auto-build', 'figure/build'], 2]);
+  [['base-body/pipeline', 'figure/auto-build', 'figure/build', 'garments/{}/run'], 2]);
 const tmpl = JSON.parse(src('shared/templates/character/base-character.json') || '{"tabs":[],"sections":[]}');
 const tab = tmpl.tabs.find((x) => x.id === 'figure_tab') || {};
 const section = tmpl.sections.find((x) => x.id === 'figure') || {};
@@ -282,6 +297,39 @@ check('[13] hair row: Create hair posts /hair', [hairRow.includes("t('Create hai
   /call\(`\/characters\/\$\{enc\}\/hair`, \{\}/.test(hairRow)], [true, true]);
 check('[13] hair row: Wear hair posts /hair/equipped', [hairRow.includes("t('Wear hair')"),
   hairRow.includes('/hair/equipped`')], [true, true]);
+
+// [14]
+check('[14] state labels', m.PIECE_STATE_LABELS, { open: 'Open', closed: 'Closed' });
+check('[14] state order', m.PIECE_STATES, ['closed', 'open']);
+check('[14] feet', m.closableDisabled(['feet']), 'Footwear has no open/closed state');
+check('[14] outer / top / legs+feet', [m.closableDisabled(['outer']), m.closableDisabled(['top']),
+  m.closableDisabled(['legs', 'feet'])], [null, null, null]);
+check('[14] open 6', m.stateMeshAction('open', 6), 'Build the open mesh — 6 hub jobs');
+check('[14] open null', m.stateMeshAction('open', null), 'Build the open mesh — cost unknown');
+check('[14] open 0', m.stateMeshAction('open', 0), 'Open mesh built');
+check('[14] closed 1', m.stateMeshAction('closed', 1), 'Build the closed mesh — 1 hub job');
+check('[14] closed 0', m.stateMeshAction('closed', 0), 'Closed mesh built');
+
+// [15]
+const modeRow = wardrobe.split('<MeshModeSelect')[1] || '';
+check('[15] Wardrobe: checkbox next to the mode', /^[\s\S]{0,600}<ClosableCheckbox\b/.test(modeRow), true);
+check('[15] Wardrobe: toggle only on a worn closable row',
+  /it\.equipped && garments\.closable\?\.\[it\.item_id\][^\n]*\n\s*<PieceStateToggle\b/.test(wardrobe), true);
+check('[15] Figure tab: toggle on a closable row', /row\.piece_state \? \(\s*<PieceStateToggle\b/.test(fieldFigure), true);
+check('[15] Figure tab: state-mesh action', /stateMeshAction\(other, row\.other_state_jobs, t\)/.test(fieldFigure), true);
+const toggleSrc = (garmentSrc.split('export function PieceStateToggle')[1] || '').split('\nexport function')[0];
+check('[15] toggle posts only through setPieceState', [/setPieceState\(character, itemId, next\)/.test(toggleSrc),
+  /\bapi(Post|Put|Get)\b/.test(toggleSrc)], [true, false]);
+const apiSrc = src('frontend/src/lib/api.ts');
+check('[15] setPieceState route', /setPieceState[\s\S]{0,300}\/outfit-options\/piece-state`, \{ item_id: itemId, state \}/.test(apiSrc),
+  true);
+const boxSrc = (garmentSrc.split('export function ClosableCheckbox')[1] || '').split('\nexport function')[0];
+check('[15] checkbox PUTs the whole outfit_piece', /apiPut\(url, \{ outfit_piece: \{ \.\.\.\(item\.outfit_piece \|\| \{\}\), closable: next \} \}\)/
+  .test(boxSrc), true);
+check('[15] Items form line', src('frontend/src/tabs/items/ItemForm.tsx')
+  .includes(`t("Open / closed: yes — set in a wearer's Wardrobe")`), true);
+const toBody = (src('frontend/src/tabs/items/itemsModel.ts').split('body.outfit_piece = {')[1] || '').split('}')[0];
+check('[15] draftToBody does not send closable', [toBody.length > 0, /closable/.test(toBody)], [true, false]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

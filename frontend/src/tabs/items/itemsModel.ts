@@ -21,6 +21,8 @@ export interface OutfitPieceMeta {
   partially_covers?: string[]
   // How the piece reaches the 3D figure: own_mesh / painted / in_body (absent = the kind default).
   mesh_mode?: string
+  // Can be worn open (spec 2026-11-12 Addendum A): its wearers get a Closed / Open toggle.
+  closable?: boolean
   exposed_detail?: boolean
   // How much the piece carries the body under it in 3D (0..1); absent = the
   // slot default a package declares.
@@ -108,6 +110,10 @@ export interface DraftItem {
    *  wearer's Wardrobe, and draftToBody never sends it (`inventory.update_item` keeps the stored one), so a
    *  form opened before a Wardrobe change cannot overwrite it. */
   mesh_mode: string
+  /** "Can be worn open" — shown read-only like `mesh_mode` and for the same reason never sent by draftToBody
+   *  (`inventory.update_item` keeps the stored flag when the update does not name it): set in a wearer's
+   *  Wardrobe, a form opened before that change cannot overwrite it. */
+  closable: boolean
   exposed_detail: boolean
   lift: number | null
   effects: string
@@ -247,6 +253,7 @@ export const EMPTY_DRAFT: DraftItem = {
   motion_damping: 1,
   partially_covers: [],
   mesh_mode: '',
+  closable: false,
   exposed_detail: false,
   lift: null,
   effects: '',
@@ -288,6 +295,7 @@ export function itemToDraft(it: Item): DraftItem {
     motion_damping: op.motion_damping ?? 1,
     partially_covers: [...(op.partially_covers || [])],
     mesh_mode: typeof op.mesh_mode === 'string' ? op.mesh_mode : '',
+    closable: op.closable === true,
     exposed_detail: op.exposed_detail === true,
     lift: typeof op.lift === 'number' ? op.lift : null,
     effects: effectsToText(it.effects),

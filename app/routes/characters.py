@@ -1885,6 +1885,9 @@ class GarmentRunRequest(BaseModel):
     step: Optional[str] = None
     view: Optional[str] = None
     force: bool = False
+    # "open" / "closed" for a closable clothing piece (plan 2026-11-12-unified-worn-pieces Task 11b); None = the
+    # state it is worn in when the run starts.
+    state: Optional[str] = None
 
 
 class GarmentMeshFetchRequest(BaseModel):
@@ -2307,15 +2310,18 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
     that is no garment of this character, or a character off the base-body
     pipeline. Never refused for a running run: the run is queued behind the
     character's running garment run (``garments.start_garment``) —
-    ``{started, queued, position, behind}``."""
+    ``{started, queued, position, behind}``. ``state`` (``open`` /
+    ``closed``) builds that state's own mesh of a closable piece (the Figure
+    tab's "Build the open mesh"); 400 for a state on a piece without one, or
+    ``open`` for a piece not worn now."""
     from app.core import base_body, garments
     _require_character(character_name)
     try:
-        garments.check_run(character_name, item_id, steps=body.step, view=body.view)
+        garments.check_run(character_name, item_id, steps=body.step, view=body.view, state=body.state)
         if base_body.current_base(character_name) is None:
             raise ValueError(f"{character_name} is not on the base-body pipeline")
         return garments.start_garment(character_name, item_id, steps=body.step, view=body.view,
-                                      force=body.force)
+                                      force=body.force, state=body.state)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -274,7 +274,7 @@ def main() -> int:
         live = {"now": 0, "max": 0}
         live_lock = threading.Lock()
 
-        def run_locked(character_name, item, kind, wanted, view, force):
+        def run_locked(character_name, item, kind, wanted, view, force, state=None):
             item_id = item["id"]
             with live_lock:
                 live["now"] += 1

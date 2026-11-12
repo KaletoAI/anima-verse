@@ -509,6 +509,14 @@ export interface WardrobeGarments {
   overlaps: Array<{ items: string[]; slots: string[] }>
   /** The boot hem control under the worn feet piece (boots spec § 8.3). */
   hem?: BootHemState
+  /** Open / closed (Task 11b): the item flag "Can be worn open" of every held outfit piece. */
+  closable?: Record<string, boolean>
+  /** The worn pieces worn open (absent = closed). */
+  piece_state?: Record<string, 'open'>
+  /** Closable pieces whose prompt fragment already names a state (ruling A6: the row's hint). */
+  names_state?: Record<string, boolean>
+  /** Build automatically is on: a toggle starts the Build. */
+  auto_build?: boolean
 }
 
 /** GET /characters/{n}/garments/{item} — the Wardrobe's own-mesh panel. */

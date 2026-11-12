@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Open / closed pieces (plan ``docs/superpowers/plans/2026-11-12-unified-worn-pieces.md`` Task 11a; spec
-``docs/superpowers/specs/2026-11-12-unified-worn-pieces-design.md`` Addendum A; rulings A1–A6): the item flag
+``docs/superpowers/specs/2026-11-12-unified-worn-pieces-design.md`` Addendum A; rulings A1–A8): the item flag
 ``outfit_piece.closable``, the worn state ``equipped_options.piece_state``, the state words in the texts, the
-outfit signature, the figure keys, the cache GC and the piece-state route.
+outfit signature, the figure keys, the cache GC, the piece-state route and (Task 11b, ruling A8) the coverage of
+an open piece.
 
 Usage:
     ./.venv/bin/python scripts/smoke_piece_state.py
@@ -17,8 +18,9 @@ Fixture (real ``add_item``; ids below are the generated ids, written as names): 
 boots"; tee ``{slots: [top]}`` "grey tee" (held, not worn). Character "Demo" holds all four and wears
 ``{outer: jacket, top: blouse}``.
 
-Expected, derived by hand from the brief and rulings A1 (closed changes no key) and A6 (the closed words are the
-neutral "worn closed" — the brief's ", buttoned" is overruled):
+Expected, derived by hand from the brief and rulings A1 (closed changes no key), A6 (neutral words) and A7 (Task
+11b: closed says NOTHING — no ", worn closed" anywhere; a closed or untoggled piece reads byte for byte as before
+the option; was: "black jacket, worn closed" in 2D / chat text):
 
 [0] Fails on the old code: ``git show 1b60c54b:app/core/garment_set.py`` has no ``def default_closable`` (BASE of
     this task), so step [1] fails there.
@@ -33,12 +35,12 @@ neutral "worn closed" — the brief's ", buttoned" is overruled):
     jacket, open) -> stored {jacket: open}, piece_state_of open; (jacket, closed) -> stored map without jacket;
     (boots, open) -> ValueError "not closable"; (tee, open) -> ValueError "not worn now" (tee made closable for
     that case); (jacket, "ajar") -> ValueError. equip_piece(Demo, jacket) after an open state -> entry gone.
-[3] Texts. piece_text(jacket, open, mesh_input=True) == "black jacket, worn open"; (closed, mesh_input=False) ==
-    "black jacket, worn closed"; (closed, mesh_input=True) == "black jacket"; the blouse (closable False) is
-    "white blouse" in every case. render_outfit(pieces={outer: jacket, top: blouse}, mesh_input=True)["pieces"]:
-    closed -> "black jacket" (the blouse is covered); open -> "white blouse underneath black jacket, worn open"
-    (D-A4: the open jacket's covers count as partially_covers, the outer slot's own fragment is suppressed);
-    not mesh_input, closed -> "black jacket, worn closed".
+[3] Texts (A7). piece_text(jacket, open) == "black jacket, worn open"; (closed) == "black jacket" (the fragment
+    alone); the blouse (closable False) is "white blouse" in both states. render_outfit(pieces={outer: jacket,
+    top: blouse})["pieces"]: closed -> "black jacket" with mesh_input and without (the blouse is covered; the
+    BASE renderer, which had no state at all, gave the same); open -> "white blouse underneath black jacket, worn
+    open" with mesh_input and without (D-A4: the open jacket's covers count as partially_covers, the outer slot's
+    own fragment is suppressed).
 [4] Signature (D-A1). _equipped_signature({outer: jacket, top: blouse}, []) closed == "outer=jacket" == the BASE
     function's output (its source from ``git show 1b60c54b:app/core/expression_regen.py`` run in a namespace);
     open == "outer=jacket|top=blouse|open:jacket"; outfit_signature = md5[:12] of those strings.
@@ -64,6 +66,14 @@ neutral "worn closed" — the brief's ", buttoned" is overruled):
     _notify_outfit_changed called once with (Demo, "piece_state", action "open", item_ids [jacket]); boots -> 400
     "not closable"; a player of another character -> 403. The chat line render_outfit(character_name=Demo)["full"]
     contains "worn open". GET adds piece_state + closable.
+[10] Coverage (ruling A8, ``outfit_renderer.covering_pieces``). Character "Bare" wears {outer: jacket, bottom:
+    trousers} (trousers {slots: [bottom]} "blue trousers", not closable), nothing on top or feet.
+    Jacket closed: covering_pieces == both pieces; the bare-slot summary (thought_context) is "barefoot" — the
+    jacket's covers [top] count, so the upper body is covered; a body slot covered_by [top, outer] is NOT
+    exposed. Jacket open: covering_pieces == {bottom: trousers}; the summary is "topless under an open layer,
+    barefoot" (the open jacket covers neither outer nor top); the [top, outer] body slot IS exposed; a slot
+    covered_by [bottom] stays covered either way. The decency hint reads the same summary ("You are currently
+    topless under an open layer, barefoot. …" — checked through _bare_slots_summary, its only coverage input).
 """
 import ast
 import hashlib
@@ -209,17 +219,17 @@ def main() -> int:
         # --- [3] texts ---------------------------------------------------------------------------------------
         print("[3] texts")
         J, B = inventory.get_item(jacket), inventory.get_item(blouse)
-        check("open mesh", outfit_renderer.piece_text(J, "open", mesh_input=True), "black jacket, worn open")
-        check("closed 2D", outfit_renderer.piece_text(J, "closed", mesh_input=False), "black jacket, worn closed")
-        check("closed mesh", outfit_renderer.piece_text(J, "closed", mesh_input=True), "black jacket")
+        check("open", outfit_renderer.piece_text(J, "open"), "black jacket, worn open")
+        check("closed says nothing (A7)", outfit_renderer.piece_text(J, "closed"), "black jacket")
         for st in ("open", "closed"):
-            for mi in (True, False):
-                check(f"blouse {st} mesh={mi}", outfit_renderer.piece_text(B, st, mesh_input=mi), "white blouse")
+            check(f"blouse {st}", outfit_renderer.piece_text(B, st), "white blouse")
         ro = lambda state, mi=True: outfit_renderer.render_outfit(  # noqa: E731
             profile={}, equipped_pieces=dict(worn), equipped_items=[], mesh_input=mi, piece_state=state)["pieces"]
         check("closed mesh render", ro({}), "black jacket")
         check("open mesh render", ro({jacket: "open"}), "white blouse underneath black jacket, worn open")
-        check("closed 2D render", ro({}, False), "black jacket, worn closed")
+        check("closed 2D render (A7)", ro({}, False), "black jacket")
+        check("open 2D render", ro({jacket: "open"}, False), "white blouse underneath black jacket, worn open")
+        check("no closed words left", hasattr(oo, "CLOSED_WORDS"), False)
 
         # --- [4] signature -----------------------------------------------------------------------------------
         print("[4] signature")
@@ -371,6 +381,31 @@ def main() -> int:
         check("chat line says worn open",
               "worn open" in outfit_renderer.render_outfit(character_name="Demo")["full"], True)
         check("names_state hint", oo.fragment_names_state("denim jacket, unbuttoned"), True)
+
+        # --- [10] coverage of an open piece (A8) -------------------------------------------------------------
+        print("[10] coverage")
+        from types import SimpleNamespace
+        from app.core import body_slots, thought_context
+        trousers = piece("Trousers", ["bottom"], "blue trousers")
+        check("create Bare", save_character_profile("Bare", {"template": "human-roleplay", "gender": "female"},
+                                                     create_new=True), True)
+        for iid in (jacket, trousers):
+            inventory.add_to_inventory("Bare", iid)
+        bare_worn = {"outer": jacket, "bottom": trousers}
+        prof = get_character_profile("Bare")
+        prof["equipped_pieces"] = dict(bare_worn)
+        check("Bare wears jacket + trousers", save_character_profile("Bare", prof), True)
+        upper_spec = SimpleNamespace(covered_by=["top", "outer"])
+        lower_spec = SimpleNamespace(covered_by=["bottom"])
+        bare = lambda: get_character_profile("Bare")  # noqa: E731
+        check("closed: covering", outfit_renderer.covering_pieces(bare()), bare_worn)
+        check("closed: summary", thought_context._bare_slots_summary("Bare"), "barefoot")
+        check("closed: upper covered", body_slots.is_slot_exposed(upper_spec, bare()), False)
+        oo.set_piece_state("Bare", jacket, "open")
+        check("open: covering", outfit_renderer.covering_pieces(bare()), {"bottom": trousers})
+        check("open: summary", thought_context._bare_slots_summary("Bare"), "topless under an open layer, barefoot")
+        check("open: upper exposed", body_slots.is_slot_exposed(upper_spec, bare()), True)
+        check("open: lower still covered", body_slots.is_slot_exposed(lower_spec, bare()), False)
 
     if FAILS:
         print(f"\nFAILED ({len(FAILS)}): " + ", ".join(FAILS))

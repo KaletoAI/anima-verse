@@ -415,14 +415,19 @@ def _bare_slots_summary(character_name: str) -> str:
 
     Groups: upper body (top/underwear_top/outer), lower body
     (bottom/underwear_bottom/legs), feet. Multi-slot pieces count via
-    collect_covered_slots. Used by the outfit line (the agent must KNOW it
+    collect_covered_slots. Only pieces that cover count
+    (``outfit_renderer.covering_pieces``): a piece worn open covers nothing
+    in front (ruling A8), so an open jacket over nothing reads "topless
+    under an open layer". Used by the outfit line (the agent must KNOW it
     is naked — "Your outfit: boots" reads like a full outfit otherwise)
     and by the recurring outfit-decision hint.
     """
     try:
+        from app.models.character import get_character_profile
         from app.models.inventory import get_equipped_pieces
-        from app.core.outfit_renderer import collect_covered_slots
-        pieces = get_equipped_pieces(character_name) or {}
+        from app.core.outfit_renderer import collect_covered_slots, covering_pieces
+        worn_pieces = get_equipped_pieces(character_name) or {}
+        pieces = covering_pieces(get_character_profile(character_name) or {}, worn_pieces)
         covered = collect_covered_slots(pieces)
     except Exception as e:
         logger.debug("bare-slots summary failed for %s: %s", character_name, e)
@@ -431,14 +436,18 @@ def _bare_slots_summary(character_name: str) -> str:
     def worn(slot: str) -> bool:
         return bool(pieces.get(slot)) or slot in covered
 
-    upper = worn("top") or worn("underwear_top") or worn("outer")
+    upper_slots = ("top", "underwear_top", "outer")
+    upper = any(worn(s) for s in upper_slots)
     lower = worn("bottom") or worn("underwear_bottom") or worn("legs")
     feet = worn("feet")
+    # A worn piece that covers nothing: worn open (A8).
+    open_upper = any(worn_pieces.get(s) and s not in pieces for s in upper_slots)
     if not upper and not lower and not feet:
-        return "completely naked"
+        open_any = any(iid and slot not in pieces for slot, iid in worn_pieces.items())
+        return "naked under an open layer" if open_any else "completely naked"
     parts: List[str] = []
     if not upper:
-        parts.append("topless")
+        parts.append("topless under an open layer" if open_upper else "topless")
     elif worn("outer") and not worn("top") and not worn("underwear_top"):
         parts.append("nothing underneath the outer layer")
     if not lower:
@@ -478,9 +487,10 @@ def _build_wardrobe_choices(character_name: str) -> str:
     preference at all and the pieces are listed flat.
     """
     try:
+        from app.models.character import get_character_profile
         from app.models.inventory import (
             get_character_inventory, get_equipped_pieces)
-        from app.core.outfit_renderer import collect_covered_slots
+        from app.core.outfit_renderer import collect_covered_slots, covering_pieces
         from app.core.outfit_coherence import matching_pieces, UNDERWEAR_SLOTS
 
         inv = get_character_inventory(character_name, include_equipped=False) or {}
@@ -499,7 +509,9 @@ def _build_wardrobe_choices(character_name: str) -> str:
             return ""
 
         worn = get_equipped_pieces(character_name) or {}
-        covered = collect_covered_slots(worn) or set()
+        # An open piece covers nothing in front (ruling A8): the slot under it is free to dress.
+        covered = collect_covered_slots(
+            covering_pieces(get_character_profile(character_name) or {}, worn)) or set()
 
         def _is_free(slot: str) -> bool:
             return not worn.get(slot) and slot not in covered

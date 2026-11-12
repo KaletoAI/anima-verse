@@ -18,14 +18,19 @@
  *   "left out: …", "failed — reason" with Retry = the Build); an own-mesh
  *   piece's details open its chain dialog (GarmentPieceDialog — a WORN
  *   piece's only entry, the Wardrobe hides its "Mesh steps"; opened here
- *   without its "Run all", Ruling 10a);
+ *   without its "Run all", Ruling 10a); a closable piece has the toggle
+ *   Closed / Open under its mode (PieceStateToggle, the one piece-state
+ *   route, saved at once — Task 11b), and an own-mesh closable piece, under
+ *   Details, the single action that builds its OTHER state's mesh
+ *   ("Build the open mesh — 6 hub jobs", POST …/garments/{item}/run
+ *   {state}; the Build only ever makes the worn state's);
  * - "Body:" (plain body · shape · texture) with the plain body's own views
  *   and model collapsed (FigureBodyDetails, each action single) and the
  *   stored bodies and textures collapsed (FigureStored, Delete).
  *
  * Nothing here starts a chain except Build and Retry (both POST
  * …/figure/build — a manual Build, which retries a cached chain failure,
- * ruling 7a). Off the pipeline the tab shows only the switch onto it (POST
+ * ruling 7a) and the other state's single action. Off the pipeline the tab shows only the switch onto it (POST
  * …/base-body/pipeline). Polls GET …/figure while a Build runs (useFigure).
  */
 import { useCallback, useState } from 'react'
@@ -34,15 +39,15 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from './Model3DViewer'
-import { GarmentPieceDialog } from './WardrobeGarment'
+import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
 import { FigureBodyDetails } from './FigureBodyDetails'
 import { FigureStored } from './FigureStored'
 import { useFigure } from './useFigure'
 import {
   BUILD_RUNNING_NOTE, BUILD_STATUS, HAIR_MODE_LABELS, MESH_MODE_LABELS, bodyLine, buildButton, hairState,
-  headerLine, wornState,
+  headerLine, stateMeshAction, wornState,
 } from './figureModel'
-import type { FigurePayload, HairMode } from './figureModel'
+import type { FigurePayload, FigureWornRow, HairMode, PieceState } from './figureModel'
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
 const CELL: CSSProperties = { padding: '4px 6px', verticalAlign: 'top' }
@@ -94,6 +99,13 @@ export function FieldFigure({ character, onOpenWardrobe }: {
 
   const reload = useCallback(() => startPoll(0), [startPoll])
 
+  /** The other state's own mesh of a worn closable piece: its chain alone (queued behind the character's
+   *  garment runs), never the Build. */
+  const buildStateMesh = useCallback((row: FigureWornRow, state: PieceState) => post(
+    `garments/${encodeURIComponent(row.item_id)}/run`, { state }, (d) => {
+      toast(d.started ? t('Started') : t('Queued'), 'success')
+    }), [post, t, toast])
+
   if (!data) {
     return error ? <div className="ga-hint" style={ERROR_STYLE}>{error}</div>
       : <div className="ga-hint">{t('Loading…')}</div>
@@ -135,8 +147,8 @@ export function FieldFigure({ character, onOpenWardrobe }: {
       <div className="ga-split-col">
         <FigureHeader data={data} posting={posting} onBuild={build}
           onAutoBuild={(enabled) => { void post('figure/auto-build', { enabled }) }} />
-        <WornTable data={data} busy={posting} onRetry={build} onOpenWardrobe={onOpenWardrobe}
-          onOpenPiece={(id, name) => setOpenPiece({ id, name })} />
+        <WornTable data={data} character={character} busy={posting} onRetry={build} onOpenWardrobe={onOpenWardrobe}
+          onOpenPiece={(id, name) => setOpenPiece({ id, name })} onStateMesh={buildStateMesh} onChanged={reload} />
         <BodySection data={data} character={character} onChanged={reload} />
       </div>
       {openPiece ? (
@@ -210,12 +222,17 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
   )
 }
 
-function WornTable({ data, busy, onRetry, onOpenWardrobe, onOpenPiece }: {
+function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenPiece, onStateMesh, onChanged }: {
   data: FigurePayload
+  character: string
   busy: boolean
   onRetry: () => void
   onOpenWardrobe?: () => void
   onOpenPiece: (itemId: string, name: string) => void
+  /** Build the other open / closed state's own mesh of a piece. */
+  onStateMesh: (row: FigureWornRow, state: PieceState) => void
+  /** A piece was toggled open / closed: reload. */
+  onChanged: () => void
 }) {
   const { t } = useI18n()
   const wardrobe = onOpenWardrobe ? (
@@ -249,6 +266,7 @@ function WornTable({ data, busy, onRetry, onOpenWardrobe, onOpenPiece }: {
           {data.worn.map((row) => {
             const cell = wornState(row, t)
             const note = row.note && !row.interim && row.state !== 'left_out' && row.state !== 'failed' ? row.note : ''
+            const other: PieceState | null = row.piece_state ? (row.piece_state === 'open' ? 'closed' : 'open') : null
             return (
               <tr key={row.item_id} style={{ borderTop: '1px solid var(--border, #30363d)' }}>
                 <td style={CELL}>
@@ -257,8 +275,27 @@ function WornTable({ data, busy, onRetry, onOpenWardrobe, onOpenPiece }: {
                     <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog"
                       onClick={() => onOpenPiece(row.item_id, row.name)}>{t('Details')}</button>
                   ) : null}
+                  {row.mode === 'own_mesh' && other ? (
+                    row.other_state_jobs === 0 ? (
+                      <div className="ga-hint">{stateMeshAction(other, 0, t)}</div>
+                    ) : (
+                      <div>
+                        <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+                          title={t('Only this piece’s chain; the Build makes only the worn state’s mesh')}
+                          onClick={() => onStateMesh(row, other)}>
+                          {stateMeshAction(other, row.other_state_jobs, t)}
+                        </button>
+                      </div>
+                    )
+                  ) : null}
                 </td>
-                <td style={CELL}>{t(MESH_MODE_LABELS[row.mode] || row.mode)}</td>
+                <td style={CELL}>
+                  <div>{t(MESH_MODE_LABELS[row.mode] || row.mode)}</div>
+                  {row.piece_state ? (
+                    <PieceStateToggle character={character} itemId={row.item_id} state={row.piece_state}
+                      autoBuild={data.auto_build} disabled={busy} onChanged={onChanged} />
+                  ) : null}
+                </td>
                 <td style={CELL}>{wardrobe}</td>
                 <td style={CELL}>
                   <div style={row.state === 'failed' ? ERROR_STYLE : undefined}>{cell.text}</div>

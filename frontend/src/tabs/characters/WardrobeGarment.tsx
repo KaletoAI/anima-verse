@@ -16,6 +16,15 @@
  * Regenerate per view — beside the fitted preview with its freshness badge,
  * its fit numbers and the step overview (ModelSteps).
  *
+ * Open / closed (Task 11b, spec Addendum A): next to the mode the item flag
+ * "Can be worn open" (ClosableCheckbox — the whole outfit_piece PUT like the
+ * mode, spends nothing; disabled for footwear with the reason under it) and,
+ * on a WORN closable row, the toggle Closed / Open (PieceStateToggle — the
+ * one piece-state route, saved at once; "then Build runs automatically" under
+ * it when that is on). An own-mesh piece has one mesh per state; the worn
+ * state's is built by the Build, the other only by its single action in the
+ * Figure tab's piece details.
+ *
  * Backend: GET /characters/{n}/garments (overview: pipeline, the mode of every
  * held/worn piece, row status incl. the pieces it is fitted over, worn pieces
  * over each other), GET /characters/{n}/garments/{item} (the dialog, polled
@@ -37,7 +46,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost, apiPut } from '../../lib/api'
+import { apiGet, apiPost, apiPut, setPieceState } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
@@ -51,8 +60,11 @@ import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
 import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
 import type { GarmentItemInfo, ItemWearers, PieceStatus } from './useGarment'
-import { BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, wearersLine } from './figureModel'
-import type { MeshMode } from './figureModel'
+import {
+  AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES, PIECE_STATE_LABELS,
+  closableDisabled, wearersLine,
+} from './figureModel'
+import type { MeshMode, PieceState } from './figureModel'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
  *  2026-11-11 § 15). */
@@ -230,6 +242,98 @@ export function MeshModeSelect({ itemId, mode, pipeline, disabled, feet = false,
       {!pipeline ? (
         <span className="ga-hint" style={{ fontSize: '0.7em' }}>
           {t('Only characters on the figure pipeline use modes')}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
+/** Closed / Open of a WORN closable piece (spec Addendum A): one click saves it at once through the one
+ *  piece-state route (like an equip: history, the automatic Build). An own-mesh piece shows its other state's
+ *  mesh once that is built (until then painted, "its open mesh"). Under it "then Build runs automatically"
+ *  when Build automatically is on — else nothing: the Figure tab's "N changes" says it. */
+export function PieceStateToggle({ character, itemId, state, autoBuild, disabled, onChanged }: {
+  character: string
+  itemId: string
+  state: PieceState
+  /** Build automatically is on for the character. */
+  autoBuild: boolean
+  disabled?: boolean
+  onChanged: (state: PieceState) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState(false)
+  const choose = async (next: PieceState) => {
+    if (busy || next === state) return
+    setBusy(true)
+    try {
+      await setPieceState(character, itemId, next)
+      onChanged(next)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <span role="group" aria-label={t('Worn open or closed')} style={{ display: 'inline-flex', gap: 2, fontSize: '0.75em' }}
+        title={t('How the piece is worn now — saved at once, like putting it on')}>
+        {PIECE_STATES.map((s) => (
+          <button key={s} type="button" className={`ga-btn ga-btn-sm${s === state ? ' ga-btn-primary' : ''}`}
+            aria-pressed={s === state} disabled={disabled || busy} onClick={() => { void choose(s) }}>
+            {t(PIECE_STATE_LABELS[s])}
+          </button>
+        ))}
+      </span>
+      {autoBuild ? <span className="ga-hint" style={{ fontSize: '0.7em' }}>{t(AUTO_BUILD_NOTE)}</span> : null}
+    </span>
+  )
+}
+
+/** The item flag "Can be worn open" (spec Addendum A), next to the mode: saved at once on the ITEM — the PUT
+ *  replaces the whole outfit_piece, so the stored one is read first and only `closable` changes; spends
+ *  nothing. Footwear has no open/closed state: disabled with the reason under it. `namesState`: the piece's
+ *  description already says open or closed (ruling A6) — a hint, no automatic edit. */
+export function ClosableCheckbox({ itemId, closable, slots, namesState = false, disabled, onChanged }: {
+  itemId: string
+  closable: boolean
+  slots: readonly string[]
+  namesState?: boolean
+  disabled?: boolean
+  onChanged: (closable: boolean) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState(false)
+  const reason = closableDisabled(slots)
+  const save = async (next: boolean) => {
+    if (busy || next === closable) return
+    setBusy(true)
+    try {
+      const url = `/inventory/items/${encodeURIComponent(itemId)}`
+      const { item } = await apiGet<{ item: { outfit_piece?: Record<string, unknown> } }>(url)
+      await apiPut(url, { outfit_piece: { ...(item.outfit_piece || {}), closable: next } })
+      onChanged(next)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75em', cursor: 'pointer' }}
+        title={t('A jacket, coat or shirt that can be worn open: its wearers get a Closed / Open toggle. Applies to every wearer; changing it spends nothing.')}>
+        <input type="checkbox" checked={closable && !reason} disabled={!!reason || disabled || busy}
+          onChange={(e) => { void save(e.target.checked) }} />
+        <span>{t('Can be worn open')}</span>
+      </label>
+      {reason ? <span className="ga-hint" style={{ fontSize: '0.7em' }}>{t(reason)}</span> : null}
+      {!reason && closable && namesState ? (
+        <span className="ga-hint" style={{ fontSize: '0.7em' }}>
+          {t('The description already says open/closed — the toggle adds to it')}
         </span>
       ) : null}
     </span>

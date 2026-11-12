@@ -28,9 +28,11 @@ whose item is ``closable`` (``garment_set.closable_of``) is worn ``closed`` (the
 stores only the open set — ``equipped_options.piece_state = {item_id: "open"}``; "closed" pops the key. A stored
 "open" counts only while the item is worn AND closable (``piece_states`` filters), so turning ``closable`` off on
 the item falls back to closed without a write. ``inventory.equip_piece`` pops the equipped item's entry (a newly
-worn piece is closed). Closed is the identity state: every key and every mesh-input text is unchanged by it; only
-"open" adds — ``OPEN_WORDS`` to the piece text (``outfit_renderer.piece_text``) and ``open:<ids>`` to the outfit
-signature. ``CLOSED_WORDS`` go only into 2D image prompts and the chat outfit line (``mesh_input=False``). A toggle
+worn piece is closed). Closed is the identity state: every key and every text is unchanged by it — 2D image
+prompts and the chat outfit line included (ruling A7: closed says nothing); only "open" adds — ``OPEN_WORDS`` to
+the piece text (``outfit_renderer.piece_text``) and ``open:<ids>`` to the outfit signature. An open piece covers
+nothing in front (D-A4, ruling A8): ``outfit_renderer.covering_pieces`` is the one rule every coverage check reads
+(the bare-slot summary, the outfit-decision hint, body-slot exposure and with it the image prompts). A toggle
 is a worn-state change (``set_piece_state`` + ``inventory._notify_outfit_changed`` in the route: history, SSE, the
 automatic Build), never an item edit. Saved sets carry ``options.piece_state`` beside ``boot_hem``;
 ``apply_saved_options`` restores both (a set without ``piece_state`` applies ``{}`` = all closed).
@@ -121,10 +123,9 @@ def apply_saved_options(character_name: str, outfit: Dict[str, Any]) -> bool:
 PIECE_STATE_KEY = "piece_state"
 OPEN, CLOSED = "open", "closed"
 PIECE_STATES: Tuple[str, ...] = (OPEN, CLOSED)
-#: The state words of a piece's text (rulings A1 / A6: neutral words). ``OPEN_WORDS`` reach every text (mesh inputs
-#: included); ``CLOSED_WORDS`` only 2D image prompts and the chat outfit line (D-A1: closed changes no key).
+#: The state words of a piece's text (rulings A1 / A6: neutral words) — they reach every text, mesh inputs
+#: included. Closed has none (ruling A7): a closed piece reads as it did before the option existed.
 OPEN_WORDS = "worn open"
-CLOSED_WORDS = "worn closed"
 #: Words in a prompt fragment that already name the state (ruling A6: the Wardrobe hints that the toggle adds to
 #: them; the fragment is never edited automatically).
 _STATE_WORDS_RE = re.compile(r"\b(?:open|opened|closed|unbuttoned|buttoned|unzipped|zipped)\b", re.IGNORECASE)
@@ -221,6 +222,20 @@ def with_piece_state(profile: Dict[str, Any], piece_state: Optional[Dict[str, st
     options[PIECE_STATE_KEY] = clean_piece_state_map(piece_state)
     out[OPTIONS_KEY] = options
     return out
+
+
+def with_item_state(profile: Dict[str, Any], item_id: str, state: str) -> Dict[str, Any]:
+    """A copy of ``profile`` whose state map is its live one (``piece_states``) with ``item_id`` in ``state`` —
+    the profile of a garment run for one state of one worn piece (plan Task 11b: every text and fingerprint of
+    the run reads it). ``state`` of a piece that is not worn or not closable has no effect (``piece_states``
+    counts only worn closable pieces). ValueError for a bad state."""
+    value = normalise_piece_state(state)
+    current = dict(piece_states(profile))
+    if value == OPEN:
+        current[str(item_id)] = OPEN
+    else:
+        current.pop(str(item_id), None)
+    return with_piece_state(profile, current)
 
 
 def fragment_names_state(fragment: Any) -> bool:

@@ -105,13 +105,13 @@ def main() -> int:
         runs = []
         gate_a = threading.Event()
 
-        def recorder(character_name, item_id, *, steps=None, view=None, force=False):
+        def recorder(character_name, item_id, *, steps=None, view=None, force=False, state=None):
             runs.append((item_id, steps, force))
             if item_id == "A":
                 gate_a.wait(30)
             return {"ok": True, "item": item_id}
 
-        garments.check_run = lambda character_name, item_id, steps=None, view=None: None
+        garments.check_run = lambda character_name, item_id, steps=None, view=None, state=None: None
         garments.run_garment = recorder
 
         print("[1] A runs, B and C wait")

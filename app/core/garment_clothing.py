@@ -28,6 +28,15 @@ shortened and said positively (Qwen2.1-Turbo ignores negatives):
 
 Unlike hair, nothing about the piece is derived from the character: the item
 is the same for every wearer, the fit is per wearer (``garment_store``).
+
+Open / closed (plan ``2026-11-12-unified-worn-pieces.md`` Task 11b, spec
+Addendum A "two meshes in the same piece"): a closable piece worn OPEN is
+another garment — its fragment says ``", worn open"`` (``fragment``), its
+fingerprint inputs carry ``state: "open"`` (``fsig_inputs``), so it has its
+own image group, mesh and fit. Closed is the identity state: its texts and
+inputs are those of before the option (ruling A1). Every text reads the
+state from the profile it is given (``outfit_options.piece_state_of``: a
+garment run hands in its run's profile, ``outfit_options.with_item_state``).
 """
 from typing import Any, Dict, Optional, Tuple
 
@@ -147,10 +156,27 @@ def _item_of(item: Any) -> Dict[str, Any]:
     return found
 
 
-def fragment(item: Dict[str, Any]) -> str:
+def fragment(item: Dict[str, Any], *, state: str = "closed") -> str:
     """The piece's ``prompt_fragment``, whitespace-normalised, without a
-    trailing full stop ("" when unset)."""
-    return " ".join(str(item.get("prompt_fragment") or "").split()).rstrip(".").strip()
+    trailing full stop ("" when unset); ``state`` ``open`` appends
+    ``", worn open"`` (``outfit_options.OPEN_WORDS``) to a set fragment,
+    closed is the fragment alone (ruling A1)."""
+    from app.core.outfit_options import OPEN, OPEN_WORDS
+    text = " ".join(str(item.get("prompt_fragment") or "").split()).rstrip(".").strip()
+    return f"{text}, {OPEN_WORDS}" if text and state == OPEN else text
+
+
+def state_of(item: Dict[str, Any], profile: Optional[Dict[str, Any]], state: Optional[str] = None) -> str:
+    """The state a clothing piece is made in: ``state`` when given (``open`` / ``closed``), else the profile's
+    worn state (``outfit_options.piece_state_of``); always ``closed`` for an item that is not closable
+    (``garment_set.closable_of``). ValueError for another state."""
+    from app.core.garment_set import closable_of
+    from app.core.outfit_options import CLOSED, normalise_piece_state, piece_state_of
+    if not closable_of(item):
+        return CLOSED
+    if state is not None:
+        return normalise_piece_state(state)
+    return piece_state_of(profile or {}, str(item.get("id") or ""))
 
 
 def garment_noun(item: Dict[str, Any]) -> str:
@@ -161,20 +187,28 @@ def garment_noun(item: Dict[str, Any]) -> str:
 
 
 def fsig_inputs(character_name: str, item: Dict[str, Any], *,
-                profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None) -> Dict[str, Any]:
     """What a clothing piece contributes to the garment fingerprint
     (``garment_store.garment_fsig``): its prompt fragment, its noun (the
     lower-cased name the ghost prompt says — a rename re-renders the ghost),
     slots, covers, partially covers and the pronouns of the character's
-    profile."""
+    profile. Worn OPEN (``state``, None → the profile's worn state,
+    ``state_of``) the fragment says ``", worn open"`` and ``state: "open"``
+    is added; closed inputs are those of before the option, byte for byte."""
     from app.core.garment_hair import pronouns
+    from app.core.outfit_options import OPEN
     item = _item_of(item)
     piece = item.get("outfit_piece") or {}
-    return {"prompt_fragment": fragment(item), "noun": garment_noun(item),
-            "slots": sorted(str(s) for s in piece.get("slots") or []),
-            "covers": sorted(str(s) for s in piece.get("covers") or []),
-            "partially_covers": sorted(str(s) for s in piece.get("partially_covers") or []),
-            "pronouns": list(pronouns(_profile_of(character_name, profile)))}
+    prof = _profile_of(character_name, profile)
+    worn = state_of(item, prof, state)
+    out = {"prompt_fragment": fragment(item, state=worn), "noun": garment_noun(item),
+           "slots": sorted(str(s) for s in piece.get("slots") or []),
+           "covers": sorted(str(s) for s in piece.get("covers") or []),
+           "partially_covers": sorted(str(s) for s in piece.get("partially_covers") or []),
+           "pronouns": list(pronouns(prof))}
+    if worn == OPEN:
+        out["state"] = OPEN
+    return out
 
 
 def _worn_negative(text: str, *, keep_hair: bool = False) -> str:
@@ -190,7 +224,9 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     """``(prompt, extra negative)`` of one clothing edit.
 
     ``worn`` FRONT (the base view): "Keep the image exactly as it is. Only
-    change their clothing: they now wear only {prompt_fragment}." — the worn
+    change their clothing: they now wear only {prompt_fragment}." — the
+    fragment in the state ``profile`` wears the piece in (``state_of``: open
+    adds ", worn open"); the worn
     BACK is no edit (``draft_prompt``, then ``fit_prompt``).
     ``ghost`` (the worn image): the piece alone, the item's name as the
     noun — ``ghost_prompt``. ValueError for an unknown step or
@@ -203,10 +239,11 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     if step == "worn" and view == "back":
         raise ValueError("the worn back is drafted from the worn front — draft_prompt, then the fit")
     item = _item_of(item_id)
-    text = _fragment_of(item)
+    prof = _profile_of(character_name, profile)
+    text = _fragment_of(item, state=state_of(item, prof))
     if step == "worn":
         from app.core.base_body import hair_text
-        haired = bool(hair_text(character_name, profile=_profile_of(character_name, profile)))
+        haired = bool(hair_text(character_name, profile=prof))
         return WORN.format(fragment=text), _worn_negative(text, keep_hair=haired)
     negative = ", ".join(t for t in (_worn_negative(text), *GHOST_NEGATIVE) if t)
     slots = (item.get("outfit_piece") or {}).get("slots") or []
@@ -226,8 +263,8 @@ def ghost_prompt(noun: str, slots, view: str) -> str:
                              openings=GHOST_OPENINGS[waist])
 
 
-def _fragment_of(item: Dict[str, Any]) -> str:
-    text = fragment(item)
+def _fragment_of(item: Dict[str, Any], *, state: str = "closed") -> str:
+    text = fragment(item, state=state)
     if not text:
         raise ValueError(f"{item.get('name') or item.get('id')} has no prompt fragment — fill it in under Items")
     return text
@@ -239,12 +276,16 @@ def draft_prompt(character_name: str, step: str, *, profile: Optional[Dict[str, 
     (``base_body.draft_prompt`` with ``DRAFT`` as the body text — the base
     back prompt, the bald head, wearing only the piece); negative: the
     draft's + the worn negative (the garment words the fragment does not
-    name). ValueError for another step, a missing item or no fragment."""
+    name; the fragment in the state ``profile`` wears the piece in,
+    ``state_of``). ValueError for another step, a missing item or no
+    fragment."""
     from app.core import base_body
     if EDIT_STEPS.get(step, {}).get("back") != "draft":
         raise ValueError(f"the clothing step {step!r} has no drafted back")
-    text = _fragment_of(_item_of(item_id))
-    prompt, negative = base_body.draft_prompt(character_name, "back", profile=_profile_of(character_name, profile),
+    item = _item_of(item_id)
+    prof = _profile_of(character_name, profile)
+    text = _fragment_of(item, state=state_of(item, prof))
+    prompt, negative = base_body.draft_prompt(character_name, "back", profile=prof,
                                               outfit_text=DRAFT.format(fragment=text))
     return prompt, ", ".join(p for p in (negative, _worn_negative(text)) if p)
 
@@ -267,14 +308,16 @@ def fit_text(text: str, limit: int = FIT_FRAGMENT_MAX) -> str:
     return text[:limit + 1].rsplit(" ", 1)[0].rstrip(" ,;")
 
 
-def fit_prompt(step: str, *, item_id: Optional[str] = None) -> Tuple[str, str]:
+def fit_prompt(step: str, *, item_id: Optional[str] = None, state: str = "closed") -> Tuple[str, str]:
     """``(prompt, keywords prompt)`` of the FIT of the worn back: ``FIT`` /
     ``FIT_KEYWORDS`` with the piece's dress text (``fit_text`` of its
-    fragment). ValueError for a step without a drafted back, a missing item
-    or a piece without a prompt fragment."""
+    fragment in ``state``: open adds ", worn open" for a closable piece).
+    ValueError for a step without a drafted back, a missing item or a piece
+    without a prompt fragment."""
     if EDIT_STEPS.get(step, {}).get("back") != "draft":
         raise ValueError(f"the clothing step {step!r} has no drafted back")
-    text = fit_text(_fragment_of(_item_of(item_id)))
+    item = _item_of(item_id)
+    text = fit_text(_fragment_of(item, state=state_of(item, None, state)))
     return FIT.format(fragment=text), FIT_KEYWORDS.format(fragment=text)
 
 

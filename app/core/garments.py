@@ -231,9 +231,10 @@ def _steps(steps: Union[None, str, Iterable[str]], order: Tuple[str, ...]) -> Op
     return wanted
 
 
-def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any], item_id: str) -> Dict[str, Any]:
+def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any], item_id: str,
+                 state: Optional[str] = None) -> Dict[str, Any]:
     from app.core import garment_store
-    return garment_store._kind_inputs(kind, character_name, profile, item_id)
+    return garment_store._kind_inputs(kind, character_name, profile, item_id, state)
 
 
 def _refresh_description(character_name: str, item: Dict[str, Any], kind: str,
@@ -317,11 +318,13 @@ def _front_hints(character_name: str, item_id: str, fsig: str, kind: str, step: 
     return _kind_module(kind).front_hints(character_name, item_id, fsig, step, view)
 
 
-def _inputs_unchanged(character_name: str, item_id: str, fsig: str, step: str) -> None:
+def _inputs_unchanged(character_name: str, item_id: str, fsig: str, step: str, state: Optional[str] = None) -> None:
     """``_Refused`` when the fsig of the run's images is no longer the
-    current one (``garment_store.garment_fsig``)."""
+    current one (``garment_store.garment_fsig`` in the run's open / closed
+    ``state`` — a run of the state the piece is not worn in now is judged by
+    its own inputs, never aborted for the worn state's)."""
     from app.core.garment_store import garment_fsig
-    if garment_fsig(character_name, item_id) != fsig:
+    if garment_fsig(character_name, item_id, state=state) != fsig:
         raise _Refused(step, INPUTS_CHANGED_ERROR, None)
 
 
@@ -634,7 +637,7 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     prepared_bytes = prepared.read_bytes()
     from app.core import garment_source
     base_images = {v: _sha(p) for v, p in base_views.items()}
-    if fsig == _fsig_or_empty(character_name, item_id):
+    if fsig == _fsig_or_empty(character_name, item_id, _state_in(character_name, item_id, profile)):
         # A group of the current fsig was made on exactly these base views: keep them with it (its frame).
         garment_source.ensure_base_copy(character_name, item_id, fsig, bsig=bsig, expected=base_images)
     # Masks in the frame of the bald front view the unrigged base was built
@@ -685,13 +688,19 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
 
 
-def _fsig_or_empty(character_name: str, item_id: str) -> str:
-    """``garment_store.garment_fsig`` ("" when the item has none)."""
+def _fsig_or_empty(character_name: str, item_id: str, state: Optional[str] = None) -> str:
+    """``garment_store.garment_fsig`` in ``state`` (None: the worn state; "" when the item has none)."""
     from app.core import garment_store as gs
     try:
-        return gs.garment_fsig(character_name, item_id)
+        return gs.garment_fsig(character_name, item_id, state=state)
     except ValueError:
         return ""
+
+
+def _state_in(character_name: str, item_id: str, profile: Dict[str, Any]) -> str:
+    """``garment_store.item_state`` of the profile (a run's profile: the state the run is for)."""
+    from app.core import garment_store as gs
+    return gs.item_state(character_name, item_id, profile)
 
 
 def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, rigged: bytes,
@@ -700,11 +709,16 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
     body of that id), write the fit GLB and its ``record`` (to that body's
     folder, ``garment_store.body_root``), decimate the distance tier to
     ``low/`` and schedule the assembly (unless ``schedule`` is False: the
-    assembly build itself fits). Shared by both hair methods and every body."""
+    assembly build itself fits). Shared by both hair methods and every body.
+    A clothing fit made for a piece worn OPEN (its inputs say ``state:
+    "open"``) records ``state: "open"``; a closed fit records no state, as
+    every fit before the option (plan Task 11b)."""
     from app.blender import refine
     from app.core import garment_fit, refit_pool
     from app.core.garment_store import garment_path, write_record
     record["fit_version"] = garment_fit.FIT_VERSION[kind]
+    if (record.get("inputs") or {}).get("state") == "open":
+        record["state"] = "open"
     fit = garment_path(character_name, item_id, fsig, "fit", body=body)
     low = garment_path(character_name, item_id, fsig, "low", body=body)
     # The graft is compute (``refit_pool.graft_file``: a worker writes it to a private temp path beside the fit);
@@ -1162,7 +1176,8 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             record["frame"]["holes"] = holes
         record.update({
             "metrics": result.metrics, "gates": gates, "report": result.report,
-            "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
+            # The state of the base fit it derives from (its own fsig), never the live worn state.
+            "inputs": {**_kind_inputs(kind, character_name, profile, item_id, gs.fit_state(base_record)),
                        "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
                        "ghost_front_sha256": _sha(ghost), "body_front_sha256": _sha(front)},
             "created_at": utc_now_iso()})
@@ -1303,7 +1318,7 @@ def body_fit_info(character_name: str, item_id: str, *,
 # --- The run --------------------------------------------------------------------
 
 def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
-                view: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
+                view: Optional[str] = None, force: bool = False, state: Optional[str] = None) -> Dict[str, Any]:
     """Run the garment chain of ``item_id`` (blocking, minutes; one run per
     character — waits for ``garment_store.char_lock``).
 
@@ -1323,14 +1338,23 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     ``BackendBusyError`` / ``MediaGenerationDisabled`` in the exception chain
     of any step, footwear's ``RETRY_LATER_ERRORS`` — carries ``retry_later:
     True`` and is not persisted). ValueError for an invalid item, step or
-    view (any view of footwear)."""
+    view (any view of footwear).
+
+    ``state`` (plan 2026-11-12-unified-worn-pieces Task 11b): the open /
+    closed state of a closable clothing piece the chain is made for — its own
+    image group, mesh and fit; None = the state the piece is worn in when the
+    run starts. The run's profile is the live one with the piece in that
+    state (``outfit_options.with_item_state``): every text, fingerprint and
+    source of the run reads it, so an open run while the piece is worn closed
+    never aborts as "inputs changed". An open run of a piece not worn now is
+    refused (its texts need the piece worn)."""
     item, kind, order = _item_order(character_name, item_id)
     _require_steps(kind, order)
     wanted = _steps(steps, order)
     _check_view(kind, view)
     from app.core import garment_store as gs
     with gs.char_lock(character_name):
-        result = _run_locked(character_name, item, kind, wanted, view, bool(force))
+        result = _run_locked(character_name, item, kind, wanted, view, bool(force), state)
         _note_outcome(character_name, item_id, result)
     if result.get("ok") and "fit" in (result.get("ran") or []) and kind in _grafted_kinds():
         # Outside the run lock: the piece is ready — a "piece_ready" request of the
@@ -1364,15 +1388,17 @@ def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> 
 
 
 def cached_failure(character_name: str, item_id: str, *,
-                   profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+                   profile: Optional[Dict[str, Any]] = None,
+                   state: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """The persisted failure of the item's CURRENT fsig that automatic
     triggers honour (``garment_store.chain_failure``) — None when the chain
     may run. Only an explicit run (``start_garment``) or a changed fsig
     retries a failed chain (plan 2026-11-09-base-body-phase5-mesh-items,
-    Task 4 fix round 1)."""
+    Task 4 fix round 1). ``state``: the open / closed state whose fsig is
+    judged (None: the worn state)."""
     from app.core import base_body, garment_store as gs
     try:
-        fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile, state=state)
     except ValueError:
         return None
     base = base_body.current_base(character_name, profile=profile)
@@ -1417,7 +1443,7 @@ def _unknown_estimate(note: str) -> Dict[str, Any]:
 
 
 def run_estimate(character_name: str, item_id: str, *,
-                 profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                 profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None) -> Dict[str, Any]:
     """The hub cost of a plain ``run_garment(character_name, item_id)`` BEFORE
     it runs: ``{steps, hub_jobs, note, refit}`` — ``steps`` the steps of the
     item's current method from the first one not ``_done`` under the current
@@ -1429,7 +1455,10 @@ def run_estimate(character_name: str, item_id: str, *,
     start at an image step but ``garment_source.find_source`` has a source
     made on another base and the current group holds no own images: the
     chain refits on the CPU first (``_refit_from_source``), so ``hub_jobs``
-    is 0 and the note names the full cost a refused refit falls back to."""
+    is 0 and the note names the full cost a refused refit falls back to.
+    ``state``: the open / closed state of a closable clothing piece whose
+    chain is estimated (None: the worn state) — its own fsig, its own
+    source (``outfit_options.with_item_state``)."""
     from app.core import base_body, garment_source
     from app.core import garment_store as gs
     from app.models.character import get_character_profile
@@ -1462,12 +1491,14 @@ def run_estimate(character_name: str, item_id: str, *,
         except OSError as e:  # PIL's UnidentifiedImageError included: an estimate never raises on a bad file
             return _unknown_estimate(f"{item.get('name') or item_id}: item image unreadable ({e})")
     try:
-        fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+        state = gs.item_state(character_name, item_id, profile, state)
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile, state=state)
         hsig = gs.garment_hsig(character_name, item_id, profile=profile) if method == gs.HAIRDECK else ""
         first = next((s for s in order
                       if not _done(character_name, item_id, kind, fsig, s, base_sha, method, hsig)), None)
     except ValueError as e:
         return _unknown_estimate(str(e))
+    run_profile = _run_profile(profile, item_id, state)
     if first is None:
         return {"steps": [], "hub_jobs": 0, "note": "nothing to run", "refit": False}
     steps = list(order[order.index(first):])
@@ -1475,8 +1506,9 @@ def run_estimate(character_name: str, item_id: str, *,
     full = sum(n for _s, n in parts)
     note = " + ".join(f"{s} {n}" for s, n in parts if n) or "no hub job"
     if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN:
-        if (not garment_source.has_own_images(character_name, item_id, kind, method, fsig)
-                and garment_source.find_source(character_name, item_id, kind, method, profile, fsig)
+        if (run_profile is not None
+                and not garment_source.has_own_images(character_name, item_id, kind, method, fsig)
+                and garment_source.find_source(character_name, item_id, kind, method, run_profile, fsig)
                 is not None):
             return {"steps": steps, "hub_jobs": 0, "refit": True,
                     "note": f"refit from the previous base; up to {full} if the refit is refused"}
@@ -1518,8 +1550,23 @@ def _item_order(character_name: str, item_id: str,
     return item, kind, gs.steps_for(kind, gs.kind_method(kind, character_name, profile))
 
 
+def _run_profile(profile: Dict[str, Any], item_id: str, state: str) -> Optional[Dict[str, Any]]:
+    """The profile a run (or an estimate) of ``item_id`` in ``state`` reads: the live ``profile`` with the piece
+    in that state (``outfit_options.with_item_state``); None when the profile cannot wear it in that state — an
+    OPEN state of a piece it does not wear (its texts would say closed)."""
+    from app.core import garment_store as gs
+    from app.core.outfit_options import with_item_state
+    out = with_item_state(profile, item_id, state)
+    return out if gs.item_state("", item_id, out) == state else None
+
+
+#: The refusal of an open run of a piece that is not worn (``run_garment``, ``check_run``).
+NOT_WORN_OPEN_ERROR = "{name} is not worn now — its open mesh is made while it is worn"
+
+
 def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
-                wanted: Optional[List[str]], view: Optional[str], force: bool) -> Dict[str, Any]:
+                wanted: Optional[List[str]], view: Optional[str], force: bool,
+                state: Optional[str] = None) -> Dict[str, Any]:
     from app.core import base_body, garment_images, garment_mesh
     from app.core import garment_store as gs
     from app.models.character import get_character_profile
@@ -1530,6 +1577,15 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         return garment_footwear.run_chain(character_name, item, wanted, force)
     item_id = item["id"]
     profile = get_character_profile(character_name) or {}
+    try:
+        state = gs.item_state(character_name, item_id, profile, state)
+    except ValueError as e:
+        return {"ok": False, "fsig": "", "step": "", "error": str(e), "ran": []}
+    run_profile = _run_profile(profile, item_id, state)
+    if run_profile is None:
+        return {"ok": False, "fsig": "", "step": "", "ran": [],
+                "error": NOT_WORN_OPEN_ERROR.format(name=item.get("name") or item_id)}
+    profile = run_profile
     method = gs.kind_method(kind, character_name, profile)
     order = gs.steps_for(kind, method)
     if not order:
@@ -1570,6 +1626,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         if first in gs.IMAGE_STEPS:
             from app.core import garment_source
             garment_source.ensure_current(character_name, item_id, fsig, bsig)
+        image_state = state if kind == _clothing() else None
         pair_step = _kind_module(kind).PAIR_STEP if method == gs.EDIT_CHAIN else None
         dirty = False  # an earlier step produced new output: every later step runs again
         regenerated_seed: Optional[int] = None  # the seed a forced HairDeck regenerate of this run made
@@ -1595,22 +1652,24 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                         garment_images.run_edit_step(character_name, item_id, fsig, step, v, force=f,
                                                      pair_check=pair,
                                                      prompt_hints=_front_hints(character_name, item_id, fsig,
-                                                                               kind, step, v))
+                                                                               kind, step, v),
+                                                     state=image_state)
                     produced = True
                     # Right away: a refusal of the next view must not leave a
                     # mesh behind that was built from the replaced image.
                     _drop_mesh(character_name, item_id, fsig)
-                    _inputs_unchanged(character_name, item_id, fsig, step)
+                    _inputs_unchanged(character_name, item_id, fsig, step, state)
                 if step == pair_step and not _pair(character_name, item_id, kind, fsig)[0]:
                     # The back is the reference (the hem); the front renders
                     # again against it (two attempts; GateRefused when both miss).
                     garment_images.run_edit_step(character_name, item_id, fsig, step, "front", force=True,
                                                  pair_check=_pair_check(character_name, item_id, kind, fsig),
                                                  prompt_hints=_front_hints(character_name, item_id, fsig,
-                                                                           kind, step, "front"))
+                                                                           kind, step, "front"),
+                                                 state=image_state)
                     produced = True
                     _drop_mesh(character_name, item_id, fsig)
-                    _inputs_unchanged(character_name, item_id, fsig, step)
+                    _inputs_unchanged(character_name, item_id, fsig, step, state)
                     agree, gates = _pair(character_name, item_id, kind, fsig)
                     if not agree:
                         raise _Refused(step, _kind_module(kind).PAIR_REFUSED, gates)
@@ -1737,22 +1796,35 @@ def _retry_later(character_name: str, item_id: str, fsig: str, step: str, e: Bas
 
 
 def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
-              view: Optional[str] = None) -> None:
+              view: Optional[str] = None, state: Optional[str] = None) -> None:
     """ValueError unless ``item_id`` is a garment of a known kind owned by
     the character and ``steps`` / ``view`` name steps of its current method
-    and a view of it (footwear has none)."""
-    _item_, kind, order = _item_order(character_name, item_id)
+    and a view of it (footwear has none); a ``state`` only for a closable
+    clothing piece (``open`` / ``closed``), ``open`` only while it is worn
+    (``NOT_WORN_OPEN_ERROR``)."""
+    item, kind, order = _item_order(character_name, item_id)
     _require_steps(kind, order)
     _steps(steps, order)
     _check_view(kind, view)
+    if state is not None:
+        from app.core import garment_set
+        from app.core.outfit_options import normalise_piece_state
+        from app.models.character import get_character_profile
+        value = normalise_piece_state(state)
+        if kind != _clothing() or not garment_set.closable_of(item):
+            raise ValueError(f"{item.get('name') or item_id} has no open / closed state")
+        if _run_profile(get_character_profile(character_name) or {}, item_id, value) is None:
+            raise ValueError(NOT_WORN_OPEN_ERROR.format(name=item.get("name") or item_id))
 
 
 class _Job:
     """One queued run of a character's worker (``_queues``)."""
 
     def __init__(self, item_id: str, steps: Union[None, str, Iterable[str]], view: Optional[str],
-                 force: bool, automatic: bool = False):
+                 force: bool, automatic: bool = False, state: Optional[str] = None):
         self.item_id, self.steps, self.view, self.force = item_id, steps, view, force
+        #: The open / closed state the run is for; None = the worn state when it starts (``run_garment``).
+        self.state = state
         #: Queued by a trigger (``enqueue_garment`` / ``run_queued``), not by a
         #: click: re-checked against ``cached_failure`` when it STARTS, because
         #: the failure it must honour may have been recorded by the run it
@@ -1765,15 +1837,15 @@ class _Job:
 
     @property
     def plain(self) -> bool:
-        """A default run (first missing step on) — what a trigger asks for."""
-        return self.steps is None and self.view is None and not self.force
+        """A default run (first missing step on, the worn state) — what a trigger asks for."""
+        return self.steps is None and self.view is None and not self.force and self.state is None
 
-    def key(self) -> Tuple[str, Any, Optional[str], bool]:
-        """What makes two runs the same request (the steps as a tuple)."""
+    def key(self) -> Tuple[str, Any, Optional[str], bool, Optional[str]]:
+        """What makes two runs the same request (the steps as a tuple, the state)."""
         steps = self.steps
         if steps is not None and not isinstance(steps, str):
             steps = tuple(steps)
-        return self.item_id, steps, self.view, bool(self.force)
+        return self.item_id, steps, self.view, bool(self.force), self.state
 
 
 def _fit_only(steps: Union[None, str, Iterable[str]]) -> bool:
@@ -1851,7 +1923,7 @@ def _worker(character_name: str) -> None:
                               "error": failure.get("error"), "cached": True, "ran": []}
             else:
                 job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
-                                         force=job.force)
+                                         force=job.force, state=job.state)
         except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
             logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
             error = str(e) or type(e).__name__
@@ -1890,7 +1962,8 @@ def _position_locked(character_name: str, job: "_Job") -> Dict[str, Any]:
 
 
 def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
-                  view: Optional[str] = None, force: bool = False) -> Dict[str, Any]:
+                  view: Optional[str] = None, force: bool = False,
+                  state: Optional[str] = None) -> Dict[str, Any]:
     """Run ``run_garment`` in the character's worker thread — at once when
     the character has no garment run, else queued behind its runs (never
     refused). An identical waiting run (same item, steps, view, force) is not
@@ -1900,10 +1973,18 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     counts as running (``queued``) from THIS moment (the UI polls), unless it
     is in a step right now. Returns ``{started, queued, position, behind}``
     (``_position_locked``). ValueError for an invalid item, step or view
-    (checked before anything is queued)."""
+    (checked before anything is queued).
+
+    ``state`` (plan Task 11b): the open / closed state the run is for (the
+    piece details' "Build the open mesh"); None = the state the piece is
+    worn in when the run STARTS. It is part of the request: a waiting
+    default run of the item is replaced only by an explicit run of the state
+    the piece is worn in now (a default run builds that state)."""
     from app.core import garment_store as gs
-    check_run(character_name, item_id, steps=steps, view=view)
-    wanted = _Job(item_id, steps, view, bool(force))
+    check_run(character_name, item_id, steps=steps, view=view, state=state)
+    wanted = _Job(item_id, steps, view, bool(force), state=state)
+    # A default run builds the worn state: an explicit run of the OTHER state never takes its place.
+    takes_default = wanted.state is None or wanted.state == _worn_state(character_name, item_id)
     # A fit-only run is a CPU refit: tracked from the click on (pending while it waits behind other runs).
     track = ""
     if _fit_only(steps):
@@ -1912,11 +1993,11 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     with _lock:
         queue = _queues.setdefault(character_name, deque())
         job = next((j for j in queue if j.key() == wanted.key()), None)
-        if job is None and not wanted.plain:
+        if job is None and not wanted.plain and takes_default:
             job = next((j for j in queue if j.item_id == item_id and j.plain), None)
             if job is not None:
                 # Explicit wins, the place in the queue stays.
-                job.steps, job.view, job.force = wanted.steps, wanted.view, wanted.force
+                job.steps, job.view, job.force, job.state = wanted.steps, wanted.view, wanted.force, wanted.state
         if job is None:
             job = wanted
             queue.append(job)
@@ -1937,6 +2018,13 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
         from app.core import refit_pool
         refit_pool.discard(track)
     return position
+
+
+def _worn_state(character_name: str, item_id: str) -> str:
+    """The state the piece is worn in now (``garment_store.item_state`` of the live profile)."""
+    from app.core import garment_store as gs
+    from app.models.character import get_character_profile
+    return gs.item_state(character_name, item_id, get_character_profile(character_name) or {})
 
 
 def enqueue_garment(character_name: str, item_id: str, *, automatic: bool = True) -> "_Job":

@@ -606,6 +606,9 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
           {t("Mode: {mode} — set in a wearer's Wardrobe")
             .replace('{mode}', t(MESH_MODE_LABELS[meshModeOf(draft.mesh_mode, draft.slots)]))}
         </span>
+        <span className="ga-form-hint" style={{ display: 'block', marginTop: 2 }}>
+          {draft.closable ? t("Open / closed: yes — set in a wearer's Wardrobe") : t("Open / closed: no — set in a wearer's Wardrobe")}
+        </span>
       </Field>}
       {isOutfit ? (
         <OutfitPieceFields

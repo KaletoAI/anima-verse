@@ -466,7 +466,15 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
     ones whose layer order is a guess (``mesh_overlaps``: a cycle, put in
     slot rank order; [] off the pipeline, where the mode is ignored),
     ``queue_running`` / ``queue`` the character's garment queue
-    (``garments.queue_state``: the item id in flight, the waiting ones)."""
+    (``garments.queue_state``: the item id in flight, the waiting ones).
+    Open / closed (plan 2026-11-12-unified-worn-pieces Task 11b): ``closable``
+    ``{item_id: bool}`` for every held outfit piece (``closable_of``, the
+    row's "Can be worn open" checkbox), ``piece_state`` ``{item_id: "open"}``
+    of the worn pieces worn open (``outfit_options.piece_states``; absent =
+    closed), ``names_state`` ``{item_id: True}`` for a closable piece whose
+    prompt fragment already names a state (ruling A6, the row's hint) and
+    ``auto_build`` (``figure_build.auto_build_on``: a toggle then starts the
+    Build)."""
     from app.core import base_body, body_slots, garments
     profile = _profile_of(character_name, profile)
     pipeline = base_body.is_base_pipeline(character_name, profile=profile)
@@ -490,10 +498,18 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
     overlaps = (mesh_overlaps(pieces, slot_order=body_slots.piece_slots_for_character(character_name))
                 if pipeline else [])
     queue = garments.queue_state(character_name)
+    modes = held_outfit_pieces(character_name, profile=profile)
+    from app.core import figure_build, outfit_options
+    from app.models.inventory import get_item
+    closable = {item_id: closable_of(get_item(item_id)) for item_id in modes}
+    names_state = {item_id: True for item_id, on in closable.items()
+                   if on and outfit_options.fragment_names_state((get_item(item_id) or {}).get("prompt_fragment"))}
     return {"pipeline": pipeline, "items": items,
-            "modes": held_outfit_pieces(character_name, profile=profile), "overlaps": overlaps,
+            "modes": modes, "overlaps": overlaps,
             "queue_running": queue["queue_running"], "queue": queue["queue"],
-            "hem": _wardrobe_hem(character_name, profile, pipeline)}
+            "hem": _wardrobe_hem(character_name, profile, pipeline),
+            "closable": closable, "piece_state": outfit_options.piece_states(profile), "names_state": names_state,
+            "auto_build": figure_build.auto_build_on(character_name, profile=profile)}
 
 
 def _wardrobe_hem(character_name: str, profile: Dict[str, Any], pipeline: bool) -> Dict[str, Any]:

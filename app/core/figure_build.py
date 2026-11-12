@@ -267,7 +267,10 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
                           views + len(stages)))
 
     for item_id in wanted.own:
-        step = _chain_step(character_name, "pieces", item_id, f"Own mesh · {_item_name(item_id)}", profile)
+        # The worn state's chain only (plan Task 11b: the other state is built by its own button, never both
+        # automatically); a piece worn open says so — its open mesh is another chain.
+        label = f"Own mesh · {_item_name(item_id)}" + (" (open)" if item_id in wanted.open else "")
+        step = _chain_step(character_name, "pieces", item_id, label, profile)
         if step is not None:
             steps.append(step)
 
@@ -699,10 +702,32 @@ def _hair_row(character_name: str, profile: Dict[str, Any], wanted, delivered,
             "note": f"Shown {shown} until its HairDeck mesh is built"}
 
 
+def _other_state_jobs(character_name: str, item_id: str, worn_state: str,
+                      profile: Dict[str, Any]) -> Optional[int]:
+    """The hub jobs of building the OTHER open / closed state's own mesh of a worn piece (the piece details'
+    single action, ``garments.run_estimate(state=…)``); None when unknown."""
+    from app.core import garments
+    from app.core.outfit_options import CLOSED, OPEN
+    try:
+        estimate = garments.run_estimate(character_name, item_id, profile=profile,
+                                         state=CLOSED if worn_state == OPEN else OPEN)
+    except Exception:  # noqa: BLE001 — an estimate, never a failure of the payload
+        logger.debug("Other-state estimate of %s/%s failed", character_name, item_id, exc_info=True)
+        return None
+    jobs = estimate.get("hub_jobs")
+    return int(jobs) if jobs is not None else None
+
+
 def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[str, Any]],
-               running: bool) -> List[Dict[str, Any]]:
+               running: bool, profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The Figure tab's worn rows. Open / closed (plan Task 11b): ``piece_state`` — ``"open"`` / ``"closed"`` for
+    a closable piece, None otherwise (not the row's ``state``, which is its readiness) — and, for an own-mesh
+    closable piece, ``other_state_jobs``: what building the other state's mesh costs (None: unknown or not
+    applicable)."""
     from app.core import garment_set
+    from app.core.outfit_options import CLOSED, OPEN
     from app.models import inventory
+    profile = _profile_of(character_name, profile)
     piece_failures: Dict[str, str] = {}
     entry = failed.get("pieces") or {}
     if entry:
@@ -728,12 +753,17 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
             state = "interim"
         else:
             state = "pending"
+        mode = garment_set.mesh_mode_of(item) or garment_set.PAINTED
+        closable = garment_set.closable_of(item)
+        piece_state = (OPEN if item_id in wanted.open else CLOSED) if closable else None
         rows.append({"slot": slot, "item_id": item_id, "name": str(item.get("name") or item_id),
-                     "mode": garment_set.mesh_mode_of(item) or garment_set.PAINTED, "state": state,
+                     "mode": mode, "state": state,
                      "note": (delivered.interim.get(item_id) or delivered.left_out.get(item_id)
                               or delivered.notes.get(item_id) or ""),
                      "interim": item_id in delivered.interim, "left_out": delivered.left_out.get(item_id) or "",
-                     "failure": failure})
+                     "failure": failure, "piece_state": piece_state,
+                     "other_state_jobs": (_other_state_jobs(character_name, item_id, piece_state, profile)
+                                          if closable and mode == garment_set.OWN_MESH else None)})
     return rows
 
 
@@ -854,7 +884,7 @@ def figure_info(character_name: str) -> Dict[str, Any]:
                         "state": ("ready" if built is not None and built.texture == wanted.texture
                                   and built.shape == wanted.shape else "missing") if wanted.texture else "none"}}
     body["plain"]["jobs"] = _plain_jobs(character_name, wanted.bsig)
-    worn = _worn_rows(character_name, wanted, delivered, failures, build["running"])
+    worn = _worn_rows(character_name, wanted, delivered, failures, build["running"], profile)
     hair = _hair_row(character_name, profile, wanted, delivered, failures, build["running"])
     for row in worn:
         row["jobs"] = _item_jobs(steps, "pieces", row["item_id"])

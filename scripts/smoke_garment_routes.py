@@ -173,7 +173,7 @@ def main() -> int:
         gate = threading.Event()
         gate.set()
 
-        def recorder(character_name, item_id, *, steps=None, view=None, force=False):
+        def recorder(character_name, item_id, *, steps=None, view=None, force=False, state=None):
             RUNS.append((character_name, item_id, steps, view, force))
             gate.wait(30)
             return {"ok": True, "fsig": "", "ran": []}
