@@ -479,7 +479,8 @@ def build_static_lod(path: Path, ratio: float) -> Dict[str, Any]:
 
 
 def decimate_to(path_in: Path, target_tris: int, out: Path, *,
-                merge_vertices: bool = False) -> Dict[str, Any]:
+                merge_vertices: bool = False,
+                tris: Optional[int] = None) -> Dict[str, Any]:
     """Reduces the GLB ``path_in`` to about ``target_tris`` triangles and
     writes the result to ``out`` (UV seams kept, skin weights interpolated).
 
@@ -488,7 +489,10 @@ def decimate_to(path_in: Path, target_tris: int, out: Path, *,
     skinned meshes (unchanged behaviour).
 
     The ratio is ``min(0.999, target / tris)`` with ``tris`` from
-    ``measure_file`` — a mesh already below the target still passes through
+    ``measure_file``, or the caller's ``tris`` when given (no Blender start
+    to count: a fit's publisher already knows its count from
+    ``glb_mesh.static_arrays``, which equals ``measure``'s on every fit
+    GLB) — a mesh already below the target still passes through
     Blender once, so every result has the same exporter behind it. The
     ``<stem>_lod<N>`` file of ``lod.py`` is moved to ``out`` (a temp folder
     beside ``out``, then one rename), never left next to it. No validation:
@@ -507,8 +511,10 @@ def decimate_to(path_in: Path, target_tris: int, out: Path, *,
     if path_in.suffix.lower() != ".glb":
         res["error"] = f"decimation handles GLB, not {path_in.suffix}"
         return res
-    measured = measure_file(path_in)
-    tris = int((measured or {}).get("tris") or 0)
+    if tris is None:
+        measured = measure_file(path_in)
+        tris = int((measured or {}).get("tris") or 0)
+    tris = int(tris)
     if tris <= 0:
         res["error"] = (unavailable_reason() or "could not measure the triangle count")
         return res

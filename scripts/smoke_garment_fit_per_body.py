@@ -262,7 +262,7 @@ def main() -> int:
         ga.schedule = lambda name, signature=None: SCHEDULED.append((name, signature)) or True
         model3d.request_lod = lambda *a, **k: False
 
-        def decimate(src, target, dst):
+        def decimate(src, target, dst, **_kw):
             Path(dst).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
             return {"ok": True, "tris": target, "ratio": 1.0}

@@ -153,7 +153,7 @@ def main() -> int:
         glb_mesh.static_arrays = lambda blob: (None, [[0, 1, 2]] * 4)
         refine.lod_ratio = lambda kind: 0.5
 
-        def decimate(src, target, out):
+        def decimate(src, target, out, **_kw):
             DECIMATED.append(Path(out).name)
             Path(out).parent.mkdir(parents=True, exist_ok=True)
             Path(out).write_bytes(Path(src).read_bytes())

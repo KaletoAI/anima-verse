@@ -132,7 +132,7 @@ def main() -> int:
         from _figure_build_fixtures import build_chains, record_requests
         REQUESTS = record_requests()
 
-        def decimate(src, target, dst):
+        def decimate(src, target, dst, **_kw):
             Path(dst).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
             return {"ok": True, "tris": target, "ratio": 1.0}

@@ -251,7 +251,7 @@ def main() -> int:
         sync_topics.changed_at = lambda name, *a, **k: None
         model3d._validator_for = lambda rig, name: (lambda data: {"ok": True, "errors": []})
 
-        def decimate(src, target, dst):
+        def decimate(src, target, dst, **_kw):
             Path(dst).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
             return {"ok": True, "tris": target, "ratio": 1.0}

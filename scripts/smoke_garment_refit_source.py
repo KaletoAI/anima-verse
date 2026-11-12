@@ -365,7 +365,7 @@ def main() -> int:
 
         service.get_image_service = lambda: FakeService()
 
-        def decimate_to(path_in, target_tris, out, merge_vertices=False):
+        def decimate_to(path_in, target_tris, out, merge_vertices=False, **_kw):
             data = Path(path_in).read_bytes()
             DECIMATES.append(Path(out).parent.name)
             Path(out).parent.mkdir(parents=True, exist_ok=True)

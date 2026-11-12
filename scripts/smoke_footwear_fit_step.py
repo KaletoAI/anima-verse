@@ -239,7 +239,7 @@ def main() -> int:
         model_refs.schedule_outfit_render = lambda *a, **k: None
         garment_assembly.schedule = lambda name, signature=None: SCHEDULED.append(name) or True
 
-        def decimate(src, target, dst):
+        def decimate(src, target, dst, **_kw):
             Path(dst).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
             return {"ok": True, "tris": target, "ratio": 1.0}

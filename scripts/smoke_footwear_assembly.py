@@ -390,7 +390,7 @@ def main() -> int:
         # The fixture rig has seven joints: the Mixamo 52-joint rule cannot hold; the rig-frame check stays real.
         model3d._validator_for = lambda rig, name: (lambda data: {"ok": True, "errors": []})
 
-        def decimate(src, target, dst):
+        def decimate(src, target, dst, **_kw):
             Path(dst).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src, dst)
             return {"ok": True, "tris": target, "ratio": 1.0}

@@ -380,7 +380,7 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     tris = out["tris"]
     target = max(1, int(round(refine.lod_ratio("character") * tris)))
     try:
-        dec = refine.decimate_to(path, target, low)
+        dec = refine.decimate_to(path, target, low, tris=tris)
     except Exception as e:  # noqa: BLE001 — the distance tier falls back to the full fit
         dec = {"ok": False, "error": str(e) or type(e).__name__}
     if dec.get("ok"):

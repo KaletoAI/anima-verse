@@ -271,7 +271,7 @@ def main() -> int:
 
         garment_hairdeck.fit_hairdeck = fit_stub
 
-        def decimate_to(path_in, target_tris, out, merge_vertices=False):
+        def decimate_to(path_in, target_tris, out, merge_vertices=False, **_kw):
             Path(out).parent.mkdir(parents=True, exist_ok=True)
             Path(out).write_bytes(Path(path_in).read_bytes())
             return {"ok": True, "path": str(out), "tris": target_tris, "ratio": 0.5, "error": ""}

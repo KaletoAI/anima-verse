@@ -244,7 +244,7 @@ def main() -> int:
         SCHEDULED = []
         garment_assembly.schedule = lambda name, signature=None: SCHEDULED.append(name) or True
 
-        def decimate(src, target, out):
+        def decimate(src, target, out, **_kw):
             Path(out).parent.mkdir(parents=True, exist_ok=True)
             Path(out).write_bytes(Path(src).read_bytes())
             return {"ok": True, "tris": target, "ratio": 0.5}

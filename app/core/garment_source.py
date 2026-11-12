@@ -152,6 +152,8 @@ refits from the stored seeds.
 from __future__ import annotations
 
 import shutil
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -629,6 +631,13 @@ def limb_numbers(positions, body) -> Optional[Dict[str, Any]]:
     return out
 
 
+#: How many ``limb_source_from_fit`` results are kept (an LRU keyed by the fit GLB's sha256, ``skirt``, ``torso``):
+#: every outfit body of one character reads the same base fit, so its limb source is derived once per base fit.
+LIMB_CACHE_SIZE = 8
+_limb_cache: "OrderedDict[Tuple[str, bool, bool], Optional[Dict[str, Any]]]" = OrderedDict()
+_limb_cache_lock = threading.Lock()
+
+
 def limb_source_from_fit(blob: bytes, *, skirt: bool = False, torso: bool = False) -> Optional[Dict[str, Any]]:
     """``garment_fit.fit_clothing``'s ``limb_source`` from a fit GLB (the garment grafted on its body): its
     vertices, its skin weights on the limb (and with ``torso`` the trunk) bones, and the frames of the limb chains
@@ -636,7 +645,28 @@ def limb_source_from_fit(blob: bytes, *, skirt: bool = False, torso: bool = Fals
     never for a skirt) plus, with ``torso`` (a fit on an outfit body), the trunk (``garment_fit.torso_frame``).
     ``numbers`` = the covered limbs' numbers, ``torso_cover`` / ``torso_open`` (with ``torso``) the trunk coverage
     (``torso_cover``) and the base fit's openings (``torso_open``), the gates' sources. None without anything to
-    align."""
+    align.
+
+    Cached (``LIMB_CACHE_SIZE`` entries, least recently used dropped) by ``sha256(blob)``, ``skirt`` and ``torso``:
+    the result is a pure function of those. The SAME object is returned on a hit — callers must not mutate it
+    (``fit_clothing`` copies into new arrays, ``write_limb_source`` only serializes). An exception is not cached."""
+    import hashlib
+    key = (hashlib.sha256(blob).hexdigest(), bool(skirt), bool(torso))
+    with _limb_cache_lock:
+        if key in _limb_cache:
+            _limb_cache.move_to_end(key)
+            return _limb_cache[key]
+    data = _limb_source_from_fit(blob, skirt=skirt, torso=torso)
+    with _limb_cache_lock:
+        _limb_cache[key] = data
+        _limb_cache.move_to_end(key)
+        while len(_limb_cache) > LIMB_CACHE_SIZE:
+            _limb_cache.popitem(last=False)
+    return data
+
+
+def _limb_source_from_fit(blob: bytes, *, skirt: bool, torso: bool) -> Optional[Dict[str, Any]]:
+    """``limb_source_from_fit`` uncached."""
     from app.core import garment_fit, glb_mesh
     from app.core.rig_contract import norm_bone_name
     garment = glb_mesh.garment_arrays(blob)
