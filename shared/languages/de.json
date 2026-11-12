@@ -4663,6 +4663,14 @@
     "Refused by its gates — run it explicitly from the Wardrobe or the 3D tab": "Von seinen Prüfungen abgelehnt — explizit über die Garderobe oder den 3D-Tab ausführen",
     "CPU-only entries keep running": "Reine CPU-Einträge laufen weiter",
     "Artefact report": "Artefakt-Bericht",
-    "What the cleanup would remove for this character, and why (a dry run)": "Was die Bereinigung bei diesem Charakter entfernen würde und warum (ein Probelauf)"
+    "What the cleanup would remove for this character, and why (a dry run)": "Was die Bereinigung bei diesem Charakter entfernen würde und warum (ein Probelauf)",
+    "Rendered without the skin detail step": "Ohne den Hautdetail-Schritt gerendert",
+    "Skin detail added — the neutral render on the left": "Hautdetails ergänzt — links das neutrale Bild",
+    "Skin detail step off — the neutral render is the front": "Hautdetail-Schritt aus — das neutrale Bild ist die Vorderansicht",
+    "Skin detail not added (backend busy) — the neutral render is the front": "Hautdetails nicht ergänzt (Backend ausgelastet) — das neutrale Bild ist die Vorderansicht",
+    "Skin detail not added — the neutral render is the front": "Hautdetails nicht ergänzt — das neutrale Bild ist die Vorderansicht",
+    "Neutral front": "Neutrale Vorderansicht",
+    "Runs the skin detail edit again on the stored neutral front (one image job); the front is not re-rendered.": "Führt die Hautdetail-Bearbeitung erneut auf der gespeicherten neutralen Vorderansicht aus (ein Bildjob); die Vorderansicht wird nicht neu gerendert.",
+    "Run skin step": "Hautschritt ausführen"
   }
 }

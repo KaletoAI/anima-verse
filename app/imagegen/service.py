@@ -2982,6 +2982,9 @@ class ImageService:
                 # rescanning the gallery.
                 "gallery_character": gallery_character,
                 "filenames": list(saved_files),
+                # The prompt the engine really received (ImageBackend.generate
+                # writes it into the log meta of the successful attempt).
+                "final_prompt": _log_meta.get("final_prompt", "") if isinstance(_log_meta, dict) else "",
             }
             # Store thread-local (for parallel callers)
             # + mirror on the instance (backward compat for non-threaded callers)

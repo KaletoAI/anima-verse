@@ -124,6 +124,17 @@ export interface ExtensionTipPanelInfo {
   error: string
 }
 
+/** The base front's skin detail step (`base_skin.info`). */
+export interface BaseSkinInfo {
+  /** The world switch `base_body.skin_detail_step`. */
+  enabled: boolean
+  /** The stored neutral front the step started from (null = none). */
+  neutral_url: string | null
+  neutral_meta?: ImageTileMeta | null
+  /** The front sidecar's `skin_step` record (null = none). */
+  step: { applied?: boolean; outcome?: string; error?: string | null; at?: string } | null
+}
+
 export interface BaseBodyInfo {
   pipeline: boolean
   humanoid: boolean
@@ -140,6 +151,8 @@ export interface BaseBodyInfo {
   collision_scales?: Record<string, number>
   /** The base model's pair tip groups (characters.py `_base_body_model_extras`). */
   extension_tips?: ExtensionTipPanelInfo[]
+  /** The front's skin detail step (null for a non-humanoid). */
+  skin?: BaseSkinInfo | null
   now?: string
 }
 

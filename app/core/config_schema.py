@@ -161,6 +161,19 @@ SECTIONS = {
                                "a fraction of the body height. 0 uses the side views unmasked (cloth on the arms). "
                                "Measured: 0.025 and above keep the flanks as good as front and back alone.",
             },
+            "skin_detail_step": {
+                "type": "bool",
+                "label": "Skin detail step on base fronts",
+                "default": True,
+                "description": "After the neutral base front is rendered, one image edit (occasion outfit_front) "
+                               "adds realistic skin — pores, tone variation, a matte finish, fine body hair on "
+                               "men — and a local transfer keeps only that fine detail: shape, colour and face "
+                               "stay those of the neutral render, shapes the edit invents are dropped. The back "
+                               "and side views are edits of this front and inherit the skin. Costs one extra "
+                               "image job per base front; when the edit is busy or fails, the neutral front is "
+                               "used. Changing this marks existing base bodies \"Built with older prompts\"; "
+                               "nothing is rebuilt automatically.",
+            },
         },
     },
     "packages": {

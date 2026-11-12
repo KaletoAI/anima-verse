@@ -366,12 +366,20 @@ def base_identity(character_name: str, *, profile: Optional[Dict[str, Any]] = No
 
 def prompt_fingerprint(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
     """12 hex over the four views' character blocks, prompts and negatives —
-    the texts a base render is made with. Stored in every base view's
-    sidecar; a stored base whose fingerprint differs from the current one is
-    current but carries the ``OLDER_PROMPTS`` note."""
+    the texts a base render is made with — and, while the world switch
+    ``base_body.skin_detail_step`` is on, the front's skin detail step
+    (``base_skin.fingerprint_part``: prompt, occasion, transfer parameters;
+    left out while off, so a base without the step stays current then).
+    Stored in every base view's sidecar; a stored base whose fingerprint
+    differs from the current one is current but carries the
+    ``OLDER_PROMPTS`` note."""
     profile = _profile_of(character_name, profile)
-    payload = {view: [base_character(character_name, view, profile=profile),
-                      *base_prompt(character_name, view, profile=profile)] for view in BASE_VIEWS}
+    payload: Dict[str, Any] = {view: [base_character(character_name, view, profile=profile),
+                                      *base_prompt(character_name, view, profile=profile)] for view in BASE_VIEWS}
+    from app.core import base_skin
+    skin = base_skin.fingerprint_part(profile)
+    if skin is not None:
+        payload["skin_step"] = skin
     return hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
 
 
@@ -642,7 +650,18 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
     scans parse every file name there as a signature of its own. A front
     kept without a pass records ``hand_gate_warning`` as a status warning;
     the run goes on. A later attempt that fails to render ends the attempts
-    with what was rendered. Back/left/right edit the chosen front.
+    with what was rendered.
+
+    Skin detail step (``base_skin``, world switch
+    ``base_body.skin_detail_step``): the chosen front is kept as the neutral
+    front (``tpose_neutral_<bsig>``), ONE edit (occasion ``outfit_front``)
+    plus a CPU frequency transfer puts real skin detail on it, and the result
+    replaces ``tpose_<bsig>`` — the front everything reads, the mesher
+    included; ``skin_step`` in its sidecar says what happened. Busy, refused
+    or failed: the neutral front stays the front, the run goes on. Back/left/
+    right edit the chosen front — the skin-detailed one, so they inherit
+    the skin (one texture over the mesh; the back-fit noise gate measured
+    for it, ``base_body_gates`` section note).
 
     Cached per base signature: a view that exists is skipped unless
     ``force``. ``view`` renders that one view only (a non-front view needs
@@ -750,6 +769,9 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
             try:
                 if v == "front":
                     path, warning = draw_front(final)
+                    if path is not None:
+                        from app.core import base_skin
+                        path = base_skin.after_front_render(character_name, path, bsig=bsig, profile=profile)
                 else:
                     path = draw(v, final, reference)
                 error = None if path else "render failed"
@@ -856,11 +878,22 @@ def base_info(character_name: str) -> Dict[str, Any]:
     return {"pipeline": pipeline, "humanoid": humanoid,
             "signature": signature, "images": images, "image_meta": image_meta,
             "prompt_fingerprint": prompt_fingerprint(character_name, profile=profile) if humanoid else "",
+            "skin": _skin_info(character_name, signature) if humanoid else None,
             "status": base_status(character_name),
             "model": base_model_info(character_name, signature),
             "outfit": outfit_info(character_name, base_sig=signature) if pipeline else None,
             "hair": hair,
             "now": _iso(utc_now())}
+
+
+def _skin_info(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
+    """``base_skin.info`` for the front tile; None when it cannot be read."""
+    try:
+        from app.core import base_skin
+        return base_skin.info(character_name, signature)
+    except Exception:  # noqa: BLE001 — the poll never fails on it
+        logger.exception("Skin step info of %s failed", character_name)
+        return None
 
 
 def _view_sidecar(path: Path) -> Dict[str, Any]:
@@ -4380,6 +4413,8 @@ REFRESH_REASON_TEXT = {"older_prompts": "older prompts",
 #: Hub jobs of one base view render on its first attempt (the front's hand
 #: gate may render it up to ``HAND_GATE_ATTEMPTS`` times).
 BASE_VIEW_JOBS = 1
+#: Hub jobs of the front's skin detail step (``base_skin``: one edit).
+SKIN_STEP_JOBS = 1
 
 
 def base_view_states(character_name: str, *, profile: Optional[Dict[str, Any]] = None
@@ -4447,11 +4482,17 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
 def base_rebuild_steps(character_name: str, plan: Dict[str, Any]) -> List[Tuple[str, int]]:
     """``(step, hub jobs on the first attempt)`` of what ``plan``
     (``base_refresh_plan``) runs, in run order: ``view <name>`` per view to
-    render, then — with the model — the hub stages of a fresh base mesh run
+    render — with the front, while the world switch is on, its ``skin
+    front`` step right after it (``base_skin``: one edit) — then, with the
+    model, the hub stages of a fresh base mesh run
     (``model3d.mesh_hub_stages``: mesh, [upscale, face], rig; normalize and
     the other Blender steps are CPU work)."""
-    from app.core import model3d
-    steps: List[Tuple[str, int]] = [(f"view {v}", BASE_VIEW_JOBS) for v in plan.get("views") or ()]
+    from app.core import base_skin, model3d
+    steps: List[Tuple[str, int]] = []
+    for v in plan.get("views") or ():
+        steps.append((f"view {v}", BASE_VIEW_JOBS))
+        if v == "front" and base_skin.enabled():
+            steps.append(("skin front", SKIN_STEP_JOBS))
     if plan.get("model"):
         steps += [(stage, 1) for stage in model3d.mesh_hub_stages(character_name, plan["signature"])]
     return steps

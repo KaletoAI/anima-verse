@@ -1826,19 +1826,49 @@ def generate_character_base_body_model(character_name: str, body: BaseBodyModelR
 
 @router.get("/{character_name}/base-body/images/{view}")
 def get_character_base_body_image(character_name: str, view: str, request: Request,
+                                  variant: Optional[Literal["neutral"]] = None,
                                   _: Dict[str, Any] = Depends(require_admin)):
     """One stored base-body view of the CURRENT base signature; 404 when
-    absent. ETag, so a re-render is picked up."""
+    absent. ETag, so a re-render is picked up. ``variant=neutral`` (front
+    only): the neutral front the skin detail step started from
+    (``base_skin``)."""
     from fastapi.responses import Response
-    from app.core.base_body import BASE_VIEWS, base_image_path
+    from app.core.base_body import BASE_VIEWS, base_image_path, base_signature
     if view not in BASE_VIEWS:
         raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(BASE_VIEWS)}")
+    if variant and view != "front":
+        raise HTTPException(status_code=400, detail="Only the front has a neutral variant")
     _require_character(character_name)
-    path = base_image_path(character_name, view)
+    if variant:
+        from app.core.base_skin import neutral_path
+        path = neutral_path(character_name, base_signature(character_name))
+    else:
+        path = base_image_path(character_name, view)
     if not path:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type, _encoding = mimetypes.guess_type(str(path))
     return etag_file_response(path, request, media_type or "application/octet-stream")
+
+
+@router.post("/{character_name}/base-body/skin-step", status_code=202)
+def rerun_character_base_body_skin_step(character_name: str,
+                                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Re-run the skin detail step of the base front from its stored neutral
+    front, without re-rendering it (``base_skin.apply_skin_step``, a worker
+    thread; one image edit). 400 for a non-humanoid, 409 without a front or
+    while a base view renders."""
+    from app.core import base_body, base_skin
+    _require_character(character_name)
+    try:
+        base_body.check_renderable(character_name, view="back")
+    except base_body.MissingInput as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if any(s.get("running") for s in base_body.base_status(character_name).values()):
+        raise HTTPException(status_code=409, detail="A base view renders right now")
+    base_skin.start_skin_step(character_name)
+    return {"started": True}
 
 
 # --- Garments: hair as its own mesh (app/core/garments.py, garment_hair.py) ---

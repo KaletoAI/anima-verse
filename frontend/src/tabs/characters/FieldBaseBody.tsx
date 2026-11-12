@@ -22,6 +22,8 @@
  * POST .../base-body/images {view?, force?} (409 without a profile picture),
  * POST .../base-body/model {force?} (409 while another 3D run of the
  * character is going — base and outfit share one guard);
+ * POST .../base-body/skin-step (re-runs the front's skin detail step on the
+ * stored neutral front; GET .../images/front?variant=neutral serves it);
  * GET .../model3d (options, backends, run results — useModel3DStatus).
  *
  * The section is humanoid-only in the template (`visible_when`); should a
@@ -37,6 +39,7 @@ import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clock
 import { Model3DViewer } from './Model3DViewer'
 import { ModelSteps } from './ModelSteps'
 import { ViewRenderTile } from './ViewRenderTile'
+import { RefImage } from './RefImage'
 import { CollisionScales } from './CollisionScales'
 import { ExtensionTipPanel } from './ExtensionTipPanel'
 import type { TipDots } from './ExtensionTipPanel'
@@ -50,12 +53,50 @@ const TILE_HEIGHT = 128
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
 
-function ViewTile({ info, view, label, busy, onRender }: {
+/** Under the front tile: the neutral render the skin detail step started
+ *  from (small, click enlarges), one line on what the step did, and the
+ *  button that runs it again on the stored neutral front (base_skin). */
+function SkinStepLine({ info, busy, onRun }: {
+  info: BaseBodyInfo
+  busy: boolean
+  onRun: () => void
+}) {
+  const { t } = useI18n()
+  const skin = info.skin
+  if (!skin || !info.images?.front || info.status?.front?.running) return null
+  const step = skin.step
+  const label = !step ? t('Rendered without the skin detail step')
+    : step.applied ? t('Skin detail added — the neutral render on the left')
+    : step.outcome === 'off' ? t('Skin detail step off — the neutral render is the front')
+    : step.outcome === 'busy' ? t('Skin detail not added (backend busy) — the neutral render is the front')
+    : t('Skin detail not added — the neutral render is the front')
+  return (
+    <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 6, marginTop: 4 }}>
+      {skin.neutral_url ? (
+        <div style={{ width: 52, flex: '0 0 auto' }}>
+          <RefImage key={skin.neutral_url} src={skin.neutral_url} height={72} label={t('Neutral front')}
+            meta={skin.neutral_meta} compact />
+        </div>
+      ) : null}
+      <span className="ga-hint" style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}
+        title={step?.error || undefined}>{label}</span>
+      {skin.enabled ? (
+        <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={onRun}
+          title={t('Runs the skin detail edit again on the stored neutral front (one image job); the front is not re-rendered.')}>
+          {t('Run skin step')}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function ViewTile({ info, view, label, busy, onRender, onSkinStep }: {
   info: BaseBodyInfo
   view: BaseView
   label: string
   busy: boolean
   onRender: (view: BaseView, force: boolean) => void
+  onSkinStep: () => void
 }) {
   const { t } = useI18n()
   const url = info.images?.[view] || null
@@ -66,6 +107,7 @@ function ViewTile({ info, view, label, busy, onRender }: {
     <ViewRenderTile label={label} url={url} meta={info.image_meta?.[view]} height={TILE_HEIGHT}
       running={!!st?.running} failed={!!st?.failed} error={st?.error} warning={st?.warning}
       disabled={busy || needsFront} disabledTitle={needsFront ? t('Render the front view first') : undefined}
+      status={view === 'front' ? <SkinStepLine info={info} busy={busy || viewsRunning(info)} onRun={onSkinStep} /> : undefined}
       onRender={() => onRender(view, !!url)} />
   )
 }
@@ -223,7 +265,8 @@ export function FieldBaseBody({ character }: { character: string }) {
         <div className="ga-view-stack">
           {BASE_VIEWS.map((view) => (
             <ViewTile key={view} info={info} view={view} label={viewLabel(view)}
-              busy={posting} onRender={(v, force) => post('images', { view: v, force })} />
+              busy={posting} onRender={(v, force) => post('images', { view: v, force })}
+              onSkinStep={() => post('skin-step', {})} />
           ))}
         </div>
       </div>

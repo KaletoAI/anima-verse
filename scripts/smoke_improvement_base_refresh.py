@@ -172,7 +172,10 @@ def main() -> int:
         from app.core import paths
         paths.init(root / "world")
         paths.init_instance(root / "instance")
-        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"}}))
+        # The base front's skin detail step (base_skin) is off here: these
+        # checks count the base renders; smoke_base_skin_step.py covers the step.
+        paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
+                                                       "base_body": {"skin_detail_step": False}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db

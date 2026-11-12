@@ -678,8 +678,12 @@ class ImageBackend(ABC):
             except Exception as _exc:
                 logger.warning("Downscale-Postprocess fehlgeschlagen: %s", _exc)
 
-        # Central logging only on real success (images produced).
+        # Central logging only on real success (images produced). The caller's
+        # ``log_meta`` also gets the prompt the engine really received
+        # (``final_prompt``: LoRA triggers, reference wording, folded
+        # negatives) — the image service stores it in the image meta.
         if log_meta is not None and isinstance(result, list) and result:
+            log_meta["final_prompt"] = final_prompt
             self._log_generation(final_prompt, negative_prompt, params,
                                  _time.time() - _t0, log_meta,
                                  negative_folded=negative_folded)

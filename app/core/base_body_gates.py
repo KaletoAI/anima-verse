@@ -246,6 +246,28 @@ def best_attempt(results: "list[Dict[str, Any]]") -> Tuple[int, bool]:
 # measurement; their base back is the bald Kira of 2026-11-09.) The limit
 # 1.75 still sits between the clean fits (at most 1.29) and real grain (1.96);
 # sigma 4 and 6 are refused on every base, sigma 2 on the bald Kira only.
+#
+# Skin detail step (``base_skin``, 2026-11-12): the base front now carries
+# real skin detail, and the back/side views are edits of it, so the gate's
+# reference (the base back) and the dressed fits (edits of the detailed
+# front, through the draft) may both carry it. Re-measured on the spike's
+# fronts (claude-out/kai-base-skin/edit-step; Kai = the clone's Qwen2.1 Turbo
+# front tpose_base634402e5, Glut = tpose_base07147615; "detailed" = the
+# shipped ``transfer_detail`` of the spike's Qwen edit, identical to the
+# spike's +hf3.0g within 1 grey level; grain as above, seed 0):
+#
+#   front                       floor      as a fit vs the       grain sigma 2 / 4 / 6
+#                                          neutral reference     neutral vs neutral    detailed vs detailed   detailed vs neutral
+#   Kai neutral -> detailed     0.3236 -> 0.3663   1.13          1.88 / 3.34 / 4.87    1.82 / 3.16 / 4.49     2.06 / 3.57 / 5.09
+#   Glut neutral -> detailed    0.3299 -> 0.3542   1.07          1.84 / 3.24 / 4.70    1.82 / 3.14 / 4.49     1.96 / 3.37 / 4.82
+#
+# The detail lifts the floor by 7-13 % only (the smoothest tenth stays
+# smooth: the face is the neutral render's, the transfer leaves invented
+# shapes and the matte edge out). Worst case for a false refusal — a clean
+# fit that carries the detail against a neutral base back: the clean fits
+# (at most 1.29) x 1.13 = 1.46, under the limit. Worst case for missed grain
+# — sigma 2 on a detailed fit against a detailed base back: 1.82 on both,
+# still refused (margin 0.07 instead of 0.09-0.13). ``NOISE_LIMIT`` stays.
 
 #: Version of the measurement (recorded with every gate result).
 NOISE_VERSION = 2
@@ -327,7 +349,9 @@ def noise_gate(path: Path, reference: Optional[Path]) -> Dict[str, Any]:
     "head_score", "figure_score"}`` of a fitted back against the base back
     ``reference`` (``noise`` / ``reference_noise``: the two noise floors); an
     image that cannot be measured passes with ``score None`` and a
-    ``reason``."""
+    ``reason``. The limit holds for skin-detailed bases too (measured, see
+    the section note: the base front's skin step lifts the floor by 7-13 %,
+    clean fits stay at most 1.46, sigma-2 grain reads 1.82)."""
     noise = figure_noise(path)
     base = figure_noise(reference) if reference is not None else None
     if noise is None or base is None:
