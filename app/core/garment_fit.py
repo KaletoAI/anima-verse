@@ -113,8 +113,12 @@ RIGGED_SMOOTH_UNTIL = 7
 #: flood entered the layer-push blend band as a ring round the head at eye level (Rosi, 32.5 mm p50 at 1.55 m).
 #: hair 8 (2026-11-12): the HairDeck back curtain is draped behind the nape before the push
 #: (``garment_hairdeck.drape_back``): pushed to its nearest surface it wrapped round the neck as a collar (Rosi).
+#: hair 9 (2026-11-12): HairDeck spring chains — the cards bound to HairDeck's own chains (``hair_chains``), the chain
+#: joints ``HairGen_c<CC>_<KK>`` / ``_end`` emitted with bind frames and appended to the skin by ``glb_mesh.graft``
+#: (fit and both assembly tiers); the cards' rest positions are unchanged. Re-fits every HairDeck hair from its
+#: stored seeds on the CPU refit pool; no hub job.
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 8, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 9, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).

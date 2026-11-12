@@ -24,6 +24,10 @@ card-centroid line (``card_centroid_line``: per joint the centroid of the ``FOLL
 nearest to it) at the nearest point of that line outside the body (``nearest_outside``). A chain with a deep joint
 that has no such point — or whose repair would collapse a segment — is unbound (``unbind``): its cards keep today's
 rigid Head -> Neck -> Spine2 weights. A repair, never a refusal; the cards themselves are never moved.
+Ruling H9: a repair that would move a joint more than ``max(TRUNCATE_MOVE_DEPTHS * its depth, TRUNCATE_MOVE_MIN_M)``
+or leave a segment at it shorter than ``TRUNCATE_SEGMENT_SHARE`` of its original length truncates the chain at
+that joint instead: the joint and every joint below it are dropped (``truncate``: the vertices bound to the dropped
+part ride the last kept segment bone), and a chain left with fewer than two joints is unbound.
 
 Skin (``chain_weights``): a chain-bound vertex rides Head with ``1 - w`` and its two segment bones with ``w * alpha``
 and ``w * (1 - alpha)``; a rigid card keeps ``garment_fit.hair_weights``' Head -> Neck -> Spine2 row. Joint names:
@@ -78,6 +82,13 @@ SETTLE_TOL_M = 0.005
 REPAIR_STEP_M = 0.001
 #: Bisection steps that refine a boundary crossing found by the sampling (0.001 m / 2**30 ~ 1e-12 m).
 REPAIR_BISECT = 30
+#: Ruling H9: a repair may move a joint at most this many times its depth ...
+TRUNCATE_MOVE_DEPTHS = 3.0
+#: ... or this far, whichever is larger; a farther move truncates the chain at that joint.
+TRUNCATE_MOVE_MIN_M = 0.03
+#: Ruling H9: a repair that leaves a segment at the moved joint shorter than this share of its original length
+#: truncates the chain at that joint.
+TRUNCATE_SEGMENT_SHARE = 0.4
 
 
 @dataclass
@@ -386,13 +397,21 @@ def nearest_outside(p: np.ndarray, line: np.ndarray, sdf, *, step: float = REPAI
 
 def repair_depth(joints: List[np.ndarray], X: np.ndarray, bound: List[np.ndarray], sdf, *,
                  tol: float = SETTLE_TOL_M, k: int = FOLLOW_K) -> Tuple[List[np.ndarray], List[int], Dict[str, Any]]:
-    """``(joints, unbound, info)``: the rest depth check of the followed joints (Ruling H8). ``bound[i]`` = the
+    """``(joints, unbound, info)``: the rest depth check of the followed joints (Ruling H8 + H9). ``bound[i]`` = the
     vertex indices into ``X`` (fitted hair) bound to chain i. A joint deeper than ``tol`` inside the body moves onto
     the chain's ``card_centroid_line`` at its ``nearest_outside`` point; every other joint keeps its exact
-    position. A chain is unbound (its position listed in ``unbound``, its joints returned unchanged) when a deep
-    joint has no outside point on the line, or when the moved joints would leave a segment shorter than
-    ``SEGMENT_EPS``. ``info``: ``moved_joints``, per chain ``depth_before`` / ``depth_after`` / ``moved`` (joint
-    positions in the chain) / ``reason`` (``"unreachable"`` / ``"collapsed"`` / None)."""
+    position. The repairs run from the root down, each seeing the joints above as repaired and the joints below as
+    they are. Ruling H9: a repair that would move joint j more than ``max(TRUNCATE_MOVE_DEPTHS * depth_j,
+    TRUNCATE_MOVE_MIN_M)`` (``"move"``), or leave one of its two segments shorter than ``TRUNCATE_SEGMENT_SHARE``
+    of its original length (``"segment"``), truncates the chain at j instead: the returned chain keeps joints
+    ``0 .. j - 1`` (``truncated_at`` j) and no deeper joint is looked at. A chain is unbound (its position listed
+    in ``unbound``, its joints returned unchanged) when a deep joint above any truncation has no outside point on
+    the line (``"unreachable"``), when a truncation leaves fewer than two joints (``"truncated"``), or when the
+    moved joints would leave a segment shorter than ``SEGMENT_EPS`` (``"collapsed"``). ``info``: ``moved_joints`` (the
+    moved joints of the chains left), per chain ``depth_before`` (all original joints) / ``depth_after`` (the
+    joints returned) / ``moved`` (joint positions in the chain, below the truncation) / ``reason`` /
+    ``truncated_at`` (original joint position or None) / ``truncate`` (``"move"`` / ``"segment"`` / None) /
+    ``move_m`` (per original joint, the distance its repair moved or would have moved it; 0 if not deep)."""
     before = joint_depth(joints, sdf)
     out: List[np.ndarray] = []
     unbound: List[int] = []
@@ -400,35 +419,73 @@ def repair_depth(joints: List[np.ndarray], X: np.ndarray, bound: List[np.ndarray
     moved_total = 0
     for i, (J, dep, idx) in enumerate(zip(joints, before, bound)):
         J = np.asarray(J, np.float64)
+        n = len(J)
         deep = np.flatnonzero(dep > tol)
-        rec: Dict[str, Any] = {"depth_before": dep, "depth_after": dep, "moved": [], "reason": None}
+        rec: Dict[str, Any] = {"depth_before": dep, "depth_after": dep, "moved": [], "reason": None,
+                               "truncated_at": None, "truncate": None, "move_m": np.zeros(n)}
         if not len(deep):
             out.append(J)
             per.append(rec)
             continue
         line = card_centroid_line(J, X, idx, k)
         J2 = J.copy()
-        reason = None
+        L0 = np.linalg.norm(np.diff(J, axis=0), axis=1)
+        cut, why, reason = n, None, None
+        moved: List[int] = []
+        # the repairs run from the root down, each against the joints above as repaired and below as they are
         for j in deep:
             q = nearest_outside(J[j], line, sdf)
             if q is None:
                 reason = "unreachable"
                 break
+            move = float(np.linalg.norm(q - J[j]))
+            rec["move_m"][j] = move
+            if move > max(TRUNCATE_MOVE_DEPTHS * float(dep[j]), TRUNCATE_MOVE_MIN_M):
+                cut, why = int(j), "move"
+                break
+            segs = [s for s in (j - 1, j) if 0 <= s < n - 1]
+            if any(float(np.linalg.norm((q if s + 1 == j else J2[s + 1]) - (q if s == j else J2[s])))
+                   < TRUNCATE_SEGMENT_SHARE * L0[s] for s in segs):
+                cut, why = int(j), "segment"
+                break
             J2[j] = q
-        if reason is None and (np.linalg.norm(np.diff(J2, axis=0), axis=1) <= SEGMENT_EPS).any():
+            moved.append(int(j))
+        if reason is None and cut < 2:
+            reason = "truncated"
+        elif reason is None and (np.linalg.norm(np.diff(J2[:cut], axis=0), axis=1) <= SEGMENT_EPS).any():
             reason = "collapsed"
+        if cut < n:
+            rec["truncated_at"], rec["truncate"] = cut, why
         if reason is not None:
             unbound.append(i)
             rec["reason"] = reason
             out.append(J)
             per.append(rec)
             continue
-        rec["moved"] = deep.tolist()
+        J2 = J2[:cut]
+        rec["moved"] = [j for j in moved if j < cut]
         rec["depth_after"] = joint_depth([J2], sdf)[0]
-        moved_total += len(deep)
+        moved_total += len(rec["moved"])
         out.append(J2)
         per.append(rec)
     return out, unbound, {"moved_joints": moved_total, "chains": per}
+
+
+def truncate(binding: Binding, kept_joints: Dict[int, int]) -> Binding:
+    """``binding`` with the chains at positions ``kept_joints`` (of the list ``bind`` got) cut to that many joints
+    (Ruling H9, >= 2): a vertex bound to a dropped segment (``seg`` >= the new segment count) rides the last kept
+    segment bone; a blend neighbour beyond it becomes that bone too, with alpha 1. ``w`` is unchanged."""
+    seg, seg2, alpha = binding.seg.copy(), binding.seg2.copy(), binding.alpha.copy()
+    for pos, m in kept_joints.items():
+        last = int(m) - 2
+        if last < 0:
+            raise ValueError(f"truncate: chain {pos} keeps {m} joints (fewer than 2)")
+        on = binding.chain == pos
+        seg[on] = np.minimum(seg[on], last)
+        seg2[on] = np.minimum(seg2[on], last)
+        alpha[on & (seg == seg2)] = 1.0
+    return Binding(card=binding.card, chain=binding.chain.copy(), seg=seg, w=binding.w.copy(), seg2=seg2,
+                   alpha=alpha, kept=list(binding.kept), mismatch=binding.mismatch, cards=binding.cards)
 
 
 def unbind(binding: Binding, chains: List[int]) -> Binding:

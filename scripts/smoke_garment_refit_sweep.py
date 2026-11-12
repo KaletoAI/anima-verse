@@ -17,7 +17,7 @@ path is a recorder that counts: ``service.get_image_service``,
 ``garment_store.garment_fsig`` / ``garment_method`` / ``garment_hsig`` come
 from fixed tables.
 
-Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 8 clothing 7 footwear = FOOTWEAR_FIT_VERSION):
+Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 9 clothing 7 footwear = FOOTWEAR_FIT_VERSION):
   item   kind      stored fsig  current fsig  base sha  fit_version  method
   hA     hair      aaaaaaaaaaaa same          SHA       (none)       edit_chain
   cB     clothing  bbbbbbbbbbbb same          SHA       1            edit_chain
@@ -120,7 +120,7 @@ def main() -> int:
         SHA, OTHER = "s" * 64, "o" * 64
         FV = garment_fit.FIT_VERSION
         # Footwear follows garment_fit.FOOTWEAR_FIT_VERSION (bumped by the boots plan): read, not pinned.
-        check("FIT_VERSION", FV, {"hair": 8, "clothing": 7, "footwear": garment_fit.FOOTWEAR_FIT_VERSION})
+        check("FIT_VERSION", FV, {"hair": 9, "clothing": 7, "footwear": garment_fit.FOOTWEAR_FIT_VERSION})
         charmod.get_character_dir("Demo", create=True)
         garments_root = gs._root("Demo")
         garments_root.mkdir(parents=True, exist_ok=True)
@@ -235,8 +235,8 @@ def main() -> int:
         refits = [line for line in lines.lines if line.startswith("Garment refit Demo/")]
         check("log lines", len(refits), 2)
         check("log cB", "fit_version 1 -> 7: ok" in refits[0] and "Demo/cB" in refits[0], True)
-        check("log hA", "fit_version None -> 8: ok" in refits[1] and "Demo/hA" in refits[1], True)
-        for item_id, fsig, version in (("hA", "a" * 12, 8), ("cB", "b" * 12, 7)):
+        check("log hA", "fit_version None -> 9: ok" in refits[1] and "Demo/hA" in refits[1], True)
+        for item_id, fsig, version in (("hA", "a" * 12, 9), ("cB", "b" * 12, 7)):
             r = json.loads(rec(item_id, fsig))
             check(f"{item_id} record", (r.get("accepted"), r.get("fit_version"), r.get("base_model_sha256")),
                   (True, version, SHA))

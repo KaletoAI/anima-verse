@@ -63,8 +63,9 @@ Fixture
     - ``_place_and_push(chain_points=…)`` returns ``chain_points`` = adjust_placement(s * J + t, pivot, 0.01, 5)
       (x 0 lies inside the head's half width: ``narrow_sides`` leaves it) +- 1e-12;
     - a cards file with one entry less: ``match`` "count", count 0, weights identical to the fit without chains;
-    - ``glb_mesh.graft`` of the chain fit onto the body: no bind frames yet (Task 4), so the chain joints fold onto
-      Head through ``joint_parents`` — the grafted skin has no HairGen joint;
+    - ``glb_mesh.graft`` of the chain fit onto the body: since Task 4 the fit carries bind frames
+      (``joint_binds``), so the graft APPENDS the chain joints to the skin after the body's own (Task 2 folded them
+      onto Head; the graft itself is tested in smoke_glb_graft_hair_joints.py);
     - fails on the old code: BASE 54cea23e's fit_hairdeck raises TypeError on ``chains_json`` (printed).
 """
 import importlib.util
@@ -346,8 +347,8 @@ def main() -> int:
         grafted = glb_mesh.graft(body_glb, g1, name="garment_hair_smoke", extras={"kind": "hair"})
         gltf = glb_mesh._parse(grafted, "Target")["gltf"]
         joint_nodes = [gltf["nodes"][j]["name"] for j in gltf["skins"][0]["joints"]]
-        check(not any(nm.startswith("HairGen_") for nm in joint_nodes),
-              f"graft folds the chain joints onto Head (skin {joint_nodes})")
+        check(joint_nodes[3:] == NAMES and joint_nodes[:3] == ["mixamorig:Hips", "mixamorig:Spine2", "mixamorig:Head"],
+              f"graft appends the chain joints after the body's (skin {joint_nodes})")
 
         try:
             base.fit_hairdeck(nohead, proxy, body_glb, chains_json=chains_json, cards_json=cards_json, **kw)

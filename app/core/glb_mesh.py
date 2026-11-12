@@ -13,6 +13,18 @@ out, a group switched off for that signature — hands its weight to its nearest
 garment source's own hierarchy (``GarmentMesh.joint_parents``, read by ``garment_arrays``); a missing contract
 joint stays an error.
 
+HairDeck spring-chain joints (plan 2026-11-12-hairdeck-spring-chains, ``rig_contract.HAIR_CHAIN_JOINT_RE``) are the
+one kind of joint a graft ADDS: a chain joint the target skin lacks and the garment carries a bind frame for
+(``GarmentMesh.joint_binds``, the bind world 4x4; ``garment_arrays`` reads it back from the source skin's inverse
+bind matrices) becomes a node under its parent (``rig_contract.hair_chain_parent``: ``_00`` under Head, every other
+under the previous joint; local TRS = inv(world(parent)) * bind, rotation by polar decomposition), an entry
+appended to ``skins[0].joints`` and a row inv(bind) in a NEW inverse-bind accessor (the old matrices + the new rows;
+the old accessor stays, unreferenced) — weighted or not, parents before children. A chain joint the target already
+has is remapped, never duplicated; one without a bind frame folds like every other extension joint. So the fit, and
+the assembly of both tiers (``garment_arrays`` of the fit -> ``graft`` onto the bare tier), carry the same joints.
+Every other byte of the target stays as it was, except ``skins[0]`` (longer joint list, new accessor) and the
+``children`` of the chain roots' parents.
+
 Vertex colours (HairDeck card hair, plan 2026-11-09-hairdeck-hair): a garment may carry ``colors`` — linear RGBA in
 [0, 1] as glTF stores them. ``graft`` writes them as ``COLOR_0`` (UNSIGNED_BYTE normalized VEC4) and
 ``garment_arrays`` reads them back, so the assembly keeps them; without ``colors`` a graft is byte-identical to the
@@ -26,6 +38,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import struct
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -82,6 +95,9 @@ class GarmentMesh:
     material: Dict[str, Any] = field(default_factory=dict)
     colors: Optional[np.ndarray] = None   # (n, 4) linear RGBA in [0, 1] -> COLOR_0; None = no vertex colours
     joint_parents: Dict[str, str] = field(default_factory=dict)   # joint name -> its parent node's name (source GLB)
+    #: hair-chain joint name -> its bind world 4x4 (``rig_contract.HAIR_CHAIN_JOINT_RE``); ``graft`` appends those
+    #: the target lacks. Empty = no hair-chain joints to add.
+    joint_binds: Dict[str, np.ndarray] = field(default_factory=dict)
 
 
 def accessor_array(parsed: dict, index: int) -> np.ndarray:
@@ -511,6 +527,7 @@ def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX, exact:
                if "NORMAL" in prim.get("attributes", {}) else None)
     image, mime, material = _primitive_image(parsed, prim)
     return GarmentMesh(positions=pos, normals=normals,
+                       joint_binds=_hair_chain_binds(parsed, node["skin"]) if "skin" in node else {},
                        uvs=_vertex_attr(parsed, prim, "TEXCOORD_0", n, 2, np.float64),
                        indices=_triangles(parsed, prim, n),
                        joints=_vertex_attr(parsed, prim, "JOINTS_0", n, 4, np.int64),
@@ -518,6 +535,24 @@ def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX, exact:
                        joint_names=_skin_joint_names(gltf, node["skin"]) if "skin" in node else [],
                        image=image, mime=mime, material=material, colors=_vertex_colors(parsed, prim, n),
                        joint_parents=_joint_parents(gltf, node["skin"]) if "skin" in node else {})
+
+
+def _hair_chain_binds(parsed: dict, skin_index: int) -> Dict[str, np.ndarray]:
+    """Hair-chain joint name -> its bind world 4x4 (the inverse of its inverse bind matrix), for the joints of skin
+    ``skin_index`` that match ``rig_contract.HAIR_CHAIN_JOINT_RE``; empty without such joints or without inverse
+    bind matrices."""
+    from app.core.rig_contract import HAIR_CHAIN_JOINT_RE
+    gltf = parsed["gltf"]
+    skins = gltf.get("skins") or []
+    if not 0 <= skin_index < len(skins) or "inverseBindMatrices" not in skins[skin_index]:
+        return {}
+    names = _skin_joint_names(gltf, skin_index)
+    if not any(HAIR_CHAIN_JOINT_RE.match(n) for n in names):
+        return {}
+    ibm = mat4_array(parsed, skins[skin_index]["inverseBindMatrices"])
+    if len(ibm) != len(names):
+        raise ValueError("The skin's inverse bind matrices do not match its joints")
+    return {n: np.linalg.inv(m) for n, m in zip(names, ibm) if HAIR_CHAIN_JOINT_RE.match(n)}
 
 
 def mat4_array(parsed: dict, index: int) -> np.ndarray:
@@ -569,6 +604,59 @@ def _local_matrix(node: dict) -> np.ndarray:
     m[:3, :3] = rotation * np.asarray(node.get("scale", (1, 1, 1)), np.float64)[None, :]
     m[:3, 3] = np.asarray(node.get("translation", (0, 0, 0)), np.float64)
     return m
+
+
+def _quaternion(R: np.ndarray) -> List[float]:
+    """``[x, y, z, w]`` of a proper rotation matrix (Shepperd's method, w >= 0)."""
+    m = np.asarray(R, np.float64)
+    tr = m[0, 0] + m[1, 1] + m[2, 2]
+    if tr > 0:
+        k = 2.0 * math.sqrt(1.0 + tr)
+        q = [(m[2, 1] - m[1, 2]) / k, (m[0, 2] - m[2, 0]) / k, (m[1, 0] - m[0, 1]) / k, 0.25 * k]
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        k = 2.0 * math.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2])
+        q = [0.25 * k, (m[0, 1] + m[1, 0]) / k, (m[0, 2] + m[2, 0]) / k, (m[2, 1] - m[1, 2]) / k]
+    elif m[1, 1] > m[2, 2]:
+        k = 2.0 * math.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2])
+        q = [(m[0, 1] + m[1, 0]) / k, 0.25 * k, (m[1, 2] + m[2, 1]) / k, (m[0, 2] - m[2, 0]) / k]
+    else:
+        k = 2.0 * math.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1])
+        q = [(m[0, 2] + m[2, 0]) / k, (m[1, 2] + m[2, 1]) / k, 0.25 * k, (m[1, 0] - m[0, 1]) / k]
+    q = np.asarray(q, np.float64)
+    q /= np.linalg.norm(q)
+    if q[3] < 0:
+        q = -q
+    return [float(v) for v in q]
+
+
+def _trs(local: np.ndarray) -> Dict[str, List[float]]:
+    """A node's ``translation`` / ``rotation`` (/ ``scale``, only when it is not 1) for the 4x4 ``local``: the
+    rotation is the polar decomposition's orthogonal factor, the scale the diagonal of its symmetric factor (the
+    off-diagonal shear, which TRS cannot hold, is dropped). ValueError for a reflection or a singular matrix."""
+    A = np.asarray(local, np.float64)[:3, :3]
+    U, S, Vt = np.linalg.svd(A)
+    R = U @ Vt
+    if np.linalg.det(R) <= 0 or S.min() <= 1e-12:
+        raise ValueError("A hair-chain joint's local transform is singular or a reflection")
+    scale = np.diag(R.T @ A)
+    out: Dict[str, List[float]] = {"translation": [float(v) for v in np.asarray(local, np.float64)[:3, 3]],
+                                   "rotation": _quaternion(R)}
+    if np.abs(scale - 1.0).max() > 1e-12:
+        out["scale"] = [float(v) for v in scale]
+    return out
+
+
+def _world_matrix(nodes: List[dict], index: int) -> np.ndarray:
+    """The world 4x4 of node ``index`` (its local transform and its ancestors')."""
+    parent = {c: i for i, n in enumerate(nodes) for c in n.get("children") or []}
+    world, at, seen = np.eye(4), index, set()
+    while at is not None:
+        if at in seen:
+            raise ValueError("The node hierarchy has a cycle")
+        seen.add(at)
+        world = _local_matrix(nodes[at]) @ world
+        at = parent.get(at)
+    return world
 
 
 def card_arrays(glb: bytes, *, node: str = "") -> Tuple[np.ndarray, np.ndarray, np.ndarray,
@@ -783,8 +871,10 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
     naming a WEIGHTED garment joint the target skin lacks and that has no such ancestor (a listed joint without
     weight > 0 maps to target index 0 with weight 0), ``ValueError`` for compressed geometry, a name already present
     or broken garment arrays. ``material_overrides`` merges top-level material keys (such as ``doubleSided`` for a
-    boot shaft, boots spec 2026-11-11 § 6.1) into the grafted material after the texture pass-through."""
-    from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+    boot shaft, boots spec 2026-11-11 § 6.1) into the grafted material after the texture pass-through. A
+    hair-chain joint the target lacks and ``garment.joint_binds`` names is APPENDED to the target skin (module
+    docstring), weighted or not."""
+    from app.core.rig_contract import BASE_JOINT_KEYS, HAIR_CHAIN_JOINT_RE, hair_chain_parent, norm_bone_name
     if not name or not isinstance(extras, dict):
         raise ValueError("graft needs a node name and an extras dict")
     parsed = _parse(target_glb, "Target")
@@ -802,6 +892,26 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
     lookup: Dict[str, int] = {}
     for i, joint in enumerate(target_names):
         lookup.setdefault(norm_bone_name(joint), i)
+    # Hair-chain joints the target lacks and the garment has a bind frame for are appended (parents first):
+    # ``append`` = (name, parent skin index, bind) in skin order after the target's own joints.
+    binds = {str(k): np.asarray(v, np.float64).reshape(4, 4) for k, v in (garment.joint_binds or {}).items()}
+    present = set(target_names) | {str(j) for j in garment.joint_names}
+
+    def chain_order(joint: str) -> Tuple[int, int]:
+        m = HAIR_CHAIN_JOINT_RE.match(joint)
+        return int(m.group(1)), (1 << 30) if m.group(2) == "end" else int(m.group(2))
+    append: List[Tuple[str, int, np.ndarray]] = []
+    candidates = {str(j) for j in garment.joint_names
+                  if HAIR_CHAIN_JOINT_RE.match(str(j)) and str(j) in binds and norm_bone_name(str(j)) not in lookup}
+    for joint in sorted(candidates, key=chain_order):
+        parent_name = hair_chain_parent(joint, present)
+        parent_at = lookup.get(norm_bone_name(parent_name)) if parent_name else None
+        if parent_at is None:
+            continue                       # no parent to hang it on: it folds like any other extension joint
+        if not np.isfinite(binds[joint]).all():
+            raise ValueError(f"Hair-chain joint {joint} has a non-finite bind frame")
+        lookup[norm_bone_name(joint)] = len(target_names) + len(append)
+        append.append((joint, parent_at, binds[joint]))
     # Only a joint that carries weight somewhere in the garment must exist in
     # the target: a garment fitted on a skin with extra joints (e.g. a pack's
     # tip group on the bare base) still lists them, unweighted. Such an unused
@@ -865,6 +975,32 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
             accessor["max"] = [float(v) for v in array.max(0)]
         accessors.append(accessor)
         return len(accessors) - 1
+
+    if append:
+        skin = gltf["skins"][0]
+        skin_nodes: List[int] = skin["joints"]
+        worlds: Dict[int, np.ndarray] = {}
+        for joint, parent_at, bind in append:
+            parent_node = skin_nodes[parent_at]
+            if parent_node not in worlds:
+                worlds[parent_node] = _world_matrix(nodes, parent_node)
+            trs = _trs(np.linalg.inv(worlds[parent_node]) @ bind)
+            nodes.append({"name": joint, **trs})
+            new_node = len(nodes) - 1
+            nodes[parent_node].setdefault("children", []).append(new_node)
+            worlds[new_node] = worlds[parent_node] @ _local_matrix(nodes[new_node])
+            skin_nodes.append(new_node)
+        if "inverseBindMatrices" in skin:
+            old_ibm = mat4_array(parsed, skin["inverseBindMatrices"])
+            if len(old_ibm) != len(target_names):
+                raise ValueError("The target skin's inverse bind matrices do not match its joints")
+        else:
+            old_ibm = np.tile(np.eye(4), (len(target_names), 1, 1))
+        ibm = np.concatenate([old_ibm, np.linalg.inv(np.stack([b for _j, _p, b in append]))])
+        raw = np.ascontiguousarray(ibm.transpose(0, 2, 1).reshape(-1, 16), dtype="<f4")
+        accessors.append({"bufferView": add_view(raw.tobytes(), None), "componentType": 5126,
+                          "count": int(len(ibm)), "type": "MAT4"})
+        skin["inverseBindMatrices"] = len(accessors) - 1
 
     attributes = {"POSITION": add_accessor(P.astype("<f4"), 5126, "VEC3", _ARRAY_BUFFER, minmax=True)}
     if N is not None:

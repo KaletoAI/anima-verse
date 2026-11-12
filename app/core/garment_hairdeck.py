@@ -899,7 +899,8 @@ def _bind_chains(P: np.ndarray, F: np.ndarray, chains_json: Optional[bytes], car
     from app.core.hair_chains import SETTLE_TOL_M
     info: Dict[str, Any] = {"count": 0, "dropped": 0, "cards_bound": 0, "cards_rigid": 0, "match": None,
                             "chains": [], "joint_depth_max_m": 0.0, "joint_depth_before_max_m": 0.0,
-                            "repair": {"tol_m": SETTLE_TOL_M, "moved_joints": 0, "unbound_chains": []}}
+                            "repair": {"tol_m": SETTLE_TOL_M, "moved_joints": 0, "unbound_chains": [],
+                                       "truncated_chains": []}}
     if chains_json is None or cards_json is None:
         return None, [], info
     from app.core import hair_chains
@@ -927,12 +928,25 @@ def _bind_chains(P: np.ndarray, F: np.ndarray, chains_json: Optional[bytes], car
 
 def _repair_report(kept: List[Any], unbound: List[int], depth: Dict[str, Any]) -> Dict[str, Any]:
     """``report.chains.repair`` of ``hair_chains.repair_depth`` over the ``kept`` chains: the tolerance, the joints
-    moved onto their card-centroid line and the chains unbound (HairDeck index, reason, depth before)."""
+    moved onto their card-centroid line, the chains unbound (HairDeck index, reason, depth before) and the chains
+    truncated (Ruling H9: HairDeck index, the first dropped joint, the joints kept — 0 or 1 for a chain that was
+    unbound for it — why, its depth and how far its repair would have moved it)."""
     from app.core.hair_chains import SETTLE_TOL_M
+    chains = depth["chains"]
+    truncated = []
+    for i, d in enumerate(chains):
+        at = d.get("truncated_at")
+        if at is None:
+            continue
+        truncated.append({"index": int(kept[i].index), "at": int(at), "kept_joints": int(at),
+                          "dropped_joints": int(len(d["depth_before"]) - at), "why": d.get("truncate"),
+                          "depth_m": round(float(d["depth_before"][at]), 5),
+                          "move_m": round(float(d["move_m"][at]), 5)})
     return {"tol_m": SETTLE_TOL_M, "moved_joints": int(depth["moved_joints"]),
-            "unbound_chains": [{"index": int(kept[i].index), "reason": depth["chains"][i]["reason"],
-                                "depth_before_max_m": round(float(depth["chains"][i]["depth_before"].max()), 5)}
-                               for i in unbound]}
+            "unbound_chains": [{"index": int(kept[i].index), "reason": chains[i]["reason"],
+                                "depth_before_max_m": round(float(chains[i]["depth_before"].max()), 5)}
+                               for i in unbound],
+            "truncated_chains": truncated}
 
 
 def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
@@ -962,10 +976,14 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     ``report.chains`` summarises them. The positions are those of the fit without chains (Ruling H8: no settle).
     The followed joints get a rest depth check against the body SDF (``hair_chains.repair_depth``): a joint more
     than ``SETTLE_TOL_M`` inside moves onto its card-centroid line at the nearest point outside the body, a chain
-    without one is unbound and its cards keep today's rigid weights — reported in ``report.chains``
-    (``joint_depth_before_max_m`` / ``joint_depth_max_m`` over the chains in the figure, ``repair``, per chain
-    ``depth_before_max_m`` / ``depth_max_m`` / ``moved``), never gated. Without the files, a card file that does
-    not match the mesh, no chain that binds a card or every chain unbound: today's fit, ``report.chains.count`` 0.
+    without one is unbound and its cards keep today's rigid weights; a repair that would move a joint too far or
+    shrink a segment at it too much truncates the chain there instead (Ruling H9, ``hair_chains.truncate``; fewer
+    than two joints left = unbound) — reported in ``report.chains`` (``joint_depth_before_max_m`` /
+    ``joint_depth_max_m`` over the chains in the figure, ``repair``, per chain ``depth_before_max_m`` /
+    ``depth_max_m`` / ``moved`` / ``truncated_at``), never gated. ``garment.joint_binds`` carries the bind frame of
+    every chain joint (``hair_chains.joint_frames`` of the repaired chains), so ``glb_mesh.graft`` appends them as
+    real joints. Without the files, a card file that does not match the mesh, no chain that binds a card or every
+    chain unbound: today's fit, ``report.chains.count`` 0, no joint binds.
     """
     from scipy.spatial import cKDTree
     _check_manual(forward_m, tilt_deg, width_scale)
@@ -1008,6 +1026,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     X = Qp[inv]
     names, J, W = hair_weights(X, body)
     joint_parents: Dict[str, str] = {}
+    joint_binds: Dict[str, np.ndarray] = {}
     if kept:
         # the joints follow their own cards from the placed (welded ``Pw``) to the fitted hair (``Qp``)
         from app.core import hair_chains
@@ -1019,6 +1038,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
         # without an outside point there is unbound (Ruling H8 — a repair, never a refusal; the cards stay)
         fitted, unbound, depth = hair_chains.repair_depth(fitted, Qp, bound, sdf)
         chain_info["repair"] = _repair_report(kept, unbound, depth)
+        kept_pos = list(binding.kept)
         chain_info["joint_depth_before_max_m"] = round(float(max(d["depth_before"].max() for d in depth["chains"])),
                                                        5)
         if unbound:
@@ -1027,20 +1047,31 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
             chain_info.update(count=len(binding.kept), cards_bound=bound_n, cards_rigid=rigid_n)
         gone = set(unbound)
         keep = [i for i in range(len(kept)) if i not in gone]
+        # Ruling H9: a chain truncated by its repair keeps its upper joints; its dropped part's vertices ride the
+        # last kept segment bone
+        cut = {kept_pos[i]: len(fitted[i]) for i in keep if depth["chains"][i].get("truncated_at") is not None}
+        if cut:
+            binding = hair_chains.truncate(binding, cut)
         kept = [kept[i] for i in keep]
         placed_chains = [hair_chains.Chain(index=c.index, joints=fitted[i], stiffness=c.stiffness)
                          for c, i in zip(kept, keep)]
         after = [depth["chains"][i] for i in keep]
         chain_info["joint_depth_max_m"] = round(float(max((d["depth_after"].max() for d in after), default=0.0)), 5)
         if kept:
-            names, J, W = hair_chains.chain_weights(names, J, W, binding, chains)
+            # the binding's chain positions index ``chains``: the repaired (and truncated) joints replace them
+            placed = list(chains)
+            for i, c in zip(keep, placed_chains):
+                placed[kept_pos[i]] = c
+            names, J, W = hair_chains.chain_weights(names, J, W, binding, placed)
             joint_parents = hair_chains.joint_parents(placed_chains)
+            joint_binds = hair_chains.joint_frames(placed_chains)
         chain_info["chains"] = [{"index": c.index, "bones": hair_chains.joint_names(c),
                                  "weighted": hair_chains.weighted_bones(names, J, W, c),
                                  "stiffness": round(float(c.stiffness), 4), "rigid": [],
                                  "depth_before_max_m": round(float(d["depth_before"].max()), 5),
                                  "depth_max_m": round(float(d["depth_after"].max()), 5),
-                                 "moved": list(d["moved"])} for c, d in zip(placed_chains, after)]
+                                 "moved": list(d["moved"]), "truncated_at": d.get("truncated_at")}
+                                for c, d in zip(placed_chains, after)]
     normals = vertex_normals(X, F)
 
     if colour_target is None and colour_profile is not None:
@@ -1064,7 +1095,8 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                           uvs=np.vstack([np.asarray(U, np.float64), np.zeros((nc, 2))]),
                           indices=np.vstack([F, Fc + len(X)]), joints=np.vstack([J, Jc]),
                           weights=np.vstack([W, Wc]), joint_names=names, image=b"", mime="", material=material,
-                          colors=np.vstack([colours, np.tile(cap_colour, (nc, 1))]), joint_parents=joint_parents)
+                          colors=np.vstack([colours, np.tile(cap_colour, (nc, 1))]), joint_parents=joint_parents,
+                          joint_binds=joint_binds)
 
     m = {
         # the push-out after the drape (``_push_max``); the drape is reported in ``report.push.drape``

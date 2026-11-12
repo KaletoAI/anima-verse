@@ -656,7 +656,9 @@ def validate_glb(data: bytes, extension_names=None) -> Dict[str, Any]:
 
     ``extension_names`` maps full names to ``{parent, group}`` declarations
     from extension_rig.extension_bone_names. Groups must be complete or absent;
-    their names are exact, while base identity follows normBoneName.
+    their names are exact, while base identity follows normBoneName. HairDeck
+    spring-chain joints (``rig_contract.HAIR_CHAIN_JOINT_RE``) are declared by
+    that rule, and their parent is checked by ``rig_contract.hair_chain_parent``.
 
     Returns {"ok", "errors": [...], "warnings": [...], "joint_count", "rig",
     "material_names"}. The material names are not a criterion — they ride along
@@ -710,7 +712,7 @@ def validate_glb(data: bytes, extension_names=None) -> Dict[str, Any]:
             joint_indices.add(index)
             local.add(index)
     count = len(joints)
-    from app.core.rig_contract import BASE_JOINT_KEYS, norm_bone_name
+    from app.core.rig_contract import BASE_JOINT_KEYS, HAIR_CHAIN_JOINT_RE, hair_chain_parent, norm_bone_name
     keys = [norm_bone_name(j) for j in joints]
     present = set(keys)
     if len(keys) != len(present):
@@ -722,7 +724,8 @@ def validate_glb(data: bytes, extension_names=None) -> Dict[str, Any]:
     if not isinstance(declarations, dict):
         raise ValueError("extension_names must map full names to parent/group declarations")
     extra = {j for j in joints if norm_bone_name(j) not in BASE_JOINT_KEYS}
-    foreign = extra - declarations.keys()
+    hair_chain = {j for j in extra if HAIR_CHAIN_JOINT_RE.match(j)}
+    foreign = extra - declarations.keys() - hair_chain
     if foreign:
         contract_errors.append("undeclared joints: " + ", ".join(sorted(foreign)))
     groups = {}
@@ -740,16 +743,23 @@ def validate_glb(data: bytes, extension_names=None) -> Dict[str, Any]:
         name = str(nodes[index].get("name", ""))
         if norm_bone_name(name) in BASE_JOINT_KEYS:
             continue
-        declaration = declarations.get(name)
-        if declaration is None:
-            continue  # reported in the foreign-name check above
+        if name in hair_chain:
+            expected = hair_chain_parent(name, joints)
+        else:
+            declaration = declarations.get(name)
+            if declaration is None:
+                continue  # reported in the foreign-name check above
+            expected = declaration["parent"]
         parent_indices = parents.get(index, [])
-        expected = declaration["parent"]
         actual = str(nodes[parent_indices[0]].get("name", "")) if len(parent_indices) == 1 else ""
-        matches = (norm_bone_name(actual) == norm_bone_name(expected)
-                   if norm_bone_name(expected) in BASE_JOINT_KEYS else actual == expected)
+        if expected is None:
+            matches = False
+        else:
+            matches = (norm_bone_name(actual) == norm_bone_name(expected)
+                       if norm_bone_name(expected) in BASE_JOINT_KEYS else actual == expected)
         if not matches or parent_indices[0] not in joint_indices:
-            contract_errors.append(f"wrong parent for {name}: expected {expected}, got {actual or 'none/ambiguous'}")
+            contract_errors.append(f"wrong parent for {name}: expected {expected or 'none'}, "
+                                   f"got {actual or 'none/ambiguous'}")
     errors.extend(contract_errors)
 
     _check_embedded_textures(info, "humanoid model", errors, warnings)
