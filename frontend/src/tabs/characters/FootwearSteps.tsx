@@ -107,8 +107,8 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'lift_asymmetry_mm', label: 'Lift asymmetry', scale: 1, unit: 'mm', digits: 1 },
   { key: 'stand_floor_mm', label: 'Sole above the floor (stand)', scale: 1, unit: 'mm', digits: 1 },
   { key: 'slim_needed', label: 'Slimming needed', scale: 100, unit: '%', digits: 1 },
-  // A split fit (a boot) adds footwear_fit.SHAFT_GATES; the stretch is recorded, not gated (`gating` false).
-  // The push and inside numbers read the collar band only (fit version 11): under it the body is cut away.
+  // A split fit (a boot) adds footwear_fit.SHAFT_GATES; the stretch and (fit version 12) the push are recorded, not
+  // gated (`gating` false): under the collar the body is cut away, the push reads a leg that is not served.
   { key: 'shaft_push_p95_m', label: 'Shaft push at the collar (p95)', scale: 1000, unit: 'mm', digits: 1 },
   { key: 'shaft_push_max_m', label: 'Shaft push at the collar (max)', scale: 1000, unit: 'mm', digits: 1 },
   { key: 'shaft_inside_share', label: 'Collar inside the leg', scale: 100, unit: '%', digits: 2 },
@@ -123,9 +123,11 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'throat_ledge_p95_mm', label: 'Throat ledge (cut)', scale: 1, unit: 'mm', digits: 1 },
   { key: 'toe_conform_m', label: 'Toe conform (cut)', scale: 1000, unit: 'mm', digits: 1 },
   // A split fit only (footwear_cut.SHAFT_CUT_GATES, cut version 5): the leg is cut away under the collar and its
-  // edge pulled into the boot's opening; the poke reads that edge against the opening, None without one.
+  // edge pulled into the boot's opening; the poke reads that edge against the opening, None without one. Cut
+  // version 6 reads the same edge at ±25° ankle flex (out through the wall or up out of the rim).
   { key: 'shaft_poke', label: 'Leg edge outside the opening (cut)', scale: 100, unit: '%', digits: 2 },
   { key: 'collar_conform_m', label: 'Leg pulled into the collar (cut)', scale: 1000, unit: 'mm', digits: 1 },
+  { key: 'collar_flex_poke', label: 'Leg edge out of the rim at ±25° flex (cut)', scale: 100, unit: '%', digits: 2 },
 ]
 
 const FIT_STATUS_TEXT: Record<FootwearFitRow['status'], string> = {

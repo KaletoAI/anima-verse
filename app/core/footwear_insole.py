@@ -67,6 +67,15 @@ Blender:
   the Leather Boots' pull tab (1.2 × 1.5 cm) as the shaft top, 2.1 / 1.6 cm above the collar. ``top_raw`` = the
   highest closed slab (``None`` without one), ``closed_share`` = closed slabs / slabs at or below it (0.0 without
   one) — gate ``shaft_closed_share`` ≥ 0.9, refusal ``SHAFT_OPEN_REFUSED`` (an open-sided shaft is a mesher hole).
+  **A shoe of class ``none`` has no shaft** (INSOLE_VERSION 6, boots plan Task 9 fix 5): its slabs, ``top_raw``
+  and ``closed_share`` are recorded, but neither shaft gate (``SHAFT_GATES``) judges it — the gates carry None —
+  and it has no cap (``cap_removed`` 0, ``cap_faces`` empty). Above the slab floor (heel seat + 7 cm nominal) a
+  low shoe has only its tongue, laces or a raised heel counter, never a tube: the live sneakers (``item_3c60cf62``,
+  collar 3.4 cm nominal) read 9 slabs up to the tongue's top, 2 of them closed rings of the tongue itself (gap
+  82–87°; the 2 below them open, 111–115°), so ``closed_share`` 0.5 refused the shoe as "The boot shaft is not
+  closed"; the same rings made the tongue's top 169 "cap" faces (x 0.53–0.64 L, y 0.33–0.38 L — the shoe's highest
+  part), and on the live pumps (``item_7d91cd7a``, 4.8 cm) the counter's top lip ring made 105 (x 0.08–0.16 L,
+  y 0.68–0.75 L). Neither is a mesher lid over an opening; both were holes cut into the shoe.
   **Cap**: a single-view mesher closes an opening it cannot see; the faces whose centroid lies within the top
   ``CAP_TOP_SHARE`` of the shaft height — from ``top_raw − CAP_TOP_SHARE × (top_raw − vamp_top_raw)`` up,
   nothing of a shaft lies above its top but a cap — whose normal's up component is ≥ ``CAP_UP_MIN`` (cos 30°)
@@ -131,8 +140,9 @@ from app.core.footwear_gates import check_gates
 #: 2: insole_cover and footprint_outline over the outsole footprint (footprint_ground);
 #: 3: the shaft block (collar height, class, tube slabs, closed share, cap removal);
 #: 4: a closed slab ring needs a largest angular gap < 90° and an extent ≥ 0.1 L (tongue / pull tab are no shaft);
-#: 5: a cap face lies inside the opening's inner loop (the collar rim of a real mesh is no cap).
-INSOLE_VERSION = 5
+#: 5: a cap face lies inside the opening's inner loop (the collar rim of a real mesh is no cap);
+#: 6: a class-``none`` shoe has no shaft: its slabs recorded, the shaft gates not judged, no cap (Task 9 fix 5).
+INSOLE_VERSION = 6
 
 #: Shoe length the per-item (nominal) numbers are given at.
 NOMINAL_LENGTH_M = 0.26
@@ -187,7 +197,8 @@ CAP_TOP_SHARE = 0.02
 CAP_UP_MIN = math.cos(math.radians(30.0))
 #: The opening's inner loop: angular bins about the ring's bbox centre, the nearest cut point per bin (3°).
 CAP_RING_BINS = 120
-#: The shaft gates, judged with INSOLE_GATES at the insole step; both are optional for a shoe without a shaft.
+#: The shaft gates, judged with INSOLE_GATES at the insole step; neither judges a shoe of class ``none`` (no
+#: shaft: a tongue or a counter lip above the slab floor is no tube, INSOLE_VERSION 6) — its gates carry None.
 SHAFT_GATES: Dict[str, Tuple[str, Any, str]] = {
     "shaft_closed_share": ("min", 0.9, "share of the shaft's tube slabs with a closed ring"),
     "overknee": ("max", SHAFT_CLASS_M["knee"], "nominal collar height above the heel seat (m)"),
@@ -391,14 +402,16 @@ def _edges(F: np.ndarray) -> np.ndarray:
 
 
 def topline_stations(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray, *,
-                     side_share: float = TOPLINE_SIDE_SHARE, min_abs: float = 0.0) -> Tuple[np.ndarray, np.ndarray,
-                                                                                            np.ndarray]:
+                     side_share: float = TOPLINE_SIDE_SHARE, min_abs: float = 0.0,
+                     upper: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """``(topline, z_pos, z_neg)`` per station: every triangle edge cut by the plane x = gx[i]
     (an edge lying in the plane gives both its ends); per side (z > 0 / z < 0) the highest cut point
     with |z| >= ``side_share`` x that side's max |z| (default ``TOPLINE_SIDE_SHARE``) and |z| > ``min_abs``;
     ``topline`` = the lower of the two sides' heights, ``z_pos`` / ``z_neg`` = the lateral position of each
     side's point. NaN where a side has no cut point. (``side_share=0`` with a ``min_abs`` of a few mm is the
-    spike's wall top — the true top edge of each side, a leaning heel counter included — which the cut uses.)"""
+    spike's wall top — the true top edge of each side, a leaning heel counter included — which the cut uses.)
+    ``upper`` (an array of ``len(gx)``, filled in place when given): the HIGHER of the two sides per station, or the
+    one side that has a cut point — a shoe with one wall missing reads its standing wall there."""
     P = np.asarray(p_frame, np.float64).reshape(-1, 3)
     E = _edges(np.asarray(faces, np.int64).reshape(-1, 3))
     nx = len(gx)
@@ -438,6 +451,8 @@ def topline_stations(p_frame: np.ndarray, faces: np.ndarray, gx: np.ndarray, *,
             heights.append(float(side[k, 1]))
             zarr[i] = float(side[k, 2])
         top[i] = min(heights) if not any(math.isnan(v) for v in heights) else np.nan
+        if upper is not None:
+            upper[i] = max((v for v in heights if not math.isnan(v)), default=np.nan)
     return top, zp, zn
 
 
@@ -685,6 +700,8 @@ def cap_faces(positions: np.ndarray, faces: np.ndarray, insole: Dict[str, Any]) 
     P = np.asarray(positions, np.float64).reshape(-1, 3)
     F = np.asarray(faces, np.int64).reshape(-1, 3)
     shaft = insole.get("shaft") or {}
+    if not shaft.get("has_shaft", True):
+        return np.zeros(len(F), bool)
     return _cap_mask(frame_of(insole).to_frame(P), F, shaft.get("top_raw"), shaft.get("vamp_top_raw"))
 
 
@@ -704,8 +721,9 @@ def strip_cap(positions: np.ndarray, faces: np.ndarray, insole: Dict[str, Any]) 
 
 def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray, top: np.ndarray,
                  prof: np.ndarray, cav: np.ndarray, roof: np.ndarray, seat: Optional[float], k: float,
-                 L: float) -> Dict[str, Any]:
-    """The ``shaft`` block of insole.json (module docstring); every length raw but ``collar_h_nominal``."""
+                 L: float, top_hi: Optional[np.ndarray] = None) -> Dict[str, Any]:
+    """The ``shaft`` block of insole.json (module docstring); every length raw but ``collar_h_nominal`` /
+    ``upper_collar_h_nominal``. ``top_hi`` = the higher side's topline per station (``topline_stations(upper=)``)."""
     roofed = ~np.isnan(cav) & (gx > 0.5 * float(gx.max()))
     behind = gx < float(gx[roofed].min()) if roofed.any() else np.ones(len(gx), bool)
     vamp_top: Optional[float] = None
@@ -716,6 +734,8 @@ def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray
     top_behind = top[behind & ~np.isnan(top)]
     collar = None if seat is None or not len(top_behind) else float(top_behind.max()) - float(seat)
     nominal = None if collar is None or k != k else collar * k
+    hi_behind = np.zeros(0) if top_hi is None else top_hi[behind & ~np.isnan(top_hi)]
+    upper = None if seat is None or k != k or not len(hi_behind) else (float(hi_behind.max()) - float(seat)) * k
     cls = "none"
     if nominal is not None:
         rounded = _r(nominal)
@@ -735,9 +755,22 @@ def _shaft_block(pf: np.ndarray, F: np.ndarray, used: np.ndarray, gx: np.ndarray
     if slabs:
         below = [c for s, c in zip(slabs, closed) if top_raw is not None and s["y"] <= top_raw + eps]
         closed_share = float(sum(below) / len(below)) if below else 0.0
-    cap_removed = int(_cap_mask(pf, F, top_raw, vamp_top).sum())
+    # a low shoe has no shaft and so no cap: the closed rings above its slab floor are the tongue or the counter's
+    # lip (INSOLE_VERSION 6); a wall that stands on ONE side only is still a shaft (a mesher hole, refused)
+    has_shaft = has_shaft_of(cls, upper)
+    cap_removed = int(_cap_mask(pf, F, top_raw, vamp_top).sum()) if has_shaft else 0
     return {"collar_h_raw": collar, "collar_h_nominal": nominal, "class": cls, "top_raw": top_raw,
-            "vamp_top_raw": vamp_top, "slabs": slabs, "closed_share": closed_share, "cap_removed": cap_removed}
+            "vamp_top_raw": vamp_top, "slabs": slabs, "closed_share": closed_share, "cap_removed": cap_removed,
+            "upper_collar_h_nominal": upper, "has_shaft": has_shaft}
+
+
+def has_shaft_of(cls: Optional[str], upper_nominal: Optional[float]) -> bool:
+    """Whether a shoe has a shaft the shaft gates judge and the cap rule reads (INSOLE_VERSION 6): its class is not
+    ``none``, or its HIGHER side's collar (``upper_collar_h_nominal``) stands above the ``none`` bound — one wall
+    standing alone is a boot with a mesher hole, not a low shoe."""
+    if cls not in (None, "none"):
+        return True
+    return upper_nominal is not None and _r(upper_nominal) > SHAFT_CLASS_M["none"]
 
 
 # --- analysis ---------------------------------------------------------------------------------------------------------
@@ -798,7 +831,8 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
     n_fore = int(fore.sum())
     vamp_cover = float((covered & fore).sum() / n_fore) if n_fore else 0.0
 
-    top, zp, zn = topline_stations(pf, F, gx)
+    top_hi = np.full(len(gx), np.nan)
+    top, zp, zn = topline_stations(pf, F, gx, upper=top_hi)
 
     # footprint outline: per station the lateral extent of the outsole cells
     left, right = [], []
@@ -868,9 +902,11 @@ def _measure(P: np.ndarray, F: np.ndarray, frame: ShoeFrame) -> Dict[str, Any]:
     with np.errstate(invalid="ignore"):
         walls = with_prof & (top - prof >= air)
     opening_share = float(walls.sum() / with_prof.sum()) if with_prof.any() else 0.0
-    shaft = _shaft_block(pf, F, used, gx, top, prof, cav, roof, seat, k, L)
+    shaft = _shaft_block(pf, F, used, gx, top, prof, cav, roof, seat, k, L, top_hi)
+    has_shaft = bool(shaft["has_shaft"])
     metrics = {"insole_cover": insole_cover, "vamp_cover": vamp_cover, "opening_share": opening_share,
-               "shaft_closed_share": shaft["closed_share"], "overknee": shaft["collar_h_nominal"]}
+               "shaft_closed_share": shaft["closed_share"] if has_shaft else None,
+               "overknee": shaft["collar_h_nominal"] if has_shaft else None}
     ok, reasons = check_gates(metrics, {**INSOLE_GATES, **SHAFT_GATES}, optional=tuple(SHAFT_GATES))
     refusal = None
     if not ok:

@@ -98,7 +98,7 @@
  *    than `FOLLOW_RING_MIN` vertices the shaft's upper half (from the middle of `band_top` and `shaft_top` up),
  *    else null (never a vacuous 0).
  *  - `shaft_poke`: the share of the side's body vertices whose dominant bone is the side's Leg / UpLeg, with bind
- *    height in [`band_top`, `collar`], that lie OUTSIDE the boot — the side's footwear nodes posed, every
+ *    height in [`band_top`, `collar` + `COLLAR_RING_M`] (the cut edge on the collar plane included), that lie OUTSIDE the boot — the side's footwear nodes posed, every
  *    boundary loop of them (welded by bind position across both nodes) closed by a fan from its centroid, and the
  *    LID at the collar — the points where the plane bind y = `collar` cuts the shaft node's edges, in angular
  *    order about their bind centroid, fanned from their posed centroid (a real mesh is a shell with a wall
@@ -119,8 +119,11 @@
  * in (`band_top`, `shaft_top`] and whose every vertex is dominated by that side's Foot / ToeBase / Leg / UpLeg.
  * Since `footwear_cut` version 5 (boots plan Task 9 fix 4, Ruling 15e) the leg IS cut under a boot, up to the
  * collar plane: these are the cut's collar edges, one per leg wall (a shell body has two), expected on a served
- * boot — reported, not judged. `shaft_poke` above therefore finds no shin under the collar (null, "—"); the cut's
- * own `shaft_poke` reads the leg edge against the opening. The sole numbers read the foot part only.
+ * boot — reported, not judged. `shaft_poke` above therefore reads the leg's cut edge (and the leg between band top
+ * and collar where the collar stands that low): the cut's own `shaft_poke` / `collar_flex_poke` read the same edge
+ * against the opening in the stand and at ±25° flex. Since cut version 6 the edge rides the Leg (its bind height =
+ * the collar's, hence `COLLAR_RING_M`; before, its Foot share put it under the collar and walk read it rising out
+ * of the rim: rebuilt Kai's Work Shoes 2.4 % left, worst frame). The sole numbers read the foot part only.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -139,6 +142,10 @@ const DEPTH = 0.005
 // boots (module docstring, BOOTS)
 const NO_FOOT_W = 1e-3
 const RING_ABOVE_BAND_M = 0.04          // footwear_fit SHAFT_RING_ABOVE_M 0.06 − SPLIT_BAND_M 0.02
+// The cut edge lies ON the collar plane (footwear_cut): since cut version 6 it rides the Leg, so its bind height IS
+// the collar's, and float32 positions against the record's 7-digit collar_bind_m put it up to ~1e-7 above — the poke
+// range reaches footwear_cut.COLLAR_RING_M over the collar so the edge is measured, not dropped.
+const COLLAR_RING_M = 0.001
 const FOLLOW_RING_MIN = 3               // footwear_fit FOLLOW_RING_MIN
 const THIGH_TOP_M = 0.05                // spec § 6.4 step 4: the shaft's top 5 cm
 const SEAT_THIGH_MAX = 0.02             // spec § 6.4 step 4: the reference per frame (start value, P4 calibrates)
@@ -834,7 +841,7 @@ async function main() {
     const poke = [], thigh = []
     for (const p of body) for (let i = 0; i < p.count; i++) {
       const g = p.offset + i, d = dominantBone(g)
-      if (bandTop !== null && legRe.test(d) && bindY(g) >= bandTop && bindY(g) <= collarY) poke.push(g)
+      if (bandTop !== null && legRe.test(d) && bindY(g) >= bandTop && bindY(g) <= collarY + COLLAR_RING_M) poke.push(g)
       if (d === `${side}upleg`) thigh.push(g)
     }
     // the body's boundary loops under the shaft: a hole in the leg shell (spec § 4 anti-goal)

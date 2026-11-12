@@ -169,8 +169,30 @@ no hole. Real material (clone copies, base bodies rebuilt 2026-11-12, knee-high 
 2.7 mm; Kai 17 871 / 357, poke 0 / 0, gap 12.4 / 12.5 mm (min 3.8 / 4.4), conform 9.5 / 9.6 mm; Work Shoes on Kai
 poke 0, conform 0.3 / 4.1 mm. Delivered (``check_footwear.mjs``): penetration 0 in still / idle / walk / sit for all
 three, seam gap 0, seated thigh in the shaft 0 %; the Work Shoes' collar stands only 7 mm over the band's top, and
-in walk up to 2.4 % of the leg vertices between band top and collar (the cut edge, Leg-weighted, against a collar
-that still carries the foot's blend) stand outside the boot volume in the worst frame (left) — open.
+in walk up to 2.4 % of the leg vertices between band top and collar stood outside the boot volume in the worst
+frame (left) — fixed by version 6:
+**The collar weights** (``CUT_VERSION`` 6, step 2d of ``conform_body``, Task 9 fix 5, Ruling 15f). The auto-weighted
+male shin carries Foot weight up the leg (rebuilt Kai at the Work Shoes' collar: 0.40 L / 0.29 R, the rest Leg) while
+the shaft above the band rides the Leg alone, so at an ankle flex the leg's cut edge moved with the foot — CPU flex at
+±25° on that material: the radial gap stays ≥ 2.8 mm, but the edge's height moves −11 … +9 mm, i.e. it rose out of the
+rim. Now every vertex with Foot / ToeBase AND lower-leg weight from ``COLLAR_BELOW_M`` under the plane to
+``COLLAR_WEIGHT_FADE_M`` (5 cm) above it keeps ``clip(h / 5 cm, 0, 1)`` of its Foot / ToeBase share, the rest moves to
+the side's Leg (``collar.leg_joint``; ``_to_leg``), and the position is re-bound through the new blend so the STAND is
+unchanged (``_Map.to_bind`` with the new weights); the snap (step 3b) gives the bisected edge Foot 0 (its kept upper
+endpoint was only faded). 5 cm: the strain of the faded skin ≈ share · θ · r / H = 0.4 · 0.44 rad · 5 cm / 5 cm ≈ 17 %
+at a 25° flex, the body's own gradient. A knee-high's collar carries no Foot share (nothing moves there: Kira 0, Kai 6
+/ 49 edge vertices). Gate ``collar_flex_poke`` (``_collar_flex``): body and shaft posed by their own Foot / ToeBase
+shares at ±``SEAM_FLEX_DEG`` about the ankle (``_Map.flexed``), read in the stand's leg frame; an edge vertex pokes
+when it leaves its bin's posed inner radius or rises more than ``COLLAR_RING_M`` beyond the rim's own lift; ≤ 0.5 %,
+None without an edge (``POKE_OPTIONAL``). Together with ``shaft_poke`` (rim gap, stand) and ``collar_conform_m`` (rim
+step) these are the boot gates that read what is served; the fit's shaft push is recorded only since fit version 12
+(``footwear_fit.SHAFT_GATING``). Real material (clone copies, fit 12 / cut 6, 2026-11-12): Work Shoes on Kai — 335 /
+297 edge vertices re-weighted, rim gap 4.2 / 4.8 mm, flex gap min the same, flex rise 0.10 / 0.09 mm,
+``collar_flex_poke`` 0 / 0 (the same material with version 5's skin reads 66.7 % / 43.7 %, rise 9.1 / 6.3 mm, gap
+min 2.7 / 3.2 mm: the gate refuses it), ACCEPTED; ``check_footwear.mjs``:
+poke 0.00 % in still / idle / walk / sit (395 / 335 edge vertices measured), penetration 0, seam gap 0, soles and
+seat as at version 5. Knee-highs: Kira rim gap 2.9 / 1.9 mm, Kai 3.8 / 4.4 mm, flex poke 0, rise 0, both ACCEPTED
+(push p95 26.6 / 36.6 mm recorded); delivered penetration 0, seam gap 0, seated thigh in the shaft 0 %.
 
 Motion (``check_footwear.mjs`` on the SERVED outfit GLB against the bare base): bind floor 0 mm over the bare
 soles, still sole L/R 1 / 0 mm, idle −3.1 … −2.4 mm, walk stance −2.0 … +15.5 mm (strike ≥ −1.2, heel off ≤ −1.4,
@@ -192,7 +214,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from app.core import glb_mesh
-from app.core.footwear_fit import FOOT_WEIGHT_MIN, WALL_SIDE_M, _about, _apply, _frame_matrix, _r, _smoothstep, _unit
+from app.core.footwear_fit import (FOOT_WEIGHT_MIN, SEAM_FLEX_DEG, WALL_SIDE_M, _about, _apply, _frame_matrix, _r,
+                                   _smoothstep, _unit)
 from app.core.footwear_gates import check_gates
 from app.core.footwear_insole import HEEL_SEAT_M
 from app.core.glb_mesh import Prim  # noqa: F401  (re-exported: the cut's primitive type)
@@ -201,8 +224,10 @@ from app.core.glb_mesh import Prim  # noqa: F401  (re-exported: the cut's primit
 #: 3: the boot's removal cap bounded at the ankle band (pulled forward in 7b04e9f5) and the ``shaft_poke`` gate;
 #: 4: ``shaft_poke``'s range ends at the collar (``split.collar_m``), not at the shaft part's highest vertex;
 #: 5: under a boot the foot AND the lower leg go up to the collar plane, the leg ring conformed into the opening,
-#: ``shaft_poke`` read on that ring, ``collar_conform_m`` (boots plan Task 9 fix 4, Ruling 15e).
-CUT_VERSION = 5
+#: ``shaft_poke`` read on that ring, ``collar_conform_m`` (boots plan Task 9 fix 4, Ruling 15e);
+#: 6: the leg at the collar rides the Leg like the shaft (step 2d: its Foot / ToeBase share moved to the Leg, faded
+#: out above the plane; the cut edge carries none) and the gate ``collar_flex_poke`` (Task 9 fix 5, Ruling 15f).
+CUT_VERSION = 6
 #: The throat conform acts this far behind the throat front (metres).
 THROAT_BAND_M = 0.02
 #: The slimming band reaches this far above the cap (metres) ...
@@ -226,14 +251,15 @@ CUT_GATES: Dict[str, Tuple[str, Any]] = {
     "toe_conform_m": ("max", 0.025),
     "shaft_poke": ("max", 0.005),
     "collar_conform_m": ("max", 0.025),
+    "collar_flex_poke": ("max", 0.005),
 }
 #: The gates of ``CUT_GATES`` that exist for a split fit (a shaft part) only — absent from a shoe's record.
-SHAFT_CUT_GATES: Tuple[str, ...] = ("shaft_poke", "collar_conform_m")
+SHAFT_CUT_GATES: Tuple[str, ...] = ("shaft_poke", "collar_conform_m", "collar_flex_poke")
 #: The gates a split fit does not carry: they read the foot before the cut, and under a boot the cut takes the whole
 #: foot (CUT_VERSION 5) — nothing of it can show (recorded in the side's diagnostics).
 HIDDEN_UNDER_BOOT: Tuple[str, ...] = ("deep_outside", "toe_conform_m")
 #: Gates whose value may be None (no shin vertex in the shaft's height range): recorded, not judged.
-POKE_OPTIONAL: Tuple[str, ...] = ("shaft_poke",)
+POKE_OPTIONAL: Tuple[str, ...] = ("shaft_poke", "collar_flex_poke")
 GATE_LABELS = {
     "deep_outside": "share of the slimmed foot's should-be-enclosed vertices > 3 mm outside the shoe, worse side",
     "visible_poke": "share of the remaining foot vertices still below the upper's rim, worse side",
@@ -241,6 +267,8 @@ GATE_LABELS = {
     "toe_conform_m": "largest vertical push of a toe under the vamp's inner surface, worse side",
     "shaft_poke": "share of the leg's cut edge at the collar that stands outside the boot's opening, worse side",
     "collar_conform_m": "largest move of the leg into the boot's opening at the collar, worse side",
+    "collar_flex_poke": "share of the leg's cut edge outside the opening or above the rim at +-25 deg ankle flex, "
+                        "worse side",
 }
 
 #: The voxel size of the enclosure test (the spike's 2 mm).
@@ -293,6 +321,9 @@ COLLAR_BELOW_M = 0.05
 #: ... on the vertices whose lower-leg weight (Foot + ToeBase + Leg of the side) reaches this — the same share
 #: decides what the cut removes under the collar.
 LEG_WEIGHT_MIN = 0.5
+#: The collar weights (step 2d, CUT_VERSION 6): the leg's Foot / ToeBase share goes to the Leg at and under the
+#: collar plane and is kept in full this far above it (metres), linearly in between (module docstring).
+COLLAR_WEIGHT_FADE_M = 0.05
 #: The opening at the collar (``collar_opening``): the shoe points this far under the collar plane, in this many
 #: angular bins about the opening's centre; fewer points than this is no opening.
 OPENING_BAND_M = 0.02
@@ -610,12 +641,45 @@ def _weight_of(prim: Prim, key: str) -> np.ndarray:
     return np.where(np.isin(J, idx), W, 0.0).sum(axis=1)
 
 
+def _joint_ids(prim: Any, key: str) -> np.ndarray:
+    """The skin indices of ``prim`` whose normalised name is ``key``."""
+    from app.core.rig_contract import norm_bone_name
+    return np.array([i for i, name in enumerate(prim.joint_names) if norm_bone_name(str(name)) == key], np.int64)
+
+
+def _to_leg(J: np.ndarray, W: np.ndarray, ids: np.ndarray, keep: np.ndarray, foot_ids: np.ndarray,
+            leg_id: int) -> int:
+    """In place on the skin arrays: the Foot / ToeBase weights (``foot_ids``) of the vertices ``ids`` scaled by
+    ``keep``, the share taken off added to the Leg (``leg_id``) — its slot when the vertex has one, else a slot of
+    weight 0, else its smallest slot (that influence goes to the Leg too); renormalised. Returns how many vertices
+    had no Leg slot and lost an influence that way (0 on every material measured)."""
+    Jv, Wv = J[ids].copy(), W[ids].copy()
+    foot = np.isin(Jv, foot_ids) & (Wv > 0)
+    taken = (Wv * foot).sum(axis=1) * (1.0 - keep)
+    Wv = np.where(foot, Wv * keep[:, None], Wv)
+    is_leg = Jv == leg_id
+    has_leg = is_leg.any(axis=1)
+    rows = np.nonzero(has_leg)[0]
+    Wv[rows, np.argmax(is_leg[rows], axis=1)] += taken[rows]
+    dropped = 0
+    for r in np.nonzero(~has_leg & (taken > 0))[0]:
+        free = np.nonzero(Wv[r] <= 0.0)[0]
+        slot = int(free[0]) if len(free) else int(np.argmin(Wv[r]))
+        dropped += 0 if len(free) else 1
+        Wv[r, slot] = taken[r] + (0.0 if len(free) else Wv[r, slot])
+        Jv[r, slot] = leg_id
+    total = Wv.sum(axis=1, keepdims=True)
+    J[ids], W[ids] = Jv, Wv / np.where(total > 0, total, 1.0)
+    return dropped
+
+
 class _Map:
     """Bind space <-> cut frame for one side on one primitive (module docstring)."""
 
     def __init__(self, desc: Dict[str, Any], joints: Dict[str, np.ndarray], prim: Prim):
         from app.core.rig_contract import norm_bone_name
         fkey, tkey = norm_bone_name(str(desc["foot_joint"])), norm_bone_name(str(desc["toe_joint"]))
+        self.fkey, self.tkey = fkey, tkey
         if fkey not in joints or tkey not in joints:
             raise ValueError(f"The body has no {desc['foot_joint']} / {desc['toe_joint']} joint")
         Jf = np.asarray(joints[fkey], np.float64)
@@ -629,6 +693,7 @@ class _Map:
         self.Tf = frame @ np.linalg.inv(Jf)
         self.T0 = self.Tf @ np.linalg.inv(Bf)
         self.Tt = self.T0 @ Bt
+        self._flex = (Jf[:3, 3].copy(), Jt[:3, 3].copy(), axis, theta, toe_turn)
         self.wF = _weight_of(prim, fkey)
         self.wT = _weight_of(prim, tkey)
         self.foot = self.wF + self.wT
@@ -649,10 +714,23 @@ class _Map:
         base = _apply(self.T0, P)
         return base + wF[:, None] * (_apply(self.Tf, P) - base) + wT[:, None] * (_apply(self.Tt, P) - base)
 
-    def to_bind(self, C: np.ndarray, ids: np.ndarray) -> np.ndarray:
-        A = self.blend(self.wF[ids], self.wT[ids])
+    def to_bind(self, C: np.ndarray, ids: np.ndarray, wF: Optional[np.ndarray] = None,
+                wT: Optional[np.ndarray] = None) -> np.ndarray:
+        A = self.blend(self.wF[ids] if wF is None else wF, self.wT[ids] if wT is None else wT)
         inv = np.linalg.inv(A)
         return np.einsum("nij,nj->ni", inv[:, :3, :3], C) + inv[:, :3, 3]
+
+    def flexed(self, P: np.ndarray, wF: np.ndarray, wT: np.ndarray, deg: float) -> np.ndarray:
+        """Bind points posed with the Foot turned ``deg`` further than the stand about the fit's axis at the ankle
+        (ToeBase along, its counter-turn kept), each by its own Foot / ToeBase share, read in the cut frame of the
+        STAND's leg (``T0``: where a Leg-only point stands) — so a point that rides the Leg does not move and a point
+        on the Foot turns by ``deg`` about the ankle. ``deg`` 0 is ``to_cut``."""
+        ankle, toe, axis, theta, toe_turn = self._flex
+        Bf = _about(ankle, axis, theta + np.radians(float(deg)))
+        Bt = _about(_apply(Bf, toe), axis, toe_turn) @ Bf
+        P = np.asarray(P, np.float64)
+        X = P + wF[:, None] * (_apply(Bf, P) - P) + wT[:, None] * (_apply(Bt, P) - P)
+        return _apply(self.T0, X)
 
 
 # --- conform ----------------------------------------------------------------------------------------------------
@@ -744,17 +822,51 @@ def _collar_conform(side: "_Side", m: "_Map", C: np.ndarray, moved: np.ndarray) 
     return {"pull": float(dist[near].max()) if near.any() else 0.0, "squeeze": float(1.0 - f.min())}
 
 
+def _collar_weights(desc: Dict[str, Any], side: "_Side", m: "_Map", C: np.ndarray, J: np.ndarray, W: np.ndarray,
+                    view: Prim) -> Dict[str, Any]:
+    """Step 2d (module docstring) in place on the skin arrays ``J`` / ``W``: every vertex with Foot / ToeBase AND
+    lower-leg weight from ``COLLAR_BELOW_M`` under the collar plane to ``COLLAR_WEIGHT_FADE_M`` above it keeps
+    ``clip(h / fade, 0, 1)`` of its Foot / ToeBase share, the rest goes to the side's Leg. The positions are the
+    caller's (it re-binds them through the new blend, so the stand stays). ``{"ids", "n", "foot_max", "dropped"}``:
+    the vertices changed, their count, the largest share moved, the vertices that had no Leg slot to take it."""
+    from app.core.rig_contract import norm_bone_name
+    leg = (desc.get("collar") or {}).get("leg_joint")
+    leg_ids = _joint_ids(view, norm_bone_name(str(leg))) if leg else np.zeros(0, np.int64)
+    none = {"ids": np.zeros(0, np.int64), "n": 0, "foot_max": 0.0, "dropped": 0}
+    if not len(leg_ids):
+        return none
+    h = collar_height(C, side.plane)
+    zone = (m.foot > 0.0) & (m.leg > 0.0) & (h >= -COLLAR_BELOW_M) & (h <= COLLAR_WEIGHT_FADE_M)
+    if not zone.any():
+        return none
+    ids = np.nonzero(zone)[0]
+    keep = np.clip(h[ids] / COLLAR_WEIGHT_FADE_M, 0.0, 1.0)
+    moved_share = m.foot[ids] * (1.0 - keep)
+    ids, keep, moved_share = ids[moved_share > 0], keep[moved_share > 0], moved_share[moved_share > 0]
+    if not len(ids):
+        return none
+    foot_ids = np.concatenate([_joint_ids(view, m.fkey), _joint_ids(view, m.tkey)])
+    dropped = _to_leg(J, W, ids, keep, foot_ids, int(leg_ids[0]))
+    return {"ids": ids, "n": int(len(ids)), "foot_max": float(moved_share.max()), "dropped": dropped}
+
+
 def conform_body(prim: Prim, cut: Dict[str, Any], joints: Dict[str, np.ndarray]) -> Tuple[Prim, Dict[str, Any]]:
-    """Steps 1–2 of ``apply_cut`` on every side of ``cut``: the forefoot slimming and the throat conform, positions
-    moved in bind space, everything else untouched. ``(prim, info)`` with per-side ``slim_share`` /
-    ``throat_moved`` and the touched vertex ids (``touched``)."""
+    """Steps 1–2d of ``apply_cut`` on every side of ``cut``: the forefoot slimming, the throat, toe and collar
+    conforms (positions moved in bind space) and, under a boot's collar, the collar weights (step 2d: the skin of
+    the leg there; the stand positions kept) — everything else untouched. ``(prim, info)`` with per-side
+    ``slim_share`` / ``throat_moved`` / ``collar_weights`` and the touched vertex ids (``touched``)."""
     P = np.asarray(prim.positions, np.float64).copy()
+    J = np.asarray(prim.joints, np.int64).copy()
+    W = np.asarray(prim.weights, np.float64).copy()
+    # the sides read the skin as step 2d of the previous side left it (each side moves only its own Foot share)
+    view = Prim(positions=P, faces=np.asarray(prim.faces, np.int64), joints=J, weights=W,
+                joint_names=list(prim.joint_names))
     touched = np.zeros(len(P), bool)
     info: Dict[str, Any] = {"slim_share": {}, "throat_moved": {}, "slim_station_max": {}, "toe_conform": {},
-                            "toe_pull": {}, "collar_pull": {}, "collar_squeeze": {}}
+                            "toe_pull": {}, "collar_pull": {}, "collar_squeeze": {}, "collar_weights": {}}
     for name, desc in (cut.get("sides") or {}).items():
         side = _Side(desc)
-        m = _Map(desc, joints, prim)
+        m = _Map(desc, joints, view)
         C = m.to_cut(P)
         x, y, z = C[:, 0], C[:, 1].copy(), C[:, 2]      # y: the height before any move (the toe push is read against it)
         capx = side.cap(x)
@@ -832,13 +944,23 @@ def conform_body(prim: Prim, cut: Dict[str, Any], joints: Dict[str, np.ndarray])
             cinfo = _collar_conform(side, m, C, moved)
             info["collar_pull"][name] = cinfo["pull"]
             info["collar_squeeze"][name] = cinfo["squeeze"]
-        if moved.any():
-            ids = np.nonzero(moved)[0]
-            P[ids] = m.to_bind(C[ids], ids)
-            touched |= moved
+        # 2d. the collar weights (a boot, CUT_VERSION 6): the leg at the collar rides the Leg like the shaft there
+        reweighted = np.zeros(len(P), bool)
+        if side.plane is not None:
+            winfo = _collar_weights(desc, side, m, C, J, W, view)
+            reweighted[winfo.pop("ids")] = True
+            info["collar_weights"][name] = winfo
+        redo = moved | reweighted
+        if redo.any():
+            # back to bind space through each vertex's (new) blend: the stand position C is kept exactly
+            ids = np.nonzero(redo)[0]
+            wF = _weight_of(view, m.fkey)[ids]
+            wT = _weight_of(view, m.tkey)[ids]
+            P[ids] = m.to_bind(C[ids], ids, wF, wT)
+            touched |= redo
     out = Prim(positions=P, faces=np.asarray(prim.faces, np.int64).copy(),
                attributes={k: np.asarray(v, np.float64).copy() for k, v in prim.attributes.items()},
-               joints=np.asarray(prim.joints, np.int64).copy(), weights=np.asarray(prim.weights, np.float64).copy(),
+               joints=J, weights=W,
                targets=[{k: np.asarray(v, np.float64).copy() for k, v in t.items()} for t in prim.targets],
                joint_names=list(prim.joint_names))
     info["touched"] = touched
@@ -1073,33 +1195,48 @@ def _collar_snap(out: Prim, desc: Dict[str, Any], joints: Dict[str, np.ndarray],
     crosses the plane partly pulled (its upper vertex is), so the bisection's point would stand that share outside;
     the snap moves it the rest of the way. ``{"collar_snapped": n, "collar_snap_m": the largest move}``."""
     side = _Side(desc)
+    none = {"collar_snapped": 0, "collar_snap_m": 0.0, "collar_edge_reweighted": 0}
     if side.inner_r is None:
-        return {"collar_snapped": 0, "collar_snap_m": 0.0}
+        return none
     m = _Map(desc, joints, out)
     ids = np.arange(len(out.positions) - n_new, len(out.positions))
     C = m.to_cut(out.positions[ids], m.wF[ids], m.wT[ids])
     ring = (m.leg[ids] >= side.leg_min) & (np.abs(collar_height(C, side.plane)) <= COLLAR_RING_M)
     if not ring.any():
-        return {"collar_snapped": 0, "collar_snap_m": 0.0}
+        return none
     ids, C = ids[ring], C[ring]
+    # the cut edge rides the Leg like the collar (step 2d's rule at h = 0): a bisected edge lerps the share of its
+    # kept endpoint above the plane, which step 2d only faded — it goes to the Leg here
+    from app.core.rig_contract import norm_bone_name
+    leg = (desc.get("collar") or {}).get("leg_joint")
+    leg_ids = _joint_ids(out, norm_bone_name(str(leg))) if leg else np.zeros(0, np.int64)
+    shared = ids[m.foot[ids] > 0.0] if len(leg_ids) else np.zeros(0, np.int64)
+    if len(shared):
+        foot_ids = np.concatenate([_joint_ids(out, m.fkey), _joint_ids(out, m.tkey)])
+        _to_leg(out.joints, out.weights, shared, np.zeros(len(shared)), foot_ids, int(leg_ids[0]))
     r, th = _in_plane(C, side.plane, side.centre)
     nb = len(side.inner_r)
     b = np.floor((th + np.pi) / (2.0 * np.pi) * nb).astype(int) % nb
     target = np.maximum(side.inner_r - side.collar_clearance, 0.0)
     target = np.minimum(target, np.minimum(np.roll(target, 1), np.roll(target, -1)))[b]
     over = r > target
-    if not over.any():
-        return {"collar_snapped": 0, "collar_snap_m": 0.0}
-    _n, lv, dv = collar_axes(side.plane)
-    Q = C[over] - np.asarray(side.plane["point"], np.float64)
-    ul = Q @ lv - float(side.centre[0])
-    ud = Q @ dv - float(side.centre[1])
-    f = target[over] / r[over]
-    move = np.outer((f - 1.0) * ul, lv) + np.outer((f - 1.0) * ud, dv)
-    sel = ids[over]
-    out.positions[sel] = m.to_bind(C[over] + move, sel)
+    move = np.zeros_like(C)
+    if over.any():
+        _n, lv, dv = collar_axes(side.plane)
+        Q = C[over] - np.asarray(side.plane["point"], np.float64)
+        ul = Q @ lv - float(side.centre[0])
+        ud = Q @ dv - float(side.centre[1])
+        f = target[over] / r[over]
+        move[over] = np.outer((f - 1.0) * ul, lv) + np.outer((f - 1.0) * ud, dv)
+    redo = over | np.isin(ids, shared)
+    if not redo.any():
+        return none
+    sel = ids[redo]
+    out.positions[sel] = m.to_bind(C[redo] + move[redo], sel, _weight_of(out, m.fkey)[sel], _weight_of(out, m.tkey)[sel])
     touched[sel] = True
-    return {"collar_snapped": int(over.sum()), "collar_snap_m": float(np.linalg.norm(move, axis=1).max())}
+    return {"collar_snapped": int(over.sum()),
+            "collar_snap_m": float(np.linalg.norm(move[over], axis=1).max()) if over.any() else 0.0,
+            "collar_edge_reweighted": int(len(shared))}
 
 
 # --- gates ----------------------------------------------------------------------------------------------------------
@@ -1147,6 +1284,67 @@ def _collar_ring(side: "_Side", ma: "_Map", Ca: np.ndarray) -> Dict[str, Any]:
                 "collar_gap_p50_mm": float(np.percentile(gap, 50) * 1000.0),
                 "collar_gap_min_mm": float(gap.min() * 1000.0),
                 "collar_under_n": int((h[ring] < -COLLAR_RING_M).sum())})
+    return out
+
+
+def _collar_flex(side: "_Side", ma: "_Map", after: Prim, shaft: glb_mesh.GarmentMesh) -> Dict[str, Any]:
+    """``collar_flex_poke`` and its diagnostics (module docstring, CUT_VERSION 6): the cut edge of the CUT body
+    (``_collar_ring``'s set) against the shaft at the ankle flex ``±SEAM_FLEX_DEG`` — body and shaft posed by their
+    own Foot / ToeBase shares (``_Map.flexed``), both read in the stand's leg frame. The opening = the shaft points
+    within ``OPENING_BAND_M`` under the plane IN THE STAND, posed; per angular bin about the opening's centre its
+    smallest radius (``collar_opening``'s rule, empty bins from their neighbours) and its highest point's lift over
+    the stand. An edge vertex pokes when its radius exceeds its bin's posed inner radius (out through the wall) or
+    it rises more than ``COLLAR_RING_M`` over its own stand height beyond its bin's rim lift (the leg's open end
+    comes up out of the rim). The value is the worse flex's share; None without an edge or an opening (not
+    judged). ``collar_flex_gap_min_mm`` / ``collar_flex_lift_mm`` = the smallest radial gap and the largest rise
+    over both flexes."""
+    out: Dict[str, Any] = {"collar_flex_poke": None, "collar_flex_gap_min_mm": None, "collar_flex_lift_mm": None}
+    if side.plane is None or side.inner_r is None:
+        return out
+    P = np.asarray(after.positions, np.float64)
+    h0 = collar_height(ma.to_cut(P), side.plane)
+    ring = (ma.leg >= side.leg_min) & (h0 <= COLLAR_RING_M)
+    S = np.asarray(shaft.positions, np.float64)
+    sF, sT = _weight_of(shaft, ma.fkey), _weight_of(shaft, ma.tkey)
+    hs0 = collar_height(ma.flexed(S, sF, sT, 0.0), side.plane)
+    band = (hs0 >= -OPENING_BAND_M) & (hs0 <= 0.0)
+    if not ring.any() or int(band.sum()) < OPENING_MIN:
+        return out
+    nb = len(side.inner_r)
+    idx = np.arange(nb)
+
+    def bins(th: np.ndarray) -> np.ndarray:
+        return np.floor((th + np.pi) / (2.0 * np.pi) * nb).astype(int) % nb
+
+    def per_bin(b: np.ndarray, v: np.ndarray, fn: Any, fill: float) -> np.ndarray:
+        res = np.full(nb, np.nan)
+        for i in range(nb):
+            if (b == i).any():
+                res[i] = float(fn(v[b == i]))
+        ok = ~np.isnan(res)
+        return np.where(ok, res, np.interp(idx, idx[ok], res[ok], period=nb)) if ok.any() else np.full(nb, fill)
+
+    Sb = S[band]
+    _r0, ths0 = _in_plane(ma.flexed(Sb, sF[band], sT[band], 0.0), side.plane, side.centre)
+    top0 = per_bin(bins(ths0), hs0[band], np.max, 0.0)
+    Pr = P[ring]
+    shares, gaps, lifts = [], [], []
+    for deg in (-SEAM_FLEX_DEG, SEAM_FLEX_DEG):
+        Cs = ma.flexed(Sb, sF[band], sT[band], deg)
+        rs, ths = _in_plane(Cs, side.plane, side.centre)
+        bs = bins(ths)
+        inner = per_bin(bs, rs, np.min, 0.0)
+        rim = per_bin(bs, collar_height(Cs, side.plane), np.max, 0.0) - top0
+        Cr = ma.flexed(Pr, ma.wF[ring], ma.wT[ring], deg)
+        rr, thr = _in_plane(Cr, side.plane, side.centre)
+        br = bins(thr)
+        gap = inner[br] - rr
+        lift = collar_height(Cr, side.plane) - h0[ring] - rim[br]
+        shares.append(float(((gap < 0.0) | (lift > COLLAR_RING_M)).mean()))
+        gaps.append(float(gap.min()))
+        lifts.append(float(lift.max()))
+    out.update({"collar_flex_poke": max(shares), "collar_flex_gap_min_mm": min(gaps) * 1000.0,
+                "collar_flex_lift_mm": max(lifts) * 1000.0})
     return out
 
 
@@ -1295,6 +1493,7 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
     shaft_out: Dict[str, Any] = {}
     if shaft is not None:
         shaft_out = _collar_ring(side, ma, Ca)
+        shaft_out.update(_collar_flex(side, ma, after, shaft))
         shaft_out["shaft_top_m"] = float(Sc_list[-1][:, 2].max())
         shaft_out["collar_m"] = float((desc.get("split") or {}).get("collar_m"))
     return {

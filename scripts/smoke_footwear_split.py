@@ -51,7 +51,8 @@ Expected, by hand:
      read the COLLAR BAND only (the shaft vertices from COLLAR_BAND_M 0.03 under the collar plane up: the raw rows
      0.13 .. 0.16, all inside the shin's height) -> push_p95_m >= 0.00425 and push_max_m <= 0.0085 (no more than the
      unwidened tube needed: the widening only removes need; measured 5.0 / 5.1 mm — on 0a6a2f2a, fit version 10,
-     the whole shaft unwidened read 10.3 / p95 8.9 mm); inside_share 0;
+     the whole shaft unwidened read 10.3 / p95 8.9 mm); inside_share 0; the push gates ok and (fit version 12)
+     recorded, not gating, the inside gate gating;
      every foot-part vertex (s = 0) unmoved: identical bind positions to the 0.03 fit (+-1e-12). (The plan's
      0.0102 took the inner half-width as 0.04 k = 0.0408 without the width factor, which widens the shaft
      too — it is one mesh.)
@@ -76,9 +77,10 @@ Expected, by hand:
      False (the source material says so); glb_mesh.garment_arrays(prefix) raises on the foot name (two
      matches), exact=True returns it. foot_pose of the boot fit == foot_pose of the clog fit on the same foot
      (bones, root_lift_m, contacts: the split changes no pose; the boot's foot part IS the clog).
-[B6] FOOTWEAR_FIT_VERSION 11; COLLAR_BAND_M 0.03; FIT_GATES has no "boot"; SHAFT_GATES = push p95 0.015 / max 0.030 / inside 0.01 /
-     seam gap 2 mm / stretch 1.5 / follow 1 deg (+ the knee gates of [B9]), SHAFT_GATING seam_stretch_max False and
-     the rest True;
+[B6] FOOTWEAR_FIT_VERSION 12; COLLAR_BAND_M 0.03; FIT_GATES has no "boot"; SHAFT_GATES = push p95 0.015 / max 0.030 / inside 0.01 /
+     seam gap 2 mm / stretch 1.5 / follow 1 deg (+ the knee gates of [B9]), SHAFT_GATING seam_stretch_max False,
+     shaft_push_p95_m / shaft_push_max_m False (fit version 12, Task 9 fix 5, Ruling 15f: under a boot the body is cut
+     away, the push is recorded only — on ebcd6c0b both gated) and the rest True;
      SPLIT_BAND_M 0.02, SPLIT_MARGIN_M 0.01, SHAFT_CLEAR_M 0.006; the record's gates carry the eight shaft
      entries for the boot and none for the clog.
 (On 2a54cb70 — fit version 5 — FootwearFit has ``shoes`` and no ``parts``, FIT_GATES has ``boot`` and the flat
@@ -133,7 +135,7 @@ follow is a vacuous 0.0 over an empty ring.)
      0.45 - 0.296844 = **0.153156**, ``clip_m`` 0, no ``clip`` stats, the shaft part's highest vertex 0.296844,
      ``split.collar_bind_m`` 0.296844, accepted. The [B1] ankle boot carries the two knee gates too (margin 0.29646,
      clip 0) and a shoe (the clog) neither.
-     [B6] FOOTWEAR_FIT_VERSION 11, KNEE_MARGIN_M 0.04, SHAFT_CLIP_MAX_M 0.05; SHAFT_GATES + shaft_clip_m ("max", 0.05)
+     [B6] FOOTWEAR_FIT_VERSION 12, KNEE_MARGIN_M 0.04, SHAFT_CLIP_MAX_M 0.05; SHAFT_GATES + shaft_clip_m ("max", 0.05)
      and knee_margin_m ("min", 0.04), both gating.
 [B10] a LEANING shin (boots plan Task 9 fix 3 + fix 4): ``flat_boot(shaft=0.30)`` on ``foot_body_glb(leg_cell=0.01,
      leg_lean_deg=15)`` (the column sheared forward 15 deg about the Foot joint's height, the Leg joint on that line).
@@ -184,15 +186,15 @@ def main() -> int:
     from app.core import footwear_insole, garment_footwear, glb_mesh
 
     # [B6]
-    check(ff.FOOTWEAR_FIT_VERSION == 11 and ff.COLLAR_BAND_M == 0.03 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
+    check(ff.FOOTWEAR_FIT_VERSION == 12 and ff.COLLAR_BAND_M == 0.03 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
           and ff.SPLIT_MARGIN_M == 0.01 and ff.SHAFT_CLEAR_M == 0.006 and ff.FOLLOW_RING_MIN == 3
           and ff.FOLLOW_OPTIONAL == ("shaft_leg_follow_deg",) and ff.KNEE_MARGIN_M == 0.04
-          and ff.SHAFT_CLIP_MAX_M == 0.05, "[B6] version 11, no boot gate, split + knee + collar band constants")
+          and ff.SHAFT_CLIP_MAX_M == 0.05, "[B6] version 12, no boot gate, split + knee + collar band constants")
     check(ff.SHAFT_GATES == {"shaft_push_p95_m": ("max", 0.015), "shaft_push_max_m": ("max", 0.030),
                              "shaft_inside_share": ("max", 0.01), "seam_gap_p95_mm": ("max", 2.0),
                              "seam_stretch_max": ("max", 1.5), "shaft_leg_follow_deg": ("max", 1.0),
                              "shaft_clip_m": ("max", 0.05), "knee_margin_m": ("min", 0.04)}
-          and ff.SHAFT_GATING == {"shaft_push_p95_m": True, "shaft_push_max_m": True, "shaft_inside_share": True,
+          and ff.SHAFT_GATING == {"shaft_push_p95_m": False, "shaft_push_max_m": False, "shaft_inside_share": True,
                                   "seam_gap_p95_mm": True, "seam_stretch_max": False, "shaft_leg_follow_deg": True,
                                   "shaft_clip_m": True, "knee_margin_m": True},
           "[B6] SHAFT_GATES + SHAFT_GATING")
@@ -293,8 +295,9 @@ def main() -> int:
     check(len(wf_.positions) == len(foot.positions) and np.allclose(wf_.positions[pin], foot.positions[pin], atol=1e-12),
           f"[B3] {int(pin.sum())} foot-part vertices unmoved by the push")
     gw = wide.record["gates"]
-    check(all(gw[g]["ok"] and gw[g]["gating"] for g in ("shaft_push_p95_m", "shaft_push_max_m", "shaft_inside_share")),
-          "[B3] the push gates pass and gate")
+    check(all(gw[g]["ok"] for g in ("shaft_push_p95_m", "shaft_push_max_m", "shaft_inside_share"))
+          and [gw[g]["gating"] for g in ("shaft_push_p95_m", "shaft_push_max_m", "shaft_inside_share")] == [False, False, True],
+          "[B3] the push gates pass (recorded, not gating since fit version 12), the inside gate gates")
 
     # [B4]
     check(near(sh["seam_gap_p95_mm"], 0.0, 1e-6), f"[B4] flat boot seam gap {sh['seam_gap_p95_mm']} mm")

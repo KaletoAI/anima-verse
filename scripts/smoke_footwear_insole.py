@@ -50,7 +50,7 @@ Expected, by hand:
      every number equals [I1] (the fin is vertical -> no ray hit; it sits at z = 0 -> no topline side).
 [I8] analyse(static_glb(pump)) equals analyse_arrays(pump) within float32 (1e-5) and is JSON without NaN.
 (Every float in insole.json is rounded to 7 decimals, so the station-count checks hold to 1e-6.)
-[I9] constants: INSOLE_VERSION 5 (the cap inside the opening; 4 = the tube ring rules, 3 = the shaft block, 2 = the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
+[I9] constants: INSOLE_VERSION 6 (a class-none shoe has no shaft; 5 = the cap inside the opening; 4 = the tube ring rules, 3 = the shaft block, 2 = the outsole footprint), DOWN_MAX -0.3, NOMINAL_LENGTH_M 0.26, STATIONS 240, AIR_SHARE 0.025, TOL_SHARE 0.035,
      INSOLE_GATES insole_cover min 0.80 / vamp_cover min 0.6 / opening_share min 0.5, BOOT_MARGIN_M 0.03,
      the refusal texts (boot, open, solid).
 [I11] the closed solid wedge (sole alone: side faces only up to h(x), no roof): the top faces up with nothing
@@ -109,7 +109,10 @@ down to max(vamp top, seat + 0.07 / k) — the height a shaft begins to be one.
      point at z = -0.04 = the centre -> no quadrant -> every shaft slab open -> closed_share 0.0, top_raw None
      -> refused SHAFT_OPEN_REFUSED. (The topline of the open-sided wedge is the LOWER side, the pump's
      h(x) + 0.03: its collar reads 0.03, class none — the slab ceiling is the mesh's top, not the topline,
-     which is how the one-sided wall is seen at all.)
+     which is how the one-sided wall is seen at all. INSOLE_VERSION 6: the HIGHER side's collar, the standing
+     -z wall's 0.26 - 0.09 = 0.17 > 0.07, still makes it a shaft — upper_collar_h_nominal 0.17 (measured 0.167: the
+     lone wall tilts the PCA frame, as [I17] (b)'s U yaws it), has_shaft True —
+     so a class-none shoe with one wall standing alone stays judged and refused.)
 [I15] wedge(shaft=0.26, cap=True): the cap is 10 x 8 quads = 160 up-facing triangles at y = 0.26 over
      x in [0, 0.10] x z in [-0.04, 0.04]. strip_cap removes the faces whose centroid lies within the top 2 % of
      the shaft height, 0.26 - 0.02 x (0.26 - 0.04) = 0.2556 .. up, and whose normal's up component is
@@ -120,7 +123,9 @@ down to max(vamp top, seat + 0.07 / k) — the height a shaft begins to be one.
      z = +-0.03 / 0.04 sit at the walls' own top height.
 [I16] the shaft block of the plain wedge() (no shaft): class none, collar_h_raw = 0.12 - 0.09 = 0.03 (the
      wall height), slabs == [] (the mesh tops at 0.12 < 0.16), closed_share None (not gated), cap_removed 0;
-     SHAFT_GATES shaft_closed_share min 0.9 / overknee max 0.48; the refusal texts.
+     upper_collar_h_nominal 0.03 (both walls alike), has_shaft False -> neither shaft gate judges it, both carry
+     None (INSOLE_VERSION 5 carried overknee 0.03); SHAFT_GATES shaft_closed_share min 0.9 / overknee max 0.48;
+     the refusal texts.
 (On 2a54cb70 — INSOLE_VERSION 2 — insole.json has no ``shaft`` block, ``strip_cap`` does not exist and
 wedge(shaft=0.60) passes its gates: [I13]-[I16] fail there on the missing key.)
 [I17] a closed ring is a TUBE (INSOLE_VERSION 4, P2 Ruling 8c — on the real P2 material the four-quadrant test read
@@ -163,6 +168,23 @@ carries gap_deg: [I17] fails there.)
      centroid inside, nothing else up-facing in the band) and the cap-free [I14] / [I17] fixtures 0.
 (On 162963ca / 863a2726 — INSOLE_VERSION 4 — the same fixture reads cap_removed 200 and strip_cap takes the rim
 with the disc: [I18] fails there.)
+[I19] a LOW shoe's tongue above the slab floor is no shaft (INSOLE_VERSION 6, boots plan Task 9 fix 5: the live
+     sneakers item_3c60cf62 were refused "The boot shaft is not closed", closed_share 0.5, and lost 169 tongue faces
+     to the cap rule). wedge(tongue=True) = the plain pump + 144 faces (372 = 228 + 144): a flat panel at z = 0 over
+     x in [0.08, 0.12], y 0.10 .. 0.18 (4 x 8 quads), a closed box z in [-0.015, 0.015], y 0.18 .. 0.20 above it
+     (z walls 2 x 4 x 2, x walls 2 x 3 x 2 quads) and its up-facing lid at 0.20 (4 x 3 quads = 24 triangles). The
+     topline ignores the tongue (|z| <= 0.015 < 0.75 x 0.04 = the walls' share filter; the panel at z = 0 is on no
+     side), so collar_h_raw = upper collar = 0.03 as [I16]: class none, has_shaft False. The tongue lies behind the
+     front half (x <= 0.12 < 0.13), so the throat and vamp top stay [I1]'s: profile and nominal equal the plain
+     pump's. The slabs run from the mesh top 0.20 down to max(0.04, 0.09 + 0.07) = 0.16 every 0.0026:
+     floor(0.04 / 0.0026) + 1 = 16 slabs; the eight at 0.20 .. 0.1818 (0.20 - 7 x 0.0026) cut the box -> four
+     quadrants about (0.10, 0), cut points every 0.01 along its walls (largest gap at a corner pair <= 36.87 + 36.87
+     = 73.74 deg < 90), extent 0.04 x 0.03 >= 0.026 -> closed; the eight at 0.1792 .. 0.161 cut the panel alone
+     (every point at z = 0: gap 180) -> open. top_raw 0.20, closed_share 8 / 16 = 0.5 — recorded, NOT judged: the
+     gates carry shaft_closed_share None / overknee None, ok True, refusal None; cap_removed 0 and cap_faces
+     empty (the lid stays). (On ebcd6c0b — INSOLE_VERSION 5 — the same fixture is refused SHAFT_OPEN_REFUSED on
+     shaft_closed_share 0.5 < 0.9 and its cap rule takes the 24 lid triangles — the cap band's floor 0.20 - 0.02 x
+     (0.20 - 0.04) = 0.1968 cuts the box's four walls, every lid centroid inside: [I19] fails there.)
 """
 import json
 import math
@@ -259,7 +281,7 @@ def main():
     print("[I9] constants")
     check("constants", (fi.INSOLE_VERSION, fi.NOMINAL_LENGTH_M, fi.STATIONS, fi.AIR_SHARE, fi.TOL_SHARE,
                         fi.BOOT_MARGIN_M, fi.DOWN_MAX),
-          (5, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
+          (6, 0.26, 240, 0.025, 0.035, 0.03, -0.3))
     check("ring constants", (fi.RING_GAP_MAX_DEG, fi.RING_EXTENT_MIN_SHARE), (90.0, 0.10))
     check("INSOLE_GATES", {k: v[:2] for k, v in fi.INSOLE_GATES.items()},
           {"insole_cover": ("min", 0.80), "vamp_cover": ("min", 0.6), "opening_share": ("min", 0.5)})
@@ -313,7 +335,7 @@ def main():
     near("vamp_cover", pump["vamp_cover"], 0.810, 0.02)
     near("vamp_cover (station count 74/91)", pump["vamp_cover"], 74 / 91, 1e-6)
     check("gates", (pump["gates"]["ok"], pump["gates"]["reasons"], pump["gates"].get("refusal")), (True, [], None))
-    check("version", pump["version"], 5)
+    check("version", pump["version"], 6)
     near("pump footprint_ground", pump["footprint_ground"], 1.0, 1e-9)
 
     print("[I4] rotated 180 deg about Y")
@@ -421,6 +443,9 @@ def main():
     check("open side top_raw None", hole["shaft"]["top_raw"], None)
     check("open side refused", (hole["gates"]["ok"], hole["gates"].get("refusal")), (False, fi.SHAFT_OPEN_REFUSED))
     check("open side class none (the topline is the lower side)", hole["shaft"]["class"], "none")
+    near("open side: the higher side's collar 0.17 (+-0.005: the lone wall tilts the PCA frame)",
+         hole["shaft"]["upper_collar_h_nominal"], 0.17, 0.005)
+    check("open side: a shaft (one wall standing alone)", hole["shaft"]["has_shaft"], True)
     check("open side JSON strict", strict_json(hole), True)
 
     print("[I15] cap detection and removal")
@@ -459,8 +484,9 @@ def main():
     check("pump closed_share None", sh["closed_share"], None)
     check("pump top_raw None", sh["top_raw"], None)
     check("pump cap_removed", sh["cap_removed"], 0)
-    check("pump gates carry the shaft metrics", (pump["gates"]["shaft_closed_share"], pump["gates"]["overknee"]),
-          (None, 0.03))
+    check("pump: no shaft, the shaft gates carry None", (sh["has_shaft"], sh["upper_collar_h_nominal"],
+                                                           pump["gates"]["shaft_closed_share"], pump["gates"]["overknee"]),
+          (False, 0.03, None, None))
     check("SHAFT_GATES", {k: v[:2] for k, v in fi.SHAFT_GATES.items()},
           {"shaft_closed_share": ("min", 0.9), "overknee": ("max", 0.48)})
     check("shaft refusal texts", (fi.OVERKNEE_REFUSED, fi.SHAFT_OPEN_REFUSED),
@@ -524,6 +550,32 @@ def main():
     check("rim gates ok", (rimmed["gates"]["ok"], rimmed["gates"].get("refusal")), (True, None))
     check("the plain cap still reads 160", capped["shaft"]["cap_removed"], 160)
     check("CAP_RING_BINS 120", fi.CAP_RING_BINS, 120)
+
+    print("[I19] a low shoe's tongue above the slab floor is no shaft")
+    Ptg, Ftg = wedge(tongue=True)
+    check("tongue fixture: 372 faces (228 + 144)", (len(Ftg), len(Ftg) - len(wedge()[1])), (372, 144))
+    tg = fi.analyse_arrays(Ptg, Ftg)
+    sg = tg["shaft"]
+    check("tongue: class none, collar 0.03, upper 0.03, no shaft", (sg["class"], sg["has_shaft"]), ("none", False))
+    near("tongue collar_h_raw", sg["collar_h_raw"], 0.03, 1e-6)
+    near("tongue upper_collar_h_nominal", sg["upper_collar_h_nominal"], 0.03, 1e-6)
+    same_numbers("tongue numbers = the plain pump's", tg, pump, 1e-9)
+    same_arrays("tongue profile", tg["profile"], pump["profile"], 1e-9)
+    ys = [s_["y"] for s_ in sg["slabs"]]
+    check("tongue: 16 slabs from 0.20 every 0.0026", (len(ys), all(abs(y - (0.20 - 0.0026 * j)) <= 1e-9 for j, y in enumerate(ys))),
+          (16, True))
+    check("tongue: the eight box slabs closed (gap <= 73.74), the eight panel slabs open (gap 180)",
+          ([s_["closed"] for s_ in sg["slabs"]] == [True] * 8 + [False] * 8,
+           all(s_["gap_deg"] <= 73.74 for s_ in sg["slabs"][:8]), all(abs(s_["gap_deg"] - 180.0) <= 1e-6 for s_ in sg["slabs"][8:])),
+          (True, True, True))
+    near("tongue top_raw 0.20", sg["top_raw"], 0.20, 1e-9)
+    near("tongue closed_share 0.5 (recorded)", sg["closed_share"], 0.5, 1e-9)
+    check("tongue: not judged — gates None, ok, no refusal (ebcd6c0b: refused, 'The boot shaft is not closed')",
+          (tg["gates"]["shaft_closed_share"], tg["gates"]["overknee"], tg["gates"]["ok"], tg["gates"].get("refusal")),
+          (None, None, True, None))
+    check("tongue: no cap — the lid stays (ebcd6c0b: 24 lid triangles removed)",
+          (sg["cap_removed"], int(fi.cap_faces(Ptg, Ftg, tg).sum()), fi.strip_cap(Ptg, Ftg, tg)[2]), (0, 0, 0))
+    check("tongue JSON strict", strict_json(tg), True)
 
     if FAILED:
         print(f"\n{len(FAILED)} check(s) failed: {FAILED}")

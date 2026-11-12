@@ -14,14 +14,16 @@ so the cut frame IS the primitive's bind space (x forward, y up, z lateral). ``j
 "lefttoebase": I}; every vertex 100 % LeftFoot.
 
 Expected, by hand:
-[X0] constants: CUT_VERSION 5 (2 = the toe conform, 3 = the boot's cap bound + shaft_poke, 4 = shaft_poke up to the
-     collar, 5 = the boot body cut at the collar plane + the collar conform), THROAT_BAND_M 0.02,
+[X0] constants: CUT_VERSION 6 (2 = the toe conform, 3 = the boot's cap bound + shaft_poke, 4 = shaft_poke up to the
+     collar, 5 = the boot body cut at the collar plane + the collar conform, 6 = the collar weights + the gate
+     collar_flex_poke), THROAT_BAND_M 0.02,
      LATERAL_BAND_M 0.015, CLEARANCE_M 0.002, FADE_M 0.015, TOE_CLEARANCE_M 0.002, TOE_FADE_M 0.015, CUT_GATES
      {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "throat_ledge_p95_mm": ("max", 4.0),
-     "toe_conform_m": ("max", 0.025), "shaft_poke": ("max", 0.005), "collar_conform_m": ("max", 0.025)},
-     SHAFT_CUT_GATES ("shaft_poke", "collar_conform_m"), POKE_OPTIONAL ("shaft_poke",), HIDDEN_UNDER_BOOT
-     ("deep_outside", "toe_conform_m"); the collar: COLLAR_CLEARANCE_M 0.002, COLLAR_FADE_M 0.015, COLLAR_BELOW_M 0.05,
-     LEG_WEIGHT_MIN 0.5, COLLAR_RING_M 0.001, OPENING_BAND_M 0.02, OPENING_BINS 24.
+     "toe_conform_m": ("max", 0.025), "shaft_poke": ("max", 0.005), "collar_conform_m": ("max", 0.025),
+     "collar_flex_poke": ("max", 0.005)}, SHAFT_CUT_GATES ("shaft_poke", "collar_conform_m", "collar_flex_poke"),
+     POKE_OPTIONAL ("shaft_poke", "collar_flex_poke"), HIDDEN_UNDER_BOOT ("deep_outside", "toe_conform_m"); the
+     collar: COLLAR_CLEARANCE_M 0.002, COLLAR_FADE_M 0.015, COLLAR_BELOW_M 0.05, LEG_WEIGHT_MIN 0.5, COLLAR_RING_M
+     0.001, OPENING_BAND_M 0.02, OPENING_BINS 24, COLLAR_WEIGHT_FADE_M 0.05; footwear_fit.SEAM_FLEX_DEG 25.
 [X1] open cylinder r 0.05 about +y, 64 segments x 21 rings (y = 0, 0.01, ..., 0.20), 1344 vertices, 20 bands x
      64 quads x 2 = 2560 triangles; flat cap y = 0.055 over the stations, footprint disc r 0.06 (every vertex inside
      the prism, its half-width 0.06 - 0.002 > 0.05: no slimming), no throat. Rings 0..5 (y <= 0.05) lie below the cap: bands 0..4
@@ -192,6 +194,27 @@ Expected, by hand:
      The hem reads the same collar: garment_layers._hem_inputs on a fit GLB carrying the two shaft parts with this
      record beside it -> top_m 0.153540 (the lower of the two sides' collar_bind_m), plane_m 0.153540 - 0.03 =
      0.123540, while the shaft nodes' highest bind vertex is 0.180153.
+[X13] the collar weights (CUT_VERSION 6, boots plan Task 9 fix 5, Ruling 15f): the leg at the collar rides the Leg
+     like the shaft. Body foot_body_glb(leg_cell=0.01, shin_foot_weight=0.3) — the leg column 30 % LeftFoot / 70 %
+     LeftLeg, as the auto-weighted male shins carry it (rebuilt Kai: 0.40 / 0.29 at the Work Shoes' collar) — and
+     [X11]'s boot flat_boot(shaft=0.16, shaft_to=0.12): the fit is [X11] (a)'s (k 1.023599, lift 0.010236, turn 0,
+     push 0; the ankle = the LeftFoot joint (0, 0.08, -0.10) in bind space, the flex axis (0, 0, -1)), the plane
+     horizontal at body 0.153540, the ring 52 per side as [X11] (a). After the cut:
+     - every ring vertex (the cut edge, body y 0.153540) carries Foot 0 (the snap's rule at h = 0);
+     - the kept rows above the plane keep 0.3 min(h / 0.05, 1) Foot, the rest Leg (h = y - 0.153540): row 0.16
+       (h 6.46 mm) 0.038760, row 0.17 0.098760, row 0.20 0.278760, row 0.21 (h 56.46 mm, past the fade) 0.3,
+       weights summing to 1 (1e-6); the stand stays: every kept vertex's cut-frame position as before (1e-9);
+     - collar_flex_poke 0 on both sides (the edge rides the Leg: no flex moves it; its smallest radial gap 9.6 mm as
+       [X11] (a), its rise 0), gates ok.
+     The gate on the OLD edge — the same 52 positions with the 0.3 Foot share they had on ebcd6c0b (CUT_VERSION 5:
+     the bisection lerps the endpoints' 0.3 / 0.7, verified there) — at a +-25 deg flex about the ankle: an edge
+     point at x (relative to the ankle) and height 0.07354 over it moves up 0.3 (-x sin 25 + 0.07354 (cos 25 - 1))
+     at the flex that lifts the heel side, i.e. 1.74 mm at the back face x = -0.03 and more than COLLAR_RING_M
+     (1 mm) for x < -0.0242: the back face's 13 cut points and per side face the corner vertical (x -0.03) and the
+     first diagonal's cut point (x -0.0265) -> 17 of 52 = 0.326923 > 0.005, refused; the largest rise 1.74 mm
+     (+-0.01), the radial gap still >= 8 mm (the edge stays inside the tube). On ebcd6c0b the gate did not exist
+     and this body was accepted with the 0.3 edge: in check_footwear.mjs's walk that is the poke over the rim
+     (rebuilt Kai's Work Shoes, 2.4 % in the worst frame).
 (On 0a6a2f2a — CUT_VERSION 4 — [X10] keeps the shin (1032 / 0 / 0), [X11] (b) is refused and the description has
 no collar: [X10] / [X11] fail there. On 863a2726 — CUT_VERSION 2 — cut_gates takes the foot meshes alone. On 02a2ff7a — fit version 7, the push on the unwelded tube — (c) reads shaft_poke 118 / 204 =
 0.578 on the LEFT side and 0 on the right: the unwelded push smoothed each quad alone, the side walls' corner
@@ -360,17 +383,19 @@ def accessor_bytes(glb: bytes, index: int) -> bytes:
 
 def main() -> int:
     print("[X0] constants")
-    check("CUT_VERSION 5", fc.CUT_VERSION == 5)
+    from app.core import footwear_fit as ff
+    check("CUT_VERSION 6", fc.CUT_VERSION == 6)
     check("bands", (fc.THROAT_BAND_M, fc.LATERAL_BAND_M, fc.CLEARANCE_M, fc.FADE_M, fc.TOE_CLEARANCE_M, fc.TOE_FADE_M)
           == (0.02, 0.015, 0.002, 0.015, 0.002, 0.015))
     check("CUT_GATES", fc.CUT_GATES == {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "toe_conform_m": ("max", 0.025),
                                          "throat_ledge_p95_mm": ("max", 4.0), "shaft_poke": ("max", 0.005),
-                                         "collar_conform_m": ("max", 0.025)})
-    check("SHAFT_CUT_GATES / POKE_OPTIONAL / HIDDEN_UNDER_BOOT", fc.SHAFT_CUT_GATES == ("shaft_poke", "collar_conform_m")
-          and fc.POKE_OPTIONAL == ("shaft_poke",) and fc.HIDDEN_UNDER_BOOT == ("deep_outside", "toe_conform_m"))
+                                         "collar_conform_m": ("max", 0.025), "collar_flex_poke": ("max", 0.005)})
+    check("SHAFT_CUT_GATES / POKE_OPTIONAL / HIDDEN_UNDER_BOOT",
+          fc.SHAFT_CUT_GATES == ("shaft_poke", "collar_conform_m", "collar_flex_poke")
+          and fc.POKE_OPTIONAL == ("shaft_poke", "collar_flex_poke") and fc.HIDDEN_UNDER_BOOT == ("deep_outside", "toe_conform_m"))
     check("collar constants", (fc.COLLAR_CLEARANCE_M, fc.COLLAR_FADE_M, fc.COLLAR_BELOW_M, fc.LEG_WEIGHT_MIN,
-                               fc.COLLAR_RING_M, fc.OPENING_BAND_M, fc.OPENING_BINS)
-          == (0.002, 0.015, 0.05, 0.5, 0.001, 0.02, 24))
+                               fc.COLLAR_RING_M, fc.OPENING_BAND_M, fc.OPENING_BINS, fc.COLLAR_WEIGHT_FADE_M, ff.SEAM_FLEX_DEG)
+          == (0.002, 0.015, 0.05, 0.5, 0.001, 0.02, 24, 0.05, 25.0))
 
     print("[X1] flat cap on the cylinder")
     cyl = cylinder()
@@ -503,7 +528,7 @@ def main() -> int:
     check("fixture fit ok", fit.ok, str(fit.reasons))
     k = fit.record["scale"]["k_m_per_unit"]
     cut = fc.cut_description(fit, ins)
-    check("version + both sides", cut["version"] == 5 and set(cut["sides"]) == {"left", "right"})
+    check("version + both sides", cut["version"] == 6 and set(cut["sides"]) == {"left", "right"})
     L = cut["sides"]["left"]
     check("joint names", (L["foot_joint"], L["toe_joint"]) == ("LeftFoot", "LeftToeBase"))
     frame = np.asarray(L["frame"], np.float64)
@@ -688,7 +713,7 @@ def main() -> int:
     from app.core.garment_fit import weld
     Pw, Fw = flat_boot(shaft=0.16, shaft_to=0.12)
     check("unwelded tube 3828 faces / 11484 vertices", (len(Fw), len(Pw)) == (3828, 11484), f"{len(Fw)} {len(Pw)}")
-    check("FOOTWEAR_FIT_VERSION 11 (the turn, the widen, the collar plane)", ff.FOOTWEAR_FIT_VERSION == 11)
+    check("FOOTWEAR_FIT_VERSION 12 (the turn, the widen, the collar plane; the push recorded)", ff.FOOTWEAR_FIT_VERSION == 12)
     inst = fi.analyse_arrays(Pw, Fw)
     glb_a = foot_body_glb(leg_cell=0.01)
     body_a, joints_a = glb_mesh.body_arrays(glb_a), glb_mesh.joint_bind_matrices(glb_a)
@@ -790,6 +815,66 @@ def main() -> int:
               len(hem_t["meshes"]) == 2 and near(hem_t["top_m"], 0.153540, 1e-6) and near(hem_t["plane_m"], 0.123540, 1e-6)
               and near(max(float(m.positions[:, 1].max()) for m in hem_t["meshes"]), 0.180153, 1e-6),
               f"{hem_t['top_m']} {hem_t['plane_m']}")
+
+    print("[X13] the collar weights: the leg at the collar rides the Leg")
+    from app.core.footwear_cut import Prim as _Prim
+    glb_w = foot_body_glb(leg_cell=0.01, shin_foot_weight=0.3)
+    joints_w = glb_mesh.joint_bind_matrices(glb_w)
+    prim_w = glb_mesh.body_primitive_arrays(glb_w)[0]
+    fit_w = ff.fit_pair(inst, shoe_garment(Pw, Fw), glb_mesh.body_arrays(glb_w), joints_w)
+    check("fit ok, push 0, k 1.023598", fit_w.ok and fit_w.record["sides"]["left"]["shaft"]["push_max_m"] == 0.0
+          and near(fit_w.record["scale"]["k_m_per_unit"], 1.023598, 1e-6), str(fit_w.reasons))
+    cut_w = fc.cut_description(fit_w, inst)
+    after_w, st_w = fc.apply_cut(prim_w, cut_w, joints_w)
+    g_w = fc.cut_gates(after_w, fit_w.parts, cut_w, joints=joints_w, body_before=prim_w)
+    desc_w = cut_w["sides"]["left"]
+    m_w = fc._Map(desc_w, joints_w, after_w)
+    Pa = np.asarray(after_w.positions, np.float64)
+    left_w = np.abs(Pa[:, 2] + 0.10) < 0.05
+    edge_w = left_w & (np.arange(len(Pa)) >= len(Pa) - st_w["new_vertices"])
+    check("the ring: 52 left edge vertices at body 0.153540, Foot 0 (ebcd6c0b: 0.3)",
+          int(edge_w.sum()) == 52 and near(Pa[edge_w, 1], 0.153540, 1e-6) and float(m_w.foot[edge_w].max()) == 0.0,
+          f"{int(edge_w.sum())} foot {float(m_w.foot[edge_w].max()):.6f}")
+    rows_ok = True
+    for y_row in (0.16, 0.17, 0.20, 0.21):
+        sel = left_w & (np.abs(Pa[:, 1] - y_row) < 1e-7)
+        want = 0.3 * min((y_row - 0.153540) / 0.05, 1.0)
+        rows_ok &= bool(sel.any()) and near(m_w.foot[sel], want, 1e-5) and near(m_w.leg[sel], 1.0, 1e-6)
+    check("rows above the plane: Foot 0.3 min(h / 0.05, 1) -> 0.038760 / 0.098760 / 0.278760 / 0.3, lower leg 1",
+          rows_ok, str({y_row: np.unique(np.round(m_w.foot[left_w & (np.abs(Pa[:, 1] - y_row) < 1e-7)], 6)).tolist()
+                        for y_row in (0.16, 0.17, 0.20, 0.21)}))
+    check("weights sum to 1", near(np.asarray(after_w.weights).sum(axis=1), 1.0, 1e-6))
+    kept_w = np.arange(len(Pa) - st_w["new_vertices"])
+    m_in = fc._Map(desc_w, joints_w, prim_w)
+    P_in = np.asarray(prim_w.positions, np.float64)
+    # each kept vertex against its input vertex (the nearest in bind space: the fixture moves none of them)
+    C_in = m_in.to_cut(P_in)
+    C_after = m_w.to_cut(Pa[kept_w], m_w.wF[kept_w], m_w.wT[kept_w])
+    idx_in = np.array([int(np.argmin(np.linalg.norm(P_in - p, axis=1))) for p in Pa[kept_w]])
+    check("the stand stays: every kept vertex's cut-frame position as before (1e-9)",
+          near(C_after, C_in[idx_in], 1e-9), f"{float(np.abs(C_after - C_in[idx_in]).max()):.3e}")
+    check("collar_flex_poke 0 on both sides, gap >= 9 mm, rise 0, gates ok",
+          all(g_w["sides"][s_]["collar_flex_poke"] == 0.0 and g_w["sides"][s_]["collar_flex_gap_min_mm"] >= 9.0
+              and abs(g_w["sides"][s_]["collar_flex_lift_mm"]) <= 1e-6 for s_ in ("left", "right"))
+          and g_w["gates"]["collar_flex_poke"] == {"value": 0.0, "limit": 0.005, "ok": True} and g_w["ok"],
+          str({s_: (g_w["sides"][s_]["collar_flex_poke"], g_w["sides"][s_]["collar_flex_gap_min_mm"],
+                    g_w["sides"][s_]["collar_flex_lift_mm"]) for s_ in g_w["sides"]}))
+    # the old edge: the same positions with the 0.3 Foot share they carried on ebcd6c0b
+    J_old = np.asarray(after_w.joints).copy()
+    W_old = np.asarray(after_w.weights, np.float64).copy()
+    names_w = [str(n) for n in after_w.joint_names]
+    ids_old = np.nonzero(edge_w)[0]
+    J_old[ids_old] = 0
+    W_old[ids_old] = 0.0
+    J_old[ids_old, 0], W_old[ids_old, 0] = names_w.index("LeftFoot"), 0.3
+    J_old[ids_old, 1], W_old[ids_old, 1] = names_w.index("LeftLeg"), 0.7
+    old_w = _Prim(positions=Pa, faces=np.asarray(after_w.faces), attributes=after_w.attributes, joints=J_old,
+                  weights=W_old, targets=after_w.targets, joint_names=list(after_w.joint_names))
+    fx_old = fc._collar_flex(fc._Side(desc_w), fc._Map(desc_w, joints_w, old_w), old_w, fit_w.parts["left"]["shaft"])
+    check("the old 0.3 edge at +-25 deg: 17 / 52 = 0.326923 rise > 1 mm, largest 1.74 mm, radial gap >= 8 mm -> refused",
+          near(fx_old["collar_flex_poke"], 17 / 52, 1e-6) and near(fx_old["collar_flex_lift_mm"], 1.74, 0.01)
+          and fx_old["collar_flex_gap_min_mm"] >= 8.0 and fx_old["collar_flex_poke"] > fc.CUT_GATES["collar_flex_poke"][1],
+          str(fx_old))
 
     print(f"\n{'ALL PASS' if not FAILS else f'{FAILS} FAILED'}")
     return 1 if FAILS else 0

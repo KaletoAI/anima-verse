@@ -60,13 +60,17 @@ def h(x: float) -> float:
 
 def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = False, solid: bool = False,
           shaft: float = 0.0, flare: float = 0.0, cap: bool = False, open_side: bool = False,
-          shaft_ends: bool = False, tab: bool = False, rim: float = 0.0):
+          shaft_ends: bool = False, tab: bool = False, rim: float = 0.0, tongue: bool = False):
     """``(positions (N, 3), faces (M, 3))`` of the wedge pump (module docstring); ``shaft`` > 0 raises the
     side walls over the rear x in [0, 0.10] to that height (a boot shaft; topline there = ``shaft``); ``flare``
     > HALF_W adds the leaning flare walls over the same x; ``cap`` closes the shaft's top with an up-facing disc,
     ``open_side`` leaves the +z shaft wall at the pump's wall height, ``shaft_ends`` closes the shaft's ends with a
     back and a front wall, ``tab`` puts a pull-tab loop on its top ring, ``rim`` > 0 a flat collar rim of that
-    width outside both shaft walls (module docstring)."""
+    width outside both shaft walls (module docstring). ``tongue`` (boots plan Task 9 fix 5) raises a low shoe's
+    tongue above the shaft slab floor at the midline, x in [0.08, 0.12]: a flat panel at z = 0 from y 0.10 to 0.18
+    (4 x 8 quads, facing +z) under a closed box z in [-0.015, 0.015] from 0.18 to 0.20 with an up-facing lid at 0.20
+    (its x walls 3 x 2, z walls 4 x 2, lid 4 x 3 quads, every cell 0.01) — the live sneakers' thick tongue top over
+    the open flap below it."""
     P, F = [], []
 
     def tri(a, b, c, facing):
@@ -134,6 +138,25 @@ def wedge(roof_from: float = 0.18, *, fin: bool = False, rotate_180: bool = Fals
                 for j in range(8):
                     z0, z1 = -HALF_W + 0.01 * j, -HALF_W + 0.01 * (j + 1)
                     quad((x, ya, z0), (x, ya, z1), (x, yb, z1), (x, yb, z0), facing)
+    if tongue:
+        for i in range(4):
+            xa, xb = 0.08 + 0.01 * i, 0.09 + 0.01 * i
+            for j in range(8):
+                quad((xa, 0.10 + 0.01 * j, 0.0), (xb, 0.10 + 0.01 * j, 0.0), (xb, 0.11 + 0.01 * j, 0.0),
+                     (xa, 0.11 + 0.01 * j, 0.0), (0, 0, 1))
+            for j in range(2):
+                ya, yb = 0.18 + 0.01 * j, 0.19 + 0.01 * j
+                for z, facing in ((0.015, (0, 0, 1)), (-0.015, (0, 0, -1))):
+                    quad((xa, ya, z), (xb, ya, z), (xb, yb, z), (xa, yb, z), facing)
+            for c in range(3):
+                za, zb = -0.015 + 0.01 * c, -0.005 + 0.01 * c
+                quad((xa, 0.20, za), (xb, 0.20, za), (xb, 0.20, zb), (xa, 0.20, zb), up)
+        for x, facing in ((0.08, (-1, 0, 0)), (0.12, (1, 0, 0))):
+            for c in range(3):
+                za, zb = -0.015 + 0.01 * c, -0.005 + 0.01 * c
+                for j in range(2):
+                    ya, yb = 0.18 + 0.01 * j, 0.19 + 0.01 * j
+                    quad((x, ya, za), (x, ya, zb), (x, yb, zb), (x, yb, za), facing)
     if shaft and tab:
         rows = [round(shaft + 0.01 * j, 10) for j in range(4)]
         for ya, yb in zip(rows[:-1], rows[1:]):

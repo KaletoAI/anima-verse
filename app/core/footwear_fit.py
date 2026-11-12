@@ -239,8 +239,11 @@ from app.core.footwear_gates import check_gates
 #:    knee gates in its record, a knee-high one unclipped); a shoe's output is unchanged and refits to the same bytes.
 #: 11: the shaft turned onto the shin and centred on the calf at the width cap (Task 9 fix 3), the collar plane and
 #:    opening for the boot body cut (step 9c, ``footwear_cut`` version 5), the push gates read in the collar band
-#:    only, the push's body field hole-filled per slice (Task 9 fix 4, Ruling 15e).
-FOOTWEAR_FIT_VERSION = 11
+#:    only, the push's body field hole-filled per slice (Task 9 fix 4, Ruling 15e);
+#: 12: the shaft push recorded, not gating (``SHAFT_GATING``); the boot body cut's collar weights and the gate
+#:    ``collar_flex_poke`` (``footwear_cut`` version 6) — a stored v11 boot fit's body and gates differ (Task 9 fix 5,
+#:    Ruling 15f).
+FOOTWEAR_FIT_VERSION = 12
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -324,8 +327,19 @@ SHAFT_GATES: Dict[str, Tuple[str, Any]] = {
 #: follow 5.9 / 7.2 deg (ring 205 / 106 vertices at +6 cm), stretch 39 / 20 (recorded). Version 7 (Rulings 8a / 8b,
 #: offline on the same material): Kira's follow 0.0 on the +6 cm ring, Kai's 0.0 over the shaft's upper half
 #: (``follow_ring`` "upper_half"), the width and push refusals unchanged — those are the mesh's (fix-1 report).
+#: **The push is recorded, not gating, since fit version 12 (Task 9 fix 5, Ruling 15f).** It measured the shaft
+#: pushed off a leg that is no longer there: under a boot the body is cut away up to the collar (``footwear_cut``
+#: version 5), so the push reads how far the item's shaft had to move, not anything the served model shows. On the
+#: knee-high leather boots (clone copies, fit version 11) the collar band's push read Kira p95 26.6 / max 30.9 mm and
+#: Kai 36.6 / 42.7 mm against 15 / 30 — refused — while the DELIVERED model (cut body + boot, ``check_footwear.mjs``)
+#: had penetration 0 % in stand / idle / walk / sit, a rim gap of 1.9 / 3.8 mm (``collar_gap_min_mm``: the leg's cut
+#: edge inside the opening), seam gap 0 and the seated thigh 0 % in the shaft; the sheet showed proper boots. What
+#: gates a boot now is what can be seen: ``shaft_inside_share`` and the seam / follow / knee gates here,
+#: ``shaft_poke`` (rim gap), ``collar_conform_m`` (rim step) and ``collar_flex_poke`` (the leg edge at ±25° ankle
+#: flex) in ``footwear_cut.CUT_GATES``; ``check_footwear.mjs`` reads penetration and the seated thigh on the served
+#: GLB. The push stays in the record and the Wardrobe as "Reported, not gated".
 SHAFT_GATING: Dict[str, bool] = {
-    "shaft_push_p95_m": True, "shaft_push_max_m": True, "shaft_inside_share": True,
+    "shaft_push_p95_m": False, "shaft_push_max_m": False, "shaft_inside_share": True,
     "seam_gap_p95_mm": True, "seam_stretch_max": False, "shaft_leg_follow_deg": True,
     "shaft_clip_m": True, "knee_margin_m": True,
 }
