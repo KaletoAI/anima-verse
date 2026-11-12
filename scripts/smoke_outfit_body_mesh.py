@@ -47,7 +47,7 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
     "f", "back": "b"}} the hash of the literal string '{"base_signature":"base01234567","base_variant":"rigged",
     "dress_text":{"back":"b","front":"f"},"hair_in_body":true,"side_views":false,"version":2}' (keys sorted, no
     spaces); is_outfit_body_signature("ob" + 8 hex) True, a base signature / an outfit signature False.
-[2] Mesh mode, A: 3 image jobs (the shape's front edit, back draft, back fit); the
+[2] Mesh mode, A: 2 image jobs (the shape's front edit, back draft — its composite is CPU work, Task 11g); the
     chain runs ONCE on the body id bA = "ob" + sha256(canonical JSON of the record's shape_inputs)[:8], whose
     dress_text is exactly what the shape's own views tpose[_back]_<bA> name per view (was: the texture store
     of tA — nothing is painted, so there is no texture), in this order:
@@ -96,7 +96,7 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
     body (rerig_model(Demo, bA)): ok, ONE rig job on bA, the body sidecar
     still carries the parent record (body_id bA) and figure.stored_shape
     still calls it current (no new mesh on the next outfit build).
-[8] G = A + skirt: other in-body dress text -> 3 image jobs, ONE mesh + ONE
+[8] G = A + skirt: other in-body dress text -> 2 image jobs, ONE mesh + ONE
     rig job, on another body bG != bA (other shape key); its texture "" as A's
     (was tG != tA: the skirt is in the body, nothing painted).
 [9] GC: verify_cache calls neither body stale (meshes or refs).
@@ -295,6 +295,14 @@ def main() -> int:
         real_create = hub_ops.create
         garments._run_locked = run_locked
         expression_regen.render_character_image = render
+        from app.core import view_composite
+
+        def compose(base_view, draft, target, *, rule="outfit", background=None):
+            """The composite stand-in (Task 11g; the real one: smoke_view_composite.py): the draft copied, ok."""
+            Path(target).write_bytes(Path(draft).read_bytes())
+            return {"rule": rule, "ok": True, "reasons": [], "iou": 0.99, "coverage": {"score": 0.9}}
+
+        view_composite.compose = compose
         charmod.run_rembg = rembg
         body_retexture.retexture = retexture
         service.get_image_service = lambda: FakeService()
@@ -428,7 +436,7 @@ def main() -> int:
                        for v, k in (("front", "tpose"), ("back", "tpose_back"))}
         check("A: shape inputs", {k: shape_inputs.get(k) for k in ("version", "base_signature", "dress_text")},
               {"version": 2, "base_signature": b1, "dress_text": store_texts})
-        check("A: ok, 3 image jobs, 0 worker runs", (result.get("ok"), jobs, runs), (True, 3, 0))
+        check("A: ok, 2 image jobs, 0 worker runs", (result.get("ok"), jobs, runs), (True, 2, 0))
         check("A: chain in order", steps,
               [("mesh", b_a), ("rig", b_a), ("retexture", b_a), ("normalize", b_a), ("extension", b_a),
                ("collision", b_a), ("extension", sig_a), ("collision", sig_a)])
@@ -553,8 +561,8 @@ def main() -> int:
         jobs, runs, steps, result = render_and_build()
         t_g = model_meta(sig_g).get("texture_signature")
         b_g = model_meta(sig_g).get("body_id")
-        check("G: ok, 3 image jobs, one mesh + one rig job on its own body",
-              (result.get("ok"), jobs, jobs_of(steps)), (True, 3, [("mesh", b_g), ("rig", b_g)]))
+        check("G: ok, 2 image jobs, one mesh + one rig job on its own body",
+              (result.get("ok"), jobs, jobs_of(steps)), (True, 2, [("mesh", b_g), ("rig", b_g)]))
         check("G: nothing painted either, other body", (t_g, t_a, b_g != b_a, base_body.is_outfit_body_signature(b_g)),
               ("", "", True, True))
 

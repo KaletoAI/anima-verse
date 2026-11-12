@@ -15,8 +15,10 @@ the shared item library redirected to a temp file
 
 Fixture (neutral wording): "Grey Blazer", outfit piece, slots [top], mode
 own_mesh, front text F = "grey tailored blazer, deep neckline, three front
-buttons, office setting" (69 characters, below ``FIT_FRAGMENT_MAX`` 120, so
-``fit_text`` keeps it whole); back text B = "grey tailored blazer".
+buttons, office setting" (69 characters); back text B = "grey tailored
+blazer". The model fit and its prompt are gone (Task 11g, Ruling C1: the
+drafted back is composited onto the base back on the CPU), so the back text
+reaches the image through the DRAFT only.
 
 Expected values, derived by hand from the code's constants:
 
@@ -24,19 +26,12 @@ Expected values, derived by hand from the code's constants:
     stored "grey tailored blazer" (whitespace collapsed, no trailing full
     stop); "" drops the key; a non-outfit item ("tool") never keeps it.
 [2] Empty field — the front text everywhere, as before:
-    ``back_text`` = ``view_text(back|left|right|side)`` = F; the fit =
-    "edit the first image with the clothes from the second image: the
-    person wears only F, add no other clothing beyond that, the rest of the
-    body stays exactly as in the first image; a back view seen from behind,
-    the back view stays a back view"; keywords "back view, seen from
-    behind, F, only these clothes, no other clothing, body unchanged from
-    the first image"; the draft says "wearing only F exactly as on the
+    ``back_text`` = ``view_text(back|left|right|side)`` = F; the draft says "wearing only F exactly as on the
     person in the reference image"; ``fsig_inputs`` has no
     ``prompt_fragment_back`` key.
-[3] Field B — the back wins, the front stays byte for byte: the fit says
-    "wears only grey tailored blazer, add no other clothing" and not "deep
-    neckline"; the draft "wearing only grey tailored blazer exactly as on
-    the person"; ``view_text(left)`` = ``view_text(side)`` = B,
+[3] Field B — the back wins, the front stays byte for byte: the draft
+    "wearing only grey tailored blazer exactly as on the person" and not
+    "neckline"; ``view_text(left)`` = ``view_text(side)`` = B,
     ``view_text(front)`` = F; ``fsig_inputs[prompt_fragment_back]`` = B
     and the fsig differs from [2]'s. The worn FRONT edit = "Keep the image
     exactly as it is. Only change their clothing: they now wear only F."
@@ -45,10 +40,13 @@ Expected values, derived by hand from the code's constants:
     from behind, the back view stays a back view" (sleeves, neck opening:
     no waistband piece). A field EQUAL to the front (F) keeps [2]'s fsig and
     inputs (the old keys).
-[4] ``base_body.fit_prompt``: back = FIT_PROMPT + "; a back view seen from
-    behind, the back view stays a back view", left = FIT_PROMPT + "; a left
-    side profile view, the side view stays a side view", right likewise,
-    front = FIT_PROMPT.
+[4] The dressed drafts name their view: ``base_body.draft_prompt(Demo, v,
+    outfit_text="wearing only B")`` for back / left / right =
+    ``DRAFT_PROMPTS[v]`` with "wearing only B" in the {outfit} slot, so it
+    contains "seen directly from behind, back view" / "strict left side
+    profile view" / "strict right side profile view"; there is no
+    ``base_body.fit_prompt`` / ``FIT_PROMPT`` and no
+    ``garment_clothing.fit_prompt`` any more.
 [5] Suggest (``routes.inventory.suggest_back_text_route``): the stub
     answers "CHANGE: yes\\nBACK: grey tailored blazer" -> {text: B, changed:
     True}, one call of task ``piece_back_text`` whose user prompt contains
@@ -86,8 +84,6 @@ FAILS: list = []
 
 F = "grey tailored blazer, deep neckline, three front buttons, office setting"
 B = "grey tailored blazer"
-VIEW = "a back view seen from behind, the back view stays a back view"
-FIT_PROMPT = "edit the first image with what the person in the second image wears, and nothing else"
 
 
 def check(label, got, want):
@@ -95,13 +91,6 @@ def check(label, got, want):
     print(("  OK   " if ok else "  FAIL ") + f"{label}: {got!r}"[:300] + ("" if ok else f" — expected {want!r}"[:300]))
     if not ok:
         FAILS.append(label)
-
-
-def fit(text: str) -> tuple:
-    return (f"edit the first image with the clothes from the second image: the person wears only {text}, add no "
-            f"other clothing beyond that, the rest of the body stays exactly as in the first image; {VIEW}",
-            f"back view, seen from behind, {text}, only these clothes, no other clothing, body unchanged from the "
-            f"first image")
 
 
 class Reply:
@@ -178,7 +167,6 @@ def main() -> int:
         item = inventory.get_item(jid)
         check("back_text", pbt.back_text(item), F)
         check("view texts", [pbt.view_text(item, v) for v in ("back", "left", "right", "side")], [F] * 4)
-        check("fit", garment_clothing.fit_prompt("worn", item_id=jid), fit(F))
         draft = garment_clothing.draft_prompt("Demo", "worn", item_id=jid)[0]
         check("draft names the front text", f"wearing only {F} exactly as on the person in the reference image"
               in draft, True)
@@ -194,9 +182,6 @@ def main() -> int:
         print("[3] field B: the back wins")
         set_back(B)
         item = inventory.get_item(jid)
-        got_fit = garment_clothing.fit_prompt("worn", item_id=jid)
-        check("fit", got_fit, fit(B))
-        check("fit without the front-only words", "deep neckline" in got_fit[0] + got_fit[1], False)
         draft = garment_clothing.draft_prompt("Demo", "worn", item_id=jid)[0]
         check("draft names the back text", (f"wearing only {B} exactly as on the person" in draft,
                                             "neckline" in draft), (True, False))
@@ -218,11 +203,17 @@ def main() -> int:
         check("... and the fsig", gs.garment_fsig("Demo", jid), fsig_empty)
         set_back("")
 
-        print("[4] dressed fits name their view")
-        check("fit prompts", [base_body.fit_prompt(v) for v in ("front", "back", "left", "right")],
-              [FIT_PROMPT, f"{FIT_PROMPT}; {VIEW}",
-               f"{FIT_PROMPT}; a left side profile view, the side view stays a side view",
-               f"{FIT_PROMPT}; a right side profile view, the side view stays a side view"])
+        print("[4] dressed drafts name their view")
+        drafts = [base_body.draft_prompt("Demo", v, outfit_text=f"wearing only {B}")[0]
+                  for v in ("back", "left", "right")]
+        check("draft prompts", drafts, [base_body.DRAFT_PROMPTS[v].format(outfit=f"wearing only {B}")
+                                        for v in ("back", "left", "right")])
+        check("each names its turn", [w in d for w, d in zip(("seen directly from behind, back view",
+                                                               "strict left side profile view",
+                                                               "strict right side profile view"), drafts)],
+              [True, True, True])
+        check("no fit prompt any more", (hasattr(base_body, "fit_prompt"), hasattr(base_body, "FIT_PROMPT"),
+                                         hasattr(garment_clothing, "fit_prompt")), (False, False, False))
 
         print("[5] Suggest saves nothing")
         before = inventory.get_item(jid)

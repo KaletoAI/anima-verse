@@ -17,9 +17,9 @@ them (``generate_base_model``), the per-character pipeline switch
 Outfits (spec § B, phase 3): every outfit combination of a character on the
 pipeline gets two DRESSED images (``dressed_views``; four with the world
 setting ``base_body.dressed_side_views``) — the front an edit of the base
-front, the back (and the sides) a draft from the dressed front fitted onto
-the base view (``generate_dressed_images``, ``dress_prompt`` /
-``draft_prompt`` / ``FIT_PROMPT``) stored as the usual ``tpose[_<view>]_<sig>``
+front, the back (and the sides) a draft from the dressed front composited
+onto the base view on the CPU (``generate_dressed_images``, ``dress_prompt`` /
+``draft_prompt``, ``view_composite``) stored as the usual ``tpose[_<view>]_<sig>``
 refs — and an
 outfit model that is the rigged base
 with the outfit painted on by the local GLBBodyRetexture worker
@@ -75,7 +75,6 @@ import json
 import os
 import re
 import threading
-from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -1131,13 +1130,14 @@ CORE_DRESSED_VIEWS = ("front", "back")
 #: slightly below front+back alone. Off, the base body's left/right views
 #: stay mesh inputs of the base model only.
 SIDE_DRESSED_VIEWS = ("left", "right")
-#: Views made in two steps (a draft from the dressed front, then a fit onto
-#: the base view): everything dressed but the front.
+#: Views made in two steps (a draft from the dressed front, then the CPU
+#: composite of its clothing onto the base view, ``view_composite``):
+#: everything dressed but the front.
 DRAFT_VIEWS = ("back", "left", "right")
-#: ``(draft occasion, fit occasion)`` per two-step view.
-DRESS_OCCASIONS = {"back": ("outfit_back_draft", "outfit_back"),
-                   "left": ("outfit_side_draft", "outfit_side"),
-                   "right": ("outfit_side_draft", "outfit_side")}
+#: The draft's occasion per two-step view — the only hub job of such a view
+#: (Task 11g, Ruling C1: the model fit and its occasions outfit_back /
+#: outfit_side are gone).
+DRAFT_OCCASIONS = {"back": "outfit_back_draft", "left": "outfit_side_draft", "right": "outfit_side_draft"}
 #: Default of ``base_body.side_arm_margin`` and its bounds (fraction of the
 #: body height the worker skips around the arm in a side view).
 SIDE_ARM_MARGIN_DEFAULT = 0.03
@@ -1163,10 +1163,11 @@ def dressed_views() -> Tuple[str, ...]:
 
 def dressed_view_jobs() -> int:
     """Hub jobs of ONE set of dressed views on its first attempts: the front
-    edit plus a draft and a fit per other ``dressed_views()`` view — 3 with
-    front + back, 7 with the side views on (``rebuild_cost`` and the Build's
-    plan, ``figure_build``, count with it)."""
-    return 1 + 2 * (len(dressed_views()) - 1)
+    edit plus a draft per other ``dressed_views()`` view — the composite onto
+    the base view is CPU work (Task 11g) — 2 with front + back, 4 with the
+    side views on (``rebuild_cost`` and the Build's plan, ``figure_build``,
+    count with it)."""
+    return 1 + (len(dressed_views()) - 1)
 
 
 def side_arm_margin() -> float:
@@ -1184,11 +1185,13 @@ def side_arm_margin() -> float:
 
 # The back is two steps (user decision 2026-11-09, measured on the end-to-end
 # run): a DRAFT rendered fresh from the dressed front with the base back
-# prompt, the body text replaced by the outfit of the reference — then the FIT,
-# an edit of the base back with the draft as second reference. Dressed side
-# views (``dressed_views``) go the same way with the base side prompt.
-# DRAFT_OUTFIT_TEXT and FIT_PROMPT are the ONE wording each: a backend that
-# addresses its references differently gets its own wording beside them.
+# prompt, the body text replaced by the outfit of the reference — then the
+# COMPOSITE of the draft's clothing onto the base back on the CPU
+# (``view_composite``, Task 11g, Ruling C1; it replaced the model fit, which
+# put nothing on, moved the figure or invented clothing). Dressed side views
+# (``dressed_views``) go the same way with the base side prompt.
+# DRAFT_OUTFIT_TEXT is the ONE wording: a backend that addresses its
+# references differently gets its own wording beside it.
 DRAFT_OUTFIT_TEXT = ("wearing exactly the same outfit as the person in the reference image, the same "
                      "garments, lengths, cut, colours and shoes")
 #: Use case of the dressed front edit: empty style and negative (config) —
@@ -1198,29 +1201,12 @@ DRESS_USE_CASE = "outfit_edit"
 DRAFT_NEGATIVE = ", ".join((HAIR_NEGATIVE, "detailed anatomy", POSE_NEGATIVE))
 #: ``DRAFT_NEGATIVE`` of a haired base (``hair_text``): headwear only.
 HAIRED_DRAFT_NEGATIVE = ", ".join((HEADWEAR_NEGATIVE, "detailed anatomy", POSE_NEGATIVE))
-#: The whole fit prompt — no style, view sentence, outfit text or negative
-#: (measured 2026-11-09: silhouette IoU vs the base back 0.92-0.93 against
-#: 0.905 with the long edit prompt). "and nothing else" since 2026-11-11
-#: (Qwen2.1 Turbo, shoes only: invented clothing 0.27 -> 0.014 of the image;
-#: full-outfit IoU unchanged within seed noise).
-FIT_PROMPT = "edit the first image with what the person in the second image wears, and nothing else"
-#: The view words a dressed fit of a non-front view closes with (Task 11e,
-#: Ruling V1: every back / side edit names its view; the fit never did) —
-#: ``fit_prompt``. The same words for every image family.
-FIT_VIEW = {"back": "a back view seen from behind, the back view stays a back view",
-            "left": "a left side profile view, the side view stays a side view",
-            "right": "a right side profile view, the side view stays a side view"}
-#: Use case of the fit: empty style and negative (config).
-FIT_USE_CASE = "outfit_fit"
-#: Alpha from which a pixel belongs to the figure of a fit reference.
-FIT_FIGURE_ALPHA = 16
-#: Fit renders per view at most; each attempt is a fresh render (new seed).
-FIT_ATTEMPTS = 2
-#: The back's ``unchanged_delta_e`` in the retexture proof (Lab dE between
-#: the registered dressed back and the base back on the regions the edit did
-#: not change) above which the outfit build renders the back fit once more
-#: and keeps the better one (finding 2026-11-09: front 2.9, back 5.9).
-BACK_REFIT_DELTA_E = 4.0
+#: An image whose alpha never drops below this carries no matte (``cut_out``).
+CUTOUT_ALPHA = 16
+#: Drafts per two-step view at most: a draft whose composite fails its
+#: checks (``view_composite.check``) or the view's gates is rendered once
+#: more (new seed); the composite itself is deterministic.
+DRAFT_ATTEMPTS = 2
 #: Where the drafts live: a subdirectory of model_refs, so no reader of
 #: the stored refs (find_ref_image, mesh inputs, the outfit scans) parses
 #: them as refs of their own; the reference gate still accepts them.
@@ -1747,97 +1733,17 @@ def draft_prompt(character_name: str, view: str, *, profile: Optional[Dict[str, 
 
 def cut_out(path: Path):
     """The RGBA cut-out of an image: as stored when it already carries a
-    matte (some alpha below ``FIT_FIGURE_ALPHA``), else the mesh-input matte
+    matte (some alpha below ``CUTOUT_ALPHA``), else the mesh-input matte
     (BiRefNet-DIS, ``character.MESH_INPUT_REMBG_MODEL``)."""
     import io
     from PIL import Image
     from app.models.character import MESH_INPUT_REMBG_MODEL, run_rembg
     with Image.open(path) as opened:
         image = opened.convert("RGBA")
-    if image.getchannel("A").getextrema()[0] < FIT_FIGURE_ALPHA:
+    if image.getchannel("A").getextrema()[0] < CUTOUT_ALPHA:
         return image
     with Image.open(io.BytesIO(run_rembg(path.read_bytes(), MESH_INPUT_REMBG_MODEL))) as matted:
         return matted.convert("RGBA")
-
-
-#: The aspect of every fit canvas (``fit_references``): square — the edit
-#: models keep the frame of a square source and re-frame a narrow one by ~2 %
-#: (2026-11-09; ``base_body_gates`` framing note). Ruling F14 g.
-SQUARE = (1, 1)
-
-
-def fit_canvas(base, draft, size: Tuple[int, int]):
-    """``(base canvas, draft canvas)`` of the fit: two transparent RGBA
-    images of one size — height = the base cut-out's, width = the wider of
-    the base cut-out and that height at the render's aspect ``size`` — the
-    base pasted centred, the draft's figure (alpha >= ``FIT_FIGURE_ALPHA``)
-    cropped, scaled to the base figure's height and pasted with its centre on
-    the base figure's centre. A cut-out without a figure: ValueError."""
-    from PIL import Image
-    base_box = base.getchannel("A").point(lambda a: 255 if a >= FIT_FIGURE_ALPHA else 0).getbbox()
-    draft_box = draft.getchannel("A").point(lambda a: 255 if a >= FIT_FIGURE_ALPHA else 0).getbbox()
-    if base_box is None or draft_box is None:
-        raise ValueError("fit reference without a figure")
-    height = base.height
-    figure = draft.crop(draft_box)
-    scale = (base_box[3] - base_box[1]) / figure.height
-    figure = figure.resize((max(1, round(figure.width * scale)), base_box[3] - base_box[1]), Image.LANCZOS)
-    width = max(base.width, round(height * size[0] / size[1]), figure.width)
-    left = (width - base.width) // 2
-    base_canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    base_canvas.paste(base, (left, 0), base)
-    centre_x = left + (base_box[0] + base_box[2]) / 2
-    draft_canvas = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draft_canvas.paste(figure, (round(centre_x - figure.width / 2), base_box[1]), figure)
-    return base_canvas, draft_canvas
-
-
-@contextmanager
-def fit_references(base_back: Path, draft: Path, refs_dir: Path, size: Tuple[int, int], *,
-                   background: Optional[Tuple[int, int, int]] = None):
-    """``(base reference, draft reference, canvas size)``: the ``fit_canvas``
-    pair of the cut-outs, saved under their own names in a private
-    ``.fitref_*`` dir inside ``refs_dir`` (the reference containment gate
-    accepts it; the fit's sidecar records the references by name). The fit
-    renders at the canvas size — the base back's height — because the
-    retexture worker registers it pixel-wise against the base back.
-    ``background``: both canvases flattened onto that colour (the garment
-    chain keeps its images on neutral grey); None = transparent, as the
-    outfit fit was measured."""
-    import tempfile
-    from PIL import Image
-    base_canvas, draft_canvas = fit_canvas(cut_out(base_back), cut_out(draft), size)
-    if background is not None:
-        def flat(image):
-            out = Image.new("RGBA", image.size, tuple(background) + (255,))
-            out.alpha_composite(image)
-            return out.convert("RGB")
-        base_canvas, draft_canvas = flat(base_canvas), flat(draft_canvas)
-    with tempfile.TemporaryDirectory(prefix=".fitref_", dir=refs_dir, ignore_cleanup_errors=True) as tmp:
-        base_out = Path(tmp) / "base" / f"{base_back.stem}.png"
-        draft_out = Path(tmp) / "draft" / f"{draft.stem}.png"
-        for out, image in ((base_out, base_canvas), (draft_out, draft_canvas)):
-            out.parent.mkdir()
-            image.save(out)
-        yield base_out, draft_out, base_canvas.size
-
-
-def fit_crop(canvas: Tuple[int, int], base_size: Tuple[int, int]) -> Tuple[Tuple[int, int], Tuple[int, int],
-                                                                          Tuple[int, int]]:
-    """``(canvas, offset, base size)`` — the ``render_character_image(
-    crop_back_to=…)`` of a fit rendered on the ``fit_references`` canvas:
-    ``fit_canvas`` pastes the base centred horizontally at the top, so the
-    base frame sits at ``((canvas w - base w) // 2, 0)``. Shared by the
-    outfit's dressed views and the garment chain's worn back."""
-    return ((int(canvas[0]), int(canvas[1])), ((int(canvas[0]) - int(base_size[0])) // 2, 0),
-            (int(base_size[0]), int(base_size[1])))
-
-
-def image_size(path: Path) -> Tuple[int, int]:
-    """``(width, height)`` of an image file."""
-    from PIL import Image
-    with Image.open(path) as im:
-        return im.size
 
 
 def draft_path(character_name: str, view: str, signature: str) -> Optional[Path]:
@@ -1897,7 +1803,9 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
 
 def fit_gate_warning(attempts: int, record: Dict[str, Any], view: str = "back") -> str:
     """The status warning of a dressed two-step view kept although no
-    attempt passed; ``record`` is the kept attempt's ``{"guard", "noise"}``."""
+    attempt passed its gates; ``record`` is the kept attempt's ``{"guard",
+    "noise", "framing"}`` (the sidecar key ``fit_gate`` keeps its name: the
+    views made by the model fit before Task 11g carry it too)."""
     reasons = []
     if not (record.get("guard") or {}).get("ok", True):
         reasons.append("turned toward the camera")
@@ -1929,7 +1837,7 @@ def best_fit_attempt(results: List[Dict[str, Any]]) -> Tuple[int, bool]:
 
 def _dress_common(view: str, *, pieces: Optional[Dict[str, str]], items: Optional[list],
                   profile: Dict[str, Any], size: Tuple[int, int]) -> Dict[str, Any]:
-    """The render arguments a two-step view's draft and fit share."""
+    """The render arguments of a two-step view's draft."""
     return dict(equipped_pieces=dict(pieces or {}), equipped_items=list(items or []),
                 pose_prompt="", expression_prompt="", image_use_case=DRAFT_USE_CASES[view],
                 override_width=size[0], override_height=size[1], apply_state_modifiers=False,
@@ -1942,7 +1850,7 @@ def render_draft(character_name: str, view: str, *, stem: Path, front: Path, ref
     """The DRAFT render of a two-step view into ``stem``: an edit of the
     dressed ``front`` (on neutral grey, the only reference) with ``prompt`` =
     ``(text, negative)`` (``draft_prompt`` — the whole prompt, no style and
-    no character block), occasion ``DRESS_OCCASIONS[view][0]``, the render
+    no character block), occasion ``DRAFT_OCCASIONS[view]``, the render
     arguments ``common`` (``_dress_common``). None when the render returned
     nothing; render errors propagate. Shared by the outfit's dressed views
     (``_dress_view``) and an own-mesh piece's worn back
@@ -1956,77 +1864,40 @@ def render_draft(character_name: str, view: str, *, stem: Path, front: Path, ref
     with square_reference(front, refs_dir) as (reference, side, offset, source_size):
         return expression_regen.render_character_image(
             character_name, output_stem=stem, bare_prompt=text, extra_negative=negative,
-            occasion=DRESS_OCCASIONS[view][0], reference_image=reference,
+            occasion=DRAFT_OCCASIONS[view], reference_image=reference,
             sidecar_extra=sidecar_extra,
             **{**common, "override_width": side, "override_height": side,
                "crop_back_to": (side, offset, source_size)})
 
 
-def fit_prompt(view: str) -> str:
-    """The dressed fit's prompt of ``view``: ``FIT_PROMPT`` and the view's
-    ``FIT_VIEW`` words (``FIT_PROMPT`` alone for a view without any)."""
-    words = FIT_VIEW.get(view)
-    return f"{FIT_PROMPT}; {words}" if words else FIT_PROMPT
+#: Sidecar keys of a draft that describe ITS render, not the composite made
+#: from it (``composite_sidecar``): the composite is no render.
+_DRAFT_RENDER_KEYS = ("prompt", "final_prompt", "negative_prompt", "reference_images", "seed", "duration_s",
+                      "provider", "service", "model", "loras", "routing", "fallback_from", "overflow_from",
+                      "front_sha256", "hub_job", "job_id")
 
 
-def render_fit(character_name: str, view: str, *, stem: Path, base_reference: Path,
-               draft_reference: Path, canvas: Tuple[int, int], extra: Dict[str, Any],
-               common: Dict[str, Any], postprocess: bool = True, prompt: str = FIT_PROMPT,
-               prompt_keywords: Optional[str] = None,
-               crop_back_to: Optional[Tuple[Any, Tuple[int, int], Tuple[int, int]]] = None) -> Optional[Path]:
-    """One FIT render of a two-step view into ``stem``: ``prompt`` (the
-    outfit's ``FIT_PROMPT``; an own-mesh piece's worn back names the piece,
-    ``garment_clothing.fit_prompt``) on the base reference (image 1) with
-    the draft reference (image 2), use case ``FIT_USE_CASE``, occasion
-    ``DRESS_OCCASIONS[view][1]``, at the canvas size. ``prompt_keywords``:
-    the tag form a keywords-family backend gets instead (None = ``prompt``
-    everywhere). ``postprocess=False`` keeps the backend's full frame (the
-    garment chain crops it back onto the base view itself); ``crop_back_to``
-    (``fit_crop``) cuts the render back to the base frame before the
-    post-processing (the outfit's dressed views). None when the render
-    returned nothing; render errors propagate."""
-    from app.core import expression_regen
-    return expression_regen.render_character_image(
-        character_name, output_stem=stem, bare_prompt=prompt,
-        **({"bare_prompt_keywords": prompt_keywords} if prompt_keywords else {}),
-        occasion=DRESS_OCCASIONS[view][1], reference_image=base_reference,
-        extra_reference_images=[draft_reference], sidecar_extra=extra,
-        **{**common, "image_use_case": FIT_USE_CASE,
-           "override_width": canvas[0], "override_height": canvas[1], "postprocess": postprocess,
-           **({"crop_back_to": crop_back_to} if crop_back_to is not None else {})})
+def composite_sidecar(draft: Path, view: str, extra: Dict[str, Any], record: Dict[str, Any]) -> Dict[str, Any]:
+    """The sidecar of a composite made from ``draft``: the draft's own
+    sidecar (its manifest — pieces, items, mesh variant / token, piece
+    state, character) without the keys of its render (``_DRAFT_RENDER_KEYS``)
+    and its ``<view>_draft`` flag, plus ``extra`` (``_composite_extra``),
+    ``created_at``, ``fit: "composite"`` and the composite's ``record``
+    (``view_composite.composite_arrays``) under ``composite``."""
+    from app.core.timeutils import utc_now_iso
+    meta = {k: v for k, v in _ref_sidecar(draft).items() if k not in _DRAFT_RENDER_KEYS and k != f"{view}_draft"}
+    meta.update(extra)
+    meta.update({"created_at": utc_now_iso(), "fit": "composite", "composite": record})
+    return meta
 
 
-def _fit_attempt(character_name: str, view: str, *, stem: Path, base_reference: Path,
-                 draft_reference: Path, canvas: Tuple[int, int], extra: Dict[str, Any],
-                 common: Dict[str, Any], base_views: Dict[str, Optional[Path]]
-                 ) -> Optional[Tuple[Path, Dict[str, Any]]]:
-    """One FIT render of a two-step view into ``stem`` (``render_fit`` on the
-    square ``fit_references`` canvas, cut back to the base view's frame,
-    ``fit_crop``) and its gate result ``{"ok", "guard", "noise", "framing"}``
-    (head ``view_guard`` against the base views, ``base_body_gates.
-    noise_gate`` and ``framing_gate`` against the base view) — None when the
-    render returned nothing. Render errors propagate."""
-    from app.core import base_body_gates
-    base_view = base_views[view]
-    path = render_fit(character_name, view, stem=stem, base_reference=base_reference,
-                      draft_reference=draft_reference, canvas=canvas, extra=extra, common=common,
-                      prompt=fit_prompt(view),
-                      crop_back_to=fit_crop(canvas, image_size(base_view)) if base_view is not None else None)
-    if path is None:
-        return None
-    guard = view_guard(view, path, base_views)
-    noise = base_body_gates.noise_gate(path, base_view)
-    framing = base_body_gates.framing_gate(path, base_view)
-    return path, {"ok": bool(guard["ok"] and noise["ok"] and framing["ok"]), "guard": guard, "noise": noise,
-                  "framing": framing}
-
-
-def _fit_extra(view: str, bsig: str, base_view: Path, draft: Path,
-               mesh_items: Optional[Dict[str, Any]] = None,
-               texture: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """The sidecar fields of a fit: the base it was fitted onto, its draft —
-    the own-mesh record of its outfit (``mesh_items``, the front's) and its
-    texture (``texture_signature``, ``dress_text``)."""
+def _composite_extra(view: str, bsig: str, base_view: Path, draft: Path,
+                     mesh_items: Optional[Dict[str, Any]] = None,
+                     texture: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The sidecar fields of a dressed view's composite: the base it was
+    composited onto, its draft — the own-mesh record of its outfit
+    (``mesh_items``, the front's) and its texture (``texture_signature``,
+    ``dress_text``)."""
     extra = {"base_signature": bsig, "dressed": True, "base_image_sha256": file_sha256(base_view),
              f"{view}_draft": draft.name, f"{view}_draft_sha256": file_sha256(draft)}
     if mesh_items:
@@ -2035,206 +1906,131 @@ def _fit_extra(view: str, bsig: str, base_view: Path, draft: Path,
     return extra
 
 
+def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Path,
+                       base_views: Dict[str, Optional[Path]], extra: Dict[str, Any]) -> Tuple[Path, Dict[str, Any]]:
+    """The composite of ``draft`` onto the base view into ``stem.png``
+    (``view_composite.compose``, rule "outfit", RGBA in the base view's
+    frame) with its sidecar (``composite_sidecar``) and its result
+    ``{"ok", "composite", "guard", "noise", "framing"}``: ``ok`` = the
+    composite's checks (alignment IoU, coverage) and the view's gates — the
+    head ``view_guard`` against the base views, ``base_body_gates.
+    noise_gate`` and ``framing_gate`` against the base view. A composite
+    that failed its checks is not gated (``guard`` etc. are ``{}``)."""
+    from app.core import base_body_gates, view_composite
+    base_view = base_views[view]
+    path = stem.with_suffix(".png")
+    record = view_composite.compose(base_view, draft, path, rule="outfit")
+    path.with_suffix(".json").write_text(json.dumps(composite_sidecar(draft, view, extra, record),
+                                                    ensure_ascii=False, indent=2), encoding="utf-8")
+    if not record["ok"]:
+        return path, {"ok": False, "composite": record, "guard": {}, "noise": {}, "framing": {}}
+    guard = view_guard(view, path, base_views)
+    noise = base_body_gates.noise_gate(path, base_view)
+    framing = base_body_gates.framing_gate(path, base_view)
+    return path, {"ok": bool(guard["ok"] and noise["ok"] and framing["ok"]), "composite": record,
+                  "guard": guard, "noise": noise, "framing": framing}
+
+
 def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                 pieces: Optional[Dict[str, str]], items: Optional[list], profile: Dict[str, Any],
                 front: Path, base_views: Dict[str, Optional[Path]], refs_dir: Path,
                 size: Tuple[int, int], mesh_items: Optional[Dict[str, Any]] = None,
                 texture: Optional[Dict[str, Any]] = None,
                 raise_load: bool = False) -> Tuple[Optional[Path], Optional[str]]:
-    """A dressed back or side view in two steps. ``(stored path, warning)``;
-    raises ``OutfitError`` with the step that failed. ``raise_load``: the
-    draft and the fit renders raise ``BackendBusyError`` /
+    """A dressed back or side view in two steps (Task 11g, Ruling C1).
+    ``(stored path, warning)``; raises ``OutfitError`` with the step that
+    failed. ``raise_load``: the draft render raises ``BackendBusyError`` /
     ``MediaGenerationDisabled`` instead of ending in None
-    (``generate_dressed_images``). The view follows the
-    dressed front, own-mesh pieces included: what the front left out (its
-    ``mesh_items``) is not in the draft's reference either — no outfit text
-    is sent — and the record goes into the draft's and the fit's sidecar.
+    (``generate_dressed_images``). The view follows the dressed front,
+    own-mesh pieces included: what the front left out (its ``mesh_items``)
+    is not in the draft's reference either — no outfit text is sent — and
+    the record goes into the draft's and the view's sidecar.
 
-    1. DRAFT (occasion ``DRESS_OCCASIONS[view][0]``: ``outfit_back_draft`` /
-       ``outfit_side_draft``): an edit of the dressed ``front`` (on grey, the
-       only reference) with ``draft_prompt`` (the view's ``DRAFT_PROMPTS``
-       sentence, empty style ``DRAFT_USE_CASES``, no character block); stored
-       as ``model_refs/drafts/tpose_<view>_<sig>``.
-    2. FIT (occasion ``outfit_back`` / ``outfit_side``, use case
-       ``FIT_USE_CASE``): an edit of the cut-out base view (image 1) with the
-       cut-out draft scaled onto it (image 2, ``fit_references``), prompt
-       ``fit_prompt(view)`` — ``FIT_PROMPT`` (user decision 2026-11-09) and
-       the view words (``FIT_VIEW``, Task 11e) — rendered
-       on the square canvas (``SQUARE``: the base view's height) and cut
-       back to the base view's frame (``fit_crop``); the draft renders on
-       the square canvas of the dressed front and is cut back to its frame.
-       The render comes back on black and gets the mesh-input matte. Up to ``FIT_ATTEMPTS``
-       renders (``_fit_attempt``), each staged in a private ``.fitgate_*``
-       dir inside ``model_refs`` and checked by the head ``view_guard`` (a
-       fit that turned toward the camera), ``base_body_gates.noise_gate``
-       (a grainy seed) and ``base_body_gates.framing_gate`` (a re-framed
-       figure) against the base view; the first passing attempt —
-       else ``best_fit_attempt`` — is moved onto ``tpose_<view>_<sig>`` with
-       every attempt's numbers in its sidecar (``fit_gate``, with
-       ``warning`` when none passed)."""
+    1. DRAFT (occasion ``DRAFT_OCCASIONS[view]``: ``outfit_back_draft`` /
+       ``outfit_side_draft`` — the view's only hub job): an edit of the
+       dressed ``front`` (on grey, the only reference) with ``draft_prompt``
+       (the view's ``DRAFT_PROMPTS`` sentence, empty style
+       ``DRAFT_USE_CASES``, no character block), rendered on the front's
+       square canvas and cut back to its frame; stored as
+       ``model_refs/drafts/tpose_<view>_<sig>``.
+    2. COMPOSITE (``view_composite``, CPU, no hub job, no model fallback):
+       the draft's clothing put onto the shape's base view, staged in a
+       private ``.composite_*`` dir inside ``model_refs``
+       (``_composite_attempt``), then the view's gates: the head
+       ``view_guard``, ``base_body_gates.noise_gate`` and ``framing_gate``
+       against the base view.
+
+    Each draft renders into the staging dir; only the chosen one is moved
+    onto ``drafts/tpose_<view>_<sig>`` (the view records its content,
+    ``follows_front``). Up to ``DRAFT_ATTEMPTS`` drafts: a composite that fails its checks
+    (alignment IoU below ``view_composite.IOU_MIN``, coverage below
+    ``COVERAGE_MIN`` — "nothing to put on" among them) or a gate makes a new
+    draft. When no draft's composite passed its checks, nothing is published
+    — the stored view (if any) stays, the texture never takes it — and
+    ``OutfitError`` carries the numbers (``view_composite.refusal``). Among
+    composites that passed their checks the first passing every gate is
+    published onto ``tpose_<view>_<sig>`` — else ``best_fit_attempt`` of
+    them, with the warning (``fit_gate_warning``) — sidecar ``fit:
+    "composite"``, ``composite`` = its record and ``fit_gate`` = every
+    attempt's numbers."""
     import tempfile
-    from app.core import base_body_gates
+    from app.core import base_body_gates, view_composite
     kind = _kind(view)
     drafts = refs_dir / DRAFT_DIR
     drafts.mkdir(exist_ok=True)
     common = _dress_common(view, pieces=pieces, items=items, profile=profile, size=size)
     if raise_load:
         common["raise_load"] = True
-    draft = render_draft(
-        character_name, view, stem=drafts / f"{kind}_{signature}", front=front, refs_dir=refs_dir,
-        prompt=draft_prompt(character_name, view, profile=profile), profile=profile, common=common,
-        sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
-                       "front_sha256": file_sha256(front),
-                       **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})})
-    if draft is None:
-        raise OutfitError(f"Dressed {view} draft failed")
     base_view = base_views[view]
-    extra = _fit_extra(view, bsig, base_view, draft, mesh_items, texture)
     final = refs_dir / f"{kind}_{signature}"
     attempts: List[Tuple[Path, Dict[str, Any]]] = []
-    with tempfile.TemporaryDirectory(prefix=".fitgate_", dir=refs_dir, ignore_cleanup_errors=True) as staging, \
-            fit_references(base_view, draft, refs_dir, SQUARE) as (base_reference, draft_reference, canvas):
-        for n in range(1, FIT_ATTEMPTS + 1):
+    with tempfile.TemporaryDirectory(prefix=".composite_", dir=refs_dir, ignore_cleanup_errors=True) as staging:
+        for n in range(1, DRAFT_ATTEMPTS + 1):
+            draft_stem = Path(staging) / f"draft{n}" / f"{kind}_{signature}"
+            draft_stem.parent.mkdir()
+            try:
+                draft = render_draft(
+                    character_name, view, stem=draft_stem, front=front, refs_dir=refs_dir,
+                    prompt=draft_prompt(character_name, view, profile=profile), profile=profile, common=common,
+                    sidecar_extra={"base_signature": bsig, "dressed": True, f"{view}_draft": True,
+                                   "front_sha256": file_sha256(front),
+                                   **({"mesh_items": mesh_items} if mesh_items else {}), **(texture or {})})
+            except Exception as e:  # noqa: BLE001 — a later draft never loses an earlier composite
+                if not attempts or (raise_load and _is_load(e)):
+                    raise
+                logger.warning("Dressed %s %s (%s): draft %d failed: %s", view, character_name, signature, n, e)
+                break
+            if draft is None:
+                if not attempts:
+                    raise OutfitError(f"Dressed {view} draft failed")
+                break
             stem = Path(staging) / f"attempt{n}" / final.name
             stem.parent.mkdir()
-            try:
-                attempt = _fit_attempt(character_name, view, stem=stem, base_reference=base_reference,
-                                       draft_reference=draft_reference, canvas=canvas, extra=extra,
-                                       common=common, base_views=base_views)
-            except Exception as e:  # noqa: BLE001 — keep what was rendered
-                if not attempts:
-                    raise
-                logger.warning("Dressed %s %s (%s): fit attempt %d failed: %s", view, character_name,
-                               signature, n, e)
-                break
-            if attempt is None:
-                if not attempts:
-                    raise OutfitError(f"Dressed {view} edit failed")
-                break
+            attempt = _composite_attempt(character_name, view, stem=stem, draft=Path(draft), base_views=base_views,
+                                         extra=_composite_extra(view, bsig, base_view, Path(draft), mesh_items,
+                                                                texture))
             attempts.append(attempt)
             result = attempt[1]
-            logger.info("Dressed %s %s (%s): fit attempt %d %s (guard %s, noise %s/%s)", view, character_name,
-                        signature, n, "passed" if result["ok"] else "failed", result["guard"].get("best"),
-                        result["noise"].get("score"), result["noise"].get("limit"))
+            logger.info("Dressed %s %s (%s): draft %d composite %s (%s; guard %s, noise %s)", view, character_name,
+                        signature, n, "passed" if result["ok"] else "failed",
+                        view_composite.summary(result["composite"]), result["guard"].get("best"),
+                        result["noise"].get("score"))
             if result["ok"]:
                 break
-        chosen, passed = best_fit_attempt([r for _p, r in attempts])
+        usable = [i for i, (_p, r) in enumerate(attempts) if r["composite"].get("ok")]
+        if not usable:
+            raise OutfitError(view_composite.refusal(f"Dressed {view}", [r["composite"] for _p, r in attempts]))
+        pick, passed = best_fit_attempt([attempts[i][1] for i in usable])
+        chosen = usable[pick]
         warning = None if passed else fit_gate_warning(len(attempts), attempts[chosen][1], view)
         record = {"ok": passed, "chosen": chosen + 1, "noise_limit": base_body_gates.NOISE_LIMIT,
                   "attempts": [r for _p, r in attempts], "warning": warning}
+        chosen_draft = Path(staging) / f"draft{chosen + 1}"
+        for staged in sorted(chosen_draft.glob(f"{kind}_{signature}.*")):
+            if staged.suffix.lower() != ".json":
+                _publish_staged(staged, drafts / f"{kind}_{signature}", {"chosen": chosen + 1}, key="composite_draft")
         stored = _publish_staged(attempts[chosen][0], final, record, key="fit_gate")
     return stored, warning
-
-
-def view_delta_e(proof: Optional[Dict[str, Any]], view: str) -> Optional[float]:
-    """``views.<view>.dressed_alignment.unchanged_delta_e`` of a retexture
-    proof (Lab dE between the registered dressed view and its base view on
-    the regions the edit left unchanged), None when the proof has none."""
-    try:
-        value = proof["views"][view]["dressed_alignment"]["unchanged_delta_e"]  # type: ignore[index]
-    except (KeyError, TypeError):
-        return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
-        return None
-    return float(value)
-
-
-def _refit_back(character_name: str, *, signature: str, bsig: str, back: Path, profile: Dict[str, Any],
-                base_views: Dict[str, Optional[Path]], first_proof: Dict[str, Any],
-                retexture) -> Tuple[Dict[str, Any], Optional[Tuple[Dict[str, Any], Path]]]:
-    """A second fit of the dressed back after the worker registered it
-    poorly (``view_delta_e(first_proof, "back") > BACK_REFIT_DELTA_E``).
-
-    One more ``_fit_attempt`` from the STORED draft (it must still be the one
-    the back was fitted from: ``back_draft_sha256`` of the back's sidecar),
-    staged in a private ``.fitgate_*`` dir. A fit that turned toward the
-    camera (``view_guard``) is dropped without a worker run. Otherwise
-    ``retexture(fit path) -> (proof, out glb)`` runs the worker with that
-    back; the refit is kept only when its back ``unchanged_delta_e`` is
-    lower — then it is published onto ``tpose_back_<sig>`` (sidecar
-    ``fit_gate`` = the back's attempts plus this one, chosen = this one;
-    ``back_refit`` = the record below).
-
-    Returns ``(record, better)``: ``record`` = ``{"limit", "attempts":
-    [{"unchanged_delta_e"}, {"unchanged_delta_e"?, "gate"?, "error"?}],
-    "chosen": 1|2, "skipped"?}``; ``better`` = the refit's ``(proof, out
-    glb)`` when it was kept, else None. Never raises for a failed render or
-    worker run — the first result stands."""
-    import tempfile
-    from app.core import base_body_gates
-    from app.core.model3d import _ref_manifest
-    from app.core.model_refs import _tpose_size
-    first = view_delta_e(first_proof, "back")
-    record: Dict[str, Any] = {"limit": BACK_REFIT_DELTA_E, "attempts": [{"unchanged_delta_e": first}],
-                              "chosen": 1}
-    meta = _ref_sidecar(back)
-    draft = draft_path(character_name, "back", signature)
-    if draft is None or not meta.get("back_draft_sha256") or file_sha256(draft) != meta["back_draft_sha256"]:
-        record["skipped"] = "the back's draft is missing or changed"
-        return record, None
-    base_back = base_views.get("back")
-    if base_back is None:
-        record["skipped"] = "base back missing"
-        return record, None
-    manifest = _ref_manifest(back) or {}
-    pieces, items = manifest.get("pieces") or {}, manifest.get("items") or []
-    mesh_profile = deepcopy(profile)
-    mesh_profile["equipped_pieces"] = dict(pieces)
-    mesh_profile["equipped_items"] = list(items)
-    size = _tpose_size()
-    common = _dress_common("back", pieces=pieces, items=items, profile=mesh_profile, size=size)
-    refs_dir = back.parent
-    final = refs_dir / f"tpose_back_{signature}"
-    entry: Dict[str, Any] = {}
-    record["attempts"].append(entry)
-    try:
-        with tempfile.TemporaryDirectory(prefix=".fitgate_", dir=refs_dir, ignore_cleanup_errors=True) as staging, \
-                fit_references(base_back, draft, refs_dir, SQUARE) as (base_reference, draft_reference, canvas):
-            stem = Path(staging) / "refit" / final.name
-            stem.parent.mkdir()
-            attempt = _fit_attempt(character_name, "back", stem=stem, base_reference=base_reference,
-                                   draft_reference=draft_reference, canvas=canvas,
-                                   extra=_fit_extra("back", bsig, base_back, draft,
-                                                    meta.get("mesh_items") if isinstance(
-                                                        meta.get("mesh_items"), dict) else None,
-                                                    {k: meta[k] for k in ("texture_signature", "dress_text")
-                                                     if k in meta}),
-                                   common=common, base_views=base_views)
-            if attempt is None:
-                entry["error"] = "the refit rendered nothing"
-                return record, None
-            path, gate = attempt
-            entry["gate"] = gate
-            if not gate["guard"].get("ok", True):
-                entry["error"] = "turned toward the camera"
-                return record, None
-            proof, out = retexture(path)
-            second = view_delta_e(proof, "back")
-            entry["unchanged_delta_e"] = second
-            logger.info("Dressed back %s (%s): refit after dE %s -> dE %s", character_name, signature,
-                        first, second)
-            if second is None or (first is not None and second >= first):
-                return record, None
-            record["chosen"] = 2
-            previous = meta.get("fit_gate") or {}
-            gates = [*(previous.get("attempts") or []), gate]
-            fit_gate = {"ok": bool(gate["ok"]), "chosen": len(gates),
-                        "noise_limit": base_body_gates.NOISE_LIMIT, "attempts": gates,
-                        "warning": None if gate["ok"] else fit_gate_warning(len(gates), gate)}
-            sidecar = path.with_suffix(".json")
-            staged = _ref_sidecar(path)
-            staged["fit_gate"] = fit_gate
-            sidecar.write_text(json.dumps(staged, ensure_ascii=False, indent=2), encoding="utf-8")
-            if _publish_staged(path, final, record, key="back_refit") is None:
-                record["chosen"] = 1
-                entry["error"] = "model_refs is gone"
-                return record, None
-            return record, (proof, out)
-    except Exception as e:  # noqa: BLE001 — the first back stands
-        entry["error"] = str(e) or type(e).__name__
-        record["chosen"] = 1
-        logger.warning("Dressed back %s (%s): refit failed: %s", character_name, signature, e)
-        return record, None
 
 
 # --- Texture bodies (plan 2026-11-10-texture-body-reuse-and-layering, Task 1) ---
@@ -2530,16 +2326,17 @@ def dressed_view_estimate(character_name: str, fig, signature: str, *,
     (``_reuse_texture_views``: the store's front made from the current base
     front, or one ``_adopt_texture_views`` would adopt; a back/side the
     store holds — or the adopted outfit has — following that front), else
-    the front 1 job (the edit) and every other view 2 (draft + fit). A
-    figure without a texture copies its views from the shape: 0. A retry of
-    a gate (the view guard's re-render, a fit attempt after the first) is
-    not counted — the UI says "estimate, retries extra". Read-only."""
+    the front 1 job (the edit) and every other view 1 (the draft; its
+    composite onto the base view is CPU work, Task 11g). A figure without a
+    texture copies its views from the shape: 0. A retry (the view guard's
+    re-render, a re-draft after a refused composite) is not counted — the UI
+    says "estimate, retries extra". Read-only."""
     from app.core.model_refs import find_ref_image
     missing = [v for v in dressed_views()
                if dressed_image(character_name, v, signature, fig.bsig, fig=fig) is None]
     if not missing or not fig.texture:
         return 0
-    jobs = {v: 1 if v == "front" else 2 for v in missing}
+    jobs = {v: 1 for v in missing}
     tsig = fig.texture
     if not is_texture_signature(tsig):
         return sum(jobs.values())
@@ -2835,11 +2632,12 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
       ``bare_prompt`` = ``dress_prompt`` of ``figure_texts``, occasion
       ``outfit_front``, use case ``DRESS_USE_CASE``);
     * back, then left/right when on: ``_dress_view`` — a draft from the
-      dressed front, then a gated fit onto the shape's view (occasions
-      ``outfit_back_draft`` / ``outfit_back``, for the sides
-      ``outfit_side_draft`` / ``outfit_side``); each needs the dressed front
-      (rendered in the same pass, or the stored one — else the status error
-      ``DRESSED_FRONT_FIRST``).
+      dressed front (occasion ``outfit_back_draft``, for the sides
+      ``outfit_side_draft``), then its CPU composite onto the shape's view
+      (``view_composite``, gated); each needs the dressed front (rendered in
+      the same pass, or the stored one — else the status error
+      ``DRESSED_FRONT_FIRST``). A composite refused twice leaves the view
+      unrendered with the numbers as its error.
 
     Nothing to paint (an undressed combination on the plain body, or a
     meshed shape with nothing painted on it — texture ``""``) copies the
@@ -2848,7 +2646,7 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
     the shape, ``base_image_sha256`` (the edited view's content),
     ``texture_signature`` = the figure's texture and the own-mesh record
     ``mesh_items`` (``mesh_record``, with the figure). A view current for
-    the figure (``dressed_image``) is skipped unless ``force``. A kept fit
+    the figure (``dressed_image``) is skipped unless ``force``. A kept gate
     warning (``fit_gate_warning``) is in the view's sidecar and in
     ``outfit_info``'s warnings.
 
@@ -3499,10 +3297,6 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
     rigged base with the warning ``COVERED_MISSING``), on a meshed shape the
     rigged shape. Sidecar ``base_variant``. An undressed combination is the
     rigged base copy without a worker run.
-    A back whose ``unchanged_delta_e`` in the proof exceeds
-    ``BACK_REFIT_DELTA_E`` is fitted once more and the worker run again
-    (``_refit_back``); the better back by that number is kept, the attempts
-    are in the sidecar (``back_refit``).
     Then the usual post-steps: texture re-encode, the extension rig
     (``model3d._auto_extension_rig`` — the copied state makes it a no-op
     unless this outfit's ``mesh_variant`` declares other groups; then every
@@ -3598,10 +3392,9 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                                     profile=mesh_profile)
         view_shas = texture_view_shas(character_name, signature, bsig, fig=fig)
         stored = None if force else stored_texture_body(character_name, tsig, base=source, view_shas=view_shas)
-        back_refit: Optional[Dict[str, Any]] = None
         if stored is not None:
             # Reused: the views are the body's (same content), so are its
-            # view guard, refit and proof; no worker run.
+            # view guard and proof; no worker run.
             outfit, body = stored
             front_path = dressed_image(character_name, "front", signature, bsig, fig=fig)
             front_meta = _ref_sidecar(front_path)
@@ -3617,7 +3410,6 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
             warnings = [w for w in body.get("view_warnings") or [] if isinstance(w, str)]
             variant = str(body.get("base_variant") or "rigged")
             proof = body.get("retexture_proof")
-            back_refit = body.get("back_refit") if isinstance(body.get("back_refit"), dict) else None
             source_state = body.get("source_state")
             source_blender = body.get("source_blender")
             logger.info("Outfit model %s (%s): painted body %s reused", character_name, signature, tsig)
@@ -3683,23 +3475,11 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                         arm_rig.write_bytes(source["rigged"])
                         side = {"side_arm_margin": side_arm_margin(), "arm_rig_glb": arm_rig}
 
-                    def run_worker(run_views: Dict[str, Tuple[Path, Path]], tag: str = ""):
-                        out = work / f"dressed{tag}.glb"
-                        result = body_retexture.retexture(worker_in, run_views, out, proof=work / f"proof{tag}.json",
-                                                          atlas=work / f"atlas{tag}.png", **side)
-                        if not out.is_file():
-                            raise OutfitError("Body retexture worker wrote no GLB")
-                        return result, out
-
-                    proof, out_glb = run_worker(views)
-                    delta = view_delta_e(proof, "back")
-                    if "back" in views and delta is not None and delta > BACK_REFIT_DELTA_E:
-                        back_refit, better = _refit_back(
-                            character_name, signature=signature, bsig=on, back=dressed_paths["back"],
-                            profile=profile, base_views=registrations, first_proof=proof,
-                            retexture=lambda fit: run_worker({**views, "back": (fit, views["back"][1])}, "_refit"))
-                        if better is not None:
-                            proof, out_glb = better
+                    out_glb = work / "dressed.glb"
+                    proof = body_retexture.retexture(worker_in, views, out_glb, proof=work / "proof.json",
+                                                     atlas=work / "atlas.png", **side)
+                    if not out_glb.is_file():
+                        raise OutfitError("Body retexture worker wrote no GLB")
                     atlas, atlas_mime = base_color_image(out_glb.read_bytes())
                     atlas, atlas_mime, restored = restore_face_texels(atlas, atlas_mime, image, source["meta"])
                     proof = {**(proof or {}), **restored}
@@ -3708,7 +3488,7 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                 if not verdict.get("ok"):
                     raise OutfitError("Retextured model is invalid: " + "; ".join(verdict.get("errors") or []))
             if front_meta.get("dressed") is not False:
-                # The guard or the back refit may have rendered a view again.
+                # The guard may have rendered a view again.
                 _store_texture_views(character_name, signature, tsig,
                                      [v for v in dressed_views()
                                       if dressed_image(character_name, v, signature, bsig, fig=fig)], texts)
@@ -3720,7 +3500,7 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                 "covered_missing": COVERED_MISSING in warnings, "dressed": front_meta.get("dressed") is not False,
                 "views": texture_view_shas(character_name, signature, bsig, fig=fig),
                 "used_views": [v for v in BASE_VIEWS if v in names], "retexture_proof": proof,
-                "back_refit": back_refit, "view_guard": guard, "view_warnings": warnings,
+                "view_guard": guard, "view_warnings": warnings,
                 "source_state": deepcopy(source_state), "source_blender": deepcopy(source_blender),
                 "body_sha256": hashlib.sha256(outfit).hexdigest()}
             if meshed:
@@ -3751,8 +3531,6 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
                      "texture_signature": tsig, "texture_reused": stored is not None})
         if meshed:
             meta.update(body_id=on, body_sha256=hashlib.sha256(source["rigged"]).hexdigest())
-        if back_refit is not None:
-            meta["back_refit"] = back_refit
         meta.update(manifest)
         meta["figure"] = fig.as_dict()
         # Own-mesh pieces in the body until their mesh is ready: the assembly's own warning, if
@@ -4458,12 +4236,14 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
     current base (``model_refs.trigger_now`` of its views, then
     ``model3d.generate_for_current_outfit(force=True)``: the wanted shape,
     the views of the figure then delivered, the model), counted in FIRST
-    attempts — the back fit's ``FIT_ATTEMPTS`` and the view guard's one
-    re-render may each add one per view: ``{image_jobs, mesh_jobs, hub_jobs,
-    note, views_needed, body_needed}``. Read-only. One set of views costs
-    the front edit plus draft + fit per other view: 3 with front + back, 7
-    with the side views on (a view the texture store holds is copied, no
-    job: the estimate stays an upper bound for first attempts).
+    attempts — a re-draft after a refused composite (``DRAFT_ATTEMPTS``) and
+    the view guard's one re-render may each add one per view: ``{image_jobs,
+    mesh_jobs, hub_jobs, note, views_needed, body_needed}``. Read-only. One
+    set of views costs the front edit plus a draft per other view — the
+    composite onto the base view is CPU work: 2 with front + back, 4 with
+    the side views on (``dressed_view_jobs``; a view the texture store holds
+    is copied, no job: the estimate stays an upper bound for first
+    attempts).
 
     * ``body_needed``: the WANTED figure (``figure.wanted_figure`` of the
       outfit's pieces) stands on a meshed shape that is not stored

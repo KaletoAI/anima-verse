@@ -741,15 +741,6 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "",
         },
     },
-    # The base-body back FIT (occasion outfit_back): an edit of the cut-out
-    # base back with the cut-out back draft as second reference, prompted by
-    # one sentence and nothing else (user decision 2026-11-09, measured: a
-    # style, a view sentence, an outfit text or a negative only cost
-    # silhouette fidelity) — so style and negative stay empty.
-    "outfit_fit": {
-        "keywords": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
-        "natural": {"prompt_style": "", "prompt_negative": "", "prompt_instruction": ""},
-    },
     # The dressed FRONT edit (occasion outfit_front) and the back/side DRAFTS
     # (outfit_back_draft / outfit_side_draft, also the worn back draft of an
     # own-mesh piece): edits of a base view with one short instruction
@@ -1511,7 +1502,9 @@ def _strip_dead_config_fields(config: dict) -> bool:
 #     (plan-rueckbau-2d-karte.md). "map" was the 2D map icon's use case;
 #     "mapfit" never had a default nor a reader and only ever reached a
 #     config.json by hand.
-DEAD_USE_CASES: tuple = ("map", "mapfit")
+#   outfit_fit — the style of the base-body back/side model FIT, removed
+#     when that step became the CPU composite (Task 11g, view_composite).
+DEAD_USE_CASES: tuple = ("map", "mapfit", "outfit_fit")
 
 
 def _strip_dead_use_cases(config: dict) -> bool:
@@ -1753,28 +1746,51 @@ def _migrate_footwear_routing(config: dict) -> bool:
 _BASE_BODY_ROUTING_SEEDS = (("base_front", "tpose"),
                             ("base_view", "tpose_view"),
                             ("outfit_front", "tpose_view"),
-                            ("outfit_back_draft", "tpose_view"),
-                            ("outfit_back", "tpose_view"))
+                            ("outfit_back_draft", "tpose_view"))
 
 
 def _migrate_base_body_routing(config: dict) -> bool:
-    """Seed the five base-body chains from tpose / tpose_view once each; a key
+    """Seed the four base-body chains from tpose / tpose_view once each; a key
     already in the routing is never overwritten. Runs after
     ``_migrate_tpose_view_routing`` (which may seed tpose_view itself)."""
     return _seed_routing_copies(config, _BASE_BODY_ROUTING_SEEDS)
 
 
-#: (target, source) — the dressed side views start on the chains of the
-#: back's two steps, which they mirror.
-_OUTFIT_SIDE_ROUTING_SEEDS = (("outfit_side_draft", "outfit_back_draft"),
-                              ("outfit_side", "outfit_back"))
+#: (target, source) — the dressed side draft starts on the chain of the
+#: back's draft, which it mirrors.
+_OUTFIT_SIDE_ROUTING_SEEDS = (("outfit_side_draft", "outfit_back_draft"),)
 
 
 def _migrate_outfit_side_routing(config: dict) -> bool:
-    """Seed the two dressed-side chains from the back's once each; a key
-    already in the routing is never overwritten. Runs after
+    """Seed the dressed-side draft chain from the back's once; a key already
+    in the routing is never overwritten. Runs after
     ``_migrate_base_body_routing`` (which may seed the back's itself)."""
     return _seed_routing_copies(config, _OUTFIT_SIDE_ROUTING_SEEDS)
+
+
+#: The routing chains of the model-fit occasions removed when the second step
+#: of a dressed back/side view became the CPU composite (plan
+#: 2026-11-12-unified-worn-pieces Task 11g, Ruling C1; ``view_composite``).
+REMOVED_FIT_OCCASIONS: tuple = ("outfit_back", "outfit_side")
+
+
+def _migrate_removed_fit_occasions(config: dict) -> bool:
+    """Drop the stored routing chains of ``REMOVED_FIT_OCCASIONS`` (instance)
+    with one INFO line naming them — the save validator refuses an unknown
+    occasion, so a chain left behind would block every settings save. A load
+    migration like the routing seeds: ``load()`` applies it in memory,
+    ``migrate_file()`` persists it at boot through the layer write path
+    (backup in ``.config-history/`` first). Idempotent."""
+    routing = (config.get("image_generation") or {}).get("routing")
+    if not isinstance(routing, dict):
+        return False
+    dropped = [occasion for occasion in REMOVED_FIT_OCCASIONS if occasion in routing]
+    for occasion in dropped:
+        del routing[occasion]
+    if dropped:
+        logger.info("Image routing: chains of the removed fit occasions dropped (the dressed back/side views "
+                    "are composited on the CPU now): %s", ", ".join(dropped))
+    return bool(dropped)
 
 
 _quadruped_chain_hints = set()
@@ -1861,6 +1877,8 @@ def _apply_file_migrations(config: dict) -> bool:
     if _migrate_footwear_routing(config):
         changed = True
     if _migrate_removed_hair_methods(config):
+        changed = True
+    if _migrate_removed_fit_occasions(config):
         changed = True
     if _migrate_base_body_routing(config):
         changed = True

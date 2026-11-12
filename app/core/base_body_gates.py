@@ -191,13 +191,16 @@ def best_attempt(results: "list[Dict[str, Any]]") -> Tuple[int, bool]:
     return min(scores)[1], False
 
 
-# --- Noise gate of the fitted dressed views (``base_body._fit_attempt``) ----
+# --- Noise gate of the dressed two-step views (``base_body._composite_attempt``) ----
 #
-# The back fit (an edit of the cut-out base back with the cut-out back draft
-# as second reference) sometimes comes back grainy: skin and cloth carry a
-# fine noise the base view does not have (seed-dependent, on turbo and
-# non-turbo models alike). The background says nothing — the fit comes back
-# on opaque black and is matted — so the noise is measured ON THE FIGURE.
+# Measured on the back FIT (an edit of the cut-out base back with the cut-out
+# back draft as second reference, replaced by the CPU composite of
+# ``view_composite`` in Task 11g), which sometimes came back grainy: skin and
+# cloth carry a fine noise the base view does not have (seed-dependent, on
+# turbo and non-turbo models alike). The composite carries the draft's
+# pixels inside the garment, so a grainy draft still shows here. The
+# background says nothing — the view is matted — so the noise is measured ON
+# THE FIGURE.
 # Both images are resampled to ``NOISE_WORK_HEIGHT`` px height first, RGB and
 # alpha apart (an RGBA resample would premultiply the colours); the figure is
 # alpha >= ``NOISE_ALPHA``, shrunk by ``NOISE_ERODE`` px (no matte edge); the
@@ -216,7 +219,7 @@ def best_attempt(results: "list[Dict[str, Any]]") -> Tuple[int, bool]:
 # and 14 % (Kira ecba33c49418: long hair, lace stockings) under the limit
 # times the base's floor, a grainy one 4 % — the floor needs 10 %, so an
 # outfit plus hair that texture nine tenths of the mid-tone figure can read
-# as grain (the fit is then re-rendered; the best attempt is kept with a
+# as grain (the view is then drafted again; the best attempt is kept with a
 # warning, ``base_body._dress_view``). Version 1
 # judged the mean over the HEAD (the top ``NOISE_HEAD_SHARE`` of the figure):
 # bare skin on a bald base, but hair once the hair is part of the base body —

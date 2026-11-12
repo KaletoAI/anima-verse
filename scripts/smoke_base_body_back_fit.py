@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Smoke: the base-body routing occasions, the back-fit references and the
-fit's noise gate (user decisions 2026-11-09).
+"""Smoke: the base-body routing occasions, the dressed views' noise gate and
+attempt choice (user decisions 2026-11-09; the model fit replaced by the CPU
+composite in Task 11g, Ruling C1 — ``smoke_view_composite.py``).
 
 Usage:
     ./.venv/bin/python scripts/smoke_base_body_back_fit.py
@@ -8,40 +9,31 @@ Usage:
 Runs without the server, against a temp storage dir; no render, no matte.
 Expected values, derived by hand:
 
-[1] Occasion catalog. Five character-scoped image occasions with
+[1] Occasion catalog. Four character-scoped image occasions with
     (char_spec_field, fallback field(s)):
       base_front         base_front_workflow, then tpose_workflow, workflow
       base_view          base_view_workflow, then tpose_view_workflow
       outfit_front       outfit_front_workflow, then tpose_view_workflow
       outfit_back_draft  outfit_back_draft_workflow, then tpose_view_workflow
-      outfit_back        outfit_back_workflow, then tpose_view_workflow
-    spec_fields lists them in that order. Only outfit_back needs a reference
-    slot. Hints: base_front names the non-turbo model, outfit_back the noise
-    check and no model, outfit_back_draft "only its clothing", the other two
-    none. All five are in MESH_INPUT_OCCASIONS. outfit_back renders with the
-    use case outfit_fit, whose style and negative are empty in both families.
+    spec_fields lists them in that order. None needs a reference slot (the
+    back fit, the only one that did, is gone). Hints: base_front names the
+    non-turbo model, outfit_back_draft "only its clothing", the other two
+    none. All four are in MESH_INPUT_OCCASIONS; outfit_back is no occasion
+    any more and its use case outfit_fit is in config.DEAD_USE_CASES.
 [2] Seeding (config._apply_file_migrations on a union whose routing holds
     tpose = ["a*"], tpose_view = ["b*"], outfit_back = ["mine"]):
     base_front = ["a*"], base_view / outfit_front / outfit_back_draft =
-    ["b*"], outfit_back stays ["mine"]. A second run changes nothing. Without
-    a tpose_view chain the four tpose_view seeds stay absent.
+    ["b*"], outfit_back dropped (config.REMOVED_FIT_OCCASIONS). A second run
+    changes nothing. Without a tpose_view chain the three tpose_view seeds
+    stay absent.
 [3] Per-character resolution (routing._character_spec, profile stubbed):
     outfit_imagegen {workflow "w", tpose_workflow "t", tpose_view_workflow
-    "v"} -> base_front "t", base_view "v", outfit_back "v"; adding
-    base_front_workflow "bf" and outfit_back_workflow "ob" -> "bf" / "ob";
-    with only workflow "w": base_front "w" (the tpose rule), base_view ""
-    (views never fall to the render match).
-[4] Fit references (base_body.fit_canvas, render size 1024 x 1024):
-    base cut-out 6 x 10, figure alpha 255 on x 2..3, y 2..7 (bbox (2,2,4,8),
-    height 6); draft cut-out 20 x 20, figure on x 4..9, y 0..11 (bbox
-    (4,0,10,12), 6 x 12). Canvas height 10, width max(6, round(10 * 1024 /
-    1024) = 10, 3) = 10; base pasted at x (10 - 6) // 2 = 2 -> its bbox
-    (4,2,6,8). Draft figure scaled by 6 / 12 to 3 x 6, centred on the base
-    figure's centre x 2 + (2 + 4) / 2 = 5 -> x round(5 - 1.5) = 4, y = 2 ->
-    bbox (4,2,7,8). Size (512, 1024): width max(6, 5, 3) = 6, base at 0 ->
-    bbox (2,2,4,8), draft at round(3 - 1.5) = 2 -> (2,2,5,8). A cut-out
-    without a figure: ValueError. cut_out keeps an image that has a matte
-    (no matte call).
+    "v"} -> base_front "t", base_view "v", outfit_back_draft "v"; adding
+    base_front_workflow "bf" and outfit_back_draft_workflow "od" -> "bf" /
+    "od"; with only workflow "w": base_front "w" (the tpose rule), base_view
+    "" (views never fall to the render match).
+[4] cut_out keeps an image that has a matte (no matte call): a 6 x 10
+    RGBA with its figure on x 2..3, y 2..7 -> alpha bbox (2, 2, 4, 8).
 [5] Noise on the figure (base_body_gates.figure_noise_arrays): 1024 x 1024
     grey, a checkerboard 128 +/- a on the figure x 300..699, y 100..899
     (alpha 255, the rest 0). Inside, every 3x3 box holds 5 pixels of the
@@ -61,11 +53,6 @@ Expected values, derived by hand:
     check failed after 2 attempts)"; guard and noise fail, 1 attempt ->
     "... turned toward the camera and grainy (back check failed after 1
     attempt)".
-[7] Extra reference slots (service.slot_extra_references, the containment
-    gate stubbed to accept paths containing "/ok/"): {slot 1} + [ok/d.png]
-    on a 2-slot backend -> input_reference_image_2 = ok/d.png; on a 1-slot
-    backend BackendNotApplicableError "needs 2 reference slots"; no own slot
-    or a refused path -> ValueError.
 """
 import os
 import sys
@@ -112,38 +99,35 @@ def main() -> int:
     import numpy as np
     from PIL import Image
     from app.core import base_body, base_body_gates as gates, config
-    from app.imagegen import occasions, routing, service
-    from app.imagegen.base import BackendNotApplicableError
+    from app.imagegen import occasions, routing
 
     print("[1] occasion catalog")
     want = {"base_front": ["base_front_workflow", "tpose_workflow", "workflow"],
             "base_view": ["base_view_workflow", "tpose_view_workflow"],
             "outfit_front": ["outfit_front_workflow", "tpose_view_workflow"],
-            "outfit_back_draft": ["outfit_back_draft_workflow", "tpose_view_workflow"],
-            "outfit_back": ["outfit_back_workflow", "tpose_view_workflow"]}
+            "outfit_back_draft": ["outfit_back_draft_workflow", "tpose_view_workflow"]}
     for occ, fields in want.items():
         d = occasions.OCCASIONS[occ]
         check(f"{occ} spec fields", list(occasions.spec_fields(d)), fields)
         check(f"{occ} scoped image", (d.get("character_scoped"), d.get("media")), (True, "image"))
         check(f"{occ} mesh input", occ in occasions.MESH_INPUT_OCCASIONS, True)
-    check("ref slot", [o for o in want if occasions.OCCASIONS[o].get("needs_ref_slot")], ["outfit_back"])
+    check("ref slot", [o for o in want if occasions.OCCASIONS[o].get("needs_ref_slot")], [])
     hints = {o: occasions.OCCASIONS[o].get("hint") or "" for o in want}
-    check("hints", ("non-turbo" in hints["base_front"], "noise check" in hints["outfit_back"],
-                    "turbo" in hints["outfit_back"], "only its clothing" in hints["outfit_back_draft"],
-                    hints["base_view"], hints["outfit_front"]), (True, True, False, True, "", ""))
-    check("fit use case", occasions.OCCASIONS["outfit_back"].get("style_use_cases"), ["outfit_fit"])
-    for family in ("natural", "keywords"):
-        p = config.get_use_case_prompts("outfit_fit", "flux" if family == "natural" else "sdxl")
-        check(f"outfit_fit {family} empty", (p["prompt_style"], p["prompt_negative"]), ("", ""))
+    check("hints", ("non-turbo" in hints["base_front"], "only its clothing" in hints["outfit_back_draft"],
+                    hints["base_view"], hints["outfit_front"]), (True, True, "", ""))
+    check("no fit occasion", ("outfit_back" in occasions.OCCASIONS, "outfit_back" in occasions.MESH_INPUT_OCCASIONS),
+          (False, False))
+    check("fit use case dead", "outfit_fit" in config.DEAD_USE_CASES, True)
 
     print("[2] seeding")
     union = {"image_generation": {"routing": {"tpose": ["a*"], "tpose_view": ["b*"], "outfit_back": ["mine"]}}}
     config._apply_file_migrations(union)
     r = union["image_generation"]["routing"]
-    check("seeded", [r.get(k) for k in ("base_front", "base_view", "outfit_front", "outfit_back_draft",
-                                          "outfit_back")],
-          [["a*"], ["b*"], ["b*"], ["b*"], ["mine"]])
-    check("second run unchanged", config._migrate_base_body_routing(union), False)
+    check("seeded", [r.get(k) for k in ("base_front", "base_view", "outfit_front", "outfit_back_draft")],
+          [["a*"], ["b*"], ["b*"], ["b*"]])
+    check("fit chain dropped", "outfit_back" in r, False)
+    check("second run unchanged", (config._migrate_base_body_routing(union),
+                                   config._migrate_removed_fit_occasions(union)), (False, False))
     only_tpose = {"image_generation": {"routing": {"tpose": ["a*"]}}}
     config._migrate_base_body_routing(only_tpose)
     check("no tpose_view source", sorted(only_tpose["image_generation"]["routing"]), ["base_front", "tpose"])
@@ -157,36 +141,20 @@ def main() -> int:
         def spec(occ):
             return routing._character_spec(occasions.OCCASIONS[occ], "Demo")
         record.update({"workflow": "w", "tpose_workflow": "t", "tpose_view_workflow": "v"})
-        check("fallbacks", [spec(o) for o in ("base_front", "base_view", "outfit_back")], ["t", "v", "v"])
-        record.update({"base_front_workflow": "bf", "outfit_back_workflow": "ob"})
-        check("own fields", [spec(o) for o in ("base_front", "outfit_back", "outfit_back_draft")],
-              ["bf", "ob", "v"])
+        check("fallbacks", [spec(o) for o in ("base_front", "base_view", "outfit_back_draft")], ["t", "v", "v"])
+        record.update({"base_front_workflow": "bf", "outfit_back_draft_workflow": "od"})
+        check("own fields", [spec(o) for o in ("base_front", "outfit_back_draft")], ["bf", "od"])
         record.clear()
         record["workflow"] = "w"
         check("render match only", [spec(o) for o in ("base_front", "base_view")], ["w", ""])
     finally:
         character_module.get_character_profile = real_profile
 
-    print("[4] fit references")
+    print("[4] cut_out keeps a matte")
     base = Image.new("RGBA", (6, 10), (0, 0, 0, 0))
     for x in range(2, 4):
         for y in range(2, 8):
             base.putpixel((x, y), (10, 200, 10, 255))
-    draft = Image.new("RGBA", (20, 20), (0, 0, 0, 0))
-    for x in range(4, 10):
-        for y in range(0, 12):
-            draft.putpixel((x, y), (200, 10, 10, 255))
-    b, d = base_body.fit_canvas(base, draft, (1024, 1024))
-    check("square: sizes", (b.size, d.size), ((10, 10), (10, 10)))
-    check("square: bboxes", (b.getchannel("A").getbbox(), d.getchannel("A").getbbox()), ((4, 2, 6, 8), (4, 2, 7, 8)))
-    b, d = base_body.fit_canvas(base, draft, (512, 1024))
-    check("portrait: bboxes", (b.size, b.getchannel("A").getbbox(), d.getchannel("A").getbbox()),
-          ((6, 10), (2, 2, 4, 8), (2, 2, 5, 8)))
-    try:
-        base_body.fit_canvas(base, Image.new("RGBA", (4, 4), (0, 0, 0, 0)), (1024, 1024))
-        check("empty draft", "no error", "ValueError")
-    except ValueError:
-        check("empty draft", "ValueError", "ValueError")
     base.save(tmp / "base.png")
     real_rembg = character_module.run_rembg
     calls = []
@@ -233,33 +201,6 @@ def main() -> int:
           "Dressed back may be grainy (back check failed after 2 attempts)")
     check("both warning", base_body.fit_gate_warning(1, bad(False, 2.4)),
           "Dressed back may be turned toward the camera and grainy (back check failed after 1 attempt)")
-
-    print("[7] extra reference slots")
-    import app.core.model_refs as model_refs
-    real_gate = model_refs.checked_reference_override
-    model_refs.checked_reference_override = lambda name, path: path if "/ok/" in path else None
-
-    class Backend:
-        name = "stub"
-
-        def __init__(self, slots):
-            self.ref_slot_count = slots
-    try:
-        own = {"input_reference_image_1": "/x/ok/base.png"}
-        check("two slots", service.slot_extra_references(own, ["/x/ok/d.png"], Backend(2), "Demo"),
-              {"input_reference_image_1": "/x/ok/base.png", "input_reference_image_2": "/x/ok/d.png"})
-        for label, args, err in (("one slot", (own, ["/x/ok/d.png"], Backend(1)), BackendNotApplicableError),
-                                 ("no own slot", ({}, ["/x/ok/d.png"], Backend(4)), ValueError),
-                                 ("refused path", (own, ["/elsewhere/d.png"], Backend(4)), ValueError)):
-            try:
-                service.slot_extra_references(*args, "Demo")
-                check(label, "no error", err.__name__)
-            except err as e:
-                check(label, (type(e).__name__, getattr(e, "reason", None) if err is BackendNotApplicableError
-                              else None),
-                      (err.__name__, "needs 2 reference slots" if err is BackendNotApplicableError else None))
-    finally:
-        model_refs.checked_reference_override = real_gate
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL OK")
     return 1 if FAILS else 0

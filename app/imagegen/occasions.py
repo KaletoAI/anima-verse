@@ -131,19 +131,14 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         {"character_scoped": True, "char_spec_field": "outfit_back_draft_workflow",
          "char_spec_fallback": "tpose_view_workflow"},
         hint="An edit of the dressed front turned around; only its clothing is used."),
-    "outfit_back": _image(
-        "Outfit — back fitted onto the base", "Pose tab: the dressed back (edit of the base back, "
-        "the draft as second reference)",
-        ["outfit_fit"],
-        {"character_scoped": True, "char_spec_field": "outfit_back_workflow",
-         "char_spec_fallback": "tpose_view_workflow"},
-        needs_ref_slot=True,
-        hint="Edit of the base back view with the draft as second reference. Grainy "
-             "results are caught by a noise check and re-rendered."),
+    # The second step of a dressed back/side view — the draft's clothing put
+    # onto the base view — is a CPU composite (app/core/view_composite.py,
+    # Task 11g): the model-fit occasions outfit_back / outfit_side are gone
+    # (config.REMOVED_FIT_OCCASIONS drops their stored chains).
     # Dressed side views (world setting base_body.dressed_side_views, off by
-    # default): the same two steps as the back. A character's own glob falls
-    # back to its back-step glob, then the T-pose views glob;
-    # config._migrate_outfit_side_routing seeds the chains from the back's.
+    # default): a draft like the back's. A character's own glob falls back to
+    # its back draft glob, then the T-pose views glob;
+    # config._migrate_outfit_side_routing seeds the chain from the back's.
     "outfit_side_draft": _image(
         "Outfit — side draft", "Pose tab: left/right draft, an edit of the dressed front in profile",
         ["base_view_side"],
@@ -151,16 +146,6 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
          "char_spec_fallback": ("outfit_back_draft_workflow", "tpose_view_workflow")},
         hint="An edit of the dressed front in profile; only its clothing is used. "
              "Runs only with the world setting Dressed side views."),
-    "outfit_side": _image(
-        "Outfit — side fitted onto the base", "Pose tab: the dressed left/right (edit of the base "
-        "side view, the draft as second reference)",
-        ["outfit_fit"],
-        {"character_scoped": True, "char_spec_field": "outfit_side_workflow",
-         "char_spec_fallback": ("outfit_back_workflow", "tpose_view_workflow")},
-        needs_ref_slot=True,
-        hint="Edit of the base side view with the draft as second reference. Grainy or "
-             "turned results are caught and re-rendered. Runs only with the world setting "
-             "Dressed side views."),
     "scene_view": _image("Rendered scene view", "Player 'Rendered' view",
                          ["scene"], _WORLD, **_PEOPLE),
     "location": _image(
@@ -233,7 +218,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
 #: the matte trims the image sides and breaks their shared framing.
 MESH_INPUT_OCCASIONS: Tuple[str, ...] = (
     "tpose", "tpose_view", "base_front", "base_view",
-    "outfit_front", "outfit_back_draft", "outfit_back", "outfit_side_draft", "outfit_side")
+    "outfit_front", "outfit_back_draft", "outfit_side_draft")
 
 #: Image occasions whose negative is NEVER folded into the prompt on a backend
 #: without a negative input (review 2026-11-11): the mesh-input renders and the

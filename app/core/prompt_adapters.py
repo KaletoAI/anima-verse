@@ -31,8 +31,8 @@ TARGET_MODELS = ("z_image", "qwen", "flux")
 #: reference images as ``<Picture N>`` blocks instead of "the first image":
 #: P-H3-Image and MiniMax-H3-Image (both MiniMax-H3) — its edit upsampler and
 #: text encoder know the pictures only by that token (review 2026-11-11). The ordinal wording of
-#: every edit prompt (``base_body.FIT_PROMPT``, ``garment_clothing.FIT`` /
-#: ``DRAFT``, the dressed drafts) is rewritten by ``reference_wording`` at the
+#: every edit prompt (``garment_clothing.DRAFT``, the dressed drafts, the
+#: base views) is rewritten by ``reference_wording`` at the
 #: central handoff, so the prompt constants stay ONE wording.
 PICTURE_REFERENCE_MODELS = ("p-h3", "minimax-h3")
 _PICTURE_WORDING = (

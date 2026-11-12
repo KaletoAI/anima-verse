@@ -34,8 +34,8 @@ from app.core.improvements.types import subjects
 from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
 
 SCOPE_WORN, SCOPE_SAVED = "worn", "saved"
-#: The occasion of the dressed front; the other views add their
-#: ``base_body.DRESS_OCCASIONS`` (draft + fit).
+#: The occasion of the dressed front; the other views add their draft's
+#: ``base_body.DRAFT_OCCASIONS`` (the composite onto the base view is CPU work).
 FRONT_OCCASION = "outfit_front"
 #: The occasions of an outfit body (a meshed shape): img2mesh + rig.
 BODY_OCCASIONS = ("mesh_humanoid", "rig_humanoid")
@@ -101,7 +101,9 @@ def _require_routes(name: str, cost: Dict[str, Any]) -> None:
         # The outfit's views, and a shape's own views before it is meshed.
         occasions.append(FRONT_OCCASION)
         for view in base_body.dressed_views():
-            occasions += [o for o in base_body.DRESS_OCCASIONS.get(view, ()) if o not in occasions]
+            draft = base_body.DRAFT_OCCASIONS.get(view)
+            if draft and draft not in occasions:
+                occasions.append(draft)
     if cost.get("body_needed"):
         occasions += list(BODY_OCCASIONS)
     for occasion in occasions:

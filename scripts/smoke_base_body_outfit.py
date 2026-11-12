@@ -76,8 +76,10 @@ Expected, derived by hand from the brief:
     the left|right edge of the frame; keep it a side profile view, do not
     turn the figure toward the camera. Keep …". Same negative.
 [3] Chain (Demo on the pipeline, wearing dress): _run_generation(Demo,
-    "tpose") (the debounce timer body) -> THREE render calls (user decision
-    2026-11-09: only front and back are dressed, the back in two steps):
+    "tpose") (the debounce timer body) -> TWO render calls (user decision
+    2026-11-09: only front and back are dressed; Task 11g, Ruling C1: the
+    back is a draft + a CPU composite, ``view_composite.compose`` — stubbed
+    here, the composite itself is ``smoke_view_composite.py``):
       front edit  stem tpose_<osig> in model_refs, reference tpose_<bsig>.png
                   centred on a grey SQUARE (fix round T12-F1, ruling F14 g:
                   ``garment_images.square_frame`` — side max(8, 8) rounded up
@@ -87,35 +89,25 @@ Expected, derived by hand from the brief:
                   names the dress, occasion outfit_front, use case tpose,
                   sidecar_extra {base_signature, dressed: true,
                   base_image_sha256 = sha256(tpose_<bsig>.png)};
-      back draft  stem tpose_back_<osig> in model_refs/drafts, reference = the
+      back draft  stem tpose_back_<osig> in the staging dir draft1, reference = the
                   dressed front tpose_<osig>.png on the same 16 x 16 grey
                   square (F14 g; (0,0) grey padding, (4,4) = the opaque stub's
                   colour_of("tpose_<osig>")), bare_prompt and
                   extra_negative = draft_prompt(Demo, "back"), no character
                   block (review 2026-11-11), occasion outfit_back_draft, use
-                  case base_view_back, back_view;
-      back fit    stem tpose_back_<osig> in the staging dir attempt1,
-                  the CUT-OUT pair (user decision 2026-11-09): reference
-                  tpose_back_<bsig>.png keeps its own matte (pixel (0,0)
-                  transparent -> RGB (0,0,0), (4,4) BASE_PX back), the extra
-                  reference = the draft (dir "draft") matted by the run_rembg
-                  stub (one call, model birefnet-dis; 2 px transparent
-                  border), its 4x4 figure scaled to the base figure's height
-                  1 and centred on x 4.5 -> pixel (4,4) = the draft colour,
-                  (0,0) transparent; bare_prompt = FIT_BACK (FIT_PROMPT
-                  + "; a back view seen from behind, the back view stays a
-                  back view" — Task 11e: the fit names its view), no
-                  extra_negative, occasion outfit_back, use case outfit_fit,
-                  rendered at the canvas size 8 x 8 (the base back's; front
-                  edit and draft at their square canvas 16 x 16, F14 g),
-                  back_view, sidecar_extra {base_signature, dressed,
-                  base_image_sha256 = sha256(tpose_back_<bsig>.png),
-                  back_draft = the draft's name, back_draft_sha256}; the
-                  stub images are opaque, so both gates skip -> attempt 1
-                  kept (fit_gate ok, chosen 1, no warning), no staging dir
-                  left in model_refs.
+                  case base_view_back, back_view.
+    Then ONE composite call: base view tpose_back_<bsig>.png, the draft
+    (draft1/tpose_back_<osig>.png), target in the staging dir attempt1, rule
+    "outfit"; the stub writes the draft there and answers an ok record
+    (``COMPOSITE_OK``). The stored back's sidecar: base_signature, dressed,
+    base_image_sha256 = sha256(tpose_back_<bsig>.png), back_draft = the
+    draft's name, back_draft_sha256 = its sha256 (the published copy in
+    drafts/ has the same bytes), fit "composite", composite = COMPOSITE_OK,
+    the front's texture_signature; the stub images are opaque, so the gates
+    skip -> attempt 1 kept (fit_gate ok, chosen 1, no warning), no staging
+    dir left in model_refs.
     No left/right edits. The front edit carries [2]'s negative; character_loras
-    True. find_ref_image(tpose_back, osig) = the stored fit (the draft lives
+    True. find_ref_image(tpose_back, osig) = the stored composite (the draft lives
     in drafts/, invisible to it). Then the auto hook (auto_generate is OFF)
     asks the Build ("outfit_change", ``figure_build.request`` recorded —
     Task 8 of plan 2026-11-12-unified-worn-pieces) and the Build's assemble
@@ -213,13 +205,13 @@ Expected, derived by hand from the brief:
     is scripts/smoke_base_body_view_guard.py). The stub renders are opaque,
     so in [3]..[10] the real guard skips every view (no matte).
     (a) back fails once (the build's check): the back is re-rendered once —
-        draft (drafts/) + fit attempt 1, whose gate check now passes; the
+        draft 1 + its composite (attempt 1), whose gate check now passes; the
         worker gets front and back; sidecar view_guard has only front and
         back: back ok + rerendered + first.ok False, front ok without
         "rerendered"; no view_warnings.
-    (a') back fails four times: the build's check, both fit attempts of the
-        re-render (draft + attempt1 + attempt2 renders) and the re-check.
-        The fit keeps attempt 1 (no guard pass, noise unmeasurable -> the
+    (a') back fails four times: the build's check, both composites of the
+        re-render (draft 1 + draft 2 renders — a failed gate drafts anew) and
+        the re-check. The view keeps attempt 1 (no guard pass, noise unmeasurable -> the
         first) with fit_gate {ok False, chosen 1, 2 attempts, warning
         "Dressed back may be turned toward the camera (back check failed
         after 2 attempts)"}; the build leaves the back out (worker views
@@ -230,8 +222,8 @@ Expected, derived by hand from the brief:
     (b) front fails twice: one re-render (tpose_<osig>); result ok False,
         error starts "front view: the dressed image does not keep its view";
         no worker call; model bytes unchanged; status failed.
-    (c) noise gate scripted per fit attempt (generate_dressed_images view
-        "back", force): scores [2.4, 1.2] -> draft + attempt1 + attempt2,
+    (c) noise gate scripted per attempt (generate_dressed_images view
+        "back", force): scores [2.4, 1.2] -> draft 1 + draft 2,
         fit_gate {ok True, chosen 2}, no dressed warning; [2.4, 1.9] ->
         chosen 2 (the lower score), ok False, warning "Dressed back may be
         grainy (back check failed after 2 attempts)" = dressed_warnings.
@@ -371,10 +363,10 @@ VIEW = {
     "right": ("This is a strict right side profile view, the whole body in profile facing the right edge of the "
               "frame; keep it a side profile view, do not turn the figure toward the camera."),
 }
-# The whole fit prompt (user decision 2026-11-09; "and nothing else" since 2026-11-11).
-FIT_PROMPT = "edit the first image with what the person in the second image wears, and nothing else"
-# The back fit names its view (Task 11e, base_body.FIT_VIEW["back"]).
-FIT_BACK = FIT_PROMPT + "; a back view seen from behind, the back view stays a back view"
+# The composite stub's record (Task 11g: the real composite is smoke_view_composite.py).
+COMPOSITE_OK = {"version": 1, "rule": "outfit", "ok": True, "reasons": [], "iou": 0.99,
+                "coverage": {"score": 0.9, "region": 0.5}, "mask_share": 0.5, "seam_de": 3.0}
+COMPOSITES = []
 BASE_PX = {"front": (200, 10, 10), "back": (10, 200, 10), "left": (10, 10, 200), "right": (200, 200, 10)}
 
 
@@ -399,6 +391,7 @@ def main() -> int:
         discover_packages(plugins, force=True)
 
         from app.core import base_body, base_body_gates, expression_regen, extension_rig, glb_delivery, model3d, model_refs
+        from app.core import view_composite
         from app.blender import refine
         from app.models import inventory
         import app.models.character as character_module
@@ -547,6 +540,7 @@ def main() -> int:
             (extension_rig, "exposed_only_slots"): extension_rig.exposed_only_slots,
             (glb_delivery, "delivery_path"): glb_delivery.delivery_path,
             (character_module, "run_rembg"): character_module.run_rembg,
+            (view_composite, "compose"): view_composite.compose,
         }
 
         def rembg(data, model="u2net", **kw):
@@ -590,7 +584,15 @@ def main() -> int:
             SCRIPT_CALLS.append((operation, [g["id"] for g in params.get("groups", [])]))
             return {"applied": True, "data": {}}
 
+        def compose(base_view, draft, target, *, rule="outfit", background=None):
+            """The composite stand-in: the (opaque) draft copied onto the target, an ok record."""
+            COMPOSITES.append((Path(base_view).name, Path(draft).name, Path(draft).parent.name, rule,
+                               Path(target).parent.name))
+            Path(target).write_bytes(Path(draft).read_bytes())
+            return json.loads(json.dumps(COMPOSITE_OK))
+
         expression_regen.render_character_image = render
+        view_composite.compose = compose
         character_module.run_rembg = rembg
         refine.apply_script = apply_script
         model3d._auto_retexture = lambda *a, **k: None
@@ -651,47 +653,34 @@ def main() -> int:
             check("the pass asks the Build", REQUESTS, [("Demo", "outfit_change")])
             check("the Build's assemble step", build_model("Demo"), "")
             dressed_renders = [r for r in RENDERS if r["character"] == "Demo"]
-            check("front edit, back draft, back fit", [(r["stem"], r["dir"]) for r in dressed_renders],
-                  [(f"tpose_{osig}", "model_refs"), (f"tpose_back_{osig}", "drafts"),
-                   (f"tpose_back_{osig}", "attempt1")])
-            front_r, draft_r, fit_r = (dressed_renders + [{}] * 3)[:3]
+            check("front edit, back draft", [(r["stem"], r["dir"]) for r in dressed_renders],
+                  [(f"tpose_{osig}", "model_refs"), (f"tpose_back_{osig}", "draft1")])
+            front_r, draft_r = (dressed_renders + [{}] * 2)[:2]
             check("references", [r.get("reference_name") for r in dressed_renders],
-                  [f"tpose_{bsig}.png", f"tpose_{osig}.png", f"tpose_back_{bsig}.png"])
+                  [f"tpose_{bsig}.png", f"tpose_{osig}.png"])
             # Front edit and draft: their source on the 16 x 16 grey square at
             # offset (4, 4) (F14 g) — (4,4) is the source's corner: the base
             # front's transparent corner -> grey, the opaque draft stub's colour.
-            # Fit: the base back keeps its own matte (corner transparent -> black
-            # in RGB, (4,4) its pixel).
-            check("references on grey / on grey / cut out", [r.get("reference_px") for r in dressed_renders],
+            check("references on grey", [r.get("reference_px") for r in dressed_renders],
                   [((128, 128, 128), (128, 128, 128)),
-                   ((128, 128, 128), colour_of(f"tpose_{osig}")),
-                   ((0, 0, 0), BASE_PX["back"])])
-            # The opaque draft gets the matte stub (figure = the 4x4 centre)
-            # once, is scaled to the base figure's height 1 (the pixel (4,4)
-            # alone) and centred on its centre x 4.5 -> pasted at (4, 4).
-            check("fit second reference = the cut-out draft",
-                  (fit_r.get("extra_names"), fit_r.get("extra_parents"), fit_r.get("extra_px"), REMBG),
-                  ([f"tpose_back_{osig}.png"], ["draft"], [((0, 0, 0), colour_of(f"tpose_back_{osig}"))],
-                   ["birefnet-dis"]))
-            check("only the fit has a second reference",
-                  [bool(r.get("extra_reference_images")) for r in dressed_renders], [False, False, True])
+                   ((128, 128, 128), colour_of(f"tpose_{osig}"))])
+            check("one composite: base back + draft 1 -> attempt 1, rule outfit", COMPOSITES,
+                  [(f"tpose_back_{bsig}.png", f"tpose_back_{osig}.png", "draft1", "outfit", "attempt1")])
+            check("no extra reference on any render", [bool(r.get("extra_reference_images")) for r in dressed_renders],
+                  [False, False])
             check("front prompt", (front_r.get("bare_prompt", "").startswith("Keep the image exactly as it is"),
                                    "a fitted red cotton dress with white sneakers" in front_r.get("bare_prompt", "")),
                   (True, True))
             check("draft prompt", draft_r.get("bare_prompt"), base_body.draft_prompt("Demo", "back")[0])
             check("draft extra negative", draft_r.get("extra_negative"), base_body.draft_prompt("Demo", "back")[1])
             check("no character block on any dressed render", [r.get("style_character") is not None
-                                                               for r in dressed_renders], [False, False, False])
-            check("fit prompt", fit_r.get("bare_prompt"), FIT_BACK)
-            check("occasions", [r.get("occasion") for r in dressed_renders],
-                  ["outfit_front", "outfit_back_draft", "outfit_back"])
-            # The fit renders at the canvas size = the 8x8 base back (square
-            # T-pose aspect); front edit and draft at their square canvas 16 (F14 g).
+                                                               for r in dressed_renders], [False, False])
+            check("occasions", [r.get("occasion") for r in dressed_renders], ["outfit_front", "outfit_back_draft"])
+            # Front edit and draft render at their square canvas 16 (F14 g).
             check("render sizes", [(r.get("override_width"), r.get("override_height")) for r in dressed_renders],
-                  [(16, 16), (16, 16), (8, 8)])
-            check("use cases", [r.get("image_use_case") for r in dressed_renders],
-                  ["outfit_edit", "base_view_back", "outfit_fit"])
-            check("character loras", [r.get("character_loras") for r in dressed_renders], [True] * 3)
+                  [(16, 16), (16, 16)])
+            check("use cases", [r.get("image_use_case") for r in dressed_renders], ["outfit_edit", "base_view_back"])
+            check("character loras", [r.get("character_loras") for r in dressed_renders], [True] * 2)
             front_sha = hashlib.sha256((refs / f"tpose_{bsig}.png").read_bytes()).hexdigest()
             back_sha = hashlib.sha256((refs / f"tpose_back_{bsig}.png").read_bytes()).hexdigest()
             draft_file = refs / "drafts" / f"tpose_back_{osig}.png"
@@ -700,26 +689,26 @@ def main() -> int:
             # front's dress text of [2]; smoke_texture_body_reuse pins the rule.
             texture_keys = ("texture_signature", "dress_text")
             front_extra = dict(front_r.get("sidecar_extra") or {})
-            fit_extra = dict(fit_r.get("sidecar_extra") or {})
             check("front texture fields", (bool(base_body.is_texture_signature(front_extra.get("texture_signature"))),
                                            front_extra.get("dress_text")),
                   (True, "they now wear a fitted red cotton dress with white sneakers"))
-            check("fit names the front's texture", fit_extra.get("texture_signature"),
-                  front_extra.get("texture_signature"))
             check("front sidecar extra", {k: v for k, v in front_extra.items() if k not in texture_keys},
                   {"base_signature": bsig, "dressed": True, "base_image_sha256": front_sha})
-            check("fit sidecar extra", {k: v for k, v in fit_extra.items() if k not in texture_keys},
+            stored_back = json.loads((refs / f"tpose_back_{osig}.json").read_text())
+            check("the back names the front's texture", stored_back.get("texture_signature"),
+                  front_extra.get("texture_signature"))
+            check("back sidecar", {k: stored_back.get(k) for k in ("base_signature", "dressed", "base_image_sha256",
+                                                                   "back_draft", "back_draft_sha256", "fit")},
                   {"base_signature": bsig, "dressed": True, "base_image_sha256": back_sha,
                    "back_draft": draft_file.name,
                    "back_draft_sha256": hashlib.sha256(draft_file.read_bytes()).hexdigest()
-                   if draft_file.is_file() else None})
-            check("extra negatives", (front_r.get("extra_negative"), fit_r.get("extra_negative")),
-                  (negative, None))
-            check("back view flag", [r.get("back_view") for r in dressed_renders], [None, True, True])
+                   if draft_file.is_file() else None, "fit": "composite"})
+            check("back sidecar: the composite's record", stored_back.get("composite"), COMPOSITE_OK)
+            check("front extra negative", front_r.get("extra_negative"), negative)
+            check("back view flag", [r.get("back_view") for r in dressed_renders], [None, True])
             check("draft stored beside the refs", (draft_file.is_file(),
                                                    model_refs.find_ref_image("Demo", "tpose_back", osig)),
                   (True, refs / f"tpose_back_{osig}.png"))
-            stored_back = json.loads((refs / f"tpose_back_{osig}.json").read_text())
             check("fit gate record", ((stored_back.get("fit_gate") or {}).get("ok"),
                                       (stored_back.get("fit_gate") or {}).get("chosen"),
                                       (stored_back.get("fit_gate") or {}).get("warning")), (True, 1, None))
@@ -1099,8 +1088,8 @@ def main() -> int:
                 n_renders, n_calls = len(RENDERS), len(calls())
                 result = model3d.generate_for_current_outfit("Demo", force=True)
                 check("guarded run ok", result.get("ok"), True)
-                check("back re-rendered once: draft + fit", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
-                      [(f"tpose_back_{osig}", "drafts"), (f"tpose_back_{osig}", "attempt1")])
+                check("back re-rendered once: one draft", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
+                      [(f"tpose_back_{osig}", "draft1")])
                 runs = calls()[n_calls:]
                 check("one worker call", len(runs), 1)
                 if runs:
@@ -1115,17 +1104,16 @@ def main() -> int:
                 check("guard only dressed views", sorted(guard), ["back", "front"])
                 check("no warnings", meta.get("view_warnings"), [])
 
-                # The back stays turned: build check, both fit attempts of the
-                # re-render and the re-check fail (4 calls) -> the fit keeps
+                # The back stays turned: build check, both composites of the
+                # re-render and the re-check fail (4 calls) -> the view keeps
                 # attempt 1 with the gate warning, the build leaves the back out.
                 fails.clear()
                 fails.update({"back": 4})
                 n_renders, n_calls = len(RENDERS), len(calls())
                 result = model3d.generate_for_current_outfit("Demo", force=True)
                 check("turned back: run ok", result.get("ok"), True)
-                check("draft + two fit attempts", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
-                      [(f"tpose_back_{osig}", "drafts"), (f"tpose_back_{osig}", "attempt1"),
-                       (f"tpose_back_{osig}", "attempt2")])
+                check("two drafts", [(r["stem"], r["dir"]) for r in RENDERS[n_renders:]],
+                      [(f"tpose_back_{osig}", "draft1"), (f"tpose_back_{osig}", "draft2")])
                 runs = calls()[n_calls:]
                 if runs:
                     views = json.loads((runs[0] / "argv.json").read_text())["views"]
@@ -1154,7 +1142,7 @@ def main() -> int:
                 check("model untouched", model.read_bytes() == before, True)
                 check("status failed", base_body.outfit_info("Demo")["status"], "failed")
 
-                # (c) the noise gate: scripted scores per fit attempt.
+                # (c) the noise gate: scripted scores per attempt.
                 fails.clear()
                 scores = []
                 real_noise = base_body_gates.noise_gate
@@ -1173,8 +1161,8 @@ def main() -> int:
                         n_renders = len(RENDERS)
                         base_body.generate_dressed_images("Demo", pieces=state[0], items=state[1],
                                                           signature=osig, force=True, view="back")
-                        check(f"{label}: draft + two fits", [r["dir"] for r in RENDERS[n_renders:]],
-                              ["drafts", "attempt1", "attempt2"])
+                        check(f"{label}: two drafts", [r["dir"] for r in RENDERS[n_renders:]],
+                              ["draft1", "draft2"])
                         gate = json.loads((refs / f"tpose_back_{osig}.json").read_text()).get("fit_gate") or {}
                         check(f"{label}: gate", (gate.get("ok"), gate.get("chosen"),
                                                  [a["noise"]["score"] for a in gate.get("attempts") or []],

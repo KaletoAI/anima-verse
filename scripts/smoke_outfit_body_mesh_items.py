@@ -45,7 +45,8 @@ Expected, derived by hand from the rulings:
     The jacket is in the body: the delivered figure stands on the interim
     shape bI = the shape of {jacket, shoes, under} (its dress text names all
     three). The render step renders nothing (bI has no views yet); the build
-    renders bI's views (3 image jobs, the only ones), meshes + rigs bI (ONE
+    renders bI's views (2 image jobs — front edit + back draft, the back's
+    composite is CPU work since Task 11g — the only ones), meshes + rigs bI (ONE
     mesh + ONE rig job), and the outfit's views are copies of bI's (nothing
     painted: texture "", 0 worker runs, no texture stored). K's figure:
     shape bI, texture "", in_body [jacket, shoes, under], painted [], own
@@ -85,7 +86,7 @@ Expected, derived by hand from the rulings:
     the jacket own, its wanted shape (under + shoes) not built yet -> the
     plain body with under + shoes painted (rule 1). (Was: K stale, the
     rebuild carried the jacket on bK.)
-[5] A piece moved out of the body: vest in_body -> L built: 3 image jobs,
+[5] A piece moved out of the body: vest in_body -> L built: 2 image jobs,
     ONE mesh + ONE rig job on bOld (its in-body dress text has the vest,
     another key than bI), texture "" (nothing painted). The vest -> painted
     (the signature stays sigL): L stale "figure", its front made for another
@@ -256,6 +257,14 @@ def main() -> int:
         garments._run_locked = run_locked
         garments.fit_on_body = fit_on_body
         expression_regen.render_character_image = render
+        from app.core import view_composite
+
+        def compose(base_view, draft, target, *, rule="outfit", background=None):
+            """The composite stand-in (Task 11g; the real one: smoke_view_composite.py): the draft copied, ok."""
+            Path(target).write_bytes(Path(draft).read_bytes())
+            return {"rule": rule, "ok": True, "reasons": [], "iou": 0.99, "coverage": {"score": 0.9}}
+
+        view_composite.compose = compose
         charmod.run_rembg = rembg
         body_retexture.retexture = retexture
         service.get_image_service = lambda: FakeService()
@@ -530,7 +539,7 @@ def main() -> int:
         b_old = meta_l.get("body_id")
         check("L: the vest meshed into its own body", (result.get("ok"), jobs, hub, t_l, b_old != b_k,
                                                         "knitted green vest" in front_text(sig_l)),
-              (True, 3, [("mesh", b_old), ("rig", b_old)], "", True, True))
+              (True, 2, [("mesh", b_old), ("rig", b_old)], "", True, True))
         set_vest("painted")
         check("same signature", model_refs.current_outfit_state("Demo")[2], sig_l)
         check("vest painted: L stale (figure)", (model3d.find_model3d("Demo", sig_l),

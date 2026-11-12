@@ -45,11 +45,11 @@ Expected, derived by hand from the brief:
     image exactly as it is. Only change their clothing: they now wear only
     black jacket, worn open at the front (unzipped / unbuttoned), its front
     edges apart so the body or the layer underneath shows between them."
-    (F15 i-2); ``fit_prompt("worn", item_id=jacket,
-    state="open")[0]`` — the BACK — has no "worn open" and equals the closed
-    fit (Task 11e / F15 i-1: from behind an open piece looks closed; was:
-    contained "worn open"); closed: neither contains "worn open" nor "worn
-    closed" (A7).
+    (F15 i-2); ``draft_prompt(Demo, "worn", profile=open,
+    item_id=jacket)[0]`` — the BACK's draft (the fit prompt is gone with the
+    model fit, Task 11g) — has no "worn open" and equals the closed draft
+    (Task 11e / F15 i-1: from behind an open piece looks closed); closed:
+    neither contains "worn open" nor "worn closed" (A7).
 [3] Fits on "basesha": F_c (record without ``state``) at the closed fsig, F_o
     (``state: "open"``) at the open fsig. Profile closed -> F_c, open -> F_o;
     explicit ``state`` overrides the profile. Only F_c (F_o removed) + open ->
@@ -63,8 +63,9 @@ Expected, derived by hand from the brief:
     images, its own fsig). ``find_source`` with the profile closed ->
     that group; with the profile open (current = open fsig) -> None (the open
     inputs differ, ``edit_fsig_on`` check).
-[5] Nothing open built: ``run_estimate(state="open")`` -> hub_jobs 6 (worn 3 +
-    ghost 2 + mesh 1, ``HUB_JOBS["clothing:edit_chain"]``), steps all 5. The
+[5] Nothing open built: ``run_estimate(state="open")`` -> hub_jobs 5 (worn 2 —
+    front edit + back draft, the back's composite is CPU work since Task 11g
+    — + ghost 2 + mesh 1, ``HUB_JOBS["clothing:edit_chain"]``), steps all 5. The
     closed chain built (images accepted, prepared mesh, F_c with kind, the
     current ``FIT_VERSION`` and the prepared sha256) ->
     ``run_estimate(state="closed")`` hub_jobs 0, steps [].
@@ -218,15 +219,14 @@ def main() -> int:
                 "black jacket, worn open at the front (unzipped / unbuttoned), its front edges apart so the body "
                 "or the layer underneath shows between them.")
         check("edit prompt open", text.startswith(want), True)
-        fit_text = garment_clothing.fit_prompt("worn", item_id=jacket, state="open")[0]
-        # Task 11e (Ruling V1, F15 i-1): the back never says the open words — the open fit is the closed one.
-        check("fit prompt open", ("worn open" in fit_text,
-                                  fit_text == garment_clothing.fit_prompt("worn", item_id=jacket)[0]), (False, True))
+        back_text = garment_clothing.draft_prompt("Demo", "worn", profile=open_prof, item_id=jacket)[0]
+        closed_back = garment_clothing.draft_prompt("Demo", "worn", profile=prof(), item_id=jacket)[0]
+        # Task 11e (Ruling V1, F15 i-1): the back never says the open words — the open draft is the closed one.
+        check("back draft open", ("worn open" in back_text, back_text == closed_back), (False, True))
         closed_text = garment_clothing.edit_prompt("Demo", "worn", "front", profile=prof(), item_id=jacket)
         closed_text = closed_text[0] if isinstance(closed_text, tuple) else closed_text
-        closed_fit = garment_clothing.fit_prompt("worn", item_id=jacket)[0]
         check("closed says no state (A7)",
-              any(w in t for t in (closed_text, closed_fit) for w in ("worn open", "worn closed")), False)
+              any(w in t for t in (closed_text, closed_back) for w in ("worn open", "worn closed")), False)
 
         # --- [3] fits ----------------------------------------------------------------------------------------
         print("[3] fits")
@@ -279,8 +279,8 @@ def main() -> int:
         # --- [5] estimate ------------------------------------------------------------------------------------
         print("[5] estimate")
         est = garments.run_estimate("Demo", jacket, state="open")
-        check("open: 6 hub jobs", (est["steps"], est["hub_jobs"], est["refit"]),
-              (["worn", "ghost", "cutout", "mesh", "fit"], 6, False))
+        check("open: 5 hub jobs", (est["steps"], est["hub_jobs"], est["refit"]),
+              (["worn", "ghost", "cutout", "mesh", "fit"], 5, False))
         def build_chain(fsig, state=None):
             """The whole chain of one state built: images, prepared mesh, the fit of that mesh."""
             from app.core.garment_fit import FIT_VERSION

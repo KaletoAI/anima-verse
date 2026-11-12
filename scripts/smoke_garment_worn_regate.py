@@ -18,8 +18,9 @@ Usage:
 
 Throwaway storage + instance, a copy of the ``human`` package; no world, no
 hub, no GPU, no server. REAL: the gates, run_edit_step, garments.run_garment.
-Stubbed: the renderer (records every call; a draft or fit renders COLLAR,
-a ghost renders nothing), ``character.run_rembg`` (every pixel more than
+Stubbed: the renderer (records every call; a draft renders COLLAR, a ghost
+renders nothing; the worn back's second step is the REAL CPU composite of
+the draft onto the base back, Task 11g), ``character.run_rembg`` (every pixel more than
 2 away from grey 128 is figure), ``get_image_service`` (raises: no image job
 may reach it).
 
@@ -73,9 +74,10 @@ Fixture, W 1024 x H 1200 on grey 128, skin (200, 160, 140):
     record into the current version.
 [2] Drafted back, the next chain run (garments.run_garment, no steps): the
     worn front is accepted (COLLAR, record of the current gate), the back has
-    two stored fit attempts — try1 HIGH, try2 TINTED — with version-1 records
-    (no gate_version, refused for colour), fitted from the current front
-    (front_sha256). The run re-gates them: try1 refused "head changed",
+    two stored attempts — try1 HIGH, try2 TINTED — with version-1 records
+    (no gate_version, refused for colour), composited from a draft of the
+    current front (front_sha256; fit "composite", a composite record that
+    passed its checks — only such an attempt is re-gated since Task 11g). The run re-gates them: try1 refused "head changed",
     try2 accepted -> the final back = try2's file, attempt 2, gates.first
     refused / gates.second ok with regated_from 1, gate_version 2; the final
     record keeps front_sha256 / draft / draft_sha256 of try2. No worn render,
@@ -84,11 +86,14 @@ Fixture, W 1024 x H 1200 on grey 128, skin (200, 160, 140):
     ghost's, no longer the worn one).
 [3] Regenerate (steps "worn", view "back", force) on the same staging:
     the same re-gate, no worn render.
-[4] Stored attempts fitted from ANOTHER front (front_sha256 differs): not
-    re-gated -> draft + fit render ("worn bd", "worn b1"; the fit = COLLAR,
-    accepted, no regated_from).
+[4] Stored attempts drafted from ANOTHER front (front_sha256 differs): not
+    re-gated -> one draft ("worn bd1"), composited onto the base back
+    (COLLAR on BASE: the composite passes its checks), accepted at attempt
+    1, no regated_from, fit "composite".
+[4b] Stored attempts of the MODEL FIT of before Task 11g (no fit
+    "composite"), otherwise as [2]: not re-gated -> "worn bd1" rendered.
 [5] Stored attempts of the CURRENT version, refused: no re-gate — Regenerate
-    renders ("worn bd", "worn b1").
+    renders ("worn bd1").
 [6] Worn FRONT (an edit, not drafted): try1 TINTED with a version-1 record,
     no final -> run_edit_step accepts it with no render, regated_from 1.
 """
@@ -255,14 +260,15 @@ def main() -> int:
 
         def recorder(character_name, *, output_stem, **kw):
             g = kw["sidecar_extra"]["garment"]
-            key = f"{g['step']} {g['view'][0]}{g.get('attempt', 'd')}"
+            key = (f"{g['step']} {g['view'][0]}d{g.get('attempt')}" if g.get("stage") == "draft"
+                   else f"{g['step']} {g['view'][0]}{g.get('attempt', 'd')}")
             renders.append(key)
             if g["step"] == "ghost":
                 return None  # the steps after the worn view are not under test
             if g.get("stage") == "draft":
                 out = COLLAR  # a fresh render: its own frame
             else:
-                arr = COLLAR  # every fit renders the jacket back
+                arr = COLLAR  # every edit renders the jacket
                 out = np.full((kw["override_height"], kw["override_width"], 3), 128, dtype=np.uint8)
                 dy, dx = (out.shape[0] - arr.shape[0]) // 2, (out.shape[1] - arr.shape[1]) // 2
                 out[dy:dy + arr.shape[0], dx:dx + arr.shape[1]] = arr
@@ -282,7 +288,7 @@ def main() -> int:
         front = image("worn", "front")
         draft_name = garment_images.draft_path("Demo", jid, fsig, "worn").name
 
-        def stage(backs, *, front_sha=None, version=None):
+        def stage(backs, *, front_sha=None, version=None, composite=True):
             """The accepted worn front + stored back attempts (no final back)."""
             front.parent.mkdir(parents=True, exist_ok=True)
             front.write_bytes(png(COLLAR))
@@ -300,8 +306,11 @@ def main() -> int:
                     old["gate_version"] = version
                 gs.write_record(target.with_suffix(".json"), {
                     "garment": {"item_id": jid, "fsig": fsig, "step": "worn", "view": "back", "attempt": n,
-                                "stage": "fit"},
-                    "front_sha256": sha, "draft": draft_name, "draft_sha256": "d" * 64, "gate": old})
+                                "stage": "composite" if composite else "fit"},
+                    "front_sha256": sha, "draft": draft_name, "draft_sha256": "d" * 64, "gate": old,
+                    **({"fit": "composite", "composite": {"rule": "piece", "ok": True, "reasons": [], "iou": 0.99,
+                                                          "coverage": {"score": 0.9, "region": 0.2}}}
+                       if composite else {})})
             gs.record_failure("Demo", jid, fsig, step="worn", error="worn back refused — attempt 1: " + OLD_REASON)
 
         def check_regated(label):
@@ -342,16 +351,23 @@ def main() -> int:
         del renders[:]
         stage([HIGH, TINTED], front_sha="0" * 64)
         res = garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
-        check("draft + fit rendered", [k for k in renders if k.startswith("worn")], ["worn bd", "worn b1"])
+        check("one draft rendered", [k for k in renders if k.startswith("worn")], ["worn bd1"])
         record = gs.read_record(image("worn", "back").with_suffix(".json"))
-        check("fresh fit accepted", (record.get("accepted"), record.get("attempt"),
-                                     "regated_from" in (record.get("gates") or {}).get("first", {})), (True, 1, False))
+        check("fresh composite accepted", (record.get("accepted"), record.get("attempt"),
+                                           "regated_from" in (record.get("gates") or {}).get("first", {}),
+                                           record.get("fit")), (True, 1, False, "composite"))
+
+        print("[4b] attempts of the model fit (before Task 11g) are not re-gated")
+        del renders[:]
+        stage([HIGH, TINTED], composite=False)
+        res = garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
+        check("model fit: one draft rendered", [k for k in renders if k.startswith("worn")], ["worn bd1"])
 
         print("[5] current-version refusals render again")
         del renders[:]
         stage([HIGH, TINTED], version=gg.WORN_GATE_VERSION)
         res = garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
-        check("draft + fit rendered", [k for k in renders if k.startswith("worn")], ["worn bd", "worn b1"])
+        check("one draft rendered", [k for k in renders if k.startswith("worn")], ["worn bd1"])
 
         print("[6] worn front (an edit) re-gates too")
         del renders[:]

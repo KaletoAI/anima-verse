@@ -62,7 +62,7 @@ texture store 0 — fix round T12-F1, ruling F13 c) and the whole set
 shape = views (when missing) + ``model3d.mesh_hub_stages``; pieces / hair =
 ``run_estimate``; fits / assemble = 0. ``hub_jobs`` None as soon as one step
 is unknown (the note says which). It is an ESTIMATE of first attempts: a
-gate's retry (a view-guard re-render, a further fit attempt) is extra — the
+gate's retry (a view-guard re-render, a re-draft after a refused composite) is extra — the
 note says so ("N hub jobs (estimate, retries extra)").
 
 The run (``start``): one FIFO per character (a deque + one worker thread). A

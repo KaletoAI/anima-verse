@@ -16,8 +16,8 @@ written, 1-based, split on whitespace).
     backend_supports_negative("ignored") is False (nothing reaches the engine).
     folds_negative is False for every mesh-input occasion and the two edit
     occasions (tpose, tpose_view, base_front, base_view, outfit_front,
-    outfit_back_draft, outfit_back, outfit_side_draft, outfit_side,
-    garment_view, footwear_empty) and True for photo, profile, "" and an
+    outfit_back_draft, outfit_side_draft, garment_view, footwear_empty — the
+    fit occasions outfit_back / outfit_side are gone, Task 11g) and True for photo, profile, "" and an
     unknown id.
     ImageBackend.generate with a stub engine, prompt "p", negative "a, b":
       setting "ignored"            -> engine gets ("p", "")           (dropped)
@@ -33,7 +33,8 @@ written, 1-based, split on whitespace).
     with what the person in the second image wears, and nothing else" ->
     "edit <Picture 1> with what the person in <Picture 2> wears, and nothing
     else", "the reference image" -> "<Picture 1>"); on
-    "Qwen2.1-Turbo" the text is unchanged.
+    "Qwen2.1-Turbo" the text is unchanged. (The sample is the former fit
+    prompt, a literal here since the fit is gone — Task 11g.)
 [3] Style join: join_style_prompt("style", "prompt", None) == "style, prompt"
     (the historic single space is gone).
 [4] Base front: the natural style of use case base_front with the block
@@ -131,7 +132,7 @@ def main() -> int:
         check("auto keywords -> send", negative_mode("auto", "keywords", "SD1.5"), "send")
         check("ignored never reaches the engine", backend_supports_negative("ignored", "natural"), False)
         pipeline = ("tpose", "tpose_view", "base_front", "base_view", "outfit_front", "outfit_back_draft",
-                    "outfit_back", "outfit_side_draft", "outfit_side", "garment_view", "footwear_empty")
+                    "outfit_side_draft", "garment_view", "footwear_empty")
         check("no fold on the pipeline occasions", [folds_negative(o) for o in pipeline], [False] * len(pipeline))
         check("NO_FOLD_OCCASIONS is exactly that set", sorted(NO_FOLD_OCCASIONS), sorted(pipeline))
         check("fold elsewhere", [folds_negative(o) for o in ("photo", "profile", "", "unknown")], [True] * 4)
@@ -174,11 +175,12 @@ def main() -> int:
 
         print("[2] reference wording")
         from app.core.prompt_adapters import reference_wording
-        check("P-H3 fit", reference_wording(base_body.FIT_PROMPT, "P-H3-Image"),
+        two_images = "edit the first image with what the person in the second image wears, and nothing else"
+        check("P-H3 two images", reference_wording(two_images, "P-H3-Image"),
               "edit <Picture 1> with what the person in <Picture 2> wears, and nothing else")
         check("P-H3 reference image", reference_wording("as in the reference image, the third image", "p-h3-x"),
               "as in <Picture 1>, <Picture 3>")
-        check("Qwen untouched", reference_wording(base_body.FIT_PROMPT, "Qwen2.1-Turbo"), base_body.FIT_PROMPT)
+        check("Qwen untouched", reference_wording(two_images, "Qwen2.1-Turbo"), two_images)
 
         print("[3] style join")
         check("comma join", config.join_style_prompt("style", "prompt", None), "style, prompt")

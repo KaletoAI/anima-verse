@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Base body: dressed side views (opt-in) and the back refit (finding 6).
+"""Base body: dressed side views (opt-in) (finding 6); no back refit since
+Task 11g (Ruling C1: the model fit, and the refit of it, replaced by the CPU
+composite — ``smoke_view_composite.py``).
 
 Usage:
     ./.venv/bin/python scripts/smoke_base_body_side_views.py
@@ -11,7 +13,8 @@ and the render/matte stubs are those of ``scripts/smoke_base_body_outfit.py``
 ``colour_of(<stem name>)`` plus the sidecar render_character_image would
 write; the matte stub makes a 2 px transparent border; the base views
 ``tpose[_<view>]_<bsig>.png`` are transparent 8x8 with pixel (4,4) =
-``BASE_PX[view]``.
+``BASE_PX[view]``. ``view_composite.compose`` is stubbed: it copies the
+(opaque) draft onto the target and answers an ok record.
 
 The worker is a REAL subprocess (fake repo ``<tmp>/worker``). Per call ``n``
 (0-based over the whole run) it records argv, the ``--glb`` input, every
@@ -37,74 +40,50 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
     right added (given in the order right, left): the views in the order
     front, back, left, right, then --side-arm-margin 0.03 --arm-rig-glb
     /w/rig.glb. No rig given: only the margin flag.
-    view_delta_e: 5.87 from views.back.dressed_alignment; missing view ->
-    None; null value -> None; True -> None; proof None -> None.
 [3] Occasions and routing. outfit_side_draft: fields
     [outfit_side_draft_workflow, outfit_back_draft_workflow,
-    tpose_view_workflow], use case base_view_side, no ref slot; outfit_side:
-    [outfit_side_workflow, outfit_back_workflow, tpose_view_workflow], use
-    case outfit_fit, ref slot; both mesh-input occasions, both hints name
-    "Dressed side views"; the catalog order has them right after
-    outfit_back. Seeding (config._apply_file_migrations on routing
-    {tpose_view: [b*], outfit_back: [mine]}): outfit_back_draft [b*] (the
-    base-body seed), outfit_side_draft [b*], outfit_side [mine]; a second
-    _migrate_outfit_side_routing -> False; an existing outfit_side [own]
-    stays. Per character {tpose_view_workflow v, outfit_back_workflow ob}:
-    outfit_side ob, outfit_side_draft v; plus outfit_side_workflow os ->
-    os. BASE_BODY_MATCH_FIELDS ends with the two side fields.
+    tpose_view_workflow], use case base_view_side, no ref slot, a
+    mesh-input occasion, its hint names "Dressed side views"; outfit_side
+    is no occasion any more; the catalog order has the side draft right
+    after outfit_back_draft. Seeding (config._apply_file_migrations on
+    routing {tpose_view: [b*], outfit_back: [mine], outfit_side: [own]}):
+    outfit_back_draft [b*] (the base-body seed), outfit_side_draft [b*],
+    outfit_back / outfit_side dropped; a second
+    _migrate_outfit_side_routing -> False; an existing outfit_side_draft
+    [own] stays. Per character {tpose_view_workflow v,
+    outfit_back_draft_workflow od}: outfit_side_draft od; plus
+    outfit_side_draft_workflow sd -> sd. BASE_BODY_MATCH_FIELDS ends with
+    the two draft fields.
 [4] OFF (the default) — byte-identical to the front+back pipeline. Demo
     wears the dress (osig; dress and scarf are ``mesh_mode: painted`` — since
     9788164d the default is ``in_body``, which would mesh a shape), delta plan [2.9]: the tpose pass renders front
-    edit, back draft, back fit (dirs model_refs, drafts, attempt1;
-    occasions outfit_front, outfit_back_draft, outfit_back); the Build's
+    edit and back draft (dirs model_refs, draft1; occasions outfit_front,
+    outfit_back_draft) and composites the back once (base tpose_back_<bsig>,
+    the draft in draft1, rule outfit); the Build's
     assemble step (Task 8 of plan 2026-11-12-unified-worn-pieces; was: the
     auto hook after the pass) makes one worker call
     whose argv has views [back, front] and neither --side-arm-margin nor
-    --arm-rig-glb; dE 2.9 <= 4 -> no refit, the model sidecar has no
-    back_refit; model_refs info: views {back, face}, drafts {back} only;
+    --arm-rig-glb; the model sidecar has no back_refit; model_refs info: views {back, face}, drafts {back} only;
     a left render -> ValueError SIDE_VIEW_NOT_DRESSED;
     _require_dressable_view(left) -> 409.
-[5] Back refit (side views off, view_guard scripted ok for every image,
-    the noise gate unmeasurable on the opaque stubs -> passes):
-    (a) plan [5.87, 3.1], forced rebuild: the build renders ONE more fit
-        (dir "refit", occasion outfit_back, use case outfit_fit, reference
-        tpose_back_<bsig>.png, extra reference the stored back draft) and
-        runs the worker twice; the second call's back dressed input is the
-        refit, front unchanged. Kept: model atlas (n2, 7, 7) of that second
-        call, retexture_proof.call = n2; sidecar back_refit = {limit 4.0,
-        attempts [{unchanged_delta_e 5.87}, {gate {ok True, ...},
-        unchanged_delta_e 3.1}], chosen 2}; the published back sidecar
-        carries the same back_refit and fit_gate {chosen 2, 2 attempts,
-        ok True, warning None}.
-    (b) plan [5.87, 6.2]: refit rendered, two worker calls, chosen 1, model
-        atlas = the FIRST call's colour, back image bytes and sidecar
-        unchanged (no back_refit in it).
-    (c) plan [3.9]: no refit render, one worker call, no back_refit.
-    (d) plan [5.0] with the stored draft changed: back_refit {chosen 1,
-        skipped "the back's draft is missing or changed"}, no render, one
-        worker call.
-    (e) plan [5.0], view_guard fails for the refit image only: one refit
-        render, ONE worker call, attempts[1].error "turned toward the
-        camera", chosen 1.
+[5] No refit (side views off): a forced rebuild with plan [5.87] (above
+    the old refit limit 4.0) renders nothing, makes ONE worker call and the
+    model sidecar has no back_refit.
 [6] ON (dressed_side_views true, margin 0.05). Demo puts on the scarf
-    (sig2), plan [2.0] (the model by the Build's assemble step, as in [4]): the pass renders front edit, back draft, back fit,
-    left draft, left fit, right draft, right fit — dirs [model_refs, drafts,
-    attempt1, drafts, attempt1, drafts, attempt1], occasions [outfit_front,
-    outfit_back_draft, outfit_back, outfit_side_draft, outfit_side,
-    outfit_side_draft, outfit_side], use cases [outfit_edit, base_view_back,
-    outfit_fit, base_view_side, outfit_fit, base_view_side, outfit_fit],
-    back_view [None, True, True, False, False, False, False]. The left draft:
+    (sig2), plan [2.0] (the model by the Build's assemble step, as in [4]): the pass renders front edit, back draft,
+    left draft, right draft — dirs [model_refs, draft1, draft1, draft1],
+    occasions [outfit_front, outfit_back_draft, outfit_side_draft,
+    outfit_side_draft], use cases [outfit_edit, base_view_back,
+    base_view_side, base_view_side], back_view [None, True, False, False];
+    three composites (back, left, right: base tpose_<view>_<bsig>.png, the
+    draft tpose_<view>_<sig2>.png in draft1, rule outfit). The left draft:
     prompt = DRAFT_PROMPTS["left"] with DRAFT_OUTFIT_TEXT in its slot (review
     2026-11-11: an edit of the dressed front — the turn, then the outfit,
     then the frame), no character block (None),
-    reference = the dressed front tpose_<sig2>.png. The left fit: reference
-    tpose_left_<bsig>.png cut out ((0,0) black, (4,4) BASE_PX left), extra
-    = the cut-out left draft ((4,4) = colour_of("tpose_left_<sig2>")),
-    prompt FIT_PROMPT + "; a left side profile view, the side view stays a
-    side view" (Task 11e: the fit names its view; the back refit FIT_BACK),
-    size 8 x 8, sidecar_extra {base_signature, dressed,
-    base_image_sha256 = sha(tpose_left_<bsig>.png), left_draft = its name,
-    left_draft_sha256}. Stored: tpose_left/right_<sig2> with fit_gate ok,
+    reference = the dressed front tpose_<sig2>.png. The stored left view's
+    sidecar: base_signature, dressed, base_image_sha256 =
+    sha(tpose_left_<bsig>.png), left_draft = its name, left_draft_sha256,
+    fit "composite". Stored: tpose_left/right_<sig2> with fit_gate ok,
     the drafts in drafts/. One worker call: views [back, front, left,
     right], argv ends with --side-arm-margin 0.05 --arm-rig-glb <file>,
     the recorded rig file = the rigged base bytes; the model sidecar
@@ -126,7 +105,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from smoke_base_body_outfit import (BASE_PX, FIT_BACK, FIT_PROMPT, colour_of, make_glb,  # noqa: E402
+from smoke_base_body_outfit import (BASE_PX, COMPOSITE_OK, colour_of, make_glb,  # noqa: E402
                                     pixel, png)
 
 FAILS = []
@@ -177,7 +156,7 @@ Path(a[a.index("--proof") + 1]).write_text(json.dumps(
     {{"call": n, "views": {{"back": {{"dressed_alignment": {{"unchanged_delta_e": delta}}}}}}}}))
 '''
 
-RENDERS, REMBG = [], []
+RENDERS, REMBG, COMPOSITES = [], [], []
 
 
 def main() -> int:
@@ -201,7 +180,7 @@ def main() -> int:
         discover_packages(plugins, force=True)
 
         from app.core import (base_body, body_retexture, character_ops, config_scope, expression_regen,
-                              extension_rig, glb_delivery, model3d, model_refs)
+                              extension_rig, glb_delivery, model3d, model_refs, view_composite)
         from app.core.config_schema import SECTIONS, field_default
         from app.blender import refine
         from app.imagegen import occasions, routing
@@ -250,52 +229,41 @@ def main() -> int:
         argv = body_retexture.build_argv(Path("/py"), w / "in.glb", four, w / "o.glb", w / "p.json", w / "a.png",
                                          side_arm_margin=0.03)
         check("no rig: margin only", argv[-2:], ["--side-arm-margin", "0.03"])
-        proof = {"views": {"back": {"dressed_alignment": {"unchanged_delta_e": 5.87}}}}
-        check("delta", base_body.view_delta_e(proof, "back"), 5.87)
-        check("delta missing view", base_body.view_delta_e(proof, "front"), None)
-        check("delta null", base_body.view_delta_e(
-            {"views": {"back": {"dressed_alignment": {"unchanged_delta_e": None}}}}, "back"), None)
-        check("delta bool", base_body.view_delta_e(
-            {"views": {"back": {"dressed_alignment": {"unchanged_delta_e": True}}}}, "back"), None)
-        check("delta no proof", base_body.view_delta_e(None, "back"), None)
 
         # --- [3] occasions + routing ---------------------------------------------
         print("[3] occasions")
-        sd, sf = occasions.OCCASIONS["outfit_side_draft"], occasions.OCCASIONS["outfit_side"]
+        sd = occasions.OCCASIONS["outfit_side_draft"]
         check("side draft fields", occasions.spec_fields(sd),
               ["outfit_side_draft_workflow", "outfit_back_draft_workflow", "tpose_view_workflow"])
-        check("side fit fields", occasions.spec_fields(sf),
-              ["outfit_side_workflow", "outfit_back_workflow", "tpose_view_workflow"])
-        check("use cases", (sd.get("style_use_cases"), sf.get("style_use_cases")), (["base_view_side"], ["outfit_fit"]))
-        check("ref slot", (bool(sd.get("needs_ref_slot")), bool(sf.get("needs_ref_slot"))), (False, True))
-        check("mesh input", ("outfit_side_draft" in occasions.MESH_INPUT_OCCASIONS,
-                             "outfit_side" in occasions.MESH_INPUT_OCCASIONS), (True, True))
-        check("hints", ("Dressed side views" in sd.get("hint", ""), "Dressed side views" in sf.get("hint", "")),
-              (True, True))
+        check("use case", sd.get("style_use_cases"), ["base_view_side"])
+        check("ref slot", bool(sd.get("needs_ref_slot")), False)
+        check("mesh input", "outfit_side_draft" in occasions.MESH_INPUT_OCCASIONS, True)
+        check("hint", "Dressed side views" in sd.get("hint", ""), True)
+        check("no side fit occasion", "outfit_side" in occasions.OCCASIONS, False)
         ids = occasions.occasion_ids()
-        i = ids.index("outfit_back")
-        check("catalog order", ids[i:i + 3], ["outfit_back", "outfit_side_draft", "outfit_side"])
-        union = {"image_generation": {"routing": {"tpose_view": ["b*"], "outfit_back": ["mine"]}}}
+        i = ids.index("outfit_back_draft")
+        check("catalog order", ids[i:i + 2], ["outfit_back_draft", "outfit_side_draft"])
+        union = {"image_generation": {"routing": {"tpose_view": ["b*"], "outfit_back": ["mine"],
+                                                  "outfit_side": ["own"]}}}
         config._apply_file_migrations(union)
         r = union["image_generation"]["routing"]
-        check("seeded", [r.get(k) for k in ("outfit_back_draft", "outfit_side_draft", "outfit_side")],
-              [["b*"], ["b*"], ["mine"]])
+        check("seeded", [r.get(k) for k in ("outfit_back_draft", "outfit_side_draft")], [["b*"], ["b*"]])
+        check("fit chains dropped", ("outfit_back" in r, "outfit_side" in r), (False, False))
         check("second run unchanged", config._migrate_outfit_side_routing(union), False)
-        own = {"image_generation": {"routing": {"outfit_back": ["x"], "outfit_side": ["own"]}}}
+        own = {"image_generation": {"routing": {"outfit_back_draft": ["x"], "outfit_side_draft": ["own"]}}}
         config._migrate_outfit_side_routing(own)
-        check("own chain kept", own["image_generation"]["routing"]["outfit_side"], ["own"])
+        check("own chain kept", own["image_generation"]["routing"]["outfit_side_draft"], ["own"])
         real_profile = character_module.get_character_profile
-        record = {"tpose_view_workflow": "v", "outfit_back_workflow": "ob"}
+        record = {"tpose_view_workflow": "v", "outfit_back_draft_workflow": "od"}
         character_module.get_character_profile = lambda name: {"outfit_imagegen": dict(record)}
         try:
-            check("fallbacks", [routing._character_spec(occasions.OCCASIONS[o], "Demo")
-                                for o in ("outfit_side", "outfit_side_draft")], ["ob", "v"])
-            record["outfit_side_workflow"] = "os"
-            check("own field", routing._character_spec(sf, "Demo"), "os")
+            check("fallback", routing._character_spec(sd, "Demo"), "od")
+            record["outfit_side_draft_workflow"] = "sd"
+            check("own field", routing._character_spec(sd, "Demo"), "sd")
         finally:
             character_module.get_character_profile = real_profile
         check("match fields", character_ops.BASE_BODY_MATCH_FIELDS[-2:],
-              ("outfit_side_draft_workflow", "outfit_side_workflow"))
+              ("outfit_back_draft_workflow", "outfit_side_draft_workflow"))
 
         # --- fixtures ---------------------------------------------------------------
         worker = root / "worker"
@@ -372,6 +340,7 @@ def main() -> int:
             (glb_delivery, "delivery_path"): glb_delivery.delivery_path,
             (character_module, "run_rembg"): character_module.run_rembg,
             (base_body, "view_guard"): base_body.view_guard,
+            (view_composite, "compose"): view_composite.compose,
         }
 
         def rembg(data, model="u2net", **kw):
@@ -388,12 +357,8 @@ def main() -> int:
 
         def render(character_name, *, output_stem, equipped_pieces, equipped_items, **kw):
             ref = kw.get("reference_image")
-            extras = kw.get("extra_reference_images") or []
             RENDERS.append({"stem": Path(output_stem).name, "dir": Path(output_stem).parent.name, **kw,
                             "reference_name": ref.name if ref else None,
-                            "extra_names": [Path(x).name for x in extras],
-                            "extra_px": [(pixel(Path(x).read_bytes(), (0, 0)), pixel(Path(x).read_bytes()))
-                                         for x in extras],
                             "reference_px": (pixel(Path(ref).read_bytes(), (0, 0)), pixel(Path(ref).read_bytes()))
                             if ref else None})
             target = Path(str(output_stem) + ".png")
@@ -411,7 +376,14 @@ def main() -> int:
             ok = Path(path).parent.name not in guard_fail_dirs
             return {"ok": ok, "scores": {}, "best": view if ok else "front"}
 
+        def compose(base_view, draft, target, *, rule="outfit", background=None):
+            """The composite stand-in: the (opaque) draft copied onto the target, an ok record."""
+            COMPOSITES.append((Path(base_view).name, Path(draft).name, Path(draft).parent.name, rule))
+            Path(target).write_bytes(Path(draft).read_bytes())
+            return json.loads(json.dumps(COMPOSITE_OK))
+
         expression_regen.render_character_image = render
+        view_composite.compose = compose
         character_module.run_rembg = rembg
         refine.apply_script = lambda *a, **k: {"applied": True, "data": {}}
         model3d._auto_retexture = lambda *a, **k: None
@@ -470,8 +442,10 @@ def main() -> int:
             model_refs._run_generation("Demo", "tpose")
             wait_idle()
             check("the Build's assemble step", build_model(), "")
-            check("three renders", [(r["dir"], r.get("occasion")) for r in RENDERS],
-                  [("model_refs", "outfit_front"), ("drafts", "outfit_back_draft"), ("attempt1", "outfit_back")])
+            check("two renders", [(r["dir"], r.get("occasion")) for r in RENDERS],
+                  [("model_refs", "outfit_front"), ("draft1", "outfit_back_draft")])
+            check("one composite", COMPOSITES,
+                  [(f"tpose_back_{bsig}.png", f"tpose_back_{osig}.png", "draft1", "outfit")])
             runs = calls()
             check("one worker call", len(runs), 1)
             if runs:
@@ -481,7 +455,7 @@ def main() -> int:
                       (False, False))
             model = model_dir / f"{osig}.glb"
             meta = model3d._read_sidecar(model)
-            check("no refit at dE 2.9", "back_refit" in meta, False)
+            check("no back_refit", "back_refit" in meta, False)
             info = model_refs.get_model_refs_info("Demo")
             check("info views", sorted(info["views"]), ["back", "face"])
             check("info drafts", {k: (v or {}).get("filename") for k, v in info["drafts"].items()},
@@ -495,84 +469,15 @@ def main() -> int:
             check("route refuses left", dressable("left"), (409, base_body.SIDE_VIEW_NOT_DRESSED))
             check("no side dressed image", base_body.dressed_image("Demo", "left", osig, bsig), None)
 
-            # --- [5] back refit -------------------------------------------------------
-            print("[5] back refit")
-            back_png = refs / f"tpose_back_{osig}.png"
-            back_json = back_png.with_suffix(".json")
-            draft_png = refs / "drafts" / f"tpose_back_{osig}.png"
-
-            def rebuild(values):
-                plan(values)
-                start_calls, start_renders = len(calls()), len(RENDERS)
-                result = model3d.generate_for_current_outfit("Demo", force=True)
-                check(f"rebuild {values} ok", result.get("ok"), True)
-                return calls()[start_calls:], RENDERS[start_renders:], model3d._read_sidecar(model)
-
-            # (a) kept
-            new_calls, new_renders, meta = rebuild([5.87, 3.1])
-            check("(a) one refit render", [(r["dir"], r.get("occasion"), r.get("image_use_case"))
-                                           for r in new_renders], [("refit", "outfit_back", "outfit_fit")])
-            if new_renders:
-                fr = new_renders[0]
-                check("(a) refit references", (fr["reference_name"], fr["extra_names"], fr.get("bare_prompt")),
-                      (f"tpose_back_{bsig}.png", [f"tpose_back_{osig}.png"], FIT_BACK))
-            check("(a) two worker calls", len(new_calls), 2)
-            if len(new_calls) == 2:
-                n2 = int(new_calls[1].name)
-                second_argv = argv_of(new_calls[1])["argv"]
-                back_arg = next((x for x in second_argv if x.startswith("back=")), "")
-                check("(a) second call gets the refit back",
-                      (sorted(argv_of(new_calls[1])["views"]), Path(back_arg[5:].split(",")[0]).parent.name),
-                      (["back", "front"], "refit"))
-                check("(a) front input unchanged", (new_calls[1] / "front_dressed.png").read_bytes(),
-                      (new_calls[0] / "front_dressed.png").read_bytes())
-                check("(a) refit kept: atlas + proof", (atlas_call(model), (meta.get("retexture_proof") or {})
-                                                        .get("call")), (n2, n2))
-                br = meta.get("back_refit") or {}
-                check("(a) back_refit", (br.get("limit"), br.get("chosen"),
-                                         [x.get("unchanged_delta_e") for x in br.get("attempts") or []],
-                                         ((br.get("attempts") or [{}, {}])[1].get("gate") or {}).get("ok")),
-                      (4.0, 2, [5.87, 3.1], True))
-                stored_back = json.loads(back_json.read_text())
-                gate = stored_back.get("fit_gate") or {}
-                check("(a) published back", ((stored_back.get("back_refit") or {}).get("chosen"),
-                                             gate.get("chosen"), len(gate.get("attempts") or []),
-                                             gate.get("ok"), gate.get("warning")), (2, 2, 2, True, None))
-            check("(a) no staging left", sorted(p.name for p in refs.iterdir() if p.name.startswith(".")), [])
-
-            # (b) not better
-            before = (back_png.read_bytes(), back_json.read_text())
-            new_calls, new_renders, meta = rebuild([5.87, 6.2])
-            check("(b) refit rendered, two calls", ([r["dir"] for r in new_renders], len(new_calls)),
-                  (["refit"], 2))
-            br = meta.get("back_refit") or {}
-            check("(b) first kept", (br.get("chosen"), [x.get("unchanged_delta_e") for x in br.get("attempts") or []]),
-                  (1, [5.87, 6.2]))
-            if new_calls:
-                check("(b) atlas of the first call", atlas_call(model), int(new_calls[0].name))
-            check("(b) back unchanged", (back_png.read_bytes(), back_json.read_text()), before)
-
-            # (c) below the limit
-            new_calls, new_renders, meta = rebuild([3.9])
-            check("(c) no refit", (len(new_renders), len(new_calls), "back_refit" in meta), (0, 1, False))
-
-            # (d) draft changed
-            draft_bytes = draft_png.read_bytes()
-            draft_png.write_bytes(png((1, 1, 1)))
-            new_calls, new_renders, meta = rebuild([5.0])
-            br = meta.get("back_refit") or {}
-            check("(d) skipped", (br.get("chosen"), br.get("skipped"), len(new_renders), len(new_calls)),
-                  (1, "the back's draft is missing or changed", 0, 1))
-            draft_png.write_bytes(draft_bytes)
-
-            # (e) refit turned toward the camera
-            guard_fail_dirs.add("refit")
-            new_calls, new_renders, meta = rebuild([5.0])
-            guard_fail_dirs.clear()
-            br = meta.get("back_refit") or {}
-            check("(e) turned refit dropped", (len(new_renders), len(new_calls), br.get("chosen"),
-                                               (br.get("attempts") or [{}, {}])[1].get("error")),
-                  (1, 1, 1, "turned toward the camera"))
+            # --- [5] no refit ---------------------------------------------------------
+            print("[5] no refit")
+            plan([5.87])
+            start_calls, start_renders = len(calls()), len(RENDERS)
+            result = model3d.generate_for_current_outfit("Demo", force=True)
+            meta = model3d._read_sidecar(model)
+            check("dE 5.87: one worker call, no render, no back_refit",
+                  (result.get("ok"), len(calls()) - start_calls, len(RENDERS) - start_renders, "back_refit" in meta),
+                  (True, 1, 0, False))
 
             # --- [6] on ----------------------------------------------------------------
             print("[6] side views on")
@@ -585,20 +490,19 @@ def main() -> int:
             wait_idle()
             check("the Build's assemble step", build_model(), "")
             rs = RENDERS[start_renders:]
-            check("seven renders", [r["dir"] for r in rs],
-                  ["model_refs", "drafts", "attempt1", "drafts", "attempt1", "drafts", "attempt1"])
+            check("four renders", [r["dir"] for r in rs], ["model_refs", "draft1", "draft1", "draft1"])
             check("occasions", [r.get("occasion") for r in rs],
-                  ["outfit_front", "outfit_back_draft", "outfit_back", "outfit_side_draft", "outfit_side",
-                   "outfit_side_draft", "outfit_side"])
+                  ["outfit_front", "outfit_back_draft", "outfit_side_draft", "outfit_side_draft"])
             check("use cases", [r.get("image_use_case") for r in rs],
-                  ["outfit_edit", "base_view_back", "outfit_fit", "base_view_side", "outfit_fit", "base_view_side",
-                   "outfit_fit"])
-            check("back_view", [r.get("back_view") for r in rs], [None, True, True, False, False, False, False])
+                  ["outfit_edit", "base_view_back", "base_view_side", "base_view_side"])
+            check("back_view", [r.get("back_view") for r in rs], [None, True, False, False])
             check("stems", [r["stem"] for r in rs],
-                  [f"tpose_{sig2}", f"tpose_back_{sig2}", f"tpose_back_{sig2}", f"tpose_left_{sig2}",
-                   f"tpose_left_{sig2}", f"tpose_right_{sig2}", f"tpose_right_{sig2}"])
-            if len(rs) == 7:
-                ld, lf = rs[3], rs[4]
+                  [f"tpose_{sig2}", f"tpose_back_{sig2}", f"tpose_left_{sig2}", f"tpose_right_{sig2}"])
+            check("three composites", COMPOSITES[-3:],
+                  [(f"tpose_{v}_{bsig}.png", f"tpose_{v}_{sig2}.png", "draft1", "outfit")
+                   for v in ("back", "left", "right")])
+            if len(rs) == 4:
+                ld = rs[2]
                 check("left draft prompt", ld.get("bare_prompt"),
                       base_body.DRAFT_PROMPTS["left"].format(outfit=base_body.DRAFT_OUTFIT_TEXT))
                 check("left draft prompt carries the outfit text after the turn",
@@ -607,22 +511,18 @@ def main() -> int:
                       True)
                 check("left draft block", ld.get("style_character"), None)
                 check("left draft reference", ld["reference_name"], f"tpose_{sig2}.png")
-                check("left fit references", (lf["reference_name"], lf["reference_px"], lf["extra_names"],
-                                              lf["extra_px"]),
-                      (f"tpose_left_{bsig}.png", ((0, 0, 0), BASE_PX["left"]), [f"tpose_left_{sig2}.png"],
-                       [((0, 0, 0), colour_of(f"tpose_left_{sig2}"))]))
-                check("left fit prompt + size", (lf.get("bare_prompt"), lf.get("override_width"),
-                                                 lf.get("override_height")),
-                      (FIT_PROMPT + "; a left side profile view, the side view stays a side view", 8, 8))
                 left_draft = refs / "drafts" / f"tpose_left_{sig2}.png"
+                stored_left = json.loads((refs / f"tpose_left_{sig2}.json").read_text())
                 # Texture fields (plan 2026-11-10) checked by smoke_texture_body_reuse.
-                check("left fit sidecar extra", {k: v for k, v in (lf.get("sidecar_extra") or {}).items()
-                                                 if k not in ("texture_signature", "dress_text")},
+                check("left sidecar", {k: stored_left.get(k) for k in ("base_signature", "dressed",
+                                                                        "base_image_sha256", "left_draft",
+                                                                        "left_draft_sha256", "fit")},
                       {"base_signature": bsig, "dressed": True,
                        "base_image_sha256": hashlib.sha256((refs / f"tpose_left_{bsig}.png").read_bytes())
                        .hexdigest(),
                        "left_draft": left_draft.name,
-                       "left_draft_sha256": hashlib.sha256(left_draft.read_bytes()).hexdigest()})
+                       "left_draft_sha256": hashlib.sha256(left_draft.read_bytes()).hexdigest(),
+                       "fit": "composite"})
             for v in ("left", "right"):
                 side = json.loads((refs / f"tpose_{v}_{sig2}.json").read_text())
                 check(f"{v} stored with fit gate", ((side.get("fit_gate") or {}).get("ok"),

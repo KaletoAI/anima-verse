@@ -182,10 +182,15 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
     order). cut_out on an all-grey accepted ghost -> ValueError "No garment
     found in the ghost front image".
 [6] Chain run (garments.run_garment; worn: the front first, its back drafted
-    from it — "worn bd" = the draft, "worn b1" = the fit; ghost: the back first):
+    from it — "worn bd1" = the draft of attempt 1, composited onto the base
+    back on the CPU (Task 11g: no fit render; the composite of WORN onto BASE
+    passes); ghost: the back first):
     A: back ghost GHOST(733), every front ghost GHOST(759) -> renders worn f1,
-       worn bd, worn b1, ghost b1, ghost f1, ghost f2 (both fronts refused with
-       the hems reason against the back) -> {ok False, step ghost, gates.view
+       worn bd1, ghost b1, ghost f1, ghost f2 (both fronts refused with the
+       hems reason against the back); the draft's prompt names the fragment
+       ("wearing only a knee-length green linen dress with short sleeves
+       exactly as on the person in the reference image"), occasion
+       outfit_back_draft; the accepted worn back records fit "composite" -> {ok False, step ghost, gates.view
        front}; the item's prompt_fragment is untouched (no description
        refresh for clothing).
     B: run again, the front GHOST(733) -> one render ghost f1, ok True, ran
@@ -559,7 +564,8 @@ def main() -> int:
 
         def recorder(character_name, *, output_stem, **kw):
             g = kw["sidecar_extra"]["garment"]
-            key = f"{g['step']} {g['view'][0]}{g.get('attempt', 'd')}"
+            key = (f"{g['step']} {g['view'][0]}d{g.get('attempt')}" if g.get("stage") == "draft"
+                   else f"{g['step']} {g['view'][0]}{g.get('attempt', 'd')}")
             renders.append(key)
             prompts[key] = kw
             queue = [] if g.get("stage") == "draft" else plan.get((g["step"], g["view"])) or []
@@ -624,18 +630,19 @@ def main() -> int:
         plan[("ghost", "back")] = [SHORT]
         plan[("ghost", "front")] = [GHOST, GHOST, GHOST]
         res = garments.run_garment("Demo", did)
-        check("A renders", renders, ["worn f1", "worn bd", "worn b1", "ghost b1", "ghost f1", "ghost f2"])
+        check("A renders", renders, ["worn f1", "worn bd1", "ghost b1", "ghost f1", "ghost f2"])
         gates = res.get("gates") or {}
         check("A refused at ghost front", (res.get("ok"), res.get("step"), gates.get("view")),
               (False, "ghost", "front"))
         check("A reasons", [a.get("reasons") for a in gates.get("attempts") or []], [[HEM_REASON], [HEM_REASON]])
-        check("A back fit prompt names the fragment", (prompts["worn b1"]["bare_prompt"],
-                                                     prompts["worn b1"].get("bare_prompt_keywords")),
-              ("edit the first image with the clothes from the second image: the person wears only a knee-length "
-               "green linen dress with short sleeves, add no other clothing beyond that, the rest of the body "
-               "stays exactly as in the first image; a back view seen from behind, the back view stays a back view",
-               "back view, seen from behind, a knee-length green linen dress with short sleeves, only these "
-               "clothes, no other clothing, body unchanged from the first image"))
+        check("A back draft prompt names the fragment",
+              ("wearing only a knee-length green linen dress with short sleeves exactly as on the person in the "
+               "reference image" in prompts["worn bd1"]["bare_prompt"], prompts["worn bd1"]["occasion"]),
+              (True, "outfit_back_draft"))
+        worn_back = gs.read_record(gs.garment_path("Demo", did, fsig, "image", step="worn", view="back")
+                                   .with_suffix(".json"))
+        check("A worn back: the composite", (worn_back.get("accepted"), worn_back.get("fit"),
+                                             (worn_back.get("composite") or {}).get("ok")), (True, "composite", True))
         check("A ghost prompt", prompts["ghost f1"]["bare_prompt"], GHOST_PROMPT)
         check("A fragment untouched", inventory.get_item(did).get("prompt_fragment"), FRAGMENT)
         del renders[:]

@@ -299,7 +299,7 @@ def main() -> int:
         check("speck below the kept-part size: refused", (speck["ok"], speck["garment_share"]), (False, 0.0))
 
         print("[2] worn drift of an edit")
-        check("drift limits", (gg.OUTSIDE_DRIFT_PX, gg.FIT_OUTSIDE_DRIFT_PX), (2.0, 2.0))
+        check("drift limit", gg.OUTSIDE_DRIFT_PX, 2.0)
         seam = worn(gg, THIN, SEAM)
         check("seam 1.71 px: ok", (seam["ok"], seam["outside_outline"], seam["outside_xor"], seam["outside_drift_px"],
                                    seam["outside_xor_limit"]), (True, 1796, 0.025, 1.71, 0.0292))

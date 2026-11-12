@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 from types import MappingProxyType
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Optional, Set, Tuple
 import uuid
 
 from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
@@ -876,7 +876,6 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            sidecar_extra: Optional[Dict[str, Any]] = None,
                            character_loras: bool = False,
                            postprocess: bool = True,
-                           extra_reference_images: Optional[List[Path]] = None,
                            style_character: Optional[str] = None,
                            raise_load: bool = False,
                            crop_back_to: Optional[Tuple[Any, Tuple[int, int], Tuple[int, int]]] = None
@@ -894,10 +893,6 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``character_loras`` lets a ``bare_prompt`` render carry the character's
     own LoRAs (``outfit_imagegen.loras``, replaced by ``tpose_loras`` on the
     mesh-input occasions, mesh-part filtered) — never slot LoRAs.
-    ``extra_reference_images`` slot further images of the character's
-    model_refs directory AFTER ``reference_image`` (image 2, 3, …); a routed
-    backend without enough reference slots is not applicable and the
-    routing moves on (``service.generate_from_input``).
     ``style_character`` is the character block for the use-case style's
     ``{character}`` slot (``config.fill_character_slot``; the base-body
     views) — the final prompt then reads style, block, rest of the style,
@@ -1125,8 +1120,6 @@ def render_character_image(character_name: str, *, output_stem: Path,
         payload["prompt_by_family"] = {"keywords": bare_prompt_keywords}
     if reference_image is not None:
         payload["reference_image_override"] = str(reference_image)
-    if extra_reference_images:
-        payload["extra_reference_images"] = [str(p) for p in extra_reference_images]
 
     if outfit_w:
         payload["override_width"] = outfit_w

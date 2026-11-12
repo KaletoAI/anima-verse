@@ -14,14 +14,16 @@ exist, the outfit model's recorded figure); the producers record their calls
 and change the world as the real ones would. [0] and [7] use the real code.
 
 Stub constants: ``dressed_views()`` = front + back, so ``dressed_view_jobs()``
-= 1 + 2·(2 − 1) = 3; ``mesh_hub_stages`` = [mesh, rig] (2); the skin step is
+= 1 + (2 − 1) = 2 (the front edit + one draft per other view; its composite
+onto the base view is CPU, Task 11g — was 1 + 2·(2 − 1) = 3 with the model
+fit); ``mesh_hub_stages`` = [mesh, rig] (2); the skin step is
 off (``base_skin.enabled`` False). Pieces: Blouse (painted), Coat (in_body),
 Tailored Black (``trousers``, own mesh; its chain ``run_estimate`` = 6 hub
 jobs until it is meshed).
 
 Expected, by hand from the brief's cost rules (plain body =
-``base_rebuild_steps`` of the refresh plan; interim / texture = 3 when their
-views are missing, else 0; shape = views 3 when its views are missing + mesh
+``base_rebuild_steps`` of the refresh plan; interim / texture = 2 when their
+views are missing, else 0; shape = views 2 when its views are missing + mesh
 + rig; pieces / hair = ``run_estimate``; fits / assemble = 0; a rebuilt plain
 body makes every view and the stored shape count as missing):
 
@@ -29,23 +31,21 @@ body makes every view and the stored shape count as missing):
     ``missing``, views front/back/left/right, model True; without
     ``missing`` → reason "" (the improvement's roster is unchanged). Views
     current, no base model → ``missing``, views [], model True.
-    ``dressed_view_jobs()`` == 3 (front + back), 7 with the side views on;
-    ``rebuild_cost`` of an outfit whose shape and views are both missing
-    still answers 3 + 3 + 2 = 8 through the helper.
+    ``dressed_view_jobs()`` == 2 (front + back), 4 with the side views on
+    (1 + 3 drafts).
 [1] Everything built → ``plan == []``, ``cost.hub_jobs == 0``, GET status
     ``up_to_date``.
 [2] Base missing + coat in_body + trousers own (no mesh) + blouse painted →
     plain_body (views 4 + mesh + rig = 6), interim (ruling A11, task 11c-2:
     the trousers are in the body meanwhile, so the interim is the shape
-    INTERIM of {coat, trousers}, not stored: its views 3 + mesh + rig 2 +
-    texture views 3 = 8; was: interim texture 3 with the trousers painted),
-    shape (3 + 2 = 5), pieces trousers (6), texture (3), fits (0), assemble
-    (0) → ``hub_jobs == 28`` (was 23), in that order; shape and texture
+    INTERIM of {coat, trousers}, not stored: its views 2 + mesh + rig 2 +
+    texture views 2 = 6), shape (2 + 2 = 4), pieces trousers (6), texture
+    (2), fits (0), assemble (0) → ``hub_jobs == 24`` (6 + 6 + 4 + 6 + 2), in that order; shape and texture
     carry ``manual`` = ``figure.TAKE_OUT`` (they take the trousers out).
 [3] Review Focus 2: hair switched body → HairDeck on a haired base
     (``older_prompts``) with the blouse painted → plain_body (4 + 2 = 6),
-    hair (``run_estimate`` HairDeck 1), texture (3: the views follow the
-    rebuilt body), fits (0), assemble (0) → 10.
+    hair (``run_estimate`` HairDeck 1), texture (2: the views follow the
+    rebuilt body), fits (0), assemble (0) → 9.
 [4] ``run_estimate`` None for the trousers → ``hub_jobs is None``, the note
     names "Tailored Black".
 [5] Review Focus 5: ``start`` while the run is in step "shape" → "queued";
@@ -345,9 +345,9 @@ def real_sections(root: Path):
         check("[0] no model without missing=True: reason", base_body.base_refresh_plan("Kira", profile={})["reason"],
               "")
         base_body.side_views_dressed = lambda: False
-        check("[0] dressed_view_jobs front+back", base_body.dressed_view_jobs(), 3)
+        check("[0] dressed_view_jobs front+back", base_body.dressed_view_jobs(), 2)
         base_body.side_views_dressed = lambda: True
-        check("[0] dressed_view_jobs with the sides", base_body.dressed_view_jobs(), 7)
+        check("[0] dressed_view_jobs with the sides", base_body.dressed_view_jobs(), 4)
     finally:
         (base_body.base_prompts_freshness, base_body.base_view_states, model3d.find_model3d,
          base_body.base_model_sha256, base_body.side_views_dressed, base_body.base_signature) = saved
@@ -369,24 +369,24 @@ def stub_sections():
     W = World(base="missing", in_body=("coat",), painted=("blouse",), own=("trousers",), shape_stored=False,
               meshed=(), model=False)
     steps = fb.plan("Kira", profile={})
-    check("[2] steps", names(steps), [("plain_body", 6), ("interim", 8), ("shape", 5), ("pieces", "trousers", 6),
-                                      ("texture", 3), ("fits", 0), ("assemble", 0)])
+    check("[2] steps", names(steps), [("plain_body", 6), ("interim", 6), ("shape", 4), ("pieces", "trousers", 6),
+                                      ("texture", 2), ("fits", 0), ("assemble", 0)])
     check("[2] plain body label", steps[0].label, "Plain body: views 4 + mesh + rig")
     check("[2] interim label (ruling A11: the trousers in the body meanwhile)", steps[1].label,
-          "Interim body shape (own mesh in the body until ready): views 3 + mesh + rig + texture views 3")
+          "Interim body shape (own mesh in the body until ready): views 2 + mesh + rig + texture views 2")
     check("[2] piece label", steps[3].label, "Own mesh · Tailored Black")
     check("[2] shape / texture take the trousers out: manual", [s.manual for s in steps if s.name in
                                                                 ("shape", "texture")], [figure.TAKE_OUT] * 2)
-    check("[2] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 28)
+    check("[2] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 24)
     check("[2] step order follows STEP_ORDER",
           [s.name for s in steps] == sorted((s.name for s in steps), key=fb.STEP_ORDER.index), True)
 
     print("[3] hair body -> HairDeck on a haired base (older prompts)")
     W = World(base="older", painted=("blouse",), hair="hairdeck", hair_done=False)
     steps = fb.plan("Kira", profile={})
-    check("[3] steps", names(steps), [("plain_body", 6), ("hair", "hair_kira", 1), ("texture", 3), ("fits", 0),
+    check("[3] steps", names(steps), [("plain_body", 6), ("hair", "hair_kira", 1), ("texture", 2), ("fits", 0),
                                       ("assemble", 0)])
-    check("[3] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 10)
+    check("[3] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 9)
 
     print("[4] run_estimate unknown for one piece")
     W = World(base="missing", in_body=("coat",), painted=("blouse",), own=("trousers",), shape_stored=False,

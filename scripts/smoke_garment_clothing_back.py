@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """The worn BACK of an own-mesh outfit piece is drafted from the worn FRONT
-and fitted onto the base back (app/core/garment_images.py ``_drafted_back``,
+and composited onto the base back (app/core/garment_images.py ``_drafted_back``,
 garment_clothing.py ``draft_prompt`` / ``back_reasons``, garment_gates.py
-``back_follows_front``, base_body.py ``render_draft`` / ``render_fit`` /
-``fit_references``, garments.py per-step view order).
+``back_follows_front``, base_body.py ``render_draft``, view_composite.py
+``compose`` — Task 11g, Ruling C1: the CPU composite replaced the model fit;
+garments.py per-step view order).
 
 Why: one edit of the base back ("they now wear only …") turned the body
 toward the camera — live "Black Blazer" (Kira, 2026-11-09): the back view
@@ -14,9 +15,12 @@ Usage:
     ./.venv/bin/python scripts/smoke_garment_clothing_back.py
 
 Throwaway storage + instance, a copy of the ``human`` package; no world, no
-hub, no GPU, no server. REAL: run_edit_step, the gates, fit_references /
-fit_canvas, garments.run_garment. Stubbed: the renderer (writes the planned
-image, records every call), ``character.run_rembg`` (every pixel more than 2
+hub, no GPU, no server. REAL: run_edit_step, the gates, garments.run_garment.
+Stubbed: the renderer (writes the planned image, records every call),
+``view_composite.compose`` (writes the planned back onto the target and
+answers an ok record of rule "piece" — or, for a planned None, a record that
+failed its checks "nothing to put on"; the composite itself is
+``smoke_view_composite.py``), ``character.run_rembg`` (every pixel more than 2
 away from grey 128 is figure; RGBA cut-out unless ``only_mask``), and for
 the chain runs ``cut_out`` / ``garment_mesh.generate`` / ``garments._fit``.
 
@@ -48,8 +52,10 @@ depth v px = v / 999 Hb.
                XOR 5000 / base area. Base area = the r-100 disc (Gauss circle
                N(100) = 31417) + torso 800 x 240 = 192000 - 1 (the disc's
                bottom pixel (512, 300) is torso too) = 223416 -> 0.02238 ->
-               0.0224: refused at the edit limit 0.015, accepted at the
-               fitted back's 0.04 (record outside_xor_max 0.04).
+               0.0224: refused at the edit limit 0.015 — the drafted back is
+               gated at an edit's limits since Task 11g (a composite keeps
+               the base outside the garment; the fitted back's looser 0.04 is
+               gone).
   BACK_EXTRA = BACK_OK + green cols [392, 632) rows [800, 900) (the fit put
                on something the front does not wear — live 2026-11-10: bodysuits
                and underwear on footwear backs). Front garment rows (320 - 100)
@@ -63,12 +69,6 @@ depth v px = v / 999 Hb.
                BACK_OK with the front: extra_part 0.0 -> follows.
 The other backs change nothing outside the jacket -> worn gate ok (outside 0).
 
-Fit canvas (fit_references(base, draft, size (1, 1), grey)): base 1024 x
-1200 -> height 1200, width max(1024, 1200 x 1 / 1, draft figure) = 1200,
-base pasted at left (1200 - 1024) // 2 = 88. The stub renders the planned
-image centred in the canvas (dx 88) -> cropped back at offset (88, 0) it is
-the planned image again.
-
 [1] prompts: draft = base_body.draft_prompt(back, outfit_text = "wearing only
     a black tailored blazer with silver buttons exactly as on the person in
     the reference image, the same length, cut and colour, and nothing else")
@@ -77,52 +77,41 @@ the planned image again.
     not the outfit's DRAFT_OUTFIT_TEXT; its negative ends with the worn
     negative "loose clothing, baggy, skirt, dress, shoes, socks, hair" —
     "jacket" is dropped: its pattern (base_body.DRESS_GARMENT_NEGATIVE,
-    r"jackets?|coats?|blazers?") names the fragment's "blazer". Fit prompt
-    (garment_clothing.FIT with the piece's fragment, never its name) =
-    "edit the first image with the clothes from the second image: the
-    person wears only a black tailored blazer with silver buttons, add no
-    other clothing beyond that, the rest of the body stays exactly as in the
-    first image; a back view seen from behind, the back view stays a back
-    view" (Task 11e: the fit names its view); its keywords form
-    (FIT_KEYWORDS) = "back view, seen from behind, a black tailored
-    blazer with silver buttons, only these clothes, no other clothing, body
-    unchanged from the first image" — not the outfit's bare FIT_PROMPT (live
-    2026-11-10, Black Stilettos: its then wording "edit the first image with
-    the clothes from the second image" put a body suit or a top and briefs
-    on the bare draft in 5 of 5 fits). A shoe ("Black Stilettos", slots
-    [feet], fragment "shiny black leather stiletto heels, high pointed toe")
-    -> that fragment in the same two sentences; its draft text "wearing only
-    shiny black leather stiletto heels, high pointed toe and no other
-    clothing, the same garment …". A piece whose NAME is a shorthand in
-    another language ("Black Lederjacket", live 2026-11-10: the name in the
-    prompt put nothing on in 4 of 4 fits) with the multi-garment fragment
+    r"jackets?|coats?|blazers?") names the fragment's "blazer". A shoe
+    ("Black Stilettos", slots [feet], fragment "shiny black leather
+    stiletto heels, high pointed toe") -> its draft text "wearing only
+    shiny black leather stiletto heels, high pointed toe exactly as on the
+    person …". A piece whose NAME is a shorthand in another language
+    ("Black Lederjacket", live 2026-11-10) with the multi-garment fragment
     "blue t-shirt, jeans, black lether jacket, slim fit, zipper, Sneekers"
-    (68 chars <= FIT_FRAGMENT_MAX 120) -> the whole fragment, "lederjacket"
-    nowhere. fit_text of a long fragment: "a long black wool coat with a wide
-    shawl collar and deep pockets" (64) + ", " + "double-breasted with six
-    horn buttons" (37) = 103 <= 120, + ", belted at the waist" = 124 > 120
-    -> the first two parts; one part of 30 words "aaaa" (149 chars) -> cut
-    at the last space within 121 chars -> 24 words (119 chars).
-    fit_prompt(ghost) -> ValueError. edit_prompt(worn, back) -> ValueError. EDIT_STEPS worn
-    views (front, back), back "draft"; ghost keeps the default order.
+    -> the draft names the fragment, "lederjacket" nowhere. The fit prompt
+    is gone (garment_clothing has no ``fit_prompt`` / ``FIT`` any more).
+    edit_prompt(worn, back) -> ValueError. EDIT_STEPS worn views (front,
+    back), back "draft"; ghost keeps the default order.
 [2] gate numbers (worn_gate + back_follows_front) as derived above.
-[3] chain run from scratch, fits [BACK_FRONT, BACK_OK]: render order worn f1,
-    worn bd (draft), worn b1, worn b2, ghost b1, ghost f1 — the draft once,
-    BEFORE the fits, the front before both. Draft call: occasion
-    "outfit_back_draft", use case "base_view_back", reference = the worn front's
-    file name, character_loras True. Fit calls: occasion "outfit_back", use
-    case "outfit_fit", bare_prompt = the blazer's fit prompt of [1] and
-    bare_prompt_keywords = its keywords form, postprocess False, 1200 x
-    1200, image 1 = the base
-    back, image 2 = the draft. Back attempt 1 refused with the opening
-    reason, attempt 2 accepted; the accepted back records front_sha256 = the
-    worn front's sha, draft = the draft's file name.
-[4] both fits front-facing -> run refused at worn back with the opening
-    reason twice; no ghost rendered.
+[3] chain run from scratch, composites [BACK_FRONT, BACK_OK]: render order
+    worn f1, worn bd1 (draft 1), worn bd2 (draft 2), ghost b1, ghost f1 —
+    one draft per attempt (a refused composite drafts anew), the front
+    before them. Draft call: occasion "outfit_back_draft", use case
+    "base_view_back", reference = the worn front's file name,
+    character_loras True. Composite calls: base = the stored base back
+    tpose_back_<bsig>.png, the draft = draft_path's file, rule "piece",
+    background grey (128, 128, 128), targets attempt 1 / 2. Back attempt 1
+    refused with the opening reason, attempt 2 accepted; the accepted back
+    records front_sha256 = the worn front's sha, draft = the draft's file
+    name, fit "composite", composite = the stub's record; its gate is the
+    edit's (no outside_xor_max).
+[4] both composites front-facing -> run refused at worn back with the
+    opening reason twice; no ghost rendered. Both composites failing their
+    checks (planned None) -> two drafts, refused; the refusal names the
+    composite's numbers ("composite refused — IoU 0.000, coverage 0.000
+    (region 0.000), mask 0.000: nothing to put on"); nothing published (the
+    back accepted before stays byte for byte).
 [5] a new accepted front drops the worn back (+ its ghost); a back whose
     front_sha256 is not the current front is not served from the cache.
 [6] fsig: version 2 differs from the same inputs under version 1.
-[7] the family pick (service.prompt_for_backend, payload prompt_by_family):
+[7] the family pick (service.prompt_for_backend, payload prompt_by_family;
+    sample prompts, no caller of this repo sends one since the fit is gone):
     a backend with image_family "keywords" renders the keywords form, one
     with "natural" the prompt; image_family "" + model "z-image-turbo"
     resolves to keywords (get_target_model -> z_image -> keywords); a
@@ -153,27 +142,15 @@ W, H = 1024, 1200
 FRAGMENT = "a black tailored blazer with silver buttons"
 DRAFT_TEXT = ("wearing only a black tailored blazer with silver buttons exactly as on the person in the reference "
               "image, the same length, cut and colour, and nothing else")
-FIT_BLAZER = ("edit the first image with the clothes from the second image: the person wears only a black tailored "
-              "blazer with silver buttons, add no other clothing beyond that, the rest of the body stays exactly "
-              "as in the first image; a back view seen from behind, the back view stays a back view")
-KW_BLAZER = ("back view, seen from behind, a black tailored blazer with silver buttons, only these clothes, no other clothing, body unchanged "
-             "from the first image")
 FIT_SHOE = ("edit the first image with the clothes from the second image: the person wears only shiny black "
             "leather stiletto heels, high pointed toe, add no other clothing beyond that, the rest of the body "
             "stays exactly as in the first image; a back view seen from behind, the back view stays a back view")
 KW_SHOE = ("back view, seen from behind, shiny black leather stiletto heels, high pointed toe, only these clothes, no other clothing, body "
            "unchanged from the first image")
 MULTI = "blue t-shirt, jeans, black lether jacket, slim fit, zipper, Sneekers"
-FIT_MULTI = ("edit the first image with the clothes from the second image: the person wears only blue t-shirt, "
-             "jeans, black lether jacket, slim fit, zipper, Sneekers, add no other clothing beyond that, the rest "
-             "of the body stays exactly as in the first image; a back view seen from behind, the back view stays "
-             "a back view")
-LONG = ("a long black wool coat with a wide shawl collar and deep pockets, double-breasted with six horn buttons, "
-        "belted at the waist, ankle length")
 SHOE_DRAFT_TEXT = ("wearing only shiny black leather stiletto heels, high pointed toe exactly as on the person in "
                    "the reference image, the same length, cut and colour, and nothing else")
 WORN_NEG = "loose clothing, baggy, skirt, dress, shoes, socks, hair"
-FIT_PROMPT = "edit the first image with what the person in the second image wears, and nothing else"
 OPENING = "back shows the front opening: neckline 0.1001 Hb deep, front 0.1001 Hb"
 
 
@@ -308,28 +285,20 @@ def main() -> int:
         check("draft text in it, not the outfit's", (DRAFT_TEXT in draft[0],
                                                      base_body.DRAFT_OUTFIT_TEXT in draft[0]), (True, False))
         check("draft negative", draft[1], f"{outfit_negative}, {WORN_NEG}")
-        check("outfit fit prompt unchanged", base_body.FIT_PROMPT, FIT_PROMPT)
-        check("blazer fit prompt", garment_clothing.fit_prompt("worn", item_id=jid), (FIT_BLAZER, KW_BLAZER))
+        check("no fit prompt any more", (hasattr(garment_clothing, "fit_prompt"), hasattr(garment_clothing, "FIT"),
+                                         hasattr(base_body, "FIT_PROMPT")), (False, False, False))
         sid = inventory.add_item(name="Black Stilettos", category="outfit_piece",
                                  prompt_fragment="shiny black leather stiletto heels, high pointed toe",
                                  outfit_piece={"slots": ["feet"], "outfit_types": ["formal"], "mesh_mode": "own_mesh"})["id"]
-        check("shoe fit prompt", garment_clothing.fit_prompt("worn", item_id=sid), (FIT_SHOE, KW_SHOE))
         shoe_draft = garment_clothing.draft_prompt("Demo", "worn", item_id=sid)[0]
         check("shoe draft text", (SHOE_DRAFT_TEXT in shoe_draft,
                                   shoe_draft == base_body.draft_prompt("Demo", "back", outfit_text=SHOE_DRAFT_TEXT)[0]),
               (True, True))
         mid = inventory.add_item(name="Black Lederjacket", category="outfit_piece", prompt_fragment=MULTI,
                                  outfit_piece={"slots": ["outer"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
-        multi = garment_clothing.fit_prompt("worn", item_id=mid)
-        check("multi-garment piece: the fragment, not the name", (multi[0], "lederjacket" in " ".join(multi).lower()),
-              (FIT_MULTI, False))
-        check("long fragment: whole leading parts",
-              garment_clothing.fit_text(LONG),
-              "a long black wool coat with a wide shawl collar and deep pockets, double-breasted with six horn buttons")
-        check("one long part: cut at a word", garment_clothing.fit_text(" ".join(["aaaa"] * 30)),
-              " ".join(["aaaa"] * 24))
-        raises("ghost has no fit", lambda: garment_clothing.fit_prompt("ghost", item_id=jid),
-               ValueError, "no drafted back")
+        multi = garment_clothing.draft_prompt("Demo", "worn", item_id=mid)[0]
+        check("multi-garment piece: the fragment, not the name", (MULTI in multi, "lederjacket" in multi.lower()),
+              (True, False))
         raises("worn back is no edit", lambda: garment_clothing.edit_prompt("Demo", "worn", "back", item_id=jid),
                ValueError, "drafted from the worn front")
         raises("ghost has no draft", lambda: garment_clothing.draft_prompt("Demo", "ghost", item_id=jid),
@@ -356,16 +325,16 @@ def main() -> int:
         check("no hem rule on worn images", gg.back_follows_front(front, short), [])
         legs = worn(BACK_LEGS, "back")
         check("legs: edit limit refuses", (legs["ok"], legs["outside_xor"]), (False, 0.0224))
-        fitted = garment_clothing.gate("worn", "back", base_rgb=BASE, base_mask=mask_of(BASE), source_rgb=None,
-                                       source_mask=None, edit_rgb=BACK_LEGS, edit_mask=mask_of(BACK_LEGS),
-                                       item_id=jid, fitted=True)
-        check("legs: fitted back limit accepts", (fitted["ok"], fitted["outside_xor"], fitted["outside_xor_max"]),
-              (True, 0.0224, 0.04))
+        drafted = garment_clothing.gate("worn", "back", base_rgb=BASE, base_mask=mask_of(BASE), source_rgb=None,
+                                        source_mask=None, edit_rgb=BACK_LEGS, edit_mask=mask_of(BACK_LEGS),
+                                        item_id=jid)
+        check("legs: the drafted back has the edit limit", (drafted["ok"], drafted["outside_xor"],
+                                                            "outside_xor_max" in drafted), (False, 0.0224, False))
         check("front chip gated on the front only", gg.limits("clothing")["worn"]["outside_xor"]["views"], ["front"])
         def fitted_back(arr):
             return garment_clothing.gate("worn", "back", base_rgb=BASE, base_mask=mask_of(BASE), source_rgb=None,
                                          source_mask=None, edit_rgb=arr, edit_mask=mask_of(arr), item_id=jid,
-                                         fitted=True, front_gate=front)
+                                         front_gate=front)
         extra = fitted_back(BACK_EXTRA)
         check("extra: worn gate alone passes", (extra["ok"], extra["outside_xor"], extra["extra_part"]),
               (True, 0.0, 0.1074))
@@ -378,12 +347,13 @@ def main() -> int:
         check("shallow front checks no opening", gg.back_follows_front({**front, "neckline_depth": 0.03}, copy), [])
         check("old record checks nothing", gg.back_follows_front({}, copy), [])
 
-        print("[3] chain: front, draft, fits")
-        calls, plan = [], {}
+        print("[3] chain: front, drafts, composites")
+        calls, plan, composites = [], {}, []
 
         def recorder(character_name, *, output_stem, **kw):
             g = kw["sidecar_extra"]["garment"]
-            key = f"{g['step']} {g['view'][0]}{g.get('attempt', 'd')}"
+            key = (f"{g['step']} {g['view'][0]}d{g.get('attempt')}" if g.get("stage") == "draft"
+                   else f"{g['step']} {g['view'][0]}{g.get('attempt', 'd')}")
             calls.append((key, kw))
             if g.get("stage") == "draft":
                 arr = FRONT  # a fresh render: its own frame
@@ -406,6 +376,23 @@ def main() -> int:
         real_render = expression_regen.render_character_image
         expression_regen.render_character_image = recorder
 
+        def compose(base_view, draft_file, target, *, rule="outfit", background=None):
+            """The composite stand-in: the planned back (None = a composite that failed its checks)."""
+            composites.append((Path(base_view).name, Path(draft_file).name, rule, background,
+                               Path(target).name))
+            queue = plan.get(("worn", "back")) or []
+            arr = queue.pop(0) if queue else BACK_OK
+            if arr is None:
+                Path(target).write_bytes(png(BASE))
+                return {"rule": rule, "ok": False, "reasons": ["nothing to put on (garment region 0.0000 < 0.002)"],
+                        "iou": 0.0, "coverage": {"score": 0.0, "region": 0.0, "nothing": True}, "mask_share": 0.0}
+            Path(target).write_bytes(png(arr))
+            return {"rule": rule, "ok": True, "reasons": [], "iou": 0.98,
+                    "coverage": {"score": 0.95, "region": 0.2}, "mask_share": 0.2}
+
+        from app.core import view_composite
+        view_composite.compose = compose
+
         def cut_out(character_name, item_id, fsig_, view, *, force=False):
             path = gs.garment_path(character_name, item_id, fsig_, "image", step="cutout", view=view)
             path.write_bytes(b"cutout")
@@ -415,27 +402,23 @@ def main() -> int:
         garment_images.cut_out = cut_out
         garment_mesh.generate = lambda *a, **k: None
         garments._fit = lambda *a, **k: None
-        plan[("worn", "back")] = [BACK_FRONT, BACK_LEGS]
+        plan[("worn", "back")] = [BACK_FRONT, BACK_OK]
         plan[("ghost", "back")] = [BACK_OK]
         plan[("ghost", "front")] = [FRONT]
         res = garments.run_garment("Demo", jid)
         order = [k for k, _kw in calls]
         check("run ok", (res.get("ok"), res.get("error")), (True, None))
-        check("render order", order[:6], ["worn f1", "worn bd", "worn b1", "worn b2", "ghost b1", "ghost f1"])
-        check("one draft", order.count("worn bd"), 1)
-        kw = dict(calls)["worn bd"]
+        check("render order", order[:5], ["worn f1", "worn bd1", "worn bd2", "ghost b1", "ghost f1"])
+        kw = dict(calls)["worn bd1"]
         front_final = gs.garment_path("Demo", jid, fsig, "image", step="worn", view="front")
         check("draft call", (kw["occasion"], kw["image_use_case"], kw["character_loras"], kw["bare_prompt"],
                              Path(kw["reference_image"]).name, kw.get("postprocess", True)),
               ("outfit_back_draft", "base_view_back", True, draft[0], front_final.name, True))
-        fit = dict(calls)["worn b1"]
         draft_file = garment_images.draft_path("Demo", jid, fsig, "worn")
-        check("fit call", (fit["occasion"], fit["image_use_case"], fit["bare_prompt"],
-                           fit.get("bare_prompt_keywords"), fit["postprocess"],
-                           fit["override_width"], fit["override_height"],
-                           Path(fit["reference_image"]).name, [Path(p).name for p in fit["extra_reference_images"]]),
-              ("outfit_back", "outfit_fit", FIT_BLAZER, KW_BLAZER, False, 1200, 1200, f"tpose_back_{bsig}.png",
-               [draft_file.name]))
+        back_1 = gs.garment_path("Demo", jid, fsig, "image", step="worn", view="back", attempt=1)
+        back_2 = gs.garment_path("Demo", jid, fsig, "image", step="worn", view="back", attempt=2)
+        check("composite calls", composites, [(f"tpose_back_{bsig}.png", draft_file.name, "piece", GREY, back_1.name),
+                                              (f"tpose_back_{bsig}.png", draft_file.name, "piece", GREY, back_2.name)])
         back_final = gs.garment_path("Demo", jid, fsig, "image", step="worn", view="back")
         record = gs.read_record(back_final.with_suffix(".json"))
         first = record.get("gates", {}).get("first") or {}
@@ -443,14 +426,16 @@ def main() -> int:
                                                     any(r.startswith(OPENING) for r in first.get("reasons") or [])),
               (False, True))
         check("attempt 2 accepted, follows the front",
-              (record.get("accepted"), record.get("attempt"), record.get("front_sha256"), record.get("draft")),
-              (True, 2, base_body.file_sha256(front_final), draft_file.name))
+              (record.get("accepted"), record.get("attempt"), record.get("front_sha256"), record.get("draft"),
+               record.get("fit"), (record.get("composite") or {}).get("ok")),
+              (True, 2, base_body.file_sha256(front_final), draft_file.name, "composite", True))
         second = record.get("gates", {}).get("second") or {}
-        check("the fit was gated as fitted", (second.get("outside_xor"), second.get("outside_xor_max")), (0.0224, 0.04))
+        check("the composite was gated as an edit", (second.get("ok"), second.get("outside_xor"),
+                                                     "outside_xor_max" in second), (True, 0.0, False))
         check("draft stored as a garment file", (draft_file.is_file(), gs.parse_name(draft_file)),
               (True, (jid, fsig)))
-        check("the fit is the planned back again", bool((np.asarray(
-            __import__("PIL.Image", fromlist=["Image"]).open(back_final).convert("RGB")) == BACK_LEGS).all()), True)
+        check("the stored back is the composite", bool((np.asarray(
+            __import__("PIL.Image", fromlist=["Image"]).open(back_final).convert("RGB")) == BACK_OK).all()), True)
 
         print("[4] a front-facing back never reaches the ghost")
         del calls[:]
@@ -461,7 +446,19 @@ def main() -> int:
               (False, "worn", "back"))
         check("both for the opening", [any(r.startswith(OPENING) for r in a.get("reasons") or []) for a in attempts],
               [True, True])
-        check("no ghost rendered", [k for k, _kw in calls], ["worn bd", "worn b1", "worn b2"])
+        check("no ghost rendered", [k for k, _kw in calls], ["worn bd1", "worn bd2"])
+        del calls[:]
+        plan[("worn", "back")] = [None, None]
+        before = (back_final.read_bytes(), back_final.with_suffix(".json").read_text())
+        res = garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
+        attempts = (res.get("gates") or {}).get("attempts") or []
+        check("composites failing their checks: two drafts, refused",
+              ([k for k, _kw in calls], res.get("ok"), res.get("step")), (["worn bd1", "worn bd2"], False, "worn"))
+        check("the refusal names the composite's numbers", [a.get("reasons") for a in attempts],
+              [["composite refused — IoU 0.000, coverage 0.000 (region 0.000), mask 0.000: nothing to put on "
+                "(garment region 0.0000 < 0.002)"]] * 2)
+        check("nothing published: the stored back unchanged",
+              (back_final.read_bytes(), back_final.with_suffix(".json").read_text()) == before, True)
 
         print("[5] a new front drops its back")
         plan[("worn", "back")] = [BACK_OK]
@@ -477,13 +474,13 @@ def main() -> int:
         del calls[:]
         plan[("worn", "back")] = [BACK_OK]
         garment_images.run_edit_step("Demo", jid, fsig, "worn", "back")
-        check("back re-drafted", [k for k, _kw in calls], ["worn bd", "worn b1"])
+        check("back re-drafted", [k for k, _kw in calls], ["worn bd1"])
         rec = gs.read_record(back_final.with_suffix(".json"))
         gs.write_record(back_final.with_suffix(".json"), {**rec, "front_sha256": "0" * 64})
         del calls[:]
         plan[("worn", "back")] = [BACK_OK]
         garment_images.run_edit_step("Demo", jid, fsig, "worn", "back")
-        check("stale back not served from the cache", [k for k, _kw in calls], ["worn bd", "worn b1"])
+        check("stale back not served from the cache", [k for k, _kw in calls], ["worn bd1"])
         del calls[:]
         garment_images.run_edit_step("Demo", jid, fsig, "worn", "back")
         check("current back served from the cache", calls, [])
@@ -525,7 +522,7 @@ def main() -> int:
             real_render("Demo", output_stem=root / "render" / "fit", equipped_pieces={}, equipped_items=[],
                         pose_prompt="", expression_prompt="", bare_prompt=FIT_SHOE,
                         **({"bare_prompt_keywords": kw_form} if kw_form else {}),
-                        image_use_case="outfit_fit", occasion="outfit_back", apply_state_modifiers=False,
+                        image_use_case="base_view_back", occasion="outfit_back_draft", apply_state_modifiers=False,
                         postprocess=False)
         check("payload prompt + by family", [(p.get("prompt"), p.get("prompt_by_family")) for p in sent],
               [(FIT_SHOE, {"keywords": KW_SHOE}), (FIT_SHOE, None)])

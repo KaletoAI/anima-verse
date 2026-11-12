@@ -22,24 +22,25 @@ The outfit model ``model3d/<sig>.glb``: sidecar base_signature
 "base00000000" (an older base) unless a case says otherwise. Nothing is
 rendered — the function only reads.
 
-Derived by hand from the cost table (front 1, every other dressed view 2 =
-draft + fit; an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
+Derived by hand from the cost table (front 1, every other dressed view 1 =
+its draft — the composite onto the base view is CPU work since Task 11g;
+an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
 
 [O1] retexture mode, older base, NO dressed view of the current base, side
      views off (dressed views front + back) → views_needed True, image
-     1 + 2·1 = 3, mesh 0, hub 3; body_needed False; note "older base: views 3
+     1 + 1·1 = 2, mesh 0, hub 2; body_needed False; note "older base: views 2
      (first attempts)".
 [O2] the world setting ``base_body.dressed_side_views`` on (dressed views
-     front, back, left, right) → image 1 + 2·3 = 7, hub 7.
+     front, back, left, right) → image 1 + 1·3 = 4, hub 4.
 [O3] side views off again; the Dress switched to mode in_body ("mesh"; back
      to painted = "retexture"): the wanted figure stands on a meshed shape
      that is not stored → body 2, plus the shape's own views (none stored)
-     3; nothing is painted on the shape (the Dress is in it: texture "") so
-     the outfit's views are copies, 0 → {image 3, mesh 2, hub 5}, note
-     "older base: views 3 + body 2 (first attempts)".
+     2; nothing is painted on the shape (the Dress is in it: texture "") so
+     the outfit's views are copies, 0 → {image 2, mesh 2, hub 4}, note
+     "older base: views 2 + body 2 (first attempts)".
 [O4] "mesh", the outfit's dressed front + back current (made on the plain
      body meanwhile): the shape is still missing with its views → still
-     {image 3, mesh 2, hub 5}; ``figure.stored_shape`` patched to answer a
+     {image 2, mesh 2, hub 4}; ``figure.stored_shape`` patched to answer a
      body → no body, and the outfit's views on the shape are copies → hub 0,
      note "older base: outfit body stored, CPU only".
 [O5] retexture mode, views current, the model built on the CURRENT base but
@@ -48,7 +49,7 @@ draft + fit; an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
 [O6] "retexture", views current, the model on the current base records a
      figure whose texture is another one ("tex000000000000") → outfit_info
      stale_reason "figure" → hub 0, note "other figure: repaint on the
-     CPU"; switched to "mesh" → the shape with its views: 3 + 2 = 5.
+     CPU"; switched to "mesh" → the shape with its views: 2 + 2 = 4.
 [O7] ``dressed_views`` patched to raise → hub_jobs None, image/mesh None,
      note starts "cost unknown".
 
@@ -181,24 +182,24 @@ def main() -> int:
         check("outfit_info stale older_base", base_body.outfit_info("Kira", signature=sig)["stale_reason"],
               "older_base")
         got, full = cost()
-        check("cost", got, {"image_jobs": 3, "mesh_jobs": 0, "hub_jobs": 3})
+        check("cost", got, {"image_jobs": 2, "mesh_jobs": 0, "hub_jobs": 2})
         check("views/body needed", (full["views_needed"], full["body_needed"]), (True, False))
-        check("note", full["note"], "older base: views 3 (first attempts)")
+        check("note", full["note"], "older base: views 2 (first attempts)")
 
         # --- [O2] -------------------------------------------------------------------
         print("[O2] dressed side views on")
         side_views(True)
         check("dressed views", base_body.dressed_views(), ("front", "back", "left", "right"))
         got, _ = cost()
-        check("cost", got, {"image_jobs": 7, "mesh_jobs": 0, "hub_jobs": 7})
+        check("cost", got, {"image_jobs": 4, "mesh_jobs": 0, "hub_jobs": 4})
         side_views(False)
 
         # --- [O3] -------------------------------------------------------------------
         print("[O3] mesh mode, no dressed view, no body")
         set_mode("mesh")
         got, full = cost()
-        check("cost", got, {"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5})
-        check("note", full["note"], "older base: views 3 + body 2 (first attempts)")
+        check("cost", got, {"image_jobs": 2, "mesh_jobs": 2, "hub_jobs": 4})
+        check("note", full["note"], "older base: views 2 + body 2 (first attempts)")
 
         # --- [O4] -------------------------------------------------------------------
         print("[O4] mesh mode, views current")
@@ -206,7 +207,7 @@ def main() -> int:
         check("dressed front current", base_body.dressed_image("Kira", "front", sig, bsig) is not None, True)
         got, full = cost()
         check("no body stored: the shape and its views", (got, full["note"]),
-              ({"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5}, "older base: views 3 + body 2 (first attempts)"))
+              ({"image_jobs": 2, "mesh_jobs": 2, "hub_jobs": 4}, "older base: views 2 + body 2 (first attempts)"))
         with patch.object(figure, "stored_shape", return_value={"rig": "mixamo"}):
             got, full = cost()
         check("body stored: nothing", (got, full["note"]),
@@ -234,7 +235,7 @@ def main() -> int:
               ({"image_jobs": 0, "mesh_jobs": 0, "hub_jobs": 0}, "other figure: repaint on the CPU"))
         set_mode("mesh")
         got, _ = cost()
-        check("in the body: views 3 + body 2", got, {"image_jobs": 3, "mesh_jobs": 2, "hub_jobs": 5})
+        check("in the body: views 2 + body 2", got, {"image_jobs": 2, "mesh_jobs": 2, "hub_jobs": 4})
         set_mode("retexture")
 
         # --- [O7] -------------------------------------------------------------------

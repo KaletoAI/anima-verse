@@ -77,7 +77,7 @@ interface RefsInfo {
    *  left and right with the world setting "Dressed side views"): the views
    *  carry those (always on, no toggle) and the face view. */
   pipeline?: boolean
-  /** Base-body pipeline: per dressed back/side view, the draft it was fitted
+  /** Base-body pipeline: per dressed back/side view, the draft it was composited
    *  from (served as `tpose_<view>_draft`). */
   drafts?: Record<string, RefInfo | null>
   auto?: { tpose?: boolean; pose?: boolean }
@@ -432,8 +432,8 @@ export function FieldModelRefs({
   }
   const renderDraft = (view: typeof DRAFT_ORDER[number], height: number) => {
     // The view's draft (rendered from the dressed front; only
-    // its clothing is fitted onto the base view). Regenerating
-    // the view renders draft and fit anew.
+    // its clothing is composited onto the base view on the CPU).
+    // Regenerating the view renders the draft anew.
     const draft = info.drafts?.[view]
     const label = draftLabel(view)
     return (
@@ -495,7 +495,7 @@ export function FieldModelRefs({
             </div>
           ))}
           {kindList.includes('tpose') ? VIEW_ORDER.filter((v) => info.views?.[v]?.enabled).map((view) => (
-            // A dressed back/side view and the draft it was fitted from, side
+            // A dressed back/side view and the draft it was composited from, side
             // by side; a view without a stored draft keeps the full width.
             (draftViews as string[]).includes(view) && info.drafts?.[view] ? (
               <div key={view} className="ga-view-pair">

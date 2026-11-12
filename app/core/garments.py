@@ -1432,7 +1432,7 @@ def cached_failure(character_name: str, item_id: str, *,
 
 #: Hub jobs per step of a plain run on its FIRST attempt (spec
 #: 2026-11-11-improvements-figure-pipeline § 6.1 / § 6.5), keyed ``<kind>:<method>``:
-#: the clothing ``worn`` = the front edit + the back draft + the back fit; a
+#: the clothing ``worn`` = the front edit + the back draft (its composite is CPU, Task 11g); a
 #: two-view image step = one edit per view; ``mesh`` = one img2mesh job;
 #: HairDeck = its one job. The cut-out, the insole and
 #: every fit are CPU work. Footwear ``source`` is computed per item (the
@@ -1440,7 +1440,7 @@ def cached_failure(character_name: str, item_id: str, *,
 #: chain may spend one more per refused attempt (R5) — this is the estimate
 #: ``run_estimate`` hands the improvements queue, not a cap.
 HUB_JOBS: Dict[str, Dict[str, int]] = {
-    "clothing:edit_chain": {"worn": 3, "ghost": 2, "cutout": 0, "mesh": 1, "fit": 0},
+    "clothing:edit_chain": {"worn": 2, "ghost": 2, "cutout": 0, "mesh": 1, "fit": 0},
     "hair:hairdeck": {"hairdeck": 1, "fit": 0},
     # Hair in the body mesh: no steps, no job (the base views carry the hair).
     "hair:body": {},
@@ -1448,10 +1448,10 @@ HUB_JOBS: Dict[str, Dict[str, int]] = {
 }
 
 
-#: Hub jobs of an edit step's BACK view on first attempts (part of ``HUB_JOBS``): the worn back is a draft + a
-#: fit, the ghost back one edit. The OPEN state of a closable piece copies them from the closed state when it
+#: Hub jobs of an edit step's BACK view on first attempts (part of ``HUB_JOBS``): the worn back is a draft (its
+#: composite is CPU), the ghost back one edit. The OPEN state of a closable piece copies them from the closed state when it
 #: has them (``garment_images.closed_back``, ruling F15 i-1) — 0 jobs.
-BACK_JOBS: Dict[str, int] = {"worn": 2, "ghost": 1}
+BACK_JOBS: Dict[str, int] = {"worn": 1, "ghost": 1}
 
 
 def _unknown_estimate(note: str) -> Dict[str, Any]:

@@ -607,8 +607,7 @@
       "column": 22,
       "row": 0,
       "special": "imagegen_override",
-      "slot_keys": ["outfit_front_workflow", "outfit_back_draft_workflow", "outfit_back_workflow",
-                    "outfit_side_draft_workflow", "outfit_side_workflow"],
+      "slot_keys": ["outfit_front_workflow", "outfit_back_draft_workflow", "outfit_side_draft_workflow"],
       "fields": [],
       "visible_when": { "feature": "humanoid" }
     },

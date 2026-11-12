@@ -145,8 +145,9 @@ SECTIONS = {
                 "label": "Dressed side views",
                 "default": False,
                 "description": "Dress the left and right views of every outfit too and hand them to the body "
-                               "retexture worker (default: front and back only). Each side costs a draft and a "
-                               "fit render (occasions outfit_side_draft / outfit_side). The worker paints only "
+                               "retexture worker (default: front and back only). Each side costs one draft render "
+                               "(occasion outfit_side_draft), composited onto the base side view on the CPU. "
+                               "The worker paints only "
                                "the torso seen clear of the arm from them; the flanks gain detail, the hips may "
                                "come out slightly worse. Applies to outfits rendered or rebuilt after the change.",
             },

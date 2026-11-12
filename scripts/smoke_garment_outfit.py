@@ -86,9 +86,12 @@ Expected, derived by hand from the brief:
       [coat]) and mesh_token = the token of X;
       garments/failed/coat_<fsig>.json {step fit, error "fit refused —
       stub"}, none for dress;
-    - back, left, right: draft + fit, no outfit text in either prompt
-      (none of the four fragments); every view's sidecar carries the
-      front's mesh_items (the side views follow the front too);
+    - back, left, right: a draft each (occasions outfit_back_draft /
+      outfit_side_draft), composited on the CPU (``view_composite.compose``
+      stubbed: the opaque draft copied, an ok record — Task 11g), no outfit
+      text in a draft prompt (none of the four fragments); every view's
+      sidecar carries the front's mesh_items (the side views follow the
+      front too);
     - after_mesh_item_ready was asked for dress (its fit was accepted in
       the run) and asked the Build ("piece_ready", ``figure_build.request``
       recorded — Task 8), no T-pose pass.
@@ -266,7 +269,8 @@ def main() -> int:
         import smoke_garment_chain as chain
         from app.core import (base_body, body_retexture, expression_regen, extension_rig, garment_assembly,
                               garment_fit, garment_set, garments, glb_delivery, glb_mesh, model3d,
-                              model_overview, model_refs, outfit_batch, outfit_cache_gc, sync_topics)
+                              model_overview, model_refs, outfit_batch, outfit_cache_gc, sync_topics,
+                              view_composite)
         from app.core import garment_store as gs
         from app.models import character as charmod
         from app.models import inventory
@@ -364,7 +368,13 @@ def main() -> int:
             Path(out_glb).write_bytes(Path(glb_in).read_bytes())
             return {}
 
+        def compose(base_view, draft, target, *, rule="outfit", background=None):
+            """The composite stand-in (Task 11g): the opaque draft copied, an ok record."""
+            Path(target).write_bytes(Path(draft).read_bytes())
+            return {"rule": rule, "ok": True, "reasons": [], "iou": 0.99, "coverage": {"score": 0.9}}
+
         expression_regen.render_character_image = render
+        view_composite.compose = compose
         charmod.run_rembg = rembg
         body_retexture.retexture = retexture
         SHAPE_JOBS = []
@@ -563,8 +573,7 @@ def main() -> int:
               fig_of(front_meta.get("mesh_items")), (["dress"], ["shoes", "skirt"], ["coat"]))
         check("front mesh_token", front_meta.get("mesh_token"), token_x)
         others = [r for r in RENDERS if r["occasion"] != "outfit_front" and r["stem"].endswith(sig_x)]
-        check("draft + fit occasions", sorted({r["occasion"] for r in others}),
-              ["outfit_back", "outfit_back_draft", "outfit_side", "outfit_side_draft"])
+        check("draft occasions", sorted({r["occasion"] for r in others}), ["outfit_back_draft", "outfit_side_draft"])
         check("no outfit text after the front", [r["stem"] for r in others
                                                  if any(f in r["prompt"] for f in FRAG.values())], [])
         for v in ("back", "left", "right"):
@@ -654,7 +663,7 @@ def main() -> int:
         check("taken out: record", record(json.loads((refs / f"tpose_{sig_x}.json").read_text()).get("mesh_items")),
               {"intended": ["coat", "dress"], "effective": ["coat", "dress"], "warnings": [],
                "unpainted": ["coat", "dress"], "missing": {}})
-        check("back re-rendered too", any(r["occasion"] == "outfit_back" for r in RENDERS), True)
+        check("back re-rendered too", any(r["occasion"] == "outfit_back_draft" for r in RENDERS), True)
 
         print("[3c] every piece its own mesh")
         wear("Demo", {"top": "dress", "outer": "coat"})

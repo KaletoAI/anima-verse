@@ -45,7 +45,8 @@ Derived by hand from the candidate rule and the chain:
 [G7] Clothing: a dress worn by Kira with an accepted fit on the current base
      → not a candidate; no fit + a persisted failure at ``ghost`` → not a
      candidate; nothing → candidate ``clothing:Kira:<dress>`` with hub_jobs
-     6 and note "worn 3 + ghost 2 + mesh 1"; apply calls ``run_garment``
+     5 and note "worn 2 + ghost 2 + mesh 1" (worn = front edit + back
+     draft; the back's composite is CPU work since Task 11g); apply calls ``run_garment``
      (the recorder, once) → rescan → gone. A character off the pipeline is
      never a subject (Nora, a plain profile, lists nothing even wearing the
      dress).
@@ -341,7 +342,7 @@ def main() -> int:
             found = clothing()
             check("nothing cached: the dress is a candidate",
                   [(c.key, c.label, c.hub_jobs, c.note) for c in found],
-                  [(f"clothing:Kira:{dress}", "Kira · Dress", 6, "worn 3 + ghost 2 + mesh 1")])
+                  [(f"clothing:Kira:{dress}", "Kira · Dress", 5, "worn 2 + ghost 2 + mesh 1")])
             check("Nora (off the pipeline) is never a subject", clothing(character="Nora"), [])
             runs = []
 

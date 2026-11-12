@@ -2019,10 +2019,9 @@ def _clean_lora_list(raw: Any) -> List[Dict[str, Any]]:
 
 
 #: The per-character backend globs of the base-body pipeline steps — the
-#: ``char_spec_field`` of the occasions base_front … outfit_side.
+#: ``char_spec_field`` of the occasions base_front … outfit_side_draft.
 BASE_BODY_MATCH_FIELDS = ("base_front_workflow", "base_view_workflow", "outfit_front_workflow",
-                          "outfit_back_draft_workflow", "outfit_back_workflow",
-                          "outfit_side_draft_workflow", "outfit_side_workflow")
+                          "outfit_back_draft_workflow", "outfit_side_draft_workflow")
 
 
 #: Every backend-glob key of the override record (``profile.outfit_imagegen``),

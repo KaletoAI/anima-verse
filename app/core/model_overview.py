@@ -18,8 +18,8 @@ a 3D model or an image, decided here on the server.
    - ``outfit_model_steps``: an outfit model on the base-body pipeline
      (sidecar ``source: "base_body"``) — base model used, base variant and
      the piece that decided it, the painted body (texture signature,
-     reused or painted, shared with N outfits), every dressed view with its fit gate and
-     view guard, the back refit, the body retexture proof, the restored face
+     reused or painted, shared with N outfits), every dressed view with its gates,
+     its composite (Task 11g) and view guard, the body retexture proof, the restored face
      texels, the extension rig (inherited from the base), the collision
      capsules (the base's set, ``collision.py``), the own-mesh
      pieces (own garment mesh / left painted on / in mesh mode missing
@@ -27,7 +27,7 @@ a 3D model or an image, decided here on the server.
      onto it, measurement and distance mesh. A model of the old
      path gets no list: the 3D tab keeps its own overview for it. On an
      MESHED SHAPE with nothing painted on it (sidecar ``body_id``, no
-     ``texture_signature``) the painted-body, back-refit, retexture-proof and
+     ``texture_signature``) the painted-body, retexture-proof and
      face-texel rows give way to one ``outfit_body`` row (body id).
    - ``outfit_body_steps``: an outfit body ``model3d/<body id>.glb`` (a
      meshed shape) — parent record (shape inputs, views meshed), mesh, face
@@ -669,13 +669,23 @@ def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]
     chosen = int(fit.get("chosen") or 0)
     pick = attempts[chosen - 1] if 0 < chosen <= len(attempts) else {}
     score = _num(_dict(guard.get("scores")).get(view))
+    # A view composited on the CPU (Task 11g) names its composite; an older one was a model fit.
+    composite = _dict((record or {}).get("composite")) if (record or {}).get("fit") == "composite" else {}
     numbers = {"guard_score": score, "noise": _num(_dict(pick.get("noise")).get("score")),
                "noise_limit": _num(fit.get("noise_limit")), "fit_attempts": len(attempts) or None,
                "unchanged_delta_e": delta_e}
+    if composite:
+        numbers.update(composite_iou=_num(composite.get("iou")),
+                       composite_coverage=_num(_dict(composite.get("coverage")).get("score")),
+                       composite_mask=_num(composite.get("mask_share")), composite_seam_de=_num(composite.get("seam_de")))
     parts = []
     if guard:
         parts.append(f"view check {guard.get('best') or '?'}" + (" · re-rendered" if guard.get("rerendered") else ""))
-    if attempts:
+    if composite:
+        parts.append(f"composite of draft {chosen} of {len(attempts)}" if attempts else "composite")
+        if numbers["composite_iou"] is not None and numbers["composite_coverage"] is not None:
+            parts.append(f"IoU {numbers['composite_iou']:.3f} · coverage {numbers['composite_coverage']:.2f}")
+    elif attempts:
         parts.append(f"fit attempt {chosen} of {len(attempts)}")
     if delta_e is not None:
         parts.append(f"ΔE {delta_e:.1f}")
@@ -690,37 +700,11 @@ def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]
     return step(f"dressed_{view}", label, DONE, detail, numbers)
 
 
-def _refit_step(meta: Dict[str, Any], back_delta: Optional[float], limit: float,
-                has_back: bool) -> Optional[Dict[str, Any]]:
-    refit = _dict(meta.get("back_refit"))
-    if not refit:
-        if not has_back:
-            return None
-        if back_delta is None:
-            return step("back_refit", "Back refit", NOT_RECORDED, "No back ΔE recorded")
-        if back_delta > limit:
-            # A poor back without a refit record: built before the refit.
-            return step("back_refit", "Back refit", NOT_RECORDED,
-                        f"Not recorded (built before the refit) · ΔE {back_delta:.1f} > {limit:.1f}",
-                        {"unchanged_delta_e": back_delta, "limit": limit})
-        return step("back_refit", "Back refit", SKIPPED, f"not needed (ΔE {back_delta:.1f} ≤ {limit:.1f})",
-                    {"unchanged_delta_e": back_delta, "limit": limit})
-    attempts = [a for a in (refit.get("attempts") or []) if isinstance(a, dict)]
-    first = _num(attempts[0].get("unchanged_delta_e")) if attempts else None
-    second = _num(attempts[1].get("unchanged_delta_e")) if len(attempts) > 1 else None
-    numbers = {"first_delta_e": first, "refit_delta_e": second, "limit": _num(refit.get("limit"))}
-    if refit.get("skipped"):
-        return step("back_refit", "Back refit", SKIPPED, str(refit["skipped"]), numbers)
-    error = str(attempts[1].get("error") or "") if len(attempts) > 1 else ""
-    if refit.get("chosen") == 2:
-        return step("back_refit", "Back refit", DONE,
-                    f"refit kept: ΔE {first:.1f} → {second:.1f}" if first is not None and second is not None
-                    else "refit kept", numbers)
-    if error:
-        return step("back_refit", "Back refit", WARNING, f"first back kept · {error}", numbers)
-    return step("back_refit", "Back refit", WARNING,
-                f"first back kept: refit not better (ΔE {first:.1f} vs {second:.1f})"
-                if first is not None and second is not None else "first back kept", numbers)
+#: The ``unchanged_delta_e`` of a view in the retexture proof (Lab ΔE between
+#: the registered dressed view and its base view where the edit left it
+#: unchanged) above which the retexture row warns of a poor registration
+#: (finding 2026-11-09: front 2.9, back 5.9).
+POOR_REGISTRATION_DELTA_E = 4.0
 
 
 def _retexture_step(meta: Dict[str, Any], limit: float) -> Dict[str, Any]:
@@ -858,7 +842,7 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
                        base_meta: Optional[Dict[str, Any]], wanted_variant: Optional[str],
                        deciders: List[str], shown: List[str], dressed_records: Dict[str, Optional[Dict[str, Any]]],
                        garments: List[Dict[str, Any]], tiers: List[str], low_tris: Any = None,
-                       refit_limit: float = 4.0, covered_missing_text: str = "",
+                       delta_limit: float = POOR_REGISTRATION_DELTA_E, covered_missing_text: str = "",
                        item_names: Optional[Dict[str, str]] = None,
                        texture_shared: Optional[int] = None,
                        body_meta: Optional[Dict[str, Any]] = None,
@@ -896,11 +880,8 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
         for v in views:
             rows.append(_dressed_view_step(v, used=v in used, record=dressed_records.get(v),
                                            guard=_dict(guards.get(v)), delta_e=deltas.get(v)))
-        refit = None if on_body else _refit_step(meta, deltas.get("back"), refit_limit, "back" in used)
-        if refit is not None:
-            rows.append(refit)
     if not on_body:
-        rows.append(_retexture_step(meta, refit_limit))
+        rows.append(_retexture_step(meta, delta_limit))
         face = _face_texels_step(meta)
         if face is not None:
             rows.append(face)
@@ -1273,7 +1254,6 @@ def outfit_model_overview(character_name: str,
     steps = outfit_model_steps(meta, base=base, base_meta=base_meta, wanted_variant=wanted, deciders=deciders,
                                shown=shown, dressed_records=records, garments=garments,
                                tiers=available_tiers(path), low_tris=low_tris,
-                               refit_limit=base_body.BACK_REFIT_DELTA_E,
                                covered_missing_text=base_body.COVERED_MISSING,
                                item_names={i: str((items.get(i) or {}).get("name") or i)
                                            for i in (*base_body.mesh_items_intended(meta),

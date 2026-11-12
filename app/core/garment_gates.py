@@ -309,9 +309,13 @@ HEM_AGREE = 0.02            # |hem_t front − hem_t back|, fractions of Hb
 # The fit re-renders the whole figure, so its outline outside the garment
 # moves more than an edit's (direct edits 0.004-0.018): fit 1 0.0259, fit 2
 # 0.0334, three quarters of it in the legs (rows below 0.5 Hb); the torso
-# band 0.30-0.50 Hb only 0.0035 / 0.0052. A fitted back is gated at
-# FIT_OUTSIDE_XOR_MAX (a re-framed or turned figure moves far more), the
-# edited views keep OUTSIDE_XOR_MAX.
+# band 0.30-0.50 Hb only 0.0035 / 0.0052. A fitted back was gated at a
+# looser 0.04 (FIT_OUTSIDE_XOR_MAX). Since Task 11g (Ruling C1) the drafted
+# back is a CPU COMPOSITE (``view_composite``): the base back outside the
+# garment mask is kept pixel for pixel, so it is gated at the edit limits —
+# measured on the ten accepted worn backs of the Anima Divide copy
+# (2026-11-12) the composites' outline XOR is 0.0004-0.0014 (drift
+# 0.02-0.12 px); FIT_OUTSIDE_XOR_MAX / FIT_OUTSIDE_DRIFT_PX are gone.
 BACK_OPENING_MIN = 0.04     # back neckline depth / Hb from which the back has an opening
 BACK_OPENING_SHARE = 0.5    # ... refused when it reaches this share of the front's depth
 # Known gap (gate audit, 2026-11-12): Glut's harness worn back was ACCEPTED
@@ -323,7 +327,6 @@ BACK_OPENING_SHARE = 0.5    # ... refused when it reaches this share of the fron
 # 0.0097), Glut's boots back 0.0609 (front 0.0 — two boots leave a notch at
 # the centre, the depth is no opening there). Not changed: the depth alone
 # does not tell this front copy from a correct back.
-FIT_OUTSIDE_XOR_MAX = 0.04  # outline change outside the garment of a FITTED view (drafted back)
 # The outline XOR is an AREA share, so what it measures grows with how much
 # of the outline lies outside the garment: the same drift costs a small
 # piece far more than a big one. Measured 2026-11-10 (Kira, BiRefNet-DIS
@@ -366,7 +369,6 @@ FIT_OUTSIDE_XOR_MAX = 0.04  # outline change outside the garment of a FITTED vie
 # passes now: the garment region compares colour, so a seam outside the
 # piece never becomes garment, and the ghost is registered onto the region.
 OUTSIDE_DRIFT_PX = 2.0      # mean outline drift @1536 an EDITED view may have outside the garment
-FIT_OUTSIDE_DRIFT_PX = 2.0  # ... a FITTED view (drafted back)
 # A FITTED back of a piece that covers little re-renders the bare figure and
 # the fit puts clothes on it the front does not have (Kira, 2026-11-10,
 # footwear: a bra + briefs, a sheer bodysuit, a leather bodysuit — ACCEPTED
@@ -476,9 +478,8 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     G / base body area (>= ``GARMENT_MIN`` 0.002: the edit put something on). ``garment_top``
     / ``garment_bottom`` are G's rows; ``neckline_depth`` (G's ``neckline``
     / Hb) and ``hem_t`` are reported for ``back_follows_front``. ``xor_max``:
-    the area limit (a fitted back: ``FIT_OUTSIDE_XOR_MAX``, recorded as
-    ``outside_xor_max`` when it differs); ``drift_px``: the drift limit (a
-    fitted back: ``FIT_OUTSIDE_DRIFT_PX``). ``front_rows``: the accepted
+    the area limit (recorded as ``outside_xor_max`` when it differs from
+    ``OUTSIDE_XOR_MAX``); ``drift_px``: the drift limit. ``front_rows``: the accepted
     front garment's rows (``garment_rows`` of its record) — then
     ``extra_part`` = the largest connected part of G outside those rows
     (± ``BACK_ROWS_MARGIN`` Hb) / base body area is reported for
@@ -1132,8 +1133,8 @@ def limits(kind: str = "clothing") -> Dict[str, Dict[str, Dict[str, Any]]]:
                 # The limit of a record is its own ``outside_xor_limit``
                 # (``record_key``; the area limit grown by the drift limit
                 # over the exposed outline). A record without it (before
-                # 2026-11-10) falls back to ``value``; the back is fitted
-                # (``FIT_OUTSIDE_XOR_MAX``) and its reasons name the refusal.
+                # 2026-11-10) falls back to ``value``; a back fitted before
+                # Task 11g had a looser limit and its reasons name the refusal.
                 "outside_xor": {"op": "lt", "value": OUTSIDE_XOR_MAX, "record_key": "outside_xor_limit",
                                 "views": ["front"]},
                 # Not gated for a piece worn on one of ``free_slots`` (SLOT_ZONES).

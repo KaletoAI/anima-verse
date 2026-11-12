@@ -141,7 +141,9 @@ frag text — an unfilled placeholder drops the fragment.
     for EVERY use case it shipped × family × clothed — the new use cases
     (base_back, base_front, base_side, base_view_back, base_view_side, plus
     footwear_source — the empty-shoe edit of occasion footwear_empty, footwear
-    plan 2026-11-10 Task 2) are additions only — and the T-pose pose constants of model_refs.py at
+    plan 2026-11-10 Task 2) are additions only; outfit_fit (the dressed
+    back/side model fit, Task 11g) is the one old use case removed on purpose
+    (config.DEAD_USE_CASES) — and the T-pose pose constants of model_refs.py at
     bda7bd17 (TPOSE_PROMPT_DEFAULT, TPOSE_VIEW_PROMPT_DEFAULTS, read from the
     old source by exec of their assignments) equal today's. A tpose payload
     without "style_character" joins as f"{style} {prompt}".
@@ -505,7 +507,11 @@ def main() -> int:
         old_cfg = types.ModuleType("config_" + BEFORE)
         old_cfg.__file__ = "config_" + BEFORE + ".py"
         exec(compile(old_source("app/core/config.py"), old_cfg.__file__, "exec"), old_cfg.__dict__)
-        old_ucs = sorted(old_cfg._DEFAULT_IMAGE_USE_CASES)
+        # outfit_fit (the dressed back/side model fit) was removed on purpose — Task 11g, Ruling C1.
+        check("outfit_fit removed on purpose", ("outfit_fit" in old_cfg._DEFAULT_IMAGE_USE_CASES,
+                                                "outfit_fit" in config._DEFAULT_IMAGE_USE_CASES,
+                                                "outfit_fit" in config.DEAD_USE_CASES), (True, False, True))
+        old_ucs = sorted(uc for uc in old_cfg._DEFAULT_IMAGE_USE_CASES if uc not in config.DEAD_USE_CASES)
         check("old use cases are all still shipped", set(old_ucs) <= set(config._DEFAULT_IMAGE_USE_CASES), True)
         check("new use cases are additions",
               sorted(set(config._DEFAULT_IMAGE_USE_CASES) - set(old_ucs)),

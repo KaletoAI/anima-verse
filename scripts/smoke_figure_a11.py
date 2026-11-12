@@ -18,7 +18,7 @@ items below; ``base_body.is_base_pipeline`` -> True, ``base_signature`` ->
 BSIG, ``base_model_sha256`` -> "basesha", ``dress_text`` -> ``"wear:" +
 "+".join(sorted visible ids)`` (visible = worn ids minus ``mesh_items``, ""
 when none is left), ``side_views_dressed`` False, ``dressed_views`` ("front",
-"back") so ``dressed_view_jobs()`` = 1 + 2 = 3, ``shape_view_shas`` {},
+"back") so ``dressed_view_jobs()`` = 1 + 1 = 2 (the back's draft; its composite is CPU since Task 11g), ``shape_view_shas`` {},
 ``shape_view`` None (no shape view stored), ``stored_base_haired`` True,
 ``prompts_current`` True, ``base_refresh_plan`` {} (the plain body is
 current), ``dressed_image`` -> a view only for the (shape, grafted pieces)
@@ -69,10 +69,10 @@ Expected, derived by hand from rulings A11 / A14:
     model". ``pending_changes`` = [{key jacket, name Jacket, wanted
     own_mesh, delivered in_body, note INTERIM_IN_BODY}].
     Plan (no model stored): interim "Interim body shape (own mesh in the body
-    until ready): views 3 + mesh + rig + texture views 3" = 3 + 2 + 3 = 8;
-    pieces "Own mesh · Jacket" 6; texture "Texture: views 3" 3 with manual
-    TAKE_OUT; fits 0; assemble 0 — explicit total 17; the automatic run
-    leaves the texture out (14). The interim step comes before the pieces
+    until ready): views 2 + mesh + rig + texture views 2" = 2 + 2 + 2 = 6;
+    pieces "Own mesh · Jacket" 6; texture "Texture: views 3" 3 (the stubbed
+    estimate) with manual TAKE_OUT; fits 0; assemble 0 — explicit total 15;
+    the automatic run leaves the texture out (12). The interim step comes before the pieces
     step and ``DEPENDS['interim']`` = {plain_body}: it never waits for the
     chain. ``_run_interim``: ``prepare_shape`` of the DELIVERED figure (shape
     S1), then the views, then the outfit model; ``run_queued`` never called.
@@ -267,15 +267,15 @@ def main() -> int:
               [{"key": "jacket", "name": "Jacket", "wanted": "own_mesh", "delivered": "in_body",
                 "note": figure.INTERIM_IN_BODY}])
         plan = figure_build.plan("Demo", profile=profile())
-        label = figure_build.INTERIM_SHAPE_LABEL.format(parts="views 3 + mesh + rig + texture views 3")
+        label = figure_build.INTERIM_SHAPE_LABEL.format(parts="views 2 + mesh + rig + texture views 2")
         check("plan", steps_of(plan),
-              [("interim", label, 8, ""), ("pieces", "Own mesh · Jacket", 6, ""),
+              [("interim", label, 6, ""), ("pieces", "Own mesh · Jacket", 6, ""),
                ("texture", "Texture: views 3", 3, figure.TAKE_OUT), ("fits", "Fits on the CPU", 0, ""),
                ("assemble", "Assemble the figure", 0, "")])
-        check("explicit cost 17", figure_build.cost("Demo", plan)["hub_jobs"], 17)
+        check("explicit cost 15", figure_build.cost("Demo", plan)["hub_jobs"], 15)
         auto = figure_build._runnable(figure_build.plan("Demo", profile=profile(), explicit=False), False)
-        check("automatic: no take-out, 14", ([s.name for s in auto], sum(s.jobs for s in auto)),
-              (["interim", "pieces", "fits", "assemble"], 14))
+        check("automatic: no take-out, 12", ([s.name for s in auto], sum(s.jobs for s in auto)),
+              (["interim", "pieces", "fits", "assemble"], 12))
         check("interim before pieces, needs only the plain body",
               ([s.name for s in plan].index("interim") < [s.name for s in plan].index("pieces"),
                figure_build.DEPENDS["interim"]), (True, {"plain_body"}))

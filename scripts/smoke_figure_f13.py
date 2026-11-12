@@ -56,13 +56,14 @@ Expected, derived by hand from the rulings:
     note. Without F_c too: still ONE entry, key and note as above (how the
     piece is shown then is the general interim — ruling A11, a follow-up
     task; not pinned here).
-[c] Estimate (F13 c), front + back dressed: ``dressed_view_jobs()`` 3 (1 + 2).
+[c] Estimate (F13 c), front + back dressed: ``dressed_view_jobs()`` 2 (1 + 1:
+    the back is one draft, its composite is CPU since Task 11g).
     ``dressed_view_estimate`` of a figure with texture TSIG and both views
-    missing: no store -> 3; the store's front made from the current base
-    front -> 2 (front copied, back draft + fit); + the store's back
-    following that front -> 0; the back's draft made from another front -> 2;
+    missing: no store -> 2; the store's front made from the current base
+    front -> 1 (front copied, back draft); + the store's back
+    following that front -> 0; the back's draft made from another front -> 1;
     the outfit's front STORED with other content and only the back missing
-    -> 2 (a copy follows only the store's front); no texture -> 0. ``cost``
+    -> 1 (a copy follows only the store's front); no texture -> 0. ``cost``
     of steps 3 + 6 -> note "9 hub jobs (estimate, retries extra)".
 [d] One step (F13 d): with nothing built, ``run_garment(jacket,
     steps="worn", only=True)`` runs ONLY worn (front, back) — the cut-out is
@@ -93,8 +94,7 @@ Expected, derived by hand from the rulings:
     render at the SOURCE's aspect 1376×3072 (MiniMax / P-H3) -> scaled to
     686×1536, blocks in place (box (0,0,686,1536)); another aspect 2048×1536
     -> scaled to height 1536 (unchanged), box x0 = (2048-1536)//2 + 425 =
-    681. ``fit_crop((1536, 1536), (686, 1536))`` == ((1536, 1536), (425, 0),
-    (686, 1536)). The dressed front (``_render_views``) and the draft
+    681. The dressed front (``_render_views``) and the draft
     (``render_draft``) go out as a 1536² reference (grey at (0, 0), the
     source's pixel at (425 + 30, 30)) with ``override_width`` ==
     ``override_height`` == 1536 and ``crop_back_to`` == (1536, (425, 0),
@@ -118,8 +118,9 @@ Expected, derived by hand from the rulings:
     shows between them"; the open worn FRONT prompt contains it, the closed
     one has no state word (``outfit_options._STATE_WORDS_RE``, A7). The
     closed chain with both backs: ``run_estimate(state="open")`` -> 3, note
-    "worn 1 + ghost 1 + mesh 1 (backs from the closed state)" (HUB_JOBS 3 /
-    2 / 1 minus ``BACK_JOBS`` worn 2, ghost 1). ``run_edit_step(worn, back,
+    "worn 1 + ghost 1 + mesh 1 (backs from the closed state)" (HUB_JOBS 2 /
+    2 / 1 minus ``BACK_JOBS`` worn 1, ghost 1 — the worn back is one draft,
+    its composite is CPU since Task 11g). ``run_edit_step(worn, back,
     state="open")`` renders NOTHING (a render stub would raise): the open
     group's worn back is the closed one byte for byte, its record
     ``copied_from`` == {fsig_c, closed, sha256}, and it follows
@@ -127,9 +128,11 @@ Expected, derived by hand from the rulings:
     The ghost back (not drafted) copies the same way and follows while the
     closed ghost back is unchanged; once that is gone the copy is rendered
     again (below).
-    The closed backs removed: the estimate -> 6 (nothing to copy); the open
-    worn back's draft and fit prompts and the open ghost back's prompt carry
-    NO state word (rendered from the closed texts).
+    The closed backs removed: the estimate -> 5 (nothing to copy); the open
+    worn back's draft prompt and the open ghost back's prompt carry NO state
+    word (rendered from the closed texts); with a composite stub that fails
+    its checks the worn back drafts twice (draft, composite, draft,
+    composite) and is refused.
 [j] Ruling F16 (the Pose tab's Regenerate during a running Build looked
     dropped: the render thread waited behind the Build's garment chains).
     ``figure_build._active`` holds Demo -> ``POST …/model-refs/generate
@@ -151,7 +154,6 @@ hair change" (a "body" entry, no note) and "plain body step" ("Plain body:
 [g] proves its point on today's code: the BASE ``_crop_back`` (``git show
 b6476661:app/core/garment_images.py``) loses the red block.
 """
-import contextlib
 import json
 import os
 import shutil
@@ -187,12 +189,6 @@ def base_module(path: str, name: str) -> types.ModuleType:
     module.__file__ = str(ROOT / path)
     exec(compile(source, f"{BASE}:{path}", "exec"), module.__dict__)
     return module
-
-
-@contextlib.contextmanager
-def _nullref():
-    """``fit_references`` stand-in: two reference paths and the square canvas."""
-    yield Path("base.png"), Path("draft.png"), (1536, 1536)
 
 
 def main() -> int:
@@ -402,29 +398,29 @@ def main() -> int:
 
         # --- [c] estimate ------------------------------------------------------------------------------------
         print("[c] estimate")
-        check("one set", base_body.dressed_view_jobs(), 3)
+        check("one set", base_body.dressed_view_jobs(), 2)
         fig = figure.Figure(signature="sig1", bsig=BSIG, shape=BSIG, texture=TSIG, in_body=(), painted=(), own=())
         outfit_views = {}
         sha = base_body.file_sha256
         with patch.object(base_body, "dressed_image",
                           lambda _c, v, *_a, **_k: outfit_views.get(v)):
-            check("no store: 3", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 3)
+            check("no store: 2", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
             store = base_body.texture_refs_dir("Demo")
             s_front = image(store / f"tpose_{TSIG}.png", colour=(1, 2, 3), meta={
                 "base_signature": BSIG, "base_image_sha256": sha(base_front), "dressed": True})
-            check("store front: 2", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
+            check("store front: 1", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 1)
             draft = image(store / base_body.DRAFT_DIR / f"tpose_back_{TSIG}.png", colour=(4, 5, 6),
                           meta={"front_sha256": sha(s_front)})
             image(store / f"tpose_back_{TSIG}.png", colour=(7, 8, 9), meta={
                 "base_signature": BSIG, "base_image_sha256": sha(base_back), "back_draft_sha256": sha(draft)})
             check("store front + back: 0", base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 0)
             draft.with_suffix(".json").write_text(json.dumps({"front_sha256": "other"}), encoding="utf-8")
-            check("back from another front: 2",
-                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
+            check("back from another front: 1",
+                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 1)
             draft.with_suffix(".json").write_text(json.dumps({"front_sha256": sha(s_front)}), encoding="utf-8")
             outfit_views["front"] = image(refs / "tpose_sig1.png", colour=(9, 9, 9), meta={})
-            check("own other front stored, back missing: 2",
-                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 2)
+            check("own other front stored, back missing: 1",
+                  base_body.dressed_view_estimate("Demo", fig, "sig1", profile=prof()), 1)
             outfit_views.clear()
             from dataclasses import replace
             check("no texture: 0",
@@ -583,7 +579,6 @@ def main() -> int:
         src.resize((1376, 3072), Image.NEAREST).save(path)
         old = base_gi._crop_back(path, work / "old_out.png", 1536, (425, 0), (686, 1536))
         check("BASE stretched it (red block lost)", near(blocks(old)[1], (255, 0, 0)), False)
-        check("fit crop", base_body.fit_crop((1536, 1536), (686, 1536)), ((1536, 1536), (425, 0), (686, 1536)))
 
         captured = []
         from app.core import expression_regen
@@ -676,7 +671,7 @@ def main() -> int:
         def no_render(*_a, **_k):
             raise AssertionError("rendered")
         with patch.object(expression_regen, "render_character_image", no_render), \
-                patch.object(base_body, "render_draft", no_render), patch.object(base_body, "render_fit", no_render):
+                patch.object(base_body, "render_draft", no_render):
             got = garment_images.run_edit_step("Demo", jacket, fsig_o, "worn", "back", state="open")
         check("copied, byte for byte", got.read_bytes() == closed_worn_back.read_bytes(), True)
         check("copied_from", gs.read_record(got.with_suffix(".json")).get("copied_from"),
@@ -695,26 +690,27 @@ def main() -> int:
             back.with_suffix(".json").unlink()
         for path in (got, got.with_suffix(".json")):
             path.unlink()
-        check("no closed backs: 6", garments.run_estimate("Demo", jacket, state="open")["hub_jobs"], 6)
+        check("no closed backs: 5", garments.run_estimate("Demo", jacket, state="open")["hub_jobs"], 5)
         prompts = []
 
         def draft(*_a, prompt, **_k):
             prompts.append(("draft", prompt[0]))
             return image(refs / "draft_stub.png", meta={})
 
-        def fit(*_a, prompt, **_k):
-            prompts.append(("fit", prompt))
-            return None
+        def composite(*_a, **_k):
+            prompts.append(("composite", ""))
+            return {"ok": False, "reasons": ["stub"], "iou": 0.0, "coverage": {"score": 0.0}}
         # Masks without the BiRefNet model (the prompts are what is checked here).
         whole = lambda _path, size: np.ones((size[1], size[0]), bool)  # noqa: E731
-        with patch.object(base_body, "render_draft", draft), patch.object(base_body, "render_fit", fit), \
-                patch.object(base_body, "fit_references", lambda *a, **k: _nullref()), \
+        from app.core import view_composite
+        with patch.object(base_body, "render_draft", draft), patch.object(view_composite, "compose", composite), \
                 patch.object(garment_images, "_mask", whole):
             try:
                 garment_images.run_edit_step("Demo", jacket, fsig_o, "worn", "back", state="open")
-            except Exception:  # noqa: BLE001 — the stub fit renders nothing: GateRefused
+            except Exception:  # noqa: BLE001 — the stub composite fails its checks: GateRefused
                 pass
-        check("worn back: draft + fit rendered", [k for k, _p in prompts][:2], ["draft", "fit"])
+        check("worn back: draft, composite, re-draft, composite", [k for k, _p in prompts],
+              ["draft", "composite", "draft", "composite"])
         check("worn back: no state word", [k for k, p in prompts if words.search(p)], [])
         # The ghost back: its source (the open worn back) accepted; the prompt captured at the render.
         worn_back_o = gs.garment_path("Demo", jacket, fsig_o, "image", step="worn", view="back")

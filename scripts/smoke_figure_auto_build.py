@@ -72,21 +72,23 @@ Expected, by hand from the brief:
     views 4 + mesh + rig):
     (a) base older (``older_prompts``), the blouse painted, its views missing
         (they read the stale base): the manual plan = plain_body (6, manual
-        "Base body outdated — Build to refresh"), texture (3), assemble (0)
-        → 9; the automatic plan lists the same plain_body (the UI's pending
-        change) then texture (3), assemble (0); its runnable steps are
+        "Base body outdated — Build to refresh"), texture (2: the dressed
+        front + the back's draft, base_body.dressed_view_jobs — the composite
+        is CPU work since Task 11g), assemble (0) → 8; the automatic plan
+        lists the same plain_body (the UI's pending change) then texture
+        (2), assemble (0); its runnable steps are
         texture + assemble. ``request(Kira, "outfit_change")`` (auto on) →
         True; the run calls dressed, model, schedule — NO base_images /
         base_model; failed {}, skipped []. GET: status "changes", cost
-        steps[0] = plain_body with that manual note and jobs 6, hub_jobs 9;
+        steps[0] = plain_body with that manual note and jobs 6, hub_jobs 8;
         the body change's note (``figure.BASE_OUTDATED``) is the same text.
         A manual ``start`` then → base_images, base_model, dressed, model,
         schedule.
     (b) no base (``missing``), the blouse painted, no model: the automatic
         plan = [plain_body (6, manual "No base body yet — Build to create")]
         alone (nothing to build on); ``start(automatic)`` → "current", no
-        producer called; the manual plan = plain_body, texture (3), assemble
-        → 9.
+        producer called; the manual plan = plain_body, texture (2), assemble
+        → 8.
 [8] Fails on the old code: at 8076597d ``figure_build.py`` has no
     ``def request(`` / ``def wearers(``, ``routes/inventory.py`` no
     ``/wearers`` route, ``schedule_outfit_render`` no Build timer, and
@@ -439,11 +441,11 @@ def failure_section():
     cached.clear()
     fbp.W = fbp.World(base="older", painted=("blouse",))
     manual = fb.plan("Kira", profile={}, explicit=True)
-    check("[9a] manual plan", fbp.names(manual), [("plain_body", 6), ("texture", 3), ("assemble", 0)])
+    check("[9a] manual plan", fbp.names(manual), [("plain_body", 6), ("texture", 2), ("assemble", 0)])
     check("[9a] plain body marked", manual[0].manual, "Base body outdated — Build to refresh")
     auto = fb.plan("Kira", profile={}, explicit=False)
     check("[9a] automatic plan lists the plain body", fbp.names(auto),
-          [("plain_body", 6), ("texture", 3), ("assemble", 0)])
+          [("plain_body", 6), ("texture", 2), ("assemble", 0)])
     check("[9a] automatic runnable: no base step", [st.name for st in fb._runnable(auto, False)],
           ["texture", "assemble"])
     check("[9a] a trigger (auto on)", fb.request("Kira", "outfit_change"), True)
@@ -455,7 +457,7 @@ def failure_section():
     first = (info["cost"]["steps"] or [{}])[0]
     check("[9a] GET: the pending base step with its cost",
           (info["status"], first.get("name"), first.get("manual"), first.get("jobs"), info["cost"]["hub_jobs"]),
-          ("changes", "plain_body", "Base body outdated — Build to refresh", 6, 9))
+          ("changes", "plain_body", "Base body outdated — Build to refresh", 6, 8))
     check("[9a] the body change's note (figure.pending_changes; smoke_figure_delivered [5])", figure.BASE_OUTDATED,
           manual[0].manual)
     fbp.W.calls.clear()
@@ -471,7 +473,7 @@ def failure_section():
     check("[9b] automatic start", fb.start("Kira", reason="body_change", automatic=True)["status"], "current")
     check("[9b] no producer called", fbp.W.calls, [])
     check("[9b] manual plan", fbp.names(fb.plan("Kira", profile={}, explicit=True)),
-          [("plain_body", 6), ("texture", 3), ("assemble", 0)])
+          [("plain_body", 6), ("texture", 2), ("assemble", 0)])
 
 
 def baseline_section():

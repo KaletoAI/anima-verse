@@ -32,12 +32,14 @@ since 9788164d the default mode is ``in_body``, which would mesh a shape). The p
 (an older base); every hand-written model records the figure its pieces are
 delivered as now (Task 6: a model without one is stale "figure" — the boot
 stamp of smoke_figure_stamp.py gives the pre-Task-6 ones theirs). Expectations derived by hand from § 6.4 and rebuild_cost's
-table (front 1 + 2 per other dressed view; retexture repaint = CPU):
+table (front 1 + 1 per other dressed view — its draft; the composite onto
+the base view is CPU work since Task 11g; retexture repaint = CPU):
 
 [B1] the worn model stale, no dressed view → one candidate
      ``outfit:Kira:<sig>``, label "Kira · Dress · older base" (the outfit's
      piece name, no saved set matches; the reason text of "older_base"),
-     hub_jobs 3, note "older base: views 3 (first attempts)".
+     hub_jobs 2 (front 1 + back draft 1), note "older base: views 2 (first
+     attempts)".
 [B2] through the engine (``handle_step``) → {"ok": True}; the calls in order
      trigger_now(("tpose",), blocking True, force False, signature sig), then
      generate_for_current_outfit(force True, signature sig); rescan → no
@@ -45,7 +47,7 @@ table (front 1 + 2 per other dressed view; retexture repaint = CPU):
 [B3] the model stale again, ``base_body._outfit_failed[("Kira", sig)]`` set →
      outfit_info "failed" → no candidate; cleared → the candidate is back.
 [B4] ``model3d._generating`` holds Kira → apply raises CandidateBusy, no
-     producer called; the occasion ``outfit_back`` resolving to nothing with
+     producer called; the occasion ``outfit_back_draft`` resolving to nothing with
      views needed → CandidateBusy too, no producer called.
 [B5] views current (B2's recorder wrote them), the model stale, the build
      recorder answers ok False "worker" → through the engine: "refused", the
@@ -59,7 +61,7 @@ table (front 1 + 2 per other dressed view; retexture repaint = CPU):
      ``outfit_batch._signature({"neck": scarf})``) with a stale model, and a
      set "Day" = [Dress, Scarf] without a model; the worn model current:
      scope worn → nothing; scope saved → exactly ``outfit:Kira:<sig2>``,
-     label "Kira · Evening · older base", hub 3; "Day" never. Its apply
+     label "Kira · Evening · older base", hub 2; "Day" never. Its apply
      renders through generate_model_ref_images (pieces {"neck": scarf}, the
      model's manifest, force False, signature sig2) — trigger_now not called —
      then the build for sig2.
@@ -75,7 +77,7 @@ table (front 1 + 2 per other dressed view; retexture repaint = CPU):
      facade ``generate_from_input`` (a real ``ImageService`` with no
      instances, switched on by hand) → the routing, where a fake backend
      records the occasion and raises ``BackendBusyError``. Views needed, the
-     model stale (cost 3), only the build recorder stays.
+     model stale (cost 2), only the build recorder stays.
      [B9a] through the engine → {"busy": …}, NOT "refused"; the step
      pending, attempts 0, refused 0; ONE routed render, occasion
      "outfit_front" (the front is the first view; the pass stops there); the
@@ -88,7 +90,7 @@ table (front 1 + 2 per other dressed view; retexture repaint = CPU):
      [B9c] the saved set "Evening" (sig2, B7) stale with its views dropped,
      scope saved → the non-worn path (``generate_model_ref_images``) →
      CandidateBusy, one routed render "outfit_front", no failure recorded.
-     [B9d] the worn front current, only the back missing (cost still 3:
+     [B9d] the worn front current, only the back missing (cost still 2:
      ``rebuild_cost`` counts the whole view set, an upper bound) → the back's
      draft (``_dress_view`` → ``render_draft``) meets the
      busy backend → CandidateBusy, one routed render "outfit_back_draft", no
@@ -277,7 +279,7 @@ def main() -> int:
             write_model(sig, pieces)
             found = cands()
             check("one candidate", [(c.key, c.label, c.hub_jobs, c.note) for c in found],
-                  [(key, "Kira · Dress · older base", 3, "older base: views 3 (first attempts)")])
+                  [(key, "Kira · Dress · older base", 2, "older base: views 2 (first attempts)")])
             check("needs_media", typ.needs_media, True)
 
             # --- [B2] ---------------------------------------------------------------
@@ -286,7 +288,7 @@ def main() -> int:
             check("scan", engine.scan(entry), {"added": 1, "closed": 0})
             check("the step carries the cost", (store.list_steps(entry)[0]["hub_jobs"],
                                                 store.list_steps(entry)[0]["note"]),
-                  (3, "older base: views 3 (first attempts)"))
+                  (2, "older base: views 2 (first attempts)"))
             check("handle_step ok", run_step(entry, key), {"ok": True})
             check("calls in order", CALLS, [("trigger_now", ("tpose",), True, False, sig),
                                             ("generate_for_current_outfit", True, sig)])
@@ -318,8 +320,8 @@ def main() -> int:
                 with model3d._lock:
                     model3d._generating.discard("Kira")
             drop_views(sig)
-            RESOLVE["outfit_back"] = ""
-            raises("outfit_back unresolved → CandidateBusy", lambda: typ.apply(cands()[0], typ.validate({}), "t"),
+            RESOLVE["outfit_back_draft"] = ""
+            raises("outfit_back_draft unresolved → CandidateBusy", lambda: typ.apply(cands()[0], typ.validate({}), "t"),
                    CandidateBusy)
             RESOLVE.clear()
             check("no producer called", CALLS, [])
@@ -371,7 +373,7 @@ def main() -> int:
             check("worn scope: nothing (the worn model is current)", cands(), [])
             found = cands(scope="saved")
             check("saved scope: Evening only", [(c.key, c.label, c.hub_jobs) for c in found],
-                  [(f"outfit:Kira:{sig2}", "Kira · Evening · older base", 3)])
+                  [(f"outfit:Kira:{sig2}", "Kira · Evening · older base", 2)])
             typ.apply(found[0], typ.validate({"scope": "saved"}), "t")
             check("non-worn: rendered the batch way, then built", CALLS,
                   [("generate_model_ref_images", ("tpose",), False, {"neck": scarf}, sig2),
@@ -413,7 +415,7 @@ def main() -> int:
              patch("app.imagegen.routing.explain_occasion", explain), \
              patch("app.imagegen.service.get_image_service", lambda: svc), \
              patch("app.imagegen.routing.run_routed", busy_backend):
-            check("views needed: cost 3", [(c.key, c.hub_jobs) for c in cands()], [(key, 3)])
+            check("views needed: cost 2", [(c.key, c.hub_jobs) for c in cands()], [(key, 2)])
             print("[B9a] a busy backend through the engine")
             entry = store.create(typ.id, "Rebuild", typ.validate({}), "one_shot")["id"]
             check("scan", engine.scan(entry), {"added": 1, "closed": 0})
@@ -444,7 +446,7 @@ def main() -> int:
             write_model(sig2, {"neck": scarf})
             found = cands(scope="saved")
             check("saved scope: Evening, views needed", [(c.key, c.hub_jobs) for c in found],
-                  [(f"outfit:Kira:{sig2}", 3)])
+                  [(f"outfit:Kira:{sig2}", 2)])
             raises("busy → CandidateBusy", lambda: typ.apply(found[0], typ.validate({"scope": "saved"}), "t"),
                    CandidateBusy)
             check("one routed render, the dressed front", routed, ["outfit_front"])
@@ -457,7 +459,7 @@ def main() -> int:
                 p.unlink()
             write_model(sig, pieces)
             found = cands()
-            check("worn: only the back missing, cost 3 (whole set)", [(c.key, c.hub_jobs) for c in found], [(key, 3)])
+            check("worn: only the back missing, cost 2 (whole set)", [(c.key, c.hub_jobs) for c in found], [(key, 2)])
             raises("busy → CandidateBusy", lambda: typ.apply(found[0], typ.validate({}), "t"), CandidateBusy)
             check("one routed render, the back's draft", routed, ["outfit_back_draft"])
             check("no failure recorded", failure(sig), (None, None))

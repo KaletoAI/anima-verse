@@ -52,8 +52,10 @@ Dress Demo item "dress": slots [top, bottom], own_mesh, prompt_fragment
 FRAGMENT. Demo has hair text, the world's hair method is the default
 "body": no hair item exists or is made.
 
-[1] Full run run_garment(Demo, D): 5 renders in chain order — worn front,
-    the drafted worn back ("d") and its fit, ghost back, ghost front (back
+[1] Full run run_garment(Demo, D): 4 renders in chain order — worn front,
+    the drafted worn back ("d"; composited onto the base back on the CPU,
+    rule "piece" — Task 11g, no fit render; WORN on BASE passes), ghost
+    back, ghost front (back
     first, garments.EDIT_VIEW_ORDER), each accepted at attempt 1 —
     cut-outs f/b, ONE generate_mesh (occasion mesh_garment), decimate_to
     raw -> prepared (target 60000, garment_mesh.TARGET_TRIS_BY_KIND) and
@@ -175,8 +177,7 @@ FRAGMENT = "a knee-length green linen dress"
 FRAGMENT2 = "a knee-length green cotton dress"
 #: [3]: a forced worn front drops the back drafted from it (``garments``: "a new front of a drafted step drops
 #: the back it was drafted from") and the later steps of both views (``garment_images._drop_later``).
-FORCED_FRONT = [("worn", "front", 1), ("worn", "back", "d"), ("worn", "back", 1), ("ghost", "back", 1),
-                ("ghost", "front", 1)]
+FORCED_FRONT = [("worn", "front", 1), ("worn", "back", "d"), ("ghost", "back", 1), ("ghost", "front", 1)]
 W, H = 1024, 1200
 
 
@@ -229,11 +230,13 @@ GHOST = dressed(canvas())
 
 
 def rembg_stub(data, model="u2net", **kwargs):
+    """The mask (``only_mask``) or, like rembg, the RGBA cut-out (``base_body.cut_out`` — the view
+    composite of Task 11g reads it)."""
     from PIL import Image
     with Image.open(io.BytesIO(data)) as im:
-        arr = np.asarray(im.convert("RGB")).astype(np.int16)
-    mask = (np.abs(arr - 128) > 2).any(2)
-    return png((mask * 255).astype(np.uint8))
+        rgb = np.asarray(im.convert("RGB"))
+    mask = ((np.abs(rgb.astype(np.int16) - 128) > 2).any(2) * 255).astype(np.uint8)
+    return png(mask) if kwargs.get("only_mask") else png(np.dstack([rgb, mask]))
 
 
 # --- GLB fixtures -------------------------------------------------------------
@@ -518,8 +521,7 @@ def main() -> int:
         check("ok", (res.get("ok"), res.get("fsig")), (True, f1))
         check("ran", res.get("ran"), ["worn", "ghost", "cutout", "mesh", "fit"])
         check("renders", [(s, v, a) for s, v, a, _f in RENDERS],
-              [("worn", "front", 1), ("worn", "back", "d"), ("worn", "back", 1), ("ghost", "back", 1),
-               ("ghost", "front", 1)])
+              [("worn", "front", 1), ("worn", "back", "d"), ("ghost", "back", 1), ("ghost", "front", 1)])
         for step in ("worn", "ghost", "cutout"):
             for v in ("front", "back"):
                 p = gs.garment_path("Demo", hid, f1, "image", step=step, view=v)
@@ -705,7 +707,7 @@ def main() -> int:
         mode["ghost_back_bad"] = False
         after = counts()
         check("refused at ghost", (res.get("ok"), res.get("step")), (False, "ghost"))
-        check("renders, no mesh", (after[0] - before[0], after[1] - before[1]), (5, 0))
+        check("renders, no mesh", (after[0] - before[0], after[1] - before[1]), (4, 0))
         check("status failed ghost", (gs.status("Demo", hid)["failed"] or {}).get("step"), "ghost")
         check("item text untouched", inventory.get_item(hid).get("prompt_fragment"), FRAGMENT2)
         info = garments.garment_info("Demo", hid)

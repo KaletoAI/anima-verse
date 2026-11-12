@@ -30,8 +30,9 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
   B1 -> B2: shift 20 px = 0.02 Hb  -> within the caps: refit accepted.
   B2 -> B3: shift 60 px = 0.06 Hb  -> beyond the caps: FrameRefused.
 
-[1] Full run on B1 (F1): 5 renders (worn front, the drafted worn back and its
-    fit, ghost back, ghost front), 1 mesh call; the group F1 keeps the
+[1] Full run on B1 (F1): 4 renders (worn front, the drafted worn back —
+    composited on the CPU since Task 11g, no fit render — ghost back, ghost
+    front), 1 mesh call; the group F1 keeps the
     base views of B1 (``ensure_current``): source_of(F1).bsig = B1,
     base_images = the sha256 of B1's two views; fit record refitted False,
     source.fsig F1.
@@ -52,13 +53,13 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     and base copy are gone; no base copy is an "unknown" file (the image name
     pattern covers ``{item}_{fsig}_base_{view}.png``).
 [4] Manual Re-render (explicit run of "worn", force): the copies go,
-    the chain renders: 5 renders, 1 mesh call; fit record refitted False,
+    the chain renders: 4 renders, 1 mesh call; fit record refitted False,
     source.fsig F2 (its own base copy of B2); garment_info.refit None.
 [5] B3 (dy 80): the refit from F2 is refused (0.06 Hb > 0.04) -> the same
-    run renders the chain: 5 renders, 1 mesh call, ok; fit record F3
+    run renders the chain: 4 renders, 1 mesh call, ok; fit record F3
     refitted False, source.fsig F3; no file of F3 carries copied_from.
 [6] The piece's own inputs changed (the dress text FRAGMENT2; base
-    unchanged): no source names the current inputs -> no refit: 5 renders,
+    unchanged): no source names the current inputs -> no refit: 4 renders,
     1 mesh call.
 [7] Limbs (garment_fit.limb_frames, garment_source.limb_numbers / limb_gate on
     synthetic geometry). Body: per side an arm cylinder r 0.030 along +-x at
@@ -94,7 +95,7 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     LONG numbers) and whose fit hangs off them (limb_numbers stubbed to HANG):
     B4 (dy 60; from the [6] group on B3, dy 80: shift -20 px = 0.02 Hb, inside
     the caps) -> the limb gate refuses the refit, the same run renders the
-    chain: ok, 5 renders, 1 mesh call, the fit refitted False, no file carries
+    chain: ok, 4 renders, 1 mesh call, the fit refitted False, no file carries
     copied_from, no limbs/ file left for F4.
 [9] align_limbs (garment_fit) by hand. Source left arm = [7]'s chain (shoulder
     (0.18, 1.4, 0), elbow 0.43, wrist 0.67, tip 0.75; radii 0.03; frame u
@@ -446,7 +447,7 @@ def main() -> int:
         before = counts()
         res = garments.run_garment("Demo", hid)
         check("ok", (res.get("ok"), res.get("fsig")), (True, f1))
-        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
+        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
         src = garment_source.source_of("Demo", hid, f1)
         check("F1 keeps B1's views", (src.get("bsig"), src.get("base_images")), (b1, view_shas(b1)))
         rec1 = fit_record(f1)
@@ -505,7 +506,7 @@ def main() -> int:
         before = counts()
         res = garments.run_garment("Demo", hid, steps=refit.get("first_step") or "worn", force=True)
         check("ok", res.get("ok"), True)
-        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
+        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
         rec4 = fit_record(f2)
         check("fit F2 own", (rec4.get("accepted"), rec4.get("refitted"), (rec4.get("source") or {}).get("fsig"),
                              (rec4.get("source") or {}).get("bsig")), (True, False, f2, b2))
@@ -521,7 +522,7 @@ def main() -> int:
         before = counts()
         res = garments.run_garment("Demo", hid)
         check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["worn", "ghost", "cutout", "mesh", "fit"]))
-        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
+        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
         rec5 = fit_record(f3)
         check("fit F3 own", (rec5.get("accepted"), rec5.get("refitted"), (rec5.get("source") or {}).get("fsig")),
               (True, False, f3))
@@ -538,7 +539,7 @@ def main() -> int:
         before = counts()
         res = garments.run_garment("Demo", hid)
         check("ok", res.get("ok"), True)
-        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
+        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
 
         # --- [7] ---------------------------------------------------------------------
         print("[7] limbs on synthetic geometry")
@@ -582,7 +583,7 @@ def main() -> int:
         finally:
             garment_source.source_limbs, garment_source.limb_numbers = real_source_limbs, real_limb_numbers
         check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["worn", "ghost", "cutout", "mesh", "fit"]))
-        check("5 renders, 1 mesh", delta(before)[:2], (5, 1))
+        check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
         rec8 = fit_record(f4)
         check("fit F4 own", (rec8.get("accepted"), rec8.get("refitted"), (rec8.get("source") or {}).get("fsig")),
               (True, False, f4))

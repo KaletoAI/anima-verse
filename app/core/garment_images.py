@@ -41,20 +41,33 @@ edit steps, prompts and gates.
 
 A step whose back is DRAFTED (``EDIT_STEPS[step]["back"] == "draft"``:
 clothing ``worn``) does not edit the base back. It takes the outfit's two
-steps (``base_body.render_draft`` / ``render_fit``, the occasions
-``outfit_back_draft`` / ``outfit_back``): a draft rendered fresh from the
+steps (Task 11g, Ruling C1): a DRAFT (``base_body.render_draft``, occasion
+``outfit_back_draft``, the step's only hub job) rendered fresh from the
 step's accepted FRONT (``kind.draft_prompt``), stored as
-``images/{item}_{fsig}_{step}draft_back.png``, then up to ``ATTEMPTS`` fits
-of the cut-out draft onto the cut-out base back (``kind.fit_prompt``),
-both on neutral grey in a square canvas, published unprocessed and cropped
-back onto the base back's frame. Each fit is gated like an edit (the kind's
-gate against the base back: a poor registration = changed outline/colour
-outside the garment refuses it and the next fit renders from the same
-draft; the fit's outline limit is the looser ``FIT_OUTSIDE_XOR_MAX`` — a fit
-re-renders the whole figure) plus ``kind.back_reasons`` against the accepted
-front's record (the front opening on the back). The accepted back records
-the front it follows (``front_sha256``); a new accepted front drops the back
-and everything after it.
+``images/{item}_{fsig}_{step}draft_back.png``, then the CPU COMPOSITE of the
+draft's piece onto the base back (``view_composite.compose``, rule
+"piece"; no hub job, no model fallback), flattened onto neutral grey in the
+base back's frame and stored as the attempt. The composite's checks
+(alignment IoU >= ``view_composite.IOU_MIN``, coverage >= ``COVERAGE_MIN``)
+come first: a composite that fails them is refused without a gate and
+never published. One that passes is gated like an edit, at an edit's
+outline limits — the base back outside the garment mask is kept pixel for
+pixel — (the kind's gate against the base back) plus ``kind.back_reasons``
+against the accepted front's record (the front opening on the back). A
+refused attempt makes a new draft; after ``ATTEMPTS`` drafts the step is
+refused with the composite's numbers. The accepted back records the front
+it follows (``front_sha256``), its draft, ``fit: "composite"`` and the
+composite's record; a new accepted front drops the back and everything
+after it. Backs FITTED by the edit model before Task 11g keep their records
+and stay accepted while they follow the front.
+
+The piece rule differs from the outfit's dressed views (``view_composite.
+RULES``): a single piece can be small — a belt measured a put-on region of
+0.014 of the figure, a necklace 0.0055 (Anima Divide copy, 2026-11-12), both
+refused by the outfit rule's 0.03 — so the piece rule keeps every garment
+component down to 30 px (no opening), scores the put-on at full resolution
+with a smaller head share and no dilation, and accepts a region from 0.002
+of the figure.
 
 A step whose gate changed (``kind.GATE_VERSIONS``: clothing ``worn``,
 ``garment_gates.WORN_GATE_VERSION``, and ``ghost``,
@@ -62,7 +75,8 @@ A step whose gate changed (``kind.GATE_VERSIONS``: clothing ``worn``,
 renders again (``_regate_stored``): when the view's final is not accepted,
 every attempt file whose gate record is of an older version is gated again
 from the file (masks only, no image job) — a drafted back only while the
-attempt was fitted from the current front (``front_sha256``). The first
+attempt is a composite that passed its checks, made from the current front
+(``front_sha256``; a stored model fit is never re-gated). The first
 that passes is published like a fresh accepted attempt; the others keep
 their new records. Nothing passes: the step renders as before. That runs on
 the next chain run of the piece and on the step's Regenerate / Run all.
@@ -860,18 +874,20 @@ def _with_registration(record: Dict[str, Any], registration: Dict[str, Any]) -> 
 def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind, *,
                   profile: Dict[str, Any], base: Path, refs_dir: Path, final: Path,
                   pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None) -> Path:
-    """The back of a drafted step (module docstring): one DRAFT from the
-    accepted front, then up to ``ATTEMPTS`` FITs of it onto the base back,
-    each gated (the kind's gate against the base back + ``kind.back_reasons``
-    against the front's accepted record). ``MissingInput`` without an
-    accepted front, ``RuntimeError`` when the draft renders nothing,
-    ``GateRefused`` after the fits."""
-    from app.core import base_body
+    """The back of a drafted step (module docstring): up to ``ATTEMPTS``
+    DRAFTs from the accepted front, each COMPOSITED onto the base back on the
+    CPU (``view_composite``, rule "piece") and — when the composite passes
+    its checks — gated (the kind's gate against the base back +
+    ``kind.back_reasons`` against the front's accepted record). A composite
+    that fails its checks is refused without a gate and makes a new draft.
+    ``MissingInput`` without an accepted front, ``RuntimeError`` when a draft
+    renders nothing, ``GateRefused`` after the drafts (the records carry the
+    composite's numbers)."""
+    from app.core import base_body, view_composite
     from app.core.base_body import file_sha256
-    from app.core.garment_store import garment_path, read_record, write_record
+    from app.core.garment_store import garment_path, write_record
     from app.core.model_refs import VIEW_REFERENCE_BACKGROUND, _tpose_size, neutral_view_reference
-    from app.core.outfit_options import piece_state_of
-    fit_text, fit_keywords = kind.fit_prompt(step, item_id=item_id, state=piece_state_of(profile, item_id))
+    from app.core.timeutils import utc_now_iso
     front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
     front_gate = accepted_record(front)
     if front_gate is None:
@@ -883,66 +899,67 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         base_rgb = _rgb(flat_base)
         base_mask = _mask(flat_base, base_size)
 
-    def gate_fit(path: Path) -> Dict[str, Any]:
+    def gate_composite(path: Path) -> Dict[str, Any]:
         record = kind.gate(step, "back", base_rgb=base_rgb, base_mask=base_mask, source_rgb=None, source_mask=None,
                            edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
-                           item_id=item_id, fitted=True, front_gate=front_gate)
+                           item_id=item_id, front_gate=front_gate)
         return _with_pair(record, pair_check, list(kind.back_reasons(front_gate, record)))
 
+    def composite_ok(sidecar: Dict[str, Any]) -> bool:
+        composite = sidecar.get("composite")
+        return sidecar.get("fit") == "composite" and isinstance(composite, dict) and composite.get("ok") is True
+
     if not (_accepted(final) and _follows_front(character_name, item_id, fsig, step, final)):
+        # Only a stored COMPOSITE that passed its checks is re-gated — never a
+        # model fit of before Task 11g, never a refused composite.
         hit = _regate_stored(character_name, item_id, fsig, step, "back", kind, final=final,
-                             regate=lambda path, _old: gate_fit(path),
-                             keep=lambda sidecar: sidecar.get("front_sha256") == front_sha,
-                             follow_keys=("front_sha256", "draft", "draft_sha256"))
+                             regate=lambda path, _old: gate_composite(path),
+                             keep=lambda sidecar: sidecar.get("front_sha256") == front_sha and composite_ok(sidecar),
+                             follow_keys=("front_sha256", "draft", "draft_sha256", "fit", "composite"))
         if hit is not None:
             return hit
 
-    # The render arguments of the outfit's draft and fit, nothing worn on
-    # the profile (the text names the piece, the reference shows it).
+    # The render arguments of the outfit's draft, nothing worn on the
+    # profile (the text names the piece, the reference shows it).
     mesh_profile = {**profile, "equipped_pieces": {}, "equipped_items": []}
-    # ``raise_load``: the draft and the fit are garment steps — load is
-    # retry_later, never a refusal record (the outfit's own dressed views
-    # keep their None-on-failure contract).
+    # ``raise_load``: the draft is a garment step — load is retry_later,
+    # never a refusal record (the outfit's own dressed views keep their
+    # None-on-failure contract).
     common = {**base_body._dress_common("back", pieces={}, items=[], profile=mesh_profile, size=_tpose_size()),
               "raise_load": True}
     draft_stem = draft_path(character_name, item_id, fsig, step).with_suffix("")
-    draft = base_body.render_draft(
-        character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir,
-        prompt=kind.draft_prompt(character_name, step, profile=profile, item_id=item_id),
-        profile=profile, common=common,
-        sidecar_extra={"garment": {**meta, "stage": "draft"}, "front_sha256": front_sha})
-    if draft is None:
-        raise RuntimeError(f"The {step} back draft rendered nothing")
-    draft = Path(draft)
-    follow = {"front_sha256": front_sha, "draft": draft.name, "draft_sha256": file_sha256(draft)}
-
+    prompt = kind.draft_prompt(character_name, step, profile=profile, item_id=item_id)
     records: List[Dict[str, Any]] = []
-    with base_body.fit_references(base, draft, refs_dir, base_body.SQUARE, background=VIEW_REFERENCE_BACKGROUND) \
-            as (base_reference, draft_reference, canvas):
-        _canvas, offset, _size = base_body.fit_crop(canvas, base_size)
-        for attempt in range(1, ATTEMPTS + 1):
-            target = garment_path(character_name, item_id, fsig, "image", step=step, view="back", attempt=attempt)
-            path = base_body.render_fit(
-                character_name, "back", stem=target.with_suffix(""), base_reference=base_reference,
-                draft_reference=draft_reference, canvas=canvas, common=common, postprocess=False,
-                prompt=fit_text, prompt_keywords=fit_keywords,
-                extra={"garment": {**meta, "attempt": attempt, "stage": "fit"}, **follow,
-                       "edit_canvas": {"side": list(canvas), "offset": list(offset), "crop": list(base_size)}})
-            if path is None:
-                record: Dict[str, Any] = {"view": "back", "ok": False, "reasons": ["render failed"]}
-            else:
-                path = crop_back(Path(path), target, canvas, offset, base_size)
-                record = gate_fit(path)
-            record["attempt"] = attempt
-            records.append(record)
-            if path is not None:
-                sidecar = read_record(target.with_suffix(".json"))
-                write_record(target.with_suffix(".json"), {**sidecar, "gate": record})
-            logger.info("Garment %s %s back (draft + fit) attempt %d: %s %s", character_name, step, attempt,
-                        "accepted" if record["ok"] else "refused", record.get("reasons") or "")
-            if record["ok"]:
-                return _publish(character_name, item_id, fsig, step, "back", kind, target, final, records,
-                                attempt, follow)
+    for attempt in range(1, ATTEMPTS + 1):
+        # Every attempt drafts anew into the one draft file: the stored
+        # draft is the one the last attempt was composited from.
+        draft = base_body.render_draft(
+            character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
+            profile=profile, common=common,
+            sidecar_extra={"garment": {**meta, "attempt": attempt, "stage": "draft"}, "front_sha256": front_sha})
+        if draft is None:
+            raise RuntimeError(f"The {step} back draft rendered nothing")
+        draft = Path(draft)
+        target = garment_path(character_name, item_id, fsig, "image", step=step, view="back", attempt=attempt)
+        composite = view_composite.compose(base, draft, target, rule="piece", background=VIEW_REFERENCE_BACKGROUND)
+        follow = {"front_sha256": front_sha, "draft": draft.name, "draft_sha256": file_sha256(draft),
+                  "fit": "composite", "composite": composite}
+        if composite["ok"]:
+            record = gate_composite(target)
+        else:
+            # Refused without a gate: the numbers go into the refusal text.
+            record = {"view": "back", "ok": False,
+                      "reasons": [f"composite refused — {view_composite.summary(composite)}"]}
+        record.update(attempt=attempt, composite=view_composite.summary(composite))
+        records.append(record)
+        write_record(target.with_suffix(".json"), {
+            "garment": {**meta, "attempt": attempt, "stage": "composite"}, **follow,
+            "base_image_sha256": file_sha256(base), "created_at": utc_now_iso(), "gate": record})
+        logger.info("Garment %s %s back (draft + composite) attempt %d: %s %s", character_name, step, attempt,
+                    "accepted" if record["ok"] else "refused", record.get("reasons") or "")
+        if record["ok"]:
+            return _publish(character_name, item_id, fsig, step, "back", kind, target, final, records,
+                            attempt, follow)
     raise GateRefused(step, "back", records)
 
 
