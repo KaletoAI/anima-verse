@@ -157,6 +157,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from app.core import fit_kernels
 from app.core.log import get_logger
 
 logger = get_logger("garment_source")
@@ -603,7 +604,7 @@ def limb_numbers(positions, body) -> Optional[Dict[str, Any]]:
     X = np.asarray(positions, np.float64)
     P = np.asarray(body.positions, np.float64)
     dominant = garment_fit.dense_weights(body).argmax(1)
-    nearest = cKDTree(P).query(X)[1] if len(X) else np.zeros(0, np.int64)
+    nearest = cKDTree(P).query(X, workers=fit_kernels.threads())[1] if len(X) else np.zeros(0, np.int64)
     out: Dict[str, Any] = {}
     for name, frame in frames.items():
         side = name.split("_")[0]
@@ -793,7 +794,8 @@ def torso_cover(positions, body) -> Optional[Dict[str, Any]]:
     band = np.clip(((v - lo) / (hi - lo) * TORSO_BANDS).astype(int), 0, TORSO_BANDS - 1)
     sector = ((theta + np.pi) / (2 * np.pi) * TORSO_SECTORS).astype(int) % TORSO_SECTORS
     X = np.asarray(positions, np.float64)
-    hit = (cKDTree(X).query(T)[0] <= TORSO_COVER_M) if len(X) else np.zeros(len(T), bool)
+    hit = ((cKDTree(X).query(T, workers=fit_kernels.threads())[0] <= TORSO_COVER_M) if len(X)
+           else np.zeros(len(T), bool))
     covered = np.zeros((TORSO_BANDS, TORSO_SECTORS))
     count = np.zeros((TORSO_BANDS, TORSO_SECTORS))
     np.add.at(covered, (band, sector), hit)
@@ -890,11 +892,13 @@ def _trunk_seen(positions, faces, body) -> Optional[Dict[str, Any]]:
         tree = cKDTree(samples)
         for step in np.arange(TORSO_SEE_FROM_M, TORSO_SEE_DEPTH_M, 0.008):
             todo = np.nonzero(~covered)[0]
-            d = tree.query(P[rows[todo]] + step * out[todo], distance_upper_bound=TORSO_SEE_LATERAL_M)[0]
+            d = tree.query(P[rows[todo]] + step * out[todo], distance_upper_bound=TORSO_SEE_LATERAL_M,
+                           workers=fit_kernels.threads())[0]
             covered[todo[d <= TORSO_SEE_LATERAL_M]] = True
         for step in np.arange(-TORSO_SEE_FROM_M, -TORSO_UNDER_DEPTH_M, -0.006):
             todo = np.nonzero(~covered & (under < 0))[0]
-            d, j = tree.query(P[rows[todo]] + step * out[todo], distance_upper_bound=TORSO_SEE_LATERAL_M)
+            d, j = tree.query(P[rows[todo]] + step * out[todo], distance_upper_bound=TORSO_SEE_LATERAL_M,
+                              workers=fit_kernels.threads())
             under[todo[d <= TORSO_SEE_LATERAL_M]] = j[d <= TORSO_SEE_LATERAL_M]
     layered = np.zeros(len(rows), bool)
     found = np.nonzero(~covered & (under >= 0))[0]

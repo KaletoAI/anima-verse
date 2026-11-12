@@ -123,10 +123,12 @@ def _no_database(*_args: Any, **_kwargs: Any) -> Any:
     raise WorkerDatabaseAccess("a refit worker process never opens a database")
 
 
-def _initializer(blender_slots: Optional[tuple] = None) -> None:
+def _initializer(blender_slots: Optional[tuple] = None, fit_threads: Optional[int] = None) -> None:
     """Runs first in every worker: no database, low priority, one BLAS thread;
     ``blender_slots`` (``runner.spawn_slots()`` of the server) pins the Blender
-    limit's slot folder and count — a worker has no instance and no config."""
+    limit's slot folder and count — a worker has no instance and no config;
+    ``fit_threads`` is the worker's share of the cores for the fit kernels and
+    KD-tree queries (``fit_kernels.set_threads``; None keeps its default)."""
     global _IN_WORKER
     _IN_WORKER = True
     if blender_slots:
@@ -135,6 +137,10 @@ def _initializer(blender_slots: Optional[tuple] = None) -> None:
     # numpy is not imported yet in a fresh spawned worker: these take effect.
     for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
         os.environ[var] = "1"
+    if fit_threads:
+        # after the BLAS variables: this import brings numpy in
+        from app.core import fit_kernels
+        fit_kernels.set_threads(fit_threads)
     import sqlite3
     sqlite3.connect = _no_database  # type: ignore[assignment]
     sqlite3.dbapi2.connect = _no_database  # type: ignore[attr-defined]
@@ -148,8 +154,10 @@ def _new_pool(size: int) -> Any:
     import multiprocessing
     from concurrent.futures import ProcessPoolExecutor
     from app.blender import runner
+    # the cores less two, shared evenly by the workers
+    fit_threads = max(1, ((os.cpu_count() or 1) - 2) // size)
     return ProcessPoolExecutor(max_workers=size, mp_context=multiprocessing.get_context("spawn"),
-                               initializer=_initializer, initargs=(runner.spawn_slots(),))
+                               initializer=_initializer, initargs=(runner.spawn_slots(), fit_threads))
 
 
 def _get_pool(size: int) -> Any:

@@ -46,5 +46,9 @@ dependencies = [
     "urllib3>=2.7.0",
     "certifi>=2026.10.19",
     "filelock>=4.2.1",
-    "multidict>=6.9.1"
+    "multidict>=6.9.1",
+    # Garment / footwear / hair fits: grids, KD-trees and the exact-band kernel (app/core/fit_kernels.py).
+    "numpy>=2.0",
+    "scipy>=1.11",
+    "numba>=0.68"
 ]

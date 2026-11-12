@@ -509,7 +509,7 @@ def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = Non
     surf = np.zeros(tuple(full_shape), bool)
     surf[idx[:, 0], idx[:, 1], idx[:, 2]] = True
     surf = ndimage.binary_dilation(surf, iterations=1)
-    inside_full = _seal_cavities(surf, ndimage.binary_fill_holes(surf))
+    inside_full = _seal_cavities(surf, fit_kernels.fill_holes(surf))
     for axis in range(3):
         # every slice of the full grid along x, y and z filled in 2D as well (docstring)
         inside_full |= fit_kernels.fill_slices(surf, axis)
@@ -551,7 +551,8 @@ def _seal_cavities(surf: np.ndarray, inside: np.ndarray, thick_vox: int = SDF_SE
 def _exact_outside_band(field: np.ndarray, lo: np.ndarray, vox: float, P: np.ndarray, F: np.ndarray,
                         pts: np.ndarray, tri_of: np.ndarray, band_vox: float, k: int = 8) -> None:
     """Replace the outside band ``0 < field <= band_vox`` voxels by the exact distance to the nearest of the
-    triangles of their ``k`` nearest surface samples (in place)."""
+    triangles of their ``k`` nearest surface samples (in place; ``fit_kernels.band_distance``, the numba port of
+    ``point_triangle_distance``)."""
     from scipy.spatial import cKDTree
     band = (field > 0) & (field <= band_vox * vox)
     cells = np.argwhere(band)
@@ -562,16 +563,10 @@ def _exact_outside_band(field: np.ndarray, lo: np.ndarray, vox: float, P: np.nda
     near = ((pts >= X.min(0) - reach) & (pts <= X.max(0) + reach)).all(1)
     if not near.any():
         return
-    _, nn = cKDTree(pts[near]).query(X, k=min(k, int(near.sum())))
+    _, nn = cKDTree(pts[near]).query(X, k=min(k, int(near.sum())), workers=fit_kernels.threads())
     nn = nn.reshape(len(X), -1)
     tris = F[tri_of[near][nn]]                                  # (n, k, 3)
-    exact = np.full(len(X), np.inf)
-    for start in range(0, len(X), 65536):
-        sl = slice(start, start + 65536)
-        t = tris[sl]
-        d = point_triangle_distance(X[sl, None, :], P[t[..., 0]], P[t[..., 1]], P[t[..., 2]])
-        exact[sl] = d.min(1)
-    field[tuple(cells.T)] = exact
+    field[tuple(cells.T)] = fit_kernels.band_distance(X, P, tris)
 
 
 def _adjacency(F: np.ndarray, n: int):
@@ -895,7 +890,7 @@ def sleeve_vertices(Q, body_P, parts, faces, upper) -> np.ndarray:
     from scipy.sparse.csgraph import connected_components
     from scipy.spatial import cKDTree
     Q = np.asarray(Q, np.float64)
-    near = np.asarray(parts)[cKDTree(np.asarray(body_P, np.float64)).query(Q)[1]]
+    near = np.asarray(parts)[cKDTree(np.asarray(body_P, np.float64)).query(Q, workers=fit_kernels.threads())[1]]
     F = np.asarray(faces, np.int64).reshape(-1, 3)
     E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
     E = E[(near[E[:, 0]] > 0) & (near[E[:, 0]] == near[E[:, 1]])]
@@ -963,7 +958,7 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
                 continue
             found = True
             kk = min(idw_k, len(cand))
-            dist, nn = cKDTree(Pb[cand]).query(Q[rows], k=kk)
+            dist, nn = cKDTree(Pb[cand]).query(Q[rows], k=kk, workers=fit_kernels.threads())
             dist, nn = dist.reshape(len(rows), -1), nn.reshape(len(rows), -1)
             w = 1.0 / np.maximum(dist, CLOTHING_IDW_EPS_M / k)
             w /= w.sum(1, keepdims=True)
