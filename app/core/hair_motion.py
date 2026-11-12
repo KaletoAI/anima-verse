@@ -14,13 +14,21 @@ not a skill package (R1) — one group ``hair_c<CC>`` per chain, solved by the c
   ``HAIR_FREQ_MIN_HZ``..``HAIR_FREQ_MAX_HZ``; the damping ratio is a constant ``HAIR_ZETA``.
 - Swing and Stiffness are profile keys (Ruling H7): ``hair_swing`` (``""`` = on, ``"off"``) and ``hair_stiffness``
   (``""`` = 1.0, else a factor within ``STIFFNESS_LIMITS``). They change only the motion, never the fit.
+- RIGID joints (Ruling H10): a chain joint whose rest (bind) position lies inside the head collision capsule rides
+  the head and is left out of its group. The fit records ``rigid: []``; the served summary fills it at payload time
+  from the joints stored in the fit GLB (``rigid_joints``: the same head capsule ``collision.fit_capsules`` gives
+  the client, with the character's region scales), so no re-fit is needed.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import threading
-from typing import Any, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 PROFILE_SWING = "hair_swing"
 PROFILE_STIFFNESS = "hair_stiffness"
@@ -45,9 +53,16 @@ HAIR_SAG_MAX_DEG = 10.0
 #: Motion group id of one chain (``CC`` = HairDeck's chain index, as in the joint names).
 GROUP_ID = "hair_c{index:02d}"
 
-# character -> ((character, garments/ st_mtime_ns, item id), chains summary or None)
-_SERVED: Dict[str, Tuple[Tuple[str, int, str], Optional[Dict[str, Any]]]] = {}
+#: Profile keys whose value is part of the served-chains cache key (with the worn hair id and the head capsule
+#: scale): a change of the character's hair invalidates the cached summary even when ``garments/`` is unchanged.
+HAIR_PROFILE_KEYS = ("hair_method", "hair_forward_m", "hair_tilt_deg", "hair_width_scale")
+
+# character -> (cache key, chains summary or None)
+_SERVED: Dict[str, Tuple[Tuple[Any, ...], Optional[Dict[str, Any]]]] = {}
 _SERVED_LOCK = threading.Lock()
+# (fit GLB path, st_mtime_ns, st_size, head scale) -> rigid joint names
+_RIGID: Dict[Tuple[str, int, int, float], FrozenSet[str]] = {}
+_RIGID_LOCK = threading.Lock()
 
 
 def _stiffness_value(raw: Any) -> Optional[float]:
@@ -106,7 +121,96 @@ def freq_zeta(stiffness: float) -> Tuple[float, float]:
     ``HAIR_FREQ_PER_STIFFNESS`` × stiffness clamped to ``HAIR_FREQ_MIN_HZ``..``HAIR_FREQ_MAX_HZ``, and
     ``HAIR_ZETA``."""
     freq = HAIR_FREQ_PER_STIFFNESS * float(stiffness)
-    return max(HAIR_FREQ_MIN_HZ, min(HAIR_FREQ_MAX_HZ, freq)), HAIR_ZETA
+    return round(max(HAIR_FREQ_MIN_HZ, min(HAIR_FREQ_MAX_HZ, freq)), 3), round(HAIR_ZETA, 3)
+
+
+def rigid_joints(fit_glb: bytes, *, scales: Optional[Dict[str, Any]] = None) -> FrozenSet[str]:
+    """The hair-chain joints (``rig_contract.HAIR_CHAIN_JOINT_RE``, never an ``_end`` leaf) of a fit GLB whose REST
+    position lies inside the body's head collision capsule (Ruling H10). Rest position = the joint's bind position
+    (inverse of its inverse bind matrix — the space the capsules are fitted in); the capsule is
+    ``collision.fit_capsules(fit_glb, scales=scales)``'s ``head`` (the body only: ``glb_mesh.body_arrays`` skips
+    the grafted hair), i.e. the capsule the client collides with. Inside = closer to its segment than its radius.
+    Empty without a head capsule or without chain joints. ValueError for a file without a skin."""
+    import numpy as np
+    from app.core import collision, glb_mesh
+    from app.core.rig_contract import HAIR_CHAIN_JOINT_RE, norm_bone_name
+    parsed = glb_mesh._parse(fit_glb, "Model")
+    gltf = parsed["gltf"]
+    skins, nodes = gltf.get("skins") or [], gltf.get("nodes") or []
+    if not skins or "inverseBindMatrices" not in skins[0]:
+        raise ValueError("The fit has no skin with inverse bind matrices")
+    names = [str(nodes[j].get("name") or "") for j in skins[0].get("joints") or []]
+    chain = [i for i, name in enumerate(names)
+             if (m := HAIR_CHAIN_JOINT_RE.match(name)) and m.group(2) != "end"]
+    if not chain:
+        return frozenset()
+    head = next((c for c in collision.fit_capsules(fit_glb, scales=scales)["capsules"] if c.get("id") == "head"),
+                None)
+    if head is None:
+        return frozenset()
+    positions = np.linalg.inv(collision._matrices(parsed, skins[0]["inverseBindMatrices"]))[:, :3, 3]
+    index = {norm_bone_name(n): i for i, n in reversed(list(enumerate(names)))}
+    a = positions[index[norm_bone_name(head["a"])]]
+    b = np.asarray(head["b_pos"], np.float64) if head.get("b_pos") else positions[index[norm_bone_name(head["b"])]]
+    points = positions[chain]
+    ab = b - a
+    t = np.clip(((points - a) @ ab) / float(ab @ ab), 0.0, 1.0) if float(ab @ ab) > 1e-12 else np.zeros(len(chain))
+    distance = np.linalg.norm(points - (a + t[:, None] * ab), axis=1)
+    return frozenset(names[i] for i, d in zip(chain, distance) if d < float(head["r"]))
+
+
+def _rigid_of_fit(path: Optional[Path], head_scale: float) -> Optional[FrozenSet[str]]:
+    """``rigid_joints`` of the fit GLB at ``path`` with the head capsule scaled by ``head_scale`` (every other
+    region at its default — only the head capsule is read), cached per (path, mtime, size, scale). None when the
+    file is missing or unreadable (logged once per file identity): the caller keeps the recorded list."""
+    if path is None:
+        return None
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    key = (str(path), stat.st_mtime_ns, stat.st_size, float(head_scale))
+    with _RIGID_LOCK:
+        if key in _RIGID:
+            return _RIGID[key]
+    from app.core import collision
+    try:
+        rigid: Optional[FrozenSet[str]] = rigid_joints(Path(path).read_bytes(),
+                                                       scales={**collision.default_scales(), "head": head_scale})
+    except Exception as exc:  # noqa: BLE001 — a fit we cannot read keeps its recorded rigid list
+        logger.warning("Hair chains: rigid joints of %s not computed: %s", Path(path).name, exc)
+        rigid = None
+    with _RIGID_LOCK:
+        if len(_RIGID) > 256:
+            _RIGID.clear()
+        _RIGID[key] = rigid
+    return rigid
+
+
+def _head_scale(character_name: str, profile: Optional[Dict[str, Any]]) -> float:
+    from app.core import collision
+    return float(collision.character_scales(character_name, profile=profile or {}).get("head", 1.0))
+
+
+def with_rigid(chains: Optional[Dict[str, Any]], rigid: Optional[FrozenSet[str]]) -> Optional[Dict[str, Any]]:
+    """A copy of a chain summary whose every chain's ``rigid`` is its recorded list plus the names of ``rigid``
+    among its ``bones`` (chain order kept, never an ``_end`` leaf). ``chains`` itself when ``rigid`` is None or
+    ``chains`` no dict."""
+    from app.core.rig_contract import HAIR_CHAIN_JOINT_RE
+    if rigid is None or not isinstance(chains, dict):
+        return chains
+    out = dict(chains)
+    rows: List[Any] = []
+    for chain in chains.get("chains") or []:
+        if not isinstance(chain, dict):
+            rows.append(chain)
+            continue
+        recorded = [str(b) for b in chain.get("rigid") or []]
+        added = [str(b) for b in chain.get("bones") or [] if str(b) in rigid and str(b) not in recorded
+                 and (m := HAIR_CHAIN_JOINT_RE.match(str(b))) and m.group(2) != "end"]
+        rows.append({**chain, "rigid": recorded + added})
+    out["chains"] = rows
+    return out
 
 
 def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -116,7 +220,10 @@ def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict
     Cached per (character, ``garments/`` directory ``st_mtime_ns``, worn item id): a fit or record write replaces a
     file in that directory, so an unchanged directory costs one ``stat`` per worldmap poll. The item id of the key
     is the profile's raw hair slot entry; whether it is the character's own hair (``garment_hair.worn_hair_id``,
-    an inventory read) is resolved on a miss only."""
+    an inventory read) is resolved on a miss only. The key also holds the profile's hair (``HAIR_PROFILE_KEYS``)
+    and the head capsule scale, so a change of either is a miss.
+
+    Each chain's ``rigid`` is filled from the fit GLB (``rigid_joints``, Ruling H10)."""
     from app.core import garment_hair
     from app.core import garment_store as gs
     if garment_hair.hair_method(character_name, profile=profile) == garment_hair.BODY_METHOD:
@@ -129,7 +236,9 @@ def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict
         stamp = os.stat(gs._root(character_name)).st_mtime_ns  # a read path never creates garments/
     except OSError:
         return None
-    key = (character_name, stamp, str(raw))
+    head_scale = _head_scale(character_name, profile)
+    key = (character_name, stamp, str(raw), tuple(str((profile or {}).get(k, "")) for k in HAIR_PROFILE_KEYS),
+           head_scale)
     with _SERVED_LOCK:
         hit = _SERVED.get(character_name)
     if hit is not None and hit[0] == key:
@@ -140,7 +249,8 @@ def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict
     if item_id:
         newest = garments._newest_fit(character_name, item_id, gs.HAIRDECK)
         found = ((newest[1].get("report") or {}).get("chains")) if newest else None
-        chains = found if isinstance(found, dict) else None
+        if isinstance(found, dict):
+            chains = with_rigid(found, _rigid_of_fit(newest[0], head_scale))
     with _SERVED_LOCK:
         _SERVED[character_name] = (key, chains)
     return chains
@@ -199,8 +309,10 @@ def motion_groups(chains: Optional[Dict[str, Any]], settings: Dict[str, Any], *,
     return out
 
 
-def panel(character_name: str, profile: Dict[str, Any], newest: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """The Hair tab's spring-chain block for the newest HairDeck fit record ``newest`` (None without a fit):
+def panel(character_name: str, profile: Dict[str, Any], newest: Optional[Dict[str, Any]],
+          path: Optional[Path] = None) -> Dict[str, Any]:
+    """The Hair tab's spring-chain block for the newest HairDeck fit record ``newest`` (None without a fit) stored
+    at ``path`` (its GLB; its joints in the head capsule do not count as swinging links, as in ``served_chains``):
     ``{count, links, swing, stiffness, limits, fitted}`` — ``count`` the bound chains of the fit (None when
     ``fitted`` is False: no fit, or one from before the spring chains), ``links`` how many joints swing (the motion
     groups' bones, counted with Swing on), ``swing`` / ``stiffness`` the stored settings, ``limits`` the
@@ -208,6 +320,8 @@ def panel(character_name: str, profile: Dict[str, Any], newest: Optional[Dict[st
     current = settings(profile)
     chains = ((newest or {}).get("report") or {}).get("chains")
     fitted = isinstance(chains, dict)
+    if fitted and path is not None:
+        chains = with_rigid(chains, _rigid_of_fit(path, _head_scale(character_name, profile)))
     groups = motion_groups(chains, {**current, "swing": True}) if fitted else {}
     count = chains.get("count") if fitted else None
     return {"count": int(count) if isinstance(count, (int, float)) and not isinstance(count, bool) else

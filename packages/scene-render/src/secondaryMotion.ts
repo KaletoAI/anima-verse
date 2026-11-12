@@ -28,6 +28,14 @@
  *    another chain is read where its bones were at the start of the frame
  *    (the capsules are updated once, before the links move) — one frame
  *    behind that chain's own swing.
+ *  - HAIR CHAINS (`MotionGroup.hair`, HairDeck's spring chains under Head) are
+ *    the exception: they collide with every bound capsule of `HAIR_REGIONS`
+ *    (`hairChainCapsules` — head, torso, arms, `shoulder_hair`, `chest_hair`), their ancestors'
+ *    capsules INCLUDED. A strand rides the head but must not swing into it,
+ *    nor into the neck/chest it hangs over; the bind rule below keeps the
+ *    rest pose where the fit put it (a joint rooted inside the head capsule
+ *    caps that capsule at its bind distance, and the server leaves the joints
+ *    inside the head capsule out of the group — `hair_motion.served_chains`).
  *  - BIND RULE, as for garments: per tip and capsule the radius is capped at
  *    the tip's distance to that capsule in the bind pose (bind-pose tip from
  *    the bone's `boneInverse`, bind-pose capsule `BoundCapsule.bind`), so the
@@ -39,7 +47,7 @@ import { normBoneName } from './clipRetarget'
 import { bindCollision, HAIR_ONLY_REGIONS } from './collision'
 import type { BoundCapsule, CollisionBinding, CollisionPayload, Vec3 } from './collision'
 import { inGarment } from './figure'
-import { pushOutOfCapsules } from './garmentCollision'
+import { HAIR_REGIONS, pushOutOfCapsules } from './garmentCollision'
 import type { CollideCapsule } from './garmentCollision'
 type Three = typeof import('three')
 
@@ -72,6 +80,9 @@ export interface MotionGroup {
   rest_max_deg: number
   straighten_deg: number
   freetext_clothing_gain: number
+  /** A HairDeck spring chain (`app/core/hair_motion.py`): its tips collide with `hairChainCapsules`
+   *  instead of `extensionCapsules` (module docstring). */
+  hair?: boolean
 }
 /** Package metadata profiles are multipliers; runtime groups are already resolved. */
 export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
@@ -121,6 +132,17 @@ const COLLIDE_SLACK = 1e-6
 export function extensionCapsules<T extends { capsule: { a: string; region?: string } }>(bound: readonly T[], ancestors: ReadonlySet<string>): T[] {
   return bound.filter(entry => !ancestors.has(normBoneName(entry.capsule.a))
     && !HAIR_ONLY_REGIONS.includes(entry.capsule.region ?? ''))
+}
+
+/**
+ * Which capsules a HAIR chain (`MotionGroup.hair`) may collide with: every
+ * bound capsule whose region is in `HAIR_REGIONS` — the set that pushes the
+ * hair cards themselves — in payload order. Ancestors are NOT excluded: the
+ * chain hangs from Head, and the head and torso capsules are exactly what it
+ * must not swing into. Pure.
+ */
+export function hairChainCapsules<T extends { capsule: { region?: string } }>(bound: readonly T[]): T[] {
+  return bound.filter(entry => HAIR_REGIONS.includes(entry.capsule.region ?? ''))
 }
 
 /**
@@ -452,7 +474,7 @@ export function createSecondaryMotion(
       st.contacts = []
       const budget = Math.max(st.paramsTo.max_deg ?? 0, st.paramsTo.sag_max_deg ?? 0)
       if (!collision || !(budget > 0)) continue
-      const bound = extensionCapsules(collision.capsules, st.ancestors)
+      const bound = st.paramsTo.hair ? hairChainCapsules(collision.capsules) : extensionCapsules(collision.capsules, st.ancestors)
       const inverse = boneInverses.get(st.bind.bone)
       let factors = bound.map(() => 1)
       if (inverse) {

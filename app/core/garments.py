@@ -2549,7 +2549,8 @@ def hairdeck_panel(character_name: str, item_id: str, *,
             "backend": job["backend"], "created_at": job["created_at"], "error": job["error"],
             "notes": job["notes"], "attempts": job["fit_attempts"], "images": images, "colour": colour,
             "placement": placement,
-            "chains": hair_motion.panel(character_name, profile, newest[1] if newest else None),
+            "chains": hair_motion.panel(character_name, profile, newest[1] if newest else None,
+                                       newest[0] if newest else None),
             "input_source": "beard_free" if sent is not None and sent != source else "profile"}
 
 

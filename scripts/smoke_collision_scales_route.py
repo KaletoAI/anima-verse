@@ -147,8 +147,8 @@ def main() -> int:
     print("[1] save leg 1.2")
     out = routes._set_character_collision_scales_sync("demo", {"scales": {"leg": 1.2}})
     check("options: every region", out["options"]["collision_scales"],
-          {"leg": 1.2, "arm": 1.0, "torso": 1.0, "head": 1.0, "chest": 1.0, "chest_hair": 1.0,
-           "attached_part": 1.0})
+          {"leg": 1.2, "arm": 1.0, "torso": 1.0, "head": 1.0, "shoulder_hair": 1.0, "chest": 1.0,
+           "chest_hair": 1.0, "attached_part": 1.0})
     profile = get_character_profile("demo")
     check("profile stores the deviation only", profile["model3d_opts"].get("collision_scales"), {"leg": 1.2})
     check("other model options kept", profile["model3d_opts"].get("auto_generate"), True)
@@ -169,7 +169,7 @@ def main() -> int:
     check("generic: none", out["models"]["cccccccccccc"], {"ok": True, "count": 0, "none": True})
     check("generic: no collision key", "collision" in json.loads(generic.with_suffix(".json").read_text()), False)
     check("answer per humanoid model", (out["models"]["base00000001"]["count"], out["models"]["aaaaaaaaaaaa"]["source"]),
-          (12, "base"))
+          (14, "base"))
     check("2D and model files untouched", snapshot(), files_before)
     check("sidecars: only the collision key changed", {p.name: sidecar_rest(p) for p in (base, outfit)}, rest_before)
 

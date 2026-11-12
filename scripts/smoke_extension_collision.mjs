@@ -113,7 +113,7 @@ const tipOf = (ext) => { ext.updateWorldMatrix(true, false); return new THREE.Ve
 const headOf = (ext) => new THREE.Vector3().setFromMatrixPosition(ext.matrixWorld)
 const group = (over = {}) => ({ rev: 'fixture', groups: { g: { ...defaults, bones: ['Ext'], ...over } } })
 const armCapsule = { id: 'left_upper_arm', a: 'mixamorig:LeftArm', b: 'mixamorig:LeftForeArm', r: 0.1, region: 'arm' }
-const payload = (...capsules) => ({ version: 3, capsules })
+const payload = (...capsules) => ({ version: 4, capsules })
 
 console.log('--- [1] pure helpers ---')
 {

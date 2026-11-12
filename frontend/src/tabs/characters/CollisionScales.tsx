@@ -28,15 +28,16 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 
-const COLLISION_REGIONS = ['leg', 'arm', 'torso', 'head', 'chest', 'chest_hair', 'attached_part'] as const
+const COLLISION_REGIONS = ['leg', 'arm', 'torso', 'head', 'shoulder_hair', 'chest', 'chest_hair', 'attached_part'] as const
 type CollisionScaleMap = Record<(typeof COLLISION_REGIONS)[number], number>
 /** Regions shown only where the set has capsules in them (module docstring). */
 const EXTENSION_REGIONS: ReadonlySet<string> = new Set(['chest', 'chest_hair', 'attached_part'])
 
 const REGION_LABELS: Record<(typeof COLLISION_REGIONS)[number], string> = {
-  leg: 'Legs', arm: 'Arms', torso: 'Torso', head: 'Head', chest: 'Chest', chest_hair: 'Chest (hair)', attached_part: 'Attached part',
+  leg: 'Legs', arm: 'Arms', torso: 'Torso', head: 'Head', shoulder_hair: 'Shoulders (hair)', chest: 'Chest',
+  chest_hair: 'Chest (hair)', attached_part: 'Attached part',
 }
-const DEFAULTS: CollisionScaleMap = { leg: 1, arm: 1, torso: 1, head: 1, chest: 1, chest_hair: 1, attached_part: 1 }
+const DEFAULTS: CollisionScaleMap = { leg: 1, arm: 1, torso: 1, head: 1, shoulder_hair: 1, chest: 1, chest_hair: 1, attached_part: 1 }
 
 const full = (scales?: Partial<Record<string, number>> | null): CollisionScaleMap =>
   Object.fromEntries(COLLISION_REGIONS.map(region => [region, scales?.[region] ?? 1])) as CollisionScaleMap

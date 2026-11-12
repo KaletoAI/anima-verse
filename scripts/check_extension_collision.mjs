@@ -13,6 +13,7 @@
  *        [--scan]                     contact OFF only, every clip in the clip directory, ranked by tip depth
  *        [--set female]               clip set tried before the root set
  *        [--fps 60] [--loops 2]       simulation rate; loops played, the LAST one is measured
+ *        [--timing]                   also time `update()` per frame (see TIMING)
  *        [--json FILE]                write the numbers as JSON
  *   MOTION.json = the `motion` payload of `GET /characters/{name}/model3d` (`{"rev", "groups"}`).
  *   Clips from ANIMATION_CLIPS_DIR (default shared/models/clips), the retarget reference from
@@ -36,6 +37,11 @@
  *    tipLocal — where the tip sits when the link rides its parent rigidly), p50/p95/max, and
  *    `swing_max_deg` = the largest angle between the rendered and the rest lever. A contact that
  *    folds a link away shows up as an offset beyond the off-run's range.
+ *
+ * TIMING (`--timing`): `performance.now()` around every `update()` of the measured loop, per clip, reported
+ * as `update_ms {mean, p95}` (ms per frame, one figure, near LOD) for the contact-on run with the whole payload
+ * (`with_hair`) and for one more contact-on run with the groups marked `hair` removed (`without_hair`; no
+ * group left = the inert solver). `hair_chains` / `hair_joints` = the hair groups and their bones.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -54,6 +60,7 @@ function parseArgs(argv) {
     else if (a === '--motion') opts.motion = argv[++i]
     else if (a === '--clips') opts.clips = argv[++i].split(',').filter(Boolean)
     else if (a === '--scan') opts.scan = true
+    else if (a === '--timing') opts.timing = true
     else if (a === '--set') opts.set = argv[++i]
     else if (a === '--fps') opts.fps = Math.max(10, Number(argv[++i]))
     else if (a === '--loops') opts.loops = Math.max(1, Number(argv[++i]))
@@ -211,13 +218,27 @@ async function main() {
   for (const t of report.tips) console.log(`  ${t.bone}: contacts ${t.contacts.join(' ')} | excluded (ancestors) ${t.excluded.join(' ')}`
     + ` | bind factor < 1: ${Object.entries(t.bind_factor).filter(([, f]) => f < 1).map(([k, f]) => `${k} ${f}`).join(' ') || '—'}`)
 
-  const runs = opts.scan ? [false] : [false, true]
+  const hairIds = Object.keys(motion.groups ?? {}).filter((id) => motion.groups[id].hair)
+  const noHair = { ...motion, rev: `${motion.rev}-nohair`,
+    groups: Object.fromEntries(Object.entries(motion.groups ?? {}).filter(([id]) => !hairIds.includes(id))) }
+  if (opts.timing) {
+    report.hair_chains = hairIds.length
+    report.hair_joints = hairIds.reduce((n, id) => n + motion.groups[id].bones.length, 0)
+    console.log(`  timing: ${report.hair_chains} hair chains, ${report.hair_joints} hair joints`)
+  }
+  const runs = opts.scan ? [false] : [false, true, ...(opts.timing ? ['nohair'] : [])]
+  const msStats = (times) => {
+    const sorted = [...times].sort((a, b) => a - b)
+    return { mean: +(times.reduce((a, b) => a + b, 0) / Math.max(1, times.length)).toFixed(4),
+      p95: +quantile(sorted, 0.95).toFixed(4) }
+  }
   for (const clip of adapted) {
     const row = report.clips[clip.name] = {}
     for (const on of runs) {
       const fig = SkeletonUtils.clone(template)
       fig.updateMatrixWorld(true)
-      const sm = createSecondaryMotion(THREE, fig, motion, template)
+      const sm = createSecondaryMotion(THREE, fig, on === 'nohair' ? noHair : motion, template)
+      const times = []
       if (on) sm.setCollision(payload)
       const binding = bindCollision(THREE, fig, payload)
       const bones = new Map()
@@ -239,8 +260,11 @@ async function main() {
         for (let f = 0; f < frames; f++) {
           mixer.update(dt)
           fig.updateMatrixWorld(true)
+          const started = performance.now()
           sm.update(dt)
+          if (loop === opts.loops - 1) times.push(performance.now() - started)
           if (loop !== opts.loops - 1) continue
+          if (on === 'nohair') continue
           binding.update()
           for (const { t, bone, local, tipLocal, caps } of tb) {
             tip.copy(tipLocal).applyMatrix4(bone.matrixWorld)
@@ -268,6 +292,8 @@ async function main() {
         }
       }
       sm.dispose()
+      if (on === 'nohair') { row.update_ms = { ...row.update_ms, without_hair: msStats(times) }; continue }
+      if (on === true && opts.timing) row.update_ms = { with_hair: msStats(times), ...row.update_ms }
       const inside = depths.filter((d) => d > 0.001).sort((a, b) => a - b)
       const nominalInside = nominal.filter((d) => d > 0.001).length
       const off = [...offsets].sort((a, b) => a - b)
@@ -286,6 +312,8 @@ async function main() {
       + `${x.worst ? `, worst ${x.worst.capsule}@t=${x.worst.t}` : ''}), offset p95/max ${x.offset_p95_mm}/${x.offset_max_mm} mm, swing ≤ ${x.swing_max_deg}°`
     console.log(`  ${clip.name.padEnd(22)} off: ${fmtRun(r.off)}`)
     if (r.on) console.log(`  ${''.padEnd(22)} on:  ${fmtRun(r.on)}`)
+    if (r.update_ms) console.log(`  ${''.padEnd(22)} update_ms with hair mean/p95 ${r.update_ms.with_hair.mean}/${r.update_ms.with_hair.p95}`
+      + `, without hair ${r.update_ms.without_hair.mean}/${r.update_ms.without_hair.p95}`)
   }
   if (opts.scan) {
     const ranked = Object.entries(report.clips).sort((a, b) => b[1].off.depth_max_mm - a[1].off.depth_max_mm)

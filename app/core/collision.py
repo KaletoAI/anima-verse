@@ -7,7 +7,7 @@ once per model and applied by both renderers every frame (``@anima/scene-render`
 
 PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
 
-    {"version": 3,
+    {"version": 4,
      "capsules": [{"id": "left_thigh", "a": "mixamorig:LeftUpLeg", "b": "mixamorig:LeftLeg",
                    "r": 0.1, "region": "leg"},
                   {"id": "head", "a": "mixamorig:Head", "b": "mixamorig:Head",
@@ -16,8 +16,8 @@ PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
                    "b_pos": [...], "r": 0.018, "region": "chest"}, ...],
      "skipped":  [{"id": "left_shin", "a": "mixamorig:LeftLeg", "b": "LeftFoot",
                    "reason": "joint LeftFoot missing"}],
-     "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0, "chest": 1.0, "chest_hair": 1.0,
-                 "attached_part": 1.0},
+     "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0, "shoulder_hair": 1.0, "chest": 1.0,
+                 "chest_hair": 1.0, "attached_part": 1.0},
      "source":   "own" | "base",       # fitted on this file / the base body it was built on
      "base_signature": "<bsig>",       # only with source "base"
      "sha256":   "<file the set describes>",
@@ -54,7 +54,10 @@ EXTENSION CAPSULES (version 2). The spring-driven extension bones a package decl
 chain bone of every group whose OP is in ``EXTENSION_CAPSULES`` (never by group or bone name), region by op
 (``chest`` for ``pair_protrusion``, ``attached_part`` for ``attached_part``), each with its own region scale. They
 follow the table's capsules in the payload. Version 3 adds the hair-only ``chest_hair`` set on ``pair_protrusion``
-(out to the skin plus the hair clearance; its own scale). Which renderer pushes what out of them is the renderers' call
+(out to the skin plus the hair clearance; its own scale). Version 4 adds the hair-only ``shoulder_hair`` pair of the
+table (``left_shoulder_hair`` / ``right_shoulder_hair``, shoulder → upper arm joint, SHOULDER_MEASURED): the gap
+between the thin chest capsule and the upper arm where swinging HairDeck chains and the hair lying on the shoulders
+sank in. Which renderer pushes what out of them is the renderers' call
 (``garmentCollision.ts`` ``garmentCapsules``; ``secondaryMotion.ts`` never pushes a chain out of its own).
 
 FITTING (``fit_capsules``) — the S1 spike's method: for each capsule the body vertices whose DOMINANT skin
@@ -74,9 +77,9 @@ from app.core.log import get_logger
 
 logger = get_logger("collision")
 
-VERSION = 3
+VERSION = 4
 #: The fixed table's regions, then the extension regions (``EXTENSION_CAPSULES``).
-REGIONS = ("leg", "arm", "torso", "head", "chest", "chest_hair", "attached_part")
+REGIONS = ("leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part")
 SCALE_MIN, SCALE_MAX = 0.5, 1.5
 #: A start bone owning fewer body vertices than this gives no capsule (a quantile of a handful is noise).
 MIN_VERTICES = 16
@@ -110,6 +113,11 @@ MIN_VERTICES = 16
 #: Head — ``HeadTop_End`` is not part of the 52-joint rig contract (``shared/models/rig/joints.json``), so the
 #: head capsule uses the crown rule. p50, margin 0: hair lies on the scalp, a fatter head capsule floats it
 #: (HEAD_MEASURED below; p95 is 2–4 cm larger — the face and jaw widen the tail).
+#:
+#: Shoulders (hair only, version 4; ``collision.ts`` ``HAIR_ONLY_REGIONS``) — the clavicle bone (``*Shoulder``)
+#: to the upper-arm joint, p95 + 6 mm like the limbs: the top of the shoulder between the chest capsule (p10
+#: around Spine2→Neck) and the upper arm, where hair lies. Cloth and the extension-bone contact never use it
+#: (it reaches out of the skin like ``chest_hair``). SHOULDER_MEASURED below.
 CAPSULES: Tuple[Tuple[str, str, str, str, float, float, str], ...] = (
     ("left_thigh", "LeftUpLeg", "LeftLeg", "leg", 0.95, 0.006, "joint"),
     ("left_shin", "LeftLeg", "LeftFoot", "leg", 0.95, 0.006, "joint"),
@@ -123,6 +131,8 @@ CAPSULES: Tuple[Tuple[str, str, str, str, float, float, str], ...] = (
     ("spine", "Spine1", "Spine2", "torso", 0.10, 0.0, "joint"),
     ("chest", "Spine2", "Neck", "torso", 0.10, 0.0, "joint"),
     ("head", "Head", "Head", "head", 0.50, 0.0, "crown"),
+    ("left_shoulder_hair", "LeftShoulder", "LeftArm", "shoulder_hair", 0.95, 0.006, "joint"),
+    ("right_shoulder_hair", "RightShoulder", "RightArm", "shoulder_hair", 0.95, 0.006, "joint"),
 )
 #: The joint that, with the start bone, gives the body axis of the crown rule.
 CROWN_AXIS_FROM = "Hips"
@@ -131,6 +141,18 @@ CROWN_AXIS_FROM = "Hips"
 #: Head joint 18.9 / 20.3 / 19.4 / 16.1 / 18.7 cm; p50 radius 7.1 / 7.8 / 7.5 / 6.9 / 8.1 cm; ``b_pos`` 11.7 /
 #: 12.5 / 11.9 / 9.3 / 10.6 cm above the Head joint; the capsule's top lands within 6 mm of the body's top
 #: (1.694–1.701 m on 1.700-m bodies).
+
+#: SHOULDER_MEASURED (2026-11-12, plan 2026-11-12-hairdeck-spring-chains Task 6, Ruling H3 revised; read-only copies
+#: of Kira's base 20d5701a and Rosi's base ed6cab12 with their HairDeck fits — Kira seeds 42/44, Rosi 42 — and the
+#: chains' motion payload, ``scripts/check_garment_collision.mjs --motion … --area LeftShoulder,RightShoulder``,
+#: 8 samples, hair ``excess`` after the push = share > 5 mm inside beyond the bind depth, worst sample; the AREA =
+#: the hair over shoulder-dominated body vertices): Shoulder-dominant vertices 418–453, distance to the segment
+#: p50 4.2–4.5, p75 5.2–5.5, p95 6.2–6.9 cm (segment 10.7–11.1 cm) → r 6.8–7.5 cm. Without → with the pair,
+#: Swing on (+motion): Kira 42 sit/celebrating/walk 6.34/4.93/8.52 → 3.75/4.25/4.19 % (shoulder area 7.8/12.9/
+#: 25.5 → 5.0/9.4/8.7 %); Kira 44 7.08/4.70/9.12 → 3.62/3.63/7.90 % (area 32.3/39.8/40.3 → 12.8/35.0/18.3 %);
+#: Rosi 42 5.66/7.02/6.12 → 3.18/4.64/3.46 % (area 28.3/48.0/25.6 → 21.5/32.7/22.4 %). Swing off (−motion): Kira 42
+#: 5.78/5.01/3.83 → 4.49/3.90/2.92 %, Kira 44 4.68/2.57/3.21 → 3.53/2.13/2.55 %, Rosi 3.39/3.66/1.89 →
+#: 1.42/2.06/1.21 %. Bind lift > 1 mm 0.00 % with the pair (the bind rule).
 
 #: EXTENSION CAPSULES — one per chain bone of an extension group whose OP is a key here (never by group or bone
 #: name): ``op → ((region, quantile, margin m), …)`` — one capsule per chain bone and entry. The groups come from the model's sidecar (``extension_rig``:

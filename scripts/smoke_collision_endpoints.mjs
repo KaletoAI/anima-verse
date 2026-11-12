@@ -155,7 +155,7 @@ async function main() {
   head.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2)
   figure.updateMatrixWorld(true)
   const payload = {
-    version: 3,
+    version: 4,
     capsules: [capsule,
       { id: 'left_shin', a: 'mixamorig:LeftLeg', b: 'mixamorig:LeftFoot', r: 0.09, region: 'leg' },
       { id: 'neck_only', a: 'mixamorig:Neck', b: 'mixamorig:Neck', r: 0.05, region: 'torso' }],
@@ -180,8 +180,9 @@ async function main() {
   binding.update()
   const straight = binding.capsules[0].now
   check('update(): unrotated head → b = (0.2, 1.52, 0.03)', vnear(straight.b, [0.2, 1.52, 0.03]), fmt(straight.b))
-  check('version 4 → null', bindCollision(THREE, figure, { ...payload, version: 4 }) === null)
-  check('no capsules → null', bindCollision(THREE, figure, { version: 3, capsules: [] }) === null)
+  check('version 3 (an older set) → null', bindCollision(THREE, figure, { ...payload, version: 3 }) === null)
+  check('version 5 → null', bindCollision(THREE, figure, { ...payload, version: 5 }) === null)
+  check('no capsules → null', bindCollision(THREE, figure, { version: 4, capsules: [] }) === null)
   check('null payload → null', bindCollision(THREE, figure, null) === null)
 
   console.log('--- [5] wireframe ---')
