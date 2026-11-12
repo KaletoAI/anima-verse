@@ -53,7 +53,8 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
     outfit_side ob, outfit_side_draft v; plus outfit_side_workflow os ->
     os. BASE_BODY_MATCH_FIELDS ends with the two side fields.
 [4] OFF (the default) — byte-identical to the front+back pipeline. Demo
-    wears the dress (osig), delta plan [2.9]: the tpose pass renders front
+    wears the dress (osig; dress and scarf are ``mesh_mode: painted`` — since
+    9788164d the default is ``in_body``, which would mesh a shape), delta plan [2.9]: the tpose pass renders front
     edit, back draft, back fit (dirs model_refs, drafts, attempt1;
     occasions outfit_front, outfit_back_draft, outfit_back); the Build's
     assemble step (Task 8 of plan 2026-11-12-unified-worn-pieces; was: the
@@ -328,9 +329,11 @@ def main() -> int:
         check("pipeline", base_body.set_pipeline("Demo", True), True)
         dress = inventory.add_item(name="dress", category="outfit_piece",
                                    prompt_fragment="a fitted red cotton dress with white sneakers",
-                                   outfit_piece={"slots": ["top"], "covers": [], "outfit_types": ["casual"]})["id"]
+                                   outfit_piece={"slots": ["top"], "covers": [], "outfit_types": ["casual"],
+                                                 "mesh_mode": "painted"})["id"]
         scarf = inventory.add_item(name="scarf", category="outfit_piece", prompt_fragment="a green wool scarf",
-                                   outfit_piece={"slots": ["neck"], "covers": [], "outfit_types": ["casual"]})["id"]
+                                   outfit_piece={"slots": ["neck"], "covers": [], "outfit_types": ["casual"],
+                                                 "mesh_mode": "painted"})["id"]
         for item in (dress, scarf):
             check(f"inventory {item}", inventory.add_to_inventory("Demo", item), True)
         bsig = base_body.base_signature("Demo")

@@ -60,19 +60,30 @@ Expected, derived by hand from the brief:
        Review Focus 1). Flag on again for the rest.
     d. Off the pipeline: Offline wearing X1 -> token "", signature ==
        pinned; Pet -> token "" for {top: dress}.
-[2] Order + dress text (Review Focus 1). Demo wears X = {top: dress,
-    bottom: skirt, outer: coat, feet: shoes}; dress ``ok``, coat ``fail``;
-    world setting ``base_body.dressed_side_views`` on.
-    generate_model_ref_images(Demo, kinds ("tpose",)):
-    - the chains run through Demo's FIFO, sorted (coat, dress), one at a
-      time (max concurrency 1), each once, on the worker thread
-      "garment-Demo";
-    - the dressed front (occasion outfit_front) prompt names "a blue
-      pleated skirt" (covered by the dress before, painted now), "a green
-      wool coat" (its chain failed), "white sneakers" — NOT "a long red
-      dress"; its sidecar mesh_items = {intended [coat, dress], effective
-      [dress], warnings ["Coat stays painted on: fit — fit refused — stub
-      — Regenerate in the Wardrobe"]} and mesh_token = the token of X;
+[2] Order + dress text (Review Focus 1), reworked by task 11c-2 of plan
+    2026-11-12-unified-worn-pieces (rulings A11 / A14): Demo wears X =
+    {top: dress, bottom: skirt, outer: coat, feet: shoes}; dress ``ok``,
+    coat ``fail``; world setting ``base_body.dressed_side_views`` on. Extra
+    stubs for the interim shape: the image service's ``generate_mesh`` /
+    ``generate_rig`` (fixture GLBs, ONE hub job each in SHAPE_JOBS) and
+    ``garments.fit_on_body`` (the quad grafted onto the shape's bytes).
+    - The chains are the Build's ``pieces`` steps (``build_chains``), never
+      part of an outfit render (A14; was: generate_model_ref_images ran
+      them first): through Demo's FIFO, sorted (coat, dress), one at a time
+      (max concurrency 1), each once, on the worker thread "garment-Demo".
+    - The refused coat is in the body (A11; was: painted on): the delivered
+      figure stands on the interim shape bC (in_body [coat], in_body_own
+      [coat], own [dress], painted [shoes, skirt]); the render step renders
+      nothing (bC has no views yet).
+    - generate_for_current_outfit: bC's views (its front names the coat
+      only), ONE mesh + ONE rig job on bC, then the outfit's views on bC:
+      ONE outfit front, naming "a blue pleated skirt", "white sneakers" and
+      "a green wool coat" (in the body), NOT "a long red dress"; its sidecar
+      mesh_items = {intended [dress], effective [dress], unpainted [dress],
+      missing {}, in_body [coat], warnings ["Coat is in the body until its
+      own mesh is ready: fit — fit refused — stub — Regenerate in the
+      Wardrobe"]}, the figure (own [dress], painted [shoes, skirt], in_body
+      [coat]) and mesh_token = the token of X;
       garments/failed/coat_<fsig>.json {step fit, error "fit refused —
       stub"}, none for dress;
     - back, left, right: draft + fit, no outfit text in either prompt
@@ -80,48 +91,43 @@ Expected, derived by hand from the brief:
       front's mesh_items (the side views follow the front too);
     - after_mesh_item_ready was asked for dress (its fit was accepted in
       the run) and asked the Build ("piece_ready", ``figure_build.request``
-      recorded — Task 8; was: it found nothing to rebuild), no T-pose pass.
-    Task 6 (plan 2026-11-12-unified-worn-pieces): the record's ``mode``
-    ("retexture") is replaced by ``figure`` (the delivered figure it was
-    made for: own [dress], painted [coat, shoes, skirt] — coat painted by
-    the interim rule); the records are compared without it, the figure on
-    its own; the side views carry the front's record unchanged.
-    Baseline, flag OFF (signature of X without token) — the SECOND outfit
-    render after the coat failed: no chain runs at all (coat's failure is
-    cached for its fsig, dress is not flagged); the front prompt names "a
-    long red dress" and NOT "a blue pleated skirt" (covered); mesh_items
-    {intended [coat], effective [], warnings [the coat warning]}. Flag on
-    again.
-[3] Failed chain -> texture + warning (Review Focus 3).
-    generate_for_current_outfit(Demo) for X: ok; the bare sidecar carries
-    mesh_items, mesh_token, garment_warnings[0] = the coat warning;
-    outfit_info warnings contain it; the bare file has no garment node,
-    model3d/assembled/<sig>.glb has "garment_clothing_dress" and NO coat
-    node; outfit_model_steps: row mesh_items WARNING "own mesh: Dress ·
-    painted on: Coat" and a garment_warnings row.
+      recorded — Task 8), no T-pose pass.
+    Baseline, flag OFF (signature of X without token) — no chain and no
+    shape job: the coat's failure is cached, bC is stored; the front names
+    "a long red dress", "a green wool coat", not "a blue pleated skirt"
+    (covered); mesh_items {intended [], effective [], unpainted [], missing
+    {}, in_body [coat], warnings [the coat warning]}. Flag on again.
+[3] Failed chain -> in the body + warning (Review Focus 3).
+    generate_for_current_outfit(Demo) for X: ok on bC (reused, no shape
+    job); the bare sidecar carries the [2] record and figure, mesh_token;
+    outfit_info warnings contain the coat warning; the bare file has no
+    garment node, model3d/assembled/<sig>.glb has "garment_clothing_dress"
+    and NO coat node; outfit_model_steps: row mesh_items WARNING "own mesh:
+    Dress · in the body until ready: Coat" (was "painted on: Coat").
 [3b] Later fit (coat -> ok): run_queued(Demo, [coat]) is automatic ->
     {cached True}, no run; start_garment(Demo, coat) (explicit) runs it
     once and clears the failure record -> the hook
-    after_mesh_item_ready(Demo, coat) asks the Build once ("piece_ready";
-    was: trigger_now(kinds ("tpose",), force False) — Task 8: the Build
-    makes the views); dressed_image(front) of X is None (stale);
-    model3d._on_older_base(model) True; outfit_info status "stale",
-    stale_reason "figure" (Task 6: the model's recorded figure painted the
-    coat, the delivered one grafts it — replaces "mesh_item_ready"); dressed_freshness of the front: stale,
-    reason "An own-mesh piece painted on here has its garment mesh now".
-    A new generate_dressed_images pass: the front prompt names skirt and
-    sneakers, neither dress nor coat; mesh_items effective [coat, dress],
-    warnings [].
+    after_mesh_item_ready(Demo, coat) asks the Build once ("piece_ready"),
+    no T-pose pass. Ruling A11: the delivered figure KEEPS bC (in_body_own
+    [coat], note READY_IN_BODY) — the front stays current, outfit_info
+    ready, stale_reason None, the coat warning gone; mesh_items_ready of the
+    front [] (it painted nothing). (Was: front and model stale "figure".)
+    Inside ``figure.taking_out`` (a manual Build) a generate_dressed_images
+    pass: the front prompt names skirt and sneakers, neither dress nor
+    coat; mesh_items effective [coat, dress], warnings []; the back
+    re-rendered too.
 [3c] All pieces own meshes: Demo in {top: dress, outer: coat} -> the front
     is the base copy (sidecar dressed False, mesh_token
     "|meshitems:coat,dress|worn:outer=coat;top=dress", mesh_items
     effective [coat, dress]); the model build is the base copy, its
     assembly carries both garment nodes.
 [4] Assembly per signature (Review Focus 1): with Demo now in {feet: shoes}
-    _wanted_for(the X model) == [dress] (its effective set, not the
-    current pieces), the all-mesh model -> [coat, dress]; a sidecar without
-    mesh_items -> []; dress flag off -> the X model still [dress]
-    (flag on again); Demo switched off the pipeline -> [] (on again).
+    _wanted_for(the X model) == [coat, dress] (its effective set plus the
+    coat it keeps in bC, whose mesh is accepted since [3b] — ruling A11;
+    was [dress]; not the current pieces), the all-mesh model -> [coat,
+    dress]; a sidecar without mesh_items -> []; dress flag off -> the X
+    model still [coat, dress] (flag on again); Demo switched off the
+    pipeline -> [] (on again).
 [5] GC keep (Review Focus 5): Demo in {feet: shoes}, holding dress and
     coat: _garment_keep contains garment:dress_<fsig> and
     garment:coat_<fsig>, not a stray garment:skirt_<12 hex> group; dress
@@ -143,10 +149,11 @@ Expected, derived by hand from the brief:
     ``fail``, X worn. start_garment twice -> two runs (explicit runs ignore
     the cache). In-memory status cleared (= restart): cached_failure step
     "fit", garment_info failed.error "fit refused — stub"; resolve_figure
-    runs only dress (done chain), not coat, and coat's accepted fit from [6]
-    still serves (effective [coat, dress]); run_queued -> cached. Coat's
-    prompt fragment changed -> new fsig -> not cached, run_queued runs coat,
-    the new failure is recorded. A fit failure holds on its base model sha
+    runs no chain at all (ruling A14; was: dress's done chain), and coat's
+    accepted fit from [6] still serves: bC keeps the coat (record in_body
+    [coat]) and the assembly grafts it (effective_mesh_items [coat, dress]);
+    run_queued -> cached. Coat's prompt fragment changed -> new fsig -> not
+    cached, run_queued runs coat (only), the new failure is recorded. A fit failure holds on its base model sha
     only (another sha -> None: the fit depends on the base model, which the
     fsig leaves out); a mesh failure holds on any. Base model rewritten (new
     sha) with coat's mesh failure recorded: the Build's chain steps
@@ -180,7 +187,7 @@ import numpy as np  # noqa: E402
 PIN = "0b532d33"
 FAILS = []
 BASE_PX = {"front": (200, 10, 10), "back": (10, 200, 10), "left": (10, 10, 200), "right": (200, 200, 10)}
-COAT_WARN = "Coat stays painted on: fit — fit refused — stub — Regenerate in the Wardrobe"
+COAT_WARN = "Coat is in the body until its own mesh is ready: fit — fit refused — stub — Regenerate in the Wardrobe"
 FRAG = {"dress": "a long red dress", "skirt": "a blue pleated skirt", "shorts": "grey denim shorts",
         "coat": "a green wool coat", "shoes": "white sneakers"}
 
@@ -200,9 +207,9 @@ def record(meta):
 
 
 def fig_of(meta):
-    """(own, painted) of the figure a ``mesh_items`` record names."""
+    """(own, painted, in_body) of the figure a ``mesh_items`` record names."""
     fig = (meta or {}).get("figure") or {}
-    return list(fig.get("own") or []), list(fig.get("painted") or [])
+    return list(fig.get("own") or []), list(fig.get("painted") or []), list(fig.get("in_body") or [])
 
 
 def png(rgb, size=8) -> bytes:
@@ -306,6 +313,26 @@ def main() -> int:
 
         garments._run_locked = run_locked
 
+        def fit_on_body(character_name, item_id, *, body_id, base_fit, profile=None, schedule=True):
+            """A piece's fit on an interim body shape (ruling A11): the quad grafted onto the shape's bytes."""
+            from app.core import garment_fit
+            path, rec = base_fit
+            fsig = gs.parse_name(Path(path))[1]
+            kind = str(rec.get("kind") or "clothing")
+            body = base_body.outfit_body_path(character_name, body_id)
+            out = gs.garment_path(character_name, item_id, fsig, "fit", body=body_id)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(glb_mesh.graft(body.read_bytes(), garment_quad(item_id), name=f"garment_{kind}_{item_id}",
+                                           extras={"kind": kind, "item_id": item_id, "fsig": fsig}))
+            gs.write_record(out.with_suffix(".json"), {
+                "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig, "body_id": body_id,
+                "body_sha256": hashlib.sha256(body.read_bytes()).hexdigest(),
+                "base_fit_sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                "fit_version": garment_fit.FIT_VERSION.get(kind)})
+            return out
+
+        garments.fit_on_body = fit_on_body
+
         def rembg(data, model="u2net", **kw):
             from PIL import Image
             with Image.open(io.BytesIO(data)) as im:
@@ -340,6 +367,28 @@ def main() -> int:
         expression_regen.render_character_image = render
         charmod.run_rembg = rembg
         body_retexture.retexture = retexture
+        SHAPE_JOBS = []
+        shape_unrigged, shape_rigged = chain.base_bodies((200, 160, 140))
+
+        class FakeService:
+            """Mesh + rig of an interim body shape (ruling A11): ONE hub job each, recorded in SHAPE_JOBS."""
+
+            def generate_mesh(self, *, source_image_path, output_path, view_images=None, occasion="", **kw):
+                SHAPE_JOBS.append(("mesh", Path(output_path).stem))
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(output_path).write_bytes(shape_unrigged)
+                return {"ok": True, "path": output_path, "backend": "fake-mesh"}
+
+            def generate_rig(self, *, mesh_path, output_path, rig, **kw):
+                SHAPE_JOBS.append(("rig", Path(mesh_path).stem))
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(output_path).write_bytes(shape_rigged)
+                return {"ok": True, "path": output_path, "backend": "fake-rig", "rig": rig}
+
+        from app.imagegen import service as imagegen_service
+        imagegen_service.get_image_service = lambda: FakeService()
+        model3d._auto_normalize = lambda *a, **k: None
+        model3d._extension_rig_once = lambda *a, **k: {"ok": True, "noop": True}
         model3d._auto_retexture = lambda *a, **k: None
         model3d._attach_measurement = lambda *a, **k: None
         model3d._auto_extension_rig = lambda *a, **k: None
@@ -473,30 +522,47 @@ def main() -> int:
         check("d Pet token", model_refs.mesh_items_token("Pet", {"top": "dress"}), "")
 
         # --- [2] order and dress text ---------------------------------------------
-        print("[2] chains first, then the dress text without the effective piece")
+        print("[2] the Build's chains, then the dress text: the refused coat in the body (ruling A11)")
         X = {"top": "dress", "bottom": "skirt", "outer": "coat", "feet": "shoes"}
         wear("Demo", X)
         sig_x = model_refs.current_outfit_state("Demo")[2]
         token_x = "|meshitems:coat,dress|worn:bottom=skirt;feet=shoes;outer=coat;top=dress"
         check("token X", model_refs.mesh_items_token("Demo"), token_x)
         RENDERS.clear()
-        model_refs.generate_model_ref_images("Demo", kinds=("tpose",))
+        from _figure_build_fixtures import build_chains
+        from app.core import figure
+        # Ruling A14: the chains are the Build's pieces steps — never run inside an outfit render.
+        check("the Build's chain steps ran", build_chains("Demo"), True)
         check("runs: FIFO sorted, once each", [r[1] for r in RUNS], ["coat", "dress"])
         check("runs on the worker", {r[2] for r in RUNS}, {"garment-Demo"})
         check("serial", live["max"], 1)
-        fronts = [r for r in RENDERS if r["occasion"] == "outfit_front"]
-        check("one front", len(fronts), 1)
+        model_refs.generate_model_ref_images("Demo", kinds=("tpose",))
+        check("the render step renders nothing: the interim shape has no views yet", RENDERS, [])
+        now = figure.delivered_figure("Demo")
+        b_c = now.shape
+        check("the refused coat is in the body (ruling A11): its own interim shape bC",
+              (base_body.is_outfit_body_signature(b_c), now.in_body, now.in_body_own, now.own, now.painted),
+              (True, ("coat",), ("coat",), ("dress",), ("shoes", "skirt")))
+        result = model3d.generate_for_current_outfit("Demo", force=True)
+        check("outfit run ok", result.get("ok"), True)
+        check("bC meshed + rigged once", SHAPE_JOBS, [("mesh", b_c), ("rig", b_c)])
+        shape_front = [r for r in RENDERS if r["occasion"] == "outfit_front" and r["stem"] == f"tpose_{b_c}"]
+        check("bC's front names the coat only", [{k: FRAG[k] in r["prompt"] for k in ("dress", "skirt", "coat",
+                                                                                       "shoes")} for r in shape_front],
+              [{"dress": False, "skirt": False, "coat": True, "shoes": False}])
+        fronts = [r for r in RENDERS if r["occasion"] == "outfit_front" and r["stem"] == f"tpose_{sig_x}"]
+        check("one outfit front", len(fronts), 1)
         prompt = fronts[0]["prompt"] if fronts else ""
         check("front names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
               {"dress": False, "skirt": True, "coat": True, "shoes": True})
-        want_mesh = {"intended": ["coat", "dress"], "effective": ["dress"],
-                     "warnings": [COAT_WARN], "unpainted": ["dress"], "missing": {}}
+        want_mesh = {"intended": ["dress"], "effective": ["dress"], "warnings": [COAT_WARN], "unpainted": ["dress"],
+                     "missing": {}, "in_body": ["coat"]}
         front_meta = json.loads((refs / f"tpose_{sig_x}.json").read_text())
         check("front mesh_items", record(front_meta.get("mesh_items")), want_mesh)
-        check("front figure: dress grafted, coat painted (interim)", fig_of(front_meta.get("mesh_items")),
-              (["dress"], ["coat", "shoes", "skirt"]))
+        check("front figure: dress grafted, coat in the body, skirt + shoes painted",
+              fig_of(front_meta.get("mesh_items")), (["dress"], ["shoes", "skirt"], ["coat"]))
         check("front mesh_token", front_meta.get("mesh_token"), token_x)
-        others = [r for r in RENDERS if r["occasion"] != "outfit_front"]
+        others = [r for r in RENDERS if r["occasion"] != "outfit_front" and r["stem"].endswith(sig_x)]
         check("draft + fit occasions", sorted({r["occasion"] for r in others}),
               ["outfit_back", "outfit_back_draft", "outfit_side", "outfit_side_draft"])
         check("no outfit text after the front", [r["stem"] for r in others
@@ -517,32 +583,34 @@ def main() -> int:
         flag("dress", False)
         RUNS.clear()
         RENDERS.clear()
+        SHAPE_JOBS.clear()
         sig_off = model_refs.current_outfit_state("Demo")[2]
         model_refs.generate_model_ref_images("Demo", kinds=("tpose",))
         fronts = [r for r in RENDERS if r["occasion"] == "outfit_front"]
         prompt = fronts[0]["prompt"] if fronts else ""
-        check("off: front names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
+        check("off: on the stored bC, the front names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat",
+                                                                                       "shoes")},
               {"dress": True, "skirt": False, "coat": True, "shoes": True})
-        check("off: second render starts no chain (coat failed)", [r[1] for r in RUNS], [])
+        check("off: the render starts no chain, no shape job", ([r[1] for r in RUNS], SHAPE_JOBS), ([], []))
         off_meta = json.loads((refs / f"tpose_{sig_off}.json").read_text())
-        check("off: coat painted, dress not intended", record(off_meta.get("mesh_items")),
-              {"intended": ["coat"], "effective": [], "warnings": [COAT_WARN],
-               "unpainted": [], "missing": {}})
+        check("off: the coat in the body, dress not intended", record(off_meta.get("mesh_items")),
+              {"intended": [], "effective": [], "warnings": [COAT_WARN], "unpainted": [], "missing": {},
+               "in_body": ["coat"]})
         flag("dress", True)
         check("flag on: key of X", model_refs.current_outfit_state("Demo")[2], sig_x)
 
-        # --- [3] failed chain -> texture + warning ----------------------------------
+        # --- [3] failed chain -> in the body + warning ----------------------------------
         print("[3] outfit model with a failed chain")
+        SHAPE_JOBS.clear()
         result = model3d.generate_for_current_outfit("Demo", force=True)
-        check("outfit run ok", result.get("ok"), True)
+        check("outfit run ok, bC reused", (result.get("ok"), result.get("body_id"), SHAPE_JOBS), (True, b_c, []))
         bare = mdir / f"{sig_x}.glb"
         assembled = mdir / "assembled" / f"{sig_x}.glb"
         meta = model3d._read_sidecar(bare)
         check("bare mesh_items", record(meta.get("mesh_items")), want_mesh)
         check("bare figure = the front's", meta.get("figure"), (front_meta.get("mesh_items") or {}).get("figure"))
         check("bare mesh_token", meta.get("mesh_token"), token_x)
-        check("garment_warnings[0]", (meta.get("garment_warnings") or [None])[0], want_mesh["warnings"][0])
-        check("outfit_info warning", want_mesh["warnings"][0] in base_body.outfit_info("Demo")["warnings"], True)
+        check("outfit_info warning", COAT_WARN in base_body.outfit_info("Demo")["warnings"], True)
         check("bare is bare", nodes(bare) if bare.is_file() else None, [])
         check("assembled: dress only", nodes(assembled) if assembled.is_file() else None,
               ["garment_clothing_dress"])
@@ -550,10 +618,9 @@ def main() -> int:
         rows = {r["id"]: r for r in (overview[0] if overview else [])}
         check("mesh_items row", (rows.get("mesh_items") or {}).get("status"), "warning")
         check("mesh_items detail", (rows.get("mesh_items") or {}).get("detail"),
-              "own mesh: Dress · painted on: Coat")
-        check("garment_warnings row", "garment_warnings" in rows, True)
+              "own mesh: Dress · in the body until ready: Coat")
 
-        print("[3b] the coat's fit arrives later")
+        print("[3b] the coat's fit arrives later: bC kept, nothing automatic")
         mode["coat"] = "ok"
         HOOKS.clear()
         TRIGGERS.clear()
@@ -566,24 +633,25 @@ def main() -> int:
         check("explicit run ran", [r[1] for r in RUNS], ["coat"])
         check("failure cleared", gs.garment_path("Demo", "coat", gs.garment_fsig("Demo", "coat"),
                                                  "failed").exists(), False)
-        check("hook found the painted coat", HOOKS, [("Demo", "coat", True)])
         check("the Build asked once (no T-pose pass of its own)", (REQUESTS, TRIGGERS),
               ([("Demo", "piece_ready")], []))
-        check("front stale", base_body.dressed_image("Demo", "front", sig_x, b1), None)
-        check("model stale", model3d._on_older_base(bare, model3d._current_base("Demo")), True)
+        now = figure.delivered_figure("Demo")
+        check("bC kept, the coat ready (ruling A11)", (now.shape, now.in_body_own, now.notes.get("coat")),
+              (b_c, ("coat",), figure.READY_IN_BODY))
+        check("front current", base_body.dressed_image("Demo", "front", sig_x, b1) is not None, True)
         info = base_body.outfit_info("Demo")
-        check("outfit_info", (info["status"], info["stale_reason"]), ("stale", "figure"))
-        check("front freshness", model_overview.dressed_freshness(
-            front_meta, bsig=b1, base_view_sha=base_body.file_sha256(refs / f"tpose_{b1}.png"),
-            mesh_ready=bool(base_body.mesh_items_ready("Demo", front_meta, bsig=b1))),
-            {"state": "stale", "reason": "An own-mesh piece painted on here has its garment mesh now"})
+        check("outfit_info: ready, the in-body warning gone", (info["status"], info["stale_reason"],
+                                                               COAT_WARN in info["warnings"]), ("ready", None, False))
+        check("front freshness: nothing painted on it has a mesh now",
+              base_body.mesh_items_ready("Demo", front_meta, bsig=b1), [])
         RENDERS.clear()
-        base_body.generate_dressed_images("Demo", pieces=X, items=[], signature=sig_x)
+        with figure.taking_out("Demo"):   # a manual Build takes the coat out of the shape
+            base_body.generate_dressed_images("Demo", pieces=X, items=[], signature=sig_x)
         fronts = [r for r in RENDERS if r["occasion"] == "outfit_front"]
         prompt = fronts[0]["prompt"] if fronts else ""
-        check("re-render names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
+        check("taken out: the re-render names", {k: FRAG[k] in prompt for k in ("dress", "skirt", "coat", "shoes")},
               {"dress": False, "skirt": True, "coat": False, "shoes": True})
-        check("re-render record", record(json.loads((refs / f"tpose_{sig_x}.json").read_text()).get("mesh_items")),
+        check("taken out: record", record(json.loads((refs / f"tpose_{sig_x}.json").read_text()).get("mesh_items")),
               {"intended": ["coat", "dress"], "effective": ["coat", "dress"], "warnings": [],
                "unpainted": ["coat", "dress"], "missing": {}})
         check("back re-rendered too", any(r["occasion"] == "outfit_back" for r in RENDERS), True)
@@ -613,11 +681,11 @@ def main() -> int:
                 return [g["item_id"] for g in garment_assembly._wanted("Demo", bare_meta=meta)]
             return [g["item_id"] for g in garment_assembly._wanted_for("Demo", mdir, sig)]
 
-        check("X model", wanted(sig_x), ["dress"])
+        check("X model (the coat kept in bC, its mesh grafted — ruling A11)", wanted(sig_x), ["coat", "dress"])
         check("all-mesh model", wanted(sig_all), ["coat", "dress"])
         check("no mesh_items", wanted(meta={k: v for k, v in meta.items() if k != "mesh_items"}), [])
         flag("dress", False)
-        check("flag off: X model keeps its garment", wanted(sig_x), ["dress"])
+        check("flag off: X model keeps its garments", wanted(sig_x), ["coat", "dress"])
         flag("dress", True)
         base_body.set_pipeline("Demo", False)
         check("off pipeline", wanted(sig_x), [])
@@ -738,9 +806,11 @@ def main() -> int:
               "fit refused — stub")
         RUNS.clear()
         res = base_body.resolve_figure("Demo", X)[1]
-        check("automatic: no coat run (dress's done chain answers at once)", [r[1] for r in RUNS], ["dress"])
+        check("resolve_figure runs no chain (ruling A14)", [r[1] for r in RUNS], [])
         check("automatic: result", (garments.run_queued("Demo", ["coat"])["coat"].get("cached")), True)
-        check("coat's accepted fit (from [6]) still serves", res.get("effective"), ["coat", "dress"])
+        check("coat's accepted fit (from [6]) still serves — kept in bC, grafted (ruling A11)",
+              (garment_assembly.effective_mesh_items({"mesh_items": res}), res.get("in_body")),
+              (["coat", "dress"], ["coat"]))
         fsig_a = gs.garment_fsig("Demo", "coat")
         op = dict(inventory.get_item("coat").get("outfit_piece") or {})
         inventory.update_item("coat", {"prompt_fragment": "a dark green wool coat", "outfit_piece": op})
@@ -749,7 +819,7 @@ def main() -> int:
         check("new fsig: not cached", garments.cached_failure("Demo", "coat"), None)
         res = garments.run_queued("Demo", ["coat"])
         check("new fsig: the chain runs", ([r[1] for r in RUNS], res["coat"].get("cached")),
-              (["dress", "coat"], None))
+              (["coat"], None))
         check("new fsig: failure recorded", gs.garment_path("Demo", "coat", fsig_b, "failed").exists(), True)
         sha_now = base_body.current_base("Demo")[1]
         check("fit failure holds on its base model",

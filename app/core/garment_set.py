@@ -231,19 +231,24 @@ def _accepted_images(steps: Dict[str, Any]) -> bool:
 
 
 def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
-                 layers: Optional[Dict[str, List[str]]] = None, left_out: bool = False) -> Dict[str, Any]:
+                 layers: Optional[Dict[str, List[str]]] = None, left_out: bool = False,
+                 in_body: bool = False) -> Dict[str, Any]:
     """The Wardrobe row chip of an own-mesh piece from its
     ``garments.garment_info``: ``{state, step, painted, reason, over,
-    without}`` (+ ``missing`` when it is left out).
+    without}`` (+ ``missing`` when it is left out, ``in_body`` when it is in
+    the body shape meanwhile).
 
     ``state`` — ``running`` (``step`` = the step in flight), else how far the
     chain of the CURRENT fingerprint got: ``fitted`` (accepted fit on the
     current base model), ``mesh`` (accepted mesh), ``images`` (at least one
     accepted image), ``missing``.
-    ``painted`` — the piece is worn (``worn``: on the pipeline and in
-    ``equipped_pieces``) without an accepted fit, so the outfit build paints
-    it onto the body meanwhile (the interim rule of ``figure.
-    delivered_figure``). ``reason`` says why, in the outfit
+    ``in_body`` — ruling A11 (task 11c-2 of the unified worn pieces): the
+    delivered figure has the worn piece in its body shape until its own mesh
+    is ready (``figure.Figure.in_body_own``: no accepted fit, or refused) —
+    never painted then. ``painted`` — the piece is worn (``worn``: on the
+    pipeline and in ``equipped_pieces``) without an accepted fit and neither
+    in the body nor left out (kept for a caller without the figure).
+    ``reason`` says why, in the outfit
     warning's words: the persisted chain failure ``"<step> — <error>"``,
     else ``base_body.BASE_MODEL_MISSING`` without a base model, else
     ``base_body.NO_MESH_FIT``; None when neither painted nor missing.
@@ -281,7 +286,7 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
     fitted = bool(info.get("fsig") and fit.get("status") == "accepted")
     absent = bool(worn and not fitted)
     footwear = str(info.get("kind") or "") == FOOTWEAR
-    painted = absent and not left_out and not footwear
+    painted = absent and not left_out and not footwear and not in_body
     reason = None
     if absent:
         failed = info.get("failed") if isinstance(info.get("failed"), dict) else None
@@ -291,7 +296,9 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
             reason = base_body.NO_MESH_FIT if base_model_ready else base_body.BASE_MODEL_MISSING
     out = {"state": state, "step": running, "painted": painted, "reason": reason,
            "queue_position": info.get("queue_position")}
-    if left_out or footwear:
+    if in_body and absent:
+        out["in_body"] = True
+    elif left_out or footwear:
         out["missing"] = absent
     if isinstance(info.get("body"), dict):
         # A meshed shape: the piece's fit on the outfit body worn now (garments.body_fit_info).
@@ -475,9 +482,12 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
     pipeline = base_body.is_base_pipeline(character_name, profile=profile)
     base = base_body.current_base(character_name, profile=profile) if pipeline else None
     left_out: Dict[str, str] = {}
+    in_body: set = set()
     if pipeline:
         from app.core import figure
-        left_out = dict(figure.delivered_figure_cached(character_name, profile=profile).left_out)
+        delivered = figure.delivered_figure_cached(character_name, profile=profile)
+        left_out = dict(delivered.left_out)
+        in_body = set(delivered.in_body_own)
     pieces = profile.get("equipped_pieces") if isinstance(profile.get("equipped_pieces"), dict) else {}
     worn = set(_ids(pieces))
     layers = worn_layers(character_name, profile=profile, base_model_sha=base[1] if base else "")
@@ -489,7 +499,7 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
             continue
         items[item_id] = piece_status(info, worn=pipeline and item_id in worn,
                                       base_model_ready=bool(base and base[1]), layers=layers.get(item_id),
-                                      left_out=item_id in left_out)
+                                      left_out=item_id in left_out, in_body=item_id in in_body)
     overlaps = (mesh_overlaps(pieces, slot_order=body_slots.piece_slots_for_character(character_name))
                 if pipeline else [])
     queue = garments.queue_state(character_name)

@@ -176,6 +176,9 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
       ? t('Queued')
       : `${progress} ${t(STEP_LABELS[status.step || ''] || status.step || '')}`.trim()
     color = 'var(--accent, #6aa9ff)'
+  } else if (status.in_body) {
+    text = `${t('In the body until its own mesh is ready')}: ${t(status.reason || '')}`
+    color = 'var(--warning, #d29922)'
   } else if (status.painted) {
     text = `${t('Painted on')}: ${t(status.reason || '')}`
     color = 'var(--warning, #d29922)'
@@ -613,6 +616,11 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             </div>
           ) : null}
           <GarmentFailure garment={garment} stepLabels={STEP_LABELS} />
+          {info.status.in_body && !running ? (
+            <div className="ga-hint" style={WARN_STYLE}>
+              {t('Until its own mesh is ready, the figure has this piece in its body shape.')}
+            </div>
+          ) : null}
           {info.status.painted && !running ? (
             <div className="ga-hint" style={WARN_STYLE}>
               {t('Until it has an accepted fit, the outfit model paints this piece onto the body.')}

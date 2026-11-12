@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Own-mesh pieces next to a meshed shape (ruling 2026-11-10, reworked by
-Task 6 of plan 2026-11-12-unified-worn-pieces — the interim rule, ruling 2):
-a flagged piece is NEVER meshed into the shape — the shape is keyed and
-built from the in-body pieces only — but while it has no fit it is SHOWN
-PAINTED on the texture next to them ("Shown painted until its own mesh is
-built"); its accepted fit then asks for the outfit's views again (the
-texture changes: the piece is no longer painted) and the rebuild grafts it.
+Task 6 of plan 2026-11-12-unified-worn-pieces — the interim rule, ruling 2 —
+and by its task 11c-2, rulings A11 / A14): a flagged piece WITHOUT its mesh
+(no accepted fit, or its chain refused) is IN THE BODY SHAPE meanwhile — an
+interim shape keyed and built from the in-body pieces plus it — never
+painted, never left out, and no outfit render runs its chain first; once
+its mesh is accepted the shape KEEPS it (no automatic job), the assembly
+grafts the mesh, and only a manual Build takes it out of the shape.
 Replaced cases are marked "(was …)".
 
 Usage:
@@ -39,60 +40,61 @@ Outfits: K {under, shoes, jacket}; L {under, shoes, vest}. "mesh mode" below
 
 Expected, derived by hand from the rulings:
 
-[1] K, under + shoes in the body, jacket refused (its chain fails "worn —
-    back refused"). The render step comes before any shape is stored, so it
-    renders for the figure delivered NOW: the plain body with under, shoes
-    (interim "its body shape") and the jacket (interim "its own mesh")
-    painted — 3 image jobs (front edit, back draft, back fit), texture tP.
-    The build then renders the shape's own views (key bK, the in-body dress
-    text: underwear + sneakers, NO jacket), meshes + rigs bK (ONE mesh + ONE
-    rig job), and renders the outfit's views on bK with the jacket painted
-    (texture tK) — the build's image jobs are for [bK, sigK] in that order —
-    and paints tK on bK: 1 worker run (was 0: the jacket was left out).
-    K's figure: shape bK, texture tK, in_body [shoes, under], painted
-    [jacket], own [], interim {jacket: "Shown painted until its own mesh is
-    built"}; the texture store holds tK and tP. mesh_items = {intended
-    [jacket], effective [], unpainted [], missing {}, warnings ["Jacket stays
-    painted on: worn — back refused — Regenerate in the Wardrobe"]} (+ the
-    figure; was unpainted [jacket], missing {jacket}). outfit_info ready with
-    that one warning. No assembly. Wardrobe jacket {painted True, no
-    "missing", reason "worn — back refused"} (was painted False, missing).
-    base_body.mesh_items_missing of K's model [] (was [jacket]; the removed outfit-body tab's row showed exactly
-    that list). Overview row
-    mesh_items ("warning", "painted on: Jacket").
-[2] Retexture mode (both painted), jacket still refused: K stale "figure"
-    (was "body_mode"); the figure now is tP on the plain body — its views are
-    the ones [1]'s render step made: 0 image jobs (was 3), 1 worker run, 0
-    mesh/rig jobs; dress text names the jacket; mesh_items has no "mode" and
-    unpainted []; warnings = [MESH_ITEM_FAILED jacket]; Wardrobe painted True,
-    no "missing" key.
-[3] Mesh mode again (jacket refused): K stale "figure"; tK's views are
-    stored -> 0 image jobs; bK current -> 0 mesh/rig jobs, 0 worker runs; K
-    on bK with tK, the jacket painted on again (was: left out).
-[4] The jacket's chain is run explicitly and accepted (run_garment): the
-    figure now grafts it (a base fit, nothing refused on bK) and paints
-    nothing, so K's texture changes: after_mesh_item_ready asks the Build
-    ("piece_ready", recorded — Task 8 of plan 2026-11-12-unified-worn-pieces;
-    the Build renders the outfit's views; was: TRIGGERS [(Demo, (tpose,))]),
-    no T-pose pass of its own; during the run 0
-    image jobs, 0 mesh/rig jobs, 0 worker runs, no body fit yet; K stale
-    "figure", its front made for another figure (dressed_image None);
-    Wardrobe {state fitted, painted False}. (Was: assembled at once, K
-    current — the jacket had never been painted.) The rebuild: 0 image jobs
-    (nothing painted — the outfit's views are copies of bK's), 0 worker
-    runs, 0 mesh/rig jobs, ONE body fit (jacket on bK), the assembly carries
-    the jacket; figure {shape bK, texture "", painted [], own [jacket],
-    interim {}}; bK untouched and K's model = bK's bytes; ready, no warning;
-    base_body.mesh_items_missing of K's model [].
-[5] A piece moved out of the body (was: a model of the old rule that meshed
-    a refused vest into its body): vest in_body -> L built: 3 image jobs,
-    ONE mesh + ONE rig job on bOld (its in-body dress text has the vest, so
-    another key than bK), texture "" != tK. The vest -> painted (the
-    signature stays sigL): L stale "figure", its front made for another
-    figure; the rebuild stands L on bK with the vest painted: 3 image jobs in
-    the render step, none in the build, 1 worker run, 0 mesh/rig jobs, a
-    texture of its own (!= tK). Artefact GC (explicit): bOld is an orphan,
-    its files (model3d/<bOld>.glb, unrigged/<bOld>.glb) are gone; bK stays.
+[1] K, under + shoes in the body, the jacket's chain run first and refused
+    ("worn — back refused"; no outfit render runs a chain any more, A14).
+    The jacket is in the body: the delivered figure stands on the interim
+    shape bI = the shape of {jacket, shoes, under} (its dress text names all
+    three). The render step renders nothing (bI has no views yet); the build
+    renders bI's views (3 image jobs, the only ones), meshes + rigs bI (ONE
+    mesh + ONE rig job), and the outfit's views are copies of bI's (nothing
+    painted: texture "", 0 worker runs, no texture stored). K's figure:
+    shape bI, texture "", in_body [jacket, shoes, under], painted [], own
+    [], interim {jacket: INTERIM_IN_BODY}, in_body_own [jacket].
+    mesh_items = {intended [], effective [], unpainted [], missing {},
+    in_body [jacket], warnings [IB = "Jacket is in the body until its own
+    mesh is ready: worn — back refused — Regenerate in the Wardrobe"]}
+    (+ the figure). outfit_info ready with IB. No assembly. Wardrobe jacket
+    {painted False, in_body True, no "missing", reason "worn — back
+    refused"}. mesh_items_missing []. Overview row mesh_items ("warning",
+    "in the body until ready: Jacket"). (Was: plain-body render step 3 jobs,
+    shape bK without the jacket, the jacket painted on tK, 1 worker run.)
+[2] Retexture mode (under + shoes painted), the jacket still refused: K
+    stale "figure"; the jacket alone in the body: interim shape bJ (dress
+    text the jacket, no sneakers), under + shoes painted on bJ: the render
+    step 0, the build renders bJ's views then the outfit's (keys [bJ, sigK]),
+    ONE mesh + ONE rig job on bJ, 1 worker run; mesh_items unpainted [],
+    in_body [jacket], no "mode"; warnings [IB]; Wardrobe painted False,
+    in_body True, no "missing". (Was: the plain body, 0 image jobs, the
+    jacket painted.)
+[3] Mesh mode again: K stale "figure"; bI is stored -> its outfit views are
+    copies again: 0 image jobs, 0 mesh/rig jobs, 0 worker runs; K on bI,
+    texture "", the jacket in the views. (Was: bK with tK, the jacket
+    painted.)
+[4] The jacket's chain is run explicitly and accepted (run_garment): during
+    the run 0 image / mesh / rig jobs, 0 worker runs, no body fit; the Build
+    asked ("piece_ready"), no T-pose pass. The delivered figure KEEPS bI
+    (in_body_own [jacket], own [], notes {jacket: READY_IN_BODY}), so K
+    stays current (stale_reason None, its front still the figure's); the
+    Wardrobe jacket {fitted, painted False, no in_body}; the in-body warning
+    is gone (judged now). The automatic Build's runnable steps have no
+    interim / shape / texture; the explicit plan lists the shape with
+    manual TAKE_OUT. Running the automatic steps: 0 image / mesh / rig jobs,
+    0 worker runs, ONE body fit (jacket on bI), the assembly grafts the
+    jacket, bI untouched and K's model = bI's bytes, ready, no warning,
+    mesh_items_missing []. Inside ``figure.taking_out`` (a manual Build):
+    the jacket own, its wanted shape (under + shoes) not built yet -> the
+    plain body with under + shoes painted (rule 1). (Was: K stale, the
+    rebuild carried the jacket on bK.)
+[5] A piece moved out of the body: vest in_body -> L built: 3 image jobs,
+    ONE mesh + ONE rig job on bOld (its in-body dress text has the vest,
+    another key than bI), texture "" (nothing painted). The vest -> painted
+    (the signature stays sigL): L stale "figure", its front made for another
+    figure; the rebuild builds bW = the shape of under + shoes (no own-mesh
+    piece waits, so the wanted shape — never built so far): render step 0,
+    the build renders bW's views then the outfit's, ONE mesh + ONE rig job,
+    1 worker run, a texture of its own (was: L on bK, 3 image jobs in the
+    render step, no mesh job). Artefact GC (explicit): bOld is an orphan,
+    its files (model3d/<bOld>.glb, unrigged/<bOld>.glb) are gone; bI stays.
 """
 import hashlib
 import json
@@ -371,80 +373,94 @@ def main() -> int:
             """What the removed outfit-body tab listed per outfit model as ``missing_mesh_items``."""
             return [item_id for item_id, _reason in base_body.mesh_items_missing("Demo", meta_of(sig))]
 
-        painted_on = base_body.MESH_ITEM_FAILED.format(item="Jacket", reason="worn — back refused")
+        in_body_warning = base_body.MESH_ITEM_IN_BODY.format(item="Jacket",
+                                                             reason="worn — back refused — Regenerate in the Wardrobe")
         K = {"underwear_bottom": "under", "feet": "shoes", "top": "jacket"}
 
         # --- [1] mesh mode, refused piece ---------------------------------------------
-        print("[1] mesh mode: a refused own-mesh piece is left out of the body")
+        print("[1] mesh mode: a refused own-mesh piece is in the body shape meanwhile (ruling A11)")
         sig_k = wear(K)
         from app.core import figure
-        check("in the body", sorted(figure.wanted_figure("Demo").in_body), ["shoes", "under"])
+        check("in the body (wanted)", sorted(figure.wanted_figure("Demo").in_body), ["shoes", "under"])
+        # No outfit render runs a garment chain any more (ruling A14) — the jacket's is run (and refused) here.
+        check("K: the jacket's chain refused", garments.run_garment("Demo", "jacket").get("error"), "back refused")
         jobs, runs, hub, result = render_and_build()
         meta_k = meta_of(sig_k)
         t_k = meta_k.get("texture_signature")
         b_k = meta_k.get("body_id")
         text = front_text(b_k)
-        check("K: the shape's dress text without the jacket", ("plain grey underwear" in text,
-                                                               "white sneakers" in text, "leather jacket" in text),
-              (True, True, False))
-        check("K: the outfit's front paints the jacket (interim)", "leather jacket" in front_text(sig_k), True)
+        check("K: the interim shape's dress text has the jacket", ("plain grey underwear" in text,
+                                                                  "white sneakers" in text, "leather jacket" in text),
+              (True, True, True))
+        check("K: the outfit's front (a copy of the shape's) names the jacket", "leather jacket" in front_text(sig_k),
+              True)
         stored_textures = sorted({p.stem.rsplit("_", 1)[-1] for p in (refs / "texture").glob("tpose_*.png")})
-        t_p_plain = next((t for t in stored_textures if t != t_k), None)
-        check("K: render 3 image jobs on the plain body, ONE mesh + ONE rig job on bK, 1 worker run",
-              (result.get("ok"), jobs, hub, runs), (True, 3, [("mesh", b_k), ("rig", b_k)], 1))
-        check("K: the build renders the shape's views, then the outfit's on it", stems(BUILD_RENDERS),
-              [b_k, sig_k])
+        check("K: render step 0 image jobs, ONE mesh + ONE rig job on bI, 0 worker runs",
+              (result.get("ok"), jobs, hub, runs), (True, 0, [("mesh", b_k), ("rig", b_k)], 0))
+        check("K: the build renders the interim shape's views only (the outfit's are copies)", stems(BUILD_RENDERS),
+              [b_k])
         fig_k = meta_k.get("figure") or {}
-        check("K: figure", {k: fig_k.get(k) for k in ("shape", "texture", "in_body", "painted", "own", "interim")},
-              {"shape": b_k, "texture": t_k, "in_body": ["shoes", "under"], "painted": ["jacket"], "own": [],
-               "interim": {"jacket": figure.INTERIM_PAINTED.format(what=figure.WHAT_OWN_MESH)}})
-        check("K: two textures stored, tK and the plain body's of the render step", (
-            base_body.is_texture_signature(t_k), len(stored_textures), t_k in stored_textures), (True, 2, True))
+        check("K: figure", {k: fig_k.get(k) for k in ("shape", "texture", "in_body", "painted", "own", "interim",
+                                                      "in_body_own")},
+              {"shape": b_k, "texture": "", "in_body": ["jacket", "shoes", "under"], "painted": [], "own": [],
+               "interim": {"jacket": figure.INTERIM_IN_BODY}, "in_body_own": ["jacket"]})
+        check("K: no texture (nothing painted), none stored", (t_k, stored_textures), ("", []))
         check("K: mesh_items record", {k: v for k, v in (meta_k.get("mesh_items") or {}).items() if k != "figure"},
-              {"intended": ["jacket"], "effective": [], "unpainted": [], "missing": {}, "warnings": [painted_on]})
+              {"intended": [], "effective": [], "unpainted": [], "missing": {}, "in_body": ["jacket"],
+               "warnings": [in_body_warning]})
         info = base_body.outfit_info("Demo")
-        check("K: outfit_info ready + warning", (info["status"], info["warnings"]), ("ready", [painted_on]))
+        check("K: outfit_info ready + warning", (info["status"], info["warnings"]), ("ready", [in_body_warning]))
         check("K: no assembly", (mdir / "assembled" / f"{sig_k}.glb").exists(), False)
         entry = wardrobe_entry("jacket")
-        check("K: Wardrobe jacket", {k: entry.get(k) for k in ("painted", "missing", "reason")},
-              {"painted": True, "missing": None, "reason": "worn — back refused"})
+        check("K: Wardrobe jacket", {k: entry.get(k) for k in ("painted", "missing", "in_body", "reason")},
+              {"painted": False, "missing": None, "in_body": True, "reason": "worn — back refused"})
         check("K: missing mesh items", missing_items(sig_k), [])
         rows = model_overview.outfit_model_overview("Demo", mdir / f"{sig_k}.glb")[0]
         row = next((r for r in rows if r["id"] == "mesh_items"), {})
-        check("K: overview row", (row.get("status"), row.get("detail")), ("warning", "painted on: Jacket"))
+        check("K: overview row", (row.get("status"), row.get("detail")),
+              ("warning", "in the body until ready: Jacket"))
 
-        # --- [2] retexture mode unchanged -------------------------------------------------
-        print("[2] retexture mode: the refused piece is painted on (rule P1)")
+        # --- [2] retexture mode: the refused jacket alone in an interim shape ---------------------
+        print("[2] retexture mode: the refused piece is in the body of its own interim shape (ruling A11)")
         set_mode("retexture")
-        check("nothing in the body", list(figure.wanted_figure("Demo").in_body), [])
+        check("nothing in the body (wanted)", list(figure.wanted_figure("Demo").in_body), [])
         check("retexture: K stale (figure)", base_body.outfit_info("Demo").get("stale_reason"), "figure")
         jobs, runs, hub, result = render_and_build()
         meta_r = meta_of(sig_k)
-        check("retexture: ok, 0 image jobs (the plain-body views of [1]), 1 worker run, 0 mesh/rig jobs",
-              (result.get("ok"), jobs, BUILD_RENDERS, runs, hub), (True, 0, [], 1, []))
-        check("retexture: on the plain body", ((meta_r.get("figure") or {}).get("shape"),
-                                               meta_r.get("texture_signature")), (b1, t_p_plain))
-        check("retexture: dress text paints the jacket", "leather jacket" in front_text(sig_k), True)
-        check("retexture: nothing unpainted, no mode", ("mode" in (meta_r.get("mesh_items") or {}),
-                                                        (meta_r.get("mesh_items") or {}).get("unpainted")), (False, []))
-        check("retexture: warning painted on", base_body.outfit_info("Demo")["warnings"],
-              [base_body.MESH_ITEM_FAILED.format(item="Jacket", reason="worn — back refused")])
+        b_j = meta_r.get("body_id")
+        check("retexture: ok, render step 0, the build renders bJ's views then the outfit's, 1 worker run, "
+              "ONE mesh + ONE rig job on bJ",
+              (result.get("ok"), jobs, stems(BUILD_RENDERS), runs, hub),
+              (True, 0, [b_j, sig_k], 1, [("mesh", b_j), ("rig", b_j)]))
+        fig_r = meta_r.get("figure") or {}
+        check("retexture: on bJ = the shape of {jacket}, under + shoes painted",
+              (b_j not in (b1, b_k), fig_r.get("in_body"), fig_r.get("painted"), fig_r.get("in_body_own"),
+               base_body.is_texture_signature(meta_r.get("texture_signature"))),
+              (True, ["jacket"], ["shoes", "under"], ["jacket"], True))
+        check("retexture: bJ's dress text is the jacket alone", ("leather jacket" in front_text(b_j),
+                                                                 "white sneakers" in front_text(b_j)), (True, False))
+        check("retexture: the outfit's dress text names the jacket", "leather jacket" in front_text(sig_k), True)
+        check("retexture: nothing unpainted, no mode, the jacket in the body",
+              ("mode" in (meta_r.get("mesh_items") or {}), (meta_r.get("mesh_items") or {}).get("unpainted"),
+               (meta_r.get("mesh_items") or {}).get("in_body")), (False, [], ["jacket"]))
+        check("retexture: warning in the body", base_body.outfit_info("Demo")["warnings"], [in_body_warning])
         entry = wardrobe_entry("jacket")
-        check("retexture: Wardrobe jacket painted", (entry.get("painted"), "missing" in entry), (True, False))
+        check("retexture: Wardrobe jacket in the body, not painted",
+              (entry.get("painted"), entry.get("in_body"), "missing" in entry), (False, True, False))
 
-        # --- [3] mesh mode again: the body of the painted pieces is reused ---------------
-        print("[3] mesh mode again: store views + the same body, no job")
+        # --- [3] mesh mode again: the interim shape of [1] is reused ---------------
+        print("[3] mesh mode again: the stored interim shape bI, copied views, no job")
         set_mode("mesh")
         check("mesh: K stale (figure)", base_body.outfit_info("Demo").get("stale_reason"), "figure")
         jobs, runs, hub, result = render_and_build()
-        check("mesh: ok, 0 image jobs, 0 mesh/rig jobs, 0 worker runs", (result.get("ok"), jobs, hub, runs),
-              (True, 0, [], 0))
+        check("mesh: ok, 0 image jobs, 0 mesh/rig jobs, 0 worker runs", (result.get("ok"), jobs, BUILD_RENDERS,
+                                                                       hub, runs), (True, 0, [], [], 0))
         meta_k = meta_of(sig_k)
-        check("mesh: K on bK, tsig tK", (meta_k.get("body_id"), meta_k.get("texture_signature")), (b_k, t_k))
-        check("mesh: the jacket painted on bK again (interim)", "leather jacket" in front_text(sig_k), True)
+        check("mesh: K on bI, no texture", (meta_k.get("body_id"), meta_k.get("texture_signature")), (b_k, ""))
+        check("mesh: the jacket in bI's views again", "leather jacket" in front_text(sig_k), True)
 
         # --- [4] the piece is accepted later: assembly only --------------------------------
-        print("[4] the jacket is accepted: assembled onto bK, no body job")
+        print("[4] the jacket is accepted: bI kept, the assembly grafts it, no automatic take-out")
         body_k = base_body.outfit_body_path("Demo", b_k)
         body_before = sha(body_k)
         r0, w0, c0, t0 = len(RENDERS), len(WORKER), len(CHAIN), len(TRIGGERS)
@@ -459,31 +475,48 @@ def main() -> int:
               (0, [], 0, []))
         check("accept: the Build asked (it renders the outfit's views), no T-pose pass of the hook",
               (REQUESTS, TRIGGERS[t0:]), ([("Demo", "piece_ready")], []))
-        check("accept: K stale (figure), its front made for another figure",
-              (model3d.find_model3d("Demo", sig_k), base_body.outfit_info("Demo").get("stale_reason"),
-               base_body.dressed_image("Demo", "front", sig_k, b1)), (None, "figure", None))
+        check("accept: K stays current (ruling A11: the shape kept, the same texture — nothing to render)",
+              (model3d.find_model3d("Demo", sig_k) is not None, base_body.outfit_info("Demo").get("stale_reason"),
+               base_body.dressed_image("Demo", "front", sig_k, b1) is not None), (True, None, True))
+        now = figure.delivered_figure("Demo")
+        check("accept: delivered keeps bI, the jacket ready", (now.shape, now.in_body_own, now.own, now.notes),
+              (b_k, ("jacket",), (), {"jacket": figure.READY_IN_BODY}))
         entry = wardrobe_entry("jacket")
-        check("accept: Wardrobe jacket", (entry.get("state"), entry.get("missing"), entry.get("painted")),
-              ("fitted", None, False))
-        jobs, runs, hub, result = render_and_build()
-        check("accept, rebuilt: 0 image jobs, 0 worker runs, 0 mesh/rig jobs",
-              (result.get("ok"), jobs, BUILD_RENDERS, runs, hub), (True, 0, [], 0, []))
-        check("accept, rebuilt: one body fit (jacket on bK)", BODY_FITS, [("jacket", b_k)])
+        check("accept: Wardrobe jacket", (entry.get("state"), entry.get("missing"), entry.get("painted"),
+                                          entry.get("in_body")), ("fitted", None, False, None))
+        check("accept: the in-body warning is gone (judged now)", base_body.outfit_info("Demo")["warnings"], [])
+        # The automatic Build the hook asked for (``figure_build.request``), run step by step: no take-out.
+        from app.core import figure_build
+        auto = figure_build._runnable(figure_build.plan("Demo", explicit=False), False)
+        check("accept: the automatic Build neither renders nor meshes",
+              [s.name for s in auto if s.name in ("interim", "shape", "texture")], [])
+        check("accept: the take-out waits for a manual Build",
+              [(s.name, s.manual) for s in figure_build.plan("Demo") if s.name in ("shape", "texture")],
+              [("shape", figure.TAKE_OUT)])
+        for step in auto:
+            check(f"accept: automatic step {step.name}", figure_build._RUNNERS[step.name]("Demo", step, False), "")
+        garment_assembly.wait_idle(30)
+        check("accept, built: 0 image jobs, 0 mesh/rig jobs, 0 worker runs",
+              (len(RENDERS) - r0, [s for s in CHAIN[c0:] if s[0] in ("mesh", "rig")], len(WORKER) - w0),
+              (0, [], 0))
+        check("accept, built: one body fit (the jacket on bI)", BODY_FITS, [("jacket", b_k)])
         assembled = mdir / "assembled" / f"{sig_k}.json"
-        check("accept, rebuilt: assembly carries the jacket",
+        check("accept, built: the assembly grafts the jacket",
               sorted((json.loads(assembled.read_text()).get("garments") or {}) if assembled.is_file() else []),
               ["jacket"])
-        fig_k = meta_of(sig_k).get("figure") or {}
-        check("accept, rebuilt: figure", {k: fig_k.get(k) for k in ("shape", "texture", "painted", "own", "interim")},
-              {"shape": b_k, "texture": "", "painted": [], "own": ["jacket"], "interim": {}})
-        check("accept, rebuilt: body untouched, the model = the body (nothing painted)",
+        check("accept, built: bI untouched, the model = the body (nothing painted)",
               (sha(body_k), sha(mdir / f"{sig_k}.glb")), (body_before, body_before))
         info = base_body.outfit_info("Demo")
-        check("accept, rebuilt: ready, no warning", (info["status"], info["warnings"]), ("ready", []))
-        check("accept, rebuilt: missing mesh items", missing_items(sig_k), [])
+        check("accept, built: ready, no warning", (info["status"], info["warnings"]), ("ready", []))
+        check("accept, built: missing mesh items", missing_items(sig_k), [])
+        with figure.taking_out("Demo"):
+            out = figure.delivered_figure("Demo")
+        check("accept: a manual Build takes the jacket out (its wanted shape not built yet: the plain body, "
+              "under + shoes painted meanwhile — rule 1)", (out.shape, out.painted, out.own, out.in_body_own),
+              (b1, ("shoes", "under"), ("jacket",), ()))
 
         # --- [5] a model of the old rule -> unreachable body -> GC ----------------------------
-        print("[5] the vest moved out of the body: L rebuilt on bK, GC removes the old body")
+        print("[5] the vest moved out of the body: L rebuilt on bW, GC removes the old body")
         def set_vest(mode):
             op = dict(inventory.get_item("vest")["outfit_piece"])
             op["mesh_mode"] = mode
@@ -495,9 +528,9 @@ def main() -> int:
         meta_l = meta_of(sig_l)
         t_l = meta_l.get("texture_signature")
         b_old = meta_l.get("body_id")
-        check("L: the vest meshed into its own body", (result.get("ok"), jobs, hub, t_l != t_k, b_old != b_k,
+        check("L: the vest meshed into its own body", (result.get("ok"), jobs, hub, t_l, b_old != b_k,
                                                         "knitted green vest" in front_text(sig_l)),
-              (True, 3, [("mesh", b_old), ("rig", b_old)], True, True, True))
+              (True, 3, [("mesh", b_old), ("rig", b_old)], "", True, True))
         set_vest("painted")
         check("same signature", model_refs.current_outfit_state("Demo")[2], sig_l)
         check("vest painted: L stale (figure)", (model3d.find_model3d("Demo", sig_l),
@@ -508,9 +541,12 @@ def main() -> int:
         jobs, runs, hub, result = render_and_build()
         meta_l = meta_of(sig_l)
         t_l = meta_l.get("texture_signature")
-        check("vest painted: L rebuilt on bK, 3 image jobs, 1 worker run, 0 mesh/rig jobs",
-              (result.get("ok"), jobs, BUILD_RENDERS, runs, hub, meta_l.get("body_id")), (True, 3, [], 1, [], b_k))
-        check("vest painted: a texture of its own", (base_body.is_texture_signature(t_l), t_l != t_k), (True, True))
+        b_w = meta_l.get("body_id")
+        check("vest painted: L rebuilt on bW (the shape of under + shoes, built now), the build renders bW's views "
+              "then the outfit's, 1 worker run, ONE mesh + ONE rig job",
+              (result.get("ok"), jobs, stems(BUILD_RENDERS), runs, hub, b_w in (b_k, b_old, b1)),
+              (True, 0, [b_w, sig_l], 1, [("mesh", b_w), ("rig", b_w)], False))
+        check("vest painted: a texture of its own", base_body.is_texture_signature(t_l), True)
         report = artefact_graph.collect("Demo", explicit=True, reason="smoke")
         orphans = {e.get("key") for e in report.get("orphans") or []}
         check("GC: bOld orphan, bK kept", (b_old in orphans, b_k in orphans), (True, False))

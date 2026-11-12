@@ -35,9 +35,13 @@ body makes every view and the stored shape count as missing):
 [1] Everything built → ``plan == []``, ``cost.hub_jobs == 0``, GET status
     ``up_to_date``.
 [2] Base missing + coat in_body + trousers own (no mesh) + blouse painted →
-    plain_body (views 4 + mesh + rig = 6), interim (3), shape (3 + 2 = 5),
-    pieces trousers (6), texture (3), fits (0), assemble (0) →
-    ``hub_jobs == 23``, in that order.
+    plain_body (views 4 + mesh + rig = 6), interim (ruling A11, task 11c-2:
+    the trousers are in the body meanwhile, so the interim is the shape
+    INTERIM of {coat, trousers}, not stored: its views 3 + mesh + rig 2 +
+    texture views 3 = 8; was: interim texture 3 with the trousers painted),
+    shape (3 + 2 = 5), pieces trousers (6), texture (3), fits (0), assemble
+    (0) → ``hub_jobs == 28`` (was 23), in that order; shape and texture
+    carry ``manual`` = ``figure.TAKE_OUT`` (they take the trousers out).
 [3] Review Focus 2: hair switched body → HairDeck on a haired base
     (``older_prompts``) with the blouse painted → plain_body (4 + 2 = 6),
     hair (``run_estimate`` HairDeck 1), texture (3: the views follow the
@@ -47,7 +51,9 @@ body makes every view and the stored shape count as missing):
 [5] Review Focus 5: ``start`` while the run is in step "shape" → "queued";
     a third call → still "queued" and ONE follow-up kept; after the run the
     follow-up re-plans to [] and ends at once; every producer ran once per
-    step (the sequence below), a fourth ``start`` answers "current".
+    step (the sequence below; the interim builds its shape INTERIM first,
+    ``interim_shape``, and no chain runs before the pieces step — ruling
+    A14), a fourth ``start`` answers "current".
 [6] ``pieces`` fails for the trousers → texture, fits, assemble still run;
     ``failed == {"pieces": {"error": "mesh refused", "item_id":
     "trousers"}}``. ``shape`` failing skips texture only (pieces, fits,
@@ -88,6 +94,7 @@ def check(label, got, want):
 
 BSIG = "base1234abcd"
 SHAPE = "ob11111111"
+INTERIM = "ob22222222"   # the interim shape of {coat, trousers} (ruling A11: trousers in the body meanwhile)
 SIG = "sig000000001"
 NAMES = {"blouse": "Silk Blouse", "coat": "Wool Coat", "trousers": "Tailored Black", "hair_kira": "Hair"}
 
@@ -100,7 +107,8 @@ class World:
         self.base = base                      # "ok" | "missing" | "older"
         self.in_body, self.painted, self.own = tuple(in_body), tuple(painted), tuple(own)
         self.hair = hair                      # wanted hair: "body" | "hairdeck"
-        self.shape_stored = shape_stored
+        self.shape_stored = shape_stored      # the wanted shape SHAPE
+        self.interim_stored = False           # the interim shape INTERIM
         self.meshed = set(own if meshed is None else meshed)
         self.hair_done = hair_done
         self.estimate = dict(estimate or {})  # item -> hub jobs (None = unknown) while not meshed
@@ -123,24 +131,37 @@ class World:
                              hair="hairdeck" if self.hair == "hairdeck" else "body",
                              pieces={f"s{i}": p for i, p in enumerate((*self.in_body, *self.painted, *self.own))})
 
+    def stored(self, shape):
+        """Whether the meshed shape ``shape`` is stored (``figure._shape_stored``)."""
+        if self.base != "ok":
+            return False
+        return self.shape_stored if shape == SHAPE else self.interim_stored if shape == INTERIM else False
+
     def delivered(self):
+        """Ruling A11 (task 11c-2): an own-mesh piece without its mesh is in the body shape meanwhile — the
+        interim shape INTERIM, stored or not; without such a piece the wanted shape when stored, else the
+        plain body with the in-body set painted (rule 1). A manual Build's view (no kept shape)."""
         from app.core import figure
         w = self.wanted()
-        shape = w.shape if (w.shape == BSIG or (self.shape_stored and self.base == "ok")) else BSIG
+        own = tuple(i for i in w.own if i in self.meshed and self.base == "ok")
+        pending = tuple(sorted(set(w.own) - set(own)))
         interim = {}
         painted = set(w.painted)
         in_body = w.in_body
-        if shape != w.shape:
-            in_body = ()
-            painted.update(w.in_body)
-            interim.update({i: figure.INTERIM_PAINTED.format(what=figure.WHAT_SHAPE) for i in w.in_body})
-        own = tuple(i for i in w.own if i in self.meshed and self.base == "ok")
-        for i in set(w.own) - set(own):
-            painted.add(i)
-            interim[i] = figure.INTERIM_PAINTED.format(what=figure.WHAT_OWN_MESH)
+        if pending:
+            in_body = tuple(sorted({*w.in_body, *pending}))
+            shape = INTERIM
+            interim.update({i: figure.INTERIM_IN_BODY for i in pending})
+        else:
+            shape = w.shape if (w.shape == BSIG or self.stored(SHAPE)) else BSIG
+            if shape != w.shape:
+                in_body = ()
+                painted.update(w.in_body)
+                interim.update({i: figure.INTERIM_PAINTED.format(what=figure.WHAT_SHAPE) for i in w.in_body})
         hair = w.hair if (w.hair == "body" or self.hair_done) else "body"
         painted_t = tuple(sorted(painted))
         return replace(w, shape=shape, in_body=in_body, painted=painted_t, own=own, interim=interim, hair=hair,
+                       in_body_own=pending,
                        texture=("tex:" + shape + ":" + ",".join(painted_t)) if painted_t else "")
 
     @staticmethod
@@ -184,8 +205,8 @@ def install_stubs():
             return {**plan, "views": list(base_body.BASE_VIEWS), "model": True, "reason": "older_prompts"}
         return plan
     base_body.base_refresh_plan = refresh_plan
-    figure._shape_stored = lambda c, shape, bsig: W.shape_stored and W.base == "ok"
-    base_body.shape_view = lambda c, v, shape, bsig: (Path("v") if W.shape_stored and W.base == "ok" else None)
+    figure._shape_stored = lambda c, shape, bsig: W.stored(shape)
+    base_body.shape_view = lambda c, v, shape, bsig: (Path("v") if W.stored(shape) else None)
     base_body.dressed_image = lambda c, v, sig, bsig, fig=None: (
         Path("v") if W.base == "ok" and W.key(fig) in W.views else None)
 
@@ -232,10 +253,13 @@ def install_stubs():
     base_body.ensure_figure_views = lambda c, sig: None
 
     def prepare(c, fig, *, items=None, rebuild=False, signature=""):
-        err = W.record("shape")
+        err = W.record("shape" if fig.shape == SHAPE else "interim_shape")
         if err:
             return {"ok": False, "error": err, "body_id": fig.shape}
-        W.shape_stored = True
+        if fig.shape == SHAPE:
+            W.shape_stored = True
+        else:
+            W.interim_stored = True
         return {"ok": True, "body_id": fig.shape}
     base_body.prepare_shape = prepare
 
@@ -331,6 +355,7 @@ def real_sections(root: Path):
 
 def stub_sections():
     global W
+    from app.core import figure
     from app.core import figure_build as fb
     install_stubs()
 
@@ -344,11 +369,15 @@ def stub_sections():
     W = World(base="missing", in_body=("coat",), painted=("blouse",), own=("trousers",), shape_stored=False,
               meshed=(), model=False)
     steps = fb.plan("Kira", profile={})
-    check("[2] steps", names(steps), [("plain_body", 6), ("interim", 3), ("shape", 5), ("pieces", "trousers", 6),
+    check("[2] steps", names(steps), [("plain_body", 6), ("interim", 8), ("shape", 5), ("pieces", "trousers", 6),
                                       ("texture", 3), ("fits", 0), ("assemble", 0)])
     check("[2] plain body label", steps[0].label, "Plain body: views 4 + mesh + rig")
+    check("[2] interim label (ruling A11: the trousers in the body meanwhile)", steps[1].label,
+          "Interim body shape (own mesh in the body until ready): views 3 + mesh + rig + texture views 3")
     check("[2] piece label", steps[3].label, "Own mesh · Tailored Black")
-    check("[2] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 23)
+    check("[2] shape / texture take the trousers out: manual", [s.manual for s in steps if s.name in
+                                                                ("shape", "texture")], [figure.TAKE_OUT] * 2)
+    check("[2] hub_jobs", fb.cost("Kira", steps)["hub_jobs"], 28)
     check("[2] step order follows STEP_ORDER",
           [s.name for s in steps] == sorted((s.name for s in steps), key=fb.STEP_ORDER.index), True)
 
@@ -381,7 +410,7 @@ def stub_sections():
     check("[5] the runs ended", wait_idle(fb), True)
     check("[5] producer calls (once per step; the follow-up re-planned to [] and ran nothing)", W.calls, [
         "slot", "base_images", "base_model",
-        "slot", "dressed", "model no-prepare",
+        "slot", "interim_shape", "dressed", "model no-prepare",
         "slot", "shape",
         "chain trousers",
         "slot", "dressed",
@@ -399,7 +428,8 @@ def stub_sections():
     check("[6] pieces run ended", wait_idle(fb), True)
     ran = [c for c in W.calls if c != "slot"]
     check("[6] pieces: texture, fits, assemble still ran", ran, [
-        "dressed", "model no-prepare", "shape", "chain trousers", "dressed", "refit", "model no-prepare", "schedule"])
+        "interim_shape", "dressed", "model no-prepare", "shape", "chain trousers", "dressed", "refit",
+        "model no-prepare", "schedule"])
     check("[6] pieces: failed", fb.state("Kira")["failed"],
           {"pieces": {"error": "mesh refused", "item_id": "trousers"}})
     check("[6] pieces: GET status failed", fb.figure_info("Kira")["status"], "failed")
@@ -413,7 +443,8 @@ def stub_sections():
     check("[6] shape run ended", wait_idle(fb), True)
     ran = [c for c in W.calls if c != "slot"]
     check("[6] shape: only texture skipped", ran, [
-        "dressed", "model no-prepare", "shape", "chain trousers", "refit", "model no-prepare", "schedule"])
+        "interim_shape", "dressed", "model no-prepare", "shape", "chain trousers", "refit", "model no-prepare",
+        "schedule"])
     st = fb.state("Kira")
     check("[6] shape: failed", st["failed"], {"shape": {"error": "mesh backend refused", "item_id": ""}})
     check("[6] shape: skipped", st["skipped"], ["texture"])

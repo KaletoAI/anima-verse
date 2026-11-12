@@ -44,6 +44,14 @@ first 8 / 12 hex of sha256 — the rules of ``scripts/smoke_figure_keys.py``):
   T(plain, blouse+coat)   = today's tsig: "tex" + h12({version 1,
        base_signature BSIG, base_variant rigged, side_views False,
        dress_text {front/back: "wear:blouse+coat"}})     = "tex06c6eeeaa12a"
+  Interim shapes (ruling A11, task 11c-2: an own-mesh piece without its mesh
+  — or refused on the stored shape — is in the body): same shape rule with
+  the dress text of the set:
+  S3 = {coat, trousers}         "wear:coat+trousers"        = "obc5d13505"
+  S5 = {blouse, coat, trousers} "wear:blouse+coat+trousers" = "ob15f74a91"
+  S6 = {boots, coat}            "wear:boots+coat"           = "ob3cb887ac"
+  S7 = {blouse, boots, coat}    "wear:blouse+boots+coat"    = "ob6fe3d04c"
+  T(S3, blouse) = "tex84149b6ab439", T(S6, blouse) = "texc0a16c8eb575"
 
 Expected, derived by hand from the brief's delivered rule:
 
@@ -56,17 +64,24 @@ Expected, derived by hand from the brief's delivered rule:
     fit is the fit on the plain body), texture T(plain, blouse+coat) =
     "tex06c6eeeaa12a".
 [3] S stored, trousers WITHOUT a fit on S (base fit yes, body fit refused):
-    branch True -> painted (blouse, trousers), interim {trousers: "Shown
-    painted until its own mesh is built"}, own (), texture "tex72b75ed8d6e3".
-    Branch False (S2 stored too) -> wanted and delivered shape S2 =
-    shape_key(in_body (blouse, coat)) = "oba82e1f92", in_body (blouse, coat),
-    notes {blouse: "In the body here: painting needs the plain body"},
-    trousers in left_out (reason "refused — stub"), painted (), texture "".
+    ruling A11 (was: painted meanwhile, "Shown painted until its own mesh is
+    built") -> the trousers join the body: branch True -> shape S3 (not
+    stored: the previous figure stays served until it is), in_body (coat,
+    trousers), in_body_own (trousers,), painted (blouse,), interim
+    {trousers: "In the body until its own mesh is ready"}, own (), left_out
+    {}, texture T(S3, blouse) = "tex84149b6ab439".
+    Branch False (S2 stored too, the trousers refused on S2 as well) ->
+    wanted shape S2 = shape_key(in_body (blouse, coat)) = "oba82e1f92";
+    delivered (was: S2 with the trousers left out, Ruling P6) shape S5,
+    in_body (blouse, coat, trousers), notes {blouse: "In the body here:
+    painting needs the plain body"}, left_out {}, painted (), texture "".
 [4] Review Focus 3: W+, boots own_mesh with NO fit at all (no base fit), S
-    and S2 stored, trousers fitted on both -> boots in left_out {boots: "no accepted
-    fit on the current base model"} and in neither painted nor in_body, in
-    both branches; branch True texture stays T(S, blouse) (boots left out of
-    the dress text as before).
+    and S2 stored, trousers fitted on both -> ruling A11 (was: boots left
+    out with "no accepted fit on the current base model") the boots are in
+    the body: left_out {}, boots in in_body and in_body_own, not painted, not
+    grafted; branch True shape S6 (the trousers grafted: an interim shape not
+    stored yet counts their base fit), texture T(S6, blouse); branch False
+    shape S7.
 [5] Review Focus 2: worn {top: blouse}, hair_method hairdeck, hair_demo worn,
     no HairDeck fit; base haired -> hair "body"; base bald -> "bald".
     With the plain body's prompts older (CURRENT False) pending_changes ==
@@ -77,7 +92,8 @@ Expected, derived by hand from the brief's delivered rule:
     built_figure == delivered; pending_changes == []; built_figure({}) is
     None. Blouse switched painted -> own_mesh (no fit, nothing built) ->
     pending_changes == [{key "blouse", name "Blouse", wanted "own_mesh",
-    delivered "painted"}].
+    delivered "in_body", note "In the body until its own mesh is ready"}]
+    (ruling A11; was: delivered "painted").
 [7] Fails on the old code: the per-character outfit body mode is gone —
     ``git show bcba4ce3:app/core/base_body.py`` (BASE of the task) holds
     exactly one ``def outfit_body_mode``; the file now holds none, and
@@ -209,28 +225,29 @@ def main() -> int:
         check("texture = today's tsig", got.texture, "tex06c6eeeaa12a")
         check("the wanted shape is still S", figure.wanted_figure("Demo", profile=profile()).shape, S)
 
-        print("[3] trousers without a fit on S")
+        print("[3] trousers without a fit on S: in the body (ruling A11)")
         STORED.update({S, S2})
         BODY_FITS.discard(("trousers", S))
         got = figure.delivered_figure("Demo", profile=profile())
-        check("True: shape", got.shape, S)
-        check("True: painted", got.painted, ("blouse", "trousers"))
-        check("True: interim", got.interim, {"trousers": "Shown painted until its own mesh is built"})
+        check("True: shape", got.shape, "obc5d13505")
+        check("True: in_body / in_body_own", (got.in_body, got.in_body_own), (("coat", "trousers"), ("trousers",)))
+        check("True: painted", got.painted, ("blouse",))
+        check("True: interim", got.interim, {"trousers": "In the body until its own mesh is ready"})
         check("True: own", got.own, ())
         check("True: left_out", got.left_out, {})
-        check("True: texture", got.texture, "tex72b75ed8d6e3")
+        check("True: texture", got.texture, "tex84149b6ab439")
         figure.PAINT_ON_SHAPE = False
         try:
             wanted, got = both(profile())
             check("False: wanted shape", wanted.shape, S2)
-            check("False: delivered shape", got.shape, S2)
-            check("False: shape_key(in_body (blouse, coat))", got.shape, figure.shape_key(
+            check("False: wanted shape = shape_key(in_body (blouse, coat))", wanted.shape, figure.shape_key(
                 "Demo", figure.WornSets(in_body=("blouse", "coat"), painted=(), own={"trousers": "clothing"},
                                         hair_in_body=True, hair_item="", pieces=dict(W)),
                 bsig=BSIG, variant="rigged", profile=profile()))
-            check("False: in_body", got.in_body, ("blouse", "coat"))
+            check("False: delivered shape S5", got.shape, "ob15f74a91")
+            check("False: in_body", got.in_body, ("blouse", "coat", "trousers"))
             check("False: notes", got.notes, {"blouse": "In the body here: painting needs the plain body"})
-            check("False: trousers left out", got.left_out, {"trousers": "refused — stub"})
+            check("False: nothing left out", got.left_out, {})
             check("False: painted", got.painted, ())
             check("False: texture", got.texture, "")
         finally:
@@ -245,15 +262,16 @@ def main() -> int:
                 got = figure.delivered_figure("Demo", profile=profile(plus))
             finally:
                 figure.PAINT_ON_SHAPE = True
-            check(f"{flag}: boots left out", got.left_out, {"boots": "no accepted fit on the current base model"})
+            check(f"{flag}: nothing left out", got.left_out, {})
             check(f"{flag}: boots not painted", "boots" in got.painted, False)
-            check(f"{flag}: boots not in the body", "boots" in got.in_body, False)
+            check(f"{flag}: boots in the body", ("boots" in got.in_body, "boots" in got.in_body_own), (True, True))
             check(f"{flag}: boots not grafted", "boots" in got.own, False)
             if flag:
-                check("True: shape", got.shape, S)
-                check("True: texture unchanged", got.texture, "texe57feda37703")
+                check("True: shape S6", got.shape, "ob3cb887ac")
+                check("True: trousers grafted", got.own, ("trousers",))
+                check("True: texture", got.texture, "texc0a16c8eb575")
             else:
-                check("False: shape", got.shape, S2)
+                check("False: shape S7", got.shape, "ob6fe3d04c")
 
         print("[5] HairDeck without a fit (Review Focus 2)")
         hairdeck = profile({"top": "blouse"}, method="hairdeck", hair="hair_demo")
@@ -278,7 +296,8 @@ def main() -> int:
         check("every mode delivered -> []", figure.pending_changes("Demo", profile=profile()), [])
         set_mode("blouse", "own_mesh")
         check("blouse painted -> own_mesh", figure.pending_changes("Demo", profile=profile()),
-              [{"key": "blouse", "name": "Blouse", "wanted": "own_mesh", "delivered": "painted"}])
+              [{"key": "blouse", "name": "Blouse", "wanted": "own_mesh", "delivered": "in_body",
+                "note": "In the body until its own mesh is ready"}])
         check("the model's figure is not the delivered one now",
               figure.built_figure(meta) == figure.delivered_figure("Demo", profile=profile()), False)
         set_mode("blouse", "painted")

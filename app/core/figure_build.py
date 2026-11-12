@@ -10,12 +10,22 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
    prompts (``base_body.base_refresh_plan(missing=True)``): its views, then
    its mesh run (``generate_base_images`` / ``generate_base_model``).
 2. ``interim`` — the wanted figure needs a shape or an own mesh that is not
-   built (the delivered figure paints a piece meanwhile, ``Figure.interim``)
-   and no outfit model of that interim figure is stored: its views
-   (``generate_dressed_images``) and its outfit model (ruling 2: shown
-   painted until the real thing exists; scheduled FIRST, counted in the cost).
+   built (``Figure.interim``: an in-body piece painted until its shape
+   exists; an own-mesh piece IN the body shape until its mesh is ready,
+   ruling A11) and no outfit model of that interim figure is stored: the
+   interim body shape when it is not stored yet (``base_body.prepare_shape``
+   of the delivered figure, its cost counted like the ``shape`` step), its
+   views (``generate_dressed_images``) and its outfit model (ruling 2;
+   scheduled FIRST, counted in the cost). It never waits for a garment chain
+   (ruling A14): the ``pieces`` steps run after it. Not listed while a manual
+   Build takes kept pieces out and the stored model of the kept shape serves
+   meanwhile.
 3. ``shape`` — the wanted meshed shape is not stored
-   (``base_body.prepare_shape``).
+   (``base_body.prepare_shape``). While own-mesh pieces are in the delivered
+   body shape (``Figure.in_body_own``) this step and ``texture`` take them
+   out of it: listed with ``manual`` ``figure.TAKE_OUT`` — only a manual
+   Build runs them (ruling A11: no automatic extra jobs); a manual Build
+   plans and builds under ``figure.taking_out``.
 4. ``pieces`` — one step per own-mesh piece whose chain has something to
    run (``garments.run_estimate``), run through the character's garment
    FIFO (``garments.run_queued``).
@@ -258,6 +268,39 @@ def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
     return [s for s in steps if explicit or not (s.failed or s.manual)]
 
 
+#: The interim step's label when it makes an interim body shape first (ruling A11 / A14).
+INTERIM_SHAPE_LABEL = "Interim body shape (own mesh in the body until ready): {parts}"
+
+
+def _interim_step(character_name: str, delivered, signature: str, *, rebased: bool,
+                  profile: Dict[str, Any]) -> Step:
+    """The ``interim`` step of the figure delivered meanwhile: its views and
+    outfit model — and first its body shape when that is an interim shape
+    not stored yet (ruling A11: own-mesh pieces without their mesh in the
+    body). That shape's cost is counted like the ``shape`` step (its views
+    when missing + ``model3d.mesh_hub_stages``), and its dressed views as a
+    whole set (they are edits of the new shape's views; copies when nothing
+    is painted). It never waits for a garment chain (ruling A14)."""
+    from app.core import base_body, figure, model3d
+    set_jobs = base_body.dressed_view_jobs()
+    new_shape = not figure.is_plain(delivered.shape) and (
+        rebased or not figure._shape_stored(character_name, delivered.shape, delivered.bsig))
+    if not new_shape:
+        missing = rebased or _views_missing(character_name, delivered, signature)
+        views = set_jobs if rebased else base_body.dressed_view_estimate(
+            character_name, delivered, signature, profile=profile) if missing else 0
+        return Step("interim", _views_label("Interim texture", views, copied=missing), views)
+    shape_views = set_jobs if rebased or any(
+        base_body.shape_view(character_name, v, delivered.shape, delivered.bsig) is None
+        for v in base_body.dressed_views()) else 0
+    stages = model3d.mesh_hub_stages(character_name, delivered.shape)
+    texture_views = set_jobs if delivered.texture else 0
+    parts = ([f"views {shape_views}"] if shape_views else []) + list(stages) + (
+        [f"texture views {texture_views}"] if texture_views else [])
+    return Step("interim", INTERIM_SHAPE_LABEL.format(parts=" + ".join(parts)),
+                shape_views + len(stages) + texture_views)
+
+
 def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
          explicit: bool = True, resolved: Optional[Tuple[Any, Any]] = None) -> List[Step]:
     """The steps a Build runs now, in ``STEP_ORDER`` (module docstring).
@@ -297,11 +340,16 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
 
     built = _model_figure(character_name, signature)
     set_jobs = base_body.dressed_view_jobs()
-    if delivered.interim and (rebased or built is None or built.as_dict() != delivered.as_dict()):
-        missing = rebased or _views_missing(character_name, delivered, signature)
-        views = set_jobs if rebased else base_body.dressed_view_estimate(
-            character_name, delivered, signature, profile=profile) if missing else 0
-        steps.append(Step("interim", _views_label("Interim texture", views, copied=missing), views))
+    # Ruling A11: a manual Build that takes kept pieces out leaves the stored model of the kept shape served
+    # meanwhile — no interim figure of its own (it would paint what that shape already carries).
+    kept_serving = (figure.is_taking_out(character_name) and built is not None and bool(built.in_body_own)
+                    and not figure.is_plain(built.shape) and figure._shape_stored(character_name, built.shape, bsig))
+    if delivered.interim and not kept_serving and (rebased or built is None
+                                                   or built.as_dict() != delivered.as_dict()):
+        steps.append(_interim_step(character_name, delivered, signature, rebased=rebased, profile=profile))
+    # Ruling A11: while own-mesh pieces are in the delivered body shape (no mesh yet, or ready but not taken
+    # out), the wanted shape / texture take them out — only a manual Build spends that (``figure.TAKE_OUT``).
+    take_out = figure.TAKE_OUT if delivered.in_body_own else ""
 
     meshed = not figure.is_plain(wanted.shape)
     if meshed and (rebased or not figure._shape_stored(character_name, wanted.shape, bsig)):
@@ -310,7 +358,7 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         stages = model3d.mesh_hub_stages(character_name, wanted.shape)
         views = set_jobs if views_missing else 0
         steps.append(Step("shape", "Body shape: " + " + ".join(([f"views {views}"] if views else []) + stages),
-                          views + len(stages)))
+                          views + len(stages), manual=take_out))
 
     for item_id in wanted.own:
         # The worn state's chain only (plan Task 11b: the other state is built by its own button, never both
@@ -332,8 +380,9 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
             views = (set_jobs if rebased or not shape_built
                      else base_body.dressed_view_estimate(character_name, wanted, signature, profile=profile)
                      if views_missing else 0)
-            steps.append(Step("texture", _views_label("Texture", views, copied=views_missing), views))
-    if (not any(s.name in ("interim", "texture") for s in steps)
+            steps.append(Step("texture", _views_label("Texture", views, copied=views_missing), views,
+                              manual=take_out))
+    if (not any(s.name in ("interim", "texture") for s in _runnable(steps, explicit))
             and _views_missing(character_name, delivered, signature)):
         # Ruling F16: the views of the figure delivered NOW, judged like the Pose tab (``dressed_image``) — a
         # view made for another figure is never "nothing to build" while the tab calls it stale.
@@ -384,9 +433,9 @@ _build_locks: Dict[str, threading.Lock] = {}  # character -> held by a run from 
 
 
 #: 409 of a manual render of the dressed views while a Build of the character runs (ruling F16, fix round
-#: T12-F1 — like Delete's ``figure.BUILD_RUNNING``, ruling 10a): the Build renders the views its figure needs,
-#: a manual run would wait behind its garment chains (the dressed front settles them, ``resolve_figure``) and
-#: look dropped.
+#: T12-F1 — like Delete's ``figure.BUILD_RUNNING``, ruling 10a): the Build renders the views its figure needs;
+#: a manual run beside it would render the same views twice (since ruling A14 no dressed render waits for the
+#: garment chains any more).
 VIEWS_BUILD_RUNNING = ("Not rendered: a Build runs for this character now and renders the views its figure "
                        "needs — regenerate after the Build if needed.")
 
@@ -564,17 +613,31 @@ def _tracked(character_name: str, label: str):
 def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
     """One Build: re-plan, then every step in order (module docstring). An
     ``automatic`` run reports a cached chain failure without running it; a
-    manual one retries it."""
-    from app.core.timeutils import utc_now_iso
-    explicit = not automatic
+    manual one retries it, and takes own-mesh pieces whose mesh is ready out
+    of the body shape (ruling A11)."""
+    from app.core import figure
     try:
         profile = _read_profile(character_name)
     except Exception as e:  # noqa: BLE001 — ruling F13 e: failed, never "nothing to build"
         _record_unread(character_name, reason, e)
         return
+    if not automatic:
+        # Ruling A11: a manual Build takes own-mesh pieces whose mesh is ready out of the body shape — the figure
+        # it plans and builds is the wanted one, not the kept shape (``figure.taking_out``).
+        with figure.taking_out(character_name):
+            _run_planned(character_name, reason, profile, automatic=False)
+    else:
+        _run_planned(character_name, reason, profile, automatic=True)
+
+
+def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, automatic: bool) -> None:
+    """``_run`` after the profile was read: plan, then every step in order."""
+    from app.core.timeutils import utc_now_iso
+    explicit = not automatic
     steps = plan(character_name, profile=profile, explicit=explicit)
     if automatic:
-        # Ruling 8a: the plain body stays listed (the UI's pending change), an automatic run never builds it.
+        # Rulings 8a / A11: the plain body and the take-out stay listed (the UI's pending change), an automatic
+        # run never builds them.
         steps = [s for s in steps if not s.manual]
     if not _runnable(steps, explicit):
         logger.info("Build %s (%s): nothing to build", character_name, reason)
@@ -696,9 +759,19 @@ def _dressed(character_name: str, wanted) -> None:
 
 
 def _run_interim(character_name: str, step: Step, explicit: bool = False) -> str:
-    """The interim figure: its views, then its outfit model — served while the
-    shape / own meshes are built (ruling 2)."""
-    _profile, wanted, _delivered, _items = _now(character_name)
+    """The interim figure: its body shape first when it is an interim shape
+    not stored yet (ruling A11 — own-mesh pieces without their mesh in the
+    body; ``base_body.prepare_shape`` of the DELIVERED figure), then its
+    views, then its outfit model — served while the wanted shape / own
+    meshes are built (ruling 2). No garment chain runs before it (ruling
+    A14): the ``pieces`` steps follow."""
+    from app.core import base_body, figure
+    _profile, wanted, delivered, items = _now(character_name)
+    if not figure.is_plain(delivered.shape) and delivered.in_body_own and not figure._shape_stored(
+            character_name, delivered.shape, delivered.bsig):
+        result = base_body.prepare_shape(character_name, delivered, items=items, signature=wanted.signature)
+        if result is not None and not result.get("ok"):
+            return str(result.get("error") or "Interim body shape build failed")
     _dressed(character_name, wanted)
     return _outfit_model(character_name, wanted.signature)
 
@@ -824,8 +897,10 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
     """The Figure tab's worn rows. Open / closed (plan Task 11b): ``piece_state`` — ``"open"`` / ``"closed"`` for
     a closable piece, None otherwise (not the row's ``state``, which is its readiness) — and, for an own-mesh
     closable piece, ``other_state_jobs``: what building the other state's mesh costs (None: unknown or not
-    applicable)."""
-    from app.core import garment_set
+    applicable). ``in_body_until`` (ruling A11): an own-mesh piece in the body shape — ``"mesh"`` until its own
+    mesh is ready (``figure.INTERIM_IN_BODY``), ``"build"`` its mesh is ready and served, the next Build takes
+    it out of the shape (``figure.READY_IN_BODY``); None otherwise."""
+    from app.core import figure, garment_set
     from app.core.outfit_options import CLOSED, OPEN
     from app.models import inventory
     profile = _profile_of(character_name, profile)
@@ -865,6 +940,9 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
                               or delivered.notes.get(item_id) or ""),
                      "interim": item_id in delivered.interim, "left_out": delivered.left_out.get(item_id) or "",
                      "failure": failure, "piece_state": piece_state,
+                     "in_body_until": (None if item_id not in delivered.in_body_own
+                                       else "mesh" if delivered.interim.get(item_id) == figure.INTERIM_IN_BODY
+                                       else "build"),
                      "other_state_jobs": (_other_state_jobs(character_name, item_id, piece_state, profile)
                                           if closable and mode == garment_set.OWN_MESH else None)})
     return rows

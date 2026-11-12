@@ -171,6 +171,9 @@ export interface FigureWornRow {
   piece_state: PieceState | null
   /** Own mesh + closable only: hub jobs of the OTHER state's mesh (0 = built, null = unknown / n.a.). */
   other_state_jobs: number | null
+  /** An own-mesh piece in the body shape (ruling A11): until its own mesh is ready (`mesh`), or its mesh is
+   *  ready and served and the next Build takes it out of the shape (`build`); null otherwise. */
+  in_body_until?: 'mesh' | 'build' | null
 }
 
 export interface FigureHairRow {
@@ -309,10 +312,20 @@ export function staleBaseNote(jobs: number | null, t: Tr = EN): string {
   return t('Makes the base model stale — the next Build rebuilds it ({cost})').replace('{cost}', jobsTr(jobs, t))
 }
 
+/** Under the state of an own-mesh piece in the body shape until its mesh is ready (ruling A11). */
+export const IN_BODY_UNTIL_MESH = 'in the body until its own mesh is ready'
+/** ... once its mesh is ready and served, until the next Build takes it out of the shape. */
+export const IN_BODY_UNTIL_BUILD = 'own mesh ready — in the body until the next Build'
+
 /** The state column of a worn row (spec sketch) and the line under it. */
-export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | 'failure' | 'left_out' | 'note' | 'interim'>,
-  t: Tr = EN): { text: string; sub: string | null } {
-  const sub = row.interim ? t('shown painted until ready') : null
+export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | 'failure' | 'left_out' | 'note' | 'interim'
+  | 'in_body_until'>, t: Tr = EN): { text: string; sub: string | null } {
+  const sub = row.in_body_until === 'mesh' ? t(IN_BODY_UNTIL_MESH)
+    : row.in_body_until === 'build' ? t(IN_BODY_UNTIL_BUILD)
+      : row.interim ? t('shown painted until ready') : null
+  if (row.in_body_until === 'build' && row.state !== 'failed') {
+    return { text: row.state === 'building' ? t('⏳ building') : t('⏳ waiting for the Build'), sub }
+  }
   switch (row.state) {
     case 'ready': return { text: t('✓ ready'), sub: null }
     case 'failed': return { text: t('failed — {reason}').replace('{reason}', row.failure || row.note), sub: null }

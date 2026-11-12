@@ -11,7 +11,8 @@ package copied in — no world, no hub, no GPU, no Blender, no server. The
 fixture is a slim cut of scripts/smoke_base_body_outfit.py (as
 scripts/smoke_outfit_rebuild_cost.py): Kira on the pipeline with a ready base
 and the four base views, wearing a plain Dress (slot top) → worn signature
-``sig``; she also holds a Scarf (slot neck). The producers are recorders:
+``sig``; she also holds a Scarf (slot neck). Both are ``mesh_mode: painted`` (painted on the plain body;
+since 9788164d the default mode is ``in_body``, which would mesh a shape). The producers are recorders:
 
 * ``model_refs.trigger_now`` records ``(kinds, blocking, force, signature)``
   and writes the outfit's dressed front + back CURRENT for the base
@@ -196,7 +197,8 @@ def main() -> int:
             (refs / f"{stem}.json").write_text(json.dumps({"base_signature": bsig}))
             shas[v] = hashlib.sha256((refs / f"{stem}.png").read_bytes()).hexdigest()
 
-        piece = {"covers": [], "outfit_types": ["casual"]}
+        # Painted on the plain body (since 9788164d the default mode is in_body — that would mesh a shape).
+        piece = {"covers": [], "outfit_types": ["casual"], "mesh_mode": "painted"}
         dress = inventory.add_item(name="Dress", category="outfit_piece", prompt_fragment="a green dress",
                                    outfit_piece={"slots": ["top"], **piece})["id"]
         scarf = inventory.add_item(name="Scarf", category="outfit_piece", prompt_fragment="a red scarf",

@@ -968,7 +968,7 @@ def _hairdeck_fit_step(character_name: str, item_id: str, kind: str, fsig: str, 
 # on that body — key ``(item, fsig, body id)``, files under
 # ``garments/bodies/<body id>/`` (``garment_store.body_root``). Such a fit is
 # DERIVED from the fit served on the base model (``garment_store.accepted_fit``
-# — the piece is a mesh at all only when it has one, ``base_body.resolve_figure``):
+# — the piece is a mesh at all only when it has one, ``figure.delivered_figure``):
 # the same fsig, the same garment source (edit chain: the cached prepared mesh +
 # ghost front; HairDeck: the seed of the base fit), fitted by the same fit and
 # gates onto the body's rigged + unrigged GLB with the body's front view as the

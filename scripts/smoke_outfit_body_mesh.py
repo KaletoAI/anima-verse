@@ -69,14 +69,19 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
     distance tier requested for sigA only (build_lod [sigA]); outfit_info
     ready; find_model3d(Demo, bA) is the body (an outfit body is never
     stale); find_model3d_serving(Demo) = (sigA, "exact").
-[3] B = A + dress (own mesh): the same shape bA -> 0 image jobs, 0 chain steps
-    on a body (no mesh, no rig), 0 worker runs; B's model names body bA; the
-    dress has an accepted (base) fit but no prepared mesh in this fixture, so
-    its fit on bA (Task 2, garments.body_fit) cannot be made: garment_warnings
-    name NOT_FITTED_ON_BODY for "Dress (The garment mesh is missing — run the
+[3] B = A + dress (own mesh), the dress's chain run first (no outfit render
+    runs a chain since task 11c-2 of plan 2026-11-12-unified-worn-pieces,
+    ruling A14): the same shape bA -> 0 image jobs, 0 chain steps on a body
+    (no mesh, no rig), 0 worker runs; B's model names body bA; the dress has
+    an accepted (base) fit but no prepared mesh in this fixture, so its fit
+    on bA (Task 2, garments.body_fit) cannot be made: garment_warnings name
+    NOT_FITTED_ON_BODY for "Dress (The garment mesh is missing — run the
     mesh step first)", the failure is recorded on bA
     (garments/bodies/<bA>/failed/dress_<F>.json), no assembled/<sigB>.glb —
-    the base fit is never grafted onto the body.
+    the base fit is never grafted onto the body. With that refusal on bA the
+    dress is in the body now (ruling A11): the delivered figure stands on
+    another (interim) shape, in_body [dress, shoes, under], in_body_own
+    [dress], own [] — B stale "figure".
 [4] C {dress}: empty dress text -> the base body: 0 image jobs, no mesh/rig
     job, 0 worker runs; model dressed False, no body_id.
 [5] A rebuilt with force in mesh mode: no mesh/rig job (the body is current).
@@ -466,21 +471,27 @@ def main() -> int:
         check("A: serving", (served[0].stem if served[0] else None, served[1]), (sig_a, "exact"))
 
         # --- [3] same tsig, other own-mesh piece ---------------------------------------
-        print("[3] same painted pieces, an own-mesh piece more -> the same body, no job")
+        print("[3] B = A + dress, its fit refused on bA -> the dress in the body of its own shape (ruling A11)")
         sig_b = wear({**A, "top": "dress"})
+        # No outfit render runs a garment chain any more (ruling A14): the dress's is run here first.
+        check("B: the dress chain", garments.run_garment("Demo", "dress").get("ok"), True)
+        fit = gs.accepted_fit("Demo", "dress", base_model_sha=base_body.base_model_sha256("Demo", b1))
+        check("B: the dress has a (base) fit", bool(fit), True)
         jobs, runs, steps, result = render_and_build()
         meta_b = model_meta(sig_b)
         check("B: ok, 0 image jobs, 0 runs, no mesh/rig job", (result.get("ok"), jobs, runs, jobs_of(steps)),
               (True, 0, 0, []))
         check("B: same tsig, same body", (meta_b.get("texture_signature"), meta_b.get("body_id")), (t_a, b_a))
-        fit = gs.accepted_fit("Demo", "dress", base_model_sha=base_body.base_model_sha256("Demo", b1))
-        check("B: the dress has a (base) fit", bool(fit), True)
         check("B: not fitted on this body", base_body.NOT_FITTED_ON_BODY.format(
             items="Dress (The garment mesh is missing — run the mesh step first)")
               in (meta_b.get("garment_warnings") or []), True)
         check("B: failure recorded on the body",
               gs.garment_path("Demo", "dress", gs.parse_name(fit[0])[1], "failed", body=b_a).is_file(), True)
         check("B: no assembly with a base fit", (mdir / "assembled" / f"{sig_b}.glb").exists(), False)
+        now = figure.delivered_figure("Demo")
+        check("B: the refused dress is in the body now (ruling A11): its own interim shape, B stale",
+              (now.shape not in (b_a, b1), now.in_body, now.in_body_own, now.own, stale_reason()),
+              (True, ("dress", "shoes", "under"), ("dress",), (), "figure"))
 
         # --- [4] empty dress text ---------------------------------------------------------
         print("[4] empty dress text -> the base body")

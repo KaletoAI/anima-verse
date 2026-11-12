@@ -1236,11 +1236,10 @@ COVERED_MISSING = ("The base body has no current covered variant — the outfit 
                    "rebuild the base body's extension bones")
 #: An outfit model built while an own-mesh piece it wears had no fit — now it has one.
 MESH_ITEM_READY = "An own-mesh piece painted on here has its garment mesh now"
-#: The ``garment_warnings`` entry of an own-mesh piece left painted on.
-MESH_ITEM_PAINTED = "{item} stays painted on: {reason}"
-#: ... for a piece whose garment chain failed: no automatic trigger retries
-#: that fsig (``garments.cached_failure``), only Regenerate does.
-MESH_ITEM_FAILED = "{item} stays painted on: {reason} — Regenerate in the Wardrobe"
+#: The ``garment_warnings`` entry of an own-mesh piece in the body shape until its mesh is ready (ruling A11);
+#: ``reason``: why it has no mesh — ``NO_MESH_FIT`` or its chain's failure (``MESH_ITEM_CHAIN_FAILED``: no
+#: automatic trigger retries that fsig, ``garments.cached_failure``).
+MESH_ITEM_IN_BODY = "{item} is in the body until its own mesh is ready: {reason}"
 NO_MESH_FIT = "no accepted fit on the current base model"
 #: Outfit body mode ``mesh`` (ruling 2026-11-10): a flagged piece without an
 #: accepted fit is never painted (meshed) into the outfit body — it is
@@ -1265,8 +1264,8 @@ def dress_text(character_name: str, view: str, *, pieces: Optional[Dict[str, str
     wardrobe's text; the items follow with their own verb ("holding …").
 
     ``mesh_items``: own-mesh pieces left out of the texture on this outfit
-    (``mesh_items_unpainted`` of ``resolve_figure``'s record: the grafted
-    pieces and the ones left out) — left out of the pieces
+    (``mesh_items_unpainted`` of ``mesh_record``: the grafted pieces) — left
+    out of the pieces
     BEFORE the renderer resolves ``covers`` / ``partially_covers``, so what
     lies under them is painted (plan 2026-11-09-base-body-phase5 Task 4).
     Pieces that are ALL mesh items leave nothing to paint: "" (never the
@@ -1516,18 +1515,20 @@ def variant_current(character_name: str, meta: Dict[str, Any], *,
 # since plan 2026-11-12-unified-worn-pieces Task 6 decided by the delivered figure) ---
 #
 # The record (sidecar ``mesh_items`` of every dressed view and outfit model,
-# ``resolve_figure``): ``intended`` = the own-mesh pieces worn (item mode
-# ``own_mesh``), ``effective`` = those grafted (``figure.Figure.own``: a fit on
-# the delivered shape), ``unpainted`` = the pieces the dress text LEFT OUT
-# (``mesh_items_unpainted``: the grafted ones plus the ones left out —
-# footwear without a fit, never painted, footwear spec § 9.1; on a meshed
-# shape in the refusal branch any own-mesh piece without a fit, Ruling P6),
-# ``missing`` = item -> reason for the left-out pieces, ``warnings`` = the
-# pieces painted meanwhile (interim rule, ruling 2: ``MESH_ITEM_PAINTED`` /
-# ``MESH_ITEM_FAILED``) and ``figure`` = the delivered figure the views were
-# made for (``figure.Figure.as_dict``).
+# ``mesh_record``): ``intended`` = the own-mesh pieces worn outside the body
+# (item mode ``own_mesh``), ``effective`` = those grafted
+# (``figure.Figure.own``: a fit on the delivered shape), ``unpainted`` = the
+# pieces the dress text LEFT OUT (``mesh_items_unpainted``: the grafted ones,
+# and ``left_out`` of a figure recorded before ruling A11), ``in_body`` = the
+# own-mesh pieces in the body shape (ruling A11, ``figure.Figure.in_body_own``:
+# their mesh is missing or not taken out yet — the dress text keeps them; the
+# assembly grafts each once its fit exists, ``mesh_items_in_body``),
+# ``missing`` = item -> reason for left-out pieces, ``warnings`` = the pieces
+# in the body until their mesh is ready (``MESH_ITEM_IN_BODY``) and
+# ``figure`` = the delivered figure the views were made for
+# (``figure.Figure.as_dict``).
 #
-# The missing pieces are judged NOW, never from the record alone
+# The pieces are judged NOW, never from the record alone
 # (``mesh_items_missing``): a piece whose fit landed since is simply grafted.
 
 def mesh_items_intended(record: Dict[str, Any]) -> List[str]:
@@ -1537,6 +1538,16 @@ def mesh_items_intended(record: Dict[str, Any]) -> List[str]:
     if not isinstance(mesh, dict):
         return []
     return [str(i) for i in mesh.get("intended") or [] if isinstance(i, str) and i]
+
+
+def mesh_items_in_body(record: Optional[Dict[str, Any]]) -> List[str]:
+    """The own-mesh pieces a dressed view / outfit model keeps IN its body
+    shape until their mesh is ready (sidecar ``mesh_items.in_body``, ruling
+    A11), sorted; [] when it records none."""
+    mesh = record.get("mesh_items") if isinstance(record, dict) else None
+    if not isinstance(mesh, dict):
+        return []
+    return sorted({str(i) for i in mesh.get("in_body") or [] if isinstance(i, str) and i})
 
 
 def mesh_items_unpainted(record: Optional[Dict[str, Any]]) -> List[str]:
@@ -1623,69 +1634,50 @@ def mesh_item_warnings(missing: Iterable[Tuple[str, str]]) -> List[str]:
             for item_id, reason in missing]
 
 
-def mesh_record(character_name: str, fig, *, results: Optional[Dict[str, Dict[str, Any]]] = None
-                ) -> Dict[str, Any]:
+def mesh_record(character_name: str, fig) -> Dict[str, Any]:
     """The ``mesh_items`` record of a delivered figure ``fig`` (block above),
-    ``{}`` when no own-mesh piece is worn. ``results``: the garment chain
-    runs of ``resolve_figure`` (``garments.run_queued``) — a failed step
-    names its error in the warning of a piece painted meanwhile and as the
-    ``missing`` reason of a left-out one (``MESH_ITEM_CHAIN_FAILED``); else
-    a painted piece's warning names why it has no fit on the shape."""
+    ``{}`` when no own-mesh piece is worn. A piece in the body shape until
+    its mesh is ready gets a warning with why it has none: its chain's
+    persisted failure (``garments.cached_failure``) or ``NO_MESH_FIT``."""
     from app.core import figure
     from app.models.inventory import get_item
-    interim_own = figure.INTERIM_PAINTED.format(what=figure.WHAT_OWN_MESH)
-    intended = sorted({*fig.own, *fig.left_out, *(i for i, text in fig.interim.items() if text == interim_own)})
-    if not intended:
+    in_body = sorted(fig.in_body_own)
+    intended = sorted({*fig.own, *fig.left_out})
+    if not intended and not in_body:
         return {}
     warnings: List[str] = []
     profile = _profile_of(character_name, None)
     base_sha = base_model_sha256(character_name, fig.bsig)
-
-    def failed(item_id: str) -> Dict[str, Any]:
-        result = (results or {}).get(item_id) or {}
-        return result if result.get("step") and result.get("error") else {}
-
-    for item_id in sorted(set(intended) & set(fig.painted)):
+    for item_id in in_body:
+        if fig.interim.get(item_id) != figure.INTERIM_IN_BODY:
+            continue  # its mesh is ready: grafted, the shape keeps it until the next Build
         name = str((get_item(item_id) or {}).get("name") or item_id)
-        result = failed(item_id)
-        if result:
-            warnings.append(MESH_ITEM_FAILED.format(item=name, reason=f"{result['step']} — {result['error']}"))
-        else:
-            reason = figure._fit_on(character_name, item_id, shape=fig.shape, base_sha=base_sha,
-                                    profile=profile)[1]
-            warnings.append(MESH_ITEM_PAINTED.format(item=name, reason=reason or NO_MESH_FIT))
-    missing = {item_id: (MESH_ITEM_CHAIN_FAILED.format(step=failed(item_id)["step"], error=failed(item_id)["error"])
-                         if failed(item_id) else reason)
-               for item_id, reason in fig.left_out.items()}
-    return {"intended": intended, "effective": list(fig.own), "unpainted": sorted({*fig.own, *fig.left_out}),
-            "missing": missing, "warnings": warnings, "figure": fig.as_dict()}
+        state = "open" if item_id in fig.open else "closed"
+        reason = figure._not_fitted_reason(character_name, item_id, base_sha=base_sha, profile=profile, state=state)
+        warnings.append(MESH_ITEM_IN_BODY.format(item=name, reason=reason))
+    record = {"intended": intended, "effective": list(fig.own), "unpainted": sorted({*fig.own, *fig.left_out}),
+              "missing": dict(fig.left_out), "warnings": warnings, "figure": fig.as_dict()}
+    if in_body:
+        record["in_body"] = in_body
+    return record
 
 
 def resolve_figure(character_name: str, pieces: Optional[Dict[str, str]], *, items: Optional[list] = None,
                    profile: Optional[Dict[str, Any]] = None):
     """The figure an outfit of ``pieces`` / ``items`` is built as NOW:
-    ``(figure.delivered_figure, mesh_items record)`` after the garment chain
-    of every worn own-mesh piece ran through the character's FIFO
-    (``garments.run_queued``; cached by fsig, a finished chain returns at
-    once; footwear runs its shoe chain there, spec § 12; a chain that failed
-    for its current fsig is not run again — only Regenerate in the Wardrobe
-    retries it). Off the pipeline the figure is the plain body and the
-    record ``{}``."""
-    from app.core import figure, garment_set
+    ``(figure.delivered_figure, mesh_items record)``. No garment chain runs
+    here (ruling A14): an own-mesh piece without its mesh is in the body
+    shape meanwhile (ruling A11), so the dressed views never wait for a
+    chain — the Build's ``pieces`` step runs them. Off the pipeline the
+    figure is the plain body and the record ``{}``."""
+    from app.core import figure
     profile = _profile_of(character_name, profile)
-    sets = figure.worn_sets(character_name, pieces=dict(pieces or {}), profile=profile)
-    grafted = [i for i, kind in sets.own.items() if kind in garment_set.GRAFTED_PIECE_KINDS]
-    results: Dict[str, Dict[str, Any]] = {}
-    if grafted:
-        from app.core import garments
-        results = garments.run_queued(character_name, grafted)
     fig = figure.delivered_figure(character_name, profile=profile, pieces=dict(pieces or {}),
                                   items=list(items or []))
-    record = mesh_record(character_name, fig, results=results)
+    record = mesh_record(character_name, fig)
     if record:
-        logger.info("Own-mesh pieces of %s: grafted %s, painted meanwhile %s, left out %s (shape %s)",
-                    character_name, list(fig.own), sorted(set(record["intended"]) & set(fig.painted)),
-                    sorted(fig.left_out), fig.shape)
+        logger.info("Own-mesh pieces of %s: grafted %s, in the body %s (shape %s)", character_name,
+                    list(fig.own), list(fig.in_body_own), fig.shape)
     return fig, record
 
 
@@ -1873,8 +1865,8 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
     older or re-rendered body does not line up with it) and it left out of
     its text exactly the own-mesh pieces that figure leaves unpainted
     (``mesh_items_unpainted`` == grafted + left out). A view made for another
-    figure — a piece painted meanwhile that has its mesh now, a mode
-    changed, a shape built since — does not count. The texture KEY is not
+    figure — a piece in the body shape that has its mesh now and was taken
+    out, a mode changed, a shape built since — does not count. The texture KEY is not
     compared: it also names the base variant, which changes the body under
     the paint, never the view. Only ``dressed_views()`` are dressed; a side
     view is None while the side views are off."""
@@ -2860,13 +2852,14 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
     warning (``fit_gate_warning``) is in the view's sidecar and in
     ``outfit_info``'s warnings.
 
-    Own-mesh pieces: when the front is rendered, ``resolve_figure`` first
-    runs the garment chain of every worn own-mesh piece (FIFO per character,
-    cached by fsig) and judges the figure after it: a grafted piece is left
-    out of the text BEFORE the outfit text resolves ``covers`` (a piece
-    hidden under a mesh dress is painted), a piece without its mesh is
-    painted meanwhile (interim rule), footwear without a fit is left out
-    (never painted). The views after the front take the front's record.
+    Own-mesh pieces: the delivered figure decides, NO garment chain runs
+    here (ruling A14 — the views never wait for a chain; the Build's
+    ``pieces`` step runs them): a grafted piece is left out of the text
+    BEFORE the outfit text resolves ``covers`` (a piece hidden under a mesh
+    dress is painted); a piece without its mesh is in the body shape
+    meanwhile (ruling A11) — it stays in the text, and the views are edits
+    of that interim shape's views. The front records ``mesh_record``; the
+    views after the front take the front's record.
 
     Texture reuse (plan 2026-11-10-texture-body-reuse, Task 1): the views
     belong to the texture ``figure.texture``. Unless ``force``, a view the
@@ -2901,19 +2894,14 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
     if not todo:
         _outfit_end(character_name, signature, "images", None)
         return {}
-    # Own-mesh pieces: the front settles them (their chains run first);
-    # the other views follow the stored front's record.
+    # Own-mesh pieces: the figure delivered now decides — no chain runs first (ruling A14: a piece without its
+    # mesh is in the body shape meanwhile, A11); the other views follow the stored front's record.
     front_now = None if "front" in todo else dressed_image(character_name, "front", signature, bsig, fig=fig)
     if front_now is not None:
         recorded = _ref_sidecar(front_now).get("mesh_items")
         mesh = recorded if isinstance(recorded, dict) else {}
     else:
-        fig, mesh = resolve_figure(character_name, pieces, items=items, profile=profile)
-        if not force:
-            todo = [v for v in wanted if dressed_image(character_name, v, signature, bsig, fig=fig) is None]
-            if not todo:
-                _outfit_end(character_name, signature, "images", None)
-                return {}
+        mesh = mesh_record(character_name, fig)
     on = fig.shape
     meshed = not figure_mod.is_plain(on)
     registrations = {v: find_ref_image(character_name, _kind(v), on) for v in BASE_VIEWS}
@@ -3529,8 +3517,9 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
     (``_assemble_garments``; a failure only adds ``garment_warnings``). The
     dressed front's own-mesh record (``mesh_items``, ``mesh_token``) is
     copied into the sidecar with the manifest — the assembly grafts the
-    pieces it left out (``garment_assembly._wanted``) — and its warnings
-    (pieces painted meanwhile) open ``garment_warnings``.
+    pieces it left out and the ones it keeps in the body shape until their
+    mesh is ready (``garment_assembly._wanted``) — and its warnings (pieces
+    in the body until their mesh is ready) open ``garment_warnings``.
 
     Painted body (plan 2026-11-10-texture-body-reuse, Task 1): everything up
     to the validated retextured GLB is the body of the texture
@@ -3766,7 +3755,7 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
             meta["back_refit"] = back_refit
         meta.update(manifest)
         meta["figure"] = fig.as_dict()
-        # Own-mesh pieces painted meanwhile: the assembly's own warning, if
+        # Own-mesh pieces in the body until their mesh is ready: the assembly's own warning, if
         # any, follows.
         mesh_warnings = [w for w in (_dict_of(manifest.get("mesh_items")).get("warnings") or [])
                          if isinstance(w, str) and w]
@@ -4213,7 +4202,10 @@ def prepare_outfit_figure(character_name: str, signature: Optional[str] = None, 
                           force: bool = False) -> Optional[Dict[str, Any]]:
     """Before an outfit model run (``model3d.generate_for_current_outfit``,
     outside its stage): the WANTED figure of the outfit ``signature``
-    (default: the worn one) gets its meshed shape (``prepare_shape``), and
+    (default: the worn one) gets its meshed shape (``prepare_shape``) — the
+    DELIVERED one instead while own-mesh pieces wait in the body on an
+    interim shape (ruling A11: taking them out is a manual Build's ``shape``
+    step, never this automatic path), and
     when the outfit has views of an earlier figure (made on the plain body
     meanwhile) they are made for the figure delivered then
     (``ensure_figure_views``). None when there is nothing to do — off the
@@ -4234,14 +4226,19 @@ def prepare_outfit_figure(character_name: str, signature: Optional[str] = None, 
     if not manifest:
         return None
     items = list(manifest.get("items") or [])
-    wanted = figure.wanted_figure(character_name, profile=profile, pieces=dict(manifest.get("pieces") or {}),
-                                  items=items, piece_state=dict(manifest.get("piece_state") or {}))
-    prepared = prepare_shape(character_name, wanted, items=items, signature=signature)
+    outfit = {"pieces": dict(manifest.get("pieces") or {}), "items": items,
+              "piece_state": dict(manifest.get("piece_state") or {})}
+    wanted, delivered = figure._delivered(character_name, profile=profile, **outfit)
+    # Ruling A11: while own-mesh pieces wait in the delivered (interim) shape, that shape is the one served —
+    # stored already (reused, no job) or not; the wanted shape takes them out on a manual Build only.
+    target = delivered if delivered.in_body_own and not figure.is_plain(delivered.shape) else wanted
+    prepared = prepare_shape(character_name, target, items=items, signature=signature)
     if prepared is None:
         return None
     if not prepared.get("ok"):
         return prepared
-    if find_ref_image(character_name, _kind("front"), signature) is not None:
+    # The interim shape's outfit views could not be rendered before it existed (they are edits of its views).
+    if target is delivered or find_ref_image(character_name, _kind("front"), signature) is not None:
         ensure_figure_views(character_name, signature)
     return None
 
@@ -4364,13 +4361,32 @@ def dressed_warnings(character_name: str, signature: str, bsig: str) -> List[str
 
 
 def _mesh_warnings(character_name: str, meta: Dict[str, Any], base_sha: str) -> List[str]:
-    """The own-mesh warnings of a stored outfit model: the recorded ones
-    (pieces painted meanwhile, ``MESH_ITEM_PAINTED`` / ``MESH_ITEM_FAILED``),
-    then the pieces it left out that still have no fit, judged NOW
-    (``mesh_items_missing`` — ``MESH_ITEM_NOT_READY``)."""
+    """The own-mesh warnings of a stored outfit model: the pieces it keeps in
+    the body shape that still have no mesh, judged NOW (``MESH_ITEM_IN_BODY``
+    with today's reason — a piece whose mesh is ready since warns no more;
+    a record without ``in_body`` keeps its recorded warnings), then the
+    pieces it left out that still have no fit (``mesh_items_missing`` —
+    ``MESH_ITEM_NOT_READY``)."""
+    from app.core import figure, garment_set
+    from app.models.inventory import get_item
     mesh = _dict_of(meta.get("mesh_items"))
     live = mesh_item_warnings(mesh_items_missing(character_name, meta, base_sha=base_sha))
-    return [w for w in (mesh.get("warnings") or []) if isinstance(w, str)] + live
+    if "in_body" not in mesh:
+        return [w for w in (mesh.get("warnings") or []) if isinstance(w, str)] + live
+    built = figure.built_figure(meta)
+    opened = set(built.open) if built is not None else set()
+    profile = _profile_of(character_name, None)
+    waiting = []
+    for item_id in mesh_items_in_body(meta):
+        item = get_item(item_id) or {}
+        kind = garment_set.garment_kind_of(item) or ""
+        if figure._mesh_delivered(character_name, item_id, kind, open_=item_id in opened, base_sha=base_sha,
+                                  profile=profile)[0]:
+            continue  # its mesh is ready: grafted, the shape keeps it until the next Build
+        reason = figure._not_fitted_reason(character_name, item_id, base_sha=base_sha, profile=profile,
+                                           state="open" if item_id in opened else "closed")
+        waiting.append(MESH_ITEM_IN_BODY.format(item=str(item.get("name") or item_id), reason=reason))
+    return waiting + live
 
 
 def outfit_info(character_name: str, *, base_sig: Optional[str] = None,

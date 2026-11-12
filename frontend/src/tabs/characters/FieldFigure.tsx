@@ -14,8 +14,9 @@
  *   run, collapsed;
  * - "Worn now (outfit …)": hair first, then every worn piece — name · mode ·
  *   ↗Wardrobe (the mode lives on the item and is edited there, ruling P4) ·
- *   state ("✓ ready", "⏳ mesh · 3 hub jobs" + "shown painted until ready",
- *   "left out: …", "failed — reason" with Retry = the Build); an own-mesh
+ *   state ("✓ ready", "⏳ mesh · 3 hub jobs" + "in the body until its own
+ *   mesh is ready" — ruling A11, an in-body piece "shown painted until
+ *   ready", "left out: …", "failed — reason" with Retry = the Build); an own-mesh
  *   piece's details open its chain dialog (GarmentPieceDialog — a WORN
  *   piece's only entry, the Wardrobe hides its "Mesh steps"; opened here
  *   without its "Run all", Ruling 10a); a closable piece has the toggle
@@ -266,7 +267,8 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenPiece
           ) : null}
           {data.worn.map((row) => {
             const cell = wornState(row, t)
-            const note = row.note && !row.interim && row.state !== 'left_out' && row.state !== 'failed' ? row.note : ''
+            const note = row.note && !row.interim && !row.in_body_until && row.state !== 'left_out'
+              && row.state !== 'failed' ? row.note : ''
             const other: PieceState | null = row.piece_state ? (row.piece_state === 'open' ? 'closed' : 'open') : null
             return (
               <tr key={row.item_id} style={{ borderTop: '1px solid var(--border, #30363d)' }}>

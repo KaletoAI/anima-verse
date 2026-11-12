@@ -45,6 +45,7 @@ import hashlib
 import json
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -230,52 +231,31 @@ def _state_in(sets: WornSets, item_id: str) -> str:
     return OPEN if item_id in sets.open else CLOSED
 
 
-def _painted_now(character_name: str, sets: WornSets, *, bsig: str) -> WornSets:
-    """``sets`` as a build paints them NOW (ruling 2, the interim rule): an
-    own-mesh CLOTHING piece without an accepted fit on the base model of
-    ``bsig`` is painted meanwhile; footwear is never painted (left out until
-    its fit exists). Read-only — the same rule as today's build
-    (``base_body.resolve_figure``: left out = the fitted pieces plus all
-    footwear). Per state (plan Task 11b): a piece worn open is grafted with
-    its OPEN fit, else with its closed one meanwhile (ruling F13 b: never
-    painted while a closed mesh exists)."""
-    from dataclasses import replace
-    from app.core import base_body, garment_set, garment_store
-    from app.core.outfit_options import CLOSED, OPEN
-    if not sets.own:
-        return sets
-    base_sha = base_body.base_model_sha256(character_name, bsig)
-
-    def fitted(item_id: str) -> bool:
-        states = (OPEN, CLOSED) if _state_in(sets, item_id) == OPEN else (CLOSED,)
-        return any(garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha, state=st)
-                   is not None for st in states)
-
-    own = {item_id: kind for item_id, kind in sets.own.items()
-           if kind == garment_set.FOOTWEAR or (base_sha and fitted(item_id))}
-    if own == sets.own:
-        return sets
-    return replace(sets, own=own, painted=tuple(sorted({*sets.painted, *(set(sets.own) - set(own))})))
-
-
 def predicted_keys(character_name: str, pieces: Optional[Dict[str, str]], items: Optional[list], *,
                    bsig: str, profile: Optional[Dict[str, Any]] = None,
                    piece_state: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
     """``(shape key, texture key)`` a figure of the outfit ``pieces`` /
     ``items`` stands on NOW — ``worn_sets`` under the items' modes, the
-    variant of ``predicted_variant``, ``shape_key``, and ``texture_key`` of
-    the pieces as painted now (``_painted_now``: an own-mesh clothing piece
-    without its fit is painted meanwhile, so on the plain body this is the
-    tsig today's build paints). Read-only (no garment chain, no image): the
-    artefact GC asks it for every live outfit. The texture key is ``""`` on
-    a meshed shape with nothing painted. ``piece_state``: the outfit's open
-    pieces (a saved set's), None → the profile's."""
+    variant of ``predicted_variant``, ``shape_key`` and ``texture_key``,
+    with every own-mesh piece whose mesh is not delivered on the base model
+    of ``bsig`` in the body shape meanwhile (ruling A11, ``_interim_sets``:
+    the interim shape a Build makes for it). Read-only (no garment chain, no
+    image): the artefact GC asks it for every live outfit. The texture key
+    is ``""`` on a meshed shape with nothing painted. ``piece_state``: the
+    outfit's open pieces (a saved set's), None → the profile's."""
+    from app.core import base_body
     profile = _profile_of(character_name, profile)
     sets = worn_sets(character_name, pieces=dict(pieces or {}), profile=profile, piece_state=piece_state)
+    base_sha = base_body.base_model_sha256(character_name, bsig)
+    pending = {item_id for item_id, kind in sets.own.items()
+               if not _mesh_delivered(character_name, item_id, kind, open_=item_id in sets.open,
+                                      base_sha=base_sha, profile=profile)[0]}
+    if pending:
+        sets, _notes = _interim_sets(sets, pending)
     variant = predicted_variant(character_name, sets, items, profile=profile)
     shape = shape_key(character_name, sets, bsig=bsig, variant=variant, profile=profile)
-    return shape, texture_key(character_name, _painted_now(character_name, sets, bsig=bsig), shape=shape,
-                              bsig=bsig, variant=variant, items=items, profile=profile)
+    return shape, texture_key(character_name, sets, shape=shape, bsig=bsig, variant=variant, items=items,
+                              profile=profile)
 
 
 def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) -> Optional[Dict[str, Any]]:
@@ -307,23 +287,37 @@ def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) ->
 # figure is what can be shown NOW — the interim rule (ruling 2) applied to
 # what is built, judged at the call:
 #
-# 1. Shape: the wanted shape when it is stored (``stored_shape`` of its
-#    current views, ``base_body.shape_view_shas``), else the plain body —
-#    then every wanted in-body piece is painted meanwhile
-#    (``INTERIM_PAINTED`` "its body shape").
-# 2. An own-mesh piece without a fit on the delivered shape: clothing is
-#    painted meanwhile ("its own mesh"), footwear is LEFT OUT with the reason
-#    (never painted, footwear spec § 9.1). A fit on the plain body is
-#    ``garment_store.accepted_fit`` on the base model; on a meshed shape the
-#    piece needs that base fit (its garment mesh exists) and no fit refused on
-#    the shape (``garments.body_fit``: an accepted or still-to-be-made CPU fit
-#    of the Build's fits step counts — the interim rule waits for MESHES, not
-#    for CPU work). Per state (plan Task 11b): a clothing piece worn OPEN
-#    is grafted with its OPEN fit; without one its CLOSED mesh stands in
-#    (fix round T12-F1, ruling F13 b: ``shown_closed``, "Shown closed until
-#    its open mesh is built" — never "no jacket", never painted while a
-#    closed mesh exists); without either the general interim applies (today
-#    painted, "its open mesh"; ruling A11 moves it into the body shape).
+# 1. Shape (no own-mesh piece in the body, rule 2): the wanted shape when it
+#    is stored (``stored_shape`` of its current views,
+#    ``base_body.shape_view_shas``), else the plain body — then every wanted
+#    in-body piece is painted meanwhile (``INTERIM_PAINTED`` "its body
+#    shape").
+# 2. Own-mesh pieces (ruling A11, task 11c-2): a piece whose own mesh is not
+#    delivered — no accepted fit on the base model in its worn state, its
+#    chain refused or still running — is part of the body SHAPE meanwhile:
+#    the shape is keyed by the in-body set plus those pieces (``interim``
+#    ``INTERIM_IN_BODY``, ``in_body_own``). It is never painted and never
+#    left out. Until that interim shape is stored the previously delivered
+#    figure stays served (as ruling 2 keeps it until an interim texture
+#    exists); the Build's ``interim`` step makes it first and never waits for
+#    the chains (ruling A14). Exception (ruling F13 b): a clothing piece worn
+#    OPEN whose open mesh is missing is grafted with its CLOSED mesh
+#    (``shown_closed``, "Shown closed until its open mesh is built"). A fit
+#    on the plain body is ``garment_store.accepted_fit`` on the base model;
+#    on a stored meshed shape the piece needs that base fit and no fit
+#    refused on the shape (``garments.body_fit``: an accepted or
+#    still-to-be-made CPU fit of the Build's fits step counts) — a piece
+#    refused there joins the body too (another interim shape). On an interim
+#    shape not stored yet every piece with its mesh counts as grafted (its
+#    fit on the shape is CPU work after the shape exists).
+#    Kept shape: once a piece's mesh is accepted it is served as its own
+#    mesh — grafted by the assembly onto the body shape that still holds it
+#    (the outfit model's ``mesh_items.in_body``) — and the delivered figure
+#    KEEPS that shape (``_kept_shape``: the outfit model built for this
+#    outfit stands on a stored shape holding the in-body set, the pieces
+#    without their mesh and some own-mesh pieces whose mesh is ready —
+#    ``notes`` ``READY_IN_BODY``). Only the next manual Build takes them out
+#    of the shape (``taking_out``); an automatic one spends nothing on it.
 # 3. Hair: HairDeck without a fit on the delivered shape is shown as the
 #    plain body has it — ``"body"`` when that body is haired
 #    (``base_body.stored_base_haired``), else ``"bald"``. Hair wanted IN the
@@ -334,12 +328,12 @@ def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) ->
 # 4. Refusal branch (``PAINT_ON_SHAPE`` False, ruling 7): nothing is painted
 #    on a meshed shape. The wanted figure already meshes the painted pieces
 #    worn with in-body pieces into the shape (``notes`` =
-#    ``PAINT_NEEDS_PLAIN``); an interim own-mesh piece on a meshed delivered
-#    shape is left out instead of painted (Ruling P6).
+#    ``PAINT_NEEDS_PLAIN``); so does an interim shape (``_interim_sets``).
 # 5. Texture: ``texture_key`` of the delivered painted set on the delivered
-#    shape. On the plain body the own-mesh set passed in is the fitted pieces
-#    plus every footwear piece (left out or not), so the key is the tsig the
-#    build paints today, byte for byte (T4 carry).
+#    shape, with the grafted own-mesh pieces left out of its dress text and
+#    the ones in the body kept in it. On the plain body every own-mesh piece
+#    is grafted, so the key is the tsig the build paints today, byte for
+#    byte (T4 carry).
 #
 # Serving keeps today's stand-in (``model3d.find_model3d_serving``) while
 # neither that texture nor an outfit model of this exact figure exists: the
@@ -350,12 +344,16 @@ def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) ->
 PAINT_ON_SHAPE = True
 #: ``Figure.notes`` of a painted piece meshed into the shape (refusal branch).
 PAINT_NEEDS_PLAIN = "In the body here: painting needs the plain body"
-#: ``Figure.interim`` of a piece shown painted until its mesh / shape exists.
+#: ``Figure.interim`` of an in-body piece shown painted until its body shape exists (ruling 2).
 INTERIM_PAINTED = "Shown painted until {what} is built"
 WHAT_SHAPE = "its body shape"
-WHAT_OWN_MESH = "its own mesh"
-#: A piece worn open whose OPEN mesh is missing and that has no closed mesh either (painted meanwhile).
-WHAT_OPEN_MESH = "its open mesh"
+#: ``Figure.interim`` of an own-mesh piece in the body shape until its own mesh is delivered (ruling A11).
+INTERIM_IN_BODY = "In the body until its own mesh is ready"
+#: ``Figure.notes`` of an own-mesh piece whose mesh is ready while the kept body shape still holds it (A11).
+READY_IN_BODY = "Own mesh ready — in the body shape until the next Build"
+#: ``figure_build.Step.manual`` of the wanted shape / texture that takes own-mesh pieces out of the kept or
+#: interim body shape: only a manual Build spends it (ruling A11: no automatic extra jobs).
+TAKE_OUT = "Own mesh in the body shape for now — Build to take it out"
 #: ``Figure.notes`` of a piece worn open shown with its closed mesh until its open mesh is built (ruling F13 b).
 SHOWN_CLOSED = "Shown closed until its open mesh is built"
 #: The note of a worn-open piece's ONE pending change while its open mesh is missing (ruling F13 b).
@@ -397,12 +395,19 @@ class Figure:
     #: Pieces worn open grafted with their CLOSED mesh until the open one is
     #: built (ruling F13 b), sorted — a subset of ``open`` and ``own``.
     shown_closed: Tuple[str, ...] = ()
+    #: Own-mesh pieces in the body shape (ruling A11), sorted — a subset of
+    #: ``in_body``: their mesh is not delivered (``interim``
+    #: ``INTERIM_IN_BODY``) or ready while the kept shape still holds them
+    #: (``notes`` ``READY_IN_BODY``). The assembly grafts each once its fit
+    #: exists (``base_body.mesh_record``: ``mesh_items.in_body``).
+    in_body_own: Tuple[str, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
         """The JSON form an outfit model sidecar records as ``figure`` —
         ``open`` only when a piece is open (an all-closed figure records
         what it recorded before the open / closed option, D-A1),
-        ``shown_closed`` only when a piece stands in closed."""
+        ``shown_closed`` only when a piece stands in closed, ``in_body_own``
+        only when an own-mesh piece is in the body shape."""
         out = {"signature": self.signature, "bsig": self.bsig, "shape": self.shape, "texture": self.texture,
                "in_body": list(self.in_body), "painted": list(self.painted), "own": list(self.own),
                "left_out": dict(self.left_out), "interim": dict(self.interim), "notes": dict(self.notes),
@@ -411,6 +416,8 @@ class Figure:
             out["open"] = list(self.open)
         if self.shown_closed:
             out["shown_closed"] = list(self.shown_closed)
+        if self.in_body_own:
+            out["in_body_own"] = list(self.in_body_own)
         return out
 
     @classmethod
@@ -426,7 +433,8 @@ class Figure:
                    shape=str(data.get("shape") or ""), texture=str(data.get("texture") or ""),
                    in_body=ids("in_body"), painted=ids("painted"), own=ids("own"), left_out=texts("left_out"),
                    interim=texts("interim"), notes=texts("notes"), hair=str(data.get("hair") or HAIR_BODY),
-                   pieces=texts("pieces"), open=ids("open"), shown_closed=ids("shown_closed"))
+                   pieces=texts("pieces"), open=ids("open"), shown_closed=ids("shown_closed"),
+                   in_body_own=ids("in_body_own"))
 
     def state_of(self, item_id: str) -> str:
         """Where a worn piece is in this figure: ``in_body`` / ``painted`` /
@@ -443,14 +451,17 @@ class Figure:
 
 def shape_plan(character_name: str, fig: "Figure", items: Optional[list], *,
                profile: Optional[Dict[str, Any]] = None) -> Tuple[WornSets, str, Optional[Dict[str, Any]]]:
-    """``(worn sets, variant, shape inputs)`` the meshed shape of the WANTED
-    figure ``fig`` is made of (``_wanted``'s rule for its pieces and held
-    ``items``); the inputs are None when no piece is in the body. The caller
-    compares ``shape_key_of(inputs)`` with ``fig.shape`` (the worn modes may
-    have changed since ``fig`` was resolved)."""
+    """``(worn sets, variant, shape inputs)`` the meshed shape of ``fig`` is
+    made of — the WANTED figure (``_wanted``'s rule for its pieces and held
+    ``items``) or an interim / kept shape of the delivered one, whose
+    ``in_body`` also holds own-mesh pieces (ruling A11: ``_interim_sets``);
+    the inputs are None when no piece is in the body. The caller compares
+    ``shape_key_of(inputs)`` with ``fig.shape`` (the worn modes may have
+    changed since ``fig`` was resolved)."""
     profile = _profile_of(character_name, profile)
-    sets, _notes = _refused_sets(worn_sets(character_name, pieces=dict(fig.pieces), profile=profile,
-                                           piece_state=_open_map(fig.open)))
+    sets = worn_sets(character_name, pieces=dict(fig.pieces), profile=profile, piece_state=_open_map(fig.open))
+    extra = (set(fig.in_body) - set(sets.in_body)) & set(sets.own)
+    sets, _notes = _interim_sets(sets, extra) if extra else _refused_sets(sets)
     variant = predicted_variant(character_name, sets, _items_of(profile, items), profile=profile)
     if not sets.in_body:
         return sets, variant, None
@@ -490,6 +501,18 @@ def _refused_sets(sets: WornSets) -> Tuple[WornSets, Dict[str, str]]:
         return sets, {}
     notes = {item_id: PAINT_NEEDS_PLAIN for item_id in sets.painted}
     return replace(sets, in_body=tuple(sorted({*sets.in_body, *sets.painted})), painted=()), notes
+
+
+def _interim_sets(sets: WornSets, extra) -> Tuple[WornSets, Dict[str, str]]:
+    """``sets`` with the own-mesh pieces ``extra`` moved into the body (ruling
+    A11: an own-mesh piece without its mesh is part of the shape meanwhile),
+    then the refusal branch (``_refused_sets``) — ``(sets, notes)``."""
+    from dataclasses import replace
+    extra = {str(i) for i in extra or ()} & set(sets.own)
+    if extra:
+        sets = replace(sets, in_body=tuple(sorted({*sets.in_body, *extra})),
+                       own={i: k for i, k in sets.own.items() if i not in extra})
+    return _refused_sets(sets)
 
 
 def _wanted(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Dict[str, str]],
@@ -613,84 +636,206 @@ def _interim_hair_on(character_name: str, *, shape: str, bsig: str, base_sha: st
     return on_shape.get("fit") is not None or bool(on_shape.get("pending"))
 
 
+def _mesh_delivered(character_name: str, item_id: str, kind: str, *, open_: bool, base_sha: str,
+                    profile: Optional[Dict[str, Any]] = None) -> Tuple[bool, bool]:
+    """``(delivered, closed_stand_in)`` of an own-mesh piece's mesh on the base
+    model ``base_sha`` (ruling A11 asks only this): an accepted fit in the
+    worn state; a clothing piece worn OPEN without its open fit counts with
+    its CLOSED fit, ``closed_stand_in`` True (ruling F13 b). Read-only."""
+    from app.core import garment_set, garment_store
+    from app.core.outfit_options import CLOSED, OPEN
+    if not base_sha:
+        return False, False
+
+    def fitted(state: str) -> bool:
+        return garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha, profile=profile,
+                                          state=state) is not None
+
+    if fitted(OPEN if open_ else CLOSED):
+        return True, False
+    if open_ and kind != garment_set.FOOTWEAR and fitted(CLOSED):
+        return True, True
+    return False, False
+
+
+@dataclass(frozen=True)
+class _Shape:
+    """The delivered shape and what is in it (``_shape_choice``)."""
+    shape: str
+    in_body: Tuple[str, ...]
+    painted: Tuple[str, ...]
+    variant: str
+    stored: bool                                              # plain, or a stored meshed shape
+    interim: Dict[str, str] = field(default_factory=dict)
+    notes: Dict[str, str] = field(default_factory=dict)       # refusal notes + READY_IN_BODY
+    refusal: bool = False                                      # the refusal branch meshed painted pieces in
+    in_body_own: Tuple[str, ...] = ()
+
+
+#: Characters a manual Build takes own-mesh pieces out of the body shape for (``taking_out``).
+_taking_out: set = set()
+
+
+def is_taking_out(character_name: str) -> bool:
+    """Whether a manual Build of the character takes kept pieces out now (``taking_out``)."""
+    with _memo_lock:
+        return character_name in _taking_out
+
+
+@contextmanager
+def taking_out(character_name: str):
+    """While a MANUAL Build of the character runs (``figure_build._run``): no
+    kept shape (``_kept_shape``) — the delivered figure takes every own-mesh
+    piece whose mesh is ready out of the body shape, so the Build's steps
+    render and assemble the wanted figure (ruling A11: "taken out only on the
+    next Build"; an automatic Build keeps the shape and spends nothing)."""
+    with _memo_lock:
+        _taking_out.add(character_name)
+    invalidate()
+    try:
+        yield
+    finally:
+        with _memo_lock:
+            _taking_out.discard(character_name)
+        invalidate()
+
+
+def _kept_shape(character_name: str, wanted: "Figure", sets: WornSets, extra, *, bsig: str,
+                items: list, profile: Dict[str, Any]) -> Optional[_Shape]:
+    """The body shape the outfit model built for this outfit stands on, KEPT
+    while it still holds own-mesh pieces whose mesh is ready (rule 2 of the
+    block above): that model's figure (``model3d`` sidecar ``figure``, found
+    with stale ones) stands on a stored meshed shape of ``bsig`` whose
+    in-body set holds the wanted in-body set and the pieces without their
+    mesh ``extra``, holds nothing else but own-mesh pieces, and is still the
+    shape of exactly those pieces (``shape_key`` now). None otherwise, and
+    while a manual Build takes them out (``taking_out``)."""
+    from app.core import model3d
+    with _memo_lock:
+        if character_name in _taking_out:
+            return None
+    try:
+        path = model3d.find_model3d(character_name, wanted.signature, include_stale=True)
+        built = built_figure(model3d._read_sidecar(path)) if path is not None else None
+    except Exception:  # noqa: BLE001 — no kept shape, never a failure of the resolver
+        return None
+    if built is None or built.bsig != bsig or is_plain(built.shape) or built.shape == wanted.shape:
+        return None
+    kept, base_in, own = set(built.in_body), set(wanted.in_body), set(sets.own)
+    ready = kept - base_in - set(extra)
+    if not ready or not ready <= own or not (base_in | set(extra)) <= kept:
+        return None
+    isets, notes = _interim_sets(sets, kept & own)
+    notes = {**wanted.notes, **notes}   # ``sets`` already went through the refusal branch (``_wanted``)
+    variant = predicted_variant(character_name, isets, items, profile=profile)
+    if (shape_key(character_name, isets, bsig=bsig, variant=variant, profile=profile) != built.shape
+            or not _shape_stored(character_name, built.shape, bsig)):
+        return None
+    notes.update({item_id: READY_IN_BODY for item_id in ready})
+    return _Shape(shape=built.shape, in_body=isets.in_body, painted=isets.painted, variant=variant, stored=True,
+                  interim={item_id: INTERIM_IN_BODY for item_id in sorted(extra)}, notes=notes,
+                  refusal=any(n == PAINT_NEEDS_PLAIN for n in notes.values()),
+                  in_body_own=tuple(sorted(kept & own)))
+
+
+def _shape_choice(character_name: str, wanted: "Figure", sets: WornSets, extra, *, bsig: str, variant: str,
+                  items: list, profile: Dict[str, Any]) -> _Shape:
+    """The delivered shape when the own-mesh pieces ``extra`` have no mesh
+    (rules 1 and 2 of the block above): a kept shape, else the interim
+    shape of the in-body set plus ``extra`` (stored or not — until it is,
+    the previously delivered figure stays served), else (nothing extra) the
+    wanted shape when stored, else the plain body with the in-body pieces
+    painted meanwhile."""
+    kept = _kept_shape(character_name, wanted, sets, extra, bsig=bsig, items=items, profile=profile)
+    if kept is not None:
+        return kept
+    if extra:
+        isets, notes = _interim_sets(sets, extra)
+        notes = {**wanted.notes, **notes}   # ``sets`` already went through the refusal branch (``_wanted``)
+        ivariant = predicted_variant(character_name, isets, items, profile=profile)
+        shape = shape_key(character_name, isets, bsig=bsig, variant=ivariant, profile=profile)
+        return _Shape(shape=shape, in_body=isets.in_body, painted=isets.painted, variant=ivariant,
+                      stored=_shape_stored(character_name, shape, bsig),
+                      interim={item_id: INTERIM_IN_BODY for item_id in sorted(extra)}, notes=notes,
+                      refusal=bool(notes), in_body_own=tuple(sorted(extra)))
+    if is_plain(wanted.shape) or _shape_stored(character_name, wanted.shape, bsig):
+        return _Shape(shape=wanted.shape, in_body=wanted.in_body, painted=wanted.painted, variant=variant,
+                      stored=True, notes=dict(wanted.notes) if not is_plain(wanted.shape) else {},
+                      refusal=bool(wanted.notes) and not is_plain(wanted.shape))
+    # Rule 1: the wanted shape is not built — its in-body pieces (and the refusal branch's) painted meanwhile.
+    return _Shape(shape=bsig, in_body=(), painted=tuple(sorted({*wanted.painted, *wanted.in_body})),
+                  variant=variant, stored=True,
+                  interim={item_id: INTERIM_PAINTED.format(what=WHAT_SHAPE) for item_id in wanted.in_body})
+
+
 def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Dict[str, str]] = None,
                items: Optional[list] = None,
                piece_state: Optional[Dict[str, str]] = None) -> Tuple[Figure, Figure]:
     """``(wanted, delivered)`` (block above). The open pieces are a text
     input, so the delivered figure has the wanted ``open``."""
     from dataclasses import replace
-    from app.core import base_body, garment_set
-    from app.core.outfit_options import CLOSED, OPEN
+    from app.core import base_body
+    from app.core.outfit_options import CLOSED
     items = _items_of(profile, items)
     wanted, sets, variant = _wanted(character_name, profile=profile, pieces=pieces, items=items,
                                     piece_state=piece_state)
     bsig = wanted.bsig
     base_sha = base_body.base_model_sha256(character_name, bsig)
-    # 1. The shape.
-    shape = wanted.shape
-    interim: Dict[str, str] = {}
-    in_body = list(wanted.in_body)
-    painted = set(wanted.painted)
-    if not is_plain(shape) and not _shape_stored(character_name, shape, bsig):
-        shape = bsig
-        for item_id in in_body:
-            interim[item_id] = INTERIM_PAINTED.format(what=WHAT_SHAPE)
-        painted.update(in_body)
-        in_body = []
-    meshed = not is_plain(shape)
-    refusal = dict(wanted.notes) if meshed else {}   # rule 4's notes (the stand-in notes join them below)
-    notes = dict(refusal)
-    if not meshed and wanted.notes:
-        # The refusal shape is not built: its painted pieces are painted on the plain body.
-        painted.update(wanted.notes)
-    # 2. Own-mesh pieces.
-    own: List[str] = []
-    left_out: Dict[str, str] = {}
-    footwear: List[str] = []
-    shown_closed: List[str] = []
-    for item_id, kind in sorted(sets.own.items()):
-        state = _state_in(sets, item_id)
-        fitted, reason = _fit_on(character_name, item_id, shape=shape, base_sha=base_sha, profile=profile,
-                                 state=state)
-        if not fitted and state == OPEN and kind != garment_set.FOOTWEAR and _fit_on(
-                character_name, item_id, shape=shape, base_sha=base_sha, profile=profile, state=CLOSED)[0]:
-            own.append(item_id)          # ruling F13 b: the closed mesh stands in for the missing open one
-            shown_closed.append(item_id)
-            notes[item_id] = SHOWN_CLOSED
-            continue
-        if fitted:
-            own.append(item_id)
-        elif kind == garment_set.FOOTWEAR:
-            left_out[item_id] = reason
-            footwear.append(item_id)
-        elif meshed and not PAINT_ON_SHAPE:
-            left_out[item_id] = reason   # 4. Ruling P6: never painted on a meshed shape
-        else:
-            painted.add(item_id)
-            interim[item_id] = INTERIM_PAINTED.format(what=WHAT_OPEN_MESH if state == OPEN else WHAT_OWN_MESH)
+    # 2. Own-mesh pieces without their mesh go into the body (ruling A11); the closed mesh stands in (F13 b).
+    extra: set = set()
+    closed: set = set()
+    for item_id, kind in sets.own.items():
+        has, stand_in = _mesh_delivered(character_name, item_id, kind, open_=item_id in sets.open,
+                                        base_sha=base_sha, profile=profile)
+        if not has:
+            extra.add(item_id)
+        elif stand_in:
+            closed.add(item_id)
+    # 1. The shape — a piece whose fit is refused on a stored meshed shape joins the body too (bounded: the
+    # set only grows).
+    while True:
+        choice = _shape_choice(character_name, wanted, sets, extra, bsig=bsig, variant=variant, items=items,
+                               profile=profile)
+        meshed = not is_plain(choice.shape)
+        refused: Dict[str, str] = {}
+        if meshed and choice.stored:
+            for item_id in sorted(set(sets.own) - set(choice.in_body)):
+                state = CLOSED if item_id in closed else _state_in(sets, item_id)
+                fitted, reason = _fit_on(character_name, item_id, shape=choice.shape, base_sha=base_sha,
+                                         profile=profile, state=state)
+                if not fitted:
+                    refused[item_id] = reason
+        if not refused:
+            break
+        extra |= set(refused)
+    own = tuple(sorted(set(sets.own) - set(choice.in_body)))
+    shown_closed = tuple(sorted(closed & set(own)))
+    notes = dict(choice.notes)
+    notes.update({item_id: SHOWN_CLOSED for item_id in shown_closed})
     # 3. Hair.
     hair = wanted.hair
-    if hair == HAIR_HAIRDECK and not _fit_on(character_name, sets.hair_item, shape=shape, base_sha=base_sha,
+    # On an interim shape not stored yet the hair's base fit counts (its fit there is CPU work after the shape).
+    hair_on = bsig if meshed and not choice.stored else choice.shape
+    if hair == HAIR_HAIRDECK and not _fit_on(character_name, sets.hair_item, shape=hair_on, base_sha=base_sha,
                                              profile=profile)[0]:
         hair = HAIR_BODY if base_body.stored_base_haired(character_name, bsig) else HAIR_BALD
     elif hair == HAIR_BODY and base_body.stored_base_haired(character_name, bsig) is False:
         # Ruling F13 a: the worn HairDeck hair stays until the plain body is rebuilt with the hair.
-        hair = HAIR_HAIRDECK if _interim_hair_on(character_name, shape=shape, bsig=bsig, base_sha=base_sha,
+        hair = HAIR_HAIRDECK if _interim_hair_on(character_name, shape=hair_on, bsig=bsig, base_sha=base_sha,
                                                  profile=profile) else HAIR_BALD
     # 5. The texture of what is painted, on the delivered shape.
-    left_painted = tuple(sorted(painted))
-    texture_sets = replace(sets, in_body=tuple(in_body), painted=left_painted,
-                           own={i: sets.own[i] for i in (*own, *footwear)} if not meshed
-                           else {i: k for i, k in sets.own.items() if i not in painted})
-    if meshed and refusal:
+    if meshed and choice.refusal:
         texture = ""
     else:
-        texture = texture_key(character_name, texture_sets, shape=shape, bsig=bsig, variant=variant, items=items,
-                              profile=profile)
-    delivered = Figure(signature=wanted.signature, bsig=bsig, shape=shape, texture=texture,
-                       in_body=tuple(sorted(in_body)), painted=left_painted, own=tuple(own),
-                       left_out=left_out, interim=interim, notes=notes, hair=hair, pieces=dict(sets.pieces),
-                       open=sets.open, shown_closed=tuple(sorted(shown_closed)))
+        texture_sets = replace(sets, in_body=tuple(choice.in_body), painted=tuple(choice.painted),
+                               own={item_id: sets.own[item_id] for item_id in own})
+        texture = texture_key(character_name, texture_sets, shape=choice.shape, bsig=bsig, variant=choice.variant,
+                              items=items, profile=profile)
+    delivered = Figure(signature=wanted.signature, bsig=bsig, shape=choice.shape, texture=texture,
+                       in_body=tuple(sorted(choice.in_body)), painted=tuple(sorted(choice.painted)), own=own,
+                       left_out={}, interim=dict(choice.interim), notes=notes, hair=hair,
+                       pieces=dict(sets.pieces), open=sets.open, shown_closed=shown_closed,
+                       in_body_own=tuple(choice.in_body_own))
     return wanted, delivered
 
 
@@ -764,9 +909,11 @@ def delivered_figure_cached(character_name: str, *, profile: Optional[Dict[str, 
 def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
     """The "N changes" of the Figure tab's header, derived (never stored):
     ``[{key, name, wanted, delivered}]`` — one per worn piece whose delivered
-    state differs from what its mode calls for (interim painting, a shape not
-    built, footwear left out; a piece meshed in by the refusal branch is
-    delivered as wanted), then ``body`` when the plain body is missing or was
+    state differs from what its mode calls for (an in-body piece painted
+    until its shape is built; an own-mesh piece in the body shape until its
+    mesh is ready or taken out, with ``note`` ``INTERIM_IN_BODY`` /
+    ``READY_IN_BODY`` — ruling A11; a piece meshed in by the refusal branch
+    is delivered as wanted), then ``body`` when the plain body is missing or was
     rendered with older prompts (``base_body.OLDER_PROMPTS``; its ``note`` =
     ``BASE_MISSING`` / ``BASE_OUTDATED``, ruling 8a), then ``hair``
     when the hair is not delivered as its method says. Read-only.
@@ -778,7 +925,7 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
     ``shown_closed``, counts as closed) — after the piece-list changes. A
     piece worn open whose open mesh is missing has ONE change (ruling F13 b):
     this state entry with ``note`` ``OPEN_MESH_MISSING`` — its piece entry
-    (painted meanwhile) is folded into it.
+    (in the body meanwhile) is folded into it.
 
     The hair wanted in the body on a plain body rendered bald (ruling F13 a):
     ONE change, ``{key: "hair", …, note: HAIR_REBUILD}`` — it replaces the
@@ -790,17 +937,16 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
 
 
 def _open_mesh_missing(wanted: "Figure", delivered: "Figure") -> Dict[str, str]:
-    """``{item: "closed" | "painted"}`` of the worn-open own-mesh pieces whose open mesh is missing: shown
-    closed meanwhile (``shown_closed``), or painted (no mesh of either state)."""
+    """``{item: "closed" | "in_body"}`` of the worn-open own-mesh pieces whose open mesh is missing: shown
+    closed meanwhile (``shown_closed``), or in the body shape (no mesh of either state, ruling A11)."""
     from app.core import garment_set
     from app.core.outfit_options import CLOSED
-    painted_open = INTERIM_PAINTED.format(what=WHAT_OPEN_MESH)
     out: Dict[str, str] = {}
     for item_id in wanted.open:
         if item_id in wanted.own and item_id in delivered.shown_closed:
             out[item_id] = CLOSED
-        elif item_id in wanted.own and delivered.interim.get(item_id) == painted_open:
-            out[item_id] = garment_set.PAINTED
+        elif item_id in wanted.own and delivered.interim.get(item_id) == INTERIM_IN_BODY:
+            out[item_id] = garment_set.IN_BODY
     return out
 
 
@@ -826,8 +972,11 @@ def _pending(character_name: str, wanted: "Figure", delivered: "Figure",
             continue  # its one change is the state entry below
         want, have = wanted.state_of(item_id), delivered.state_of(item_id)
         if want != have:
-            out.append({"key": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
-                        "wanted": want, "delivered": have})
+            change = {"key": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
+                      "wanted": want, "delivered": have}
+            if item_id in delivered.in_body_own:   # ruling A11: why an own-mesh piece is in the body shape
+                change["note"] = delivered.interim.get(item_id) or delivered.notes.get(item_id) or ""
+            out.append(change)
     out.extend(_state_changes(character_name, wanted, open_missing))
     from app.core.model_refs import find_ref_image
     hair_rebuild = hair_needs_rebuild(character_name, wanted, profile=profile)
@@ -870,7 +1019,7 @@ def _state_changes(character_name: str, wanted: Figure,
     closed for open, ``shown_closed``, is closed there). ``open_missing``
     (``_open_mesh_missing``): pieces worn open whose open mesh is missing —
     always an entry, ``delivered`` how it is shown meanwhile ("closed" /
-    "painted"), with ``note`` ``OPEN_MESH_MISSING`` (ruling F13 b)."""
+    "in_body"), with ``note`` ``OPEN_MESH_MISSING`` (ruling F13 b)."""
     from app.core import garment_set
     from app.core.outfit_options import CLOSED, OPEN
     from app.models.inventory import get_item

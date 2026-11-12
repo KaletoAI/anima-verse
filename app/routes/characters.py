@@ -2005,17 +2005,19 @@ def get_character_garment(character_name: str, item_id: str,
     # the delivered figure leaves it out instead in the refusal branch on a
     # meshed shape, and footwear is always missing (``piece_status``, spec § 9.1).
     worn_piece = bool(pipeline and worn and kind in garment_set.OWN_MESH_PIECE_KINDS)
-    left_out = False
+    left_out = in_body = False
     if worn_piece:
         from app.core import figure
-        left_out = item_id in figure.delivered_figure_cached(character_name, profile=profile).left_out
+        delivered = figure.delivered_figure_cached(character_name, profile=profile)
+        left_out = item_id in delivered.left_out
+        in_body = item_id in delivered.in_body_own   # ruling A11: in the body until its own mesh is ready
     payload = {"pipeline": pipeline, "item_id": item_id, "name": str(item.get("name") or item_id),
                "kind": kind, "mesh_mode": garment_set.mesh_mode_of(item), "worn": bool(worn),
                "status": garment_set.piece_status(
                    info, worn=worn_piece, base_model_ready=bool(base and base[1]),
                    layers=garment_set.worn_layers(character_name, profile=profile,
                                                   base_model_sha=base[1] if base else "").get(item_id),
-                   left_out=left_out),
+                   left_out=left_out, in_body=in_body),
                "garment": info, "limits": _garment_limits(kind)}
     from app.core.model_overview import annotate_garment
     return annotate_garment(payload)

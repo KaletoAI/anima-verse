@@ -29,8 +29,11 @@ Fixture (expected values derived by hand):
     version 2; no per_height: clothing records are fractions of Hb);
     mesh.largest_component_share {ge 0.90}; fit.max_push_m {le 0.10},
     fit.rigged_inside_share {le 0.01}, fit.largest_component_share {ge 0.90}.
-    No base model is stored -> status {missing, step None, painted True,
-    reason base_body.BASE_MODEL_MISSING}. preview_url None ->
+    No base model is stored -> status {missing, step None, painted False,
+    in_body True, reason base_body.BASE_MODEL_MISSING} (ruling A11, task
+    11c-2 of plan 2026-11-12-unified-worn-pieces: a worn own-mesh piece
+    without its mesh is in the body shape meanwhile, never painted; was
+    painted True — the same for [3] and [5]). preview_url None ->
     preview_freshness {missing, "No provenance recorded"}. ``steps`` (the
     ModelSteps rows) = the clothing chain in order, all "missing", the ghost
     row labelled "Piece-only views".
@@ -39,7 +42,7 @@ Fixture (expected values derived by hand):
 [3] A planted base model -> reason base_body.NO_MESH_FIT. A planted ACCEPTED
     worn/front final (record {"accepted": true}) with attempt 1 -> the tile
     and its attempt carry freshness "current"; status state "images",
-    still painted (no fit).
+    still in the body (no fit).
 [4] A persisted chain failure (garment_store.record_failure, step ghost,
     error "gate refused") is reported after a "restart" (empty in-memory
     status): garment.failed {step ghost, error "gate refused", gates None},
@@ -47,8 +50,8 @@ Fixture (expected values derived by hand):
     error as detail, the worn row stays "missing" (only the front is
     accepted).
 [5] GET /characters/Demo/garments: pipeline True, items = the own-mesh pieces
-    Demo holds [cape, coat, dress] (not shirt, not the hair); dress painted
-    with reason "ghost — gate refused"; cape not worn -> painted False,
+    Demo holds [cape, coat, dress] (not shirt, not the hair); dress in the
+    body (painted False, in_body True) with reason "ghost — gate refused"; cape not worn -> painted False,
     reason None; overlaps: the coat covers top, the dress is worn on top —
     the coat is LAYERED over the dress (plan 2026-11-10 Task 2), only pieces
     over each other warn -> []; every row carries queue_position None and
@@ -188,8 +191,8 @@ def main() -> int:
                    {"op": "range", "value": [0.8, 1.25]}, False, {"op": "ge", "value": 0.90},
                    {"op": "le", "value": 0.10}, {"op": "le", "value": 0.01}, {"op": "ge", "value": 0.90}))
             check("status, no base model", body.get("status"),
-                  {"state": "missing", "step": None, "painted": True, "reason": base_body.BASE_MODEL_MISSING,
-                   "queue_position": None})
+                  {"state": "missing", "step": None, "painted": False, "reason": base_body.BASE_MODEL_MISSING,
+                   "queue_position": None, "in_body": True})
             g = body.get("garment") or {}
             check("garment kind + fsig", (g.get("kind"), bool(g.get("fsig"))), ("clothing", True))
             check("preview freshness", g.get("preview_freshness"),
@@ -222,8 +225,8 @@ def main() -> int:
                                       for a in tile.get("attempts") or []]),
                   ("current", [(1, "current")]))
             check("status images", body.get("status"),
-                  {"state": "images", "step": None, "painted": True, "reason": base_body.NO_MESH_FIT,
-                   "queue_position": None})
+                  {"state": "images", "step": None, "painted": False, "reason": base_body.NO_MESH_FIT,
+                   "queue_position": None, "in_body": True})
 
             print("[4] persisted failure")
             gs.record_failure("Demo", dress, fsig, step="ghost", error="gate refused")
@@ -243,8 +246,8 @@ def main() -> int:
             check("overview", (r.status_code, body.get("pipeline"), sorted(items)),
                   (200, True, ["cape", "coat", "dress"]))
             check("dress row", items.get("dress"),
-                  {"state": "images", "step": None, "painted": True, "reason": "ghost — gate refused",
-                   "queue_position": None})
+                  {"state": "images", "step": None, "painted": False, "reason": "ghost — gate refused",
+                   "queue_position": None, "in_body": True})
             check("cape row", items.get("cape"),
                   {"state": "missing", "step": None, "painted": False, "reason": None, "queue_position": None})
             check("overlaps", body.get("overlaps"), [])

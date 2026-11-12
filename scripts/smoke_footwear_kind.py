@@ -76,9 +76,10 @@ dress; Mira holds heels.
        sorted([dress, heels]), effective sorted([dress, heels]) (the heels'
        fit is grafted), warnings [], unpainted sorted([dress, heels]),
        missing {}}; the figure's shape = Kira's bsig, own = both, and the
-       record's figure is that figure; run_queued was asked for
-       sorted([dress, heels]) (the shoe chain is part of the outfit build,
-       spec § 12).
+       record's figure is that figure; run_queued was NOT asked (ruling A14,
+       task 11c-2 of the unified worn pieces: no dressed render waits for a
+       garment chain — the Build's ``pieces`` steps run them; was: asked for
+       sorted([dress, heels]), spec § 12).
      The cloak worn (mode in_body — replaces the old "mesh mode" case): the
        wanted figure has in_body [cloak] on a meshed shape (not plain); no
        shape is built, so the delivered figure stays on the plain body with
@@ -333,7 +334,7 @@ def main() -> int:
               {"intended": both, "effective": both, "warnings": [], "unpainted": both, "missing": {}})
         check("plain-body figure: both grafted", (fig.shape, list(fig.own), out.get("figure")),
               (kira_bsig, both, fig.as_dict()))
-        check("run_queued: both grafted kinds", QUEUED, [both])
+        check("run_queued: no chain (ruling A14)", QUEUED, [])
         # Mesh mode = a worn piece in the body (interim rule, plan 2026-11-12-unified-worn-pieces Task 2).
         check("Kira holds the cloak", inventory.add_to_inventory("Kira", cloak), True)
         check("mesh mode on: cloak worn", inventory.equip_piece("Kira", cloak, source="smoke")["status"], "ok")

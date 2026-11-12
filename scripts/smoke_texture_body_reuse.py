@@ -36,6 +36,12 @@ shoes {[feet], "white sneakers"}, dress {[top], covers [bottom], own_mesh,
 skirt"}. Outfits: A {under, shoes}; B = A + dress; C {dress}; D {} (nothing);
 E = A + coat; E2 = A + coat + dress; F = A + scarf; G = A + skirt.
 
+Since task 11c-2 of plan 2026-11-12-unified-worn-pieces (ruling A14) no
+outfit render runs a garment chain: every render-and-build below runs the
+Build's ``pieces`` steps first (``_figure_build_fixtures.build_chains``), so
+a worn own-mesh piece has its fit as the cases assume (without one it would
+be in the body shape meanwhile, ruling A11).
+
 Expected, derived by hand from the plan's Global Constraints:
 
 [1] The rule. texture_inputs(Demo, A, variant rigged) = {version 1,
@@ -341,8 +347,14 @@ def main() -> int:
         def nodes(path):
             return sorted(n for n in chain.node_names(Path(path).read_bytes()) if str(n).startswith("garment_"))
 
+        from _figure_build_fixtures import build_chains
+
         def render_and_build(force_build=False):
             r0, w0 = len(RENDERS), len(WORKER)
+            # No outfit render runs a garment chain (task 11c-2, ruling A14): the Build's pieces steps first,
+            # so a worn own-mesh piece has its fit as before (else it is in the body shape meanwhile, A11).
+            build_chains("Demo")
+            garments.wait_idle(30)
             model_refs.generate_model_ref_images("Demo", kinds=("tpose",))
             garments.wait_idle(30)
             r1 = len(RENDERS)

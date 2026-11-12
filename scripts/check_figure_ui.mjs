@@ -64,7 +64,12 @@
  *     AUTO_BUILD_NOTE = "then Build runs automatically"; staleBaseNote(7) (the skin step's note, the base-skin
  *     review) → "Makes the base model stale — the next Build rebuilds it (7 hub jobs)".
  * [11] wornState(row) / bodyLine — the sketch's state column and Body line:
- *       ready → "✓ ready"; own_mesh interim with 3 jobs → "⏳ mesh · 3 hub jobs" + "shown painted until ready";
+ *       ready → "✓ ready"; own_mesh interim with 3 jobs, in_body_until 'mesh' (ruling A11, task 11c-2: in the
+ *       body until its mesh is ready; was "shown painted until ready") → "⏳ mesh · 3 hub jobs" + "in the body
+ *       until its own mesh is ready"; own_mesh pending, in_body_until 'build' (its mesh ready, the next Build
+ *       takes it out of the shape) → "⏳ waiting for the Build" + "own mesh ready — in the body until the next
+ *       Build", building → "⏳ building" + the same line; in_body interim (no in_body_until) → the sub
+ *       "shown painted until ready" (its shape not built yet);
  *       failed "mesh — refused" → "failed — mesh — refused"; left_out "no fit yet" → "left out: no fit yet";
  *       in_body pending → "⏳ waiting for the Build" (no line under it: not interim).
  *       bodyLine(all ready, ['hair'], ['Black Blazer']) → 'plain body ✓ · shape "hair" ✓ · texture "Black Blazer" ✓';
@@ -262,8 +267,14 @@ check('[10] skin note', m.staleBaseNote(7), 'Makes the base model stale — the 
 const row = (o) => ({ state: 'pending', mode: 'painted', jobs: 0, failure: '', left_out: '', note: '',
   interim: false, ...o });
 check('[11] ready', m.wornState(row({ state: 'ready' })), { text: '✓ ready', sub: null });
-check('[11] interim own mesh', m.wornState(row({ state: 'interim', mode: 'own_mesh', jobs: 3, interim: true })),
-  { text: '⏳ mesh · 3 hub jobs', sub: 'shown painted until ready' });
+check('[11] interim own mesh', m.wornState(row({ state: 'interim', mode: 'own_mesh', jobs: 3, interim: true,
+  in_body_until: 'mesh' })), { text: '⏳ mesh · 3 hub jobs', sub: 'in the body until its own mesh is ready' });
+check('[11] own mesh ready, in the body until the Build', m.wornState(row({ mode: 'own_mesh', in_body_until: 'build' })),
+  { text: '⏳ waiting for the Build', sub: 'own mesh ready — in the body until the next Build' });
+check('[11] ... while the Build runs', m.wornState(row({ state: 'building', mode: 'own_mesh', in_body_until: 'build' })),
+  { text: '⏳ building', sub: 'own mesh ready — in the body until the next Build' });
+check('[11] in_body interim keeps its line', m.wornState(row({ state: 'interim', mode: 'in_body', interim: true })).sub,
+  'shown painted until ready');
 check('[11] failed', m.wornState(row({ state: 'failed', failure: 'mesh — refused' })),
   { text: 'failed — mesh — refused', sub: null });
 check('[11] left out', m.wornState(row({ state: 'left_out', left_out: 'no fit yet' })),

@@ -208,13 +208,16 @@ def built_on_fit_base(bare_meta: Dict[str, Any], record: Dict[str, Any]) -> bool
 
 
 def effective_mesh_items(bare_meta: Optional[Dict[str, Any]]) -> List[str]:
-    """The own-mesh outfit pieces a bare outfit model was built WITHOUT in its
-    texture (``base_body.mesh_items_unpainted``: sidecar
-    ``mesh_items.effective``; in outfit body mode mesh ``unpainted``, every
-    flagged piece — one without an accepted fit yet is simply not grafted
-    until it has one, ruling 2026-11-10), sorted; [] when it records none."""
-    from app.core.base_body import mesh_items_unpainted
-    return mesh_items_unpainted(bare_meta)
+    """The own-mesh outfit pieces to graft onto a bare outfit model: the ones
+    it was built WITHOUT in its texture (``base_body.mesh_items_unpainted``:
+    sidecar ``mesh_items.effective``; in outfit body mode mesh
+    ``unpainted``) and the ones its body shape holds until their mesh is
+    ready (``base_body.mesh_items_in_body``, ruling A11: served as their own
+    mesh once accepted, the shape keeps them until the next Build) — one
+    without an accepted fit yet is simply not grafted until it has one
+    (ruling 2026-11-10), sorted; [] when it records none."""
+    from app.core.base_body import mesh_items_in_body, mesh_items_unpainted
+    return sorted({*mesh_items_unpainted(bare_meta), *mesh_items_in_body(bare_meta)})
 
 
 def _piece_kind(item: Dict[str, Any]) -> str:
