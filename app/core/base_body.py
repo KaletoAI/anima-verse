@@ -1883,11 +1883,14 @@ def composite_sidecar(draft: Path, view: str, extra: Dict[str, Any], record: Dic
     state, character) without the keys of its render (``_DRAFT_RENDER_KEYS``)
     and its ``<view>_draft`` flag, plus ``extra`` (``_composite_extra``),
     ``created_at``, ``fit: "composite"`` and the composite's ``record``
-    (``view_composite.composite_arrays``) under ``composite``."""
+    (``view_composite.composite_arrays``) under ``composite`` — an EMPTY
+    composite (the base view unchanged) as ``composite: "empty"`` with the
+    record under ``composite_record`` (``view_composite.sidecar_fields``)."""
+    from app.core import view_composite
     from app.core.timeutils import utc_now_iso
     meta = {k: v for k, v in _ref_sidecar(draft).items() if k not in _DRAFT_RENDER_KEYS and k != f"{view}_draft"}
     meta.update(extra)
-    meta.update({"created_at": utc_now_iso(), "fit": "composite", "composite": record})
+    meta.update({"created_at": utc_now_iso(), **view_composite.sidecar_fields(record)})
     return meta
 
 
@@ -1964,8 +1967,10 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     onto ``drafts/tpose_<view>_<sig>`` (the view records its content,
     ``follows_front``). Up to ``DRAFT_ATTEMPTS`` drafts: a composite that fails its checks
     (alignment IoU below ``view_composite.IOU_MIN``, coverage below
-    ``COVERAGE_MIN`` — "nothing to put on" among them) or a gate makes a new
-    draft. When no draft's composite passed its checks, nothing is published
+    ``COVERAGE_MIN``) or a gate makes a new draft. A draft that lines up but
+    wears nothing that shows in this view is no failure: the composite is
+    EMPTY — the base view unchanged, sidecar ``composite: "empty"`` (fix
+    round 1). When no draft's composite passed its checks, nothing is published
     — the stored view (if any) stays, the texture never takes it — and
     ``OutfitError`` carries the numbers (``view_composite.refusal``). Among
     composites that passed their checks the first passing every gate is

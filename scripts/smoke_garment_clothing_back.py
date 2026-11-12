@@ -376,7 +376,7 @@ def main() -> int:
         real_render = expression_regen.render_character_image
         expression_regen.render_character_image = recorder
 
-        def compose(base_view, draft_file, target, *, rule="outfit", background=None):
+        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None):
             """The composite stand-in: the planned back (None = a composite that failed its checks)."""
             composites.append((Path(base_view).name, Path(draft_file).name, rule, background,
                                Path(target).name))

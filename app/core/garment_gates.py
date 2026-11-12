@@ -166,8 +166,11 @@ GARMENT_MIN = 0.002         # garment region / base body area, at least (= one k
 #: renders again (``garment_images``, ``kind.GATE_VERSIONS``). 2: the colour
 #: outside the garment is recorded, not refused; the head zone ends at the
 #: neck's narrowest row (``head_zone``). 3: ``GARMENT_MIN`` 0.002 and an
-#: edit's ``OUTSIDE_DRIFT_PX`` 2.0 (the gate audit, see both constants).
-WORN_GATE_VERSION = 3
+#: edit's ``OUTSIDE_DRIFT_PX`` 2.0 (the gate audit, see both constants). 4: a CPU
+#: composite's head share leaves its support out (``worn_gate(composite_support=…)``,
+#: Task 11g fix round 1: Kai's open jacket, a stand-up collar above the neck row,
+#: was refused at 0.066 although the composite takes every head pixel from the base).
+WORN_GATE_VERSION = 4
 OUTSIDE_XOR_MAX = 0.015     # outline change outside the garment region / base body area
 HEAD_ZONE = CHIN_ROW        # fallback end of the head: base figure rows above y0 + 0.13·Hb
 HEAD_GARMENT_MAX = 0.05     # share of the head zone inside the garment region
@@ -453,7 +456,8 @@ def head_zone(base_mask) -> Optional[Dict[str, Any]]:
 def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
               occupied: Iterable[str] = (), xor_max: float = OUTSIDE_XOR_MAX,
               drift_px: float = OUTSIDE_DRIFT_PX,
-              front_rows: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
+              front_rows: Optional[Tuple[float, float]] = None,
+              composite_support: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """Step 1 gate of clothing: the base view with the piece put on.
 
     The garment region G = ``garment_region``; everything of the figure
@@ -483,7 +487,16 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     front garment's rows (``garment_rows`` of its record) — then
     ``extra_part`` = the largest connected part of G outside those rows
     (± ``BACK_ROWS_MARGIN`` Hb) / base body area is reported for
-    ``back_follows_front``. ``gate_version`` = ``WORN_GATE_VERSION``.
+    ``back_follows_front``. ``composite_support``: the worn image is a CPU
+    composite (``view_composite``, the drafted back) and this is its support —
+    every pixel it may have changed (bool, the base view's shape); outside it
+    the composite IS the base. The head share then counts only G outside the
+    support (``head_garment``, gated): a collar or hood the composite put over
+    the neck is the garment, not a changed face, while a head change anywhere
+    else still refuses. ``head_in_support`` (G ∩ support in the head zone) is
+    recorded; ``head_support`` True says the rule applied. None for a model
+    edit (the front): every head pixel of G counts.
+    ``gate_version`` = ``WORN_GATE_VERSION``.
     Limits and their calibration: see the "Clothing" block above."""
     from scipy import ndimage
     _check(base_rgb, base_mask, worn_rgb, worn_mask)
@@ -508,7 +521,16 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
     head = np.zeros_like(m0)
     head[:zone["row"]] = True
     head &= m0
-    head_garment = float((region & head).sum() / max(int(head.sum()), 1))
+    head_px = max(int(head.sum()), 1)
+    in_support = None
+    if composite_support is not None:
+        support = np.asarray(composite_support, dtype=bool)
+        if support.shape != m0.shape:
+            raise ValueError(f"composite support {support.shape} does not match the base view {m0.shape}")
+        in_support = float((region & head & support).sum() / head_px)
+        head_garment = float((region & head & ~support).sum() / head_px)
+    else:
+        head_garment = float((region & head).sum() / head_px)
     box = _bbox(region)
     extra = None
     if front_rows is not None:
@@ -530,6 +552,7 @@ def worn_gate(base_rgb, base_mask, worn_rgb, worn_mask, *, view: str,
             "outside_xor": _r(xor, 4), "outside_xor_limit": _r(xor_limit, 4), "outside_outline": outline,
             "outside_drift_px": _r(drift, 2) if drift is not None else None,
             "head_garment": _r(head_garment, 4), "head_gated": head_gated,
+            **({"head_support": True, "head_in_support": _r(in_support, 4)} if in_support is not None else {}),
             "head_rule": zone["rule"], "head_row_t": zone["t"],
             "garment_bbox": box,
             "garment_top": box[1] if box else None, "garment_bottom": box[3] if box else None,

@@ -11,6 +11,9 @@ Per owner, under ``characters/<name>/garments/``::
     images/{item}_{fsig}_{step}_{view}.try{n}.raw.png an attempt as rendered, while the
                                                       attempt file holds it registered
                                                       (``garment_images.raw_path``)
+    images/{item}_{fsig}_{step}_{view}.try{n}.support.png the pixels a composite
+                                                      attempt may have changed
+                                                      (``garment_images.support_path``)
     raw/{item}_{fsig}.glb                             generator output
     prepared/{item}_{fsig}.glb                        decimated
     {item}_{fsig}.glb + .json                         the fit: rigged base with the
@@ -151,8 +154,9 @@ _BASE_RE = re.compile(r"base[0-9a-f]{8}")
 _FSIG_RE = re.compile(r"[0-9a-f]{12}")
 _ITEM = r"(?P<item>[A-Za-z0-9][A-Za-z0-9_-]*)"
 _FSIG = r"(?P<fsig>[0-9a-f]{12})"
-#: images/: {item}_{fsig}_{step}_{view}[.try{n}].{png,json} and the raw {…}.try{n}.raw.png
-_IMAGE_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[a-z]+_[a-z]+(?:\.try[0-9]+(?:\.raw(?=\.png$))?)?\.(?:png|json)")
+#: images/: {item}_{fsig}_{step}_{view}[.try{n}].{png,json}, the raw {…}.try{n}.raw.png and the
+#: composite support {…}.try{n}.support.png
+_IMAGE_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[a-z]+_[a-z]+(?:\.try[0-9]+(?:\.(?:raw|support)(?=\.png$))?)?\.(?:png|json)")
 #: the mesh folders and the fit: {item}_{fsig}.{glb,json}
 _MESH_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"\.(?:glb|json|npz)")
 #: layers/ and layers/low/: {item}_{fsig}_{lsig}.{glb,json}

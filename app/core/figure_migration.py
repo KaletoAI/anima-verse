@@ -819,3 +819,68 @@ def stamp_figures_once() -> Optional[Dict[str, Dict[str, str]]]:
                 sum(1 for d in result.values() for v in d.values() if v != STALE),
                 sum(1 for d in result.values() for v in d.values() if v == STALE))
     return result
+
+
+# --- The removed fit occasions' character globs (Task 11g fix round 1) ------
+#
+# The model FIT of a dressed back / side view is a CPU composite since Task
+# 11g (``view_composite``): the occasions ``outfit_back`` / ``outfit_side``
+# are gone (``config.REMOVED_FIT_OCCASIONS`` drops their routing chains) and
+# with them the character editor's "Back fit" / "Side fit" globs. A value a
+# character stored there (``profile.outfit_imagegen``) feeds nothing any
+# more: ``drop_fit_globs_once`` removes it from every character row (dormant
+# and pooled ones too) under ``keyed_lock("character_profile", name)``, once
+# per world (world_kv ``FIT_GLOBS_FLAG``), with ONE summary INFO line naming
+# the characters. A profile that does not save keeps the key (a WARNING);
+# the flag is set anyway. A character list that cannot be read raises
+# before anything is written and leaves the flag unset.
+
+#: world_kv key of the done flag.
+FIT_GLOBS_FLAG = "dropped_removed_fit_globs"
+#: The ``outfit_imagegen`` keys that fed only the removed fit occasions.
+REMOVED_FIT_GLOBS: Tuple[str, ...] = ("outfit_back_workflow", "outfit_side_workflow")
+
+
+def _drop_fit_globs(name: str) -> List[str]:
+    """Pop ``REMOVED_FIT_GLOBS`` from the character's ``outfit_imagegen``
+    under the profile lock; the keys dropped (empty when none was there or
+    the profile did not save)."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name) or {}
+        imagegen = profile.get("outfit_imagegen")
+        if not isinstance(imagegen, dict):
+            return []
+        dropped = [key for key in REMOVED_FIT_GLOBS if key in imagegen]
+        if not dropped:
+            return []
+        profile["outfit_imagegen"] = {k: v for k, v in imagegen.items() if k not in REMOVED_FIT_GLOBS}
+        if save_character_profile(name, profile):
+            return dropped
+    logger.warning("Removed fit globs %s: profile not saved — %s stay", name, ", ".join(dropped))
+    return []
+
+
+def drop_fit_globs_once() -> Optional[Dict[str, List[str]]]:
+    """The clean-up above. None when it already ran, else ``{character:
+    [keys dropped]}``."""
+    from app.models.character import list_available_characters
+    from app.models.world import get_world_setting, set_world_setting
+    if get_world_setting(FIT_GLOBS_FLAG, strict=True):
+        return None
+    names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)
+    result: Dict[str, List[str]] = {}
+    for name in names:
+        try:
+            dropped = _drop_fit_globs(name)
+        except Exception as e:  # noqa: BLE001 — the next character still goes
+            logger.warning("Removed fit globs %s: failed: %s", name, e)
+            continue
+        if dropped:
+            result[name] = dropped
+    set_world_setting(FIT_GLOBS_FLAG, "1")
+    logger.info("Removed fit occasions: outfit_imagegen.%s dropped from %d character(s)%s",
+                " / ".join(REMOVED_FIT_GLOBS), len(result),
+                f": {', '.join(f'{n} ({len(k)})' for n, k in sorted(result.items()))}" if result else "")
+    return result

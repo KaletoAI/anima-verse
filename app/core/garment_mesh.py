@@ -189,7 +189,9 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
     (``_stored_attempt``): accepted, it becomes the prepared mesh without a
     mesher call; refused, the fresh attempts follow. Otherwise up to
     ``MAX_ATTEMPTS`` times: ``generate_mesh`` on the kind's occasion
-    (``mesh_occasion``) from the front cut-out with the back cut-out as extra view, then
+    (``mesh_occasion``) from the front cut-out with the back cut-out as extra view (none
+    when the piece's drafted back is EMPTY — ``garment_images.skipped_view``: nothing of it
+    shows from behind, the mesher gets the front alone), then
     ``refine.decimate_to(raw, target_tris(kind), …)`` and the component gate.
 
     ``view_body`` is left at ``"humanoid"`` (the ``generate_mesh`` default):
@@ -214,8 +216,10 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
         return prepared
 
     kind = _kind(item_id)
+    from app.core.garment_images import skipped_view
+    # An empty drafted back has no cut-out: the mesh is made from the front alone.
     cut = {view: gs.garment_path(name, item_id, fsig, "image", step="cutout", view=view)
-           for view in gs.GARMENT_VIEWS}
+           for view in gs.GARMENT_VIEWS if not skipped_view(name, item_id, fsig, "cutout", view)}
     for view, path in cut.items():
         if not path.is_file():
             raise FileNotFoundError(f"garment cut-out ({view}) missing: {path.name}")
@@ -345,7 +349,8 @@ def _attempt(name: str, kind: str, cut: Dict[str, Path], raw: Path, candidate: P
     res = get_image_service().generate_mesh(
         source_image_path=str(cut["front"]), output_path=str(raw),
         character_name=name, mesh_name=f"{name}-{kind}",
-        view_images={"back": str(cut["back"])}, occasion=mesh_occasion(kind),
+        view_images={view: str(path) for view, path in cut.items() if view != "front"},
+        occasion=mesh_occasion(kind),
         face_num=FACE_NUM, material="dielectric", alpha="opaque")
     if not res.get("ok"):
         raise RuntimeError(f"garment mesh generation failed: {res.get('error') or 'unknown error'}")

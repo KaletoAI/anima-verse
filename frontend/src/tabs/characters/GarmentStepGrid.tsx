@@ -165,7 +165,9 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   const { t } = useI18n()
   const viewLabel = (view: GarmentView) => (view === 'front' ? t('Front view') : t('Back view'))
   const steps = garment?.steps ?? {}
-  const accepted = (step: GarmentImageStep, view: GarmentView) => !!steps[step]?.[view]?.accepted
+  // A view left out after an empty drafted back counts as done.
+  const accepted = (step: GarmentImageStep, view: GarmentView) =>
+    !!steps[step]?.[view]?.accepted || !!steps[step]?.[view]?.skipped
   const lastImage = imageSteps[imageSteps.length - 1]?.step
   const order = [...imageSteps.map((s) => s.step), 'mesh', 'fit']
   const mesh = steps.mesh
@@ -177,7 +179,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
     const { step, chips } = spec
     const img = steps[step]?.[view]
     const prev = index > 0 ? imageSteps[index - 1].step : undefined
-    const blocked = prev && !accepted(prev, view) ? t('Run the previous step first') : undefined
+    const blocked = img?.skipped ? t('Not made: nothing of the piece shows from behind')
+      : prev && !accepted(prev, view) ? t('Run the previous step first') : undefined
     const label = `${t(stepLabels[step] || step)} · ${viewLabel(view)}`
     const mark = runMark(feedback, garment, order, step, view)
     const slot = runSlot({ step, view })
@@ -185,7 +188,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
       ? 'var(--accent, #6aa9ff)' : null
     const stateLines = [
       label,
-      img?.url ? (img.accepted ? t('Accepted') : t('Not accepted')) : t('No render yet'),
+      img?.url ? (img.accepted ? t('Accepted') : t('Not accepted')) : img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet'),
+      img?.empty ? t('Nothing of the piece shows from behind — the base back unchanged') : '',
       img?.created_at ? formatDateTime(img.created_at, clockSettings()) : '',
       step === 'cutout' && img?.url
         ? [img.side ? `${t('Square side')} ${img.side} px` : '', upscaleText(img.upscale, t)].filter(Boolean).join(' · ')
@@ -197,7 +201,9 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         {img?.url ? (
           <RefImage key={img.url} src={img.url} width={THUMB_W} height={THUMB_H} label={label} meta={img} compact />
         ) : (
-          <div className="ga-step-grid-empty" title={t('No render yet')}>{t('No render yet')}</div>
+          <div className="ga-step-grid-empty" title={img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet')}>
+            {img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet')}
+          </div>
         )}
         <div className="ga-step-grid-side">
           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>

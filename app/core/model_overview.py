@@ -671,6 +671,8 @@ def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]
     score = _num(_dict(guard.get("scores")).get(view))
     # A view composited on the CPU (Task 11g) names its composite; an older one was a model fit.
     composite = _dict((record or {}).get("composite")) if (record or {}).get("fit") == "composite" else {}
+    # An EMPTY composite (fix round 1): nothing of the outfit shows here — the base view unchanged.
+    empty = (record or {}).get("fit") == "composite" and (record or {}).get("composite") == "empty"
     numbers = {"guard_score": score, "noise": _num(_dict(pick.get("noise")).get("score")),
                "noise_limit": _num(fit.get("noise_limit")), "fit_attempts": len(attempts) or None,
                "unchanged_delta_e": delta_e}
@@ -681,6 +683,8 @@ def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]
     parts = []
     if guard:
         parts.append(f"view check {guard.get('best') or '?'}" + (" · re-rendered" if guard.get("rerendered") else ""))
+    if empty:
+        parts.append("nothing of the outfit shows in this view — the base view unchanged")
     if composite:
         parts.append(f"composite of draft {chosen} of {len(attempts)}" if attempts else "composite")
         if numbers["composite_iou"] is not None and numbers["composite_coverage"] is not None:

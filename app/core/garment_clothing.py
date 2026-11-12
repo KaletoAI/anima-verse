@@ -319,14 +319,15 @@ def back_reasons(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> list:
 
 def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
          edit_rgb, edit_mask, item_id: Optional[str] = None,
-         front_gate: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+         front_gate: Optional[Dict[str, Any]] = None, composite_support=None) -> Dict[str, Any]:
     """The gate record of one attempt (``garment_gates``): ``worn`` against
     the base view — the zones the piece is worn on (its slots,
     ``garment_gates.occupied_zones``: a hat frees the head) are not checked;
     the drafted back (a CPU composite, Task 11g) has an edit's outline
     limits; with the accepted front's record ``front_gate`` it measures what it puts
-    on outside the front garment's rows (``extra_part``, ``back_reasons``);
-    ``ghost`` against the garment region of the accepted worn image
+    on outside the front garment's rows (``extra_part``, ``back_reasons``)
+    and, with its ``composite_support``, a head share outside the support
+    (``garment_gates.worn_gate``); ``ghost`` against the garment region of the accepted worn image
     (``source``). All arrays share the base view's size."""
     from app.core import garment_gates
     if step == "worn":
@@ -336,7 +337,8 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
                                        xor_max=garment_gates.OUTSIDE_XOR_MAX,
                                        drift_px=garment_gates.OUTSIDE_DRIFT_PX,
                                        front_rows=(garment_gates.garment_rows(front_gate)
-                                                   if front_gate else None))
+                                                   if front_gate else None),
+                                       composite_support=composite_support)
     if step == "ghost":
         region = garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
         return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view,

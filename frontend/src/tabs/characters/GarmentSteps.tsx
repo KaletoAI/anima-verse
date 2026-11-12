@@ -269,8 +269,11 @@ function ImageTile({ img, label, small, chips, limits, view, busy, blockedTitle,
       {url ? (
         <RefImage key={url} src={url} height={height} label={label} meta={img} compact={small} />
       ) : (
-        <div className="ga-hint" style={{ ...EMPTY_TILE, height }}>{t('No render yet')}</div>
+        <div className="ga-hint" style={{ ...EMPTY_TILE, height }}>
+          {img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet')}
+        </div>
       )}
+      {img?.empty ? <div className="ga-hint">{t('Nothing of the piece shows from behind — the base back unchanged')}</div> : null}
       {url && img && !img.accepted ? <div className="ga-hint" style={WARN_STYLE}>{t('Not accepted')}</div> : null}
       {chips ? <GateChips specs={chips} record={shownRecord(img)} limits={limits} view={view} /> : null}
       {extra}
@@ -458,7 +461,9 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
   const { t } = useI18n()
   const viewLabel = (view: GarmentView) => (view === 'front' ? t('Front view') : t('Back view'))
   const steps = garment?.steps ?? {}
-  const accepted = (step: GarmentImageStep, view: GarmentView) => !!steps[step]?.[view]?.accepted
+  // A view left out after an empty drafted back counts as done.
+  const accepted = (step: GarmentImageStep, view: GarmentView) =>
+    !!steps[step]?.[view]?.accepted || !!steps[step]?.[view]?.skipped
   const lastImage = imageSteps[imageSteps.length - 1]?.step
   const mesh = steps.mesh
   const order = [...imageSteps.map((s) => s.step), 'mesh', 'fit']
@@ -471,7 +476,8 @@ export function GarmentSteps({ garment, imageSteps, stepLabels, limits, fitChips
         <div style={{ display: 'flex', gap: 6 }}>
           {GARMENT_VIEWS.map((view) => {
             const img = steps[step]?.[view]
-            const blocked = prev && !accepted(prev, view) ? t('Run the previous step first') : undefined
+            const blocked = img?.skipped ? t('Not made: nothing of the piece shows from behind')
+              : prev && !accepted(prev, view) ? t('Run the previous step first') : undefined
             return (
               <ImageTile
                 key={view}

@@ -39,6 +39,10 @@ export interface GarmentImageInfo extends ImageTileMeta {
   /** Cut-out only: the routed upscale (`status` applied · lanczos · not_needed). */
   upscale?: Record<string, unknown> | null
   side?: number | null
+  /** The drafted back is an EMPTY composite: the base back unchanged. */
+  empty?: boolean
+  /** Why this view is not made (the steps after an empty drafted back). */
+  skipped?: string | null
 }
 
 export interface GarmentMeshInfo {

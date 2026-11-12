@@ -295,9 +295,12 @@ def _pair(character_name: str, item_id: str, kind: str, fsig: str) -> Tuple[bool
     """Whether the accepted images of both views of the kind's pair step agree
     (the kind module's ``pair_agree``: hair ends / hems at the same height),
     with both gate records."""
+    from app.core.garment_images import skipped_view
     module = _kind_module(kind)
     gates = {view: _accepted_gate(_image(character_name, item_id, fsig, module.PAIR_STEP, view))
              for view in ("front", "back")}
+    if gates["front"] and skipped_view(character_name, item_id, fsig, module.PAIR_STEP, "back"):
+        return True, gates  # no back to agree with (an empty drafted back)
     if not gates["front"] or not gates["back"]:
         return False, gates
     return module.pair_agree(gates["front"], gates["back"]), gates
@@ -305,8 +308,12 @@ def _pair(character_name: str, item_id: str, kind: str, fsig: str) -> Tuple[bool
 
 def _pair_check(character_name: str, item_id: str, kind: str, fsig: str):
     """The pair check of a FRONT attempt of the pair step: against the
-    accepted back's gate record (the kind module's ``pair_reason``)."""
+    accepted back's gate record (the kind module's ``pair_reason``); none
+    without a back (an empty drafted back, ``garment_images.skipped_view``)."""
+    from app.core.garment_images import skipped_view
     module = _kind_module(kind)
+    if skipped_view(character_name, item_id, fsig, module.PAIR_STEP, "back"):
+        return lambda record: None
     back = _accepted_gate(_image(character_name, item_id, fsig, module.PAIR_STEP, "back")) or {}
     return lambda record: module.pair_reason(record, back)
 
@@ -379,7 +386,9 @@ def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, ba
         from app.core import garment_footwear
         return garment_footwear.step_done(item_id, step)
     if step in IMAGE_STEPS:
-        if not all(_accepted(_image(character_name, item_id, fsig, step, v)) for v in GARMENT_VIEWS):
+        from app.core.garment_images import skipped_view
+        if not all(_accepted(_image(character_name, item_id, fsig, step, v))
+                   or skipped_view(character_name, item_id, fsig, step, v) for v in GARMENT_VIEWS):
             return False
         return step != _kind_module(kind).PAIR_STEP or _pair(character_name, item_id, kind, fsig)[0]
     if step == "mesh":
@@ -1674,6 +1683,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                     # ``worn``) drops the back it was drafted from.
                     if not f and _accepted(_image(character_name, item_id, fsig, step, v)):
                         continue
+                    if garment_images.skipped_view(character_name, item_id, fsig, step, v):
+                        continue  # an empty drafted back: no later back image
                     if step == "cutout":
                         garment_images.cut_out(character_name, item_id, fsig, v, force=f)
                     else:
@@ -2351,7 +2362,7 @@ def _stamp(path: Path) -> Optional[int]:
 
 
 def _image_info(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Dict[str, Any]:
-    from app.core.garment_images import ATTEMPTS
+    from app.core.garment_images import ATTEMPTS, skipped_view
     from app.core.garment_store import read_record
     from app.core.model_refs import image_tile_meta
     final = _image(character_name, item_id, fsig, step, view)
@@ -2373,6 +2384,12 @@ def _image_info(character_name: str, item_id: str, fsig: str, step: str, view: s
     out = {"url": _url(character_name, item_id, f"images/{step}/{view}", stamp) if stamp is not None else None,
            "accepted": record.get("accepted") is True, "gates": gates, "attempts": attempts,
            **(image_tile_meta(final, record) if stamp is not None else {})}
+    # An empty drafted back (the base back unchanged) and the views it leaves out.
+    if record.get("composite") == "empty":
+        out["empty"] = True
+    skipped = skipped_view(character_name, item_id, fsig, step, view)
+    if skipped:
+        out["skipped"] = skipped
     if step == "cutout" and record:
         out["upscale"] = record.get("upscale")
         out["side"] = record.get("side")

@@ -53,7 +53,24 @@ come first: a composite that fails them is refused without a gate and
 never published. One that passes is gated like an edit, at an edit's
 outline limits — the base back outside the garment mask is kept pixel for
 pixel — (the kind's gate against the base back) plus ``kind.back_reasons``
-against the accepted front's record (the front opening on the back). A
+against the accepted front's record (the front opening on the back). The
+composite's SUPPORT (every pixel it may have changed) is kept beside the
+attempt as ``….try{n}.support.png`` (``support_path``) and handed to the
+gate: the head share leaves it out (``garment_gates.worn_gate``), so a
+collar or hood over the neck passes while a changed head elsewhere still
+refuses. A stored attempt without one gets it made again from the stored
+draft while that is the draft it was composited from (``draft_sha256``).
+
+An EMPTY composite (fix round 1: the draft lines up but nothing of the
+piece shows from behind — a necklace, a front-only detail) is accepted
+without the gate: the back IS the base back, sidecar ``composite:
+"empty"``, gate record ``empty`` True. The steps after the drafted one have
+no back then (``skipped_view``: no ghost back, no cut-out back — there is
+no garment in it to cut out) and the mesh is made from the front cut-out
+alone (``garment_mesh``; a mesh alias takes its back view as optional).
+The chain had no "piece without a back" path before: this is it. Such a
+group never serves as a ``garment_source`` (that needs both views of every
+step), so a new base renders it again. A
 refused attempt makes a new draft; after ``ATTEMPTS`` drafts the step is
 refused with the composite's numbers. The accepted back records the front
 it follows (``front_sha256``), its draft, ``fit: "composite"`` and the
@@ -432,6 +449,45 @@ def _drop_later(character_name: str, item_id: str, fsig: str, step: str, view: s
         path = garment_path(character_name, item_id, fsig, "image", step=later, view=view)
         path.unlink(missing_ok=True)
         path.with_suffix(".json").unlink(missing_ok=True)
+
+
+#: Why a view of an image step is not made (``skipped_view``).
+EMPTY_BACK = "nothing of the piece shows from behind — no back image; the mesh is made from the front"
+
+
+def support_path(path: Path) -> Path:
+    """The support sibling of a composite attempt — ``….try{n}.support.png``
+    (``view_composite.write_support``; module docstring)."""
+    return path.with_name(f"{path.stem}.support.png")
+
+
+def empty_back(character_name: str, item_id: str, fsig: str) -> bool:
+    """Whether the accepted back of the kind's drafted step is an EMPTY
+    composite (module docstring)."""
+    from app.core import view_composite
+    from app.core.garment_store import garment_path, read_record
+    kind = _kind_module(item_id)
+    for step in getattr(kind, "EDIT_STEPS", {}) or {}:
+        if not _drafted(kind, step):
+            continue
+        path = garment_path(character_name, item_id, fsig, "image", step=step, view="back")
+        if _accepted(path) and view_composite.is_empty(read_record(path.with_suffix(".json")).get("composite")):
+            return True
+    return False
+
+
+def skipped_view(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Optional[str]:
+    """``EMPTY_BACK`` for the back of an image step AFTER a drafted step whose
+    back is EMPTY (``empty_back``): that view is not made. None otherwise."""
+    from app.core.garment_store import image_steps
+    if view != "back":
+        return None
+    kind = _kind_module(item_id)
+    order = list(image_steps(_item_kind(item_id)))
+    drafted = [i for i, s in enumerate(order) if _drafted(kind, s)]
+    if not drafted or step not in order or order.index(step) <= drafted[0]:
+        return None
+    return EMPTY_BACK if empty_back(character_name, item_id, fsig) else None
 
 
 def _drafted(kind, step: str) -> bool:
@@ -885,7 +941,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     composite's numbers)."""
     from app.core import base_body, view_composite
     from app.core.base_body import file_sha256
-    from app.core.garment_store import garment_path, write_record
+    from app.core.garment_store import garment_path, read_record, write_record
     from app.core.model_refs import VIEW_REFERENCE_BACKGROUND, _tpose_size, neutral_view_reference
     from app.core.timeutils import utc_now_iso
     front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
@@ -899,23 +955,47 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         base_rgb = _rgb(flat_base)
         base_mask = _mask(flat_base, base_size)
 
-    def gate_composite(path: Path) -> Dict[str, Any]:
+    def gate_composite(path: Path, support) -> Dict[str, Any]:
         record = kind.gate(step, "back", base_rgb=base_rgb, base_mask=base_mask, source_rgb=None, source_mask=None,
                            edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
-                           item_id=item_id, front_gate=front_gate)
+                           item_id=item_id, front_gate=front_gate, composite_support=support)
         return _with_pair(record, pair_check, list(kind.back_reasons(front_gate, record)))
+
+    def empty_record() -> Dict[str, Any]:
+        # The base back unchanged: nothing to gate (module docstring).
+        return {"view": "back", "ok": True, "reasons": [], "empty": True,
+                "gate_version": (getattr(kind, "GATE_VERSIONS", None) or {}).get(step)}
+
+    def support_of(path: Path, sidecar: Dict[str, Any]):
+        """The support of a stored attempt (module docstring); None: every head pixel counts."""
+        stored = view_composite.read_support(support_path(path), base_size)
+        if stored is not None:
+            return stored
+        draft = draft_path(character_name, item_id, fsig, step)
+        if not sidecar.get("draft_sha256") or not draft.is_file() or file_sha256(draft) != sidecar["draft_sha256"]:
+            return None
+        view_composite.write_support(view_composite.support_mask(base, draft, rule="piece"), support_path(path))
+        return view_composite.read_support(support_path(path), base_size)
+
+    def regate_attempt(path: Path) -> Dict[str, Any]:
+        sidecar = read_record(path.with_suffix(".json"))
+        if view_composite.is_empty(sidecar.get("composite")):
+            return empty_record()
+        return gate_composite(path, support_of(path, sidecar))
 
     def composite_ok(sidecar: Dict[str, Any]) -> bool:
         composite = sidecar.get("composite")
-        return sidecar.get("fit") == "composite" and isinstance(composite, dict) and composite.get("ok") is True
+        return sidecar.get("fit") == "composite" and (
+            view_composite.is_empty(composite) or (isinstance(composite, dict) and composite.get("ok") is True))
 
     if not (_accepted(final) and _follows_front(character_name, item_id, fsig, step, final)):
         # Only a stored COMPOSITE that passed its checks is re-gated — never a
         # model fit of before Task 11g, never a refused composite.
         hit = _regate_stored(character_name, item_id, fsig, step, "back", kind, final=final,
-                             regate=lambda path, _old: gate_composite(path),
+                             regate=lambda path, _old: regate_attempt(path),
                              keep=lambda sidecar: sidecar.get("front_sha256") == front_sha and composite_ok(sidecar),
-                             follow_keys=("front_sha256", "draft", "draft_sha256", "fit", "composite"))
+                             follow_keys=("front_sha256", "draft", "draft_sha256", "fit", "composite",
+                                          "composite_record"))
         if hit is not None:
             return hit
 
@@ -941,11 +1021,14 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
             raise RuntimeError(f"The {step} back draft rendered nothing")
         draft = Path(draft)
         target = garment_path(character_name, item_id, fsig, "image", step=step, view="back", attempt=attempt)
-        composite = view_composite.compose(base, draft, target, rule="piece", background=VIEW_REFERENCE_BACKGROUND)
+        composite = view_composite.compose(base, draft, target, rule="piece", background=VIEW_REFERENCE_BACKGROUND,
+                                           mask_target=support_path(target))
         follow = {"front_sha256": front_sha, "draft": draft.name, "draft_sha256": file_sha256(draft),
-                  "fit": "composite", "composite": composite}
-        if composite["ok"]:
-            record = gate_composite(target)
+                  **view_composite.sidecar_fields(composite)}
+        if composite["ok"] and view_composite.is_empty(composite):
+            record = empty_record()
+        elif composite["ok"]:
+            record = gate_composite(target, view_composite.read_support(support_path(target), base_size))
         else:
             # Refused without a gate: the numbers go into the refusal text.
             record = {"view": "back", "ok": False,

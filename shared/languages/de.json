@@ -4689,6 +4689,8 @@
     "Suggestion filled in — check it and save the item.": "Vorschlag eingetragen — prüfe ihn und speichere das Item.",
     "The front text needs no change for the back — the field can stay empty.": "Der Vordertext braucht für die Rückseite keine Änderung — das Feld kann leer bleiben.",
     "Fill in the description (front) first.": "Fülle zuerst die Beschreibung (vorne) aus.",
-    "No suggestion: the LLM failed or is not routed.": "Kein Vorschlag: Das LLM ist fehlgeschlagen oder nicht geroutet."
+    "No suggestion: the LLM failed or is not routed.": "Kein Vorschlag: Das LLM ist fehlgeschlagen oder nicht geroutet.",
+    "Not made: nothing of the piece shows from behind": "Nicht erstellt: Von hinten ist nichts vom Teil zu sehen",
+    "Nothing of the piece shows from behind — the base back unchanged": "Von hinten ist nichts vom Teil zu sehen — die Basis-Rückansicht bleibt unverändert"
   }
 }

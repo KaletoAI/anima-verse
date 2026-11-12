@@ -737,6 +737,15 @@ async def lifespan(app: FastAPI):
     except Exception as _frd:
         logger.warning("Mode re-default failed (retried at the next start): %s", _frd)
 
+    # Clean-up (same plan, Task 11g fix round 1): the per-character globs of
+    # the removed fit occasions outfit_back / outfit_side (a CPU composite
+    # replaced them) leave every profile. Once per world, one log line.
+    try:
+        from app.core.figure_migration import drop_fit_globs_once
+        drop_fit_globs_once()
+    except Exception as _fgd:
+        logger.warning("Removed fit globs clean-up failed (retried at the next start): %s", _fgd)
+
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
 

@@ -69,9 +69,9 @@ Fixture, W 1024 x H 1200 on grey 128, skin (200, 160, 140):
 [1] head_zone + gate numbers as derived above; limits("clothing") worn has
     no outside_dRGB limit (its chip is information); every worn record
     carries the current gate_version; GATE_VERSIONS["worn"] =
-    WORN_GATE_VERSION = 3 (2 + the gate audit's GARMENT_MIN / drift,
-    smoke_garment_gate_audit.py); the re-gate below re-judges a version-1
-    record into the current version.
+    WORN_GATE_VERSION = 4 (2 + the gate audit's GARMENT_MIN / drift,
+    smoke_garment_gate_audit.py, 3; + the composite support, [7], 4); the
+    re-gate below re-judges a version-1 record into the current version.
 [2] Drafted back, the next chain run (garments.run_garment, no steps): the
     worn front is accepted (COLLAR, record of the current gate), the back has
     two stored attempts — try1 HIGH, try2 TINTED — with version-1 records
@@ -79,7 +79,7 @@ Fixture, W 1024 x H 1200 on grey 128, skin (200, 160, 140):
     current front (front_sha256; fit "composite", a composite record that
     passed its checks — only such an attempt is re-gated since Task 11g). The run re-gates them: try1 refused "head changed",
     try2 accepted -> the final back = try2's file, attempt 2, gates.first
-    refused / gates.second ok with regated_from 1, gate_version 2; the final
+    refused / gates.second ok with regated_from 1, the current gate_version; the final
     record keeps front_sha256 / draft / draft_sha256 of try2. No worn render,
     no draft, no image service call; the run goes on to the ghost (the stub
     renders nothing there -> refused at "ghost"; the persisted failure is the
@@ -96,6 +96,47 @@ Fixture, W 1024 x H 1200 on grey 128, skin (200, 160, 140):
     renders ("worn bd1").
 [6] Worn FRONT (an edit, not drafted): try1 TINTED with a version-1 record,
     no final -> run_edit_step accepts it with no render, regated_from 1.
+[7] Task 11g fix round 1, the head gate of a COMPOSITE (``worn_gate(
+    composite_support=…)``): the composite takes every pixel outside its
+    support from the base, so the head share counts G outside the support.
+    COLLAR_SUPPORT = the jacket's black pixels of HIGH (neck rows [196, 280)
+    + torso rows [280, 700)) grown by 4 px.
+    (a) HIGH with that support: its 994 head px all lie in the support ->
+        head_garment 0.0, head_in_support 0.0891 (= [1]'s 994 / 11159),
+        head_support True, ok, no reasons — the collar case passes.
+    (b) FACE = HIGH + a black patch rows [120, 160) cols [490, 535) on the
+        head (inside the disc: its farthest corner (535, 120) lies sqrt(23² +
+        40²) = 46.1 < 60 from the centre), 40 x 45 = 1800 px minus the
+        opening's 3 px at each of its 4 corners = 1788 px, outside the
+        support -> head_garment 1788 / 11159 = 0.1602 > 0.05 -> refused
+        ["head changed: 0.16 of the head > 0.05"] (the gate stays effective
+        outside the support); head_in_support still 0.0891.
+    (c) A support of another shape -> ValueError.
+    (d) The chain: the draft renders HIGH (a collar above the neck row —
+        Kai's open jacket, refused at 0.066 on 01bcf015); Regenerate worn
+        back -> one draft "worn bd1", the REAL composite onto BASE, accepted
+        at attempt 1: gate head_support True, head_garment 0.0, ok; the
+        support file …worn_back.try1.support.png is written and is a stored
+        garment name (garment_store.parse_name -> (item, fsig)).
+    (e) A stored HIGH attempt of version 3 composited from the STORED draft
+        (draft file = HIGH, draft_sha256 its sha) and no support file: the
+        next run re-gates it with the support made again from the draft ->
+        accepted at attempt 1 with no render, regated_from 3, the support
+        file written. The same attempt with draft_sha256 of another draft:
+        no support -> every head px counts -> refused again "head changed:
+        0.089" and the step renders.
+[8] Task 11g fix round 1, EMPTY: the draft renders BASE (nothing of the
+    piece shows from behind). Regenerate worn back -> one draft, the
+    composite EMPTY: the final back = BASE's pixels (flattened on grey 128:
+    the composite of BASE onto BASE), record accepted, composite "empty",
+    composite_record.empty True, gates.first {ok True, empty True,
+    gate_version 4}; the support file is all 0. Then skipped_view: ghost
+    back / cutout back -> EMPTY_BACK; worn back, ghost front -> None;
+    garments._pair (no ghost back) -> True once the ghost front is
+    accepted; garments._done(ghost) with only the front accepted -> True;
+    _image_info: worn back empty True, ghost back skipped = EMPTY_BACK. The
+    mesh step (the REAL garment_mesh.generate, the image service stubbed to
+    refuse): generate_mesh gets view_images {} — the front alone.
 """
 import io
 import json
@@ -161,6 +202,8 @@ def jacket(r):
 
 BASE = base()
 COLLAR = jacket(216)
+#: What a worn-back draft renders ([7], [8] change it).
+DRAFT = [COLLAR]
 HIGH = jacket(196)
 TINTED = COLLAR.copy()
 TINTED[mask_of(BASE) & ~(COLLAR == BLACK).all(2)] = TINT
@@ -233,7 +276,7 @@ def main() -> int:
               (tinted["ok"], tinted["outside_dRGB"], tinted["outside_xor"], tinted["head_garment"], tinted["reasons"]),
               (True, 16.0, 0.0, 0.0, []))
         check("record version", (collar["gate_version"], gg.WORN_GATE_VERSION,
-                                 garment_clothing.GATE_VERSIONS["worn"]), (3, 3, 3))
+                                 garment_clothing.GATE_VERSIONS["worn"]), (4, 4, 4))
         check("no colour limit (chip is information)", "outside_dRGB" in gg.limits("clothing")["worn"], False)
         check("outline limit unchanged", gg.limits("clothing")["worn"]["outside_xor"]["value"], 0.015)
 
@@ -266,7 +309,7 @@ def main() -> int:
             if g["step"] == "ghost":
                 return None  # the steps after the worn view are not under test
             if g.get("stage") == "draft":
-                out = COLLAR  # a fresh render: its own frame
+                out = DRAFT[0]  # a fresh render: its own frame
             else:
                 arr = COLLAR  # every edit renders the jacket
                 out = np.full((kw["override_height"], kw["override_width"], 3), 128, dtype=np.uint8)
@@ -279,6 +322,7 @@ def main() -> int:
             return path
 
         expression_regen.render_character_image = recorder
+        real_mesh_generate = garment_mesh.generate
         garment_mesh.generate = lambda *a, **k: None
         garments._fit = lambda *a, **k: None
 
@@ -288,8 +332,9 @@ def main() -> int:
         front = image("worn", "front")
         draft_name = garment_images.draft_path("Demo", jid, fsig, "worn").name
 
-        def stage(backs, *, front_sha=None, version=None, composite=True):
-            """The accepted worn front + stored back attempts (no final back)."""
+        def stage(backs, *, front_sha=None, version=None, composite=True, draft=None):
+            """The accepted worn front + stored back attempts (no final back);
+            ``draft``: the stored draft file (its sha in the sidecars)."""
             front.parent.mkdir(parents=True, exist_ok=True)
             front.write_bytes(png(COLLAR))
             gs.write_record(front.with_suffix(".json"), {"accepted": True, "attempt": 1,
@@ -297,6 +342,13 @@ def main() -> int:
             sha = front_sha or base_body.file_sha256(front)
             for path in (image("worn", "back"), image("worn", "back").with_suffix(".json")):
                 path.unlink(missing_ok=True)
+            for n in (1, 2):
+                garment_images.support_path(image("worn", "back", n)).unlink(missing_ok=True)
+            draft_file = garment_images.draft_path("Demo", jid, fsig, "worn")
+            draft_sha = "d" * 64
+            if draft is not None:
+                draft_file.write_bytes(png(draft))
+                draft_sha = base_body.file_sha256(draft_file)
             for n, arr in enumerate(backs, 1):
                 target = image("worn", "back", n)
                 target.write_bytes(png(arr))
@@ -307,7 +359,7 @@ def main() -> int:
                 gs.write_record(target.with_suffix(".json"), {
                     "garment": {"item_id": jid, "fsig": fsig, "step": "worn", "view": "back", "attempt": n,
                                 "stage": "composite" if composite else "fit"},
-                    "front_sha256": sha, "draft": draft_name, "draft_sha256": "d" * 64, "gate": old,
+                    "front_sha256": sha, "draft": draft_name, "draft_sha256": draft_sha, "gate": old,
                     **({"fit": "composite", "composite": {"rule": "piece", "ok": True, "reasons": [], "iou": 0.99,
                                                           "coverage": {"score": 0.9, "region": 0.2}}}
                        if composite else {})})
@@ -384,6 +436,111 @@ def main() -> int:
         check("front accepted without a render", (got == front, renders, record.get("accepted"),
                                                   record.get("attempt"), first.get("ok"), first.get("regated_from")),
               (True, [], True, 1, True, 1))
+
+        print("[7] the head gate of a composite leaves its support out")
+        from scipy import ndimage as ndi
+        black = (HIGH == BLACK).all(2)
+        support = ndi.binary_dilation(black, iterations=4)
+        g = gg.worn_gate(BASE, mask_of(BASE), HIGH, mask_of(HIGH), view="back", composite_support=support)
+        check("(a) collar in the support: passes",
+              (g["ok"], g["reasons"], g["head_garment"], g.get("head_in_support"), g.get("head_support")),
+              (True, [], 0.0, round(994 / 11159, 4), True))
+        FACE = HIGH.copy()
+        FACE[120:160, 490:535] = BLACK
+        g = gg.worn_gate(BASE, mask_of(BASE), FACE, mask_of(FACE), view="back", composite_support=support)
+        check("(b) a head change outside the support: refused",
+              (g["ok"], g["reasons"], g["head_garment"], g.get("head_in_support")),
+              (False, ["head changed: 0.16 of the head > 0.05"], round(1788 / 11159, 4), round(994 / 11159, 4)))
+        try:
+            gg.worn_gate(BASE, mask_of(BASE), HIGH, mask_of(HIGH), view="back", composite_support=support[:10])
+            check("(c) support of another shape", "no exception", "ValueError")
+        except ValueError:
+            check("(c) support of another shape", "ValueError", "ValueError")
+
+        del renders[:]
+        DRAFT[0] = HIGH
+        stage([])
+        garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
+        record = gs.read_record(image("worn", "back").with_suffix(".json"))
+        first = (record.get("gates") or {}).get("first") or {}
+        check("(d) collar above the neck: one draft, accepted",
+              ([k for k in renders if k.startswith("worn")], record.get("accepted"), record.get("attempt"),
+               first.get("ok"), first.get("head_support"), first.get("head_garment"), first.get("reasons")),
+              (["worn bd1"], True, 1, True, True, 0.0, []))
+        sup_file = garment_images.support_path(image("worn", "back", 1))
+        check("(d) support file, a stored garment name", (sup_file.name, gs.parse_name(sup_file)),
+              (f"{jid}_{fsig}_worn_back.try1.support.png", (jid, fsig)))
+
+        del renders[:]
+        stage([HIGH], version=3, draft=HIGH)
+        garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
+        record = gs.read_record(image("worn", "back").with_suffix(".json"))
+        first = (record.get("gates") or {}).get("first") or {}
+        check("(e) re-gated with the support made from the stored draft",
+              ([k for k in renders if k.startswith("worn")], record.get("accepted"), record.get("attempt"),
+               first.get("ok"), first.get("regated_from"), first.get("head_support"),
+               garment_images.support_path(image("worn", "back", 1)).is_file()),
+              ([], True, 1, True, 3, True, True))
+        del renders[:]
+        stage([HIGH], version=3, draft=HIGH)
+        sidecar = gs.read_record(image("worn", "back", 1).with_suffix(".json"))
+        # try1 was composited from another draft than the stored one
+        gs.write_record(image("worn", "back", 1).with_suffix(".json"), {**sidecar, "draft_sha256": "e" * 64})
+        DRAFT[0] = COLLAR
+        garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
+        check("(e) another draft: no support, refused again -> one draft rendered",
+              ([k for k in renders if k.startswith("worn")],
+               gs.read_record(image("worn", "back").with_suffix(".json")).get("accepted")), (["worn bd1"], True))
+
+        print("[8] an EMPTY back")
+        del renders[:]
+        DRAFT[0] = BASE
+        stage([])
+        garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
+        back = image("worn", "back")
+        record = gs.read_record(back.with_suffix(".json"))
+        first = (record.get("gates") or {}).get("first") or {}
+        from PIL import Image
+        with Image.open(back) as im:
+            pixels = np.asarray(im.convert("RGB"))
+        check("empty: the base back, accepted",
+              ([k for k in renders if k.startswith("worn")], bool(np.array_equal(pixels, BASE)), record.get("accepted"),
+               record.get("composite"), (record.get("composite_record") or {}).get("empty")),
+              (["worn bd1"], True, True, "empty", True))
+        check("empty: gate record", (first.get("ok"), first.get("empty"), first.get("gate_version")),
+              (True, True, gg.WORN_GATE_VERSION))
+        from app.core import view_composite
+        check("empty: support all 0",
+              bool(view_composite.read_support(garment_images.support_path(image("worn", "back", 1))).any()), False)
+        sv = lambda step, view: garment_images.skipped_view("Demo", jid, fsig, step, view)  # noqa: E731
+        check("skipped views", [sv("ghost", "back"), sv("cutout", "back"), sv("worn", "back"), sv("ghost", "front")],
+              [garment_images.EMPTY_BACK, garment_images.EMPTY_BACK, None, None])
+        ghost_front = image("ghost", "front")
+        ghost_front.write_bytes(png(COLLAR))
+        gs.write_record(ghost_front.with_suffix(".json"), {"accepted": True, "attempt": 1,
+                                                           "gates": {"first": {"ok": True, "attempt": 1}}})
+        check("pair without a back", garments._pair("Demo", jid, "clothing", fsig)[0], True)
+        check("ghost done with the front alone",
+              garments._done("Demo", jid, "clothing", fsig, "ghost", "x"), True)
+        check("image info", (garments._image_info("Demo", jid, fsig, "worn", "back").get("empty"),
+                             garments._image_info("Demo", jid, fsig, "ghost", "back").get("skipped")),
+              (True, garment_images.EMPTY_BACK))
+        cut_front = image("cutout", "front")
+        cut_front.write_bytes(png(COLLAR))
+        calls = []
+
+        class Service:
+            def generate_mesh(self, **kw):
+                calls.append(kw)
+                return {"ok": False, "error": "stub"}
+        imgservice.get_image_service = lambda: Service()
+        try:
+            real_mesh_generate("Demo", jid, fsig, force=True)
+        except Exception:  # noqa: BLE001 — the stub refuses; the call is what is checked
+            pass
+        imgservice.get_image_service = no_image_job
+        check("mesh from the front alone", [(Path(c["source_image_path"]).name, c["view_images"]) for c in calls],
+              [(cut_front.name, {})])
 
     print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall passed")
     return 1 if FAILS else 0

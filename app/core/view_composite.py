@@ -61,9 +61,24 @@ The CHECKS (``ok`` / ``reasons``):
   head rows dropped, dilated; score = base_de / (base_de + draft_de) inside
   it — 0 = the composite is the bare base, 1 = it is the draft). 11f
   measured the bare fits 0.052 .. 0.127, the dressed ones 0.681 .. 0.956.
-  A garment region below ``PUT_ON_MIN_REGION`` (0.03 of the base figure)
-  means the draft wears nothing that shows in this view — coverage 0,
-  ``NOTHING_TO_PUT_ON``.
+  A garment region below the rule's ``region_min`` (outfit 0.03 of the base
+  figure, piece 0.002) means the draft wears nothing that shows in this
+  view: see EMPTY below.
+
+EMPTY (fix round 1 of Task 11g): a draft that lines up with the base
+(``iou >= IOU_MIN``) but wears nothing that shows in this view — a necklace
+or a front-only detail seen from behind — is NOT refused. The view is the
+base view UNCHANGED (``empty`` True, ``coverage`` score None = n/a,
+``mask_share`` 0); the sidecar says ``"composite": "empty"`` and keeps the
+numbers under ``composite_record`` (``sidecar_fields``). A draft that does
+not line up is refused as before: its "nothing" is no measurement.
+
+``compose(mask_target=…)`` also writes the composite's SUPPORT — every pixel
+it may have changed (the garment mask and the flare grown by
+``SUPPORT_GROW`` px: the feathered blend reaches 2 px past the mask, the
+flare's blur 3) — as a grey PNG: outside it the composite IS the base, so a
+gate that compares it with the base (``garment_gates.worn_gate``'s head
+share) leaves the support out.
 
 The callers re-draft once on a failed check, then refuse with the numbers
 (``refusal``); a refused composite is never published into the views or the
@@ -83,7 +98,7 @@ from app.core.log import get_logger
 logger = get_logger("view_composite")
 
 #: Bumped when the composite changes for the same inputs (recorded with every result).
-VERSION = 1
+VERSION = 2
 #: Rows of the shape flow's work images.
 FLOW_HEIGHT = 512
 #: Gaussian sigma (work px) of the flow field.
@@ -130,6 +145,10 @@ RULES: Dict[str, Dict[str, Any]] = {
     "piece": {"opening": 0, "min_component": 30,
               "put_on": {"work_height": None, "head_share": 0.08, "dilate": 0, "region_min": 0.002}},
 }
+#: Px the support (``compose(mask_target=…)``) grows the garment mask + flare by.
+SUPPORT_GROW = 4
+#: The sidecar value of an empty composite (module docstring).
+EMPTY = "empty"
 #: The refusal reasons.
 NOTHING_TO_PUT_ON = "nothing to put on"
 NOT_ALIGNED = "the draft does not line up with the base"
@@ -529,7 +548,15 @@ def composite_arrays(base: np.ndarray, draft: np.ndarray, *, rule: str = "outfit
     module docstring; ``rule``: a ``RULES`` key ("outfit" / "piece"). Pure
     and deterministic. ``CompositeError`` when the base has no figure or the
     rule is unknown; a draft without a figure comes back as the base with
-    ``ok`` False (``NO_FIGURE``)."""
+    ``ok`` False (``NO_FIGURE``); an EMPTY one as the base with ``ok`` True."""
+    out, record, _support = _composite(base, draft, rule)
+    return out, record
+
+
+def _composite(base: np.ndarray, draft: np.ndarray, rule: str
+               ) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
+    """``composite_arrays`` plus the support mask (module docstring; all
+    False when the result is the base)."""
     from scipy import ndimage as ndi
     started = time.perf_counter()
     if rule not in RULES:
@@ -543,7 +570,7 @@ def composite_arrays(base: np.ndarray, draft: np.ndarray, *, rule: str = "outfit
     record: Dict[str, Any] = {"version": VERSION, "rule": rule, "iou_min": IOU_MIN, "coverage_min": COVERAGE_MIN}
     if not figure_mask(draft).any():
         return base.copy(), {**record, "ok": False, "reasons": [NO_FIGURE], "iou": 0.0,
-                             "coverage": {"score": 0.0, "region": 0.0, "nothing": True}}
+                             "coverage": {"score": 0.0, "region": 0.0, "nothing": True}}, np.zeros_like(bm)
     shape = bm.shape
     aligned, alignment = _similarity(draft, shape, bm)
     aligned_mask = figure_mask(aligned)
@@ -587,20 +614,31 @@ def composite_arrays(base: np.ndarray, draft: np.ndarray, *, rule: str = "outfit
         "drift_px": round(contour_drift(cm, bm), 2),
     })
     reasons = check(record)
+    support = ndi.binary_dilation(mask | flare, _disk(SUPPORT_GROW))
+    if coverage.get("nothing") and not reasons:
+        # EMPTY: nothing of the draft shows in this view — the base unchanged.
+        out, support = base.copy(), np.zeros_like(bm)
+        record.update(empty=True, coverage={**coverage, "score": None}, mask_share=0.0, flare_px=0, seam_de=None,
+                      composite_iou=1.0, drift_px=0.0)
     record.update(ok=not reasons, reasons=reasons, runtime_s=round(time.perf_counter() - started, 2))
-    return out, record
+    return out, record, support
 
 
 def check(record: Dict[str, Any]) -> List[str]:
-    """The refusal reasons of a composite record (empty = it passes)."""
+    """The refusal reasons of a composite record (none = it passes). Nothing
+    to put on refuses only a draft that does not line up (module docstring,
+    EMPTY)."""
     reasons = []
     coverage = record.get("coverage") or {}
+    aligned = float(record.get("iou") or 0.0) >= IOU_MIN
     if coverage.get("nothing"):
+        if aligned:
+            return reasons
         limit = RULES.get(str(record.get("rule") or "outfit"), RULES["outfit"])["put_on"]["region_min"]
         reasons.append(f"{NOTHING_TO_PUT_ON} (garment region {float(coverage.get('region') or 0.0):.4f} < {limit})")
     elif float(coverage.get("score") or 0.0) < COVERAGE_MIN:
         reasons.append(f"{NOT_COVERED} (coverage {float(coverage.get('score') or 0.0):.3f} < {COVERAGE_MIN})")
-    if float(record.get("iou") or 0.0) < IOU_MIN:
+    if not aligned:
         reasons.append(f"{NOT_ALIGNED} (IoU {float(record.get('iou') or 0.0):.3f} < {IOU_MIN})")
     return reasons
 
@@ -639,21 +677,25 @@ def to_image(rgba: np.ndarray, background: Optional[Tuple[int, int, int]] = None
 
 
 def compose(base_view: Path, draft: Path, target: Path, *, rule: str = "outfit",
-            background: Optional[Tuple[int, int, int]] = None) -> Dict[str, Any]:
+            background: Optional[Tuple[int, int, int]] = None,
+            mask_target: Optional[Path] = None) -> Dict[str, Any]:
     """Composite ``draft`` onto ``base_view`` and write the result to
     ``target`` (PNG, in the base view's frame; RGBA, or flattened onto
     ``background``) — written whether or not it passes, the caller stages it;
     ``rule``: "outfit" (a dressed view) or "piece" (a worn back).
+    ``mask_target``: where the support goes (``write_support``).
     Returns the record (``composite_arrays``). ``CompositeError`` on the
     event loop / a GPU-queue worker (``_guard_thread``) or for a base view
     without a figure."""
     _guard_thread()
-    out, record = composite_arrays(load_rgba(base_view), load_rgba(draft), rule=rule)
+    out, record, support = _composite(load_rgba(base_view), load_rgba(draft), rule)
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.tmp")
     to_image(out, background).save(tmp, format="PNG")
     tmp.replace(target)
+    if mask_target is not None:
+        write_support(support, mask_target)
     logger.info("View composite %s onto %s: %s (IoU %s, coverage %s, mask %s, seam ΔE %s, %.2f s)",
                 Path(draft).name, Path(base_view).name, "ok" if record["ok"] else "; ".join(record["reasons"]),
                 record.get("iou"), (record.get("coverage") or {}).get("score"), record.get("mask_share"),
@@ -661,9 +703,58 @@ def compose(base_view: Path, draft: Path, target: Path, *, rule: str = "outfit",
     return record
 
 
+def support_mask(base_view: Path, draft: Path, *, rule: str = "outfit") -> np.ndarray:
+    """The support of the composite ``compose`` makes of ``draft`` on
+    ``base_view`` (deterministic: the same as when it was made), for a
+    stored composite without its support file. ``_guard_thread`` applies."""
+    _guard_thread()
+    return _composite(load_rgba(base_view), load_rgba(draft), rule)[2]
+
+
+def write_support(support: np.ndarray, path: Path) -> None:
+    """The support mask as a grey PNG (255 = may have changed), atomically."""
+    from PIL import Image
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    Image.fromarray(np.where(support, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG")
+    tmp.replace(path)
+
+
+def read_support(path: Path, size: Optional[Tuple[int, int]] = None) -> Optional[np.ndarray]:
+    """A support PNG as a bool array (resized to ``size`` = (w, h) by nearest
+    neighbour when given); None when the file is missing or unreadable."""
+    from PIL import Image
+    try:
+        with Image.open(path) as im:
+            grey = im.convert("L")
+            if size is not None and grey.size != tuple(size):
+                grey = grey.resize(tuple(size), Image.NEAREST)
+            return np.asarray(grey) >= 128
+    except (OSError, ValueError):
+        return None
+
+
+def is_empty(record: Any) -> bool:
+    """Whether a composite record (or a sidecar's ``composite`` value) is EMPTY."""
+    return record == EMPTY or (isinstance(record, dict) and record.get("empty") is True)
+
+
+def sidecar_fields(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The sidecar fields of a composite: ``fit: "composite"`` and the record
+    under ``composite`` — for an EMPTY one ``composite: "empty"`` and the
+    record under ``composite_record`` (module docstring)."""
+    if is_empty(record):
+        return {"fit": "composite", "composite": EMPTY, "composite_record": record}
+    return {"fit": "composite", "composite": record}
+
+
 def summary(record: Dict[str, Any]) -> str:
     """One attempt's numbers in a refusal text."""
     coverage = record.get("coverage") or {}
+    if is_empty(record):
+        return (f"IoU {float(record.get('iou') or 0.0):.3f}, coverage n/a (region "
+                f"{float(coverage.get('region') or 0.0):.4f}): {EMPTY} — the base view unchanged")
     return (f"IoU {float(record.get('iou') or 0.0):.3f}, coverage {float(coverage.get('score') or 0.0):.3f}"
             f" (region {float(coverage.get('region') or 0.0):.3f}), mask {float(record.get('mask_share') or 0.0):.3f}"
             + (f": {'; '.join(record.get('reasons') or [])}" if record.get("reasons") else ""))

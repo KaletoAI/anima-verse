@@ -37,9 +37,18 @@ Expected values, derived by hand:
     1.1 (x - 150), 420 rows): height 1.1 x 320 = 352, top 20, centre 150
     -> scale 320 / 352 = 0.9091, dx 0.0, dy 40 - 20 = 20.0; iou >= 0.99
     (the same figure resampled), ok.
-[3] draft = base: no draft cell differs -> region 0, "nothing to put on"
-    with the rule's minimum ("< 0.03" outfit, "< 0.002" piece), coverage
-    0.0, ok False, and the composite is the base exactly.
+[3] draft = base: no draft cell differs -> region 0 < the rule's minimum
+    (0.03 outfit, 0.002 piece) with iou 1.0 >= 0.93 -> EMPTY (fix round 1):
+    ok True, reasons [], empty True, coverage score None (n/a), region 0.0,
+    mask_share 0.0, seam_de None, and the composite is the base exactly —
+    for both rules. sidecar_fields -> {fit "composite", composite "empty",
+    composite_record = the record}; a non-empty record -> {fit, composite =
+    the record}. summary -> "IoU 1.000, coverage n/a (region 0.0000): empty
+    — the base view unchanged". Pure ``check``: nothing + iou 0.95 -> [];
+    nothing (region 0.01, rule outfit) + iou 0.90 -> ["nothing to put on
+    (garment region 0.0100 < 0.03)", "the draft does not line up with the
+    base (IoU 0.900 < 0.93)"] — a draft that does not line up is no
+    measurement of "nothing".
 [4] ALIGNMENT refused: the arms raised above the head (arms rows 20..175,
     head rows 100..160, torso 170..280, legs 280..360) -> bbox rows
     20..360 = 340, scale 320 / 340 = 0.9412, dy 40 - 20 = 20.0, dx 0.0;
@@ -61,6 +70,9 @@ Expected values, derived by hand:
     (b) composite 1 fails, 2 passes -> two drafts, the second published:
         sidecar fit "composite", composite = record 2, fit_gate chosen 2
         with both attempts; drafts/tpose_back_<sig>.png = draft 2's bytes.
+    (c) the composite EMPTY (stub record empty True, ok True) -> one draft,
+        published; sidecar fit "composite", composite "empty",
+        composite_record.empty True (base_body.composite_sidecar).
     The garment chain's own refusal (worn back, rule "piece") is
     smoke_garment_clothing_back.py [4].
 [6] Job counts: dressed_view_jobs() = 1 + (views - 1): front + back -> 2,
@@ -80,7 +92,28 @@ Expected values, derived by hand:
     record except runtime_s.
 [10] Old-code proof: ``git show eaa0fd58:app/imagegen/occasions.py`` holds
     '"outfit_back": _image(' — on eaa0fd58 the back's second step was a
-    routed model fit (a hub job), the occasion this task removes.
+    routed model fit (a hub job), the occasion this task removes. And
+    ``git show 01bcf015:app/core/view_composite.py`` has no ``EMPTY``: there
+    draft = base was refused (fix round 1 changes that).
+[11] Support (fix round 1): compose(base, D, mask_target=S) writes S, a grey
+    PNG of the base's size. It holds R (the mask is R + its halo) and lies
+    inside R grown by 4 (halo, [1]: inside the 88 x 88 box) + SUPPORT_GROW 4
+    = 8 px (chessboard distance: a disk of radius 4 around a point of that
+    box stays inside the box grown by 4); outside S the
+    written composite equals the base exactly (RGBA bytes; ``_blend``
+    changes nothing beyond the mask grown by 2 px). draft = base -> S all 0.
+    read_support of a missing file -> None; with size (150, 200) -> a
+    200 x 150 bool array (nearest).
+[12] The removed fit occasions' character globs (fix round 1):
+    figure_migration.drop_fit_globs_once on a temp world with A
+    (outfit_imagegen {workflow "Z*", outfit_back_workflow "Q*",
+    outfit_side_workflow "Q*"}), B (outfit_imagegen {workflow "Z*"}) and C,
+    dormant (outfit_imagegen {outfit_side_workflow "Q*"}) -> {A:
+    [outfit_back_workflow, outfit_side_workflow], C: [outfit_side_workflow]};
+    A keeps {workflow "Z*"}, B unchanged, C {}; exactly ONE info line
+    "Removed fit occasions: outfit_imagegen.outfit_back_workflow /
+    outfit_side_workflow dropped from 2 character(s): A (2), C (1)"; a second
+    run -> None, no line.
 """
 from __future__ import annotations
 
@@ -171,13 +204,23 @@ def main() -> int:
         check("alignment", rec["alignment"], {"scale": 0.9091, "dx": 0.0, "dy": 20.0})
         check("iou >= 0.99, ok", (rec["iou"] >= 0.99, rec["ok"]), (True, True))
 
-        print("[3] nothing to put on")
-        out, rec = vc.composite_arrays(base, base.copy(), rule="outfit")
-        check("outfit", (rec["ok"], rec["reasons"], rec["coverage"]["score"]),
-              (False, ["nothing to put on (garment region 0.0000 < 0.03)"], 0.0))
-        check("composite = base", bool(np.array_equal(out, base)), True)
-        _o, rec = vc.composite_arrays(base, base.copy(), rule="piece")
-        check("piece", rec["reasons"], ["nothing to put on (garment region 0.0000 < 0.002)"])
+        print("[3] nothing to put on: EMPTY")
+        for rule in ("outfit", "piece"):
+            out, rec = vc.composite_arrays(base, base.copy(), rule=rule)
+            check(f"{rule}: empty, accepted", (rec["ok"], rec["reasons"], rec.get("empty"), rec["coverage"]["score"],
+                                               rec["coverage"]["region"], rec["mask_share"], rec["seam_de"]),
+                  (True, [], True, None, 0.0, 0.0, None))
+            check(f"{rule}: composite = base", bool(np.array_equal(out, base)), True)
+        check("sidecar fields (empty)", vc.sidecar_fields(rec),
+              {"fit": "composite", "composite": "empty", "composite_record": rec})
+        check("sidecar fields (applied)", vc.sidecar_fields({"ok": True}), {"fit": "composite", "composite": {"ok": True}})
+        check("summary (empty)", vc.summary(rec), "IoU 1.000, coverage n/a (region 0.0000): empty — the base view unchanged")
+        check("check: nothing, aligned", vc.check({"iou": 0.95, "coverage": {"score": 0.0, "region": 0.0, "nothing": True}}),
+              [])
+        check("check: nothing, not aligned",
+              vc.check({"iou": 0.9, "rule": "outfit", "coverage": {"score": 0.0, "region": 0.01, "nothing": True}}),
+              ["nothing to put on (garment region 0.0100 < 0.03)",
+               "the draft does not line up with the base (IoU 0.900 < 0.93)"])
 
         print("[4] alignment refused")
         up = figure([(100, 160, 125, 175), (160, 170, 140, 160), (170, 280, 100, 200), (280, 360, 105, 145),
@@ -214,9 +257,12 @@ def main() -> int:
             path.with_suffix(".json").write_text(json.dumps({"n": len(renders)}))
             return path
 
-        def compose(base_view, draft_file, target, *, rule="outfit", background=None):
+        def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None):
             ok = plan.pop(0)
             Path(target).write_bytes(Path(draft_file).read_bytes())
+            if ok == "empty":
+                return {"version": 2, "rule": rule, "ok": True, "empty": True, "iou": 1.0, "reasons": [],
+                        "coverage": {"score": None, "region": 0.0, "nothing": True}, "mask_share": 0.0}
             rec = {"version": 1, "rule": rule, "ok": ok, "iou": 0.97 if ok else 0.9,
                    "coverage": {"score": 0.9, "region": 0.2}, "mask_share": 0.3}
             rec["reasons"] = vc.check(rec)
@@ -259,6 +305,13 @@ def main() -> int:
                                   len(meta["fit_gate"]["attempts"])), ("composite", 0.97, 2, 2))
             published = refs / base_body.DRAFT_DIR / "tpose_back_sig.png"
             check("(b) draft 2 published", published.is_file() and published.read_bytes() == path.read_bytes(), True)
+            renders.clear()
+            plan[:] = ["empty"]
+            path, warning = base_body._dress_view("Demo", "back", **kw)
+            meta = json.loads(path.with_suffix(".json").read_text())
+            check("(c) empty: one draft, published", (renders, path.name, warning), (["back"], stored.name, None))
+            check("(c) sidecar", (meta.get("fit"), meta.get("composite"), (meta.get("composite_record") or {}).get("empty")),
+                  ("composite", "empty", True))
         finally:
             base_body.render_draft, base_body.draft_prompt, vc.compose, base_body.view_guard = real
             base_body_gates.noise_gate, base_body_gates.framing_gate = real_gates
@@ -347,6 +400,58 @@ def main() -> int:
             check("eaa0fd58 routed the back fit", '"outfit_back": _image(' in old.stdout, True)
         else:
             print("  SKIP eaa0fd58 not in this clone")
+        old = subprocess.run(["git", "-C", str(ROOT), "show", "01bcf015:app/core/view_composite.py"],
+                             capture_output=True, text=True)
+        if old.returncode == 0:
+            check("01bcf015 refused an empty draft (no EMPTY)", "EMPTY" in old.stdout, False)
+        else:
+            print("  SKIP 01bcf015 not in this clone")
+
+        print("[11] support")
+        from PIL import Image
+        support_file = root / "out" / "s.png"
+        vc.compose(base_back, draft_file, root / "out" / "d.png", mask_target=support_file)
+        with Image.open(support_file) as im:
+            check("support: grey, base size", (im.mode, im.size), ("L", (300, 400)))
+        sup = vc.read_support(support_file)
+        check("support holds R, inside R + 8 px", (bool(sup[r].all()), bool((sup & ~ndi.binary_dilation(r, np.ones((3, 3), bool), iterations=8)).any())),
+              (True, False))
+        with Image.open(root / "out" / "d.png") as im:
+            written = np.asarray(im.convert("RGBA"), dtype=np.int16)
+        check("outside the support = the base", int(np.abs(written - np.round(base).astype(np.int16))[~sup].max()), 0)
+        vc.compose(base_back, save(base, root / "in" / "same.png"), root / "out" / "e.png", mask_target=support_file)
+        check("empty: support all 0", bool(vc.read_support(support_file).any()), False)
+        check("missing support", vc.read_support(root / "out" / "none.png"), None)
+        check("support resized", vc.read_support(support_file, (150, 200)).shape, (200, 150))
+
+        print("[12] the removed fit globs leave the profiles")
+        from app.core import db, figure_migration
+        paths.get_config_path().write_text(json.dumps({}))
+        config.load(paths.get_config_path(), instance_path=root / "instance" / "config.json")
+        db.init_schema()
+        from app.models.character import get_character_profile, save_character_profile
+        globs = {"A": {"workflow": "Z*", "outfit_back_workflow": "Q*", "outfit_side_workflow": "Q*"},
+                 "B": {"workflow": "Z*"}, "C": {"outfit_side_workflow": "Q*"}}
+        for name, imagegen in globs.items():
+            check(f"create {name}", save_character_profile(name, {"template": "human-roleplay", "gender": "female",
+                                                                  "outfit_imagegen": dict(imagegen)},
+                                                           create_new=True), True)
+        with db.transaction() as conn:
+            conn.execute("UPDATE characters SET status='dormant' WHERE name='C'")
+        lines.clear()
+        real_logger = figure_migration.logger
+        figure_migration.logger = Rec()
+        try:
+            result = figure_migration.drop_fit_globs_once()
+            check("dropped", result, {"A": ["outfit_back_workflow", "outfit_side_workflow"],
+                                      "C": ["outfit_side_workflow"]})
+            check("profiles", [get_character_profile(n).get("outfit_imagegen") for n in "ABC"],
+                  [{"workflow": "Z*"}, {"workflow": "Z*"}, {}])
+            check("one log line", lines, ["Removed fit occasions: outfit_imagegen.outfit_back_workflow / "
+                                          "outfit_side_workflow dropped from 2 character(s): A (2), C (1)"])
+            check("once", (figure_migration.drop_fit_globs_once(), len(lines)), (None, 1))
+        finally:
+            figure_migration.logger = real_logger
 
     print("ALL OK" if not FAILS else f"FAILED: {', '.join(FAILS)}")
     return 1 if FAILS else 0
