@@ -1499,7 +1499,9 @@ async def generate_character_model_refs(character_name: str,
     main or one body-form T-pose view, leaving other renders untouched.
     With ``view: "face"`` the image dialog may add ``prompt``, ``backend``
     (explicit, no fallback), ``loras`` and ``negative_prompt`` — for this
-    run only, nothing is stored."""
+    run only, nothing is stored. 409 ``figure_build.VIEWS_BUILD_RUNNING``
+    for the dressed views of a base-body character while its Build runs
+    (ruling F16)."""
     from app.core.model_refs import (
         REF_KINDS, tpose_views_for_character, current_outfit_state, find_ref_image,
         trigger_now,
@@ -1548,8 +1550,21 @@ async def generate_character_model_refs(character_name: str,
         if current_profile_image(character_name) is None:
             raise HTTPException(status_code=409,
                                 detail="No profile picture. Set a profile picture, then render the face view")
+    else:
+        _refuse_views_while_building(character_name, kinds)
     trigger_now(character_name, kinds=kinds, tpose_view=view, face_render=face_render)
     return {"status": "generating"}
+
+
+def _refuse_views_while_building(character_name: str, kinds) -> None:
+    """409 ``figure_build.VIEWS_BUILD_RUNNING`` for a manual render of the dressed views (kind ``tpose``; None
+    = the auto toggles) of a base-body-pipeline character while its Build runs (ruling F16): never a 200 whose
+    render waits unseen behind the Build."""
+    from app.core import base_body, figure_build
+    from app.core.model_refs import get_auto_kinds
+    tpose = "tpose" in kinds if kinds is not None else bool(get_auto_kinds(character_name).get("tpose"))
+    if tpose and base_body.is_base_pipeline(character_name) and figure_build.running(character_name):
+        raise HTTPException(status_code=409, detail=figure_build.VIEWS_BUILD_RUNNING)
 
 
 #: 409 of a pose render on the base-body pipeline without the base views.
@@ -1888,6 +1903,9 @@ class GarmentRunRequest(BaseModel):
     # "open" / "closed" for a closable clothing piece (plan 2026-11-12-unified-worn-pieces Task 11b); None = the
     # state it is worn in when the run starts.
     state: Optional[str] = None
+    # With a step: True runs the chain FROM it (Re-render, the hair row's Regenerate); False (default) runs only
+    # that step (the steps dialog's buttons, fix round T12-F1 ruling F13 d). Without a step: always the chain.
+    chain: bool = False
 
 
 class GarmentMeshFetchRequest(BaseModel):
@@ -2305,8 +2323,12 @@ def set_character_outfit_options(character_name: str, body: OutfitOptionsRequest
 def run_character_garment(character_name: str, item_id: str, body: GarmentRunRequest,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """(Re-)run a garment's chain in a worker thread: from the first missing
-    step, or from ``step`` (``force``: re-run it — only ``view`` for an image
-    step — and everything after it). 400 for an unknown step/view, an item
+    step ("Run all"), or ONLY ``step`` (``force``: re-run it — only ``view``
+    for an image step; ruling F13 d — the steps dialog's buttons), or with
+    ``chain`` the chain FROM ``step`` (everything after it too: Re-render,
+    the hair row's Regenerate). Footwear keeps the chain from ``step``: its
+    step regenerate starts a new shoe source whose later steps do not exist
+    yet. 400 for an unknown step/view, an item
     that is no garment of this character, or a character off the base-body
     pipeline. Never refused for a running run: the run is queued behind the
     character's running garment run (``garments.start_garment``) —
@@ -2321,7 +2343,8 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
         if base_body.current_base(character_name) is None:
             raise ValueError(f"{character_name} is not on the base-body pipeline")
         return garments.start_garment(character_name, item_id, steps=body.step, view=body.view,
-                                      force=body.force, state=body.state)
+                                      force=body.force, state=body.state,
+                                      only=bool(body.step) and not body.chain)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

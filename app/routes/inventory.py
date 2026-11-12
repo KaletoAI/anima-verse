@@ -374,7 +374,8 @@ def get_item_wearers_route(item_id: str, _admin=Depends(require_admin)) -> Dict[
     if unknown:
         cost = {"hub_jobs": None, "note": "cost unknown — " + ", ".join(unknown)}
     else:
-        cost = {"hub_jobs": total, "note": f"{total} hub jobs (first attempts)" if rows else "nobody wears it"}
+        cost = {"hub_jobs": total,
+                "note": figure_build.COST_NOTE.format(total=total) if rows else "nobody wears it"}
     return {"item_id": item_id, "mode": garment_set.mesh_mode_of(item) or "", "wearers": rows, "cost": cost}
 
 

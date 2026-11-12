@@ -79,14 +79,18 @@ Expected, derived by hand from the brief:
     "tpose") (the debounce timer body) -> THREE render calls (user decision
     2026-11-09: only front and back are dressed, the back in two steps):
       front edit  stem tpose_<osig> in model_refs, reference tpose_<bsig>.png
-                  on grey (pixel (0,0) = (128,128,128), (4,4) = BASE_PX
-                  front), prompt starts "Keep the image exactly as it is" and
+                  centred on a grey SQUARE (fix round T12-F1, ruling F14 g:
+                  ``garment_images.square_frame`` — side max(8, 8) rounded up
+                  to SIZE_STEP 16 = 16, offset ((16-8)//2) = (4, 4); pixel
+                  (0,0) = (128,128,128) the padding, (4,4) = the source's
+                  transparent corner (0,0) -> grey as well), prompt starts "Keep the image exactly as it is" and
                   names the dress, occasion outfit_front, use case tpose,
                   sidecar_extra {base_signature, dressed: true,
                   base_image_sha256 = sha256(tpose_<bsig>.png)};
       back draft  stem tpose_back_<osig> in model_refs/drafts, reference = the
-                  dressed front tpose_<osig>.png (opaque stub -> handed as is,
-                  pixel = colour_of("tpose_<osig>")), bare_prompt and
+                  dressed front tpose_<osig>.png on the same 16 x 16 grey
+                  square (F14 g; (0,0) grey padding, (4,4) = the opaque stub's
+                  colour_of("tpose_<osig>")), bare_prompt and
                   extra_negative = draft_prompt(Demo, "back"), no character
                   block (review 2026-11-11), occasion outfit_back_draft, use
                   case base_view_back, back_view;
@@ -101,7 +105,8 @@ Expected, derived by hand from the brief:
                   (0,0) transparent; bare_prompt = FIT_PROMPT, no
                   extra_negative, occasion outfit_back, use case outfit_fit,
                   rendered at the canvas size 8 x 8 (the base back's; front
-                  edit and draft at _tpose_size()), back_view, sidecar_extra {base_signature, dressed,
+                  edit and draft at their square canvas 16 x 16, F14 g),
+                  back_view, sidecar_extra {base_signature, dressed,
                   base_image_sha256 = sha256(tpose_back_<bsig>.png),
                   back_draft = the draft's name, back_draft_sha256}; the
                   stub images are opaque, so both gates skip -> attempt 1
@@ -486,9 +491,11 @@ def main() -> int:
             check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
         dress = inventory.add_item(name="dress", category="outfit_piece",
                                    prompt_fragment="a fitted red cotton dress with white sneakers",
-                                   outfit_piece={"slots": ["top"], "covers": [], "outfit_types": ["casual"]})["id"]
+                                   outfit_piece={"slots": ["top"], "covers": [], "outfit_types": ["casual"],
+                                                 "mesh_mode": "painted"})["id"]
         scarf = inventory.add_item(name="scarf", category="outfit_piece", prompt_fragment="a green wool scarf",
-                                   outfit_piece={"slots": ["neck"], "covers": [], "outfit_types": ["casual"]})["id"]
+                                   outfit_piece={"slots": ["neck"], "covers": [], "outfit_types": ["casual"],
+                                                 "mesh_mode": "painted"})["id"]
         for name in ("Demo", "DemoOld"):
             for item in (dress, scarf):
                 check(f"inventory {name} {item}", inventory.add_to_inventory(name, item), True)
@@ -646,12 +653,14 @@ def main() -> int:
             front_r, draft_r, fit_r = (dressed_renders + [{}] * 3)[:3]
             check("references", [r.get("reference_name") for r in dressed_renders],
                   [f"tpose_{bsig}.png", f"tpose_{osig}.png", f"tpose_back_{bsig}.png"])
-            # Front edit: the base front on grey. Draft: the dressed front, opaque
-            # in this stub, handed as stored. Fit: the base back keeps its own
-            # matte (corner transparent -> black in RGB, (4,4) its pixel).
-            check("references on grey / as delivered / cut out", [r.get("reference_px") for r in dressed_renders],
-                  [((128, 128, 128), BASE_PX["front"]),
-                   (colour_of(f"tpose_{osig}"), colour_of(f"tpose_{osig}")),
+            # Front edit and draft: their source on the 16 x 16 grey square at
+            # offset (4, 4) (F14 g) — (4,4) is the source's corner: the base
+            # front's transparent corner -> grey, the opaque draft stub's colour.
+            # Fit: the base back keeps its own matte (corner transparent -> black
+            # in RGB, (4,4) its pixel).
+            check("references on grey / on grey / cut out", [r.get("reference_px") for r in dressed_renders],
+                  [((128, 128, 128), (128, 128, 128)),
+                   ((128, 128, 128), colour_of(f"tpose_{osig}")),
                    ((0, 0, 0), BASE_PX["back"])])
             # The opaque draft gets the matte stub (figure = the 4x4 centre)
             # once, is scaled to the base figure's height 1 (the pixel (4,4)
@@ -673,10 +682,9 @@ def main() -> int:
             check("occasions", [r.get("occasion") for r in dressed_renders],
                   ["outfit_front", "outfit_back_draft", "outfit_back"])
             # The fit renders at the canvas size = the 8x8 base back (square
-            # T-pose aspect); front edit and draft at the T-pose size.
-            tsize = model_refs._tpose_size()
+            # T-pose aspect); front edit and draft at their square canvas 16 (F14 g).
             check("render sizes", [(r.get("override_width"), r.get("override_height")) for r in dressed_renders],
-                  [tsize, tsize, (8, 8)])
+                  [(16, 16), (16, 16), (8, 8)])
             check("use cases", [r.get("image_use_case") for r in dressed_renders],
                   ["outfit_edit", "base_view_back", "outfit_fit"])
             check("character loras", [r.get("character_loras") for r in dressed_renders], [True] * 3)

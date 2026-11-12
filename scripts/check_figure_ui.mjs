@@ -95,6 +95,17 @@
  *      (lib/api.ts: POST `/outfit-options/piece-state` with {item_id, state}); the checkbox PUTs the whole
  *      outfit_piece with `closable`; ItemForm shows "Open / closed: yes — set in a wearer's Wardrobe" and
  *      itemsModel's draftToBody does not send `closable` (like `mesh_mode`).
+ * [16] Fix round T12-F1 (rulings F13 a–c), changeLine(change) — a pending change names its cost:
+ *       {key 'hair', name 'Hair', note 'in the body → plain body rebuild', jobs 9}
+ *         → "Hair · in the body → plain body rebuild, 9 hub jobs" (F13 a)
+ *       {key 'j:state', name 'Black Lederjacket', note 'worn open — open mesh missing', jobs 6}
+ *         → "Black Lederjacket worn open — open mesh missing (6 hub jobs)" (F13 b: ONE row, the name first)
+ *       {key 'j', name 'Shirt', note 'x', jobs 0} → "Shirt: x" (nothing planned: no cost)
+ *       {key 'j', name 'Shirt', jobs null} → "Shirt (cost unknown)" · without `jobs` → "Shirt"
+ *     hairState({state 'pending', rebuild true, jobs 9, note n}) → text "⏳ plain body rebuild · 9 hub jobs",
+ *     sub n; without `rebuild` → "⏳ HairDeck · 9 hub jobs". ESTIMATE_NOTE = "Hub jobs are an estimate —
+ *     retries extra" (F13 c) and FieldFigure renders it under the Build button and the changes through
+ *     changeLine.
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -332,6 +343,25 @@ check('[15] Items form line', src('frontend/src/tabs/items/ItemForm.tsx')
   .includes(`t("Open / closed: yes — set in a wearer's Wardrobe")`), true);
 const toBody = (src('frontend/src/tabs/items/itemsModel.ts').split('body.outfit_piece = {')[1] || '').split('}')[0];
 check('[15] draftToBody does not send closable', [toBody.length > 0, /closable/.test(toBody)], [true, false]);
+
+// [16] fix round T12-F1
+check('[16] hair rebuild', m.changeLine({ key: 'hair', name: 'Hair', wanted: 'body', delivered: 'hairdeck',
+  note: 'in the body → plain body rebuild', jobs: 9 }), 'Hair · in the body → plain body rebuild, 9 hub jobs');
+check('[16] open mesh missing', m.changeLine({ key: 'j:state', name: 'Black Lederjacket', wanted: 'open',
+  delivered: 'closed', note: 'worn open — open mesh missing', jobs: 6 }),
+  'Black Lederjacket worn open — open mesh missing (6 hub jobs)');
+check('[16] nothing planned', m.changeLine({ key: 'j', name: 'Shirt', wanted: 'own', delivered: 'painted',
+  note: 'x', jobs: 0 }), 'Shirt: x');
+check('[16] unknown', m.changeLine({ key: 'j', name: 'Shirt', wanted: 'own', delivered: 'painted', jobs: null }),
+  'Shirt (cost unknown)');
+check('[16] no jobs field', m.changeLine({ key: 'j', name: 'Shirt', wanted: 'own', delivered: 'painted' }), 'Shirt');
+check('[16] hair state rebuild', m.hairState({ mode: 'body', state: 'pending', note: 'n', jobs: 9, rebuild: true }),
+  { text: '⏳ plain body rebuild · 9 hub jobs', sub: 'n' });
+check('[16] hair state HairDeck', m.hairState({ mode: 'hairdeck', state: 'pending', note: '', jobs: 9 }).text,
+  '⏳ HairDeck · 9 hub jobs');
+check('[16] estimate note', m.ESTIMATE_NOTE, 'Hub jobs are an estimate — retries extra');
+check('[16] FieldFigure uses them', [/t\(ESTIMATE_NOTE\)/.test(fieldFigure),
+  /data\.changes\.map\(\(c\) => changeLine\(c, t\)\)/.test(fieldFigure)], [true, true]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

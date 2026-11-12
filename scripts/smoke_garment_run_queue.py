@@ -73,7 +73,7 @@ def main() -> int:
         live_lock = threading.Lock()
         gate_a = threading.Event()
 
-        def recorder(character_name, item_id, *, steps=None, view=None, force=False, state=None):
+        def recorder(character_name, item_id, *, steps=None, view=None, force=False, state=None, only=False):
             with live_lock:
                 live["now"] += 1
                 live["max"] = max(live["max"], live["now"])

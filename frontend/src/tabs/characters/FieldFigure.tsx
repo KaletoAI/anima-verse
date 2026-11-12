@@ -44,8 +44,8 @@ import { FigureBodyDetails } from './FigureBodyDetails'
 import { FigureStored } from './FigureStored'
 import { useFigure } from './useFigure'
 import {
-  BUILD_RUNNING_NOTE, BUILD_STATUS, HAIR_MODE_LABELS, MESH_MODE_LABELS, bodyLine, buildButton, hairState,
-  headerLine, stateMeshAction, wornState,
+  BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, bodyLine, buildButton,
+  changeLine, hairState, headerLine, stateMeshAction, wornState,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, HairMode, PieceState } from './figureModel'
 
@@ -186,7 +186,8 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
           <span>{t('Build automatically')}</span>
         </label>
       </div>
-      {button.disabled ? <div className="ga-hint">{button.disabled}</div> : null}
+      {button.disabled ? <div className="ga-hint">{button.disabled}</div>
+        : data.cost.hub_jobs ? <div className="ga-hint">{t(ESTIMATE_NOTE)}</div> : null}
       {running ? (
         <div className="ga-hint">
           {step ? `${t('Running')}: ${step.index && step.count ? `${step.index}/${step.count} ` : ''}${step.label}` : t('Running')}
@@ -195,7 +196,7 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
       ) : null}
       {data.changes.length ? (
         <div className="ga-hint">
-          {data.changes.map((c) => c.note ? `${t(c.name)}: ${t(c.note)}` : t(c.name)).join(' · ')}
+          {data.changes.map((c) => changeLine(c, t)).join(' · ')}
         </div>
       ) : null}
       {!running && failed.length ? (

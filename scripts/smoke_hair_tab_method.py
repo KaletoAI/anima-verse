@@ -77,7 +77,8 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     served_fsig F1, others [], counts still (1, 2) — the kept fit is served
     with 0 jobs.
 [8] Fix round 1 — a forced regenerate gives a NEW result: two POST run
-    {step "hairdeck", force true} send seeds 43 and 44 (the next seed after
+    {step "hairdeck", force true, chain true} (the hair row's Regenerate:
+    the step and the chain after it, ruling F13 d) send seeds 43 and 44 (the next seed after
     the highest the job record has seen: 42 -> 43 -> 44) to generate_hair;
     each re-fits ONLY the new seed — a regenerate's own seed is fitted first
     and published when it passes (ruling 2026-11-09): counts (1, 2) ->
@@ -443,7 +444,8 @@ def main() -> int:
             print("[8] forced HairDeck regenerate takes the next seed")
             hsig_before = (h.get("hairdeck") or {}).get("hsig")
             for n, want in ((1, (2, 3)), (2, (3, 4))):
-                r = client.post("/characters/Demo/garments/hair_demo/run", json={"step": "hairdeck", "force": True})
+                r = client.post("/characters/Demo/garments/hair_demo/run", json={"step": "hairdeck", "force": True,
+                                                                                     "chain": True})
                 check(f"forced {n} 202", r.status_code, 202)
                 wait_idle()
                 check(f"forced {n} counts", counts(), want)

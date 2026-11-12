@@ -684,8 +684,9 @@ export type RunMark = 'queued' | 'generating' | 'redo' | null
 
 /** How a tile of `step` (image steps: `view`) relates to the run this panel
  *  started: the targeted step waits (`queued`) or runs (`generating`); a later
- *  step of a forced run is redone after it (`redo`, until it runs) — the
- *  same view only, when the click named one. `order` = the method's steps. */
+ *  step of a forced CHAIN run (`chain`) is redone after it (`redo`, until it
+ *  runs) — the same view only, when the click named one; a step-only run
+ *  (the dialog's buttons) redoes nothing after it. `order` = the method's steps. */
 export function runMark(fb: RunFeedback | undefined, garment: GarmentRunState | null | undefined,
   order: readonly string[], step: string, view?: string): RunMark {
   const target = fb?.target
@@ -701,7 +702,7 @@ export function runMark(fb: RunFeedback | undefined, garment: GarmentRunState | 
   if (ri === si) return 'generating'
   if (ri > si) return null
   if (si === ti) return 'queued'
-  return target.force ? 'redo' : null
+  return target.force && target.chain ? 'redo' : null
 }
 
 /**

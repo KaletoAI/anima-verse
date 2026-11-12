@@ -131,6 +131,7 @@ export const BUILD_STATUS: Record<string, string> = {
   queued: 'Build queued after the running one',
   current: 'Nothing to build',
   off: 'Off the figure pipeline',
+  failed: 'Build failed — the profile could not be read',
 }
 
 // --- The Figure tab (Task 10; spec "The UI", rules for the buttons, ruling 8) ---------------------------
@@ -176,7 +177,21 @@ export interface FigureHairRow {
   mode: string
   state: 'ready' | 'failed' | 'building' | 'pending'
   note: string
+  /** Hub jobs of its plan step — the plain body's rebuild when `rebuild` (0 = none planned, null = unknown). */
   jobs: number | null
+  /** The hair is wanted in the body and only the plain body's rebuild puts it there (ruling F13 a). */
+  rebuild?: boolean
+}
+
+/** One pending change (`figure.pending_changes` + `figure_build._with_jobs`). */
+export interface FigureChange {
+  key: string
+  name: string
+  wanted: string
+  delivered: string
+  note?: string
+  /** Hub jobs of the plan step that builds it (0 = none planned, null = unknown). */
+  jobs?: number | null
 }
 
 export interface FigureBodyPart {
@@ -191,7 +206,7 @@ export interface FigurePayload {
   humanoid: boolean
   auto_build: boolean
   status: FigureStatus
-  changes: Array<{ key: string; name: string; wanted: string; delivered: string; note?: string }>
+  changes: FigureChange[]
   cost: { hub_jobs: number | null; note: string; steps: FigureStep[] }
   build: {
     running: boolean
@@ -232,6 +247,26 @@ function jobsTr(hubJobs: number | null, t: Tr): string {
 function imageJobsTr(jobs: number | null, t: Tr): string {
   if (jobs === null) return t('cost unknown')
   return jobs === 1 ? t('1 image job') : t('{n} image jobs').replace('{n}', String(jobs))
+}
+
+/** The note of the hair's change while the plain body must be rebuilt with the hair (`figure.HAIR_REBUILD`). */
+export const HAIR_REBUILD_NOTE = 'in the body → plain body rebuild'
+/** Written under the Build button: the cost is an estimate of first attempts (ruling F13 c). */
+export const ESTIMATE_NOTE = 'Hub jobs are an estimate — retries extra'
+
+/** One pending change as a line, its cost named (fix round T12-F1, F13 a/b):
+ *  the hair's rebuild → "Hair · in the body → plain body rebuild, 9 hub jobs";
+ *  an open / closed state → "Black jacket worn open — open mesh missing (6 hub jobs)";
+ *  else "Name: note (N hub jobs)" — the cost only when something is planned. */
+export function changeLine(c: FigureChange, t: Tr = EN): string {
+  const cost = c.jobs === undefined || c.jobs === 0 ? '' : jobsTr(c.jobs, t)
+  if (c.key === 'hair' && c.note === HAIR_REBUILD_NOTE) {
+    return `${t(c.name)} · ${t(c.note)}${cost ? `, ${cost}` : ''}`
+  }
+  const head = c.note
+    ? (c.key.endsWith(':state') ? `${c.name} ${t(c.note)}` : `${t(c.name)}: ${t(c.note)}`)
+    : t(c.name)
+  return cost ? `${head} (${cost})` : head
 }
 
 /** The header's status line (spec sketch): "Status: up to date" or "2 changes · Build (7 hub jobs)". */
@@ -300,7 +335,13 @@ export function hairState(hair: FigureHairRow, t: Tr = EN): { text: string; sub:
     case 'ready': return { text: t('✓ ready'), sub: null }
     case 'failed': return { text: t('failed — {reason}').replace('{reason}', hair.note), sub: null }
     case 'building': return { text: t('⏳ building'), sub }
-    default: return { text: t('⏳ HairDeck · {cost}').replace('{cost}', jobsTr(hair.jobs, t)), sub }
+    default:
+      return {
+        text: hair.rebuild
+          ? t('⏳ plain body rebuild · {cost}').replace('{cost}', jobsTr(hair.jobs, t))
+          : t('⏳ HairDeck · {cost}').replace('{cost}', jobsTr(hair.jobs, t)),
+        sub,
+      }
   }
 }
 

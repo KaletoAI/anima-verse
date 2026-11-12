@@ -286,7 +286,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
           title={emptyBlocked || t('1 image job, shared by every wearer')}
           ariaLabel={`${empty?.url ? t('Regenerate') : t('Generate')} · ${label('empty')}`}
           label={empty?.url ? t('Regenerate') : t('Generate')}
-          onClick={() => onRun({ step: 'empty', force: true })}
+          onClick={() => onRun({ step: 'empty', force: true, chain: true })}
         />
         <AttemptThumbs attempts={emptyAttempts} label={label('empty')} chips={EMPTY_CHIPS} limits={limits.empty}
           view="side" />
@@ -350,7 +350,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
           title={meshBlocked || t('1 mesh job, shared by every wearer')}
           ariaLabel={`${mesh?.url ? t('Regenerate') : t('Generate')} · ${label('mesh')}`}
           label={mesh?.url ? t('Regenerate') : t('Generate')}
-          onClick={() => onRun({ step: 'mesh', force: true })}
+          onClick={() => onRun({ step: 'mesh', force: true, chain: true })}
         />
         <MeshJobFetch url={meshBlocked ? null : meshFetchUrl} disabled={busy} onDone={() => onMeshFetched?.()} />
       </div>
@@ -519,7 +519,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
               title={blocked || fitTitle}
               ariaLabel={`${t('Re-fit')} · ${label}`}
               label={t('Re-fit')}
-              onClick={() => onRun({ step: 'fit', force: true })}
+              onClick={() => onRun({ step: 'fit', force: true, chain: true })}
             />
           ) : null}
         </div>

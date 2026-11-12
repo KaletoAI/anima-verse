@@ -312,8 +312,16 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
             fit = None
         else:
             # The fit of the CURRENT method (garment_store.accepted_fit): a switched
-            # hair method serves that method's fit, or no hair before it has one.
+            # hair method serves that method's fit, or no hair before it has one —
+            # except hair switched INTO the body on a plain body still rendered bald:
+            # its HairDeck hair stays until the rebuild (figure.interim_hair_fit, ruling F13 a).
             fit = garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
+            if fit is None and item_id not in clothing and kind == "hair":
+                from app.core import figure
+                stand_in = figure.interim_hair_fit(character_name, bsig=base[0], base_sha=base[1], profile=profile)
+                from app.core.garment_hair import worn_hair_id
+                if stand_in is not None and worn_hair_id(character_name, profile) == item_id:
+                    fit = stand_in
             parsed = garment_store.parse_name(fit[0]) if fit else None
             if not parsed:
                 continue

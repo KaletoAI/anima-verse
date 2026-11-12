@@ -1318,7 +1318,8 @@ def body_fit_info(character_name: str, item_id: str, *,
 # --- The run --------------------------------------------------------------------
 
 def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
-                view: Optional[str] = None, force: bool = False, state: Optional[str] = None) -> Dict[str, Any]:
+                view: Optional[str] = None, force: bool = False, state: Optional[str] = None,
+                only: bool = False) -> Dict[str, Any]:
     """Run the garment chain of ``item_id`` (blocking, minutes; one run per
     character — waits for ``garment_store.char_lock``).
 
@@ -1327,6 +1328,15 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     a replaced prepared mesh). A step name (or several): from the earliest of
     them; with ``force`` that step re-runs — only for ``view`` when given —
     and every later step runs again. Without ``force`` a cached step is reused.
+
+    ``only`` (the steps dialog's step buttons, fix round T12-F1 ruling F13 d):
+    the named steps and nothing after them — the run ends at the LAST named
+    step. A new image already drops the later image steps of its view when it
+    is published (``garment_images._drop_later``) and the mesh with it
+    (``_drop_mesh``); the fit then reads ``outdated`` and stays served (R11)
+    until a chain run ("Run all", the Build) makes the rest again. A group
+    whose images were copied from the previous base still restarts at its
+    first step (two bases never mix) and runs up to the named step.
 
     The steps are those of the item's CURRENT method
     (``garment_store.steps_for``; hair by HairDeck: ``hairdeck``, ``fit``;
@@ -1354,7 +1364,7 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     _check_view(kind, view)
     from app.core import garment_store as gs
     with gs.char_lock(character_name):
-        result = _run_locked(character_name, item, kind, wanted, view, bool(force), state)
+        result = _run_locked(character_name, item, kind, wanted, view, bool(force), state, only=bool(only))
         _note_outcome(character_name, item_id, result)
     if result.get("ok") and "fit" in (result.get("ran") or []) and kind in _grafted_kinds():
         # Outside the run lock: the piece is ready — a "piece_ready" request of the
@@ -1438,6 +1448,12 @@ HUB_JOBS: Dict[str, Dict[str, int]] = {
 }
 
 
+#: Hub jobs of an edit step's BACK view on first attempts (part of ``HUB_JOBS``): the worn back is a draft + a
+#: fit, the ghost back one edit. The OPEN state of a closable piece copies them from the closed state when it
+#: has them (``garment_images.closed_back``, ruling F15 i-1) — 0 jobs.
+BACK_JOBS: Dict[str, int] = {"worn": 2, "ghost": 1}
+
+
 def _unknown_estimate(note: str) -> Dict[str, Any]:
     return {"steps": [], "hub_jobs": None, "note": note, "refit": False}
 
@@ -1458,7 +1474,9 @@ def run_estimate(character_name: str, item_id: str, *,
     is 0 and the note names the full cost a refused refit falls back to.
     ``state``: the open / closed state of a closable clothing piece whose
     chain is estimated (None: the worn state) — its own fsig, its own
-    source (``outfit_options.with_item_state``)."""
+    source (``outfit_options.with_item_state``). The OPEN state's image
+    steps lose their ``BACK_JOBS`` where the closed state has the back
+    (ruling F15 i-1: copied, never rendered with state words)."""
     from app.core import base_body, garment_source
     from app.core import garment_store as gs
     from app.models.character import get_character_profile
@@ -1503,8 +1521,17 @@ def run_estimate(character_name: str, item_id: str, *,
         return {"steps": [], "hub_jobs": 0, "note": "nothing to run", "refit": False}
     steps = list(order[order.index(first):])
     parts = [(s, int(costs.get(s, 0))) for s in steps]
+    reused = []
+    if kind == _clothing() and method == gs.EDIT_CHAIN and state == "open":
+        # Ruling F15 i-1: the open state's backs are the closed state's — copied when it has them.
+        from app.core import garment_images
+        reused = [s for s in steps if s in BACK_JOBS
+                  and garment_images.closed_back(character_name, item_id, s, profile=profile) is not None]
+        parts = [(s, n - BACK_JOBS[s] if s in reused else n) for s, n in parts]
     full = sum(n for _s, n in parts)
     note = " + ".join(f"{s} {n}" for s, n in parts if n) or "no hub job"
+    if reused:
+        note += " (backs from the closed state)"
     if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN:
         if (run_profile is not None
                 and not garment_source.has_own_images(character_name, item_id, kind, method, fsig)
@@ -1566,7 +1593,7 @@ NOT_WORN_OPEN_ERROR = "{name} is not worn now — its open mesh is made while it
 
 def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                 wanted: Optional[List[str]], view: Optional[str], force: bool,
-                state: Optional[str] = None) -> Dict[str, Any]:
+                state: Optional[str] = None, *, only: bool = False) -> Dict[str, Any]:
     from app.core import base_body, garment_images, garment_mesh
     from app.core import garment_store as gs
     from app.models.character import get_character_profile
@@ -1630,7 +1657,10 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         pair_step = _kind_module(kind).PAIR_STEP if method == gs.EDIT_CHAIN else None
         dirty = False  # an earlier step produced new output: every later step runs again
         regenerated_seed: Optional[int] = None  # the seed a forced HairDeck regenerate of this run made
-        for step in order[order.index(first):]:
+        # ``only``: up to the last named step (ruling F13 d), else the rest of the chain.
+        last = max(wanted, key=order.index) if only and wanted else order[-1]
+        run_steps = order[order.index(first):order.index(last) + 1]
+        for step in run_steps:
             forced = force and step == first
             gs.start(character_name, item_id, step)
             produced = False
@@ -1821,8 +1851,10 @@ class _Job:
     """One queued run of a character's worker (``_queues``)."""
 
     def __init__(self, item_id: str, steps: Union[None, str, Iterable[str]], view: Optional[str],
-                 force: bool, automatic: bool = False, state: Optional[str] = None):
+                 force: bool, automatic: bool = False, state: Optional[str] = None, only: bool = False):
         self.item_id, self.steps, self.view, self.force = item_id, steps, view, force
+        #: Only the named steps, nothing after them (``run_garment(only=…)``, ruling F13 d).
+        self.only = bool(only) and steps is not None
         #: The open / closed state the run is for; None = the worn state when it starts (``run_garment``).
         self.state = state
         #: Queued by a trigger (``enqueue_garment`` / ``run_queued``), not by a
@@ -1840,12 +1872,12 @@ class _Job:
         """A default run (first missing step on, the worn state) — what a trigger asks for."""
         return self.steps is None and self.view is None and not self.force and self.state is None
 
-    def key(self) -> Tuple[str, Any, Optional[str], bool, Optional[str]]:
-        """What makes two runs the same request (the steps as a tuple, the state)."""
+    def key(self) -> Tuple[str, Any, Optional[str], bool, Optional[str], bool]:
+        """What makes two runs the same request (the steps as a tuple, the state, ``only``)."""
         steps = self.steps
         if steps is not None and not isinstance(steps, str):
             steps = tuple(steps)
-        return self.item_id, steps, self.view, bool(self.force), self.state
+        return self.item_id, steps, self.view, bool(self.force), self.state, self.only
 
 
 def _fit_only(steps: Union[None, str, Iterable[str]]) -> bool:
@@ -1923,7 +1955,7 @@ def _worker(character_name: str) -> None:
                               "error": failure.get("error"), "cached": True, "ran": []}
             else:
                 job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
-                                         force=job.force, state=job.state)
+                                         force=job.force, state=job.state, only=job.only)
         except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
             logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
             error = str(e) or type(e).__name__
@@ -1963,7 +1995,7 @@ def _position_locked(character_name: str, job: "_Job") -> Dict[str, Any]:
 
 def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
                   view: Optional[str] = None, force: bool = False,
-                  state: Optional[str] = None) -> Dict[str, Any]:
+                  state: Optional[str] = None, only: bool = False) -> Dict[str, Any]:
     """Run ``run_garment`` in the character's worker thread — at once when
     the character has no garment run, else queued behind its runs (never
     refused). An identical waiting run (same item, steps, view, force) is not
@@ -1979,10 +2011,14 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     piece details' "Build the open mesh"); None = the state the piece is
     worn in when the run STARTS. It is part of the request: a waiting
     default run of the item is replaced only by an explicit run of the state
-    the piece is worn in now (a default run builds that state)."""
+    the piece is worn in now (a default run builds that state).
+
+    ``only`` (ruling F13 d): the named steps alone, nothing after them
+    (``run_garment``) — the steps dialog's step buttons; without ``steps``
+    it means nothing (a default run is the chain)."""
     from app.core import garment_store as gs
     check_run(character_name, item_id, steps=steps, view=view, state=state)
-    wanted = _Job(item_id, steps, view, bool(force), state=state)
+    wanted = _Job(item_id, steps, view, bool(force), state=state, only=only)
     # A default run builds the worn state: an explicit run of the OTHER state never takes its place.
     takes_default = wanted.state is None or wanted.state == _worn_state(character_name, item_id)
     # A fit-only run is a CPU refit: tracked from the click on (pending while it waits behind other runs).
@@ -1998,6 +2034,7 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
             if job is not None:
                 # Explicit wins, the place in the queue stays.
                 job.steps, job.view, job.force, job.state = wanted.steps, wanted.view, wanted.force, wanted.state
+                job.only = wanted.only
         if job is None:
             job = wanted
             queue.append(job)

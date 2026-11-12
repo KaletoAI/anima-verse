@@ -2428,6 +2428,13 @@ def _invalidate_config_derived_caches() -> None:
         prop_action_sources.invalidate()
     except Exception as e:   # never let a cache reset break load/save
         logger.debug("prop action invalidation after config change failed: %s", e)
+    try:
+        # Delivered figures, the Figure tab's answer and its cost memo read
+        # config (dressed views, routing): a save moves their generation.
+        from app.core import figure
+        figure.invalidate()
+    except Exception as e:   # never let a cache reset break load/save
+        logger.debug("figure invalidation after config change failed: %s", e)
 
 
 def _collect_restart_values(cfg: dict) -> dict:

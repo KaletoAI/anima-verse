@@ -25,7 +25,8 @@ body actions):
   and only when asked, because it is heavier than the Build's own poll.
 * ``POST /characters/{c}/figure/build`` — 202 ``figure_build.start(reason=
   "manual")``: ``{"status": "started" | "queued" | "current"}``; 409 off the
-  pipeline with the reason.
+  pipeline with the reason; 503 when the profile could not be read (the
+  Build's failure state records it, ruling F13 e).
 * ``POST /characters/{c}/figure/auto-build {enabled}`` — "Build
   automatically" (``figure_build.set_auto_build``): ``{"auto_build":
   figure_build.auto_build_on(c)}`` (off as well while the world switch of
@@ -117,6 +118,8 @@ def build_figure(character_name: str, _: Dict[str, Any] = Depends(require_admin)
     result = figure_build.start(character_name, reason="manual")
     if result.get("status") == "off":
         raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))
+    if result.get("status") == "failed":
+        raise HTTPException(status_code=503, detail=str(result.get("reason") or "Build failed"))
     return result
 
 

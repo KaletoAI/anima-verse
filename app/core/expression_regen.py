@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 from types import MappingProxyType
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import uuid
 
 from app.imagegen.base import BackendBusyError, MediaGenerationDisabled
@@ -850,7 +850,9 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            postprocess: bool = True,
                            extra_reference_images: Optional[List[Path]] = None,
                            style_character: Optional[str] = None,
-                           raise_load: bool = False) -> Optional[Path]:
+                           raise_load: bool = False,
+                           crop_back_to: Optional[Tuple[Any, Tuple[int, int], Tuple[int, int]]] = None
+                           ) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
     Reference callers retain their own prompts, state and provenance policy.
@@ -878,6 +880,11 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``postprocess=False`` publishes the backend's file as delivered: no
     background removal, no side trim — a garment edit keeps the full frame
     of its source (``garment_images``), the gates compare it pixel for pixel.
+    ``crop_back_to`` = ``(canvas side or (w, h), offset, source size)``: an
+    edit rendered on a square canvas (``garment_images.square_reference``)
+    is cut back to its source frame (``garment_images.crop_back``) BEFORE
+    the post-processing — the outfit's dressed views (fix round T12-F1,
+    ruling F14 g).
     ``raise_load`` (the garment image steps): a ``BackendBusyError`` or
     ``MediaGenerationDisabled`` of the render is RAISED instead of ending in
     None — a chain that persists refusals must never record load as one.
@@ -1215,6 +1222,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
         staging_dir = workspace if record_provenance else out_dir
         tmp_path = staging_dir / f".tmp_{out_stem_name}{src_path.suffix}"
         shutil.move(str(src_path), str(tmp_path))
+        if crop_back_to is not None:
+            from app.core.garment_images import crop_back
+            canvas, offset, size = crop_back_to
+            tmp_path = crop_back(tmp_path, tmp_path.with_suffix(".png"), canvas, offset, size)
 
         if not postprocess:
             final_tmp = tmp_path

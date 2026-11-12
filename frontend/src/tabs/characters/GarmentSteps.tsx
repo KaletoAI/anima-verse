@@ -420,7 +420,7 @@ export function RefitNotice({ garment, feedback, busy, onRun }: {
       <span title={title}>{t('Refitted from the previous base')}</span>
       {detail ? <span className="ga-hint">{detail}</span> : null}
       <RunButton feedback={feedback} slot="rerender" disabled={busy}
-        onClick={() => onRun({ step: refit.first_step, force: true }, 'rerender')}
+        onClick={() => onRun({ step: refit.first_step, force: true, chain: true }, 'rerender')}
         title={t('Renders the images and the mesh on the current base body; the refitted piece stays in use until then.')}
         label={t('Re-render')} />
     </div>

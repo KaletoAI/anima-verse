@@ -39,7 +39,9 @@ export function meshNotReadyText(t: (key: string) => string, item: string, reaso
 export type GarmentLimits = Partial<Record<string, Record<string, GateLimit>>>
 
 /** The body of POST /characters/{n}/garments/{item}/run. */
-export interface GarmentRunBody { step?: string; view?: string; force?: boolean }
+/** POST …/garments/{item}/run. With a `step`: only that step (the steps dialog's buttons), unless `chain` — then
+ *  the chain from it (Re-render, the hair's Regenerate, footwear). Without one: the chain from the first missing step. */
+export interface GarmentRunBody { step?: string; view?: string; force?: boolean; chain?: boolean }
 
 /** One chip: which number of a gate record, how it reads, how it scales.
  *  The limit itself always comes from the server. */

@@ -81,12 +81,18 @@ interface RefsInfo {
    *  from (served as `tpose_<view>_draft`). */
   drafts?: Record<string, RefInfo | null>
   auto?: { tpose?: boolean; pose?: boolean }
+  /** Base-body pipeline: the character's Build (it renders the dressed views; a manual
+   *  render of them is refused while it runs — 409, shown under the images). */
+  build?: { running: boolean; step?: string }
   // Per image — a running default-pose render must not lock the 3D tab's
   // T-pose button (and vice versa): with several backends they run in parallel.
   status?: Partial<Record<RefKind, KindStatus>>
   /** Server clock at response time — state ages are measured against it. */
   now?: string
 }
+
+/** Shown while the character's Build runs (it renders these views; Regenerate waits for it). */
+const BUILD_RUNS_VIEWS = 'A Build is running for this character — it renders these views; regenerate after it'
 
 // Display order of the extra views (checkboxes and thumbnails alike).
 const VIEW_ORDER = ['front', 'back', 'left', 'right', 'face'] as const
@@ -117,6 +123,9 @@ const anyRunning = (d: RefsInfo | null | undefined, kinds: RefKind[]) =>
   kinds.some((k) => !!d?.status?.[k]?.running) || (kinds.includes('tpose') && !!d?.face_view?.rendering)
 const anyScheduled = (d: RefsInfo | null | undefined, kinds: RefKind[]) =>
   kinds.some((k) => !!d?.status?.[k]?.scheduled)
+/** A Build of a pipeline character runs: it renders the dressed views (`tpose`). */
+const buildRunning = (d: RefsInfo | null | undefined, kinds: RefKind[]) =>
+  kinds.includes('tpose') && !!d?.pipeline && !!d?.build?.running
 
 /**
  * Identity of what is on screen: outfit signature + stored files of our kinds
@@ -204,7 +213,7 @@ export function FieldModelRefs({
         timerRef.current = null
         const d = await load()
         if (pollIdRef.current !== id) return
-        const active = anyRunning(d, kindList) || anyScheduled(d, kindList)
+        const active = anyRunning(d, kindList) || anyScheduled(d, kindList) || buildRunning(d, kindList)
         const fp = renderFingerprint(d, kindList)
         // Cache-bust when the shown files changed — or when a render just
         // ended (a re-render keeps the filename; the sidecar stamp may lag).
@@ -349,7 +358,9 @@ export function FieldModelRefs({
   const showQueued = !showGenerating && !running && scheduledFor >= HINT_AFTER_S
   // The button waits only for a REAL render (or the user's click) — a
   // scheduled timer must not stop the user from triggering right away.
-  const blocked = busy || running
+  // A running Build renders the dressed views itself (a manual render is refused meanwhile).
+  const building = buildRunning(info, kindList)
+  const blocked = busy || running || building
 
   const label = (kind: RefKind) => (kind === 'tpose' ? t('Pose') : t('Default pose'))
   // Own source strings on purpose: the bare "Back" is the navigation label
@@ -450,6 +461,11 @@ export function FieldModelRefs({
   return (
     <div className="ga-form">
       {genError ? <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{genError}</div> : null}
+      {building ? (
+        <div className="ga-hint" style={{ color: 'var(--warning, #d29922)' }}>
+          {t(BUILD_RUNS_VIEWS)}{info.build?.step ? ` · ${info.build.step}` : ''}
+        </div>
+      ) : null}
       {layout === 'stack' ? (
         <div className="ga-view-stack">
           {kindList.map((kind) => (

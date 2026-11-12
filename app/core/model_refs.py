@@ -856,9 +856,10 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
     A humanoid on the base-body pipeline (``pipeline: true``) has only the
     dressed back — plus left and right with the world setting
     ``base_body.dressed_side_views`` — as extra outfit views
-    (``base_body.dressed_views()``; always enabled, no toggle) and
+    (``base_body.dressed_views()``; always enabled, no toggle),
     ``drafts``: ``{view: info of its draft | None}`` for each of those views
-    (served as kind ``tpose_<view>_draft``)."""
+    (served as kind ``tpose_<view>_draft``) and ``build``: ``{running, step}``
+    of the character's Build (``figure_build.state``; ruling F16)."""
     try:
         _, _, signature = current_outfit_state(character_name)
     except Exception:
@@ -883,6 +884,11 @@ def get_model_refs_info(character_name: str) -> Dict[str, Any]:
         out["drafts"] = {view: _ref_info(base_body.draft_path(character_name, view, signature)
                                          if signature else None)
                          for view in dressed if view in base_body.DRAFT_VIEWS}
+        # Ruling F16: the Pose tab shows a running Build (it renders these views; a manual render is refused).
+        from app.core import figure_build
+        build = figure_build.state(character_name)
+        out["build"] = {"running": bool(build.get("running")),
+                        "step": str((build.get("step") or {}).get("label") or "")}
     if is_humanoid(character_name):
         face = face_view_info(character_name)
         out["face_view"] = face

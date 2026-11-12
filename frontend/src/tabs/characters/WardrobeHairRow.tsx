@@ -197,7 +197,7 @@ function HairDeckSteps({ info, hd, busy, onRun, feedback }: {
           feedback={feedback}
           slot={runSlot({ step: 'hairdeck' })}
           disabled={busy || !garment || noInput}
-          onClick={() => onRun({ step: 'hairdeck', force: true })}
+          onClick={() => onRun({ step: 'hairdeck', force: true, chain: true })}
           label={t('Regenerate hair (HairDeck)')}
         />
       </div>

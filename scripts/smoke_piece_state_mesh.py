@@ -34,19 +34,26 @@ Expected, derived by hand from the brief:
 [1] ``fsig_inputs(Demo, jacket)`` with the jacket closed == the BASE
     (c7f0a002) function's output — no ``state`` key, fragment "black jacket";
     ``garment_fsig`` closed == the BASE ``garment_fsig`` (BASE store + BASE
-    clothing module) value. Open: inputs ``prompt_fragment`` "black jacket,
-    worn open" and ``state`` "open"; the fsig differs from the closed one;
+    clothing module) value. Open: inputs ``prompt_fragment`` "black jacket, "
+    + ``OPEN_IMAGE_WORDS`` (fix round T12-F1, ruling F15 i-2: "worn open at the
+    front (unzipped / unbuttoned), its front edges apart so the body or the
+    layer underneath shows between them") and ``state`` "open"; the fsig
+    differs from the closed one;
     ``garment_fsig(state="open")`` with the profile closed == the fsig with the
     profile open.
 [2] ``edit_prompt(Demo, "worn", "front", profile=open)`` starts "Keep the
     image exactly as it is. Only change their clothing: they now wear only
-    black jacket, worn open."; ``fit_prompt("worn", item_id=jacket,
+    black jacket, worn open at the front (unzipped / unbuttoned), its front
+    edges apart so the body or the layer underneath shows between them."
+    (F15 i-2); ``fit_prompt("worn", item_id=jacket,
     state="open")[0]`` contains "the person wears only black jacket, worn
     open"; closed: neither contains "worn open" nor "worn closed" (A7).
 [3] Fits on "basesha": F_c (record without ``state``) at the closed fsig, F_o
     (``state: "open"``) at the open fsig. Profile closed -> F_c, open -> F_o;
     explicit ``state`` overrides the profile. Only F_c (F_o removed) + open ->
-    None (the closed fit never stands in), and ``newest_accepted_fits(state=
+    F_c (fix round T12-F1, ruling F13 b: the closed mesh is SERVED until the
+    open one is built — was None per A2), an explicit ``state="open"`` -> None
+    (the open chain still sees no open fit), and ``newest_accepted_fits(state=
     "open")`` == {}.
 [4] One closed group stored on another base ("oldbsig", its fsig =
     ``edit_fsig_on(closed)``) with an accepted fit; ``_complete`` /
@@ -73,10 +80,13 @@ Expected, derived by hand from the brief:
 [7] GC: the jacket held, F_c and F_o both stored (profile closed) ->
     ``_garment_roots`` keep holds both garment keys (jacket, fsig_c) and
     (jacket, fsig_o).
-[8] Figure: the jacket worn open, only F_c -> delivered ``painted`` ∋ jacket,
-    ``interim[jacket]`` == "Shown painted until its open mesh is built",
-    ``own`` ∌ jacket. ``figure_build.plan`` has Step("pieces", "Own mesh ·
-    Black Jacket (open)", 6, jacket) and no other pieces step for the jacket.
+[8] Figure: the jacket worn open, only F_c -> delivered ``own`` ∋ jacket,
+    ``shown_closed`` == (jacket,), no interim (ruling F13 b: the closed mesh
+    stands in, never painted while it exists). ``figure_build.plan`` has
+    Step("pieces", "Own mesh · Black Jacket (open)", 3, jacket) — worn 1 +
+    ghost 1 + mesh 1: [5]'s closed chain has both backs (its worn back
+    follows its front), the open state copies them (ruling F15 i-1) — and no
+    other pieces step for the jacket.
     The open chain built (as [5]'s closed one) -> ``own`` ∋ jacket, no
     interim, no pieces step.
 [9] Layering: the jacket open with F_o over the blouse with its fit F_b ->
@@ -189,7 +199,7 @@ def main() -> int:
         check("closed fsig == BASE", fsig_c, base_fsig)
         set_state("open")
         open_inputs = garment_clothing.fsig_inputs("Demo", J, profile=prof())
-        check("open fragment", open_inputs.get("prompt_fragment"), "black jacket, worn open")
+        check("open fragment", open_inputs.get("prompt_fragment"), "black jacket, " + oo.OPEN_IMAGE_WORDS)
         check("open state", open_inputs.get("state"), "open")
         fsig_o = gs.garment_fsig("Demo", jacket)
         check("open fsig differs", fsig_o != fsig_c, True)
@@ -203,7 +213,8 @@ def main() -> int:
         text = garment_clothing.edit_prompt("Demo", "worn", "front", profile=open_prof, item_id=jacket)
         text = text[0] if isinstance(text, tuple) else text
         want = ("Keep the image exactly as it is. Only change their clothing: they now wear only "
-                "black jacket, worn open.")
+                "black jacket, worn open at the front (unzipped / unbuttoned), its front edges apart so the body "
+                "or the layer underneath shows between them.")
         check("edit prompt open", text.startswith(want), True)
         fit_text = garment_clothing.fit_prompt("worn", item_id=jacket, state="open")[0]
         check("fit prompt open", "the person wears only black jacket, worn open" in fit_text, True)
@@ -234,7 +245,8 @@ def main() -> int:
         check("open -> F_o", fit_of(), f_o)
         check("explicit closed -> F_c", fit_of(state="closed"), f_c)
         f_o.unlink()
-        check("only F_c, open -> None", fit_of(), None)
+        check("only F_c, open -> F_c (served, F13 b)", fit_of(), f_c)
+        check("only F_c, explicit open -> None", fit_of(state="open"), None)
         check("newest open == {}", gs.newest_accepted_fits("Demo", jacket, state="open"), {})
         set_state("closed")
         check("explicit open -> None", fit_of(state="open"), None)
@@ -275,6 +287,12 @@ def main() -> int:
                     path.write_bytes(b"png")
                     gs.write_record(path.with_suffix(".json"), {"accepted": True, "attempt": 1,
                                                                 "gates": {"first": {"ok": True, "hem_t": 0.65}}})
+            # The worn back follows its front (drafted): the open state can reuse it (ruling F15 i-1).
+            worn_back = gs.garment_path("Demo", jacket, fsig, "image", step="worn", view="back")
+            gs.write_record(worn_back.with_suffix(".json"), {
+                **gs.read_record(worn_back.with_suffix(".json")),
+                "front_sha256": base_body.file_sha256(gs.garment_path("Demo", jacket, fsig, "image", step="worn",
+                                                                      view="front"))})
             prepared = gs.garment_path("Demo", jacket, fsig, "prepared")
             prepared.parent.mkdir(parents=True, exist_ok=True)
             prepared.write_bytes(b"glb")
@@ -295,7 +313,7 @@ def main() -> int:
         runs = []
         real_run, real_check = garments.run_garment, garments.check_run
 
-        def recorder(character_name, item_id, *, steps=None, view=None, force=False, state=None):
+        def recorder(character_name, item_id, *, steps=None, view=None, force=False, state=None, only=False):
             runs.append((item_id, steps, state))
             if item_id == "busy":
                 gate.wait(30)
@@ -401,11 +419,10 @@ def main() -> int:
         f_o.with_suffix(".json").unlink()
         set_state("open")
         got = figure.delivered_figure("Demo", profile=prof())
-        check("painted ∋ jacket", jacket in got.painted, True)
-        check("interim", got.interim.get(jacket), "Shown painted until its open mesh is built")
-        check("own ∌ jacket", jacket in got.own, False)
+        check("own ∋ jacket (closed mesh)", (jacket in got.own, got.shown_closed), (True, (jacket,)))
+        check("no interim", (jacket in got.painted, got.interim.get(jacket)), (False, None))
         steps = [s for s in figure_build.plan("Demo", profile=prof()) if s.name == "pieces"]
-        check("pieces step", steps, [figure_build.Step("pieces", "Own mesh · Black Jacket (open)", 6, jacket)])
+        check("pieces step", steps, [figure_build.Step("pieces", "Own mesh · Black Jacket (open)", 3, jacket)])
         f_o = build_chain(fsig_o, "open")
         got = figure.delivered_figure("Demo", profile=prof())
         check("with F_o: own", (jacket in got.own, got.interim.get(jacket)), (True, None))

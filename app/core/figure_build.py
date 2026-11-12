@@ -22,7 +22,10 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
 5. ``hair`` — HairDeck hair whose chain has something to run
    (``garment_hair.ensure_hair_item`` + ``run_queued``).
 6. ``texture`` — the wanted painted set: its views, when they are missing
-   (the paint itself is Blender on the CPU, done by the assembly).
+   (the paint itself is Blender on the CPU, done by the assembly). Also
+   ("Views: …") when no interim / texture step is planned but a view of
+   the figure delivered NOW is not current for it (``dressed_image`` — the
+   Pose tab's predicate; ruling F16).
 7. ``fits`` — the CPU refits (``garment_refit.refit_character``, tracked).
 8. ``assemble`` — the outfit model of the figure delivered THEN, built from
    whatever is built (the interim rule), then the garment assembly
@@ -43,10 +46,14 @@ else.
 
 Cost (``cost``) reuses the producers' own arithmetic, never a second table:
 the plain body = ``base_rebuild_steps``; interim / texture =
-``base_body.dressed_view_jobs()`` when their views are missing, else 0;
+``base_body.dressed_view_estimate`` (per missing view, a copy from the
+texture store 0 — fix round T12-F1, ruling F13 c) and the whole set
+``base_body.dressed_view_jobs()`` on a rebuilt body or shape;
 shape = views (when missing) + ``model3d.mesh_hub_stages``; pieces / hair =
 ``run_estimate``; fits / assemble = 0. ``hub_jobs`` None as soon as one step
-is unknown (the note says which).
+is unknown (the note says which). It is an ESTIMATE of first attempts: a
+gate's retry (a view-guard re-render, a further fit attempt) is extra — the
+note says so ("N hub jobs (estimate, retries extra)").
 
 The run (``start``): one FIFO per character (a deque + one worker thread). A
 ``start`` while a run goes keeps ONE follow-up (repeated calls keep one);
@@ -149,6 +156,32 @@ def _item_name(item_id: str) -> str:
     return str((inventory.get_item(item_id) or {}).get("name") or item_id)
 
 
+#: ``state()['failed']`` key of a Build that could not read the character's profile (ruling F13 e).
+PROFILE_FAILED = "profile"
+#: Its error text.
+PROFILE_UNREADABLE = "The character's profile could not be read — nothing was judged or built: {error}"
+
+
+def _read_profile(character_name: str) -> Dict[str, Any]:
+    """The profile a Build judges, read STRICTLY (``get_character_profile(strict=True)``): a DB or decoding
+    error raises instead of becoming the empty profile — which reads as "off the pipeline" and ended a Build
+    as "nothing to build" (T12 incident; ruling F13 e)."""
+    from app.models.character import get_character_profile
+    return get_character_profile(character_name, strict=True)
+
+
+def _record_unread(character_name: str, reason: str, error: BaseException) -> Dict[str, Any]:
+    """A Build (or its start) that could not read the profile: a warning and the failure state
+    (``state()['failed'][PROFILE_FAILED]``) — never "nothing to build". Returns the ``start`` answer."""
+    from app.core.timeutils import utc_now_iso
+    message = PROFILE_UNREADABLE.format(error=str(error) or type(error).__name__)
+    logger.warning("Build %s (%s) failed: %s", character_name, reason, message)
+    with _lock:
+        _last[character_name] = {"failed": {PROFILE_FAILED: {"error": message, "item_id": ""}}, "skipped": [],
+                                 "reason": reason, "finished_at": utc_now_iso()}
+    return {"status": "failed", "reason": message}
+
+
 def on_pipeline(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
     """Whether the character builds a figure at all (``base_body.is_base_pipeline``)."""
     from app.core import base_body
@@ -170,8 +203,16 @@ def _views_missing(character_name: str, fig, signature: str) -> bool:
                for v in base_body.dressed_views())
 
 
-def _views_label(what: str, views: int) -> str:
-    return f"{what}: views {views}" if views else f"{what}: paint on the CPU"
+def _views_label(what: str, views: int, copied: bool = False) -> str:
+    if views:
+        return f"{what}: views {views}"
+    return f"{what}: views copied from the texture store" if copied else f"{what}: paint on the CPU"
+
+
+#: The plain body step's label when its rebuild is what the hair wanted in the body costs (ruling F13 a).
+HAIR_REBUILD_LABEL = "Hair · in the body → plain body rebuild ({parts})"
+#: ``cost`` note: the total is an estimate of first attempts (ruling F13 c).
+COST_NOTE = "{total} hub jobs (estimate, retries extra)"
 
 
 def _chain_step(character_name: str, name: str, item_id: str, label: str,
@@ -218,7 +259,7 @@ def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
 
 
 def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
-         explicit: bool = True) -> List[Step]:
+         explicit: bool = True, resolved: Optional[Tuple[Any, Any]] = None) -> List[Step]:
     """The steps a Build runs now, in ``STEP_ORDER`` (module docstring).
     ``[]`` off the pipeline or when the delivered figure is the wanted one and
     built. ``explicit`` (default — what the Build button runs, the plan the UI
@@ -226,12 +267,13 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     its fsig is listed with ``failed`` and 0 jobs; it makes the fits and the
     assembly follow only when ``explicit`` (a manual Build retries it). The
     plain body is listed with ``manual`` in both; only an explicit plan builds
-    on its refresh (ruling 8a). Read-only."""
+    on its refresh (ruling 8a). ``resolved``: the ``figure._delivered``
+    pair of ``profile`` when the caller holds it. Read-only."""
     from app.core import base_body, figure, garment_refit, model3d
     profile = _profile_of(character_name, profile)
     if not base_body.is_base_pipeline(character_name, profile=profile):
         return []
-    wanted, delivered = figure._delivered(character_name, profile=profile)
+    wanted, delivered = resolved or figure._delivered(character_name, profile=profile)
     signature, bsig = wanted.signature, wanted.bsig
     steps: List[Step] = []
 
@@ -243,7 +285,9 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         parts = ([f"views {views}"] if views else []) + [step for step, _jobs in rebuild
                                                          if not step.startswith("view ")]
         no_base = refresh.get("reason") == "missing"   # no stored front or no base model
-        steps.append(Step("plain_body", "Plain body: " + " + ".join(parts),
+        label = ("Plain body: " + " + ".join(parts) if no_base or not figure.hair_needs_rebuild(
+            character_name, wanted, profile=profile) else HAIR_REBUILD_LABEL.format(parts=" + ".join(parts)))
+        steps.append(Step("plain_body", label,
                           sum(jobs for _step, jobs in rebuild),
                           manual=figure.BASE_MISSING if no_base else figure.BASE_OUTDATED))
         if no_base and not explicit:
@@ -254,8 +298,10 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     built = _model_figure(character_name, signature)
     set_jobs = base_body.dressed_view_jobs()
     if delivered.interim and (rebased or built is None or built.as_dict() != delivered.as_dict()):
-        views = set_jobs if rebased or _views_missing(character_name, delivered, signature) else 0
-        steps.append(Step("interim", _views_label("Interim texture", views), views))
+        missing = rebased or _views_missing(character_name, delivered, signature)
+        views = set_jobs if rebased else base_body.dressed_view_estimate(
+            character_name, delivered, signature, profile=profile) if missing else 0
+        steps.append(Step("interim", _views_label("Interim texture", views, copied=missing), views))
 
     meshed = not figure.is_plain(wanted.shape)
     if meshed and (rebased or not figure._shape_stored(character_name, wanted.shape, bsig)):
@@ -283,8 +329,18 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         shape_built = not any(s.name == "shape" for s in steps)
         views_missing = rebased or not shape_built or _views_missing(character_name, wanted, signature)
         if views_missing or built is None or built.texture != wanted.texture or built.shape != wanted.shape:
-            views = set_jobs if views_missing else 0
-            steps.append(Step("texture", _views_label("Texture", views), views))
+            views = (set_jobs if rebased or not shape_built
+                     else base_body.dressed_view_estimate(character_name, wanted, signature, profile=profile)
+                     if views_missing else 0)
+            steps.append(Step("texture", _views_label("Texture", views, copied=views_missing), views))
+    if (not any(s.name in ("interim", "texture") for s in steps)
+            and _views_missing(character_name, delivered, signature)):
+        # Ruling F16: the views of the figure delivered NOW, judged like the Pose tab (``dressed_image``) — a
+        # view made for another figure is never "nothing to build" while the tab calls it stale.
+        views = base_body.dressed_view_estimate(character_name, delivered, signature, profile=profile)
+        label = (_views_label("Views", views, copied=True) if views or delivered.texture
+                 else "Views: copied from the body's views")
+        steps.append(Step("texture", label, views))
 
     grafted = bool(wanted.own) or wanted.hair == figure.HAIR_HAIRDECK
     work = _runnable(steps, explicit)
@@ -311,7 +367,7 @@ def cost(character_name: str, steps: Optional[List[Step]] = None) -> Dict[str, A
     if unknown:
         note = "cost unknown — " + "; ".join(unknown)
     elif steps:
-        note = f"{total} hub jobs (first attempts)"
+        note = COST_NOTE.format(total=total)
     else:
         note = "nothing to build"
     return {"hub_jobs": total, "steps": [s.as_dict() for s in steps], "note": note}
@@ -325,6 +381,20 @@ _active: set = set()                      # characters whose worker thread is al
 _current: Dict[str, Dict[str, Any]] = {}  # character -> the run in flight
 _last: Dict[str, Dict[str, Any]] = {}     # character -> the last run that had steps
 _build_locks: Dict[str, threading.Lock] = {}  # character -> held by a run from its plan to its last step
+
+
+#: 409 of a manual render of the dressed views while a Build of the character runs (ruling F16, fix round
+#: T12-F1 — like Delete's ``figure.BUILD_RUNNING``, ruling 10a): the Build renders the views its figure needs,
+#: a manual run would wait behind its garment chains (the dressed front settles them, ``resolve_figure``) and
+#: look dropped.
+VIEWS_BUILD_RUNNING = ("Not rendered: a Build runs for this character now and renders the views its figure "
+                       "needs — regenerate after the Build if needed.")
+
+
+def running(character_name: str) -> bool:
+    """Whether a Build of the character runs now (its worker is alive: a run or its kept follow-up)."""
+    with _lock:
+        return character_name in _active
 
 
 def build_lock(character_name: str) -> threading.Lock:
@@ -351,15 +421,20 @@ def start(character_name: str, *, reason: str, automatic: bool = False) -> Dict[
     keep one; it re-plans when it starts), ``"current"`` (nothing to build —
     for an ``automatic`` Build also when only cached chain failures are left,
     which only a manual Build retries), ``"off"`` (off the pipeline, with
-    ``reason``). ``automatic``: started by a trigger (``request``), not by a
-    click (ruling 7a)."""
-    if not on_pipeline(character_name):
+    ``reason``), ``"failed"`` (the profile could not be read: ``reason``,
+    recorded as the Build's failure — ruling F13 e). ``automatic``: started
+    by a trigger (``request``), not by a click (ruling 7a)."""
+    try:
+        profile = _read_profile(character_name)
+    except Exception as e:  # noqa: BLE001 — a DB / decoding error is the Build's failure, never "current"
+        return _record_unread(character_name, reason, e)
+    if not on_pipeline(character_name, profile=profile):
         return {"status": "off", "reason": OFF_PIPELINE}
     with _lock:
         if character_name in _active:
             _keep_followup_locked(character_name, reason, automatic)
             return {"status": "queued"}
-    if not _runnable(plan(character_name, explicit=not automatic), not automatic):
+    if not _runnable(plan(character_name, profile=profile, explicit=not automatic), not automatic):
         return {"status": "current"}
     with _lock:
         if character_name in _active:  # another start won the race
@@ -406,9 +481,14 @@ def request(character_name: str, trigger: str) -> bool:
     """A trigger's way to the Build (module docstring): on the pipeline with
     ``auto_build_on`` → an automatic ``start(reason=trigger)``; True when it
     started or was kept as the follow-up. Else False — the change stays in
-    ``figure.pending_changes``. Never raises."""
+    ``figure.pending_changes``; a profile that cannot be read is recorded as
+    the Build's failure (ruling F13 e). Never raises."""
     try:
-        profile = _profile_of(character_name, None)
+        try:
+            profile = _read_profile(character_name)
+        except Exception as e:  # noqa: BLE001 — recorded, never "not requested" in silence
+            _record_unread(character_name, trigger, e)
+            return False
         if not on_pipeline(character_name, profile=profile) or not auto_build_on(character_name, profile=profile):
             logger.debug("Build %s not requested (%s): off the pipeline or not automatic", character_name, trigger)
             return False
@@ -487,7 +567,12 @@ def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
     manual one retries it."""
     from app.core.timeutils import utc_now_iso
     explicit = not automatic
-    steps = plan(character_name, explicit=explicit)
+    try:
+        profile = _read_profile(character_name)
+    except Exception as e:  # noqa: BLE001 — ruling F13 e: failed, never "nothing to build"
+        _record_unread(character_name, reason, e)
+        return
+    steps = plan(character_name, profile=profile, explicit=explicit)
     if automatic:
         # Ruling 8a: the plain body stays listed (the UI's pending change), an automatic run never builds it.
         steps = [s for s in steps if not s.manual]
@@ -558,9 +643,10 @@ def _run_step(character_name: str, step: Step, explicit: bool) -> str:
 
 
 def _now(character_name: str):
-    """``(profile, wanted, delivered, items)`` judged now."""
+    """``(profile, wanted, delivered, items)`` judged now — the profile read strictly (a read error fails the
+    step, ruling F13 e)."""
     from app.core import figure
-    profile = _profile_of(character_name, None)
+    profile = _read_profile(character_name)
     wanted, delivered = figure._delivered(character_name, profile=profile)
     return profile, wanted, delivered, figure._items_of(profile, None)
 
@@ -689,17 +775,32 @@ _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
 
 # --- The Figure tab's payload ----------------------------------------------------------
 
+#: The hair row's notes while the hair wanted in the body waits for the plain body's rebuild (ruling F13 a):
+#: the worn HairDeck hair stands in, or (no HairDeck fit) the plain body is bald.
+HAIR_WAITS_HAIRDECK = "Shown with its HairDeck hair until the plain body is rebuilt with the hair"
+HAIR_WAITS_BALD = "Shown bald until the plain body is rebuilt with the hair"
+
+
 def _hair_row(character_name: str, profile: Dict[str, Any], wanted, delivered,
               failed: Dict[str, Dict[str, Any]], running: bool) -> Dict[str, Any]:
+    """The Figure tab's hair row: ``{mode, state, note, rebuild}`` — ``rebuild``
+    True when the hair is wanted in the body and only the plain body's
+    rebuild puts it there (ruling F13 a; the row's ``jobs`` are then that
+    step's)."""
     from app.core import figure, garment_hair
     mode = garment_hair.hair_method(character_name, profile=profile)
+    rebuild = wanted.hair == figure.HAIR_BODY and figure.hair_needs_rebuild(character_name, wanted, profile=profile)
     if (failed.get("hair") or {}).get("error"):
-        return {"mode": mode, "state": "failed", "note": str(failed["hair"]["error"])}
-    if wanted.hair == delivered.hair:
-        return {"mode": mode, "state": "ready", "note": ""}
+        return {"mode": mode, "state": "failed", "note": str(failed["hair"]["error"]), "rebuild": rebuild}
+    if wanted.hair == delivered.hair and not rebuild:
+        return {"mode": mode, "state": "ready", "note": "", "rebuild": False}
+    state = "building" if running else "pending"
+    if wanted.hair == figure.HAIR_BODY:
+        note = HAIR_WAITS_HAIRDECK if delivered.hair == figure.HAIR_HAIRDECK else HAIR_WAITS_BALD
+        return {"mode": mode, "state": state, "note": note, "rebuild": True}
     shown = "in the body" if delivered.hair == figure.HAIR_BODY else "bald"
-    return {"mode": mode, "state": "building" if running else "pending",
-            "note": f"Shown {shown} until its HairDeck mesh is built"}
+    return {"mode": mode, "state": state, "note": f"Shown {shown} until its HairDeck mesh is built",
+            "rebuild": False}
 
 
 def _other_state_jobs(character_name: str, item_id: str, worn_state: str,
@@ -743,6 +844,8 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
         failure = str(piece_failures.get(item_id) or "")
         if failure:
             state = "failed"
+        elif item_id in delivered.shown_closed:
+            state = "building" if running else "pending"   # ruling F13 b: the closed mesh stands in
         elif want == have:
             state = "ready"
         elif running:
@@ -805,6 +908,28 @@ def _item_jobs(steps: List[Step], name: str, item_id: str) -> Optional[int]:
     return 0
 
 
+def _with_jobs(changes: List[Dict[str, Any]], steps: List[Step]) -> List[Dict[str, Any]]:
+    """``changes`` (``figure.pending_changes``) each with the ``jobs`` of the
+    plan step that builds it (fix round T12-F1, F13 a/b — the change row
+    names its cost): a piece or its open / closed state = its ``pieces``
+    chain, the hair = its ``hair`` chain or, wanted in the body on a bald
+    plain body, the plain body's rebuild; the plain body = its step. None:
+    unknown; 0: nothing of it planned."""
+    from app.core import figure
+    out = []
+    for change in changes:
+        key = str(change.get("key") or "")
+        if key == figure.BODY_KEY:
+            jobs = _item_jobs(steps, "plain_body", "")
+        elif key == figure.HAIR_KEY:
+            jobs = _item_jobs(steps, "plain_body" if change.get("note") == figure.HAIR_REBUILD else "hair", "")
+        else:
+            item_id = key[:-len(figure.STATE_KEY_SUFFIX)] if key.endswith(figure.STATE_KEY_SUFFIX) else key
+            jobs = _item_jobs(steps, "pieces", item_id)
+        out.append({**change, "jobs": jobs})
+    return out
+
+
 def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
     """What the single actions on the plain body cost (the Figure tab's Body
     details write it under each button): ``view`` (a side or back view),
@@ -840,7 +965,66 @@ def _outfit_name(character_name: str, pieces: Dict[str, str]) -> str:
     return ""
 
 
+#: ``figure_info`` memo: character -> (key, monotonic, answer) (fix round T12-F1, ruling F13 f).
+_info_memo: Dict[str, Tuple[Tuple[Any, ...], float, Dict[str, Any]]] = {}
+_info_lock = threading.Lock()
+
+
+def _stat(path) -> Tuple[int, int]:
+    try:
+        st = path.stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return 0, 0
+
+
+def _info_key(character_name: str, profile: Dict[str, Any], build: Dict[str, Any]) -> Tuple[Any, ...]:
+    """What a memoised ``figure_info`` answer stands for — taken BEFORE the
+    inputs are read: the figure generation (``figure.invalidate``: every
+    ref, model, garment record and config write), the profile and the worn
+    items (their modes and texts), the Build's state, and the stat of the
+    character's ``model_refs`` / ``model3d`` / ``garments`` directories (an
+    atomic publication renames into them; a deletion too)."""
+    import hashlib
+    from app.core import figure
+    from app.models.character import get_character_dir
+    from app.models.inventory import get_item
+    worn = profile.get("equipped_pieces") or {}
+    ids = sorted({str(v) for v in worn.values() if v} | {str(i) for i in profile.get("equipped_items") or []
+                                                         if isinstance(i, str)})
+    root = get_character_dir(character_name)
+    return (figure._generation[0], hashlib.sha1(figure._canonical(profile)).hexdigest(),
+            hashlib.sha1(figure._canonical({i: get_item(i) for i in ids})).hexdigest(),
+            figure._canonical(build),
+            tuple(_stat(root / name) for name in ("model_refs", "model3d", "garments")))
+
+
 def figure_info(character_name: str) -> Dict[str, Any]:
+    """``_figure_info`` memoised (fix round T12-F1, ruling F13 f: the Figure
+    tab's GET took 2–5 s): an answer is served again while its ``_info_key``
+    holds, for at most ``figure.MEMO_TTL_S``, and stored only when no write
+    moved the figure generation while it was computed. A copy is returned."""
+    import copy
+    import time
+    from app.core import figure
+    profile = _profile_of(character_name, None)
+    build = state(character_name)
+    key = _info_key(character_name, profile, build)
+    now = time.monotonic()
+    with _info_lock:
+        hit = _info_memo.get(character_name)
+        if hit is not None and hit[0] == key and now - hit[1] < figure.MEMO_TTL_S:
+            return copy.deepcopy(hit[2])
+    info = _figure_info(character_name, profile=profile, build=build)
+    with _info_lock:
+        if key[0] == figure._generation[0]:
+            if len(_info_memo) >= 256:
+                _info_memo.clear()
+            _info_memo[character_name] = (key, now, copy.deepcopy(info))
+    return info
+
+
+def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     """``GET /characters/{c}/figure``: ``{pipeline, humanoid, auto_build,
     status, changes, cost, build, wanted, delivered, served_url, outfit (the
     saved outfit worn now, "" when none matches), worn (each row with the
@@ -850,9 +1034,7 @@ def figure_info(character_name: str) -> Dict[str, Any]:
     failure, or a planned chain failed for its input — ``Step.failed``),
     else ``up_to_date``. ``auto_build`` = ``auto_build_on``."""
     from app.core import figure, model_refs
-    profile = _profile_of(character_name, None)
     pipeline = on_pipeline(character_name, profile=profile)
-    build = state(character_name)
     out: Dict[str, Any] = {
         "pipeline": pipeline, "humanoid": model_refs.is_humanoid(character_name, profile=profile),
         "auto_build": auto_build_on(character_name, profile=profile),
@@ -861,7 +1043,7 @@ def figure_info(character_name: str) -> Dict[str, Any]:
         return {**out, "status": "up_to_date", "changes": [], "cost": cost(character_name, []),
                 "wanted": None, "delivered": None, "outfit": "", "worn": [], "hair": None, "body": None}
     wanted, delivered = figure._delivered(character_name, profile=profile)
-    steps = plan(character_name, profile=profile)
+    steps = plan(character_name, profile=profile, resolved=(wanted, delivered))
     failures = _with_cached_failures(build["failed"], steps)
     if build["running"]:
         status = "building"
@@ -869,15 +1051,20 @@ def figure_info(character_name: str) -> Dict[str, Any]:
         status = "failed" if failures else "changes"
     else:
         status = "up_to_date"
-    changes = figure.pending_changes(character_name, profile=profile)
+    changes = _with_jobs(figure._pending(character_name, wanted, delivered, profile), steps)
     body_change = next((c for c in changes if c.get("key") == figure.BODY_KEY), None)
     built = _model_figure(character_name, wanted.signature)
     meshed = not figure.is_plain(wanted.shape)
-    plain_state = ("ready" if body_change is None
-                   else "missing" if body_change.get("delivered") == "missing" else "older_prompts")
-    body = {"plain": {"key": wanted.bsig, "state": plain_state,
-                      "note": "" if body_change is None or plain_state == "missing"
-                      else str(body_change.get("delivered") or "")},
+    hair_rebuild = any(c.get("key") == figure.HAIR_KEY and c.get("note") == figure.HAIR_REBUILD for c in changes)
+    if body_change is not None:
+        plain_state = "missing" if body_change.get("delivered") == "missing" else "older_prompts"
+        plain_note = "" if plain_state == "missing" else str(body_change.get("delivered") or "")
+    elif hair_rebuild:   # the hair's row stands for the plain body's rebuild (ruling F13 a)
+        from app.core.base_body import OLDER_PROMPTS
+        plain_state, plain_note = "older_prompts", OLDER_PROMPTS
+    else:
+        plain_state, plain_note = "ready", ""
+    body = {"plain": {"key": wanted.bsig, "state": plain_state, "note": plain_note},
             "shape": {"key": wanted.shape if meshed else "",
                       "state": ("ready" if delivered.shape == wanted.shape else "missing") if meshed else "plain"},
             "texture": {"key": wanted.texture,
@@ -888,7 +1075,7 @@ def figure_info(character_name: str) -> Dict[str, Any]:
     hair = _hair_row(character_name, profile, wanted, delivered, failures, build["running"])
     for row in worn:
         row["jobs"] = _item_jobs(steps, "pieces", row["item_id"])
-    hair["jobs"] = _item_jobs(steps, "hair", "")
+    hair["jobs"] = _item_jobs(steps, "plain_body" if hair.get("rebuild") else "hair", "")
     return {**out, "status": status, "changes": changes, "cost": cost(character_name, steps),
             "wanted": wanted.as_dict(), "delivered": delivered.as_dict(),
             "outfit": _outfit_name(character_name, wanted.pieces),

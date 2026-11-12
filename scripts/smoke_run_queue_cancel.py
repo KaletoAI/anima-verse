@@ -105,7 +105,7 @@ def main() -> int:
         runs = []
         gate_a = threading.Event()
 
-        def recorder(character_name, item_id, *, steps=None, view=None, force=False, state=None):
+        def recorder(character_name, item_id, *, steps=None, view=None, force=False, state=None, only=False):
             runs.append((item_id, steps, force))
             if item_id == "A":
                 gate_a.wait(30)

@@ -167,7 +167,11 @@ def install_stubs():
     from app.models import inventory
 
     base_body.is_base_pipeline = lambda c, profile=None: c == "Kira"
-    figure._delivered = lambda c, *, profile, pieces=None, items=None: (W.wanted(), W.delivered())
+    # The World's Kira has no DB row: the Build's strict profile read (fix round T12-F1, ruling F13 e) gets
+    # the empty profile the non-strict read gave before — the stubs below never read it.
+    from app.core import figure_build
+    figure_build._read_profile = lambda c: {}
+    figure._delivered = lambda c, *, profile, pieces=None, items=None, **_kw: (W.wanted(), W.delivered())
     base_skin.enabled = lambda: False
     model3d.mesh_hub_stages = lambda c, sig: ["mesh", "rig"]
     base_body.dressed_views = lambda: ("front", "back")

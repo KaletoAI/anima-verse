@@ -130,6 +130,12 @@ OPEN_WORDS = "worn open"
 #: The closed words — ONLY in the text an LLM reads (ruling A9: ``outfit_renderer.render_outfit(for_llm=True)``
 #: names the state of every worn closable piece); image and mesh prompts never carry them (A7).
 CLOSED_WORDS = "worn closed"
+#: The open state in an IMAGE EDIT prompt of the piece's own chain (``garment_clothing.fragment``: the worn
+#: front; ruling F15 i-2, fix round T12-F1). The bare "worn open" left the edit model to guess WHERE — it split a
+#: leather jacket open down the back (hub job c9e10d2b). An open piece is open at the front; its back views are
+#: rendered from the CLOSED texts (``garment_images``, ruling F15 i-1). Every other text keeps ``OPEN_WORDS``.
+OPEN_IMAGE_WORDS = ("worn open at the front (unzipped / unbuttoned), its front edges apart so the body or the "
+                    "layer underneath shows between them")
 #: Words in a prompt fragment that already name the state (ruling A6: the Wardrobe hints that the toggle adds to
 #: them; the fragment is never edited automatically).
 _STATE_WORDS_RE = re.compile(r"\b(?:open|opened|closed|unbuttoned|buttoned|unzipped|zipped)\b", re.IGNORECASE)

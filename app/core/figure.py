@@ -236,16 +236,23 @@ def _painted_now(character_name: str, sets: WornSets, *, bsig: str) -> WornSets:
     ``bsig`` is painted meanwhile; footwear is never painted (left out until
     its fit exists). Read-only — the same rule as today's build
     (``base_body.resolve_figure``: left out = the fitted pieces plus all
-    footwear). Per state (plan Task 11b): a piece worn open needs its OPEN
-    fit, the closed one never stands in."""
+    footwear). Per state (plan Task 11b): a piece worn open is grafted with
+    its OPEN fit, else with its closed one meanwhile (ruling F13 b: never
+    painted while a closed mesh exists)."""
     from dataclasses import replace
     from app.core import base_body, garment_set, garment_store
+    from app.core.outfit_options import CLOSED, OPEN
     if not sets.own:
         return sets
     base_sha = base_body.base_model_sha256(character_name, bsig)
+
+    def fitted(item_id: str) -> bool:
+        states = (OPEN, CLOSED) if _state_in(sets, item_id) == OPEN else (CLOSED,)
+        return any(garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha, state=st)
+                   is not None for st in states)
+
     own = {item_id: kind for item_id, kind in sets.own.items()
-           if kind == garment_set.FOOTWEAR or (base_sha and garment_store.accepted_fit(
-               character_name, item_id, base_model_sha=base_sha, state=_state_in(sets, item_id)) is not None)}
+           if kind == garment_set.FOOTWEAR or (base_sha and fitted(item_id))}
     if own == sets.own:
         return sets
     return replace(sets, own=own, painted=tuple(sorted({*sets.painted, *(set(sets.own) - set(own))})))
@@ -312,11 +319,18 @@ def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) ->
 #    the shape (``garments.body_fit``: an accepted or still-to-be-made CPU fit
 #    of the Build's fits step counts — the interim rule waits for MESHES, not
 #    for CPU work). Per state (plan Task 11b): a clothing piece worn OPEN
-#    needs its OPEN fit — without it, it is painted ("its open mesh", the
-#    painted text says "…, worn open"), never served with the closed mesh.
+#    is grafted with its OPEN fit; without one its CLOSED mesh stands in
+#    (fix round T12-F1, ruling F13 b: ``shown_closed``, "Shown closed until
+#    its open mesh is built" — never "no jacket", never painted while a
+#    closed mesh exists); without either the general interim applies (today
+#    painted, "its open mesh"; ruling A11 moves it into the body shape).
 # 3. Hair: HairDeck without a fit on the delivered shape is shown as the
 #    plain body has it — ``"body"`` when that body is haired
-#    (``base_body.stored_base_haired``), else ``"bald"``.
+#    (``base_body.stored_base_haired``), else ``"bald"``. Hair wanted IN the
+#    body on a plain body rendered bald (the hair mode was switched; only a
+#    rebuild of the plain body puts the hair in, ruling 8a: a manual Build)
+#    keeps the worn HairDeck hair meanwhile (ruling F13 a,
+#    ``interim_hair_fit``) — never served bald while a HairDeck fit exists.
 # 4. Refusal branch (``PAINT_ON_SHAPE`` False, ruling 7): nothing is painted
 #    on a meshed shape. The wanted figure already meshes the painted pieces
 #    worn with in-body pieces into the shape (``notes`` =
@@ -340,8 +354,14 @@ PAINT_NEEDS_PLAIN = "In the body here: painting needs the plain body"
 INTERIM_PAINTED = "Shown painted until {what} is built"
 WHAT_SHAPE = "its body shape"
 WHAT_OWN_MESH = "its own mesh"
-#: A piece worn open whose OPEN mesh is missing (plan Task 11b: never served with the closed mesh).
+#: A piece worn open whose OPEN mesh is missing and that has no closed mesh either (painted meanwhile).
 WHAT_OPEN_MESH = "its open mesh"
+#: ``Figure.notes`` of a piece worn open shown with its closed mesh until its open mesh is built (ruling F13 b).
+SHOWN_CLOSED = "Shown closed until its open mesh is built"
+#: The note of a worn-open piece's ONE pending change while its open mesh is missing (ruling F13 b).
+OPEN_MESH_MISSING = "worn open — open mesh missing"
+#: The note of the hair's pending change when the hair is wanted in the body but the plain body is bald (F13 a).
+HAIR_REBUILD = "in the body → plain body rebuild"
 #: ``Figure.hair``.
 HAIR_BODY, HAIR_HAIRDECK, HAIR_BALD = "body", "hairdeck", "bald"
 #: ``pending_changes`` keys of the body and the hair.
@@ -374,17 +394,23 @@ class Figure:
     pieces: Dict[str, str] = field(default_factory=dict)
     #: The worn closable pieces worn open (``WornSets.open``), sorted.
     open: Tuple[str, ...] = ()
+    #: Pieces worn open grafted with their CLOSED mesh until the open one is
+    #: built (ruling F13 b), sorted — a subset of ``open`` and ``own``.
+    shown_closed: Tuple[str, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
         """The JSON form an outfit model sidecar records as ``figure`` —
         ``open`` only when a piece is open (an all-closed figure records
-        what it recorded before the open / closed option, D-A1)."""
+        what it recorded before the open / closed option, D-A1),
+        ``shown_closed`` only when a piece stands in closed."""
         out = {"signature": self.signature, "bsig": self.bsig, "shape": self.shape, "texture": self.texture,
                "in_body": list(self.in_body), "painted": list(self.painted), "own": list(self.own),
                "left_out": dict(self.left_out), "interim": dict(self.interim), "notes": dict(self.notes),
                "hair": self.hair, "pieces": dict(self.pieces)}
         if self.open:
             out["open"] = list(self.open)
+        if self.shown_closed:
+            out["shown_closed"] = list(self.shown_closed)
         return out
 
     @classmethod
@@ -400,7 +426,7 @@ class Figure:
                    shape=str(data.get("shape") or ""), texture=str(data.get("texture") or ""),
                    in_body=ids("in_body"), painted=ids("painted"), own=ids("own"), left_out=texts("left_out"),
                    interim=texts("interim"), notes=texts("notes"), hair=str(data.get("hair") or HAIR_BODY),
-                   pieces=texts("pieces"), open=ids("open"))
+                   pieces=texts("pieces"), open=ids("open"), shown_closed=ids("shown_closed"))
 
     def state_of(self, item_id: str) -> str:
         """Where a worn piece is in this figure: ``in_body`` / ``painted`` /
@@ -548,6 +574,45 @@ def _fit_on(character_name: str, item_id: str, *, shape: str, base_sha: str,
     return False, str(on_shape.get("error") or "") or "not fitted on this body"
 
 
+def interim_hair_fit(character_name: str, *, bsig: str, base_sha: str,
+                     profile: Optional[Dict[str, Any]] = None) -> Optional[Tuple[Any, Dict[str, Any]]]:
+    """The HairDeck fit served while the hair is wanted IN the body but the
+    plain body ``bsig`` was rendered bald (``base_body.stored_base_haired``
+    False — the hair mode was switched, only a rebuild puts the hair in;
+    ruling F13 a): ``(fit GLB, record)`` of the newest accepted HairDeck fit
+    of the worn own hair item (``garment_hair.worn_hair_id``) on the base
+    model ``base_sha``, None otherwise (hair not in the body, a haired or
+    unknown plain body, no worn hair item, no such fit). Read-only — the
+    delivered figure's rule 3 and the garment assembly ask it."""
+    from app.core import base_body, garment_hair, garment_store
+    profile = _profile_of(character_name, profile)
+    if not base_sha or not garment_hair.hair_in_body(character_name, profile):
+        return None
+    if base_body.stored_base_haired(character_name, bsig) is not False:
+        return None
+    item_id = garment_hair.worn_hair_id(character_name, profile)
+    if not item_id:
+        return None
+    return garment_store.newest_accepted_fits(character_name, item_id, base_model_sha=base_sha).get(
+        garment_store.HAIRDECK)
+
+
+def _interim_hair_on(character_name: str, *, shape: str, bsig: str, base_sha: str,
+                     profile: Dict[str, Any]) -> bool:
+    """Whether ``interim_hair_fit`` has a fit that the delivered ``shape`` carries (rule 2's test of a
+    garment on a meshed shape: an accepted or still-to-be-made CPU body fit counts)."""
+    fit = interim_hair_fit(character_name, bsig=bsig, base_sha=base_sha, profile=profile)
+    if fit is None:
+        return False
+    if is_plain(shape):
+        return True
+    from app.core import garments, garment_hair
+    on_shape = garments.body_fit(character_name, garment_hair.worn_hair_id(character_name, profile), body_id=shape,
+                                 body_sha=garments.body_sha256(character_name, shape), base_fit=fit,
+                                 profile=profile, build=False)
+    return on_shape.get("fit") is not None or bool(on_shape.get("pending"))
+
+
 def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Dict[str, str]] = None,
                items: Optional[list] = None,
                piece_state: Optional[Dict[str, str]] = None) -> Tuple[Figure, Figure]:
@@ -555,6 +620,7 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     input, so the delivered figure has the wanted ``open``."""
     from dataclasses import replace
     from app.core import base_body, garment_set
+    from app.core.outfit_options import CLOSED, OPEN
     items = _items_of(profile, items)
     wanted, sets, variant = _wanted(character_name, profile=profile, pieces=pieces, items=items,
                                     piece_state=piece_state)
@@ -572,7 +638,8 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
         painted.update(in_body)
         in_body = []
     meshed = not is_plain(shape)
-    notes = dict(wanted.notes) if meshed else {}
+    refusal = dict(wanted.notes) if meshed else {}   # rule 4's notes (the stand-in notes join them below)
+    notes = dict(refusal)
     if not meshed and wanted.notes:
         # The refusal shape is not built: its painted pieces are painted on the plain body.
         painted.update(wanted.notes)
@@ -580,10 +647,17 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     own: List[str] = []
     left_out: Dict[str, str] = {}
     footwear: List[str] = []
+    shown_closed: List[str] = []
     for item_id, kind in sorted(sets.own.items()):
         state = _state_in(sets, item_id)
         fitted, reason = _fit_on(character_name, item_id, shape=shape, base_sha=base_sha, profile=profile,
                                  state=state)
+        if not fitted and state == OPEN and kind != garment_set.FOOTWEAR and _fit_on(
+                character_name, item_id, shape=shape, base_sha=base_sha, profile=profile, state=CLOSED)[0]:
+            own.append(item_id)          # ruling F13 b: the closed mesh stands in for the missing open one
+            shown_closed.append(item_id)
+            notes[item_id] = SHOWN_CLOSED
+            continue
         if fitted:
             own.append(item_id)
         elif kind == garment_set.FOOTWEAR:
@@ -593,20 +667,22 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
             left_out[item_id] = reason   # 4. Ruling P6: never painted on a meshed shape
         else:
             painted.add(item_id)
-            interim[item_id] = INTERIM_PAINTED.format(what=WHAT_OPEN_MESH if state == "open" else WHAT_OWN_MESH)
+            interim[item_id] = INTERIM_PAINTED.format(what=WHAT_OPEN_MESH if state == OPEN else WHAT_OWN_MESH)
     # 3. Hair.
     hair = wanted.hair
     if hair == HAIR_HAIRDECK and not _fit_on(character_name, sets.hair_item, shape=shape, base_sha=base_sha,
                                              profile=profile)[0]:
         hair = HAIR_BODY if base_body.stored_base_haired(character_name, bsig) else HAIR_BALD
     elif hair == HAIR_BODY and base_body.stored_base_haired(character_name, bsig) is False:
-        hair = HAIR_BALD
+        # Ruling F13 a: the worn HairDeck hair stays until the plain body is rebuilt with the hair.
+        hair = HAIR_HAIRDECK if _interim_hair_on(character_name, shape=shape, bsig=bsig, base_sha=base_sha,
+                                                 profile=profile) else HAIR_BALD
     # 5. The texture of what is painted, on the delivered shape.
     left_painted = tuple(sorted(painted))
     texture_sets = replace(sets, in_body=tuple(in_body), painted=left_painted,
                            own={i: sets.own[i] for i in (*own, *footwear)} if not meshed
                            else {i: k for i, k in sets.own.items() if i not in painted})
-    if meshed and notes:
+    if meshed and refusal:
         texture = ""
     else:
         texture = texture_key(character_name, texture_sets, shape=shape, bsig=bsig, variant=variant, items=items,
@@ -614,7 +690,7 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     delivered = Figure(signature=wanted.signature, bsig=bsig, shape=shape, texture=texture,
                        in_body=tuple(sorted(in_body)), painted=left_painted, own=tuple(own),
                        left_out=left_out, interim=interim, notes=notes, hair=hair, pieces=dict(sets.pieces),
-                       open=sets.open)
+                       open=sets.open, shown_closed=tuple(sorted(shown_closed)))
     return wanted, delivered
 
 
@@ -698,27 +774,74 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
     Open / closed (plan Task 11a): ``{key: "<item_id>:state", name, wanted,
     delivered}`` (``"open"`` / ``"closed"``) for a worn closable piece whose
     state differs between the wanted figure and the figure the served model
-    was built as (``served_figure``) — after the piece-list changes."""
-    from app.core import base_body
-    from app.models.inventory import get_item
+    was built as (``served_figure``; a piece it shows closed for open,
+    ``shown_closed``, counts as closed) — after the piece-list changes. A
+    piece worn open whose open mesh is missing has ONE change (ruling F13 b):
+    this state entry with ``note`` ``OPEN_MESH_MISSING`` — its piece entry
+    (painted meanwhile) is folded into it.
+
+    The hair wanted in the body on a plain body rendered bald (ruling F13 a):
+    ONE change, ``{key: "hair", …, note: HAIR_REBUILD}`` — it replaces the
+    plain body's "older prompts" entry, whose rebuild it is (the hair mode
+    changed the base prompt)."""
     profile = _profile_of(character_name, profile)
     wanted, delivered = _delivered(character_name, profile=profile)
+    return _pending(character_name, wanted, delivered, profile)
+
+
+def _open_mesh_missing(wanted: "Figure", delivered: "Figure") -> Dict[str, str]:
+    """``{item: "closed" | "painted"}`` of the worn-open own-mesh pieces whose open mesh is missing: shown
+    closed meanwhile (``shown_closed``), or painted (no mesh of either state)."""
+    from app.core import garment_set
+    from app.core.outfit_options import CLOSED
+    painted_open = INTERIM_PAINTED.format(what=WHAT_OPEN_MESH)
+    out: Dict[str, str] = {}
+    for item_id in wanted.open:
+        if item_id in wanted.own and item_id in delivered.shown_closed:
+            out[item_id] = CLOSED
+        elif item_id in wanted.own and delivered.interim.get(item_id) == painted_open:
+            out[item_id] = garment_set.PAINTED
+    return out
+
+
+def hair_needs_rebuild(character_name: str, wanted: "Figure", *, profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether the hair is wanted in the body while the stored plain body was rendered bald and its prompts
+    are no longer current (the hair text is in them now) — the plain body's rebuild is what the hair change
+    costs (ruling F13 a). A character without hair text keeps its bald plain body: no rebuild."""
+    from app.core import base_body
+    return (wanted.hair == HAIR_BODY and base_body.stored_base_haired(character_name, wanted.bsig) is False
+            and not base_body.prompts_current(character_name, wanted.bsig,
+                                              profile=_profile_of(character_name, profile)))
+
+
+def _pending(character_name: str, wanted: "Figure", delivered: "Figure",
+             profile: Dict[str, Any]) -> List[Dict[str, str]]:
+    """``pending_changes`` of an already resolved ``(wanted, delivered)``."""
+    from app.core import base_body
+    from app.models.inventory import get_item
     out: List[Dict[str, str]] = []
+    open_missing = _open_mesh_missing(wanted, delivered)
     for item_id in sorted({*wanted.in_body, *wanted.painted, *wanted.own}):
+        if item_id in open_missing:
+            continue  # its one change is the state entry below
         want, have = wanted.state_of(item_id), delivered.state_of(item_id)
         if want != have:
             out.append({"key": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
                         "wanted": want, "delivered": have})
-    out.extend(_state_changes(character_name, wanted))
+    out.extend(_state_changes(character_name, wanted, open_missing))
     from app.core.model_refs import find_ref_image
+    hair_rebuild = hair_needs_rebuild(character_name, wanted, profile=profile)
     if (find_ref_image(character_name, "tpose", wanted.bsig) is None
             or not base_body.base_model_sha256(character_name, wanted.bsig)):
         out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built", "delivered": "missing",
                     "note": BASE_MISSING})
-    elif not base_body.prompts_current(character_name, wanted.bsig, profile=profile):
+    elif not hair_rebuild and not base_body.prompts_current(character_name, wanted.bsig, profile=profile):
         out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built",
                     "delivered": base_body.OLDER_PROMPTS, "note": BASE_OUTDATED})
-    if wanted.hair != delivered.hair:
+    if hair_rebuild:
+        out.append({"key": HAIR_KEY, "name": "Hair", "wanted": wanted.hair, "delivered": delivered.hair,
+                    "note": HAIR_REBUILD})
+    elif wanted.hair != delivered.hair:
         out.append({"key": HAIR_KEY, "name": "Hair", "wanted": wanted.hair, "delivered": delivered.hair})
     return out
 
@@ -739,10 +862,15 @@ def served_figure(character_name: str) -> Optional[Figure]:
     return built_figure(model3d._read_sidecar(path)) if path is not None else None
 
 
-def _state_changes(character_name: str, wanted: Figure) -> List[Dict[str, str]]:
+def _state_changes(character_name: str, wanted: Figure,
+                   open_missing: Optional[Dict[str, str]] = None) -> List[Dict[str, str]]:
     """The open / closed entries of ``pending_changes``: worn closable pieces
     of ``wanted`` whose state the served model's figure does not show (a
-    piece that model does not wear is not a state change)."""
+    piece that model does not wear is not a state change; one it shows
+    closed for open, ``shown_closed``, is closed there). ``open_missing``
+    (``_open_mesh_missing``): pieces worn open whose open mesh is missing —
+    always an entry, ``delivered`` how it is shown meanwhile ("closed" /
+    "painted"), with ``note`` ``OPEN_MESH_MISSING`` (ruling F13 b)."""
     from app.core import garment_set
     from app.core.outfit_options import CLOSED, OPEN
     from app.models.inventory import get_item
@@ -750,18 +878,22 @@ def _state_changes(character_name: str, wanted: Figure) -> List[Dict[str, str]]:
                       if garment_set.closable_of(get_item(i)))
     if not closable:
         return []
-    built = served_figure(character_name)
-    if built is None:
-        return []
-    worn_there = {str(v) for v in built.pieces.values() if v}
+    open_missing = open_missing or {}
+    built = served_figure(character_name) if any(i not in open_missing for i in closable) else None
+    worn_there = {str(v) for v in built.pieces.values() if v} if built is not None else set()
     out: List[Dict[str, str]] = []
     for item_id in closable:
+        name = str((get_item(item_id) or {}).get("name") or item_id)
+        if item_id in open_missing:
+            out.append({"key": item_id + STATE_KEY_SUFFIX, "name": name, "wanted": OPEN,
+                        "delivered": open_missing[item_id], "note": OPEN_MESH_MISSING})
+            continue
+        if built is None:
+            continue
         want = OPEN if item_id in wanted.open else CLOSED
-        have = OPEN if item_id in built.open else CLOSED
+        have = OPEN if item_id in built.open and item_id not in built.shown_closed else CLOSED
         if item_id in worn_there and want != have:
-            out.append({"key": item_id + STATE_KEY_SUFFIX,
-                        "name": str((get_item(item_id) or {}).get("name") or item_id),
-                        "wanted": want, "delivered": have})
+            out.append({"key": item_id + STATE_KEY_SUFFIX, "name": name, "wanted": want, "delivered": have})
     return out
 
 

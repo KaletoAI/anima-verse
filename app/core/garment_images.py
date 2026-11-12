@@ -71,6 +71,17 @@ sibling (``raw_path``, written before the registration rewrites the file),
 or the file itself when no registration moved it — and registered again;
 a file moved before raw siblings were kept (2026-11-12) is gated as stored.
 
+The OPEN state of a closable clothing piece (ruling F15 i-1, fix round
+T12-F1): an open jacket looks the same from behind as a closed one, and the
+edit model split it open down the back when the back's text said "worn open"
+(hub job c9e10d2b, 2026-11-12). So its BACK views are never rendered with
+state words: an image step's back is COPIED from the closed state's accepted
+back of that step (``closed_back``; 0 jobs; the copy's record names it under
+``copied_from`` and follows it — ``_follows_front``), and without one it is
+rendered with the CLOSED texts (``_back_profile``). The closed group itself
+is left alone: a back drafted from the OPEN front never follows the closed
+front, so it could not serve the closed state.
+
 ``cut_out`` turns an accepted ghost image into the generator input
 (R6): BiRefNet-DIS mask on the original colours, a square of side
 ``1.15 × max(w, h)`` around the mask, routed upscale below 1024², Lanczos
@@ -241,20 +252,63 @@ def square_reference(path: Path, refs_dir: Path):
         yield out, side, offset, rgba.size
 
 
-def _crop_back(path: Path, target: Path, side, offset: Tuple[int, int],
-               size: Tuple[int, int]) -> Path:
-    """The square render cut back to the source frame, as PNG at ``target``:
-    a render of another size is first scaled (pure scale) to the requested
-    ``side``² (or ``side`` = ``(w, h)``, the fit canvas), then the source's
-    ``size`` is cropped at ``offset``. The renderer's sidecar moves along."""
+#: Relative aspect difference below which a render counts as the canvas's (or
+#: the source's) aspect: 686×1536 sent, 1376×3072 back is 0.3 % off.
+ASPECT_TOLERANCE = 0.02
+
+
+def crop_back_box(result: Tuple[int, int], side, offset: Tuple[int, int],
+                  size: Tuple[int, int]) -> Tuple[Tuple[int, int], Tuple[int, int, int, int]]:
+    """``(scaled size, (x0, y0, x1, y1))``: how a render of ``result`` (w, h)
+    of the edit canvas ``side``² (or ``side`` = ``(w, h)``) is cut back to the
+    source frame ``size`` placed at ``offset`` in that canvas — the render is
+    first resized to ``scaled size``, then the box is cropped (it may reach
+    past the scaled render's edges). By the render's aspect (within
+    ``ASPECT_TOLERANCE``):
+
+    - the CANVAS's (any size): a pure scale to the canvas, the box is the
+      source frame at ``offset``;
+    - the SOURCE's: the backend answered in the source's own frame (MiniMax /
+      P-H3 answer 1376×3072 for a 686×1536 source) — a pure scale to
+      ``size``, nothing cropped;
+    - another: scaled UNIFORMLY to the canvas height and taken as centred on
+      the canvas horizontally — never stretched (fix round T12-F1, ruling
+      F14 g)."""
+    cw, ch = (int(side[0]), int(side[1])) if isinstance(side, (tuple, list)) else (int(side), int(side))
+    rw, rh = int(result[0]), int(result[1])
+    sw, sh = int(size[0]), int(size[1])
+    aspect = rw / float(rh)
+
+    def near(w: int, h: int) -> bool:
+        return abs(aspect / (w / float(h)) - 1.0) <= ASPECT_TOLERANCE
+    if near(cw, ch):
+        return (cw, ch), (int(offset[0]), int(offset[1]), int(offset[0]) + sw, int(offset[1]) + sh)
+    if near(sw, sh):
+        return (sw, sh), (0, 0, sw, sh)
+    scaled = (max(1, round(rw * ch / float(rh))), ch)
+    x0 = (scaled[0] - cw) // 2 + int(offset[0])
+    y0 = int(offset[1])
+    return scaled, (x0, y0, x0 + sw, y0 + sh)
+
+
+def crop_back(path: Path, target: Path, side, offset: Tuple[int, int],
+              size: Tuple[int, int]) -> Path:
+    """The edit render cut back to the source frame, as PNG at ``target``
+    (``crop_back_box``: scaled by the render's aspect, then the source's
+    ``size`` cropped; what lies past the render's edge is neutral grey).
+    Shared by every square-canvas edit — the garment chain, the beard and
+    the outfit's dressed views (``base_body``, ``expression_regen.
+    render_character_image(crop_back_to=…)``). The renderer's sidecar moves
+    along."""
     from PIL import Image
-    canvas = tuple(side) if isinstance(side, (tuple, list)) else (side, side)
+    from app.core.model_refs import VIEW_REFERENCE_BACKGROUND
     with Image.open(path) as im:
         rgb = im.convert("RGB")
-    if rgb.size != canvas:
-        rgb = rgb.resize(canvas, Image.Resampling.LANCZOS)
-    dx, dy = offset
-    cropped = rgb.crop((dx, dy, dx + int(size[0]), dy + int(size[1])))
+    scaled, box = crop_back_box(rgb.size, side, offset, size)
+    if rgb.size != scaled:
+        rgb = rgb.resize(scaled, Image.Resampling.LANCZOS)
+    cropped = Image.new("RGB", (int(size[0]), int(size[1])), VIEW_REFERENCE_BACKGROUND)
+    cropped.paste(rgb, (-box[0], -box[1]))
     tmp = target.with_name(f".{target.name}.tmp")
     cropped.save(tmp, format="PNG")
     tmp.replace(target)
@@ -308,12 +362,80 @@ def accepted_record(path: Path) -> Optional[Dict[str, Any]]:
 
 def _follows_front(character_name: str, item_id: str, fsig: str, step: str, back: Path) -> bool:
     """A drafted back counts only while it was made from the CURRENT
-    accepted front (``front_sha256`` of its record)."""
+    accepted front (``front_sha256`` of its record). A back COPIED from the
+    closed state (``copied_from``, ruling F15 i-1) counts while the closed
+    back is still that file and follows ITS front."""
     from app.core.base_body import file_sha256
     from app.core.garment_store import garment_path, read_record
+    record = read_record(back.with_suffix(".json"))
+    copied = record.get("copied_from")
+    if isinstance(copied, dict):
+        source_fsig = str(copied.get("fsig") or "")
+        try:
+            source = garment_path(character_name, item_id, source_fsig, "image", step=step, view="back")
+        except ValueError:
+            return False
+        return (_accepted(source) and file_sha256(source) == copied.get("sha256")
+                and (not _drafted(_kind_module(item_id), step)
+                     or _follows_front(character_name, item_id, source_fsig, step, source)))
     front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
-    sha = read_record(back.with_suffix(".json")).get("front_sha256")
+    sha = record.get("front_sha256")
     return bool(sha) and _accepted(front) and sha == file_sha256(front)
+
+
+def _open_state(character_name: str, item_id: str, profile: Dict[str, Any], state: Optional[str]) -> bool:
+    """Whether a run of ``item_id`` is for the OPEN state of a closable clothing piece (``state``, None = the
+    state ``profile`` wears it in)."""
+    from app.core.garment_store import item_state
+    from app.core.outfit_options import OPEN
+    return item_state(character_name, item_id, profile, state) == OPEN
+
+
+def _back_profile(item_id: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    """The profile an open piece's BACK is rendered from: the piece CLOSED — no state words in the back's texts
+    (ruling F15 i-1: from behind an open piece looks like a closed one)."""
+    from app.core.outfit_options import CLOSED, with_item_state
+    return with_item_state(profile, item_id, CLOSED)
+
+
+def closed_back(character_name: str, item_id: str, step: str, *,
+                profile: Dict[str, Any]) -> Optional[Tuple[str, Path]]:
+    """``(closed fsig, back)``: the CLOSED state's accepted back image of ``step`` that the open state reuses
+    (ruling F15 i-1) — accepted and, for a drafted step, following its closed front. None without one."""
+    from app.core.garment_store import garment_fsig, garment_path
+    from app.core.outfit_options import CLOSED
+    if step not in getattr(_kind_module(item_id), "EDIT_STEPS", {}):
+        return None
+    try:
+        fsig = garment_fsig(character_name, item_id, profile=profile, state=CLOSED)
+    except ValueError:
+        return None
+    path = garment_path(character_name, item_id, fsig, "image", step=step, view="back")
+    if not _accepted(path):
+        return None
+    if _drafted(_kind_module(item_id), step) and not _follows_front(character_name, item_id, fsig, step, path):
+        return None
+    return fsig, path
+
+
+def _copy_closed_back(character_name: str, item_id: str, fsig: str, step: str, final: Path,
+                      source: Tuple[str, Path]) -> Path:
+    """The closed back ``source`` copied onto the open group's ``final`` with its record and ``copied_from``
+    ``{fsig, state, sha256}``; a changed copy makes the later image steps of the back stale (``_drop_later``)."""
+    from app.core.base_body import file_sha256
+    from app.core.garment_store import read_record, write_record
+    from app.core.outfit_options import CLOSED
+    closed_fsig, path = source
+    sha = file_sha256(path)
+    if final.is_file() and file_sha256(final) == sha and _accepted(final):
+        return final
+    shutil.copyfile(path, final)
+    write_record(final.with_suffix(".json"), {**read_record(path.with_suffix(".json")),
+                                              "copied_from": {"fsig": closed_fsig, "state": CLOSED, "sha256": sha}})
+    _drop_later(character_name, item_id, fsig, step, "back")
+    logger.info("Garment %s %s back of %s: copied from the closed state (%s) — no render", character_name, step,
+                item_id, closed_fsig)
+    return final
 
 
 def _publish(character_name: str, item_id: str, fsig: str, step: str, view: str, kind, target: Path,
@@ -372,8 +494,9 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
     kind = _kind_module(item_id)
     drafted = view == "back" and _drafted(kind, step)
+    copied = isinstance(read_record(final.with_suffix(".json")).get("copied_from"), dict)
     if not force and _accepted(final) and (
-            not drafted or _follows_front(character_name, item_id, fsig, step, final)):
+            not (drafted or copied) or _follows_front(character_name, item_id, fsig, step, final)):
         return final
     if step not in kind.EDIT_STEPS:
         raise ValueError(f"no edit step {step!r}")
@@ -381,6 +504,13 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     if state is not None:
         from app.core.outfit_options import with_item_state
         profile = with_item_state(profile, item_id, state)
+    if view == "back" and _open_state(character_name, item_id, profile, state):
+        # Ruling F15 i-1: the open state's back is the closed one's — copied, or rendered from closed texts.
+        source = None if force else closed_back(character_name, item_id, step, profile=profile)
+        if source is not None:
+            final.parent.mkdir(parents=True, exist_ok=True)
+            return _copy_closed_back(character_name, item_id, fsig, step, final, source)
+        profile = _back_profile(item_id, profile)
     bsig = base_body.base_signature(character_name, profile=profile)
     base = find_ref_image(character_name, base_body._kind(view), bsig)
     if base is None:
@@ -477,7 +607,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         if path is None:
             record: Dict[str, Any] = {"view": view, "ok": False, "reasons": ["render failed"]}
         else:
-            path = _crop_back(Path(path), target, side, offset, source_size)
+            path = crop_back(Path(path), target, side, offset, source_size)
             record = _with_pair(gate_file(path), pair_check)
         record["attempt"] = attempt
         records.append(record)
@@ -700,9 +830,9 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     follow = {"front_sha256": front_sha, "draft": draft.name, "draft_sha256": file_sha256(draft)}
 
     records: List[Dict[str, Any]] = []
-    with base_body.fit_references(base, draft, refs_dir, (1, 1), background=VIEW_REFERENCE_BACKGROUND) \
+    with base_body.fit_references(base, draft, refs_dir, base_body.SQUARE, background=VIEW_REFERENCE_BACKGROUND) \
             as (base_reference, draft_reference, canvas):
-        offset = ((canvas[0] - base_size[0]) // 2, 0)
+        _canvas, offset, _size = base_body.fit_crop(canvas, base_size)
         for attempt in range(1, ATTEMPTS + 1):
             target = garment_path(character_name, item_id, fsig, "image", step=step, view="back", attempt=attempt)
             path = base_body.render_fit(
@@ -714,7 +844,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
             if path is None:
                 record: Dict[str, Any] = {"view": "back", "ok": False, "reasons": ["render failed"]}
             else:
-                path = _crop_back(Path(path), target, canvas, offset, base_size)
+                path = crop_back(Path(path), target, canvas, offset, base_size)
                 record = gate_fit(path)
             record["attempt"] = attempt
             records.append(record)

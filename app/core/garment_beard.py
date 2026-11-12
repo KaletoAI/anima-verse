@@ -234,7 +234,7 @@ def beard_free_input(character_name: str, source: Path, folder: Path) -> Tuple[P
     ``accepted: False`` with the attempts' gate records). Blocking: the edit goes through the image service's
     routed ``garment_view`` occasion (``expression_regen.render_character_image``)."""
     from app.core import expression_regen
-    from app.core.garment_images import _crop_back, _mask, _rgb, square_reference
+    from app.core.garment_images import _mask, _rgb, crop_back, square_reference
     from app.core.garment_store import read_record, write_record
     from app.core.model_refs import get_model_refs_dir
     from app.core.timeutils import utc_now_iso
@@ -271,7 +271,7 @@ def beard_free_input(character_name: str, source: Path, folder: Path) -> Tuple[P
         if path is None:
             gate: Dict[str, Any] = {"ok": False, "reasons": ["render failed"]}
         else:
-            path = _crop_back(Path(path), candidate, side, offset, source_size)
+            path = crop_back(Path(path), candidate, side, offset, source_size)
             gate = beard_gate(src_rgb, src_mask, _rgb(path, size), _mask(path, size))
         gate["attempt"] = attempt
         attempts.append(gate)

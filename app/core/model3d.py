@@ -23,7 +23,7 @@ import re
 import shutil
 import threading
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from app.imagegen.routing import ROUTE_META_KEYS
@@ -2842,21 +2842,91 @@ def face_before_rig_planned(character_name: str, rig: Optional[str] = None) -> b
     return rig == "mixamo" and bool(get_model3d_options(character_name)["face_before_rig"])
 
 
+#: ``_face_route_ok`` memo: ``character -> (figure generation, monotonic, ok)`` (fix round T12-F1, F13 f).
+_route_memo: Dict[str, Tuple[int, float, bool]] = {}
+_route_lock = threading.Lock()
+
+
+def _face_route_ok(character_name: str) -> bool:
+    """``face_retexture.runnable(character_name)["ok"]``, memoised (fix round T12-F1, ruling F13 f — a live hub
+    probe, ~0.75 s, which the Figure tab asked four times per GET): under the figure generation
+    (``figure.invalidate``) for at most ``figure.MEMO_TTL_S`` — a route coming back or going away shows within
+    that bound."""
+    import time
+    from app.core import face_retexture, figure
+    generation = figure._generation[0]
+    now = time.monotonic()
+    with _route_lock:
+        hit = _route_memo.get(character_name)
+        if hit is not None and hit[0] == generation and now - hit[1] < figure.MEMO_TTL_S:
+            return hit[2]
+    ok = bool(face_retexture.runnable(character_name)["ok"])
+    with _route_lock:
+        if generation == figure._generation[0]:
+            if len(_route_memo) >= 256:
+                _route_memo.clear()
+            _route_memo[character_name] = (generation, now, ok)
+    return ok
+
+
+#: ``mesh_hub_stages`` memo: ``(character, signature) -> (key, monotonic, stages)`` (fix round T12-F1, F13 f).
+_stages_memo: Dict[Tuple[str, str], Tuple[Tuple[Any, ...], float, List[str]]] = {}
+_stages_lock = threading.Lock()
+
+
 def mesh_hub_stages(character_name: str, signature: str) -> List[str]:
     """The hub stages a FRESH mesh run of ``signature``
     (``generate_for_current_outfit``, the base body included) submits on its
     first attempts, in run order — what a cost estimate counts
     (``base_body.base_rebuild_cost``): ``mesh``; with the face correction
     before the rig (``face_before_rig_planned``) and a face route
-    (``face_retexture.runnable`` — without one the run records it as skipped)
-    ``upscale`` when the reference is the front view
-    (``face_retexture.use_upscale``) and ``face``; then ``rig``. The dark-face
-    gate may add one ``face`` retry. Texture re-encode, normalize, the
-    extension rig and the measurement run in Blender on the CPU: no hub stage.
-    Read-only."""
+    (``face_retexture.runnable`` — without one the run records it as skipped;
+    its probe memoised, ``_face_route_ok``) ``upscale`` when the reference is
+    the front view (``face_retexture.use_upscale``) and ``face``; then
+    ``rig``. The dark-face gate may add one ``face`` retry. Texture
+    re-encode, normalize, the extension rig and the measurement run in
+    Blender on the CPU: no hub stage. Read-only.
+
+    Memoised per character + signature (fix round T12-F1, ruling F13 f —
+    the face reference check decodes the face view, the probe asks the hub):
+    keyed by the figure generation (``figure.invalidate``: every ref / model
+    / record write), ``face_before_rig_planned`` and the face view's file
+    stat (read fresh — the face view is written outside those), for at most
+    ``figure.MEMO_TTL_S`` — a profile picture or a route changing shows
+    within that bound."""
+    import time
+    from app.core import figure
+    planned = face_before_rig_planned(character_name)
+    key = (figure._generation[0], planned, _face_view_stat(character_name))
+    now = time.monotonic()
+    with _stages_lock:
+        hit = _stages_memo.get((character_name, signature))
+        if hit is not None and hit[0] == key and now - hit[1] < figure.MEMO_TTL_S:
+            return list(hit[2])
+    stages = _mesh_hub_stages(character_name, signature, planned)
+    with _stages_lock:
+        if key[0] == figure._generation[0]:
+            if len(_stages_memo) >= 256:
+                _stages_memo.clear()
+            _stages_memo[(character_name, signature)] = (key, now, list(stages))
+    return stages
+
+
+def _face_view_stat(character_name: str) -> Tuple[int, int]:
+    """``(mtime_ns, size)`` of the character's ``model_refs/face_view.png``; (0, 0) without one."""
+    from app.models.character import get_character_dir
+    try:
+        st = (get_character_dir(character_name) / "model_refs" / "face_view.png").stat()
+    except OSError:
+        return 0, 0
+    return st.st_mtime_ns, st.st_size
+
+
+def _mesh_hub_stages(character_name: str, signature: str, planned: bool) -> List[str]:
+    """``mesh_hub_stages`` computed (its docstring)."""
     from app.core import face_retexture
     stages = ["mesh"]
-    if face_before_rig_planned(character_name) and face_retexture.runnable(character_name)["ok"]:
+    if planned and _face_route_ok(character_name):
         reference = face_retexture.reference_info(character_name, signature, {})["reference"]
         if face_retexture.use_upscale(reference, None):
             stages.append("upscale")

@@ -185,7 +185,7 @@ def main() -> int:
         RENDERS, WORKER = [], []
         COVERED: set = set()
 
-        def run_locked(character_name, item, kind, wanted, view, force):
+        def run_locked(character_name, item, kind, wanted, view, force, state=None, only=False):
             item_id = item["id"]
             fsig = gs.garment_fsig(character_name, item_id)
             bsig = base_body.base_signature(character_name)

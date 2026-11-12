@@ -497,8 +497,15 @@ def main() -> int:
                       [(8, "older prompts: views 4 + mesh + upscale + face + rig = 8 hub jobs (first attempts; "
                            "the hand gate may render the front up to 2 more times; "
                            "the dark-face gate may retry the face once)")])
+                # The stages are memoised under the figure generation and the face view's file
+                # (model3d.mesh_hub_stages): a patched reference needs a fresh generation.
+                from app.core import figure as figure_mod
+                figure_mod.invalidate()
                 with patch.object(face_retexture, "reference_info", lambda *a, **k: {"reference": "face"}):
                     check("(b) reference face → no upscale", [c.hub_jobs for c in cands()], [7])
+            # The face route's probe is memoised under the figure generation (model3d._face_route_ok): a route
+            # going away shows after the next write or ``figure.MEMO_TTL_S`` — here at once.
+            figure_mod.invalidate()
             with patch.object(face_retexture, "runnable", lambda *a, **k: {"ok": False, "problems": [{}]}):
                 check("(c) no face route → skipped", [c.hub_jobs for c in cands()], [6])
             model3d.set_model3d_options("Kira", {"face_before_rig": False})

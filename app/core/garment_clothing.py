@@ -31,7 +31,8 @@ is the same for every wearer, the fit is per wearer (``garment_store``).
 
 Open / closed (plan ``2026-11-12-unified-worn-pieces.md`` Task 11b, spec
 Addendum A "two meshes in the same piece"): a closable piece worn OPEN is
-another garment — its fragment says ``", worn open"`` (``fragment``), its
+another garment — its fragment says it is worn open at the front
+(``fragment``, ``outfit_options.OPEN_IMAGE_WORDS``), its
 fingerprint inputs carry ``state: "open"`` (``fsig_inputs``), so it has its
 own image group, mesh and fit. Closed is the identity state: its texts and
 inputs are those of before the option (ruling A1). Every text reads the
@@ -158,12 +159,15 @@ def _item_of(item: Any) -> Dict[str, Any]:
 
 def fragment(item: Dict[str, Any], *, state: str = "closed") -> str:
     """The piece's ``prompt_fragment``, whitespace-normalised, without a
-    trailing full stop ("" when unset); ``state`` ``open`` appends
-    ``", worn open"`` (``outfit_options.OPEN_WORDS``) to a set fragment,
-    closed is the fragment alone (ruling A1)."""
-    from app.core.outfit_options import OPEN, OPEN_WORDS
+    trailing full stop ("" when unset); ``state`` ``open`` appends the
+    explicit open phrase of the image edits (``outfit_options.
+    OPEN_IMAGE_WORDS``, ruling F15 i-2: "worn open at the front …, its front
+    edges apart …") to a set fragment, closed is the fragment alone (rulings
+    A1 / A7). Only the front says it: the open state's backs are rendered
+    from the closed texts (``garment_images``, ruling F15 i-1)."""
+    from app.core.outfit_options import OPEN, OPEN_IMAGE_WORDS
     text = " ".join(str(item.get("prompt_fragment") or "").split()).rstrip(".").strip()
-    return f"{text}, {OPEN_WORDS}" if text and state == OPEN else text
+    return f"{text}, {OPEN_IMAGE_WORDS}" if text and state == OPEN else text
 
 
 def state_of(item: Dict[str, Any], profile: Optional[Dict[str, Any]], state: Optional[str] = None) -> str:
@@ -193,8 +197,9 @@ def fsig_inputs(character_name: str, item: Dict[str, Any], *,
     lower-cased name the ghost prompt says — a rename re-renders the ghost),
     slots, covers, partially covers and the pronouns of the character's
     profile. Worn OPEN (``state``, None → the profile's worn state,
-    ``state_of``) the fragment says ``", worn open"`` and ``state: "open"``
-    is added; closed inputs are those of before the option, byte for byte."""
+    ``state_of``) the fragment says the open phrase (``fragment``) and
+    ``state: "open"`` is added; closed inputs are those of before the
+    option, byte for byte."""
     from app.core.garment_hair import pronouns
     from app.core.outfit_options import OPEN
     item = _item_of(item)
@@ -226,7 +231,7 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     ``worn`` FRONT (the base view): "Keep the image exactly as it is. Only
     change their clothing: they now wear only {prompt_fragment}." — the
     fragment in the state ``profile`` wears the piece in (``state_of``: open
-    adds ", worn open"); the worn
+    adds the open phrase); the worn
     BACK is no edit (``draft_prompt``, then ``fit_prompt``).
     ``ghost`` (the worn image): the piece alone, the item's name as the
     noun — ``ghost_prompt``. ValueError for an unknown step or
@@ -311,7 +316,8 @@ def fit_text(text: str, limit: int = FIT_FRAGMENT_MAX) -> str:
 def fit_prompt(step: str, *, item_id: Optional[str] = None, state: str = "closed") -> Tuple[str, str]:
     """``(prompt, keywords prompt)`` of the FIT of the worn back: ``FIT`` /
     ``FIT_KEYWORDS`` with the piece's dress text (``fit_text`` of its
-    fragment in ``state``: open adds ", worn open" for a closable piece).
+    fragment in ``state``: open adds the open phrase for a closable piece;
+    the open state's back is fitted from the CLOSED text, ``garment_images``).
     ValueError for a step without a drafted back, a missing item or a piece
     without a prompt fragment."""
     if EDIT_STEPS.get(step, {}).get("back") != "draft":

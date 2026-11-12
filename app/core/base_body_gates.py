@@ -363,3 +363,107 @@ def noise_gate(path: Path, reference: Optional[Path]) -> Dict[str, Any]:
             "noise": round(noise["floor"], 4), "reference_noise": round(base["floor"], 4),
             "head_score": _ratio(noise["head"], base["head"]),
             "figure_score": _ratio(noise["figure"], base["figure"])}
+
+
+# --- Framing of a dressed view (fix round T12-F1, ruling F14 h) ----------------
+#
+# A dressed edit must keep the figure where the base view has it: the shape
+# and the texture are registered pixel-wise against the base view, so a
+# figure that the edit model re-framed (moved up or down, scaled) puts wrong
+# geometry into the shape. Measured on the silhouette — the alpha masks the
+# other gates read (``view_guard``'s matte, ``noise_gate``'s alpha): its top
+# and bottom rows as fractions of the frame height, against the base view's.
+#
+# The limit, derived from the measured cases:
+# - a square-canvas edit (the source centred on a square, cropped back —
+#   ``garment_images``) keeps the frame: body XOR 0.005–0.007 against the base
+#   (2026-11-09 end-to-end run), i.e. well under 1 % of the height;
+# - the same edit sent at its narrow crop size re-framed the figure by ~2 %
+#   (2026-11-09: body XOR 0.111), a correct image that only moved;
+# - hub job 0544b374 (Kira's dressed front, Qwen2.1-Turbo, 686×1536 sent at
+#   1536²): the silhouette ran 0.036–0.999 against 0.024–0.968 — top +1.2 %,
+#   bottom +3.1 %, the feet cut off at the frame.
+# 3 % lies above the ~2 % re-frame the square canvas now prevents and below
+# 0544's +3.1 % that cut the feet: refused only above it. Drift above 1 % (the
+# square canvas's own spread is far below it) is kept with a warning.
+FRAMING_LIMIT = 0.03
+FRAMING_WARN = 0.01
+
+
+def _silhouette_rows(alpha: np.ndarray) -> Optional[Dict[str, float]]:
+    """``{top, bottom, width}`` of the largest figure in an alpha matte as
+    fractions of the frame height (``bottom`` = one past the last row),
+    plus ``touches`` (the figure reaches the top or bottom frame row). None
+    without a figure or a matte (no transparent pixel)."""
+    from scipy import ndimage as ndi
+    alpha = np.asarray(alpha)
+    if alpha.size == 0 or alpha.min() > 127:
+        return None
+    mask = alpha > 127
+    labels, count = ndi.label(mask)
+    if count == 0:
+        return None
+    if count > 1:
+        sizes = ndi.sum(mask, labels, range(1, count + 1))
+        mask = labels == 1 + int(np.argmax(sizes))
+    rows = np.nonzero(mask.any(axis=1))[0]
+    cols = np.nonzero(mask.any(axis=0))[0]
+    h = float(mask.shape[0])
+    return {"top": float(rows[0]) / h, "bottom": float(rows[-1] + 1) / h,
+            "width": float(cols[-1] + 1 - cols[0]) / h,
+            "touches": bool(rows[0] == 0 or rows[-1] == mask.shape[0] - 1)}
+
+
+def framing_arrays(alpha: np.ndarray, base_alpha: np.ndarray) -> Dict[str, Any]:
+    """``{"ok", "top", "bottom", "width", "limit", "warning"?, "cut"?}`` of a
+    dressed view's matte against its base view's (block above): ``top`` /
+    ``bottom`` the drift of the silhouette's top / bottom row (dressed minus
+    base, fractions of the frame height, + = down), ``width`` the change of
+    its horizontal extent (an outfit widens it — recorded, never judged);
+    ``ok`` False when ``|top|`` or ``|bottom|`` exceeds ``FRAMING_LIMIT``,
+    a ``warning`` above ``FRAMING_WARN``; ``cut`` when the dressed figure
+    reaches the top or bottom frame row and the base figure does not. An
+    unmeasurable pair passes with ``skipped``."""
+    mine, base = _silhouette_rows(alpha), _silhouette_rows(base_alpha)
+    if mine is None or base is None:
+        return {"ok": True, "limit": FRAMING_LIMIT,
+                "skipped": "dressed view without a matte" if mine is None else "base view without a matte"}
+    top = round(mine["top"] - base["top"], 4)
+    bottom = round(mine["bottom"] - base["bottom"], 4)
+    out: Dict[str, Any] = {"ok": bool(max(abs(top), abs(bottom)) <= FRAMING_LIMIT), "top": top, "bottom": bottom,
+                           "width": round(mine["width"] - base["width"], 4), "limit": FRAMING_LIMIT}
+    if mine["touches"] and not base["touches"]:
+        out["cut"] = True
+    drift = max(abs(top), abs(bottom))
+    if drift > FRAMING_WARN:
+        out["warning"] = framing_message(out)
+    return out
+
+
+def framing_message(record: Dict[str, Any], view: str = "") -> str:
+    """The refusal / warning text of a framing record: which edge moved by how much."""
+    edge = "bottom" if abs(record.get("bottom") or 0) >= abs(record.get("top") or 0) else "top"
+    drift = float(record.get(edge) or 0) * 100
+    what = f"{view} view: " if view else ""
+    cut = " — cut at the frame" if record.get("cut") else ""
+    return (f"{what}the figure moved: its {edge} edge shifted {drift:+.1f} % of the height "
+            f"(limit {record.get('limit', FRAMING_LIMIT) * 100:.0f} %){cut}")
+
+
+def framing_gate(path: Path, base_view: Optional[Path]) -> Dict[str, Any]:
+    """``framing_arrays`` of a dressed view file against its base view file:
+    the dressed view's alpha as stored (post-processed with the mesh-input
+    matte), the base view's as stored or, without a matte, the mesh-input
+    matte (``base_body.cut_out``). Never raises: an unreadable file passes
+    with ``skipped``."""
+    from PIL import Image
+    if base_view is None:
+        return {"ok": True, "limit": FRAMING_LIMIT, "skipped": "base view missing"}
+    try:
+        with Image.open(path) as im:
+            alpha = np.asarray(im.convert("RGBA").getchannel("A"))
+        from app.core.base_body import cut_out
+        base_alpha = np.asarray(cut_out(Path(base_view)).getchannel("A"))
+    except Exception as e:  # noqa: BLE001 — a gate that cannot read never blocks
+        return {"ok": True, "limit": FRAMING_LIMIT, "skipped": f"not measurable: {e}"}
+    return framing_arrays(alpha, base_alpha)

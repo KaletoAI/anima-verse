@@ -609,13 +609,17 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     model) has no fit. A footwear fit of an older fit version is never
     served (``_accepted_on``). Hair whose method is ``BODY`` is never
     served: the hair is part of the body mesh. Per open / closed state (plan
-    2026-11-12-unified-worn-pieces Task 11b, ruling A2): ``state`` (None →
-    the profile's worn state, ``item_state``) names the fsig and filters the
-    fallback — a piece worn open is never served its closed fit, nor the
-    other way round."""
+    2026-11-12-unified-worn-pieces Task 11b, ruling A2): ``state`` names the
+    fsig and filters the fallback — asked for one state, a piece is never
+    served the other state's fit. ``state`` None = the profile's worn state
+    (``item_state``), and then the SERVED fit (fix round T12-F1, ruling F13
+    b): a piece worn open whose open fit is missing is served its closed fit
+    meanwhile (``figure``: "Shown closed until its open mesh is built") —
+    never nothing, never painted while a closed mesh exists."""
     if not base_model_sha:
         return None
     profile = _profile_of(character_name, profile)
+    served = state is None
     try:
         state = item_state(character_name, item_id, profile, state)
         current: Optional[str] = garment_fsig(character_name, item_id, profile=profile, state=state)
@@ -630,7 +634,11 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
         record = read_record(path.with_suffix(".json"))
         if path.is_file() and _accepted_on(record, base_model_sha) and fit_state(record) == state:
             return path, record
-    return newest_accepted_fits(character_name, item_id, base_model_sha=base_model_sha, state=state).get(method)
+    hit = newest_accepted_fits(character_name, item_id, base_model_sha=base_model_sha, state=state).get(method)
+    if hit is None and served and state == "open":
+        # Ruling F13 b: worn open without its open mesh — the closed mesh stands in.
+        return accepted_fit(character_name, item_id, base_model_sha=base_model_sha, profile=profile, state="closed")
+    return hit
 
 
 def newest_accepted_fits(character_name: str, item_id: str, *, base_model_sha: str = "",
