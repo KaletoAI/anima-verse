@@ -256,6 +256,316 @@ def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) ->
     return meta
 
 
+# --- The wanted and the delivered figure (Task 6, rulings 2 and 7) -------------
+#
+# The WANTED figure is what the worn pieces call for under their item modes:
+# the in-body set meshed into ``shape``, the painted set on ``texture``, every
+# own-mesh piece fitted on top, the hair as its method says. The DELIVERED
+# figure is what can be shown NOW — the interim rule (ruling 2) applied to
+# what is built, judged at the call:
+#
+# 1. Shape: the wanted shape when it is stored (``stored_shape`` of its
+#    current views, ``base_body.shape_view_shas``), else the plain body —
+#    then every wanted in-body piece is painted meanwhile
+#    (``INTERIM_PAINTED`` "its body shape").
+# 2. An own-mesh piece without a fit on the delivered shape: clothing is
+#    painted meanwhile ("its own mesh"), footwear is LEFT OUT with the reason
+#    (never painted, footwear spec § 9.1). A fit on the plain body is
+#    ``garment_store.accepted_fit`` on the base model; on a meshed shape the
+#    piece needs that base fit (its garment mesh exists) and no fit refused on
+#    the shape (``garments.body_fit``: an accepted or still-to-be-made CPU fit
+#    of the Build's fits step counts — the interim rule waits for MESHES, not
+#    for CPU work).
+# 3. Hair: HairDeck without a fit on the delivered shape is shown as the
+#    plain body has it — ``"body"`` when that body is haired
+#    (``base_body.stored_base_haired``), else ``"bald"``.
+# 4. Refusal branch (``PAINT_ON_SHAPE`` False, ruling 7): nothing is painted
+#    on a meshed shape. The wanted figure already meshes the painted pieces
+#    worn with in-body pieces into the shape (``notes`` =
+#    ``PAINT_NEEDS_PLAIN``); an interim own-mesh piece on a meshed delivered
+#    shape is left out instead of painted (Ruling P6).
+# 5. Texture: ``texture_key`` of the delivered painted set on the delivered
+#    shape. On the plain body the own-mesh set passed in is the fitted pieces
+#    plus every footwear piece (left out or not), so the key is the tsig the
+#    build paints today, byte for byte (T4 carry).
+#
+# Serving keeps today's stand-in (``model3d.find_model3d_serving``) while
+# neither that texture nor an outfit model of this exact figure exists: the
+# previously delivered figure stays until the new one is built.
+
+#: Ruling 1b (Task 1's spike): painting onto a meshed shape works. False
+#: switches to the refusal branch of ruling 7 (rule 4 above).
+PAINT_ON_SHAPE = True
+#: ``Figure.notes`` of a painted piece meshed into the shape (refusal branch).
+PAINT_NEEDS_PLAIN = "In the body here: painting needs the plain body"
+#: ``Figure.interim`` of a piece shown painted until its mesh / shape exists.
+INTERIM_PAINTED = "Shown painted until {what} is built"
+WHAT_SHAPE = "its body shape"
+WHAT_OWN_MESH = "its own mesh"
+#: ``Figure.hair``.
+HAIR_BODY, HAIR_HAIRDECK, HAIR_BALD = "body", "hairdeck", "bald"
+#: ``pending_changes`` keys of the body and the hair.
+BODY_KEY, HAIR_KEY = "body", "hair"
+#: The wanted / delivered words of a piece in ``pending_changes``.
+LEFT_OUT = "left_out"
+
+
+@dataclass(frozen=True)
+class Figure:
+    """A figure of a character (block above)."""
+    signature: str                  # mesh-input signature of the worn outfit
+    bsig: str                       # the plain body
+    shape: str                      # bsig (plain body) or "ob…"
+    texture: str                    # "tex…" or "" (nothing painted on a meshed shape)
+    in_body: Tuple[str, ...]        # meshed into ``shape``
+    painted: Tuple[str, ...]        # painted on ``texture`` (interim ones included)
+    own: Tuple[str, ...]            # own-mesh pieces grafted (fit on ``shape`` exists)
+    left_out: Dict[str, str] = field(default_factory=dict)   # item -> reason
+    interim: Dict[str, str] = field(default_factory=dict)    # item -> INTERIM_PAINTED text
+    notes: Dict[str, str] = field(default_factory=dict)      # item -> PAINT_NEEDS_PLAIN
+    hair: str = HAIR_BODY           # "body" | "hairdeck" | "bald"
+
+    def as_dict(self) -> Dict[str, Any]:
+        """The JSON form an outfit model sidecar records as ``figure``."""
+        return {"signature": self.signature, "bsig": self.bsig, "shape": self.shape, "texture": self.texture,
+                "in_body": list(self.in_body), "painted": list(self.painted), "own": list(self.own),
+                "left_out": dict(self.left_out), "interim": dict(self.interim), "notes": dict(self.notes),
+                "hair": self.hair}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Figure":
+        def ids(key: str) -> Tuple[str, ...]:
+            return tuple(sorted(str(i) for i in data.get(key) or [] if isinstance(i, str) and i))
+
+        def texts(key: str) -> Dict[str, str]:
+            value = data.get(key)
+            return {str(k): str(v) for k, v in value.items()} if isinstance(value, dict) else {}
+
+        return cls(signature=str(data.get("signature") or ""), bsig=str(data.get("bsig") or ""),
+                   shape=str(data.get("shape") or ""), texture=str(data.get("texture") or ""),
+                   in_body=ids("in_body"), painted=ids("painted"), own=ids("own"), left_out=texts("left_out"),
+                   interim=texts("interim"), notes=texts("notes"), hair=str(data.get("hair") or HAIR_BODY))
+
+    def state_of(self, item_id: str) -> str:
+        """Where a worn piece is in this figure: ``in_body`` / ``painted`` /
+        ``own_mesh`` / ``left_out`` (``""`` when not worn)."""
+        from app.core import garment_set
+        if item_id in self.in_body:
+            return garment_set.IN_BODY
+        if item_id in self.own:
+            return garment_set.OWN_MESH
+        if item_id in self.painted:
+            return garment_set.PAINTED
+        return LEFT_OUT if item_id in self.left_out else ""
+
+
+def built_figure(meta: Dict[str, Any]) -> Optional[Figure]:
+    """The figure an outfit model was built as (its sidecar key ``figure``),
+    None when it records none (built before Task 6)."""
+    data = meta.get("figure") if isinstance(meta, dict) else None
+    return Figure.from_dict(data) if isinstance(data, dict) else None
+
+
+def _items_of(profile: Dict[str, Any], items: Optional[list]) -> list:
+    if items is not None:
+        return list(items)
+    worn = profile.get("equipped_items")
+    return list(worn) if isinstance(worn, list) else []
+
+
+def _signature(character_name: str, pieces: Dict[str, str], items: list, profile: Dict[str, Any]) -> str:
+    """The mesh-input signature of ``pieces`` / ``items`` (``model_refs.current_outfit_state``'s rule)."""
+    from app.core import model_refs
+    return model_refs.mesh_signature(dict(pieces), list(items), character_name,
+                                     model_refs.mesh_variant(character_name, dict(pieces), profile),
+                                     model_refs.mesh_items_token(character_name, dict(pieces), profile))
+
+
+def _refused_sets(sets: WornSets) -> Tuple[WornSets, Dict[str, str]]:
+    """The refusal branch (``PAINT_ON_SHAPE`` False): the painted pieces worn
+    with in-body pieces are meshed into the shape — ``(sets, notes)``."""
+    from dataclasses import replace
+    if PAINT_ON_SHAPE or not sets.in_body or not sets.painted:
+        return sets, {}
+    notes = {item_id: PAINT_NEEDS_PLAIN for item_id in sets.painted}
+    return replace(sets, in_body=tuple(sorted({*sets.in_body, *sets.painted})), painted=()), notes
+
+
+def _wanted(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Dict[str, str]],
+            items: Optional[list]) -> Tuple[Figure, WornSets, str]:
+    """``(wanted figure, its worn sets, variant)``."""
+    from app.core import base_body
+    if pieces is None:
+        pieces = profile.get("equipped_pieces") or {}
+    items = _items_of(profile, items)
+    sets, notes = _refused_sets(worn_sets(character_name, pieces=dict(pieces), profile=profile))
+    bsig = base_body.base_signature(character_name, profile=profile)
+    variant = predicted_variant(character_name, sets, items, profile=profile)
+    shape = shape_key(character_name, sets, bsig=bsig, variant=variant, profile=profile)
+    texture = ("" if notes and not is_plain(shape)
+               else texture_key(character_name, sets, shape=shape, bsig=bsig, variant=variant, items=items,
+                                profile=profile))
+    figure = Figure(signature=_signature(character_name, sets.pieces, items, profile), bsig=bsig, shape=shape,
+                    texture=texture, in_body=sets.in_body, painted=sets.painted, own=tuple(sorted(sets.own)),
+                    notes=notes if not is_plain(shape) else {},
+                    hair=HAIR_BODY if sets.hair_in_body else HAIR_HAIRDECK)
+    return figure, sets, variant
+
+
+def wanted_figure(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                  pieces: Optional[Dict[str, str]] = None, items: Optional[list] = None) -> Figure:
+    """The figure the worn pieces (``pieces`` / ``items``, default the
+    profile's ``equipped_pieces`` / ``equipped_items``) call for under their
+    item modes — nothing judged as built or not. Read-only."""
+    return _wanted(character_name, profile=_profile_of(character_name, profile), pieces=pieces, items=items)[0]
+
+
+def _shape_stored(character_name: str, shape: str, bsig: str) -> bool:
+    """Whether the meshed shape ``shape`` is stored and current
+    (``stored_shape`` against its views made from the current plain body)."""
+    from app.core import base_body
+    return stored_shape(character_name, shape, view_shas=base_body.shape_view_shas(character_name, shape, bsig)) \
+        is not None
+
+
+def _not_fitted_reason(character_name: str, item_id: str, *, base_sha: str, profile: Dict[str, Any]) -> str:
+    """Why an own-mesh piece has no fit: its chain's persisted failure
+    (``base_body.MESH_ITEM_CHAIN_FAILED``), else ``NO_MESH_FIT`` /
+    ``BASE_MODEL_MISSING``."""
+    from app.core import base_body, garments
+    try:
+        failure = garments.cached_failure(character_name, item_id, profile=profile)
+    except Exception:  # noqa: BLE001 — a reason, never a failure of the resolver
+        failure = None
+    if failure and failure.get("step") and failure.get("error"):
+        return base_body.MESH_ITEM_CHAIN_FAILED.format(step=failure["step"], error=failure["error"])
+    return base_body.NO_MESH_FIT if base_sha else base_body.BASE_MODEL_MISSING
+
+
+def _fit_on(character_name: str, item_id: str, *, shape: str, base_sha: str,
+            profile: Dict[str, Any]) -> Tuple[bool, str]:
+    """``(fitted, reason)`` of a garment (own-mesh piece or HairDeck hair) on
+    the delivered ``shape`` (rule 2 of the block above)."""
+    from app.core import garment_store, garments
+    if not item_id:
+        return False, ""
+    base_fit = (garment_store.accepted_fit(character_name, item_id, base_model_sha=base_sha, profile=profile)
+                if base_sha else None)
+    if base_fit is None:
+        return False, _not_fitted_reason(character_name, item_id, base_sha=base_sha, profile=profile)
+    if is_plain(shape):
+        return True, ""
+    on_shape = garments.body_fit(character_name, item_id, body_id=shape,
+                                 body_sha=garments.body_sha256(character_name, shape), base_fit=base_fit,
+                                 profile=profile, build=False)
+    if on_shape.get("fit") is not None or on_shape.get("pending"):
+        return True, ""
+    return False, str(on_shape.get("error") or "") or "not fitted on this body"
+
+
+def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Dict[str, str]] = None,
+               items: Optional[list] = None) -> Tuple[Figure, Figure]:
+    """``(wanted, delivered)`` (block above)."""
+    from dataclasses import replace
+    from app.core import base_body, garment_set
+    items = _items_of(profile, items)
+    wanted, sets, variant = _wanted(character_name, profile=profile, pieces=pieces, items=items)
+    bsig = wanted.bsig
+    base_sha = base_body.base_model_sha256(character_name, bsig)
+    # 1. The shape.
+    shape = wanted.shape
+    interim: Dict[str, str] = {}
+    in_body = list(wanted.in_body)
+    painted = set(wanted.painted)
+    if not is_plain(shape) and not _shape_stored(character_name, shape, bsig):
+        shape = bsig
+        for item_id in in_body:
+            interim[item_id] = INTERIM_PAINTED.format(what=WHAT_SHAPE)
+        painted.update(in_body)
+        in_body = []
+    meshed = not is_plain(shape)
+    notes = dict(wanted.notes) if meshed else {}
+    if not meshed and wanted.notes:
+        # The refusal shape is not built: its painted pieces are painted on the plain body.
+        painted.update(wanted.notes)
+    # 2. Own-mesh pieces.
+    own: List[str] = []
+    left_out: Dict[str, str] = {}
+    footwear: List[str] = []
+    for item_id, kind in sorted(sets.own.items()):
+        fitted, reason = _fit_on(character_name, item_id, shape=shape, base_sha=base_sha, profile=profile)
+        if fitted:
+            own.append(item_id)
+        elif kind == garment_set.FOOTWEAR:
+            left_out[item_id] = reason
+            footwear.append(item_id)
+        elif meshed and not PAINT_ON_SHAPE:
+            left_out[item_id] = reason   # 4. Ruling P6: never painted on a meshed shape
+        else:
+            painted.add(item_id)
+            interim[item_id] = INTERIM_PAINTED.format(what=WHAT_OWN_MESH)
+    # 3. Hair.
+    hair = wanted.hair
+    if hair == HAIR_HAIRDECK and not _fit_on(character_name, sets.hair_item, shape=shape, base_sha=base_sha,
+                                             profile=profile)[0]:
+        hair = HAIR_BODY if base_body.stored_base_haired(character_name, bsig) else HAIR_BALD
+    elif hair == HAIR_BODY and base_body.stored_base_haired(character_name, bsig) is False:
+        hair = HAIR_BALD
+    # 5. The texture of what is painted, on the delivered shape.
+    left_painted = tuple(sorted(painted))
+    texture_sets = replace(sets, in_body=tuple(in_body), painted=left_painted,
+                           own={i: sets.own[i] for i in (*own, *footwear)} if not meshed
+                           else {i: k for i, k in sets.own.items() if i not in painted})
+    if meshed and notes:
+        texture = ""
+    else:
+        texture = texture_key(character_name, texture_sets, shape=shape, bsig=bsig, variant=variant, items=items,
+                              profile=profile)
+    delivered = Figure(signature=wanted.signature, bsig=bsig, shape=shape, texture=texture,
+                       in_body=tuple(sorted(in_body)), painted=left_painted, own=tuple(own),
+                       left_out=left_out, interim=interim, notes=notes, hair=hair)
+    return wanted, delivered
+
+
+def delivered_figure(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                     pieces: Optional[Dict[str, str]] = None, items: Optional[list] = None) -> Figure:
+    """The figure that would be delivered NOW for the worn pieces (default:
+    the profile's; ``pieces`` / ``items`` judge another outfit, e.g. a stored
+    model's manifest) — the interim rule applied (block above). Read-only:
+    no chain, no fit, no image runs here."""
+    return _delivered(character_name, profile=_profile_of(character_name, profile), pieces=pieces, items=items)[1]
+
+
+def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, str]]:
+    """The "N changes" of the Figure tab's header, derived (never stored):
+    ``[{key, name, wanted, delivered}]`` — one per worn piece whose delivered
+    state differs from what its mode calls for (interim painting, a shape not
+    built, footwear left out; a piece meshed in by the refusal branch is
+    delivered as wanted), then ``body`` when the plain body is missing or was
+    rendered with older prompts (``base_body.OLDER_PROMPTS``), then ``hair``
+    when the hair is not delivered as its method says. Read-only."""
+    from app.core import base_body
+    from app.models.inventory import get_item
+    profile = _profile_of(character_name, profile)
+    wanted, delivered = _delivered(character_name, profile=profile)
+    out: List[Dict[str, str]] = []
+    for item_id in sorted({*wanted.in_body, *wanted.painted, *wanted.own}):
+        want, have = wanted.state_of(item_id), delivered.state_of(item_id)
+        if want != have:
+            out.append({"key": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
+                        "wanted": want, "delivered": have})
+    from app.core.model_refs import find_ref_image
+    if (find_ref_image(character_name, "tpose", wanted.bsig) is None
+            or not base_body.base_model_sha256(character_name, wanted.bsig)):
+        out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built", "delivered": "missing"})
+    elif not base_body.prompts_current(character_name, wanted.bsig, profile=profile):
+        out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built",
+                    "delivered": base_body.OLDER_PROMPTS})
+    if wanted.hair != delivered.hair:
+        out.append({"key": HAIR_KEY, "name": "Hair", "wanted": wanted.hair, "delivered": delivered.hair})
+    return out
+
+
 def stored_unneeded(character_name: str) -> List[Dict[str, Any]]:
     """What is stored but not needed now (Ruling 5a; the Figure tab lists
     it, only an explicit Delete removes it): every outfit body the artefact

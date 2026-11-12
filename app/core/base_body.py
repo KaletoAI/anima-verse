@@ -450,6 +450,17 @@ def prompts_current(character_name: str, signature: str, *, profile: Optional[Di
     return bool(meta) and meta.get("prompt_fingerprint") == prompt_fingerprint(character_name, profile=profile)
 
 
+def stored_base_haired(character_name: str, bsig: str) -> Optional[bool]:
+    """Whether the stored base front of ``bsig`` was rendered with hair: its
+    sidecar ``prompt`` does not name the bald head (``BALD_HEAD``). None
+    without a stored front. The delivered figure shows HairDeck hair without
+    a fit as this body has it (``figure`` rule 3)."""
+    from app.core.model_refs import find_ref_image
+    if find_ref_image(character_name, _kind("front"), bsig) is None:
+        return None
+    return BALD_HEAD not in str(_front_sidecar(character_name, bsig).get("prompt") or "")
+
+
 def base_prompts_freshness(character_name: str, *,
                            profile: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
     """``{state, reason}`` of the stored base front against the current
@@ -2643,6 +2654,24 @@ def texture_view_shas(character_name: str, signature: str, bsig: str) -> Dict[st
     (``dressed_image``; "" for a missing one) — what a painted body was
     made from."""
     return {v: file_sha256(dressed_image(character_name, v, signature, bsig)) for v in dressed_views()}
+
+
+def shape_view_shas(character_name: str, shape: str, bsig: str) -> Dict[str, str]:
+    """``{view: sha256}`` of the stored views of the meshed shape ``shape``
+    (``model_refs/tpose[_<view>]_<shape>``, ``dressed_views()``) that were
+    edited from the CURRENT plain body ``bsig`` (sidecar ``base_signature``
+    and ``base_image_sha256`` = that base view's content); "" for a missing
+    or outdated one — what ``figure.stored_shape`` compares with the
+    shape's recorded ``views``. Read-only."""
+    from app.core.model_refs import find_ref_image
+    out: Dict[str, str] = {}
+    for v in dressed_views():
+        path = find_ref_image(character_name, _kind(v), shape)
+        meta = _ref_sidecar(path)
+        current = (path is not None and meta.get("base_signature") == bsig
+                   and meta.get("base_image_sha256") == file_sha256(find_ref_image(character_name, _kind(v), bsig)))
+        out[v] = file_sha256(path) if current else ""
+    return out
 
 
 def _source_sha(base: Dict[str, Any], variant: str) -> str:
