@@ -199,6 +199,21 @@ under the knee), seam gap 0, slim 0.073, every foot gate green — REFUSED on ``
 centre there — the shaft stands vertical (frame up = body up) while Kira's shin leans 16.3° forward in bind (Foot
 joint 111 mm behind the knee). The same boot on Kai ``base634402e5`` (k 0.3800, width factor 1.046, collar 0.362):
 push p95 0.0102, max 0.0344 — refused on the max alone. Not a follow / clip problem.
+
+**Task 9 fix 4 (Ruling 15e: the body is cut away under the boot).** Step 9c: the collar PLANE (the widened rim's
+best-fit plane, normal up; horizontal at the collar without a rim) and the OPENING (``footwear_cut.collar_opening``)
+in the cut frame go into ``shaft.collar_plane`` / ``shaft.opening`` — the cut removes foot and lower leg under that
+plane and conforms the leg's edge into the opening (``footwear_cut`` version 5). What the cut body cannot show stops
+gating: ``shaft_push_p95_m`` / ``shaft_push_max_m`` / ``shaft_inside_share`` read the shaft vertices from
+``COLLAR_BAND_M`` under the plane up (the visible collar band; the whole-shaft values stay as ``push_all_*`` /
+``inside_all_share``). The push's body field is hole-filled slice by slice (``garment_fit.body_sdf(fill_slices=)``):
+the clone's base bodies rebuilt 2026-11-12 (Kira ``base20d5701a``, Kai ``base634402e5``) are leg SHELLS whose
+calf cavity the 3D fill and the seal read as outside, so the push left the shaft's side walls inside the leg
+(pushed toward the cavity). Measured on copies (knee-high leather boots, width cap 1.10, turn + calf centring of
+fix 3): Kira band push p95 26.6 / max 30.9 mm (whole shaft 21.6 / 31.1), Kai 36.6 / 42.7 mm — both REFUSED on the
+push: the image's shaft is 64 mm wide at the collar against an 87-mm calf (a flattened single-view tube), the
+spec's "too narrow for this calf". The Work Shoes on Kai read 16.2 / 23.4 mm (refused on p95 by 1.2 mm; on the
+pre-rebuild Kai 13.5 / 20.9, accepted).
 """
 import math
 from dataclasses import dataclass, field
@@ -222,7 +237,10 @@ from app.core.footwear_gates import check_gates
 #: 10: the knee edge (step 10) — a knee-high shaft clipped at ``knee − KNEE_MARGIN_M``, the collar after the clip,
 #:    the gates ``shaft_clip_m`` / ``knee_margin_m`` on every split fit (Task 14). A stored v9 boot fit differs (no
 #:    knee gates in its record, a knee-high one unclipped); a shoe's output is unchanged and refits to the same bytes.
-FOOTWEAR_FIT_VERSION = 10
+#: 11: the shaft turned onto the shin and centred on the calf at the width cap (Task 9 fix 3), the collar plane and
+#:    opening for the boot body cut (step 9c, ``footwear_cut`` version 5), the push gates read in the collar band
+#:    only, the push's body field hole-filled per slice (Task 9 fix 4, Ruling 15e).
+FOOTWEAR_FIT_VERSION = 11
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
@@ -261,6 +279,24 @@ FOLLOW_TURN_DEG = 20.0
 KNEE_MARGIN_M = 0.04
 SHAFT_CLIP_MAX_M = 0.05
 KNEE_MARGIN_ROUND = 9
+#: The shaft onto the shin (step 9a, fit version 11): the shaft's axis is the line fitted through the middles of its
+#: horizontal sections, slabs of ``SHAFT_AXIS_SLAB_M`` between the band's top and the collar, each with at least
+#: ``SHAFT_AXIS_SLAB_MIN`` vertices; fewer than ``SHAFT_AXIS_SLABS`` slabs or a span under ``SHAFT_AXIS_MIN_M`` is no
+#: axis (an ankle boot: no turn). The calf's section at the collar = the shin vertices within ``CALF_SECTION_M``.
+SHAFT_AXIS_MIN_M = 0.05
+SHAFT_AXIS_SLAB_M = 0.01
+SHAFT_AXIS_SLAB_MIN = 8
+SHAFT_AXIS_SLABS = 3
+CALF_SECTION_M = 0.005
+#: The shaft width factor (step 9b, spec § 17): per axis at most this — the spec names no cap of its own, so both are
+#: its one width cap, § 5.5's 1.10 (Task 9 fix 3 measured what a larger across cap would take: module docstring); the
+#: opening's inner radius on a side = the nearest shaft vertex to the axis within ``WIDEN_BIN_DEG`` of that side.
+SHAFT_WIDTH_CAP_ACROSS = WIDTH_CAP
+SHAFT_WIDTH_CAP_DEPTH = WIDTH_CAP
+WIDEN_BIN_DEG = 15.0
+#: The shaft push gates read the push of the shaft vertices within this far under the collar plane (and above it):
+#: the body under the boot is cut away (``footwear_cut``, Ruling 15e), only the collar band still meets the leg.
+COLLAR_BAND_M = 0.03
 #: Shaft measures whose worse side is the SMALLER value.
 WORST_IS_MIN = ("knee_margin_m",)
 #: The shaft gates of a SPLIT fit (spec § 9 start values); a shoe carries none of them. ``gating`` per gate
@@ -680,6 +716,152 @@ def _rotation_angle_deg(R: np.ndarray) -> float:
     return math.degrees(math.acos(max(-1.0, min(1.0, (float(np.trace(R)) - 1.0) / 2.0))))
 
 
+def _lean_deg(v: np.ndarray) -> float:
+    """The angle (degrees) between the direction ``v`` and the body's up."""
+    return math.degrees(math.acos(max(-1.0, min(1.0, float(_unit(v) @ _UP)))))
+
+
+def _section_centre(X: np.ndarray) -> np.ndarray:
+    """The horizontal (x, z) middle of a cross-section's extent — density-independent (a mesh denser on one wall
+    pulls a vertex mean, not the middle of the extent)."""
+    return 0.5 * (X[:, [0, 2]].min(0) + X[:, [0, 2]].max(0))
+
+
+def _rodrigues(V: np.ndarray, axis: np.ndarray, angles: np.ndarray) -> np.ndarray:
+    """Each row of ``V`` turned by its own angle (radians) about the unit ``axis`` (Rodrigues' formula)."""
+    c, s = np.cos(angles)[:, None], np.sin(angles)[:, None]
+    return V * c + np.cross(axis, V) * s + np.outer(V @ axis, axis) * (1.0 - c)
+
+
+def _shaft_widen(P: np.ndarray, yf: np.ndarray, s_band: np.ndarray, turn: Dict[str, Any], *, y_lo: float,
+                 y_hi: float, lateral: np.ndarray, calf: np.ndarray) -> Dict[str, Any]:
+    """Step 9b (fit version 11, spec § 17's shaft width factor): the turned shaft's cross-section scaled about its axis
+    — ONE factor across (``lateral``, the shoe's z ⟂ the axis) and one along the depth — to the calf plus
+    ``SHAFT_CLEAR_M`` where the opening is narrower, each ``min(cap, max(1, needed))``, blended in across the band
+    like the turn. ``needed`` per axis = the largest over the shaft's slabs (frame heights [``y_lo``, ``y_hi``], as the
+    axis) and the axis' two sides of (the calf's reach from the axis + clearance) / the opening's inner radius there
+    (the nearest shaft vertex to the axis within ±``WIDEN_BIN_DEG`` of that side). Returns the positions and the
+    record (``needed`` and ``factor`` per axis) and the collar ring's lowest / highest point after the widening."""
+    a = _unit(turn["leg_axis"])
+    lv = _unit(lateral - (lateral @ a) * a)
+    dv = np.cross(a, lv)
+    c_top = turn["pivot"] + turn["t"]
+
+    def local(X: np.ndarray) -> np.ndarray:
+        Q = X - c_top
+        return np.stack([Q @ lv, Q @ dv, Q @ a], axis=1)
+
+    Lc = local(calf)
+    need = {"across": [], "depth": []}
+    half = math.radians(WIDEN_BIN_DEG)
+    for lo in np.arange(y_lo, y_hi - 1e-12, SHAFT_AXIS_SLAB_M):
+        sel = (yf >= lo) & (yf < lo + SHAFT_AXIS_SLAB_M) & (s_band >= 1.0)
+        if int(sel.sum()) < SHAFT_AXIS_SLAB_MIN:
+            continue
+        Ls = local(P[sel])
+        ua = float(np.median(Ls[:, 2]))
+        sec = Lc[np.abs(Lc[:, 2] - ua) <= CALF_SECTION_M]
+        if len(sec) < SHAFT_AXIS_SLAB_MIN:
+            continue
+        r = np.hypot(Ls[:, 0], Ls[:, 1])
+        th = np.arctan2(Ls[:, 1], Ls[:, 0])
+        for name, col, dirs in (("across", 0, (0.0, math.pi)), ("depth", 1, (0.5 * math.pi, -0.5 * math.pi))):
+            for sign, ang in zip((1.0, -1.0), dirs):
+                inb = np.abs(np.angle(np.exp(1j * (th - ang)))) <= half
+                if not inb.any():
+                    continue
+                reach = float(np.max(sign * sec[:, col]))
+                r_in = max(float(r[inb].min()), 1e-6)
+                need[name].append((reach + SHAFT_CLEAR_M) / r_in)
+
+    needed = {name: (max(v) if v else None) for name, v in need.items()}
+    caps = {"across": SHAFT_WIDTH_CAP_ACROSS, "depth": SHAFT_WIDTH_CAP_DEPTH}
+    factor = {name: (1.0 if v is None else min(caps[name], max(1.0, v))) for name, v in needed.items()}
+    out = P.copy()
+    rows, s = turn["rows"], turn["s"]
+    if factor["across"] != 1.0 or factor["depth"] != 1.0:
+        C = turn["pivot"] + s[:, None] * turn["t"]
+        Q = P[rows] - C
+        ul, ud = Q @ lv, Q @ dv
+        out[rows] = (P[rows] + np.outer(ul * s * (factor["across"] - 1.0), lv)
+                     + np.outer(ud * s * (factor["depth"] - 1.0), dv))
+    # the collar ring widened with the shaft (above the band, s = 1): its lowest and highest point
+    rim = turn["rim"]
+    if len(rim):
+        Q = rim - c_top
+        rim = rim + np.outer((Q @ lv) * (factor["across"] - 1.0), lv) + np.outer((Q @ dv) * (factor["depth"] - 1.0), dv)
+    return {"P": out, "needed": needed, "factor": factor, "cap": caps, "rim": rim,
+            "collar_lo": float(rim[:, 1].min()) if len(rim) else None,
+            "collar_hi": float(rim[:, 1].max()) if len(rim) else None}
+
+
+def _shaft_turn(Pw: np.ndarray, yf: np.ndarray, s_band: np.ndarray, *, y_lo: float, y_hi: float, frame0: float,
+                y_pivot: float, leg_dir: np.ndarray, calf: np.ndarray, faces: np.ndarray,
+                collar_f: float) -> Optional[Dict[str, Any]]:
+    """Step 9a (fit version 11): the shaft onto the shin (module docstring). ``Pw`` = the placed shoe (posed, before
+    the root lift), ``yf`` its frame heights, ``s_band`` the band's smoothstep; the axis is read over the frame
+    heights [``y_lo``, ``y_hi``] (the band's top to the collar), ``frame0`` = the bind height of frame height 0,
+    ``y_pivot`` the frame height of the pivot (the split), ``leg_dir`` the Leg bone's direction (ankle -> knee) in the
+    stand, ``calf`` the side's shin vertices in the stand, ``faces`` the side's faces, ``collar_f`` the collar's frame
+    height. None when the shaft is too short for an axis (fewer than ``SHAFT_AXIS_SLABS`` slabs over at least
+    ``SHAFT_AXIS_MIN_M``) — the shaft then stays as placed (an ankle boot: the foot part's placement decides).
+    Else ``{"P": the turned positions, "rows" / "s": the moving vertices and their blend, "axis" / "angle": the
+    full turn, "pivot", "t": the horizontal shift, "leg_axis", "rim": the collar ring turned and shifted, …}``."""
+    if y_hi - y_lo < SHAFT_AXIS_MIN_M:
+        return None
+    edges = np.arange(y_lo, y_hi + 1e-12, SHAFT_AXIS_SLAB_M)
+    ys, cs = [], []
+    for a, b in zip(edges[:-1], edges[1:]):
+        sel = (yf >= a) & (yf < b) & (s_band >= 1.0)
+        if int(sel.sum()) < SHAFT_AXIS_SLAB_MIN:
+            continue
+        ys.append(frame0 + 0.5 * (a + b))
+        cs.append(_section_centre(Pw[sel]))
+    if len(ys) < SHAFT_AXIS_SLABS:
+        return None
+    Y, C = np.asarray(ys), np.asarray(cs)
+    bx, ax = np.polyfit(Y, C[:, 0], 1)
+    bz, az = np.polyfit(Y, C[:, 1], 1)
+    axis_s = _unit(np.array([bx, 1.0, bz]))
+    axis_l = _unit(leg_dir)
+    yp = frame0 + y_pivot
+    pivot = np.array([ax + bx * yp, yp, az + bz * yp])
+    cross = np.cross(axis_s, axis_l)
+    sn = float(np.linalg.norm(cross))
+    angle = math.atan2(sn, float(axis_s @ axis_l))
+    rot_axis = cross / sn if sn > 1e-12 else np.array([1.0, 0.0, 0.0])
+    R = _rotation(rot_axis, angle)
+    # the collar ring: where the frame plane at the collar cuts the shaft's edges (exact lerp) and the vertices ON it
+    # (a rim row at the collar's very height), turned in full
+    E = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
+    da, db = yf[E[:, 0]] - collar_f, yf[E[:, 1]] - collar_f
+    cut = (da * db < 0.0) & (s_band[E[:, 0]] >= 1.0) & (s_band[E[:, 1]] >= 1.0)
+    u = (da[cut] / (da[cut] - db[cut]))[:, None]
+    on = np.unique(faces[np.isin(faces, np.nonzero((np.abs(yf - collar_f) <= 1e-9) & (s_band >= 1.0))[0])])
+    on = on[np.abs(yf[on] - collar_f) <= 1e-9]
+    rim = np.concatenate([Pw[E[cut, 0]] + u * (Pw[E[cut, 1]] - Pw[E[cut, 0]]), Pw[on]])
+    rim_t = (rim - pivot) @ R.T + pivot
+    # the shift: the turned shaft's axis onto the calf's section centre at the collar (horizontal only)
+    yc = float(rim_t[:, 1].mean()) if len(rim_t) else frame0 + collar_f
+    sec = calf[np.abs(calf[:, 1] - yc) <= CALF_SECTION_M]
+    t = np.zeros(3)
+    calf_c = None
+    if len(sec) >= SHAFT_AXIS_SLAB_MIN:
+        calf_c = _section_centre(sec)
+        on_axis = pivot + axis_l * ((yc - yp) / float(axis_l[1]))
+        t[[0, 2]] = calf_c - on_axis[[0, 2]]
+    # the blend: the band's smoothstep turns and shifts by s (the foot part, s = 0, stays put; above the band s = 1)
+    out = Pw.copy()
+    mv = np.nonzero(s_band > 0.0)[0]
+    s = s_band[mv]
+    out[mv] = _rodrigues(Pw[mv] - pivot, rot_axis, s * angle) + pivot + s[:, None] * t
+    rim_t = rim_t + t
+    return {"P": out, "rows": mv, "s": s, "axis": rot_axis, "angle": angle, "pivot": pivot, "t": t, "leg_axis": axis_l,
+            "turn_deg": math.degrees(angle),
+            "shaft_lean_deg": _lean_deg(axis_s), "leg_lean_deg": _lean_deg(axis_l),
+            "shift_m": float(np.linalg.norm(t)), "calf_centre": calf_c, "slabs": len(ys), "rim": rim_t}
+
+
 def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.BodyMesh,
          joints: Dict[str, np.ndarray], feet: Dict[str, FootMeasure], width_cap: float) -> FootwearFit:
     from app.core.footwear_insole import BALL_SHARE, HEEL_SEAT_M, PITCH_HEEL_SHARE, insole_map, topline_stations
@@ -840,6 +1022,7 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
         W4 = np.zeros((n_v, 4))
         W4[:, 0], W4[:, 1] = 1.0 - wt, wt
         shaft_rec: Dict[str, Any] = {}
+        turn: Optional[Dict[str, Any]] = None
         if is_boot:
             any_split = True
             li = _skin_index(body, f"{side}leg")
@@ -877,10 +1060,25 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             from app.core.garment_fit import SDF_MARGIN_M, VOX_M, body_sdf, push_out, weld
             mats = {fm.foot_index: w["Bf"], fm.toe_index: w["Bt"]}
             Pposed = _skin(P, body, np.arange(len(P)), mats)
+            frame0 = float(w["Pf"][1, 3])              # bind height of the shoe ground (frame height 0)
+            knee = np.asarray(joints[f"{side}leg"], np.float64)[:3, 3]
+            # 9a. the shaft onto the shin (fit version 11): turned onto the Leg bone about the band's centre and
+            # shifted onto the calf's section at the collar, both blended in across the band
+            shin_w = _joint_weight(body, li) + (_joint_weight(body, ui) if ui is not None else 0.0)
+            turn = _shaft_turn(Pw, yf, s_band, y_lo=y_split + SPLIT_BAND_M, y_hi=float(collar_raw) * k,
+                               frame0=frame0, y_pivot=y_split, leg_dir=knee - fm.ankle,
+                               calf=Pposed[shin_w > 0.5], faces=side_idx, collar_f=float(collar_raw) * k)
+            widen = None
+            if turn is not None:
+                Pw = turn["P"]
+                # 9b. the shaft width factor where the opening is still narrower than the calf (spec § 17)
+                widen = _shaft_widen(Pw, yf, s_band, turn, y_lo=y_split + SPLIT_BAND_M, y_hi=float(collar_raw) * k,
+                                     lateral=w["Pf"][:3, 2], calf=Pposed[shin_w > 0.5])
+                Pw = widen["P"]
             rows = np.nonzero(moving)[0]
             lo = Pw[rows].min(0) - SDF_MARGIN_M
             hi = Pw[rows].max(0) + SDF_MARGIN_M
-            sdf = body_sdf(Pposed, body.faces, vox=VOX_M, bounds=(lo, hi))
+            sdf = body_sdf(Pposed, body.faces, vox=VOX_M, bounds=(lo, hi), fill_slices=True)
             local = np.full(n_v, -1, np.int64)
             local[rows] = np.arange(len(rows))
             fsel = side_idx[np.all(moving[side_idx], axis=1)]
@@ -909,21 +1107,61 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
                          "inside_share": float(inside.mean()) if len(inside) else 0.0}
             # 10. the knee edge (fit version 10): the collar in bind space against the Leg joint; above
             # knee - KNEE_MARGIN_M the shaft is clipped there (the cut itself runs on the built shaft part below)
-            frame0 = float(w["Pf"][1, 3])              # bind height of the shoe ground (frame height 0)
-            knee_y = float(np.asarray(joints[f"{side}leg"], np.float64)[1, 3])
+            # a turned shaft's rim tilts with the shin: its highest point is the top the knee clip reads, its lowest
+            # the collar a horizontal plane still closes (step 9a); an unturned rim is level, both are the collar
+            knee_y = float(knee[1])
             top_bind = frame0 + float(collar_raw) * k
+            rim_lo = top_bind
+            if widen is not None and widen["collar_hi"] is not None:
+                top_bind, rim_lo = widen["collar_hi"], widen["collar_lo"]
             clip_y = knee_y - KNEE_MARGIN_M
             clip_m = max(0.0, top_bind - clip_y)
-            collar_bind = clip_y if clip_m > 0.0 else top_bind
+            collar_bind = min(rim_lo, clip_y) if clip_m > 0.0 else rim_lo
             shaft_rec.update({"shaft_top_m": top_bind, "knee_m": knee_y, "clip_m": clip_m,
                               "clip_y_m": clip_y if clip_m > 0.0 else None,
-                              "knee_margin_m": round(knee_y - collar_bind, KNEE_MARGIN_ROUND)})
+                              "knee_margin_m": round(knee_y - min(top_bind, clip_y), KNEE_MARGIN_ROUND),
+                              "turn": None if turn is None else {
+                                  "turn_deg": turn["turn_deg"], "shaft_lean_deg": turn["shaft_lean_deg"],
+                                  "leg_lean_deg": turn["leg_lean_deg"], "shift_m": turn["shift_m"],
+                                  "slabs": turn["slabs"], "calf_section": turn["calf_centre"] is not None,
+                                  "rim_lo_m": widen["collar_lo"], "rim_hi_m": widen["collar_hi"]},
+                              "widen": None if widen is None else {"needed": widen["needed"], "factor": widen["factor"],
+                                                                   "cap": widen["cap"]}})
+            # 9c. the collar plane and the opening (fit version 11, Ruling 15e): what the body cut removes under and
+            # conforms into (``footwear_cut``), in the cut frame — the shoe frame at the fitted size, where every
+            # stand position X sits at ``diag(k, k, k wf) Pf^-1 X`` (a rigid map: the width factor cancels)
+            from app.core.footwear_cut import collar_height, collar_opening
+            T0 = np.diag([k, k, k * width_factor, 1.0]) @ np.linalg.inv(w["Pf"])
+            rim_pts = widen["rim"] if widen is not None else np.zeros((0, 3))
+            if len(rim_pts) >= 3:
+                c0 = rim_pts.mean(0)
+                nrm = np.linalg.svd(rim_pts - c0)[2][-1]
+                nrm = nrm if nrm[1] > 0 else -nrm
+            else:
+                c0, nrm = _apply(w["Pf"], np.array([0.0, float(collar_raw), 0.0])), _UP.copy()
+            plane = {"point": _apply(T0, c0), "normal": _unit(T0[:3, :3] @ nrm),
+                     "clip_m": (clip_y - frame0) if clip_m > 0.0 else None}
+            Xc = _apply(T0, Pw)
+            hc = collar_height(Xc, plane)
+            opening = collar_opening(Xc, hc, plane)
+            # the push measures read the collar band only: under it the body is cut away (Ruling 15e)
+            band = hc[rows] >= -COLLAR_BAND_M
+            dn_band, in_band_c = dn[band], inside[band]
+            shaft_rec.update({"collar_plane": plane, "opening": opening,
+                              "push_all_p95_m": shaft_rec["push_p95_m"], "push_all_max_m": shaft_rec["push_max_m"],
+                              "inside_all_share": shaft_rec["inside_share"],
+                              "push_p95_m": float(np.percentile(dn_band, 95)) if len(dn_band) else 0.0,
+                              "push_max_m": float(dn_band.max()) if len(dn_band) else 0.0,
+                              "inside_share": float(in_band_c.mean()) if len(in_band_c) else 0.0,
+                              "collar_band_vertices": int(band.sum())})
         bind = (W4[:, 0:1] * _apply(Bfi, Pw) + W4[:, 1:2] * _apply(Bti, Pw) + (W4[:, 2:3] + W4[:, 3:4]) * Pw)
         if is_boot:
             bind[rows] = blended_bind(Pw[rows], W4[rows])        # the band and shaft: exact (above)
         normals = None
         if shoe.normals is not None:
             n = np.asarray(shoe.normals, np.float64) @ np.linalg.inv(M[:3, :3])    # inverse transpose
+            if is_boot and turn is not None:                # the band and shaft turned with the positions (9a)
+                n[turn["rows"]] = _rodrigues(n[turn["rows"]], turn["axis"], turn["s"] * turn["angle"])
             n = (W4[:, 0:1] * (n @ Bfi[:3, :3].T) + W4[:, 1:2] * (n @ Bti[:3, :3].T) + (W4[:, 2:3] + W4[:, 3:4]) * n)
             ln = np.linalg.norm(n, axis=1, keepdims=True)
             normals = n / np.where(ln > 0, ln, 1.0)
@@ -954,7 +1192,8 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             # the follow ring: the shaft above y_split + SHAFT_RING_ABOVE_M, else the shaft part's upper half,
             # else no measure (None — never a vacuous 0.0; Ruling 8b); a clipped shaft is measured up to the clip
             # (what is served — the clipped-off top no longer exists)
-            served = yf <= clip_y - frame0 + 1e-9 if clip_m > 0.0 else np.ones(n_v, bool)
+            served = ((yf <= clip_y - frame0 + 1e-9 if turn is None else turn["P"][:, 1] <= clip_y + 1e-9)
+                      if clip_m > 0.0 else np.ones(n_v, bool))
             ring = (yf > y_split + SHAFT_RING_ABOVE_M) & served
             follow_ring: Optional[str] = "top"
             if int(ring.sum()) < FOLLOW_RING_MIN:
@@ -1038,9 +1277,11 @@ def _fit(insole: Dict[str, Any], shoe: glb_mesh.GarmentMesh, body: glb_mesh.Body
             "split": {"is_boot": is_boot, "y_m": y_split, "band_m": SPLIT_BAND_M, "margin_m": SPLIT_MARGIN_M,
                       "topline_m": topline_m, "collar_above_ankle_mm": collar_above,
                       # the collar AFTER the knee clip (step 10): a clipped shaft's top is the clip plane
-                      "collar_m": (None if not is_boot else float(collar_raw) * k if not shaft_rec["clip_m"]
+                      # (a turned shaft's collar is its rim's lowest point after the clip, step 9a)
+                      "collar_m": (None if not is_boot else collar_bind - frame0 if turn is not None
+                                   else float(collar_raw) * k if not shaft_rec["clip_m"]
                                    else shaft_rec["clip_y_m"] - frame0),
-                      "collar_bind_m": (None if not is_boot
+                      "collar_bind_m": (None if not is_boot else collar_bind if turn is not None
                                         else float(_apply(w["Pf"], np.array([0.0, float(collar_raw), 0.0]))[1])
                                         if not shaft_rec["clip_m"] else shaft_rec["clip_y_m"])},
             "parts": {name: int(len(mesh.indices)) for name, mesh in side_parts.items()},

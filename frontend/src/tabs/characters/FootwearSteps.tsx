@@ -108,9 +108,10 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'stand_floor_mm', label: 'Sole above the floor (stand)', scale: 1, unit: 'mm', digits: 1 },
   { key: 'slim_needed', label: 'Slimming needed', scale: 100, unit: '%', digits: 1 },
   // A split fit (a boot) adds footwear_fit.SHAFT_GATES; the stretch is recorded, not gated (`gating` false).
-  { key: 'shaft_push_p95_m', label: 'Shaft push off the shin (p95)', scale: 1000, unit: 'mm', digits: 1 },
-  { key: 'shaft_push_max_m', label: 'Shaft push off the shin (max)', scale: 1000, unit: 'mm', digits: 1 },
-  { key: 'shaft_inside_share', label: 'Shaft inside the leg', scale: 100, unit: '%', digits: 2 },
+  // The push and inside numbers read the collar band only (fit version 11): under it the body is cut away.
+  { key: 'shaft_push_p95_m', label: 'Shaft push at the collar (p95)', scale: 1000, unit: 'mm', digits: 1 },
+  { key: 'shaft_push_max_m', label: 'Shaft push at the collar (max)', scale: 1000, unit: 'mm', digits: 1 },
+  { key: 'shaft_inside_share', label: 'Collar inside the leg', scale: 100, unit: '%', digits: 2 },
   { key: 'seam_gap_p95_mm', label: 'Seam gap at the ankle', scale: 1, unit: 'mm', digits: 2 },
   { key: 'seam_stretch_max', label: 'Seam stretch at ±25°', scale: 1, unit: '×', digits: 1 },
   { key: 'shaft_leg_follow_deg', label: 'Shaft follows the shin', scale: 1, unit: '°', digits: 2 },
@@ -121,8 +122,10 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'visible_poke', label: 'Foot poking through (cut)', scale: 100, unit: '%', digits: 2 },
   { key: 'throat_ledge_p95_mm', label: 'Throat ledge (cut)', scale: 1, unit: 'mm', digits: 1 },
   { key: 'toe_conform_m', label: 'Toe conform (cut)', scale: 1000, unit: 'mm', digits: 1 },
-  // A split fit only (footwear_cut.SHAFT_CUT_GATES): the shin judged against the shaft, None without a shin vertex.
-  { key: 'shaft_poke', label: 'Shin poking through the shaft (cut)', scale: 100, unit: '%', digits: 2 },
+  // A split fit only (footwear_cut.SHAFT_CUT_GATES, cut version 5): the leg is cut away under the collar and its
+  // edge pulled into the boot's opening; the poke reads that edge against the opening, None without one.
+  { key: 'shaft_poke', label: 'Leg edge outside the opening (cut)', scale: 100, unit: '%', digits: 2 },
+  { key: 'collar_conform_m', label: 'Leg pulled into the collar (cut)', scale: 1000, unit: 'mm', digits: 1 },
 ]
 
 const FIT_STATUS_TEXT: Record<FootwearFitRow['status'], string> = {

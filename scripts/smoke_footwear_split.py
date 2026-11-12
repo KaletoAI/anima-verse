@@ -45,14 +45,13 @@ Expected, by hand:
      fixture body has no UpLeg; a rig-contract body adds it as the fourth slot).
 [B3] push: the leg column's half-width 0.03 against the shaft's inner half-width 0.04 k x 1.0380 = 0.042504
      -> gap 12.5 mm > SHAFT_CLEAR_M 6 mm -> push_max_m < 0.0002, inside_share 0. ``foot_body_glb(leg_half_w=
-     0.045, leg_cell=0.01)``: the shin stands 2.5 mm INSIDE each side wall -> needed 0.045 + 0.006 - 0.042504
-     = 0.0085 laterally for the rows inside the shin's height (body y >= 0.10: raw rows 0.11 .. 0.16, more than
-     half of the moving vertices) -> push_p95_m >= 0.0085; push_max_m in [0.0085, 0.0120]: the row 0.11 sits
-     2.4 mm above the box leg's bottom face and the field's gradient there points down, so a vertex at that
-     edge can be pushed past the bottom face as well as the side, hypot(8.5, 8.4) = 12.0 mm at most (a real
-     shin has no bottom face; the smoothing passes mix the two) — measured 10.3 / p95 8.9 mm since fit version 8
-     (the push on WELDED positions, Task 9 fix 1: the smoothing runs over the connected tube instead of per
-     unshared quad; version 7 read 10.8 / 9.3); inside_share 0;
+     0.045, leg_cell=0.01)``: the shin stands 2.5 mm INSIDE each side wall -> needed (0.045 + 0.006) / 0.042504
+     = 1.20 across, so the shaft is widened by the cap 1.10 (fit version 11, step 9b) to an inner half-width
+     0.046754 and the push needs 0.045 + 0.006 - 0.046754 = 0.00425 laterally; since fit version 11 the push gates
+     read the COLLAR BAND only (the shaft vertices from COLLAR_BAND_M 0.03 under the collar plane up: the raw rows
+     0.13 .. 0.16, all inside the shin's height) -> push_p95_m >= 0.00425 and push_max_m <= 0.0085 (no more than the
+     unwidened tube needed: the widening only removes need; measured 5.0 / 5.1 mm — on 0a6a2f2a, fit version 10,
+     the whole shaft unwidened read 10.3 / p95 8.9 mm); inside_share 0;
      every foot-part vertex (s = 0) unmoved: identical bind positions to the 0.03 fit (+-1e-12). (The plan's
      0.0102 took the inner half-width as 0.04 k = 0.0408 without the width factor, which widens the shaft
      too — it is one mesh.)
@@ -77,7 +76,7 @@ Expected, by hand:
      False (the source material says so); glb_mesh.garment_arrays(prefix) raises on the foot name (two
      matches), exact=True returns it. foot_pose of the boot fit == foot_pose of the clog fit on the same foot
      (bones, root_lift_m, contacts: the split changes no pose; the boot's foot part IS the clog).
-[B6] FOOTWEAR_FIT_VERSION 10; FIT_GATES has no "boot"; SHAFT_GATES = push p95 0.015 / max 0.030 / inside 0.01 /
+[B6] FOOTWEAR_FIT_VERSION 11; COLLAR_BAND_M 0.03; FIT_GATES has no "boot"; SHAFT_GATES = push p95 0.015 / max 0.030 / inside 0.01 /
      seam gap 2 mm / stretch 1.5 / follow 1 deg (+ the knee gates of [B9]), SHAFT_GATING seam_stretch_max False and
      the rest True;
      SPLIT_BAND_M 0.02, SPLIT_MARGIN_M 0.01, SHAFT_CLEAR_M 0.006; the record's gates carry the eight shaft
@@ -134,8 +133,18 @@ follow is a vacuous 0.0 over an empty ring.)
      0.45 - 0.296844 = **0.153156**, ``clip_m`` 0, no ``clip`` stats, the shaft part's highest vertex 0.296844,
      ``split.collar_bind_m`` 0.296844, accepted. The [B1] ankle boot carries the two knee gates too (margin 0.29646,
      clip 0) and a shoe (the clog) neither.
-     [B6] FOOTWEAR_FIT_VERSION 10, KNEE_MARGIN_M 0.04, SHAFT_CLIP_MAX_M 0.05; SHAFT_GATES + shaft_clip_m ("max", 0.05)
+     [B6] FOOTWEAR_FIT_VERSION 11, KNEE_MARGIN_M 0.04, SHAFT_CLIP_MAX_M 0.05; SHAFT_GATES + shaft_clip_m ("max", 0.05)
      and knee_margin_m ("min", 0.04), both gating.
+[B10] a LEANING shin (boots plan Task 9 fix 3 + fix 4): ``flat_boot(shaft=0.30)`` on ``foot_body_glb(leg_cell=0.01,
+     leg_lean_deg=15)`` (the column sheared forward 15 deg about the Foot joint's height, the Leg joint on that line).
+     The shaft is turned onto the shin about the band: turn 15.000 deg (+-1e-3), the shaft's own lean 0; the flat rim
+     (raw 0.30 -> 0.216843 over the pivot along the turned axis, half-depth 0.05118) tilts with it: rim lo / hi
+     0.08 + 0.216843 cos 15 deg -/+ 0.05118 sin 15 deg = 0.276208 / 0.302702 (+-2e-6); collar_bind_m = the rim's
+     lowest point 0.276208. The collar PLANE (step 9c) is the rim's: normal (sin 15, cos 15, 0) = (0.258819,
+     0.965926, 0) (+-1e-6); push 0 (the column stands 12.5 mm inside the side walls), accepted. The cut (footwear_cut
+     version 5) takes the leg up to that tilted plane: every new leg vertex lies on it (|height| <= 1e-9 in the cut
+     frame), shaft_poke 0, collar_conform_m 0, the cut gates ok. (On 0a6a2f2a there is no turn: the record has no
+     ``turn`` and the shaft stands upright beside the shin; [B10] fails there.)
 (On faf0cba2 — fit version 9 — nothing is clipped: the 0.42 shaft's top stays at 0.419676, the record's clip_m and
 knee_margin_m are None and the gates have no knee entries; [B8] and [B9] fail.)
 """
@@ -175,10 +184,10 @@ def main() -> int:
     from app.core import footwear_insole, garment_footwear, glb_mesh
 
     # [B6]
-    check(ff.FOOTWEAR_FIT_VERSION == 10 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
+    check(ff.FOOTWEAR_FIT_VERSION == 11 and ff.COLLAR_BAND_M == 0.03 and "boot" not in ff.FIT_GATES and ff.SPLIT_BAND_M == 0.02
           and ff.SPLIT_MARGIN_M == 0.01 and ff.SHAFT_CLEAR_M == 0.006 and ff.FOLLOW_RING_MIN == 3
           and ff.FOLLOW_OPTIONAL == ("shaft_leg_follow_deg",) and ff.KNEE_MARGIN_M == 0.04
-          and ff.SHAFT_CLIP_MAX_M == 0.05, "[B6] version 10, no boot gate, split + knee constants")
+          and ff.SHAFT_CLIP_MAX_M == 0.05, "[B6] version 11, no boot gate, split + knee + collar band constants")
     check(ff.SHAFT_GATES == {"shaft_push_p95_m": ("max", 0.015), "shaft_push_max_m": ("max", 0.030),
                              "shaft_inside_share": ("max", 0.01), "seam_gap_p95_mm": ("max", 2.0),
                              "seam_stretch_max": ("max", 1.5), "shaft_leg_follow_deg": ("max", 1.0),
@@ -274,9 +283,9 @@ def main() -> int:
     glb_w = fx.foot_body_glb(leg_half_w=0.045, leg_cell=0.01)
     wide = ff.fit_pair(insole_b, fx.shoe_garment(Pb, Fb), glb_mesh.body_arrays(glb_w), glb_mesh.joint_bind_matrices(glb_w))
     shw = wide.record["sides"]["left"]["shaft"]
-    need = 0.045 + 0.006 - 0.04 * k * wide.record["scale"]["width_factor"]
-    check(near(need, 0.0085, 1e-4) and 0.0085 <= shw["push_max_m"] <= 0.0120 and 0.0085 <= shw["push_p95_m"] <= 0.0120
-          and shw["inside_share"] == 0.0 and wide.ok,
+    need = 0.045 + 0.006 - 0.04 * k * wide.record["scale"]["width_factor"] * 1.10
+    check(near(need, 0.00425, 1e-4) and near(shw["widen"]["factor"]["across"], 1.10, 1e-9)
+          and 0.00425 <= shw["push_p95_m"] <= shw["push_max_m"] <= 0.0085 and shw["inside_share"] == 0.0 and wide.ok,
           f"[B3] shin 0.045: needed {need:.4f}, push max {shw['push_max_m']:.4f} / p95 {shw['push_p95_m']:.4f}, "
           f"inside {shw['inside_share']}, ok {wide.ok}")
     pin = (foot.positions[:, 1] + lift) < y_split - 0.02 - 1e-9
@@ -458,6 +467,37 @@ def main() -> int:
     check(near(sh["knee_margin_m"], 0.29646, 2e-5) and sh["clip_m"] == 0.0 and g["knee_margin_m"]["ok"]
           and g["shaft_clip_m"]["ok"] and not any(k_ in clog.record["gates"] for k_ in ("knee_margin_m", "shaft_clip_m")),
           f"[B9] the 0.16 ankle boot: margin {sh['knee_margin_m']}, clip {sh['clip_m']}; the clog carries no knee gate")
+
+    # [B10] a leaning shin: the turn, the tilted collar plane, the cut on it
+    from app.core import footwear_cut as fc
+    Pl, Fl = fx.flat_boot(shaft=0.30)
+    ins_l = footwear_insole.analyse_arrays(Pl, Fl)
+    glb_l = fx.foot_body_glb(leg_cell=0.01, leg_lean_deg=15.0)
+    joints_l = glb_mesh.joint_bind_matrices(glb_l)
+    fit_l = ff.fit_pair(ins_l, fx.shoe_garment(Pl, Fl), glb_mesh.body_arrays(glb_l), joints_l)
+    sl = fit_l.record["sides"]["left"]
+    tn, pl = sl["shaft"].get("turn") or {}, sl["shaft"].get("collar_plane") or {}
+    c15, s15 = float(np.cos(np.radians(15.0))), float(np.sin(np.radians(15.0)))
+    check(fit_l.ok and near(tn.get("turn_deg"), 15.0, 1e-3) and near(tn.get("shaft_lean_deg"), 0.0, 1e-3)
+          and near(tn.get("rim_lo_m"), 0.08 + 0.216843 * c15 - 0.05118 * s15, 2e-6)
+          and near(tn.get("rim_hi_m"), 0.08 + 0.216843 * c15 + 0.05118 * s15, 2e-6)
+          and near(sl["split"]["collar_bind_m"], 0.276208, 2e-6) and sl["shaft"]["push_max_m"] == 0.0,
+          f"[B10] turn {tn}, collar {sl['split']['collar_bind_m']}, push {sl['shaft']['push_max_m']}, ok {fit_l.ok} {fit_l.reasons}")
+    check(pl.get("normal") is not None and all(near(a_, b_, 1e-6) for a_, b_ in zip(pl["normal"], (s15, c15, 0.0))),
+          f"[B10] collar plane normal {pl.get('normal')}")
+    prim_l = glb_mesh.body_primitive_arrays(glb_l)[0]
+    cut_l = fc.cut_description(fit_l, ins_l)
+    after_l, st_l = fc.apply_cut(prim_l, cut_l, joints_l)
+    gl = fc.cut_gates(after_l, fit_l.parts, cut_l, joints=joints_l, body_before=prim_l)
+    n_r, n_l = st_l["sides"]["right"]["new_vertices"], st_l["sides"]["left"]["new_vertices"]
+    ids_l = np.arange(len(after_l.positions) - n_r - n_l, len(after_l.positions) - n_r)
+    m_l = fc._Map(cut_l["sides"]["left"], joints_l, after_l)
+    leg_new = ids_l[m_l.leg[ids_l] >= 0.5]
+    h_l = fc.collar_height(m_l.to_cut(after_l.positions[leg_new], m_l.wF[leg_new], m_l.wT[leg_new]), cut_l["sides"]["left"]["collar"]["plane"])
+    check(len(leg_new) > 0 and float(np.abs(h_l).max()) <= 1e-9 and gl["ok"]
+          and gl["sides"]["left"]["shaft_poke"] == 0.0 and gl["sides"]["left"]["collar_conform_m"] == 0.0,
+          f"[B10] cut on the tilted plane: {len(leg_new)} leg vertices, |h| max {float(np.abs(h_l).max()) if len(h_l) else None}, "
+          f"gates {gl['ok']} {gl['reasons']}")
 
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0

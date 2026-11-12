@@ -75,9 +75,14 @@ Expected, by hand:
      fit record's ``sides.<side>.split.collar_bind_m``, fit version 9: the tube's flat rim raw 0.16 is the highest
      closed slab, 0.16 k - lift = 0.163776 - 0.010236 = 0.153540 +- 1e-6); the shaft nodes' material doubleSided true
      (graft's override), the foot nodes' the source material's as the fit GLB carries it (this fixture's static_glb
-     default: true as well — smoke_footwear_fit_step.py [P5] writes false and sees it kept); the body cut is the
-     clog's (24 faces / 48 vertices:
-     the removal cap stops at the band's bottom 0.0702, under the leg columns at 0.1102); sidecar foot_pose has the
+     default: true as well — smoke_footwear_fit_step.py [P5] writes false and sees it kept); the body cut (footwear_cut
+     version 5, boots plan Task 9 fix 4: foot AND lower leg go up to the collar plane — here horizontal at the flat
+     rim, body y 0.153540) leaves 28 faces / 48 vertices: each leg column (corners at y 0.10 and 0.45, one quad per
+     face, 4 own vertices per face, 100 % Leg) loses its bottom face (2 triangles, 4 vertices); each of its 4 side
+     quads loses its 2 lower corners and gains 3 cut vertices (the two vertical edges and the diagonal) and keeps 3
+     triangles (the triangle with both lower corners -> 1, the one with one -> 2); the top face stays:
+     4·3 + 2 = 14 faces, 4·(2 + 3) + 4 = 24 vertices per column, 28 / 48 for two (on 0a6a2f2a, CUT_VERSION 4,
+     the clog's 24 / 48: the columns stood whole); sidecar foot_pose has the
      SAME bones / root_lift_m / contacts / rest / version as the heels' record (the boot's foot part IS the clog;
      the split changes no pose), source {boots, FB, sha of that tier's bytes}; GET /model/meta -> that foot_pose.
      Back to pieces {feet: heels}, unpainted [heels] -> assemble -> both tiers rebuilt with the TWO heels nodes
@@ -90,15 +95,17 @@ Expected, by hand:
      at body y_split + 0.02 = 0.08 + 0.02 = 0.10, so the first shaft row without Foot weight is j 11: band top
      0.102360, the shaft top j 16: 0.153540 (both +- 2e-6, float32), the collar = the shaft node's extras
      ``collar_bind_m`` 0.153540 (the flat rim IS the top here; with a pull tab it is not — smoke_footwear_cut
-     [X12]). The served body is the cut clog body (the
-     two leg columns, corners at y 0.10 and 0.45 only): no boundary loop, so open_loops_above_split 0, and no shin
-     vertex in [0.10236, 0.15354], so shaft_poke None (as smoke_footwear_cut [X11] (d)). Frame 0: seam gap 0
+     [X12]). The served body is cut at the collar plane (cut version 5, [A7]): each leg column ends in the cut's
+     rim at 0.153540 — 12 vertices (4 side quads × 3 cut points), 8 welded positions, ONE open loop per side whose
+     centroid lies in (band top, shaft top]: open_loops_above_split 2 (on 0a6a2f2a: 0 — the columns stood whole);
+     those 12 rim vertices are the shin vertices in [0.10236, 0.15354] (poke_vertices 12), all at |x| <= 0.03,
+     |z - zc| <= 0.03, inside the shaft's walls at 0.0517 / -0.0711 / 0.0425: shaft_poke 0 (on 0a6a2f2a: None,
+     no shin vertex in the range). Frame 0: seam gap 0
      (+- 1e-6 mm: a seam twin pair has one bind position and one set of weights), leg follow 0 (+- 1e-3 deg: the
-     shaft above band top is 100 % Leg). CONTROL file (same nodes): the body plane-cut at y 0.12 (each column
-     ends in an 8-vertex rim, 12 vertices with the bisection's duplicates, at 0.12 in the shaft's range) -> one
-     open loop per side (2); the left rim moved +0.10 in x (x 0.07 / 0.13, past the shaft's front wall at 0.0517)
-     -> shaft_poke left 12 / 12 = 1, right 0 / 12 = 0 (the rim at |x| <= 0.03, |z - zc| <= 0.03 inside the
-     walls at 0.0517 / -0.0711 / 0.0425); the left shaft's ring (bind y > 0.14236) re-weighted 100 % LeftFoot
+     shaft above band top is 100 % Leg). CONTROL file (same nodes): the served body's collar rims (above; one open
+     loop per side, 2, 12 rim vertices per side in the shaft's range), the left rim moved +0.10 in x (x 0.07 / 0.13,
+     past the shaft's front wall at 0.0517) -> shaft_poke left 12 / 12 = 1, right 0 / 12 = 0 (the rim at
+     |x| <= 0.03, |z - zc| <= 0.03 inside the walls); the left shaft's ring (bind y > 0.14236) re-weighted 100 % LeftFoot
      with the META's LeftFoot extension set to 20 deg -> the still pose's follow left = 20 (+- 1e-3: the ring
      turns rigidly with the Foot, the Leg stays in bind), right 0; the left shaft's band (bind y < 0.10236)
      re-weighted 100 % LeftToeBase -> the seam twins differ by half the 20 deg turn about axes 4-7 cm away: gap
@@ -234,9 +241,9 @@ def reweight(blob: bytes, node_name: str, joint: str, *, above: float = -1.0, be
 
 def run_check_footwear(root: Path, asm: Path) -> None:
     """[K] (module docstring): ``scripts/check_footwear.mjs`` on the boot assembly, then on the same file with the
-    body plane-cut at y 0.12 (a hole in the leg shell under the shaft)."""
+    left leg's collar rim moved out through the shaft."""
     import subprocess
-    from app.core import footwear_cut, glb_mesh
+    from app.core import glb_mesh
     print("[K] check_footwear.mjs on the four-node boot assembly")
     work = root / "check"
     (work / "clips").mkdir(parents=True, exist_ok=True)
@@ -249,7 +256,7 @@ def run_check_footwear(root: Path, asm: Path) -> None:
     clip.write_text(json.dumps({"name": "idle", "duration": 0, "uuid": "one-key", "blendMode": 2500, "tracks": tracks}))
     blob = asm.read_bytes()
     meta = asm.with_suffix(".json")
-    # the control: the body plane-cut at y 0.12 (a hole in each leg shell under the shaft), the left rim moved
+    # the control: the served body's collar rim (the cut at the collar plane, body y 0.153540), the left rim moved
     # 0.10 forward (out through the shaft's front wall), the left shaft's ring above band top + 0.04 re-weighted
     # 100 % LeftFoot (a shaft that turns with the foot), its band (the vertices under band top, the seam twins
     # among them) 100 % LeftToeBase (a shaft node that no longer shares the foot node's weights; still a foot bone,
@@ -257,9 +264,9 @@ def run_check_footwear(root: Path, asm: Path) -> None:
     # the still pose would turn nothing)
     cut_glb = work / "boot_cut_shin.glb"
     prims = glb_mesh.body_primitive_arrays(blob)
-    cut = {i: footwear_cut.plane_cut(prim, y_m=0.12)[0] for i, prim in enumerate(prims)}
+    cut = dict(enumerate(prims))
     for prim in cut.values():
-        rim = (np.abs(prim.positions[:, 1] - 0.12) < 1e-6) & (prim.positions[:, 2] < 0.0)
+        rim = (np.abs(prim.positions[:, 1] - 0.153540) < 2e-6) & (prim.positions[:, 2] < 0.0)
         prim.positions[rim, 0] += 0.10
     ctl = reweight(glb_mesh.rewrite_body_primitives(blob, cut), "garment_footwear_boots_left_shaft", "LeftFoot",
                    above=0.102360 + 0.04)
@@ -288,17 +295,19 @@ def run_check_footwear(root: Path, asm: Path) -> None:
          0.102360, 2e-6)
     near("K shaft top (bind y)", (sides.get("left") or {}).get("shaft_top_bind_y"), 0.153540, 2e-6)
     near("K collar (bind y) = the shaft node's collar_bind_m", (sides.get("left") or {}).get("collar_bind_y"), 0.153540, 2e-6)
-    check("K open body loops above the split: 0", boot.get("open_loops_above_split"), 0)
+    check("K open body loops above the split: the collar rims, 2", boot.get("open_loops_above_split"), 2)
+    check("K served: 12 rim vertices per side in the shaft's range",
+          [(sides.get(s_) or {}).get("poke_vertices") for s_ in ("left", "right")], [12, 12])
     frame0 = (((rep.get("clips") or {}).get("idle") or {}).get("per_frame") or [{}])[0].get("boot") or {}
     for s_ in ("left", "right"):
         near(f"K frame 0 seam gap {s_} (mm)", (frame0.get(s_) or {}).get("seam_gap_mm"), 0.0, 1e-6)
         near(f"K frame 0 leg follow {s_} (deg)", (frame0.get(s_) or {}).get("shaft_leg_follow_deg"), 0.0, 1e-3)
-        # the round-1 leg column has vertices at y 0.10 and 0.45 only: none in [band top, shaft top] (as [X11] (d))
-        check(f"K frame 0 shaft poke {s_}: no shin vertex in the range -> None", (frame0.get(s_) or {}).get("shaft_poke"), None)
+        # the collar rim inside the shaft's walls (module docstring)
+        check(f"K frame 0 shaft poke {s_}: the rim inside the walls -> 0", (frame0.get(s_) or {}).get("shaft_poke"), 0)
     check("K one frame", ((rep.get("clips") or {}).get("idle") or {}).get("frames"), 1)
     ctl = reports["cut"]
     cut_boot = ctl.get("boot") or {}
-    check("K control: the shin cut at 0.12 -> one open loop per side above the split",
+    check("K control: the collar rims -> one open loop per side above the split",
           ({s_: (cut_boot.get("sides") or {}).get(s_, {}).get("open_loops_above_split") for s_ in ("left", "right")},
            cut_boot.get("open_loops_above_split")), ({"left": 1, "right": 1}, 2))
     still = (ctl.get("still") or {}).get("boot") or {}
@@ -673,7 +682,7 @@ def main() -> int:
                   tuple(double_sided(blob, f"garment_footwear_{boots}_{s_}") for s_ in ("left_shaft", "right_shaft", "left", "right")),
                   (True, True) + tuple(double_sided(fit_glb, f"garment_footwear_{boots}_{s_}") for s_ in ("left", "right")))
             body = glb_mesh.body_arrays(blob)
-            check(f"A7 {tier} body cut = the clog's (24 / 48)", (len(body.faces), len(body.positions)), (24, 48))
+            check(f"A7 {tier} body cut at the collar (28 / 48)", (len(body.faces), len(body.positions)), (28, 48))
             side = ga.read_sidecar(path)
             check(f"A7 {tier} foot_pose = the heels' shape", {k: side["foot_pose"].get(k) for k in pose_keys},
                   {k: fp_record.get(k) for k in pose_keys})

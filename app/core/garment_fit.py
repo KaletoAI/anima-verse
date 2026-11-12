@@ -426,7 +426,7 @@ def point_triangle_closest(X: np.ndarray, A: np.ndarray, B: np.ndarray, C: np.nd
 
 
 def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = None,
-             exact_band_vox: float = SDF_EXACT_BAND_VOX) -> Sdf:
+             exact_band_vox: float = SDF_EXACT_BAND_VOX, fill_slices: bool = False) -> Sdf:
     """Signed distance field of the body solid on a grid cropped to ``bounds = (lo, hi)``.
 
     Surface voxelisation at the 5 x 5 barycentric samples, one dilation, hole fill, EDT difference (spike), with:
@@ -451,6 +451,12 @@ def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = Non
       directions, and the clearance is decided exactly in this band. Inside, the corrected EDT stays (it only
       sets how far the first push goes; the iterations converge outside). The nearest outside triangles are the
       outer wall, so a double wall does not disturb the band.
+    - ``fill_slices`` (the footwear shaft push, boots plan Task 9 fix 4): every horizontal slice of the crop's height
+      range is hole-filled in 2D too. A limb meshed as a shell — an outer and an inward-facing inner wall, the
+      calf's cavity 5–7 cm across, open to the outside somewhere along the leg — escapes both the 3D fill and the
+      seal (whose region must be ``2 · SDF_SEAL_THICK_VOX + 1`` voxels, 7 cm, thick); its slice is a ring the 2D
+      fill closes. The clone's base bodies rebuilt 2026-11-12 (Kira ``base20d5701a``, Kai ``base634402e5``) read the
+      calf's cavity as OUTSIDE without it: the shaft's side walls stayed inside the leg at the collar.
     Inside distances near the crop faces may be overestimated (the nearest outside voxel can lie beyond the
     crop); the crop margin keeps that away from the garment.
     """
@@ -474,6 +480,10 @@ def body_sdf(P, F, *, vox: float, bounds, zero_offset_vox: Optional[float] = Non
     surf[idx[:, 0], idx[:, 1], idx[:, 2]] = True
     surf = ndimage.binary_dilation(surf, iterations=1)
     inside_full = _seal_cavities(surf, ndimage.binary_fill_holes(surf))
+    if fill_slices:
+        # every horizontal slice of the crop's height range filled in 2D as well (``fill_slices``, docstring)
+        for j in range(int(before[1]), int(before[1] + shape[1])):
+            inside_full[:, j, :] |= ndimage.binary_fill_holes(surf[:, j, :])
     del surf
     crop = tuple(slice(int(b), int(b + n)) for b, n in zip(before, shape))
     inside = np.ascontiguousarray(inside_full[crop])

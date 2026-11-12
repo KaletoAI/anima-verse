@@ -116,9 +116,11 @@
  *    check, not a fit gate; `ok` null with no seat clip measured). A knee-high's collar is the knee CLIP when the fit
  *    clipped it (`footwear_fit` step 10, fit version 10: `collar_bind_m` = `knee − KNEE_MARGIN_M`).
  * Once, in the bind pose: `open_loops_above_split` = the body boundary loops (THE CUT above) whose centroid lies
- * in (`band_top`, `shaft_top`] and whose every vertex is dominated by that side's Foot / ToeBase / Leg / UpLeg —
- * a hole in the leg shell under the shaft (the anti-goal of spec § 4: the shin is never cut under a shaft). 0 on
- * a served boot. The sole numbers read the foot part only.
+ * in (`band_top`, `shaft_top`] and whose every vertex is dominated by that side's Foot / ToeBase / Leg / UpLeg.
+ * Since `footwear_cut` version 5 (boots plan Task 9 fix 4, Ruling 15e) the leg IS cut under a boot, up to the
+ * collar plane: these are the cut's collar edges, one per leg wall (a shell body has two), expected on a served
+ * boot — reported, not judged. `shaft_poke` above therefore finds no shin under the collar (null, "—"); the cut's
+ * own `shaft_poke` reads the leg edge against the opening. The sole numbers read the foot part only.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'

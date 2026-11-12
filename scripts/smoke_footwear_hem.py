@@ -62,12 +62,15 @@ Expected, by hand:
      stands h = 0.0425 - 0.03 = 0.0125 above the body, so a trouser vertex there must stand 0.0125 + LAYER_CLEAR_M
      0.0119 = 0.0244 above it: |z - zc| >= 0.0544 (the voxel EDT beyond the exact band reads up to 0.6 voxel
      short, so up to ~2 mm further, never more than 0.5 mm less) for the vertices with |x| <= 0.015 (their feet
-     lie on the z faces) and y in [0.11, 0.15]; behind the column the back wall stands 0.071136 - 0.03 = 0.0411
-     above the back face -> x <= -(0.03 + 0.0411 + 0.0119) = -0.083 for |z - zc| <= 0.015, y in [0.11, 0.15];
-     in front x >= 0.03 + 0.0217 + 0.0119 = 0.0636 (measured 0.05498 / -0.08304 / 0.06345). Above the shaft top
-     the push's six smoothing passes carry a displacement that halves per 1-cm ring (10.1 / 6.0 / 3.3 / 1.7 / 0.8
-     / 0.4 mm at y 0.20 .. 0.25) and is under MOVED_EPS_M from 0.26 on -> rings y >= 0.30 unmoved (pinned with
-     margin). The foot part is NOT an inner piece (structural: the record's ``inner`` names the boot alone with
+     lie on the z faces) and y in [0.11, 0.15]; the image's tube stood 0.071136 - 0.03 = 0.0411 behind the column's
+     back face and 0.0217 in front of its front face; since fit version 11 (boots plan Task 9 fix 3) the shaft is
+     centred on the calf's section, shifted (0.0411 - 0.0217) / 2 = 0.0097 forward, so both walls stand
+     (0.0411 + 0.0217) / 2 = 0.0314 off the column -> x <= -(0.03 + 0.0314 + 0.0119) = -0.0733 behind for
+     |z - zc| <= 0.015, y in [0.11, 0.15], and x >= 0.0733 in front (measured 0.0550 / -0.07332 / 0.07325; on
+     0a6a2f2a, fit version 10, unshifted: -0.0830 / 0.0636). Above the shaft top the push's six smoothing passes
+     carry a displacement that halves per 1-cm ring and is under MOVED_EPS_M from 0.26 on -> rings y >= 0.30 unmoved
+     (pinned with margin); at y 0.25 the tail is 0.2 .. 0.5 mm (measured 0.30; 0.4 on 0a6a2f2a, where the back wall's
+     larger push fed it). The foot part is NOT an inner piece (structural: the record's ``inner`` names the boot alone with
      ``shaft`` True, ``shaft_meshes`` returns the two shaft nodes with the record's 1372 faces each, never the
      2456-face foot parts). The rings beside the foot box DO move on this fixture (6-17 mm at y 0.02 .. 0.06): the
      shaft's band rows (body y from 0.06) have their feet on the box top 4 cm below, so the tube above the box is
@@ -502,14 +505,14 @@ def main() -> int:
         beside_z = (np.abs(P0[:, 0]) <= 0.015) & (P0[:, 1] >= 0.11 - 1e-9) & (P0[:, 1] <= 0.15 + 1e-9)
         within("beside the z faces: min |z - zc| (>= 0.0544 - 0.0005)", float(lat[beside_z].min()), 0.0544 - 0.0005, 0.0544 + 0.0025)
         behind = (np.abs(P0[:, 2] - ZC) <= 0.015) & (P0[:, 0] < 0) & (P0[:, 1] >= 0.11 - 1e-9) & (P0[:, 1] <= 0.15 + 1e-9)
-        within("behind the column: max x (<= -0.083 + 0.0005)", float(Po[behind, 0].max()), -0.083 - 0.0025, -0.083 + 0.0005)
+        within("behind the column: max x (<= -0.0733 + 0.0005)", float(Po[behind, 0].max()), -0.0733 - 0.0025, -0.0733 + 0.0005)
         front = (np.abs(P0[:, 2] - ZC) <= 0.015) & (P0[:, 0] > 0) & (P0[:, 1] >= 0.11 - 1e-9) & (P0[:, 1] <= 0.15 + 1e-9)
-        within("in front of the column: min x (>= 0.0636 - 0.0005)", float(Po[front, 0].min()), 0.0636 - 0.0005, 0.0636 + 0.0025)
+        within("in front of the column: min x (>= 0.0733 - 0.0005)", float(Po[front, 0].min()), 0.0733 - 0.0005, 0.0733 + 0.0025)
         from app.core.garment_fit import MOVED_EPS_M
         high = P0[:, 1] >= 0.30 - 1e-9
         within("y >= 0.30 unmoved (max |dr|)", float(np.linalg.norm(Po[high] - P0[high], axis=1).max()), 0.0, MOVED_EPS_M)
         ring25 = np.abs(P0[:, 1] - 0.25) <= 1e-6
-        within("the smoothing's tail at y 0.25 (0.3 .. 0.5 mm)", float(np.linalg.norm(Po[ring25] - P0[ring25], axis=1).max()), 0.0003, 0.0005)
+        within("the smoothing's tail at y 0.25 (0.2 .. 0.5 mm)", float(np.linalg.norm(Po[ring25] - P0[ring25], axis=1).max()), 0.0002, 0.0005)
         check("the foot part is no inner piece: inner = the boot's shaft alone",
               (sorted(rec_o.get("inner") or {}), (rec_o.get("inner") or {}).get(boots, {}).get("shaft")), ([boots], True))
         check("shaft_meshes = the two shaft nodes (1372 faces each, the record's parts.shaft), never the foot parts",

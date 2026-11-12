@@ -12273,10 +12273,17 @@ ankle (`y_split` = the Foot joint's height in the shod stand; per fit, never per
   two. `foot_pose` is the foot part's alone and unchanged; nothing in either renderer reads `part` —
   `figureBox`, `inGarment`, `footPoseMatches` work by `kind` and `fsig`, and a figure applies the record to the
   four nodes exactly as to two.
-- **No cut under the shaft.** The body cut's removal stops at the band's bottom (`y_split − SPLIT_BAND_M`); the shin
-  under the shaft stays whole (the shaft is pushed off it by `SHAFT_CLEAR_M` 6 mm in the fit), so a camera looking
-  into the collar of a seated figure sees skin or trousers, never the inside of the body shell. The fit's
-  `shaft_poke` (≤ 0.5 %, the shin between the band's top and the collar) refuses a shaft the shin pokes through.
+- **The body is cut away under the boot** (`footwear_cut` version 5, boots plan Task 9 fix 4, Ruling 15e). For a
+  split fit the cut removes the side's foot AND lower leg up to the COLLAR PLANE (the fit record's
+  `shaft.collar_plane`: the widened rim's plane, normal up, lowered by a knee clip) and bisects cleanly on it; a body
+  hidden in a boot can show nothing, so nothing of it is kept. At the collar the leg's edge is conformed into the
+  boot's OPENING (`shaft.opening`: centre + inner radius per 15° bin): the leg from 5 cm under the plane to
+  `COLLAR_FADE_M` 1.5 cm above it is scaled about the opening's centre to the inner radius minus 2 mm, faded out
+  above the plane, and the cut edge snapped inside — the leg runs into the collar without a step. Geometric (plane +
+  opening), never vertex indices: both tiers and every rebuilt body are cut alike. Gates: `shaft_poke` (≤ 0.5 %,
+  the cut edge outside the opening) and `collar_conform_m` (≤ 25 mm, the largest pull); the shaft's push gates
+  read only the collar band (3 cm under the plane up). A camera looking into the collar of a seated figure sees the
+  leg's edge inside the shaft, never the inside of the body shell above it.
 - **The hem mode is assembly state** (`outfit_options`, profile `equipped_options.boot_hem`, saved with an outfit):
   with own-mesh trousers worn over a boot, `over` (the default) layers the trousers over the two shaft nodes
   (`garment_layers`, the shaft as the inner piece), `tucked` cuts the trouser leg 3 cm under the collar (the lower
@@ -12399,7 +12406,9 @@ loops closed by fans and a lid at the collar plane, voxelised like the body; a s
 is refused) and on seat clips `seat_thigh_in_shaft` (the UpLeg-dominant vertices inside the 5 cm under the collar,
 spec ≤ 2 % per frame; a summary line and `boot.seat_thigh_in_shaft {max, reference, clips, ok}` in the JSON take the
 worst frame over every seat clip per side against that reference — a check, not a fit gate); once,
-`open_loops_above_split` (body boundary loops under the shaft: 0); penetration counts every footwear node. Numbers in
+`open_loops_above_split` (body boundary loops under the shaft: since cut version 5 the collar edges, one per leg
+wall — reported, not judged; the shin under the collar is gone, so `shaft_poke` there reads the cut edge alone or
+null); penetration counts every footwear node. Numbers in
 `--json` (`boot`, `still.boot`, `clips.<kind>.boot`, `per_frame[].boot`); the fixture run is
 `scripts/smoke_footwear_assembly.py` [K] (a one-key `--clip-json` clip and a control file with known answers).
 

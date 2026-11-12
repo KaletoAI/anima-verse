@@ -332,7 +332,7 @@ def heel_raise(x: float, heel_up: float) -> float:
 
 
 def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0,
-              leg_half_w: float = 0.03, leg_cell: float = 0.0, leg_bottom: float = 0.10):
+              leg_half_w: float = 0.03, leg_cell: float = 0.0, leg_bottom: float = 0.10, leg_lean_deg: float = 0.0):
     """``(positions, faces, joints (N, 2), weights (N, 2), joint names)`` of the synthetic feet (block above):
     every vertex has two joint slots, the second one unused (joint 0, weight 0) except on the leg column with a
     ``shin_foot_weight`` > 0 (Foot ``shin_foot_weight`` / Leg the rest) — the default body's GLB bytes are the
@@ -341,7 +341,10 @@ def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight:
     (0 = one quad per face, the round-1 column of 24 faces) — the voxel body field of the shaft push needs a
     surface the sampler closes, and the clothing transfer's 8 nearest body vertices should be the shin, not six
     corners. ``leg_bottom`` is the column's lowest y (0.10 = the round-1 gap above the foot box; boots plan Task 9:
-    0.02 stands the column ON the foot box, so a boot's cut has an edge to bisect at the ankle band)."""
+    0.02 stands the column ON the foot box, so a boot's cut has an edge to bisect at the ankle band). ``leg_lean_deg``
+    leans the shin FORWARD (+x) about the Foot joint's height: every leg-column vertex is sheared by x += (y − 0.08)
+    tan(lean), so each horizontal section is the upright one moved forward and the sections' middles lie on a line
+    leaning ``leg_lean_deg`` (boots plan Task 9 fix 3; ``foot_joints`` moves the Leg joint onto that line)."""
     names = list(_FOOT_PARENT)
     P, F, J = [], [], []
     for side, zc in FOOT_ZC.items():
@@ -380,17 +383,36 @@ def foot_body(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight:
                 facing[n_axis] = 1.0 if top else -1.0
                 nu = max(1, int(round(ext[axis_u] / leg_cell))) if leg_cell > 0 else 1
                 nv = max(1, int(round(ext[axis_v] / leg_cell))) if leg_cell > 0 else 1
+                n_leg = len(P)
                 _grid(P, F, J, o, u / nu, v / nv, nu, nv, facing, leg)
+                if leg_lean_deg:
+                    for p in P[n_leg:]:
+                        p[0] += (p[1] - FOOT_JOINTS[f"{side}Foot"][1]) * math.tan(math.radians(leg_lean_deg))
     ja = np.asarray([(a, b) for a, b, _ in J], np.int64)
     wa = np.asarray([(w, 1.0 - w) for _, _, w in J], np.float64)
     return np.asarray(P), np.asarray(F, np.int64), ja, wa, names
 
 
+def foot_joints(leg_lean_deg: float = 0.0):
+    """``FOOT_JOINTS`` with each Leg joint moved forward onto a shin leaning ``leg_lean_deg`` about the Foot joint:
+    x = (0.45 − 0.08) tan(lean) (``foot_body``'s shear at the knee's height); 0 = ``FOOT_JOINTS`` itself."""
+    if not leg_lean_deg:
+        return FOOT_JOINTS
+    out = dict(FOOT_JOINTS)
+    for side in FOOT_ZC:
+        x, y, z = FOOT_JOINTS[f"{side}Leg"]
+        out[f"{side}Leg"] = (x + (y - FOOT_JOINTS[f"{side}Foot"][1]) * math.tan(math.radians(leg_lean_deg)), y, z)
+    return out
+
+
 def foot_body_glb(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_weight: float = 0.0,
-                  leg_half_w: float = 0.03, leg_cell: float = 0.0, leg_bottom: float = 0.10) -> bytes:
+                  leg_half_w: float = 0.03, leg_cell: float = 0.0, leg_bottom: float = 0.10,
+                  leg_lean_deg: float = 0.0) -> bytes:
     """The synthetic feet as a skinned GLB (skin 0 = the joints above, inverse bind matrices = -translation)."""
     from app.core.glb_mesh import pack_glb
-    pos, faces, jidx, wgts, names = foot_body(ball_width, heel_up, shin_foot_weight, leg_half_w, leg_cell, leg_bottom)
+    pos, faces, jidx, wgts, names = foot_body(ball_width, heel_up, shin_foot_weight, leg_half_w, leg_cell, leg_bottom,
+                                              leg_lean_deg)
+    joints = foot_joints(leg_lean_deg)
     blob = bytearray()
     accessors, views = [], []
 
@@ -421,14 +443,14 @@ def foot_body_glb(ball_width: float = 0.085, heel_up: float = 0.0, shin_foot_wei
     nodes = []
     for n in names:
         parent = _FOOT_PARENT[n]
-        local = np.subtract(FOOT_JOINTS[n], FOOT_JOINTS[parent] if parent else (0, 0, 0))
+        local = np.subtract(joints[n], joints[parent] if parent else (0, 0, 0))
         nodes.append({"name": n, "translation": [float(c) for c in local]})
     for i, n in enumerate(names):
         kids = [j for j, m in enumerate(names) if _FOOT_PARENT[m] == n]
         if kids:
             nodes[i]["children"] = kids
     ibm = np.stack([np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [-x, -y, -z, 1]], "<f4")
-                    for x, y, z in (FOOT_JOINTS[n] for n in names)]).reshape(-1, 16)
+                    for x, y, z in (joints[n] for n in names)]).reshape(-1, 16)
     skin = {"joints": list(range(len(names))), "inverseBindMatrices": add(ibm, 5126, "MAT4")}
     nodes.append({"name": "Body", "mesh": 0, "skin": 0})
     gltf = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0, len(nodes) - 1]}],

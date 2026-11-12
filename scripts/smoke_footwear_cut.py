@@ -14,11 +14,14 @@ so the cut frame IS the primitive's bind space (x forward, y up, z lateral). ``j
 "lefttoebase": I}; every vertex 100 % LeftFoot.
 
 Expected, by hand:
-[X0] constants: CUT_VERSION 4 (2 = the toe conform, 3 = the boot's cap bound + shaft_poke, 4 = shaft_poke up to the
-     collar), THROAT_BAND_M 0.02,
+[X0] constants: CUT_VERSION 5 (2 = the toe conform, 3 = the boot's cap bound + shaft_poke, 4 = shaft_poke up to the
+     collar, 5 = the boot body cut at the collar plane + the collar conform), THROAT_BAND_M 0.02,
      LATERAL_BAND_M 0.015, CLEARANCE_M 0.002, FADE_M 0.015, TOE_CLEARANCE_M 0.002, TOE_FADE_M 0.015, CUT_GATES
      {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "throat_ledge_p95_mm": ("max", 4.0),
-     "toe_conform_m": ("max", 0.025), "shaft_poke": ("max", 0.005)}, SHAFT_CUT_GATES = POKE_OPTIONAL = ("shaft_poke",).
+     "toe_conform_m": ("max", 0.025), "shaft_poke": ("max", 0.005), "collar_conform_m": ("max", 0.025)},
+     SHAFT_CUT_GATES ("shaft_poke", "collar_conform_m"), POKE_OPTIONAL ("shaft_poke",), HIDDEN_UNDER_BOOT
+     ("deep_outside", "toe_conform_m"); the collar: COLLAR_CLEARANCE_M 0.002, COLLAR_FADE_M 0.015, COLLAR_BELOW_M 0.05,
+     LEG_WEIGHT_MIN 0.5, COLLAR_RING_M 0.001, OPENING_BAND_M 0.02, OPENING_BINS 24.
 [X1] open cylinder r 0.05 about +y, 64 segments x 21 rings (y = 0, 0.01, ..., 0.20), 1344 vertices, 20 bands x
      64 quads x 2 = 2560 triangles; flat cap y = 0.055 over the stations, footprint disc r 0.06 (every vertex inside
      the prism, its half-width 0.06 - 0.002 > 0.05: no slimming), no throat. Rings 0..5 (y <= 0.05) lie below the cap: bands 0..4
@@ -121,58 +124,56 @@ Expected, by hand:
      (|g| <= 1e-9 in that side's cut frame) or on the throat-front wall x = x_t, where g jumps by the toe-box
      headroom and the bisection converges onto the jump (the last n_right vertices are the right side's, the
      n_left before them the left's); faces valid, no dangling vertex; the new vertices' weights sum to 1.
-[X10] the cut under a BOOT stops at the ankle band (boots spec 2026-11-11 § 7; CUT_VERSION 3 — the bound itself
-     landed with Task 6 in 7b04e9f5). foot_body_glb() + flat_boot(shaft=0.16), the fit of smoke_footwear_split.py
-     [B1]: k 1.023599, lift 0.010236, y_split 0.090236, split. The description's side carries split {y_m 0.090236,
-     band_m 0.02} and its cap over the shaft's x-range (every station up to the front wall at 0.10: the last behind
-     it at raw 0.0990, the first in front at 0.10008 already reads the clog's wall) is min(0.16 k = 0.163776,
-     0.090236 - 0.02) = 0.070236 (read at raw 0.05 and 0.09, within 1e-6); past the front wall the clog's wall top
-     0.035 k = 0.035826 (raw 0.12). The default body has nothing between the foot box's
-     top (frame 0.030236) and the leg column's bottom (0.110236): apply_cut removes the 1032 foot faces, bisects
-     nothing, makes no vertex -> 24 faces / 48 vertices = [X7]'s cut (positions equal within 1e-12). The same
-     boot on foot_body_glb(leg_bottom=0.02): the leg column (100 % Leg, body x in [-0.03, 0.03] -> frame 0.0411 ..
-     0.1011 inside the shaft's x-range, |z| <= 0.03 inside the footprint's 0.0425) stands ON the foot box, one
-     quad per face. Its bottom face (frame 0.030236) goes; each of its four side quads (one quad from body y 0.02
-     to 0.45) crosses the cap -> per quad 2 bisected triangles, 3 new vertices (two verticals + the diagonal) and
-     3 kept triangles; the top face stays -> per side removed 516 + 2 = 518, bisected 8, new 12, kept 2 + 12 = 14
-     faces / 4 + 8 + 12 = 24 vertices -> totals 1036 / 16 / 24, 28 faces / 48 vertices, and every new vertex lies
-     at frame y 0.070236 = body y 0.06 (+- 1e-7: the description stores y_split to 7 decimals), the band's bottom
-     — not at the wall top 0.163776 (body 0.15354) an unbounded cap would cut at. The plain clog() on the
-     leg_bottom body: 1036 / 16 / 24 as well, its new vertices at the clog's OWN wall top 0.035 k - lift =
-     0.025590 body (+- 1e-6) on the column's side faces, up to 0.0259 on its back face at raw 0.0402, where the
-     station interpolation from the heel counter's 0.05 (station 0.0392) down to 0.035 (0.0403) still adds 0.3
-     mm — a shoe is unchanged by version 3.
-[X11] shaft_poke (spec § 7 / § 9, CUT_VERSION 3): of the shin vertices — this side's Leg-weighted body vertices with
-     frame height in [y_split + 0.02 = 0.110236, the shaft part's top 0.163776] (the band's top inclusive, 1e-9)
-     — the share in the voxel exterior of foot part + shaft. Boot = flat_boot(shaft=0.16, shaft_to=0.12) as the
-     fixture comes, UNWELDED (3828 faces, 11484 = 3 x 3828 vertices: every triangle its own, like a mesh's UV-seam
-     duplicates): since fit version 8 the shaft push welds its positions first (Task 9 fix 1, as layer_over does),
-     so the smoothing runs over the connected tube and the pushed tube stays closed. The tube's front wall at raw
-     0.12 stands 2 cm in front of the column's front face at frame 0.1011, so a push moves the side walls only — a
-     pushed front wall tilts away from the side walls of this BOX tube and opens the corner (a fixture artefact: a
-     real shaft is one round sheet; smoke_footwear_split [B3]'s shaft_to 0.10 shows it). k, lift, y_split as
-     [X10] (the clog's foot part is the same), width factor 1.0380 -> the shaft's inner half-width 0.04 k 1.038 =
-     0.042504.
-     (a) foot_body_glb(leg_cell=0.01) (shin half-width 0.03, 12.5 mm inside the shaft, push 0): shin vertices in
-     range = the column's rows body y 0.10 .. 0.15 (frame 0.110236 .. 0.160236; the row 0.16 at 0.170236 is
-     above the top): the two z-faces 2 x 7 x 6 = 84, the two x-faces 2 x 7 x 6 = 84 (7 z-columns), the bottom
-     face 7 x 7 = 49 -> 217 per side, all inside the tube -> shaft_poke 0, gate ok and gating True (the fit record,
-     garment_footwear.fit, is smoke_footwear_fit_step.py's business; here the gate dict).
-     (b) the SAME fit's parts (unpushed: the wall at 0.042504) judged against foot_body_glb(leg_half_w=0.05,
-     leg_cell=0.01, leg_bottom=0.07) — the brief's "push disabled" without a hook: the column's bottom face at
-     body 0.07 lies under the range, so the rows 0.10 .. 0.15 count: z-faces 84 (all at |z| = 0.05, 7.5 mm
-     outside the wall and beyond the 3 mm dilation -> exterior), x-faces 2 x 11 x 6 = 132 (11 z-columns -0.05 ..
-     0.05), of which the 2 x 2 x 6 = 24 at |z| = 0.05 are outside and the 108 at |z| <= 0.04 inside -> 216 shin
-     vertices, 108 pokes -> shaft_poke 0.5 > 0.005: refused, the reason names shaft_poke.
-     (c) foot_body_glb(leg_half_w=0.045, leg_cell=0.01, leg_bottom=0.07), its OWN fit (the push on: needed 0.045 +
-     0.006 - 0.042504 = 0.0085; push_p95_m >= 0.0085, push_max_m <= 0.012 as smoke_footwear_split.py [B3] —
-     measured 9.8 / 9.0 mm; the fit accepted): the shin's rows 0.10 .. 0.15 stand 6 mm inside the pushed wall ->
-     z-faces 84 + x-faces 2 x 10 x 6 = 120 = 204 shin vertices, shaft_poke 0 on BOTH sides, the gates ok. The
-     same fit on the fixture welded beforehand (garment_fit.weld) gives the same shaft positions (1e-6: the weld
-     rounds to a micrometre) and 0 pokes — the push no longer depends on how the source is stitched.
-     (d) the clog fit (no shaft): the gate dict has no shaft_poke key (SHAFT_CUT_GATES); the 0.16 boot on
-     foot_body_glb(leg_bottom=0.02) (one quad per face: the column's vertices sit at body y 0.02 and 0.45, none in
-     the range) -> shaft_poke value None, ok None (POKE_OPTIONAL), the gates ok.
+[X10] the cut under a BOOT takes foot AND lower leg up to the COLLAR PLANE (boots plan Task 9 fix 4, Ruling 15e;
+     CUT_VERSION 5 — on 0a6a2f2a, version 4, it stopped at the ankle band and kept the shin). foot_body_glb() +
+     flat_boot(shaft=0.16), the fit of smoke_footwear_split.py [B1]: k 1.023599, lift 0.010236, y_split 0.090236,
+     split. The description's side carries split {y_m 0.090236, band_m 0.02}; its cap over the shaft's x-range is
+     still min(0.16 k = 0.163776, 0.090236 - 0.02) = 0.070236 (read at raw 0.05 and 0.09, within 1e-6) and past the
+     front wall the clog's wall top 0.035 k = 0.035826 (raw 0.12) — the prism is unchanged. NEW: side.collar =
+     {plane {point, normal (0, 1, 0), clip_m None}, opening, leg_joint "LeftLeg", clearance 0.002, fade 0.015,
+     weight_min 0.5}: the flat rim at raw 0.16 is level (no lean: turn 0, widen 1.0), so the plane is horizontal at
+     the collar, frame y 0.163776 (+-1e-6) = body 0.153540. The default body's leg columns (100 % Leg, corners at
+     body y 0.10 and 0.45, one quad per face with its own 4 vertices) cross the plane: per column the bottom face
+     goes (2 triangles), each of the 4 side quads loses its 2 lower corners, gains 3 cut vertices (both verticals +
+     the diagonal) and keeps 3 triangles (2 bisected), the top face stays -> per side removed 516 + 2 = 518,
+     bisected 8, new 12, kept 14 faces / 4·(2 + 3) + 4 = 24 vertices -> totals 1036 / 16 / 24, 28 faces / 48
+     vertices (on 0a6a2f2a: 1032 / 0 / 0 = [X7]), every new vertex at frame y 0.163776 = body 0.153540 (+-1e-6).
+     The same on foot_body_glb(leg_bottom=0.02) (the column ON the foot box): its bottom face at frame 0.030236 is
+     under the plane too -> 1036 / 16 / 24, new vertices at body 0.153540 (on 0a6a2f2a at the band's bottom 0.06).
+     The plain clog() on the leg_bottom body: 1036 / 16 / 24, its new vertices at the clog's OWN wall top 0.035 k -
+     lift = 0.025590 body (+- 1e-6) on the column's side faces, up to 0.0259 on its back face at raw 0.0402, where
+     the station interpolation from the heel counter's 0.05 (station 0.0392) down to 0.035 (0.0403) still adds 0.3
+     mm — a shoe has no collar and is unchanged by version 5.
+[X11] the collar ring (CUT_VERSION 5): ``shaft_poke`` = the share of the cut edge — the remaining leg vertices
+     (lower-leg weight >= 0.5) at most COLLAR_RING_M over the plane — standing outside the opening's inner radius
+     of its angular bin; ``collar_conform_m`` = the conform's largest pull within +-fade. Boot =
+     flat_boot(shaft=0.16, shaft_to=0.12) as the fixture comes, UNWELDED (3828 faces, 11484 = 3 x 3828 vertices:
+     since fit version 8 the shaft push welds first, Task 9 fix 1). k, lift, y_split as [X10], width factor 1.0380
+     -> the shaft's inner half-width across 0.04 k 1.038 = 0.042504; plane horizontal at frame 0.163776, between the
+     leg_cell=0.01 column's rows body 0.15 (h -3.5 mm) and 0.16 (h +6.5 mm). The ring is the cut's new vertices
+     (the row 0.16 is 6.5 mm > COLLAR_RING_M over the plane): the column's two z-faces span x 0.06 -> 6 quads, 7
+     verticals + 6 diagonals = 13 cut vertices each; its two x-faces span z 2 leg_half_w -> 2 leg_half_w / 0.01
+     quads, (n + 1) + n each.
+     (a) foot_body_glb(leg_cell=0.01) (leg_half_w 0.03, push 0): ring 4 x 13 = 52 per side. The column's outline
+     in the opening reaches 0.03 / cos(15 deg) = 0.0311 in a bin facing a wall (that wall 0.0425 away or more) and
+     0.0424 at most at a corner (where the box's inner wall is 0.0425 / cos(30 deg) = 0.0491 or more away): every
+     ring vertex >= 6 mm inside its bin's inner radius (measured 9.6) -> conform 0, shaft_poke 0, gates ok, gating.
+     (b) the SAME fit's parts (unpushed: the wall at 0.042504) on foot_body_glb(leg_half_w=0.05, leg_cell=0.01,
+     leg_bottom=0.07): the column's z-faces stand at 0.05, 7.5 mm outside the side walls; ring 2 x 13 + 2 x 21 = 68.
+     The conform scales the leg into the opening: at least 0.05 - (0.042504 - 0.002) = 0.0095 pulled at the side
+     walls' bins, at most the gate 0.025 -> accepted; the conform's fade above the plane leaves the crossing edges
+     partly pulled, the snap (step 3b) takes their cut points the rest of the way to the bin's target, so the
+     smallest gap is the clearance, 2.0 mm (+-1e-6), shaft_poke 0, gates ok. (On 0a6a2f2a, version 4, this case
+     read 216 shin vertices in the shaft's range, 108 outside the tube -> 0.5, refused: the shin stood in the shaft.)
+     (c) foot_body_glb(leg_half_w=0.045, leg_cell=0.01, leg_bottom=0.07), its OWN fit: the shaft widened x 1.10
+     across (fit version 11, needed (0.045 + 0.006) / 0.042504 = 1.20, capped) -> inner half-width 0.046754, push
+     0.045 + 0.006 - 0.046754 = 0.00425 at least (as smoke_footwear_split.py [B3]; measured 5.7 / 5.8 mm),
+     max <= 0.012, fit accepted; ring 2 x 13 + 2 x 19 = 64, shaft_poke 0 on both sides, gates ok. The same fit on
+     the fixture welded beforehand (garment_fit.weld) gives the same shaft positions (1e-6) and 0 pokes.
+     (d) the clog fit (no shaft): the gate dict has neither shaft_poke nor collar_conform_m (SHAFT_CUT_GATES); the
+     0.16 boot on foot_body_glb(leg_bottom=0.02): ring 4 x 3 = 12 per side (one quad per face), shaft_poke 0 —
+     and the boot's gate dict carries no deep_outside / toe_conform_m (HIDDEN_UNDER_BOOT: the foot is cut away whole),
+     both kept in the side's diagnostics.
 [X12] a pull tab above a closed collar is no shaft top (boots plan Task 9 fix 2, ruling 13c; CUT_VERSION 4, fit
      version 9). Boot = flat_boot(shaft=0.16, shaft_to=0.12, pull_tab=0.026): [X11]'s tube plus one flat panel at
      the back wall x = 0, z in [-0.01, 0.01], y 0.16 .. 0.186 (rows 0.16 / 0.17 / 0.18 / 0.186: 3 quads, 6
@@ -184,17 +185,15 @@ Expected, by hand:
      (a)'s (k 1.023599, lift 0.010236, push 0): split.collar_m = 0.16 k = 0.163776 (+-1e-6), collar_bind_m =
      0.163776 - 0.010236 = 0.153540 (+-1e-6) on both sides; the shaft part's highest vertex is the tab's top:
      0.186 k = 0.190389 in the cut frame (the diagnostic shaft_top_m, +-1e-5) and 0.190389 - 0.010236 = 0.180153 in
-     bind space. shaft_poke reads the shin up to the COLLAR: the rows body 0.10 .. 0.15 as [X11] (a) -> 217 shin
-     vertices per side, 0 pokes, the gates ok. The tab ignored is the whole point: up to the tab's top the range
-     would add the rows body 0.16 / 0.17 / 0.18 (frame 0.170236 / 0.180236 / 0.190236 <= 0.190389), 28 vertices
-     each (the z-faces 2 x 7 and the x-faces 2 x 7 of a row), all above the lid at the tube's rim and so in the
-     exterior: 84 pokes of 301 = 0.279070 > 0.005, refused — ON d78da2f9 (CUT_VERSION 3, the range up to the
-     shaft part's highest vertex) this case reads exactly that (shin_n 301, shaft_poke_n 84 per side) and fails.
+     bind space. The collar PLANE (CUT_VERSION 5) is the closed rim's: horizontal at frame 0.163776 (+-1e-6), not
+     at the tab's 0.190389 — the cut takes the leg up to the rim and the ring is [X11] (a)'s 52 vertices per side,
+     0 pokes, the gates ok. (ON d78da2f9, CUT_VERSION 3, the shin range ran up to the tab: 84 pokes of 301 per side,
+     refused.)
      The hem reads the same collar: garment_layers._hem_inputs on a fit GLB carrying the two shaft parts with this
      record beside it -> top_m 0.153540 (the lower of the two sides' collar_bind_m), plane_m 0.153540 - 0.03 =
      0.123540, while the shaft nodes' highest bind vertex is 0.180153.
-(On 863a2726 — CUT_VERSION 2 — cut_gates takes the foot meshes alone, CUT_GATES has no shaft_poke and (b) passes:
-[X11] fails there. On 02a2ff7a — fit version 7, the push on the unwelded tube — (c) reads shaft_poke 118 / 204 =
+(On 0a6a2f2a — CUT_VERSION 4 — [X10] keeps the shin (1032 / 0 / 0), [X11] (b) is refused and the description has
+no collar: [X10] / [X11] fail there. On 863a2726 — CUT_VERSION 2 — cut_gates takes the foot meshes alone. On 02a2ff7a — fit version 7, the push on the unwelded tube — (c) reads shaft_poke 118 / 204 =
 0.578 on the LEFT side and 0 on the right: the unwelded push smoothed each quad alone, the side walls' corner
 columns tore away from the back wall and the flood fill entered the tube (the mirrored right side tore where no
 shin vertex looks); (c) fails there on the left share and the fit's own acceptance was a false green.)
@@ -361,12 +360,17 @@ def accessor_bytes(glb: bytes, index: int) -> bytes:
 
 def main() -> int:
     print("[X0] constants")
-    check("CUT_VERSION 4", fc.CUT_VERSION == 4)
+    check("CUT_VERSION 5", fc.CUT_VERSION == 5)
     check("bands", (fc.THROAT_BAND_M, fc.LATERAL_BAND_M, fc.CLEARANCE_M, fc.FADE_M, fc.TOE_CLEARANCE_M, fc.TOE_FADE_M)
           == (0.02, 0.015, 0.002, 0.015, 0.002, 0.015))
     check("CUT_GATES", fc.CUT_GATES == {"deep_outside": ("max", 0.02), "visible_poke": ("max", 0.005), "toe_conform_m": ("max", 0.025),
-                                         "throat_ledge_p95_mm": ("max", 4.0), "shaft_poke": ("max", 0.005)})
-    check("SHAFT_CUT_GATES / POKE_OPTIONAL", fc.SHAFT_CUT_GATES == ("shaft_poke",) and fc.POKE_OPTIONAL == ("shaft_poke",))
+                                         "throat_ledge_p95_mm": ("max", 4.0), "shaft_poke": ("max", 0.005),
+                                         "collar_conform_m": ("max", 0.025)})
+    check("SHAFT_CUT_GATES / POKE_OPTIONAL / HIDDEN_UNDER_BOOT", fc.SHAFT_CUT_GATES == ("shaft_poke", "collar_conform_m")
+          and fc.POKE_OPTIONAL == ("shaft_poke",) and fc.HIDDEN_UNDER_BOOT == ("deep_outside", "toe_conform_m"))
+    check("collar constants", (fc.COLLAR_CLEARANCE_M, fc.COLLAR_FADE_M, fc.COLLAR_BELOW_M, fc.LEG_WEIGHT_MIN,
+                               fc.COLLAR_RING_M, fc.OPENING_BAND_M, fc.OPENING_BINS)
+          == (0.002, 0.015, 0.05, 0.5, 0.001, 0.02, 24))
 
     print("[X1] flat cap on the cylinder")
     cyl = cylinder()
@@ -499,7 +503,7 @@ def main() -> int:
     check("fixture fit ok", fit.ok, str(fit.reasons))
     k = fit.record["scale"]["k_m_per_unit"]
     cut = fc.cut_description(fit, ins)
-    check("version + both sides", cut["version"] == 4 and set(cut["sides"]) == {"left", "right"})
+    check("version + both sides", cut["version"] == 5 and set(cut["sides"]) == {"left", "right"})
     L = cut["sides"]["left"]
     check("joint names", (L["foot_joint"], L["toe_joint"]) == ("LeftFoot", "LeftToeBase"))
     frame = np.asarray(L["frame"], np.float64)
@@ -625,7 +629,7 @@ def main() -> int:
     check("weights of new vertices sum to 1 on Foot / ToeBase", near(after8.weights[ids["left"]].sum(1), 1.0, 1e-9)
           and near(after8.weights[ids["right"]].sum(1), 1.0, 1e-9))
 
-    print("[X10] the cut under a boot stops at the ankle band")
+    print("[X10] the cut under a boot takes foot and lower leg up to the collar plane")
     from _footwear_fixtures import flat_boot
     Pb, Fb = flat_boot(shaft=0.16)
     insb = fi.analyse_arrays(Pb, Fb)
@@ -641,10 +645,18 @@ def main() -> int:
           and abs(float(np.interp(0.09 * kb, capb[:, 0], capb[:, 1])) - 0.070236) <= 1e-6,
           f"{float(np.interp(0.05 * kb, capb[:, 0], capb[:, 1])):.6f}")
     check("cap past the front wall = the clog's wall top 0.035826", abs(float(np.interp(0.12 * kb, capb[:, 0], capb[:, 1])) - 0.035 * kb) <= 1e-6)
+    col = Lb.get("collar") or {}
+    check("the collar: plane horizontal at frame 0.163776, leg joint LeftLeg, clearance / fade / weight_min",
+          col.get("plane") is not None and near(col["plane"]["point"][1], 0.163776, 1e-6)
+          and near(col["plane"]["normal"], [0.0, 1.0, 0.0], 1e-6) and col["plane"]["clip_m"] is None
+          and col.get("leg_joint") == "LeftLeg" and (col.get("clearance_m"), col.get("fade_m"), col.get("weight_min")) == (0.002, 0.015, 0.5)
+          and len((col.get("opening") or {}).get("inner_r") or []) == 24, str({k: col.get(k) for k in ("plane", "leg_joint")}))
     afterb, stb = fc.apply_cut(prim, cutb, joints)
-    check("default body: 1032 / 0 / 0, 24 faces / 48 vertices = [X7]",
-          (stb["removed_faces"], stb["bisected_faces"], stb["new_vertices"], len(afterb.faces), len(afterb.positions)) == (1032, 0, 0, 24, 48)
-          and near(afterb.positions, after.positions, 1e-12), str(stb))
+    check("default body: 1036 / 16 / 24, 28 faces / 48 vertices (0a6a2f2a: 1032 / 0 / 0 = [X7])",
+          (stb["removed_faces"], stb["bisected_faces"], stb["new_vertices"], len(afterb.faces), len(afterb.positions)) == (1036, 16, 24, 28, 48),
+          str(stb))
+    check("default body: every new vertex at body y 0.153540 (the collar plane)", near(afterb.positions[-24:, 1], 0.153540, 1e-6),
+          f"{np.unique(np.round(afterb.positions[-24:, 1], 9))}")
     glb_lb = foot_body_glb(leg_bottom=0.02)
     prim_lb = glb_mesh.body_primitive_arrays(glb_lb)[0]
     joints_lb = glb_mesh.joint_bind_matrices(glb_lb)
@@ -657,13 +669,13 @@ def main() -> int:
           (st_lb["removed_faces"], st_lb["bisected_faces"], st_lb["new_vertices"], len(after_lb.faces), len(after_lb.positions)) == (1036, 16, 24, 28, 48),
           str((st_lb, len(after_lb.faces), len(after_lb.positions))))
     new_lb = after_lb.positions[-24:]
-    check("every new vertex at body y 0.06 (frame 0.070236, the band's bottom)", near(new_lb[:, 1], 0.06, 1e-7),
+    check("every new vertex at body y 0.153540 (frame 0.163776, the collar plane)", near(new_lb[:, 1], 0.153540, 1e-6),
           f"{np.unique(np.round(new_lb[:, 1], 9))}")
     for s in ("left", "right"):
         m_lb = fc._Map(cut_lb["sides"][s], joints_lb, after_lb)
         ids_s = np.nonzero(np.abs(after_lb.positions[-24:, 2] - (-0.10 if s == "left" else 0.10)) < 0.05)[0] + len(after_lb.positions) - 24
         C_lb = m_lb.to_cut(after_lb.positions[ids_s], m_lb.wF[ids_s], m_lb.wT[ids_s])
-        check(f"{s}: the new vertices' frame height 0.070236", near(C_lb[:, 1], 0.070236, 1e-6), f"{C_lb[:, 1].min():.6f}..{C_lb[:, 1].max():.6f}")
+        check(f"{s}: the new vertices' frame height 0.163776", near(C_lb[:, 1], 0.163776, 1e-6), f"{C_lb[:, 1].min():.6f}..{C_lb[:, 1].max():.6f}")
     fitc_lb = ff.fit_pair(insc, shoe_garment(Pc, Fc), glb_mesh.body_arrays(glb_lb), joints_lb)
     afterc_lb, stc_lb = fc.apply_cut(prim_lb, fc.cut_description(fitc_lb, insc), joints_lb)
     yc_lb = afterc_lb.positions[-24:, 1]
@@ -672,11 +684,11 @@ def main() -> int:
           and abs(float(yc_lb.min()) - (0.035 * kc - 0.010236)) <= 1e-6 and float(yc_lb.max()) <= 0.0259,
           f"{stc_lb['removed_faces']}/{stc_lb['bisected_faces']}/{stc_lb['new_vertices']} y {yc_lb.min():.6f}..{yc_lb.max():.6f}")
 
-    print("[X11] shaft_poke")
+    print("[X11] the collar ring: shaft_poke + collar_conform_m")
     from app.core.garment_fit import weld
     Pw, Fw = flat_boot(shaft=0.16, shaft_to=0.12)
     check("unwelded tube 3828 faces / 11484 vertices", (len(Fw), len(Pw)) == (3828, 11484), f"{len(Fw)} {len(Pw)}")
-    check("FOOTWEAR_FIT_VERSION 10 (the push welds, the collar, the knee clip)", ff.FOOTWEAR_FIT_VERSION == 10)
+    check("FOOTWEAR_FIT_VERSION 11 (the turn, the widen, the collar plane)", ff.FOOTWEAR_FIT_VERSION == 11)
     inst = fi.analyse_arrays(Pw, Fw)
     glb_a = foot_body_glb(leg_cell=0.01)
     body_a, joints_a = glb_mesh.body_arrays(glb_a), glb_mesh.joint_bind_matrices(glb_a)
@@ -691,24 +703,30 @@ def main() -> int:
         a, _st = fc.apply_cut(pr, c, j)
         return fc.cut_gates(a, parts or fit.parts, c, joints=j, body_before=pr)
     g_a = poke_gates(fit_a, glb_a)
-    check("(a) 217 shin vertices per side, shaft_poke 0, ok", all(g_a["sides"][s]["shin_n"] == 217 and g_a["sides"][s]["shaft_poke"] == 0.0
-          for s in ("left", "right")) and g_a["gates"]["shaft_poke"] == {"value": 0.0, "limit": 0.005, "ok": True} and g_a["ok"],
-          str({s: (g_a["sides"][s]["shin_n"], g_a["sides"][s]["shaft_poke"]) for s in g_a["sides"]}))
+    check("(a) ring 52 per side, >= 6 mm inside, conform 0, shaft_poke 0, ok",
+          all(g_a["sides"][s]["shin_n"] == 52 and g_a["sides"][s]["shaft_poke"] == 0.0 and g_a["sides"][s]["collar_gap_min_mm"] >= 6.0
+              and g_a["sides"][s]["collar_conform_m"] == 0.0 for s in ("left", "right"))
+          and g_a["gates"]["shaft_poke"] == {"value": 0.0, "limit": 0.005, "ok": True} and g_a["ok"],
+          str({s: (g_a["sides"][s]["shin_n"], g_a["sides"][s]["shaft_poke"], g_a["sides"][s]["collar_gap_min_mm"]) for s in g_a["sides"]}))
     check("(a) shaft top 0.163776 in the cut frame", near(g_a["sides"]["left"]["shaft_top_m"], 0.163776, 1e-5))
     glb_b = foot_body_glb(leg_half_w=0.05, leg_cell=0.01, leg_bottom=0.07)
     g_b = poke_gates(fit_a, glb_b, parts=fit_a.parts)
-    check("(b) unpushed shaft on the 0.05 shin: 216 shin vertices, 108 pokes -> 0.5, refused",
-          all(g_b["sides"][s]["shin_n"] == 216 and g_b["sides"][s]["shaft_poke_n"] == 108 and g_b["sides"][s]["shaft_poke"] == 0.5
-              for s in ("left", "right")) and g_b["ok"] is False and any("shaft_poke" in r for r in g_b["reasons"]),
-          str({s: (g_b["sides"][s]["shin_n"], g_b["sides"][s]["shaft_poke_n"]) for s in g_b["sides"]}) + str(g_b["reasons"]))
+    check("(b) unpushed shaft on the 0.05 shin: ring 68, conformed 0.0095 .. 0.025, smallest gap 2.0 mm, poke 0, ok "
+          "(0a6a2f2a: 108 / 216, refused)",
+          all(g_b["sides"][s]["shin_n"] == 68 and g_b["sides"][s]["shaft_poke"] == 0.0
+              and 0.0095 <= g_b["sides"][s]["collar_conform_m"] <= 0.025 and near(g_b["sides"][s]["collar_gap_min_mm"], 2.0, 1e-6)
+              for s in ("left", "right")) and g_b["ok"] is True,
+          str({s: (g_b["sides"][s]["shin_n"], g_b["sides"][s]["shaft_poke_n"], g_b["sides"][s]["collar_conform_m"],
+                   g_b["sides"][s]["collar_gap_min_mm"]) for s in g_b["sides"]}) + str(g_b["reasons"]))
     glb_c = foot_body_glb(leg_half_w=0.045, leg_cell=0.01, leg_bottom=0.07)
     fit_c = ff.fit_pair(inst, shoe_garment(Pw, Fw), glb_mesh.body_arrays(glb_c), glb_mesh.joint_bind_matrices(glb_c))
     sh_c = fit_c.record["sides"]["left"]["shaft"]
-    check("(c) the push on: fit ok, p95 >= 0.0085, max <= 0.012", fit_c.ok and 0.0085 <= sh_c["push_p95_m"] and sh_c["push_max_m"] <= 0.012,
+    check("(c) widened x 1.10 across, the push on: fit ok, p95 >= 0.00425, max <= 0.012",
+          fit_c.ok and near(sh_c["widen"]["factor"]["across"], 1.10, 1e-9) and 0.00425 <= sh_c["push_p95_m"] and sh_c["push_max_m"] <= 0.012,
           f"{fit_c.reasons} p95 {sh_c['push_p95_m']:.4f} max {sh_c['push_max_m']:.4f}")
     g_c = poke_gates(fit_c, glb_c)
-    check("(c) 204 shin vertices, shaft_poke 0 on both sides, ok (02a2ff7a: 118 / 204 left)",
-          all(g_c["sides"][s]["shin_n"] == 204 and g_c["sides"][s]["shaft_poke"] == 0.0 for s in ("left", "right")) and g_c["ok"],
+    check("(c) ring 64, shaft_poke 0 on both sides, ok",
+          all(g_c["sides"][s]["shin_n"] == 64 and g_c["sides"][s]["shaft_poke"] == 0.0 for s in ("left", "right")) and g_c["ok"],
           str({s: (g_c["sides"][s]["shin_n"], g_c["sides"][s]["shaft_poke_n"]) for s in g_c["sides"]}))
     Pv, Fv, _inv = weld(Pw, Fw)
     fit_v = ff.fit_pair(fi.analyse_arrays(Pv, Fv), shoe_garment(Pv, Fv), glb_mesh.body_arrays(glb_c), glb_mesh.joint_bind_matrices(glb_c))
@@ -719,9 +737,11 @@ def main() -> int:
           and all(g_v["sides"][s]["shaft_poke"] == 0.0 for s in ("left", "right")),
           str({s: g_v["sides"][s]["shaft_poke_n"] for s in g_v["sides"]}))
     g_d = fc.cut_gates(after_lb, fit_lb.parts, cut_lb, joints=joints_lb, body_before=prim_lb)
-    check("(d) no shin vertex in the range: value None, ok None, gates ok",
-          g_d["gates"]["shaft_poke"] == {"value": None, "limit": 0.005, "ok": None} and g_d["ok"]
-          and all(g_d["sides"][s]["shin_n"] == 0 for s in ("left", "right")), str(g_d["gates"]["shaft_poke"]))
+    check("(d) the one-quad column: ring 12 per side, shaft_poke 0, gates ok; no deep_outside / toe_conform_m gate under a boot",
+          g_d["gates"]["shaft_poke"] == {"value": 0.0, "limit": 0.005, "ok": True} and g_d["ok"]
+          and all(g_d["sides"][s]["shin_n"] == 12 for s in ("left", "right"))
+          and not any(k in g_d["gates"] for k in fc.HIDDEN_UNDER_BOOT)
+          and all(k in g_d["sides"]["left"] for k in fc.HIDDEN_UNDER_BOOT), str(g_d["gates"]))
 
     print("[X12] a pull tab above the closed collar is no shaft top")
     Pt, Ft = flat_boot(shaft=0.16, shaft_to=0.12, pull_tab=0.026)
@@ -746,8 +766,11 @@ def main() -> int:
                                                    for s_ in ("left", "right")))
     after_t, _st = fc.apply_cut(pr_t, cut_t, joints_a)
     g_t = fc.cut_gates(after_t, fit_t.parts, cut_t, joints=joints_a, body_before=pr_t)
-    check("217 shin vertices per side up to the collar, 0 pokes, ok (d78da2f9: 84 / 301 up to the tab, refused)",
-          all(g_t["sides"][s_]["shin_n"] == 217 and g_t["sides"][s_]["shaft_poke_n"] == 0 for s_ in ("left", "right"))
+    check("the collar plane at the rim 0.163776, not the tab", all(near(cut_t["sides"][s_]["collar"]["plane"]["point"][1], 0.163776, 1e-6)
+                                                                  and near(cut_t["sides"][s_]["collar"]["plane"]["normal"], [0.0, 1.0, 0.0], 1e-6)
+                                                                  for s_ in ("left", "right")))
+    check("ring 52 per side at the collar, 0 pokes, ok (d78da2f9: 84 / 301 up to the tab, refused)",
+          all(g_t["sides"][s_]["shin_n"] == 52 and g_t["sides"][s_]["shaft_poke_n"] == 0 for s_ in ("left", "right"))
           and g_t["gates"]["shaft_poke"] == {"value": 0.0, "limit": 0.005, "ok": True} and g_t["ok"],
           str({s_: (g_t["sides"][s_]["shin_n"], g_t["sides"][s_]["shaft_poke_n"]) for s_ in g_t["sides"]}))
     check("diagnostics: shaft_top_m = the tab 0.190389, collar_m 0.163776",
