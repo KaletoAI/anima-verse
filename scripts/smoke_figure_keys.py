@@ -3,8 +3,9 @@
 ``docs/superpowers/plans/2026-11-12-unified-worn-pieces.md`` Task 4; spec
 ``docs/superpowers/specs/2026-11-12-unified-worn-pieces-design.md``,
 builder-check ruling 1): the worn sets per mode, the SHAPE key (the in-body
-set including in-body hair) and the TEXTURE key (the painted set), plus the
-in-body part of ``model_refs.mesh_items_token``.
+set including in-body hair) and the TEXTURE key (the painted set). The
+mesh-input token ``model_refs.mesh_items_token`` stays mode-blind (Ruling
+4a): only own-mesh pieces change it, as at BASE.
 
 Usage:
     ./.venv/bin/python scripts/smoke_figure_keys.py
@@ -63,15 +64,17 @@ Expected, derived by hand from the brief:
     (garment kind hair, owner Demo) in equipped_mesh_pieces: hair_item
     "hair_demo" under hairdeck (own unchanged: hair is no outfit piece), ""
     under body (the hair is in the body).
-[6] mesh_items_token. Coat painted (no in-body piece): equal to the token of
+[6] mesh_items_token stays mode-blind (Ruling 4a: the dressed views are the
+    same images whether a piece is painted or in the body, so the mesh-input
+    signature must not change with that mode). The current function equals
     the BASE function (``git show aeadce9c:app/core/model_refs.py`` loaded as
-    a temp module, same stubs) = "|meshitems:boots,trousers|worn:bottom=
-    trousers;feet=boots;outer=coat;top=blouse". Coat in the body:
-    "|meshitems:boots,trousers|inbody:coat|worn:bottom=trousers;feet=boots;
-    outer=coat;top=blouse". Only {outer: coat, top: blouse} worn (no own
-    piece): "|meshitems:|inbody:coat|worn:outer=coat;top=blouse" — BASE
-    gave "" there (the fails-on-old-code proof, with BASE having no
-    app/core/figure.py).
+    a temp module, same stubs) for every case below, and by hand:
+    PIECES with the coat painted AND with the coat in the body ->
+    "|meshitems:boots,trousers|worn:bottom=trousers;feet=boots;outer=coat;
+    top=blouse" both times (no "|inbody:"); {outer: coat, top: blouse} worn
+    with the coat in the body (no own piece) -> ""; with the blouse own_mesh
+    as well -> "|meshitems:blouse|worn:outer=coat;top=blouse".
+    Fails-on-old-code proof: app/core/figure.py is absent at aeadce9c ([0]).
 """
 import copy
 import importlib.util
@@ -238,22 +241,22 @@ def main() -> int:
         haired["hair_method"] = "body"
         check("body: a leftover hair item is not served", figure.worn_sets("Demo", profile=haired).hair_item, "")
 
-        print("[6] mesh_items_token")
+        print("[6] mesh_items_token stays mode-blind (Ruling 4a)")
         base_refs = load_base_model_refs()
-        set_mode("coat", "painted")
         p = profile()
-        want = "|meshitems:boots,trousers|worn:bottom=trousers;feet=boots;outer=coat;top=blouse"
-        check(f"no in-body piece: token at {BASE}", base_refs.mesh_items_token("Demo", PIECES, profile=p), want)
-        check("no in-body piece: unchanged", model_refs.mesh_items_token("Demo", PIECES, profile=p), want)
-        set_mode("coat", "in_body")
-        check("coat in the body", model_refs.mesh_items_token("Demo", PIECES, profile=p),
-              "|meshitems:boots,trousers|inbody:coat|worn:bottom=trousers;feet=boots;outer=coat;top=blouse")
+        full = "|meshitems:boots,trousers|worn:bottom=trousers;feet=boots;outer=coat;top=blouse"
         two = {"outer": "coat", "top": "blouse"}
-        check("in-body only, no own piece", model_refs.mesh_items_token("Demo", two, profile=p),
-              "|meshitems:|inbody:coat|worn:outer=coat;top=blouse")
-        check(f"in-body only at {BASE} (fails on the old code)", base_refs.mesh_items_token("Demo", two, profile=p),
-              "")
-        check("nothing flagged", model_refs.mesh_items_token("Demo", {"top": "blouse"}, profile=p), "")
+        cases = [("coat painted", "coat", "painted", PIECES, full),
+                 ("coat in the body", "coat", "in_body", PIECES, full),
+                 ("in-body coat, no own piece", "coat", "in_body", two, ""),
+                 ("in-body coat + own-mesh blouse", "blouse", "own_mesh", two,
+                  "|meshitems:blouse|worn:outer=coat;top=blouse")]
+        for label, item_id, mode, pieces, want in cases:
+            set_mode(item_id, mode)
+            now = model_refs.mesh_items_token("Demo", pieces, profile=p)
+            check(f"{label}: by hand", now, want)
+            check(f"{label}: == {BASE}", now, base_refs.mesh_items_token("Demo", pieces, profile=p))
+        set_mode("blouse", "painted")
 
     if FAILS:
         print(f"\nFAILED ({len(FAILS)}): " + ", ".join(FAILS))
