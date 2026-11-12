@@ -6,10 +6,10 @@ and the mode of every worn outfit piece (plan
 The mode is a property of the ITEM — ``outfit_piece.mesh_mode`` (``mesh_mode_of``),
 the same for every wearer: ``own_mesh`` (a finished mesh fitted on top),
 ``painted`` (on the body's texture) or ``in_body`` (meshed as part of the
-body). An item without a valid stored mode has its kind default
-(``default_mesh_mode``: slots exactly ``feet`` → own mesh; ``outer`` among
-the slots, or both ``top`` and ``bottom`` → in the body; everything else →
-painted).
+body). A mode is stored only when someone picks it (the Wardrobe's mode
+select, a route that names it); an item without a valid stored mode is in
+the body (``default_mesh_mode``, Ruling A10 — for every slot set, footwear
+included: own mesh and painted must be chosen).
 
 Two kinds of item become a fitted garment mesh on a base-body character:
 
@@ -55,21 +55,15 @@ FOOTWEAR_SLOT = "feet"
 #: The modes of an outfit piece (``outfit_piece.mesh_mode``, module docstring).
 OWN_MESH, PAINTED, IN_BODY = "own_mesh", "painted", "in_body"
 MESH_MODES: Tuple[str, ...] = (OWN_MESH, PAINTED, IN_BODY)
-#: Slots that make a piece "in the body" by default (``default_mesh_mode``).
-_IN_BODY_SLOT = "outer"
-_IN_BODY_PAIR = frozenset({"top", "bottom"})
 
 
 def default_mesh_mode(slots: Iterable[str]) -> str:
-    """The kind default of an outfit piece worn on ``slots``: exactly
-    ``feet`` → ``own_mesh``; ``outer`` among them, or both ``top`` and
-    ``bottom`` → ``in_body``; everything else → ``painted``."""
-    worn = {str(s) for s in (slots or ()) if s}
-    if worn == {FOOTWEAR_SLOT}:
-        return OWN_MESH
-    if _IN_BODY_SLOT in worn or _IN_BODY_PAIR <= worn:
-        return IN_BODY
-    return PAINTED
+    """The default mode of an outfit piece worn on ``slots`` — the mode of
+    every piece without a stored one: ``in_body`` for every slot set,
+    footwear included (Ruling A10: "in the body" is the default, own mesh
+    and painted must be chosen). ``slots`` stays a parameter so a later
+    per-slot rule needs no new call sites."""
+    return IN_BODY
 
 
 def _piece_of(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -83,9 +77,10 @@ def _slots_of(piece: Dict[str, Any]) -> List[str]:
 
 def mesh_mode_of(item: Optional[Dict[str, Any]]) -> Optional[str]:
     """The mode of an outfit piece: its stored ``outfit_piece.mesh_mode``,
-    or the kind default of its slots (``default_mesh_mode``) when that is
-    missing or not one of ``MESH_MODES``. None for anything that is not an
-    ``outfit_piece``."""
+    or the default (``default_mesh_mode``: in the body) when that is missing
+    or not one of ``MESH_MODES``. None for anything that is not an
+    ``outfit_piece``. Read-only: never store its answer back on the item —
+    a stored mode is a choice (module docstring)."""
     if not isinstance(item, dict) or item.get("category") != "outfit_piece":
         return None
     piece = _piece_of(item)

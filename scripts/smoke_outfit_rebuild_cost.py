@@ -11,7 +11,8 @@ package copied in — no world, no hub, no GPU, no Blender, no server. The
 fixture is a slim cut of scripts/smoke_base_body_outfit.py: Kira on the
 pipeline with a ready base (``model3d/<bsig>.glb`` + sidecar rig mixamo) and
 the four base views ``tpose[_<view>]_<bsig>.png`` (sidecar base_signature),
-wearing a plain Dress (slot top) → the worn signature ``sig``. "The views
+wearing a plain Dress (slot top, mode painted — chosen: since Ruling A10 the
+default is in the body) → the worn signature ``sig``. "The views
 current" = ``tpose_<sig>.png`` / ``tpose_back_<sig>.png`` with sidecar
 ``base_signature`` = bsig, ``base_image_sha256`` = sha256 of the base view,
 ``dressed`` true, the equipped Dress and ``texture_signature`` = the texture
@@ -131,7 +132,8 @@ def main() -> int:
             shas[v] = hashlib.sha256((refs / f"{stem}.png").read_bytes()).hexdigest()
 
         dress = inventory.add_item(name="Dress", category="outfit_piece", prompt_fragment="a green dress",
-                                   outfit_piece={"slots": ["top"], "covers": [], "outfit_types": ["casual"]})["id"]
+                                   outfit_piece={"slots": ["top"], "covers": [], "outfit_types": ["casual"],
+                                                 "mesh_mode": "painted"})["id"]
         check("Kira holds the dress", inventory.add_to_inventory("Kira", dress), True)
         check("Kira wears the dress", inventory.equip_piece("Kira", dress, source="smoke")["status"], "ok")
         pieces, items, sig = model_refs.current_outfit_state("Kira")

@@ -22,12 +22,13 @@
  *       (2, 7)    → text "worn by 2 characters now", button "Build for them (7 hub jobs)", reason null
  *       (2, null) → button "Build for them (cost unknown)" (a wearer's cost is unknown → the total is)
  *       (1, 1)    → singular both ways: "worn by 1 character now", "Build for them (1 hub job)"
- * [4] defaultMeshMode(slots) mirrors `garment_set.default_mesh_mode` (spec Q2): exactly feet → own_mesh;
- *       outer among them, or both top and bottom → in_body; everything else → painted:
- *       ['feet'] → own_mesh · ['legs','feet'] → painted (not feet ALONE) · ['outer'] → in_body ·
- *       ['top','bottom'] → in_body · ['top'] → painted · [] → painted
- * [5] meshModeOf(stored, slots): a stored valid mode wins ('in_body' on ['feet'] → in_body); '' or an
- *       unknown word → the kind default (''/['feet'] → own_mesh, 'own'/['top'] → painted).
+ * [4] defaultMeshMode(slots) mirrors `garment_set.default_mesh_mode` (Ruling A10, replaced spec Q2's kind
+ *       default): in_body for every slot set, footwear included:
+ *       ['feet'] → in_body · ['legs','feet'] → in_body · ['outer'] → in_body ·
+ *       ['top','bottom'] → in_body · ['top'] → in_body · [] → in_body
+ * [5] meshModeOf(stored, slots): a stored valid mode wins ('painted' on ['outer'] → painted, 'own_mesh' on
+ *       ['feet'] → own_mesh); '' or an unknown word → the default (''/['feet'] → in_body, 'own'/['top'] →
+ *       in_body).
  * [6] figureBuildLine(changes, hubJobs) — the hair row's line after a mode change (the character's own
  *       Build, POST /characters/{c}/figure/build):
  *       (0, 0)    → text "No changes", button null, reason "Nothing to build"
@@ -172,17 +173,18 @@ check('[3] wearersLine(1, 1)', m.wearersLine(1, 1),
   { text: 'worn by 1 character now', button: 'Build for them (1 hub job)', reason: null });
 
 // [4]
-check('[4] feet', m.defaultMeshMode(['feet']), 'own_mesh');
-check('[4] legs+feet', m.defaultMeshMode(['legs', 'feet']), 'painted');
+check('[4] feet', m.defaultMeshMode(['feet']), 'in_body');
+check('[4] legs+feet', m.defaultMeshMode(['legs', 'feet']), 'in_body');
 check('[4] outer', m.defaultMeshMode(['outer']), 'in_body');
 check('[4] top+bottom', m.defaultMeshMode(['top', 'bottom']), 'in_body');
-check('[4] top', m.defaultMeshMode(['top']), 'painted');
-check('[4] none', m.defaultMeshMode([]), 'painted');
+check('[4] top', m.defaultMeshMode(['top']), 'in_body');
+check('[4] none', m.defaultMeshMode([]), 'in_body');
 
 // [5]
-check('[5] stored wins', m.meshModeOf('in_body', ['feet']), 'in_body');
-check('[5] empty -> default', m.meshModeOf('', ['feet']), 'own_mesh');
-check('[5] unknown -> default', m.meshModeOf('own', ['top']), 'painted');
+check('[5] stored wins (painted)', m.meshModeOf('painted', ['outer']), 'painted');
+check('[5] stored wins (own_mesh)', m.meshModeOf('own_mesh', ['feet']), 'own_mesh');
+check('[5] empty -> default', m.meshModeOf('', ['feet']), 'in_body');
+check('[5] unknown -> default', m.meshModeOf('own', ['top']), 'in_body');
 
 // [6]
 check('[6] figureBuildLine(0, 0)', m.figureBuildLine(0, 0),

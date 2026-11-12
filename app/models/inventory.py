@@ -409,15 +409,17 @@ def _normalize_outfit_types(raw) -> List[str]:
     return normalize_outfit_types(raw)
 
 
-def _clean_mesh_mode(raw, slots: List[str]) -> str:
+def _clean_mesh_mode(raw) -> Optional[str]:
     """``outfit_piece.mesh_mode``: how the piece reaches a base-body
     character's 3D model — ``own_mesh`` / ``painted`` / ``in_body``
-    (``app/core/garment_set.py``). A value outside those becomes the kind
-    default of ``slots`` (``garment_set.default_mesh_mode``). Never part of a
-    2D key (``_render_relevant_fields``, outfit signature): a change of mode
+    (``app/core/garment_set.py``). A stored mode is a CHOICE (Ruling A10):
+    a value outside those is None — the caller stores no key and the piece
+    follows the default (``garment_set.default_mesh_mode``), never the
+    default written down. Never part of a 2D key
+    (``_render_relevant_fields``, outfit signature): a change of mode
     changes no 2D render."""
-    from app.core.garment_set import MESH_MODES, default_mesh_mode
-    return raw if raw in MESH_MODES else default_mesh_mode(slots)
+    from app.core.garment_set import MESH_MODES
+    return raw if raw in MESH_MODES else None
 
 
 def _clean_closable(raw, slots: List[str]) -> bool:
@@ -646,12 +648,16 @@ def add_item(name: str,
             # the coherence rule can rely on them.
             "outfit_types": _normalize_outfit_types(outfit_piece.get("outfit_types")),
             "lora": _clean_piece_lora(outfit_piece.get("lora") or outfit_piece.get("loras")),
-            # An ``own_mesh`` key in the input is ignored (the mode replaced
-            # that flag, plan 2026-11-12-unified-worn-pieces Task 2).
-            "mesh_mode": _clean_mesh_mode(outfit_piece.get("mesh_mode"), slots),
             "closable": _clean_closable(outfit_piece.get("closable"), slots),
             "exposed_detail": _clean_exposed_detail(outfit_piece.get("exposed_detail")),
         }
+        # The mode only when the input names a valid one (a choice, Ruling
+        # A10); without it the piece follows the default. An ``own_mesh`` key
+        # in the input is ignored (the mode replaced that flag, plan
+        # 2026-11-12-unified-worn-pieces Task 2).
+        mesh_mode = _clean_mesh_mode(outfit_piece.get("mesh_mode"))
+        if mesh_mode is not None:
+            item["outfit_piece"]["mesh_mode"] = mesh_mode
         lift = _lift(outfit_piece.get("lift"))
         if lift is not None:
             item["outfit_piece"]["lift"] = lift
@@ -747,8 +753,10 @@ def update_item(item_id: str,
 
     def _apply_updates(item: Dict[str, Any]) -> Dict[str, Any]:
         # An outfit_piece update that does not name ``mesh_mode`` (a partial
-        # edit) keeps the stored mode; a stored item WITHOUT a mode (an
-        # imported one) stays without one and reads its kind default. The
+        # edit) keeps the stored mode; a stored item WITHOUT a mode stays
+        # without one and reads the default. An update that names an invalid
+        # mode (null, "") clears it — back to the default, never the default
+        # written down (Ruling A10: a stored mode is a choice). The
         # removed ``own_mesh`` flag is never written: neither from the INPUT
         # nor carried through from the stored piece (the boot migration
         # ``app/core/figure_migration.py`` judged it into the mode).
@@ -784,10 +792,9 @@ def update_item(item_id: str,
                 "exposed_detail": (_clean_exposed_detail(op.get("exposed_detail")) if "exposed_detail" in op
                                    else prev_exposed_detail),
             }
-            if "mesh_mode" in op:
-                item["outfit_piece"]["mesh_mode"] = _clean_mesh_mode(op.get("mesh_mode"), slots)
-            elif prev_mesh_mode is not None:
-                item["outfit_piece"]["mesh_mode"] = _clean_mesh_mode(prev_mesh_mode, slots)
+            mesh_mode = _clean_mesh_mode(op.get("mesh_mode") if "mesh_mode" in op else prev_mesh_mode)
+            if mesh_mode is not None:
+                item["outfit_piece"]["mesh_mode"] = mesh_mode
             if "closable" in op:
                 item["outfit_piece"]["closable"] = _clean_closable(op.get("closable"), slots)
             elif prev_closable is not None:

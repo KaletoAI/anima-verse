@@ -34,6 +34,26 @@ written and leaves the flag unset (the boot logs it, the next start retries).
 The shared library is ``shared/items/items.json`` in the repository: the
 first boot of any world rewrites that tracked file.
 
+RE-DEFAULT (Rulings A10 / A12) — ``redefault_modes_once``, once per world
+(world_kv ``REDEFAULT_FLAG``), after the mode migration and only once that
+has run. Since A10 the default mode of a piece is ``in_body`` and a mode is
+stored only when someone picks it; the mode migration above had written a
+mode into EVERY piece (most of them ``painted`` by its rule 4). Every outfit
+piece — the world's and the shared library's — that no TEST character wears
+(``equipped_pieces`` of any character row: dormant and pooled ones too)
+loses its stored ``outfit_piece.mesh_mode`` and follows the default; a piece
+worn by at least one test character keeps its mode untouched. A test
+character (``is_test_character``) is a humanoid whose STORED profile carries
+``model_pipeline: "base_body"``. One INFO line per cleared item, one summary
+line. Failure handling as above: a character list, a profile or an item list
+that cannot be read raises before anything is written and leaves the flag
+unset; a failed write is logged as a WARNING, the item keeps its mode, the
+flag is set anyway. Items are written with the plain savers — no outfit
+notification, no Build, no hub job: a test character's pieces keep their
+modes (its wanted figure is unchanged), and off the pipeline the modes are
+ignored (``garment_set.worn_garments`` is empty, ``figure.worn_sets`` puts
+nothing in the body).
+
 RE-KEYING (Task 5, ruling 4) — ``rekey_bodies_once``, once per world
 (world_kv ``REKEY_FLAG``), right after the mode migration and only once that
 has run: every stored outfit body (``ob…``) still keyed by its texture
@@ -77,6 +97,8 @@ logger = get_logger("figure_migration")
 FLAG = "migrated_worn_piece_modes"
 #: world_kv key of the re-key's done flag.
 REKEY_FLAG = "rekeyed_figure_bodies"
+#: world_kv key of the re-default's done flag (Ruling A12).
+REDEFAULT_FLAG = "redefaulted_unworn_piece_modes"
 #: A body's decision when it keeps its old id.
 STALE = "stale"
 #: The removed per-item flag (``outfit_piece`` key).
@@ -213,6 +235,102 @@ def migrate_modes_once() -> Optional[Dict[str, Any]]:
     logger.info("Worn-piece mode migration done: %d item(s) judged, %d profile(s) without %s",
                 len(judged), len(profiles), PROFILE_KEY)
     return {"items": judged, "profiles": profiles}
+
+
+# --- Re-default of the modes nobody tests (module docstring, Rulings A10 / A12) ----------
+
+
+def is_test_character(name: str, profile: Dict[str, Any]) -> bool:
+    """Whether ``name`` is one of the user's test characters for the
+    re-default: humanoid AND its STORED profile says ``model_pipeline:
+    "base_body"``. Read from the stored key on purpose, never through
+    ``base_body.is_base_pipeline``: the "Use base body pipeline" checkbox's
+    stored value is the user's record of which characters they test the
+    figure with (Ruling A12), and that helper will answer True for every
+    humanoid once the checkbox is gone (Task 11d)."""
+    if profile.get("model_pipeline") != "base_body":
+        return False
+    from app.core.model_refs import is_humanoid
+    return bool(is_humanoid(name, profile=profile))
+
+
+def _tested_pieces(names: Sequence[str]) -> Dict[str, List[str]]:
+    """``{item id: [test character, ...]}`` — the outfit pieces a test
+    character wears (``equipped_pieces``). A profile that cannot be read
+    raises (``strict``): clearing a tester's piece would cost a rebuild."""
+    from app.models.character import get_character_profile
+    tested: Dict[str, List[str]] = {}
+    for name in names:
+        profile = get_character_profile(name, strict=True) or {}
+        if not is_test_character(name, profile):
+            continue
+        pieces = profile.get("equipped_pieces")
+        for item_id in sorted({str(v).strip() for v in (pieces.values() if isinstance(pieces, dict) else ())
+                               if v and str(v).strip()}):
+            tested.setdefault(item_id, []).append(name)
+    return tested
+
+
+def _redefault(items: List[Dict[str, Any]], tested: Dict[str, List[str]], where: str
+               ) -> Tuple[Dict[str, str], Dict[str, str], List[Dict[str, Any]]]:
+    """Clear the stored mode of every untested outfit piece of ``items`` in
+    place. ``(cleared {id: old mode}, kept {id: mode}, changed items)``."""
+    cleared: Dict[str, str] = {}
+    kept: Dict[str, str] = {}
+    changed: List[Dict[str, Any]] = []
+    for item in items:
+        piece = _piece(item)
+        if item.get("category") != "outfit_piece" or piece is None or "mesh_mode" not in piece:
+            continue
+        item_id = str(item.get("id") or "")
+        if item_id in tested:
+            kept[item_id] = str(piece.get("mesh_mode"))
+            continue
+        cleared[item_id] = str(piece.pop("mesh_mode"))
+        changed.append(item)
+        logger.info("Mode re-default: item %s (%s, %s) %s -> default (worn by no test character)",
+                    item_id, item.get("name") or "-", where, cleared[item_id])
+    return cleared, kept, changed
+
+
+def redefault_modes_once() -> Optional[Dict[str, Dict[str, str]]]:
+    """The re-default (module docstring). None when it already ran or the
+    mode migration has not run yet (it would write rule-4 modes again),
+    else ``{cleared: {item id: old mode}, kept: {item id: mode}}`` — world
+    and shared items together, ``cleared`` only what was written."""
+    from app.models import inventory
+    from app.models.character import list_available_characters
+    from app.models.world import get_world_setting, set_world_setting
+    if get_world_setting(REDEFAULT_FLAG, strict=True):
+        return None
+    if not get_world_setting(FLAG, strict=True):
+        logger.warning("Mode re-default waits: the worn-piece mode migration has not run yet")
+        return None
+    names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)
+    tested = _tested_pieces(names)
+    world_items = inventory._load_items(strict=True)
+    shared_items = inventory._load_shared_items(strict=True)
+
+    cleared, kept, changed = _redefault(world_items, tested, "world")
+    for item in changed:
+        if not inventory._save_items([item]):
+            item_id = str(item.get("id") or "")
+            logger.warning("Mode re-default: world item %s not saved — keeps %s", item_id, cleared.pop(item_id, "-"))
+    shared_cleared, shared_kept, shared_changed = _redefault(shared_items, tested, "shared")
+    kept.update(shared_kept)
+    if shared_changed:
+        try:
+            inventory._save_shared_items(shared_items)
+            cleared.update(shared_cleared)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Mode re-default: shared items not saved, they keep their modes (%s): %s",
+                           ", ".join(str(i.get("id")) for i in shared_changed), e)
+
+    set_world_setting(REDEFAULT_FLAG, "1")
+    logger.info("Mode re-default done: %d item(s) back to the default, %d kept (worn by %s)",
+                len(cleared), len(kept),
+                ", ".join(sorted({n for ns in tested.values() for n in ns})) or "no test character")
+    return {"cleared": cleared, "kept": kept}
 
 
 # --- Re-keying the stored outfit bodies (module docstring) ------------------------------

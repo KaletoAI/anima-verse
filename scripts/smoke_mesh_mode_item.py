@@ -9,44 +9,46 @@ Usage:
 
 Runs against a THROWAWAY storage directory with a copy of the repo's ``human``
 package — no real world, no hub, no GPU, no server. Every expectation is
-derived by hand below from the plan's Global Constraints ("Kind default (spec
-Q2): slots exactly ``feet`` → own mesh; ``outer`` in slots, or both ``top``
-and ``bottom`` → in the body; everything else → painted") and Task 2's
+derived by hand below from Ruling A10 (it replaced the plan's kind default
+of spec Q2: the default mode is "in the body" for every slot set, footwear
+included, and a mode is stored only when someone picks it) and Task 2's
 Interfaces block.
 
-[1] default_mesh_mode — the kind default:
-    ["feet"] -> "own_mesh" (exactly feet); ["outer"] -> "in_body" (outer);
-    ["top", "bottom"] -> "in_body" (both top and bottom); ["top"] ->
-    "painted"; ["legs", "feet"] -> "painted" (feet, but not alone);
-    ["head"] -> "painted". MESH_MODES == ("own_mesh", "painted", "in_body").
-    mesh_mode_of: None for a non-outfit-piece (a tool, a hair garment, None).
-[2] add_item stores the mode:
-    Boots {"slots": ["feet"]} -> outfit_piece.mesh_mode "own_mesh" (the kind
-    default), no "own_mesh" key; garment_kind_of -> "footwear" (own mesh,
-    feet alone). Coat {"slots": ["outer"]} -> "in_body"; garment_kind_of None
-    (in the body is no own mesh). Blouse {"slots": ["top"], "mesh_mode":
-    "own_mesh"} -> "own_mesh", garment_kind_of "clothing". Tee {"slots":
-    ["top"], "own_mesh": True} -> "painted" (the input flag is ignored: the
-    top default), no "own_mesh" key, garment_kind_of None.
+[1] default_mesh_mode — the default:
+    ["feet"], ["outer"], ["top", "bottom"], ["top"], ["legs", "feet"],
+    ["head"] -> "in_body" (was own_mesh / in_body / in_body / painted /
+    painted / painted under the kind default). MESH_MODES == ("own_mesh",
+    "painted", "in_body"). mesh_mode_of: None for a non-outfit-piece (a tool,
+    a hair garment, None).
+[2] add_item stores a mode only when the input names a valid one:
+    Boots {"slots": ["feet"]} -> no "mesh_mode" key (mode in_body), no
+    "own_mesh" key; garment_kind_of None (in the body is no own mesh).
+    Shoes {"slots": ["feet"], "mesh_mode": "own_mesh"} -> "own_mesh",
+    garment_kind_of "footwear" (own mesh, feet alone). Coat {"slots":
+    ["outer"]} -> no key, garment_kind_of None. Blouse {"slots": ["top"],
+    "mesh_mode": "own_mesh"} -> "own_mesh", garment_kind_of "clothing". Tee
+    {"slots": ["top"], "own_mesh": True} -> no "mesh_mode" key (the input
+    flag is ignored), no "own_mesh" key, garment_kind_of None.
 [3] update_item:
     Blouse {"outfit_piece": {"slots": ["top"]}} -> keeps "own_mesh" (the
     update does not name the mode). {"slots": ["top"], "mesh_mode": "bogus"}
-    -> "painted" (the top default). {"slots": ["top"], "own_mesh": True} ->
-    still "painted", no "own_mesh" key written. An unrelated update
-    ({"name": "silk blouse"}) keeps "painted".
+    -> no key (back to the default, never the default written down).
+    {"slots": ["top"], "own_mesh": True} -> still no key, no "own_mesh" key
+    written. An unrelated update ({"name": "silk blouse"}) writes no key.
     Legacy: a Vest stored RAW (SQL into ``items.pieces``) as {"slots":
     ["top"], "own_mesh": true} — written before the mode existed. An
     update_item of its name drops the flag (no carry-through since Task 3:
     the boot migration ``figure_migration`` judged every stored flag into
     the mode) and writes NO "mesh_mode"; an outfit_piece update without a
     mode (slots ["top"]) still writes neither; mesh_mode_of(vest) ==
-    "painted" (the top default), garment_kind_of None.
+    "in_body" (the default), garment_kind_of None.
 [4] The wanted figure (Task 6 replaced the interim base_body.outfit_body_mode,
     which is gone): its shape is meshed iff a worn piece has mode "in_body";
     no profile key is read. meshed = (in_body, shape not plain); Demo is on
     the base-body pipeline (off it every piece is painted).
     Demo's profile carries outfit_body_mode "mesh" and wears Shirt (top,
-    painted) + Trousers (bottom, painted) -> ([], False) (was "retexture").
+    mesh_mode painted, chosen) + Trousers (bottom, painted, chosen) -> ([],
+    False) (was "retexture").
     Equip the Coat (outer, in_body) -> ([coat], True) (was "mesh").
     pieces={"outer": coat} -> ([coat], True), pieces={"top": shirt} -> ([],
     False), pieces={} -> ([], False). Coat updated to mesh_mode "painted" ->
@@ -144,12 +146,12 @@ def main() -> int:
             print(f"\nFAILED ({len(FAILS)}): " + ", ".join(FAILS))
             return 1
         d = garment_set.default_mesh_mode
-        check("feet", d(["feet"]), "own_mesh")
+        check("feet", d(["feet"]), "in_body")
         check("outer", d(["outer"]), "in_body")
         check("top + bottom", d(["top", "bottom"]), "in_body")
-        check("top", d(["top"]), "painted")
-        check("legs + feet", d(["legs", "feet"]), "painted")
-        check("head", d(["head"]), "painted")
+        check("top", d(["top"]), "in_body")
+        check("legs + feet", d(["legs", "feet"]), "in_body")
+        check("head", d(["head"]), "in_body")
         check("MESH_MODES", garment_set.MESH_MODES, ("own_mesh", "painted", "in_body"))
         check("constants", (garment_set.OWN_MESH, garment_set.PAINTED, garment_set.IN_BODY),
               ("own_mesh", "painted", "in_body"))
@@ -171,18 +173,26 @@ def main() -> int:
             return garment_set.garment_kind_of(inventory.get_item(item_id))
 
         print("[2] add_item")
+        def mode(item_id):
+            return garment_set.mesh_mode_of(inventory.get_item(item_id))
+
         boots = add("Boots", {"slots": ["feet"]})
-        check("boots mode", piece(boots).get("mesh_mode"), "own_mesh")
+        check("boots: no mode stored", "mesh_mode" in piece(boots), False)
+        check("boots mode (default)", mode(boots), "in_body")
         check("boots: no own_mesh key", "own_mesh" in piece(boots), False)
-        check("boots kind", kind(boots), "footwear")
+        check("boots kind", kind(boots), None)
+        shoes = add("Shoes", {"slots": ["feet"], "mesh_mode": "own_mesh"})
+        check("shoes mode", piece(shoes).get("mesh_mode"), "own_mesh")
+        check("shoes kind", kind(shoes), "footwear")
         coat = add("Coat", {"slots": ["outer"]})
-        check("coat mode", piece(coat).get("mesh_mode"), "in_body")
+        check("coat: no mode stored", "mesh_mode" in piece(coat), False)
+        check("coat mode (default)", mode(coat), "in_body")
         check("coat kind", kind(coat), None)
         blouse = add("Blouse", {"slots": ["top"], "mesh_mode": "own_mesh"})
         check("blouse mode", piece(blouse).get("mesh_mode"), "own_mesh")
         check("blouse kind", kind(blouse), "clothing")
         tee = add("Tee", {"slots": ["top"], "own_mesh": True})
-        check("tee: input flag ignored -> top default", piece(tee).get("mesh_mode"), "painted")
+        check("tee: input flag ignored -> no mode stored", "mesh_mode" in piece(tee), False)
         check("tee: no own_mesh key", "own_mesh" in piece(tee), False)
         check("tee kind", kind(tee), None)
 
@@ -190,12 +200,13 @@ def main() -> int:
         inventory.update_item(blouse, {"outfit_piece": {"slots": ["top"]}})
         check("no mode named -> kept", piece(blouse).get("mesh_mode"), "own_mesh")
         inventory.update_item(blouse, {"outfit_piece": {"slots": ["top"], "mesh_mode": "bogus"}})
-        check("bogus -> top default", piece(blouse).get("mesh_mode"), "painted")
+        check("bogus -> no mode stored", "mesh_mode" in piece(blouse), False)
+        check("bogus -> the default", mode(blouse), "in_body")
         inventory.update_item(blouse, {"outfit_piece": {"slots": ["top"], "own_mesh": True}})
-        check("input own_mesh alone -> mode unchanged", piece(blouse).get("mesh_mode"), "painted")
+        check("input own_mesh alone -> still no mode", "mesh_mode" in piece(blouse), False)
         check("input own_mesh not written", "own_mesh" in piece(blouse), False)
         inventory.update_item(blouse, {"name": "silk blouse"})
-        check("unrelated update keeps the mode", piece(blouse).get("mesh_mode"), "painted")
+        check("unrelated update writes no mode", "mesh_mode" in piece(blouse), False)
 
         vest = add("Vest", {"slots": ["top"]})
         raw = {k: v for k, v in piece(vest).items() if k != "mesh_mode"}
@@ -212,7 +223,7 @@ def main() -> int:
         inventory.update_item(vest, {"outfit_piece": {"slots": ["top"]}})
         check("legacy: piece update writes no own_mesh", "own_mesh" in piece(vest), False)
         check("legacy: piece update writes no mode", "mesh_mode" in piece(vest), False)
-        check("legacy: mode meanwhile = top default", garment_set.mesh_mode_of(inventory.get_item(vest)), "painted")
+        check("legacy: mode meanwhile = the default", garment_set.mesh_mode_of(inventory.get_item(vest)), "in_body")
         check("legacy: kind", kind(vest), None)
 
         print("[4] the wanted figure's shape follows the worn modes")
@@ -222,8 +233,8 @@ def main() -> int:
                  "outfit_body_mode": "mesh"}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
         check("pipeline Demo (the figure is a pipeline notion)", base_body.set_pipeline("Demo", True), True)
-        shirt = add("Shirt", {"slots": ["top"]})
-        trousers = add("Trousers", {"slots": ["bottom"]})
+        shirt = add("Shirt", {"slots": ["top"], "mesh_mode": "painted"})
+        trousers = add("Trousers", {"slots": ["bottom"], "mesh_mode": "painted"})
         check("shirt/trousers painted", (piece(shirt).get("mesh_mode"), piece(trousers).get("mesh_mode")),
               ("painted", "painted"))
         for item in (shirt, trousers, coat):

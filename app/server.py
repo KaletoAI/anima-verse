@@ -724,6 +724,18 @@ async def lifespan(app: FastAPI):
     except Exception as _fse:
         logger.warning("Outfit model figure stamp failed (retried at the next start): %s", _fse)
 
+    # Migration (same plan, Rulings A10 / A12): the default mode is "in the
+    # body" now and a mode is stored only when someone picks it — every outfit
+    # piece no test character (stored model_pipeline base_body) wears loses
+    # the mode the migration above wrote. Once per world, after the figure
+    # migrations; item writes only (no Build, no hub job), before the garment
+    # refit sweep below reads the modes.
+    try:
+        from app.core.figure_migration import redefault_modes_once
+        redefault_modes_once()
+    except Exception as _frd:
+        logger.warning("Mode re-default failed (retried at the next start): %s", _frd)
+
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
 

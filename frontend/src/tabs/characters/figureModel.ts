@@ -54,16 +54,14 @@ export function isMeshMode(v: unknown): v is MeshMode {
   return v === 'own_mesh' || v === 'painted' || v === 'in_body'
 }
 
-/** The kind default of a piece worn on `slots` (`garment_set.default_mesh_mode`): exactly feet → own mesh;
- *  outer among them, or both top and bottom → in the body; everything else → painted. */
-export function defaultMeshMode(slots: readonly string[]): MeshMode {
-  const worn = new Set(slots.filter(Boolean))
-  if (worn.size === 1 && worn.has('feet')) return 'own_mesh'
-  if (worn.has('outer') || (worn.has('top') && worn.has('bottom'))) return 'in_body'
-  return 'painted'
+/** The default mode of a piece worn on `slots` (`garment_set.default_mesh_mode`): in the body for every slot
+ *  set, footwear included (Ruling A10 — own mesh and painted must be chosen). `slots` is unused today. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function defaultMeshMode(_slots: readonly string[]): MeshMode {
+  return 'in_body'
 }
 
-/** The mode in effect: the stored one when valid, else the kind default (`garment_set.mesh_mode_of`). */
+/** The mode in effect: the stored one when valid, else the default (`garment_set.mesh_mode_of`). */
 export function meshModeOf(stored: string | null | undefined, slots: readonly string[]): MeshMode {
   return isMeshMode(stored) ? stored : defaultMeshMode(slots)
 }
