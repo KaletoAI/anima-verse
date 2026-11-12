@@ -29,12 +29,12 @@ TARGET_MODELS = ("z_image", "qwen", "flux")
 
 #: Backends (by model id substring, lower-case) whose edit model addresses its
 #: reference images as ``<Picture N>`` blocks instead of "the first image":
-#: P-H3-Image (MiniMax-H3) — its edit upsampler and text encoder know the
-#: pictures only by that token (review 2026-11-11). The ordinal wording of
+#: P-H3-Image and MiniMax-H3-Image (both MiniMax-H3) — its edit upsampler and
+#: text encoder know the pictures only by that token (review 2026-11-11). The ordinal wording of
 #: every edit prompt (``base_body.FIT_PROMPT``, ``garment_clothing.FIT`` /
 #: ``DRAFT``, the dressed drafts) is rewritten by ``reference_wording`` at the
 #: central handoff, so the prompt constants stay ONE wording.
-PICTURE_REFERENCE_MODELS = ("p-h3",)
+PICTURE_REFERENCE_MODELS = ("p-h3", "minimax-h3")
 _PICTURE_WORDING = (
     (re.compile(r"\bthe first image\b", re.IGNORECASE), "<Picture 1>"),
     (re.compile(r"\bthe second image\b", re.IGNORECASE), "<Picture 2>"),
