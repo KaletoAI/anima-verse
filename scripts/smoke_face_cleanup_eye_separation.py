@@ -18,8 +18,11 @@ the median lands a little outward of the paint centre: the located separation re
 
 Hand-derived expectations:
 - 100 mm: located (two eyes, |centre x| within 45..55 mm), the cleanup records ``applied`` for the eyes;
-- 120 mm: still refused — the reason reads "eye separation 12x mm is not a face" (a pair of clusters that far
-  apart is not one face's eyes; the bound stays a bound);
+- 120 mm: still refused — the reason reads "eye separation 1xx mm is not a face" with xx > 10 (a pair of clusters
+  that far apart is not one face's eyes; the bound stays a bound). Since version 3 the face's eye window keeps paint
+  only up to EYE_LATERAL_MM = 72 mm beside the mid-plane: of an ellipse spanning 38..82 mm the vertices in 38..72
+  remain, their median (outward-weighted as above) sits near 57 mm, so the separation reads about 115 mm (113..119),
+  no longer 12x — still over the 110 mm bound;
 - the canonical 69.7 mm fixture is untouched by the change (``smoke_face_cleanup.py`` keeps passing).
 On b1c42502 (bound 90 mm) the 100 mm case fails with the reason "eye separation 103 mm is not a face".
 
@@ -60,7 +63,7 @@ def main():
     head.EYE_X = 60 * head.MM
     glb, *_ = head.build_head()
     eyes = fc.measure_face(glb)["eyes"]
-    check(eyes.get("status") == "skipped" and re.fullmatch(r"eye separation 12\d mm is not a face", eyes.get("reason") or ""),
+    check(eyes.get("status") == "skipped" and re.fullmatch(r"eye separation 11[1-9] mm is not a face", eyes.get("reason") or ""),
           f"120 mm: refused ({eyes.get('status')}: {eyes.get('reason')})")
 
     if FAILS:

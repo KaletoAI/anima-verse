@@ -34,9 +34,11 @@ this texture (its result must match the input geometry byte for byte, ``face_ret
 the corrected mesh is what every later stage sees, with or without a face retexture.
 
 How the regions are found (no landmark model, no hub): the EYES by the lash paint itself — near-black texels
-(luminance < ``DARK_LUMINANCE``) sampled at the vertices of the head's front half (top 15 % of the figure, the
-side of the head centre where the paint is found) in the eye band (45-70 % of the head segment), one cluster
-per side of the head's mid-plane, gated for size, symmetry and height (``_locate_eyes``). The MOUTH from the
+(luminance < ``DARK_LUMINANCE``) sampled at the vertices of the head (top 15 % of the figure) in the eye band
+(45-70 % of the head segment), inside the FACE's eye window (at most ``EYE_DEPTH_MM`` behind the nose tip, at most
+``EYE_LATERAL_MM`` beside the face's mid-plane through the nose cap; the front from the feet), one cluster per side
+of that mid-plane, gated for size, symmetry and height (``_locate_eyes``; version 3 — hair inside the base mesh
+made the head's vertex mean a wrong frame). The MOUTH from the
 eyes: saturated red texels in the window 0.6-1.4 interpupillary distances below the eye line
 (``_locate_mouth``). A face without the paint has nothing to correct: the step records ``skipped`` with the
 reason and leaves the bytes alone.
@@ -59,7 +61,10 @@ import numpy as np
 
 from app.core.timeutils import utc_now_iso
 
-VERSION = 2
+# 1 pressed the flaps back, 2 folds them onto their root, 3 locates the eyes in the face's frame (haired heads). A
+# source cleaned at an older version may be re-applied ("Re-apply face cleanup"); nothing re-runs on its own — a
+# skipped cleanup runs again with the next mesher result anyway (every base build cleans its fresh mesh).
+VERSION = 3
 REFERENCE_HEIGHT_MM = 1700.0
 
 # Eyes.
@@ -73,8 +78,19 @@ EYE_HALF_WIDTH_MM = (8.0, 32.0)
 # Kira 88 mm, Lirien 100 mm — 90 refused Lirien and left her lash flaps black through the face retexture
 # (smoke_face_cleanup_eye_separation.py).
 EYE_SEPARATION_MM = (35.0, 110.0)
-EYE_SYMMETRY_MM = 10.0          # |(xL - mid) + (xR - mid)|
+EYE_SYMMETRY_MM = 10.0          # |(xL - mid) + (xR - mid)|, mid = the face's mid-plane (the nose cap)
 EYE_LEVEL_MM = 8.0              # |yL - yR|
+# The face frame (version 3, see ``_locate_eyes``).
+FOOT_SHARE = 0.03               # the feet: the bottom 3 % of the figure ...
+SHIN_BAND = (0.08, 0.12)        # ... against the shins; the feet lead by 86-115 mm on the measured bases
+FOOT_FRONT_MM = 20.0            # a lead under this says nothing (no feet, a floor-length hem): the paint decides
+NOSE_WINDOW = 0.4               # the nose tip: the front-most vertex below the top 40 % of the head segment (a fringe
+                                # reaches 6 mm short of the nose tip on Kira's haired base, 50-70 mm under the top) ...
+NOSE_COLUMN_MM = 45.0           # ... within this of the head's median x (hair strands over a shoulder lie 67 mm out)
+NOSE_CAP_MM = (5.0, 15.0)       # the cap whose median x is the mid-plane: this deep behind the tip, this high around it
+EYE_DEPTH_MM = 60.0             # the eye window: lash paint lies at most this far behind the nose tip (bald bases 2026-11:
+                                # deepest paint 54-55 mm; Kai's sideburns 70-100, the inner shell 60-70) ...
+EYE_LATERAL_MM = 72.0           # ... and at most this far beside the mid-plane (Lirien's outer corner: 64 mm)
 EYE_Y_TRIM_MM = 12.0            # paint farther than this from the eye line (brows, nostrils) is not the eye
 EYE_REGION_MARGIN_MM = 10.0     # region ellipse: a = half_width + margin
 EYE_REGION_ASPECT = 0.7         # region ellipse: b = aspect * half_width + margin
@@ -149,9 +165,46 @@ def _saturation(rgb: np.ndarray) -> np.ndarray:
 
 # --- eyes -------------------------------------------------------------------------------------------------------------
 
+def _front_from_feet(P: np.ndarray, mm: float) -> int:
+    """+1 / -1: the side of z the figure faces, read from its FEET (the soles reach FOOT_FRONT_MM or more in front of
+    the shins); 0 when the feet do not say (a mesh without feet, a hem down to the floor)."""
+    low, high = P.min(0), P.max(0)
+    height = high[1] - low[1]
+    feet = P[:, 1] < low[1] + FOOT_SHARE * height
+    shins = (P[:, 1] > low[1] + SHIN_BAND[0] * height) & (P[:, 1] < low[1] + SHIN_BAND[1] * height)
+    if feet.sum() < 20 or shins.sum() < 20:
+        return 0
+    lead = float(P[feet, 2].mean() - P[shins, 2].mean())
+    return 0 if abs(lead) < FOOT_FRONT_MM * mm else (1 if lead > 0 else -1)
+
+
+def _face_anchor(P: np.ndarray, head: np.ndarray, front: int, mm: float) -> Optional[Tuple[np.ndarray, float]]:
+    """``(nose tip, face mid-plane x)``: the front-most vertex of the head's central column below the top
+    NOSE_WINDOW of the head segment (no fringe, no shoulder), and the median x of its cap (NOSE_CAP_MM). None for
+    a head without such a column."""
+    hp = P[head]
+    hy0, hy1 = hp[:, 1].min(), hp[:, 1].max()
+    column = head & (P[:, 1] < hy1 - NOSE_WINDOW * (hy1 - hy0)) & (np.abs(P[:, 0] - np.median(hp[:, 0])) < NOSE_COLUMN_MM * mm)
+    if column.sum() < 20:
+        return None
+    idx = np.flatnonzero(column)
+    tip = P[idx[int(np.argmax(front * P[idx, 2]))]]
+    cap = column & (front * (tip[2] - P[:, 2]) < NOSE_CAP_MM[0] * mm) & (np.abs(P[:, 1] - tip[1]) < NOSE_CAP_MM[1] * mm)
+    return tip, float(np.median(P[cap, 0]))
+
+
 def _locate_eyes(P: np.ndarray, lum: np.ndarray, mm: float) -> Tuple[Optional[List[Dict[str, Any]]], str, Dict[str, Any]]:
     """The two eye centres from the lash paint. Returns ``(eyes | None, reason, frame)`` with ``frame`` =
-    {head (mask), centre, front (+1/-1 along z)}."""
+    {head (mask), centre (x on the FACE's mid-plane), front (+1/-1 along z), nose (tip)}.
+
+    Version 3 takes the frame from the face, not from the mean of the head's vertices: hair inside the base mesh
+    made both wrong (Task 6 acceptance 2026-11-12, haired bases of Kai and Kira). The FRONT comes from the feet
+    (``_front_from_feet``; the paint majority only when the feet do not say — Kai's dark hair at the back
+    outnumbered his lash paint and turned the head around); the MID-PLANE is the nose cap's median x (Kira's long
+    hair shifted the head mean 14.8 mm sideways, the paint read 18 mm asymmetric); and only paint inside the face's
+    EYE WINDOW counts — at most EYE_DEPTH_MM behind the nose tip and EYE_LATERAL_MM beside the mid-plane (Kai's
+    sideburns 65-80 mm lateral lie 70-100 mm behind the nose tip and joined his right eye: 70 mm wide). Hair colour
+    is no criterion: Kai's lash paint is the same dark brown as his hair (median RGB 52/31/19 and 45/29/20)."""
     low, high = P.min(0), P.max(0)
     height = high[1] - low[1]
     head = P[:, 1] > high[1] - HEAD_SHARE * height
@@ -162,17 +215,25 @@ def _locate_eyes(P: np.ndarray, lum: np.ndarray, mm: float) -> Tuple[Optional[Li
     hy0, hy1 = hp[:, 1].min(), hp[:, 1].max()
     band = (P[:, 1] > hy0 + EYE_BAND[0] * (hy1 - hy0)) & (P[:, 1] < hy0 + EYE_BAND[1] * (hy1 - hy0))
     dark = (lum < DARK_LUMINANCE) & head & band
-    best: Optional[Tuple[int, int]] = None
-    for sign in (1, -1):
-        count = int((dark & (sign * (P[:, 2] - centre[2]) > 0)).sum())
-        if best is None or count > best[1]:
-            best = (sign, count)
-    front = best[0]
-    frame = {"head": head, "centre": centre, "front": front}
-    dark &= front * (P[:, 2] - centre[2]) > 0
+    front = _front_from_feet(P, mm)
+    if not front:
+        best: Optional[Tuple[int, int]] = None
+        for sign in (1, -1):
+            count = int((dark & (sign * (P[:, 2] - centre[2]) > 0)).sum())
+            if best is None or count > best[1]:
+                best = (sign, count)
+        front = best[0]
+    anchor = _face_anchor(P, head, front, mm)
+    if anchor is None:
+        return None, "no face in front of the head", {"head": head, "centre": centre, "front": front}
+    nose, mid_x = anchor
+    centre = np.array([mid_x, centre[1], centre[2]])
+    frame = {"head": head, "centre": centre, "front": front, "nose": nose}
+    behind = front * (nose[2] - P[:, 2])
+    dark &= (behind < EYE_DEPTH_MM * mm) & (np.abs(P[:, 0] - mid_x) < EYE_LATERAL_MM * mm)
     eyes: List[Dict[str, Any]] = []
-    for side, sel in (("left" if front > 0 else "right", dark & (P[:, 0] > centre[0])),
-                      ("right" if front > 0 else "left", dark & (P[:, 0] < centre[0]))):
+    for side, sel in (("left" if front > 0 else "right", dark & (P[:, 0] > mid_x)),
+                      ("right" if front > 0 else "left", dark & (P[:, 0] < mid_x))):
         pts = P[sel]
         if len(pts) < EYE_MIN_VERTICES:
             return None, f"too little lash paint on the {side} side ({len(pts)} vertices)", frame
@@ -196,11 +257,11 @@ def _locate_eyes(P: np.ndarray, lum: np.ndarray, mm: float) -> Tuple[Optional[Li
             c[2] = np.percentile(P[footprint, 2], 75)
         eyes.append({"side": side, "centre": c, "half_width": half_width, "vertices": int(len(pts))})
     a, b = eyes
-    symmetry = abs((a["centre"][0] - centre[0]) + (b["centre"][0] - centre[0]))
+    symmetry = abs((a["centre"][0] - mid_x) + (b["centre"][0] - mid_x))
     level = abs(a["centre"][1] - b["centre"][1])
     separation = abs(a["centre"][0] - b["centre"][0])
     if symmetry > EYE_SYMMETRY_MM * mm:
-        return None, f"eye paint is not symmetric about the head ({symmetry / mm:.0f} mm)", frame
+        return None, f"eye paint is not symmetric about the face ({symmetry / mm:.0f} mm)", frame
     if level > EYE_LEVEL_MM * mm:
         return None, f"eye paint is not level ({level / mm:.0f} mm)", frame
     if not (EYE_SEPARATION_MM[0] * mm <= separation <= EYE_SEPARATION_MM[1] * mm):
@@ -530,7 +591,7 @@ def _clean_eyes(P: np.ndarray, F: np.ndarray, lum: np.ndarray, mm: float) -> Tup
         record["flap_lash_share"] = round(float(lash[proud_v].mean()), 2) if proud_v.any() else None
         record["unanchored_vertices"] = int((proud_v & ~fold).sum())
         if not fold.any():
-            record.update(status="skipped", reason="no flap stands proud of the lid" if not proud.any()
+            record.update(status="skipped", reason="no flap stands proud of the lid" if not proud_v.any()
                           else "the proud vertices touch no lid skin to fold onto")
             record.setdefault("after_mm", record["before_mm"])
             records.append(record)
