@@ -12232,7 +12232,16 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   with `hair: true` (HairDeck's spring chains under Head, `app/core/hair_motion.py`) collides with every capsule
   of the hair regions (`HAIR_REGIONS` — head, torso, arms, `shoulder_hair`, `chest_hair`; `hairChainCapsules`), its ancestors'
   included; the joints that lie inside the head capsule at rest are not in the group (the server's `rigid`). The BIND RULE holds as for garments (radius capped at the tip's
-  bind-pose distance). Far LOD, no driven link or no payload → nothing is bound, no per-frame work. Checks:
+  bind-pose distance). TODAY'S SKIN UNDER THE SWING (Ruling H11): a hair group's `anchor_blend` is
+  `{bone: {body joint: share}}` — per chain joint (the rigid ones included; a chain whose every joint is rigid
+  sends a group with `bones: []` and only these rows) the Head / Neck / Spine2 row that reproduces today's hair skin
+  (`garment_hairdeck._anchor_blend`, bounded least squares over the chain's vertices) — and `anchor_from` the bone the
+  chains hang from (Head). Each joint is placed at that blend of the body joints' motions since bind (linear, as
+  skinning blends) times its bind frame, times its own swing scaled to the row's `anchor_from` share; at zero swing
+  the hair is exactly where today's skin puts it. The hair contact runs on that final frame (the tip turned about
+  the joint). Swing itself is a FIT input (profile `hair_swing`, default off): with Swing off the fit is today's
+  skin byte for byte and the payload has no hair group. Checks: `scripts/smoke_hair_today_skin.mjs` (hand-derived),
+  `scripts/check_garment_collision.mjs --motion` (penetration on the real clips). Far LOD, no driven link or no payload → nothing is bound, no per-frame work. Checks:
   `scripts/smoke_extension_collision.mjs` (hand-derived), `scripts/check_extension_collision.mjs` (tip depth and
   tip offset from rest on the real clips, contact off/on).
 

@@ -67,6 +67,14 @@ Fixture
       (``joint_binds``), so the graft APPENDS the chain joints to the skin after the body's own (Task 2 folded them
       onto Head; the graft itself is tested in smoke_glb_graft_hair_joints.py);
     - fails on the old code: BASE 54cea23e's fit_hairdeck raises TypeError on ``chains_json`` (printed).
+    Ruling H11 (Swing a fit input): the "with the files" checks above run with ``swing=True``. With the files and
+    Swing off (the default): the garment is the fit without chains, byte for byte (positions, joints, weights,
+    names, indices), no joint_parents / joint_binds, report.chains swing False, count 1, the chain's weighted []
+    and anchor_blend None. With Swing on: report.chains swing True; chain 0's anchor_blend has a row for every
+    bone but ``_end``, shares > 0 summing to 1 +- 0.002, and with the chain skin of [5] (card a's vertex v = (1 - w)
+    Head + w (alpha R_seg + (1 - alpha) R_seg2)) those rows reproduce the no-chain fit's rows over card a with a
+    squared error no larger than the rows ``hair_weights`` gives at the segment middles (the least-squares target
+    of ``_anchor_blend``; its ridge pulls towards those rows, so the optimum can never be worse).
 """
 import importlib.util
 import json
@@ -292,7 +300,8 @@ def main() -> int:
         check(r0.metrics == rb.metrics, "without chains: metrics identical to BASE")
 
         chains_json, cards_json = json.dumps(CHAINS).encode(), cards_file()
-        r1 = gh.fit_hairdeck(nohead, proxy, body_glb, chains_json=chains_json, cards_json=cards_json, **kw)
+        r1 = gh.fit_hairdeck(nohead, proxy, body_glb, chains_json=chains_json, cards_json=cards_json, swing=True,
+                             **kw)
         g1, rep = r1.garment, r1.report["chains"]
         print(f"       report.chains {rep}")
         check(np.array_equal(g1.positions, g0.positions) and np.array_equal(g1.indices, g0.indices),
@@ -337,6 +346,54 @@ def main() -> int:
         check(placement["tilt_deg"] == 5.0 and np.abs(pushed["chain_points"] - want_cp).max() < 1e-12,
               f"_place_and_push chain_points = adjust_placement(s J + t, pivot, 0.01, 5): "
               f"{np.abs(pushed['chain_points'] - want_cp).max():.2e}")
+
+        # Ruling H11: Swing off = today's garment byte for byte; Swing on records the anchor blend
+        roff = gh.fit_hairdeck(nohead, proxy, body_glb, chains_json=chains_json, cards_json=cards_json, **kw)
+        goff, rep_off = roff.garment, roff.report["chains"]
+        check(goff.positions.tobytes() == g0.positions.tobytes() and goff.joints.tobytes() == g0.joints.tobytes()
+              and goff.weights.tobytes() == g0.weights.tobytes() and goff.joint_names == g0.joint_names
+              and goff.indices.tobytes() == g0.indices.tobytes() and not goff.joint_parents and not goff.joint_binds,
+              "swing off: the garment is the fit without chains byte for byte, no chain joint")
+        check(rep_off.get("swing") is False and rep_off["count"] == 1
+              and [(c["weighted"], c["anchor_blend"]) for c in rep_off["chains"]] == [([], None)],
+              f"swing off: report swing False, count 1, weighted [], anchor_blend None — {rep_off}")
+        check(rep.get("swing") is True, "swing on: report swing True")
+        # the rows' defining property, from the chain skin of [5]: card a's vertex v is skinned (1 - w) Head +
+        # w (alpha R_seg + (1 - alpha) R_seg2); with the recorded rows that must reproduce today's row (g0) at
+        # least as well as the rows at the segment middles (the ridge's pull target), every row >= 0, sum 1
+        blend = rep["chains"][0]["anchor_blend"]
+        names0 = list(g0.joint_names)
+        hi = names0.index(next(n for n in names0 if n.lower().endswith("head")))
+        on_a = np.flatnonzero(b.chain[:na] == 0)
+        T = np.zeros((len(on_a), len(names0)))
+        for k in range(g0.joints.shape[1]):
+            np.add.at(T, (np.arange(len(on_a)), g0.joints[on_a, k]), g0.weights[on_a, k])
+        bones = hc.joint_names(chains[0])
+
+        def dense_rows(rows):
+            R = np.zeros((len(bones), len(names0)))
+            for i, bone in enumerate(bones):
+                for n, v in (rows.get(bone) or {}).items():
+                    R[i, names0.index(n)] = v
+            R[-1] = R[-2]
+            return R
+
+        def residual(R):
+            w, al = b.w[on_a], b.alpha[on_a]
+            E = (w * al)[:, None] * R[b.seg[on_a]] + (w * (1 - al))[:, None] * R[b.seg2[on_a]]
+            E[:, hi] += 1 - w
+            return float(((E - T) ** 2).sum())
+
+        # the placed joints: the bind frames' translations of the Swing-on fit
+        Jc = np.array([np.asarray(g1.joint_binds[n])[:3, 3] for n in bones], np.float64)
+        mn, mJ, mW = gh.hair_weights((Jc[:-1] + Jc[1:]) / 2, body)
+        mid = {bones[i]: {mn[int(j)]: float(x) for j, x in zip(mJ[i], mW[i]) if x > 0} for i in range(len(Jc) - 1)}
+        check(set(blend) == set(bones[:-1]) and all(min(r.values()) > 0 and abs(sum(r.values()) - 1) <= 0.002
+                                                     for r in blend.values()),
+              f"swing on: anchor_blend rows for {sorted(blend)} (every bone but _end), shares > 0 summing to 1")
+        check(residual(dense_rows(blend)) <= residual(dense_rows(mid)) + 1e-4,
+              f"swing on: the rows reproduce today's skin over card a at least as well as the segment-middle rows "
+              f"({residual(dense_rows(blend)):.5f} <= {residual(dense_rows(mid)):.5f})")
 
         r2 = gh.fit_hairdeck(nohead, proxy, body_glb, chains_json=chains_json,
                              cards_json=cards_file(drop_last=True), **kw)

@@ -474,7 +474,10 @@ def garment_fsig(character_name: str, item_id: str, *,
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
     (R10); hair made by HairDeck adds ``{method, hsig, colour, placement}``
     (the colour override, "" = automatic; the manual placement
-    ``garment_hair.hair_placement``, None = automatic). Footwear is md5[:12] over ``{kind,
+    ``garment_hair.hair_placement``, None = automatic) and ``swing: True``
+    only when the hair swings on its spring chains (``hair_motion.swing_on``,
+    Ruling H11: a Swing-off fit keeps the fingerprint it had before Swing
+    was a fit input). Footwear is md5[:12] over ``{kind,
     ssig, insole_version, width_cap, fit_version}`` alone
     (``garment_footwear.fsig_inputs``) — no base signature, no base images.
     ValueError when ``item_id`` is no garment of a known kind."""
@@ -490,6 +493,9 @@ def garment_fsig(character_name: str, item_id: str, *,
         payload.update(method=HAIRDECK, hsig=garment_hsig(character_name, item_id, profile=profile),
                        colour=garment_hair.hair_colour_override(profile),
                        placement=garment_hair.hair_placement(profile))
+        from app.core import hair_motion
+        if hair_motion.swing_on(profile):
+            payload["swing"] = True
     return _md5(payload)
 
 

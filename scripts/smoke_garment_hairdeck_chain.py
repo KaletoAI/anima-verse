@@ -246,10 +246,10 @@ def main() -> int:
         service.get_image_service = lambda: FakeService()
 
         def fit_stub(nohead_glb, proxy_glb, rigged_base_glb, *, colour_target, forward_m=None, tilt_deg=None,
-                     colour_profile=None, length_class=None, chains_json=None, cards_json=None):
+                     colour_profile=None, length_class=None, chains_json=None, cards_json=None, swing=False):
             import smoke_garment_fit as fx
             FIT_CALLS.append({"nohead": nohead_glb, "proxy": proxy_glb, "colour_target": colour_target,
-                              "colour_profile": colour_profile, "length_class": length_class})
+                              "colour_profile": colour_profile, "length_class": length_class, "swing": swing})
             seed = int(bytes(nohead_glb).split(b"_seed")[1].split(b"_")[0])
             push = mode["push"].get(seed)
             ok = True if push is not None else (mode["fit_ok"].pop(0) if mode["fit_ok"] else True)
@@ -386,6 +386,7 @@ def main() -> int:
               {"accepted": True, "attempt": 1, "seed": 42, "notes": ["input_alpha"], "error": None})
         check("fit inputs", (FIT_CALLS[0]["nohead"], FIT_CALLS[0]["proxy"], FIT_CALLS[0]["colour_target"]),
               (b"hair_seed42_nohead.glb-call1", b"hair_seed42.glb-call1", None))
+        check("fit swing: the default (off, Ruling H11)", FIT_CALLS[0]["swing"], False)
         check("fit profile colour / class", (tuple(round(c, 5) for c in FIT_CALLS[0]["colour_profile"] or ()),
                                              FIT_CALLS[0]["length_class"]), (BLONDE, "medium"))
         fit = gs.garment_path("Demo", hid, f_hd, "fit")

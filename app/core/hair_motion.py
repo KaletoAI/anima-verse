@@ -12,8 +12,18 @@ not a skill package (R1) — one group ``hair_c<CC>`` per chain, solved by the c
 - HairDeck's per-chain ``stiffness`` (0.2–0.75) times the character's Stiffness factor maps linearly to the spring
   frequency (``HAIR_FREQ_PER_STIFFNESS`` Hz per unit, measured in the spike, Ruling H1a), clamped to
   ``HAIR_FREQ_MIN_HZ``..``HAIR_FREQ_MAX_HZ``; the damping ratio is a constant ``HAIR_ZETA``.
-- Swing and Stiffness are profile keys (Ruling H7): ``hair_swing`` (``""`` = on, ``"off"``) and ``hair_stiffness``
-  (``""`` = 1.0, else a factor within ``STIFFNESS_LIMITS``). They change only the motion, never the fit.
+- Swing and Stiffness are profile keys: ``hair_swing`` (``"on"`` / ``"off"``, ``""`` = ``HAIR_SWING_DEFAULT``) and
+  ``hair_stiffness`` (``""`` = 1.0, else a factor within ``STIFFNESS_LIMITS``). Stiffness changes only the motion.
+  Swing is a FIT input (Ruling H11, replacing H7's "motion only"): with Swing off the fit writes today's skin
+  (``garment_fit.hair_weights``' Head -> Neck -> Spine2 rows, no chain joint, no binding) and the payload has no
+  hair group; with Swing on the chain-bound cards ride their chain joints. ``garment_store.garment_fsig`` holds
+  Swing only when it is on, so a fit made with Swing off keeps the fingerprint it had before Swing was a fit input
+  (the boot refit sweep refits it under that fingerprint), and toggling it refits on the CPU
+  (``routes/characters.py`` ``/hair/motion``).
+- A chain of a Swing-on fit carries ``anchor_blend`` (``garment_hairdeck._anchor_blend``: per joint the Head /
+  Neck / Spine2 row that reproduces today's skin over the chain's vertices): the client puts each joint at that
+  blend of the three bones and adds its swing scaled to the row's Head share (``secondaryMotion.ts``, HAIR CHAINS),
+  so at rest the hair is where today's skin puts it. The rigid joints below keep their rows (carried, no swing).
 - RIGID joints (Ruling H10): a chain joint whose rest (bind) position lies inside the head collision capsule rides
   the head and is left out of its group. The fit records ``rigid: []``; the served summary fills it at payload time
   from the joints stored in the fit GLB (``rigid_joints``: the same head capsule ``collision.fit_capsules`` gives
@@ -32,8 +42,15 @@ logger = logging.getLogger(__name__)
 
 PROFILE_SWING = "hair_swing"
 PROFILE_STIFFNESS = "hair_stiffness"
-#: The stored value of ``PROFILE_SWING`` that turns the swing off; anything else is on.
+#: The stored values of ``PROFILE_SWING``; anything else (``""``) means ``HAIR_SWING_DEFAULT``.
+SWING_ON = "on"
 SWING_OFF = "off"
+#: Swing of a character that never chose (Ruling H11, 2026-11-12): OFF — the fit is then today's hair, byte for
+#: byte in its skin. It flips to True only when the acceptance (plan 2026-11-12-hairdeck-spring-chains, Task 8)
+#: shows the Swing-on hair's penetration at most today's + 1 percentage point in the worst pose
+#: (``scripts/check_garment_collision.mjs --motion``, hair ``excess``). Flipping it changes the fit fingerprint
+#: of every character on the default (``garment_store.garment_fsig``): their hair is refitted at the next run.
+HAIR_SWING_DEFAULT = False
 #: The bounds of the Stiffness factor (× HairDeck's per-chain stiffness).
 STIFFNESS_LIMITS: Tuple[float, float] = (0.5, 2.0)
 DEFAULT_STIFFNESS = 1.0
@@ -55,7 +72,7 @@ GROUP_ID = "hair_c{index:02d}"
 
 #: Profile keys whose value is part of the served-chains cache key (with the worn hair id and the head capsule
 #: scale): a change of the character's hair invalidates the cached summary even when ``garments/`` is unchanged.
-HAIR_PROFILE_KEYS = ("hair_method", "hair_forward_m", "hair_tilt_deg", "hair_width_scale")
+HAIR_PROFILE_KEYS = ("hair_method", "hair_forward_m", "hair_tilt_deg", "hair_width_scale", PROFILE_SWING)
 
 # character -> (cache key, chains summary or None)
 _SERVED: Dict[str, Tuple[Tuple[Any, ...], Optional[Dict[str, Any]]]] = {}
@@ -81,30 +98,37 @@ def _stiffness_value(raw: Any) -> Optional[float]:
     return value
 
 
+def swing_on(profile: Optional[Dict[str, Any]]) -> bool:
+    """Swing of the profile key ``hair_swing``: ``"on"`` True, ``"off"`` False, anything else
+    ``HAIR_SWING_DEFAULT``. A fit input (Ruling H11)."""
+    stored = str((profile or {}).get(PROFILE_SWING) or "")
+    return True if stored == SWING_ON else False if stored == SWING_OFF else HAIR_SWING_DEFAULT
+
+
 def settings(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """``{"swing": bool, "stiffness": float}`` of the profile keys ``hair_swing`` / ``hair_stiffness``. Swing is on
-    unless the stored value is ``"off"``; a stiffness that is empty, no number or beyond ``STIFFNESS_LIMITS`` counts
-    as ``DEFAULT_STIFFNESS``."""
+    """``{"swing": bool, "stiffness": float}`` of the profile keys ``hair_swing`` / ``hair_stiffness``. Swing:
+    ``swing_on``; a stiffness that is empty, no number or beyond ``STIFFNESS_LIMITS`` counts as
+    ``DEFAULT_STIFFNESS``."""
     profile = profile or {}
     try:
         stiffness = _stiffness_value(profile.get(PROFILE_STIFFNESS))
     except ValueError:
         stiffness = None
-    return {"swing": str(profile.get(PROFILE_SWING) or "") != SWING_OFF,
-            "stiffness": DEFAULT_STIFFNESS if stiffness is None else stiffness}
+    return {"swing": swing_on(profile), "stiffness": DEFAULT_STIFFNESS if stiffness is None else stiffness}
 
 
 def set_hair_motion(character_name: str, swing: Any, stiffness: Any) -> bool:
-    """Store Swing (a bool; stored as ``""`` = on / ``"off"``) and the Stiffness factor (a number within
-    ``STIFFNESS_LIMITS``; None, ``""`` or 1.0 = the default, stored as ``""``) in ONE read-modify-write under the
-    profile lock. ValueError for a non-bool swing or an invalid stiffness — nothing is stored then. The save
-    result; True without a save when unchanged. Only the motion payload changes: nothing is re-fitted."""
+    """Store Swing (a bool; stored as ``"on"`` / ``"off"`` — an explicit choice survives a change of
+    ``HAIR_SWING_DEFAULT``) and the Stiffness factor (a number within ``STIFFNESS_LIMITS``; None, ``""`` or 1.0 =
+    the default, stored as ``""``) in ONE read-modify-write under the profile lock. ValueError for a non-bool swing
+    or an invalid stiffness — nothing is stored then. The save result; True without a save when unchanged.
+    Stiffness changes only the motion payload; Swing is a fit input (the caller starts the CPU refit)."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
     if not isinstance(swing, bool):
         raise ValueError("hair swing must be true or false")
     value = _stiffness_value(stiffness)
-    wanted = {PROFILE_SWING: "" if swing else SWING_OFF,
+    wanted = {PROFILE_SWING: SWING_ON if swing else SWING_OFF,
               PROFILE_STIFFNESS: "" if value is None or value == DEFAULT_STIFFNESS else value}
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
@@ -216,6 +240,8 @@ def with_rigid(chains: Optional[Dict[str, Any]], rigid: Optional[FrozenSet[str]]
 def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """``report.chains`` of the newest accepted HairDeck fit of the worn hair (``garments._newest_fit``), None for
     the hair method ``body``, without worn hair, without such a fit or for a fit from before the spring chains.
+    With Swing off ``motion_groups`` emits nothing whatever this fit is; a fit made with Swing off has no weighted
+    joint, so it gives no group either.
 
     Cached per (character, ``garments/`` directory ``st_mtime_ns``, worn item id): a fit or record write replaces a
     file in that directory, so an unchanged directory costs one ``stat`` per worldmap poll. The item id of the key
@@ -272,10 +298,16 @@ def motion_groups(chains: Optional[Dict[str, Any]], settings: Dict[str, Any], *,
                   gravity_scale: float = 1.0) -> Dict[str, Dict[str, Any]]:
     """The motion groups of a chain summary (``served_chains``), pure. One group ``hair_c<CC>`` per chain whose
     ``bones`` are its ``weighted`` joints minus its ``rigid`` ones, never the ``_end`` leaf, in chain order; a
-    chain without such a bone (or malformed) is left out. Values: every ``MOTION_FIELDS`` default of ``RigSpec``,
+    chain without such a bone is left out unless it has an ``anchor_blend`` (then its group has ``bones`` [] and
+    only carries the rows of its rigid joints); a malformed chain is left out. Values: every ``MOTION_FIELDS`` default of ``RigSpec``,
     then ``freq_zeta(stiffness × settings["stiffness"])``, ``HAIR_GRAVITY``, ``HAIR_MAX_DEG``, ``HAIR_SAG_MAX_DEG``;
     ``scale_axis`` the default, ``rigid_tail`` 0, ``rest_deg`` 0, ``gravity_scale`` the profile's (the caller's),
-    ``hair`` True. ``{}`` when Swing is off or without chains."""
+    ``hair`` True, and the chain's ``anchor_blend`` when the fit recorded one — ``{bone: {body joint: share}}`` of
+    the chain's weighted joints, its rigid ones included (today's skin row at each bone, ``garment_hairdeck._anchor_blend``) with ``anchor_from`` =
+    ``hair_chains.HEAD_PARENT`` (the bone every chain hangs from: its share of a row is the share of the swing the
+    client shows at that bone).
+    ``{}`` when Swing is off or without chains; a fit made with Swing off has no weighted joint, so no group."""
+    from app.core.hair_chains import HEAD_PARENT
     from app.core.rig_contract import HAIR_CHAIN_JOINT_RE
     if not settings.get("swing") or not isinstance(chains, dict):
         return {}
@@ -288,6 +320,11 @@ def motion_groups(chains: Optional[Dict[str, Any]], settings: Dict[str, Any], *,
             stiffness = float(chain["stiffness"])
             weighted = [str(b) for b in chain.get("weighted") or []]
             rigid = {str(b) for b in chain.get("rigid") or []}
+            raw_blend = chain.get("anchor_blend") or {}
+            blend = {str(bone): {str(k): float(v) for k, v in row.items()
+                                 if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+                                 and v > 0}
+                     for bone, row in raw_blend.items() if isinstance(row, dict)}
         except (TypeError, ValueError, KeyError, AttributeError):
             continue
         if index < 0 or not math.isfinite(stiffness):
@@ -297,7 +334,11 @@ def motion_groups(chains: Optional[Dict[str, Any]], settings: Dict[str, Any], *,
             match = HAIR_CHAIN_JOINT_RE.match(bone)
             if match and int(match.group(1)) == index and match.group(2) != "end" and bone not in rigid:
                 bones.append(bone)
-        if not bones:
+        # every joint of the chain but the leaf: a carried (rigid) one rides today's skin without a swing
+        joints = {b for b in weighted if (m := HAIR_CHAIN_JOINT_RE.match(b)) and int(m.group(1)) == index
+                  and m.group(2) != "end"}
+        blend = {bone: row for bone, row in blend.items() if bone in joints and row}
+        if not bones and not blend:
             continue
         if defaults is None:
             defaults = _defaults()
@@ -305,7 +346,8 @@ def motion_groups(chains: Optional[Dict[str, Any]], settings: Dict[str, Any], *,
         out[GROUP_ID.format(index=index)] = {
             "bones": bones, **defaults, "freq_hz": freq, "zeta": zeta, "gravity": HAIR_GRAVITY,
             "max_deg": HAIR_MAX_DEG, "sag_max_deg": HAIR_SAG_MAX_DEG, "scale_axis": "centroid", "rigid_tail": 0,
-            "rest_deg": 0.0, "gravity_scale": float(gravity_scale), "hair": True}
+            "rest_deg": 0.0, "gravity_scale": float(gravity_scale), "hair": True,
+            **({"anchor_blend": blend, "anchor_from": HEAD_PARENT} if blend else {})}
     return out
 
 

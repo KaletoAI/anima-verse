@@ -2189,18 +2189,34 @@ def set_character_hair_motion(character_name: str, body: HairMotionRequest,
     """Set how HairDeck hair swings on its spring chains: ``swing`` (bool)
     and ``stiffness`` (a factor × HairDeck's per-chain stiffness within
     ``hair_motion.STIFFNESS_LIMITS``, null = 1). 400 for a non-bool swing or
-    a stiffness beyond its limits. Only the motion payload changes: nothing
-    is re-fitted (no run starts here). ``{swing, stiffness}`` as stored."""
-    from app.core import hair_motion
+    a stiffness beyond its limits. Stiffness changes only the motion payload.
+    Swing is a fit input (Ruling H11): a changed Swing starts the hair's
+    fit-only run (a CPU refit from the stored HairDeck seeds, no HairDeck
+    call; ``garments.start_garment`` with ``steps="fit"``) when the character
+    has a hair item. ``{swing, stiffness, refit}`` — the stored settings and
+    whether a refit was started."""
+    from app.core import garment_hair, hair_motion
+    from app.models.character import get_character_profile
     _require_character(character_name)
+    before = hair_motion.swing_on(get_character_profile(character_name) or {})
     try:
         saved = hair_motion.set_hair_motion(character_name, body.swing, body.stiffness)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not saved:
         raise HTTPException(status_code=500, detail="Saving the character profile failed")
-    from app.models.character import get_character_profile
-    return hair_motion.settings(get_character_profile(character_name) or {})
+    stored = get_character_profile(character_name) or {}
+    refit = False
+    if hair_motion.swing_on(stored) != before:
+        item = garment_hair.find_hair_item(character_name, stored)
+        if item:
+            from app.core import garments
+            try:
+                garments.start_garment(character_name, item["id"], steps="fit")
+                refit = True
+            except ValueError as e:
+                logger.warning("hair swing of %s: no refit started — %s", character_name, e)
+    return {**hair_motion.settings(stored), "refit": refit}
 
 
 @router.post("/{character_name}/hair", status_code=202)

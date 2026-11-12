@@ -101,6 +101,13 @@ HAIRLINE_HALF_WIDTH = 0.15
 # parting and the crown (Kira's HairDeck renders).
 CAP_COLOUR_PERCENTILE = 50
 
+# Swing on (Ruling H11): a chain bone's ``anchor_blend`` row is the least-squares row that reproduces today's skin
+# over the chain's vertices, pulled towards the row at the bone's segment middle with this ridge (relative to the
+# mean diagonal of the normal matrix) so a bone with few vertices stays near that row.
+ANCHOR_BLEND_RIDGE = 0.05
+#: Weight of each row's "shares sum to 1" equation in that bounded (0..1) least-squares solve.
+ANCHOR_BLEND_SUM_WEIGHT = 100.0
+
 # Placement correction (user test 2026-11-09, finding 5). The proxy is a near-sphere, the cranium is longer (Kira:
 # depth 0.20 m, width 0.17 m) and its back dominates the ICP point set, so the placed proxy sits ~1.2 cm to the back
 # and its front lands ~6 mm behind the forehead: the hairline rides 3.5 cm above the brow ridge (a long forehead).
@@ -949,12 +956,66 @@ def _repair_report(kept: List[Any], unbound: List[int], depth: Dict[str, Any]) -
             "truncated_chains": truncated}
 
 
+def _anchor_blend(chain: Any, body: Any, today: Tuple[List[str], np.ndarray, np.ndarray], binding: Any,
+                  position: int) -> Dict[str, Dict[str, float]]:
+    """Today's skin at one chain's bones (Ruling H11): per bone (``{bone: {body joint: share}}``, joint names as in
+    the body, shares > 0 rounded to 3 decimals) the row R_j that makes the chain skin reproduce ``today`` (=
+    ``hair_weights``' ``names, J, W``) when every bone rides its row: a bound vertex is skinned ``(1 - w)`` Head +
+    ``w * alpha`` seg + ``w * (1 - alpha)`` seg2 (``hair_chains.chain_weights``), so its rows must satisfy
+    ``w * (alpha R_seg + (1 - alpha) R_seg2) = today_v - (1 - w) Head``. Least squares over the chain's bound
+    vertices (``position`` = its index in ``binding``) with every share in [0, 1] and each row summing to 1
+    (``ANCHOR_BLEND_SUM_WEIGHT``), pulled with ``ANCHOR_BLEND_RIDGE`` towards the row at the bone's segment middle
+    (also the row of a bone without vertices), then normalised."""
+    from app.core import hair_chains
+    from app.core.rig_contract import norm_bone_name
+    J = np.asarray(chain.joints, np.float64)
+    bones = hair_chains.joint_names(chain)
+    if len(J) < 2:
+        return {}
+    names, tJ, tW = today
+    k = len(names)
+    head = [i for i, nm in enumerate(names) if norm_bone_name(str(nm)) == "head"]
+    mnames, mJ, mW = hair_weights((J[:-1] + J[1:]) / 2, body)
+    R0 = np.zeros((len(bones), k))
+    for b in range(len(J) - 1):
+        for jj, ww in zip(mJ[b], mW[b]):
+            R0[b, names.index(mnames[int(jj)])] += ww
+    R0[-1] = R0[-2]
+    on = np.flatnonzero(np.asarray(binding.chain) == position)
+    R = R0
+    if len(on) and head:
+        T = np.zeros((len(on), k))
+        np.add.at(T, (np.repeat(np.arange(len(on)), tJ.shape[1]), np.asarray(tJ)[on].ravel()), np.asarray(tW)[on].ravel())
+        w, al = np.asarray(binding.w)[on], np.asarray(binding.alpha)[on]
+        T[:, head[0]] -= 1.0 - w
+        A = np.zeros((len(on), len(bones)))
+        np.add.at(A, (np.arange(len(on)), np.asarray(binding.seg)[on]), w * al)
+        np.add.at(A, (np.arange(len(on)), np.asarray(binding.seg2)[on]), w * (1.0 - al))
+        from scipy.optimize import lsq_linear
+        nb = len(bones)
+        lam = ANCHOR_BLEND_RIDGE * max(1.0, float(np.trace(A.T @ A)) / nb)
+        # x = vec(R) (row-major); rows: the vertices per joint column, the ridge, each row's sum (weighted hard)
+        M = np.vstack([np.kron(A, np.eye(k)), np.sqrt(lam) * np.eye(nb * k),
+                       ANCHOR_BLEND_SUM_WEIGHT * np.kron(np.eye(nb), np.ones((1, k)))])
+        y = np.concatenate([T.ravel(), np.sqrt(lam) * R0.ravel(), ANCHOR_BLEND_SUM_WEIGHT * np.ones(nb)])
+        R = lsq_linear(M, y, bounds=(0.0, 1.0)).x.reshape(nb, k)
+        sums = R.sum(axis=1, keepdims=True)
+        R = np.where(sums > 1e-9, R / np.where(sums > 1e-9, sums, 1.0), R0)
+    out: Dict[str, Dict[str, float]] = {}
+    for bone, row in zip(bones[:-1], R[:-1]):
+        shares = {str(n): round(float(v), 3) for n, v in zip(names, row) if round(float(v), 3) > 0}
+        if shares:
+            out[bone] = shares
+    return out
+
+
 def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                  colour_target: Optional[Tuple[float, float, float]],
                  forward_m: Optional[float] = None, tilt_deg: Optional[float] = None,
                  colour_profile: Optional[Tuple[float, float, float]] = None,
                  length_class: Optional[str] = None, width_scale: Optional[float] = None,
-                 chains_json: Optional[bytes] = None, cards_json: Optional[bytes] = None) -> FitResult:
+                 chains_json: Optional[bytes] = None, cards_json: Optional[bytes] = None,
+                 swing: bool = False) -> FitResult:
     """Fit HairDeck hair onto the rigged base body.
 
     ``nohead_glb``: the hair (node ``hair_cards``, ``COLOR_0``); ``proxy_glb``: the result file with the
@@ -984,6 +1045,14 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     every chain joint (``hair_chains.joint_frames`` of the repaired chains), so ``glb_mesh.graft`` appends them as
     real joints. Without the files, a card file that does not match the mesh, no chain that binds a card or every
     chain unbound: today's fit, ``report.chains.count`` 0, no joint binds.
+
+    ``swing`` (Ruling H11, the profile's ``hair_motion.swing_on``): only with Swing on are the chain-bound vertices
+    skinned to their chains and the joints written (``joint_parents`` / ``joint_binds``). With Swing off the
+    binding is still computed and reported (``report.chains``, ``swing`` False, every chain's ``weighted`` empty —
+    no motion group), but the garment is today's: ``hair_weights``' rows byte for byte, no chain joint. With Swing
+    on each chain records ``anchor_blend`` = per bone the Head / Neck / Spine2 row that reproduces today's skin
+    (``_anchor_blend``): the client puts each bone's swing on top of that blend (secondaryMotion.ts, HAIR CHAINS),
+    so the hair at rest is where today's skin puts it and only the swing is added.
     """
     from scipy.spatial import cKDTree
     _check_manual(forward_m, tilt_deg, width_scale)
@@ -1062,16 +1131,21 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
             placed = list(chains)
             for i, c in zip(keep, placed_chains):
                 placed[kept_pos[i]] = c
-            names, J, W = hair_chains.chain_weights(names, J, W, binding, placed)
-            joint_parents = hair_chains.joint_parents(placed_chains)
-            joint_binds = hair_chains.joint_frames(placed_chains)
+            today = (list(names), np.asarray(J), np.asarray(W))
+            if swing:
+                names, J, W = hair_chains.chain_weights(names, J, W, binding, placed)
+                joint_parents = hair_chains.joint_parents(placed_chains)
+                joint_binds = hair_chains.joint_frames(placed_chains)
+        chain_info["swing"] = bool(swing)
         chain_info["chains"] = [{"index": c.index, "bones": hair_chains.joint_names(c),
                                  "weighted": hair_chains.weighted_bones(names, J, W, c),
+                                 "anchor_blend": _anchor_blend(c, body, today, binding, kept_pos[i])
+                                 if swing else None,
                                  "stiffness": round(float(c.stiffness), 4), "rigid": [],
                                  "depth_before_max_m": round(float(d["depth_before"].max()), 5),
                                  "depth_max_m": round(float(d["depth_after"].max()), 5),
                                  "moved": list(d["moved"]), "truncated_at": d.get("truncated_at")}
-                                for c, d in zip(placed_chains, after)]
+                                for c, d, i in zip(placed_chains, after, keep)]
     normals = vertex_normals(X, F)
 
     if colour_target is None and colour_profile is not None:

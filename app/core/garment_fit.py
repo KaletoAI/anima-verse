@@ -117,8 +117,12 @@ RIGGED_SMOOTH_UNTIL = 7
 #: joints ``HairGen_c<CC>_<KK>`` / ``_end`` emitted with bind frames and appended to the skin by ``glb_mesh.graft``
 #: (fit and both assembly tiers); the cards' rest positions are unchanged. Re-fits every HairDeck hair from its
 #: stored seeds on the CPU refit pool; no hub job.
+#: hair 10 (2026-11-12, Ruling H11): Swing is a fit input (profile ``hair_swing``, ``hair_motion.swing_on``, default
+#: OFF). With Swing off the fit is today's hair again — ``hair_weights``' skin byte for byte, no chain joint — so the
+#: refit of every hair 9 fit (made with the chains bound: 1.2-4.5 % penetration against today's 0.01-0.21 %) lands
+#: it back in today's state; with Swing on each chain records its ``anchor_blend``. Refit on the CPU pool; no hub job.
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 9, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 10, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).

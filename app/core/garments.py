@@ -762,8 +762,9 @@ def _fit_seed(character_name: str, item_id: str, hsig: str, seed: int, attempt: 
     verdict ``{attempt, seed, ok, reasons, limits, metrics}`` (``attempt`` =
     the seed's position among the stored seeds, 1-based). The seed's spring
     chains (``chains_seed<s>.json`` + ``cards_seed<s>.json``) go to the fit
-    only when both files are there."""
-    from app.core import garment_hair, garment_hairdeck
+    only when both files are there; they bind the hair only with Swing on
+    (``hair_motion.swing_on``, Ruling H11)."""
+    from app.core import garment_hair, garment_hairdeck, hair_motion
     from app.core import garment_store as gs
     folder = gs.hairdeck_dir(character_name, item_id, hsig)
     hair, proxy = _seed_files(folder, seed)
@@ -781,7 +782,7 @@ def _fit_seed(character_name: str, item_id: str, hsig: str, seed: int, attempt: 
     result = refit_pool.run(garment_hairdeck.fit_hairdeck, hair_bytes, proxy_bytes, rigged,
                             colour_target=garment_hair.colour_target(override),
                             colour_profile=garment_hair.colour_target(named["hex"]) if named else None,
-                            length_class=length_class,
+                            length_class=length_class, swing=hair_motion.swing_on(profile),
                             **garment_hair.hair_placement(profile), **chains)
     gates = {"attempt": attempt, "seed": seed, "ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": _hairdeck_limits(length_class), "metrics": result.metrics}
@@ -842,7 +843,7 @@ def _publish_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, b
     (``inputs.seed``) and every seed's verdict of this fit step (``seeds``);
     the job record keeps the verdicts too (``fitted_seeds``, ``fit_attempts``
     = the refused ones)."""
-    from app.core import base_body, garment_hair
+    from app.core import base_body, garment_hair, hair_motion
     from app.core import garment_store as gs
     from app.core.garment_store import GARMENT_VIEWS, HAIRDECK
     from app.core.model_refs import find_ref_image
@@ -865,6 +866,7 @@ def _publish_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, b
                    "base_images": {v: _sha(p) for v, p in base_views.items()},
                    "hsig": hsig, "attempt": fit["gates"]["attempt"], "seed": seed, "colour": override,
                    "placement": garment_hair.hair_placement(profile),
+                   "swing": hair_motion.swing_on(profile),
                    "nohead_sha256": hashlib.sha256(fit["hair_bytes"]).hexdigest(),
                    "proxy_sha256": hashlib.sha256(fit["proxy_bytes"]).hexdigest()},
         "colour": _hairdeck_colour(override, garment_hair.profile_hair_colour(character_name, profile=profile),
@@ -1029,7 +1031,7 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
     when the gate refuses, ``MissingInput`` when a source is gone (the
     prepared mesh / ghost front / HairDeck seed, the body or its front
     view). Never runs a generator."""
-    from app.core import base_body, garment_fit, garment_set, glb_mesh
+    from app.core import base_body, garment_fit, garment_set, glb_mesh, hair_motion
     from app.core import garment_store as gs
     from app.core.model_refs import find_ref_image
     from app.core.timeutils import utc_now_iso
@@ -1078,6 +1080,7 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             "inputs": {**_kind_inputs(kind, character_name, profile, item_id), "hsig": hsig, "seed": seed,
                        "attempt": fit["gates"]["attempt"], "colour": override,
                        "placement": garment_hair.hair_placement(profile),
+                       "swing": hair_motion.swing_on(profile),
                        "nohead_sha256": hashlib.sha256(fit["hair_bytes"]).hexdigest(),
                        "proxy_sha256": hashlib.sha256(fit["proxy_bytes"]).hexdigest()},
             "colour": _hairdeck_colour(override, garment_hair.profile_hair_colour(character_name, profile=profile),
@@ -2586,7 +2589,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     source steps, the insole, the fit of the current fsig on the base model
     and the width cap).
     ValueError for an invalid item."""
-    from app.core import base_body, garment_hair, garment_store as gs
+    from app.core import base_body, garment_hair, hair_motion, garment_store as gs
     from app.core.http_files import content_version
     from app.core.model_refs import find_ref_image
     from app.models.character import get_character_profile
@@ -2643,6 +2646,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                     stale.append("colour_changed")
                 if used.get("placement") != garment_hair.hair_placement(profile):
                     stale.append("placement_changed")
+                if bool(used.get("swing")) != hair_motion.swing_on(profile):
+                    stale.append("swing_changed")
     preview = preview_path(character_name, item_id)
     preview_url = None
     if preview is not None:

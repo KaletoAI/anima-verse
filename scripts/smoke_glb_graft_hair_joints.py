@@ -53,6 +53,8 @@ _01 -> _00, _end -> _01 (what ``fit_hairdeck`` emits).
 [6] ``fit_hairdeck`` (smoke_hair_chains_bind's fixture + its T2 chains file) sets ``garment.joint_binds`` for every
     chain joint it names in ``joint_parents``; grafted onto the fit body, each appended joint's world translation
     equals its bind (1e-6).
+Ruling H11: every fit here runs with ``swing=True`` — Swing is a fit input and only a Swing-on fit binds the
+chains (with Swing off the garment is today's skin, smoke_hair_chains_bind.py).
 """
 import copy
 import importlib.util
@@ -395,7 +397,7 @@ def main() -> int:
         P, F, _na = sb.hair()
         nohead, proxy = sb.hair_glbs(fx, P, F)
         body = fx.body_glb()
-        r = gh.fit_hairdeck(nohead, proxy, body, chains_json=json.dumps(sb.CHAINS).encode(),
+        r = gh.fit_hairdeck(nohead, proxy, body, swing=True, chains_json=json.dumps(sb.CHAINS).encode(),
                             cards_json=sb.cards_file(), colour_target=None, forward_m=0.01, tilt_deg=5.0,
                             width_scale=0.9)
         g = r.garment

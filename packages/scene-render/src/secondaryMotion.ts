@@ -36,6 +36,25 @@
  *    rest pose where the fit put it (a joint rooted inside the head capsule
  *    caps that capsule at its bind distance, and the server leaves the joints
  *    inside the head capsule out of the group — `hair_motion.served_chains`).
+ *    TODAY'S SKIN UNDER THE SWING (Ruling H11): a hair group's `anchor_blend`
+ *    names per chain joint the Head / Neck / Spine2 row that reproduces
+ *    today's hair skin (the server's least-squares fit), its rigid joints
+ *    included (carried: no swing of their own; a chain of carried joints only
+ *    sends `bones: []`). The chain is solved as before (rigid under Head);
+ *    then each bone's deviation from that rigid rest, L = rest⁻¹ · rendered
+ *    (its swing, in its own rest frame), is scaled to the row's share of the
+ *    bone the chain hangs from (`anchor_from`, Head — the swing is driven by
+ *    the head's motion, so it moves only the head-carried share of the hair)
+ *    and put on top of the linear blend of the row's bones:
+ *    world = Σ share · (joint now · joint bind⁻¹) · bone bind · L^share.
+ *    Without swing (L = identity) every bone is where today's skin puts the
+ *    hair at it — a strand on the back follows Spine2, the crown the head.
+ *    The contact then turns that final frame about the joint (the tip check
+ *    of the solver would act on the rigid chain, not on what is drawn).
+ *    Measured (Ruling H11, check_garment_collision, worst of sit/celebrating/
+ *    walk): the rigid chain sank 3.6–7.9 % of the hair into the body, one
+ *    blend per chain 3.6–10.9 %, today's skin under the head share
+ *    0.5–2.3 % (Kira 0.5–1.1, Rosi 2.3; today 0.0–0.2 %).
  *  - BIND RULE, as for garments: per tip and capsule the radius is capped at
  *    the tip's distance to that capsule in the bind pose (bind-pose tip from
  *    the bone's `boneInverse`, bind-pose capsule `BoundCapsule.bind`), so the
@@ -83,6 +102,15 @@ export interface MotionGroup {
   /** A HairDeck spring chain (`app/core/hair_motion.py`): its tips collide with `hairChainCapsules`
    *  instead of `extensionCapsules` (module docstring). */
   hair?: boolean
+  /** Hair only: per chain joint (the group's bones and its carried, rigid
+   *  ones) the body joints today's hair skin rides there, with their shares
+   *  (`hair_motion` — the Head / Neck / Spine2 row the server fitted to today's
+   *  skin). The joint's swing is put on top of that blend (module docstring,
+   *  HAIR CHAINS). */
+  anchor_blend?: Record<string, Record<string, number>>
+  /** Hair only: the body bone the chain hangs from (Head); its share of a
+   *  bone's `anchor_blend` row is how much of the swing that bone shows. */
+  anchor_from?: string
 }
 /** Package metadata profiles are multipliers; runtime groups are already resolved. */
 export type MotionAttributeProfiles = Record<string, Record<string, Partial<Pick<MotionGroup,
@@ -120,6 +148,47 @@ const CONTACT_SCAN = 12
 const CONTACT_REFINE = 14
 /** A tip moved less than this (metres) by the push counts as outside. */
 const COLLIDE_SLACK = 1e-6
+
+/** The turn angle in [0, limit] that takes a tip out of the capsules (`depthAt(angle)` = its depth after that
+ *  turn, `depth0` at 0): the first outside angle of a `CONTACT_SCAN` scan, refined by bisection; when no angle
+ *  gets out, the shallowest one (null when it is no better than 0). */
+function contactAngle(depthAt: (angle: number) => number, depth0: number, limit: number): number | null {
+  const step = limit / CONTACT_SCAN
+  let inside = 0, outside = -1, best = 0, bestDepth = depth0
+  for (let k = 1; k <= CONTACT_SCAN; k++) {
+    const depth = depthAt(k * step)
+    if (depth < COLLIDE_SLACK) { outside = k * step; break }
+    inside = k * step
+    if (depth < bestDepth) { best = k * step; bestDepth = depth }
+  }
+  let angle: number
+  if (outside > 0) {
+    for (let i = 0; i < CONTACT_REFINE; i++) {
+      const mid = (inside + outside) / 2
+      if (depthAt(mid) < COLLIDE_SLACK) outside = mid; else inside = mid
+    }
+    angle = outside
+  } else {
+    // Shallowest tip: ternary search around the best scan sample.
+    let lo = Math.max(0, best - step), hi = Math.min(limit, best + step)
+    for (let i = 0; i < CONTACT_REFINE; i++) {
+      const m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3
+      if (depthAt(m1) <= depthAt(m2)) hi = m2; else lo = m1
+    }
+    angle = (lo + hi) / 2
+    const depth = depthAt(angle)
+    if (!(depth < depth0)) return null
+    if (depth < COLLIDE_SLACK) {
+      // An outside window the scan stepped over: its near edge, by bisection from below.
+      let below = Math.max(0, best - step)
+      for (let i = 0; i < CONTACT_REFINE; i++) {
+        const mid = (below + angle) / 2
+        if (depthAt(mid) < COLLIDE_SLACK) angle = mid; else below = mid
+      }
+    }
+  }
+  return angle
+}
 
 /**
  * Which capsules a chain may collide with: every bound capsule whose start
@@ -240,6 +309,12 @@ interface Bind {
    *  (glTF extras `anchor_blend`); the rest frame follows their blend instead of
    *  the one parent. Undefined = the parent alone. */
   anchorBlend?: { bind: Bind; share: number }[]
+  /** Hair: today's skin row at this bone (`MotionGroup.anchor_blend`), normalised; see HAIR CHAINS. */
+  todayBlend?: { bind: Bind; share: number }[]
+  /** Hair: the row's share of the bone the chain hangs from (`MotionGroup.anchor_from`). */
+  swingShare?: number
+  /** Hair scratch of one frame (`frame` = the update it belongs to): rigid rest, final world, bind world. */
+  today?: { frame: number; rest: Matrix4; world: Matrix4; bind: Matrix4 }
 }
 interface Particle {
   bind: Bind
@@ -320,7 +395,9 @@ export function createSecondaryMotion(
   three: Three, root: Object3D, payload?: SecondaryMotionPayload,
   template?: Object3D,
 ): SecondaryMotion {
-  const names = new Set(Object.values(payload?.groups ?? {}).flatMap(g => g.bones.map(normBoneName)))
+  // A hair group's carried joints (`anchor_blend` rows) count as its bones here.
+  const groupBones = (g: MotionGroup) => [...g.bones, ...Object.keys(g.anchor_blend ?? {})].map(normBoneName)
+  const names = new Set(Object.values(payload?.groups ?? {}).flatMap(groupBones))
   let matching = false
   if (names.size) root.traverse(o => { if ((o as Bone).isBone && names.has(normBoneName(o.name))) matching = true })
   if (!matching) {
@@ -332,7 +409,7 @@ export function createSecondaryMotion(
       configure(next) {
         if (stopped) return
         if (delegate) { delegate.configure(next); return }
-        const requested = new Set(Object.values(next?.groups ?? {}).flatMap(g => g.bones.map(normBoneName)))
+        const requested = new Set(Object.values(next?.groups ?? {}).flatMap(groupBones))
         let found = false
         if (requested.size) root.traverse(o => { if ((o as Bone).isBone && requested.has(normBoneName(o.name))) found = true })
         if (found) {
@@ -445,18 +522,23 @@ export function createSecondaryMotion(
   // (breast tissue: 22-63 % Spine1, the rest Spine2). Following the one parent
   // alone made it sag with the upper chest in clips that bend it against the
   // lower one; the build measures the shares and stores them on the joint.
-  for (const b of binds.values()) {
-    const raw = (b.bone.userData as { anchor_blend?: Record<string, number> } | undefined)?.anchor_blend
-    if (!raw || typeof raw !== 'object') continue
-    const entries = Object.entries(raw)
+  const anchorEntries = (b: Bind, raw: unknown) => {
+    if (!raw || typeof raw !== 'object') return undefined
+    const entries = Object.entries(raw as Record<string, unknown>)
       .map(([name, share]) => ({ bind: byName.get(normBoneName(name)), share: Number(share) }))
       .filter((e): e is { bind: Bind; share: number } => !!e.bind && e.bind !== b && Number.isFinite(e.share) && e.share > 0)
     const total = entries.reduce((sum, e) => sum + e.share, 0)
-    if (total > 0) b.anchorBlend = entries.map(e => ({ bind: e.bind, share: e.share / total }))
+    return total > 0 ? entries.map(e => ({ bind: e.bind, share: e.share / total })) : undefined
+  }
+  for (const b of binds.values()) {
+    const blend = anchorEntries(b, (b.bone.userData as { anchor_blend?: unknown } | undefined)?.anchor_blend)
+    if (blend) b.anchorBlend = blend
   }
   let particles: Particle[] = []
   /** rigid_tail links, parent first: carried by their parent, never driven. */
   let rigids: Bind[] = []
+  /** Hair bones with today's skin row (HAIR CHAINS), parents first. */
+  let hairBones: Bind[] = []
   let far = false
   let disposed = false
   let collisionPayload: CollisionPayload | null | undefined
@@ -499,12 +581,30 @@ export function createSecondaryMotion(
       group.bones.map(normBoneName)))
     const nextParticles: Particle[] = []
     const nextRigids: Bind[] = []
+    const nextHair: Bind[] = []
+    for (const b of hairBones) b.todayBlend = undefined
     for (const params of Object.values(next?.groups ?? {})) {
       const chain = params.bones.map(name => byName.get(normBoneName(name)))
       // Absent/partial groups and vertices without influence are ordinary skips.
       if (chain.some(b => !b || b.centroid.lengthSq() < 1e-12)) continue
       const members = new Set((chain as Bind[]).map(b => b.bone))
       const roots = (chain as Bind[]).filter(b => !members.has(b.bone.parent as Bone))
+      // A hair chain's bones take today's skin rows from the payload (HAIR CHAINS).
+      // A carried joint of the chain (server-side rigid, outside `bones`) has a
+      // row too: it rides today's skin without a swing of its own.
+      if (params.hair && params.anchor_blend) {
+        const from = normBoneName(params.anchor_from ?? '')
+        for (const [name, row] of Object.entries(params.anchor_blend)) {
+          const b = byName.get(normBoneName(name))
+          if (!b || nextHair.includes(b)) continue
+          b.todayBlend = anchorEntries(b, row)
+          if (!b.todayBlend) continue
+          b.swingShare = b.todayBlend.filter(e => normBoneName(e.bind.bone.name) === from).reduce((sum, e) => sum + e.share, 0)
+          nextHair.push(b)
+        }
+      }
+      // A hair chain whose every joint is carried sends no bone, only its rows.
+      if (!chain.length) continue
       // A link with a successor scales along the axis to that joint, so girth
       // (perpendicular) never pushes the next link off its line; the last link
       // uses its declared bind-frame axis.
@@ -700,11 +800,13 @@ export function createSecondaryMotion(
           head: new three.Vector3(), centre: new three.Vector3(), force: new three.Vector3(), torque: new three.Vector3(), weight: 0, q: new three.Quaternion() }
       }
     }
-    for (const old of [...particles.map(p => p.bind), ...rigids]) if (!selected.has(old.bone)) {
+    for (const b of nextHair) if (!selected.has(b.bone)) { selected.add(b.bone); b.bone.matrixAutoUpdate = false }
+    for (const old of [...particles.map(p => p.bind), ...rigids, ...hairBones]) if (!selected.has(old.bone)) {
       restore(old)
       old.bone.updateWorldMatrix(false, true)
     }
     rigids = nextRigids.sort((a, b) => a.depth - b.depth)
+    hairBones = nextHair.sort((a, b) => a.depth - b.depth)
     const drivenBones = new Set(nextParticles.map(st => st.bind.bone))
     const drivenDepth = (st: Particle) => {
       let depth = 0
@@ -730,6 +832,8 @@ export function createSecondaryMotion(
   const chainCentre = new three.Vector3(), chainForce = new three.Vector3()
   const driven = new Map<Bone, Particle>()
   const delta = new three.Matrix4(), localBase = new three.Matrix4()
+  const deviation = new three.Matrix4(), todayDelta = new three.Matrix4()
+  let hairFrame = 0
   const blendQ = new three.Quaternion(), deltaQ = new three.Quaternion(), firstQ = new three.Quaternion()
   const blendHead = new three.Vector3(), blendPos = new three.Vector3(), blendScale = new three.Vector3()
   const contactLocal = new three.Matrix4(), contactInverse = new three.Matrix4(), contactQ = new three.Quaternion()
@@ -768,41 +872,36 @@ export function createSecondaryMotion(
       const p = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules)
       return Math.hypot(p[0] - tipWorld.x, p[1] - tipWorld.y, p[2] - tipWorld.z)
     }
-    const step = limit / CONTACT_SCAN
-    let inside = 0, outside = -1, best = 0, bestDepth = depth0
-    for (let k = 1; k <= CONTACT_SCAN; k++) {
-      const depth = depthAt(k * step)
-      if (depth < COLLIDE_SLACK) { outside = k * step; break }
-      inside = k * step
-      if (depth < bestDepth) { best = k * step; bestDepth = depth }
-    }
-    let angle: number
-    if (outside > 0) {
-      for (let i = 0; i < CONTACT_REFINE; i++) {
-        const mid = (inside + outside) / 2
-        if (depthAt(mid) < COLLIDE_SLACK) outside = mid; else inside = mid
-      }
-      angle = outside
-    } else {
-      // Shallowest tip: ternary search around the best scan sample.
-      let lo = Math.max(0, best - step), hi = Math.min(limit, best + step)
-      for (let i = 0; i < CONTACT_REFINE; i++) {
-        const m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3
-        if (depthAt(m1) <= depthAt(m2)) hi = m2; else lo = m1
-      }
-      angle = (lo + hi) / 2
-      const depth = depthAt(angle)
-      if (!(depth < depth0)) return
-      if (depth < COLLIDE_SLACK) {
-        // An outside window the scan stepped over: its near edge, by bisection from below.
-        let below = Math.max(0, best - step)
-        for (let i = 0; i < CONTACT_REFINE; i++) {
-          const mid = (below + angle) / 2
-          if (depthAt(mid) < COLLIDE_SLACK) angle = mid; else below = mid
-        }
-      }
-    }
+    const angle = contactAngle(depthAt, depth0, limit)
+    if (angle === null) return
     dynamic.premultiply(contactQ.setFromAxisAngle(contactAxis, angle))
+  }
+  /** A hair bone's contact on today's skin (HAIR CHAINS): its final world is
+   *  turned about its own head, the same search as `keepTipOutside`. */
+  const keepHairTipOutside = (st: Particle, world: Matrix4, limit: number) => {
+    if (!(limit > 0)) return
+    const capsules: CollideCapsule[] = st.contacts.map(({ bound, factor }) =>
+      ({ a: bound.now.a, b: bound.now.b, r: bound.now.r * factor }))
+    head.setFromMatrixPosition(world)
+    tipWorld.copy(st.tipLocal).applyMatrix4(world)
+    const pushed = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules)
+    const depth0 = Math.hypot(pushed[0] - tipWorld.x, pushed[1] - tipWorld.y, pushed[2] - tipWorld.z)
+    if (depth0 < COLLIDE_SLACK) return
+    lever.copy(tipWorld).sub(head)
+    contactAxis.set(pushed[0], pushed[1], pushed[2]).sub(tipWorld)
+    contactAxis.crossVectors(lever, contactAxis)
+    if (contactAxis.lengthSq() < 1e-20 || lever.lengthSq() < 1e-12) return
+    contactAxis.normalize()
+    const angle = contactAngle(turn => {
+      tipWorld.copy(lever).applyAxisAngle(contactAxis, turn).add(head)
+      const p = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules)
+      return Math.hypot(p[0] - tipWorld.x, p[1] - tipWorld.y, p[2] - tipWorld.z)
+    }, depth0, limit)
+    if (angle === null) return
+    // world' = T(head) · R · T(-head) · world
+    rotationMatrix.makeRotationAxis(contactAxis, angle)
+    world.premultiply(translationMatrix.makeTranslation(-head.x, -head.y, -head.z))
+      .premultiply(rotationMatrix).premultiply(translationMatrix.makeTranslation(head.x, head.y, head.z))
   }
   /** Rest frame at the blend of the anchor bones' motions since bind: the bind
    *  head moved as linear skinning moved the tissue (sum of share x delta x head),
@@ -853,7 +952,7 @@ export function createSecondaryMotion(
       })
     },
     update(realDelta, options = {}) {
-      if (disposed || !particles.length) return
+      if (disposed || (!particles.length && !hairBones.length)) return
       const dt = Number.isFinite(realDelta) ? Math.max(0, realDelta) : 0
       if (!!options.far !== far) { far = !!options.far; reset() }
       root.updateWorldMatrix(true, false)
@@ -862,6 +961,8 @@ export function createSecondaryMotion(
       const colliding = !!collision && !far
       if (colliding) collision!.update()
       driven.clear()
+      // A carried hair joint is at its rigid rest for the solve (HAIR CHAINS).
+      for (const b of hairBones) b.bone.matrix.copy(b.local)
       for (const st of particles) {
         st.paramsBlend = Math.min(1.5, st.paramsBlend + dt)
         st.params = blendMotionParams(st.paramsFrom, st.paramsTo, st.paramsBlend, st.params)
@@ -1137,7 +1238,7 @@ export function createSecondaryMotion(
         }
         shiftPart.copy(head).add(headShift).applyMatrix4(inverseAnchor)
         translationMatrix.makeTranslation(shiftPart.x, shiftPart.y, shiftPart.z)
-        if (colliding && st.contacts.length) {
+        if (colliding && st.contacts.length && !b.todayBlend) {
           keepTipOutside(st, dynamicQ, restQ,
             Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180)
         }
@@ -1171,13 +1272,48 @@ export function createSecondaryMotion(
         b.bone.matrix.copy(inverseAnchor.copy(parent.matrixWorld).invert()).multiply(anchor)
         b.bone.matrixWorldNeedsUpdate = true
       }
+      // Hair: today's skin under the swing (HAIR CHAINS), parents first.
+      if (!far && hairBones.length) {
+        hairFrame++
+        for (const b of hairBones) {
+          const st = driven.get(b.bone)
+          const parent = b.bone.parent!
+          const owner = binds.get(parent as Bone)
+          const hairParent = owner?.today?.frame === hairFrame ? owner.today : undefined
+          if (!hairParent) parent.updateWorldMatrix(false, false)
+          const today = b.today ??= { frame: 0, rest: new three.Matrix4(), world: new three.Matrix4(),
+            bind: b.bindWorldInverse.clone().invert() }
+          today.frame = hairFrame
+          const rest = today.rest.copy(hairParent ? hairParent.rest : parent.matrixWorld).multiply(b.local)
+          // L = rest⁻¹ · rendered (identity for a carried joint); world = blend · bind · L
+          if (st) deviation.copy(rest).invert().multiply(b.bone.matrixWorld)
+          else deviation.identity()
+          // Only the share of the hair that rides the chain's hanging bone swings (HAIR CHAINS).
+          deviation.decompose(blendPos, deltaQ, blendScale)
+          deltaQ.slerp(identityQ, 1 - b.swingShare!)
+          deviation.compose(blendPos.multiplyScalar(b.swingShare!), deltaQ, blendScale)
+          todayDelta.set(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+          for (const { bind: x, share } of b.todayBlend!) {
+            delta.copy(x.bone.matrixWorld).multiply(x.bindWorldInverse)
+            for (let i = 0; i < 16; i++) todayDelta.elements[i] += share * delta.elements[i]
+          }
+          const world = today.world.copy(todayDelta).multiply(today.bind).multiply(deviation)
+          if (st && colliding && st.contacts.length) {
+            keepHairTipOutside(st, world, Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180)
+          }
+          b.bone.matrix.copy(localBase.copy(hairParent ? hairParent.world : parent.matrixWorld).invert().multiply(world))
+          b.bone.matrixWorld.copy(world)
+          b.bone.matrixWorldNeedsUpdate = true
+        }
+      }
       // Publish all non-driven descendants once after the chain is complete.
       root.updateMatrixWorld(true)
     },
     dispose() {
       for (const st of particles) restore(st.bind)
       for (const b of rigids) restore(b)
-      particles = []; rigids = []; binds.clear(); sums.clear(); byName.clear(); boneInverses.clear(); collision = null; disposed = true
+      for (const b of hairBones) restore(b)
+      particles = []; rigids = []; hairBones = []; binds.clear(); sums.clear(); byName.clear(); boneInverses.clear(); collision = null; disposed = true
     },
   }
 }
