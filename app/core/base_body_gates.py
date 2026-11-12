@@ -197,48 +197,86 @@ def best_attempt(results: "list[Dict[str, Any]]") -> Tuple[int, bool]:
 # as second reference) sometimes comes back grainy: skin and cloth carry a
 # fine noise the base view does not have (seed-dependent, on turbo and
 # non-turbo models alike). The background says nothing — the fit comes back
-# on opaque black and is matted — so the noise is measured ON THE FIGURE, in
-# its HEAD region: the bald head is bare skin in the base back and in every
-# dressed back alike, so an outfit's own texture (knit, print, folds) never
-# reads as grain. Head = the top ``NOISE_HEAD_SHARE`` of the figure's height
-# (alpha >= ``NOISE_ALPHA`` rows), shrunk by ``NOISE_ERODE`` px (no matte
-# edge). Noise = the mean absolute difference between the grey image and its
-# 3x3 box mean (float, no rounding) over that region. Both images are
-# resampled to ``NOISE_WORK_HEIGHT`` px height first, RGB and alpha apart
-# (an RGBA resample would premultiply the colours).
+# on opaque black and is matted — so the noise is measured ON THE FIGURE.
+# Both images are resampled to ``NOISE_WORK_HEIGHT`` px height first, RGB and
+# alpha apart (an RGBA resample would premultiply the colours); the figure is
+# alpha >= ``NOISE_ALPHA``, shrunk by ``NOISE_ERODE`` px (no matte edge); the
+# per-pixel noise is the absolute difference between the grey image and its
+# 3x3 box mean (float, no rounding).
 #
-# The score is the fit's head noise over the base back's (the reference at
-# least ``NOISE_FLOOR``); ``ok`` when it is at most ``NOISE_LIMIT``. The whole
-# figure's noise ratio is recorded beside it (``figure_score``), not judged.
-# Calibrated 2026-11-09 on claude-out/base-body-e2e/simple (the fit inputs of
-# the user decision: both references cut out, prompt "edit the first image
-# with the clothes from the second image"; the RGB-on-black renders matted by
-# a luminance threshold for the calibration, the base back by its own matte):
-# base back head 0.5001; good fits S_back_s52 0.6789 (score 1.36), S_back_s53
-# 0.6341 (1.27); grainy fit S_back_s51 1.1099 (2.22). Whole figure, for
-# comparison: base 0.4605, good 0.9606 / 0.9194 (2.09 / 2.00), grainy 1.7374
-# (3.77) — the outfit's own texture doubles it, the head stays put. The limit
-# sits between 1.36 and 2.22.
+# Version 2 (2026-11-12) judges the figure's NOISE FLOOR: the
+# ``NOISE_QUANTILE`` percentile of the means of the ``NOISE_BLOCK`` x
+# ``NOISE_BLOCK`` blocks lying wholly inside the figure — the noise of its
+# smoothest tenth, wherever that is. Blocks whose mean grey lies outside
+# ``NOISE_BLOCK_GREY`` do not count: near black and near white the noise is
+# squashed (Kira's black blazer alone held the floor of her fit, 0.89, until
+# it was left out: 1.29 on her skin and hair). Grain lifts every block; an
+# outfit's own texture (knit, print, lace) and hair lift only the blocks they
+# cover. Of the counted blocks a clean fit keeps 72-74 % (calibration fits)
+# and 14 % (Kira ecba33c49418: long hair, lace stockings) under the limit
+# times the base's floor, a grainy one 4 % — the floor needs 10 %, so an
+# outfit plus hair that texture nine tenths of the mid-tone figure can read
+# as grain (the fit is then re-rendered; the best attempt is kept with a
+# warning, ``base_body._dress_view``). Version 1
+# judged the mean over the HEAD (the top ``NOISE_HEAD_SHARE`` of the figure):
+# bare skin on a bald base, but hair once the hair is part of the base body —
+# hair's own strand texture (head noise 3.9-5.3 against 0.5-1.3 bald) made
+# the score blind (Task 6 acceptance 2026-11-12: heavy grain 1.04-1.10, a
+# clean real fit 1.39). The head and whole-figure ratios are still recorded
+# (``head_score``, ``figure_score``), not judged.
+#
+# The score is the fit's floor over the base back's (the reference at least
+# ``NOISE_FLOOR``); ``ok`` when it is at most ``NOISE_LIMIT`` (unchanged).
+# Measured 2026-11-12 (synthetic grain = one Gaussian value per pixel added
+# to R, G and B alike, seed 0, on the stored base back itself; v1 = head
+# mean, v2 = floor):
+#
+#   back                                   v1 sigma 2 / 4 / 6     v2 sigma 2 / 4 / 6   clean
+#   Kai, bald base (head 1.28)             1.13 / 1.44 / 1.82     1.27 / 1.83 / 2.48   1.00
+#   Kira, bald base (head 1.31)            1.64 / 2.67 / 3.77     2.54 / 4.71 / 6.93   1.00
+#   Kai, haired base (head 5.27)           1.01 / 1.03 / 1.06     1.73 / 2.99 / 4.35   1.00
+#   Kira, haired base (head 3.89)          1.01 / 1.03 / 1.08     1.73 / 2.94 / 4.24   1.00
+#
+#   real fits                              v1      v2
+#   calibration 2026-11-09, grainy s51     2.25    1.96   (refused by both)
+#   calibration, good s52 / s53            1.38 / 1.29    1.14 / 1.12
+#   Kira ecba33c49418 on the haired base   1.39    1.29
+#
+# (The calibration fits are RGB on black, matted by luminance > 10 for the
+# measurement; their base back is the bald Kira of 2026-11-09.) The limit
+# 1.75 still sits between the clean fits (at most 1.29) and real grain (1.96);
+# sigma 4 and 6 are refused on every base, sigma 2 on the bald Kira only.
 
-#: Fit head noise / base head noise above which the fit counts as grainy.
+#: Version of the measurement (recorded with every gate result).
+NOISE_VERSION = 2
+#: Fit noise floor / base noise floor above which the fit counts as grainy.
 NOISE_LIMIT = 1.75
-#: The reference noise is at least this (a perfectly flat base head).
+#: The reference noise is at least this (a perfectly flat base).
 NOISE_FLOOR = 0.05
 #: Height (px) both images are resampled to before measuring.
 NOISE_WORK_HEIGHT = 1024
 #: Alpha from which a pixel belongs to the figure.
 NOISE_ALPHA = 240
-#: Share of the figure height (from the top) that is the head region.
+#: Share of the figure height (from the top) that is the head region (recorded only).
 NOISE_HEAD_SHARE = 0.12
 #: The regions are shrunk by this many pixels (matte edge).
 NOISE_ERODE = 4
-#: Fewer head pixels than this: not measurable.
+#: Fewer head pixels than this: no head number (recorded only).
 NOISE_MIN_PIXELS = 200
+#: Block size (px) of the noise floor.
+NOISE_BLOCK = 8
+#: The noise floor: this percentile of the block means.
+NOISE_QUANTILE = 10
+#: Only blocks whose mean grey (0..255) lies in this range count toward the floor.
+NOISE_BLOCK_GREY = (32.0, 235.0)
+#: Fewer counted blocks inside the figure than this: not measurable.
+NOISE_MIN_BLOCKS = 20
 
 
-def figure_noise_arrays(grey: np.ndarray, alpha: np.ndarray) -> Optional[Dict[str, float]]:
-    """``{"head", "figure"}`` noise of a work-size grey image and its alpha
-    (see the section note), None without a measurable head."""
+def figure_noise_arrays(grey: np.ndarray, alpha: np.ndarray) -> Optional[Dict[str, Optional[float]]]:
+    """``{"floor", "head", "figure"}`` noise of a work-size grey image and its
+    alpha (see the section note; ``head`` None for too small a head), None
+    without a measurable figure."""
     from scipy import ndimage
     figure = np.asarray(alpha) >= NOISE_ALPHA
     if not figure.any() or figure.all():
@@ -248,17 +286,25 @@ def figure_noise_arrays(grey: np.ndarray, alpha: np.ndarray) -> Optional[Dict[st
     head = figure.copy()
     head[top + int(NOISE_HEAD_SHARE * height):] = False
     head = ndimage.binary_erosion(head, iterations=NOISE_ERODE, border_value=0)
-    if int(head.sum()) < NOISE_MIN_PIXELS:
-        return None
     body = ndimage.binary_erosion(figure, iterations=NOISE_ERODE, border_value=0)
     grey = np.asarray(grey, dtype=np.float64)
     residual = np.abs(grey - ndimage.uniform_filter(grey, size=3, mode="nearest"))
-    return {"head": float(residual[head].mean()), "figure": float(residual[body].mean())}
+    b = NOISE_BLOCK
+    hb, wb = residual.shape[0] // b, residual.shape[1] // b
+    means = residual[:hb * b, :wb * b].reshape(hb, b, wb, b).mean(axis=(1, 3))
+    level = grey[:hb * b, :wb * b].reshape(hb, b, wb, b).mean(axis=(1, 3))
+    inside = (body[:hb * b, :wb * b].reshape(hb, b, wb, b).all(axis=(1, 3))
+              & (level >= NOISE_BLOCK_GREY[0]) & (level <= NOISE_BLOCK_GREY[1]))
+    if int(inside.sum()) < NOISE_MIN_BLOCKS:
+        return None
+    return {"floor": float(np.percentile(means[inside], NOISE_QUANTILE)),
+            "head": float(residual[head].mean()) if int(head.sum()) >= NOISE_MIN_PIXELS else None,
+            "figure": float(residual[body].mean())}
 
 
-def figure_noise(path: Path) -> Optional[Dict[str, float]]:
-    """The head/figure noise of a matted image file, None when it cannot be
-    measured (unreadable, no matte, no figure, too small a head)."""
+def figure_noise(path: Path) -> Optional[Dict[str, Optional[float]]]:
+    """The floor/head/figure noise of a matted image file, None when it cannot
+    be measured (unreadable, no matte, no figure, too small a figure)."""
     from PIL import Image
     try:
         with Image.open(path) as opened:
@@ -272,18 +318,24 @@ def figure_noise(path: Path) -> Optional[Dict[str, float]]:
     return figure_noise_arrays(np.asarray(grey), np.asarray(alpha))
 
 
+def _ratio(fit: Optional[float], base: Optional[float]) -> Optional[float]:
+    return None if fit is None or base is None else round(fit / max(base, NOISE_FLOOR), 4)
+
+
 def noise_gate(path: Path, reference: Optional[Path]) -> Dict[str, Any]:
-    """``{"ok", "score", "limit", "noise", "reference_noise",
-    "figure_score"}`` of a fitted back against the base back ``reference``;
-    an image that cannot be measured passes with ``score None`` and a
+    """``{"ok", "score", "limit", "version", "noise", "reference_noise",
+    "head_score", "figure_score"}`` of a fitted back against the base back
+    ``reference`` (``noise`` / ``reference_noise``: the two noise floors); an
+    image that cannot be measured passes with ``score None`` and a
     ``reason``."""
     noise = figure_noise(path)
     base = figure_noise(reference) if reference is not None else None
     if noise is None or base is None:
-        return {"ok": True, "score": None, "limit": NOISE_LIMIT,
-                "noise": noise and round(noise["head"], 4), "reference_noise": base and round(base["head"], 4),
+        return {"ok": True, "score": None, "limit": NOISE_LIMIT, "version": NOISE_VERSION,
+                "noise": noise and round(noise["floor"], 4), "reference_noise": base and round(base["floor"], 4),
                 "reason": "fit not measurable" if noise is None else "base back not measurable"}
-    score = noise["head"] / max(base["head"], NOISE_FLOOR)
-    return {"ok": score <= NOISE_LIMIT, "score": round(score, 4), "limit": NOISE_LIMIT,
-            "noise": round(noise["head"], 4), "reference_noise": round(base["head"], 4),
-            "figure_score": round(noise["figure"] / max(base["figure"], NOISE_FLOOR), 4)}
+    score = noise["floor"] / max(base["floor"], NOISE_FLOOR)
+    return {"ok": score <= NOISE_LIMIT, "score": round(score, 4), "limit": NOISE_LIMIT, "version": NOISE_VERSION,
+            "noise": round(noise["floor"], 4), "reference_noise": round(base["floor"], 4),
+            "head_score": _ratio(noise["head"], base["head"]),
+            "figure_score": _ratio(noise["figure"], base["figure"])}
