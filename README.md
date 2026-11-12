@@ -119,6 +119,8 @@ stops acting autonomously).
   An ended test stays in the queue — finished (saved, or not saved and why), failed (with the reason) or
   cancelled — until you dismiss it. A request with no answer within `model_test.case_timeout_seconds`
   (default 300) fails its case; when more requests in a row time out than run in parallel, the test ends as failed.
+  A cut-off answer (token limit) fails its case but never keeps a run unsaved — only provider errors do, and the
+  test then says so above any cut-off warning.
   Two tabs: **Tools & Helpers** (tool calls, helper tasks, vision, speed) and **Roleplay** — the game's
   real chat prompt against a demo cast, scored 0–100 on repetition, prose, character fidelity, logic and
   discipline; code metrics plus a calibrated judge model you pick, with a per-case report.

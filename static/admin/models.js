@@ -269,9 +269,16 @@ function suitThinkingText(result) {
 function suitWarning(result, settings) {
     const stats = suitCutoffStats(result);
     if (!stats.cut) return '';
+    // Name the limit the cut-off requests were SENT with (recorded per run);
+    // "Thinking up to" caps only the thinking of the escalation stages.
+    const sent = (result.truncated_limits || []).length ? result.truncated_limits.join(' / ') : null;
+    const budgets = Object.values((settings || {}).thinking_max || {}).filter(v => v > 0);
     return '<div class="suit-warn">⚠ ' + stats.cut + ' of ' + stats.total
-        + ' answers were cut off at the token limit (Max tokens ' + esc((settings || {}).max_tokens ?? 'unknown')
-        + ').<div>Failed only because of this: ' + esc(stats.failed.join(', ') || 'none')
+        + ' answers were cut off at the token limit (' + (sent ? 'sent with max_tokens ' + esc(sent)
+            : 'Max tokens ' + esc((settings || {}).max_tokens ?? 'unknown')) + ').'
+        + (budgets.length ? '<div>Max tokens limits every answer; "Thinking up to" ' + esc(Math.max(...budgets))
+            + ' caps only the thinking of the escalation stages, not the answer.</div>' : '')
+        + '<div>Failed only because of this: ' + esc(stats.failed.join(', ') || 'none')
         + '</div>' + (suitThinkingText(result) ? '<div>' + esc(suitThinkingText(result)) + '</div>' : '') + '</div>';
 }
 function suitDiagnosticBadges(result) {
@@ -981,7 +988,11 @@ function suitRenderJob(job) {
         const vision = summary.vision || {};
         const limit = job.max_turn_seconds == null ? 20 : job.max_turn_seconds;
         const number = value => value == null ? 'not tested' : String(value);
+        // Whether the result was saved comes first: a cut-off warning below it
+        // must not read as the reason a run is missing from the table.
         status.innerHTML = '<b>' + esc(job.model || summary.model || '') + '</b> · Finished'
+            + (summary.saved === false || summary.infra ? '<div class="suit-outcome suit-outcome-warn">Not saved: '
+                + esc(summary.not_saved_reason || 'a request failed at the provider; inspect the diagnostics below.') + '</div>' : '')
             + suitWarning({...summary, settings}, settings) + suitThinkingSummary(summary)
             + '<div>Tools: ' + esc(summary.tool || 'not tested')
             + ' · Helpers: ' + esc(summary.helper || 'not tested')
@@ -996,8 +1007,6 @@ function suitRenderJob(job) {
             + '<div>Projected non-RP time per thought turn: ' + esc(number(summary.projected_turn_s))
             + ' s / maximum ' + esc(limit) + ' s</div>'
             + '<div>Suitable as the single helper model: <b>' + esc(summary.verdict || 'not tested') + '</b></div>'
-            + (summary.saved === false || summary.infra ? '<div class="suit-outcome suit-outcome-warn">Not saved: '
-                + esc(summary.not_saved_reason || 'a request failed at the provider; inspect the diagnostics below.') + '</div>' : '')
             + (summary.timed_out_runs ? '<div>' + esc(summary.timed_out_runs) + ' request(s) got no answer in time and failed their case.</div>' : '')
             + (summary.curated_only ? '<div>Curated cases only; no logged cases.</div>' : '')
             + suitDeleteControls(job.model || summary.model || '', job.result_saved);

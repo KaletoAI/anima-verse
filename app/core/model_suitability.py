@@ -10,7 +10,9 @@ argument and semantic dimension passes and no refusal is detected. Uncurated
 semantics remain not_tested. Case verdicts require a strict majority; invalid input
 (missing image, invalid fixture, infrastructure error) excludes the case from score
 denominators. A truncated answer (finish_reason=length) FAILS without being called a
-refusal or hallucination. A request that gets no answer within
+refusal or hallucination — and never keeps a run unsaved: a cut-off answer is the
+model's behaviour at the limit it was sent (recorded per run as max_tokens_sent),
+not an outage. A request that gets no answer within
 model_test.case_timeout_seconds (a read timeout) FAILS its run as "no answer within
 N s"; a connect/pool timeout, a 5xx or a refused connection stays an infrastructure
 error. More answer timeouts in a row than requests run in parallel end the whole run
@@ -435,7 +437,14 @@ def iter_suitability_results(
         if estimated:
             usage["reasoning_tokens"] = round(len(reasoning) / 3.5)
         ctok = int(usage.get("completion_tokens") or 0)
+        # The limit of the request whose finish_reason this run reports: a
+        # budgeted call that ended inside its first request ran under the
+        # thinking budget; a continued (budget_hit) or plain call under Max
+        # tokens. The cut-off warning names this, not a setting.
+        first_only = (bool(budget) and not getattr(resp, "budget_hit", False)
+                      and not getattr(resp, "budget_unenforceable", False))
         raw = {"content": getattr(resp, "content", "") or "",
+               "max_tokens_sent": budget if first_only else (settings["max_tokens"] or None),
                "reasoning": reasoning,
                "reasoning_tokens_estimated": estimated,
                "budget_unenforceable": bool(getattr(resp, "budget_unenforceable", False)),
@@ -946,6 +955,8 @@ def _summarize(model_full: str, results: List[Dict[str, Any]], *, settings: Opti
             for run in record.get("runs", [])),
         "total_runs": len(all_runs),
         "truncated_runs": sum(run.get("finish_reason") == "length" for run in all_runs),
+        "truncated_limits": sorted({run["max_tokens_sent"] for run in all_runs
+                                    if run.get("finish_reason") == "length" and run.get("max_tokens_sent")}),
         "truncated_cases": [r["id"] for r in results if any(run.get("finish_reason") == "length" for run in r.get("runs", []))],
         "failed_by_truncation": failed_by_truncation,
         "thinking_runs": sum(((run.get("usage") or {}).get("reasoning_tokens") or 0) > 0 or bool((run.get("reasoning") or "").strip()) for run in all_runs),
@@ -1032,7 +1043,7 @@ def _persist(model_full: str, summary: Dict[str, Any], results: List[Dict[str, A
             "speed": summary.get("speed"),
             **{key: summary.get(key) for key in ("settings", "concurrency", "live_play", "projected_turn_s", "speed_ok",
                                                       "max_turn_seconds", "vision", "curated_only", "total_runs", "truncated_runs",
-                                                      "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "budget_overruns", "reasoning_tokens_median", "reasoning_tokens_estimated", "thinking")},
+                                                      "truncated_limits", "truncated_cases", "failed_by_truncation", "thinking_runs", "thinking_leak_runs", "budget_hits", "budget_overruns", "reasoning_tokens_median", "reasoning_tokens_estimated", "thinking")},
             "checks": stored_checks,
         },
     }
