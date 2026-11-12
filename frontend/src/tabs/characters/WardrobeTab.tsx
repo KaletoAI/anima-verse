@@ -265,6 +265,10 @@ export function WardrobeTab({ character, onEditAppearance, onOpenFigure }: {
 
   // Own-mesh pieces: row toggles + chips, one expanded chain panel.
   const { data: garments, reload: reloadGarments, setStatus: setGarmentStatus } = useWardrobeGarments(character)
+  // The worn outfit as the render keys see it: equipped pieces + the pieces worn open
+  // (`garments.piece_state` is the effective map — a piece whose "Can be worn open" was
+  // unticked drops out of it, so that change re-keys the preview back to closed too).
+  const outfitKey = JSON.stringify([data.equipped, garments?.piece_state || {}])
   const [openGarment, setOpenGarment] = useState('')
   const closeGarment = useCallback(() => setOpenGarment(''), [])
   // Rows whose mode was changed here: item id -> a counter the wearers line reloads on.
@@ -615,15 +619,14 @@ export function WardrobeTab({ character, onEditAppearance, onOpenFigure }: {
 
       {/* ── Right: default-pose preview of the current outfit on top (the
           T-pose input lives on the 3D tab), effective prompts below. The
-          refreshKey follows the equipped state so the preview tracks the
-          outfit as it is edited here. ── */}
+          refreshKey follows the worn outfit — the equipped pieces AND the
+          pieces worn open (an open piece has its own outfit signature and
+          prompt text) — so the preview tracks the outfit as it is edited here. ── */}
       <div style={{ flex: '1 1 0', minWidth: 220, display: 'flex', flexDirection: 'column',
                     gap: 10, minHeight: 0, overflow: 'auto' }}>
-        <FieldModelRefs character={character} kinds={['pose']}
-          refreshKey={JSON.stringify(data.equipped)} />
+        <FieldModelRefs character={character} kinds={['pose']} refreshKey={outfitKey} />
         <div style={{ borderTop: '1px solid rgba(255,255,255,0.12)', paddingTop: 8 }}>
-          <PromptPreview character={character}
-            refreshKey={JSON.stringify(data.equipped)} />
+          <PromptPreview character={character} refreshKey={outfitKey} />
         </div>
       </div>
       <ConfirmDialog
