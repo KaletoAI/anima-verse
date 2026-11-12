@@ -24,8 +24,9 @@ Fixture (expected values derived by hand):
     True, pipeline True. Limits come from the gate constants of the
     CLOTHING kind (garment_gates.limits("clothing"), garment_mesh,
     garment_fit.CLOTHING_GATES): steps [fit, ghost, mesh, worn] — no
-    "haired", no "hairdeck_fit"; worn.garment_share {ge 0.01}; ghost.top_dy
-    {abs_le 0.0055} (no per_height: clothing records are fractions of Hb);
+    "haired", no "hairdeck_fit"; worn.garment_share {ge 0.01}; ghost.w_ratio
+    {range [0.8, 1.25]} and no ghost.top_dy (recorded only since ghost gate
+    version 2; no per_height: clothing records are fractions of Hb);
     mesh.largest_component_share {ge 0.98}; fit.max_push_m {le 0.10},
     fit.rigged_inside_share {le 0.01}, fit.largest_component_share {ge 0.98}.
     No base model is stored -> status {missing, step None, painted True,
@@ -178,13 +179,13 @@ def main() -> int:
                    "worn": True})
             limits = body.get("limits") or {}
             check("clothing limits", (sorted(limits), limits.get("worn", {}).get("garment_share"),
-                                      limits.get("ghost", {}).get("top_dy"),
+                                      limits.get("ghost", {}).get("w_ratio"), "top_dy" in limits.get("ghost", {}),
                                       limits.get("mesh", {}).get("largest_component_share"),
                                       limits.get("fit", {}).get("max_push_m"),
                                       limits.get("fit", {}).get("rigged_inside_share"),
                                       limits.get("fit", {}).get("largest_component_share")),
                   (["fit", "ghost", "mesh", "worn"], {"op": "ge", "value": 0.01},
-                   {"op": "abs_le", "value": 0.0055}, {"op": "ge", "value": 0.98},
+                   {"op": "range", "value": [0.8, 1.25]}, False, {"op": "ge", "value": 0.98},
                    {"op": "le", "value": 0.10}, {"op": "le", "value": 0.01}, {"op": "ge", "value": 0.98}))
             check("status, no base model", body.get("status"),
                   {"state": "missing", "step": None, "painted": True, "reason": base_body.BASE_MODEL_MISSING,

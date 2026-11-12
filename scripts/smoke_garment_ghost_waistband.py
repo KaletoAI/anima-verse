@@ -3,7 +3,8 @@
 boots plan): the edit model turned the trousers' ghost back into a centred
 product shot (×1.45..1.59 tall), so the ghost back of a piece whose top edge
 is a waistband is laid onto the worn back's garment region by ONE uniform
-scale (the waistband width) and a shift onto the waistband top, uncapped; the
+scale (the waistband width) and a shift onto the waistband top, without the
+outline caps (only a scale outside ``WAIST_SCALE_RANGE`` is not applied); the
 length is the edit's and does not refuse (app/core/garment_gates.py
 ``waistband_piece`` / ``register_waistband`` / ``ghost_clothing_gate(
 length_free=True)``, app/core/garment_clothing.py ``register_estimate`` /
@@ -46,7 +47,8 @@ smoke_garment_ghost_registration.py):
     0.66667 (the next steps give the same rows). centre [200, 309.5],
     shift_px [500 − 200, 299.5 − 309.5] = [300, −10], waist_px [120, 180],
     length_ratio (769 − 200 + 1)·0.66667 / (879 − 500 + 1) = 380 / 380 =
-    1.0, within_caps True (uncapped), not negligible.
+    1.0, within_caps True (0.66667 inside WAIST_SCALE_RANGE [1/3, 3]), not
+    negligible.
 [3] The chain glue on that ghost (``_register`` with the clothing hook + the
     clothing gate, view back, an item with slots ["bottom"]):
     before (as rendered): top_dy (200 − 500) / 799 = −0.37547, w_ratio
@@ -72,7 +74,9 @@ smoke_garment_ghost_registration.py):
 [6] A top keeps the outline registration: the same 1.5× ghost of P with
     slots ["outer"] -> no ``method``, |shift| 0.375 Hb > 0.04 -> not
     applied ("beyond the correction caps — gated as rendered"), refused
-    for top + width, no ``registered``, no ``length_free``.
+    for its width (1.503 > 1.25; the top offset −0.375 Hb only recorded in
+    ``warnings`` since ghost gate version 2), no ``registered``, no
+    ``length_free``.
     Negligible: GHOST(P, 1, 0, 0) on the back -> scale 1.0, shift 0 ->
     not applied, the file untouched, no ``registered``.
 [7] Pair check: front hem_t 0.80 against a back hem_t 0.90 (|Δ| 0.10 >
@@ -284,8 +288,8 @@ def main() -> int:
     r = rec.get("registration") or {}
     check("top: outline method, not applied", (r.get("method"), r.get("applied"), r.get("note")),
           (None, False, "beyond the correction caps — gated as rendered"))
-    check("top: refused for top + width", (rec["ok"], any("garment top moved" in x for x in rec["reasons"]),
-                                          any("garment width changed" in x for x in rec["reasons"])),
+    check("top: refused for width, top recorded", (rec["ok"], any("garment width changed" in x for x in rec["reasons"]),
+                                                   any("garment top moved" in x for x in rec["warnings"])),
           (False, True, True))
     check("top: no registered, not length_free", ("registered" in rec, "length_free" in rec), (False, False))
     exact = ghost(trousers())

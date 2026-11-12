@@ -31,7 +31,7 @@ is the same for every wearer, the fit is per wearer (``garment_store``).
 """
 from typing import Any, Dict, Optional, Tuple
 
-from app.core.garment_gates import WORN_GATE_VERSION
+from app.core.garment_gates import GHOST_GATE_VERSION, WORN_GATE_VERSION
 
 KIND = "clothing"
 #: What the messages call the thing in the images ("No garment found …").
@@ -116,8 +116,11 @@ DEFAULT_NOUN = "garment"
 GHOST_NEGATIVE = ("person", "skin", "head", "arms", "hands", "legs", "feet", "mannequin", "hanger")
 #: The gate version per step whose gate changed since attempts were stored
 #: (``garment_images``: a refused view re-gates its stored attempts of an
-#: older version before it renders again).
-GATE_VERSIONS: Dict[str, int] = {"worn": WORN_GATE_VERSION}
+#: older version before it renders again). ``ghost`` 2 (2026-11-12): the
+#: position is recorded, the width widened, skin sampled on the thighs —
+#: a refused ghost view whose stored attempts pass now is published from
+#: its files on the next run (Retry), without an image job.
+GATE_VERSIONS: Dict[str, int] = {"worn": WORN_GATE_VERSION, "ghost": GHOST_GATE_VERSION}
 #: The pair check: the front ghost against the accepted back ghost.
 PAIR_STEP = "ghost"
 PAIR_REFUSED = "front and back garment end at different heights"
@@ -325,7 +328,8 @@ def register_estimate(step: str, view: str, reference, ghost_mask, *, body_h: in
     """The correction ``garment_images._register`` applies before the gate:
     the ghost of a waistband piece (both views) by its waistband
     (``garment_gates.register_waistband``: one uniform scale, the top and
-    the waistband centre aligned, uncapped — ruling 13d: the edit model
+    the waistband centre aligned, no outline caps (a scale outside
+    ``WAIST_SCALE_RANGE`` is a failed measurement) — ruling 13d: the edit model
     turned the trousers' back into a centred product shot, ×1.45..1.59 tall;
     13f: the front, too);
     everything else by its outline (``garment_gates.register``, capped)."""

@@ -32,7 +32,7 @@ keeps the correction (``registration``, chip keys ``reg_shift`` /
 ``reg_scale``). Everything after the ghost reads the moved file. A kind may
 estimate its own correction (``register_estimate``): the clothing ghost (both
 views) of a waistband piece is scaled by its waistband width and shifted onto the
-waistband top, uncapped (``garment_gates.register_waistband``, rulings 13d/13f;
+waistband top, without the outline caps (``garment_gates.register_waistband``, rulings 13d/13f;
 record key ``registered``).
 
 The kind's own module (``kind_module``: ``garment_clothing`` — the only kind
@@ -57,7 +57,8 @@ the front it follows (``front_sha256``); a new accepted front drops the back
 and everything after it.
 
 A step whose gate changed (``kind.GATE_VERSIONS``: clothing ``worn``,
-``garment_gates.WORN_GATE_VERSION``) RE-GATES its stored attempts before it
+``garment_gates.WORN_GATE_VERSION``, and ``ghost``,
+``garment_gates.GHOST_GATE_VERSION``) RE-GATES its stored attempts before it
 renders again (``_regate_stored``): when the view's final is not accepted,
 every attempt file whose gate record is of an older version is gated again
 from the file (masks only, no image job) — a drafted back only while the
@@ -400,8 +401,10 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
             record = kind.gate(step, view, base_rgb=base_rgb, base_mask=base_mask, source_rgb=source_rgb,
                                source_mask=source_mask, edit_rgb=_rgb(path, base_size),
                                edit_mask=_mask(path, base_size), item_id=item_id)
-            # A registered attempt file is already moved: its correction stays recorded.
-            record.update({k: old[k] for k in ("registration", "reg_shift", "reg_scale") if k in old})
+            # A registered attempt file is already moved: its correction stays recorded
+            # (``registered`` too: ``pair_agree`` reads it on a waistband back).
+            record.update({k: old[k] for k in ("registration", "reg_shift", "reg_scale", "registered")
+                           if k in old})
             return _with_pair(record, pair_check)
         hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final, regate=regate)
         if hit is not None:
@@ -581,7 +584,7 @@ def _with_registration(record: Dict[str, Any], registration: Dict[str, Any]) -> 
     """The gate record with its registration: ``registration`` (+ the
     ``residual`` = the record's position numbers) and the chip keys
     ``reg_shift`` (|centroid shift| / Hb) and ``reg_scale``. A waistband
-    registration (``garment_gates.register_waistband``, uncapped) has no
+    registration (``garment_gates.register_waistband``) has no
     chip keys — their chips show the outline registration's caps — but
     ``registered`` = ``{scale, dx, dy, length_ratio}`` (dx / dy in px of the
     gate frame) when it was applied."""

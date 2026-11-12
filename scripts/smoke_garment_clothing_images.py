@@ -27,9 +27,9 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
         y0 100, Hb 999. Head zone rows < int(100 + 0.13 x 999) = 229 (the
         chin rule of ``head_zone``: the disc narrows down to the shoulder
         row, no neck — the neck rule: scripts/smoke_garment_worn_regate.py).
-        Skin sample rows int(100 + 0.04 x 999) = 139 .. int(100 + 0.10 x 999)
-        = 199, middle row 169: head chord half-width sqrt(100² - 31²) = 95
-        -> columns 464 .. 560, all skin -> sample (200, 160, 140).
+        Skin sample (the thighs, ghost gate version 2) rows int(100 + 0.60
+        x 999) = 699 .. int(100 + 0.66 x 999) = 759, every figure pixel
+        there is torso skin -> sample (200, 160, 140).
         Morphology at H 1200: open round(2 x 1200/1536) = 2, close
         round(4 x 1200/1536) = 3, margin round(8 x 1200/1536) = 6 iterations.
   DRESS(top, bottom, x0, x1) = green (40, 90, 50), |ΔRGB| to skin
@@ -64,10 +64,21 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
         no reasons; outside stays 0 (the notch is left out of it).
   GHOST_LEGS   = GHOST(759) + the torso rows [780, 1100) in skin: skin far
         outside G -> skin_left > 0.005 -> refused ("skin left in the image").
-  GHOST_WIDE   = GHOST(759) with cols [356, 668): w_ratio 311 / 263 = 1.183
-        > 1.05 -> refused ("garment width changed").
+  GHOST_WIDE   = GHOST(759) with cols [356, 668): w_ratio 311 / 263 = 1.183,
+        inside the widened [0.80, 1.25] (ghost gate version 2), but cols
+        356..373 and 650..667 lie beyond G grown by 6 (374..649): 2 x 18 x
+        440 rows = 15840 px over G's area 264 x 440 - 30 x 80 = 113760 (less
+        a few cut corners) -> outside 0.139 > 0.05 -> refused ("more than
+        the garment in the image"), not for its width.
+  GHOST_NARROW = GHOST(759) with cols [380, 560) — a cut-off piece: w_ratio
+        (559 - 380) / (643 - 380) = 0.681 < 0.80 -> refused ("garment width
+        changed"); its centre offset ((380 + 559) - (380 + 643)) / 2 / 999 =
+        -0.04204 only recorded ("garment centre moved" in ``warnings``).
   GHOST_RAISED = GHOST(759) moved up 10 rows: top_dy -10 / 999 = -0.01001,
-        |..| > 0.0055 -> refused ("garment top moved").
+        |..| > 0.0055 -> RECORDED ("garment top moved" in ``warnings``),
+        not refused; rows 310..313 lie beyond the 6-row margin, less its
+        open neckline cols [472, 552): 4 x (264 - 80) = 736 px, plus the few
+        pixels above G's cut top corners -> outside 0.0066 <= 0.05 -> ok.
   HATTED = BASE with the head (rows < 300, figure pixels) in hat brown
         (90, 60, 40): |ΔRGB| 103.3 > 20 -> G = the head, everything else
         unchanged -> outside 0, head_garment 1.0.
@@ -115,7 +126,8 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
     outside_dRGB since gate version 2 — recorded, never refused; ghost incl.
     the registration caps reg_shift / reg_scale,
     scripts/smoke_garment_ghost_registration.py), limits() defaults to the
-    clothing table, limits("hair") is a ValueError (no image chain).
+    clothing table, limits("hair") is a ValueError (no image chain);
+    ghost without top_dy / centre_dx since ghost gate version 2 (recorded).
     Fix round 1 (slot zones, garment_gates.SLOT_ZONES = {head: (head,)}):
     the clothing module's worn gate with item_id — Hat (slots [head]) on
     HATTED -> ok True, head_gated False, head_garment 1.0; the dress
@@ -298,6 +310,7 @@ GHOST_CLOSED = dress(canvas(), neckline="none")
 GHOST_LEGS = ghost()
 GHOST_LEGS[780:1100, 392:632] = SKIN
 GHOST_WIDE = ghost(x0=356, x1=668)
+GHOST_NARROW = ghost(x1=560)
 GHOST_RAISED = ghost(top=310, bottom=749)
 HATTED = BASE.copy()
 HATTED[:300][mask_of(BASE)[:300]] = (90, 60, 40)
@@ -376,12 +389,22 @@ def gates_part(gg, kept):
     check("closed neckline reported, not refused", (closed["ok"], closed["reasons"], closed["neck_fill"],
                                                      closed["outside"]), (True, [], 1.0, 0.0))
     check("legs refused", reason(ghost_gate(GHOST_LEGS), "skin left in the image"), (False, True))
-    check("wide refused", reason(ghost_gate(GHOST_WIDE), "garment width changed"), (False, True))
+    wide = ghost_gate(GHOST_WIDE)
+    check("wide refused for outside, not width",
+          (reason(wide, "more than the garment"), any("garment width changed" in x for x in wide["reasons"]),
+           wide["w_ratio"], round(wide["outside"], 3)), ((False, True), False, 1.183, 0.139))
+    narrow = ghost_gate(GHOST_NARROW)
+    check("narrow (cut off) refused for width", (reason(narrow, "garment width changed"), narrow["w_ratio"],
+                                                 narrow["centre_dx"],
+                                                 any("garment centre moved" in x for x in narrow["warnings"])),
+          ((False, True), 0.681, -0.04204, True))
     raised = ghost_gate(GHOST_RAISED)
-    check("raised refused", (reason(raised, "garment top moved"), raised["top_dy"]), ((False, True), -0.01001))
+    check("raised recorded, accepted", (raised["ok"], raised["top_dy"], round(raised["outside"], 4),
+                                        [x.split(":")[0] for x in raised["warnings"]], raised["gate_version"]),
+          (True, -0.01001, 0.0066, ["garment top moved"], 2))
     check("limits clothing", {k: sorted(v) for k, v in gg.limits("clothing").items()},
           {"worn": ["garment_share", "head_garment", "outside_xor"],
-           "ghost": ["centre_dx", "outside", "reg_scale", "reg_shift", "skin_left", "top_dy", "w_ratio"]})
+           "ghost": ["outside", "reg_scale", "reg_shift", "skin_left", "w_ratio"]})
     check("limits() = clothing", gg.limits(), gg.limits("clothing"))
     try:
         gg.limits("hair")

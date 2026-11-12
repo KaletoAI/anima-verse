@@ -59,11 +59,18 @@ Geometry, W 600 x H 1000 on grey 128:
     centre_dx 0.03004 refused; corrected (|shift| ≈ 0.03004 < 0.04) -> ok,
     residual |centre_dx| <= 0.0025.
 [5] Beyond the cap: GHOST(1, 0, +64) (64 / 799 = 0.0801 Hb, the hand-made
-    "0.08 Hb" case) -> refused with "garment centre moved"; whatever the
-    estimate, a correction is applied only within the caps.
+    "0.08 Hb" case) -> the centre offset is only RECORDED (ghost gate
+    version 2: "garment centre moved" in ``warnings``), and the piece lies
+    beside its region: torso cols 284..443 against G's 220..379 grown by 5
+    -> cols 385..443 (59) beyond on rows 200..599 (sleeves 465..523, also
+    59), less the rows the sleeve margin covers — outside > 0.3 > 0.05 ->
+    refused "more than the garment in the image"; whatever the estimate, a
+    correction is applied only within the caps.
     GHOST(1.10, 0, 0) (10 % larger): scale 1/1.10 = 0.909 < 0.93 -> not
-    applied ("beyond the correction caps"), refused for its width
-    (w_ratio ≈ 1.10 > 1.05).
+    applied ("beyond the correction caps"); w_ratio ≈ 1.10 lies in the
+    widened [0.80, 1.25], but 16 px of each side and 20 rows top and bottom
+    lie beyond the 5 px margin: outside >= 2·11·440 / 73600 = 0.13 > 0.05
+    -> refused "more than the garment in the image".
 [6] Negligible: GHOST(1, 0, 0) = T itself -> registration negligible, the
     file is NOT rewritten (bytes equal), ok, residual 0.
 [7] _touching: G + a separate patch cols [100, 120) rows [300, 340) (a
@@ -231,15 +238,20 @@ def main() -> int:
     print("[5] beyond the cap")
     _, rec, _ = chain("right64", ghost(1.0, 0, 64))
     r = rec.get("registration") or {}
-    check("0.08 Hb refused, centre moved", (rec["ok"], any("garment centre moved" in x for x in rec["reasons"])),
-          (False, True))
+    check("0.08 Hb: centre recorded, refused for outside",
+          (rec["ok"], any("garment centre moved" in x for x in rec["warnings"]),
+           any("garment centre moved" in x for x in rec["reasons"]),
+           any("more than the garment" in x for x in rec["reasons"]), rec["outside"] > 0.3),
+          (False, True, False, True, True))
     check("applied only within the caps", (not r.get("applied")) or bool(r.get("within_caps")), True)
     _, rec, _ = chain("big10", ghost(1.10, 0, 0))
     r = rec.get("registration") or {}
     near("10 % larger: scale", r.get("scale"), 1 / 1.10, 0.006)
     check("not applied", (r.get("applied"), r.get("note")), (False, "beyond the correction caps — gated as rendered"))
-    check("refused for its width", (rec["ok"], any("garment width changed" in x for x in rec["reasons"])),
-          (False, True))
+    check("refused for outside, not its width",
+          (rec["ok"], any("more than the garment" in x for x in rec["reasons"]),
+           any("garment width changed" in x for x in rec["reasons"]), rec["outside"] >= 0.13),
+          (False, True, False, True))
 
     print("[6] negligible")
     exact = ghost()
