@@ -48,7 +48,7 @@ Expected, derived by hand:
 [3] Assembly with layers (Review Focus 5). Demo on the pipeline, base model B (the body above), body fits
     slip (r 0.1125) and coat (r 0.1080, its low tier 32 segments) accepted on sha(B). Outfit model A: bare =
     the body, sidecar mesh_items {intended [coat, slip], effective [coat, slip]}, bare low tier too.
-    lsig1 = md5[:12] of {"inner": {"slip": sha(slip fit)}, "version": 1} (sorted JSON).
+    lsig1 = md5[:12] of {"inner": {"slip": sha(slip fit)}, "version": 2} (sorted JSON; LAYER_VERSION 2).
     - served(A, full) before a build: the bare file + schedule(Demo, A); _wanted_for: coat over {lsig lsig1,
       items [slip], pending True}, coat fit = its body fit; slip without ``over``.
     - assemble(A) -> {full: assembled, low: assembled}; layers/coat_<F>_<lsig1>.glb + .json and
@@ -383,7 +383,7 @@ def main() -> int:
         bare_a = write_outfit("outfitA", ["coat", "slip"], ["coat", "slip"], base_sha)
 
         def lsig_of(inner):
-            payload = json.dumps({"version": 1, "inner": inner}, sort_keys=True)
+            payload = json.dumps({"version": 2, "inner": inner}, sort_keys=True)
             return hashlib.md5(payload.encode()).hexdigest()[:12]
         lsig1 = lsig_of({"slip": sha(slip_fit)})
         check("layer_sig rule", gl.layer_sig({"slip": sha(slip_fit)}), lsig1)

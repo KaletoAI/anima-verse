@@ -558,19 +558,61 @@ def write_record(path: Path, record: Dict[str, Any]) -> None:
         figure.invalidate()   # a fit or a refusal can change a delivered figure
 
 
+def footwear_servable(record: Dict[str, Any]) -> bool:
+    """An accepted FOOTWEAR fit record of any fit version that the assembly can graft: it carries the body cut
+    (``cut`` with ``sides``, ``garment_assembly._cut_body``) and the ``foot_pose``. Every version since the cut
+    (fit version 3) and the foot pose has them; an older record without them is never served."""
+    cut = record.get("cut")
+    return (record.get("accepted") is True and isinstance(cut, dict) and bool(cut.get("sides"))
+            and isinstance(record.get("foot_pose"), dict))
+
+
 def _accepted_on(record: Dict[str, Any], base_model_sha: str) -> bool:
-    """Accepted on the base model ``base_model_sha``. A FOOTWEAR fit must also
-    be of the current ``footwear_fit.FOOTWEAR_FIT_VERSION``: an older one is
-    never served as accepted (R11 ruling, plan 2026-11-10-footwear-rigid-shoes
-    Task 10 carry — the version is part of the footwear fsig, so the newest
-    accepted fit of an older fsig could be an older fit; the piece is then
-    missing until the refit, never a fit the cut gates did not pass)."""
+    """Accepted on the base model ``base_model_sha``. A FOOTWEAR fit of an
+    older ``footwear_fit.FOOTWEAR_FIT_VERSION`` (an older fsig: the version is
+    part of the footwear fsig) is served meanwhile when it can be grafted
+    (``footwear_servable``) — until a fit of the new version is accepted, and
+    on after that fit is refused, like every other garment (plan 2026-11-12
+    fit-sdf-speed-drape, Ruling R7b: a shoe never goes missing because of a
+    version bump; the current fsig's fit stays ``missing`` in
+    ``garment_footwear.fit_state``, so the chain and the refit sweep replace
+    it). Was R11 (plan
+    2026-11-10-footwear-rigid-shoes Task 10 carry): never served."""
     if record.get("accepted") is not True or record.get("base_model_sha256") != base_model_sha:
         return False
     if str(record.get("kind") or "") == "footwear":
         from app.core.footwear_fit import FOOTWEAR_FIT_VERSION
-        return record.get("fit_version") == FOOTWEAR_FIT_VERSION
+        return record.get("fit_version") == FOOTWEAR_FIT_VERSION or footwear_servable(record)
     return True
+
+
+def newest_body_footwear_fit(character_name: str, item_id: str, body: str, body_sha: str
+                             ) -> Optional[Tuple[Path, Dict[str, Any]]]:
+    """``(fit GLB, record)`` of the item's newest (GLB mtime) accepted footwear fit on the outfit body ``body``
+    made of the body bytes ``body_sha``, any fsig / fit version, graftable (``footwear_servable``) — what an outfit
+    model on that body keeps of a shoe whose fit of the current fsig is missing or refused (Ruling R7b). None
+    when there is none. Read-only."""
+    if not is_body_id(body) or not body_sha:
+        return None
+    folder = body_root(character_name, body)
+    best: Optional[Tuple[int, Path, Dict[str, Any]]] = None
+    for (iid, _fsig), files in stored_groups(character_name).items():
+        if iid != item_id:
+            continue
+        for path in files:
+            if path.suffix != ".glb" or path.parent != folder:
+                continue
+            record = read_record(path.with_suffix(".json"))
+            if (str(record.get("kind") or "") != "footwear" or record.get("body_id") != body
+                    or record.get("body_sha256") != body_sha or not footwear_servable(record)):
+                continue
+            try:
+                mtime = path.stat().st_mtime_ns
+            except OSError:
+                continue
+            if best is None or mtime > best[0]:
+                best = (mtime, path, record)
+    return (best[1], best[2]) if best else None
 
 
 def fit_state(record: Dict[str, Any]) -> str:
@@ -606,8 +648,8 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     else the newest (GLB mtime) accepted fit of the item on that model made
     with the CURRENT method (``fit_method``; a switched method never serves
     the other method's hair), else None. An empty ``base_model_sha`` (no base
-    model) has no fit. A footwear fit of an older fit version is never
-    served (``_accepted_on``). Hair whose method is ``BODY`` is never
+    model) has no fit. A footwear fit of an older fit version is served
+    while it can be grafted (``_accepted_on``, Ruling R7b). Hair whose method is ``BODY`` is never
     served: the hair is part of the body mesh. Per open / closed state (plan
     2026-11-12-unified-worn-pieces Task 11b, ruling A2): ``state`` names the
     fsig and filters the fallback — asked for one state, a piece is never
@@ -685,8 +727,10 @@ def newest_accepted_fits(character_name: str, item_id: str, *, base_model_sha: s
 # base model it failed on.
 
 def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, error: str,
-                   base_model_sha: str = "") -> None:
-    """Persist the failure of a chain run of ``(item_id, fsig)``."""
+                   base_model_sha: str = "", stamp: Optional[Dict[str, Any]] = None) -> None:
+    """Persist the failure of a chain run of ``(item_id, fsig)``. ``stamp`` (a refused refit of the sweep,
+    ``garment_refit.refusal_stamp``): ``{fit_version, inputs_id}`` merged into the record — the sweep does not
+    try the same refit again (``garment_refit.held_refusal``, Ruling R7c)."""
     from app.core.timeutils import utc_now
     path = garment_path(character_name, item_id, fsig, "failed")
     if not path.parent.parent.parent.is_dir():
@@ -697,6 +741,8 @@ def record_failure(character_name: str, item_id: str, fsig: str, *, step: str, e
         # Refused by a fit that already widens a too-small piece (``garment_refit`` retries one without).
         from app.core.garment_fit import SCALE_RETRY_VERSION
         record["scale_retry"] = SCALE_RETRY_VERSION
+        if stamp:
+            record.update({key: stamp[key] for key in ("fit_version", "inputs_id") if key in stamp})
     write_record(path, record)
 
 

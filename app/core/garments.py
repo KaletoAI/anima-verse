@@ -1392,7 +1392,8 @@ def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> 
         elif result.get("step") and not result.get("retry_later"):
             base = base_body.current_base(character_name)
             gs.record_failure(character_name, item_id, fsig, step=str(result["step"]),
-                              error=str(result.get("error") or ""), base_model_sha=base[1] if base else "")
+                              error=str(result.get("error") or ""), base_model_sha=base[1] if base else "",
+                              stamp=result.get("refusal_stamp"))
     except (OSError, ValueError) as e:
         logger.warning("Garment failure record %s/%s not written: %s", character_name, item_id, e)
 

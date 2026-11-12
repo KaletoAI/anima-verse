@@ -101,7 +101,10 @@ from app.core.log import get_logger
 logger = get_logger("garment_layers")
 
 #: Bumped when a layered fit's meaning changes (part of ``lsig``).
-LAYER_VERSION = 1
+#: 2 (plan 2026-11-12 fit-sdf-speed-drape phase A, Task 7): the layered push's own body field
+#: (``garment_fit_layers``, ``garment_fit.body_sdf``) is the filled, body-cached solid, and the inner pieces it is
+#: fitted over are refitted against it (``garment_fit.FIT_VERSION`` clothing 8 / hair 11, footwear 17).
+LAYER_VERSION = 2
 #: Layered fits kept per (item, fsig) — inner sets an outfit switches between.
 LAYER_KEEP = 4
 #: A tucked trouser leg is cut this far under the boot shaft's top (metres; spec § 8.1).

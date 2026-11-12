@@ -566,9 +566,12 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str, 
     Fits the item's source on the outfit body directly (``fit`` with ``body``), never from the base fit (there
     is no ``base_fit_sha256``). ``build`` (the assembly build, never serving) fits a missing / stale / outdated
     one first, serialised per body; a refusal or failure is recorded per body (``record_body_failure``, the
-    fit version as the third key) and nothing of another body or an older fit version is served then (R11
-    ruling). Without a ready source nothing is fitted and nothing recorded (``SOURCE_NOT_READY``); nothing is
-    fitted on a body whose stored bytes are no longer ``body_sha``."""
+    fit version as the third key). While the current fsig's fit is not usable and none is pending, the newest
+    graftable fit of the item on these body bytes under another fsig (an older fit version: the version is part
+    of the footwear fsig) is served, ``error`` naming why (Ruling R7b, plan 2026-11-12 fit-sdf-speed-drape: a shoe
+    never goes missing because of a version bump; was R11: nothing). Nothing of another body is served. Without a
+    ready source nothing is fitted and nothing recorded (``SOURCE_NOT_READY``); nothing is fitted on a body whose
+    stored bytes are no longer ``body_sha``."""
     from app.core import garment_fit, garment_store as gs, garments
     from app.core.keyed_lock import keyed_lock
     empty = {"fit": None, "low": None, "record": {}, "fsig": "", "pending": False}
@@ -616,6 +619,13 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str, 
         error = SOURCE_NOT_READY
     else:
         error = "not fitted on this outfit body yet" if pending or on_body else "the outfit body was rebuilt"
+    if not usable and not pending:
+        older = gs.newest_body_footwear_fit(character_name, item_id, body_id, body_sha)
+        if older is not None:
+            old_fsig = gs.parse_name(older[0])[1]
+            old_low = gs.garment_path(character_name, item_id, old_fsig, "low", body=body_id)
+            return {"fit": older[0], "low": old_low if old_low.is_file() else None, "record": older[1],
+                    "fsig": old_fsig, "pending": False, "error": error}
     return {"fit": fit_path if usable else None, "low": low if usable and low.is_file() else None,
             "record": record if usable else {}, "fsig": fsig, "pending": pending, "error": error}
 

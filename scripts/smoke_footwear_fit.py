@@ -227,7 +227,7 @@ def main() -> int:
     from app.core import footwear_insole, glb_mesh
 
     # [F0]
-    check(ff.FOOTWEAR_FIT_VERSION == 16 and ff.HEIGHT_CAP == 1.5 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
+    check(ff.FOOTWEAR_FIT_VERSION == 17 and ff.HEIGHT_CAP == 1.5 and ff.BALL_SOLVE_STEPS == 8 and ff.BALL_SOLVE_TOL_RAD == 1e-7
           and ff.INSTEP_ROOF_SHARE == 0.8 and ff.INSTEP_FROM_SHARE == 0.45
           and ff.ALLOW_M == 0.005 and ff.BLEND_M == 0.015 and ff.WIDTH_CAP == 1.10 and ff.SHOE_WIDTH_CAP == 1.65
           and ff.WIDTH_CAP_MIN == 1.00 and ff.SLIM_MAX_SHARE == 0.18, "[F0] constants")
@@ -409,8 +409,8 @@ def main() -> int:
               f"[F11] ok {fit_hu.ok}, reasons {fit_hu.reasons}, foot_pose root lift {fit_hu.foot_pose.get('root_lift_m')}")
 
     # [F12] the version and the two band constants ([F1]-[F8] above are the unchanged regression)
-    check(ff.FOOTWEAR_FIT_VERSION == 16 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
-          "[F12] FOOTWEAR_FIT_VERSION 16, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
+    check(ff.FOOTWEAR_FIT_VERSION == 17 and ff.CONTACT_BAND_H_M == 0.01 and ff.PLANTAR_BAND_M == 0.03,
+          "[F12] FOOTWEAR_FIT_VERSION 17, CONTACT_BAND_H_M 0.01, PLANTAR_BAND_M 0.03")
 
     # [F13] a shoe without a shaft is widened to the foot
     from app.core import footwear_cut

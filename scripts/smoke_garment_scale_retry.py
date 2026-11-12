@@ -35,6 +35,8 @@ Expected numbers, derived by hand:
     called once.
 [7] The case of [3] with the finish failing rigged_inside_share at 1.06 only: 1.06 refused (finished), 1.08 passes
     -> factor 1.08 (the smallest scale that passes EVERY gate), finish called 3 times.
+No transfer runs here: the finish reports the rigged pass as clean (inside share 0, push 0 — the rigged-push gates
+of 2026-11-12, plan fit-sdf-speed-drape Task 7) unless a case says otherwise.
 """
 import math
 import sys
@@ -106,7 +108,8 @@ def run(rho, finish_extra=None):
 
     def finish(Qs, Qp, disp):
         scale = round(float(np.linalg.norm(Qs[:, [0, 2]], axis=1).mean()) / rho, 2)
-        m = {**gf.push_numbers(Qs, Qp), "largest_component_share": 1.0, "rigged_inside_share": 0.0}
+        m = {**gf.push_numbers(Qs, Qp), "largest_component_share": 1.0, "rigged_inside_share": 0.0,
+             "rigged_push_max_m": 0.0, "rigged_deep_push_share": 0.0}
         m.update((finish_extra or (lambda s: {}))(scale))
         calls["finish"].append(scale)
         ok, reasons = gf.gate(m, gf.CLOTHING_GATES)
@@ -125,7 +128,8 @@ def main() -> int:
           P.tolist())
 
     print("[2] too_small")
-    base = {"max_push_m": 0.05, "deep_push_share": 0.05, "largest_component_share": 0.99, "rigged_inside_share": 0.0}
+    base = {"max_push_m": 0.05, "deep_push_share": 0.05, "largest_component_share": 0.99, "rigged_inside_share": 0.0,
+            "rigged_push_max_m": 0.0, "rigged_deep_push_share": 0.0}
 
     def reasons(**over):
         return gf.gate({**base, **over}, gf.CLOTHING_GATES)[1]

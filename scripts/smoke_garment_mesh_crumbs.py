@@ -284,7 +284,8 @@ def main() -> int:
         G = garment_fit.CLOTHING_GATES["largest_component_share"]
         check("fit limit", G[:2], ("min", 0.90))
         check("fit limit is the mesh limit", G[1] == gm.MIN_COMPONENT_SHARE, True)
-        base = {"max_push_m": 0.05, "deep_push_share": 0.05, "rigged_inside_share": 0.0}
+        base = {"max_push_m": 0.05, "deep_push_share": 0.05, "rigged_inside_share": 0.0,
+                "rigged_push_max_m": 0.0, "rigged_deep_push_share": 0.0}
         check("0.9697 passes the fit gate",
               garment_fit.gate({**base, "largest_component_share": 0.9697}, garment_fit.CLOTHING_GATES)[0], True)
         check("0.8586 refuses at the fit gate",

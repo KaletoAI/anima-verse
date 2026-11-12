@@ -134,8 +134,16 @@ SIDE_DEEP_M = 0.03
 #: OFF). With Swing off the fit is today's hair again — ``hair_weights``' skin byte for byte, no chain joint — so the
 #: refit of every hair 9 fit (made with the chains bound: 1.2-4.5 % penetration against today's 0.01-0.21 %) lands
 #: it back in today's state; with Swing on each chain records its ``anchor_blend``. Refit on the CPU pool; no hub job.
+#: 8 / hair 11 (2026-11-12, plan fit-sdf-speed-drape phase A — ONE CPU refit of every stored fit, no hub job):
+#: the body field is the filled solid (Task 1: a double wall is closed by the three-axis slice fill, the clothing
+#: push keeps each vertex on its side, ``push_kept``), computed by the same numbers faster (Task 2: label fill,
+#: numba band, threaded KD queries), cached per body on a body-anchored lattice (Task 5, ``body_field``: the grid no
+#: longer moves with the garment's bounds) — and clothing gates the rigged clearance pass (Task 7:
+#: ``rigged_deep_push_share``, the existing 0.12 on the push that really happens; Ruling R7a). A fit the correct
+#: field now refuses keeps serving its old fit, the refusal recorded with its numbers and not retried at every start
+#: (Rulings D4 / R7c).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 10, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 11, "clothing": 8, "footwear": FOOTWEAR_FIT_VERSION}
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).
@@ -237,12 +245,25 @@ SKIRT_CENTRE_M = 0.02
 #                                                           blazer 2966 depth -3 cm   0.833 / 0.329 / 72 mm
 # The DEEP push share (``DEEP_PUSH_M`` = 3 cm, 2.5 x ``CLEAR_M``) separates them: correct <= 0.079, misplaced >= 0.146
 # — the limit 0.12 lies between; the max push gate passes every one of the misplaced pieces.
+#
+# The rigged clearance pass (``transfer_skinned`` step 4) is gated by its DEEP push share with the same limit
+# (2026-11-12, plan fit-sdf-speed-drape Task 7, Ruling R7a): ``rigged_deep_push_share`` measures the push that
+# really happens on the body the piece is worn on. A leaky field read a double wall's core as outside and pushed
+# nothing there; the filled field pushes such a piece out by its whole depth, and the gate refuses it instead of
+# passing a piece that stood inside the body. ``rigged_push_max_m`` / ``rigged_push_p95_m`` are REPORTED, not gated:
+# as on the unrigged push, the max passes every misplaced piece and refuses real ones — Kai's jacket marches the
+# side panel the transfer buried in the chest out by its own side (``_transfer_sides``, up to ``SIDE_MARCH_M``).
+# Measured that day on the phase-A evidence (accept.py, ``~/claude-out/fit-sdf-speed-drape/accept/t7``) — rigged
+# push max / p95 / deep share: Kai's jacket base 0.3026 m / 0.0317 / 0.0525 (437 vertices side-marched), jacket
+# obf 0.0432 / 0.0114 / 0.0013, jeans base 0.0483 / 0.0007 / 0.0019, jeans obf 0.0411 / 0.022 / 0.0147, Kira's
+# blazer 0.0199 / 0.0074 / 0.0.
 DEEP_PUSH_M = 0.03
 CLOTHING_GATES = {
     "max_push_m": ("max", 0.10, "largest push-out"),
     "deep_push_share": ("max", 0.12, "share of vertices pushed out more than 3 cm"),
     "largest_component_share": ("min", MESH_MIN_COMPONENT_SHARE, "area share of the largest component"),
     "rigged_inside_share": ("max", 0.01, "share of vertices inside the rigged body after the transfer"),
+    "rigged_deep_push_share": ("max", 0.12, "share of vertices pushed out more than 3 cm on the rigged body"),
 }
 
 # Scale retry (2026-11-10): a clothing fit refused ONLY because the piece is too small for the body — every failing
@@ -890,6 +911,7 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     Xd = push_kept(X, adjacency, sdf, clear=clear_m, iterations=rigged_iterations,
                    smooth_until=RIGGED_SMOOTH_UNTIL, margin=SIDE_MARGIN_M, toward=toward)
     X = X + Xd
+    rigged_push = np.linalg.norm(Xd, axis=1)
     d = sdf.sample(X)
     arm_cols = [i for i, n in enumerate(body_rigged.joint_names) if "arm" in norm_bone_name(n)]
     report = {
@@ -902,7 +924,9 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "sleeve_vertices": int(sleeve.sum()),
         "sleeve_below_waist": int((sleeve & ~upper).sum()),
         "relaxed_vertices": int(relaxed),
-        "rigged_push_max_m": float(np.linalg.norm(Xd, axis=1).max()) if len(Xd) else 0.0,
+        "rigged_push_max_m": float(rigged_push.max()) if len(rigged_push) else 0.0,
+        "rigged_push_p95_m": float(np.percentile(rigged_push, 95)) if len(rigged_push) else 0.0,
+        "rigged_deep_push_share": float((rigged_push > DEEP_PUSH_M).mean()) if len(rigged_push) else 0.0,
         "rigged_clearance_p1_m": float(np.percentile(d, 1)),
         "rigged_inside_share": float((d < 0).mean()),
     }
@@ -1492,9 +1516,20 @@ def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any]) -> 
         "deep_push_share": round(float((push > DEEP_PUSH_M).mean()) if len(push) else 0.0, 4),
         "largest_component_share": round(float(share.max()) if len(share) else 0.0, 4),
         "rigged_inside_share": round(float(transfer_report.get("rigged_inside_share", float("nan"))), 4),
+        "rigged_push_max_m": round(float(transfer_report.get("rigged_push_max_m", float("nan"))), 4),
+        "rigged_push_p95_m": round(float(transfer_report.get("rigged_push_p95_m", float("nan"))), 4),
+        "rigged_deep_push_share": round(float(transfer_report.get("rigged_deep_push_share", float("nan"))), 4),
         "rigged_clearance_p1_m": round(float(transfer_report.get("rigged_clearance_p1_m", float("nan"))), 4),
         "tris": int(len(Fw)),
     }
+
+
+def clothing_gates(*, torso_mapped: bool) -> Dict[str, Tuple[str, float, str]]:
+    """The ``CLOTHING_GATES`` a clothing fit is judged by. A piece whose trunk is re-expressed from its base fit
+    (``map_torso``, outfit bodies) no longer stands where the image framing put it: the push numbers of that
+    placement (``PLACEMENT_GATE_KEYS``) are recorded, not gated. The rigged pass's gates (``rigged_inside_share``,
+    ``rigged_deep_push_share``) hold for every fit — that push really happens on the body the piece is worn on."""
+    return {key: spec for key, spec in CLOTHING_GATES.items() if not (torso_mapped and key in PLACEMENT_GATE_KEYS)}
 
 
 def gate(m: Dict[str, Any], gates: Dict[str, Tuple[str, float, str]]) -> Tuple[bool, List[str]]:
@@ -1776,10 +1811,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         names = [body_r.joint_names[i] for i in used]
         m = clothing_metrics(X, Fk, Qs * k, Qp * k, transfer_report)
         torso_mapped = "torso" in ((transfer_report.get("limbs") or {}).get("chains") or {})
-        # A piece whose trunk is re-expressed from its base fit (``map_torso``, outfit bodies) no longer stands
-        # where the image framing put it: the push numbers of that placement are recorded, not gated.
-        ok, reasons = gate(m, {key: spec for key, spec in CLOTHING_GATES.items()
-                               if not (torso_mapped and key in PLACEMENT_GATE_KEYS)})
+        ok, reasons = gate(m, clothing_gates(torso_mapped=torso_mapped))
 
         garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material)
         crotch = crotch_height(body_r)

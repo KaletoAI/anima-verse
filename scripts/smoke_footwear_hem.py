@@ -460,7 +460,7 @@ def main() -> int:
         check("inner = {boots: shaft_sha}", rec_t.get("inner", {}).get(boots, {}).get("sha256"), gl.shaft_sha(shafts))
         check("lsig = layer_sig(inner, tucked, plane)", lsig_t, gl.layer_sig({boots: gl.shaft_sha(shafts)}, mode="tucked", plane_m=plane))
         check("plain layer_sig unchanged (Task 2 payload)", gl.layer_sig({"slip": "abc"}),
-              hashlib.md5(json.dumps({"inner": {"slip": "abc"}, "version": 1}, sort_keys=True).encode()).hexdigest()[:12])
+              hashlib.md5(json.dumps({"inner": {"slip": "abc"}, "version": 2}, sort_keys=True).encode()).hexdigest()[:12])
         node_t = trousers_node(asm.read_bytes())
         Pt = np.asarray(node_t.positions, float)
         check("tucked node 3200 vertices / 6208 faces", (len(Pt), len(node_t.indices)), (3200, 6208))

@@ -73,8 +73,11 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
       o 0.020 (f 1)    left LeftBreast 1                  right RightBreast 0.6 / Spine2 0.4 (as the skin)
       o 0.0375 (f 0.5) left LeftBreast 0.5 / Spine2 0.5   right RightBreast 0.3 / Spine2 0.7
       o 0.060 (f 0)    left Spine2 1                      right Spine2 1 (no extension bone)
-[4] Gates: the keys are max_push_m / deep_push_share / largest_component_share / rigged_inside_share (moved_share is
-    reported, not gated — 2026-11-10); the spike dress numbers (max push 0.0293 units x 1.70 = 0.0498 m, one
+[4] Gates: the keys are max_push_m / deep_push_share / largest_component_share / rigged_inside_share /
+    rigged_deep_push_share (moved_share is reported, not gated — 2026-11-10; the rigged deep push gated since
+    2026-11-12, plan fit-sdf-speed-drape Task 7 — its max ``rigged_push_max_m`` reported, not gated, Ruling R7a: the
+    numbers in the fixtures below are Kira's Black Blazer's rigged pass on base20d5701a measured that day,
+    0.0199 m / 0.0 — not recorded for the spike dress, taken for it too); the spike dress numbers (max push 0.0293 units x 1.70 = 0.0498 m, one
     component, inside 0.0, deep push share 0.079 as measured through the product) and the product's on the same dress
     (0.0501 m, 0.9888, 0.0, 0.079; ``garment_fit.CLOTHING_GATES`` comment) pass; Kira's Black Blazer (max push
     0.0424 m, moved 0.991, deep 0.0309, component 0.9975, inside 0.0) passes; the same blazer placed 5 % small (deep
@@ -383,18 +386,20 @@ def test_extension(rig):
 def test_gates():
     from app.core import garment_fit as gf
     G = gf.CLOTHING_GATES
-    check(set(G) == {"max_push_m", "deep_push_share", "largest_component_share", "rigged_inside_share"},
+    check(set(G) == {"max_push_m", "deep_push_share", "largest_component_share", "rigged_inside_share",
+                     "rigged_deep_push_share"},
           f"[4] clothing gate keys ({sorted(G)})")
+    rigged = {"rigged_push_max_m": 0.0199, "rigged_deep_push_share": 0.0}
     spike = {"max_push_m": 0.0498, "deep_push_share": 0.079, "largest_component_share": 1.0,
-             "rigged_inside_share": 0.0}
+             "rigged_inside_share": 0.0, **rigged}
     ok, reasons = gf.gate(spike, G)
     check(ok, f"[4] the spike dress numbers pass ({reasons})")
     product = {"max_push_m": 0.0501, "moved_share": 0.929, "deep_push_share": 0.079, "largest_component_share": 0.9888,
-               "rigged_inside_share": 0.0}
+               "rigged_inside_share": 0.0, **rigged}
     ok, reasons = gf.gate(product, G)
     check(ok, f"[4] the product numbers on the spike dress pass ({reasons})")
     blazer = {"max_push_m": 0.0424, "moved_share": 0.991, "deep_push_share": 0.0309, "largest_component_share": 0.9975,
-              "rigged_inside_share": 0.0}
+              "rigged_inside_share": 0.0, **rigged}
     ok, reasons = gf.gate(blazer, G)
     check(ok, f"[4] the Black Blazer numbers pass, moved share 0.991 reported only ({reasons})")
     ok, reasons = gf.gate(dict(blazer, deep_push_share=0.146), G)

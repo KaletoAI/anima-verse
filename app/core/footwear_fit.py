@@ -306,7 +306,10 @@ from app.core.footwear_gates import check_gates
 #:    ``footwear_cut`` version 7): ``height_needed`` reads the slimmed foot, the side records its toe tip
 #:    (``toe_x_m``) for the cut, and a toe box the height fit cannot raise enough names the mesh only when the mesh
 #:    disagrees with its image (``too_flat_reason``).
-FOOTWEAR_FIT_VERSION = 16
+#: 17 (plan 2026-11-12 fit-sdf-speed-drape phase A): the body field is the three-axis slice-filled solid for every
+#:    fit (Task 1; the footwear push had the y-slices only, ``fill_slices=True``), computed faster (Task 2) and
+#:    cached per body on a body-anchored lattice (Task 5) — the shaft push moves by up to a voxel. One CPU refit.
+FOOTWEAR_FIT_VERSION = 17
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).
