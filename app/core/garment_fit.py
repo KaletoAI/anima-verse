@@ -110,8 +110,10 @@ RIGGED_SMOOTH_UNTIL = 7
 #: hair 6 (2026-11-11): the HairDeck scalp cap takes the hair's median colour (was the 20th percentile).
 #: hair 7 (2026-11-11): the HairDeck smoothed push runs without the crown spread (``garment_hairdeck._push``): its
 #: flood entered the layer-push blend band as a ring round the head at eye level (Rosi, 32.5 mm p50 at 1.55 m).
+#: hair 8 (2026-11-12): the HairDeck back curtain is draped behind the nape before the push
+#: (``garment_hairdeck.drape_back``): pushed to its nearest surface it wrapped round the neck as a collar (Rosi).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 7, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 8, "clothing": 7, "footwear": FOOTWEAR_FIT_VERSION}
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).

@@ -57,6 +57,19 @@ CARD_CLEAR_M = 0.004
 LAYER_BAND_M = 0.006
 LAYER_BLEND_M = 0.03
 LAYER_CLAMP_ITERATIONS = 4
+# The back curtain is draped BEHIND the nape before the push (``drape_back``, FIT_VERSION hair 8). HairDeck's
+# proxy is a head without a neck; its inner back cards hang straight down from the occiput, through where the
+# neck is. Rosi 2026-11-12 (~/claude-out/rosi-hair2): below the ear line 7.7k welded vertices of the back curtain
+# lay inside the neck / upper back (96-98 % of them on cards rooted behind the head's mid plane), up to 5-7 cm deep,
+# some on a sheet through the middle of the neck (y 1.40: z 0.10 against the neck's 0.04 .. 0.15). The push moves
+# each to its NEAREST surface — for a vertex 1 cm from the neck's side and 6 cm from its back that is the side, so
+# the curtain wrapped round the neck as a collar (push p50 35-44 mm in the back sectors, 40-70 % of it upward).
+# Draped, a back card's vertex below the ear line that lies closer than the clearance goes backward (-z) out of
+# the body (stepping DRAPE_STEP_M up to DRAPE_MAX_M; beyond that the push decides), and along its card the shift
+# is carried down (a strand once behind the nape stays behind) and faded in over DRAPE_RAMP_M above.
+DRAPE_STEP_M = 0.002
+DRAPE_MAX_M = 0.10
+DRAPE_RAMP_M = 0.03
 # The face stays clear (``_clear_face``, after the push), Kira 2026-11-11 (~/claude-out/kira-hairdeck,
 # face_back.py): 100 hair vertices hung in the face box (brow .. chin, the inner FACE_CLEAR_SHARE of the face width
 # at that height, in front of the head's mid plane), p50 54 mm in front of that plane — HairDeck's side strands fall
@@ -110,6 +123,19 @@ GATE_TILT_STEP_DEG = 1.5
 #: Bounds of the manual values (the Hair tab's inputs; ``garment_hair.set_hair_placement``).
 TILT_LIMIT_DEG = 15.0
 FORWARD_LIMIT_M = 0.03
+#: Hair width (``narrow_sides``, per character, profile ``hair_width_scale``; None = 1, HairDeck's own width): the
+#: hair's lateral reach beyond the head scaled about the head's mid plane. Rosi 2026-11-12 (~/claude-out/rosi-hair2):
+#: the sides stand off the head by HairDeck's own volume — proxy -> hair at 1.52-1.56 m p50 11 / p90 29-34 mm in
+#: HairDeck's space (x the ICP scale 1.50, whose proxy is no wider than her head: half width 77.5 mm against
+#: 86.5 mm), placed 8-10 / 28-32 mm, final 12-15 / 28-33 mm; the push leaves the outer reach as it was (|x| p90
+#: 101 / 107 mm placed, 102 / 108 final). Nothing in the fit adds it, so it is a per-character taste, not a default.
+WIDTH_SCALE_LIMITS = (0.5, 1.5)
+#: The head's half width per height (``_side_profile``): Head- or Neck-weighted body vertices, the
+#: WIDTH_PROFILE_PERCENTILE of |x - cx| per WIDTH_PROFILE_BIN_M bin (an ear is no head width), smoothed over
+#: WIDTH_PROFILE_SMOOTH bins; above / below the measured bins the outermost value holds.
+WIDTH_PROFILE_BIN_M = 0.005
+WIDTH_PROFILE_PERCENTILE = 95
+WIDTH_PROFILE_SMOOTH = 5
 #: Head centre profile for the landmarks: Head-weighted body vertices with |x - head cx| below this, in y bins.
 PROFILE_HALF_WIDTH_M = 0.02
 PROFILE_BIN_M = 0.005
@@ -135,7 +161,7 @@ FALLBACK_BROW_RATIO = 0.6
 FALLBACK_FLOOR_RATIO = 0.4
 
 GATES = {
-    "max_push_m": ("max", 0.12, "largest push-out"),
+    "max_push_m": ("max", 0.12, "largest push-out after the drape"),
     "moved_share": ("max", 0.90, "share of vertices moved by the push-out"),
     "icp_resid_p95_m": ("max", 0.012, "95th percentile of the proxy-to-cranium distance"),
 }
@@ -468,11 +494,51 @@ def solve_tilt(Q: np.ndarray, pivot: np.ndarray, forward_m: float, box: Tuple[fl
     return (lo + hi) / 2, "solved"
 
 
-def _check_manual(forward_m: Optional[float], tilt_deg: Optional[float]) -> None:
+def _check_manual(forward_m: Optional[float], tilt_deg: Optional[float], width_scale: Optional[float] = None) -> None:
     for value, limit, name in ((forward_m, FORWARD_LIMIT_M, "forward_m"), (tilt_deg, TILT_LIMIT_DEG, "tilt_deg")):
         if value is not None and not (isinstance(value, (int, float)) and math.isfinite(value)
                                       and abs(value) <= limit):
             raise ValueError(f"The hair {name} must be a number within +-{limit:g}, got {value!r}")
+    lo, hi = WIDTH_SCALE_LIMITS
+    if width_scale is not None and not (isinstance(width_scale, (int, float)) and math.isfinite(width_scale)
+                                        and lo <= width_scale <= hi):
+        raise ValueError(f"The hair width_scale must be a number within {lo:g}..{hi:g}, got {width_scale!r}")
+
+
+def _side_profile(P: np.ndarray, side_v: np.ndarray, cx: float) -> Tuple[np.ndarray, np.ndarray]:
+    """``(heights, half widths)`` of the head and neck (``side_v``: Head- or Neck-weighted body vertices) about
+    the mid plane ``cx``: per ``WIDTH_PROFILE_BIN_M`` bin the ``WIDTH_PROFILE_PERCENTILE`` of ``|x - cx|``, a
+    moving mean over ``WIDTH_PROFILE_SMOOTH`` filled bins."""
+    S = P[side_v]
+    y0 = float(S[:, 1].min())
+    idx = ((S[:, 1] - y0) / WIDTH_PROFILE_BIN_M).astype(np.int64)
+    ys, hs = [], []
+    for b in np.unique(idx):
+        sel = idx == b
+        if sel.sum() >= 3:
+            ys.append(y0 + (b + 0.5) * WIDTH_PROFILE_BIN_M)
+            hs.append(float(np.percentile(np.abs(S[sel, 0] - cx), WIDTH_PROFILE_PERCENTILE)))
+    h = np.asarray(hs)
+    k = WIDTH_PROFILE_SMOOTH // 2
+    smooth = np.array([h[max(0, i - k):i + k + 1].mean() for i in range(len(h))])
+    return np.asarray(ys), smooth
+
+
+def narrow_sides(Q: np.ndarray, profile: Tuple[np.ndarray, np.ndarray], cx: float, width_scale: float
+                 ) -> np.ndarray:
+    """The hair ``Q`` with its lateral reach beyond the head scaled by ``width_scale`` about the mid plane ``cx``:
+    a vertex ``a = |x - cx|`` beyond the head's half width ``h(y)`` (``_side_profile``, interpolated) goes to
+    ``h + (a - h) * width_scale``; within ``h`` it stays. Monotone in ``a`` (no layer passes another), the identity
+    at the head's side, so hair lying on the scalp and the front hairline (``HAIRLINE_HALF_WIDTH`` of the width,
+    inside ``h``) keep their place; the push-out afterwards clears what moved into the body."""
+    Q = np.asarray(Q, np.float64).copy()
+    if width_scale == 1.0 or not len(profile[0]):
+        return Q
+    h = np.interp(Q[:, 1], profile[0], profile[1])
+    off = Q[:, 0] - cx
+    a = np.abs(off)
+    Q[:, 0] = cx + np.sign(off) * np.where(a > h, h + (a - h) * width_scale, a)
+    return Q
 
 
 # --- scalp cap -----------------------------------------------------------------------------------------------------
@@ -553,21 +619,101 @@ def layer_push(P: np.ndarray, sdf, *, clear: float = CARD_CLEAR_M, band: float =
     return _clamp(P, disp, sdf, clear, LAYER_CLAMP_ITERATIONS)
 
 
+def _cards(Fw: np.ndarray, n: int) -> np.ndarray:
+    """The card (connected component of the welded faces) of each of the ``n`` vertices."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    F = np.asarray(Fw, np.int64).reshape(-1, 3)
+    A = coo_matrix((np.ones(F.size), (F.ravel(), np.roll(F, 1, 1).ravel())), shape=(n, n))
+    return connected_components(A, directed=False)[1]
+
+
+def drape_back(P: np.ndarray, Fw: np.ndarray, sdf, *, below_y: float, back_z: float,
+               clear: float = CARD_CLEAR_M) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """``(displacement along -z, report)`` that hangs the back curtain behind the nape (``DRAPE_STEP_M``).
+
+    A back card is one whose highest vertex lies behind ``back_z`` (the head's mid plane). Each of its vertices
+    below ``below_y`` (the ear line) with ``sdf < clear`` needs the smallest backward step (multiples of
+    ``DRAPE_STEP_M``, at most ``DRAPE_MAX_M``) that puts it ``clear`` outside; none found = 0 (the push decides).
+    Along the card a vertex then takes ``max_u need(u) * ramp(y - y_u)`` — ramp 1 at or below u (carried down the
+    strand), falling linearly to 0 at ``DRAPE_RAMP_M`` above u — so the strand bends behind the nape instead of
+    each vertex jumping to its own nearest surface."""
+    P = np.asarray(P, np.float64)
+    n = len(P)
+    shift = np.zeros(n)
+    if not n or not len(Fw):
+        return np.zeros_like(P), {"cards": 0, "vertices": 0, "max_m": 0.0}
+    card = _cards(Fw, n)
+    top = np.full(card.max() + 1, -np.inf)
+    np.maximum.at(top, card, P[:, 1])
+    order = np.lexsort((-P[:, 1], card))
+    root = order[np.r_[0, np.flatnonzero(np.diff(card[order])) + 1]]
+    root_z = np.empty(len(top))
+    root_z[card[root]] = P[root, 2]
+    cand = np.flatnonzero((root_z[card] < back_z) & (P[:, 1] < below_y))
+    need = np.zeros(n)
+    if len(cand):
+        d = sdf.sample(P[cand])
+        todo = cand[d < clear]
+        steps = np.arange(1, int(round(DRAPE_MAX_M / DRAPE_STEP_M)) + 1) * DRAPE_STEP_M
+        open_ = np.ones(len(todo), bool)
+        for s in steps:
+            if not open_.any():
+                break
+            idx = todo[open_]
+            X = P[idx].copy()
+            X[:, 2] -= s
+            ok = sdf.sample(X) >= clear
+            need[idx[ok]] = s
+            open_[np.flatnonzero(open_)[ok]] = False
+    for c in np.unique(card[need > 0]):
+        members = np.flatnonzero(card == c)
+        src = members[need[members] > 0]
+        rise = P[members, 1][:, None] - P[src, 1][None, :]        # > 0: the member lies above the source
+        ramp = np.clip(1.0 - rise / DRAPE_RAMP_M, 0.0, 1.0)
+        shift[members] = (need[src][None, :] * ramp).max(1)
+    disp = np.zeros_like(P)
+    disp[:, 2] = -shift
+    return disp, {"cards": int(len(np.unique(card[shift > 0]))), "vertices": int((need > 0).sum()),
+                  "shifted": int((shift > MOVED_EPS_M).sum()), "max_m": round(float(shift.max()), 4)}
+
+
+def _drape_frame(body) -> Optional[Tuple[float, float]]:
+    """``(ear line y, head mid-plane z)`` of a skinned body for ``drape_back``; None without a skin (a bare
+    test mesh: no drape)."""
+    if not getattr(body, "joint_names", None):
+        return None
+    from app.core.garment_fit import ear_line_height
+    head_v = dense_weights(body)[:, joint_index(body, "head")] > 0.5
+    return ear_line_height(body), _head_box(body.positions, head_v)[1]
+
+
 def _push(Q: np.ndarray, F: np.ndarray, U, body) -> Dict[str, Any]:
-    """The push-out of the placed hair ``Q`` on the rigged body (welded cards, SDF over the hair's bounds): on the
-    head (the top ``SPREAD_DEPTH_M``) layer-keeping (``layer_push``), below it the smoothed ``push_out`` without
-    its crown spread (the spread's flood would enter the blend band as a ring, see ``LAYER_BLEND_M``), blended
-    over ``LAYER_BLEND_M`` and clamped once more."""
+    """The push-out of the placed hair ``Q`` on the rigged body (welded cards, SDF over the hair's bounds): the back
+    curtain first draped behind the nape (``drape_back``, below the ear line, behind the Head-weighted vertices'
+    mid plane; only on a skinned body), then on the head (the top ``SPREAD_DEPTH_M``) layer-keeping
+    (``layer_push``), below it the smoothed ``push_out`` without its crown spread (the spread's flood would enter
+    the blend band as a ring, see ``LAYER_BLEND_M``), blended over ``LAYER_BLEND_M`` and clamped once more."""
     Pw, Fw, inv = weld(Q, F, U)
-    sdf = body_sdf(body.positions, body.faces, vox=VOX_M,
-                   bounds=(Pw.min(0) - SDF_MARGIN_M, Pw.max(0) + SDF_MARGIN_M))
+    frame = _drape_frame(body)
+    lo = Pw.min(0) - SDF_MARGIN_M
+    if frame is not None:
+        lo[2] -= DRAPE_MAX_M  # the drape's backward steps stay inside the field
+    sdf = body_sdf(body.positions, body.faces, vox=VOX_M, bounds=(lo, Pw.max(0) + SDF_MARGIN_M))
     d0 = sdf.sample(Pw)
-    _q, smooth = push_out(Pw, Fw, sdf, clear=CARD_CLEAR_M)
-    layered = layer_push(Pw, sdf)
-    w = np.clip((Pw[:, 1] - (Pw[:, 1].max() - SPREAD_DEPTH_M)) / LAYER_BLEND_M, 0.0, 1.0)[:, None]
-    disp = _clamp(Pw, w * layered + (1.0 - w) * smooth, sdf, CARD_CLEAR_M, LAYER_CLAMP_ITERATIONS)
+    if frame is None:
+        drape, drape_info = np.zeros_like(Pw), None
+    else:
+        drape, drape_info = drape_back(Pw, Fw, sdf, below_y=frame[0], back_z=frame[1])
+    Pd = Pw + drape
+    _q, smooth = push_out(Pd, Fw, sdf, clear=CARD_CLEAR_M)
+    layered = layer_push(Pd, sdf)
+    w = np.clip((Pd[:, 1] - (Pd[:, 1].max() - SPREAD_DEPTH_M)) / LAYER_BLEND_M, 0.0, 1.0)[:, None]
+    push = _clamp(Pd, w * layered + (1.0 - w) * smooth, sdf, CARD_CLEAR_M, LAYER_CLAMP_ITERATIONS)
+    disp = drape + push
     Qp = Pw + disp
-    return {"Pw": Pw, "Fw": Fw, "inv": inv, "sdf": sdf, "d0": d0, "Qp": Qp, "disp": disp}
+    return {"Pw": Pw, "Fw": Fw, "inv": inv, "sdf": sdf, "d0": d0, "Qp": Qp, "disp": disp, "push": push,
+            "drape": drape_info}
 
 
 def _ring_max(values: np.ndarray, adjacency, falloff: float, rings: int) -> np.ndarray:
@@ -622,8 +768,8 @@ def _clear_face(Fw: np.ndarray, Qp: np.ndarray, sdf, body, head_w: np.ndarray,
 
 def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, head_v: np.ndarray, chin: float,
                     top: float, forward_m: Optional[float], tilt_deg: Optional[float],
-                    gates: Optional[Dict[str, Tuple[str, float, str]]] = None
-                    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+                    gates: Optional[Dict[str, Tuple[str, float, str]]] = None,
+                    width_scale: Optional[float] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Apply the placement correction to the placed hair ``Q0`` and push it out: ``(push, placement report)``.
 
     ``forward_m`` None = ``DEFAULT_FORWARD_M``. ``tilt_deg`` None = auto: the hairline target comes from
@@ -639,9 +785,26 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
     first, and the first that passes is taken (``tilt_solve`` gets ``+push_gate``; report ``gate_search``). Kira's
     base ``base20d5701a`` (head ~5 cm further forward over the upper back, pitched back) puts the back curtain 8-9.5
     cm deep into the upper back at tilt 0 (push 0.12-0.15); a forward tilt swings that curtain back out of it.
-    A manual tilt is never searched: it is fitted as set, and the gate decides."""
+    A manual tilt is never searched: it is fitted as set, and the gate decides.
+
+    ``width_scale`` (None = 1) narrows or widens the placed hair's sides (``narrow_sides``) after the forward /
+    tilt and before the push; the hairline the tilt aims with lies inside the head's width, so it is not moved."""
     gates = GATES if gates is None else gates
     box = _head_box(body.positions, head_v)
+    width = 1.0 if width_scale is None else float(width_scale)
+    side_profile: Tuple[np.ndarray, np.ndarray] = (np.zeros(0), np.zeros(0))
+    if width != 1.0:
+        side_v = head_v.copy()
+        try:
+            side_v |= dense_weights(body)[:, joint_index(body, "neck")] > 0.5
+        except KeyError:
+            pass
+        side_profile = _side_profile(body.positions, side_v, box[0])
+
+    def placed(tilt: float) -> np.ndarray:
+        Q = adjust_placement(Q0, pivot, forward, tilt) if (forward or tilt) else Q0
+        return narrow_sides(Q, side_profile, box[0], width) if width != 1.0 else Q
+
     forward = DEFAULT_FORWARD_M if forward_m is None else float(forward_m)
     landmarks, landmark_source, rejected = placement_landmarks(body.positions, head_v, chin, top)
     target = hairline_target(landmarks["brow_y"], landmarks["crown_y"]) if landmarks else None
@@ -656,7 +819,7 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
             tilt, how = 0.0, "no_landmarks"
         else:
             tilt, how = solve_tilt(Q0, pivot, forward, box, aim, floor)
-        Q = adjust_placement(Q0, pivot, forward, tilt) if (forward or tilt) else Q0
+        Q = placed(tilt)
         pushed = _push(Q, F, U, body)
         pushed_hl = front_hairline(pushed["Qp"], box, floor)
         if not auto or pushed_hl is None or how == "no_hairline" or rounds >= PLACEMENT_ROUNDS:
@@ -672,7 +835,7 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
         grid = np.round(np.arange(0.0, AUTO_TILT_MAX_DEG + 1e-9, GATE_TILT_STEP_DEG), 3)
         picked = None
         for cand in sorted((float(c) for c in grid if abs(c - tilt) > 1e-6), key=lambda c: (abs(c - tilt), c)):
-            Qc = adjust_placement(Q0, pivot, forward, cand)
+            Qc = placed(cand)
             pc = _push(Qc, F, U, body)
             tried.append([cand, _push_max(pc)])
             if _push_passes(pc, gates):
@@ -687,6 +850,7 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
     return pushed, {
         "forward_m": round(forward, 5), "forward_source": "default" if forward_m is None else "manual",
         "tilt_deg": round(tilt, 3), "tilt_source": "manual" if tilt_deg is not None else "auto",
+        "width_scale": round(width, 3), "width_source": "manual" if width_scale is not None else "default",
         "tilt_solve": how, "rounds": rounds, "pivot": [round(float(v), 5) for v in pivot], "landmarks": landmarks,
         "landmark_source": landmark_source, "landmarks_rejected": rejected,
         "hairline_ratio": HAIRLINE_BROW_RATIO, "hairline_target_y": r5(target),
@@ -697,7 +861,8 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
 
 
 def _push_max(pushed: Dict[str, Any]) -> float:
-    disp = pushed["disp"]
+    """The largest push-out after the drape (``drape_back`` is a deliberate move, bounded by ``DRAPE_MAX_M``)."""
+    disp = pushed.get("push", pushed["disp"])
     return round(float(np.linalg.norm(disp, axis=1).max()), 4) if len(disp) else 0.0
 
 
@@ -708,7 +873,7 @@ def _push_passes(pushed: Dict[str, Any], gates: Optional[Dict[str, Tuple[str, fl
     mag = np.linalg.norm(pushed["disp"], axis=1)
     if not len(mag):
         return True
-    return (round(float(mag.max()), 4) <= gates["max_push_m"][1]
+    return (_push_max(pushed) <= gates["max_push_m"][1]
             and round(float((mag > MOVED_EPS_M).mean()), 4) <= gates["moved_share"][1])
 
 
@@ -716,7 +881,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                  colour_target: Optional[Tuple[float, float, float]],
                  forward_m: Optional[float] = None, tilt_deg: Optional[float] = None,
                  colour_profile: Optional[Tuple[float, float, float]] = None,
-                 length_class: Optional[str] = None) -> FitResult:
+                 length_class: Optional[str] = None, width_scale: Optional[float] = None) -> FitResult:
     """Fit HairDeck hair onto the rigged base body.
 
     ``nohead_glb``: the hair (node ``hair_cards``, ``COLOR_0``); ``proxy_glb``: the result file with the
@@ -725,12 +890,13 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     CIELAB transfer onto it (``_transfer_colours``; ``colour_target`` wins). ``length_class`` (the profile's hair
     length class, e.g. ``"short"``) picks the gates (``gates_for``). ``forward_m`` / ``tilt_deg``: the placement correction after ``place_proxy`` (move
     along +z; forward pitch about x through the placed proxy centre), None = automatic (``DEFAULT_FORWARD_M``; the
-    tilt that brings the front hairline to the brow line, ``_placement``). ValueError for a manual value beyond
-    ``FORWARD_LIMIT_M`` / ``TILT_LIMIT_DEG``. Returns the hair plus scalp cap as ONE garment (rigged bind space,
+    tilt that brings the front hairline to the brow line, ``_placement``). ``width_scale``: the sides' reach beyond
+    the head scaled (``narrow_sides``), None = 1. ValueError for a manual value beyond ``FORWARD_LIMIT_M`` /
+    ``TILT_LIMIT_DEG`` / ``WIDTH_SCALE_LIMITS``. Returns the hair plus scalp cap as ONE garment (rigged bind space,
     Head -> Spine2 weights, cap all Head, ``COLOR_0``, double-sided), the metrics and the gates' verdict.
     """
     from scipy.spatial import cKDTree
-    _check_manual(forward_m, tilt_deg)
+    _check_manual(forward_m, tilt_deg, width_scale)
     gates = gates_for(length_class)
     P, F, U, C, material = card_arrays(nohead_glb, node="hair_cards")
     if C is None:
@@ -754,8 +920,9 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     pivot = s * (proxy.min(0) + proxy.max(0)) / 2 + t
     # placement correction + push-out on the rigged body
     pushed, placement = _place_and_push(s * np.asarray(P, np.float64) + t, pivot, F, U, body, head_v, chin, top,
-                                        forward_m, tilt_deg, gates)
+                                        forward_m, tilt_deg, gates, width_scale)
     Pw, inv, sdf, d0, Qp, disp = (pushed[k] for k in ("Pw", "inv", "sdf", "d0", "Qp", "disp"))
+    push_mag = np.linalg.norm(pushed["push"], axis=1)
     Qp, face = _clear_face(pushed["Fw"], Qp, sdf, body, head_w, placement["landmarks"], chin,
                            placement["hairline_pushed_y"])
     d1 = sdf.sample(Qp)
@@ -788,7 +955,8 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                           colors=np.vstack([colours, np.tile(cap_colour, (nc, 1))]))
 
     m = {
-        "max_push_m": round(float(mag.max()) if len(mag) else 0.0, 4),
+        # the push-out after the drape (``_push_max``); the drape is reported in ``report.push.drape``
+        "max_push_m": round(float(push_mag.max()) if len(push_mag) else 0.0, 4),
         "moved_share": round(float((mag > MOVED_EPS_M).mean()) if len(mag) else 0.0, 4),
         "icp_scale": round(s, 4),
         "icp_resid_median_m": round(float(np.median(resid)), 5),
@@ -802,6 +970,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
         # Reported, not gated: the placement correction actually applied.
         "forward_m": placement["forward_m"],
         "tilt_deg": placement["tilt_deg"],
+        "width_scale": placement["width_scale"],
     }
     ok, reasons = _gate_against(m, gates)
     near_hair, _ = cKDTree(Qp).query(cranium)
@@ -811,7 +980,8 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
         "icp": icp,
         "placement": placement,
         "length_class": length_class,
-        "push": {"clear_m": CARD_CLEAR_M, "welded_vertices": int(len(Pw)), "inside_before": int((d0 < 0).sum()),
+        "push": {"clear_m": CARD_CLEAR_M, "welded_vertices": int(len(Pw)), "drape": pushed.get("drape"),
+                 "inside_before": int((d0 < 0).sum()),
                  "closer_than_clear_before": int((d0 < CARD_CLEAR_M).sum()), "inside_after": int((d1 < 0).sum()),
                  "min_clear_after_m": round(float(d1.min()), 5) if len(d1) else None,
                  "p95_push_m": round(float(np.percentile(mag[mag > MOVED_EPS_M], 95)), 4)

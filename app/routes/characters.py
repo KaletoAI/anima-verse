@@ -1868,6 +1868,7 @@ class HairPlacementRequest(BaseModel):
     # validates (400 with its message, not a schema 422).
     forward_m: Any = None
     tilt_deg: Any = None
+    width_scale: Any = None
 
 
 class FootwearWidthCapRequest(BaseModel):
@@ -2122,22 +2123,24 @@ def set_character_hair_colour(character_name: str, body: HairColourRequest,
 @router.post("/{character_name}/hair/placement")
 def set_character_hair_placement(character_name: str, body: HairPlacementRequest,
                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Set the HairDeck hair placement: ``forward_m`` (metres along +z) and
-    ``tilt_deg`` (forward pitch, degrees), each a number or null for
-    automatic (forward ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to
-    the brow line). 400 for a non-number or a value beyond its limit. Only
+    """Set the HairDeck hair placement: ``forward_m`` (metres along +z),
+    ``tilt_deg`` (forward pitch, degrees) and ``width_scale`` (the sides'
+    reach beyond the head), each a number or null for automatic (forward
+    ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to the brow line,
+    width 1). 400 for a non-number or a value beyond its limit. Only
     the fit fingerprint changes: the next run re-fits from the cached
     HairDeck job, without a HairDeck call (no run starts here)."""
     from app.core import garment_hair
     _require_character(character_name)
     try:
-        saved = garment_hair.set_hair_placement(character_name, body.forward_m, body.tilt_deg)
+        saved = garment_hair.set_hair_placement(character_name, body.forward_m, body.tilt_deg,
+                                                body.width_scale)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not saved:
         raise HTTPException(status_code=500, detail="Saving the character profile failed")
     from app.models.character import get_character_profile
-    return garment_hair.hair_placement(get_character_profile(character_name) or {})
+    return {"width_scale": None, **garment_hair.hair_placement(get_character_profile(character_name) or {})}
 
 
 @router.post("/{character_name}/hair", status_code=202)

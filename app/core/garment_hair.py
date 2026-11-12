@@ -194,17 +194,33 @@ def set_hair_colour(character_name: str, hex_colour: str) -> bool:
 
 
 #: The profile keys of the HairDeck placement correction (``garment_hairdeck.fit_hairdeck``'s ``forward_m`` /
-#: ``tilt_deg``); empty = automatic.
-PLACEMENT_KEYS: Dict[str, str] = {"forward_m": "hair_forward_m", "tilt_deg": "hair_tilt_deg"}
+#: ``tilt_deg`` / ``width_scale``); empty = automatic (width: 1, HairDeck's own).
+PLACEMENT_KEYS: Dict[str, str] = {"forward_m": "hair_forward_m", "tilt_deg": "hair_tilt_deg",
+                                  "width_scale": "hair_width_scale"}
+#: Placement values that enter ``hair_placement`` (and so the fit fingerprint) only when set: a hair without a
+#: width keeps the fingerprint it had before the width existed (the CPU refit sweep only re-fits a stale fit under
+#: its unchanged fingerprint, ``garment_refit.outdated_fits``).
+_PLACEMENT_WHEN_SET = ("width_scale",)
 
 
-def _placement_limit(name: str) -> float:
+def _placement_range(name: str) -> Tuple[float, float]:
     from app.core import garment_hairdeck
-    return garment_hairdeck.FORWARD_LIMIT_M if name == "forward_m" else garment_hairdeck.TILT_LIMIT_DEG
+    if name == "width_scale":
+        return garment_hairdeck.WIDTH_SCALE_LIMITS
+    limit = garment_hairdeck.FORWARD_LIMIT_M if name == "forward_m" else garment_hairdeck.TILT_LIMIT_DEG
+    return -limit, limit
+
+
+def placement_limits() -> Dict[str, Any]:
+    """The bounds of the manual values for the Hair tab: ``|forward_m|``, ``|tilt_deg|`` and ``[lo, hi]`` of
+    ``width_scale``."""
+    from app.core import garment_hairdeck
+    return {"forward_m": garment_hairdeck.FORWARD_LIMIT_M, "tilt_deg": garment_hairdeck.TILT_LIMIT_DEG,
+            "width_scale": list(garment_hairdeck.WIDTH_SCALE_LIMITS)}
 
 
 def _placement_value(name: str, raw: Any) -> Optional[float]:
-    """A manual placement value as float, None for empty. ValueError for a non-number or one beyond its limit."""
+    """A manual placement value as float, None for empty. ValueError for a non-number or one beyond its range."""
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         return None
     if isinstance(raw, bool):
@@ -213,35 +229,43 @@ def _placement_value(name: str, raw: Any) -> Optional[float]:
         value = float(raw)
     except (TypeError, ValueError):
         raise ValueError(f"hair {name} must be a number or empty") from None
-    limit = _placement_limit(name)
-    if not math.isfinite(value) or abs(value) > limit:
-        raise ValueError(f"hair {name} must be within +-{limit:g}")
+    lo, hi = _placement_range(name)
+    if not math.isfinite(value) or not lo <= value <= hi:
+        if lo == -hi:
+            raise ValueError(f"hair {name} must be within +-{hi:g}")
+        raise ValueError(f"hair {name} must be within {lo:g}..{hi:g}")
     return value
 
 
 def hair_placement(profile: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
-    """``{forward_m, tilt_deg}``: the manual HairDeck placement of the profile keys ``hair_forward_m`` (metres
-    along +z) and ``hair_tilt_deg`` (forward pitch, degrees); None = automatic (forward
-    ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to the brow line). A stored value that is no number or
-    lies beyond its limit counts as automatic."""
+    """``{forward_m, tilt_deg[, width_scale]}``: the manual HairDeck placement of the profile keys
+    ``hair_forward_m`` (metres along +z), ``hair_tilt_deg`` (forward pitch, degrees) and ``hair_width_scale``
+    (the sides' reach beyond the head, ``garment_hairdeck.narrow_sides``); None = automatic (forward
+    ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to the brow line). ``width_scale`` is present only when
+    set (``_PLACEMENT_WHEN_SET``). A stored value that is no number or lies beyond its range counts as
+    automatic."""
     out: Dict[str, Optional[float]] = {}
     for name, key in PLACEMENT_KEYS.items():
         try:
-            out[name] = _placement_value(name, (profile or {}).get(key))
+            value = _placement_value(name, (profile or {}).get(key))
         except ValueError:
-            out[name] = None
+            value = None
+        if value is not None or name not in _PLACEMENT_WHEN_SET:
+            out[name] = value
     return out
 
 
-def set_hair_placement(character_name: str, forward_m: Any, tilt_deg: Any) -> bool:
-    """Store the manual HairDeck placement (profile keys ``hair_forward_m`` / ``hair_tilt_deg``; None or "" =
-    automatic, stored as ""). ValueError for a non-number or a value beyond ``garment_hairdeck.FORWARD_LIMIT_M`` /
-    ``TILT_LIMIT_DEG`` — nothing is stored then. Both keys are written in ONE read-modify-write under the profile
-    lock. Only the HairDeck fit fingerprint changes: the next run re-fits from the cached HairDeck job."""
+def set_hair_placement(character_name: str, forward_m: Any, tilt_deg: Any, width_scale: Any = None) -> bool:
+    """Store the manual HairDeck placement (profile keys ``hair_forward_m`` / ``hair_tilt_deg`` /
+    ``hair_width_scale``; None or "" = automatic, stored as ""). ValueError for a non-number or a value beyond
+    ``garment_hairdeck.FORWARD_LIMIT_M`` / ``TILT_LIMIT_DEG`` / ``WIDTH_SCALE_LIMITS`` — nothing is stored then.
+    All keys are written in ONE read-modify-write under the profile lock. Only the HairDeck fit fingerprint
+    changes: the next run re-fits from the cached HairDeck job."""
     from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile, save_character_profile
     values = {"forward_m": _placement_value("forward_m", forward_m),
-              "tilt_deg": _placement_value("tilt_deg", tilt_deg)}
+              "tilt_deg": _placement_value("tilt_deg", tilt_deg),
+              "width_scale": _placement_value("width_scale", width_scale)}
     with keyed_lock("character_profile", character_name):
         profile = get_character_profile(character_name) or {}
         changed = False

@@ -746,8 +746,8 @@ def _placement_summary(placement: Any) -> Optional[Dict[str, Any]]:
     came from) and the hairline it reached against its target. None without a report section."""
     if not isinstance(placement, dict):
         return None
-    keys = ("forward_m", "forward_source", "tilt_deg", "tilt_source", "tilt_solve", "hairline_target_y",
-            "landmark_source")
+    keys = ("forward_m", "forward_source", "tilt_deg", "tilt_source", "tilt_solve", "width_scale", "width_source",
+            "hairline_target_y", "landmark_source")
     return {**{k: placement.get(k) for k in keys}, "hairline_y": placement.get("hairline_pushed_y")}
 
 
@@ -2509,8 +2509,8 @@ def hairdeck_panel(character_name: str, item_id: str, *,
       (None without), ``profile`` ``{name, hex}`` of the named colour (None
       without), ``fitted`` the newest HairDeck fit's record ``colour``
       (``_hairdeck_colour``; None without a fit);
-    - ``placement``: ``{forward_m, tilt_deg, default_forward_m, limits,
-      fitted}`` — the manual values (None = automatic,
+    - ``placement``: ``{forward_m, tilt_deg, width_scale, default_forward_m,
+      limits, fitted}`` — the manual values (None = automatic,
       ``garment_hair.hair_placement``), the automatic forward shift, the
       bounds of a manual value and what the newest HairDeck fit applied
       (its record's ``placement``; None without a fit or from a fit before
@@ -2552,10 +2552,9 @@ def hairdeck_panel(character_name: str, item_id: str, *,
               "source": "override" if override else ("profile" if named else "hairdeck"),
               "auto": _rgb_hex(info.get("hair_color")) if isinstance(info, dict) else None,
               "profile": named, "fitted": newest[1].get("colour") if newest else None}
-    placement = {**garment_hair.hair_placement(profile),
+    placement = {"width_scale": None, **garment_hair.hair_placement(profile),
                  "default_forward_m": garment_hairdeck.DEFAULT_FORWARD_M,
-                 "limits": {"forward_m": garment_hairdeck.FORWARD_LIMIT_M,
-                            "tilt_deg": garment_hairdeck.TILT_LIMIT_DEG},
+                 "limits": garment_hair.placement_limits(),
                  "fitted": newest[1].get("placement") if newest else None}
     fitted_seed = None
     current = gs.read_record(gs.garment_path(character_name, item_id,

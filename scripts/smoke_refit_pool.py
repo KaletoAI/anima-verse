@@ -25,7 +25,7 @@ start/end (time.time) in ``report.smoke``; ``raise``: ValueError("smoke refusal"
 after 0.2 s; ``det``: no sleep, no pid (byte-identical across processes).
 
 Fixture per character X, items ``hair_<x>_<n>``: fit record accepted, kind hair, method hairdeck, fit_version 1
-(< FIT_VERSION hair 7: outdated), base_model_sha256 sha(RIGGED), inputs {seed 1, hsig H}; the old fit GLB b"OLD";
+(< FIT_VERSION hair 8: outdated), base_model_sha256 sha(RIGGED), inputs {seed 1, hsig H}; the old fit GLB b"OLD";
 hairdeck_dir(X, item, H)/hair_seed1_nohead.glb = the hair bytes, hair_seed1.glb = b"PROXY".
 
 Expected, derived by hand from the spec:
@@ -52,7 +52,7 @@ Expected, derived by hand from the spec:
     exactly Bea, Cat, Dan (Eli has no work → none), labels "Refit · Bea (2 fits)", "Refit · Cat (2 fits)",
     "Refit · Dan (1 fit)", provider CPU; Dan (3rd with 2 slots) observed pending → running → completed;
     every row completed at the end; /queue/status (the route) listed rows with provider CPU while they ran, at
-    least one running AND one pending at the same poll; active_tasks empty afterwards. Records fit_version 7.
+    least one running AND one pending at the same poll; active_tasks empty afterwards. Records fit_version 8.
 [4] Failure: Fay (mode raise) and Gus (timed) in one sweep → Fay's fit refused (old fit kept, its failure
     recorded with "smoke refusal"), Gus's accepted. Hal (mode crash) and Ida (timed, in flight while Hal's worker
     dies) → Ida accepted (its call ran once more on its own), Hal refused with "crashed"; afterwards a probe
@@ -330,7 +330,7 @@ def main() -> int:
         check("pool used", refit_pool._pool is not None, True)
         check("same files", sorted(f2), sorted(f1))
         check("same bytes", [k for k in f1 if f1[k] != f2.get(k)], [])
-        check("fit_version 7", [record("Ann", i).get("fit_version") for i in ("hair_ann_1", "hair_ann_2")], [7, 7])
+        check("fit_version 8", [record("Ann", i).get("fit_version") for i in ("hair_ann_1", "hair_ann_2")], [8, 8])
         check("no temp file left", [p.name for p in gs._root("Ann").rglob(".*.refit.tmp")], [])
 
         coat, slip = _tube(0.1080, 0.80, 1.40), _tube(0.1125, 1.00, 1.40)
