@@ -12,13 +12,19 @@
  * stored HairDeck result (POST /characters/{n}/garments/{item}/run {} — only
  * the fit runs, HairDeck does not run again). The drafts are keyed by the
  * server values, so they restart from them after a save.
+ *
+ * Hair motion (plan docs/superpowers/plans/2026-11-12-hairdeck-spring-chains.md
+ * Task 7): the spring chains of the newest fit, Swing and Stiffness. Both post
+ * to POST /characters/{n}/hair/motion {swing, stiffness}; the server starts
+ * the CPU refit itself when Swing changes (Swing is a fit input, Ruling H11 —
+ * off = today's hair), Stiffness changes only the motion payload.
  */
 import { useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { ROW, WARN_STYLE } from './garmentStyle'
-import type { HairMethod, HairPlacement } from './useGarment'
+import type { HairChains, HairMethod, HairPlacement } from './useGarment'
 
 /** A placement draft field as a number; '' = automatic (null), NaN = invalid. */
 function draftNumber(text: string, scale: number): number | null {
@@ -30,13 +36,18 @@ function draftNumber(text: string, scale: number): number | null {
 
 const draftText = (v: number | null, scale: number) => (v === null ? '' : String(Math.round(v * scale * 100) / 100))
 
-export function HairDeckPlacement({ character, itemId, method, placement, busy, running, onSaved }: {
+export function HairDeckPlacement({ character, itemId, method, placement, chains, swingPending, busy, running,
+  onSaved }: {
   character: string
   /** The hair item (the re-fit runs its chain); '' = none yet — only saved. */
   itemId: string
   /** The hair method in effect: only HairDeck hair is re-fitted. */
   method: HairMethod
   placement: HairPlacement
+  /** The spring chains and the Swing/Stiffness settings; absent on an older server. */
+  chains?: HairChains
+  /** The served fit was made with the other Swing setting (stale reason `swing_changed`). */
+  swingPending: boolean
   /** Another hair action is in flight. */
   busy: boolean
   /** A hair run is active: the placement waits for it. */
@@ -63,14 +74,128 @@ export function HairDeckPlacement({ character, itemId, method, placement, busy, 
       onSaved()
     }
   }
+  // Swing / Stiffness: the server refits by itself when Swing changes (no garment run from here).
+  const applyMotion = async (swing: boolean, stiffness: number | null) => {
+    if (posting) return
+    setPosting(true)
+    try {
+      await apiPost(`/characters/${encodeURIComponent(character)}/hair/motion`, { swing, stiffness })
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setPosting(false)
+      onSaved()
+    }
+  }
   return (
-    <PlacementForm
-      key={`${placement.forward_m ?? ''}|${placement.tilt_deg ?? ''}|${placement.width_scale ?? ''}`}
-      placement={placement}
-      busy={busy || posting}
-      running={running}
-      onApply={(f, a, w) => { void apply(f, a, w) }}
-    />
+    <>
+      <PlacementForm
+        key={`${placement.forward_m ?? ''}|${placement.tilt_deg ?? ''}|${placement.width_scale ?? ''}`}
+        placement={placement}
+        busy={busy || posting}
+        running={running}
+        onApply={(f, a, w) => { void apply(f, a, w) }}
+      />
+      {chains && method === 'hairdeck' ? (
+        <>
+          <div className="ga-fieldset-title">{t('Hair motion')}</div>
+          <HairSwingForm
+            key={`${chains.swing}|${chains.stiffness}`}
+            chains={chains}
+            busy={busy || posting}
+            refitting={running && swingPending}
+            swingPending={swingPending && !running}
+            onApply={(swing, stiffness) => { void applyMotion(swing, stiffness) }}
+          />
+        </>
+      ) : null}
+    </>
+  )
+}
+
+/** Swing (a checkbox, applied at once), Stiffness (a slider with Apply / Reset) and the chain count or the
+ *  notice for a hairstyle without spring chains. */
+export function HairSwingForm({ chains, busy, refitting, swingPending, onApply }: {
+  chains: HairChains
+  busy: boolean
+  /** The refit for a changed Swing runs. */
+  refitting: boolean
+  /** The served hair still has the other Swing setting and no run is active. */
+  swingPending: boolean
+  /** stiffness null = 1 (as generated). */
+  onApply: (swing: boolean, stiffness: number | null) => void
+}) {
+  const { t } = useI18n()
+  const [lo, hi] = chains.limits
+  const [stiffness, setStiffness] = useState(chains.stiffness)
+  const none = chains.fitted && chains.count === 0
+  return (
+    <>
+      <div className="ga-hint">
+        {!chains.fitted
+          ? t('Spring chains appear after the next fit')
+          : chains.count
+            ? t('{n} spring chains').replace('{n}', String(chains.count))
+            : t('No spring chains in this hairstyle — hair moves with the head')}
+      </div>
+      <div style={ROW}>
+        <label
+          style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}
+          title={t('Off = the hair moves with the head exactly as today.')}
+        >
+          <input
+            type="checkbox"
+            checked={chains.swing}
+            disabled={busy || (none && !chains.swing)}
+            onChange={(e) => onApply(e.target.checked, chains.stiffness)}
+          />
+          <span>{t('Swing')}</span>
+        </label>
+        {refitting ? (
+          <span className="ga-hint" style={WARN_STYLE}>{t('Refitting the hair for the new Swing setting…')}</span>
+        ) : swingPending ? (
+          <span className="ga-hint" style={WARN_STYLE}>{t('The Swing setting takes effect after the next fit')}</span>
+        ) : null}
+      </div>
+      <div className="ga-hint">
+        {t('Swing on: the hair swings with motion but can touch the shoulders more than today — in the worst measured pose up to 2.3 % of the hair dips into the body, against at most 0.2 % today. Off by default. Changing Swing re-fits the hair from the stored HairDeck result.')}
+      </div>
+      <div style={ROW}>
+        <label className="ga-hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          {t('Stiffness (×)')}
+          <input
+            type="range"
+            min={lo}
+            max={hi}
+            step={0.1}
+            style={{ width: 140 }}
+            value={stiffness}
+            disabled={busy || none}
+            onChange={(e) => setStiffness(Number(e.target.value))}
+          />
+          <span style={{ minWidth: 36 }}>{stiffness.toFixed(1)}×</span>
+        </label>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={busy || none || Math.abs(stiffness - chains.stiffness) < 1e-9}
+          onClick={() => onApply(chains.swing, stiffness)}
+        >
+          {t('Apply')}
+        </button>
+        <button
+          type="button"
+          className="ga-btn ga-btn-sm"
+          disabled={busy || chains.stiffness === 1}
+          onClick={() => onApply(chains.swing, null)}
+        >
+          {t('Reset')}
+        </button>
+      </div>
+      <div className="ga-hint">
+        {t('Higher stiffness springs back faster. Stiffness changes only the motion — nothing is re-fitted; it acts while Swing is on.')}
+      </div>
+    </>
   )
 }
 

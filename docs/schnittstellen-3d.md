@@ -12632,6 +12632,19 @@ frame partitions, freeze, gaps, resets, live rest blend, response-root motion
 extraction, toggle behavior, numeric consumer parity, oblique stretched chains,
 multi-mesh non-identity binds and analytic normal/tangent perpendicularity).
 
+HAIR GROUPS (HairDeck spring chains, `app/core/hair_motion.py`, plan 2026-11-12-hairdeck-spring-chains): a group
+with `hair: true` (id `hair_c<NN>`, one per chain, hanging from Head) is served only when the character's Swing is
+on, and the client binds it on the near LOD only; with Swing off the fit is today's skin and the payload carries no
+hair group. `bones` are
+the chain joints that carry weight and do not lie inside the head capsule at rest (the rigid ones ride their
+`anchor_blend` row without swing); `freq_hz` = `HAIR_FREQ_PER_STIFFNESS` × HairDeck's per-chain stiffness × the
+character's Stiffness factor (clamped, rounded to 3 decimals). Collision runs against the `HAIR_REGIONS` capsules,
+the placement on today's skin through `anchor_blend` / `anchor_from` (see the hair-chain paragraph above). Admin
+surface: Game-Admin → Characters → Wardrobe, hair row → Hair motion (`HairDeckPlacement.tsx`): the chain count (or
+"No spring chains in this hairstyle — hair moves with the head"), Swing (a checkbox, default off — changing it
+re-fits the hair on the CPU, `POST /characters/{n}/hair/motion` starts the fit-only run) and Stiffness (0.5–2.0,
+motion only, no refit).
+
 
 # Anhang — Änderungsverlauf
 

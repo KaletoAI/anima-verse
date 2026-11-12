@@ -114,6 +114,24 @@ export interface HairDeckPanel {
   }
   /** The placement correction after the head match (`garments.hairdeck_panel`). */
   placement: HairPlacement
+  /** The spring chains of the newest HairDeck fit and the Swing/Stiffness settings (`hair_motion.panel`). */
+  chains?: HairChains
+}
+
+/** HairDeck spring chains (`hair_motion.panel`). Swing is a fit input (off = today's hair, re-fitted on change);
+ *  Stiffness changes only the motion. */
+export interface HairChains {
+  /** The bound chains of the newest fit; null when `fitted` is false. */
+  count: number | null
+  /** How many joints swing (counted with Swing on). */
+  links: number
+  swing: boolean
+  /** The factor on HairDeck's per-chain stiffness (1 = as generated). */
+  stiffness: number
+  /** [lo, hi] of the Stiffness factor. */
+  limits: [number, number]
+  /** False: no fit yet, or one from before the spring chains. */
+  fitted: boolean
 }
 
 /** The colour a HairDeck fit used (`garments._hairdeck_colour`): CIE76 ΔE of the hair's median to the target. */

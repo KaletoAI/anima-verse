@@ -400,7 +400,9 @@ export function WardrobeHairRow({ character, onEditAppearance }: {
               <>
                 <div className="ga-fieldset-title">{t('Hair placement')}</div>
                 <HairDeckPlacement character={character} itemId={itemId} method={info.method}
-                  placement={hd.placement} busy={busy} running={running} onSaved={() => startPoll(300)} />
+                  placement={hd.placement} chains={hd.chains}
+                  swingPending={!!garment?.stale_reasons.includes('swing_changed')}
+                  busy={busy} running={running} onSaved={() => startPoll(300)} />
               </>
             ) : null}
             <div className="ga-fieldset-title">{t('HairDeck')}</div>
