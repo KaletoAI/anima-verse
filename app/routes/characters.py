@@ -1901,6 +1901,12 @@ class HairPlacementRequest(BaseModel):
     width_scale: Any = None
 
 
+class HairMotionRequest(BaseModel):
+    # Plain Any so hair_motion.set_hair_motion validates (400 with its message, not a schema 422).
+    swing: Any = True
+    stiffness: Any = None
+
+
 class FootwearWidthCapRequest(BaseModel):
     # A number or null (back to the default); plain Any so garment_footwear.set_width_cap validates (400 with
     # its message, not a schema 422).
@@ -2175,6 +2181,26 @@ def set_character_hair_placement(character_name: str, body: HairPlacementRequest
         raise HTTPException(status_code=500, detail="Saving the character profile failed")
     from app.models.character import get_character_profile
     return {"width_scale": None, **garment_hair.hair_placement(get_character_profile(character_name) or {})}
+
+
+@router.post("/{character_name}/hair/motion")
+def set_character_hair_motion(character_name: str, body: HairMotionRequest,
+                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Set how HairDeck hair swings on its spring chains: ``swing`` (bool)
+    and ``stiffness`` (a factor × HairDeck's per-chain stiffness within
+    ``hair_motion.STIFFNESS_LIMITS``, null = 1). 400 for a non-bool swing or
+    a stiffness beyond its limits. Only the motion payload changes: nothing
+    is re-fitted (no run starts here). ``{swing, stiffness}`` as stored."""
+    from app.core import hair_motion
+    _require_character(character_name)
+    try:
+        saved = hair_motion.set_hair_motion(character_name, body.swing, body.stiffness)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    from app.models.character import get_character_profile
+    return hair_motion.settings(get_character_profile(character_name) or {})
 
 
 @router.post("/{character_name}/hair", status_code=202)

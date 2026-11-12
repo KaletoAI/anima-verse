@@ -408,6 +408,9 @@ def validate_motion_overrides(section, *, character=False):
 def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_states=True, preview_states=None):
     """Package → world → attribute multipliers → raw character → bounce/weight → clothing → state; mesh-independent.
 
+    Hair: the served HairDeck fit's spring chains (``hair_motion.motion_groups``, groups ``hair_c<CC>``) are merged
+    after the package groups, also for a character without any package group; none of the layers apply to them.
+
     Clothing: the product of the covering pieces' ``motion_damping`` (or the
     free-text gain) scales gain, max_deg, translate and spill and makes
     freq_hz/zeta stiffer by 1/sqrt(factor); the strongest covering piece's
@@ -421,10 +424,8 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
+    from app.core import hair_motion
     declarations = rig_groups_for(character_name, profile)
-    if not declarations:
-        return {"rev": _revision({"declarations": []}), "groups": {}}
-    world = config.get("extension_motion.groups", {}) or {}
     scale = profile.get("motion_gravity_scale", 1)
     try:
         scale = float(scale)
@@ -433,6 +434,13 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         scale = max(0.0, min(3.0, scale))
     except (TypeError, ValueError):
         scale = 1.0
+    # Core hair (not a package): the served HairDeck fit's spring chains, untouched by the layers below.
+    hair = hair_motion.motion_groups(hair_motion.served_chains(character_name, profile),
+                                     hair_motion.settings(profile), gravity_scale=scale)
+    if not declarations:
+        # Without hair the rev stays the one a character without groups always had.
+        return {"rev": _revision({"declarations": [], **({"hair": hair} if hair else {})}), "groups": dict(hair)}
+    world = config.get("extension_motion.groups", {}) or {}
     equipment = (profile.get("equipped_pieces") or {}) if apply_clothing else {}
     pieces = {}
     items = item_snapshot() if equipment else {}
@@ -564,10 +572,13 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
             **values, "scale_axis": group["scale_axis"], "rigid_tail": group["rigid_tail"],
             "rest_deg": max(-values["rest_max_deg"], min((rest or 0) + lift * values["rest_max_deg"], values["rest_max_deg"])),
         }
+    groups.update(hair)
     inputs = {"declarations": declarations, "world": world, "equipment": equipment,
               "pieces": pieces, "coverage": coverage, "attributes": attributes,
               "character": (profile.get("model3d_opts") or {}).get("extension_motion") or {},
               "gravity_scale": scale, "states": states, "groups": groups}
+    if hair:
+        inputs["hair"] = hair
     return {"rev": _revision(inputs), "groups": groups}
 
 

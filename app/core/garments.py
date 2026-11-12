@@ -2520,11 +2520,13 @@ def hairdeck_panel(character_name: str, item_id: str, *,
       ``garment_hair.hair_placement``), the automatic forward shift, the
       bounds of a manual value and what the newest HairDeck fit applied
       (its record's ``placement``; None without a fit or from a fit before
-      the placement correction).
+      the placement correction);
+    - ``chains``: the spring chains of the newest HairDeck fit and the
+      Swing/Stiffness settings (``hair_motion.panel``).
 
     None for an item that is no hair."""
     import json as _json
-    from app.core import garment_hair, garment_hairdeck, garment_store as gs
+    from app.core import garment_hair, garment_hairdeck, hair_motion, garment_store as gs
     from app.core.model_refs import current_profile_image, image_tile_meta
     from app.models.character import get_character_profile
     if profile is None:
@@ -2577,6 +2579,7 @@ def hairdeck_panel(character_name: str, item_id: str, *,
             "backend": job["backend"], "created_at": job["created_at"], "error": job["error"],
             "notes": job["notes"], "attempts": job["fit_attempts"], "images": images, "colour": colour,
             "placement": placement,
+            "chains": hair_motion.panel(character_name, profile, newest[1] if newest else None),
             "input_source": "beard_free" if sent is not None and sent != source else "profile"}
 
 
