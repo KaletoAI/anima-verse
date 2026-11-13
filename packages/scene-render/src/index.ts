@@ -190,6 +190,11 @@ export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, COLLIDE_GLSL_D
   HAIR_REGIONS, EXTENSION_REGIONS, CLOTH_EXCLUDED_REGIONS, collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
 export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry } from './garmentCollision'
 
+export { STRAND_ROWS, StrandMismatch, StrandSim, bindStrands, boxDepth, decodeStrandSdf, eyePointsEntered,
+  invertAffine, limitSegmentAngle, maxSdfDepthMm, restInsideBox, scalpCameras, scalpExposure, SCALP_CAMERA_FOV_DEG,
+  strandCapsules, strandParams, strandSdfAt, strandTargets } from './hairSimMath'
+export type { HairStrandRecord, StrandBinding, StrandFrame, StrandParams, StrandSdf } from './hairSimMath'
+
 export { FOOT_POSE_VERSION, SEAT_FADE_M, applyFootPose, applyFootPoseToPose, footPoseLiftM, footPoseMatches,
   footContactsNow, footPoseRest, seatRaise, seatFootLift } from './footPose'
 export type { FootPose, FootPoseRest, FootContact, FootSide } from './footPose'

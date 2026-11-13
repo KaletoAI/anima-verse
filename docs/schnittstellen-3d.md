@@ -12339,11 +12339,20 @@ hair on its skin — never scrambled.
   (`garments.preview_path`), built when missing, regardless of Swing; same ETag rule. The hair GET names it as
   `preview_strands_url` (`null` without a preview fit).
 
+**The sim (pure).** `packages/scene-render/src/hairSimMath.ts` (no `three`): `bindStrands` turns the record and the
+two attributes into rest frames + per-vertex offsets (`StrandMismatch` when they do not belong together),
+`strandTargets` puts every row where today's skin puts it (`Σ_b w_b · bone_b now · bone_b bind⁻¹ · rest`),
+`StrandSim.step` runs spec § 6.2.1 (Verlet + pendulum pull, length/bend passes, angle limit against the TARGET
+segment, head SDF + capsules under the bind rule + face box in head-bind space, tether) and `rebuild` writes the
+vertices in head-bind space. At rest every term is zero: the rebuilt mesh equals the bind mesh bit for bit.
+
 **Proofs (§ B5a).** `scripts/smoke_hair_strands_record.py` (the record on a hand-built head and two cards: pins,
 rest, free arc, `u`, follow rows, SDF decoding, boxes, cache), `scripts/smoke_hair_strands_graft.py` (the
-attributes' round trip, the full tier only, a mismatch refused, the assembly state), and
+attributes' round trip, the full tier only, a mismatch refused, the assembly state),
 `scripts/smoke_hair_strands_route.py` (ETag/304/404, admin-only preview, `model.hair_strands`, the preview GLB's
-binding).
+binding), and `scripts/smoke_hair_sim.mjs` (the sim on a quantized sphere head: exact rest, angle limit, tether,
+SDF depth and eye box under sway/walk, scalp exposure, HAAR without limit, follow rows under a pitched spine with
+the torso capsule).
 
 ### Footwear (`foot_pose`, garment kind `footwear`)
 
