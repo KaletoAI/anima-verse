@@ -47,6 +47,11 @@ body actions):
   redo is refused (``detail`` says which); 503 when the profile could not be
   read. ``plain_body.run_all`` of ``GET …/figure?plain=1`` is its plan
   (``figure_build.base_run_all``: kind, steps, hub_jobs, note, running, last).
+* ``POST /characters/{c}/base-body/mesh-repair`` — the Base body tab's "Repair again" (Ruling A34,
+  ``base_mesh_repair.start_repair``): the stored base model's mesh repair with the saved settings, then its
+  extension rig on the repaired mesh — local, no hub job. 202 ``{"started": True}``; 404 without a stored base
+  model, 409 off the pipeline, while a Build, a base render / 3D run or another repair of the character goes.
+  ``plain_body.mesh_repair`` of ``GET …/figure?plain=1`` is its state (``model3d.mesh_repair_state``).
 * ``POST /characters/{c}/figure/auto-build {enabled}`` — "Build
   automatically" (``figure_build.set_auto_build``): ``{"auto_build":
   figure_build.auto_build_on(c)}`` (off as well while the world switch of
@@ -110,12 +115,14 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
     model's face fields (``model3d.face_info``) and collision capsules
     (``collision.ensure`` — the set the outfit models inherit), the stored
     region scales (``collision_scales``), the face cleanup of the base
-    source (``face_cleanup``, ``model3d.face_cleanup_state``), the tip
+    source (``face_cleanup``, ``model3d.face_cleanup_state``), the base mesh
+    repair (``mesh_repair``, ``model3d.mesh_repair_state``), the tip
     panels of its ``pair_tip`` groups (``extension_tips``,
     ``extension_tip.tip_panels``) and the Base body tab's "Run all" plan
     (``run_all``, ``figure_build.base_run_all``). Never raises."""
     from app.core import collision, extension_tip, figure_build
-    from app.core.model3d import face_cleanup_state, face_info, find_model3d, get_model3d_options
+    from app.core.model3d import (face_cleanup_state, face_info, find_model3d, get_model3d_options,
+                                  mesh_repair_state)
     try:
         bsig = info.get("signature") or ""
         info["collision_scales"] = get_model3d_options(character_name).get("collision_scales") or {}
@@ -123,7 +130,9 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
         model = info.get("model")
         path = find_model3d(character_name, bsig) if bsig and isinstance(model, dict) else None
         info["extension_tips"] = []
+        info["mesh_repair"] = None
         if path is not None and model.get("status") != "running":
+            info["mesh_repair"] = mesh_repair_state(character_name, bsig)
             model.update(face_info(character_name, path))
             model["collision"] = collision.ensure(character_name, bsig)
             info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
@@ -191,6 +200,28 @@ def run_all_base_body(character_name: str, _: Dict[str, Any] = Depends(require_a
     if status == "failed":
         raise HTTPException(status_code=503, detail=str(result.get("reason") or "Run all failed"))
     return result
+
+
+@router.post("/{character_name}/base-body/mesh-repair", status_code=202)
+def repair_base_mesh(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import base_body, base_mesh_repair, figure_build, model3d
+    _require_character(character_name)
+    if not figure_build.on_pipeline(character_name):
+        raise HTTPException(status_code=409, detail=figure_build.OFF_PIPELINE)
+    bsig = base_body.base_signature(character_name)
+    if not bsig or model3d.mesh_repair_state(character_name, bsig) is None:
+        raise HTTPException(status_code=404, detail="No stored humanoid base model to repair")
+    if figure_build.running(character_name):
+        raise HTTPException(status_code=409, detail=figure_build.RUN_ALL_BUILD_RUNNING)
+    if model3d.generation_running(character_name):
+        raise HTTPException(status_code=409, detail=figure_build.RUN_ALL_BUSY)
+    try:
+        started = base_mesh_repair.start_repair(character_name, bsig)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if not started:
+        raise HTTPException(status_code=409, detail="A base mesh repair of this character runs")
+    return {"started": True}
 
 
 class AutoBuildRequest(BaseModel):

@@ -20,7 +20,8 @@ value below is written out by hand.
     '{"Tip": {"tip": …}}' ≠ '{}' → True; the stored state built with exactly that → False.
 [3] ``extension_tip.start_tip_rebuild``: an unknown signature → ValueError; a known one → True and the recorder got
     (C, sig) once; a second start while the first holds the slot → False.
-[4] ``figure_build.base_run_all`` with the plain body current, no cleanup, no face step and the settings of [1]
+[4] ``figure_build.base_run_all`` with the plain body current, no cleanup, no face step, the mesh repair current
+    (Ruling A34) and the settings of [1]
     newer than the build → kind "extension_rig", steps [extension 0], hub_jobs 0; ``start_base_run_all`` →
     ``{"status": "started", "kind": "extension_rig"}`` and the recorder got (C, BSIG); with the slot taken →
     "busy". Built with the saved settings → kind "".
@@ -176,7 +177,8 @@ with common:
         (base_skin, "enabled", lambda: False),
         (model3d, "face_cleanup_state", lambda c, s: {"can_reapply": False}),
         (model3d, "generation_running", lambda c: False),
-        (figure_build, "_face_retexture_pending", lambda c, s: ""))
+        (figure_build, "_face_retexture_pending", lambda c, s: ""),
+        (figure_build, "_mesh_repair_due", lambda c, s: False))
     with plan_stubs:
         p = figure_build.base_run_all(C, profile={"name": C})
         check("[4] extension rebuild due", [p["kind"], [(s["name"], s["jobs"]) for s in p["steps"]], p["hub_jobs"]],

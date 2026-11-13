@@ -715,8 +715,7 @@ def tip_mesh(meshes, p, placement):
                 inner.add((index,vertex.index))
     if len(inner) < DOUBLE_WALL_MIN_VERTICES:
         inner = set()   # a crease or seam, not a wall: single-walled body, unchanged
-    frames = []
-    for tip in tips:
+    def frame(tip, tree):
         normal = Vector()
         for index,mesh in enumerate(meshes):
             for face in mesh.data.polygons:
@@ -734,10 +733,20 @@ def tip_mesh(meshes, p, placement):
             normal.negate()
         a = normal.orthogonal().normalized()
         b = normal.cross(a)
-        frames.append((tip,normal,a,b,existing_tip(tree,tip,normal,a,b)))
+        return (tip,normal,a,b,existing_tip(tree,tip,normal,a,b))
+    frames = [frame(tip,tree) for tip in tips]
     # One decision for the pair: a tip just above the threshold on one side and
     # just below on the other must not end up as one kept tip and one stub.
     keep = statistics.mean(f[4]['protrusion'] for f in frames) >= EXISTING_TIP_MIN_M
+    smoothing = None
+    if not keep:
+        # The stub replaces the source's own tip (Ruling A34): whatever the
+        # mesher modelled there (a fold, a crater) is smoothed away first, over
+        # the part's footprint; the frames are taken again on the result.
+        smoothing = smooth_source(meshes,tips,radius,p,inner)
+        if smoothing['moved']:
+            tree = world_tree(meshes)
+            frames = [frame(tip,tree) for tip in tips]
     rows = []
     for tip,normal,a,b,existing in frames:
         def coords(point):
@@ -806,12 +815,91 @@ def tip_mesh(meshes, p, placement):
         rows.append({'tip':list(filled),'axis':list(axis),'radius':radius,'fill':fill if coef is not None else 'skipped: '+reason,
                      'fill_rms':rms,'fill_moved':moved,'fill_kept_by_tolerance':kept,
                      'tip_source':'stub','tip_length_m':p['tip_length'],'tip_radius_m':p['tip_diameter']/2,
-                     'existing_tip_m':existing['protrusion'],'inner_wall_vertices':len(inner)})
+                     'existing_tip_m':existing['protrusion'],'inner_wall_vertices':len(inner),
+                     'source_smooth':smoothing})
     stubs = [Vector(row['tip']) for row in rows if row['tip_source']=='stub']
     if p['tip_subdivide'] > 0 and stubs:
         for mesh in meshes:
             subdivide(mesh,stubs,[p['tip_subdivide']])
     return rows, before
+
+
+def smooth_source(meshes, tips, radius, p, inner):
+    """Laplacian-smooth the source surface around ``tips`` before the stub is
+    built (``base_mesh_repair.smooth_region``; Ruling A34). Radius = the
+    part's footprint, ``fill_radius`` x the tip radius
+    (``base_mesh_repair.tip_smooth_radius``); falloff = the fill's own blend
+    width. Inner-wall vertices (``inner``: (mesh index, vertex index)) stay
+    fixed and are nobody's neighbour. Returns the numbers for the metrics."""
+    _common.app_root_on_path()
+    from app.core import base_mesh_repair
+    co,edges,owners,normals,faces = mesh_arrays(meshes)
+    offsets,offset = [],0
+    for mesh in meshes:
+        offsets.append(offset)
+        offset += len(mesh.data.vertices)
+    fixed = np.zeros(len(co),bool)
+    for index,vertex in inner:
+        fixed[offsets[index]+vertex] = True
+    footprint = base_mesh_repair.tip_smooth_radius(p['fill_radius'],radius)
+    new,info = base_mesh_repair.smooth_region(np.array([tuple(c) for c in co]),np.array(edges,dtype=np.int64).reshape(-1,2),
+                                              [tuple(t) for t in tips],footprint,p['fill_blend']*radius,fixed=fixed,
+                                              min_wall=DOUBLE_WALL_MIN_VERTICES)
+    old = np.array([tuple(c) for c in co])
+    moved = np.flatnonzero(np.linalg.norm(new-old,axis=1) > 1e-9)
+    for i in moved:
+        mesh,vi = owners[i]
+        mesh.data.vertices[vi].co = mesh.matrix_world.inverted()@Vector(tuple(new[i]))
+    for mesh in meshes:
+        mesh.data.update()
+    return {'radius_m':info['radius_m'],'blend_m':p['fill_blend']*radius,'iterations':info['iterations'],
+            'moved':info['moved'],'max_shift_mm':round(info['max_shift_m']*1000,3),'edge_mm':round(info['edge_m']*1000,3),
+            'folds_released':info.get('folds_released',0)}
+
+
+def position_snapshot(meshes):
+    """Every vertex position of ``meshes`` before the tip ops (``refresh_normals``)."""
+    return [{tuple(round(c,7) for c in v.co) for v in mesh.data.vertices} for mesh in meshes]
+
+
+def refresh_normals(meshes, snapshot):
+    """Give the vertices the tip ops moved or created — and their one ring,
+    whose faces changed with them — the surface's own smooth normal (Ruling
+    A34). An imported GLB carries its normals as custom normals: a vertex the
+    fill, the smoothing or the stub moved kept the normal of where it was, and
+    a vertex the subdivision made got one interpolated between neighbours —
+    across a fold of the source, a normal pointing into the body, which shades
+    as a black hole in the skin. Copies at one position share the normal.
+    Every other vertex keeps its custom normal. Returns the count refreshed."""
+    refreshed = 0
+    for index,mesh in enumerate(meshes):
+        data = mesh.data
+        if not data.has_custom_normals:
+            continue
+        changed = {v.index for v in data.vertices if tuple(round(c,7) for c in v.co) not in snapshot[index]}
+        if not changed:
+            continue
+        ring = set(changed)
+        for poly in data.polygons:
+            if any(i in changed for i in poly.vertices):
+                ring.update(poly.vertices)
+        key = lambda v: tuple(round(c/COINCIDENT_EPSILON_M) for c in v.co)
+        wanted = {key(data.vertices[i]) for i in ring}
+        sums = {}
+        for v in data.vertices:
+            k = key(v)
+            if k in wanted:
+                sums[k] = sums.get(k,Vector())+v.normal
+        corner = [Vector(c.vector) for c in data.corner_normals]
+        for loop in data.loops:
+            if loop.vertex_index in ring:
+                n = sums[key(data.vertices[loop.vertex_index])]
+                if n.length > 1e-8:
+                    corner[loop.index] = n.normalized()
+        data.normals_split_custom_set([tuple(n) for n in corner])
+        data.update()
+        refreshed += len(ring)
+    return refreshed
 
 
 # Metres per step of the tip offset walk along the surface.
@@ -2564,6 +2652,7 @@ def extension_bones(args):
     if failed:
         return skip('; '.join(k+': '+v for k,v in failed.items()),failed,'failed' if malformed else 'not_found')
     soft,prepared,tip_info = {},{},{}
+    snapshot = None   # vertex positions before the first tip op (refresh_normals)
     # A colour placement always pins the re-plan; a geometry placement only
     # when a tip group stands on it (its crest apex is the tip suggestion).
     tip_sources = {g.get('depends_on') for g in enabled if g['op']=='pair_tip'}
@@ -2582,6 +2671,8 @@ def extension_bones(args):
                 continue
             p = parameters(g)
             rows,tip_info[g['id']] = tip_positions(meshes,pinned[g['depends_on']],g.get('tip_override'))
+            if snapshot is None:
+                snapshot = position_snapshot(meshes)
             prepared[g['id']] = tip_mesh(meshes,p,rows)
         if prepared:
             co,edges,owners,normals,faces = mesh_arrays(meshes)
@@ -2605,6 +2696,12 @@ def extension_bones(args):
                     if any(bone_key(name) in bones or any(name==other for _,_,previous in plans for other,_,_,_ in previous[0]) for name,_,_,_ in plan[0]):
                         raise ValueError('tip bone already exists')
                     plans.append((g,p,plan))
+            # The surface around the tips changed (subdivision, smoothing, fill,
+            # stub): its normals follow it (refresh_normals).
+            refreshed = refresh_normals(meshes,snapshot)
+            for g,_,plan in plans:
+                if g['id'] in prepared:
+                    plan[2]['normals_refreshed'] = refreshed
     except (ValueError,KeyError,TypeError,IndexError) as e:
         return skip(str(e),status='failed')
     for g in enabled:

@@ -16,7 +16,7 @@ import type { ModelStep } from './ModelSteps'
 import type { CollisionPayload } from '@anima/scene-render'
 import type { FaceCleanupState, FaceFields } from './ModelFaceActions'
 import type { FigurePayload, ModelStaleReason } from './figureModel'
-import type { BaseRunAll } from './baseBodyModel'
+import type { BaseRunAll, MeshRepairState } from './baseBodyModel'
 
 export const BASE_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BaseView = typeof BASE_VIEWS[number]
@@ -156,6 +156,8 @@ export interface BaseBodyInfo {
   collision_scales?: Record<string, number>
   /** The base model's pair tip groups (figure.py `_plain_body_extras`). */
   extension_tips?: ExtensionTipPanelInfo[]
+  /** The base mesh repair (`model3d.mesh_repair_state`; null without a stored humanoid base model). */
+  mesh_repair?: MeshRepairState | null
   /** The front's skin detail step (null for a non-humanoid). */
   skin?: BaseSkinInfo | null
   /** The Base body tab's "Run all" plan (`figure_build.base_run_all`). */
@@ -181,6 +183,7 @@ export const tipsRunning = (d: BaseBodyInfo | null | undefined) =>
 
 const isActive = (d: BaseBodyInfo | null | undefined) =>
   viewsRunning(d) || modelRunning(d) || !!d?.face_cleanup?.running || tipsRunning(d) || !!d?.run_all?.running
+  || !!d?.mesh_repair?.running
 
 export function useBaseBody(character: string) {
   const enc = encodeURIComponent(character)

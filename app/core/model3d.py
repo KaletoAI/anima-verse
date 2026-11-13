@@ -483,7 +483,19 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             "extension_motion": dict(raw.get("extension_motion") or {}),
             # Collision-capsule radius scale per region (collision.py), all
             # four regions; an invalid stored map counts as the defaults.
-            "collision_scales": _collision_scales_option(raw.get("collision_scales"))}
+            "collision_scales": _collision_scales_option(raw.get("collision_scales")),
+            # The base mesh repair's settings (``base_mesh_repair.validated_settings``; Ruling A34): the switch
+            # and the largest hole it fills; only deviations from the defaults are stored, an invalid stored
+            # map counts as the defaults.
+            "mesh_repair": _mesh_repair_option(raw.get("mesh_repair"))}
+
+
+def _mesh_repair_option(raw: Any) -> Dict[str, Any]:
+    from app.core.base_mesh_repair import validated_settings
+    try:
+        return validated_settings(raw)
+    except ValueError:
+        return validated_settings(None)
 
 
 def remembered_face_controls(character_name: str) -> Dict[str, Any]:
@@ -568,6 +580,15 @@ def set_model3d_options(character_name: str,
                 opts["auto_generate"] = True
             else:
                 opts.pop("auto_generate", None)
+        if "mesh_repair" in updates:
+            from app.core.base_mesh_repair import validated_settings
+            repair = validated_settings(updates["mesh_repair"])
+            repair_defaults = validated_settings(None)
+            cleaned = {k: v for k, v in repair.items() if v != repair_defaults[k]}
+            if cleaned:
+                opts["mesh_repair"] = cleaned
+            else:
+                opts.pop("mesh_repair", None)
         if "face_cleanup" in updates:
             if type(updates["face_cleanup"]) is not bool:
                 raise ValueError("face_cleanup must be a boolean")
@@ -1624,6 +1645,7 @@ def _auto_covered_variant(character_name: str, path: Path, meta: Dict[str, Any],
     fingerprint = extension_rig_fingerprint(kept, model_extension_overrides(profile, path.stem))
     previous = _read_sidecar(target) if target.is_file() else {}
     if (not force and previous.get("source_sha256") == source_sha
+            and not _mesh_repair_due(character_name, target, {"base": True, "rig": "mixamo", **previous})
             and (previous.get("extension_rig") or {}).get("fingerprint") == fingerprint
             and (previous.get("extension_rig") or {}).get("status") != "failed"
             and (before or {}).get("status") == "built"):
@@ -1652,11 +1674,87 @@ def _auto_covered_variant(character_name: str, path: Path, meta: Dict[str, Any],
         _publish_model_bytes(target, work.read_bytes())
         _publish_sidecar(target, {"rig": "mixamo", "source_sha256": source_sha,
                                   "groups_removed": removed, "extension_rig": state,
+                                  **({"mesh_repair": covered_meta["mesh_repair"]}
+                                     if "mesh_repair" in covered_meta else {}),
                                   "blender": covered_meta.get("blender") or {},
                                   "created_at": utc_now_iso()})
     meta["covered_variant"] = {"status": "built", "groups_removed": removed, "at": utc_now_iso()}
     logger.info("Model3D %s: covered variant of %s without %s", character_name, path.stem, ", ".join(removed))
     return True
+
+
+def _mesh_repair_target(meta: Dict[str, Any], path: Path) -> bool:
+    """Whether the model of ``meta`` / ``path`` gets the base mesh repair: a humanoid base body GLB (the base and
+    its covered variant), never an outfit model (it is built from the repaired base)."""
+    return bool(meta.get("base")) and meta.get("rig") == "mixamo" and path.suffix.lower() == ".glb"
+
+
+def _mesh_repair_due(character_name: str, path: Path, meta: Dict[str, Any]) -> bool:
+    """Whether the stored record ``meta["mesh_repair"]`` is of other settings or another repair version than
+    the ones in force (``base_mesh_repair.settings_fingerprint``) — a base body without a record is due."""
+    if not _mesh_repair_target(meta, path):
+        return False
+    from app.core.base_mesh_repair import settings_fingerprint
+    record = meta.get("mesh_repair")
+    settings = get_model3d_options(character_name).get("mesh_repair")
+    return not isinstance(record, dict) or record.get("settings") != settings_fingerprint(settings)
+
+
+def _repaired_base(character_name: str, data: bytes, meta: Dict[str, Any]) -> bytes:
+    """``data`` (the clean prerig source of a base body) with its holes filled (``base_mesh_repair.repair_glb``,
+    Ruling A34) and the record in ``meta["mesh_repair"]``; any other model's bytes unchanged. The prerig itself
+    stays as the rigger left it, so another "largest hole" setting starts from the same source. A repair that
+    raises keeps the bytes and records the failure (with the settings, so it is not retried on every rebuild —
+    "Repair again" retries it)."""
+    if not meta.get("base") or meta.get("rig") != "mixamo":
+        return data
+    from app.core import base_mesh_repair
+    settings = get_model3d_options(character_name).get("mesh_repair")
+    try:
+        out, record = base_mesh_repair.repair_glb(data, settings)
+    except Exception as exc:  # noqa: BLE001 — the base is published without the repair
+        logger.warning("Model3D %s: base mesh repair failed: %s", character_name, exc)
+        out, record = data, {"version": base_mesh_repair.VERSION,
+                             "settings": base_mesh_repair.settings_fingerprint(settings),
+                             "status": "failed", "error": f"Repair failed: {exc}"}
+    record["at"] = utc_now_iso()
+    meta["mesh_repair"] = record
+    if record.get("filled"):
+        logger.info("Model3D %s: base mesh repair — %s", character_name, base_mesh_repair.summary(record))
+    return out
+
+
+def mesh_repair_state(character_name: str, bsig: str) -> Optional[Dict[str, Any]]:
+    """The Base body tab's mesh repair panel: ``{settings, record, due, summary, light, running, last}`` of the
+    stored base model ``bsig`` (None without one, or for a non-humanoid base). ``light``: ``ok`` (closed, or
+    every hole filled) · ``warn`` (a hole left open, or the settings / repair version changed since — ``due``)
+    · ``error`` (the repair failed) · ``off`` (switched off). ``running`` / ``last``: the "Repair again" run
+    (``base_mesh_repair.start_repair``)."""
+    from app.core import base_mesh_repair
+    path = find_model3d(character_name, bsig) if bsig else None
+    if path is None:
+        return None
+    meta = _read_sidecar(path)
+    meta.setdefault("rig", required_rig(character_name))
+    if not meta.get("base") or not _mesh_repair_target(meta, path):
+        return None
+    settings = get_model3d_options(character_name).get("mesh_repair")
+    record = meta.get("mesh_repair") if isinstance(meta.get("mesh_repair"), dict) else None
+    due = _mesh_repair_due(character_name, path, meta)
+    if record is None:
+        light, text = "warn", "Not repaired yet — the next rebuild repairs it"
+    elif record.get("status") == "failed":
+        light, text = "error", base_mesh_repair.summary(record)
+    elif record.get("status") == "skipped":
+        light, text = "off", base_mesh_repair.summary(record)
+    else:
+        text = base_mesh_repair.summary(record)
+        light = "warn" if record.get("unfilled") else "ok"
+    if due and record is not None:
+        light = "warn" if light != "error" else light
+        text += " · settings changed — Repair again applies them"
+    return {"settings": settings, "record": record, "due": due, "summary": text, "light": light,
+            **base_mesh_repair.run_state(character_name)}
 
 
 def _extension_rig_once(character_name: str, path: Path,
@@ -1692,7 +1790,10 @@ def _extension_rig_once(character_name: str, path: Path,
     # "applied"; a forced rebuild must still retry the part.
     part_failed = any(op in ("attached_part", "inset_part") and ((previous.get("metrics") or {}).get(gid) or {}).get("status") == "failed"
                       for gid, op in (previous.get("group_ops") or {}).items())
-    if previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
+    # A base body's mesh is repaired on the way (Ruling A34, ``_repaired_base``): a record of other settings (or
+    # of an older repair version) makes the rebuild due even when the extension groups are current.
+    repair_due = _mesh_repair_due(character_name, path, meta)
+    if not repair_due and previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
             and source_current and not part_failed)):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
     groups = [g for g in _extension_groups_for(meta, resolved_extension_groups(
@@ -1709,7 +1810,7 @@ def _extension_rig_once(character_name: str, path: Path,
         state.update(status="none_applicable", reason="Extension bones require a humanoid GLB")
         return {"ok": True, "applied": False, "extension_rig": state}
     source = path.parent / "prerig" / path.name
-    if not groups and not state["has_applied"]:
+    if not groups and not state["has_applied"] and not repair_due:
         # A failed later attempt can still leave a previously rigged mesh;
         # its existing prerig source drives the removal path below.
         return {"ok": True, "applied": False, "extension_rig": state}
@@ -1752,9 +1853,10 @@ def _extension_rig_once(character_name: str, path: Path,
         return {"ok": False, "applied": False, "extension_rig": state, "error": state["reason"]}
     _publish_sidecar(source, source_meta)
     if not groups:
-        changed = path.read_bytes() != source.read_bytes()
+        clean = _repaired_base(character_name, source.read_bytes(), meta)
+        changed = path.read_bytes() != clean
         if changed:
-            _publish_model_bytes(path, source.read_bytes())
+            _publish_model_bytes(path, clean)
         if changed:
             meta["blender"] = source_meta.get("blender") or {}
         state["has_applied"] = False
@@ -1762,6 +1864,8 @@ def _extension_rig_once(character_name: str, path: Path,
     with tempfile.TemporaryDirectory(prefix=".extension-", dir=path.parent) as tmp:
         staged = Path(tmp) / path.name
         shutil.copy2(source, staged)
+        repair_before = meta.get("mesh_repair")
+        staged.write_bytes(_repaired_base(character_name, staged.read_bytes(), meta))
         attached = [g for g in groups if g["op"] == "attached_part"]
         companions = [g for g in groups if g["op"] == "attached_part_bone"]
         remaining = [g for g in groups if g["op"] not in ("attached_part", "attached_part_bone", "inset_part")]
@@ -1826,6 +1930,11 @@ def _extension_rig_once(character_name: str, path: Path,
             state.update(status="applied", has_applied=part_applied or bool(remaining and result.get("applied")))
         else:
             state["status"] = data.get("status") if data.get("status") in ("not_found", "failed") else "failed"
+            # Nothing was published: the stored model keeps the repair it had.
+            if repair_before is None:
+                meta.pop("mesh_repair", None)
+            else:
+                meta["mesh_repair"] = repair_before
         state["per_tier"][LOW_TIER if path.parent.name == LOW_TIER else FULL_TIER] = {
             key: state[key] for key in ("fingerprint", "groups", "status", "reason", "metrics", "attempted", "attempted_at")}
         return {"ok": state["status"] != "failed", "applied": publish,
@@ -1851,8 +1960,9 @@ def _extension_state_current(character_name: str, path: Path, meta: Dict[str, An
 
 @_serial_model
 def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, *,
-                          tier: str = FULL_TIER, force: bool = False) -> Dict[str, Any]:
-    """Rebuild a stored model from prerig and derive its distance tier anew."""
+                          tier: str = FULL_TIER, force: bool = False, repair: bool = False) -> Dict[str, Any]:
+    """Rebuild a stored model from prerig and derive its distance tier anew. ``repair``: a base body's mesh
+    repair runs again even when its record is current ("Repair again", Ruling A34)."""
     if tier not in MODEL_TIERS:
         raise ValueError("Unknown model tier")
     path = (find_model3d(character_name, signature) if signature
@@ -1884,6 +1994,8 @@ def rebuild_extension_rig(character_name: str, signature: Optional[str] = None, 
             return result
     original_bytes = path.read_bytes()
     original_meta = json.loads(json.dumps(meta))
+    if repair and meta.get("base"):
+        meta.pop("mesh_repair", None)
     result = _auto_extension_rig(character_name, path, meta, force=force)
     if not result.get("noop"):
         _publish_sidecar(path, meta)

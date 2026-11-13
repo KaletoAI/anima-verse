@@ -24,7 +24,8 @@
  *
  * Layout: the Run all header across the top; then two columns — the four views stacked and small on the left (a
  * click enlarges one), the base model's 3D preview with everything that acts on it on the right: its steps
- * beside the preview, the collision capsule sliders beside it too (live preview while dragging — the outfit
+ * beside the preview, the base mesh repair (MeshRepairPanel, Ruling A34: status light, its settings saved on their
+ * own, "Repair again" — local), the collision capsule sliders beside it too (live preview while dragging — the outfit
  * models inherit the base body's set), one panel per pair tip extension group (ExtensionTipPanel), and the
  * face/rig actions under it (ModelFaceActions); the Settings section closes the tab.
  *
@@ -56,6 +57,7 @@ import { RefImage } from './RefImage'
 import { CollisionScales } from './CollisionScales'
 import { ExtensionTipPanel } from './ExtensionTipPanel'
 import type { TipDots } from './ExtensionTipPanel'
+import { MeshRepairPanel } from './MeshRepairPanel'
 import { ModelFaceActions } from './ModelFaceActions'
 import { FaceSettings } from './FaceSettings'
 import { FieldSet } from './FieldSet'
@@ -350,13 +352,19 @@ export function FieldBaseBody({ character, onOpenFigure }: {
   }
 
   const model = info.model
-  const modelBusy = posting || modelRunning(info) || !!st?.pending || tipsRunning(info)
+  const modelBusy = posting || modelRunning(info) || !!st?.pending || tipsRunning(info) || !!info.mesh_repair?.running
   const ready = model?.status === 'ready'
 
   const collision = collisionPreview ?? model?.collision
   const tipPanels = model?.url && ready ? info.extension_tips ?? [] : []
-  const asideTools = model?.url && ready && (model.collision !== undefined || tipPanels.length) ? (
+  const meshRepair = model?.url && ready ? info.mesh_repair ?? null : null
+  const asideTools = model?.url && ready && (model.collision !== undefined || tipPanels.length || meshRepair) ? (
     <>
+      {/* The base mesh repair (Ruling A34): status light, settings saved on their own, Repair again (local). */}
+      {meshRepair ? (
+        <MeshRepairPanel character={character} state={meshRepair} disabled={modelBusy}
+          onSaved={reloadAll} onStarted={() => startPoll(800)} />
+      ) : null}
       {model.collision !== undefined ? (
         <CollisionScales character={character} collision={model.collision}
           scales={info.collision_scales} disabled={modelBusy}

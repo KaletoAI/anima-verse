@@ -3698,8 +3698,9 @@ async def set_character_model3d_options(character_name: str, request: Request,
         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Per-character overrides for the mesh generation.
     Body: {"auto_generate": bool, "face_before_rig": bool, "face_cleanup": bool, "face_photo": {…},
-    "face_controls": {strength, feather, render_resolution, yaw}}; each is optional. The face values are
-    remembered for the next face retexture and saved without running anything (400 when out of range).
+    "face_controls": {strength, feather, render_resolution, yaw}, "mesh_repair": {enabled, max_hole_cm}}; each
+    is optional. The face values are remembered for the next face retexture, the mesh repair settings for the
+    next base mesh repair; both are saved without running anything (400 when out of range).
     Auto-generation uses the cheapest backend after the new T-pose succeeds."""
     import asyncio
     body = await request.json()
@@ -3716,7 +3717,8 @@ def _set_character_model3d_options_sync(character_name: str,
         raise HTTPException(status_code=404, detail="Character not found")
     if not isinstance(body, dict) or not (
             "auto_generate" in body or "face_before_rig" in body or "face_cleanup" in body
-            or "face_photo" in body or "face_controls" in body or "extension_rig" in body):
+            or "face_photo" in body or "face_controls" in body or "extension_rig" in body
+            or "mesh_repair" in body):
         raise HTTPException(status_code=400,
                             detail="model options missing")
     updates = {}
@@ -3724,6 +3726,10 @@ def _set_character_model3d_options_sync(character_name: str,
         updates["face_photo"] = body["face_photo"]
     if "face_controls" in body:
         updates["face_controls"] = body["face_controls"]
+    if "mesh_repair" in body:
+        # The base mesh repair's settings (Ruling A34), validated by ``set_model3d_options``; saved without
+        # running anything — the panel then shows the repair as due.
+        updates["mesh_repair"] = body["mesh_repair"]
     if "face_before_rig" in body:
         if type(body["face_before_rig"]) is not bool:
             raise HTTPException(400, "face_before_rig must be a boolean")

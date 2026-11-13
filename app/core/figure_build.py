@@ -9,6 +9,10 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
 1. ``plain_body`` — the plain body is missing or was rendered with older
    prompts (``base_body.base_refresh_plan(missing=True)``): its views, then
    its mesh run (``generate_base_images`` / ``generate_base_model``).
+1b. ``base_repair`` — the stored base model's mesh repair is older than its settings or the repair version
+   (``model3d.mesh_repair_state`` ``due``; Ruling A34): its local rebuild from the clean prerig source
+   (``model3d.rebuild_extension_rig(repair=True)``) — CPU, no hub job, in automatic Builds too. A plain body
+   rebuilt in the same Build is repaired by its own run; the step then finds nothing due.
 2. ``interim`` — the wanted figure needs an own mesh that is not built
    (``Figure.interim``: an own-mesh piece IN the body shape until its mesh
    is ready, ruling A11) and no outfit model of that interim figure is
@@ -141,18 +145,18 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-STEP_ORDER = ("plain_body", "interim", "shape", "pieces", "hair", "texture", "fits", "assemble")
+STEP_ORDER = ("plain_body", "base_repair", "interim", "shape", "pieces", "hair", "texture", "fits", "assemble")
 #: What a step needs: a failed (or skipped) step skips every step naming it here.
-DEPENDS = {"interim": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain_body"},
+DEPENDS = {"base_repair": {"plain_body"}, "interim": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain_body"},
            "hair": {"plain_body"}, "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
            "assemble": {"plain_body", "fits"}}
 #: Steps that hold the character's 3D generation slot (model work).
-SLOT_STEPS = frozenset({"plain_body", "interim", "shape", "texture", "assemble"})
+SLOT_STEPS = frozenset({"plain_body", "base_repair", "interim", "shape", "texture", "assemble"})
 #: Steps whose failure (a refused view, a shape not meshed) STOPS the Build: nothing after them runs (Ruling C4).
 STOP_STEPS = frozenset({"plain_body", "interim", "shape", "texture"})
 #: Steps that do not check the run's pinned figure first (Ruling A18): the plain body (it builds what every
 #: figure stands on; the pin is taken again after it) and the CPU refits (they fit what is built).
-UNPINNED_STEPS = frozenset({"plain_body", "fits"})
+UNPINNED_STEPS = frozenset({"plain_body", "base_repair", "fits"})
 #: Steps after which the run pins the wanted figure again: they change it themselves — the plain body (the
 #: figure stands on the new body) and the hair (its chain delivers the worn hairstyle's mesh; the hairstyle itself is
 #: made before the first pin — ``garment_hair.ensure_hairstyle`` at the start of ``_run``).
@@ -463,6 +467,8 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
             return steps  # ruling 8a: nothing to build on until a manual Build makes it
     # Ruling 8a: only a manual Build refreshes the plain body; an automatic one builds on the stored one.
     rebased = stale and explicit
+    if not rebased and _mesh_repair_due(character_name, bsig):
+        steps.append(Step("base_repair", MESH_REPAIR_LABEL, 0))
 
     built = _model_figure(character_name, signature)
     set_jobs = base_body.dressed_view_jobs()
@@ -546,7 +552,8 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     work = _runnable(steps, explicit)
     if refused and explicit:
         steps.append(Step("fits", REFIT_LABEL.format(names=", ".join(_item_name(i) for i in sorted(refused))), 0))
-    elif grafted and not hold and (any(s.name in ("plain_body", "shape", "pieces", "hair") for s in work)
+    elif grafted and not hold and (any(s.name in ("plain_body", "base_repair", "shape", "pieces", "hair")
+                                       for s in work)
                                    or garment_refit.work_count(character_name, profile=profile) > 0):
         steps.append(Step("fits", "Fits on the CPU", 0))
 
@@ -1191,6 +1198,36 @@ def _run_plain_body(character_name: str, step: Step, explicit: bool = False) -> 
     return ""
 
 
+#: The Build's label of the base mesh repair step.
+MESH_REPAIR_LABEL = "Base mesh repair (local)"
+
+
+def _mesh_repair_due(character_name: str, bsig: str) -> bool:
+    """Whether the stored base model ``bsig`` needs its mesh repair (``model3d.mesh_repair_state`` ``due``);
+    False without a stored base model or when the state cannot be read."""
+    from app.core import model3d
+    try:
+        state = model3d.mesh_repair_state(character_name, bsig) if bsig else None
+    except Exception:  # noqa: BLE001 — a plan never fails on it
+        logger.debug("Build %s: mesh repair state not read", character_name, exc_info=True)
+        return False
+    return bool(state and state.get("due"))
+
+
+def _run_base_repair(character_name: str, step: Step, explicit: bool = False) -> str:
+    """The base mesh repair of the stored base model when it is (still) due — a plain body rebuilt before it
+    in this Build was repaired by its own run. Local; the base's changed bytes refit what is fitted on it."""
+    from app.core import base_body, model3d
+    bsig = base_body.base_signature(character_name)
+    if not _mesh_repair_due(character_name, bsig):
+        return ""
+    result = model3d.rebuild_extension_rig(character_name, bsig, force=True, repair=True)
+    if not result.get("ok"):
+        return str(result.get("error") or (result.get("extension_rig") or {}).get("reason")
+                   or "Base mesh repair failed")
+    return ""
+
+
 def _outfit_model(character_name: str, signature: str) -> str:
     """The outfit model of the figure delivered now, without the shape
     preparation (the Build's own steps make shapes). Not forced: a model of
@@ -1554,7 +1591,7 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
 
 
 _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
-    "plain_body": _run_plain_body, "interim": _run_interim, "shape": _run_shape, "pieces": _run_pieces,
+    "plain_body": _run_plain_body, "base_repair": _run_base_repair, "interim": _run_interim, "shape": _run_shape, "pieces": _run_pieces,
     "hair": _run_hair, "texture": _run_texture, "fits": _run_fits, "assemble": _run_assemble}
 
 
@@ -1841,10 +1878,13 @@ def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
 #    (none recorded, or the last one failed), or the face values saved since differ from the ones it ran with
 #    (Task UI2: the record's ``settings`` fingerprint): ``model3d.trigger_face_retexture`` with the remembered
 #    settings.
-# 4. else ``extension_rig`` — a tip setting saved since (Task UI2) makes the stored base model's extension rig older
+# 4. else ``mesh_repair`` — the stored base model's mesh repair is older than its saved settings or the repair
+#    version (``model3d.mesh_repair_state`` ``due``, Ruling A34): ``base_mesh_repair.start_repair`` — local, no hub
+#    job; it rebuilds the extension rig on the repaired mesh, so it includes kind 5.
+# 5. else ``extension_rig`` — a tip setting saved since (Task UI2) makes the stored base model's extension rig older
 #    than its settings (``model3d.extension_settings_changed``): ``extension_tip.start_tip_rebuild`` — local, no hub
 #    job.
-# 5. else nothing: "Everything is current".
+# 6. else nothing: "Everything is current".
 #
 # Each earlier kind includes the later ones (a new model, a cleanup and a face retexture all re-rig, and the rig
 # builds the extension bones with the saved settings), so one kind per click is enough.
@@ -1855,6 +1895,9 @@ def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
 #: ``base_run_all`` kinds.
 RUN_ALL_PLAIN, RUN_ALL_CLEANUP, RUN_ALL_FACE = "plain_body", "face_cleanup", "face_retexture"
 RUN_ALL_EXTENSION = "extension_rig"
+RUN_ALL_REPAIR = "mesh_repair"
+#: The base mesh repair is local (CPU); its label in the step list.
+REPAIR_STEP = "repair"
 #: The extension rebuild is local (CPU); its label in the step list.
 EXTENSION_STEP = "extension"
 #: ``start_base_run_all``'s refusals.
@@ -1913,8 +1956,8 @@ def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     """What the Base body tab's "Run all" runs now (block comment above): ``{kind, steps: [{name, jobs}],
     hub_jobs, note, running, last}`` — ``kind`` "" when every step is current (``hub_jobs`` 0) or the plan
     could not be read (``hub_jobs`` None, ``note`` says why); ``steps`` in run order with their first-attempt
-    hub jobs (``view front``, ``skin front``, ``mesh``, ``upscale``, ``face``, ``rig``, ``cleanup`` and
-    ``extension`` — the last two local); ``face_due`` why a face retexture is planned ("missing" / "changed",
+    hub jobs (``view front``, ``skin front``, ``mesh``, ``upscale``, ``face``, ``rig``, ``cleanup``, ``repair``
+    and ``extension`` — the last three local); ``face_due`` why a face retexture is planned ("missing" / "changed",
     else ""); ``running`` while a Run all of the character goes, ``last`` its last outcome
     (``{error, finished_at}``, None before the first). Read-only."""
     from app.core import base_body, model3d
@@ -1946,6 +1989,10 @@ def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
             return {**out, "kind": RUN_ALL_FACE, "hub_jobs": len(stages), "face_due": face_due,
                     "note": what + " + ".join(stages),
                     "steps": [{"name": stage, "jobs": 1} for stage in stages]}
+        if _mesh_repair_due(character_name, bsig):
+            return {**out, "kind": RUN_ALL_REPAIR, "hub_jobs": 0,
+                    "note": "base mesh not repaired with the saved settings: repair + extension rebuild (local)",
+                    "steps": [{"name": REPAIR_STEP, "jobs": 0}, {"name": EXTENSION_STEP, "jobs": 0}]}
         path = model3d.find_model3d(character_name, bsig) if bsig else None
         if path is not None and model3d.extension_settings_changed(character_name, path):
             return {**out, "kind": RUN_ALL_EXTENSION, "hub_jobs": 0,
@@ -1989,6 +2036,11 @@ def start_base_run_all(character_name: str) -> Dict[str, Any]:
     if kind == RUN_ALL_FACE:
         result = model3d.trigger_face_retexture(character_name, bsig)
         if result.get("status") == "already_running":
+            return {"status": "busy", "reason": RUN_ALL_BUSY}
+        return {"status": "started", "kind": kind}
+    if kind == RUN_ALL_REPAIR:
+        from app.core import base_mesh_repair
+        if model3d.generation_running(character_name) or not base_mesh_repair.start_repair(character_name, bsig):
             return {"status": "busy", "reason": RUN_ALL_BUSY}
         return {"status": "started", "kind": kind}
     if kind == RUN_ALL_EXTENSION:

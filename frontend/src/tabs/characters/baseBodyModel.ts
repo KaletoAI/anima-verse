@@ -7,9 +7,10 @@
  */
 
 /** What "Run all" runs now (`figure_build.base_run_all`): the plain body's refresh, the face cleanup of the
- *  stored base mesh, its missing or outdated face retexture, the extension rebuild after saved tip settings (Task
- *  UI2) — "" when every step is current. */
-export type RunAllKind = '' | 'plain_body' | 'face_cleanup' | 'face_retexture' | 'extension_rig'
+ *  stored base mesh, its missing or outdated face retexture, the base mesh repair after a saved repair setting or a
+ *  new repair version (Ruling A34), the extension rebuild after saved tip settings (Task UI2) — "" when every step is
+ *  current. */
+export type RunAllKind = '' | 'plain_body' | 'face_cleanup' | 'face_retexture' | 'mesh_repair' | 'extension_rig'
 
 /** `plain_body.run_all` of GET …/figure?plain=1. */
 export interface BaseRunAll {
@@ -57,6 +58,7 @@ export function runAllWhat(kind: RunAllKind, t: Tr = EN, faceDue: BaseRunAll['fa
     case 'face_retexture': return faceDue === 'changed'
       ? t('Face values changed — not applied yet: redoes the face retexture with the saved values')
       : t('Adds the missing face retexture to the base model')
+    case 'mesh_repair': return t('The base mesh is not repaired with the saved settings: repairs it, then rebuilds the extension bones (local)')
     case 'extension_rig': return t('Tip settings saved, not built yet: rebuilds the extension bones of the base model')
     default: return ''
   }
@@ -84,6 +86,7 @@ export function runAllStep(name: string, t: Tr = EN): string {
     case 'face': return t('Face retexture')
     case 'rig': return t('Rig')
     case 'cleanup': return t('Face cleanup (local)')
+    case 'repair': return t('Mesh repair (local)')
     case 'extension': return t('Extension bones (local)')
     default: return name
   }
@@ -161,3 +164,74 @@ export function chainRunAll(run: { steps: string[]; hub_jobs: number | null; ref
 export const TIP_DUE_NOTE = 'Saved — not built yet. Rebuild (local, no hub job) or Run all builds it.'
 /** The Rebuild button's label: the CPU extension rebuild of the base model, no hub job. */
 export const TIP_REBUILD_LABEL = 'Rebuild (local, no hub job)'
+
+// --- Base mesh repair (Ruling A34: holes filled on the CPU; saved on its own, "Repair again" runs it) ---------
+
+/** The repair's settings (`base_mesh_repair.validated_settings`). */
+export interface MeshRepairSettings { enabled: boolean; max_hole_cm: number }
+export const MESH_REPAIR_DEFAULTS: MeshRepairSettings = { enabled: true, max_hole_cm: 4 }
+export const MAX_HOLE_RANGE: [number, number] = [0.5, 20]
+
+/** `plain_body.mesh_repair` of GET …/figure?plain=1 (`model3d.mesh_repair_state`). */
+export interface MeshRepairState {
+  settings: MeshRepairSettings
+  record: {
+    status?: string; holes?: number; filled?: number; largest_cm?: number
+    unfilled?: Array<{ size_cm: number | null; reason: string }>; at?: string; error?: string
+  } | null
+  /** The settings or the repair version changed since the stored repair ran. */
+  due: boolean
+  /** The server's status line: "3 holes filled, largest 0.2 cm" … */
+  summary: string
+  light: 'ok' | 'warn' | 'error' | 'off'
+  /** A "Repair again" of the character runs. */
+  running: boolean
+  last: { signature: string; error: string; at: string } | null
+}
+
+/** The status light's colour class (ModelSteps' dots). */
+export function meshRepairDot(light: MeshRepairState['light']): string {
+  return light === 'ok' ? 'green' : light === 'warn' ? 'yellow' : light === 'error' ? 'red' : 'grey'
+}
+
+/** Why the draft cannot be saved, null = it can. */
+export function meshRepairInvalid(draft: MeshRepairSettings): string | null {
+  const [lo, hi] = MAX_HOLE_RANGE
+  if (!Number.isFinite(draft.max_hole_cm) || draft.max_hole_cm < lo || draft.max_hole_cm > hi) {
+    return 'The largest hole to fill goes from 0.5 to 20 cm'
+  }
+  return null
+}
+
+/** The body of POST …/model3d/options: only deviations from the defaults (the server prunes them as well). */
+export function meshRepairBody(draft: MeshRepairSettings): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (draft.enabled !== MESH_REPAIR_DEFAULTS.enabled) out.enabled = draft.enabled
+  if (draft.max_hole_cm !== MESH_REPAIR_DEFAULTS.max_hole_cm) out.max_hole_cm = draft.max_hole_cm
+  return out
+}
+
+/** The status line beside the light (the server's `summary`, built here so it is translated). */
+export function meshRepairLine(state: MeshRepairState, t: Tr = EN): string {
+  const r = state.record
+  let line: string
+  if (!r) line = t('Not repaired yet — the next rebuild repairs it')
+  else if (r.status === 'failed') line = r.error || t('Repair failed')
+  else if (r.status === 'skipped') line = t('Switched off')
+  else {
+    const parts: string[] = []
+    const filled = r.filled ?? 0
+    if (filled) {
+      parts.push((filled === 1 ? t('1 hole filled, largest {cm} cm') : t('{n} holes filled, largest {cm} cm'))
+        .replace('{n}', String(filled)).replace('{cm}', (r.largest_cm ?? 0).toFixed(1)))
+    }
+    const open = r.unfilled ?? []
+    if (open.length) {
+      const sizes = open.map((u) => (u.size_cm !== null ? `${u.size_cm.toFixed(1)} cm` : '?')).join(', ')
+      parts.push((open.length === 1 ? t('1 hole left open ({sizes})') : t('{n} holes left open ({sizes})'))
+        .replace('{n}', String(open.length)).replace('{sizes}', sizes))
+    }
+    line = parts.length ? parts.join(' · ') : t('Closed — no hole')
+  }
+  return state.due && r ? `${line} · ${t('settings changed — Repair again applies them')}` : line
+}

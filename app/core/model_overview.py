@@ -283,6 +283,27 @@ def _limb_weights_step(blender: Dict[str, Any], rig: str) -> Optional[Dict[str, 
     return step("limb_weights", "Limb weights", DONE, detail, numbers)
 
 
+def _mesh_repair_step(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The base mesh repair (``base_mesh_repair``, Ruling A34): holes found / filled, the largest filled, what
+    stayed open. None for a model that gets none (not a humanoid GLB)."""
+    from app.core.base_mesh_repair import summary
+    label = "Mesh repair"
+    if (meta.get("rig") or "mixamo") != "mixamo":
+        return None
+    record = _dict(meta.get("mesh_repair"))
+    if not record:
+        return step("mesh_repair", label, NOT_RECORDED, "Not repaired yet")
+    numbers = {"holes": record.get("holes"), "filled": record.get("filled"),
+               "largest_cm": record.get("largest_cm"), "left_open": len(record.get("unfilled") or []) or None,
+               "faces_added": record.get("faces_added"), "version": record.get("version")}
+    status = str(record.get("status") or "")
+    if status == "failed":
+        return step("mesh_repair", label, FAILED, summary(record), numbers)
+    if status == "skipped":
+        return step("mesh_repair", label, SKIPPED, summary(record), numbers)
+    return step("mesh_repair", label, WARNING if record.get("unfilled") else DONE, summary(record), numbers)
+
+
 def _extension_step(state: Dict[str, Any], *, source: str = "") -> Dict[str, Any]:
     if not state:
         return step("extension_rig", "Extension rig", SKIPPED, "No extension groups")
@@ -563,6 +584,7 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
             _rig_step(meta)]
     for row in (_head_twist_step(blender), _posture_step(blender), _normalize_step(blender),
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
+                _mesh_repair_step(meta),
                 _extension_step(_dict(meta.get("extension_rig"))),
                 _covered_step(_dict(meta.get("covered_variant")), exists=covered_exists, current=covered_current),
                 _collision_step(meta, current=collision_current),
