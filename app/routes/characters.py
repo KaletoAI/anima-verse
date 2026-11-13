@@ -2176,14 +2176,16 @@ def _hairstyle_id(character_name: str, item_id: str) -> str:
 
 
 @router.get("/{character_name}/hairstyles")
-def get_character_hairstyles(character_name: str) -> Dict[str, Any]:
+def get_character_hairstyles(character_name: str,
+                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The character's hairstyles (plan 2026-11-12-unified-worn-pieces Task 13):
     ``{hairstyles: [{id, name, description, mode, worn, plain, freshness:
     {state, reason}}], default_mode, modes, built_modes}`` — worn first
     (``garment_hair.hairstyle_list``); ``plain`` marks the hairstyle the
     plain body is the body of, ``default_mode`` the mode a new one gets,
     ``modes`` every mode, ``built_modes`` the ones that can be chosen
-    (``haar`` is not built yet). Read-only."""
+    (``haar`` is not built yet). Read-only; admin only like its sibling
+    hair routes (Ruling FR-minors)."""
     from app.core import garment_hair
     from app.models.character import get_character_profile
     _require_character(character_name)
@@ -2924,9 +2926,9 @@ def retexture_character_model3d(character_name: str) -> Dict[str, Any]:
 
 
 @router.post("/{character_name}/model3d/generate")
-def generate_character_model3d(character_name: str, force: bool = False,
+def generate_character_model3d(character_name: str, request: Request, force: bool = False,
                                backend: str = "", face_num: int = 0,
-                               texture_size: int = 0) -> Dict[str, Any]:
+                               texture_size: int = 0) -> Any:
     """Starts the mesh generation for the current outfit (T-pose render as
     input). ``backend`` picks the mesh backend (empty = the rig's mesh
     occasion chain of the image routing);
@@ -2934,23 +2936,25 @@ def generate_character_model3d(character_name: str, force: bool = False,
     (0 = default; texture size reaches the gateway once its alias declares
     the param). Cached per combination — ``force=1`` re-generates.
 
-    Base-body pipeline: "Rebuild from base body"
-    (``model3d_pipeline.rebuild_from_base``) — stale dressed views first,
-    then the outfit model built anew from the current base, whatever
-    ``force`` says. A ``backend``/``face_num``/``texture_size`` is a 400
-    (no mesh backend applies), a missing rigged base model a 409."""
+    Base-body pipeline (Ruling FR-I4): the character's Build, exactly as
+    ``POST /characters/{c}/figure/build`` (``figure.start_manual_build``):
+    admin only, 202 ``{"status": "started" | "queued" | "current"}``, 409
+    while a base-body step runs, 503 when the profile could not be read —
+    the Build's lock, plan and estimate, never a cascade of its own. A
+    ``backend``/``face_num``/``texture_size`` is a 400 (no mesh backend
+    applies)."""
     from app.core.model3d import trigger_generation
     from app.core.model_refs import find_ref_image
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
-    from app.core import model3d_pipeline
-    if model3d_pipeline.pipeline_state(character_name) is not None:
+    from app.core import figure_build, model3d_pipeline
+    if figure_build.on_pipeline(character_name):
+        require_admin(request)
         if (backend or "").strip() or face_num or texture_size:
             raise HTTPException(status_code=400, detail=model3d_pipeline.NO_BACKEND)
-        try:
-            return model3d_pipeline.rebuild_from_base(character_name)
-        except LookupError as exc:
-            raise HTTPException(status_code=409, detail=str(exc.args[0])) from exc
+        from fastapi.responses import JSONResponse
+        from app.routes.figure import start_manual_build
+        return JSONResponse(status_code=202, content=start_manual_build(character_name))
     if not find_ref_image(character_name, "tpose"):
         raise HTTPException(
             status_code=409,

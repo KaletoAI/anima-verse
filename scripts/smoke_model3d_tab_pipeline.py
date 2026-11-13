@@ -9,7 +9,7 @@ Runs against a THROWAWAY storage + instance directory with a copy of the
 repo's ``human`` package — no real world, no hub, no server process (the
 characters router in a bare FastAPI app, ``require_admin`` overridden).
 ``model3d.trigger_generation``, ``model_refs.trigger_now``,
-``model3d.trigger_rerig``, ``model3d.rerig_model`` and
+``figure_build.start``, ``model3d.trigger_rerig``, ``model3d.rerig_model`` and
 ``model3d.rebuild_extension_rig`` are recorders, so nothing renders, meshes
 or rigs.
 
@@ -29,32 +29,21 @@ Expected, derived by hand from the rules in the module docstring:
     model_refs/tpose_<Plain osig>.png -> 200 {status: generating}, one
     trigger_generation(Plain, force=False, backend_glob="").
     pipeline_state(Plain) is None.
-[2] Demo without a base model: generate -> 409 BASE_MODEL_FIRST;
-    generate?backend=x, ?face_num=5000, ?texture_size=1024 -> 400 NO_BACKEND;
-    nothing triggered. pipeline_state: base_model None, rerig_source False,
-    dressed_current False.
-[3] Demo with the ready base model, dressed views missing: generate -> 200
-    {status: generating, dress: true}; the worker calls
-    trigger_now(Demo, ("tpose",), force=False, blocking=True); the recorder
-    renders nothing -> no trigger_generation (dressed views still not
-    current).
-[4] Same, the trigger_now recorder now writes both dressed views: generate ->
-    {dress: true}; trigger_now once, then trigger_generation(Demo,
-    force=True) — a forced rebuild, not the cached check (recorded as
-    (Demo, True, "", followup False)).
-[5] Dressed views current: generate (also ?force=0) -> {dress: false}; no
-    trigger_now; trigger_generation(Demo, force=True).
-[6] A forced rebuild is never lost (ruling 2026-11-09). Demo in
-    model3d._generating (another model job runs; POLL_SECONDS 0.02):
-    two clicks -> {status: queued} twice, _pending == {(Demo, OSIG)},
-    pipeline_state queued True, nothing triggered while busy (0.2 s).
-    Job ends (guard released) -> exactly ONE trigger_generation(Demo,
-    force=True), _pending empty, no waiter left.
-    [6b] the model run itself finds a job started meanwhile (recorder
-    answers False once): the rebuild queues itself -> the waiter runs it
-    again -> two recorded calls, both forced, the second accepted.
-    [6c] a queued rebuild of an outfit no longer worn (signature
-    "deadbeef") is dropped when the job ends: no trigger.
+[2] Ruling FR-I4 — on the pipeline POST generate IS the Build (``figure_build.start`` a recorder answering
+    STARTED["answer"], default {status: started}; ``figure.start_manual_build`` maps it like POST
+    …/figure/build): ?backend=x, ?face_num=5000, ?texture_size=1024 -> 400 NO_BACKEND, nothing started;
+    generate and generate?force=1 -> 202 {status: started}, each one start(Demo, reason="manual"); no
+    trigger_now and no trigger_generation (the old cascade is unreachable).
+[3] The answers map like the Build route's, for both routes alike (POST generate and POST …/figure/build):
+    queued -> 202 {status: queued}; current -> 202 {status: current}; base_busy (reason "B") -> 409 "B";
+    off (reason "O") -> 409 "O"; failed (reason "F") -> 503 "F".
+[4] Admin only on the pipeline: ``routes.require_admin`` answering 403 -> generate 403 "Admin role required",
+    nothing started; Plain (off the pipeline, its T-pose ref stored in [1]) still reaches its own path:
+    200 {status: generating} — not 403.
+[5] Fails on the old code: at commit 5eab1741 the route called ``model3d_pipeline.rebuild_from_base`` (the
+    cascade) and ``model3d_pipeline`` defined it.
+[6] Base model and dressed views for the sections below: model3d/BSIG.glb with {rig: mixamo} -> pipeline
+    base_model "ready"; the dressed views written -> dressed_current True.
 [7] Refusals on the pipeline (409, REFUSED with the action):
     upload "Uploading a model", fetch-job "Fetching a mesh job",
     rig "Changing the rig label". Plain: upload of an invalid GLB -> 422
@@ -84,8 +73,8 @@ Expected, derived by hand from the rules in the module docstring:
     too, so it never reported done). Without low/0aaaaaaa.glb -> False.
 [11] GET /model3d (get_model3d_info stubbed — it probes the mesh backends
     over the network): Demo carries pipeline {base_signature BSIG, base_model
-    "ready", rerig_source True, dressed_current True, rebuilding False,
-    queued False};
+    "ready", rerig_source True, dressed_current True, fallback None} — no
+    rebuilding / queued keys (the cascade is gone, Ruling FR-I4);
     Plain carries pipeline None.
 """
 import hashlib
@@ -180,21 +169,26 @@ def main() -> int:
                     "base_signature": bsig, "dressed": True,
                     "base_image_sha256": hashlib.sha256(base.read_bytes()).hexdigest()}))
 
-        def settle():
-            for _ in range(200):
-                with model3d_pipeline._lock:
-                    if not model3d_pipeline._rebuilding:
-                        return
-                time.sleep(0.02)
-            FAILS.append("rebuild thread did not finish")
-
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         from app.core.auth_dependency import require_admin
         from app.routes import characters as routes
+        from app.routes import figure as figure_routes
+        from app.core import figure_build
+        from fastapi import HTTPException
         app = FastAPI()
         app.include_router(routes.router)
+        app.include_router(figure_routes.router)
         app.dependency_overrides[require_admin] = lambda: {"role": "admin"}
+        ROLE = {"admin": True}
+
+        def route_admin(_request):
+            if not ROLE["admin"]:
+                raise HTTPException(status_code=403, detail="Admin role required")
+            return {"role": "admin"}
+        routes.require_admin = route_admin
+        STARTED = {"answer": {"status": "started"}, "calls": []}
+        figure_build.start = lambda name, **kw: STARTED["calls"].append((name, kw)) or dict(STARTED["answer"])
 
         with TestClient(app, raise_server_exceptions=False) as client:
             def call(method, url, **kw):
@@ -219,92 +213,60 @@ def main() -> int:
             check("Plain trigger", GENERATIONS, [("Plain", False, "", False)])
             GENERATIONS.clear()
 
-            print("[2] Demo without a base model")
-            state = model3d_pipeline.pipeline_state("Demo")
-            check("state", (state["base_signature"], state["base_model"], state["rerig_source"],
-                            state["dressed_current"]), (bsig, None, False, False))
-            check("no base model", detail(call("POST", "/characters/Demo/model3d/generate?force=1")),
-                  (409, model3d_pipeline.BASE_MODEL_FIRST))
+            print("[2] Ruling FR-I4: generate on the pipeline is the Build")
             for query in ("backend=x", "face_num=5000", "texture_size=1024"):
                 check(f"400 {query}", detail(call("POST", f"/characters/Demo/model3d/generate?{query}")),
                       (400, model3d_pipeline.NO_BACKEND))
-            check("nothing triggered", (GENERATIONS, DRESS), ([], []))
+            check("nothing started", STARTED["calls"], [])
+            for query in ("", "?force=1"):
+                check(f"generate{query}", call("POST", f"/characters/Demo/model3d/generate{query}"),
+                      (202, {"status": "started"}))
+            check("two manual Builds", STARTED["calls"], [("Demo", {"reason": "manual"})] * 2)
+            check("no cascade", (DRESS, GENERATIONS), ([], []))
+            STARTED["calls"].clear()
 
-            print("[3] base ready, dressed views missing, dressing renders nothing")
+            print("[3] the answers map like the Build route's")
+            for answer, want in (({"status": "queued"}, (202, {"status": "queued"})),
+                                 ({"status": "current"}, (202, {"status": "current"})),
+                                 ({"status": "base_busy", "reason": "B"}, (409, "B")),
+                                 ({"status": "off", "reason": "O"}, (409, "O")),
+                                 ({"status": "failed", "reason": "F"}, (503, "F"))):
+                STARTED["answer"] = answer
+                for url in ("/characters/Demo/model3d/generate", "/characters/Demo/figure/build"):
+                    got = call("POST", url)
+                    if got[0] >= 400:
+                        got = detail(got)
+                    check(f"{answer['status']} {url.rsplit('/', 2)[-2]}", got, want)
+            STARTED["answer"] = {"status": "started"}
+            STARTED["calls"].clear()
+
+            print("[4] admin only on the pipeline")
+            ROLE["admin"] = False
+            check("non-admin 403", detail(call("POST", "/characters/Demo/model3d/generate")),
+                  (403, "Admin role required"))
+            check("nothing started", STARTED["calls"], [])
+            check("Plain keeps its own path", call("POST", "/characters/Plain/model3d/generate"),
+                  (200, {"status": "generating"}))
+            ROLE["admin"] = True
+            GENERATIONS.clear()
+
+            print("[5] fails on the old code (5eab1741)")
+            import subprocess
+            old_route = subprocess.run(["git", "-C", str(ROOT), "show", "5eab1741:app/routes/characters.py"],
+                                       capture_output=True, text=True).stdout
+            old_pipe = subprocess.run(["git", "-C", str(ROOT), "show", "5eab1741:app/core/model3d_pipeline.py"],
+                                      capture_output=True, text=True).stdout
+            check("5eab1741: the route ran the cascade", "model3d_pipeline.rebuild_from_base(character_name)"
+                  in old_route, True)
+            check("5eab1741: the cascade existed", "def rebuild_from_base" in old_pipe, True)
+            check("the cascade is gone", hasattr(model3d_pipeline, "rebuild_from_base"), False)
+
+            print("[6] base model and dressed views for the sections below")
             (models / f"{bsig}.glb").write_bytes(b"glTF-base")
             (models / f"{bsig}.json").write_text(json.dumps({"rig": "mixamo", "base": True}))
             check("base ready", model3d_pipeline.pipeline_state("Demo")["base_model"], "ready")
-            check("rebuild", call("POST", "/characters/Demo/model3d/generate?force=1"),
-                  (200, {"status": "generating", "dress": True}))
-            settle()
-            check("dressed first", DRESS, [("Demo", ("tpose",), False, True)])
-            check("no model run", GENERATIONS, [])
-            DRESS.clear()
-
-            print("[4] dressing succeeds")
-            dress_writes["on"] = True
-            check("rebuild", call("POST", "/characters/Demo/model3d/generate"),
-                  (200, {"status": "generating", "dress": True}))
-            settle()
-            check("dressed first", DRESS, [("Demo", ("tpose",), False, True)])
-            check("forced model run", GENERATIONS, [("Demo", True, "", False)])
-            DRESS.clear()
-            GENERATIONS.clear()
-
-            print("[5] dressed views current")
-            check("current", model3d_pipeline.pipeline_state("Demo")["dressed_current"], True)
-            check("rebuild force=0", call("POST", "/characters/Demo/model3d/generate?force=0"),
-                  (200, {"status": "generating", "dress": False}))
-            settle()
-            check("no dressing", DRESS, [])
-            check("forced model run", GENERATIONS, [("Demo", True, "", False)])
-            GENERATIONS.clear()
-
-            print("[6] a model job runs: the forced rebuild waits, never lost")
-            model3d_pipeline.POLL_SECONDS = 0.02
-
-            def idle():
-                for _ in range(300):
-                    with model3d_pipeline._lock:
-                        if (not model3d_pipeline._waiters and not model3d_pipeline._rebuilding
-                                and not model3d_pipeline._pending):
-                            return
-                    time.sleep(0.02)
-                FAILS.append("waiter did not finish")
-
-            with model3d._lock:
-                model3d._generating.add("Demo")
-            for click in (1, 2):
-                check(f"click {click}", call("POST", "/characters/Demo/model3d/generate"),
-                      (200, {"status": "queued"}))
-            check("pending", set(model3d_pipeline._pending), {("Demo", osig)})
-            check("state queued", model3d_pipeline.pipeline_state("Demo")["queued"], True)
-            time.sleep(0.2)
-            check("nothing while busy", (GENERATIONS, DRESS), ([], []))
-            with model3d._lock:
-                model3d._generating.discard("Demo")
-            idle()
-            check("one forced run after the job", GENERATIONS, [("Demo", True, "", False)])
-            check("nothing pending", (set(model3d_pipeline._pending), set(model3d_pipeline._waiters)),
-                  (set(), set()))
-            GENERATIONS.clear()
-
-            print("[6b] a job starts between the check and the model run")
-            GEN_ANSWERS.append(False)
-            check("rebuild", call("POST", "/characters/Demo/model3d/generate"),
-                  (200, {"status": "generating", "dress": False}))
-            idle()
-            check("re-run forced", GENERATIONS, [("Demo", True, "", False), ("Demo", True, "", False)])
-            GENERATIONS.clear()
-
-            print("[6c] a queued rebuild of an outfit no longer worn")
-            with model3d._lock:
-                model3d._generating.add("Demo")
-            model3d_pipeline._queue_forced("Demo", "deadbeef")
-            with model3d._lock:
-                model3d._generating.discard("Demo")
-            idle()
-            check("dropped", (GENERATIONS, DRESS), ([], []))
+            write_dressed()
+            check("dressed current", model3d_pipeline.pipeline_state("Demo")["dressed_current"], True)
 
             print("[7] refusals")
             glb = {"file": ("x.glb", b"not a glb", "model/gltf-binary")}
@@ -338,7 +300,7 @@ def main() -> int:
             check("Demo GET", status[0], 200)
             check("Demo pipeline", (status[1] or {}).get("pipeline"),
                   {"base_signature": bsig, "base_model": "ready", "rerig_source": True,
-                   "dressed_current": True, "rebuilding": False, "queued": False, "fallback": None})
+                   "dressed_current": True, "fallback": None})
             # The current outfit has no model: the tab says so (model3d_pipeline.fallback_state).
             model3d.get_model3d_info = lambda name, preview_states=None: {"pending": False, "model": None,
                                                                           "signature": osig}
