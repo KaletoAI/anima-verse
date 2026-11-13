@@ -9,8 +9,10 @@
  * stored) → face retexture ("Improve face before rigging", or the dialog
  * here) → rig → normalize, extension bones, collision capsules.
  *
- * - Switches (POST /characters/{n}/model3d/options): `face_cleanup` and
- *   `face_before_rig` — they decide the NEXT mesher run.
+ * - Settings (FaceSettings, Task UI1 rule R3 — saved on their own, nothing runs): the switches
+ *   `face_cleanup` and `face_before_rig` (they decide the NEXT mesher run) and the face retexture values
+ *   (`face_photo`, `face_controls`). Rendered here unless the caller shows them in its own Settings section
+ *   (`settingsElsewhere` — the Base body tab).
  * - "Re-apply face cleanup…" (POST .../model3d/face-cleanup): brings the
  *   cleanup onto the STORED source (from the mesher's retained original) and
  *   rebuilds what follows it; the server says which hub jobs that costs
@@ -28,7 +30,7 @@
  * The caller owns the status (`st`, GET .../model3d) and its poll: `onStarted`
  * asks it to poll until the run ends; completion toasts are raised here.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Field } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -36,6 +38,8 @@ import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import type { Model3DInfo, Model3DStatus } from './FieldModel3D'
+import { FaceSettings } from './FaceSettings'
+import { faceControlsOf, facePhotoOf } from './baseBodyModel'
 
 /** The face cleanup of the retained source (server `model3d.face_cleanup_state`). */
 export interface FaceCleanupState {
@@ -122,7 +126,7 @@ const CLEANUP_STATUS: Record<FaceCleanupState['status'], string> = {
 const WARN = { color: 'var(--ga-warn, #c77d0a)' }
 
 export function ModelFaceActions({ character, st, face, signature, cleanup, hasModel, canRerig,
-  rerigBlocked, onReload, onStarted }: {
+  rerigBlocked, onReload, onStarted, settingsElsewhere = false }: {
   character: string
   st: Model3DStatus
   /** Face fields of the model the face acts on; null without a model. */
@@ -138,6 +142,8 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
   onReload: () => Promise<unknown> | void
   /** A run started: the caller polls until `st.pending` clears. */
   onStarted: () => void
+  /** The caller renders FaceSettings in its own Settings section (the Base body tab). */
+  settingsElsewhere?: boolean
 }) {
   useClockSettings()
   const { t, lang } = useI18n()
@@ -164,16 +170,6 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
   // The click's own busy flag ends with the next status read (by then the
   // server reports the run as `pending`).
   useEffect(() => { setBusy(false) }, [st])
-
-  const setOption = useCallback(async (key: 'face_before_rig' | 'face_cleanup', value: boolean) => {
-    try {
-      await apiPost(`/characters/${enc}/model3d/options`, { [key]: value })
-      toast(t('Saved'))
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    }
-    await onReload()
-  }, [enc, onReload, t, toast])
 
   // --- Re-apply face cleanup -------------------------------------------
   const [cleanupOpen, setCleanupOpen] = useState(false)
@@ -314,14 +310,14 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
   }, [faceOpen, faceReference, faceSignature, facePhoto, faceBackend, hubPhotoControls, enc, photoPreviewKey])
 
   const openFaceDialog = () => {
-    setFacePhoto({ balance: st.options?.face_photo?.balance ?? 1, tone_match: st.options?.face_photo?.tone_match ?? 1,
-      skin_recolor: st.options?.face_photo?.skin_recolor ?? 1, brightness: st.options?.face_photo?.brightness ?? 1 })
+    // The dialog starts from the saved face values (FaceSettings); a run with other values stores its photo values.
+    setFacePhoto(facePhotoOf(st.options?.face_photo))
     setFaceReference('')
     setUpscaleFirst(!!st.upscale_runnable)
     setUpscaleBackend('')
     setFaceBackend('')
     setFaceCheck(null)
-    setFaceControls({ strength: 1, feather: 0.18, render_resolution: 768, yaw: 0 })
+    setFaceControls(faceControlsOf(st.options?.face_controls))
     setFaceOpen(true)
   }
 
@@ -377,19 +373,12 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
   const up = fr?.upscale
   const photo = fr?.status === 'applied' && fr.photo ? fr.photo : null
   const photoText = photo ? `${photo.balance ? ` · ${t('Light balance')} ${Math.round(photo.balance * 100)} %` : ''}${photo.tone_match != null && photo.tone_match !== 1 ? ` · ${t('Skin tone match')} ${Math.round(photo.tone_match * 100)} %` : ''}${typeof photo.skin_recolor === 'number' && photo.skin_recolor !== 1 ? ` · ${t('Skin colour correction')} ${Math.round(photo.skin_recolor * 100)} %` : ''}${photo.brightness !== 1 ? ` · ${t('Face brightness')} ${Math.round(photo.brightness * 100)} %` : ''}${photo.applied_on === 'hub' ? ' (hub)' : photo.applied_on === 'none' ? '' : ' (local)'}` : ''
-  const optionsDisabled = !humanoid
   const jobsText = (cleanup?.jobs || []).map((job) => t(job)).join(' → ')
   const notOnStored = !!cleanup?.enabled && !!cleanup.stored && cleanup.status !== 'applied'
 
   return (
     <div className="ga-face-actions" role="group" aria-label={t('Face and rig')}>
-      <label className="ga-check-row"
-        title={!humanoid ? t('Humanoid models only.')
-          : t('Before the face retexture, lash flaps the mesher built from painted lashes are folded back onto their root (the eyeball, lids and sockets stay) and over-saturated lips in the raw texture are neutralised. Recorded in the model overview as "Face cleanup". Humanoid models only.')}>
-        <input type="checkbox" checked={!!st.options?.face_cleanup} disabled={optionsDisabled || pending}
-          onChange={(e) => { void setOption('face_cleanup', e.target.checked) }} />
-        <span>{t('Face cleanup before the face retexture (lashes, lips)')}</span>
-      </label>
+      {settingsElsewhere ? null : <FaceSettings character={character} st={st} pending={pending} onReload={onReload} />}
       {cleanup && cleanup.status !== 'none' ? (
         <div className="ga-face-actions-row">
           <span className="ga-hint ga-face-actions-state"
@@ -413,14 +402,6 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
           {cleanup.result.ok ? t('Face cleanup re-applied') : `${t('Face cleanup failed')}: ${cleanup.result.error || t('Error')}`}
         </div>
       ) : null}
-      <label className="ga-check-row"
-        title={!humanoid ? t('Humanoid models only.')
-          : pipeline ? t('The base body model gets the face correction (upscaler + face retexture) before its first rig; outfit models take the face from it.')
-          : t('New meshes get the face correction (upscaler + face retexture) before the first rig, so the rigger runs once. Independent of auto-generate. Humanoid models only.')}>
-        <input type="checkbox" checked={!!st.options?.face_before_rig} disabled={optionsDisabled || pending}
-          onChange={(e) => { void setOption('face_before_rig', e.target.checked) }} />
-        <span>{t('Improve face before rigging')}</span>
-      </label>
       {faceNotice ? (
         <div className="ga-face-actions-row" role="status" data-face-reference={face?.face_reference?.face_problem?.code || ''}>
           <span className="ga-hint" style={WARN}>{faceNotice}</span>

@@ -441,11 +441,29 @@ def get_model3d_options(character_name: str) -> Dict[str, Any]:
             # result passes the visual gate (review 2026-11-09, torn shards at the eye); only True is stored.
             "face_cleanup": bool(raw.get("face_cleanup")),
             "face_photo": dict(raw.get("face_photo") or {}),
+            # The face retexture's four controls (strength, feather, render resolution, yaw) — remembered like
+            # ``face_photo``, saved on their own (the Base body tab's face settings); only deviations from
+            # ``face_retexture.validated_params()`` are stored. A run without explicit values uses them
+            # (``remembered_face_controls``).
+            "face_controls": dict(raw.get("face_controls") or {}),
             "extension_rig_models": dict(raw.get("extension_rig_models") or {}),
             "extension_motion": dict(raw.get("extension_motion") or {}),
             # Collision-capsule radius scale per region (collision.py), all
             # four regions; an invalid stored map counts as the defaults.
             "collision_scales": _collision_scales_option(raw.get("collision_scales"))}
+
+
+def remembered_face_controls(character_name: str) -> Dict[str, Any]:
+    """The face retexture controls a run without explicit values uses: the character's stored
+    ``face_controls`` over the defaults (``face_retexture.validated_params``); a stored set that no longer
+    validates counts as the defaults (one warning) — it never breaks a model run."""
+    from app.core import face_retexture
+    stored = get_model3d_options(character_name).get("face_controls") or {}
+    try:
+        return face_retexture.validated_params(stored or None)
+    except ValueError as exc:
+        logger.warning("Stored face controls of %s ignored: %s", character_name, exc)
+        return face_retexture.validated_params(None)
 
 
 def _collision_scales_option(raw: Any) -> Dict[str, float]:
@@ -476,6 +494,15 @@ def set_model3d_options(character_name: str,
                 opts["face_photo"] = cleaned
             else:
                 opts.pop("face_photo", None)
+        if "face_controls" in updates:
+            from app.core.face_retexture import validated_params as control_params
+            controls = control_params(updates["face_controls"])
+            control_defaults = control_params(None)
+            cleaned = {k: v for k, v in controls.items() if v != control_defaults[k]}
+            if cleaned:
+                opts["face_controls"] = cleaned
+            else:
+                opts.pop("face_controls", None)
         if "face_before_rig" in updates:
             if type(updates["face_before_rig"]) is not bool:
                 raise ValueError("face_before_rig must be a boolean")
@@ -3142,7 +3169,7 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                 if photo_mode == 'local' and face_reference == 'front' and photo['balance']:
                     photo['balance'] = 0.
                     photo_reason = PROBLEM
-                face_inputs = {"reference": face_reference, "face_before_rig": True, "controls": face_retexture.validated_params(None),
+                face_inputs = {"reference": face_reference, "face_before_rig": True, "controls": remembered_face_controls(character_name),
                                "face_backend_glob": "", "upscale": face_retexture.use_upscale(face_reference, None), "upscale_backend_glob": "",
                                "source_kind": "facefix", "photo": photo, "photo_mode": photo_mode, "photo_reason": photo_reason}
                 if not ready["ok"]:
@@ -4023,7 +4050,9 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
         photo = photo_params(photo) if explicit_photo else dict(remembered)
         photo_mode = 'hub' if face_retexture.photo_controls_supported(character_name, backend_glob) else 'local'
         photo_reason = ''
-        controls = face_retexture.validated_params(params)
+        # No explicit controls (Improvements, any non-dialog caller): the remembered ones, like the photo values.
+        controls = (face_retexture.validated_params(params) if params is not None
+                    else remembered_face_controls(character_name))
         face_snapshot = {}
         eligibility = face_retexture.check(character_name, signature, reference, _snapshot=face_snapshot)
         ready = face_retexture.runnable(character_name, backend_glob)
@@ -4432,7 +4461,8 @@ def trigger_face_retexture(character_name: str, signature: str, *,
     from app.core.task_queue import get_task_queue
     from app.core.face_retexture import safe_signature, validated_params
     safe_signature(signature)
-    controls = validated_params(params)
+    # None = the remembered controls (the Base body tab's "Run all", any caller without the dialog's values).
+    controls = validated_params(params) if params is not None else remembered_face_controls(character_name)
     from app.core.face_photo_adjust import validated_params as photo_params
     photo = photo_params(photo) if photo is not None else None  # None = remembered
     with _lock:

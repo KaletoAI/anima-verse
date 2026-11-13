@@ -1130,7 +1130,7 @@ DRAFT_OCCASIONS = {"back": "outfit_back_draft", "left": "outfit_side_draft", "ri
 SIDE_ARM_MARGIN_DEFAULT = 0.03
 SIDE_ARM_MARGIN_MAX = 0.2
 SIDE_VIEW_NOT_DRESSED = ("On the base-body pipeline only the front and the back are dressed — "
-                         "the side views belong to the base body (Figure tab)")
+                         "the side views belong to the base body (Base body tab)")
 DRESSED_FRONT_FIRST = "Render the dressed front first — the back draft is made from it"
 
 
@@ -1199,7 +1199,7 @@ DRAFT_ATTEMPTS = 2
 #: them as refs of their own; the reference gate still accepts them.
 DRAFT_DIR = "drafts"
 
-BASE_IMAGES_MISSING = "Base body images missing — render them in the Figure tab"
+BASE_IMAGES_MISSING = "Base body images missing — render them in the Base body tab"
 BASE_MODEL_MISSING = "Base body model missing — generate it in the 3D tab"
 DRESSED_IMAGES_MISSING = "Dressed images missing — render the outfit's pose images"
 OLDER_BASE = "Built on an older base body"

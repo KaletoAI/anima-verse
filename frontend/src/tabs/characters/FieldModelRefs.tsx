@@ -338,6 +338,8 @@ export function FieldModelRefs({
   // On the figure pipeline the T-pose pass is a step of the Build: the Figure tab's
   // "Build automatically" decides (one switch per thing), so this toggle is off-limits.
   const buildDecides = (kind: RefKind) => !!info.pipeline && kind === 'tpose'
+  /** Every kind of this tab is the Build's (the Pose tab on the pipeline). */
+  const pipelineViews = kindList.every(buildDecides)
   // What Generate fires: the checked kinds, and on the pipeline always the T-pose pass.
   const fires = (kind: RefKind) => buildDecides(kind) || autoOn(kind)
   const anyAuto = kindList.some((k) => fires(k))
@@ -572,14 +574,19 @@ export function FieldModelRefs({
           : t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination.')}
       </div>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={blocked || !anyAuto}
-          onClick={() => generate()}
-        >
-          {showGenerating ? t('Generating…') : t('Generate')}
-        </button>
+        {/* On the pipeline the dressed views are the Build's (its "Build (N jobs)" is this tab's Run all, beside
+            the outfit model); a second all-views render here and the T-pose path's disabled Auto box are not
+            shown (Task UI1, rule R4) — each view keeps its own Regenerate. */}
+        {pipelineViews ? null : (
+          <button
+            type="button"
+            className="ga-btn ga-btn-sm"
+            disabled={blocked || !anyAuto}
+            onClick={() => generate()}
+          >
+            {showGenerating ? t('Generating…') : t('Generate')}
+          </button>
+        )}
         {showQueued ? (
           <span className="ga-hint">
             {dueIn > 0
@@ -587,18 +594,15 @@ export function FieldModelRefs({
               : t('Render queued')}
           </span>
         ) : null}
-        {kindList.map((kind) => (
+        {kindList.filter((kind) => !buildDecides(kind)).map((kind) => (
           <label
             key={kind}
-            style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: buildDecides(kind) ? 'not-allowed' : 'pointer' }}
-            title={buildDecides(kind)
-              ? t(BUILD_MAKES_VIEWS)
-              : t('Render this image automatically after outfit changes')}
+            style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
+            title={t('Render this image automatically after outfit changes')}
           >
             <input
               type="checkbox"
               checked={autoOn(kind)}
-              disabled={buildDecides(kind)}
               onChange={(e) => setAuto(kind, e.target.checked)}
             />
             <span>

@@ -23,15 +23,18 @@ server. Expected values, by hand from the plan's Task 11 file list:
     carrying ``pipeline`` and ``humanoid`` (what the base-body GET answered);
     GET ``/characters/Demo/figure`` → 200 WITHOUT ``plain_body``.
 [3] ``shared/templates/character/base-character.json`` has no tab id
-    ``base_body_tab`` / ``outfit_body_tab`` / ``hair_tab`` and no section
-    with special ``base_body`` / ``outfit_body`` / ``hair``; tab
-    ``figure_tab`` and section ``figure`` (special ``figure``) are there.
+    ``outfit_body_tab`` / ``hair_tab`` and no section with special
+    ``outfit_body`` / ``hair``; tab ``figure_tab`` and section ``figure``
+    (special ``figure``) are there. (Was: no ``base_body_tab`` / ``base_body``
+    either — Task UI1 brought a NEW Base body tab back at the user's request,
+    2026-11-13: tab ``base_body_tab`` with section ``base_body`` directly
+    before ``figure_tab``, rendered by a new ``FieldBaseBody``.)
     Resolved (``app.models.character_template.get_template`` + the
     ``visible_when.feature`` rule of CharactersTab): ``human-default`` shows
     the ``figure`` section, ``animal-default`` hides it (``humanoid: false``).
-[4] ``git grep`` in ``frontend/src``: 0 lines name ``FieldBaseBody``,
-    ``FieldOutfitBody``, ``FieldHair`` (word) or ``useOutfitBodies``; the four
-    files do not exist.
+[4] ``git grep`` in ``frontend/src``: 0 lines name ``FieldOutfitBody``,
+    ``FieldHair`` (word) or ``useOutfitBodies``; those three files do not exist
+    (``FieldBaseBody`` is Task UI1's new Base body tab — was: deleted too).
 [5] ``git grep`` in ``app frontend/src docs README.md``: 0 lines name
     ``outfit_body_mode`` outside ``app/core/figure_migration.py`` (the boot
     migration that removes the key), and 0 lines use ``own_mesh`` as the
@@ -41,8 +44,9 @@ server. Expected values, by hand from the plan's Task 11 file list:
     ``in_body``) is the new model and stays — the plan's literal "0 own_mesh"
     would forbid the mode itself.
 [6] No user-facing source names a removed tab: 0 lines in ``app``,
-    ``frontend/src``, ``packages``, ``plugins``, ``static/admin`` name "Base body
-    tab", "Outfit body tab" or "Hair tab" (case-insensitive).
+    ``frontend/src``, ``packages``, ``plugins``, ``static/admin`` name
+    "Outfit body tab" or "Hair tab" (case-insensitive). (Was: "Base body tab"
+    too — the tab exists again since Task UI1.)
 [7] ``body_retexture.run_timeout_seconds`` (the painted-body run limit of the
     removed Outfit body tab runs) is no longer in ``config_schema``.
 [8] Fails on the old code: at 223c629a the template has ``base_body_tab``,
@@ -131,9 +135,12 @@ def template_part() -> None:
     raw = json.loads((ROOT / "shared/templates/character/base-character.json").read_text(encoding="utf-8"))
     tab_ids = [t.get("id") for t in raw.get("tabs") or []]
     specials = [s.get("special") for s in raw.get("sections") or []]
-    check("[3] removed tab ids", [t for t in tab_ids if t in ("base_body_tab", "outfit_body_tab", "hair_tab")], [])
-    check("[3] removed specials", [s for s in specials if s in ("base_body", "outfit_body", "hair")], [])
+    check("[3] removed tab ids", [t for t in tab_ids if t in ("outfit_body_tab", "hair_tab")], [])
+    check("[3] removed specials", [s for s in specials if s in ("outfit_body", "hair")], [])
     check("[3] figure_tab + figure section", "figure_tab" in tab_ids and "figure" in specials)
+    check("[3] Task UI1: base_body_tab right before figure_tab, section base_body",
+          [tab_ids.index("base_body_tab") + 1 == tab_ids.index("figure_tab") if "base_body_tab" in tab_ids
+           and "figure_tab" in tab_ids else False, "base_body" in specials], [True, True])
     from app.models.character_template import get_template
     for name, want in (("human-default", True), ("animal-default", False)):
         tmpl = get_template(name) or {}
@@ -146,8 +153,8 @@ def template_part() -> None:
 
 def grep_part() -> None:
     check("[4] frontend names none of the removed components",
-          grep_lines(r"FieldBaseBody\|FieldOutfitBody\|FieldHair\b\|useOutfitBodies", "frontend/src"), [])
-    for f in ("FieldBaseBody.tsx", "FieldOutfitBody.tsx", "FieldHair.tsx", "useOutfitBodies.ts"):
+          grep_lines(r"FieldOutfitBody\|FieldHair\b\|useOutfitBodies", "frontend/src"), [])
+    for f in ("FieldOutfitBody.tsx", "FieldHair.tsx", "useOutfitBodies.ts"):
         check(f"[4] {f} deleted", (ROOT / "frontend/src/tabs/characters" / f).exists(), False)
     check("[4] app/routes/outfit_bodies.py deleted", (ROOT / "app/routes/outfit_bodies.py").exists(), False)
     mode = [line for line in grep_lines("outfit_body_mode", "app", "frontend/src", "docs", "README.md")
@@ -159,7 +166,7 @@ def grep_part() -> None:
             if not line.startswith("app/core/figure_migration.py:") and flag.search(line.split(":", 2)[-1])]
     check("[5] own_mesh never used as the removed flag", hits, [])
     check("[6] no source names a removed tab",
-          grep_lines("base body tab|outfit body tab|hair tab", "app", "frontend/src", "packages", "plugins",
+          grep_lines("outfit body tab|hair tab", "app", "frontend/src", "packages", "plugins",
                      "static/admin", extended=True, icase=True), [])
 
 

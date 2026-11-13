@@ -25,8 +25,9 @@
  *   Details, the single action that builds its OTHER state's mesh
  *   ("Build the open mesh — 6 hub jobs", POST …/garments/{item}/run
  *   {state}; the Build only ever makes the worn state's);
- * - "Body:" (plain body · shape · texture) with the plain body's own views
- *   and model collapsed (FigureBodyDetails, each action single) and the
+ * - "Body:" (plain body · shape · texture), one line on the base body with
+ *   "Open Base body tab" (its views, model, face and rig steps and their
+ *   settings live in the Base body tab since Task UI1 — FieldBaseBody) and the
  *   stored bodies and textures collapsed (FigureStored, Delete).
  *
  * Nothing here starts a chain except Build and Retry (both POST
@@ -44,11 +45,10 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from './Model3DViewer'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
-import { FigureBodyDetails } from './FigureBodyDetails'
 import { FigureStored } from './FigureStored'
 import { useFigure } from './useFigure'
 import {
-  BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, NO_BASE_BODY_NOTE, bodyLine,
+  BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, NO_BASE_BODY_NOTE, baseBodyLine, bodyLine,
   buildButton, changeLine, hairState, headerLine, noBaseBody, stateMeshAction, wornState,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, HairMode, PieceState } from './figureModel'
@@ -69,10 +69,12 @@ function Collapsed({ summary, children }: { summary: string; children: () => Rea
 
 const noop = () => undefined
 
-export function FieldFigure({ character, onOpenWardrobe }: {
+export function FieldFigure({ character, onOpenWardrobe, onOpenBaseBody }: {
   character: string
   /** Opens the Wardrobe tab, where the modes are edited. */
   onOpenWardrobe?: () => void
+  /** Opens the Base body tab (the plain body's views, model, face and rig, and their settings). */
+  onOpenBaseBody?: () => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -138,7 +140,7 @@ export function FieldFigure({ character, onOpenWardrobe }: {
           onAutoBuild={(enabled) => { void post('figure/auto-build', { enabled }) }} />
         <WornTable data={data} character={character} busy={posting} onRetry={build} onOpenWardrobe={onOpenWardrobe}
           onOpenPiece={(id, name) => setOpenPiece({ id, name })} onStateMesh={buildStateMesh} onChanged={reload} />
-        <BodySection data={data} character={character} onChanged={reload} />
+        <BodySection data={data} character={character} onChanged={reload} onOpenBaseBody={onOpenBaseBody} />
       </div>
       {openPiece ? (
         <GarmentPieceDialog character={character} itemId={openPiece.id} name={openPiece.name} noRunAll
@@ -307,10 +309,11 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenPiece
   )
 }
 
-function BodySection({ data, character, onChanged }: {
+function BodySection({ data, character, onChanged, onOpenBaseBody }: {
   data: FigurePayload
   character: string
   onChanged: () => void
+  onOpenBaseBody?: () => void
 }) {
   const { t } = useI18n()
   if (!data.body) return null
@@ -324,12 +327,12 @@ function BodySection({ data, character, onChanged }: {
         {bodyLine(data.body, shapeNames, names('painted'), t)}
       </div>
       {plainNote ? <div className="ga-hint">{t(plainNote)}</div> : null}
-      <Collapsed summary={t('Plain body: views, model, face and rig')}>
-        {() => (
-          <FigureBodyDetails character={character} jobs={data.body?.plain.jobs} autoBuild={data.auto_build}
-            onChanged={onChanged} />
-        )}
-      </Collapsed>
+      <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 8 }}>
+        <span className="ga-hint">{baseBodyLine(data.body.plain.state, t)}</span>
+        {onOpenBaseBody ? (
+          <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>{t('Open Base body tab')}</button>
+        ) : null}
+      </div>
       <Collapsed summary={t('Stored bodies and textures')}>
         {() => <FigureStored character={character} onDeleted={onChanged} />}
       </Collapsed>

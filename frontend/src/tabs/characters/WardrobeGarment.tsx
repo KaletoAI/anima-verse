@@ -65,6 +65,7 @@ import {
   closableDisabled, wearersLine,
 } from './figureModel'
 import type { MeshMode, PieceState } from './figureModel'
+import { chainRunAll } from './baseBodyModel'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
  *  2026-11-11 § 15). */
@@ -476,6 +477,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   const stepLabels = footwear ? FOOTWEAR_STEP_LABELS : STEP_LABELS
   // What a default run of the shoe would run and what it costs (server step list).
   const footwearPlan = footwear ? footwearRunPlan(footwear, t) : ''
+  // Rule R1 (Task UI1): the label carries what Run all runs now; nothing due → "Everything is current".
+  const runAll = chainRunAll(info?.run, t)
   const running = garmentRunning(info)
   const busy = feedback.pending !== null || running
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
@@ -648,10 +651,11 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
               feedback={feedback}
               slot="all"
               primary
-              disabled={busy || !garment}
-              title={[t('Runs every step that is missing or out of date'), footwearPlan].filter(Boolean).join('\n')}
+              disabled={busy || !garment || runAll.disabled}
+              title={[t('Runs every step that is missing or out of date'), info.run?.note || '', footwearPlan]
+                .filter(Boolean).join('\n')}
               onClick={() => onRun({}, 'all')}
-              label={t('Run all')}
+              label={runAll.label}
             />
           ) : null}
           <button type="button" className="ga-modal-close" aria-label={t('Close')} onClick={onClose}>×</button>

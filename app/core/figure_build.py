@@ -1081,6 +1081,183 @@ def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
         return {"view": None, "front": None, "model": None, "after_front": None}
 
 
+# --- The Base body tab's "Run all" (Task UI1, rule R1) ----------------------------------------------------------
+#
+# ONE button that brings the plain (base) body up to date and skips every step that is current — the same
+# judgement the Build and the ``base_refresh`` improvement use, never a second one:
+#
+# 1. ``plain_body`` — ``base_body.base_refresh_plan(missing=True)`` has views or the model: exactly the Build's
+#    ``plain_body`` step (``_run_plain_body`` through ``_run_step``: the stale / missing views, the skin step with
+#    the front, then the model — whose run applies the face cleanup and the face retexture as switched on);
+#    cost ``base_body.base_rebuild_cost``.
+# 2. else ``face_cleanup`` — the stored base mesh is not cleaned at the current version while the switch is on
+#    (``model3d.face_cleanup_state`` ``can_reapply``): ``model3d.trigger_face_cleanup``, which rebuilds what follows.
+# 3. else ``face_retexture`` — "Improve face before rigging" is on and the stored base model has no face retexture
+#    (none recorded, or the last one failed): ``model3d.trigger_face_retexture`` with the remembered settings.
+# 4. else nothing: "Everything is current".
+#
+# The single steps (a view's / the model's Regenerate, "Run skin step", the face dialogs) stay the forced
+# re-runs (rule R2); the settings (the face switches and values) are saved on their own (rule R3).
+
+#: ``base_run_all`` kinds.
+RUN_ALL_PLAIN, RUN_ALL_CLEANUP, RUN_ALL_FACE = "plain_body", "face_cleanup", "face_retexture"
+#: ``start_base_run_all``'s refusals.
+RUN_ALL_BUILD_RUNNING = ("A Build runs for this character now — it refreshes the base body itself when that is "
+                         "outdated; Run all again after it")
+RUN_ALL_BUSY = "A base view render or a 3D run of this character is going — Run all again after it"
+#: The face cleanup itself is local (CPU); its label in the step list.
+CLEANUP_STEP = "cleanup"
+
+_run_all_active: set = set()
+_run_all_last: Dict[str, Dict[str, Any]] = {}
+
+
+def _face_retexture_pending(character_name: str, bsig: str) -> bool:
+    """The stored base model misses its face retexture: "Improve face before rigging" is on, the model is a
+    humanoid one with its retained unrigged source, and its sidecar records no face retexture or a failed one
+    (``reverted`` and ``skipped`` are decisions, not missing work)."""
+    from app.core import model3d
+    if not model3d.get_model3d_options(character_name).get("face_before_rig"):
+        return False
+    if model3d.required_rig(character_name) != "mixamo":
+        return False
+    path = model3d.find_model3d(character_name, bsig)
+    if path is None or not (path.parent / "unrigged" / f"{bsig}.glb").is_file():
+        return False
+    record = model3d._read_sidecar(path).get("face_retexture")
+    return not isinstance(record, dict) or record.get("status") == "failed"
+
+
+def _face_stages(character_name: str, bsig: str, follow_up: str) -> List[str]:
+    """The hub stages of a face redo on the stored base mesh: a re-rig alone, or the face stages of a fresh
+    mesh run (``model3d.mesh_hub_stages`` without ``mesh``: [upscale,] face, rig)."""
+    from app.core import model3d
+    if follow_up == "rerig":
+        return ["rig"]
+    stages = [stage for stage in model3d.mesh_hub_stages(character_name, bsig) if stage != "mesh"]
+    return stages if "face" in stages else ["face", "rig"]
+
+
+def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What the Base body tab's "Run all" runs now (block comment above): ``{kind, steps: [{name, jobs}],
+    hub_jobs, note, running, last}`` — ``kind`` "" when every step is current (``hub_jobs`` 0) or the plan
+    could not be read (``hub_jobs`` None, ``note`` says why); ``steps`` in run order with their first-attempt
+    hub jobs (``view front``, ``skin front``, ``mesh``, ``upscale``, ``face``, ``rig``, ``cleanup`` — the
+    last one local); ``running`` while a Run all of the character goes, ``last`` its last outcome
+    (``{error, finished_at}``, None before the first). Read-only."""
+    from app.core import base_body, model3d
+    with _lock:
+        state_now = {"running": character_name in _run_all_active,
+                     "last": dict(_run_all_last[character_name]) if character_name in _run_all_last else None}
+    out: Dict[str, Any] = {"kind": "", "steps": [], "hub_jobs": 0, "note": "", **state_now}
+    try:
+        profile = _profile_of(character_name, profile)
+        if not on_pipeline(character_name, profile=profile):
+            return out
+        refresh = base_body.base_refresh_plan(character_name, profile=profile, missing=True)
+        if refresh.get("views") or refresh.get("model"):
+            cost = base_body.base_rebuild_cost(character_name, profile=profile, plan=refresh)
+            return {**out, "kind": RUN_ALL_PLAIN, "hub_jobs": cost.get("hub_jobs"), "note": str(cost.get("note") or ""),
+                    "steps": [{"name": step, "jobs": jobs} for step, jobs in cost.get("steps") or []]}
+        bsig = str(refresh.get("signature") or "")
+        cleanup = model3d.face_cleanup_state(character_name, bsig) if bsig else {}
+        if cleanup.get("can_reapply"):
+            stages = _face_stages(character_name, bsig, str(cleanup.get("follow_up") or "rerig"))
+            return {**out, "kind": RUN_ALL_CLEANUP, "hub_jobs": len(stages),
+                    "note": "face cleanup not on the stored mesh: cleanup (local) + " + " + ".join(stages),
+                    "steps": [{"name": CLEANUP_STEP, "jobs": 0}] + [{"name": stage, "jobs": 1} for stage in stages]}
+        if bsig and _face_retexture_pending(character_name, bsig):
+            stages = _face_stages(character_name, bsig, "face_retexture")
+            return {**out, "kind": RUN_ALL_FACE, "hub_jobs": len(stages),
+                    "note": "the base model has no face retexture: " + " + ".join(stages),
+                    "steps": [{"name": stage, "jobs": 1} for stage in stages]}
+        return out
+    except Exception as e:  # noqa: BLE001 — a label, never a failure of the poll
+        logger.warning("Base Run all plan of %s not computable: %s", character_name, e)
+        return {**out, "hub_jobs": None, "note": f"cost unknown — {e}"}
+
+
+def start_base_run_all(character_name: str) -> Dict[str, Any]:
+    """Start the Base body tab's "Run all": ``{"status": "started", "kind"}`` · ``"current"`` (nothing to do)
+    · ``"off"`` (off the pipeline) · ``"building"`` (a Build of the character runs or holds its lock —
+    ``RUN_ALL_BUILD_RUNNING``) · ``"busy"`` (a base render or a 3D run goes — ``RUN_ALL_BUSY``) · ``"failed"``
+    (the profile could not be read). A face redo that its own guard refuses raises ``ValueError`` /
+    ``LookupError`` (the route's 409). The plain-body step runs in a worker thread under the character's
+    ``build_lock`` (a Build started meanwhile waits for it) and the 3D generation slot (``_run_step``)."""
+    from app.core import base_body, model3d
+    try:
+        profile = _read_profile(character_name)
+    except Exception as e:  # noqa: BLE001 — never "current" on an unreadable profile
+        return {"status": "failed", "reason": PROFILE_UNREADABLE.format(error=str(e) or type(e).__name__)}
+    if not on_pipeline(character_name, profile=profile):
+        return {"status": "off", "reason": OFF_PIPELINE}
+    if running(character_name):
+        return {"status": "building", "reason": RUN_ALL_BUILD_RUNNING}
+    with _lock:
+        if character_name in _run_all_active:
+            return {"status": "busy", "reason": RUN_ALL_BUSY}
+    plan_now = base_run_all(character_name, profile=profile)
+    kind = plan_now["kind"]
+    if not kind:
+        return {"status": "current"}
+    bsig = base_body.base_signature(character_name, profile=profile)
+    if kind == RUN_ALL_CLEANUP:
+        result = model3d.trigger_face_cleanup(character_name, bsig)
+        if result.get("status") == "already_running":
+            return {"status": "busy", "reason": RUN_ALL_BUSY}
+        return {"status": "started", "kind": kind}
+    if kind == RUN_ALL_FACE:
+        result = model3d.trigger_face_retexture(character_name, bsig)
+        if result.get("status") == "already_running":
+            return {"status": "busy", "reason": RUN_ALL_BUSY}
+        return {"status": "started", "kind": kind}
+    lock = build_lock(character_name)
+    if not lock.acquire(blocking=False):
+        return {"status": "building", "reason": RUN_ALL_BUILD_RUNNING}
+    views = [v for v in base_body.BASE_VIEWS if v in {s["name"][5:] for s in plan_now["steps"]
+                                                       if s["name"].startswith("view ")}]
+    if model3d.generation_running(character_name) or any(
+            s.get("running") for s in base_body.base_status(character_name).values()):
+        lock.release()
+        return {"status": "busy", "reason": RUN_ALL_BUSY}
+    with _lock:
+        _run_all_active.add(character_name)
+    # The planned views count as running from THIS moment (the tab polls ``base_info``), as a view's Regenerate.
+    base_body.reserve_views(character_name, views)
+    step = Step("plain_body", "Plain body: " + str(plan_now["note"]), plan_now["hub_jobs"])
+
+    def run() -> None:
+        from app.core.timeutils import utc_now_iso
+        queue, task_id = _tracked(character_name, f"Base body · {character_name} (Run all)")
+        error = "Run all failed"
+        try:
+            error = _run_step(character_name, step, True)
+        finally:
+            base_body.release_views(character_name, views)
+            lock.release()
+            with _lock:
+                _run_all_active.discard(character_name)
+                _run_all_last[character_name] = {"error": error, "finished_at": utc_now_iso()}
+            if queue is not None and task_id:
+                try:
+                    queue.track_finish(task_id, error=error)
+                except Exception:  # noqa: BLE001
+                    logger.debug("Run all track %s not finished", task_id, exc_info=True)
+            logger.info("Base Run all %s ended%s", character_name, f": {error}" if error else "")
+
+    try:
+        threading.Thread(target=run, daemon=True, name=f"base-run-all-{character_name}").start()
+    except Exception:
+        # No thread, so nobody else frees what was taken above.
+        base_body.release_views(character_name, views)
+        lock.release()
+        with _lock:
+            _run_all_active.discard(character_name)
+        raise
+    logger.info("Base Run all %s started (%s)", character_name, plan_now["note"])
+    return {"status": "started", "kind": kind}
+
+
 def _outfit_name(character_name: str, pieces: Dict[str, str]) -> str:
     """The saved outfit whose pieces are exactly the worn ones, else ""."""
     ids = sorted({str(v) for v in (pieces or {}).values() if v})

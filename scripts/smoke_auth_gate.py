@@ -133,7 +133,8 @@ E) WORLD-LEVEL WRITES ARE ADMIN-ONLY (user decision 2026-09-21) — the table
    for a player by its own ``require_admin`` — checked through the real
    routers together with POST /characters/{c}/figure/auto-build (player
    403, anonymous 401). Task 10: GET /characters/{c}/figure/stored and
-   DELETE …/figure/stored/{key} the same way (their own require_admin).
+   DELETE …/figure/stored/{key} the same way (their own require_admin). Task UI1:
+   POST /characters/{c}/base-body/run-all the same way (player 403, anonymous 401).
 
    Prefix neighbours: ``_under`` is segment-wise, so /worldly, /rulesx,
    /eventsful, /intentsful and /inventory/itemsy are NOT under the rules above
@@ -684,7 +685,8 @@ figure_app.include_router(figure_route.router)
 figure_client = TestClient(figure_app)
 for _m, _p in [("GET", "/inventory/items/apple/wearers"), ("POST", "/inventory/items/apple/build-wearers"),
                ("POST", "/characters/Mara/figure/auto-build"),
-               ("GET", "/characters/Mara/figure/stored"), ("DELETE", "/characters/Mara/figure/stored/obdeadbeef")]:
+               ("GET", "/characters/Mara/figure/stored"), ("DELETE", "/characters/Mara/figure/stored/obdeadbeef"),
+               ("POST", "/characters/Mara/base-body/run-all")]:
     _kw = {"json": {"enabled": False}} if _p.endswith("auto-build") else {}
     check(f"user {_m} {_p} (real route)",
           figure_client.request(_m, _p, headers={"x-test-user": "user"}, **_kw).status_code, 403)

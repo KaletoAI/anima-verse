@@ -115,7 +115,7 @@ def main() -> int:
         app = FastAPI()
         app.include_router(routes.router)
         url = "/characters/{}/model-refs/generate"
-        want_msg = "Render the base body first (Figure tab) — the outfit views are edits of it"
+        want_msg = "Render the base body first (Base body tab) — the outfit views are edits of it"
         check("message", getattr(routes, "BASE_FIRST", None), want_msg)
 
         with TestClient(app, raise_server_exceptions=False) as client:
@@ -168,7 +168,7 @@ def main() -> int:
 
             print("[7] side views")
             side = ("On the base-body pipeline only the front and the back are dressed — the side views "
-                    "belong to the base body (Figure tab)")
+                    "belong to the base body (Base body tab)")
             check("left", post("Demo", {"kinds": ["tpose"], "view": "left"}), (409, side))
             check("right", post("Demo", {"kinds": ["tpose"], "view": "right"}), (409, side))
             check("no side trigger", TRIGGERS, [])

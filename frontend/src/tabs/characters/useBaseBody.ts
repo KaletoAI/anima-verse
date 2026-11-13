@@ -1,6 +1,6 @@
 /**
  * useBaseBody — the character's plain (base) body as the `plain_body` of
- * `GET /characters/{name}/figure?plain=1` reports it
+ * `GET /characters/{name}/figure?plain=1` (and, as `figure`, the rest of that answer) reports it
  * (`app/core/base_body.py::base_info` + the model extras, app/routes/figure.py
  * `_plain_body`), polled while anything of it
  * runs: a base view render, the base model, or the current outfit's model on
@@ -15,7 +15,8 @@ import type { Freshness } from './FreshnessBadge'
 import type { ModelStep } from './ModelSteps'
 import type { CollisionPayload } from '@anima/scene-render'
 import type { FaceCleanupState, FaceFields } from './ModelFaceActions'
-import type { ModelStaleReason } from './figureModel'
+import type { FigurePayload, ModelStaleReason } from './figureModel'
+import type { BaseRunAll } from './baseBodyModel'
 
 export const BASE_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BaseView = typeof BASE_VIEWS[number]
@@ -155,6 +156,8 @@ export interface BaseBodyInfo {
   extension_tips?: ExtensionTipPanelInfo[]
   /** The front's skin detail step (null for a non-humanoid). */
   skin?: BaseSkinInfo | null
+  /** The Base body tab's "Run all" plan (`figure_build.base_run_all`). */
+  run_all?: BaseRunAll | null
   now?: string
 }
 
@@ -175,11 +178,14 @@ export const tipsRunning = (d: BaseBodyInfo | null | undefined) =>
   !!d?.extension_tips?.some((group) => group.running)
 
 const isActive = (d: BaseBodyInfo | null | undefined) =>
-  viewsRunning(d) || modelRunning(d) || !!d?.face_cleanup?.running || tipsRunning(d)
+  viewsRunning(d) || modelRunning(d) || !!d?.face_cleanup?.running || tipsRunning(d) || !!d?.run_all?.running
 
 export function useBaseBody(character: string) {
   const enc = encodeURIComponent(character)
   const [info, setInfo] = useState<BaseBodyInfo | null>(null)
+  /** The rest of the same answer: the figure's own payload (the single actions' costs `body.plain.jobs`,
+   *  "Build automatically", a running Build). */
+  const [figure, setFigure] = useState<FigurePayload | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Poll generation: a tick of a stopped/restarted chain drops its result.
   const pollIdRef = useRef(0)
@@ -198,13 +204,17 @@ export function useBaseBody(character: string) {
       const tick = async () => {
         timerRef.current = null
         let d: BaseBodyInfo | null = null
+        let f: FigurePayload | null = null
         try {
-          d = (await apiGet<{ plain_body?: BaseBodyInfo }>(`/characters/${enc}/figure?plain=1`)).plain_body ?? null
+          const answer = await apiGet<FigurePayload & { plain_body?: BaseBodyInfo }>(`/characters/${enc}/figure?plain=1`)
+          d = answer.plain_body ?? null
+          f = answer
         } catch {
           d = null
         }
         if (pollIdRef.current !== id) return
         setInfo(d)
+        setFigure(f)
         if (!isActive(d)) return
         n += 1
         timerRef.current = setTimeout(tick, n >= POLL_SLOW_AFTER ? POLL_SLOW_MS : POLL_MS)
@@ -216,10 +226,11 @@ export function useBaseBody(character: string) {
 
   useEffect(() => {
     setInfo(null)
+    setFigure(null)
     if (!character) return stopPoll
     startPoll()
     return stopPoll
   }, [character, startPoll, stopPoll])
 
-  return { info, setInfo, startPoll }
+  return { info, figure, setInfo, startPoll }
 }

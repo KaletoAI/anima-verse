@@ -64,6 +64,12 @@
       ]
     },
     {
+      "id": "base_body_tab",
+      "label": "Base body",
+      "label_de": "Grundkörper",
+      "columns": [29]
+    },
+    {
       "id": "figure_tab",
       "label": "Figure",
       "label_de": "Figur",
@@ -154,6 +160,15 @@
       "column": 24,
       "row": 0,
       "special": "model3d_gen",
+      "fields": []
+    },
+    {
+      "id": "base_body",
+      "label": "Base body",
+      "label_de": "Grundkörper",
+      "column": 29,
+      "row": 0,
+      "special": "base_body",
       "fields": []
     },
     {

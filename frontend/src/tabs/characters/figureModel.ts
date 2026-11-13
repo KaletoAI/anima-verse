@@ -390,6 +390,13 @@ export function bodyLine(body: NonNullable<FigurePayload['body']>, shapeNames: s
   return [plain, shape, texture].join(' · ')
 }
 
+/** The Figure tab's one line on the base body (Task UI1 — its steps live in the Base body tab). */
+export function baseBodyLine(state: string, t: Tr = EN): string {
+  if (state === 'ready') return t('Base body: up to date — its views, model, face and rig are in the Base body tab')
+  if (state === 'missing') return t('Base body: none yet — the Build makes it, or Run all in the Base body tab')
+  return t('Base body: outdated — the Build refreshes it, or Run all in the Base body tab')
+}
+
 /** Why a stored outfit model is stale (`base_body.outfit_info` / `model3d` info `stale_reason`). */
 export type ModelStaleReason = 'older_base' | 'before_pipeline' | 'detail_changed' | 'figure' | 'outfit_body'
 

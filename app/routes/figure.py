@@ -27,6 +27,15 @@ body actions):
   "manual")``: ``{"status": "started" | "queued" | "current"}``; 409 off the
   pipeline with the reason; 503 when the profile could not be read (the
   Build's failure state records it, ruling F13 e).
+* ``POST /characters/{c}/base-body/run-all`` — the Base body tab's "Run all"
+  (``figure_build.start_base_run_all``, Task UI1 rule R1): the plain body's
+  refresh — only the steps that are not current — else the face cleanup or the
+  face retexture the stored base mesh misses. 202 ``{"status": "started",
+  "kind"}`` or ``{"status": "current"}``; 409 off the pipeline, while a Build
+  of the character runs, while a base render / 3D run goes or when a face
+  redo is refused (``detail`` says which); 503 when the profile could not be
+  read. ``plain_body.run_all`` of ``GET …/figure?plain=1`` is its plan
+  (``figure_build.base_run_all``: kind, steps, hub_jobs, note, running, last).
 * ``POST /characters/{c}/figure/auto-build {enabled}`` — "Build
   automatically" (``figure_build.set_auto_build``): ``{"auto_build":
   figure_build.auto_build_on(c)}`` (off as well while the world switch of
@@ -90,10 +99,11 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
     model's face fields (``model3d.face_info``) and collision capsules
     (``collision.ensure`` — the set the outfit models inherit), the stored
     region scales (``collision_scales``), the face cleanup of the base
-    source (``face_cleanup``, ``model3d.face_cleanup_state``) and the tip
+    source (``face_cleanup``, ``model3d.face_cleanup_state``), the tip
     panels of its ``pair_tip`` groups (``extension_tips``,
-    ``extension_tip.tip_panels``). Never raises."""
-    from app.core import collision, extension_tip
+    ``extension_tip.tip_panels``) and the Base body tab's "Run all" plan
+    (``run_all``, ``figure_build.base_run_all``). Never raises."""
+    from app.core import collision, extension_tip, figure_build
     from app.core.model3d import face_cleanup_state, face_info, find_model3d, get_model3d_options
     try:
         bsig = info.get("signature") or ""
@@ -108,6 +118,7 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
             info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
     except Exception:  # noqa: BLE001 — the poll never fails on the extras
         logger.exception("Plain body extras of %s failed", character_name)
+    info["run_all"] = figure_build.base_run_all(character_name)
     return info
 
 
@@ -120,6 +131,22 @@ def build_figure(character_name: str, _: Dict[str, Any] = Depends(require_admin)
         raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))
     if result.get("status") == "failed":
         raise HTTPException(status_code=503, detail=str(result.get("reason") or "Build failed"))
+    return result
+
+
+@router.post("/{character_name}/base-body/run-all", status_code=202)
+def run_all_base_body(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import figure_build
+    _require_character(character_name)
+    try:
+        result = figure_build.start_base_run_all(character_name)
+    except (ValueError, LookupError) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    status = result.get("status")
+    if status in ("off", "building", "busy"):
+        raise HTTPException(status_code=409, detail=str(result.get("reason") or status))
+    if status == "failed":
+        raise HTTPException(status_code=503, detail=str(result.get("reason") or "Run all failed"))
     return result
 
 

@@ -180,6 +180,7 @@ export interface Model3DStatus {
   has_input?: boolean
   model?: Model3DInfo | null
   options?: { auto_generate?: boolean; face_before_rig?: boolean; face_cleanup?: boolean; face_photo?: { balance?: number; skin_recolor?: number; tone_match?: number; brightness?: number };
+    face_controls?: { strength?: number; feather?: number; render_resolution?: number; yaw?: number };
     extension_rig_models?: Record<string, Record<string, { enabled?: boolean; flip?: boolean; tip?: unknown }>>;
     extension_motion?: Record<string, Physics & { bounce?: number; weight?: number }>
     collision_scales?: Record<string, number> }
@@ -220,11 +221,11 @@ export interface Model3DStatus {
   blender?: { enabled?: boolean; executable?: string; version?: string; usable?: boolean }
 }
 
-export function FieldModel3D({ character, onOpenFigure }: {
+export function FieldModel3D({ character, onOpenBaseBody }: {
   character: string
-  /** Switches to the Figure tab (where the plain body's face, rig and
-   *  collision live on the pipeline, in its "Plain body" details). */
-  onOpenFigure?: () => void
+  /** Switches to the Base body tab (where the plain body's face, rig and
+   *  collision live on the pipeline — Task UI1). */
+  onOpenBaseBody?: () => void
 }) {
   // Subscribe to the shared clock settings so the stamps above re-render
   // once the server-configured format and timezone arrive.
@@ -814,7 +815,7 @@ export function FieldModel3D({ character, onOpenFigure }: {
 
   const fallback = pipeline?.fallback || null
   const buildBlocked = pending ? t('Locked: a 3D model job is running for this character')
-    : !baseReady ? t('Generate the rigged base model first (Figure tab)') : ''
+    : !baseReady ? t('Generate the rigged base model first (Base body tab)') : ''
   const fallbackBanner = fallback ? (
     <div role="status" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div className="ga-hint" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
@@ -1123,12 +1124,12 @@ export function FieldModel3D({ character, onOpenFigure }: {
         </div>
         {/* Face cleanup, face retexture and the rig act on the model with
             the retained source: off the pipeline this outfit's model, on it
-            the base body — whose actions live in the Figure tab. */}
+            the base body — whose actions live in the Base body tab. */}
         {pipeline ? (
           <div className="ga-face-actions-row">
             <span className="ga-hint">{t('Face cleanup, face retexture, re-rig and collision capsules act on the base body.')}</span>
-            {onOpenFigure ? (
-              <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenFigure}>{t('Open Figure tab')}</button>
+            {onOpenBaseBody ? (
+              <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>{t('Open Base body tab')}</button>
             ) : null}
           </div>
         ) : (

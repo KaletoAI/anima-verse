@@ -536,6 +536,10 @@ export interface GarmentItemInfo {
   status: PieceStatus
   garment: GarmentInfo | null
   limits: Partial<Record<string, Record<string, GateLimit>>>
+  /** What "Run all" runs now (`garments.run_estimate`; null off the pipeline): the steps from the first one
+   *  that is not current, their first-attempt hub jobs (null = unknown, `note` says why); `refit` — the chain
+   *  refits on the CPU first (0 hub jobs). */
+  run?: { steps: string[]; hub_jobs: number | null; note: string; refit: boolean } | null
 }
 
 /** A step runs or the item waits in the character's garment queue

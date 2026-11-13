@@ -1,38 +1,43 @@
 /**
- * FigureBodyDetails — the plain body's own views and model, collapsed under
- * the Figure tab's "Body:" line (plan 2026-11-12-unified-worn-pieces Task 10,
- * spec ruling 8: "the body's own views, Regenerate and face cleanup move into
- * the Figure tab's collapsed Body details, each a single action"); it is
- * what the base-body tab showed until Task 11 removed that tab.
+ * FieldBaseBody — the Base body tab (template tab `base_body_tab`, section `base_body`; Task UI1 of
+ * docs/superpowers/plans/2026-11-12-unified-worn-pieces.md). The plain (base) body every figure of the character
+ * is built on: its four views, the skin detail step, the base model with its face and rig steps, and their
+ * settings — what sat collapsed under the Figure tab's "Body:" line until Task UI1 (the Figure tab keeps the
+ * figure and one line on the base body with "Open Base body tab").
  *
- * Layout: two columns — the four views stacked and small on the left (a
- * click enlarges one), the base model's 3D preview with everything that
- * acts on it on the right: its steps beside the preview, the collision
- * capsule sliders beside it too (live preview while dragging — the outfit
- * models inherit the base body's set), one panel per pair tip extension
- * group (ExtensionTipPanel), and the face/rig actions under it
- * (ModelFaceActions) — on the pipeline they all act on the base body.
+ * The rule of the character area (R1–R4):
+ * - R1 "Run all" (POST …/base-body/run-all, `figure_build.start_base_run_all`): runs, in order, what is NOT
+ *   current — the plain body's refresh as the Build plans it (`base_refresh_plan(missing=True)`: the stale or
+ *   missing views, the skin step with the front, the model), else the face cleanup the stored base mesh misses,
+ *   else its missing face retexture. Its label carries the job count ("Run all (7 hub jobs)"); nothing due →
+ *   "Everything is current", disabled. The plan comes with the poll (`plain_body.run_all`).
+ * - R2 single steps, each redoing its step even when it is current: a view's Regenerate, "Run skin step", the
+ *   model's Regenerate, "Face retexture…", "Re-rig base body…" (ModelFaceActions) — each with its cost under it;
+ *   a step whose input is missing is disabled with the reason under it.
+ * - R3 settings saved on their own (Settings section): the face switches and the face retexture values
+ *   (FaceSettings); the skin detail step is a world switch (Game-Admin → Setup) and is shown, not edited, here.
+ * - R4 only the current flow: no T-pose path, no outfit-body wording.
  *
- * Every button does ONE thing and says what before the click (the spec's
- * rule 3): a view's Regenerate renders that view only, the model's
- * Regenerate meshes the plain body only — there is no "render all" chain
- * here; the Build plans what is missing. `jobs` (GET …/figure
- * `body.plain.jobs`) gives the cost lines: "Regenerate this view — 1 image
- * job", "Regenerate the plain body's mesh — 3 hub jobs". A new base model
- * (Regenerate, a face or rig action) starts the automatic Build when
- * "Build automatically" is on (`garments.after_base_model` → body change),
- * so those say "then Build runs automatically". "Run skin step" changes the
- * front's bytes: the base model is stale then, and only the next (manual)
- * Build rebuilds it (ruling 8a) — written under the button with its cost.
+ * Layout: the Run all header across the top; then two columns — the four views stacked and small on the left (a
+ * click enlarges one), the base model's 3D preview with everything that acts on it on the right: its steps
+ * beside the preview, the collision capsule sliders beside it too (live preview while dragging — the outfit
+ * models inherit the base body's set), one panel per pair tip extension group (ExtensionTipPanel), and the
+ * face/rig actions under it (ModelFaceActions); the Settings section closes the tab.
  *
- * Backend (app/routes/characters.py, app/core/base_body.py):
- * GET /characters/{n}/figure?plain=1 (`plain_body`: views, model, face fields,
- * collision, face cleanup; polled while something runs — useBaseBody), POST .../base-body/images {view,
- * force} (409 without a profile picture or, for a side view, the front),
- * POST .../base-body/model {force} (409 while another 3D run of the
- * character is going), POST .../base-body/skin-step (the front's skin
- * detail edit on the stored neutral front; GET .../images/front?variant=
- * neutral serves it), GET .../model3d (useModel3DStatus).
+ * A new base model (Run all, Regenerate, a face or rig action) starts the automatic Build when "Build
+ * automatically" is on (`garments.after_base_model` → body change), so those say "then Build runs
+ * automatically". "Run skin step" changes the front's bytes: the base model is stale then, and Run all or the
+ * next Build you start rebuilds it — written under the button with its cost. A temporary NPC (Ruling A13a) and
+ * an animal have no base body: the tab says why.
+ *
+ * Backend (app/routes/characters.py, app/routes/figure.py, app/core/base_body.py):
+ * GET /characters/{n}/figure?plain=1 (`plain_body`: views, model, face fields, collision, face cleanup,
+ * run_all; the rest of the answer is the figure — `body.plain.jobs`, `auto_build`; polled while something runs —
+ * useBaseBody), POST …/base-body/run-all, POST …/base-body/images {view, force} (409 without a profile picture
+ * or, for a side view, the front), POST …/base-body/model {force} (409 while another 3D run of the character is
+ * going), POST …/base-body/skin-step (the front's skin detail edit on the stored neutral front; GET
+ * …/images/front?variant=neutral serves it), GET …/model3d (useModel3DStatus), POST …/model3d/options (the
+ * settings).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -48,11 +53,15 @@ import { CollisionScales } from './CollisionScales'
 import { ExtensionTipPanel } from './ExtensionTipPanel'
 import type { TipDots } from './ExtensionTipPanel'
 import { ModelFaceActions } from './ModelFaceActions'
+import { FaceSettings } from './FaceSettings'
+import { FieldSet } from './FieldSet'
 import { useModel3DStatus } from './useModel3DStatus'
 import type { CollisionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
-import { AUTO_BUILD_NOTE, singleAction, staleBaseNote } from './figureModel'
+import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, singleAction, staleBaseNote } from './figureModel'
+import { RUN_ALL_STATUS, runAllButton, runAllStep, runAllWhat } from './baseBodyModel'
+import type { BaseRunAll } from './baseBodyModel'
 
 const TILE_HEIGHT = 128
 
@@ -152,20 +161,93 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
   )
 }
 
-export function FigureBodyDetails({ character, jobs, autoBuild = false, onChanged }: {
+/** The tab's head: "Run all" (rule R1) with its count, what it runs, the plan collapsed, its last error. */
+function RunAllHeader({ runAll, busy, buildRunning, onRun, onOpenFigure }: {
+  runAll: BaseRunAll | null | undefined
+  busy: boolean
+  /** A Build of the character runs: Run all waits for it (the server answers 409). */
+  buildRunning: boolean
+  onRun: () => void
+  onOpenFigure?: () => void
+}) {
+  const { t } = useI18n()
+  const button = runAllButton(runAll, t)
+  const disabled = busy || button.disabled || buildRunning
+  const what = runAll ? runAllWhat(runAll.kind, t) : ''
+  const lastError = runAll && !runAll.running && runAll.last?.error ? runAll.last.error : ''
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+      <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <button type="button" className="ga-btn ga-btn-primary" disabled={disabled}
+          title={runAll?.note || undefined} onClick={onRun}>
+          {button.label}
+        </button>
+        {what ? <span className="ga-hint">{what}</span> : null}
+        {onOpenFigure ? (
+          <button type="button" className="ga-btn ga-btn-sm" style={{ marginLeft: 'auto' }} onClick={onOpenFigure}>
+            {t('Open Figure tab')}
+          </button>
+        ) : null}
+      </div>
+      {buildRunning ? <div className="ga-hint">{t('A Build runs for this character — Run all waits until it has ended.')}</div>
+        : button.reason ? <div className="ga-hint">{button.reason}</div>
+        : runAll?.kind && runAll.hub_jobs ? <div className="ga-hint">{t(ESTIMATE_NOTE)}</div> : null}
+      {runAll?.kind && runAll.steps.length ? (
+        <details>
+          <summary style={{ cursor: 'pointer' }} className="ga-hint">{t('What Run all runs')}</summary>
+          <ol style={{ margin: '4px 0 0 18px', padding: 0 }} className="ga-hint">
+            {runAll.steps.map((step, i) => (
+              <li key={`${step.name}:${i}`}>
+                {runAllStep(step.name, t)}
+                {step.jobs === null ? ` — ${t('cost unknown')}` : step.jobs ? ` — ${step.jobs === 1 ? t('1 hub job')
+                  : t('{n} hub jobs').replace('{n}', String(step.jobs))}` : ` — ${t('local')}`}
+              </li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
+      {lastError ? <div className="ga-hint" style={ERROR_STYLE}>{t('Run all')}: {lastError}</div> : null}
+    </div>
+  )
+}
+
+/** The Settings section (rule R3): saved on their own, nothing runs. */
+function BaseSettings({ character, info, st, pending, onReload }: {
   character: string
-  /** The single actions' costs; without them no cost lines are written. */
-  jobs?: PlainBodyJobs
-  /** "Build automatically" is on: a new base model starts the Build. */
-  autoBuild?: boolean
-  /** Something of the plain body changed (a run ended): the caller re-reads its own state. */
-  onChanged?: () => void
+  info: BaseBodyInfo
+  st: ReturnType<typeof useModel3DStatus>['st']
+  pending: boolean
+  onReload: () => Promise<unknown> | void
+}) {
+  const { t } = useI18n()
+  return (
+    <FieldSet title={t('Settings')}>
+      <div className="ga-hint">{t('Saved on their own — nothing runs. A setting that makes a step due shows in Run all.')}</div>
+      {st ? <FaceSettings character={character} st={st} pending={pending} onReload={onReload} />
+        : <div className="ga-hint">{t('Loading…')}</div>}
+      {info.skin ? (
+        <div className="ga-hint">
+          {info.skin.enabled ? t('Skin detail step: on') : t('Skin detail step: off')}
+          {' — '}{t('a world setting (Game-Admin → Setup); it applies to the next front render')}
+        </div>
+      ) : null}
+    </FieldSet>
+  )
+}
+
+export function FieldBaseBody({ character, onOpenFigure }: {
+  character: string
+  /** Switches to the Figure tab (the figure and its Build). */
+  onOpenFigure?: () => void
 }) {
   useClockSettings()
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
-  const { info, startPoll } = useBaseBody(character)
+  const { info, figure, startPoll } = useBaseBody(character)
+  // The single actions' costs and "Build automatically" come with the same answer (the figure's part).
+  const jobs: PlainBodyJobs | undefined = figure?.body?.plain.jobs
+  const autoBuild = !!figure?.auto_build
   // Options, backends and run results of the model actions (face, rig).
   const { st, load: loadStatus, startPoll: pollStatus } = useModel3DStatus(character)
   // The user's own click, until the request answered (the poll then shows
@@ -195,14 +277,6 @@ export function FigureBodyDetails({ character, jobs, autoBuild = false, onChange
     wasPending.current = pending
   }, [st?.pending, startPoll])
 
-  // Anything of the plain body running → idle: the caller's figure state changed too.
-  const wasActive = useRef(false)
-  const active = !!info && (viewsRunning(info) || modelRunning(info) || tipsRunning(info) || !!st?.pending)
-  useEffect(() => {
-    if (wasActive.current && !active) onChanged?.()
-    wasActive.current = active
-  }, [active, onChanged])
-
   const post = useCallback(
     async (path: string, body: unknown) => {
       if (posting) return
@@ -220,6 +294,25 @@ export function FigureBodyDetails({ character, jobs, autoBuild = false, onChange
     [enc, posting, startPoll, t, toast],
   )
 
+  // Run all (rule R1): the server runs what is not current; the poll follows the views, the model and the
+  // face runs it starts.
+  const runAll = useCallback(async () => {
+    if (posting) return
+    setPosting(true)
+    try {
+      const d = await apiPost<{ status?: string }>(`/characters/${enc}/base-body/run-all`, {})
+      const status = String(d?.status || '')
+      toast(t(RUN_ALL_STATUS[status] || status), 'success')
+      startPoll(500)
+      pollStatus(800)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      startPoll()
+    } finally {
+      setPosting(false)
+    }
+  }, [enc, pollStatus, posting, startPoll, t, toast])
+
   const reloadAll = useCallback(async () => {
     startPoll()
     await loadStatus()
@@ -234,9 +327,11 @@ export function FigureBodyDetails({ character, jobs, autoBuild = false, onChange
 
   if (!info) return <div className="ga-hint">{t('Loading…')}</div>
   if (!info.humanoid) {
-    return <div className="ga-hint">{t('The base body is for humanoid characters only.')}</div>
+    return <div className="ga-hint">{t('An animal has no base body — its 3D model is made from its T-pose picture (3D tab).')}</div>
   }
-  if (!info.pipeline) return null
+  if (!info.pipeline) {
+    return <div className="ga-hint">{t('A temporary NPC has no base body — its 3D model is made from its T-pose picture.')}</div>
+  }
 
   const model = info.model
   const modelBusy = posting || modelRunning(info) || !!st?.pending || tipsRunning(info)
@@ -262,6 +357,10 @@ export function FigureBodyDetails({ character, jobs, autoBuild = false, onChange
   ) : undefined
 
   return (
+    <div>
+    <RunAllHeader runAll={info.run_all} busy={posting || viewsRunning(info) || modelBusy}
+      buildRunning={!!figure?.build.running} onRun={() => { void runAll() }} onOpenFigure={onOpenFigure} />
+    {figure?.build.running ? <div className="ga-hint">{t(BUILD_RUNNING_NOTE)}</div> : null}
     <div className="ga-split ga-split-views">
       <div className="ga-split-col">
         <div className="ga-view-stack">
@@ -271,7 +370,7 @@ export function FigureBodyDetails({ character, jobs, autoBuild = false, onChange
               onSkinStep={() => post('skin-step', {})} />
           ))}
         </div>
-        {jobs ? <div className="ga-hint">{t('A new view makes the base model stale — the next Build you start rebuilds it.')}</div> : null}
+        {jobs ? <div className="ga-hint">{t('A new view makes the base model stale — Run all or the next Build you start rebuilds it.')}</div> : null}
       </div>
 
       <div className="ga-split-col">
@@ -329,13 +428,15 @@ export function FigureBodyDetails({ character, jobs, autoBuild = false, onChange
                     signature={info.signature} cleanup={info.face_cleanup ?? st.face_cleanup}
                     hasModel={!!model.url} canRerig={!!st.pipeline?.rerig_source}
                     rerigBlocked={t('The base body has no retained unrigged mesh — regenerate the base model (Regenerate beside “Base model”).')}
-                    onReload={reloadAll} onStarted={onModelRunStarted} />
+                    onReload={reloadAll} onStarted={onModelRunStarted} settingsElsewhere />
                 </>
               ) : null}
             </div>
           ) : null}
         </div>
       </div>
+    </div>
+    <BaseSettings character={character} info={info} st={st} pending={modelBusy} onReload={reloadAll} />
     </div>
   )
 }

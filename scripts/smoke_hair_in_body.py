@@ -341,7 +341,7 @@ def main() -> int:
         fp_deck = base_body.prompt_fingerprint("Long", profile=as_deck)
         check("fingerprint differs", fp_body != fp_deck, True)
         check("freshness without a front", base_body.base_prompts_freshness("Long"),
-              {"state": "missing", "reason": "Base body images missing — render them in the Figure tab"})
+              {"state": "missing", "reason": "Base body images missing — render them in the Base body tab"})
         refs = model_refs.get_model_refs_dir("Long")
         refs.mkdir(parents=True, exist_ok=True)
         bsig = base_body.base_signature("Long")

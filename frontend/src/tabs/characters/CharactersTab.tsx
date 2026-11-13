@@ -25,6 +25,7 @@ import { FieldModel3D } from './FieldModel3D'
 import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FieldFigure } from './FieldFigure'
+import { FieldBaseBody } from './FieldBaseBody'
 import { FieldPose } from './FieldPose'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from '@anima/player-ui'
@@ -137,7 +138,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'figure',
+  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'figure', 'base_body',
   'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
   'imagegen_override',
 ])
@@ -1152,7 +1153,16 @@ export function CharactersTab() {
                       figure: (
                         <FieldFigure key={selected} character={selected}
                           onOpenWardrobe={subTabs.some((s) => s.id === 'wardrobe')
-                            ? () => setSubTab('wardrobe') : undefined} />
+                            ? () => setSubTab('wardrobe') : undefined}
+                          onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
+                            ? () => setSubTab('tab:base_body_tab') : undefined} />
+                      ),
+                      // The Base body tab (Task UI1): the plain body's views, model, face and rig steps, its
+                      // "Run all" and its settings.
+                      base_body: (
+                        <FieldBaseBody key={selected} character={selected}
+                          onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
+                            ? () => setSubTab('tab:figure_tab') : undefined} />
                       ),
                       // Pose renders left, the outfit model built from them right.
                       model_refs: (
@@ -1164,8 +1174,8 @@ export function CharactersTab() {
                       ),
                       model3d_gen: (
                         <FieldModel3D key={selected} character={selected}
-                          onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
-                            ? () => setSubTab('tab:figure_tab') : undefined} />
+                          onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
+                            ? () => setSubTab('tab:base_body_tab') : undefined} />
                       ),
                       // The 3D tab's side panels share the compact model-panel text size.
                       model3d_animations: <div className="ga-model3d-side"><Model3DAnimations character={selected} /></div>,

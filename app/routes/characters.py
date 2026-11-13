@@ -1568,7 +1568,7 @@ def _refuse_views_while_building(character_name: str, kinds) -> None:
 
 
 #: 409 of a pose render on the base-body pipeline without the base views.
-BASE_FIRST = "Render the base body first (Figure tab) — the outfit views are edits of it"
+BASE_FIRST = "Render the base body first (Base body tab) — the outfit views are edits of it"
 
 
 def _require_dressable_view(character_name: str, view: str, *, base_ready: bool) -> None:
@@ -1956,7 +1956,7 @@ def get_character_garment(character_name: str, item_id: str,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Wardrobe's panel of one own-mesh piece (or any garment of the
     character): ``{pipeline, item_id, name, kind, mesh_mode, worn, status,
-    garment, limits}`` (``mesh_mode``: the item's mode,
+    garment, limits, run}`` (``run``: ``garments.run_estimate`` — the dialog's "Run all" label; ``mesh_mode``: the item's mode,
     ``garment_set.mesh_mode_of``; None for hair) — ``garment`` is ``garments.garment_info`` (a
     footwear piece: ``garment_footwear.info``, the shoe source steps; every
     image with its ``freshness``, the preview with ``preview_freshness``,
@@ -1998,7 +1998,10 @@ def get_character_garment(character_name: str, item_id: str,
                    layers=garment_set.worn_layers(character_name, profile=profile,
                                                   base_model_sha=base[1] if base else "").get(item_id),
                    left_out=left_out, in_body=in_body),
-               "garment": info, "limits": _garment_limits(kind)}
+               "garment": info, "limits": _garment_limits(kind),
+               # What the dialog's "Run all" runs now (Task UI1, rule R1): the chain from its first step that is
+               # not current — ``garments.run_estimate``, the same plan the run takes; None off the pipeline.
+               "run": garments.run_estimate(character_name, item_id, profile=profile) if pipeline else None}
     from app.core.model_overview import annotate_garment
     return annotate_garment(payload)
 
@@ -2835,7 +2838,7 @@ def rerig_character_model3d(
         signature = pipeline["base_signature"]
         if not pipeline["rerig_source"]:
             raise HTTPException(409, "The base body has no retained unrigged mesh. "
-                                     "Generate the base model again (Figure tab).")
+                                     "Generate the base model again (Base body tab).")
     if not signature:
         served = find_model3d_serving(character_name)[0]
         signature = served.stem if served else ""
@@ -3267,7 +3270,9 @@ def queue_character_extension_rigs(
 async def set_character_model3d_options(character_name: str, request: Request,
         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Per-character overrides for the mesh generation.
-    Body: {"auto_generate": bool, "face_before_rig": bool, "face_cleanup": bool}; each is optional.
+    Body: {"auto_generate": bool, "face_before_rig": bool, "face_cleanup": bool, "face_photo": {…},
+    "face_controls": {strength, feather, render_resolution, yaw}}; each is optional. The face values are
+    remembered for the next face retexture and saved without running anything (400 when out of range).
     Auto-generation uses the cheapest backend after the new T-pose succeeds."""
     import asyncio
     body = await request.json()
@@ -3284,12 +3289,14 @@ def _set_character_model3d_options_sync(character_name: str,
         raise HTTPException(status_code=404, detail="Character not found")
     if not isinstance(body, dict) or not (
             "auto_generate" in body or "face_before_rig" in body or "face_cleanup" in body
-            or "face_photo" in body or "extension_rig" in body):
+            or "face_photo" in body or "face_controls" in body or "extension_rig" in body):
         raise HTTPException(status_code=400,
                             detail="model options missing")
     updates = {}
     if "face_photo" in body:
         updates["face_photo"] = body["face_photo"]
+    if "face_controls" in body:
+        updates["face_controls"] = body["face_controls"]
     if "face_before_rig" in body:
         if type(body["face_before_rig"]) is not bool:
             raise HTTPException(400, "face_before_rig must be a boolean")

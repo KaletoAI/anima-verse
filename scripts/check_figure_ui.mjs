@@ -86,15 +86,16 @@
  *       (plain older_prompts, shape plain, texture missing, [], ['Blazer'])
  *         → 'plain body: older prompts · no shape (nothing in the body) · texture "Blazer" ⏳'.
  * [12] Source greps: the Wardrobe's "Mesh steps" opens only on a row that is NOT worn on the pipeline (T9
- *      concern 2 — a worn piece's only entry is the Figure tab); FigureBodyDetails writes staleBaseNote
- *      under "Run skin step"; FieldFigure starts nothing but the Build (its POSTs, all through its one
+ *      concern 2 — a worn piece's only entry is the Figure tab); the Base body tab (FieldBaseBody — was
+ *      FigureBodyDetails inside the Figure tab until Task UI1) writes staleBaseNote under "Run skin step"; FieldFigure starts nothing but the Build (its POSTs, all through its one
  *      `post()` helper — `apiPost` named twice: import + that call: figure/build, figure/auto-build,
  *      (base-body/pipeline until Task 11h removed the switch) and since Task 11b the other state's single
  *      action garments/{item}/run — a
  *      template-literal path, written with its `${…}` as `{}`); the template has tab `figure_tab` {Figure, Figur} with the
  *      humanoid-only section `figure` (special "figure"), and CharactersTab renders the slot `figure`.
  * [13] Task 11 source greps: the Figure tab opens GarmentPieceDialog with `noRunAll`, and the dialog's
- *      "Run all" renders only `!noRunAll` (Ruling 10a: there only Build and Retry start chains); the
+ *      "Run all" renders only `!noRunAll` (Ruling 10a: there only Build and Retry start chains; since Task UI1
+ *      its label is `runAll.label`, the count from `chainRunAll`); the
  *      Wardrobe's hair row has "Create hair" (POST `/characters/${enc}/hair` with `{}`) and "Wear hair"
  *      (POST …/hair/equipped) — the hair tab they lived in is gone (T9 concern 4).
  *
@@ -319,7 +320,7 @@ const wardrobe = src('frontend/src/tabs/characters/WardrobeTab.tsx');
 const meshSteps = wardrobe.split("{t('Mesh steps')}")[0].split('\n').slice(-6).join('\n');
 check('[12] Wardrobe: Mesh steps only on rows not worn on the pipeline',
   /garmentStatus && !\(it\.equipped && garments\.pipeline\)/.test(meshSteps), true);
-const details = src('frontend/src/tabs/characters/FigureBodyDetails.tsx');
+const details = src('frontend/src/tabs/characters/FieldBaseBody.tsx');
 const skin = details.split("t('Run skin step')")[1] || '';
 check('[12] skin step: stale-base note under the button', /staleBaseNote\(/.test(skin.slice(0, 600)), true);
 const fieldFigure = src('frontend/src/tabs/characters/FieldFigure.tsx');
@@ -340,7 +341,7 @@ check('[12] CharactersTab slot', /figure:\s*\(?\s*<FieldFigure/.test(src('fronte
 // [13]
 check('[13] Figure tab: piece dialog without Run all', /<GarmentPieceDialog[^>]*\bnoRunAll\b/.test(fieldFigure), true);
 const garmentSrc = src('frontend/src/tabs/characters/WardrobeGarment.tsx');
-const runAll = garmentSrc.split("label={t('Run all')}")[0].split('\n').slice(-10).join('\n');
+const runAll = garmentSrc.split('label={runAll.label}')[0].split('\n').slice(-10).join('\n');
 check('[13] dialog: Run all only without noRunAll', /info\?\.pipeline && !noRunAll \?/.test(runAll), true);
 const hairRow = src('frontend/src/tabs/characters/WardrobeHairRow.tsx');
 check('[13] hair row: Create hair posts /hair', [hairRow.includes("t('Create hair')"),
