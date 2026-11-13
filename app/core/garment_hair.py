@@ -738,6 +738,34 @@ def wear_outfit_hairstyle(character_name: str, outfit: Dict[str, Any]) -> bool:
         return False
 
 
+def wear_estimate(character_name: str, item_id: str, *,
+                  profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """What wearing the hairstyle ``item_id`` spends after the click (the Hairstyles tab's Wear button, the
+    user's rule "every button names the hub jobs it causes"): ``{hub_jobs, automatic, note}`` — the Build plan
+    of the profile with ``item_id`` worn instead (``figure_build.plan`` of that profile, ``figure_build.cost``):
+    an automatic Build when "Build automatically" is on (``automatic`` True: the Build starts by itself), else
+    the manual Build the user starts later. ``hub_jobs`` None when a step's cost is unknown. None off the
+    figure pipeline, for the worn hairstyle, or when the plan cannot be made. Read-only: the profile is copied,
+    nothing is stored or started."""
+    from app.core import figure_build
+    profile = _profile_of(character_name, profile)
+    try:
+        if not figure_build.on_pipeline(character_name, profile=profile):
+            return None
+        worn = profile.get("equipped_mesh_pieces")
+        worn = dict(worn) if isinstance(worn, dict) else {}
+        if worn.get(HAIR_KIND) == item_id:
+            return None
+        automatic = bool(figure_build.auto_build_on(character_name, profile=profile))
+        trial = {**profile, "equipped_mesh_pieces": {**worn, HAIR_KIND: item_id}}
+        steps = figure_build.plan(character_name, profile=trial, explicit=not automatic)
+        cost = figure_build.cost(character_name, steps)
+    except Exception:  # noqa: BLE001 — a label, never a failure of the list
+        logger.exception("Wear estimate of %s for %s failed", item_id, character_name)
+        return None
+    return {"hub_jobs": cost["hub_jobs"], "automatic": automatic, "note": cost["note"]}
+
+
 def hairstyle_list(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The Hairstyles tab's list: per owned hairstyle ``{id, name,
     description, mode, worn, plain, freshness}`` — worn first, then by id.

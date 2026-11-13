@@ -2083,7 +2083,9 @@ def get_character_hair(character_name: str, item_id: str = "",
     ``plain`` this hairstyle is the plain body's (``garment_hair.BASE_HAIRSTYLE_KEY``); ``run`` what its "Run all"
     runs now (``garments.run_estimate`` of the hairstyle; None off the pipeline or without one); ``body_url`` the
     current base model (``base_body.base_model_info`` url; None without one) — the preview of a ``body``
-    hairstyle that is the plain body's."""
+    hairstyle that is the plain body's. Task UI4: ``step_jobs`` the hub jobs of each step of the hairstyle's
+    mode on first attempts (``garments.HUB_JOBS``, ``{}`` for ``body``), ``preview_motion`` the previewed fit's
+    spring chains for the live Stiffness preview (``hair_motion.preview_payload``; None without a preview)."""
     from app.core import base_body, garment_hair, garment_hairdeck, garments
     from app.core.model_refs import is_humanoid
     from app.models.character import get_character_profile
@@ -2141,6 +2143,17 @@ def get_character_hair(character_name: str, item_id: str = "",
         except Exception:  # noqa: BLE001 — a label, never a failure of the GET
             logger.exception("Hair GET: no run estimate for %s/%s", character_name, item_id)
     model = base_body.base_model_info(character_name) if pipeline else None
+    # The Hairstyles tab's live Stiffness preview of the previewed fit (``hair_motion.preview_payload``).
+    preview_motion = None
+    if info and info.get("preview_url") and item_id:
+        try:
+            from app.core import garment_store as gs, hair_motion
+            fit_path = garments.preview_path(character_name, item_id)
+            if fit_path is not None:
+                preview_motion = hair_motion.preview_payload(
+                    character_name, fit_path, gs.read_record(fit_path.with_suffix(".json")), profile=profile)
+        except Exception:  # noqa: BLE001 — a preview aid, never a failure of the GET
+            logger.exception("Hair GET: no motion preview for %s/%s", character_name, item_id)
     payload = {"pipeline": pipeline,
                 "humanoid": humanoid,
                 "description": text,
@@ -2159,6 +2172,9 @@ def get_character_hair(character_name: str, item_id: str = "",
                                  if in_body and pipeline else None),
                 "plain": bool(item_id and item_id == str(profile.get(garment_hair.BASE_HAIRSTYLE_KEY) or "")),
                 "run": run,
+                # The single steps' hub jobs on first attempts (``garments.HUB_JOBS``) — the buttons name them.
+                "step_jobs": dict(garments.HUB_JOBS.get(f"hair:{method}") or {}),
+                "preview_motion": preview_motion,
                 "body_url": (model or {}).get("url"),
                 # Ruling UI3 a: when the plain body shown there was built (the 3D preview's caption).
                 "body_built_at": (model or {}).get("created_at") or None}
@@ -2184,15 +2200,36 @@ def get_character_hairstyles(character_name: str,
     (``garment_hair.hairstyle_list``); ``plain`` marks the hairstyle the
     plain body is the body of, ``default_mode`` the mode a new one gets,
     ``modes`` every mode, ``built_modes`` the ones that can be chosen
-    (``haar`` is not built yet). Read-only; admin only like its sibling
-    hair routes (Ruling FR-minors)."""
-    from app.core import garment_hair
+    (``haar`` is not built yet). Task UI4: every hairstyle not worn carries
+    ``wear`` — what its Wear button spends after the click
+    (``garment_hair.wear_estimate``: ``{hub_jobs, automatic, note}``, None
+    off the pipeline) and every HairDeck hairstyle ``due`` — the steps its
+    Run all would run now (``garments.run_estimate`` ``steps``; ``[]`` when
+    current, off the pipeline or for another mode), so a saved setting shows
+    in the list too; ``pipeline`` / ``auto_build`` the character's figure
+    pipeline and "Build automatically". Read-only; admin only like its
+    sibling hair routes (Ruling FR-minors)."""
+    from app.core import figure_build, garment_hair, garments
     from app.models.character import get_character_profile
     _require_character(character_name)
     profile = get_character_profile(character_name) or {}
-    return {"hairstyles": garment_hair.hairstyle_list(character_name, profile=profile),
+    rows = garment_hair.hairstyle_list(character_name, profile=profile)
+    pipeline = figure_build.on_pipeline(character_name, profile=profile)
+    for row in rows:
+        row["wear"] = (garment_hair.wear_estimate(character_name, row["id"], profile=profile)
+                       if pipeline and not row["worn"] else None)
+        due: List[str] = []
+        if pipeline and row["mode"] == garment_hair.HAIRDECK_MODE:
+            try:
+                due = list(garments.run_estimate(character_name, row["id"], profile=profile).get("steps") or [])
+            except Exception:  # noqa: BLE001 — a list light, never a failure of the list
+                logger.exception("Hairstyles GET: no run estimate for %s/%s", character_name, row["id"])
+        row["due"] = due
+    return {"hairstyles": rows,
             "default_mode": garment_hair.default_mode(),
-            "modes": list(garment_hair.HAIR_MODES), "built_modes": list(garment_hair.BUILT_MODES)}
+            "modes": list(garment_hair.HAIR_MODES), "built_modes": list(garment_hair.BUILT_MODES),
+            "pipeline": bool(pipeline),
+            "auto_build": bool(pipeline and figure_build.auto_build_on(character_name, profile=profile))}
 
 
 @router.post("/{character_name}/hairstyles", status_code=201)

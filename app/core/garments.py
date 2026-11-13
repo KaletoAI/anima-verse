@@ -2791,7 +2791,8 @@ def hairdeck_panel(character_name: str, item_id: str, *,
       ``garment_hair.hair_placement``), the automatic forward shift, the
       bounds of a manual value and what the newest HairDeck fit applied
       (its record's ``placement``; None without a fit or from a fit before
-      the placement correction);
+      the placement correction), ``pivot`` the point that fit tilted the hair about (``[x, y, z]`` metres,
+      its report's ``placement.pivot``; None without);
     - ``chains``: the spring chains of the newest HairDeck fit and the
       Swing/Stiffness settings (``hair_motion.panel``).
 
@@ -2835,7 +2836,10 @@ def hairdeck_panel(character_name: str, item_id: str, *,
     placement = {"width_scale": None, **garment_hair.hair_placement(settings),
                  "default_forward_m": garment_hairdeck.DEFAULT_FORWARD_M,
                  "limits": garment_hair.placement_limits(),
-                 "fitted": newest[1].get("placement") if newest else None}
+                 "fitted": newest[1].get("placement") if newest else None,
+                 # The point the fit pitched the hair about (its report's placement): the Hairstyles tab's live
+                 # placement preview turns the fitted hair about it; None without a fit or from an older one.
+                 "pivot": ((newest[1].get("report") or {}).get("placement") or {}).get("pivot") if newest else None}
     fitted_seed = None
     current = gs.read_record(gs.garment_path(character_name, item_id,
                                              gs.garment_fsig(character_name, item_id, profile=profile),

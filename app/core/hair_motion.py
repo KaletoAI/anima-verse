@@ -363,3 +363,41 @@ def panel(character_name: str, hairstyle: Dict[str, Any], newest: Optional[Dict[
             "links": sum(len(group["bones"]) for group in groups.values()),
             "swing": current["swing"], "stiffness": current["stiffness"], "limits": list(STIFFNESS_LIMITS),
             "fitted": fitted}
+
+
+def _gravity_scale(profile: Optional[Dict[str, Any]]) -> float:
+    """The profile's ``motion_gravity_scale`` as ``extension_rig.motion_payload`` reads it: a finite number
+    clamped to 0..3, else 1."""
+    raw = (profile or {}).get("motion_gravity_scale", 1)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(3.0, value)) if math.isfinite(value) else 1.0
+
+
+def preview_payload(character_name: str, path: Optional[Path], record: Optional[Dict[str, Any]], *,
+                    profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The Hairstyles tab's live Stiffness preview of the PREVIEWED fit (its GLB ``path`` and its record): the
+    motion groups of that fit with Swing on and Stiffness 1 (``motion_groups``, rigid joints from ``path``), the
+    raw HairDeck stiffness of each group's chain and the frequency mapping of ``freq_zeta``, so the client turns
+    a dragged Stiffness factor into each group's ``freq_hz`` without a request — ``{groups, chain_stiffness,
+    freq: {per_stiffness, min_hz, max_hz}, fit_swing}``. ``fit_swing``: the fit was made with Swing on (only
+    then are the cards bound to the chain joints, so only then does the preview swing). None without a record
+    or for a fit from before the spring chains. Read-only."""
+    chains = ((record or {}).get("report") or {}).get("chains")
+    if not isinstance(chains, dict):
+        return None
+    chains = with_rigid(chains, _rigid_of_fit(path, _head_scale(character_name, profile)))
+    groups = motion_groups(chains, {"swing": True, "stiffness": DEFAULT_STIFFNESS},
+                           gravity_scale=_gravity_scale(profile))
+    raw: Dict[str, float] = {}
+    for chain in (chains or {}).get("chains") or []:
+        try:
+            raw[GROUP_ID.format(index=int(chain["index"]))] = float(chain["stiffness"])
+        except (TypeError, ValueError, KeyError):
+            continue
+    return {"groups": groups, "chain_stiffness": {g: raw[g] for g in groups if g in raw},
+            "freq": {"per_stiffness": HAIR_FREQ_PER_STIFFNESS, "min_hz": HAIR_FREQ_MIN_HZ,
+                     "max_hz": HAIR_FREQ_MAX_HZ},
+            "fit_swing": bool(((record or {}).get("inputs") or {}).get("swing"))}

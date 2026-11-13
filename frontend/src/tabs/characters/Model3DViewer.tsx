@@ -284,7 +284,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   picking = false, onPickPoint, actionAccessPoints, spatialAuthoring = false, onPickGroundPoint,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
-  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup }:
+  onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
+  meshAdjust = null, focus = null }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
@@ -480,7 +481,19 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  figure in the ground group is then grounded on its SOLE per clip
      *  (`measureClipGround`, the rule the 3D client's terrain drop shares).
      *  Model mode only; absent = centred as before. */
-    clipGroup?: 'ground' | 'seat' | 'lie' }) {
+    clipGroup?: 'ground' | 'seat' | 'lie'
+    /** A LIVE vertex preview of the meshes whose name starts with `match` (model mode): every vertex of their
+     *  loaded positions goes through `map` (model units of the mesh's own geometry, which is the fit frame for
+     *  a grafted garment node) and their material colour is multiplied by `tint` (linear rgb) — re-applied
+     *  whenever the prop changes, without reloading; null / no `map` and `tint` = the loaded mesh as it is.
+     *  The Hairstyles tab drags its placement and colour sliders through it. */
+    meshAdjust?: { match: string; map?: ((p: [number, number, number]) => [number, number, number]) | null
+      tint?: [number, number, number] | null } | null
+    /** Frame a PART of the model instead of all of it (model mode): the camera looks at `center` (model units
+     *  of the loaded scene) from far enough to hold a sphere of `radius`, from the front three-quarter or —
+     *  `side` — from the model's +x side (its left), where a forward shift and a forward tilt read as lengths
+     *  and angles. "Reset view" returns to it; a change of the prop re-frames. null = the whole model. */
+    focus?: { center: [number, number, number]; radius: number; side?: boolean } | null }) {
   const { t } = useI18n()
   const [takes, setTakes] = useState<string[]>([])
   const [take, setTake] = useState('')
@@ -606,6 +619,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const polylinesRef = useRef(polylines)
   polylinesRef.current = polylines
   const polylineFnRef = useRef<(() => void) | null>(null)
+  const meshAdjustRef = useRef(meshAdjust)
+  meshAdjustRef.current = meshAdjust
+  const meshAdjustFnRef = useRef<(() => void) | null>(null)
+  const focusRef = useRef(focus)
+  focusRef.current = focus
+  const focusKey = focus ? `${focus.center.join(',')}|${focus.radius}|${focus.side ? 1 : 0}` : ''
   const slotsRef = useRef(slots)
   slotsRef.current = slots
   const slotFnRef = useRef<(() => void) | null>(null)
@@ -660,6 +679,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   // show up without re-downloading the model.
   useEffect(() => { areaFnRef.current?.() }, [areaOutlines])
   useEffect(() => { polylineFnRef.current?.() }, [polylines])
+  useEffect(() => { meshAdjustFnRef.current?.() }, [meshAdjust])
+  useEffect(() => { if (focusKey) refitFnRef.current?.() }, [focusKey])
   useEffect(() => { slotFnRef.current?.() }, [slots])
   // Disarming the tool drops whatever was half-drawn: a ring that survived
   // into the next arming would send points from the previous camera.
@@ -1455,6 +1476,20 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             camera.updateProjectionMatrix()
             controls.target.set(0, 0, 0)
             controls.update()
+            const f = focusRef.current
+            if (f) {
+              object.updateMatrixWorld(true)
+              const c = object.localToWorld(new THREE.Vector3(f.center[0], f.center[1], f.center[2]))
+              const d = (f.radius / Math.sin((Math.PI * camera.fov) / 360)) * 1.1
+              const dir = (f.side ? new THREE.Vector3(1, 0.12, 0.1) : new THREE.Vector3(0.45, 0.15, 1))
+                .transformDirection(object.matrixWorld)
+              camera.position.copy(c).addScaledVector(dir, d)
+              camera.near = d / 100
+              camera.far = d * 100
+              camera.updateProjectionMatrix()
+              controls.target.copy(c)
+              controls.update()
+            }
           }
           // How big this model is, as ONE number: the radius of its bounding
           // sphere. It is the yardstick for whether the next model to load is
@@ -1590,6 +1625,57 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           disposers.push(() => {
             if (polylineFnRef.current === rebuildPolylines) polylineFnRef.current = null
             clearGroup(polylineGroup)
+          })
+
+          // ── Live vertex preview (`meshAdjust`): the loaded positions and colour are kept, every change maps
+          // them anew — the meshes are this load's own, so nothing shared is touched. ──
+          let adjustTargets: Array<{ mesh: Mesh; base: Float32Array; color: InstanceType<typeof THREE.Color> | null }> = []
+          let adjustMatch: string | null = null
+          const applyMeshAdjust = () => {
+            const adjust = meshAdjustRef.current
+            const match = adjust?.match || ''
+            if (match !== adjustMatch) {
+              adjustMatch = match
+              adjustTargets = []
+              if (match) {
+                object.traverse((o: Object3D) => {
+                  const mesh = o as Mesh
+                  if (!mesh.isMesh || !o.name.startsWith(match)) return
+                  const pos = mesh.geometry.getAttribute('position')
+                  const base = new Float32Array(pos.count * 3)
+                  for (let i = 0; i < pos.count; i++) {
+                    base[i * 3] = pos.getX(i); base[i * 3 + 1] = pos.getY(i); base[i * 3 + 2] = pos.getZ(i)
+                  }
+                  const mat = mesh.material as MeshStandardMaterial | MeshStandardMaterial[]
+                  const color = !Array.isArray(mat) && mat?.color ? mat.color.clone() : null
+                  adjustTargets.push({ mesh, base, color })
+                })
+              }
+            }
+            for (const target of adjustTargets) {
+              const pos = target.mesh.geometry.getAttribute('position')
+              const map = adjust?.map
+              for (let i = 0; i < pos.count; i++) {
+                const p: [number, number, number] = [target.base[i * 3], target.base[i * 3 + 1], target.base[i * 3 + 2]]
+                const q = map ? map(p) : p
+                pos.setXYZ(i, q[0], q[1], q[2])
+              }
+              pos.needsUpdate = true
+              target.mesh.geometry.computeBoundingBox()
+              target.mesh.geometry.computeBoundingSphere()
+              const mat = target.mesh.material as MeshStandardMaterial
+              if (target.color && !Array.isArray(mat) && mat.color) {
+                const tint = adjust?.tint
+                mat.color.copy(target.color)
+                if (tint) mat.color.setRGB(target.color.r * tint[0], target.color.g * tint[1], target.color.b * tint[2])
+              }
+            }
+          }
+          meshAdjustFnRef.current = applyMeshAdjust
+          applyMeshAdjust()
+          disposers.push(() => {
+            if (meshAdjustFnRef.current === applyMeshAdjust) meshAdjustFnRef.current = null
+            adjustTargets = []
           })
 
           // ── The door leaf test swing (spec § 6) ──

@@ -160,8 +160,8 @@
  *      `/outfit-sets/{id}/hairstyle` (D5); CharactersTab lists `hairstyles` directly after the Wardrobe entry in
  *      the order that places it (`afterAussehen`), gates it on the template feature `humanoid` and renders
  *      FieldHairstyles; FieldHairstyles' dialog is a createPortal to document.body, "New hairstyle" posts
- *      `/hairstyles`, Wear posts `/hairstyles/{id}/wear`, the detail reads `/hair?item_id=`; R3 — the placement
- *      and Swing saves (HairDeckPlacement) send `item_id` and start no garment run; FieldFigure's hair row shows
+ *      `/hairstyles`, Wear posts `/hairstyles/{id}/wear`, the detail reads `/hair?item_id=`; R3 — the placement,
+ *      colour and Swing saves (HairLiveControls, one `post(path, body)` adding `item_id`) start no garment run; FieldFigure's hair row shows
  *      `hair.name` and links to the Hairstyles tab.
  */
 import { readFileSync } from 'node:fs';
@@ -510,11 +510,12 @@ check('[19] dialog through createPortal', /return createPortal\([\s\S]*?document
 check('[19] routes', [tabSrc.includes('`/characters/${encodeURIComponent(character)}/hairstyles`'),
   tabSrc.includes('/hairstyles/${encodeURIComponent(id)}/wear`'),
   tabSrc.includes('/hair?item_id=${encodeURIComponent(itemId)}`')], [true, true, true]);
-const placementSrc = src('frontend/src/tabs/characters/HairDeckPlacement.tsx');
-check('[19] R3: placement and Swing saved with item_id, no run', [
-  /hair\/placement`, \{ forward_m, tilt_deg, width_scale, item_id: itemId \}/.test(placementSrc),
-  /hair\/motion`, \{ swing, stiffness, item_id: itemId \}/.test(placementSrc), /garments\//.test(placementSrc)],
-  [true, true, false]);
+const liveSrc = src('frontend/src/tabs/characters/HairLiveControls.tsx');
+check('[19] R3: placement, colour and Swing saved with item_id, no run', [
+  /apiPost\(`\/characters\/\$\{enc\}\/hair\/\$\{path\}`, \{ \.\.\.body, item_id: itemId \}\)/.test(liveSrc),
+  /post\('placement', \{ forward_m: /.test(liveSrc), /post\('colour', \{ hex: /.test(liveSrc),
+  /post\('motion', \{ swing: e\.target\.checked, stiffness: /.test(liveSrc), /garments\//.test(liveSrc)],
+  [true, true, true, true, false]);
 check('[19] Figure tab hair row: name + mode, link to Hairstyles', [/\{hair\.name \|\| t\('Hair'\)\}/.test(fieldFigure),
   /<td style=\{CELL\}>\{hairstyles\}<\/td>/.test(fieldFigure)], [true, true]);
 
