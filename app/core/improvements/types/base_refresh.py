@@ -204,7 +204,7 @@ class BaseRefresh(ImprovementType):
         with model3d._lock:
             if name in model3d._generating:
                 raise CandidateBusy(f"{name}: model generation already running")
-            model3d._generating.add(name)
+            model3d._generating.add(name, "Base body refresh (Improvements)")
         try:
             if plan["views"]:
                 _render_views(name, list(plan["views"]))

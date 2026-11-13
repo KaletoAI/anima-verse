@@ -3197,7 +3197,7 @@ def revert_character_face_retexture(character_name: str, signature: str = "", la
     with _lock:
         if character_name in _generating:
             raise HTTPException(409, "A model job is already running")
-        _generating.add(character_name)
+        _generating.add(character_name, "Face retexture revert")
     try:
         with _char_lock(character_name):
             result = revert_face_retexture(character_name, signature)

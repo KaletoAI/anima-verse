@@ -52,7 +52,7 @@ import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
 import { FigureStored } from './FigureStored'
 import { useFigure } from './useFigure'
 import {
-  BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, NO_BASE_BODY_NOTE, baseBodyLine, bodyLine,
+  BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, NO_BASE_BODY_NOTE, baseBodyLine, bodyLine,
   buildButton, changeLine, hairState, headerLine, noBaseBody, stateMeshAction, wornState,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, HairMode, PieceState } from './figureModel'
@@ -203,6 +203,7 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
           {' — '}{t(BUILD_RUNNING_NOTE)}
         </div>
       ) : null}
+      {!running && data.build.deferred ? <div className="ga-hint">{t(BUILD_DEFERRED_NOTE)}</div> : null}
       {data.changes.length ? (
         <div className="ga-hint">
           {data.changes.map((c) => changeLine(c, t)).join(' · ')}

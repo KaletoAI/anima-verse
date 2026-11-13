@@ -573,6 +573,85 @@ def running(character_name: str) -> bool:
         return character_name in _active
 
 
+#: Ruling A26 a (symmetrical to A20's ``BASE_BUILD_RUNNING``): a Build does not start while a base-body step of
+#: the character is queued or running — it would build on a base that is being replaced (Kai, 2026-11-13: the
+#: skin step rewrote the base front 60 s into a Build, the dressed front was edited from the old one). ``step``
+#: is ``base_step_in_flight``'s name of it.
+BASE_STEP_RUNNING = "{step} is running — Build once it is done"
+#: Ruling A26 b: the base views changed under a running Build (a step that slipped in beside it) — it stops at
+#: the next step instead of failing with "views missing". ``step`` is the step it stopped at.
+BASE_CHANGED = "Base body changed during the Build ({step}) — Build again"
+#: How often a deferred automatic Build looks whether the base step ended, and how long it waits at most
+#: (Ruling A26 a / A22: a deferral, never a failure).
+DEFERRED_POLL_S = 5.0
+DEFERRED_WAIT_S = 3600.0
+_deferred: Dict[str, str] = {}   # character -> the reason of the automatic Build waiting for a base step
+
+
+def base_step_in_flight(character_name: str) -> str:
+    """The base-body step of the character queued or running now, by name, "" when none (Ruling A26 a) — read
+    from the registries the steps keep anyway, never a second one: the Base body tab's Run all
+    (``_run_all_active``), the base views' reservations and the base model run
+    (``base_body.base_steps_running``: a view's render, the skin step, Run all's views, the base model — each
+    from its click on), the character's 3D generation guard when a base step holds it
+    (``model3d.generation_holder``: re-rig, face retexture / cleanup, a fetched or resumed mesh job, the base
+    refresh / face Improvements) and an extension tip rebuild."""
+    with _lock:
+        if character_name in _run_all_active:
+            return "Base body Run all"
+    from app.core import base_body, extension_tip, model3d
+    steps = base_body.base_steps_running(character_name)
+    if steps:
+        return steps[0]
+    holder = model3d.generation_holder(character_name)
+    if holder:
+        return holder
+    if extension_tip.rebuild_running(character_name):
+        return "Extension tip rebuild"
+    return ""
+
+
+def _defer(character_name: str, reason: str, step: str) -> Dict[str, Any]:
+    """An automatic start while a base step is in flight (Ruling A26 a): a deferral, not a failure (A22) — ONE
+    waiter per character starts the automatic Build once no base step is in flight any more (it re-plans then;
+    nothing to build ends at once). ``{"status": "deferred", "reason"}``."""
+    message = BASE_STEP_RUNNING.format(step=step)
+    with _lock:
+        waiting = character_name in _deferred
+        _deferred[character_name] = reason
+    logger.info("Build %s (%s, automatic) deferred: %s", character_name, reason, message)
+    if not waiting:
+        try:
+            threading.Thread(target=_deferred_waiter, args=(character_name,), daemon=True,
+                             name=f"figure-build-deferred-{character_name}").start()
+        except Exception:  # noqa: BLE001 — without a waiter the change stays pending (figure.pending_changes)
+            with _lock:
+                _deferred.pop(character_name, None)
+            logger.warning("Build %s: deferral waiter not started", character_name, exc_info=True)
+    return {"status": "deferred", "reason": message}
+
+
+def _deferred_waiter(character_name: str, *, poll_s: Optional[float] = None,
+                     timeout_s: Optional[float] = None) -> None:
+    import time
+    poll_s = DEFERRED_POLL_S if poll_s is None else poll_s
+    deadline = time.monotonic() + (DEFERRED_WAIT_S if timeout_s is None else timeout_s)
+    try:
+        while base_step_in_flight(character_name):
+            if time.monotonic() >= deadline:
+                logger.info("Build %s: a base step still runs after %.0f s — the deferred automatic Build is "
+                            "dropped (the change stays pending)", character_name, DEFERRED_WAIT_S)
+                return
+            time.sleep(poll_s)
+    finally:
+        with _lock:
+            reason = _deferred.pop(character_name, None)
+    if reason is not None and time.monotonic() < deadline:
+        logger.info("Build %s: the base step is done — the deferred automatic Build (%s) starts", character_name,
+                    reason)
+        request(character_name, reason)
+
+
 def build_lock(character_name: str) -> threading.Lock:
     """The character's Build lock: a run holds it from its plan to its last
     step (``_worker``); ``figure.delete_stored`` takes it without waiting and
@@ -598,7 +677,11 @@ def start(character_name: str, *, reason: str, automatic: bool = False) -> Dict[
     for an ``automatic`` Build also when only cached chain failures are left,
     which only a manual Build retries), ``"off"`` (off the pipeline, with
     ``reason``), ``"failed"`` (the profile could not be read: ``reason``,
-    recorded as the Build's failure — ruling F13 e). ``automatic``: started
+    recorded as the Build's failure — ruling F13 e), ``"base_busy"`` (a click
+    while a base-body step of the character is queued or running — Ruling
+    A26 a; ``reason`` names it, the routes answer 409) / ``"deferred"`` (the
+    same for an automatic start: it starts once the step is done — a
+    deferral, never a failure). ``automatic``: started
     by a trigger (``request``), not by a click (ruling 7a)."""
     try:
         profile = _read_profile(character_name)
@@ -610,6 +693,12 @@ def start(character_name: str, *, reason: str, automatic: bool = False) -> Dict[
         if character_name in _active:
             _keep_followup_locked(character_name, reason, automatic)
             return {"status": "queued"}
+    busy = base_step_in_flight(character_name)
+    if busy:
+        # Ruling A26 a: never beside a base step — a click is refused naming it, a trigger waits for it.
+        if automatic:
+            return _defer(character_name, reason, busy)
+        return {"status": "base_busy", "reason": BASE_STEP_RUNNING.format(step=busy)}
     if not _runnable(plan(character_name, profile=profile, explicit=not automatic), not automatic):
         return {"status": "current"}
     with _lock:
@@ -658,7 +747,8 @@ def request(character_name: str, trigger: str) -> bool:
     ``auto_build_on`` → an automatic ``start(reason=trigger)``; True when it
     started or was kept as the follow-up. Else False — the change stays in
     ``figure.pending_changes``; a profile that cannot be read is recorded as
-    the Build's failure (ruling F13 e). Never raises."""
+    the Build's failure (ruling F13 e). A request while a base-body step runs is
+    deferred until it is done (Ruling A26 a) — True as well. Never raises."""
     try:
         try:
             profile = _read_profile(character_name)
@@ -668,7 +758,8 @@ def request(character_name: str, trigger: str) -> bool:
         if not on_pipeline(character_name, profile=profile) or not auto_build_on(character_name, profile=profile):
             logger.debug("Build %s not requested (%s): off the pipeline or not automatic", character_name, trigger)
             return False
-        return start(character_name, reason=trigger, automatic=True).get("status") in ("started", "queued")
+        return start(character_name, reason=trigger, automatic=True).get("status") in ("started", "queued",
+                                                                                       "deferred")
     except Exception:  # noqa: BLE001 — a trigger never breaks its caller
         logger.exception("Build request of %s (%s) failed", character_name, trigger)
         return False
@@ -694,18 +785,21 @@ def wearers(item_id: str) -> List[str]:
 
 
 def state(character_name: str) -> Dict[str, Any]:
-    """``{running, step, queued, failed, skipped, superseded, reason, finished_at}``:
+    """``{running, step, queued, deferred, failed, skipped, superseded, reason, finished_at}``:
     ``step`` the step in flight (``{name, label, jobs, item_id, index,
     count}``), ``queued`` the follow-ups kept (0 or 1); ``failed`` /
     ``skipped`` / ``finished_at`` of the last run that had steps;
     ``superseded`` its ``{step, label, note}`` when it ended superseded
-    (Ruling A18), else None."""
+    (Ruling A18), else None; ``deferred`` the reason of an automatic Build that
+    waits for a base step (Ruling A26 a), else None."""
     with _lock:
+        deferred = _deferred.get(character_name)
         running = character_name in _active
         current = dict(_current.get(character_name) or {})
         queued = len(_queues.get(character_name) or ())
         last = dict(_last.get(character_name) or {})
     return {"running": running, "step": current.get("step") if running else None, "queued": queued,
+            "deferred": deferred,
             "failed": dict(last.get("failed") or {}), "skipped": list(last.get("skipped") or []),
             "superseded": dict(last["superseded"]) if last.get("superseded") else None,
             "reason": current.get("reason") if running else last.get("reason"),
@@ -798,6 +892,40 @@ def _check_pin(character_name: str) -> None:
             fields=_moved_fields(pinned.as_dict(), wanted.as_dict())), new=_figure_text(wanted)))
 
 
+#: Steps that write the base views themselves: the run takes its base snapshot again after them (Ruling A26 b).
+BASE_WRITING_STEPS = frozenset({"plain_body"})
+
+
+def _base_snapshot(character_name: str) -> Optional[Tuple[str, Dict[str, str]]]:
+    """``(base signature, {view: sha256})`` of the character's base views now ("" for a missing one) — what a
+    running Build compares before each step (Ruling A26 b). None when it cannot be read (no verdict then)."""
+    try:
+        from app.core import base_body
+        from app.core.model_refs import find_ref_image
+        bsig = base_body.base_signature(character_name)
+        return bsig, {v: base_body.file_sha256(find_ref_image(character_name, base_body._kind(v), bsig))
+                      for v in base_body.BASE_VIEWS}
+    except Exception:  # noqa: BLE001 — no snapshot, no verdict; the steps report their own errors
+        logger.debug("Build %s: base snapshot not read", character_name, exc_info=True)
+        return None
+
+
+def _base_changed(character_name: str, snapshot: Optional[Tuple[str, Dict[str, str]]]) -> List[str]:
+    """The base views whose content is not the run's snapshot any more ([] without a snapshot). Another base
+    SIGNATURE is no verdict here: the wanted figure moved with it, the pin says so (Ruling A18 — superseded,
+    with its follow-up)."""
+    if snapshot is None:
+        return []
+    now = _base_snapshot(character_name)
+    if now is None or now[0] != snapshot[0]:
+        return []
+    return [v for v in snapshot[1] if now[1].get(v, "") != snapshot[1][v]]
+
+
+def _step_text(step: Step) -> str:
+    return step.name.replace("_", " ")
+
+
 def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, automatic: bool) -> None:
     """``_run`` after the profile was read: plan, then every step in order. The run pins the wanted figure of
     its plan (Ruling A18, module docstring); a step that raises ``StepSuperseded`` ends the run without a
@@ -814,9 +942,25 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
     if not _runnable(steps, explicit):
         logger.info("Build %s (%s): nothing to build", character_name, reason)
         return
+    busy = base_step_in_flight(character_name)
+    if busy:
+        # Ruling A26 a, for a run that slipped past ``start`` (a kept follow-up, a race with a click): nothing
+        # is built beside a base step — an automatic run waits for it, a manual one says why it did not start.
+        if automatic:
+            _defer(character_name, reason, busy)
+        else:
+            with _lock:
+                _last[character_name] = {"failed": {"build": {"error": BASE_STEP_RUNNING.format(step=busy),
+                                                              "item_id": ""}},
+                                         "skipped": [s.name for s in steps], "reason": reason,
+                                         "finished_at": utc_now_iso(), "superseded": None}
+            logger.info("Build %s (%s) not run: %s", character_name, reason, BASE_STEP_RUNNING.format(step=busy))
+        return
     with _lock:
         _current[character_name] = {"reason": reason, "step": None, "steps": [s.as_dict() for s in steps]}
     _pin(character_name, resolved[0])
+    # Ruling A26 b: the base views as the run found them — a change under it stops it at the next step.
+    snapshot = _base_snapshot(character_name)
     queue, task_id = _tracked(character_name, f"Build · {character_name} (0/{len(steps)})")
     failed: Dict[str, Dict[str, Any]] = {}
     skipped: List[str] = []
@@ -839,7 +983,12 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                 logger.info("Build %s: %s skipped — it needs %s", character_name, step.label,
                             sorted(DEPENDS[step.name] & (set(failed) | set(skipped))))
                 continue
-            if step.failed and automatic:
+            changed = _base_changed(character_name, snapshot)
+            if changed:
+                error = BASE_CHANGED.format(step=_step_text(step))
+                logger.warning("Build %s: base views %s changed during the Build — stopped before %s",
+                               character_name, ", ".join(changed), step.label)
+            elif step.failed and automatic:
                 # Ruling 7a: an automatic Build never spends a chain that failed for this input.
                 error = step.failed
             else:
@@ -867,6 +1016,16 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                         _pin(character_name, _now(character_name)[1])   # the Build's own change of the figure
                     except Exception:  # noqa: BLE001 — the next step reports an unreadable profile
                         logger.debug("Build %s: pin not renewed", character_name, exc_info=True)
+                if step.name in BASE_WRITING_STEPS:
+                    snapshot = _base_snapshot(character_name)   # the Build's own change of the base views
+                elif _base_changed(character_name, snapshot):
+                    # Ruling A26 b: the base changed while the step ran — what it made stands on the replaced
+                    # base, and a failure is BECAUSE of that (Kai: "views missing" for a dressed front edited
+                    # from the replaced base front). Stop here, never with the step's own error.
+                    logger.warning("Build %s: the base views changed while %s ran (%s)", character_name,
+                                   step.label, error or "done")
+                    error = BASE_CHANGED.format(step=_step_text(step))
+                    changed = ["changed"]
             if error:
                 logger.warning("Build %s: %s failed: %s", character_name, step.label, error)
                 entry = failed.get(step.name)
@@ -874,9 +1033,10 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     failed[step.name] = {"error": error, "item_id": step.item_id}
                 else:
                     entry.setdefault("items", {entry["item_id"]: entry["error"]})[step.item_id] = error
-                if step.name in STOP_STEPS:
+                if step.name in STOP_STEPS or changed:
                     # Ruling C4: a refused view stops the Build here — nothing is meshed, painted or assembled
-                    # from what it left; the figure delivered before stays served.
+                    # from what it left; the figure delivered before stays served. Ruling A26 b: so does a base
+                    # that changed under the Build.
                     rest = [s.name for s in steps[index:] if s.name not in skipped]
                     skipped.extend(dict.fromkeys(rest))
                     logger.info("Build %s stopped at %s — skipped: %s", character_name, step.label,
@@ -1027,6 +1187,17 @@ def _dressed(character_name: str, wanted) -> str:
     if not missing:
         return ""
     reason = base_body.outfit_failure(character_name, wanted.signature)
+    stale = base_body.stale_views(character_name, wanted.signature, missing)
+    if stale:
+        # Ruling A26 c: a stored view edited from a base view replaced since is stale, not missing.
+        if reason == base_body.DRESSED_FRONT_STALE and "front" in stale:
+            reason = ""
+        gone = [v for v in missing if v not in stale]
+        text = base_body.VIEWS_STALE.format(views=base_body._join_views(stale),
+                                            verb="is" if len(stale) == 1 else "are")
+        if gone:
+            text += "; " + DRESSED_VIEWS_MISSING.format(views=", ".join(gone))
+        return text + (f" ({reason})" if reason else "")
     return DRESSED_VIEWS_MISSING.format(views=", ".join(missing)) + (f" ({reason})" if reason else "")
 
 
@@ -1195,6 +1366,10 @@ def refit(character_name: str, item_id: str) -> Dict[str, Any]:
     piece and assembles the figure when the fit is accepted, the figure built before stays served otherwise.
     ``start``'s answer; ValueError when the piece's fit is not refused."""
     from app.core import garment_store
+    busy = base_step_in_flight(character_name)
+    if busy:
+        # Ruling A26 a: a click — refused naming the base step (nothing cleared).
+        return {"status": "base_busy", "reason": BASE_STEP_RUNNING.format(step=busy)}
     profile, wanted, delivered, _items = _now(character_name)
     if item_id not in delivered.fit_refused:
         raise ValueError(f"{_item_name(item_id)}: its fit on the body shape is not refused")
@@ -1624,7 +1799,7 @@ def start_base_run_all(character_name: str) -> Dict[str, Any]:
     with _lock:
         _run_all_active.add(character_name)
     # The planned views count as running from THIS moment (the tab polls ``base_info``), as a view's Regenerate.
-    base_body.reserve_views(character_name, views)
+    base_body.reserve_views(character_name, views, step=base_body.RUN_ALL_STEP)
     step = Step("plain_body", "Plain body: " + str(plan_now["note"]), plan_now["hub_jobs"])
 
     def run() -> None:

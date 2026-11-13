@@ -154,12 +154,13 @@ def build_current_outfit(character_name: str) -> Dict[str, Any]:
     2026-11-12-unified-worn-pieces ruling 7a). ``{"status": …}``:
     ``started``, ``queued`` (a Build runs — this is its one follow-up),
     ``current`` (nothing to build). ``ValueError`` off the pipeline,
-    ``LookupError`` when the profile could not be read (ruling F13 e)."""
+    ``LookupError`` when the profile could not be read (ruling F13 e) or a
+    base-body step of the character runs (Ruling A26 a, the step named)."""
     from app.core import figure_build
     result = figure_build.start(character_name, reason="build_current_outfit")
     if result.get("status") == "off":
         raise ValueError("The character is not on the base-body pipeline")
-    if result.get("status") == "failed":
+    if result.get("status") in ("failed", "base_busy"):   # base_busy: Ruling A26 a, the route's 409
         raise LookupError(str(result.get("reason") or "Build failed"))
     return {"status": str(result.get("status") or "")}
 

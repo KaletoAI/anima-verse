@@ -241,6 +241,13 @@ def save_tip_override(character_name: str, signature: str, group_id: str,
     return set_tip_override(character_name, signature, group_id, tip, enabled=enabled)
 
 
+def rebuild_running(character_name: str) -> str:
+    """The model signature whose extension rig is rebuilt for the character now, "" when none (Ruling A26: a
+    Build does not start beside it)."""
+    with _lock:
+        return str(_running.get(character_name) or "")
+
+
 def start_tip_rebuild(character_name: str, signature: str) -> bool:
     """Rebuild the extension rig of the stored model ``signature`` in a worker thread with the saved settings (the
     CPU rebuild of ``model3d.rebuild_extension_rig``, forced so a failed attempt is retried; no hub job). False

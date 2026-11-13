@@ -98,7 +98,7 @@ class FaceRetexture(ImprovementType):
         with model3d._lock:
             if name in model3d._generating:
                 raise CandidateBusy(f'{name}: model generation already running')
-            model3d._generating.add(name)
+            model3d._generating.add(name, 'Face retexture (Improvements)')
         try:
             if (self.is_done(candidate, params)
                     or source_token(model3d.get_model3d_dir(name), signature) != source

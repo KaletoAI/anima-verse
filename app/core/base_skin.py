@@ -501,7 +501,7 @@ def apply_skin_step(character_name: str) -> Dict[str, Any]:
             shutil.copyfile(front, neutral)
             if front.with_suffix(".json").is_file():
                 shutil.copyfile(front.with_suffix(".json"), neutral.with_suffix(".json"))
-        base_body.reserve_views(character_name, ("front",))
+        base_body.reserve_views(character_name, ("front",), step=base_body.SKIN_STEP)
         try:
             record = run_step(character_name, front, neutral, profile=profile)
             record["rerun"] = True
@@ -522,7 +522,7 @@ def start_skin_step(character_name: str) -> None:
     from THIS moment (the UI polls ``base_info``)."""
     import threading
     from app.core import base_body
-    base_body.reserve_views(character_name, ("front",))
+    base_body.reserve_views(character_name, ("front",), step=base_body.SKIN_STEP)
 
     def run() -> None:
         try:

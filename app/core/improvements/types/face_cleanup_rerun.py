@@ -60,7 +60,7 @@ class FaceCleanupRerun(ImprovementType):
         with model3d._lock:
             if name in model3d._generating:
                 raise CandidateBusy(f'{name}: model generation already running')
-            model3d._generating.add(name)
+            model3d._generating.add(name, 'Face cleanup (Improvements)')
         try:
             state = model3d.face_cleanup_rerun_state(name)
             if state is None or state['signature'] != signature:

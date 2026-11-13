@@ -38,7 +38,40 @@ logger = get_logger(__name__)
 MODEL_EXTS = (".fbx", ".glb", ".gltf", ".obj", ".ply", ".vrm")
 
 _lock = threading.Lock()
-_generating: set = set()
+
+
+class _GenerationGuard(set):
+    """The characters whose 3D generation guard is held (a plain set for every caller), plus WHAT holds it when
+    the holder names itself (``add(name, what)``): the base-body steps do — the base model, a re-rig, a face
+    retexture / cleanup, a fetched mesh job, a resumed hub job — so a Build that must not start beside one names
+    it (Ruling A26, ``figure_build.base_step_in_flight``). An unnamed holder (the Build's own
+    ``generation_slot``, an outfit rebuild) only serialises."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.what: Dict[str, str] = {}
+
+    def add(self, name, what: str = "") -> None:  # type: ignore[override]
+        super().add(name)
+        if what:
+            self.what[name] = what
+        else:
+            self.what.pop(name, None)
+
+    def discard(self, name) -> None:  # type: ignore[override]
+        super().discard(name)
+        self.what.pop(name, None)
+
+    def remove(self, name) -> None:  # type: ignore[override]
+        super().remove(name)
+        self.what.pop(name, None)
+
+    def clear(self) -> None:
+        super().clear()
+        self.what.clear()
+
+
+_generating: _GenerationGuard = _GenerationGuard()
 _rerig_results: Dict[str, Dict[str, Any]] = {}
 _face_retexture_results: Dict[str, Dict[str, Any]] = {}
 # The last "Re-apply face cleanup" run per character (``trigger_face_cleanup``).
@@ -3801,7 +3834,7 @@ def trigger_rerig(character_name: str, signature: str, *, backend_glob: str = ""
     with _lock:
         if character_name in _generating:
             return {"status": "already_running"}
-        _generating.add(character_name)
+        _generating.add(character_name, "Re-rig")
     try:
         queue = get_task_queue()
         task_id = queue.track_start("model3d_rerig", f"Re-rig: {character_name}",
@@ -3882,7 +3915,7 @@ def fetch_job_for_current_outfit(character_name: str, job_id: str, *,
         if character_name in _generating:
             return {"status": "busy",
                     "error": "a 3D model generation is running for this character"}
-        _generating.add(character_name)
+        _generating.add(character_name, "Mesh job fetch")
     staging: Optional[Path] = None
     try:
         with _char_lock(character_name):
@@ -4011,7 +4044,7 @@ def trigger_generation(character_name: str, *, force: bool = False,
     with _lock:
         if character_name in _generating:
             return False
-        _generating.add(character_name)
+        _generating.add(character_name, "Base body model (mesh + rig)" if base else "")
     threading.Thread(target=_run,
                      args=[character_name, force, backend_glob, prefer_cheapest,
                            face_num, texture_size, base],
@@ -4045,6 +4078,14 @@ def generation_running(character_name: str) -> bool:
     """Whether a 3D run of the character holds the generation guard now."""
     with _lock:
         return character_name in _generating
+
+
+def generation_holder(character_name: str) -> str:
+    """What holds the character's generation guard now when the holder named itself (a base-body step: "Base
+    body model (mesh + rig)", "Re-rig", "Face retexture", …), else "" — also while an unnamed run (a Build's
+    ``generation_slot``) holds it (Ruling A26)."""
+    with _lock:
+        return _generating.what.get(character_name, "") if character_name in _generating else ""
 
 
 def maybe_auto_generate_for_outfit(character_name: str) -> bool:
@@ -4605,7 +4646,7 @@ def trigger_face_retexture(character_name: str, signature: str, *,
     with _lock:
         if character_name in _generating:
             return {'status': 'already_running'}
-        _generating.add(character_name)
+        _generating.add(character_name, "Face retexture")
         _face_retexture_results.pop(character_name, None)
     try:
         queue = get_task_queue()
@@ -4808,7 +4849,7 @@ def trigger_face_cleanup(character_name: str, signature: str) -> Dict[str, Any]:
     with _lock:
         if character_name in _generating:
             return {"status": "already_running"}
-        _generating.add(character_name)
+        _generating.add(character_name, "Face cleanup")
         _face_cleanup_results.pop(character_name, None)
     try:
         queue = get_task_queue()
@@ -4889,7 +4930,7 @@ def _op_reserve(op):
     with _lock:
         if name in _generating:
             return lambda: None
-        _generating.add(name)
+        _generating.add(name, "A resumed 3D hub job")
 
     def release() -> None:
         with _lock:

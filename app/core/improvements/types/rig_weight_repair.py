@@ -49,7 +49,7 @@ class RigWeightRepair(ImprovementType):
         with model3d._lock:
             if name in model3d._generating:
                 raise CandidateBusy(f'{name}: model generation already running')
-            model3d._generating.add(name)
+            model3d._generating.add(name, 'Rig weight repair (Improvements)')
         try:
             if self.is_done(candidate, params):
                 return

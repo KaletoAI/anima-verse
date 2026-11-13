@@ -132,7 +132,13 @@ export const BUILD_STATUS: Record<string, string> = {
   current: 'Nothing to build',
   off: 'No figure — humanoid characters that are not temporary NPCs only',
   failed: 'Build failed — the profile could not be read',
+  // Ruling A26 a: not beside a base-body step (a click: 409 with the step named; "Build for them" lists it).
+  base_busy: 'Not started — a base-body step of the character is running',
+  deferred: 'Waits for the running base-body step, then builds',
 }
+
+/** Ruling A26 a: an automatic Build that waits for a base-body step of the character (`build.deferred`). */
+export const BUILD_DEFERRED_NOTE = 'An automatic Build waits for the running base-body step and starts when it is done'
 
 // --- The Figure tab (Task 10; spec "The UI", rules for the buttons, ruling 8) ---------------------------
 
@@ -222,6 +228,8 @@ export interface FigurePayload {
     /** The step in flight; `index` counts from 1. */
     step: (FigureStep & { index?: number; count?: number }) | null
     queued: number
+    /** Ruling A26 a: the reason of an automatic Build that waits for a base-body step, else null. */
+    deferred?: string | null
     failed: Record<string, { error: string; item_id?: string; items?: Record<string, string> }>
     skipped: string[]
     reason: string | null

@@ -133,6 +133,8 @@ def build_figure(character_name: str, _: Dict[str, Any] = Depends(require_admin)
     from app.core import figure_build
     _require_character(character_name)
     result = figure_build.start(character_name, reason="manual")
+    if result.get("status") == "base_busy":   # Ruling A26 a: a base-body step of the character runs
+        raise HTTPException(status_code=409, detail=str(result.get("reason") or "A base-body step runs"))
     if result.get("status") == "off":
         raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))
     if result.get("status") == "failed":
@@ -153,6 +155,8 @@ def refit_figure_piece(character_name: str, body: RefitRequest,
         result = figure_build.refit(character_name, body.item_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if result.get("status") == "base_busy":   # Ruling A26 a
+        raise HTTPException(status_code=409, detail=str(result.get("reason") or "A base-body step runs"))
     if result.get("status") == "off":
         raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))
     if result.get("status") == "failed":

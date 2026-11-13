@@ -511,6 +511,9 @@ def is_base_pipeline(character_name: str, *, profile: Optional[Dict[str, Any]] =
 # character lock counts — it WILL render), since when, and the last failure.
 _status_lock = threading.Lock()
 _running: Dict[Tuple[str, str], Tuple[datetime, int]] = {}
+# What the first reservation still holding a view is (Ruling A26: a Build refused beside it names it):
+# ``RENDER_STEP`` (a view's render), ``SKIN_STEP`` (the skin step on the front), ``RUN_ALL_STEP``.
+_running_step: Dict[Tuple[str, str], str] = {}
 _failed: Dict[Tuple[str, str], Dict[str, Any]] = {}
 # One base render per character at a time: the views edit the front, and a
 # second run would race the same files.
@@ -526,14 +529,23 @@ def _iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat(timespec="seconds") if dt else None
 
 
-def reserve_views(character_name: str, views: Iterable[str]) -> None:
-    """Mark views running (counted, so nested and queued runs stack)."""
+#: What reserves a base view (``reserve_views``' ``step``; Ruling A26 names it).
+RENDER_STEP = "render"
+SKIN_STEP = "skin step"
+RUN_ALL_STEP = "Run all"
+
+
+def reserve_views(character_name: str, views: Iterable[str], *, step: str = RENDER_STEP) -> None:
+    """Mark views running (counted, so nested and queued runs stack); ``step`` is what reserves them — the
+    first reservation of a view names it until the view is free again."""
     from app.core.timeutils import utc_now
     with _status_lock:
         for view in views:
             key = (character_name, view)
             started, count = _running.get(key, (utc_now(), 0))
             _running[key] = (started, count + 1)
+            if count == 0:
+                _running_step[key] = step
 
 
 def release_views(character_name: str, views: Iterable[str]) -> None:
@@ -543,8 +555,28 @@ def release_views(character_name: str, views: Iterable[str]) -> None:
             started, count = _running.get(key, (None, 0))
             if count <= 1:
                 _running.pop(key, None)
+                _running_step.pop(key, None)
             else:
                 _running[key] = (started, count - 1)
+
+
+def base_steps_running(character_name: str) -> List[str]:
+    """The base-body steps of the character queued or running now, by name (Ruling A26 — a Build does not
+    start beside one): "Base body skin step", "Base body front view render", "Base body Run all" (from the
+    views' reservations, which a step takes from its click on) and "Base body model (mesh + rig)" (a base model
+    run, ``start_base_model`` from its click on). [] when none."""
+    out: List[str] = []
+    with _status_lock:
+        steps = {view: _running_step.get((character_name, view), RENDER_STEP)
+                 for view in BASE_VIEWS if (character_name, view) in _running}
+        model = character_name in _model_running
+    for view, step in steps.items():
+        name = (f"Base body {view} view render" if step == RENDER_STEP else f"Base body {step}")
+        if name not in out:
+            out.append(name)
+    if model:
+        out.append("Base body model (mesh + rig)")
+    return out
 
 
 def _record(character_name: str, view: str, error: Optional[str], *, warning: bool = False) -> None:
@@ -1143,6 +1175,9 @@ SIDE_ARM_MARGIN_MAX = 0.2
 SIDE_VIEW_NOT_DRESSED = ("On the base-body pipeline only the front and the back are dressed — "
                          "the side views belong to the base body (Base body tab)")
 DRESSED_FRONT_FIRST = "Render the dressed front first — the back draft is made from it"
+#: ``DRESSED_FRONT_FIRST`` when the dressed front IS stored but was edited from a base front replaced since
+#: (Ruling A26 c — the skin step rewrote the base front while the dressed front rendered).
+DRESSED_FRONT_STALE = "The dressed front is stale — the base front changed; the back draft is not made from it"
 
 
 def side_views_dressed() -> bool:
@@ -2970,7 +3005,8 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                 front = current("front")
                 path = None
                 if front is None:
-                    errors.append(DRESSED_FRONT_FIRST)
+                    errors.append(DRESSED_FRONT_STALE if stale_views(character_name, signature, ("front",))
+                                  else DRESSED_FRONT_FIRST)
                 else:
                     try:
                         path, warning = _dress_view(
@@ -3949,6 +3985,11 @@ OUTFIT_BODY_OUTDATED = "The outfit body does not match its views — rebuild the
 #: all (ruling 2026-11-10) — a missing view is rendered first in the same
 #: run; one that cannot be rendered stops the build.
 VIEWS_MISSING = "{views} {noun} missing — not meshed from the {have} alone"
+#: ``VIEWS_MISSING`` when no view of the set is there at all.
+VIEWS_NONE = "{views} {noun} missing — nothing to mesh from"
+#: Ruling A26 c: a dressed view that IS stored but was edited from base view content replaced since (the skin
+#: step rewrote the base front while the dressed front rendered) — stale, never "missing".
+VIEWS_STALE = "Dressed {views} {verb} stale — the base {views} changed"
 #: The figure a shape was asked for is not the one its pieces call for now.
 SHAPE_CHANGED = "The worn pieces changed — the body shape was not built"
 #: The in-body pieces of a shape name no text to edit the views with.
@@ -4093,12 +4134,52 @@ def _join_views(views: Iterable[str]) -> str:
     return views[0] if len(views) == 1 else ", ".join(views[:-1]) + " and " + views[-1]
 
 
-def views_missing_message(missing: List[str], have: List[str], reason: str = "") -> str:
+def stale_views(character_name: str, signature: str, views: Iterable[str]) -> List[str]:
+    """Of ``views``, the dressed views stored for ``signature`` (an outfit or a meshed shape) that were edited
+    from base view content that is not there any more (Ruling A26 c): the sidecar's ``base_image_sha256`` is
+    not the content of the view it names (``base_signature``) now — stale, not missing. A model fit of before
+    Task 11g is outdated by rule, never "stale" here. Read-only."""
+    from app.core.model_refs import find_ref_image
+    out: List[str] = []
+    for v in views:
+        path = find_ref_image(character_name, _kind(v), signature)
+        if path is None:
+            continue
+        meta = _ref_sidecar(path)
+        on = str(meta.get("base_signature") or "")
+        recorded = str(meta.get("base_image_sha256") or "")
+        if is_model_fit(meta) or not on or not recorded:
+            continue
+        if recorded != file_sha256(find_ref_image(character_name, _kind(v), on)):
+            out.append(v)
+    return out
+
+
+def views_missing_message(missing: List[str], have: List[str], reason: str = "", *,
+                          stale: Iterable[str] = ()) -> str:
     """``VIEWS_MISSING`` for the views a shape still lacks, ``reason`` (the
-    render's error) appended in brackets."""
-    label = _join_views(missing)
-    text = VIEWS_MISSING.format(views=label[:1].upper() + label[1:], noun="view" if len(missing) == 1 else "views",
-                                have=_join_views(have) if have else "nothing")
+    render's error) appended in brackets. A view of ``missing`` that is
+    in ``stale`` (``stale_views``: stored, but edited from a base view replaced
+    since) is named stale instead (``VIEWS_STALE``, Ruling A26 c); with no view
+    there at all the text says so (``VIEWS_NONE``)."""
+    stale = set(stale)
+    old = [v for v in missing if v in stale]
+    gone = [v for v in missing if v not in stale]
+    parts: List[str] = []
+    if old:
+        label = _join_views(old)
+        parts.append(VIEWS_STALE.format(views=label, verb="is" if len(old) == 1 else "are"))
+    if gone:
+        label = _join_views(gone)
+        noun = "view" if len(gone) == 1 else "views"
+        if have:
+            parts.append(VIEWS_MISSING.format(views=label, noun=noun, have=_join_views(have)))
+        elif old:
+            parts.append(f"{label} {noun} missing")
+        else:
+            parts.append(VIEWS_NONE.format(views=label, noun=noun))
+    text = "; ".join(parts)
+    text = text[:1].upper() + text[1:]
     return f"{text} ({reason})" if reason else text
 
 
@@ -4191,8 +4272,12 @@ def render_shape_views(character_name: str, fig, views: List[str], *, items: Opt
     with _status_lock:
         failure = dict(_outfit_failed.get((character_name, shape)) or {})
     reason = str(failure.get("error") or "")
-    return {"ok": False, "error": reason or views_missing_message(missing, [v for v in views if v not in missing]),
-            "missing": missing, "reason": reason}
+    stale = stale_views(character_name, shape, missing)
+    if reason == DRESSED_FRONT_STALE and "front" in stale:
+        reason = ""   # the message names the stale front itself
+    return {"ok": False, "error": reason or views_missing_message(missing, [v for v in views if v not in missing],
+                                                                  stale=stale),
+            "missing": missing, "reason": reason, "stale": stale}
 
 
 def _mark_shape_views(character_name: str, shape: str, parent: Dict[str, Any]) -> None:
@@ -4280,7 +4365,8 @@ def prepare_shape(character_name: str, fig, *, items: Optional[list] = None, reb
                     if not still:
                         raise OutfitError(rendered["error"])
                     raise OutfitError(views_missing_message(
-                        still, [v for v in dressed_views() if v not in still], rendered.get("reason") or ""))
+                        still, [v for v in dressed_views() if v not in still], rendered.get("reason") or "",
+                        stale=rendered.get("stale") or ()))
             paths = {v: shape_view(character_name, v, shape, bsig) for v in dressed_views()}
 
             def rerender(v: str) -> Optional[Path]:
