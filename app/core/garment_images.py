@@ -107,6 +107,22 @@ sibling (``raw_path``, written before the registration rewrites the file),
 or the file itself when no registration moved it — and registered again;
 a file moved before raw siblings were kept (2026-11-12) is gated as stored.
 
+HEM SNAP (Ruling A27): an attempt whose gate refuses it for the hem ALONE,
+within ``garment_gates.HEM_SNAP_MAX`` (the kind's ``hem_snap``: clothing
+``ghost``), is corrected on the CPU (``_snap_hem``) — its rows below the
+underarm line rescaled so its hem meets the worn hem — and gated again in
+full (the pair check too). Only a corrected image that passes is kept: the
+attempt file is rewritten (the rendering kept as its raw sibling, like a
+registration) and its record and sidecar carry ``hem_snap`` = ``{from, to,
+scale, underarm}`` (the published final's sidecar too). A corrected image
+that fails leaves the attempt as rendered, refused, its record noting
+``hem_snap_refused``. The snap runs on fresh attempts, on stored attempts
+judged again (``_regate_stored``: ghost gate version 5 re-judges what
+version 4 refused, before any render) and on an accepted ghost re-gated
+from its file (``regate_accepted``). ``rejudge_expected`` tells the
+estimate and the failure cache (``garments``) — from the stored records
+only — that a refused view will be accepted from a stored attempt.
+
 The OPEN state of a closable clothing piece (ruling F15 i-1, fix round
 T12-F1): an open jacket looks the same from behind as a closed one, and the
 edit model split it open down the back when the back's text said "worn open"
@@ -731,7 +747,10 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
                                                           gate_args=gate_args, edit_rgb=edit_rgb,
                                                           edit_mask=edit_mask)
         record = kind.gate(step, view, edit_rgb=edit_rgb, edit_mask=edit_mask, **gate_args)
-        return _with_registration(record, registration) if registration is not None else record
+        if registration is not None:
+            record = _with_registration(record, registration)
+        # Ruling A27: a hem-only refusal is snapped to the worn hem (and gated again in full).
+        return _snap_hem(kind, step, view, path, base_size, gate_args, position, edit_mask, record, pair_check)
 
     if not _accepted(final):
         def regate(path: Path, old: Dict[str, Any]) -> Dict[str, Any]:
@@ -743,13 +762,14 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
                 if raw.is_file():
                     shutil.copyfile(raw, path)
                 return _with_pair(gate_file(path), pair_check)
-            record = kind.gate(step, view, edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size),
-                               **gate_args)
+            mask = _mask(path, base_size)
+            record = kind.gate(step, view, edit_rgb=_rgb(path, base_size), edit_mask=mask, **gate_args)
             # A file moved before raw siblings were kept stays as it is: its
             # correction stays recorded (``registered`` too: ``pair_agree``
             # reads it on a waistband back).
             record.update({k: old[k] for k in ("registration", "reg_shift", "reg_scale", "registered")
                            if k in old})
+            record = _snap_hem(kind, step, view, path, base_size, gate_args, position, mask, record, pair_check)
             return _with_pair(record, pair_check)
         hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final, regate=regate)
         if hit is not None:
@@ -789,7 +809,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         records.append(record)
         if path is not None:
             sidecar = read_record(target.with_suffix(".json"))
-            write_record(target.with_suffix(".json"), {**sidecar, "gate": record})
+            write_record(target.with_suffix(".json"), _attempt_sidecar(sidecar, record))
         logger.info("Garment %s %s %s attempt %d: %s %s", character_name, step, view, attempt,
                     "accepted" if record["ok"] else "refused", record.get("reasons") or "")
         if record["ok"]:
@@ -836,6 +856,9 @@ def regate_accepted(character_name: str, item_id: str, fsig: str, step: str, vie
     kind names for the step (clothing: ``hem_refused`` / ``look_refused``)
     makes the view stale (``stale_accepted``): the next run renders it again
     instead of reusing it; a refusal by an older rule is only recorded.
+    Refused by its hem alone within the snap (Ruling A27, ``_snap_hem``) the
+    final is snapped in place instead — it stays accepted, the sidecar names
+    ``hem_snap`` and the view's later images go (``_drop_later``).
     Returns the new record, None when
     nothing was due (not accepted, a copy of the closed state's back, a
     current record, no accepted source). Reads files and masks only: never
@@ -877,13 +900,21 @@ def regate_accepted(character_name: str, item_id: str, fsig: str, step: str, vie
                           base_body.base_signature(character_name, profile=profile))
     if base is None:
         return None
-    base_size, gate_args, _position = _gate_inputs(kind, step, base, source, get_model_refs_dir(character_name),
-                                                   item_id)
-    record = kind.gate(step, view, edit_rgb=_rgb(final, base_size), edit_mask=_mask(final, base_size), **gate_args)
+    base_size, gate_args, position = _gate_inputs(kind, step, base, source, get_model_refs_dir(character_name),
+                                                  item_id)
+    mask = _mask(final, base_size)
+    record = kind.gate(step, view, edit_rgb=_rgb(final, base_size), edit_mask=mask, **gate_args)
     record.update({k: old[k] for k in ("registration", "reg_shift", "reg_scale", "registered") if k in old})
+    # Ruling A27: refused by its hem alone -> the final itself snapped (no raw sibling beside a final); its
+    # later images were made from the file as it was and go.
+    record = _snap_hem(kind, step, view, final, base_size, gate_args, position, mask, record, None, keep_raw=False)
     record.update(attempt=old.get("attempt", sidecar.get("attempt")),
                   regated_from=int(old.get("gate_version") or 1))
+    if record.get("hem_snap"):
+        sidecar = {**sidecar, "hem_snap": record["hem_snap"]}
     write_record(final.with_suffix(".json"), {**sidecar, "gates": {**gates, ordinal: record}})
+    if record.get("hem_snap"):
+        _drop_later(character_name, item_id, fsig, step, view)
     stale = any(record.get(k) is True for k in _stale_keys(kind, step))
     logger.info("Garment %s %s %s (accepted) re-gated (gate version %s -> %s): %s %s", character_name, step, view,
                 record["regated_from"], record.get("gate_version"),
@@ -921,6 +952,97 @@ def _with_pair(record: Dict[str, Any], pair_check: Optional[Callable[[Dict[str, 
     if not reasons:
         return record
     return {**record, "ok": False, "reasons": [*(record.get("reasons") or []), *reasons]}
+
+
+def _attempt_sidecar(sidecar: Dict[str, Any], record: Dict[str, Any]) -> Dict[str, Any]:
+    """An attempt's sidecar with its gate ``record`` — and the record's
+    ``hem_snap`` (Ruling A27) as a sidecar key of its own, dropped when the
+    record has none (``_publish`` carries the sidecar's keys to the final)."""
+    out = {k: v for k, v in sidecar.items() if k != "hem_snap"}
+    out["gate"] = record
+    if record.get("hem_snap"):
+        out["hem_snap"] = record["hem_snap"]
+    return out
+
+
+def _snap_hem(kind, step: str, view: str, path: Path, base_size: Tuple[int, int], gate_args: Dict[str, Any],
+              region, edit_mask, record: Dict[str, Any],
+              pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]], *,
+              keep_raw: bool = True) -> Dict[str, Any]:
+    """Ruling A27 (module docstring "HEM SNAP"): ``record`` when the kind
+    snaps nothing for it (``kind.hem_snap`` None: not refused by the hem
+    alone, beyond ``HEM_SNAP_MAX``, no underarm line). Else the image at
+    ``path`` rescaled below the underarm line (``garment_gates.snap_rows``,
+    in the file's own pixels) and gated again in full with ``pair_check``:
+    passing, the file is rewritten (``keep_raw``: the rendering kept as its
+    raw sibling first, unless one is there) and the new record, with
+    ``hem_snap`` = ``{from, to, scale, underarm}`` and ``before_snap``, is
+    returned; failing, the file stays and ``record`` is returned with
+    ``hem_snap_refused`` (the snap and the corrected image's reasons).
+    ``edit_mask`` is the mask the record was gated with (the registered
+    one); ``region`` the step's position reference."""
+    import numpy as np
+    from PIL import Image
+    from app.core import garment_gates
+    snap_of = getattr(kind, "hem_snap", None)
+    if snap_of is None or region is None:
+        return record
+    snap = snap_of(step, view, record, ghost_mask=edit_mask, region=region, base_mask=gate_args["base_mask"])
+    if snap is None:
+        return record
+    info = {k: snap[k] for k in ("from", "to", "scale", "underarm")}
+    with Image.open(path) as im:
+        rgb = np.asarray(im.convert("RGB"))
+    tmp = path.with_name(f".{path.name}.snap.tmp")
+    try:
+        Image.fromarray(garment_gates.snap_rows(rgb, snap, factor=rgb.shape[0] / base_size[1])).save(
+            tmp, format="PNG")
+        snapped = kind.gate(step, view, edit_rgb=_rgb(tmp, base_size),
+                            edit_mask=garment_gates.snap_rows(edit_mask, snap), **gate_args)
+        snapped.update({k: record[k] for k in ("registration", "reg_shift", "reg_scale", "registered")
+                        if k in record})
+        snapped = _with_pair(snapped, pair_check)
+        if not snapped.get("ok"):
+            logger.info("Garment %s %s hem snap %s refused: %s", step, view, info, snapped.get("reasons"))
+            return {**record, "hem_snap_refused": {**info, "reasons": snapped.get("reasons") or []}}
+        raw = raw_path(path)
+        if keep_raw and not raw.is_file():
+            shutil.copyfile(path, raw)
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    logger.info("Garment %s %s hem snapped to the worn hem: %s", step, view, info)
+    return {**snapped, "hem_snap": info,
+            "before_snap": {"hem_c": record.get("hem_c"), "reasons": record.get("reasons") or []}}
+
+
+def rejudge_expected(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
+    """Ruling A27: whether the next run takes ``view`` of ``step`` from a
+    STORED attempt without a render — the view is not accepted and one of
+    its attempts holds a gate record of an older gate version
+    (``_stale_gate``: ``_regate_stored`` judges it again first) that the
+    kind's ``hem_snap_due`` names: refused by its hem alone within
+    ``HEM_SNAP_MAX``, so the snap is expected to pass it. Read from the
+    sidecars only (no image, no write) — the estimate's and the failure
+    cache's view (``garments``); the run itself decides on the images."""
+    from app.core.garment_store import garment_path, read_record
+    try:
+        kind = _kind_module(item_id)
+        due = getattr(kind, "hem_snap_due", None)
+        if due is None or step not in getattr(kind, "EDIT_STEPS", {}):
+            return False
+        if _accepted(garment_path(character_name, item_id, fsig, "image", step=step, view=view)):
+            return False
+        for attempt in range(1, ATTEMPTS + 1):
+            target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
+            if not target.is_file():
+                continue
+            old = read_record(target.with_suffix(".json")).get("gate")
+            if isinstance(old, dict) and _stale_gate(kind, step, old) and due(step, old):
+                return True
+    except ValueError:
+        return False
+    return False
 
 
 def _stale_gate(kind, step: str, record: Any) -> bool:
@@ -964,7 +1086,8 @@ def _regate_stored(character_name: str, item_id: str, fsig: str, step: str, view
         stale_any = True
         record = {**regate(target, old), "attempt": attempt, "regated_from": int(old.get("gate_version") or 1)}
         records.append(record)
-        write_record(target.with_suffix(".json"), {**sidecar, "gate": record})
+        sidecar = _attempt_sidecar(sidecar, record)
+        write_record(target.with_suffix(".json"), sidecar)
         logger.info("Garment %s %s %s attempt %d re-gated (gate version %s -> %s): %s %s", character_name, step,
                     view, attempt, record["regated_from"], record.get("gate_version"),
                     "accepted" if record.get("ok") else "refused", record.get("reasons") or "")

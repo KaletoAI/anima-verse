@@ -271,7 +271,11 @@ def occupied_zones(slots: Iterable[str]) -> Tuple[str, ...]:
 # Ghost gate version 4 (Ruling A17, 2026-11-13): the hem against the WORN
 # piece and the open / closed look of a closable front — the block "Hem and
 # centre gap" below ``HEM_AGREE``.
-GHOST_GATE_VERSION = 4
+# Ghost gate version 5 (Ruling A27, 2026-11-13): a ghost whose ONLY refusal
+# is the hem, within ``HEM_SNAP_MAX``, is snapped to the worn hem on the CPU
+# (the block "Hem snap" after ``hem_deviation``); attempts stored under
+# version 4 are judged again by the chain before it renders.
+GHOST_GATE_VERSION = 5
 CLOTH_TOP_DY_WARN = 0.0055  # |top edge offset| / Hb from which it is recorded as a warning
 CLOTH_CENTRE_DX_WARN = 0.007  # |centre offset| / Hb from which it is recorded as a warning
 CLOTH_W_RATIO_MIN = 0.80
@@ -1129,6 +1133,163 @@ def hem_deviation(record: Dict[str, Any]) -> Optional[float]:
         return abs(float(record["hem_c"]) - float(record["worn_hem_c"]))
     except (KeyError, TypeError, ValueError):
         return None
+
+
+# --- Hem snap (Ruling A27, 2026-11-13) -------------------------------------
+#
+# The worn view on the body is the truth for the LENGTH of a piece; the ghost
+# only supplies the unseen inside and back. Kai's leather jacket
+# (item_555a7a01, fsig 3749e6028b55, live 2026-11-13 21:42): ghost back
+# attempt 2 was refused ONLY for its hem, ghost 0.50281 against the worn
+# 0.4684 (|Δ| 0.0344 Hb > HEM_AGREE) — the same jacket drawn about 8 % larger
+# (outline registration 0.923, just beyond its cap, so gated as rendered),
+# its sleeves hanging lower. Attempt 1 was a LONGER jacket (|Δ| 0.0758 and a
+# part of 0.1418 beyond the worn piece) — a true refusal. A refusal of such
+# an attempt costs a queued or paid render for a few centimetres.
+#
+# So a ghost record whose only reason is the hem rule (``HEM_REASON``),
+# |hem_c − worn_hem_c| <= HEM_SNAP_MAX, is corrected (``hem_snap_due``): the
+# rows of the ghost image from the UNDERARM line down are rescaled
+# vertically about that line by ``scale`` = (worn hem row − line) / (ghost
+# hem row − line), so the ghost's centre hem (``centre_hem``, the gate's own
+# measure) lands on the worn piece's; the rows above the line (collar,
+# shoulders — what the registration laid onto the worn region) stay pixel
+# for pixel. The underarm line (``underarm_row``) is read on the worn
+# view's garment region — the reference the registration lays the ghost onto
+# —: the first row from the shoulder row down where the run of the region
+# through the figure's centre column has region pixels on BOTH sides (the
+# sleeves part from the body); a region without sleeves (a vest, an open
+# front with nothing at the centre) takes the base figure's own underarm,
+# measured the same way on its mask. Kai's copies (Hb 1424, y0 42, centre
+# column 428, BiRefNet masks as cached): the region parts at row 428
+# (0.27107 Hb; the base figure at 412, 0.25983); ghost hem row 758.0, worn
+# hem row 709.0 -> scale 281.0 / 330.0 = 0.85152 (the sidecar's
+# ``hem_snap``); snapped, attempt 2 passes every rule (hem 0.4684 = the
+# worn hem, ``outside`` 0.0286 -> 0.0034, width 1.08 unchanged), attempt 1
+# is not snapped (two reasons). The line must lie at least HEM_SNAP_SPAN·Hb above both hems
+# (a piece whose hem is at the underarm has nothing to rescale). The
+# corrected image is gated again in full (the chain's pair check too) and
+# only kept when it passes; otherwise the attempt stays refused as rendered
+# (``hem_snap_refused`` records why). Beyond HEM_SNAP_MAX, or with any other
+# reason, nothing is corrected. A waistband piece (``length_free``) has no
+# hem rule. Cost if wrong: a ghost rescaled by up to ~10 % of its torso
+# length below the underarm.
+HEM_SNAP_MAX = 0.05         # |ghost hem − worn hem| / Hb up to which a hem-only refusal is snapped
+HEM_SNAP_SPAN = 0.05        # Hb the underarm line must lie above both hems
+HEM_REASON = "garment ends at another height than the worn piece"
+
+
+def hem_snap_due(record: Dict[str, Any]) -> bool:
+    """Whether a ghost gate record is refused by the hem rule ALONE
+    (``hem_refused``, its one reason ``HEM_REASON``), not ``length_free``,
+    with |``hem_c`` − ``worn_hem_c``| <= ``HEM_SNAP_MAX`` — the attempt the
+    chain snaps (the block "Hem snap")."""
+    if not isinstance(record, dict) or record.get("ok") or record.get("hem_refused") is not True:
+        return False
+    if record.get("length_free"):
+        return False
+    reasons = record.get("reasons") or []
+    if len(reasons) != 1 or not str(reasons[0]).startswith(HEM_REASON):
+        return False
+    deviation = hem_deviation(record)
+    return deviation is not None and deviation <= HEM_SNAP_MAX
+
+
+def _parted_row(mask: np.ndarray, cx: int, start: int, stop: int) -> Optional[int]:
+    """The first row in ``[start, stop)`` where the run of ``mask`` through
+    column ``cx`` has mask pixels on both sides of it; None when none has."""
+    for row in range(max(start, 0), min(stop, mask.shape[0])):
+        line = mask[row]
+        if not line[cx]:
+            continue
+        xs = np.nonzero(~line[:cx])[0]
+        left = (xs.max() + 1) if len(xs) else 0
+        xs = np.nonzero(~line[cx:])[0]
+        right = cx + int(xs.min()) if len(xs) else line.shape[0]
+        if line[:left].any() and line[right:].any():
+            return row
+    return None
+
+
+def underarm_row(region, base_mask, *, stop: Optional[int] = None) -> Optional[int]:
+    """The underarm line of a garment (the block "Hem snap"), as a row of the
+    gate frame: the first row from the base figure's shoulder row
+    (``SHOULDER_ROW``) down to ``stop`` (default: the figure's last row)
+    where the worn ``region`` parts into the body and both sleeves; a region
+    that never does (no sleeves, nothing at the centre) takes the base
+    figure's own underarm. None when neither parts."""
+    centre = _centre_column(base_mask)
+    if centre is None:
+        return None
+    cx, y0, hb = centre
+    start = int(y0 + SHOULDER_ROW * hb)
+    stop = int(y0 + hb) if stop is None else int(stop)
+    for mask in (region, base_mask):
+        row = _parted_row(np.asarray(mask, dtype=bool), cx, start, stop)
+        if row is not None:
+            return row
+    return None
+
+
+def hem_snap(record: Dict[str, Any], ghost_mask, region, base_mask) -> Optional[Dict[str, Any]]:
+    """The hem snap of a ghost record that is due (``hem_snap_due``):
+    ``{from, to, scale, underarm, row}`` — ``from`` the ghost's ``hem_c``
+    (measured again on ``ghost_mask``, the mask the gate measured), ``to``
+    the record's ``worn_hem_c``, ``underarm`` the line in Hb and ``row`` in
+    px of the gate frame (``underarm_row`` of the worn ``region``), ``scale``
+    = (to row − row) / (from row − row), rounded to 5 digits (the value
+    ``snap_rows`` applies). None when not due, unmeasured, or the line is
+    not ``HEM_SNAP_SPAN``·Hb above both hems."""
+    if not hem_snap_due(record):
+        return None
+    centre = _centre_column(base_mask)
+    ghost_hem = centre_hem(ghost_mask, base_mask)
+    if centre is None or ghost_hem is None:
+        return None
+    _cx, y0, hb = centre
+    worn = float(record["worn_hem_c"])
+    src, dst = y0 + ghost_hem * hb, y0 + worn * hb
+    row = underarm_row(region, base_mask, stop=int(min(src, dst)))
+    if row is None or min(src, dst) - row < HEM_SNAP_SPAN * hb:
+        return None
+    scale = round((dst - row) / (src - row), 5)
+    return {"from": _r(ghost_hem, 5), "to": _r(worn, 5), "scale": scale,
+            "underarm": _r((row - y0) / hb, 5), "row": int(row)}
+
+
+def snap_rows(array, snap: Dict[str, Any], *, factor: float = 1.0,
+              fill: Optional[Sequence[float]] = None) -> np.ndarray:
+    """``array`` (an ``(H, W)`` bool mask or an ``(H, W, 3)`` RGB image)
+    with its rows from ``snap["row"]`` down rescaled vertically by
+    ``snap["scale"]`` about that row (``hem_snap``): output row q >= line
+    takes the input at line + (q − line) / scale, linearly between two rows;
+    the rows above stay as they are. ``factor`` = rows of this array per row
+    of the gate frame (an image of another size than the masks). A mask is
+    thresholded at 0.5; rows that map beyond the image take 0 / ``fill``
+    (default: the median of the image's border pixels — the plain
+    background)."""
+    arr = np.asarray(array)
+    h = arr.shape[0]
+    line = float(snap["row"]) * float(factor)
+    scale = float(snap["scale"])
+    q = np.arange(h, dtype=np.float64)
+    src = np.where(q < line, q, line + (q - line) / scale)
+    inside = src <= h - 1
+    lo = np.clip(np.floor(src).astype(int), 0, h - 1)
+    hi = np.clip(lo + 1, 0, h - 1)
+    frac = np.where(inside, src - np.floor(src), 0.0)
+    if arr.ndim == 2:
+        a = arr.astype(np.float32)
+        out = a[lo] * (1.0 - frac)[:, None] + a[hi] * frac[:, None]
+        out[~inside] = 0.0
+        return out >= 0.5
+    rgb = arr[..., :3].astype(np.float32)
+    if fill is None:
+        border = np.concatenate([rgb[0], rgb[-1], rgb[:, 0], rgb[:, -1]])
+        fill = np.median(border, 0)
+    out = rgb[lo] * (1.0 - frac)[:, None, None] + rgb[hi] * frac[:, None, None]
+    out[~inside] = np.asarray(fill, dtype=np.float32)
+    return np.clip(np.rint(out), 0, 255).astype(np.uint8)
 
 
 # --- Registration of a piece-only (ghost) image -------------------------------

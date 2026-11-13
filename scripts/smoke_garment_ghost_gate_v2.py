@@ -318,10 +318,10 @@ def main() -> int:
           (True, 0.19236))
 
     print("[7] re-gate + limits")
-    check("GATE_VERSIONS ghost", (garment_clothing.GATE_VERSIONS.get("ghost"), gg.GHOST_GATE_VERSION), (4, 4))
+    check("GATE_VERSIONS ghost", (garment_clothing.GATE_VERSIONS.get("ghost"), gg.GHOST_GATE_VERSION), (5, 5))
     check("record without version stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False}), True)
     check("version 3 stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 3}), True)
-    check("current version not stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 4}),
+    check("current version not stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 5}),
           False)
     ghost_limits = gg.limits("clothing")["ghost"]
     check("no position limits", ("top_dy" in ghost_limits, "centre_dx" in ghost_limits), (False, False))

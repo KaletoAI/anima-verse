@@ -1515,6 +1515,10 @@ def cached_failure(character_name: str, item_id: str, *,
         return None
     base = base_body.current_base(character_name, profile=profile)
     failure = gs.chain_failure(character_name, item_id, fsig, base_model_sha=base[1] if base else "")
+    if failure is not None and _rejudge_pending(character_name, item_id, fsig, str(failure.get("step") or "")):
+        # Ruling A27: the refusal was recorded under an older gate and a stored attempt passes the current one
+        # (the hem snap) — it no longer holds; the run takes that attempt without a render.
+        failure = None
     if failure is not None:
         return failure
     # Footwear: the source is ONE per item, whoever wears it, so a refused
@@ -1555,6 +1559,17 @@ HUB_JOBS: Dict[str, Dict[str, int]] = {
 #: composite is CPU), the ghost back one edit. The OPEN state of a closable piece copies them from the closed state when it
 #: has them (``garment_images.closed_back``, ruling F15 i-1) — 0 jobs.
 BACK_JOBS: Dict[str, int] = {"worn": 1, "ghost": 1}
+
+
+def _rejudge_pending(character_name: str, item_id: str, fsig: str, step: str) -> bool:
+    """Ruling A27: whether a view of the image ``step`` is taken from a stored attempt the run judges again
+    under the current gate (``garment_images.rejudge_expected``: refused by an older gate for its hem alone,
+    within the snap) — read from the sidecars only."""
+    from app.core import garment_images
+    from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS
+    if step not in IMAGE_STEPS:
+        return False
+    return any(garment_images.rejudge_expected(character_name, item_id, fsig, step, v) for v in GARMENT_VIEWS)
 
 
 def _unknown_estimate(note: str) -> Dict[str, Any]:
@@ -1626,8 +1641,11 @@ def run_estimate(character_name: str, item_id: str, *,
     parts = [(s, int(costs.get(s, 0))) for s in steps]
     if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN:
         # The first step re-makes only its views that are not done (one job per view): a view kept accepted and
-        # current costs nothing (Ruling A25 — the estimate is what the run spends on first attempts).
-        kept = sum(1 for v in gs.GARMENT_VIEWS if _view_done(character_name, item_id, fsig, first, v))
+        # current costs nothing (Ruling A25 — the estimate is what the run spends on first attempts), nor does
+        # one a stored attempt passes once judged again with the hem snap (Ruling A27).
+        from app.core.garment_images import rejudge_expected
+        kept = sum(1 for v in gs.GARMENT_VIEWS if _view_done(character_name, item_id, fsig, first, v)
+                   or rejudge_expected(character_name, item_id, fsig, first, v))
         parts[0] = (first, max(parts[0][1] - kept, 0))
     reused = []
     if kind == _clothing() and method == gs.EDIT_CHAIN and state == "open":

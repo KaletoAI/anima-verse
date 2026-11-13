@@ -130,6 +130,9 @@ GHOST_NEGATIVE = ("person", "skin", "head", "arms", "hands", "legs", "feet", "ma
 #: edit's outline drift widened, the ghost's ``outside`` counts only parts
 #: beyond 0.02·Hb and the waistband hem leaves strands out; a registered
 #: ghost attempt is re-gated from its raw sibling (``garment_images``).
+#: ``ghost`` 5 (Ruling A27, 2026-11-13): a ghost refused by its hem alone
+#: within ``garment_gates.HEM_SNAP_MAX`` is snapped to the worn hem
+#: (``hem_snap``) — the attempts refused under 4 are judged again first.
 GATE_VERSIONS: Dict[str, int] = {"worn": WORN_GATE_VERSION, "ghost": GHOST_GATE_VERSION}
 #: The steps whose ACCEPTED images are re-gated from their files when their
 #: record predates the step's gate version (``garment_images.regate_accepted``,
@@ -400,6 +403,28 @@ def position_reference(step: str, *, base_rgb, base_mask, source_rgb, source_mas
     if step != "ghost":
         return None
     return garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
+
+
+def hem_snap_due(step: str, record: Dict[str, Any]) -> bool:
+    """Ruling A27: whether a ``ghost`` gate record is refused by its hem
+    alone within ``garment_gates.HEM_SNAP_MAX`` (``garment_gates.
+    hem_snap_due``) — read from the record only, no image (the estimate's
+    view of a stored attempt the chain judges again)."""
+    from app.core import garment_gates
+    return step == "ghost" and garment_gates.hem_snap_due(record)
+
+
+def hem_snap(step: str, view: str, record: Dict[str, Any], *, ghost_mask, region,
+             base_mask) -> Optional[Dict[str, Any]]:
+    """Ruling A27: the hem snap of a ``ghost`` attempt refused by its hem
+    alone (``garment_gates.hem_snap``: its rows below the underarm line of
+    the worn ``region`` rescaled so its hem meets the worn hem); None for
+    another step or when nothing is due. ``garment_images`` applies it,
+    gates the corrected image again and keeps it only when it passes."""
+    from app.core import garment_gates
+    if step != "ghost" or region is None:
+        return None
+    return garment_gates.hem_snap(record, ghost_mask, region, base_mask)
 
 
 def pair_agree(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> bool:

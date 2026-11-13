@@ -412,7 +412,7 @@ def main() -> int:
         reg = first.get("registration") or {}
         check("a) re-registered from the raw: accepted, no render",
               (got == ghost_final, renders, jobs, record.get("accepted"), first.get("ok"), first.get("regated_from"),
-               first.get("gate_version"), reg.get("applied")), (True, [], [], True, True, 2, 4, True))
+               first.get("gate_version"), reg.get("applied")), (True, [], [], True, True, 2, 5, True))
         near("a) shift rows", (reg.get("shift_px") or [0])[0], -12.0, 0.5)
         check("a) the try file is the jacket in place, the raw as rendered",
               (int((mask_of(read(try1)) ^ mask_of(JACKET)).sum()) <= 2 * 320, bool((read(raw1) == SHIFTED).all()),
@@ -462,13 +462,13 @@ def main() -> int:
 
         print("[7] versions")
         check("versions", (gg.WORN_GATE_VERSION, gg.GHOST_GATE_VERSION, garment_clothing.GATE_VERSIONS),
-              (4, 4, {"worn": 4, "ghost": 4}))
+              (4, 5, {"worn": 4, "ghost": 5}))
         check("version 2 stale", (garment_images._stale_gate(garment_clothing, "ghost", {"gate_version": 2}),
                                   garment_images._stale_gate(garment_clothing, "worn", {"gate_version": 2})),
               (True, True))
-        check("ghost version 3 stale, 4 not (A17)",
-              (garment_images._stale_gate(garment_clothing, "ghost", {"gate_version": 3}),
-               garment_images._stale_gate(garment_clothing, "ghost", {"gate_version": 4})), (True, False))
+        check("ghost version 4 stale, 5 not (A27)",
+              (garment_images._stale_gate(garment_clothing, "ghost", {"gate_version": 4}),
+               garment_images._stale_gate(garment_clothing, "ghost", {"gate_version": 5})), (True, False))
 
     print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall passed")
     return 1 if FAILS else 0
