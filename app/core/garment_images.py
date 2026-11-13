@@ -1500,7 +1500,8 @@ def _remake_copy(character_name: str, item_id: str, fsig: str, step: str, source
 def remake_model_fit_backs(character_name: str) -> Dict[str, str]:
     """``remake_model_fit_back`` of every stale worn back of the character: ``{file: outcome}``.
     Under the character's garment run lock (``garment_store.char_lock``): no chain run of the
-    character changes its files meanwhile."""
+    character changes its files meanwhile; each back under its item's run lock too
+    (``garment_store.run_item_lock``): a CPU refit beside the chain FIFO (Ruling A30) holds only that one."""
     from app.core.garment_store import PART_DIRS, char_lock, garments_dir
     folder = garments_dir(character_name) / PART_DIRS["image"]
     out: Dict[str, str] = {}
@@ -1511,7 +1512,7 @@ def remake_model_fit_backs(character_name: str) -> Dict[str, str]:
 
 
 def _remake_backs_locked(character_name: str, folder: Path, out: Dict[str, str]) -> Dict[str, str]:
-    from app.core.garment_store import read_record
+    from app.core.garment_store import read_record, run_item_lock
 
     def materialised(path: Path) -> bool:
         return isinstance(read_record(path.with_suffix(".json")).get("copied_from"), str)
@@ -1521,8 +1522,9 @@ def _remake_backs_locked(character_name: str, folder: Path, out: Dict[str, str])
         if match is None:
             continue
         try:
-            outcome = remake_model_fit_back(character_name, match.group("item"), match.group("fsig"),
-                                            match.group("step"))
+            with run_item_lock(character_name, match.group("item")):
+                outcome = remake_model_fit_back(character_name, match.group("item"), match.group("fsig"),
+                                                match.group("step"))
         except Exception as e:  # noqa: BLE001 — e.g. an item of an unknown kind: left as it is
             logger.warning("Model fit back %s of %s not re-made: %s", path.name, character_name, e)
             continue

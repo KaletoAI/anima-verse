@@ -841,10 +841,23 @@ _failed: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _char_locks: Dict[str, threading.Lock] = {}
 
 
+# One run per ITEM of a character at a time (Ruling A30): a CPU refit beside the character's FIFO
+# (``garments.start_garment``) holds only this lock, never ``char_lock``. Lock order: ``char_lock`` before
+# ``run_item_lock`` — nothing holding an item lock ever waits for ``char_lock``.
+_item_locks: Dict[Tuple[str, str], threading.Lock] = {}
+
+
 def char_lock(character_name: str) -> threading.Lock:
     """The lock a garment run of this character holds."""
     with _status_lock:
         return _char_locks.setdefault(character_name, threading.Lock())
+
+
+def run_item_lock(character_name: str, item_id: str) -> threading.Lock:
+    """The lock every garment run of ``item_id`` for this character holds (Ruling A30): a FIFO run takes it
+    after ``char_lock``, a CPU refit beside the FIFO takes it alone — so two runs of one item never overlap."""
+    with _status_lock:
+        return _item_locks.setdefault((character_name, item_id), threading.Lock())
 
 
 def _iso(dt: Optional[datetime]) -> Optional[str]:

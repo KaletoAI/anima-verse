@@ -942,9 +942,9 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
     """The Wardrobe panel of a footwear piece (``garments.garment_info`` of kind ``footwear``):
 
     ``{item_id, kind "footwear", method "shoe", method_source "world", description, fsig, ssig (the shown
-    source, ``shown_ssig``), current_ssig, running_step, started_at, queue_position, queue_running, failed,
-    steps, item_image_url, mesh_url, insole, stale_reasons, fits, preview_url, preview_freshness, foot_pose,
-    served_fsig None, refit None, body None, body_id None}``.
+    source, ``shown_ssig``), current_ssig, running_step, started_at, queue_position, queue_running,
+    queue_beside, failed, steps, item_image_url, mesh_url, insole, stale_reasons, fits, preview_url,
+    preview_freshness, foot_pose, served_fsig None, refit None, body None, body_id None}``.
 
     ``steps`` in chain order: ``source``, ``empty``, ``cutout``, ``mesh``, ``insole`` each ``{status
     accepted|refused|failed|waiting|missing, gates, metrics, url, freshness, backend, created_at, error}``
@@ -1098,7 +1098,8 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
         "description": str(item.get("prompt_fragment") or ""), "fsig": fsig, "ssig": shown,
         "current_ssig": current, "steps": steps, "stale_reasons": stale,
         "running_step": status["running_step"], "started_at": status["started_at"],
-        "queue_position": queue["queue_position"], "queue_running": queue["queue_running"], "failed": failed,
+        "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
+        "queue_beside": queue["queue_beside"], "failed": failed,
         "item_image_url": (_url(character_name, item_id, "image/source", image_stamp)
                            if image_stamp is not None else None),
         "mesh_url": steps["mesh"]["url"], "insole": insole_view, "width_cap": width_cap(profile, item_id),

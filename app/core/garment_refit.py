@@ -564,10 +564,9 @@ def _refit_footwear(character_name: str, profile: Dict[str, Any], base: Tuple[st
 
 
 def _busy(character_name: str) -> bool:
-    """A garment chain of the character runs or waits in its FIFO."""
+    """A garment chain of the character runs or waits in its FIFO, or a CPU refit runs beside it (Ruling A30)."""
     from app.core import garments
-    with garments._lock:
-        return character_name in garments._active
+    return garments.busy(character_name)
 
 
 def _refit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
@@ -601,13 +600,14 @@ def _refit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsi
 def refit_character(character_name: str) -> Optional[List[str]]:
     """Refit the character's outdated fits (``outdated_fits``, the too-small
     refusals ``refused_fits``, then ``outdated_body_fits`` /
-    ``refused_body_fits``) under its garment run lock. None when a chain
-    runs (lock held / FIFO active) — nothing was touched; else the item ids
-    refitted (``"<item>@<body id>"`` for a fit on an outfit body)."""
+    ``refused_body_fits``) under its garment run lock (``garments.hold_all``:
+    no CPU refit starts beside the FIFO meanwhile, Ruling A30). None when a
+    chain runs (lock held / FIFO active / a refit beside it) — nothing was
+    touched; else the item ids refitted (``"<item>@<body id>"`` for a fit on
+    an outfit body)."""
     from app.core import base_body, garment_fit, garments, garment_store as gs
     from app.models.character import get_character_profile
-    lock = gs.char_lock(character_name)
-    if _busy(character_name) or not lock.acquire(blocking=False):
+    if not garments.hold_all(character_name):
         return None
     done: List[str] = []
     try:
@@ -661,7 +661,7 @@ def refit_character(character_name: str) -> Optional[List[str]]:
             done += _refit_bodies(character_name, profile, base[1])
             done += _refit_footwear(character_name, profile, base)
     finally:
-        lock.release()
+        garments.release_all(character_name)
     return done
 
 

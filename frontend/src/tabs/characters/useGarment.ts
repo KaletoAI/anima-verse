@@ -233,6 +233,9 @@ export interface GarmentInfo {
    *  idle) — `garments.queue_state`; absent on an older server. */
   queue_position?: number | null
   queue_running?: string | null
+  /** The item's CPU refit runs BESIDE the character's garment queue (Ruling A30): it waits behind
+   *  nothing, so no "Queued behind …"; absent on an older server. */
+  queue_beside?: boolean
   failed: GarmentFailure | null
   preview_url: string | null
   /** When the previewed fit was made (Ruling UI3 a: the preview's caption); null without one. */
@@ -248,7 +251,7 @@ export interface GarmentInfo {
 /** The run state every garment panel carries (clothing, hair and footwear alike): what the run
  *  marks, the status line and the failure block read. */
 export type GarmentRunState = Pick<GarmentInfo, 'running_step' | 'started_at' | 'queue_position' | 'queue_running'
-  | 'failed'>
+  | 'queue_beside' | 'failed'>
 
 /** The steps of a footwear piece in chain order (`garment_store.FOOTWEAR_STEPS`): the item steps
  *  (one shoe source per item, shared by every wearer) and the per-body fit. */
@@ -665,6 +668,8 @@ export interface RunAnswer {
   queued?: boolean
   position?: number | null
   behind?: unknown
+  /** A CPU refit started beside the character's garment queue (Ruling A30) — not queued. */
+  beside?: boolean
 }
 
 /** What the panel shows about the user's own run clicks (useGarmentRun). */

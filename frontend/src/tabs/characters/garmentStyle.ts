@@ -231,9 +231,12 @@ export function upscaleText(upscale: Record<string, unknown> | null | undefined,
 /** "Queued behind <item> · position n" of an item whose run waits in the
  *  character's garment queue: the item in flight and the place from the
  *  polled info (`queue_running` / `queue_position`), else from the start
- *  answer, else the overview's running pieces; item ids shown by name. */
+ *  answer, else the overview's running pieces; item ids shown by name.
+ *  A CPU refit running beside the queue (`queue_beside`, Ruling A30) waits
+ *  behind nothing: "Starting…" until its fit step shows. */
 export function queueText(garment: GarmentRunState | null | undefined, fb: RunFeedback | undefined,
   stepLabels: Record<string, string>, t: (s: string) => string): string {
+  if (garment?.queue_beside && !garment.queue_position) return t('Starting…')
   const name = (id: string) => fb?.names[id] || id
   const ahead = garment?.queue_running
     ? [name(garment.queue_running)]

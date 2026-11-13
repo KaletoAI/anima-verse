@@ -16,10 +16,12 @@ run status (``garment_store.start`` / ``end`` / ``status``).
 Expected values (derived by hand from the rules in ``start_garment``):
 [1] Idle character, start A -> {started True, queued False, position 0,
     behind None}; the recorder holds A's run; queue_state(Demo, A) ->
-    {queue_running "A", queue [], queue_position None}.
+    {queue_running "A", queue [], beside [], queue_position None,
+    queue_beside False} (no refit beside the FIFO, Ruling A30).
 [2] start B (another item) while A runs -> {started False, queued True,
     position 1, behind "A"}; B's status running_step "queued";
-    queue_state(Demo, B) -> {queue_running "A", queue ["B"], queue_position 1}.
+    queue_state(Demo, B) -> {queue_running "A", queue ["B"], beside [],
+    queue_position 1, queue_beside False}.
 [3] The same click again (B, same steps/view/force) -> the same payload,
     queue still ["B"] (no second job).
 [4] Explicit over a waiting default run: enqueue_garment(Demo, C) (the
@@ -35,7 +37,7 @@ Expected values (derived by hand from the rules in ``start_garment``):
     at most one run at a time; while B runs, A's status is "queued" again
     (A waits for its second run). B's status: running_step None, failed error
     "boom". The trigger's job C is done with {ok True, item "C"}.
-[7] Idle afterwards: queue_state(Demo) -> {queue_running None, queue []},
+[7] Idle afterwards: queue_state(Demo) -> {queue_running None, queue [], beside []},
     no worker left (``_active`` empty), A's status running_step None.
 """
 import os
@@ -106,14 +108,14 @@ def main() -> int:
               {"started": True, "queued": False, "position": 0, "behind": None})
         check("A runs", wait_for(lambda: bool(RUNS)), True)
         check("queue A", garments.queue_state("Demo", "A"),
-              {"queue_running": "A", "queue": [], "queue_position": None})
+              {"queue_running": "A", "queue": [], "beside": [], "queue_position": None, "queue_beside": False})
 
         print("[2] another item while A runs: queued behind it")
         queued_b = {"started": False, "queued": True, "position": 1, "behind": "A"}
         check("start B", garments.start_garment("Demo", "B"), queued_b)
         check("B status", gs.status("Demo", "B")["running_step"], "queued")
         check("queue B", garments.queue_state("Demo", "B"),
-              {"queue_running": "A", "queue": ["B"], "queue_position": 1})
+              {"queue_running": "A", "queue": ["B"], "beside": [], "queue_position": 1, "queue_beside": False})
 
         print("[3] the same click again: no second job")
         check("start B again", garments.start_garment("Demo", "B"), queued_b)
@@ -148,7 +150,7 @@ def main() -> int:
         check("trigger job done", (trigger_job.done.is_set(), trigger_job.result), (True, {"ok": True, "item": "C"}))
 
         print("[7] idle afterwards")
-        check("queue empty", garments.queue_state("Demo"), {"queue_running": None, "queue": []})
+        check("queue empty", garments.queue_state("Demo"), {"queue_running": None, "queue": [], "beside": []})
         with garments._lock:
             check("no worker", (set(garments._active), dict(garments._current)), (set(), {}))
         check("A idle", gs.status("Demo", "A")["running_step"], None)

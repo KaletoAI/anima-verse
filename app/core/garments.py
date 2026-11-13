@@ -111,6 +111,21 @@ one character run one after the other, each request once; a failed run never
 holds the queue (the next one starts). ``queue_state`` is the UI view;
 ``cancel_garment`` takes an item's waiting runs out (never the one in flight).
 
+Ruling A30: a CPU refit (a run of the fit step alone, ``_fit_only``) of an
+item that has no run in flight or waiting does NOT queue behind the
+character's run of ANOTHER item — it starts at once on a thread of its own
+(``_side``, "beside" the FIFO) and computes on a ``refit_pool`` slot. It
+holds only the item's run lock (``garment_store.run_item_lock``), never the
+character's (``char_lock``), which a chain waiting on hub work holds for
+minutes. Runs of the same item stay serialized (every run holds the item
+lock; an item with a run in flight or waiting queues as before), and
+nothing that changes or depends on the base body is passed: while a
+base-body step is in flight (``figure_build.base_step_in_flight``) or the
+character's 3D generation guard is held (``model3d.generation_running``:
+a base model run, the Build's model steps) the refit queues behind the
+FIFO's run as before. The character-wide refit sweep
+(``garment_refit.refit_character``) never runs beside one (``hold_all``).
+
 An own-mesh outfit piece (kind ``clothing``) whose fit was accepted by a run
 asks ``base_body.after_mesh_item_ready``: a "piece ready" request of the
 character's Build, which builds the figure with the piece grafted.
@@ -153,6 +168,11 @@ _queues: Dict[str, Deque["_Job"]] = {}
 # Per character the run its worker is doing (or about to do: the spawn takes
 # the head job, so a character in ``_active`` always has one here).
 _current: Dict[str, "_Job"] = {}
+# Ruling A30: per character the CPU refits running beside its FIFO, item id -> job (each on a thread of its
+# own, holding only the item's run lock).
+_side: Dict[str, Dict[str, "_Job"]] = {}
+# Characters whose refit sweep holds every garment of theirs (``hold_all``): no refit starts beside the FIFO.
+_held: set = set()
 _ORDINALS = ("first", "second", "third")
 #: The seed of the first HairDeck job of an hsig. A forced regenerate takes
 #: the next seed after the highest one the job record has seen
@@ -1427,9 +1447,16 @@ def body_fit_info(character_name: str, item_id: str, *,
 
 def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
                 view: Optional[str] = None, force: bool = False, state: Optional[str] = None,
-                only: bool = False) -> Dict[str, Any]:
+                only: bool = False, beside: bool = False) -> Dict[str, Any]:
     """Run the garment chain of ``item_id`` (blocking, minutes; one run per
-    character — waits for ``garment_store.char_lock``).
+    character — waits for ``garment_store.char_lock``, then for the item's
+    ``garment_store.run_item_lock``).
+
+    ``beside`` (Ruling A30, ``start_garment`` only): a CPU refit of the fit
+    step alone that runs beside the character's FIFO — it takes the item's
+    run lock and NOT the character's, so it never waits behind another
+    item's chain (one waiting on hub work holds the character lock for
+    minutes).
 
     ``steps`` None: from the first step whose accepted output for the current
     fsig is missing (the fit counts as missing on another base model or from
@@ -1471,7 +1498,11 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     wanted = _steps(steps, order)
     _check_view(kind, view)
     from app.core import garment_store as gs
-    with gs.char_lock(character_name):
+    if beside and wanted != ["fit"]:
+        raise ValueError("Only a run of the fit step alone runs beside the character's other garment runs")
+    import contextlib
+    with (contextlib.nullcontext() if beside else gs.char_lock(character_name)), \
+            gs.run_item_lock(character_name, item_id):
         result = _run_locked(character_name, item, kind, wanted, view, bool(force), state, only=bool(only))
         _note_outcome(character_name, item_id, result)
     if result.get("ok") and "fit" in (result.get("ran") or []) and kind in _grafted_kinds():
@@ -2036,6 +2067,8 @@ class _Job:
         self.result: Dict[str, Any] = {}
         #: The tracked CPU task of a fit-only run (``refit_pool.track``), "" for any other run.
         self.track = ""
+        #: Runs beside the character's FIFO (Ruling A30, ``_side``): a CPU refit of an item nothing else runs.
+        self.beside = False
 
     @property
     def plain(self) -> bool:
@@ -2109,28 +2142,7 @@ def _worker(character_name: str) -> None:
                 _queues.pop(character_name, None)
                 _active.discard(character_name)
             return
-        error: Optional[str] = None
-        if job.track:
-            from app.core import refit_pool
-            refit_pool.activate(job.track)
-        try:
-            failure = cached_failure(character_name, job.item_id) if job.automatic else None
-            if failure is not None:
-                # The run this job waited behind refused the same input: an
-                # automatic run never spends the chain on it again.
-                logger.info("Garment run %s/%s skipped: %s refused for this input (%s) — waits for an"
-                            " explicit run", character_name, job.item_id, failure.get("step"),
-                            str(failure.get("error") or "")[:120])
-                job.result = {"ok": False, "fsig": failure.get("fsig"), "step": failure.get("step"),
-                              "error": failure.get("error"), "cached": True, "ran": []}
-            else:
-                job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
-                                         force=job.force, state=job.state, only=job.only)
-        except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
-            logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
-            error = str(e) or type(e).__name__
-            job.result = {"ok": False, "error": error}
-        _end_track(job, "" if job.result.get("ok") else str(job.result.get("error") or "the fit was refused"))
+        error = _execute(character_name, job)
         with _lock:
             # Ends the ``queued`` mark of a run that had nothing to do or
             # failed before its first step (a step replaces the mark).
@@ -2150,11 +2162,119 @@ def _worker(character_name: str) -> None:
                 return
 
 
+def _execute(character_name: str, job: "_Job") -> Optional[str]:
+    """Run one job (the FIFO worker's and a refit's beside it): ``job.result`` is set, the tracked CPU task
+    ends; returns the error of a run that raised, else None."""
+    error: Optional[str] = None
+    if job.track:
+        from app.core import refit_pool
+        refit_pool.activate(job.track)
+    try:
+        failure = cached_failure(character_name, job.item_id) if job.automatic else None
+        if failure is not None:
+            # The run this job waited behind refused the same input: an
+            # automatic run never spends the chain on it again.
+            logger.info("Garment run %s/%s skipped: %s refused for this input (%s) — waits for an"
+                        " explicit run", character_name, job.item_id, failure.get("step"),
+                        str(failure.get("error") or "")[:120])
+            job.result = {"ok": False, "fsig": failure.get("fsig"), "step": failure.get("step"),
+                          "error": failure.get("error"), "cached": True, "ran": []}
+        elif job.beside:
+            job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
+                                     force=job.force, state=job.state, only=job.only, beside=True)
+        else:
+            job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
+                                     force=job.force, state=job.state, only=job.only)
+    except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
+        logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
+        error = str(e) or type(e).__name__
+        job.result = {"ok": False, "error": error}
+    _end_track(job, "" if job.result.get("ok") else str(job.result.get("error") or "the fit was refused"))
+    return error
+
+
+def _side_worker(character_name: str, job: "_Job") -> None:
+    """Ruling A30: run a CPU refit beside the character's FIFO (``start_garment``), then take it out of
+    ``_side``. When the item has a run in the FIFO by then (queued while this one ran) it waits again."""
+    from app.core import garment_store as gs
+    error: Optional[str] = None
+    try:
+        error = _execute(character_name, job)
+    finally:
+        with _lock:
+            gs.end(character_name, job.item_id, QUEUED, error=error)
+            side = _side.get(character_name) or {}
+            if side.get(job.item_id) is job:
+                side.pop(job.item_id, None)
+            if not side:
+                _side.pop(character_name, None)
+            current = _current.get(character_name)
+            if (current is not None and current.item_id == job.item_id) or any(
+                    j.item_id == job.item_id for j in _queues.get(character_name) or ()):
+                gs.start(character_name, job.item_id, QUEUED)
+            job.done.set()
+
+
+def _base_in_flight(character_name: str) -> str:
+    """What changes or holds the character's base body now (Ruling A30: no refit runs beside the FIFO then):
+    a base-body step (``figure_build.base_step_in_flight``, Ruling A26) or the 3D generation guard
+    (``model3d.generation_running`` — a base model run, the Build's model steps). "" when none."""
+    from app.core import figure_build, model3d
+    step = figure_build.base_step_in_flight(character_name)
+    if step:
+        return step
+    return "3D generation" if model3d.generation_running(character_name) else ""
+
+
+def _beside_ok_locked(character_name: str, item_id: str) -> bool:
+    """Whether a CPU refit of ``item_id`` may start beside the FIFO (Ruling A30; caller holds ``_lock`` and has
+    checked the base, ``_base_in_flight``): the FIFO runs ANOTHER item, and the item has no run in flight,
+    waiting or beside, and no refit sweep holds the character."""
+    current = _current.get(character_name)
+    if character_name not in _active or current is None or current.item_id == item_id:
+        return False
+    if character_name in _held or item_id in (_side.get(character_name) or {}):
+        return False
+    return all(j.item_id != item_id for j in _queues.get(character_name) or ())
+
+
+def busy(character_name: str) -> bool:
+    """A garment run of the character runs or waits — in its FIFO or beside it (Ruling A30)."""
+    with _lock:
+        return character_name in _active or bool(_side.get(character_name))
+
+
+def hold_all(character_name: str) -> bool:
+    """Take the character's garment run lock WITHOUT waiting for a character-wide pass (the refit sweep,
+    ``garment_refit.refit_character``): False when a garment run of the character runs or waits — in the FIFO
+    or beside it — or the lock is held. While held no refit starts beside the FIFO (Ruling A30): such a click
+    queues as before. Release with ``release_all``."""
+    from app.core import garment_store as gs
+    with _lock:
+        if character_name in _active or _side.get(character_name) or character_name in _held:
+            return False
+        if not gs.char_lock(character_name).acquire(blocking=False):
+            return False
+        _held.add(character_name)
+    return True
+
+
+def release_all(character_name: str) -> None:
+    """End ``hold_all``."""
+    from app.core import garment_store as gs
+    gs.char_lock(character_name).release()
+    with _lock:
+        _held.discard(character_name)
+
+
 def _position_locked(character_name: str, job: "_Job") -> Dict[str, Any]:
     """``{started, queued, position, behind}`` of a job the caller just put
     into the character's FIFO (caller holds ``_lock``): ``position`` 0 and
     ``started`` True for the run in flight, else its 1-based place among the
-    waiting runs, ``behind`` the item id in flight."""
+    waiting runs, ``behind`` the item id in flight. A refit beside the FIFO
+    (Ruling A30) has started and waits behind nothing: ``beside`` True."""
+    if job.beside:
+        return {"started": True, "queued": False, "position": 0, "behind": None, "beside": True}
     current = _current.get(character_name)
     if current is job:
         return {"started": True, "queued": False, "position": 0, "behind": None}
@@ -2185,7 +2305,14 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
 
     ``only`` (ruling F13 d): the named steps alone, nothing after them
     (``run_garment``) — the steps dialog's step buttons; without ``steps``
-    it means nothing (a default run is the chain)."""
+    it means nothing (a default run is the chain).
+
+    Ruling A30: a fit-only run (a CPU refit) of an item with no run in
+    flight, waiting or beside starts at once BESIDE the character's run of
+    another item (``_side_worker``, ``_beside_ok_locked``) — ``{started True,
+    queued False, position 0, behind None, beside True}`` — unless a base-body
+    step or the 3D generation guard is in flight (``_base_in_flight``) or a
+    refit sweep holds the character: then it queues as before."""
     from app.core import garment_store as gs
     check_run(character_name, item_id, steps=steps, view=view, state=state)
     wanted = _Job(item_id, steps, view, bool(force), state=state, only=only)
@@ -2193,10 +2320,32 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     takes_default = wanted.state is None or wanted.state == _worn_state(character_name, item_id)
     # A fit-only run is a CPU refit: tracked from the click on (pending while it waits behind other runs).
     track = ""
+    beside = False
     if _fit_only(steps):
         from app.core import refit_pool
         track = refit_pool.track(character_name, refit_pool.fits_label(character_name, 1), pending=True)
+        # Read before ``_lock`` (its registries have locks of their own): a base step that starts right after
+        # is the same as one started while the refit computes — as with an idle FIFO today.
+        beside = not _base_in_flight(character_name)
     with _lock:
+        if beside and _beside_ok_locked(character_name, item_id):
+            wanted.beside = True
+            wanted.track, track = track, ""
+            _side.setdefault(character_name, {})[item_id] = wanted
+            if not gs.status(character_name, item_id).get("running_step"):
+                gs.start(character_name, item_id, QUEUED)
+            try:
+                threading.Thread(target=_side_worker, args=(character_name, wanted), daemon=True,
+                                 name=f"garment-refit-{character_name}-{item_id}").start()
+            except Exception:
+                side = _side.get(character_name) or {}
+                side.pop(item_id, None)
+                if not side:
+                    _side.pop(character_name, None)
+                gs.end(character_name, item_id, QUEUED)
+                _end_track(wanted, discard=True)
+                raise
+            return _position_locked(character_name, wanted)
         queue = _queues.setdefault(character_name, deque())
         job = next((j for j in queue if j.key() == wanted.key()), None)
         if job is None and not wanted.plain and takes_default:
@@ -2287,7 +2436,9 @@ def cancel_garment(character_name: str, item_id: str) -> Dict[str, Any]:
         queue = _queues.get(character_name)
         dropped = [j for j in queue or () if j.item_id == item_id]
         current = _current.get(character_name)
-        in_flight = current is not None and current.item_id == item_id
+        # A refit beside the FIFO (Ruling A30) is in flight as well.
+        in_flight = (current is not None and current.item_id == item_id) or \
+            item_id in (_side.get(character_name) or {})
         if not dropped:
             if in_flight:
                 raise RunStarted(ALREADY_RUNNING)
@@ -2307,17 +2458,23 @@ def cancel_garment(character_name: str, item_id: str) -> Dict[str, Any]:
 
 
 def queue_state(character_name: str, item_id: Optional[str] = None) -> Dict[str, Any]:
-    """The character's garment queue for the UI: ``{queue_running, queue}``
-    — the item id in flight (None when idle) and the waiting item ids in
-    run order; with ``item_id`` also ``queue_position``: the 1-based place
-    of the item's first waiting run (None when it waits for nothing)."""
+    """The character's garment queue for the UI: ``{queue_running, queue,
+    beside}`` — the item id in flight in the FIFO (None when idle), the
+    waiting item ids in run order and the item ids of the CPU refits running
+    beside the FIFO (Ruling A30, sorted); with ``item_id`` also
+    ``queue_position``: the 1-based place of the item's first waiting run
+    (None when it waits for nothing), and ``queue_beside``: the item's refit
+    runs beside the FIFO — it waits behind nothing (the UI never says
+    "Queued behind …" for it)."""
     with _lock:
         current = _current.get(character_name)
         waiting = [j.item_id for j in _queues.get(character_name) or ()]
+        beside = sorted(_side.get(character_name) or {})
     out: Dict[str, Any] = {"queue_running": current.item_id if current is not None else None,
-                           "queue": waiting}
+                           "queue": waiting, "beside": beside}
     if item_id is not None:
         out["queue_position"] = waiting.index(item_id) + 1 if item_id in waiting else None
+        out["queue_beside"] = item_id in beside
     return out
 
 
@@ -2377,7 +2534,7 @@ def wait_idle(timeout: float = 60.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         with _lock:
-            if not _active:
+            if not _active and not _side:
                 return True
         time.sleep(0.05)
     return False
@@ -2414,7 +2571,7 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
     (``StepBusy`` while it is held — a collected job never races a running step):
 
     - edit chain (clothing): ``garment_mesh.collect_job`` under the character's run lock
-      (``garment_store.char_lock``), step ``mesh``;
+      (``garment_store.char_lock``) and the item's (``run_item_lock``, Ruling A30), step ``mesh``;
     - footwear: ``footwear_source.collect_mesh_job`` under the ITEM lock, step ``mesh`` of the shoe source.
 
     Each runs the SAME prepare + gates as a fresh attempt and writes the same record plus ``collected_job``.
@@ -2455,8 +2612,15 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
         if not lock.acquire(blocking=False):
             raise StepBusy(RUN_GOING)
         try:
-            fsig = gs.garment_fsig(character_name, item_id, profile=profile)
-            res = garment_mesh.collect_job(character_name, item_id, fsig, job_id)
+            # The item's run lock too (Ruling A30): a refit of this item beside the FIFO reads its mesh.
+            item_lock = gs.run_item_lock(character_name, item_id)
+            if not item_lock.acquire(blocking=False):
+                raise StepBusy(RUN_GOING)
+            try:
+                fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+                res = garment_mesh.collect_job(character_name, item_id, fsig, job_id)
+            finally:
+                item_lock.release()
         finally:
             lock.release()
     status = res.get("status")
@@ -2885,7 +3049,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     ``queue_position`` / ``queue_running`` (``queue_state``): the 1-based
     place of the item's next waiting run in the character's garment queue
     (None = none waits) and the item id in flight (None = idle) — the UI's
-    "Queued behind <item>" while ``running_step`` is ``queued``.
+    "Queued behind <item>" while ``running_step`` is ``queued``;
+    ``queue_beside`` True for a refit running beside the FIFO (Ruling A30):
+    it waits behind nothing.
     ``refit`` (``garment_source``): the current fit was refitted from a source
     made on an older base — ``{source_bsig, source_fsig, materialized_from,
     registration {shift, scale} | None, first_step, created_at}`` (the tab
@@ -3004,6 +3170,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         "steps": steps, "stale_reasons": stale,
         "running_step": status["running_step"], "started_at": status["started_at"],
         "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
+        "queue_beside": queue["queue_beside"],
         "failed": failed, "preview_url": preview_url,
         # Ruling UI3 a: when the previewed fit was made (the 3D preview's caption).
         "preview_built_at": model_overview.built_at(preview) if preview_url else None,

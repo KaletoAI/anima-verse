@@ -23,7 +23,7 @@ GARMENTS (character Demo; items A, B, C)
 [1] start_garment(A) -> started (the recorder holds A). B through the trigger
     path (enqueue_garment, handle kept), then the explicit click on B
     (steps "fit", force) merges into that job; start_garment(C) -> position 2.
-    queue_state(Demo) = {queue_running "A", queue ["B", "C"]}.
+    queue_state(Demo) = {queue_running "A", queue ["B", "C"], beside []}.
 [2] POST …/garments/B/cancel (admin) -> 200 {item_id "B", cancelled 1,
     queue_running "A", queue ["C"]}. Afterwards queue_state(Demo, "C") ->
     queue_position 1 (it moved up); B's status running_step None (its
@@ -120,7 +120,7 @@ def main() -> int:
         trigger_b = garments.enqueue_garment("Demo", "B")
         check("explicit B merges", garments.start_garment("Demo", "B", steps="fit", force=True)["position"], 1)
         check("start C", garments.start_garment("Demo", "C")["position"], 2)
-        check("queue", garments.queue_state("Demo"), {"queue_running": "A", "queue": ["B", "C"]})
+        check("queue", garments.queue_state("Demo"), {"queue_running": "A", "queue": ["B", "C"], "beside": []})
 
         print("[2] cancel B: C moves up, A untouched")
         r = client.post("/characters/Demo/garments/B/cancel", headers=ADMIN)
@@ -151,7 +151,7 @@ def main() -> int:
         gate_a.set()
         check("idle", garments.wait_idle(30), True)
         check("runs", runs, [("A", None, False), ("C", None, False)])
-        check("queue empty", garments.queue_state("Demo"), {"queue_running": None, "queue": []})
+        check("queue empty", garments.queue_state("Demo"), {"queue_running": None, "queue": [], "beside": []})
 
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))
     return 1 if FAILS else 0

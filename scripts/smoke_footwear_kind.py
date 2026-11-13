@@ -130,7 +130,7 @@ dress; Mira holds heels.
        current fsig is the footwear one, its method "shoe"), and
        refit_character(Kira) calls garments._fit 0 times for heels.
      After all of it: the character's queue is idle and empty
-     (queue_running None, queue []), status(Kira, heels) has no running
+     (queue_running None, queue [], beside []), status(Kira, heels) has no running
      step, cached_failure(Kira, heels) is None and no file
      garments/failed/<heels>_<current fsig>.json exists.
 """
@@ -450,7 +450,7 @@ def main() -> int:
             garments._fit = real_fit
         check("refit sweep fits no heels", [i for i in FITS if i == heels], [])
         check("wait idle", garments.wait_idle(10.0), True)
-        check("queue empty", garments.queue_state("Kira"), {"queue_running": None, "queue": []})
+        check("queue empty", garments.queue_state("Kira"), {"queue_running": None, "queue": [], "beside": []})
         check("no running step", gs.status("Kira", heels).get("running_step"), None)
         check("no cached failure", garments.cached_failure("Kira", heels), None)
         current = gs.garment_fsig("Kira", heels)

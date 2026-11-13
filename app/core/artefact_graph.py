@@ -402,6 +402,7 @@ def running_keys(character_name: str) -> Tuple[Set[str], Set[str]]:
             items.update(item for (name, item) in garment_store._running if name == character_name)
         with garments._lock:
             items.update(job.item_id for job in garments._queues.get(character_name, ()) or ())
+            items.update(garments._side.get(character_name) or ())   # refits beside the FIFO (Ruling A30)
     except Exception:
         logger.exception("Artefact GC %s: garment runs unreadable", character_name)
     return sigs, items
