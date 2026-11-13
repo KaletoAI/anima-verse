@@ -696,8 +696,9 @@ async def lifespan(app: FastAPI):
     # Migration (plan 2026-11-12-unified-worn-pieces Task 3, ruling 4): every
     # stored outfit piece gets its mode (outfit_piece.mesh_mode) from the
     # removed own-mesh flag and its wearers' removed body mode, then both keys
-    # leave the items and profiles (figure_migration names them). Once per world, world_kv-marked; before
-    # the garment refit sweep below reads the modes.
+    # leave the items and profiles (figure_migration names them). The world's items and profiles once per
+    # world (world_kv-marked), the shared library once per installation (its own marker in the shared items
+    # file, Ruling FR-C1); before the garment refit sweep below reads the modes.
     try:
         from app.core.figure_migration import migrate_modes_once
         migrate_modes_once()

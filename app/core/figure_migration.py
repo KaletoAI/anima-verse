@@ -5,10 +5,17 @@ Task 3, builder-check ruling 4).
 
 The mode of a worn piece (``outfit_piece.mesh_mode``, ``garment_set``) used
 to be split over two places: the ITEM's ``own_mesh`` flag and the WEARER's
-``outfit_body_mode`` (``mesh`` / ``retexture``). ``migrate_modes_once`` runs
-once per world (world_kv flag ``FLAG``) and judges every stored outfit piece
-— the world's (``world.db``) and the shared library's — with ``judge_item``,
-in this order:
+``outfit_body_mode`` (``mesh`` / ``retexture``). ``migrate_modes_once`` judges
+every stored outfit piece with ``judge_item`` — the world's (``world.db``) once
+per world (world_kv flag ``FLAG``, which also covers the profiles), the shared
+library's once per INSTALLATION (Ruling FR-C1: its own marker
+``SHARED_MODES_KEY``, a top-level key of the shared items file written in the
+same write as the judged items; the shared re-default's marker counts as done
+too, ``shared_modes_done``). The two halves run on their own markers: a world
+already migrated still runs the shared half while the shared marker is unset
+(a failed shared write retries on the next boot), a new world never re-judges
+the shared library: after the re-default has removed the modes nobody tests,
+rule 4 would paint them all again. The judgement, in this order:
 
 1. an item that already carries a valid ``mesh_mode`` is untouched (a shared
    item judged in another world, an item created after Task 2);
@@ -32,7 +39,7 @@ list or a wearer's profile that cannot be read raises before anything is
 written and leaves the flag unset (the boot logs it, the next start retries).
 
 The shared library is ``shared/items/items.json`` in the repository: the
-first boot of any world rewrites that tracked file.
+first boot of the first world rewrites that tracked file, once.
 
 RE-DEFAULT (Rulings A10 / A12, fix round 1) — ``redefault_modes_once``,
 after the mode migration and only once that has run. Since A10 the default
@@ -121,6 +128,10 @@ REDEFAULT_FLAG = "redefaulted_unworn_piece_modes"
 #: Top-level key of the SHARED items file: the shared library's re-default ran
 #: (once for every world; ``inventory.get_shared_items_meta``).
 SHARED_REDEFAULT_KEY = "redefaulted_unworn_piece_modes"
+#: Top-level key of the SHARED items file: the shared library's half of the
+#: mode migration ran (once per installation, Ruling FR-C1). The world flag
+#: ``FLAG`` covers only the world's items and its profiles.
+SHARED_MODES_KEY = "migrated_worn_piece_modes"
 #: A body's decision when it keeps its old id.
 STALE = "stale"
 #: The removed per-item flag (``outfit_piece`` key).
@@ -217,43 +228,64 @@ def _drop_profile_key(name: str) -> bool:
     return False
 
 
+def shared_modes_done() -> bool:
+    """Whether the SHARED library's half of the mode migration ran — once per
+    installation (Ruling FR-C1): its own marker ``SHARED_MODES_KEY`` in the
+    shared items file, or the shared re-default's marker (the re-default runs
+    only after the mode migration, and re-judging the pieces it cleared would
+    paint them again). An unreadable file raises (``strict``)."""
+    from app.models import inventory
+    meta = inventory.get_shared_items_meta(strict=True)
+    return bool(meta.get(SHARED_MODES_KEY) or meta.get(SHARED_REDEFAULT_KEY))
+
+
 def migrate_modes_once() -> Optional[Dict[str, Any]]:
-    """The migration (module docstring). None when it already ran, else
-    ``{items: {item id: mode}, profiles: [names whose key was dropped]}``."""
+    """The migration (module docstring). None when both halves already ran
+    (the world's ``FLAG`` and the shared library's ``shared_modes_done``),
+    else ``{items: {item id: mode}, profiles: [names whose key was
+    dropped]}`` — only the halves that ran this time."""
     from app.models import inventory
     from app.models.character import list_available_characters
     from app.models.world import get_world_setting, set_world_setting
-    if get_world_setting(FLAG, strict=True):
+    world_done = bool(get_world_setting(FLAG, strict=True))
+    shared_done = shared_modes_done()
+    if world_done and shared_done:
         return None
     # A list that cannot be read is no reason to call the world migrated.
     names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)
     worn, modes = _wearers(names)
-    world_items = inventory._load_items(strict=True)
-    shared_items = inventory._load_shared_items(strict=True)
+    world_items = [] if world_done else inventory._load_items(strict=True)
+    shared_items = [] if shared_done else inventory._load_shared_items(strict=True)
 
     judged, changed = _migrate(world_items, worn, modes, "world")
     for item in changed:
         if not inventory._save_items([item]):
             logger.warning("Worn-piece mode migration: world item %s not saved", item.get("id"))
             judged.pop(str(item.get("id") or ""), None)
-    shared_judged, shared_changed = _migrate(shared_items, worn, modes, "shared")
-    if shared_changed:
+    if shared_done:
+        logger.info("Worn-piece mode migration: the shared library was migrated before (installation "
+                    "marker) — its modes stay as they are")
+    else:
+        from app.core.timeutils import utc_now_iso
+        shared_judged, shared_changed = _migrate(shared_items, worn, modes, "shared")
         try:
-            inventory._save_shared_items(shared_items)
+            # The marker travels in the same write as the judged items: no half state.
+            inventory._save_shared_items(shared_items, meta={SHARED_MODES_KEY: utc_now_iso()})
             judged.update(shared_judged)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 — the marker stays unset: the next boot retries
             logger.warning("Worn-piece mode migration: shared items not saved (%s): %s",
-                           ", ".join(str(i.get("id")) for i in shared_changed), e)
+                           ", ".join(str(i.get("id")) for i in shared_changed) or "-", e)
 
     profiles: List[str] = []
-    for name in names:
+    for name in ([] if world_done else names):
         try:
             if _drop_profile_key(name):
                 profiles.append(name)
         except Exception as e:  # noqa: BLE001
             logger.warning("Worn-piece mode migration %s: profile step failed: %s", name, e)
 
-    set_world_setting(FLAG, "1")
+    if not world_done:
+        set_world_setting(FLAG, "1")
     logger.info("Worn-piece mode migration done: %d item(s) judged, %d profile(s) without %s",
                 len(judged), len(profiles), PROFILE_KEY)
     return {"items": judged, "profiles": profiles}
@@ -1014,10 +1046,13 @@ def drop_pipeline_key_once() -> Optional[Dict[str, str]]:
 # ``base_body.hairstyle_default_mode`` at config load (``config.
 # _migrate_hairstyle_default_mode``). Item first, profile second, under
 # ``keyed_lock("garment_item", name)`` → ``keyed_lock("character_profile",
-# name)`` (``garment_hair.create_hairstyle``'s order). A failure is a WARNING
-# naming the character and the migration goes on; the flag is set anyway. A
-# character list or profile that cannot be read raises before anything is
-# written and leaves the flag unset.
+# name)`` (``garment_hair.create_hairstyle``'s order). A failure (an
+# exception, a profile that was not saved) is a WARNING naming the character
+# and the migration goes on; the flag is set only when every character went
+# through (Ruling FR-minors) — else the next start runs it again, which finds
+# a minted hairstyle instead of minting another. A character list or profile
+# that cannot be read raises before anything is written and leaves the flag
+# unset.
 
 #: world_kv key of the done flag.
 HAIRSTYLE_FLAG = "migrated_hairstyle_items"
@@ -1082,16 +1117,20 @@ def _migrate_hairstyle(name: str) -> Tuple[str, List[str]]:
                     profile[garment_hair.BASE_HAIRSTYLE_KEY] = item_id
                     changed = True
             if changed and not save_character_profile(name, profile):
-                logger.warning("Hairstyle migration %s: profile not saved — %s stays unworn, keys %s stay",
-                               name, item_id or "no hairstyle", ", ".join(dropped) or "none")
-                return item_id, []
+                # Ruling FR-minors: a failure, so the migration is retried at the next start.
+                raise RuntimeError(f"profile not saved — {item_id or 'no hairstyle'} stays unworn, keys "
+                                   f"{', '.join(dropped) or 'none'} stay")
     return item_id, dropped
 
 
 def migrate_hairstyles_once() -> Optional[Dict[str, str]]:
     """The migration above. None when it already ran or still waits for the
     hair migration, else ``{character: hairstyle id}`` (characters that got
-    none are left out)."""
+    none are left out). Done (``HAIRSTYLE_FLAG``) only when every character
+    went through (Ruling FR-minors): one that failed — an exception, a
+    profile that was not saved — is logged and the whole migration runs
+    again at the next start (it is idempotent: a worn hairstyle is found,
+    never minted twice)."""
     from app.core.hair_migration import HAIR_FLAG
     from app.models.character import list_available_characters
     from app.models.world import get_world_setting, set_world_setting
@@ -1103,16 +1142,22 @@ def migrate_hairstyles_once() -> Optional[Dict[str, str]]:
     names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)
     result: Dict[str, str] = {}
     keys = 0
+    failed: List[str] = []
     for name in names:
         try:
             item_id, dropped = _migrate_hairstyle(name)
         except Exception as e:  # noqa: BLE001 — the next character still goes
             logger.warning("Hairstyle migration %s: failed: %s", name, e)
+            failed.append(name)
             continue
         keys += len(dropped)
         if item_id:
             result[name] = item_id
-    set_world_setting(HAIRSTYLE_FLAG, "1")
+    if failed:
+        logger.warning("Hairstyle migration not done — %d character(s) failed (%s); retried at the next start",
+                       len(failed), ", ".join(failed))
+    else:
+        set_world_setting(HAIRSTYLE_FLAG, "1")
     logger.info("Hairstyles: %d character(s) got their hairstyle worn, %d legacy hair key(s) dropped%s — "
                 "nothing rebuilt", len(result), keys,
                 f": {', '.join(f'{n} ({i})' for n, i in sorted(result.items()))}" if result else "")
