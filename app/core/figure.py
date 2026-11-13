@@ -43,11 +43,14 @@ although nothing predicts it.
 """
 import hashlib
 import json
+import logging
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 #: Bumped when a shape is meshed differently for the same inputs.
 SHAPE_VERSION = 2
@@ -238,8 +241,9 @@ def predicted_keys(character_name: str, pieces: Optional[Dict[str, str]], items:
     ``items`` stands on NOW — ``worn_sets`` under the items' modes, the
     variant of ``predicted_variant``, ``shape_key`` and ``texture_key``,
     with every own-mesh piece whose mesh is not delivered on the base model
-    of ``bsig`` in the body shape meanwhile (ruling A11, ``_interim_sets``:
-    the interim shape a Build makes for it). Read-only (no garment chain, no
+    of ``bsig`` and needs hub work to get it in the body shape meanwhile
+    (rulings A11 / A15 a, ``_own_pending`` / ``_interim_sets``: the interim
+    shape a Build makes for it). Read-only (no garment chain, no
     image): the artefact GC asks it for every live outfit. The texture key
     is ``""`` on a meshed shape with nothing painted. ``piece_state``: the
     outfit's open pieces (a saved set's), None → the profile's."""
@@ -247,9 +251,7 @@ def predicted_keys(character_name: str, pieces: Optional[Dict[str, str]], items:
     profile = _profile_of(character_name, profile)
     sets = worn_sets(character_name, pieces=dict(pieces or {}), profile=profile, piece_state=piece_state)
     base_sha = base_body.base_model_sha256(character_name, bsig)
-    pending = {item_id for item_id, kind in sets.own.items()
-               if not _mesh_delivered(character_name, item_id, kind, open_=item_id in sets.open,
-                                      base_sha=base_sha, profile=profile)[0]}
+    pending = _own_pending(character_name, sets, base_sha=base_sha, profile=profile)[0]
     if pending:
         sets, _notes = _interim_sets(sets, pending)
     variant = predicted_variant(character_name, sets, items, profile=profile)
@@ -300,7 +302,14 @@ def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) ->
 #    left out. Until that interim shape is stored the previously delivered
 #    figure stays served (as ruling 2 keeps it until an interim texture
 #    exists); the Build's ``interim`` step makes it first and never waits for
-#    the chains (ruling A14). Exception (ruling F13 b): a clothing piece worn
+#    the chains (ruling A14) — only while the character has no figure to show
+#    (ruling A15 b, ``figure_build._interim_waits``). Only a piece whose mesh
+#    needs HUB work counts (ruling A15 a, ``_needs_hub``: no accepted garment
+#    mesh, its chain must run, or its chain failed): a piece whose garment
+#    mesh exists and only lacks its fit on the current base model (a refit
+#    from the last source, or the fit step alone — CPU) stays an own-mesh
+#    piece (``_own_pending``'s ``refit``); the Build's ``pieces`` / ``fits``
+#    steps fit it in the same Build. Exception (ruling F13 b): a clothing piece worn
 #    OPEN whose open mesh is missing is grafted with its CLOSED mesh
 #    (``shown_closed``, "Shown closed until its open mesh is built"). A fit
 #    on the plain body is ``garment_store.accepted_fit`` on the base model;
@@ -639,7 +648,7 @@ def _interim_hair_on(character_name: str, *, shape: str, bsig: str, base_sha: st
 def _mesh_delivered(character_name: str, item_id: str, kind: str, *, open_: bool, base_sha: str,
                     profile: Optional[Dict[str, Any]] = None) -> Tuple[bool, bool]:
     """``(delivered, closed_stand_in)`` of an own-mesh piece's mesh on the base
-    model ``base_sha`` (ruling A11 asks only this): an accepted fit in the
+    model ``base_sha`` (ruling A11; ``_own_pending`` then asks ``_needs_hub``): an accepted fit in the
     worn state; a clothing piece worn OPEN without its open fit counts with
     its CLOSED fit, ``closed_stand_in`` True (ruling F13 b). Read-only."""
     from app.core import garment_set, garment_store
@@ -656,6 +665,53 @@ def _mesh_delivered(character_name: str, item_id: str, kind: str, *, open_: bool
     if open_ and kind != garment_set.FOOTWEAR and fitted(CLOSED):
         return True, True
     return False, False
+
+
+def _needs_hub(character_name: str, item_id: str, *, state: str, profile: Dict[str, Any]) -> bool:
+    """Ruling A15 a: whether an own-mesh piece without its fit on the current
+    base model needs HUB work to get its mesh — its chain failed for the
+    current input (``garments.cached_failure``: only an explicit run retries
+    it), or the run its chain would make now (``garments.run_estimate`` in
+    ``state``) costs hub jobs, is unknown or has nothing to run. False when
+    the accepted garment mesh exists and only the fit is missing: a refit
+    from the last accepted source onto the new base (``refit``) or the fit
+    step alone — CPU work the Build's ``pieces`` / ``fits`` steps do. An
+    unreadable answer counts as hub work (the A11 interim, as before).
+    Read-only."""
+    from app.core import garments
+    try:
+        if garments.cached_failure(character_name, item_id, profile=profile, state=state) is not None:
+            return True
+        estimate = garments.run_estimate(character_name, item_id, profile=profile, state=state)
+    except Exception:  # noqa: BLE001 — a judgement, never a failure of the resolver
+        logger.debug("Hub need of %s/%s not judged", character_name, item_id, exc_info=True)
+        return True
+    jobs = estimate.get("hub_jobs")
+    return jobs is None or int(jobs) > 0 or not estimate.get("steps")
+
+
+def _own_pending(character_name: str, sets: WornSets, *, base_sha: str,
+                 profile: Dict[str, Any]) -> Tuple[set, set, set]:
+    """``(extra, closed, refit)`` of the own-mesh pieces of ``sets`` on the
+    base model ``base_sha``: ``extra`` — no mesh delivered and it needs hub
+    work (``_needs_hub``): in the body shape meanwhile (rulings A11 / A15 a);
+    ``closed`` — worn open, its closed mesh stands in (ruling F13 b);
+    ``refit`` — no fit on this base model, but only CPU work is missing
+    (ruling A15 a): grafted as wanted, the Build fits it."""
+    extra: set = set()
+    closed: set = set()
+    refit: set = set()
+    for item_id, kind in sets.own.items():
+        has, stand_in = _mesh_delivered(character_name, item_id, kind, open_=item_id in sets.open,
+                                        base_sha=base_sha, profile=profile)
+        if has:
+            if stand_in:
+                closed.add(item_id)
+        elif _needs_hub(character_name, item_id, state=_state_in(sets, item_id), profile=profile):
+            extra.add(item_id)
+        else:
+            refit.add(item_id)
+    return extra, closed, refit
 
 
 @dataclass(frozen=True)
@@ -781,25 +837,19 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
                                     piece_state=piece_state)
     bsig = wanted.bsig
     base_sha = base_body.base_model_sha256(character_name, bsig)
-    # 2. Own-mesh pieces without their mesh go into the body (ruling A11); the closed mesh stands in (F13 b).
-    extra: set = set()
-    closed: set = set()
-    for item_id, kind in sets.own.items():
-        has, stand_in = _mesh_delivered(character_name, item_id, kind, open_=item_id in sets.open,
-                                        base_sha=base_sha, profile=profile)
-        if not has:
-            extra.add(item_id)
-        elif stand_in:
-            closed.add(item_id)
+    # 2. Own-mesh pieces whose mesh needs hub work go into the body (rulings A11 / A15 a); the closed mesh
+    # stands in (F13 b); a piece that only lacks its CPU fit stays an own-mesh piece (A15 a).
+    extra, closed, refit = _own_pending(character_name, sets, base_sha=base_sha, profile=profile)
     # 1. The shape — a piece whose fit is refused on a stored meshed shape joins the body too (bounded: the
-    # set only grows).
+    # set only grows). A piece waiting for its CPU fit has no base fit to judge there yet: it counts as fitted
+    # (its fit on the shape is CPU work after its base fit, like on an interim shape not stored yet).
     while True:
         choice = _shape_choice(character_name, wanted, sets, extra, bsig=bsig, variant=variant, items=items,
                                profile=profile)
         meshed = not is_plain(choice.shape)
         refused: Dict[str, str] = {}
         if meshed and choice.stored:
-            for item_id in sorted(set(sets.own) - set(choice.in_body)):
+            for item_id in sorted(set(sets.own) - set(choice.in_body) - refit):
                 state = CLOSED if item_id in closed else _state_in(sets, item_id)
                 fitted, reason = _fit_on(character_name, item_id, shape=choice.shape, base_sha=base_sha,
                                          profile=profile, state=state)

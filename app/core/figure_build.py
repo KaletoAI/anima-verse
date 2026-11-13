@@ -22,7 +22,18 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
    scheduled FIRST, counted in the cost). It never waits for a garment chain
    (ruling A14): the ``pieces`` steps run after it. Not listed while a manual
    Build takes kept pieces out and the stored model of the kept shape serves
-   meanwhile.
+   meanwhile. Ruling A15: only an own-mesh piece whose mesh needs HUB work is
+   in the interim (``figure._needs_hub`` — a piece whose garment mesh exists
+   and only lacks its fit on the current base is fitted by the ``pieces`` /
+   ``fits`` steps on the CPU), and no interim at all while the character has
+   a figure to show (``_interim_waits``: an outfit model is served — exact,
+   stale or the nearest stand-in): that figure stays served until the new one
+   is assembled (as Ruling C4 does for a refused view); the interim is built
+   only when there is nothing to show. While it waits, nothing is rendered or
+   assembled for the interim figure (no ``Views`` step for it, the ``texture``
+   step renders nothing, the assembly reports ``INTERIM_WAITS``) and the
+   wanted shape is no take-out: no interim shape holds the pieces, so an
+   automatic Build builds it.
 3. ``shape`` — the wanted meshed shape is not stored
    (``base_body.prepare_shape``): first every view the shape needs
    (``dressed_views()``) is refreshed — a stale one (a model fit of before
@@ -246,6 +257,33 @@ def _painted_interim(fig) -> bool:
 #: ``_run_assemble``'s error while the figure delivered now would still paint in-body pieces (Ruling C4).
 SHAPE_NOT_BUILT = ("Not assembled: the body shape is not built — nothing is painted in its place; the figure "
                    "built before stays served")
+#: ``_run_assemble``'s error while an own mesh needs hub work and a figure is served (Ruling A15 b).
+INTERIM_WAITS = ("Not assembled: an own mesh is not ready — no interim body shape while a figure is shown; the "
+                 "figure built before stays served")
+
+
+def _figure_served(character_name: str) -> bool:
+    """Whether the character has a figure to show (Ruling A15 b): an outfit model is served for the worn
+    outfit (``model3d.find_model3d_serving`` — exact, stale or the nearest stand-in; never the plain base)."""
+    from app.core import model3d
+    try:
+        return model3d.find_model3d_serving(character_name)[0] is not None
+    except Exception:  # noqa: BLE001 — nothing to show, never a failure of the plan
+        logger.debug("Served model of %s unreadable", character_name, exc_info=True)
+        return False
+
+
+def _interim_waits(character_name: str, delivered, built) -> bool:
+    """Ruling A15 b: whether the figure delivered now holds own-mesh pieces whose mesh needs hub work in an
+    interim body shape (``figure.INTERIM_IN_BODY``) that is not the built model (``built``: the figure the
+    stored outfit model of the worn outfit was built as) while the character has a figure to show — then no
+    interim is made: the figure shown stays served until the new one is assembled."""
+    from app.core import figure
+    if not any(text == figure.INTERIM_IN_BODY for text in (delivered.interim or {}).values()):
+        return False
+    if built is not None and built.as_dict() == delivered.as_dict():
+        return False
+    return _figure_served(character_name)
 
 
 #: The plain body step's label when its rebuild is what the hair wanted in the body costs (ruling F13 a).
@@ -309,7 +347,9 @@ def _interim_step(character_name: str, delivered, signature: str, *, rebased: bo
     body). That shape's cost is counted like the ``shape`` step (its views
     when missing + ``model3d.mesh_hub_stages``), and its dressed views as a
     whole set (they are edits of the new shape's views; copies when nothing
-    is painted). It never waits for a garment chain (ruling A14)."""
+    is painted). It never waits for a garment chain (ruling A14). Planned
+    only for pieces whose mesh needs hub work and only while the character
+    has no figure to show (ruling A15, ``plan``)."""
     from app.core import base_body, figure, model3d
     set_jobs = base_body.dressed_view_jobs()
     new_shape = not figure.is_plain(delivered.shape) and (
@@ -373,12 +413,17 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     kept_serving = (figure.is_taking_out(character_name) and built is not None and bool(built.in_body_own)
                     and not figure.is_plain(built.shape) and figure._shape_stored(character_name, built.shape, bsig))
     painted_interim = _painted_interim(delivered)
-    if delivered.interim and not painted_interim and not kept_serving and (
+    # Ruling A15 b: no interim while a figure is shown — it stays served until the new one is assembled.
+    waits = _interim_waits(character_name, delivered, built)
+    if delivered.interim and not painted_interim and not kept_serving and not waits and (
             rebased or built is None or built.as_dict() != delivered.as_dict()):
         steps.append(_interim_step(character_name, delivered, signature, rebased=rebased, profile=profile))
     # Ruling A11: while own-mesh pieces are in the delivered body shape (no mesh yet, or ready but not taken
     # out), the wanted shape / texture take them out — only a manual Build spends that (``figure.TAKE_OUT``).
-    take_out = figure.TAKE_OUT if delivered.in_body_own else ""
+    # Ruling A15 b: pieces waiting for their mesh while a figure is shown are in no shape that is built — the
+    # wanted shape is no take-out then (a kept shape's ready pieces still are).
+    take_out = figure.TAKE_OUT if delivered.in_body_own and (not waits or any(
+        delivered.notes.get(item_id) == figure.READY_IN_BODY for item_id in delivered.in_body_own)) else ""
 
     meshed = not figure.is_plain(wanted.shape)
     if meshed and (rebased or not figure._shape_stored(character_name, wanted.shape, bsig)):
@@ -410,7 +455,8 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
                      if views_missing else 0)
             steps.append(Step("texture", _views_label("Texture", views, copied=views_missing), views,
                               manual=take_out))
-    if (not painted_interim and not any(s.name in ("interim", "texture") for s in _runnable(steps, explicit))
+    if (not painted_interim and not waits
+            and not any(s.name in ("interim", "texture") for s in _runnable(steps, explicit))
             and _views_missing(character_name, delivered, signature)):
         # Ruling F16: the views of the figure delivered NOW, judged like the Pose tab (``dressed_image``) — a
         # view made for another figure is never "nothing to build" while the tab calls it stale.
@@ -425,8 +471,8 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
                     or garment_refit.work_count(character_name, profile=profile) > 0):
         steps.append(Step("fits", "Fits on the CPU", 0))
 
-    if _runnable(steps, explicit) or (not painted_interim and (built is None
-                                                               or built.as_dict() != delivered.as_dict())):
+    if _runnable(steps, explicit) or (not painted_interim and not waits
+                                      and (built is None or built.as_dict() != delivered.as_dict())):
         steps.append(Step("assemble", "Assemble the figure", 0))
     return steps
 
@@ -866,8 +912,14 @@ def _run_hair(character_name: str, step: Step, explicit: bool = False) -> str:
 
 
 def _run_texture(character_name: str, step: Step, explicit: bool = False) -> str:
-    """The views of the painted set on the shape delivered now (the paint is the assembly's)."""
-    _profile, wanted, _delivered, _items = _now(character_name)
+    """The views of the painted set on the shape delivered now (the paint is the assembly's) — none while an
+    own mesh needs hub work and a figure is shown (Ruling A15 b: no views of an interim figure; the assembly
+    reports it)."""
+    _profile, wanted, delivered, _items = _now(character_name)
+    if _interim_waits(character_name, delivered, _model_figure(character_name, wanted.signature)):
+        logger.info("Build %s: no views rendered — an own mesh is not ready and the figure shown stays",
+                    character_name)
+        return ""
     return _dressed(character_name, wanted)
 
 
@@ -885,6 +937,8 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
     _profile, wanted, delivered, _items = _now(character_name)
     if _painted_interim(delivered):
         return SHAPE_NOT_BUILT  # Ruling C4: never the painted interim
+    if _interim_waits(character_name, delivered, _model_figure(character_name, wanted.signature)):
+        return INTERIM_WAITS  # Ruling A15 b: no interim while a figure is shown
     views = base_body.ensure_figure_views(character_name, wanted.signature)
     if views is not None and not views.get("ok"):
         return str(views.get("error") or "views failed")

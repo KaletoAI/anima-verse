@@ -8,6 +8,14 @@ never waits for the garment chains.
 Usage:
     ./.venv/bin/python scripts/smoke_figure_a11.py
 
+Ruling A15 (Task 11g-fix3) narrows the interim: only a piece whose mesh
+needs HUB work (``figure._needs_hub``), and only while no figure is served
+(``figure_build._interim_waits``). Every expectation below still holds as
+written: the ``run_estimate`` stub's 6 jobs ARE hub work, a refused chain is
+too, and no outfit model is served here (``find_model3d_serving`` finds no
+model in the throwaway storage). The refit-only and served-figure cases are
+``scripts/smoke_interim_refit_only.py``.
+
 Runs against a THROWAWAY storage + instance directory — no world, no hub, no
 GPU, no server. The resolver (``figure``), the plan (``figure_build.plan``)
 and ``base_body.resolve_figure`` / ``mesh_record`` are real; the rest are
