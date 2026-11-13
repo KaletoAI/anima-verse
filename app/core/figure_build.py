@@ -9,10 +9,13 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
 1. ``plain_body`` — the plain body is missing or was rendered with older
    prompts (``base_body.base_refresh_plan(missing=True)``): its views, then
    its mesh run (``generate_base_images`` / ``generate_base_model``).
-2. ``interim`` — the wanted figure needs a shape or an own mesh that is not
-   built (``Figure.interim``: an in-body piece painted until its shape
-   exists; an own-mesh piece IN the body shape until its mesh is ready,
-   ruling A11) and no outfit model of that interim figure is stored: the
+2. ``interim`` — the wanted figure needs an own mesh that is not built
+   (``Figure.interim``: an own-mesh piece IN the body shape until its mesh
+   is ready, ruling A11) and no outfit model of that interim figure is
+   stored. Never for an in-body piece waiting for its shape (Ruling C4, fix
+   round 2 of Task 11g: no PAINTED interim — Ylva's Build painted a nude
+   back onto the plain body; ``_painted_interim``): the figure delivered
+   before stays served until the ``shape`` step has built it. Else: the
    interim body shape when it is not stored yet (``base_body.prepare_shape``
    of the delivered figure, its cost counted like the ``shape`` step), its
    views (``generate_dressed_images``) and its outfit model (ruling 2;
@@ -21,7 +24,12 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
    Build takes kept pieces out and the stored model of the kept shape serves
    meanwhile.
 3. ``shape`` — the wanted meshed shape is not stored
-   (``base_body.prepare_shape``). While own-mesh pieces are in the delivered
+   (``base_body.prepare_shape``): first every view the shape needs
+   (``dressed_views()``) is refreshed — a stale one (a model fit of before
+   Task 11g, Ruling C2) counts as missing and is re-made, its stored draft
+   composited again when it follows the front (``base_body.
+   shape_view_jobs``) — then it is meshed; never from a partial, stale or
+   refused set. While own-mesh pieces are in the delivered
    body shape (``Figure.in_body_own``) this step and ``texture`` take them
    out of it: listed with ``manual`` ``figure.TAKE_OUT`` — only a manual
    Build runs them (ruling A11: no automatic extra jobs); a manual Build
@@ -75,7 +83,10 @@ so a Build never plans on a body that is deleted under it (Ruling 10a). Model wo
 texture, assemble) holds ``model3d.generation_slot``. A failed step is
 recorded (``failed[step]``; for ``pieces`` the first failing piece, every
 failing piece under ``items``) and skips only the steps whose ``DEPENDS``
-name it; the others run. The run shows as one tracked task "Build · <name>
+name it; the others run — except a failed VIEW step (``STOP_STEPS``: plain
+body, interim, shape, texture — a refused view, Ruling C4): it STOPS the
+Build there, every later step is skipped, and its reason is the Build's
+status (``state()['failed']``) in the Figure tab. The run shows as one tracked task "Build · <name>
 (<i>/<n> <label>)".
 
 Automatic (Task 8; rulings 7a, 7b): ``request(character, trigger)`` is how the
@@ -115,6 +126,8 @@ DEPENDS = {"interim": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain
            "assemble": {"plain_body"}}
 #: Steps that hold the character's 3D generation slot (model work).
 SLOT_STEPS = frozenset({"plain_body", "interim", "shape", "texture", "assemble"})
+#: Steps whose failure (a refused view, a shape not meshed) STOPS the Build: nothing after them runs (Ruling C4).
+STOP_STEPS = frozenset({"plain_body", "interim", "shape", "texture"})
 
 #: ``start`` / the route's 409 off the pipeline (a non-humanoid or a temporary NPC — Rulings A13 / A13a).
 OFF_PIPELINE = "No figure — the figure is for humanoid characters that are not temporary NPCs"
@@ -219,6 +232,22 @@ def _views_label(what: str, views: int, copied: bool = False) -> str:
     return f"{what}: views copied from the texture store" if copied else f"{what}: paint on the CPU"
 
 
+def _painted_interim(fig) -> bool:
+    """Whether ``fig`` (a delivered figure) paints in-body pieces on the plain
+    body because their shape is not built (``figure.INTERIM_PAINTED``, rule 1
+    of ``figure``'s block). Such a figure is never built (Ruling C4): the
+    figure delivered before stays served until the Build has built the
+    shape."""
+    from app.core import figure
+    painted = figure.INTERIM_PAINTED.format(what=figure.WHAT_SHAPE)
+    return any(text == painted for text in (fig.interim or {}).values())
+
+
+#: ``_run_assemble``'s error while the figure delivered now would still paint in-body pieces (Ruling C4).
+SHAPE_NOT_BUILT = ("Not assembled: the body shape is not built — nothing is painted in its place; the figure "
+                   "built before stays served")
+
+
 #: The plain body step's label when its rebuild is what the hair wanted in the body costs (ruling F13 a).
 HAIR_REBUILD_LABEL = "Hair · in the body → plain body rebuild ({parts})"
 #: ``cost`` note: the total is an estimate of first attempts (ruling F13 c).
@@ -290,9 +319,8 @@ def _interim_step(character_name: str, delivered, signature: str, *, rebased: bo
         views = set_jobs if rebased else base_body.dressed_view_estimate(
             character_name, delivered, signature, profile=profile) if missing else 0
         return Step("interim", _views_label("Interim texture", views, copied=missing), views)
-    shape_views = set_jobs if rebased or any(
-        base_body.shape_view(character_name, v, delivered.shape, delivered.bsig) is None
-        for v in base_body.dressed_views()) else 0
+    shape_views = set_jobs if rebased else base_body.shape_view_jobs(character_name, delivered.shape,
+                                                                     delivered.bsig)
     stages = model3d.mesh_hub_stages(character_name, delivered.shape)
     texture_views = set_jobs if delivered.texture else 0
     parts = ([f"views {shape_views}"] if shape_views else []) + list(stages) + (
@@ -344,8 +372,9 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     # meanwhile — no interim figure of its own (it would paint what that shape already carries).
     kept_serving = (figure.is_taking_out(character_name) and built is not None and bool(built.in_body_own)
                     and not figure.is_plain(built.shape) and figure._shape_stored(character_name, built.shape, bsig))
-    if delivered.interim and not kept_serving and (rebased or built is None
-                                                   or built.as_dict() != delivered.as_dict()):
+    painted_interim = _painted_interim(delivered)
+    if delivered.interim and not painted_interim and not kept_serving and (
+            rebased or built is None or built.as_dict() != delivered.as_dict()):
         steps.append(_interim_step(character_name, delivered, signature, rebased=rebased, profile=profile))
     # Ruling A11: while own-mesh pieces are in the delivered body shape (no mesh yet, or ready but not taken
     # out), the wanted shape / texture take them out — only a manual Build spends that (``figure.TAKE_OUT``).
@@ -353,10 +382,9 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
 
     meshed = not figure.is_plain(wanted.shape)
     if meshed and (rebased or not figure._shape_stored(character_name, wanted.shape, bsig)):
-        views_missing = rebased or any(base_body.shape_view(character_name, v, wanted.shape, bsig) is None
-                                       for v in base_body.dressed_views())
+        # Ruling C4: every view the shape needs is refreshed before it is meshed (a stale one re-made).
+        views = set_jobs if rebased else base_body.shape_view_jobs(character_name, wanted.shape, bsig)
         stages = model3d.mesh_hub_stages(character_name, wanted.shape)
-        views = set_jobs if views_missing else 0
         steps.append(Step("shape", "Body shape: " + " + ".join(([f"views {views}"] if views else []) + stages),
                           views + len(stages), manual=take_out))
 
@@ -382,7 +410,7 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
                      if views_missing else 0)
             steps.append(Step("texture", _views_label("Texture", views, copied=views_missing), views,
                               manual=take_out))
-    if (not any(s.name in ("interim", "texture") for s in _runnable(steps, explicit))
+    if (not painted_interim and not any(s.name in ("interim", "texture") for s in _runnable(steps, explicit))
             and _views_missing(character_name, delivered, signature)):
         # Ruling F16: the views of the figure delivered NOW, judged like the Pose tab (``dressed_image``) — a
         # view made for another figure is never "nothing to build" while the tab calls it stale.
@@ -397,7 +425,8 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
                     or garment_refit.work_count(character_name, profile=profile) > 0):
         steps.append(Step("fits", "Fits on the CPU", 0))
 
-    if _runnable(steps, explicit) or built is None or built.as_dict() != delivered.as_dict():
+    if _runnable(steps, explicit) or (not painted_interim and (built is None
+                                                               or built.as_dict() != delivered.as_dict())):
         steps.append(Step("assemble", "Assemble the figure", 0))
     return steps
 
@@ -677,6 +706,14 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     failed[step.name] = {"error": error, "item_id": step.item_id}
                 else:
                     entry.setdefault("items", {entry["item_id"]: entry["error"]})[step.item_id] = error
+                if step.name in STOP_STEPS:
+                    # Ruling C4: a refused view stops the Build here — nothing is meshed, painted or assembled
+                    # from what it left; the figure delivered before stays served.
+                    rest = [s.name for s in steps[index:] if s.name not in skipped]
+                    skipped.extend(dict.fromkeys(rest))
+                    logger.info("Build %s stopped at %s — skipped: %s", character_name, step.label,
+                                ", ".join(dict.fromkeys(rest)) or "nothing")
+                    break
             else:
                 logger.info("Build %s: %s done", character_name, step.label)
     finally:
@@ -750,12 +787,28 @@ def _outfit_model(character_name: str, signature: str) -> str:
     return "" if result.get("ok") else str(result.get("error") or "Outfit model build failed")
 
 
-def _dressed(character_name: str, wanted) -> None:
-    """The views of the figure delivered NOW for the worn outfit (missing ones only)."""
+#: ``_dressed``'s error: a dressed view stayed missing (Ruling C4).
+DRESSED_VIEWS_MISSING = "Views missing: {views} — nothing is painted or assembled without them"
+
+
+def _dressed(character_name: str, wanted) -> str:
+    """The views of the figure delivered NOW for the worn outfit (missing ones only); "" when every
+    ``dressed_views()`` view is current afterwards, else the error — the recorded refusal (a composite that
+    failed, Ruling C4) or which views are missing. Nothing is built on top of a view that stayed missing."""
     from app.core import base_body
     _profile, _w, _d, items = _now(character_name)
-    base_body.generate_dressed_images(character_name, pieces=dict(wanted.pieces), items=items,
-                                      signature=wanted.signature)
+    try:
+        base_body.generate_dressed_images(character_name, pieces=dict(wanted.pieces), items=items,
+                                          signature=wanted.signature)
+    except Exception as e:  # noqa: BLE001 — reported as the step's error below
+        logger.warning("Build %s: dressed views of %s failed: %s", character_name, wanted.signature, e)
+    _profile, _w, delivered, _items = _now(character_name)
+    missing = [v for v in base_body.dressed_views()
+               if base_body.dressed_image(character_name, v, wanted.signature, delivered.bsig, fig=delivered) is None]
+    if not missing:
+        return ""
+    reason = base_body.outfit_failure(character_name, wanted.signature)
+    return DRESSED_VIEWS_MISSING.format(views=", ".join(missing)) + (f" ({reason})" if reason else "")
 
 
 def _run_interim(character_name: str, step: Step, explicit: bool = False) -> str:
@@ -772,8 +825,7 @@ def _run_interim(character_name: str, step: Step, explicit: bool = False) -> str
         result = base_body.prepare_shape(character_name, delivered, items=items, signature=wanted.signature)
         if result is not None and not result.get("ok"):
             return str(result.get("error") or "Interim body shape build failed")
-    _dressed(character_name, wanted)
-    return _outfit_model(character_name, wanted.signature)
+    return _dressed(character_name, wanted) or _outfit_model(character_name, wanted.signature)
 
 
 def _run_shape(character_name: str, step: Step, explicit: bool = False) -> str:
@@ -816,8 +868,7 @@ def _run_hair(character_name: str, step: Step, explicit: bool = False) -> str:
 def _run_texture(character_name: str, step: Step, explicit: bool = False) -> str:
     """The views of the painted set on the shape delivered now (the paint is the assembly's)."""
     _profile, wanted, _delivered, _items = _now(character_name)
-    _dressed(character_name, wanted)
-    return ""
+    return _dressed(character_name, wanted)
 
 
 def _run_fits(character_name: str, step: Step, explicit: bool = False) -> str:
@@ -831,7 +882,9 @@ def _run_fits(character_name: str, step: Step, explicit: bool = False) -> str:
 def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> str:
     """The outfit model of the figure delivered now (whatever is built), then the assembly."""
     from app.core import base_body, garment_assembly
-    _profile, wanted, _delivered, _items = _now(character_name)
+    _profile, wanted, delivered, _items = _now(character_name)
+    if _painted_interim(delivered):
+        return SHAPE_NOT_BUILT  # Ruling C4: never the painted interim
     views = base_body.ensure_figure_views(character_name, wanted.signature)
     if views is not None and not views.get("ok"):
         return str(views.get("error") or "views failed")

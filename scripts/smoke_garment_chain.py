@@ -71,7 +71,11 @@ FRAGMENT. Demo has hair text, the world's hair method is the default
     the drafted step drops the back drafted from it, and every later image
     step of both views goes (``garment_images._drop_later``): the same 5
     renders as [1]; the old prepared mesh is deleted and rebuilt (1 mesh
-    call), the fit is re-fitted (2 decimations).
+    call), the fit is re-fitted (2 decimations). The forced front differs
+    from the old one by one background pixel (a re-render never returns
+    the same bytes): the stored back draft was made from the old front, so
+    the back is drafted anew — a stored draft is reused only for the SAME
+    front (``front_sha256``, Ruling C2 / Task 11g fix 2).
 [4] Forced mesh refused (stub adds a cylinder r 0.06, y 0.0 .. 0.3 at
     x 0.5, no crumb: 0.1357 of 0.5795 > 0.002): area share of the largest =
     (2 pi 0.125 x 0.44 + 2 pi 0.125^2) / (that + 2 pi 0.06 x 0.3 +
@@ -372,7 +376,7 @@ def main() -> int:
 
         # --- stubs -------------------------------------------------------------
         RENDERS, MESHES, DECIMATES, SCHEDULED = [], [], [], []
-        mode = {"ghost_back_bad": False, "mesh_bad": False, "mesh_raise_at": 0, "on_render": None}
+        mode = {"ghost_back_bad": False, "mesh_bad": False, "mesh_raise_at": 0, "on_render": None, "salt": 0}
         charmod.run_rembg = rembg_stub
 
         def recorder(character_name, *, output_stem, **kw):
@@ -399,6 +403,11 @@ def main() -> int:
                 out_canvas = np.full((kw["override_height"], side, 3), 128, dtype=np.uint8)
                 dy, dx = (out_canvas.shape[0] - arr.shape[0]) // 2, (side - arr.shape[1]) // 2
                 out_canvas[dy:dy + arr.shape[0], dx:dx + arr.shape[1]] = arr
+                if mode["salt"]:
+                    # [3]: a real re-render never returns the same bytes — one background pixel off by one
+                    # (below the rembg stub's mask threshold), so the stored back draft no longer follows
+                    # the new front (Ruling C2 reuses a draft only for the SAME front, ``front_sha256``).
+                    out_canvas[dy, dx] = (out_canvas[dy, dx].astype(np.int16) + mode["salt"]).astype(np.uint8)
             out = Path(str(output_stem) + ".png")
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(png(out_canvas))
@@ -563,7 +572,9 @@ def main() -> int:
         # --- [3] forced worn front ------------------------------------------------
         print("[3] forced worn front re-runs it and every later step")
         RENDERS.clear(), MESHES.clear(), DECIMATES.clear()
+        mode["salt"] = 1
         res = garments.run_garment("Demo", hid, steps="worn", view="front", force=True)
+        mode["salt"] = 0
         check("ok", res.get("ok"), True)
         check("renders", [(s, v, a) for s, v, a, _f in RENDERS], FORCED_FRONT)
         check("mesh rebuilt", len(MESHES), 1)

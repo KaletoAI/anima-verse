@@ -1354,6 +1354,14 @@ def _outfit_end(character_name: str, signature: str, stage: str, error: Optional
             _outfit_failed.pop(key, None)
 
 
+def outfit_failure(character_name: str, signature: str) -> str:
+    """The last recorded failure of a dressed-view (or model) run of
+    ``signature`` — an outfit or a shape key — or "" (the Build's reason
+    when a view stays missing, Ruling C4)."""
+    with _status_lock:
+        return str((_outfit_failed.get((character_name, signature)) or {}).get("error") or "")
+
+
 def _is_load(e: BaseException) -> bool:
     """Whether ``e`` (or an exception in its ``__cause__`` / ``__context__``
     chain) is load or the media switch: ``BackendBusyError`` /
@@ -1766,6 +1774,8 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
     if path is None:
         return None
     meta = _ref_sidecar(path)
+    if is_model_fit(meta):
+        return None  # Ruling C2: a model fit of before Task 11g is stale, never served
     on = str(meta.get("base_signature") or "")
     if not on or (on != bsig and not is_outfit_body_signature(on)):
         return None
@@ -1781,6 +1791,29 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
     if fig.bsig != bsig or fig.shape != on or mesh_items_unpainted(meta) != sorted({*fig.own, *fig.left_out}):
         return None  # made for another figure
     return path
+
+
+def is_model_fit(record: Any) -> bool:
+    """Whether a dressed back/side view's sidecar (``record``) is a MODEL fit
+    of before Task 11g (Ruling C2, fix round 2): a ``fit_gate`` record
+    without the composite's ``fit: "composite"``. Such a view is STALE — the
+    old fits came back nude and were accepted (Ylva 2026-11-13) — and never
+    counts: ``dressed_image``, ``shape_view_shas`` and the texture store's
+    ``_view_current`` refuse it; ``model_fit_remake`` re-makes it from its
+    stored draft once at boot."""
+    return isinstance(record, dict) and "fit_gate" in record and record.get("fit") != "composite"
+
+
+def stored_draft(character_name: str, view: str, signature: str, front: Optional[Path]) -> Optional[Path]:
+    """The stored draft of a two-step view (``draft_path``) while it was made
+    from ``front`` as it is now (its sidecar's ``front_sha256``) — the draft
+    a view is composited from again without a new hub job (Ruling C2); None
+    when there is none or it follows another front."""
+    draft = draft_path(character_name, view, signature)
+    if draft is None or front is None:
+        return None
+    sha = _ref_sidecar(draft).get("front_sha256")
+    return draft if sha and sha == file_sha256(front) else None
 
 
 def fit_gate_warning(attempts: int, record: Dict[str, Any], view: str = "back") -> str:
@@ -1921,7 +1954,7 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                 front: Path, base_views: Dict[str, Optional[Path]], refs_dir: Path,
                 size: Tuple[int, int], mesh_items: Optional[Dict[str, Any]] = None,
                 texture: Optional[Dict[str, Any]] = None,
-                raise_load: bool = False) -> Tuple[Optional[Path], Optional[str]]:
+                raise_load: bool = False, reuse_draft: bool = True) -> Tuple[Optional[Path], Optional[str]]:
     """A dressed back or side view in two steps (Task 11g, Ruling C1).
     ``(stored path, warning)``; raises ``OutfitError`` with the step that
     failed. ``raise_load``: the draft render raises ``BackendBusyError`` /
@@ -1945,7 +1978,11 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
        ``view_guard``, ``base_body_gates.noise_gate`` and ``framing_gate``
        against the base view.
 
-    Each draft renders into the staging dir; only the chosen one is moved
+    The STORED draft of the view comes first (Ruling C2, fix round 2): while
+    it was made from this ``front`` (``stored_draft``) it is composited again
+    — no hub job — and only a composite of it that fails its checks or a
+    gate makes ONE new draft; ``reuse_draft`` False (a forced re-render, the
+    Regenerate button) always drafts anew. Each new draft renders into the staging dir; only the chosen one is moved
     onto ``drafts/tpose_<view>_<sig>`` (the view records its content,
     ``follows_front``). Up to ``DRAFT_ATTEMPTS`` drafts: a composite that fails its checks
     (alignment IoU below ``view_composite.IOU_MIN``, coverage below
@@ -1972,7 +2009,24 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     final = refs_dir / f"{kind}_{signature}"
     attempts: List[Tuple[Path, Dict[str, Any]]] = []
     with tempfile.TemporaryDirectory(prefix=".composite_", dir=refs_dir, ignore_cleanup_errors=True) as staging:
-        for n in range(1, DRAFT_ATTEMPTS + 1):
+        first = 1
+        kept = stored_draft(character_name, view, signature, front) if reuse_draft else None
+        if kept is not None:
+            # Ruling C2: the stored draft made from this front is composited again first — no hub job; a
+            # composite that fails its checks or a gate makes ONE new draft (attempt 2).
+            stem = Path(staging) / "attempt1" / final.name
+            stem.parent.mkdir()
+            attempt = _composite_attempt(character_name, view, stem=stem, draft=kept, base_views=base_views,
+                                         extra=_composite_extra(view, bsig, base_view, kept, mesh_items, texture))
+            attempts.append(attempt)
+            first = 2
+            logger.info("Dressed %s %s (%s): stored draft composite %s (%s; guard %s, noise %s)", view,
+                        character_name, signature, "passed" if attempt[1]["ok"] else "failed",
+                        view_composite.summary(attempt[1]["composite"]), attempt[1]["guard"].get("best"),
+                        attempt[1]["noise"].get("score"))
+        for n in range(first, DRAFT_ATTEMPTS + 1):
+            if attempts and attempts[-1][1]["ok"]:
+                break
             draft_stem = Path(staging) / f"draft{n}" / f"{kind}_{signature}"
             draft_stem.parent.mkdir()
             try:
@@ -2163,7 +2217,7 @@ def follows_front(view: str, record: Dict[str, Any], draft: Optional[Path], fron
 
 
 def _view_current(record: Dict[str, Any], bsig: str, base_view: Optional[Path]) -> bool:
-    return (record.get("base_signature") == bsig and bool(record.get("base_image_sha256"))
+    return (record.get("base_signature") == bsig and bool(record.get("base_image_sha256")) and not is_model_fit(record)
             and record.get("base_image_sha256") == file_sha256(base_view))
 
 
@@ -2314,7 +2368,9 @@ def dressed_view_estimate(character_name: str, fig, signature: str, *,
     front, or one ``_adopt_texture_views`` would adopt; a back/side the
     store holds — or the adopted outfit has — following that front), else
     the front 1 job (the edit) and every other view 1 (the draft; its
-    composite onto the base view is CPU work, Task 11g). A figure without a
+    composite onto the base view is CPU work, Task 11g) — 0 while the stored
+    front stays and the view's stored draft follows it (``stored_draft``,
+    Ruling C2: composited again, no job). A figure without a
     texture copies its views from the shape: 0. A retry (the view guard's
     re-render, a re-draft after a refused composite) is not counted — the UI
     says "estimate, retries extra". Read-only."""
@@ -2324,6 +2380,12 @@ def dressed_view_estimate(character_name: str, fig, signature: str, *,
     if not missing or not fig.texture:
         return 0
     jobs = {v: 1 for v in missing}
+    if "front" not in missing:
+        # Ruling C2: a back/side whose stored draft follows the outfit's front is composited from it again.
+        front_now = find_ref_image(character_name, "tpose", signature)
+        for v in list(jobs):
+            if stored_draft(character_name, v, signature, front_now) is not None:
+                jobs[v] = 0
     tsig = fig.texture
     if not is_texture_signature(tsig):
         return sum(jobs.values())
@@ -2485,7 +2547,7 @@ def shape_view_shas(character_name: str, shape: str, bsig: str) -> Dict[str, str
     for v in dressed_views():
         path = find_ref_image(character_name, _kind(v), shape)
         meta = _ref_sidecar(path)
-        current = (path is not None and meta.get("base_signature") == bsig
+        current = (path is not None and meta.get("base_signature") == bsig and not is_model_fit(meta)
                    and meta.get("base_image_sha256") == file_sha256(find_ref_image(character_name, _kind(v), bsig)))
         out[v] = file_sha256(path) if current else ""
     return out
@@ -2807,7 +2869,7 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                             profile=profile, front=front, base_views=registrations, refs_dir=refs_dir,
                             size=(width, height), mesh_items=_ref_sidecar(front).get("mesh_items") or None,
                             texture={"texture_signature": tsig, "dress_text": texts.get(v, "")},
-                            **load_kwargs)
+                            reuse_draft=not force, **load_kwargs)
                         if warning:
                             logger.warning("Dressed %s %s (%s): %s", v, character_name, signature, warning)
                     except Exception as e:  # noqa: BLE001 — the front stays
@@ -3776,6 +3838,25 @@ def shape_view(character_name: str, view: str, shape: str, bsig: str) -> Optiona
     from app.core.model_refs import find_ref_image
     return find_ref_image(character_name, _kind(view), shape) if shape_view_shas(
         character_name, shape, bsig).get(view) else None
+
+
+def shape_view_jobs(character_name: str, shape: str, bsig: str) -> int:
+    """Hub jobs of refreshing the views of the meshed shape ``shape`` on the
+    plain body ``bsig`` before it is meshed (Ruling C4; ``prepare_shape``
+    renders what ``shape_view`` misses): 0 when every ``dressed_views()``
+    view is current; a missing front = the whole set
+    (``dressed_view_jobs`` — the others are drafted from the new front);
+    else 1 per missing back/side, 0 when its stored draft follows the stored
+    front (``stored_draft``, Ruling C2: composited again on the CPU). First
+    attempts only. Read-only."""
+    from app.core.model_refs import find_ref_image
+    missing = [v for v in dressed_views() if shape_view(character_name, v, shape, bsig) is None]
+    if not missing:
+        return 0
+    if "front" in missing:
+        return dressed_view_jobs()
+    front = find_ref_image(character_name, "tpose", shape)
+    return sum(0 if stored_draft(character_name, v, shape, front) is not None else 1 for v in missing)
 
 
 def render_shape_views(character_name: str, fig, views: List[str], *, items: Optional[list] = None,

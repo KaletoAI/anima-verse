@@ -73,11 +73,11 @@ Expected, by hand:
     (Was also: the tab's pending entry and its blocked reasons, 404/409 of paint/repaint — removed with it.)
 [2] painted -> in_body (no shape B1 yet): the switch spends nothing (0 builds, 0 jobs). The delivered figure is
     the plain body with top + skirt painted meanwhile — texture T1, exactly O1's model (was: stale "body_mode");
-    pending_changes names top and skirt {wanted in_body, delivered painted}; the Build's plan names steps [interim (O1's model records no interim notes yet — 0 jobs), shape, assemble].
-    build-current -> "started": the interim step's build call (cached — O1's model is that interim figure already,
-    T1 painted: 0 jobs), the shape step renders B1's views (front edit tpose_<B1> + back = 3 image jobs) and
-    meshes B1 (ONE hub job), the assemble step one more build call: O1's views copies of B1's (0 image jobs) —
-    TWO build calls, 0 worker runs, no T-pose pass (was: the tab's Regenerate of B1, then build-current); O1
+    pending_changes names top and skirt {wanted in_body, delivered painted}; the Build's plan names steps [shape,
+    assemble] — no interim step: a painted interim of in-body pieces is never built (Ruling C4, Task 11g fix 2;
+    was: [interim, shape, assemble] with the interim's cached build call). build-current -> "started": the shape
+    step renders B1's views (front edit tpose_<B1> + back = 3 image jobs) and meshes B1 (ONE hub job), the
+    assemble step one build call: O1's views copies of B1's (0 image jobs) — ONE build call, 0 worker runs, no T-pose pass (was: the tab's Regenerate of B1, then build-current); O1
     stands on B1 with texture "". in_body -> painted: the switch spends nothing; O1 stale "figure"; build-current
     -> "started": T1's views back from the texture store (0 image jobs), ONE build, 0 hub
     jobs, 0 worker runs — T1's painted body reused; O1 has no body_id and names T1. B1 still stored after an
@@ -280,7 +280,7 @@ def main() -> int:
         expression_regen.render_character_image = fake_render
 
         def fake_dress_view(character_name, view, *, signature, bsig, pieces, items, profile, front, base_views,
-                            refs_dir, size, mesh_items=None, texture=None):
+                            refs_dir, size, mesh_items=None, texture=None, reuse_draft=True):
             backs.append((view, signature))
             # As the real two-step view: the draft from the front (sidecar front_sha256), the fit naming the draft.
             draft = png(refs_dir / base_body.DRAFT_DIR / f"{base_body._kind(view)}_{signature}.png", (0, 0, 60))
@@ -430,12 +430,12 @@ def main() -> int:
                                                      for c in figure.pending_changes(char) if c["key"] in P1.values()),
               [("skirt", "in_body", "painted"), ("top", "in_body", "painted")])
         check("[2] the Build would mesh the shape", [st.name for st in figure_build.plan(char)],
-              ["interim", "shape", "assemble"])
+              ["shape", "assemble"])
         check("[2] nothing spent", counts(), {"images": 0, "hub": 0, "workers": 0, "builds": 0})
         check("[2] build-current", build_current(), STARTED)
-        check("[2] the shape's views, ONE hub job, two builds, no T-pose pass",
+        check("[2] the shape's views, ONE hub job, one build, no T-pose pass",
               (counts(), renders, backs, hub_jobs, passes),
-              ({"images": 3, "hub": 1, "workers": 0, "builds": 2}, [(f"tpose_{B1}", "outfit_front")],
+              ({"images": 3, "hub": 1, "workers": 0, "builds": 1}, [(f"tpose_{B1}", "outfit_front")],
                [("back", B1)], [B1], []))
         o1 = json.loads((M / f"{O1}.json").read_text())
         check("[2] O1 stands on B1, nothing painted", (o1.get("body_id"), (o1.get("figure") or {}).get("texture")),

@@ -386,8 +386,9 @@ def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, ba
         from app.core import garment_footwear
         return garment_footwear.step_done(item_id, step)
     if step in IMAGE_STEPS:
-        from app.core.garment_images import skipped_view
-        if not all(_accepted(_image(character_name, item_id, fsig, step, v))
+        from app.core.garment_images import skipped_view, stale_model_fit
+        if not all((_accepted(_image(character_name, item_id, fsig, step, v))
+                    and not stale_model_fit(character_name, item_id, fsig, step, v))
                    or skipped_view(character_name, item_id, fsig, step, v) for v in GARMENT_VIEWS):
             return False
         return step != _kind_module(kind).PAIR_STEP or _pair(character_name, item_id, kind, fsig)[0]
@@ -1681,8 +1682,9 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                     f = forced and (view is None or v == view)
                     # Checked per view: a new front of a drafted step (clothing
                     # ``worn``) drops the back it was drafted from.
-                    if not f and _accepted(_image(character_name, item_id, fsig, step, v)):
-                        continue
+                    if not f and _accepted(_image(character_name, item_id, fsig, step, v)) and \
+                            not garment_images.stale_model_fit(character_name, item_id, fsig, step, v):
+                        continue  # a model fit of before Task 11g is re-made (Ruling C2)
                     if garment_images.skipped_view(character_name, item_id, fsig, step, v):
                         continue  # an empty drafted back: no later back image
                     if step == "cutout":

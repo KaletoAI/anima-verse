@@ -78,7 +78,8 @@
  *       until its own mesh is ready"; own_mesh pending, in_body_until 'build' (its mesh ready, the next Build
  *       takes it out of the shape) → "⏳ waiting for the Build" + "own mesh ready — in the body until the next
  *       Build", building → "⏳ building" + the same line; in_body interim (no in_body_until) → the sub
- *       "shown painted until ready" (its shape not built yet);
+ *       "not in the 3D figure until its body shape is built" (its shape not built yet; Ruling C4 of Task 11g
+ *       fix round 2: nothing is painted in its place any more — was "shown painted until ready");
  *       failed "mesh — refused" → "failed — mesh — refused"; left_out "no fit yet" → "left out: no fit yet";
  *       in_body pending → "⏳ waiting for the Build" (no line under it: not interim).
  *       bodyLine(all ready, ['hair'], ['Black Blazer']) → 'plain body ✓ · shape "hair" ✓ · texture "Black Blazer" ✓';
@@ -299,7 +300,7 @@ check('[11] own mesh ready, in the body until the Build', m.wornState(row({ mode
 check('[11] ... while the Build runs', m.wornState(row({ state: 'building', mode: 'own_mesh', in_body_until: 'build' })),
   { text: '⏳ building', sub: 'own mesh ready — in the body until the next Build' });
 check('[11] in_body interim keeps its line', m.wornState(row({ state: 'interim', mode: 'in_body', interim: true })).sub,
-  'shown painted until ready');
+  'not in the 3D figure until its body shape is built');
 check('[11] failed', m.wornState(row({ state: 'failed', failure: 'mesh — refused' })),
   { text: 'failed — mesh — refused', sub: null });
 check('[11] left out', m.wornState(row({ state: 'left_out', left_out: 'no fit yet' })),

@@ -56,8 +56,26 @@ body makes every view and the stored shape count as missing):
     A14), a fourth ``start`` answers "current".
 [6] ``pieces`` fails for the trousers → texture, fits, assemble still run;
     ``failed == {"pieces": {"error": "mesh refused", "item_id":
-    "trousers"}}``. ``shape`` failing skips texture only (pieces, fits,
-    assemble run; ``skipped == ["texture"]``).
+    "trousers"}}``. ``shape`` failing STOPS the Build (Ruling C4, fix round
+    2 of Task 11g: a refused view / an unmeshed shape — nothing is built on
+    what it left): the calls end with ``shape``, ``skipped == ["pieces",
+    "texture", "fits", "assemble"]`` (every later step, in order);
+    ``STOP_STEPS == {plain_body, interim, shape, texture}``.
+[9] Ruling C4 (fix round 2 of Task 11g), same stubs. (a) coat in the body,
+    its shape not stored, nothing painted, no model: the delivered figure
+    paints the coat on the plain body (rule 1, ``_painted_interim`` True);
+    the plan is ``shape`` (views 2 = the whole set: the stub has no shape
+    view, so the front is missing -> ``dressed_view_jobs`` 2; + mesh + rig
+    = 4) and ``assemble`` 0 — no interim, no texture; the run calls
+    ``shape``, ``model no-prepare``, ``schedule`` and the model is the
+    wanted figure. (b) the same with the shape refused ("Dressed back
+    refused — …"): calls ``shape`` only, ``failed == {shape: that error}``,
+    ``skipped == ["assemble"]``, status "failed", no model; ``_run_assemble``
+    on the painted interim answers ``SHAPE_NOT_BUILT`` and calls nothing.
+    (c) a painted blouse beside the coat: plan shape 4, texture 2 (the set),
+    assemble 0; the run calls shape, dressed, model, schedule — the model's
+    texture is ``tex:ob11111111:blouse``. (d) fails on ff011edf: its plan of
+    (a) is interim, shape, assemble.
 [7] Routes through the real gate (``auth_gate_middleware`` + a stubbed
     session, as ``smoke_auth_gate``) and a real throwaway world: admin GET
     ``/characters/Kira/figure`` → 200 with every key of the brief; a player
@@ -84,6 +102,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 BASELINE = "bc07100f"
+#: The commit before fix round 2 of Task 11g (Ruling C4: no painted interim).
+C4_BASELINE = "ff011edf"
 FAILS = []
 
 
@@ -118,6 +138,7 @@ class World:
         self.calls = []
         self.block = None                     # (producer, entered Event, release Event)
         self.views = set()
+        self.made = set()                     # views the Build's ``dressed`` producer made (on the body now)
         self.model_fig = None
         if views is None:
             self.views.add(self.key(self.delivered()))
@@ -209,8 +230,11 @@ def install_stubs():
     base_body.base_refresh_plan = refresh_plan
     figure._shape_stored = lambda c, shape, bsig: W.stored(shape)
     base_body.shape_view = lambda c, v, shape, bsig: (Path("v") if W.stored(shape) else None)
+    # The views stored before count on a current plain body only; a view the Build's own ``dressed`` made
+    # counts on the plain body it was made from, an outdated one too (``made``; Ruling C4: ``_dressed`` checks).
     base_body.dressed_image = lambda c, v, sig, bsig, fig=None: (
-        Path("v") if W.base == "ok" and W.key(fig) in W.views else None)
+        Path("v") if W.key(fig) in W.views and (W.base == "ok" or (W.base != "missing" and W.key(fig) in W.made))
+        else None)
 
     def run_estimate(c, item_id, profile=None):
         if item_id == "hair_kira":
@@ -250,6 +274,7 @@ def install_stubs():
         if err:
             raise RuntimeError(err)
         W.views.add(W.key(W.delivered()))
+        W.made.add(W.key(W.delivered()))
         return {"front": "f", "back": "b"}
     base_body.generate_dressed_images = dressed
     base_body.ensure_figure_views = lambda c, sig: None
@@ -444,12 +469,11 @@ def stub_sections():
     fb.start("Kira", reason="manual")
     check("[6] shape run ended", wait_idle(fb), True)
     ran = [c for c in W.calls if c != "slot"]
-    check("[6] shape: only texture skipped", ran, [
-        "interim_shape", "dressed", "model no-prepare", "shape", "chain trousers", "refit", "model no-prepare",
-        "schedule"])
+    check("[6] shape: the Build stops there", ran, ["interim_shape", "dressed", "model no-prepare", "shape"])
     st = fb.state("Kira")
     check("[6] shape: failed", st["failed"], {"shape": {"error": "mesh backend refused", "item_id": ""}})
-    check("[6] shape: skipped", st["skipped"], ["texture"])
+    check("[6] shape: every later step skipped", st["skipped"], ["pieces", "texture", "fits", "assemble"])
+    check("[6] STOP_STEPS", fb.STOP_STEPS, frozenset({"plain_body", "interim", "shape", "texture"}))
     check("[6] DEPENDS", fb.DEPENDS, {"interim": {"plain_body"}, "shape": {"plain_body"},
                                       "pieces": {"plain_body"}, "hair": {"plain_body"},
                                       "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
@@ -458,6 +482,61 @@ def stub_sections():
 
 KEYS = {"pipeline", "humanoid", "auto_build", "status", "changes", "cost", "build", "wanted", "delivered",
         "served_url", "worn", "hair", "body"}
+
+
+def c4_section():
+    """[9] Ruling C4 (fix round 2 of Task 11g) under the [1]–[6] stubs."""
+    global W
+    import importlib.util
+    from app.core import figure_build as fb
+    print("[9] C4: no painted interim; views before the mesh; a refused view stops the Build")
+    W = World(in_body=("coat",), shape_stored=False, model=False)
+    check("[9a] delivered paints the coat (rule 1), _painted_interim", fb._painted_interim(W.delivered()), True)
+    check("[9a] plan: shape (views 2 + mesh + rig), assemble — no interim, no texture",
+          names(fb.plan("Kira", profile={})), [("shape", 4), ("assemble", 0)])
+    W.calls.clear()
+    fb.start("Kira", reason="manual")
+    check("[9a] run ended", wait_idle(fb), True)
+    check("[9a] the shape first, then the model of the built figure — nothing painted",
+          [c for c in W.calls if c != "slot"], ["shape", "model no-prepare", "schedule"])
+    check("[9a] the model is the wanted figure", W.model_fig == W.wanted().as_dict(), True)
+
+    W = World(in_body=("coat",), shape_stored=False, model=False)
+    W.fail["shape"] = "Dressed back refused — the composite of the draft failed (IoU 0.902 < 0.93)"
+    W.calls.clear()
+    fb.start("Kira", reason="manual")
+    check("[9b] run ended", wait_idle(fb), True)
+    check("[9b] a refused view: the Build stops at the shape", [c for c in W.calls if c != "slot"], ["shape"])
+    st = fb.state("Kira")
+    check("[9b] its reason is the Build's status",
+          (st["failed"], st["skipped"]),
+          ({"shape": {"error": W.fail["shape"], "item_id": ""}}, ["assemble"]))
+    check("[9b] Figure tab: failed", fb.figure_info("Kira")["status"], "failed")
+    check("[9b] nothing meshed, painted or assembled", W.model_fig, None)
+    check("[9b] _run_assemble on the painted interim: refused, no model",
+          (fb._run_assemble("Kira", fb.Step("assemble", "Assemble the figure", 0)), W.calls[-1]),
+          (fb.SHAPE_NOT_BUILT, "shape"))
+
+    W = World(in_body=("coat",), painted=("blouse",), shape_stored=False, model=False)
+    check("[9c] a painted piece: shape, texture (views 2), assemble",
+          names(fb.plan("Kira", profile={})), [("shape", 4), ("texture", 2), ("assemble", 0)])
+    W.calls.clear()
+    fb.start("Kira", reason="manual")
+    check("[9c] run ended", wait_idle(fb), True)
+    check("[9c] the blouse is still painted — on the built shape",
+          [c for c in W.calls if c != "slot"], ["shape", "dressed", "model no-prepare", "schedule"])
+    check("[9c] model: shape + blouse texture", (W.model_fig["shape"], W.model_fig["texture"]),
+          (SHAPE, f"tex:{SHAPE}:blouse"))
+
+    print(f"[9d] fails on {C4_BASELINE}: its plan painted the coat first")
+    source = subprocess.run(["git", "-C", str(ROOT), "show", f"{C4_BASELINE}:app/core/figure_build.py"],
+                            capture_output=True, text=True).stdout
+    spec = importlib.util.spec_from_loader("figure_build_old", loader=None)
+    old = importlib.util.module_from_spec(spec)
+    exec(compile(source, f"{C4_BASELINE}:figure_build.py", "exec"), old.__dict__)
+    W = World(in_body=("coat",), shape_stored=False, model=False)
+    check(f"[9d] {C4_BASELINE}: interim (paint the coat on the plain body) before the shape",
+          [s.name for s in old.plan("Kira", profile={})], ["interim", "shape", "assemble"])
 
 
 def route_section(root: Path):
@@ -577,6 +656,7 @@ def main() -> int:
         if part == "stubs":
             real_sections(root)
             stub_sections()
+            c4_section()
         else:
             route_section(root)
     if FAILS:

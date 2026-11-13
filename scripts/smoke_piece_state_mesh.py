@@ -291,10 +291,11 @@ def main() -> int:
                     path.write_bytes(b"png")
                     gs.write_record(path.with_suffix(".json"), {"accepted": True, "attempt": 1,
                                                                 "gates": {"first": {"ok": True, "hem_t": 0.65}}})
-            # The worn back follows its front (drafted): the open state can reuse it (ruling F15 i-1).
+            # The worn back follows its front (drafted): the open state can reuse it (ruling F15 i-1). It is a
+            # composite (Task 11g) — a back without ``fit: "composite"`` is a stale model fit (Ruling C2).
             worn_back = gs.garment_path("Demo", jacket, fsig, "image", step="worn", view="back")
             gs.write_record(worn_back.with_suffix(".json"), {
-                **gs.read_record(worn_back.with_suffix(".json")),
+                **gs.read_record(worn_back.with_suffix(".json")), "fit": "composite",
                 "front_sha256": base_body.file_sha256(gs.garment_path("Demo", jacket, fsig, "image", step="worn",
                                                                       view="front"))})
             prepared = gs.garment_path("Demo", jacket, fsig, "prepared")

@@ -332,12 +332,16 @@ export const IN_BODY_UNTIL_MESH = 'in the body until its own mesh is ready'
 /** ... once its mesh is ready and served, until the next Build takes it out of the shape. */
 export const IN_BODY_UNTIL_BUILD = 'own mesh ready — in the body until the next Build'
 
+/** Under an in-body piece whose body shape is not built yet: nothing is painted in its place any more (Ruling C4,
+ *  Task 11g fix round 2) — the Build meshes the shape first, the figure built before stays served meanwhile. */
+export const IN_BODY_UNTIL_SHAPE = 'not in the 3D figure until its body shape is built'
+
 /** The state column of a worn row (spec sketch) and the line under it. */
 export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | 'failure' | 'left_out' | 'note' | 'interim'
   | 'in_body_until'>, t: Tr = EN): { text: string; sub: string | null } {
   const sub = row.in_body_until === 'mesh' ? t(IN_BODY_UNTIL_MESH)
     : row.in_body_until === 'build' ? t(IN_BODY_UNTIL_BUILD)
-      : row.interim ? t('shown painted until ready') : null
+      : row.interim ? t(IN_BODY_UNTIL_SHAPE) : null
   if (row.in_body_until === 'build' && row.state !== 'failed') {
     return { text: row.state === 'building' ? t('⏳ building') : t('⏳ waiting for the Build'), sub }
   }

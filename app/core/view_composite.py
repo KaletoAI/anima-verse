@@ -20,40 +20,60 @@ The method (``composite_arrays``), on float RGBA arrays in 0..255:
 2. WARP — a smooth warp driven by the silhouettes: TV-L1 optical flow
    between the clipped signed distance fields of the two figures at
    ``FLOW_HEIGHT`` rows, Gaussian-smoothed (``FLOW_SMOOTH``) and applied to
-   the aligned draft (``_shape_flow``). The flare of a skirt (draft garment
-   bridging the base's leg gap in the hip-to-knee band, outside the base
-   figure) is left out of the flow and pasted unwarped — trouser legs and
-   sleeve cuffs are not flare (only a row whose whole leg gap the draft
-   covers counts, ``_flare``).
+   the aligned draft (``_shape_flow``). The flare of a skirt (the draft
+   bridging the base's leg gap in the hip-to-ankle band ``FLARE_BAND``,
+   outside the base figure) is left out of the flow and pasted unwarped —
+   trouser legs and sleeve cuffs are not flare (only a row whose leg gap the
+   draft covers to 95 % counts, ``_flare``). It takes no skin test (fix
+   round 2 of Task 11g): a skin-coloured skirt is flare too — Ylva's brown
+   leather skirt read as skin, was left in the flow and warped into trouser
+   legs.
 3. MASK — the garment: the registered draft's figure pixels that differ
    from the base by colour (``DE_GARMENT``, Lab ΔE76 after a light blur) or
    texture (local L-contrast differing by ``TEXTURE_DIFF``), minus skin:
    skin is modelled from the BASE's own figure (``Skin``: the chroma mode and
-   its spread) and re-centred on the draft's head; draft skin over base skin
-   is never garment, draft skin outside the base silhouette is limb drift.
+   its spread) and re-centred on the draft — on the skin both share
+   (``_shared_skin``: base skin the aligned draft repeats within
+   ``SHARED_SKIN_DE``) when there is enough of it, else on the draft's head,
+   never on the whole figure (a figure mostly in leather has the leather as
+   its mode); draft skin over base skin of the same lightness
+   (``SKIN_SAME_DL``) is never garment — a skin-coloured garment over skin is
+   (fix round 2); draft skin outside the base silhouette is limb drift.
    Opened, closed, specks dropped, small holes filled (``_garment_mask``).
 4. SEAM — colour matching at the seam only: inside a band along the mask's
    edge the draft is shifted toward the base by the local offset measured
    on the skin ring just outside it (``_seam_colour_match``).
 5. COMPOSITE — the base everywhere, the (seam-matched) draft inside the
-   feathered mask, the flare on top; the base's alpha unless the mask adds
-   figure (``_blend``).
+   mask and the flare (grown ``FLARE_FILL`` px back to the base outline),
+   feathered as ONE region; the base's alpha unless the mask adds figure
+   (``_blend``).
 
 The record (``composite_arrays`` / ``compose``): ``alignment`` (scale, dx,
 dy in base px), ``warp`` (mean / p95 / max displacement in base px inside
 the base figure), ``mask_share`` (mask / base figure), ``flare_px``,
 ``coverage`` (the put-on score of Task 11f, below), ``seam_de`` (median
 CIEDE2000 across the mask edge where the draft is skin on both sides),
-``ring_offset_de``, ``iou`` (the ALIGNMENT IoU: the registered draft figure
-against the base figure), ``composite_iou`` / ``drift_px`` (the composite's
+``ring_offset_de``, ``iou`` (the ALIGNMENT IoU, below), ``iou_full`` (the
+registered draft figure against the base figure everywhere — the check
+until fix round 2, kept for the record), ``composite_iou`` / ``drift_px`` (the composite's
 figure against the base's: IoU, mean outline distance), ``runtime_s``.
 
 The CHECKS (``ok`` / ``reasons``):
 
-* ``iou >= IOU_MIN`` (0.93) — the draft could be aligned onto the base. The
-  spike's registered drafts: 0.9535 (Rosi, a skirt that flares) .. 0.9853;
-  the model fits it replaced: 0.59 .. 0.93. Below it the draft stands
-  differently from the base (another pose, a turned figure).
+* ``iou >= IOU_MIN`` (0.93) — the draft could be aligned onto the base.
+  Measured OUTSIDE the garment (Ruling C3, fix round 2 of Task 11g:
+  ``alignment_iou``): the registered draft figure (flare left out) against
+  the base figure, the garment mask + flare grown by ``IOU_MARGIN`` px left
+  out, disagreements thinner than ``IOU_TOLERANCE`` px opened away. A
+  garment widens the silhouette by design — a long skirt or loose sleeves
+  are no misalignment — while an arm, a leg or the head that stand
+  elsewhere are. Measured 2026-11-13 on the 16 stored drafts of Anima
+  Divide: 0.9313 (Lirien) .. 1.0, Ylva's two drafts 0.9643 / 0.9510 (the
+  whole-figure IoU refused them at 0.902 / 0.901); refused: the drafts with
+  an arm raised 30° of Ylva (0.85 / 0.88), Lirien 0.835 and Kai 0.929, her
+  side view as the draft of her back 0.495. KNOWN LIMIT: an arm raised
+  ~30° on a slim figure can be absorbed by the warp (Glut 0.934, Rosi
+  0.976 — the whole-figure IoU passed them as well).
 * ``coverage >= COVERAGE_MIN`` (0.5) — the composite put on what the draft
   wears: the Task 11f put-on score of the composite against the base and the
   REGISTERED draft (``_put_on``: the draft cells differing from the base by
@@ -98,7 +118,7 @@ from app.core.log import get_logger
 logger = get_logger("view_composite")
 
 #: Bumped when the composite changes for the same inputs (recorded with every result).
-VERSION = 2
+VERSION = 3
 #: Rows of the shape flow's work images.
 FLOW_HEIGHT = 512
 #: Gaussian sigma (work px) of the flow field.
@@ -109,14 +129,28 @@ SDF_CLIP = 40.0
 DE_GARMENT = 16.0
 #: Difference of the local L contrast (7 px window) above which a draft pixel differs in texture.
 TEXTURE_DIFF = 6.0
+#: Lab L difference (after the 1.5 px blur) under which draft skin over base skin stays skin (``_garment_mask``).
+SKIN_SAME_DL = 15.0
 #: Chroma Mahalanobis radius of "skin-like".
 SKIN_MAHA = 3.0
 #: Alpha above which a pixel belongs to a figure.
 FIGURE_ALPHA = 127
-#: Hip-to-knee band (share of the base figure's height from its top) where a skirt can flare.
-FLARE_BAND = (0.40, 0.78)
-#: The alignment IoU (registered draft figure / base figure) a composite needs.
+#: Hip-to-ankle band (share of the base figure's height from its top) where a skirt can flare (to 0.78 =
+#: the knee until fix round 2 of Task 11g: Ylva's calf-long wrap skirt warped into trouser legs below it).
+FLARE_BAND = (0.40, 0.92)
+#: Px the pasted flare grows back toward the base outline (``_composite``).
+FLARE_FILL = 6
+#: Lab ΔE76 under which an aligned draft pixel over the base's (eroded) skin still is that skin
+#: (``_shared_skin``), and the share of the draft figure such pixels need to set the draft's skin mode.
+SHARED_SKIN_DE = 15.0
+SHARED_SKIN_MIN = 0.02
+#: The alignment IoU (registered draft figure / base figure, outside the garment — ``alignment_iou``) a
+#: composite needs.
 IOU_MIN = 0.93
+#: Px (base frame) the garment mask + flare are grown by before the alignment IoU leaves them out (Ruling
+#: C3), and the outline tolerance (px) under which a disagreement there does not count (``alignment_iou``).
+IOU_MARGIN = 12
+IOU_TOLERANCE = 2
 #: The put-on score a composite needs (Task 11f's limit).
 COVERAGE_MIN = 0.5
 #: The put-on measure of Task 11f (``base_body_gates`` 11f patch): work rows,
@@ -208,6 +242,30 @@ def _local_std(lum: np.ndarray, size: int = 7) -> np.ndarray:
 
 def iou(a: np.ndarray, b: np.ndarray) -> float:
     return float((a & b).sum() / max(1, (a | b).sum()))
+
+
+def alignment_iou(draft_mask: np.ndarray, base_mask: np.ndarray, garment: np.ndarray, *,
+                  margin: Optional[int] = None, tolerance: Optional[int] = None) -> float:
+    """The ALIGNMENT IoU (Ruling C3): the IoU of the registered draft figure and the base figure OUTSIDE the
+    garment — ``garment`` (the draft's garment mask and flare, base frame) grown by ``margin`` px (default
+    ``IOU_MARGIN``) — where a disagreement thinner than the outline ``tolerance`` (default
+    ``IOU_TOLERANCE``: a binary opening with a disk of that radius) does not count. A garment legitimately
+    changes the silhouette (a long wrap skirt widens it); what is left — head, hair, arms, hands, legs —
+    must line up, like the head gate leaving the composite's support out (fix round 1). The tolerance:
+    outside a garment that covers most of the figure the remainder is small, and the 1–2 px outline noise
+    along its long edge alone cost Ylva's draft 0.04. ``1 - |disagreement| / |union|`` outside the garment;
+    1.0 when nothing is left outside it."""
+    from scipy import ndimage as ndi
+    grow = IOU_MARGIN if margin is None else int(margin)
+    keep = IOU_TOLERANCE if tolerance is None else int(tolerance)
+    out = ndi.binary_dilation(garment, _disk(grow)) if grow > 0 and garment.any() else garment
+    union = (draft_mask | base_mask) & ~out
+    if not union.any():
+        return 1.0
+    differ = (draft_mask ^ base_mask) & ~out
+    if keep > 0:
+        differ = ndi.binary_opening(differ, _disk(keep))
+    return float(1.0 - differ.sum() / union.sum())
 
 
 def contour_drift(a: np.ndarray, b: np.ndarray) -> float:
@@ -317,7 +375,7 @@ class Skin:
         self.empty = False
 
     def recentred(self, labimg: np.ndarray, head: np.ndarray, figure: np.ndarray,
-                  max_shift: float = 15) -> "Skin":
+                  max_shift: float = 15, shared: Optional[np.ndarray] = None) -> "Skin":
         """The same spread around the draft's own skin mode: its ``head``'s
         (a bald head, the spike's rule) when that mode is within
         ``max_shift`` and skin-bright (median L at least this model's 10th
@@ -325,14 +383,24 @@ class Skin:
         2026-11-12, hair chroma (2.5, 4.9) against his skin (10.2, 22.0)),
         else the mode of the whole draft ``figure`` when it is within
         ``max_shift`` (a draft whose skin is warmer than its base's), else
-        this model."""
+        this model. ``shared`` (fix round 2 of Task 11g): the draft's pixels
+        that still look like the base's skin there (``_shared_skin``) — tried
+        between the head and the whole figure, because a figure whose mode
+        is a skin-coloured garment (Ylva's brown leather wrap skirt
+        2026-11-13: the whole figure's mode was the leather, so the skirt
+        read as skin — no flare, the skirt warped into trouser legs) must
+        not become the skin; it needs ``SHARED_SKIN_MIN`` of the figure."""
         out = Skin.__new__(Skin)
         out.empty, out.icov, out.hi = self.empty, self.icov, 99.0
         out.centre, out.lo = self.centre, self.lo
         out.lum_median, out.lum_p10 = self.lum_median, self.lum_p10
         if self.empty:
             return out
-        for region, bright in ((head, True), (figure, False)):
+        regions = [(head, True)]
+        if shared is not None and shared.sum() >= SHARED_SKIN_MIN * max(1, figure.sum()):
+            regions.append((shared, False))
+        regions.append((figure, False))
+        for region, bright in regions:
             other = Skin(labimg, region)
             if other.empty or np.linalg.norm(other.centre - self.centre) >= max_shift:
                 continue
@@ -351,6 +419,16 @@ class Skin:
         return (np.sqrt(m) < SKIN_MAHA) & (lum > self.lo) & (lum < self.hi)
 
 
+def _shared_skin(lb: np.ndarray, la: np.ndarray, base_mask: np.ndarray, aligned: np.ndarray,
+                 skin_b: "Skin") -> np.ndarray:
+    """The aligned draft's pixels over the base's skin (the base figure eroded by 3 px, ``skin_b``) that
+    differ from it by less than ``SHARED_SKIN_DE`` (Lab ΔE76) — the bare skin both images share (arms,
+    shoulders, feet), whatever the garment's colour (``Skin.recentred``)."""
+    from scipy import ndimage as ndi
+    inner = ndi.binary_erosion(base_mask, _disk(3)) & (aligned[..., 3] > 240)
+    return inner & skin_b.like(lb) & (np.linalg.norm(la - lb, axis=-1) < SHARED_SKIN_DE)
+
+
 def _garment_mask(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_mask: np.ndarray,
                   skin_b: Skin, skin_d: Skin, *, opening: int = 1,
                   min_component: int = 150) -> Tuple[np.ndarray, np.ndarray]:
@@ -363,8 +441,10 @@ def _garment_mask(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_ma
     tex = np.abs(_local_std(ld[..., 0]) - _local_std(lb[..., 0]))
     cand = dw_mask & ((de > DE_GARMENT) | (tex > TEXTURE_DIFF))
     skin_draft = skin_d.like(lds)
-    # Draft skin over base skin is never garment (arm drift, tone shift).
-    cand &= ~(skin_draft & skin_b.like(lbs) & (de < 30) & (tex < TEXTURE_DIFF))
+    # Draft skin over base skin is never garment (arm drift, tone shift) — unless it is much darker or
+    # lighter than the base there (``SKIN_SAME_DL``): a skin-coloured garment (brown leather) is not skin.
+    cand &= ~(skin_draft & skin_b.like(lbs) & (de < 30) & (tex < TEXTURE_DIFF)
+              & (np.abs(lds[..., 0] - lbs[..., 0]) < SKIN_SAME_DL))
     # Draft skin OUTSIDE the base silhouette is limb drift; inside it a bare
     # part may replace a base garment (shoes -> bare feet) and stays.
     cand &= ~(skin_draft & ~base_mask)
@@ -387,12 +467,16 @@ def _garment_mask(base: np.ndarray, dw: np.ndarray, base_mask: np.ndarray, dw_ma
     return m & dw_mask, de
 
 
-def _flare(aligned: np.ndarray, aligned_mask: np.ndarray, base_mask: np.ndarray, skin_d: Skin) -> np.ndarray:
-    """The draft's flare (a skirt) on the aligned draft: non-skin draft
-    figure outside the base silhouette, in the hip-to-knee band, central,
-    near the base or between its legs — only in rows where the draft covers
-    the WHOLE leg gap of the base (a skirt bridges it; trouser legs that
-    merely stand closer than the base's, and sleeve cuffs, do not)."""
+def _flare(aligned: np.ndarray, aligned_mask: np.ndarray, base_mask: np.ndarray) -> np.ndarray:
+    """The draft's flare (a skirt) on the aligned draft: draft figure
+    outside the base silhouette, in the hip-to-ankle band (``FLARE_BAND``),
+    central, near the base or between its legs — only in rows where the
+    draft covers the WHOLE leg gap of the base (a skirt bridges it; trouser
+    legs that merely stand closer than the base's, and sleeve cuffs, do
+    not). No skin test (fix round 2 of Task 11g): a skin-coloured skirt
+    (brown leather) bridges the gap as well, and legs that stand together
+    instead of apart leave the base's legs uncovered — the alignment IoU
+    refuses that draft."""
     from scipy import ndimage as ndi
     t, b, left, right = _bbox(base_mask)
     height = b - t
@@ -414,12 +498,10 @@ def _flare(aligned: np.ndarray, aligned_mask: np.ndarray, base_mask: np.ndarray,
         rgt = np.nonzero(row[ci:])[0]
         if len(lft) and len(rgt):
             gap[y, lft[-1] + 1:ci + rgt[0]] = True
-    lab_aligned = _lab(aligned)
-    not_skin = ~skin_d.like(lab_aligned) & aligned_mask
     rows_gap = gap.sum(1)
-    bridged = (rows_gap > 0) & ((gap & not_skin).sum(1) >= 0.95 * rows_gap)
+    bridged = (rows_gap > 0) & ((gap & aligned_mask).sum(1) >= 0.95 * rows_gap)
     bridged = ndi.binary_opening(bridged, np.ones(9, bool))
-    flare = (aligned_mask & ~skin_d.like(lab_aligned) & ~ndi.binary_dilation(base_mask, _disk(4)) & band & central
+    flare = (aligned_mask & ~ndi.binary_dilation(base_mask, _disk(4)) & band & central
              & (near | between) & bridged[:, None])
     return ndi.binary_opening(flare, _disk(2))
 
@@ -451,19 +533,27 @@ def _seam_colour_match(base: np.ndarray, dw: np.ndarray, mask: np.ndarray, skin_
 
 def _blend(base: np.ndarray, dw: np.ndarray, mask: np.ndarray, flare_rgba: np.ndarray,
            flare: np.ndarray) -> np.ndarray:
-    """The base with the draft inside the (1.2 px feathered) mask and the
-    flare on top; alpha: the base's, raised where the mask adds figure."""
+    """The base with the draft inside the (1.2 px feathered) mask, the flare
+    with it; alpha: the base's, raised where the mask adds figure.
+
+    The flare and the mask are ONE pasted region, feathered once: each pixel
+    takes the draft (``dw``) or the flare's source (``flare_rgba``), whichever
+    region is nearer. Feathered apart, the two half-weights met where the
+    flare touches the garment over a leg and left a half-transparent line
+    down the skirt (alpha ~0.7, fix round 2 of Task 11g)."""
     from scipy import ndimage as ndi
-    m = ndi.gaussian_filter(mask.astype(float), 1.2)
-    m = np.where(ndi.binary_dilation(mask, _disk(2)), m, 0)
-    out = base.copy()
-    out[..., :3] = base[..., :3] * (1 - m[..., None]) + dw[..., :3] * m[..., None]
-    out[..., 3] = base[..., 3] * (1 - m) + dw[..., 3] * m
-    out[..., 3] = np.where(mask & (base[..., 3] > FIGURE_ALPHA), np.maximum(out[..., 3], base[..., 3]), out[..., 3])
+    region = mask | flare
+    source = dw
     if flare.any():
-        f = ndi.gaussian_filter(flare.astype(float), 1.0)
-        out[..., :3] = out[..., :3] * (1 - f[..., None]) + flare_rgba[..., :3] * f[..., None]
-        out[..., 3] = np.maximum(out[..., 3], flare_rgba[..., 3] * f)
+        nearer_flare = ndi.distance_transform_edt(~flare) < ndi.distance_transform_edt(~mask) if mask.any() \
+            else np.ones_like(flare)
+        source = np.where(nearer_flare[..., None], flare_rgba, dw)
+    m = ndi.gaussian_filter(region.astype(float), 1.2)
+    m = np.where(ndi.binary_dilation(region, _disk(2)), m, 0)
+    out = base.copy()
+    out[..., :3] = base[..., :3] * (1 - m[..., None]) + source[..., :3] * m[..., None]
+    out[..., 3] = base[..., 3] * (1 - m) + source[..., 3] * m
+    out[..., 3] = np.where(mask & (base[..., 3] > FIGURE_ALPHA), np.maximum(out[..., 3], base[..., 3]), out[..., 3])
     return out
 
 
@@ -579,15 +669,20 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str
     head = aligned_mask & (aligned[..., 3] > 240)
     top, bottom, _l, _r = _bbox(aligned_mask)
     head[top + int(0.09 * (bottom - top)):] = False
-    skin_d = skin_b.recentred(_lab(aligned), head, aligned_mask & (aligned[..., 3] > 240))
-    flare_aligned = _flare(aligned, aligned_mask, bm, skin_d)
+    la = _lab(aligned)
+    skin_d = skin_b.recentred(la, head, aligned_mask & (aligned[..., 3] > 240),
+                              shared=_shared_skin(lb, la, bm, aligned, skin_b))
+    flare_aligned = _flare(aligned, aligned_mask, bm)
     v, u = _shape_flow(bm, _largest(aligned_mask & ~flare_aligned))
     dw = _apply_flow(aligned, v, u)
     dwm = figure_mask(dw)
     mask, _de = _garment_mask(base, dw, bm, dwm, skin_b, skin_d, opening=spec["opening"],
                               min_component=spec["min_component"])
-    # The flare only where it touches the garment.
-    flare = flare_aligned & ~bm
+    # The flare only where it touches the garment. Pasted up to the base outline (``FLARE_FILL``): the 4 px
+    # ring ``_flare`` leaves out is draft figure too — without it the base's background showed as a grey line
+    # between the flare and the garment over the legs (Ylva 2026-11-13).
+    flare = (ndi.binary_dilation(flare_aligned, _disk(FLARE_FILL)) if flare_aligned.any() else flare_aligned) \
+        & aligned_mask & ~bm
     fl, fn = ndi.label(flare)
     if fn:
         touch = np.unique(fl[ndi.binary_dilation(mask, _disk(3)) & flare])
@@ -609,7 +704,8 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str
         "coverage": coverage,
         "seam_de": None if seam is None else round(seam, 2),
         "ring_offset_de": round(ring_offset, 2),
-        "iou": round(iou(dwm & ~flare, bm), 4),
+        "iou": round(alignment_iou(dwm & ~flare, bm, mask | flare), 4),
+        "iou_full": round(iou(dwm & ~flare, bm), 4),
         "composite_iou": round(iou(cm, bm), 4),
         "drift_px": round(contour_drift(cm, bm), 2),
     })

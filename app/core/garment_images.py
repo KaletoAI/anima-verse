@@ -124,6 +124,7 @@ Blocking — called from the garment run's worker thread, which holds
 (``garment_store.start/end``) belongs to that run as well.
 """
 import io
+import re
 import shutil
 import tempfile
 from contextlib import contextmanager
@@ -537,7 +538,25 @@ def _follows_front(character_name: str, item_id: str, fsig: str, step: str, back
                      or _follows_front(character_name, item_id, source_fsig, step, source)))
     front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
     sha = record.get("front_sha256")
+    if record.get("fit") != "composite":
+        return False  # Ruling C2: a model fit of before Task 11g is stale (``stale_model_fit``)
     return bool(sha) and _accepted(front) and sha == file_sha256(front)
+
+
+def stale_model_fit(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
+    """Whether the accepted ``view`` of ``step`` is a drafted back made by the
+    MODEL fit of before Task 11g (Ruling C2, fix round 2): accepted, not a
+    copy of the closed state's back (``copied_from``), no ``fit:
+    "composite"``. Never counted as done (``garments``); re-made from its
+    stored draft (``remake_model_fit_back``, once at boot) or rendered anew."""
+    from app.core.garment_store import garment_path, read_record
+    if view != "back" or not _drafted(_kind_module(item_id), step):
+        return False
+    path = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
+    if not _accepted(path):
+        return False
+    record = read_record(path.with_suffix(".json"))
+    return not isinstance(record.get("copied_from"), dict) and record.get("fit") != "composite"
 
 
 def _open_state(character_name: str, item_id: str, profile: Dict[str, Any], state: Optional[str]) -> bool:
@@ -675,7 +694,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     refs_dir = get_model_refs_dir(character_name)
     final.parent.mkdir(parents=True, exist_ok=True)
     if drafted:
-        return _drafted_back(character_name, item_id, fsig, step, kind, profile=profile, base=base,
+        return _drafted_back(character_name, item_id, fsig, step, kind, profile=profile, base=base, force=force,
                              refs_dir=refs_dir, final=final, pair_check=pair_check)
     source_step = kind.EDIT_STEPS[step]["source"]
     if source_step == "base":
@@ -927,9 +946,15 @@ def _with_registration(record: Dict[str, Any], registration: Dict[str, Any]) -> 
     return out
 
 
+class StoredDraftUnusable(RuntimeError):
+    """``_drafted_back(stored_only=True)``: no stored draft made from the current front, or its composite
+    did not pass — a new draft (a hub job) would be needed."""
+
+
 def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind, *,
                   profile: Dict[str, Any], base: Path, refs_dir: Path, final: Path,
-                  pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None) -> Path:
+                  pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+                  stored_only: bool = False, force: bool = False) -> Path:
     """The back of a drafted step (module docstring): up to ``ATTEMPTS``
     DRAFTs from the accepted front, each COMPOSITED onto the base back on the
     CPU (``view_composite``, rule "piece") and — when the composite passes
@@ -938,7 +963,14 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     that fails its checks is refused without a gate and makes a new draft.
     ``MissingInput`` without an accepted front, ``RuntimeError`` when a draft
     renders nothing, ``GateRefused`` after the drafts (the records carry the
-    composite's numbers)."""
+    composite's numbers).
+
+    The STORED draft comes first (Ruling C2, fix round 2): while it was made
+    from the current front (its sidecar's ``front_sha256``) it is composited
+    again as attempt 1 — no hub job — and only when that fails is ONE new
+    draft rendered (attempt 2). ``stored_only`` (the boot re-make of a model
+    fit, ``remake_model_fit_back``): never renders — ``StoredDraftUnusable``
+    instead."""
     from app.core import base_body, view_composite
     from app.core.base_body import file_sha256
     from app.core.garment_store import garment_path, read_record, write_record
@@ -1008,15 +1040,28 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     common = {**base_body._dress_common("back", pieces={}, items=[], profile=mesh_profile, size=_tpose_size()),
               "raise_load": True}
     draft_stem = draft_path(character_name, item_id, fsig, step).with_suffix("")
-    prompt = kind.draft_prompt(character_name, step, profile=profile, item_id=item_id)
+    stored = draft_path(character_name, item_id, fsig, step)
+    # ``force`` (Regenerate): a new draft, never the stored one again.
+    reuse = (not force and stored.is_file()
+             and read_record(stored.with_suffix(".json")).get("front_sha256") == front_sha)
+    if stored_only and not reuse:
+        raise StoredDraftUnusable(f"The {step} back has no stored draft made from the current front")
     records: List[Dict[str, Any]] = []
     for attempt in range(1, ATTEMPTS + 1):
-        # Every attempt drafts anew into the one draft file: the stored
-        # draft is the one the last attempt was composited from.
-        draft = base_body.render_draft(
-            character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
-            profile=profile, common=common,
-            sidecar_extra={"garment": {**meta, "attempt": attempt, "stage": "draft"}, "front_sha256": front_sha})
+        if attempt == 1 and reuse:
+            draft = stored   # Ruling C2: the stored draft of this front, composited again — no hub job
+        elif stored_only:
+            raise StoredDraftUnusable(f"The composite of the stored {step} back draft did not pass: "
+                                      + "; ".join(str(r) for r in (records[-1].get("reasons") or [])))
+        else:
+            # Every new attempt drafts into the one draft file: the stored
+            # draft is the one the last attempt was composited from.
+            prompt = kind.draft_prompt(character_name, step, profile=profile, item_id=item_id)
+            draft = base_body.render_draft(
+                character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
+                profile=profile, common=common,
+                sidecar_extra={"garment": {**meta, "attempt": attempt, "stage": "draft"},
+                               "front_sha256": front_sha})
         if draft is None:
             raise RuntimeError(f"The {step} back draft rendered nothing")
         draft = Path(draft)
@@ -1118,3 +1163,97 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
     logger.info("Garment cut-out %s %s: side %d -> %d (%s)", character_name, view, side, final_side,
                 upscale.get("status"))
     return target
+
+
+#: A final back image of an image step: ``{item}_{fsig}_{step}_back.png``.
+_FINAL_BACK_RE = re.compile(r"(?P<item>[A-Za-z0-9][A-Za-z0-9_-]*)_(?P<fsig>[0-9a-f]{12})_(?P<step>[a-z]+)_back\.png")
+
+
+def remake_model_fit_back(character_name: str, item_id: str, fsig: str, step: str) -> str:
+    """Re-make ONE accepted worn back that the MODEL fit made (``stale_model_fit``;
+    Ruling C2, ``model_fit_remake``): the stored draft of the current front composited
+    again and gated (``_drafted_back(stored_only=True)`` — never a render) onto the base
+    back the group was made on (its base copy, ``garment_source.base_copy``; the
+    character's current base back for a group without one). ``"remade"``, or
+    ``"removed: <why>"``: the back and the later back steps are dropped
+    (``_drop_later``) and the chain renders them on its next run. ``"current"`` when it
+    is no stale model fit. A MATERIALISED back (``copied_from`` the source fsig,
+    ``garment_source.materialize``) has no draft of its own: ``_remake_copy``."""
+    from app.core import base_body, garment_source
+    from app.core.garment_store import garment_path, read_record
+    from app.core.model_refs import find_ref_image, get_model_refs_dir
+    from app.models.character import get_character_profile
+    if not stale_model_fit(character_name, item_id, fsig, step, "back"):
+        return "current"
+    final = garment_path(character_name, item_id, fsig, "image", step=step, view="back")
+    copied = read_record(final.with_suffix(".json")).get("copied_from")
+    if isinstance(copied, str) and copied:
+        return _remake_copy(character_name, item_id, fsig, step, copied)
+    try:
+        profile = get_character_profile(character_name) or {}
+        base = garment_source.base_copy(character_name, item_id, fsig, "back")
+        if not base.is_file():
+            base = find_ref_image(character_name, base_body._kind("back"),
+                                  base_body.base_signature(character_name, profile=profile))
+        if base is None:
+            raise base_body.MissingInput(base_body.BASE_IMAGES_MISSING)
+        _drafted_back(character_name, item_id, fsig, step, _kind_module(item_id), profile=profile, base=base,
+                      refs_dir=get_model_refs_dir(character_name), final=final, stored_only=True)
+        return "remade"
+    except Exception as e:  # noqa: BLE001 — the stale back never stays
+        _drop_later(character_name, item_id, fsig, step, "back", inclusive=True)
+        return f"removed: {e}"
+
+
+def _remake_copy(character_name: str, item_id: str, fsig: str, step: str, source_fsig: str) -> str:
+    """A materialised stale back (``remake_model_fit_back``): copied again from its source group's back once
+    that is re-made (a composite — the copy keeps ``copied_from`` like ``garment_source.materialize``; the
+    later back steps of the copy go stale), else dropped with the later back steps like any refused re-make."""
+    from app.core.garment_store import garment_path, read_record, write_record
+    final = garment_path(character_name, item_id, fsig, "image", step=step, view="back")
+    try:
+        source = garment_path(character_name, item_id, source_fsig, "image", step=step, view="back")
+    except ValueError:
+        source = None
+    if source is None or not _accepted(source) or stale_model_fit(character_name, item_id, source_fsig, step,
+                                                                  "back"):
+        _drop_later(character_name, item_id, fsig, step, "back", inclusive=True)
+        return f"removed: its source back ({source_fsig}) was not re-made"
+    shutil.copyfile(source, final)
+    write_record(final.with_suffix(".json"), {**read_record(source.with_suffix(".json")), "copied_from": source_fsig})
+    _drop_later(character_name, item_id, fsig, step, "back")
+    return "remade"
+
+
+def remake_model_fit_backs(character_name: str) -> Dict[str, str]:
+    """``remake_model_fit_back`` of every stale worn back of the character: ``{file: outcome}``.
+    Under the character's garment run lock (``garment_store.char_lock``): no chain run of the
+    character changes its files meanwhile."""
+    from app.core.garment_store import PART_DIRS, char_lock, garments_dir
+    folder = garments_dir(character_name) / PART_DIRS["image"]
+    out: Dict[str, str] = {}
+    if not folder.is_dir():
+        return out
+    with char_lock(character_name):
+        return _remake_backs_locked(character_name, folder, out)
+
+
+def _remake_backs_locked(character_name: str, folder: Path, out: Dict[str, str]) -> Dict[str, str]:
+    from app.core.garment_store import read_record
+
+    def materialised(path: Path) -> bool:
+        return isinstance(read_record(path.with_suffix(".json")).get("copied_from"), str)
+    # The rendered backs first: a materialised copy follows its source group's re-made back (``_remake_copy``).
+    for path in sorted(folder.iterdir(), key=lambda p: (materialised(p), p.name)):
+        match = _FINAL_BACK_RE.fullmatch(path.name)
+        if match is None:
+            continue
+        try:
+            outcome = remake_model_fit_back(character_name, match.group("item"), match.group("fsig"),
+                                            match.group("step"))
+        except Exception as e:  # noqa: BLE001 — e.g. an item of an unknown kind: left as it is
+            logger.warning("Model fit back %s of %s not re-made: %s", path.name, character_name, e)
+            continue
+        if outcome != "current":
+            out[path.name] = outcome
+    return out

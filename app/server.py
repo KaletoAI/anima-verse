@@ -759,6 +759,17 @@ async def lifespan(app: FastAPI):
     except Exception as _fgd:
         logger.warning("Removed fit globs clean-up failed (retried at the next start): %s", _fgd)
 
+    # Re-make (same plan, Task 11g fix round 2, Ruling C2): the dressed
+    # back/side views and worn backs the old MODEL fit made are stale (they
+    # came back nude); readers refuse them, and once per world a background
+    # thread composites each again from its stored draft on the CPU — no hub
+    # job — or removes it (drafted anew by the next Build).
+    try:
+        from app.core.model_fit_remake import start_once as _remake_model_fits
+        _remake_model_fits()
+    except Exception as _mfr:
+        logger.warning("Model fit re-make not started (retried at the next start): %s", _mfr)
+
     logger.info("Initializing TTS Service...")
     tts_service = initialize_tts_service()
 

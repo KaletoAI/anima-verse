@@ -109,6 +109,12 @@ The other backs change nothing outside the jacket -> worn gate ok (outside 0).
     back accepted before stays byte for byte).
 [5] a new accepted front drops the worn back (+ its ghost); a back whose
     front_sha256 is not the current front is not served from the cache.
+    Fix round 2 (Ruling C2): the stub's new front has the same bytes, so the
+    stored draft follows it and the back is composited from it again — no
+    draft render, the back accepted with fit "composite"; a stored draft
+    whose front_sha256 names another front is drafted anew (worn bd1); a
+    back record naming another front is re-made from the stored draft (no
+    render) and follows the front again.
 [6] fsig: version 2 differs from the same inputs under version 1.
 [7] the family pick (service.prompt_for_backend, payload prompt_by_family;
     sample prompts, no caller of this repo sends one since the fit is gone):
@@ -473,13 +479,27 @@ def main() -> int:
         del calls[:]
         plan[("worn", "back")] = [BACK_OK]
         garment_images.run_edit_step("Demo", jid, fsig, "worn", "back")
-        check("back re-drafted", [k for k, _kw in calls], ["worn bd1"])
+        # Fix round 2 (Ruling C2): the stub's new front has the old front's bytes, so the stored draft
+        # follows it and is composited again — no draft render.
+        check("back re-made from the stored draft of the same front", [k for k, _kw in calls], [])
+        check("re-made back accepted, composite", (back_final.exists(),
+              gs.read_record(back_final.with_suffix(".json")).get("fit")), (True, "composite"))
+        draft = garment_images.draft_path("Demo", jid, fsig, "worn")
+        gs.write_record(draft.with_suffix(".json"), {**gs.read_record(draft.with_suffix(".json")),
+                                                      "front_sha256": "1" * 64})
+        garment_images.run_edit_step("Demo", jid, fsig, "worn", "front", force=True)
+        del calls[:]
+        plan[("worn", "back")] = [BACK_OK]
+        garment_images.run_edit_step("Demo", jid, fsig, "worn", "back")
+        check("a draft of another front: back re-drafted", [k for k, _kw in calls], ["worn bd1"])
         rec = gs.read_record(back_final.with_suffix(".json"))
         gs.write_record(back_final.with_suffix(".json"), {**rec, "front_sha256": "0" * 64})
         del calls[:]
         plan[("worn", "back")] = [BACK_OK]
         garment_images.run_edit_step("Demo", jid, fsig, "worn", "back")
-        check("stale back not served from the cache", [k for k, _kw in calls], ["worn bd1"])
+        check("stale back not served from the cache — re-made from its stored draft", [k for k, _kw in calls], [])
+        check("re-made back follows the front again",
+              gs.read_record(back_final.with_suffix(".json")).get("front_sha256") != "0" * 64, True)
         del calls[:]
         garment_images.run_edit_step("Demo", jid, fsig, "worn", "back")
         check("current back served from the cache", calls, [])

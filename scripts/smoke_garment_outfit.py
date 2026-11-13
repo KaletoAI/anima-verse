@@ -353,7 +353,12 @@ def main() -> int:
                             "prompt": kw.get("bare_prompt") or "", "extra": dict(kw.get("sidecar_extra") or {})})
             target = Path(str(output_stem) + ".png")
             target.parent.mkdir(parents=True, exist_ok=True)
-            Image.new("RGB", (8, 8), colour_of(target.stem)).save(target)
+            im = Image.new("RGB", (8, 8), colour_of(target.stem))
+            # A real render never returns the same bytes twice: one corner pixel carries the render's number, so
+            # a re-rendered front is a NEW front and the back is drafted from it anew (a stored draft is reused
+            # only for the same front — Ruling C2, Task 11g fix 2).
+            im.putpixel((7, 7), (len(RENDERS) % 256, 0, 0))
+            im.save(target)
             profile = kw.get("mesh_input_profile") or get_character_profile(character_name)
             token = model_refs.mesh_items_token(character_name, equipped_pieces, profile)
             meta = {"equipped_pieces": equipped_pieces or {}, "equipped_items": equipped_items or [],

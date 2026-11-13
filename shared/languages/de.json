@@ -4636,7 +4636,7 @@
     "plain body: none yet": "Grundkörper: noch keiner",
     "plain body: older prompts": "Grundkörper: ältere Prompts",
     "shape": "Form",
-    "shown painted until ready": "bis zur Fertigstellung aufgemalt gezeigt",
+    "not in the 3D figure until its body shape is built": "erst nach dem Bau der Körperform in der 3D-Figur",
     "stored, not needed now": "gespeichert, gerade nicht gebraucht",
     "then Build runs automatically": "danach läuft Build automatisch",
     "⏳ HairDeck · {cost}": "⏳ HairDeck · {cost}",
