@@ -130,6 +130,10 @@ GHOST_NEGATIVE = ("person", "skin", "head", "arms", "hands", "legs", "feet", "ma
 #: ``ghost`` 5 (Ruling A27, 2026-11-13): a ghost refused by its hem alone
 #: within ``garment_gates.HEM_SNAP_MAX`` is snapped to the worn hem
 #: (``hem_snap``) — the attempts refused under 4 are judged again first.
+#: ``ghost`` 6 (Ruling A32, 2026-11-13): ``skin_left`` counts a pixel as skin
+#: only when it is nearer the skin than the piece in the same light, off the
+#: ghost's outline (``garment_gates.skin_pixels``) — the attempts refused
+#: under 5 are judged again first.
 GATE_VERSIONS: Dict[str, int] = {"worn": WORN_GATE_VERSION, "ghost": GHOST_GATE_VERSION}
 #: The steps whose ACCEPTED images are re-gated from their files when their
 #: record predates the step's gate version (``garment_images.regate_accepted``,

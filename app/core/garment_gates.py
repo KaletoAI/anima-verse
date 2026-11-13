@@ -275,7 +275,12 @@ def occupied_zones(slots: Iterable[str]) -> Tuple[str, ...]:
 # is the hem, within ``HEM_SNAP_MAX``, is snapped to the worn hem on the CPU
 # (the block "Hem snap" after ``hem_deviation``); attempts stored under
 # version 4 are judged again by the chain before it renders.
-GHOST_GATE_VERSION = 5
+# Ghost gate version 6 (Ruling A32, 2026-11-13): ``skin_left`` counts a
+# pixel as skin only when it is nearer the skin than the piece in the
+# same light, and never on the ghost's own outline — the block "Skin or
+# piece" below ``SKIN_LEFT_MAX``; the attempts refused under 5 are judged
+# again by the chain before it renders.
+GHOST_GATE_VERSION = 6
 CLOTH_TOP_DY_WARN = 0.0055  # |top edge offset| / Hb from which it is recorded as a warning
 CLOTH_CENTRE_DX_WARN = 0.007  # |centre offset| / Hb from which it is recorded as a warning
 CLOTH_W_RATIO_MIN = 0.80
@@ -290,6 +295,31 @@ CLOTH_W_RATIO_MAX = 1.25
 SKIN_SAMPLE_ROWS = (0.60, 0.66)
 SKIN_DRGB = 30.0            # a ghost pixel this close to the sampled skin is skin
 SKIN_LEFT_MAX = 0.005       # skin outside the garment region / garment area
+# Skin or piece (Ruling A32, 2026-11-13). Ylva's laced linen blouse
+# (item_laced_linen_blouse, fsig a4166095ab54): both ghost backs show the
+# cream blouse alone, no skin to the eye, and were refused "skin left"
+# 0.0151 / 0.0129 (605 / 517 px over the region's 40006). The skin sample
+# is (174, 122, 98), the worn region's median (``piece_colour``) (210,
+# 195, 178); the flagged pixels' median (135, 114, 100) is the cream in
+# shadow (the inside of a sleeve, the underside of the peplum: 0.56 of the
+# piece's brightness), mean |ΔRGB| 16 to the skin but 78 to the lit piece —
+# no plain RGB comparison tells them apart (0 of 605 nearer the piece). In
+# the SAME light they are: a pixel is compared with each colour scaled to
+# its own brightness (``shade_distance``): 6.2 to the piece, 12.8 to the
+# skin. And 142 / 155 of them lay on the ghost silhouette's outermost
+# pixel, blended into the background. So a ghost pixel beyond the region
+# is skin only when it is within ``SKIN_DRGB`` of the skin (as before),
+# at least as near the skin as the piece in the same light (a tie counts
+# as skin: a piece in the skin's own hue cannot be told from it, the test
+# before), and not within ``GHOST_RIM`` of the ghost's outline. Ylva:
+# rim 142 / 155, shaded piece 348 / 319, still counted 115 / 43 px (warm
+# shading where the sleeve meets the body and under the peplum) -> 0.00287
+# / 0.00107; leftover skin (an arm, a neck) is lit skin and stays skin
+# (scripts/smoke_ghost_skin_vs_garment.py).
+# GHOST_RIM reuses GARMENT_OPEN, the width the worn region already drops
+# as "thin outline fringes": 1 px at 1024 — the outermost pixel, where the
+# matte's edge mixes the piece with the background.
+GHOST_RIM = GARMENT_OPEN    # px @1536 of the ghost's outline left out of skin_left
 CLOTH_OUTSIDE_MAX = 0.05    # largest ghost part beyond CLOTH_FAR / garment area (and the near warning)
 CLOTH_FAR = 0.02            # Hb: ghost pixels farther than this from the region form ``outside``'s parts
 NECKLINE_MIN_DEPTH = 0.012  # notch depth / Hb from which the garment has a neckline
@@ -687,6 +717,44 @@ def back_follows_front(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) ->
     return reasons
 
 
+def piece_colour(worn_rgb, region) -> Optional[np.ndarray]:
+    """The piece's own colour: the median RGB of the worn view's pixels in
+    the garment ``region`` (``garment_region``); None without a worn image
+    or an empty region (block "Skin or piece")."""
+    if worn_rgb is None:
+        return None
+    region = np.asarray(region, dtype=bool)
+    if not region.any():
+        return None
+    return np.median(np.asarray(worn_rgb, dtype=np.float32)[..., :3][region], 0)
+
+
+def shade_distance(rgb, colour) -> np.ndarray:
+    """Per pixel the mean |ΔRGB| to ``colour`` scaled to the pixel's own
+    brightness (mean of RGB; ``colour`` in the pixel's light or shadow) —
+    a hue comparison in RGB units (block "Skin or piece")."""
+    rgb = np.asarray(rgb, dtype=np.float32)[..., :3]
+    colour = np.asarray(colour, dtype=np.float32)
+    scale = rgb.mean(-1, keepdims=True) / max(float(colour.mean()), 1.0)
+    return np.abs(rgb - scale * colour).mean(-1)
+
+
+def skin_pixels(ghost_rgb, ghost_mask, skin, piece, height: int) -> np.ndarray:
+    """The ghost pixels that count as skin (block "Skin or piece"): within
+    ``SKIN_DRGB`` of ``skin`` (mean |ΔRGB|), at least as near the skin as
+    ``piece`` in the pixel's own light (``shade_distance``; without a piece
+    colour the first test alone) and inside the ghost mask eroded by
+    ``GHOST_RIM`` iterations @1536 (its outline is anti-aliased into the
+    background)."""
+    from scipy import ndimage
+    rgb = np.asarray(ghost_rgb, dtype=np.float32)[..., :3]
+    near = np.abs(rgb - np.asarray(skin, dtype=np.float32)).mean(2) <= SKIN_DRGB
+    if piece is not None:
+        near &= shade_distance(rgb, skin) <= shade_distance(rgb, piece)
+    core = ndimage.binary_erosion(np.asarray(ghost_mask, dtype=bool), iterations=_iterations(GHOST_RIM, height))
+    return near & core
+
+
 def skin_colour(base_rgb, base_mask) -> Optional[np.ndarray]:
     """The skin of the base view: the median RGB of the base figure's pixels
     on rows y0 + 0.60·Hb .. y0 + 0.66·Hb (``SKIN_SAMPLE_ROWS``, the bare
@@ -908,7 +976,10 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     ghost pixels outside the region grown by 8 px @1536 whose mean |ΔRGB| to
     the base's skin (``skin_colour``, the thighs) is <= 30, over the region's
     area (<= 0.005: no head, arm, leg or foot left; a skin-coloured garment
-    is not counted inside its own region); ``outside_near`` = every ghost
+    is not counted inside its own region; since gate version 6, Ruling A32,
+    only pixels at least as near the skin as the piece's own colour
+    ``piece_colour`` of ``worn_rgb`` in the same light and off the ghost's
+    outline, ``skin_pixels``); ``outside_near`` = every ghost
     pixel out there except in the neckline opening and the body openings
     (``body_openings``: the inside of the garment shows there, e.g. through
     an open jacket), over the region's area — a warning above 0.05 (the
@@ -977,7 +1048,8 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     if skin is None:
         skin_left = 0.0
     else:
-        near = np.abs(np.asarray(ghost_rgb, dtype=np.float32)[..., :3] - skin).mean(2) <= SKIN_DRGB
+        # Ruling A32: skin only where nearer the skin than the piece, off the ghost's outline.
+        near = skin_pixels(ghost_rgb, ghost, skin, piece_colour(worn_rgb, region), height)
         skin_left = float((skin_beyond & near).sum() / area)
     neck = neckline(region)
     depth = neck["depth"] / hb
