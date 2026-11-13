@@ -550,7 +550,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
                 ) : null}
               </div>
               <Model3DViewer key={footwear.preview_url} url={footwear.preview_url} format="glb" height={430}
-                freshness={footwear.preview_freshness} footPose={footwear.foot_pose}
+                freshness={footwear.preview_freshness} builtAt={footwear.preview_built_at} footPose={footwear.foot_pose}
                 clipUrl={clips[previewPose.kind] || ''} clipGroup={previewPose.group} />
             </>
           ) : (
@@ -598,7 +598,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
         <div className="ga-garment-dialog-col">
           {garment?.preview_url ? (
             <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={430}
-              freshness={garment.preview_freshness}
+              freshness={garment.preview_freshness} builtAt={garment.preview_built_at}
               statusPanel={info.steps?.length ? <ModelSteps steps={info.steps} /> : undefined} />
           ) : (
             <>

@@ -357,7 +357,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
       {info.mesh_url ? (
         <>
           <Model3DViewer key={info.mesh_url} url={info.mesh_url} format="glb" height={260}
-            freshness={mesh?.freshness} polylines={polylines} />
+            freshness={mesh?.freshness} polylines={polylines} builtAt={info.mesh_built_at} />
           {polylines.length ? (
             <div className="ga-hint" style={{ display: 'flex', gap: 12 }}>
               <span>{swatch(INSOLE_COLOR)}{t('Insole')}</span>

@@ -2959,6 +2959,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         if record is not None:
             failed = {"step": record.get("step"), "error": record.get("error"), "gates": None,
                       "failed_at": record.get("failed_at")}
+    from app.core import model_overview
     # finite_json: a NaN in an in-memory failure's gates must not fail the whole tab's JSON encoding
     return gs.finite_json({
         "item_id": item_id, "kind": kind, "fsig": fsig, "method": method, "method_source": method_source,
@@ -2966,7 +2967,10 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         "steps": steps, "stale_reasons": stale,
         "running_step": status["running_step"], "started_at": status["started_at"],
         "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
-        "failed": failed, "preview_url": preview_url, "served_fsig": served_fsig, "refit": refit,
+        "failed": failed, "preview_url": preview_url,
+        # Ruling UI3 a: when the previewed fit was made (the 3D preview's caption).
+        "preview_built_at": model_overview.built_at(preview) if preview_url else None,
+        "served_fsig": served_fsig, "refit": refit,
         "body": body, "body_id": body["body_id"] if body else None})
 
 def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:

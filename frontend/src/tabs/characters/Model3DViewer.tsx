@@ -38,6 +38,7 @@ import { CLOSE_TOL_PX } from '../world/planGeometry'
 import { areaKindOf } from '../props/propTypes'
 import type { AreaOutline, LeafBbox, MeshLayoutEntry,
   PropSlotValues } from '../props/propTypes'
+import { BuiltAtCaption } from './BuiltAtCaption'
 import { FreshnessCorner } from './FreshnessBadge'
 import type { Freshness } from './FreshnessBadge'
 
@@ -276,7 +277,7 @@ export interface ActionAccessOverlay {
   yaw: number
 }
 
-export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, freshness, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
+export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, freshness, builtAt, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   placement, onBounds, markers, lightPoint, surfacePoints, waterRegions, onPickModelPoint, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
@@ -288,6 +289,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
     freshness?: Freshness | null
+    /** When the shown model was built (a SYSTEM stamp from its payload, Ruling UI3 a) — a caption in the
+     *  bottom right corner (`BuiltAtCaption`). */
+    builtAt?: string | null
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
@@ -2491,6 +2495,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         )
       ) : null}
       <FreshnessCorner freshness={freshness} />
+      {!loading && !error ? <BuiltAtCaption at={builtAt} /> : null}
       {/* THE VIEW CONTROLS — one column at the top right, so no button has to
           know how many of its neighbours happen to be shown. */}
       {!loading && !error && (motion || onFrontalChange || keepCamera

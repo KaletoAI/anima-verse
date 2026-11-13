@@ -73,18 +73,25 @@ Expected values, derived by hand from the fixtures below:
       base view back 16:00 vs front 17:00 stale "Made from an older front
                view"; back 18:00 current; the front itself current; no stamp
                missing
-      base model {F, back B} vs current {F, B} current; back B2 stale "Base
-               views re-rendered since this model"; no source sha missing
+      base model {F, back B} vs current {F, B} current; back B2 stale "Back
+               view changed after this model" (Ruling UI3 b) with
+               changed_views [{back, at = the stamp handed in, reason}],
+               built_at = the model's created_at, action "Run all rebuilds
+               it" (UI3 c); front F2 + back B2 -> "Front view changed after
+               this model · Back view changed after this model" in view
+               order; no source sha missing
       model3d  nearest + stale_base detail_changed -> stale "Stand-in: model
                of another outfit · Built for another body detail under the
                clothing"; old path tpose changed -> "Pose render changed since
-               this model"; pipeline + views newer -> "Dressed views
-               re-rendered since this model"; old path tpose unknown ->
+               this model"; pipeline + the dressed back newer -> "Dressed back
+               changed after this model" with changed_views [{back, at}] and
+               built_at = the model's created_at; old path tpose unknown ->
                missing; exact pipeline -> current
       hair     no preview missing; accepted current-fsig fit current; refused
                fit with colour+placement reasons -> stale "Hair colour changed
                · Hair placement changed"; no reasons -> "An older fit is shown"
-      dressed_newer  model 16:00, a view 16:05 -> True; a view 15:00 -> False
+      dressed_changed  model 16:00, the front 16:05 -> [{front, 16:05}]; a
+               view 15:00 -> []; no model stamp -> []
 [4] IO on a temp world (character "Ann", base signature base0000aaaa):
     base front written 10:00 with a passing hand gate, base back 09:00, base
     model sidecar = fixture A with the real hashes of front + back, covered
@@ -92,8 +99,11 @@ Expected values, derived by hand from the fixtures below:
       annotate_base_info: image_meta front current, back stale "Made from an
       older front view"; model.steps[0] hand_gate done "passed on attempt 1 of
       1"; covered_variant done "without g2"; model.freshness current.
-      The front rewritten with other bytes -> model.freshness stale "Base
-      views re-rendered since this model".
+      The front rewritten with other bytes -> model.freshness stale "Front
+      view changed after this model", changed_views[0].at = the front file's
+      mtime (``file_stamp``), action "Run all rebuilds it". ``built_at``
+      (UI3 a): the model's sidecar created_at; a file without a sidecar ->
+      its mtime; None -> None.
     annotate_hair: every image and attempt current, the fit step untouched,
     preview current; of the two other methods' previews the one off the
     current base stale "Fitted on an older base model", the other current.
@@ -299,16 +309,24 @@ def main() -> int:
     check("base no stamp", mo.base_view_freshness("left", "", t17)["state"], M)
     meta = {"source_image_sha256": "F", "view_images_sha256": {"back": "B"}}
     check("base model current", mo.base_model_freshness(meta, {"front": "F", "back": "B", "left": "L"})["state"], C)
-    check("base model stale", st(mo.base_model_freshness(meta, {"front": "F", "back": "B2"})),
-          (S, "Base views re-rendered since this model"))
+    stale = mo.base_model_freshness({**meta, "created_at": t16}, {"front": "F", "back": "B2"}, {"back": t17})
+    check("base model stale", st(stale), (S, "Back view changed after this model"))
+    check("base model: which view and when", (stale["changed_views"], stale["built_at"], stale["action"]),
+          ([{"view": "back", "at": t17, "reason": "Back view changed after this model"}], t16, "Run all rebuilds it"))
+    check("base model: two views in view order",
+          st(mo.base_model_freshness(meta, {"front": "F2", "back": "B2"})),
+          (S, "Front view changed after this model · Back view changed after this model"))
     check("base model none", mo.base_model_freshness({}, {"front": "F"})["state"], M)
     check("model3d nearest", st(mo.model3d_freshness({"match": "nearest", "stale_base": True,
                                                       "stale_reason": "detail_changed", "base_signature": "b"})),
           (S, "Stand-in: model of another outfit · Built for another body detail under the clothing"))
     check("model3d pose", st(mo.model3d_freshness({"match": "exact", "tpose_status": "changed"})),
           (S, "Pose render changed since this model"))
-    check("model3d views", st(mo.model3d_freshness({"match": "exact", "base_signature": "b"}, views_newer=True)),
-          (S, "Dressed views re-rendered since this model"))
+    views = mo.model3d_freshness({"match": "exact", "base_signature": "b", "created_at": t16},
+                                 views_changed=[{"view": "back", "at": t17}])
+    check("model3d views", st(views), (S, "Dressed back changed after this model"))
+    check("model3d views: which and when", (views["changed_views"], views["built_at"]),
+          ([{"view": "back", "at": t17, "reason": "Dressed back changed after this model"}], t16))
     check("model3d unknown", mo.model3d_freshness({"match": "exact", "tpose_status": "unknown"})["state"], M)
     check("model3d current", mo.model3d_freshness({"match": "exact", "base_signature": "b",
                                                    "tpose_status": "unknown"})["state"], C)
@@ -326,9 +344,11 @@ def main() -> int:
                                                                "steps": {"fit": {"status": "missing"}},
                                                                "stale_reasons": ["description_changed"]})),
           (S, "Piece description changed"))
-    check("dressed newer", mo.dressed_newer(t16, {"front": {"created_at": "2026-11-09T16:05:00+00:00"}}), True)
-    check("dressed older", mo.dressed_newer(t16, {"front": {"created_at": "2026-11-09T15:00:00+00:00"},
-                                                  "back": None}), False)
+    check("dressed newer", mo.dressed_changed(t16, {"front": {"created_at": "2026-11-09T16:05:00+00:00"}}),
+          [{"view": "front", "at": "2026-11-09T16:05:00+00:00"}])
+    check("dressed older", mo.dressed_changed(t16, {"front": {"created_at": "2026-11-09T15:00:00+00:00"},
+                                                    "back": None}), [])
+    check("dressed: no model stamp", mo.dressed_changed("", {"front": {"created_at": t17}}), [])
 
     print("[4] IO on a temp world")
     bsig = "base0000aaaa"
@@ -361,7 +381,17 @@ def main() -> int:
     check("model fresh", out["model"]["freshness"]["state"], C)
     (refs / f"tpose_{bsig}.png").write_bytes(b"front-2 longer")
     out = mo.annotate_base_info("Ann", {"signature": bsig, "image_meta": {}, "model": {"status": "ready"}})
-    check("model stale", st(out["model"]["freshness"]), (S, "Base views re-rendered since this model"))
+    # Ruling UI3 a: the 3D previews' caption — the model's created_at, else the file's write time.
+    (models / "covered" / f"{bsig}.json").write_text(json.dumps({"source_sha256": sha(b"prerig"),
+                                                                 "created_at": t16}))
+    check("built_at: the sidecar's created_at", mo.built_at(models / "covered" / f"{bsig}.glb"), t16)
+    check("built_at: no sidecar -> the file's mtime", mo.built_at(models / "prerig" / f"{bsig}.glb"),
+          mo.file_stamp(models / "prerig" / f"{bsig}.glb"))
+    check("built_at: no file", mo.built_at(None), None)
+    fresh = out["model"]["freshness"]
+    check("model stale", st(fresh), (S, "Front view changed after this model"))
+    check("model stale: the front file's write time, Run all", (fresh["changed_views"][0]["at"], fresh["action"]),
+          (mo.file_stamp(refs / f"tpose_{bsig}.png"), "Run all rebuilds it"))
 
     hair = {"garment": {"fsig": "f", "preview_url": "p", "stale_reasons": [],
                         "steps": {"worn": {"front": {"url": "u", "attempts": [{"attempt": 1, "url": "a"}]}},

@@ -254,7 +254,7 @@ def main() -> int:
                          "collision": None, "method": "hairdeck", "method_source": "world",
                          "world_method": "hairdeck", "hairdeck": None, "others": [],
                          "hair_in_body": False, "base_prompts": None, "plain": False, "run": None,
-                         "body_url": None}))
+                         "body_url": None, "body_built_at": None}))
             # The chip limits: HairDeck's fit gates only (the edit-chain steps are gone).
             check("hair limits", sorted(limits), ["hairdeck_fit"])
             r = client.get("/characters/Pet/hair")

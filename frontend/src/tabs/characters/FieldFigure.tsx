@@ -142,7 +142,8 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
       <div className="ga-split-col">
         {/* The figure gets the wider column and no tilt toolbar (user 2026-11-13): the canvas fills the column. */}
         {data.served_url ? (
-          <Model3DViewer key={data.served_url} url={data.served_url} format="glb" height={600} />
+          <Model3DViewer key={data.served_url} url={data.served_url} format="glb" height={600}
+            builtAt={data.served_built_at} />
         ) : (
           <div className="ga-hint" style={{ height: 200, display: 'flex', alignItems: 'center',
             justifyContent: 'center', border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>

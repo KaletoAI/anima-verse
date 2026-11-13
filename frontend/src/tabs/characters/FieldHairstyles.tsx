@@ -12,7 +12,7 @@
  * Build (FigureBuildLine).
  *
  * Right, for the SELECTED hairstyle (GET /characters/{c}/hair?item_id=, polled while a run goes — useGarment):
- * - a live 3D preview (orbit / zoom, the old Hair tab's): HairDeck — the hair fitted on the plain body
+ * - a live 3D preview (orbit / zoom): HairDeck — the hair fitted on the plain body
  *   (`garment.preview_url`, with the base model's capsules); `body` — the plain body itself when this hairstyle
  *   is the plain body's (`body_url`); otherwise why there is none;
  * - Settings, each SAVED ON ITS OWN, nothing runs (R3): the mode (POST …/hair/method {method, item_id}), the
@@ -192,7 +192,7 @@ function HairstyleDetail({ character, entry, onChanged, onRunEnded, onOpenFigure
     preview = (
       <>
         <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={PREVIEW_HEIGHT}
-          freshness={garment.preview_freshness} collision={info.collision} />
+          freshness={garment.preview_freshness} collision={info.collision} builtAt={garment.preview_built_at} />
         <div className="ga-hint">
           {info.collision?.capsules?.length
             ? t('Fitted on the plain body; collides with its torso, arm and head capsules')
@@ -203,7 +203,8 @@ function HairstyleDetail({ character, entry, onChanged, onRunEnded, onOpenFigure
   } else if (mode === 'body' && info.plain && info.body_url) {
     preview = (
       <>
-        <Model3DViewer key={info.body_url} url={info.body_url} format="glb" height={PREVIEW_HEIGHT} />
+        <Model3DViewer key={info.body_url} url={info.body_url} format="glb" height={PREVIEW_HEIGHT}
+          builtAt={info.body_built_at} />
         <div className="ga-hint">{t('The plain body — this hairstyle is part of its mesh')}</div>
       </>
     )

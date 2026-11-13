@@ -10,15 +10,36 @@
  *                    English phrases joined by " · ", each translated here
  *   missing  grey   "no data" — nothing recorded to compare against
  *
+ * A model reason that compares the model with the views it was built from
+ * names the view (Ruling UI3 b — "Front view changed after this model"); WHEN
+ * comes separately in `changed_views` ([{view, at, reason}]) and `built_at`,
+ * and is formatted here in the viewer's clock: "Front view changed after this
+ * model · 20:30". `action` names what resolves it ("Run all rebuilds it",
+ * UI3 c). The tooltip carries both stamps: the model's and each view's.
+ *
  * Placed top left on every tile (RefImage) and 3D preview (Model3DViewer);
  * the top right belongs to their actions and view controls.
  */
 import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+import { freshnessText } from './freshnessText'
+
+/** A view that changed after the model (Ruling UI3 b): `reason` is the reason part it belongs to. */
+export interface ChangedView {
+  view: string
+  at: string | null
+  reason: string
+}
 
 export interface Freshness {
   state: 'current' | 'stale' | 'missing'
   reason?: string
+  /** UI3 b: the views that changed after the model, with their SYSTEM stamps. */
+  changed_views?: ChangedView[]
+  /** UI3 b: when the model was built. */
+  built_at?: string | null
+  /** UI3 c: the action that resolves the stale state (a fixed English phrase). */
+  action?: string
 }
 
 const COLORS: Record<Freshness['state'], string> = {
@@ -50,14 +71,11 @@ export function FreshnessBadge({ freshness, compact = false }: {
 }) {
   const { t } = useI18n()
   if (!freshness || !COLORS[freshness.state]) return null
-  const reason = (freshness.reason || '').split(' · ').filter(Boolean).map((part) => t(part)).join(' · ')
-  const text = freshness.state === 'current' ? t('current')
-    : freshness.state === 'stale' ? (reason ? `${t('outdated')}: ${reason}` : t('outdated'))
-    : t('no data')
+  const { text, title } = freshnessText(freshness, t)
   return (
     <span
       role="status"
-      title={freshness.state === 'missing' && reason ? `${text} · ${reason}` : text}
+      title={title}
       style={{ ...BADGE, ...(compact ? COMPACT : null), background: COLORS[freshness.state] }}
     >
       {text}

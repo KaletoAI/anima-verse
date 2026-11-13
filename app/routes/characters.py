@@ -2159,7 +2159,9 @@ def get_character_hair(character_name: str, item_id: str = "",
                                  if in_body and pipeline else None),
                 "plain": bool(item_id and item_id == str(profile.get(garment_hair.BASE_HAIRSTYLE_KEY) or "")),
                 "run": run,
-                "body_url": (model or {}).get("url")}
+                "body_url": (model or {}).get("url"),
+                # Ruling UI3 a: when the plain body shown there was built (the 3D preview's caption).
+                "body_built_at": (model or {}).get("created_at") or None}
     from app.core.model_overview import annotate_hair
     return annotate_hair(payload)
 

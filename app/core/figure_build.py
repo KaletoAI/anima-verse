@@ -1566,6 +1566,20 @@ def _served_url(character_name: str) -> Optional[str]:
         return None
 
 
+def _served_built_at(character_name: str) -> Optional[str]:
+    """When the model ``_served_url`` serves was built (Ruling UI3 a: the 3D preview's caption) — the
+    delivered bytes (the garment assembly when it is current), ``model_overview.built_at``; None without one."""
+    from app.core import garment_assembly, model3d, model_overview
+    try:
+        full, _, _ = model3d.find_model3d_serving_tier(character_name, "")
+        if full is None:
+            return None
+        return model_overview.built_at(garment_assembly.served(character_name, full, model3d.FULL_TIER))
+    except Exception:  # noqa: BLE001 — the caption is optional
+        logger.debug("Served model stamp of %s unreadable", character_name, exc_info=True)
+        return None
+
+
 def _item_jobs(steps: List[Step], name: str, item_id: str) -> Optional[int]:
     """The planned hub jobs of a piece's (``pieces``, by item) or the hair's
     chain step: 0 when nothing of it is planned, None when unknown."""
@@ -1910,7 +1924,8 @@ def figure_info(character_name: str) -> Dict[str, Any]:
 
 def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     """``GET /characters/{c}/figure``: ``{pipeline, humanoid, auto_build,
-    status, changes, cost, build, wanted, delivered, served_url, outfit (the
+    status, changes, cost, build, wanted, delivered, served_url, served_built_at
+    (when the served model was built — Ruling UI3 a), outfit (the
     saved outfit worn now, "" when none matches), worn (each row with the
     ``jobs`` its chain step plans), hair (with ``jobs``), body (``plain.jobs``:
     ``_plain_jobs``)}``. ``status``: ``building`` while a run goes, else ``failed`` /
@@ -1922,7 +1937,8 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     out: Dict[str, Any] = {
         "pipeline": pipeline, "humanoid": model_refs.is_humanoid(character_name, profile=profile),
         "auto_build": auto_build_on(character_name, profile=profile),
-        "build": build, "served_url": _served_url(character_name)}
+        "build": build, "served_url": _served_url(character_name),
+        "served_built_at": _served_built_at(character_name)}
     if not pipeline:
         return {**out, "status": "up_to_date", "changes": [], "cost": cost(character_name, []),
                 "wanted": None, "delivered": None, "outfit": "", "worn": [], "hair": None, "body": None}

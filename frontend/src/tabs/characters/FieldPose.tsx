@@ -42,7 +42,7 @@ function PoseOutfitModel({ character, onOpen3D, onOpenFigure }: {
             format={model.format || 'fbx'}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
             embeddedTakes={model.rig === 'generic'} clipLoops={model.clips}
-            freshness={model.freshness} collision={model.collision}
+            freshness={model.freshness} collision={model.collision} builtAt={model.created_at}
             statusPanel={model.steps?.length ? <ModelSteps steps={model.steps} /> : undefined} />
         </div>
       ) : (

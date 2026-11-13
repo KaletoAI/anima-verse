@@ -235,6 +235,8 @@ export interface GarmentInfo {
   queue_running?: string | null
   failed: GarmentFailure | null
   preview_url: string | null
+  /** When the previewed fit was made (Ruling UI3 a: the preview's caption); null without one. */
+  preview_built_at?: string | null
   served_fsig: string | null
   /** The current fit was refitted from images + mesh made on the previous
    *  base (server `garment_source`); null otherwise / on an older server. */
@@ -421,6 +423,8 @@ export interface FootwearInfo extends GarmentRunState {
   /** The inventory item image (read-only here), versioned. */
   item_image_url: string | null
   mesh_url: string | null
+  /** When the shown shoe mesh was made (Ruling UI3 a); null without one. */
+  mesh_built_at?: string | null
   insole: FootwearInsole | null
   /** The fit of the current fsig per body (base first). */
   fits: FootwearFitRow[]
@@ -428,6 +432,8 @@ export interface FootwearInfo extends GarmentRunState {
   width_cap: number
   /** The shod base model of the current fsig (GET …/garments/{item}/model), versioned; null without one. */
   preview_url: string | null
+  /** When that fit was made (Ruling UI3 a); null without one. */
+  preview_built_at?: string | null
   preview_freshness?: Freshness | null
   /** That fit's foot pose (with `source.fsig`) — the preview applies it only to a GLB carrying those shoes. */
   foot_pose: FootPose | null
@@ -481,6 +487,8 @@ export interface HairInfo {
   run?: { steps: string[]; hub_jobs: number | null; note: string; refit: boolean } | null
   /** The current base model's file (the preview of a `body` hairstyle that is the plain body's); null without. */
   body_url?: string | null
+  /** When that base model was built (Ruling UI3 a); null without one. */
+  body_built_at?: string | null
 }
 
 const POLL_MS = 3000

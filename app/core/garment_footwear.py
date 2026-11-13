@@ -900,6 +900,14 @@ def _fits(character_name: str, item_id: str, fsig: Optional[str], base: Tuple[st
     return rows
 
 
+def _built_at(path: Optional[Path]) -> Optional[str]:
+    from app.core.model_overview import built_at
+    try:
+        return built_at(path)
+    except ValueError:
+        return None
+
+
 def _preview(character_name: str, item_id: str,
              fsig: Optional[str]) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """``(preview_url, foot_pose)`` of ``info``: the shod base model of the CURRENT fsig (the file
@@ -1095,5 +1103,9 @@ def info(character_name: str, item_id: str, *, profile: Dict[str, Any]) -> Dict[
                            if image_stamp is not None else None),
         "mesh_url": steps["mesh"]["url"], "insole": insole_view, "width_cap": width_cap(profile, item_id),
         "fits": fits, "preview_url": preview_url,
+        # Ruling UI3 a: when the shown shoe mesh / the shod preview were made (the 3D previews' caption).
+        "mesh_built_at": _built_at(mesh_path(character_name, item_id)) if steps["mesh"]["url"] else None,
+        "preview_built_at": (_built_at(gs.garment_path(character_name, item_id, fsig, "fit"))
+                             if preview_url and fsig else None),
         "preview_freshness": steps["fit"]["freshness"] if preview_url else None, "foot_pose": foot_pose,
         "served_fsig": None, "refit": None, "body": None, "body_id": None}

@@ -847,6 +847,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             height={480}
             statusPanel={statusPanel}
             freshness={model.freshness}
+            builtAt={model.created_at}
             motion={rigless ? undefined : previewMotion}
             motionToolbar={asideTools}
             url={viewerUrl}

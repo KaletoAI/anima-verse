@@ -236,6 +236,8 @@ export interface FigurePayload {
     finished_at: string | null
   }
   served_url: string | null
+  /** When the served model was built (Ruling UI3 a: the preview's caption); null without one. */
+  served_built_at?: string | null
   /** The saved outfit worn now, "" when none matches. */
   outfit: string
   worn: FigureWornRow[]

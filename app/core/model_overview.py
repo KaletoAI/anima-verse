@@ -77,8 +77,19 @@ OLDER_FRONT_VIEW = "Made from an older front view"
 OLDER_DRESSED_FRONT = "Made from an older dressed front"
 # A view of an outfit body whose recorded dress text is not what its outfits compute now.
 DRESS_TEXT_CHANGED = "Dress text changed"
-BASE_VIEWS_CHANGED = "Base views re-rendered since this model"
-DRESSED_VIEWS_CHANGED = "Dressed views re-rendered since this model"
+# Ruling UI3 b: a model reason names WHICH view changed after the model; WHEN goes in the freshness'
+# ``changed_views`` ([{view, at, reason}], SYSTEM stamps) and ``built_at`` (the model's), never into the phrase
+# (the React badge translates the phrase and formats the time in the browser's locale).
+BASE_VIEW_CHANGED = {"front": "Front view changed after this model",
+                     "back": "Back view changed after this model",
+                     "left": "Left view changed after this model",
+                     "right": "Right view changed after this model"}
+DRESSED_VIEW_CHANGED = {"front": "Dressed front changed after this model",
+                        "back": "Dressed back changed after this model",
+                        "left": "Dressed left view changed after this model",
+                        "right": "Dressed right view changed after this model"}
+# Ruling UI3 c: the action that resolves a stale base model (the Base body tab's Run all re-plans it).
+RUN_ALL_REBUILDS = "Run all rebuilds it"
 POSE_RENDER_CHANGED = "Pose render changed since this model"
 STAND_IN = "Stand-in: model of another outfit"
 PROFILE_CHANGED = "The profile picture changed"
@@ -111,8 +122,41 @@ CLOTHING_STALE_REASONS = {"description_changed": "Piece description changed",
 FITTED_ON_OLDER_BASE = "Fitted on an older base model"
 
 
-def freshness(state: str, reason: str = "") -> Dict[str, str]:
+def freshness(state: str, reason: str = "") -> Dict[str, Any]:
     return {"state": state, "reason": reason}
+
+
+def file_stamp(path: Optional[Path]) -> Optional[str]:
+    """When a file was written: its mtime as an aware UTC ISO stamp (a SYSTEM stamp), None without the file.
+    The content's own time — an in-place edit (the skin step keeps the front's ``created_at``) moves it."""
+    if path is None:
+        return None
+    try:
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(timespec="seconds")
+    except OSError:
+        return None
+
+
+def built_at(path: Optional[Path], meta: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """The build time of a model file for the 3D previews' caption (Ruling UI3 a): its sidecar's
+    ``created_at``, else the file's mtime (``file_stamp``); None without the file."""
+    if path is None:
+        return None
+    if meta is None:
+        meta = _sidecar(path) if path.with_suffix(".json").is_file() else {}
+    return str(meta.get("created_at") or "") or file_stamp(path)
+
+
+def _changed(stale: Dict[str, Any], phrases: Dict[str, str], views: List[str],
+             stamps: Dict[str, Optional[str]], model_created: Optional[str]) -> Dict[str, Any]:
+    """``stale`` with the UI3 fields of the views that changed after the model: ``changed_views`` ([{view, at,
+    reason}] in view order) and ``built_at``."""
+    stale["changed_views"] = [{"view": v, "at": stamps.get(v) or None,
+                               "reason": phrases.get(v, f"{v.capitalize()} view changed after this model")}
+                              for v in views]
+    stale["built_at"] = model_created or None
+    return stale
 
 
 def _join(reasons: Iterable[str]) -> str:
@@ -1000,41 +1044,69 @@ def base_view_freshness(view: str, created: str, front_created: str,
     return freshness(CURRENT)
 
 
-def base_model_freshness(meta: Dict[str, Any], view_shas: Dict[str, str]) -> Dict[str, str]:
+_VIEW_ORDER = ("front", "back", "left", "right")
+
+
+def _in_view_order(views: Iterable[str]) -> List[str]:
+    views = list(dict.fromkeys(views))
+    return sorted(views, key=lambda v: (_VIEW_ORDER.index(v) if v in _VIEW_ORDER else len(_VIEW_ORDER), v))
+
+
+def base_model_freshness(meta: Dict[str, Any], view_shas: Dict[str, str],
+                         view_stamps: Optional[Dict[str, Optional[str]]] = None) -> Dict[str, Any]:
     """A base model: built from the base views stored now? ``view_shas``:
-    view -> sha256 of the current base view file ("" when absent)."""
+    view -> sha256 of the current base view file ("" when absent). Stale: one
+    phrase per view whose content is not what the model was built from
+    (``BASE_VIEW_CHANGED``, Ruling UI3 b), ``changed_views`` with each view's
+    write time (``view_stamps``: view -> ``file_stamp``), ``built_at`` the
+    model's ``created_at`` and ``action`` ``RUN_ALL_REBUILDS`` (UI3 c — the
+    base refresh plan calls such a model stale, so Run all rebuilds it)."""
     recorded = {"front": meta.get("source_image_sha256") or ""}
     recorded.update({v: s for v, s in _dict(meta.get("view_images_sha256")).items()})
     if not recorded["front"]:
         return freshness(MISSING, NO_PROVENANCE)
-    for view, sha in recorded.items():
-        if sha and view_shas.get(view, sha) != sha:
-            return freshness(STALE, BASE_VIEWS_CHANGED)
+    changed = _in_view_order(view for view, sha in recorded.items() if sha and view_shas.get(view, sha) != sha)
+    if changed:
+        out = _changed(freshness(STALE, _join(BASE_VIEW_CHANGED.get(v, f"{v.capitalize()} view changed after "
+                                                                       "this model") for v in changed)),
+                       BASE_VIEW_CHANGED, changed, dict(view_stamps or {}), str(meta.get("created_at") or ""))
+        out["action"] = RUN_ALL_REBUILDS
+        return out
     return freshness(CURRENT)
 
 
-def dressed_newer(model_created: str, records: Dict[str, Optional[Dict[str, Any]]]) -> bool:
-    """Whether a dressed view the outfit model was built from was rendered
-    again after the model (its sidecar ``created_at`` is later)."""
+def dressed_changed(model_created: str, records: Dict[str, Optional[Dict[str, Any]]]) -> List[Dict[str, str]]:
+    """The dressed views the outfit model was built from that were rendered
+    again after the model (their sidecar ``created_at`` is later): ``[{view,
+    at}]`` in view order, [] without a model stamp."""
     if not model_created:
-        return False
-    return any(str(r.get("created_at") or "") > model_created for r in records.values() if isinstance(r, dict))
+        return []
+    return [{"view": v, "at": str(records[v].get("created_at"))}
+            for v in _in_view_order(records)
+            if isinstance(records.get(v), dict) and str(records[v].get("created_at") or "") > model_created]
 
 
-def model3d_freshness(model: Dict[str, Any], *, views_newer: bool = False) -> Dict[str, str]:
-    """The 3D tab's model (``get_model3d_info``'s ``model``); ``views_newer``:
-    ``dressed_newer`` of a pipeline outfit model."""
+def model3d_freshness(model: Dict[str, Any], *,
+                      views_changed: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    """The 3D tab's model (``get_model3d_info``'s ``model``); ``views_changed``:
+    ``dressed_changed`` of a pipeline outfit model — one phrase per view
+    (``DRESSED_VIEW_CHANGED``) with ``changed_views`` / ``built_at`` (Ruling UI3 b)."""
     reasons = []
     if model.get("match") == "nearest":
         reasons.append(STAND_IN)
     if model.get("stale_base"):
         reasons.append(MODEL_STALE_REASONS.get(model.get("stale_reason") or "", MODEL_STALE_REASONS["older_base"]))
-    if views_newer:
-        reasons.append(DRESSED_VIEWS_CHANGED)
-    elif not model.get("base_signature") and model.get("tpose_status") == "changed":
+    views = [c["view"] for c in views_changed or []]
+    for v in views:
+        reasons.append(DRESSED_VIEW_CHANGED.get(v, f"Dressed {v} changed after this model"))
+    if not views and not model.get("base_signature") and model.get("tpose_status") == "changed":
         reasons.append(POSE_RENDER_CHANGED)
     if reasons:
-        return freshness(STALE, _join(reasons))
+        out = freshness(STALE, _join(reasons))
+        if views:
+            _changed(out, DRESSED_VIEW_CHANGED, views, {c["view"]: c.get("at") for c in views_changed or []},
+                     str(model.get("created_at") or ""))
+        return out
     if not model.get("base_signature") and model.get("tpose_status") == "unknown" and model.get("match") == "exact":
         return freshness(MISSING, NO_PROVENANCE)
     return freshness(CURRENT)
@@ -1067,6 +1139,13 @@ def _base_view_shas(character_name: str, bsig: str) -> Dict[str, str]:
     from app.core.model_refs import find_ref_image
     return {v: base_body.file_sha256(find_ref_image(character_name, base_body._kind(v), bsig))
             for v in base_body.BASE_VIEWS}
+
+
+def _base_view_stamps(character_name: str, bsig: str) -> Dict[str, Optional[str]]:
+    """view -> when the current base view file was written (``file_stamp``)."""
+    from app.core import base_body
+    from app.core.model_refs import find_ref_image
+    return {v: file_stamp(find_ref_image(character_name, base_body._kind(v), bsig)) for v in base_body.BASE_VIEWS}
 
 
 def _base_model_path(character_name: str, bsig: str) -> Path:
@@ -1104,7 +1183,8 @@ def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, An
                                                                      collision.character_scales(character_name))
                                                 if meta.get("collision") else None))
     return {"steps": steps,
-            "freshness": base_model_freshness(meta, _base_view_shas(character_name, bsig))}
+            "freshness": base_model_freshness(meta, _base_view_shas(character_name, bsig),
+                                              _base_view_stamps(character_name, bsig))}
 
 
 def outfit_body_overview(character_name: str, body_id: str) -> Optional[Dict[str, Any]]:
@@ -1270,7 +1350,7 @@ def outfit_model_overview(character_name: str,
                                body_meta=body_meta,
                                missing_items=[i for i, _reason in base_body.mesh_items_missing(
                                    character_name, meta, base_sha=base[1] if base else None)])
-    return steps, dressed_newer(str(meta.get("created_at") or ""), records)
+    return steps, dressed_changed(str(meta.get("created_at") or ""), records)
 
 
 def annotate_model3d_info(character_name: str, info: Dict[str, Any]) -> Dict[str, Any]:
@@ -1286,7 +1366,7 @@ def annotate_model3d_info(character_name: str, info: Dict[str, Any]) -> Dict[str
                     if isinstance(name, str) and name and Path(name).name == name else None)
         if overview is not None:
             model["steps"] = overview[0]
-        model["freshness"] = model3d_freshness(model, views_newer=bool(overview and overview[1]))
+        model["freshness"] = model3d_freshness(model, views_changed=overview[1] if overview else None)
     except Exception:  # noqa: BLE001
         logger.exception("Model overview of %s failed", character_name)
     return info
