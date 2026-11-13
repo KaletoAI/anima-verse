@@ -117,7 +117,6 @@ def main() -> int:
                  "body_slots": {"skin": {"tone": "light"}, "eyes": {"color": "blue"},
                                 "build": {"type": "athletic"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         did = inventory.add_item(name="Green Dress", category="outfit_piece", prompt_fragment=FRAGMENT,
                                  outfit_piece={"slots": ["top", "bottom"], "covers": ["legs"],
                                                "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]

@@ -15,8 +15,9 @@ base images got 200 from the route; the worker then found no base view,
 logged "base images of <bsig> missing" and returned {} — the tab showed
 nothing. Now the route answers 409 with BASE_FIRST before any thread starts.
 
-Fixture: ``Demo`` (human-roleplay, base-body pipeline), ``Plain`` (the same
-profile, NOT on the pipeline). BSIG = base_signature(Demo); base view files
+Fixture: ``Demo`` (human-roleplay, base-body pipeline), ``Plain``
+(animal-default — off the pipeline; until Task 11h a human with the pipeline
+switch off, a state that no longer exists). BSIG = base_signature(Demo); base view files
 are model_refs/tpose_BSIG.png (front) and tpose_<view>_BSIG.png.
 
 Expected, derived by hand from the route rule "a T-pose render of a pipeline
@@ -97,10 +98,9 @@ def main() -> int:
                  "body_slots": {"skin": {"tone": "light"}, "eyes": {"color": "blue"},
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
-        for name in ("Demo", "Plain"):
-            check(f"create {name}", save_character_profile(name, json.loads(json.dumps(human)), create_new=True),
-                  True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
+        check("create Demo", save_character_profile("Demo", json.loads(json.dumps(human)), create_new=True), True)
+        check("create Plain", save_character_profile("Plain", {"template": "animal-default"}, create_new=True),
+              True)
         bsig = base_body.base_signature("Demo")
         refs = get_character_dir("Demo") / "model_refs"
         refs.mkdir(parents=True, exist_ok=True)

@@ -323,7 +323,7 @@ def is_feature_enabled(character_name: str, feature: str, *, profile=None, confi
 
 
 def template_feature(character_name: str, feature: str,
-                     default: bool = False) -> bool:
+                     default: bool = False, *, profile: Optional[Dict[str, Any]] = None) -> bool:
     """Template-only feature lookup that fails CLOSED.
 
     ``is_feature_enabled`` is deliberately fail-open: a template that omits a
@@ -333,10 +333,12 @@ def template_feature(character_name: str, feature: str,
     only, ignores the per-character config override (a marker is a property of
     the KIND of character, not a per-character toggle) and returns ``default``
     (False) whenever the key, the template or the profile is missing.
+    ``profile``: the caller's already loaded profile (no second read).
     """
     try:
-        from app.models.character import get_character_profile
-        profile = get_character_profile(character_name) or {}
+        if profile is None:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
         features = template_features(profile.get("template") or "human-default")
         if features is None:
             return default

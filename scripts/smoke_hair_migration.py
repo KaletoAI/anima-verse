@@ -207,7 +207,6 @@ def main() -> int:
             prof = get_character_profile(char)
             prof["profile_image"] = f"{char}_1.png"
             assert save_character_profile(char, prof)
-            assert base_body.set_pipeline(char, True)
             bsig = base_body.base_signature(char)
             R = get_character_dir(char) / "model_refs"
             for view in ("tpose", "tpose_back"):

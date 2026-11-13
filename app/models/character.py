@@ -888,17 +888,18 @@ def save_character_profile(character_name: str, profile: Dict[str, Any],
     return _stored
 
 
-def is_temporary_npc(character_name: str) -> bool:
+def is_temporary_npc(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
     """True when this character's TEMPLATE marks it as a temporary NPC.
 
     The template is the single source of truth (feature ``temporary_npc``), so
     a second NPC kind is another template JSON and not another code path. The
     lookup fails CLOSED — see ``character_template.template_feature``.
+    ``profile``: the caller's already loaded profile (no second read).
     """
     if not character_name:
         return False
     from app.models.character_template import template_feature
-    return template_feature(character_name, "temporary_npc")
+    return template_feature(character_name, "temporary_npc", profile=profile)
 
 
 def list_temporary_npcs() -> List[str]:

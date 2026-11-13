@@ -131,7 +131,6 @@ def main() -> int:
         human = {"template": "human-roleplay", "gender": "male", "age": 30, "height": 180,
                  "character_appearance": "athletic", "body_slots": {"skin": {"tone": "olive"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         hid = inventory.add_item(name="Jacket", category="outfit_piece", prompt_fragment="a black jacket",
                                  outfit_piece={"slots": ["top"], "covers": ["torso"],
                                                "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]

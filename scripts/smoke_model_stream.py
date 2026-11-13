@@ -155,6 +155,10 @@ with tempfile.TemporaryDirectory() as tmp:
     from app.core import db, model3d
     from app.routes import characters
     db.init_schema()
+    from app.models.character import save_character_profile
+    # demo.fbx + demo.png is the generic (non-humanoid) model contract. Since Task 11h (Ruling A13) every humanoid is
+    # on the base-body pipeline, where a model without a base identity counts as stale, so demo is an animal here.
+    assert save_character_profile("demo", {"template": "animal-default"}, create_new=True)
     from app.models.character import get_character_dir
     get_character_dir("demo").mkdir(parents=True, exist_ok=True)
     directory = model3d.get_model3d_dir("demo")

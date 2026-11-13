@@ -489,7 +489,7 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
               <p>{t('The stored mesh is cleaned in place (lash flaps folded back onto their root, lips neutralised), then everything after it is rebuilt from it.')}</p>
               <p><strong>{t('Hub jobs')}:</strong> {jobsText}</p>
               <p className="ga-hint">{t('Normalize, extension bones and collision capsules follow the rig locally.')}</p>
-              {pipeline ? <p className="ga-hint">{t('Every outfit model is painted onto the base body: each one turns stale and is rebuilt on its next trigger.')}</p> : null}
+              {pipeline ? <p className="ga-hint">{t('Every figure is built on the base body: each one turns stale and the next Build rebuilds it.')}</p> : null}
               {cleanup.status === 'applied' ? <p className="ga-hint">{t('The stored mesh was cleaned by an older version; the new version starts again from the mesher\'s original mesh.')}</p> : null}
             </div>
             <div className="ga-modal-footer">
@@ -648,7 +648,7 @@ export function ModelFaceActions({ character, st, face, signature, cleanup, hasM
             <div className="ga-modal-header">{pipeline ? t('Re-rig base body') : t('Re-rig from mesh')}</div>
             <div className="ga-modal-body ga-form">
               <p className="ga-hint">{pipeline
-                ? t('Re-rigs the base body from its retained mesh. Every outfit model is painted onto the base body, so each one is rebuilt on its next trigger.')
+                ? t('Re-rigs the base body from its retained mesh. Every figure is built on the base body, so the next Build rebuilds each one.')
                 : t('Reuses the retained mesh and rebuilds the rig, extension bones and existing low tier.')}</p>
               <label>{t('Rigger')}
                 <select className="ga-input" value={rerigBackend} disabled={busy} onChange={e => setRerigBackend(e.target.value)}>

@@ -93,7 +93,10 @@ def _wants(name: str, profile: Dict[str, Any], item_id: str, kind: str) -> bool:
 
 
 def _subjects(params: Dict[str, Any]) -> Tuple[List[str], str, str]:
-    names = [params["character"]] if params.get("character") else subjects.pipeline_characters()
+    # The roster is the pipeline characters with a READY base model, a named character too: since Task 11h
+    # (Ruling A13) every humanoid is on the pipeline, also one without a base body, whose chain cannot run.
+    roster = subjects.pipeline_characters()
+    names = [n for n in roster if n == params["character"]] if params.get("character") else roster
     return names, params.get("kind") or KIND_ALL, params.get("scope") or SCOPE_WORN
 
 

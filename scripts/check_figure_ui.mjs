@@ -51,8 +51,12 @@
  *                              without a pending change of a piece: still a Build, said as such)
  *       ('failed', 1, null)  → "1 change · a step failed · Build (cost unknown)"
  *       ('building', 2, 7)   → "Status: building · 2 changes";  ('building', 0, 0) → "Status: building"
- * [9] buildButton(f) — rule 2, the disabled reason written under it:
- *       off the pipeline                → disabled "Off the figure pipeline"
+ * [9] buildButton(f) — rule 2, the disabled reason written under it (Task 11h, Ruling A13: every humanoid is
+ *     on the pipeline, the "Off the figure pipeline" case is gone with the switch):
+ *       no plain body yet (body.plain.state "missing"), steps costing 9 → label "Build base body (9 hub jobs)",
+ *                                          disabled null; noBaseBody → true; with plain "ready" → false;
+ *       no body block (null)             → noBaseBody false, label "Build (…)";
+ *       BUILD_STATUS.off = "No figure — humanoid characters that are not temporary NPCs only";
  *       no planned step, no run          → label "Build (0 hub jobs)", disabled "Nothing to build"
  *       no planned step, a run goes      → disabled null (a click queues the next one — NOT a disable)
  *       steps costing 7, run or not      → label "Build (7 hub jobs)", disabled null
@@ -62,7 +66,12 @@
  *       ('model', 3) → "Regenerate the plain body's mesh — 3 hub jobs";  ('model', null) → "… — cost unknown"
  *       ('face', 1) → "Redo the plain body's face — 1 hub job"
  *     AUTO_BUILD_NOTE = "then Build runs automatically"; staleBaseNote(7) (the skin step's note, the base-skin
- *     review) → "Makes the base model stale — the next Build rebuilds it (7 hub jobs)".
+ *     review) → "Makes the base model stale — the next Build you start rebuilds it (7 hub jobs)" (Task 11h: an
+ *     automatic Build never rebuilds the plain body, ruling 8a — was "the next Build rebuilds it").
+ *     staleModelText (Task 11h, the Pose and 3D tabs' line under a stale outfit model): 'before_pipeline' →
+ *     "Made without the base body — the Figure tab’s Build replaces it"; 'outfit_body' → "Built on an older body
+ *     shape — rebuild it"; 'figure' → "Built as another figure than the worn pieces show now — rebuild it";
+ *     null / 'older_base' → "Built on an older base body — rebuild it".
  * [11] wornState(row) / bodyLine — the sketch's state column and Body line:
  *       ready → "✓ ready"; own_mesh interim with 3 jobs, in_body_until 'mesh' (ruling A11, task 11c-2: in the
  *       body until its mesh is ready; was "shown painted until ready") → "⏳ mesh · 3 hub jobs" + "in the body
@@ -79,7 +88,8 @@
  *      concern 2 — a worn piece's only entry is the Figure tab); FigureBodyDetails writes staleBaseNote
  *      under "Run skin step"; FieldFigure starts nothing but the Build (its POSTs, all through its one
  *      `post()` helper — `apiPost` named twice: import + that call: figure/build, figure/auto-build,
- *      base-body/pipeline, and since Task 11b the other state's single action garments/{item}/run — a
+ *      (base-body/pipeline until Task 11h removed the switch) and since Task 11b the other state's single
+ *      action garments/{item}/run — a
  *      template-literal path, written with its `${…}` as `{}`); the template has tab `figure_tab` {Figure, Figur} with the
  *      humanoid-only section `figure` (special "figure"), and CharactersTab renders the slot `figure`.
  * [13] Task 11 source greps: the Figure tab opens GarmentPieceDialog with `noRunAll`, and the dialog's
@@ -111,6 +121,10 @@
  *     sub n; without `rebuild` → "⏳ HairDeck · 9 hub jobs". ESTIMATE_NOTE = "Hub jobs are an estimate —
  *     retries extra" (F13 c) and FieldFigure renders it under the Build button and the changes through
  *     changeLine.
+ * [17] Ruling A13b (source greps): FigureBuildButton posts only figure/build and labels itself with
+ *       buildButton (the Figure tab's "Build (N jobs)"); BaseBodyOutfitStatus (Pose tab) and FieldModel3D (3D tab)
+ *       render it instead of "Rebuild outfit model" / "Rebuild from base body" (no model3d/generate); the
+ *       Wardrobe chip has no status.painted branch.
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -242,15 +256,22 @@ check('[8] building 0', m.headerLine('building', 0, 0), 'Status: building');
 
 // [9]
 const step = (jobs) => ({ name: 'pieces', label: 'x', jobs, item_id: 'a', failed: '', manual: '' });
-const fig = (pipeline, steps, running) => ({
-  pipeline, cost: { hub_jobs: steps.reduce((a, s) => a + s.jobs, 0), note: '', steps }, build: { running } });
-check('[9] off pipeline', m.buildButton(fig(false, [], false)).disabled, 'Off the figure pipeline');
-check('[9] nothing to build', m.buildButton(fig(true, [], false)),
+const fig = (plain, steps, running) => ({
+  body: plain === null ? null : { plain: { key: 'b', state: plain }, shape: { key: '', state: 'plain' },
+    texture: { key: '', state: 'none' } },
+  cost: { hub_jobs: steps.reduce((a, s) => a + s.jobs, 0), note: '', steps }, build: { running } });
+check('[9] no base body', m.buildButton(fig('missing', [step(4), step(5)], false)),
+  { label: 'Build base body (9 hub jobs)', disabled: null });
+check('[9] noBaseBody', [m.noBaseBody(fig('missing', [], false)), m.noBaseBody(fig('ready', [], false)),
+  m.noBaseBody(fig(null, [], false))], [true, false, false]);
+check('[9] no body block', m.buildButton(fig(null, [step(2)], false)).label, 'Build (2 hub jobs)');
+check('[9] off status', m.BUILD_STATUS.off, 'No figure — humanoid characters that are not temporary NPCs only');
+check('[9] nothing to build', m.buildButton(fig('ready', [], false)),
   { label: 'Build (0 hub jobs)', disabled: 'Nothing to build' });
-check('[9] running, nothing planned: not disabled', m.buildButton(fig(true, [], true)).disabled, null);
-check('[9] 7 jobs', m.buildButton(fig(true, [step(3), step(4)], false)),
+check('[9] running, nothing planned: not disabled', m.buildButton(fig('ready', [], true)).disabled, null);
+check('[9] 7 jobs', m.buildButton(fig('ready', [step(3), step(4)], false)),
   { label: 'Build (7 hub jobs)', disabled: null });
-check('[9] 7 jobs while running', m.buildButton(fig(true, [step(7)], true)),
+check('[9] 7 jobs while running', m.buildButton(fig('ready', [step(7)], true)),
   { label: 'Build (7 hub jobs)', disabled: null });
 check('[9] running note', m.BUILD_RUNNING_NOTE, 'A Build is running — the next one is queued');
 
@@ -261,7 +282,11 @@ check('[10] model 3', m.singleAction('model', 3), "Regenerate the plain body's m
 check('[10] model null', m.singleAction('model', null), "Regenerate the plain body's mesh — cost unknown");
 check('[10] face 1', m.singleAction('face', 1), "Redo the plain body's face — 1 hub job");
 check('[10] auto note', m.AUTO_BUILD_NOTE, 'then Build runs automatically');
-check('[10] skin note', m.staleBaseNote(7), 'Makes the base model stale — the next Build rebuilds it (7 hub jobs)');
+check('[10] skin note', m.staleBaseNote(7), 'Makes the base model stale — the next Build you start rebuilds it (7 hub jobs)');
+check('[10] stale model texts', ['before_pipeline', 'outfit_body', 'figure', null, 'older_base'].map((r) => m.staleModelText(r)), [
+  'Made without the base body — the Figure tab’s Build replaces it', 'Built on an older body shape — rebuild it',
+  'Built as another figure than the worn pieces show now — rebuild it', 'Built on an older base body — rebuild it',
+  'Built on an older base body — rebuild it']);
 
 // [11]
 const row = (o) => ({ state: 'pending', mode: 'painted', jobs: 0, failure: '', left_out: '', note: '',
@@ -301,7 +326,7 @@ const fieldFigure = src('frontend/src/tabs/characters/FieldFigure.tsx');
 const posts = [...fieldFigure.matchAll(/\bpost\(\s*['`]([^'`]+)['`]/g)].map((x) => x[1].replace(/\$\{[^}]*\}/g, '{}'));
 check('[12] FieldFigure starts only the Build (+ the other state\'s mesh)', [[...new Set(posts)].sort(),
   (fieldFigure.match(/\bapiPost\b/g) || []).length],
-  [['base-body/pipeline', 'figure/auto-build', 'figure/build', 'garments/{}/run'], 2]);
+  [['figure/auto-build', 'figure/build', 'garments/{}/run'], 2]);
 const tmpl = JSON.parse(src('shared/templates/character/base-character.json') || '{"tabs":[],"sections":[]}');
 const tab = tmpl.tabs.find((x) => x.id === 'figure_tab') || {};
 const section = tmpl.sections.find((x) => x.id === 'figure') || {};
@@ -373,6 +398,20 @@ check('[16] hair state HairDeck', m.hairState({ mode: 'hairdeck', state: 'pendin
 check('[16] estimate note', m.ESTIMATE_NOTE, 'Hub jobs are an estimate — retries extra');
 check('[16] FieldFigure uses them', [/t\(ESTIMATE_NOTE\)/.test(fieldFigure),
   /data\.changes\.map\(\(c\) => changeLine\(c, t\)\)/.test(fieldFigure)], [true, true]);
+
+// [17] Ruling A13b: the Pose tab's and the 3D tab's rebuild buttons are the Figure tab's Build.
+const fbb = src('frontend/src/tabs/characters/FigureBuildButton.tsx');
+const bbos = src('frontend/src/tabs/characters/BaseBodyOutfitStatus.tsx');
+const fm3 = src('frontend/src/tabs/characters/FieldModel3D.tsx');
+check('[17] FigureBuildButton posts only figure/build, labelled by buildButton',
+  [[...fbb.matchAll(/apiPost[^(]*\(`\/characters\/\$\{enc\}\/([^`?]+)/g)].map((x) => x[1]),
+    /buildButton\(data, t\)/.test(fbb)], [['figure/build'], true]);
+check('[17] Pose tab: the Build, no model3d/generate', [/<FigureBuildButton/.test(bbos), /model3d\/generate/.test(bbos),
+  /Rebuild outfit model/.test(bbos)], [true, false, false]);
+check('[17] 3D tab: the Build instead of "Rebuild from base body"', [/<FigureBuildButton/.test(fm3),
+  /rebuildFromBase|Rebuild from base body'/.test(fm3)], [true, false]);
+check('[17] Wardrobe: no painted status branch', /status\.painted/.test(src('frontend/src/tabs/characters/WardrobeGarment.tsx')),
+  false);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

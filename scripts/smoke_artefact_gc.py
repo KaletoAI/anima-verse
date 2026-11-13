@@ -186,7 +186,6 @@ def main() -> int:
             prof = get_character_profile(char)
             prof["profile_image"] = f"{char}_1.png"
             assert save_character_profile(char, prof)
-            assert base_body.set_pipeline(char, True)
             hid = garment_hair.ensure_hair_item(char)
             ids = {}
             for key, slots, own in (("top", ["top"], False), ("skirt", ["bottom"], False), ("dress", ["outer"], True)):

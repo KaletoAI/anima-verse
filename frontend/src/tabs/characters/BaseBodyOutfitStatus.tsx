@@ -1,7 +1,7 @@
 /**
  * BaseBodyOutfitStatus — under the Pose tab's outfit-model preview: how the CURRENT
  * outfit's model on the base-body pipeline stands (`base_info.outfit`).
- * Renders nothing off the pipeline.
+ * Renders nothing off the pipeline (a non-humanoid; every humanoid is on it).
  *
  * The outfit model is the rigged base body with the outfit painted on by the
  * local retexture worker. Shown: its status, the worker's error when the last
@@ -13,17 +13,15 @@
  * are listed as warnings under the status.
  *
  * A changed base body does NOT rebuild outfit models by itself; such a model
- * reports `stale` (or was built before the character joined the pipeline), and "Rebuild outfit model" starts the rebuild
- * of the current outfit (POST /characters/{n}/model3d/generate — the route
- * FieldModel3D's "Rebuild from base body" uses: stale dressed views first,
- * then the outfit model anew from the current base body). "Open Figure tab"
- * leads to the character's Build and its plain body.
+ * reports `stale` (or was made without the base body — every humanoid's old model until its first Build,
+ * Ruling A13). The button next to the status is the Figure tab's Build (FigureBuildButton, Ruling A13b:
+ * POST …/figure/build, "Build (N jobs)" — no cascade of its own). "Open Figure tab" leads to the character's
+ * Build and its plain body.
  */
-import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiPost } from '../../lib/api'
-import { useToast } from '../../lib/Toast'
-import { modelRunning, useBaseBody } from './useBaseBody'
+import { useBaseBody } from './useBaseBody'
+import { staleModelText } from './figureModel'
+import { FigureBuildButton } from './FigureBuildButton'
 
 /** A share (0..1) from the proof's `texels` block, or null when absent. */
 function texelShare(proof: Record<string, unknown> | null, key: string): number | null {
@@ -37,37 +35,13 @@ const pct = (v: number) => `${(v * 100).toFixed(1)} %`
 
 export function BaseBodyOutfitStatus({ character, onStarted, onOpenFigure }: {
   character: string
-  /** A rebuild was started (the caller re-reads its model preview). */
+  /** A Build was started (the caller re-reads its model preview). */
   onStarted?: () => void
   /** Switches to the Figure tab. */
   onOpenFigure?: () => void
 }) {
   const { t } = useI18n()
-  const { toast } = useToast()
-  const enc = encodeURIComponent(character)
   const { info, startPoll } = useBaseBody(character)
-  const [posting, setPosting] = useState(false)
-
-  const rebuild = useCallback(async () => {
-    if (posting) return
-    setPosting(true)
-    try {
-      const d = await apiPost<{ status?: string }>(`/characters/${enc}/model3d/generate?force=1`, {})
-      if (d?.status === 'already_running') {
-        toast(t('A 3D model generation is already running for this character'))
-      } else if (d?.status === 'queued') {
-        toast(t('Rebuild queued — it starts when the running model job ends'))
-      } else {
-        toast(t('Generating…'))
-      }
-      startPoll(500)
-      onStarted?.()
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-    } finally {
-      setPosting(false)
-    }
-  }, [enc, onStarted, posting, startPoll, t, toast])
 
   const outfit = info?.outfit
   if (!info?.pipeline || !outfit) return null
@@ -77,15 +51,7 @@ export function BaseBodyOutfitStatus({ character, onStarted, onOpenFigure }: {
   const statusText = outfit.status === 'running' ? t('Generating…')
     : outfit.status === 'failed' ? t('Failed')
     : outfit.status === 'stale'
-      ? (outfit.stale_reason === 'before_pipeline'
-        ? t('Built before the base body pipeline — rebuild it')
-        : outfit.stale_reason === 'detail_changed'
-          ? t('Built for another body detail under the clothing — rebuild it')
-          : outfit.stale_reason === 'mesh_item_ready'
-            ? t('An own-mesh piece painted on here has its garment mesh now — rebuild it')
-            : outfit.stale_reason === 'figure'
-              ? t('Built as another figure than the worn pieces show now — rebuild it')
-              : t('Built on an older base body — rebuild it'))
+      ? staleModelText(outfit.stale_reason, t)
     : outfit.status === 'missing' ? t('Not built yet')
     : t('Ready')
 
@@ -93,15 +59,7 @@ export function BaseBodyOutfitStatus({ character, onStarted, onOpenFigure }: {
     <div className="ga-form" style={{ marginTop: 8 }}>
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <span>{t('Outfit model (base body)')}: <span className="ga-hint">{statusText}</span></span>
-        <button
-          type="button"
-          className="ga-btn ga-btn-sm"
-          disabled={posting || modelRunning(info) || !info.model}
-          title={!info.model ? t('Generate the base model first') : undefined}
-          onClick={rebuild}
-        >
-          {t('Rebuild outfit model')}
-        </button>
+        <FigureBuildButton character={character} onStarted={() => { startPoll(500); onStarted?.() }} />
         {onOpenFigure ? (
           <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenFigure}>{t('Open Figure tab')}</button>
         ) : null}

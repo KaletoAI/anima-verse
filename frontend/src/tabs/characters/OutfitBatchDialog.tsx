@@ -333,7 +333,7 @@ export function OutfitBatchDialog({
         </div>
         <div className="ga-modal-body">
           <div className="ga-hint">
-            {t('Renders the T-pose reference and the mesh for every combination of the outfit pieces in this inventory — per slot one piece or nothing, without changing what the character wears. Carried items are not part of these combinations, and combinations that already have a mesh are skipped.')}
+            {t('Makes the 3D input and the model for every combination of the outfit pieces in this inventory — for a humanoid the dressed views of its base body and the outfit model built on it, for an animal the T-pose reference and its mesh — per slot one piece or nothing, without changing what the character wears. Carried items are not part of these combinations, and combinations that already have a model are skipped.')}
           </div>
 
           {!loaded ? (

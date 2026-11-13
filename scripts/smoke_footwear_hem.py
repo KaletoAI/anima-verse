@@ -261,7 +261,6 @@ def main() -> int:
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
                  "character_appearance": "slender", "body_slots": {"skin": {"tone": "olive"}}}
         check("create Demo", save_character_profile("Demo", dict(human), create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
 
         def boot_source(iid, mesh):
             ssig = fs.current_ssig(iid)

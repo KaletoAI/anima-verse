@@ -11,7 +11,9 @@ Runs against a THROWAWAY storage + instance directory with the ``human``
 package copied in — no world, no hub, no GPU, no Blender, no server.
 
 Fixture: Kira (human-roleplay, female, 30, 168 cm, profile picture
-``Kira_1.png``) on the base-body pipeline; Mira (same, OFF the pipeline).
+``Kira_1.png``) on the base-body pipeline; Mira (same, on the pipeline too —
+every humanoid is since Task 11h, Ruling A13 — but WITHOUT a base body; was:
+off the pipeline through the removed switch).
 ``bsig`` = base_signature(Kira), ``fp`` = prompt_fingerprint(Kira). Kira's
 four base views ``model_refs/tpose[_<view>]_<bsig>.png`` carry sidecars with
 ``prompt_fingerprint`` "000000000000" (older prompts; the front stamped
@@ -53,7 +55,7 @@ the front view, face; rig — normalize and the other Blender steps are CPU):
      released; base_prompts_freshness "current"; base_signature unchanged
      (prompts are not identity — the files replaced in place); rescan → no
      candidate; is_done True; the one-shot worked itself off.
-[B2] no note → no candidate: the refreshed Kira; Mira (off the pipeline);
+[B2] no note → no candidate: the refreshed Kira; Mira (on the pipeline, no base model → off the roster);
      Kira's base model file gone (not ready → off the figure roster); the
      front gone (missing is not older). Params: character "Kira" narrows,
      "Mira" → [], "Nope" → ValueError "invalid value for 'character'" (the
@@ -190,6 +192,7 @@ def main() -> int:
         from app.core.improvements import engine, registry, store
         from app.core.improvements.base import CandidateBusy, CandidateRefused
         from app.core.improvements.types.base_refresh import BaseRefresh
+        from app.core.improvements.types import subjects
         from app.core.task_queue import get_task_queue
         from app.core.timeutils import utc_now_iso
         from app.imagegen.base import BackendBusyError
@@ -208,7 +211,6 @@ def main() -> int:
             stored = get_character_profile(name)
             stored["profile_image"] = f"{name}_1.png"
             check(f"profile image {name}", save_character_profile(name, stored), True)
-        check("pipeline Kira", base_body.set_pipeline("Kira", True), True)
         bsig = base_body.base_signature("Kira")
         fp = base_body.prompt_fingerprint("Kira")
         cdir = get_character_dir("Kira")
@@ -336,7 +338,8 @@ def main() -> int:
 
             # --- [B2] ---------------------------------------------------------------
             print("[B2] no note, no candidate")
-            check("Mira off the pipeline", base_body.is_base_pipeline("Mira"), False)
+            check("Mira on the pipeline (humanoid)", base_body.is_base_pipeline("Mira"), True)
+            check("Mira off the roster (no base model)", "Mira" in subjects.pipeline_characters(), False)
             check("refreshed Kira: nothing", cands(), [])
             old_base()
             write_model()

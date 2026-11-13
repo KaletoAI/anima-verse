@@ -472,7 +472,6 @@ def main() -> int:
         stored = get_character_profile("Demo")
         stored["profile_image"] = "Demo_1.png"
         check("profile image", save_character_profile("Demo", stored), True)
-        check("pipeline", base_body.set_pipeline("Demo", True), True)
         hid = inventory.add_item(name="Dress", category="outfit_piece", owner="Demo", item_id="dress",
                                  prompt_fragment=FRAGMENT,
                                  outfit_piece={"slots": ["top", "bottom"], "outfit_types": ["casual"],
@@ -798,7 +797,6 @@ def main() -> int:
         neo = json.loads(json.dumps(human))
         neo["body_slots"]["hair"] = {"length": "short", "color": "black"}
         check("create Neo", save_character_profile("Neo", neo, create_new=True), True)
-        check("pipeline Neo", base_body.set_pipeline("Neo", True), True)
         check("Neo has hair text", bool(garment_hair.hair_description("Neo")), True)
         write_base_for("Neo")
         garments.wait_idle(30)

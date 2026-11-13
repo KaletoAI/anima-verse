@@ -340,7 +340,6 @@ def main() -> int:
         stored = get_character_profile("Demo")
         stored["profile_image"] = "Demo_1.png"
         check("profile image", save_character_profile("Demo", stored), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
 
         from app.core import figure
         check("nothing worn: no shape wanted", figure.is_plain(figure.wanted_figure("Demo").shape), True)

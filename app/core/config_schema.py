@@ -134,7 +134,7 @@ SECTIONS = {
                 "default": "body",
                 "description": "How a base-body character's hair is made. From the body mesh: the base views are "
                                "rendered with the character's hair, so the hair is part of the base body and of "
-                               "every outfit body — no hair mesh, no hair job. HairDeck: one job turns the profile "
+                               "every body shape — no hair mesh, no hair job. HairDeck: one job turns the profile "
                                "picture into hair cards (needs an img2hair backend, occasion hair_mesh), fitted "
                                "onto the bald base body. A character can override this in its Wardrobe's hair row. "
                                "Switching between the two changes the base body's prompts: its views show "

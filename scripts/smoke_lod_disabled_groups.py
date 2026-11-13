@@ -21,6 +21,10 @@ with tempfile.TemporaryDirectory() as tmp:
     paths.init(tmp)
     from app.core.db import init_schema
     init_schema()
+    # The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on
+    # the base-body pipeline and only a non-humanoid takes it; the humanoid fixture keeps it via this stub.
+    from app.core import base_body as _legacy_bb
+    _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
     from app.core import model3d, extension_rig
     from app.blender import runner
     model_dir = Path(tmp) / "characters" / "demo" / "model3d"

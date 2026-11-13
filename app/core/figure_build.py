@@ -116,8 +116,8 @@ DEPENDS = {"interim": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain
 #: Steps that hold the character's 3D generation slot (model work).
 SLOT_STEPS = frozenset({"plain_body", "interim", "shape", "texture", "assemble"})
 
-#: ``start`` / the route's 409 off the pipeline.
-OFF_PIPELINE = "Off the figure pipeline — the character is not on the base-body pipeline"
+#: ``start`` / the route's 409 off the pipeline (a non-humanoid or a temporary NPC — Rulings A13 / A13a).
+OFF_PIPELINE = "No figure — the figure is for humanoid characters that are not temporary NPCs"
 #: Task-queue row type of a Build.
 TRACK_TYPE = "figure_build"
 

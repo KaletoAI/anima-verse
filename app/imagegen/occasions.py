@@ -130,7 +130,8 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         ["base_view_back"],
         {"character_scoped": True, "char_spec_field": "outfit_back_draft_workflow",
          "char_spec_fallback": "tpose_view_workflow"},
-        hint="An edit of the dressed front turned around; only its clothing is used."),
+        hint="An edit of the dressed front turned around; only its clothing is used — composited onto the "
+             "base back view on the CPU (no second render)."),
     # The second step of a dressed back/side view — the draft's clothing put
     # onto the base view — is a CPU composite (app/core/view_composite.py,
     # Task 11g): the model-fit occasions outfit_back / outfit_side are gone
@@ -144,8 +145,8 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         ["base_view_side"],
         {"character_scoped": True, "char_spec_field": "outfit_side_draft_workflow",
          "char_spec_fallback": ("outfit_back_draft_workflow", "tpose_view_workflow")},
-        hint="An edit of the dressed front in profile; only its clothing is used. "
-             "Runs only with the world setting Dressed side views."),
+        hint="An edit of the dressed front in profile; only its clothing is used — composited onto the "
+             "base side view on the CPU (no second render). Runs only with the world setting Dressed side views."),
     "scene_view": _image("Rendered scene view", "Player 'Rendered' view",
                          ["scene"], _WORLD, **_PEOPLE),
     "location": _image(

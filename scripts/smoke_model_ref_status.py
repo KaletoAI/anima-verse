@@ -83,7 +83,7 @@ FIRED = []      # (character, kinds, force) as _fire_kinds would receive them
 
 def _stub_world():
     mr.current_outfit_state = lambda name: ({}, [], "")
-    mr.is_humanoid = lambda name: False
+    mr.is_humanoid = lambda name, **_k: False
     mr.enabled_tpose_views = lambda name: ()
     mr.get_auto_kinds = lambda name: dict(AUTO)
     mr._enabled = lambda: ENABLED[0]

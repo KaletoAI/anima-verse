@@ -256,7 +256,6 @@ def main() -> int:
                  "character_appearance": "slender", "body_slots": {"skin": {"tone": "olive"}}}
         for name in ("Demo", "Mira"):
             check(f"create {name}", save_character_profile(name, dict(human), create_new=True), True)
-            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
 
         def shoe_item(item_id, shaft=0.0, colour=(20, 20, 20), mesh=None, material=None):
             iid = inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,

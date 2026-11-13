@@ -93,10 +93,10 @@ FIGURE_CHANGED = "Built for another figure"
 # The same phrases as base_body.OLDER_BASE / BEFORE_PIPELINE / DETAIL_CHANGED /
 # FIGURE_CHANGED / OUTFIT_BODY_CHANGED.
 MODEL_STALE_REASONS = {"older_base": "Built on an older base body",
-                       "before_pipeline": "Built before the base body pipeline",
+                       "before_pipeline": "Made without the base body",
                        "detail_changed": "Built for another body detail under the clothing",
                        "figure": FIGURE_CHANGED,
-                       "outfit_body": "Built on an older outfit body"}
+                       "outfit_body": "Built on an older body shape"}
 # garments.garment_info ``stale_reasons`` -> phrase (the hair labels).
 HAIR_STALE_REASONS = {"description_changed": "Hair description changed",
                       "base_changed": "Base body changed",
@@ -286,7 +286,7 @@ def _collision_step(meta: Dict[str, Any], *, current: Optional[bool] = None) -> 
     if record.get("source") == "base":
         parts.append("from the base model")
     elif record.get("source") == "body":
-        parts.append("from the outfit body")
+        parts.append("from the body shape")
     if current is False:
         parts.append("outdated")
     status = WARNING if skipped or current is False else DONE
@@ -585,10 +585,10 @@ def _outfit_body_step(meta: Dict[str, Any], body_meta: Optional[Dict[str, Any]])
     body_id = str(meta.get("body_id") or "")
     numbers = {"body_id": body_id or None, "texture_signature": meta.get("texture_signature")}
     if body_meta is None:
-        return step("outfit_body", "Outfit body", WARNING, f"{body_id} · file missing" if body_id else
+        return step("outfit_body", "Body shape", WARNING, f"{body_id} · file missing" if body_id else
                     "Not recorded", numbers)
     parts = [body_id, str(meta.get("texture_signature") or ""), "meshed from the dressed views"]
-    return step("outfit_body", "Outfit body", DONE, " · ".join(p for p in parts if p), numbers)
+    return step("outfit_body", "Body shape", DONE, " · ".join(p for p in parts if p), numbers)
 
 
 def _posture_match_step(blender: Dict[str, Any]) -> Dict[str, Any]:
@@ -629,13 +629,13 @@ def _body_parent_step(meta: Dict[str, Any]) -> Dict[str, Any]:
     """The parent record of an outfit body (``base_body.prepare_shape``)."""
     record = _dict(meta.get("outfit_body"))
     if not record:
-        return step("outfit_body", "Outfit body", NOT_RECORDED, "No parent record")
+        return step("outfit_body", "Body shape", NOT_RECORDED, "No parent record")
     used = [v for v in (record.get("used_views") or []) if isinstance(v, str)]
     warnings = [w for w in (record.get("view_warnings") or []) if isinstance(w, str)]
     detail = " · ".join(filter(None, [str(record.get("texture_signature") or ""),
                                       str(record.get("base_signature") or ""),
                                       ("views " + ", ".join(used)) if used else ""] + warnings))
-    return step("outfit_body", "Outfit body", WARNING if warnings else DONE, detail,
+    return step("outfit_body", "Body shape", WARNING if warnings else DONE, detail,
                 {"texture_signature": record.get("texture_signature"), "views": len(used) or None})
 
 
@@ -889,12 +889,12 @@ def outfit_model_steps(meta: Dict[str, Any], *, base: Optional[Tuple[str, str]],
         face = _face_texels_step(meta)
         if face is not None:
             rows.append(face)
-    rows.append(_rig_step(meta, inherited=True, source="the outfit body" if on_body else "the base model"))
+    rows.append(_rig_step(meta, inherited=True, source="the body shape" if on_body else "the base model"))
     state = _dict(meta.get("extension_rig"))
     base_state = _dict(((body_meta if on_body else base_meta) or {}).get("extension_rig"))
     if on_body and state and base_state and state.get("fingerprint") == base_state.get("fingerprint") \
             and state.get("attempted_at") == base_state.get("attempted_at"):
-        source = "inherited from the outfit body"
+        source = "inherited from the body shape"
     elif on_body:
         source = "rebuilt for this outfit" if state else ""
     elif meta.get("base_variant") == "covered":

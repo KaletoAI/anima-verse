@@ -34,12 +34,13 @@ REAL.
 Fixture: Demo (human-roleplay, profile image, on the pipeline, no hair
 slot -> no hair item), base images ``tpose[_<view>]_<B1>`` (8x8 RGBA) and
 the base models of smoke_garment_chain (``base_bodies``: unrigged + rigged
-with the 52 Mixamo joints). Offline (human, pipeline OFF), Pet
-(animal-default, ``model_pipeline: base_body`` but not humanoid).
+with the 52 Mixamo joints). Pet (animal-default, a stale
+``model_pipeline: base_body`` but not humanoid — the one character off the
+pipeline since Task 11h; the former "Offline" human switched off it is gone).
 Items (explicit ids): dress {slots [top], covers [bottom], own_mesh,
 "a long red dress"}, skirt {[bottom], "a blue pleated skirt"}, shorts
 {[bottom], "grey denim shorts"}, coat {[outer], own_mesh, "a green wool
-coat"}, shoes {[feet], "white sneakers"}. Demo and Offline hold all five.
+coat"}, shoes {[feet], "white sneakers"}. Demo holds all five.
 
 Expected, derived by hand from the brief:
 
@@ -58,8 +59,7 @@ Expected, derived by hand from the brief:
        _signature(X1) == _signature(X2) == the pinned signature of X1, and
        current_outfit_state == pinned (flipping back restores the old key,
        Review Focus 1). Flag on again for the rest.
-    d. Off the pipeline: Offline wearing X1 -> token "", signature ==
-       pinned; Pet -> token "" for {top: dress}.
+    d. Off the pipeline: Pet -> token "" for {top: dress}.
 [2] Order + dress text (Review Focus 1), reworked by task 11c-2 of plan
     2026-11-12-unified-worn-pieces (rulings A11 / A14): Demo wears X =
     {top: dress, bottom: skirt, outer: coat, feet: shoes}; dress ``ok``,
@@ -129,8 +129,7 @@ Expected, derived by hand from the brief:
     coat it keeps in bC, whose mesh is accepted since [3b] — ruling A11;
     was [dress]; not the current pieces), the all-mesh model -> [coat,
     dress]; a sidecar without mesh_items -> []; dress flag off -> the X
-    model still [coat, dress] (flag on again); Demo switched off the
-    pipeline -> [] (on again).
+    model still [coat, dress] (flag on again).
 [5] GC keep (Review Focus 5): Demo in {feet: shoes}, holding dress and
     coat: _garment_keep contains garment:dress_<fsig> and
     garment:coat_<fsig>, not a stray garment:skirt_<12 hex> group; dress
@@ -145,8 +144,7 @@ Expected, derived by hand from the brief:
     second run_queued at once -> queue [dress, coat] (dress reused, the
     running coat queued again); released -> runs coat, dress, coat in that
     order, max concurrency 1, idle afterwards. Off pipeline:
-    after_base_model(Offline) False, resolve_figure(Offline, X) record {}
-    and resolve_figure(Pet, {top: dress}) record {} without a run (Review
+    resolve_figure(Pet, {top: dress}) record {} without a run (Review
     Focus 4; Task 6 replaced resolve_mesh_items by resolve_figure).
 [8] Fix round 1 (a failed chain is not retried automatically): coat
     ``fail``, X worn. start_garment twice -> two runs (explicit runs ignore
@@ -429,7 +427,7 @@ def main() -> int:
                  "character_appearance": "slender",
                  "body_slots": {"skin": {"tone": "olive"}, "eyes": {"color": "green"},
                                 "build": {"type": "athletic"}}}
-        for name in ("Demo", "Offline"):
+        for name in ("Demo",):
             check(f"create {name}", save_character_profile(name, json.loads(json.dumps(human)),
                                                            create_new=True), True)
             images = get_character_images_dir(name)
@@ -438,7 +436,6 @@ def main() -> int:
             stored = get_character_profile(name)
             stored["profile_image"] = f"{name}_1.png"
             check(f"profile image {name}", save_character_profile(name, stored), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         check("create Pet", save_character_profile("Pet", {"template": "animal-default", "gender": "female",
                                                            "model_pipeline": "base_body"}, create_new=True), True)
 
@@ -451,9 +448,8 @@ def main() -> int:
         check("items", [piece("dress", ["top"], covers=["bottom"], own_mesh=True), piece("skirt", ["bottom"]),
                         piece("shorts", ["bottom"]), piece("coat", ["outer"], own_mesh=True),
                         piece("shoes", ["feet"])], ["dress", "skirt", "shorts", "coat", "shoes"])
-        for name in ("Demo", "Offline"):
-            for item in FRAG:
-                inventory.add_to_inventory(name, item)
+        for item in FRAG:
+            inventory.add_to_inventory("Demo", item)
 
         def flag(item_id, on):
             item = inventory.get_item(item_id)
@@ -526,9 +522,6 @@ def main() -> int:
         check("c flag off: pinned", model_refs.current_outfit_state("Demo")[2], pinned_sig("Demo", x1))
         flag("dress", True)
         check("c flag on again", model_refs.current_outfit_state("Demo")[2], sig_x1)
-        wear("Offline", x1)
-        check("d Offline token", model_refs.mesh_items_token("Offline"), "")
-        check("d Offline pinned", model_refs.current_outfit_state("Offline")[2], pinned_sig("Offline", x1))
         check("d Pet token", model_refs.mesh_items_token("Pet", {"top": "dress"}), "")
 
         # --- [2] order and dress text ---------------------------------------------
@@ -696,9 +689,6 @@ def main() -> int:
         flag("dress", False)
         check("flag off: X model keeps its garments", wanted(sig_x), ["coat", "dress"])
         flag("dress", True)
-        base_body.set_pipeline("Demo", False)
-        check("off pipeline", wanted(sig_x), [])
-        base_body.set_pipeline("Demo", True)
 
         # --- [5] GC keep ------------------------------------------------------------------
         print("[5] GC keeps the fits of held pieces")
@@ -756,8 +746,6 @@ def main() -> int:
         check("serial", live["max"], 1)
         del gates["coat"]
         RUNS.clear()
-        check("Offline: no run", garments.after_base_model("Offline"), False)
-        check("Offline: resolve", base_body.resolve_figure("Offline", X)[1], {})
         check("Pet: resolve", base_body.resolve_figure("Pet", {"top": "dress"})[1], {})
         check("no run off the pipeline", RUNS, [])
 

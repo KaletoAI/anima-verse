@@ -14,6 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core import paths
 with tempfile.TemporaryDirectory() as tmp:
     paths.init(tmp)
+    # The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on
+    # the base-body pipeline and only a non-humanoid takes it; the humanoid fixture keeps it via this stub.
+    from app.core import base_body as _legacy_bb
+    _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
     from app.core import character_ops as co, model_refs as mr, model3d as m3
     with patch.object(mr, 'current_outfit_state', return_value=({}, [], 'new')), patch.object(mr, 'trigger_now'), patch.object(mr, 'find_ref_image', return_value=Path(tmp)/'input.png'), patch.object(m3, 'find_model3d', return_value=None), patch.object(m3, 'trigger_generation', side_effect=[False, True]) as trigger:
         co._regenerate_mesh_part('fixture')

@@ -48,7 +48,7 @@ with pixel (4, 4) = BASE_PX[view], sidecar base_signature = bsig.
 
 Characters (template human-roleplay — it has the outfit system):
 ``Demo`` (human, profile image, on the pipeline), ``DemoOld``
-(human, NOT on the pipeline), ``DemoNoModel`` (on the pipeline, base images,
+(human, no base body — on the pipeline too since Task 11h), ``DemoNoModel`` (base images,
 no base model). Outfit piece ``dress`` (slot top, prompt_fragment
 "a fitted red cotton dress with white sneakers"), piece ``scarf`` (slot neck,
 "a green wool scarf").
@@ -192,14 +192,11 @@ Expected, derived by hand from the brief:
         (_face_retexture_signature), model info face_signature = bsig.
 [9] DemoNoModel: model run -> ok False, error BASE_MODEL_MISSING, outfit
     status failed.
-[10] Not on the pipeline (DemoOld): its tpose pass renders with
-    prompt_prefix = get_tpose_prompt(), occasion "tpose", no bare_prompt,
-    no reference_image; the hook with auto_generate off starts nothing; with
-    auto_generate on it calls trigger_generation(prefer_cheapest=True); a
-    stored model without base_signature is found by find_model3d (no stale
-    rule off the pipeline). Switched ONTO the pipeline, that model is
-    "stale" with error "Built before the base body pipeline" and
-    stale_reason "before_pipeline" (its sidecar has no base_signature).
+[10] DemoOld (humanoid — on the pipeline without a switch since Task 11h,
+    Ruling A13; the former "today's path" checks of a humanoid switched
+    off it are gone, that path is the animals' now): a stored model of its
+    current outfit without base_signature is "stale" with error "Made
+    without the base body" and stale_reason "before_pipeline".
 [11] View guard in the model run (Demo wearing dress, forced rebuilds;
     ``base_body.view_guard`` replaced by a script — the measurement itself
     is scripts/smoke_base_body_view_guard.py). The stub renders are opaque,
@@ -484,8 +481,6 @@ def main() -> int:
             stored = get_character_profile(name)
             stored["profile_image"] = f"{name}_1.png"
             check(f"profile image {name}", save_character_profile(name, stored), True)
-        for name in ("Demo", "DemoNoModel"):
-            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
         dress = inventory.add_item(name="dress", category="outfit_piece",
                                    prompt_fragment="a fitted red cotton dress with white sneakers",
                                    outfit_piece={"slots": ["top"], "covers": [], "outfit_types": ["casual"],
@@ -1040,36 +1035,17 @@ def main() -> int:
             info = base_body.outfit_info("DemoNoModel")
             check("status no base model", (info["status"], info["error"]), ("failed", base_body.BASE_MODEL_MISSING))
 
-            # --- [10] not on the pipeline --------------------------------------------
-            print("[10] character off the pipeline keeps today's path")
+            # --- [10] a model from before the pipeline ----------------------------------
+            print("[10] a humanoid's model made without the base body is stale")
             equip("DemoOld", dress)
-            n_renders = len(RENDERS)
-            real_trigger = model3d.trigger_generation
-            model3d.trigger_generation = lambda name, **kw: TRIGGERS.append((name, kw)) or True
-            try:
-                model_refs.generate_model_ref_images("DemoOld", kinds=("tpose",))
-                old = [r for r in RENDERS[n_renders:] if r["character"] == "DemoOld"]
-                check("old path main render", [(r.get("prompt_prefix"), r.get("occasion"), r.get("bare_prompt"),
-                                                r.get("reference_image")) for r in old[:1]],
-                      [(model_refs.get_tpose_prompt(), "tpose", None, None)])
-                check("auto off: nothing started", (model3d.maybe_auto_generate_for_outfit("DemoOld"), TRIGGERS),
-                      (False, []))
-                model3d.set_model3d_options("DemoOld", {"auto_generate": True})
-                model3d.maybe_auto_generate_for_outfit("DemoOld")
-                check("auto on: cheapest trigger", TRIGGERS, [("DemoOld", {"prefer_cheapest": True})])
-            finally:
-                model3d.trigger_generation = real_trigger
             old_dir = get_character_dir("DemoOld") / "model3d"
+            old_dir.mkdir(parents=True, exist_ok=True)
             old_sig = model_refs.current_outfit_state("DemoOld")[2]
             (old_dir / f"{old_sig}.glb").write_bytes(rigged)
             (old_dir / f"{old_sig}.json").write_text(json.dumps({"rig": "mixamo"}))
-            check("no stale rule off the pipeline", model3d.find_model3d("DemoOld", old_sig),
-                  old_dir / f"{old_sig}.glb")
-            check("DemoOld onto the pipeline", base_body.set_pipeline("DemoOld", True), True)
             info = base_body.outfit_info("DemoOld")
             check("built before the pipeline", (info["status"], info["error"], info["stale_reason"]),
-                  ("stale", "Built before the base body pipeline", "before_pipeline"))
-            check("DemoOld off the pipeline", base_body.set_pipeline("DemoOld", False), True)
+                  ("stale", "Made without the base body", "before_pipeline"))
 
             # --- [11] view guard ------------------------------------------------------
             print("[11] view guard: re-render once, leave out, front fails the build")

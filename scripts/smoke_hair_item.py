@@ -62,8 +62,9 @@ non-string ``mesh_item: 5``.
     "hair") -> True and {}; ensure finds the item again by owner + kind.
 [9] Pet -> ValueError "Hair as its own mesh is for humanoid …", profile
     unchanged, no item created. Bald -> ValueError "No hair set …", no item
-    created. Offline (a human off the pipeline) -> ValueError "Offline is not
-    on the base-body pipeline".
+    created. (The former Offline case — a human with the pipeline switch off
+    -> "is not on the base-body pipeline" — left with Task 11h: that state no
+    longer exists and ensure_hair_item lost the branch.)
 """
 import json
 import os
@@ -149,16 +150,12 @@ def main() -> int:
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", json.loads(json.dumps(human)), create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         check("create Pet", save_character_profile("Pet", {"template": "animal-default", "gender": "female",
                                                            "model_pipeline": "base_body"}, create_new=True), True)
         bald = json.loads(json.dumps(human))
         bald["body_slots"].pop("hair")
         bald["character_appearance"] = "slender, green eyes"
         check("create Bald", save_character_profile("Bald", bald, create_new=True), True)
-        check("pipeline Bald", base_body.set_pipeline("Bald", True), True)
-        check("create Offline", save_character_profile("Offline", json.loads(json.dumps(human)),
-                                                       create_new=True), True)
 
         blouse = inventory.add_item(name="blouse", category="outfit_piece",
                                     prompt_fragment="a white linen blouse",
@@ -299,8 +296,6 @@ def main() -> int:
             check("Pet profile unchanged", get_character_profile("Pet"), pet_before)
             raises("Bald", lambda: garment_hair.ensure_hair_item("Bald"), ValueError, "No hair set")
             check("Bald no mesh pieces", inventory.get_equipped_mesh_pieces("Bald"), {})
-            raises("Offline", lambda: garment_hair.ensure_hair_item("Offline"), ValueError,
-                   "Offline is not on the base-body pipeline")
             check("no item created", len(inventory.list_items()), items_now)
         finally:
             inventory._notify_outfit_changed = real_notify

@@ -62,7 +62,9 @@ body makes every view and the stored shape count as missing):
     session, as ``smoke_auth_gate``) and a real throwaway world: admin GET
     ``/characters/Kira/figure`` → 200 with every key of the brief; a player
     allowed to see Kira → 403 on the GET and on POST …/figure/build; admin
-    POST build for a character off the pipeline → 409 naming the reason.
+    POST build for a character off the pipeline (Mara, an animal) → 409 with
+    the reason OFF_PIPELINE "No figure — the figure is for humanoid characters
+    only".
 [8] Fails on the old code: ``app/core/figure_build.py`` does not exist at
     bc07100f and ``base_body.dressed_view_jobs`` is not defined there.
 """
@@ -465,7 +467,7 @@ def route_section(root: Path):
     import hashlib
     from fastapi import FastAPI, Request
     from fastapi.testclient import TestClient
-    from app.core import auth_dependency, base_body, glb_delivery, model_refs
+    from app.core import auth_dependency, base_body, figure_build as fb, glb_delivery, model_refs
     from app.models import inventory
     from app.models.character import get_character_dir, save_character_profile
     from app.routes import figure as figure_route
@@ -474,8 +476,8 @@ def route_section(root: Path):
     glb_delivery.delivery_path = lambda path, **kw: path
     human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168}
     check("[7] create Kira", save_character_profile("Kira", dict(human), create_new=True), True)
-    check("[7] create Mara", save_character_profile("Mara", dict(human), create_new=True), True)
-    check("[7] pipeline Kira", base_body.set_pipeline("Kira", True), True)
+    # Mara is an animal: since Task 11h (Ruling A13) only a non-humanoid is off the pipeline.
+    check("[7] create Mara", save_character_profile("Mara", {"template": "animal-default"}, create_new=True), True)
     bsig = base_body.base_signature("Kira")
     cdir = get_character_dir("Kira")
     mdir, refs = cdir / "model3d", cdir / "model_refs"
@@ -523,7 +525,7 @@ def route_section(root: Path):
           client.post("/characters/Kira/figure/build", headers={"x-test-user": "user"}).status_code, 403)
     r = client.post("/characters/Mara/figure/build", headers={"x-test-user": "admin"})
     check("[7] admin POST build off the pipeline", r.status_code, 409)
-    check("[7] 409 names the reason", "pipeline" in str(r.json().get("detail") or ""), True)
+    check("[7] 409 names the reason", str(r.json().get("detail") or ""), fb.OFF_PIPELINE)
     check("[7] admin GET unknown character",
           client.get("/characters/Nobody/figure", headers={"x-test-user": "admin"}).status_code, 404)
 

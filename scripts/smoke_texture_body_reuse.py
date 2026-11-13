@@ -294,7 +294,6 @@ def main() -> int:
         stored = get_character_profile("Demo")
         stored["profile_image"] = "Demo_1.png"
         check("profile image", save_character_profile("Demo", stored), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
 
         def piece(item_id, slots, *, covers=(), own_mesh=False):
             op = {"slots": list(slots), "covers": list(covers), "outfit_types": ["casual"]}

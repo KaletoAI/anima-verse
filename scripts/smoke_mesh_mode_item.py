@@ -232,7 +232,6 @@ def main() -> int:
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
                  "outfit_body_mode": "mesh"}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo (the figure is a pipeline notion)", base_body.set_pipeline("Demo", True), True)
         shirt = add("Shirt", {"slots": ["top"], "mesh_mode": "painted"})
         trousers = add("Trousers", {"slots": ["bottom"], "mesh_mode": "painted"})
         check("shirt/trousers painted", (piece(shirt).get("mesh_mode"), piece(trousers).get("mesh_mode")),

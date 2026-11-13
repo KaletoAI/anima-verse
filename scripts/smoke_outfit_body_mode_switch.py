@@ -205,7 +205,6 @@ def main() -> int:
         prof = get_character_profile(char)
         prof["profile_image"] = f"{char}_1.png"
         assert save_character_profile(char, prof)
-        assert base_body.set_pipeline(char, True)
         for key, slots in (("top", ["top"]), ("skirt", ["bottom"]), ("hat", ["head"])):
             op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "mesh_mode": "painted"}
             inventory.add_item(name=key.title(), category="outfit_piece", item_id=key,

@@ -17,7 +17,8 @@ probes every backend). So nothing meshes,
 rigs or reaches a hub.
 
 Fixture: ``Demo`` (human-roleplay, base-body pipeline, BSIG =
-base_signature(Demo)), ``Plain`` (same profile, off the pipeline, a model
+base_signature(Demo)), ``Plain`` (same profile, kept off the pipeline by a
+stub of ``base_body.is_base_pipeline`` — since Task 11h only a non-humanoid is off it; a model
 0aaaaaaa). The retained source is model3d/unrigged/<sig>.glb + sidecar.
 
 Expected, derived by hand from the rules in model3d's "Face cleanup
@@ -138,7 +139,11 @@ def main() -> int:
                                 "hair": {"length": "medium", "color": "blonde"}}}
         for name in ("Demo", "Plain"):
             check(f"create {name}", save_character_profile(name, json.loads(json.dumps(human)), create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
+        # Plain covers the legacy whole-body path: since Task 11h (Ruling A13) every humanoid is on the base-body
+        # pipeline and only a non-humanoid takes that path (whose face cleanup is no case); this stub keeps the
+        # humanoid Plain on it, Demo goes through the real predicate.
+        real_pipeline = base_body.is_base_pipeline
+        base_body.is_base_pipeline = lambda c, **k: c != "Plain" and real_pipeline(c, **k)
         bsig = base_body.base_signature("Demo")
         models = get_character_dir("Demo") / "model3d"
         (models / "unrigged").mkdir(parents=True, exist_ok=True)

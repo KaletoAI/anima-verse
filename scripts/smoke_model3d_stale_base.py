@@ -29,8 +29,8 @@ fix (the info says so instead of the tab losing the model):
     "before_pipeline".
 [3] sidecar on the current base (BSIG, SHA): match "exact", stale_base
     False, no stale_reason.
-[4] off the pipeline, sidecar of [1]: no stale rule -> match "exact",
-    stale_base False.
+(The former [4] "off the pipeline" case left with Task 11h: a humanoid
+cannot be off the base-body pipeline any more.)
 """
 import json
 import os
@@ -99,7 +99,6 @@ def main() -> int:
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         bsig = base_body.base_signature("Demo")
         osig = model_refs.current_outfit_state("Demo")[2]
         mdir = model3d.get_model3d_dir("Demo")
@@ -134,12 +133,6 @@ def main() -> int:
         sidecar(base_signature=bsig, base_model_sha256=base_sha)
         m = model()
         check("current", (m.get("match"), m.get("stale_base"), "stale_reason" in m), ("exact", False, False))
-
-        print("[4] off the pipeline")
-        sidecar(base_signature="base0ld00000", base_model_sha256="0" * 64)
-        check("pipeline off", base_body.set_pipeline("Demo", False), True)
-        m = model()
-        check("off pipeline", (m.get("match"), m.get("stale_base")), ("exact", False))
 
     if FAILS:
         print("FAILED: " + ", ".join(FAILS))

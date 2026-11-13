@@ -1731,10 +1731,6 @@ class BaseBodyImagesRequest(BaseModel):
     force: bool = False
 
 
-class BaseBodyPipelineRequest(BaseModel):
-    enabled: bool
-
-
 def _require_character(character_name: str) -> None:
     if not get_character_dir(character_name).exists():
         raise HTTPException(status_code=404, detail="Character not found")
@@ -1756,22 +1752,6 @@ def generate_character_base_body_images(character_name: str, body: BaseBodyImage
         raise HTTPException(status_code=400, detail=str(e))
     start_base_images(character_name, view=body.view, force=body.force)
     return {"started": True}
-
-
-@router.post("/{character_name}/base-body/pipeline")
-def set_character_base_body_pipeline(character_name: str, body: BaseBodyPipelineRequest,
-                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Switch the character onto or off the base-body model pipeline; 400 for
-    a non-humanoid."""
-    from app.core.base_body import is_base_pipeline, set_pipeline
-    _require_character(character_name)
-    try:
-        saved = set_pipeline(character_name, body.enabled)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    if not saved:
-        raise HTTPException(status_code=500, detail="Saving the character profile failed")
-    return {"pipeline": is_base_pipeline(character_name)}
 
 
 class BaseBodyModelRequest(BaseModel):
@@ -2001,9 +1981,9 @@ def get_character_garment(character_name: str, item_id: str,
     pieces = profile.get("equipped_pieces") if isinstance(profile.get("equipped_pieces"), dict) else {}
     mesh_pieces = profile.get("equipped_mesh_pieces") if isinstance(profile.get("equipped_mesh_pieces"), dict) else {}
     worn = item_id in pieces.values() or item_id in mesh_pieces.values()
-    # Only clothing is painted on while it has no fit (hair is simply absent);
-    # the delivered figure leaves it out instead in the refusal branch on a
-    # meshed shape, and footwear is always missing (``piece_status``, spec § 9.1).
+    # A worn own-mesh clothing piece without its fit is in the body shape meanwhile (ruling A11, the delivered
+    # figure's ``in_body_own``) or left out in the refusal branch; hair is simply absent and footwear is
+    # missing until fitted (``piece_status``, spec § 9.1).
     worn_piece = bool(pipeline and worn and kind in garment_set.OWN_MESH_PIECE_KINDS)
     left_out = in_body = False
     if worn_piece:

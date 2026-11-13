@@ -31,8 +31,11 @@
  *
  * Nothing here starts a chain except Build and Retry (both POST
  * …/figure/build — a manual Build, which retries a cached chain failure,
- * ruling 7a) and the other state's single action. Off the pipeline the tab shows only the switch onto it (POST
- * …/base-body/pipeline). Polls GET …/figure while a Build runs (useFigure).
+ * ruling 7a) and the other state's single action. Every humanoid is on the
+ * figure pipeline (Ruling A13 — the "Use base body pipeline" switch is gone);
+ * one without a plain body yet keeps the model it has and the button reads
+ * "Build base body (N hub jobs)" with NO_BASE_BODY_NOTE under it. Polls GET
+ * …/figure while a Build runs (useFigure).
  */
 import { useCallback, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -45,14 +48,13 @@ import { FigureBodyDetails } from './FigureBodyDetails'
 import { FigureStored } from './FigureStored'
 import { useFigure } from './useFigure'
 import {
-  BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, bodyLine, buildButton,
-  changeLine, hairState, headerLine, stateMeshAction, wornState,
+  BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, NO_BASE_BODY_NOTE, bodyLine,
+  buildButton, changeLine, hairState, headerLine, noBaseBody, stateMeshAction, wornState,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, HairMode, PieceState } from './figureModel'
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
 const CELL: CSSProperties = { padding: '4px 6px', verticalAlign: 'top' }
-const PIPELINE_HINT = 'A bald, neutral A-pose base body built from the profile picture. Outfits are rendered as edits of its views and painted onto its rigged model.'
 
 /** A collapsed block whose content mounts only while open (no fetch, no poll while closed). */
 function Collapsed({ summary, children }: { summary: string; children: () => ReactNode }) {
@@ -111,23 +113,10 @@ export function FieldFigure({ character, onOpenWardrobe }: {
     return error ? <div className="ga-hint" style={ERROR_STYLE}>{error}</div>
       : <div className="ga-hint">{t('Loading…')}</div>
   }
+  // Every humanoid is on the pipeline (Ruling A13) except a temporary NPC (A13a): its model comes from the T-pose.
   if (!data.humanoid) return <div className="ga-hint">{t('The figure is for humanoid characters only.')}</div>
-
-  const pipelineSwitch = (
-    <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }} title={t(PIPELINE_HINT)}>
-      <input type="checkbox" checked={data.pipeline} disabled={posting}
-        onChange={(e) => { void post('base-body/pipeline', { enabled: e.target.checked }) }} />
-      <span>{t('Use base body pipeline')}</span>
-    </label>
-  )
   if (!data.pipeline) {
-    return (
-      <div className="ga-form">
-        {pipelineSwitch}
-        <div className="ga-hint">{t(PIPELINE_HINT)}</div>
-        <div className="ga-hint">{t('Off the figure pipeline')}</div>
-      </div>
-    )
+    return <div className="ga-hint">{t('A temporary NPC has no figure — its 3D model is made from its T-pose picture.')}</div>
   }
 
   return (
@@ -143,7 +132,6 @@ export function FieldFigure({ character, onOpenWardrobe }: {
             {t('No figure yet — Build makes it')}
           </div>
         )}
-        {pipelineSwitch}
       </div>
       <div className="ga-split-col">
         <FigureHeader data={data} posting={posting} onBuild={build}
@@ -181,7 +169,7 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
           {button.label}
         </button>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}
-          title={t('Outfit changes, a new body or a piece that became ready start the Build by themselves. Off: they only collect as changes until you click Build. Never stops a running Build.')}>
+          title={t('Outfit changes, a new body or a piece that became ready start the Build by themselves; such a Build never makes or refreshes the base body — only a Build you start does. Off: they only collect as changes until you click Build. Never stops a running Build.')}>
           <input type="checkbox" checked={data.auto_build} disabled={posting}
             onChange={(e) => onAutoBuild(e.target.checked)} />
           <span>{t('Build automatically')}</span>
@@ -189,6 +177,7 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
       </div>
       {button.disabled ? <div className="ga-hint">{button.disabled}</div>
         : data.cost.hub_jobs ? <div className="ga-hint">{t(ESTIMATE_NOTE)}</div> : null}
+      {noBaseBody(data) && !running ? <div className="ga-hint">{t(NO_BASE_BODY_NOTE)}</div> : null}
       {running ? (
         <div className="ga-hint">
           {step ? `${t('Running')}: ${step.index && step.count ? `${step.index}/${step.count} ` : ''}${step.label}` : t('Running')}

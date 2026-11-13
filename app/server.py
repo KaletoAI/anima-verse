@@ -737,6 +737,19 @@ async def lifespan(app: FastAPI):
     except Exception as _frd:
         logger.warning("Mode re-default failed (retried at the next start): %s", _frd)
 
+    # Clean-up (same plan, Task 11h, Ruling A13): the "Use base body pipeline"
+    # switch is gone — every humanoid is on the pipeline — and its stored
+    # profile key model_pipeline leaves every profile. ORDER: strictly AFTER
+    # the re-default above, which reads that stored key to find the test
+    # characters; drop_pipeline_key_once itself waits (drops nothing, no flag)
+    # until the re-default is done, so a world that never booted since the
+    # re-default landed still gets it right. Once per world, one log line.
+    try:
+        from app.core.figure_migration import drop_pipeline_key_once
+        drop_pipeline_key_once()
+    except Exception as _fpk:
+        logger.warning("Pipeline switch removal failed (retried at the next start): %s", _fpk)
+
     # Clean-up (same plan, Task 11g fix round 1): the per-character globs of
     # the removed fit occasions outfit_back / outfit_side (a CPU composite
     # replaced them) leave every profile. Once per world, one log line.

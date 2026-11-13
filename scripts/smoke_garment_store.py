@@ -160,7 +160,6 @@ def main() -> int:
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         hid = garment_hair.ensure_hair_item("Demo")
         check("hair item id", hid, "hair_demo")
 

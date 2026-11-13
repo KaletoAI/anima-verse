@@ -23,8 +23,11 @@ Fixture (expected values derived by hand):
           mesh-input line -> behind_shoulders True. Item id = "hair_" + slug
           "demo" = "hair_demo".
   Pet     animal template + model_pipeline base_body -> not humanoid -> 400.
-  Offline human, pipeline OFF -> 400 naming the "base-body pipeline"; it also
-          owns a garment item "hair_offline" (added directly) -> a run is 400.
+  Offline animal template (until Task 11h a human with the pipeline switch
+          off — that state no longer exists; a non-humanoid is the one
+          character off the pipeline) -> 400 naming "humanoid"; it also
+          owns a garment item "hair_offline" (added directly) -> a run is 400
+          naming "base-body pipeline" (current_base is None off it).
   Bald    human, pipeline on, no hair slot value, no hair clause -> "" ->
           POST /hair 400 "No hair set"; no item -> /hair/equipped 404.
   Other   human, pipeline on, owns "hair_other" -> foreign for Demo.
@@ -44,7 +47,7 @@ Fixture (expected values derived by hand):
     {hairdeck_fit} only (the edit-chain steps and their gates are gone,
     Task 2 of that spec); Pet: humanoid False, description "", garment
     None; Nobody: 404.
-[3] POST /hair: Pet 400, Offline 400 ("base-body pipeline"), Bald 400
+[3] POST /hair: Pet 400, Offline 400 ("humanoid"), Bald 400
     ("No hair set"); none of them gets an item or a run.
 [4] POST /characters/Demo/hair -> 202 {item_id "hair_demo", started True,
     queued False, position 0, behind None}; the recorder runs (Demo,
@@ -187,16 +190,16 @@ def main() -> int:
                  "body_slots": {"skin": {"tone": "light"}, "eyes": {"color": "blue"},
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
-        for name in ("Demo", "Offline", "Other"):
+        for name in ("Demo", "Other"):
             check(f"create {name}", save_character_profile(name, json.loads(json.dumps(human)), create_new=True),
                   True)
+        check("create Offline", save_character_profile("Offline", {"template": "animal-default"}, create_new=True),
+              True)
         bald = json.loads(json.dumps(human))
         bald["body_slots"].pop("hair")
         check("create Bald", save_character_profile("Bald", bald, create_new=True), True)
         check("create Pet", save_character_profile("Pet", {"template": "animal-default", "gender": "female",
                                                            "model_pipeline": "base_body"}, create_new=True), True)
-        for name in ("Demo", "Other", "Bald"):
-            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
         garment = {"kind": "hair", "slot": "hair", "body_slot": "hair"}
         inventory.add_item(name="Hair", category="garment", owner="Offline", prompt_fragment="medium blonde hair",
                            garment=garment, item_id="hair_offline", transferable=False, portable=False)
@@ -260,7 +263,7 @@ def main() -> int:
 
             # --- [3] refusals ----------------------------------------------------------
             print("[3] POST /hair refusals")
-            for name, needle in (("Pet", "humanoid"), ("Offline", "base-body pipeline"), ("Bald", "No hair set")):
+            for name, needle in (("Pet", "humanoid"), ("Offline", "humanoid"), ("Bald", "No hair set")):
                 r = client.post(f"/characters/{name}/hair", json={})
                 detail = (r.json() or {}).get("detail", "") if r.status_code == 400 else r.text
                 check(f"{name} 400", (r.status_code, needle in str(detail)), (400, True))

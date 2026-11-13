@@ -419,7 +419,6 @@ def main() -> int:
             state["dy"] = dy
 
         b1 = use_profile_image(1)
-        check("pipeline", base_body.set_pipeline("Demo", True), True)
         hid = inventory.add_item(name="Dress", category="outfit_piece", owner="Demo", item_id="dress",
                                  prompt_fragment=sc.FRAGMENT,
                                  outfit_piece={"slots": ["top", "bottom"], "outfit_types": ["casual"],

@@ -40,6 +40,10 @@ def main():
         from app.imagegen.base import GenerationCancelled, MediaGenerationDisabled, HubJobLost
         from app.models.character import save_character_profile
         db.init_schema()
+        # The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on
+        # the base-body pipeline and only a non-humanoid takes it; the humanoid fixture keeps it via this stub.
+        from app.core import base_body as _legacy_bb
+        _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
         root = paths.get_storage_dir() / 'characters' / 'demo' / 'model3d'
         root.mkdir(parents=True)
         refs = root.parent / 'model_refs'

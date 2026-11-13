@@ -17,8 +17,8 @@ import { CollisionScales } from './CollisionScales'
  * DELETE .../model3d.
  *
  * Base-body pipeline (`st.pipeline`, server app/core/model3d_pipeline.py):
- * the outfit model is painted onto the rigged base body, so "Generate" is
- * "Rebuild from base body" (no mesh-backend dialog), re-rig acts on the base
+ * the outfit model is built on the rigged base body, so "Generate" is the
+ * Figure tab's Build (FigureBuildButton, Ruling A13b — no mesh-backend dialog), re-rig acts on the base
  * body, and upload / "Fetch by job ID" / the upload rig label are not
  * offered (the server refuses them too).
  */
@@ -34,7 +34,10 @@ import type { FaceCleanupState, FaceReferenceState } from './ModelFaceActions'
 import type { ModelStep } from './ModelSteps'
 import type { Freshness } from './FreshnessBadge'
 import { OutfitBatchDialog } from './OutfitBatchDialog'
+import { FigureBuildButton } from './FigureBuildButton'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
+import { staleModelText } from './figureModel'
+import type { ModelStaleReason } from './figureModel'
 
 /** What Blender measured in the actual geometry — as opposed to what the
  *  file's header claims. Absent until the model has been measured. */
@@ -124,7 +127,7 @@ export interface Model3DInfo {
   steps?: ModelStep[]
   /** Current / outdated / no data — the viewer's corner badge. */
   freshness?: Freshness | null
-  stale_reason?: 'older_base' | 'before_pipeline' | 'detail_changed' | 'mesh_item_ready' | 'figure'
+  stale_reason?: ModelStaleReason
   /** Base-body pipeline: the face belongs to the base body — the face
    *  dialog and its status act on this signature. */
   face_signature?: string
@@ -384,24 +387,6 @@ export function FieldModel3D({ character, onOpenFigure }: {
     },
     [busy, enc, startPoll, t, toast],
   )
-
-  // Base-body pipeline: no backend dialog — the server dresses stale views
-  // first, then builds the outfit model anew from the current base body.
-  const rebuildFromBase = useCallback(async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      const d = await apiPost<{ status?: string }>(`/characters/${enc}/model3d/generate`, {})
-      toast(d?.status === 'already_running'
-        ? t('A 3D model generation is already running for this character')
-        : d?.status === 'queued' ? t('Rebuild queued — it starts when the running model job ends')
-          : t('Rebuilding from the base body…'))
-      startPoll()
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-      setBusy(false)
-    }
-  }, [busy, enc, startPoll, t, toast])
 
   // Base-body pipeline, a stand-in on screen: build the CURRENT outfit's model the way an outfit change does
   // (missing dressed views first, never forced — a stored body of its key is reused, no hub job).
@@ -945,15 +930,7 @@ export function FieldModel3D({ character, onOpenFigure }: {
           ) : null}
           {model.stale_base ? (
             <div className="ga-hint" role="status" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
-              {model.stale_reason === 'before_pipeline'
-                ? t('Built before the base body pipeline — rebuild it')
-                : model.stale_reason === 'detail_changed'
-                  ? t('Built for another body detail under the clothing — rebuild it')
-                  : model.stale_reason === 'mesh_item_ready'
-                    ? t('An own-mesh piece painted on here has its garment mesh now — rebuild it')
-                    : model.stale_reason === 'figure'
-                      ? t('Built as another figure than the worn pieces show now — rebuild it')
-                      : t('Built on an older base body — rebuild it')}
+              {staleModelText(model.stale_reason, t)}
             </div>
           ) : null}
           {model.match === 'nearest' && !fallback ? (
@@ -1044,7 +1021,7 @@ export function FieldModel3D({ character, onOpenFigure }: {
           {pending
             ? t('Generating the 3D model — this takes a few minutes.')
             : pipeline
-              ? t('No 3D model for this outfit yet — it is built from the base body (Rebuild from base body).')
+              ? t('No 3D model for this outfit yet — the Figure tab’s Build makes it from the base body.')
               : t('No 3D model for this outfit yet — upload one or generate it from the pose render.')}
         </div>
       )}
@@ -1061,16 +1038,8 @@ export function FieldModel3D({ character, onOpenFigure }: {
           <div className="ga-form-section-label">{t('Model')}</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
             {pipeline ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                disabled={pending || !baseReady}
-                onClick={rebuildFromBase}
-                title={!baseReady ? t('Generate the rigged base model first (Figure tab)')
-                  : t('Builds the outfit model anew from the current base body. Dressed views that no longer match the base body are rendered first; no mesh backend is involved.')}
-              >
-                {pending ? t('Generating…') : t('Rebuild from base body')}
-              </button>
+              // The Figure tab's Build (Ruling A13b) — same plan, same job count, no cascade of its own.
+              <FigureBuildButton character={character} onStarted={() => startPoll()} />
             ) : (
               <button
                 type="button"

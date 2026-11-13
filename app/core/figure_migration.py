@@ -266,10 +266,12 @@ def is_test_character(name: str, profile: Dict[str, Any]) -> bool:
     """Whether ``name`` is one of the user's test characters for the
     re-default: humanoid AND its STORED profile says ``model_pipeline:
     "base_body"``. Read from the stored key on purpose, never through
-    ``base_body.is_base_pipeline``: the "Use base body pipeline" checkbox's
-    stored value is the user's record of which characters they test the
-    figure with (Ruling A12), and that helper will answer True for every
-    humanoid once the checkbox is gone (Task 11d)."""
+    ``base_body.is_base_pipeline``: the removed "Use base body pipeline"
+    checkbox's stored value is the user's record of which characters they
+    test the figure with (Ruling A12), and that helper answers True for every
+    humanoid since the checkbox is gone (Task 11h, Ruling A13). The key stays
+    in the profiles until the re-default is done (``drop_pipeline_key_once``
+    waits for it)."""
     if profile.get("model_pipeline") != "base_body":
         return False
     from app.core.model_refs import is_humanoid
@@ -883,4 +885,94 @@ def drop_fit_globs_once() -> Optional[Dict[str, List[str]]]:
     logger.info("Removed fit occasions: outfit_imagegen.%s dropped from %d character(s)%s",
                 " / ".join(REMOVED_FIT_GLOBS), len(result),
                 f": {', '.join(f'{n} ({len(k)})' for n, k in sorted(result.items()))}" if result else "")
+    return result
+
+
+# --- The removed "Use base body pipeline" switch (Task 11h, Ruling A13) --------
+#
+# Every humanoid is on the base-body pipeline now (``base_body.is_base_pipeline``
+# = humanoid and not a temporary NPC, Ruling A13a; an animal never is) and the
+# per-character switch is gone with its
+# route. Its stored profile value ``model_pipeline`` feeds nothing but ONE
+# reader: the re-default above (``is_test_character``), which reads the
+# STORED key on purpose to know the user's test characters. So the order is
+# load-bearing: ``drop_pipeline_key_once`` runs only AFTER the re-default is
+# finished for this world — the world's flag ``REDEFAULT_FLAG`` is set, and
+# the shared library's marker ``SHARED_REDEFAULT_KEY`` is set or this world
+# has no test character (it has nothing to give the shared re-default then).
+# Until both hold it drops nothing, sets no flag and logs that it waits (the
+# next start retries). Then it pops ``model_pipeline`` from every character
+# row (dormant and pooled ones too) under ``keyed_lock("character_profile",
+# name)``, once per world (world_kv ``PIPELINE_KEY_FLAG``), with ONE summary
+# INFO line naming the characters and the values dropped. It rebuilds
+# nothing: a humanoid without a base body keeps serving its existing model
+# until a manual Build makes the base body (ruling 8a: an automatic Build
+# never does). A profile that does not save keeps the key (a WARNING); the
+# flag is set anyway. A character list or a profile that cannot be read
+# raises before anything is written and leaves the flag unset.
+
+#: world_kv key of the done flag.
+PIPELINE_KEY_FLAG = "dropped_model_pipeline_key"
+#: The removed per-character profile key of the "Use base body pipeline" switch.
+PIPELINE_KEY = "model_pipeline"
+
+
+def _pipeline_key_waits(names: Sequence[str]) -> str:
+    """Why the drop must wait for the re-default (module section above), ""
+    when it may run. Reads every profile ``strict``: a tester hidden behind an
+    unreadable profile would lose its record before the shared re-default."""
+    from app.models import inventory
+    from app.models.character import get_character_profile
+    from app.models.world import get_world_setting
+    if not get_world_setting(REDEFAULT_FLAG, strict=True):
+        return "the world's mode re-default has not run yet"
+    if inventory.get_shared_items_meta(strict=True).get(SHARED_REDEFAULT_KEY):
+        return ""
+    testers = [n for n in names if is_test_character(n, get_character_profile(n, strict=True) or {})]
+    return ("the shared library's mode re-default still needs this world's test characters ("
+            + ", ".join(testers) + ")") if testers else ""
+
+
+def _drop_pipeline_key(name: str) -> Optional[str]:
+    """Pop ``model_pipeline`` under the profile lock; the value dropped (None
+    when the key was not there or the profile did not save)."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    with keyed_lock("character_profile", name):
+        profile = get_character_profile(name, strict=True) or {}
+        if PIPELINE_KEY not in profile:
+            return None
+        value = profile.pop(PIPELINE_KEY)
+        if save_character_profile(name, profile):
+            return str(value)
+    logger.warning("Pipeline switch removal %s: profile not saved — %s stays", name, PIPELINE_KEY)
+    return None
+
+
+def drop_pipeline_key_once() -> Optional[Dict[str, str]]:
+    """The clean-up above. None when it already ran or still waits for the
+    re-default, else ``{character: value dropped}``."""
+    from app.models.character import get_character_profile, list_available_characters
+    from app.models.world import get_world_setting, set_world_setting
+    if get_world_setting(PIPELINE_KEY_FLAG, strict=True):
+        return None
+    names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)
+    waits = _pipeline_key_waits(names)
+    if waits:
+        logger.info("Pipeline switch removal waits (retried at the next start): %s", waits)
+        return None
+    holders = [n for n in names if PIPELINE_KEY in (get_character_profile(n, strict=True) or {})]
+    result: Dict[str, str] = {}
+    for name in holders:
+        try:
+            value = _drop_pipeline_key(name)
+        except Exception as e:  # noqa: BLE001 — the next character still goes
+            logger.warning("Pipeline switch removal %s: failed: %s", name, e)
+            continue
+        if value is not None:
+            result[name] = value
+    set_world_setting(PIPELINE_KEY_FLAG, "1")
+    logger.info("Pipeline switch removed: profile key %s dropped from %d character(s)%s — every humanoid is "
+                "on the base-body pipeline, nothing rebuilt", PIPELINE_KEY, len(result),
+                f": {', '.join(f'{n} ({v})' for n, v in sorted(result.items()))}" if result else "")
     return result

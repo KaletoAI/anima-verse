@@ -386,8 +386,8 @@ operands use the same normalization; other scalars compare as trimmed lowercase
 strings.
 
 `exposed_only: true` (boolean, default false) marks a rig group whose detail
-exists only while its slot is uncovered. A base body (`model_pipeline:
-base_body`) then also gets a **covered variant** `model3d/covered/<bsig>.glb`,
+exists only while its slot is uncovered. A base body (every humanoid has one
+on the base-body pipeline) then also gets a **covered variant** `model3d/covered/<bsig>.glb`,
 built from the same clean prerig source with every other group identical
 (same colour markers, same placement) and without the `exposed_only` groups.
 An outfit model is painted onto the covered variant when ANY worn piece covers

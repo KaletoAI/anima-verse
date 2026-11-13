@@ -4,7 +4,7 @@
  * stacked and small on the left (FieldModelRefs,
  * `layout="stack"`; a click enlarges a tile), the model built from them on
  * the right: its 3D preview with the step checklist beside it, and on the
- * base-body pipeline the outfit model's status with "Rebuild outfit model"
+ * base-body pipeline the outfit model's status with the Figure tab's Build ("Build (N jobs)", Ruling A13b)
  * and a link to the Figure tab (BaseBodyOutfitStatus) under it.
  *
  * The model is the 3D tab's (GET /characters/{n}/model3d, useModel3DStatus):
@@ -48,7 +48,7 @@ function PoseOutfitModel({ character, onOpen3D, onOpenFigure }: {
       ) : (
         <div className="ga-hint">
           {st.pending ? t('Generating the 3D model — this takes a few minutes.')
-            : st.pipeline ? t('No 3D model for this outfit yet — it is built from the base body (Rebuild from base body).')
+            : st.pipeline ? t('No 3D model for this outfit yet — the Figure tab’s Build makes it from the base body.')
               : t('No 3D model for this outfit yet — upload one or generate it from the pose render.')}
         </div>
       )}

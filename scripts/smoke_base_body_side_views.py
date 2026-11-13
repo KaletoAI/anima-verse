@@ -294,7 +294,6 @@ def main() -> int:
         stored = get_character_profile("Demo")
         stored["profile_image"] = "Demo_1.png"
         check("profile image", save_character_profile("Demo", stored), True)
-        check("pipeline", base_body.set_pipeline("Demo", True), True)
         dress = inventory.add_item(name="dress", category="outfit_piece",
                                    prompt_fragment="a fitted red cotton dress with white sneakers",
                                    outfit_piece={"slots": ["top"], "covers": [], "outfit_types": ["casual"],

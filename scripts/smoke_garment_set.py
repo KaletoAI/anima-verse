@@ -18,7 +18,8 @@ and wears ``dress`` (slots top+bottom, mode ``own_mesh``) and ``shoes``
 mesh), holds but does not wear ``cape`` (slot outer, own mesh), and wears a
 hair garment (category garment, kind hair, owner Demo) through
 ``equipped_mesh_pieces``. ``coat`` (slot outer, own mesh) is held by
-nobody. ``Offline`` is a human off the pipeline wearing the dress; ``Pet``
+nobody. ``Offline`` is a human wearing the dress whose profile never had the
+removed pipeline switch on (until Task 11h: off the pipeline); ``Pet``
 uses the animal template with ``model_pipeline: base_body`` (an animal is
 never on the pipeline). ``Other`` owns a second hair garment.
 
@@ -34,7 +35,8 @@ never on the pipeline). ``Other`` owns a second hair garment.
     invalidate_variants_for_item.
 [3] worn_garments(Demo) = sorted({hair, dress}): the dress occupies top AND
     bottom but appears once, shoes are painted. With pieces={"feet": shoes}
-    only the hair stays. Offline wearing the dress -> []; Pet (animal) with
+    only the hair stays. Offline wearing the dress -> [dress] (every humanoid
+    is on the pipeline since Task 11h, Ruling A13; was []); Pet (animal) with
     pieces={"top": dress} -> []. held_clothing(Demo) = sorted({cape, dress})
     (coat is held by nobody, shoes painted); holds(Demo, cape) True,
     holds(Demo, hair) True (worn mesh piece, not in the inventory),
@@ -111,8 +113,6 @@ def main() -> int:
         for name in ("Demo", "Offline", "Other"):
             check(f"create {name}", save_character_profile(name, json.loads(json.dumps(human)),
                                                            create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
-        check("pipeline Other", base_body.set_pipeline("Other", True), True)
         check("create Pet", save_character_profile("Pet", {"template": "animal-default", "gender": "female",
                                                            "model_pipeline": "base_body"}, create_new=True), True)
 
@@ -190,7 +190,7 @@ def main() -> int:
         check("kind None", garment_set.garment_kind_of(None), None)
         check("worn Demo", garment_set.worn_garments("Demo"), sorted([hair, dress]))
         check("worn Demo, pieces override", garment_set.worn_garments("Demo", pieces={"feet": shoes}), [hair])
-        check("worn Offline", garment_set.worn_garments("Offline"), [])
+        check("worn Offline (on the pipeline without a switch)", garment_set.worn_garments("Offline"), [dress])
         check("worn Pet", garment_set.worn_garments("Pet", pieces={"top": dress}), [])
         check("held Demo", garment_set.held_clothing("Demo"), sorted([cape, dress]))
         check("held Other", garment_set.held_clothing("Other"), [])

@@ -249,7 +249,6 @@ def main() -> int:
             stored = get_character_profile("Demo")
             stored["profile_image"] = "Demo_1.png"
             check("profile image", save_character_profile("Demo", stored), True)
-        check("pipeline", base_body.set_pipeline("Demo", True), True)
         cdir = get_character_dir("Demo")
         (cdir / "secret.png").write_bytes(b"SECRET-BYTES")
         refs, mdir = cdir / "model_refs", cdir / "model3d"

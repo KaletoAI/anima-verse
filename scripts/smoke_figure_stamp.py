@@ -110,7 +110,6 @@ def main() -> int:
 
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168}
         check("create Kira", save_character_profile("Kira", dict(human), create_new=True), True)
-        check("pipeline Kira", base_body.set_pipeline("Kira", True), True)
         bsig = base_body.base_signature("Kira")
         cdir = get_character_dir("Kira")
         mdir, refs = cdir / "model3d", cdir / "model_refs"

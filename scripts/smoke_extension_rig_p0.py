@@ -88,6 +88,10 @@ def main():
         os.environ["ANIMATION_RIG_FILE"] = str(root / "reference.fbx")
         from app.core import db
         db.init_schema()
+        # The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on
+        # the base-body pipeline and only a non-humanoid takes it; the humanoid fixture keeps it via this stub.
+        from app.core import base_body as _legacy_bb
+        _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
         from app.core.extension_rig import (extension_bone_names, extension_metadata,
                                            motion_payload, rig_groups_for)
         from app.core.model_validate import validate_glb

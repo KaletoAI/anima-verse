@@ -1,7 +1,7 @@
 """Base body — the bald, unclothed A-pose figure of a humanoid character.
 
-A humanoid character on the ``base_body`` model pipeline (profile field
-``model_pipeline: "base_body"``) gets ONE base body: four A-pose views
+Every humanoid character is on the ``base_body`` model pipeline
+(``is_base_pipeline``; an animal never is) and gets ONE base body: four A-pose views
 (front/back/left/right) of a bald, anatomically neutral figure, rendered from
 the character's profile image, and one model built from them. Outfits are
 painted onto that body later (spec
@@ -11,8 +11,9 @@ This module holds the description, the view prompts with their negative, the
 base signature that keys every stored base image and model, the rendering of
 the four views (``generate_base_images``, the front through the hand-pose
 gate of ``base_body_gates``), the rigged base model built from
-them (``generate_base_model``), the per-character pipeline switch
-(``set_pipeline``) and the UI info (``base_info``).
+them (``generate_base_model``) and the UI info (``base_info``). A humanoid
+without a base body yet keeps serving the model it has until a manual Build
+makes the base body (``figure_build``, ruling 8a: automatic Builds never do).
 
 Outfits (spec § B, phase 3): every outfit combination of a character on the
 pipeline gets two DRESSED images (``dressed_views``; four with the world
@@ -484,13 +485,16 @@ def base_prompts_freshness(character_name: str, *,
 
 
 def is_base_pipeline(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
-    """Whether the character is on the base-body pipeline: the profile switch
-    is set AND the character is humanoid (an animal never is)."""
-    profile = _profile_of(character_name, profile)
-    if profile.get("model_pipeline") != "base_body":
-        return False
+    """Whether the character is on the base-body pipeline: every humanoid is
+    (Ruling A13 — the per-character switch and its ``model_pipeline`` profile
+    key are gone), except a temporary NPC (Ruling A13a: no user ever starts a
+    Build for one, so it keeps the direct T-pose path that finishes it —
+    ``npc_assets``); an animal never is."""
     from app.core.model_refs import is_humanoid
-    return bool(is_humanoid(character_name, profile=profile))
+    from app.models.character import is_temporary_npc
+    profile = _profile_of(character_name, profile)
+    return bool(is_humanoid(character_name, profile=profile)) and not is_temporary_npc(character_name,
+                                                                                         profile=profile)
 
 
 # --- Rendering the four views ---------------------------------------------
@@ -1057,28 +1061,6 @@ def base_model_info(character_name: str, signature: Optional[str] = None) -> Opt
             "status": status, "error": error}
 
 
-def set_pipeline(character_name: str, enabled: bool) -> bool:
-    """Switch the character onto (``model_pipeline: "base_body"``) or off the
-    base-body pipeline. ValueError for a non-humanoid on switching on — the
-    profile stays untouched. Returns the save result."""
-    from app.core.keyed_lock import keyed_lock
-    from app.core.model_refs import is_humanoid
-    from app.models.character import get_character_profile, save_character_profile
-    with keyed_lock("character_profile", character_name):
-        profile = get_character_profile(character_name) or {}
-        if enabled:
-            if not is_humanoid(character_name, profile=profile):
-                raise ValueError("The base-body pipeline is for humanoid characters only")
-            if profile.get("model_pipeline") == "base_body":
-                return True
-            profile["model_pipeline"] = "base_body"
-        else:
-            if "model_pipeline" not in profile:
-                return True
-            profile.pop("model_pipeline")
-        return bool(save_character_profile(character_name, profile))
-
-
 # --- Outfits on the base body (spec § B) -----------------------------------
 
 # The edit form of the S1 spike (claude-out/s1-base-body/kleidung_real/
@@ -1216,7 +1198,7 @@ BASE_IMAGES_MISSING = "Base body images missing — render them in the Figure ta
 BASE_MODEL_MISSING = "Base body model missing — generate it in the 3D tab"
 DRESSED_IMAGES_MISSING = "Dressed images missing — render the outfit's pose images"
 OLDER_BASE = "Built on an older base body"
-BEFORE_PIPELINE = "Built before the base body pipeline"
+BEFORE_PIPELINE = "Made without the base body"
 DETAIL_CHANGED = "Built for another body detail under the clothing"
 COVERED_MISSING = ("The base body has no current covered variant — the outfit was built from the full base; "
                    "rebuild the base body's extension bones")
@@ -3654,7 +3636,7 @@ VIEWS_MISSING = "{views} {noun} missing — not meshed from the {have} alone"
 SHAPE_CHANGED = "The worn pieces changed — the body shape was not built"
 #: The in-body pieces of a shape name no text to edit the views with.
 SHAPE_EMPTY = "The pieces in the body name nothing to dress the body shape with"
-OUTFIT_BODY_CHANGED = "Built on an older outfit body"
+OUTFIT_BODY_CHANGED = "Built on an older body shape"
 #: An outfit model built as another figure than the one delivered now.
 FIGURE_CHANGED = "Built for another figure"
 NOT_FITTED_ON_BODY = "Not fitted on this outfit body, served without: {items}"
@@ -4228,9 +4210,9 @@ def outfit_info(character_name: str, *, base_sig: Optional[str] = None,
 
 #: A stale outfit model's ``stale_reason`` (``outfit_info``) in a rebuild
 #: note or an improvement label.
-STALE_REASON_TEXT = {"older_base": "older base", "before_pipeline": "built before the pipeline",
+STALE_REASON_TEXT = {"older_base": "older base", "before_pipeline": "made without the base body",
                      "detail_changed": "other body detail", "figure": "other figure",
-                     "outfit_body": "older outfit body"}
+                     "outfit_body": "older body shape"}
 #: The img2mesh + rig jobs of one outfit body (meshed shape).
 OUTFIT_BODY_JOBS = 2
 
@@ -4292,7 +4274,7 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
     mesh_jobs = OUTFIT_BODY_JOBS if body_needed else 0
     parts = ([f"views {image_jobs}"] if image_jobs else []) + ([f"body {mesh_jobs}"] if mesh_jobs else [])
     what = (" + ".join(parts) + " (first attempts)" if parts
-            else "outfit body stored, CPU only" if meshed else "repaint on the CPU")
+            else "body shape stored, CPU only" if meshed else "repaint on the CPU")
     reason = STALE_REASON_TEXT.get(str(stale_reason or ""), "")
     return {"image_jobs": image_jobs, "mesh_jobs": mesh_jobs, "hub_jobs": image_jobs + mesh_jobs,
             "views_needed": views_needed, "body_needed": body_needed,

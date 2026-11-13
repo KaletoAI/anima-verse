@@ -130,7 +130,7 @@ export const BUILD_STATUS: Record<string, string> = {
   started: 'Build started',
   queued: 'Build queued after the running one',
   current: 'Nothing to build',
-  off: 'Off the figure pipeline',
+  off: 'No figure — humanoid characters that are not temporary NPCs only',
   failed: 'Build failed — the profile could not be read',
 }
 
@@ -284,15 +284,29 @@ export function headerLine(status: FigureStatus, changes: number, hubJobs: numbe
 }
 
 /** The ONE primary button (rule 2): its label with the cost, and why it is disabled — written under it.
- *  A running Build does NOT disable it: a click queues the next one (`BUILD_RUNNING_NOTE`). */
-export function buildButton(f: Pick<FigurePayload, 'pipeline' | 'cost' | 'build'>, t: Tr = EN): {
+ *  A running Build does NOT disable it: a click queues the next one (`BUILD_RUNNING_NOTE`). Every humanoid is
+ *  on the pipeline (Ruling A13); one without a plain body yet (`body.plain.state` missing) gets "Build base
+ *  body (cost)" — the same Build, whose plan starts with the plain body (only a manual Build makes it, ruling
+ *  8a), the cost the whole click. */
+export function buildButton(f: Pick<FigurePayload, 'cost' | 'build' | 'body'>, t: Tr = EN): {
   label: string; disabled: string | null
 } {
-  const label = t('Build ({cost})').replace('{cost}', jobsTr(f.cost.hub_jobs, t))
-  if (!f.pipeline) return { label, disabled: t('Off the figure pipeline') }
+  const cost = jobsTr(f.cost.hub_jobs, t)
+  const label = noBaseBody(f) ? t('Build base body ({cost})').replace('{cost}', cost)
+    : t('Build ({cost})').replace('{cost}', cost)
   if (!f.cost.steps.length && !f.build.running) return { label, disabled: t('Nothing to build') }
   return { label, disabled: null }
 }
+
+/** The humanoid has no plain body yet: its figure starts with "Build base body" (Ruling A13). */
+export function noBaseBody(f: Pick<FigurePayload, 'body'>): boolean {
+  return f.body?.plain.state === 'missing'
+}
+
+/** Under "Build base body": what is on screen until then and what the click makes (Ruling A13 — nothing is
+ *  rebuilt by itself). */
+export const NO_BASE_BODY_NOTE = 'No base body yet — nothing is rebuilt by itself: the character keeps the model it '
+  + 'has until you start this Build, which makes the base body from the profile picture first, then the figure on it.'
 
 /** Written under Build while one runs — not a disable. */
 export const BUILD_RUNNING_NOTE = 'A Build is running — the next one is queued'
@@ -306,10 +320,11 @@ export function singleAction(kind: 'view' | 'model' | 'face', jobs: number | nul
   return t("Redo the plain body's face — {cost}").replace('{cost}', jobsTr(jobs, t))
 }
 
-/** Under "Run skin step" (and a new front): the base model is stale then, and only the next Build
- *  (a manual one, ruling 8a) rebuilds it — what that costs. */
+/** Under "Run skin step" (and a new front): the base model is stale then, and only the next Build you start
+ *  (a manual one — an automatic Build never rebuilds the plain body, ruling 8a) rebuilds it — what that costs. */
 export function staleBaseNote(jobs: number | null, t: Tr = EN): string {
-  return t('Makes the base model stale — the next Build rebuilds it ({cost})').replace('{cost}', jobsTr(jobs, t))
+  return t('Makes the base model stale — the next Build you start rebuilds it ({cost})')
+    .replace('{cost}', jobsTr(jobs, t))
 }
 
 /** Under the state of an own-mesh piece in the body shape until its mesh is ready (ruling A11). */
@@ -369,4 +384,19 @@ export function bodyLine(body: NonNullable<FigurePayload['body']>, shapeNames: s
   const texture = body.texture.state === 'none' ? t('nothing painted')
     : `${named(t('texture'), textureNames)} ${body.texture.state === 'ready' ? '✓' : '⏳'}`
   return [plain, shape, texture].join(' · ')
+}
+
+/** Why a stored outfit model is stale (`base_body.outfit_info` / `model3d` info `stale_reason`). */
+export type ModelStaleReason = 'older_base' | 'before_pipeline' | 'detail_changed' | 'figure' | 'outfit_body'
+
+/** The line under a stale outfit model (Pose tab, 3D tab). `before_pipeline` is a model made without the base
+ *  body — since Ruling A13 every humanoid's old model, until its first Build makes the base body. */
+export function staleModelText(reason: string | null | undefined, t: Tr = EN): string {
+  switch (reason) {
+    case 'before_pipeline': return t('Made without the base body — the Figure tab’s Build replaces it')
+    case 'detail_changed': return t('Built for another body detail under the clothing — rebuild it')
+    case 'figure': return t('Built as another figure than the worn pieces show now — rebuild it')
+    case 'outfit_body': return t('Built on an older body shape — rebuild it')
+    default: return t('Built on an older base body — rebuild it')
+  }
 }

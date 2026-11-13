@@ -302,7 +302,6 @@ def main() -> int:
                 check(f"profile {sorted(values)}", save_character_profile("Demo", stored), True)
 
         set_profile(profile_image="Demo_1.png")
-        check("pipeline", base_body.set_pipeline("Demo", True), True)
         hid = garment_hair.ensure_hair_item("Demo")
         check("hair item worn", inventory.get_equipped_mesh_pieces("Demo"), {"hair": hid})
         cdir = get_character_dir("Demo")

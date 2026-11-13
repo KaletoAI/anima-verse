@@ -19,15 +19,15 @@ character), the render threads (``model_refs._fire_kinds``,
 Kai are on the base-body pipeline with nothing of their outfits built, so their
 real plan always has steps an automatic Build runs; their plain body counts as
 current (``base_body.base_refresh_plan`` stubbed: an automatic Build never
-builds it — ruling 8a, section [9]); Mara is off the pipeline.
+builds it — ruling 8a, section [9]). (Mara, a human with the pipeline switch
+off, left with Task 11h — that state no longer exists.)
 
 Expected, by hand from the brief:
 
 [1] Auto on (no ``figure_auto_build`` key = on): Kira equips the blouse →
     after the debounce ONE run, ``(Kira, "outfit_change", automatic)``; the
     renders fired for Kira are ``pose`` only (no ``tpose`` kind, no
-    ``trigger_now(("tpose",))``); Mara (off the pipeline) equips the scarf →
-    her renders are ``tpose`` and ``pose``, no Build.
+    ``trigger_now(("tpose",))``).
 [2] Auto off (``set_auto_build(Kira, False)``): Kira equips the skirt → no
     run after the debounce; ``figure.pending_changes(Kira)`` is not empty; a
     manual ``start`` → "started", run ``(Kira, "manual", manual)``; a manual
@@ -199,10 +199,8 @@ def world_section():
     base_body.base_refresh_plan = lambda c, profile=None, missing=False: {
         "signature": "", "views": [], "model": False, "reason": ""}
     human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168}
-    for name in ("Kira", "Kai", "Mara"):
+    for name in ("Kira", "Kai"):
         check(f"create {name}", save_character_profile(name, dict(human), create_new=True), True)
-    check("pipeline Kira", base_body.set_pipeline("Kira", True), True)
-    check("pipeline Kai", base_body.set_pipeline("Kai", True), True)
 
     def piece(name, slot, mode="painted"):
         return inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"a {name.lower()}",
@@ -210,7 +208,7 @@ def world_section():
                                                 "mesh_mode": mode})["id"]
     blouse, skirt, scarf, hat = piece("Blouse", "top"), piece("Skirt", "bottom"), piece("Scarf", "neck"), \
         piece("Hat", "head")
-    for name in ("Kira", "Kai", "Mara"):
+    for name in ("Kira", "Kai"):
         for iid in (blouse, skirt, scarf, hat):
             inventory.add_to_inventory(name, iid)
 
@@ -222,11 +220,7 @@ def world_section():
     check("[1] runs", RUNS, [("Kira", "outfit_change", "auto")])
     check("[1] Kira's renders: pose only", [k for n, k in FIRED if n == "Kira"], [("pose",)])
     check("[1] no trigger_now for Kira", [c for c in NOW if c[0] == "Kira"], [])
-    check("[1] Mara equips the scarf", inventory.equip_piece("Mara", scarf, source="smoke")["status"], "ok")
-    check("[1] Mara's renders after the debounce",
-          wait_for(lambda: len([1 for n, _k in FIRED if n == "Mara"]) >= 2), True)
-    check("[1] Mara's renders: tpose and pose", sorted(k for n, k in FIRED if n == "Mara"), [("pose",), ("tpose",)])
-    check("[1] still one run (Mara is off the pipeline)", len(RUNS), 1)
+    check("[1] still one run", len(RUNS), 1)
     check("[1] Kira idle", idle("Kira"), True)
 
     print("[2] auto off: the change only stays marked; a manual Build still runs")

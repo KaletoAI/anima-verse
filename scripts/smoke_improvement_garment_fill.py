@@ -47,9 +47,9 @@ Derived by hand from the candidate rule and the chain:
      candidate; nothing → candidate ``clothing:Kira:<dress>`` with hub_jobs
      5 and note "worn 2 + ghost 2 + mesh 1" (worn = front edit + back
      draft; the back's composite is CPU work since Task 11g); apply calls ``run_garment``
-     (the recorder, once) → rescan → gone. A character off the pipeline is
-     never a subject (Nora, a plain profile, lists nothing even wearing the
-     dress).
+     (the recorder, once) → rescan → gone. A character without a ready base
+     model is never a subject (Nora, a plain profile — on the pipeline since
+     Task 11h, but without a base — lists nothing even wearing the dress).
 
 Fails on 193321cf: ModuleNotFoundError — app.core.improvements.types.garment_fill.
 """
@@ -144,7 +144,6 @@ def main() -> int:
         for name in ("Kira", "Mira", "Nora"):
             check(f"create {name}", save_character_profile(name, dict(human), create_new=True), True)
         for name in ("Kira", "Mira"):
-            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
             bsig = base_body.base_signature(name)
             mdir = get_character_dir(name) / "model3d"
             mdir.mkdir(parents=True, exist_ok=True)
@@ -343,7 +342,7 @@ def main() -> int:
             check("nothing cached: the dress is a candidate",
                   [(c.key, c.label, c.hub_jobs, c.note) for c in found],
                   [(f"clothing:Kira:{dress}", "Kira · Dress", 5, "worn 2 + ghost 2 + mesh 1")])
-            check("Nora (off the pipeline) is never a subject", clothing(character="Nora"), [])
+            check("Nora (no ready base model) is never a subject", clothing(character="Nora"), [])
             runs = []
 
             def fake_run_garment(name, item_id, **kw):

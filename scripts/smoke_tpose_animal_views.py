@@ -55,7 +55,7 @@ def main():
             path.write_bytes(b"new")
             return path
 
-        with (patch.object(mr, "is_humanoid", side_effect=lambda name: name == "humanoid"),
+        with (patch.object(mr, "is_humanoid", side_effect=lambda name, **_k: name == "humanoid"),
               patch.object(character, "get_character_profile", side_effect=lambda name: copy.deepcopy(profiles[name])),
               patch.object(character, "save_character_profile", side_effect=save),
               patch.object(expression_regen, "render_character_image", side_effect=render)):

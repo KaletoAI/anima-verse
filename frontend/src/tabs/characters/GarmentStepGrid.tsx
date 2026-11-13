@@ -139,11 +139,11 @@ export function StepLabel({ garment, step, label, help }: {
 
 /** What each step makes and what its Regenerate costs (tooltips). */
 const STEP_HELP: Record<string, string> = {
-  worn: 'Worn views: the base body wearing this piece, front and back (image edits of the base views). Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — this step only; the later images of the view and the mesh are dropped, Run all or the Build makes them again.',
+  worn: 'Worn views: the base body wearing this piece — the front an image edit of the base front, the back a draft composited onto the base back on the CPU (no second render; when nothing of the piece shows from behind, the back stays the base back). Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — this step only; the later images of the view and the mesh are dropped, Run all or the Build makes them again.',
   ghost: 'Piece-only views: the piece alone, the body removed, aligned to the worn view. Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — this step only; the later images of the view and the mesh are dropped, Run all or the Build makes them again.',
   cutout: 'Cut-outs: the piece-only views squared and upscaled as the mesh input. Regenerate: local crop plus a routed upscale job — this step only; the mesh is dropped, Run all or the Build makes it and the fit again.',
   mesh: 'Mesh: a 3D mesh built from both cut-outs and decimated. Regenerate: one hub mesh job (a second attempt when the gate refuses it) — this step only; the fit then reads outdated and stays in use until Re-fit, Run all or the Build fits it again.',
-  fit: 'Fit: the mesh fitted onto the rigged base model. Re-fit runs locally — no hub job.',
+  fit: 'Fit: the mesh fitted onto the rigged body it is worn on (the plain body, or a body shape). Re-fit runs locally — no hub job.',
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,

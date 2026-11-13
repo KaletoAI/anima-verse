@@ -473,7 +473,7 @@ export function WardrobeHairRow({ character, onEditAppearance }: {
           ))}
           {!info.pipeline ? (
             <span className="ga-hint" style={{ fontSize: '0.7em' }}>
-              {t('Only characters on the figure pipeline use modes')}
+              {t('Only humanoid characters that are not temporary NPCs use modes')}
             </span>
           ) : info.method_source === 'world' ? (
             <span className="ga-hint" style={{ fontSize: '0.7em' }}>{t('World default')}</span>

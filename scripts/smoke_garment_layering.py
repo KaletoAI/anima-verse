@@ -331,7 +331,6 @@ def main() -> int:
                  "body_slots": {"skin": {"tone": "olive"}, "eyes": {"color": "green"},
                                 "build": {"type": "athletic"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         for item in ("slip", "coat", "blouse", "skirt"):
             inventory.add_to_inventory("Demo", item)
         cdir = get_character_dir("Demo")

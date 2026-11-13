@@ -176,6 +176,10 @@ def main() -> int:
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
         db.init_schema()
+        # The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on
+        # the base-body pipeline and only a non-humanoid takes it; the humanoid fixture keeps it via this stub.
+        from app.core import base_body as _legacy_bb
+        _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
         plugins = root / "plugins"
         shutil.copytree(ROOT / "plugins" / "human", plugins / "human")
         from app.plugins.loader import discover_packages

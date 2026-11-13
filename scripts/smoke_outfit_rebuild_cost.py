@@ -42,7 +42,7 @@ an outfit body 2 = img2mesh + rig; retexture repaint = CPU):
      body meanwhile): the shape is still missing with its views → still
      {image 2, mesh 2, hub 4}; ``figure.stored_shape`` patched to answer a
      body → no body, and the outfit's views on the shape are copies → hub 0,
-     note "older base: outfit body stored, CPU only".
+     note "older base: body shape stored, CPU only" (Task 11h wording; was "outfit body stored").
 [O5] retexture mode, views current, the model built on the CURRENT base but
      ``variant_current`` patched False → outfit_info stale_reason
      "detail_changed" → hub 0, note "other body detail: repaint on the CPU".
@@ -115,7 +115,6 @@ def main() -> int:
 
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168}
         check("create Kira", save_character_profile("Kira", dict(human), create_new=True), True)
-        check("pipeline Kira", base_body.set_pipeline("Kira", True), True)
         bsig = base_body.base_signature("Kira")
         cdir = get_character_dir("Kira")
         mdir, refs = cdir / "model3d", cdir / "model_refs"
@@ -211,7 +210,7 @@ def main() -> int:
         with patch.object(figure, "stored_shape", return_value={"rig": "mixamo"}):
             got, full = cost()
         check("body stored: nothing", (got, full["note"]),
-              ({"image_jobs": 0, "mesh_jobs": 0, "hub_jobs": 0}, "older base: outfit body stored, CPU only"))
+              ({"image_jobs": 0, "mesh_jobs": 0, "hub_jobs": 0}, "older base: body shape stored, CPU only"))
 
         # --- [O5] -------------------------------------------------------------------
         print("[O5] retexture, views current, detail changed")

@@ -46,6 +46,10 @@ def main():
         from app.core.keyed_lock import keyed_lock
         from app.models.character import get_character_dir, get_character_profile, save_character_profile
         db.init_schema()
+        # The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on
+        # the base-body pipeline and only a non-humanoid takes it; the humanoid fixture keeps it via this stub.
+        from app.core import base_body as _legacy_bb
+        _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
         get_character_dir("demo").mkdir(parents=True, exist_ok=True)
         with keyed_lock("character_profile", "demo"):
             assert save_character_profile("demo", {"name": "demo"})

@@ -448,7 +448,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
   }
   const fitBody = (row: FootwearFitRow) => {
     const m = row.metrics || {}
-    const label = row.base ? t('Base model') : t('Outfit body {id}').replace('{id}', row.body_id || '')
+    const label = row.base ? t('Base model') : t('Body shape {id}').replace('{id}', row.body_id || '')
     const fitted = row.status !== 'missing' && row.status !== 'refused'
     const numbers = fitted ? [
       num(m.k_m_per_unit) != null ? `${t('Scale')} ${m.k_m_per_unit.toFixed(3)} m/unit` : '',

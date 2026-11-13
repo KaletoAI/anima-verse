@@ -229,7 +229,6 @@ def main() -> int:
             stored = get_character_profile(name)
             stored["profile_image"] = f"{name}_1.png"
             check(f"image {name}", save_character_profile(name, stored), True)
-            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
             bsig = base_body.base_signature(name)
             mdir = get_character_dir(name) / "model3d"
             mdir.mkdir(parents=True, exist_ok=True)

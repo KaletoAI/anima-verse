@@ -27,7 +27,9 @@ Derived by hand from the candidate rule and ``refit_character``:
      exactly one candidate ``character:Kira``, label "Kira · 1 fit: Dress"
      (one unit → singular), hub_jobs 0, note "CPU only — no hub job".
      ``needs_media`` False. The parameter ``character=Kira`` lists the same;
-     ``character=Nora`` (a plain profile, off the pipeline) lists nothing.
+     ``character=Nora`` (a plain profile without a base model — on the
+     pipeline since Task 11h, but not a subject without a READY base) lists
+     nothing.
 [F3] ``garments._active`` holds Kira (a garment chain runs) → through the
      engine (``handle_step``) the step answers busy, stays ``pending`` with
      attempts 0; neither the posture match nor ``_fit`` ran (0 / 0).
@@ -145,7 +147,6 @@ def main() -> int:
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168}
         for name in ("Kira", "Nora"):
             check(f"create {name}", save_character_profile(name, dict(human), create_new=True), True)
-        check("pipeline Kira", base_body.set_pipeline("Kira", True), True)
         bsig = base_body.base_signature("Kira")
         mdir = get_character_dir("Kira") / "model3d"
         mdir.mkdir(parents=True, exist_ok=True)
@@ -212,7 +213,7 @@ def main() -> int:
               [("character:Kira", "Kira · 1 fit: Dress", 0, "CPU only — no hub job")])
         check("needs_media False", typ.needs_media, False)
         check("character=Kira lists the same", [c.key for c in cands(character="Kira")], ["character:Kira"])
-        check("Nora (off the pipeline) is never a subject", cands(character="Nora"), [])
+        check("Nora (no ready base model) is never a subject", cands(character="Nora"), [])
 
         # --- [F3] -------------------------------------------------------------------
         print("[F3] a running garment chain is load")

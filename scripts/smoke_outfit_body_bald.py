@@ -130,7 +130,6 @@ def main() -> int:
         prof = get_character_profile(char)
         prof["profile_image"] = f"{char}_1.png"
         assert save_character_profile(char, prof)
-        assert base_body.set_pipeline(char, True)
         hair_id = garment_hair.ensure_hair_item(char)
         check("fixture: hair worn", inventory.get_equipped_mesh_pieces(char), {"hair": hair_id})
         for key, slots in (("top", ["top"]), ("skirt", ["bottom"])):

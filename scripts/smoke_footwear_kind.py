@@ -209,7 +209,6 @@ def main() -> int:
             check(f"create {name}", save_character_profile(name, {
                 "template": "human-roleplay", "gender": gender, "age": 30, "height": height,
                 "body_slots": {"hair": {"length": "medium", "color": "blonde"}}}, create_new=True), True)
-            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
 
         def piece(name, slots, own_mesh=None):
             op = {"slots": slots, "outfit_types": ["casual"]}

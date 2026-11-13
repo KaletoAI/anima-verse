@@ -22,6 +22,10 @@ from app.core import paths
 def main():
     with tempfile.TemporaryDirectory(prefix="model-ref-single-view-") as tmp:
         paths.init(tmp)
+        # The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on
+        # the base-body pipeline and only a non-humanoid takes it; the humanoid fixture keeps it via this stub.
+        from app.core import base_body as _legacy_bb
+        _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
         from app.core import expression_regen, model_refs as mr
 
         refs = Path(tmp) / "characters" / "demo" / "model_refs"

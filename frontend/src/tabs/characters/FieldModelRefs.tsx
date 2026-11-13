@@ -93,6 +93,8 @@ interface RefsInfo {
 
 /** Shown while the character's Build runs (it renders these views; Regenerate waits for it). */
 const BUILD_RUNS_VIEWS = 'A Build is running for this character — it renders these views; regenerate after it'
+/** On the figure pipeline (every humanoid): the dressed views are a step of the Figure tab's Build. */
+const BUILD_MAKES_VIEWS = 'The Figure tab\'s Build makes these views (its "Build automatically" decides when). A back or side view is a draft composited onto the base view on the CPU — no second render.'
 
 // Display order of the extra views (checkboxes and thumbnails alike).
 const VIEW_ORDER = ['front', 'back', 'left', 'right', 'face'] as const
@@ -564,7 +566,7 @@ export function FieldModelRefs({
       )}
       <div className="ga-hint">
         {kindList.includes('tpose') && info.pipeline
-          ? t('On the figure pipeline, the Figure tab\'s Build automatically decides')
+          ? t(BUILD_MAKES_VIEWS)
           : kindList.includes('tpose')
           ? t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination. The pose render feeds the image-to-3D pipeline.')
           : t('Rendered automatically after outfit changes (debounced); Generate re-renders the current combination.')}
@@ -590,7 +592,7 @@ export function FieldModelRefs({
             key={kind}
             style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: buildDecides(kind) ? 'not-allowed' : 'pointer' }}
             title={buildDecides(kind)
-              ? t('On the figure pipeline, the Figure tab\'s Build automatically decides')
+              ? t(BUILD_MAKES_VIEWS)
               : t('Render this image automatically after outfit changes')}
           >
             <input

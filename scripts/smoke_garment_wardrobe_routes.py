@@ -16,7 +16,8 @@ Fixture (expected values derived by hand):
           own mesh) and ``coat`` (slot outer, covers [top], own mesh); holds
           ``cape`` (outer, own mesh, not worn — the coat sits in outer) and
           ``shirt`` (underwear_top, mode painted); owns the hair item ``hair_demo``.
-  Offline human, pipeline OFF, holds and wears ``dress``.
+  Offline human whose profile never had the removed pipeline switch on
+          (until Task 11h: off the pipeline), holds and wears ``dress``.
   Other   human, pipeline on, holds nothing of the above.
 
 [1] Player session: GET /garments and GET /garments/dress are 403.
@@ -55,8 +56,9 @@ Fixture (expected values derived by hand):
     reason None; overlaps: the coat covers top, the dress is worn on top —
     the coat is LAYERED over the dress (plan 2026-11-10 Task 2), only pieces
     over each other warn -> []; every row carries queue_position None and
-    the root queue_running None, queue [] (nothing runs). Offline: pipeline False, dress
-    painted False, overlaps []. Other: items {}.
+    the root queue_running None, queue [] (nothing runs). Offline: pipeline True (every
+    humanoid since Task 11h, Ruling A13; was False), dress painted False,
+    overlaps []. Other: items {}.
 [6] garment_set.piece_status, pure: running wins ({running, step "mesh"});
     a waiting piece passes its garment_info queue_position through
     ({running, step "queued", queue_position 2});
@@ -127,8 +129,6 @@ def main() -> int:
         for name in ("Demo", "Offline", "Other"):
             check(f"create {name}", save_character_profile(name, json.loads(json.dumps(human)), create_new=True),
                   True)
-        for name in ("Demo", "Other"):
-            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
 
         def piece(item_id, slots, own_mesh, covers=()):
             op = {"slots": slots, "outfit_types": ["casual"], "mesh_mode": "own_mesh" if own_mesh else "painted", "covers": list(covers)}
@@ -254,7 +254,7 @@ def main() -> int:
             check("idle queue", (body.get("queue_running"), body.get("queue")), (None, []))
             body = client.get("/characters/Offline/garments").json()
             check("offline", (body.get("pipeline"), (body.get("items") or {}).get("dress", {}).get("painted"),
-                              body.get("overlaps")), (False, False, []))
+                              body.get("overlaps")), (True, False, []))
             check("other", client.get("/characters/Other/garments").json().get("items"), {})
             check("unknown character", client.get("/characters/Nobody/garments").status_code, 404)
 

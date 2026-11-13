@@ -159,6 +159,10 @@ from app.core import paths  # noqa: E402
 paths.init(STORAGE)
 from app.core import db  # noqa: E402
 db.init_schema()
+# The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on
+# the base-body pipeline and only a non-humanoid takes it; the humanoid fixture keeps it via this stub.
+from app.core import base_body as _legacy_bb
+_legacy_bb.is_base_pipeline = lambda *_a, **_k: False
 
 from app.core import config  # noqa: E402
 # The FINISH GATE is off here. This run is about the template's feature gates,

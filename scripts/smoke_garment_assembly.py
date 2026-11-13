@@ -32,7 +32,8 @@ Expected, derived by hand from plan R11/R12 and the Task 7 brief:
     sha256 of the pre-task tier records [["full", true, size, mtime, ino],
     ["low", false, 0, 0, 0]] (no assembled record without an assembly);
     no schedule.
-[2] H equipped but Demo off the pipeline -> wanted {} and served = bare.
+[2] H equipped. (Until Task 11h also: Demo switched off the pipeline ->
+    wanted {} and served = bare; a humanoid cannot be off it any more.)
 [3] Back on the pipeline, before any build: wanted = {H: (fit, None, record)};
     served(full) = bare and schedule(Demo, OSIG) recorded.
 [4] assemble(Demo, OSIG) -> {full: assembled, low: none}; assembled/OSIG.glb
@@ -227,7 +228,6 @@ def main() -> int:
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         hid = garment_hair.ensure_hair_item("Demo")
         check("hair item", (hid, inventory.get_equipped_mesh_pieces("Demo")), ("hair_demo", {"hair": "hair_demo"}))
         cdir = get_character_dir("Demo")
@@ -279,12 +279,8 @@ def main() -> int:
         check("model_revision unchanged formula", rev_bare, old_revision(bare))
         check("no schedule", SCHEDULED, [])
 
-        print("[2] off the pipeline")
+        print("[2] equip H (the off-pipeline case left with Task 11h — every humanoid is on it)")
         check("equip", inventory.equip_mesh_piece("Demo", hid), True)
-        check("pipeline off", base_body.set_pipeline("Demo", False), True)
-        check("wanted off pipeline", ga.wanted_garments("Demo"), {})
-        check("served off pipeline", ga.served("Demo", bare, "full"), bare)
-        check("pipeline on", base_body.set_pipeline("Demo", True), True)
 
         print("[3] wanted, not built")
         SCHEDULED.clear()

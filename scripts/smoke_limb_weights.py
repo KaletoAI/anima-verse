@@ -130,6 +130,10 @@ print('PASS exported distributions')
 def application_checks(root):
     from app.core import paths
     paths.init(root)
+    # The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on
+    # the base-body pipeline and only a non-humanoid takes it; the humanoid fixture keeps it via this stub.
+    from app.core import base_body as _legacy_bb
+    _legacy_bb.is_base_pipeline = lambda *_a, **_k: False
     from app.core import model3d
     from app.blender import refine, runner
     report = {'vertices': 3, 'fully_foreign': 2, 'error': ''}

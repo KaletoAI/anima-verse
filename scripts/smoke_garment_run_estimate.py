@@ -43,8 +43,8 @@ MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
      the full cost: "refit from the previous base; up to 5 if the refit is
      refused".
 [E7] An unknown item -> hub_jobs None, the ValueError's text as the note; a
-     character off the pipeline -> None, note "… is not on the base-body
-     pipeline".
+     character off the pipeline (Off, an animal — no human can be off it
+     since Task 11h) -> None, note "… is not on the base-body pipeline".
 
 Fails on 193321cf: AttributeError — module ``garments`` has no attribute
 ``run_estimate``.
@@ -112,8 +112,8 @@ def main() -> int:
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
-        check("create Off", save_character_profile("Off", dict(human), create_new=True), True)
+        # Off is an animal: since Task 11h (Ruling A13) only a non-humanoid is off the pipeline.
+        check("create Off", save_character_profile("Off", {"template": "animal-default"}, create_new=True), True)
 
         def dress(name):
             iid = inventory.add_item(name=name, category="outfit_piece", prompt_fragment=f"a green {name.lower()}",

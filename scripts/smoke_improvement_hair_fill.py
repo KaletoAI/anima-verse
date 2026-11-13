@@ -139,7 +139,6 @@ def main() -> int:
         for name, profile in (("Kira", human), ("Bald", bald)):
             check(f"create {name}", save_character_profile(name, json.loads(json.dumps(profile)), create_new=True),
                   True)
-            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
             bsig = base_body.base_signature(name)
             mdir = get_character_dir(name) / "model3d"
             mdir.mkdir(parents=True, exist_ok=True)

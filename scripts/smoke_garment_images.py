@@ -189,7 +189,6 @@ def main() -> int:
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         hid = inventory.add_item(name="Dress", category="outfit_piece", owner="Demo", item_id="dress",
                                  prompt_fragment="a green dress",
                                  outfit_piece={"slots": ["top", "bottom"], "outfit_types": ["casual"],

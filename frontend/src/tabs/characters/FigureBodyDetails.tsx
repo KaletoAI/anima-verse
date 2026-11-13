@@ -271,7 +271,7 @@ export function FigureBodyDetails({ character, jobs, autoBuild = false, onChange
               onSkinStep={() => post('skin-step', {})} />
           ))}
         </div>
-        {jobs ? <div className="ga-hint">{t('A new view makes the base model stale — the next Build rebuilds it.')}</div> : null}
+        {jobs ? <div className="ga-hint">{t('A new view makes the base model stale — the next Build you start rebuilds it.')}</div> : null}
       </div>
 
       <div className="ga-split-col">

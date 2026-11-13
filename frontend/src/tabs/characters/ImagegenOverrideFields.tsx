@@ -120,13 +120,13 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   },
   outfit_back_draft_workflow: {
     kind: 'image', label: 'Back draft', placeholder: 'Qwen*', fallback: ['tpose_view_workflow'],
-    tip: 'Rendered fresh from the dressed front; only its clothing is used. Empty = the T-pose views glob, then this step\'s chain.',
+    tip: 'Rendered fresh from the dressed front; only its clothing is used, composited onto the base back on the CPU (no second render). Empty = the T-pose views glob, then this step\'s chain.',
   },
   outfit_side_draft_workflow: {
     kind: 'image', label: 'Side draft', placeholder: 'Qwen*',
     fallback: ['outfit_back_draft_workflow', 'tpose_view_workflow'],
     note: 'Only with the world setting Dressed side views',
-    tip: 'Rendered fresh from the dressed front in profile; only its clothing is used. Runs only with the world setting Dressed side views. Empty = the Back draft glob, then the T-pose views glob, then this step\'s chain.',
+    tip: 'Rendered fresh from the dressed front in profile; only its clothing is used, composited onto the base side view on the CPU (no second render). Runs only with the world setting Dressed side views. Empty = the Back draft glob, then the T-pose views glob, then this step\'s chain.',
   },
   mesh_workflow: {
     kind: 'mesh', label: 'Mesh', placeholder: 'Trellis*',

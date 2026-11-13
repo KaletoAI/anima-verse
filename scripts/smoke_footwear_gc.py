@@ -165,7 +165,6 @@ def main() -> int:
             prof = get_character_profile(name)
             prof["profile_image"] = f"{name}_1.png"
             check(f"profile {name}", save_character_profile(name, prof), True)
-            check(f"pipeline {name}", base_body.set_pipeline(name, True), True)
 
         def shoe_item(item_id, colour, holder, mesh=fx.clog):
             iid = inventory.add_item(name=item_id.capitalize(), category="outfit_piece", item_id=item_id,

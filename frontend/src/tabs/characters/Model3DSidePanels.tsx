@@ -99,7 +99,7 @@ export function Model3DGeneration({ character }: { character: string }) {
   // (face cleanup, face before rigging) live with the model they act on:
   // ModelFaceActions, in the Figure tab's plain-body details on the pipeline, beside the
   // preview in the 3D tab off it.
-  if (st.pipeline) return <div className="ga-hint">{t('Outfit models are built from the base body automatically.')}</div>
+  if (st.pipeline) return <div className="ga-hint">{t('Outfit models are built from the base body by the Figure tab’s Build.')}</div>
   return (
     <label className="ga-check-row"
       title={t('Once the T-pose render of a NEW outfit combination has succeeded, the mesh is generated automatically on the cheapest matching backend — the T-pose is always awaited first.')}>

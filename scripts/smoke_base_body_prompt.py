@@ -76,8 +76,10 @@ frag text — an unfilled placeholder drops the fragment.
     VIEW_BACK and the signature unchanged; the back DRAFT follows the
     override with hair-clause removal: "custom back pose, arms down, " +
     BALD_BACK + ", " + OUTFIT.
-[8] is_base_pipeline: False by default; True with model_pipeline "base_body";
-    False for an animal-template profile with the same field.
+[8] is_base_pipeline: True for the humanoid profile without any key (Task 11h,
+    Ruling A13: every humanoid is on the pipeline — was: False until the
+    removed model_pipeline switch said "base_body"); False for an
+    animal-template profile, with or without a stale model_pipeline value.
 [9] base_body_negative: the parsed slot spec carries "visible marking"; a
     male profile (same slots) gets BASE + ", visible marking, spot"; when the
     marking's text changes ("visible marking" -> "bold marking") the base
@@ -381,11 +383,10 @@ def main() -> int:
             model_refs._cfg = real_cfg
 
         print("[8] is_base_pipeline")
-        check("default", base_body.is_base_pipeline(name, profile=stored), False)
-        check("switched on", base_body.is_base_pipeline(name, profile=dict(stored, model_pipeline="base_body")),
-              True)
+        check("humanoid, no key", base_body.is_base_pipeline(name, profile=stored), True)
+        check("animal", base_body.is_base_pipeline("", profile={"template": "animal-default"}), False)
         animal = {"template": "animal-default", "model_pipeline": "base_body"}
-        check("animal", base_body.is_base_pipeline("", profile=animal), False)
+        check("animal, stale key", base_body.is_base_pipeline("", profile=animal), False)
 
         print("[9] base_body_negative")
         from app.core.body_slots import slots_for_character

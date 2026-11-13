@@ -7,7 +7,7 @@
  * same for every wearer: Own mesh (a finished mesh fitted on top), Painted (on
  * the body's texture) or In the body (meshed as part of the body). Per row:
  * the mode select (MeshModeSelect — saved at once, spends nothing; disabled
- * off the figure pipeline), after a change the wearers line (WearersLine —
+ * for a non-humanoid, the only character off the figure pipeline), after a change the wearers line (WearersLine —
  * "worn by K characters now" and one "Build for them (cost)"), and for an
  * own-mesh piece its status chip (server: `garment_set.piece_status`) and
  * "Mesh steps", which opens the piece's dialog (GarmentPieceDialog): the
@@ -164,7 +164,7 @@ const CHIP: CSSProperties = {
   whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
 }
 
-/** The row chip: running, painted on / missing (and why), or how far the chain got. */
+/** The row chip: running, in the body / missing (and why), or how far the chain got. */
 export function PieceStatusChip({ status, name }: { status: PieceStatus; name: string }) {
   const { t } = useI18n()
   const progress = t(STATE_LABELS[status.state] || status.state)
@@ -178,9 +178,6 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
     color = 'var(--accent, #6aa9ff)'
   } else if (status.in_body) {
     text = `${t('In the body until its own mesh is ready')}: ${t(status.reason || '')}`
-    color = 'var(--warning, #d29922)'
-  } else if (status.painted) {
-    text = `${t('Painted on')}: ${t(status.reason || '')}`
     color = 'var(--warning, #d29922)'
   } else if (status.missing) {
     // Mesh mode: not painted into the outfit body, so not shown until the mesh is accepted.
@@ -200,13 +197,13 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
 /** The mode select of one outfit piece (ruling 3): Own mesh · Painted · In the
  *  body, saved at once on the ITEM (every wearer) and spending nothing — the
  *  PUT replaces the whole outfit_piece, so the stored one is read first and
- *  only `mesh_mode` changes. Off the figure pipeline it is disabled with the
- *  reason under it. `onChanged` gets the saved mode (the row then shows its
+ *  only `mesh_mode` changes. For a non-humanoid (off the figure pipeline —
+ *  every humanoid is on it) it is disabled with the reason under it. `onChanged` gets the saved mode (the row then shows its
  *  wearers line). */
 export function MeshModeSelect({ itemId, mode, pipeline, disabled, feet = false, onChanged }: {
   itemId: string
   mode: MeshMode
-  /** The character is on the figure pipeline (`GET …/garments` pipeline). */
+  /** The character is on the figure pipeline (`GET …/garments` pipeline) — every humanoid is. */
   pipeline: boolean
   disabled?: boolean
   /** A piece worn in slot feet alone: a rigid shoe (its own-mesh hint). */
@@ -244,7 +241,7 @@ export function MeshModeSelect({ itemId, mode, pipeline, disabled, feet = false,
       </label>
       {!pipeline ? (
         <span className="ga-hint" style={{ fontSize: '0.7em' }}>
-          {t('Only characters on the figure pipeline use modes')}
+          {t('Only humanoid characters that are not temporary NPCs use modes')}
         </span>
       ) : null}
     </span>
@@ -508,7 +505,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   if (!info) {
     body = <div className="ga-hint">{t('Loading…')}</div>
   } else if (!info.pipeline) {
-    body = <div className="ga-hint">{t('Own meshes need the base body pipeline — switch it on in the Figure tab')}</div>
+    body = <div className="ga-hint">{t('Own meshes are for humanoid characters that are not temporary NPCs')}</div>
   } else if (footwear) {
     body = (
       <div className="ga-garment-dialog-body">
@@ -619,11 +616,6 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           {info.status.in_body && !running ? (
             <div className="ga-hint" style={WARN_STYLE}>
               {t('Until its own mesh is ready, the figure has this piece in its body shape.')}
-            </div>
-          ) : null}
-          {info.status.painted && !running ? (
-            <div className="ga-hint" style={WARN_STYLE}>
-              {t('Until it has an accepted fit, the outfit model paints this piece onto the body.')}
             </div>
           ) : null}
           {info.status.missing && !running ? (

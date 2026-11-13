@@ -653,7 +653,7 @@ export function ItemForm({ draft, items, outfitTypeOptions, conditionOptions, on
       {isOutfit && <BackTextField draft={draft} onUpdate={onUpdate} />}
 
       {isOutfit && <Field label={t('3D figure')}
-        hint={t('How the piece reaches the 3D figure of every wearer on the figure pipeline: Own mesh, Painted or In the body. 2D images stay unchanged.')}>
+        hint={t('How the piece reaches the 3D figure of every humanoid wearer: Own mesh, Painted or In the body (the default). 2D images stay unchanged.')}>
         <span className="ga-form-hint" style={{ display: 'block', marginTop: 6 }}>
           {t("Mode: {mode} — set in a wearer's Wardrobe")
             .replace('{mode}', t(MESH_MODE_LABELS[meshModeOf(draft.mesh_mode, draft.slots)]))}

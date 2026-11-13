@@ -124,7 +124,6 @@ def main() -> int:
             prof = get_character_profile(char)
             prof["profile_image"] = f"{char}_1.png"
             assert save_character_profile(char, prof)
-            assert base_body.set_pipeline(char, True)
             ids = {}
             # The outfit body mode follows the worn pieces (interim rule, plan 2026-11-12-unified-worn-pieces
             # Task 2): mesh mode = the painted pieces in the body.

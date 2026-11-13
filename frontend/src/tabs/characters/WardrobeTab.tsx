@@ -417,7 +417,7 @@ export function WardrobeTab({ character, onEditAppearance, onOpenFigure }: {
         />
         {garments && !garments.pipeline && anyOwnMesh ? (
           <div className="ga-form-hint" style={{ fontSize: '0.8em' }}>
-            {t('Own meshes need the base body pipeline — switch it on in the Figure tab')}
+            {t('Own meshes are for humanoid characters that are not temporary NPCs')}
           </div>
         ) : null}
         {garments?.overlaps.map((o) => (

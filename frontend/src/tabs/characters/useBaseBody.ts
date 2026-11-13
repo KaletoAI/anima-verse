@@ -15,6 +15,7 @@ import type { Freshness } from './FreshnessBadge'
 import type { ModelStep } from './ModelSteps'
 import type { CollisionPayload } from '@anima/scene-render'
 import type { FaceCleanupState, FaceFields } from './ModelFaceActions'
+import type { ModelStaleReason } from './figureModel'
 
 export const BASE_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BaseView = typeof BASE_VIEWS[number]
@@ -55,13 +56,12 @@ export type BaseModelWithFace = BaseModelInfo & FaceFields
 /** The current outfit's model on the pipeline. */
 export interface BaseOutfitInfo {
   signature: string
-  /** stale = built on an older base body (or before the pipeline, for
-   *  another body detail, or with an own-mesh piece painted on that has its
-   *  garment mesh now). */
+  /** stale = built on an older base body (or without the base body, for
+   *  another body detail, as another figure or on an older body shape). */
   status: 'running' | 'failed' | 'stale' | 'ready' | 'missing'
   error: string
   /** Why a stale model is stale; null unless status is stale. */
-  stale_reason: 'older_base' | 'before_pipeline' | 'detail_changed' | 'mesh_item_ready' | 'figure' | null
+  stale_reason: ModelStaleReason | null
   /** Warnings of the stored model: dressed views left out because the
    *  edit turned the figure around, own-mesh pieces left painted on
    *  (server English text). */

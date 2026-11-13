@@ -101,7 +101,11 @@ def _fake_render(character_name, **kw):
 
 
 expression_regen.render_character_image = _fake_render
-model_refs.is_humanoid = lambda name: True
+model_refs.is_humanoid = lambda name, **_k: True
+# The legacy whole-body path this smoke covers: since Task 11h (Ruling A13) every humanoid is on the base-body
+# pipeline and only a non-humanoid takes that path; the humanoid fixture keeps it through this stub.
+from app.core import base_body  # noqa: E402
+base_body.is_base_pipeline = lambda *_a, **_k: False
 model_refs.enabled_tpose_views = lambda name: model_refs.TPOSE_VIEWS_BY_BODY["humanoid"]
 model_refs.find_ref_image = lambda *a, **k: None
 model_refs.get_model_refs_dir = lambda name: refs

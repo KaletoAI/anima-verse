@@ -405,10 +405,10 @@ def ensure_hair_item(character_name: str) -> str:
     """Create (if missing), refresh and wear the character's hair item;
     returns its id.
 
-    ValueError for a non-humanoid, a character off the base-body pipeline, a
-    species without a hair mesh-item slot, or no hair text at all. The
+    ValueError for a non-humanoid (the one character off the base-body
+    pipeline since Task 11h, Ruling A13), a species without a hair mesh-item
+    slot, or no hair text at all. The
     inventory is not touched — the item is worn, never carried."""
-    from app.core.base_body import is_base_pipeline
     from app.core.keyed_lock import keyed_lock
     from app.core.model_refs import is_humanoid
     from app.models import inventory
@@ -420,8 +420,6 @@ def ensure_hair_item(character_name: str) -> str:
         profile = get_character_profile(character_name) or {}
         if not is_humanoid(character_name, profile=profile):
             raise ValueError("Hair as its own mesh is for humanoid characters only")
-        if not is_base_pipeline(character_name, profile=profile):
-            raise ValueError(f"{character_name} is not on the base-body pipeline")
         if hair_in_body(character_name, profile):
             raise ValueError(f"{HAIR_IN_BODY} — no hair item for the method {BODY_METHOD!r}")
         slot = _hair_slot(character_name, profile)

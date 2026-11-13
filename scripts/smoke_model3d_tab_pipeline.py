@@ -13,8 +13,8 @@ characters router in a bare FastAPI app, ``require_admin`` overridden).
 ``model3d.rebuild_extension_rig`` are recorders, so nothing renders, meshes
 or rigs.
 
-Fixture: ``Demo`` (human-roleplay, base-body pipeline), ``Plain`` (the same
-profile, NOT on the pipeline). BSIG = base_signature(Demo), OSIG = Demo's
+Fixture: ``Demo`` (human-roleplay, base-body pipeline), ``Plain``
+(animal-default — off the pipeline; until Task 11h a human with the pipeline switch off, a state that no longer exists). BSIG = base_signature(Demo), OSIG = Demo's
 current outfit signature. The rigged base model is model3d/BSIG.glb with
 sidecar {rig: mixamo} (``base_model_info`` -> "ready"); its re-rig source is
 model3d/unrigged/BSIG.glb. A dressed view counts as current when its ref
@@ -157,10 +157,9 @@ def main() -> int:
                  "body_slots": {"skin": {"tone": "light"}, "eyes": {"color": "blue"},
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
-        for name in ("Demo", "Plain"):
-            check(f"create {name}", save_character_profile(name, json.loads(json.dumps(human)), create_new=True),
-                  True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
+        check("create Demo", save_character_profile("Demo", json.loads(json.dumps(human)), create_new=True), True)
+        check("create Plain", save_character_profile("Plain", {"template": "animal-default"}, create_new=True),
+              True)
         bsig = base_body.base_signature("Demo")
         osig = model_refs.current_outfit_state("Demo")[2]
         psig = model_refs.current_outfit_state("Plain")[2]

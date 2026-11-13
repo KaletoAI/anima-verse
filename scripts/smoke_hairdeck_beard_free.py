@@ -276,7 +276,6 @@ def main() -> int:
                 check(f"profile {sorted(values)}", save_character_profile("Demo", stored), True)
 
         set_profile(profile_image="Demo_1.png", hair_method="hairdeck")
-        base_body.set_pipeline("Demo", True)
         hid = garment_hair.ensure_hair_item("Demo")
 
         def md5(payload):

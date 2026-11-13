@@ -259,7 +259,6 @@ def main() -> int:
         stored = get_character_profile("Demo")
         stored["profile_image"] = "Demo_1.png"
         check("profile", save_character_profile("Demo", stored), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         check("dressed views", base_body.dressed_views(), ("front", "back"))
 
         for item_id, slot in (("under", "underwear_bottom"), ("shoes", "feet"), ("skirt", "bottom")):

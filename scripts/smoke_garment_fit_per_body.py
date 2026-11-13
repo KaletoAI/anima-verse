@@ -297,7 +297,6 @@ def main() -> int:
                  "body_slots": {"skin": {"tone": "olive"}, "eyes": {"color": "green"},
                                 "build": {"type": "athletic"}, "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("pipeline Demo", base_body.set_pipeline("Demo", True), True)
         check("hair in the body mesh: no hair item", (garment_hair.hair_method("Demo"),
                                                      inventory.get_equipped_mesh_pieces("Demo")), ("body", {}))
 

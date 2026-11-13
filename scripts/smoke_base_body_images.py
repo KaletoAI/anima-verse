@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Base body: the four A-pose images, the pipeline switch and the routes (app/core/base_body.py).
+"""Base body: the four A-pose images, the pipeline predicate and the routes (app/core/base_body.py).
 
 Usage:
     ./.venv/bin/python scripts/smoke_base_body_images.py
@@ -54,11 +54,11 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     result {"front": None}, no view render (they need the front), status
     front.failed True and back/left/right failed with error "front render
     failed"; a view of DemoFail then raises ValueError (no front).
-[3] base_info(Demo): pipeline False, signature bsig, images = 4 URLs
+[3] base_info(Demo): pipeline True (a humanoid is on the pipeline without any
+    profile key since Task 11h, Ruling A13 — was: False until set_pipeline
+    switched it on; the switch is gone), signature bsig, images = 4 URLs
     "/characters/Demo/base-body/images/<view>?v=<mtime_ns>", model None.
-    set_pipeline(Demo, True) -> True, stored model_pipeline "base_body",
-    base_info pipeline True; set_pipeline(Demo, False) -> True, the field is
-    gone. set_pipeline(DemoFox, True) -> ValueError, profile unchanged.
+    base_info(DemoFox)["pipeline"] False (an animal never is).
 [4] The real render_character_image with a FAKE image service (records the
     JSON payload, writes the "generated" file into the images dir) and a
     recording postprocess_outfit_image:
@@ -92,8 +92,8 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
 [6] Routes (characters + figure routers on a bare FastAPI app, real sessions):
     player GET /characters/Demo/figure?plain=1 -> 403; admin -> 200 with
     plain_body.signature bsig (since Task 11 of plan 2026-11-12-unified-worn-pieces
-    the plain body's payload rides on the figure GET; was GET .../base-body); POST .../pipeline {enabled: true} for DemoFox -> 400 and the profile
-    is unchanged; for Demo -> 200 {pipeline: true}; POST .../images
+    the plain body's payload rides on the figure GET; was GET .../base-body); the removed POST .../pipeline (was
+    400 for DemoFox / 200 {pipeline: true} for Demo) is checked in smoke_pipeline_switch_removed; POST .../images
     {view: "left", force: true} -> 202 {started: true} and, once the worker
     is done, exactly one render (left); {view: "sideways"} -> 422; DemoFox
     images -> 400; DemoBare images -> 409; GET .../images/front -> 200 with
@@ -287,26 +287,15 @@ def main() -> int:
                 check("view without front", "ValueError", "ValueError")
             CALLS.clear()
 
-            print("[3] base_info and the pipeline switch")
+            print("[3] base_info and the pipeline predicate")
             info = base_body.base_info("Demo")
-            check("pipeline off", info["pipeline"], False)
+            check("pipeline (humanoid)", info["pipeline"], True)
             check("signature", info["signature"], bsig)
             check("model", info["model"], None)
             want_urls = {v: f"/characters/Demo/base-body/images/{v}?v={(refs / (s + '.png')).stat().st_mtime_ns}"
                          for v, s in zip(views, stems)}
             check("image urls", info["images"], want_urls)
-            check("switch on", base_body.set_pipeline("Demo", True), True)
-            check("stored", get_character_profile("Demo").get("model_pipeline"), "base_body")
-            check("info pipeline on", base_body.base_info("Demo")["pipeline"], True)
-            check("switch off", base_body.set_pipeline("Demo", False), True)
-            check("field removed", "model_pipeline" in get_character_profile("Demo"), False)
-            before = get_character_profile("DemoFox")
-            try:
-                base_body.set_pipeline("DemoFox", True)
-                check("animal switch", "no error", "ValueError")
-            except ValueError:
-                check("animal switch", "ValueError", "ValueError")
-            check("animal profile unchanged", get_character_profile("DemoFox"), before)
+            check("animal off the pipeline", base_body.base_info("DemoFox")["pipeline"], False)
         finally:
             expression_regen.render_character_image = real_render
 
@@ -412,12 +401,6 @@ def main() -> int:
                 client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_ADMIN])
                 r = client.get("/characters/Demo/figure?plain=1")
                 check("admin GET", (r.status_code, (r.json().get("plain_body") or {}).get("signature")), (200, bsig))
-                before = get_character_profile("DemoFox")
-                r = client.post("/characters/DemoFox/base-body/pipeline", json={"enabled": True})
-                check("animal pipeline", r.status_code, 400)
-                check("animal profile unchanged", get_character_profile("DemoFox"), before)
-                r = client.post("/characters/Demo/base-body/pipeline", json={"enabled": True})
-                check("pipeline on", (r.status_code, r.json().get("pipeline")), (200, True))
                 r = client.post("/characters/Demo/base-body/images", json={"view": "left", "force": True})
                 check("images started", (r.status_code, r.json()), (202, {"started": True}))
                 deadline = time.monotonic() + 10
