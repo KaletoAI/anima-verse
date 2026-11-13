@@ -60,9 +60,12 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      Deck and Bald: every block / prompt / negative of the four views equals
      the start hash's output byte for byte (Bald: no hairstyle -> the bald
      wording; Deck: a HairDeck hairstyle).
-     Back draft of Long: DRAFT_PROMPTS["back"] with the outfit text and the
-     same head clause as the back view, negative "hat, hood, headscarf, wig,
-     detailed anatomy, " + POSE_NEGATIVE; Deck's draft = the start hash's.
+     Back draft of Long: DRAFT_PROMPTS["back"] (Ruling A29: no clothing —
+     "exactly as on the person in the reference image, the same length, cut
+     and colour, and nothing else") with the same head clause as the back
+     view, negative "hat, hood, headscarf, wig, detailed anatomy, " +
+     POSE_NEGATIVE; Deck's draft = DRAFT_PROMPTS["back"] as it is (the bald
+     wording), its negative = the start hash's.
      Dressed front edit (dress_text stubbed "they now wear a blue shirt"):
      Long opens with "Keep the image exactly as it is: the same person, same
      hair, same body shape, ..." and its negative has no "hair" term; Deck =
@@ -172,8 +175,9 @@ VIEW_TAIL = {
     "right": "The same person turned to a strict right side profile view, same A-pose, same framing, ",
 }
 END = "the whole figure from head to feet in the frame."
-OUTFIT = ("wearing exactly the same outfit as the person in the reference image, the same garments, lengths, cut, "
-          "colours and shoes")
+#: The draft's reference clause since Ruling A29 (it names no clothing).
+CLOTHES_REF = ("exactly as on the person in the reference image, the same length, cut and colour, and nothing "
+               "else")
 
 
 def main() -> int:
@@ -301,10 +305,12 @@ def main() -> int:
                                                                                         profile=P["Deck"]), True)
 
         draft, negative = base_body.draft_prompt("Long", "back", profile=P["Long"])
-        check("Long back draft", draft, f"{VIEW_TAIL['back']}long brunette hair, {REF}, {BEHIND}, {OUTFIT}, {END}")
+        check("Long back draft", draft, f"{VIEW_TAIL['back']}long brunette hair, {REF}, {BEHIND}, {CLOTHES_REF}, {END}")
         check("Long draft negative", negative, "hat, hood, headscarf, wig, detailed anatomy, " + POSE_NEG)
-        check(f"Deck draft == {START}", base_body.draft_prompt("Deck", "back", profile=P["Deck"]),
-              old_bb.draft_prompt("Deck", "back", profile=P["Deck"]))
+        deck_draft = base_body.draft_prompt("Deck", "back", profile=P["Deck"])
+        check("Deck draft: the bald sentence (Ruling A29)", deck_draft[0], base_body.DRAFT_PROMPTS["back"])
+        check(f"Deck draft negative == {START}", deck_draft[1],
+              old_bb.draft_prompt("Deck", "back", profile=P["Deck"])[1])
 
         stub = lambda *a, **k: "they now wear a blue shirt"  # noqa: E731
         with patch.object(base_body, "dress_text", stub), patch.object(old_bb, "dress_text", stub):

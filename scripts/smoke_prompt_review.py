@@ -54,15 +54,14 @@ written, 1-based, split on whitespace).
     its outfit text starts at word 29 (DRESS_KEEP is 24 words, "Only change
     their clothing:" 4).
 [6] Drafts: DRAFT_USE_CASES == {back: base_view_back, left: base_view_side,
-    right: base_view_side}; DRAFT_PROMPTS["back"] filled with
-    DRAFT_OUTFIT_TEXT: 47 words (17 + 20 + 10), starts with "The same person
-    turned around", the outfit clause starts at word 18 ("The same person
-    turned around, seen directly from behind, back view, same A-pose, same
-    framing, completely bald," is 17 words), ends with "in the frame."; a trailing
-    full stop of the outfit text is dropped. garment_clothing.DRAFT with
-    fragment "a red dress" reads "wearing only a red dress exactly as on the
+    right: base_view_side}; DRAFT_PROMPTS["back"] (Ruling A29, the user's
+    validated sentence, no clothing): 45 words (17 + 18 + 10), starts with
+    "The same person turned around", the reference clause "exactly as on the
     person in the reference image, the same length, cut and colour, and
-    nothing else".
+    nothing else" (18 words) starts at word 18 ("The same person turned
+    around, seen directly from behind, back view, same A-pose, same framing,
+    completely bald," is 17 words), ends with "in the frame."; it carries no
+    "{" slot and ``draft_prompt`` returns it as it is.
 [7] Ghosts: garment_clothing.GHOST with noun "red dress": "position" is word
     9 and "width" word 11 of 49, no "no " in it; garment_hair._GHOST["front"]
     starts "Keep the hair exactly as it is: the same position, outer outline,
@@ -216,19 +215,15 @@ def main() -> int:
         print("[6] drafts")
         check("draft use cases", base_body.DRAFT_USE_CASES,
               {"back": "base_view_back", "left": "base_view_side", "right": "base_view_side"})
-        draft = base_body.DRAFT_PROMPTS["back"].format(outfit=base_body.DRAFT_OUTFIT_TEXT)
-        check("47 words", len(words(draft)), 47)
+        draft = base_body.DRAFT_PROMPTS["back"]
+        check("45 words", len(words(draft)), 45)
         check("starts with the turn", draft.startswith("The same person turned around"), True)
-        check("outfit at word 18", word_at(draft, "wearing exactly the same outfit"), 18)
+        check("reference clause at word 18", word_at(draft, "exactly as on the person in the reference image"), 18)
         check("ends with the frame", draft.endswith("in the frame."), True)
         profile = {"template": "", "gender": "female"}
-        check("draft_prompt drops a trailing full stop",
-              base_body.draft_prompt("Demo", "back", profile=profile, outfit_text="wearing a hat.")[0],
-              base_body.DRAFT_PROMPTS["back"].format(outfit="wearing a hat"))
+        check("draft_prompt: the sentence as it is, no slot",
+              ("{" in draft, base_body.draft_prompt("Demo", "back", profile=profile)[0]), (False, draft))
         from app.core import garment_clothing
-        check("clothing DRAFT", garment_clothing.DRAFT.format(fragment="a red dress"),
-              "wearing only a red dress exactly as on the person in the reference image, the same length, cut "
-              "and colour, and nothing else")
 
         print("[7] ghosts")
         ghost = garment_clothing.GHOST.format(noun="red dress")

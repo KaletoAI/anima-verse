@@ -18,7 +18,9 @@ own_mesh, front text F = "grey tailored blazer, deep neckline, three front
 buttons, office setting" (69 characters); back text B = "grey tailored
 blazer". The model fit and its prompt are gone (Task 11g, Ruling C1: the
 drafted back is composited onto the base back on the CPU), so the back text
-reaches the image through the DRAFT only.
+reaches the image through the DRAFT's NEGATIVE only (Ruling A29: the draft
+prompt names no clothing; the garment words the back text does not name
+stay forbidden).
 
 Expected values, derived by hand from the code's constants:
 
@@ -26,12 +28,12 @@ Expected values, derived by hand from the code's constants:
     stored "grey tailored blazer" (whitespace collapsed, no trailing full
     stop); "" drops the key; a non-outfit item ("tool") never keeps it.
 [2] Empty field — the front text everywhere, as before:
-    ``back_text`` = ``view_text(back|left|right|side)`` = F; the draft says "wearing only F exactly as on the
-    person in the reference image"; ``fsig_inputs`` has no
+    ``back_text`` = ``view_text(back|left|right|side)`` = F; the draft prompt is
+    ``base_body.DRAFT_PROMPTS["back"]`` (no "blazer"); ``fsig_inputs`` has no
     ``prompt_fragment_back`` key.
 [3] Field B — the back wins, the front stays byte for byte: the draft
-    "wearing only grey tailored blazer exactly as on the person" and not
-    "neckline"; ``view_text(left)`` = ``view_text(side)`` = B,
+    prompt is the same sentence (no "blazer", no "neckline");
+    ``view_text(left)`` = ``view_text(side)`` = B,
     ``view_text(front)`` = F; ``fsig_inputs[prompt_fragment_back]`` = B
     and the fsig differs from [2]'s. The worn FRONT edit = "Keep the image
     exactly as it is. Only change their clothing: they now wear only F."
@@ -40,9 +42,8 @@ Expected values, derived by hand from the code's constants:
     from behind, the back view stays a back view" (sleeves, neck opening:
     no waistband piece). A field EQUAL to the front (F) keeps [2]'s fsig and
     inputs (the old keys).
-[4] The dressed drafts name their view: ``base_body.draft_prompt(Demo, v,
-    outfit_text="wearing only B")`` for back / left / right =
-    ``DRAFT_PROMPTS[v]`` with "wearing only B" in the {outfit} slot, so it
+[4] The dressed drafts name their view: ``base_body.draft_prompt(Demo, v)``
+    for back / left / right = ``DRAFT_PROMPTS[v]`` (no clothing), so it
     contains "seen directly from behind, back view" / "strict left side
     profile view" / "strict right side profile view"; there is no
     ``base_body.fit_prompt`` / ``FIT_PROMPT`` and no
@@ -168,8 +169,8 @@ def main() -> int:
         check("back_text", pbt.back_text(item), F)
         check("view texts", [pbt.view_text(item, v) for v in ("back", "left", "right", "side")], [F] * 4)
         draft = garment_clothing.draft_prompt("Demo", "worn", item_id=jid)[0]
-        check("draft names the front text", f"wearing only {F} exactly as on the person in the reference image"
-              in draft, True)
+        check("draft names no clothing (Ruling A29)", (draft == base_body.DRAFT_PROMPTS["back"], "blazer" in draft),
+              (True, False))
         inputs_empty = garment_clothing.fsig_inputs("Demo", jid)
         check("no back key", pbt.FIELD in inputs_empty, False)
         fsig_empty = gs.garment_fsig("Demo", jid)
@@ -183,8 +184,8 @@ def main() -> int:
         set_back(B)
         item = inventory.get_item(jid)
         draft = garment_clothing.draft_prompt("Demo", "worn", item_id=jid)[0]
-        check("draft names the back text", (f"wearing only {B} exactly as on the person" in draft,
-                                            "neckline" in draft), (True, False))
+        check("draft still names no clothing", (draft == base_body.DRAFT_PROMPTS["back"], "neckline" in draft),
+              (True, False))
         check("view texts", [pbt.view_text(item, v) for v in ("front", "back", "left", "side")], [F, B, B, B])
         inputs_b = garment_clothing.fsig_inputs("Demo", jid)
         check("inputs", (inputs_b.get("prompt_fragment"), inputs_b.get(pbt.FIELD)), (F, B))
@@ -204,10 +205,8 @@ def main() -> int:
         set_back("")
 
         print("[4] dressed drafts name their view")
-        drafts = [base_body.draft_prompt("Demo", v, outfit_text=f"wearing only {B}")[0]
-                  for v in ("back", "left", "right")]
-        check("draft prompts", drafts, [base_body.DRAFT_PROMPTS[v].format(outfit=f"wearing only {B}")
-                                        for v in ("back", "left", "right")])
+        drafts = [base_body.draft_prompt("Demo", v)[0] for v in ("back", "left", "right")]
+        check("draft prompts", drafts, [base_body.DRAFT_PROMPTS[v] for v in ("back", "left", "right")])
         check("each names its turn", [w in d for w, d in zip(("seen directly from behind, back view",
                                                                "strict left side profile view",
                                                                "strict right side profile view"), drafts)],

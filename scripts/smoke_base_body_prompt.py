@@ -73,9 +73,8 @@ frag text — an unfilled placeholder drops the fragment.
     image_generation.tpose_prompt changes neither the front prompt nor the
     signature. The base back is a constant too: tpose_back_prompt = "custom
     back pose, arms down, hair tied back" leaves base_prompt(back) ==
-    VIEW_BACK and the signature unchanged; the back DRAFT follows the
-    override with hair-clause removal: "custom back pose, arms down, " +
-    BALD_BACK + ", " + OUTFIT.
+    VIEW_BACK and the signature unchanged; the back DRAFT ignores it too
+    (== DRAFT_BACK).
 [8] is_base_pipeline: True for the humanoid profile without any key (Task 11h,
     Ruling A13: every humanoid is on the pipeline — was: False until the
     removed model_pipeline switch said "base_body"); False for an
@@ -95,17 +94,15 @@ frag text — an unfilled placeholder drops the fragment.
     with length "long": the description ends ", pale spot, long tail" (slot
     order marking, spot, tail; spot applies to males and has no
     placeholder) — the female one has no "spot".
-[11] Back DRAFT (user decisions 2026-11-09; it keeps the long view text,
-    unlike the base back): prompt = POSE_BACK, BALD_BACK, OUTFIT — POSE_BACK
-    the mesh-input back text minus "the same hairstyle, hair length and hair
-    volume as the reference" (ends "...legs clearly apart with open space
-    visible between them"), BALD_BACK = BALD minus "natural eyebrows"
-    (strip_face_terms), OUTFIT = "wearing exactly the same outfit as the
-    person in the reference image, the same garments, lengths, cut, colours
-    and shoes" in BODY's place; block = "sfw, " + APPEARANCE_BACK — no "no clothing",
-    no ``base_body_prompt`` text. For the long-tail profile of [10] the same
-    block (its "long tail" is a base_body_prompt fragment), and neither
-    "long tail" nor "mannequin" appears in prompt or block. Negative = HAIR_NEG +
+[11] Back DRAFT: one short sentence, the user's validated wording of Ruling A29
+    (2026-11-13) — DRAFT_BACK = "The same person turned around, seen directly
+    from behind, back view, same A-pose, same framing, completely bald,
+    exactly as on the person in the reference image, the same length, cut
+    and colour, and nothing else, the whole figure from head to feet in the
+    frame." — a view change that never names the clothing (no "outfit", no
+    "garments"), no "no clothing", no ``base_body_prompt`` text. For the
+    long-tail profile of [10] the same sentence, and neither "long tail" nor
+    "mannequin" appears in it. Negative = HAIR_NEG +
     ", detailed anatomy, " + POSE_NEG (BASE without "clothing, underwear,
     jewellery") + ", visible marking".
 [12] The FINAL front prompt — what the image service sends: the base_front
@@ -145,7 +142,10 @@ frag text — an unfilled placeholder drops the fragment.
     footwear_source — the empty-shoe edit of occasion footwear_empty, footwear
     plan 2026-11-10 Task 2) are additions only; outfit_fit (the dressed
     back/side model fit, Task 11g) is the one old use case removed on purpose
-    (config.DEAD_USE_CASES) — and the T-pose pose constants of model_refs.py at
+    (config.DEAD_USE_CASES); face_view / profile (review 2026-11-11) and
+    tpose_back / tpose_side (Ruling A29, 2026-11-13: their LLM instruction
+    describes the body and hair, never the clothing — the views turn the main
+    render around) changed on purpose — and the T-pose pose constants of model_refs.py at
     bda7bd17 (TPOSE_PROMPT_DEFAULT, TPOSE_VIEW_PROMPT_DEFAULTS, read from the
     old source by exec of their assignments) equal today's. A tpose payload
     without "style_character" joins as f"{style} {prompt}".
@@ -228,8 +228,6 @@ POSE_NEG = ("hands touching body, fists, curled fingers, fused fingers, mitten h
             "cropped legs, close-up, portrait crop")
 BASE = HAIR_NEG + ", clothing, underwear, jewellery, detailed anatomy, " + POSE_NEG
 NEGATIVE = BASE + ", visible marking"
-OUTFIT = ("wearing exactly the same outfit as the person in the reference image, the same garments, lengths, cut, "
-          "colours and shoes")
 # [12] The base front after the prompt review (2026-11-11), written out by
 # hand with clean separators and the neutral stand-in fragments of frag_a /
 # frag_b: subject sentence, the character block (sfw, bald, mannequin body,
@@ -249,7 +247,8 @@ TARGET = ("a full-body render of the character as a realistic 3D figure with lif
           "angled about 45 degrees down and away from the body, not touching the body, all five fingers straight, "
           "relaxed and slightly apart, legs clearly apart with open space visible between them")
 DRAFT_BACK = ("The same person turned around, seen directly from behind, back view, same A-pose, same framing, "
-              "completely bald, " + OUTFIT + ", the whole figure from head to feet in the frame.")
+              "completely bald, exactly as on the person in the reference image, the same length, cut and colour, "
+              "and nothing else, the whole figure from head to feet in the frame.")
 SUBJECT = "a full-body render of the character as a realistic 3D figure with lifelike skin textures"
 #: The commit before the prompt-layout change ([13]) — never HEAD.
 BEFORE = "bda7bd17"
@@ -445,7 +444,7 @@ def main() -> int:
         check("draft ignores the body slots", prompt, DRAFT_BACK)
         check("no 'no clothing' in the draft", "no clothing" in prompt, False)
         check("no tail, no mannequin", ("long tail" in prompt, "mannequin" in prompt), (False, False))
-        check("outfit right after the turn", prompt.index(OUTFIT) < len(prompt) / 2, True)
+        check("the clothing is never named (Ruling A29)", ("outfit" in prompt, "garment" in prompt), (False, False))
         check("draft use cases are the empty edit styles", base_body.DRAFT_USE_CASES,
               {"back": "base_view_back", "left": "base_view_side", "right": "base_view_side"})
 
@@ -520,13 +519,18 @@ def main() -> int:
               ["base_back", "base_front", "base_side", "base_view_back", "base_view_side",
                "footwear_source", "outfit_edit"])
         # Review 2026-11-11: face_view (style emptied) and profile (rules
-        # positive, character slot) changed on purpose; every other old use
-        # case resolves byte-identically.
+        # positive, character slot) changed on purpose; Ruling A29: tpose_back /
+        # tpose_side (the instruction never describes the clothing) too; every
+        # other old use case resolves byte-identically.
         diffs = [(uc, fam, clothed) for uc in old_ucs for fam in ("natural", "keywords") for clothed in (True, False)
-                 if uc not in ("face_view", "profile")
+                 if uc not in ("face_view", "profile", "tpose_back", "tpose_side")
                  and old_cfg.get_use_case_prompts(uc, fam, clothed=clothed)
                  != config.get_use_case_prompts(uc, fam, clothed=clothed)]
         check("every other old use case resolves byte-identically", diffs, [])
+        a29 = [(uc, fam) for uc in ("tpose_back", "tpose_side") for fam in ("natural", "keywords")
+               if {k: v for k, v in old_cfg.get_use_case_prompts(uc, fam).items() if k != "prompt_instruction"}
+               != {k: v for k, v in config.get_use_case_prompts(uc, fam).items() if k != "prompt_instruction"}]
+        check("tpose_back / tpose_side: only the instruction changed (Ruling A29)", a29, [])
         import ast
         tree = ast.parse(old_source("app/core/model_refs.py"))
         wanted = ("TPOSE_FRONT_HAIR_CLAUSE", "TPOSE_CHEST_HAIR_CLAUSE", "TPOSE_REFERENCE_HAIR_CLAUSE",

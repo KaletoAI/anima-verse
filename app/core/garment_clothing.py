@@ -18,8 +18,9 @@ shortened and said positively (Qwen2.1-Turbo ignores negatives):
   the piece (its ``prompt_fragment``, owned by the user, never derived). The
   FRONT first; the BACK in the outfit's two steps (``base_body`` draft +
   composite, shared through ``garment_images``): a DRAFT from the accepted
-  worn front (``draft_prompt``: the base back prompt wearing only the
-  piece), then the CPU COMPOSITE of the draft's piece onto the base back
+  worn front (``draft_prompt``: the outfit's back draft sentence — a view
+  change, so it never names the piece, Ruling A29), then the CPU COMPOSITE
+  of the draft's piece onto the base back
   (``view_composite``, rule "piece"; Task 11g, Ruling C1 — it replaced the
   model FIT and its prompt). A single edit of the back view turned
   the body toward the camera (S1 spike; live "Black Blazer" 2026-11-09:
@@ -31,10 +32,11 @@ shortened and said positively (Qwen2.1-Turbo ignores negatives):
 Unlike hair, nothing about the piece is derived from the character: the item
 is the same for every wearer, the mesh fit is per wearer (``garment_store``).
 
-Back text (Task 11e, Ruling V1): every BACK text of the chain — the worn
-back's draft, the ghost back's negative — quotes the piece's back
-description (``piece_back_text.back_text``: the optional item field
-``prompt_fragment_back``, else the front text as before). The fingerprint names the back text
+Back text (Task 11e, Ruling V1): the BACK texts of the chain — the worn
+back draft's negative, the ghost back's negative — are built from the
+piece's back description (``piece_back_text.back_text``: the optional item
+field ``prompt_fragment_back``, else the front text as before); the worn
+back draft's PROMPT names no clothing at all (Ruling A29). The fingerprint names the back text
 only when it is set and differs from the front (``fsig_inputs``): a piece
 without one keeps its keys. The worn FRONT and the ghost front are unchanged.
 
@@ -66,11 +68,6 @@ EDIT_STEPS: Dict[str, Dict[str, Any]] = {"worn": {"source": "base", "views": ("f
                                          "ghost": {"source": "worn"}}
 
 WORN = "Keep the image exactly as it is. Only change their clothing: they now wear only {fragment}."
-#: The body text of the worn back's draft (``base_body.draft_prompt``): the
-#: piece alone in the text, the same fragment as the front — the reference
-#: (the accepted worn front) shows how it looks.
-DRAFT = ("wearing only {fragment} exactly as on the person in the reference image, the same length, cut and "
-         "colour, and nothing else")
 #: Position, size and width first — they are what the ghost gates measure
 #: (centre / width ratio) and they stood as the last clause of 49 words
 #: before the review of 2026-11-11; the removed person is said once,
@@ -307,20 +304,21 @@ def _back_text_of(item: Dict[str, Any]) -> str:
 
 def draft_prompt(character_name: str, step: str, *, profile: Optional[Dict[str, Any]] = None,
                  item_id: Optional[str] = None) -> Tuple[str, str]:
-    """``(prompt, negative)`` of the DRAFT of the worn back
-    (``base_body.draft_prompt`` with ``DRAFT`` as the body text — the base
-    back prompt, the bald head, wearing only the piece in its back text,
-    ``_back_text_of``); negative: the draft's + the worn negative (the
-    garment words the back text does not name). ValueError for another step,
-    a missing item or no fragment."""
+    """``(prompt, negative)`` of the DRAFT of the worn back: the prompt is
+    ``base_body.draft_prompt``'s back sentence as it is — the draft only turns
+    the accepted worn front around, so it never names the piece (Ruling A29:
+    "wearing only <fragment>" made the model invent a skirt or culottes under
+    a blouse; the reference shows the piece). Negative: the draft's + the
+    worn negative (the garment words the piece's back text,
+    ``_back_text_of``, does not name). ValueError for another step, a missing
+    item or no fragment."""
     from app.core import base_body
     if EDIT_STEPS.get(step, {}).get("back") != "draft":
         raise ValueError(f"the clothing step {step!r} has no drafted back")
     item = _item_of(item_id)
     prof = _profile_of(character_name, profile)
     text = _back_text_of(item)
-    prompt, negative = base_body.draft_prompt(character_name, "back", profile=prof,
-                                              outfit_text=DRAFT.format(fragment=text))
+    prompt, negative = base_body.draft_prompt(character_name, "back", profile=prof)
     return prompt, ", ".join(p for p in (negative, _worn_negative(text)) if p)
 
 

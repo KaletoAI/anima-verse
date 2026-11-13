@@ -200,9 +200,9 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
        f1, worn bd1, ghost b1 (refused for its hem against the worn back),
        ghost b2 (accepted), ghost f1, ghost f2 (both refused for their hem
        against the worn front AND the worn back, the reasons above); the
-       draft's prompt names the fragment
-       ("wearing only a knee-length green linen dress with short sleeves
-       exactly as on the person in the reference image"), occasion
+       draft's prompt is the back draft sentence (``base_body.DRAFT_PROMPTS
+       ["back"]``) and never names the piece ("dress", "linen" nowhere —
+       Ruling A29: the draft turns the worn front around), occasion
        outfit_back_draft; the accepted worn back records fit "composite" -> {ok False, step ghost, gates.view
        front}; the item's prompt_fragment is untouched (no description
        refresh for clothing).
@@ -663,10 +663,11 @@ def main() -> int:
         check("A back: attempt 1 refused for its hem, attempt 2 accepted",
               (back_record.get("attempt"), (back_record.get("gates") or {}).get("first", {}).get("reasons")),
               (2, [SHORT_GATE_REASON]))
-        check("A back draft prompt names the fragment",
-              ("wearing only a knee-length green linen dress with short sleeves exactly as on the person in the "
-               "reference image" in prompts["worn bd1"]["bare_prompt"], prompts["worn bd1"]["occasion"]),
-              (True, "outfit_back_draft"))
+        check("A back draft prompt: the sentence, never the piece (Ruling A29)",
+              (prompts["worn bd1"]["bare_prompt"] == base_body.DRAFT_PROMPTS["back"],
+               "dress" in prompts["worn bd1"]["bare_prompt"], "linen" in prompts["worn bd1"]["bare_prompt"],
+               prompts["worn bd1"]["occasion"]),
+              (True, False, False, "outfit_back_draft"))
         worn_back = gs.read_record(gs.garment_path("Demo", did, fsig, "image", step="worn", view="back")
                                    .with_suffix(".json"))
         check("A worn back: the composite", (worn_back.get("accepted"), worn_back.get("fit"),

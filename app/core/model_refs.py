@@ -149,6 +149,9 @@ ANIMAL_VIEW_PROMPT_DEFAULTS = {
 #
 # Like the main pose these are PURE POSE text; framing, lighting and
 # background come from the use-case styles ("tpose_back" / "tpose_side").
+# A view never names the clothing (Ruling A29, user 2026-11-13): the render
+# leaves the outfit layer out (``render_character_image(name_outfit=False)``)
+# and the slotted main render shows what the figure wears.
 #
 # The back view deliberately carries NO face token (and gets an EMPTY
 # expression layer, and its appearance loses every facial segment via
@@ -1127,7 +1130,8 @@ def generate_model_ref_images(character_name: str,
             else:
                 _cleanup_legacy(refs_dir, kind)
             # Extra views for multi-view img2mesh — same outfit, same size,
-            # same signature, only the pose/use-case layer differs. Missing
+            # same signature, only the pose/use-case layer differs; the outfit
+            # itself is never named (Ruling A29 — the reference shows it). Missing
             # views are never fatal: the mesh runs off the main render.
             if _tpose and path is not None:
                 view_reference = modifier_scope.enter_context(neutral_view_reference(path, refs_dir))
@@ -1168,7 +1172,10 @@ def generate_model_ref_images(character_name: str,
                             # figure, outfit and proportions the views must
                             # match for multi-view img2mesh. It is sent on
                             # neutral grey (see neutral_view_reference).
-                            reference_image=view_reference)
+                            reference_image=view_reference,
+                            # Ruling A29: the view changes, the clothing is
+                            # the reference's — the prompt never names it.
+                            name_outfit=False)
                     except Exception as e:
                         view_path = None
                         logger.warning(

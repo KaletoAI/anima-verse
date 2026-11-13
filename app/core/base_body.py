@@ -70,10 +70,10 @@ A-pose front without the palms and hair clauses). Back/left/right are edits
 of the front and carry ONE short sentence each (``BASE_VIEW_PROMPTS``), no
 style and no character block (use cases ``base_view_back`` /
 ``base_view_side``; user test 2026-11-09: the long texts made Qwen invent
-things). The outfit drafts keep the mesh-input view texts of
-``app/core/model_refs.py`` (admin overrides included) with their hair
-clauses taken out, under the long ``base_back`` / ``base_side`` styles
-(``DRAFT_USE_CASES``).
+things). The outfit drafts (and an own-mesh piece's worn back draft) carry
+the same kind of sentence (``DRAFT_PROMPTS``) under the empty styles of the
+edit views (``DRAFT_USE_CASES``) — a view change that never names the
+clothing (Ruling A29): the dressed front it is an edit of shows it.
 """
 import hashlib
 import json
@@ -121,20 +121,28 @@ BASE_USE_CASES = {"front": "base_front", "back": "base_view_back", "left": "base
 #: Use case per two-step draft (back, left, right): the empty style of the
 #: base edit views (``base_view_*``, keeping their view negatives) — a draft
 #: is an edit of the dressed front and carries one short sentence
-#: (``DRAFT_PROMPTS``), no style and no character block (review 2026-11-11:
-#: the long base style and the 60-word A-pose text put the only new
-#: information, the outfit clause, at word 168 of 188).
+#: (``DRAFT_PROMPTS``), no style and no character block (review 2026-11-11).
 DRAFT_USE_CASES = {"back": "base_view_back", "left": "base_view_side", "right": "base_view_side"}
-#: The WHOLE prompt of a two-step draft per view, with the outfit clause in
-#: its slot (``draft_prompt``): the base view sentence, the outfit right
-#: after the turn, the frame last.
+#: The WHOLE prompt of a two-step draft per view (``draft_prompt``) — an
+#: outfit's dressed back/side and an own-mesh piece's worn back alike.
+#: Ruling A29 (user, 2026-11-13): a draft only CHANGES THE VIEW of the dressed
+#: front it is an edit of, so it never names the clothing — no outfit text,
+#: no ``prompt_fragment``, no piece name; the reference shows it. Naming it
+#: made the model invent garments (Ylva's own-mesh blouse: "wearing only
+#: cream off-shoulder linen blouse …" drew a skirt on one try and culottes on
+#: another). The back is the user's validated sentence VERBATIM (the blouse
+#: alone, bare legs); each side keeps that wording and only says its own
+#: turn. ``scripts/smoke_view_prompts_no_clothing.py`` pins it.
 DRAFT_PROMPTS = {
     "back": ("The same person turned around, seen directly from behind, back view, same A-pose, same "
-             "framing, completely bald, {outfit}, the whole figure from head to feet in the frame."),
+             "framing, completely bald, exactly as on the person in the reference image, the same length, "
+             "cut and colour, and nothing else, the whole figure from head to feet in the frame."),
     "left": ("The same person turned to a strict left side profile view, same A-pose, same framing, "
-             "completely bald, {outfit}, the whole figure from head to feet in the frame."),
+             "completely bald, exactly as on the person in the reference image, the same length, cut and "
+             "colour, and nothing else, the whole figure from head to feet in the frame."),
     "right": ("The same person turned to a strict right side profile view, same A-pose, same framing, "
-              "completely bald, {outfit}, the whole figure from head to feet in the frame."),
+              "completely bald, exactly as on the person in the reference image, the same length, cut and "
+              "colour, and nothing else, the whole figure from head to feet in the frame."),
 }
 #: The WHOLE prompt of each edit view of the base front (user test
 #: 2026-11-09: the long pose texts and the style made Qwen invent things; a
@@ -1217,16 +1225,12 @@ def side_arm_margin() -> float:
     return min(max(value, 0.0), SIDE_ARM_MARGIN_MAX)
 
 # The back is two steps (user decision 2026-11-09, measured on the end-to-end
-# run): a DRAFT rendered fresh from the dressed front with the base back
-# prompt, the body text replaced by the outfit of the reference — then the
+# run): a DRAFT rendered fresh from the dressed front with ``DRAFT_PROMPTS``
+# (the turn only, never the clothing — Ruling A29) — then the
 # COMPOSITE of the draft's clothing onto the base back on the CPU
 # (``view_composite``, Task 11g, Ruling C1; it replaced the model fit, which
 # put nothing on, moved the figure or invented clothing). Dressed side views
-# (``dressed_views``) go the same way with the base side prompt.
-# DRAFT_OUTFIT_TEXT is the ONE wording: a backend that addresses its
-# references differently gets its own wording beside it.
-DRAFT_OUTFIT_TEXT = ("wearing exactly the same outfit as the person in the reference image, the same "
-                     "garments, lengths, cut, colours and shoes")
+# (``dressed_views``) go the same way with their side sentence.
 #: Use case of the dressed front edit: empty style and negative (config) —
 #: the ``DRESS_KEEP`` sentence is the whole prompt, like the base views.
 DRESS_USE_CASE = "outfit_edit"
@@ -1778,12 +1782,12 @@ def _draft_view(view: str) -> str:
 
 
 def draft_prompt(character_name: str, view: str, *, profile: Optional[Dict[str, Any]] = None,
-                 outfit_text: str = DRAFT_OUTFIT_TEXT, hair: Optional[str] = None) -> Tuple[str, str]:
+                 hair: Optional[str] = None) -> Tuple[str, str]:
     """``(prompt, negative)`` of the DRAFT of a two-step view (back, left,
-    right): the view's ``DRAFT_PROMPTS`` sentence with ``outfit_text`` in its
-    slot (an outfit: ``DRAFT_OUTFIT_TEXT``; an own-mesh piece's worn back:
-    ``garment_clothing.DRAFT``) — the whole prompt of the edit, no style and
-    no character block (the dressed front is the reference). Negative:
+    right): the view's ``DRAFT_PROMPTS`` sentence — the whole prompt of the
+    edit, no style, no character block and never the clothing (Ruling A29:
+    the dressed front, the reference, shows it); the same text for an
+    outfit's dressed view and an own-mesh piece's worn back. Negative:
     ``DRAFT_NEGATIVE`` + the slots' ``base_body_negative`` texts. A haired
     base (``hair_text``) keeps the reference's hair where the sentence said
     "completely bald" (``_haired_head``), negative ``HAIRED_DRAFT_NEGATIVE``.
@@ -1792,8 +1796,7 @@ def draft_prompt(character_name: str, view: str, *, profile: Optional[Dict[str, 
     ``garment_hair.BALD``), None = the plain body's."""
     from app.core.garment_hair import BALD
     profile = _profile_of(character_name, profile)
-    text = (outfit_text or "").strip().rstrip(".").strip()
-    prompt = DRAFT_PROMPTS[_draft_view(view)].format(outfit=text)
+    prompt = DRAFT_PROMPTS[_draft_view(view)]
     hair = hair_text(character_name, profile=profile) if hair is None else ("" if hair == BALD else hair)
     if not hair:
         return prompt, base_negative(character_name, profile=profile, head=DRAFT_NEGATIVE)

@@ -979,7 +979,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            postprocess: bool = True,
                            style_character: Optional[str] = None,
                            raise_load: bool = False,
-                           crop_back_to: Optional[Tuple[Any, Tuple[int, int], Tuple[int, int]]] = None
+                           crop_back_to: Optional[Tuple[Any, Tuple[int, int], Tuple[int, int]]] = None,
+                           name_outfit: bool = True
                            ) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
@@ -1013,6 +1014,12 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``MediaGenerationDisabled`` of the render is RAISED instead of ending in
     None — a chain that persists refusals must never record load as one.
     Every other caller keeps None for every failure.
+    ``name_outfit=False`` (Ruling A29): the render only CHANGES THE VIEW of a
+    ``reference_image`` that already shows the figure dressed (the T-pose
+    back/side views of ``model_refs``) — the prompt names no clothing: the
+    outfit, the items and a free-text wardrobe are left out. The equipped
+    pieces still decide what the body slots say (covered or not), whether
+    the style's ``{fabric}`` slot is filled, and keep their LoRAs.
     """
     from app.core.dependencies import get_skill_manager
     from app.models.character import (
@@ -1077,6 +1084,12 @@ def render_character_image(character_name: str, *, output_stem: Path,
         _free_text = _rendered.get("full", "") or ""
         if _free_text.startswith("wearing: "):
             outfit_desc = _free_text[len("wearing: "):].strip()
+    # Whether the figure wears something (the style's ``{fabric}`` slot,
+    # ``payload["clothed"]``) — decided before a view change drops the words.
+    _clothed = bool(outfit_desc)
+    if not name_outfit:
+        # Ruling A29: a view change never names the clothing — the reference shows it.
+        outfit_desc = items_desc = _fallback_text = ""
 
     _state_fp = ""
     if apply_state_modifiers:
@@ -1284,7 +1297,7 @@ def render_character_image(character_name: str, *, output_stem: Path,
     # pieces or the free-text wardrobe, both of which land in outfit_desc.
     # An undressed character would otherwise be rendered against a style
     # that asks for fabric textures, and the model duly invents cloth.
-    payload["clothed"] = bool(outfit_desc)
+    payload["clothed"] = _clothed
 
     provenance_workspace = None
     try:

@@ -618,16 +618,19 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the character's head only with a completely bald bare scalp, no hair or accessories. Do not mention pose or expression.",
         },
     },
+    # The T-pose back and side views turn the main render around (model_refs:
+    # it is their reference), so neither their prompt nor an LLM instruction
+    # names the clothing (Ruling A29).
     "tpose_back": {
         "keywords": {
             "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, full arm span visible with both hands fully inside the frame, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_BACK,
-            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
+            "prompt_instruction": "Write comma-separated tags describing the character's body and hair seen from behind on a plain background with flat even lighting. Never describe the clothing: the reference image shows it. Do not mention pose or facial expression.",
         },
         "natural": {
             "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, the full arm span visible with both hands entirely inside the frame, both feet entirely inside the frame, and margin around the figure, flat even shadowless lighting, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_BACK,
-            "prompt_instruction": "Describe the character head-to-toe seen from behind on a plain background with flat even lighting. Do not mention pose or facial expression.",
+            "prompt_instruction": "Describe the character's body and hair seen from behind on a plain background with flat even lighting. Never describe the clothing: the reference image shows it. Do not mention pose or facial expression.",
         },
     },
     # Shared by the left and the right profile. No arm-span clause here: in a
@@ -637,12 +640,12 @@ _DEFAULT_IMAGE_USE_CASES = {
         "keywords": {
             "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, full body view, head to toe, both feet fully inside the frame, wide framing with margin around the figure, plain neutral background, flat even shadowless lighting, face evenly lit from the front, no shadows on the face, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus, high detail",
             "prompt_negative": _NEG_TPOSE_SIDE,
-            "prompt_instruction": "Write comma-separated tags describing the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
+            "prompt_instruction": "Write comma-separated tags describing the character's body and hair in side profile on a plain background with flat even lighting. Never describe the clothing: the reference image shows it. Do not mention pose or facial expression.",
         },
         "natural": {
             "prompt_style": "a full-body render of the character as a realistic 3D figure with lifelike skin{fabric} textures, shown from head to toe against a plain neutral background, both feet entirely inside the frame, margin around the figure, flat even shadowless lighting, the face evenly lit from the front by soft diffuse light with no shadows on it, relit instead of keeping the lighting and shadows of the reference image, uniform illumination, sharp focus",
             "prompt_negative": _NEG_TPOSE_SIDE,
-            "prompt_instruction": "Describe the character head-to-toe in side profile on a plain background with flat even lighting. Do not mention pose or facial expression.",
+            "prompt_instruction": "Describe the character's body and hair in side profile on a plain background with flat even lighting. Never describe the clothing: the reference image shows it. Do not mention pose or facial expression.",
         },
     },
     # The base-body front and the outfit drafts (app/core/base_body.py,

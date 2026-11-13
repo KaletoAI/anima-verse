@@ -77,9 +77,9 @@ Expected, derived by hand from the brief (fix 6, user test 2026-11-09):
     base_view_side, base_view_side], back_view [None, True, False, False];
     three composites (back, left, right: base tpose_<view>_<bsig>.png, the
     draft tpose_<view>_<sig2>.png in draft1, rule outfit). The left draft:
-    prompt = DRAFT_PROMPTS["left"] with DRAFT_OUTFIT_TEXT in its slot (review
-    2026-11-11: an edit of the dressed front — the turn, then the outfit,
-    then the frame), no character block (None),
+    prompt = DRAFT_PROMPTS["left"] as it is (Ruling A29: an edit of the
+    dressed front that only turns it — the turn, the reference clause, the
+    frame; never the clothing), no character block (None),
     reference = the dressed front tpose_<sig2>.png. The stored left view's
     sidecar: base_signature, dressed, base_image_sha256 =
     sha(tpose_left_<bsig>.png), left_draft = its name, left_draft_sha256,
@@ -503,12 +503,10 @@ def main() -> int:
                    for v in ("back", "left", "right")])
             if len(rs) == 4:
                 ld = rs[2]
-                check("left draft prompt", ld.get("bare_prompt"),
-                      base_body.DRAFT_PROMPTS["left"].format(outfit=base_body.DRAFT_OUTFIT_TEXT))
-                check("left draft prompt carries the outfit text after the turn",
+                check("left draft prompt", ld.get("bare_prompt"), base_body.DRAFT_PROMPTS["left"])
+                check("left draft prompt: the turn, never the clothing (Ruling A29)",
                       ld.get("bare_prompt", "").startswith("The same person turned to a strict left side profile view")
-                      and ", completely bald, " + base_body.DRAFT_OUTFIT_TEXT + ", the whole figure" in ld.get("bare_prompt", ""),
-                      True)
+                      and "outfit" not in ld.get("bare_prompt", ""), True)
                 check("left draft block", ld.get("style_character"), None)
                 check("left draft reference", ld["reference_name"], f"tpose_{sig2}.png")
                 left_draft = refs / "drafts" / f"tpose_left_{sig2}.png"

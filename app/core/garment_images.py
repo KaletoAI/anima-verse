@@ -61,6 +61,15 @@ collar or hood over the neck passes while a changed head elsewhere still
 refuses. A stored attempt without one gets it made again from the stored
 draft while that is the draft it was composited from (``draft_sha256``).
 
+The draft's PROMPT is part of what a stored draft and a stored attempt are
+reused under (Ruling A29: the draft prompt stopped naming the piece). An
+attempt records the prompt its draft was made with (``draft_prompt``); a
+REFUSED back reuses neither a stored draft nor a stored attempt made with
+another prompt — they drew what the old text named, so they are never
+composited or re-gated into passing — and drafts anew. An ACCEPTED back
+stays as it is (its record names no prompt and is never re-judged by it),
+and the boot re-make of a model fit (``stored_only``) keeps its stored draft.
+
 An EMPTY composite (fix round 1: the draft lines up but nothing of the
 piece shows from behind — a necklace, a front-only detail) is accepted
 without the gate: the back IS the base back, sidecar ``composite:
@@ -1259,19 +1268,36 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         return sidecar.get("fit") == "composite" and (
             view_composite.is_empty(composite) or (isinstance(composite, dict) and composite.get("ok") is True))
 
+    current_prompt: List[Optional[str]] = []
+
+    def draft_text() -> Optional[str]:
+        """The prompt a new draft is made with now (None: the piece has no text to draft it)."""
+        if not current_prompt:
+            try:
+                current_prompt.append(kind.draft_prompt(character_name, step, profile=profile, item_id=item_id)[0])
+            except ValueError:
+                current_prompt.append(None)
+        return current_prompt[0]
+
+    def made_with_current_prompt(prompt: Any) -> bool:
+        """Ruling A29: whether a stored draft / attempt was drafted with today's draft prompt."""
+        return bool(prompt) and prompt == draft_text()
+
     if not (_accepted(final) and _follows_front(character_name, item_id, fsig, step, final)):
         # Only a stored COMPOSITE that passed its checks is re-gated — never a
-        # model fit of before Task 11g, never a refused composite.
+        # model fit of before Task 11g, never a refused composite, never one
+        # whose draft was made with another prompt (Ruling A29).
         hit = _regate_stored(character_name, item_id, fsig, step, "back", kind, final=final,
                              regate=lambda path, _old: regate_attempt(path),
-                             keep=lambda sidecar: sidecar.get("front_sha256") == front_sha and composite_ok(sidecar),
-                             follow_keys=("front_sha256", "draft", "draft_sha256", "fit", "composite",
-                                          "composite_record"))
+                             keep=lambda sidecar: (sidecar.get("front_sha256") == front_sha and composite_ok(sidecar)
+                                                   and made_with_current_prompt(sidecar.get("draft_prompt"))),
+                             follow_keys=("front_sha256", "draft", "draft_sha256", "draft_prompt", "fit",
+                                          "composite", "composite_record"))
         if hit is not None:
             return hit
 
     # The render arguments of the outfit's draft, nothing worn on the
-    # profile (the text names the piece, the reference shows it).
+    # profile (the reference shows the piece; the text never names it, Ruling A29).
     mesh_profile = {**profile, "equipped_pieces": {}, "equipped_items": []}
     # ``raise_load``: the draft is a garment step — load is retry_later,
     # never a refusal record (the outfit's own dressed views keep their
@@ -1280,15 +1306,18 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
               "raise_load": True}
     draft_stem = draft_path(character_name, item_id, fsig, step).with_suffix("")
     stored = draft_path(character_name, item_id, fsig, step)
-    # ``force`` (Regenerate): a new draft, never the stored one again.
-    reuse = (not force and stored.is_file()
-             and read_record(stored.with_suffix(".json")).get("front_sha256") == front_sha)
+    # ``force`` (Regenerate): a new draft, never the stored one again. Ruling A29: a stored draft made with
+    # another prompt is not composited again — except by the boot re-make (``stored_only``) of an ACCEPTED back.
+    stored_record = read_record(stored.with_suffix(".json")) if stored.is_file() else {}
+    reuse = (not force and stored.is_file() and stored_record.get("front_sha256") == front_sha
+             and (stored_only or made_with_current_prompt(stored_record.get("prompt"))))
     if stored_only and not reuse:
         raise StoredDraftUnusable(f"The {step} back has no stored draft made from the current front")
     records: List[Dict[str, Any]] = []
     for attempt in range(1, ATTEMPTS + 1):
         if attempt == 1 and reuse:
             draft = stored   # Ruling C2: the stored draft of this front, composited again — no hub job
+            drafted_with = stored_record.get("prompt")
         elif stored_only:
             raise StoredDraftUnusable(f"The composite of the stored {step} back draft did not pass: "
                                       + "; ".join(str(r) for r in (records[-1].get("reasons") or [])))
@@ -1296,6 +1325,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
             # Every new attempt drafts into the one draft file: the stored
             # draft is the one the last attempt was composited from.
             prompt = kind.draft_prompt(character_name, step, profile=profile, item_id=item_id)
+            drafted_with = prompt[0]
             draft = base_body.render_draft(
                 character_name, "back", stem=draft_stem, front=front, refs_dir=refs_dir, prompt=prompt,
                 profile=profile, common=common,
@@ -1310,6 +1340,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
         composite = view_composite.compose(base, draft, target, rule="piece", background=VIEW_REFERENCE_BACKGROUND,
                                            mask_target=support_path(target))
         follow = {"front_sha256": front_sha, "draft": draft.name, "draft_sha256": file_sha256(draft),
+                  **({"draft_prompt": drafted_with} if drafted_with else {}),
                   **view_composite.sidecar_fields(composite)}
         if composite["ok"] and view_composite.is_empty(composite):
             record = empty_record()

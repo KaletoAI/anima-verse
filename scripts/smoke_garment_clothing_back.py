@@ -69,22 +69,20 @@ depth v px = v / 999 Hb.
                BACK_OK with the front: extra_part 0.0 -> follows.
 The other backs change nothing outside the jacket -> worn gate ok (outside 0).
 
-[1] prompts: draft = base_body.draft_prompt(back, outfit_text = "wearing only
-    a black tailored blazer with silver buttons exactly as on the person in
-    the reference image, the same length, cut and colour, and nothing else")
-    — the DRAFT_PROMPTS back sentence with that clause in its slot (review
-    2026-11-11: no style, use case base_view_back, no character block) —
-    not the outfit's DRAFT_OUTFIT_TEXT; its negative ends with the worn
+[1] prompts: draft = base_body.draft_prompt(back) — the DRAFT_PROMPTS back
+    sentence as it is (Ruling A29: the draft only turns the worn front
+    around, so it never names the piece; review 2026-11-11: no style, use
+    case base_view_back, no character block), the same text as an outfit's
+    back draft, without the fragment; its negative ends with the worn
     negative "loose clothing, baggy, skirt, dress, shoes, socks, hair" —
     "jacket" is dropped: its pattern (base_body.DRESS_GARMENT_NEGATIVE,
     r"jackets?|coats?|blazers?") names the fragment's "blazer". A shoe
     ("Black Stilettos", slots [feet], fragment "shiny black leather
-    stiletto heels, high pointed toe") -> its draft text "wearing only
-    shiny black leather stiletto heels, high pointed toe exactly as on the
-    person …". A piece whose NAME is a shorthand in another language
+    stiletto heels, high pointed toe") -> the same draft prompt, no
+    "stiletto". A piece whose NAME is a shorthand in another language
     ("Black Lederjacket", live 2026-11-10) with the multi-garment fragment
     "blue t-shirt, jeans, black lether jacket, slim fit, zipper, Sneekers"
-    -> the draft names the fragment, "lederjacket" nowhere. The fit prompt
+    -> the same prompt, neither the fragment nor "lederjacket". The fit prompt
     is gone (garment_clothing has no ``fit_prompt`` / ``FIT`` any more).
     edit_prompt(worn, back) -> ValueError. EDIT_STEPS worn views (front,
     back), back "draft"; ghost keeps the default order.
@@ -114,7 +112,11 @@ The other backs change nothing outside the jacket -> worn gate ok (outside 0).
     draft render, the back accepted with fit "composite"; a stored draft
     whose front_sha256 names another front is drafted anew (worn bd1); a
     back record naming another front is re-made from the stored draft (no
-    render) and follows the front again.
+    render) and follows the front again. Ruling A29: a stored draft of the
+    same front drafted with ANOTHER prompt (its sidecar ``prompt``, the old
+    "wearing only …" text) is not composited again — drafted anew (worn
+    bd1). The stub writes a draft's sidecar as the real render does: the
+    sidecar extras plus ``prompt`` = the bare prompt.
 [6] fsig: version 2 differs from the same inputs under version 1.
 [7] the family pick (service.prompt_for_backend, payload prompt_by_family;
     sample prompts, no caller of this repo sends one since the fit is gone):
@@ -146,16 +148,12 @@ SKIN = (200, 160, 140)
 GREEN = (40, 90, 50)
 W, H = 1024, 1200
 FRAGMENT = "a black tailored blazer with silver buttons"
-DRAFT_TEXT = ("wearing only a black tailored blazer with silver buttons exactly as on the person in the reference "
-              "image, the same length, cut and colour, and nothing else")
 FIT_SHOE = ("edit the first image with the clothes from the second image: the person wears only shiny black "
             "leather stiletto heels, high pointed toe, add no other clothing beyond that, the rest of the body "
             "stays exactly as in the first image; a back view seen from behind, the back view stays a back view")
 KW_SHOE = ("back view, seen from behind, shiny black leather stiletto heels, high pointed toe, only these clothes, no other clothing, body "
            "unchanged from the first image")
 MULTI = "blue t-shirt, jeans, black lether jacket, slim fit, zipper, Sneekers"
-SHOE_DRAFT_TEXT = ("wearing only shiny black leather stiletto heels, high pointed toe exactly as on the person in "
-                   "the reference image, the same length, cut and colour, and nothing else")
 WORN_NEG = "loose clothing, baggy, skirt, dress, shoes, socks, hair"
 OPENING = "back shows the front opening: neckline 0.1001 Hb deep, front 0.1001 Hb"
 
@@ -285,10 +283,10 @@ def main() -> int:
 
         print("[1] prompts")
         draft = garment_clothing.draft_prompt("Demo", "worn", item_id=jid)
-        outfit_prompt, outfit_negative = base_body.draft_prompt("Demo", "back", outfit_text=DRAFT_TEXT)
-        check("draft prompt = the base back prompt with the piece", draft[0], outfit_prompt)
-        check("draft text in it, not the outfit's", (DRAFT_TEXT in draft[0],
-                                                     base_body.DRAFT_OUTFIT_TEXT in draft[0]), (True, False))
+        outfit_prompt, outfit_negative = base_body.draft_prompt("Demo", "back")
+        check("draft prompt = the outfit's back draft sentence (Ruling A29)",
+              (draft[0], outfit_prompt), (base_body.DRAFT_PROMPTS["back"], base_body.DRAFT_PROMPTS["back"]))
+        check("the piece is not named", ("blazer" in draft[0], "button" in draft[0]), (False, False))
         check("draft negative", draft[1], f"{outfit_negative}, {WORN_NEG}")
         check("no fit prompt any more", (hasattr(garment_clothing, "fit_prompt"), hasattr(garment_clothing, "FIT"),
                                          hasattr(base_body, "FIT_PROMPT")), (False, False, False))
@@ -296,14 +294,12 @@ def main() -> int:
                                  prompt_fragment="shiny black leather stiletto heels, high pointed toe",
                                  outfit_piece={"slots": ["feet"], "outfit_types": ["formal"], "mesh_mode": "own_mesh"})["id"]
         shoe_draft = garment_clothing.draft_prompt("Demo", "worn", item_id=sid)[0]
-        check("shoe draft text", (SHOE_DRAFT_TEXT in shoe_draft,
-                                  shoe_draft == base_body.draft_prompt("Demo", "back", outfit_text=SHOE_DRAFT_TEXT)[0]),
-              (True, True))
+        check("shoe draft: the same sentence", (shoe_draft == outfit_prompt, "stiletto" in shoe_draft), (True, False))
         mid = inventory.add_item(name="Black Lederjacket", category="outfit_piece", prompt_fragment=MULTI,
                                  outfit_piece={"slots": ["outer"], "outfit_types": ["casual"], "mesh_mode": "own_mesh"})["id"]
         multi = garment_clothing.draft_prompt("Demo", "worn", item_id=mid)[0]
-        check("multi-garment piece: the fragment, not the name", (MULTI in multi, "lederjacket" in multi.lower()),
-              (True, False))
+        check("multi-garment piece: neither the fragment nor the name",
+              (multi == outfit_prompt, "jeans" in multi, "lederjacket" in multi.lower()), (True, False, False))
         raises("worn back is no edit", lambda: garment_clothing.edit_prompt("Demo", "worn", "back", item_id=jid),
                ValueError, "drafted from the worn front")
         raises("ghost has no draft", lambda: garment_clothing.draft_prompt("Demo", "ghost", item_id=jid),
@@ -375,7 +371,8 @@ def main() -> int:
             path = Path(str(output_stem) + ".png")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(png(arr))
-            path.with_suffix(".json").write_text(json.dumps(kw["sidecar_extra"]))
+            path.with_suffix(".json").write_text(json.dumps({**kw["sidecar_extra"],
+                                                             "prompt": kw.get("bare_prompt") or ""}))
             return path
 
         real_render = expression_regen.render_character_image
@@ -492,6 +489,17 @@ def main() -> int:
         plan[("worn", "back")] = [BACK_OK]
         garment_images.run_edit_step("Demo", jid, fsig, "worn", "back")
         check("a draft of another front: back re-drafted", [k for k, _kw in calls], ["worn bd1"])
+        # Ruling A29: a stored draft of THIS front drafted with another prompt is not composited again.
+        gs.write_record(draft.with_suffix(".json"), {**gs.read_record(draft.with_suffix(".json")),
+                                                      "prompt": "The same person turned around, wearing only "
+                                                                + FRAGMENT})
+        garment_images.run_edit_step("Demo", jid, fsig, "worn", "front", force=True)
+        del calls[:]
+        plan[("worn", "back")] = [BACK_OK]
+        garment_images.run_edit_step("Demo", jid, fsig, "worn", "back")
+        check("a draft made with another prompt: back re-drafted", [k for k, _kw in calls], ["worn bd1"])
+        check("... and the new draft records today's prompt",
+              gs.read_record(draft.with_suffix(".json")).get("prompt"), base_body.DRAFT_PROMPTS["back"])
         rec = gs.read_record(back_final.with_suffix(".json"))
         gs.write_record(back_final.with_suffix(".json"), {**rec, "front_sha256": "0" * 64})
         del calls[:]

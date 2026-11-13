@@ -77,7 +77,9 @@ Fixture, W 1024 x H 1200 on grey 128, skin (200, 160, 140):
     two stored attempts — try1 HIGH, try2 TINTED — with version-1 records
     (no gate_version, refused for colour), composited from a draft of the
     current front (front_sha256; fit "composite", a composite record that
-    passed its checks — only such an attempt is re-gated since Task 11g). The run re-gates them: try1 refused "head changed",
+    passed its checks — only such an attempt is re-gated since Task 11g)
+    and drafted with today's draft prompt (``draft_prompt`` = the validated
+    back sentence, Ruling A29). The run re-gates them: try1 refused "head changed",
     try2 accepted -> the final back = try2's file, attempt 2, gates.first
     refused / gates.second ok with regated_from 1, the current gate_version; the final
     record keeps front_sha256 / draft / draft_sha256 of try2. No worn render,
@@ -92,6 +94,10 @@ Fixture, W 1024 x H 1200 on grey 128, skin (200, 160, 140):
     1, no regated_from, fit "composite".
 [4b] Stored attempts of the MODEL FIT of before Task 11g (no fit
     "composite"), otherwise as [2]: not re-gated -> "worn bd1" rendered.
+[4c] Ruling A29: stored attempts drafted with ANOTHER prompt (the old
+    "wearing only <fragment> …" text), or recording none, otherwise as [2]:
+    not re-gated -> "worn bd1" rendered; the new attempt records today's
+    ``draft_prompt`` and so does the published back.
 [5] Stored attempts of the CURRENT version, refused: no re-gate — Regenerate
     renders ("worn bd1").
 [6] Worn FRONT (an edit, not drafted): try1 TINTED with a version-1 record,
@@ -331,7 +337,9 @@ def main() -> int:
         front = image("worn", "front")
         draft_name = garment_images.draft_path("Demo", jid, fsig, "worn").name
 
-        def stage(backs, *, front_sha=None, version=None, composite=True, draft=None):
+        current_prompt = garment_clothing.draft_prompt("Demo", "worn", item_id=jid)[0]
+
+        def stage(backs, *, front_sha=None, version=None, composite=True, draft=None, prompt=current_prompt):
             """The accepted worn front + stored back attempts (no final back);
             ``draft``: the stored draft file (its sha in the sidecars)."""
             front.parent.mkdir(parents=True, exist_ok=True)
@@ -359,6 +367,7 @@ def main() -> int:
                     "garment": {"item_id": jid, "fsig": fsig, "step": "worn", "view": "back", "attempt": n,
                                 "stage": "composite" if composite else "fit"},
                     "front_sha256": sha, "draft": draft_name, "draft_sha256": draft_sha, "gate": old,
+                    **({"draft_prompt": prompt} if prompt else {}),
                     **({"fit": "composite", "composite": {"rule": "piece", "ok": True, "reasons": [], "iou": 0.99,
                                                           "coverage": {"score": 0.9, "region": 0.2}}}
                        if composite else {})})
@@ -413,6 +422,18 @@ def main() -> int:
         stage([HIGH, TINTED], composite=False)
         res = garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
         check("model fit: one draft rendered", [k for k in renders if k.startswith("worn")], ["worn bd1"])
+
+        print("[4c] attempts drafted with another prompt are not re-gated (Ruling A29)")
+        old_prompt = current_prompt.replace("completely bald, ", "completely bald, wearing only a black jacket ", 1)
+        for label, prompt in (("old prompt", old_prompt), ("no prompt recorded", None)):
+            del renders[:]
+            stage([HIGH, TINTED], prompt=prompt)
+            res = garments.run_garment("Demo", jid, steps="worn", view="back", force=True)
+            record = gs.read_record(image("worn", "back").with_suffix(".json"))
+            check(f"{label}: one draft rendered, today's prompt recorded",
+                  ([k for k in renders if k.startswith("worn")], record.get("accepted"), record.get("draft_prompt"),
+                   gs.read_record(image("worn", "back", 1).with_suffix(".json")).get("draft_prompt")),
+                  (["worn bd1"], True, current_prompt, current_prompt))
 
         print("[5] current-version refusals render again")
         del renders[:]
