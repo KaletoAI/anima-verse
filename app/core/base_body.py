@@ -99,7 +99,12 @@ BASE_BODY_VERSION = 2
 # at word 167 and 191 of 199). Positive wording only — a CFG-free model
 # draws what a negation names ("no hair", "without anatomical detail").
 BALD_HEAD = "completely bald with a smooth bare scalp"
-BODY_TEXT = "a smooth featureless mannequin-like unclothed body with plain smooth skin"
+#: Natural skin tone with a plain chest and groin: the spike text of
+#: 2026-11-12 10:50 (hub job 10c82251, Kai) without its "fine natural body
+#: hair" — the bald/haired base must not name hair. The earlier "smooth
+#: featureless mannequin-like ... plain smooth skin" made every base front
+#: a pale plastic doll (user report 2026-11-13).
+BODY_TEXT = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin"
 #: Opens the character block of the base front ("no clothing" is carried by
 #: BODY_TEXT's "unclothed" since 2026-11-11).
 BASE_BLOCK_HEAD = "sfw"

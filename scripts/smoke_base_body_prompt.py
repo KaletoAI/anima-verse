@@ -218,7 +218,7 @@ FEET = ("the whole figure from head to feet inside the frame with both hands ins
         "the head and below the feet")
 FEET_KW = "both feet and both hands fully inside the frame, empty margin above the head and below the feet"
 BALD = "completely bald with a smooth bare scalp"
-BODY = "a smooth featureless mannequin-like unclothed body with plain smooth skin"
+BODY = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin"
 BLOCK_HEAD = "sfw, " + BALD + ", " + BODY
 APPEARANCE = "female, 30 years old, green eyes, olive skin, average height, athletic build"
 APPEARANCE_BACK = "female, 30 years old, olive skin, average height, athletic build"
@@ -234,14 +234,15 @@ OUTFIT = ("wearing exactly the same outfit as the person in the reference image,
 # hand with clean separators and the neutral stand-in fragments of frag_a /
 # frag_b: subject sentence, the character block (sfw, bald, mannequin body,
 # appearance), ONE framing clause, background, ONE lighting clause, focus,
-# then the pose text. Counted by hand: subject 15 words, block head 18 ("sfw"
-# 1, bald 7, body 10), appearance 18 (incl. the two 3-word fixture
-# fragments), framing 25, background 3, lighting 11, focus 2, pose 40 = 132
-# words; "completely" is word 17 and "mannequin-like" word 27 (they were 167
-# and 191 of 199 before).
+# then the pose text. Counted by hand: subject 15 words, block head 33 ("sfw"
+# 1, bald 7, body 25 — the natural-skin body text of 2026-11-13), appearance
+# 18 (incl. the two 3-word fixture fragments), framing 25, background 3,
+# lighting 11, focus 2, pose 40 = 147 words; "completely" is word 17 and
+# "unclothed" word 25 (15 + 1 + 7 + 2).
 TARGET = ("a full-body render of the character as a realistic 3D figure with lifelike skin textures, sfw, "
-          "completely bald with a smooth bare scalp, a smooth featureless mannequin-like unclothed body with plain "
-          "smooth skin, female, 26 years old, blue eyes, light skin, average height, athletic build, slot fragment a, "
+          "completely bald with a smooth bare scalp, an unclothed body with realistic natural skin, visible pores, "
+          "subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin, "
+          "female, 26 years old, blue eyes, light skin, average height, athletic build, slot fragment a, "
           "slot fragment b, the whole figure from head to feet inside the frame with both hands inside it and empty "
           "margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the "
           "whole figure and the face, sharp focus, standing upright facing the camera, A-pose, arms straight and "
@@ -464,8 +465,8 @@ def main() -> int:
         check("front final == TARGET", front_final, TARGET)
         check("block right after the subject", front_final.startswith(SUBJECT + ", " + BLOCK_HEAD + ", female"), True)
         words = front_final.split()
-        check("bald at word 17, mannequin at word 27, 132 words",
-              (words.index("completely") + 1, words.index("mannequin-like") + 1, len(words)), (17, 27, 132))
+        check("bald at word 17, unclothed at word 25, 147 words",
+              (words.index("completely") + 1, words.index("unclothed") + 1, len(words)), (17, 25, 147))
         check("pose right after the style", ", sharp focus, standing upright facing the camera" in front_final, True)
         for view, want in (("back", VIEW_BACK), ("left", VIEW_LEFT), ("right", VIEW_RIGHT)):
             for family in ("natural", "keywords"):

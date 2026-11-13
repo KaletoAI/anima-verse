@@ -34,8 +34,8 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
 [H1] Base views of Long (method body). APPEARANCE = "female, 30 years old,
      green eyes, olive skin, average height, athletic build" (the human build
      slot carries the height; smoke_base_body_prompt [1]).
-     front block = "sfw, long brunette hair, a smooth featureless
-       mannequin-like unclothed body with plain smooth skin, " + APPEARANCE
+     front block = "sfw, long brunette hair, " + BODY_TEXT (the natural-skin
+       body text of 2026-11-13) + ", " + APPEARANCE
        (the hair text where BALD_HEAD stood);
      front prompt = BASE_FRONT_POSE_PROMPT + ", no hair on the chest or in
        front of the shoulders, chest, collarbones and front of the shoulders
@@ -152,7 +152,7 @@ def old_names(path: str, names) -> dict:
 
 
 APPEARANCE = "female, 30 years old, green eyes, olive skin, average height, athletic build"
-BODY_TEXT = "a smooth featureless mannequin-like unclothed body with plain smooth skin"
+BODY_TEXT = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin"
 CHEST = ("no hair on the chest or in front of the shoulders, chest, collarbones and front of the shoulders "
          "fully uncovered")
 REF = "the same hairstyle, hair length and hair volume as the reference"
@@ -208,6 +208,10 @@ def main() -> int:
         old_bb = types.ModuleType("base_body_" + START)
         old_bb.__file__ = "base_body_" + START + ".py"
         exec(compile(old_source("app/core/base_body.py"), old_bb.__file__, "exec"), old_bb.__dict__)
+        # The body text changed on its own (2026-11-13, natural skin — not part of
+        # the hair method): the START module gets today's text, so these proofs
+        # still compare only what the hair method touches.
+        old_bb.BODY_TEXT = base_body.BODY_TEXT
 
         base = {"template": "human-default", "gender": "female", "age": 30, "height": 168,
                 "character_appearance": "wears a red scarf",

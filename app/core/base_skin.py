@@ -2,10 +2,10 @@
 ``claude-out/kai-base-skin/edit-step/``: ``edit_spike.py``, ``analyse.py``,
 ``measurements.json``).
 
-WHY. The base front is rendered with ``base_body.BODY_TEXT`` ("a smooth
-featureless mannequin-like unclothed body with plain smooth skin") so the
-anatomy stays neutral — and it looks like plastic: no pores, no tone
-variation. Asking the text-to-image render for real skin brought the
+WHY. The base front was rendered with a "smooth featureless mannequin-like"
+body text so the anatomy stays neutral — and it looked like plastic: no
+pores, no tone variation (``base_body.BODY_TEXT`` names natural skin since
+2026-11-13; this step stays as the second safeguard). Asking the text-to-image render for real skin brought the
 anatomy back. The winner of the spike keeps the neutral render and adds the
 skin afterwards in two steps:
 

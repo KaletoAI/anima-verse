@@ -44,8 +44,9 @@ written, 1-based, split on whitespace).
     character model, lifelike skin textures" is 10 words). The natural style
     names "lighting" once and neither "relit" nor "uniform illumination".
     base_body.BALD_HEAD == "completely bald with a smooth bare scalp",
-    BODY_TEXT == "a smooth featureless mannequin-like unclothed body with
-    plain smooth skin", BASE_BLOCK_HEAD == "sfw"; none of the three contains
+    BODY_TEXT == "an unclothed body with realistic natural skin, visible
+    pores, subtle skin tone variation, matte skin, a plain smooth chest and
+    groin like a store mannequin", BASE_BLOCK_HEAD == "sfw"; none of the three contains
     "no " or "without". model_refs.BASE_FRONT_POSE_PROMPT is 40 words.
 [5] Dressed front: DRESS_USE_CASE == "outfit_edit", whose style and negative
     are empty in both families; base_body._edit_prompt("front", "they now
@@ -195,7 +196,7 @@ def main() -> int:
               (nat.count("lighting"), "relit" in nat, "uniform illumination" in nat), (1, False, False))
         check("BALD_HEAD", base_body.BALD_HEAD, "completely bald with a smooth bare scalp")
         check("BODY_TEXT", base_body.BODY_TEXT,
-              "a smooth featureless mannequin-like unclothed body with plain smooth skin")
+              "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin")
         check("BASE_BLOCK_HEAD", base_body.BASE_BLOCK_HEAD, "sfw")
         check("no negation in the block words",
               any(w in t for t in (base_body.BALD_HEAD, base_body.BODY_TEXT, base_body.BASE_BLOCK_HEAD)
