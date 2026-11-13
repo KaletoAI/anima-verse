@@ -208,7 +208,6 @@ export interface Model3DStatus {
     rerig_source: boolean
     /** every dressed view of the current outfit matches the current base */
     dressed_current: boolean
-    rebuilding: boolean
     /** The served model is NOT the current outfit's (another combination's stand-in, or none) —
      *  server `model3d_pipeline.fallback_state`; null when the current outfit's own model is served. */
     fallback?: { current_signature: string; current_name: string; served_signature: string;

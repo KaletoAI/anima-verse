@@ -18,9 +18,11 @@
  *   state ("✓ ready", "⏳ mesh · 3 hub jobs" + "in the body until its own
  *   mesh is ready" — ruling A11, an in-body piece "shown painted until
  *   ready", "left out: …", "failed — reason" with Retry = the Build, "Fit refused
- *   — reason" with its single steps Re-fit (POST …/figure/refit {item_id}: an
- *   automatic, CPU-only Build) and Regenerate mesh (POST …/garments/{item}/run
- *   {step: "mesh", force, chain}) — Ruling A23); an own-mesh
+ *   — reason" with its single steps Re-fit (POST …/figure/refit {item_id}: that
+ *   piece's CPU fit and the CPU assembly only, hub steps stay due for the Build —
+ *   Ruling FR-I2; 409 while a Build runs) and Regenerate mesh (POST
+ *   …/garments/{item}/run {step: "mesh", force, chain}, its cost the server's
+ *   `regenerate_jobs`) — Ruling A23); an own-mesh
  *   piece's details open its chain dialog (GarmentPieceDialog — a WORN
  *   piece's only entry, the Wardrobe hides its "Mesh steps"; opened here
  *   without its "Run all", Ruling 10a); a closable piece has the toggle
@@ -53,11 +55,14 @@ import { FigureStored } from './FigureStored'
 import { useFigure } from './useFigure'
 import {
   BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, NO_BASE_BODY_NOTE, baseBodyLine, bodyLine,
-  buildButton, changeLine, hairState, headerLine, noBaseBody, stateMeshAction, wornState,
+  buildButton, changeLine, hairState, headerLine, noBaseBody, regenerateMeshLabel, stateMeshAction, wornState,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, HairMode, PieceState } from './figureModel'
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
+
+/** The answers of POST …/figure/refit (Ruling FR-I2) besides the Build's own. */
+const REFIT_STATUS: Record<string, string> = { started: 'Re-fit started (CPU only)' }
 const CELL: CSSProperties = { padding: '4px 6px', verticalAlign: 'top' }
 
 /** A collapsed block whose content mounts only while open (no fetch, no poll while closed). */
@@ -110,10 +115,11 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
 
   const reload = useCallback(() => startPoll(0), [startPoll])
 
-  /** Ruling A23 b: a piece whose fit on the body shape was refused — fit it again (CPU), or make its mesh anew. */
+  /** Ruling A23 b: a piece whose fit on the body shape was refused — fit it again (CPU), or make its mesh anew.
+   *  Re-fit (Ruling FR-I2) runs that piece's CPU fit and the CPU assembly only; while a Build runs it answers 409. */
   const refit = useCallback((row: FigureWornRow) => post('figure/refit', { item_id: row.item_id }, (d) => {
     const status = String(d.status || '')
-    toast(t(BUILD_STATUS[status] || status), 'success')
+    toast(t(REFIT_STATUS[status] || BUILD_STATUS[status] || status), 'success')
   }), [post, t, toast])
   const regenerateMesh = useCallback((row: FigureWornRow) => post(
     `garments/${encodeURIComponent(row.item_id)}/run`, { step: 'mesh', force: true, chain: true }, (d) => {
@@ -329,13 +335,13 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairs
                   {row.state === 'fit_refused' ? (
                     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                       <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => onRefit(row)}
-                        title={t('Fits the piece on the body shape again (CPU, no hub job), then assembles the figure')}>
+                        title={t('Fits this piece on the body shape again and assembles the figure — CPU only, no hub job; steps that need hub jobs stay due for the next Build')}>
                         {t('Re-fit')}
                       </button>
                       <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
                         onClick={() => onRegenerateMesh(row)}
-                        title={t('Makes the piece’s mesh anew (1 hub job), then fits it')}>
-                        {t('Regenerate mesh')}
+                        title={t('Makes the piece’s mesh anew, then fits it')}>
+                        {regenerateMeshLabel(row.regenerate_jobs, t)}
                       </button>
                     </div>
                   ) : null}

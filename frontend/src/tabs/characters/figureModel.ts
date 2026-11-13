@@ -180,6 +180,9 @@ export interface FigureWornRow {
   piece_state: PieceState | null
   /** Own mesh + closable only: hub jobs of the OTHER state's mesh (0 = built, null = unknown / n.a.). */
   other_state_jobs: number | null
+  /** A piece whose fit was refused: hub jobs of its "Regenerate mesh" (the server's estimate; null = unknown
+   *  or n.a.). */
+  regenerate_jobs?: number | null
   /** An own-mesh piece in the body shape (ruling A11): until its own mesh is ready (`mesh`), or its mesh is
    *  ready and served and the next Build takes it out of the shape (`build`); null otherwise. */
   in_body_until?: 'mesh' | 'build' | null
@@ -244,7 +247,8 @@ export interface FigurePayload {
   hair: FigureHairRow | null
   body: {
     plain: FigureBodyPart & {
-      jobs?: { view: number | null; front: number | null; model: number | null; after_front: number | null }
+      jobs?: { view: number | null; front: number | null; model: number | null; after_front: number | null
+        model_followup?: ModelFollowup | null }
     }
     /** `state`: ready · missing · plain (nothing in the body). */
     shape: FigureBodyPart
@@ -334,6 +338,24 @@ export function singleAction(kind: 'view' | 'model' | 'face', jobs: number | nul
   if (kind === 'view') return t('Regenerate this view — {cost}').replace('{cost}', imageJobsTr(jobs, t))
   if (kind === 'model') return t("Regenerate the plain body's mesh — {cost}").replace('{cost}', jobsTr(jobs, t))
   return t("Redo the plain body's face — {cost}").replace('{cost}', jobsTr(jobs, t))
+}
+
+/** Ruling UI3c: what a base step that changes a view in place makes stale — the stored base model, rebuilt by the
+ *  next Build (server `figure_build._plain_jobs` `model_followup`: its hub stages, null = no base model stored). */
+export interface ModelFollowup { jobs: number; stages: string[] }
+
+/** On a base step's button, before the click (Ruling UI3c): "+3 hub jobs for the model (mesh, face, rig)"; "" when
+ *  nothing goes stale. */
+export function modelFollowup(f: ModelFollowup | null | undefined, t: Tr = EN): string {
+  if (!f) return ''
+  return t('+{cost} for the model ({stages})').replace('{cost}', jobsTr(f.jobs, t))
+    .replace('{stages}', f.stages.join(', '))
+}
+
+/** The Figure tab's "Regenerate mesh" of a refused piece with its cost (the server's estimate). */
+export function regenerateMeshLabel(jobs: number | null | undefined, t: Tr = EN): string {
+  return jobs === undefined || jobs === null ? t('Regenerate mesh')
+    : t('Regenerate mesh ({cost})').replace('{cost}', jobsTr(jobs, t))
 }
 
 /** Under "Run skin step" (and a new front): the base model is stale then, and only the next Build you start

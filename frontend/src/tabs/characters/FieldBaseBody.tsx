@@ -63,7 +63,8 @@ import { useModel3DStatus } from './useModel3DStatus'
 import type { CollisionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
-import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, singleAction, staleBaseNote } from './figureModel'
+import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, singleAction, staleBaseNote } from './figureModel'
+import type { ModelFollowup } from './figureModel'
 import { RUN_ALL_STATUS, faceDueLine, runAllButton, runAllStep, runAllWhat } from './baseBodyModel'
 import type { BaseRunAll } from './baseBodyModel'
 
@@ -77,6 +78,9 @@ export interface PlainBodyJobs {
   front: number | null
   model: number | null
   after_front: number | null
+  /** Ruling UI3c: what a step that changes a base view in place makes stale (the stored base model's hub stages);
+   *  null = no base model stored. */
+  model_followup?: ModelFollowup | null
 }
 
 /** The cost line under a single action and, when its result starts the automatic Build, that note. */
@@ -91,13 +95,15 @@ function ActionLine({ text, auto }: { text: string; auto?: boolean }) {
 
 /** Under the front tile: the neutral render the skin detail step started
  *  from (small, click enlarges), one line on what the step did, and the
- *  button that runs it again on the stored neutral front (base_skin) — with
- *  what it makes stale under it. */
-function SkinStepLine({ info, busy, staleJobs, onRun }: {
+ *  button that runs it again on the stored neutral front (base_skin) — its
+ *  follow-up cost ON it before the click (Ruling UI3c: the step edits the front in place, the other views stay
+ *  current, the stored base model goes stale — "+3 hub jobs for the model (mesh, face, rig)") and what it makes
+ *  stale under it. */
+function SkinStepLine({ info, busy, followup, onRun }: {
   info: BaseBodyInfo
   busy: boolean
-  /** Hub jobs of the Build that then rebuilds the base (undefined = not known here). */
-  staleJobs: number | null | undefined
+  /** The stored base model's rebuild the step makes due (null = no base model stored, undefined = not known). */
+  followup: ModelFollowup | null | undefined
   onRun: () => void
 }) {
   const { t } = useI18n()
@@ -123,11 +129,11 @@ function SkinStepLine({ info, busy, staleJobs, onRun }: {
         {skin.enabled ? (
           <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={onRun}
             title={t('Runs the skin detail edit again on the stored neutral front (one image job); the front is not re-rendered.')}>
-            {t('Run skin step')}
+            {t('Run skin step')}{followup ? ` (${modelFollowup(followup, t)})` : ''}
           </button>
         ) : null}
       </div>
-      {skin.enabled && staleJobs !== undefined ? <ActionLine text={staleBaseNote(staleJobs, t)} /> : null}
+      {skin.enabled && followup ? <ActionLine text={staleBaseNote(followup.jobs, t)} /> : null}
     </div>
   )
 }
@@ -147,16 +153,20 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
   // A side/back view edits the front: it cannot render before the front exists.
   const needsFront = view !== 'front' && !info.images?.front
   const cost = jobs ? singleAction('view', view === 'front' ? jobs.front : jobs.view, t) : undefined
+  // Ruling UI3c: a new view makes the stored base model stale (a new front the other views too) — said before the
+  // click.
+  const followup = !jobs?.model_followup ? '' : view === 'front' ? staleBaseNote(jobs.after_front, t)
+    : modelFollowup(jobs.model_followup, t)
   return (
     <ViewRenderTile label={label} url={url} meta={info.image_meta?.[view]} height={TILE_HEIGHT}
       running={!!st?.running} failed={!!st?.failed} error={st?.error} warning={st?.warning}
       disabled={busy || needsFront} disabledReason={needsFront ? t('Render the front view first') : undefined}
-      actionTitle={cost}
+      actionTitle={cost && followup ? `${cost} · ${followup}` : cost}
       status={(
         <>
-          {cost && !needsFront ? <ActionLine text={cost} /> : null}
+          {cost && !needsFront ? <ActionLine text={followup ? `${cost} · ${followup}` : cost} /> : null}
           {view === 'front' ? (
-            <SkinStepLine info={info} busy={busy || viewsRunning(info)} staleJobs={jobs?.after_front}
+            <SkinStepLine info={info} busy={busy || viewsRunning(info)} followup={jobs?.model_followup}
               onRun={onSkinStep} />
           ) : null}
         </>

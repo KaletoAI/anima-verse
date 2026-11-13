@@ -90,7 +90,8 @@
  *      FigureBodyDetails inside the Figure tab until Task UI1) writes staleBaseNote under "Run skin step"; FieldFigure starts nothing but the Build (its POSTs, all through its one
  *      `post()` helper — `apiPost` named twice: import + that call: figure/build, figure/auto-build,
  *      (base-body/pipeline until Task 11h removed the switch) and since Task 11b the other state's single
- *      action garments/{item}/run — a
+ *      action garments/{item}/run (also the refused piece's Regenerate mesh), and since Ruling A23 b the CPU-only
+ *      Re-fit figure/refit (Ruling FR-I2: never a hub step) — a
  *      template-literal path, written with its `${…}` as `{}`); the template has tab `figure_tab` {Figure, Figur} with the
  *      humanoid-only section `figure` (special "figure"), and CharactersTab renders the slot `figure`.
  * [13] Task 11 source greps: the Figure tab opens GarmentPieceDialog with `noRunAll`, and the dialog's
@@ -361,9 +362,9 @@ check('[12] skin step: stale-base note under the button', /staleBaseNote\(/.test
 const fieldFigure = src('frontend/src/tabs/characters/FieldFigure.tsx');
 // Every POST of the tab goes through its one `post(path, …)` helper (one apiPost call).
 const posts = [...fieldFigure.matchAll(/\bpost\(\s*['`]([^'`]+)['`]/g)].map((x) => x[1].replace(/\$\{[^}]*\}/g, '{}'));
-check('[12] FieldFigure starts only the Build (+ the other state\'s mesh)', [[...new Set(posts)].sort(),
+check('[12] FieldFigure starts only the Build (+ the other state\'s mesh, the CPU Re-fit)', [[...new Set(posts)].sort(),
   (fieldFigure.match(/\bapiPost\b/g) || []).length],
-  [['figure/auto-build', 'figure/build', 'garments/{}/run'], 2]);
+  [['figure/auto-build', 'figure/build', 'figure/refit', 'garments/{}/run'], 2]);
 const tmpl = JSON.parse(src('shared/templates/character/base-character.json') || '{"tabs":[],"sections":[]}');
 const tab = tmpl.tabs.find((x) => x.id === 'figure_tab') || {};
 const section = tmpl.sections.find((x) => x.id === 'figure') || {};
