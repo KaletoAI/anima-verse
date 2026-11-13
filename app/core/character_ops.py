@@ -1708,7 +1708,9 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
 
 
 def _regenerate_mesh_part(character_name):
-    """Render missing neutral inputs, then request the missing mesh outside profile locks."""
+    """Render missing neutral inputs, then request the missing mesh outside profile locks. Off the figure
+    pipeline only (a non-humanoid's whole-body model): on it a switch change marks the figure due and nothing
+    more (Ruling FR-I5, ``apply_body_slot_values``)."""
     from app.core import model_refs, model3d
     from app.imagegen.base import MediaGenerationDisabled
     try:
@@ -1781,7 +1783,14 @@ def apply_body_slot_values(character_name: str,
             new_switch = ((after.get("body_slots") or {}).get(slot_id) or {}).get(spec.mesh_part.switch)
             switch_changed = old_switch != new_switch
     if switch_changed:
-        _schedule_mesh_part_regeneration(character_name)
+        from app.core import base_body
+        if base_body.is_base_pipeline(character_name):
+            # Ruling FR-I5: on the figure pipeline a mesh-part switch only saves and marks the figure due —
+            # the Figure tab's Build builds it (no render, no mesh, no Build started from here).
+            from app.core import figure
+            figure.invalidate()
+        else:
+            _schedule_mesh_part_regeneration(character_name)
     return {"status": "success", "slot": slot_id}
 
 
