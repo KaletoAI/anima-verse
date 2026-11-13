@@ -1713,6 +1713,10 @@ def after_mesh_item_ready(character_name: str, item_id: str) -> bool:
         pieces, _items, _signature = current_outfit_state(character_name)
         if item_id not in (pieces or {}).values():
             return False
+        if figure_build.runs_chain(character_name, item_id):
+            # Ruling A25: the Build ran this chain itself — its own fits and assembly follow, no follow-up.
+            logger.info("Fit of %s/%s accepted inside its Build — no piece_ready follow-up", character_name, item_id)
+            return False
         return figure_build.request(character_name, "piece_ready")
     except Exception:  # noqa: BLE001 — a trigger never breaks the garment run
         logger.exception("Build request after the fit of %s/%s failed", character_name, item_id)

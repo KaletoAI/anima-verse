@@ -52,9 +52,10 @@ Expected, derived by hand from the rulings:
     no interim; ``pending_changes`` holds exactly ONE entry naming the jacket:
     ``{key "<jacket>:state", wanted open, delivered closed, note "worn open —
     open mesh missing"}``; the plan keeps Step("pieces", "Own mesh · Black
-    Jacket (open)", 3) (worn 1 + ghost 1 + mesh 1: the closed chain's backs
-    are copied, ruling F15 i-1 — its worn back follows its front);
-    ``figure_info``: that change ``jobs`` 3, the worn row state "pending"
+    Jacket (open)", 5) (worn 1 + ghost 1 + cutout 2 + mesh 1: the closed
+    chain's backs are copied, ruling F15 i-1 — its worn back follows its
+    front; the cut-out's two upscales counted since Ruling A25, T15-F1);
+    ``figure_info``: that change ``jobs`` 5, the worn row state "pending"
     with the SHOWN_CLOSED
     note. Without F_c too: still ONE entry, key and note as above (how the
     piece is shown then is the general interim — ruling A11, a follow-up
@@ -120,10 +121,11 @@ Expected, derived by hand from the rulings:
     unbuttoned), its front edges apart so the body or the layer underneath
     shows between them"; the open worn FRONT prompt contains it, the closed
     one has no state word (``outfit_options._STATE_WORDS_RE``, A7). The
-    closed chain with both backs: ``run_estimate(state="open")`` -> 3, note
-    "worn 1 + ghost 1 + mesh 1 (backs from the closed state)" (HUB_JOBS 2 /
-    2 / 1 minus ``BACK_JOBS`` worn 1, ghost 1 — the worn back is one draft,
-    its composite is CPU since Task 11g). ``run_edit_step(worn, back,
+    closed chain with both backs: ``run_estimate(state="open")`` -> 5, note
+    "worn 1 + ghost 1 + cutout 2 + mesh 1 (backs from the closed state)"
+    (HUB_JOBS 2 / 2 / 2 / 1 minus ``BACK_JOBS`` worn 1, ghost 1 — the worn
+    back is one draft, its composite is CPU since Task 11g; the cut-out is
+    one routed upscale per view, Ruling A25). ``run_edit_step(worn, back,
     state="open")`` renders NOTHING (a render stub would raise): the open
     group's worn back is the closed one byte for byte, its record
     ``copied_from`` == {fsig_c, closed, sha256}, and it follows
@@ -131,7 +133,10 @@ Expected, derived by hand from the rulings:
     The ghost back (not drafted) copies the same way and follows while the
     closed ghost back is unchanged; once that is gone the copy is rendered
     again (below).
-    The closed backs removed: the estimate -> 5 (nothing to copy); the open
+    The closed backs removed (and the open worn back): the estimate -> 6,
+    note "worn 1 + ghost 2 + cutout 2 + mesh 1" (nothing to copy; the open
+    worn front accepted above stays — the first step counts only the views
+    it re-makes, Ruling A25); the open
     worn back's draft prompt and the open ghost back's prompt carry NO state
     word (rendered from the closed texts); with a composite stub that fails
     its checks the worn back drafts twice (draft, composite, draft,
@@ -379,10 +384,10 @@ def main() -> int:
                                         "delivered": "closed", "note": "worn open — open mesh missing"}])
             steps = [s for s in figure_build.plan("Demo", profile=prof()) if s.name == "pieces"]
             check("pieces step", [(s.label, s.jobs, s.item_id) for s in steps],
-                  [("Own mesh · Black Jacket (open)", 3, jacket)])
+                  [("Own mesh · Black Jacket (open)", 5, jacket)])
             figure_build._info_memo.clear()
             info = figure_build.figure_info("Demo")
-            check("change jobs", [c.get("jobs") for c in info["changes"] if jacket in c["key"]], [3])
+            check("change jobs", [c.get("jobs") for c in info["changes"] if jacket in c["key"]], [5])
             row = next(r for r in info["worn"] if r["item_id"] == jacket)
             check("worn row", (row["state"], row["note"]), ("pending", "Shown closed until its open mesh is built"))
             for path in (f_c, f_c.with_suffix(".json")):
@@ -657,7 +662,7 @@ def main() -> int:
         build_chain(fsig_c)
         est = garments.run_estimate("Demo", jacket, state="open")
         check("open estimate", (est["hub_jobs"], est["note"]),
-              (3, "worn 1 + ghost 1 + mesh 1 (backs from the closed state)"))
+              (5, "worn 1 + ghost 1 + cutout 2 + mesh 1 (backs from the closed state)"))
         oo.set_piece_state("Demo", jacket, "open")
         closed_worn_back = gs.garment_path("Demo", jacket, fsig_c, "image", step="worn", view="back")
         # The open worn front accepted (the back's own front); the closed back is reused, nothing renders.
@@ -688,7 +693,9 @@ def main() -> int:
             back.with_suffix(".json").unlink()
         for path in (got, got.with_suffix(".json")):
             path.unlink()
-        check("no closed backs: 5", garments.run_estimate("Demo", jacket, state="open")["hub_jobs"], 5)
+        est = garments.run_estimate("Demo", jacket, state="open")
+        check("no closed backs: 6 (the open worn front kept)", (est["hub_jobs"], est["note"]),
+              (6, "worn 1 + ghost 2 + cutout 2 + mesh 1"))
         prompts = []
 
         def draft(*_a, prompt, **_k):

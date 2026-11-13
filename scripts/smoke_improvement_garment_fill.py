@@ -45,8 +45,8 @@ Derived by hand from the candidate rule and the chain:
 [G7] Clothing: a dress worn by Kira with an accepted fit on the current base
      → not a candidate; no fit + a persisted failure at ``ghost`` → not a
      candidate; nothing → candidate ``clothing:Kira:<dress>`` with hub_jobs
-     5 and note "worn 2 + ghost 2 + mesh 1" (worn = front edit + back
-     draft; the back's composite is CPU work since Task 11g); apply calls ``run_garment``
+     7 and note "worn 2 + ghost 2 + cutout 2 + mesh 1" (worn = front edit + back
+     draft; the back's composite is CPU work since Task 11g; the cut-out's two upscales since Ruling A25); apply calls ``run_garment``
      (the recorder, once) → rescan → gone. A character without a ready base
      model is never a subject (Nora, a plain profile — on the pipeline since
      Task 11h, but without a base — lists nothing even wearing the dress).
@@ -341,7 +341,7 @@ def main() -> int:
             found = clothing()
             check("nothing cached: the dress is a candidate",
                   [(c.key, c.label, c.hub_jobs, c.note) for c in found],
-                  [(f"clothing:Kira:{dress}", "Kira · Dress", 5, "worn 2 + ghost 2 + mesh 1")])
+                  [(f"clothing:Kira:{dress}", "Kira · Dress", 7, "worn 2 + ghost 2 + cutout 2 + mesh 1")])
             check("Nora (no ready base model) is never a subject", clothing(character="Nora"), [])
             runs = []
 

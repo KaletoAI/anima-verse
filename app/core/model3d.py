@@ -486,26 +486,6 @@ def face_settings_fingerprint(character_name: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def face_settings_fingerprint(character_name: str) -> str:
-    """The fingerprint of the face retexture SETTINGS in force now (Task UI2, rule R3 → R1): the remembered
-    ``face_photo`` and ``face_controls`` as a run without explicit values would take them, BEFORE any
-    mode-specific rewrite (local mode drops the hub-only tone match and skin recolour, a front-view reference forces
-    the balance to 0 — those follow from the backend and the reference, not from the settings). A face retexture
-    stores it in its record (``face_retexture.settings``); ``figure_build`` compares it with this value, so saving
-    other values makes the face step due. "" when the stored values cannot be read (nothing is then marked due)."""
-    from app.core.face_photo_adjust import validated_params as photo_params
-    try:
-        photo = photo_params(get_model3d_options(character_name).get("face_photo") or None)
-    except ValueError:
-        return ""
-    controls = remembered_face_controls(character_name)
-    # Numbers as floats: a stored 1 and a default 1.0 are the same setting.
-    payload = json.dumps({"photo": {k: float(v) for k, v in photo.items()},
-                          "controls": {k: float(v) for k, v in controls.items()}},
-                         sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
-
-
 def _collision_scales_option(raw: Any) -> Dict[str, float]:
     from app.core.collision import default_scales, validate_scales
     try:

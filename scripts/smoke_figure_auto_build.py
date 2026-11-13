@@ -60,7 +60,8 @@ Expected, by hand from the brief:
     makes a hair item in its hair step: ``ensure_hairstyle`` runs before the
     plan, stubbed by ``smoke_figure_build_plan``):
     ``plan(explicit=False)`` (automatic) = ``[hair]`` with ``failed`` set, label "… — failed — Retry",
-    jobs 0 → cost 0; an automatic ``start`` → "current"; GET status
+    jobs 1 — what its retry spends (the stubbed HairDeck estimate 1; Ruling A25, T15-F1: a manual Build runs
+    it) → cost of that plan 1, of what an automatic Build runs (``_runnable``) 0; an automatic ``start`` → "current"; GET status
     ``failed``, hair row ``failed``; ``plan(explicit=True)`` (the default:
     the Build button's plan) = hair, fits, assemble; a manual Build runs ``run_queued(…, explicit=True)``, then the
     refit and the assembly. While it retries the chain its track label reads
@@ -389,16 +390,17 @@ def failure_section():
 
     fbp.W = fbp.World(hair="hairdeck", hair_done=False)
     steps = fb.plan("Kira", profile={}, explicit=False)
-    check("[7] automatic plan", fbp.names(steps), [("hair", "hair_kira", 0)])
+    check("[7] automatic plan", fbp.names(steps), [("hair", "hair_kira", 1)])
     check("[7] failed text", steps[0].failed, "hairdeck — no hair found")
     check("[7] label", steps[0].label, "Hair · Hair (HairDeck) — failed — Retry")
-    check("[7] cost", fb.cost("Kira", steps)["hub_jobs"], 0)
+    check("[7] cost: the retry counted", fb.cost("Kira", steps)["hub_jobs"], 1)
+    check("[7] cost: an automatic Build runs none of it", fb.cost("Kira", fb._runnable(steps, False))["hub_jobs"], 0)
     check("[7] automatic start", fb.start("Kira", reason="outfit_change", automatic=True)["status"], "current")
     info = fb.figure_info("Kira")
     check("[7] GET status", info["status"], "failed")
     check("[7] hair row", (info["hair"]["state"], info["hair"]["note"]), ("failed", "hairdeck — no hair found"))
     check("[7] explicit plan", fbp.names(fb.plan("Kira", profile={}, explicit=True)),
-          [("hair", "hair_kira", 0), ("fits", 0), ("assemble", 0)])
+          [("hair", "hair_kira", 1), ("fits", 0), ("assemble", 0)])
     check("[7] automatic running label", steps[0].running_label(False), "Hair · Hair (HairDeck) — failed — Retry")
     from app.core import task_queue
     track_labels = []

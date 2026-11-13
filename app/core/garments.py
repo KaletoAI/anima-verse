@@ -444,6 +444,15 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
     return "accepted"
 
 
+def _view_done(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
+    """Whether one view of an image step is accepted and current (or skipped) — ``_done``'s rule per view."""
+    from app.core.garment_images import skipped_view, stale_accepted, stale_model_fit
+    return ((_accepted(_image(character_name, item_id, fsig, step, view))
+             and not stale_model_fit(character_name, item_id, fsig, step, view)
+             and not stale_accepted(character_name, item_id, fsig, step, view))
+            or skipped_view(character_name, item_id, fsig, step, view))
+
+
 def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, base_model_sha: str,
           method: str = "edit_chain", hsig: str = "") -> bool:
     from app.core.garment_store import GARMENT_VIEWS, IMAGE_STEPS, SHOE
@@ -1527,13 +1536,14 @@ def cached_failure(character_name: str, item_id: str, *,
 #: 2026-11-11-improvements-figure-pipeline § 6.1 / § 6.5), keyed ``<kind>:<method>``:
 #: the clothing ``worn`` = the front edit + the back draft (its composite is CPU, Task 11g); a
 #: two-view image step = one edit per view; ``mesh`` = one img2mesh job;
-#: HairDeck = its one job. The cut-out, the insole and
-#: every fit are CPU work. Footwear ``source`` is computed per item (the
+#: HairDeck = its one job. The clothing ``cutout`` = one routed upscale per view (front + back: a cut-out below
+#: ``garment_images.CUTOUT_MIN_SIDE`` goes through the ``upscale`` occasion — counted on first attempts, Ruling A25);
+#: the insole and every fit are CPU work. Footwear ``source`` is computed per item (the
 #: upscale, only for an item image below ``footwear_source.MIN_SIDE``). A
 #: chain may spend one more per refused attempt (R5) — this is the estimate
 #: ``run_estimate`` hands the improvements queue, not a cap.
 HUB_JOBS: Dict[str, Dict[str, int]] = {
-    "clothing:edit_chain": {"worn": 2, "ghost": 2, "cutout": 0, "mesh": 1, "fit": 0},
+    "clothing:edit_chain": {"worn": 2, "ghost": 2, "cutout": 2, "mesh": 1, "fit": 0},
     "hair:hairdeck": {"hairdeck": 1, "fit": 0},
     # Hair in the body mesh: no steps, no job (the base views carry the hair).
     "hair:body": {},
@@ -1614,13 +1624,18 @@ def run_estimate(character_name: str, item_id: str, *,
         return {"steps": [], "hub_jobs": 0, "note": "nothing to run", "refit": False}
     steps = list(order[order.index(first):])
     parts = [(s, int(costs.get(s, 0))) for s in steps]
+    if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN:
+        # The first step re-makes only its views that are not done (one job per view): a view kept accepted and
+        # current costs nothing (Ruling A25 — the estimate is what the run spends on first attempts).
+        kept = sum(1 for v in gs.GARMENT_VIEWS if _view_done(character_name, item_id, fsig, first, v))
+        parts[0] = (first, max(parts[0][1] - kept, 0))
     reused = []
     if kind == _clothing() and method == gs.EDIT_CHAIN and state == "open":
         # Ruling F15 i-1: the open state's backs are the closed state's — copied when it has them.
         from app.core import garment_images
         reused = [s for s in steps if s in BACK_JOBS
                   and garment_images.closed_back(character_name, item_id, s, profile=profile) is not None]
-        parts = [(s, n - BACK_JOBS[s] if s in reused else n) for s, n in parts]
+        parts = [(s, max(n - BACK_JOBS[s], 0) if s in reused else n) for s, n in parts]
     full = sum(n for _s, n in parts)
     note = " + ".join(f"{s} {n}" for s, n in parts if n) or "no hub job"
     if reused:

@@ -93,8 +93,10 @@ Expected, derived by hand from the brief:
       sidecar carries the front's mesh_items (the side views follow the
       front too);
     - after_mesh_item_ready was asked for dress (its fit was accepted in
-      the run) and asked the Build ("piece_ready", ``figure_build.request``
-      recorded — Task 8), no T-pose pass.
+      the run) and asked NOTHING: the chain ran inside the Build's own
+      pieces step (``figure_build.runs_chain``), whose fits and assembly
+      come next — no "piece_ready" follow-up (Ruling A25, T15-F1; before
+      it the hook queued one, Task 8); no T-pose pass.
     Baseline, flag OFF (signature of X without token) — no chain and no
     shape job: the coat's failure is cached, bC is stored; the front names
     "a long red dress", "a green wool coat", not "a blue pleated skirt"
@@ -584,8 +586,8 @@ def main() -> int:
         check("coat failure on disk", (fail_rec.get("step"), fail_rec.get("error")), ("fit", "fit refused — stub"))
         check("dress has none", gs.garment_path("Demo", "dress", gs.garment_fsig("Demo", "dress"),
                                                 "failed").exists(), False)
-        check("hook asked the Build for dress", (HOOKS, REQUESTS), ([("Demo", "dress", True)],
-                                                                    [("Demo", "piece_ready")]))
+        check("hook for dress: the Build's own chain, no follow-up (A25)", (HOOKS, REQUESTS),
+              ([("Demo", "dress", False)], []))
         check("no T-pose pass triggered", TRIGGERS, [])
         print("[2] baseline: flag off")
         flag("dress", False)

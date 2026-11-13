@@ -107,7 +107,8 @@ Expected, derived by hand from rulings A11 / A14:
     S4, in_body (boots, jacket), in_body_own (boots, jacket), painted
     (blouse,), left_out {}, interim INTERIM_IN_BODY for both, texture T4;
     the jacket's record warning names "mesh — refused — stub — Regenerate in
-    the Wardrobe"; the plan lists "Own mesh · Jacket — failed — Retry" (0).
+    the Wardrobe"; the plan lists "Own mesh · Jacket — failed — Retry" (6 —
+    what its retry spends, the stubbed ``run_estimate``: Ruling A25, T15-F1).
 [6] A manual Build taking a KEPT piece out: the blouse switched to in_body,
     the jacket without a fit -> delivered on the interim shape SBJ of
     {blouse, jacket} (in_body_own (jacket,)); SBJ stored and the outfit
@@ -353,7 +354,7 @@ def main() -> int:
         check("the refusal is named", warnings[1],
               "Jacket is in the body until its own mesh is ready: mesh — refused — stub — Regenerate in the Wardrobe")
         pieces = [(s.label, s.jobs) for s in figure_build.plan("Demo", profile=profile(wp)) if s.name == "pieces"]
-        check("plan: failed — Retry", ("Own mesh · Jacket — failed — Retry", 0) in pieces, True)
+        check("plan: failed — Retry", ("Own mesh · Jacket — failed — Retry", 6) in pieces, True)
 
         print("[6] a manual Build that takes a kept piece out: the kept shape serves, no interim figure")
         FAILURES.clear()

@@ -63,9 +63,10 @@ Expected, derived by hand from the brief:
     images, its own fsig). ``find_source`` with the profile closed ->
     that group; with the profile open (current = open fsig) -> None (the open
     inputs differ, ``edit_fsig_on`` check).
-[5] Nothing open built: ``run_estimate(state="open")`` -> hub_jobs 5 (worn 2 —
+[5] Nothing open built: ``run_estimate(state="open")`` -> hub_jobs 7 (worn 2 —
     front edit + back draft, the back's composite is CPU work since Task 11g
-    — + ghost 2 + mesh 1, ``HUB_JOBS["clothing:edit_chain"]``), steps all 5. The
+    — + ghost 2 + cutout 2 (one upscale per view, Ruling A25) + mesh 1,
+    ``HUB_JOBS["clothing:edit_chain"]``), steps all 5. The
     closed chain built (images accepted, prepared mesh, F_c with kind, the
     current ``FIT_VERSION`` and the prepared sha256) ->
     ``run_estimate(state="closed")`` hub_jobs 0, steps [].
@@ -86,8 +87,8 @@ Expected, derived by hand from the brief:
 [8] Figure: the jacket worn open, only F_c -> delivered ``own`` ∋ jacket,
     ``shown_closed`` == (jacket,), no interim (ruling F13 b: the closed mesh
     stands in, never painted while it exists). ``figure_build.plan`` has
-    Step("pieces", "Own mesh · Black Jacket (open)", 3, jacket) — worn 1 +
-    ghost 1 + mesh 1: [5]'s closed chain has both backs (its worn back
+    Step("pieces", "Own mesh · Black Jacket (open)", 5, jacket) — worn 1 +
+    ghost 1 + cutout 2 + mesh 1: [5]'s closed chain has both backs (its worn back
     follows its front), the open state copies them (ruling F15 i-1) — and no
     other pieces step for the jacket.
     The open chain built (as [5]'s closed one) -> ``own`` ∋ jacket, no
@@ -279,8 +280,8 @@ def main() -> int:
         # --- [5] estimate ------------------------------------------------------------------------------------
         print("[5] estimate")
         est = garments.run_estimate("Demo", jacket, state="open")
-        check("open: 5 hub jobs", (est["steps"], est["hub_jobs"], est["refit"]),
-              (["worn", "ghost", "cutout", "mesh", "fit"], 5, False))
+        check("open: 7 hub jobs", (est["steps"], est["hub_jobs"], est["refit"]),
+              (["worn", "ghost", "cutout", "mesh", "fit"], 7, False))
         def build_chain(fsig, state=None):
             """The whole chain of one state built: images, prepared mesh, the fit of that mesh."""
             from app.core.garment_fit import FIT_VERSION
@@ -427,7 +428,7 @@ def main() -> int:
         check("own ∋ jacket (closed mesh)", (jacket in got.own, got.shown_closed), (True, (jacket,)))
         check("no interim", (jacket in got.painted, got.interim.get(jacket)), (False, None))
         steps = [s for s in figure_build.plan("Demo", profile=prof()) if s.name == "pieces"]
-        check("pieces step", steps, [figure_build.Step("pieces", "Own mesh · Black Jacket (open)", 3, jacket)])
+        check("pieces step", steps, [figure_build.Step("pieces", "Own mesh · Black Jacket (open)", 5, jacket)])
         f_o = build_chain(fsig_o, "open")
         got = figure.delivered_figure("Demo", profile=prof())
         check("with F_o: own", (jacket in got.own, got.interim.get(jacket)), (True, None))

@@ -329,15 +329,18 @@ def _chain_step(character_name: str, name: str, item_id: str, label: str,
                 profile: Dict[str, Any]) -> Optional[Step]:
     """A garment chain step (``pieces`` / ``hair``) when its chain has something to run or
     its cost is unknown (``run_estimate``); a chain that failed for its current fsig
-    (``garments.cached_failure``) as "failed — Retry" with 0 jobs (ruling 7a)."""
+    (``garments.cached_failure``) as "failed — Retry" (ruling 7a) with what its retry
+    spends — a manual Build runs it (Ruling A25; an automatic one skips it)."""
     from app.core import garments
     failure = garments.cached_failure(character_name, item_id, profile=profile)
+    estimate = garments.run_estimate(character_name, item_id, profile=profile)
     if failure is not None:
         error = str(failure.get("error") or "chain failed")
         if failure.get("step"):
             error = f"{failure['step']} — {error}"
-        return Step(name, f"{label}{FAILED_SUFFIX}", 0, item_id, failed=error)
-    estimate = garments.run_estimate(character_name, item_id, profile=profile)
+        jobs = estimate.get("hub_jobs")
+        return Step(name, f"{label}{FAILED_SUFFIX}", int(jobs) if jobs is not None else None, item_id,
+                    failed=error)
     if estimate.get("hub_jobs") is None:
         return Step(name, f"{label} ({estimate.get('note') or 'cost unknown'})", None, item_id)
     if not estimate.get("steps"):
@@ -538,6 +541,14 @@ _current: Dict[str, Dict[str, Any]] = {}  # character -> the run in flight
 _last: Dict[str, Dict[str, Any]] = {}     # character -> the last run that had steps
 _build_locks: Dict[str, threading.Lock] = {}  # character -> held by a run from its plan to its last step
 _pins: Dict[str, Any] = {}                # character -> the wanted figure the run in flight was planned for (A18)
+_own_chains: Dict[str, set] = {}          # character -> items whose chain the Build runs now (Ruling A25)
+
+
+def runs_chain(character_name: str, item_id: str) -> bool:
+    """Whether the character's Build runs ``item_id``'s chain itself now (Ruling A25): its finished fit queues
+    no "piece_ready" follow-up — the Build's own fits and assembly come next."""
+    with _lock:
+        return item_id in _own_chains.get(character_name, ())
 
 
 #: 409 of a manual render of the dressed views while a Build of the character runs (ruling F16, fix round
@@ -1079,8 +1090,14 @@ def _chain(character_name: str, item_id: str, explicit: bool) -> str:
     """The item's chain through the character's garment FIFO; ``explicit`` (a
     manual Build) clears a cached failure first and retries it (ruling 7a)."""
     from app.core import garments
-    runs = garments.run_queued(character_name, [item_id], explicit=True) if explicit else \
-        garments.run_queued(character_name, [item_id])
+    with _lock:
+        _own_chains.setdefault(character_name, set()).add(item_id)
+    try:
+        runs = garments.run_queued(character_name, [item_id], explicit=True) if explicit else \
+            garments.run_queued(character_name, [item_id])
+    finally:
+        with _lock:
+            _own_chains.get(character_name, set()).discard(item_id)
     result = runs.get(item_id) or {}
     if result.get("ok"):
         return ""

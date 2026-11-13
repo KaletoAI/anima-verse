@@ -16,12 +16,14 @@ patched where named. Nothing renders: the estimate only READS the step state
 
 Every number is derived by hand from the first-attempt table ``garments.HUB_JOBS``
 (clothing worn 2 — the front edit + the back draft, its composite is CPU
-since Task 11g — + ghost 2 + cutout 0 + mesh 1 + fit 0; HairDeck hairdeck
+since Task 11g — + ghost 2 + cutout 2 (one routed upscale per view below
+CUTOUT_MIN_SIDE 1024, counted on first attempts since Ruling A25, T15-F1)
++ mesh 1 + fit 0; HairDeck hairdeck
 1 + fit 0; hair in the body mesh: no steps; footwear source (1 below
 MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
 
 [E1] Clothing D (own-mesh dress worn by Demo), nothing cached -> steps all 5,
-     hub_jobs 2 + 2 + 0 + 1 + 0 = 5, note "worn 2 + ghost 2 + mesh 1",
+     hub_jobs 2 + 2 + 2 + 1 + 0 = 7, note "worn 2 + ghost 2 + cutout 2 + mesh 1",
      refit False.
 [E2] worn + ghost + cutout accepted for both views (the ghost pair agrees:
      hem_t 0.65 front and back, |Δ| 0 <= 0.02) -> steps [mesh, fit],
@@ -31,7 +33,7 @@ MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
      (f1803222, ``garment_images.stale_model_fit``) counts an accepted
      drafted back WITHOUT it as a model fit of before Task 11g — stale, never
      done (``garments._done``) — and the chain would start at "worn" again
-     (all 5 steps, 5 jobs: the two reds of this smoke between f1803222 and
+     (all 5 steps, 5 jobs then — 7 now: the two reds of this smoke between f1803222 and
      Task UI2 were this fixture, not the estimate).
 [E3] The prepared mesh accepted too, the fit missing -> steps ["fit"],
      hub_jobs 0, note "no hub job".
@@ -48,7 +50,7 @@ MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
      -> steps [insole, fit], 0.
 [E6] A second dress E with no images of its own; ``find_source`` patched to
      answer a source -> hub_jobs 0, refit True, steps all 5, the note names
-     the full cost: "refit from the previous base; up to 5 if the refit is
+     the full cost: "refit from the previous base; up to 7 if the refit is
      refused".
 [E7] An unknown item -> hub_jobs None, the ValueError's text as the note; a
      character off the pipeline (Off, an animal — no human can be off it
@@ -141,7 +143,7 @@ def main() -> int:
 
         print("[E1] clothing, nothing cached")
         check("full chain", brief(estimate(did)),
-              (["worn", "ghost", "cutout", "mesh", "fit"], 5, "worn 2 + ghost 2 + mesh 1", False))
+              (["worn", "ghost", "cutout", "mesh", "fit"], 7, "worn 2 + ghost 2 + cutout 2 + mesh 1", False))
 
         print("[E2] worn + ghost + cutout accepted")
         fsig = gs.garment_fsig("Demo", did)
@@ -204,9 +206,9 @@ def main() -> int:
         check("refit", (est["steps"], est["hub_jobs"], est["refit"]),
               (["worn", "ghost", "cutout", "mesh", "fit"], 0, True))
         check("note names the full cost", est["note"],
-              "refit from the previous base; up to 5 if the refit is refused")
-        check("without a source the same piece costs 5", brief(estimate(eid)),
-              (["worn", "ghost", "cutout", "mesh", "fit"], 5, "worn 2 + ghost 2 + mesh 1", False))
+              "refit from the previous base; up to 7 if the refit is refused")
+        check("without a source the same piece costs 7", brief(estimate(eid)),
+              (["worn", "ghost", "cutout", "mesh", "fit"], 7, "worn 2 + ghost 2 + cutout 2 + mesh 1", False))
 
         print("[E7] unknown item / off the pipeline")
         est = garments.run_estimate("Demo", "no_such_item")
