@@ -479,16 +479,21 @@ def _hair_image(garment: Dict[str, Any], tier: str) -> Tuple[bytes, str]:
 
 
 def _state(wanted: List[Dict[str, Any]], tier: str, *,
-           alpha_cutoff: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
+           alpha_cutoff: Optional[float] = None, character_name: str = "") -> Dict[str, Dict[str, Any]]:
     """The sidecar ``garments`` map an assembly of ``tier`` must carry — a
     layered piece adds ``over`` (its ``lsig``) and, while its layered fit is
     missing, ``pending`` (so the assembly is rebuilt once it exists); trousers
     over a boot add ``hem`` ``{mode, lsig, fallback}`` (boots spec § 8.2); a hair
     piece adds ``alpha_cutoff`` — the world's ``base_body.hair_alpha_cutoff``
     (``hair_cards.alpha_cutoff``, read live; ``alpha_cutoff`` = the value a build
-    grafted with), so a changed setting re-assembles on the CPU (spec § 6.1)."""
+    grafted with), so a changed setting re-assembles on the CPU (spec § 6.1);
+    on the full tier a hair piece also adds ``strands`` — the sha256 of its
+    fit's current strand record (``hair_strands.current_sha``, with the
+    collision scales of ``character_name`` when given; "" without one), the
+    record whose per-vertex binding the build grafts (spec § 6.2.3)."""
     from app.core.garment_set import HAIR
     out: Dict[str, Dict[str, Any]] = {}
+    scales: Optional[Dict[str, float]] = None
     for g in wanted:
         if g["fit"] is None:
             # A fit on an outfit body still to be made (``garments.body_fit``).
@@ -509,6 +514,12 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
                 from app.core import hair_cards
                 alpha_cutoff = hair_cards.alpha_cutoff()
             entry["alpha_cutoff"] = alpha_cutoff
+            if tier == FULL:
+                from app.core import hair_strands
+                if scales is None and character_name:
+                    from app.core.collision import character_scales
+                    scales = character_scales(character_name)
+                entry["strands"] = hair_strands.current_sha(g["fit"], fit_sha256=entry["sha256"], scales=scales)
         out[g["item_id"]] = entry
     return out
 
@@ -550,7 +561,7 @@ def served(character_name: str, path: Optional[Path], tier: str) -> Optional[Pat
             if assembled.exists():
                 schedule(character_name, signature)  # takes the leftover away
             return path
-        if _current(assembled, path, _state(wanted, tier)):
+        if _current(assembled, path, _state(wanted, tier, character_name=character_name)):
             return assembled
         schedule(character_name, signature)
         return path
@@ -639,6 +650,32 @@ def _tint_scalp(blob: bytes, mesh, garment: Dict[str, Any], tier: str, tints: Di
     return tinted
 
 
+def _attach_strands(character_name: str, garment: Dict[str, Any], source: bytes, mesh) -> None:
+    """The full tier's hair carries its strand binding (strand-hair spec § 6.2.3): the strand record of the fit
+    (``hair_strands.record_for_fit``, built on the CPU when missing) and its per-vertex ``_STRAND_CARD`` /
+    ``_STRAND_U`` (``hair_strands.vertex_arrays``) go onto ``mesh`` — only when the record was made of these very
+    fit bytes and has one entry per vertex, so a record that does not belong to the mesh never scrambles it.
+    Without a record the hair stays as today (static on its skin); never a reason to fail the assembly."""
+    import hashlib
+    from app.core import hair_strands
+    fit = garment["fit"]
+    try:
+        record = hair_strands.record_for_fit(character_name, fit)
+        arrays = hair_strands.vertex_arrays(fit) if record is not None else None
+    except Exception as e:  # noqa: BLE001 — a finish for the 3D client's sim, never a failed assembly
+        logger.warning("Garment assembly: strand record of %s (%s) failed: %s", garment["item_id"], garment["fsig"], e)
+        return
+    if record is None or arrays is None:
+        return
+    n = len(mesh.positions)
+    if record.get("fit_sha256") != hashlib.sha256(source).hexdigest() or len(arrays["card"]) != n:
+        logger.warning("Garment assembly: strand record of %s (%s) does not match the grafted hair (%d vertices)",
+                       garment["item_id"], garment["fsig"], n)
+        return
+    names = hair_strands.VERTEX_ATTRIBUTES
+    mesh.extra_attributes = {names["card"]: arrays["card"], names["u"]: arrays["u"]}
+
+
 def _build(character_name: str, directory: Path, bare: Path,
            wanted: List[Dict[str, Any]], tier: str,
            warnings: Optional[List[str]] = None) -> Tuple[bytes, Dict[str, Any], list]:
@@ -715,6 +752,9 @@ def _build(character_name: str, directory: Path, bare: Path,
             if not mesh.image:
                 mesh.image, mesh.mime = _hair_image(garment, tier)
             overrides = hair_cards.alpha_overrides(cutoff)
+            mesh.extra_attributes = {}           # only the full tier carries the strand binding
+            if tier == FULL:
+                _attach_strands(character_name, garment, source, mesh)
         if garment.get("over") and not garment["over"]["pending"]:
             extras["over"] = garment["over"]["items"]
         blob = glb_mesh.graft(blob, mesh, name=f"garment_{garment['kind']}_{garment['item_id']}", extras=extras,
@@ -725,7 +765,8 @@ def _build(character_name: str, directory: Path, bare: Path,
     frames = rig_frames_preserved(data, blob)
     if not frames.get("ok"):
         raise ValueError("assembled model rewrote the rig frames: " + "; ".join(frames.get("errors") or []))
-    side = {**meta, "garments": _state(wanted, tier, alpha_cutoff=cutoff), "bare_revision": revision,
+    side = {**meta, "garments": _state(wanted, tier, alpha_cutoff=cutoff, character_name=character_name),
+            "bare_revision": revision,
             "assembled_at": utc_now_iso()}
     if scalp_tints:
         side["scalp_tint"] = scalp_tints
@@ -776,7 +817,7 @@ def assemble(character_name: str, signature: str, *,
             changed |= removed
             statuses[tier] = "removed" if removed else "none"
             continue
-        if _current(target, bare, _state(wanted, tier)):
+        if _current(target, bare, _state(wanted, tier, character_name=character_name)):
             statuses[tier] = "current"
             continue
         try:
@@ -814,8 +855,8 @@ def _input_key(character_name: str, signature: str) -> str:
     revisions + wanted garments) — the failure memo's key."""
     directory = _model3d().get_model3d_dir(character_name)
     wanted = _wanted_for(character_name, directory, signature)
-    return json.dumps([[bare_revision(bare_path(directory, signature, t)), _state(wanted, t)] for t in TIERS],
-                      sort_keys=True)
+    return json.dumps([[bare_revision(bare_path(directory, signature, t)),
+                        _state(wanted, t, character_name=character_name)] for t in TIERS], sort_keys=True)
 
 
 def schedule(character_name: str, signature: Optional[str] = None) -> bool:

@@ -301,8 +301,9 @@ def main() -> int:
         node, count = garment_node(asm.read_bytes(), node_name)
         check("garment node", (node.get("extras"), count), ({"garment": extras}, 4))
         side = json.loads(asm.with_suffix(".json").read_text())
+        # ``strands`` "": the fixture fit has no strand record (no HairDeck method / report), strand-hair Task 5
         check("sidecar garments", side.get("garments"),
-              {hid: {"kind": "hair", "fsig": fsig, "sha256": sha(fit), "alpha_cutoff": 0.15}})
+              {hid: {"kind": "hair", "fsig": fsig, "sha256": sha(fit), "alpha_cutoff": 0.15, "strands": ""}})
         check("sidecar bare_revision", side.get("bare_revision"), ga.bare_revision(bare))
         check("sidecar copies bare meta", (side.get("rig"), side.get("base_signature")), ("mixamo", bsig))
         check("bare unchanged", sha(bare), bare_sha)

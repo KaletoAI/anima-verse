@@ -39,6 +39,7 @@ from __future__ import annotations
 import copy
 import json
 import math
+import re
 import struct
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,6 +47,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 GARMENT_NODE_PREFIX = "garment_"
+#: The names of a garment's custom per-vertex attributes (``GarmentMesh.extra_attributes``).
+EXTRA_ATTRIBUTE_RE = re.compile(r"^_STRAND_[A-Z]+$")
 COMPRESSION_EXTENSIONS = ("EXT_meshopt_compression", "KHR_meshopt_compression", "KHR_draco_mesh_compression")
 _TRS_KEYS = ("translation", "rotation", "scale", "matrix")
 _ARRAY_BUFFER, _ELEMENT_ARRAY_BUFFER = 34962, 34963
@@ -98,6 +101,10 @@ class GarmentMesh:
     #: hair-chain joint name -> its bind world 4x4 (``rig_contract.HAIR_CHAIN_JOINT_RE``); ``graft`` appends those
     #: the target lacks. Empty = no hair-chain joints to add.
     joint_binds: Dict[str, np.ndarray] = field(default_factory=dict)
+    #: Custom per-vertex SCALAR attributes (``EXTRA_ATTRIBUTE_RE``: the strand binding ``_STRAND_CARD`` uint16 /
+    #: ``_STRAND_U`` float32 of ``hair_strands``), one value per vertex; ``graft`` writes them, ``garment_arrays``
+    #: reads them back. Empty = none.
+    extra_attributes: Dict[str, np.ndarray] = field(default_factory=dict)
 
 
 def accessor_array(parsed: dict, index: int) -> np.ndarray:
@@ -534,7 +541,47 @@ def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX, exact:
                        weights=_vertex_attr(parsed, prim, "WEIGHTS_0", n, 4, np.float64),
                        joint_names=_skin_joint_names(gltf, node["skin"]) if "skin" in node else [],
                        image=image, mime=mime, material=material, colors=_vertex_colors(parsed, prim, n),
-                       joint_parents=_joint_parents(gltf, node["skin"]) if "skin" in node else {})
+                       joint_parents=_joint_parents(gltf, node["skin"]) if "skin" in node else {},
+                       extra_attributes=_extra_attributes(parsed, prim, n))
+
+
+def _extra_attributes(parsed: dict, primitive: dict, count: int) -> Dict[str, np.ndarray]:
+    """The primitive's custom SCALAR attributes named by ``EXTRA_ATTRIBUTE_RE``, each ``(count,)`` in its stored
+    component type (uint16 / float32)."""
+    out: Dict[str, np.ndarray] = {}
+    for name, index in (primitive.get("attributes") or {}).items():
+        if not EXTRA_ATTRIBUTE_RE.match(str(name)):
+            continue
+        array = np.asarray(accessor_array(parsed, index))
+        if array.shape != (count, 1):
+            raise ValueError(f"{name} accessor has the wrong shape")
+        out[str(name)] = array.reshape(count).copy()
+    return out
+
+
+def _check_extra(g: GarmentMesh, n: int) -> List[Tuple[str, np.ndarray, int]]:
+    """``(name, values, componentType)`` of ``g.extra_attributes``: an integer attribute as uint16 (5123), a float
+    one as float32 (5126). ValueError — naming the attribute — for a name outside ``EXTRA_ATTRIBUTE_RE``, a length
+    other than ``n`` (a record that does not belong to this mesh must never scramble it), an integer out of uint16
+    or a non-finite float."""
+    out: List[Tuple[str, np.ndarray, int]] = []
+    for name in sorted(g.extra_attributes or {}):
+        if not EXTRA_ATTRIBUTE_RE.match(str(name)):
+            raise ValueError(f"Garment attribute {name!r} is no custom attribute (_STRAND_*)")
+        values = np.asarray(g.extra_attributes[name])
+        if values.ndim != 1 or len(values) != n:
+            raise ValueError(f"Garment attribute {name} has {values.size} values for {n} vertices")
+        if values.dtype.kind in "iub":
+            if len(values) and (values.min() < 0 or values.max() > 0xFFFF):
+                raise ValueError(f"Garment attribute {name} exceeds 16 bits")
+            out.append((str(name), values.astype("<u2"), 5123))
+        elif values.dtype.kind == "f":
+            if not np.isfinite(values).all():
+                raise ValueError(f"Garment attribute {name} contains non-finite values")
+            out.append((str(name), values.astype("<f4"), 5126))
+        else:
+            raise ValueError(f"Garment attribute {name} has the unsupported type {values.dtype}")
+    return out
 
 
 def _hair_chain_binds(parsed: dict, skin_index: int) -> Dict[str, np.ndarray]:
@@ -873,7 +920,8 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
     or broken garment arrays. ``material_overrides`` merges top-level material keys (such as ``doubleSided`` for a
     boot shaft, boots spec 2026-11-11 § 6.1) into the grafted material after the texture pass-through. A
     hair-chain joint the target lacks and ``garment.joint_binds`` names is APPENDED to the target skin (module
-    docstring), weighted or not."""
+    docstring), weighted or not. ``garment.extra_attributes`` become custom SCALAR vertex attributes of the
+    primitive (``_check_extra``: uint16 / float32; ValueError naming one whose length is not the vertex count)."""
     from app.core.rig_contract import BASE_JOINT_KEYS, HAIR_CHAIN_JOINT_RE, hair_chain_parent, norm_bone_name
     if not name or not isinstance(extras, dict):
         raise ValueError("graft needs a node name and an extras dict")
@@ -887,6 +935,7 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
         raise ValueError(f"The target GLB already has a node or mesh named {name!r}")
     P, N, U, I, J, W = _check_garment(garment)
     C = _check_colors(garment, len(P))
+    extra = _check_extra(garment, len(P))
 
     target_names = _skin_joint_names(gltf, 0)
     lookup: Dict[str, int] = {}
@@ -1010,6 +1059,8 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
         attributes["COLOR_0"] = add_accessor(C, 5121, "VEC4", _ARRAY_BUFFER, normalized=True)
     attributes["JOINTS_0"] = add_accessor(J.astype("<u2"), 5123, "VEC4", _ARRAY_BUFFER)
     attributes["WEIGHTS_0"] = add_accessor(W.astype("<f4"), 5126, "VEC4", _ARRAY_BUFFER)
+    for extra_name, values, component in extra:
+        attributes[extra_name] = add_accessor(values.reshape(-1, 1), component, "SCALAR", _ARRAY_BUFFER)
     indices = add_accessor(I.reshape(-1, 1).astype("<u4"), 5125, "SCALAR", _ELEMENT_ARRAY_BUFFER)
 
     material = copy.deepcopy(garment.material or {})
