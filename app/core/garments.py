@@ -166,6 +166,11 @@ NO_HAIR_ERROR = "HairDeck found no hair in the profile picture"
 EDIT_VIEW_ORDER: Tuple[str, ...] = ("back", "front")
 INPUTS_CHANGED_ERROR = ("The base views or the garment's description changed during the run "
                         "— run the chain again to start from the new ones")
+#: Ruling A20: checked BEFORE each composite onto a base view (``garment_images._drafted_back``) — a base view
+#: rendered again while the chain ran (Kai's jacket, 2026-11-13: attempt 2 composited onto the base back
+#: re-rendered meanwhile and was refused for "drift"). The true reason, before any composite of the new base.
+BASE_VIEW_CHANGED_ERROR = ("Base view changed meanwhile ({views}) — the base body was rendered again while the "
+                           "chain ran; run the chain again")
 
 
 class _Refused(Exception):
@@ -333,6 +338,28 @@ def _inputs_unchanged(character_name: str, item_id: str, fsig: str, step: str, s
     from app.core.garment_store import garment_fsig
     if garment_fsig(character_name, item_id, state=state) != fsig:
         raise _Refused(step, INPUTS_CHANGED_ERROR, None)
+
+
+def _base_view_shas(character_name: str, bsig: str) -> Dict[str, str]:
+    """sha256 of the plain body's ``GARMENT_VIEWS`` now (what the fsig of a run hashes as ``base_images``)."""
+    from app.core import base_body
+    from app.core.garment_store import GARMENT_VIEWS
+    from app.core.model_refs import find_ref_image
+    return {view: base_body.file_sha256(find_ref_image(character_name, base_body._kind(view), bsig))
+            for view in GARMENT_VIEWS}
+
+
+def _composite_guard(character_name: str, bsig: str, shas: Dict[str, str], step: str):
+    """The check a drafted back runs before each composite (Ruling A20): ``_Refused(step,
+    BASE_VIEW_CHANGED_ERROR)`` when a base view differs from the one the run started on (``shas``)."""
+    def check() -> None:
+        now = _base_view_shas(character_name, bsig)
+        changed = [view for view, sha in shas.items() if now.get(view) != sha]
+        if changed:
+            logger.info("Garment run %s: base view %s changed meanwhile — no composite onto it",
+                        character_name, ", ".join(changed))
+            raise _Refused(step, BASE_VIEW_CHANGED_ERROR.format(views=", ".join(changed)), None)
+    return check
 
 
 def _mesh_done(character_name: str, item_id: str, fsig: str) -> bool:
@@ -1641,6 +1668,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             raise ValueError(f"{character_name} is not on the base-body pipeline")
         bsig, base_sha = base
         _refresh_description(character_name, item, kind, profile)
+        base_views = _base_view_shas(character_name, bsig)   # Ruling A20: what each composite checks against
         fsig = gs.garment_fsig(character_name, item_id, profile=profile)
         if method == gs.HAIRDECK:
             hsig = gs.garment_hsig(character_name, item_id, profile=profile)
@@ -1697,7 +1725,9 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                                                      pair_check=pair,
                                                      prompt_hints=_front_hints(character_name, item_id, fsig,
                                                                                kind, step, v),
-                                                     state=image_state)
+                                                     state=image_state,
+                                                     before_composite=_composite_guard(character_name, bsig,
+                                                                                       base_views, step))
                     produced = True
                     # Right away: a refusal of the next view must not leave a
                     # mesh behind that was built from the replaced image.

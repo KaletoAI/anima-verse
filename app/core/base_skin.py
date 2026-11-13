@@ -508,6 +508,12 @@ def apply_skin_step(character_name: str) -> Dict[str, Any]:
             _set_front_record(front, record)
         finally:
             base_body.release_views(character_name, ("front",))
+        # One line either way (audit 2026-11-13: whether a re-run landed could not be read from the log).
+        if record.get("applied"):
+            logger.info("Skin step re-run %s (%s): applied on the stored neutral front", character_name, bsig)
+        else:
+            logger.info("Skin step re-run %s (%s): skipped — %s%s", character_name, bsig, record.get("outcome"),
+                        f": {record.get('error')}" if record.get("error") else "")
         return record
 
 

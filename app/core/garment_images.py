@@ -642,9 +642,14 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
                   force: bool = False,
                   pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
                   prompt_hints: Optional[Dict[str, Any]] = None,
-                  state: Optional[str] = None) -> Path:
+                  state: Optional[str] = None,
+                  before_composite: Optional[Callable[[], None]] = None) -> Path:
     """Render, gate and store one edit step of one view; returns the final
     image ``images/{item}_{fsig}_{step}_{view}.png``.
+
+    ``before_composite`` (the chain's base-view check, Ruling A20): called
+    before every composite of a drafted back onto the base view; it raises
+    to refuse with the true reason before anything is composited.
 
     ``state`` (plan 2026-11-12-unified-worn-pieces Task 11b): the open /
     closed state of the run's piece — the prompts read the profile with the
@@ -695,7 +700,8 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     final.parent.mkdir(parents=True, exist_ok=True)
     if drafted:
         return _drafted_back(character_name, item_id, fsig, step, kind, profile=profile, base=base, force=force,
-                             refs_dir=refs_dir, final=final, pair_check=pair_check)
+                             refs_dir=refs_dir, final=final, pair_check=pair_check,
+                             before_composite=before_composite)
     source_step = kind.EDIT_STEPS[step]["source"]
     if source_step == "base":
         source = base
@@ -954,7 +960,8 @@ class StoredDraftUnusable(RuntimeError):
 def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind, *,
                   profile: Dict[str, Any], base: Path, refs_dir: Path, final: Path,
                   pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
-                  stored_only: bool = False, force: bool = False) -> Path:
+                  stored_only: bool = False, force: bool = False,
+                  before_composite: Optional[Callable[[], None]] = None) -> Path:
     """The back of a drafted step (module docstring): up to ``ATTEMPTS``
     DRAFTs from the accepted front, each COMPOSITED onto the base back on the
     CPU (``view_composite``, rule "piece") and — when the composite passes
@@ -970,7 +977,8 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
     again as attempt 1 — no hub job — and only when that fails is ONE new
     draft rendered (attempt 2). ``stored_only`` (the boot re-make of a model
     fit, ``remake_model_fit_back``): never renders — ``StoredDraftUnusable``
-    instead."""
+    instead. ``before_composite`` (Ruling A20) runs before every composite
+    and refuses (raises) when the base view changed meanwhile."""
     from app.core import base_body, view_composite
     from app.core.base_body import file_sha256
     from app.core.garment_store import garment_path, read_record, write_record
@@ -1066,6 +1074,8 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
             raise RuntimeError(f"The {step} back draft rendered nothing")
         draft = Path(draft)
         target = garment_path(character_name, item_id, fsig, "image", step=step, view="back", attempt=attempt)
+        if before_composite is not None:
+            before_composite()   # Ruling A20: never a composite onto a base view rendered again meanwhile
         composite = view_composite.compose(base, draft, target, rule="piece", background=VIEW_REFERENCE_BACKGROUND,
                                            mask_target=support_path(target))
         follow = {"front_sha256": front_sha, "draft": draft.name, "draft_sha256": file_sha256(draft),

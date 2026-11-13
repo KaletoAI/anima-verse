@@ -3853,6 +3853,9 @@ VIEWS_MISSING = "{views} {noun} missing — not meshed from the {have} alone"
 SHAPE_CHANGED = "The worn pieces changed — the body shape was not built"
 #: The in-body pieces of a shape name no text to edit the views with.
 SHAPE_EMPTY = "The pieces in the body name nothing to dress the body shape with"
+#: ``prepare_shape`` stopped before the mesh: the caller's ``model3d.shape_guard`` says the shape is no longer
+#: wanted (Ruling A18) — no failure, nothing recorded.
+SHAPE_NOT_WANTED = "Not meshed: the body shape {shape} is no longer wanted — the follow-up builds the one wanted now"
 OUTFIT_BODY_CHANGED = "Built on an older body shape"
 #: An outfit model built as another figure than the one delivered now.
 FIGURE_CHANGED = "Built for another figure"
@@ -4096,7 +4099,13 @@ def prepare_shape(character_name: str, fig, *, items: Optional[list] = None, reb
     the body id (``generate_for_current_outfit(signature=<body id>,
     force=True, outfit_body=…)``). The outfit's status counts as running
     meanwhile (stage ``body``); a failure is recorded for the outfit and
-    returned ``{ok: False, error, body_id}``."""
+    returned ``{ok: False, error, body_id}``.
+
+    Ruling A18: a caller that registered ``model3d.shape_guard`` for the
+    shape is asked before the mesh (here, after the views) and before each
+    further hub stage (``model3d._character_mesh_stages``); a shape no longer
+    wanted stops there — ``{ok: False, superseded: True, error, body_id}``,
+    no failure recorded for the outfit."""
     from app.core import figure as figure_mod, model3d
     from app.core.keyed_lock import keyed_lock
     from app.core.model_refs import find_ref_image
@@ -4157,11 +4166,18 @@ def prepare_shape(character_name: str, fig, *, items: Optional[list] = None, reb
                       "used_views": [v for v in BASE_VIEWS if v in used], "view_guard": guard,
                       "view_warnings": warnings}
             _mark_shape_views(character_name, shape, parent)
+            if not model3d.shape_still_wanted(character_name, shape):
+                # Ruling A18: the views stay (they are the shape's); no mesh job for a shape nobody wants now.
+                logger.info("Outfit body %s of %s: no longer wanted — not meshed", shape, character_name)
+                return {"ok": False, "superseded": True, "error": SHAPE_NOT_WANTED.format(shape=shape),
+                        "body_id": shape}
             logger.info("Outfit body %s of %s (in the body: %s, outfit %s): meshing %s", shape, character_name,
                         list(fig.in_body), signature or "-", parent["used_views"])
             result = model3d.generate_for_current_outfit(
                 character_name, force=True, signature=shape,
                 outfit_body={"outfit_body": parent, "base_variant": variant})
+            if result.get("superseded"):
+                return {**result, "body_id": shape}   # Ruling A18: stopped between stages, not a failure
             if not result.get("ok"):
                 error = str(result.get("error") or "Outfit body generation failed")
             return {**result, "body_id": shape, **({"error": error} if error else {})}
@@ -4213,7 +4229,14 @@ def prepare_outfit_figure(character_name: str, signature: Optional[str] = None, 
     pipeline, the outfit model stored and current (unless ``force``), the
     figure on the plain body, nothing records the outfit's pieces — or when
     it went through; the shape's failure ``{ok: False, error, body_id}``
-    otherwise (this run's result)."""
+    otherwise (this run's result).
+
+    Ruling A15 b (as in the Build, ``figure_build._interim_waits``): no
+    interim shape while the outfit has a figure to show — a stored model of
+    this outfit (stale ones too) or, for the worn outfit, any served model —
+    then nothing is meshed and the run's result is ``{ok: False, error:
+    figure_build.INTERIM_WAITS, waits: True}``: the figure shown stays
+    served until the own mesh is ready."""
     from app.core import figure, model3d
     from app.core.model_refs import current_outfit_state, find_ref_image
     profile = _profile_of(character_name, None)
@@ -4230,6 +4253,13 @@ def prepare_outfit_figure(character_name: str, signature: Optional[str] = None, 
     outfit = {"pieces": dict(manifest.get("pieces") or {}), "items": items,
               "piece_state": dict(manifest.get("piece_state") or {})}
     wanted, delivered = figure._delivered(character_name, profile=profile, **outfit)
+    from app.core import figure_build
+    if figure_build._interim_waits(character_name, delivered, figure_build._model_figure(character_name, signature),
+                                   signature=signature):
+        # Ruling A15 b: no interim shape while a figure is shown — it stays served until the own mesh is ready.
+        logger.info("Outfit %s of %s: an own mesh is not ready and a figure is shown — no interim body shape",
+                    signature, character_name)
+        return {"ok": False, "error": figure_build.INTERIM_WAITS, "waits": True}
     # Ruling A11: while own-mesh pieces wait in the delivered (interim) shape, that shape is the one served —
     # stored already (reused, no job) or not; the wanted shape takes them out on a manual Build only.
     target = delivered if delivered.in_body_own and not figure.is_plain(delivered.shape) else wanted

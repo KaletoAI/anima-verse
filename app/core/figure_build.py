@@ -100,6 +100,15 @@ Build there, every later step is skipped, and its reason is the Build's
 status (``state()['failed']``) in the Figure tab. The run shows as one tracked task "Build · <name>
 (<i>/<n> <label>)".
 
+A run pins the figure it planned for (Ruling A18, Task 11g-fix6): the wanted figure of its plan (taken again
+after the ``REPIN_STEPS``, which change it themselves). Before every step but ``UNPINNED_STEPS`` the wanted figure of NOW is compared with
+it; the interim step pins its interim body shape, the shape step its shape, a view render the figure it
+renders for; and a shape being meshed is asked between its hub stages whether it is still wanted
+(``model3d.shape_guard``: no face or rig job for a shape the hair change made obsolete). A step whose figure
+moved ends the run as "superseded" (``StepSuperseded``, ``state()['superseded']``) — not a failure, no error
+state — and ONE follow-up builds the figure wanted now; before, such a step failed ("Views missing", "the body
+shape is not built") and the follow-up started from scratch anyway.
+
 Automatic (Task 8; rulings 7a, 7b): ``request(character, trigger)`` is how the
 triggers of today reach the Build — the outfit change (``model_refs``'s
 debounce timer), the body change (``garments.after_base_model``), a piece
@@ -139,6 +148,31 @@ DEPENDS = {"interim": {"plain_body"}, "shape": {"plain_body"}, "pieces": {"plain
 SLOT_STEPS = frozenset({"plain_body", "interim", "shape", "texture", "assemble"})
 #: Steps whose failure (a refused view, a shape not meshed) STOPS the Build: nothing after them runs (Ruling C4).
 STOP_STEPS = frozenset({"plain_body", "interim", "shape", "texture"})
+#: Steps that do not check the run's pinned figure first (Ruling A18): the plain body (it builds what every
+#: figure stands on; the pin is taken again after it) and the CPU refits (they fit what is built).
+UNPINNED_STEPS = frozenset({"plain_body", "fits"})
+#: Steps after which the run pins the wanted figure again: they change it themselves — the plain body (the
+#: figure stands on the new body) and the hair (``garment_hair.ensure_hair_item`` wears a new hair item).
+REPIN_STEPS = frozenset({"plain_body", "hair"})
+
+#: A step whose figure moved while it ran (Ruling A18): not a failure, no error state — ``state()['superseded']``.
+SUPERSEDED = "Superseded: {why} — the follow-up builds {new}"
+#: ``SUPERSEDED``'s ``why`` of the run's pinned wanted figure.
+WANTED_MOVED = "the wanted figure changed meanwhile ({fields})"
+#: ... of the interim step's body shape (a garment fit accepted meanwhile needs another interim, or none).
+INTERIM_MOVED = "the interim body shape {shape} is no longer the one to show (now {now})"
+#: ... of the shape step's body shape (the hair or an outfit change wants another shape).
+SHAPE_MOVED = "the body shape {shape} is no longer wanted (now {now})"
+#: ... of the views of a step (the figure delivered moved while they rendered).
+VIEWS_MOVED = "the figure changed while its views rendered ({fields})"
+#: The reason of the follow-up a superseded run keeps.
+SUPERSEDED_REASON = "superseded"
+
+
+class StepSuperseded(Exception):
+    """A step's pinned figure is no longer the one wanted / delivered (Ruling A18): the run ends there — neither
+    a failure nor an error state — and ONE follow-up (``_keep_followup_locked``) re-plans and builds the figure
+    wanted now."""
 
 #: ``start`` / the route's 409 off the pipeline (a non-humanoid or a temporary NPC — Rulings A13 / A13a).
 OFF_PIPELINE = "No figure — the figure is for humanoid characters that are not temporary NPCs"
@@ -262,28 +296,37 @@ INTERIM_WAITS = ("Not assembled: an own mesh is not ready — no interim body sh
                  "figure built before stays served")
 
 
-def _figure_served(character_name: str) -> bool:
+def _figure_served(character_name: str, signature: str = "") -> bool:
     """Whether the character has a figure to show (Ruling A15 b): an outfit model is served for the worn
-    outfit (``model3d.find_model3d_serving`` — exact, stale or the nearest stand-in; never the plain base)."""
+    outfit (``model3d.find_model3d_serving`` — exact, stale or the nearest stand-in; never the plain base).
+    ``signature`` (``base_body.prepare_outfit_figure``, an outfit rebuild or batch): a stored model of THAT
+    outfit counts (stale ones too); another outfit than the worn one has nothing else to show."""
     from app.core import model3d
     try:
+        if signature:
+            if model3d.find_model3d(character_name, signature, include_stale=True) is not None:
+                return True
+            from app.core.model_refs import current_outfit_state
+            if signature != current_outfit_state(character_name)[2]:
+                return False
         return model3d.find_model3d_serving(character_name)[0] is not None
     except Exception:  # noqa: BLE001 — nothing to show, never a failure of the plan
         logger.debug("Served model of %s unreadable", character_name, exc_info=True)
         return False
 
 
-def _interim_waits(character_name: str, delivered, built) -> bool:
+def _interim_waits(character_name: str, delivered, built, *, signature: str = "") -> bool:
     """Ruling A15 b: whether the figure delivered now holds own-mesh pieces whose mesh needs hub work in an
     interim body shape (``figure.INTERIM_IN_BODY``) that is not the built model (``built``: the figure the
-    stored outfit model of the worn outfit was built as) while the character has a figure to show — then no
-    interim is made: the figure shown stays served until the new one is assembled."""
+    stored outfit model of the worn outfit was built as) while the character has a figure to show
+    (``_figure_served``; ``signature``: of that outfit) — then no interim is made: the figure shown stays
+    served until the new one is assembled."""
     from app.core import figure
     if not any(text == figure.INTERIM_IN_BODY for text in (delivered.interim or {}).values()):
         return False
     if built is not None and built.as_dict() == delivered.as_dict():
         return False
-    return _figure_served(character_name)
+    return _figure_served(character_name, signature)
 
 
 #: The plain body step's label when its rebuild is what the hair wanted in the body costs (ruling F13 a).
@@ -505,6 +548,7 @@ _active: set = set()                      # characters whose worker thread is al
 _current: Dict[str, Dict[str, Any]] = {}  # character -> the run in flight
 _last: Dict[str, Dict[str, Any]] = {}     # character -> the last run that had steps
 _build_locks: Dict[str, threading.Lock] = {}  # character -> held by a run from its plan to its last step
+_pins: Dict[str, Any] = {}                # character -> the wanted figure the run in flight was planned for (A18)
 
 
 #: 409 of a manual render of the dressed views while a Build of the character runs (ruling F16, fix round
@@ -513,6 +557,14 @@ _build_locks: Dict[str, threading.Lock] = {}  # character -> held by a run from 
 #: garment chains any more).
 VIEWS_BUILD_RUNNING = ("Not rendered: a Build runs for this character now and renders the views its figure "
                        "needs — regenerate after the Build if needed.")
+
+
+#: 409 of the base body's own actions (a view's render, "Run skin step", the base model) while a Build of the
+#: character runs (Ruling A20): the Build plans and builds on the base body as it found it — a base edit beside
+#: it made its views and meshes stale while they were built (Kai, 2026-11-13: a new front 34 s after the Build
+#: started).
+BASE_BUILD_RUNNING = ("Not started: a Build runs for this character now and builds on the base body as it is — "
+                      "change the base body after the Build")
 
 
 def running(character_name: str) -> bool:
@@ -642,10 +694,12 @@ def wearers(item_id: str) -> List[str]:
 
 
 def state(character_name: str) -> Dict[str, Any]:
-    """``{running, step, queued, failed, skipped, reason, finished_at}``:
+    """``{running, step, queued, failed, skipped, superseded, reason, finished_at}``:
     ``step`` the step in flight (``{name, label, jobs, item_id, index,
     count}``), ``queued`` the follow-ups kept (0 or 1); ``failed`` /
-    ``skipped`` / ``finished_at`` of the last run that had steps."""
+    ``skipped`` / ``finished_at`` of the last run that had steps;
+    ``superseded`` its ``{step, label, note}`` when it ended superseded
+    (Ruling A18), else None."""
     with _lock:
         running = character_name in _active
         current = dict(_current.get(character_name) or {})
@@ -653,6 +707,7 @@ def state(character_name: str) -> Dict[str, Any]:
         last = dict(_last.get(character_name) or {})
     return {"running": running, "step": current.get("step") if running else None, "queued": queued,
             "failed": dict(last.get("failed") or {}), "skipped": list(last.get("skipped") or []),
+            "superseded": dict(last["superseded"]) if last.get("superseded") else None,
             "reason": current.get("reason") if running else last.get("reason"),
             "finished_at": last.get("finished_at")}
 
@@ -705,11 +760,46 @@ def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
         _run_planned(character_name, reason, profile, automatic=True)
 
 
+def _figure_text(fig) -> str:
+    """How a superseded step names the figure the follow-up builds."""
+    return f"figure {fig.signature} (shape {fig.shape})"
+
+
+def _moved_fields(old: Dict[str, Any], new: Dict[str, Any]) -> str:
+    """The ``Figure.as_dict`` keys that differ, in their order — what moved."""
+    return ", ".join(k for k in dict.fromkeys([*old, *new]) if old.get(k) != new.get(k)) or "figure"
+
+
+def _pin(character_name: str, wanted) -> None:
+    with _lock:
+        _pins[character_name] = wanted
+
+
+def _check_pin(character_name: str) -> None:
+    """``StepSuperseded`` when the wanted figure of now is not the one the run pinned (Ruling A18). A profile
+    that cannot be read is no verdict here (the step reports it)."""
+    with _lock:
+        pinned = _pins.get(character_name)
+    if pinned is None:
+        return
+    try:
+        _profile, wanted, _delivered, _items = _now(character_name)
+    except Exception:  # noqa: BLE001 — the step itself fails on it
+        return
+    if wanted.as_dict() != pinned.as_dict():
+        raise StepSuperseded(SUPERSEDED.format(why=WANTED_MOVED.format(
+            fields=_moved_fields(pinned.as_dict(), wanted.as_dict())), new=_figure_text(wanted)))
+
+
 def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, automatic: bool) -> None:
-    """``_run`` after the profile was read: plan, then every step in order."""
+    """``_run`` after the profile was read: plan, then every step in order. The run pins the wanted figure of
+    its plan (Ruling A18, module docstring); a step that raises ``StepSuperseded`` ends the run without a
+    failure and keeps ONE follow-up."""
+    from app.core import figure
     from app.core.timeutils import utc_now_iso
     explicit = not automatic
-    steps = plan(character_name, profile=profile, explicit=explicit)
+    resolved = figure._delivered(character_name, profile=profile)
+    steps = plan(character_name, profile=profile, explicit=explicit, resolved=resolved)
     if automatic:
         # Rulings 8a / A11: the plain body and the take-out stay listed (the UI's pending change), an automatic
         # run never builds them.
@@ -719,9 +809,11 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
         return
     with _lock:
         _current[character_name] = {"reason": reason, "step": None, "steps": [s.as_dict() for s in steps]}
+    _pin(character_name, resolved[0])
     queue, task_id = _tracked(character_name, f"Build · {character_name} (0/{len(steps)})")
     failed: Dict[str, Dict[str, Any]] = {}
     skipped: List[str] = []
+    superseded: Optional[Dict[str, str]] = None
     try:
         for index, step in enumerate(steps, 1):
             shown = step.running_label(explicit)
@@ -744,7 +836,30 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                 # Ruling 7a: an automatic Build never spends a chain that failed for this input.
                 error = step.failed
             else:
-                error = _run_step(character_name, step, explicit)
+                try:
+                    if step.name not in UNPINNED_STEPS:
+                        _check_pin(character_name)
+                    if step.name == "plain_body":
+                        _wait_base_views(character_name)
+                    error = _run_step(character_name, step, explicit)
+                except StepSuperseded as e:
+                    # Ruling A18: the figure moved — not a failure; ONE follow-up builds the figure wanted now.
+                    superseded = {"step": step.name, "label": step.label, "note": str(e)}
+                    logger.info("Build %s: %s superseded — %s", character_name, step.label, e)
+                    with _lock:
+                        _keep_followup_locked(character_name, SUPERSEDED_REASON, automatic)
+                    if queue is not None and task_id:
+                        try:
+                            queue.track_update_label(task_id, f"Build · {character_name} — superseded, the "
+                                                              "follow-up builds the figure wanted now")
+                        except Exception:  # noqa: BLE001
+                            logger.debug("Build track %s not relabelled", task_id, exc_info=True)
+                    break
+                if not error and step.name in REPIN_STEPS:
+                    try:
+                        _pin(character_name, _now(character_name)[1])   # the Build's own change of the figure
+                    except Exception:  # noqa: BLE001 — the next step reports an unreadable profile
+                        logger.debug("Build %s: pin not renewed", character_name, exc_info=True)
             if error:
                 logger.warning("Build %s: %s failed: %s", character_name, step.label, error)
                 entry = failed.get(step.name)
@@ -764,8 +879,9 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                 logger.info("Build %s: %s done", character_name, step.label)
     finally:
         with _lock:
+            _pins.pop(character_name, None)
             _last[character_name] = {"failed": failed, "skipped": skipped, "reason": reason,
-                                     "finished_at": utc_now_iso()}
+                                     "finished_at": utc_now_iso(), "superseded": superseded}
         if queue is not None and task_id:
             try:
                 queue.track_finish(task_id, error="; ".join(f"{k}: {v['error']}" for k, v in failed.items()))
@@ -783,6 +899,8 @@ def _run_step(character_name: str, step: Step, explicit: bool) -> str:
             with model3d.generation_slot(character_name):
                 return _RUNNERS[step.name](character_name, step, explicit)
         return _RUNNERS[step.name](character_name, step, explicit)
+    except StepSuperseded:
+        raise  # Ruling A18: not the step's failure — ``_run_planned`` ends the run and keeps the follow-up
     except Exception as e:  # noqa: BLE001 — the step failed, the run goes on
         logger.exception("Build %s: %s failed", character_name, step.label)
         return str(e) or type(e).__name__
@@ -795,6 +913,41 @@ def _now(character_name: str):
     profile = _read_profile(character_name)
     wanted, delivered = figure._delivered(character_name, profile=profile)
     return profile, wanted, delivered, figure._items_of(profile, None)
+
+
+#: How long the Build's plain body step waits for base views rendered beside it (Ruling A20), and how often it
+#: looks.
+BASE_VIEWS_WAIT_S = 1800.0
+BASE_VIEWS_POLL_S = 2.0
+
+
+def _wait_base_views(character_name: str, *, timeout_s: Optional[float] = None,
+                     poll_s: Optional[float] = None) -> List[str]:
+    """Ruling A20: before the Build's plain body step judges what is missing, the base views reserved by a
+    render beside it (a view's Regenerate or the skin step started before the Build — the routes refuse new
+    ones while it runs) are waited for, so the plain body is judged and meshed from the views that run
+    leaves, never from the front it replaces. Returns the views still reserved after ``timeout_s`` (then the
+    step goes on: ``generate_base_images`` serialises on the character's render lock)."""
+    import time
+    from app.core import base_body
+    timeout_s = BASE_VIEWS_WAIT_S if timeout_s is None else timeout_s
+    poll_s = BASE_VIEWS_POLL_S if poll_s is None else poll_s
+    deadline = time.monotonic() + timeout_s
+    logged = False
+    while True:
+        busy = [v for v, st in base_body.base_status(character_name).items() if st.get("running")]
+        if not busy or time.monotonic() >= deadline:
+            if busy:
+                logger.warning("Build %s: base views %s still render after %.0f s — the plain body step goes on",
+                               character_name, ", ".join(busy), timeout_s)
+            elif logged:
+                logger.info("Build %s: the base views rendered beside it are done", character_name)
+            return busy
+        if not logged:
+            logger.info("Build %s: waiting for the base views being rendered (%s) before the plain body step",
+                        character_name, ", ".join(busy))
+            logged = True
+        time.sleep(poll_s)
 
 
 def _run_plain_body(character_name: str, step: Step, explicit: bool = False) -> str:
@@ -837,18 +990,31 @@ def _outfit_model(character_name: str, signature: str) -> str:
 DRESSED_VIEWS_MISSING = "Views missing: {views} — nothing is painted or assembled without them"
 
 
+def _view_identity(fig) -> Dict[str, Any]:
+    """What the dressed views of a figure are made for (Ruling A18): its shape, texture, hair and which pieces
+    are in the body / grafted."""
+    return {"shape": fig.shape, "texture": fig.texture, "hair": fig.hair, "in_body": list(fig.in_body),
+            "own": list(fig.own)}
+
+
 def _dressed(character_name: str, wanted) -> str:
     """The views of the figure delivered NOW for the worn outfit (missing ones only); "" when every
     ``dressed_views()`` view is current afterwards, else the error — the recorded refusal (a composite that
-    failed, Ruling C4) or which views are missing. Nothing is built on top of a view that stayed missing."""
+    failed, Ruling C4) or which views are missing. Nothing is built on top of a view that stayed missing.
+    Ruling A18: the views are judged for the figure they were rendered for — when the delivered figure moved
+    while they rendered (a garment fit accepted, the hair changed), ``StepSuperseded``, never "Views
+    missing"."""
     from app.core import base_body
-    _profile, _w, _d, items = _now(character_name)
+    _profile, _w, before, items = _now(character_name)
     try:
         base_body.generate_dressed_images(character_name, pieces=dict(wanted.pieces), items=items,
                                           signature=wanted.signature)
     except Exception as e:  # noqa: BLE001 — reported as the step's error below
         logger.warning("Build %s: dressed views of %s failed: %s", character_name, wanted.signature, e)
-    _profile, _w, delivered, _items = _now(character_name)
+    _profile, wanted_now, delivered, _items = _now(character_name)
+    if _view_identity(delivered) != _view_identity(before):
+        raise StepSuperseded(SUPERSEDED.format(why=VIEWS_MOVED.format(
+            fields=_moved_fields(_view_identity(before), _view_identity(delivered))), new=_figure_text(wanted_now)))
     missing = [v for v in base_body.dressed_views()
                if base_body.dressed_image(character_name, v, wanted.signature, delivered.bsig, fig=delivered) is None]
     if not missing:
@@ -863,26 +1029,54 @@ def _run_interim(character_name: str, step: Step, explicit: bool = False) -> str
     body; ``base_body.prepare_shape`` of the DELIVERED figure), then its
     views, then its outfit model — served while the wanted shape / own
     meshes are built (ruling 2). No garment chain runs before it (ruling
-    A14): the ``pieces`` steps follow."""
-    from app.core import base_body, figure
+    A14): the ``pieces`` steps follow.
+
+    Ruling A18: the step pins its interim body shape — a garment fit accepted meanwhile makes another interim
+    (or none) the one to show: the mesh stops before its next hub stage (``model3d.shape_guard``) and the step
+    ends superseded (``StepSuperseded``) instead of failing on the views of a figure nobody shows."""
+    from app.core import base_body, figure, model3d
     _profile, wanted, delivered, items = _now(character_name)
-    if not figure.is_plain(delivered.shape) and delivered.in_body_own and not figure._shape_stored(
-            character_name, delivered.shape, delivered.bsig):
-        result = base_body.prepare_shape(character_name, delivered, items=items, signature=wanted.signature)
-        if result is not None and not result.get("ok"):
+    shape = delivered.shape
+    result = None
+    if not figure.is_plain(shape) and delivered.in_body_own and not figure._shape_stored(
+            character_name, shape, delivered.bsig):
+        with model3d.shape_guard(character_name, shape, lambda: _now(character_name)[2].shape == shape):
+            result = base_body.prepare_shape(character_name, delivered, items=items, signature=wanted.signature)
+        if result is not None and not result.get("ok") and not result.get("superseded"):
             return str(result.get("error") or "Interim body shape build failed")
+    _profile, wanted_now, delivered_now, _items = _now(character_name)
+    if delivered_now.shape != shape:
+        raise StepSuperseded(SUPERSEDED.format(why=INTERIM_MOVED.format(shape=shape, now=delivered_now.shape),
+                                               new=_figure_text(wanted_now)))
+    if result is not None and result.get("superseded"):
+        # The guard said no, but this interim is the one to show again now: the follow-up builds it.
+        raise StepSuperseded(SUPERSEDED.format(why=str(result.get("error") or "the interim body shape moved"),
+                                               new=_figure_text(wanted_now)))
     return _dressed(character_name, wanted) or _outfit_model(character_name, wanted.signature)
 
 
 def _run_shape(character_name: str, step: Step, explicit: bool = False) -> str:
-    from app.core import base_body, figure
+    """The wanted meshed shape (``base_body.prepare_shape``). Ruling A18: the step pins that shape — a hair or
+    outfit change that wants another one stops the mesh before its next hub stage (``model3d.shape_guard``)
+    and ends the step superseded (``StepSuperseded``)."""
+    from app.core import base_body, figure, model3d
     _profile, wanted, _delivered, items = _now(character_name)
-    if figure.is_plain(wanted.shape):
+    shape = wanted.shape
+    if figure.is_plain(shape):
         return ""
-    result = base_body.prepare_shape(character_name, wanted, items=items, signature=wanted.signature)
-    if result is None or result.get("ok"):
-        return ""
-    return str(result.get("error") or "Body shape build failed")
+    with model3d.shape_guard(character_name, shape, lambda: _now(character_name)[1].shape == shape):
+        result = base_body.prepare_shape(character_name, wanted, items=items, signature=wanted.signature)
+    if result is not None and not result.get("ok") and not result.get("superseded"):
+        return str(result.get("error") or "Body shape build failed")
+    _profile, wanted_now, _d, _items = _now(character_name)
+    if wanted_now.shape != shape:
+        raise StepSuperseded(SUPERSEDED.format(why=SHAPE_MOVED.format(shape=shape, now=wanted_now.shape),
+                                               new=_figure_text(wanted_now)))
+    if result is not None and result.get("superseded"):
+        # The guard said no, but the shape is wanted again now: the follow-up builds it.
+        raise StepSuperseded(SUPERSEDED.format(why=str(result.get("error") or "the body shape moved"),
+                                               new=_figure_text(wanted_now)))
+    return ""
 
 
 def _chain(character_name: str, item_id: str, explicit: bool) -> str:
@@ -954,6 +1148,24 @@ _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
 
 
 # --- The Figure tab's payload ----------------------------------------------------------
+
+#: The note of an own-mesh piece waiting for hub work while a figure is shown (Ruling A15 b): no interim body
+#: is built, so it is not "in the body" — replaces ``figure.INTERIM_IN_BODY`` in the change row and the worn row.
+INTERIM_SHOWN = "The figure built before stays shown until its own mesh is ready"
+
+
+def _waiting_wording(changes: List[Dict[str, Any]], worn: List[Dict[str, Any]]) -> None:
+    """While no interim body is built (Ruling A15 b), the rows of the pieces it would hold say what is shown
+    instead (``INTERIM_SHOWN``): the change's note, and the worn row's note with ``in_body_until`` / ``interim``
+    cleared (the tab writes those as "in the body until …")."""
+    from app.core import figure
+    for change in changes:
+        if change.get("note") == figure.INTERIM_IN_BODY:
+            change["note"] = INTERIM_SHOWN
+    for row in worn:
+        if row.get("in_body_until") == "mesh":
+            row.update(in_body_until=None, interim=False, note=INTERIM_SHOWN)
+
 
 #: The hair row's notes while the hair wanted in the body waits for the plain body's rebuild (ruling F13 a):
 #: the worn HairDeck hair stands in, or (no HairDeck fit) the plain body is bald.
@@ -1474,6 +1686,8 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
                                   and built.shape == wanted.shape else "missing") if wanted.texture else "none"}}
     body["plain"]["jobs"] = _plain_jobs(character_name, wanted.bsig)
     worn = _worn_rows(character_name, wanted, delivered, failures, build["running"], profile)
+    if _interim_waits(character_name, delivered, built):
+        _waiting_wording(changes, worn)
     hair = _hair_row(character_name, profile, wanted, delivered, failures, build["running"])
     for row in worn:
         row["jobs"] = _item_jobs(steps, "pieces", row["item_id"])

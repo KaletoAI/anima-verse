@@ -436,7 +436,7 @@ def main() -> int:
         cut = []
 
         def edit_step(character_name, item_id, fsig, step, view, *, force=False, pair_check=None,
-                      prompt_hints=None, state=None):
+                      prompt_hints=None, state=None, before_composite=None):
             seen.append((step, view))
             path = gs.garment_path(character_name, item_id, fsig, "image", step=step, view=view)
             path.parent.mkdir(parents=True, exist_ok=True)

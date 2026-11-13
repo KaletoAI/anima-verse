@@ -1760,14 +1760,24 @@ def _require_character(character_name: str) -> None:
         raise HTTPException(status_code=404, detail="Character not found")
 
 
+def _refuse_during_build(character_name: str) -> None:
+    """409 ``figure_build.BASE_BUILD_RUNNING`` while a Build of the character runs (Ruling A20): a base view,
+    the skin step or the base model made beside it would change what the Build builds on."""
+    from app.core import figure_build
+    if figure_build.running(character_name):
+        raise HTTPException(status_code=409, detail=figure_build.BASE_BUILD_RUNNING)
+
+
 @router.post("/{character_name}/base-body/images", status_code=202)
 def generate_character_base_body_images(character_name: str, body: BaseBodyImagesRequest,
                                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Render the base-body views in a worker thread: all four (cached ones
     skipped unless ``force``) or one ``view``. 400 for a non-humanoid, 409
-    when the profile picture or (for a single view) the front is missing."""
+    when the profile picture or (for a single view) the front is missing, or
+    while a Build of the character runs (Ruling A20)."""
     from app.core.base_body import MissingInput, check_renderable, start_base_images
     _require_character(character_name)
+    _refuse_during_build(character_name)
     try:
         check_renderable(character_name, view=body.view)
     except MissingInput as e:
@@ -1787,10 +1797,11 @@ def generate_character_base_body_model(character_name: str, body: BaseBodyModelR
                                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Build the rigged base model from the base images in a worker thread
     (cached per base signature unless ``force``). 400 for a non-humanoid,
-    409 without a profile picture or base images, or while a 3D model
-    generation runs for the character."""
+    409 without a profile picture or base images, while a 3D model
+    generation runs for the character, or while its Build runs (Ruling A20)."""
     from app.core.base_body import MissingInput, check_model_ready, start_base_model
     _require_character(character_name)
+    _refuse_during_build(character_name)
     try:
         check_model_ready(character_name)
     except MissingInput as e:
@@ -1834,10 +1845,12 @@ def rerun_character_base_body_skin_step(character_name: str,
                                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Re-run the skin detail step of the base front from its stored neutral
     front, without re-rendering it (``base_skin.apply_skin_step``, a worker
-    thread; one image edit). 400 for a non-humanoid, 409 without a front or
-    while a base view renders."""
+    thread; one image edit). 400 for a non-humanoid, 409 without a front,
+    while a base view renders, or while a Build of the character runs
+    (Ruling A20)."""
     from app.core import base_body, base_skin
     _require_character(character_name)
+    _refuse_during_build(character_name)
     try:
         base_body.check_renderable(character_name, view="back")
     except base_body.MissingInput as e:

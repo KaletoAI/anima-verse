@@ -776,6 +776,14 @@ def request_lod(character_name: str, model_path: Path) -> bool:
 
     The admin stays in charge: the generated mesh is a floor, not a ceiling.
     A better low-poly version made elsewhere can replace it at any time.
+
+    Ruling A19 (Task 11g-fix6): the tier is built from ``model_path``
+    itself (``build_lod(path=…)``), never looked up again — a stale-aware
+    lookup counted the model just staged as missing when the figure had
+    moved meanwhile, and the whole delivery failed. Inside a stage the build
+    runs right away; its failure is a WARNING (``lod_error`` in the model's
+    sidecar, the stale low tier of the file dropped) and never aborts the
+    delivery of the model ("Nachschritte verwerfen nie").
     """
     meta = _read_sidecar(model_path)
     # A base body (and an outfit body) is copied per outfit, never shown at
@@ -784,10 +792,21 @@ def request_lod(character_name: str, model_path: Path) -> bool:
             or meta.get("rig") == "none" or meta.get("base") or meta.get("outfit_body")):
         return False
     if character_name in getattr(_staging, "directories", {}):
-        result = build_lod(character_name, model_path.stem, ratio=_auto_lod_ratio())
-        if not result.get("ok"):
-            raise RuntimeError(result.get("error") or "Low tier preparation failed")
-        return True
+        try:
+            result = build_lod(character_name, model_path.stem, ratio=_auto_lod_ratio(), path=model_path)
+        except Exception as e:  # noqa: BLE001 — a missing distance tier never fails the delivery
+            result = {"ok": False, "error": str(e) or type(e).__name__}
+        if result.get("ok"):
+            return True
+        error = str(result.get("error") or "Low tier preparation failed")
+        logger.warning("Model3D %s: distance mesh of %s not built — the model is delivered without it: %s",
+                       character_name, model_path.name, error)
+        (model_path.parent / LOW_TIER / model_path.name).unlink(missing_ok=True)
+        (model_path.parent / LOW_TIER / model_path.name).with_suffix(".json").unlink(missing_ok=True)
+        meta = _read_sidecar(model_path)
+        meta["lod_error"] = error
+        _publish_sidecar(model_path, meta)
+        return False
     key = str(model_path)
     with _lock:
         if key in _lod_building:
@@ -797,7 +816,7 @@ def request_lod(character_name: str, model_path: Path) -> bool:
     def _run_build() -> None:
         try:
             res = build_lod(character_name, model_path.stem,
-                            ratio=_auto_lod_ratio())
+                            ratio=_auto_lod_ratio(), path=model_path)
             if not res.get("ok"):
                 logger.debug("Model3D %s: LOD not built (%s)",
                              character_name, res.get("error"))
@@ -2476,10 +2495,12 @@ def retexture_model(character_name: str,
 
 @_serial_model
 def build_lod(character_name: str, signature: Optional[str] = None, *,
-              ratio: float = 0.25) -> Dict[str, Any]:
+              ratio: float = 0.25, path: Optional[Path] = None) -> Dict[str, Any]:
     """Builds the reduced (``low``) version of a stored mesh.
 
-    The source is the model of the SERVED combination, the result lands under
+    The source is ``path`` when given (``request_lod``: the model it was
+    handed, Ruling A19 — no lookup), else the model of ``signature`` / of the
+    SERVED combination; the result lands under
     ``model3d/low/`` with the same file name. Rig and skin travel with it —
     Decimate interpolates the vertex weights onto the surviving vertices — so
     the joint count is unchanged and the shared animation clips still apply.
@@ -2487,9 +2508,13 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
     Reduction changes the silhouette; that is its purpose. ``ratio`` is
     therefore the caller's decision, not a default that quietly ages.
     """
-    path = (find_model3d(character_name, signature) if signature
-            else find_model3d_serving(character_name)[0])
-    if not path:
+    if path is not None:
+        # The file handed over, in the directory this run publishes from (the stage of ``_serial_model``).
+        path = get_model3d_dir(character_name) / path.name
+    else:
+        path = (find_model3d(character_name, signature) if signature
+                else find_model3d_serving(character_name)[0])
+    if not path or not path.is_file():
         return {"ok": False, "error": "no_model"}
     if path.suffix.lower() != ".glb":
         return {"ok": False, "error": f"LOD handles GLB, not {path.suffix}"}
@@ -3022,6 +3047,54 @@ def _mesh_hub_stages(character_name: str, signature: str, planned: bool) -> List
     return stages
 
 
+# ── A meshed shape still wanted between its hub stages (Ruling A18, Task 11g-fix6) ──
+# The Build meshes a body shape (``base_body.prepare_shape``) for the figure it planned; a hair change or a
+# garment fit accepted meanwhile can make that shape unwanted while its mesh job runs (Ylva: face and rig were
+# still spent on a shape the hair change had made obsolete). The caller registers a question for the shape in
+# its own thread (``shape_guard``); ``_character_mesh_stages`` asks it before each further hub stage (the face
+# stages, the rig) and stops when the answer is no. A resumed run after a restart has no question: it finishes.
+
+_shape_guards = threading.local()
+#: ``_character_mesh_stages``' answer when the shape it meshes is no longer wanted (Ruling A18).
+SHAPE_NOT_WANTED = ("Stopped before the {stage}: the body shape {signature} is no longer wanted — the follow-up "
+                    "builds the one wanted now")
+
+
+@contextlib.contextmanager
+def shape_guard(character_name: str, signature: str, still_wanted: Callable[[], bool]):
+    """While the caller (this thread) meshes ``signature``: ``still_wanted()`` is asked before every further hub
+    stage of it (``shape_still_wanted``); False stops the run there (Ruling A18)."""
+    guards = getattr(_shape_guards, "map", {})
+    _shape_guards.map = {**guards, (character_name, signature): still_wanted}
+    try:
+        yield
+    finally:
+        _shape_guards.map = guards
+
+
+def shape_still_wanted(character_name: str, signature: str) -> bool:
+    """The answer of the ``shape_guard`` registered for ``signature`` in this thread; True without one, or when
+    the question itself fails (the stage goes on — a guard never fails a build)."""
+    check = getattr(_shape_guards, "map", {}).get((character_name, signature))
+    if check is None:
+        return True
+    try:
+        return bool(check())
+    except Exception:  # noqa: BLE001 — unknown = still wanted
+        logger.debug("Shape guard of %s/%s failed", character_name, signature, exc_info=True)
+        return True
+
+
+def _stop_unwanted(character_name: str, signature: str, stage: str) -> Optional[Dict[str, Any]]:
+    """``{ok: False, error, superseded: True}`` when the shape ``signature`` is no longer wanted before the hub
+    stage ``stage`` (``shape_still_wanted``), else None."""
+    if shape_still_wanted(character_name, signature):
+        return None
+    error = SHAPE_NOT_WANTED.format(stage=stage, signature=signature)
+    logger.info("Model3D %s: %s", character_name, error)
+    return {"ok": False, "error": error, "superseded": True}
+
+
 def generate_for_current_outfit(character_name: str, *, force: bool = False,
                                 backend_glob: str = "",
                                 prefer_cheapest: bool = False,
@@ -3373,6 +3446,10 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
         if op.done("face_before_rig"):
             face_status = op.result("face_before_rig")["meta"]
         if face_status is None or face_status["status"] == "applied":
+            if not op.done("face_before_rig"):
+                stop = _stop_unwanted(character_name, signature, "face")  # Ruling A18
+                if stop is not None:
+                    return stop
             from app.imagegen.base import GenerationCancelled, GpuTaskCancelled, MediaGenerationDisabled, HubJobLost
             try:
                 corrected = _face_source_stages(character_name, op)
@@ -3389,6 +3466,10 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
             for suffix in (".glb", ".json"):
                 frozen = op.abs(f"inputs/unrigged/{signature}{suffix}")
                 _publish_model_bytes(out_dir / "unrigged" / f"{signature}{suffix}", frozen.read_bytes())
+            if not op.done("rig"):
+                stop = _stop_unwanted(character_name, signature, "rig")  # Ruling A18
+                if stop is not None:
+                    return stop
             result = _rig_from_source(character_name, signature, corrected["source"],
                                       replacement_mask=corrected["mask"], op=op)
             if result.get("ok"):
@@ -3401,6 +3482,9 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
     source = (op.abs(f"inputs/unrigged/{signature}.glb") if inputs.get("face_before_rig")
               else op.abs(f"source/{signature}.glb"))
     if not op.done("rig"):
+        stop = _stop_unwanted(character_name, signature, "rig")  # Ruling A18
+        if stop is not None:
+            return stop
         from app.imagegen.base import BackendNotApplicableError
         # Sequential caller-thread submission: the mesh slot has been released.
         try:
