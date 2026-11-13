@@ -139,6 +139,19 @@ SECTIONS = {
                                "profile picture into hair cards (needs an img2hair backend, occasion "
                                "hair_mesh), fitted onto a bald body.",
             },
+            "hair_alpha_cutoff": {
+                "type": "float",
+                "label": "Hair alpha cutoff",
+                "default": 0.15,
+                "min": 0.05,
+                "max": 0.5,
+                "step": 0.01,
+                "description": "Hair cards are drawn from a strand texture: texels whose alpha is below this "
+                               "value are cut out (glTF alphaMode MASK). Lower keeps more of the thin strand "
+                               "ends, higher gives sharper, sparser strands; the useful range is 0.10-0.20. A "
+                               "change re-assembles the served figures on the CPU (no refit, no hub job), and "
+                               "the Hairstyles preview shows it at once.",
+            },
             "dressed_side_views": {
                 "type": "bool",
                 "label": "Dressed side views",
