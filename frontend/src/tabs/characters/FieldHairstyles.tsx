@@ -257,7 +257,7 @@ function HairstyleDetail({ character, entry, onChanged, onRunEnded, onOpenFigure
   const preview = mode === 'hairdeck' && garment?.preview_url ? (
     <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={VIEWER_HEIGHT}
       previewTilt freshness={garment.preview_freshness} builtAt={garment.preview_built_at}
-      collision={info.collision} motion={motion} meshAdjust={meshAdjust} polylines={polylines} focus={focus}
+      alphaCutoff={info.alpha_cutoff} collision={info.collision} motion={motion} meshAdjust={meshAdjust} polylines={polylines} focus={focus}
       motionToolbar={hd ? (
         <HairLiveControls character={character} itemId={itemId} hd={hd} info={info} busy={busy || !info.pipeline}
           previewSwings={motion ? 'yes' : 'no_swing'} onDraft={onDraft} onRuler={setRuler} onSaved={reload} />

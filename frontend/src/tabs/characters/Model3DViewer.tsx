@@ -20,7 +20,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
   restCorrections, restPoseOf, rigHipsHeight,
   standingHipsRef, clipHeightOffsetM, clipHeightGroup, createCollisionOverlay, collidingGarmentMeshes,
-  createGarmentCollision, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
+  createGarmentCollision, applyAlphaCutoff, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
   footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose,
   seatFootLift } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
@@ -285,7 +285,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
-  meshAdjust = null, focus = null }:
+  meshAdjust = null, focus = null, alphaCutoff }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
@@ -293,6 +293,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
     /** When the shown model was built (a SYSTEM stamp from its payload, Ruling UI3 a) — a caption in the
      *  bottom right corner (`BuiltAtCaption`). */
     builtAt?: string | null
+    /** The world's hair-card alpha cutoff (the hair GET's `alpha_cutoff`, strand-hair spec § 6.1): applied live
+     *  to every material the model brought in as glTF MASK (`applyAlphaCutoff`), so a changed setting shows at
+     *  once without a refit. Undefined = the glTF material's own cutoff. */
+    alphaCutoff?: number
     /** Persisted 90°-step orientation fix ({x,y,z} in degrees) — applied live,
      *  without reloading the model. */
     rotation?: { x?: number; y?: number; z?: number }
@@ -522,6 +526,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   // Garments pushed out of the capsules (`createGarmentCollision`, the same
   // routine the 3D client runs) — on by default; the toggle compares.
   const [garmentPushOn, setGarmentPushOn] = useState(true)
+  // Read per frame (like the push toggle): a dragged setting must not re-download the model.
+  const alphaCutoffRef = useRef(alphaCutoff)
+  alphaCutoffRef.current = alphaCutoff
   const [garmentPushable, setGarmentPushable] = useState(false)
   const garmentPushRef = useRef<CollisionPayload | null>(null)
   garmentPushRef.current = garmentPushOn && collision?.capsules?.length ? collision : null
@@ -1283,6 +1290,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         let garmentCollision: GarmentCollision | null = null
         let garmentShown: CollisionPayload | null | undefined
         disposers.push(() => garmentCollision?.dispose())
+        // The cutoff last applied to the materials on screen (`applyAlphaCutoff`); a new garment push swaps in
+        // fresh material clones, so it is applied again then.
+        let alphaShown: number | undefined
         let extensionShown: CollisionPayload | null | undefined
         setGarmentPushable(collidingGarmentMeshes(object).length > 0)
         const clock = new THREE.Clock()
@@ -2440,6 +2450,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             garmentCollision?.dispose()
             garmentShown = garmentPushRef.current
             garmentCollision = createGarmentCollision(THREE, object, garmentShown)
+            alphaShown = undefined
+          }
+          const cutoff = alphaCutoffRef.current
+          if (typeof cutoff === 'number' && cutoff !== alphaShown) {
+            applyAlphaCutoff(object, cutoff)
+            alphaShown = cutoff
           }
           controls.update()
           renderer.render(scene, camera)

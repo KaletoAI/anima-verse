@@ -489,6 +489,9 @@ export interface HairInfo {
   body_url?: string | null
   /** When that base model was built (Ruling UI3 a); null without one. */
   body_built_at?: string | null
+  /** The world's hair-card alpha cutoff (`base_body.hair_alpha_cutoff`, strand-hair spec § 6.1): the preview
+   *  applies it to the MASK cards of the fit it shows. */
+  alpha_cutoff?: number
 }
 
 const POLL_MS = 3000

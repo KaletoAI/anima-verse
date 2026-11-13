@@ -164,7 +164,7 @@ export { wallTransform, boxFaceExtents, boxFaceUVs, extraRotation,
 export { clipOutlinePoints, cutoutPolygons, clipPointInside, clipKeepsPoint,
   cutoutPadding, cutoutDiscardsPoint } from './clipMath'
 export { cutPlaneData } from './depthCutMath'
-export { surfaceFinish } from './materials'
+export { surfaceFinish, applyAlphaCutoff } from './materials'
 export type { VerifyPoint, VerifyBox, VerifyMeasurement, VerifyResult } from './verify'
 
 export { gateWaterExtra, setWaterExtrasEnabled, waterExtrasUniform } from './waterExtras'

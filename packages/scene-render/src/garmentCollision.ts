@@ -58,7 +58,10 @@
  * SHADOWS. Each patched mesh gets its own `customDepthMaterial` /
  * `customDistanceMaterial` with the same patch and the SAME uniform objects,
  * so the shadow is cast by the pushed garment (three copies map, alphaTest,
- * side … onto a custom depth material itself).
+ * side … onto a custom depth material itself at each shadow pass). An
+ * alpha-tested garment (hair cards, glTF MASK) hands its map and cutoff to
+ * both depth materials at creation as well, so they are right before the
+ * first shadow pass and `applyAlphaCutoff` (materials.ts) finds them MASK.
  *
  * OWNERSHIP. Figures in the 3D client are `SkeletonUtils.clone`s that SHARE
  * their template's materials, but capsule uniforms are per figure — so every
@@ -72,7 +75,7 @@
  *
  * `three` is injected, never imported.
  */
-import type { Material, Object3D, SkinnedMesh, Vector4, WebGLProgramParametersWithUniforms } from 'three'
+import type { Material, Object3D, SkinnedMesh, Texture, Vector4, WebGLProgramParametersWithUniforms } from 'three'
 import { bindCollision, HAIR_ONLY_REGIONS, linearScale, transformPoint } from './collision'
 import type { BoundCapsule, CapsuleNow, CollisionBinding, CollisionPayload, Mat4, Vec3 } from './collision'
 import { isGarmentNode } from './figure'
@@ -480,8 +483,20 @@ export function createGarmentCollision(three: Three, root: Object3D,
     const owned: Material[] = []
     const cloneOf = (m: Material) => { const c = patch(m.clone(), uniforms, weighted, m); owned.push(c); return c }
     mesh.material = Array.isArray(original) ? original.map(cloneOf) : cloneOf(original)
-    const depth = patch(new three.MeshDepthMaterial({ depthPacking: three.RGBADepthPacking }), uniforms, weighted)
-    const distance = patch(new three.MeshDistanceMaterial(), uniforms, weighted)
+    const depthMat = new three.MeshDepthMaterial({ depthPacking: three.RGBADepthPacking })
+    const distanceMat = new three.MeshDistanceMaterial()
+    // An alpha-tested garment (hair cards, glTF MASK — strand-hair spec § 6.1): the depth passes cut the
+    // same texels as the colour pass — the same map object and cutoff, never a cutoff of their own.
+    const masked = (Array.isArray(mesh.material) ? mesh.material : [mesh.material])
+      .find(m => m.alphaTest > 0) as (Material & { map?: Texture | null }) | undefined
+    if (masked) {
+      for (const d of [depthMat, distanceMat]) {
+        d.map = masked.map ?? null
+        d.alphaTest = masked.alphaTest
+      }
+    }
+    const depth = patch(depthMat, uniforms, weighted)
+    const distance = patch(distanceMat, uniforms, weighted)
     owned.push(depth, distance)
     const state: State = {
       entry: { mesh, kind, capsules, local: [] }, binds, uniforms, original, owned,

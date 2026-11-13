@@ -2085,8 +2085,10 @@ def get_character_hair(character_name: str, item_id: str = "",
     current base model (``base_body.base_model_info`` url; None without one) — the preview of a ``body``
     hairstyle that is the plain body's. Task UI4: ``step_jobs`` the hub jobs of each step of the hairstyle's
     mode on first attempts (``garments.HUB_JOBS``, ``{}`` for ``body``), ``preview_motion`` the previewed fit's
-    spring chains for the live Stiffness preview (``hair_motion.preview_payload``; None without a preview)."""
-    from app.core import base_body, garment_hair, garment_hairdeck, garments
+    spring chains for the live Stiffness preview (``hair_motion.preview_payload``; None without a preview).
+    ``alpha_cutoff``: the world's hair-card cutoff (``hair_cards.alpha_cutoff``, strand-hair spec § 6.1) the preview
+    applies to the MASK cards it shows."""
+    from app.core import base_body, garment_hair, garment_hairdeck, garments, hair_cards
     from app.core.model_refs import is_humanoid
     from app.models.character import get_character_profile
     from app.models.inventory import get_item
@@ -2177,7 +2179,10 @@ def get_character_hair(character_name: str, item_id: str = "",
                 "preview_motion": preview_motion,
                 "body_url": (model or {}).get("url"),
                 # Ruling UI3 a: when the plain body shown there was built (the 3D preview's caption).
-                "body_built_at": (model or {}).get("created_at") or None}
+                "body_built_at": (model or {}).get("created_at") or None,
+                # The world's hair-card cutoff (strand-hair spec § 6.1): the preview applies it to the MASK
+                # cards of the fit it shows, so a changed setting shows at once without a refit.
+                "alpha_cutoff": hair_cards.alpha_cutoff()}
     from app.core.model_overview import annotate_hair
     return annotate_hair(payload)
 

@@ -17,7 +17,7 @@
  *
  * three is a PARAMETER everywhere, never an import.
  */
-import type { Material, MeshStandardMaterial, Texture } from 'three'
+import type { Material, MeshStandardMaterial, Object3D, Texture } from 'three'
 
 type THREE = typeof import('three')
 
@@ -625,4 +625,45 @@ export function surfaceMaterial(T: THREE, opts: SurfaceMaterialOptions): Materia
                      (opts.mask || fullMask) as Texture)
   }
   return mat
+}
+
+/**
+ * The hair-card alpha cutoff, applied to a loaded model (strand-hair spec
+ * 2026-11-13 § 6.1). The glTF material decides WHICH materials are alpha
+ * tested: a hair card comes in as `alphaMode: MASK`, which GLTFLoader turns
+ * into `alphaTest > 0`; every other material has `alphaTest` 0 and is never
+ * touched. `cutoff` comes from the server (the hair GET's `alpha_cutoff`, the
+ * world setting) — no renderer carries a cutoff of its own.
+ *
+ * On first sight a material's glTF value is recorded in
+ * `userData.gltfAlphaTest`, so a later call (the setting dragged again) still
+ * knows the material was MASK. The meshes' `customDepthMaterial` /
+ * `customDistanceMaterial` (the garment push's patched depth materials) follow
+ * as well, so the shadow cuts the same strands. Crossing no zero, a changed
+ * `alphaTest` needs no recompile. Returns how many materials changed; a
+ * non-positive or non-finite `cutoff` changes nothing.
+ */
+export function applyAlphaCutoff(root: Object3D, cutoff: number): number {
+  if (!Number.isFinite(cutoff) || cutoff <= 0) return 0
+  const seen = new Set<Material>()
+  let changed = 0
+  const visit = (mat: Material | null | undefined) => {
+    if (!mat || seen.has(mat)) return
+    seen.add(mat)
+    const data = mat.userData as { gltfAlphaTest?: number }
+    if (typeof data.gltfAlphaTest !== 'number') data.gltfAlphaTest = mat.alphaTest
+    if (data.gltfAlphaTest > 0 && mat.alphaTest !== cutoff) {
+      mat.alphaTest = cutoff
+      changed++
+    }
+  }
+  root.traverse((o) => {
+    const holder = o as Object3D & { material?: Material | Material[] }
+    const m = holder.material
+    if (Array.isArray(m)) m.forEach(visit)
+    else visit(m)
+    visit(o.customDepthMaterial)
+    visit(o.customDistanceMaterial)
+  })
+  return changed
 }

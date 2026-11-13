@@ -47,8 +47,13 @@
  * [10] Sources: no native dialog in the tab's files; HairDeckPlacement.tsx is gone (no legacy placement form);
  *     the tab names no other flow's run route (`/figure/build` only via FigureBuildLine, no `/model3d/`); every
  *     3D preview passes `builtAt`; the New-hairstyle dialog is a createPortal to document.body.
+ * [11] Alpha cutoff (strand-hair plan 2026-11-13 Task 3, spec § 4 / § 6.1): the HairDeck preview (the viewer of
+ *     `garment.preview_url`) passes the hair GET's `alpha_cutoff` (`alphaCutoff={info.alpha_cutoff}`), and no
+ *     client source (frontend/src, client3d/src, packages/<pkg>/src) carries a cutoff of its own: no assignment of a
+ *     non-zero number to `alphaTest` and no `alphaCutoff` number literal — except `client3d/src/scene/impostors.ts`
+ *     (0.5: the client's own billboard material for distant props, no glTF material and no hair).
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -211,6 +216,27 @@ const viewers = tab.match(/<Model3DViewer\b[\s\S]*?\/>/g) || [];
 check('[10] every 3D preview shows Built <time>', [viewers.length > 0, viewers.every((v) => /builtAt=/.test(v))],
   [true, true]);
 check('[10] dialog through createPortal', /return createPortal\([\s\S]*?document\.body,\s*\)/.test(tab), true);
+
+// [11]
+const hairdeckViewer = viewers.find((v) => /preview_url/.test(v)) || '';
+check('[11] the HairDeck preview applies the GET\'s cutoff', /alphaCutoff=\{info\.alpha_cutoff\}/.test(hairdeckViewer), true);
+const sources = [];
+const walk = (d) => {
+  for (const name of readdirSync(d)) {
+    const f = join(d, name);
+    if (name === 'node_modules') continue;
+    if (statSync(f).isDirectory()) walk(f);
+    else if (/\.(ts|tsx|js|mjs)$/.test(name)) sources.push(f);
+  }
+};
+for (const d of ['frontend/src', 'client3d/src', ...readdirSync(join(ROOT, 'packages')).map((p) => `packages/${p}/src`)]) {
+  if (existsSync(join(ROOT, d))) walk(join(ROOT, d));
+}
+const hardCoded = sources.filter((f) => {
+  const text = readFileSync(f, 'utf8');
+  return /alphaTest\s*[:=]\s*(0*\.\d*[1-9]|[1-9])/.test(text) || /alphaCutoff\s*[:=]\s*\d/.test(text);
+}).map((f) => f.slice(ROOT.length)).filter((f) => f !== 'client3d/src/scene/impostors.ts');
+check('[11] no client carries a cutoff of its own', [sources.length > 100, hardCoded], [true, []]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);
