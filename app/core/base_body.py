@@ -1831,6 +1831,8 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
                                                  piece_state=dict(manifest.get("piece_state") or {}))
     if fig.bsig != bsig or fig.shape != on or mesh_items_unpainted(meta) != sorted({*fig.own, *fig.left_out}):
         return None  # made for another figure
+    if getattr(fig, "texture", "") and composite_outdated(meta):
+        return None  # Ruling A24: composited by older rules — re-composited from its stored draft
     return path
 
 
@@ -1843,6 +1845,29 @@ def is_model_fit(record: Any) -> bool:
     ``_view_current`` refuse it; ``model_fit_remake`` re-makes it from its
     stored draft once at boot."""
     return isinstance(record, dict) and "fit_gate" in record and record.get("fit") != "composite"
+
+
+def composite_outdated(record: Any) -> bool:
+    """Ruling A24 (T15-F1): whether a dressed back/side view's sidecar (``record``) is a composite of an older
+    ``view_composite.VERSION`` — its draft composited and checked by rules that changed since (A16's face check,
+    A21's head) — or one recorded as passing whose numbers fail today's checks (``view_composite.check``). Such
+    a view is re-composited from its stored draft at its next use (no hub job; without a stored
+    draft following its front it is rendered again, counted in the estimate): a meshed shape's view before the
+    shape is meshed (``shape_view`` — a shape already meshed from it keeps it, ``shape_view_shas``), a painted
+    figure's view (``dressed_image`` / the texture store's ``_view_current``); a view copied from its shape (a
+    figure with nothing painted) follows the shape's."""
+    if not isinstance(record, dict) or record.get("fit") != "composite":
+        return False
+    composite = record.get("composite")
+    if not isinstance(composite, dict):
+        return False
+    from app.core import view_composite
+    try:
+        if int(composite.get("version") or 0) < view_composite.VERSION:
+            return True
+    except (TypeError, ValueError):
+        return True
+    return bool(composite.get("ok")) and bool(view_composite.check(composite))
 
 
 def stored_draft(character_name: str, view: str, signature: str, front: Optional[Path]) -> Optional[Path]:
@@ -2059,6 +2084,9 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     base_view = base_views[view]
     final = refs_dir / f"{kind}_{signature}"
     attempts: List[Tuple[Path, Dict[str, Any]]] = []
+    # Ruling A24: a view composited by older rules is re-composited from its stored draft — no hub job: a
+    # composite that passes its checks is published (the gates' warning kept) without a new draft.
+    remake = composite_outdated(_ref_sidecar(final))
     with tempfile.TemporaryDirectory(prefix=".composite_", dir=refs_dir, ignore_cleanup_errors=True) as staging:
         first = 1
         kept = stored_draft(character_name, view, signature, front) if reuse_draft else None
@@ -2078,6 +2106,10 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                         attempt[1]["noise"].get("score"))
         for n in range(first, DRAFT_ATTEMPTS + 1):
             if attempts and attempts[-1][1]["ok"]:
+                break
+            if remake and kept is not None and attempts and (attempts[0][1]["composite"] or {}).get("ok"):
+                logger.info("Dressed %s %s (%s): re-composited from its stored draft (Ruling A24) — no new draft",
+                            view, character_name, signature)
                 break
             draft_stem = Path(staging) / f"draft{n}" / f"{kind}_{signature}"
             draft_stem.parent.mkdir()
@@ -2271,7 +2303,7 @@ def follows_front(view: str, record: Dict[str, Any], draft: Optional[Path], fron
 
 def _view_current(record: Dict[str, Any], bsig: str, base_view: Optional[Path]) -> bool:
     return (record.get("base_signature") == bsig and bool(record.get("base_image_sha256")) and not is_model_fit(record)
-            and record.get("base_image_sha256") == file_sha256(base_view))
+            and not composite_outdated(record) and record.get("base_image_sha256") == file_sha256(base_view))
 
 
 def _store_texture_views(character_name: str, signature: str, tsig: str, views: Iterable[str],
@@ -4086,10 +4118,14 @@ def outfit_body_op_partial(inputs: Dict[str, Any]) -> str:
 
 def shape_view(character_name: str, view: str, shape: str, bsig: str) -> Optional[Path]:
     """The stored view of the shape that is current for the plain body
-    ``bsig`` (``shape_view_shas``), else None."""
+    ``bsig`` (``shape_view_shas``) and — the shape is meshed from it — not a
+    composite of older rules (``composite_outdated``, Ruling A24: re-composited
+    from its stored draft first), else None."""
     from app.core.model_refs import find_ref_image
-    return find_ref_image(character_name, _kind(view), shape) if shape_view_shas(
-        character_name, shape, bsig).get(view) else None
+    if not shape_view_shas(character_name, shape, bsig).get(view):
+        return None
+    path = find_ref_image(character_name, _kind(view), shape)
+    return None if path is None or composite_outdated(_ref_sidecar(path)) else path
 
 
 def shape_view_jobs(character_name: str, shape: str, bsig: str) -> int:

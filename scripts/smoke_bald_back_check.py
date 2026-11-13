@@ -193,7 +193,7 @@ def main() -> int:
 
         def compose(base_view, draft_file, target, *, rule="outfit", background=None, mask_target=None, head=False):
             Path(target).write_bytes(Path(draft_file).read_bytes())
-            rec = {"version": 1, "rule": rule, "ok": True, "iou": 0.99,
+            rec = {"version": vc.VERSION, "rule": rule, "ok": True, "iou": 0.99,
                    "coverage": {"score": 0.9, "region": 0.2}, "mask_share": 0.3}
             rec["reasons"] = vc.check(rec)
             return rec

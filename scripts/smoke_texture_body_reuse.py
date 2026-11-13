@@ -258,7 +258,8 @@ def main() -> int:
         def compose(base_view, draft, target, *, rule="outfit", background=None):
             """The composite stand-in (Task 11g; the real one: smoke_view_composite.py): the draft copied, ok."""
             Path(target).write_bytes(Path(draft).read_bytes())
-            return {"rule": rule, "ok": True, "reasons": [], "iou": 0.99, "coverage": {"score": 0.9}}
+            return {"version": view_composite.VERSION, "rule": rule, "ok": True, "reasons": [], "iou": 0.99,
+                    "coverage": {"score": 0.9}}  # the current version (an older one is re-composited, Ruling A24)
 
         view_composite.compose = compose
         charmod.run_rembg = rembg

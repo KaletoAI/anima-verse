@@ -261,9 +261,9 @@ def main() -> int:
             ok = plan.pop(0)
             Path(target).write_bytes(Path(draft_file).read_bytes())
             if ok == "empty":
-                return {"version": 2, "rule": rule, "ok": True, "empty": True, "iou": 1.0, "reasons": [],
+                return {"version": vc.VERSION, "rule": rule, "ok": True, "empty": True, "iou": 1.0, "reasons": [],
                         "coverage": {"score": None, "region": 0.0, "nothing": True}, "mask_share": 0.0}
-            rec = {"version": 1, "rule": rule, "ok": ok, "iou": 0.97 if ok else 0.9,
+            rec = {"version": vc.VERSION, "rule": rule, "ok": ok, "iou": 0.97 if ok else 0.9,
                    "coverage": {"score": 0.9, "region": 0.2}, "mask_share": 0.3}
             rec["reasons"] = vc.check(rec)
             return rec
@@ -285,7 +285,7 @@ def main() -> int:
                 base_body._dress_view("Demo", "back", **kw)
                 check("(a) refused", "no exception", "OutfitError")
             except base_body.OutfitError as e:
-                failed = {"version": 1, "rule": "outfit", "ok": False, "iou": 0.9,
+                failed = {"version": vc.VERSION, "rule": "outfit", "ok": False, "iou": 0.9,
                           "coverage": {"score": 0.9, "region": 0.2}, "mask_share": 0.3,
                           "reasons": ["the draft does not line up with the base (IoU 0.900 < 0.93)"]}
                 check("(a) the refusal names both drafts' numbers", str(e), vc.refusal("Dressed back", [failed, failed]))

@@ -379,7 +379,8 @@ def main() -> int:
             """The composite stand-in: the (opaque) draft copied onto the target, an ok record."""
             COMPOSITES.append((Path(base_view).name, Path(draft).name, Path(draft).parent.name, rule))
             Path(target).write_bytes(Path(draft).read_bytes())
-            return json.loads(json.dumps(COMPOSITE_OK))
+            # The real composite records the current version (an older one is re-composited, Ruling A24).
+            return {**json.loads(json.dumps(COMPOSITE_OK)), "version": view_composite.VERSION}
 
         expression_regen.render_character_image = render
         view_composite.compose = compose

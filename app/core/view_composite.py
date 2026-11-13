@@ -127,8 +127,10 @@ from app.core.log import get_logger
 
 logger = get_logger("view_composite")
 
-#: Bumped when the composite changes for the same inputs (recorded with every result).
-VERSION = 3
+#: Bumped when the composite changes for the same inputs (recorded with every result). 4: a bald shape's dressed back
+#: takes the draft's head (Ruling A21) and its views are judged by the face (A16) — a dressed view composited before
+#: is re-composited from its stored draft at its next use (Ruling A24, ``base_body.composite_outdated``).
+VERSION = 4
 #: Rows of the shape flow's work images.
 FLOW_HEIGHT = 512
 #: Gaussian sigma (work px) of the flow field.

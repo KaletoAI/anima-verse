@@ -360,8 +360,9 @@ VIEW = {
     "right": ("This is a strict right side profile view, the whole body in profile facing the right edge of the "
               "frame; keep it a side profile view, do not turn the figure toward the camera."),
 }
-# The composite stub's record (Task 11g: the real composite is smoke_view_composite.py).
-COMPOSITE_OK = {"version": 1, "rule": "outfit", "ok": True, "reasons": [], "iou": 0.99,
+# The composite stub's record (Task 11g: the real composite is smoke_view_composite.py); the stub stamps
+# ``view_composite.VERSION`` into it.
+COMPOSITE_OK = {"version": 0, "rule": "outfit", "ok": True, "reasons": [], "iou": 0.99,
                 "coverage": {"score": 0.9, "region": 0.5}, "mask_share": 0.5, "seam_de": 3.0}
 COMPOSITES = []
 BASE_PX = {"front": (200, 10, 10), "back": (10, 200, 10), "left": (10, 10, 200), "right": (200, 200, 10)}
@@ -584,7 +585,8 @@ def main() -> int:
             COMPOSITES.append((Path(base_view).name, Path(draft).name, Path(draft).parent.name, rule,
                                Path(target).parent.name))
             Path(target).write_bytes(Path(draft).read_bytes())
-            return json.loads(json.dumps(COMPOSITE_OK))
+            # The real composite records the current version (an older one is re-composited, Ruling A24).
+            return {**json.loads(json.dumps(COMPOSITE_OK)), "version": view_composite.VERSION}
 
         expression_regen.render_character_image = render
         view_composite.compose = compose
@@ -698,7 +700,8 @@ def main() -> int:
                    "back_draft": draft_file.name,
                    "back_draft_sha256": hashlib.sha256(draft_file.read_bytes()).hexdigest()
                    if draft_file.is_file() else None, "fit": "composite"})
-            check("back sidecar: the composite's record", stored_back.get("composite"), COMPOSITE_OK)
+            check("back sidecar: the composite's record", stored_back.get("composite"),
+                  {**COMPOSITE_OK, "version": view_composite.VERSION})
             check("front extra negative", front_r.get("extra_negative"), negative)
             check("back view flag", [r.get("back_view") for r in dressed_renders], [None, True])
             check("draft stored beside the refs", (draft_file.is_file(),
