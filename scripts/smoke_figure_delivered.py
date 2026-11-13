@@ -29,7 +29,10 @@ CURRENT; ``model_refs.find_ref_image`` -> a path for the base front of BSIG.
 Fixture: "Demo", BSIG = "base0123abcd", variant "rigged". Items
 (outfit_piece): coat [outer] in_body, blouse [top] painted, trousers
 [bottom] own_mesh (clothing), boots [feet] own_mesh (footwear); the hair item
-"hair_demo" (garment kind hair, owner Demo). Worn W = {outer: coat, top:
+"hair_demo" (garment kind hair, owner Demo; no mode = HairDeck) and the
+hairstyle "hair_body" (mode body, "short hair") — the plain body's
+hairstyle (``base_hairstyle``) in every profile, worn unless a test wears
+another (plan Task 13: the hair mode is the worn hairstyle's). Worn W = {outer: coat, top:
 blouse, bottom: trousers}; W+ = W + {feet: boots}.
 
 Keys by hand (canonical JSON = sort_keys, separators ",", ":"; h8 / h12 =
@@ -82,7 +85,7 @@ Expected, derived by hand from the brief's delivered rule:
     grafted; branch True shape S6 (the trousers grafted: an interim shape not
     stored yet counts their base fit), texture T(S6, blouse); branch False
     shape S7.
-[5] Review Focus 2: worn {top: blouse}, hair_method hairdeck, hair_demo worn,
+[5] Review Focus 2: worn {top: blouse}, the HairDeck hairstyle hair_demo worn,
     no HairDeck fit; base haired -> hair "body"; base bald -> "bald".
     With the plain body's prompts older (CURRENT False) pending_changes ==
     [{key body, name "Plain body", wanted "built", delivered OLDER_PROMPTS, note BASE_OUTDATED
@@ -131,7 +134,9 @@ ITEMS = {"coat": _item("coat", ["outer"], "in_body"),
          "trousers": _item("trousers", ["bottom"], "own_mesh"),
          "boots": _item("boots", ["feet"], "own_mesh"),
          "hair_demo": {"id": "hair_demo", "name": "Hair", "category": "garment", "owner": "Demo",
-                       "garment": {"kind": "hair"}}}
+                       "garment": {"kind": "hair"}},
+         "hair_body": {"id": "hair_body", "name": "Short hair", "category": "garment", "owner": "Demo",
+                       "garment": {"kind": "hair", "mesh_mode": "body", "description": "short hair"}}}
 W = {"outer": "coat", "top": "blouse", "bottom": "trousers"}
 STORED = set()
 BASE_FITS = set()
@@ -145,9 +150,11 @@ def set_mode(item_id, mode):
 
 
 def profile(pieces=None, method="body", hair=None):
-    return {"model_pipeline": "base_body", "hair_method": method,
+    """``method`` names the worn hairstyle's mode: body -> hair_body, hairdeck -> ``hair`` (default hair_demo)."""
+    worn = hair or ("hair_body" if method == "body" else "hair_demo")
+    return {"model_pipeline": "base_body", "base_hairstyle": "hair_body",
             "equipped_pieces": dict(W if pieces is None else pieces),
-            "equipped_mesh_pieces": {"hair": hair} if hair else {}, "equipped_items": []}
+            "equipped_mesh_pieces": {"hair": worn}, "equipped_items": []}
 
 
 def stub_dress_text(character_name, view, *, pieces, items, profile=None, mesh_items=()):

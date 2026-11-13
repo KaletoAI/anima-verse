@@ -48,8 +48,9 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
 4. ``pieces`` — one step per own-mesh piece whose chain has something to
    run (``garments.run_estimate``), run through the character's garment
    FIFO (``garments.run_queued``).
-5. ``hair`` — HairDeck hair whose chain has something to run
-   (``garment_hair.ensure_hair_item`` + ``run_queued``).
+5. ``hair`` — the worn HairDeck hairstyle whose chain has something to run
+   (``run_queued``). A humanoid that owns no hairstyle gets its first one
+   (``garment_hair.ensure_hairstyle``) when the Build starts.
 6. ``texture`` — the wanted painted set: its views, when they are missing
    (the paint itself is Blender on the CPU, done by the assembly). Also
    ("Views: …") when no interim / texture step is planned but a view of
@@ -152,7 +153,8 @@ STOP_STEPS = frozenset({"plain_body", "interim", "shape", "texture"})
 #: figure stands on; the pin is taken again after it) and the CPU refits (they fit what is built).
 UNPINNED_STEPS = frozenset({"plain_body", "fits"})
 #: Steps after which the run pins the wanted figure again: they change it themselves — the plain body (the
-#: figure stands on the new body) and the hair (``garment_hair.ensure_hair_item`` wears a new hair item).
+#: figure stands on the new body) and the hair (its chain delivers the worn hairstyle's mesh; the hairstyle itself is
+#: made before the first pin — ``garment_hair.ensure_hairstyle`` at the start of ``_run``).
 REPIN_STEPS = frozenset({"plain_body", "hair"})
 
 #: A step whose figure moved while it ran (Ruling A18): not a failure, no error state — ``state()['superseded']``.
@@ -356,20 +358,13 @@ def _chain_step(character_name: str, name: str, item_id: str, label: str,
 
 
 def _hair_step(character_name: str, profile: Dict[str, Any]) -> Optional[Step]:
-    """The HairDeck chain of the hair item; without an item yet (``ensure_hair_item``
-    makes it in the run) the method's chain from the start (``garments.HUB_JOBS``)."""
-    from app.core import garment_hair, garments
-    method = garment_hair.hair_method(character_name, profile=profile)
-    label = f"Hair · {'HairDeck' if method == 'hairdeck' else method}"
-    item = garment_hair.find_hair_item(character_name, profile)
-    if item and item.get("id"):
-        return _chain_step(character_name, "hair", str(item["id"]), label, profile)
-    if not garment_hair.hair_description(character_name, profile=profile):
-        return None  # bald: no hair item to make (``ensure_hair_item`` refuses it), nothing to build
-    costs = garments.HUB_JOBS.get(f"hair:{method}")
-    if costs is None:
-        return Step("hair", f"{label} (no cost table for {method})", None)
-    return Step("hair", label, sum(costs.values())) if costs else None
+    """The HairDeck chain of the worn hairstyle (``garment_hair.worn_hairstyle``); None without one."""
+    from app.core import garment_hair
+    item = garment_hair.worn_hairstyle(character_name, profile)
+    if not item or not item.get("id"):
+        return None
+    label = f"Hair · {item.get('name') or 'Hairstyle'} (HairDeck)"
+    return _chain_step(character_name, "hair", str(item["id"]), label, profile)
 
 
 def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
@@ -745,7 +740,14 @@ def _run(character_name: str, reason: str, *, automatic: bool = False) -> None:
     ``automatic`` run reports a cached chain failure without running it; a
     manual one retries it, and takes own-mesh pieces whose mesh is ready out
     of the body shape (ruling A11)."""
-    from app.core import figure
+    from app.core import figure, garment_hair
+    try:
+        # Hairstyles (plan Task 13): a humanoid without one gets its first, worn, before anything is planned.
+        garment_hair.ensure_hairstyle(character_name)
+    except ValueError as e:
+        logger.info("Build %s: no hairstyle (%s)", character_name, e)
+    except Exception as e:  # noqa: BLE001 — a hairstyle that cannot be made never blocks the Build
+        logger.warning("Build %s: the first hairstyle was not made: %s", character_name, e)
     try:
         profile = _read_profile(character_name)
     except Exception as e:  # noqa: BLE001 — ruling F13 e: failed, never "nothing to build"
@@ -1097,11 +1099,11 @@ def _run_pieces(character_name: str, step: Step, explicit: bool = False) -> str:
 
 
 def _run_hair(character_name: str, step: Step, explicit: bool = False) -> str:
+    """The worn HairDeck hairstyle's chain (``step.item_id``, else the worn one now)."""
     from app.core import garment_hair
-    try:
-        item_id = garment_hair.ensure_hair_item(character_name)
-    except (ValueError, RuntimeError) as e:
-        return str(e)
+    item_id = step.item_id or garment_hair.worn_hair_id(character_name)
+    if not item_id:
+        return "No hairstyle is worn"
     return _chain(character_name, item_id, explicit)
 
 
@@ -1171,27 +1173,35 @@ def _waiting_wording(changes: List[Dict[str, Any]], worn: List[Dict[str, Any]]) 
 #: the worn HairDeck hair stands in, or (no HairDeck fit) the plain body is bald.
 HAIR_WAITS_HAIRDECK = "Shown with its HairDeck hair until the plain body is rebuilt with the hair"
 HAIR_WAITS_BALD = "Shown bald until the plain body is rebuilt with the hair"
+#: The hair row's note while another body hairstyle waits for its body shape (D4).
+HAIR_WAITS_SHAPE = "Shown with the plain body's hair until this hairstyle's body shape is built"
 
 
 def _hair_row(character_name: str, profile: Dict[str, Any], wanted, delivered,
               failed: Dict[str, Dict[str, Any]], running: bool) -> Dict[str, Any]:
-    """The Figure tab's hair row: ``{mode, state, note, rebuild}`` — ``rebuild``
-    True when the hair is wanted in the body and only the plain body's
-    rebuild puts it there (ruling F13 a; the row's ``jobs`` are then that
-    step's)."""
+    """The Figure tab's hair row: ``{name, item_id, mode, state, note,
+    rebuild}`` of the worn hairstyle (plan Task 13: ``name`` / ``item_id``
+    the hairstyle, ``""`` when none is worn; ``mode`` its mode) —
+    ``rebuild`` True when the hair is wanted in the body and only the plain
+    body's rebuild puts it there (ruling F13 a; the row's ``jobs`` are then
+    that step's)."""
     from app.core import figure, garment_hair
-    mode = garment_hair.hair_method(character_name, profile=profile)
+    item = garment_hair.worn_hairstyle(character_name, profile) or {}
+    head = {"name": str(item.get("name") or ""), "item_id": str(item.get("id") or ""),
+            "mode": garment_hair.hair_mode(character_name, profile=profile)}
     rebuild = wanted.hair == figure.HAIR_BODY and figure.hair_needs_rebuild(character_name, wanted, profile=profile)
     if (failed.get("hair") or {}).get("error"):
-        return {"mode": mode, "state": "failed", "note": str(failed["hair"]["error"]), "rebuild": rebuild}
-    if wanted.hair == delivered.hair and not rebuild:
-        return {"mode": mode, "state": "ready", "note": "", "rebuild": False}
+        return {**head, "state": "failed", "note": str(failed["hair"]["error"]), "rebuild": rebuild}
+    if wanted.hair == delivered.hair and wanted.hair_style == delivered.hair_style and not rebuild:
+        return {**head, "state": "ready", "note": "", "rebuild": False}
     state = "building" if running else "pending"
-    if wanted.hair == figure.HAIR_BODY:
+    if wanted.hair == figure.HAIR_BODY and rebuild:
         note = HAIR_WAITS_HAIRDECK if delivered.hair == figure.HAIR_HAIRDECK else HAIR_WAITS_BALD
-        return {"mode": mode, "state": state, "note": note, "rebuild": True}
+        return {**head, "state": state, "note": note, "rebuild": True}
+    if wanted.hair == figure.HAIR_BODY:
+        return {**head, "state": state, "note": HAIR_WAITS_SHAPE, "rebuild": False}
     shown = "in the body" if delivered.hair == figure.HAIR_BODY else "bald"
-    return {"mode": mode, "state": state, "note": f"Shown {shown} until its HairDeck mesh is built",
+    return {**head, "state": state, "note": f"Shown {shown} until its HairDeck mesh is built",
             "rebuild": False}
 
 

@@ -1882,27 +1882,40 @@ class PieceStateRequest(BaseModel):
 
 
 class HairMethodRequest(BaseModel):
-    # Plain string, validated by garment_hair.set_hair_method (400, not 422).
+    # Plain strings, validated by garment_hair.set_hairstyle_mode (400, not 422). ``item_id`` "" = the worn
+    # hairstyle.
     method: str = ""
+    item_id: str = ""
 
 
 class HairColourRequest(BaseModel):
-    # "#rrggbb" or "" (automatic); validated by garment_hair.set_hair_colour.
+    # "#rrggbb" or "" (automatic); validated by garment_hair.set_hair_colour. ``item_id`` "" = the worn hairstyle.
     hex: str = ""
+    item_id: str = ""
 
 
 class HairPlacementRequest(BaseModel):
     # Numbers or null (automatic); plain Any so garment_hair.set_hair_placement
-    # validates (400 with its message, not a schema 422).
+    # validates (400 with its message, not a schema 422). ``item_id`` "" = the worn hairstyle.
     forward_m: Any = None
     tilt_deg: Any = None
     width_scale: Any = None
+    item_id: str = ""
 
 
 class HairMotionRequest(BaseModel):
     # Plain Any so hair_motion.set_hair_motion validates (400 with its message, not a schema 422).
+    # ``item_id`` "" = the worn hairstyle.
     swing: Any = True
     stiffness: Any = None
+    item_id: str = ""
+
+
+class HairstyleCreateRequest(BaseModel):
+    # Plain strings, validated by garment_hair.create_hairstyle (400 with its message, not a schema 422):
+    # ``description`` "" = the Appearance's hair text, ``mode`` "" = the world's default mode.
+    description: str = ""
+    mode: str = ""
 
 
 class FootwearWidthCapRequest(BaseModel):
@@ -2055,9 +2068,10 @@ def get_character_hair(character_name: str,
     current base model's capsule set (``collision.ensure``) the preview
     pushes the hair out of, None without a preview or base model; ``limits`` the gate limits for the
     tab's chips: ``hairdeck_fit``, those of the hair's length class
-    (``garment_hairdeck.gates_for``, from the gate constants themselves). ``method`` / ``method_source``
-    (``"character"`` | ``"world"``) the hair method in effect, ``world_method``
-    the world default; ``hairdeck`` the HairDeck section of the current
+    (``garment_hairdeck.gates_for``, from the gate constants themselves). ``method`` the worn hairstyle's mode
+    (``method_source`` ``"hairstyle"``), ``world_method`` the world's default mode for a new hairstyle
+    (``garment_hair.default_mode``); ``item_id`` / ``equipped`` the worn hairstyle (else the first owned one,
+    not equipped); ``hairdeck`` the HairDeck section of the current
     ``hsig`` (``garments.hairdeck_panel``, None without an item) and
     ``others`` the kept results of the methods not selected, newest first
     (``garments.other_methods_info``, ``[]`` without an item). Every image carries a ``freshness`` and both previews a
@@ -2072,7 +2086,8 @@ def get_character_hair(character_name: str,
     profile = get_character_profile(character_name) or {}
     humanoid = bool(is_humanoid(character_name, profile=profile))
     in_body = bool(humanoid and garment_hair.hair_in_body(character_name, profile))
-    item = garment_hair.find_hair_item(character_name, profile) if humanoid else None
+    item = (garment_hair.worn_hairstyle(character_name, profile)
+            or next(iter(garment_hair.hairstyles(character_name)), None)) if humanoid else None
     item_id = item["id"] if item else None
     worn = profile.get("equipped_mesh_pieces")
     equipped = bool(item_id and isinstance(worn, dict) and worn.get(garment_hair.HAIR_KIND) == item_id)
@@ -2088,7 +2103,11 @@ def get_character_hair(character_name: str,
         except ValueError:
             info = hairdeck = None
             others = []
-    method, method_source = garment_hair.hair_method_source(character_name, profile=profile)
+    method = garment_hair.hairstyle_mode(item) if item else garment_hair.default_mode()
+    method_source = "hairstyle" if item else "world"
+    # The hairstyle's text; without one the Appearance's, which its first hairstyle will be made from.
+    text = (garment_hair.hairstyle_description(item) if item
+            else garment_hair.appearance_hair_text(character_name, profile=profile)) if humanoid else ""
     # The preview is the hair fitted on the current base model, so the base
     # model's capsule set is what the viewer pushes the hair out of (the
     # same set the outfit models inherit, the same push the 3D client runs).
@@ -2104,16 +2123,16 @@ def get_character_hair(character_name: str,
             logger.exception("Hair GET: no capsule set for %s", character_name)
     payload = {"pipeline": base_body.is_base_pipeline(character_name, profile=profile),
                 "humanoid": humanoid,
-                "description": garment_hair.hair_description(character_name, profile=profile) if humanoid else "",
-                "behind_shoulders": bool(humanoid and garment_hair.hair_behind_shoulders(character_name,
-                                                                                         profile=profile)),
+                "description": text,
+                "behind_shoulders": bool(text and garment_hair.hair_behind_shoulders(
+                    character_name, profile=profile, text=text)),
                 "item_id": item_id, "equipped": equipped, "garment": info, "collision": hair_collision,
                 "limits": {**_garment_limits("hair"),
                            "hairdeck_fit": _gate_limits(garment_hairdeck.gates_for(
-                               garment_hair.hair_length_class(character_name, profile=profile)
-                               if humanoid else None))},
+                               garment_hair.hair_length_class(character_name, profile=profile, text=text)
+                               if text else None))},
                 "method": method, "method_source": method_source,
-                "world_method": garment_hair.world_hair_method(),
+                "world_method": garment_hair.default_mode(),
                 "hairdeck": hairdeck, "others": others,
                 "hair_in_body": in_body,
                 "base_prompts": (base_body.base_prompts_freshness(character_name, profile=profile)
@@ -2123,125 +2142,204 @@ def get_character_hair(character_name: str,
     return annotate_hair(payload)
 
 
-@router.post("/{character_name}/hair/method")
-def set_character_hair_method(character_name: str, body: HairMethodRequest,
-                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Choose how the character's hair is made: ``""`` (the world
-    default ``base_body.hair_method``), ``"body"`` (in the body mesh),
-    or ``"hairdeck"``. 400 for anything else. No GPU work starts: the served hair follows the
-    method's newest accepted fit, so the served model is re-assembled."""
-    from app.core import garment_assembly, garment_hair
+def _hairstyle_id(character_name: str, item_id: str) -> str:
+    """``item_id``, else the worn hairstyle's; 404 without either."""
+    from app.core import garment_hair
+    found = str(item_id or "").strip() or garment_hair.worn_hair_id(character_name)
+    if not found:
+        raise HTTPException(status_code=404, detail="This character wears no hairstyle")
+    return found
+
+
+@router.get("/{character_name}/hairstyles")
+def get_character_hairstyles(character_name: str) -> Dict[str, Any]:
+    """The character's hairstyles (plan 2026-11-12-unified-worn-pieces Task 13):
+    ``{hairstyles: [{id, name, description, mode, worn, plain, freshness:
+    {state, reason}}], default_mode, modes, built_modes}`` — worn first
+    (``garment_hair.hairstyle_list``); ``plain`` marks the hairstyle the
+    plain body is the body of, ``default_mode`` the mode a new one gets,
+    ``modes`` every mode, ``built_modes`` the ones that can be chosen
+    (``haar`` is not built yet). Read-only."""
+    from app.core import garment_hair
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    profile = get_character_profile(character_name) or {}
+    return {"hairstyles": garment_hair.hairstyle_list(character_name, profile=profile),
+            "default_mode": garment_hair.default_mode(),
+            "modes": list(garment_hair.HAIR_MODES), "built_modes": list(garment_hair.BUILT_MODES)}
+
+
+@router.post("/{character_name}/hairstyles", status_code=201)
+def create_character_hairstyle(character_name: str, body: HairstyleCreateRequest,
+                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Create a hairstyle (``description`` "" = the Appearance's hair text,
+    ``mode`` "" = the world default). Starts nothing and wears nothing —
+    except a character's first hairstyle, which is worn. 400 for ``haar``
+    (not built yet), an unknown mode, a non-humanoid or no text. ``{item_id}``."""
+    from app.core import garment_hair
     _require_character(character_name)
     try:
-        saved = garment_hair.set_hair_method(character_name, body.method)
+        item_id = garment_hair.create_hairstyle(character_name, body.description, body.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"item_id": item_id}
+
+
+@router.post("/{character_name}/hairstyles/{item_id}/wear")
+def wear_character_hairstyle(character_name: str, item_id: str,
+                             _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Wear the hairstyle ``item_id`` — an outfit change: the Build is
+    requested (``figure_build.request``), nothing else starts. 400 for an
+    item that is no hairstyle of the character. ``{worn}``."""
+    from app.core import garment_hair
+    _require_character(character_name)
+    try:
+        saved = garment_hair.wear_hairstyle(character_name, item_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not saved:
         raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    return {"worn": item_id}
+
+
+@router.post("/{character_name}/hair/method")
+def set_character_hair_method(character_name: str, body: HairMethodRequest,
+                              _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Set a hairstyle's mode (``item_id`` "" = the worn one): ``""`` (the
+    world default ``base_body.hairstyle_default_mode``), ``"body"`` (in the
+    body mesh) or ``"hairdeck"``; ``"haar"`` is a 400 (not built yet), as is
+    anything else. No GPU work starts: the served model is re-assembled."""
+    from app.core import garment_assembly, garment_hair
+    _require_character(character_name)
+    item_id = _hairstyle_id(character_name, body.item_id)
+    try:
+        saved = garment_hair.set_hairstyle_mode(character_name, item_id, body.method)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
     try:
         garment_assembly.schedule(character_name)
     except Exception as e:  # noqa: BLE001 — a failed schedule must not undo the stored choice
         logger.warning("garment assembly schedule for %s failed: %s", character_name, e)
-    method, source = garment_hair.hair_method_source(character_name)
-    return {"method": method, "method_source": source}
+    from app.models.inventory import get_item
+    return {"method": garment_hair.hairstyle_mode(get_item(item_id)), "method_source": "hairstyle",
+            "item_id": item_id}
 
 
 @router.post("/{character_name}/hair/colour")
 def set_character_hair_colour(character_name: str, body: HairColourRequest,
                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Set the manual HairDeck hair colour (``"#rrggbb"``) or ``""`` for
-    automatic (the profile's named hair colour, else HairDeck's own colours:
-    ``source`` ``"profile"`` / ``"hairdeck"``). 400 on an invalid value. Only
-    the fit fingerprint changes: the next run re-fits from the cached
-    HairDeck job, without a HairDeck call (no run starts here)."""
+    """Set a hairstyle's (``item_id`` "" = the worn one) manual HairDeck hair
+    colour (``"#rrggbb"``) or ``""`` for automatic (the hairstyle text's
+    named colour, else HairDeck's own colours: ``source`` ``"profile"`` /
+    ``"hairdeck"``). 400 on an invalid value. Only the fit fingerprint
+    changes: the next run re-fits from the cached HairDeck job, without a
+    HairDeck call (no run starts here)."""
     from app.core import garment_hair
+    from app.models.inventory import get_item
     _require_character(character_name)
+    item_id = _hairstyle_id(character_name, body.item_id)
     try:
-        saved = garment_hair.set_hair_colour(character_name, body.hex)
+        saved = garment_hair.set_hair_colour(character_name, item_id, body.hex)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not saved:
-        raise HTTPException(status_code=500, detail="Saving the character profile failed")
-    from app.models.character import get_character_profile
-    stored = get_character_profile(character_name) or {}
-    override = garment_hair.hair_colour_override(stored)
-    named = garment_hair.profile_hair_colour(character_name, profile=stored)
+        raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
+    item = get_item(item_id)
+    override = garment_hair.hair_colour_override(garment_hair.hairstyle_settings(item))
+    named = garment_hair.profile_hair_colour(character_name, text=garment_hair.hairstyle_description(item))
     return {"target": override or None, "source": "override" if override else ("profile" if named else "hairdeck")}
 
 
 @router.post("/{character_name}/hair/placement")
 def set_character_hair_placement(character_name: str, body: HairPlacementRequest,
                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Set the HairDeck hair placement: ``forward_m`` (metres along +z),
-    ``tilt_deg`` (forward pitch, degrees) and ``width_scale`` (the sides'
-    reach beyond the head), each a number or null for automatic (forward
-    ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to the brow line,
-    width 1). 400 for a non-number or a value beyond its limit. Only
-    the fit fingerprint changes: the next run re-fits from the cached
-    HairDeck job, without a HairDeck call (no run starts here)."""
+    """Set a hairstyle's (``item_id`` "" = the worn one) HairDeck placement:
+    ``forward_m`` (metres along +z), ``tilt_deg`` (forward pitch, degrees)
+    and ``width_scale`` (the sides' reach beyond the head), each a number or
+    null for automatic (forward ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt
+    solved to the brow line, width 1). 400 for a non-number or a value
+    beyond its limit. Only the fit fingerprint changes: the next run re-fits
+    from the cached HairDeck job, without a HairDeck call (no run starts
+    here)."""
     from app.core import garment_hair
+    from app.models.inventory import get_item
     _require_character(character_name)
+    item_id = _hairstyle_id(character_name, body.item_id)
     try:
-        saved = garment_hair.set_hair_placement(character_name, body.forward_m, body.tilt_deg,
+        saved = garment_hair.set_hair_placement(character_name, item_id, body.forward_m, body.tilt_deg,
                                                 body.width_scale)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not saved:
-        raise HTTPException(status_code=500, detail="Saving the character profile failed")
-    from app.models.character import get_character_profile
-    return {"width_scale": None, **garment_hair.hair_placement(get_character_profile(character_name) or {})}
+        raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
+    return {"width_scale": None,
+            **garment_hair.hair_placement(garment_hair.hairstyle_settings(get_item(item_id)))}
 
 
 @router.post("/{character_name}/hair/motion")
 def set_character_hair_motion(character_name: str, body: HairMotionRequest,
                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Set how HairDeck hair swings on its spring chains: ``swing`` (bool)
-    and ``stiffness`` (a factor × HairDeck's per-chain stiffness within
+    """Set how a hairstyle's (``item_id`` "" = the worn one) HairDeck hair
+    swings on its spring chains: ``swing`` (bool) and ``stiffness`` (a
+    factor × HairDeck's per-chain stiffness within
     ``hair_motion.STIFFNESS_LIMITS``, null = 1). 400 for a non-bool swing or
     a stiffness beyond its limits. Stiffness changes only the motion payload.
-    Swing is a fit input (Ruling H11): a changed Swing starts the hair's
-    fit-only run (a CPU refit from the stored HairDeck seeds, no HairDeck
-    call; ``garments.start_garment`` with ``steps="fit"``) when the character
-    has a hair item. ``{swing, stiffness, refit}`` — the stored settings and
-    whether a refit was started."""
+    Swing is a fit input (Ruling H11): a changed Swing starts the
+    hairstyle's fit-only run (a CPU refit from the stored HairDeck seeds, no
+    HairDeck call; ``garments.start_garment`` with ``steps="fit"``) when it
+    is HairDeck hair. ``{swing, stiffness, refit}`` — the stored settings
+    and whether a refit was started."""
     from app.core import garment_hair, hair_motion
-    from app.models.character import get_character_profile
+    from app.models.inventory import get_item
     _require_character(character_name)
-    before = hair_motion.swing_on(get_character_profile(character_name) or {})
+    item_id = _hairstyle_id(character_name, body.item_id)
+    before = hair_motion.swing_on(garment_hair.hairstyle_settings(get_item(item_id)))
     try:
-        saved = hair_motion.set_hair_motion(character_name, body.swing, body.stiffness)
+        saved = hair_motion.set_hair_motion(character_name, item_id, body.swing, body.stiffness)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not saved:
-        raise HTTPException(status_code=500, detail="Saving the character profile failed")
-    stored = get_character_profile(character_name) or {}
+        raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
+    item = get_item(item_id)
+    stored = garment_hair.hairstyle_settings(item)
     refit = False
-    if hair_motion.swing_on(stored) != before:
-        item = garment_hair.find_hair_item(character_name, stored)
-        if item:
-            from app.core import garments
-            try:
-                garments.start_garment(character_name, item["id"], steps="fit")
-                refit = True
-            except ValueError as e:
-                logger.warning("hair swing of %s: no refit started — %s", character_name, e)
+    if hair_motion.swing_on(stored) != before and garment_hair.hairstyle_mode(item) == garment_hair.HAIRDECK_MODE:
+        from app.core import garments
+        try:
+            garments.start_garment(character_name, item_id, steps="fit")
+            refit = True
+        except ValueError as e:
+            logger.warning("hair swing of %s: no refit started — %s", character_name, e)
     return {**hair_motion.settings(stored), "refit": refit}
 
 
 @router.post("/{character_name}/hair", status_code=202)
 def create_character_hair(character_name: str,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Create (if missing), refresh and wear the hair item, then start its
-    chain (R14: creating the item starts it; every cached step is skipped).
+    """Make sure the character wears a hairstyle (its first one is made from
+    its Appearance, ``garment_hair.create_hairstyle``) and, for HairDeck
+    hair, start its chain (every cached step is skipped).
     ``{item_id, started, queued, position, behind}``: ``started`` False =
-    queued behind the character's running garment run
-    (``garments.start_garment``).
-    400 for a non-humanoid, a character off the base-body pipeline or one
-    without any hair text."""
+    queued behind the character's running garment run, or nothing to run
+    (hair in the body mesh). 400 for a non-humanoid, a character that wears
+    no hairstyle but owns some, or one without any hair text."""
     from app.core import garment_hair, garments
+    from app.models.inventory import get_item
     _require_character(character_name)
+    from app.core.model_refs import is_humanoid
     try:
-        item_id = garment_hair.ensure_hair_item(character_name)
+        if not is_humanoid(character_name):
+            raise ValueError("Hairstyles are for humanoid characters only")
+        item_id = garment_hair.worn_hair_id(character_name)
+        if not item_id and garment_hair.hairstyles(character_name):
+            raise ValueError("No hairstyle is worn — wear one first")
+        item_id = item_id or garment_hair.create_hairstyle(character_name, "", "")
+        if garment_hair.hairstyle_mode(get_item(item_id)) != garment_hair.HAIRDECK_MODE:
+            return {"item_id": item_id, "started": False, "queued": False, "position": 0, "behind": None}
         queued = garments.start_garment(character_name, item_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -2253,16 +2351,18 @@ def create_character_hair(character_name: str,
 @router.post("/{character_name}/hair/equipped")
 def set_character_hair_equipped(character_name: str, body: GarmentEquippedRequest,
                                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Wear or take off the character's hair item (its mesh-item slot only;
-    no 2D path sees it, R2). 404 when the character has no hair item. No GPU
-    work starts — the served model is re-assembled."""
+    """Wear or take off the character's hairstyle (the worn one, else the
+    first owned; its mesh-item slot only, no 2D path sees it, R2). 404 when
+    the character has no hairstyle. No GPU work starts — the served model is
+    re-assembled."""
     from app.core import garment_hair
     from app.models import inventory
     from app.models.character import get_character_profile
     _require_character(character_name)
-    item = garment_hair.find_hair_item(character_name, get_character_profile(character_name) or {})
+    item = (garment_hair.worn_hairstyle(character_name, get_character_profile(character_name) or {})
+            or next(iter(garment_hair.hairstyles(character_name)), None))
     if not item:
-        raise HTTPException(status_code=404, detail="This character has no hair item")
+        raise HTTPException(status_code=404, detail="This character has no hairstyle")
     try:
         if body.equipped:
             saved = inventory.equip_mesh_piece(character_name, item["id"])
@@ -2581,10 +2681,10 @@ def get_character_garment_model(character_name: str, item_id: str, request: Requ
     method" preview). 400 for an unknown method; 404 without a fit or for an
     item that is no garment of this character."""
     from app.core import garments
-    from app.core.garment_hair import HAIR_METHODS
+    from app.core.garment_hair import HAIR_MODES
     from app.core.http_files import snapshot_response
-    if method and method not in HAIR_METHODS:
-        raise HTTPException(status_code=400, detail=f"method must be one of {', '.join(HAIR_METHODS)}")
+    if method and method not in HAIR_MODES:
+        raise HTTPException(status_code=400, detail=f"method must be one of {', '.join(HAIR_MODES)}")
     _require_character(character_name)
     return snapshot_response(None, request, media_type="model/gltf-binary",
                              version=request.query_params.get("v"),

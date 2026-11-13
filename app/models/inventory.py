@@ -498,15 +498,31 @@ def _clean_piece_lora(raw) -> Dict[str, Any]:
     return {"name": nm, "strength": st, "workflow": wf}
 
 
-def _clean_garment(raw) -> Dict[str, str]:
+def _clean_garment(raw) -> Dict[str, Any]:
     """The ``garment`` field of a garment item: ``{kind, slot, body_slot}``
-    as stripped strings. ValueError without a kind or a slot — the slot is
-    the mesh-item slot (a body slot's ``mesh_item``) the item is worn in."""
+    as stripped strings, plus — only when set — a hairstyle's ``mesh_mode``
+    and ``description`` (stripped strings) and its HairDeck settings
+    (``garment_hair.SETTING_KEYS``, a string or a number each; validated by
+    their setters). ValueError without a kind or a slot — the slot is the
+    mesh-item slot (a body slot's ``mesh_item``) the item is worn in."""
+    from app.core.garment_hair import SETTING_KEYS
     if not isinstance(raw, dict):
         raise ValueError("garment must be an object with 'kind' and 'slot'")
-    out = {key: str(raw.get(key) or "").strip() for key in ("kind", "slot", "body_slot")}
+    out: Dict[str, Any] = {key: str(raw.get(key) or "").strip() for key in ("kind", "slot", "body_slot")}
     if not out["kind"] or not out["slot"]:
         raise ValueError("garment needs a non-empty 'kind' and 'slot'")
+    for key in ("mesh_mode", "description"):
+        value = " ".join(str(raw.get(key) or "").split())
+        if value:
+            out[key] = value
+    for key in SETTING_KEYS:
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            continue
+        if isinstance(value, str):
+            value = value.strip()
+        if value != "":
+            out[key] = value
     return out
 
 

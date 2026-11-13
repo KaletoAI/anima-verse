@@ -297,7 +297,7 @@ def main() -> int:
                  "body_slots": {"skin": {"tone": "olive"}, "eyes": {"color": "green"},
                                 "build": {"type": "athletic"}, "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        check("hair in the body mesh: no hair item", (garment_hair.hair_method("Demo"),
+        check("hair in the body mesh: no hair item", (garment_hair.default_mode(),
                                                      inventory.get_equipped_mesh_pieces("Demo")), ("body", {}))
 
         def piece(item_id, slots, *, covers=()):

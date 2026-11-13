@@ -80,7 +80,8 @@ def _fit_missing(name: str, profile: Dict[str, Any], item_id: str, kind: str) ->
         fsig = gs.garment_fsig(name, item_id, profile=profile)
     except ValueError:
         return False
-    return garments._fit_state(name, item_id, fsig, base[1], gs.kind_method(kind, name, profile)) != "accepted"
+    method = gs.kind_method(kind, name, profile, item_id=item_id)
+    return garments._fit_state(name, item_id, fsig, base[1], method) != "accepted"
 
 
 def _wants(name: str, profile: Dict[str, Any], item_id: str, kind: str) -> bool:

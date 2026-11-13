@@ -35,11 +35,12 @@ MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
      Task UI2 were this fixture, not the estimate).
 [E3] The prepared mesh accepted too, the fit missing -> steps ["fit"],
      hub_jobs 0, note "no hub job".
-[E4] Hair H (ensure_hair_item, world method hairdeck), nothing cached, the
-     world method patched per case: hairdeck -> 1 (steps [hairdeck, fit]);
-     body -> no steps, 0, note "Hair comes from the body mesh"; the removed
-     methods edit_chain / subtract stored as the world value (hair-from-body
-     spec 2026-11-11, Task 2) resolve to body -> the same.
+[E4] Hairstyle H (ensure_hairstyle: the first one, the world default mode
+     hairdeck), nothing cached, H's mode per case (plan Task 13: the mode is
+     the hairstyle's): hairdeck -> 1 (steps [hairdeck, fit]); body -> no
+     steps, 0, note "Hair comes from the body mesh"; haar (stored on the
+     item directly — the setter refuses it) -> no steps, 0, note "HAAR hair
+     is not built yet".
 [E5] Footwear S (feet piece, own_mesh): item image 800 px (longer side <
      1024: the source step upscales) -> 1 + 1 + 0 + 1 + 0 + 0 = 3, steps all
      6; a 1200 px image -> 2 (the source step is free); source..mesh done
@@ -97,7 +98,7 @@ def main() -> int:
         paths.init_instance(root / "instance")
         # A hair method that makes a hair item (the default "body" makes none).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "hairdeck"}}))
+                                                        "base_body": {"hairstyle_default_mode": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -164,17 +165,14 @@ def main() -> int:
         check("fit left", brief(estimate(did)), (["fit"], 0, "no hub job", False))
 
         print("[E4] hair per method")
-        hid = garment_hair.ensure_hair_item("Demo")
-        with patch.object(garment_hair, "world_hair_method", return_value="hairdeck"):
-            check("hairdeck", brief(estimate(hid)), (["hairdeck", "fit"], 1, "hairdeck 1", False))
-        from app.core import config as config_mod
-        real_get = config_mod.get
-        for method in ("body", "edit_chain", "subtract"):
-            # The stored world value itself: a removed method is read as the default "body" (world_hair_method).
-            with patch.object(config_mod, "get", side_effect=lambda key, default=None, m=method: (
-                    m if key == "base_body.hair_method" else real_get(key, default))):
-                check(f"world {method}: no steps", brief(estimate(hid)),
-                      ([], 0, "Hair comes from the body mesh", False))
+        hid = garment_hair.ensure_hairstyle("Demo")
+        check("hairdeck", brief(estimate(hid)), (["hairdeck", "fit"], 1, "hairdeck 1", False))
+        check("mode body", garment_hair.set_hairstyle_mode("Demo", hid, "body"), True)
+        check("body: no steps", brief(estimate(hid)), ([], 0, "Hair comes from the body mesh", False))
+        garment = dict(inventory.get_item(hid)["garment"], mesh_mode="haar")
+        check("mode haar stored", inventory.update_item(hid, {"garment": garment}) is not None, True)
+        check("haar: no steps", brief(estimate(hid)), ([], 0, "HAAR hair is not built yet", False))
+        check("back to hairdeck", garment_hair.set_hairstyle_mode("Demo", hid, "hairdeck"), True)
 
         print("[E5] footwear")
         sid = inventory.add_item(name="Shoes", category="outfit_piece", prompt_fragment="black shoes",

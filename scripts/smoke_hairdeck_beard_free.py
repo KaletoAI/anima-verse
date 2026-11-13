@@ -43,7 +43,7 @@ EXPECTED VALUES, DERIVED BY HAND
     version 1, source_sha256 = sha256(P), attempt 1}. Again: no render call (cache by sha), same path.
     Another picture P2: cached None, a new render. A no-op edit model: ATTEMPTS = 2 render calls, both
     refused -> (P2, record accepted False); note() starts "Beard removal refused".
-[5] garment_hsig of Demo (male, hair item, method hairdeck): with "light stubble" =
+[5] garment_hsig of Demo (male, a HairDeck hairstyle — create_hairstyle mode "hairdeck"): with "light stubble" =
     md5({"beard_free": 1, "extra_params": {"input_steps": 30}, "profile_image": sha256(Demo_1.png),
     "version": 1}, sorted keys)[:12]; with "clean-shaven" the same payload without "beard_free"; the fsig
     differs between the two and returns to the first value when "light stubble" is set again.
@@ -275,8 +275,8 @@ def main() -> int:
                         stored[key] = value
                 check(f"profile {sorted(values)}", save_character_profile("Demo", stored), True)
 
-        set_profile(profile_image="Demo_1.png", hair_method="hairdeck")
-        hid = garment_hair.ensure_hair_item("Demo")
+        set_profile(profile_image="Demo_1.png")
+        hid = garment_hair.create_hairstyle("Demo", "", "hairdeck")
 
         def md5(payload):
             return hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False,

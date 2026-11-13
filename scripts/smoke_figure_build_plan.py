@@ -248,8 +248,10 @@ def install_stubs():
         return {"steps": ["worn", "ghost", "mesh", "fit"], "hub_jobs": jobs, "note": "worn 3 + ghost 2 + mesh 1"}
     garments.run_estimate = run_estimate
     garments.cached_failure = lambda c, item_id, profile=None: None
-    garment_hair.find_hair_item = lambda c, profile=None: {"id": "hair_kira"}
-    garment_hair.hair_method = lambda c, profile=None: W.hair
+    # The worn hairstyle (plan Task 13): "hair_kira", its mode the world's wanted hair.
+    garment_hair.worn_hairstyle = lambda c, profile=None: {"id": "hair_kira", "name": "Hair",
+                                                           "garment": {"kind": "hair", "mesh_mode": W.hair}}
+    garment_hair.hair_mode = lambda c, profile=None: W.hair
     garment_refit.work_count = lambda c, profile=None: 0
     model3d.find_model3d = lambda c, sig=None, include_stale=False: Path("m.glb") if W.model_fig else None
     model3d._read_sidecar = lambda path: {"figure": W.model_fig} if W.model_fig else {}
@@ -303,7 +305,7 @@ def install_stubs():
                 out[i] = {"ok": True}
         return out
     garments.run_queued = run_queued
-    garment_hair.ensure_hair_item = lambda c: (W.record("hair_item"), "hair_kira")[1]
+    garment_hair.ensure_hairstyle = lambda c: "hair_kira"
     garment_refit.refit_character = lambda c: (W.record("refit"), [])[1]
     garment_refit.tracked = lambda c, run: run()
 

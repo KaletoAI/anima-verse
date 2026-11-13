@@ -41,7 +41,8 @@ calls; ``garment_refit.work_count`` 0; ``model3d.mesh_hub_stages`` ["mesh",
 "rig"]; ``model3d.find_model3d`` / ``_read_sidecar`` -> the outfit model
 MODEL (None = no model).
 
-Fixture: "Demo", hair in the body (method ``body``), BSIG = "base0123abcd",
+Fixture: "Demo", hair in the body (the worn hairstyle "hair_body", mode
+``body``, is the plain body's — plan Task 13), BSIG = "base0123abcd",
 variant "rigged" (no package declares an exposed-only rig). Items
 (outfit_piece): blouse [top] painted; jacket [outer] own_mesh, closable
 (clothing); boots [feet] own_mesh (footwear). Worn W = {top: blouse, outer:
@@ -157,7 +158,9 @@ def _item(item_id, slots, mode, **extra):
 
 ITEMS = {"blouse": _item("blouse", ["top"], "painted"),
          "jacket": _item("jacket", ["outer"], "own_mesh", closable=True),
-         "boots": _item("boots", ["feet"], "own_mesh")}
+         "boots": _item("boots", ["feet"], "own_mesh"),
+         "hair_body": {"id": "hair_body", "name": "Short hair", "category": "garment", "owner": "Demo",
+                       "garment": {"kind": "hair", "mesh_mode": "body", "description": "short hair"}}}
 W = {"top": "blouse", "outer": "jacket"}
 STORED, FITS, BODY_FITS, VIEWS = set(), set(), set(), set()
 FAILURES = {}
@@ -166,9 +169,9 @@ RUNS = []
 
 
 def profile(pieces=None):
-    return {"model_pipeline": "base_body", "hair_method": "body", "equipped_pieces": dict(W if pieces is None
-                                                                                          else pieces),
-            "equipped_mesh_pieces": {}, "equipped_items": []}
+    return {"model_pipeline": "base_body", "base_hairstyle": "hair_body",
+            "equipped_pieces": dict(W if pieces is None else pieces),
+            "equipped_mesh_pieces": {"hair": "hair_body"}, "equipped_items": []}
 
 
 def stub_dress_text(character_name, view, *, pieces, items, profile=None, mesh_items=(), **_kw):

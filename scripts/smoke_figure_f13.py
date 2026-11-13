@@ -29,12 +29,15 @@ Expected, derived by hand from the rulings:
 [a] Hair in the body on a bald plain body (F13 a). ``stored_base_haired`` on a
     front whose sidecar prompt says "…, completely bald, smooth clean-shaven
     head, …" (the OLDER bald wording) -> False; "… long brown hair …" -> True.
-    Then (stubbed: haired False, prompts not current, hair item "hairitem"
-    worn with an accepted HairDeck fit on "basesha", refresh = views
+    Then (stubbed: haired False, prompts not current; the hairstyle
+    "Long brown hair" — ``create_hairstyle`` mode body, the character's first,
+    so worn and the plain body's (plan Task 13) — carries an accepted
+    HairDeck fit on "basesha" from before its mode was body, refresh = views
     front/back/left/right + model, ``base_rebuild_steps`` = 4 views of 1 +
     mesh 1 + rig 1): ``delivered.hair`` == "hairdeck" (never "bald" while the
     fit exists), ``wanted.hair`` == "body"; ``pending_changes`` holds ONE
-    hair entry ``{key hair, wanted body, delivered hairdeck, note "in the
+    hair entry ``{key hair, name "Long brown hair" (the worn hairstyle's),
+    wanted body, delivered hairdeck, note "in the
     body → plain body rebuild"}`` and NO "body" entry (the hair's rebuild IS
     the plain body's); the plan's plain_body step label "Hair · in the body →
     plain body rebuild (views 4 + mesh + rig)", 6 jobs; ``figure_info``: the
@@ -278,10 +281,9 @@ def main() -> int:
         base_front.with_suffix(".json").write_text(json.dumps(
             {"prompt": "a woman, completely bald, smooth clean-shaven head, standing"}), encoding="utf-8")
         check("older bald wording -> bald", base_body.stored_base_haired("Demo", BSIG), False)
-        p = prof()
-        p["hair_method"] = "body"
-        check("hair in the body", save_character_profile("Demo", p), True)
-        fit_h = put_fit("hairitem", "a1b2c3d4e5f6", method=gs.HAIRDECK)
+        hair_id = garment_hair.create_hairstyle("Demo", "long brown hair", "body")
+        check("hair in the body: the first hairstyle is worn", garment_hair.worn_hair_id("Demo", prof()), hair_id)
+        fit_h = put_fit(hair_id, "a1b2c3d4e5f6", method=gs.HAIRDECK)
         rebuild = [("view front", 1), ("view back", 1), ("view left", 1), ("view right", 1), ("mesh", 1),
                    ("rig", 1)]
         with patch.object(base_body, "stored_base_haired", lambda *_a, **_k: False), \
@@ -289,15 +291,14 @@ def main() -> int:
                 patch.object(base_body, "base_refresh_plan", lambda *_a, **_k: {
                     "signature": BSIG, "views": ["front", "back", "left", "right"], "model": True,
                     "reason": "older prompts"}), \
-                patch.object(base_body, "base_rebuild_steps", lambda *_a, **_k: list(rebuild)), \
-                patch.object(garment_hair, "worn_hair_id", lambda *_a, **_k: "hairitem"):
+                patch.object(base_body, "base_rebuild_steps", lambda *_a, **_k: list(rebuild)):
             wanted, delivered = figure._delivered("Demo", profile=prof())
             check("wanted hair", wanted.hair, figure.HAIR_BODY)
             check("delivered hair: the HairDeck hair stays", delivered.hair, figure.HAIR_HAIRDECK)
             changes = figure.pending_changes("Demo", profile=prof())
             check("one hair change, no body change",
                   [c for c in changes if c["key"] in (figure.HAIR_KEY, figure.BODY_KEY)],
-                  [{"key": "hair", "name": "Hair", "wanted": "body", "delivered": "hairdeck",
+                  [{"key": "hair", "name": "Long brown hair", "wanted": "body", "delivered": "hairdeck",
                     "note": "in the body → plain body rebuild"}])
             plain = [s for s in figure_build.plan("Demo", profile=prof()) if s.name == "plain_body"]
             check("plain body step", [(s.label, s.jobs) for s in plain],
@@ -315,10 +316,6 @@ def main() -> int:
             check("no HairDeck fit -> bald", delivered.hair, figure.HAIR_BALD)
             info = figure_build.figure_info("Demo")
             check("hair row bald", info["hair"]["note"], "Shown bald until the plain body is rebuilt with the hair")
-        p = prof()
-        p.pop("hair_method", None)
-        p["hair_method"] = ""
-        save_character_profile("Demo", p)
         base_front.with_suffix(".json").write_text(json.dumps({"prompt": "a woman, long brown hair"}),
                                                    encoding="utf-8")
 

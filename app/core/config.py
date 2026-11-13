@@ -1700,15 +1700,21 @@ def _migrate_garment_routing(config: dict) -> bool:
 REMOVED_HAIR_OCCASIONS: tuple = ("hair_views_mesh", "hair_source_mesh")
 #: ``base_body.hair_method`` values of the removed methods; they become ``body``.
 REMOVED_HAIR_METHODS: tuple = ("edit_chain", "subtract")
+#: The world setting the hair method was, and the one it is now (plan
+#: 2026-11-12-unified-worn-pieces Task 13: the mode is the hairstyle's; the world only names the mode a NEW
+#: hairstyle gets).
+LEGACY_HAIR_METHOD_KEY = "hair_method"
+HAIRSTYLE_DEFAULT_MODE_KEY = "hairstyle_default_mode"
 
 
 def _migrate_removed_hair_methods(config: dict) -> bool:
     """Drop the routing chains of the removed hair occasions (instance) and
-    turn a world ``base_body.hair_method`` of a removed method into ``body``
-    (world; the default, so the prune leaves no key). A load migration like
-    the routing seeds: ``load()`` applies it in memory, ``migrate_file()``
-    persists it at boot through the layer write path (backup in
-    ``.config-history/`` first). Idempotent."""
+    move a world ``base_body.hair_method`` to ``base_body.
+    hairstyle_default_mode`` (world; a removed method becomes ``body``, the
+    default, so the prune leaves no key; a ``hairstyle_default_mode``
+    already set wins). A load migration like the routing seeds: ``load()``
+    applies it in memory, ``migrate_file()`` persists it at boot through the
+    layer write path (backup in ``.config-history/`` first). Idempotent."""
     changed = False
     routing = (config.get("image_generation") or {}).get("routing")
     if isinstance(routing, dict):
@@ -1717,9 +1723,14 @@ def _migrate_removed_hair_methods(config: dict) -> bool:
                 del routing[occasion]
                 changed = True
     base_body = config.get("base_body")
-    if isinstance(base_body, dict) and base_body.get("hair_method") in REMOVED_HAIR_METHODS:
-        logger.info("World hair method %r removed -> 'body'", base_body["hair_method"])
-        base_body["hair_method"] = "body"
+    if isinstance(base_body, dict) and LEGACY_HAIR_METHOD_KEY in base_body:
+        method = base_body.pop(LEGACY_HAIR_METHOD_KEY)
+        if method in REMOVED_HAIR_METHODS:
+            logger.info("World hair method %r removed -> 'body'", method)
+            method = "body"
+        if method and HAIRSTYLE_DEFAULT_MODE_KEY not in base_body:
+            base_body[HAIRSTYLE_DEFAULT_MODE_KEY] = method
+        logger.info("World hair method %r -> base_body.%s", method, HAIRSTYLE_DEFAULT_MODE_KEY)
         changed = True
     if changed:
         logger.info("Config: settings of the removed hair methods cleared")

@@ -9,9 +9,12 @@ texture) or ``own_mesh`` (its own garment mesh, fitted on top). A figure is
 built from two keys:
 
 - the SHAPE key (``shape_key``): the body mesh, keyed by the in-body set —
-  and in-body hair is part of that set (hair method ``body``). With nothing
-  in the body the shape IS the base (``bsig``): today's base, haired iff
-  the hair is in the body, so no base is rebuilt. Otherwise ``"ob"`` + 8
+  and by the worn hairstyle when the plain body does not carry it
+  (``garment_hair.shape_hair``, plan Task 13 / D4: another ``body``
+  hairstyle puts its text into the shape, a HairDeck one on a haired plain
+  body needs a bald shape). With nothing in the body and the plain body's
+  own hair the shape IS the base (``bsig``): today's base, haired iff its
+  hairstyle is in the body, so no base is rebuilt. Otherwise ``"ob"`` + 8
   hex over ``shape_inputs`` (the prefix and regex of
   ``base_body.OUTFIT_BODY_RE``, so the outfit body folders, collision and
   ``model3d`` keep working). Painted and own-mesh pieces never enter it.
@@ -64,8 +67,8 @@ class WornSets:
     in_body: Tuple[str, ...]      # sorted item ids, mode in_body
     painted: Tuple[str, ...]      # sorted, mode painted (+ every non-garment worn piece)
     own: Dict[str, str]           # item id -> "clothing" | "footwear" (mode own_mesh)
-    hair_in_body: bool            # garment_hair.hair_in_body
-    hair_item: str                # worn HairDeck item id, "" otherwise
+    hair_in_body: bool            # garment_hair.hair_in_body: the worn hairstyle's mode is ``body``
+    hair_item: str                # worn HairDeck hairstyle id, "" otherwise
     #: The worn ``{slot: item id}`` the sets were resolved from — the dress
     #: texts of ``shape_inputs`` / ``texture_key`` are composed from it.
     pieces: Dict[str, str] = field(default_factory=dict)
@@ -74,6 +77,11 @@ class WornSets:
     #: an open in-body / painted piece has its own shape / texture key; all
     #: closed keys every text as before (D-A1).
     open: Tuple[str, ...] = ()
+    #: What the worn hairstyle adds to the body shape (``garment_hair.shape_hair``, D4): "" (the plain body
+    #: carries it), its text (another ``body`` hairstyle) or ``garment_hair.BALD``; "" off the pipeline.
+    hair_shape: str = ""
+    #: The worn hairstyle's id when it is not the plain body's (``garment_hair.hair_style_id``), else "".
+    hair_style: str = ""
 
 
 def _open_map(open_ids) -> Dict[str, str]:
@@ -101,11 +109,12 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
     Own-mesh pieces are the worn garments (``garment_set.worn_garments``,
     empty off the pipeline) among ``pieces``; in-body pieces need the
     pipeline as well; everything else — mode painted, or no outfit piece at
-    all — is painted. ``hair_item``: the worn own hair item when the hair is
-    NOT in the body (a leftover hair item is never served with in-body
-    hair), else ``""``. ``open``: the worn closable pieces worn open —
+    all — is painted. ``hair_item``: the worn hairstyle when it is HairDeck
+    hair, else ``""``. ``open``: the worn closable pieces worn open —
     ``piece_state`` (``{item_id: "open"}``), None → the profile's
-    (``outfit_options.piece_states``)."""
+    (``outfit_options.piece_states``). ``hair_shape`` / ``hair_style``: the
+    worn hairstyle against the plain body's (``garment_hair.shape_hair`` /
+    ``hair_style_id``), on the pipeline only."""
     from app.core import base_body, garment_hair, garment_set
     from app.core.outfit_options import OPEN, piece_states
     from app.models.inventory import get_item
@@ -123,13 +132,17 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
     in_body = sorted(i for i in ids - set(own)
                      if pipeline and garment_set.mesh_mode_of(get_item(i)) == garment_set.IN_BODY)
     painted = sorted(ids - set(own) - set(in_body))
-    hair_in = garment_hair.hair_in_body(character_name, profile)
+    mode = garment_hair.hair_mode(character_name, profile=profile)
     state = piece_states(profile, worn) if piece_state is None else (piece_state or {})
     opened = sorted(i for i in ids if state.get(i) == OPEN and garment_set.closable_of(get_item(i)))
+    hair_pipeline = pipeline
     return WornSets(in_body=tuple(in_body), painted=tuple(painted), own=dict(sorted(own.items())),
-                    hair_in_body=hair_in,
-                    hair_item="" if hair_in else garment_hair.worn_hair_id(character_name, profile),
-                    pieces=dict(worn), open=tuple(opened))
+                    hair_in_body=mode == garment_hair.BODY_MODE,
+                    hair_item=(garment_hair.worn_hair_id(character_name, profile)
+                               if mode == garment_hair.HAIRDECK_MODE else ""),
+                    pieces=dict(worn), open=tuple(opened),
+                    hair_shape=garment_hair.shape_hair(character_name, profile) if hair_pipeline else "",
+                    hair_style=garment_hair.hair_style_id(character_name, profile) if hair_pipeline else "")
 
 
 def _dress_texts(character_name: str, sets: WornSets, *, left_out, items: Optional[list],
@@ -159,16 +172,22 @@ def shape_inputs(character_name: str, sets: WornSets, *, bsig: str, variant: str
     """What a meshed shape is made of: the base signature and variant, the
     hair-in-body switch, the side-view switch and the dress text of every
     dressed view with the painted and own-mesh pieces left out (the in-body
-    pieces only; held items never enter the body)."""
+    pieces only; held items never enter the body) — and ``hair`` (D4) only
+    when the worn hairstyle is not the plain body's own hair
+    (``WornSets.hair_shape``: another hairstyle's text, or ``"bald"``), so
+    every shape stored before hairstyles keeps its key byte for byte."""
     from app.core import base_body
     profile = _dressed_profile(_profile_of(character_name, profile), sets, [])
-    return {"version": SHAPE_VERSION,
-            "base_signature": bsig,
-            "base_variant": variant,
-            "hair_in_body": sets.hair_in_body,
-            "side_views": base_body.side_views_dressed(),
-            "dress_text": _dress_texts(character_name, sets, left_out=(*sets.painted, *sets.own), items=[],
-                                       profile=profile)}
+    inputs = {"version": SHAPE_VERSION,
+              "base_signature": bsig,
+              "base_variant": variant,
+              "hair_in_body": sets.hair_in_body,
+              "side_views": base_body.side_views_dressed(),
+              "dress_text": _dress_texts(character_name, sets, left_out=(*sets.painted, *sets.own), items=[],
+                                         profile=profile)}
+    if sets.hair_shape:
+        inputs["hair"] = sets.hair_shape
+    return inputs
 
 
 def shape_key_of(inputs: Dict[str, Any]) -> str:
@@ -179,9 +198,10 @@ def shape_key_of(inputs: Dict[str, Any]) -> str:
 
 def shape_key(character_name: str, sets: WornSets, *, bsig: str, variant: str,
               profile: Optional[Dict[str, Any]] = None) -> str:
-    """``bsig`` for the plain body (nothing in the body), else ``"ob"`` + the
-    first 8 hex of sha256 over the canonical JSON of ``shape_inputs``."""
-    if not sets.in_body:
+    """``bsig`` for the plain body (nothing in the body, the plain body's own
+    hair), else ``"ob"`` + the first 8 hex of sha256 over the canonical JSON
+    of ``shape_inputs``."""
+    if not sets.in_body and not sets.hair_shape:
         return bsig
     return shape_key_of(shape_inputs(character_name, sets, bsig=bsig, variant=variant, profile=profile))
 
@@ -327,9 +347,12 @@ def stored_shape(character_name: str, key: str, *, view_shas: Dict[str, str]) ->
 #    without their mesh and some own-mesh pieces whose mesh is ready —
 #    ``notes`` ``READY_IN_BODY``). Only the next manual Build takes them out
 #    of the shape (``taking_out``); an automatic one spends nothing on it.
-# 3. Hair: HairDeck without a fit on the delivered shape is shown as the
-#    plain body has it — ``"body"`` when that body is haired
-#    (``base_body.stored_base_haired``), else ``"bald"``. Hair wanted IN the
+# 3. Hair (the worn hairstyle, plan Task 13): HairDeck hair on the plain body
+#    when that body is haired (``base_body.stored_base_haired``) is shown as
+#    the plain body has it, ``"body"`` — its bald shape (D4) is not built yet;
+#    HairDeck without a fit on the delivered shape is ``"bald"``. Another
+#    ``body`` hairstyle lives in its body shape; on the plain body meanwhile
+#    the plain body's hair shows (``hair_style`` ""). Hair wanted IN the
 #    body on a plain body rendered bald (the hair mode was switched; only a
 #    rebuild of the plain body puts the hair in, ruling 8a: a manual Build)
 #    keeps the worn HairDeck hair meanwhile (ruling F13 a,
@@ -410,13 +433,19 @@ class Figure:
     #: (``notes`` ``READY_IN_BODY``). The assembly grafts each once its fit
     #: exists (``base_body.mesh_record``: ``mesh_items.in_body``).
     in_body_own: Tuple[str, ...] = ()
+    #: The hairstyle shown when it is not the plain body's (``WornSets.hair_style``; "" while the plain body's
+    #: hair or no hair is shown) — two figures that differ only in the worn HairDeck hairstyle differ here.
+    hair_style: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         """The JSON form an outfit model sidecar records as ``figure`` —
         ``open`` only when a piece is open (an all-closed figure records
         what it recorded before the open / closed option, D-A1),
         ``shown_closed`` only when a piece stands in closed, ``in_body_own``
-        only when an own-mesh piece is in the body shape."""
+        only when an own-mesh piece is in the body shape, ``hair_style`` only
+        when another hairstyle than the plain body's is shown (a figure of
+        the plain body's hairstyle records what it recorded before
+        hairstyles)."""
         out = {"signature": self.signature, "bsig": self.bsig, "shape": self.shape, "texture": self.texture,
                "in_body": list(self.in_body), "painted": list(self.painted), "own": list(self.own),
                "left_out": dict(self.left_out), "interim": dict(self.interim), "notes": dict(self.notes),
@@ -427,6 +456,8 @@ class Figure:
             out["shown_closed"] = list(self.shown_closed)
         if self.in_body_own:
             out["in_body_own"] = list(self.in_body_own)
+        if self.hair_style:
+            out["hair_style"] = self.hair_style
         return out
 
     @classmethod
@@ -443,7 +474,7 @@ class Figure:
                    in_body=ids("in_body"), painted=ids("painted"), own=ids("own"), left_out=texts("left_out"),
                    interim=texts("interim"), notes=texts("notes"), hair=str(data.get("hair") or HAIR_BODY),
                    pieces=texts("pieces"), open=ids("open"), shown_closed=ids("shown_closed"),
-                   in_body_own=ids("in_body_own"))
+                   in_body_own=ids("in_body_own"), hair_style=str(data.get("hair_style") or ""))
 
     def state_of(self, item_id: str) -> str:
         """Where a worn piece is in this figure: ``in_body`` / ``painted`` /
@@ -472,7 +503,7 @@ def shape_plan(character_name: str, fig: "Figure", items: Optional[list], *,
     extra = (set(fig.in_body) - set(sets.in_body)) & set(sets.own)
     sets, _notes = _interim_sets(sets, extra) if extra else _refused_sets(sets)
     variant = predicted_variant(character_name, sets, _items_of(profile, items), profile=profile)
-    if not sets.in_body:
+    if not sets.in_body and not sets.hair_shape:
         return sets, variant, None
     return sets, variant, shape_inputs(character_name, sets, bsig=fig.bsig, variant=variant, profile=profile)
 
@@ -542,8 +573,8 @@ def _wanted(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Di
     figure = Figure(signature=_signature(character_name, sets.pieces, items, profile, sets.open), bsig=bsig,
                     shape=shape, texture=texture, in_body=sets.in_body, painted=sets.painted,
                     own=tuple(sorted(sets.own)), notes=notes if not is_plain(shape) else {},
-                    hair=HAIR_BODY if sets.hair_in_body else HAIR_HAIRDECK, pieces=dict(sets.pieces),
-                    open=sets.open)
+                    hair=HAIR_BODY if sets.hair_in_body else HAIR_HAIRDECK if sets.hair_item else HAIR_BALD,
+                    pieces=dict(sets.pieces), open=sets.open, hair_style=sets.hair_style)
     return figure, sets, variant
 
 
@@ -864,15 +895,24 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     notes.update({item_id: SHOWN_CLOSED for item_id in shown_closed})
     # 3. Hair.
     hair = wanted.hair
+    hair_style = wanted.hair_style
     # On an interim shape not stored yet the hair's base fit counts (its fit there is CPU work after the shape).
     hair_on = bsig if meshed and not choice.stored else choice.shape
-    if hair == HAIR_HAIRDECK and not _fit_on(character_name, sets.hair_item, shape=hair_on, base_sha=base_sha,
-                                             profile=profile)[0]:
-        hair = HAIR_BODY if base_body.stored_base_haired(character_name, bsig) else HAIR_BALD
+    plain_haired = not meshed and bool(base_body.stored_base_haired(character_name, bsig))
+    if hair == HAIR_HAIRDECK and plain_haired:
+        # D4: HairDeck hair is never put on a haired plain body — its bald shape is not built yet, so the
+        # plain body is shown with its own hair meanwhile.
+        hair, hair_style = HAIR_BODY, ""
+    elif hair == HAIR_HAIRDECK and not _fit_on(character_name, sets.hair_item, shape=hair_on, base_sha=base_sha,
+                                               profile=profile)[0]:
+        hair, hair_style = HAIR_BALD, ""
     elif hair == HAIR_BODY and base_body.stored_base_haired(character_name, bsig) is False:
         # Ruling F13 a: the worn HairDeck hair stays until the plain body is rebuilt with the hair.
         hair = HAIR_HAIRDECK if _interim_hair_on(character_name, shape=hair_on, bsig=bsig, base_sha=base_sha,
                                                  profile=profile) else HAIR_BALD
+    elif hair == HAIR_BODY and sets.hair_shape and not meshed:
+        # D4: another body hairstyle lives in its body shape; until that is built the plain body's hair shows.
+        hair_style = ""
     # 5. The texture of what is painted, on the delivered shape.
     if meshed and choice.refusal:
         texture = ""
@@ -885,7 +925,7 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
                        in_body=tuple(sorted(choice.in_body)), painted=tuple(sorted(choice.painted)), own=own,
                        left_out={}, interim=dict(choice.interim), notes=notes, hair=hair,
                        pieces=dict(sets.pieces), open=sets.open, shown_closed=shown_closed,
-                       in_body_own=tuple(choice.in_body_own))
+                       in_body_own=tuple(choice.in_body_own), hair_style=hair_style)
     return wanted, delivered
 
 
@@ -939,6 +979,11 @@ def delivered_figure_cached(character_name: str, *, profile: Optional[Dict[str, 
     profile = _profile_of(character_name, profile)
     worn = pieces if pieces is not None else (profile.get("equipped_pieces") or {})
     ids = sorted({str(v) for v in (worn or {}).values() if v})
+    # The hairstyles' modes and texts decide the hair and the shape (plan Task 13).
+    from app.core.garment_hair import BASE_HAIRSTYLE_KEY
+    mesh = profile.get("equipped_mesh_pieces")
+    ids = sorted({*ids, *(str(v) for v in (mesh.values() if isinstance(mesh, dict) else ()) if v),
+                  *([str(profile[BASE_HAIRSTYLE_KEY])] if profile.get(BASE_HAIRSTYLE_KEY) else [])})
     key = (character_name, _generation[0], hashlib.sha1(_canonical(profile)).hexdigest(),
            _canonical({"pieces": pieces, "items": items, "piece_state": piece_state}),
            hashlib.sha1(_canonical({i: get_item(i) for i in ids})).hexdigest())
@@ -965,8 +1010,9 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
     ``READY_IN_BODY`` — ruling A11; a piece meshed in by the refusal branch
     is delivered as wanted), then ``body`` when the plain body is missing or was
     rendered with older prompts (``base_body.OLDER_PROMPTS``; its ``note`` =
-    ``BASE_MISSING`` / ``BASE_OUTDATED``, ruling 8a), then ``hair``
-    when the hair is not delivered as its method says. Read-only.
+    ``BASE_MISSING`` / ``BASE_OUTDATED``, ruling 8a), then ``hair`` (named
+    after the worn hairstyle) when the hair is not delivered as its mode says
+    or another hairstyle than the worn one is shown. Read-only.
 
     Open / closed (plan Task 11a): ``{key: "<item_id>:state", name, wanted,
     delivered}`` (``"open"`` / ``"closed"``) for a worn closable piece whose
@@ -1001,11 +1047,13 @@ def _open_mesh_missing(wanted: "Figure", delivered: "Figure") -> Dict[str, str]:
 
 
 def hair_needs_rebuild(character_name: str, wanted: "Figure", *, profile: Optional[Dict[str, Any]] = None) -> bool:
-    """Whether the hair is wanted in the body while the stored plain body was rendered bald and its prompts
-    are no longer current (the hair text is in them now) — the plain body's rebuild is what the hair change
-    costs (ruling F13 a). A character without hair text keeps its bald plain body: no rebuild."""
+    """Whether the plain body's own hairstyle (``wanted.hair_style`` "") is wanted in the body while the
+    stored plain body was rendered bald and its prompts are no longer current (the hair text is in them now)
+    — the plain body's rebuild is what the hair change costs (ruling F13 a). A character without hair text
+    keeps its bald plain body: no rebuild. Another body hairstyle is made as a body shape instead (D4)."""
     from app.core import base_body
-    return (wanted.hair == HAIR_BODY and base_body.stored_base_haired(character_name, wanted.bsig) is False
+    return (wanted.hair == HAIR_BODY and not wanted.hair_style
+            and base_body.stored_base_haired(character_name, wanted.bsig) is False
             and not base_body.prompts_current(character_name, wanted.bsig,
                                               profile=_profile_of(character_name, profile)))
 
@@ -1037,11 +1085,14 @@ def _pending(character_name: str, wanted: "Figure", delivered: "Figure",
     elif not hair_rebuild and not base_body.prompts_current(character_name, wanted.bsig, profile=profile):
         out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built",
                     "delivered": base_body.OLDER_PROMPTS, "note": BASE_OUTDATED})
+    from app.core.garment_hair import worn_hairstyle
+    hairstyle = worn_hairstyle(character_name, profile)
+    hair_name = str((hairstyle or {}).get("name") or "Hair")
     if hair_rebuild:
-        out.append({"key": HAIR_KEY, "name": "Hair", "wanted": wanted.hair, "delivered": delivered.hair,
+        out.append({"key": HAIR_KEY, "name": hair_name, "wanted": wanted.hair, "delivered": delivered.hair,
                     "note": HAIR_REBUILD})
-    elif wanted.hair != delivered.hair:
-        out.append({"key": HAIR_KEY, "name": "Hair", "wanted": wanted.hair, "delivered": delivered.hair})
+    elif wanted.hair != delivered.hair or wanted.hair_style != delivered.hair_style:
+        out.append({"key": HAIR_KEY, "name": hair_name, "wanted": wanted.hair, "delivered": delivered.hair})
     return out
 
 

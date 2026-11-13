@@ -280,7 +280,7 @@ def main() -> int:
         expression_regen.render_character_image = fake_render
 
         def fake_dress_view(character_name, view, *, signature, bsig, pieces, items, profile, front, base_views,
-                            refs_dir, size, mesh_items=None, texture=None, reuse_draft=True):
+                            refs_dir, size, mesh_items=None, texture=None, reuse_draft=True, hair=None):
             backs.append((view, signature))
             # As the real two-step view: the draft from the front (sidecar front_sha256), the fit naming the draft.
             draft = png(refs_dir / base_body.DRAFT_DIR / f"{base_body._kind(view)}_{signature}.png", (0, 0, 60))

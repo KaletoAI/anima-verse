@@ -404,7 +404,7 @@ def main() -> int:
             garments._fit, garment_images.run_edit_step, garment_images.cut_out, garment_mesh.generate = saved
         ENQUEUED = []
         real_enqueue = garments.enqueue_garment
-        real_ensure_hair = garment_hair.ensure_hair_item
+        real_ensure_hair = garment_hair.ensure_hairstyle
         real_request = figure_build.request
 
         def recording_enqueue(character_name, item_id, automatic=True):
@@ -415,9 +415,9 @@ def main() -> int:
             return done
 
         def no_hair_item(name):
-            raise ValueError("hair creation stubbed off")
+            return ""  # hairstyle creation stubbed off
         garments.enqueue_garment = recording_enqueue
-        garment_hair.ensure_hair_item = no_hair_item
+        garment_hair.ensure_hairstyle = no_hair_item
         REQUESTS = []
         figure_build.request = lambda name, trigger: REQUESTS.append((name, trigger)) or True
         try:
@@ -426,7 +426,7 @@ def main() -> int:
             build_chains("Kira")
         finally:
             garments.enqueue_garment = real_enqueue
-            garment_hair.ensure_hair_item = real_ensure_hair
+            garment_hair.ensure_hairstyle = real_ensure_hair
             figure_build.request = real_request
         check("the Build's chain steps enqueue (footwear too since Task 25: fit-only, its item steps cached)",
               ENQUEUED, [dress, heels])

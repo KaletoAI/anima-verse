@@ -59,7 +59,7 @@ A refusal ends the run (``{ok: False, step, error, gates}`` + the in-memory
 status); nothing downstream runs, and an already accepted fit keeps being
 served (R11 — a refused re-run never makes the figure bald).
 
-Hair made by HairDeck (``garment_hair.hair_method``; plan
+A hairstyle made by HairDeck (``garment_hair.hairstyle_mode``; plan
 ``docs/superpowers/plans/2026-11-09-hairdeck-hair.md``, Task 4) runs
 ``hairdeck → fit`` instead (``garment_store.steps_for``):
 
@@ -843,11 +843,21 @@ def _placement_summary(placement: Any) -> Optional[Dict[str, Any]]:
     return {**{k: placement.get(k) for k in keys}, "hairline_y": placement.get("hairline_pushed_y")}
 
 
+def _hair_of(character_name: str, item_id: str) -> Tuple[Dict[str, Any], str]:
+    """``(settings, text)`` of the hairstyle ``item_id``: its HairDeck settings
+    (``garment_hair.hairstyle_settings`` — colour, placement, Swing) and its
+    description (the named colour and the length class come from it)."""
+    from app.core import garment_hair
+    from app.models.inventory import get_item
+    item = get_item(item_id)
+    return garment_hair.hairstyle_settings(item), garment_hair.hairstyle_description(item)
+
+
 def _fit_seed(character_name: str, item_id: str, hsig: str, seed: int, attempt: int, rigged: bytes,
               profile: Dict[str, Any]) -> Dict[str, Any]:
     """Fit one stored HairDeck seed of ``hsig`` onto ``rigged`` (colour = the
-    profile's override, else the profile's named hair colour, else HairDeck's
-    own; gates = those of the hair's length class; placement = the profile's
+    hairstyle's override, else its text's named hair colour, else HairDeck's
+    own; gates = those of its length class; placement = the hairstyle's
     manual forward/tilt, else automatic) without publishing anything:
     ``{seed, result, hair_bytes, proxy_bytes, gates}`` — ``gates`` the
     verdict ``{attempt, seed, ok, reasons, limits, metrics}`` (``attempt`` =
@@ -865,16 +875,17 @@ def _fit_seed(character_name: str, item_id: str, hsig: str, seed: int, attempt: 
     chains_file, cards_file = folder / f"chains_seed{seed}.json", folder / f"cards_seed{seed}.json"
     chains = ({"chains_json": chains_file.read_bytes(), "cards_json": cards_file.read_bytes()}
               if chains_file.is_file() and cards_file.is_file() else {})
-    override = garment_hair.hair_colour_override(profile)
-    named = garment_hair.profile_hair_colour(character_name, profile=profile)
-    length_class = garment_hair.hair_length_class(character_name, profile=profile)
+    settings, text = _hair_of(character_name, item_id)
+    override = garment_hair.hair_colour_override(settings)
+    named = garment_hair.profile_hair_colour(character_name, profile=profile, text=text)
+    length_class = garment_hair.hair_length_class(character_name, profile=profile, text=text)
     # The compute runs on the refit pool when it is on (``refit_pool``): bytes and plain values in, the fit out.
     from app.core import refit_pool
     result = refit_pool.run(garment_hairdeck.fit_hairdeck, hair_bytes, proxy_bytes, rigged,
                             colour_target=garment_hair.colour_target(override),
                             colour_profile=garment_hair.colour_target(named["hex"]) if named else None,
-                            length_class=length_class, swing=hair_motion.swing_on(profile),
-                            **garment_hair.hair_placement(profile), **chains)
+                            length_class=length_class, swing=hair_motion.swing_on(settings),
+                            **garment_hair.hair_placement(settings), **chains)
     gates = {"attempt": attempt, "seed": seed, "ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": _hairdeck_limits(length_class), "metrics": result.metrics}
     return {"seed": seed, "result": result, "hair_bytes": hair_bytes, "proxy_bytes": proxy_bytes, "gates": gates}
@@ -944,8 +955,9 @@ def _publish_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, b
     gs.write_record(folder / gs.HAIRDECK_RECORD,
                     {**gs.read_record(folder / gs.HAIRDECK_RECORD), "fitted_seeds": _seed_summary(fits),
                      "fit_attempts": _refused_gates(fits)})
-    override = garment_hair.hair_colour_override(profile)
-    length_class = garment_hair.hair_length_class(character_name, profile=profile)
+    settings, text = _hair_of(character_name, item_id)
+    override = garment_hair.hair_colour_override(settings)
+    length_class = garment_hair.hair_length_class(character_name, profile=profile, text=text)
     base_views = {v: find_ref_image(character_name, base_body._kind(v), bsig) for v in GARMENT_VIEWS}
     gates = {"ok": True, "reasons": [], "limits": _hairdeck_limits(length_class)}
     record: Dict[str, Any] = {
@@ -956,11 +968,12 @@ def _publish_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, b
         "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                    "base_images": {v: _sha(p) for v, p in base_views.items()},
                    "hsig": hsig, "attempt": fit["gates"]["attempt"], "seed": seed, "colour": override,
-                   "placement": garment_hair.hair_placement(profile),
-                   "swing": hair_motion.swing_on(profile),
+                   "placement": garment_hair.hair_placement(settings),
+                   "swing": hair_motion.swing_on(settings),
                    "nohead_sha256": hashlib.sha256(fit["hair_bytes"]).hexdigest(),
                    "proxy_sha256": hashlib.sha256(fit["proxy_bytes"]).hexdigest()},
-        "colour": _hairdeck_colour(override, garment_hair.profile_hair_colour(character_name, profile=profile),
+        "colour": _hairdeck_colour(override, garment_hair.profile_hair_colour(character_name, profile=profile,
+                                                                              text=text),
                                    result.report.get("colour") or {}),
         "length_class": length_class,
         "placement": _placement_summary(result.report.get("placement")),
@@ -1163,18 +1176,20 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(fit["gates"]["reasons"]),
                            fit["gates"])
         result = fit["result"]
-        override = garment_hair.hair_colour_override(profile)
-        length_class = garment_hair.hair_length_class(character_name, profile=profile)
+        settings, text = _hair_of(character_name, item_id)
+        override = garment_hair.hair_colour_override(settings)
+        length_class = garment_hair.hair_length_class(character_name, profile=profile, text=text)
         record.update({
             "method": gs.HAIRDECK, "metrics": result.metrics, "report": result.report,
             "gates": {"ok": True, "reasons": [], "limits": _hairdeck_limits(length_class)},
             "inputs": {**_kind_inputs(kind, character_name, profile, item_id), "hsig": hsig, "seed": seed,
                        "attempt": fit["gates"]["attempt"], "colour": override,
-                       "placement": garment_hair.hair_placement(profile),
-                       "swing": hair_motion.swing_on(profile),
+                       "placement": garment_hair.hair_placement(settings),
+                       "swing": hair_motion.swing_on(settings),
                        "nohead_sha256": hashlib.sha256(fit["hair_bytes"]).hexdigest(),
                        "proxy_sha256": hashlib.sha256(fit["proxy_bytes"]).hexdigest()},
-            "colour": _hairdeck_colour(override, garment_hair.profile_hair_colour(character_name, profile=profile),
+            "colour": _hairdeck_colour(override, garment_hair.profile_hair_colour(character_name, profile=profile,
+                                                                                  text=text),
                                        result.report.get("colour") or {}),
             "length_class": length_class, "placement": _placement_summary(result.report.get("placement")),
             "created_at": utc_now_iso()})
@@ -1568,7 +1583,7 @@ def run_estimate(character_name: str, item_id: str, *,
     if base is None:
         return _unknown_estimate(f"{character_name} is not on the base-body pipeline")
     bsig, base_sha = base
-    method = gs.kind_method(kind, character_name, profile)
+    method = gs.kind_method(kind, character_name, profile, item_id=item_id)
     if not order:
         # Hair in the body mesh (``garment_store.BODY``): nothing to run, ever.
         return {"steps": [], "hub_jobs": 0, "note": _no_steps_note(kind, method), "refit": False}
@@ -1631,9 +1646,13 @@ def _grafted_kinds() -> Tuple[str, ...]:
 
 
 def _no_steps_note(kind: str, method: str) -> str:
-    """Why a garment of ``kind`` made with ``method`` has no steps (hair in the body mesh)."""
+    """Why a garment of ``kind`` made with ``method`` has no steps (hair in the body mesh, HAAR not built)."""
     from app.core import garment_hair
-    return garment_hair.HAIR_IN_BODY if method == garment_hair.BODY_METHOD else f"no steps for {kind} by {method}"
+    if method == garment_hair.BODY_MODE:
+        return garment_hair.HAIR_IN_BODY
+    if method == garment_hair.HAAR_MODE:
+        return garment_hair.HAAR_NOT_BUILT
+    return f"no steps for {kind} by {method}"
 
 
 def _require_steps(kind: str, order: Tuple[str, ...], method: str = "") -> None:
@@ -1641,7 +1660,7 @@ def _require_steps(kind: str, order: Tuple[str, ...], method: str = "") -> None:
     body mesh never runs (no click, no trigger, no improvement)."""
     if not order:
         from app.core import garment_hair
-        raise ValueError(_no_steps_note(kind, method or garment_hair.BODY_METHOD))
+        raise ValueError(_no_steps_note(kind, method or garment_hair.BODY_MODE))
 
 
 def _item_order(character_name: str, item_id: str,
@@ -1652,7 +1671,7 @@ def _item_order(character_name: str, item_id: str,
     item, kind = _item(character_name, item_id)
     if profile is None:
         profile = get_character_profile(character_name) or {}
-    return item, kind, gs.steps_for(kind, gs.kind_method(kind, character_name, profile))
+    return item, kind, gs.steps_for(kind, gs.kind_method(kind, character_name, profile, item_id=item_id))
 
 
 def _run_profile(profile: Dict[str, Any], item_id: str, state: str) -> Optional[Dict[str, Any]]:
@@ -1691,7 +1710,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         return {"ok": False, "fsig": "", "step": "", "ran": [],
                 "error": NOT_WORN_OPEN_ERROR.format(name=item.get("name") or item_id)}
     profile = run_profile
-    method = gs.kind_method(kind, character_name, profile)
+    method = gs.kind_method(kind, character_name, profile, item_id=item_id)
     order = gs.steps_for(kind, method)
     if not order:
         # The method changed to one without steps (hair in the body mesh) while the run waited.
@@ -2370,7 +2389,7 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
         raise ValueError(f"{item_id} is {'no' if footwear else 'a'} footwear piece"
                          + ("" if footwear else " — its mesh is the shoe source's"))
     profile = get_character_profile(character_name) or {}
-    method = gs.kind_method(kind, character_name, profile)
+    method = gs.kind_method(kind, character_name, profile, item_id=item_id)
     order = gs.steps_for(kind, method)
     if method == gs.HAIRDECK:
         raise ValueError("Hair made by HairDeck has no mesh job to fetch")
@@ -2423,8 +2442,8 @@ def after_base_model(character_name: str) -> bool:
     ssig) whose fit is not accepted on it — a refit of the last accepted
     source first when the fsig changed — through the character's FIFO
     (``run_queued``; a chain that failed for its current fsig is skipped,
-    ``cached_failure``), the hair item of a character with hair text but none
-    (the hair step's ``ensure_hair_item``), the CPU refits, the assembly.
+    ``cached_failure``), the first hairstyle of a character with hair text but
+    none (``garment_hair.ensure_hairstyle``), the CPU refits, the assembly.
     Off, nothing runs and the change stays marked
     (``figure.pending_changes``). A request during a running Build becomes
     its one follow-up. True when a Build was started or kept. Never raises."""
@@ -2575,9 +2594,9 @@ def preview_path(character_name: str, item_id: str, method: str = "") -> Optiona
     newest accepted fit (on the current base model first, else on any) —
     the tab's "Other method" preview. ValueError for an unknown method."""
     from app.core import base_body, garment_store as gs
-    from app.core.garment_hair import HAIR_METHODS
+    from app.core.garment_hair import HAIR_MODES
     from app.models.character import get_character_profile
-    if method and method not in HAIR_METHODS:
+    if method and method not in HAIR_MODES:
         raise ValueError(f"unknown method {method[:40]!r}")
     profile = get_character_profile(character_name) or {}
     try:
@@ -2602,17 +2621,21 @@ def preview_path(character_name: str, item_id: str, method: str = "") -> Optiona
 
 def _other_fit(character_name: str, item_id: str, method: str,
                profile: Dict[str, Any]) -> Optional[Tuple[Path, Dict[str, Any], bool]]:
-    """``(fit GLB, record, on the current base model)`` of the fit ``method``
-    would serve if it were selected (``garment_store.accepted_fit`` with the
-    method put into a profile copy: its current-fsig fit, else its newest
-    accepted fit on the current base model), else its newest accepted fit on
-    any base model; None without one."""
+    """``(fit GLB, record, on the current base model)`` of the fit the
+    hairstyle would serve in ``method`` (a mode it no longer has): its
+    fit under the fingerprint of that mode (``garment_store.garment_fsig``
+    with ``method``), else the newest accepted fit of that mode on the
+    current base model, else on any base model; None without one."""
     from app.core import base_body, garment_store as gs
     base = base_body.current_base(character_name, profile=profile)
     if base and base[1]:
-        hit = gs.accepted_fit(character_name, item_id, base_model_sha=base[1],
-                              profile={**profile, "hair_method": method})
-        if hit and gs.fit_method(hit[1]) == method:
+        path = gs.garment_path(character_name, item_id,
+                               gs.garment_fsig(character_name, item_id, profile=profile, method=method), "fit")
+        record = gs.read_record(path.with_suffix(".json"))
+        if path.is_file() and gs._accepted_on(record, base[1]) and gs.fit_method(record) == method:
+            return path, record, True
+        hit = gs.newest_accepted_fits(character_name, item_id, base_model_sha=base[1]).get(method)
+        if hit:
             return hit[0], hit[1], True
     hit = gs.newest_accepted_fits(character_name, item_id).get(method)
     return (hit[0], hit[1], False) if hit else None
@@ -2620,8 +2643,8 @@ def _other_fit(character_name: str, item_id: str, method: str,
 
 def other_methods_info(character_name: str, item_id: str, *,
                        profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """The hair GET's "Other methods": one entry per hair method NOT
-    selected that has a result — ``{method, preview_url, created_at, metrics,
+    """The hair GET's "Other methods": one entry per hair mode the hairstyle
+    does NOT have that kept a result — ``{method, preview_url, created_at, metrics,
     colour, on_current_base}`` of the accepted fit it would serve if selected
     (``_other_fit``) — newest first; ``[]`` when none has one (or the item is
     no hair). Selecting such a method generates nothing: its fit is served as
@@ -2634,8 +2657,8 @@ def other_methods_info(character_name: str, item_id: str, *,
     _item_, kind = _item(character_name, item_id)
     if kind != garment_hair.HAIR_KIND:
         return []
-    current = garment_hair.hair_method(character_name, profile=profile)
-    hits = [(m, _other_fit(character_name, item_id, m, profile)) for m in garment_hair.HAIR_METHODS if m != current]
+    current = garment_hair.hairstyle_mode(_item_)
+    hits = [(m, _other_fit(character_name, item_id, m, profile)) for m in garment_hair.HAIR_MODES if m != current]
     hits = [(m, h) for m, h in hits if h is not None]
     hits.sort(key=lambda mh: _stamp(mh[1][0]) or 0, reverse=True)
     out: List[Dict[str, Any]] = []
@@ -2760,14 +2783,15 @@ def hairdeck_panel(character_name: str, item_id: str, *,
         info = _json.loads((folder / "info.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         info = {}
-    override = garment_hair.hair_colour_override(profile)
-    named = garment_hair.profile_hair_colour(character_name, profile=profile)
+    settings, text = _hair_of(character_name, item_id)
+    override = garment_hair.hair_colour_override(settings)
+    named = garment_hair.profile_hair_colour(character_name, profile=profile, text=text)
     newest = _newest_fit(character_name, item_id, gs.HAIRDECK)
     colour = {"target": override or None,
               "source": "override" if override else ("profile" if named else "hairdeck"),
               "auto": _rgb_hex(info.get("hair_color")) if isinstance(info, dict) else None,
               "profile": named, "fitted": newest[1].get("colour") if newest else None}
-    placement = {"width_scale": None, **garment_hair.hair_placement(profile),
+    placement = {"width_scale": None, **garment_hair.hair_placement(settings),
                  "default_forward_m": garment_hairdeck.DEFAULT_FORWARD_M,
                  "limits": garment_hair.placement_limits(),
                  "fitted": newest[1].get("placement") if newest else None}
@@ -2786,8 +2810,8 @@ def hairdeck_panel(character_name: str, item_id: str, *,
             "backend": job["backend"], "created_at": job["created_at"], "error": job["error"],
             "notes": job["notes"], "attempts": job["fit_attempts"], "images": images, "colour": colour,
             "placement": placement,
-            "chains": hair_motion.panel(character_name, profile, newest[1] if newest else None,
-                                       newest[0] if newest else None),
+            "chains": hair_motion.panel(character_name, settings, newest[1] if newest else None,
+                                       newest[0] if newest else None, profile=profile),
             "input_source": "beard_free" if sent is not None and sent != source else "profile"}
 
 
@@ -2833,7 +2857,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         from app.core import garment_footwear
         return gs.finite_json(garment_footwear.info(character_name, item_id, profile=profile))
     inputs = _kind_inputs(kind, character_name, profile, item_id)
-    method, method_source = (garment_hair.hair_method_source(character_name, profile=profile)
+    method, method_source = ((garment_hair.hairstyle_mode(_item_), "hairstyle")
                              if kind == garment_hair.HAIR_KIND else (gs.EDIT_CHAIN, "world"))
     try:
         fsig: Optional[str] = gs.garment_fsig(character_name, item_id, profile=profile)
@@ -2876,11 +2900,12 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
             if method == gs.HAIRDECK and gs.fit_method(record) == gs.HAIRDECK:
                 if used.get("hsig") != hsig:
                     stale.append("hairdeck_changed")
-                if (used.get("colour") or "") != garment_hair.hair_colour_override(profile):
+                settings = garment_hair.hairstyle_settings(_item_)
+                if (used.get("colour") or "") != garment_hair.hair_colour_override(settings):
                     stale.append("colour_changed")
-                if used.get("placement") != garment_hair.hair_placement(profile):
+                if used.get("placement") != garment_hair.hair_placement(settings):
                     stale.append("placement_changed")
-                if bool(used.get("swing")) != hair_motion.swing_on(profile):
+                if bool(used.get("swing")) != hair_motion.swing_on(settings):
                     stale.append("swing_changed")
     preview = preview_path(character_name, item_id)
     preview_url = None
@@ -2933,8 +2958,8 @@ def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     """``{item_id, status}`` of the worn hair item for ``base_body.base_info``
     — status ``running`` / ``failed`` / ``ready`` (current fit accepted on
     the current base model) / ``stale`` (an older fit is served) /
-    ``missing``; None without a worn hair item, off the pipeline, or with
-    the hair in the body mesh (``garment_hair.hair_in_body``)."""
+    ``missing``; None without a worn hairstyle, off the pipeline, or for a
+    worn hairstyle that is no HairDeck hair (in the body mesh, HAAR)."""
     from app.core import base_body, garment_store as gs
     from app.core.garment_hair import HAIR_KIND
     if profile is None:
@@ -2945,13 +2970,13 @@ def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     base = base_body.current_base(character_name, profile=profile)
     if not item_id or base is None:
         return None
-    from app.core.garment_hair import hair_in_body
-    if hair_in_body(character_name, profile):
-        return None  # the hair is in the body mesh: no hair mesh is wanted or served
+    from app.core.garment_hair import HAIRDECK_MODE, hairstyle_mode
     try:
-        _item(character_name, item_id)
+        worn_item, _kind = _item(character_name, item_id)
     except ValueError:
         return None
+    if hairstyle_mode(worn_item) != HAIRDECK_MODE:
+        return None  # in the body mesh (or HAAR): no hair mesh is wanted or served
     status = gs.status(character_name, item_id)
     if status["running_step"]:
         state = "running"

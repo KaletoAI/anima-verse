@@ -20,8 +20,11 @@ visible ids)`` where the visible ids are the worn piece ids minus
 ``mesh_items`` (``""`` when none is left); ``base_body.side_views_dressed``
 -> False; ``base_body.dressed_views`` -> ("front", "back"). The REAL
 ``texture_inputs`` / ``texture_signature`` run on those stubs (they call
-the module globals). The hair method comes from the profile key
-``hair_method`` ("body" = the hair is in the body, "hairdeck" = not).
+the module globals). The hair mode is the worn hairstyle's (plan Task 13):
+``profile("body")`` wears the hairstyle "hair_body" (mode body, "short
+hair"), ``profile("hairdeck")`` the hairstyle "hair_demo" (no mode =
+HairDeck); each is also the plain body's (``base_hairstyle``), so no
+hairstyle shape is involved (``shape_inputs`` has no "hair" key).
 
 Fixture: character "Demo", bsig = "base0123abcd" (a base signature,
 ``base_body.BASE_SIG_RE``), variant "rigged". Items (category outfit_piece):
@@ -63,7 +66,7 @@ Expected, derived by hand from the brief:
     = "ob386b6362" != "ob82e8f156". Wearing its own hair item "hair_demo"
     (garment kind hair, owner Demo) in equipped_mesh_pieces: hair_item
     "hair_demo" under hairdeck (own unchanged: hair is no outfit piece), ""
-    under body (the hair is in the body).
+    while the body hairstyle hair_body is worn (the hair is in the body).
 [6] mesh_items_token stays mode-blind (Ruling 4a: the dressed views are the
     same images whether a piece is painted or in the body, so the mesh-input
     signature must not change with that mode). The current function equals
@@ -110,6 +113,9 @@ ITEMS = {"coat": _item("coat", ["outer"], "in_body"),
          "trousers": _item("trousers", ["bottom"], "own_mesh")}
 ITEMS["hair_demo"] = {"id": "hair_demo", "name": "Hair", "category": "garment", "owner": "Demo",
                       "garment": {"kind": "hair"}}
+ITEMS["hair_body"] = {"id": "hair_body", "name": "Short hair", "category": "garment", "owner": "Demo",
+                      "garment": {"kind": "hair", "mesh_mode": "body", "description": "short hair"}}
+HAIRSTYLE = {"body": "hair_body", "hairdeck": "hair_demo"}
 PIECES = {"outer": "coat", "top": "blouse", "feet": "boots", "bottom": "trousers"}
 
 
@@ -118,8 +124,9 @@ def set_mode(item_id, mode):
 
 
 def profile(method="body", pieces=None):
-    return {"model_pipeline": "base_body", "hair_method": method,
-            "equipped_pieces": dict(PIECES if pieces is None else pieces), "equipped_mesh_pieces": {}}
+    return {"model_pipeline": "base_body", "base_hairstyle": HAIRSTYLE[method],
+            "equipped_pieces": dict(PIECES if pieces is None else pieces),
+            "equipped_mesh_pieces": {"hair": HAIRSTYLE[method]}}
 
 
 def stub_dress_text(character_name, view, *, pieces, items, profile=None, mesh_items=()):
@@ -234,12 +241,11 @@ def main() -> int:
         check("hairdeck shape", shape, "ob386b6362")
         check("differs from the haired shape", shape != "ob82e8f156", True)
         haired = profile("hairdeck")
-        haired["equipped_mesh_pieces"] = {"hair": "hair_demo"}
         check("hairdeck: the worn hair item", figure.worn_sets("Demo", profile=haired).hair_item, "hair_demo")
         check("hairdeck: the hair item is no piece", figure.worn_sets("Demo", profile=haired).own,
               {"boots": "footwear", "trousers": "clothing"})
-        haired["hair_method"] = "body"
-        check("body: a leftover hair item is not served", figure.worn_sets("Demo", profile=haired).hair_item, "")
+        check("body hairstyle worn: no hair item served", figure.worn_sets("Demo", profile=profile()).hair_item,
+              "")
 
         print("[6] mesh_items_token stays mode-blind (Ruling 4a)")
         base_refs = load_base_model_refs()

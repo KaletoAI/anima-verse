@@ -31,15 +31,21 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     2026-11-11), hairdeck None, others [];
     limits.hairdeck_fit = the HairDeck gate constants as "le" chips:
     max_push_m 0.12, moved_share 0.90, icp_resid_p95_m 0.012.
-[3] Method: "bogus" -> 400, profile key absent; "hairdeck" -> 200 {method
-    "hairdeck", method_source "character"}, profile hair_method "hairdeck",
-    one assembly schedule (the served hair follows the method); GET says
-    the same. "" -> {body, world} (falls back to the world), profile
-    "". The world set to "hairdeck": "" -> {hairdeck, world}, GET
-    world_method "hairdeck". World back to absent, character "hairdeck".
-[4] Colour: "#12345", "red", "#GGGGGG", "ff8000" -> 400 each; the profile
-    key hair_colour stays absent.
-[5] POST /hair (creates + wears "hair_demo", starts the REAL chain): ran
+[3] Method (plan 2026-11-12-unified-worn-pieces Task 13: the mode, colour,
+    placement and motion are the worn HAIRSTYLE's — keys of its item's
+    ``garment``; method_source is "hairstyle"): with no hairstyle POST
+    /hair/method -> 404. POST /hairstyles {} -> 201 {item_id "hair_demo"}
+    (the first hairstyle, text from the Appearance, mode the world default
+    "body"), worn, one assembly schedule (wearing it). "bogus" -> 400, mode
+    stays "body"; "hairdeck" -> 200 {method "hairdeck", method_source
+    "hairstyle", item_id "hair_demo"}, the item's mesh_mode "hairdeck", a
+    second schedule (the served hair follows the mode); GET says the same.
+    "" -> {body, hairstyle} (the world default). The world default set to
+    "hairdeck": "" -> {hairdeck, hairstyle}, GET world_method "hairdeck".
+    World back to absent, the hairstyle "hairdeck".
+[4] Colour: "#12345", "red", "#GGGGGG", "ff8000" -> 400 each; the
+    hairstyle's hair_colour stays absent.
+[5] POST /hair (wears "hair_demo" already, HairDeck: starts the REAL chain): ran
     hairdeck + fit -> generate_hair 1 call (seed 42), fit 1 call with
     colour_target None, colour_profile = the profile's "blonde" #d3b497 =
     (211/255, 180/255, 151/255), length_class "medium" (hair slot length).
@@ -55,8 +61,8 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     prep -> the job's prep.png bytes "prep.png-call1", input -> the profile
     picture's bytes, "bogus" -> 400, a traversal name -> 400/404 without the
     planted secret. others [] (the only other method, "body", has no fit).
-[6] Colour "#FF8000" -> 200 {target "#ff8000", source "override"}, profile
-    "#ff8000". GET: fsig F2 != F1, hairdeck.hsig unchanged, garment.fit
+[6] Colour "#FF8000" -> 200 {target "#ff8000", source "override"}, the hairstyle's
+    hair_colour "#ff8000". GET: fsig F2 != F1, hairdeck.hsig unchanged, garment.fit
     "missing", stale_reasons ["colour_changed"], served_fsig still F1.
     POST run {} -> re-fits WITHOUT a HairDeck call: generate_hair still 1,
     fit 2 with colour_target (1.0, 128/255, 0.0); GET: fit accepted, fit
@@ -66,13 +72,13 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     again, fit accepted (nothing to run: counts stay (1, 2)).
 [7] Method "body" (the hair is in the body mesh; the edit chain this step
     switched to before is gone, hair-from-body spec 2026-11-11 Task 2):
-    200 {body, character}, one assembly schedule; GET hair_in_body True,
+    200 {body, hairstyle, hair_demo}, one assembly schedule; GET hair_in_body True,
     garment / hairdeck None and others [] although the item is still owned
     (item_id "hair_demo"); the plain model route is 404 (method body serves
     no fit), ?method=hairdeck still returns the F1 bytes (what HairDeck
     would serve with colour "", not the newer F2), the removed
     ?method=edit_chain and ?method=bogus are 400. "edit_chain" and
-    "subtract" as POST /hair/method -> 400, the profile keeps "body".
+    "subtract" as POST /hair/method -> 400, the hairstyle keeps "body".
     Counts stay (1, 2): the switch generated nothing. Back to "hairdeck":
     served_fsig F1, others [], counts still (1, 2) — the kept fit is served
     with 0 jobs.
@@ -97,7 +103,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     1.635, landmark_source "profile"; no width in the stub's report -> width
     None). forward "abc", 0.031 (> 0.03), tilt 15.5 (> 15), true, "nan",
     width 0.4 (< 0.5) -> 400 each, nothing stored. {forward_m 0.004,
-    tilt_deg "3"} -> 200 {width None, 0.004, 3.0}, profile
+    tilt_deg "3"} -> 200 {width None, 0.004, 3.0}, the hairstyle's
     hair_forward_m 0.004 / hair_tilt_deg 3.0; fsig F3 (neither F1 nor F2),
     hsig unchanged, fit "missing", stale ["placement_changed"], F1 served.
     POST run {} -> no HairDeck call, one fit per stored seed (42, 43, 44 ->
@@ -106,7 +112,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     and placement.tilt_source "manual"; stale []. All three pass with the
     stub's push 0.01 -> the tie goes to the lower seed: F3's inputs.seed 42,
     panel seed 42, job_seed 44, seeds_tried 3. Reset {null, null} -> {None,
-    None}, both keys stored as "", fsig F1 again — still "accepted": the F1
+    None}, both keys gone from the hairstyle, fsig F1 again — still "accepted": the F1
     fit (seed 44) stays fresh, its own seed file is unchanged.
 """
 import hashlib
@@ -274,6 +280,11 @@ def main() -> int:
         def profile():
             return get_character_profile("Demo") or {}
 
+        def style():
+            """hair_demo's ``garment`` block ({} before it exists)."""
+            from app.models.inventory import get_item
+            return (get_item("hair_demo") or {}).get("garment") or {}
+
         def counts():
             return len(HAIR_CALLS), len(FIT_CALLS)
 
@@ -301,8 +312,7 @@ def main() -> int:
                                       ("GET", "/characters/Demo/garments/hair_demo/model?method=hairdeck", None)):
                 r = client.request(method, url, json=body) if body is not None else client.request(method, url)
                 check(f"player {method} {url}", r.status_code, 403)
-            check("player stored nothing", ("hair_method" in profile(), "hair_colour" in profile(),
-                                            "hair_forward_m" in profile()), (False, False, False))
+            check("player stored nothing", style(), {})
             client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_ADMIN])
 
             # --- [2] GET before the item -----------------------------------------
@@ -317,30 +327,39 @@ def main() -> int:
 
             # --- [3] method --------------------------------------------------------
             print("[3] POST /hair/method")
-            r = client.post("/characters/Demo/hair/method", json={"method": "bogus"})
-            check("bogus 400", (r.status_code, "hair_method" in profile()), (400, False))
             r = client.post("/characters/Demo/hair/method", json={"method": "hairdeck"})
-            check("hairdeck", (r.status_code, r.json()), (200, {"method": "hairdeck", "method_source": "character"}))
-            check("stored hairdeck", (profile().get("hair_method"), len(SCHEDULED)), ("hairdeck", 1))
+            check("no hairstyle 404", r.status_code, 404)
+            r = client.post("/characters/Demo/hairstyles", json={})
+            check("first hairstyle 201", (r.status_code, r.json()), (201, {"item_id": "hair_demo"}))
+            check("worn, body, one schedule", ((profile().get("equipped_mesh_pieces") or {}).get("hair"),
+                                               style().get("mesh_mode"), len(SCHEDULED)), ("hair_demo", "body", 1))
+            r = client.post("/characters/Demo/hair/method", json={"method": "bogus"})
+            check("bogus 400", (r.status_code, style().get("mesh_mode")), (400, "body"))
+            r = client.post("/characters/Demo/hair/method", json={"method": "hairdeck"})
+            check("hairdeck", (r.status_code, r.json()),
+                  (200, {"method": "hairdeck", "method_source": "hairstyle", "item_id": "hair_demo"}))
+            check("stored hairdeck", (style().get("mesh_mode"), len(SCHEDULED)), ("hairdeck", 2))
             h = hair()
-            check("GET hairdeck", (h.get("method"), h.get("method_source")), ("hairdeck", "character"))
+            check("GET hairdeck", (h.get("method"), h.get("method_source")), ("hairdeck", "hairstyle"))
             r = client.post("/characters/Demo/hair/method", json={"method": ""})
-            check("'' -> world", (r.status_code, r.json()), (200, {"method": "body", "method_source": "world"}))
-            check("stored ''", profile().get("hair_method"), "")
-            config._CONFIG["base_body"] = {"hair_method": "hairdeck"}
+            check("'' -> world", (r.status_code, r.json()),
+                  (200, {"method": "body", "method_source": "hairstyle", "item_id": "hair_demo"}))
+            config._CONFIG["base_body"] = {"hairstyle_default_mode": "hairdeck"}
             r = client.post("/characters/Demo/hair/method", json={"method": ""})
-            check("'' -> world hairdeck", r.json(), {"method": "hairdeck", "method_source": "world"})
+            check("'' -> world hairdeck", r.json(),
+                  {"method": "hairdeck", "method_source": "hairstyle", "item_id": "hair_demo"})
             check("GET world_method", hair().get("world_method"), "hairdeck")
             config._CONFIG.pop("base_body", None)
             r = client.post("/characters/Demo/hair/method", json={"method": "hairdeck"})
-            check("character hairdeck again", r.json(), {"method": "hairdeck", "method_source": "character"})
+            check("hairstyle hairdeck again", r.json(),
+                  {"method": "hairdeck", "method_source": "hairstyle", "item_id": "hair_demo"})
 
             # --- [4] colour validation ---------------------------------------------
             print("[4] POST /hair/colour validation")
             for bad in ("#12345", "red", "#GGGGGG", "ff8000"):
                 r = client.post("/characters/Demo/hair/colour", json={"hex": bad})
                 check(f"colour {bad!r} 400", r.status_code, 400)
-            check("hair_colour absent", "hair_colour" in profile(), False)
+            check("hair_colour absent", "hair_colour" in style(), False)
 
             # --- [5] first HairDeck run ---------------------------------------------
             print("[5] POST /hair runs hairdeck + fit")
@@ -389,7 +408,7 @@ def main() -> int:
             hsig1 = hd.get("hsig")
             r = client.post("/characters/Demo/hair/colour", json={"hex": "#FF8000"})
             check("colour 200", (r.status_code, r.json()), (200, {"target": "#ff8000", "source": "override"}))
-            check("stored colour", profile().get("hair_colour"), "#ff8000")
+            check("stored colour", style().get("hair_colour"), "#ff8000")
             h = hair()
             g = h.get("garment") or {}
             f2 = g.get("fsig")
@@ -418,7 +437,7 @@ def main() -> int:
             SCHEDULED.clear()
             r = client.post("/characters/Demo/hair/method", json={"method": "body"})
             check("body", (r.status_code, r.json(), len(SCHEDULED)),
-                  (200, {"method": "body", "method_source": "character"}, 1))
+                  (200, {"method": "body", "method_source": "hairstyle", "item_id": "hair_demo"}, 1))
             h = hair()
             check("body tab", (h.get("hair_in_body"), h.get("item_id"), h.get("garment"), h.get("hairdeck"),
                                h.get("others")), (True, "hair_demo", None, None, []))
@@ -432,7 +451,7 @@ def main() -> int:
                 check(f"{gone} model 400", client.get(f"{murl}?method={gone}").status_code, 400)
             for gone in ("edit_chain", "subtract"):
                 r = client.post("/characters/Demo/hair/method", json={"method": gone})
-                check(f"{gone} method 400", (r.status_code, profile().get("hair_method")), (400, "body"))
+                check(f"{gone} method 400", (r.status_code, style().get("mesh_mode")), (400, "body"))
             check("switch generated nothing", counts(), (1, 2))
             r = client.post("/characters/Demo/hair/method", json={"method": "hairdeck"})
             h = hair()
@@ -482,11 +501,11 @@ def main() -> int:
                         {"tilt_deg": "nan"}, {"width_scale": 0.4}):
                 r = client.post("/characters/Demo/hair/placement", json=bad)
                 check(f"placement {bad} 400", r.status_code, 400)
-            check("nothing stored", ("hair_forward_m" in profile(), "hair_tilt_deg" in profile()), (False, False))
+            check("nothing stored", ("hair_forward_m" in style(), "hair_tilt_deg" in style()), (False, False))
             r = client.post("/characters/Demo/hair/placement", json={"forward_m": 0.004, "tilt_deg": "3"})
             check("placement 200", (r.status_code, r.json()),
                   (200, {"width_scale": None, "forward_m": 0.004, "tilt_deg": 3.0}))
-            check("stored placement", (profile().get("hair_forward_m"), profile().get("hair_tilt_deg")), (0.004, 3.0))
+            check("stored placement", (style().get("hair_forward_m"), style().get("hair_tilt_deg")), (0.004, 3.0))
             h = hair()
             g = h.get("garment") or {}
             f3 = g.get("fsig")
@@ -517,7 +536,7 @@ def main() -> int:
             r = client.post("/characters/Demo/hair/placement", json={"forward_m": None, "tilt_deg": None})
             check("placement reset", (r.status_code, r.json()),
                   (200, {"width_scale": None, "forward_m": None, "tilt_deg": None}))
-            check("reset stored as empty", (profile().get("hair_forward_m"), profile().get("hair_tilt_deg")), ("", ""))
+            check("reset: keys gone", ("hair_forward_m" in style(), "hair_tilt_deg" in style()), (False, False))
             g = hair().get("garment") or {}
             check("back to F1", (g.get("fsig"), (g.get("steps") or {}).get("fit", {}).get("status")), (f1, "accepted"))
 

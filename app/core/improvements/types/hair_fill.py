@@ -2,20 +2,16 @@
 have hair text but no hair mesh, made at idle time (spec
 docs/superpowers/specs/2026-11-11-improvements-figure-pipeline-design.md § 6.5).
 
-A subject is a character on the pipeline with a ready base and hair text
-(``garment_hair.hair_description`` — a bald character has none) that has no
-hair item at all, or wears its hair item without an accepted fit on the
-current base for the current method (``garments.hair_summary`` status
-``missing``; a served older fit is ``stale`` — ``fit_refit`` or the chain's
-own trigger handles it). A hair item the character owns but took off in the
-Wardrobe's hair row is no subject (``garments._ensure_hair``'s rule). The method is the
-character's (``garment_hair.hair_method``, the world default) — read, never
-set. A character whose hair is in the body mesh (method ``body``,
-``garment_hair.hair_in_body``) is never a subject: it has no hair mesh.
+A subject is a character on the pipeline with a ready base whose WORN
+hairstyle (``garment_hair.worn_hairstyle``, plan 2026-11-12-unified-worn-pieces
+Task 13) is HairDeck hair without an accepted fit on the current base
+(``garments.hair_summary`` status ``missing``; a served older fit is ``stale``
+— ``fit_refit`` or the chain's own trigger handles it). The mode is the
+hairstyle's — read, never set. A character that wears no hairstyle, or one
+in the body mesh (mode ``body``), is never a subject: it has no hair mesh to
+make.
 
-The cost before start is ``garments.run_estimate`` of the worn item; without
-an item yet, the full chain of the method (``garments.HUB_JOBS``: HairDeck
-1).
+The cost before start is ``garments.run_estimate`` of the worn hairstyle.
 
 No automatic re-spend: a persisted chain failure of the item's current fsig
 (``garments.cached_failure``) excludes it, and a run that ends refused —
@@ -25,16 +21,14 @@ resolves to nothing right now, a chain result ``retry_later``) is busy.
 """
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.core.improvements.base import (Candidate, CandidateBusy, CandidateRefused, ImprovementType,
+from app.core.improvements.base import (Candidate, CandidateBusy, ImprovementType,
                                         ParamField)
 from app.core.improvements.types import subjects
 from app.core.improvements.types.garment_fill import _in_flight, _judge
 
-#: The occasions each hair method renders on (spec § 5.3); HairDeck's job
+#: The occasions each hair mode renders on (spec § 5.3); HairDeck's job
 #: runs on the ``hair_mesh`` occasion (``ImageService.generate_hair``).
 OCCASIONS: Dict[str, Tuple[str, ...]] = {"body": (), "hairdeck": ("hair_mesh",)}
-#: The method as the hair row names it.
-METHOD_LABEL = {"body": "from the body mesh", "hairdeck": "HairDeck"}
 
 
 def _profile(name: str) -> Dict[str, Any]:
@@ -42,44 +36,26 @@ def _profile(name: str) -> Dict[str, Any]:
     return get_character_profile(name) or {}
 
 
-def _subject(name: str, profile: Dict[str, Any]) -> Optional[Tuple[Optional[str], str]]:
-    """``(worn hair item id or None, method)`` when the character wants a hair
-    mesh — hair text, and no hair item at all or a worn one whose fit is
-    ``missing`` — else None. A worn item's in-flight run is judged by the
-    caller."""
+def _subject(name: str, profile: Dict[str, Any]) -> Optional[Tuple[str, str]]:
+    """``(worn hairstyle id, its name)`` when its HairDeck fit is ``missing``,
+    else None. Its in-flight run is judged by the caller."""
     from app.core import garment_hair, garments
-    if not garment_hair.hair_description(name, profile=profile):
+    item = garment_hair.worn_hairstyle(name, profile)
+    if item is None or garment_hair.hairstyle_mode(item) != garment_hair.HAIRDECK_MODE:
+        return None  # no hairstyle worn, or its hair is in the body mesh: no hair mesh, no run
+    if not garment_hair.hairstyle_description(item):
         return None
-    method = garment_hair.hair_method(name, profile=profile)
-    if method == garment_hair.BODY_METHOD:
-        return None  # the hair is in the body mesh: no hair item, no run
     summary = garments.hair_summary(name, profile=profile)
-    if summary is None:
-        # No worn hair item: a subject only when it owns none either (an
-        # item taken off in the hair row stays off).
-        return None if garment_hair.find_hair_item(name, profile) is not None else (None, method)
-    if summary.get("status") != "missing":
+    if summary is None or summary.get("status") != "missing":
         return None
     item_id = str(summary["item_id"])
     if garments.cached_failure(name, item_id, profile=profile) is not None:
         return None
-    return item_id, method
-
-
-def _estimate(name: str, item_id: Optional[str], method: str, profile: Dict[str, Any]) -> Dict[str, Any]:
-    """``run_estimate`` of the worn item; without one, the method's full chain."""
-    from app.core import garments
-    if item_id:
-        return garments.run_estimate(name, item_id, profile=profile)
-    costs = garments.HUB_JOBS.get(f"hair:{method}")
-    if not costs:
-        return {"hub_jobs": None, "note": f"no cost table for hair by {method}"}
-    parts = " + ".join(f"{step} {n}" for step, n in costs.items() if n) or "no hub job"
-    return {"hub_jobs": sum(costs.values()), "note": f"new hair item: {parts}"}
+    return item_id, str(item.get("name") or "Hairstyle")
 
 
 def _require_routes(method: str, name: str) -> None:
-    """Every occasion the method renders on must resolve right now; nothing
+    """Every occasion the mode renders on must resolve right now; nothing
     available is load — the step waits."""
     for occasion in OCCASIONS.get(method, ()):
         if not subjects.default_mesh_backend(occasion, name):
@@ -111,9 +87,9 @@ class HairFill(ImprovementType):
             names = [n for n in names if n == params["character"]]
         return names
 
-    def _wanted(self, name: str, profile: Dict[str, Any]) -> Optional[Tuple[Optional[str], str]]:
+    def _wanted(self, name: str, profile: Dict[str, Any]) -> Optional[Tuple[str, str]]:
         subject = _subject(name, profile)
-        if subject is None or (subject[0] and _in_flight(name, subject[0])):
+        if subject is None or _in_flight(name, subject[0]):
             return None
         return subject
 
@@ -126,9 +102,10 @@ class HairFill(ImprovementType):
             subject = self._wanted(name, profile)
             if subject is None:
                 continue
-            item_id, method = subject
-            est = _estimate(name, item_id, method, profile)
-            out.append(Candidate(f"character:{name}", f"{name} · {METHOD_LABEL.get(method, method)}",
+            item_id, label = subject
+            from app.core import garments
+            est = garments.run_estimate(name, item_id, profile=profile)
+            out.append(Candidate(f"character:{name}", f"{name} · {label} (HairDeck)",
                                  hub_jobs=est.get("hub_jobs"), note=str(est.get("note") or "")))
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
@@ -139,20 +116,15 @@ class HairFill(ImprovementType):
     # --- apply -----------------------------------------------------------------
 
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> None:
-        from app.core import garment_hair, garments
+        from app.core import garments
         name = candidate.key.split(":", 1)[1]
         # Made, refused or taken off meanwhile: nothing to spend — the next
         # scan closes the step.
         subject = _subject(name, _profile(name))
         if subject is None:
             return
-        item_id, method = subject
-        if item_id and _in_flight(name, item_id):
+        item_id, _label = subject
+        if _in_flight(name, item_id):
             raise CandidateBusy(f"{name}: a hair run is in flight")
-        _require_routes(method, name)
-        if not item_id:
-            try:
-                item_id = garment_hair.ensure_hair_item(name)
-            except ValueError as e:
-                raise CandidateRefused(f"hair item — {e}") from e
+        _require_routes("hairdeck", name)
         _judge(garments.run_garment(name, item_id))

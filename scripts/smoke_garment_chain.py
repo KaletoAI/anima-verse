@@ -487,7 +487,7 @@ def main() -> int:
                                                "mesh_mode": "own_mesh"})["id"]
         inventory.add_to_inventory("Demo", hid)
         check("dress worn", inventory.equip_piece("Demo", hid, source="smoke").get("status"), "ok")
-        check("no hair item (method body)", garment_hair.find_hair_item("Demo", get_character_profile("Demo")),
+        check("no hair item (no hairstyle yet)", garment_hair.worn_hairstyle("Demo", get_character_profile("Demo")),
               None)
         cdir = get_character_dir("Demo")
         refs = cdir / "model_refs"
@@ -808,14 +808,14 @@ def main() -> int:
         neo = json.loads(json.dumps(human))
         neo["body_slots"]["hair"] = {"length": "short", "color": "black"}
         check("create Neo", save_character_profile("Neo", neo, create_new=True), True)
-        check("Neo has hair text", bool(garment_hair.hair_description("Neo")), True)
+        check("Neo has hair text", bool(garment_hair.appearance_hair_text("Neo")), True)
         write_base_for("Neo")
         garments.wait_idle(30)
         before = counts()
         check("Neo: the Build has no chain step", build_chains("Neo"), False)
         check("idle", garments.wait_idle(30), True)
         check("Neo no item", (inventory.get_equipped_mesh_pieces("Neo"),
-                              garment_hair.find_hair_item("Neo", get_character_profile("Neo"))), ({}, None))
+                              garment_hair.worn_hairstyle("Neo", get_character_profile("Neo"))), ({}, None))
         check("no GPU work", counts()[:2], before[:2])
 
         # --- [12] the base views change during a run ----------------------------------------

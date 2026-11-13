@@ -1208,6 +1208,8 @@ def preview_outfit_set_route(character_name: str, outfit_id: str,
         # The saved open pieces (``outfit_options.piece_state``, Addendum A): {item_id: "open"}; {} = all closed.
         "piece_state": (clean_piece_state_map((target.get("options") or {}).get("piece_state"))
                         if isinstance(target.get("options"), dict) else {}),
+        # The hairstyle the set wears (hairstyles plan Task 13 / D5): its item id, "" = the hair stays as it is.
+        "hairstyle": str(target.get("hairstyle") or ""),
     }
 
 
@@ -1284,6 +1286,12 @@ def _apply_outfit_set_route_sync(character_name: str,
         # The set's per-outfit options come with it (boots plan Task 10): a row without them applies null.
         from app.core.outfit_options import apply_saved_options
         apply_saved_options(character_name, target)
+        # The set's hairstyle (hairstyles plan Task 13 / D5) — an outfit change: ONE Build request below.
+        from app.core.garment_hair import wear_outfit_hairstyle
+        hair_changed = wear_outfit_hairstyle(character_name, target)
+    if hair_changed:
+        from app.core.garment_hair import request_outfit_build
+        request_outfit_build(character_name)
     return {
         "status": "ok",
         "outfit_id": target.get("id"),

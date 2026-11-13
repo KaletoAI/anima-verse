@@ -1281,6 +1281,14 @@ def _cancel_timers(character_name: str, kinds: tuple) -> None:
 BUILD_TIMER = "figure_build"
 
 
+def cancel_build_timer(character_name: str) -> None:
+    """Disarm the character's debounced Build request (``BUILD_TIMER``) — for
+    a caller that requests the Build itself right away, so a change that
+    also armed the timer (an outfit set's pieces and its hairstyle) asks
+    the Build once."""
+    _cancel_timers(character_name, (BUILD_TIMER,))
+
+
 def _fire_kind(character_name: str, kind: str) -> None:
     """Timer body. Fires only if THIS timer is still the armed one: a timer
     cancelled a moment too late (its body already started) must not render —

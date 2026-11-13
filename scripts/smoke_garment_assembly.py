@@ -15,7 +15,7 @@ context (``breast_L`` under Spine2, the fixture's inserted bone) and
 ``garment_assembly.schedule`` (recorder, except where the real one is named).
 
 Fixture: ``Demo`` (human-roleplay, female, on the base-body pipeline, hair
-slot medium/blonde). H = ensure_hair_item(Demo) ("hair_demo", equipped in
+slot medium/blonde). H = ensure_hairstyle(Demo) ("hair_demo", equipped in
 the ``hair`` mesh slot). BSIG = base_signature(Demo); the base views are fake
 PNGs, the base model model3d/BSIG.glb = b"base-model" -> SHA. OSIG = the
 current outfit signature; model3d/OSIG.glb = the fixture body (53 joints,
@@ -175,7 +175,7 @@ def main() -> int:
         # A hair method that makes a hair item (the default "body" of the hair-from-body spec 2026-11-11 makes
         # none; the edit chain this smoke was written for is gone since its Task 2 — the assembly does not care).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "hairdeck"}}))
+                                                        "base_body": {"hairstyle_default_mode": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "inst/config.json")
         from app.core import db
@@ -228,7 +228,7 @@ def main() -> int:
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        hid = garment_hair.ensure_hair_item("Demo")
+        hid = garment_hair.ensure_hairstyle("Demo")
         check("hair item", (hid, inventory.get_equipped_mesh_pieces("Demo")), ("hair_demo", {"hair": "hair_demo"}))
         cdir = get_character_dir("Demo")
         bsig = base_body.base_signature("Demo")

@@ -16,7 +16,7 @@ view render (``base_body.render_shape_views`` — what the Build's shape step ru
 view run, POST outfit-bodies/<B0>/views/front/regenerate, which called the same producer with ``force``).
 
 Fixture (character Demo: humanoid, pipeline on, side views off = the default; appearance with hair, so
-``garment_hair.ensure_hair_item`` creates and WEARS its own hair item H). Items top / skirt, in mode in_body (both
+``garment_hair.ensure_hairstyle`` creates and WEARS its first hairstyle H, mode HairDeck). Items top / skirt, in mode in_body (both
 in the shape); "retexture mode" in [1] = both switched to painted (no shape wanted).
 Base views front/back of bsig, base model. Outfit O1 {top, skirt} WORN with a dressed front + back made BEFORE the
 rule, texture T0 = its tsig, its body B0 = its shape key (figure.shape_key of {top, skirt} in the body — the dress
@@ -103,7 +103,7 @@ def main() -> int:
         # A hair method with an own hair mesh (the default "body" makes no hair item; the edit chain this smoke
         # was written for is gone since the hair-from-body spec 2026-11-11).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "hairdeck"}}))
+                                                        "base_body": {"hairstyle_default_mode": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "inst/config.json")
         from app.core import db
@@ -130,7 +130,7 @@ def main() -> int:
         prof = get_character_profile(char)
         prof["profile_image"] = f"{char}_1.png"
         assert save_character_profile(char, prof)
-        hair_id = garment_hair.ensure_hair_item(char)
+        hair_id = garment_hair.ensure_hairstyle(char)
         check("fixture: hair worn", inventory.get_equipped_mesh_pieces(char), {"hair": hair_id})
         for key, slots in (("top", ["top"]), ("skirt", ["bottom"])):
             op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "mesh_mode": "in_body"}

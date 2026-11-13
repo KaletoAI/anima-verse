@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """The ``hair_fill`` improvement type (app/core/improvements/types/hair_fill.py;
 spec docs/superpowers/specs/2026-11-11-improvements-figure-pipeline-design.md § 6.5):
-the hair mesh of characters on the pipeline that have hair text but none.
+the hair mesh of characters on the pipeline whose worn HairDeck hairstyle has
+none (plan 2026-11-12-unified-worn-pieces Task 13: the subject is the worn
+hairstyle; the type never creates or wears one).
 
 Usage:
     ./.venv/bin/python scripts/smoke_improvement_hair_fill.py
@@ -25,20 +27,22 @@ empties one.
 
 Expectations, derived by hand from § 6.5 and ``garments.HUB_JOBS``:
 
-[H1] Kira has hair text and no hair item. World method body (the default
-     since the hair-from-body spec 2026-11-11): the hair is in the body mesh →
-     no candidate; so do the removed world values "edit_chain" and
-     "subtract" (they resolve to body, Task 2). World
-     ``base_body.hair_method`` "hairdeck" → exactly one candidate
-     ``character:Kira`` (Bald is no subject: [H6]): label "Kira · HairDeck",
-     hub_jobs ``HUB_JOBS["hair:hairdeck"]`` 1 + 0 = 1, note "new hair item:
-     hairdeck 1" (the fit step costs no job and is left out of the note).
-     The world stays on hairdeck for the rest.
-[H2] through the engine (``handle_step``) → {"ok": True}:
-     ``ensure_hair_item`` created and wore the item (``find_hair_item`` not
-     None, ``worn_hair_id`` = its id), run_garment called once with that
-     item; ``hair_summary`` "ready"; rescan → no candidate; the one-shot
-     worked itself off.
+[H1] Kira has hair text (Appearance: "medium blonde hair") and no hairstyle
+     → no candidate (nothing to run; the type creates nothing). Her first
+     hairstyle (``create_hairstyle``, mode "" = the world default "body") is
+     worn, its hair in the body mesh → no candidate; the world default set
+     to "hairdeck" changes no existing hairstyle → still none. Her
+     hairstyle switched to "hairdeck" (``set_hairstyle_mode``) → exactly one
+     candidate ``character:Kira`` (Bald is no subject: [H6]): label "Kira ·
+     Medium blonde hair (HairDeck)" (the hairstyle's name: its text with a
+     capital first letter), hub_jobs ``HUB_JOBS["hair:hairdeck"]`` 1 + 0 =
+     1, note = run_estimate's "hairdeck 1" (the fit step costs no job and is
+     left out of the note; the former "new hair item: " prefix went with the
+     item creation).
+[H2] through the engine (``handle_step``) → {"ok": True}: run_garment
+     called once with the worn hairstyle; still one hairstyle of Kira;
+     ``hair_summary`` "ready"; rescan → no candidate; the one-shot worked
+     itself off.
 [H3] the fit deleted → hair_summary "missing" → the candidate is back with
      ``run_estimate``'s cost (the HairDeck job and its seed are still stored,
      so only the fit runs: 0, note "no hub job"); a persisted failure of the
@@ -54,8 +58,9 @@ Expectations, derived by hand from § 6.5 and ``garments.HUB_JOBS``:
      refused, attempts 1, one run.
 [H6] Bald (no hair text) → never a candidate (``character=Bald`` lists
      nothing).
-[H7] Kira takes the hair item off (``unequip_mesh_piece``) → hair_summary
-     None, but ``find_hair_item`` still finds the owned item → no candidate.
+[H7] Kira takes the hairstyle off (``unequip_mesh_piece``) → hair_summary
+     None, she still owns it (``hairstyles``) → no candidate (only a worn
+     hairstyle is a subject).
 
 Fails on 505c3076: ModuleNotFoundError — app.core.improvements.types.hair_fill.
 """
@@ -120,7 +125,7 @@ def main() -> int:
         from app.core.improvements.types.hair_fill import HairFill
         from app.core.task_queue import get_task_queue
         from app.models import inventory
-        from app.models.character import get_character_dir, get_character_profile, save_character_profile
+        from app.models.character import get_character_dir, save_character_profile
 
         get_task_queue()._started = True          # no worker threads: rows only
         model_refs.schedule_outfit_render = lambda *a, **k: None
@@ -146,8 +151,8 @@ def main() -> int:
             (mdir / f"{bsig}.json").write_text(json.dumps({"base": True, "rig": "mixamo", "signature": bsig,
                                                            "format": "glb", "source": "generated"}))
             check(f"{name} base ready", (base_body.base_model_info(name) or {}).get("status"), "ready")
-        check("Kira hair text", garment_hair.hair_description("Kira"), "medium blonde hair")
-        check("Bald no hair text", garment_hair.hair_description("Bald"), "")
+        check("Kira hair text", garment_hair.appearance_hair_text("Kira"), "medium blonde hair")
+        check("Bald no hair text", garment_hair.appearance_hair_text("Bald"), "")
 
         RUNS = []
         ANSWER = {"result": None}
@@ -194,20 +199,23 @@ def main() -> int:
             store.mark_running(entry, key)
             return engine.handle_step({"improvement_id": entry, "candidate_key": key, "_task_id": "t"})
 
-        def world_method(method):
-            config._CONFIG.setdefault("base_body", {})["hair_method"] = method
 
         with patch.object(garments, "run_garment", run_garment), \
              patch("app.imagegen.routing.explain_occasion", explain):
 
             # --- [H1] ---------------------------------------------------------------
             print("[H1] hair text, no item")
-            check("body (default): no candidate", rows(), [])
-            for gone in ("edit_chain", "subtract"):
-                world_method(gone)
-                check(f"removed {gone} = body: no candidate", rows(), [])
-            world_method("hairdeck")
-            check("hairdeck", rows(), [("character:Kira", "Kira · HairDeck", 1, "new hair item: hairdeck 1")])
+            check("no hairstyle: no candidate", rows(), [])
+            item_id = garment_hair.create_hairstyle("Kira", "", "")
+            check("the first hairstyle is worn, body", (garment_hair.worn_hair_id("Kira"),
+                                                        garment_hair.hair_mode("Kira")), (item_id, "body"))
+            check("body: no candidate", rows(), [])
+            config._CONFIG.setdefault("base_body", {})["hairstyle_default_mode"] = "hairdeck"
+            check("world default hairdeck: still none", rows(), [])
+            config._CONFIG.pop("base_body", None)
+            check("Kira's hairstyle -> hairdeck", garment_hair.set_hairstyle_mode("Kira", item_id, "hairdeck"), True)
+            check("hairdeck", rows(), [("character:Kira", "Kira · Medium blonde hair (HairDeck)", 1,
+                                        "hairdeck 1")])
             check("needs_media", typ.needs_media, True)
 
             # --- [H2] ---------------------------------------------------------------
@@ -215,10 +223,8 @@ def main() -> int:
             entry = store.create(typ.id, "Hair", typ.validate({}), "one_shot")["id"]
             check("scan", engine.scan(entry), {"added": 1, "closed": 0})
             check("handle_step ok", run_step(entry, "character:Kira"), {"ok": True})
-            item = garment_hair.find_hair_item("Kira", get_character_profile("Kira"))
-            check("the item exists", item is not None, True)
-            item_id = (item or {}).get("id")
-            check("and is worn", garment_hair.worn_hair_id("Kira"), item_id)
+            check("still one hairstyle, worn", ([h["id"] for h in garment_hair.hairstyles("Kira")],
+                                                garment_hair.worn_hair_id("Kira")), ([item_id], item_id))
             check("one run with that item", RUNS, [("Kira", item_id)])
             check("hair_summary ready", (garments.hair_summary("Kira") or {}).get("status"), "ready")
             check("rescan: no candidate", cands(), [])
@@ -230,7 +236,7 @@ def main() -> int:
             fit.unlink()
             check("hair_summary missing", (garments.hair_summary("Kira") or {}).get("status"), "missing")
             check("candidate back with run_estimate's cost", rows(),
-                  [("character:Kira", "Kira · HairDeck", 0, "no hub job")])
+                  [("character:Kira", "Kira · Medium blonde hair (HairDeck)", 0, "no hub job")])
             fsig = gs.garment_fsig("Kira", item_id)
             gs.record_failure("Kira", item_id, fsig, step="fit", error="refused",
                               base_model_sha=base_body.current_base("Kira")[1])
@@ -274,8 +280,7 @@ def main() -> int:
             print("[H7] the item taken off")
             check("unequip", inventory.unequip_mesh_piece("Kira", garment_hair.HAIR_KIND), True)
             check("hair_summary None", garments.hair_summary("Kira"), None)
-            check("the owned item is still found",
-                  (garment_hair.find_hair_item("Kira", get_character_profile("Kira")) or {}).get("id"), item_id)
+            check("the hairstyle is still owned", [h["id"] for h in garment_hair.hairstyles("Kira")], [item_id])
             check("no candidate", cands(), [])
 
     print(f"\n{len(FAILS)} failure(s)" + (": " + ", ".join(FAILS) if FAILS else ""))

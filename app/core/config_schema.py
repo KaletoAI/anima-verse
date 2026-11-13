@@ -125,20 +125,19 @@ SECTIONS = {
         "scope": "world",
         "world_group": "gameplay",
         "fields": {
-            "hair_method": {
+            "hairstyle_default_mode": {
                 "type": "select",
-                "label": "Hair method",
+                "label": "Default hairstyle mode",
                 "choices": ["body", "hairdeck"],
-                "choice_labels": {"body": "From the body mesh",
+                "choice_labels": {"body": "In the body mesh",
                                   "hairdeck": "HairDeck (one image → hair cards)"},
                 "default": "body",
-                "description": "How a base-body character's hair is made. From the body mesh: the base views are "
-                               "rendered with the character's hair, so the hair is part of the base body and of "
-                               "every body shape — no hair mesh, no hair job. HairDeck: one job turns the profile "
-                               "picture into hair cards (needs an img2hair backend, occasion hair_mesh), fitted "
-                               "onto the bald base body. A character can override this in its Wardrobe's hair row. "
-                               "Switching between the two changes the base body's prompts: its views show "
-                               "\"Built with older prompts\" until they are regenerated.",
+                "description": "The mode a NEW hairstyle gets (a character's first one is made from its "
+                               "Appearance). Every hairstyle keeps its own mode afterwards. In the body mesh: "
+                               "the hair is part of the body — the plain body is rendered with it, another such "
+                               "hairstyle becomes its own body shape; no hair job. HairDeck: one job turns the "
+                               "profile picture into hair cards (needs an img2hair backend, occasion "
+                               "hair_mesh), fitted onto a bald body.",
             },
             "dressed_side_views": {
                 "type": "bool",

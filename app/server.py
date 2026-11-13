@@ -759,6 +759,20 @@ async def lifespan(app: FastAPI):
     except Exception as _fgd:
         logger.warning("Removed fit globs clean-up failed (retried at the next start): %s", _fgd)
 
+    # Migration (same plan, Task 13, D3): hairstyles are items — every humanoid
+    # gets ONE hairstyle from today's hair (text, stored method, colour /
+    # placement / motion keys), worn and the plain body's own; the legacy
+    # profile keys leave. Nothing is rebuilt (the plain body's prompts read
+    # the same text). ORDER: after the hair migration above (it reads the
+    # stored hair_method and removes old hair items first; this one waits for
+    # its flag) and after the figure migrations above, before the garment
+    # refit sweep below reads the hair. Once per world, one log line.
+    try:
+        from app.core.figure_migration import migrate_hairstyles_once
+        migrate_hairstyles_once()
+    except Exception as _fhs:
+        logger.warning("Hairstyle migration failed (retried at the next start): %s", _fhs)
+
     # Re-make (same plan, Task 11g fix round 2, Ruling C2): the dressed
     # back/side views and worn backs the old MODEL fit made are stale (they
     # came back nude); readers refuse them, and once per world a background

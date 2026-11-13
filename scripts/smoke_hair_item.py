@@ -9,8 +9,9 @@ package plus ONE fixture package — no real world, no private pack, no server.
 Every expectation is derived by hand below from the human manifest, the
 fixture and the rules of plan 2026-11-09-base-body-phase4-hair (R2, R3).
 
-World hair method ``hairdeck`` (a mesh method: the default ``body`` makes no
-hair item). Fixture character ``Demo`` (template human-roleplay, female, 30,
+World default hairstyle mode ``hairdeck`` (plan 2026-11-12-unified-worn-pieces
+Task 13: a hair item is a hairstyle; its mode is the item's, a new one gets
+the world default). Fixture character ``Demo`` (template human-roleplay, female, 30,
 168 cm, on the base-body pipeline): hair slot {length: medium, color: blonde},
 character_appearance "slender, wavy hair with a side parting, green eyes",
 two equipped outfit pieces (top "blouse", bottom "jeans"). ``Pet`` uses the
@@ -29,7 +30,7 @@ non-string ``mesh_item: 5``.
     is the front ``values`` line for "medium": "hair tucked back behind the
     shoulders, the chest and collarbones free of hair". Unknown slot ->
     ("", "").
-[4] hair_description(Demo) = fragment + every comma/sentence clause of the
+[4] appearance_hair_text(Demo) = fragment + every comma/sentence clause of the
     appearance matching \\bhair\\b: clauses "slender" / "wavy hair with a side
     parting" / "green eyes" -> only the middle one:
         "medium blonde hair, wavy hair with a side parting"
@@ -39,12 +40,16 @@ non-string ``mesh_item: 5``.
     (R3: "no hair text AT ALL means no hair item"). A clause that denies hair
     ("bald head with no hair": no/without/bald/hairless) or still holds a
     {placeholder} is not hair text -> "".
-[5] hair_behind_shoulders: medium -> True (the values table has "medium");
-    short -> False (no entry).
-[6] ensure_hair_item(Demo): creates ONE item {name "Hair", category
-    "garment", owner "Demo", garment {kind hair, slot hair, body_slot hair},
-    prompt_fragment = [4]}; a second call returns the same id and creates
-    nothing; equipped_mesh_pieces == {"hair": id}, stored in
+[5] hair_behind_shoulders of the Appearance's hair text (``text=`` [4]):
+    medium -> True (the values table has "medium"); short -> False (no entry).
+[6] ensure_hairstyle(Demo): creates ONE item {name = the description cut at
+    a word to 48 characters + "…" (the 49-character [4] text) = "Medium
+    blonde hair, wavy hair with a side…", category "garment", owner "Demo",
+    garment {kind hair, slot hair, body_slot hair, mesh_mode hairdeck (the
+    world default), description = [4]}, prompt_fragment = [4]}; a second
+    call returns the same id and creates nothing; equipped_mesh_pieces ==
+    {"hair": id} and base_hairstyle == id (the first hairstyle is worn and
+    the plain body's), stored in
     character_state.meta (state key, not profile_json); the inventory
     listing is identical before/after; ``_notify_outfit_changed`` is never
     called; ``garment_assembly.schedule`` is called once (the first equip
@@ -55,16 +60,17 @@ non-string ``mesh_item: 5``.
 [8] equip_piece(Demo, hair_id) is refused (the hair item is no outfit piece
     and not in the inventory); equip_mesh_piece refuses an outfit piece, a
     garment whose slot ("wings") is not among Demo's mesh-item slots, an
-    unknown id and a hair garment owned by another character (ValueError). A changed slot (short) re-run of ensure_hair_item keeps the
-    id and refreshes prompt_fragment to "short blonde hair, wavy hair with a
-    side parting" without purging any outfit render
-    (invalidate_variants_for_item never called). unequip_mesh_piece(Demo,
-    "hair") -> True and {}; ensure finds the item again by owner + kind.
-[9] Pet -> ValueError "Hair as its own mesh is for humanoid …", profile
-    unchanged, no item created. Bald -> ValueError "No hair set …", no item
-    created. (The former Offline case — a human with the pipeline switch off
-    -> "is not on the base-body pipeline" — left with Task 11h: that state no
-    longer exists and ensure_hair_item lost the branch.)
+    unknown id and a hair garment owned by another character (ValueError). A
+    changed slot (short): ensure_hairstyle keeps the id and the hairstyle's
+    text (it is the item's now, not re-derived from the Appearance), no
+    outfit render purged (invalidate_variants_for_item never called).
+    unequip_mesh_piece(Demo, "hair") -> True and {}; ensure_hairstyle then
+    answers "" (it owns one, none is worn — never re-worn behind the user's
+    back); wear_hairstyle(Demo, id) wears it again (the Build request
+    stubbed).
+[9] create_hairstyle: Pet -> ValueError "Hairstyles are for humanoid …",
+    profile unchanged, no item created. Bald -> ValueError "No hair set …",
+    no item created; ensure_hairstyle(Bald) -> "" (bald: nothing to make).
 """
 import json
 import os
@@ -123,7 +129,7 @@ def main() -> int:
         # The world's hair method is pinned to a mesh method (``hairdeck``): since the hair-from-body
         # spec (2026-11-11) the default ``body`` renders a haired base and never makes a hair item.
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human,fixture_mesh"},
-                                                       "base_body": {"hair_method": "hairdeck"}}))
+                                                       "base_body": {"hairstyle_default_mode": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -191,26 +197,29 @@ def main() -> int:
         check("prompt_fragments general", "medium blonde hair" in frags["general"], True)
         check("prompt_fragments exposed", MEDIUM_LINE in frags["exposed"], True)
 
-        print("[4] hair_description")
+        print("[4] appearance_hair_text")
         from app.core import garment_hair
-        check("description", garment_hair.hair_description("Demo", profile=stored), DESCRIPTION)
-        check("stored-profile path", garment_hair.hair_description("Demo"), DESCRIPTION)
+        check("description", garment_hair.appearance_hair_text("Demo", profile=stored), DESCRIPTION)
+        check("stored-profile path", garment_hair.appearance_hair_text("Demo"), DESCRIPTION)
         dup = dict(stored, character_appearance="Medium blonde hair. wavy hair with a side parting")
-        check("dedup", garment_hair.hair_description("Demo", profile=dup), DESCRIPTION)
+        check("dedup", garment_hair.appearance_hair_text("Demo", profile=dup), DESCRIPTION)
         no_slot = json.loads(json.dumps(stored))
         no_slot["body_slots"].pop("hair")
-        check("clause only", garment_hair.hair_description("Demo", profile=no_slot),
+        check("clause only", garment_hair.appearance_hair_text("Demo", profile=no_slot),
               "wavy hair with a side parting")
         denied = dict(no_slot, character_appearance="slender, bald head with no hair, {mood} hair glow")
-        check("denial and placeholder clauses dropped", garment_hair.hair_description("Demo", profile=denied), "")
+        check("denial and placeholder clauses dropped", garment_hair.appearance_hair_text("Demo", profile=denied),
+              "")
 
         print("[5] hair_behind_shoulders")
-        check("medium", garment_hair.hair_behind_shoulders("Demo", profile=stored), True)
+        check("medium", garment_hair.hair_behind_shoulders(
+            "Demo", profile=stored, text=garment_hair.appearance_hair_text("Demo", profile=stored)), True)
         short = json.loads(json.dumps(stored))
         short["body_slots"]["hair"]["length"] = "short"
-        check("short", garment_hair.hair_behind_shoulders("Demo", profile=short), False)
+        check("short", garment_hair.hair_behind_shoulders(
+            "Demo", profile=short, text=garment_hair.appearance_hair_text("Demo", profile=short)), False)
 
-        print("[6] ensure_hair_item")
+        print("[6] ensure_hairstyle")
         pieces = inventory.get_equipped_pieces("Demo")
         items = inventory.get_equipped_items("Demo")
 
@@ -239,16 +248,18 @@ def main() -> int:
         garment_assembly.schedule = lambda name, signature=None: scheduled.append(name) or True
         expression_regen.invalidate_variants_for_item = lambda item_id: purged.append(item_id) or 0
         try:
-            hair_id = garment_hair.ensure_hair_item("Demo")
-            check("second call same id", garment_hair.ensure_hair_item("Demo"), hair_id)
+            hair_id = garment_hair.ensure_hairstyle("Demo")
+            check("second call same id", garment_hair.ensure_hairstyle("Demo"), hair_id)
             check("one item created", len(inventory.list_items()), items_before + 1)
             item = inventory.get_item(hair_id)
-            check("name", item.get("name"), "Hair")
+            check("name", item.get("name"), "Medium blonde hair, wavy hair with a side…")
             check("category", item.get("category"), "garment")
             check("owner", item.get("owner"), "Demo")
-            check("garment", item.get("garment"), {"kind": "hair", "slot": "hair", "body_slot": "hair"})
+            check("garment", item.get("garment"), {"kind": "hair", "slot": "hair", "body_slot": "hair",
+                                                   "mesh_mode": "hairdeck", "description": DESCRIPTION})
             check("prompt_fragment", item.get("prompt_fragment"), DESCRIPTION)
             check("equipped_mesh_pieces", inventory.get_equipped_mesh_pieces("Demo"), {"hair": hair_id})
+            check("the plain body's hairstyle", get_character_profile("Demo").get("base_hairstyle"), hair_id)
             row = db.get_connection().execute(
                 "SELECT meta FROM character_state WHERE character_name=?", ("Demo",)).fetchone()
             check("state meta key", json.loads(row[0] or "{}").get("equipped_mesh_pieces"), {"hair": hair_id})
@@ -275,15 +286,25 @@ def main() -> int:
 
             from app.core.body_slots import set_slot_value
             check("set short", set_slot_value("Demo", "hair", "length", "short"), True)
-            check("refresh same id", garment_hair.ensure_hair_item("Demo"), hair_id)
-            check("refreshed fragment", inventory.get_item(hair_id).get("prompt_fragment"),
-                  "short blonde hair, wavy hair with a side parting")
+            check("same id after the slot change", garment_hair.ensure_hairstyle("Demo"), hair_id)
+            check("the hairstyle keeps its text", (inventory.get_item(hair_id).get("prompt_fragment"),
+                                                   garment_hair.hair_description("Demo")),
+                  (DESCRIPTION, DESCRIPTION))
             check("no outfit render purge", purged, [])
 
             check("unequip", inventory.unequip_mesh_piece("Demo", "hair"), True)
             check("unequipped", inventory.get_equipped_mesh_pieces("Demo"), {})
-            check("found by owner", garment_hair.ensure_hair_item("Demo"), hair_id)
+            check("owned, none worn: not re-worn", garment_hair.ensure_hairstyle("Demo"), "")
+            from app.core import figure_build
+            requests = []
+            real_request = figure_build.request
+            figure_build.request = lambda name, trigger: requests.append((name, trigger)) or True
+            try:
+                check("wear it again", garment_hair.wear_hairstyle("Demo", hair_id), True)
+            finally:
+                figure_build.request = real_request
             check("re-equipped", inventory.get_equipped_mesh_pieces("Demo"), {"hair": hair_id})
+            check("one Build request", requests, [("Demo", "outfit_change")])
             check("still one hair item of Demo", sum(1 for it in inventory.list_items()
                                                     if (it.get("garment") or {}).get("kind") == "hair"
                                                     and it.get("owner") == "Demo"), 1)
@@ -292,9 +313,11 @@ def main() -> int:
             print("[9] refused characters")
             items_now = len(inventory.list_items())
             pet_before = get_character_profile("Pet")
-            raises("Pet", lambda: garment_hair.ensure_hair_item("Pet"), ValueError, "Hair as its own mesh is for humanoid")
+            raises("Pet", lambda: garment_hair.create_hairstyle("Pet", "", ""), ValueError,
+                   "Hairstyles are for humanoid")
             check("Pet profile unchanged", get_character_profile("Pet"), pet_before)
-            raises("Bald", lambda: garment_hair.ensure_hair_item("Bald"), ValueError, "No hair set")
+            raises("Bald", lambda: garment_hair.create_hairstyle("Bald", "", ""), ValueError, "No hair set")
+            check("ensure Bald: nothing to make", garment_hair.ensure_hairstyle("Bald"), "")
             check("Bald no mesh pieces", inventory.get_equipped_mesh_pieces("Bald"), {})
             check("no item created", len(inventory.list_items()), items_now)
         finally:

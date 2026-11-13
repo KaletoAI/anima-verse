@@ -976,3 +976,144 @@ def drop_pipeline_key_once() -> Optional[Dict[str, str]]:
                 "on the base-body pipeline, nothing rebuilt", PIPELINE_KEY, len(result),
                 f": {', '.join(f'{n} ({v})' for n, v in sorted(result.items()))}" if result else "")
     return result
+
+
+# --- Hairstyles as items (Task 13, D3) ------------------------------------------
+#
+# A character's hair was ONE thing: the hair text derived from its Appearance,
+# the per-character ``hair_method`` (else the world's ``base_body.hair_method``)
+# and the profile keys of its colour, placement, swing and stiffness — plus,
+# under HairDeck, a hair item. Since Task 13 hair is a HAIRSTYLE: an item (a
+# garment of kind hair the character owns) with its mode
+# (``garment.mesh_mode``), its text (``garment.description``) and those
+# settings; several owned, one worn (``equipped_mesh_pieces["hair"]``).
+# ``migrate_hairstyles_once`` turns today's state into exactly that, once per
+# world (world_kv ``HAIRSTYLE_FLAG``), for every character row (dormant and
+# pooled ones too):
+#
+# - a humanoid with a hair slot and hair text (``garment_hair.
+#   appearance_hair_text``) gets ONE hairstyle: mode = its STORED method
+#   (``hair_migration.legacy_hair_method``: the profile's ``hair_method``,
+#   else the world default), description = that hair text, settings = its
+#   stored profile keys (``garment_hair.SETTING_KEYS``). A character that
+#   already owns a hair item (HairDeck) gets THAT item extended — the worn
+#   one, else the first owned — never a duplicate; its job folders and fits
+#   stay, and its fingerprint inputs are the same values as before;
+# - the hairstyle is worn and becomes the plain body's hairstyle
+#   (``garment_hair.BASE_HAIRSTYLE_KEY``): the plain body's prompts read the
+#   same text as before (``base_body.hair_text``), so ``base_signature``,
+#   ``prompt_fingerprint`` and every stored file stay as they are — NOTHING
+#   is rebuilt, no hub job, no generation;
+# - the profile keys ``hair_method`` and ``SETTING_KEYS`` leave every
+#   profile (a bald humanoid, a non-humanoid too).
+#
+# It runs only after ``hair_migration.delete_all_hair_once`` (its flag
+# ``HAIR_FLAG``): that one reads the stored method too and removes the hair
+# items of the removed methods first; until then it waits (the next start
+# retries). The world's ``base_body.hair_method`` became
+# ``base_body.hairstyle_default_mode`` at config load (``config.
+# _migrate_hairstyle_default_mode``). Item first, profile second, under
+# ``keyed_lock("garment_item", name)`` → ``keyed_lock("character_profile",
+# name)`` (``garment_hair.create_hairstyle``'s order). A failure is a WARNING
+# naming the character and the migration goes on; the flag is set anyway. A
+# character list or profile that cannot be read raises before anything is
+# written and leaves the flag unset.
+
+#: world_kv key of the done flag.
+HAIRSTYLE_FLAG = "migrated_hairstyle_items"
+
+
+def _legacy_settings(profile: Dict[str, Any]) -> Dict[str, Any]:
+    from app.core.garment_hair import SETTING_KEYS
+    return {k: profile[k] for k in SETTING_KEYS if profile.get(k) not in (None, "")}
+
+
+def _hairstyle_of(name: str, profile: Dict[str, Any]) -> str:
+    """Step 1 for one character (the caller holds the item lock): the id of
+    the hairstyle it gets — an owned hair item extended, else a new one —
+    "" for no hairstyle (bald, no humanoid, no hair slot)."""
+    from app.core import garment_hair
+    from app.core.hair_migration import legacy_hair_method
+    from app.core.model_refs import is_humanoid
+    from app.models import inventory
+    if not is_humanoid(name, profile=profile):
+        return ""
+    slot = garment_hair._hair_slot(name, profile)
+    text = garment_hair.appearance_hair_text(name, profile=profile)
+    if slot is None or not text:
+        return ""
+    mode = legacy_hair_method(profile)
+    settings = _legacy_settings(profile)
+    owned = garment_hair.hairstyles(name)
+    worn = garment_hair.worn_hair_id(name, profile)
+    item = next((i for i in owned if i.get("id") == worn), owned[0] if owned else None)
+    if item is None:
+        return str(garment_hair._mint_hairstyle(name, slot.id, text, mode, settings)["id"])
+    garment = dict(item.get("garment") or {})
+    garment.update({"mesh_mode": mode, "description": text, **settings})
+    garment.setdefault("body_slot", slot.id)
+    if garment != (item.get("garment") or {}) and inventory.update_item(item["id"], {"garment": garment}) is None:
+        raise RuntimeError(f"hair item {item['id']} not updated")
+    return str(item["id"])
+
+
+def _migrate_hairstyle(name: str) -> Tuple[str, List[str]]:
+    """``(hairstyle id or "", profile keys dropped)`` of one character."""
+    from app.core import garment_hair
+    from app.core.hair_migration import LEGACY_METHOD_KEY
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    with keyed_lock("garment_item", name):
+        item_id = _hairstyle_of(name, get_character_profile(name, strict=True) or {})
+        with keyed_lock("character_profile", name):
+            profile = get_character_profile(name, strict=True) or {}
+            dropped = [k for k in (LEGACY_METHOD_KEY, *garment_hair.SETTING_KEYS) if k in profile]
+            for key in dropped:
+                profile.pop(key)
+            changed = bool(dropped)
+            if item_id:
+                worn = profile.get("equipped_mesh_pieces")
+                worn = dict(worn) if isinstance(worn, dict) else {}
+                if worn.get(garment_hair.HAIR_KIND) != item_id:
+                    worn[garment_hair.HAIR_KIND] = item_id
+                    profile["equipped_mesh_pieces"] = worn
+                    changed = True
+                if profile.get(garment_hair.BASE_HAIRSTYLE_KEY) != item_id:
+                    profile[garment_hair.BASE_HAIRSTYLE_KEY] = item_id
+                    changed = True
+            if changed and not save_character_profile(name, profile):
+                logger.warning("Hairstyle migration %s: profile not saved — %s stays unworn, keys %s stay",
+                               name, item_id or "no hairstyle", ", ".join(dropped) or "none")
+                return item_id, []
+    return item_id, dropped
+
+
+def migrate_hairstyles_once() -> Optional[Dict[str, str]]:
+    """The migration above. None when it already ran or still waits for the
+    hair migration, else ``{character: hairstyle id}`` (characters that got
+    none are left out)."""
+    from app.core.hair_migration import HAIR_FLAG
+    from app.models.character import list_available_characters
+    from app.models.world import get_world_setting, set_world_setting
+    if get_world_setting(HAIRSTYLE_FLAG, strict=True):
+        return None
+    if not get_world_setting(HAIR_FLAG, strict=True):
+        logger.info("Hairstyle migration waits for the hair migration (retried at the next start)")
+        return None
+    names = list_available_characters(include_pooled=True, include_dormant=True, strict=True)
+    result: Dict[str, str] = {}
+    keys = 0
+    for name in names:
+        try:
+            item_id, dropped = _migrate_hairstyle(name)
+        except Exception as e:  # noqa: BLE001 — the next character still goes
+            logger.warning("Hairstyle migration %s: failed: %s", name, e)
+            continue
+        keys += len(dropped)
+        if item_id:
+            result[name] = item_id
+    set_world_setting(HAIRSTYLE_FLAG, "1")
+    logger.info("Hairstyles: %d character(s) got their hairstyle worn, %d legacy hair key(s) dropped%s — "
+                "nothing rebuilt", len(result), keys,
+                f": {', '.join(f'{n} ({i})' for n, i in sorted(result.items()))}" if result else "")
+    return result

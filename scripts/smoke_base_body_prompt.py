@@ -277,7 +277,7 @@ def main() -> int:
         # The world's hair method is pinned to a mesh method (``hairdeck``): since the hair-from-body
         # spec (2026-11-11) the default ``body`` renders a haired base and never makes a hair item.
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human,fixture_marks"},
-                                                       "base_body": {"hair_method": "hairdeck"}}))
+                                                       "base_body": {"hairstyle_default_mode": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db

@@ -54,13 +54,17 @@ Expected, by hand from the brief:
     …/figure/auto-build; admin POST auto-build ``{enabled: false}`` →
     ``{"auto_build": false}`` and the profile key stored False.
 [7] Ruling 7a (the stubbed world of ``smoke_figure_build_plan``: hair wanted
-    HairDeck, its chain failed for its fsig, the model built as delivered):
+    HairDeck, its chain failed for its fsig, the model built as delivered; the
+    hair step is named after the worn hairstyle — the fixture's item "Hair" —
+    since plan 2026-11-12-unified-worn-pieces Task 13, and a Build no longer
+    makes a hair item in its hair step: ``ensure_hairstyle`` runs before the
+    plan, stubbed by ``smoke_figure_build_plan``):
     ``plan(explicit=False)`` (automatic) = ``[hair]`` with ``failed`` set, label "… — failed — Retry",
     jobs 0 → cost 0; an automatic ``start`` → "current"; GET status
     ``failed``, hair row ``failed``; ``plan(explicit=True)`` (the default:
     the Build button's plan) = hair, fits, assemble; a manual Build runs ``run_queued(…, explicit=True)``, then the
     refit and the assembly. While it retries the chain its track label reads
-    "Build · Kira (1/3 Hair · HairDeck — retrying)" (step 1 of hair, fits,
+    "Build · Kira (1/3 Hair · Hair (HairDeck) — retrying)" (step 1 of hair, fits,
     assemble; T8 concern 7 — not "… — failed — Retry"), and
     ``running_label(False)`` keeps the plan label (an automatic Build never
     runs it). The cached hair failure next to other work (the
@@ -387,7 +391,7 @@ def failure_section():
     steps = fb.plan("Kira", profile={}, explicit=False)
     check("[7] automatic plan", fbp.names(steps), [("hair", "hair_kira", 0)])
     check("[7] failed text", steps[0].failed, "hairdeck — no hair found")
-    check("[7] label", steps[0].label, "Hair · HairDeck — failed — Retry")
+    check("[7] label", steps[0].label, "Hair · Hair (HairDeck) — failed — Retry")
     check("[7] cost", fb.cost("Kira", steps)["hub_jobs"], 0)
     check("[7] automatic start", fb.start("Kira", reason="outfit_change", automatic=True)["status"], "current")
     info = fb.figure_info("Kira")
@@ -395,7 +399,7 @@ def failure_section():
     check("[7] hair row", (info["hair"]["state"], info["hair"]["note"]), ("failed", "hairdeck — no hair found"))
     check("[7] explicit plan", fbp.names(fb.plan("Kira", profile={}, explicit=True)),
           [("hair", "hair_kira", 0), ("fits", 0), ("assemble", 0)])
-    check("[7] automatic running label", steps[0].running_label(False), "Hair · HairDeck — failed — Retry")
+    check("[7] automatic running label", steps[0].running_label(False), "Hair · Hair (HairDeck) — failed — Retry")
     from app.core import task_queue
     track_labels = []
 
@@ -413,9 +417,9 @@ def failure_section():
     check("[7] manual run ended", fbp.wait_idle(fb), True)
     check("[7] run_queued explicit", explicit_calls, [(("hair_kira",), True)])
     check("[7] manual run: chain, refit, assembly", [c for c in fbp.W.calls if c != "slot"],
-          ["hair_item", "chain hair_kira", "refit", "model no-prepare", "schedule"])
+          ["chain hair_kira", "refit", "model no-prepare", "schedule"])
     check("[7] manual run: no failure", fb.state("Kira")["failed"], {})
-    check("[7] retried chain shown running", track_labels[:1], ["Build · Kira (1/3 Hair · HairDeck — retrying)"])
+    check("[7] retried chain shown running", track_labels[:1], ["Build · Kira (1/3 Hair · Hair (HairDeck) — retrying)"])
 
     print("[7] automatic run with a cached failure next to other work")
     cached["hair_kira"] = {"item_id": "hair_kira", "fsig": "f1", "step": "hairdeck", "error": "no hair found"}
@@ -425,7 +429,7 @@ def failure_section():
     check("[7] automatic run ended", fbp.wait_idle(fb), True)
     ran = [c for c in fbp.W.calls if c != "slot"]
     check("[7] the other work ran", ran, ["dressed", "model no-prepare", "schedule"])
-    check("[7] the hair chain did not run", [c for c in ran if c.startswith("chain") or c == "hair_item"], [])
+    check("[7] the hair chain did not run", [c for c in ran if c.startswith("chain")], [])
     check("[7] run_queued not called", explicit_calls, [])
     check("[7] failed hair = the cached error", fb.state("Kira")["failed"].get("hair"),
           {"error": "hairdeck — no hair found", "item_id": "hair_kira"})

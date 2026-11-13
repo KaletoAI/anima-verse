@@ -2033,12 +2033,13 @@ Seit Phase 4 des Basiskörper-Programms (Plan
 `docs/superpowers/plans/2026-11-09-base-body-phase4-hair.md`, R11/R12) kann das
 AUSGELIEFERTE Charakter-GLB (`url` und `low_url` aus § A7) neben dem Körper
 weitere Meshes tragen — heute Kleidungsstücke mit eigenem Mesh, Schuhe und die
-Haare eines Charakters auf der Basiskörper-Pipeline mit der Haar-Methode
-HairDeck (`hair_method`, gewählt in der Haar-Zeile der Garderobe; seit Task 11
-von Plan `2026-11-12-unified-worn-pieces` gibt es keinen eigenen Haar-Tab
-mehr). Unter der Standard-Methode `body` (Spec
+Haare eines Charakters auf der Basiskörper-Pipeline, dessen getragene Frisur
+den Modus HairDeck hat (seit Task 13 von Plan `2026-11-12-unified-worn-pieces`
+ist eine Frisur ein Item mit eigenem Modus `garment.mesh_mode`; mehrere
+besessen, eine getragen in `equipped_mesh_pieces.hair`). Im Modus `body` (Spec
 `docs/superpowers/specs/2026-11-11-hair-from-body-design.md`) sind die Haare
-Teil des Körper-Meshes selbst — kein Garment, kein `garment_hair_*`-Knoten.
+Teil des Körper-Meshes selbst — kein Garment, kein `garment_hair_*`-Knoten;
+eine andere `body`-Frisur als die des Grundkörpers ist eine eigene Körperform.
 
 - **Form:** jedes Garment ist ein zusätzliches **Skinned Mesh auf Skin 0**
   (dieselben Knochen wie der Körper, Gewichte auf `Head` → `Spine2`). Knoten-

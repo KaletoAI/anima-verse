@@ -8,7 +8,10 @@ Usage:
 Runs against a THROWAWAY storage + instance directory with a copy of the
 repo's ``human`` package — no real world, no hub, no GPU, no server; the
 image service is a stub without a pool (nothing is loaded or probed). The world
-config names no ``base_body.hair_method``, so the schema default applies.
+config names no ``base_body.hairstyle_default_mode``, so the schema default
+applies. Hairstyles (plan 2026-11-12-unified-worn-pieces Task 13): the mode is
+the worn hairstyle's; each fixture's first hairstyle (``create_hairstyle``,
+text from the Appearance) is worn and the plain body's.
 The "unchanged bytes" proofs execute ``app/core/base_body.py`` (and read the
 face-view prompt and ``resolve_negative_prompt``) as they were at ``START``
 (019a995a, the task's start) and compare their output with today's for a
@@ -18,18 +21,18 @@ Fixtures (template human-default, female, 30, height 168, skin olive, eyes
 green, build athletic, character_appearance "wears a red scarf", profile
 image Demo_1.png, on the base-body pipeline, a ready base model
 ``model3d/<bsig>.glb`` + sidecar rig mixamo):
-  ``Long``  hair {length long, color brunette}   -> hair text "long brunette hair";
-  ``Short`` hair {length short, color black}     -> "short black hair";
-  ``Bald``  no hair slot values                  -> no hair text;
-  ``Deck``  as Long + profile hair_method "hairdeck".
+  ``Long``  hair {length long, color brunette}   -> hairstyle "long brunette hair", mode body;
+  ``Short`` hair {length short, color black}     -> "short black hair", mode body;
+  ``Bald``  no hair slot values                  -> no hair text, no hairstyle;
+  ``Deck``  as Long, its hairstyle in mode "hairdeck".
 
 EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
 
-[H0] Schema default ``base_body.hair_method`` = "body", choices ["body",
-     "hairdeck"] (edit_chain and subtract removed by Task 2), label "From the
-     body mesh"; ``world_hair_method()`` "body"; ``hair_method`` Long "body",
-     Deck "hairdeck"; an unknown world value ("nonsense") resolves to "body",
-     and so do the removed "edit_chain" / "subtract";
+[H0] Schema default ``base_body.hairstyle_default_mode`` = "body", choices
+     ["body", "hairdeck"] (HAAR is not built), label "In the body mesh";
+     ``default_mode()`` "body"; ``hair_mode`` Long "body", Deck "hairdeck",
+     Bald "" (no hairstyle); an unknown world value ("nonsense") resolves to
+     "body", and so do the removed "edit_chain" / "subtract" and "haar";
      ``hair_in_body`` Long True, Deck False.
 [H1] Base views of Long (method body). APPEARANCE = "female, 30 years old,
      green eyes, olive skin, average height, athletic build" (the human build
@@ -55,8 +58,8 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      Short: the same shapes with "short black hair" and WITHOUT "the hair falls
      behind the shoulders" (no mesh-input line for "short").
      Deck and Bald: every block / prompt / negative of the four views equals
-     the start hash's output byte for byte (Bald: no hair text under body ->
-     the bald wording; Deck: another method).
+     the start hash's output byte for byte (Bald: no hairstyle -> the bald
+     wording; Deck: a HairDeck hairstyle).
      Back draft of Long: DRAFT_PROMPTS["back"] with the outfit text and the
      same head clause as the back view, negative "hat, hood, headscarf, wig,
      detailed anatomy, " + POSE_NEGATIVE; Deck's draft = the start hash's.
@@ -74,8 +77,9 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      bangs, fringe, hair strands, ponytail, hat, cap" -> "hat, cap"; an
      explicit negative_prompt is kept as it is; without a drop list the output
      equals the start hash's function.
-[H2] base_identity(Long) == base_identity(Long as hairdeck) (the method is no
-     identity input); prompt_fingerprint differs. base_prompts_freshness(Long):
+[H2] base_identity(Long) == base_identity(Long whose plain body's hairstyle
+     is a second, HairDeck one) (the hairstyle is no identity input);
+     prompt_fingerprint differs. base_prompts_freshness(Long):
      no stored front -> missing "Base body images missing — render them in
      the Figure tab"; a front sidecar with the hairdeck fingerprint ->
      stale OLDER_PROMPTS; with Long's own fingerprint -> current.
@@ -83,12 +87,13 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      ``figure_build.request`` recorded — Task 8 of plan
      2026-11-12-unified-worn-pieces), and the Build of Long has no chain step
      (``build_chains`` False; was: after_base_model -> False; enqueue_garment =
-     recorder): no hair item (find_hair_item None), nothing queued;
-     ensure_hair_item(Long) -> ValueError starting "Hair comes from the body
+     recorder): its hairstyle is in the body, nothing queued;
+     check_run(Long, its hairstyle) -> ValueError "Hair comes from the body
      mesh". Contrast: the Build's hair step of Deck (was: after_base_model)
-     creates Deck's hair item and queues it once.
+     queues Deck's hairstyle once.
 [H4] hair_fill.find_candidates({}) lists Deck only (Long and Short are body,
-     Bald has no hair text); world method "hairdeck" -> Long, Short and Deck.
+     Bald has no hairstyle); Long's hairstyle switched to "hairdeck" -> Deck
+     and Long (the world default changes no existing hairstyle).
 [H5] garment_store.steps_for("hair", "body") == () (never a ValueError);
      HUB_JOBS["hair:body"] == {}. With Deck's item and Deck switched to
      "body": check_run -> ValueError "Hair comes from the body mesh";
@@ -99,7 +104,8 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      coat in mode in_body, so the shape is meshed — Task 6 of plan
      2026-11-12-unified-worn-pieces replaced outfit_body_bald in mesh mode by
      ``base_body._bald_edit`` of the wanted shape): True under hairdeck
-     (wears its own hair item), False under body. The hair payload (the Wardrobe hair row's; route function
+     (wears its own hair item), False under body (Deck's hairstyle switched
+     to "body" with ``set_hairstyle_mode``). The hair payload (the Wardrobe hair row's; route function
      called directly): hair_in_body True, garment None, others [],
      base_prompts = H2's freshness; under hairdeck hair_in_body False,
      base_prompts None.
@@ -224,9 +230,10 @@ def main() -> int:
         for name, slots in fixtures.items():
             profile = json.loads(json.dumps(base))
             profile["body_slots"].update(slots)
-            if name == "Deck":
-                profile["hair_method"] = "hairdeck"
             check(f"create {name}", save_character_profile(name, profile, create_new=True), True)
+            if slots:
+                hid = garment_hair.create_hairstyle(name, "", "hairdeck" if name == "Deck" else "body")
+                check(f"{name} wears its first hairstyle", garment_hair.worn_hair_id(name), hid)
             images = get_character_images_dir(name)
             images.mkdir(parents=True, exist_ok=True)
             (images / f"{name}_1.png").write_bytes(b"\x89PNG" + b"a" * 100)
@@ -244,17 +251,18 @@ def main() -> int:
 
         # --- [H0] -----------------------------------------------------------------
         print("[H0] the method and its default")
-        field = config_scope.schema_for(config_scope.WORLD)["base_body"]["fields"]["hair_method"]
+        field = config_scope.schema_for(config_scope.WORLD)["base_body"]["fields"]["hairstyle_default_mode"]
         check("schema default", field["default"], "body")
         check("schema choices", field["choices"], ["body", "hairdeck"])
-        check("schema label", field["choice_labels"]["body"], "From the body mesh")
-        check("world default", garment_hair.world_hair_method(), "body")
-        check("methods", (garment_hair.hair_method("Long"), garment_hair.hair_method("Deck")), ("body", "hairdeck"))
-        config._CONFIG.setdefault("base_body", {})["hair_method"] = "nonsense"
-        check("unknown world value -> body", garment_hair.world_hair_method(), "body")
-        for gone in ("edit_chain", "subtract"):
-            config._CONFIG["base_body"]["hair_method"] = gone
-            check(f"removed world value {gone} -> body", garment_hair.world_hair_method(), "body")
+        check("schema label", field["choice_labels"]["body"], "In the body mesh")
+        check("world default", garment_hair.default_mode(), "body")
+        check("modes", (garment_hair.hair_mode("Long"), garment_hair.hair_mode("Deck"), garment_hair.hair_mode("Bald")),
+              ("body", "hairdeck", ""))
+        config._CONFIG.setdefault("base_body", {})["hairstyle_default_mode"] = "nonsense"
+        check("unknown world value -> body", garment_hair.default_mode(), "body")
+        for gone in ("edit_chain", "subtract", "haar"):
+            config._CONFIG["base_body"]["hairstyle_default_mode"] = gone
+            check(f"world value {gone} -> body", garment_hair.default_mode(), "body")
         config._CONFIG.pop("base_body", None)
         check("hair_in_body", (garment_hair.hair_in_body("Long"), garment_hair.hair_in_body("Deck")), (True, False))
 
@@ -334,7 +342,9 @@ def main() -> int:
 
         # --- [H2] -----------------------------------------------------------------
         print("[H2] identity and fingerprint")
-        as_deck = dict(P["Long"], hair_method="hairdeck")
+        second = garment_hair.create_hairstyle("Long", "", "hairdeck")
+        check("a second hairstyle is not worn", garment_hair.worn_hair_id("Long") != second, True)
+        as_deck = dict(P["Long"], base_hairstyle=second, equipped_mesh_pieces={"hair": second})
         check("identity unchanged", base_body.base_identity("Long", profile=P["Long"]),
               base_body.base_identity("Long", profile=as_deck))
         fp_body = base_body.prompt_fingerprint("Long", profile=P["Long"])
@@ -370,15 +380,15 @@ def main() -> int:
             check("after_base_model Long asks the Build", (garments.after_base_model("Long"), REQUESTS),
                   (True, [("Long", "body_change")]))
             check("the Build of Long has no chain step", build_chains("Long"), False)
-            check("Long has no hair item", garment_hair.find_hair_item("Long", get_character_profile("Long")), None)
+            check("Long's hair is in the body", garment_hair.hair_in_body("Long"), True)
             check("nothing queued", QUEUED, [])
             try:
-                garment_hair.ensure_hair_item("Long")
-                check("ensure_hair_item refused", "no error", "ValueError")
+                garments.check_run("Long", garment_hair.worn_hair_id("Long"))
+                check("check_run refused", "no error", "ValueError")
             except ValueError as e:
-                check("ensure_hair_item refused", str(e).startswith("Hair comes from the body mesh"), True)
+                check("check_run refused", str(e).startswith("Hair comes from the body mesh"), True)
             check("the Build of Deck runs its hair step", build_chains("Deck"), True)
-            deck_item = (garment_hair.find_hair_item("Deck", get_character_profile("Deck")) or {}).get("id")
+            deck_item = garment_hair.worn_hair_id("Deck")
             check("Deck item queued", QUEUED, [("Deck", deck_item)])
 
         # --- [H4] -----------------------------------------------------------------
@@ -387,11 +397,11 @@ def main() -> int:
         # Deck now wears an item without a fit: its candidate is the worn item ("missing").
         check("body characters are no candidates",
               [c.key for c in typ.find_candidates(typ.validate({}))], ["character:Deck"])
-        config._CONFIG.setdefault("base_body", {})["hair_method"] = "hairdeck"
-        check("world hairdeck lists them",
-              [c.key for c in typ.find_candidates(typ.validate({}))],
-              ["character:Deck", "character:Long", "character:Short"])
-        config._CONFIG.pop("base_body", None)
+        long_id = garment_hair.worn_hair_id("Long")
+        check("Long -> hairdeck", garment_hair.set_hairstyle_mode("Long", long_id, "hairdeck"), True)
+        check("a HairDeck hairstyle lists Long",
+              [c.key for c in typ.find_candidates(typ.validate({}))], ["character:Deck", "character:Long"])
+        check("Long -> body", garment_hair.set_hairstyle_mode("Long", long_id, "body"), True)
 
         # --- [H5] -----------------------------------------------------------------
         print("[H5] no steps, nothing served")
@@ -425,8 +435,7 @@ def main() -> int:
         tab = hair_route("Deck", _={})
         check("tab hairdeck", (tab["hair_in_body"], tab["base_prompts"]), (False, None))
 
-        deck["hair_method"] = "body"
-        check("save Deck body", save_character_profile("Deck", deck), True)
+        check("Deck's hairstyle -> body", garment_hair.set_hairstyle_mode("Deck", deck_item, "body"), True)
         try:
             garments.check_run("Deck", deck_item)
             check("check_run refused", "no error", "ValueError")

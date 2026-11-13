@@ -436,7 +436,7 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
         scale = 1.0
     # Core hair (not a package): the served HairDeck fit's spring chains, untouched by the layers below.
     hair = hair_motion.motion_groups(hair_motion.served_chains(character_name, profile),
-                                     hair_motion.settings(profile), gravity_scale=scale)
+                                     hair_motion.worn_settings(character_name, profile), gravity_scale=scale)
     if not declarations:
         # Without hair the rev stays the one a character without groups always had.
         return {"rev": _revision({"declarations": [], **({"hair": hair} if hair else {})}), "groups": dict(hair)}

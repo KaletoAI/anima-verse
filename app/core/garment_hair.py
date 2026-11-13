@@ -1,19 +1,21 @@
-"""Hair as its own mesh — the hair garment of a humanoid on the base-body
-pipeline (plan ``docs/superpowers/plans/2026-11-09-base-body-phase4-hair.md``,
-spec ``2026-11-08-base-body-outfits-design.md`` § C/D).
+"""Hairstyles — the hair of a humanoid on the base-body pipeline (plan
+``docs/superpowers/plans/2026-11-09-base-body-phase4-hair.md``, spec
+``2026-11-08-base-body-outfits-design.md`` § C/D; hairstyles: plan
+``2026-11-12-unified-worn-pieces`` Task 13, decisions D1–D5).
 
-The base body is bald; its hair is ONE item per character:
-category ``garment``, ``owner`` = the character, ``garment = {kind: "hair",
-slot: "hair", body_slot: <slot id>}``, worn through the profile state key
-``equipped_mesh_pieces`` (never ``equipped_pieces`` — R2: no 2D prompt, outfit
-signature, outfit preset or LLM unequip ever sees it).
+A hairstyle is an item: category ``garment``, ``owner`` = the character,
+``garment = {kind: "hair", slot: "hair", body_slot: <slot id>, mesh_mode,
+description, <settings>}`` (section "Hairstyles" below). A character owns
+several and wears one through the profile state key ``equipped_mesh_pieces``
+(never ``equipped_pieces`` — R2: no 2D prompt, outfit signature or LLM unequip
+ever sees it; a saved outfit set may name one, D5).
 
 Which body slot is "the hair" is declared by the species package (body-slot
-key ``mesh_item: hair``); the core names no slot id. The description is
-DERIVED, never edited on the item (R3): the slot's ``always`` fragment plus
-every clause of the free-text appearance that mentions hair. The item's
-``prompt_fragment`` is refreshed from it whenever ``ensure_hair_item`` runs,
-so the 2D body slot and the 3D item never diverge.
+key ``mesh_item: hair``); the core names no slot id. A hairstyle's text is its
+own (``garment.description``); the Appearance's hair text
+(``appearance_hair_text``: the slot's ``always`` fragment plus every clause of
+the free-text appearance that mentions hair) is what a character's first
+hairstyle starts from.
 """
 import math
 import re
@@ -24,6 +26,7 @@ from app.core.log import get_logger
 logger = get_logger("garment_hair")
 
 HAIR_KIND = "hair"
+#: The name of a hairstyle whose description gives none.
 HAIR_ITEM_NAME = "Hair"
 
 _HAIR_WORD = re.compile(r"\bhair\b", re.IGNORECASE)
@@ -57,11 +60,12 @@ def _appearance_hair_clauses(text: str) -> List[str]:
     return out
 
 
-def hair_description(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
-    """The hair text of the character (R3): the ``always`` fragment of its
-    hair body slot (human: ``"{length} {color} hair"``), then every clause of
-    ``character_appearance`` matching ``\\bhair\\b``, de-duplicated
-    (case-insensitive). "" = no hair text at all — a bald character."""
+def appearance_hair_text(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The hair text of the character's Appearance (R3): the ``always``
+    fragment of its hair body slot (human: ``"{length} {color} hair"``), then
+    every clause of ``character_appearance`` matching ``\\bhair\\b``,
+    de-duplicated (case-insensitive). "" = no hair text at all — a bald
+    character. What a character's first hairstyle starts from."""
     profile = _profile_of(character_name, profile)
     parts: List[str] = []
     slot = _hair_slot(character_name, profile)
@@ -80,15 +84,41 @@ def hair_description(character_name: str, *, profile: Optional[Dict[str, Any]] =
     return ", ".join(unique)
 
 
-def hair_behind_shoulders(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
-    """Whether the hair falls behind the shoulders: the hair slot has a
-    mesh-input line for its current value (human: medium and longer)."""
+def hair_description(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                     item: Optional[Dict[str, Any]] = None) -> str:
+    """The text of the hairstyle ``item`` (``hairstyle_description``), None →
+    the worn hairstyle's; "" without one — no hair."""
+    if item is None:
+        item = worn_hairstyle(character_name, _profile_of(character_name, profile))
+    return hairstyle_description(item)
+
+
+def _text_of(character_name: str, profile: Dict[str, Any], text: Optional[str]) -> str:
+    return hair_description(character_name, profile=profile) if text is None else " ".join(str(text).split())
+
+
+def _is_appearance_hair(character_name: str, profile: Dict[str, Any], text: str) -> bool:
+    """Whether ``text`` is the Appearance's hair text — then the hair slot's
+    values describe that hair (its length, ``hair_behind_shoulders``)."""
+    return bool(text) and text == appearance_hair_text(character_name, profile=profile)
+
+
+def hair_behind_shoulders(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                          text: Optional[str] = None) -> bool:
+    """Whether the hair ``text`` (None: the worn hairstyle's) falls behind the
+    shoulders: for the Appearance's hair (``_is_appearance_hair``) the hair
+    slot has a mesh-input line for its current value (human: medium and
+    longer); for any other text its length class (``hair_length_class``) is
+    medium or longer."""
     profile = _profile_of(character_name, profile)
-    slot = _hair_slot(character_name, profile)
-    if slot is None:
-        return False
-    from app.core.body_slots import slot_fragment
-    return bool(slot_fragment(character_name, slot.id, profile=profile, mesh_input=True)[1])
+    text = _text_of(character_name, profile, text)
+    if _is_appearance_hair(character_name, profile, text):
+        slot = _hair_slot(character_name, profile)
+        if slot is None:
+            return False
+        from app.core.body_slots import slot_fragment
+        return bool(slot_fragment(character_name, slot.id, profile=profile, mesh_input=True)[1])
+    return hair_length_class(character_name, profile=profile, text=text) in LENGTH_CLASSES[2:]
 
 
 def pronouns(profile: Dict[str, Any]) -> Tuple[str, str]:
@@ -103,97 +133,242 @@ def pronouns(profile: Dict[str, Any]) -> Tuple[str, str]:
     return "their", "they"
 
 
-# --- The hair method (plan 2026-11-09-hairdeck-hair, Task 4) -------------------
+# --- Hairstyles (plan 2026-11-12-unified-worn-pieces Task 13, decisions D1-D5) --
+#
+# A hairstyle is a hair item (module docstring) whose ``garment`` also holds
+# ``mesh_mode`` (how the hair reaches the figure, ``HAIR_MODES``) and
+# ``description`` (the hairstyle's text). A character owns several and wears
+# one (``equipped_mesh_pieces["hair"]``); the hair mode IS the worn
+# hairstyle's mode. The plain body is the body of ONE hairstyle — the
+# profile key ``BASE_HAIRSTYLE_KEY`` names it: under the mode ``body`` the
+# base views are rendered with its description (``plain_hair_text``), under
+# any other mode bald. Wearing another hairstyle never rebuilds the plain
+# body: a body hairstyle with another text, or a HairDeck one on a haired
+# plain body, makes a body SHAPE (``shape_hair``, D4). The HairDeck settings
+# (colour, placement, Swing, Stiffness) are per hairstyle, stored under the
+# ``SETTING_KEYS`` of its ``garment`` (``hairstyle_settings``).
 
-#: How the hair mesh is made: ``body`` (no hair mesh at all — the base views
-#: are rendered WITH the character's hair, so the hair is part of the base
-#: body and of every outfit body; spec 2026-11-11-hair-from-body, the world
-#: default) or HairDeck (one profile picture -> hair cards -> fit). Any other
-#: stored value (a removed method) resolves to the default.
-HAIR_METHODS: Tuple[str, ...] = ("body", "hairdeck")
-#: The method whose hair lives inside the body mesh (``hair_in_body``).
-BODY_METHOD = "body"
-DEFAULT_HAIR_METHOD = BODY_METHOD
-#: Why a ``body`` character has no hair item and no hair run.
+#: How a hairstyle reaches the figure: HairDeck (one profile picture -> hair
+#: cards -> fit), HAAR (not built yet) or ``body`` (the hair is part of the
+#: body mesh — no hair mesh, no hair job).
+HAIRDECK_MODE, HAAR_MODE, BODY_MODE = "hairdeck", "haar", "body"
+HAIR_MODES: Tuple[str, ...] = (HAIRDECK_MODE, HAAR_MODE, BODY_MODE)
+#: The modes a hairstyle can be made with today.
+BUILT_MODES: Tuple[str, ...] = (HAIRDECK_MODE, BODY_MODE)
+#: The world default of a new hairstyle when the world names no valid one.
+DEFAULT_HAIR_MODE = BODY_MODE
+#: ``create_hairstyle`` / ``set_hairstyle_mode`` refuse HAAR with this (ValueError).
+HAAR_NOT_BUILT = "HAAR hair is not built yet"
+#: Why a ``body`` hairstyle has no hair run.
 HAIR_IN_BODY = "Hair comes from the body mesh"
+#: Profile key: the id of the hairstyle the plain body is the body of (D3).
+BASE_HAIRSTYLE_KEY = "base_hairstyle"
+#: ``shape_hair`` of a hairstyle that needs a bald body (D4).
+BALD = "bald"
+#: The per-hairstyle settings, keys of the item's ``garment`` (they kept the
+#: names the profile keys had, so their readers read either mapping).
+SETTING_KEYS: Tuple[str, ...] = ("hair_colour", "hair_forward_m", "hair_tilt_deg", "hair_width_scale",
+                                 "hair_swing", "hair_stiffness")
+#: The longest hairstyle name ``create_hairstyle`` derives from a description.
+NAME_MAX = 48
 _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
 
-def world_hair_method() -> str:
-    """The world default ``base_body.hair_method`` (an unknown or removed value = ``DEFAULT_HAIR_METHOD``)."""
+def default_mode() -> str:
+    """The world setting ``base_body.hairstyle_default_mode`` — the mode a
+    new hairstyle gets when none is named (an unknown value, or ``haar``, =
+    ``DEFAULT_HAIR_MODE``)."""
     from app.core import config
     from app.core.config_schema import field_default
-    value = str(config.get("base_body.hair_method", field_default("base_body", "hair_method")) or "")
-    return value if value in HAIR_METHODS else DEFAULT_HAIR_METHOD
+    value = str(config.get("base_body.hairstyle_default_mode",
+                           field_default("base_body", "hairstyle_default_mode")) or "")
+    return value if value in BUILT_MODES else DEFAULT_HAIR_MODE
 
 
-def hair_method_source(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
-    """``(method, source)``: the character's own ``hair_method`` when it names
-    a method (source ``"character"``), else the world's
-    ``base_body.hair_method`` (source ``"world"``; an unknown world value is
-    ``DEFAULT_HAIR_METHOD``). ``""`` or an unknown profile value = the world."""
-    profile = _profile_of(character_name, profile)
-    own = str(profile.get("hair_method") or "")
-    if own in HAIR_METHODS:
-        return own, "character"
-    return world_hair_method(), "world"
+def is_hairstyle(item: Optional[Dict[str, Any]], character_name: str) -> bool:
+    """Whether ``item`` is a hairstyle of the character: a garment of kind
+    hair it owns."""
+    return _is_own_hair(item, character_name)
 
 
-def hair_method(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
-    """One of ``HAIR_METHODS`` — see ``hair_method_source``."""
-    return hair_method_source(character_name, profile=profile)[0]
+def hairstyle_mode(item: Optional[Dict[str, Any]]) -> str:
+    """The hairstyle's ``garment.mesh_mode`` (one of ``HAIR_MODES``). An item
+    that names none was made for HairDeck — the only method hair items were
+    made for before hairstyles (the boot migration names every mode)."""
+    mode = str(((item or {}).get("garment") or {}).get("mesh_mode") or "")
+    return mode if mode in HAIR_MODES else HAIRDECK_MODE
+
+
+def hairstyle_description(item: Optional[Dict[str, Any]]) -> str:
+    """The hairstyle's text (``garment.description``), "" without one."""
+    return " ".join(str(((item or {}).get("garment") or {}).get("description") or "").split())
+
+
+def hairstyle_settings(item: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The hairstyle's HairDeck settings (``SETTING_KEYS`` of its
+    ``garment``; a missing key = automatic / the default) — the mapping
+    ``hair_colour_override``, ``hair_placement`` and ``hair_motion.settings``
+    read."""
+    garment = (item or {}).get("garment") or {}
+    return {key: garment[key] for key in SETTING_KEYS if key in garment}
+
+
+def hairstyles(character_name: str) -> List[Dict[str, Any]]:
+    """Every hairstyle the character owns, by id."""
+    from app.models import inventory
+    return sorted((item for item in inventory.list_items() if _is_own_hair(item, character_name)),
+                  key=lambda item: str(item.get("id") or ""))
+
+
+def worn_hairstyle(character_name: str, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The hairstyle the character wears (``worn_hair_id``), None without one."""
+    item_id = worn_hair_id(character_name, profile)
+    if not item_id:
+        return None
+    from app.models import inventory
+    return inventory.get_item(item_id)
+
+
+def hair_mode(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The character's hair mode: the worn hairstyle's (``hairstyle_mode``),
+    "" without a worn hairstyle (no hair at all)."""
+    item = worn_hairstyle(character_name, profile)
+    return hairstyle_mode(item) if item is not None else ""
 
 
 def hair_in_body(character_name: str, profile: Optional[Dict[str, Any]] = None) -> bool:
-    """Whether the character's hair is part of its body mesh (method ``body``):
-    the base views are rendered with the hair (``base_body.base_character`` /
-    ``base_prompt``), and no hair item is ever created or run."""
-    return hair_method(character_name, profile=profile) == BODY_METHOD
+    """Whether the worn hairstyle is part of the body mesh (mode ``body``)."""
+    return hair_mode(character_name, profile=profile) == BODY_MODE
 
 
-def hair_colour_override(profile: Optional[Dict[str, Any]]) -> str:
-    """The manual hair colour of the profile key ``hair_colour`` as
-    ``"#rrggbb"`` (lower case), ``""`` = automatic (HairDeck's own vertex
-    colours). A value that is no ``#rrggbb`` counts as automatic."""
-    value = str((profile or {}).get("hair_colour") or "").strip()
+def plain_hairstyle(character_name: str, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The hairstyle the plain body is the body of (profile key
+    ``BASE_HAIRSTYLE_KEY``), None when it names none of the character's
+    hairstyles."""
+    profile = _profile_of(character_name, profile)
+    item_id = str(profile.get(BASE_HAIRSTYLE_KEY) or "")
+    if not item_id:
+        return None
+    from app.models import inventory
+    item = inventory.get_item(item_id)
+    return item if _is_own_hair(item, character_name) else None
+
+
+def plain_hair_text(character_name: str, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The hair text the plain body is rendered with: the description of the
+    plain hairstyle (``plain_hairstyle``) when its mode is ``body``, else ""
+    — a bald plain body."""
+    item = plain_hairstyle(character_name, profile)
+    return hairstyle_description(item) if item is not None and hairstyle_mode(item) == BODY_MODE else ""
+
+
+def shape_hair(character_name: str, profile: Optional[Dict[str, Any]] = None) -> str:
+    """What the worn hairstyle adds to the body SHAPE (D4): "" when the plain
+    body already has its hair (a ``body`` hairstyle whose text is the plain
+    body's, or no hair in the body on a bald plain body); the hairstyle's
+    text for a ``body`` hairstyle with another text; ``BALD`` when the plain
+    body is haired but the worn hair is not in the body (HairDeck, HAAR, or
+    no hairstyle worn)."""
+    profile = _profile_of(character_name, profile)
+    plain = plain_hair_text(character_name, profile)
+    worn = worn_hairstyle(character_name, profile)
+    if worn is not None and hairstyle_mode(worn) == BODY_MODE:
+        text = hairstyle_description(worn)
+        return "" if text == plain else (text or BALD)
+    return BALD if plain else ""
+
+
+def hair_style_id(character_name: str, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The worn hairstyle's id when it is NOT the plain body's hairstyle, ""
+    otherwise — what tells two figures apart that differ only in the worn
+    HairDeck hairstyle (``figure.Figure.hair_style``)."""
+    profile = _profile_of(character_name, profile)
+    worn = worn_hair_id(character_name, profile)
+    return "" if not worn or worn == str(profile.get(BASE_HAIRSTYLE_KEY) or "") else worn
+
+
+def hair_colour_override(settings: Optional[Dict[str, Any]]) -> str:
+    """The manual hair colour of a hairstyle's settings (``hairstyle_settings``,
+    key ``hair_colour``) as ``"#rrggbb"`` (lower case), ``""`` = automatic
+    (HairDeck's own vertex colours). A value that is no ``#rrggbb`` counts as
+    automatic."""
+    value = str((settings or {}).get("hair_colour") or "").strip()
     return value.lower() if _HEX_COLOUR.fullmatch(value) else ""
 
 
-def _set_profile_key(character_name: str, key: str, value: str) -> bool:
-    """Store one hair key of the profile (read-modify-write under the
-    profile lock). The save result; True without a save when unchanged."""
+def _own_hairstyle(character_name: str, item_id: str) -> Dict[str, Any]:
+    """The character's hairstyle ``item_id``; ValueError when it is none."""
+    from app.models import inventory
+    item = inventory.get_item(str(item_id or ""))
+    if not _is_own_hair(item, character_name):
+        raise ValueError(f"{str(item_id)[:80]!r} is no hairstyle of {character_name}")
+    return item
+
+
+def set_hairstyle_settings(character_name: str, item_id: str, values: Dict[str, Any]) -> bool:
+    """Store settings of one hairstyle (``SETTING_KEYS``; ``""`` / None =
+    automatic, the key is dropped) in ONE read-modify-write of the item under
+    ``keyed_lock("garment_item", character_name)``. ValueError for a key that
+    is no setting or an item that is no hairstyle of the character. The
+    update result; True without a write when unchanged."""
     from app.core.keyed_lock import keyed_lock
-    from app.models.character import get_character_profile, save_character_profile
-    with keyed_lock("character_profile", character_name):
-        profile = get_character_profile(character_name) or {}
-        if str(profile.get(key) or "") == value:
+    from app.models import inventory
+    unknown = sorted(set(values) - set(SETTING_KEYS))
+    if unknown:
+        raise ValueError(f"no hairstyle setting: {', '.join(unknown)}")
+    with keyed_lock("garment_item", character_name):
+        item = _own_hairstyle(character_name, item_id)
+        garment = dict(item.get("garment") or {})
+        for key, value in values.items():
+            if value is None or value == "":
+                garment.pop(key, None)
+            else:
+                garment[key] = value
+        if garment == (item.get("garment") or {}):
             return True
-        profile[key] = value
-        return bool(save_character_profile(character_name, profile))
+        return inventory.update_item(item["id"], {"garment": garment}) is not None
 
 
-def set_hair_method(character_name: str, method: str) -> bool:
-    """Store the character's own hair method (profile key ``hair_method``);
-    ``""`` = the world default. ValueError for anything else than ``""`` or a
-    ``HAIR_METHODS`` entry. Returns the save result. Starts no run: the
-    served hair follows the method's newest accepted fit (Task 4)."""
-    if method not in ("", *HAIR_METHODS):
-        raise ValueError(f"hair method must be one of: \"\", {', '.join(HAIR_METHODS)}")
-    return _set_profile_key(character_name, "hair_method", method)
+def set_hairstyle_mode(character_name: str, item_id: str, mode: str) -> bool:
+    """Set a hairstyle's mode (``""`` = the world's ``default_mode``).
+    ValueError for an unknown mode, ``HAAR_NOT_BUILT`` for ``haar``, or an
+    item that is no hairstyle of the character. Starts nothing: a mode
+    change of the plain body's hairstyle changes the base prompts (the plain
+    body shows "older prompts" until a Build), of another hairstyle its
+    shape (ruling P1)."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models import inventory
+    mode = _checked_mode(mode)
+    with keyed_lock("garment_item", character_name):
+        item = _own_hairstyle(character_name, item_id)
+        garment = dict(item.get("garment") or {})
+        if garment.get("mesh_mode") == mode:
+            return True
+        garment["mesh_mode"] = mode
+        return inventory.update_item(item["id"], {"garment": garment}) is not None
 
 
-def set_hair_colour(character_name: str, hex_colour: str) -> bool:
-    """Store the manual hair colour (profile key ``hair_colour``, lower-case
+def _checked_mode(mode: str) -> str:
+    mode = str(mode or "").strip() or default_mode()
+    if mode == HAAR_MODE:
+        raise ValueError(HAAR_NOT_BUILT)
+    if mode not in BUILT_MODES:
+        raise ValueError(f"hair mode must be one of: {', '.join(BUILT_MODES)}")
+    return mode
+
+
+def set_hair_colour(character_name: str, item_id: str, hex_colour: str) -> bool:
+    """Store a hairstyle's manual hair colour (``hair_colour``, lower-case
     ``#rrggbb``); ``""`` = automatic (HairDeck's own colours). ValueError for
     anything else. Only the HairDeck fit fingerprint changes: the next run
     re-fits from the cached HairDeck job."""
     value = str(hex_colour or "").strip()
     if value and not _HEX_COLOUR.fullmatch(value):
         raise ValueError("hair colour must be #rrggbb or empty")
-    return _set_profile_key(character_name, "hair_colour", value.lower())
+    return set_hairstyle_settings(character_name, item_id, {"hair_colour": value.lower()})
 
 
-#: The profile keys of the HairDeck placement correction (``garment_hairdeck.fit_hairdeck``'s ``forward_m`` /
+#: The setting keys of the HairDeck placement correction (``garment_hairdeck.fit_hairdeck``'s ``forward_m`` /
 #: ``tilt_deg`` / ``width_scale``); empty = automatic (width: 1, HairDeck's own).
 PLACEMENT_KEYS: Dict[str, str] = {"forward_m": "hair_forward_m", "tilt_deg": "hair_tilt_deg",
                                   "width_scale": "hair_width_scale"}
@@ -237,17 +412,17 @@ def _placement_value(name: str, raw: Any) -> Optional[float]:
     return value
 
 
-def hair_placement(profile: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
-    """``{forward_m, tilt_deg[, width_scale]}``: the manual HairDeck placement of the profile keys
-    ``hair_forward_m`` (metres along +z), ``hair_tilt_deg`` (forward pitch, degrees) and ``hair_width_scale``
-    (the sides' reach beyond the head, ``garment_hairdeck.narrow_sides``); None = automatic (forward
-    ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to the brow line). ``width_scale`` is present only when
-    set (``_PLACEMENT_WHEN_SET``). A stored value that is no number or lies beyond its range counts as
-    automatic."""
+def hair_placement(settings: Optional[Dict[str, Any]]) -> Dict[str, Optional[float]]:
+    """``{forward_m, tilt_deg[, width_scale]}``: the manual HairDeck placement of a hairstyle's settings
+    (``hairstyle_settings``, keys ``hair_forward_m`` — metres along +z —, ``hair_tilt_deg`` — forward pitch,
+    degrees — and ``hair_width_scale`` — the sides' reach beyond the head, ``garment_hairdeck.narrow_sides``);
+    None = automatic (forward ``garment_hairdeck.DEFAULT_FORWARD_M``, tilt solved to the brow line).
+    ``width_scale`` is present only when set (``_PLACEMENT_WHEN_SET``). A stored value that is no number or lies
+    beyond its range counts as automatic."""
     out: Dict[str, Optional[float]] = {}
     for name, key in PLACEMENT_KEYS.items():
         try:
-            value = _placement_value(name, (profile or {}).get(key))
+            value = _placement_value(name, (settings or {}).get(key))
         except ValueError:
             value = None
         if value is not None or name not in _PLACEMENT_WHEN_SET:
@@ -255,26 +430,18 @@ def hair_placement(profile: Optional[Dict[str, Any]]) -> Dict[str, Optional[floa
     return out
 
 
-def set_hair_placement(character_name: str, forward_m: Any, tilt_deg: Any, width_scale: Any = None) -> bool:
-    """Store the manual HairDeck placement (profile keys ``hair_forward_m`` / ``hair_tilt_deg`` /
-    ``hair_width_scale``; None or "" = automatic, stored as ""). ValueError for a non-number or a value beyond
-    ``garment_hairdeck.FORWARD_LIMIT_M`` / ``TILT_LIMIT_DEG`` / ``WIDTH_SCALE_LIMITS`` — nothing is stored then.
-    All keys are written in ONE read-modify-write under the profile lock. Only the HairDeck fit fingerprint
-    changes: the next run re-fits from the cached HairDeck job."""
-    from app.core.keyed_lock import keyed_lock
-    from app.models.character import get_character_profile, save_character_profile
+def set_hair_placement(character_name: str, item_id: str, forward_m: Any, tilt_deg: Any,
+                       width_scale: Any = None) -> bool:
+    """Store a hairstyle's manual HairDeck placement (``hair_forward_m`` / ``hair_tilt_deg`` /
+    ``hair_width_scale``; None or "" = automatic, the key is dropped). ValueError for a non-number or a value
+    beyond ``garment_hairdeck.FORWARD_LIMIT_M`` / ``TILT_LIMIT_DEG`` / ``WIDTH_SCALE_LIMITS`` — nothing is stored
+    then. All keys are written in ONE read-modify-write of the item (``set_hairstyle_settings``). Only the
+    HairDeck fit fingerprint changes: the next run re-fits from the cached HairDeck job."""
     values = {"forward_m": _placement_value("forward_m", forward_m),
               "tilt_deg": _placement_value("tilt_deg", tilt_deg),
               "width_scale": _placement_value("width_scale", width_scale)}
-    with keyed_lock("character_profile", character_name):
-        profile = get_character_profile(character_name) or {}
-        changed = False
-        for name, key in PLACEMENT_KEYS.items():
-            wanted = "" if values[name] is None else values[name]
-            if profile.get(key, "") != wanted:
-                profile[key] = wanted
-                changed = True
-        return bool(save_character_profile(character_name, profile)) if changed else True
+    return set_hairstyle_settings(character_name, item_id,
+                                  {PLACEMENT_KEYS[name]: value for name, value in values.items()})
 
 
 # --- Length class and named colour of the hair ---------------------------------
@@ -303,27 +470,31 @@ _HAIR_AT = re.compile(r"\bhair\b")
 _COLOUR_REACH_WORDS = 4
 
 
-def hair_length_class(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """The hair's length class (``LENGTH_CLASSES``) or None: the value of the attribute the hair slot declares
-    for its mesh-input line (the human pack: ``length``) when it is a class, else the first class word of
-    ``hair_description`` ("short brunette hair" -> "short")."""
+def hair_length_class(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                      text: Optional[str] = None) -> Optional[str]:
+    """The length class (``LENGTH_CLASSES``) of the hair ``text`` (None: the worn hairstyle's) or None: for the
+    Appearance's hair (``_is_appearance_hair``) the value of the attribute the hair slot declares for its
+    mesh-input line (the human pack: ``length``) when it is a class; else the first class word of the text
+    ("short brunette hair" -> "short")."""
     profile = _profile_of(character_name, profile)
-    slot = _hair_slot(character_name, profile)
+    text = _text_of(character_name, profile, text)
+    slot = _hair_slot(character_name, profile) if _is_appearance_hair(character_name, profile, text) else None
     if slot is not None and getattr(slot, "mesh_input_prompt", None):
         from app.core.body_slots import slot_values
         key = slot.mesh_input_prompt.get("attribute")
         value = str((slot_values(character_name, profile=profile).get(slot.id) or {}).get(key) or "")
         if " ".join(value.lower().split()) in LENGTH_CLASSES:
             return " ".join(value.lower().split())
-    match = _LENGTH_CLASS_WORD.search(hair_description(character_name, profile=profile))
+    match = _LENGTH_CLASS_WORD.search(text)
     return " ".join(match.group(1).lower().split()) if match else None
 
 
-def hair_colour_name(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """The named hair colour of ``hair_description`` (a ``HAIR_COLOURS`` key) or None: per clause, the colour
-    word nearest before a "hair" within ``_COLOUR_REACH_WORDS`` words ("brown eyes and black hair" -> black);
-    the first clause with one wins."""
-    for clause in hair_description(character_name, profile=profile).lower().split(","):
+def hair_colour_name(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                     text: Optional[str] = None) -> Optional[str]:
+    """The named colour of the hair ``text`` (None: the worn hairstyle's; a ``HAIR_COLOURS`` key) or None: per
+    clause, the colour word nearest before a "hair" within ``_COLOUR_REACH_WORDS`` words ("brown eyes and black
+    hair" -> black); the first clause with one wins."""
+    for clause in _text_of(character_name, _profile_of(character_name, profile), text).lower().split(","):
         for hair in _HAIR_AT.finditer(clause):
             window = " ".join(clause[:hair.start()].split()[-_COLOUR_REACH_WORDS:])
             found = list(_COLOUR_WORD.finditer(window))
@@ -332,10 +503,10 @@ def hair_colour_name(character_name: str, *, profile: Optional[Dict[str, Any]] =
     return None
 
 
-def profile_hair_colour(character_name: str, *,
-                        profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, str]]:
-    """``{name, hex}`` of the profile's named hair colour (``hair_colour_name``), None without one."""
-    name = hair_colour_name(character_name, profile=profile)
+def profile_hair_colour(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
+                        text: Optional[str] = None) -> Optional[Dict[str, str]]:
+    """``{name, hex}`` of the hair text's named colour (``hair_colour_name``), None without one."""
+    name = hair_colour_name(character_name, profile=profile, text=text)
     return {"name": name, "hex": HAIR_COLOURS[name]} if name else None
 
 
@@ -349,13 +520,17 @@ def colour_target(hex_colour: str) -> Optional[Tuple[float, float, float]]:
     return tuple(int(hex_colour[i:i + 2], 16) / 255.0 for i in (1, 3, 5))  # type: ignore[return-value]
 
 
-def fsig_inputs(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """What the hair kind contributes to the garment fingerprint
-    (``garment_store.garment_fsig``, R10): the derived description, whether
-    the hair falls behind the shoulders, and the pronouns the prompts use."""
+def fsig_inputs(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What a hairstyle contributes to the garment fingerprint
+    (``garment_store.garment_fsig``, R10): its description, whether that hair
+    falls behind the shoulders, and the pronouns the prompts use. A migrated
+    hairstyle carries the text the fingerprint was made of, so its fits stay
+    current."""
     profile = _profile_of(character_name, profile)
-    return {"description": hair_description(character_name, profile=profile),
-            "behind_shoulders": hair_behind_shoulders(character_name, profile=profile),
+    from app.models import inventory
+    text = hairstyle_description(inventory.get_item(str(item_id or "")))
+    return {"description": text,
+            "behind_shoulders": hair_behind_shoulders(character_name, profile=profile, text=text),
             "pronouns": list(pronouns(profile))}
 
 
@@ -366,9 +541,9 @@ def _is_own_hair(item: Optional[Dict[str, Any]], character_name: str) -> bool:
 
 
 def worn_hair_id(character_name: str, profile: Optional[Dict[str, Any]] = None) -> str:
-    """The id of the character's OWN hair item it wears in the hair slot of
-    ``equipped_mesh_pieces`` (a garment of kind hair owned by it), "" without
-    one — the hair that is its own mesh, whatever its method or fit state."""
+    """The id of the hairstyle the character wears in the hair slot of
+    ``equipped_mesh_pieces`` (a garment of kind hair it owns, any mode), ""
+    without one."""
     profile = _profile_of(character_name, profile)
     worn = profile.get("equipped_mesh_pieces")
     item_id = worn.get(HAIR_KIND) if isinstance(worn, dict) else None
@@ -376,17 +551,6 @@ def worn_hair_id(character_name: str, profile: Optional[Dict[str, Any]] = None) 
         return ""
     from app.models import inventory
     return str(item_id) if _is_own_hair(inventory.get_item(str(item_id)), character_name) else ""
-
-
-def find_hair_item(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The character's hair item: the one worn in the hair slot, else the
-    first (by id) item it owns whose garment kind is hair."""
-    from app.models import inventory
-    worn = worn_hair_id(character_name, profile)
-    if worn:
-        return inventory.get_item(worn)
-    owned = [item for item in inventory.list_items() if _is_own_hair(item, character_name)]
-    return min(owned, key=lambda item: item.get("id") or "") if owned else None
 
 
 def _new_item_id(character_name: str) -> str:
@@ -401,49 +565,214 @@ def _new_item_id(character_name: str) -> str:
     return candidate
 
 
-def ensure_hair_item(character_name: str) -> str:
-    """Create (if missing), refresh and wear the character's hair item;
-    returns its id.
+def hairstyle_name(description: str) -> str:
+    """The name a new hairstyle gets: its description, capitalised, cut at a
+    word to ``NAME_MAX`` characters; ``HAIR_ITEM_NAME`` for an empty one."""
+    text = " ".join(str(description or "").split())
+    if not text:
+        return HAIR_ITEM_NAME
+    if len(text) > NAME_MAX:
+        cut = text[:NAME_MAX].rsplit(" ", 1)[0].rstrip(" ,;")
+        text = (cut or text[:NAME_MAX]) + "…"
+    return text[:1].upper() + text[1:]
 
-    ValueError for a non-humanoid (the one character off the base-body
-    pipeline since Task 11h, Ruling A13), a species without a hair mesh-item
-    slot, or no hair text at all. The
-    inventory is not touched — the item is worn, never carried."""
-    from app.core.keyed_lock import keyed_lock
+
+def _check_hairstyle_owner(character_name: str, profile: Dict[str, Any]):
+    """The hair body slot of a humanoid; ValueError for a non-humanoid or a
+    species without a hair mesh-item slot."""
     from app.core.model_refs import is_humanoid
+    if not is_humanoid(character_name, profile=profile):
+        raise ValueError("Hairstyles are for humanoid characters only")
+    slot = _hair_slot(character_name, profile)
+    if slot is None:
+        raise ValueError(f"No hair slot is declared for {character_name}")
+    return slot
+
+
+def _mint_hairstyle(character_name: str, slot_id: str, description: str, mode: str,
+                    settings: Optional[Dict[str, Any]] = None, *, item_id: str = "") -> Dict[str, Any]:
+    """Add a hairstyle item (the caller holds ``keyed_lock("garment_item",
+    character_name)``). Worn nowhere, carried by nobody."""
     from app.models import inventory
+    garment = {"kind": HAIR_KIND, "slot": HAIR_KIND, "body_slot": slot_id, "mesh_mode": mode,
+               "description": description,
+               **{k: v for k, v in (settings or {}).items() if k in SETTING_KEYS and v not in (None, "")}}
+    item = inventory.add_item(
+        name=hairstyle_name(description), category="garment", owner=character_name,
+        prompt_fragment=description, garment=garment, item_id=item_id or _new_item_id(character_name),
+        transferable=False, portable=False)
+    logger.info("hairstyle created for %s: %s (%s)", character_name, item["id"], mode)
+    return item
+
+
+def _claim_first(character_name: str, item_id: str) -> None:
+    """A character's first hairstyle becomes the plain body's hairstyle and is
+    worn — when the profile names no plain hairstyle / wears none yet (one
+    read-modify-write under the profile lock). Wearing it asks for the
+    garment assembly, as every mesh-item equip does."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        changed = worn_now = False
+        if plain_hairstyle(character_name, profile) is None:
+            profile[BASE_HAIRSTYLE_KEY] = item_id
+            changed = True
+        worn = dict(profile.get("equipped_mesh_pieces") or {}) if isinstance(
+            profile.get("equipped_mesh_pieces"), dict) else {}
+        if not worn_hair_id(character_name, profile):
+            worn[HAIR_KIND] = item_id
+            profile["equipped_mesh_pieces"] = worn
+            changed = worn_now = True
+        if changed and not save_character_profile(character_name, profile):
+            raise RuntimeError(f"Could not store the first hairstyle of {character_name}")
+    if worn_now:
+        try:
+            from app.core import garment_assembly
+            garment_assembly.schedule(character_name)
+        except Exception as e:  # noqa: BLE001 — a failed schedule must not undo the stored state
+            logger.warning("garment assembly schedule for %s failed: %s", character_name, e)
+
+
+def create_hairstyle(character_name: str, description: str, mode: str = "") -> str:
+    """Create a hairstyle of the character; returns its item id.
+
+    ``description`` the hairstyle's text (empty: the Appearance's hair text,
+    ``appearance_hair_text``); ``mode`` one of ``BUILT_MODES`` (``""``: the
+    world's ``default_mode``). ValueError for ``haar`` (``HAAR_NOT_BUILT``),
+    an unknown mode, a non-humanoid, a species without a hair slot, or no
+    text at all. Starts nothing; the new hairstyle is not worn — except the
+    character's FIRST one, which is worn and becomes the plain body's
+    hairstyle (``BASE_HAIRSTYLE_KEY``)."""
+    from app.core.keyed_lock import keyed_lock
     from app.models.character import get_character_profile
-    # One creation per character at a time (two concurrent calls must not
-    # mint two items). Lock order: garment_item -> character_profile (taken
-    # inside equip_mesh_piece); nothing here waits on I/O beyond the DB.
+    mode = _checked_mode(mode)
     with keyed_lock("garment_item", character_name):
         profile = get_character_profile(character_name) or {}
-        if not is_humanoid(character_name, profile=profile):
-            raise ValueError("Hair as its own mesh is for humanoid characters only")
-        if hair_in_body(character_name, profile):
-            raise ValueError(f"{HAIR_IN_BODY} — no hair item for the method {BODY_METHOD!r}")
-        slot = _hair_slot(character_name, profile)
-        if slot is None:
-            raise ValueError(f"No hair slot is declared for {character_name}")
-        description = hair_description(character_name, profile=profile)
-        if not description:
-            raise ValueError("No hair set — fill in the hair in Appearance; a bald character gets no hair item")
-        garment = {"kind": HAIR_KIND, "slot": HAIR_KIND, "body_slot": slot.id}
-        item = find_hair_item(character_name, profile)
-        if item is None:
-            item = inventory.add_item(
-                name=HAIR_ITEM_NAME, category="garment", owner=character_name,
-                prompt_fragment=description, garment=garment, item_id=_new_item_id(character_name),
-                transferable=False, portable=False)
-            logger.info("hair item created for %s: %s", character_name, item["id"])
+        slot = _check_hairstyle_owner(character_name, profile)
+        text = " ".join(str(description or "").split()) or appearance_hair_text(character_name, profile=profile)
+        if not text:
+            raise ValueError("No hair set — describe the hairstyle, or fill in the hair in Appearance")
+        item = _mint_hairstyle(character_name, slot.id, text, mode)
+        _claim_first(character_name, item["id"])
+    return item["id"]
+
+
+def ensure_hairstyle(character_name: str) -> str:
+    """The worn hairstyle's id; a humanoid that owns none gets its first one
+    made from its Appearance (``create_hairstyle`` with the world's
+    ``default_mode``) — before a plain body is rendered for it, so the plain
+    body is that hairstyle's body. "" for a character that wears none but
+    owns some (one was taken off), and for a character without any hair text
+    (bald). ValueError like ``create_hairstyle`` otherwise."""
+    from app.models.character import get_character_profile
+    profile = get_character_profile(character_name) or {}
+    worn = worn_hair_id(character_name, profile)
+    if worn:
+        return worn
+    if hairstyles(character_name):
+        return ""
+    if not appearance_hair_text(character_name, profile=profile):
+        return ""
+    return create_hairstyle(character_name, "", "")
+
+
+def wear_hairstyle(character_name: str, item_id: str, *, request: bool = True) -> bool:
+    """Wear the character's hairstyle ``item_id`` (``equipped_mesh_pieces
+    ["hair"]``, read-modify-write under the profile lock). ValueError for an
+    item that is no hairstyle of the character. The save result; True
+    without a save when it is already worn. Builds nothing: a changed
+    hairstyle is an outfit change (D5) — ``figure_build.request(name,
+    "outfit_change")`` decides (Build automatically, else a pending change);
+    ``request=False`` leaves that request to the caller (an outfit set
+    applies pieces and hairstyle, then requests once)."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models.character import get_character_profile, save_character_profile
+    _own_hairstyle(character_name, item_id)
+    with keyed_lock("character_profile", character_name):
+        profile = get_character_profile(character_name) or {}
+        worn = dict(profile.get("equipped_mesh_pieces") or {}) if isinstance(
+            profile.get("equipped_mesh_pieces"), dict) else {}
+        if worn.get(HAIR_KIND) == item_id:
+            return True
+        worn[HAIR_KIND] = item_id
+        profile["equipped_mesh_pieces"] = worn
+        saved = bool(save_character_profile(character_name, profile))
+    if saved:
+        logger.info("hairstyle worn by %s: %s", character_name, item_id)
+        from app.core import figure, figure_build
+        figure.invalidate()
+        if request:
+            figure_build.request(character_name, "outfit_change")
+    return saved
+
+
+def request_outfit_build(character_name: str) -> None:
+    """The ONE Build request of an outfit set that changed the hairstyle
+    (``wear_outfit_hairstyle`` True): the debounce timer its pieces may have
+    armed is disarmed (``model_refs.cancel_build_timer``) and the Build is
+    requested now (``figure_build.request(name, "outfit_change")``) — it
+    sees the pieces and the hairstyle together."""
+    from app.core import figure_build, model_refs
+    model_refs.cancel_build_timer(character_name)
+    figure_build.request(character_name, "outfit_change")
+
+
+def wear_outfit_hairstyle(character_name: str, outfit: Dict[str, Any]) -> bool:
+    """Wear the hairstyle a saved outfit set names (``outfit["hairstyle"]``,
+    D5) without requesting the Build (``wear_hairstyle(request=False)``).
+    True when the worn hairstyle changed — the caller then asks the Build
+    once (``request_outfit_build``). A set without one, or naming an item that is no hairstyle of the
+    character any more (deleted), changes nothing (a WARNING for the
+    latter)."""
+    item_id = str((outfit or {}).get("hairstyle") or "").strip()
+    if not item_id:
+        return False
+    from app.models.character import get_character_profile
+    if worn_hair_id(character_name, get_character_profile(character_name) or {}) == item_id:
+        return False
+    try:
+        return wear_hairstyle(character_name, item_id, request=False)
+    except ValueError as e:
+        logger.warning("outfit set of %s: hairstyle %s not worn — %s", character_name, item_id, e)
+        return False
+
+
+def hairstyle_list(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """The Hairstyles tab's list: per owned hairstyle ``{id, name,
+    description, mode, worn, plain, freshness}`` — worn first, then by id.
+    ``plain``: the plain body is this hairstyle's body; ``freshness``
+    (``model_overview.freshness`` shape ``{state, reason}``): a ``body``
+    hairstyle is ``current`` when it is the plain body's (its hair is in the
+    plain body) and ``missing`` otherwise (its body shape is made by a
+    Build); a HairDeck one is ``current`` with an accepted fit on the
+    current base model, ``stale`` with an older fit only, ``missing``
+    without; HAAR ``missing``. Read-only."""
+    from app.core import base_body, garment_store
+    from app.core.model_overview import CURRENT, MISSING, STALE, freshness
+    profile = _profile_of(character_name, profile)
+    worn = worn_hair_id(character_name, profile)
+    plain = str(profile.get(BASE_HAIRSTYLE_KEY) or "")
+    base = base_body.current_base(character_name, profile=profile)
+    out: List[Dict[str, Any]] = []
+    for item in hairstyles(character_name):
+        item_id = str(item.get("id") or "")
+        mode = hairstyle_mode(item)
+        if mode == BODY_MODE:
+            fresh = freshness(CURRENT) if item_id == plain else freshness(MISSING, "Body shape made by a Build")
+        elif mode == HAIRDECK_MODE:
+            try:
+                served = (garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1],
+                                                     profile=profile) if base and base[1] else None)
+                newest = garment_store.newest_accepted_fits(character_name, item_id).get(garment_store.HAIRDECK)
+            except ValueError:
+                served = newest = None
+            fresh = (freshness(CURRENT) if served else freshness(STALE, "Fitted on an older body") if newest
+                     else freshness(MISSING, "No HairDeck fit yet"))
         else:
-            updates: Dict[str, Any] = {}
-            if (item.get("prompt_fragment") or "") != description:
-                updates["prompt_fragment"] = description
-            if item.get("garment") != garment:
-                updates["garment"] = garment
-            if updates and inventory.update_item(item["id"], updates) is None:
-                raise RuntimeError(f"Could not refresh the hair item {item['id']}")
-        if not inventory.equip_mesh_piece(character_name, item["id"]):
-            raise RuntimeError(f"Could not store the worn hair item of {character_name}")
-        return item["id"]
+            fresh = freshness(MISSING, HAAR_NOT_BUILT)
+        out.append({"id": item_id, "name": str(item.get("name") or item_id),
+                    "description": hairstyle_description(item), "mode": mode,
+                    "worn": item_id == worn, "plain": item_id == plain, "freshness": fresh})
+    out.sort(key=lambda e: not e["worn"])
+    return out

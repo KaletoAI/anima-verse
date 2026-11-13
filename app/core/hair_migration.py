@@ -11,11 +11,11 @@ ones too):
    removed methods (``hair_subtract_shape``, ``hair_shell_mm``, a ``hair_method``
    that names no method any more, the per-character ``outfit_imagegen`` chains of
    the removed occasions) and decides the EFFECTIVE method on what is left
-   (``garment_hair.hair_method``: the character's own value, else the world's).
-   ``body``: every own hair item goes and every hair slot is emptied. HairDeck:
-   the character keeps its hair item (``garment_hair.find_hair_item``: the worn
-   own hair, else the first owned) with its HairDeck job folders and fits; any
-   other own hair item goes;
+   (``legacy_hair_method``: the character's stored value, else the world's
+   default). ``body``: every own hair item goes and every hair slot is emptied.
+   HairDeck: the character keeps its hair item (the worn own hair, else the
+   first owned) with its HairDeck job folders and fits; any other own hair item
+   goes;
 2. outside the lock: ``inventory.delete_item`` per hair item that goes;
 3. ``artefact_graph.collect(explicit=True)`` without a budget, limited to the
    hair nodes (``keys``) — every group, layered fit, body fit and HairDeck job
@@ -66,6 +66,24 @@ def _contained(root: Path, path: Path) -> bool:
     return contained(root, path)
 
 
+#: The per-character hair methods before hairstyles (plan 2026-11-12-unified-worn-pieces Task 13 moved the
+#: mode onto the hairstyle item and dropped the profile key ``hair_method``).
+LEGACY_HAIR_METHODS: Tuple[str, ...] = ("body", "hairdeck")
+#: The profile key the method was stored under.
+LEGACY_METHOD_KEY = "hair_method"
+
+
+def legacy_hair_method(profile: Dict[str, Any]) -> str:
+    """The hair method a profile from before hairstyles stood for: its stored
+    ``hair_method`` when it names one of ``LEGACY_HAIR_METHODS``, else the
+    world's default (``garment_hair.default_mode`` — the world setting the old
+    ``base_body.hair_method`` was renamed to). Read by the boot migrations
+    only."""
+    from app.core import garment_hair
+    own = (profile or {}).get(LEGACY_METHOD_KEY)
+    return own if own in LEGACY_HAIR_METHODS else garment_hair.default_mode()
+
+
 def _is_hair(item: Optional[Dict[str, Any]]) -> bool:
     from app.core.garment_hair import HAIR_KIND
     return bool(item and item.get("category") == "garment"
@@ -86,9 +104,9 @@ def _profile_step(name: str, hair_items: Dict[str, Dict[str, Any]]) -> Dict[str,
             if key in profile:
                 profile.pop(key)
                 dropped.append(key)
-        own = profile.get("hair_method")
-        if own not in (None, "", *garment_hair.HAIR_METHODS):
-            profile.pop("hair_method")
+        own = profile.get(LEGACY_METHOD_KEY)
+        if own not in (None, "", *LEGACY_HAIR_METHODS):
+            profile.pop(LEGACY_METHOD_KEY)
             dropped.append(f"hair_method={own}")
         imagegen = profile.get("outfit_imagegen")
         if isinstance(imagegen, dict):
@@ -96,12 +114,12 @@ def _profile_step(name: str, hair_items: Dict[str, Dict[str, Any]]) -> Dict[str,
                 if key in imagegen:
                     imagegen.pop(key)
                     dropped.append(f"outfit_imagegen.{key}")
-        method = garment_hair.hair_method(name, profile=profile)
+        method = legacy_hair_method(profile)
         owned = sorted(iid for iid, item in hair_items.items() if (item.get("owner") or "").strip() == name)
         worn = profile.get("equipped_mesh_pieces")
         worn = dict(worn) if isinstance(worn, dict) else {}
         kept = ""
-        if method != garment_hair.BODY_METHOD:
+        if method != garment_hair.BODY_MODE:
             worn_hair = worn.get(garment_hair.HAIR_KIND)
             kept = worn_hair if worn_hair in owned else (owned[0] if owned else "")
         unequipped = [slot for slot, iid in worn.items() if iid in hair_items and iid != kept]

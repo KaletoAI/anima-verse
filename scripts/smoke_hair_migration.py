@@ -17,8 +17,9 @@ Fixture (written BEFORE the first config load):
   instance config: image_generation.routing {hair_source_mesh: ["X"],
     hair_views_mesh: ["Y"], mesh_garment: ["Z"]};
   world config: packages human, base_body.hair_method "edit_chain".
-  Ana (pipeline on; hair item ``hair_ana`` made by ensure_hair_item while her
-    profile said hairdeck, then the profile set to hair_method "subtract",
+  Ana (pipeline on; hair item ``hair_ana`` made by create_hairstyle(mode
+    hairdeck) while her profile said hairdeck, then the profile set to the
+    legacy key hair_method "subtract",
     hair_subtract_shape "shell", hair_shell_mm 2, outfit_imagegen
     {hair_source_mesh_workflow "X*", mesh_workflow "keep*"}); a second own
     hair item ``hair_ana_2`` (not worn); an own-mesh dress ``dress_a``.
@@ -48,11 +49,17 @@ Fixture (written BEFORE the first config load):
 
 EXPECTED, BY HAND FROM THE SPEC § Design 6 AND THE CORRECTION
 [1] Config, in memory after load: routing keeps only mesh_garment of the three;
-    base_body.hair_method "body". config.migrate_file persists it: the
-    instance config.json routing has neither hair key, the world config.json has
-    no base_body.hair_method (pruned: "body" is the default), and both layer
-    dirs hold a .config-history snapshot. _migrate_removed_hair_methods on the
-    migrated dict -> False (idempotent).
+    the world's base_body.hair_method is gone and became
+    base_body.hairstyle_default_mode "body" (the removed "edit_chain" -> body;
+    plan 2026-11-12-unified-worn-pieces Task 13 renamed the setting).
+    config.migrate_file persists it: the instance config.json routing has
+    neither hair key, the world config.json has neither base_body key
+    (pruned: "body" is the default), and both layer dirs hold a
+    .config-history snapshot. _migrate_removed_hair_methods on the migrated
+    dict -> False (idempotent); on {"base_body": {"hair_method": "hairdeck"}}
+    -> True and the dict becomes {"base_body": {"hairstyle_default_mode":
+    "hairdeck"}}; a hairstyle_default_mode already set wins over a leftover
+    hair_method (which is dropped).
 [2] Proof the migration is new work: at 8f4f306c (the start of Task 3)
     app/core/hair_migration.py does not exist and config.py names no
     _migrate_removed_hair_methods; the GC rules that judge garment groups are
@@ -167,20 +174,27 @@ def main() -> int:
         routing = config.get("image_generation.routing") or {}
         check("[1] routing in memory", sorted(k for k in routing if k in ("hair_source_mesh", "hair_views_mesh",
                                                                           "mesh_garment")), ["mesh_garment"])
-        check("[1] world hair_method in memory", config.get("base_body.hair_method"), "body")
+        check("[1] world hair_method in memory", (config.get("base_body.hair_method"),
+                                                  config.get("base_body.hairstyle_default_mode")), (None, "body"))
         config.migrate_file(world_cfg, inst_cfg)
         on_disk = json.loads(inst_cfg.read_text())
         check("[1] instance file routing", sorted(k for k in (on_disk.get("image_generation") or {})
                                                   .get("routing", {}) if k.startswith("hair_")
                                                   or k == "mesh_garment"), ["mesh_garment"])
-        check("[1] world file hair_method", (json.loads(world_cfg.read_text()).get("base_body") or {})
-              .get("hair_method"), None)
+        check("[1] world file base_body", (json.loads(world_cfg.read_text()).get("base_body") or {}), {})
         check("[1] backups", [bool(list((d / config.CONFIG_HISTORY_DIRNAME).glob("*")))
                               for d in (inst_cfg.parent, world_cfg.parent)], [True, True])
-        again = {"image_generation": {"routing": {"mesh_garment": ["Z"]}}, "base_body": {"hair_method": "body"}}
+        again = {"image_generation": {"routing": {"mesh_garment": ["Z"]}},
+                 "base_body": {"hairstyle_default_mode": "body"}}
         check("[1] idempotent", config._migrate_removed_hair_methods(again), False)
         check("[1] hairdeck world value stays", (config._migrate_removed_hair_methods(
-            {"base_body": {"hair_method": "hairdeck"}})), False)
+            {"base_body": {"hairstyle_default_mode": "hairdeck"}})), False)
+        moved = {"base_body": {"hair_method": "hairdeck"}}
+        check("[1] hair_method hairdeck moves", (config._migrate_removed_hair_methods(moved), moved),
+              (True, {"base_body": {"hairstyle_default_mode": "hairdeck"}}))
+        both = {"base_body": {"hair_method": "hairdeck", "hairstyle_default_mode": "body"}}
+        check("[1] the new key wins", (config._migrate_removed_hair_methods(both), both),
+              (True, {"base_body": {"hairstyle_default_mode": "body"}}))
 
         from app.core import db
         db.init_schema()
@@ -237,7 +251,7 @@ def main() -> int:
 
         # Ana --------------------------------------------------------------------------------------
         A = make("Ana", "hairdeck")
-        assert garment_hair.ensure_hair_item("Ana") == "hair_ana"
+        assert garment_hair.create_hairstyle("Ana", "", "hairdeck") == "hair_ana"
         inventory.add_item(name="Hair", category="garment", owner="Ana", item_id="hair_ana_2",
                            garment={"kind": "hair", "slot": "hair", "body_slot": "hair"},
                            transferable=False, portable=False)
@@ -279,7 +293,7 @@ def main() -> int:
 
         # Bea --------------------------------------------------------------------------------------
         B = make("Bea", "hairdeck")
-        assert garment_hair.ensure_hair_item("Bea") == "hair_bea"
+        assert garment_hair.create_hairstyle("Bea", "", "hairdeck") == "hair_bea"
         G = B / "garments"
         fb, hb = gs.garment_fsig("Bea", "hair_bea"), gs.garment_hsig("Bea", "hair_bea")
         keep_b = hair_fit(G, "hair_bea", fb, {"method": "hairdeck", "inputs": {"hsig": hb}})

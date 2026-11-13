@@ -12,8 +12,9 @@ not a skill package (R1) — one group ``hair_c<CC>`` per chain, solved by the c
 - HairDeck's per-chain ``stiffness`` (0.2–0.75) times the character's Stiffness factor maps linearly to the spring
   frequency (``HAIR_FREQ_PER_STIFFNESS`` Hz per unit, measured in the spike, Ruling H1a), clamped to
   ``HAIR_FREQ_MIN_HZ``..``HAIR_FREQ_MAX_HZ``; the damping ratio is a constant ``HAIR_ZETA``.
-- Swing and Stiffness are profile keys: ``hair_swing`` (``"on"`` / ``"off"``, ``""`` = ``HAIR_SWING_DEFAULT``) and
-  ``hair_stiffness`` (``""`` = 1.0, else a factor within ``STIFFNESS_LIMITS``). Stiffness changes only the motion.
+- Swing and Stiffness are settings of the hairstyle (``garment_hair.hairstyle_settings``, plan
+  2026-11-12-unified-worn-pieces Task 13): ``hair_swing`` (``"on"`` / ``"off"``, ``""`` = ``HAIR_SWING_DEFAULT``)
+  and ``hair_stiffness`` (``""`` = 1.0, else a factor within ``STIFFNESS_LIMITS``). Stiffness changes only the motion.
   Swing is a FIT input (Ruling H11, replacing H7's "motion only"): with Swing off the fit writes today's skin
   (``garment_fit.hair_weights``' Head -> Neck -> Spine2 rows, no chain joint, no binding) and the payload has no
   hair group; with Swing on the chain-bound cards ride their chain joints. ``garment_store.garment_fsig`` holds
@@ -40,9 +41,10 @@ from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-PROFILE_SWING = "hair_swing"
-PROFILE_STIFFNESS = "hair_stiffness"
-#: The stored values of ``PROFILE_SWING``; anything else (``""``) means ``HAIR_SWING_DEFAULT``.
+#: The hairstyle setting keys (``garment_hair.SETTING_KEYS``) of Swing and Stiffness.
+SETTING_SWING = "hair_swing"
+SETTING_STIFFNESS = "hair_stiffness"
+#: The stored values of ``SETTING_SWING``; anything else (``""``) means ``HAIR_SWING_DEFAULT``.
 SWING_ON = "on"
 SWING_OFF = "off"
 #: Swing of a character that never chose (Ruling H11, 2026-11-12): OFF — the fit is then today's hair, byte for
@@ -70,9 +72,6 @@ HAIR_SAG_MAX_DEG = 10.0
 #: Motion group id of one chain (``CC`` = HairDeck's chain index, as in the joint names).
 GROUP_ID = "hair_c{index:02d}"
 
-#: Profile keys whose value is part of the served-chains cache key (with the worn hair id and the head capsule
-#: scale): a change of the character's hair invalidates the cached summary even when ``garments/`` is unchanged.
-HAIR_PROFILE_KEYS = ("hair_method", "hair_forward_m", "hair_tilt_deg", "hair_width_scale", PROFILE_SWING)
 
 # character -> (cache key, chains summary or None)
 _SERVED: Dict[str, Tuple[Tuple[Any, ...], Optional[Dict[str, Any]]]] = {}
@@ -98,46 +97,45 @@ def _stiffness_value(raw: Any) -> Optional[float]:
     return value
 
 
-def swing_on(profile: Optional[Dict[str, Any]]) -> bool:
-    """Swing of the profile key ``hair_swing``: ``"on"`` True, ``"off"`` False, anything else
-    ``HAIR_SWING_DEFAULT``. A fit input (Ruling H11)."""
-    stored = str((profile or {}).get(PROFILE_SWING) or "")
+def swing_on(settings: Optional[Dict[str, Any]]) -> bool:
+    """Swing of a hairstyle's settings (``garment_hair.hairstyle_settings``, key ``hair_swing``): ``"on"`` True,
+    ``"off"`` False, anything else ``HAIR_SWING_DEFAULT``. A fit input (Ruling H11)."""
+    stored = str((settings or {}).get(SETTING_SWING) or "")
     return True if stored == SWING_ON else False if stored == SWING_OFF else HAIR_SWING_DEFAULT
 
 
-def settings(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """``{"swing": bool, "stiffness": float}`` of the profile keys ``hair_swing`` / ``hair_stiffness``. Swing:
-    ``swing_on``; a stiffness that is empty, no number or beyond ``STIFFNESS_LIMITS`` counts as
-    ``DEFAULT_STIFFNESS``."""
-    profile = profile or {}
+def settings(hairstyle: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """``{"swing": bool, "stiffness": float}`` of a hairstyle's settings (``garment_hair.hairstyle_settings``, keys
+    ``hair_swing`` / ``hair_stiffness``). Swing: ``swing_on``; a stiffness that is empty, no number or beyond
+    ``STIFFNESS_LIMITS`` counts as ``DEFAULT_STIFFNESS``."""
+    hairstyle = hairstyle or {}
     try:
-        stiffness = _stiffness_value(profile.get(PROFILE_STIFFNESS))
+        stiffness = _stiffness_value(hairstyle.get(SETTING_STIFFNESS))
     except ValueError:
         stiffness = None
-    return {"swing": swing_on(profile), "stiffness": DEFAULT_STIFFNESS if stiffness is None else stiffness}
+    return {"swing": swing_on(hairstyle), "stiffness": DEFAULT_STIFFNESS if stiffness is None else stiffness}
 
 
-def set_hair_motion(character_name: str, swing: Any, stiffness: Any) -> bool:
-    """Store Swing (a bool; stored as ``"on"`` / ``"off"`` — an explicit choice survives a change of
-    ``HAIR_SWING_DEFAULT``) and the Stiffness factor (a number within ``STIFFNESS_LIMITS``; None, ``""`` or 1.0 =
-    the default, stored as ``""``) in ONE read-modify-write under the profile lock. ValueError for a non-bool swing
-    or an invalid stiffness — nothing is stored then. The save result; True without a save when unchanged.
-    Stiffness changes only the motion payload; Swing is a fit input (the caller starts the CPU refit)."""
-    from app.core.keyed_lock import keyed_lock
-    from app.models.character import get_character_profile, save_character_profile
+def worn_settings(character_name: str, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``settings`` of the worn hairstyle (``garment_hair.worn_hairstyle``; none worn: the defaults)."""
+    from app.core import garment_hair
+    return settings(garment_hair.hairstyle_settings(garment_hair.worn_hairstyle(character_name, profile)))
+
+
+def set_hair_motion(character_name: str, item_id: str, swing: Any, stiffness: Any) -> bool:
+    """Store a hairstyle's Swing (a bool; stored as ``"on"`` / ``"off"`` — an explicit choice survives a change of
+    ``HAIR_SWING_DEFAULT``) and Stiffness factor (a number within ``STIFFNESS_LIMITS``; None, ``""`` or 1.0 = the
+    default, the key is dropped) in ONE read-modify-write of the item (``garment_hair.set_hairstyle_settings``).
+    ValueError for a non-bool swing, an invalid stiffness or an item that is no hairstyle of the character —
+    nothing is stored then. The update result; True without a write when unchanged. Stiffness changes only the
+    motion payload; Swing is a fit input (the caller starts the CPU refit)."""
+    from app.core import garment_hair
     if not isinstance(swing, bool):
         raise ValueError("hair swing must be true or false")
     value = _stiffness_value(stiffness)
-    wanted = {PROFILE_SWING: SWING_ON if swing else SWING_OFF,
-              PROFILE_STIFFNESS: "" if value is None or value == DEFAULT_STIFFNESS else value}
-    with keyed_lock("character_profile", character_name):
-        profile = get_character_profile(character_name) or {}
-        changed = False
-        for key, stored in wanted.items():
-            if profile.get(key, "") != stored:
-                profile[key] = stored
-                changed = True
-        return bool(save_character_profile(character_name, profile)) if changed else True
+    return garment_hair.set_hairstyle_settings(character_name, item_id, {
+        SETTING_SWING: SWING_ON if swing else SWING_OFF,
+        SETTING_STIFFNESS: "" if value is None or value == DEFAULT_STIFFNESS else value})
 
 
 def freq_zeta(stiffness: float) -> Tuple[float, float]:
@@ -238,45 +236,39 @@ def with_rigid(chains: Optional[Dict[str, Any]], rigid: Optional[FrozenSet[str]]
 
 
 def served_chains(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """``report.chains`` of the newest accepted HairDeck fit of the worn hair (``garments._newest_fit``), None for
-    the hair method ``body``, without worn hair, without such a fit or for a fit from before the spring chains.
-    With Swing off ``motion_groups`` emits nothing whatever this fit is; a fit made with Swing off has no weighted
-    joint, so it gives no group either.
+    """``report.chains`` of the newest accepted HairDeck fit of the worn hairstyle (``garments._newest_fit``), None
+    for a hairstyle that is no HairDeck hair (in the body mesh, HAAR), without a worn hairstyle, without such a fit
+    or for a fit from before the spring chains. With Swing off ``motion_groups`` emits nothing whatever this fit
+    is; a fit made with Swing off has no weighted joint, so it gives no group either.
 
-    Cached per (character, ``garments/`` directory ``st_mtime_ns``, worn item id): a fit or record write replaces a
-    file in that directory, so an unchanged directory costs one ``stat`` per worldmap poll. The item id of the key
-    is the profile's raw hair slot entry; whether it is the character's own hair (``garment_hair.worn_hair_id``,
-    an inventory read) is resolved on a miss only. The key also holds the profile's hair (``HAIR_PROFILE_KEYS``)
-    and the head capsule scale, so a change of either is a miss.
+    Cached per (character, ``garments/`` directory ``st_mtime_ns``, worn item id, the worn item's ``garment``
+    — mode and settings, one item read —, head capsule scale): a fit or record write replaces a file in that
+    directory, so an unchanged directory costs one ``stat`` and one item read per worldmap poll.
 
     Each chain's ``rigid`` is filled from the fit GLB (``rigid_joints``, Ruling H10)."""
+    import json as _json
     from app.core import garment_hair
     from app.core import garment_store as gs
-    if garment_hair.hair_method(character_name, profile=profile) == garment_hair.BODY_METHOD:
-        return None
-    worn = (profile or {}).get("equipped_mesh_pieces")
-    raw = worn.get(garment_hair.HAIR_KIND) if isinstance(worn, dict) else None
-    if not raw:
+    item = garment_hair.worn_hairstyle(character_name, profile)
+    if item is None or garment_hair.hairstyle_mode(item) != garment_hair.HAIRDECK_MODE:
         return None
     try:
         stamp = os.stat(gs._root(character_name)).st_mtime_ns  # a read path never creates garments/
     except OSError:
         return None
     head_scale = _head_scale(character_name, profile)
-    key = (character_name, stamp, str(raw), tuple(str((profile or {}).get(k, "")) for k in HAIR_PROFILE_KEYS),
-           head_scale)
+    key = (character_name, stamp, str(item.get("id") or ""),
+           _json.dumps(item.get("garment") or {}, sort_keys=True, default=str), head_scale)
     with _SERVED_LOCK:
         hit = _SERVED.get(character_name)
     if hit is not None and hit[0] == key:
         return hit[1]
     from app.core import garments
     chains: Optional[Dict[str, Any]] = None
-    item_id = garment_hair.worn_hair_id(character_name, profile)
-    if item_id:
-        newest = garments._newest_fit(character_name, item_id, gs.HAIRDECK)
-        found = ((newest[1].get("report") or {}).get("chains")) if newest else None
-        if isinstance(found, dict):
-            chains = with_rigid(found, _rigid_of_fit(newest[0], head_scale))
+    newest = garments._newest_fit(character_name, str(item["id"]), gs.HAIRDECK)
+    found = ((newest[1].get("report") or {}).get("chains")) if newest else None
+    if isinstance(found, dict):
+        chains = with_rigid(found, _rigid_of_fit(newest[0], head_scale))
     with _SERVED_LOCK:
         _SERVED[character_name] = (key, chains)
     return chains
@@ -351,19 +343,19 @@ def motion_groups(chains: Optional[Dict[str, Any]], settings: Dict[str, Any], *,
     return out
 
 
-def panel(character_name: str, profile: Dict[str, Any], newest: Optional[Dict[str, Any]],
-          path: Optional[Path] = None) -> Dict[str, Any]:
+def panel(character_name: str, hairstyle: Dict[str, Any], newest: Optional[Dict[str, Any]],
+          path: Optional[Path] = None, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The hair GET's spring-chain block for the newest HairDeck fit record ``newest`` (None without a fit) stored
     at ``path`` (its GLB; its joints in the head capsule do not count as swinging links, as in ``served_chains``):
     ``{count, links, swing, stiffness, limits, fitted}`` — ``count`` the bound chains of the fit (None when
     ``fitted`` is False: no fit, or one from before the spring chains), ``links`` how many joints swing (the motion
-    groups' bones, counted with Swing on), ``swing`` / ``stiffness`` the stored settings, ``limits`` the
-    Stiffness bounds."""
-    current = settings(profile)
+    groups' bones, counted with Swing on), ``swing`` / ``stiffness`` the hairstyle's stored settings
+    (``hairstyle``: ``garment_hair.hairstyle_settings``), ``limits`` the Stiffness bounds."""
+    current = settings(hairstyle)
     chains = ((newest or {}).get("report") or {}).get("chains")
     fitted = isinstance(chains, dict)
     if fitted and path is not None:
-        chains = with_rigid(chains, _rigid_of_fit(path, _head_scale(character_name, profile)))
+        chains = with_rigid(chains, _rigid_of_fit(path, _head_scale(character_name, profile or {})))
     groups = motion_groups(chains, {**current, "swing": True}) if fitted else {}
     count = chains.get("count") if fitted else None
     return {"count": int(count) if isinstance(count, (int, float)) and not isinstance(count, bool) else

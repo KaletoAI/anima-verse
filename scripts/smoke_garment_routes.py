@@ -12,7 +12,7 @@ real sessions (pattern of smoke_base_body_model.py [5]).
 
 Stubs: ``garments.run_garment`` (recorder that BLOCKS on an event, so a run
 can be held "in flight"), ``garment_assembly.schedule`` (recorder; equipping
-asks for an assembly). Everything else is real: ``ensure_hair_item``,
+asks for an assembly). Everything else is real: ``create_hairstyle``,
 ``start_garment`` (its worker thread calls the recorder), ``garment_info``,
 ``preview_path``, ``garment_store.garment_path`` and the file responses.
 
@@ -151,7 +151,7 @@ def main() -> int:
         paths.init_instance(root / "instance")
         # A hair method with a hair item (the default "body" makes none).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "hairdeck"}}))
+                                                        "base_body": {"hairstyle_default_mode": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db

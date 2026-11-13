@@ -234,8 +234,8 @@ def main() -> int:
         garments._stored_seeds = lambda name, item_id, hsig: [1]
         garments._hairdeck_files = lambda name, item_id, hsig: (Path("hair"), Path("proxy"))
         garments._kind_inputs = lambda kind, name, profile, item_id: {"description": item_id}
-        garment_hair.hair_length_class = lambda name, profile=None: "short"
-        garment_hair.profile_hair_colour = lambda name, profile=None: None
+        garment_hair.hair_length_class = lambda name, profile=None, text=None: "short"
+        garment_hair.profile_hair_colour = lambda name, profile=None, text=None: None
         garment_source.backfill = lambda name: 0
         outfit_bodies.match_stale_postures = lambda name: []
         outfit_bodies.stale_posture_bodies = lambda name, profile=None: []

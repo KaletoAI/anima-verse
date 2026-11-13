@@ -30,12 +30,16 @@ GLB has no body to fit one on. Segment (0, 1.5, 0)–(0, 1.6, 0); distances by h
     stiffness 0.4 and c01 weighted [_00, _01], stiffness 0.32, both ``rigid: []`` as fit_hairdeck records them):
     c00 rigid [c00_00], c01 rigid [c01_00]; motion_groups → hair_c00 bones [_01, _02], freq_hz 0.4 × 3.7 = 1.48,
     hair_c01 bones [_01], freq_hz 0.32 × 3.7 = 1.184 — EXACTLY (rounded to 3 decimals; the float product is
-    1.1840000000000002), zeta 0.5. Cache: a second poll does not read the fit again; a change of the profile's
-    hair (hair_forward_m) is a miss; head scale 0.9 (model3d_opts.collision_scales) is a miss and gives c01
-    rigid [] → hair_c01 bones [_00, _01].
-[4] panel(Demo, profile, record, path): links = 2 + 1 = 3 at scale 1 (5 without the path — the recorded lists).
+    1.1840000000000002), zeta 0.5. Cache: a second poll does not read the fit again; a change of the worn
+    hairstyle's hair (its hair_forward_m — the settings are the item's since plan 2026-11-12-unified-worn-pieces
+    Task 13) is a miss; head scale 0.9 (model3d_opts.collision_scales) is a miss and gives c01 rigid [] → hair_c01
+    bones [_00, _01].
+[4] panel(Demo, hairstyle settings, record, path): links = 2 + 1 = 3 at scale 1 (5 without the path — the recorded
+    lists).
 [5] FAILS ON THE OLD CODE (pinned c061f759): that commit's hair_motion.py, loaded from git, serves the same fit with
-    rigid [] → hair_c00 bones [_00, _01, _02], and its freq_zeta(0.32)[0] is 1.1840000000000002, not 1.184.
+    rigid [] → hair_c00 bones [_00, _01, _02], and its freq_zeta(0.32)[0] is 1.1840000000000002, not 1.184. (That
+    code asks ``garment_hair.hair_method`` / ``BODY_METHOD``, which Task 13 removed; the proof lends it stand-ins
+    answering "hairdeck", the method the fixture had then.)
 """
 import json
 import os
@@ -156,14 +160,16 @@ def main() -> int:
 
         # --- [3] served_chains ---------------------------------------------------------
         print("[3] served_chains / motion_groups")
+        from app.core import garment_hair
         check("create Demo", save_character_profile("Demo", {"template": "human-roleplay", "gender": "female"},
                                                     create_new=True), True)
         inventory.add_item(name="Hair", category="garment", owner="Demo", item_id="hair_demo",
-                           garment={"kind": "hair", "slot": "hair", "body_slot": "hair"},
+                           garment={"kind": "hair", "slot": "hair", "body_slot": "hair", "mesh_mode": "hairdeck",
+                                    "description": "long hair"},
                            transferable=False, portable=False)
         with keyed_lock("character_profile", "Demo"):
             stored = get_character_profile("Demo")
-            stored.update(hair_method="hairdeck", equipped_mesh_pieces={"hair": "hair_demo"})
+            stored.update(equipped_mesh_pieces={"hair": "hair_demo"})
             check("profile fixture", save_character_profile("Demo", stored), True)
         gdir = get_character_dir("Demo") / "garments"
         gdir.mkdir(parents=True, exist_ok=True)
@@ -188,8 +194,10 @@ def main() -> int:
               [(v["freq_hz"], v["zeta"]) for v in groups.values()], [(1.48, 0.5), (1.184, 0.5)])
         hm.served_chains("Demo", profile)
         check("second poll: no re-read", len(calls), 1)
-        hm.served_chains("Demo", {**profile, "hair_forward_m": 0.002})
-        check("profile hair change: miss", len(calls), 2)
+        garment = dict(inventory.get_item("hair_demo")["garment"], hair_forward_m=0.002)
+        inventory.update_item("hair_demo", {"garment": garment})
+        hm.served_chains("Demo", profile)
+        check("hairstyle hair change: miss", len(calls), 2)
         scaled = {**profile, "model3d_opts": {"collision_scales": {"head": 0.9}}}
         served9 = hm.served_chains("Demo", scaled)
         check("head scale change: miss", len(calls), 3)
@@ -204,8 +212,10 @@ def main() -> int:
 
         # --- [4] panel -------------------------------------------------------------------
         print("[4] panel")
-        check("links with the fit path", hm.panel("Demo", profile, record(), fit_path)["links"], 3)
-        check("links without the path (recorded lists)", hm.panel("Demo", profile, record())["links"], 5)
+        settings = garment_hair.hairstyle_settings(inventory.get_item("hair_demo"))
+        check("links with the fit path", hm.panel("Demo", settings, record(), fit_path, profile=profile)["links"], 3)
+        check("links without the path (recorded lists)",
+              hm.panel("Demo", settings, record(), profile=profile)["links"], 5)
 
         # --- [5] fails on the old code ----------------------------------------------------
         print(f"[5] old code ({OLD_COMMIT})")
@@ -214,7 +224,13 @@ def main() -> int:
                                     check=True, capture_output=True, text=True).stdout
             old = types.ModuleType("hair_motion_old")
             exec(compile(source, f"{OLD_COMMIT}:app/core/hair_motion.py", "exec"), old.__dict__)
-            old_groups = old.motion_groups(old.served_chains("Demo", profile), {"swing": True, "stiffness": 1.0})
+            garment_hair.hair_method = lambda name, profile=None: "hairdeck"
+            garment_hair.BODY_METHOD = "body"
+            try:
+                old_served = old.served_chains("Demo", profile)
+            finally:
+                del garment_hair.hair_method, garment_hair.BODY_METHOD
+            old_groups = old.motion_groups(old_served, {"swing": True, "stiffness": 1.0})
             check("old: hair_c00 swings its head-capsule joint", old_groups["hair_c00"]["bones"],
                   ["HairGen_c00_00", "HairGen_c00_01", "HairGen_c00_02"])
             check("old: freq_zeta(0.32) unrounded", old.freq_zeta(0.32)[0] != 1.184, True)

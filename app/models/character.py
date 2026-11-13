@@ -3406,9 +3406,11 @@ def _outfit_options(outfit_data: Dict, character_name: str, *, live: bool) -> Di
 def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
     """Add or update an outfit.
 
-    outfit_data: {id?, name, outfit, locations[], activities[], pieces[], remove_slots[], options{boot_hem, piece_state}}
+    outfit_data: {id?, name, outfit, locations[], activities[], pieces[], remove_slots[], options{boot_hem, piece_state},
+    hairstyle?}
     (``options``: the per-outfit options of ``app.core.outfit_options``; a new set without them stores the
-    character's live value). Return the outfit ID."""
+    character's live value. ``hairstyle``: the id of the character's hairstyle the set wears — plan
+    2026-11-12-unified-worn-pieces Task 13 / D5 — "" = the set leaves the hair as it is). Return the outfit ID."""
     outfits = get_character_outfits(character_name)
     outfit_id = outfit_data.get("id", "")
 
@@ -3432,6 +3434,8 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
                     existing["remove_slots"] = list(outfit_data["remove_slots"] or [])
                 if "options" in outfit_data:
                     existing["options"] = _outfit_options(outfit_data, character_name, live=False)
+                if "hairstyle" in outfit_data:
+                    existing["hairstyle"] = str(outfit_data.get("hairstyle") or "").strip()
                 # Dead key of the abolished per-slot colour override.
                 existing.pop("pieces_colors", None)
                 save_character_outfits(character_name, outfits)
@@ -3454,6 +3458,7 @@ def add_character_outfit(character_name: str, outfit_data: Dict) -> str:
         "excluded_locations": outfit_data.get("excluded_locations", []),
         "image": outfit_data.get("image", ""),
         "options": _outfit_options(outfit_data, character_name, live=True),
+        "hairstyle": str(outfit_data.get("hairstyle") or "").strip(),
         "created_at": outfit_data.get("created_at", utc_now_iso()),
     })
     save_character_outfits(character_name, outfits)

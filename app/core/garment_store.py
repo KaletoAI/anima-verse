@@ -59,10 +59,11 @@ signature and the content of the base front + back view. The base MODEL is not
 in it: a base model regenerated under the same base signature keeps images and
 mesh and only re-fits; the fit record's ``base_model_sha256`` decides that.
 
-Hair has two methods (``garment_hair.hair_method``; spec
-``2026-11-11-hair-from-body-design.md``): ``body`` — the hair is part of the
-body mesh, no steps, no files — and HairDeck — steps ``("hairdeck", "fit")``
-(``steps_for``). HairDeck
+A hairstyle has its own mode (``garment_hair.hairstyle_mode``; spec
+``2026-11-11-hair-from-body-design.md``, plan 2026-11-12-unified-worn-pieces
+Task 13): ``body`` — the hair is part of the body mesh, no steps, no files —,
+HairDeck — steps ``("hairdeck", "fit")`` (``steps_for``) — and HAAR (not built
+yet: no steps). HairDeck
 turns the profile picture into hair cards; its files live in ONE folder per
 ``hsig``::
 
@@ -76,8 +77,8 @@ the backend the ``hair_mesh`` occasion is meant to run on and
 re-fits from the cached job. A character with facial hair adds
 ``garment_beard.hsig_inputs`` (HairDeck gets a beard-free copy of the picture,
 cached in the job folder as ``beard_free.png``). The HairDeck fsig is the
-edit-chain payload (``_edit_payload``) plus ``method``, ``hsig``, the colour override (profile ``hair_colour``)
-and the placement (profile ``hair_forward_m`` / ``hair_tilt_deg``). The fit is the same ``{item}_{fsig}.glb`` +
+edit-chain payload (``_edit_payload``) plus ``method``, ``hsig``, the colour override (the hairstyle's
+``hair_colour``) and the placement (its ``hair_forward_m`` / ``hair_tilt_deg``). The fit is the same ``{item}_{fsig}.glb`` +
 record (its record says ``method: "hairdeck"``; a record without ``method`` is an edit-chain fit — of hair, one of
 the removed method, never served); ``prepared/`` is not used by HairDeck.
 
@@ -126,8 +127,10 @@ HAIRDECK_VERSION = 1
 HAIRDECK_RECORD = "record.json"
 EDIT_CHAIN = "edit_chain"
 HAIRDECK = "hairdeck"
-#: Hair inside the body mesh (``garment_hair.BODY_METHOD``): no steps, no fit, nothing served.
+#: Hair inside the body mesh (``garment_hair.BODY_MODE``): no steps, no fit, nothing served.
 BODY = "body"
+#: HAIR not built yet (``garment_hair.HAAR_MODE``): no steps, no fit, nothing served.
+HAAR = "haar"
 #: The only method of footwear (no method choice for ``feet``).
 SHOE = "shoe"
 GARMENT_VIEWS: Tuple[str, ...] = ("front", "back")
@@ -335,7 +338,7 @@ def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any],
     (``garment_clothing.fsig_inputs``)."""
     if kind == "hair":
         from app.core import garment_hair
-        return garment_hair.fsig_inputs(character_name, profile=profile)
+        return garment_hair.fsig_inputs(character_name, str(item_id or ""), profile=profile)
     if kind in ("clothing", "footwear"):
         from app.models.inventory import get_item
         item = get_item(item_id) if item_id else None
@@ -349,13 +352,14 @@ def _kind_inputs(kind: str, character_name: str, profile: Dict[str, Any],
     raise ValueError(f"unknown garment kind {kind!r}")
 
 
-def kind_method(kind: str, character_name: str, profile: Dict[str, Any]) -> str:
-    """The method a garment of ``kind`` is made with: hair follows
-    ``garment_hair.hair_method``, footwear is always a ``shoe``, every other
-    kind the edit chain."""
+def kind_method(kind: str, character_name: str, profile: Dict[str, Any], *, item_id: str = "") -> str:
+    """The method a garment ``item_id`` of ``kind`` is made with: a hairstyle
+    its own mode (``garment_hair.hairstyle_mode``), footwear always a
+    ``shoe``, every other kind the edit chain."""
     if kind == "hair":
         from app.core import garment_hair
-        return garment_hair.hair_method(character_name, profile=profile)
+        from app.models.inventory import get_item
+        return garment_hair.hairstyle_mode(get_item(str(item_id or "")))
     if kind == "footwear":
         return SHOE
     return EDIT_CHAIN
@@ -364,14 +368,14 @@ def kind_method(kind: str, character_name: str, profile: Dict[str, Any]) -> str:
 def steps_for(kind: str, method: str) -> Tuple[str, ...]:
     """The step order of ``kind`` made with ``method``: hair by HairDeck is
     ``HAIRDECK_STEPS``, hair in the body mesh (``BODY``) has none — ``()``,
-    nothing ever runs —, footwear only by ``shoe`` (``FOOTWEAR_STEPS``; the
+    nothing ever runs — and neither has HAAR (not built yet), footwear only by ``shoe`` (``FOOTWEAR_STEPS``; the
     edit chain is never run for a feet piece), clothing only by the edit
     chain (``GARMENT_STEPS[kind]``). ValueError for an unknown kind or method
     (hair by any other method too — only ``body`` and HairDeck remain)."""
     if kind not in GARMENT_STEPS:
         raise ValueError(f"unknown garment kind {kind!r}")
     if kind == "hair":
-        if method == BODY:
+        if method in (BODY, HAAR):
             return ()
         if method == HAIRDECK:
             return HAIRDECK_STEPS
@@ -404,7 +408,7 @@ def garment_method(character_name: str, item_id: str, *,
     """``kind_method`` of a garment item. ValueError when ``item_id`` is no
     garment of a known kind."""
     kind = _garment_kind(item_id)
-    return kind_method(kind, character_name, _profile_of(character_name, profile))
+    return kind_method(kind, character_name, _profile_of(character_name, profile), item_id=item_id)
 
 
 def hairdeck_backend_params(character_name: str) -> Dict[str, Any]:
@@ -478,7 +482,8 @@ def _md5(payload: Dict[str, Any]) -> str:
 
 
 def garment_fsig(character_name: str, item_id: str, *,
-                 profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None) -> str:
+                 profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None,
+                 method: Optional[str] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
     (R10); hair made by HairDeck adds ``{method, hsig, colour, placement}``
     (the colour override, "" = automatic; the manual placement
@@ -492,22 +497,27 @@ def garment_fsig(character_name: str, item_id: str, *,
     2026-11-12-unified-worn-pieces Task 11b): ``state`` (``open`` /
     ``closed``; None → the profile's worn state) enters its inputs —
     ``"state": "open"`` and the ", worn open" fragment; a closed piece's fsig
-    is the one it had before the option. ValueError when ``item_id`` is no
-    garment of a known kind (or for a bad ``state``)."""
+    is the one it had before the option. ``method`` (hair only): the
+    fingerprint the hairstyle would have in that mode — None = its own mode
+    (the Wardrobe hair row's "Other method" preview asks for the mode it left).
+    ValueError when ``item_id`` is no garment of a known kind (or for a bad
+    ``state``)."""
     kind = _garment_kind(item_id)
     profile = _profile_of(character_name, profile)
     if kind == "footwear":
         # No base in it (spec § 5.6): a base change makes the fit stale, never the source.
         return _md5({"kind": kind, **_kind_inputs(kind, character_name, profile, item_id)})
     payload = _edit_payload(character_name, item_id, kind, profile, state=state)
-    method = kind_method(kind, character_name, profile)
+    method = method or kind_method(kind, character_name, profile, item_id=item_id)
     if method == HAIRDECK:
         from app.core import garment_hair
+        from app.models.inventory import get_item
+        settings = garment_hair.hairstyle_settings(get_item(item_id))
         payload.update(method=HAIRDECK, hsig=garment_hsig(character_name, item_id, profile=profile),
-                       colour=garment_hair.hair_colour_override(profile),
-                       placement=garment_hair.hair_placement(profile))
+                       colour=garment_hair.hair_colour_override(settings),
+                       placement=garment_hair.hair_placement(settings))
         from app.core import hair_motion
-        if hair_motion.swing_on(profile):
+        if hair_motion.swing_on(settings):
             payload["swing"] = True
     return _md5(payload)
 
@@ -673,7 +683,7 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     except ValueError:
         current, method = None, EDIT_CHAIN
         state = state if state in ("open", "closed") else "closed"
-    if method == BODY:
+    if method in (BODY, HAAR):
         return None
     if current is not None:
         path = garment_path(character_name, item_id, current, "fit")

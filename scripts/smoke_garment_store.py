@@ -11,7 +11,7 @@ Every expectation is derived by hand below from plan
 
 Fixture: ``Demo`` (template human-roleplay, female, on the base-body pipeline,
 hair slot {length: medium, color: blonde}, appearance "slender, wavy hair with
-a side parting"). ensure_hair_item(Demo) gives the item H (id "hair_demo").
+a side parting"). ensure_hairstyle(Demo) gives the item H (id "hair_demo").
 BSIG = base_signature(Demo). The base views are fake PNG bytes at
 model_refs/tpose_BSIG.png (front) and model_refs/tpose_back_BSIG.png (back);
 the base model is model3d/BSIG.glb with bytes b"model-1".
@@ -19,8 +19,10 @@ the base model is model3d/BSIG.glb with bytes b"model-1".
 [1] fsig = md5[:12] over {kind, description, behind_shoulders, pronouns,
     version, bsig, sha256 of base front + back image}:
     - 12 lowercase hex characters, and two calls give the same value;
-    - another description (appearance "slender, curly hair", so the description
-      becomes "medium blonde hair, curly hair") -> different;
+    - another description (the hairstyle's ``garment.description`` set to
+      "medium blonde hair, curly hair" — plan Task 13: the text is the
+      hairstyle's, no longer read from the Appearance) -> different, and the
+      old text back -> the same fsig again;
     - GARMENT_VERSION["hair"] 1 -> 2 -> different (restored afterwards);
     - another bsig: the same image bytes copied to "base0123abcd" and
       base_signature patched to answer it -> different (only bsig changed);
@@ -131,7 +133,7 @@ def main() -> int:
         paths.init(root / "world")
         # A hair method with a hair item (the default "body" makes none).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "hairdeck"}}))
+                                                        "base_body": {"hairstyle_default_mode": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -144,7 +146,7 @@ def main() -> int:
         from app.core import base_body, garment_assembly, garment_hair, model_refs
         from app.core import outfit_cache_gc as gc
         from app.models import inventory
-        from app.models.character import (get_character_dir, get_character_profile,
+        from app.models.character import (get_character_dir,
                                           save_character_profile)
         garment_assembly.schedule = lambda *a, **k: False
         try:
@@ -160,7 +162,7 @@ def main() -> int:
                                 "build": {"type": "athletic"},
                                 "hair": {"length": "medium", "color": "blonde"}}}
         check("create Demo", save_character_profile("Demo", human, create_new=True), True)
-        hid = garment_hair.ensure_hair_item("Demo")
+        hid = garment_hair.ensure_hairstyle("Demo")
         check("hair item id", hid, "hair_demo")
 
         cdir = get_character_dir("Demo")
@@ -174,11 +176,13 @@ def main() -> int:
         fsig = gs.garment_fsig("Demo", hid)
         check("12 hex", bool(re.fullmatch(r"[0-9a-f]{12}", fsig)), True)
         check("stable", gs.garment_fsig("Demo", hid), fsig)
-        profile = get_character_profile("Demo")
-        curly = dict(profile, character_appearance="slender, curly hair")
-        check("description input", garment_hair.fsig_inputs("Demo", profile=curly)["description"],
+        garment = dict(inventory.get_item(hid)["garment"])
+        inventory.update_item(hid, {"garment": {**garment, "description": "medium blonde hair, curly hair"}})
+        check("description input", garment_hair.fsig_inputs("Demo", hid)["description"],
               "medium blonde hair, curly hair")
-        check("other description", gs.garment_fsig("Demo", hid, profile=curly) != fsig, True)
+        check("other description", gs.garment_fsig("Demo", hid) != fsig, True)
+        inventory.update_item(hid, {"garment": garment})
+        check("description back", gs.garment_fsig("Demo", hid), fsig)
         gs.GARMENT_VERSION["hair"] = 2
         try:
             check("version bump", gs.garment_fsig("Demo", hid) != fsig, True)

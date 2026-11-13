@@ -4485,6 +4485,12 @@ def _play_set_outfit_sync(user, body: Any):
                               source="play_outfit")
         from app.core.outfit_options import apply_saved_options
         apply_saved_options(avatar, target)   # the set's boot hem (boots plan Task 10)
+        # The set's hairstyle (hairstyles plan Task 13 / D5) — an outfit change: ONE Build request below.
+        from app.core.garment_hair import wear_outfit_hairstyle
+        hair_changed = wear_outfit_hairstyle(avatar, target)
+    if hair_changed:
+        from app.core.garment_hair import request_outfit_build
+        request_outfit_build(avatar)
     # Direct action is world-visible: narrator line -> NPCs can react.
     try:
         from app.core.perception import announce_action

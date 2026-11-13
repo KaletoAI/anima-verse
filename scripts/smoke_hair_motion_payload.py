@@ -19,9 +19,10 @@ unit, Ruling H1a; zeta 0.5; limits 0.8..6.0 Hz)
 [2] settings (Ruling H11: Swing defaults to HAIR_SWING_DEFAULT = False): {} -> {swing False, stiffness 1.0};
     hair_swing "off" -> swing False; "on" -> True; "" or "maybe" -> the default, False;
     hair_stiffness "abc" -> 1.0, 2.5 (> 2.0) -> 1.0, true -> 1.0, "1.5" -> 1.5, 0.5 -> 0.5.
-    set_hair_motion(Demo, True, 0.4) -> ValueError (0.4 < 0.5), set_hair_motion(Demo, "yes", 1.0) -> ValueError
-    (no bool), set_hair_motion(Demo, True, "nan") -> ValueError: the profile keeps its values (the fixture's
-    hair_swing "on", no hair_stiffness).
+    The settings are the hairstyle's (plan 2026-11-12-unified-worn-pieces Task 13: ``garment`` keys of the item
+    hair_demo, mode hairdeck): set_hair_motion(Demo, hair_demo, True, 0.4) -> ValueError (0.4 < 0.5),
+    set_hair_motion(Demo, hair_demo, "yes", 1.0) -> ValueError (no bool), set_hair_motion(Demo, hair_demo, True,
+    "nan") -> ValueError: the hairstyle keeps its values (the fixture's hair_swing "on", no hair_stiffness).
 [3] motion_groups on a summary with chain 3 (weighted [_00, _01, _02], rigid [_00], stiffness 0.4) and chain 5
     (weighted [_00], rigid [_00], stiffness 0.3), settings {swing True, stiffness 1.0}, gravity_scale 1.0:
     - exactly one group "hair_c03", bones [HairGen_c03_01, HairGen_c03_02] (no _00: rigid; no _end), hair True,
@@ -46,24 +47,29 @@ unit, Ruling H1a; zeta 0.5; limits 0.8..6.0 Hz)
     returns groups {} for the same character (its early return ``if not declarations`` came first).
     Stiffness factor 1.5 (set_hair_motion) -> rev changes, freq_hz 2.22. Swing off -> groups {} and the rev equals
     the no-hair rev of the old code (``_revision({"declarations": []})``), so a character without hair keeps its
-    rev byte for byte. The fixture profile has hair_swing "on" (the default is off since Ruling H11).
+    rev byte for byte. The fixture hairstyle has hair_swing "on" (the default is off since Ruling H11).
     served_chains cache: a second call with the garments/ directory unchanged does not call _newest_fit again
     (1 call for 2 polls); a new record file in garments/ (a newer fit, chain 3 stiffness 0.6) changes the
-    directory mtime -> re-read, freq_hz = 0.6·3.7 = 2.22. Method "body" -> None. No worn hair -> None.
-[5] panel(Demo, profile, record): {count 2, links 2 (chain 3's two bones; chain 5 has none), swing True,
+    directory mtime -> re-read, freq_hz = 0.6·3.7 = 2.22. A worn hairstyle in mode "body" -> None. No worn
+    hair -> None.
+[5] panel(Demo, hairstyle settings, record): {count 2, links 2 (chain 3's two bones; chain 5 has none), swing True,
     stiffness 1.0, limits [0.5, 2.0], fitted True}; record None -> {count None, links 0, fitted False}; a record
     without report.chains -> fitted False, count None. garments.hairdeck_panel(Demo, hair_demo)["chains"] is that
     block for the newest HairDeck fit.
 [6] Route (``garments.start_garment`` recorded, not run): player session -> 403, nothing stored. Admin: stiffness
-    2.1 -> 400, swing "yes" -> 400, the profile unchanged; {swing false, stiffness 1.5} -> 200 {swing false,
-    stiffness 1.5, refit true}, profile hair_swing "off", hair_stiffness 1.5, one fit-only run of hair_demo
+    2.1 -> 400, swing "yes" -> 400, the hairstyle unchanged; {swing false, stiffness 1.5} -> 200 {swing false,
+    stiffness 1.5, refit true}, the worn hairstyle hair_swing "off", hair_stiffness 1.5, one fit-only run of
+    hair_demo
     (steps "fit" — Swing is a fit input, Ruling H11); {swing true, stiffness null} -> 200 {swing true, stiffness
-    1.0, refit true}, stored ("on", ""), a second run; {swing true, stiffness 1.2} -> refit false, no third run
+    1.0, refit true}, stored ("on", no key), a second run; {swing true, stiffness 1.2} -> refit false, no third
+    run
     (Stiffness is motion only).
     Unknown character -> 404. The profile write runs under the lock (scripts/smoke_profile_rmw_lock.py).
-[7] Fit fingerprint (Ruling H11): with hair_swing "off", "" or "maybe" (Swing off) ``garment_fsig`` equals the one
-    of ``garment_store.py`` at 47290755 (before Swing was a fit input), so the boot refit sweep refits a hair 9 fit
-    under its own fingerprint; with "on" it differs (``swing: True`` joins the payload).
+[7] Fit fingerprint (Ruling H11): with the hairstyle's hair_swing "off", "" or "maybe" (Swing off)
+    ``garment_fsig`` is one value — the payload carries no ``swing`` key, as before Swing was a fit input; with
+    "on" it differs (``swing: True`` joins the payload). (The proof against ``garment_store.py`` at 47290755 went
+    with Task 13: that code reads the profile keys the hairstyle replaced; the migration's fingerprint identity is
+    pinned by scripts/smoke_hairstyle_items.py.)
 """
 import json
 import os
@@ -151,16 +157,26 @@ def main() -> int:
         check("create Demo", save_character_profile("Demo", {"template": "human-roleplay", "gender": "female"},
                                                     create_new=True), True)
         inventory.add_item(name="Hair", category="garment", owner="Demo", item_id="hair_demo",
-                           garment={"kind": "hair", "slot": "hair", "body_slot": "hair"},
+                           garment={"kind": "hair", "slot": "hair", "body_slot": "hair", "mesh_mode": "hairdeck",
+                                    "description": "long hair", "hair_swing": "on"},
+                           transferable=False, portable=False)
+        inventory.add_item(name="Short hair", category="garment", owner="Demo", item_id="hair_body",
+                           garment={"kind": "hair", "slot": "hair", "body_slot": "hair", "mesh_mode": "body",
+                                    "description": "short hair"},
                            transferable=False, portable=False)
         with keyed_lock("character_profile", "Demo"):
             stored = get_character_profile("Demo")
-            stored.update(hair_method="hairdeck", equipped_mesh_pieces={"hair": "hair_demo"},
-                          motion_gravity_scale=0.5, hair_swing="on")
+            stored.update(equipped_mesh_pieces={"hair": "hair_demo"}, motion_gravity_scale=0.5)
             check("profile fixture", save_character_profile("Demo", stored), True)
 
         def profile():
             return get_character_profile("Demo") or {}
+
+        from app.core import garment_hair
+
+        def hairstyle():
+            """The hairstyle's settings (``garment_hair.hairstyle_settings``)."""
+            return garment_hair.hairstyle_settings(inventory.get_item("hair_demo"))
 
         # --- [2] settings ----------------------------------------------------------
         print("[2] settings and set_hair_motion")
@@ -173,10 +189,11 @@ def main() -> int:
             check(f"swing {raw!r} -> the default", hm.settings({"hair_swing": raw})["swing"], False)
         for raw, want in (("abc", 1.0), (2.5, 1.0), (True, 1.0), ("1.5", 1.5), (0.5, 0.5), ("", 1.0)):
             check(f"stiffness {raw!r}", hm.settings({"hair_stiffness": raw})["stiffness"], want)
-        raises("stiffness 0.4 refused", lambda: hm.set_hair_motion("Demo", True, 0.4))
-        raises("swing 'yes' refused", lambda: hm.set_hair_motion("Demo", "yes", 1.0))
-        raises("stiffness nan refused", lambda: hm.set_hair_motion("Demo", True, "nan"))
-        check("profile untouched", (profile().get("hair_swing"), "hair_stiffness" in profile()), ("on", False))
+        raises("stiffness 0.4 refused", lambda: hm.set_hair_motion("Demo", "hair_demo", True, 0.4))
+        raises("swing 'yes' refused", lambda: hm.set_hair_motion("Demo", "hair_demo", "yes", 1.0))
+        raises("stiffness nan refused", lambda: hm.set_hair_motion("Demo", "hair_demo", True, "nan"))
+        raises("no hairstyle of Demo", lambda: hm.set_hair_motion("Demo", "nobody_hair", True, 1.0))
+        check("hairstyle untouched", (hairstyle().get("hair_swing"), "hair_stiffness" in hairstyle()), ("on", False))
 
         # --- [3] motion_groups -----------------------------------------------------
         print("[3] motion_groups")
@@ -263,16 +280,16 @@ def main() -> int:
             print(f"  FAIL old-code proof: git show {BASE_COMMIT} failed: {e}")
             FAILS.append("old-code proof")
 
-        check("set stiffness 1.5", hm.set_hair_motion("Demo", True, 1.5), True)
+        check("set stiffness 1.5", hm.set_hair_motion("Demo", "hair_demo", True, 1.5), True)
         p2 = extension_rig.motion_payload("Demo")
         check("rev changes with the stiffness", p2["rev"] != p1["rev"], True)
         close("freq_hz 2.22", p2["groups"]["hair_c03"]["freq_hz"], 2.22)
-        check("swing off", hm.set_hair_motion("Demo", False, 1.5), True)
+        check("swing off", hm.set_hair_motion("Demo", "hair_demo", False, 1.5), True)
         p3 = extension_rig.motion_payload("Demo")
         check("swing off -> no groups", p3["groups"], {})
         check("swing off -> the no-hair rev of the old code", p3["rev"],
               extension_rig._revision({"declarations": []}))
-        check("back to defaults", hm.set_hair_motion("Demo", True, None), True)
+        check("back to defaults", hm.set_hair_motion("Demo", "hair_demo", True, None), True)
 
         # a newer fit record in garments/ -> new directory mtime -> re-read
         time.sleep(0.01)
@@ -287,7 +304,8 @@ def main() -> int:
         check("directory change re-reads", len(calls), n + 1)
         close("newest fit: freq_zeta(0.6) = 2.22", p4["groups"]["hair_c03"]["freq_hz"], 2.22)
         garments._newest_fit = real_newest
-        check("method body -> None", hm.served_chains("Demo", {**profile(), "hair_method": "body"}), None)
+        check("body hairstyle worn -> None",
+              hm.served_chains("Demo", {**profile(), "equipped_mesh_pieces": {"hair": "hair_body"}}), None)
         check("no worn hair -> None", hm.served_chains("Demo", {**profile(), "equipped_mesh_pieces": {}}), None)
         check("foreign item -> None",
               hm.served_chains("Demo", {**profile(), "equipped_mesh_pieces": {"hair": "nobody_hair"}}), None)
@@ -295,18 +313,20 @@ def main() -> int:
         # --- [5] panel -------------------------------------------------------------
         print("[5] panel")
         record = {"accepted": True, "method": "hairdeck", "report": {"chains": summary()}}
-        check("panel with chains", hm.panel("Demo", profile(), record),
+        check("panel with chains", hm.panel("Demo", hairstyle(), record, profile=profile()),
               {"count": 2, "links": 2, "swing": True, "stiffness": 1.0, "limits": [0.5, 2.0], "fitted": True})
-        check("panel without a fit", hm.panel("Demo", profile(), None),
+        check("panel without a fit", hm.panel("Demo", hairstyle(), None, profile=profile()),
               {"count": None, "links": 0, "swing": True, "stiffness": 1.0, "limits": [0.5, 2.0], "fitted": False})
-        check("panel of a pre-chain fit", hm.panel("Demo", profile(), {"accepted": True, "report": {}})["fitted"],
-              False)
+        check("panel of a pre-chain fit",
+              hm.panel("Demo", hairstyle(), {"accepted": True, "report": {}}, profile=profile())["fitted"], False)
         try:
             block = (garments.hairdeck_panel("Demo", "hair_demo", profile=profile()) or {}).get("chains")
         except Exception as e:  # noqa: BLE001 — reported as a failure below
             block = f"{type(e).__name__}: {e}"
         newest = real_newest("Demo", "hair_demo", "hairdeck")
-        check("hairdeck_panel carries the block", block, hm.panel("Demo", profile(), newest[1] if newest else None))
+        check("hairdeck_panel carries the block", block,
+              hm.panel("Demo", hairstyle(), newest[1] if newest else None, newest[0] if newest else None,
+                       profile=profile()))
 
         # --- [6] route -------------------------------------------------------------
         print("[6] POST /characters/{n}/hair/motion")
@@ -323,25 +343,26 @@ def main() -> int:
         with TestClient(app, raise_server_exceptions=False) as client:
             client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_USER])
             check("player -> 403", client.post(url, json={"swing": False, "stiffness": 1.5}).status_code, 403)
-            check("player stored nothing", profile().get("hair_swing"), "on")
+            check("player stored nothing", hairstyle().get("hair_swing"), "on")
             runs = []
             real_start = garments.start_garment
             garments.start_garment = lambda name, item_id, **kw: runs.append((name, item_id, kw)) or {"started": True}
             client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_ADMIN])
-            before = (profile().get("hair_swing"), profile().get("hair_stiffness"))
+            before = (hairstyle().get("hair_swing"), hairstyle().get("hair_stiffness"))
             check("stiffness 2.1 -> 400", client.post(url, json={"swing": True, "stiffness": 2.1}).status_code, 400)
             check("swing 'yes' -> 400", client.post(url, json={"swing": "yes", "stiffness": 1.0}).status_code, 400)
-            check("refused -> profile unchanged", (profile().get("hair_swing"), profile().get("hair_stiffness")),
+            check("refused -> hairstyle unchanged", (hairstyle().get("hair_swing"), hairstyle().get("hair_stiffness")),
                   before)
             r = client.post(url, json={"swing": False, "stiffness": 1.5})
             check("{false, 1.5} -> 200", (r.status_code, r.json()),
                   (200, {"swing": False, "stiffness": 1.5, "refit": True}))
-            check("stored", (profile().get("hair_swing"), profile().get("hair_stiffness")), ("off", 1.5))
+            check("stored", (hairstyle().get("hair_swing"), hairstyle().get("hair_stiffness")), ("off", 1.5))
             check("swing change -> one fit-only run", runs, [("Demo", "hair_demo", {"steps": "fit"})])
             r = client.post(url, json={"swing": True, "stiffness": None})
             check("{true, null} -> 200 defaults", (r.status_code, r.json()),
                   (200, {"swing": True, "stiffness": 1.0, "refit": True}))
-            check("stored as on / ''", (profile().get("hair_swing"), profile().get("hair_stiffness")), ("on", ""))
+            check("stored as on / no key", (hairstyle().get("hair_swing"), "hair_stiffness" in hairstyle()),
+                  ("on", False))
             r = client.post(url, json={"swing": True, "stiffness": 1.2})
             check("stiffness only -> no refit", (r.json().get("refit"), len(runs)), (False, 2))
             garments.start_garment = real_start
@@ -351,21 +372,14 @@ def main() -> int:
         # --- [7] fit fingerprint -------------------------------------------------------
         print("[7] garment_fsig and Swing (Ruling H11)")
         from app.core import garment_store as gs
-        try:
-            src = subprocess.run(["git", "-C", str(ROOT), "show", f"{FSIG_BASE}:app/core/garment_store.py"],
-                                 check=True, capture_output=True, text=True).stdout
-            old_gs = types.ModuleType("garment_store_base")
-            exec(compile(src, f"{FSIG_BASE}:app/core/garment_store.py", "exec"), old_gs.__dict__)
-            for raw in ("off", "", "maybe"):
-                prof = {**profile(), "hair_swing": raw}
-                check(f"swing {raw!r}: the fsig of {FSIG_BASE}", gs.garment_fsig("Demo", "hair_demo", profile=prof),
-                      old_gs.garment_fsig("Demo", "hair_demo", profile=prof))
-            on_prof = {**profile(), "hair_swing": "on"}
-            check("swing on: another fsig", gs.garment_fsig("Demo", "hair_demo", profile=on_prof)
-                  != old_gs.garment_fsig("Demo", "hair_demo", profile=on_prof), True)
-        except (subprocess.CalledProcessError, OSError) as e:
-            print(f"  FAIL fsig proof: git show {FSIG_BASE} failed: {e}")
-            FAILS.append("fsig proof")
+
+        def fsig_with(swing):
+            garment = dict(inventory.get_item("hair_demo")["garment"], hair_swing=swing)
+            inventory.update_item("hair_demo", {"garment": garment})
+            return gs.garment_fsig("Demo", "hair_demo")
+        off = {raw: fsig_with(raw) for raw in ("off", "", "maybe")}
+        check("swing off / '' / maybe: one fsig", len(set(off.values())), 1)
+        check("swing on: another fsig", fsig_with("on") != off["off"], True)
 
     print("ALL OK" if not FAILS else f"FAILED: {FAILS}")
     return 0 if not FAILS else 1

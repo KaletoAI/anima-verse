@@ -9,7 +9,7 @@ Runs against a THROWAWAY storage + instance directory with a copy of the repo's 
 no hub, no GPU, no server process. Every file is synthetic bytes; only names and JSON sidecars matter to the GC.
 
 Fixture (``make(char, s)``, one fresh character per scenario; items ``top<s>`` {top}, ``skirt<s>`` {bottom} painted,
-``dress<s>`` {outer} own mesh, all in the inventory; hair item worn, hair_method hairdeck; pipeline on, "mode mesh"
+``dress<s>`` {outer} own mesh, all in the inventory; hairstyle (HairDeck) worn; pipeline on, "mode mesh"
 = top and skirt in mode in_body (the worn outfit's wanted figure has them in the body — Task 6 of plan
 2026-11-12-unified-worn-pieces removed the per-character mode; "switch to retexture" = both set to painted, which
 spends and walks nothing);
@@ -179,14 +179,14 @@ def main() -> int:
 
         def make(char: str, s: str, *, orphans: bool = False):
             human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
-                     "character_appearance": "slender, wavy hair with a side parting", "hair_method": "hairdeck",
+                     "character_appearance": "slender, wavy hair with a side parting",
                      "body_slots": {"hair": {"length": "medium", "color": "blonde"}}}
             assert save_character_profile(char, human, create_new=True)
             touch(get_character_images_dir(char) / f"{char}_1.png", b"\x89PNG" + char.encode() * 8)
             prof = get_character_profile(char)
             prof["profile_image"] = f"{char}_1.png"
             assert save_character_profile(char, prof)
-            hid = garment_hair.ensure_hair_item(char)
+            hid = garment_hair.create_hairstyle(char, "", "hairdeck")  # the first hairstyle: worn
             ids = {}
             for key, slots, own in (("top", ["top"], False), ("skirt", ["bottom"], False), ("dress", ["outer"], True)):
                 op = {"slots": slots, "covers": [], "outfit_types": ["casual"], "mesh_mode": "own_mesh" if own else "in_body"}

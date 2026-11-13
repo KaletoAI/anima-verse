@@ -283,7 +283,6 @@ def main() -> int:
                                                         "mesh_mode": "in_body"}})
         inventory.update_item(blouse, {"outfit_piece": {"slots": ["top"], "mesh_mode": "painted"}})
         prof = get_character_profile("Demo")
-        prof["hair_method"] = "body"
 
         def keys(state):
             p = oo.with_piece_state(prof, state)

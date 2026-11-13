@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """HairDeck as the second hair method in the garment chain (plan
 docs/superpowers/plans/2026-11-09-hairdeck-hair.md, Task 4):
-garment_hair.hair_method, garment_store.steps_for / garment_hsig / the
+garment_hair.hairstyle_mode / default_mode, garment_store.steps_for / garment_hsig / the
 method-aware fsig and accepted_fit, garments' ``hairdeck`` step, its fit with
 the seed-43 retry, the choice among the stored seeds, and the serving after a
 method switch.
@@ -22,19 +22,23 @@ radius 0.19 around the rigged head centre (0, 1.58, 0) weighted by the REAL
 records, the fingerprints and the serving are REAL.
 
 EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
-[1] hair_method: the profile key ``hair_method`` wins when it names a method
-    ("body"/"hairdeck", source "character"); "", an unknown value and the
-    removed methods "edit_chain" / "subtract" (hair-from-body spec 2026-11-11,
-    Task 2) fall to the world key ``base_body.hair_method`` (source "world");
-    an absent, unknown or removed world value is the default "body". This
-    smoke's world pins "hairdeck" (the default "body" makes no hair item).
-    Schema: field_default("base_body", "hair_method") == "body", the path is
-    world-scope (config_scope.scope_of) and the section names a world_group
-    that is one of WORLD_GROUPS (so Game-Admin -> Setup shows it).
+[1] The hairstyle's mode (plan 2026-11-12-unified-worn-pieces Task 13): the
+    hairstyle H (``ensure_hairstyle``, the character's first) got the world's
+    default mode ``base_body.hairstyle_default_mode`` = "hairdeck" (this
+    smoke's world pins it); ``hairstyle_mode`` reads ``garment.mesh_mode``
+    ("body"/"hairdeck"/"haar"), an item without one or with an unknown /
+    removed value ("bogus", "edit_chain", "subtract") is "hairdeck" (hair items
+    were made for HairDeck only before hairstyles). ``default_mode``: an
+    absent, unknown, removed or "haar" world value is "body".
+    ``set_hairstyle_mode(H, "")`` = the world default "hairdeck"; "haar" is a
+    ValueError naming "not built yet", "bogus" a ValueError.
+    Schema: field_default("base_body", "hairstyle_default_mode") == "body",
+    the path is world-scope (config_scope.scope_of) and the section names a
+    world_group that is one of WORLD_GROUPS (so Game-Admin -> Setup shows it).
 [2] steps_for("hair", "hairdeck") == ("hairdeck", "fit") == GARMENT_STEPS["hair"];
     steps_for("hair", "body") == (); "edit_chain", "subtract" and any other
     method are a ValueError.
-    Then Demo's hair_method = "hairdeck", backend extra_params
+    Then H's mode = "hairdeck", backend extra_params
     {"input_steps": 30}: run_garment -> ok, ran ["hairdeck", "fit"]; ONE
     generate_hair call, input = Demo's profile picture, params {"seed": 42};
     raw/H_<hsig>/ holds the 7 job files + record.json {accepted True,
@@ -47,7 +51,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     "#d3b497", source "profile", name "blonde", applied True, ΔE 20.0 -> 0.0
     (the stub echoes a recolour whenever a colour was asked for)}; the fsig
     is a HairDeck one; prepared/ holds
-    nothing. garment_info: method "hairdeck" (source "character"), steps
+    nothing. garment_info: method "hairdeck" (source "hairstyle": the mode is the item's), steps
     ["hairdeck", "fit"], hairdeck status "accepted", fit "accepted",
     served_fsig = fsig. A second run: ran [], no call.
 [3] Review Focus 2 — the base model rewritten under the same B1 (another
@@ -91,9 +95,10 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     "method" = the removed edit chain, accepted on the current base model,
     written LAST = newest). Method hairdeck, current fsig refused ([5b]):
     wanted_garments serves the [5a] fit (newest accepted HAIRDECK fit), not
-    E. The character set to the removed "edit_chain": the world's hairdeck
-    -> still [5a], never E. Method body: no hair served ({}: the hair is in
-    the body mesh). E removed, method hairdeck again: the [5a] fit, no call.
+    E. H's stored mode set to the removed "edit_chain" (written into the item
+    directly — no setter takes it): read as hairdeck -> still [5a], never E.
+    Mode body: no hair served ({}: the hair is in the body mesh), no hair
+    summary. E removed, mode hairdeck again: the [5a] fit, no call.
 [7] Fix round 1 — cache GC (outfit_cache_gc) keeps, per hair item, the
     current fsig, the served fit and the newest accepted fit of EACH method.
     Two synthetic edit-chain fits accepted on the current base model:
@@ -105,8 +110,8 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     and E_old. purge_stale(those + E + [5a]) skips 2 (E, [5a]) and removes
     the three; the four HairDeck job folders stay (E stays too: the GC keeps
     the newest fit of every method a record names — deleting the leftovers
-    is the migration's, Task 3); the character set to "edit_chain" still
-    serves [5a], no generation call.
+    is the migration's, Task 3); H's stored mode "edit_chain" still serves
+    [5a], no generation call.
 [8] Coordinator ruling 2026-11-09 — every stored seed is weighed. Back on
     the [5a] hsig (extra_params {"input_steps": 32}): the job folder stores
     seeds [42, 43]; the [5a] fit chose 43 (42 was refused then). The stub
@@ -127,20 +132,23 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     / prep.png carry no seed).
 [9] HairDeck fixes 2026-11-09 — length class and named colour. Demo (hair
     slot medium / blonde): hair_length_class "medium", profile_hair_colour
-    {blonde, #d3b497}. From the appearance alone (hair slot empty): "brown
+    {blonde, #d3b497}. From the appearance alone (hair slot empty; the
+    Appearance's hair text passed as ``text``): "brown
     eyes and black hair" -> (None, "black": the colour word nearest before
     "hair"); "short dark brown hair, a full beard" -> ("short", "dark
     brown"); "long hair" -> ("long", None). (``length_phrase`` went with the
     hair edit chain.)
-    The stub's moved_share 0.93 (Kai's seed 43), push 0.01. Hair slot short
-    / brunette: description changes -> fsig new, hsig the [8] one;
+    The stub's moved_share 0.93 (Kai's seed 43), push 0.01. The hairstyle's
+    description set to "short brunette hair" (plan Task 13: the text is the
+    hairstyle's; not the Appearance's, so its length is the class word):
+    description changes -> fsig new, hsig the [8] one;
     run_garment -> ok, ran ["fit"], no HairDeck call, 2 fit calls (seeds 42,
     43) with length_class "short" and colour_profile (92, 59, 38) / 255;
     both pass (0.93 <= 0.97) -> tie -> seed 42; record length_class "short",
     gates.limits.moved_share ["max", 0.97], colour {"#5c3b26", profile,
     brunette, applied, 20.0 -> 0.0}; hairdeck_panel colour {target None,
     source "profile", profile {brunette, #5c3b26}, fitted = that record
-    colour}. Hair slot medium / brunette: both seeds refused ("moved_share
+    colour}. Description "medium brunette hair": both seeds refused ("moved_share
     0.93 > 0.9"), 2 seeds stored -> no HairDeck call: {ok False, step
     "fit"}, fit calls +2.
 """
@@ -192,7 +200,7 @@ def main() -> int:
         paths.init_instance(root / "instance")
         # A hair method that makes a hair item (the default "body" of the hair-from-body spec 2026-11-11 makes none).
         paths.get_config_path().write_text(json.dumps({"packages": {"enabled": "human"},
-                                                        "base_body": {"hair_method": "hairdeck"}}))
+                                                        "base_body": {"hairstyle_default_mode": "hairdeck"}}))
         from app.core import config
         config.load(paths.get_config_path(), instance_path=root / "instance/config.json")
         from app.core import db
@@ -302,7 +310,7 @@ def main() -> int:
                 check(f"profile {sorted(values)}", save_character_profile("Demo", stored), True)
 
         set_profile(profile_image="Demo_1.png")
-        hid = garment_hair.ensure_hair_item("Demo")
+        hid = garment_hair.ensure_hairstyle("Demo")
         check("hair item worn", inventory.get_equipped_mesh_pieces("Demo"), {"hair": hid})
         cdir = get_character_dir("Demo")
         refs, mdir = cdir / "model_refs", cdir / "model3d"
@@ -335,24 +343,40 @@ def main() -> int:
             wanted = garment_assembly.wanted_garments("Demo")
             return wanted[hid][0].name if hid in wanted else None
 
-        # --- [1] hair_method --------------------------------------------------------
-        print("[1] hair_method resolution")
-        profile = get_character_profile("Demo")
-        check("world", garment_hair.hair_method_source("Demo", profile=profile), ("hairdeck", "world"))
-        check("character wins", garment_hair.hair_method_source("Demo", profile={**profile, "hair_method": "body"}),
-              ("body", "character"))
-        check("character empty -> world", garment_hair.hair_method("Demo", profile={**profile, "hair_method": ""}),
-              "hairdeck")
+        def set_mode(mode):
+            """Write H's stored mode directly (any string — the removed ones too)."""
+            garment = dict(inventory.get_item(hid)["garment"])
+            garment["mesh_mode"] = mode
+            check(f"stored mode {mode!r}", inventory.update_item(hid, {"garment": garment}) is not None, True)
+
+        # --- [1] the hairstyle's mode ----------------------------------------------
+        print("[1] hairstyle mode resolution")
+        check("first hairstyle: the world default", garment_hair.hairstyle_mode(inventory.get_item(hid)), "hairdeck")
+        check("worn mode", garment_hair.hair_mode("Demo"), "hairdeck")
         for gone in ("bogus", "edit_chain", "subtract"):
-            check(f"character {gone} -> world",
-                  garment_hair.hair_method_source("Demo", profile={**profile, "hair_method": gone}),
-                  ("hairdeck", "world"))
-        for gone in ("bogus", "edit_chain", "subtract"):
-            config._CONFIG["base_body"] = {"hair_method": gone}
-            check(f"world {gone} -> default", garment_hair.hair_method("Demo", profile=profile), "body")
-        config._CONFIG["base_body"] = {"hair_method": "hairdeck"}
-        check("schema default", field_default("base_body", "hair_method"), "body")
-        check("world scope", config_scope.scope_of("base_body.hair_method"), "world")
+            check(f"stored {gone} -> hairdeck",
+                  garment_hair.hairstyle_mode({"garment": {"kind": "hair", "mesh_mode": gone}}), "hairdeck")
+        check("no mode -> hairdeck", garment_hair.hairstyle_mode({"garment": {"kind": "hair"}}), "hairdeck")
+        for stored in ("body", "hairdeck", "haar"):
+            check(f"stored {stored}",
+                  garment_hair.hairstyle_mode({"garment": {"kind": "hair", "mesh_mode": stored}}), stored)
+        for gone in ("bogus", "edit_chain", "subtract", "haar"):
+            config._CONFIG["base_body"] = {"hairstyle_default_mode": gone}
+            check(f"world {gone} -> default", garment_hair.default_mode(), "body")
+        config._CONFIG["base_body"] = {"hairstyle_default_mode": "hairdeck"}
+        check("world hairdeck", garment_hair.default_mode(), "hairdeck")
+        check("set body", garment_hair.set_hairstyle_mode("Demo", hid, "body"), True)
+        check("body stored", garment_hair.hair_mode("Demo"), "body")
+        check("set '' -> world default", (garment_hair.set_hairstyle_mode("Demo", hid, ""),
+                                         garment_hair.hair_mode("Demo")), (True, "hairdeck"))
+        for bad, phrase in (("haar", "not built yet"), ("bogus", "")):
+            try:
+                garment_hair.set_hairstyle_mode("Demo", hid, bad)
+                check(f"set {bad} raises", False, True)
+            except ValueError as e:
+                check(f"set {bad} raises", phrase in str(e), True)
+        check("schema default", field_default("base_body", "hairstyle_default_mode"), "body")
+        check("world scope", config_scope.scope_of("base_body.hairstyle_default_mode"), "world")
         check("world group listed", SECTIONS["base_body"].get("world_group") in {g["id"] for g in WORLD_GROUPS},
               True)
 
@@ -369,7 +393,7 @@ def main() -> int:
                 check(f"{gone} raises", True, True)
         f_edit = F_EDIT
 
-        set_profile(hair_method="hairdeck")
+        garment_hair.set_hairstyle_mode("Demo", hid, "hairdeck")
         h1 = gs.garment_hsig("Demo", hid)
         f_hd = gs.garment_fsig("Demo", hid)
         res = garments.run_garment("Demo", hid)
@@ -400,7 +424,7 @@ def main() -> int:
         info = garments.garment_info("Demo", hid)
         check("info", (info["method"], info["method_source"], list(info["steps"]),
                        info["steps"]["hairdeck"]["status"], info["steps"]["fit"]["status"], info["served_fsig"]),
-              ("hairdeck", "character", ["hairdeck", "fit"], "accepted", "accepted", f_hd))
+              ("hairdeck", "hairstyle", ["hairdeck", "fit"], "accepted", "accepted", f_hd))
         res = garments.run_garment("Demo", hid)
         check("second run", (res.get("ok"), res.get("ran"), counts()), (True, [], (1, 1)))
 
@@ -416,7 +440,7 @@ def main() -> int:
         check("calls", counts(), (1, 2))
         check("fsig/hsig unchanged", (gs.garment_fsig("Demo", hid), gs.garment_hsig("Demo", hid)), (f_hd, h1))
         check("re-fitted on the new base", fit_record(f_hd).get("base_model_sha256"), new_sha)
-        set_profile(hair_colour="#FF8000")
+        check("set colour", garment_hair.set_hair_colour("Demo", hid, "#FF8000"), True)
         f_col = gs.garment_fsig("Demo", hid)
         check("colour: hsig same, fsig new", (gs.garment_hsig("Demo", hid), f_col != f_hd), (h1, True))
         res = garments.run_garment("Demo", hid)
@@ -425,7 +449,7 @@ def main() -> int:
         check("colour record", fit_record(f_col).get("colour"),
               {"target": "#ff8000", "source": "override", "name": None, "applied": True, "delta_e_before": 20.0,
                "delta_e_after": 0.0})
-        set_profile(hair_colour="")
+        check("reset colour", garment_hair.set_hair_colour("Demo", hid, ""), True)
         check("colour reset -> old fsig", gs.garment_fsig("Demo", hid), f_hd)
 
         # --- [4] no hair found ----------------------------------------------------
@@ -499,15 +523,15 @@ def main() -> int:
         check("E is newest", edit_fit.stat().st_mtime_ns > gs.garment_path("Demo", hid, f5a, "fit").stat().st_mtime_ns,
               True)
         check("hairdeck (current refused) serves [5a]", served(), f"{hid}_{f5a}.glb")
-        set_profile(hair_method="edit_chain")
-        check("removed edit_chain -> world hairdeck", garment_hair.hair_method_source("Demo"), ("hairdeck", "world"))
+        set_mode("edit_chain")
+        check("removed edit_chain -> hairdeck", garment_hair.hair_mode("Demo"), "hairdeck")
         check("the leftover E is never served", served(), f"{hid}_{f5a}.glb")
-        set_profile(hair_method="body")
+        set_mode("body")
         check("body: no hair mesh served", garment_assembly.wanted_garments("Demo"), {})
         check("body: no hair summary", garments.hair_summary("Demo"), None)
         edit_fit.unlink()
         edit_fit.with_suffix(".json").unlink()
-        set_profile(hair_method="hairdeck")
+        set_mode("hairdeck")
         check("hairdeck again serves [5a]", served(), f"{hid}_{f5a}.glb")
         check("no generation in [6]", counts(), before)
 
@@ -544,9 +568,9 @@ def main() -> int:
               [False, False, False])
         check("HairDeck job folders untouched",
               [gs.hairdeck_dir("Demo", hid, h).is_dir() for h in (h1, h4, h5a, h5b)], [True] * 4)
-        set_profile(hair_method="edit_chain")
+        set_mode("edit_chain")
         check("removed edit_chain still serves [5a]", served(), f"{hid}_{f5a}.glb")
-        set_profile(hair_method="hairdeck")
+        set_mode("hairdeck")
         check("and back to [5a]", served(), f"{hid}_{f5a}.glb")
         check("no generation in [7]", counts(), before)
 
@@ -602,10 +626,17 @@ def main() -> int:
                                  ("short dark brown hair, a full beard", ("short", "dark brown")),
                                  ("long hair", ("long", None))):
             free = {**demo, "body_slots": {**demo["body_slots"], "hair": {}}, "character_appearance": appearance}
-            check(f"from appearance {appearance!r}", (garment_hair.hair_length_class("Demo", profile=free),
-                                                      garment_hair.hair_colour_name("Demo", profile=free)), want)
+            text = garment_hair.appearance_hair_text("Demo", profile=free)
+            check(f"from appearance {appearance!r}", (garment_hair.hair_length_class("Demo", profile=free, text=text),
+                                                      garment_hair.hair_colour_name("Demo", profile=free, text=text)),
+                  want)
+
+        def describe(text):
+            garment = dict(inventory.get_item(hid)["garment"])
+            check(f"description {text!r}",
+                  inventory.update_item(hid, {"garment": {**garment, "description": text}}) is not None, True)
         mode["push"], mode["moved"] = {}, 0.93
-        set_profile(body_slots={**demo["body_slots"], "hair": {"length": "short", "color": "brunette"}})
+        describe("short brunette hair")
         f9 = gs.garment_fsig("Demo", hid)
         check("short: hsig kept, fsig new", (gs.garment_hsig("Demo", hid), f9 != f5a), (h5a, True))
         before = counts()
@@ -623,7 +654,7 @@ def main() -> int:
         check("short: panel colour", {k: panel["colour"].get(k) for k in ("target", "source", "profile", "fitted")},
               {"target": None, "source": "profile", "profile": {"name": "brunette", "hex": "#5c3b26"},
                "fitted": r.get("colour")})
-        set_profile(body_slots={**demo["body_slots"], "hair": {"length": "medium", "color": "brunette"}})
+        describe("medium brunette hair")
         before = counts()
         res = garments.run_garment("Demo", hid)
         check("medium: refused on moved_share, no HairDeck call",

@@ -3,12 +3,13 @@
  *
  * Usage:  node scripts/smoke_setup_choice_labels.mjs   (from the repo root; bundles with node_modules/esbuild)
  *
- * Expected, by hand from the schema field `base_body.hair_method` (choices ["body", "hairdeck"] — `body` first,
- * the default since the hair-from-body spec 2026-11-11; `edit_chain` and `subtract` removed in its Task 2 —
- * choice_labels {body: "From the body mesh", hairdeck: "HairDeck (one image → hair cards)"}):
+ * Expected, by hand from the schema field `base_body.hairstyle_default_mode` (the former `hair_method`, renamed by
+ * plan 2026-11-12-unified-worn-pieces Task 13; choices ["body", "hairdeck"] — `body` first, the default since the
+ * hair-from-body spec 2026-11-11; `edit_chain` and `subtract` removed in its Task 2, `haar` not built —
+ * choice_labels {body: "In the body mesh", hairdeck: "HairDeck (one image → hair cards)"}):
  *   1. The world schema the Setup page receives (config_scope.schema_for(WORLD), read through Python) still
  *      carries exactly those choices and labels.
- *   2. selectOptions(choices, labels) -> [{value "body", label "From the body mesh"}, {value "hairdeck",
+ *   2. selectOptions(choices, labels) -> [{value "body", label "In the body mesh"}, {value "hairdeck",
  *      label "HairDeck (one image → hair cards)"}] — the VALUE stays the raw choice.
  *   3. Without labels (or a choice the labels miss) the label is the choice itself: [1, "b"] with {b: "Bee"}
  *      -> [{1, "1"}, {"b", "Bee"}]; no choices -> [].
@@ -25,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 
 const CHOICES = ['body', 'hairdeck']
 const LABELS = {
-  body: 'From the body mesh',
+  body: 'In the body mesh',
   hairdeck: 'HairDeck (one image → hair cards)',
 }
 
@@ -35,7 +36,7 @@ if (!process.env.SETUP_CHOICE_LABELS_BUNDLED) {
     const py = spawnSync('./.venv/bin/python', ['-c', [
       'import json',
       'from app.core import config_scope',
-      'f = config_scope.schema_for(config_scope.WORLD)["base_body"]["fields"]["hair_method"]',
+      'f = config_scope.schema_for(config_scope.WORLD)["base_body"]["fields"]["hairstyle_default_mode"]',
       'print(json.dumps({"choices": f["choices"], "choice_labels": f.get("choice_labels")}))',
     ].join('\n')], { encoding: 'utf8', env: { ...process.env, STORAGE_DIR: tmp, INSTANCE_DIR: tmp } })
     assert.equal(py.status, 0, py.stderr)
