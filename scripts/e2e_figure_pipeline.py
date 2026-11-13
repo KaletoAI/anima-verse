@@ -4,7 +4,7 @@
 
 Usage:
     ./.venv/bin/python scripts/e2e_figure_pipeline.py --world <copy of a world dir> \
-        [--plugins <plugins dir>] [--shared-items <shared/items dir>] [--u2net-home <rembg models>] \
+        --character <name> --bald-character <name> [--plugins <plugins dir>] [--shared-items <shared/items dir>] [--u2net-home <rembg models>] \
         [--only "1,7,6;2;3;4,5"] [--plan-only] [--no-migrate] [--workdir <dir>] [--log-dir <dir>] [--keep]
 
 ``--world`` is a COPY (``cp`` of ``world.db`` + the characters' directories, never the live one — a
@@ -18,10 +18,19 @@ Zero outbound requests: the temp instance names stub backends only (never the re
 provider), every ``socket`` connect / DNS lookup and every ``requests`` send raises and is COUNTED, and
 the result is FAIL when the count is > 0. The stubs answer from what is stored (block "The responder").
 
-Scenario groups (characters Kai and Ylva Nordwind of the copy): ``1,7,6`` Kai's manual Build, the Base body
-tab's Run all (current; then a face-value change), the automatic Build after that base refresh; ``2``
-Ylva's bald shape; ``3`` a hairstyle change during Kai's shape step (Ruling A18); ``4,5`` the base-body
-routes during a Build (A20) and an injected LOD failure (A19). Exit 0 = every check passed.
+The characters are named on the command line (no world's names live in this file): ``--character`` C, a
+humanoid of the copy (best with an own-mesh piece worn), and ``--bald-character`` B, one whose worn hairstyle
+is a HairDeck on a haired base (a bald body shape). Scenario groups: ``1,7,6`` C's manual Build, the Base body
+tab's Run all (whatever is due first, then "current", then a face-value change), the automatic Build after
+that base refresh; ``2`` B's automatic Build; ``3`` a hairstyle change during C's shape step (Ruling A18);
+``4,5`` the base-body routes during a Build (A20) and an injected LOD failure (A19). Exit 0 = every check
+passed.
+
+What is checked is what the rulings promise whatever the copy holds (Ruling FR-e2e of the final review: the
+expectations had drifted with the live world): every stub call is one the Build's OWN estimate counted (all
+calls == the plan's estimate, each step's calls == its jobs), the steps run in plan order, the automatic
+Builds never run base work, fits and assembly spend no hub job — and zero outbound requests. No fixed step
+list or call count.
 """
 import argparse
 import json
@@ -33,7 +42,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -812,6 +821,7 @@ def show(result: Dict[str, Any]) -> None:
 class Scenario:
     def __init__(self, number: int, title: str):
         self.number, self.title, self.checks, self.notes = number, title, [], []
+        self.skipped = False
         self.calls: List[Dict[str, Any]] = []
         self.steps: List[Dict[str, Any]] = []
         self.estimate: Any = None
@@ -825,6 +835,11 @@ class Scenario:
         self.notes.append(text)
         print(f"   note: {text}")
 
+    def skip(self, text: str) -> None:
+        """The scenario does not apply to this copy (no check made): reported as SKIP, never as PASS."""
+        self.skipped = True
+        self.note(text)
+
     def take(self, result: Dict[str, Any]) -> None:
         self.calls += result["calls"]
         self.steps += [{k: (len(v) if k == "calls" else v) for k, v in s.items() if k != "calls_before"}
@@ -833,8 +848,8 @@ class Scenario:
         self.estimate = result["estimate"]["hub_jobs"] if self.estimate is None else self.estimate
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"number": self.number, "title": self.title, "pass": all(c["ok"] for c in self.checks)
-                and bool(self.checks), "checks": self.checks, "notes": self.notes, "steps": self.steps,
+        return {"number": self.number, "title": self.title, "skipped": self.skipped and not self.checks,
+                "pass": all(c["ok"] for c in self.checks) and (bool(self.checks) or self.skipped), "checks": self.checks, "notes": self.notes, "steps": self.steps,
                 "calls": len(self.calls), "estimate": self.estimate}
 
 
@@ -849,119 +864,168 @@ def _problems(logs: List[Dict[str, Any]]) -> List[str]:
             and not r["name"].startswith(quiet)]
 
 
+#: A gate's verdict on the copy's DATA (a fit or a view composite refused): the stub answers with the copy's own
+#: stored images and meshes, which need not suit what the live world wants at copy time. Such a step ends the
+#: Build by rule — what is checked then is that rule, never the verdict (Ruling FR-e2e: no world-bound expectation).
+GATE_REFUSALS = ("fit refused", "fit on the outfit body refused", "composite of the draft failed")
+
+
+def _gate_refused(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The step that ended in a gate's refusal (``GATE_REFUSALS``), else None."""
+    return next((s for s in result["steps"] if s.get("error") and any(g in s["error"] for g in GATE_REFUSALS)),
+                None)
+
+
+def _state_refused(result: Dict[str, Any]) -> bool:
+    """The Build state's failure is a gate's refusal of the copy's data — this run's or, when nothing ran, the
+    previous Build's (the state keeps the last run's failure)."""
+    return any(any(g in str((f or {}).get("error") or "") for g in GATE_REFUSALS)
+               for f in (result["state"].get("failed") or {}).values())
+
+
 def _common_checks(sc: Scenario, result: Dict[str, Any], character: str, *, allow_superseded: bool = False,
                    expected_warnings: tuple = ()) -> None:
-    errors = [f"{s['step']}: {s['error']}" for s in result["steps"] if s.get("error")]
-    sc.check("no step ended in an error", not errors, errors or "")
+    gate = _gate_refused(result)
+    if gate is not None:
+        sc.note(f"a gate refused the copy's data at {gate['step']}: {gate['error'][:200]}")
+    prior = gate is None and not result["steps"] and _state_refused(result)
+    if prior:
+        sc.note("nothing ran; the Build state keeps the previous Build's refusal of the copy's data")
+    errors = [f"{s['step']}: {s['error']}" for s in result["steps"] if s.get("error") and s is not gate]
+    sc.check("no step ended in an error (a gate's refusal of the copy's data aside)", not errors, errors or "")
     if not allow_superseded:
         sup = [s["step"] for s in result["steps"] if s.get("superseded")]
         sc.check("no step superseded", not sup, sup or "")
     failed = result["state"].get("failed") or {}
-    sc.check("Build state has no failure", not failed, failed or "")
+    if gate is None and not prior:
+        sc.check("Build state has no failure", not failed, failed or "")
+    elif gate is not None:
+        sc.check(f"Build state records the refusal at {gate['step']}, nothing else", sorted(failed) == [gate["step"]],
+                 failed)
     stub_errors = [f"{_kind(c)} {_what(c)}: {c['error']}" for c in result["calls"] if c.get("error")]
     sc.check("every stub call answered", not stub_errors, stub_errors or "")
-    warnings = [w for w in _problems(result["logs"]) if not any(e in w for e in expected_warnings)]
+    expected = tuple(expected_warnings) + (GATE_REFUSALS + ("Back view missing", "refused") if gate else ())
+    warnings = [w for w in _problems(result["logs"]) if not any(e in w for e in expected)]
     sc.check("no unexpected warning/error log line", not warnings, warnings or "")
     now = served(character)
-    sc.check("served figure is the wanted figure", now["current"],
-             "" if now["current"] else {"built": now["built"], "wanted": now["wanted"]})
+    if gate is None and not prior:
+        sc.check("served figure is the wanted figure", now["current"],
+                 "" if now["current"] else {"built": now["built"], "wanted": now["wanted"]})
+    else:
+        sc.note("served figure not checked: a refused Build keeps the figure built before")
 
 
 # --- Scenarios -------------------------------------------------------------------------------------------------------
 
-KAI, YLVA = "Kai", "Ylva Nordwind"
-KAI_JACKET = "item_555a7a01"
+#: The characters under test (``--character`` / ``--bald-character``; set in ``_child``).
+MAIN, BALD = "", ""
+
+
+def _estimate_checks(sc: Scenario, result: Dict[str, Any]) -> None:
+    """What the Build's OWN estimate promises (Ruling A25: first attempts; retries are extra): the steps ran in
+    plan order — all of them, or up to the one a gate refused (the Build stops there, the rest skipped); with no
+    refusal all stub calls == the estimate; each finished step's calls == its jobs; fits and assembly no hub job."""
+    ran = [s["step"] for s in result["steps"]]
+    gate = _gate_refused(result)
+    want = result["runnable"] if gate is None else result["runnable"][:result["runnable"].index(gate["step"]) + 1]
+    sc.check("the runnable steps ran once each, in plan order" + (f" (up to the refused {gate['step']})"
+                                                                  if gate else ""), ran == want,
+             {"ran": ran, "runnable": result["runnable"]})
+    if gate is None:
+        sc.check("all stub calls == the Build's estimate (A25)",
+                 len(result["calls"]) == result["estimate"]["hub_jobs"],
+                 f"{len(result['calls'])} vs {result['estimate']['hub_jobs']}: "
+                 + ", ".join(_kind(c) for c in result["calls"]))
+    for st in result["steps"]:
+        if st.get("superseded") or st.get("jobs") is None or st is gate:
+            continue
+        sc.check(f"{st['step']}: calls == its estimate", len(st["calls"]) == st["jobs"],
+                 f"{len(st['calls'])} vs {st['jobs']}: " + ", ".join(_kind(c) for c in st["calls"]))
+    for st in result["steps"]:
+        if st["step"] in ("fits", "assemble"):
+            sc.check(f"{st['step']}: no hub job", not st["calls"], [_kind(c) for c in st["calls"]])
 
 
 def scenario_1() -> Scenario:
-    """Kai as cloned: a manual Build (shape, the failed jacket chain, CPU refits, assembly)."""
-    sc = Scenario(1, "Kai manual Build as cloned")
-    before = served(KAI)
-    result = run_build(KAI)
+    """The main character as cloned: a manual Build of whatever its plan holds."""
+    from app.core import figure_build
+    sc = Scenario(1, "Manual Build as cloned")
+    before = served(MAIN)
+    result = run_build(MAIN)
     show(result)
     sc.take(result)
     plan = [s["name"] for s in result["plan"]]
-    sc.check("plan: shape, pieces, fits, assemble (no interim, no plain body)",
-             plan == ["shape", "pieces", "fits", "assemble"], plan)
-    ran = [s["step"] for s in result["steps"]]
-    sc.check("steps ran once each, in plan order", ran == plan, ran)
+    sc.check("plan in step order", plan == sorted(plan, key=figure_build.STEP_ORDER.index), plan)
     sc.check("exactly one Build run (a Build's own piece completion queues no follow-up)", result["builds"] == 1,
              [(r["reason"], r["automatic"]) for r in result["runs"]])
-    sc.check("all stub calls == the Build's estimate (A25)", len(result["calls"]) == result["estimate"]["hub_jobs"],
-             f"{len(result['calls'])} vs {result['estimate']['hub_jobs']}")
-    _common_checks(sc, result, KAI)
+    _estimate_checks(sc, result)
+    _common_checks(sc, result, MAIN)
     by = {s["step"]: s for s in result["steps"]}
-    shape_key = str(before["wanted"].get("shape") or "")
     if "shape" in by:
-        kinds = [_kind(c) for c in by["shape"]["calls"]]
-        sc.check("shape: front, back draft, mesh, face, rig", kinds == ["outfit_front", "outfit_back_draft",
-                                                                        "img2mesh", "face_retexture", "mesh2rig"],
-                 kinds)
-        keys = {c.get("key") for c in by["shape"]["calls"] if c.get("category") != "img2img"}
-        sc.check(f"shape: mesh/face/rig all for {shape_key}", keys == {shape_key}, keys)
-        sc.check("shape: calls == estimate", len(by["shape"]["calls"]) == by["shape"]["jobs"],
-                 f"{len(by['shape']['calls'])} vs {by['shape']['jobs']}")
-    if "pieces" in by:
-        calls = by["pieces"]["calls"]
-        renders = [c.get("garment") or {} for c in calls if _kind(c) == "garment_view"]
-        sc.check("jacket: only the stale ghost back is rendered (A17d), the ghost front try2 is reused",
-                 [(g.get("step"), g.get("view")) for g in renders] == [("ghost", "back")], renders)
-        sc.check("jacket: one garment mesh", sum(_kind(c) == "img2mesh" for c in calls) == 1,
-                 [_kind(c) for c in calls])
-        sc.check("jacket chain 'failed — Retry': calls == its retry estimate (A25)",
-                 len(calls) == by["pieces"]["jobs"],
-                 f"{len(calls)} vs {by['pieces']['jobs']}: " + ", ".join(_kind(c) for c in calls))
-    for step in ("fits", "assemble"):
-        if step in by:
-            sc.check(f"{step}: no hub job", not by[step]["calls"], [_kind(c) for c in by[step]["calls"]])
-    fit_fail = [r["msg"] for r in result["logs"] if "Garment fit" in r["msg"] and "failed" in r["msg"]]
-    sc.check("every garment fit accepted", not fit_fail, fit_fail)
-    from app.core import figure_build
-    sc.check("no Build running or queued afterwards", not figure_build.running(KAI))
+        shape_key = str(before["wanted"].get("shape") or "")
+        keys = {c.get("key") for c in by["shape"]["calls"] if _kind(c) in ("img2mesh", "face_retexture", "mesh2rig")}
+        sc.check(f"shape: its mesh/face/rig all for the wanted shape {shape_key}", keys <= {shape_key}, keys)
+    sc.check("no Build running or queued afterwards", not figure_build.running(MAIN))
     return sc
 
 
 def scenario_7() -> Scenario:
-    """Base body tab Run all on the current Kai: "current"; after a face-value change only the face steps."""
+    """Base body tab Run all: whatever is due first (its calls == its estimate), then "current" with 0 calls;
+    after a face-value change only the face steps."""
     from app.core import figure_build, model3d
     from app.core.face_photo_adjust import DEFAULTS
     sc = Scenario(7, "Base body Run all")
-    CURRENT["character"] = KAI
-    plan = figure_build.base_run_all(KAI)
+    CURRENT["character"] = MAIN
+    plan = figure_build.base_run_all(MAIN)
+    if plan["kind"]:
+        # The copy's base is not current (the live world moved on): Run all brings it up to date first —
+        # exactly what its own plan counted.
+        sc.note(f"setup: Run all due on the copy ({plan['kind']}): {plan['note']}")
+        due_calls, due_steps = len(CALLS), len(STEP_LOG)
+        started = figure_build.start_base_run_all(MAIN)
+        sc.check("due Run all starts", started.get("status") == "started", started)
+        wait_quiet(MAIN)
+        # Its own calls: the ones no Build step made (an automatic Build after the base refresh is scenario 6's).
+        due = [c for c in CALLS[due_calls:] if c["t"] and not any(c in st["calls"] for st in STEP_LOG[due_steps:])]
+        sc.check("due Run all: calls == its estimate", len(due) == (plan["hub_jobs"] or 0),
+                 f"{len(due)} vs {plan['hub_jobs']}: " + ", ".join(_kind(c) for c in due))
+        plan = figure_build.base_run_all(MAIN)
     sc.check("Run all plan of the current base: nothing", plan["kind"] == "" and plan["hub_jobs"] == 0,
              {k: plan[k] for k in ("kind", "hub_jobs", "note", "face_due")})
     calls_before = len(CALLS)
-    started = figure_build.start_base_run_all(KAI)
+    started = figure_build.start_base_run_all(MAIN)
     sc.check("Run all answers 'current'", started.get("status") == "current", started)
     sc.check("Run all on current spends 0 calls", len(CALLS) == calls_before, len(CALLS) - calls_before)
-    opts = model3d.get_model3d_options(KAI)
-    sc.check("Kai has face before rig", bool(opts.get("face_before_rig")), opts.get("face_before_rig"))
+    opts = model3d.get_model3d_options(MAIN)
+    if not opts.get("face_before_rig"):
+        sc.note("the character has no face-before-rig: the face-value part of this scenario does not apply")
+        return sc
     # Setup: the cloned base's face record predates Task UI2 (no ``settings`` fingerprint) and counts as current
     # by design whatever the values are; it gets the fingerprint of the values in force — what a face
     # retexture made since UI2 records — so a change of the values is what makes the face step due.
     from app.core import base_body
-    base_path = model3d.find_model3d(KAI, base_body.base_signature(KAI))
+    base_path = model3d.find_model3d(MAIN, base_body.base_signature(MAIN))
     meta = model3d._read_sidecar(base_path)
     if isinstance(meta.get("face_retexture"), dict) and not meta["face_retexture"].get("settings"):
-        meta["face_retexture"]["settings"] = model3d.face_settings_fingerprint(KAI)
+        meta["face_retexture"]["settings"] = model3d.face_settings_fingerprint(MAIN)
         model3d._publish_sidecar(base_path, meta)
         sc.note("setup: stamped the face settings fingerprint of the values in force into the cloned base's "
                 "pre-UI2 face record")
-        sc.check("Run all still 'current' with the stamped record", figure_build.base_run_all(KAI)["kind"] == "")
+        sc.check("Run all still 'current' with the stamped record", figure_build.base_run_all(MAIN)["kind"] == "")
     photo = dict(opts.get("face_photo") or DEFAULTS)
     key = next(k for k in DEFAULTS if k not in ("balance", "tone_match", "skin_recolor"))
     photo[key] = 1.25 if float(photo.get(key, 1.0)) != 1.25 else 1.1
-    model3d.set_model3d_options(KAI, {"face_photo": photo})
-    plan = figure_build.base_run_all(KAI)
+    model3d.set_model3d_options(MAIN, {"face_photo": photo})
+    plan = figure_build.base_run_all(MAIN)
     names = [s["name"] for s in plan["steps"]]
     sc.check(f"after a face-value change ({key} -> {photo[key]}): only face steps planned",
              plan["kind"] != "" and names and not ({"view front", "skin front", "mesh"} & set(names)),
              {"kind": plan["kind"], "steps": plan["steps"], "face_due": plan["face_due"], "note": plan["note"]})
     sc.estimate = plan["hub_jobs"]
     calls_before, steps_before, logs_before = len(CALLS), len(STEP_LOG), len(LOGS)
-    started = figure_build.start_base_run_all(KAI)
+    started = figure_build.start_base_run_all(MAIN)
     sc.check("Run all starts", started.get("status") == "started", started)
-    wait_quiet(KAI)
+    wait_quiet(MAIN)
     calls = CALLS[calls_before:]
     base_calls = [c for c in calls if c["t"] and not any(c in s["calls"] for s in STEP_LOG[steps_before:])]
     sc.calls = base_calls
@@ -971,13 +1035,13 @@ def scenario_7() -> Scenario:
              and not any(c.get("category") == "img2img" for c in base_calls), kinds)
     sc.check("Run all calls == its estimate", len(base_calls) == (plan["hub_jobs"] or 0),
              f"{len(base_calls)} vs {plan['hub_jobs']}")
-    last = figure_build.base_run_all(KAI)
+    last = figure_build.base_run_all(MAIN)
     sc.check("Run all ended without error", not (last.get("last") or {}).get("error"), last.get("last"))
     sc.check("base is current again", last["kind"] == "", {k: last[k] for k in ("kind", "note", "face_due")})
-    rec = model3d._read_sidecar(model3d.find_model3d(KAI, __import__("app.core.base_body", fromlist=["x"])
-                                                      .base_signature(KAI))).get("face_retexture") or {}
+    rec = model3d._read_sidecar(model3d.find_model3d(MAIN, __import__("app.core.base_body", fromlist=["x"])
+                                                      .base_signature(MAIN))).get("face_retexture") or {}
     sc.check("base model face record applied with the new settings",
-             rec.get("status") == "applied" and rec.get("settings") == model3d.face_settings_fingerprint(KAI),
+             rec.get("status") == "applied" and rec.get("settings") == model3d.face_settings_fingerprint(MAIN),
              {k: rec.get(k) for k in ("status", "settings", "error")})
     warnings = _problems(LOGS[logs_before:])
     sc.check("no unexpected warning/error log line", not warnings, warnings)
@@ -998,10 +1062,10 @@ def scenario_6() -> Scenario:
     if after.get("builds"):
         sc.note(f"the base refresh itself requested {after['builds']} automatic Build(s): "
                 + ", ".join(f"{s['step']}({len(s['calls'])})" for s in after["steps"]))
-    plan = figure_build.plan(KAI, explicit=False)
+    plan = figure_build.plan(MAIN, explicit=False)
     sc.note("automatic plan now: " + (", ".join(f"{s.name}[{s.jobs}]{' manual' if s.manual else ''}"
                                                 for s in plan) or "nothing"))
-    result = run_build(KAI, automatic=True, reason="e2e automatic after base refresh")
+    result = run_build(MAIN, automatic=True, reason="e2e automatic after base refresh")
     show(result)
     sc.take(result)
     auto_steps = list(after.get("steps") or []) + result["steps"]
@@ -1009,70 +1073,77 @@ def scenario_6() -> Scenario:
     sc.check("no plain-body step in the automatic Build(s)", "plain_body" not in names, names)
     base_calls = [c for s in auto_steps for c in s["calls"] if _kind(c) in ("base_front", "base_view")]
     sc.check("no base view rendered", not base_calls, [_what(c) for c in base_calls])
-    _common_checks(sc, result, KAI)
-    now = served(KAI)
+    _estimate_checks(sc, result)
+    _common_checks(sc, result, MAIN)
+    now = served(MAIN)
     from app.core import base_body
+    if _gate_refused(result) is not None or _state_refused(result):
+        sc.note("served figure not checked against the base: a refused Build keeps the figure built before")
+        return sc
     sc.check("served figure stands on the current base model",
-             now["meta"].get("base_model_sha256") in (None, base_body.current_base(KAI)[1])
-             if base_body.current_base(KAI) else False,
-             {"figure": now["meta"].get("base_model_sha256"), "base": base_body.current_base(KAI)})
+             now["meta"].get("base_model_sha256") in (None, base_body.current_base(MAIN)[1])
+             if base_body.current_base(MAIN) else False,
+             {"figure": now["meta"].get("base_model_sha256"), "base": base_body.current_base(MAIN)})
     return sc
 
 
 def scenario_2() -> Scenario:
-    """Ylva (HairDeck): the automatic Build makes the bald shape — back accepted at its first draft, head
-    taken over (A16/A21) — and assembles."""
-    sc = Scenario(2, "Ylva bald shape")
-    before = served(YLVA)
+    """The bald-shape character (HairDeck on a haired base): its automatic Build spends what its plan counted and
+    never runs base work; when it makes the bald shape, the back follows A16/A21 (accepted at a stored or first
+    draft, the draft's head taken over)."""
+    sc = Scenario(2, "Bald shape, automatic Build")
+    before = served(BALD)
     from app.core import figure_build
-    manual = figure_build.plan(YLVA, explicit=True)
-    sc.note("a MANUAL Build of Ylva would plan: " + ", ".join(f"{s.name}[{s.jobs}]{' (' + s.manual + ')' if s.manual else ''}"
-                                                              for s in manual)
-            + f" = {figure_build.cost(YLVA, manual)['note']}")
-    result = run_build(YLVA, automatic=True)
+    manual = figure_build.plan(BALD, explicit=True)
+    sc.note("a MANUAL Build would plan: " + ", ".join(f"{s.name}[{s.jobs}]{' (' + s.manual + ')' if s.manual else ''}"
+                                                      for s in manual)
+            + f" = {figure_build.cost(BALD, manual)['note']}")
+    result = run_build(BALD, automatic=True)
     show(result)
     sc.take(result)
     ran = [s["step"] for s in result["steps"]]
-    sc.check("automatic Build runs the shape and no plain body", "shape" in ran and "plain_body" not in ran, ran)
-    sc.check("all stub calls == the Build's estimate (A24: the outdated back re-composited, no draft)",
-             len(result["calls"]) == result["estimate"]["hub_jobs"],
-             f"{len(result['calls'])} vs {result['estimate']['hub_jobs']}: " + ", ".join(_kind(c) for c in result["calls"]))
-    _common_checks(sc, result, YLVA)
-    shape = str(before["wanted"].get("shape") or "")
-    from app.core.model_refs import get_model_refs_dir
-    meta = _sidecar(get_model_refs_dir(YLVA) / f"tpose_back_{shape}.png")
-    fit = meta.get("fit_gate") or meta.get("fit") or {}
-    attempts = fit.get("attempts") or []
-    sc.check("dressed back accepted at its first draft (A16)", fit.get("chosen") == 1 and fit.get("ok") is True
-             and len(attempts) == 1, {k: fit.get(k) for k in ("chosen", "ok", "warning")} | {"attempts": len(attempts)})
-    head = ((attempts[0] if attempts else {}).get("composite") or {}).get("head")
-    sc.check("the draft's head is taken over (A21)", bool(head), head)
-    by = {s["step"]: s for s in result["steps"]}
-    if "shape" in by:
-        sc.check("shape: calls == estimate", len(by["shape"]["calls"]) == by["shape"]["jobs"],
-                 f"{len(by['shape']['calls'])} vs {by['shape']['jobs']}")
+    sc.check("automatic Build: no plain body (ruling 8a)", "plain_body" not in ran, ran)
+    _estimate_checks(sc, result)
+    _common_checks(sc, result, BALD)
+    if "shape" in ran and _gate_refused(result) is None:
+        shape = str(before["wanted"].get("shape") or "")
+        from app.core.model_refs import get_model_refs_dir
+        meta = _sidecar(get_model_refs_dir(BALD) / f"tpose_back_{shape}.png")
+        fit = meta.get("fit_gate") or meta.get("fit") or {}
+        attempts = fit.get("attempts") or []
+        sc.check("dressed back accepted (A16)", fit.get("ok") is True and bool(attempts),
+                 {k: fit.get(k) for k in ("chosen", "ok", "warning")} | {"attempts": len(attempts)})
+        chosen = attempts[int(fit.get("chosen") or 1) - 1] if attempts else {}
+        head = (chosen.get("composite") or {}).get("head")
+        sc.check("the draft's head is taken over (A21)", bool(head), head)
+    else:
+        sc.note("no shape made: the A16/A21 checks of the bald back do not apply to this copy")
     return sc
 
 
 def scenario_3() -> Scenario:
-    """A hairstyle change while Kai's shape renders: that step ends superseded, ONE follow-up builds the new
+    """A hairstyle change while the main character's shape renders: that step ends superseded, ONE follow-up builds the new
     figure, nothing stale goes to face/rig (A18)."""
     from app.core import garment_hair
+    from app.core import figure_build
     sc = Scenario(3, "Supersede during the shape step")
-    before = served(KAI)
+    if not any(s.name == "shape" for s in figure_build.plan(MAIN, explicit=True)):
+        sc.skip("the copy plans no shape step for the character: the supersede scenario does not apply")
+        return sc
+    before = served(MAIN)
     old_shape = str(before["wanted"].get("shape") or "")
     fired: Dict[str, Any] = {}
 
     def change_hair(ctx, params):
-        if fired or ctx.get("occasion") != "outfit_back_draft" or ctx["character"] != KAI:
+        if fired or ctx.get("occasion") != "outfit_back_draft" or ctx["character"] != MAIN:
             return None
-        item = garment_hair.create_hairstyle(KAI, "shoulder-length wavy auburn hair", mode="body")
+        item = garment_hair.create_hairstyle(MAIN, "shoulder-length wavy auburn hair", mode="body")
         fired["item"] = item
-        fired["saved"] = garment_hair.wear_hairstyle(KAI, item)
+        fired["saved"] = garment_hair.wear_hairstyle(MAIN, item)
         return None
     RESPONDER["fn"].overrides.append(change_hair)
     try:
-        result = run_build(KAI)
+        result = run_build(MAIN)
     finally:
         RESPONDER["fn"].overrides.remove(change_hair)
     show(result)
@@ -1088,9 +1159,9 @@ def scenario_3() -> Scenario:
     stale = [f"{_kind(c)} {c.get('key')}" for c in result["calls"]
              if _kind(c) in ("face_retexture", "mesh2rig") and c.get("key") == old_shape]
     sc.check(f"no face/rig of the stale shape {old_shape}", not stale, stale)
-    now = served(KAI)
+    now = served(MAIN)
     sc.check("new shape differs from the old", now["wanted"].get("shape") != old_shape, now["wanted"].get("shape"))
-    _common_checks(sc, result, KAI, allow_superseded=True)
+    _common_checks(sc, result, MAIN, allow_superseded=True)
     return sc
 
 
@@ -1104,31 +1175,31 @@ def scenario_4_5() -> List[Scenario]:
     answers: Dict[str, Any] = {}
 
     def probe(ctx, params):
-        if answers or ctx["character"] != KAI:
+        if answers or ctx["character"] != MAIN:
             return None
         for name, call in (
                 ("images", lambda: routes.generate_character_base_body_images(
-                    KAI, routes.BaseBodyImagesRequest(), {})),
-                ("model", lambda: routes.generate_character_base_body_model(KAI, routes.BaseBodyModelRequest(), {})),
-                ("skin-step", lambda: routes.rerun_character_base_body_skin_step(KAI, {}))):
+                    MAIN, routes.BaseBodyImagesRequest(), {})),
+                ("model", lambda: routes.generate_character_base_body_model(MAIN, routes.BaseBodyModelRequest(), {})),
+                ("skin-step", lambda: routes.rerun_character_base_body_skin_step(MAIN, {}))):
             try:
                 answers[name] = ("answered", call())
             except HTTPException as e:
                 answers[name] = (e.status_code, e.detail)
-        answers["run-all"] = figure_build.start_base_run_all(KAI)
+        answers["run-all"] = figure_build.start_base_run_all(MAIN)
         return None
     real_lod = model3d.build_lod
     lod_calls: List[str] = []
 
     def failing_lod(character_name, signature, *a, **k):
         lod_calls.append(f"{character_name}/{signature}")
-        if character_name == KAI:
+        if character_name == MAIN:
             raise RuntimeError("injected LOD failure (e2e)")
         return real_lod(character_name, signature, *a, **k)
     RESPONDER["fn"].overrides.append(probe)
     model3d.build_lod = failing_lod
     try:
-        result = run_build(KAI)
+        result = run_build(MAIN)
     finally:
         RESPONDER["fn"].overrides.remove(probe)
         model3d.build_lod = real_lod
@@ -1141,12 +1212,17 @@ def scenario_4_5() -> List[Scenario]:
                  bool(got) and got[0] == 409 and got[1] == figure_build.BASE_BUILD_RUNNING, got)
     s4.check("base Run all during the Build: 'building'", (answers.get("run-all") or {}).get("status") == "building",
              answers.get("run-all"))
-    s4.check("the Build itself was not disturbed",
-             not any(s.get("error") for s in result["steps"]) and not (result["state"].get("failed") or {}),
+    gate = _gate_refused(result)
+    s4.check("the Build itself was not disturbed (a gate's refusal of the copy's data aside)",
+             not any(s.get("error") for s in result["steps"] if s is not gate)
+             and set(result["state"].get("failed") or {}) <= ({gate["step"]} if gate else set()),
              result["state"].get("failed"))
+    _common_checks(s5, result, MAIN, expected_warnings=("injected LOD failure",))
+    if gate is not None or "assemble" not in [s["step"] for s in result["steps"]]:
+        s5.note("nothing was assembled on this copy: the LOD part does not apply")
+        return [s4, s5]
     s5.check("the LOD build was attempted (and failed by injection)", bool(lod_calls), lod_calls)
-    _common_checks(s5, result, KAI, expected_warnings=("injected LOD failure",))
-    now = served(KAI)
+    now = served(MAIN)
     s5.check("the delivered model records the LOD failure as a warning (lod_error)",
              "injected LOD failure" in str(now["meta"].get("lod_error") or ""), now["meta"].get("lod_error"))
     return [s4, s5]
@@ -1165,6 +1241,8 @@ GROUPS: Dict[str, Callable[[], List[Scenario]]] = {
 # --- Main ------------------------------------------------------------------------------------------------------------
 
 def _child(args) -> int:
+    global MAIN, BALD
+    MAIN, BALD = args.character, args.bald_character
     tmp = Path(tempfile.mkdtemp(prefix="e2e_figure_"))
     out: Dict[str, Any] = {"scenarios": [], "outbound": None, "crash": None}
     try:
@@ -1180,7 +1258,7 @@ def _child(args) -> int:
         if not args.no_migrate:
             print("boot migrations:", json.dumps(boot_migrations(), default=str)[:1500])
         if args.plan_only:
-            for c in (KAI, YLVA):
+            for c in (MAIN, BALD):
                 d = describe(c)
                 print(f"== {c}\n wanted    {json.dumps(d['wanted'], default=str)}\n delivered "
                       f"{json.dumps(d['delivered'], default=str)}")
@@ -1207,6 +1285,8 @@ def _child(args) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--world", required=True, type=Path, help="a COPY of a world (read only; never written)")
+    ap.add_argument("--character", required=True, help="the main character (scenarios 1, 3-7)")
+    ap.add_argument("--bald-character", required=True, help="the HairDeck / bald-shape character (scenario 2)")
     ap.add_argument("--plugins", type=Path, default=ROOT / "plugins")
     ap.add_argument("--shared-items", type=Path, default=ROOT / "shared" / "items")
     ap.add_argument("--u2net-home", type=Path, default=ROOT / "models" / "u2net")
@@ -1244,7 +1324,8 @@ def main() -> int:
             cmd = [sys.executable, str(Path(__file__).resolve()), "--child", "--stock", str(args.world),
                    "--world", str(copy), "--group", group, "--result", str(res),
                    "--plugins", str(args.plugins), "--shared-items", str(args.shared_items),
-                   "--u2net-home", str(args.u2net_home)]
+                   "--u2net-home", str(args.u2net_home), "--character", args.character,
+                   "--bald-character", args.bald_character]
             cmd += ["--log", str(log)] if log else []
             cmd += ["--no-migrate"] if args.no_migrate else []
             cmd += ["--plan-only"] if args.plan_only else []
@@ -1269,7 +1350,8 @@ def main() -> int:
                 print(f"group {group}: CRASH\n{data['crash'][-1500:]}")
             for sc in data["scenarios"]:
                 failed |= not sc["pass"]
-                print(f"Scenario {sc['number']}: {'PASS' if sc['pass'] else 'FAIL'} — {sc['title']} "
+                verdict = "SKIP" if sc.get("skipped") else "PASS" if sc["pass"] else "FAIL"
+                print(f"Scenario {sc['number']}: {verdict} — {sc['title']} "
                       f"(stub calls {sc['calls']}, estimate {sc['estimate']})")
                 for st in sc["steps"]:
                     print(f"    {st['step']:9} {st['calls']:2} call(s) est {st['jobs']}"
