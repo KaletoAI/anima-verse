@@ -3005,6 +3005,8 @@ a.ga-btn {
    preview with its controls right. */
 .ga-split { display: grid; gap: 16px; align-items: start; }
 .ga-split-views { grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); }
+/* The Figure tab: the 3D figure takes the wider column, the Build and the worn pieces the other. */
+.ga-split-views.ga-split-figure { grid-template-columns: minmax(360px, 1.2fr) minmax(320px, 1fr); }
 .ga-split > * { min-width: 0; }
 /* The split tabs (Pose, Figure) and the face actions are dense: one
    text size for everything, hints muted and a step smaller. */
@@ -3026,7 +3028,7 @@ a.ga-btn {
 .ga-view-stack { display: flex; flex-direction: column; gap: 8px; }
 .ga-view-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 @media (max-width: 1000px) {
-  .ga-split-views { grid-template-columns: minmax(0, 1fr); }
+  .ga-split-views, .ga-split-views.ga-split-figure { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* Building hull: compact groups with captions above their controls. */

@@ -1,7 +1,9 @@
 /**
  * ExpressionsTab — every cached expression variant of a character in the
- * Game-Admin, with its generation parameters. Per image: delete (inline
- * confirmation) · enlarge in the lightbox. On top, in one row: the
+ * Game-Admin, with its generation parameters. Per image: Regenerate (Task UI2,
+ * rule R2 — re-renders exactly that image from the inputs its sidecar stored,
+ * never the current mood or outfit; its job count under it, or why it cannot)
+ * · delete (inline confirmation) · enlarge in the lightbox. On top, in one row: the
  * template's own settings of this tab (the expression set picker, handed in as
  * `settings`), "Generate default expression", "Clear expression cache" and
  * "Preview expression cleanup".
@@ -9,6 +11,9 @@
  * Source:  GET    /characters/{name}/expressions
  * Image:   GET    /characters/{name}/expressions/{file}
  * Delete:  DELETE /characters/{name}/expressions/{file}
+ * Regen:   POST   /characters/{name}/expressions/{file}/regenerate (attempt; polled through
+ *          GET /characters/{name}/expression-status?attempt_id=…) — `regenerate` of each row says whether and
+ *          at what cost (`expression_regen.regenerate_plan`)
  * Cache:   POST   /characters/{name}/clear-expression-cache
  */
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
@@ -49,6 +54,33 @@ interface Expression {
   created_at: string
   use_count: number
   last_used_at: number
+  /** The per-image Regenerate: possible (`ok`) with its image jobs, else why not (`reason`). */
+  regenerate?: RegeneratePlan
+}
+
+interface RegeneratePlan {
+  ok: boolean
+  reason: string
+  /** Image jobs on a first attempt: 1, or 2 when the outfit's base renders first (`base_first`). */
+  jobs: number
+  base_first: boolean
+}
+
+interface ExpressionAttemptState {
+  attempt_id: string
+  state: string
+  error?: string
+  detail?: string
+}
+
+/** The Regenerate button's caption under an image: its cost, or why it is disabled. */
+function regenerateCaption(plan: RegeneratePlan | undefined, isBase: boolean, t: (s: string) => string): string {
+  if (!plan) return t('Cannot be regenerated: no stored inputs')
+  if (!plan.ok) return t(plan.reason)
+  if (plan.base_first) return t("2 image jobs — the outfit's base image renders first")
+  // A new base replaces the reference of the expressions edited from it: they render again when used.
+  if (isBase) return t('1 image job — the expressions edited from it render again when used')
+  return t('1 image job')
 }
 
 function loraLabel(e: Expression): string {
@@ -96,6 +128,8 @@ export function ExpressionsTab({ character, settings }: {
   const [confirmClear, setConfirmClear] = useState(false)
   const [promptOf, setPromptOf] = useState<Expression | null>(null)
   const [busy, setBusy] = useState(false)
+  /** Files whose Regenerate runs (file → attempt id). */
+  const [regenerating, setRegenerating] = useState<Record<string, string>>({})
   // Same render path as the default-expression field on the Appearance tab:
   // the one default variant, forced, for every character and temporary NPC.
   const generation = useExpressionAttempt(character)
@@ -127,6 +161,46 @@ export function ExpressionsTab({ character, settings }: {
       setItems((d) => (d ? d.filter((e) => e.file !== f) : d))
       setConfirmDel(null)
     } catch (e) { toast(t('Error') + ': ' + (e as Error).message, 'error') } finally { setBusy(false) }
+  }
+
+  // Poll the running Regenerates; when one ends, the list is re-read (new image, new stamp).
+  useEffect(() => {
+    const running = Object.entries(regenerating)
+    if (!running.length) return
+    const timer = window.setTimeout(async () => {
+      let ended = false
+      const next = { ...regenerating }
+      for (const [file, attemptId] of running) {
+        try {
+          const a = await apiGet<ExpressionAttemptState>(
+            `/characters/${encodeURIComponent(character)}/expression-status?attempt_id=${encodeURIComponent(attemptId)}`)
+          if (a.state === 'pending' || a.state === 'running') continue
+          if (a.state !== 'ready') toast(`${t('Regenerate failed')}: ${a.error || a.state}`, 'error')
+        } catch (e) {
+          toast(t('Error') + ': ' + (e as Error).message, 'error')
+        }
+        delete next[file]
+        ended = true
+      }
+      setRegenerating(next)
+      if (ended) await load()
+    }, 2000)
+    return () => window.clearTimeout(timer)
+  }, [character, load, regenerating, t, toast])
+  useEffect(() => { setRegenerating({}) }, [character])
+
+  const regenerate = async (f: string) => {
+    if (regenerating[f]) return
+    try {
+      const a = await apiPost<ExpressionAttemptState>(
+        `/characters/${encodeURIComponent(character)}/expressions/${encodeURIComponent(f)}/regenerate`, {})
+      if (a.state === 'pending' || a.state === 'running') {
+        setRegenerating((r) => ({ ...r, [f]: a.attempt_id }))
+        toast(t('Regenerating…'))
+      } else {
+        await load()
+      }
+    } catch (e) { toast(t('Error') + ': ' + (e as Error).message, 'error') }
   }
 
   const clearCache = async () => {
@@ -271,6 +345,18 @@ export function ExpressionsTab({ character, settings }: {
                       </div>
                     )}
                     {e.created_at && <div style={{ fontSize: '0.68em', opacity: 0.45 }}>{fmtDate(e.created_at)}</div>}
+                    {/* Regenerate (rule R2): this very image again from its stored inputs */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 }}>
+                      <button type="button" className="ga-btn ga-btn-sm" style={{ fontSize: '0.72em', padding: '2px 6px' }}
+                        disabled={!e.regenerate?.ok || !!regenerating[e.file]}
+                        title={t('Renders this image again from the set, expression, outfit and mood it was made with — not from the current mood or outfit.')}
+                        onClick={() => void regenerate(e.file)}>
+                        {regenerating[e.file] ? t('Regenerating…') : t('Regenerate')}
+                      </button>
+                      <div className="ga-hint" style={{ fontSize: '0.68em', opacity: 0.75, overflowWrap: 'anywhere' }}>
+                        {regenerateCaption(e.regenerate, !!e.is_base, t)}
+                      </div>
+                    </div>
                     {/* Final prompt: view + copy */}
                     <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
                       <button type="button" className="ga-btn ga-btn-sm" style={{ fontSize: '0.7em', padding: '2px 6px' }}

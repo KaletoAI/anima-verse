@@ -21,7 +21,7 @@
  *      slimming needed per side, lift, the collar above the ankle, on a boot
  *      the split (height per side, band, the four nodes) and the shaft chips,
  *      the fit gate chips; Re-fit (local, no hub job) and the width cap slider
- *      1.00–1.10, which saves on release and re-fits.
+ *      1.00–1.10, which saves on release and runs nothing (Task UI2, rule R3: the fit is then due).
  *
  * Boots: docs/superpowers/specs/2026-11-11-footwear-boots-mens-design.md § 15.
  *
@@ -165,7 +165,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
   busy: boolean
   feedback?: RunFeedback
   onRun: (body: GarmentRunBody, slot?: string) => void
-  /** Save the width cap (null = back to the default) and re-fit; the caller posts. */
+  /** Save the width cap (null = back to the default) — saved only, nothing runs; the caller posts. */
   onWidthCap: (cap: number | null) => void
   /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
   meshFetchUrl?: string | null
@@ -566,7 +566,7 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
     <div className="ga-step-grid-row" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6, ...ring('fit') }}>
       {(info.fits?.length ? info.fits : []).map(fitBody)}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
-        title={t("How much wider than the shoe the foot may make it (1.00–1.10). Saved on release, then re-fitted — local, no hub job.")}>
+        title={t("How much wider than the shoe the foot may make it (1.00–1.10). Saved on release — nothing runs; the fit is then due: Re-fit or Run all applies it (local, no hub job).")}>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           {t('Width cap')}
           <input type="range" min={CAP_MIN} max={CAP_MAX} step={0.01} value={capDraft}

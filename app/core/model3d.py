@@ -466,6 +466,46 @@ def remembered_face_controls(character_name: str) -> Dict[str, Any]:
         return face_retexture.validated_params(None)
 
 
+def face_settings_fingerprint(character_name: str) -> str:
+    """The fingerprint of the face retexture SETTINGS in force now (Task UI2, rule R3 → R1): the remembered
+    ``face_photo`` and ``face_controls`` as a run without explicit values would take them, BEFORE any
+    mode-specific rewrite (local mode drops the hub-only tone match and skin recolour, a front-view reference forces
+    the balance to 0 — those follow from the backend and the reference, not from the settings). A face retexture
+    stores it in its record (``face_retexture.settings``); ``figure_build`` compares it with this value, so saving
+    other values makes the face step due. "" when the stored values cannot be read (nothing is then marked due)."""
+    from app.core.face_photo_adjust import validated_params as photo_params
+    try:
+        photo = photo_params(get_model3d_options(character_name).get("face_photo") or None)
+    except ValueError:
+        return ""
+    controls = remembered_face_controls(character_name)
+    # Numbers as floats: a stored 1 and a default 1.0 are the same setting.
+    payload = json.dumps({"photo": {k: float(v) for k, v in photo.items()},
+                          "controls": {k: float(v) for k, v in controls.items()}},
+                         sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def face_settings_fingerprint(character_name: str) -> str:
+    """The fingerprint of the face retexture SETTINGS in force now (Task UI2, rule R3 → R1): the remembered
+    ``face_photo`` and ``face_controls`` as a run without explicit values would take them, BEFORE any
+    mode-specific rewrite (local mode drops the hub-only tone match and skin recolour, a front-view reference forces
+    the balance to 0 — those follow from the backend and the reference, not from the settings). A face retexture
+    stores it in its record (``face_retexture.settings``); ``figure_build`` compares it with this value, so saving
+    other values makes the face step due. "" when the stored values cannot be read (nothing is then marked due)."""
+    from app.core.face_photo_adjust import validated_params as photo_params
+    try:
+        photo = photo_params(get_model3d_options(character_name).get("face_photo") or None)
+    except ValueError:
+        return ""
+    controls = remembered_face_controls(character_name)
+    # Numbers as floats: a stored 1 and a default 1.0 are the same setting.
+    payload = json.dumps({"photo": {k: float(v) for k, v in photo.items()},
+                          "controls": {k: float(v) for k, v in controls.items()}},
+                         sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
 def _collision_scales_option(raw: Any) -> Dict[str, float]:
     from app.core.collision import default_scales, validate_scales
     try:
@@ -1864,6 +1904,26 @@ def extension_rebuild_targets(character_name: str) -> tuple[List[Path], List[Pat
     return targets, skipped
 
 
+def extension_settings_changed(character_name: str, path: Path, meta: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether the extension settings saved for the stored model ``path`` (the per-model switches and tip
+    overrides, ``model3d_opts.extension_rig_models``) differ from the ones its extension rig was built with — the
+    fingerprint part of ``_extension_state_current`` only (Task UI2, rule R3 → R1: a saved tip setting makes the
+    rebuild due). A model never processed (no ``attempted`` state) or one whose last build failed under the SAME
+    settings is not "changed": the first is built by its own run, the second is a failure, not a setting."""
+    from app.core.extension_rig import (extension_rig_fingerprint, effective_extension_overrides,
+                                       rig_groups_for)
+    from app.models.character import get_character_profile
+    meta = _read_sidecar(path) if meta is None else meta
+    previous = meta.get("extension_rig") or {}
+    if not previous.get("attempted") or not previous.get("fingerprint"):
+        return False
+    profile = get_character_profile(character_name) or {}
+    declarations = _extension_groups_for(meta, rig_groups_for(
+        character_name, profile=profile, mesh_variant=meta.get("mesh_variant") or ""))
+    return previous.get("fingerprint") != extension_rig_fingerprint(
+        declarations, effective_extension_overrides(profile, path.stem, meta, declarations))
+
+
 def extension_state_current(character_name: str, path: Path, meta: Dict[str, Any]) -> bool:
     """Public form of ``_extension_state_current`` (the Improvements type's
     completion check): the stored extension state of ``path`` matches what a
@@ -3170,6 +3230,8 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                     photo['balance'] = 0.
                     photo_reason = PROBLEM
                 face_inputs = {"reference": face_reference, "face_before_rig": True, "controls": remembered_face_controls(character_name),
+                               # The settings in force (before the mode rewrites above) — the record carries them.
+                               "settings_fingerprint": face_settings_fingerprint(character_name),
                                "face_backend_glob": "", "upscale": face_retexture.use_upscale(face_reference, None), "upscale_backend_glob": "",
                                "source_kind": "facefix", "photo": photo, "photo_mode": photo_mode, "photo_reason": photo_reason}
                 if not ready["ok"]:
@@ -4088,12 +4150,19 @@ def _face_retexture_model(character_name: str, signature: Optional[str] = None, 
             set_model3d_options(character_name, {'face_photo': {
                 'balance': remembered['balance'] if photo_mode == 'local' and reference == 'front' else photo['balance'],
                 'tone_match': photo['tone_match'], 'skin_recolor': photo['skin_recolor'], 'brightness': photo['brightness']}})
+        if params is not None:
+            # The dialog's controls are remembered like its photo values (Task UI2): the face settings then say
+            # what the stored model was made with, and its record's fingerprint matches them.
+            set_model3d_options(character_name, {'face_controls': controls})
+        # The settings in force after this run's own values were remembered — before the mode rewrites.
+        settings_fingerprint = face_settings_fingerprint(character_name)
         if upscale and upscale_backend_glob:
             from app.core.upscale_reference import require_upscale_backend
             require_upscale_backend(upscale_backend_glob, character_name)
         op = hub_ops.create(_OP_FACE, _op_subject(character_name, signature), {
             "character": character_name, "signature": signature, "controls": controls, "photo": photo, "photo_mode": photo_mode,
             **({"photo_reason": photo_reason} if photo_reason else {}),
+            **({"settings_fingerprint": settings_fingerprint} if settings_fingerprint else {}),
             "backend_glob": backend_glob, "upscale": bool(upscale), "reference": reference,
             "upscale_backend_glob": upscale_backend_glob, "source_kind": "facefix",
             "rig": required_rig(character_name),
@@ -4216,7 +4285,11 @@ def _face_source_stages(character_name: str, op) -> Dict[str, Any]:
                          'params': attempt_controls, 'photo': photo_meta,
                          **({'tone_match': {'status': 'unsupported', 'reason': TONE_MATCH_UNSUPPORTED}}
                             if inputs.get('photo_mode', 'local') == 'local' else {}),
-                         **({'photo_reason': inputs['photo_reason']} if inputs.get('photo_reason') else {}), 'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
+                         **({'photo_reason': inputs['photo_reason']} if inputs.get('photo_reason') else {}),
+                         # The face settings in force when it ran (``face_settings_fingerprint``); a record without
+                         # one (made before Task UI2) counts as current.
+                         **({'settings': inputs['settings_fingerprint']} if inputs.get('settings_fingerprint') else {}),
+                         'upscale': upscale_meta, 'baked': baked, 'result_sha256': result.get('result_sha256', ''),
                          'result_url': result.get('result_url', ''),
                          'route_meta': {k: result[k] for k in ROUTE_META_KEYS if k in result}}
             if result.get('compare_path'):

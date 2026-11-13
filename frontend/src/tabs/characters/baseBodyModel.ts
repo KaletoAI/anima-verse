@@ -7,8 +7,9 @@
  */
 
 /** What "Run all" runs now (`figure_build.base_run_all`): the plain body's refresh, the face cleanup of the
- *  stored base mesh, its missing face retexture — "" when every step is current. */
-export type RunAllKind = '' | 'plain_body' | 'face_cleanup' | 'face_retexture'
+ *  stored base mesh, its missing or outdated face retexture, the extension rebuild after saved tip settings (Task
+ *  UI2) — "" when every step is current. */
+export type RunAllKind = '' | 'plain_body' | 'face_cleanup' | 'face_retexture' | 'extension_rig'
 
 /** `plain_body.run_all` of GET …/figure?plain=1. */
 export interface BaseRunAll {
@@ -18,6 +19,9 @@ export interface BaseRunAll {
   /** 0 with kind "" = everything current; null = the plan could not be read (`note` says why). */
   hub_jobs: number | null
   note: string
+  /** Why a face retexture is planned: "missing" (none, or a failed one) or "changed" (the saved face values differ
+   *  from the ones it ran with — Task UI2); "" otherwise. */
+  face_due?: '' | 'missing' | 'changed'
   /** A Run all of the character goes now. */
   running: boolean
   /** Its last outcome ("" = it ended without an error). */
@@ -45,14 +49,25 @@ export function runAllButton(r: BaseRunAll | null | undefined, t: Tr = EN): {
   return { label: t('Run all ({cost})').replace('{cost}', jobsTr(r.hub_jobs, t)), disabled: false, reason: null }
 }
 
-/** One line on what the planned Run all does. */
-export function runAllWhat(kind: RunAllKind, t: Tr = EN): string {
+/** One line on what the planned Run all does (`faceDue`: `face_due` of the plan). */
+export function runAllWhat(kind: RunAllKind, t: Tr = EN, faceDue: BaseRunAll['face_due'] = ''): string {
   switch (kind) {
     case 'plain_body': return t('Refreshes the base body: the views that are not current, then the model')
     case 'face_cleanup': return t('Brings the face cleanup onto the stored base mesh, then redoes what follows it')
-    case 'face_retexture': return t('Adds the missing face retexture to the base model')
+    case 'face_retexture': return faceDue === 'changed'
+      ? t('Face values changed — not applied yet: redoes the face retexture with the saved values')
+      : t('Adds the missing face retexture to the base model')
+    case 'extension_rig': return t('Tip settings saved, not built yet: rebuilds the extension bones of the base model')
     default: return ''
   }
+}
+
+/** Under the saved face values (rule R3 → R1, Task UI2): the face retexture of the stored base model ran with other
+ *  values — "Face values changed — not applied yet (2 hub jobs)"; null when they are applied (or the face step is
+ *  not what Run all plans now: a plan that rebuilds the model or the cleanup applies the values too). */
+export function faceDueLine(r: BaseRunAll | null | undefined, t: Tr = EN): string | null {
+  if (!r || r.kind !== 'face_retexture' || r.face_due !== 'changed') return null
+  return t('Face values changed — not applied yet ({cost})').replace('{cost}', jobsTr(r.hub_jobs, t))
 }
 
 /** A step name of the plan (`base_body.base_rebuild_steps` / `model3d.mesh_hub_stages`) as a label. */
@@ -69,6 +84,7 @@ export function runAllStep(name: string, t: Tr = EN): string {
     case 'face': return t('Face retexture')
     case 'rig': return t('Rig')
     case 'cleanup': return t('Face cleanup (local)')
+    case 'extension': return t('Extension bones (local)')
     default: return name
   }
 }
@@ -123,7 +139,8 @@ export function faceSettingsChanged(saved: { photo: FacePhoto; controls: FaceCon
 
 /** Under the face values after a save: what applies them (nothing runs on Save). */
 export const FACE_SETTINGS_NOTE = 'Saving runs nothing. The next face retexture uses these values: the face step '
-  + 'of a new base model (with "Improve face before rigging"), Run all when it adds the face, or "Face retexture…" now.'
+  + 'of a new base model (with "Improve face before rigging"), Run all — which redoes the face when the saved values '
+  + 'differ from the applied ones — or "Face retexture…" now.'
 
 // --- A garment chain's "Run all" (the Wardrobe's piece dialog; rule R1 applied there) --------------------
 
@@ -137,3 +154,10 @@ export function chainRunAll(run: { steps: string[]; hub_jobs: number | null; ref
   if (run.refit) return { label: t('Run all (refit on the CPU)'), disabled: false }
   return { label: t('Run all ({cost})').replace('{cost}', jobsTr(run.hub_jobs, t)), disabled: false }
 }
+
+// --- A pair tip panel (rule R3: Save stores the settings, Rebuild builds them — Task UI2) ------------------------
+
+/** The panel's state line after a save: the saved settings are not built yet (`extension_tips[].due`). */
+export const TIP_DUE_NOTE = 'Saved — not built yet. Rebuild (local, no hub job) or Run all builds it.'
+/** The Rebuild button's label: the CPU extension rebuild of the base model, no hub job. */
+export const TIP_REBUILD_LABEL = 'Rebuild (local, no hub job)'

@@ -932,6 +932,30 @@ def serve_expression_route(character_name: str, filename: str, _: Dict[str, Any]
                         headers={"Cache-Control": "no-cache"})
 
 
+@router.post("/{character_name}/expressions/{filename}/regenerate", status_code=202)
+def regenerate_expression_route(character_name: str, filename: str,
+                                _: Dict[str, Any] = Depends(require_admin)):
+    """Re-render exactly this stored expression image from the inputs its sidecar stored — set, member, worn
+    pieces/items, mood; never the current mood or outfit (Task UI2, rule R2; ``expression_regen.regenerate_stored``,
+    the same producer as every expression render, forced). 202 with the attempt (poll ``…/expression-status
+    ?attempt_id=``), 200 when it already ended; 404 for a missing image; 409 with the reason when the stored inputs
+    are missing or no longer give this file (the tab disables the button with the same reason)."""
+    from dataclasses import asdict
+    from fastapi.responses import JSONResponse
+    from app.core.expression_regen import regenerate_stored
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    try:
+        attempt = regenerate_stored(character_name, filename)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    status = 202 if attempt.state in ("pending", "running") else 200 if attempt.state == "ready" else 409
+    return JSONResponse({**asdict(attempt), **({"detail": attempt.error} if attempt.error else {})},
+                        status_code=status, headers={"Cache-Control": "no-cache"})
+
+
 @router.delete("/{character_name}/expressions/{filename}")
 def delete_expression_route(character_name: str, filename: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Deletes a single expression variant image + its JSON sidecar."""
@@ -3158,18 +3182,53 @@ class ExtensionTipRequest(BaseModel):
     enabled: Optional[bool] = None
 
 
-@router.post("/{character_name}/model3d/extension-tip", status_code=202)
-def apply_character_model3d_extension_tip(character_name: str, body: ExtensionTipRequest,
-                                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+@router.post("/{character_name}/model3d/extension-tip")
+def save_character_model3d_extension_tip(character_name: str, body: ExtensionTipRequest,
+                                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Store a ``pair_tip`` group's tip override on one stored model
     (``tip``: offsets per side, mirror, colour disc — None resets it; see
     ``extension_rig.validate_tip_override``) — or, with ``enabled`` given,
     only the group's per-model on/off switch (the 3D tab's, tip kept; off
-    builds no tip bone, stub or disc) — and rebuild that model's
-    extension rig in a worker thread (CPU, no hub job). ``{tip, started}``;
-    the Base body poll reports the run (``extension_tips[].running``). 400
-    for a malformed value or a group the model does not carry, 409 while the
-    base model or another tip rebuild of the character runs."""
+    builds no tip bone, stub or disc). Saves ONLY (Task UI2, rule R3): nothing
+    is rebuilt — ``{tip, due}``, ``due`` True when the model's extension rig
+    is now older than its settings (``POST …/extension-tip/apply`` or the Base
+    body tab's "Run all" rebuilds it). 400 for a malformed value or a group
+    the model does not carry, 409 while a tip rebuild of the character runs."""
+    from app.core import extension_tip
+    from app.core.face_retexture import safe_signature
+    from app.core.model3d import extension_settings_changed, find_model3d
+    _require_character(character_name)
+    try:
+        signature = safe_signature(body.signature)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    try:
+        if body.enabled is not None:
+            stored = extension_tip.save_tip_override(character_name, signature, body.group, enabled=body.enabled)
+        else:
+            stored = extension_tip.save_tip_override(character_name, signature, body.group, body.tip)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        status = 409 if str(exc) == extension_tip.REBUILD_RUNNING else 500
+        raise HTTPException(status, str(exc)) from exc
+    path = find_model3d(character_name, signature)
+    return {"tip": stored, "due": bool(path is not None and extension_settings_changed(character_name, path))}
+
+
+class ExtensionTipApplyRequest(BaseModel):
+    signature: str
+
+
+@router.post("/{character_name}/model3d/extension-tip/apply", status_code=202)
+def apply_character_model3d_extension_tip(character_name: str, body: ExtensionTipApplyRequest,
+                                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Rebuild one stored model's extension rig with its saved tip settings
+    in a worker thread (CPU, no hub job; ``extension_tip.start_tip_rebuild``):
+    ``{started: True}``; the Base body poll reports the run
+    (``extension_tips[].running``). 400 for a bad signature or a missing
+    model, 409 while the base model or another tip rebuild of the character
+    runs."""
     from app.core import base_body, extension_tip
     from app.core.face_retexture import safe_signature
     _require_character(character_name)
@@ -3180,18 +3239,12 @@ def apply_character_model3d_extension_tip(character_name: str, body: ExtensionTi
     if (base_body.base_model_info(character_name, signature) or {}).get("status") == "running":
         raise HTTPException(409, "The base model is being generated")
     try:
-        if body.enabled is not None:
-            started, stored = extension_tip.apply_tip_override(
-                character_name, signature, body.group, enabled=body.enabled)
-        else:
-            started, stored = extension_tip.apply_tip_override(character_name, signature, body.group, body.tip)
+        started = extension_tip.start_tip_rebuild(character_name, signature)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(500, str(exc)) from exc
     if not started:
-        raise HTTPException(409, "A tip rebuild is already running for this character")
-    return {"tip": stored, "started": True}
+        raise HTTPException(409, extension_tip.REBUILD_RUNNING)
+    return {"started": True}
 
 
 @router.post("/{character_name}/model3d/collision")

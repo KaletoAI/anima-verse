@@ -26,9 +26,11 @@ Expected, by hand from the brief and the code it reuses:
     list WITHOUT "face" (no face route known) still plans [face, rig] (2).
 [5] Everything current → kind "", hub_jobs 0. A plan that raises → kind "", hub_jobs None, note
     "cost unknown — boom".
-[6] ``_face_retexture_pending`` on files in the tmp dir: switch off → False; switch on, no stored model → False;
-    model without its ``unrigged/<sig>.glb`` → False; with it and no record → True; record "applied" → False;
-    "failed" → True; "reverted" → False; "skipped" → False; a non-humanoid rig ("generic") → False.
+[6] ``_face_retexture_pending`` on files in the tmp dir (since Task UI2 it answers WHY: "" current, "missing",
+    "changed" — the last one is ``smoke_face_settings_due.py``'s): switch off → ""; switch on, no stored model → "";
+    model without its ``unrigged/<sig>.glb`` → ""; with it and no record → "missing"; record "applied" (no
+    settings fingerprint) → ""; "failed" → "missing"; "reverted" → ""; "skipped" → ""; a non-humanoid rig
+    ("generic") → "".
 [7] ``start_base_run_all``: a Build running → "building"; nothing due → "current"; off the pipeline → "off";
     face cleanup due → ``trigger_face_cleanup(c, bsig)`` called once, "started"; its "already_running" → "busy";
     face retexture due → ``trigger_face_retexture(c, bsig)`` (no explicit values: the remembered ones), "started".
@@ -99,7 +101,7 @@ def world(*, pipeline=True, refresh=None, cleanup=None, pending=False, stages=("
         (base_skin, "enabled", lambda: False),
         (model3d, "mesh_hub_stages", lambda c, s: list(stages)),
         (model3d, "face_cleanup_state", lambda c, s: dict(cleanup or {"can_reapply": False})),
-        (figure_build, "_face_retexture_pending", lambda c, s: pending),
+        (figure_build, "_face_retexture_pending", lambda c, s: "missing" if pending else ""),
     )
 
 
@@ -157,19 +159,19 @@ with Patch((model3d, "get_model3d_options", lambda c: dict(opts)),
            (model3d, "find_model3d", lambda c, s: model if model.exists() else None),
            (model3d, "_read_sidecar", lambda path: ({"face_retexture": records["rec"]} if records["rec"] else {}))):
     pend = lambda: figure_build._face_retexture_pending(C, BSIG)  # noqa: E731
-    check("[6] switch off", pend(), False)
+    check("[6] switch off", pend(), "")
     opts["face_before_rig"] = True
-    check("[6] no stored model", pend(), False)
+    check("[6] no stored model", pend(), "")
     model.write_bytes(b"glb")
-    check("[6] no unrigged source", pend(), False)
+    check("[6] no unrigged source", pend(), "")
     (mdir / "unrigged" / f"{BSIG}.glb").write_bytes(b"src")
-    check("[6] no record", pend(), True)
-    for status, want in (("applied", False), ("failed", True), ("reverted", False), ("skipped", False)):
+    check("[6] no record", pend(), "missing")
+    for status, want in (("applied", ""), ("failed", "missing"), ("reverted", ""), ("skipped", "")):
         records["rec"] = {"status": status}
         check(f"[6] record {status}", pend(), want)
     records["rec"] = None
     with Patch((model3d, "required_rig", lambda c, *a, **k: "generic")):
-        check("[6] not humanoid", pend(), False)
+        check("[6] not humanoid", pend(), "")
 
 # [7]
 calls = []

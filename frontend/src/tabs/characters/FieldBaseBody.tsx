@@ -16,6 +16,10 @@
  *   a step whose input is missing is disabled with the reason under it.
  * - R3 settings saved on their own (Settings section): the face switches and the face retexture values
  *   (FaceSettings); the skin detail step is a world switch (Game-Admin → Setup) and is shown, not edited, here.
+ *   Saving face values that differ from the ones the stored face retexture ran with makes the face step due (Task
+ *   UI2: the record's settings fingerprint) — "Face values changed — not applied yet (N hub jobs)" under the values,
+ *   and Run all redoes it; a saved tip setting (ExtensionTipPanel: Save, then Rebuild) makes the extension rebuild
+ *   due the same way (local, no hub job).
  * - R4 only the current flow: no T-pose path, no outfit-body wording.
  *
  * Layout: the Run all header across the top; then two columns — the four views stacked and small on the left (a
@@ -60,7 +64,7 @@ import type { CollisionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
 import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, singleAction, staleBaseNote } from './figureModel'
-import { RUN_ALL_STATUS, runAllButton, runAllStep, runAllWhat } from './baseBodyModel'
+import { RUN_ALL_STATUS, faceDueLine, runAllButton, runAllStep, runAllWhat } from './baseBodyModel'
 import type { BaseRunAll } from './baseBodyModel'
 
 const TILE_HEIGHT = 128
@@ -173,7 +177,7 @@ function RunAllHeader({ runAll, busy, buildRunning, onRun, onOpenFigure }: {
   const { t } = useI18n()
   const button = runAllButton(runAll, t)
   const disabled = busy || button.disabled || buildRunning
-  const what = runAll ? runAllWhat(runAll.kind, t) : ''
+  const what = runAll ? runAllWhat(runAll.kind, t, runAll.face_due) : ''
   const lastError = runAll && !runAll.running && runAll.last?.error ? runAll.last.error : ''
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
@@ -214,6 +218,7 @@ function RunAllHeader({ runAll, busy, buildRunning, onRun, onOpenFigure }: {
 /** The Settings section (rule R3): saved on their own, nothing runs. */
 function BaseSettings({ character, info, st, pending, onReload }: {
   character: string
+  /** The plan of Run all says whether the saved face values are applied (`run_all.face_due`). */
   info: BaseBodyInfo
   st: ReturnType<typeof useModel3DStatus>['st']
   pending: boolean
@@ -223,7 +228,8 @@ function BaseSettings({ character, info, st, pending, onReload }: {
   return (
     <FieldSet title={t('Settings')}>
       <div className="ga-hint">{t('Saved on their own — nothing runs. A setting that makes a step due shows in Run all.')}</div>
-      {st ? <FaceSettings character={character} st={st} pending={pending} onReload={onReload} />
+      {st ? <FaceSettings character={character} st={st} pending={pending} onReload={onReload}
+        dueLine={faceDueLine(info.run_all, t)} />
         : <div className="ga-hint">{t('Loading…')}</div>}
       {info.skin ? (
         <div className="ga-hint">

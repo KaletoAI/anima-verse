@@ -25,7 +25,14 @@ MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
      refit False.
 [E2] worn + ghost + cutout accepted for both views (the ghost pair agrees:
      hem_t 0.65 front and back, |Δ| 0 <= 0.02) -> steps [mesh, fit],
-     hub_jobs 1, note "mesh 1".
+     hub_jobs 1, note "mesh 1". The worn back is the clothing chain's one
+     DRAFTED view (``garment_clothing.EDIT_STEPS["worn"]["back"] ==
+     "draft"``), so its record says ``fit: "composite"``: Ruling C2
+     (f1803222, ``garment_images.stale_model_fit``) counts an accepted
+     drafted back WITHOUT it as a model fit of before Task 11g — stale, never
+     done (``garments._done``) — and the chain would start at "worn" again
+     (all 5 steps, 5 jobs: the two reds of this smoke between f1803222 and
+     Task UI2 were this fixture, not the estimate).
 [E3] The prepared mesh accepted too, the fit missing -> steps ["fit"],
      hub_jobs 0, note "no hub job".
 [E4] Hair H (ensure_hair_item, world method hairdeck), nothing cached, the
@@ -142,8 +149,11 @@ def main() -> int:
                 path = gs.garment_path("Demo", did, fsig, "image", step=step, view=view)
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(png_bytes(16))
-                gs.write_record(path.with_suffix(".json"),
-                                {"accepted": True, "attempt": 1, "gates": {"first": {"ok": True, "hem_t": 0.65}}})
+                record = {"accepted": True, "attempt": 1, "gates": {"first": {"ok": True, "hem_t": 0.65}}}
+                if step == "worn" and view == "back":
+                    # The worn back is DRAFTED: since Ruling C2 (f1803222) it counts only as a CPU composite.
+                    record["fit"] = "composite"
+                gs.write_record(path.with_suffix(".json"), record)
         check("mesh + fit left", brief(estimate(did)), (["mesh", "fit"], 1, "mesh 1", False))
 
         print("[E3] prepared mesh accepted, fit missing")

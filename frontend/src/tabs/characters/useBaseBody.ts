@@ -121,8 +121,10 @@ export interface ExtensionTipPanelInfo {
   disc: { status: string; reason: string; pixels: number } | null
   limits: { offset_max_mm: number; diameter_mm: [number, number]; soft_max_mm: number
     disc_defaults: ExtensionTipDisc }
-  /** An Apply of this model runs now. */
+  /** A Rebuild of this model runs now. */
   running: boolean
+  /** The saved settings are not built yet (Task UI2: Save stores them, Rebuild or Run all builds them). */
+  due?: boolean
   /** The last Apply's error ('' when it succeeded). */
   error: string
 }

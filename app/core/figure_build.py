@@ -1147,14 +1147,25 @@ def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
 # 2. else ``face_cleanup`` — the stored base mesh is not cleaned at the current version while the switch is on
 #    (``model3d.face_cleanup_state`` ``can_reapply``): ``model3d.trigger_face_cleanup``, which rebuilds what follows.
 # 3. else ``face_retexture`` — "Improve face before rigging" is on and the stored base model has no face retexture
-#    (none recorded, or the last one failed): ``model3d.trigger_face_retexture`` with the remembered settings.
-# 4. else nothing: "Everything is current".
+#    (none recorded, or the last one failed), or the face values saved since differ from the ones it ran with
+#    (Task UI2: the record's ``settings`` fingerprint): ``model3d.trigger_face_retexture`` with the remembered
+#    settings.
+# 4. else ``extension_rig`` — a tip setting saved since (Task UI2) makes the stored base model's extension rig older
+#    than its settings (``model3d.extension_settings_changed``): ``extension_tip.start_tip_rebuild`` — local, no hub
+#    job.
+# 5. else nothing: "Everything is current".
 #
-# The single steps (a view's / the model's Regenerate, "Run skin step", the face dialogs) stay the forced
-# re-runs (rule R2); the settings (the face switches and values) are saved on their own (rule R3).
+# Each earlier kind includes the later ones (a new model, a cleanup and a face retexture all re-rig, and the rig
+# builds the extension bones with the saved settings), so one kind per click is enough.
+# The single steps (a view's / the model's Regenerate, "Run skin step", the face dialogs, a tip panel's Rebuild)
+# stay the forced re-runs (rule R2); the settings (the face switches and values, the tip settings) are saved on
+# their own (rule R3).
 
 #: ``base_run_all`` kinds.
 RUN_ALL_PLAIN, RUN_ALL_CLEANUP, RUN_ALL_FACE = "plain_body", "face_cleanup", "face_retexture"
+RUN_ALL_EXTENSION = "extension_rig"
+#: The extension rebuild is local (CPU); its label in the step list.
+EXTENSION_STEP = "extension"
 #: ``start_base_run_all``'s refusals.
 RUN_ALL_BUILD_RUNNING = ("A Build runs for this character now — it refreshes the base body itself when that is "
                          "outdated; Run all again after it")
@@ -1166,20 +1177,35 @@ _run_all_active: set = set()
 _run_all_last: Dict[str, Dict[str, Any]] = {}
 
 
-def _face_retexture_pending(character_name: str, bsig: str) -> bool:
-    """The stored base model misses its face retexture: "Improve face before rigging" is on, the model is a
+#: ``_face_retexture_pending``'s answers: nothing due, no (or a failed) face retexture, the saved face values
+#: differ from the ones the stored face retexture ran with (Task UI2: rule R3 → R1).
+FACE_CURRENT, FACE_MISSING, FACE_CHANGED = "", "missing", "changed"
+
+
+def _face_retexture_pending(character_name: str, bsig: str) -> str:
+    """Why the stored base model's face retexture is due: "Improve face before rigging" is on, the model is a
     humanoid one with its retained unrigged source, and its sidecar records no face retexture or a failed one
-    (``reverted`` and ``skipped`` are decisions, not missing work)."""
+    (``FACE_MISSING``; ``reverted`` and ``skipped`` are decisions, not missing work), or an applied one whose
+    ``settings`` fingerprint differs from the face values saved now (``FACE_CHANGED``,
+    ``model3d.face_settings_fingerprint``). A record WITHOUT a fingerprint (made before Task UI2) counts as current —
+    never every existing model due at once. ``FACE_CURRENT`` ("") otherwise."""
     from app.core import model3d
     if not model3d.get_model3d_options(character_name).get("face_before_rig"):
-        return False
+        return FACE_CURRENT
     if model3d.required_rig(character_name) != "mixamo":
-        return False
+        return FACE_CURRENT
     path = model3d.find_model3d(character_name, bsig)
     if path is None or not (path.parent / "unrigged" / f"{bsig}.glb").is_file():
-        return False
+        return FACE_CURRENT
     record = model3d._read_sidecar(path).get("face_retexture")
-    return not isinstance(record, dict) or record.get("status") == "failed"
+    if not isinstance(record, dict) or record.get("status") == "failed":
+        return FACE_MISSING
+    stored = str(record.get("settings") or "")
+    if record.get("status") == "applied" and stored:
+        now = model3d.face_settings_fingerprint(character_name)
+        if now and now != stored:
+            return FACE_CHANGED
+    return FACE_CURRENT
 
 
 def _face_stages(character_name: str, bsig: str, follow_up: str) -> List[str]:
@@ -1196,14 +1222,15 @@ def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     """What the Base body tab's "Run all" runs now (block comment above): ``{kind, steps: [{name, jobs}],
     hub_jobs, note, running, last}`` — ``kind`` "" when every step is current (``hub_jobs`` 0) or the plan
     could not be read (``hub_jobs`` None, ``note`` says why); ``steps`` in run order with their first-attempt
-    hub jobs (``view front``, ``skin front``, ``mesh``, ``upscale``, ``face``, ``rig``, ``cleanup`` — the
-    last one local); ``running`` while a Run all of the character goes, ``last`` its last outcome
+    hub jobs (``view front``, ``skin front``, ``mesh``, ``upscale``, ``face``, ``rig``, ``cleanup`` and
+    ``extension`` — the last two local); ``face_due`` why a face retexture is planned ("missing" / "changed",
+    else ""); ``running`` while a Run all of the character goes, ``last`` its last outcome
     (``{error, finished_at}``, None before the first). Read-only."""
     from app.core import base_body, model3d
     with _lock:
         state_now = {"running": character_name in _run_all_active,
                      "last": dict(_run_all_last[character_name]) if character_name in _run_all_last else None}
-    out: Dict[str, Any] = {"kind": "", "steps": [], "hub_jobs": 0, "note": "", **state_now}
+    out: Dict[str, Any] = {"kind": "", "steps": [], "hub_jobs": 0, "note": "", "face_due": "", **state_now}
     try:
         profile = _profile_of(character_name, profile)
         if not on_pipeline(character_name, profile=profile):
@@ -1220,11 +1247,19 @@ def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
             return {**out, "kind": RUN_ALL_CLEANUP, "hub_jobs": len(stages),
                     "note": "face cleanup not on the stored mesh: cleanup (local) + " + " + ".join(stages),
                     "steps": [{"name": CLEANUP_STEP, "jobs": 0}] + [{"name": stage, "jobs": 1} for stage in stages]}
-        if bsig and _face_retexture_pending(character_name, bsig):
+        face_due = _face_retexture_pending(character_name, bsig) if bsig else FACE_CURRENT
+        if face_due:
             stages = _face_stages(character_name, bsig, "face_retexture")
-            return {**out, "kind": RUN_ALL_FACE, "hub_jobs": len(stages),
-                    "note": "the base model has no face retexture: " + " + ".join(stages),
+            what = ("face values changed — not applied yet: " if face_due == FACE_CHANGED
+                    else "the base model has no face retexture: ")
+            return {**out, "kind": RUN_ALL_FACE, "hub_jobs": len(stages), "face_due": face_due,
+                    "note": what + " + ".join(stages),
                     "steps": [{"name": stage, "jobs": 1} for stage in stages]}
+        path = model3d.find_model3d(character_name, bsig) if bsig else None
+        if path is not None and model3d.extension_settings_changed(character_name, path):
+            return {**out, "kind": RUN_ALL_EXTENSION, "hub_jobs": 0,
+                    "note": "tip settings saved, not built yet: extension rebuild (local)",
+                    "steps": [{"name": EXTENSION_STEP, "jobs": 0}]}
         return out
     except Exception as e:  # noqa: BLE001 — a label, never a failure of the poll
         logger.warning("Base Run all plan of %s not computable: %s", character_name, e)
@@ -1263,6 +1298,11 @@ def start_base_run_all(character_name: str) -> Dict[str, Any]:
     if kind == RUN_ALL_FACE:
         result = model3d.trigger_face_retexture(character_name, bsig)
         if result.get("status") == "already_running":
+            return {"status": "busy", "reason": RUN_ALL_BUSY}
+        return {"status": "started", "kind": kind}
+    if kind == RUN_ALL_EXTENSION:
+        from app.core import extension_tip
+        if model3d.generation_running(character_name) or not extension_tip.start_tip_rebuild(character_name, bsig):
             return {"status": "busy", "reason": RUN_ALL_BUSY}
         return {"status": "started", "kind": kind}
     lock = build_lock(character_name)

@@ -21,9 +21,12 @@ An outfit model on the base body inherits the base model's tip override
 (``extension_rig.effective_extension_overrides``) and its texture comes from
 the base's, disc included.
 
-This module also runs "Apply" in the background (``apply_tip_override``: the
-existing CPU extension rebuild, no hub job) and builds the plain body's tip
-panel data (``tip_panels``). It never names a group or a package.
+Saving a setting rebuilds nothing (``save_tip_override``, Task UI2 rule R3):
+the panel then reports the model as due (``tip_panels`` ``due``) and
+"Rebuild" (``start_tip_rebuild``: the existing CPU extension rebuild in the
+background, no hub job) or the Base body tab's "Run all" applies it. This
+module also builds the plain body's tip panel data (``tip_panels``). It
+never names a group or a package.
 """
 from __future__ import annotations
 
@@ -220,30 +223,44 @@ def _tip_groups(character_name: str, signature: str, *, profile=None, meta=None)
     return [group for group in _extension_groups_for(meta, groups) if group["op"] == "pair_tip"]
 
 
-def apply_tip_override(character_name: str, signature: str, group_id: str,
-                       tip: Any = KEEP, *, enabled: Any = KEEP) -> Tuple[bool, Optional[Dict[str, Any]]]:
-    """Store the tip override (``set_tip_override``) and rebuild the
-    extension rig of ``signature`` in a worker thread (the CPU rebuild of
-    ``model3d.rebuild_extension_rig``, forced so a failed attempt is
-    retried). The character's slot is taken BEFORE the store, so a second
-    request while a rebuild runs changes nothing: ``(False, None)``.
-    Otherwise ``(True, stored value)``; the store's ValueError /
-    RuntimeError propagate with the slot released."""
+#: ``save_tip_override`` / ``start_tip_rebuild``: a rebuild of the character runs now.
+REBUILD_RUNNING = "A tip rebuild is already running for this character"
+
+
+def save_tip_override(character_name: str, signature: str, group_id: str,
+                      tip: Any = KEEP, *, enabled: Any = KEEP) -> Optional[Dict[str, Any]]:
+    """Store the tip override / the per-model switch (``set_tip_override``) WITHOUT rebuilding anything (Task UI2,
+    rule R3: a setting is saved on its own). The stored model's extension rig is then out of date with its settings
+    (``model3d.extension_settings_changed``): the panel says so and the Base body tab's "Run all" — or the panel's
+    "Rebuild" (``start_tip_rebuild``) — applies it. RuntimeError(``REBUILD_RUNNING``) while a rebuild of the
+    character runs (it read the settings at its start); the store's ValueError / RuntimeError propagate. Returns
+    the stored tip value (None = none)."""
     with _lock:
         if character_name in _running:
-            return False, None
+            raise RuntimeError(REBUILD_RUNNING)
+    return set_tip_override(character_name, signature, group_id, tip, enabled=enabled)
+
+
+def start_tip_rebuild(character_name: str, signature: str) -> bool:
+    """Rebuild the extension rig of the stored model ``signature`` in a worker thread with the saved settings (the
+    CPU rebuild of ``model3d.rebuild_extension_rig``, forced so a failed attempt is retried; no hub job). False
+    when a rebuild of the character already runs. ValueError when the model is missing."""
+    from app.core.model3d import find_model3d
+    if find_model3d(character_name, signature) is None:
+        raise ValueError("Stored model not found for signature")
+    with _lock:
+        if character_name in _running:
+            return False
         _running[character_name] = signature
+        _results.pop(character_name, None)
     try:
-        stored = set_tip_override(character_name, signature, group_id, tip, enabled=enabled)
+        threading.Thread(target=_apply, args=(character_name, signature), daemon=True,
+                         name=f"extension-tip-{character_name}").start()
     except BaseException:
         with _lock:
             _running.pop(character_name, None)
         raise
-    with _lock:
-        _results.pop(character_name, None)
-    threading.Thread(target=_apply, args=(character_name, signature), daemon=True,
-                     name=f"extension-tip-{character_name}").start()
-    return True, stored
+    return True
 
 
 def _apply(character_name: str, signature: str) -> None:
@@ -306,7 +323,10 @@ def tip_panels(character_name: str, signature: str) -> List[Dict[str, Any]]:
 
     ``{id, label, enabled, active, status, reason, tip_source, sides: [{side: left|right,
     suggested, tip, tangent_up, tangent_out, offset_mm} | None, ...],
-    override, disc, limits, running, error}``. ``tip`` is the built tip
+    override, disc, limits, running, due, error}`` (``due``: the saved
+    settings differ from the ones the model's extension rig was built with —
+    ``model3d.extension_settings_changed``; the same for every group, the
+    rebuild is per model). ``tip`` is the built tip
     (None while the group was not built); ``suggested`` falls back to the
     source group's apex, the tangents to its wall normal. ``side`` follows
     the operation's convention: the first chain lies on +X, the figure's left.
@@ -327,6 +347,12 @@ def tip_panels(character_name: str, signature: str) -> List[Dict[str, Any]]:
         return []
     state = meta.get("extension_rig") or {}
     metrics = state.get("metrics") or {}
+    try:
+        from app.core.model3d import extension_settings_changed
+        due = extension_settings_changed(character_name, path, meta)
+    except Exception:  # noqa: BLE001 — the poll never fails on the panel
+        logger.exception("Extension settings state of %s (%s) not readable", character_name, signature)
+        due = False
     with _lock:
         running = _running.get(character_name) == signature
         last = dict(_results.get(character_name) or {})
@@ -369,5 +395,7 @@ def tip_panels(character_name: str, signature: str) -> List[Dict[str, Any]]:
                        "limits": {"offset_max_mm": TIP_OFFSET_MAX_MM, "diameter_mm": list(DISC_DIAMETER_MM),
                                   "soft_max_mm": DISC_SOFT_MAX_MM, "disc_defaults": dict(DISC_DEFAULTS)},
                        "running": running,
+                       # Saved settings not built yet (the model's extension rig is older than them).
+                       "due": due,
                        "error": last.get("error") or "" if last.get("signature") == signature else ""})
     return panels

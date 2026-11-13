@@ -244,6 +244,21 @@ def inventory(character):
         if iid not in names:
             names[iid] = (get_item(iid) or {}).get("name") or iid
         return names[iid]
+    try:
+        profile = _profile(character)
+    except CleanupError:
+        return []
+
+    def regenerate(row, meta, file):
+        # The per-image Regenerate (Task UI2, rule R2): only a current image is re-made as that very file.
+        if row["action"] == "keep":
+            try:
+                return er.regenerate_plan(character, meta, file_stem=file.stem, profile=profile, cat=cat)
+            except Exception as exc:  # noqa: BLE001 — a listing never fails on one row's plan
+                return {"ok": False, "reason": f"Not computable: {exc}", "jobs": 0, "base_first": False}
+        reason = (er.REGEN_NO_INPUTS if not er.has_stored_inputs(meta)
+                  else er.REGEN_OLD_NAME if row["action"] == "adopt" else er.REGEN_NOT_CURRENT)
+        return {"ok": False, "reason": reason, "jobs": 0, "base_first": False}
     for row in plan["files"]:
         file = folder / row["file"]
         if file.suffix.lower() not in er._IMAGE_EXTS or file.is_symlink() or not file.is_file():
@@ -259,5 +274,6 @@ def inventory(character):
             "status": "current" if row["action"] == "keep" else "unverified" if row["action"] == "review" else "historical",
             "reason": row["reason"], "version": content_version(file),
             "equipped_pieces": {slot: item_name(iid) for slot, iid in (meta.get("equipped_pieces") or {}).items()},
-            "equipped_items": [item_name(iid) for iid in meta.get("equipped_items") or []]})
+            "equipped_items": [item_name(iid) for iid in meta.get("equipped_items") or []],
+            "regenerate": regenerate(row, meta, file)})
     return sorted(rows, key=lambda row: str(row.get("created_at") or ""), reverse=True)

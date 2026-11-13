@@ -482,19 +482,16 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   const running = garmentRunning(info)
   const busy = feedback.pending !== null || running
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
-  /** The width cap: saved (null = the default), then re-fitted from the cached source — local, no hub job;
-   *  without a ready source only saved. */
+  /** The width cap (null = the default) is SAVED on its own (Task UI2, rule R3): nothing runs; the fit's
+   *  fingerprint changes, so the fit row shows it as due and Run all — or the row's Re-fit — re-fits (local). */
   const onWidthCap = async (cap: number | null) => {
     try {
       await apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/footwear/width-cap`, { cap })
+      toast(t('Saved'))
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
-      startPoll(0)
-      return
     }
-    const ready = footwear?.steps.mesh?.status === 'accepted' && footwear?.steps.insole?.status === 'accepted'
-    if (ready) void start({ step: 'fit' })
-    else startPoll(0)
+    startPoll(0)
   }
   // "Fetch finished job…" on the mesh row: the shoe source's own route for footwear.
   const meshFetchUrl = info?.pipeline && itemId

@@ -122,12 +122,11 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenBaseBody }: {
   }
 
   return (
-    <div className="ga-split ga-split-views" style={{ gridTemplateColumns: 'minmax(260px, 360px) minmax(0, 1fr)' }}>
+    <div className="ga-split ga-split-views ga-split-figure">
       <div className="ga-split-col">
+        {/* The figure gets the wider column and no tilt toolbar (user 2026-11-13): the canvas fills the column. */}
         {data.served_url ? (
-          <div className="ga-model3d-fit">
-            <Model3DViewer key={data.served_url} url={data.served_url} format="glb" height={460} previewTilt />
-          </div>
+          <Model3DViewer key={data.served_url} url={data.served_url} format="glb" height={600} />
         ) : (
           <div className="ga-hint" style={{ height: 200, display: 'flex', alignItems: 'center',
             justifyContent: 'center', border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>

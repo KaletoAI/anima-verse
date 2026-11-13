@@ -320,6 +320,107 @@ def _member_snapshot(character, cat, spec, key, outfit, pieces, items, profile, 
         framing, is_base)
 
 
+# --- Regenerate ONE stored expression image (Task UI2, rule R2) ---------------------------------------------------
+#
+# The Expressions tab's per-image "Regenerate" re-renders exactly that file from what its sidecar stored — the set,
+# the member key, the worn pieces / items (with the open pieces its ``outfit_raw`` names) and the mood — never from
+# the character's CURRENT mood or outfit. The same producer as every other expression render (``_execute`` through
+# ``start_expression_attempt(force=True)``): a derived member is edited from its outfit's cached base image (the base
+# rendered first when it is missing), a base re-render drops the members edited from the old base
+# (``_drop_stale_derived``; they render again when used). It is "exactly that file" only while the stored inputs
+# still give that file's identity under the current catalog and appearance; otherwise the result would be a
+# different image, and the button says so instead.
+
+REGEN_NO_INPUTS = ("Made before its inputs were stored — it cannot be regenerated exactly. Delete it; the current "
+                   "image renders when it is used")
+REGEN_NOT_CURRENT = ("Not current: its set, outfit or appearance changed since — Regenerate would make a different "
+                     "image. Delete it; the current one renders when it is used")
+REGEN_OLD_NAME = "Kept under an older file name — apply the expression cleanup first"
+
+
+def has_stored_inputs(meta: Any) -> bool:
+    """Whether an expression sidecar stored what a Regenerate needs: schema 2 with the set, the member key, the
+    outfit identity, the image identity and the worn pieces / items."""
+    return (isinstance(meta, dict) and meta.get("schema") == 2
+            and all(isinstance(meta.get(k), str) and meta.get(k)
+                    for k in ("expression_set", "expression_key", "outfit_raw", "identity"))
+            and isinstance(meta.get("equipped_pieces"), dict)
+            and isinstance(meta.get("equipped_items"), list))
+
+
+def stored_snapshot(character: str, meta: Any, *, profile=None, cat=None):
+    """``(request, "")``: the render request of a stored expression image rebuilt from its sidecar ``meta``
+    (schema 2: ``expression_set``, ``expression_key``, ``outfit_raw``, ``identity``, ``equipped_pieces``,
+    ``equipped_items``, ``mood``) on the character's current profile — wearing what the image was rendered with
+    (``render_profile_of``). ``(None, reason)`` when the inputs are missing (``REGEN_NO_INPUTS``) or no longer
+    give the stored identity (``REGEN_NOT_CURRENT``). ``profile`` / ``cat``: what the caller already holds."""
+    from app.core.expression_sets import catalog_snapshot
+    from app.core.model_refs import outfit_signature_raw
+    from app.core.outfit_options import piece_states
+    from app.models.character import get_character_profile
+    if not has_stored_inputs(meta):
+        return None, REGEN_NO_INPUTS
+    cat = cat or catalog_snapshot()
+    spec = cat.sets.get(meta["expression_set"])
+    key = meta["expression_key"]
+    if spec is None or key not in spec.members:
+        return None, REGEN_NOT_CURRENT
+    if profile is None:
+        with keyed_lock("character_profile", character):
+            profile = deepcopy(get_character_profile(character) or {})
+    rendered = render_profile_of(profile, meta)
+    pieces = {str(k): str(v) for k, v in rendered["equipped_pieces"].items()}
+    items = [str(i) for i in rendered["equipped_items"]]
+    outfit = outfit_signature_raw(pieces, items, character, profile=rendered,
+                                  piece_state=piece_states(rendered, pieces))
+    request = _member_snapshot(character, cat, spec, key, outfit, pieces, items, rendered,
+                               str(meta.get("mood") or ""), mutation_epoch(character))
+    if request.stem != meta["identity"]:
+        return None, REGEN_NOT_CURRENT
+    return request, ""
+
+
+def regenerate_plan(character: str, meta: Any, *, file_stem: str, profile=None, cat=None) -> Dict[str, Any]:
+    """What the per-image Regenerate of the stored image ``file_stem`` would do: ``{ok, reason, jobs, base_first}``
+    — ``jobs`` the image jobs on a first attempt (1; 2 for a derived member whose outfit base is not cached: the
+    base renders first, ``base_first``). ``ok`` False with ``reason`` when the stored inputs are missing or no
+    longer give this file (``stored_snapshot``), or the file is not under its canonical name. Read-only."""
+    request, reason = stored_snapshot(character, meta, profile=profile, cat=cat)
+    if request is None:
+        return {"ok": False, "reason": reason, "jobs": 0, "base_first": False}
+    if request.stem != file_stem:
+        return {"ok": False, "reason": REGEN_OLD_NAME, "jobs": 0, "base_first": False}
+    base_first = not request.is_base and get_cached_expression(base_snapshot(request)) is None
+    return {"ok": True, "reason": "", "jobs": 2 if base_first else 1, "base_first": base_first}
+
+
+def regenerate_stored(character: str, filename: str):
+    """Start the Regenerate of the stored expression image ``filename`` (a plain name in the character's
+    expressions folder): ``start_expression_attempt(request, force=True, ignore_feature_gate=True)`` on the request
+    ``stored_snapshot`` rebuilds — the same producer, routing and backend channel as every expression render.
+    Returns the attempt. LookupError when the file or its sidecar is missing; ValueError(reason) when it cannot be
+    regenerated exactly."""
+    folder = _get_expressions_dir(character)
+    if not filename or Path(filename).name != filename or Path(filename).suffix.lower() not in _IMAGE_EXTS:
+        raise ValueError("Invalid expression filename")
+    image = folder / filename
+    sidecar = image.with_suffix(".json")
+    if image.is_symlink() or sidecar.is_symlink() or not image.is_file():
+        raise LookupError("Expression not found")
+    if image.resolve().parent != folder.resolve():
+        raise ValueError("Invalid expression filename")
+    try:
+        meta = json.loads(sidecar.read_text())
+    except (OSError, ValueError):
+        meta = None
+    request, reason = stored_snapshot(character, meta)
+    if request is None:
+        raise ValueError(reason)
+    if request.stem != image.stem:
+        raise ValueError(REGEN_OLD_NAME)
+    return start_expression_attempt(request, force=True, ignore_feature_gate=True)
+
+
 def base_snapshot(request):
     """The base-image request of a derived expression: the set's default
     member for the same outfit, profile and epoch."""

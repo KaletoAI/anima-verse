@@ -1,15 +1,19 @@
 /**
  * ExtensionTipPanel — one pair tip extension group of the base model, in the
- * Figure tab's plain-body details, the side column next to the viewer: where its tips sit (the
+ * Base body tab, the side column next to the viewer: where its tips sit (the
  * colour marker or, without one, the geometry crest as a suggestion), an
  * offset per side (up / away from the midline, mm), mirror, and a colour
  * disc painted into the texture around each tip.
  *
  * Backend: `extension_tips[]` of `plain_body` in GET /characters/{c}/figure?plain=1
- * (`app/core/extension_tip.py::tip_panels`); Apply/Reset POST
- * /characters/{c}/model3d/extension-tip {signature, group, tip} — the server
- * stores the override and rebuilds the model's extension rig in the
- * background; the caller polls until `running` ends and the viewer reloads.
+ * (`app/core/extension_tip.py::tip_panels`). Settings are saved on their own
+ * (Task UI2, rule R3): Save / Reset / the Enabled box POST
+ * /characters/{c}/model3d/extension-tip {signature, group, tip | enabled} —
+ * stored, nothing rebuilt; the panel then says "Saved — not built yet"
+ * (`due`) and the Base body tab's Run all picks the rebuild up. Rebuild (rule
+ * R2, also when current) POST …/model3d/extension-tip/apply {signature}: the
+ * CPU extension rebuild in the background, no hub job; the caller polls until
+ * `running` ends and the viewer reloads.
  *
  * While the sliders move, `onPreview` hands the caller dots for the viewer:
  * the built tip moved by the draft's difference along the surface tangents
@@ -20,6 +24,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import type { ExtensionTipOverride, ExtensionTipPanelInfo } from './useBaseBody'
+import { TIP_DUE_NOTE, TIP_REBUILD_LABEL } from './baseBodyModel'
 
 export type TipDots = Array<{ at: [number, number, number]; color: string }>
 
@@ -92,11 +97,23 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
     return { ...previous, offsets }
   }) }
 
+  // Save (rule R3): the settings only — nothing is rebuilt; the poll then reports `due`.
   const send = async (change: { tip: ExtensionTipOverride | null } | { enabled: boolean }) => {
     setPosting(true)
     try {
       await apiPost(`/characters/${encodeURIComponent(character)}/model3d/extension-tip`,
         { signature, group: panel.id, ...change })
+      toast(t('Saved'))
+      onStarted()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally { setPosting(false) }
+  }
+  // Rebuild (rule R2): the model's extension bones from the saved settings — also when they are built already.
+  const rebuild = async () => {
+    setPosting(true)
+    try {
+      await apiPost(`/characters/${encodeURIComponent(character)}/model3d/extension-tip/apply`, { signature })
       onStarted()
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
@@ -111,9 +128,10 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
     : panel.active === false ? t('Source group switched off for this model')
     : panel.error ? `${t('Failed')}: ${panel.error}`
     : panel.status !== 'applied' ? `${t('Not built')}${panel.reason ? `: ${panel.reason}` : ''}`
+    : panel.due ? t(TIP_DUE_NOTE)
     : panel.disc?.status === 'failed' ? `${t('Colour disc failed')}: ${panel.disc.reason}`
     : ''
-  const help = t('Where the tips of this group sit. Without a colour marker the geometry crest is a suggestion; move each tip along the body surface (up, and away from the midline) and add a colour disc around it. Apply rebuilds the extension bones of the base model; outfit models built on it take its tips and texture.')
+  const help = t('Where the tips of this group sit. Without a colour marker the geometry crest is a suggestion; move each tip along the body surface (up, and away from the midline) and add a colour disc around it. Save stores the settings without building; Rebuild (or Run all) rebuilds the extension bones of the base model; outfit models built on it take its tips and texture.')
   const sideLabel = (i: number) => panel.sides[i]?.side === 'right' ? t('Right') : t('Left')
 
   return (
@@ -187,11 +205,17 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
       <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 }}>
         <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={locked || !changed}
           title={changed ? t('Unsaved changes') : undefined}
-          onClick={() => void send({ tip: draft })}>{t('Apply')}</button>
+          onClick={() => void send({ tip: draft })}>{t('Save')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={locked || !changed}
           onClick={() => setDraft(stored)}>{t('Revert')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={locked || !panel.override}
+          title={t('Saves the defaults (nothing is rebuilt)')}
           onClick={() => void send({ tip: null })}>{t('Reset')}</button>
+        <button type="button" className={`ga-btn ga-btn-sm${panel.due ? ' ga-btn-primary' : ''}`}
+          disabled={busy || changed}
+          title={changed ? t('Save or revert the changes first — Rebuild builds the saved settings')
+            : t('Rebuilds the extension bones of the base model from the saved settings, also when they are built already.')}
+          onClick={() => void rebuild()}>{t(TIP_REBUILD_LABEL)}</button>
       </div>
     </fieldset>
   )

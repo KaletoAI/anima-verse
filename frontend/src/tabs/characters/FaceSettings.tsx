@@ -12,7 +12,8 @@
  *   (POST …/model3d/options {face_photo, face_controls}); only deviations from the defaults are stored. Until
  *   now they could only be set inside the "Face retexture…" dialog, i.e. while running it. A run without the
  *   dialog's values (the face step of a new model, Run all, the Improvements queue) uses the saved ones; the
- *   dialog starts from them.
+ *   dialog starts from them and a dialog run remembers its values. Saved values that differ from the ones the
+ *   stored face retexture ran with make the face step due (Task UI2): `dueLine` says so, Run all redoes it.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Field } from '@anima/player-ui'
@@ -26,8 +27,11 @@ import {
 } from './baseBodyModel'
 import type { FaceControls, FacePhoto } from './baseBodyModel'
 
-export function FaceSettings({ character, st, pending, onReload }: {
+export function FaceSettings({ character, st, pending, onReload, dueLine }: {
   character: string
+  /** "Face values changed — not applied yet (N hub jobs)" when the saved values are not the applied ones (the Base
+   *  body tab's Run all plan, `faceDueLine`); null/undefined = nothing to say. */
+  dueLine?: string | null
   /** GET …/model3d — its `options` hold the saved values. */
   st: Model3DStatus
   /** A model run goes: the switches wait (they decide the next run). */
@@ -109,6 +113,7 @@ export function FaceSettings({ character, st, pending, onReload }: {
           onChange={(e) => { void setOption('face_before_rig', e.target.checked) }} />
         <span>{t('Improve face before rigging')}</span>
       </label>
+      {dueLine ? <div className="ga-hint" role="status">{dueLine} — {t('Run all applies them')}</div> : null}
       <details>
         <summary style={{ cursor: 'pointer' }}>{t('Face retexture values')}{changed ? ` · ${t('not saved')}` : ''}</summary>
         <div className="ga-form" style={{ marginTop: 6 }}>
