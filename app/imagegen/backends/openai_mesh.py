@@ -325,14 +325,21 @@ class OpenAIMeshBackend(ImageBackend):
 
     def check_availability(self) -> bool:
         if not self.model:
-            logger.warning("%s: kein Model/Alias konfiguriert", self.name)
+            logger.warning("%s: no model/alias configured", self.name)
+            self._mark_unavailable()
+            return False
+        if not self.api_key:
+            # The gateway answers every keyless request with 401: do not ask
+            # it (an empty test instance used to send one probe per seeded
+            # alias on every service start and filled the hub's call log).
+            logger.info("%s: no API key — not probed, unavailable", self.name)
             self._mark_unavailable()
             return False
         try:
             r = requests.get(f"{self.api_url}/v1/models",
                              headers=self._headers(), timeout=10)
             if r.status_code in (401, 403):
-                logger.warning("%s: Auth abgelehnt (HTTP %d)", self.name, r.status_code)
+                logger.warning("%s: auth refused (HTTP %d)", self.name, r.status_code)
                 self._mark_unavailable()
                 return False
             if r.status_code != 200:

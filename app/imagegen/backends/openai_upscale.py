@@ -6,8 +6,11 @@ from urllib.parse import quote, urljoin
 
 import requests
 
+from app.core.log import get_logger
 from app.imagegen.base import ImageBackend, GatewayRejectedError, GatewayInputMismatchError, GatewayOutputError
 from app.imagegen.backends._gateway_job import submit_job, poll_job, download_result, stage_kwargs, stage_cancel
+
+logger = get_logger('image_backends')
 
 
 class OpenAIUpscaleBackend(ImageBackend):
@@ -32,6 +35,13 @@ class OpenAIUpscaleBackend(ImageBackend):
         return {'Authorization': f'Bearer {self.api_key}'} if self.api_key else {}
 
     def check_availability(self):
+        if not self.api_key:
+            # Keyless gateway requests are refused with 401 — not probed (see
+            # openai_mesh.check_availability).
+            logger.info('%s: no API key — not probed, unavailable', self.name)
+            self._schema = (False, '', frozenset())
+            self._mark_unavailable()
+            return False
         try:
             response = requests.get(f'{self.api_url}/v1/generations/{quote(self.model, safe="")}/schema', headers=self._headers(), timeout=10)
             response.raise_for_status()
