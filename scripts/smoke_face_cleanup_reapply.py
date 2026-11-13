@@ -42,20 +42,30 @@ re-apply" block:
     humanoid rig route is configured." (nothing cleaned); face path with a
     failing face check 409 naming its message (nothing cleaned). The route
     carries require_admin.
-[4] Rerig path on Demo (source b"glTF-src", recorded skipped): 200
+[4] Rerig path on Demo (source SRC — a real one-triangle GLB, ``tiny_glb``
+    — recorded skipped): 200
     {status generating, follow_up rerig, jobs [rig]}; afterwards the source
-    is b"glTF-src-clean", its sidecar face_cleanup {status applied,
-    reapplied True}, clean_face saw b"glTF-src" once, rerig_model(Demo,
+    is SRC + b"-clean", its sidecar face_cleanup {status applied,
+    reapplied True}, clean_face saw SRC once, rerig_model(Demo,
     BSIG) once, face_retexture_model never, after_base_face_change(Demo,
     BSIG) once, the result {ok True, follow_up rerig}, the guard released;
-    the mesher's bytes b"glTF-src" are retained as unrigged/mesher/BSIG.glb
+    the mesher's bytes SRC are retained as unrigged/mesher/BSIG.glb
     (the source was never cleaned before, so it WAS the mesher's output).
 [5] Face path on Demo (facefix present, record at VERSION-1, the retained
-    mesher file b"glTF-mesher"): clean_face saw b"glTF-mesher" (never the
-    cleaned source), face_retexture_model(Demo, BSIG) once, rerig never.
+    mesher file MESHER — SRC's triangle with one corner 0.01 farther out, within
+    the cleanup's own move: tolerance 0.15 x 110 mm / 1700 mm x height 1.7 =
+    0.0165): clean_face saw MESHER (never the cleaned source),
+    face_retexture_model(Demo, BSIG) once, rerig never.
+[5b] Ruling A39 — a mesher original of ANOTHER mesh is refused, nothing changes (source SRC, its record, the
+    mesher file; clean_face never called, no follow-up): MESHER_OTHER (4 vertices, 2 triangles against 3 / 1)
+    -> "The retained mesher original is another mesh (4 vertices, 2 triangles) than the stored source (3
+    vertices, 1 triangles) — …"; MESHER_WIDER (same counts, a corner 0.05 out: 0.05 / 1.7 = 2.9 % of the height
+    against the tolerance 0.0165 / 1.7 = 0.97 % -> "1.0 %") -> "… another extent … an edge 2.9 % of the figure
+    height apart, the cleanup moves at most 1.0 % …".
 [6] Old path, Plain "0aaaaaaa": rerig_model(Plain, "0aaaaaaa").
 [7] clean_face raises "boom": result {ok False, error "Face cleanup failed:
-    boom"}, the source bytes unchanged, no follow-up, guard released.
+    boom"}, the source bytes (SRC) unchanged, no follow-up, guard released (the
+    mesher file MESHER of [5] passes the A39 check first).
 [8] GET extras: ``routes/figure._plain_body_extras`` (GET /figure?plain=1) gives face_cleanup.signature
     BSIG, collision_scales = collision.default_scales() (nothing saved),
     and the base model the face fields
@@ -73,6 +83,39 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 FAILS = []
+
+
+def tiny_glb(vertices):
+    """A real one-mesh GLB (POSITION + uint16 indices, a fan over ``vertices``) — what model3d's A39 check
+    parses (``model_validate.parse_glb`` + ``glb_mesh.accessor_array``)."""
+    import struct
+    pos = b"".join(struct.pack("<3f", *v) for v in vertices)
+    idx = b"".join(struct.pack("<3H", 0, i, i + 1) for i in range(1, len(vertices) - 1))
+    idx += b"\0" * (-len(idx) % 4)
+    lo = [min(v[k] for v in vertices) for k in range(3)]
+    hi = [max(v[k] for v in vertices) for k in range(3)]
+    gltf = {"asset": {"version": "2.0"}, "scene": 0, "scenes": [{"nodes": [0]}], "nodes": [{"mesh": 0}],
+            "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+            "buffers": [{"byteLength": len(pos) + len(idx)}],
+            "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": len(pos)},
+                            {"buffer": 0, "byteOffset": len(pos), "byteLength": len(idx)}],
+            "accessors": [{"bufferView": 0, "componentType": 5126, "count": len(vertices), "type": "VEC3",
+                           "min": lo, "max": hi},
+                          {"bufferView": 1, "componentType": 5123, "count": 3 * (len(vertices) - 2),
+                           "type": "SCALAR"}]}
+    js = json.dumps(gltf).encode()
+    js += b" " * (-len(js) % 4)
+    body = pos + idx
+    chunks = struct.pack("<I4s", len(js), b"JSON") + js + struct.pack("<I4s", len(body), b"BIN\0") + body
+    return struct.pack("<4sII", b"glTF", 2, 12 + len(chunks)) + chunks
+
+
+# The stored source and the mesher originals of [5]/[5b]/[7] (heights 1.7 = the figure's height in mesh units).
+TRIANGLE = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.7, 0.0)]
+SRC = tiny_glb(TRIANGLE)
+MESHER = tiny_glb([(0.0, 0.0, 0.0), (1.01, 0.0, 0.0), (0.0, 1.7, 0.0)])       # 0.01 apart: the cleanup's own move
+MESHER_WIDER = tiny_glb([(0.0, 0.0, 0.0), (1.05, 0.0, 0.0), (0.0, 1.7, 0.0)])  # 0.05 apart: beyond it
+MESHER_OTHER = tiny_glb(TRIANGLE + [(1.0, 1.7, 0.0)])                          # 4 vertices, 2 triangles
 
 
 def check(label, got, want):
@@ -153,7 +196,7 @@ def main() -> int:
         version = face_cleanup.VERSION
 
         def write_source(record):
-            source.write_bytes(b"glTF-src")
+            source.write_bytes(SRC)
             source.with_suffix(".json").write_text(json.dumps({"rig": "none", "face_cleanup": record}))
 
         def wait_guard():
@@ -248,37 +291,58 @@ def main() -> int:
                   (409, "The reference photo has changed."))
             face_problems["list"] = []
             (models / "facefix" / f"{bsig}.glb").unlink()
-            check("nothing cleaned", (CLEANS, source.read_bytes()), ([], b"glTF-src"))
+            check("nothing cleaned", (CLEANS, source.read_bytes()), ([], SRC))
 
             print("[4] rerig path (pipeline)")
             check("start", post("/characters/Demo/model3d/face-cleanup?signature=0bbbbbbb")[1] | {"task_id": ""},
                   {"status": "generating", "follow_up": "rerig", "jobs": ["rig"], "task_id": ""})
             wait_guard()
             meta = json.loads(source.with_suffix(".json").read_text())
-            check("source cleaned", source.read_bytes(), b"glTF-src-clean")
+            check("source cleaned", source.read_bytes(), SRC + b"-clean")
             check("record", (meta["face_cleanup"]["status"], meta["face_cleanup"].get("reapplied")), ("applied", True))
-            check("clean input", CLEANS, [b"glTF-src"])
+            check("clean input", CLEANS, [SRC])
             check("rerig", RERIGS, [("Demo", bsig)])
             check("no face", FACES, [])
             check("after", AFTER, [("Demo", bsig)])
             result = model3d._face_cleanup_results.get("Demo") or {}
             check("result", (result.get("ok"), result.get("follow_up")), (True, "rerig"))
             check("state result", state()["result"]["ok"], True)
-            check("mesher retained", (mesher.is_file() and mesher.read_bytes(), state()["mesher_retained"]), (b"glTF-src", True))
+            check("mesher retained", (mesher.is_file() and mesher.read_bytes(), state()["mesher_retained"]), (SRC, True))
             CLEANS.clear(); RERIGS.clear(); AFTER.clear()
 
             print("[5] face path (pipeline)")
             write_source({"status": "applied", "version": version - 1})
-            mesher.write_bytes(b"glTF-mesher")
+            mesher.write_bytes(MESHER)
             (models / "facefix" / f"{bsig}.glb").write_bytes(b"glTF-facefix")
             check("start", post("/characters/Demo/model3d/face-cleanup")[1]["follow_up"], "face_retexture")
             wait_guard()
-            check("clean input is the mesher file", CLEANS, [b"glTF-mesher"])
-            check("source cleaned from it", source.read_bytes(), b"glTF-mesher-clean")
+            check("clean input is the mesher file", CLEANS, [MESHER])
+            check("source cleaned from it", source.read_bytes(), MESHER + b"-clean")
             check("face", FACES, [("Demo", bsig)])
             check("no rerig", RERIGS, [])
-            (models / "facefix" / f"{bsig}.glb").unlink()
             CLEANS.clear(); FACES.clear(); AFTER.clear()
+
+            print("[5b] a mesher original of another mesh is refused (Ruling A39)")
+            for label, other, error in (
+                    ("other counts", MESHER_OTHER,
+                     "The retained mesher original is another mesh (4 vertices, 2 triangles) than the stored source "
+                     "(3 vertices, 1 triangles) — nothing was changed. Regenerate the model to clean a fresh mesh."),
+                    ("other extent", MESHER_WIDER,
+                     "The retained mesher original has another extent than the stored source (an edge 2.9 % of the "
+                     "figure height apart, the cleanup moves at most 1.0 %) — nothing was changed. Regenerate the "
+                     "model to clean a fresh mesh.")):
+                write_source({"status": "applied", "version": version - 1})
+                mesher.write_bytes(other)
+                check(f"{label}: start", post("/characters/Demo/model3d/face-cleanup")[0], 200)
+                wait_guard()
+                result = model3d._face_cleanup_results.get("Demo") or {}
+                check(f"{label}: refused", (result.get("ok"), result.get("error")), (False, error))
+                check(f"{label}: nothing changed", (CLEANS, source.read_bytes(), mesher.read_bytes(),
+                                                    json.loads(source.with_suffix(".json").read_text())["face_cleanup"]),
+                      ([], SRC, other, {"status": "applied", "version": version - 1}))
+                check(f"{label}: no follow-up", (RERIGS, FACES, AFTER), ([], [], []))
+            mesher.write_bytes(MESHER)
+            (models / "facefix" / f"{bsig}.glb").unlink()
 
             print("[6] old path")
             plain = get_character_dir("Plain") / "model3d"
@@ -300,7 +364,7 @@ def main() -> int:
             wait_guard()
             result = model3d._face_cleanup_results.get("Demo") or {}
             check("result", (result.get("ok"), result.get("error")), (False, "Face cleanup failed: boom"))
-            check("source unchanged", source.read_bytes(), b"glTF-src")
+            check("source unchanged", source.read_bytes(), SRC)
             check("no follow-up", (RERIGS, FACES, AFTER), ([], [], []))
             with model3d._lock:
                 check("guard released", "Demo" in model3d._generating, False)

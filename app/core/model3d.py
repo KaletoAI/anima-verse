@@ -4795,6 +4795,12 @@ def _reclean_face_source(character_name: str, signature: str, *, from_stored: bo
     lips = True
     if mesher.is_file():
         blob = mesher.read_bytes()
+        # Ruling A39: the mesher original must be the mesh the source was cleaned from — a leftover of an
+        # earlier mesh of the same signature (Kira 2026-11-13) would be published as the source.
+        other = _other_mesh_reason(blob, source.read_bytes())
+        if other:
+            logger.warning("Face cleanup re-apply %s/%s refused: %s", character_name, signature, other)
+            return {"ok": False, "error": other}
     elif previous.get("status") == "applied" and from_stored:
         blob, lips = source.read_bytes(), False
     elif previous.get("status") == "applied":
@@ -4828,6 +4834,58 @@ def _reclean_face_source(character_name: str, signature: str, *, from_stored: bo
     _publish_sidecar(source, meta)
     logger.info("Face cleanup re-applied %s/%s: %s", character_name, signature, face_cleanup.summary(record))
     return {"ok": True, "face_cleanup": record, "changed": cleaned != blob}
+
+
+def _mesh_shape(blob: bytes) -> Tuple[int, int, Any, Any]:
+    """``(vertices, triangles, bbox min, bbox max)`` over every triangle primitive of the GLB ``blob`` (a real
+    parse: ``model_validate.parse_glb`` + ``glb_mesh.accessor_array``). ValueError for an unreadable file."""
+    import numpy as np
+    from app.core.glb_mesh import accessor_array
+    from app.core.model_validate import parse_glb
+    parsed = parse_glb(blob)
+    vertices = triangles = 0
+    lo, hi = np.full(3, np.inf), np.full(3, -np.inf)
+    for mesh in parsed["gltf"].get("meshes") or []:
+        for primitive in mesh.get("primitives") or []:
+            if primitive.get("mode", 4) != 4 or "POSITION" not in (primitive.get("attributes") or {}):
+                continue
+            positions = np.asarray(accessor_array(parsed, primitive["attributes"]["POSITION"]), np.float64)
+            vertices += len(positions)
+            count = (int(parsed["gltf"]["accessors"][primitive["indices"]]["count"]) if "indices" in primitive
+                     else len(positions))
+            triangles += count // 3
+            lo, hi = np.minimum(lo, positions.min(0)), np.maximum(hi, positions.max(0))
+    if not vertices:
+        raise ValueError("no triangle mesh in the file")
+    return vertices, triangles, lo, hi
+
+
+def _other_mesh_reason(mesher: bytes, source: bytes) -> str:
+    """Why the mesher original ``mesher`` is NOT the mesh the source ``source`` was cleaned from (Ruling A39), ""
+    when it is. The face cleanup only moves vertices: vertex and triangle counts stay exactly, and no vertex moves
+    farther than its displacement cap (``face_cleanup.MOVE_CAP_SEPARATION`` of the widest eye separation it
+    accepts, ``EYE_SEPARATION_MM``; 16.5 mm on a 1.70 m figure, scaled to the source's height) — so neither
+    bounding box edge may move farther either."""
+    from app.core import face_cleanup
+    try:
+        m_vertices, m_triangles, m_lo, m_hi = _mesh_shape(mesher)
+        s_vertices, s_triangles, s_lo, s_hi = _mesh_shape(source)
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        return f"The mesher's original mesh or the stored source cannot be read ({exc}) — nothing was changed."
+    if (m_vertices, m_triangles) != (s_vertices, s_triangles):
+        return (f"The retained mesher original is another mesh ({m_vertices} vertices, {m_triangles} triangles) "
+                f"than the stored source ({s_vertices} vertices, {s_triangles} triangles) — nothing was changed. "
+                "Regenerate the model to clean a fresh mesh.")
+    height = float((s_hi - s_lo).max())
+    tolerance = (face_cleanup.MOVE_CAP_SEPARATION * face_cleanup.EYE_SEPARATION_MM[1]
+                 / face_cleanup.REFERENCE_HEIGHT_MM * height)
+    shift = float(max(abs(m_lo - s_lo).max(), abs(m_hi - s_hi).max()))
+    if shift > tolerance:
+        return (f"The retained mesher original has another extent than the stored source (an edge "
+                f"{shift / height * 100:.1f} % of the figure height apart, the cleanup moves at most "
+                f"{tolerance / height * 100:.1f} %) — nothing was changed. Regenerate the model to clean a fresh "
+                "mesh.")
+    return ""
 
 
 MESHER_MISSING = ("The stored mesh was cleaned by an older version and the mesher's original mesh is not retained "
