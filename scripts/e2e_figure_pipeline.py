@@ -887,6 +887,8 @@ def scenario_1() -> Scenario:
     sc.check("steps ran once each, in plan order", ran == plan, ran)
     sc.check("exactly one Build run (a Build's own piece completion queues no follow-up)", result["builds"] == 1,
              [(r["reason"], r["automatic"]) for r in result["runs"]])
+    sc.check("all stub calls == the Build's estimate (A25)", len(result["calls"]) == result["estimate"]["hub_jobs"],
+             f"{len(result['calls'])} vs {result['estimate']['hub_jobs']}")
     _common_checks(sc, result, KAI)
     by = {s["step"]: s for s in result["steps"]}
     shape_key = str(before["wanted"].get("shape") or "")
@@ -906,8 +908,9 @@ def scenario_1() -> Scenario:
                  [(g.get("step"), g.get("view")) for g in renders] == [("ghost", "back")], renders)
         sc.check("jacket: one garment mesh", sum(_kind(c) == "img2mesh" for c in calls) == 1,
                  [_kind(c) for c in calls])
-        sc.note(f"jacket chain 'failed — Retry' is estimated 0 (ruling 7a) and spent {len(calls)} stub calls: "
-                + ", ".join(_kind(c) for c in calls))
+        sc.check("jacket chain 'failed — Retry': calls == its retry estimate (A25)",
+                 len(calls) == by["pieces"]["jobs"],
+                 f"{len(calls)} vs {by['pieces']['jobs']}: " + ", ".join(_kind(c) for c in calls))
     for step in ("fits", "assemble"):
         if step in by:
             sc.check(f"{step}: no hub job", not by[step]["calls"], [_kind(c) for c in by[step]["calls"]])
@@ -1031,6 +1034,9 @@ def scenario_2() -> Scenario:
     sc.take(result)
     ran = [s["step"] for s in result["steps"]]
     sc.check("automatic Build runs the shape and no plain body", "shape" in ran and "plain_body" not in ran, ran)
+    sc.check("all stub calls == the Build's estimate (A24: the outdated back re-composited, no draft)",
+             len(result["calls"]) == result["estimate"]["hub_jobs"],
+             f"{len(result['calls'])} vs {result['estimate']['hub_jobs']}: " + ", ".join(_kind(c) for c in result["calls"]))
     _common_checks(sc, result, YLVA)
     shape = str(before["wanted"].get("shape") or "")
     from app.core.model_refs import get_model_refs_dir
