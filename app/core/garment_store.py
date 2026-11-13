@@ -635,6 +635,33 @@ def user_accept_holds(record: Dict[str, Any], character_name: str = "") -> bool:
     return True
 
 
+def image_accept_holds(path: Path, record: Dict[str, Any]) -> bool:
+    """False for a garment IMAGE the user took by hand although its gate refused it (Ruling A37, "Use this":
+    ``user_accepted {at, attempt, attempt_sha256, inputs, reasons}``) once any of its inputs changed: the file
+    is no longer the attempt the user saw (``attempt_sha256``), or an image it was made from (``inputs``:
+    ``{file name in the same folder: sha256}`` — the source step's image, a drafted back's front) is no longer
+    that file. True for every other record. Such an image never counts as accepted again; the chain renders the
+    view anew."""
+    block = record.get("user_accepted")
+    if not isinstance(block, dict) or "attempt_sha256" not in block:
+        return True
+    from app.core.base_body import file_sha256
+    if file_sha256(path) != block.get("attempt_sha256"):
+        return False
+    inputs = block.get("inputs") if isinstance(block.get("inputs"), dict) else {}
+    return all(file_sha256(path.parent / str(name)) == sha for name, sha in inputs.items())
+
+
+def accepted_image(path: Path) -> bool:
+    """A garment image (or another chain file with a record) that is accepted: on disk, ``accepted`` True in its
+    record, and — taken by the user against its gate — still made from the inputs the user saw
+    (``image_accept_holds``)."""
+    if not path.is_file():
+        return False
+    record = read_record(path.with_suffix(".json"))
+    return record.get("accepted") is True and image_accept_holds(path, record)
+
+
 def _accepted_on(record: Dict[str, Any], base_model_sha: str) -> bool:
     """Accepted on the base model ``base_model_sha``. A FOOTWEAR fit of an
     older ``footwear_fit.FOOTWEAR_FIT_VERSION`` (an older fsig: the version is

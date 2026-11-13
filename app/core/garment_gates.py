@@ -739,6 +739,38 @@ def shade_distance(rgb, colour) -> np.ndarray:
     return np.abs(rgb - scale * colour).mean(-1)
 
 
+def attempt_distance(worn_rgb, region, edit_rgb, edit_mask) -> Optional[Dict[str, Any]]:
+    """How far a passing attempt is from the worn piece (Ruling A37: of several stored attempts that pass, the
+    nearest is published): measured on the OVERLAP of the worn garment ``region`` and the attempt's mask, both
+    images in the gate frame (the attempt registered as gated). Two terms in RGB units, summed into ``score``
+    (lower = nearer):
+
+    ``colour``: per pixel the mean |ΔRGB| of the attempt to the worn pixel scaled to the attempt pixel's own
+    brightness — ``shade_distance`` with the worn pixel as the colour: a hue comparison that a lighter or darker
+    rendering of the same cloth does not change.
+
+    ``structure``: per pixel the |difference| of the brightness (mean of RGB) of the worn pixel and of the attempt
+    pixel scaled by median(worn brightness) / median(attempt brightness) over the overlap — the light and shade
+    pattern (folds, a ruffle, an opening showing the inside) with the overall exposure taken out.
+
+    ``{colour, structure, score, overlap}`` (``overlap`` in pixels); None without a worn image or an empty
+    overlap. Reads arrays only."""
+    if worn_rgb is None or region is None:
+        return None
+    overlap = np.asarray(region, dtype=bool) & np.asarray(edit_mask, dtype=bool)
+    if not overlap.any():
+        return None
+    worn = np.asarray(worn_rgb, dtype=np.float32)[..., :3][overlap]
+    edit = np.asarray(edit_rgb, dtype=np.float32)[..., :3][overlap]
+    worn_l, edit_l = worn.mean(1), edit.mean(1)
+    scale = edit_l / np.maximum(worn_l, 1.0)
+    colour = float(np.abs(edit - scale[:, None] * worn).mean(1).mean())
+    exposure = float(np.median(worn_l)) / max(float(np.median(edit_l)), 1.0)
+    structure = float(np.abs(edit_l * exposure - worn_l).mean())
+    return {"colour": round(colour, 3), "structure": round(structure, 3),
+            "score": round(colour + structure, 3), "overlap": int(overlap.sum())}
+
+
 def skin_pixels(ghost_rgb, ghost_mask, skin, piece, height: int) -> np.ndarray:
     """The ghost pixels that count as skin (block "Skin or piece"): within
     ``SKIN_DRGB`` of ``skin`` (mean |ΔRGB|), at least as near the skin as

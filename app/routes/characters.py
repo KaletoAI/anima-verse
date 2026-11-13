@@ -2047,7 +2047,8 @@ def get_character_garment(character_name: str, item_id: str,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Wardrobe's panel of one own-mesh piece (or any garment of the
     character): ``{pipeline, item_id, name, kind, mesh_mode, worn, status,
-    garment, limits, run, view_runs}`` (``run``: ``garments.run_estimate`` — the dialog's "Run all" label;
+    garment, limits, run, view_runs, use_runs}`` (``run``: ``garments.run_estimate`` — the dialog's "Run all" label;
+    ``use_runs``: ``garments.use_plans`` — "Use this" on each stored attempt, Ruling A37;
     ``view_runs``: ``garments.view_plans`` — each per-view button's jobs, follow-up and missing prerequisites,
     None without per-view runs; ``mesh_mode``: the item's mode,
     ``garment_set.mesh_mode_of``; None for hair) — ``garment`` is ``garments.garment_info`` (a
@@ -2099,7 +2100,9 @@ def get_character_garment(character_name: str, item_id: str,
                # not current — ``garments.run_estimate``, the same plan the run takes; None off the pipeline.
                "run": garments.run_estimate(character_name, item_id, profile=profile) if pipeline else None,
                # Ruling A33: what each per-view button of the step grid spends and needs, before the click.
-               "view_runs": garments.view_plans(character_name, item_id, profile=profile) if pipeline else None}
+               "view_runs": garments.view_plans(character_name, item_id, profile=profile) if pipeline else None,
+               # Ruling A37: "Use this" on each stored attempt — passing / by the user, why not, the cost after.
+               "use_runs": garments.use_plans(character_name, item_id, profile=profile) if pipeline else None}
     from app.core.model_overview import annotate_garment
     return annotate_garment(payload)
 
@@ -2671,6 +2674,31 @@ def get_character_garment_image(character_name: str, item_id: str, step: str, vi
     if path is None or not path.is_file():
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     return etag_file_response(path, request, "image/png")
+
+
+@router.post("/{character_name}/garments/{item_id}/images/{step}/{view}/attempts/{attempt}/use")
+def use_character_garment_attempt(character_name: str, item_id: str, step: str, view: str, attempt: int,
+                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A37, "Use this": the stored ``attempt`` of ``view`` of the edit ``step`` becomes the view's accepted
+    image — a refused one accepted by the user (``garments.use_attempt``). Spends no job; the view's later
+    images and the mesh become due (``follow_up``: the chain's estimate now). Admin-only. 400 for a bad
+    step / view / attempt, 409 when the attempt cannot be used or a garment run of the piece is in progress."""
+    from app.core import garment_store as gs
+    from app.core import garments
+    from app.core.garment_images import ATTEMPTS, AttemptUnusable
+    if step not in gs.IMAGE_STEPS:
+        raise HTTPException(status_code=400, detail=f"step must be one of {', '.join(gs.IMAGE_STEPS)}")
+    if view not in gs.GARMENT_VIEWS:
+        raise HTTPException(status_code=400, detail=f"view must be one of {', '.join(gs.GARMENT_VIEWS)}")
+    if not 1 <= attempt <= ATTEMPTS:
+        raise HTTPException(status_code=400, detail=f"attempt must be 1..{ATTEMPTS}")
+    _require_character(character_name)
+    try:
+        return garments.use_attempt(character_name, item_id, step, view, attempt)
+    except (AttemptUnusable, garments.UseBusy) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/{character_name}/garments/{item_id}/footwear/image/{which}")

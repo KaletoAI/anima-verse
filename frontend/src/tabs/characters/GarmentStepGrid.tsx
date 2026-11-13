@@ -18,6 +18,12 @@
  * reason, and a separate "Render … first" button names what it renders first
  * and the hub jobs of the whole click. A pair whose views disagree marks the
  * view to regenerate (a view button never repairs the pair).
+ *
+ * Ruling A37: every stored attempt tile has "Use this" (0 jobs; the hub jobs
+ * of what becomes due after it — later images, mesh — from the server's
+ * estimate on the button; fit and assembly on the CPU). A refused attempt
+ * taken this way shows "Accepted by you" on the view until an image it was
+ * made from changes ("Acceptance voided").
  * The hair row keeps its own layout (GarmentSteps).
  */
 import { Fragment } from 'react'
@@ -33,8 +39,8 @@ import { MeshJobFetch } from './MeshJobFetch'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type {
-  GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit, GateRecord, RunFeedback, ViewNeed,
-  ViewRunPlan, ViewRunPlans,
+  AttemptUsePlan, AttemptUsePlans, GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit,
+  GateRecord, RunFeedback, ViewNeed, ViewRunPlan, ViewRunPlans,
 } from './useGarment'
 
 /** Thumbnail height of an image cell (px). */
@@ -86,36 +92,93 @@ export function GateIcon({ specs, record, limits, view, extra }: {
   )
 }
 
+/** The steps after a "Use this", named as the grid names them (the estimate's step keys). */
+const FOLLOW_STEP_WORDS: Record<string, string> = {
+  worn: 'worn views', ghost: 'piece-only views', cutout: 'cut-outs', mesh: 'mesh', fit: 'fit',
+}
+
+/** "Use this" on one stored attempt (Ruling A37): 0 jobs for the click itself; the label names the hub jobs of
+ *  what becomes due after it (the server's estimate), the tooltip what the click does — a refused attempt is
+ *  accepted by the user ("Accepted by you"), voided when an image it was made from changes. */
+function UseAttemptButton({ plan, label, attempt, disabled, onUse }: {
+  plan: AttemptUsePlan
+  label: string
+  attempt: number
+  disabled: boolean
+  onUse: () => void
+}) {
+  const { t } = useI18n()
+  if (plan.in_use) {
+    return <span className="ga-hint" style={{ fontSize: '0.7em' }} title={t('This attempt is the image in use')}>{t('In use')}</span>
+  }
+  const follow = plan.follow_up
+  const jobs = follow?.hub_jobs
+  const cost = follow == null ? '' : jobs == null ? t('cost unknown')
+    : jobs === 0 ? t('then no hub job') : jobs === 1 ? t('then 1 hub job') : t('then {n} hub jobs').replace('{n}', String(jobs))
+  const steps = (follow?.steps || []).map((s) => t(FOLLOW_STEP_WORDS[s] || s)).join(', ')
+  const title = [
+    `${t('Use this')}: ${label} · ${t('Attempt')} ${attempt}`,
+    plan.block ? t(plan.block) : '',
+    !plan.block ? t('The click itself spends no hub job.') : '',
+    !plan.block && plan.passing ? t('Its gate passed: it becomes the accepted image.') : '',
+    !plan.block && !plan.passing
+      ? t('Its gate refused it: you accept it ("Accepted by you"). Any change of an image it was made from voids that.')
+      : '',
+    follow ? `${t('Then due')}: ${steps || t('nothing')} — ${follow.note}` : '',
+    follow ? t('The fit and the assembly run on the CPU.') : '',
+  ].filter(Boolean).join('\n')
+  return (
+    <button type="button" className="ga-btn ga-btn-sm" style={{ fontSize: '0.68em', padding: '0 4px' }}
+      disabled={disabled || !!plan.block} title={title} aria-label={title.split('\n')[0]}
+      onClick={onUse}>
+      {plan.block ? t('Use this') : `${t('Use this')}${cost ? ` · ${cost}` : ''}`}
+    </button>
+  )
+}
+
 /** The refused/replaced attempts of an image as tiny thumbnails (click =
- *  lightbox, reason and numbers on hover). */
-export function AttemptThumbs({ attempts, label, chips, limits, view }: {
+ *  lightbox, reason and numbers on hover) — with "Use this" under each when
+ *  the caller passes the plans (Ruling A37; the clothing grid). */
+export function AttemptThumbs({ attempts, label, chips, limits, view, uses, busy = false, onUse }: {
   attempts: Array<{ attempt: number; gate: GateRecord | null; url: string }>
   label: string
   chips?: ChipSpec[]
   limits?: Record<string, GateLimit>
   view: string
+  /** "Use this" per attempt number (`use_runs` of the panel); absent = no button. */
+  uses?: Record<string, AttemptUsePlan>
+  busy?: boolean
+  onUse?: (attempt: number) => void
 }) {
   const { t } = useI18n()
   const enlarge = useEnlarge()
   if (!attempts.length) return null
   return (
-    <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'flex-start' }}>
       {attempts.map((a) => {
         const alt = `${label} · ${t('Attempt')} ${a.attempt}`
         const zoom = enlarge({ src: a.url, alt })
+        const refused = a.gate?.ok === false || !!a.gate?.reasons?.length
         const tip = [
           alt,
+          a.gate ? (refused ? t('Refused') : t('Passed')) : '',
           ...chipResults(chips || [], a.gate, limits, view)
             .filter((c) => c.ok === false).map((c) => `✕ ${t(c.label)} ${c.shown} (${c.lim})`),
           ...(Array.isArray(a.gate?.reasons) ? (a.gate?.reasons as string[]) : []),
-        ].join('\n')
+        ].filter(Boolean).join('\n')
+        const plan = uses?.[String(a.attempt)]
         return (
-          <img key={a.attempt} src={a.url} alt={alt} {...zoom} title={tip}
-            style={{
-              ...zoom.style, width: 26, height: 34, objectFit: 'cover', borderRadius: 3,
-              border: `1px solid ${a.gate?.ok === false || a.gate?.reasons?.length
-                ? 'var(--danger, #f85149)' : 'var(--border, #30363d)'}`,
-            }} />
+          <div key={a.attempt} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+            <img src={a.url} alt={alt} {...zoom} title={tip}
+              style={{
+                ...zoom.style, width: 26, height: 34, objectFit: 'cover', borderRadius: 3,
+                border: `1px solid ${refused ? 'var(--danger, #f85149)' : 'var(--success, #3fb950)'}`,
+              }} />
+            {plan && onUse ? (
+              <UseAttemptButton plan={plan} label={label} attempt={a.attempt} disabled={busy}
+                onUse={() => onUse(a.attempt)} />
+            ) : null}
+          </div>
         )
       })}
     </div>
@@ -173,7 +236,7 @@ function upToText(n: number, t: (s: string) => string): string {
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
-  viewRuns = null, meshFetchUrl = null, onMeshFetched }: {
+  viewRuns = null, useRuns = null, onUse, meshFetchUrl = null, onMeshFetched }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -184,6 +247,10 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   feedback?: RunFeedback
   /** Each view button's cost and prerequisites (the panel's `view_runs`, Ruling A33); null = unknown. */
   viewRuns?: ViewRunPlans | null
+  /** "Use this" on each stored attempt (the panel's `use_runs`, Ruling A37); null = no button. */
+  useRuns?: AttemptUsePlans | null
+  /** "Use this" clicked on `attempt` of `view` of `step` (0 jobs; the caller posts it and reloads). */
+  onUse?: (step: string, view: GarmentView, attempt: number) => void
   /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
   meshFetchUrl?: string | null
   /** The mesh record changed through a fetched job: reload the panel. */
@@ -262,10 +329,17 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
               <GateIcon specs={chips || []} record={shownRecord(img)} limits={chips ? limits[step] : undefined}
                 view={view} extra={stateLines} />
             ) : null}
-            {img?.url && !img.accepted ? (
+            {img?.url && img.user_accepted?.holds ? (
               <span className="ga-run-badge"
+                title={[t('Its gate refused it; you chose it with “Use this”.'), ...img.user_accepted.reasons].join('\n')}
+                style={{ borderColor: 'var(--success, #3fb950)', color: 'var(--success, #3fb950)' }}>
+                {t('Accepted by you')}
+              </span>
+            ) : img?.url && !img.accepted ? (
+              <span className="ga-run-badge"
+                title={img.user_accepted ? t('Your acceptance no longer holds: an image it was made from changed') : undefined}
                 style={{ borderColor: 'var(--danger, #f85149)', color: 'var(--danger, #f85149)' }}>
-                {t('Refused')}
+                {img.user_accepted ? t('Acceptance voided') : t('Refused')}
               </span>
             ) : null}
             <RunBadge mark={mark}
@@ -315,7 +389,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
             </>
           ) : null}
           <AttemptThumbs attempts={img?.attempts ?? []} label={label} chips={chips}
-            limits={chips ? limits[step] : undefined} view={view} />
+            limits={chips ? limits[step] : undefined} view={view} uses={useRuns?.[step]?.[view]} busy={busy || !garment}
+            onUse={onUse ? (n) => onUse(step, view, n) : undefined} />
         </div>
       </div>
     )

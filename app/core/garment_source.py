@@ -372,7 +372,7 @@ def backfill(character_name: str) -> int:
 
 def _accepted(path: Path) -> bool:
     from app.core import garment_store as gs
-    return path.is_file() and gs.read_record(path.with_suffix(".json")).get("accepted") is True
+    return gs.accepted_image(path)
 
 
 def has_own_images(character_name: str, item_id: str, kind: str, method: str, fsig: str) -> bool:

@@ -158,6 +158,7 @@ import os
 import re
 import threading
 from collections import deque
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Deque, Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import quote
@@ -321,8 +322,8 @@ def _image(character_name: str, item_id: str, fsig: str, step: str, view: str, a
 
 
 def _accepted(path: Path) -> bool:
-    from app.core.garment_store import read_record
-    return path.is_file() and read_record(path.with_suffix(".json")).get("accepted") is True
+    from app.core.garment_store import accepted_image
+    return accepted_image(path)
 
 
 def _accepted_gate(path: Path) -> Optional[Dict[str, Any]]:
@@ -348,13 +349,31 @@ def _pair(character_name: str, item_id: str, kind: str, fsig: str) -> Tuple[bool
     with both gate records."""
     from app.core.garment_images import skipped_view
     module = _kind_module(kind)
-    gates = {view: _accepted_gate(_image(character_name, item_id, fsig, module.PAIR_STEP, view))
-             for view in ("front", "back")}
+    assumed = _ASSUMED.get() or {}
+    gates: Dict[str, Any] = {}
+    by_user = False
+    for view in ("front", "back"):
+        key = (module.PAIR_STEP, view)
+        if key in assumed:   # ``use_plans``: the view as it would be after a "Use this"
+            gates[view] = (assumed[key] or {}).get("gate")
+            by_user = by_user or bool((assumed[key] or {}).get("user"))
+            continue
+        path = _image(character_name, item_id, fsig, module.PAIR_STEP, view)
+        gates[view] = _accepted_gate(path) if _accepted(path) else None
+        by_user = by_user or (gates[view] is not None and _user_taken(path))
     if gates["front"] and skipped_view(character_name, item_id, fsig, module.PAIR_STEP, "back"):
         return True, gates  # no back to agree with (an empty drafted back)
     if not gates["front"] or not gates["back"]:
         return False, gates
+    if by_user:
+        return True, gates  # Ruling A37: a view the user took by hand is never rendered again for the pair
     return module.pair_agree(gates["front"], gates["back"]), gates
+
+
+def _user_taken(path: Path) -> bool:
+    """Whether the accepted image at ``path`` was taken by the user against its gate (Ruling A37)."""
+    from app.core.garment_store import read_record
+    return isinstance(read_record(path.with_suffix(".json")).get("user_accepted"), dict)
 
 
 def _pair_check(character_name: str, item_id: str, kind: str, fsig: str, *, repair: bool = False):
@@ -483,9 +502,19 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
     return "accepted"
 
 
+#: ``use_plans`` (Ruling A37): image views assumed as they would be after a "Use this" — ``{(step, view):
+#: None (dropped: not done) | {gate, user} (accepted with that gate record; ``user`` = taken against it)}``.
+#: Read by ``_view_done``, ``_done`` and ``_pair``, so ``run_estimate`` prices the state after the click.
+_ASSUMED: ContextVar[Optional[Dict[Tuple[str, str], Optional[Dict[str, Any]]]]] = ContextVar(
+    "garment_assumed_views", default=None)
+
+
 def _view_done(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
     """Whether one view of an image step is accepted and current (or skipped) — ``_done``'s rule per view."""
     from app.core.garment_images import skipped_view, stale_accepted, stale_model_fit
+    assumed = _ASSUMED.get()
+    if assumed and (step, view) in assumed:
+        return assumed[(step, view)] is not None
     return ((_accepted(_image(character_name, item_id, fsig, step, view))
              and not stale_model_fit(character_name, item_id, fsig, step, view)
              and not stale_accepted(character_name, item_id, fsig, step, view))
@@ -500,11 +529,7 @@ def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, ba
         from app.core import garment_footwear
         return garment_footwear.step_done(item_id, step)
     if step in IMAGE_STEPS:
-        from app.core.garment_images import skipped_view, stale_accepted, stale_model_fit
-        if not all((_accepted(_image(character_name, item_id, fsig, step, v))
-                    and not stale_model_fit(character_name, item_id, fsig, step, v)
-                    and not stale_accepted(character_name, item_id, fsig, step, v))
-                   or skipped_view(character_name, item_id, fsig, step, v) for v in GARMENT_VIEWS):
+        if not all(_view_done(character_name, item_id, fsig, step, v) for v in GARMENT_VIEWS):
             return False
         return step != _kind_module(kind).PAIR_STEP or _pair(character_name, item_id, kind, fsig)[0]
     if step == "mesh":
@@ -1775,8 +1800,9 @@ def run_estimate(character_name: str, item_id: str, *,
         # current costs nothing (Ruling A25 — the estimate is what the run spends on first attempts), nor does
         # one a stored attempt passes once judged again with the hem snap (Ruling A27).
         from app.core.garment_images import rejudge_expected
+        assumed = _ASSUMED.get() or {}
         kept = sum(1 for v in gs.GARMENT_VIEWS if _view_done(character_name, item_id, fsig, first, v)
-                   or rejudge_expected(character_name, item_id, fsig, first, v))
+                   or ((first, v) not in assumed and rejudge_expected(character_name, item_id, fsig, first, v)))
         parts[0] = (first, max(parts[0][1] - kept, 0))
     reused = []
     if kind == _clothing() and method == gs.EDIT_CHAIN and state == "open":
@@ -2016,6 +2042,117 @@ def view_plans(character_name: str, item_id: str, *, profile: Optional[Dict[str,
         return None
     return {step: {view: _plan_of(character_name, item_id, ctx, step, view) for view in GARMENT_VIEWS}
             for step in image_steps(ctx["kind"])}
+
+
+# --- "Use this" on a stored attempt (Ruling A37) -----------------------------------------
+
+class UseBusy(RuntimeError):
+    """A garment run of the piece holds its run lock: "Use this" waits for it to end (409)."""
+
+
+def _use_assumption(kind: str, step: str, view: str, gate: Optional[Dict[str, Any]],
+                    passing: bool) -> Dict[Tuple[str, str], Optional[Dict[str, Any]]]:
+    """The views as they are after "Use this" on ``view`` of ``step`` (``garment_images._publish``): that view
+    accepted with ``gate`` (taken by the user unless ``passing``), its later image steps dropped, and for a
+    new front of a drafted step its back and the back's later steps too."""
+    from app.core.garment_store import image_steps
+    order = image_steps(kind)
+    later = order[order.index(step) + 1:]
+    out: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {(step, view): {"gate": gate, "user": not passing}}
+    out.update({(s, view): None for s in later})
+    if view == "front" and (_kind_module(kind).EDIT_STEPS.get(step) or {}).get("back") == "draft":
+        out.update({(s, "back"): None for s in (step, *later)})
+    return out
+
+
+def use_plans(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None
+              ) -> Optional[Dict[str, Dict[str, Dict[str, Dict[str, Any]]]]]:
+    """Ruling A37: what "Use this" does on every stored attempt of the item's edit steps BEFORE the click —
+    ``{step: {view: {attempt: {passing, in_use, block, follow_up}}}}``: ``passing`` its gate record passes (else
+    the click is an acceptance by the user), ``in_use`` it is the view's accepted image now, ``block`` why it
+    cannot be used ("" when it can: ``garment_images.attempt_inputs``), ``follow_up`` the estimate of the chain
+    after the click (``run_estimate`` with the view taken and its later images dropped: ``{steps, hub_jobs,
+    note}``; None when in use or blocked). The worn state's group; None when the item has no per-view runs.
+    Read from the files only."""
+    from app.core import garment_images
+    from app.core.garment_store import GARMENT_VIEWS, garment_path, read_record
+    from app.models.character import get_character_profile
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    ctx = _view_context(character_name, item_id, profile, None)
+    if ctx is None:
+        return None
+    kind, fsig = ctx["kind"], ctx["fsig"]
+    out: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {}
+    for step in getattr(_kind_module(kind), "EDIT_STEPS", {}) or {}:
+        for view in GARMENT_VIEWS:
+            final = _image(character_name, item_id, fsig, step, view)
+            final_record = read_record(final.with_suffix(".json")) if final.is_file() else {}
+            for n in range(1, garment_images.ATTEMPTS + 1):
+                target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=n)
+                if not target.is_file():
+                    continue
+                sidecar = read_record(target.with_suffix(".json"))
+                gate = sidecar.get("gate") if isinstance(sidecar.get("gate"), dict) else None
+                passing = bool(gate and gate.get("ok") is True)
+                in_use = (_accepted(final) and int(final_record.get("attempt") or 0) == n
+                          and _sha(final) == _sha(target))
+                block = "" if in_use else garment_images.attempt_inputs(character_name, item_id, fsig, step, view,
+                                                                        sidecar)[0]
+                follow = None
+                if not in_use and not block:
+                    token = _ASSUMED.set(_use_assumption(kind, step, view, gate, passing))
+                    try:
+                        estimate = run_estimate(character_name, item_id, profile=profile)
+                    finally:
+                        _ASSUMED.reset(token)
+                    follow = {k: estimate.get(k) for k in ("steps", "hub_jobs", "note")}
+                out.setdefault(step, {}).setdefault(view, {})[str(n)] = {
+                    "passing": passing, "in_use": in_use, "block": block, "follow_up": follow}
+    return out
+
+
+def use_attempt(character_name: str, item_id: str, step: str, view: str, attempt: int, *,
+                profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Ruling A37, "Use this": the stored ``attempt`` of ``view`` of edit ``step`` becomes the view's accepted
+    image (``garment_images.use_attempt``: a refused one accepted by the user) — no job. Under the item's run
+    lock (``garment_store.run_item_lock``, never waiting: ``UseBusy`` while a run holds it). The later images
+    of the view go, the mesh with them (``_drop_mesh``: the fit reads outdated and stays served until a new one
+    is accepted); a recorded refusal of this step or a later one is answered (the chain may run again).
+    ``{item_id, step, view, attempt, changed, passing, user_accepted, follow_up}`` — ``follow_up`` the chain's
+    estimate now (``run_estimate``). ``garment_images.AttemptUnusable`` / ValueError for a bad request."""
+    from app.core import garment_images
+    from app.core import garment_store as gs
+    from app.core.garment_store import GARMENT_VIEWS, image_steps
+    from app.models.character import get_character_profile
+    if view not in GARMENT_VIEWS:
+        raise ValueError(f"invalid view {view!r}")
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    ctx = _view_context(character_name, item_id, profile, None)
+    if ctx is None:
+        raise ValueError("This piece has no image steps to take an attempt from")
+    kind, fsig = ctx["kind"], ctx["fsig"]
+    lock = gs.run_item_lock(character_name, item_id)
+    if not lock.acquire(blocking=False):
+        raise UseBusy("A garment run of this piece is in progress — use the attempt after it")
+    try:
+        result = garment_images.use_attempt(character_name, item_id, fsig, step, view, attempt)
+        if result["changed"]:
+            _drop_mesh(character_name, item_id, fsig)
+            order = image_steps(kind)
+            due = set(order[order.index(step):]) | {"mesh", "fit"}
+            failure = gs.chain_failure(character_name, item_id, fsig)
+            if failure is not None and failure.get("step") in due:
+                gs.clear_failure(character_name, item_id, fsig)
+            failed = gs.status(character_name, item_id).get("failed") or {}
+            if failed.get("step") in due:
+                gs.end(character_name, item_id, str(failed["step"]))
+    finally:
+        lock.release()
+    estimate = run_estimate(character_name, item_id, profile=profile)
+    return {"item_id": item_id, "step": step, "view": view, "attempt": attempt, **result,
+            "follow_up": {k: estimate.get(k) for k in ("steps", "hub_jobs", "note")}}
 
 
 def _check_view_run(character_name: str, item_id: str, step: str, view: str, *, state: Optional[str],
@@ -3098,8 +3235,13 @@ def _image_info(character_name: str, item_id: str, fsig: str, step: str, view: s
     gates = record.get("gates")
     if not isinstance(gates, dict):
         gates = {_ORDINALS[i]: a["gate"] for i, a in enumerate(attempts) if a.get("gate") is not None}
+    block = record.get("user_accepted") if isinstance(record.get("user_accepted"), dict) else None
     out = {"url": _url(character_name, item_id, f"images/{step}/{view}", stamp) if stamp is not None else None,
-           "accepted": record.get("accepted") is True, "gates": gates, "attempts": attempts,
+           "accepted": _accepted(final), "gates": gates, "attempts": attempts,
+           # Ruling A37: taken by the user against its gate; ``holds`` False once an input changed.
+           "user_accepted": ({"at": block.get("at"), "attempt": block.get("attempt"),
+                              "reasons": block.get("reasons") or [], "holds": _accepted(final)}
+                             if block and stamp is not None else None),
            **(image_tile_meta(final, record) if stamp is not None else {})}
     # An empty drafted back (the base back unchanged) and the views it leaves out.
     if record.get("composite") == "empty":

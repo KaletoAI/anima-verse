@@ -42,6 +42,9 @@
  * height groups ground / ground / seat); POST …/footwear/width-cap saves the
  * width cap the slider sets.
  *
+ * Ruling A37: "Use this" under every stored attempt of the clothing grid — POST
+ * …/garments/{item}/images/{step}/{view}/attempts/{n}/use (0 jobs; a refused attempt becomes "Accepted by you").
+ *
  * Above the preview of clothing and footwear, the body switch (FitBodySwitch, Ruling A31): one button per body
  * the piece was fitted on, the selected body's model (GET …/garments/{item}/fits/{body}/model — a refused fit
  * with the failing region marked), and Accept / Undo accept of a refused fit.
@@ -64,7 +67,7 @@ import { FitBodySwitch } from './FitBodySwitch'
 import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
 import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
-import type { GarmentItemInfo, ItemWearers, PieceStatus } from './useGarment'
+import type { GarmentItemInfo, GarmentView, ItemWearers, PieceStatus } from './useGarment'
 import {
   AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES, PIECE_STATE_LABELS,
   closableDisabled, showBodySwitch, wearersLine,
@@ -501,6 +504,26 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     }
     startPoll(0)
   }
+  /** Ruling A37, "Use this": a stored attempt becomes the view's image — 0 jobs; the toast names what is due now
+   *  (the server's estimate after the click). */
+  const [using, setUsing] = useState(false)
+  const onUse = async (step: string, view: GarmentView, attempt: number) => {
+    if (using) return
+    setUsing(true)
+    try {
+      const d = await apiPost<{ changed: boolean; user_accepted: boolean;
+        follow_up: { hub_jobs: number | null; note: string } }>(
+        `/characters/${enc}/garments/${encodeURIComponent(itemId)}/images/${step}/${view}/attempts/${attempt}/use`, {})
+      const due = d.follow_up.hub_jobs == null ? t('cost unknown')
+        : t('Now due: {note}').replace('{note}', d.follow_up.note)
+      toast(`${d.user_accepted ? t('Accepted by you') : t('In use')} · ${due}`, 'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setUsing(false)
+    }
+    startPoll(0)
+  }
   // "Fetch finished job…" on the mesh row: the shoe source's own route for footwear.
   const meshFetchUrl = info?.pipeline && itemId
     ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}/${footwear ? 'footwear/mesh' : 'mesh'}/fetch` : null
@@ -618,10 +641,12 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             stepLabels={STEP_LABELS}
             limits={info.limits || {}}
             fitChips={FIT_CHIPS}
-            busy={busy}
+            busy={busy || using}
             onRun={onRun}
             feedback={feedback}
             viewRuns={info.view_runs}
+            useRuns={info.use_runs}
+            onUse={(step, view, attempt) => { void onUse(step, view, attempt) }}
             meshFetchUrl={meshFetchUrl}
             onMeshFetched={onMeshFetched}
           />

@@ -102,10 +102,22 @@ renders again (``_regate_stored``): when the view's final is not accepted,
 every attempt file whose gate record is of an older version is gated again
 from the file (masks only, no image job) — a drafted back only while the
 attempt is a composite that passed its checks, made from the current front
-(``front_sha256``; a stored model fit is never re-gated). The first
-that passes is published like a fresh accepted attempt; the others keep
-their new records. Nothing passes: the step renders as before. That runs on
-the next chain run of the piece and on the step's Regenerate / Run all.
+(``front_sha256``; a stored model fit is never re-gated). Of those that
+pass, the one NEAREST the worn piece is published like a fresh accepted
+attempt (Ruling A37, ``garment_gates.attempt_distance`` in the worn region —
+the ghost; the worn views have no worn piece to compare and take the first);
+every judged attempt keeps its new record. Nothing passes: the step renders
+as before. That runs on the next chain run of the piece and on the step's
+Regenerate / Run all.
+
+"USE THIS" (Ruling A37, ``use_attempt``): any stored attempt of an edit
+step can be made the view's accepted image by hand — no render, no job.
+A passing attempt is published as the chain publishes it; a refused one
+is accepted BY THE USER (``user_accepted``), which holds only while the
+file and every image it was made from are unchanged
+(``garment_store.image_accept_holds``) and is never re-gated. An attempt
+made from an image that is no longer the accepted one cannot be used
+(``attempt_inputs``).
 An ACCEPTED image of a step the kind names in ``REGATE_ACCEPTED_STEPS``
 (clothing ``ghost``, Ruling A17 d) is re-gated from its file at the next
 run when its record predates the gate (``regate_accepted``, called by the
@@ -665,8 +677,8 @@ def _publish(character_name: str, item_id: str, fsig: str, step: str, view: str,
 
 
 def _accepted(path: Path) -> bool:
-    from app.core.garment_store import read_record
-    return path.is_file() and read_record(path.with_suffix(".json")).get("accepted") is True
+    from app.core.garment_store import accepted_image
+    return accepted_image(path)
 
 
 def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view: str, *,
@@ -780,7 +792,14 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
                            if k in old})
             record = _snap_hem(kind, step, view, path, base_size, gate_args, position, mask, record, pair_check)
             return _with_pair(record, pair_check)
-        hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final, regate=regate)
+        def closeness(path: Path) -> Optional[Dict[str, Any]]:
+            # Ruling A37: the attempt as re-gated (registered) against the worn piece in its region.
+            from app.core import garment_gates
+            return garment_gates.attempt_distance(gate_args["source_rgb"], position, _rgb(path, base_size),
+                                                  _mask(path, base_size))
+
+        hit = _regate_stored(character_name, item_id, fsig, step, view, kind, final=final, regate=regate,
+                             closeness=closeness if position is not None else None)
         if hit is not None:
             return hit
 
@@ -885,6 +904,8 @@ def regate_accepted(character_name: str, item_id: str, fsig: str, step: str, vie
     sidecar = read_record(final.with_suffix(".json"))
     if isinstance(sidecar.get("copied_from"), dict):
         return None  # the closed state's back: re-gated by the closed group's run
+    if isinstance(sidecar.get("user_accepted"), dict):
+        return None  # Ruling A37: taken by the user against its gate — never judged again
     try:
         ordinal = _ORDINALS[int(sidecar.get("attempt") or 1) - 1]
     except (IndexError, TypeError, ValueError):
@@ -1070,17 +1091,27 @@ def _stale_gate(kind, step: str, record: Any) -> bool:
 def _regate_stored(character_name: str, item_id: str, fsig: str, step: str, view: str, kind, *,
                    final: Path, regate: Callable[[Path, Dict[str, Any]], Dict[str, Any]],
                    keep: Optional[Callable[[Dict[str, Any]], bool]] = None,
-                   follow_keys: Sequence[str] = ()) -> Optional[Path]:
+                   follow_keys: Sequence[str] = (),
+                   closeness: Optional[Callable[[Path], Optional[Dict[str, Any]]]] = None) -> Optional[Path]:
     """Gate the stored attempt files of a refused view again (module
     docstring): every attempt whose gate record is stale (``_stale_gate``)
     and that ``keep`` accepts (its sidecar; a drafted back: fitted from the
     current front) gets ``regate(path, old record)`` as its new record —
-    written into its sidecar, ``regated_from`` = the old version. The first
-    that passes is published (``_publish``; ``follow_keys`` of its sidecar
-    go into the final's record) and returned; None when none passes or none
-    is stale. Reads files and masks only: never renders."""
+    written into its sidecar, ``regated_from`` = the old version. Every
+    stale attempt is judged; of those that pass, the NEAREST to the worn
+    piece is published (Ruling A37: two passing ghost backs of Ylva's
+    blouse, the first without the worn back's ruffle): ``closeness(path)``
+    (``garment_gates.attempt_distance`` on the step's position reference —
+    the ghost) scores each, the lowest ``score`` wins, a tie or a missing
+    score keeps the attempt order; without ``closeness`` (a step with no
+    worn piece to compare: the worn views) the first that passes wins. The
+    winner is published (``_publish``; ``follow_keys`` of its sidecar go
+    into the final's record, the scores under ``picked``) and returned; None
+    when none passes or none is stale. Reads files and masks only: never
+    renders."""
     from app.core.garment_store import garment_path, read_record, write_record
     records: List[Dict[str, Any]] = []
+    passed: List[Tuple[int, Path, Dict[str, Any]]] = []
     stale_any = False
     for attempt in range(1, ATTEMPTS + 1):
         target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
@@ -1101,13 +1132,145 @@ def _regate_stored(character_name: str, item_id: str, fsig: str, step: str, view
                     view, attempt, record["regated_from"], record.get("gate_version"),
                     "accepted" if record.get("ok") else "refused", record.get("reasons") or "")
         if record.get("ok"):
+            passed.append((attempt, target, sidecar))
+    if passed:
+        attempt, target, sidecar = passed[0]
+        extra = {k: sidecar[k] for k in follow_keys if k in sidecar}
+        if closeness is not None and len(passed) > 1:
+            scores = {n: closeness(path) for n, path, _s in passed}
+            ranked = sorted(passed, key=lambda p: (scores[p[0]] is None,
+                                                   (scores[p[0]] or {}).get("score", 0.0), p[0]))
+            attempt, target, sidecar = ranked[0]
             extra = {k: sidecar[k] for k in follow_keys if k in sidecar}
-            return _publish(character_name, item_id, fsig, step, view, kind, target, final, records, attempt,
-                            extra or None)
+            extra["picked"] = {"by": "nearest to the worn piece",
+                               "scores": {str(n): score for n, score in scores.items()}}
+            logger.info("Garment %s %s %s: %d stored attempts pass — attempt %d is nearest the worn piece %s",
+                        character_name, step, view, len(passed), attempt, scores)
+        return _publish(character_name, item_id, fsig, step, view, kind, target, final, records, attempt,
+                        extra or None)
     if stale_any:
         logger.info("Garment %s %s %s: no stored attempt passes the current gate — rendering", character_name,
                     step, view)
     return None
+
+
+# --- "Use this" (Ruling A37) ------------------------------------------------------
+
+#: The sidecar keys a drafted back's attempt carries into its final (``_drafted_back``'s ``follow_keys``).
+DRAFT_FOLLOW_KEYS = ("front_sha256", "draft", "draft_sha256", "draft_prompt", "fit", "composite", "composite_record")
+
+
+#: Why a stored attempt cannot be used (``attempt_inputs``) — plain words the Wardrobe shows on its tile.
+NO_ATTEMPTS = "This step keeps no attempts"
+FRONT_NOT_ACCEPTED = "The front it was drafted from is not accepted"
+EARLIER_FRONT = "Drafted from an earlier front"
+SOURCE_NOT_ACCEPTED = "The image it was made from is not accepted"
+EARLIER_SOURCE = "Made from an earlier image of the step before"
+
+
+class AttemptUnusable(ValueError):
+    """``use_attempt``: the stored attempt cannot be taken (none stored, made from an image that is no longer
+    the accepted one, or a step without attempts)."""
+
+
+def _made_before(sidecar: Dict[str, Any], source: Path) -> bool:
+    """Whether an attempt (its sidecar's ``created_at``) was rendered before the accepted ``source`` image it
+    edits was made (that final's ``created_at``): it was made from an earlier source. False when either time
+    is unknown."""
+    from app.core.garment_store import read_record
+    from app.core.timeutils import parse_iso
+    made, src = sidecar.get("created_at"), read_record(source.with_suffix(".json")).get("created_at")
+    if not made or not src:
+        return False
+    try:
+        return parse_iso(str(made)) < parse_iso(str(src))
+    except (TypeError, ValueError):
+        return False
+
+
+def attempt_inputs(character_name: str, item_id: str, fsig: str, step: str, view: str,
+                   sidecar: Dict[str, Any]) -> Tuple[str, Dict[str, str]]:
+    """``(why not, inputs)`` of a stored attempt of ``view`` of edit ``step`` (Ruling A37): ``why not`` is ""
+    when the attempt may be used — it was made from the images accepted now — else the plain reason; ``inputs``
+    the images it was made from, ``{file name: sha256}`` (none for an edit of the base view: the base is part of
+    the fsig). A drafted back follows the front its draft was made from (``front_sha256``) and must be a
+    composite; another edit reads the source step's accepted image of the view and must not be older than it."""
+    from app.core.base_body import file_sha256
+    from app.core.garment_store import garment_path
+    kind = _kind_module(item_id)
+    spec = (getattr(kind, "EDIT_STEPS", {}) or {}).get(step)
+    if spec is None:
+        return NO_ATTEMPTS, {}
+    if view == "back" and _drafted(kind, step):
+        front = garment_path(character_name, item_id, fsig, "image", step=step, view="front")
+        if not _accepted(front):
+            return FRONT_NOT_ACCEPTED, {}
+        sha = file_sha256(front)
+        if sidecar.get("front_sha256") != sha or sidecar.get("fit") != "composite":
+            return EARLIER_FRONT, {}
+        return "", {front.name: sha}
+    source_step = spec.get("source")
+    if source_step in (None, "base"):
+        return "", {}
+    source = garment_path(character_name, item_id, fsig, "image", step=source_step, view=view)
+    if not _accepted(source):
+        return SOURCE_NOT_ACCEPTED, {}
+    if _made_before(sidecar, source):
+        return EARLIER_SOURCE, {}
+    return "", {source.name: file_sha256(source)}
+
+
+def use_attempt(character_name: str, item_id: str, fsig: str, step: str, view: str, attempt: int) -> Dict[str, Any]:
+    """Ruling A37, "Use this": publish the stored ``attempt`` of ``view`` of edit ``step`` as the view's
+    accepted image — no render, no job. A PASSING attempt (its gate record ``ok``) is published like the chain
+    publishes it; a REFUSED one is published accepted by the user: its record carries ``user_accepted {at,
+    attempt, attempt_sha256, inputs, reasons, gate_version}`` and holds only while the file and every input are
+    unchanged (``garment_store.image_accept_holds``). Either way the later images of the view go
+    (``_publish``: a new front of a drafted step drops its back too); the caller drops the mesh. ``{changed,
+    passing, user_accepted}`` — ``changed`` False when that attempt is the accepted image already.
+    ``AttemptUnusable`` when it cannot be taken (``attempt_inputs``). The caller holds the item's run lock."""
+    from app.core.base_body import file_sha256
+    from app.core.garment_store import garment_path, read_record
+    from app.core.timeutils import utc_now_iso
+    kind = _kind_module(item_id)
+    if step not in (getattr(kind, "EDIT_STEPS", {}) or {}):
+        raise AttemptUnusable(NO_ATTEMPTS)
+    if attempt not in range(1, ATTEMPTS + 1):
+        raise AttemptUnusable(f"No attempt {attempt} (1..{ATTEMPTS})")
+    target = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
+    if not target.is_file():
+        raise AttemptUnusable(f"No stored attempt {attempt} of the {step} {view}")
+    sidecar = read_record(target.with_suffix(".json"))
+    gate = sidecar.get("gate") if isinstance(sidecar.get("gate"), dict) else None
+    passing = bool(gate and gate.get("ok") is True)
+    final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
+    current = read_record(final.with_suffix(".json"))
+    if (_accepted(final) and int(current.get("attempt") or 0) == attempt
+            and file_sha256(final) == file_sha256(target)):
+        return {"changed": False, "passing": passing, "user_accepted": isinstance(current.get("user_accepted"), dict)}
+    why, inputs = attempt_inputs(character_name, item_id, fsig, step, view, sidecar)
+    if why:
+        raise AttemptUnusable(why)
+    records: List[Dict[str, Any]] = []
+    for n in range(1, ATTEMPTS + 1):
+        other = garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=n)
+        rec = read_record(other.with_suffix(".json")).get("gate") if other.is_file() else None
+        records.append(rec if isinstance(rec, dict) else
+                       {"view": view, "ok": False, "reasons": ["no stored attempt"], "attempt": n})
+    extra: Dict[str, Any] = {}
+    if view == "back" and _drafted(kind, step):
+        extra.update({k: sidecar[k] for k in DRAFT_FOLLOW_KEYS if k in sidecar})
+    extra["used_by_hand"] = {"at": utc_now_iso(), "attempt": attempt}
+    if not passing:
+        extra["user_accepted"] = {
+            "at": utc_now_iso(), "attempt": attempt, "attempt_sha256": file_sha256(target), "inputs": inputs,
+            "reasons": list((gate or {}).get("reasons") or ["no gate record"]),
+            "gate_version": (gate or {}).get("gate_version")}
+    final.parent.mkdir(parents=True, exist_ok=True)
+    _publish(character_name, item_id, fsig, step, view, kind, target, final, records, attempt, extra)
+    logger.info("Garment %s %s %s of %s: attempt %d used by hand (%s)", character_name, step, view, item_id,
+                attempt, "passing" if passing else "refused — accepted by the user")
+    return {"changed": True, "passing": passing, "user_accepted": not passing}
 
 
 #: The gate numbers a registration corrects; after it they are the residual.
@@ -1291,8 +1454,7 @@ def _drafted_back(character_name: str, item_id: str, fsig: str, step: str, kind,
                              regate=lambda path, _old: regate_attempt(path),
                              keep=lambda sidecar: (sidecar.get("front_sha256") == front_sha and composite_ok(sidecar)
                                                    and made_with_current_prompt(sidecar.get("draft_prompt"))),
-                             follow_keys=("front_sha256", "draft", "draft_sha256", "draft_prompt", "fit",
-                                          "composite", "composite_record"))
+                             follow_keys=DRAFT_FOLLOW_KEYS)
         if hit is not None:
             return hit
 

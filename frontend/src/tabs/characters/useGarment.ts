@@ -43,6 +43,9 @@ export interface GarmentImageInfo extends ImageTileMeta {
   empty?: boolean
   /** Why this view is not made (the steps after an empty drafted back). */
   skipped?: string | null
+  /** Ruling A37: the image was taken by the user although its gate refused it ("Use this"); `holds` false once
+   *  an input changed (the view is then due again). */
+  user_accepted?: { at: string | null; attempt: number | null; reasons: string[]; holds: boolean } | null
 }
 
 export interface GarmentMeshInfo {
@@ -570,6 +573,19 @@ export interface ViewRunPlan {
 /** `view_runs` of the panel: step → view → plan (null without per-view runs). */
 export type ViewRunPlans = Partial<Record<string, Partial<Record<GarmentView, ViewRunPlan>>>>
 
+/** "Use this" on one stored attempt before the click (`garments.use_plans`, Ruling A37): `passing` its gate
+ *  passes (else the click accepts it as the user), `in_use` it is the view's image now, `block` why it cannot be
+ *  used ("" = it can), `follow_up` the chain's estimate after the click (null when in use or blocked). */
+export interface AttemptUsePlan {
+  passing: boolean
+  in_use: boolean
+  block: string
+  follow_up: { steps: string[]; hub_jobs: number | null; note: string } | null
+}
+
+/** `use_runs` of the panel: step → view → attempt number → plan. */
+export type AttemptUsePlans = Partial<Record<string, Partial<Record<GarmentView, Record<string, AttemptUsePlan>>>>>
+
 /** GET /characters/{n}/garments/{item} — the Wardrobe's own-mesh panel. */
 export interface GarmentItemInfo {
   pipeline: boolean
@@ -587,6 +603,8 @@ export interface GarmentItemInfo {
   run?: { steps: string[]; hub_jobs: number | null; note: string; refit: boolean } | null
   /** Each per-view button's cost and prerequisites (`garments.view_plans`, Ruling A33); null without per-view runs. */
   view_runs?: ViewRunPlans | null
+  /** "Use this" on each stored attempt (`garments.use_plans`, Ruling A37); null without per-view runs. */
+  use_runs?: AttemptUsePlans | null
 }
 
 /** A step runs or the item waits in the character's garment queue
