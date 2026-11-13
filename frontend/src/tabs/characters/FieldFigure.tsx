@@ -17,7 +17,10 @@
  *   ↗Wardrobe (the mode lives on the item and is edited there, ruling P4) ·
  *   state ("✓ ready", "⏳ mesh · 3 hub jobs" + "in the body until its own
  *   mesh is ready" — ruling A11, an in-body piece "shown painted until
- *   ready", "left out: …", "failed — reason" with Retry = the Build); an own-mesh
+ *   ready", "left out: …", "failed — reason" with Retry = the Build, "Fit refused
+ *   — reason" with its single steps Re-fit (POST …/figure/refit {item_id}: an
+ *   automatic, CPU-only Build) and Regenerate mesh (POST …/garments/{item}/run
+ *   {step: "mesh", force, chain}) — Ruling A23); an own-mesh
  *   piece's details open its chain dialog (GarmentPieceDialog — a WORN
  *   piece's only entry, the Wardrobe hides its "Mesh steps"; opened here
  *   without its "Run all", Ruling 10a); a closable piece has the toggle
@@ -107,6 +110,16 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
 
   const reload = useCallback(() => startPoll(0), [startPoll])
 
+  /** Ruling A23 b: a piece whose fit on the body shape was refused — fit it again (CPU), or make its mesh anew. */
+  const refit = useCallback((row: FigureWornRow) => post('figure/refit', { item_id: row.item_id }, (d) => {
+    const status = String(d.status || '')
+    toast(t(BUILD_STATUS[status] || status), 'success')
+  }), [post, t, toast])
+  const regenerateMesh = useCallback((row: FigureWornRow) => post(
+    `garments/${encodeURIComponent(row.item_id)}/run`, { step: 'mesh', force: true, chain: true }, (d) => {
+      toast(d.started ? t('Started') : t('Queued'), 'success')
+    }), [post, t, toast])
+
   /** The other state's own mesh of a worn closable piece: its chain alone (queued behind the character's
    *  garment runs), never the Build. */
   const buildStateMesh = useCallback((row: FigureWornRow, state: PieceState) => post(
@@ -142,7 +155,8 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
           onAutoBuild={(enabled) => { void post('figure/auto-build', { enabled }) }} />
         <WornTable data={data} character={character} busy={posting} onRetry={build} onOpenWardrobe={onOpenWardrobe}
           onOpenHairstyles={onOpenHairstyles}
-          onOpenPiece={(id, name) => setOpenPiece({ id, name })} onStateMesh={buildStateMesh} onChanged={reload} />
+          onOpenPiece={(id, name) => setOpenPiece({ id, name })} onStateMesh={buildStateMesh} onChanged={reload}
+          onRefit={refit} onRegenerateMesh={regenerateMesh} />
         <BodySection data={data} character={character} onChanged={reload} onOpenBaseBody={onOpenBaseBody} />
       </div>
       {openPiece ? (
@@ -219,7 +233,7 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
 }
 
 function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairstyles, onOpenPiece, onStateMesh,
-  onChanged }: {
+  onChanged, onRefit, onRegenerateMesh }: {
   data: FigurePayload
   character: string
   busy: boolean
@@ -231,6 +245,9 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairs
   onStateMesh: (row: FigureWornRow, state: PieceState) => void
   /** A piece was toggled open / closed: reload. */
   onChanged: () => void
+  /** Ruling A23 b: the single steps of a piece whose fit on the body shape was refused. */
+  onRefit: (row: FigureWornRow) => void
+  onRegenerateMesh: (row: FigureWornRow) => void
 }) {
   const { t } = useI18n()
   const wardrobe = onOpenWardrobe ? (
@@ -268,7 +285,7 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairs
           {data.worn.map((row) => {
             const cell = wornState(row, t)
             const note = row.note && !row.interim && !row.in_body_until && row.state !== 'left_out'
-              && row.state !== 'failed' ? row.note : ''
+              && row.state !== 'failed' && row.state !== 'fit_refused' ? row.note : ''
             const other: PieceState | null = row.piece_state ? (row.piece_state === 'open' ? 'closed' : 'open') : null
             return (
               <tr key={row.item_id} style={{ borderTop: '1px solid var(--border, #30363d)' }}>
@@ -301,10 +318,25 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairs
                 </td>
                 <td style={CELL}>{wardrobe}</td>
                 <td style={CELL}>
-                  <div style={row.state === 'failed' ? ERROR_STYLE : undefined}>{cell.text}</div>
+                  <div style={row.state === 'failed' || row.state === 'fit_refused' ? ERROR_STYLE : undefined}>
+                    {cell.text}
+                  </div>
                   {cell.sub ? <div className="ga-hint">{cell.sub}</div> : null}
                   {note ? <div className="ga-hint">{t(note)}</div> : null}
                   {row.state === 'failed' ? retry : null}
+                  {row.state === 'fit_refused' ? (
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={() => onRefit(row)}
+                        title={t('Fits the piece on the body shape again (CPU, no hub job), then assembles the figure')}>
+                        {t('Re-fit')}
+                      </button>
+                      <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+                        onClick={() => onRegenerateMesh(row)}
+                        title={t('Makes the piece’s mesh anew (1 hub job), then fits it')}>
+                        {t('Regenerate mesh')}
+                      </button>
+                    </div>
+                  ) : null}
                 </td>
               </tr>
             )

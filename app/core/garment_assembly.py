@@ -405,17 +405,26 @@ def body_fit_warning(character_name: str, bare_meta: Dict[str, Any], *,
     ``base_body.NOT_FITTED_ON_BODY`` naming the garments left off with the
     reason (a refused fit on that body), "" when none is. "" for a model on
     the base body."""
-    from app.core import garment_store
     from app.core.base_body import NOT_FITTED_ON_BODY
     from app.models.inventory import get_item
-    if not garment_store.is_body_id(str(bare_meta.get("body_id") or "")):
-        return ""
-    left_off: Dict[str, str] = {}
-    _wanted(character_name, profile, bare_meta=bare_meta, build_layers=True, left_off=left_off)
+    left_off = body_fit_left_off(character_name, bare_meta, profile=profile)
     if not left_off:
         return ""
     names = [f"{(get_item(i) or {}).get('name') or i} ({reason})" for i, reason in sorted(left_off.items())]
     return NOT_FITTED_ON_BODY.format(items=", ".join(names))
+
+
+def body_fit_left_off(character_name: str, bare_meta: Dict[str, Any], *,
+                      profile: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    """``body_fit_warning``'s garments left off the outfit body (item -> the reason), after fitting every garment
+    the model carries onto it; {} for a model on the base body. The publication refuses a model that would lack
+    a piece its figure grafts (Ruling A23 a, ``base_body``)."""
+    from app.core import garment_store
+    if not garment_store.is_body_id(str(bare_meta.get("body_id") or "")):
+        return {}
+    left_off: Dict[str, str] = {}
+    _wanted(character_name, profile, bare_meta=bare_meta, build_layers=True, left_off=left_off)
+    return left_off
 
 
 def wanted_garments(character_name: str, *,

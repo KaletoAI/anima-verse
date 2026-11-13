@@ -3621,6 +3621,11 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
         first = model3d._ref_manifest(front_now)
         pieces, items = dict(first.get("pieces") or {}), list(first.get("items") or [])
         fig = figure_mod.delivered_figure(character_name, profile=profile, pieces=pieces, items=items)
+        if fig.fit_refused:
+            # Ruling A23 a: a wanted piece's fit on the body shape is refused — nothing lacking it is published.
+            from app.models.inventory import get_item
+            raise OutfitError(FIT_REFUSED_NOT_PUBLISHED.format(items=", ".join(
+                f"{(get_item(i) or {}).get('name') or i} ({r})" for i, r in sorted(fig.fit_refused.items()))))
         on = fig.shape
         meshed = not figure_mod.is_plain(on)
         registrations = {v: find_ref_image(character_name, _kind(v), on) for v in BASE_VIEWS}
@@ -3770,8 +3775,6 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
             _store_texture_body(character_name, tsig, outfit, record)
         out_dir = model3d.get_model3d_dir(character_name)
         path = out_dir / f"{signature}.glb"
-        model3d._purge_combination(out_dir, signature, keep_model=path)
-        model3d._publish_model_bytes(path, outfit)
         meta = {k: v for k, v in deepcopy(source["meta"]).items()
                 if k not in _BASE_ONLY_META and k != "outfit_body"}
         if source_state is not None:
@@ -3800,12 +3803,15 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
         mesh_warnings = [w for w in (_dict_of(manifest.get("mesh_items")).get("warnings") or [])
                          if isinstance(w, str) and w]
         if meshed:
-            from app.core.garment_assembly import body_fit_warning
-            not_fitted = body_fit_warning(character_name, meta, profile=profile)
+            # Ruling A23 a: fitted onto the shape BEFORE anything is published — a grafted piece refused there
+            # raises, the model built before stays.
+            not_fitted = _refuse_partial(character_name, fig, meta, profile)
             if not_fitted:
                 mesh_warnings.append(not_fitted)
         if mesh_warnings:
             meta["garment_warnings"] = mesh_warnings
+        model3d._purge_combination(out_dir, signature, keep_model=path)
+        model3d._publish_model_bytes(path, outfit)
         model3d._auto_retexture(character_name, path, meta)
         colour = base_color_image(path.read_bytes())
         prerig = out_dir / "prerig" / path.name
@@ -3918,6 +3924,36 @@ OUTFIT_BODY_CHANGED = "Built on an older body shape"
 #: An outfit model built as another figure than the one delivered now.
 FIGURE_CHANGED = "Built for another figure"
 NOT_FITTED_ON_BODY = "Not fitted on this outfit body, served without: {items}"
+#: Ruling A23 a (T15-F1): an outfit model is never published lacking a piece its figure grafts whose fit on the
+#: body shape was refused — the model built before stays served (and stays the delivered figure, ``figure``).
+FIT_REFUSED_NOT_PUBLISHED = ("Not published: the fit of {items} on the body shape was refused — the figure built "
+                             "before stays served")
+
+
+def _refuse_partial(character_name: str, fig, meta: Dict[str, Any], profile: Optional[Dict[str, Any]]) -> str:
+    """Before an outfit model on a meshed shape is published: fit every garment it carries onto the shape
+    (``garment_assembly.body_fit_left_off``, CPU) and raise ``OutfitError(FIT_REFUSED_NOT_PUBLISHED)`` when a
+    piece the figure ``fig`` grafts (its own-mesh pieces, its HairDeck hair) was left off (Ruling A23 a);
+    else the ``NOT_FITTED_ON_BODY`` warning of the others left off ("" when none)."""
+    from app.core import figure as figure_mod
+    from app.core.garment_assembly import body_fit_left_off
+    from app.models.inventory import get_item
+    left_off = body_fit_left_off(character_name, meta, profile=profile)
+    grafted = set(fig.own)
+    if fig.hair == figure_mod.HAIR_HAIRDECK:
+        from app.core.garment_hair import worn_hair_id
+        hair_id = worn_hair_id(character_name, _profile_of(character_name, profile))
+        if hair_id:
+            grafted.add(hair_id)
+    missing = sorted(set(left_off) & grafted)
+    if missing:
+        names = [f"{(get_item(i) or {}).get('name') or i} ({left_off[i]})" for i in missing]
+        logger.warning("Outfit model %s on %s not published: %s", character_name, fig.shape, "; ".join(names))
+        raise OutfitError(FIT_REFUSED_NOT_PUBLISHED.format(items=", ".join(names)))
+    if not left_off:
+        return ""
+    names = [f"{(get_item(i) or {}).get('name') or i} ({reason})" for i, reason in sorted(left_off.items())]
+    return NOT_FITTED_ON_BODY.format(items=", ".join(names))
 
 
 def is_outfit_body_signature(value: Optional[str]) -> bool:
@@ -4379,9 +4415,11 @@ def _build_on_shape(character_name: str, signature: str, *, fig, base: Dict[str,
     manifest. The own-mesh pieces it carries and the worn hair are fitted
     onto THIS shape before the sidecar is published
     (``garment_assembly.body_fit_warning`` → ``garments.body_fit``, CPU from
-    the cached garment sources) and grafted by the eager assembly; a garment
-    refused on the shape is left off and named in ``garment_warnings``
-    (``NOT_FITTED_ON_BODY``)."""
+    the cached garment sources) and grafted by the eager assembly — BEFORE
+    anything is published: a piece the figure grafts refused on the shape
+    raises ``OutfitError(FIT_REFUSED_NOT_PUBLISHED)`` and the model built
+    before stays (Ruling A23 a); another garment left off is named in
+    ``garment_warnings`` (``NOT_FITTED_ON_BODY``)."""
     from app.core import model3d
     from app.core.extension_rig import extension_metadata
     from app.core.timeutils import utc_now_iso
@@ -4398,8 +4436,6 @@ def _build_on_shape(character_name: str, signature: str, *, fig, base: Dict[str,
             names[v] = used.name
     out_dir = model3d.get_model3d_dir(character_name)
     path = out_dir / f"{signature}.glb"
-    model3d._purge_combination(out_dir, signature, keep_model=path)
-    model3d._publish_model_bytes(path, shape["rigged"])
     meta = {k: v for k, v in deepcopy(shape["meta"]).items() if k not in _BASE_ONLY_META and k != "outfit_body"}
     meta.update({"created_at": utc_now_iso(), "source": "base_body", "signature": signature,
                  "base_variant": variant, "covered_missing": False, "character": character_name,
@@ -4414,12 +4450,14 @@ def _build_on_shape(character_name: str, signature: str, *, fig, base: Dict[str,
     meta.update(manifest)
     meta["figure"] = fig.as_dict()
     warnings = [w for w in (_dict_of(manifest.get("mesh_items")).get("warnings") or []) if isinstance(w, str) and w]
-    from app.core.garment_assembly import body_fit_warning
-    not_fitted = body_fit_warning(character_name, meta, profile=profile)
+    # Ruling A23 a: fitted onto the shape BEFORE anything is published — a grafted piece refused there raises.
+    not_fitted = _refuse_partial(character_name, fig, meta, profile)
     if not_fitted:
         warnings.append(not_fitted)
     if warnings:
         meta["garment_warnings"] = warnings
+    model3d._purge_combination(out_dir, signature, keep_model=path)
+    model3d._publish_model_bytes(path, shape["rigged"])
     if shape["prerig"] is not None:
         prerig = out_dir / "prerig" / path.name
         prerig.parent.mkdir(parents=True, exist_ok=True)

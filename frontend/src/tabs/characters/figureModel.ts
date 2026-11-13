@@ -160,11 +160,14 @@ export interface FigureWornRow {
   item_id: string
   name: string
   mode: MeshMode
-  state: 'ready' | 'failed' | 'building' | 'left_out' | 'interim' | 'pending'
+  state: 'ready' | 'failed' | 'fit_refused' | 'building' | 'left_out' | 'interim' | 'pending'
   note: string
   interim: boolean
   left_out: string
   failure: string
+  /** Ruling A23 b: its fit on the body shape was refused (the reason; "" otherwise) — the figure built before stays
+   *  served; the row offers Re-fit and Regenerate mesh. */
+  fit_refused?: string
   /** Hub jobs its chain step plans (0 = none planned, null = unknown). */
   jobs: number | null
   /** Open / closed of a closable piece; null = not closable (NOT the readiness above). */
@@ -339,9 +342,12 @@ export const IN_BODY_UNTIL_BUILD = 'own mesh ready — in the body until the nex
  *  Task 11g fix round 2) — the Build meshes the shape first, the figure built before stays served meanwhile. */
 export const IN_BODY_UNTIL_SHAPE = 'not in the 3D figure until its body shape is built'
 
+/** Under a piece whose fit on the body shape was refused (Ruling A23): nothing lacking it is published. */
+export const FIT_REFUSED_NOTE = 'the figure built before stays shown until it fits'
+
 /** The state column of a worn row (spec sketch) and the line under it. */
 export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | 'failure' | 'left_out' | 'note' | 'interim'
-  | 'in_body_until'>, t: Tr = EN): { text: string; sub: string | null } {
+  | 'in_body_until' | 'fit_refused'>, t: Tr = EN): { text: string; sub: string | null } {
   const sub = row.in_body_until === 'mesh' ? t(IN_BODY_UNTIL_MESH)
     : row.in_body_until === 'build' ? t(IN_BODY_UNTIL_BUILD)
       : row.interim ? t(IN_BODY_UNTIL_SHAPE) : null
@@ -351,6 +357,10 @@ export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | '
   switch (row.state) {
     case 'ready': return { text: t('✓ ready'), sub: null }
     case 'failed': return { text: t('failed — {reason}').replace('{reason}', row.failure || row.note), sub: null }
+    case 'fit_refused': return {
+      text: t('Fit refused — {reason}').replace('{reason}', row.fit_refused || row.note),
+      sub: t(FIT_REFUSED_NOTE),
+    }
     case 'left_out': return { text: t('left out: {reason}').replace('{reason}', row.left_out || row.note), sub: null }
     case 'building': return { text: t('⏳ building'), sub }
     default:

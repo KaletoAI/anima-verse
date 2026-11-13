@@ -403,6 +403,9 @@ BASE_OUTDATED = "Base body outdated — Build to refresh"
 BASE_MISSING = "No base body yet — Build to create"
 #: The wanted / delivered words of a piece in ``pending_changes``.
 LEFT_OUT = "left_out"
+#: Why a wanted own-mesh piece is not on the figure delivered (Ruling A23 c, T15-F1): its fit on the wanted body
+#: shape was refused — a cached failure keyed by the fit's inputs and the shape (``garment_store.body_failure``).
+FIT_REFUSED = "Fit refused — {reason}"
 
 
 @dataclass(frozen=True)
@@ -436,6 +439,11 @@ class Figure:
     #: The hairstyle shown when it is not the plain body's (``WornSets.hair_style``; "" while the plain body's
     #: hair or no hair is shown) — two figures that differ only in the worn HairDeck hairstyle differ here.
     hair_style: str = ""
+    #: Ruling A23 (T15-F1), never recorded (``as_dict``) nor compared: the wanted own-mesh pieces whose fit on the
+    #: wanted body shape is refused (item -> reason) while a figure is shown — then nothing is published lacking
+    #: them and this figure is the one kept (``kept``: the figure the stored model of the outfit was built as).
+    fit_refused: Dict[str, str] = field(default_factory=dict, compare=False)
+    kept: bool = field(default=False, compare=False)
 
     def as_dict(self) -> Dict[str, Any]:
         """The JSON form an outfit model sidecar records as ``figure`` —
@@ -855,6 +863,38 @@ def _shape_choice(character_name: str, wanted: "Figure", sets: WornSets, extra, 
                   interim={item_id: INTERIM_PAINTED.format(what=WHAT_SHAPE) for item_id in wanted.in_body})
 
 
+def figure_served(character_name: str, signature: str = "") -> bool:
+    """Whether the character has a figure to show (Ruling A15 b): an outfit model is served for the worn
+    outfit (``model3d.find_model3d_serving`` — exact, stale or the nearest stand-in; never the plain base).
+    ``signature`` (``base_body.prepare_outfit_figure``, an outfit rebuild or batch): a stored model of THAT
+    outfit counts (stale ones too); another outfit than the worn one has nothing else to show."""
+    from app.core import model3d
+    try:
+        if signature:
+            if model3d.find_model3d(character_name, signature, include_stale=True) is not None:
+                return True
+            from app.core.model_refs import current_outfit_state
+            if signature != current_outfit_state(character_name)[2]:
+                return False
+        return model3d.find_model3d_serving(character_name)[0] is not None
+    except Exception:  # noqa: BLE001 — nothing to show, never a failure of the plan
+        logger.debug("Served model of %s unreadable", character_name, exc_info=True)
+        return False
+
+
+def _previous_figure(character_name: str, signature: str, bsig: str) -> Optional[Figure]:
+    """The figure the stored model of the outfit ``signature`` (stale ones too) was built as, on the plain body
+    ``bsig``; None without one (Ruling A23 c: it stays the delivered figure while a wanted fit is refused)."""
+    from app.core import model3d
+    try:
+        path = model3d.find_model3d(character_name, signature, include_stale=True)
+        built = built_figure(model3d._read_sidecar(path)) if path is not None else None
+    except Exception:  # noqa: BLE001 — no previous figure, never a failure of the resolver
+        logger.debug("Previous figure of %s (%s) unreadable", character_name, signature, exc_info=True)
+        return None
+    return built if built is not None and built.bsig == bsig else None
+
+
 def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional[Dict[str, str]] = None,
                items: Optional[list] = None,
                piece_state: Optional[Dict[str, str]] = None) -> Tuple[Figure, Figure]:
@@ -872,8 +912,11 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     # stands in (F13 b); a piece that only lacks its CPU fit stays an own-mesh piece (A15 a).
     extra, closed, refit = _own_pending(character_name, sets, base_sha=base_sha, profile=profile)
     # 1. The shape — a piece whose fit is refused on a stored meshed shape joins the body too (bounded: the
-    # set only grows). A piece waiting for its CPU fit has no base fit to judge there yet: it counts as fitted
-    # (its fit on the shape is CPU work after its base fit, like on an interim shape not stored yet).
+    # set only grows) while no figure is shown; with one shown (Ruling A23 c) the refused pieces stay out of any
+    # interim: the stored model of the outfit stays the delivered figure, else they are left out (never
+    # published so — ``base_body``). A piece waiting for its CPU fit has no base fit to judge there yet: it counts
+    # as fitted (its fit on the shape is CPU work after its base fit, like on an interim shape not stored yet).
+    fit_refused: Dict[str, str] = {}
     while True:
         choice = _shape_choice(character_name, wanted, sets, extra, bsig=bsig, variant=variant, items=items,
                                profile=profile)
@@ -888,8 +931,15 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
                     refused[item_id] = reason
         if not refused:
             break
+        if figure_served(character_name, wanted.signature):
+            fit_refused = refused
+            break
         extra |= set(refused)
-    own = tuple(sorted(set(sets.own) - set(choice.in_body)))
+    if fit_refused:
+        previous = _previous_figure(character_name, wanted.signature, bsig)
+        if previous is not None:
+            return wanted, replace(previous, fit_refused=fit_refused, kept=True)
+    own = tuple(sorted(set(sets.own) - set(choice.in_body) - set(fit_refused)))
     shown_closed = tuple(sorted(closed & set(own)))
     notes = dict(choice.notes)
     notes.update({item_id: SHOWN_CLOSED for item_id in shown_closed})
@@ -923,9 +973,10 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
                               items=items, profile=profile)
     delivered = Figure(signature=wanted.signature, bsig=bsig, shape=choice.shape, texture=texture,
                        in_body=tuple(sorted(choice.in_body)), painted=tuple(sorted(choice.painted)), own=own,
-                       left_out={}, interim=dict(choice.interim), notes=notes, hair=hair,
+                       left_out={item_id: FIT_REFUSED.format(reason=reason) for item_id, reason in fit_refused.items()},
+                       interim=dict(choice.interim), notes=notes, hair=hair,
                        pieces=dict(sets.pieces), open=sets.open, shown_closed=shown_closed,
-                       in_body_own=tuple(choice.in_body_own), hair_style=hair_style)
+                       in_body_own=tuple(choice.in_body_own), hair_style=hair_style, fit_refused=fit_refused)
     return wanted, delivered
 
 

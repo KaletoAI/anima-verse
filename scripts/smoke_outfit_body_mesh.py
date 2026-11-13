@@ -72,16 +72,20 @@ Expected, derived by hand from the spec and the plan's Global Constraints:
 [3] B = A + dress (own mesh), the dress's chain run first (no outfit render
     runs a chain since task 11c-2 of plan 2026-11-12-unified-worn-pieces,
     ruling A14): the same shape bA -> 0 image jobs, 0 chain steps on a body
-    (no mesh, no rig), 0 worker runs; B's model names body bA; the dress has
-    an accepted (base) fit but no prepared mesh in this fixture, so its fit
-    on bA (Task 2, garments.body_fit) cannot be made: garment_warnings name
-    NOT_FITTED_ON_BODY for "Dress (The garment mesh is missing — run the
-    mesh step first)", the failure is recorded on bA
+    (no mesh, no rig), 0 worker runs; the dress has an accepted (base) fit
+    but no prepared mesh in this fixture, so its fit on bA (Task 2,
+    garments.body_fit) cannot be made: the failure is recorded on bA
     (garments/bodies/<bA>/failed/dress_<F>.json), no assembled/<sigB>.glb —
-    the base fit is never grafted onto the body. With that refusal on bA the
-    dress is in the body now (ruling A11): the delivered figure stands on
-    another (interim) shape, in_body [dress, shoes, under], in_body_own
-    [dress], own [] — B stale "figure".
+    the base fit is never grafted onto the body. Ruling A23 a (T15-F1): NO
+    model of B is published lacking the dress (result ok False, its error
+    FIT_REFUSED_NOT_PUBLISHED for "Dress (The garment mesh is missing — run
+    the mesh step first)"); A's model stays served (the nearest stand-in).
+    A23 c: while it is shown the refused dress never goes into an interim
+    body — the delivered figure stays on bA, in_body [shoes, under],
+    in_body_own [], own [], left_out {dress: "Fit refused — The garment mesh
+    is missing — run the mesh step first"}. (Before A23 B's model was
+    published with the NOT_FITTED_ON_BODY warning and the dress then went
+    into an interim shape of its own — hub jobs for a figure already shown.)
 [4] C {dress}: empty dress text -> the base body: 0 image jobs, no mesh/rig
     job, 0 worker runs; model dressed False, no body_id.
 [5] A rebuilt with force in mesh mode: no mesh/rig job (the body is current).
@@ -486,19 +490,22 @@ def main() -> int:
         check("B: the dress has a (base) fit", bool(fit), True)
         jobs, runs, steps, result = render_and_build()
         meta_b = model_meta(sig_b)
-        check("B: ok, 0 image jobs, 0 runs, no mesh/rig job", (result.get("ok"), jobs, runs, jobs_of(steps)),
-              (True, 0, 0, []))
-        check("B: same tsig, same body", (meta_b.get("texture_signature"), meta_b.get("body_id")), (t_a, b_a))
-        check("B: not fitted on this body", base_body.NOT_FITTED_ON_BODY.format(
-            items="Dress (The garment mesh is missing — run the mesh step first)")
-              in (meta_b.get("garment_warnings") or []), True)
+        reason = "The garment mesh is missing — run the mesh step first"
+        check("B: not ok, 0 image jobs, 0 runs, no mesh/rig job", (result.get("ok"), jobs, runs, jobs_of(steps)),
+              (False, 0, 0, []))
+        check("B: not published (A23 a)", (base_body.FIT_REFUSED_NOT_PUBLISHED.format(items=f"Dress ({reason})")
+                                           in str(result.get("error")), meta_b, (mdir / f"{sig_b}.glb").exists()),
+              (True, {}, False))
+        served = model3d.find_model3d_serving("Demo")
+        check("B: A's model stays served", served[0].stem if served[0] else None, sig_a)
         check("B: failure recorded on the body",
               gs.garment_path("Demo", "dress", gs.parse_name(fit[0])[1], "failed", body=b_a).is_file(), True)
         check("B: no assembly with a base fit", (mdir / "assembled" / f"{sig_b}.glb").exists(), False)
         now = figure.delivered_figure("Demo")
-        check("B: the refused dress is in the body now (ruling A11): its own interim shape, B stale",
-              (now.shape not in (b_a, b1), now.in_body, now.in_body_own, now.own, stale_reason()),
-              (True, ("dress", "shoes", "under"), ("dress",), (), "figure"))
+        check("B: the refused dress left out, never in an interim body while A is shown (A23 c)",
+              (now.shape, now.in_body, now.in_body_own, now.own, now.left_out, now.fit_refused),
+              (b_a, ("shoes", "under"), (), (), {"dress": figure.FIT_REFUSED.format(reason=reason)},
+               {"dress": reason}))
 
         # --- [4] empty dress text ---------------------------------------------------------
         print("[4] empty dress text -> the base body")

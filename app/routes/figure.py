@@ -27,6 +27,12 @@ body actions):
   "manual")``: ``{"status": "started" | "queued" | "current"}``; 409 off the
   pipeline with the reason; 503 when the profile could not be read (the
   Build's failure state records it, ruling F13 e).
+* ``POST /characters/{c}/figure/refit {item_id}`` — the worn row's "Re-fit" of
+  a piece whose fit on the body shape was refused (Ruling A23 b,
+  ``figure_build.refit``): its cached refusal is dropped and an automatic
+  Build (CPU only) fits it and assembles the figure — ``{"status": "started"
+  | "queued" | "current"}``; 400 when the piece's fit is not refused, 409 off
+  the pipeline, 503 when the profile could not be read.
 * ``POST /characters/{c}/base-body/run-all`` — the Base body tab's "Run all"
   (``figure_build.start_base_run_all``, Task UI1 rule R1): the plain body's
   refresh — only the steps that are not current — else the face cleanup or the
@@ -127,6 +133,26 @@ def build_figure(character_name: str, _: Dict[str, Any] = Depends(require_admin)
     from app.core import figure_build
     _require_character(character_name)
     result = figure_build.start(character_name, reason="manual")
+    if result.get("status") == "off":
+        raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))
+    if result.get("status") == "failed":
+        raise HTTPException(status_code=503, detail=str(result.get("reason") or "Build failed"))
+    return result
+
+
+class RefitRequest(BaseModel):
+    item_id: str
+
+
+@router.post("/{character_name}/figure/refit", status_code=202)
+def refit_figure_piece(character_name: str, body: RefitRequest,
+                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import figure_build
+    _require_character(character_name)
+    try:
+        result = figure_build.refit(character_name, body.item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if result.get("status") == "off":
         raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))
     if result.get("status") == "failed":

@@ -60,7 +60,10 @@ body makes every view and the stored shape count as missing):
     2 of Task 11g: a refused view / an unmeshed shape — nothing is built on
     what it left): the calls end with ``shape``, ``skipped == ["pieces",
     "texture", "fits", "assemble"]`` (every later step, in order);
-    ``STOP_STEPS == {plain_body, interim, shape, texture}``.
+    ``STOP_STEPS == {plain_body, interim, shape, texture}``; ``DEPENDS`` every
+    step on the plain body, the texture on the shape, and the assembly on the
+    fits (Ruling A23 a, T15-F1: a refit refused again assembles nothing — no
+    outfit model without a wanted own-mesh piece).
 [9] Ruling C4 (fix round 2 of Task 11g), same stubs. (a) coat in the body,
     its shape not stored, nothing painted, no model: the delivered figure
     paints the coat on the plain body (rule 1, ``_painted_interim`` True);
@@ -479,7 +482,7 @@ def stub_sections():
     check("[6] DEPENDS", fb.DEPENDS, {"interim": {"plain_body"}, "shape": {"plain_body"},
                                       "pieces": {"plain_body"}, "hair": {"plain_body"},
                                       "texture": {"plain_body", "shape"}, "fits": {"plain_body"},
-                                      "assemble": {"plain_body"}})
+                                      "assemble": {"plain_body", "fits"}})
 
 
 KEYS = {"pipeline", "humanoid", "auto_build", "status", "changes", "cost", "build", "wanted", "delivered",
