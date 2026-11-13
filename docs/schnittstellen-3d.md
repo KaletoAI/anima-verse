@@ -12212,7 +12212,8 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   deeper. The body is never pushed. Shadows use patched
   depth/distance materials with the same capsules. Without a garment mesh or capsules nothing is patched. The shader and the TypeScript `pushOutOfCapsules` are one rule
   (`scripts/smoke_garment_collision.mjs` executes the shader text); `scripts/check_garment_collision.mjs`
-  measures the penetration of a garment through the body on the real clips before/after the push, and with
+  measures with the SERVED capsule set (the `collision` record of the sidecar `MODEL.json` beside the GLB; a GLB-only
+  fit only behind `--fitted`, printed as not the client's set — `scripts/smoke_check_collision_payload.mjs`) the penetration of a garment through the body on the real clips before/after the push, and with
   `--motion` (the `motion` payload) every clip also with the secondary motion running plus the SHOW-THROUGH of
   the moving tissue through the garment (share of the bind-covered tissue vertices in front of every fabric layer
   along their torso-fixed line of sight). The capsules never reach a chest under a jacket (the `chest` capsule

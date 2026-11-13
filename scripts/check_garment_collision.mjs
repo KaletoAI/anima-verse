@@ -7,8 +7,11 @@
  *
  * Usage:
  *   node scripts/check_garment_collision.mjs MODEL.glb [MODEL2.glb …]
- *        [--collision PAYLOAD.json]   collision payload (default: fitted from the GLB by
- *                                     app/core/collision.py::fit_capsules via ./.venv/bin/python)
+ *        [--collision PAYLOAD.json]   collision payload of the one model (default: the SERVED record —
+ *                                     the `collision` of the sidecar MODEL.json beside the GLB)
+ *        [--fitted]                   fallback when a model has no served record: fitted from the GLB
+ *                                     alone by app/core/collision.py::fit_capsules (no extension capsules,
+ *                                     no character scales — NOT what the client gets; printed so)
  *        [--clips walk,run,sit]       clip kinds (default walk,run,sit; hair: sit,celebrating,walk)
  *        [--set female]               clip set tried before the root set
  *        [--samples 4]                samples per clip at t = k/N · duration
@@ -104,6 +107,7 @@ import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import { fileURLToPath } from 'url'
+import { resolvePayloadSource } from './collisionPayloadSource.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -115,6 +119,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--collision') opts.collision = argv[++i]
+    else if (a === '--fitted') opts.fitted = true
     else if (a === '--clips') opts.clips = argv[++i].split(',').filter(Boolean)
     else if (a === '--set') opts.set = argv[++i]
     else if (a === '--samples') opts.samples = Math.max(1, Number(argv[++i]))
@@ -397,6 +402,11 @@ async function main() {
     process.exit(run.status ?? 1)
   }
   const opts = parseArgs(process.argv.slice(2))
+  // Which capsule set each model is measured with — resolved up front, so a model without one stops the run
+  // before any clip is loaded (collisionPayloadSource.mjs).
+  const fileIo = { exists: (f) => fs.existsSync(f), readJson: (f) => JSON.parse(fs.readFileSync(f, 'utf8')) }
+  const sources = new Map(opts.models.map((m) => [m, resolvePayloadSource(m, {
+    collision: opts.collision, fitted: !!opts.fitted, modelCount: opts.models.length }, fileIo)]))
   const motion = opts.motion ? JSON.parse(fs.readFileSync(opts.motion, 'utf8')) : null
   stubBrowser()
   const THREE = await import('three')
@@ -436,10 +446,10 @@ async function main() {
   for (const modelPath of opts.models) {
     const name = path.basename(modelPath).replace(/\.glb$/, '')
     // ---- payload
-    let payload
-    const payloadFile = opts.models.length === 1 ? opts.collision : null
-    if (payloadFile) payload = JSON.parse(fs.readFileSync(payloadFile, 'utf8'))
-    else {
+    const source = sources.get(modelPath)
+    let payload = source.payload
+    console.log(`== ${name}: ${source.note}`)
+    if (source.kind === 'fitted') {
       const py = spawnSync(path.join(REPO, '.venv/bin/python'), ['-c',
         'import json,sys\nfrom app.core.collision import fit_capsules\n'
         + 'print(json.dumps(fit_capsules(open(sys.argv[1],"rb").read())))', path.resolve(modelPath)],
@@ -614,7 +624,8 @@ async function main() {
       }
     }
     const mm = report.models[name] = {
-      file: modelPath, vertices: total, garment_vertices: garmentIdx.length, body_faces: bodyFaces.length / 3,
+      file: modelPath, payload_source: { kind: source.kind, file: source.file }, vertices: total,
+      garment_vertices: garmentIdx.length, body_faces: bodyFaces.length / 3,
       skin_crosscheck_m: worst,
       capsules: gc.entries.map((e) => ({ mesh: e.mesh.name, kind: e.kind, count: e.capsules.length })),
       capsules_missing: gc.binding.missing,
