@@ -1429,9 +1429,13 @@ def _purge_combination(out_dir: Path, signature: str, *,
     # facefix-ref/ is not listed: the upscaled photo outlives a mesh swap
     # (see _publish_signature); see drop_reference_cache below.
     # The garment assemblies are derived from the files being replaced too.
-    for directory in (out_dir / "unrigged", out_dir / "facefix", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME,
+    # The mesher's original (MESHER_DIR) belongs to the unrigged source beside it and goes or stays with it: left
+    # behind, it outlived a new mesh of the same signature, and "Re-apply face cleanup" (which starts from it)
+    # rebuilt the model from the OLD mesh (Finding A38).
+    sources = (out_dir / "unrigged", out_dir / MESHER_DIR)
+    for directory in (*sources, out_dir / "facefix", out_dir / RAW_DIR_NAME, out_dir / "prerig", out_dir / LOW_TIER / "prerig", out_dir / LOW_TIER / RAW_DIR_NAME,
                       out_dir / COVERED_DIR, out_dir / ASSEMBLED_DIR, out_dir / ASSEMBLED_DIR / LOW_TIER):
-        if (preserve_unrigged and directory.name == "unrigged") or (preserve_sources and directory.name in ("unrigged", "facefix")):
+        if (preserve_unrigged and directory in sources) or (preserve_sources and (directory in sources or directory.name == "facefix")):
             continue
         for old in directory.glob(f"{signature}.*"):
             old.unlink()
