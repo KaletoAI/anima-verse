@@ -80,7 +80,7 @@ and stay accepted while they follow the front.
 
 The piece rule differs from the outfit's dressed views (``view_composite.
 RULES``): a single piece can be small — a belt measured a put-on region of
-0.014 of the figure, a necklace 0.0055 (Anima Divide copy, 2026-11-12), both
+0.014 of the figure, a necklace 0.0055 (a live world copy, 2026-11-12), both
 refused by the outfit rule's 0.03 — so the piece rule keeps every garment
 component down to 30 px (no opening), scores the put-on at full resolution
 with a smaller head share and no dilation, and accepts a region from 0.002

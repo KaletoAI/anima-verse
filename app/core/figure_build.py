@@ -13,7 +13,7 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
    (``Figure.interim``: an own-mesh piece IN the body shape until its mesh
    is ready, ruling A11) and no outfit model of that interim figure is
    stored. Never for an in-body piece waiting for its shape (Ruling C4, fix
-   round 2 of Task 11g: no PAINTED interim — Ylva's Build painted a nude
+   round 2 of Task 11g: no PAINTED interim — a live test Build painted a nude
    back onto the plain body; ``_painted_interim``): the figure delivered
    before stays served until the ``shape`` step has built it. Else: the
    interim body shape when it is not stored yet (``base_body.prepare_shape``
@@ -364,6 +364,34 @@ def _runnable(steps: List[Step], explicit: bool) -> List[Step]:
     return [s for s in steps if explicit or not (s.failed or s.manual)]
 
 
+#: The steps that render views (Ruling FR-I3: a refused view makes them a cached failure).
+VIEW_STEPS = frozenset({"interim", "shape", "texture"})
+#: ``Step.failed`` of a view step whose view was refused for its inputs (Ruling FR-I3).
+VIEW_REFUSED = "View refused — {views}"
+
+
+def _refused(step: Step, refusals: Dict[str, str]) -> Step:
+    """``step`` as a cached failure (Ruling FR-I3) when a view it renders was refused for its inputs: listed
+    "failed — Retry" with what its retry spends (the estimates count a refused view as one draft); an automatic
+    Build skips it, a manual one clears the records and retries once."""
+    if not refusals:
+        return step
+    reason = VIEW_REFUSED.format(views="; ".join(f"{v}: {r}" for v, r in sorted(refusals.items())))
+    return Step(step.name, f"{step.label}{FAILED_SUFFIX}", step.jobs, step.item_id, failed=reason,
+                manual=step.manual)
+
+
+def _retry_refused_views(character_name: str, step: Optional[Step], explicit: bool, *signatures: str) -> None:
+    """A manual Build retries a view step that was a cached refusal once (Ruling FR-I3): its records go."""
+    if not explicit or step is None or not step.failed:
+        return
+    from app.core import base_body
+    for signature in signatures:
+        if signature:
+            base_body.clear_view_refusals(character_name, signature)
+    logger.info("Build %s: retrying the refused views of %s", character_name, ", ".join(s for s in signatures if s))
+
+
 #: The interim step's label when it makes an interim body shape first (ruling A11 / A14).
 INTERIM_SHAPE_LABEL = "Interim body shape (own mesh in the body until ready): {parts}"
 
@@ -446,7 +474,13 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     waits = _interim_waits(character_name, delivered, built)
     if delivered.interim and not painted_interim and not kept_serving and not waits and (
             rebased or built is None or built.as_dict() != delivered.as_dict()):
-        steps.append(_interim_step(character_name, delivered, signature, rebased=rebased, profile=profile))
+        step = _interim_step(character_name, delivered, signature, rebased=rebased, profile=profile)
+        if not rebased:   # Ruling FR-I3
+            refusals = dict(base_body.dressed_view_refusals(character_name, delivered, signature))
+            if not figure.is_plain(delivered.shape):
+                refusals.update(base_body.shape_view_refusals(character_name, delivered.shape, delivered.bsig))
+            step = _refused(step, refusals)
+        steps.append(step)
     # Ruling A11: while own-mesh pieces are in the delivered body shape (no mesh yet, or ready but not taken
     # out), the wanted shape / texture take them out — only a manual Build spends that (``figure.TAKE_OUT``).
     # Ruling A15 b: pieces waiting for their mesh while a figure is shown are in no shape that is built — the
@@ -459,8 +493,10 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         # Ruling C4: every view the shape needs is refreshed before it is meshed (a stale one re-made).
         views = set_jobs if rebased else base_body.shape_view_jobs(character_name, wanted.shape, bsig)
         stages = model3d.mesh_hub_stages(character_name, wanted.shape)
-        steps.append(Step("shape", "Body shape: " + " + ".join(([f"views {views}"] if views else []) + stages),
-                          views + len(stages), manual=take_out))
+        step = Step("shape", "Body shape: " + " + ".join(([f"views {views}"] if views else []) + stages),
+                    views + len(stages), manual=take_out)
+        steps.append(step if rebased else _refused(step, base_body.shape_view_refusals(character_name,
+                                                                                         wanted.shape, bsig)))
 
     for item_id in wanted.own:
         # The worn state's chain only (plan Task 11b: the other state is built by its own button, never both
@@ -482,13 +518,17 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
             views = (set_jobs if rebased or not shape_built
                      else base_body.dressed_view_estimate(character_name, wanted, signature, profile=profile)
                      if views_missing else 0)
-            steps.append(Step("texture", _views_label("Texture", views, copied=views_missing), views,
-                              manual=take_out))
+            step = Step("texture", _views_label("Texture", views, copied=views_missing), views, manual=take_out)
+            steps.append(step if rebased or not shape_built
+                         else _refused(step, base_body.dressed_view_refusals(character_name, wanted, signature)))
     # Ruling A23 b: a refused fit on the wanted shape is a cached failure — an automatic Build plans no views,
     # fits or assembly for it (nothing new can be published without the piece); a manual one re-fits it once.
     refused = dict(delivered.fit_refused)
-    hold = bool(refused) and not explicit
-    if (not painted_interim and not waits and not refused
+    # Ruling FR-I3: a view refused for its inputs is a cached failure too — an automatic Build plans nothing
+    # that needs it (no other views, fits or assembly); a manual one retries it once.
+    view_hold = not explicit and any(s.failed and s.name in VIEW_STEPS for s in steps)
+    hold = (bool(refused) or view_hold) and not explicit
+    if (not painted_interim and not waits and not refused and not view_hold
             and not any(s.name in ("interim", "texture") for s in _runnable(steps, explicit))
             and _views_missing(character_name, delivered, signature)):
         # Ruling F16: the views of the figure delivered NOW, judged like the Pose tab (``dressed_image``) — a
@@ -496,7 +536,10 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         views = base_body.dressed_view_estimate(character_name, delivered, signature, profile=profile)
         label = (_views_label("Views", views, copied=True) if views or delivered.texture
                  else "Views: copied from the body's views")
-        steps.append(Step("texture", label, views))
+        step = _refused(Step("texture", label, views),
+                        base_body.dressed_view_refusals(character_name, delivered, signature))
+        steps.append(step)
+        hold = hold or (not explicit and bool(step.failed))
 
     grafted = bool(wanted.own) or wanted.hair == figure.HAIR_HAIRDECK
     work = _runnable(steps, explicit)
@@ -536,6 +579,7 @@ def cost(character_name: str, steps: Optional[List[Step]] = None) -> Dict[str, A
 
 _lock = threading.Lock()
 _queues: Dict[str, Deque[Tuple[str, bool]]] = {}  # character -> follow-up (reason, automatic), at most one
+_refit_items: Dict[str, str] = {}         # character -> the piece of its queued Re-fit run (Ruling FR-I2)
 _active: set = set()                      # characters whose worker thread is alive
 _current: Dict[str, Dict[str, Any]] = {}  # character -> the run in flight
 _last: Dict[str, Dict[str, Any]] = {}     # character -> the last run that had steps
@@ -561,7 +605,7 @@ VIEWS_BUILD_RUNNING = ("Not rendered: a Build runs for this character now and re
 
 #: 409 of the base body's own actions (a view's render, "Run skin step", the base model) while a Build of the
 #: character runs (Ruling A20): the Build plans and builds on the base body as it found it — a base edit beside
-#: it made its views and meshes stale while they were built (Kai, 2026-11-13: a new front 34 s after the Build
+#: it made its views and meshes stale while they were built (live test, 2026-11-13: a new front 34 s after the Build
 #: started).
 BASE_BUILD_RUNNING = ("Not started: a Build runs for this character now and builds on the base body as it is — "
                       "change the base body after the Build")
@@ -574,7 +618,7 @@ def running(character_name: str) -> bool:
 
 
 #: Ruling A26 a (symmetrical to A20's ``BASE_BUILD_RUNNING``): a Build does not start while a base-body step of
-#: the character is queued or running — it would build on a base that is being replaced (Kai, 2026-11-13: the
+#: the character is queued or running — it would build on a base that is being replaced (live test, 2026-11-13: the
 #: skin step rewrote the base front 60 s into a Build, the dressed front was edited from the old one). ``step``
 #: is ``base_step_in_flight``'s name of it.
 BASE_STEP_RUNNING = "{step} is running — Build once it is done"
@@ -815,10 +859,14 @@ def _worker(character_name: str) -> None:
                 _current.pop(character_name, None)
                 return
             reason, automatic = queue.popleft()
+            refit_item = _refit_items.pop(character_name, "") if reason == REFIT_REASON else ""
             _current[character_name] = {"reason": reason, "step": None, "steps": []}
         try:
             with build_lock(character_name):
-                _run(character_name, reason, automatic=automatic)
+                if refit_item:
+                    _run_refit(character_name, refit_item)
+                else:
+                    _run(character_name, reason, automatic=automatic)
         except Exception:  # noqa: BLE001 — a worker reports, never raises
             logger.exception("Build %s (%s) failed", character_name, reason)
 
@@ -1020,7 +1068,7 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     snapshot = _base_snapshot(character_name)   # the Build's own change of the base views
                 elif _base_changed(character_name, snapshot):
                     # Ruling A26 b: the base changed while the step ran — what it made stands on the replaced
-                    # base, and a failure is BECAUSE of that (Kai: "views missing" for a dressed front edited
+                    # base, and a failure is BECAUSE of that (a live test: "views missing" for a dressed front edited
                     # from the replaced base front). Stop here, never with the step's own error.
                     logger.warning("Build %s: the base views changed while %s ran (%s)", character_name,
                                    step.label, error or "done")
@@ -1215,6 +1263,8 @@ def _run_interim(character_name: str, step: Step, explicit: bool = False) -> str
     from app.core import base_body, figure, model3d
     _profile, wanted, delivered, items = _now(character_name)
     shape = delivered.shape
+    _retry_refused_views(character_name, step, explicit, wanted.signature,
+                         "" if figure.is_plain(shape) else shape)
     result = None
     if not figure.is_plain(shape) and delivered.in_body_own and not figure._shape_stored(
             character_name, shape, delivered.bsig):
@@ -1242,6 +1292,7 @@ def _run_shape(character_name: str, step: Step, explicit: bool = False) -> str:
     shape = wanted.shape
     if figure.is_plain(shape):
         return ""
+    _retry_refused_views(character_name, step, explicit, shape)
     with model3d.shape_guard(character_name, shape, lambda: _now(character_name)[1].shape == shape):
         result = base_body.prepare_shape(character_name, wanted, items=items, signature=wanted.signature)
     if result is not None and not result.get("ok") and not result.get("superseded"):
@@ -1298,6 +1349,7 @@ def _run_texture(character_name: str, step: Step, explicit: bool = False) -> str
         logger.info("Build %s: no views rendered — an own mesh is not ready and the figure shown stays",
                     character_name)
         return ""
+    _retry_refused_views(character_name, step, explicit, wanted.signature)
     return _dressed(character_name, wanted)
 
 
@@ -1360,25 +1412,121 @@ def refit_refused(character_name: str, item_ids: Optional[List[str]] = None) -> 
     return still
 
 
+#: The run reason of a "Re-fit" (``refit``): the worker runs ``_run_refit`` for it, never a Build.
+REFIT_REASON = "refit"
+#: The steps a "Re-fit" runs (Ruling FR-I2): the CPU refit of the piece and the CPU assembly — never a hub step.
+REFIT_STEPS = frozenset({"fits", "assemble"})
+#: ``refit``'s refusal while a Build of the character runs (it would re-fit and assemble itself).
+REFIT_BUILD_RUNNING = "A Build runs for this character now — Re-fit after it"
+#: A Re-fit whose fit was accepted while hub steps are due (Ruling FR-I2): they stay due for Build, nothing is
+#: assembled (the figure built before stays served).
+REFIT_DUE = "Fit accepted — not assembled: {steps} still due — Build to finish"
+#: A Re-fit whose fit was accepted while views of the figure are missing: their render is hub work (FR-I2).
+REFIT_VIEWS_DUE = "views of the figure"
+
+
 def refit(character_name: str, item_id: str) -> Dict[str, Any]:
-    """The Figure tab's "Re-fit" of a piece whose fit on the body shape was refused (Ruling A23 b): its cached
-    refusal is dropped and an automatic Build is started — CPU only (it never runs a manual step): it fits the
-    piece and assembles the figure when the fit is accepted, the figure built before stays served otherwise.
-    ``start``'s answer; ValueError when the piece's fit is not refused."""
-    from app.core import garment_store
+    """The Figure tab's "Re-fit" of a piece whose fit on the body shape was refused (Rulings A23 b, FR-I2):
+    a run of its own in the character's Build worker (``_run_refit``) that, under the ``build_lock`` (FR-minors),
+    drops the cached refusal, fits the piece on the CPU and — accepted, and no hub step due — assembles the
+    figure on the CPU. It never starts a hub step: what is due stays due for Build. ``{"status": "started"}``;
+    ``"building"`` while a Build of the character runs (``REFIT_BUILD_RUNNING``), ``"base_busy"`` while a base
+    step is in flight (Ruling A26 a), ``"off"`` / ``"failed"`` as ``start``; ValueError when the piece's fit is
+    not refused."""
     busy = base_step_in_flight(character_name)
     if busy:
         # Ruling A26 a: a click — refused naming the base step (nothing cleared).
         return {"status": "base_busy", "reason": BASE_STEP_RUNNING.format(step=busy)}
-    profile, wanted, delivered, _items = _now(character_name)
+    try:
+        profile = _read_profile(character_name)
+    except Exception as e:  # noqa: BLE001 — recorded like a Build's start
+        return _record_unread(character_name, REFIT_REASON, e)
+    if not on_pipeline(character_name, profile=profile):
+        return {"status": "off", "reason": OFF_PIPELINE}
+    from app.core import figure
+    _wanted, delivered = figure._delivered(character_name, profile=profile)
     if item_id not in delivered.fit_refused:
         raise ValueError(f"{_item_name(item_id)}: its fit on the body shape is not refused")
-    found = _refused_fit_of(character_name, item_id, wanted, profile)
-    if found is not None:
-        garment_store.clear_failure_on_body(character_name, item_id, found[1], wanted.shape)
+    with _lock:
+        if character_name in _active:
+            return {"status": "building", "reason": REFIT_BUILD_RUNNING}
+        _queues[character_name] = deque([(REFIT_REASON, True)])
+        _refit_items[character_name] = item_id
+        _active.add(character_name)
+        _current[character_name] = {"reason": REFIT_REASON, "step": None, "steps": []}
+    threading.Thread(target=_worker, args=(character_name,), daemon=True,
+                     name=f"figure-refit-{character_name}").start()
+    logger.info("Re-fit %s of %s started", item_id, character_name)
+    return {"status": "started"}
+
+
+def _refit_due(character_name: str, steps: List[Step], delivered, signature: str) -> List[str]:
+    """What keeps a Re-fit from assembling (Ruling FR-I2): the labels of the runnable automatic steps that are
+    not ``REFIT_STEPS`` (hub work, they stay due for Build) and the figure's views when one is missing (the
+    assembly would render it — ``base_body.ensure_figure_views``)."""
+    from app.core import base_body
+    due = [s.label for s in steps if s.name not in REFIT_STEPS]
+    if any(s.name == "assemble" for s in steps) and not due and (
+            _views_missing(character_name, delivered, signature)
+            or not all(base_body.dressed_image(character_name, v, signature, delivered.bsig)
+                       for v in base_body.dressed_views())):
+        due.append(REFIT_VIEWS_DUE)
+    return due
+
+
+def _run_refit(character_name: str, item_id: str) -> None:
+    """The Re-fit run (``refit``; the worker holds the ``build_lock``): the piece's re-fit
+    (``refit_refused`` — the cached refusal is dropped HERE, under the lock), then the automatic plan's ``fits``
+    and ``assemble`` steps only, both CPU, and only when no other step is due; else nothing is assembled and
+    ``state()['failed']['assemble']`` says what Build still has to do (``REFIT_DUE``)."""
     from app.core import figure
-    figure.invalidate()
-    return start(character_name, reason="refit", automatic=True)
+    from app.core.timeutils import utc_now_iso
+    label = f"Re-fit · {character_name} ({_item_name(item_id)})"
+    queue, task_id = _tracked(character_name, label)
+    failed: Dict[str, Dict[str, Any]] = {}
+    skipped: List[str] = []
+    try:
+        try:
+            still = refit_refused(character_name, [item_id])
+        except Exception as e:  # noqa: BLE001 — the run reports, never raises
+            logger.exception("Re-fit %s of %s failed", item_id, character_name)
+            still = {item_id: str(e) or type(e).__name__}
+        if still:
+            failed["fits"] = {"error": REFIT_REFUSED.format(
+                items="; ".join(f"{_item_name(i)}: {r}" for i, r in sorted(still.items()))), "item_id": item_id}
+            skipped.append("assemble")
+            return
+        profile = _read_profile(character_name)
+        wanted, delivered = figure._delivered(character_name, profile=profile)
+        steps = _runnable([s for s in plan(character_name, profile=profile, explicit=False,
+                                           resolved=(wanted, delivered)) if not s.manual], False)
+        due = _refit_due(character_name, steps, delivered, wanted.signature)
+        if due:
+            failed["assemble"] = {"error": REFIT_DUE.format(steps="; ".join(due)), "item_id": item_id}
+            skipped.extend(s.name for s in steps if s.name in REFIT_STEPS and s.name != "assemble")
+            logger.info("Re-fit %s of %s: fit accepted, not assembled — due for Build: %s", item_id,
+                        character_name, "; ".join(due))
+            return
+        for step in steps:
+            with _lock:
+                if character_name in _current:
+                    _current[character_name]["step"] = {**step.as_dict(), "index": 1, "count": len(steps)}
+            error = _run_step(character_name, step, False)
+            if error:
+                failed[step.name] = {"error": error, "item_id": step.item_id}
+                break
+    except Exception as e:  # noqa: BLE001 — a worker reports, never raises
+        logger.exception("Re-fit %s of %s failed", item_id, character_name)
+        failed.setdefault("fits", {"error": str(e) or type(e).__name__, "item_id": item_id})
+    finally:
+        with _lock:
+            _last[character_name] = {"failed": failed, "skipped": skipped, "reason": REFIT_REASON,
+                                     "finished_at": utc_now_iso(), "superseded": None}
+        if queue is not None and task_id:
+            try:
+                queue.track_finish(task_id, error="; ".join(f"{k}: {v['error']}" for k, v in failed.items()))
+            except Exception:  # noqa: BLE001
+                logger.debug("Re-fit track %s not finished", task_id, exc_info=True)
 
 
 def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> str:
@@ -1478,6 +1626,23 @@ def _other_state_jobs(character_name: str, item_id: str, worn_state: str,
     return int(jobs) if jobs is not None else None
 
 
+#: The step the Figure tab's "Regenerate mesh" of a refused piece forces (with its chain, Ruling A23 b).
+REGENERATE_STEP = "mesh"
+
+
+def _regenerate_jobs(character_name: str, item_id: str, profile: Dict[str, Any]) -> Optional[int]:
+    """The hub jobs of "Regenerate mesh" (``garments.run_estimate(from_step=REGENERATE_STEP)``: the mesh made
+    anew and everything after it — Ruling FR-minors, the button states it); None when unknown."""
+    from app.core import garments
+    try:
+        jobs = garments.run_estimate(character_name, item_id, profile=profile,
+                                     from_step=REGENERATE_STEP).get("hub_jobs")
+    except Exception:  # noqa: BLE001 — an estimate, never a failure of the payload
+        logger.debug("Regenerate estimate of %s/%s failed", character_name, item_id, exc_info=True)
+        return None
+    return int(jobs) if jobs is not None else None
+
+
 def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[str, Any]],
                running: bool, profile: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The Figure tab's worn rows. Open / closed (plan Task 11b): ``piece_state`` — ``"open"`` / ``"closed"`` for
@@ -1485,7 +1650,8 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
     closable piece, ``other_state_jobs``: what building the other state's mesh costs (None: unknown or not
     applicable). ``in_body_until`` (ruling A11): an own-mesh piece in the body shape — ``"mesh"`` until its own
     mesh is ready (``figure.INTERIM_IN_BODY``), ``"build"`` its mesh is ready and served, the next Build takes
-    it out of the shape (``figure.READY_IN_BODY``); None otherwise."""
+    it out of the shape (``figure.READY_IN_BODY``); None otherwise. ``regenerate_jobs`` (a piece whose fit was
+    refused): what its "Regenerate mesh" spends (``_regenerate_jobs``), else None."""
     from app.core import figure, garment_set
     from app.core.outfit_options import CLOSED, OPEN
     from app.models import inventory
@@ -1533,7 +1699,9 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
                                        else "mesh" if delivered.interim.get(item_id) == figure.INTERIM_IN_BODY
                                        else "build"),
                      "other_state_jobs": (_other_state_jobs(character_name, item_id, piece_state, profile)
-                                          if closable and mode == garment_set.OWN_MESH else None)})
+                                          if closable and mode == garment_set.OWN_MESH else None),
+                     "regenerate_jobs": (_regenerate_jobs(character_name, item_id, profile)
+                                         if state == "fit_refused" else None)})
     return rows
 
 
@@ -1615,20 +1783,29 @@ def _plain_jobs(character_name: str, bsig: str) -> Dict[str, Any]:
     """What the single actions on the plain body cost (the Figure tab's Body
     details write it under each button): ``view`` (a side or back view),
     ``front`` (with the skin detail step while it is on), ``model`` (its mesh
-    run, ``model3d.mesh_hub_stages``) and ``after_front`` (what the next
-    Build then rebuilds after a new front or skin step: the three other
-    views, which edit the front, and the model). None when not computable."""
+    run, ``model3d.mesh_hub_stages``), ``after_front`` (what the next
+    Build then rebuilds after a new front: the three other views, which edit
+    the front, and the model) and ``model_followup`` (Ruling UI3c: what a
+    step that changes a base view IN PLACE — the skin step keeps the front's
+    ``created_at``, so the other views stay current — or a single side view
+    makes stale: the stored base model, rebuilt by the next Build — ``{jobs,
+    stages}`` from the same ``base_rebuild_steps``; None while no base model
+    is stored, nothing goes stale then). None when not computable."""
     from app.core import base_body, base_skin, model3d
     try:
         others = [v for v in base_body.BASE_VIEWS if v != "front"]
+        model_steps = base_body.base_rebuild_steps(character_name, {"signature": bsig, "views": [], "model": True})
+        stored = model3d.find_model3d(character_name, bsig) is not None
         return {"view": base_body.BASE_VIEW_JOBS,
                 "front": base_body.BASE_VIEW_JOBS + (base_body.SKIN_STEP_JOBS if base_skin.enabled() else 0),
                 "model": len(model3d.mesh_hub_stages(character_name, bsig)),
                 "after_front": sum(jobs for _step, jobs in base_body.base_rebuild_steps(
-                    character_name, {"signature": bsig, "views": others, "model": True}))}
+                    character_name, {"signature": bsig, "views": others, "model": True})),
+                "model_followup": ({"jobs": sum(jobs for _step, jobs in model_steps),
+                                    "stages": [step for step, _jobs in model_steps]} if stored else None)}
     except Exception:  # noqa: BLE001 — an estimate, never a failure
         logger.debug("Plain body job counts of %s not computable", character_name, exc_info=True)
-        return {"view": None, "front": None, "model": None, "after_front": None}
+        return {"view": None, "front": None, "model": None, "after_front": None, "model_followup": None}
 
 
 # --- The Base body tab's "Run all" (Task UI1, rule R1) ----------------------------------------------------------
@@ -1880,16 +2057,23 @@ def _info_key(character_name: str, profile: Dict[str, Any], build: Dict[str, Any
     """What a memoised ``figure_info`` answer stands for — taken BEFORE the
     inputs are read: the figure generation (``figure.invalidate``: every
     ref, model, garment record and config write), the profile and the worn
-    items (their modes and texts), the Build's state, and the stat of the
-    character's ``model_refs`` / ``model3d`` / ``garments`` directories (an
-    atomic publication renames into them; a deletion too)."""
+    items (their modes and texts) — the worn hairstyle and the base
+    hairstyle among them (Ruling FR-minors: a hairstyle's mode, colour or
+    placement is an item edit, as in ``figure.delivered_figure_cached``),
+    the Build's state, and the stat of the character's ``model_refs`` /
+    ``model3d`` / ``garments`` directories (an atomic publication renames
+    into them; a deletion too)."""
     import hashlib
     from app.core import figure
+    from app.core.garment_hair import BASE_HAIRSTYLE_KEY
     from app.models.character import get_character_dir
     from app.models.inventory import get_item
     worn = profile.get("equipped_pieces") or {}
+    mesh = profile.get("equipped_mesh_pieces")
     ids = sorted({str(v) for v in worn.values() if v} | {str(i) for i in profile.get("equipped_items") or []
-                                                         if isinstance(i, str)})
+                                                         if isinstance(i, str)}
+                 | {str(v) for v in (mesh.values() if isinstance(mesh, dict) else ()) if v}
+                 | ({str(profile[BASE_HAIRSTYLE_KEY])} if profile.get(BASE_HAIRSTYLE_KEY) else set()))
     root = get_character_dir(character_name)
     return (figure._generation[0], hashlib.sha1(figure._canonical(profile)).hexdigest(),
             hashlib.sha1(figure._canonical({i: get_item(i) for i in ids})).hexdigest(),

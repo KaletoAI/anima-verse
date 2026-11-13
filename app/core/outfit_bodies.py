@@ -14,10 +14,10 @@ and every outfit model that wears those painted pieces is a copy of it.
 What is left here:
 
 * ``body_ids`` — every stored body of a character;
-* ``refit_body`` / ``match_posture`` / ``rebuild_worn_on`` and
-  ``stale_posture_bodies`` / ``match_stale_postures`` — the posture match of
-  a stored body and its refits (the boot sweep, the ``fit_refit``
-  improvement);
+* ``refit_body`` / ``match_posture`` and ``stale_posture_bodies`` /
+  ``match_stale_postures`` — the posture match of a stored body and its
+  refits (the boot sweep, the ``fit_refit`` improvement); what stands on a
+  turned body is rebuilt by the character's Build (``figure_build.request``);
 * ``outfit_label`` — the display name of an outfit combination;
 * ``delete`` / ``delete_texture`` — the explicit Delete of ONE stored body or
   painted body (``figure.delete_stored``, the Figure tab's "Stored bodies and
@@ -232,27 +232,6 @@ def match_posture(character_name: str, body_id: str) -> Dict[str, Any]:
     return result
 
 
-def rebuild_worn_on(character_name: str, body_id: str) -> bool:
-    """After the body ``body_id`` changed under its outfit models: rebuild
-    the WORN outfit's model when it stands on that body — through the auto
-    hook (``model3d.maybe_auto_generate_for_outfit``; inside a generation
-    slot it runs as the follow-up once the slot ends). Only when the worn
-    outfit's figure wants that body and the body is current for its own
-    views, so the rebuild is CPU on the body, never a mesh run. True when a
-    build was started or queued."""
-    from app.core import base_body, model3d
-    from app.core.model_refs import current_outfit_state
-    profile = _profile(character_name)
-    worn = current_outfit_state(character_name)[2]
-    if not worn or base_body.outfit_body_of_outfit(character_name, worn, profile=profile) != body_id:
-        return False
-    bsig = base_body.base_signature(character_name, profile=profile)
-    if _body_record(character_name, body_id).get("views") != base_body.shape_view_shas(character_name, body_id, bsig):
-        return False
-    model3d.maybe_auto_generate_for_outfit(character_name)
-    return True
-
-
 def stale_posture_bodies(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> List[str]:
     """The read-only half of ``match_stale_postures``: the stored outfit
     bodies of a character whose posture record is stale
@@ -270,10 +249,13 @@ def stale_posture_bodies(character_name: str, *, profile: Optional[Dict[str, Any
 def match_stale_postures(character_name: str) -> List[str]:
     """The boot sweep's part (``garment_refit.sweep``): every stored body of
     a character whose posture record is stale
-    (``stale_posture_bodies``) is matched, its garments are refitted onto the
-    turned body (``refit_body``) and the worn outfit's model on it is rebuilt
-    (``rebuild_worn_on``) — each body inside the character's generation slot.
-    CPU only. Returns the bodies matched."""
+    (``stale_posture_bodies``) is matched and its garments are refitted onto
+    the turned body (``refit_body``) — each body inside the character's
+    generation slot, CPU only. When a body was turned, the character's Build
+    is asked once (``figure_build.request(…, "body_change")``, after the
+    slots): it plans what stands on the body — never a build of its own here
+    (Ruling FR-minors; the auto hook it called before bypassed the Build).
+    Returns the bodies matched."""
     from app.core import model3d
     done: List[str] = []
     for body_id in stale_posture_bodies(character_name):
@@ -286,7 +268,10 @@ def match_stale_postures(character_name: str) -> List[str]:
                 continue
             done.append(body_id)
             refit_body(character_name, body_id)
-            rebuild_worn_on(character_name, body_id)
+    if done:
+        from app.core import figure, figure_build
+        figure.invalidate()
+        figure_build.request(character_name, "body_change")
     return done
 
 

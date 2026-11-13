@@ -176,7 +176,7 @@ PUT_ON_MIN_REGION = 0.03
 #: The mask and coverage rule of a whole OUTFIT (the spike's; ``put_on``
 #: = Task 11f's measure) and of ONE PIECE — the garment chain's worn back,
 #: a draft that wears only that piece (measured 2026-11-12 on the 10
-#: worn-back drafts of Anima Divide with an accepted worn back): a belt
+#: worn-back drafts of a live world copy with an accepted worn back): a belt
 #: (region 0.014 at 192 rows) and a necklace (0.0, in the head rows and
 #: blurred into the skin by the cells) fell under the outfit's region
 #: minimum although their composites were right. A piece keeps thin parts

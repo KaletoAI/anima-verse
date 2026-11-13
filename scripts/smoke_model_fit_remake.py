@@ -11,9 +11,7 @@ Usage:
 
 Runs without a server, a hub or a GPU: a temp world (``paths.init`` first,
 STORAGE_DIR / INSTANCE_DIR temp dirs), synthetic RGBA figures, the garment
-chain's draft step stubbed. Section [3] reads Ylva's two stored drafts of
-the Anima Divide world when that world is on this machine (copies in the
-temp dir; skipped otherwise).
+chain's draft step stubbed. Every image is synthetic: no world is read.
 
 Fixture (400 rows x 300 columns, transparent, rows / columns half-open):
     skin SKIN (224, 172, 140) = Lab (74.6, 14.4, 23.6) (``view_composite._lab``),
@@ -26,8 +24,8 @@ Fixture (400 rows x 300 columns, transparent, rows / columns half-open):
     chroma is 0.68 from the skin's (well inside SKIN_MAHA 3 x sqrt(1.5)
     = 3.67 of the skin model: the base skin's spread is the 1.0 floor), its
     L 44.4 is above the skin model's lower bound (the feet's L 43.1 is the
-    2nd percentile, minus 8 = 35.1): BY COLOUR IT IS SKIN, like Ylva's
-    leather wrap skirt (2026-11-13) — but 30.2 darker than the skin it covers.
+    2nd percentile, minus 8 = 35.1): BY COLOUR IT IS SKIN, like the brown
+    leather wrap skirt of a live test (2026-11-13) — but 30.2 darker than the skin it covers.
     DRAFT = the base + a BROWN skirt rows 200..320 cols 100..200: it bridges
     the leg gap (rows 230..320) and is 5 px wider than the legs.
 
@@ -48,12 +46,13 @@ Expected, derived by hand:
 [2] C3 keeps refusing a draft that does not line up: the skirt draft with
     both arms raised (rows 20..120 instead of 115..230) -> ok False, reason
     "the draft does not line up" (iou < 0.93): the arms lie outside the
-    garment. A turned draft (Ylva's side view as the draft of her back, [3])
-    too.
-[3] Ylva's drafts (only when the world is here): the drafts of 77d513da244d
-    and obb3af5eb3 on base5fe6bd6a's back pass (iou >= 0.93, ok True) — at
-    ff011edf both were refused (IoU 0.902 / 0.901, log 2026-11-13 09:43) —
-    and her left base view as the draft of her back is refused.
+    garment.
+[3] (Removed in the final-review fixes: it read two stored drafts of a live
+    world — drift-prone, a real world's name in a smoke. A synthetic profile
+    is no stand-in: ``composite_arrays`` registers the draft onto the base,
+    so a narrower turned figure lines up. What it showed is [1] (a
+    skin-coloured skirt draft passes) and [2] (a draft that does not line up
+    is refused), both on synthetic figures.)
 [4] Fails on the old code (ff011edf's view_composite, ``git show``): the
     skirt draft of [1] is refused — no flare (the skirt read as skin) and
     coverage < 0.5.
@@ -128,15 +127,6 @@ SKIRT = (200, 320, 100, 200, BROWN)
 ARMS_UP = [p for p in BODY if not (p[0] == 115 and p[2] in (80, 200))] + [(20, 120, 80, 100), (20, 120, 200, 220)]
 
 
-def _main_tree() -> Path:
-    """The main working tree (a linked git worktree has no ``worlds/``): the parent of the common git dir."""
-    import subprocess
-    out = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                         capture_output=True, text=True).stdout.strip()
-    return Path(out).parent if out else ROOT
-
-
-YLVA = _main_tree() / "worlds" / "Anima Divide" / "characters" / "Ylva Nordwind" / "model_refs"
 BSIG, SIG, TSIG = "base1234abcd", "aaaaaaaaaaaa", "tex111111111111"[:15]
 
 
@@ -206,25 +196,6 @@ def composite_sections(tmp: Path):
     check("arms raised: refused, not aligned", (rec["ok"], rec["iou"] < vc.IOU_MIN,
                                                 [r.split(" (")[0] for r in rec["reasons"]]),
           (False, True, [vc.NOT_ALIGNED]))
-
-    print("[3] Ylva's stored drafts")
-    back = YLVA / "tpose_back_base5fe6bd6a.png"
-    if not back.is_file():
-        print("  SKIP the Anima Divide world is not on this machine")
-    else:
-        copy = tmp / "ylva"
-        copy.mkdir()
-        shutil.copy(back, copy / "base.png")
-        for sig in ("77d513da244d", "obb3af5eb3"):
-            shutil.copy(YLVA / "drafts" / f"tpose_back_{sig}.png", copy / f"{sig}.png")
-            rec = vc.compose(copy / "base.png", copy / f"{sig}.png", copy / f"out_{sig}.png")
-            print(f"       {sig}: iou {rec['iou']} (full {rec.get('iou_full')}), coverage "
-                  f"{rec['coverage'].get('score')}, flare {rec['flare_px']}")
-            check(f"{sig}: passes", (rec["ok"], rec["iou"] >= vc.IOU_MIN), (True, True))
-        shutil.copy(YLVA / "tpose_left_base5fe6bd6a.png", copy / "left.png")
-        rec = vc.compose(copy / "base.png", copy / "left.png", copy / "out_left.png")
-        check("her side view as the draft of her back: refused, not aligned",
-              (rec["ok"], any(r.startswith(vc.NOT_ALIGNED) for r in rec["reasons"])), (False, True))
 
     print(f"[4] fails on {OLD}")
     old = old_module("app/core/view_composite.py", "view_composite_old")

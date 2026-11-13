@@ -104,7 +104,7 @@ BASE_BODY_VERSION = 2
 # draws what a negation names ("no hair", "without anatomical detail").
 BALD_HEAD = "completely bald with a smooth bare scalp"
 #: Natural skin tone with a plain chest and groin: the spike text of
-#: 2026-11-12 10:50 (hub job 10c82251, Kai) without its "fine natural body
+#: 2026-11-12 10:50 (hub job 10c82251) without its "fine natural body
 #: hair" — the bald/haired base must not name hair. The earlier "smooth
 #: featureless mannequin-like ... plain smooth skin" made every base front
 #: a pale plastic doll (user report 2026-11-13).
@@ -1879,7 +1879,7 @@ def is_model_fit(record: Any) -> bool:
     """Whether a dressed back/side view's sidecar (``record``) is a MODEL fit
     of before Task 11g (Ruling C2, fix round 2): a ``fit_gate`` record
     without the composite's ``fit: "composite"``. Such a view is STALE — the
-    old fits came back nude and were accepted (Ylva 2026-11-13) — and never
+    old fits came back nude and were accepted (live test, 2026-11-13) — and never
     counts: ``dressed_image``, ``shape_view_shas`` and the texture store's
     ``_view_current`` refuse it; ``model_fit_remake`` re-makes it from its
     stored draft once at boot."""
@@ -1919,6 +1919,98 @@ def stored_draft(character_name: str, view: str, signature: str, front: Optional
         return None
     sha = _ref_sidecar(draft).get("front_sha256")
     return draft if sha and sha == file_sha256(front) else None
+
+
+# --- Refused views (Ruling FR-I3) ---------------------------------------------------------
+#
+# A dressed back/side view whose composite was refused (no draft's composite passed its checks,
+# ``view_composite.refusal``) is a cached failure keyed by its inputs, like a refused fit (Ruling A23 b):
+# the dressed front it follows, the base view it is composited onto and ``view_composite.VERSION``. While
+# they are the same, an automatic Build does not plan the view again (``figure_build.plan`` lists its step
+# as "failed — Retry"); a manual Build clears the record and retries the view once — counted as one draft
+# (``shape_view_jobs`` / ``dressed_view_estimate``). The record lives beside the view's draft
+# (``model_refs/drafts/refused/<kind>_<signature>.json``) and goes with its signature
+# (``outfit_cache_gc._ref_files``); a published view drops it.
+
+#: Subfolder of ``DRAFT_DIR`` that holds the refusal records of the dressed views.
+VIEW_REFUSED_DIR = "refused"
+
+
+def _view_refusal_path(character_name: str, view: str, signature: str) -> Path:
+    from app.models.character import get_character_dir
+    return get_character_dir(character_name) / "model_refs" / DRAFT_DIR / VIEW_REFUSED_DIR / \
+        f"{_kind(view)}_{signature}.json"
+
+
+def _view_inputs(front: Optional[Path], base_view: Optional[Path]) -> Dict[str, Any]:
+    """What a view's composite depends on beyond its draft (Ruling FR-I3)."""
+    from app.core import view_composite
+    return {"front_sha256": file_sha256(front), "base_image_sha256": file_sha256(base_view),
+            "composite_version": view_composite.VERSION}
+
+
+def record_view_refusal(character_name: str, view: str, signature: str, *, front: Optional[Path],
+                        base_view: Optional[Path], error: str) -> None:
+    """Persist the refusal of the dressed ``view`` of ``signature`` (Ruling FR-I3). Never raises."""
+    from app.core.timeutils import utc_now_iso
+    path = _view_refusal_path(character_name, view, signature)
+    if not path.parent.parent.parent.is_dir():
+        return  # never mint the folders of a vanished character
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, json.dumps({"view": view, "signature": signature, "error": error,
+                                        "inputs": _view_inputs(front, base_view), "refused_at": utc_now_iso()},
+                                       ensure_ascii=False, indent=2).encode("utf-8"))
+    except OSError:
+        logger.warning("Refusal of the dressed %s %s (%s) not recorded", view, character_name, signature,
+                       exc_info=True)
+
+
+def clear_view_refusals(character_name: str, signature: str, views: Optional[Iterable[str]] = None) -> None:
+    """Drop the refusal records of ``views`` (default: every draft view) of ``signature`` — a published view,
+    or a manual Build that retries them (Ruling FR-I3)."""
+    for view in views or DRAFT_VIEWS:
+        try:
+            _view_refusal_path(character_name, view, signature).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            pass
+
+
+def refused_views(character_name: str, signature: str, on: str, *, current) -> Dict[str, str]:
+    """``{view: reason}`` of the dressed draft views of ``signature`` that are not current (``current(view)``
+    None) and whose recorded refusal still holds: the same dressed front (``tpose_<signature>``), the same view
+    of the shape ``on`` it is composited onto and the same ``view_composite.VERSION`` (Ruling FR-I3).
+    Read-only."""
+    from app.core.model_refs import find_ref_image
+    out: Dict[str, str] = {}
+    front: Optional[Path] = None
+    for view in (v for v in dressed_views() if v in DRAFT_VIEWS):
+        path = _view_refusal_path(character_name, view, signature)
+        if not path.is_file():
+            continue
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict) or not record.get("error") or current(view) is not None:
+            continue
+        if front is None:
+            front = find_ref_image(character_name, "tpose", signature)
+        if record.get("inputs") == _view_inputs(front, find_ref_image(character_name, _kind(view), on)):
+            out[view] = str(record["error"])
+    return out
+
+
+def shape_view_refusals(character_name: str, shape: str, bsig: str) -> Dict[str, str]:
+    """``refused_views`` of the meshed shape ``shape`` on the plain body ``bsig`` (Ruling FR-I3)."""
+    return refused_views(character_name, shape, bsig, current=lambda v: shape_view(character_name, v, shape, bsig))
+
+
+def dressed_view_refusals(character_name: str, fig, signature: str) -> Dict[str, str]:
+    """``refused_views`` of the outfit ``signature`` as the figure ``fig`` (its views are composited onto the
+    views of ``fig.shape``; Ruling FR-I3)."""
+    return refused_views(character_name, signature, fig.shape,
+                         current=lambda v: dressed_image(character_name, v, signature, fig.bsig, fig=fig))
 
 
 def fit_gate_warning(attempts: int, record: Dict[str, Any], view: str = "back") -> str:
@@ -2128,6 +2220,7 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
     remake = composite_outdated(_ref_sidecar(final))
     with tempfile.TemporaryDirectory(prefix=".composite_", dir=refs_dir, ignore_cleanup_errors=True) as staging:
         first = 1
+        render_failed = False   # a draft that did not render: no refusal is recorded for it (Ruling FR-I3)
         kept = stored_draft(character_name, view, signature, front) if reuse_draft else None
         if kept is not None:
             # Ruling C2: the stored draft made from this front is composited again first — no hub job; a
@@ -2164,10 +2257,12 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                 if not attempts or (raise_load and _is_load(e)):
                     raise
                 logger.warning("Dressed %s %s (%s): draft %d failed: %s", view, character_name, signature, n, e)
+                render_failed = True
                 break
             if draft is None:
                 if not attempts:
                     raise OutfitError(f"Dressed {view} draft failed")
+                render_failed = True
                 break
             stem = Path(staging) / f"attempt{n}" / final.name
             stem.parent.mkdir()
@@ -2184,7 +2279,11 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
                 break
         usable = [i for i, (_p, r) in enumerate(attempts) if r["composite"].get("ok")]
         if not usable:
-            raise OutfitError(view_composite.refusal(f"Dressed {view}", [r["composite"] for _p, r in attempts]))
+            error = view_composite.refusal(f"Dressed {view}", [r["composite"] for _p, r in attempts])
+            if not render_failed:
+                # Ruling FR-I3: every draft was composited and refused — a cached failure of these inputs.
+                record_view_refusal(character_name, view, signature, front=front, base_view=base_view, error=error)
+            raise OutfitError(error)
         pick, passed = best_fit_attempt([attempts[i][1] for i in usable])
         chosen = usable[pick]
         warning = None if passed else fit_gate_warning(len(attempts), attempts[chosen][1], view)
@@ -2195,6 +2294,8 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             if staged.suffix.lower() != ".json":
                 _publish_staged(staged, drafts / f"{kind}_{signature}", {"chosen": chosen + 1}, key="composite_draft")
         stored = _publish_staged(attempts[chosen][0], final, record, key="fit_gate")
+    if stored is not None:
+        clear_view_refusals(character_name, signature, (view,))
     return stored, warning
 
 
@@ -2507,8 +2608,10 @@ def dressed_view_estimate(character_name: str, fig, signature: str, *,
     if "front" not in missing:
         # Ruling C2: a back/side whose stored draft follows the outfit's front is composited from it again.
         front_now = find_ref_image(character_name, "tpose", signature)
+        # Ruling FR-I3: a view whose composite was refused for these inputs is drafted anew on its retry.
+        refused = dressed_view_refusals(character_name, fig, signature)
         for v in list(jobs):
-            if stored_draft(character_name, v, signature, front_now) is not None:
+            if v not in refused and stored_draft(character_name, v, signature, front_now) is not None:
                 jobs[v] = 0
     tsig = fig.texture
     if not is_texture_signature(tsig):
@@ -3052,21 +3155,21 @@ VIEW_GUARD_SIZE = 64
 # Ruling A16 (Task 11g-fix4): the head likeness above only tells the views
 # apart while the dressed figure carries the SAME head as the plain views. A
 # bald shape on a haired plain body (D4: a HairDeck hair worn on a haired
-# base) or another hair in the body does not: Ylva's bald back of the head
+# base) or another hair in the body does not: a test character's bald back of the head
 # correlated best with the haired FRONT (0.35 against -0.09 for the back,
 # 2026-11-13 — three correct back renders refused). Whether the head differs
 # is measured on the dressed FRONT of the same figure against the base front
-# (``head_match``): on the 14 stored dressed fronts of Anima Divide
+# (``head_match``): on the 14 stored dressed fronts of a live world copy
 # (2026-11-13) every haired front over its haired base 0.832 .. 0.988, the
-# bald front of Ylva's shape oba9471e94 0.222 — limit ``HEAD_MATCH_MIN``.
+# bald front of that character's shape oba9471e94 0.222 — limit ``HEAD_MATCH_MIN``.
 # Such a figure is judged by a cue that does not depend on the hair: a
 # frontal FACE in its head region (``face_found``, the LBP frontal-face
 # cascade scikit-image ships). Measured on the same world's 328 stored views
 # (head = top ``FACE_HEAD_SHARE`` of the figure at ``FACE_WORK_WIDTH`` px, a
 # face at least ``FACE_MIN_SHARE`` of that wide, ``FACE_NEIGHBORS``
 # neighbours, centred within ``FACE_CENTRE_TOL``): a face on 147 of 154
-# fronts, on 0 of 115 backs and 0 of 59 side views; on Ylva's bald front,
-# none on her three bald back renders, their draft or their composites. No
+# fronts, on 0 of 115 backs and 0 of 59 side views; on the bald front,
+# none on its three bald back renders, their draft or their composites. No
 # plain views "edited to the same head" are stored (a bald shape's views are
 # edits of the haired plain views), so the face is the cue the check uses.
 HEAD_MATCH_MIN = 0.6
@@ -4229,7 +4332,10 @@ def shape_view_jobs(character_name: str, shape: str, bsig: str) -> int:
     if "front" in missing:
         return dressed_view_jobs()
     front = find_ref_image(character_name, "tpose", shape)
-    return sum(0 if stored_draft(character_name, v, shape, front) is not None else 1 for v in missing)
+    # Ruling FR-I3: a view whose composite was refused for these inputs is drafted anew on its retry (1 job).
+    refused = shape_view_refusals(character_name, shape, bsig)
+    return sum(0 if v not in refused and stored_draft(character_name, v, shape, front) is not None else 1
+               for v in missing)
 
 
 def render_shape_views(character_name: str, fig, views: List[str], *, items: Optional[list] = None,

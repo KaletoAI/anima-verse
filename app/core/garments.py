@@ -174,7 +174,7 @@ EDIT_VIEW_ORDER: Tuple[str, ...] = ("back", "front")
 INPUTS_CHANGED_ERROR = ("The base views or the garment's description changed during the run "
                         "— run the chain again to start from the new ones")
 #: Ruling A20: checked BEFORE each composite onto a base view (``garment_images._drafted_back``) — a base view
-#: rendered again while the chain ran (Kai's jacket, 2026-11-13: attempt 2 composited onto the base back
+#: rendered again while the chain ran (a live test's jacket, 2026-11-13: attempt 2 composited onto the base back
 #: re-rendered meanwhile and was refused for "drift"). The true reason, before any composite of the new base.
 BASE_VIEW_CHANGED_ERROR = ("Base view changed meanwhile ({views}) — the base body was rendered again while the "
                            "chain ran; run the chain again")
@@ -1577,7 +1577,8 @@ def _unknown_estimate(note: str) -> Dict[str, Any]:
 
 
 def run_estimate(character_name: str, item_id: str, *,
-                 profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None) -> Dict[str, Any]:
+                 profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None,
+                 from_step: str = "") -> Dict[str, Any]:
     """The hub cost of a plain ``run_garment(character_name, item_id)`` BEFORE
     it runs: ``{steps, hub_jobs, note, refit}`` — ``steps`` the steps of the
     item's current method from the first one not ``_done`` under the current
@@ -1594,7 +1595,11 @@ def run_estimate(character_name: str, item_id: str, *,
     chain is estimated (None: the worn state) — its own fsig, its own
     source (``outfit_options.with_item_state``). The OPEN state's image
     steps lose their ``BACK_JOBS`` where the closed state has the back
-    (ruling F15 i-1: copied, never rendered with state words)."""
+    (ruling F15 i-1: copied, never rendered with state words).
+    ``from_step``: the run FORCED from that step on with its chain (the
+    Figure tab's "Regenerate mesh", ``{step, force, chain}`` — Ruling
+    FR-minors: its button states this cost); unknown when the item's chain
+    has no such step."""
     from app.core import base_body, garment_source
     from app.core import garment_store as gs
     from app.models.character import get_character_profile
@@ -1630,8 +1635,11 @@ def run_estimate(character_name: str, item_id: str, *,
         state = gs.item_state(character_name, item_id, profile, state)
         fsig = gs.garment_fsig(character_name, item_id, profile=profile, state=state)
         hsig = gs.garment_hsig(character_name, item_id, profile=profile) if method == gs.HAIRDECK else ""
-        first = next((s for s in order
-                      if not _done(character_name, item_id, kind, fsig, s, base_sha, method, hsig)), None)
+        if from_step and from_step not in order:
+            return _unknown_estimate(f"no step {from_step} for {kind} by {method}")
+        first = from_step or next((s for s in order
+                                   if not _done(character_name, item_id, kind, fsig, s, base_sha, method, hsig)),
+                                  None)
     except ValueError as e:
         return _unknown_estimate(str(e))
     run_profile = _run_profile(profile, item_id, state)
@@ -1639,7 +1647,7 @@ def run_estimate(character_name: str, item_id: str, *,
         return {"steps": [], "hub_jobs": 0, "note": "nothing to run", "refit": False}
     steps = list(order[order.index(first):])
     parts = [(s, int(costs.get(s, 0))) for s in steps]
-    if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN:
+    if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN and not from_step:
         # The first step re-makes only its views that are not done (one job per view): a view kept accepted and
         # current costs nothing (Ruling A25 — the estimate is what the run spends on first attempts), nor does
         # one a stored attempt passes once judged again with the hem snap (Ruling A27).
@@ -1658,7 +1666,7 @@ def run_estimate(character_name: str, item_id: str, *,
     note = " + ".join(f"{s} {n}" for s, n in parts if n) or "no hub job"
     if reused:
         note += " (backs from the closed state)"
-    if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN:
+    if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN and not from_step:
         if (run_profile is not None
                 and not garment_source.has_own_images(character_name, item_id, kind, method, fsig)
                 and garment_source.find_source(character_name, item_id, kind, method, run_profile, fsig)

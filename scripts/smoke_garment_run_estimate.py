@@ -37,6 +37,13 @@ MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
      Task UI2 were this fixture, not the estimate).
 [E3] The prepared mesh accepted too, the fit missing -> steps ["fit"],
      hub_jobs 0, note "no hub job".
+[E3b] Ruling FR-minors — the forced run of the Figure tab's "Regenerate mesh"
+     (``run_estimate(from_step=…)``), with everything of [E3] done:
+     from_step "mesh" -> steps [mesh, fit], 1, note "mesh 1" (done or not,
+     the forced step and every one after it); from_step "worn" -> all 5, 7
+     (no kept view subtracted, no refit answer: the run is forced); an
+     unknown step -> hub_jobs None, note "no step nope for clothing by
+     edit_chain".
 [E4] Hairstyle H (ensure_hairstyle: the first one, the world default mode
      hairdeck), nothing cached, H's mode per case (plan Task 13: the mode is
      the hairstyle's): hairdeck -> 1 (steps [hairdeck, fit]); body -> no
@@ -165,6 +172,14 @@ def main() -> int:
         prepared.write_bytes(b"glb")
         gs.write_record(prepared.with_suffix(".json"), {"accepted": True})
         check("fit left", brief(estimate(did)), (["fit"], 0, "no hub job", False))
+
+        print("[E3b] the forced run of Regenerate mesh")
+        check("from mesh", brief(garments.run_estimate("Demo", did, from_step="mesh")),
+              (["mesh", "fit"], 1, "mesh 1", False))
+        check("from worn", brief(garments.run_estimate("Demo", did, from_step="worn")),
+              (["worn", "ghost", "cutout", "mesh", "fit"], 7, "worn 2 + ghost 2 + cutout 2 + mesh 1", False))
+        est = garments.run_estimate("Demo", did, from_step="nope")
+        check("unknown step", (est["hub_jobs"], est["note"]), (None, f"no step nope for clothing by {gs.EDIT_CHAIN}"))
 
         print("[E4] hair per method")
         hid = garment_hair.ensure_hairstyle("Demo")

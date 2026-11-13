@@ -20,8 +20,8 @@ any call, ``model_refs.trigger_now`` / ``schedule_outfit_render`` and
 For the stale posture body: a stored body ``model3d/ob12345678.glb`` with a
 sidecar that has no posture record (``stale_reason`` "missing"); the
 character wears a coat in mode in_body (its figure wants a meshed shape);
-``match_posture`` / ``refit_body`` /
-``rebuild_worn_on`` are recorders, the first writing the posture record.
+``match_posture`` / ``refit_body`` and ``figure_build.request`` are
+recorders, the first writing the posture record.
 
 Derived by hand from the listers' rules (versions read from the constants,
 never pinned):
@@ -35,8 +35,10 @@ never pinned):
 [R3] ``stale_posture_bodies(Demo)`` lists the fixture body whatever is worn
      (no outfit body mode any more, plan 2026-11-12-unified-worn-pieces
      Task 6: a stored body is a body); ``match_stale_postures`` (recorders) returns the
-     body, calls match → refit → rebuild once each, and the lister is empty
-     afterwards (the recorder wrote the record).
+     body, calls match → refit once each, then asks the Build ONCE
+     (``figure_build.request(Demo, "body_change")``, Ruling FR-minors — the
+     removed ``rebuild_worn_on`` built outside the Build), and the lister is
+     empty afterwards (the recorder wrote the record).
 [R4] The insole old again: ``refit_character(Demo)`` → [heels] with the
      service stub never called; the insole record is current again and a fit
      record under the current fsig is accepted (``garment_footwear.fit_state``
@@ -214,11 +216,14 @@ def main() -> int:
             model3d._publish_sidecar(body_path, meta)
             return {"ok": True, "changed": True}
 
+        from app.core import figure_build
         with patch.object(outfit_bodies, "match_posture", match_posture), \
              patch.object(outfit_bodies, "refit_body", lambda name, body_id: calls.append(("refit", body_id)) or {}), \
-             patch.object(outfit_bodies, "rebuild_worn_on", lambda name, body_id: calls.append(("rebuild", body_id)) or True):
+             patch.object(figure_build, "request", lambda name, trigger: calls.append(("request", trigger)) or True):
             check("match_stale_postures returns the body", outfit_bodies.match_stale_postures("Demo"), [bid])
-        check("match → refit → rebuild once each", calls, [("match", bid), ("refit", bid), ("rebuild", bid)])
+        check("match → refit → ONE Build request (FR-minors: no rebuild of its own)", calls,
+              [("match", bid), ("refit", bid), ("request", "body_change")])
+        check("rebuild_worn_on is gone", hasattr(outfit_bodies, "rebuild_worn_on"), False)
         check("empty afterwards", outfit_bodies.stale_posture_bodies("Demo"), [])
         check("no service call", SERVICE, [])
 

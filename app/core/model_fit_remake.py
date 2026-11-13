@@ -1,7 +1,7 @@
 """Ruling C2 (plan 2026-11-12-unified-worn-pieces, Task 11g fix round 2):
 the dressed back/side views and the garment chain's worn backs that the
 MODEL fit made before Task 11g are stale — the old fits came back nude and
-were accepted (Ylva, 2026-11-13: a Build painted a nude back and meshed a
+were accepted (live test, 2026-11-13: a Build painted a nude back and meshed a
 shape from a dressed front and a nude back).
 
 The readers refuse them from now on (``base_body.is_model_fit`` in

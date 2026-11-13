@@ -25,14 +25,19 @@ body actions):
   and only when asked, because it is heavier than the Build's own poll.
 * ``POST /characters/{c}/figure/build`` — 202 ``figure_build.start(reason=
   "manual")``: ``{"status": "started" | "queued" | "current"}``; 409 off the
-  pipeline with the reason; 503 when the profile could not be read (the
-  Build's failure state records it, ruling F13 e).
+  pipeline or while a base-body step runs, with the reason; 503 when the
+  profile could not be read (the Build's failure state records it, ruling
+  F13 e). ``POST /characters/{c}/model3d/generate`` answers the same for a
+  character on the pipeline (Ruling FR-I4, ``start_manual_build``).
 * ``POST /characters/{c}/figure/refit {item_id}`` — the worn row's "Re-fit" of
-  a piece whose fit on the body shape was refused (Ruling A23 b,
-  ``figure_build.refit``): its cached refusal is dropped and an automatic
-  Build (CPU only) fits it and assembles the figure — ``{"status": "started"
-  | "queued" | "current"}``; 400 when the piece's fit is not refused, 409 off
-  the pipeline, 503 when the profile could not be read.
+  a piece whose fit on the body shape was refused (Rulings A23 b, FR-I2,
+  ``figure_build.refit``): under the Build lock its cached refusal is dropped,
+  the piece is fitted on the CPU and the figure assembled on the CPU — never a
+  hub step; steps that need the hub stay due for Build (the run's
+  ``failed.assemble`` says which) — ``{"status": "started"}``; 400 when the
+  piece's fit is not refused, 409 off the pipeline, while a Build of the
+  character runs or a base step is in flight, 503 when the profile could not
+  be read.
 * ``POST /characters/{c}/base-body/run-all`` — the Base body tab's "Run all"
   (``figure_build.start_base_run_all``, Task UI1 rule R1): the plain body's
   refresh — only the steps that are not current — else the face cleanup or the
@@ -130,8 +135,16 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
 
 @router.post("/{character_name}/figure/build", status_code=202)
 def build_figure(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    from app.core import figure_build
     _require_character(character_name)
+    return start_manual_build(character_name)
+
+
+def start_manual_build(character_name: str) -> Dict[str, Any]:
+    """A click's Build (``figure_build.start(reason="manual")``) with the answers of ``figure/build``: the
+    result, or ``HTTPException`` 409 (a base-body step runs, off the pipeline) / 503 (the profile could not be
+    read). Also what ``POST /characters/{c}/model3d/generate`` does for a character on the pipeline (Ruling
+    FR-I4) — the caller checks the admin role first."""
+    from app.core import figure_build
     result = figure_build.start(character_name, reason="manual")
     if result.get("status") == "base_busy":   # Ruling A26 a: a base-body step of the character runs
         raise HTTPException(status_code=409, detail=str(result.get("reason") or "A base-body step runs"))
@@ -155,7 +168,7 @@ def refit_figure_piece(character_name: str, body: RefitRequest,
         result = figure_build.refit(character_name, body.item_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if result.get("status") == "base_busy":   # Ruling A26 a
+    if result.get("status") in ("base_busy", "building"):   # Ruling A26 a / a Build runs (FR-I2)
         raise HTTPException(status_code=409, detail=str(result.get("reason") or "A base-body step runs"))
     if result.get("status") == "off":
         raise HTTPException(status_code=409, detail=str(result.get("reason") or figure_build.OFF_PIPELINE))

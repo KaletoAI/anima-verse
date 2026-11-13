@@ -394,7 +394,7 @@ GAP_MIN = 0.015             # Hb: the widest open run from which a front counts 
 # looser 0.04 (FIT_OUTSIDE_XOR_MAX). Since Task 11g (Ruling C1) the drafted
 # back is a CPU COMPOSITE (``view_composite``): the base back outside the
 # garment mask is kept pixel for pixel, so it is gated at the edit limits —
-# measured on the ten accepted worn backs of the Anima Divide copy
+# measured on the ten accepted worn backs of a live world copy
 # (2026-11-12) the composites' outline XOR is 0.0004-0.0014 (drift
 # 0.02-0.12 px); FIT_OUTSIDE_XOR_MAX / FIT_OUTSIDE_DRIFT_PX are gone.
 BACK_OPENING_MIN = 0.04     # back neckline depth / Hb from which the back has an opening

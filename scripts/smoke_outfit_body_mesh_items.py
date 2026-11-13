@@ -60,17 +60,19 @@ Expected, derived by hand from the rulings:
     "in the body until ready: Jacket"). (Was: plain-body render step 3 jobs,
     shape bK without the jacket, the jacket painted on tK, 1 worker run.)
 [2] Retexture mode (under + shoes painted), the jacket still refused: K
-    stale "figure"; the jacket alone in the body: interim shape bJ (dress
-    text the jacket, no sneakers), under + shoes painted on bJ: the render
-    step 0, the build renders bJ's views then the outfit's (keys [bJ, sigK]),
-    ONE mesh + ONE rig job on bJ, 1 worker run; mesh_items unpainted [],
-    in_body [jacket], no "mode"; warnings [IB]; Wardrobe painted False,
-    in_body True, no "missing". (Was: the plain body, 0 image jobs, the
-    jacket painted.)
-[3] Mesh mode again: K stale "figure"; bI is stored -> its outfit views are
-    copies again: 0 image jobs, 0 mesh/rig jobs, 0 worker runs; K on bI,
-    texture "", the jacket in the views. (Was: bK with tK, the jacket
-    painted.)
+    stale "figure" (the wanted figure would be the jacket alone in an
+    interim shape). Ruling A15 b: no interim while a figure is shown — K's
+    model built in [1] stays served until the new one is assembled: the
+    build answers {ok False, error INTERIM_WAITS, waits True}, 0 image jobs,
+    no render, 0 worker runs, no mesh/rig job; K's model is unchanged (body
+    bI, the figure of [1]); its mesh_items unpainted [], in_body [jacket],
+    no "mode"; warnings [IB]; Wardrobe painted False, in_body True, no
+    "missing". (Was, before A15 b: interim shape bJ with the jacket alone,
+    under + shoes painted on it, ONE mesh + ONE rig job, 1 worker run.)
+[3] Mesh mode again: K is the wanted figure again (nothing was rebuilt in
+    [2]) -> stale_reason None; bI is stored -> its outfit views are copies:
+    0 image jobs, 0 mesh/rig jobs, 0 worker runs; K on bI, texture "", the
+    jacket in the views. (Was: K stale "figure" after the bJ build of [2].)
 [4] The jacket's chain is run explicitly and accepted (run_garment): during
     the run 0 image / mesh / rig jobs, 0 worker runs, no body fit; the Build
     asked ("piece_ready"), no T-pose pass. The delivered figure KEEPS bI
@@ -437,17 +439,12 @@ def main() -> int:
         jobs, runs, hub, result = render_and_build()
         meta_r = meta_of(sig_k)
         b_j = meta_r.get("body_id")
-        check("retexture: ok, render step 0, the build renders bJ's views then the outfit's, 1 worker run, "
-              "ONE mesh + ONE rig job on bJ",
-              (result.get("ok"), jobs, stems(BUILD_RENDERS), runs, hub),
-              (True, 0, [b_j, sig_k], 1, [("mesh", b_j), ("rig", b_j)]))
-        fig_r = meta_r.get("figure") or {}
-        check("retexture: on bJ = the shape of {jacket}, under + shoes painted",
-              (b_j not in (b1, b_k), fig_r.get("in_body"), fig_r.get("painted"), fig_r.get("in_body_own"),
-               base_body.is_texture_signature(meta_r.get("texture_signature"))),
-              (True, ["jacket"], ["shoes", "under"], ["jacket"], True))
-        check("retexture: bJ's dress text is the jacket alone", ("leather jacket" in front_text(b_j),
-                                                                 "white sneakers" in front_text(b_j)), (True, False))
+        from app.core import figure_build
+        check("retexture: A15 b — no interim while K is shown: the build waits, no job, no render, no worker run",
+              (result.get("ok"), result.get("error"), result.get("waits"), jobs, BUILD_RENDERS, runs, hub),
+              (False, figure_build.INTERIM_WAITS, True, 0, [], 0, []))
+        check("retexture: K's model unchanged (bI, the figure of [1])",
+              (b_j, meta_r.get("figure") == fig_k, meta_r.get("texture_signature")), (b_k, True, ""))
         check("retexture: the outfit's dress text names the jacket", "leather jacket" in front_text(sig_k), True)
         check("retexture: nothing unpainted, no mode, the jacket in the body",
               ("mode" in (meta_r.get("mesh_items") or {}), (meta_r.get("mesh_items") or {}).get("unpainted"),
@@ -460,7 +457,8 @@ def main() -> int:
         # --- [3] mesh mode again: the interim shape of [1] is reused ---------------
         print("[3] mesh mode again: the stored interim shape bI, copied views, no job")
         set_mode("mesh")
-        check("mesh: K stale (figure)", base_body.outfit_info("Demo").get("stale_reason"), "figure")
+        check("mesh: K current again (nothing rebuilt in [2])", base_body.outfit_info("Demo").get("stale_reason"),
+              None)
         jobs, runs, hub, result = render_and_build()
         check("mesh: ok, 0 image jobs, 0 mesh/rig jobs, 0 worker runs", (result.get("ok"), jobs, BUILD_RENDERS,
                                                                        hub, runs), (True, 0, [], [], 0))

@@ -39,17 +39,39 @@ Expected, derived by hand from rulings A23 a/b/c:
     then Step("assemble", …). ``_run_assemble`` -> "Not assembled: the fit of Jacket on the body shape is
     refused — the figure built before stays served" (nothing published). The worn row of the jacket: state
     "fit_refused", fit_refused "refused — stub". ``refit(blouse)`` -> ValueError (its fit is not refused);
-    ``refit(jacket)`` clears the refusal of (jacket, "0123456789ab") on SB and starts an AUTOMATIC Build with
-    reason "refit". The manual Build's fits step, refused again -> "Fit refused — Jacket: refused — stub; the
+    ``refit(jacket)`` (Ruling FR-I2) answers {"status": "started"} and starts NO Build (``figure_build.start``
+    not called): its own run in the Build worker clears the refusal of (jacket, "0123456789ab") on SB once,
+    under the character's build lock (FR-minors), fits it again, refused again -> ``state()["failed"]`` ==
+    {"fits": "Fit refused — Jacket: refused — stub; the figure built before stays served"}, no CPU refit,
+    0 hub calls. The manual Build's fits step, refused again -> "Fit refused — Jacket: refused — stub; the
     figure built before stays served", no CPU refit run (assemble depends on fits: ``DEPENDS["assemble"]`` ∋
     "fits"); accepted (BODY_FITS ∋ (jacket, SB)) -> "", the CPU refits run once, and the figure is no longer
     refused (delivered own (jacket,), fit_refused {}).
+[2b] Ruling FR-I2 — what a Re-fit runs: the jacket's fit on SB refused when the figure is resolved, ACCEPTED
+    by the Re-fit's own fit (``body_fit(build=True)``), ``plan`` narrowed to a given step list (the runners
+    recorded, each answering ""):
+    a) plan [shape (5 jobs, hub), fits, assemble] -> nothing runs, ``state()["failed"]`` == {"assemble":
+       "Fit accepted — not assembled: Shape stub still due — Build to finish"}, 0 hub calls;
+    b) plan [fits, assemble] -> the runners "fits" then "assemble" run, failed {}, 0 hub calls;
+    c) while a Build of the character is active, ``refit`` answers {"status": "building", …} and queues
+       nothing.
+    Every Re-fit run held the character's build lock (``build_lock`` recorded on entry).
 [3] A model served for ANOTHER outfit only (no model of W, the nearest stand-in): delivered on SB, own (),
     left_out {jacket: "Fit refused — refused — stub"}, fit_refused {jacket: "refused — stub"}, kept False, no
     interim — the refused jacket never goes into an interim body while a figure is shown (A23 c); the worn row
     "fit_refused".
+[5] Ruling FR-I3 — a dressed view refused for its inputs is a cached failure too: the model of W built as F
+    and served, the jacket's fit accepted, the back view of W missing (``dressed_image`` None for "back") and
+    ``dressed_view_refusals`` -> {"back": "Dressed back refused — stub"}. The AUTOMATIC plan runs no view step,
+    no fits and no assembly; the MANUAL plan has exactly one view step ("texture"), failed == "View refused —
+    back: Dressed back refused — stub", its label ending " — failed — Retry", jobs 3 (the estimate stub — the
+    estimate counts the refused view as one draft, ``smoke_figure_view_refused.py``). ``_retry_refused_views``
+    clears the records of W only for a manual Build of that failed step (explicit True), never for an
+    automatic one or a step that did not fail.
 [4] Fails on the old code (explicit hash 21ca534b, the base of T15-F1): ``figure.py`` had no ``FIT_REFUSED``
-    (the refused piece always joined an interim body) and ``DEPENDS["assemble"]`` was {"plain_body"}.
+    (the refused piece always joined an interim body) and ``DEPENDS["assemble"]`` was {"plain_body"}. FR-I2:
+    at 5eab1741 (the base of the final-review fixes) ``refit`` started an automatic Build
+    (``start(character_name, reason="refit", automatic=True)``, every due hub step with it).
 """
 import copy
 import os
@@ -88,6 +110,20 @@ STORED, BODY_FITS = set(), set()
 MODEL = {"sig": None, "path": None, "meta": None}
 SERVED = {"path": None}
 CLEARED, STARTS, REFITS = [], [], []
+
+
+HUB, LOCKED = [], []
+
+
+def wait_idle(figure_build, timeout=30.0):
+    import time
+    deadline = time.time() + timeout
+    while figure_build.running("Demo") and time.time() < deadline:
+        time.sleep(0.05)
+
+
+def errors(figure_build):
+    return {k: v.get("error") for k, v in (figure_build.state("Demo").get("failed") or {}).items()}
 
 
 def profile():
@@ -152,6 +188,26 @@ def main() -> int:
         model3d._read_sidecar = lambda _p: copy.deepcopy(MODEL["meta"] or {})
         figure_build._read_profile = lambda _c: profile()
         figure_build.start = lambda c, **kw: STARTS.append((c, kw)) or {"status": "started"}
+        figure_build.base_step_in_flight = lambda *_a, **_kw: ""
+        figure_build._tracked = lambda *_a, **_kw: (None, "")
+        from contextlib import contextmanager
+        real_lock = figure_build.build_lock
+
+        @contextmanager
+        def recording_lock(character_name):
+            with real_lock(character_name):
+                LOCKED.append(character_name)
+                yield
+
+        figure_build.build_lock = recording_lock
+        # Every hub job goes through the image service (CLAUDE.md): any use of it is counted.
+        from app.imagegen import service as image_service
+
+        class _Hub:
+            def __getattr__(self, name):
+                HUB.append(name)
+                raise RuntimeError(f"hub call {name} in a smoke")
+        image_service.get_image_service = lambda *_a, **_kw: _Hub()
 
         def delivered():
             figure.invalidate()
@@ -201,9 +257,16 @@ def main() -> int:
             check("refit(blouse) refused", "ValueError", "ValueError")
         CLEARED.clear()
         STARTS.clear()
-        figure_build.refit("Demo", "jacket")
-        check("refit(jacket): refusal cleared, automatic Build started",
-              (CLEARED, STARTS), ([("jacket", FSIG, sb)], [("Demo", {"reason": "refit", "automatic": True})]))
+        REFITS.clear()
+        HUB.clear()
+        started = figure_build.refit("Demo", "jacket")
+        wait_idle(figure_build)
+        check("refit(jacket): started, no Build", (started, STARTS), ({"status": "started"}, []))
+        check("refit(jacket): refusal cleared once under the build lock, no CPU refit",
+              (CLEARED, REFITS, LOCKED), ([("jacket", FSIG, sb)], [], ["Demo"]))
+        check("refit(jacket): refused again", errors(figure_build),
+              {"fits": "Fit refused — Jacket: refused — stub; the figure built before stays served"})
+        check("refit(jacket): 0 hub calls", HUB, [])
         check("DEPENDS: assemble needs the fits", "fits" in figure_build.DEPENDS["assemble"], True)
         CLEARED.clear()
         REFITS.clear()
@@ -217,6 +280,52 @@ def main() -> int:
               (["Demo"], ("jacket",), {}))
         BODY_FITS.discard(("jacket", sb))
 
+        print("[2b] Ruling FR-I2: a Re-fit runs only the CPU fit and assembly")
+        MODEL.update(sig=wanted.signature, path=root / "model.glb", meta={"figure": built.as_dict()})
+        SERVED["path"] = root / "model.glb"
+        real_plan, real_runners, real_body_fit = figure_build.plan, dict(figure_build._RUNNERS), garments.body_fit
+
+        def refit_accepts(_c, item_id, *, body_id, build=False, **_kw):
+            if build:
+                return {"fit": root / f"{item_id}_{body_id}.glb", "pending": False, "error": ""}
+            return {"fit": None, "pending": False, "error": "refused — stub"}
+        garments.body_fit = refit_accepts
+        ran = []
+        for name in list(figure_build._RUNNERS):
+            figure_build._RUNNERS[name] = (lambda n: lambda c, st, ex: ran.append(n) or "")(name)
+        S = figure_build.Step
+        try:
+            for case, steps, want_ran, want_failed in (
+                    ("a", [S("shape", "Shape stub", 5), S("fits", "Fit stub", 0), S("assemble", "Assemble stub", 0)],
+                     [], {"assemble": "Fit accepted — not assembled: Shape stub still due — Build to finish"}),
+                    ("b", [S("fits", "Fit stub", 0), S("assemble", "Assemble stub", 0)], ["fits", "assemble"], {})):
+                figure_build.plan = lambda *_a, _steps=steps, **_kw: list(_steps)
+                refused_now = dict(delivered()[1].fit_refused)
+                ran.clear()
+                HUB.clear()
+                LOCKED.clear()
+                started = figure_build.refit("Demo", "jacket") if refused_now else {"status": "not refused"}
+                wait_idle(figure_build)
+                check(f"{case}) started", started, {"status": "started"})
+                check(f"{case}) steps run", ran, want_ran)
+                check(f"{case}) failed", errors(figure_build), want_failed)
+                check(f"{case}) under the build lock, 0 hub calls", (LOCKED, HUB), (["Demo"], []))
+        finally:
+            figure_build.plan = real_plan
+            figure_build._RUNNERS.clear()
+            figure_build._RUNNERS.update(real_runners)
+            garments.body_fit = real_body_fit
+        delivered()
+        with figure_build._lock:
+            figure_build._active.add("Demo")
+        try:
+            got = figure_build.refit("Demo", "jacket")
+            check("c) a Build active: building, nothing queued",
+                  (got.get("status"), list(figure_build._queues.get("Demo") or [])), ("building", []))
+        finally:
+            with figure_build._lock:
+                figure_build._active.discard("Demo")
+
         print("[3] another outfit's model shown: the jacket left out, never an interim")
         MODEL.update(sig="another", path=root / "other.glb", meta={})
         SERVED["path"] = root / "other.glb"
@@ -226,6 +335,39 @@ def main() -> int:
         rows = figure_build._worn_rows("Demo", wanted_now, got, {}, False, profile())
         check("worn row", [r["state"] for r in rows if r["item_id"] == "jacket"], ["fit_refused"])
 
+        print("[5] Ruling FR-I3: a refused view is a cached failure")
+        BODY_FITS.add(("jacket", sb))
+        _w, built_now = delivered()
+        MODEL.update(sig=wanted.signature, path=root / "model.glb", meta={"figure": built_now.as_dict()})
+        SERVED["path"] = root / "model.glb"
+        real_image, real_refusals = base_body.dressed_image, base_body.dressed_view_refusals
+        real_clear = base_body.clear_view_refusals
+        cleared_views = []
+        base_body.dressed_image = lambda _c, view, *_a, **_kw: None if view == "back" else root / "view.png"
+        base_body.dressed_view_refusals = lambda *_a, **_kw: {"back": "Dressed back refused — stub"}
+        base_body.clear_view_refusals = lambda c, sig, views=None: cleared_views.append((c, sig))
+        try:
+            delivered()
+            auto = [s.name for s in figure_build._runnable(
+                figure_build.plan("Demo", profile=profile(), explicit=False), False)]
+            check("automatic: no view step, no fits, no assembly",
+                  [n for n in auto if n in ("interim", "shape", "texture", "fits", "assemble")], [])
+            manual = [s for s in figure_build.plan("Demo", profile=profile(), explicit=True)
+                      if s.name in figure_build.VIEW_STEPS]
+            check("manual: one failed view step",
+                  [(s.name, s.failed, s.label.endswith(figure_build.FAILED_SUFFIX), s.jobs) for s in manual],
+                  [("texture", "View refused — back: Dressed back refused — stub", True, 3)])
+            step = manual[0] if manual else None
+            figure_build._retry_refused_views("Demo", step, False, wanted.signature)
+            figure_build._retry_refused_views("Demo", figure_build.Step("texture", "x", 3), True, wanted.signature)
+            check("no clear: automatic, or a step that did not fail", cleared_views, [])
+            figure_build._retry_refused_views("Demo", step, True, wanted.signature)
+            check("manual retry clears the records of W", cleared_views, [("Demo", wanted.signature)])
+        finally:
+            base_body.dressed_image, base_body.dressed_view_refusals = real_image, real_refusals
+            base_body.clear_view_refusals = real_clear
+            BODY_FITS.discard(("jacket", sb))
+
         print(f"[4] fails on the old code ({BASELINE})")
         old_fig = subprocess.run(["git", "-C", str(ROOT), "show", f"{BASELINE}:app/core/figure.py"],
                                  capture_output=True, text=True).stdout
@@ -233,6 +375,10 @@ def main() -> int:
                                    capture_output=True, text=True).stdout
         check(f"{BASELINE}: no FIT_REFUSED", (bool(old_fig), "FIT_REFUSED" in old_fig), (True, False))
         check(f"{BASELINE}: assemble needed only the plain body", '"assemble": {"plain_body"}}' in old_build, True)
+        old_refit = subprocess.run(["git", "-C", str(ROOT), "show", "5eab1741:app/core/figure_build.py"],
+                                   capture_output=True, text=True).stdout
+        check("5eab1741: refit started an automatic Build",
+              'return start(character_name, reason="refit", automatic=True)' in old_refit, True)
 
     print(f"\n{len(FAILS)} failure(s)")
     for label in FAILS:
