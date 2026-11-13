@@ -247,12 +247,15 @@ def main() -> int:
         body_glb = fx.body_glb()
         nohead, proxy = sb.hair_glbs(fx, P, F)
         kw = {"colour_target": None, "forward_m": 0.01, "tilt_deg": 5.0, "width_scale": 0.9}
+        # The current code with the drape off (on by default since FIT hair 12): the drape is not this smoke's
+        # subject, and the BASE commit compared against has none.
+        now = dict(kw, drape=False)
         deep = [{"joints": [[0, 0.40, -0.03], [0, 0.30, -0.05]], "stiffness": 0.4}]
         deep3 = [{"joints": [[0, 0.40, -0.03], [0, 0.35, -0.05], [0, 0.30, -0.05]], "stiffness": 0.4}]
         deep_json, cards_json = json.dumps(deep).encode(), sb.cards_file()
         base = load_base(Path(tmp), "app/core/garment_hairdeck.py", "garment_hairdeck_base")
 
-        r0 = gh.fit_hairdeck(nohead, proxy, body_glb, **kw)
+        r0 = gh.fit_hairdeck(nohead, proxy, body_glb, **now)
         rb0 = base.fit_hairdeck(nohead, proxy, body_glb, **kw)
         rep0 = r0.report["chains"]
         check(rep0["joint_depth_max_m"] == 0.0 and rep0["repair"]["moved_joints"] == 0
@@ -260,7 +263,7 @@ def main() -> int:
         check(same_garment(r0.garment, rb0.garment) and r0.metrics == rb0.metrics,
               f"without chains: garment and metrics identical to {BASE_COMMIT}")
 
-        r1 = gh.fit_hairdeck(nohead, proxy, body_glb, swing=True, chains_json=deep_json, cards_json=cards_json, **kw)
+        r1 = gh.fit_hairdeck(nohead, proxy, body_glb, swing=True, chains_json=deep_json, cards_json=cards_json, **now)
         rb1 = base.fit_hairdeck(nohead, proxy, body_glb, chains_json=deep_json, cards_json=cards_json, **kw)
         rep = r1.report["chains"]
         print(f"       deep: report.chains {json.dumps({k: v for k, v in rep.items() if k != 'chains'})}")
@@ -274,7 +277,7 @@ def main() -> int:
         check(np.array_equal(r1.garment.positions, r0.garment.positions), "deep: positions = the fit without chains")
 
         r4 = gh.fit_hairdeck(nohead, proxy, body_glb, swing=True, chains_json=json.dumps(deep3).encode(), cards_json=cards_json,
-                             **kw)
+                             **now)
         rep4 = r4.report["chains"]
         print(f"       deep3: {json.dumps({k: v for k, v in rep4.items() if k != 'chains'})}")
         tr4 = rep4["repair"]["truncated_chains"]
@@ -288,7 +291,7 @@ def main() -> int:
         real = hc.nearest_outside
         hc.nearest_outside = lambda *a, **k: None
         try:
-            r2 = gh.fit_hairdeck(nohead, proxy, body_glb, swing=True, chains_json=deep_json, cards_json=cards_json, **kw)
+            r2 = gh.fit_hairdeck(nohead, proxy, body_glb, swing=True, chains_json=deep_json, cards_json=cards_json, **now)
         finally:
             hc.nearest_outside = real
         rep2 = r2.report["chains"]
@@ -301,7 +304,7 @@ def main() -> int:
               "unreachable: garment incl. skin identical to the fit without chains, no joint_parents")
 
         r3 = gh.fit_hairdeck(nohead, proxy, body_glb, swing=True, chains_json=json.dumps(sb.CHAINS).encode(),
-                             cards_json=cards_json, **kw)
+                             cards_json=cards_json, **now)
         rb3 = base.fit_hairdeck(nohead, proxy, body_glb, chains_json=json.dumps(sb.CHAINS).encode(),
                                 cards_json=cards_json, **kw)
         rep3 = r3.report["chains"]
@@ -369,7 +372,7 @@ def main() -> int:
 
         tip = [{"joints": [[0, 0.40, -0.06], [0, 0.35, -0.06], [0, 0.43, -0.03]], "stiffness": 0.4}]
         r5 = gh.fit_hairdeck(nohead, proxy, body_glb, swing=True, chains_json=json.dumps(tip).encode(), cards_json=cards_json,
-                             **kw)
+                             **now)
         rep5 = r5.report["chains"]
         g5 = r5.garment
         print(f"       tip: {json.dumps({k: v for k, v in rep5.items() if k != 'chains'})}")

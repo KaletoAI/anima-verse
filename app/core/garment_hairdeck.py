@@ -78,8 +78,10 @@ DRAPE_RAMP_M = 0.03
 # CARD_PIN_TOP_M when the card has no vertex at or above the ear line; every free vertex starts at its PLACED
 # position (inside the neck for a curtain that hangs through it) with today's placed shape as its rest, tethered to
 # its card's nearest pin (long-range attachments), and the body grows round it from DRAPE_CLEAR_M - grow to
-# DRAPE_CLEAR_M; a card held only by its top cm starts where the fit put it (``drape_below_ear``). The field reaches DRAPE_FIELD_DROP_M below the hair for its sag. Off until accepted
-# (HAIR_DRAPE_ON; ``fit_hairdeck(drape=...)`` overrides it per call).
+# DRAPE_CLEAR_M; a card held only by its top cm starts where the fit put it (``drape_below_ear``). The field reaches DRAPE_FIELD_DROP_M below the hair for its sag. On since acceptance
+# B (2026-11-13, FIT hair 12; HAIR_DRAPE_ON; ``fit_hairdeck(drape=...)`` overrides it per call). Known limitation: a
+# raised arm crossing the draped front strands squeezes them into the chest (Kira celebrating 0.21 -> 0.85 % excess
+# with the served capsules) — the cross-person spec's squeeze rule (Ruling B11j) fixes it.
 # Acceptance B fix 1 (Rulings B11a-e, ~/claude-out/fit-sdf-speed-drape/accept/B): the refinement is coarser (lmax
 # 0.02 instead of the spike's 0.012: Rosi 127k -> 71k drape vertices) and the run ends at rest (``rest_vmax`` / ``rest_substeps``); the
 # drape keeps DRAPE_CLEAR_M from the body, not CARD_CLEAR_M — Kira's raised-shoulder pose pressed into hair laid at
@@ -93,7 +95,7 @@ DRAPE_RAMP_M = 0.03
 DRAPE_CLEAR_M = 0.008
 HAIR_DRAPE = drape.DrapeParams(substeps=2500, dt=1e-3, gravity=9.81, a_stretch=0.0, a_bend=1e-5, damp=0.02, mu=0.6,
                                grow=0.08, max_push=0.002, lmax=0.02, rest_vmax=0.003, rest_substeps=100)
-HAIR_DRAPE_ON = False
+HAIR_DRAPE_ON = True
 CARD_PIN_TOP_M = 0.01
 DRAPE_FIELD_DROP_M = 0.10
 # The face stays clear (``_clear_face``, after the push), Kira 2026-11-11 (~/claude-out/kira-hairdeck,

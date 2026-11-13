@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""HairDeck fit: the XPBD drape below the ear line (``garment_hairdeck.drape_below_ear``, keyword ``drape``, off by
-default — ``HAIR_DRAPE_ON``). Plan 2026-11-12 fit-sdf-speed-drape, Task 10.
+"""HairDeck fit: the XPBD drape below the ear line (``garment_hairdeck.drape_below_ear``, keyword ``drape``, on by
+default since acceptance B — ``HAIR_DRAPE_ON``, FIT hair 12). Plan 2026-11-12 fit-sdf-speed-drape, Task 10.
 
 Usage: ./.venv/bin/python scripts/smoke_hairdeck_drape_xpbd.py
 
@@ -34,8 +34,9 @@ Fixture (metres, +y up, +z front). Body, skin joints [mixamorig:Hips, mixamorig:
      out backward).
 [D4] Short hair, drape=True: ``report.push.drape_xpbd`` == {"skipped": "no_free_vertex"}; garment, metrics and the
      rest of the report equal to drape=False.
-[D5] drape=False (and the default, ``HAIR_DRAPE_ON`` False) is byte-equal to commit 71306d21's ``fit_hairdeck`` on
-     both fixtures: every garment array's bytes, the metrics, the verdict and the report (no ``drape_xpbd`` key).
+[D5] drape=False is byte-equal to commit 71306d21's ``fit_hairdeck`` on both fixtures: every garment array's bytes,
+     the metrics, the verdict and the report (no ``drape_xpbd`` key). The default (``HAIR_DRAPE_ON`` True since
+     acceptance B) is byte-equal to drape=True (the drape's wall-clock timings ``t_*_s`` aside).
 [D6] Ruling B11e, ``drape_below_ear`` directly: one card held only by its top (2 columns x 0.075 / 0.079, z 0, rows
      every 5 mm from y 1.50 down to 1.4125 — no vertex at or above the ear line 1.5125), fitted (``Qf``) beside the
      neck, placed (``Pw``) the same shape moved to x 0.000 / 0.004, z 0.03 — inside the neck. Pins = its top
@@ -188,6 +189,13 @@ def hair_glbs(fit, P, F):
 GARMENT_KEYS = ("positions", "normals", "uvs", "indices", "joints", "weights", "colors")
 
 
+def untimed(res):
+    """The drape's report without its wall-clock timings (``t_*_s``)."""
+    rep = res.report["push"].get("drape_xpbd")
+    return json.dumps({k: v for k, v in rep.items() if not k.startswith("t_")} if isinstance(rep, dict) else rep,
+                      sort_keys=True, default=str)
+
+
 def blob(res, drop_xpbd=False):
     """Everything a fit returns, as comparable bytes / JSON."""
     rep = json.loads(json.dumps(res.report, default=str, sort_keys=True))
@@ -226,7 +234,7 @@ def main() -> int:
         bglb = body_glb(width, fit)
         body = body_arrays(bglb)
         check(abs(ear_line_height(body) - EAR) < 1e-6, f"fixture: ear line {ear_line_height(body):.5f} ({EAR})")
-        check(gh.HAIR_DRAPE_ON is False, "HAIR_DRAPE_ON is False (off until accepted)")
+        check(gh.HAIR_DRAPE_ON is True, "HAIR_DRAPE_ON is True (on since acceptance B)")
         P, F, neck = hair()
         nohead, proxy = hair_glbs(fit, P, F)
         kw = dict(colour_target=None, forward_m=0.0, tilt_deg=0.0)
@@ -283,12 +291,12 @@ def main() -> int:
 
         # [D5] byte-equal to the base commit
         base = load_base(Path(tmp))
-        for label, nh, px, res in (("long", nohead, proxy, off), ("short", s_nohead, s_proxy, s_off)):
+        for label, nh, px, res, res_on in (("long", nohead, proxy, off, on), ("short", s_nohead, s_proxy, s_off, s_on)):
             ref = base.fit_hairdeck(nh, px, bglb, **kw)
             dflt = gh.fit_hairdeck(nh, px, bglb, **kw)
             check(blob(res) == blob(ref), f"[D5] {label}: drape=False byte-equal to {BASE_COMMIT}")
-            check(blob(dflt) == blob(ref), f"[D5] {label}: the default (HAIR_DRAPE_ON False) byte-equal to "
-                                           f"{BASE_COMMIT}")
+            same = blob(dflt, drop_xpbd=True) == blob(res_on, drop_xpbd=True) and untimed(dflt) == untimed(res_on)
+            check(same, f"[D5] {label}: the default (HAIR_DRAPE_ON True) byte-equal to drape=True (drape timings aside)")
             check("drape_xpbd" not in res.report["push"], f"[D5] {label}: no drape_xpbd key without the drape")
     if FAILS:
         print("FAILED: " + ", ".join(FAILS))

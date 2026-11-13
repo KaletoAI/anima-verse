@@ -234,7 +234,7 @@ def test_h3(gf, reasons):
 
 def test_h4(gf):
     from app.core import footwear_fit, garment_layers
-    check(gf.FIT_VERSION == {"hair": 11, "clothing": 9, "footwear": 17} and footwear_fit.FOOTWEAR_FIT_VERSION == 17
+    check(gf.FIT_VERSION == {"hair": 12, "clothing": 9, "footwear": 17} and footwear_fit.FOOTWEAR_FIT_VERSION == 17
           and garment_layers.LAYER_VERSION == 2,
           f"[H4] FIT_VERSION {gf.FIT_VERSION}, FOOTWEAR_FIT_VERSION {footwear_fit.FOOTWEAR_FIT_VERSION}, "
           f"LAYER_VERSION {garment_layers.LAYER_VERSION} (want hair 11 / clothing 9 / footwear 17, layers 2)")

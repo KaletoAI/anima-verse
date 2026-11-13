@@ -287,9 +287,12 @@ def main() -> int:
         body_glb = fx.body_glb()
         nohead, proxy = hair_glbs(fx, P, F)
         kw = {"colour_target": None, "forward_m": 0.01, "tilt_deg": 5.0, "width_scale": 0.9}
+        # The current code with the drape off (on by default since FIT hair 12): the drape is not this smoke's
+        # subject, and the BASE commit compared against has none.
+        now = dict(kw, drape=False)
         base = load_base(Path(tmp))
         rb = base.fit_hairdeck(nohead, proxy, body_glb, **kw)
-        r0 = gh.fit_hairdeck(nohead, proxy, body_glb, **kw)
+        r0 = gh.fit_hairdeck(nohead, proxy, body_glb, **now)
         g0, gb = r0.garment, rb.garment
         same = (np.array_equal(g0.positions, gb.positions) and np.array_equal(g0.joints, gb.joints)
                 and np.array_equal(g0.weights, gb.weights) and g0.joint_names == gb.joint_names
@@ -301,7 +304,7 @@ def main() -> int:
 
         chains_json, cards_json = json.dumps(CHAINS).encode(), cards_file()
         r1 = gh.fit_hairdeck(nohead, proxy, body_glb, chains_json=chains_json, cards_json=cards_json, swing=True,
-                             **kw)
+                             **now)
         g1, rep = r1.garment, r1.report["chains"]
         print(f"       report.chains {rep}")
         check(np.array_equal(g1.positions, g0.positions) and np.array_equal(g1.indices, g0.indices),
@@ -348,7 +351,7 @@ def main() -> int:
               f"{np.abs(pushed['chain_points'] - want_cp).max():.2e}")
 
         # Ruling H11: Swing off = today's garment byte for byte; Swing on records the anchor blend
-        roff = gh.fit_hairdeck(nohead, proxy, body_glb, chains_json=chains_json, cards_json=cards_json, **kw)
+        roff = gh.fit_hairdeck(nohead, proxy, body_glb, chains_json=chains_json, cards_json=cards_json, **now)
         goff, rep_off = roff.garment, roff.report["chains"]
         check(goff.positions.tobytes() == g0.positions.tobytes() and goff.joints.tobytes() == g0.joints.tobytes()
               and goff.weights.tobytes() == g0.weights.tobytes() and goff.joint_names == g0.joint_names
@@ -396,7 +399,7 @@ def main() -> int:
               f"({residual(dense_rows(blend)):.5f} <= {residual(dense_rows(mid)):.5f})")
 
         r2 = gh.fit_hairdeck(nohead, proxy, body_glb, chains_json=chains_json,
-                             cards_json=cards_file(drop_last=True), **kw)
+                             cards_json=cards_file(drop_last=True), **now)
         check(r2.report["chains"]["match"] == "count" and r2.report["chains"]["count"] == 0
               and np.array_equal(r2.garment.weights, g0.weights) and r2.garment.joint_names == g0.joint_names,
               f"cards file one short: {r2.report['chains']}, weights as without chains")
