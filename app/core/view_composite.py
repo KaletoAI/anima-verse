@@ -100,6 +100,16 @@ flare's blur 3) — as a grey PNG: outside it the composite IS the base, so a
 gate that compares it with the base (``garment_gates.worn_gate``'s head
 share) leaves the support out.
 
+HEAD (Ruling A21, Task 11g-fix4b): a dressed view of a shape whose head
+differs from the plain views (a bald shape on haired plain views, D4 — the
+caller measures it: ``base_body.head_match`` of the dressed front) is
+composited with ``head=True``: everything above the draft's shoulder line
+(``_head_zone``) is the draft — its head, neck and shoulder tops, the flow
+there on the draft's own outline, the base's figure (its hair) gone — so the
+result is never a bald head stretched into the haired outline. The record
+gains ``head`` with the zone and the seam ΔE along its neck line. Without
+``head`` the composite is byte for byte what it was.
+
 The callers re-draft once on a failed check, then refuse with the numbers
 (``refusal``); a refused composite is never published into the views or the
 texture. ``compose`` refuses to run on the event loop and inside a GPU-queue
@@ -181,6 +191,18 @@ RULES: Dict[str, Dict[str, Any]] = {
 }
 #: Px the support (``compose(mask_target=…)``) grows the garment mask + flare by.
 SUPPORT_GROW = 4
+#: The HEAD ZONE of a composite that takes the draft's head (``compose(head=True)``, Ruling A21): a dressed
+#: view of a shape whose head differs from the plain views (a bald shape on haired plain views, D4). The
+#: neck is the narrowest row of the aligned draft in ``HEAD_NECK_BAND`` (shares of its height from its
+#: top); the zone ends ``HEAD_ZONE_MARGIN`` below the first row under the neck at least
+#: ``HEAD_SHOULDER_RATIO`` times the neck's width (the shoulder line), searched down to
+#: ``HEAD_SHOULDER_SEARCH``. Ylva's bald back draft (2026-11-13): neck 56 px at 0.124..0.144, 2x at 0.17,
+#: the haired base 150..175 px wide down to 0.17 (the hair) — the base's head and hair above the line
+#: go, the draft's head, neck and shoulder tops come in, the flow there runs on the draft's own outline.
+HEAD_NECK_BAND = (0.06, 0.22)
+HEAD_SHOULDER_RATIO = 2.0
+HEAD_SHOULDER_SEARCH = 0.32
+HEAD_ZONE_MARGIN = 0.04
 #: The sidecar value of an empty composite (module docstring).
 EMPTY = "empty"
 #: The refusal reasons.
@@ -298,6 +320,26 @@ def _similarity(draft: np.ndarray, shape: Tuple[int, int], base_mask: np.ndarray
                                                     [0, 0, 1]]))
     out = transform.warp(draft / 255.0, tf, output_shape=shape, order=1, mode="constant", cval=0) * 255.0
     return out, {"scale": round(float(s), 4), "dx": round(float(cx1 - cx0), 2), "dy": round(float(t1 - t0), 2)}
+
+
+def _head_zone(mask: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """``(zone, record)`` of a figure mask (the ALIGNED draft's, in the base
+    frame): the rows above its shoulder line (``HEAD_*`` constants) as a
+    bool array of the mask's shape, and ``{"neck_row", "cut_row"}`` (base
+    px) with ``cut`` = the zone's end as a share of the figure height."""
+    t, b, _l, _r = _bbox(mask)
+    height = b - t
+    widths = mask.sum(1)
+    lo, hi = t + int(HEAD_NECK_BAND[0] * height), t + max(int(HEAD_NECK_BAND[1] * height), int(HEAD_NECK_BAND[0] * height) + 1)
+    neck = lo + int(np.argmin(widths[lo:hi]))
+    limit = HEAD_SHOULDER_RATIO * max(int(widths[neck]), 1)
+    end = t + int(HEAD_SHOULDER_SEARCH * height)
+    wide = np.nonzero(widths[neck:end] >= limit)[0]
+    shoulder = neck + int(wide[0]) if wide.size else end
+    cut = min(b, shoulder + int(round(HEAD_ZONE_MARGIN * height)))
+    zone = np.zeros_like(mask)
+    zone[:cut] = True
+    return zone, {"neck_row": neck, "cut_row": cut, "cut": round((cut - t) / height, 4)}
 
 
 # --- 2. Warp ------------------------------------------------------------------
@@ -532,7 +574,7 @@ def _seam_colour_match(base: np.ndarray, dw: np.ndarray, mask: np.ndarray, skin_
 
 
 def _blend(base: np.ndarray, dw: np.ndarray, mask: np.ndarray, flare_rgba: np.ndarray,
-           flare: np.ndarray) -> np.ndarray:
+           flare: np.ndarray, clear: Optional[np.ndarray] = None) -> np.ndarray:
     """The base with the draft inside the (1.2 px feathered) mask, the flare
     with it; alpha: the base's, raised where the mask adds figure.
 
@@ -540,7 +582,10 @@ def _blend(base: np.ndarray, dw: np.ndarray, mask: np.ndarray, flare_rgba: np.nd
     takes the draft (``dw``) or the flare's source (``flare_rgba``), whichever
     region is nearer. Feathered apart, the two half-weights met where the
     flare touches the garment over a leg and left a half-transparent line
-    down the skirt (alpha ~0.7, fix round 2 of Task 11g)."""
+    down the skirt (alpha ~0.7, fix round 2 of Task 11g).
+
+    ``clear`` (the head zone, Ruling A21): where the draft has no figure
+    there the base's figure goes too — its alpha is not kept up."""
     from scipy import ndimage as ndi
     region = mask | flare
     source = dw
@@ -553,16 +598,26 @@ def _blend(base: np.ndarray, dw: np.ndarray, mask: np.ndarray, flare_rgba: np.nd
     out = base.copy()
     out[..., :3] = base[..., :3] * (1 - m[..., None]) + source[..., :3] * m[..., None]
     out[..., 3] = base[..., 3] * (1 - m) + source[..., 3] * m
-    out[..., 3] = np.where(mask & (base[..., 3] > FIGURE_ALPHA), np.maximum(out[..., 3], base[..., 3]), out[..., 3])
+    keep = mask & (base[..., 3] > FIGURE_ALPHA)
+    if clear is not None:
+        keep &= ~clear
+    out[..., 3] = np.where(keep, np.maximum(out[..., 3], base[..., 3]), out[..., 3])
+    if clear is not None:
+        # The head zone IS the draft: no feathered remnant of the base's hair outline.
+        inside = clear & region
+        out[inside] = source[inside]
     return out
 
 
 # --- Measures -----------------------------------------------------------------
 
-def _seam_de(img: np.ndarray, mask: np.ndarray, d_lab: np.ndarray, skin_d: Skin, k: int = 3) -> Optional[float]:
+def _seam_de(img: np.ndarray, mask: np.ndarray, d_lab: np.ndarray, skin_d: Skin, k: int = 3,
+             rows: Optional[Tuple[int, int]] = None) -> Optional[float]:
     """Median CIEDE2000 between the pixel ``k`` px outside and ``k`` px
     inside the mask edge where the registered draft is skin on both sides
-    (the edge cuts skin, not a garment edge); None below 10 pairs."""
+    (the edge cuts skin, not a garment edge); None below 10 pairs.
+    ``rows`` (half-open): only the outer pixels in those rows (the neck
+    line of a head zone, Ruling A21)."""
     from scipy import ndimage as ndi
     from skimage import color
     if not mask.any():
@@ -570,6 +625,9 @@ def _seam_de(img: np.ndarray, mask: np.ndarray, d_lab: np.ndarray, skin_d: Skin,
     lab_i = _lab(img)
     outside_d, (oi, oj) = ndi.distance_transform_edt(~mask, return_indices=True)
     outer = (outside_d > k - 0.5) & (outside_d <= k + 0.5)
+    if rows is not None:
+        outer[:max(0, rows[0])] = False
+        outer[max(0, rows[1]):] = False
     ys, xs = np.nonzero(outer)
     ny, nx = oi[ys, xs], oj[ys, xs]
     dy, dx = ny - ys, nx - xs
@@ -631,22 +689,33 @@ def put_on(base: np.ndarray, draft: np.ndarray, result: np.ndarray, *, work_heig
 
 # --- The composite ------------------------------------------------------------
 
-def composite_arrays(base: np.ndarray, draft: np.ndarray, *, rule: str = "outfit"
+def composite_arrays(base: np.ndarray, draft: np.ndarray, *, rule: str = "outfit", head: bool = False
                      ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """``(composite RGBA array in the base frame, record)`` of a draft (RGBA
     float 0..255, any size) put onto a base view (RGBA float 0..255) — the
     module docstring; ``rule``: a ``RULES`` key ("outfit" / "piece"). Pure
     and deterministic. ``CompositeError`` when the base has no figure or the
     rule is unknown; a draft without a figure comes back as the base with
-    ``ok`` False (``NO_FIGURE``); an EMPTY one as the base with ``ok`` True."""
-    out, record, _support = _composite(base, draft, rule)
+    ``ok`` False (``NO_FIGURE``); an EMPTY one as the base with ``ok`` True.
+    ``head``: take the draft's head as well (``_composite``)."""
+    out, record, _support = _composite(base, draft, rule, take_head=head)
     return out, record
 
 
-def _composite(base: np.ndarray, draft: np.ndarray, rule: str
+def _composite(base: np.ndarray, draft: np.ndarray, rule: str, *, take_head: bool = False
                ) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
     """``composite_arrays`` plus the support mask (module docstring; all
-    False when the result is the base)."""
+    False when the result is the base).
+
+    ``take_head`` (Ruling A21): the draft wears another head than the base (a
+    bald shape on haired plain views) — the HEAD ZONE (``_head_zone`` of
+    the aligned draft: everything above its shoulder line) comes from the
+    draft: the flow runs on the draft's own outline there (the base's hair
+    does not stretch the draft's head and neck), the zone joins the mask
+    and the base's figure goes where the draft has none (no hair left on a
+    bald head). Never EMPTY (the head is put on). The record gains
+    ``head`` = the zone's rows and the seam ΔE along its neck line
+    (``neck_seam_de``); without it nothing changes."""
     from scipy import ndimage as ndi
     started = time.perf_counter()
     if rule not in RULES:
@@ -664,6 +733,7 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str
     shape = bm.shape
     aligned, alignment = _similarity(draft, shape, bm)
     aligned_mask = figure_mask(aligned)
+    zone, zone_record = _head_zone(aligned_mask) if take_head else (None, None)
     lb = _lab(base)
     skin_b = Skin(lb, bm & (base[..., 3] > 240))
     head = aligned_mask & (aligned[..., 3] > 240)
@@ -673,11 +743,15 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str
     skin_d = skin_b.recentred(la, head, aligned_mask & (aligned[..., 3] > 240),
                               shared=_shared_skin(lb, la, bm, aligned, skin_b))
     flare_aligned = _flare(aligned, aligned_mask, bm)
-    v, u = _shape_flow(bm, _largest(aligned_mask & ~flare_aligned))
+    flow_base = bm if zone is None else (bm & ~zone) | (aligned_mask & zone)
+    v, u = _shape_flow(flow_base, _largest(aligned_mask & ~flare_aligned))
     dw = _apply_flow(aligned, v, u)
     dwm = figure_mask(dw)
     mask, _de = _garment_mask(base, dw, bm, dwm, skin_b, skin_d, opening=spec["opening"],
                               min_component=spec["min_component"])
+    if zone is not None:
+        # Every base pixel of the zone (its hair's soft matte edge and loose strands too) and the draft's figure.
+        mask = (mask & ~zone) | (zone & (dwm | (base[..., 3] > 0) | (dw[..., 3] > 0)))
     # The flare only where it touches the garment. Pasted up to the base outline (``FLARE_FILL``): the 4 px
     # ring ``_flare`` leaves out is draft figure too — without it the base's background showed as a grey line
     # between the flare and the garment over the legs (Ylva 2026-11-13).
@@ -688,13 +762,17 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str
         touch = np.unique(fl[ndi.binary_dilation(mask, _disk(3)) & flare])
         flare = np.isin(fl, touch[touch > 0])
     matched, ring_offset = _seam_colour_match(base, dw, mask, skin_b, skin_d)
-    out = _blend(base, matched, mask, aligned, flare)
+    out = _blend(base, matched, mask, aligned, flare, clear=zone)
     # The registered draft as the composite sees it: the warped draft, the flare unwarped.
     registered = np.where(flare[..., None], aligned, dw)
     cm = figure_mask(out)
     magnitude = np.hypot(v, u)[bm]
     coverage = put_on(base, registered, out, **spec["put_on"])
     seam = _seam_de(out, mask, _lab(dw), skin_d)
+    if zone_record is not None:
+        cut = zone_record["cut_row"]
+        neck_seam = _seam_de(out, mask, _lab(dw), skin_d, rows=(cut - 1, cut + 7))
+        record["head"] = {**zone_record, "neck_seam_de": None if neck_seam is None else round(neck_seam, 2)}
     record.update({
         "alignment": alignment,
         "warp": {"mean_px": round(float(magnitude.mean()), 2), "p95_px": round(float(np.percentile(magnitude, 95)), 2),
@@ -711,7 +789,7 @@ def _composite(base: np.ndarray, draft: np.ndarray, rule: str
     })
     reasons = check(record)
     support = ndi.binary_dilation(mask | flare, _disk(SUPPORT_GROW))
-    if coverage.get("nothing") and not reasons:
+    if coverage.get("nothing") and not reasons and zone is None:
         # EMPTY: nothing of the draft shows in this view — the base unchanged.
         out, support = base.copy(), np.zeros_like(bm)
         record.update(empty=True, coverage={**coverage, "score": None}, mask_share=0.0, flare_px=0, seam_de=None,
@@ -774,17 +852,18 @@ def to_image(rgba: np.ndarray, background: Optional[Tuple[int, int, int]] = None
 
 def compose(base_view: Path, draft: Path, target: Path, *, rule: str = "outfit",
             background: Optional[Tuple[int, int, int]] = None,
-            mask_target: Optional[Path] = None) -> Dict[str, Any]:
+            mask_target: Optional[Path] = None, head: bool = False) -> Dict[str, Any]:
     """Composite ``draft`` onto ``base_view`` and write the result to
     ``target`` (PNG, in the base view's frame; RGBA, or flattened onto
     ``background``) — written whether or not it passes, the caller stages it;
     ``rule``: "outfit" (a dressed view) or "piece" (a worn back).
     ``mask_target``: where the support goes (``write_support``).
+    ``head``: the draft's head comes too (Ruling A21, ``_composite``).
     Returns the record (``composite_arrays``). ``CompositeError`` on the
     event loop / a GPU-queue worker (``_guard_thread``) or for a base view
     without a figure."""
     _guard_thread()
-    out, record, support = _composite(load_rgba(base_view), load_rgba(draft), rule)
+    out, record, support = _composite(load_rgba(base_view), load_rgba(draft), rule, take_head=head)
     target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.tmp")

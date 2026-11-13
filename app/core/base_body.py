@@ -1941,11 +1941,17 @@ def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Pat
     front the draft was made from — a head that differs from the base
     front's is judged by the face cue, Ruling A16), ``base_body_gates.
     noise_gate`` and ``framing_gate`` against the base view. A composite
-    that failed its checks is not gated (``guard`` etc. are ``{}``)."""
+    that failed its checks is not gated (``guard`` etc. are ``{}``).
+    A head that differs (``head_match`` of ``front`` below
+    ``HEAD_MATCH_MIN``) is taken from the draft as well
+    (``view_composite.compose(head=True)``, Ruling A21) — never a bald head
+    on the haired plain back."""
     from app.core import base_body_gates, view_composite
     base_view = base_views[view]
     path = stem.with_suffix(".png")
-    record = view_composite.compose(base_view, draft, path, rule="outfit")
+    match = head_match(front, base_views.get("front")) if front is not None else None
+    other_head = {"head": True} if match is not None and match < HEAD_MATCH_MIN else {}
+    record = view_composite.compose(base_view, draft, path, rule="outfit", **other_head)
     path.with_suffix(".json").write_text(json.dumps(composite_sidecar(draft, view, extra, record),
                                                     ensure_ascii=False, indent=2), encoding="utf-8")
     if not record["ok"]:
