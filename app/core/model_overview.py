@@ -682,7 +682,9 @@ def _dressed_view_step(view: str, *, used: bool, record: Optional[Dict[str, Any]
                        composite_mask=_num(composite.get("mask_share")), composite_seam_de=_num(composite.get("seam_de")))
     parts = []
     if guard:
-        parts.append(f"view check {guard.get('best') or '?'}" + (" · re-rendered" if guard.get("rerendered") else ""))
+        parts.append(f"view check {guard.get('best') or '?'}" + (" · re-rendered" if guard.get("rerendered") else "")
+                     + (" (face cue)" if guard.get("cue") == "face" else "")
+                     + (f" · kept after {guard.get('draft_attempts')} drafts" if guard.get("kept") else ""))
     if empty:
         parts.append("nothing of the outfit shows in this view — the base view unchanged")
     if composite:

@@ -371,7 +371,7 @@ def main() -> int:
 
         guard_fail_dirs = set()
 
-        def guard(view, path, base_views):
+        def guard(view, path, base_views, front=None):
             ok = Path(path).parent.name not in guard_fail_dirs
             return {"ok": ok, "scores": {}, "best": view if ok else "front"}
 

@@ -1930,13 +1930,16 @@ def _composite_extra(view: str, bsig: str, base_view: Path, draft: Path,
 
 
 def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Path,
-                       base_views: Dict[str, Optional[Path]], extra: Dict[str, Any]) -> Tuple[Path, Dict[str, Any]]:
+                       base_views: Dict[str, Optional[Path]], extra: Dict[str, Any],
+                       front: Optional[Path] = None) -> Tuple[Path, Dict[str, Any]]:
     """The composite of ``draft`` onto the base view into ``stem.png``
     (``view_composite.compose``, rule "outfit", RGBA in the base view's
     frame) with its sidecar (``composite_sidecar``) and its result
     ``{"ok", "composite", "guard", "noise", "framing"}``: ``ok`` = the
     composite's checks (alignment IoU, coverage) and the view's gates — the
-    head ``view_guard`` against the base views, ``base_body_gates.
+    head ``view_guard`` against the base views (``front``: the dressed
+    front the draft was made from — a head that differs from the base
+    front's is judged by the face cue, Ruling A16), ``base_body_gates.
     noise_gate`` and ``framing_gate`` against the base view. A composite
     that failed its checks is not gated (``guard`` etc. are ``{}``)."""
     from app.core import base_body_gates, view_composite
@@ -1947,7 +1950,7 @@ def _composite_attempt(character_name: str, view: str, *, stem: Path, draft: Pat
                                                     ensure_ascii=False, indent=2), encoding="utf-8")
     if not record["ok"]:
         return path, {"ok": False, "composite": record, "guard": {}, "noise": {}, "framing": {}}
-    guard = view_guard(view, path, base_views)
+    guard = view_guard(view, path, base_views, front=front)
     noise = base_body_gates.noise_gate(path, base_view)
     framing = base_body_gates.framing_gate(path, base_view)
     return path, {"ok": bool(guard["ok"] and noise["ok"] and framing["ok"]), "composite": record,
@@ -2022,7 +2025,8 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             stem = Path(staging) / "attempt1" / final.name
             stem.parent.mkdir()
             attempt = _composite_attempt(character_name, view, stem=stem, draft=kept, base_views=base_views,
-                                         extra=_composite_extra(view, bsig, base_view, kept, mesh_items, texture))
+                                         extra=_composite_extra(view, bsig, base_view, kept, mesh_items, texture),
+                                         front=front)
             attempts.append(attempt)
             first = 2
             logger.info("Dressed %s %s (%s): stored draft composite %s (%s; guard %s, noise %s)", view,
@@ -2054,7 +2058,7 @@ def _dress_view(character_name: str, view: str, *, signature: str, bsig: str,
             stem.parent.mkdir()
             attempt = _composite_attempt(character_name, view, stem=stem, draft=Path(draft), base_views=base_views,
                                          extra=_composite_extra(view, bsig, base_view, Path(draft), mesh_items,
-                                                                texture))
+                                                                texture), front=front)
             attempts.append(attempt)
             result = attempt[1]
             logger.info("Dressed %s %s (%s): draft %d composite %s (%s; guard %s, noise %s)", view, character_name,
@@ -2909,15 +2913,40 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
 VIEW_GUARD_HEAD_SHARE = 0.12
 VIEW_GUARD_SIZE = 64
 
+# Ruling A16 (Task 11g-fix4): the head likeness above only tells the views
+# apart while the dressed figure carries the SAME head as the plain views. A
+# bald shape on a haired plain body (D4: a HairDeck hair worn on a haired
+# base) or another hair in the body does not: Ylva's bald back of the head
+# correlated best with the haired FRONT (0.35 against -0.09 for the back,
+# 2026-11-13 — three correct back renders refused). Whether the head differs
+# is measured on the dressed FRONT of the same figure against the base front
+# (``head_match``): on the 14 stored dressed fronts of Anima Divide
+# (2026-11-13) every haired front over its haired base 0.832 .. 0.988, the
+# bald front of Ylva's shape oba9471e94 0.222 — limit ``HEAD_MATCH_MIN``.
+# Such a figure is judged by a cue that does not depend on the hair: a
+# frontal FACE in its head region (``face_found``, the LBP frontal-face
+# cascade scikit-image ships). Measured on the same world's 328 stored views
+# (head = top ``FACE_HEAD_SHARE`` of the figure at ``FACE_WORK_WIDTH`` px, a
+# face at least ``FACE_MIN_SHARE`` of that wide, ``FACE_NEIGHBORS``
+# neighbours, centred within ``FACE_CENTRE_TOL``): a face on 147 of 154
+# fronts, on 0 of 115 backs and 0 of 59 side views; on Ylva's bald front,
+# none on her three bald back renders, their draft or their composites. No
+# plain views "edited to the same head" are stored (a bald shape's views are
+# edits of the haired plain views), so the face is the cue the check uses.
+HEAD_MATCH_MIN = 0.6
+FACE_HEAD_SHARE = 0.16
+FACE_WORK_WIDTH = 128
+FACE_MIN_SHARE = 0.3
+FACE_NEIGHBORS = 4
+FACE_CENTRE_TOL = 0.2
 
-def _head_vector(path: Path):
-    """The head region of a matted figure as a unit, zero-mean vector, or
-    None when it cannot be measured (no transparent pixel = no matte, no
-    figure, a flat head region). The figure is cropped to its alpha box,
-    the top ``VIEW_GUARD_HEAD_SHARE`` of it cropped again to its own alpha
-    box (the head, not the arm span), put on neutral grey, greyscaled and
-    resized to ``VIEW_GUARD_SIZE`` squared."""
-    import numpy as np
+
+def _head_image(path: Path, share: float):
+    """The head region of a matted figure as a greyscale image on neutral
+    grey, or None when it cannot be measured (unreadable, no transparent
+    pixel = no matte, no figure). The figure is cropped to its alpha box,
+    the top ``share`` of it cropped again to its own alpha box (the head,
+    not the arm span)."""
     from PIL import Image
     try:
         with Image.open(path) as opened:
@@ -2931,26 +2960,107 @@ def _head_vector(path: Path):
     if box is None:
         return None
     figure = image.crop(box)
-    head = figure.crop((0, 0, figure.width, max(1, round(figure.height * VIEW_GUARD_HEAD_SHARE))))
+    head = figure.crop((0, 0, figure.width, max(1, round(figure.height * share))))
     box = head.getchannel("A").getbbox()
     if box is None:
         return None
     head = head.crop(box)
     flat = Image.new("RGBA", head.size, (128, 128, 128, 255))
     flat.alpha_composite(head)
-    grey = flat.convert("L").resize((VIEW_GUARD_SIZE, VIEW_GUARD_SIZE), Image.BILINEAR)
+    return flat.convert("L")
+
+
+def _head_vector(path: Path):
+    """The head region (``_head_image`` of the top ``VIEW_GUARD_HEAD_SHARE``)
+    resized to ``VIEW_GUARD_SIZE`` squared as a unit, zero-mean vector, or
+    None when it cannot be measured (also a flat head region)."""
+    import numpy as np
+    from PIL import Image
+    grey = _head_image(path, VIEW_GUARD_HEAD_SHARE)
+    if grey is None:
+        return None
+    grey = grey.resize((VIEW_GUARD_SIZE, VIEW_GUARD_SIZE), Image.BILINEAR)
     vector = np.asarray(grey, dtype=np.float64).ravel()
     vector = vector - vector.mean()
     norm = float(np.linalg.norm(vector))
     return vector / norm if norm > 1e-9 else None
 
 
-def view_guard(view: str, dressed: Path, base_views: Dict[str, Optional[Path]]) -> Dict[str, Any]:
+def head_match(front: Optional[Path], base_front: Optional[Path]) -> Optional[float]:
+    """The head likeness (``_head_vector`` correlation) of a dressed front
+    and the base front it was edited from; None when either cannot be
+    measured. Below ``HEAD_MATCH_MIN`` the figure wears another head than
+    the plain views (Ruling A16)."""
+    if front is None or base_front is None:
+        return None
+    a, b = _head_vector(front), _head_vector(base_front)
+    if a is None or b is None:
+        return None
+    return round(float(a @ b), 4)
+
+
+_FACE_LOCK = threading.Lock()
+_face_cascade = None
+
+
+def face_found(path: Path) -> Optional[bool]:
+    """Whether the head region of a matted figure shows a frontal face
+    (Ruling A16): the top ``FACE_HEAD_SHARE`` of the figure (``_head_image``)
+    at ``FACE_WORK_WIDTH`` px wide, scikit-image's LBP frontal-face cascade;
+    a face counts when it is at least ``FACE_MIN_SHARE`` of the head wide,
+    backed by ``FACE_NEIGHBORS`` detections and centred within
+    ``FACE_CENTRE_TOL`` of the head's width (a profile's eye sits off the
+    middle). None when the head cannot be measured."""
+    global _face_cascade
+    import numpy as np
+    from PIL import Image
+    grey = _head_image(path, FACE_HEAD_SHARE)
+    if grey is None:
+        return None
+    width = FACE_WORK_WIDTH
+    grey = grey.resize((width, max(1, round(grey.height * width / grey.width))), Image.BILINEAR)
+    pixels = np.asarray(grey, dtype=np.float64) / 255.0
+    side = max(1, int(width * FACE_MIN_SHARE))
+    if pixels.shape[0] < side:
+        return False
+    with _FACE_LOCK:
+        if _face_cascade is None:
+            from skimage import data
+            from skimage.feature import Cascade
+            _face_cascade = Cascade(data.lbp_frontal_face_cascade_filename())
+        found = _face_cascade.detect_multi_scale(img=pixels, scale_factor=1.1, step_ratio=1, min_size=(side, side),
+                                                 max_size=(width, width), min_neighbor_number=FACE_NEIGHBORS)
+    return any(abs((f["c"] + f["width"] / 2) / width - 0.5) <= FACE_CENTRE_TOL for f in found)
+
+
+def view_guard(view: str, dressed: Path, base_views: Dict[str, Optional[Path]], *,
+               front: Optional[Path] = None) -> Dict[str, Any]:
     """Whether a dressed view kept its view: ``{"ok", "scores": {base view:
     correlation}, "best"}`` — ``ok`` when the dressed head region correlates
     best with the base view of the same name. ``{"ok": True, "skipped":
     <reason>}`` when it cannot be measured (an image without a matte, the
-    own base view missing): the guard never blocks what it cannot judge."""
+    own base view missing): the guard never blocks what it cannot judge.
+
+    ``front``: the dressed front of the same figure (the view itself for
+    the front). When its head differs from the base front's (``head_match``
+    below ``HEAD_MATCH_MIN``, Ruling A16 — a bald shape on haired plain
+    views) the head likeness is no measure and the face cue judges instead:
+    ``{"ok", "cue": "face", "face", "head_match", "best"}`` — a back or side
+    view showing a frontal face (``face_found``) faces the camera (``best``
+    "front"), one without keeps its view; a front showing a face is a front,
+    one without falls back to the head likeness (a front turned away shows
+    no face either)."""
+    match = head_match(front, base_views.get("front")) if front is not None else None
+    if match is not None and match < HEAD_MATCH_MIN:
+        face = face_found(dressed)
+        if view != "front":
+            if face is None:
+                return {"ok": True, "skipped": "dressed image without a measurable head region",
+                        "cue": "face", "head_match": match}
+            return {"ok": not face, "cue": "face", "face": face, "head_match": match,
+                    "best": "front" if face else view}
+        if face:
+            return {"ok": True, "cue": "face", "face": True, "head_match": match, "best": "front"}
     vector = _head_vector(dressed)
     if vector is None:
         return {"ok": True, "skipped": "dressed image without a measurable head region"}
@@ -2965,13 +3075,14 @@ def view_guard(view: str, dressed: Path, base_views: Dict[str, Optional[Path]]) 
     return {"ok": best == view, "scores": scores, "best": best}
 
 
-def dressed_view_check(view: str, dressed: Path, base_views: Dict[str, Optional[Path]]) -> Dict[str, Any]:
-    """``view_guard`` of a dressed view plus its ``framing`` record
-    (``base_body_gates.framing_gate`` against the base view of the same
-    name, ruling F14 h): ``ok`` only when the view kept its view AND its
-    frame."""
+def dressed_view_check(view: str, dressed: Path, base_views: Dict[str, Optional[Path]], *,
+                       front: Optional[Path] = None) -> Dict[str, Any]:
+    """``view_guard`` of a dressed view (``front``: see there) plus its
+    ``framing`` record (``base_body_gates.framing_gate`` against the base
+    view of the same name, ruling F14 h): ``ok`` only when the view kept its
+    view AND its frame."""
     from app.core import base_body_gates
-    result = view_guard(view, dressed, base_views)
+    result = view_guard(view, dressed, base_views, front=front)
     framing = base_body_gates.framing_gate(dressed, base_views.get(view))
     return {**result, "framing": framing, "ok": bool(result["ok"] and framing["ok"])}
 
@@ -2983,6 +3094,8 @@ def _guard_message(view: str, result: Dict[str, Any]) -> str:
         return framing_message(framing, view)
     if not result.get("best"):
         return f"{view} view: the dressed image does not keep its view ({result.get('skipped') or 'unchecked'})"
+    if result.get("cue") == "face":
+        return f"{view} view: the dressed image does not keep its view (a face is visible — it faces the camera)"
     return (f"{view} view: the dressed image does not keep its view (its head looks most like the "
             f"{result['best']} base view)")
 
@@ -3236,7 +3349,15 @@ def _guard_dressed_views(character_name: str, signature: str, bsig: str,
     view — except the front, which fails the build (``OutfitError``).
     Returns ``(guard record per view, warnings)``; the record keeps the
     scores of both attempts (``first`` = the replaced image's). A view
-    kept with a framing drift above ``FRAMING_WARN`` adds its warning."""
+    kept with a framing drift above ``FRAMING_WARN`` adds its warning.
+
+    The dressed front of the build (``dressed_views["front"]``) goes with
+    every check (``view_guard``'s ``front``: a head that differs from the
+    plain views' is judged by the face cue, Ruling A16 a). One retry budget
+    per view (Ruling A16 b): a two-step view whose draft loop already
+    retried it for the same orientation reason (``orientation_retried``) is
+    NOT re-rendered — the stored view is the best of those drafts; it is
+    kept (record ``kept``) with a warning naming the attempts."""
     from app.core.model3d import _ref_manifest
     if _ref_sidecar(dressed_views["front"]).get("dressed") is False:
         return {}, []
@@ -3247,7 +3368,15 @@ def _guard_dressed_views(character_name: str, signature: str, bsig: str,
         path = dressed_views.get(v)
         if path is None or registrations.get(v) is None:
             continue
-        result = dressed_view_check(v, path, registrations)
+        result = dressed_view_check(v, path, registrations, front=dressed_views.get("front"))
+        retried = 0 if result["ok"] else orientation_retried(v, path, result)
+        if retried:
+            message = (f"{_guard_message(v, result)}; kept — its drafts were already re-tried for this "
+                       f"({retried} attempts)")
+            logger.warning("Outfit model %s (%s): %s", character_name, signature, message)
+            record[v] = {**result, "kept": True, "draft_attempts": retried}
+            warnings.append(message)
+            continue
         if not result["ok"]:
             logger.warning("Outfit model %s (%s): %s — rendering it once more", character_name, signature,
                            _guard_message(v, result))
@@ -3286,6 +3415,21 @@ def _guard_dressed_views(character_name: str, signature: str, bsig: str,
         warnings.append(_guard_message(v, result) + "; left out of the outfit model")
         dressed_views[v] = None
     return record, warnings
+
+
+def orientation_retried(view: str, path: Path, result: Dict[str, Any]) -> int:
+    """How many draft attempts of the stored two-step view ``path`` failed
+    the orientation check (``fit_gate`` sidecar record of ``_dress_view``:
+    each attempt's ``guard``) when ``result`` (``dressed_view_check``) fails
+    for its orientation too (``best`` names another view) and the draft
+    loop already retried it (two attempts or more failed it) — else 0
+    (Ruling A16 b: one retry budget per view; a framing failure alone, a
+    front, a view without a draft record keep the guard's re-render)."""
+    if result.get("best") in (None, view):
+        return 0
+    attempts = (_ref_sidecar(path).get("fit_gate") or {}).get("attempts") or []
+    turned = sum(1 for a in attempts if isinstance(a, dict) and (a.get("guard") or {}).get("ok") is False)
+    return turned if turned >= 2 else 0
 
 
 def _dict_of(value: Any) -> Dict[str, Any]:

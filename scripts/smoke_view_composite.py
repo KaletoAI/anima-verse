@@ -274,7 +274,7 @@ def main() -> int:
         base_body.render_draft = render_draft
         base_body.draft_prompt = lambda *a, **k: ("p", "n")
         vc.compose = compose
-        base_body.view_guard = lambda view, path, views: {"ok": True, "best": view}
+        base_body.view_guard = lambda view, path, views, front=None: {"ok": True, "best": view}
         base_body_gates.noise_gate = lambda *a, **k: {"ok": True, "score": 1.0}
         base_body_gates.framing_gate = lambda *a, **k: {"ok": True}
         kw = dict(signature="sig", bsig="bsig", pieces={}, items=[], profile={}, front=front,

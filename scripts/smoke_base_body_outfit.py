@@ -1052,7 +1052,7 @@ def main() -> int:
             real_guard = base_body.view_guard
             fails = {}
 
-            def scripted(view, dressed, bases):
+            def scripted(view, dressed, bases, front=None):
                 if fails.get(view, 0) > 0:
                     fails[view] -= 1
                     return {"ok": False, "scores": {"front": 0.9, view: 0.5}, "best": "front"}
