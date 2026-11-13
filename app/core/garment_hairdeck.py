@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from app.core import drape
 from app.core.garment_fit import (MOVED_EPS_M, SDF_MARGIN_M, SPREAD_DEPTH_M, VOX_M, FitResult, body_sdf,
                                   chin_height, dense_weights, gate as _gate_against, hair_weights, joint_index,
                                   push_out, vertex_normals, weld)
@@ -70,6 +71,20 @@ LAYER_CLAMP_ITERATIONS = 4
 DRAPE_STEP_M = 0.002
 DRAPE_MAX_M = 0.10
 DRAPE_RAMP_M = 0.03
+# Below the ear line the hair falls under gravity (``drape_below_ear``, plan 2026-11-12 fit-sdf-speed-drape, Task 10):
+# an XPBD drape (``app/core/drape.py``) with the drape spike's parameters h2 (~/claude-out/drape-spike/runs/
+# rosi__h2.json: Rosi's 61k welded vertices refined to 128k, 2500 substeps of 1 ms, 10 s on 4 threads). Everything
+# at or above the ear line stays where the placement and the push put it (pinned), and so does each card's top
+# CARD_PIN_TOP_M when the card has no vertex at or above the ear line; every free vertex starts at its PLACED
+# position (inside the neck for a curtain that hangs through it) with today's placed shape as its rest, tethered to
+# its card's nearest pin (long-range attachments), and the body grows round it from CARD_CLEAR_M - grow to
+# CARD_CLEAR_M. The field reaches DRAPE_FIELD_DROP_M below the hair for its sag. Off until accepted
+# (HAIR_DRAPE_ON; ``fit_hairdeck(drape=...)`` overrides it per call).
+HAIR_DRAPE = drape.DrapeParams(substeps=2500, dt=1e-3, gravity=9.81, a_stretch=0.0, a_bend=1e-5, damp=0.02, mu=0.6,
+                               grow=0.08, max_push=0.002, lmax=0.012)
+HAIR_DRAPE_ON = False
+CARD_PIN_TOP_M = 0.01
+DRAPE_FIELD_DROP_M = 0.10
 # The face stays clear (``_clear_face``, after the push), Kira 2026-11-11 (~/claude-out/kira-hairdeck,
 # face_back.py): 100 hair vertices hung in the face box (brow .. chin, the inner FACE_CLEAR_SHARE of the face width
 # at that height, in front of the head's mid plane), p50 54 mm in front of that plane — HairDeck's side strands fall
@@ -685,6 +700,54 @@ def drape_back(P: np.ndarray, Fw: np.ndarray, sdf, *, below_y: float, back_z: fl
                   "shifted": int((shift > MOVED_EPS_M).sum()), "max_m": round(float(shift.max()), 4)}
 
 
+def drape_pins(Q: np.ndarray, card: np.ndarray, ear_y: float) -> np.ndarray:
+    """The vertices the drape below the ear holds: ``Q[:, 1] >= ear_y``, plus each card's top ``CARD_PIN_TOP_M``
+    (from its highest vertex down) when the card has no vertex at or above ``ear_y``."""
+    Q = np.asarray(Q, np.float64)
+    card = np.asarray(card, np.int64)
+    pinned = Q[:, 1] >= ear_y
+    if not len(Q):
+        return pinned
+    top = np.full(card.max() + 1, -np.inf)
+    np.maximum.at(top, card, Q[:, 1])
+    has_pin = np.zeros(card.max() + 1, bool)
+    has_pin[np.unique(card[pinned])] = True
+    return pinned | ((~has_pin[card]) & (Q[:, 1] >= top[card] - CARD_PIN_TOP_M))
+
+
+def drape_below_ear(Pw: np.ndarray, Qf: np.ndarray, Fw: np.ndarray, body, *,
+                    ear_y: float) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """The fitted hair ``Qf`` (welded, faces ``Fw``; ``Pw`` its placed positions) with everything below the ear
+    line draped by XPBD (``HAIR_DRAPE``) -> ``(Q, report)``.
+
+    Pins: ``drape_pins(Qf, cards, ear_y)``; their positions are ``Qf``'s, bit for bit. Start = the pins at ``Qf``,
+    every other vertex at ``Pw``; rest = ``Pw``; long-range attachments on; clearance ``CARD_CLEAR_M`` against
+    ``body_sdf`` over the hair's bounds (start and ``Qf``) +- ``SDF_MARGIN_M``, reaching ``DRAPE_FIELD_DROP_M``
+    further down. No free vertex: ``Qf`` unchanged, ``{"skipped": "no_free_vertex"}`` (Taichi is not touched)."""
+    Pw = np.asarray(Pw, np.float64)
+    Qf = np.asarray(Qf, np.float64)
+    card = _cards(Fw, len(Qf))
+    pinned = drape_pins(Qf, card, ear_y)
+    if pinned.all():
+        return Qf.copy(), {"skipped": "no_free_vertex"}
+    X0 = np.where(pinned[:, None], Qf, Pw)
+    both = np.vstack([X0, Qf])
+    lo, hi = both.min(0) - SDF_MARGIN_M, both.max(0) + SDF_MARGIN_M
+    lo[1] -= DRAPE_FIELD_DROP_M
+    field = body_sdf(body.positions, body.faces, vox=VOX_M, bounds=(lo, hi))
+    res = drape.run(X0, Fw, Pw, pinned, field, HAIR_DRAPE, clear=CARD_CLEAR_M, lra=True)
+    Q = res.X
+    free = ~pinned
+    d = field.sample(Q[free])
+    moved = np.linalg.norm(Q[free] - Qf[free], axis=1)
+    info = dict(res.report, ear_y=round(float(ear_y), 5), free=int(free.sum()),
+                cards=int(len(np.unique(card[free]))), inside_after=int((d < 0).sum()),
+                min_clear_after_m=round(float(d.min()), 5), moved_max_m=round(float(moved.max()), 4),
+                moved_p50_m=round(float(np.median(moved)), 4))
+    info["pinned_input"] = int(pinned.sum())
+    return Q, info
+
+
 def _drape_frame(body) -> Optional[Tuple[float, float]]:
     """``(ear line y, head mid-plane z)`` of a skinned body for ``drape_back``; None without a skin (a bare
     test mesh: no drape)."""
@@ -1015,7 +1078,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                  colour_profile: Optional[Tuple[float, float, float]] = None,
                  length_class: Optional[str] = None, width_scale: Optional[float] = None,
                  chains_json: Optional[bytes] = None, cards_json: Optional[bytes] = None,
-                 swing: bool = False) -> FitResult:
+                 swing: bool = False, drape: Optional[bool] = None) -> FitResult:
     """Fit HairDeck hair onto the rigged base body.
 
     ``nohead_glb``: the hair (node ``hair_cards``, ``COLOR_0``); ``proxy_glb``: the result file with the
@@ -1053,6 +1116,11 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     on each chain records ``anchor_blend`` = per bone the Head / Neck / Spine2 row that reproduces today's skin
     (``_anchor_blend``): the client puts each bone's swing on top of that blend (secondaryMotion.ts, HAIR CHAINS),
     so the hair at rest is where today's skin puts it and only the swing is added.
+
+    ``drape`` (None = ``HAIR_DRAPE_ON``): after the push and the face clearing, the hair below the ear line is draped
+    by XPBD (``drape_below_ear``); the placement, the push and its gates are decided before it, unchanged, and the
+    hair at or above the ear line stays today's bit for bit. The chains follow their cards to the draped hair and
+    the weights are taken there. ``report.push.drape_xpbd`` records the drape (present only when it was asked for).
     """
     from scipy.spatial import cKDTree
     _check_manual(forward_m, tilt_deg, width_scale)
@@ -1090,6 +1158,10 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     push_mag = np.linalg.norm(pushed["push"], axis=1)
     Qp, face = _clear_face(pushed["Fw"], Qp, sdf, body, head_w, placement["landmarks"], chin,
                            placement["hairline_pushed_y"])
+    drape_xpbd = None
+    if HAIR_DRAPE_ON if drape is None else drape:
+        from app.core.garment_fit import ear_line_height
+        Qp, drape_xpbd = drape_below_ear(Pw, Qp, pushed["Fw"], body, ear_y=ear_line_height(body))
     d1 = sdf.sample(Qp)
     mag = np.linalg.norm(disp, axis=1)
     X = Qp[inv]
@@ -1215,4 +1287,6 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
         "vertices": {"hair": int(len(X)), "cap": int(nc)},
         "chains": chain_info,
     }
+    if drape_xpbd is not None:
+        report["push"]["drape_xpbd"] = drape_xpbd
     return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
