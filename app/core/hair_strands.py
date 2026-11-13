@@ -18,7 +18,8 @@ The record (``build_record``):
   pinned rows are ``{Head: 1}`` (they sit on the scalp and move with it).
 - ``sdf``: the head of the fit's body (``garment_fit.body_sdf``) cropped to the head, int8 millimetres, x fastest.
 - ``face_box`` / ``eye_box`` from the head landmarks, ``ear_y`` the ear line, ``capsules`` the fit body's capsule
-  set (``collision.fit_capsules``; the client keeps the hair regions), ``params`` the mode's parameter set.
+  set (``collision.fit_capsules``, with the extension capsules of the body the fit was made on — e.g.
+  ``chest_hair`` —, ``fit_extension``; the client keeps the hair regions), ``params`` the mode's parameter set.
 
 HairDeck's layout (``hairdeck_layout``): its cards are square tubes, 4 vertices per row, rows root first, the hair
 vertices first in raw order and the scalp cap after them (``garment_hairdeck.fit_hairdeck``, ``report.vertices``).
@@ -31,6 +32,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -265,10 +267,13 @@ def _floats(a: np.ndarray, digits: int) -> list:
 
 
 def build_record(fit_glb: bytes, *, mode: str, item_id: str, fsig: str, layout: StrandLayout,
-                 scales: Dict[str, float]) -> Tuple[Dict[str, Any], Dict[str, np.ndarray]]:
+                 scales: Dict[str, float], extension: Optional[list] = None
+                 ) -> Tuple[Dict[str, Any], Dict[str, np.ndarray]]:
     """The strand record of ``fit_glb`` (module docstring; spec § 6.2.3) for ``layout`` (of the hair primitive in
-    that GLB), plus the per-vertex arrays ``{"card": uint16 card + 1 (0 = rigid), "u": float32}``. ValueError for
-    an unknown ``mode`` or a GLB without a skinned body."""
+    that GLB), plus the per-vertex arrays ``{"card": uint16 card + 1 (0 = rigid), "u": float32}``. ``extension``:
+    the fit body's extension groups (``collision.extension_chains``, ``fit_extension``) — their capsules (e.g.
+    ``chest_hair``) follow the table's, a chain bone the fit GLB lacks is skipped (Ruling H-R4). ValueError for an
+    unknown ``mode`` or a GLB without a skinned body."""
     from app.core import collision
     from app.core import garment_fit as gf
     from app.core.glb_mesh import body_arrays
@@ -289,7 +294,7 @@ def build_record(fit_glb: bytes, *, mode: str, item_id: str, fsig: str, layout: 
     total = free_arc[:, -1]
     free_frac = np.where(total[:, None] > 1e-9, free_arc / np.maximum(total[:, None], 1e-9), 0.0)
     bones, w = _follow(C, body, pins)
-    fitted = collision.fit_capsules(fit_glb, scales=scales)
+    fitted = collision.fit_capsules(fit_glb, scales=scales, extension=extension)
     record = {
         "version": RECORD_VERSION,
         "item_id": str(item_id), "fsig": str(fsig), "mode": mode,
@@ -405,6 +410,24 @@ def _npz_bytes(arrays: Dict[str, np.ndarray], fit_sha: str) -> bytes:
     return out.getvalue()
 
 
+#: A fit record's ``body_id``: a base signature or an outfit body id (both name ``model3d/<body_id>.glb``).
+_BODY_ID_RE = re.compile(r"(?:base|ob)[0-9a-f]{8}")
+
+
+def fit_extension(character_name: str, fit_record: Dict[str, Any]) -> list:
+    """The extension groups that get capsules on the body the fit was made on (Ruling H-R4):
+    ``collision.extension_chains`` of that body's model sidecar (``model3d/<body_id>.json``, the fit record's
+    ``body_id``); ``[]`` without a body id, a sidecar or an applied extension rig."""
+    from app.core import collision
+    from app.core.model3d import _read_sidecar
+    from app.models.character import get_character_dir
+    body_id = str(fit_record.get("body_id") or "")
+    if not _BODY_ID_RE.fullmatch(body_id):
+        return []
+    meta = _read_sidecar(get_character_dir(character_name) / "model3d" / f"{body_id}.glb")
+    return collision.extension_chains(meta) if meta else []
+
+
 def record_for_fit(character_name: str, fit_path: Path) -> Optional[Dict[str, Any]]:
     """The strand record of the hair fit ``fit_path``: read from its sidecars when they are current (this
     version, the fit's sha256, the character's collision scales), else built and written atomically (the npz
@@ -440,7 +463,8 @@ def record_for_fit(character_name: str, fit_path: Path) -> Optional[Dict[str, An
                 raise ValueError(f"{n_hair} hair vertices of {len(garment.positions)}")
             layout = hairdeck_layout(garment.positions, garment.indices, n_hair)
             record, arrays = build_record(blob, mode=mode, item_id=str(fit_record.get("item_id") or ""),
-                                          fsig=str(fit_record.get("fsig") or ""), layout=layout, scales=scales)
+                                          fsig=str(fit_record.get("fsig") or ""), layout=layout, scales=scales,
+                                          extension=fit_extension(character_name, fit_record))
         except Exception as exc:  # noqa: BLE001 — no record means static hair, never a failed assembly
             _log_once(key, "Hair strands %s: no record (%s)", fit_path.name, exc)
             return None
@@ -470,6 +494,48 @@ def vertex_arrays(fit_path: Path) -> Optional[Dict[str, np.ndarray]]:
 
 
 # --- Serving ------------------------------------------------------------------------------------------------------
+
+def preview_version(fit_path: Path) -> str:
+    """The content version of the Hairstyles preview GLB of the fit ``fit_path`` (``preview_glb``): the fit
+    file's (``http_files.content_version``), with ``.s<RECORD_VERSION>`` appended for a HairDeck fit — its
+    preview carries the strand binding, so a client cache of the bare fit never stands in for it. OSError for an
+    unreadable fit."""
+    from app.core import garment_store as gs
+    from app.core.http_files import content_version
+    version = content_version(Path(fit_path))
+    record = gs.read_record(Path(fit_path).with_suffix(".json"))
+    return f"{version}.s{RECORD_VERSION}" if gs.fit_method(record) == gs.HAIRDECK else version
+
+
+def preview_glb(character_name: str, fit_path: Path) -> Optional[Tuple[bytes, str]]:
+    """``(bytes, version)`` of the Hairstyles preview GLB of the fit ``fit_path`` (Ruling H-R5): a HairDeck fit
+    with ``_STRAND_CARD`` / ``_STRAND_U`` on its hair primitive — the same per-vertex binding the full tier
+    carries (``garment_assembly._attach_strands``), so the preview's sim binds like the 3D client's — when its
+    record (``record_for_fit``, built on the CPU when missing) was made of these very bytes; every other fit, or
+    one without a record, as it is stored. ``version`` = ``preview_version`` of the bytes read. None for an
+    unreadable fit."""
+    from app.core import garment_store as gs
+    from app.core.glb_mesh import add_vertex_attributes
+    fit_path = Path(fit_path)
+    try:
+        blob = fit_path.read_bytes()
+    except OSError:
+        return None
+    sha = hashlib.sha256(blob).hexdigest()
+    if gs.fit_method(gs.read_record(fit_path.with_suffix(".json"))) != gs.HAIRDECK:
+        return blob, sha[:16]
+    version = f"{sha[:16]}.s{RECORD_VERSION}"
+    record = record_for_fit(character_name, fit_path)
+    arrays = vertex_arrays(fit_path) if record is not None else None
+    if record is None or arrays is None or record.get("fit_sha256") != sha:
+        return blob, version
+    try:
+        blob = add_vertex_attributes(blob, {VERTEX_ATTRIBUTES["card"]: arrays["card"],
+                                            VERTEX_ATTRIBUTES["u"]: arrays["u"]}, node_prefix="garment_hair_")
+    except ValueError as exc:
+        _log_once((str(fit_path), sha), "Hair strands %s: preview without the binding (%s)", fit_path.name, exc)
+    return blob, version
+
 
 def strands_url(character_name: str) -> str:
     return f"/characters/{quote(character_name)}/model/hair-strands"

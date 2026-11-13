@@ -884,7 +884,8 @@ def collect(*, dry_run: bool = False) -> Dict[str, Any]:
             for path in files:
                 # the fit records: ``garments/<item>_<fsig>.json`` and ``bodies/<body>/<item>_<fsig>.json``
                 in_root = path.parent == garment_store._root(name)
-                if path.suffix != ".json" or not (in_root or garment_store.body_of(path)):
+                if path.suffix != ".json" or garment_store.is_strands_sidecar(path) \
+                        or not (in_root or garment_store.body_of(path)):
                     continue
                 record = garment_store.read_record(path)
                 if record.get("accepted") is True and record.get("kind") == garment_set.FOOTWEAR and record.get("ssig"):

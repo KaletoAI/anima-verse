@@ -19,6 +19,8 @@ Per owner, under ``characters/<name>/garments/``::
     {item}_{fsig}.glb + .json                         the fit: rigged base with the
                                                       garment grafted on; its record
                                                       holds gates + base_model_sha256
+    {item}_{fsig}.strands.json + .npz                 a hair fit's strand record
+                                                      (``hair_strands``), in its group
     low/{item}_{fsig}.glb                             the distance tier
     layers/{item}_{fsig}_{lsig}.glb + .json           a LAYERED fit: the body fit pushed
                                                       over the fitted inner pieces
@@ -160,8 +162,10 @@ _FSIG = r"(?P<fsig>[0-9a-f]{12})"
 #: images/: {item}_{fsig}_{step}_{view}[.try{n}].{png,json}, the raw {…}.try{n}.raw.png and the
 #: composite support {…}.try{n}.support.png
 _IMAGE_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[a-z]+_[a-z]+(?:\.try[0-9]+(?:\.(?:raw|support)(?=\.png$))?)?\.(?:png|json)")
-#: the mesh folders and the fit: {item}_{fsig}.{glb,json}
-_MESH_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"\.(?:glb|json|npz)")
+#: the mesh folders and the fit: {item}_{fsig}.{glb,json}, and a hair fit's strand sidecars
+#: {item}_{fsig}.strands.{json,npz} (``hair_strands.sidecar_paths``) — in the group of their fit, so they go with it
+#: (Ruling H-R3)
+_MESH_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"(?:\.(?:glb|json|npz)|\.strands\.(?:json|npz))")
 #: layers/ and layers/low/: {item}_{fsig}_{lsig}.{glb,json}
 _LAYER_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[0-9a-f]{12}\.(?:glb|json)")
 
@@ -289,6 +293,12 @@ def parse_name(path: Path) -> Optional[Tuple[str, str]]:
         pattern = _IMAGE_NAME_RE if path.parent.name == PART_DIRS["image"] else _MESH_NAME_RE
     match = pattern.fullmatch(path.name)
     return (match.group("item"), match.group("fsig")) if match else None
+
+
+def is_strands_sidecar(path: Path) -> bool:
+    """Whether a stored garment file is a hair fit's strand sidecar (``{item}_{fsig}.strands.{json,npz}``), not
+    a fit, a fit record or a mesh — the readers of a group's ``.json`` files skip it."""
+    return Path(path).name.endswith((".strands.json", ".strands.npz"))
 
 
 def stored_groups(character_name: str) -> Dict[Tuple[str, str], List[Path]]:

@@ -49,6 +49,10 @@ Expected (by hand):
   [8] cache: a second record_for_fit leaves the sidecar mtime unchanged; rewriting the fit (one cap vertex moved
       by 1 mm) changes fit_sha256 and the record; the stored JSON bytes == encode(record) and current_sha ==
       their sha256; a fit of another method gets None
+  [9]  Ruling H-R3: ``<item>_<fsig>.strands.json`` / ``.npz`` parse to the fit's (item, fsig), sit in its
+       ``stored_groups`` group and in its artefact-graph garment node (deleted with the fit), never ``unknown``
+  [10] Ruling H-R4: extension capsules of the fit body (derivation at the check)
+  [11] Ruling H-R5: the preview GLB carries the binding (derivation at the check)
 """
 import base64
 import hashlib
@@ -385,6 +389,97 @@ def run_checks(tmp):
     gs.write_record(fit.with_suffix(".json"), {**rec, "method": "edit_chain"})
     check(hs.record_for_fit(CHAR, fit) is None, "[8] a fit of another method gets None")
     print(f"     record {len(data)} bytes, sdf dims {s['dims']}")
+    gs.write_record(fit.with_suffix(".json"), rec)
+    record = hs.record_for_fit(CHAR, fit)
+    json_path, npz_path = hs.sidecar_paths(fit)
+
+    # [9] Ruling H-R3: the sidecars belong to their fit
+    check(gs.parse_name(json_path) == (ITEM, FSIG) and gs.parse_name(npz_path) == (ITEM, FSIG)
+          and gs.parse_name(fit) == (ITEM, FSIG), "[9] parse_name: both sidecars name (item, fsig) like the fit")
+    check(gs.is_strands_sidecar(json_path) and gs.is_strands_sidecar(npz_path) and not gs.is_strands_sidecar(fit)
+          and not gs.is_strands_sidecar(fit.with_suffix(".json")), "[9] is_strands_sidecar: the two sidecars only")
+    group = gs.stored_groups(CHAR).get((ITEM, FSIG), [])
+    check({json_path, npz_path, fit, fit.with_suffix(".json")} <= set(group),
+          f"[9] stored_groups: the fit's group holds both sidecars ({sorted(p.name for p in group)})")
+    from app.core import artefact_graph
+    nodes, unknown = artefact_graph.scan(CHAR)
+    owner = [n for n in nodes if json_path in n.files and npz_path in n.files]
+    check(len(owner) == 1 and owner[0].kind == "garment" and fit in owner[0].files
+          and json_path not in unknown and npz_path not in unknown,
+          "[9] artefact_graph.scan: the sidecars are files of the fit's garment node (deleted with it), not unknown")
+
+    # [10] Ruling H-R4: the extension capsules of the body the fit was made on. A fake package declares the
+    #      group "bump" with the one-link chain [mixamorig:Head]; the body's sidecar model3d/base0000abcd.json lists
+    #      it as applied with op pair_protrusion. EXTENSION_CAPSULES["pair_protrusion"] has two entries (chest,
+    #      chest_hair), so the record gains exactly two capsules, after the table's, with the ids "<group>:<bone>"
+    #      and "<group>:<bone>:<region>" (bone = norm_bone_name("mixamorig:Head") = "head"):
+    #      "bump:head", "bump:head:chest_hair". Without the sidecar (or with an outside op) none.
+    from types import SimpleNamespace
+    from app.plugins import loader
+    base_ids = [c["id"] for c in record["capsules"]["capsules"]]
+    check(not any(":" in i for i in base_ids), f"[10] a fit record without body_id: no extension capsule ({len(base_ids)})")
+    fake = [SimpleNamespace(body_slots=[SimpleNamespace(rigs=[
+        SimpleNamespace(id="bump", chains=[[{"bone": "mixamorig:Head", "parent": "Neck"}]])])])]
+    real_declared = loader.declared_packages
+    loader.declared_packages = lambda: fake
+    try:
+        model_dir = get_character_dir(CHAR) / "model3d"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "base0000abcd.json").write_text(json.dumps({"extension_rig": {
+            "status": "applied", "groups": ["bump"], "group_ops": {"bump": "pair_protrusion"}}}))
+        gs.write_record(fit.with_suffix(".json"), {**rec, "body_id": "base0000abcd"})
+        json_path.unlink()
+        ext = hs.record_for_fit(CHAR, fit)
+        ids = [c["id"] for c in ext["capsules"]["capsules"]] if ext else []
+        check(ids == base_ids + ["bump:head", "bump:head:chest_hair"],
+              f"[10] body_id with an applied pair_protrusion group: + bump:head, bump:head:chest_hair (got {ids[len(base_ids):]})")
+        gs.write_record(fit.with_suffix(".json"), {**rec, "body_id": "base0000ffff"})
+        json_path.unlink()
+        none = hs.record_for_fit(CHAR, fit)
+        check(none is not None and [c["id"] for c in none["capsules"]["capsules"]] == base_ids,
+              "[10] a body_id without a model sidecar: the table's capsules only")
+    finally:
+        loader.declared_packages = real_declared
+        gs.write_record(fit.with_suffix(".json"), rec)
+
+    # [11] Ruling H-R5: the Hairstyles preview GLB carries the full tier's binding. preview_glb(fit) = the fit with
+    #      _STRAND_CARD / _STRAND_U on the hair primitive, equal to the npz ([4]: 284 values, A 1, B 2, cap 0); the
+    #      body and the hair's own attributes unchanged; version = sha256(fit)[:16] + ".s1" == preview_version(fit).
+    #      A fit of another method: the stored bytes, version = content_version (no suffix).
+    from app.core.http_files import content_version
+    json_path.unlink()
+    record = hs.record_for_fit(CHAR, fit)
+    built = hs.preview_glb(CHAR, fit)
+    fit_bytes = fit.read_bytes()
+    want_version = hashlib.sha256(fit_bytes).hexdigest()[:16] + ".s1"
+    check(built is not None and built[1] == want_version == hs.preview_version(fit),
+          f"[11] preview version {built[1] if built else None} == sha16 + '.s1' == preview_version")
+    arrays = hs.vertex_arrays(fit)
+    served = glb_mesh.garment_arrays(built[0], node_prefix=NAME, exact=True)
+    plain = glb_mesh.garment_arrays(fit_bytes, node_prefix=NAME, exact=True)
+    extra = served.extra_attributes
+    check(sorted(extra) == ["_STRAND_CARD", "_STRAND_U"] and extra["_STRAND_CARD"].dtype == np.uint16
+          and np.array_equal(extra["_STRAND_CARD"], arrays["card"]) and np.array_equal(extra["_STRAND_U"], arrays["u"]),
+          "[11] the preview's hair primitive carries _STRAND_CARD / _STRAND_U == the npz")
+    check(np.array_equal(served.positions, plain.positions) and np.array_equal(served.indices, plain.indices)
+          and np.array_equal(glb_mesh.body_arrays(built[0]).positions, glb_mesh.body_arrays(fit_bytes).positions)
+          and not plain.extra_attributes, "[11] positions / faces / body unchanged; the stored fit has no binding")
+    try:
+        glb_mesh.add_vertex_attributes(built[0], {"_STRAND_U": arrays["u"]}, node_prefix=NAME)
+        twice = False
+    except ValueError:
+        twice = True
+    try:
+        glb_mesh.add_vertex_attributes(fit_bytes, {"_STRAND_U": arrays["u"][:-1]}, node_prefix=NAME)
+        short = False
+    except ValueError:
+        short = True
+    check(twice and short, "[11] add_vertex_attributes refuses an attribute already there and a wrong length")
+    gs.write_record(fit.with_suffix(".json"), {**rec, "method": "edit_chain"})
+    other = hs.preview_glb(CHAR, fit)
+    check(other == (fit_bytes, content_version(fit)) and hs.preview_version(fit) == content_version(fit),
+          "[11] a fit of another method: the stored bytes, the plain content version")
+    gs.write_record(fit.with_suffix(".json"), rec)
 
     print("PASS" if not FAILS else f"FAIL ({len(FAILS)})")
     return 0 if not FAILS else 1

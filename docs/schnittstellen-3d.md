@@ -12305,8 +12305,11 @@ with the per-vertex binding), keyed by the fit GLB's sha256 and the character's 
   `garment_hairdeck.head_landmarks` (`landmarks "profile"`); a head whose profile shows no face uses
   `brow = top − 0.09`, `nose = chin + 0.06` (`"fallback"`).
 - **Capsules.** `collision.fit_capsules` of the fit GLB with the character's region scales, bind space; the client
-  keeps the hair regions (`HAIR_REGIONS`) under the bind rule (`tipBindFactors`). Extension capsules are not in
-  the record.
+  keeps the hair regions (`HAIR_REGIONS`) under the bind rule (`tipBindFactors`). The extension capsules of the
+  body the fit was made on (`collision.extension_chains` of `model3d/<body_id>.json`, e.g. `chest_hair`) follow the
+  table's — a chain bone the fit GLB lacks is skipped (Ruling H-R4).
+- **Files.** `<item>_<fsig>.strands.json` / `.strands.npz` belong to their fit's group
+  (`garment_store.parse_name`): the artefact GC keeps and deletes them with the fit (Ruling H-R3).
 - **Params.** The mode's set (`hair_strands.PARAMS`): HairDeck `root_deg 10`, HAAR `root_deg 0`; the Stiffness
   slider multiplies `stiffness` on the client.
 
@@ -12317,8 +12320,10 @@ has one entry per vertex:
 - `_STRAND_CARD` — `UNSIGNED_SHORT` SCALAR, card + 1; 0 = rigid (the scalp cap);
 - `_STRAND_U` — `FLOAT` SCALAR, the vertex's place along the 17 rows, in [0, 16].
 
-three's GLTFLoader exposes them as `geometry.attributes._strand_card` / `_strand_u`. The distance tier
-(`low_url`) carries neither. The assembly's hair state carries `strands` = the record's sha256, so a new record
+three's GLTFLoader exposes them as `geometry.attributes._strand_card` / `_strand_u`. The Hairstyles preview GLB
+(`GET /characters/{name}/garments/{item_id}/model`, a HairDeck fit) carries the same two on its hair primitive
+(`hair_strands.preview_glb`, Ruling H-R5), versioned `<content version>.s1` (`hair_strands.preview_version`, also
+the `v` of the hair GET's `preview_url`). The distance tier (`low_url`) carries neither. The assembly's hair state carries `strands` = the record's sha256, so a new record
 re-assembles on the CPU. A record whose `cards` or vertex binding does not match the served primitive leaves the
 hair on its skin — never scrambled.
 
@@ -12337,7 +12342,8 @@ hair on its skin — never scrambled.
 **Proofs (§ B5a).** `scripts/smoke_hair_strands_record.py` (the record on a hand-built head and two cards: pins,
 rest, free arc, `u`, follow rows, SDF decoding, boxes, cache), `scripts/smoke_hair_strands_graft.py` (the
 attributes' round trip, the full tier only, a mismatch refused, the assembly state), and
-`scripts/smoke_hair_strands_route.py` (ETag/304/404, admin-only preview, `model.hair_strands`).
+`scripts/smoke_hair_strands_route.py` (ETag/304/404, admin-only preview, `model.hair_strands`, the preview GLB's
+binding).
 
 ### Footwear (`foot_pose`, garment kind `footwear`)
 

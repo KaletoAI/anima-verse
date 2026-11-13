@@ -564,11 +564,16 @@ def _check_extra(g: GarmentMesh, n: int) -> List[Tuple[str, np.ndarray, int]]:
     one as float32 (5126). ValueError — naming the attribute — for a name outside ``EXTRA_ATTRIBUTE_RE``, a length
     other than ``n`` (a record that does not belong to this mesh must never scramble it), an integer out of uint16
     or a non-finite float."""
+    return _check_attributes(g.extra_attributes or {}, n)
+
+
+def _check_attributes(attributes: Dict[str, np.ndarray], n: int) -> List[Tuple[str, np.ndarray, int]]:
+    """``_check_extra`` of a plain ``{name: values}``."""
     out: List[Tuple[str, np.ndarray, int]] = []
-    for name in sorted(g.extra_attributes or {}):
+    for name in sorted(attributes):
         if not EXTRA_ATTRIBUTE_RE.match(str(name)):
             raise ValueError(f"Garment attribute {name!r} is no custom attribute (_STRAND_*)")
-        values = np.asarray(g.extra_attributes[name])
+        values = np.asarray(attributes[name])
         if values.ndim != 1 or len(values) != n:
             raise ValueError(f"Garment attribute {name} has {values.size} values for {n} vertices")
         if values.dtype.kind in "iub":
@@ -582,6 +587,42 @@ def _check_extra(g: GarmentMesh, n: int) -> List[Tuple[str, np.ndarray, int]]:
         else:
             raise ValueError(f"Garment attribute {name} has the unsupported type {values.dtype}")
     return out
+
+
+def add_vertex_attributes(glb: bytes, attributes: Dict[str, np.ndarray], *,
+                          node_prefix: str = GARMENT_NODE_PREFIX) -> bytes:
+    """``glb`` with ``attributes`` (custom SCALAR attributes, ``_check_attributes``: uint16 / float32, one value
+    per vertex) added to the single primitive of the ONE node whose name starts with ``node_prefix`` (as
+    ``garment_arrays``): every existing accessor, view and image unchanged, the new data appended. ValueError for
+    no / several such nodes, a primitive count other than one, an attribute the primitive already has, or a
+    length other than its vertex count."""
+    parsed = _parse(glb, "Garment")
+    gltf = parsed["gltf"]
+    nodes = [n for n in gltf.get("nodes") or [] if "mesh" in n and str(n.get("name") or "").startswith(node_prefix)]
+    if len(nodes) != 1:
+        raise ValueError(f"Expected exactly one garment node '{node_prefix}*', found {len(nodes)}")
+    prims = gltf["meshes"][nodes[0]["mesh"]].get("primitives") or []
+    if len(prims) != 1:
+        raise ValueError(f"A garment mesh must have exactly one primitive, found {len(prims)}")
+    prim = prims[0]
+    n = int(gltf["accessors"][prim["attributes"]["POSITION"]]["count"])
+    extra = _check_attributes(attributes, n)
+    taken = sorted(set(prim["attributes"]).intersection(name for name, _v, _c in extra))
+    if taken:
+        raise ValueError(f"The primitive already has {', '.join(taken)}")
+    binary = bytearray(parsed["bin"])
+    views = gltf.setdefault("bufferViews", [])
+    accessors = gltf.setdefault("accessors", [])
+    for name, values, component in extra:
+        binary.extend(b"\0" * (-len(binary) % 4))
+        raw = values.tobytes()
+        views.append({"buffer": 0, "byteOffset": len(binary), "byteLength": len(raw), "target": _ARRAY_BUFFER})
+        binary.extend(raw)
+        accessors.append({"bufferView": len(views) - 1, "componentType": component, "count": n, "type": "SCALAR"})
+        prim["attributes"][name] = len(accessors) - 1
+    binary.extend(b"\0" * (-len(binary) % 4))
+    gltf["buffers"][0]["byteLength"] = len(binary)
+    return pack_glb(gltf, bytes(binary))
 
 
 def _hair_chain_binds(parsed: dict, skin_index: int) -> Dict[str, np.ndarray]:

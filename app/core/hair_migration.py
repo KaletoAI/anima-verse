@@ -141,7 +141,7 @@ def _group_is_removed_method(files: List[Path], garments_root: Path) -> Optional
     from app.core import garment_store
     fit_methods = set()
     for path in files:
-        if path.suffix != ".json":
+        if path.suffix != ".json" or garment_store.is_strands_sidecar(path):
             continue
         body = garment_store.body_of(path)
         if path.parent == garments_root or (body and path.parent.name == body):

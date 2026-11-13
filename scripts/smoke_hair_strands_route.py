@@ -23,6 +23,10 @@ record_for_fit`` -> the fixture record; ``model3d.find_model3d_serving`` -> a fi
 [4] GET /characters/demo/model3d (admin) -> model.hair_strands == {"url": "/characters/demo/model/hair-strands",
     "sha256": sha}; served_file() None -> model.hair_strands None.
 [5] scripts/smoke_auth_gate.py still passes (run as a subprocess).
+[6] GET /characters/demo/garments/it1/model (the Hairstyles preview GLB, Ruling H-R5) with ``hair_strands.
+    preview_version`` / ``preview_glb`` stubbed: player 403; admin with ``v`` == the version -> 200, the built
+    bytes, ETag '"<version>"', immutable; another ``v`` -> no-cache; If-None-Match the version -> 304 without
+    building; no preview fit -> 404. (Run before [5]; numbered after it.)
 """
 import hashlib
 import os
@@ -148,6 +152,28 @@ def run_checks(tmp):
     state["served"] = None
     model = (admin.get(f"/characters/{CHAR}/model3d").json() or {}).get("model") or {}
     check("hair_strands" in model and model["hair_strands"] is None, "[4] no record -> model.hair_strands None")
+
+    # [6] the preview GLB route (Ruling H-R5): preview_version / preview_glb stubbed (their content is
+    #     smoke_hair_strands_record.py [11]); version "abcdef0123456789.s1", bytes b"glTF-with-binding"
+    ver = "abcdef0123456789.s1"
+    calls = []
+    hair_strands.preview_version = lambda fit: ver
+    hair_strands.preview_glb = lambda name, fit: calls.append(fit) or (b"glTF-with-binding", ver)
+    murl = f"/characters/{CHAR}/garments/it1/model"
+    check(player.get(murl).status_code == 403, "[6] player GET the preview GLB -> 403")
+    r = admin.get(murl + f"?v={ver}")
+    check(r.status_code == 200 and r.content == b"glTF-with-binding" and r.headers.get("etag") == f'"{ver}"'
+          and "immutable" in (r.headers.get("cache-control") or "")
+          and (r.headers.get("content-type") or "").startswith("model/gltf-binary"),
+          f"[6] admin ?v=<version> -> 200, the built bytes, ETag, immutable (got {r.status_code}, "
+          f"{r.headers.get('etag')}, {r.headers.get('cache-control')})")
+    r = admin.get(murl + "?v=older")
+    check(r.status_code == 200 and r.headers.get("cache-control") == "no-cache", "[6] another v -> no-cache")
+    n = len(calls)
+    r = admin.get(murl, headers={"If-None-Match": f'"{ver}"'})
+    check(r.status_code == 304 and len(calls) == n, "[6] If-None-Match -> 304 without building")
+    garments.preview_path = lambda name, item_id, method="": None
+    check(admin.get(murl).status_code == 404, "[6] no preview fit -> 404")
 
     # [5] the auth gate smoke
     env = {k: v for k, v in os.environ.items() if k not in ("STORAGE_DIR", "INSTANCE_DIR")}

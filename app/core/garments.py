@@ -3210,7 +3210,7 @@ def other_methods_info(character_name: str, item_id: str, *,
     no hair). Selecting such a method generates nothing: its fit is served as
     it is (a fit on an older base model stays stale until the method runs)."""
     from app.core import garment_hair
-    from app.core.http_files import content_version
+    from app.core.hair_strands import preview_version
     from app.models.character import get_character_profile
     if profile is None:
         profile = get_character_profile(character_name) or {}
@@ -3224,7 +3224,7 @@ def other_methods_info(character_name: str, item_id: str, *,
     out: List[Dict[str, Any]] = []
     for method, (path, record, on_base) in hits:
         try:
-            url: Optional[str] = _url(character_name, item_id, "model", content_version(path), f"&method={method}")
+            url: Optional[str] = _url(character_name, item_id, "model", preview_version(path), f"&method={method}")
         except OSError:
             url = None
         out.append({"method": method, "preview_url": url, "created_at": record.get("created_at"),
@@ -3417,7 +3417,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     and the width cap).
     ValueError for an invalid item."""
     from app.core import base_body, garment_hair, hair_motion, garment_store as gs
-    from app.core.http_files import content_version
+    from app.core.hair_strands import preview_version
     from app.core.model_refs import find_ref_image
     from app.models.character import get_character_profile
     _item_, kind = _item(character_name, item_id)
@@ -3488,7 +3488,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     preview_url = None
     if preview is not None:
         try:
-            preview_url = _url(character_name, item_id, "model", content_version(preview))
+            preview_url = _url(character_name, item_id, "model", preview_version(preview))
         except OSError:
             preview_url = None
     try:

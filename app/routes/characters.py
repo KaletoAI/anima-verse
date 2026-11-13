@@ -2793,17 +2793,36 @@ def get_character_garment_model(character_name: str, item_id: str, request: Requ
     """The hair preview GLB (the rigged base with the garment grafted
     on, ``garments.preview_path``), versioned by content; ``method`` naming
     the method NOT selected = that method's newest accepted fit (the "Other
-    method" preview). 400 for an unknown method; 404 without a fit or for an
-    item that is no garment of this character."""
-    from app.core import garments
+    method" preview). A HairDeck fit carries its strand binding
+    (``hair_strands.preview_glb``, Ruling H-R5), versioned
+    ``hair_strands.preview_version``: ``ETag`` = ``"<version>"``, 304 on a
+    match (nothing is built), immutable when ``v`` names it. 400 for an
+    unknown method; 404 without a fit or for an item that is no garment of
+    this character."""
+    from fastapi.responses import Response
+    from app.core import garments, hair_strands
     from app.core.garment_hair import HAIR_MODES
-    from app.core.http_files import snapshot_response
     if method and method not in HAIR_MODES:
         raise HTTPException(status_code=400, detail=f"method must be one of {', '.join(HAIR_MODES)}")
     _require_character(character_name)
-    return snapshot_response(None, request, media_type="model/gltf-binary",
-                             version=request.query_params.get("v"),
-                             resolve=lambda: garments.preview_path(character_name, item_id, method))
+    fit = garments.preview_path(character_name, item_id, method)
+    try:
+        version = hair_strands.preview_version(fit) if fit is not None else ""
+    except OSError:
+        version = ""
+    if not version:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    asked = request.query_params.get("v")
+    if etag_matches(request.headers.get("if-none-match"), f'"{version}"'):
+        cache = "public, max-age=31536000, immutable" if asked == version else "no-cache"
+        return Response(status_code=304, headers={"ETag": f'"{version}"', "Cache-Control": cache})
+    built = hair_strands.preview_glb(character_name, fit)
+    if built is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    data, version = built
+    cache = "public, max-age=31536000, immutable" if asked == version else "no-cache"
+    return Response(content=data, media_type="model/gltf-binary",
+                    headers={"ETag": f'"{version}"', "Cache-Control": cache})
 
 
 @router.get("/{character_name}/garments/{item_id}/hair-strands")

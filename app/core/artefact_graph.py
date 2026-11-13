@@ -744,12 +744,13 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
         node.reachable = g_ok and b_ok
         node.reason = ("fit of a kept garment on a live body" if node.reachable
                        else "body gone" if not b_ok else "garment fingerprint gone")
+    from app.core import garment_store
     kept_hsigs: Dict[str, Set[str]] = {}
     for node in nodes:
         if node.kind != "garment" or not node.reachable:
             continue
         for p in node.files:
-            if p.suffix == ".json" and p.parent.name == "garments":
+            if p.suffix == ".json" and p.parent.name == "garments" and not garment_store.is_strands_sidecar(p):
                 inputs = _json(p).get("inputs")
                 if isinstance(inputs, dict) and inputs.get("hsig"):
                     kept_hsigs.setdefault(node.parents["item_id"], set()).add(str(inputs["hsig"]))
