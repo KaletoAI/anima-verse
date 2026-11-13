@@ -111,6 +111,17 @@ region:
       -> 475..478, 4 x 400 = 1600 px each side, two parts -> 1600 / 127996
       = 0.0125 -> ACCEPTED (warning: near 0.08753): a uniformly wider ghost
       is the fit's to correct, not more garment.
+
+Ghost gate version 4 (Ruling A17, smoke_ghost_hem_reference.py) changes [1]
+and [7]: the hem is gated against the worn piece's (``centre_hem``, ± round(
+0.04 x 799) = 32 columns around the base's shoulder-row centre (120 + 479) /
+2 = 299.5 -> 300). GHOST_HEM's inside below the hem runs on from the jacket
+in every band column, so its hem is row 619: (619 - 100) / 799 = 0.64956
+against the region's 599: 0.62453 -> |Δ| 20 / 799 = 0.02503 > 0.02 —
+refused for its hem alone (no skin: skin_left 0.0; the old code's skin
+refusal of [6] still holds) — the dark underside below Kai's jacket hem in
+miniature. [2]'s raised jacket moves its hem 10 / 799 = 0.0125: still ok.
+[7]: GATE_VERSIONS["ghost"] = 4; a version 3 record is stale.
 """
 import importlib.util
 import os
@@ -133,6 +144,9 @@ import numpy as np  # noqa: E402
 from app.core import garment_clothing, garment_gates as gg, garment_images as gi  # noqa: E402
 
 PINNED = "54cea23e"
+#: [1] under ghost gate version 4 (Ruling A17, docstring).
+HEM_A17 = ("garment ends at another height than the worn piece: |Δ| 0.025 Hb > 0.02 Hb "
+           "(ghost 0.64956, worn 0.62453)")
 FAILS = []
 W, H = 600, 1000
 HB = 799
@@ -239,8 +253,9 @@ def main() -> int:
     print("[1] skin sampled on the thighs")
     check("skin sample", [float(v) for v in gg.skin_colour(BASE, mask_of(BASE))], [200.0, 160.0, 140.0])
     hem = gate(gg, BASE, WORN_J, GHOST_HEM)
-    check("hem inside: ok, no skin", (hem["ok"], hem["skin_left"], hem["outside_near"], hem["outside"]),
-          (True, 0.0, 0.03281, 0.01094))
+    check("hem inside: no skin, refused only for its hem (A17)",
+          (hem["ok"], hem["skin_left"], hem["outside_near"], hem["outside"], hem["reasons"]),
+          (False, 0.0, 0.03281, 0.01094, [HEM_A17]))
 
     print("[2] position recorded")
     up = gate(gg, BASE, WORN_J, GHOST_UP)
@@ -303,9 +318,10 @@ def main() -> int:
           (True, 0.19236))
 
     print("[7] re-gate + limits")
-    check("GATE_VERSIONS ghost", (garment_clothing.GATE_VERSIONS.get("ghost"), gg.GHOST_GATE_VERSION), (3, 3))
+    check("GATE_VERSIONS ghost", (garment_clothing.GATE_VERSIONS.get("ghost"), gg.GHOST_GATE_VERSION), (4, 4))
     check("record without version stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False}), True)
-    check("current version not stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 3}),
+    check("version 3 stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 3}), True)
+    check("current version not stale", gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 4}),
           False)
     ghost_limits = gg.limits("clothing")["ghost"]
     check("no position limits", ("top_dy" in ghost_limits, "centre_dx" in ghost_limits), (False, False))

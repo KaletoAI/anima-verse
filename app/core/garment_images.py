@@ -97,6 +97,11 @@ attempt is a composite that passed its checks, made from the current front
 that passes is published like a fresh accepted attempt; the others keep
 their new records. Nothing passes: the step renders as before. That runs on
 the next chain run of the piece and on the step's Regenerate / Run all.
+An ACCEPTED image of a step the kind names in ``REGATE_ACCEPTED_STEPS``
+(clothing ``ghost``, Ruling A17 d) is re-gated from its file at the next
+run when its record predates the gate (``regate_accepted``, called by the
+run before it decides what is done); one the current gate refuses is stale
+(``stale_accepted``): never done, rendered again — not reused.
 A registered attempt is re-gated from the image AS RENDERED: its raw
 sibling (``raw_path``, written before the registration rewrites the file),
 or the file itself when no registration moved it — and registered again;
@@ -194,8 +199,9 @@ def pad_into(rgb, mask, shape: Tuple[int, int]):
 
 def kind_module(kind: str):
     """The module of a garment kind's image chain (``EDIT_STEPS``,
-    ``edit_prompt``, ``gate``, ``position_reference``, ``SUBJECT`` and the pair hooks ``PAIR_STEP``,
-    ``pair_agree``, ``pair_reason``, ``PAIR_REFUSED``, ``front_hints``).
+    ``edit_prompt``, ``gate``, ``position_reference``, ``SUBJECT``, ``REGATE_ACCEPTED_STEPS`` and the pair
+    hooks ``PAIR_STEP``, ``pair_agree``, ``pair_reason``, ``pair_repair_reason``, ``pair_redo``,
+    ``PAIR_REFUSED``, ``front_hints``).
     ValueError for a kind without one (hair, footwear)."""
     if kind == "clothing":
         from app.core import garment_clothing
@@ -669,7 +675,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     attempts (the attempt files and their gate records stay for the UI)."""
     from app.core import base_body, expression_regen
     from app.core.garment_store import garment_path, read_record, write_record
-    from app.core.model_refs import find_ref_image, get_model_refs_dir, neutral_view_reference
+    from app.core.model_refs import find_ref_image, get_model_refs_dir
     from app.models.character import get_character_profile
 
     final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
@@ -712,19 +718,7 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     prompt, negative = kind.edit_prompt(character_name, step, view, profile=profile, item_id=item_id,
                                         **(prompt_hints or {}))
 
-    with neutral_view_reference(base, refs_dir) as flat_base:
-        base_size = _image_size(flat_base)
-        base_rgb = _rgb(flat_base)
-        base_mask = _mask(flat_base, base_size)
-    source_rgb = source_mask = None
-    if source != base:
-        source_rgb = _rgb(source, base_size)
-        source_mask = _mask(source, base_size)
-    position = (kind.position_reference(step, base_rgb=base_rgb, base_mask=base_mask,
-                                        source_rgb=source_rgb, source_mask=source_mask)
-                if source_rgb is not None else None)
-    gate_args = {"base_rgb": base_rgb, "base_mask": base_mask, "source_rgb": source_rgb,
-                 "source_mask": source_mask, "item_id": item_id}
+    base_size, gate_args, position = _gate_inputs(kind, step, base, source, refs_dir, item_id)
 
     def gate_file(path: Path) -> Dict[str, Any]:
         """Register the attempt file at ``path`` onto ``position`` (a step
@@ -801,6 +795,120 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         if record["ok"]:
             return _publish(character_name, item_id, fsig, step, view, kind, target, final, records, attempt)
     raise GateRefused(step, view, records)
+
+
+def _gate_inputs(kind, step: str, base: Path, source: Path, refs_dir: Path,
+                 item_id: str) -> Tuple[Tuple[int, int], Dict[str, Any], Any]:
+    """``(base size, gate arguments, position reference)`` of an edit step's
+    gate: the base view flattened on neutral grey, its mask, the source's
+    (when it is not the base) and the kind's ``position_reference``."""
+    from app.core.model_refs import neutral_view_reference
+    with neutral_view_reference(base, refs_dir) as flat_base:
+        base_size = _image_size(flat_base)
+        base_rgb = _rgb(flat_base)
+        base_mask = _mask(flat_base, base_size)
+    source_rgb = source_mask = None
+    if source != base:
+        source_rgb = _rgb(source, base_size)
+        source_mask = _mask(source, base_size)
+    position = (kind.position_reference(step, base_rgb=base_rgb, base_mask=base_mask,
+                                        source_rgb=source_rgb, source_mask=source_mask)
+                if source_rgb is not None else None)
+    return base_size, {"base_rgb": base_rgb, "base_mask": base_mask, "source_rgb": source_rgb,
+                       "source_mask": source_mask, "item_id": item_id}, position
+
+
+def _stale_keys(kind, step: str) -> Tuple[str, ...]:
+    """The record keys that make a re-gated accepted image of ``step`` stale
+    (``kind.REGATE_ACCEPTED_STEPS``); () for a step that is not re-gated."""
+    return tuple((getattr(kind, "REGATE_ACCEPTED_STEPS", None) or {}).get(step) or ())
+
+
+def regate_accepted(character_name: str, item_id: str, fsig: str, step: str, view: str, *,
+                    state: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Ruling A17 (d): gate the ACCEPTED image of ``view`` again when its
+    gate record predates the step's gate version (``_stale_gate``) and the
+    kind names the step in ``REGATE_ACCEPTED_STEPS`` (clothing ``ghost``).
+    The file is gated as stored — it is the registered attempt, so it is
+    not registered again; the old record's registration keys stay — and the
+    new record (``regated_from`` = the old version) replaces the accepted
+    one in its sidecar; ``accepted`` stays. A record refused by a rule the
+    kind names for the step (clothing: ``hem_refused`` / ``look_refused``)
+    makes the view stale (``stale_accepted``): the next run renders it again
+    instead of reusing it; a refusal by an older rule is only recorded.
+    Returns the new record, None when
+    nothing was due (not accepted, a copy of the closed state's back, a
+    current record, no accepted source). Reads files and masks only: never
+    renders. ``state``: the run's open / closed state (``run_edit_step``)."""
+    from app.core import base_body
+    from app.core.garment_store import garment_path, read_record, write_record
+    from app.core.model_refs import find_ref_image, get_model_refs_dir
+    from app.models.character import get_character_profile
+    kind = _kind_module(item_id)
+    if not _stale_keys(kind, step) or step not in kind.EDIT_STEPS:
+        return None
+    final = garment_path(character_name, item_id, fsig, "image", step=step, view=view)
+    if not _accepted(final):
+        return None
+    sidecar = read_record(final.with_suffix(".json"))
+    if isinstance(sidecar.get("copied_from"), dict):
+        return None  # the closed state's back: re-gated by the closed group's run
+    try:
+        ordinal = _ORDINALS[int(sidecar.get("attempt") or 1) - 1]
+    except (IndexError, TypeError, ValueError):
+        return None
+    gates = sidecar.get("gates") or {}
+    old = gates.get(ordinal)
+    if not isinstance(old, dict) or old.get("empty") or not _stale_gate(kind, step, old):
+        return None
+    source_step = kind.EDIT_STEPS[step]["source"]
+    if source_step == "base":
+        return None  # an edit of the base view: nothing to regate against here
+    source = garment_path(character_name, item_id, fsig, "image", step=source_step, view=view)
+    if not _accepted(source):
+        return None
+    profile = get_character_profile(character_name) or {}
+    if state is not None:
+        from app.core.outfit_options import with_item_state
+        profile = with_item_state(profile, item_id, state)
+    if view == "back" and _open_state(character_name, item_id, profile, state):
+        profile = _back_profile(item_id, profile)
+    base = find_ref_image(character_name, base_body._kind(view),
+                          base_body.base_signature(character_name, profile=profile))
+    if base is None:
+        return None
+    base_size, gate_args, _position = _gate_inputs(kind, step, base, source, get_model_refs_dir(character_name),
+                                                   item_id)
+    record = kind.gate(step, view, edit_rgb=_rgb(final, base_size), edit_mask=_mask(final, base_size), **gate_args)
+    record.update({k: old[k] for k in ("registration", "reg_shift", "reg_scale", "registered") if k in old})
+    record.update(attempt=old.get("attempt", sidecar.get("attempt")),
+                  regated_from=int(old.get("gate_version") or 1))
+    write_record(final.with_suffix(".json"), {**sidecar, "gates": {**gates, ordinal: record}})
+    stale = any(record.get(k) is True for k in _stale_keys(kind, step))
+    logger.info("Garment %s %s %s (accepted) re-gated (gate version %s -> %s): %s %s", character_name, step, view,
+                record["regated_from"], record.get("gate_version"),
+                "stale — rendered again, not reused" if stale
+                else "still accepted" if record.get("ok") else "kept (refused by an older rule only)",
+                record.get("reasons") or "")
+    return record
+
+
+def stale_accepted(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
+    """Whether the accepted ``view`` of ``step`` was re-gated
+    (``regate_accepted``) and refused by a rule that makes it stale (the
+    kind's keys for the step) — never counted as done (``garments``),
+    rendered again, not reused (Ruling A17 d)."""
+    keys = _stale_keys(_kind_module(item_id), step)
+    if not keys:
+        return False
+    record = accepted_record(_final(character_name, item_id, fsig, step, view))
+    return (isinstance(record, dict) and "regated_from" in record
+            and any(record.get(k) is True for k in keys))
+
+
+def _final(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Path:
+    from app.core.garment_store import garment_path
+    return garment_path(character_name, item_id, fsig, "image", step=step, view=view)
 
 
 def _with_pair(record: Dict[str, Any], pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]],

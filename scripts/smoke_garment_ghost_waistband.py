@@ -81,7 +81,12 @@ smoke_garment_ghost_registration.py):
     not applied, the file untouched, no ``registered``.
 [7] Pair check: front hem_t 0.80 against a back hem_t 0.90 (|Δ| 0.10 >
     0.02): disagree / a reason; the same back with ``registered`` ->
-    agree / None.
+    agree / None. Since Ruling A17 (smoke_ghost_hem_reference.py) a front
+    ATTEMPT is checked against the WORN back's hem (``pair_reason``: the
+    front's ``hem_c`` against the back record's ``worn_hem_c``, 0.80 / 0.90
+    -> a reason) and the ghost pair's own rule is the repair reason
+    (``pair_repair_reason``, hem_t 0.80 / 0.90 -> a reason); both None
+    against a registered back.
 [8] Fails on the old code (garment_gates.py PINNED at f4c5dc6d0d, read with
     ``git show`` into a temp module): no ``register_waistband``; its
     ``register`` on the [2] ghost is not within the caps (|shift| > 0.04 Hb)
@@ -305,10 +310,14 @@ def main() -> int:
     print("[7] pair check")
     front, back = {"hem_t": 0.80}, {"hem_t": 0.90}
     check("plain back: disagree", garment_clothing.pair_agree(front, back), False)
-    check("plain back: a reason", garment_clothing.pair_reason(front, back) is not None, True)
-    registered = {**back, "registered": {"scale": 0.66667, "dx": -10.0, "dy": 300.0, "length_ratio": 1.1}}
+    check("plain back: a reason (the pair repair; A17: the front attempt against the worn back)",
+          (garment_clothing.pair_repair_reason(front, back) is not None,
+           garment_clothing.pair_reason({"hem_c": 0.80}, {"worn_hem_c": 0.90}) is not None), (True, True))
+    registered = {**back, "worn_hem_c": 0.90,
+                  "registered": {"scale": 0.66667, "dx": -10.0, "dy": 300.0, "length_ratio": 1.1}}
     check("registered back: agree", garment_clothing.pair_agree(front, registered), True)
-    check("registered back: no reason", garment_clothing.pair_reason(front, registered), None)
+    check("registered back: no reason", (garment_clothing.pair_reason({**front, "hem_c": 0.80}, registered),
+                                         garment_clothing.pair_repair_reason(front, registered)), (None, None))
 
     print(f"[8] fails on the old code ({PINNED})")
     old = pinned_gates()

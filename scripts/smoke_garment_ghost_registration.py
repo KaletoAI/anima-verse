@@ -84,6 +84,15 @@ Geometry, W 600 x H 1000 on grey 128:
     0.01674 <= 0.05; the sleeve ends (col 124 / 475, 16 px out) are parts of
     66 px -> ACCEPTED, the rim a warning: a uniformly 10 % larger piece is
     the fit's to correct.
+    Ghost gate version 4 (Ruling A17, smoke_ghost_hem_reference.py): the
+    hem is gated against the worn piece's. Band ± round(0.04 x 799) = 32
+    columns around the base's shoulder-row centre round(299.5) = 300 lies in
+    the torso; the scaled ghost's last row is q − 377.326 < 1.10 x (599.5 −
+    377.326) = 244.39 -> 621, the region's 599: hem_c (621 − 100) / 799 =
+    0.65207 against 0.62453, |Δ| 22 / 799 = 0.02753 > 0.02 -> REFUSED for its
+    hem alone (the rim stays a warning): uncorrected, a 10 % larger ghost
+    hangs 2.75 % of the figure below its worn piece — what Kai's jacket back
+    did with its correction beyond the caps.
 [6] Negligible: GHOST(1, 0, 0) = T itself -> registration negligible, the
     file is NOT rewritten (bytes equal), ok, residual 0.
 [7] _touching: G + a separate patch cols [100, 120) rows [300, 340) (a
@@ -262,9 +271,11 @@ def main() -> int:
     r = rec.get("registration") or {}
     near("10 % larger: scale", r.get("scale"), 1 / 1.10, 0.006)
     check("not applied", (r.get("applied"), r.get("note")), (False, "beyond the correction caps — gated as rendered"))
-    check("accepted, its rim a warning (gate version 3)",
+    check("its rim a warning, refused for its hem alone (gate version 4, A17)",
           (rec["ok"], rec["outside_near"] >= 0.13,
-           any("garment rim beyond the worn piece" in x for x in rec["warnings"])), (True, True, True))
+           any("garment rim beyond the worn piece" in x for x in rec["warnings"]), rec["reasons"]),
+          (False, True, True, ["garment ends at another height than the worn piece: |Δ| 0.0275 Hb > 0.02 Hb "
+                               "(ghost 0.65207, worn 0.62453)"]))
     near("10 % larger: the far part", rec["outside"], 1232 / 73600, 0.001)
 
     print("[6] negligible")

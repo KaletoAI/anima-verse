@@ -6,8 +6,9 @@ spec ``2026-11-08-base-body-outfits-design.md``).
 The kind module of garment kind ``clothing`` (``garment_set.CLOTHING``) —
 the image-chain protocol of ``garment_images.kind_module``: ``EDIT_STEPS``, ``edit_prompt``, ``gate``,
 ``position_reference``, ``fsig_inputs`` and the pair hooks the orchestration (``garments``) calls —
-``PAIR_STEP``, ``pair_agree``, ``pair_reason``, ``PAIR_REFUSED``,
-``front_hints`` — plus ``SUBJECT`` for messages and ``register_estimate``
+``PAIR_STEP``, ``pair_agree``, ``pair_reason``, ``pair_repair_reason``,
+``pair_redo``, ``PAIR_REFUSED``, ``front_hints``, ``REGATE_ACCEPTED_STEPS``
+(Ruling A17) — plus ``SUBJECT`` for messages and ``register_estimate``
 (the ghost of a waistband piece is registered by its waistband).
 
 The image chain of the S1 spike (``claude-out/s1-base-body/src/dress_edit.py``),
@@ -130,7 +131,18 @@ GHOST_NEGATIVE = ("person", "skin", "head", "arms", "hands", "legs", "feet", "ma
 #: beyond 0.02·Hb and the waistband hem leaves strands out; a registered
 #: ghost attempt is re-gated from its raw sibling (``garment_images``).
 GATE_VERSIONS: Dict[str, int] = {"worn": WORN_GATE_VERSION, "ghost": GHOST_GATE_VERSION}
-#: The pair check: the front ghost against the accepted back ghost.
+#: The steps whose ACCEPTED images are re-gated from their files when their
+#: record predates the step's gate version (``garment_images.regate_accepted``,
+#: Ruling A17 d), each with the record keys that make such an image STALE
+#: (rendered again, not reused): ``ghost`` 4 gates the hem against the worn
+#: piece (``hem_refused``: a stored ghost back that hangs below its worn back)
+#: and a closable front's open / closed look (``look_refused``). A re-gated
+#: image refused for an older rule only records it and stays in use.
+REGATE_ACCEPTED_STEPS: Dict[str, Tuple[str, ...]] = {"ghost": ("hem_refused", "look_refused")}
+#: The pair check (Ruling A17): a front ghost attempt against the WORN back's
+#: hem (``pair_reason``), the accepted ghost pair against each other
+#: (``pair_agree``), and the view farther from its worn view rendered again
+#: when they disagree (``pair_redo``).
 PAIR_STEP = "ghost"
 PAIR_REFUSED = "front and back garment end at different heights"
 
@@ -328,7 +340,10 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
     on outside the front garment's rows (``extra_part``, ``back_reasons``)
     and, with its ``composite_support``, a head share outside the support
     (``garment_gates.worn_gate``); ``ghost`` against the garment region of the accepted worn image
-    (``source``). All arrays share the base view's size."""
+    (``source``) — its hem against the worn view's and, for a closable
+    piece's front, its open / closed look against the worn view's (Ruling
+    A17, ``garment_gates.ghost_clothing_gate``). All arrays share the base
+    view's size."""
     from app.core import garment_gates
     if step == "worn":
         slots = ((_item_of(item_id).get("outfit_piece") or {}).get("slots") or []) if item_id else []
@@ -340,9 +355,12 @@ def gate(step: str, view: str, *, base_rgb, base_mask, source_rgb, source_mask,
                                                    if front_gate else None),
                                        composite_support=composite_support)
     if step == "ghost":
+        from app.core.garment_set import closable_of
         region = garment_gates.garment_region(base_rgb, base_mask, source_rgb, source_mask)
         return garment_gates.ghost_clothing_gate(base_rgb, base_mask, region, edit_rgb, edit_mask, view=view,
-                                                 length_free=_waistband_ghost(step, item_id))
+                                                 length_free=_waistband_ghost(step, item_id),
+                                                 worn_rgb=source_rgb,
+                                                 closable=bool(item_id) and closable_of(_item_of(item_id)))
     raise ValueError(f"no clothing edit step {step!r}")
 
 
@@ -385,20 +403,44 @@ def position_reference(step: str, *, base_rgb, base_mask, source_rgb, source_mas
 
 
 def pair_agree(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> bool:
-    """Front and back ghost end at the same height (``garment_gates.hems_agree``)
-    — always True against a back registered by its waistband (``registered``):
-    its hem is the edit's length scaled by the waistband, not a measurement
-    (ruling 13d: the length does not matter)."""
+    """Front and back ghost end at the same height (``garment_gates.hems_agree``,
+    the centre hems) — always True against a back registered by its waistband
+    (``registered``): its hem is the edit's length scaled by the waistband,
+    not a measurement (ruling 13d: the length does not matter)."""
     from app.core.garment_gates import hems_agree
     return bool(back_gate.get("registered")) or hems_agree(front_gate, back_gate)
 
 
 def pair_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[str]:
-    """The refusal reason of a front ghost attempt against the accepted back
-    (``garment_gates.hems_reason``); None against a back registered by its
-    waistband (``pair_agree``)."""
+    """The refusal reason of a front ghost attempt against the WORN back's hem
+    (Ruling A17 b, ``garment_gates.worn_hems_reason``: ``worn_hem_c`` of the
+    accepted back ghost's record — never its ghost hem); None for a waistband
+    piece (``registered`` back or ``length_free`` front: the length is free)."""
+    from app.core.garment_gates import worn_hems_reason
+    if back_gate.get("registered") or front_gate.get("length_free"):
+        return None
+    return worn_hems_reason(front_gate, back_gate)
+
+
+def pair_repair_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[str]:
+    """The reason a front rendered again to repair a disagreeing pair is
+    refused (``garments``): ``pair_reason`` and, since the back stays, the
+    ghost pair's own rule (``garment_gates.hems_reason``)."""
     from app.core.garment_gates import hems_reason
-    return None if back_gate.get("registered") else hems_reason(front_gate, back_gate)
+    reason = pair_reason(front_gate, back_gate)
+    if reason or back_gate.get("registered"):
+        return reason
+    return hems_reason(front_gate, back_gate)
+
+
+def pair_redo(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> str:
+    """The view a disagreeing ghost pair renders again (Ruling A17 c):
+    ``"back"`` when the back's hem is farther from its worn back than the
+    front's from its worn front (``garment_gates.hem_deviation``), else
+    ``"front"`` (also when either is unmeasured)."""
+    from app.core.garment_gates import hem_deviation
+    back, front = hem_deviation(back_gate), hem_deviation(front_gate)
+    return "back" if back is not None and front is not None and back > front else "front"
 
 
 def front_hints(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Optional[Dict[str, Any]]:

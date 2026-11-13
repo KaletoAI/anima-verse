@@ -267,8 +267,12 @@ def occupied_zones(slots: Iterable[str]) -> Tuple[str, ...]:
 # its own slit tips as "more". The hem is now ``_hem_row``: the last row of
 # the region opened by the margin (a strand narrower than twice the margin
 # is no cloth) without its small parts (``_main_parts``) — 951 there.
-GHOST_GATE_VERSION = 3
-CLOTH_TOP_DY_WARN = 0.0055   # |top edge offset| / Hb from which it is recorded as a warning
+#
+# Ghost gate version 4 (Ruling A17, 2026-11-13): the hem against the WORN
+# piece and the open / closed look of a closable front — the block "Hem and
+# centre gap" below ``HEM_AGREE``.
+GHOST_GATE_VERSION = 4
+CLOTH_TOP_DY_WARN = 0.0055  # |top edge offset| / Hb from which it is recorded as a warning
 CLOTH_CENTRE_DX_WARN = 0.007  # |centre offset| / Hb from which it is recorded as a warning
 CLOTH_W_RATIO_MIN = 0.80
 CLOTH_W_RATIO_MAX = 1.25
@@ -286,7 +290,77 @@ CLOTH_OUTSIDE_MAX = 0.05    # largest ghost part beyond CLOTH_FAR / garment area
 CLOTH_FAR = 0.02            # Hb: ghost pixels farther than this from the region form ``outside``'s parts
 NECKLINE_MIN_DEPTH = 0.012  # notch depth / Hb from which the garment has a neckline
 NECKLINE_BAND = 0.03        # ± this share of the garment width around its centre column
-HEM_AGREE = 0.02            # |hem_t front − hem_t back|, fractions of Hb
+HEM_AGREE = 0.02            # |hem front − hem back| and |ghost hem − worn hem|, fractions of Hb
+# Hem and centre gap (Ruling A17, 2026-11-13). Kai's leather jacket
+# (item_555a7a01, fsig 3fc8dd52a021): the ghost BACK (attempt 2) was
+# accepted hanging below the worn back's hem with a dark underside bulge;
+# every ghost front was then measured against it (``hems_reason``, |Δ|
+# 0.0243 / 0.0405 Hb) and refused, and a restart reused the stored back —
+# refused forever. The bbox bottom (``hem_t``) cannot see that: in the
+# A-pose the lowest garment pixel is a sleeve cuff or a re-shaded hand — the
+# worn back region ends at row 796 (the fingertips, hem_t 0.5295) and the
+# bad ghost back at 0.514, "above" its worn piece. ``hem_c`` (``centre_hem``)
+# is the hem where the torso is: per column within ± HEM_BAND·Hb of the base
+# figure's centre (the shoulder row's span centre) the last row of the
+# column's LONGEST vertical run of the mask — a separate re-shaded patch
+# below is shorter than the torso's run —, kept when that run is at least
+# HEM_RUN_MIN of the mask's own height (a collar above an open front is no
+# hem), the median over the kept columns; None when fewer than HEM_BAND_MIN
+# of the band's columns are kept (an open front, a cutaway, nothing at the
+# centre: gloves, a shrug — no hem rule then, the ghost pair falls back to
+# the bbox ``hem_t``). The worn region is measured WITHOUT its skin-coloured
+# pixels (within SKIN_DRGB of the skin sample): an edit re-shades the belly
+# or crotch below a hem, and Kira's Black Blazer front (a cutaway) read
+# 0.494 with them — the crotch — against its ghost's 0.458. Measured on
+# copies of the stored images (BiRefNet-DIS masks, the attempts as stored —
+# attempt 1 of the front registered):
+#   worn back region    0.45716   ghost back attempt 2 (accepted) 0.51124  |Δ| 0.0541
+#                                 ghost back attempt 1            0.52949  |Δ| 0.0723
+#   worn front region   0.46512   ghost front attempt 1 (OPEN)    0.45525  |Δ| 0.0099, worn back 0.0019
+#                                 ghost front attempt 2           0.45877  |Δ| 0.0063, worn back 0.0016
+# Worn front against worn back 0.0080. Every accepted ghost of the live world
+# re-gated the same way (8 images, 2026-11-13): only that ghost back is
+# refused by the hem; Kai's open-state jacket front and Kira's cutaway blazer
+# front measure no worn hem; Kai's closed jacket front (ceda6b488194) and
+# Rosi's piece lie 0.0021 / 0.0100 from their worn views (Kai's waistband
+# jeans are length-free).
+# So the ghost of each view is gated against its
+# own WORN view (a) — the worn views are what the composite and the worn
+# gates validated —, the front attempt against the worn back too (b,
+# ``worn_hems_reason``), never against the ghost back; the ghost pair still
+# has to agree (``hems_agree``, on ``hem_c``) and the view that is farther
+# from its worn view is the one rendered again (c, ``hem_deviation``).
+# A waistband piece's length is free (ruling 13d): no hem rule there.
+#
+# Open / closed (same ruling): attempt 1 of that front came out OPEN —
+# unzipped, the black inside between the panels — while the piece is worn
+# closed, and only the hem refused it. ``centre_gap`` = the widest run of
+# OPEN columns within ± GAP_BAND·Hb of the centre, in Hb: a pixel is open
+# when it is not garment or darker than GAP_DARK × the median luminance of
+# the garment's panels (GAP_BAND..GAP_PANEL·Hb off the centre, the same
+# rows), a column when at least half its rows are. Rows: GAP_ROWS of the
+# figure (chest to waist), below the worn region's neckline + 0.02 Hb and
+# above its hem − 0.02 Hb; fewer than GAP_ROWS_MIN·Hb rows measure nothing.
+# The worn view is measured the same way on its garment region (an open
+# piece shows the body there: not garment), so a dark placket by design is
+# open in both. Kai's copies (front rows 387..614, the panels' median
+# luminance 17.7..21.3, dark at <= 7.1..8.5 — black leather on black):
+#   worn front 0.0014    ghost front attempt 1 (OPEN) 0.0345    attempt 2 0.0021
+#   Kai's OPEN-state front (2b72c222b6ae, accepted): worn 0.0881, ghost 0.0543
+# A closable piece's ghost FRONT is refused when one of the two reaches
+# GAP_MIN and the other does not — 7x the highest closed one, 0.43 of the
+# lowest open one. One open piece only, black: a ghost whose inside is
+# lighter than GAP_DARK of its panels reads closed.
+HEM_BAND = 0.04             # ± Hb around the figure's centre column whose garment rows give the hem
+HEM_BAND_MIN = 0.5          # share of the band's columns that must be kept for a measured hem
+HEM_RUN_MIN = 0.25          # a column's run counts from this share of the mask's own height
+GAP_ROWS = (0.24, 0.40)     # Hb: the rows the centre gap is looked for on (chest to waist)
+GAP_ROWS_MIN = 0.04         # Hb: fewer rows than this between neckline and hem measure no gap
+GAP_EDGE = 0.02             # Hb kept clear of the worn region's neckline and hem
+GAP_BAND = 0.05             # ± Hb around the centre column searched for the gap
+GAP_PANEL = 0.15            # Hb: the panels are the garment pixels from GAP_BAND to this far off the centre
+GAP_DARK = 0.4              # a pixel this share of the panels' median luminance (or darker) shows the inside
+GAP_MIN = 0.015             # Hb: the widest open run from which a front counts as open
 # The worn BACK against the accepted worn FRONT (``back_follows_front``; the
 # back is drafted from that front, ``garment_images``). Measured 2026-11-09 on
 # the live "Black Blazer" (Kira) — the single-edit back turned the BODY toward
@@ -712,8 +786,110 @@ def _touching(region, ghost, height: int) -> np.ndarray:
     return np.isin(labels, np.union1d(keep, [int(sizes.argmax())]))
 
 
+def _centre_column(base_mask) -> Optional[Tuple[int, int, int]]:
+    """``(centre x, y0, Hb)`` of the base figure: the span centre of its
+    shoulder row (``SHOULDER_ROW``); None without a figure."""
+    m0 = np.asarray(base_mask, dtype=bool)
+    zones = _zones(m0)
+    if zones is None or zones[1] <= 0:
+        return None
+    y0, hb = zones
+    span = _span(m0, int(y0 + SHOULDER_ROW * hb))
+    if span is None:
+        return None
+    return int(round(span[0])), y0, hb
+
+
+def centre_hem(mask, base_mask, *, exclude=None) -> Optional[float]:
+    """``hem_c`` of a garment mask (the block "Hem and centre gap"): ``mask``
+    without ``exclude``; per column within ± ``HEM_BAND``·Hb of the base
+    figure's centre the last row of the column's longest vertical run, kept
+    when that run is at least ``HEM_RUN_MIN`` of the mask's own height (a
+    collar above an open front is no hem); the median over the kept columns,
+    as (row − y0) / Hb of the base figure. None when fewer than
+    ``HEM_BAND_MIN`` of the band's columns are kept."""
+    centre = _centre_column(base_mask)
+    if centre is None:
+        return None
+    cx, y0, hb = centre
+    mask = np.asarray(mask, dtype=bool)
+    if exclude is not None:
+        mask = mask & ~np.asarray(exclude, dtype=bool)
+    box = _bbox(mask)
+    if box is None:
+        return None
+    least = HEM_RUN_MIN * (box[3] - box[1] + 1)
+    half = max(1, int(round(HEM_BAND * hb)))
+    lo, hi = max(0, cx - half), min(mask.shape[1], cx + half + 1)
+    bottoms: List[int] = []
+    for x in range(lo, hi):
+        rows = np.nonzero(mask[:, x])[0]
+        if not len(rows):
+            continue
+        breaks = np.nonzero(np.diff(rows) > 1)[0]
+        starts = np.concatenate(([0], breaks + 1))
+        ends = np.concatenate((breaks, [len(rows) - 1]))
+        longest = int(np.argmax(ends - starts))
+        if rows[ends[longest]] - rows[starts[longest]] + 1 >= least:
+            bottoms.append(int(rows[ends[longest]]))
+    if len(bottoms) < HEM_BAND_MIN * (hi - lo):
+        return None
+    return (float(np.median(bottoms)) - y0) / hb
+
+
+def gap_rows(region, base_mask, hem: Optional[float]) -> Optional[Tuple[int, int]]:
+    """The rows ``[r0, r1)`` the centre gap is measured on: ``GAP_ROWS`` of
+    the base figure, below the worn region's centre top (its neckline) +
+    ``GAP_EDGE`` and, when the worn hem ``hem`` (``centre_hem``) is measured,
+    above it − ``GAP_EDGE`` (an open front has none: its centre is body);
+    None when fewer than ``GAP_ROWS_MIN``·Hb rows are left or the region is
+    empty."""
+    centre = _centre_column(base_mask)
+    region = np.asarray(region, dtype=bool)
+    box = _bbox(region)
+    if centre is None or box is None:
+        return None
+    _cx, y0, hb = centre
+    top = box[1] + neckline(region)["depth"]
+    r0 = int(max(y0 + GAP_ROWS[0] * hb, top + GAP_EDGE * hb))
+    r1 = int(y0 + GAP_ROWS[1] * hb if hem is None else min(y0 + GAP_ROWS[1] * hb, y0 + (hem - GAP_EDGE) * hb))
+    return (r0, r1) if r1 - r0 >= GAP_ROWS_MIN * hb else None
+
+
+def centre_gap(rgb, mask, base_mask, rows: Tuple[int, int]) -> Optional[float]:
+    """The widest run of OPEN columns within ± ``GAP_BAND``·Hb of the base
+    figure's centre on ``rows`` (``gap_rows``), in Hb (the block "Hem and
+    centre gap"): a pixel is open when ``mask`` does not hold it or its
+    luminance (mean of RGB) is at most ``GAP_DARK`` × the median luminance of
+    the mask's pixels ``GAP_BAND``..``GAP_PANEL``·Hb off the centre on those
+    rows (the panels); a column when at least half its rows are. None
+    without panels."""
+    centre = _centre_column(base_mask)
+    if centre is None:
+        return None
+    cx, _y0, hb = centre
+    r0, r1 = rows
+    mask = np.asarray(mask, dtype=bool)[r0:r1]
+    lum = np.asarray(rgb, dtype=np.float32)[r0:r1, :, :3].mean(2)
+    off = np.abs(np.arange(mask.shape[1]) - cx)
+    half = max(1, int(round(GAP_BAND * hb)))
+    panel = mask & ((off > half) & (off <= GAP_PANEL * hb))[None, :]
+    if not panel.any():
+        return None
+    dark = GAP_DARK * float(np.median(lum[panel]))
+    lo, hi = max(0, cx - half), min(mask.shape[1], cx + half + 1)
+    opened = (~mask[:, lo:hi]) | (lum[:, lo:hi] <= dark)
+    columns = opened.mean(0) >= 0.5
+    best = run = 0
+    for is_open in columns:
+        run = run + 1 if is_open else 0
+        best = max(best, run)
+    return best / hb
+
+
 def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask, *,
-                        view: str, length_free: bool = False) -> Dict[str, Any]:
+                        view: str, length_free: bool = False, worn_rgb=None,
+                        closable: bool = False) -> Dict[str, Any]:
     """Step 2 gate of clothing: the piece alone against the garment region of
     the accepted worn view (``garment_region``).
 
@@ -749,6 +925,15 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     ``hem_row``) grown by the margin — the length is the edit's, not
     measured (ruling 13d); ``skin_left`` still counts there (feet left in the
     image), ``h_ratio`` / ``hem_t`` are reported.
+    Gate version 4 (Ruling A17, the block "Hem and centre gap"): ``hem_c`` of
+    the ghost and ``worn_hem_c`` of the region without its skin-coloured
+    pixels (``worn_rgb`` within ``SKIN_DRGB`` of the skin sample;
+    ``centre_hem``) — refused when they differ by more than ``HEM_AGREE``
+    (not for ``length_free``; ``hem_refused``); a ``closable`` piece's FRONT
+    with ``worn_rgb`` records ``centre_gap`` / ``worn_centre_gap``
+    (``centre_gap`` on ``gap_rows``) and is refused when exactly one of
+    them reaches ``GAP_MIN`` (the ghost open where the piece is worn
+    closed, or closed where it is worn open; ``look_refused``).
     Calibration: the "Clothing" block above."""
     from scipy import ndimage
     _check(base_rgb, base_mask, ghost_rgb, ghost_mask)
@@ -823,11 +1008,39 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     if outside > CLOTH_OUTSIDE_MAX:
         reasons.append(f"more than the garment in the image: a part of {_r(outside, 4)} more than "
                        f"{CLOTH_FAR} Hb beyond the worn piece > {CLOTH_OUTSIDE_MAX}")
+    # The worn region without skin (a belly or crotch the edit re-shaded) —
+    # the ghost as it is: its openings are NOT left out (``body_openings``
+    # counts the hips between two cuffs as one, and the bulge below Kai's
+    # jacket back lay exactly there).
+    worn_skin = None
+    if worn_rgb is not None and skin is not None:
+        worn_skin = np.abs(np.asarray(worn_rgb, dtype=np.float32)[..., :3] - skin).mean(2) <= SKIN_DRGB
+    hem_c, worn_hem_c = centre_hem(ghost, m0), centre_hem(region, m0, exclude=worn_skin)
+    hem_refused = (not length_free and hem_c is not None and worn_hem_c is not None
+                   and abs(hem_c - worn_hem_c) > HEM_AGREE)
+    look_refused = False
+    if hem_refused:
+        reasons.append(f"garment ends at another height than the worn piece: |Δ| {_r(abs(hem_c - worn_hem_c), 4)} "
+                       f"Hb > {HEM_AGREE} Hb (ghost {_r(hem_c, 5)}, worn {_r(worn_hem_c, 5)})")
+    gaps: Dict[str, Any] = {}
+    if closable and view == "front" and worn_rgb is not None:
+        rows = gap_rows(region, m0, worn_hem_c)
+        gap = centre_gap(ghost_rgb, ghost, m0, rows) if rows else None
+        worn_gap = centre_gap(worn_rgb, region, m0, rows) if rows else None
+        gaps = {"centre_gap": _r(gap, 4), "worn_centre_gap": _r(worn_gap, 4)}
+        look_refused = gap is not None and worn_gap is not None and (gap >= GAP_MIN) != (worn_gap >= GAP_MIN)
+        if look_refused:
+            look = ("open where the worn piece is closed" if gap >= GAP_MIN
+                    else "closed where the worn piece is open")
+            reasons.append(f"garment {look}: a centre gap of {_r(gap, 4)} Hb (worn {_r(worn_gap, 4)} Hb, "
+                           f"open from {GAP_MIN} Hb)")
     return {**out, "top_dy": _r(top_dy, 5), "centre_dx": _r(centre_dx, 5), "w_ratio": round(w_ratio, 3),
             "h_ratio": round(h_ratio, 3), "iou": round(iou, 3), "skin_left": _r(skin_left, 5),
             "outside": _r(outside, 5), "outside_near": _r(outside_near, 5), "opening_seen": _r(opening_seen, 5),
             "neckline_depth": _r(depth, 4), "neck_fill": _r(neck_fill, 3),
             "bottom": b[3], "hem_t": _r((b[3] - y0) / hb, 5),
+            "hem_c": _r(hem_c, 5), "worn_hem_c": _r(worn_hem_c, 5), **gaps,
+            "hem_refused": bool(hem_refused), "look_refused": bool(look_refused),
             **({"length_free": True, "hem_row": hem} if length_free else {}),
             "gate_version": GHOST_GATE_VERSION, "warnings": warnings,
             "ok": not reasons, "reasons": reasons}
@@ -847,32 +1060,75 @@ def _hem_row(region: np.ndarray, height: int) -> int:
     return int(box[3])
 
 
+def _hem_pair(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[Tuple[float, float, str]]:
+    """``(front hem, back hem, key)`` of two ghost records: their ``hem_c``
+    when both have one (gate version 4, the block "Hem and centre gap"), else
+    their bbox ``hem_t`` (a piece with nothing at the centre); None when a
+    record has neither."""
+    for key in ("hem_c", "hem_t"):
+        try:
+            return float(front_gate[key]), float(back_gate[key]), key
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
 def hems_gap(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[tuple]:
-    """``(|hem_t_front − hem_t_back|, HEM_AGREE)`` — both hems against their
-    own view's figure (fractions of Hb); None when a record lacks ``hem_t``."""
-    try:
-        gap = abs(float(front_gate["hem_t"]) - float(back_gate["hem_t"]))
-    except (KeyError, TypeError, ValueError):
+    """``(|hem front − hem back|, HEM_AGREE)`` of the ghost pair — both hems
+    against their own view's figure (fractions of Hb), the centre hems
+    (``_hem_pair``); None when a record lacks a hem."""
+    pair = _hem_pair(front_gate, back_gate)
+    if pair is None:
         return None
-    return gap, HEM_AGREE
+    return abs(pair[0] - pair[1]), HEM_AGREE
 
 
 def hems_agree(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> bool:
-    """The front and back garment end at the same height of the figure:
-    |hem_t_front − hem_t_back| <= 0.02 (fractions of the body height Hb)."""
+    """The front and back ghost end at the same height of the figure:
+    |hem front − hem back| <= 0.02 (fractions of the body height Hb)."""
     gap = hems_gap(front_gate, back_gate)
     return gap is not None and gap[0] <= gap[1]
 
 
 def hems_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[str]:
     """The refusal reason of a front ghost attempt whose hem is not where the
-    accepted back's is (``hems_agree``); None when they agree or the attempt
-    has no measured hem."""
+    accepted back ghost's is (``hems_agree``); None when they agree or the
+    attempt has no measured hem. Since Ruling A17 only the pair repair of
+    the chain checks a front against the ghost back (``garments``); a front
+    attempt is checked against the WORN back (``worn_hems_reason``)."""
     gap = hems_gap(front_gate, back_gate)
     if gap is None or gap[0] <= gap[1]:
         return None
+    key = _hem_pair(front_gate, back_gate)[2]
     return (f"garment ends at another height than in the back view: |Δ| {_r(gap[0], 4)} Hb > {gap[1]} Hb "
-            f"(front {front_gate.get('hem_t')}, back {back_gate.get('hem_t')})")
+            f"(front {front_gate.get(key)}, back {back_gate.get(key)})")
+
+
+def worn_hems_reason(front_gate: Dict[str, Any], back_gate: Dict[str, Any]) -> Optional[str]:
+    """Ruling A17 (b): the refusal reason of a front ghost attempt whose centre
+    hem (``hem_c``) is more than ``HEM_AGREE`` from the WORN back's
+    (``worn_hem_c`` of the accepted back ghost's record, measured on the worn
+    back's garment region); the front against its own worn view is the
+    gate's (``ghost_clothing_gate``). None when they agree or a hem is not
+    measured (an open front, nothing at the centre) — never the ghost back's
+    hem in its place; the ghost pair still has to agree (``hems_agree``)."""
+    front, worn_back = front_gate.get("hem_c"), back_gate.get("worn_hem_c")
+    if not isinstance(front, (int, float)) or not isinstance(worn_back, (int, float)):
+        return None
+    gap = abs(front - worn_back)
+    if gap <= HEM_AGREE:
+        return None
+    return (f"garment ends at another height than in the back view: |Δ| {_r(gap, 4)} Hb > {HEM_AGREE} Hb "
+            f"(front {_r(front, 5)}, worn back {_r(worn_back, 5)})")
+
+
+def hem_deviation(record: Dict[str, Any]) -> Optional[float]:
+    """|``hem_c`` − ``worn_hem_c``| of a ghost record: how far the ghost's hem
+    is from its own worn view's (Ruling A17 c); None when unmeasured."""
+    try:
+        return abs(float(record["hem_c"]) - float(record["worn_hem_c"]))
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 # --- Registration of a piece-only (ghost) image -------------------------------

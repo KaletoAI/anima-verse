@@ -173,6 +173,15 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
     "garment ends at another height than in the back view: |Δ| 0.026 Hb >
     0.02 Hb (front 0.65966, back 0.63363)"; back GHOST(769) hem_t 0.66967
     -> |Δ| 0.01001 -> agree.
+    Ruling A17 (ghost gate version 4) changed this block: the centre hem
+    ``hem_c`` (± 40 columns around the base's shoulder-row centre 512: every
+    band column's longest run ends at the bottom row, the neckline rows only
+    start it later) equals hem_t here, and the region's ``worn_hem_c`` is
+    0.65966. So GHOST(733) is now REFUSED by its own gate — "garment ends at
+    another height than the worn piece: |Δ| 0.026 Hb > 0.02 Hb (ghost
+    0.63363, worn 0.65966)" — and as a front against the worn back
+    (``worn_hems_reason``) "… (front 0.63363, worn back 0.65966)";
+    GHOST(769) passes both (0.01001). The ghost pair rule above is unchanged.
 [5] run_edit_step worn front on D: render 1 = WORN_SHIFT (refused), render 2
     = WORN (accepted): final images/D_F_worn_front.png, gates.first.ok False,
     gates.second.ok True; the render call has occasion "garment_view", use
@@ -185,16 +194,21 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
     from it — "worn bd1" = the draft of attempt 1, composited onto the base
     back on the CPU (Task 11g: no fit render; the composite of WORN onto BASE
     passes); ghost: the back first):
-    A: back ghost GHOST(733), every front ghost GHOST(759) -> renders worn f1,
-       worn bd1, ghost b1, ghost f1, ghost f2 (both fronts refused with the
-       hems reason against the back); the draft's prompt names the fragment
+    A (rewritten for Ruling A17 — a back like GHOST(733) is refused by its
+       own gate now, so it can no longer refuse every front): back ghosts
+       GHOST(733), GHOST(769), front ghosts GHOST(733) twice -> renders worn
+       f1, worn bd1, ghost b1 (refused for its hem against the worn back),
+       ghost b2 (accepted), ghost f1, ghost f2 (both refused for their hem
+       against the worn front AND the worn back, the reasons above); the
+       draft's prompt names the fragment
        ("wearing only a knee-length green linen dress with short sleeves
        exactly as on the person in the reference image"), occasion
        outfit_back_draft; the accepted worn back records fit "composite" -> {ok False, step ghost, gates.view
        front}; the item's prompt_fragment is untouched (no description
        refresh for clothing).
-    B: run again, the front GHOST(733) -> one render ghost f1, ok True, ran
-       starts [ghost, cutout].
+    B: run again, the front GHOST(759) (0 from both worn hems, 0.01001 from
+       the ghost back GHOST(769)) -> one render ghost f1, ok True, ran starts
+       [ghost, cutout].
     garment_info(D): kind clothing, description = the fragment, steps keys
     [worn, ghost, cutout, mesh, fit].
 """
@@ -246,6 +260,11 @@ WORN_NEG = "loose clothing, baggy, skirt, jacket, shoes, socks, hair"
 GHOST_NEG = WORN_NEG + ", person, skin, head, arms, hands, legs, feet, mannequin, hanger"
 HEM_REASON = ("garment ends at another height than in the back view: |Δ| 0.026 Hb > 0.02 Hb "
               "(front 0.65966, back 0.63363)")
+#: Ruling A17: GHOST(733) against the worn piece (its gate) and as a front against the worn back.
+SHORT_GATE_REASON = ("garment ends at another height than the worn piece: |Δ| 0.026 Hb > 0.02 Hb "
+                     "(ghost 0.63363, worn 0.65966)")
+SHORT_WORN_BACK_REASON = ("garment ends at another height than in the back view: |Δ| 0.026 Hb > 0.02 Hb "
+                          "(front 0.63363, worn back 0.65966)")
 
 
 def check(label, got, want):
@@ -430,10 +449,14 @@ def gates_part(gg, kept):
 
     print("[4] hems")
     short, matching = ghost_gate(SHORT), ghost_gate(MATCHING)
-    check("short/matching pass their gate", (short["ok"], matching["ok"]), (True, True))
-    check("hem_t", (short["hem_t"], matching["hem_t"]), (0.63363, 0.66967))
+    check("short refused for its hem, matching passes (A17)", (short["ok"], short["reasons"], matching["ok"]),
+          (False, [SHORT_GATE_REASON], True))
+    check("hem_t / hem_c", (short["hem_t"], matching["hem_t"], short["hem_c"], matching["hem_c"], good["hem_c"],
+                            good["worn_hem_c"]), (0.63363, 0.66967, 0.63363, 0.66967, 0.65966, 0.65966))
     check("disagree", gg.hems_agree(good, short), False)
     check("reason", gg.hems_reason(good, short), HEM_REASON)
+    check("front vs the worn back (A17 b)", (gg.worn_hems_reason(short, good), gg.worn_hems_reason(matching, good)),
+          (SHORT_WORN_BACK_REASON, None))
     check("agree", (gg.hems_agree(good, matching), gg.hems_reason(good, matching)), (True, None))
     check("unmeasured", (gg.hems_agree({}, good), gg.hems_reason({"reasons": ["x"]}, good)), (False, None))
     kept["good"] = good
@@ -626,14 +649,20 @@ def main() -> int:
         garments._fit = lambda *a, **k: None
         del renders[:]
         plan.clear()
-        plan[("ghost", "back")] = [SHORT]
-        plan[("ghost", "front")] = [GHOST, GHOST, GHOST]
+        plan[("ghost", "back")] = [SHORT, MATCHING]
+        plan[("ghost", "front")] = [SHORT, SHORT]
         res = garments.run_garment("Demo", did)
-        check("A renders", renders, ["worn f1", "worn bd1", "ghost b1", "ghost f1", "ghost f2"])
+        check("A renders", renders, ["worn f1", "worn bd1", "ghost b1", "ghost b2", "ghost f1", "ghost f2"])
         gates = res.get("gates") or {}
         check("A refused at ghost front", (res.get("ok"), res.get("step"), gates.get("view")),
               (False, "ghost", "front"))
-        check("A reasons", [a.get("reasons") for a in gates.get("attempts") or []], [[HEM_REASON], [HEM_REASON]])
+        check("A reasons", [a.get("reasons") for a in gates.get("attempts") or []],
+              [[SHORT_GATE_REASON, SHORT_WORN_BACK_REASON]] * 2)
+        back_record = gs.read_record(gs.garment_path("Demo", did, fsig, "image", step="ghost", view="back")
+                                     .with_suffix(".json"))
+        check("A back: attempt 1 refused for its hem, attempt 2 accepted",
+              (back_record.get("attempt"), (back_record.get("gates") or {}).get("first", {}).get("reasons")),
+              (2, [SHORT_GATE_REASON]))
         check("A back draft prompt names the fragment",
               ("wearing only a knee-length green linen dress with short sleeves exactly as on the person in the "
                "reference image" in prompts["worn bd1"]["bare_prompt"], prompts["worn bd1"]["occasion"]),
@@ -645,7 +674,7 @@ def main() -> int:
         check("A ghost prompt", prompts["ghost f1"]["bare_prompt"], GHOST_PROMPT)
         check("A fragment untouched", inventory.get_item(did).get("prompt_fragment"), FRAGMENT)
         del renders[:]
-        plan[("ghost", "front")] = [SHORT]
+        plan[("ghost", "front")] = [GHOST]
         res = garments.run_garment("Demo", did)
         check("B renders", renders, ["ghost f1"])
         check("B ok", (res.get("ok"), (res.get("ran") or [])[:2]), (True, ["ghost", "cutout"]))

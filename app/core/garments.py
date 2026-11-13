@@ -18,10 +18,17 @@ downstream); one that was served from the cache does not.
   back is drafted from it). The kind's pair step (``PAIR_STEP`` of its
   module, ``garment_images.kind_module``: ``ghost``) additionally needs front
   and back to agree (``pair_agree``: the hems, ``hems_agree``): a front
-  attempt is gated against the accepted back (``_pair_check``), and a pair
-  that still disagrees — a new back, or both views from before — renders the
-  front again against the back, with its own attempts. A disagreeing pair
-  never ends a run without a new attempt. The kind's ``front_hints`` give the
+  attempt is checked against the accepted back's record (``_pair_check``;
+  clothing since Ruling A17: the WORN back's hem, never the ghost back's),
+  and a pair that still disagrees — a new back, or both views from before —
+  renders again the view the kind's ``pair_redo`` names (clothing: the back
+  when its hem is farther from its worn back than the front's from its worn
+  front), then, still disagreeing, the front against the back, with its own
+  attempts. A disagreeing pair never ends a run without a new attempt. The
+  accepted images of the kind's ``REGATE_ACCEPTED_STEPS`` are re-gated from
+  their files when their record predates the gate (``_regate_accepted``);
+  one the current gate refuses is stale (``garment_images.stale_accepted``),
+  never done and rendered again. The kind's ``front_hints`` give the
   front edit what the back shows (clothing: nothing);
 - every image step checks after each view that the run's inputs (base views,
   the kind's description: ``garment_fsig``) did not change meanwhile — a base view
@@ -311,16 +318,48 @@ def _pair(character_name: str, item_id: str, kind: str, fsig: str) -> Tuple[bool
     return module.pair_agree(gates["front"], gates["back"]), gates
 
 
-def _pair_check(character_name: str, item_id: str, kind: str, fsig: str):
+def _pair_check(character_name: str, item_id: str, kind: str, fsig: str, *, repair: bool = False):
     """The pair check of a FRONT attempt of the pair step: against the
-    accepted back's gate record (the kind module's ``pair_reason``); none
-    without a back (an empty drafted back, ``garment_images.skipped_view``)."""
+    accepted back's gate record (the kind module's ``pair_reason`` —
+    clothing: the WORN back's hem, Ruling A17 b); ``repair`` (a front
+    rendered again because the pair disagrees, the back staying) the kind's
+    ``pair_repair_reason`` (the ghost back's hem as well). None without a
+    back (an empty drafted back, ``garment_images.skipped_view``)."""
     from app.core.garment_images import skipped_view
     module = _kind_module(kind)
     if skipped_view(character_name, item_id, fsig, module.PAIR_STEP, "back"):
         return lambda record: None
     back = _accepted_gate(_image(character_name, item_id, fsig, module.PAIR_STEP, "back")) or {}
-    return lambda record: module.pair_reason(record, back)
+    reason = getattr(module, "pair_repair_reason", None) if repair else None
+    return lambda record: (reason or module.pair_reason)(record, back)
+
+
+def _pair_redo(kind: str, gates: Dict[str, Any]) -> str:
+    """The view a disagreeing pair renders again: the kind's ``pair_redo``
+    (clothing: the one farther from its worn view, Ruling A17 c), else the
+    front."""
+    redo = getattr(_kind_module(kind), "pair_redo", None)
+    if redo is None or not gates.get("front") or not gates.get("back"):
+        return "front"
+    return redo(gates["front"], gates["back"])
+
+
+def _regate_accepted(character_name: str, item_id: str, kind: str, fsig: str, state: Optional[str]) -> None:
+    """Ruling A17 (d): the accepted images of the kind's
+    ``REGATE_ACCEPTED_STEPS`` whose records predate the gate are gated again
+    from their files before the run decides what is done
+    (``garment_images.regate_accepted``); one refused by the rules the kind
+    names for the step is stale and renders again. A failure only logs —
+    the step reports its own."""
+    from app.core import garment_images
+    from app.core.garment_store import GARMENT_VIEWS
+    for step in getattr(_kind_module(kind), "REGATE_ACCEPTED_STEPS", ()) or ():
+        for v in GARMENT_VIEWS:
+            try:
+                garment_images.regate_accepted(character_name, item_id, fsig, step, v, state=state)
+            except Exception as e:  # noqa: BLE001 — the step itself reports a missing input
+                logger.warning("Garment %s/%s: re-gating the accepted %s %s failed: %s", character_name, item_id,
+                               step, v, e)
 
 
 def _front_hints(character_name: str, item_id: str, fsig: str, kind: str, step: str,
@@ -413,9 +452,10 @@ def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, ba
         from app.core import garment_footwear
         return garment_footwear.step_done(item_id, step)
     if step in IMAGE_STEPS:
-        from app.core.garment_images import skipped_view, stale_model_fit
+        from app.core.garment_images import skipped_view, stale_accepted, stale_model_fit
         if not all((_accepted(_image(character_name, item_id, fsig, step, v))
-                    and not stale_model_fit(character_name, item_id, fsig, step, v))
+                    and not stale_model_fit(character_name, item_id, fsig, step, v)
+                    and not stale_accepted(character_name, item_id, fsig, step, v))
                    or skipped_view(character_name, item_id, fsig, step, v) for v in GARMENT_VIEWS):
             return False
         return step != _kind_module(kind).PAIR_STEP or _pair(character_name, item_id, kind, fsig)[0]
@@ -1672,6 +1712,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         fsig = gs.garment_fsig(character_name, item_id, profile=profile)
         if method == gs.HAIRDECK:
             hsig = gs.garment_hsig(character_name, item_id, profile=profile)
+        if method == gs.EDIT_CHAIN:
+            _regate_accepted(character_name, item_id, kind, fsig, state if kind == _clothing() else None)
         if wanted is None:
             first = next((s for s in order
                           if not _done(character_name, item_id, kind, fsig, s, base_sha, method, hsig)), None)
@@ -1707,7 +1749,9 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                 views = (gs.GARMENT_VIEWS if step == "cutout"
                          else _kind_module(kind).EDIT_STEPS[step].get("views", EDIT_VIEW_ORDER))
                 for v in views:
-                    f = forced and (view is None or v == view)
+                    # Ruling A17 (d): an accepted view the current gate refuses is rendered again, not reused.
+                    stale = garment_images.stale_accepted(character_name, item_id, fsig, step, v)
+                    f = (forced and (view is None or v == view)) or stale
                     # Checked per view: a new front of a drafted step (clothing
                     # ``worn``) drops the back it was drafted from.
                     if not f and _accepted(_image(character_name, item_id, fsig, step, v)) and \
@@ -1733,11 +1777,26 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                     # mesh behind that was built from the replaced image.
                     _drop_mesh(character_name, item_id, fsig)
                     _inputs_unchanged(character_name, item_id, fsig, step, state)
-                if step == pair_step and not _pair(character_name, item_id, kind, fsig)[0]:
+                agree, gates = (_pair(character_name, item_id, kind, fsig) if step == pair_step
+                                else (True, None))
+                if not agree and _pair_redo(kind, gates) == "back":
+                    # Ruling A17 (c): the back is farther from its worn back than the
+                    # front from its worn front — the BACK renders again (its gate
+                    # holds its hem to the worn back's).
+                    garment_images.run_edit_step(character_name, item_id, fsig, step, "back", force=True,
+                                                 prompt_hints=_front_hints(character_name, item_id, fsig,
+                                                                           kind, step, "back"),
+                                                 state=image_state)
+                    produced = True
+                    _drop_mesh(character_name, item_id, fsig)
+                    _inputs_unchanged(character_name, item_id, fsig, step, state)
+                    agree, gates = _pair(character_name, item_id, kind, fsig)
+                if not agree:
                     # The back is the reference (the hem); the front renders
                     # again against it (two attempts; GateRefused when both miss).
                     garment_images.run_edit_step(character_name, item_id, fsig, step, "front", force=True,
-                                                 pair_check=_pair_check(character_name, item_id, kind, fsig),
+                                                 pair_check=_pair_check(character_name, item_id, kind, fsig,
+                                                                        repair=True),
                                                  prompt_hints=_front_hints(character_name, item_id, fsig,
                                                                            kind, step, "front"),
                                                  state=image_state)
