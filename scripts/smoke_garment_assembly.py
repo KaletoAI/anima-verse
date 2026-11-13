@@ -39,7 +39,7 @@ Expected, derived by hand from plan R11/R12 and the Task 7 brief:
 [4] assemble(Demo, OSIG) -> {full: assembled, low: none}; assembled/OSIG.glb
     holds a node "garment_hair_hair_demo" with extras.garment {kind hair,
     item_id H, fsig F}; sidecar garments = {H: {kind hair, fsig F, sha256
-    sha(fit)}}, bare_revision = bare_revision(bare), rig mixamo (copied);
+    sha(fit), alpha_cutoff 0.15 (the world default, strand-hair H1)}}, bare_revision = bare_revision(bare), rig mixamo (copied);
     the bare OSIG.glb is byte-identical (sha) and has NO garment node;
     served(full) = the assembled path; model_revision(bare) changes;
     versioned url v = content_version(assembled); the publication token is
@@ -302,7 +302,7 @@ def main() -> int:
         check("garment node", (node.get("extras"), count), ({"garment": extras}, 4))
         side = json.loads(asm.with_suffix(".json").read_text())
         check("sidecar garments", side.get("garments"),
-              {hid: {"kind": "hair", "fsig": fsig, "sha256": sha(fit)}})
+              {hid: {"kind": "hair", "fsig": fsig, "sha256": sha(fit), "alpha_cutoff": 0.15}})
         check("sidecar bare_revision", side.get("bare_revision"), ga.bare_revision(bare))
         check("sidecar copies bare meta", (side.get("rig"), side.get("base_signature")), ("mixamo", bsig))
         check("bare unchanged", sha(bare), bare_sha)

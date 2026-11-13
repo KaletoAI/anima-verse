@@ -227,6 +227,11 @@ def main() -> int:
         from app.core import paths
         paths.init(Path(tmp) / "world")
         from app.core import garment_hairdeck as gh
+        # The strip atlas (FIT hair 13, ``hair_cards.texture_garment``: the atlas, the column UVs, no card cross
+        # sections) is not this smoke's subject, and the BASE commit compared against has none: the current fit
+        # here returns the untextured garment.
+        from app.core import hair_cards
+        hair_cards.texture_garment = lambda garment, card: garment
         from app.core.garment_fit import SDF_MARGIN_M, VOX_M, body_sdf, ear_line_height
         from app.core.glb_mesh import body_arrays
 

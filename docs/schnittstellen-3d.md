@@ -2045,9 +2045,18 @@ eine andere `body`-Frisur als die des Grundkörpers ist eine eigene Körperform.
   (dieselben Knochen wie der Körper, Gewichte auf `Head` → `Spine2`). Knoten-
   und Mesh-Name `garment_<kind>_<item_id>` (überlebt Blender und three.js'
   `sanitizeNodeName`), Knoten-`extras.garment = {kind, item_id, fsig}` —
-  three.js' GLTFLoader legt das als `userData.garment` ab. Material deckend
-  (`alphaMode: OPAQUE`). Die Fernstufe (`low_url`) trägt die reduzierte
-  Fassung desselben Garments.
+  three.js' GLTFLoader legt das als `userData.garment` ab. Material: **Haare**
+  (`kind` `hair`) sind Alpha-Karten — `alphaMode: MASK` mit `alphaCutoff` =
+  Welt-Einstellung `base_body.hair_alpha_cutoff` (Default 0,15), `doubleSided`,
+  Basisfarb-Textur = der Strähnen-Atlas (`app/core/hair_cards.py`, RGBA, fast
+  weiß) × `COLOR_0`; die Kopfhaut-Kappe liest den deckenden Fleck des Atlas
+  (Spec `docs/superpowers/specs/2026-11-13-strand-hair-design.md` § 6.1). Jedes
+  andere Garment bleibt deckend (`alphaMode: OPAQUE`). Kein Renderer setzt
+  einen eigenen Cutoff: der Client liest das glTF-Material (GLTFLoader →
+  `alphaTest`); nur die Frisuren-Vorschau legt den aktuellen Wert aus dem
+  Hair-GET (`alpha_cutoff`) darüber. Die Fernstufe (`low_url`) trägt die
+  reduzierte Fassung desselben Garments — hat die Dezimierung das Bild
+  verloren, nimmt die Montage das des vollen Fits.
 - **Gewichte von Kleidung (`kind` `clothing`):** die Körperknochen unter dem
   Stück — und über Gewebe mit Zusatz-Bones (Extension-Bones einer Paket-Kette,
   z. B. das Brustpaar) auch diese Zusatz-Bones, mit demselben Anteil wie die Haut

@@ -810,9 +810,16 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
     # The graft is compute (``refit_pool.graft_file``: a worker writes it to a private temp path beside the fit);
     # the rename into place, the record and the distance tier are published here.
     tmp = refit_pool.temp_path(fit)
+    # Hair cards are alpha-tested (``hair_cards.alpha_overrides``: MASK at the world cutoff, read here, in the
+    # publishing process); every other garment stays OPAQUE.
+    overrides = None
+    if kind == "hair":
+        from app.core import hair_cards
+        overrides = hair_cards.alpha_overrides()
     try:
         tris = refit_pool.run(refit_pool.graft_file, rigged, result.garment, f"garment_{kind}_{item_id}",
-                              {"kind": kind, "item_id": item_id, "fsig": fsig}, str(tmp))
+                              {"kind": kind, "item_id": item_id, "fsig": fsig}, str(tmp),
+                              material_overrides=overrides)
         # A distance tier of the previous fit must never pair with the new one.
         low.unlink(missing_ok=True)
         os.replace(tmp, fit)

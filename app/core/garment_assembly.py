@@ -465,11 +465,29 @@ def _source(garment: Dict[str, Any], tier: str) -> Path:
     return garment["low"] if tier == LOW and garment["low"] is not None else garment["fit"]
 
 
-def _state(wanted: List[Dict[str, Any]], tier: str) -> Dict[str, Dict[str, Any]]:
+def _hair_image(garment: Dict[str, Any], tier: str) -> Tuple[bytes, str]:
+    """``(image bytes, mime)`` of a hair garment's base colour: the tier source's, else — a distance tier whose
+    Blender decimation dropped the image — the full fit's, so the far tier never turns opaque or white
+    (strand-hair spec § 6.1). Empty for a fit without an image (a fit from before the strip atlas)."""
+    from app.core import glb_mesh
+    source = _source(garment, tier)
+    mesh = glb_mesh.garment_arrays(source.read_bytes())
+    if mesh.image or source == garment["fit"]:
+        return mesh.image, mesh.mime
+    full = glb_mesh.garment_arrays(garment["fit"].read_bytes())
+    return full.image, full.mime
+
+
+def _state(wanted: List[Dict[str, Any]], tier: str, *,
+           alpha_cutoff: Optional[float] = None) -> Dict[str, Dict[str, Any]]:
     """The sidecar ``garments`` map an assembly of ``tier`` must carry — a
     layered piece adds ``over`` (its ``lsig``) and, while its layered fit is
     missing, ``pending`` (so the assembly is rebuilt once it exists); trousers
-    over a boot add ``hem`` ``{mode, lsig, fallback}`` (boots spec § 8.2)."""
+    over a boot add ``hem`` ``{mode, lsig, fallback}`` (boots spec § 8.2); a hair
+    piece adds ``alpha_cutoff`` — the world's ``base_body.hair_alpha_cutoff``
+    (``hair_cards.alpha_cutoff``, read live; ``alpha_cutoff`` = the value a build
+    grafted with), so a changed setting re-assembles on the CPU (spec § 6.1)."""
+    from app.core.garment_set import HAIR
     out: Dict[str, Dict[str, Any]] = {}
     for g in wanted:
         if g["fit"] is None:
@@ -486,6 +504,11 @@ def _state(wanted: List[Dict[str, Any]], tier: str) -> Dict[str, Dict[str, Any]]
         if hem:
             # the boot hem (``outfit_options``): a toggle or a fallback changes the state, so ``_current`` rebuilds
             entry["hem"] = {"mode": hem["mode"], "lsig": over["lsig"] if over else "", "fallback": hem.get("fallback")}
+        if g["kind"] == HAIR:
+            if alpha_cutoff is None:
+                from app.core import hair_cards
+                alpha_cutoff = hair_cards.alpha_cutoff()
+            entry["alpha_cutoff"] = alpha_cutoff
         out[g["item_id"]] = entry
     return out
 
@@ -632,7 +655,10 @@ def _build(character_name: str, directory: Path, bare: Path,
     from app.core.keyed_lock import keyed_lock
     from app.core.model_validate import rig_frames_preserved
     from app.core.timeutils import utc_now_iso
+    from app.core import hair_cards
     model3d = _model3d()
+    # One read of the world setting per build: the grafts and the sidecar state carry the same value.
+    cutoff = hair_cards.alpha_cutoff()
     with keyed_lock("model3d_publication", str(directory)):
         revision = bare_revision(bare)
         data = bare.read_bytes()
@@ -681,18 +707,25 @@ def _build(character_name: str, directory: Path, bare: Path,
                     blob = glb_mesh.graft(blob, mesh, name=name, extras=node_extras)
             continue
         mesh = glb_mesh.garment_arrays(source)
+        overrides = None
         if garment["kind"] == HAIR:
             blob = _tint_scalp(blob, mesh, garment, tier, scalp_tints)
+            # Alpha cards (spec § 6.1): MASK at the world cutoff; a tier source without its image takes the
+            # full fit's.
+            if not mesh.image:
+                mesh.image, mesh.mime = _hair_image(garment, tier)
+            overrides = hair_cards.alpha_overrides(cutoff)
         if garment.get("over") and not garment["over"]["pending"]:
             extras["over"] = garment["over"]["items"]
-        blob = glb_mesh.graft(blob, mesh, name=f"garment_{garment['kind']}_{garment['item_id']}", extras=extras)
+        blob = glb_mesh.graft(blob, mesh, name=f"garment_{garment['kind']}_{garment['item_id']}", extras=extras,
+                              material_overrides=overrides)
     verdict = model3d._validator_for("mixamo", character_name)(blob)
     if not verdict.get("ok"):
         raise ValueError("assembled model failed validation: " + "; ".join(verdict.get("errors") or []))
     frames = rig_frames_preserved(data, blob)
     if not frames.get("ok"):
         raise ValueError("assembled model rewrote the rig frames: " + "; ".join(frames.get("errors") or []))
-    side = {**meta, "garments": _state(wanted, tier), "bare_revision": revision,
+    side = {**meta, "garments": _state(wanted, tier, alpha_cutoff=cutoff), "bare_revision": revision,
             "assembled_at": utc_now_iso()}
     if scalp_tints:
         side["scalp_tint"] = scalp_tints

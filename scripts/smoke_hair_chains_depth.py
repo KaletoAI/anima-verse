@@ -171,6 +171,11 @@ def main() -> int:
         paths.init(Path(tmp) / "world")
         from app.core import hair_chains as hc
         from app.core import garment_hairdeck as gh
+        # The strip atlas (FIT hair 13, ``hair_cards.texture_garment``: the atlas, the column UVs, no card cross
+        # sections) is not this smoke's subject, and the BASE commit compared against has none: the current fit
+        # here returns the untextured garment.
+        from app.core import hair_cards
+        hair_cards.texture_garment = lambda garment, card: garment
 
         check(hc.SETTLE_TOL_M == 0.005, f"SETTLE_TOL_M {hc.SETTLE_TOL_M} == 0.005 (H1a)")
         sd = SphereSdf((0, 0, 0), 0.1)

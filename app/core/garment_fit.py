@@ -157,8 +157,11 @@ SIDE_DEEP_M = 0.03
 #: Known limitation (accepted): a raised arm crossing the draped FRONT strands squeezes them into the chest — the
 #: upper-arm capsule pushes them onto its own surface, which lies inside the chest (Kira celebrating excess with the
 #: served capsules 0.21 -> 0.85 %, depth p50 12 mm); the cross-person spec's squeeze rule (Ruling B11j) fixes it.
+#: hair 13 (2026-11-13, strand-hair plan Task 2 — one CPU refit of every HairDeck fit, no hub job): the cards carry
+#: the strip atlas of ``hair_cards`` as base colour (UVs mapped into the card's variant column, the cap on the opaque
+#: patch) and are grafted as glTF MASK with the world cutoff ``base_body.hair_alpha_cutoff``.
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 12, "clothing": 9, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 13, "clothing": 9, "footwear": FOOTWEAR_FIT_VERSION}
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).

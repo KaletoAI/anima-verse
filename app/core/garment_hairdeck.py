@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from app.core import drape
+from app.core import drape, hair_cards
 from app.core.garment_fit import (MOVED_EPS_M, SDF_MARGIN_M, SPREAD_DEPTH_M, VOX_M, FitResult, body_sdf,
                                   chin_height, dense_weights, gate as _gate_against, hair_weights, joint_index,
                                   push_out, vertex_normals, weld)
@@ -1125,7 +1125,9 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     tilt that brings the front hairline to the brow line, ``_placement``). ``width_scale``: the sides' reach beyond
     the head scaled (``narrow_sides``), None = 1. ValueError for a manual value beyond ``FORWARD_LIMIT_M`` /
     ``TILT_LIMIT_DEG`` / ``WIDTH_SCALE_LIMITS``. Returns the hair plus scalp cap as ONE garment (rigged bind space,
-    Head -> Spine2 weights, cap all Head, ``COLOR_0``, double-sided), the metrics and the gates' verdict.
+    Head -> Spine2 weights, cap all Head, ``COLOR_0``, double-sided, the strip atlas of ``hair_cards`` as base
+    colour with each card's UVs in its variant's column and the cap on the opaque patch), the metrics and the gates'
+    verdict.
 
     ``chains_json`` / ``cards_json``: the seed's ``chains_seed<s>.json`` / ``cards_seed<s>.json`` (both or none).
     With both, the cards are bound to HairDeck's spring chains (``hair_chains.bind``, in HairDeck's space before the
@@ -1284,6 +1286,9 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                           weights=np.vstack([W, Wc]), joint_names=names, image=b"", mime="", material=material,
                           colors=np.vstack([colours, np.tile(cap_colour, (nc, 1))]), joint_parents=joint_parents,
                           joint_binds=joint_binds)
+    # Alpha cards (strand-hair spec § 6.1): the strip atlas as base colour, each card's UVs in its variant's
+    # column, the cap on the opaque patch; the MASK material keys are added by the graft (``_publish_fit``).
+    garment = hair_cards.texture_garment(garment, hair_cards.hairdeck_cards(F, len(X), len(X) + nc))
 
     m = {
         # the push-out after the drape (``_push_max``); the drape is reported in ``report.push.drape``
