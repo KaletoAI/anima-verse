@@ -152,6 +152,28 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
     - The cells of bands 13 - 14 (v 0.55 .. 0.65, y >= 1.1525) x sectors 11 - 12 (-15 .. 15 deg) open (the base fit
       leaves them seen): the patch reaches into them -> an EDGE, no hole (largest 0, the gate passes), edge_cm2 = its
       part below y 1.1525: 0.03216 x (1.1525 - 1.1116) = 13.2 cm2 (+- 2).
+[12] Limbs: off the limb only when off the SKIN too (T15-F1, ruling A23 d — Kai's jeans on obf6474c3b). Body: [7]'s
+    arms with two opposite lobes: ring points k = 1..5 and 13..17 (angles 15 .. 75 and 195 .. 255 deg) at r 0.09,
+    the other 14 at r 0.03. Radius = the median of 24 distances (14 x 0.03, 10 x 0.09) = 0.03; the lobes are
+    point-symmetric, so the joint points (ring means) stay on the axis: frames as in [7]. Sleeve hugging it: rings
+    of 36 points (10 deg), r = the body's + 0.015: the 6 + 6 points at 20 .. 70 and 200 .. 250 deg at 0.105, the
+    other 24 at 0.045. Old rule (radius + 4 cm only): 12 of 36 points per ring (excess 0.075 > 0.04) -> off
+    [0.3333, 0.3333] -> refused against [7]'s LONG (off [0, 0]: +0.33 > 0.10). New rule: a 0.105 point is at most
+    5 deg from a lobe point of its ring (r 0.09, same x): sqrt(0.105^2 + 0.09^2 - 2 x 0.105 x 0.09 x cos 5deg) =
+    0.0172 m from the skin < 0.04 -> off [0.0, 0.0], vertices 3024 (as LONG), the gate passes. [7]'s HANG is
+    unchanged: a hanging point beyond r + 4 cm (> 0.07 from the axis) is > 0.07 - 0.03 = 0.04 from every skin
+    point of its ring.
+[13] Torso holes measured beyond the base fit's seen share (T15-F1, ruling A23 d — Kai's jacket under the arm).
+    [11]'s window, cells of 15 deg x 0.05 v (v = (y - 0.85) / 0.55): band b = y [0.85 + 0.55 (-0.1 + 0.05 b), +
+    0.0275); bands 11 .. 14 = y [1.0975, 1.125), [1.125, 1.1525), [1.1525, 1.18), [1.18, 1.2075); sectors 11 / 12 =
+    -15 .. 0 / 0 .. 15 deg. The seen patch (|phi| < 9.21 deg, y 1.1116 .. 1.1884) per sector is 0.01608 m wide: per
+    cell 2.155 / 4.422 / 4.422 / 1.351 cm2 (bands 11 .. 14; total 2 x 12.35 = 24.7). A cell's skin: 0.02618 x
+    0.0275 = 7.200 cm2.
+    - base share 0.5 in bands 11 .. 14 x sectors 11 / 12 (not open: open is ABOVE 0.5): allowance 3.600 per cell ->
+      beyond 0 / 0.822 / 0.822 / 0 per sector -> 3.29 cm2 (seen_cm2 24.7); the gate passes.
+    - base share 0.1 there: allowance 0.720 -> 1.435 / 3.702 / 3.702 / 0.631 per sector -> 18.94 cm2: refused.
+    - torso_open of the windowed tube itself (the base fit's shares): band 12 x sector 12 = 4.422 / 7.200 = 0.614
+      (above 0.5: open), band 5 x sector 0 = 0.0 (covered).
 """
 import json
 import os
@@ -228,6 +250,37 @@ def arm_body():
     return BodyMesh(positions=np.asarray(P, np.float64), faces=np.zeros((0, 3), np.int64),
                     uvs=np.zeros((len(P), 2)), joints=np.asarray(J, np.int64), weights=np.asarray(W, np.float64),
                     joint_names=["mixamorig:" + n for n in ARM_JOINTS])
+
+
+def lobed(k: int) -> bool:
+    """[12]'s lobes: ring points k = 1..5 and 13..17 of 24 (15 deg steps)."""
+    return 1 <= k <= 5 or 13 <= k <= 17
+
+
+def lobed_arm_body():
+    """[12]'s body: [7]'s with the arm rings' lobe points at r 0.09."""
+    body = arm_body()
+    P = np.array(body.positions, np.float64)
+    for i in range(2 * 131 * 24):
+        k = i % 24
+        if lobed(k):
+            a = np.radians(15.0 * k)
+            P[i, 1], P[i, 2] = 1.4 + 0.09 * np.cos(a), 0.09 * np.sin(a)
+    from dataclasses import replace
+    return replace(body, positions=P)
+
+
+def lobed_sleeves(x_end):
+    """[12]'s sleeve: [7]'s rings, r = the lobed body's + 0.015."""
+    out = []
+    for sign in (1.0, -1.0):
+        for k in range(int(round((x_end - 0.12) / 0.005)) + 1):
+            x = round(0.12 + 0.005 * k, 3)
+            for j in range(36):
+                a = np.radians(10.0 * j)
+                r = 0.105 if (20 <= 10 * j <= 70 or 200 <= 10 * j <= 250) else 0.045
+                out.append([sign * x, 1.4 + r * np.cos(a), r * np.sin(a)])
+    return np.asarray(out, np.float64)
 
 
 def sleeves(x_end, hang=0.0):
@@ -661,6 +714,41 @@ def main() -> int:
         check("reaching an open cell = edge", (holes["largest_cm2"], garment_source.torso_hole_gate(holes)["ok"]),
               (0.0, True))
         within("edge area", holes["edge_cm2"], 11.2, 15.2)
+
+        # --- [12] --------------------------------------------------------------------
+        print("[12] limbs: off the limb only when off the skin too")
+        lbody = lobed_arm_body()
+        lframes = garment_fit.limb_frames(lbody)
+        check("lobed chain = [7]'s", ([[round(c, 4) for c in p] for p in lframes["left_arm"]["points"]],
+                                      [round(r, 4) for r in lframes["left_arm"]["radii"]]),
+              ([[0.18, 1.4, 0.0], [0.43, 1.4, 0.0], [0.67, 1.4, 0.0], [0.75, 1.4, 0.0]], [0.03, 0.03, 0.03]))
+        hug = garment_source.limb_numbers(lobed_sleeves(0.66), lbody)
+        for side in ("left", "right"):
+            check(f"{side} hugging sleeve not off", (hug[f"{side}_arm"]["off"], hug[f"{side}_arm"]["vertices"]),
+                  ([0.0, 0.0], 3024))
+        check("hugging sleeve vs LONG ok", garment_source.limb_gate(hug, long_)["ok"], True)
+        check("HANG still off the forearm", garment_source.limb_numbers(sleeves(0.66, hang=0.05), arm_body())["left_arm"]
+              ["off"], [0.0, 0.4622])
+
+        # --- [13] --------------------------------------------------------------------
+        print("[13] torso holes beyond the base fit's seen share")
+        body, garment = trunk_and_tube()
+
+        def shares(value):
+            return [[value if (11 <= b <= 14 and 11 <= k <= 12) else 0.0
+                     for k in range(garment_source.TORSO_OPEN_SECTORS)] for b in range(bands)]
+        half = garment_source.torso_holes(garment[0], garment[1], body, shares(0.5))
+        print(f"  share 0.5: {half}")
+        within("share 0.5: beyond", half["largest_cm2"], 1.5, 5.5)
+        within("share 0.5: seen", half["patches"][0]["seen_cm2"], 22.2, 27.2)
+        check("share 0.5: passes", garment_source.torso_hole_gate(half)["ok"], True)
+        tenth = garment_source.torso_holes(garment[0], garment[1], body, shares(0.1))
+        print(f"  share 0.1: {tenth}")
+        within("share 0.1: beyond", tenth["largest_cm2"], 16.4, 21.4)
+        check("share 0.1: refused", garment_source.torso_hole_gate(tenth)["ok"], False)
+        own = garment_source.torso_open(garment[0], garment[1], body)
+        within("own share band 12 x sector 12", own[12][12], 0.55, 0.68)
+        check("own share band 5 x sector 0", own[5][0], 0.0)
 
     if FAILS:
         print(f"FAILED ({len(FAILS)}): " + ", ".join(FAILS))

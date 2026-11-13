@@ -764,9 +764,10 @@ def record_body_failure(character_name: str, item_id: str, fsig: str, body: str,
                         body_sha: str, base_fit_sha: str, fit_version: Any) -> None:
     """Persist a refused (or failed) fit of ``(item_id, fsig)`` on the outfit
     body ``body``: automatic fits on that body skip it while the body, the
-    base fit it was derived from and the fit algorithm are the same
-    (``body_failure``)."""
+    base fit it was derived from, the fit algorithm and the body gates
+    (``garment_source.BODY_GATES_VERSION``) are the same (``body_failure``)."""
     from app.core.garment_fit import SCALE_RETRY_VERSION
+    from app.core.garment_source import BODY_GATES_VERSION
     from app.core.timeutils import utc_now
     from app.models.character import get_character_dir
     if not get_character_dir(character_name).is_dir():
@@ -774,7 +775,7 @@ def record_body_failure(character_name: str, item_id: str, fsig: str, body: str,
     write_record(garment_path(character_name, item_id, fsig, "failed", body=body),
                  {"item_id": item_id, "fsig": fsig, "step": "fit", "error": error, "body_id": body,
                   "body_sha256": body_sha, "base_fit_sha256": base_fit_sha, "fit_version": fit_version,
-                  "scale_retry": SCALE_RETRY_VERSION, "failed_at": _iso(utc_now())})
+                  "scale_retry": SCALE_RETRY_VERSION, "gates": BODY_GATES_VERSION, "failed_at": _iso(utc_now())})
 
 
 def body_failure(character_name: str, item_id: str, fsig: str, body: str, *, body_sha: str,
@@ -782,13 +783,17 @@ def body_failure(character_name: str, item_id: str, fsig: str, body: str, *, bod
     """The persisted failure of a fit of ``(item_id, fsig)`` on the outfit
     body ``body`` that still holds: recorded on the same body
     (``body_sha``), from the same base fit (``base_fit_sha``) by the same fit
-    algorithm (``fit_version``). None otherwise."""
+    algorithm (``fit_version``) and the same body gates (``garment_source.
+    BODY_GATES_VERSION`` — a refusal of other gates is judged again, T15-F1).
+    None otherwise."""
+    from app.core.garment_source import BODY_GATES_VERSION
     try:
         record = read_record(garment_path(character_name, item_id, fsig, "failed", body=body))
     except ValueError:
         return None
     if (not record.get("error") or record.get("body_sha256") != body_sha
-            or record.get("base_fit_sha256") != base_fit_sha or record.get("fit_version") != fit_version):
+            or record.get("base_fit_sha256") != base_fit_sha or record.get("fit_version") != fit_version
+            or record.get("gates") != BODY_GATES_VERSION):
         return None
     return record
 
