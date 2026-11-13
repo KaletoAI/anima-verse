@@ -46,8 +46,8 @@ does.
      ``"fit refused — " + "; ".join(reasons)`` written by ``garment_store.record_failure(step "fit")`` under
      ``paths.init(<tmp>)``, read back: it carries the reason with the key ``rigged_deep_push_share``, the value
      (``1`` as ``gate`` formats it, ``{value:g}``) and the limit ``0.12``, plus ``scale_retry`` (a fit refusal).
-[H4] The phase-A version bump: ``FIT_VERSION`` hair 11 / clothing 8 / footwear 17 (= ``FOOTWEAR_FIT_VERSION``),
-     ``garment_layers.LAYER_VERSION`` 2 — every stored v10 / v7 / v16 fit and every layer-1 fit is outdated once.
+[H4] The phase-A version bump: ``FIT_VERSION`` hair 11 / clothing 9 (8 in phase A, 9 with Task 7 fix 1's side
+     projection) / footwear 17 (= ``FOOTWEAR_FIT_VERSION``), ``garment_layers.LAYER_VERSION`` 2.
 [H5] Ruling R7b on an outfit body (``garment_footwear.body_fit``; stubs: the shoe's current fsig
      ``fedcba987654``, its source ready, the stored body bytes ``"b" * 64``, the fit refuses). Stored: the shoe's
      fit of the OLD fsig ``0123456789ab`` on ``ob0000000a`` — accepted, fit_version 16, ``body_sha256`` "b" * 64,
@@ -234,10 +234,10 @@ def test_h3(gf, reasons):
 
 def test_h4(gf):
     from app.core import footwear_fit, garment_layers
-    check(gf.FIT_VERSION == {"hair": 11, "clothing": 8, "footwear": 17} and footwear_fit.FOOTWEAR_FIT_VERSION == 17
+    check(gf.FIT_VERSION == {"hair": 11, "clothing": 9, "footwear": 17} and footwear_fit.FOOTWEAR_FIT_VERSION == 17
           and garment_layers.LAYER_VERSION == 2,
           f"[H4] FIT_VERSION {gf.FIT_VERSION}, FOOTWEAR_FIT_VERSION {footwear_fit.FOOTWEAR_FIT_VERSION}, "
-          f"LAYER_VERSION {garment_layers.LAYER_VERSION} (want hair 11 / clothing 8 / footwear 17, layers 2)")
+          f"LAYER_VERSION {garment_layers.LAYER_VERSION} (want hair 11 / clothing 9 / footwear 17, layers 2)")
 
 
 def test_h5():

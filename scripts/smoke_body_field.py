@@ -45,13 +45,24 @@ the same probes through it.
        at least CLEAR_M - 0.0005 outside.
      - The clothing push at commit 9b5dcb20 (``push_out``, 8 / 6, the fit's unrigged push then; its rigged loop was the
        same rule): the twelve deep neighbours drag A along — it does NOT end in front (z < 0.10).
-[F7] A vertex the transfer buried leaves by its own side (``push_kept`` ``toward``, the rigged push's
-     ``_transfer_sides``). [F2]'s body, vox 0.004; a triangle at the centre, (0, 0, 0), (0, 0.004, 0), (0, 0, 0.004)
-     — 10 cm deep, every direction equally near — with ``toward`` = +x for all three. The march takes voxel steps of
-     0.004 along +x until the field reaches CLEAR_M: sqrt(x^2 + 0.004^2) - 0.10 >= 0.0119 -> x >= 0.11183 -> the
-     28th step, x = 0.112; y / z stay. The loop then has nothing to push (clear) and the smoothing nothing to move
-     (one displacement for all three) -> each vertex ends at x = 0.112 +- 0.001 with its own y / z (+- 0.001).
-     Without ``toward`` no march is made: the triangle does not end out at +x (x < 0.10).
+[F7] A vertex the transfer buried on the wrong side is PROJECTED onto the nearest body surface of its own side, not
+     walked (``_side_projection`` -> ``push_kept`` ``start``; Task 7 fix 1, Ruling A8c). A synthetic buried panel:
+     body = a closed box x -0.20 .. 0.20, y 0 .. 0.60, z -0.06 .. 0.06 (a flat trunk), vox 0.004, crop
+     (-0.26, -0.06, -0.12) .. (0.26, 0.66, 0.12). Panel = a triangle (0.10, 0.30, 0.004), (0.10, 0.304, 0.004),
+     (0.104, 0.30, 0.004): 5.6 cm under the front wall (its gradient leads out at the FRONT, +z), 10 cm from the +x
+     side; its side u = (1, -1, 0) / sqrt 2 (45 deg down from +x).
+     - Facing surfaces (outward normal . u > SIDE_COS 0.5): the +x wall (0.707) and the bottom (0.707); front / back
+       (0), top and -x (< 0) are not. Nearest: the +x wall, 0.10 away (the bottom is 0.30). Landing: on the wall,
+       lifted CLEAR_M, settled at the clearance -> x = 0.20 + 0.0119 = 0.2119 +- 0.002, y / z kept within the
+       sample spacing (+- 0.006). The move = 0.10 + 0.0119 (<= 0.115): its distance to that surface, nothing more.
+       ``report``: side_projected 3, side_unreached 0. The rigged loop then has nothing to push and the smoothing
+       one displacement for all three -> the same ends.
+     - The WALK at commit 004728b0 (``push_kept`` ``toward``, ``_march_out``: voxel steps along u until the field
+       reaches CLEAR_M): x reaches 0.2119 after t = 0.1119 * sqrt 2 = 0.158 -> y = 0.30 - 0.112 = 0.188: the vertex
+       slides 11 cm down the side -> y < 0.25 (the walk; the projection keeps y > 0.29).
+     - Unreachable inside the crop: crop (-0.26, 0.10, -0.12) .. (0.15, 0.66, 0.12) holds neither the +x wall nor the
+       bottom (the walls it keeps face +-z, +y, -x: none faces u) -> side_projected 0, side_unreached 3, every start
+       row zero (the vertices stay where the transfer put them; the push treats them like any other).
 [F5] ``fill_slices(surf, axis)`` equals ``ndimage.binary_fill_holes`` of every slice ⟂ axis: a random 40^3 mask (seed
      7, 30 % filled, then dilated once) for axis 0, 1 and 2 -> ``np.array_equal``.
 """
@@ -256,18 +267,33 @@ def test_f6(gf):
 
 
 def test_f7(gf):
-    P, F = spheres()
-    sdf = gf.body_sdf(P, F, vox=0.004, bounds=(np.full(3, -0.13), np.full(3, 0.13)))
-    Q = np.array([[0.0, 0.0, 0.0], [0.0, 0.004, 0.0], [0.0, 0.0, 0.004]])
+    P, F = box((-0.20, 0.0, -0.06), (0.20, 0.60, 0.06))
+    sdf = gf.body_sdf(P, F, vox=0.004, bounds=(np.array([-0.26, -0.06, -0.12]), np.array([0.26, 0.66, 0.12])))
+    Q = np.array([[0.10, 0.30, 0.004], [0.10, 0.304, 0.004], [0.104, 0.30, 0.004]])
+    u = np.tile(np.array([1.0, -1.0, 0.0]) / math.sqrt(2.0), (3, 1))
     adjacency = gf._adjacency(np.array([[0, 1, 2]]), 3)
     kw = dict(clear=gf.CLEAR_M, iterations=gf.RIGGED_ITERATIONS, smooth_until=gf.RIGGED_SMOOTH_UNTIL,
               margin=gf.SIDE_MARGIN_M)
-    X = Q + gf.push_kept(Q, adjacency, sdf, toward=np.tile([1.0, 0.0, 0.0], (3, 1)), **kw)
-    ok = np.all(np.abs(X[:, 0] - 0.112) <= 0.001) and np.all(np.abs(X[:, 1:] - Q[:, 1:]) <= 0.001)
-    check(ok, f"[F7] toward +x: the buried triangle leaves along +x (x {X[:, 0].round(4).tolist()} = 0.112 +- 0.001, "
-              f"y/z kept)")
-    Xg = Q + gf.push_kept(Q, adjacency, sdf, **kw)
-    check(np.all(Xg[:, 0] < 0.10), f"[F7] without toward no march along +x (x {Xg[:, 0].round(4).tolist()} < 0.10)")
+    start, report = gf._side_projection(sdf, Q, u, P, F, gf.CLEAR_M)
+    check(report["side_projected"] == 3 and report["side_unreached"] == 0,
+          f"[F7] the buried panel is projected, all three ({report})")
+    land = Q + start
+    move = np.linalg.norm(start, axis=1)
+    check(np.all(np.abs(land[:, 0] - 0.2119) <= 0.002) and np.all(np.abs(land[:, 1:] - Q[:, 1:]) <= 0.006)
+          and np.all(move <= 0.115),
+          f"[F7] lands on its own side's nearest wall: x {land[:, 0].round(4).tolist()} = 0.2119 +- 0.002, y/z kept "
+          f"(+- 0.006), move {move.round(4).tolist()} <= 0.115")
+    X = Q + gf.push_kept(Q, adjacency, sdf, start=start, **kw)
+    check(np.all(np.abs(X[:, 0] - 0.2119) <= 0.002) and np.all(X[:, 1] > 0.29),
+          f"[F7] after the rigged push: x {X[:, 0].round(4).tolist()}, y {X[:, 1].round(4).tolist()} (> 0.29)")
+    old = base_module("004728b0")
+    Xo = Q + old.push_kept(Q, adjacency, sdf, toward=u, **kw)
+    check(np.all(Xo[:, 1] < 0.25),
+          f"[F7] 004728b0 walk: the panel slides down the side (y {Xo[:, 1].round(4).tolist()} < 0.25)")
+    sdf_c = gf.body_sdf(P, F, vox=0.004, bounds=(np.array([-0.26, 0.10, -0.12]), np.array([0.15, 0.66, 0.12])))
+    start_c, report_c = gf._side_projection(sdf_c, Q, u, P, F, gf.CLEAR_M)
+    check(report_c["side_projected"] == 0 and report_c["side_unreached"] == 3 and not start_c.any(),
+          f"[F7] no facing surface inside the crop: nothing projected, three counted, zero starts ({report_c})")
 
 
 def test_f5():
