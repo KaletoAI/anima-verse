@@ -1373,6 +1373,7 @@ def _resolve_character_model_snapshot(character_name: str):
                 "source": info.get("source", "generated"),
                 "extension_rig": info.get("extension_rig"),
                 "collision": info.get("collision"),
+                "hair_strands": info.get("hair_strands"),
                 "foot_pose": None,
                 "motion": status["motion"],
                 "model_rev": info["model_rev"], "tiers": info["tiers"],
@@ -1486,6 +1487,43 @@ def get_character_model_file(character_name: str, request: Request,
     built falls back to the full one, so a client may always ask.
     """
     return _model_asset_response(character_name, request, tier=tier)
+
+
+def _strands_response(request: Request, data: Optional[bytes], sha: str):
+    """A strand record (``hair_strands.encode`` bytes) with ``ETag: "<sha256>"``: 304 on a matching
+    ``If-None-Match`` (``http_files.etag_matches``), 404 — the normal "no strands" state — without one."""
+    from fastapi.responses import Response
+    headers = {"Cache-Control": "no-cache"}
+    if not sha:
+        return Response(status_code=404, headers=headers)
+    etag = f'"{sha}"'
+    headers["ETag"] = etag
+    if etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    if data is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return Response(content=data, media_type="application/json", headers=headers)
+
+
+@router.get("/{character_name}/model/hair-strands")
+def get_character_model_hair_strands(character_name: str, request: Request):
+    """The strand record of the served model's hair (``hair_strands.served_file``, strand-hair spec § 6.2.3) —
+    the record whose sha256 the current full-tier assembly carries. ``ETag`` = ``"<sha256>"``, 304 on a match
+    (nothing is read or built), 404 = no strands (Swing off, no grafted hair, no record): the hair stays on its
+    skin."""
+    from app.core import hair_strands
+    found = hair_strands.served_file(character_name)
+    if found is None:
+        return _strands_response(request, None, "")
+    path, sha = found
+    if etag_matches(request.headers.get("if-none-match"), f'"{sha}"'):
+        return _strands_response(request, None, sha)
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return _strands_response(request, None, "")
+    import hashlib
+    return _strands_response(request, data, hashlib.sha256(data).hexdigest())
 
 
 @router.get("/{character_name}/model/texture")
@@ -2085,7 +2123,9 @@ def get_character_hair(character_name: str, item_id: str = "",
     current base model (``base_body.base_model_info`` url; None without one) — the preview of a ``body``
     hairstyle that is the plain body's. Task UI4: ``step_jobs`` the hub jobs of each step of the hairstyle's
     mode on first attempts (``garments.HUB_JOBS``, ``{}`` for ``body``), ``preview_motion`` the previewed fit's
-    spring chains for the live Stiffness preview (``hair_motion.preview_payload``; None without a preview).
+    spring chains for the live Stiffness preview (``hair_motion.preview_payload``; None without a preview),
+    ``preview_strands_url`` the strand record of that previewed fit (``GET …/garments/{item}/hair-strands``, the
+    per-strand preview, strand-hair spec § 6.2.3; None without a preview fit).
     ``alpha_cutoff``: the world's hair-card cutoff (``hair_cards.alpha_cutoff``, strand-hair spec § 6.1) the preview
     applies to the MASK cards it shows."""
     from app.core import base_body, garment_hair, garment_hairdeck, garments, hair_cards
@@ -2147,11 +2187,14 @@ def get_character_hair(character_name: str, item_id: str = "",
     model = base_body.base_model_info(character_name) if pipeline else None
     # The Hairstyles tab's live Stiffness preview of the previewed fit (``hair_motion.preview_payload``).
     preview_motion = None
+    preview_strands_url = None
     if info and info.get("preview_url") and item_id:
         try:
             from app.core import garment_store as gs, hair_motion
             fit_path = garments.preview_path(character_name, item_id)
             if fit_path is not None:
+                # The previewed fit's strand record (strand-hair spec § 6.2.3), whatever Swing says.
+                preview_strands_url = f"/characters/{quote(character_name)}/garments/{quote(item_id)}/hair-strands"
                 preview_motion = hair_motion.preview_payload(
                     character_name, fit_path, gs.read_record(fit_path.with_suffix(".json")), profile=profile)
         except Exception:  # noqa: BLE001 — a preview aid, never a failure of the GET
@@ -2177,6 +2220,8 @@ def get_character_hair(character_name: str, item_id: str = "",
                 # The single steps' hub jobs on first attempts (``garments.HUB_JOBS``) — the buttons name them.
                 "step_jobs": dict(garments.HUB_JOBS.get(f"hair:{method}") or {}),
                 "preview_motion": preview_motion,
+                # The previewed fit's strand record (``GET …/garments/{item}/hair-strands``); None without one.
+                "preview_strands_url": preview_strands_url,
                 "body_url": (model or {}).get("url"),
                 # Ruling UI3 a: when the plain body shown there was built (the 3D preview's caption).
                 "body_built_at": (model or {}).get("created_at") or None,
@@ -2745,6 +2790,23 @@ def get_character_garment_model(character_name: str, item_id: str, request: Requ
     return snapshot_response(None, request, media_type="model/gltf-binary",
                              version=request.query_params.get("v"),
                              resolve=lambda: garments.preview_path(character_name, item_id, method))
+
+
+@router.get("/{character_name}/garments/{item_id}/hair-strands")
+def get_character_garment_hair_strands(character_name: str, item_id: str, request: Request,
+                                       _: Dict[str, Any] = Depends(require_admin)):
+    """The strand record of the Hairstyles preview's fit (``garments.preview_path``; built on the CPU when it is
+    missing, ``hair_strands.record_for_fit``), regardless of Swing — the preview's own switch. ``ETag`` =
+    ``"<sha256>"``, 304 on a match; 404 without a preview fit or a record (no HairDeck fit)."""
+    import hashlib
+    from app.core import garments, hair_strands
+    _require_character(character_name)
+    fit = garments.preview_path(character_name, item_id)
+    record = hair_strands.record_for_fit(character_name, fit) if fit is not None else None
+    if record is None:
+        return _strands_response(request, None, "")
+    data = hair_strands.encode(record)
+    return _strands_response(request, data, hashlib.sha256(data).hexdigest())
 
 
 # --- Generated 3D model (img2mesh from the T-pose render, per outfit) ---

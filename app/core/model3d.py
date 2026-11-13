@@ -1255,6 +1255,15 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         # sidecar's record when the assembly is served, None for the bare file.
         from app.core import garment_assembly
         info["foot_pose"] = garment_assembly.served_foot_pose(character_name, path, FULL_TIER)
+        # The strand record of the SERVED assembly's hair (strand-hair spec
+        # § 6.2.3): {url, sha256}, None with Swing off, no grafted hair or no
+        # record — the client then keeps the hair on its skin.
+        try:
+            from app.core import hair_strands
+            info["hair_strands"] = hair_strands.served(character_name, profile=profile, path=path)
+        except Exception as exc:  # noqa: BLE001 — the info route never fails on it
+            logger.warning("Model3D %s: hair strands unavailable: %s", character_name, exc)
+            info["hair_strands"] = None
         info["model_rev"] = model_revision(path)
         info["tiers"] = available_tiers(path)
         low = tier_variant(path, LOW_TIER)

@@ -2097,6 +2097,10 @@ eine andere `body`-Frisur als die des Grundkörpers ist eine eigene Körperform.
 - **Ich-Perspektive:** das Schrumpfen des Kopfknochens nimmt die Haare nur so
   weit mit, wie sie an `Head` hängen; Spitzen mit `Spine2`-Gewicht unter dem
   Kinn bleiben sichtbar (gewollt).
+- **Strähnen (`hair_strands`):** die Haare der vollen Stufe tragen zusätzlich die
+  Strähnen-Bindung `_STRAND_CARD` / `_STRAND_U` je Vertex, und zum Modell gehört ein
+  Strähnen-Datensatz (`model.hair_strands`) — Vertrag im Abschnitt „Hair strands
+  (`hair_strands`)" nach „Collision capsules". Die Fernstufe trägt keine Bindung.
 - **Keine Kollision:** Garments haben in dieser Phase keine Kollisionskapseln
   (eigener Plan `2026-11-08-collision-capsules-design.md`) — Haare können bei
   Bewegung durch Arme und Schultern gehen.
@@ -12257,6 +12261,83 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   `scripts/check_garment_collision.mjs --motion` (penetration on the real clips). Far LOD, no driven link or no payload → nothing is bound, no per-frame work. Checks:
   `scripts/smoke_extension_collision.mjs` (hand-derived), `scripts/check_extension_collision.mjs` (tip depth and
   tip offset from rest on the real clips, contact off/on).
+
+### Hair strands (`hair_strands`)
+
+The per-strand hair simulation (strand-hair spec `docs/superpowers/specs/2026-11-13-strand-hair-design.md`
+§ 6.2) runs in both renderers on data the server computes once per hair fit (`app/core/hair_strands.py`). A client
+detects no cards, rows, pins, colliders or face boxes itself.
+
+**Record v1** — compact JSON, cached as `<fit stem>.strands.json` beside the fit (plus `<fit stem>.strands.npz`
+with the per-vertex binding), keyed by the fit GLB's sha256 and the character's collision scales:
+
+```
+{"version": 1, "item_id", "fsig", "mode": "hairdeck" | "haar", "fit_sha256",
+ "frame": "head_bind", "head_bone": "mixamorig:Head", "rows": 17, "cards": S,
+ "rest":      [S*17*3 floats, m],      // per card 17 centreline rows, root first
+ "pins":      [S ints >= 1],           // the leading pinned rows of each card
+ "free_arc":  [S*17 floats, m],        // arc from the last pin, 0 on pins
+ "free_frac": [S*17 floats 0..1],      // 0 at the last pin, 1 at the tip
+ "follow": {"bones": [Head, Neck, Spine2], "w": [S*17*len(bones) floats]},   // rows sum to 1
+ "ear_y", "face_box": [x0, x1, y0, y1, z0], "eye_box": [x0, x1, y0, y1, z0], "landmarks": "profile" | "fallback",
+ "sdf": {"dims": [nx, ny, nz], "lo": [x, y, z], "vox", "order": "x_fastest", "unit": "mm_int8", "data": base64},
+ "capsules": {"version": 4, "capsules": [CollisionCapsule], "scales": {…}},
+ "params": {"damping", "stiffness", "bend", "iterations", "root_deg", "root_frac", "fly_soft", "fly_arc",
+            "tether", "tether_r0", "tether_r1", "tether_head", "head_clr", "face_box"},
+ "vertex_attributes": {"card": "_STRAND_CARD", "u": "_STRAND_U"}}
+```
+
+- **Frame.** Every position (`rest`, `sdf.lo`, the boxes, the capsules' `a_pos`/`b_pos`) is in the bind space of
+  the served GLB (the space of the body's POSITION accessor; the fit's body is the body the figure stands on,
+  § A3a). The SDF and the boxes ride the head bone rigidly: `world = Head_now · Head_bind⁻¹ · p`.
+- **Rows.** HairDeck cards are square tubes, 4 vertices per true row; the true row centres are resampled by arc
+  length to 17 rows. **Pins** (rule `scalp_free`): row 0, every row within 2 cm of arc, and the leading rows that
+  stay within 6 mm of the body up to 4 cm of arc; `pins[k]` counts the leading run.
+- **Follow.** The animated target of a row is where today's skin puts it: `Σ_b w_b · (bone_b now · bone_b bind⁻¹)
+  · p_bind` with the row's Head / Neck / Spine2 blend (`garment_fit.hair_weights` at the row). Pinned rows are
+  `{Head: 1}`. A skin without a Neck lists two bones.
+- **SDF.** `garment_fit.body_sdf` of the fit body, cropped to `x cx ± 0.15`, `y chin − 0.05 … top + 0.06`,
+  `z cz ± 0.16` m, every second voxel of `VOX_M` (6.8 mm); int8 millimetres clamped to ±127, x fastest: byte
+  `(ix, iy, iz)` at `ix + nx·(iy + ny·iz)`. Outside the grid it reads +0.127 m. Exact within 6 voxels outside the
+  body (`SDF_EXACT_BAND_VOX`); inside, the voxel EDT reads up to about one voxel shallow.
+- **Boxes.** Face keep-out (used by the sim): `|x − cx| < 6 cm`, `chin < y < brow + 1 cm`, `z > cz + 0.25·head_d`;
+  eye box (the checks only): `|x − cx| < 4 cm`, `nose + 1 cm < y < brow + 0.5 cm`, same plane. The landmarks are
+  `garment_hairdeck.head_landmarks` (`landmarks "profile"`); a head whose profile shows no face uses
+  `brow = top − 0.09`, `nose = chin + 0.06` (`"fallback"`).
+- **Capsules.** `collision.fit_capsules` of the fit GLB with the character's region scales, bind space; the client
+  keeps the hair regions (`HAIR_REGIONS`) under the bind rule (`tipBindFactors`). Extension capsules are not in
+  the record.
+- **Params.** The mode's set (`hair_strands.PARAMS`): HairDeck `root_deg 10`, HAAR `root_deg 0`; the Stiffness
+  slider multiplies `stiffness` on the client.
+
+**Per-vertex binding.** The hair primitive of the served FULL-tier assembly carries two custom attributes, written
+from the npz (`garment_assembly._attach_strands`) only when the record was made of the very fit bytes grafted and
+has one entry per vertex:
+
+- `_STRAND_CARD` — `UNSIGNED_SHORT` SCALAR, card + 1; 0 = rigid (the scalp cap);
+- `_STRAND_U` — `FLOAT` SCALAR, the vertex's place along the 17 rows, in [0, 16].
+
+three's GLTFLoader exposes them as `geometry.attributes._strand_card` / `_strand_u`. The distance tier
+(`low_url`) carries neither. The assembly's hair state carries `strands` = the record's sha256, so a new record
+re-assembles on the CPU. A record whose `cards` or vertex binding does not match the served primitive leaves the
+hair on its skin — never scrambled.
+
+**Routes.**
+
+- `GET /characters/{name}/model3d` → `model.hair_strands = {"url", "sha256"}` or `null`; the same in
+  `/characters/{name}/model/meta` (`hair_strands`). `null` with Swing off for the worn hairstyle, without an
+  assembly with grafted hair, or without a record.
+- `GET /characters/{name}/model/hair-strands` (public segment `model`): the record whose sha256 the CURRENT served
+  full assembly carries. `ETag: "<sha256>"`, compared with `http_files.etag_matches`; a match is a 304 that reads
+  and builds nothing; 404 is the normal "no strands" state.
+- `GET /characters/{name}/garments/{item_id}/hair-strands` (admin): the record of the Hairstyles preview's fit
+  (`garments.preview_path`), built when missing, regardless of Swing; same ETag rule. The hair GET names it as
+  `preview_strands_url` (`null` without a preview fit).
+
+**Proofs (§ B5a).** `scripts/smoke_hair_strands_record.py` (the record on a hand-built head and two cards: pins,
+rest, free arc, `u`, follow rows, SDF decoding, boxes, cache), `scripts/smoke_hair_strands_graft.py` (the
+attributes' round trip, the full tier only, a mismatch refused, the assembly state), and
+`scripts/smoke_hair_strands_route.py` (ETag/304/404, admin-only preview, `model.hair_strands`).
 
 ### Footwear (`foot_pose`, garment kind `footwear`)
 
