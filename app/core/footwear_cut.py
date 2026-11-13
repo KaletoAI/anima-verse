@@ -1605,6 +1605,10 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
         shaft_out["collar_m"] = float((desc.get("split") or {}).get("collar_m"))
     return {
         **shaft_out,
+        # The vertices the two enclosure gates count (Ruling A31, the Details preview's marked region): indices into
+        # ``before`` (deep pokes) and ``after`` (left below the rim). ``cut_gates`` takes them out again.
+        "_marks": {"deep": np.nonzero(fb)[0][deep],
+                   "visible": np.nonzero(fa)[0][should_a] if len(Fa) else np.zeros(0, np.int64)},
         "deep_outside": float(deep.sum() / n_should) if n_should else 0.0,
         "should_enclosed": n_should, "poke_n": int(poke.sum()), "deep_n": int(deep.sum()),
         "poke_depth_p95_mm": float(np.percentile(depth[poke], 95) * 1000.0) if poke.any() else 0.0,
@@ -1629,7 +1633,9 @@ def _side_gates(desc: Dict[str, Any], joints: Dict[str, np.ndarray], before: Pri
 def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]], cut: Dict[str, Any], *,
               joints: Dict[str, np.ndarray], body_before: Prim) -> Dict[str, Any]:
     """The cut's gates (module docstring): ``{"ok", "reasons", "gates": {name: {value, limit, ok}}, "sides": {side:
-    diagnostics}}``. ``body_before`` is the primitive ``apply_cut`` started from (bare); ``deep_outside`` is read on
+    diagnostics}, "marks"}}`` — ``marks`` (Ruling A31) the foot points the REFUSED enclosure gates counted, bind
+    space with their skin: ``{positions, joints, weights, joint_names}`` (``deep_outside``: the deep pokes of the
+    conformed foot; ``visible_poke``: the vertices left below the rim), None when neither refused. ``body_before`` is the primitive ``apply_cut`` started from (bare); ``deep_outside`` is read on
     it after the conform, the rest on ``body_after``; ``parts`` = the fit's bind-space parts per side
     (``footwear_fit.FootwearFit.parts``: ``foot``, and ``shaft`` for a split fit — then ``shaft_poke`` is judged,
     None and ``ok`` None without a shin vertex in its range); ``joints`` = ``glb_mesh.joint_bind_matrices`` of
@@ -1668,4 +1674,17 @@ def cut_gates(body_after: Prim, parts: Dict[str, Dict[str, glb_mesh.GarmentMesh]
         passed: Optional[bool] = None if metrics[name] is None and name in POKE_OPTIONAL else \
             check_gates({name: metrics[name]}, {name: (kind, limit, GATE_LABELS[name])})[0]
         gates[name] = {"value": metrics[name], "limit": limit, "ok": passed}
-    return {"ok": ok, "reasons": reasons, "gates": gates, "sides": sides}
+    picked = {"deep": before, "visible": body_after}
+    parts_p, parts_j, parts_w = [], [], []
+    for side in sides.values():
+        found = side.pop("_marks", None) or {}
+        for key, gate in (("deep", "deep_outside"), ("visible", "visible_poke")):
+            idx = np.asarray(found.get(key, ()), np.int64)
+            if (gates.get(gate) or {}).get("ok") is False and len(idx):
+                prim = picked[key]
+                parts_p.append(np.asarray(prim.positions, np.float64)[idx])
+                parts_j.append(np.asarray(prim.joints, np.int64)[idx])
+                parts_w.append(np.asarray(prim.weights, np.float64)[idx])
+    marks = ({"positions": np.concatenate(parts_p), "joints": np.concatenate(parts_j),
+              "weights": np.concatenate(parts_w), "joint_names": list(before.joint_names)} if parts_p else None)
+    return {"ok": ok, "reasons": reasons, "gates": gates, "sides": sides, "marks": marks}

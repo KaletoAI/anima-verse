@@ -408,6 +408,12 @@ LEFT_OUT = "left_out"
 FIT_REFUSED = "Fit refused — {reason}"
 
 
+def _strip_refused(reason: str) -> str:
+    """``reason`` without the fit paths' own "fit refused — " prefix (never "Fit refused — fit refused — …")."""
+    from app.core.fit_attempts import strip_prefix
+    return strip_prefix(reason)
+
+
 @dataclass(frozen=True)
 class Figure:
     """A figure of a character (block above)."""
@@ -444,6 +450,8 @@ class Figure:
     #: them and this figure is the one kept (``kept``: the figure the stored model of the outfit was built as).
     fit_refused: Dict[str, str] = field(default_factory=dict, compare=False)
     kept: bool = field(default=False, compare=False)
+    #: The body shape those fits were refused on (Ruling A31: the Figure tab names it) — "" without a refusal.
+    fit_refused_on: str = field(default="", compare=False)
 
     def as_dict(self) -> Dict[str, Any]:
         """The JSON form an outfit model sidecar records as ``figure`` —
@@ -938,7 +946,7 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     if fit_refused:
         previous = _previous_figure(character_name, wanted.signature, bsig)
         if previous is not None:
-            return wanted, replace(previous, fit_refused=fit_refused, kept=True)
+            return wanted, replace(previous, fit_refused=fit_refused, kept=True, fit_refused_on=choice.shape)
     own = tuple(sorted(set(sets.own) - set(choice.in_body) - set(fit_refused)))
     shown_closed = tuple(sorted(closed & set(own)))
     notes = dict(choice.notes)
@@ -973,10 +981,12 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
                               items=items, profile=profile)
     delivered = Figure(signature=wanted.signature, bsig=bsig, shape=choice.shape, texture=texture,
                        in_body=tuple(sorted(choice.in_body)), painted=tuple(sorted(choice.painted)), own=own,
-                       left_out={item_id: FIT_REFUSED.format(reason=reason) for item_id, reason in fit_refused.items()},
+                       left_out={item_id: FIT_REFUSED.format(reason=_strip_refused(reason))
+                                 for item_id, reason in fit_refused.items()},
                        interim=dict(choice.interim), notes=notes, hair=hair,
                        pieces=dict(sets.pieces), open=sets.open, shown_closed=shown_closed,
-                       in_body_own=tuple(choice.in_body_own), hair_style=hair_style, fit_refused=fit_refused)
+                       in_body_own=tuple(choice.in_body_own), hair_style=hair_style, fit_refused=fit_refused,
+                       fit_refused_on=choice.shape if fit_refused else "")
     return wanted, delivered
 
 

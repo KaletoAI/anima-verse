@@ -174,6 +174,14 @@ export interface FigureWornRow {
   /** Ruling A23 b: its fit on the body shape was refused (the reason; "" otherwise) — the figure built before stays
    *  served; the row offers Re-fit and Regenerate mesh. */
   fit_refused?: string
+  /** Ruling A31: the measured reasons behind `fit_refused` (the tooltip). */
+  fit_refused_detail?: string
+  /** Ruling A31: what is in the body shape the fit was refused on ("t-shirt, underwear"; "" unknown). */
+  refused_on?: string
+  /** Ruling A31: the refusal points at the piece itself — only then a new mesh helps ("Regenerate mesh"). */
+  piece_broken?: boolean
+  /** Ruling A31: the fit the figure uses was refused by its checks and accepted by the user. */
+  accepted_by_user?: { on: string; reason: string; detail: string; at: string | null } | null
   /** Hub jobs its chain step plans (0 = none planned, null = unknown). */
   jobs: number | null
   /** Open / closed of a closable piece; null = not closable (NOT the readiness above). */
@@ -374,12 +382,15 @@ export const IN_BODY_UNTIL_BUILD = 'own mesh ready — in the body until the nex
  *  Task 11g fix round 2) — the Build meshes the shape first, the figure built before stays served meanwhile. */
 export const IN_BODY_UNTIL_SHAPE = 'not in the 3D figure until its body shape is built'
 
-/** Under a piece whose fit on the body shape was refused (Ruling A23): nothing lacking it is published. */
-export const FIT_REFUSED_NOTE = 'the figure built before stays shown until it fits'
+/** Under a piece whose fit on the body shape was refused (Ruling A23, A31 wording): nothing lacking it is
+ *  published; what each button does. */
+export const FIT_REFUSED_NOTE = 'Still shown: the figure built before. Re-fit tries again on the CPU (no hub job). A new mesh only helps when the piece itself is broken.'
+/** The status light's words of a fit the user accepted although its checks refused it (Ruling A31). */
+export const ACCEPTED_BY_YOU = 'Accepted by you'
 
 /** The state column of a worn row (spec sketch) and the line under it. */
 export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | 'failure' | 'left_out' | 'note' | 'interim'
-  | 'in_body_until' | 'fit_refused'>, t: Tr = EN): { text: string; sub: string | null } {
+  | 'in_body_until' | 'fit_refused' | 'refused_on' | 'accepted_by_user'>, t: Tr = EN): { text: string; sub: string | null } {
   const sub = row.in_body_until === 'mesh' ? t(IN_BODY_UNTIL_MESH)
     : row.in_body_until === 'build' ? t(IN_BODY_UNTIL_BUILD)
       : row.interim ? t(IN_BODY_UNTIL_SHAPE) : null
@@ -387,10 +398,19 @@ export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | '
     return { text: row.state === 'building' ? t('⏳ building') : t('⏳ waiting for the Build'), sub }
   }
   switch (row.state) {
-    case 'ready': return { text: t('✓ ready'), sub: null }
+    case 'ready': return row.accepted_by_user
+      ? {
+        text: t('✓ ready — {accepted}').replace('{accepted}', t(ACCEPTED_BY_YOU)),
+        sub: t('{body}: its checks refused it — {reason}').replace('{body}', bodyWords(row.accepted_by_user.on, t))
+          .replace('{reason}', row.accepted_by_user.reason),
+      }
+      : { text: t('✓ ready'), sub: null }
     case 'failed': return { text: t('failed — {reason}').replace('{reason}', row.failure || row.note), sub: null }
     case 'fit_refused': return {
-      text: t('Fit refused — {reason}').replace('{reason}', row.fit_refused || row.note),
+      text: (row.refused_on
+        ? t('Fits the plain body — refused on the body shape ({pieces}): {reason}').replace('{pieces}', row.refused_on)
+        : t('Fits the plain body — refused on the body shape: {reason}'))
+        .replace('{reason}', row.fit_refused || row.note),
       sub: t(FIT_REFUSED_NOTE),
     }
     case 'left_out': return { text: t('left out: {reason}').replace('{reason}', row.left_out || row.note), sub: null }
@@ -403,6 +423,47 @@ export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | '
         sub,
       }
   }
+}
+
+/** A body's words from the server ("Plain body", "Body shape (t-shirt)", "Body shape ob12345678"), translated
+ *  around the piece names (Ruling A31). */
+export function bodyWords(label: string, t: Tr = EN): string {
+  if (label === 'Plain body') return t('Plain body')
+  const named = /^Body shape \((.*)\)$/.exec(label)
+  if (named) return t('Body shape ({pieces})').replace('{pieces}', named[1])
+  const id = /^Body shape (\S+)$/.exec(label)
+  return id ? t('Body shape {id}').replace('{id}', id[1]) : label
+}
+
+/** One body of the Details preview's body switch (Ruling A31, `fit_attempts.bodies`). */
+export interface FitBody {
+  /** "" = the plain body, else the outfit body id. */
+  body: string
+  /** "plain" or the body id — the route's path segment. */
+  key: string
+  label: string
+  status: 'accepted' | 'user_accepted' | 'refused' | 'stale' | 'missing'
+  /** The verdict in plain words ("" when accepted). */
+  reason: string
+  /** The measured reasons (tooltip). */
+  reason_detail: string
+  piece_broken: boolean
+  /** The model to show (versioned), null: nothing to show. */
+  url: string | null
+  built_at: string | null
+  marks: Array<{ kind: string; count: number; colour: string; label: string }>
+  foot_pose: unknown
+  can_accept: boolean
+  /** Why it cannot be accepted ("" when it can). */
+  accept_block: string
+  accepted_at: string | null
+  /** The figure stands on this body now. */
+  current: boolean
+}
+
+/** The body switch is worth showing when there is more than the plain body's accepted fit to see. */
+export function showBodySwitch(bodies: FitBody[] | undefined): boolean {
+  return !!bodies && (bodies.length > 1 || bodies.some((b) => b.status !== 'accepted'))
 }
 
 /** The state column of the hair row. */

@@ -2092,6 +2092,9 @@ def get_character_garment(character_name: str, item_id: str,
                                                   base_model_sha=base[1] if base else "").get(item_id),
                    left_out=left_out, in_body=in_body),
                "garment": info, "limits": _garment_limits(kind),
+               # Ruling A31: the Details preview's body switch — each body's fit attempt, its status and reason
+               # (``fit_attempts.bodies``; [] off the pipeline and for hair).
+               "bodies": _fit_bodies(character_name, item_id, profile) if pipeline else [],
                # What the dialog's "Run all" runs now (Task UI1, rule R1): the chain from its first step that is
                # not current — ``garments.run_estimate``, the same plan the run takes; None off the pipeline.
                "run": garments.run_estimate(character_name, item_id, profile=profile) if pipeline else None,
@@ -2840,6 +2843,83 @@ def get_character_garment_hair_strands(character_name: str, item_id: str, reques
         return _strands_response(request, None, "")
     data = hair_strands.encode(record)
     return _strands_response(request, data, hashlib.sha256(data).hexdigest())
+
+
+def _fit_bodies(character_name: str, item_id: str, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
+    from app.core import fit_attempts
+    try:
+        return fit_attempts.bodies(character_name, item_id, profile=profile)
+    except Exception:  # noqa: BLE001 — the panel shows without its body switch
+        logger.exception("Fit bodies of %s/%s failed", character_name, item_id)
+        return []
+
+
+@router.get("/{character_name}/garments/{item_id}/fits/{body}/model")
+def get_character_garment_fit_model(character_name: str, item_id: str, body: str, request: Request,
+                                    _: Dict[str, Any] = Depends(require_admin)):
+    """The Details preview's model of one body (Ruling A31, ``fit_attempts.shown_file``): ``body`` "plain" or an
+    outfit body id — the body's kept refused attempt with the refusing gate's region marked, or its fit. 400 for
+    a bad body, 404 when the body shows nothing."""
+    from fastapi.responses import Response
+    from app.core import fit_attempts
+    from app.core.http_files import etag_matches, snapshot_response
+    _require_character(character_name)
+    try:
+        shown = fit_attempts.shown_file(character_name, item_id, body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if shown is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    path, marks = shown
+    if marks is None:
+        return snapshot_response(path, request, media_type="model/gltf-binary",
+                                 version=request.query_params.get("v"))
+    try:
+        st, mst = path.stat(), marks.stat()
+    except OSError:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    etag = f'"a31-{st.st_size:x}-{st.st_mtime_ns:x}-{mst.st_size:x}-{mst.st_mtime_ns:x}"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    return Response(content=fit_attempts.marked_glb(path, marks, item_id), media_type="model/gltf-binary",
+                    headers=headers)
+
+
+def _fit_accept_call(fn, character_name: str, item_id: str, body: str) -> Dict[str, Any]:
+    from app.core import fit_attempts, garment_store as gs
+    _require_character(character_name)
+    key = "" if body == "plain" else body
+    if key and not gs.is_body_id(key):
+        raise HTTPException(status_code=400, detail=f"invalid body {body[:40]!r}")
+    try:
+        return fn(character_name, item_id, key)
+    except fit_attempts.Busy as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except fit_attempts.AcceptError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{character_name}/garments/{item_id}/fits/{body}/accept")
+def accept_character_garment_fit(character_name: str, item_id: str, body: str,
+                                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A31: accept the REFUSED fit of a clothing or footwear piece on one body ("plain" or an outfit body
+    id) — ``fit_attempts.accept``. Spends no job; the figure becomes due for a re-assembly (CPU only), which this
+    does not start (``follow_up``: the Build's estimate now). 409 when there is no current refused attempt to
+    accept or a garment run holds the plain body's fits."""
+    from app.core import fit_attempts
+    return _fit_accept_call(fit_attempts.accept, character_name, item_id, body)
+
+
+@router.post("/{character_name}/garments/{item_id}/fits/{body}/unaccept")
+def unaccept_character_garment_fit(character_name: str, item_id: str, body: str,
+                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A31: undo the user's acceptance of a piece's fit on one body (``fit_attempts.undo``) — the
+    refusal is back; the figure becomes due for a re-assembly (CPU only). 409 when none holds there."""
+    from app.core import fit_attempts
+    return _fit_accept_call(fit_attempts.undo, character_name, item_id, body)
 
 
 # --- Generated 3D model (img2mesh from the T-pose render, per outfit) ---

@@ -768,13 +768,20 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     # Masks in the frame of the bald front view the unrigged base was built
     # from (R6: the full-frame ghost mask, never the cut-out); a source made
     # on another base is registered onto it (``garment_source.fit_masks``).
+    from app.core import fit_attempts
+    attempt_base = {"kind": kind, "item_id": item_id, "fsig": fsig, "base_signature": bsig,
+                    "base_model_sha256": base_sha, "body_id": bsig, "body_sha256": base_sha,
+                    "fit_version": garment_fit.FIT_VERSION[kind]}
     try:
         bald_mask, ghost_mask, frame = garment_source.fit_masks(character_name, item_id, fsig,
                                                                 body_front=base_views["front"],
                                                                 base_front=base_views["front"])
     except garment_source.FrameRefused as e:
-        raise _Refused("fit", f"fit refused — {e}", {"ok": False, "reasons": [str(e)],
-                                                      "registration": e.registration})
+        gates = {"ok": False, "reasons": [str(e)], "registration": e.registration}
+        # Ruling A31: the refusal is the body's last attempt (no mesh to show: nothing was fitted).
+        fit_attempts.store(character_name, item_id, fsig, body="", kind=kind, record=attempt_base,
+                           error=f"fit refused — {e}", gates=gates)
+        raise _Refused("fit", f"fit refused — {e}", gates)
     from app.models.inventory import get_item
     slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
     # A refit aligns its sleeves / trouser legs onto this body's limbs (``garment_source`` LIMBS).
@@ -788,28 +795,43 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     limits = garment_fit.CLOTHING_GATES
     gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
+
+    def record_of(accepted: bool, frame_: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "accepted": accepted, "kind": kind, "item_id": item_id, "fsig": fsig,
+            "metrics": result.metrics, "gates": gates, "report": result.report,
+            "base_signature": bsig, "base_model_sha256": base_sha, "body_id": bsig, "body_sha256": base_sha,
+            "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
+                       "base_images": base_images,
+                       "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
+                       "ghost_front_sha256": _sha(ghost)},
+            **garment_source.fit_source(character_name, item_id, fsig, base_images), "frame": frame_,
+            "created_at": utc_now_iso()}
+
+    def refuse(error: str, refusal: Dict[str, Any], marks: Optional[Dict[str, Any]] = None) -> None:
+        # Ruling A31: the refused fit is kept as the plain body's last attempt (mesh, record, marked region).
+        record = record_of(False, frame)
+        if record.get("inputs", {}).get("state") == "open":
+            record["state"] = "open"
+        fit_attempts.store(character_name, item_id, fsig, body="", kind=kind,
+                           record={**record, "fit_version": garment_fit.FIT_VERSION[kind]}, error=error,
+                           gates=refusal, rigged=snapshot["rigged"], garment=result.garment, marks=marks)
+        raise _Refused("fit", error, refusal)
+
     if not result.ok:
-        raise _Refused("fit", "fit refused — " + "; ".join(result.reasons),
-                       {**gates, "metrics": result.metrics})
+        refuse("fit refused — " + "; ".join(result.reasons), {**gates, "metrics": result.metrics})
     # A refit's limbs sit on the body (``garment_source`` LIMBS).
+    limb_marks: Dict[str, Any] = {}
     limbs = garment_source.check_limbs(character_name, item_id, fsig, result.garment.positions,
-                                       snapshot["rigged"], frame)
+                                       snapshot["rigged"], frame, marks=limb_marks)
     if limbs is not None and not limbs["ok"]:
-        raise _Refused("fit", "refit refused — " + "; ".join(limbs["reasons"]),
-                       {"ok": False, "reasons": limbs["reasons"], "limbs": limbs})
+        refuse("refit refused — " + "; ".join(limbs["reasons"]),
+               {"ok": False, "reasons": limbs["reasons"], "limbs": limbs},
+               {"limb": fit_attempts.mesh_marks(result.garment, garment_source.limb_marks(limb_marks, limbs))})
     if limbs is not None:
         frame = {**frame, "limbs": limbs}
 
-    record: Dict[str, Any] = {
-        "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig,
-        "metrics": result.metrics, "gates": gates, "report": result.report,
-        "base_signature": bsig, "base_model_sha256": base_sha, "body_id": bsig, "body_sha256": base_sha,
-        "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
-                   "base_images": base_images,
-                   "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
-                   "ghost_front_sha256": _sha(ghost)},
-        **garment_source.fit_source(character_name, item_id, fsig, base_images), "frame": frame,
-        "created_at": utc_now_iso()}
+    record: Dict[str, Any] = record_of(True, frame)
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
 
 
@@ -882,6 +904,10 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
     if body:
         from app.core.garment_store import clear_failure_on_body
         clear_failure_on_body(character_name, item_id, fsig, body)
+    # Ruling A31: the accepted fit is now the body's last attempt — a kept refused one (and a user's acceptance of
+    # it, overwritten above) goes.
+    from app.core import fit_attempts
+    fit_attempts.drop(character_name, item_id, body=body)
     if schedule:
         from app.core import garment_assembly
         garment_assembly.schedule(character_name)
@@ -1252,6 +1278,8 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
         # Hair fits of the removed methods (hair views → mesh, subtract): nothing refits them any more.
         raise ValueError(f"No fit on an outfit body for a {kind} fit by {gs.fit_method(base_record)!r}")
     else:
+        from app.core import fit_attempts
+        record["fit_version"] = garment_fit.FIT_VERSION[kind]
         prepared = gs.garment_path(character_name, item_id, fsig, "prepared")
         if not _accepted(prepared):
             raise base_body.MissingInput("The garment mesh is missing — run the mesh step first")
@@ -1271,8 +1299,10 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             body_mask, ghost_mask, frame = garment_source.fit_masks(character_name, item_id, fsig,
                                                                     body_front=front, base_front=base_front)
         except garment_source.FrameRefused as e:
-            raise _Refused("fit", f"fit on the outfit body refused — {e}",
-                           {"ok": False, "reasons": [str(e)], "registration": e.registration})
+            refusal = {"ok": False, "reasons": [str(e)], "registration": e.registration}
+            fit_attempts.store(character_name, item_id, fsig, body=body_id, kind=kind, record=dict(record),
+                               error=f"fit on the outfit body refused — {e}", gates=refusal)
+            raise _Refused("fit", f"fit on the outfit body refused — {e}", refusal)
         record["frame"] = frame
         from app.models.inventory import get_item
         slots = list(((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or [])
@@ -1294,33 +1324,6 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
         limits = garment_fit.CLOTHING_GATES
         gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
                  "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
-        if not result.ok:
-            raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(result.reasons),
-                           {**gates, "metrics": result.metrics})
-        limbs = garment_source.check_limbs(character_name, item_id, fsig, result.garment.positions,
-                                           body["rigged"], frame, source=(limb_source or {}).get("numbers") or None)
-        if limbs is not None and not limbs["ok"]:
-            raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(limbs["reasons"]),
-                           {"ok": False, "reasons": limbs["reasons"], "limbs": limbs})
-        if limbs is not None:
-            record["frame"] = {**frame, "limbs": limbs}
-        if (limb_source or {}).get("torso_cover"):
-            # The trunk the base fit covers stays covered (``garment_source`` TORSO) — never a torn piece.
-            body_r = glb_mesh.body_arrays(body["rigged"])
-            torso = garment_source.torso_gate(garment_source.torso_cover(result.garment.positions, body_r),
-                                              limb_source["torso_cover"])
-            if not torso["ok"]:
-                raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(torso["reasons"]),
-                               {"ok": False, "reasons": torso["reasons"], "torso": torso})
-            record["frame"] = {**record["frame"], "torso": torso}
-            # ... and no single hole opens in it (``garment_source`` TORSO holes).
-            holes = garment_source.torso_holes(result.garment.positions, result.garment.indices,
-                                               body_r, limb_source.get("torso_open"))
-            hole_gate = garment_source.torso_hole_gate(holes)
-            if not hole_gate["ok"]:
-                raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(hole_gate["reasons"]),
-                               {"ok": False, "reasons": hole_gate["reasons"], "holes": holes})
-            record["frame"]["holes"] = holes
         record.update({
             "metrics": result.metrics, "gates": gates, "report": result.report,
             # The state of the base fit it derives from (its own fsig), never the live worn state.
@@ -1328,6 +1331,47 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
                        "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
                        "ghost_front_sha256": _sha(ghost), "body_front_sha256": _sha(front)},
             "created_at": utc_now_iso()})
+
+        def refuse(reasons: List[str], refusal: Dict[str, Any], marks: Optional[Dict[str, Any]] = None) -> None:
+            # Ruling A31: the refused fit is kept as this body's last attempt (mesh, record, marked region).
+            error = "fit on the outfit body refused — " + "; ".join(reasons)
+            attempt = {**record, "accepted": False}
+            if attempt.get("inputs", {}).get("state") == "open":
+                attempt["state"] = "open"
+            fit_attempts.store(character_name, item_id, fsig, body=body_id, kind=kind, record=attempt, error=error,
+                               gates=refusal, rigged=body["rigged"], garment=result.garment, marks=marks)
+            raise _Refused("fit", error, refusal)
+
+        if not result.ok:
+            refuse(list(result.reasons), {**gates, "metrics": result.metrics})
+        limb_marks: Dict[str, Any] = {}
+        limbs = garment_source.check_limbs(character_name, item_id, fsig, result.garment.positions,
+                                           body["rigged"], frame, source=(limb_source or {}).get("numbers") or None,
+                                           marks=limb_marks)
+        if limbs is not None and not limbs["ok"]:
+            refuse(limbs["reasons"], {"ok": False, "reasons": limbs["reasons"], "limbs": limbs},
+                   {"limb": fit_attempts.mesh_marks(result.garment, garment_source.limb_marks(limb_marks, limbs))})
+        if limbs is not None:
+            record["frame"] = {**frame, "limbs": limbs}
+        if (limb_source or {}).get("torso_cover"):
+            # The trunk the base fit covers stays covered (``garment_source`` TORSO) — never a torn piece.
+            body_r = glb_mesh.body_arrays(body["rigged"])
+            torso_marks: Dict[str, Any] = {}
+            torso = garment_source.torso_gate(garment_source.torso_cover(result.garment.positions, body_r,
+                                                                         marks=torso_marks),
+                                              limb_source["torso_cover"])
+            if not torso["ok"]:
+                refuse(torso["reasons"], {"ok": False, "reasons": torso["reasons"], "torso": torso},
+                       {"torso": fit_attempts.mesh_marks(body_r, garment_source.torso_marks(
+                           torso_marks, limb_source["torso_cover"], torso))})
+            record["frame"] = {**record["frame"], "torso": torso}
+            # ... and no single hole opens in it (``garment_source`` TORSO holes).
+            holes = garment_source.torso_holes(result.garment.positions, result.garment.indices,
+                                               body_r, limb_source.get("torso_open"))
+            hole_gate = garment_source.torso_hole_gate(holes)
+            if not hole_gate["ok"]:
+                refuse(hole_gate["reasons"], {"ok": False, "reasons": hole_gate["reasons"], "holes": holes})
+            record["frame"]["holes"] = holes
     return _publish_fit(character_name, item_id, kind, fsig, bsig, body["rigged"], result, record,
                         body=body_id, schedule=schedule)
 
@@ -1403,9 +1447,12 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
                                            base_fit_sha=base_fit_sha, fit_version=version)
                 state, base_fit_sha, failure = current()
     record = gs.read_record(fit_path.with_suffix(".json"))
+    # A fit the USER accepted (Ruling A31) serves only while it is the accepted fit by today's state (body, base
+    # fit, fit version) — a changed input voids it, it never stands in like a stale gate-accepted fit.
     usable = (fit_path.is_file() and record.get("accepted") is True and record.get("body_id") == body_id
               and record.get("body_sha256") == body_sha
-              and (failure is None or record.get("fit_version") == version))
+              and (failure is None or record.get("fit_version") == version)
+              and (not isinstance(record.get("user_accepted"), dict) or state == "accepted"))
     low = gs.garment_path(character_name, item_id, fsig, "low", body=body_id)
     pending = state != "accepted" and failure is None and on_body and not build
     error = "" if state == "accepted" else str((failure or {}).get("error") or "") or (

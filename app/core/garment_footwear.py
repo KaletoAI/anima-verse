@@ -341,18 +341,14 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     # rename into place and the distance tier are published here.
     from app.core import refit_pool
     tmp = refit_pool.temp_path(path)
-    try:
-        out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap_override(profile, item_id), kind,
-                             item_id, fsig, str(tmp))
-        if not out["ok"]:
-            raise _Refused("fit", "fit refused — " + "; ".join(out["reasons"]), out["gates"])
-        fit_record, cut_stats = out["record"], out["cut_stats"]
+
+    def record_of(out: Dict[str, Any], accepted: bool) -> Dict[str, Any]:
         now = utc_now_iso()
         parents: Dict[str, Any] = {"body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
                                    "source": _source_parents(item_id, ssig)}
         record: Dict[str, Any] = {
-            "method": "shoe", "kind": kind, "item_id": item_id, "fsig": fsig, "ssig": ssig, **fit_record,
-            "parents": parents, "accepted": True, "fit_version": garment_fit.FIT_VERSION[kind],
+            "method": "shoe", "kind": kind, "item_id": item_id, "fsig": fsig, "ssig": ssig, **out["record"],
+            "parents": parents, "accepted": accepted, "fit_version": garment_fit.FIT_VERSION[kind],
             "body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
             # ``rest``: the BARE body's figure box and rest soles (``footwear_rest``) for the shod preview
             # (whose body is cut); the assembly re-measures its own bare file.
@@ -362,6 +358,27 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         if not body:
             parents["base_model_sha256"] = body_sha
             record["base_model_sha256"] = body_sha
+        return record
+
+    from app.core import fit_attempts
+    try:
+        out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap_override(profile, item_id), kind,
+                             item_id, fsig, str(tmp))
+        if not out["ok"]:
+            error = "fit refused — " + "; ".join(out["reasons"])
+            # Ruling A31: the refused attempt is kept per (item, body) — with its GLB when the cut ran.
+            attempt = out.get("attempt")
+            fit_attempts.store(character_name, item_id, fsig, body=body, kind=kind,
+                               record=record_of(attempt, False) if attempt else
+                               {"kind": kind, "item_id": item_id, "fsig": fsig, "body_id": body_id,
+                                "body_sha256": body_sha, "fit_version": garment_fit.FIT_VERSION[kind],
+                                **({"base_model_sha256": body_sha} if not body else {})},
+                               error=error, gates=out["gates"], glb=tmp if attempt else None,
+                               tris=(attempt or {}).get("tris"), marks={"foot": out.get("marks")})
+            raise _Refused("fit", error, out["gates"])
+        fit_record, cut_stats = out["record"], out["cut_stats"]
+        record = record_of(out, True)
+        now = record["created_at"]
         # A refit after a body change (the fsig has no base in it: the same path): the record remembers the
         # body it came from (``refitted.from_body_sha256``, Task 25) — the Wardrobe says so, the GC keeps nothing by it.
         previous = gs.read_record(path.with_suffix(".json")) if path.is_file() else {}
@@ -391,6 +408,7 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     gs.write_record(path.with_suffix(".json"), record)
     if body:
         gs.clear_failure_on_body(character_name, item_id, fsig, body)
+    fit_attempts.drop(character_name, item_id, body=body)
     if schedule:
         from app.core import garment_assembly
         garment_assembly.schedule(character_name)
@@ -404,11 +422,11 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
     the cut (``cut_gates``) and graft the shoe parts — once more with the upper fitted to the foot's height when the
     first attempt is refused and the shoe is a closed toe box ready for it (fit version 15, ``footwear_fit`` module
     docstring "Shoe height"). Reads nothing but its arguments; writes the fit GLB to the
-    private temp path ``out`` only when accepted. ``{ok: False, reasons, gates}`` when a gate refuses, else
-    ``{ok: True, record, foot_pose, cut_stats, rest, glb_sha256, tris}`` (``record`` = the fit's own record part
-    with the cut gates and diagnostics)."""
-    import hashlib
-    from app.core import footwear_fit, footwear_rest, glb_mesh
+    private temp path ``out`` when accepted. ``{ok: False, reasons, gates}`` when a gate refuses — plus, when a cut
+    gate refused a fit that was cut (Ruling A31), ``attempt`` (the shape below; the refused GLB written to ``out``)
+    and ``marks`` (``footwear_cut.cut_gates``) —, else ``{ok: True, record, foot_pose, cut_stats, rest, glb_sha256,
+    tris}`` (``record`` = the fit's own record part with the cut gates and diagnostics)."""
+    from app.core import footwear_fit, glb_mesh
     positions, faces, uvs, image, mime, material = glb_mesh.static_arrays(prepared)
     n = len(positions)
     shoe = glb_mesh.GarmentMesh(positions=positions, normals=None, uvs=uvs, indices=faces,
@@ -429,7 +447,22 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
             att["reasons"] = [flat] + att["reasons"]
             att["gates"]["reasons"] = [flat] + list(att["gates"].get("reasons") or [])
     if not att["ok"]:
-        return {"ok": False, "reasons": att["reasons"], "gates": att["gates"]}
+        refused: Dict[str, Any] = {"ok": False, "reasons": att["reasons"], "gates": att["gates"]}
+        if "replaced" in att:
+            # Ruling A31: the refused attempt as it would have been published (the cut body + the shoe parts), its
+            # record and the foot points the refusing cut gates counted — the Details preview shows it, marked.
+            refused["attempt"] = _attempt_out(att, rigged, kind, item_id, fsig, out)
+            refused["marks"] = att.get("marks")
+        return refused
+    return {"ok": True, **_attempt_out(att, rigged, kind, item_id, fsig, out)}
+
+
+def _attempt_out(att: Dict[str, Any], rigged: bytes, kind: str, item_id: str, fsig: str,
+                 out: str) -> Dict[str, Any]:
+    """Graft one cut attempt of ``fit_compute`` (accepted or refused) onto the cut body, write it to ``out`` and
+    return ``{record, foot_pose, cut_stats, rest, glb_sha256, tris}``."""
+    import hashlib
+    from app.core import footwear_fit, footwear_rest, glb_mesh
     result, replaced, cut_stats = att["result"], att["replaced"], att["cut_stats"]
 
     blob = glb_mesh.rewrite_body_primitives(rigged, replaced)
@@ -448,7 +481,7 @@ def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Opt
     path = Path(out)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(blob)
-    return {"ok": True, "record": result.record, "foot_pose": result.foot_pose, "cut_stats": cut_stats,
+    return {"record": result.record, "foot_pose": result.foot_pose, "cut_stats": cut_stats,
             "rest": footwear_rest.rest_measurement(rigged), "glb_sha256": hashlib.sha256(blob).hexdigest(),
             "tris": len(glb_mesh.static_arrays(blob)[1])}
 
@@ -489,7 +522,8 @@ def _fit_attempt(result: Any, prims: List["glb_mesh.Prim"], joints: Dict[str, np
     result.record["cut_stats"] = {key: cut_stats[key] for key in ("removed_faces", "bisected_faces", "new_vertices")}
     if not cut_gates["ok"]:
         return {"ok": False, "result": result, "reasons": list(cut_gates["reasons"]),
-                "gates": {"ok": False, "reasons": list(cut_gates["reasons"]), **result.record["gates"]}}
+                "gates": {"ok": False, "reasons": list(cut_gates["reasons"]), **result.record["gates"]},
+                "replaced": replaced, "cut_stats": cut_stats, "marks": cut_gates.get("marks")}
     return {"ok": True, "result": result, "replaced": replaced, "cut_stats": cut_stats}
 
 
@@ -607,8 +641,11 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str, 
                                            base_fit_sha="", fit_version=version)
                 state, failure = current()
     record = gs.read_record(fit_path.with_suffix(".json"))
+    # A fit the USER accepted (Ruling A31) serves only while it is the accepted fit by today's state (the shoe
+    # source too) — a changed input voids it.
     usable = (fit_path.is_file() and record.get("accepted") is True and record.get("body_id") == body_id
-              and record.get("body_sha256") == body_sha and record.get("fit_version") == version)
+              and record.get("body_sha256") == body_sha and record.get("fit_version") == version
+              and (not isinstance(record.get("user_accepted"), dict) or state == "accepted"))
     low = gs.garment_path(character_name, item_id, fsig, "low", body=body_id)
     pending = on_body and failure is None and not build
     if state == "accepted":
@@ -800,8 +837,15 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
         fresh = {"accepted": freshness(CURRENT), "stale": freshness(STALE, FIT_BODY_CHANGED),
                  "outdated": freshness(STALE, FIT_SOURCE_CHANGED)}.get(status, freshness(MISSING))
     return {"status": status, "gates": record.get("gates") or {}, "metrics": metrics, "url": None,
-            "freshness": fresh, "created_at": record.get("fitted_at"), "error": error,
+            # the row's pill already says "Refused (gate)": the reason without the fit path's own prefix
+            "freshness": fresh, "created_at": record.get("fitted_at"),
+            "error": _strip_refused(error) if isinstance(error, str) else error,
             "split": _split_view(record), "shaft": _fit_shaft_view(record)}
+
+
+def _strip_refused(error: str) -> str:
+    from app.core.fit_attempts import strip_prefix
+    return strip_prefix(error)
 
 
 def _split_view(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:

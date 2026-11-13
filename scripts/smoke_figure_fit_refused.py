@@ -36,8 +36,9 @@ Expected, derived by hand from rulings A23 a/b/c:
     on SB refused now -> delivered = F (``as_dict`` equal), kept True, fit_refused {jacket: "refused — stub"};
     never an interim (interim {}). The AUTOMATIC plan has no "fits" and no "assemble" step (a cached failure is
     not re-planned); the MANUAL plan has Step("fits", "Re-fit on the body shape (refused before): Jacket", 0)
-    then Step("assemble", …). ``_run_assemble`` -> "Not assembled: the fit of Jacket on the body shape is
-    refused — the figure built before stays served" (nothing published). The worn row of the jacket: state
+    then Step("assemble", …). ``_run_assemble`` -> "Not assembled: Jacket fit the plain body but not the body
+    shape (Blouse). The figure built before stays shown." (nothing published; Ruling A31 wording — the shape
+    named by what is in it, the wanted figure's in-body pieces). The worn row of the jacket: state
     "fit_refused", fit_refused "refused — stub". ``refit(blouse)`` -> ValueError (its fit is not refused);
     ``refit(jacket)`` (Ruling FR-I2) answers {"status": "started"} and starts NO Build (``figure_build.start``
     not called): its own run in the Build worker clears the refusal of (jacket, "0123456789ab") on SB once,
@@ -245,7 +246,8 @@ def main() -> int:
               [("fits", "Re-fit on the body shape (refused before): Jacket", 0),
                ("assemble", "Assemble the figure", 0)])
         check("assemble refuses to publish", figure_build._run_assemble("Demo", None),
-              "Not assembled: the fit of Jacket on the body shape is refused — the figure built before stays served")
+              "Not assembled: Jacket fit the plain body but not the body shape (Blouse). The figure built before "
+              "stays shown.")
         wanted_now, got = delivered()
         rows = figure_build._worn_rows("Demo", wanted_now, got, {}, False, profile())
         check("worn row", [(r["item_id"], r["state"], r.get("fit_refused")) for r in rows if r["item_id"] == "jacket"],

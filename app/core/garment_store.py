@@ -45,6 +45,13 @@ above unchanged. An OUTFIT BODY of the mesh mode (``figure.shape_key``,
     bodies/<body id>/layers/low/…                     its distance tier
     bodies/<body id>/failed/{item}_{fsig}.json        the last refused fit there
 
+Each body (the base model in ``garments/``, an outfit body in its folder) also keeps the LAST refused fit of an
+item and the fit a user's acceptance of it displaced (Ruling A31, ``fit_attempts``)::
+
+    attempts/{item}_{fsig}.glb + .json + .npz         the refused fit, its record, the marked region
+    attempts/prev/{item}_{fsig}.glb + .json           the fit an acceptance displaced (for its undo)
+    attempts/prev/low/{item}_{fsig}.glb               its distance tier
+
 Images, the raw/prepared mesh and the HairDeck job stay shared (per fsig /
 hsig): a fit on a body is CPU work from them (``garments.fit_on_body``),
 never a hub job. Every fit record names its parents: ``item_id``, ``fsig``,
@@ -142,13 +149,18 @@ IMAGE_STEPS: Tuple[str, ...] = ("worn", "ghost", "cutout")
 #: part -> sub-folder of ``garments/`` ("" = the folder itself).
 PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepared",
                              "fit": "", "low": "low", "failed": "failed",
-                             "layer": "layers", "layer_low": "layers/low", "limbs": "limbs"}
+                             "layer": "layers", "layer_low": "layers/low", "limbs": "limbs",
+                             # Ruling A31 (``fit_attempts``): the last refused fit per (item, body), and the fit an
+                             # acceptance of it displaced
+                             "attempt": "attempts", "attempt_prev": "attempts/prev",
+                             "attempt_prev_low": "attempts/prev/low"}
 #: File suffix of a part other than ``glb`` (``limbs``: the refit's limb source, ``garment_source``).
 _PART_SUFFIX: Dict[str, str] = {"failed": "json", "limbs": "npz"}
 #: The parts keyed by an inner-layer signature ``lsig`` besides the fsig.
 LAYER_PARTS: Tuple[str, ...] = ("layer", "layer_low")
 #: The parts kept per body (``garment_path(body=…)``); the rest is shared.
-BODY_PARTS: Tuple[str, ...] = ("fit", "low", "failed", "layer", "layer_low")
+BODY_PARTS: Tuple[str, ...] = ("fit", "low", "failed", "layer", "layer_low", "attempt", "attempt_prev",
+                                "attempt_prev_low")
 #: Folder of the outfit bodies' fits under ``garments/``.
 BODIES_DIR = "bodies"
 #: An outfit body id (``base_body.OUTFIT_BODY_RE``).
@@ -591,6 +603,38 @@ def footwear_servable(record: Dict[str, Any]) -> bool:
             and isinstance(record.get("foot_pose"), dict))
 
 
+def user_accept_holds(record: Dict[str, Any], character_name: str = "") -> bool:
+    """False for a fit the USER accepted (``user_accepted``, Ruling A31 — ``fit_attempts``) that is no longer
+    the fit accepted: made by another fit algorithm version, or (on the base model, given ``character_name``) of
+    another prepared mesh (clothing) or shoe source (footwear) than the one stored now. True for every other record. A user's acceptance is bound to
+    the fit it saw; such a record is never served."""
+    if not isinstance(record.get("user_accepted"), dict):
+        return True
+    from app.core import garment_fit
+    if record.get("fit_version") != garment_fit.FIT_VERSION.get(str(record.get("kind") or "")):
+        return False
+    kind = str(record.get("kind") or "")
+    on_base = not is_body_id(str(record.get("body_id") or ""))
+    if character_name and kind == "footwear" and on_base:
+        from app.core import garment_footwear  # the shoe source it was fitted from must still be today's
+        try:
+            return garment_footwear.fit_state(character_name, str(record.get("item_id") or ""),
+                                              str(record.get("fsig") or ""),
+                                              str(record.get("base_model_sha256") or "")) == "accepted"
+        except ValueError:
+            return False
+    prepared = (record.get("inputs") or {}).get("prepared_sha256")
+    if character_name and prepared and kind == "clothing" and on_base:
+        from app.core.base_body import file_sha256
+        try:
+            path = garment_path(character_name, str(record.get("item_id") or ""), str(record.get("fsig") or ""),
+                                "prepared")
+        except ValueError:
+            return False
+        return file_sha256(path) == prepared
+    return True
+
+
 def _accepted_on(record: Dict[str, Any], base_model_sha: str) -> bool:
     """Accepted on the base model ``base_model_sha``. A FOOTWEAR fit of an
     older ``footwear_fit.FOOTWEAR_FIT_VERSION`` (an older fsig: the version is
@@ -603,6 +647,8 @@ def _accepted_on(record: Dict[str, Any], base_model_sha: str) -> bool:
     it). Was R11 (plan
     2026-11-10-footwear-rigid-shoes Task 10 carry): never served."""
     if record.get("accepted") is not True or record.get("base_model_sha256") != base_model_sha:
+        return False
+    if not user_accept_holds(record):
         return False
     if str(record.get("kind") or "") == "footwear":
         from app.core.footwear_fit import FOOTWEAR_FIT_VERSION
@@ -628,8 +674,9 @@ def newest_body_footwear_fit(character_name: str, item_id: str, body: str, body_
                 continue
             record = read_record(path.with_suffix(".json"))
             if (str(record.get("kind") or "") != "footwear" or record.get("body_id") != body
-                    or record.get("body_sha256") != body_sha or not footwear_servable(record)):
-                continue
+                    or record.get("body_sha256") != body_sha or not footwear_servable(record)
+                    or isinstance(record.get("user_accepted"), dict)):
+                continue  # a user's acceptance (Ruling A31) never stands in for another fit
             try:
                 mtime = path.stat().st_mtime_ns
             except OSError:
@@ -698,7 +745,8 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     if current is not None:
         path = garment_path(character_name, item_id, current, "fit")
         record = read_record(path.with_suffix(".json"))
-        if path.is_file() and _accepted_on(record, base_model_sha) and fit_state(record) == state:
+        if (path.is_file() and _accepted_on(record, base_model_sha) and fit_state(record) == state
+                and user_accept_holds(record, character_name)):
             return path, record
     hit = newest_accepted_fits(character_name, item_id, base_model_sha=base_model_sha, state=state).get(method)
     if hit is None and served and state == "open":
@@ -724,8 +772,8 @@ def newest_accepted_fits(character_name: str, item_id: str, *, base_model_sha: s
             if path.suffix != ".glb" or path.parent != root:
                 continue
             record = read_record(path.with_suffix(".json"))
-            if record.get("accepted") is not True:
-                continue
+            if record.get("accepted") is not True or isinstance(record.get("user_accepted"), dict):
+                continue  # a user's acceptance (Ruling A31) holds for its own fsig only, never as a fallback
             if base_model_sha and not _accepted_on(record, base_model_sha):
                 continue
             if state is not None and fit_state(record) != state:

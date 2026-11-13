@@ -37,7 +37,8 @@ extension_deg_right 22.2, toe_room_mm_right 18.0, root_lift_m 0.052, k_m_per_uni
      ``ob_id`` of three texture signatures, then sorted): A carries an accepted record of F on
      sha(A) -> status accepted, metrics width_factor 1.05 (its own hand value); B has nothing -> missing;
      C has a recorded body failure of F on sha(C) (base_fit_sha "", the current fit version, error "fit refused — x")
-     -> status refused, error "fit refused — x". ``fits`` = [base, then the three in sorted id order], each
+     -> status refused, error "x" (Ruling A31: the row's pill says "Refused (gate)", the reason drops the fit path's
+     own "fit refused — " prefix). ``fits`` = [base, then the three in sorted id order], each
      ``base`` False. Since Task 6 of plan 2026-11-12-unified-worn-pieces no per-character mode gates the rows
      (the old "retexture mode: base row only" case): with the coat taken off in [I4] the rows are still [bsig,
      A, B, C]. A model3d/ file that is NOT an outfit body id (the base GLB, an outfit model "o…") is no
@@ -256,7 +257,7 @@ def main() -> int:
         info = garments.garment_info("Demo", heels)
         rows = [(r.get("body_id"), r.get("base"), r.get("status"), r.get("error")) for r in info.get("fits") or []]
         check("I2 rows", rows, [(bsig, True, "accepted", None), (A, False, "accepted", None),
-                                (B, False, "missing", None), (C, False, "refused", "fit refused — x")])
+                                (B, False, "missing", None), (C, False, "refused", "x")])
         near("I2 A width factor", (info["fits"][1]["metrics"] if len(info["fits"]) > 1 else {}).get("width_factor"),
              1.05)
         check("I2 B no metrics", info["fits"][2]["metrics"] if len(info["fits"]) > 2 else None, {})

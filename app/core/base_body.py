@@ -3802,8 +3802,10 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
         if fig.fit_refused:
             # Ruling A23 a: a wanted piece's fit on the body shape is refused — nothing lacking it is published.
             from app.models.inventory import get_item
+            from app.core.fit_attempts import strip_prefix
             raise OutfitError(FIT_REFUSED_NOT_PUBLISHED.format(items=", ".join(
-                f"{(get_item(i) or {}).get('name') or i} ({r})" for i, r in sorted(fig.fit_refused.items()))))
+                f"{(get_item(i) or {}).get('name') or i} ({strip_prefix(r)})"
+                for i, r in sorted(fig.fit_refused.items()))))
         on = fig.shape
         meshed = not figure_mod.is_plain(on)
         registrations = {v: find_ref_image(character_name, _kind(v), on) for v in BASE_VIEWS}
@@ -4109,8 +4111,8 @@ FIGURE_CHANGED = "Built for another figure"
 NOT_FITTED_ON_BODY = "Not fitted on this outfit body, served without: {items}"
 #: Ruling A23 a (T15-F1): an outfit model is never published lacking a piece its figure grafts whose fit on the
 #: body shape was refused — the model built before stays served (and stays the delivered figure, ``figure``).
-FIT_REFUSED_NOT_PUBLISHED = ("Not published: the fit of {items} on the body shape was refused — the figure built "
-                             "before stays served")
+FIT_REFUSED_NOT_PUBLISHED = ("Not published: {items} fit the plain body but not the body shape. The figure built "
+                             "before stays shown.")
 
 
 def _refuse_partial(character_name: str, fig, meta: Dict[str, Any], profile: Optional[Dict[str, Any]]) -> str:
@@ -4130,7 +4132,8 @@ def _refuse_partial(character_name: str, fig, meta: Dict[str, Any], profile: Opt
             grafted.add(hair_id)
     missing = sorted(set(left_off) & grafted)
     if missing:
-        names = [f"{(get_item(i) or {}).get('name') or i} ({left_off[i]})" for i in missing]
+        from app.core.fit_attempts import strip_prefix
+        names = [f"{(get_item(i) or {}).get('name') or i} ({strip_prefix(left_off[i])})" for i in missing]
         logger.warning("Outfit model %s on %s not published: %s", character_name, fig.shape, "; ".join(names))
         raise OutfitError(FIT_REFUSED_NOT_PUBLISHED.format(items=", ".join(names)))
     if not left_off:

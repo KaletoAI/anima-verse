@@ -17,12 +17,16 @@
  *   ↗Wardrobe (the mode lives on the item and is edited there, ruling P4) ·
  *   state ("✓ ready", "⏳ mesh · 3 hub jobs" + "in the body until its own
  *   mesh is ready" — ruling A11, an in-body piece "shown painted until
- *   ready", "left out: …", "failed — reason" with Retry = the Build, "Fit refused
- *   — reason" with its single steps Re-fit (POST …/figure/refit {item_id}: that
- *   piece's CPU fit and the CPU assembly only, hub steps stay due for the Build —
- *   Ruling FR-I2; 409 while a Build runs) and Regenerate mesh (POST
+ *   ready", "left out: …", "failed — reason" with Retry = the Build, "Fits the
+ *   plain body — refused on the body shape (…): reason" (Ruling A31 wording, the
+ *   measured reasons on hover) with its single steps Re-fit (POST …/figure/refit
+ *   {item_id}: that piece's CPU fit and the CPU assembly only, hub steps stay due
+ *   for the Build — Ruling FR-I2; 409 while a Build runs) and — only when the
+ *   reason points at the piece itself (`piece_broken`) — Regenerate mesh (POST
  *   …/garments/{item}/run {step: "mesh", force, chain}, its cost the server's
- *   `regenerate_jobs`) — Ruling A23); an own-mesh
+ *   `regenerate_jobs`) — Ruling A23; "✓ ready — Accepted by you" in green when
+ *   the fit it uses was refused by its checks and accepted by the user, Ruling
+ *   A31); an own-mesh
  *   piece's details open its chain dialog (GarmentPieceDialog — a WORN
  *   piece's only entry, the Wardrobe hides its "Mesh steps"; opened here
  *   without its "Run all", Ruling 10a); a closable piece has the toggle
@@ -60,6 +64,8 @@ import {
 import type { FigurePayload, FigureWornRow, HairMode, PieceState } from './figureModel'
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
+/** A fit the user accepted although its checks refused it (Ruling A31): the green of an accepted light. */
+const ACCEPTED_STYLE: CSSProperties = { color: 'var(--success, #3fb950)' }
 
 /** The answers of POST …/figure/refit (Ruling FR-I2) besides the Build's own. */
 const REFIT_STATUS: Record<string, string> = { started: 'Re-fit started (CPU only)' }
@@ -326,7 +332,10 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairs
                 </td>
                 <td style={CELL}>{wardrobe}</td>
                 <td style={CELL}>
-                  <div style={row.state === 'failed' || row.state === 'fit_refused' ? ERROR_STYLE : undefined}>
+                  <div style={row.state === 'failed' || row.state === 'fit_refused' ? ERROR_STYLE
+                    : row.accepted_by_user ? ACCEPTED_STYLE : undefined}
+                    title={row.state === 'fit_refused' ? row.fit_refused_detail || undefined
+                      : row.accepted_by_user?.detail || undefined}>
                     {cell.text}
                   </div>
                   {cell.sub ? <div className="ga-hint">{cell.sub}</div> : null}
@@ -338,11 +347,16 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairs
                         title={t('Fits this piece on the body shape again and assembles the figure — CPU only, no hub job; steps that need hub jobs stay due for the next Build')}>
                         {t('Re-fit')}
                       </button>
-                      <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
-                        onClick={() => onRegenerateMesh(row)}
-                        title={t('Makes the piece’s mesh anew, then fits it')}>
-                        {regenerateMeshLabel(row.regenerate_jobs, t)}
-                      </button>
+                      {row.piece_broken ? (
+                        <button type="button" className="ga-btn ga-btn-sm" disabled={busy}
+                          onClick={() => onRegenerateMesh(row)}
+                          title={t('Makes the piece’s mesh anew, then fits it')}>
+                          {regenerateMeshLabel(row.regenerate_jobs, t)}
+                        </button>
+                      ) : null}
+                      <span className="ga-hint">
+                        {t('Details shows the refused fit on each body, marked where it fails, and can accept it.')}
+                      </span>
                     </div>
                   ) : null}
                 </td>

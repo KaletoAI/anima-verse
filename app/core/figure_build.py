@@ -299,7 +299,8 @@ REFIT_LABEL = "Re-fit on the body shape (refused before): {names}"
 #: ``_run_fits``' error when a re-fit is refused again (Ruling A23 b): nothing is assembled without the piece.
 REFIT_REFUSED = "Fit refused — {items}; the figure built before stays served"
 #: ``_run_assemble``'s error while a wanted fit stays refused (Ruling A23 a): nothing lacking it is published.
-FIT_REFUSED_KEPT = "Not assembled: the fit of {items} on the body shape is refused — the figure built before stays served"
+FIT_REFUSED_KEPT = ("Not assembled: {items} fit the plain body but not the body shape{shape}. The figure built before "
+                    "stays shown.")
 #: ``_run_assemble``'s error while an own mesh needs hub work and a figure is served (Ruling A15 b).
 INTERIM_WAITS = ("Not assembled: an own mesh is not ready — no interim body shape while a figure is shown; the "
                  "figure built before stays served")
@@ -1535,7 +1536,10 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
     _profile, wanted, delivered, _items = _now(character_name)
     if delivered.fit_refused:
         # Ruling A23 a: never published lacking a wanted piece whose fit was refused.
-        return FIT_REFUSED_KEPT.format(items=", ".join(_item_name(i) for i in sorted(delivered.fit_refused)))
+        names = (", ".join(_item_name(i) for i in wanted.in_body)
+                 if wanted.shape == delivered.fit_refused_on else "")
+        return FIT_REFUSED_KEPT.format(items=", ".join(_item_name(i) for i in sorted(delivered.fit_refused)),
+                                       shape=f" ({names})" if names else "")
     if _painted_interim(delivered):
         return SHAPE_NOT_BUILT  # Ruling C4: never the painted interim
     if _interim_waits(character_name, delivered, _model_figure(character_name, wanted.signature)):
@@ -1650,9 +1654,14 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
     closable piece, ``other_state_jobs``: what building the other state's mesh costs (None: unknown or not
     applicable). ``in_body_until`` (ruling A11): an own-mesh piece in the body shape — ``"mesh"`` until its own
     mesh is ready (``figure.INTERIM_IN_BODY``), ``"build"`` its mesh is ready and served, the next Build takes
-    it out of the shape (``figure.READY_IN_BODY``); None otherwise. ``regenerate_jobs`` (a piece whose fit was
-    refused): what its "Regenerate mesh" spends (``_regenerate_jobs``), else None."""
-    from app.core import figure, garment_set
+    it out of the shape (``figure.READY_IN_BODY``); None otherwise. A piece whose fit on the body shape was
+    refused (Ruling A31 wording): ``fit_refused`` the reason in plain words, ``fit_refused_detail`` the measured
+    reasons (the tooltip), ``refused_on`` what is in that body shape ("" unknown), ``piece_broken`` whether the
+    reason points at the piece itself — only then ``regenerate_jobs`` is what its "Regenerate mesh" spends
+    (``_regenerate_jobs``), else None. ``accepted_by_user`` (Ruling A31): ``{on, reason}`` when the fit the
+    figure uses was refused by its checks and accepted by the user (``on``: "Plain body" / "Body shape (…)"),
+    else None."""
+    from app.core import figure, fit_attempts, garment_set
     from app.core.outfit_options import CLOSED, OPEN
     from app.models import inventory
     profile = _profile_of(character_name, profile)
@@ -1662,6 +1671,8 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
         piece_failures = dict(entry.get("items") or {entry.get("item_id"): entry.get("error")})
     rows: List[Dict[str, Any]] = []
     seen = set()
+    names = (fit_attempts.shape_names(character_name, profile=profile)
+             if delivered.fit_refused or not figure.is_plain(delivered.shape) else {})
     for slot, item_id in sorted(wanted.pieces.items()):
         if item_id in seen:
             continue
@@ -1670,6 +1681,8 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
         want, have = wanted.state_of(item_id), delivered.state_of(item_id)
         failure = str(piece_failures.get(item_id) or "")
         refused = str(delivered.fit_refused.get(item_id) or "")
+        words = (fit_attempts.refusal_words(character_name, item_id, delivered.fit_refused_on, refused)
+                 if refused else {"text": "", "detail": "", "piece": False})
         if failure:
             state = "failed"
         elif refused:
@@ -1694,14 +1707,19 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
                      "note": (delivered.interim.get(item_id) or delivered.left_out.get(item_id)
                               or delivered.notes.get(item_id) or ""),
                      "interim": item_id in delivered.interim, "left_out": delivered.left_out.get(item_id) or "",
-                     "failure": failure, "fit_refused": refused, "piece_state": piece_state,
+                     "failure": failure, "fit_refused": words["text"], "fit_refused_detail": words["detail"],
+                     "refused_on": names.get(delivered.fit_refused_on, "") if refused else "",
+                     "piece_broken": bool(words["piece"]), "piece_state": piece_state,
+                     "accepted_by_user": (fit_attempts.accepted_by_user(character_name, item_id, delivered.shape,
+                                                                         profile=profile, names=names)
+                                          if mode == garment_set.OWN_MESH and not refused else None),
                      "in_body_until": (None if item_id not in delivered.in_body_own
                                        else "mesh" if delivered.interim.get(item_id) == figure.INTERIM_IN_BODY
                                        else "build"),
                      "other_state_jobs": (_other_state_jobs(character_name, item_id, piece_state, profile)
                                           if closable and mode == garment_set.OWN_MESH else None),
                      "regenerate_jobs": (_regenerate_jobs(character_name, item_id, profile)
-                                         if state == "fit_refused" else None)})
+                                         if state == "fit_refused" and words["piece"] else None)})
     return rows
 
 

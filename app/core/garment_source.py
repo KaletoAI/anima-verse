@@ -612,14 +612,18 @@ def _limb_bones(kind: str) -> Tuple[str, ...]:
     return ("arm", "forearm", "hand") if kind == "arm" else ("upleg", "leg", "foot")
 
 
-def limb_numbers(positions, body) -> Optional[Dict[str, Any]]:
+def limb_numbers(positions, body, *, marks: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Per limb chain (``garment_fit.limb_frames``) of the rigged ``body`` (``glb_mesh.BodyMesh``), the part of the
     garment vertices ``positions`` (same bind space) on it — those whose nearest body vertex is dominated by one of
     the chain's bones: ``{chain: {vertices, reach_m, off [segment 0, segment 1]} | None}`` (module docstring LIMBS;
     ``off`` the share farther than the radius + ``LIMB_OFF_M`` from the segment AND than ``LIMB_OFF_M`` from the skin;
     ``off`` per segment None below ``LIMB_MIN_VERTICES``, the chain None when neither segment has them; segment 0
     counts from a quarter of its length, past the shoulder / hip seam). ``reach_m``: the p99 distance along the
-    chain from the proximal joint. None when the body has no limb chain."""
+    chain from the proximal joint. None when the body has no limb chain.
+
+    ``marks`` (a dict, Ruling A31): filled with ``{chain: [indices segment 0, indices segment 1]}`` — the
+    indices into ``positions`` of the vertices counted OFF the limb per segment (the very vertices the share
+    above is taken of), for the Details preview's marked region."""
     from scipy.spatial import cKDTree
     from app.core import garment_fit
     from app.core.rig_contract import norm_bone_name
@@ -650,6 +654,9 @@ def limb_numbers(positions, body) -> Optional[Dict[str, Any]]:
         # Off the limb = beyond its radius + LIMB_OFF_M AND that far from the skin (T15-F1, ruling A23 d).
         away = (excess > LIMB_OFF_M) & (skin_s > LIMB_OFF_M)
         off = [round(float(away[m].mean()), 4) if int(m.sum()) >= LIMB_MIN_VERTICES else None for m in masks]
+        if marks is not None:
+            rows = np.nonzero(on)[0] if len(X) and cols else np.zeros(0, np.int64)
+            marks[name] = [rows[m & away] for m in masks]
         if off == [None, None]:
             out[name] = None
             continue
@@ -793,6 +800,7 @@ def limb_gate(numbers: Optional[Dict[str, Any]], source: Dict[str, Any]) -> Dict
     LIMBS) — only "sits on the limb": a segment the source covers whose off-limb share grew by more than
     ``LIMB_OFF_DELTA``, or a limb the source covers that the refit lost. The reach is recorded, never a reason."""
     reasons = []
+    failing: List[List[Any]] = []
     for name, want in sorted((source or {}).items()):
         if not isinstance(want, dict) or "off" not in want:
             continue
@@ -808,15 +816,26 @@ def limb_gate(numbers: Optional[Dict[str, Any]], source: Dict[str, Any]) -> Dict
             if g is None or g - w > LIMB_OFF_DELTA:
                 reasons.append(f"{label}: off the {part[seg]} — {g} of its vertices beyond the limb + "
                                f"{LIMB_OFF_M * 100:.0f} cm (source {w}, limit +{LIMB_OFF_DELTA})")
-    return {"ok": not reasons, "reasons": reasons, "fit": numbers, "source": source,
+                failing.append([name, seg])
+    # ``failing``: the (chain, segment) pairs that refused — the region the Details preview marks (Ruling A31).
+    return {"ok": not reasons, "reasons": reasons, "fit": numbers, "source": source, "failing": failing,
             "limits": {"off_m": LIMB_OFF_M, "off_delta": LIMB_OFF_DELTA}}
 
 
+def limb_marks(marks: Dict[str, Any], gate: Dict[str, Any]) -> np.ndarray:
+    """The garment vertex indices of the segments ``limb_gate`` refused (``gate["failing"]``) out of the
+    ``limb_numbers(marks=…)`` of the same fit — the limb region the Details preview marks (Ruling A31)."""
+    out = [np.asarray(marks[name][seg], np.int64) for name, seg in gate.get("failing") or []
+           if name in marks and marks[name] is not None and seg < len(marks[name])]
+    return np.unique(np.concatenate(out)) if out else np.zeros(0, np.int64)
+
+
 def check_limbs(character_name: str, item_id: str, fsig: str, positions, rigged_glb: bytes,
-                frame: Dict[str, Any], source: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+                frame: Dict[str, Any], source: Optional[Dict[str, Any]] = None,
+                marks: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """``limb_gate`` of a fit against ``source`` (limb numbers; an outfit-body fit: its base fit's) or, without
     one, of a REGISTERED fit (``frame.registered``) of the group ``fsig`` against its source's; None when there is
-    nothing to check (a native fit, a source without limbs)."""
+    nothing to check (a native fit, a source without limbs). ``marks``: ``limb_numbers``' per-vertex output."""
     if source is None:
         if not frame.get("registered"):
             return None
@@ -824,17 +843,18 @@ def check_limbs(character_name: str, item_id: str, fsig: str, positions, rigged_
     if not source:
         return None
     from app.core import glb_mesh
-    return limb_gate(limb_numbers(positions, glb_mesh.body_arrays(rigged_glb)), source)
+    return limb_gate(limb_numbers(positions, glb_mesh.body_arrays(rigged_glb), marks=marks), source)
 
 
 # --- Torso coverage (outfit bodies) -----------------------------------------------------------------------
 
-def torso_cover(positions, body) -> Optional[Dict[str, Any]]:
+def torso_cover(positions, body, *, marks: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """Which part of the trunk of the rigged ``body`` the garment ``positions`` cover (module docstring TORSO):
     the trunk vertices (dominated by a ``garment_fit.trunk_bone``) from just below the hip joint to the neck joint
     in ``TORSO_BANDS`` heights x ``TORSO_SECTORS`` angles around the trunk axis; a vertex is covered with a garment
     vertex within ``TORSO_COVER_M``. ``{covered [[share per sector] per band], count [[...]]}``; None without a
-    trunk."""
+    trunk. ``marks`` (a dict, Ruling A31): filled with ``uncovered`` (the body vertex indices of the trunk vertices
+    counted NOT covered), ``band`` and ``sector`` (their cells) — ``torso_marks`` picks the refused region."""
     from scipy.spatial import cKDTree
     from app.core import garment_fit
     from app.core.rig_contract import norm_bone_name
@@ -844,11 +864,12 @@ def torso_cover(positions, body) -> Optional[Dict[str, Any]]:
     names = [norm_bone_name(n) for n in body.joint_names]
     cols = [i for i, n in enumerate(names) if garment_fit.trunk_bone(n)]
     P = np.asarray(body.positions, np.float64)
-    T = P[np.isin(garment_fit.dense_weights(body).argmax(1), cols)]
+    trunk_rows = np.nonzero(np.isin(garment_fit.dense_weights(body).argmax(1), cols))[0]
+    T = P[trunk_rows]
     v, theta, _rho = garment_fit._torso_coords(T, frame)
     lo, hi = TORSO_V_RANGE
     inside = (v >= lo) & (v < hi)
-    T, v, theta = T[inside], v[inside], theta[inside]
+    T, v, theta, trunk_rows = T[inside], v[inside], theta[inside], trunk_rows[inside]
     band = np.clip(((v - lo) / (hi - lo) * TORSO_BANDS).astype(int), 0, TORSO_BANDS - 1)
     sector = ((theta + np.pi) / (2 * np.pi) * TORSO_SECTORS).astype(int) % TORSO_SECTORS
     X = np.asarray(positions, np.float64)
@@ -858,6 +879,9 @@ def torso_cover(positions, body) -> Optional[Dict[str, Any]]:
     count = np.zeros((TORSO_BANDS, TORSO_SECTORS))
     np.add.at(covered, (band, sector), hit)
     np.add.at(count, (band, sector), 1)
+    if marks is not None:
+        miss = ~np.asarray(hit, bool)
+        marks.update(uncovered=trunk_rows[miss], band=band[miss], sector=sector[miss])
     return {"covered": (covered / np.maximum(count, 1)).round(4).tolist(), "count": count.astype(int).tolist()}
 
 
@@ -872,6 +896,7 @@ def torso_gate(fit: Optional[Dict[str, Any]], source: Optional[Dict[str, Any]]) 
     share is more than ``TORSO_COVER_DELTA`` below the source's."""
     reasons: List[str] = []
     shares: Dict[str, Any] = {}
+    failing: List[str] = []
     if source and fit:
         cs, ns = np.asarray(source["covered"]), np.asarray(source["count"])
         cf, nf = np.asarray(fit["covered"]), np.asarray(fit["count"])
@@ -887,10 +912,29 @@ def torso_gate(fit: Optional[Dict[str, Any]], source: Optional[Dict[str, Any]]) 
             if want - got > TORSO_COVER_DELTA:
                 reasons.append(f"torso {group}: {got:.2f} of the area the source covers is covered within "
                                f"{TORSO_COVER_M * 100:.0f} cm (source {want:.2f}, limit -{TORSO_COVER_DELTA})")
+                failing.append(group)
     elif source and not fit:
         reasons.append("torso: not measurable on this body")
-    return {"ok": not reasons, "reasons": reasons, "shares": shares,
+    # ``failing``: the front / side / back groups that refused — the region the Details preview marks (Ruling A31).
+    return {"ok": not reasons, "reasons": reasons, "shares": shares, "failing": failing,
             "limits": {"cover_m": TORSO_COVER_M, "cover_delta": TORSO_COVER_DELTA}}
+
+
+def torso_marks(marks: Dict[str, Any], source: Optional[Dict[str, Any]], gate: Dict[str, Any]) -> np.ndarray:
+    """The body vertex indices of the UNCOVERED trunk (``torso_cover(marks=…)`` of the fit) inside the region
+    ``torso_gate`` judged and refused: the cells the source covers (share >= ``TORSO_SOURCE_COVERED``) of the
+    refused front / side / back groups (``gate["failing"]``) — the torso region the Details preview marks
+    (Ruling A31)."""
+    failing = set(gate.get("failing") or [])
+    rows = np.asarray(marks.get("uncovered", np.zeros(0)), np.int64)
+    if not failing or not source or not len(rows):
+        return np.zeros(0, np.int64)
+    band = np.asarray(marks["band"], np.int64)
+    sector = np.asarray(marks["sector"], np.int64)
+    region = np.asarray(source["covered"]) >= TORSO_SOURCE_COVERED
+    groups = np.array([_sector_group(k) in failing for k in range(TORSO_SECTORS)])
+    keep = region[band, sector] & groups[sector]
+    return np.unique(rows[keep])
 
 
 # --- Torso holes (outfit bodies) --------------------------------------------------------------------------------

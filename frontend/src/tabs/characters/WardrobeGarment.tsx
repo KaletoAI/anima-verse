@@ -41,6 +41,10 @@
  * the stand / walk / sit clips of the library (kinds idle / walk / sit,
  * height groups ground / ground / seat); POST …/footwear/width-cap saves the
  * width cap the slider sets.
+ *
+ * Above the preview of clothing and footwear, the body switch (FitBodySwitch, Ruling A31): one button per body
+ * the piece was fitted on, the selected body's model (GET …/garments/{item}/fits/{body}/model — a refused fit
+ * with the failing region marked), and Accept / Undo accept of a refused fit.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -56,15 +60,16 @@ import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyTex
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { FootwearSteps } from './FootwearSteps'
 import { Model3DViewer } from './Model3DViewer'
+import { FitBodySwitch } from './FitBodySwitch'
 import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
 import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
 import type { GarmentItemInfo, ItemWearers, PieceStatus } from './useGarment'
 import {
   AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES, PIECE_STATE_LABELS,
-  closableDisabled, wearersLine,
+  closableDisabled, showBodySwitch, wearersLine,
 } from './figureModel'
-import type { MeshMode, PieceState } from './figureModel'
+import type { FitBody, MeshMode, PieceState } from './figureModel'
 import { chainRunAll } from './baseBodyModel'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
@@ -424,6 +429,9 @@ export function WearersLine({ itemId, version }: {
   )
 }
 
+/** The body switch's empty viewer: a body whose refusal came before attempts were kept (Ruling A31). */
+const NO_ATTEMPT_KEPT = 'No fit kept for this body — Re-fit in the Figure tab fits it again and keeps it (CPU only)'
+
 /** The steps dialog of one own-mesh piece: a wide modal (portal to
  *  document.body) — top bar with the piece, its ONE status (state, queue
  *  place or running step), Run all and close; left the chain as a compact
@@ -500,6 +508,24 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   const previewPose = PREVIEW_POSES.find((p) => p.key === pose) || PREVIEW_POSES[0]
   const fit = garment?.steps.fit
   const fitRecord = fit && fit.status !== 'missing' ? fit.metrics : null
+  // Ruling A31: the body switch — which body the preview shows, the piece as last fitted there.
+  const bodies: FitBody[] = (info as { bodies?: FitBody[] } | null)?.bodies || []
+  const [bodyKey, setBodyKey] = useState('plain')
+  const switchOn = showBodySwitch(bodies)
+  const shownBody = switchOn ? bodies.find((b) => b.key === bodyKey) || bodies[0] : null
+  const bodySwitch = switchOn ? (
+    <FitBodySwitch character={character} itemId={itemId} bodies={bodies} selected={shownBody?.key || 'plain'}
+      onSelect={setBodyKey} onChanged={() => startPoll(0)} />
+  ) : null
+  /** The model the viewer shows: the selected body's (the plain body's accepted fit = the piece's own preview). */
+  const viewed = (own: { url: string | null | undefined; builtAt: string | null | undefined; footPose?: unknown }) =>
+    shownBody && (shownBody.key !== 'plain' || shownBody.status !== 'accepted')
+      ? { url: shownBody.url, builtAt: shownBody.built_at, footPose: shownBody.foot_pose }
+      : { url: own.url || null, builtAt: own.builtAt || null, footPose: own.footPose }
+
+  const shoeView = viewed({ url: footwear?.preview_url, builtAt: footwear?.preview_built_at,
+    footPose: footwear?.foot_pose })
+  const pieceView = viewed({ url: garment?.preview_url, builtAt: garment?.preview_built_at })
 
   let body: ReactNode
   if (!info) {
@@ -526,7 +552,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             onMeshFetched={onMeshFetched} />
         </div>
         <div className="ga-garment-dialog-col">
-          {footwear.preview_url ? (
+          {bodySwitch}
+          {shoeView.url ? (
             <>
               <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }} role="group"
                 aria-label={t('Preview pose')}>
@@ -549,12 +576,15 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
                   </span>
                 ) : null}
               </div>
-              <Model3DViewer key={footwear.preview_url} url={footwear.preview_url} format="glb" height={430}
-                freshness={footwear.preview_freshness} builtAt={footwear.preview_built_at} footPose={footwear.foot_pose}
+              <Model3DViewer key={shoeView.url} url={shoeView.url} format="glb" height={430}
+                freshness={shoeView.url === footwear.preview_url ? footwear.preview_freshness : null}
+                builtAt={shoeView.builtAt} footPose={shoeView.footPose as typeof footwear.foot_pose}
                 clipUrl={clips[previewPose.kind] || ''} clipGroup={previewPose.group} />
             </>
           ) : (
-            <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>{t('No fitted mesh yet')}</div>
+            <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>
+              {shownBody && shownBody.key !== 'plain' ? t(NO_ATTEMPT_KEPT) : t('No fitted mesh yet')}
+            </div>
           )}
           {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
           <GarmentFailure garment={footwear} stepLabels={FOOTWEAR_STEP_LABELS} />
@@ -597,13 +627,17 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           />
         </div>
         <div className="ga-garment-dialog-col">
-          {garment?.preview_url ? (
-            <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={430}
-              freshness={garment.preview_freshness} builtAt={garment.preview_built_at}
+          {bodySwitch}
+          {pieceView.url ? (
+            <Model3DViewer key={pieceView.url} url={pieceView.url} format="glb" height={430}
+              freshness={pieceView.url === garment?.preview_url ? garment?.preview_freshness : null}
+              builtAt={pieceView.builtAt}
               statusPanel={info.steps?.length ? <ModelSteps steps={info.steps} /> : undefined} />
           ) : (
             <>
-              <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>{t('No fitted mesh yet')}</div>
+              <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>
+                {shownBody && shownBody.key !== 'plain' ? t(NO_ATTEMPT_KEPT) : t('No fitted mesh yet')}
+              </div>
               {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
             </>
           )}
