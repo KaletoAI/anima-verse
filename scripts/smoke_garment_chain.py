@@ -67,11 +67,15 @@ FRAGMENT. Demo has hair text, the world's hair method is the default
     sha(prepared); low exists; schedule(Demo) recorded; result ok, ran =
     all five steps; status idle.
 [2] A second run: ok, ran [], no render / mesh / decimate call.
-[3] Forced worn front (steps "worn", view "front", force): a new front of
-    the drafted step drops the back drafted from it, and every later image
-    step of both views goes (``garment_images._drop_later``): the same 5
-    renders as [1]; the old prepared mesh is deleted and rebuilt (1 mesh
-    call), the fit is re-fitted (2 decimations). The forced front differs
+[3] Forced worn front (steps "worn", view "front", force — the step grid's
+    view button): a new front of the drafted step drops the back drafted
+    from it, and every later image step of both views goes
+    (``garment_images._drop_later``). Since Ruling A33 the view button runs
+    that view and its follow-up only — the front and the back drafted again
+    from it (2 renders), no ghost, no mesh call, no decimation; the old
+    prepared mesh is deleted (``_drop_mesh``). Run all then makes the rest:
+    ghost back + front (2 renders), the mesh rebuilt (1 mesh call), the fit
+    re-fitted (2 decimations) — the 4 renders of [1] over both runs. The forced front differs
     from the old one by one background pixel (a re-render never returns
     the same bytes): the stored back draft was made from the old front, so
     the back is drafted anew — a stored draft is reused only for the SAME
@@ -180,8 +184,10 @@ DRESS_ROWS = (320, 760)
 FRAGMENT = "a knee-length green linen dress"
 FRAGMENT2 = "a knee-length green cotton dress"
 #: [3]: a forced worn front drops the back drafted from it (``garments``: "a new front of a drafted step drops
-#: the back it was drafted from") and the later steps of both views (``garment_images._drop_later``).
-FORCED_FRONT = [("worn", "front", 1), ("worn", "back", "d"), ("ghost", "back", 1), ("ghost", "front", 1)]
+#: the back it was drafted from") and the later steps of both views (``garment_images._drop_later``); the view
+#: button re-drafts that back in the same run (Ruling A33 follow-up), Run all makes the ghosts again.
+FORCED_FRONT = [("worn", "front", 1), ("worn", "back", "d")]
+FORCED_FRONT_RUN_ALL = [("ghost", "back", 1), ("ghost", "front", 1)]
 W, H = 1024, 1200
 
 
@@ -570,13 +576,19 @@ def main() -> int:
         check("fit untouched", fit.stat().st_mtime_ns if fit.is_file() else 0, fit_mtime)
 
         # --- [3] forced worn front ------------------------------------------------
-        print("[3] forced worn front re-runs it and every later step")
+        print("[3] forced worn front re-runs it and its drafted back only (Ruling A33); Run all makes the rest")
         RENDERS.clear(), MESHES.clear(), DECIMATES.clear()
         mode["salt"] = 1
         res = garments.run_garment("Demo", hid, steps="worn", view="front", force=True)
         mode["salt"] = 0
-        check("ok", res.get("ok"), True)
+        check("ok", (res.get("ok"), res.get("ran")), (True, ["worn"]))
         check("renders", [(s, v, a) for s, v, a, _f in RENDERS], FORCED_FRONT)
+        check("no mesh call, no refit, the old mesh dropped", (len(MESHES), DECIMATES, prepared.is_file()),
+              (0, [], False))
+        RENDERS.clear()
+        res = garments.run_garment("Demo", hid)
+        check("Run all: ok", (res.get("ok"), res.get("ran")), (True, ["ghost", "cutout", "mesh", "fit"]))
+        check("Run all: renders", [(s, v, a) for s, v, a, _f in RENDERS], FORCED_FRONT_RUN_ALL)
         check("mesh rebuilt", len(MESHES), 1)
         check("refit (prepared + low)", [d[1] for d in DECIMATES], ["prepared", "low"])
 

@@ -1974,6 +1974,9 @@ class GarmentRunRequest(BaseModel):
     # With a step: True runs the chain FROM it (Re-render, the hair row's Regenerate); False (default) runs only
     # that step (the steps dialog's buttons, fix round T12-F1 ruling F13 d). Without a step: always the chain.
     chain: bool = False
+    # With a view (Ruling A33): run the view's missing prerequisite views first (the button's explicit "first"
+    # action); without it a missing one is a 409 before anything is spent.
+    prerequisites: bool = False
 
 
 class GarmentMeshFetchRequest(BaseModel):
@@ -2044,7 +2047,9 @@ def get_character_garment(character_name: str, item_id: str,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Wardrobe's panel of one own-mesh piece (or any garment of the
     character): ``{pipeline, item_id, name, kind, mesh_mode, worn, status,
-    garment, limits, run}`` (``run``: ``garments.run_estimate`` — the dialog's "Run all" label; ``mesh_mode``: the item's mode,
+    garment, limits, run, view_runs}`` (``run``: ``garments.run_estimate`` — the dialog's "Run all" label;
+    ``view_runs``: ``garments.view_plans`` — each per-view button's jobs, follow-up and missing prerequisites,
+    None without per-view runs; ``mesh_mode``: the item's mode,
     ``garment_set.mesh_mode_of``; None for hair) — ``garment`` is ``garments.garment_info`` (a
     footwear piece: ``garment_footwear.info``, the shoe source steps; every
     image with its ``freshness``, the preview with ``preview_freshness``,
@@ -2089,7 +2094,9 @@ def get_character_garment(character_name: str, item_id: str,
                "garment": info, "limits": _garment_limits(kind),
                # What the dialog's "Run all" runs now (Task UI1, rule R1): the chain from its first step that is
                # not current — ``garments.run_estimate``, the same plan the run takes; None off the pipeline.
-               "run": garments.run_estimate(character_name, item_id, profile=profile) if pipeline else None}
+               "run": garments.run_estimate(character_name, item_id, profile=profile) if pipeline else None,
+               # Ruling A33: what each per-view button of the step grid spends and needs, before the click.
+               "view_runs": garments.view_plans(character_name, item_id, profile=profile) if pipeline else None}
     from app.core.model_overview import annotate_garment
     return annotate_garment(payload)
 
@@ -2549,7 +2556,10 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
     step ("Run all"), or ONLY ``step`` (``force``: re-run it — only ``view``
     for an image step; ruling F13 d — the steps dialog's buttons), or with
     ``chain`` the chain FROM ``step`` (everything after it too: Re-render,
-    the hair row's Regenerate). Footwear keeps the chain from ``step``: its
+    the hair row's Regenerate). ``view`` (Ruling A33) runs that view of
+    ``step`` alone, never a chain; 409 (nothing spent) while a view it needs
+    is not accepted, unless ``prerequisites`` lets the run make them first
+    (``garments.view_plan``). Footwear keeps the chain from ``step``: its
     step regenerate starts a new shoe source whose later steps do not exist
     yet. 400 for an unknown step/view, an item
     that is no garment of this character, or a character off the base-body
@@ -2562,12 +2572,16 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
     from app.core import base_body, garments
     _require_character(character_name)
     try:
-        garments.check_run(character_name, item_id, steps=body.step, view=body.view, state=body.state)
+        garments.check_run(character_name, item_id, steps=body.step, view=body.view, state=body.state,
+                           prerequisites=body.prerequisites)
         if base_body.current_base(character_name) is None:
             raise ValueError(f"{character_name} is not on the base-body pipeline")
         return garments.start_garment(character_name, item_id, steps=body.step, view=body.view,
                                       force=body.force, state=body.state,
-                                      only=bool(body.step) and not body.chain)
+                                      only=bool(body.step) and (not body.chain or body.view is not None),
+                                      prerequisites=body.prerequisites)
+    except garments.PrerequisiteMissing as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

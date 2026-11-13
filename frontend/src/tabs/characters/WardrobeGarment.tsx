@@ -591,6 +591,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             busy={busy}
             onRun={onRun}
             feedback={feedback}
+            viewRuns={info.view_runs}
             meshFetchUrl={meshFetchUrl}
             onMeshFetched={onMeshFetched}
           />

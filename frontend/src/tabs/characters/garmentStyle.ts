@@ -40,8 +40,10 @@ export type GarmentLimits = Partial<Record<string, Record<string, GateLimit>>>
 
 /** The body of POST /characters/{n}/garments/{item}/run. */
 /** POST …/garments/{item}/run. With a `step`: only that step (the steps dialog's buttons), unless `chain` — then
- *  the chain from it (Re-render, the hair's Regenerate, footwear). Without one: the chain from the first missing step. */
-export interface GarmentRunBody { step?: string; view?: string; force?: boolean; chain?: boolean }
+ *  the chain from it (Re-render, the hair's Regenerate, footwear). Without one: the chain from the first missing step.
+ *  With a `view` (Ruling A33): that view of the step alone; a view it needs that is not accepted is a 409 before
+ *  anything is spent, unless `prerequisites` — the button's explicit "first" action — lets the run make it first. */
+export interface GarmentRunBody { step?: string; view?: string; force?: boolean; chain?: boolean; prerequisites?: boolean }
 
 /** One chip: which number of a gate record, how it reads, how it scales.
  *  The limit itself always comes from the server. */

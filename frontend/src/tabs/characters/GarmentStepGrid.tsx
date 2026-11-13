@@ -10,6 +10,14 @@
  * The step names carry a tooltip with what the step makes and what a
  * Regenerate costs (hub jobs). Run clicks go through the caller (`onRun`,
  * useGarmentRun) and keep their immediate feedback (RunButton, runMark).
+ *
+ * Ruling A33: a view's button runs THAT view of its step alone. Its cost
+ * stands beside it before the click (`viewRuns`, the server's per-view plan:
+ * the view's hub jobs plus a follow-up — a new drafted front drafts its back
+ * again). A view it needs that is not accepted disables it with the plain
+ * reason, and a separate "Render … first" button names what it renders first
+ * and the hub jobs of the whole click. A pair whose views disagree marks the
+ * view to regenerate (a view button never repairs the pair).
  * The hair row keeps its own layout (GarmentSteps).
  */
 import { Fragment } from 'react'
@@ -25,7 +33,8 @@ import { MeshJobFetch } from './MeshJobFetch'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type {
-  GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit, GateRecord, RunFeedback,
+  GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit, GateRecord, RunFeedback, ViewNeed,
+  ViewRunPlan, ViewRunPlans,
 } from './useGarment'
 
 /** Thumbnail height of an image cell (px). */
@@ -139,15 +148,32 @@ export function StepLabel({ garment, step, label, help }: {
 
 /** What each step makes and what its Regenerate costs (tooltips). */
 const STEP_HELP: Record<string, string> = {
-  worn: 'Worn views: the base body wearing this piece — the front an image edit of the base front, the back a draft composited onto the base back on the CPU (no second render; when nothing of the piece shows from behind, the back stays the base back). Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — this step only; the later images of the view and the mesh are dropped, Run all or the Build makes them again.',
-  ghost: 'Piece-only views: the piece alone, the body removed, aligned to the worn view. Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — this step only; the later images of the view and the mesh are dropped, Run all or the Build makes them again.',
+  worn: 'Worn views: the base body wearing this piece — the front an image edit of the base front, the back a draft composited onto the base back on the CPU (no second render; when nothing of the piece shows from behind, the back stays the base back). Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — that view only; a new front drafts the back again from it in the same run. The later images and the mesh are dropped, Run all or the Build makes them again.',
+  ghost: 'Piece-only views: the piece alone, the body removed, aligned to the worn view. The front takes its length from the accepted back, so the back comes first. Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — that view only; the later images of the view and the mesh are dropped, Run all or the Build makes them again.',
   cutout: 'Cut-outs: the piece-only views squared and upscaled as the mesh input. Regenerate: local crop plus a routed upscale job — this step only; the mesh is dropped, Run all or the Build makes it and the fit again.',
   mesh: 'Mesh: a 3D mesh built from both cut-outs and decimated. Regenerate: one hub mesh job (a second attempt when the gate refuses it) — this step only; the fit then reads outdated and stays in use until Re-fit, Run all or the Build fits it again.',
   fit: 'Fit: the mesh fitted onto the rigged body it is worn on (the plain body, or a body shape). Re-fit runs locally — no hub job.',
 }
 
+/** Why a view needs another one, said on its disabled button (Ruling A33). */
+const NEED_TEXT: Record<ViewNeed, string> = {
+  source: 'This image is made from that one.',
+  draft: 'The back is drafted from the front.',
+  pair: 'The front takes its length from the back.',
+}
+
+/** "1 hub job" / "3 hub jobs" / "no hub job". */
+function jobsText(n: number, t: (s: string) => string): string {
+  return n === 0 ? t('no hub job') : n === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(n))
+}
+
+/** "up to 1 hub job" / "up to 3 hub jobs" / "no hub job" (first attempts; a refused attempt retries). */
+function upToText(n: number, t: (s: string) => string): string {
+  return n === 0 ? t('no hub job') : n === 1 ? t('up to 1 hub job') : t('up to {n} hub jobs').replace('{n}', String(n))
+}
+
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
-  meshFetchUrl = null, onMeshFetched }: {
+  viewRuns = null, meshFetchUrl = null, onMeshFetched }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -156,6 +182,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   busy: boolean
   onRun: (body: GarmentRunBody, slot?: string) => void
   feedback?: RunFeedback
+  /** Each view button's cost and prerequisites (the panel's `view_runs`, Ruling A33); null = unknown. */
+  viewRuns?: ViewRunPlans | null
   /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
   meshFetchUrl?: string | null
   /** The mesh record changed through a fetched job: reload the panel. */
@@ -164,6 +192,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   useClockSettings()
   const { t } = useI18n()
   const viewLabel = (view: GarmentView) => (view === 'front' ? t('Front view') : t('Back view'))
+  /** "Piece-only · Back view" — a view of a step, as the cells name it. */
+  const viewName = (step: string, view: GarmentView) => `${t(stepLabels[step] || step)} · ${viewLabel(view)}`
   const steps = garment?.steps ?? {}
   // A view left out after an empty drafted back counts as done.
   const accepted = (step: GarmentImageStep, view: GarmentView) =>
@@ -179,9 +209,30 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
     const { step, chips } = spec
     const img = steps[step]?.[view]
     const prev = index > 0 ? imageSteps[index - 1].step : undefined
+    const plan: ViewRunPlan | undefined = viewRuns?.[step]?.[view]
+    const missing = plan?.missing ?? []
+    // Ruling A33: the server's plan names every view this one needs; without a plan the grid's own rule stands.
+    const needs = missing.length
+      ? t('Needs {what} first').replace('{what}', missing.length === 1 ? viewName(missing[0].step, missing[0].view)
+        : t('{n} views').replace('{n}', String(missing.length)))
+      : undefined
     const blocked = img?.skipped ? t('Not made: nothing of the piece shows from behind')
-      : prev && !accepted(prev, view) ? t('Run the previous step first') : undefined
-    const label = `${t(stepLabels[step] || step)} · ${viewLabel(view)}`
+      : needs ?? (!plan && prev && !accepted(prev, view) ? t('Run the previous step first') : undefined)
+    const label = viewName(step, view)
+    const cost = plan && !img?.skipped
+      ? `${jobsText(plan.jobs, t)}${plan.follow_up_jobs ? ` + ${t('{n} follow-up').replace('{n}', String(plan.follow_up_jobs))}` : ''}`
+      : ''
+    const costTitle = plan ? [
+      `${t('This view')}: ${jobsText(plan.jobs, t)}`,
+      ...plan.follow_up.map((f) => `${t('Then')} ${viewName(f.step, f.view)}: ${jobsText(f.jobs, t)} — ${t(NEED_TEXT[f.why])}`),
+      t('First attempts — a refused attempt is tried once more.'),
+    ].join('\n') : ''
+    const needsTitle = missing.length ? [
+      ...missing.map((m) => `${viewName(m.step, m.view)} — ${t(NEED_TEXT[m.why])}`),
+    ].join('\n') : ''
+    const firstTotal = plan ? plan.prerequisite_jobs + plan.jobs + plan.follow_up_jobs : 0
+    const firstSlot = `${runSlot({ step, view })}|first`
+    const pairRedo = garment?.pair && !garment.pair.agree && garment.pair.step === step && garment.pair.redo === view
     const mark = runMark(feedback, garment, order, step, view)
     const slot = runSlot({ step, view })
     const ring = mark === 'redo' ? 'var(--warning, #d29922)' : mark || feedback?.pending === slot
@@ -219,17 +270,50 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
             ) : null}
             <RunBadge mark={mark}
               title={mark === 'queued' ? queueText(garment, feedback, stepLabels, t) : undefined} />
+            {pairRedo ? (
+              <span className="ga-run-badge"
+                title={[garment?.pair?.error || '', t('Regenerate this view — or Run all renders it again.')]
+                  .filter(Boolean).join('\n')}
+                style={{ borderColor: 'var(--warning, #d29922)', color: 'var(--warning, #d29922)' }}>
+                {t('Does not match the other view')}
+              </span>
+            ) : null}
           </div>
-          <RunButton
-            feedback={feedback}
-            slot={slot}
-            disabled={busy || !garment || !!blocked}
-            title={blocked || `${img?.url ? t('Regenerate') : t('Generate')}: ${label}\n${t(STEP_HELP[step] || '')}`}
-            ariaLabel={`${img?.url ? t('Regenerate') : t('Generate')} · ${label}`}
-            label={img?.url ? '↻' : t('Generate')}
-            startingLabel="…"
-            onClick={() => onRun({ step, view, force: true })}
-          />
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+            <RunButton
+              feedback={feedback}
+              slot={slot}
+              disabled={busy || !garment || !!blocked}
+              title={blocked ? [blocked, needsTitle].filter(Boolean).join('\n')
+                : [`${img?.url ? t('Regenerate') : t('Generate')}: ${label}`, costTitle, t(STEP_HELP[step] || '')]
+                  .filter(Boolean).join('\n')}
+              ariaLabel={`${img?.url ? t('Regenerate') : t('Generate')} · ${label}${cost ? ` · ${cost}` : ''}`}
+              label={img?.url ? '↻' : t('Generate')}
+              startingLabel="…"
+              onClick={() => onRun({ step, view, force: true })}
+            />
+            {cost ? <span className="ga-hint" title={costTitle}>{cost}</span> : null}
+          </div>
+          {needs ? (
+            <>
+              <div className="ga-hint" title={needsTitle}>{needs}</div>
+              <RunButton
+                feedback={feedback}
+                slot={firstSlot}
+                disabled={busy || !garment}
+                title={[
+                  ...missing.map((m) => `${viewName(m.step, m.view)}: ${jobsText(m.jobs, t)} — ${t(NEED_TEXT[m.why])}`),
+                  `${t('Then')} ${label}: ${jobsText(plan?.jobs ?? 0, t)}`,
+                  ...(plan?.follow_up ?? []).map((f) => `${t('Then')} ${viewName(f.step, f.view)}: ${jobsText(f.jobs, t)}`),
+                  t('First attempts — a refused attempt is tried once more.'),
+                ].join('\n')}
+                label={`${t('Render {what} first').replace('{what}', missing.length === 1
+                  ? viewName(missing[0].step, missing[0].view) : t('{n} views').replace('{n}', String(missing.length)))}`
+                  + ` — ${upToText(firstTotal, t)}`}
+                onClick={() => onRun({ step, view, force: true, prerequisites: true }, firstSlot)}
+              />
+            </>
+          ) : null}
           <AttemptThumbs attempts={img?.attempts ?? []} label={label} chips={chips}
             limits={chips ? limits[step] : undefined} view={view} />
         </div>

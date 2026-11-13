@@ -3482,6 +3482,11 @@ a.ga-btn {
   gap: 6px 10px;
   align-items: stretch;
 }
+/* A step button that cannot run (Ruling A33: a view it needs is missing) reads disabled; its reason stands beside it. */
+.ga-step-grid .ga-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .ga-step-grid-head {
   font-size: 0.75em;
   color: var(--text-muted, #8b949e);

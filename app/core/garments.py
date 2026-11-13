@@ -126,6 +126,18 @@ a base model run, the Build's model steps) the refit queues behind the
 FIFO's run as before. The character-wide refit sweep
 (``garment_refit.refit_character``) never runs beside one (``hold_all``).
 
+Ruling A33: a per-view button (the step grid's Generate / Regenerate of one
+view) runs ONLY that view of that step — no other view of the step, not even
+a stale one, no later step, no pair repair. The views it reads first
+(``view_needs``: the previous step's same view, a drafted back's front, the
+pair step's back) must be accepted: ``check_run`` refuses with
+``PrerequisiteMissing`` (409) before anything is queued or spent, unless the
+caller asks for them (``prerequisites``, the button's explicit "first"
+action): then the run makes them first, in chain order. A new front of a
+drafted step re-drafts its back in the same run (``_follow_ups``).
+``view_plans`` states each button's jobs, follow-up and prerequisites before
+the click. Run all is unchanged: the chain, accepted views skipped.
+
 An own-mesh outfit piece (kind ``clothing``) whose fit was accepted by a run
 asks ``base_body.after_mesh_item_ready``: a "piece ready" request of the
 character's Build, which builds the figure with the piece grafted.
@@ -249,6 +261,13 @@ def _check_view(kind: str, view: Optional[str]) -> None:
         raise ValueError("Footwear has no views")
     if view not in GARMENT_VIEWS:
         raise ValueError(f"Unknown garment view {view!r}")
+
+
+def _check_view_steps(wanted: Optional[List[str]], view: Optional[str]) -> None:
+    """Ruling A33: a ``view`` names ONE image step (the step grid's per-view buttons) — ValueError otherwise."""
+    from app.core.garment_store import IMAGE_STEPS
+    if view is not None and (wanted is None or len(wanted) != 1 or wanted[0] not in IMAGE_STEPS):
+        raise ValueError("A view runs one image step")
 
 
 def _steps(steps: Union[None, str, Iterable[str]], order: Tuple[str, ...]) -> Optional[List[str]]:
@@ -1447,7 +1466,7 @@ def body_fit_info(character_name: str, item_id: str, *,
 
 def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
                 view: Optional[str] = None, force: bool = False, state: Optional[str] = None,
-                only: bool = False, beside: bool = False) -> Dict[str, Any]:
+                only: bool = False, beside: bool = False, prerequisites: bool = False) -> Dict[str, Any]:
     """Run the garment chain of ``item_id`` (blocking, minutes; one run per
     character — waits for ``garment_store.char_lock``, then for the item's
     ``garment_store.run_item_lock``).
@@ -1473,6 +1492,20 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     whose images were copied from the previous base still restarts at its
     first step (two bases never mix) and runs up to the named step.
 
+    ``view`` (Ruling A33, the step grid's per-view buttons): ONE image step
+    of an edit chain, that view alone (``only`` implied) — no other view of
+    the step (not even a stale one) and no later step. The views it needs
+    (``view_needs``: the previous step's same view, a drafted back's front,
+    the pair step's back) must be accepted: a run that finds one missing
+    renders nothing and answers ``{ok: False, prerequisite: [...]}``
+    (unpersisted) — unless ``prerequisites`` (the button's explicit "first"
+    action): then they render first, in chain order, never forced. The view's
+    follow-up (``_follow_ups``: a new front of a drafted step re-drafts its
+    back) runs in the same run. The pair repair of the chain does not run: a
+    pair step whose views disagree afterwards says so (``pair`` in the result)
+    and Run all repairs it. ValueError for a view with anything but one image
+    step.
+
     The steps are those of the item's CURRENT method
     (``garment_store.steps_for``; hair by HairDeck: ``hairdeck``, ``fit``;
     footwear: the shoe chain, ``garment_footwear.run_chain``).
@@ -1497,13 +1530,17 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     _require_steps(kind, order)
     wanted = _steps(steps, order)
     _check_view(kind, view)
+    _check_view_steps(wanted, view)
+    if view is not None:
+        only = True  # Ruling A33: a view runs its step alone
     from app.core import garment_store as gs
     if beside and wanted != ["fit"]:
         raise ValueError("Only a run of the fit step alone runs beside the character's other garment runs")
     import contextlib
     with (contextlib.nullcontext() if beside else gs.char_lock(character_name)), \
             gs.run_item_lock(character_name, item_id):
-        result = _run_locked(character_name, item, kind, wanted, view, bool(force), state, only=bool(only))
+        result = _run_locked(character_name, item, kind, wanted, view, bool(force), state, only=bool(only),
+                             **({"prerequisites": True} if prerequisites else {}))
         _note_outcome(character_name, item_id, result)
     if result.get("ok") and "fit" in (result.get("ran") or []) and kind in _grafted_kinds():
         # Outside the run lock: the piece is ready — a "piece_ready" request of the
@@ -1528,7 +1565,8 @@ def _note_outcome(character_name: str, item_id: str, result: Dict[str, Any]) -> 
     try:
         if result.get("ok"):
             gs.clear_failure(character_name, item_id, fsig)
-        elif result.get("step") and not result.get("retry_later"):
+        elif result.get("step") and not result.get("retry_later") and not result.get("prerequisite"):
+            # A per-view run refused for a missing prerequisite spent nothing and is no defect (Ruling A33).
             base = base_body.current_base(character_name)
             gs.record_failure(character_name, item_id, fsig, step=str(result["step"]),
                               error=str(result.get("error") or ""), base_model_sha=base[1] if base else "",
@@ -1714,6 +1752,248 @@ def run_estimate(character_name: str, item_id: str, *,
     return {"steps": steps, "hub_jobs": full, "note": note, "refit": False}
 
 
+# --- A per-view run (Ruling A33) ---------------------------------------------------
+
+#: Why a view needs another view (``view_needs``; the UI words each code): ``source`` the step edits the
+#: previous step's image of the same view, ``draft`` a drafted back is made from its step's front, ``pair``
+#: the pair step's front is matched to the accepted back's length.
+NEEDS_SOURCE, NEEDS_DRAFT, NEEDS_PAIR = "source", "draft", "pair"
+_NEEDS_TEXT = {NEEDS_SOURCE: "the {view} is made from the {need} image",
+               NEEDS_DRAFT: "the {view} is drafted from the {need}",
+               NEEDS_PAIR: "the {view} is matched to the {need}'s length"}
+#: How the refusals name a step (the UI's own labels are its step names).
+_STEP_WORDS = {"worn": "worn", "ghost": "piece-only", "cutout": "cut-out"}
+#: A per-view run's refusal when a view it needs is not accepted (``PrerequisiteMissing``; 409).
+PREREQUISITE_ERROR = "Needs {what} first — {why}. Nothing was rendered"
+
+
+class PrerequisiteMissing(Exception):
+    """Ruling A33: a per-view run whose prerequisite views are not accepted, refused before anything is
+    spent (``check_run`` → 409; a queued run that finds it at its start answers the same, unpersisted).
+    ``missing`` = the plan's ``missing`` entries."""
+
+    def __init__(self, message: str, missing: List[Dict[str, Any]]):
+        super().__init__(message)
+        self.missing = missing
+
+
+def _view_order(kind: str, step: str) -> Tuple[str, ...]:
+    """The render order of the views of image ``step``: the cut-out front first, an edit step its own
+    (``EDIT_STEPS[step]["views"]``: clothing ``worn`` the front first) or ``EDIT_VIEW_ORDER``."""
+    from app.core.garment_store import GARMENT_VIEWS
+    if step == "cutout":
+        return GARMENT_VIEWS
+    return tuple(_kind_module(kind).EDIT_STEPS[step].get("views", EDIT_VIEW_ORDER))
+
+
+def view_needs(kind: str, step: str, view: str) -> List[Tuple[str, str, str]]:
+    """The views (``(step, view, why)``) that ``view`` of image ``step`` reads before it renders — each must be
+    accepted first (Ruling A33): the previous image step's same view (``source``: an edit's
+    ``EDIT_STEPS[step]["source"]``, the cut-out's ghost), a drafted step's front for its back (``draft``,
+    ``garment_images._drafted_back``) and the pair step's back for its front (``pair``, ``_pair_check``)."""
+    from app.core.garment_store import image_steps
+    module = _kind_module(kind)
+    order = image_steps(kind)
+    out: List[Tuple[str, str, str]] = []
+    if step == "cutout":
+        out.append((order[order.index(step) - 1], view, NEEDS_SOURCE))
+    else:
+        spec = module.EDIT_STEPS[step]
+        if spec.get("source") not in (None, "base"):
+            out.append((spec["source"], view, NEEDS_SOURCE))
+        if view == "back" and spec.get("back") == "draft":
+            out.append((step, "front", NEEDS_DRAFT))
+        if view == "front" and step == module.PAIR_STEP:
+            out.append((step, "back", NEEDS_PAIR))
+    return out
+
+
+def _view_cost(character_name: str, item_id: str, kind: str, fsig: str, step: str, view: str, *,
+               costs: Dict[str, int], forced: bool, open_state: bool, profile: Dict[str, Any],
+               front_changes: bool = False) -> int:
+    """Hub jobs of rendering ``view`` of image ``step`` on first attempts: one per view (``HUB_JOBS`` split by
+    ``BACK_JOBS``); 0 for a view a stored attempt passes once judged again (Ruling A27) — never for a drafted
+    back whose front ``front_changes``: its attempts follow the old front — and for an OPEN back copied from the
+    closed state (ruling F15 i-1; a forced back is rendered from the closed texts instead)."""
+    from app.core import garment_images
+    total = int(costs.get(step, 0))
+    back = BACK_JOBS.get(step, total // 2)
+    jobs = back if view == "back" else total - back
+    if not front_changes and garment_images.rejudge_expected(character_name, item_id, fsig, step, view):
+        return 0
+    if (open_state and view == "back" and not forced and step in BACK_JOBS
+            and garment_images.closed_back(character_name, item_id, step, profile=profile) is not None):
+        return 0
+    return jobs
+
+
+def _copied_view(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
+    """Whether the final of ``view`` was copied from the previous base's group (``garment_source.materialize``)
+    — a run of a view drops those copies first (``garment_source.drop_materialized``), so it counts missing."""
+    from app.core import garment_source
+    from app.core.garment_store import read_record
+    record = read_record(_image(character_name, item_id, fsig, step, view).with_suffix(".json"))
+    return bool(record.get(garment_source.COPIED) or record.get(garment_source.MATERIALIZED))
+
+
+def _view_ready(character_name: str, item_id: str, fsig: str, step: str, view: str, materialized: bool) -> bool:
+    """A view a per-view run may read: accepted and current (``_view_done``), or left out (``skipped_view``);
+    in a group holding copies of the previous base's images, never a copy."""
+    if materialized and _copied_view(character_name, item_id, fsig, step, view):
+        return False
+    return _view_done(character_name, item_id, fsig, step, view)
+
+
+def _missing_views(character_name: str, item_id: str, kind: str, fsig: str, step: str, view: str,
+                   materialized: bool) -> List[Dict[str, Any]]:
+    """Every view ``view`` of ``step`` needs, directly or through another, that is not ready — in run order
+    (chain step, then the step's view order). Each ``{step, view, why, for: [step, view]}`` (``for`` = the
+    view that needs it)."""
+    from app.core.garment_store import image_steps
+    from app.core.garment_images import skipped_view
+    found: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    todo = [(step, view)]
+    seen = set(todo)
+    while todo:
+        s, v = todo.pop()
+        for ns, nv, why in view_needs(kind, s, v):
+            if (ns, nv) in seen:
+                continue
+            seen.add((ns, nv))
+            if skipped_view(character_name, item_id, fsig, ns, nv):
+                continue  # an empty drafted back: nothing to wait for
+            if _view_ready(character_name, item_id, fsig, ns, nv, materialized):
+                continue
+            found[(ns, nv)] = {"step": ns, "view": nv, "why": why, "for": [s, v]}
+            todo.append((ns, nv))
+    order = image_steps(kind)
+    return sorted(found.values(), key=lambda m: (order.index(m["step"]),
+                                                 _view_order(kind, m["step"]).index(m["view"])))
+
+
+def _follow_ups(kind: str, step: str, view: str) -> List[Tuple[str, str, str]]:
+    """The views a new ``view`` of ``step`` renders again in the same run (Ruling A33 c): a new front of a
+    DRAFTED step drops the back drafted from it (``garment_images._publish``), which is drafted again from the
+    new front. A new image's LATER steps and the mesh are only dropped — Run all makes them again."""
+    if view == "front" and (_kind_module(kind).EDIT_STEPS.get(step) or {}).get("back") == "draft":
+        return [(step, "back", NEEDS_DRAFT)]
+    return []
+
+
+def _view_words(step: str, view: str) -> str:
+    """"piece-only back" — a view as the refusals name it."""
+    return f"{_STEP_WORDS.get(step, step)} {view}"
+
+
+def _what(missing: List[Dict[str, Any]]) -> str:
+    """The refusal's words for the missing views ("the piece-only back", "2 views (worn front, worn back)")."""
+    names = [_view_words(m["step"], m["view"]) for m in missing]
+    return f"the {names[0]}" if len(names) == 1 else f"{len(names)} views ({', '.join(names)})"
+
+
+def _view_context(character_name: str, item_id: str, profile: Optional[Dict[str, Any]],
+                  state: Optional[str]) -> Optional[Dict[str, Any]]:
+    """What a per-view plan reads once per item: ``{kind, method, fsig, costs, open, profile, materialized}``;
+    None when the item has no per-view runs (no edit chain, off the pipeline, no fsig)."""
+    from app.core import base_body, garment_source
+    from app.core import garment_store as gs
+    from app.models.character import get_character_profile
+    try:
+        _item_, kind, _order = _item_order(character_name, item_id, profile)
+    except ValueError:
+        return None
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    if kind == _footwear() or base_body.current_base(character_name, profile=profile) is None:
+        return None
+    method = gs.kind_method(kind, character_name, profile, item_id=item_id)
+    if method != gs.EDIT_CHAIN:
+        return None
+    try:
+        state = gs.item_state(character_name, item_id, profile, state)
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile, state=state)
+    except ValueError:
+        return None
+    run_profile = _run_profile(profile, item_id, state) or profile
+    return {"kind": kind, "method": method, "fsig": fsig, "costs": dict(HUB_JOBS.get(f"{kind}:{method}") or {}),
+            "open": kind == _clothing() and state == "open", "profile": run_profile,
+            "materialized": garment_source.is_materialized(character_name, item_id, fsig)}
+
+
+def _plan_of(character_name: str, item_id: str, ctx: Dict[str, Any], step: str, view: str) -> Dict[str, Any]:
+    from app.core.garment_images import skipped_view
+    kind, fsig = ctx["kind"], ctx["fsig"]
+    args = {"costs": ctx["costs"], "open_state": ctx["open"], "profile": ctx["profile"]}
+    skipped = skipped_view(character_name, item_id, fsig, step, view)
+    missing = _missing_views(character_name, item_id, kind, fsig, step, view, ctx["materialized"])
+    drafted = {s for s, spec in (getattr(_kind_module(kind), "EDIT_STEPS", {}) or {}).items()
+               if spec.get("back") == "draft"}
+    for m in missing:
+        # A drafted back whose front renders first is drafted from the NEW front: no stored attempt counts.
+        front_changes = (m["view"] == "back" and m["step"] in drafted
+                         and any(o["step"] == m["step"] and o["view"] == "front" for o in missing))
+        m["jobs"] = _view_cost(character_name, item_id, kind, fsig, m["step"], m["view"], forced=False,
+                               front_changes=front_changes, **args)
+    follow = [{"step": s, "view": v, "why": why,
+               "jobs": _view_cost(character_name, item_id, kind, fsig, s, v, forced=False, front_changes=True,
+                                  **args)}
+              for s, v, why in _follow_ups(kind, step, view)]
+    jobs = 0 if skipped else _view_cost(character_name, item_id, kind, fsig, step, view, forced=True, **args)
+    return {"step": step, "view": view, "jobs": jobs, "skipped": skipped or None,
+            "missing": missing, "prerequisite_jobs": sum(m["jobs"] for m in missing),
+            "follow_up": follow, "follow_up_jobs": sum(f["jobs"] for f in follow)}
+
+
+def view_plan(character_name: str, item_id: str, step: str, view: str, *,
+              profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """What the per-view button of ``view`` of image ``step`` spends BEFORE the click (Ruling A33): ``{step,
+    view, jobs, skipped, missing, prerequisite_jobs, follow_up, follow_up_jobs}`` — ``jobs`` this view on first
+    attempts (forced, as the button runs it), ``missing`` the views it needs that are not accepted, in run order
+    (``{step, view, why, for, jobs}``; the button is refused with 409 while any is — its "first" action runs
+    them, ``prerequisite_jobs``), ``follow_up`` the views the same run renders again after it (a drafted step's
+    back; ``follow_up_jobs``), ``skipped`` why the view is not made (an empty drafted back's later views).
+    None when the item has no per-view runs. Read from the files only."""
+    ctx = _view_context(character_name, item_id, profile, state)
+    if ctx is None or (step != "cutout" and step not in getattr(_kind_module(ctx["kind"]), "EDIT_STEPS", {})):
+        return None
+    return _plan_of(character_name, item_id, ctx, step, view)
+
+
+def view_plans(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
+               state: Optional[str] = None) -> Optional[Dict[str, Dict[str, Dict[str, Any]]]]:
+    """``{step: {view: view_plan}}`` for every image step and view of the item (the Wardrobe's step grid);
+    None when the item has no per-view runs."""
+    from app.core.garment_store import GARMENT_VIEWS, image_steps
+    ctx = _view_context(character_name, item_id, profile, state)
+    if ctx is None:
+        return None
+    return {step: {view: _plan_of(character_name, item_id, ctx, step, view) for view in GARMENT_VIEWS}
+            for step in image_steps(ctx["kind"])}
+
+
+def _check_view_run(character_name: str, item_id: str, step: str, view: str, *, state: Optional[str],
+                    prerequisites: bool) -> None:
+    """``check_run``'s per-view rule (Ruling A33): ValueError for a view that is not made (an empty drafted
+    back's later views); ``PrerequisiteMissing`` while a view it needs is not accepted, unless the caller
+    allows the run to make them first (``prerequisites``)."""
+    plan = view_plan(character_name, item_id, step, view, state=state)
+    if plan is None:
+        return
+    if plan["skipped"]:
+        raise ValueError(f"The {_STEP_WORDS.get(step, step)} {view} is not made: {plan['skipped']}")
+    if plan["missing"] and not prerequisites:
+        raise PrerequisiteMissing(_prerequisite_error(plan["missing"]), plan["missing"])
+
+
+def _prerequisite_error(missing: List[Dict[str, Any]]) -> str:
+    """The refusal text: the missing views and why the last of them — the one nearest the clicked view in run
+    order — is needed."""
+    last = missing[-1]
+    why = _NEEDS_TEXT.get(last["why"], "the {view} reads the {need}").format(
+        view=_view_words(*last["for"]), need=_view_words(last["step"], last["view"]))
+    return PREREQUISITE_ERROR.format(what=_what(missing), why=why)
+
+
 def _clothing() -> str:
     from app.core.garment_set import CLOTHING
     return CLOTHING
@@ -1769,7 +2049,8 @@ NOT_WORN_OPEN_ERROR = "{name} is not worn now — its open mesh is made while it
 
 def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                 wanted: Optional[List[str]], view: Optional[str], force: bool,
-                state: Optional[str] = None, *, only: bool = False) -> Dict[str, Any]:
+                state: Optional[str] = None, *, only: bool = False,
+                prerequisites: bool = False) -> Dict[str, Any]:
     from app.core import base_body, garment_images, garment_mesh
     from app.core import garment_store as gs
     from app.models.character import get_character_profile
@@ -1824,7 +2105,20 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                     return refit
         else:
             first = min(wanted, key=order.index)
-            if first in gs.IMAGE_STEPS:
+            scoped = view is not None and method == gs.EDIT_CHAIN
+            if scoped:
+                # Ruling A33: a view run checks the views it needs BEFORE anything is spent or dropped.
+                from app.core import garment_source
+                step = first
+                materialized = garment_source.is_materialized(character_name, item_id, fsig)
+                missing = _missing_views(character_name, item_id, kind, fsig, first, view, materialized)
+                if missing and not prerequisites:
+                    error = _prerequisite_error(missing)
+                    return {**_refusal(character_name, item_id, fsig, first, error, None, ran), "prerequisite": missing}
+                if materialized:
+                    # Copies of the previous base's images never mix with a new render (counted missing above).
+                    garment_source.drop_materialized(character_name, item_id, fsig)
+            elif first in gs.IMAGE_STEPS:
                 from app.core import garment_source
                 if garment_source.drop_materialized(character_name, item_id, fsig):
                     # Re-render: images of two bases never mix in one group — the chain starts at its first step.
@@ -1834,6 +2128,43 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             garment_source.ensure_current(character_name, item_id, fsig, bsig)
         image_state = state if kind == _clothing() else None
         pair_step = _kind_module(kind).PAIR_STEP if method == gs.EDIT_CHAIN else None
+        if view is not None and method == gs.EDIT_CHAIN:
+            # Ruling A33: the views it needs (allowed: ``prerequisites``), the view, its follow-up — nothing else.
+            targets = ([(m["step"], m["view"]) for m in missing] + [(first, view)]
+                       + [(s, v) for s, v, _why in _follow_ups(kind, first, view)])
+            for step, v in targets:
+                f = force and (step, v) == (first, view)
+                if not f and _view_done(character_name, item_id, fsig, step, v):
+                    continue
+                if garment_images.skipped_view(character_name, item_id, fsig, step, v):
+                    continue  # an empty drafted back: no later back image
+                gs.start(character_name, item_id, step)
+                if step == "cutout":
+                    garment_images.cut_out(character_name, item_id, fsig, v, force=f)
+                else:
+                    # A front of the pair step is checked against the accepted back (``_pair_check``).
+                    pair = (_pair_check(character_name, item_id, kind, fsig)
+                            if step == pair_step and v == "front" else None)
+                    garment_images.run_edit_step(character_name, item_id, fsig, step, v, force=f, pair_check=pair,
+                                                 prompt_hints=_front_hints(character_name, item_id, fsig, kind,
+                                                                           step, v),
+                                                 state=image_state,
+                                                 before_composite=_composite_guard(character_name, bsig,
+                                                                                   base_views, step))
+                _drop_mesh(character_name, item_id, fsig)
+                _inputs_unchanged(character_name, item_id, fsig, step, state)
+                gs.end(character_name, item_id, step)
+                if step not in ran:
+                    ran.append(step)
+            out: Dict[str, Any] = {"ok": True, "fsig": fsig, "ran": ran}
+            if first == pair_step:
+                agree, gates = _pair(character_name, item_id, kind, fsig)
+                if not agree and gates.get("front") and gates.get("back"):
+                    # No pair repair here (it would render the other view): the step reads not done, Run all
+                    # repairs it, the grid names the view to regenerate.
+                    out["pair"] = {"agree": False, "redo": _pair_redo(kind, gates),
+                                   "error": _kind_module(kind).PAIR_REFUSED}
+            return out
         dirty = False  # an earlier step produced new output: every later step runs again
         regenerated_seed: Optional[int] = None  # the seed a forced HairDeck regenerate of this run made
         # ``only``: up to the last named step (ruling F13 d), else the rest of the chain.
@@ -1844,9 +2175,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             gs.start(character_name, item_id, step)
             produced = False
             if step in gs.IMAGE_STEPS:
-                views = (gs.GARMENT_VIEWS if step == "cutout"
-                         else _kind_module(kind).EDIT_STEPS[step].get("views", EDIT_VIEW_ORDER))
-                for v in views:
+                for v in _view_order(kind, step):
                     # Ruling A17 (d): an accepted view the current gate refuses is rendered again, not reused.
                     stale = garment_images.stale_accepted(character_name, item_id, fsig, step, v)
                     f = (forced and (view is None or v == view)) or stale
@@ -2027,16 +2356,21 @@ def _retry_later(character_name: str, item_id: str, fsig: str, step: str, e: Bas
 
 
 def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
-              view: Optional[str] = None, state: Optional[str] = None) -> None:
+              view: Optional[str] = None, state: Optional[str] = None, prerequisites: bool = False) -> None:
     """ValueError unless ``item_id`` is a garment of a known kind owned by
     the character and ``steps`` / ``view`` name steps of its current method
-    and a view of it (footwear has none); a ``state`` only for a closable
+    and a view of it (footwear has none; a view only with one image step,
+    Ruling A33); a ``state`` only for a closable
     clothing piece (``open`` / ``closed``), ``open`` only while it is worn
-    (``NOT_WORN_OPEN_ERROR``)."""
+    (``NOT_WORN_OPEN_ERROR``). A view run whose prerequisite views are not
+    accepted raises ``PrerequisiteMissing`` (the route's 409) unless
+    ``prerequisites`` lets the run make them first; a view that is not made
+    (``skipped_view``) is a ValueError."""
     item, kind, order = _item_order(character_name, item_id)
     _require_steps(kind, order)
-    _steps(steps, order)
+    wanted = _steps(steps, order)
     _check_view(kind, view)
+    _check_view_steps(wanted, view)
     if state is not None:
         from app.core import garment_set
         from app.core.outfit_options import normalise_piece_state
@@ -2046,16 +2380,21 @@ def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iter
             raise ValueError(f"{item.get('name') or item_id} has no open / closed state")
         if _run_profile(get_character_profile(character_name) or {}, item_id, value) is None:
             raise ValueError(NOT_WORN_OPEN_ERROR.format(name=item.get("name") or item_id))
+    if view is not None and wanted:
+        _check_view_run(character_name, item_id, wanted[0], view, state=state, prerequisites=prerequisites)
 
 
 class _Job:
     """One queued run of a character's worker (``_queues``)."""
 
     def __init__(self, item_id: str, steps: Union[None, str, Iterable[str]], view: Optional[str],
-                 force: bool, automatic: bool = False, state: Optional[str] = None, only: bool = False):
+                 force: bool, automatic: bool = False, state: Optional[str] = None, only: bool = False,
+                 prerequisites: bool = False):
         self.item_id, self.steps, self.view, self.force = item_id, steps, view, force
-        #: Only the named steps, nothing after them (``run_garment(only=…)``, ruling F13 d).
-        self.only = bool(only) and steps is not None
+        #: Only the named steps, nothing after them (``run_garment(only=…)``, ruling F13 d); a view run always.
+        self.only = (bool(only) or view is not None) and steps is not None
+        #: A view run that makes its missing prerequisite views first (Ruling A33, the explicit "first" action).
+        self.prerequisites = bool(prerequisites) and view is not None
         #: The open / closed state the run is for; None = the worn state when it starts (``run_garment``).
         self.state = state
         #: Queued by a trigger (``enqueue_garment`` / ``run_queued``), not by a
@@ -2075,12 +2414,12 @@ class _Job:
         """A default run (first missing step on, the worn state) — what a trigger asks for."""
         return self.steps is None and self.view is None and not self.force and self.state is None
 
-    def key(self) -> Tuple[str, Any, Optional[str], bool, Optional[str], bool]:
-        """What makes two runs the same request (the steps as a tuple, the state, ``only``)."""
+    def key(self) -> Tuple[str, Any, Optional[str], bool, Optional[str], bool, bool]:
+        """What makes two runs the same request (the steps as a tuple, the state, ``only``, ``prerequisites``)."""
         steps = self.steps
         if steps is not None and not isinstance(steps, str):
             steps = tuple(steps)
-        return self.item_id, steps, self.view, bool(self.force), self.state, self.only
+        return self.item_id, steps, self.view, bool(self.force), self.state, self.only, self.prerequisites
 
 
 def _fit_only(steps: Union[None, str, Iterable[str]]) -> bool:
@@ -2183,8 +2522,10 @@ def _execute(character_name: str, job: "_Job") -> Optional[str]:
             job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
                                      force=job.force, state=job.state, only=job.only, beside=True)
         else:
+            # ``prerequisites`` only when asked (Ruling A33): every other run keeps its call as before.
             job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
-                                     force=job.force, state=job.state, only=job.only)
+                                     force=job.force, state=job.state, only=job.only,
+                                     **({"prerequisites": True} if job.prerequisites else {}))
     except Exception as e:  # noqa: BLE001 — a worker thread reports, never raises
         logger.error("Garment run %s/%s failed: %s", character_name, job.item_id, e)
         error = str(e) or type(e).__name__
@@ -2285,7 +2626,8 @@ def _position_locked(character_name: str, job: "_Job") -> Dict[str, Any]:
 
 def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
                   view: Optional[str] = None, force: bool = False,
-                  state: Optional[str] = None, only: bool = False) -> Dict[str, Any]:
+                  state: Optional[str] = None, only: bool = False,
+                  prerequisites: bool = False) -> Dict[str, Any]:
     """Run ``run_garment`` in the character's worker thread — at once when
     the character has no garment run, else queued behind its runs (never
     refused). An identical waiting run (same item, steps, view, force) is not
@@ -2307,6 +2649,11 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     (``run_garment``) — the steps dialog's step buttons; without ``steps``
     it means nothing (a default run is the chain).
 
+    ``view`` (Ruling A33): the step's view alone (``run_garment``);
+    ``PrerequisiteMissing`` before anything is queued while a view it needs
+    is not accepted, unless ``prerequisites`` (the button's explicit "first"
+    action) lets the run make them first.
+
     Ruling A30: a fit-only run (a CPU refit) of an item with no run in
     flight, waiting or beside starts at once BESIDE the character's run of
     another item (``_side_worker``, ``_beside_ok_locked``) — ``{started True,
@@ -2314,8 +2661,9 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     step or the 3D generation guard is in flight (``_base_in_flight``) or a
     refit sweep holds the character: then it queues as before."""
     from app.core import garment_store as gs
-    check_run(character_name, item_id, steps=steps, view=view, state=state)
-    wanted = _Job(item_id, steps, view, bool(force), state=state, only=only)
+    check_run(character_name, item_id, steps=steps, view=view, state=state,
+              **({"prerequisites": True} if prerequisites else {}))
+    wanted = _Job(item_id, steps, view, bool(force), state=state, only=only, prerequisites=prerequisites)
     # A default run builds the worn state: an explicit run of the OTHER state never takes its place.
     takes_default = wanted.state is None or wanted.state == _worn_state(character_name, item_id)
     # A fit-only run is a CPU refit: tracked from the click on (pending while it waits behind other runs).
@@ -2353,7 +2701,7 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
             if job is not None:
                 # Explicit wins, the place in the queue stays.
                 job.steps, job.view, job.force, job.state = wanted.steps, wanted.view, wanted.force, wanted.state
-                job.only = wanted.only
+                job.only, job.prerequisites = wanted.only, wanted.prerequisites
         if job is None:
             job = wanted
             queue.append(job)
@@ -3057,6 +3405,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     registration {shift, scale} | None, first_step, created_at}`` (the tab
     shows "Refitted from the previous base" + Re-render = an explicit run of
     ``first_step``), None otherwise.
+    ``pair`` (an edit chain whose pair step has both views accepted, Ruling
+    A33): ``{step, agree, redo, error}`` — ``redo`` the view a disagreeing
+    pair renders again (``_pair_redo``); None otherwise.
     ``body`` (mesh mode, plan 2026-11-10-outfit-body-mesh-mode Task 2): the
     piece's fit on the outfit body the CURRENT outfit model stands on
     (``body_fit_info``; ``body_id`` repeats its id), None on the base body —
@@ -3094,6 +3445,14 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                 steps[step] = _hairdeck_info(character_name, item_id, hsig or "")
             elif step == "fit":
                 steps[step] = _fit_info(character_name, item_id, fsig, base[1], method)
+    pair = None
+    if fsig and method == gs.EDIT_CHAIN and _kind_module(kind).PAIR_STEP in steps:
+        # Ruling A33: a view run never repairs a disagreeing pair (that renders the other view) — say which one.
+        agree, pair_gates = _pair(character_name, item_id, kind, fsig)
+        if pair_gates.get("front") and pair_gates.get("back"):
+            pair = {"step": _kind_module(kind).PAIR_STEP, "agree": agree,
+                    "redo": None if agree else _pair_redo(kind, pair_gates),
+                    "error": None if agree else _kind_module(kind).PAIR_REFUSED}
     served = (gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile)
               if base[1] else None)
     served_fsig = (gs.parse_name(served[0]) or (None, None))[1] if served else None
@@ -3167,7 +3526,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     return gs.finite_json({
         "item_id": item_id, "kind": kind, "fsig": fsig, "method": method, "method_source": method_source,
         "hsig": hsig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
-        "steps": steps, "stale_reasons": stale,
+        "steps": steps, "stale_reasons": stale, "pair": pair,
         "running_step": status["running_step"], "started_at": status["started_at"],
         "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
         "queue_beside": queue["queue_beside"],

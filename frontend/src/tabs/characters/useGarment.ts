@@ -225,6 +225,9 @@ export interface GarmentInfo {
   }
   stale_reasons: Array<'description_changed' | 'base_changed' | 'base_model_changed' | 'hairdeck_changed'
     | 'colour_changed' | string>
+  /** The pair step's views, both accepted (Ruling A33): whether they agree, and the view a disagreeing pair
+   *  renders again (`redo`) — a view button never repairs the pair; null/absent otherwise. */
+  pair?: { step: string; agree: boolean; redo: GarmentView | null; error: string | null } | null
   /** The step in flight, `queued` between the click and the first step. */
   running_step: string | null
   started_at: string | null
@@ -545,6 +548,28 @@ export interface WardrobeGarments {
   auto_build?: boolean
 }
 
+/** Why a view needs another one (`garments.view_needs`): made from that image (`source`), a back drafted from its
+ *  front (`draft`), a front matched to the back's length (`pair`). */
+export type ViewNeed = 'source' | 'draft' | 'pair'
+
+/** What one per-view button of the step grid spends and needs before the click (`garments.view_plan`, Ruling A33):
+ *  `jobs` this view (first attempts), `missing` the views it needs that are not accepted (run order; the button is
+ *  refused while any is — its "first" action renders them, `prerequisite_jobs`), `follow_up` what the same run
+ *  renders again after it (a drafted step's back), `skipped` why the view is not made. */
+export interface ViewRunPlan {
+  step: string
+  view: GarmentView
+  jobs: number
+  skipped: string | null
+  missing: Array<{ step: string; view: GarmentView; why: ViewNeed; for: [string, GarmentView]; jobs: number }>
+  prerequisite_jobs: number
+  follow_up: Array<{ step: string; view: GarmentView; why: ViewNeed; jobs: number }>
+  follow_up_jobs: number
+}
+
+/** `view_runs` of the panel: step → view → plan (null without per-view runs). */
+export type ViewRunPlans = Partial<Record<string, Partial<Record<GarmentView, ViewRunPlan>>>>
+
 /** GET /characters/{n}/garments/{item} — the Wardrobe's own-mesh panel. */
 export interface GarmentItemInfo {
   pipeline: boolean
@@ -560,6 +585,8 @@ export interface GarmentItemInfo {
    *  that is not current, their first-attempt hub jobs (null = unknown, `note` says why); `refit` — the chain
    *  refits on the CPU first (0 hub jobs). */
   run?: { steps: string[]; hub_jobs: number | null; note: string; refit: boolean } | null
+  /** Each per-view button's cost and prerequisites (`garments.view_plans`, Ruling A33); null without per-view runs. */
+  view_runs?: ViewRunPlans | null
 }
 
 /** A step runs or the item waits in the character's garment queue
