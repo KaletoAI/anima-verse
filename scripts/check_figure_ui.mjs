@@ -95,9 +95,8 @@
  *      humanoid-only section `figure` (special "figure"), and CharactersTab renders the slot `figure`.
  * [13] Task 11 source greps: the Figure tab opens GarmentPieceDialog with `noRunAll`, and the dialog's
  *      "Run all" renders only `!noRunAll` (Ruling 10a: there only Build and Retry start chains; since Task UI1
- *      its label is `runAll.label`, the count from `chainRunAll`); the
- *      Wardrobe's hair row has "Create hair" (POST `/characters/${enc}/hair` with `{}`) and "Wear hair"
- *      (POST …/hair/equipped) — the hair tab they lived in is gone (T9 concern 4).
+ *      its label is `runAll.label`, the count from `chainRunAll`). (The Wardrobe hair row's "Create hair" /
+ *      "Wear hair" cases went with the row — Task 14, Ruling P3; their successors are case [19].)
  *
  * Task 11b — open / closed (spec Addendum A, plan Task 11b "Interfaces", rulings A6/A7):
  * [14] PIECE_STATE_LABELS open → "Open", closed → "Closed"; PIECE_STATES = [closed, open] (the toggle's order).
@@ -132,6 +131,37 @@
  *      tabs), height 600; the grid is the class `ga-split-figure` with columns minmax(360px, 1.2fr) minmax(320px, 1fr)
  *      in game-admin.css (at a 1280 px window the right column keeps ~440 px for the header, Build and pieces) and
  *      collapses to one column under 1000 px like every `ga-split-views`.
+ *
+ * Task 14 — the Hairstyles tab (Rulings P2/P3, the user's rule R1–R4; helpers in figureModel.ts):
+ * [19] hairstyleRows(owned, wornId) — the worn hairstyle first, then the server's order; label "<name> · <mode
+ *      label>" (HAIR_MODE_LABELS):
+ *        owned [a "Short bob" body, b "Long braid" hairdeck, c "Bun" haar], wornId "b"
+ *          → ids [b, a, c], labels ["Long braid · HairDeck", "Short bob · In the body", "Bun · HAAR"], worn
+ *            [true, false, false];
+ *        the same with wornId "" and a stale worn flag on b → ids [a, b, c], worn all false (wornId wins);
+ *        a nameless entry {id "hair_x", name ""} → "hair_x · HairDeck".
+ *      newHairstyleDisabled(description, mode) — the New hairstyle dialog's Create:
+ *        ("", body) → "Describe the hairstyle"; ("   ", hairdeck) → "Describe the hairstyle" (blank = empty);
+ *        ("a bun", haar) → "not built yet" (HAAR is listed disabled); ("a bun", hairdeck) → null; ("a bun", body) → null.
+ *      hairstyleActions(mode, run) — R1 Run all only where the flow has more than one step (HairDeck: hairdeck → fit),
+ *      R2 single steps with their cost:
+ *        (body, any) and (haar, any) → runAll / regenerate / refit all null (the Build makes a body hairstyle);
+ *        (hairdeck, null) → runAll {"Run all", enabled} (no estimate: the server decides);
+ *        (hairdeck, {steps [], hub_jobs 0}) → {"Everything is current", disabled};
+ *        (hairdeck, {steps [hairdeck, fit], hub_jobs 1}) → "Run all: create + fit (1 hub job)";
+ *        (hairdeck, {steps [fit], hub_jobs 0}) → "Run all: re-fit (no hub job)";
+ *        (hairdeck, {steps [hairdeck, fit], hub_jobs null}) → "Run all: create + fit (cost unknown)";
+ *        (hairdeck, {refit true, steps [hairdeck, fit]}) → "Run all (refit on the CPU)";
+ *        regenerate "Regenerate hair (HairDeck) — 1 hub job", refit "Re-fit — no hub job" (HUB_JOBS hair:hairdeck
+ *        = {hairdeck 1, fit 0} in app/core/garments.py).
+ *      Source greps: the Wardrobe has no hair row (WardrobeHairRow.tsx gone, WardrobeTab names neither it nor a
+ *      `/hair` route) but its saved-outfit panel renders OutfitHairstyleSelect, which posts
+ *      `/outfit-sets/{id}/hairstyle` (D5); CharactersTab lists `hairstyles` directly after the Wardrobe entry in
+ *      the order that places it (`afterAussehen`), gates it on the template feature `humanoid` and renders
+ *      FieldHairstyles; FieldHairstyles' dialog is a createPortal to document.body, "New hairstyle" posts
+ *      `/hairstyles`, Wear posts `/hairstyles/{id}/wear`, the detail reads `/hair?item_id=`; R3 — the placement
+ *      and Swing saves (HairDeckPlacement) send `item_id` and start no garment run; FieldFigure's hair row shows
+ *      `hair.name` and links to the Hairstyles tab.
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -348,11 +378,6 @@ check('[13] Figure tab: piece dialog without Run all', /<GarmentPieceDialog[^>]*
 const garmentSrc = src('frontend/src/tabs/characters/WardrobeGarment.tsx');
 const runAll = garmentSrc.split('label={runAll.label}')[0].split('\n').slice(-10).join('\n');
 check('[13] dialog: Run all only without noRunAll', /info\?\.pipeline && !noRunAll \?/.test(runAll), true);
-const hairRow = src('frontend/src/tabs/characters/WardrobeHairRow.tsx');
-check('[13] hair row: Create hair posts /hair', [hairRow.includes("t('Create hair')"),
-  /call\(`\/characters\/\$\{enc\}\/hair`, \{\}/.test(hairRow)], [true, true]);
-check('[13] hair row: Wear hair posts /hair/equipped', [hairRow.includes("t('Wear hair')"),
-  hairRow.includes('/hair/equipped`')], [true, true]);
 
 // [14]
 check('[14] state labels', m.PIECE_STATE_LABELS, { open: 'Open', closed: 'Closed' });
@@ -433,6 +458,64 @@ check('[18] its columns', /\.ga-split-views\.ga-split-figure \{ grid-template-co
 check('[18] one column when narrow',
   /@media \(max-width: 1000px\) \{\s*\.ga-split-views, \.ga-split-views\.ga-split-figure \{ grid-template-columns: minmax\(0, 1fr\); \}/
     .test(adminCss), true);
+
+// [19] Task 14: the Hairstyles tab.
+const hs = (id, name, mode, worn = false) => ({ id, name, description: '', mode, worn, plain: false, freshness: null });
+const owned = [hs('a', 'Short bob', 'body'), hs('b', 'Long braid', 'hairdeck', true), hs('c', 'Bun', 'haar')];
+const worn = m.hairstyleRows(owned, 'b');
+check('[19] worn first', worn.map((h) => h.id), ['b', 'a', 'c']);
+check('[19] labels', worn.map((h) => h.label), ['Long braid · HairDeck', 'Short bob · In the body', 'Bun · HAAR']);
+check('[19] worn flags', worn.map((h) => h.worn), [true, false, false]);
+const none = m.hairstyleRows(owned, '');
+check('[19] none worn: server order, stale flag ignored', [none.map((h) => h.id), none.map((h) => h.worn)],
+  [['a', 'b', 'c'], [false, false, false]]);
+check('[19] nameless', m.hairstyleRows([hs('hair_x', '', 'hairdeck')], '')[0].label, 'hair_x · HairDeck');
+check('[19] dialog: empty', m.newHairstyleDisabled('', 'body'), 'Describe the hairstyle');
+check('[19] dialog: blank', m.newHairstyleDisabled('   ', 'hairdeck'), 'Describe the hairstyle');
+check('[19] dialog: HAAR', m.newHairstyleDisabled('a bun', 'haar'), 'not built yet');
+check('[19] dialog: ok', [m.newHairstyleDisabled('a bun', 'hairdeck'), m.newHairstyleDisabled('a bun', 'body')],
+  [null, null]);
+const nothing = { runAll: null, regenerate: null, refit: null };
+check('[19] body: no run of its own', m.hairstyleActions('body', { steps: [], hub_jobs: 0, note: '', refit: false }),
+  nothing);
+check('[19] haar: no run', m.hairstyleActions('haar', null), nothing);
+const run = (steps, hubJobs, refit = false) => ({ steps, hub_jobs: hubJobs, note: '', refit });
+check('[19] no estimate', m.hairstyleActions('hairdeck', null).runAll, { label: 'Run all', disabled: false });
+check('[19] current', m.hairstyleActions('hairdeck', run([], 0)).runAll,
+  { label: 'Everything is current', disabled: true });
+check('[19] create + fit', m.hairstyleActions('hairdeck', run(['hairdeck', 'fit'], 1)).runAll,
+  { label: 'Run all: create + fit (1 hub job)', disabled: false });
+check('[19] re-fit only', m.hairstyleActions('hairdeck', run(['fit'], 0)).runAll,
+  { label: 'Run all: re-fit (no hub job)', disabled: false });
+check('[19] cost unknown', m.hairstyleActions('hairdeck', run(['hairdeck', 'fit'], null)).runAll.label,
+  'Run all: create + fit (cost unknown)');
+check('[19] refit on the CPU', m.hairstyleActions('hairdeck', run(['hairdeck', 'fit'], 0, true)).runAll.label,
+  'Run all (refit on the CPU)');
+const single = m.hairstyleActions('hairdeck', run([], 0));
+check('[19] single steps', [single.regenerate, single.refit],
+  ['Regenerate hair (HairDeck) — 1 hub job', 'Re-fit — no hub job']);
+check('[19] Wardrobe: no hair row', [src('frontend/src/tabs/characters/WardrobeHairRow.tsx'),
+  /WardrobeHairRow|\/hair[`/]/.test(wardrobe)], ['', false]);
+check('[19] Wardrobe: set editor hairstyle select posts the set route', [/<OutfitHairstyleSelect\b/.test(wardrobe),
+  /\/outfit-sets\/\$\{encodeURIComponent\(outfitId\)\}\/hairstyle`/.test(wardrobe)], [true, true]);
+const charactersTab = src('frontend/src/tabs/characters/CharactersTab.tsx');
+const afterAussehen = (charactersTab.split('const afterAussehen')[1] || '').split('].filter')[0];
+check('[19] tab sits directly after the Wardrobe',
+  /\{ id: 'wardrobe', label: 'Wardrobe' \}\]\),\s*\{ id: 'hairstyles', label: 'Hairstyles' \},/.test(afterAussehen), true);
+check('[19] tab gated on humanoid, renders FieldHairstyles', [/hairstyles: 'humanoid'/.test(charactersTab),
+  /subTab === 'hairstyles' \? \(\s*<FieldHairstyles/.test(charactersTab)], [true, true]);
+const tabSrc = src('frontend/src/tabs/characters/FieldHairstyles.tsx');
+check('[19] dialog through createPortal', /return createPortal\([\s\S]*?document\.body,\s*\)/.test(tabSrc), true);
+check('[19] routes', [tabSrc.includes('`/characters/${encodeURIComponent(character)}/hairstyles`'),
+  tabSrc.includes('/hairstyles/${encodeURIComponent(id)}/wear`'),
+  tabSrc.includes('/hair?item_id=${encodeURIComponent(itemId)}`')], [true, true, true]);
+const placementSrc = src('frontend/src/tabs/characters/HairDeckPlacement.tsx');
+check('[19] R3: placement and Swing saved with item_id, no run', [
+  /hair\/placement`, \{ forward_m, tilt_deg, width_scale, item_id: itemId \}/.test(placementSrc),
+  /hair\/motion`, \{ swing, stiffness, item_id: itemId \}/.test(placementSrc), /garments\//.test(placementSrc)],
+  [true, true, false]);
+check('[19] Figure tab hair row: name + mode, link to Hairstyles', [/\{hair\.name \|\| t\('Hair'\)\}/.test(fieldFigure),
+  /<td style=\{CELL\}>\{hairstyles\}<\/td>/.test(fieldFigure)], [true, true]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

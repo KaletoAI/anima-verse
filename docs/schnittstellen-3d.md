@@ -12641,10 +12641,10 @@ the chain joints that carry weight and do not lie inside the head capsule at res
 `anchor_blend` row without swing); `freq_hz` = `HAIR_FREQ_PER_STIFFNESS` × HairDeck's per-chain stiffness × the
 character's Stiffness factor (clamped, rounded to 3 decimals). Collision runs against the `HAIR_REGIONS` capsules,
 the placement on today's skin through `anchor_blend` / `anchor_from` (see the hair-chain paragraph above). Admin
-surface: Game-Admin → Characters → Wardrobe, hair row → Hair motion (`HairDeckPlacement.tsx`): the chain count (or
-"No spring chains in this hairstyle — hair moves with the head"), Swing (a checkbox, default off — changing it
-re-fits the hair on the CPU, `POST /characters/{n}/hair/motion` starts the fit-only run) and Stiffness (0.5–2.0,
-motion only, no refit).
+surface: Game-Admin → Characters → Hairstyles, the selected hairstyle → Hair motion (`HairDeckPlacement.tsx`): the
+chain count (or "No spring chains in this hairstyle — hair moves with the head"), Swing (a checkbox, default off —
+`POST /characters/{n}/hair/motion {swing, stiffness, item_id}` only saves it; the changed Swing makes the fit stale
+and the tab's Run all / Re-fit re-fits the hair on the CPU) and Stiffness (0.5–2.0, motion only, no refit).
 
 
 # Anhang — Änderungsverlauf

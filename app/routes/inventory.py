@@ -1225,6 +1225,31 @@ def delete_outfit_set_route(character_name: str, outfit_id: str,
     return {"status": "ok", "outfit_id": outfit_id}
 
 
+@router.post("/characters/{character_name}/outfit-sets/{outfit_id}/hairstyle")
+async def set_outfit_set_hairstyle_route(character_name: str, outfit_id: str, request: Request,
+                                         _admin=Depends(require_admin)) -> Dict[str, Any]:
+    """Name the hairstyle a saved outfit set wears (plan 2026-11-12-unified-worn-pieces D5, the Wardrobe's
+    set editor, Task 14). Body ``{"hairstyle": "<item id>"}``; ``""`` = the set leaves the hair as it is.
+    Stores the set only — nothing is worn, nothing is built (applying the set wears it). 400 for an item
+    that is no hairstyle of the character, 404 for an unknown set. ``{outfit_id, hairstyle}``."""
+    import asyncio
+    body = await request.json()
+    hairstyle = str((body or {}).get("hairstyle") or "").strip() if isinstance(body, dict) else ""
+    return await asyncio.to_thread(_set_outfit_set_hairstyle_sync, character_name, outfit_id, hairstyle)
+
+
+def _set_outfit_set_hairstyle_sync(character_name: str, outfit_id: str, hairstyle: str) -> Dict[str, Any]:
+    """The blocking body of ``set_outfit_set_hairstyle_route``."""
+    from app.core.garment_hair import is_hairstyle
+    from app.models.character import add_character_outfit, get_character_outfits
+    if not any(o.get("id") == outfit_id for o in get_character_outfits(character_name)):
+        raise HTTPException(status_code=404, detail="outfit not found")
+    if hairstyle and not is_hairstyle(get_item(hairstyle), character_name):
+        raise HTTPException(status_code=400, detail=f"{hairstyle[:80]} is no hairstyle of {character_name}")
+    add_character_outfit(character_name, {"id": outfit_id, "hairstyle": hairstyle})
+    return {"outfit_id": outfit_id, "hairstyle": hairstyle}
+
+
 @router.post("/characters/{character_name}/apply-outfit-set")
 async def apply_outfit_set_route(character_name: str, request: Request) -> Dict[str, Any]:
     """Apply a saved outfit set with a piece list.

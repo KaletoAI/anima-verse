@@ -2057,18 +2057,19 @@ def get_character_garment(character_name: str, item_id: str,
 
 
 @router.get("/{character_name}/hair")
-def get_character_hair(character_name: str,
+def get_character_hair(character_name: str, item_id: str = "",
                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """The hair GET (the Wardrobe's hair row): ``{pipeline, humanoid, description, behind_shoulders,
+    """The hair GET (the Hairstyles tab's selected hairstyle): ``{pipeline, humanoid, description, behind_shoulders,
     item_id, equipped, garment, collision, limits, method, method_source,
-    world_method, hairdeck, others, hair_in_body, base_prompts}`` — ``description`` is
-    derived (Appearance + hair slot, R3), ``item_id`` the worn hair item or
+    world_method, hairdeck, others, hair_in_body, base_prompts, plain, run, body_url}`` — ``description`` is
+    the hairstyle's text (without one the Appearance's), ``item_id`` the hairstyle asked for by the query
+    ``item_id`` (404 when it is no hairstyle of the character; Task 14), else the worn hair item or
     else the one the character owns (None: no item yet), ``garment`` its
     ``garments.garment_info`` (None without an item), ``collision`` the
     current base model's capsule set (``collision.ensure``) the preview
     pushes the hair out of, None without a preview or base model; ``limits`` the gate limits for the
     tab's chips: ``hairdeck_fit``, those of the hair's length class
-    (``garment_hairdeck.gates_for``, from the gate constants themselves). ``method`` the worn hairstyle's mode
+    (``garment_hairdeck.gates_for``, from the gate constants themselves). ``method`` the hairstyle's mode
     (``method_source`` ``"hairstyle"``), ``world_method`` the world's default mode for a new hairstyle
     (``garment_hair.default_mode``); ``item_id`` / ``equipped`` the worn hairstyle (else the first owned one,
     not equipped); ``hairdeck`` the HairDeck section of the current
@@ -2078,16 +2079,27 @@ def get_character_hair(character_name: str,
     ``preview_freshness`` (``model_overview.annotate_hair``). ``hair_in_body``: the method is ``body`` — the hair
     is part of the body mesh, ``garment`` / ``hairdeck`` stay None and ``others`` empty even with a leftover item,
     and ``base_prompts`` is the stored base's prompt freshness (``base_body.base_prompts_freshness``; None off
-    the pipeline or for another method)."""
+    the pipeline or for another method). Task 14: ``hair_in_body`` is THIS hairstyle's mode being ``body``;
+    ``plain`` this hairstyle is the plain body's (``garment_hair.BASE_HAIRSTYLE_KEY``); ``run`` what its "Run all"
+    runs now (``garments.run_estimate`` of the hairstyle; None off the pipeline or without one); ``body_url`` the
+    current base model (``base_body.base_model_info`` url; None without one) — the preview of a ``body``
+    hairstyle that is the plain body's."""
     from app.core import base_body, garment_hair, garment_hairdeck, garments
     from app.core.model_refs import is_humanoid
     from app.models.character import get_character_profile
+    from app.models.inventory import get_item
     _require_character(character_name)
     profile = get_character_profile(character_name) or {}
     humanoid = bool(is_humanoid(character_name, profile=profile))
-    in_body = bool(humanoid and garment_hair.hair_in_body(character_name, profile))
-    item = (garment_hair.worn_hairstyle(character_name, profile)
-            or next(iter(garment_hair.hairstyles(character_name)), None)) if humanoid else None
+    asked = str(item_id or "").strip()
+    if asked:
+        item = get_item(asked) if humanoid else None
+        if not garment_hair.is_hairstyle(item, character_name):
+            raise HTTPException(status_code=404, detail="No hairstyle of this character")
+    else:
+        item = (garment_hair.worn_hairstyle(character_name, profile)
+                or next(iter(garment_hair.hairstyles(character_name)), None)) if humanoid else None
+    in_body = bool(item and garment_hair.hairstyle_mode(item) == garment_hair.BODY_MODE)
     item_id = item["id"] if item else None
     worn = profile.get("equipped_mesh_pieces")
     equipped = bool(item_id and isinstance(worn, dict) and worn.get(garment_hair.HAIR_KIND) == item_id)
@@ -2121,7 +2133,15 @@ def get_character_hair(character_name: str,
                 hair_collision = collision.ensure(character_name, current[0])
         except Exception:
             logger.exception("Hair GET: no capsule set for %s", character_name)
-    payload = {"pipeline": base_body.is_base_pipeline(character_name, profile=profile),
+    pipeline = base_body.is_base_pipeline(character_name, profile=profile)
+    run = None
+    if pipeline and item_id:
+        try:
+            run = garments.run_estimate(character_name, item_id, profile=profile)
+        except Exception:  # noqa: BLE001 — a label, never a failure of the GET
+            logger.exception("Hair GET: no run estimate for %s/%s", character_name, item_id)
+    model = base_body.base_model_info(character_name) if pipeline else None
+    payload = {"pipeline": pipeline,
                 "humanoid": humanoid,
                 "description": text,
                 "behind_shoulders": bool(text and garment_hair.hair_behind_shoulders(
@@ -2136,8 +2156,10 @@ def get_character_hair(character_name: str,
                 "hairdeck": hairdeck, "others": others,
                 "hair_in_body": in_body,
                 "base_prompts": (base_body.base_prompts_freshness(character_name, profile=profile)
-                                 if in_body and base_body.is_base_pipeline(character_name, profile=profile)
-                                 else None)}
+                                 if in_body and pipeline else None),
+                "plain": bool(item_id and item_id == str(profile.get(garment_hair.BASE_HAIRSTYLE_KEY) or "")),
+                "run": run,
+                "body_url": (model or {}).get("url")}
     from app.core.model_overview import annotate_hair
     return annotate_hair(payload)
 
@@ -2288,33 +2310,21 @@ def set_character_hair_motion(character_name: str, body: HairMotionRequest,
     factor × HairDeck's per-chain stiffness within
     ``hair_motion.STIFFNESS_LIMITS``, null = 1). 400 for a non-bool swing or
     a stiffness beyond its limits. Stiffness changes only the motion payload.
-    Swing is a fit input (Ruling H11): a changed Swing starts the
-    hairstyle's fit-only run (a CPU refit from the stored HairDeck seeds, no
-    HairDeck call; ``garments.start_garment`` with ``steps="fit"``) when it
-    is HairDeck hair. ``{swing, stiffness, refit}`` — the stored settings
-    and whether a refit was started."""
+    Swing is a fit input (Ruling H11): a changed Swing makes the hairstyle's
+    fit stale — saved on its own, nothing runs (Task 14, the user's rule R3:
+    settings independent of execution); the Hairstyles tab's Run all / Re-fit
+    refits it on the CPU. ``{swing, stiffness}`` — the stored settings."""
     from app.core import garment_hair, hair_motion
     from app.models.inventory import get_item
     _require_character(character_name)
     item_id = _hairstyle_id(character_name, body.item_id)
-    before = hair_motion.swing_on(garment_hair.hairstyle_settings(get_item(item_id)))
     try:
         saved = hair_motion.set_hair_motion(character_name, item_id, body.swing, body.stiffness)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if not saved:
         raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
-    item = get_item(item_id)
-    stored = garment_hair.hairstyle_settings(item)
-    refit = False
-    if hair_motion.swing_on(stored) != before and garment_hair.hairstyle_mode(item) == garment_hair.HAIRDECK_MODE:
-        from app.core import garments
-        try:
-            garments.start_garment(character_name, item_id, steps="fit")
-            refit = True
-        except ValueError as e:
-            logger.warning("hair swing of %s: no refit started — %s", character_name, e)
-    return {**hair_motion.settings(stored), "refit": refit}
+    return hair_motion.settings(garment_hair.hairstyle_settings(get_item(item_id)))
 
 
 @router.post("/{character_name}/hair", status_code=202)

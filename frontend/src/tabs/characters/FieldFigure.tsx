@@ -12,7 +12,8 @@
  *   is no disable, a click queues the next one) and the "Build
  *   automatically" checkbox (POST …/figure/auto-build); what the Build would
  *   run, collapsed;
- * - "Worn now (outfit …)": hair first, then every worn piece — name · mode ·
+ * - "Worn now (outfit …)": the worn hairstyle first (its name · its mode · ↗Hairstyles — Task 14, where
+ *   hairstyles are worn, made and set), then every worn piece — name · mode ·
  *   ↗Wardrobe (the mode lives on the item and is edited there, ruling P4) ·
  *   state ("✓ ready", "⏳ mesh · 3 hub jobs" + "in the body until its own
  *   mesh is ready" — ruling A11, an in-body piece "shown painted until
@@ -69,10 +70,12 @@ function Collapsed({ summary, children }: { summary: string; children: () => Rea
 
 const noop = () => undefined
 
-export function FieldFigure({ character, onOpenWardrobe, onOpenBaseBody }: {
+export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpenBaseBody }: {
   character: string
   /** Opens the Wardrobe tab, where the modes are edited. */
   onOpenWardrobe?: () => void
+  /** Opens the Hairstyles tab (Task 14), where the hairstyles and their modes are edited. */
+  onOpenHairstyles?: () => void
   /** Opens the Base body tab (the plain body's views, model, face and rig, and their settings). */
   onOpenBaseBody?: () => void
 }) {
@@ -138,6 +141,7 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenBaseBody }: {
         <FigureHeader data={data} posting={posting} onBuild={build}
           onAutoBuild={(enabled) => { void post('figure/auto-build', { enabled }) }} />
         <WornTable data={data} character={character} busy={posting} onRetry={build} onOpenWardrobe={onOpenWardrobe}
+          onOpenHairstyles={onOpenHairstyles}
           onOpenPiece={(id, name) => setOpenPiece({ id, name })} onStateMesh={buildStateMesh} onChanged={reload} />
         <BodySection data={data} character={character} onChanged={reload} onOpenBaseBody={onOpenBaseBody} />
       </div>
@@ -214,12 +218,14 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
   )
 }
 
-function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenPiece, onStateMesh, onChanged }: {
+function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairstyles, onOpenPiece, onStateMesh,
+  onChanged }: {
   data: FigurePayload
   character: string
   busy: boolean
   onRetry: () => void
   onOpenWardrobe?: () => void
+  onOpenHairstyles?: () => void
   onOpenPiece: (itemId: string, name: string) => void
   /** Build the other open / closed state's own mesh of a piece. */
   onStateMesh: (row: FigureWornRow, state: PieceState) => void
@@ -230,6 +236,10 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenPiece
   const wardrobe = onOpenWardrobe ? (
     <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenWardrobe}
       title={t('The mode is set in the Wardrobe')}>↗ {t('Wardrobe')}</button>
+  ) : null
+  const hairstyles = onOpenHairstyles ? (
+    <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenHairstyles}
+      title={t('Hairstyles are worn, made and set in the Hairstyles tab')}>↗ {t('Hairstyles')}</button>
   ) : null
   const retry = (
     <button type="button" className="ga-btn ga-btn-sm" disabled={busy} onClick={onRetry}
@@ -245,9 +255,9 @@ function WornTable({ data, character, busy, onRetry, onOpenWardrobe, onOpenPiece
         <tbody>
           {hair && hairCell ? (
             <tr style={{ borderTop: '1px solid var(--border, #30363d)' }}>
-              <td style={CELL}>{t('Hair')}</td>
+              <td style={CELL}>{hair.name || t('Hair')}</td>
               <td style={CELL}>{t(HAIR_MODE_LABELS[hair.mode as HairMode] || hair.mode)}</td>
-              <td style={CELL}>{wardrobe}</td>
+              <td style={CELL}>{hairstyles}</td>
               <td style={CELL}>
                 <div style={hair.state === 'failed' ? ERROR_STYLE : undefined}>{hairCell.text}</div>
                 {hairCell.sub ? <div className="ga-hint">{hairCell.sub}</div> : null}

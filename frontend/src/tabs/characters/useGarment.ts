@@ -475,6 +475,12 @@ export interface HairInfo {
   hair_in_body?: boolean
   /** With `hair_in_body`: the stored base's prompt freshness (`base_body.base_prompts_freshness`). */
   base_prompts?: Freshness | null
+  /** Task 14 (GET …/hair?item_id=): this hairstyle is the plain body's. */
+  plain?: boolean
+  /** What its "Run all" runs now (`garments.run_estimate`); null off the pipeline or without a hairstyle. */
+  run?: { steps: string[]; hub_jobs: number | null; note: string; refit: boolean } | null
+  /** The current base model's file (the preview of a `body` hairstyle that is the plain body's); null without. */
+  body_url?: string | null
 }
 
 const POLL_MS = 3000

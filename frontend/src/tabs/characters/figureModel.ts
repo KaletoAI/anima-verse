@@ -177,6 +177,9 @@ export interface FigureWornRow {
 }
 
 export interface FigureHairRow {
+  /** The worn hairstyle's name and id (Task 13); "" when none is worn. */
+  name?: string
+  item_id?: string
   mode: string
   state: 'ready' | 'failed' | 'building' | 'pending'
   note: string
@@ -411,3 +414,84 @@ export function staleModelText(reason: string | null | undefined, t: Tr = EN): s
     default: return t('Built on an older base body — rebuild it')
   }
 }
+
+// --- The Hairstyles tab (Task 14, Rulings P2/P3; the user's rule R1–R4) ---------------------------------------
+
+/** One hairstyle the character owns (GET /characters/{c}/hairstyles → `garment_hair.hairstyle_list`). */
+export interface Hairstyle {
+  id: string
+  name: string
+  description: string
+  mode: HairMode
+  worn: boolean
+  /** The plain body is this hairstyle's body (its hair is in the plain body when the mode is `body`). */
+  plain: boolean
+  freshness: { state: string; reason?: string | null } | null
+}
+
+/** GET /characters/{c}/hairstyles. */
+export interface HairstylesPayload {
+  hairstyles: Hairstyle[]
+  /** The mode a new hairstyle gets (the world's `base_body.hairstyle_default_mode`). */
+  default_mode: HairMode
+  modes: HairMode[]
+  /** The modes that can be chosen today (`haar` is not built yet). */
+  built_modes: HairMode[]
+}
+
+/** "<name> · <mode label>" — a hairstyle as the list and the outfit-set select name it. */
+export function hairstyleLabel(h: { name: string; id: string; mode: string }, t: Tr = EN): string {
+  const mode = HAIR_MODE_LABELS[h.mode as HairMode] || h.mode
+  return `${h.name || h.id} · ${t(mode)}`
+}
+
+/** The Hairstyles tab's list: the worn hairstyle first, then the others in the server's order, each with its
+ *  label. `wornId` is the worn hairstyle's id ("" = none worn) — it wins over a stale `worn` flag. */
+export function hairstyleRows(owned: readonly Hairstyle[], wornId: string, t: Tr = EN): Array<Hairstyle & {
+  label: string
+}> {
+  const rows = owned.map((h) => ({ ...h, worn: !!wornId && h.id === wornId, label: hairstyleLabel(h, t) }))
+  return [...rows.filter((h) => h.worn), ...rows.filter((h) => !h.worn)]
+}
+
+/** Why the New hairstyle dialog's Create is disabled (written under it), null = it can be created:
+ *  an empty description first, then a mode that is not built (HAAR). */
+export function newHairstyleDisabled(description: string, mode: HairMode): string | null {
+  if (!description.trim()) return 'Describe the hairstyle'
+  return hairModeDisabled(mode)
+}
+
+/** `garments.run_estimate` of a hairstyle (GET …/hair?item_id= `run`). */
+export interface HairstyleRun {
+  steps: string[]
+  hub_jobs: number | null
+  note: string
+  refit: boolean
+}
+
+/** The flow of the selected hairstyle as buttons (rules R1/R2):
+ *  - HairDeck has two steps (HairDeck → fit), so it has a Run all — the steps from the first one not current,
+ *    named with its cost: "Create + fit (1 hub job)" when HairDeck runs, "Re-fit (no hub job)" when only the fit
+ *    is due, "Everything is current" disabled when nothing is; no estimate → plain "Run all" (the server decides);
+ *  - its single steps re-run even when current: "Regenerate hair (HairDeck) — 1 hub job" (a new seed, then the
+ *    fit) and "Re-fit — no hub job";
+ *  - `body` (and HAAR) have no run of their own: the hair is part of the body, the Figure tab's Build makes it. */
+export function hairstyleActions(mode: HairMode, run: HairstyleRun | null | undefined, t: Tr = EN): {
+  runAll: { label: string; disabled: boolean } | null
+  regenerate: string | null
+  refit: string | null
+} {
+  if (mode !== 'hairdeck') return { runAll: null, regenerate: null, refit: null }
+  const regenerate = t('Regenerate hair (HairDeck) — {cost}').replace('{cost}', jobsTr(1, t))
+  const refit = t('Re-fit — no hub job')
+  let runAll: { label: string; disabled: boolean }
+  if (!run) runAll = { label: t('Run all'), disabled: false }
+  else if (!run.steps.length) runAll = { label: t('Everything is current'), disabled: true }
+  else if (run.refit) runAll = { label: t('Run all (refit on the CPU)'), disabled: false }
+  else if (run.steps[0] === 'fit') runAll = { label: t('Run all: re-fit (no hub job)'), disabled: false }
+  else runAll = { label: t('Run all: create + fit ({cost})').replace('{cost}', jobsTr(run.hub_jobs, t)), disabled: false }
+  return { runAll, regenerate, refit }
+}
+
+/** Under a setting of the selected hairstyle after a save (rule R3): nothing ran. */
+export const HAIRSTYLE_SAVED_NOTE = 'Saved — nothing runs. Run all or Re-fit applies it (no hub job).'

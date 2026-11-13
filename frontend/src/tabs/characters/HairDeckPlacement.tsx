@@ -1,23 +1,24 @@
 /**
- * HairDeckPlacement — the HairDeck hair placement block (in the Wardrobe's
- * hair row since plan
- * docs/superpowers/plans/2026-11-12-unified-worn-pieces.md Task 9; ruling 5).
- * Self-contained: it saves its own values and asks for the re-fit, so later
- * placement controls land here and nowhere else.
+ * HairDeckPlacement — the HairDeck hair placement block of the SELECTED
+ * hairstyle in the Hairstyles tab (plan
+ * docs/superpowers/plans/2026-11-12-unified-worn-pieces.md Task 14; the
+ * Wardrobe's hair row had it since Task 9). Self-contained: it saves its own
+ * values, so later placement controls land here and nowhere else.
  *
  * Fields: forward shift (shown in mm), forward tilt (°) and hair width (a
  * factor on the sides' reach beyond the head). Empty = automatic (width: 1).
  * Apply stores them (POST /characters/{n}/hair/placement {forward_m,
- * tilt_deg, width_scale}, null = automatic), then re-fits the hair from the
- * stored HairDeck result (POST /characters/{n}/garments/{item}/run {} — only
- * the fit runs, HairDeck does not run again). The drafts are keyed by the
- * server values, so they restart from them after a save.
+ * tilt_deg, width_scale, item_id}, null = automatic) and runs NOTHING (the
+ * user's rule R3: settings independent of execution) — the fit is then stale
+ * and the tab's Run all / Re-fit re-fits the hair from the stored HairDeck
+ * result (no hub job). The drafts are keyed by the server values, so they
+ * restart from them after a save.
  *
  * Hair motion (plan docs/superpowers/plans/2026-11-12-hairdeck-spring-chains.md
  * Task 7): the spring chains of the newest fit, Swing and Stiffness. Both post
- * to POST /characters/{n}/hair/motion {swing, stiffness}; the server starts
- * the CPU refit itself when Swing changes (Swing is a fit input, Ruling H11 —
- * off = today's hair), Stiffness changes only the motion payload.
+ * to POST /characters/{n}/hair/motion {swing, stiffness, item_id}, saved only:
+ * a changed Swing makes the fit stale (Swing is a fit input, Ruling H11 — off =
+ * today's hair), Stiffness changes only the motion payload.
  */
 import { useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -39,9 +40,9 @@ const draftText = (v: number | null, scale: number) => (v === null ? '' : String
 export function HairDeckPlacement({ character, itemId, method, placement, chains, swingPending, busy, running,
   onSaved }: {
   character: string
-  /** The hair item (the re-fit runs its chain); '' = none yet — only saved. */
+  /** The hairstyle the values are saved on. */
   itemId: string
-  /** The hair method in effect: only HairDeck hair is re-fitted. */
+  /** The hairstyle's mode: only HairDeck hair has spring chains. */
   method: HairMethod
   placement: HairPlacement
   /** The spring chains and the Swing/Stiffness settings; absent on an older server. */
@@ -63,10 +64,7 @@ export function HairDeckPlacement({ character, itemId, method, placement, chains
     setPosting(true)
     const enc = encodeURIComponent(character)
     try {
-      await apiPost(`/characters/${enc}/hair/placement`, { forward_m, tilt_deg, width_scale })
-      if (itemId && method === 'hairdeck') {
-        await apiPost(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, {})
-      }
+      await apiPost(`/characters/${enc}/hair/placement`, { forward_m, tilt_deg, width_scale, item_id: itemId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -74,12 +72,12 @@ export function HairDeckPlacement({ character, itemId, method, placement, chains
       onSaved()
     }
   }
-  // Swing / Stiffness: the server refits by itself when Swing changes (no garment run from here).
+  // Swing / Stiffness: saved only — a changed Swing makes the fit stale (Run all / Re-fit applies it).
   const applyMotion = async (swing: boolean, stiffness: number | null) => {
     if (posting) return
     setPosting(true)
     try {
-      await apiPost(`/characters/${encodeURIComponent(character)}/hair/motion`, { swing, stiffness })
+      await apiPost(`/characters/${encodeURIComponent(character)}/hair/motion`, { swing, stiffness, item_id: itemId })
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -152,13 +150,13 @@ export function HairSwingForm({ chains, busy, refitting, swingPending, onApply }
           <span>{t('Swing')}</span>
         </label>
         {refitting ? (
-          <span className="ga-hint" style={WARN_STYLE}>{t('Refitting the hair for the new Swing setting…')}</span>
+          <span className="ga-hint" style={WARN_STYLE}>{t('Fitting the hair…')}</span>
         ) : swingPending ? (
           <span className="ga-hint" style={WARN_STYLE}>{t('The Swing setting takes effect after the next fit')}</span>
         ) : null}
       </div>
       <div className="ga-hint">
-        {t('Swing on: the hair swings with motion but can touch the shoulders more than today — in the worst measured pose up to 2.3 % of the hair dips into the body, against at most 0.2 % today. Off by default. Changing Swing re-fits the hair from the stored HairDeck result.')}
+        {t('Swing on: the hair swings with motion but can touch the shoulders more than today — in the worst measured pose up to 2.3 % of the hair dips into the body, against at most 0.2 % today. Off by default. Saving runs nothing — Run all or Re-fit then fits the hair with the new Swing setting (no hub job).')}
       </div>
       <div style={ROW}>
         <label className="ga-hint" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -304,7 +302,7 @@ function PlacementForm({ placement, busy, running, onApply }: {
         {' '}
         {t('Hair width below 1 brings the sides closer to the head; the hairline stays.')}
         {' '}
-        {t('A placement change re-fits the hair from the stored HairDeck result — HairDeck does not run again.')}
+        {t('Saving runs nothing. Run all or Re-fit then fits the hair with the new placement from the stored HairDeck result (no hub job).')}
       </div>
     </>
   )

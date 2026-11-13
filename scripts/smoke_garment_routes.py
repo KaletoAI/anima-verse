@@ -39,7 +39,8 @@ Fixture (expected values derived by hand):
     None, equipped False, garment None, collision None (no base model ->
     no capsule set, commit 8a617513), method
     "hairdeck", method_source "world", world_method "hairdeck",
-    hairdeck None, others [], hair_in_body False, base_prompts None} (the
+    hairdeck None, others [], hair_in_body False, base_prompts None, plain False, run None (no hairstyle to
+    estimate), body_url None (no base model) — the last three since Task 14} (the
     method keys: plan 2026-11-09-hairdeck-hair Task 5 — the world pins
     hairdeck, a method with a hair item (the default "body" of the
     hair-from-body spec 2026-11-11 makes none), whose keys hair_in_body /
@@ -252,7 +253,8 @@ def main() -> int:
                          "behind_shoulders": True, "item_id": None, "equipped": False, "garment": None,
                          "collision": None, "method": "hairdeck", "method_source": "world",
                          "world_method": "hairdeck", "hairdeck": None, "others": [],
-                         "hair_in_body": False, "base_prompts": None}))
+                         "hair_in_body": False, "base_prompts": None, "plain": False, "run": None,
+                         "body_url": None}))
             # The chip limits: HairDeck's fit gates only (the edit-chain steps are gone).
             check("hair limits", sorted(limits), ["hairdeck_fit"])
             r = client.get("/characters/Pet/hair")

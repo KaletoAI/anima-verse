@@ -11,8 +11,10 @@
  * change the row's wearers line ("worn by K characters now" · "Build for them
  * (cost)"); one chain dialog per own-mesh piece ("Mesh steps") while it is only
  * held — a piece WORN on the figure pipeline has its one entry in the Figure
- * tab (plan Task 10; the row links there instead). The hair row
- * on top (WardrobeHairRow): the hair's mode and its settings.
+ * tab (plan Task 10; the row links there instead). No hair row (Ruling P3 of
+ * Task 14): the hairstyles live in their own Hairstyles tab; a saved outfit
+ * names the hairstyle it wears (OutfitHairstyleSelect, D5 — POST
+ * /inventory/characters/{c}/outfit-sets/{id}/hairstyle, stored only).
  * Boot hem (BootHemControl): GET/POST /characters/{c}/outfit-options, shown
  * under the worn boot when own-mesh trousers are worn with it.
  */
@@ -25,8 +27,7 @@ import { FieldModelRefs } from './FieldModelRefs'
 import {
   ClosableCheckbox, GarmentPieceDialog, MeshModeSelect, PieceStateToggle, PieceStatusChip, WearersLine,
 } from './WardrobeGarment'
-import { WardrobeHairRow } from './WardrobeHairRow'
-import { closableDisabled, meshModeOf } from './figureModel'
+import { closableDisabled, hairstyleLabel, meshModeOf } from './figureModel'
 import { useWardrobeGarments } from './useGarment'
 import { ConfirmDialog, PromptPreview } from '@anima/player-ui'
 import { thumbUrl, thumbWidth } from '@anima/player-ui'
@@ -88,6 +89,61 @@ interface OutfitPreview {
   remove_slots: string[]
   /** The saved boot hem: "tucked" / "over" / null (= over). */
   boot_hem?: BootHemMode | null
+  /** The hairstyle the set wears (D5): its item id, "" = the set leaves the hair as it is. */
+  hairstyle?: string
+}
+
+/**
+ * The saved outfit's hairstyle (plan 2026-11-12-unified-worn-pieces D5, Task 14): one select of the
+ * character's hairstyles (GET /characters/{c}/hairstyles) plus "Hair stays as it is". A change is stored at
+ * once (POST /inventory/characters/{c}/outfit-sets/{id}/hairstyle) and wears nothing — Apply wears it.
+ */
+function OutfitHairstyleSelect({ character, outfitId, value, disabled, onSaved }: {
+  character: string
+  outfitId: string
+  value: string
+  disabled: boolean
+  onSaved: (hairstyle: string) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const enc = encodeURIComponent(character)
+  const [styles, setStyles] = useState<Array<{ id: string; name: string; mode: string }> | null>(null)
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    let active = true
+    apiGet<{ hairstyles?: Array<{ id: string; name: string; mode: string }> }>(`/characters/${enc}/hairstyles`)
+      .then((d) => { if (active) setStyles(d.hairstyles || []) })
+      .catch(() => { if (active) setStyles([]) })
+    return () => { active = false }
+  }, [enc])
+  if (!styles || (!styles.length && !value)) return null
+  const save = async (next: string) => {
+    setSaving(true)
+    try {
+      await apiPost(`/inventory/characters/${enc}/outfit-sets/${encodeURIComponent(outfitId)}/hairstyle`,
+        { hairstyle: next })
+      onSaved(next)
+    } catch (error) {
+      toast((error as Error).message, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+  const known = !value || styles.some((h) => h.id === value)
+  return (
+    <label className="ga-form-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      {t('Hairstyle')}
+      <select className="ga-input" value={value} disabled={disabled || saving} style={{ width: '100%' }}
+        onChange={(e) => { void save(e.target.value) }}>
+        <option value="">{t('Hair stays as it is')}</option>
+        {styles.map((h) => (
+          <option key={h.id} value={h.id}>{hairstyleLabel(h, t)}</option>
+        ))}
+        {!known ? <option value={value}>{t('Missing hairstyle: {id}').replace('{id}', value)}</option> : null}
+      </select>
+    </label>
+  )
 }
 
 /**
@@ -199,10 +255,8 @@ function OutfitLockSwitch({ character }: { character: string }) {
   )
 }
 
-export function WardrobeTab({ character, onEditAppearance, onOpenFigure }: {
+export function WardrobeTab({ character, onOpenFigure }: {
   character: string
-  /** Opens the Appearance tab (the hair row's description is edited there). */
-  onEditAppearance?: () => void
   /** Opens the Figure tab — a worn own-mesh piece's chain details live there. */
   onOpenFigure?: () => void
 }) {
@@ -429,9 +483,6 @@ export function WardrobeTab({ character, onEditAppearance, onOpenFigure }: {
           </div>
         ))}
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 3 }}>
-          {!slotFilter || slotFilter === 'head' ? (
-            <WardrobeHairRow character={character} onEditAppearance={onEditAppearance} />
-          ) : null}
           {filtered.length === 0 && <div className="ga-placeholder">{t('No outfit pieces')}</div>}
           {filtered.map((it) => {
             const sub = it.description || it.slots.map((s) => data.slot_labels[s] || s).join(', ')
@@ -558,6 +609,10 @@ export function WardrobeTab({ character, onEditAppearance, onOpenFigure }: {
                       </div>
                     ))}
                     {outfitPreview.outfit && <span className="ga-form-hint">{outfitPreview.outfit}</span>}
+                    <OutfitHairstyleSelect character={character} outfitId={outfitPreview.id}
+                      value={outfitPreview.hairstyle || ''} disabled={busy}
+                      onSaved={(hairstyle) => setOutfitPreview((p) => (p && p.id === outfitPreview.id
+                        ? { ...p, hairstyle } : p))} />
                     {outfitPreview.boot_hem === 'tucked' && (
                       <span className="ga-form-hint">{t('Trousers tucked into the boots')}</span>
                     )}

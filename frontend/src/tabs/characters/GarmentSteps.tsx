@@ -1,6 +1,6 @@
 /**
  * GarmentSteps — the generic steps of a garment's edit chain, shared by the
- * Wardrobe's hair row (WardrobeHairRow) and own-mesh panel (WardrobeGarment):
+ * Hairstyles tab (FieldHairstyles, HairstyleParts) and own-mesh panel (WardrobeGarment):
  * the image steps (front + back tile each, gate chips, attempts,
  * Regenerate per view), the mesh and the fit (chips, Re-fit), plus the
  * failure block. Every chip's LIMIT comes from the server (the gate
@@ -319,7 +319,7 @@ export function StepState({ garment, step }: { garment: GarmentInfo; step: strin
 
 /** The fit: status, Re-fit, the chips of the fit record (or of a refused
  *  fit's numbers), the distance tier and the step state. */
-export function FitBlock({ garment, chips, limits, ready, busy, onRun, lowFailedText, feedback, order }: {
+export function FitBlock({ garment, chips, limits, ready, busy, onRun, lowFailedText, feedback, order, runLabel }: {
   garment: GarmentInfo | null
   chips: ChipSpec[]
   limits: Record<string, GateLimit> | undefined
@@ -332,6 +332,8 @@ export function FitBlock({ garment, chips, limits, ready, busy, onRun, lowFailed
   feedback?: RunFeedback
   /** The method's step order (the run marks). */
   order: readonly string[]
+  /** The Re-fit button's label (with its cost); default "Re-fit". */
+  runLabel?: string
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -357,7 +359,7 @@ export function FitBlock({ garment, chips, limits, ready, busy, onRun, lowFailed
           disabled={busy || !garment || !ready}
           title={garment && !ready ? t('Run the previous step first') : undefined}
           onClick={() => { onRun({ step: 'fit', force: true }) }}
-          label={t('Re-fit')}
+          label={runLabel || t('Re-fit')}
         />
       </div>
       <GateChips specs={chips} record={fitRecord} limits={limits} />

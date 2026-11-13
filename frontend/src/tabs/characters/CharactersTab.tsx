@@ -26,6 +26,7 @@ import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model
 import { FieldModelRefs } from './FieldModelRefs'
 import { FieldFigure } from './FieldFigure'
 import { FieldBaseBody } from './FieldBaseBody'
+import { FieldHairstyles } from './FieldHairstyles'
 import { FieldPose } from './FieldPose'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from '@anima/player-ui'
@@ -103,6 +104,8 @@ const SPECIAL_TABS: Array<{ id: string; label: string }> = [
   { id: 'relationships', label: 'Relationships' },
   { id: 'skills', label: 'Skills' },
   { id: 'wardrobe', label: 'Wardrobe' },
+  // The hairstyles (plan 2026-11-12-unified-worn-pieces Task 14, Ruling P2): directly after the Wardrobe.
+  { id: 'hairstyles', label: 'Hairstyles' },
   { id: 'secrets', label: 'Secrets' },
 ]
 
@@ -771,6 +774,8 @@ export function CharactersTab() {
       secrets: 'secrets_enabled',
       expressions: 'expression_variants_enabled',
       home: 'activity_home_enabled',
+      // Hairstyles are a humanoid's (garment_hair: "Hairstyles are for humanoid characters only").
+      hairstyles: 'humanoid',
     }
     const features = (template?.features || {}) as Record<string, boolean>
     const gateOk = (id: string) => {
@@ -798,9 +803,10 @@ export function CharactersTab() {
       ...(wardrobeField
         ? [{ id: wardrobeField.id, label: wardrobeField.label, translated: true }]
         : [{ id: 'wardrobe', label: 'Wardrobe' }]),
+      { id: 'hairstyles', label: 'Hairstyles' },
       { id: 'secrets', label: 'Secrets' },
     ].filter((s) => s.id === wardrobeField?.id || s.id === imageField?.id || gateOk(s.id))
-    const placed = new Set(['wardrobe', 'secrets'])
+    const placed = new Set(['wardrobe', 'hairstyles', 'secrets'])
     const out: Array<{ id: string; label: string; translated?: boolean }> = []
     let inserted = false
     for (const ft of fieldTabs) {
@@ -1154,6 +1160,8 @@ export function CharactersTab() {
                         <FieldFigure key={selected} character={selected}
                           onOpenWardrobe={subTabs.some((s) => s.id === 'wardrobe')
                             ? () => setSubTab('wardrobe') : undefined}
+                          onOpenHairstyles={subTabs.some((s) => s.id === 'hairstyles')
+                            ? () => setSubTab('hairstyles') : undefined}
                           onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
                             ? () => setSubTab('tab:base_body_tab') : undefined} />
                       ),
@@ -1254,8 +1262,10 @@ export function CharactersTab() {
               />
             ) : subTab === 'wardrobe' ? (
               <WardrobeTab key={selected} character={selected}
-                onEditAppearance={fieldTabs.some((g) => g.id === 'tab:aussehen')
-                  ? () => setSubTab('tab:aussehen') : undefined}
+                onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
+                  ? () => setSubTab('tab:figure_tab') : undefined} />
+            ) : subTab === 'hairstyles' ? (
+              <FieldHairstyles key={selected} character={selected}
                 onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
                   ? () => setSubTab('tab:figure_tab') : undefined} />
             ) : subTab === 'secrets' ? (

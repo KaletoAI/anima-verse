@@ -58,12 +58,10 @@ unit, Ruling H1a; zeta 0.5; limits 0.8..6.0 Hz)
     block for the newest HairDeck fit.
 [6] Route (``garments.start_garment`` recorded, not run): player session -> 403, nothing stored. Admin: stiffness
     2.1 -> 400, swing "yes" -> 400, the hairstyle unchanged; {swing false, stiffness 1.5} -> 200 {swing false,
-    stiffness 1.5, refit true}, the worn hairstyle hair_swing "off", hair_stiffness 1.5, one fit-only run of
-    hair_demo
-    (steps "fit" — Swing is a fit input, Ruling H11); {swing true, stiffness null} -> 200 {swing true, stiffness
-    1.0, refit true}, stored ("on", no key), a second run; {swing true, stiffness 1.2} -> refit false, no third
-    run
-    (Stiffness is motion only).
+    stiffness 1.5}, the worn hairstyle hair_swing "off", hair_stiffness 1.5, NO run (Task 14, the user's rule R3:
+    a setting is saved on its own — Swing is a fit input, Ruling H11, so the fit is stale and the Hairstyles tab's
+    Run all / Re-fit refits it); {swing true, stiffness null} -> 200 {swing true, stiffness 1.0}, stored ("on", no
+    key), still no run; {swing true, stiffness 1.2} -> no run either (Stiffness is motion only).
     Unknown character -> 404. The profile write runs under the lock (scripts/smoke_profile_rmw_lock.py).
 [7] Fit fingerprint (Ruling H11): with the hairstyle's hair_swing "off", "" or "maybe" (Swing off)
     ``garment_fsig`` is one value — the payload carries no ``swing`` key, as before Swing was a fit input; with
@@ -355,16 +353,16 @@ def main() -> int:
                   before)
             r = client.post(url, json={"swing": False, "stiffness": 1.5})
             check("{false, 1.5} -> 200", (r.status_code, r.json()),
-                  (200, {"swing": False, "stiffness": 1.5, "refit": True}))
+                  (200, {"swing": False, "stiffness": 1.5}))
             check("stored", (hairstyle().get("hair_swing"), hairstyle().get("hair_stiffness")), ("off", 1.5))
-            check("swing change -> one fit-only run", runs, [("Demo", "hair_demo", {"steps": "fit"})])
+            check("swing change -> saved only, no run (R3)", runs, [])
             r = client.post(url, json={"swing": True, "stiffness": None})
             check("{true, null} -> 200 defaults", (r.status_code, r.json()),
-                  (200, {"swing": True, "stiffness": 1.0, "refit": True}))
+                  (200, {"swing": True, "stiffness": 1.0}))
             check("stored as on / no key", (hairstyle().get("hair_swing"), "hair_stiffness" in hairstyle()),
                   ("on", False))
             r = client.post(url, json={"swing": True, "stiffness": 1.2})
-            check("stiffness only -> no refit", (r.json().get("refit"), len(runs)), (False, 2))
+            check("stiffness only -> no run", (r.status_code, len(runs)), (200, 0))
             garments.start_garment = real_start
             check("unknown character -> 404",
                   client.post("/characters/Nobody/hair/motion", json={"swing": True}).status_code, 404)
