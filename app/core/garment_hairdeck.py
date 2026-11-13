@@ -77,11 +77,22 @@ DRAPE_RAMP_M = 0.03
 # at or above the ear line stays where the placement and the push put it (pinned), and so does each card's top
 # CARD_PIN_TOP_M when the card has no vertex at or above the ear line; every free vertex starts at its PLACED
 # position (inside the neck for a curtain that hangs through it) with today's placed shape as its rest, tethered to
-# its card's nearest pin (long-range attachments), and the body grows round it from CARD_CLEAR_M - grow to
-# CARD_CLEAR_M. The field reaches DRAPE_FIELD_DROP_M below the hair for its sag. Off until accepted
+# its card's nearest pin (long-range attachments), and the body grows round it from DRAPE_CLEAR_M - grow to
+# DRAPE_CLEAR_M; a card held only by its top cm starts where the fit put it (``drape_below_ear``). The field reaches DRAPE_FIELD_DROP_M below the hair for its sag. Off until accepted
 # (HAIR_DRAPE_ON; ``fit_hairdeck(drape=...)`` overrides it per call).
+# Acceptance B fix 1 (Rulings B11a-e, ~/claude-out/fit-sdf-speed-drape/accept/B): the refinement is coarser (lmax
+# 0.02 instead of the spike's 0.012: Rosi 127k -> 71k drape vertices) and the run ends at rest (``rest_vmax`` / ``rest_substeps``); the
+# drape keeps DRAPE_CLEAR_M from the body, not CARD_CLEAR_M — Kira's raised-shoulder pose pressed into hair laid at
+# 4 mm (celebrating excess 0.19 -> 1.41 %); the face is cleared once more after the drape, on the draped vertices
+# only (a side strand fell back into the face box: Rosi 10, Kira 4, Lirien 58 vertices). Rest = the largest vertex
+# speed below 3 mm/s for 100 substeps (0.1 s) once the body has grown (substep 1500): a vertex at rest no longer
+# speeds up, so the slow creep left covers at most 3 mm/s x the <= 1 s skipped = 3 mm (smoke_drape_xpbd X7: 1.2 mm
+# on a hanging cloth). Rosi's largest speed falls below 3 mm/s near substep 2300. A few dozen vertices of Kira /
+# Lirien (< 0.2 %, 2 cm off the body) keep cycling between a stretch constraint and their tether at up to 0.25 m/s
+# while the p99 speed is 0.5 mm/s: those runs take all substeps.
+DRAPE_CLEAR_M = 0.008
 HAIR_DRAPE = drape.DrapeParams(substeps=2500, dt=1e-3, gravity=9.81, a_stretch=0.0, a_bend=1e-5, damp=0.02, mu=0.6,
-                               grow=0.08, max_push=0.002, lmax=0.012)
+                               grow=0.08, max_push=0.002, lmax=0.02, rest_vmax=0.003, rest_substeps=100)
 HAIR_DRAPE_ON = False
 CARD_PIN_TOP_M = 0.01
 DRAPE_FIELD_DROP_M = 0.10
@@ -721,7 +732,9 @@ def drape_below_ear(Pw: np.ndarray, Qf: np.ndarray, Fw: np.ndarray, body, *,
     line draped by XPBD (``HAIR_DRAPE``) -> ``(Q, report)``.
 
     Pins: ``drape_pins(Qf, cards, ear_y)``; their positions are ``Qf``'s, bit for bit. Start = the pins at ``Qf``,
-    every other vertex at ``Pw``; rest = ``Pw``; long-range attachments on; clearance ``CARD_CLEAR_M`` against
+    every other vertex at ``Pw`` — except the cards held only by their top ``CARD_PIN_TOP_M`` (no vertex at or above
+    the ear line), which start whole at ``Qf`` (Ruling B11e); rest = ``Pw``; long-range attachments on; clearance
+    ``DRAPE_CLEAR_M`` against
     ``body_sdf`` over the hair's bounds (start and ``Qf``) +- ``SDF_MARGIN_M``, reaching ``DRAPE_FIELD_DROP_M``
     further down. No free vertex: ``Qf`` unchanged, ``{"skipped": "no_free_vertex"}`` (Taichi is not touched)."""
     Pw = np.asarray(Pw, np.float64)
@@ -730,12 +743,19 @@ def drape_below_ear(Pw: np.ndarray, Qf: np.ndarray, Fw: np.ndarray, body, *,
     pinned = drape_pins(Qf, card, ear_y)
     if pinned.all():
         return Qf.copy(), {"skipped": "no_free_vertex"}
-    X0 = np.where(pinned[:, None], Qf, Pw)
+    # Ruling B11e: a card held only by its top cm (a lower piece of a split strand) started at its placed position
+    # lies inside the shoulder; the growing body pushed it out on whichever side of the shoulder ridge was nearer and
+    # it parted from its bundle (Kira 2026-11-13: card 31, 68 mm from any other card, lay alone on the left shoulder).
+    # It starts where the fit put it — outside the body, beside its neighbours — and falls from there.
+    held = np.zeros(card.max() + 1, bool)
+    held[np.unique(card[Qf[:, 1] >= ear_y])] = True
+    start_fitted = pinned | ~held[card]
+    X0 = np.where(start_fitted[:, None], Qf, Pw)
     both = np.vstack([X0, Qf])
     lo, hi = both.min(0) - SDF_MARGIN_M, both.max(0) + SDF_MARGIN_M
     lo[1] -= DRAPE_FIELD_DROP_M
     field = body_sdf(body.positions, body.faces, vox=VOX_M, bounds=(lo, hi))
-    res = drape.run(X0, Fw, Pw, pinned, field, HAIR_DRAPE, clear=CARD_CLEAR_M, lra=True)
+    res = drape.run(X0, Fw, Pw, pinned, field, HAIR_DRAPE, clear=DRAPE_CLEAR_M, lra=True)
     Q = res.X
     free = ~pinned
     d = field.sample(Q[free])
@@ -745,6 +765,7 @@ def drape_below_ear(Pw: np.ndarray, Qf: np.ndarray, Fw: np.ndarray, body, *,
                 min_clear_after_m=round(float(d.min()), 5), moved_max_m=round(float(moved.max()), 4),
                 moved_p50_m=round(float(np.median(moved)), 4))
     info["pinned_input"] = int(pinned.sum())
+    info["started_fitted"] = int((start_fitted & ~pinned).sum())
     return Q, info
 
 
@@ -800,9 +821,13 @@ def _ring_max(values: np.ndarray, adjacency, falloff: float, rings: int) -> np.n
 
 def _clear_face(Fw: np.ndarray, Qp: np.ndarray, sdf, body, head_w: np.ndarray,
                 landmarks: Optional[Dict[str, float]], chin: float,
-                hairline_y: Optional[float]) -> Tuple[np.ndarray, Dict[str, Any]]:
+                hairline_y: Optional[float], *, movable: Optional[np.ndarray] = None,
+                clear: float = CARD_CLEAR_M) -> Tuple[np.ndarray, Dict[str, Any]]:
     """The pushed hair ``Qp`` (welded, faces ``Fw``) with the face kept clear (``FACE_CLEAR_SHARE``) ->
-    ``(Q, report)``. A front hairline at or below the brows (``hairline_y``) is a fringe the image shows: kept."""
+    ``(Q, report)``. A front hairline at or below the brows (``hairline_y``) is a fringe the image shows: kept.
+    ``movable`` (bool per vertex, None = all): only these vertices count as in the box and move — the pass after the
+    drape (Ruling B11a) moves the draped vertices only, so the hair the drape pinned stays bit for bit; ``clear``:
+    the clearance the moved vertices are clamped to."""
     from app.core.garment_fit import _adjacency
     Q = np.asarray(Qp, np.float64).copy()
     P = body.positions
@@ -821,14 +846,22 @@ def _clear_face(Fw: np.ndarray, Qp: np.ndarray, sdf, body, head_w: np.ndarray,
     reach = FACE_CLEAR_SHARE * half
     off = Q[:, 0] - cx
     inside = (Q[:, 1] < brow) & (Q[:, 1] > chin) & (Q[:, 2] > mid_z) & (np.abs(off) < reach)
+    if movable is not None:
+        inside &= movable
     need = np.where(inside, reach - np.abs(off), 0.0)
     adjacency = _adjacency(Fw, len(Q))
     dx = (_ring_max(np.where(off >= 0, need, 0.0), adjacency, FACE_FALLOFF, FACE_FALLOFF_RINGS)
           - _ring_max(np.where(off < 0, need, 0.0), adjacency, FACE_FALLOFF, FACE_FALLOFF_RINGS))
+    if movable is not None:
+        dx = np.where(movable, dx, 0.0)
     Q[:, 0] += dx
     if inside.any():
         # a strand moved aside may now cut the cheek: out to the clearance again
-        Q = Q + _clamp(Q, np.zeros_like(Q), sdf, CARD_CLEAR_M, LAYER_CLAMP_ITERATIONS)
+        if movable is None:
+            Q = Q + _clamp(Q, np.zeros_like(Q), sdf, clear, LAYER_CLAMP_ITERATIONS)
+        else:
+            Q[movable] = Q[movable] + _clamp(Q[movable], np.zeros_like(Q[movable]), sdf, clear,
+                                             LAYER_CLAMP_ITERATIONS)
     return Q, {"in_box": int(inside.sum()), "moved": int((np.abs(dx) > MOVED_EPS_M).sum()),
                "max_m": round(float(np.abs(dx).max()), 4) if len(dx) else 0.0,
                "half_width_m": round(half, 4), "mid_z": round(mid_z, 5),
@@ -1161,7 +1194,13 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     drape_xpbd = None
     if HAIR_DRAPE_ON if drape is None else drape:
         from app.core.garment_fit import ear_line_height
-        Qp, drape_xpbd = drape_below_ear(Pw, Qp, pushed["Fw"], body, ear_y=ear_line_height(body))
+        ear_y = ear_line_height(body)
+        free = ~drape_pins(Qp, _cards(pushed["Fw"], len(Qp)), ear_y)
+        Qp, drape_xpbd = drape_below_ear(Pw, Qp, pushed["Fw"], body, ear_y=ear_y)
+        if "skipped" not in drape_xpbd:
+            # Ruling B11a: the face once more, on the draped vertices only (the pinned hair stays bit for bit)
+            Qp, drape_xpbd["face"] = _clear_face(pushed["Fw"], Qp, sdf, body, head_w, placement["landmarks"], chin,
+                                                 placement["hairline_pushed_y"], movable=free, clear=DRAPE_CLEAR_M)
     d1 = sdf.sample(Qp)
     mag = np.linalg.norm(disp, axis=1)
     X = Qp[inv]

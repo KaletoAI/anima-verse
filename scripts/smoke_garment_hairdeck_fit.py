@@ -80,6 +80,9 @@ Fixture (metres, +y up, the body faces +z)
 [6] The face stays clear (``_clear_face``, FIT_VERSION hair 5): two hair ribbons in front of a face band move
     sideways out of the box, bent along the card; a fringe (front hairline at or below the brows) is kept. The
     numbers are derived in ``face_clear``. The [1]-[5] fixture has no landmarks, so nothing moves there.
+    ``movable`` (Ruling B11a, the pass after the drape): only the +x ribbon's vertices below y 1.50 may move ->
+    14 of them in the box (rows 1.43 .. 1.49, 2 columns), each leaves it; every other vertex keeps its bits; 26 stay
+    in the box (the -x ribbon's 20 + the +x ribbon's rows 1.50 .. 1.52).
 """
 import json
 import math
@@ -321,6 +324,11 @@ def face_clear(gh):
     j_mid = 2 * len(ys) + i_mid
     check(abs(dx[j_mid] + 0.0376) < 1e-6, f"the mirrored ribbon moves to -x ({dx[j_mid]:.6f})")
     check(np.allclose(Q[:, 1:], V[:, 1:]), "only x changes (y, z kept; no clamp)")
+    mov = (np.arange(len(V)) < 2 * len(ys)) & (V[:, 1] < 1.495)
+    Qm, repm = gh._clear_face(F, V, sdf, body, head_w, {"brow_y": 1.53}, 1.42, None, movable=mov, clear=0.008)
+    check(repm["in_box"] == 14 and repm["in_box_after"] == 26, f"movable: 14 in the box, 26 after ({repm})")
+    check(np.array_equal(Qm[~mov], V[~mov]), "movable: every other vertex keeps its bits")
+    check(abs(Qm[i_mid, 0] - 0.0576) < 1e-6, f"movable: inner column at y 1.48 to the box edge ({Qm[i_mid, 0]:.6f})")
     Qf, repf = gh._clear_face(F, V, sdf, body, head_w, {"brow_y": 1.53}, 1.42, 1.50)
     check(repf.get("skipped") == "fringe" and np.array_equal(Qf, V), f"a hairline at 1.50 <= brow is a fringe: kept {repf}")
 

@@ -17,6 +17,9 @@ A port of the drape spike (``~/claude-out/drape-spike/src/drape.py`` + ``refine.
   ``clear - grow`` to ``clear`` over the first 60 % of the substeps; the push per substep capped at
   ``max_push`` + the approach speed; Coulomb-like friction ``mu``) -> ``anchor`` (``anchor_m``: never farther than
   that from the anchor positions) -> ``update`` (velocities, damping).
+- Early stop at rest (``rest_vmax`` / ``rest_substeps``, off by default): once the body has finished growing, the
+  run ends when the largest vertex speed stayed below ``rest_vmax`` for ``rest_substeps`` substeps in a row
+  (measured every substep from then on); ``report.substeps_run`` / ``report.rest_stop``.
 
 Taichi is started once per process (``_ti``: CPU, f32, ``cpu_max_num_threads = fit_kernels.threads()`` at that
 moment, the kernel cache in the temp directory, its version check off — no network); every kernel is compiled
@@ -51,7 +54,8 @@ class DrapeParams:
     """One drape's parameters: ``substeps`` of ``dt`` seconds, ``gravity`` (m/s^2, along -y), XPBD compliances
     ``a_stretch`` / ``a_bend``, velocity ``damp`` per substep, friction ``mu``, body growth ``grow`` (m), the push cap
     per substep ``max_push`` (m), refinement ``lmax`` (m, 0 = none), ``anchor_m`` (m, 0 = no anchor),
-    ``self_clear`` / ``self_rebuild`` (self-collision; not in this engine yet, 0 = off)."""
+    ``self_clear`` / ``self_rebuild`` (self-collision; not in this engine yet, 0 = off), ``rest_vmax`` (m/s) /
+    ``rest_substeps``: the early stop at rest (both > 0 = on; see the module docstring)."""
     substeps: int
     dt: float
     gravity: float
@@ -65,6 +69,8 @@ class DrapeParams:
     anchor_m: float = 0.0
     self_clear: float = 0.0
     self_rebuild: int = 50
+    rest_vmax: float = 0.0
+    rest_substeps: int = 0
 
 
 @dataclass
@@ -510,6 +516,10 @@ def run(X0, F, rest, pinned, field: "garment_fit.Sdf", params: DrapeParams, *, c
         at_s, at_b = params.a_stretch / dt ** 2, params.a_bend / dt ** 2
         N = int(params.substeps)
         trace = []
+        rest_on = params.rest_vmax > 0 and params.rest_substeps > 0
+        # the body is fully grown from this substep on (clr == clear); the early stop never cuts the growth short
+        grown = int(np.ceil(GROW_SHARE * N)) if params.grow > 0 else 0
+        calm, ran, rest_stop = 0, N, False
         t0 = time.time()
         for s_ in range(N):
             clr = clear
@@ -518,6 +528,13 @@ def run(X0, F, rest, pinned, field: "garment_fit.Sdf", params: DrapeParams, *, c
             _substep(k, st, dt, params.gravity, at_s, at_b, clr, params.mu, params.max_push, params.damp, seg,
                      lra=len(li) > 0,
                      anchor_r=params.anchor_m if use_anchor else 0.0, lo=lo, vox=vox)
+            if rest_on and s_ + 1 >= grown:
+                vm = float(k["vmax"](st["v"]))
+                calm = calm + 1 if vm < params.rest_vmax else 0
+                if calm >= params.rest_substeps:
+                    trace.append(round(vm, 5))
+                    ran, rest_stop = s_ + 1, True
+                    break
             if s_ % VMAX_EVERY == VMAX_EVERY - 1 or s_ == N - 1:
                 trace.append(round(float(k["vmax"](st["v"])), 5))
         ti.sync()
@@ -527,5 +544,6 @@ def run(X0, F, rest, pinned, field: "garment_fit.Sdf", params: DrapeParams, *, c
     report = {"n": int(n), "n_orig": int(n_orig), "constraints": int(len(pairs)), "colours": len(seg),
               "stretch": int((kind == 0).sum()) - int(len(G)), "bend": int((kind == 1).sum()), "glue": int(len(G)),
               "lra": int(len(li)), "pinned": int(pin.sum()), "rest_scale_c": round(c, 6),
-              "t_jit_s": round(t_jit, 3), "t_run_s": round(t_run, 3), "vmax_tail": trace[-VMAX_TAIL:]}
+              "t_jit_s": round(t_jit, 3), "t_run_s": round(t_run, 3), "vmax_tail": trace[-VMAX_TAIL:],
+              "substeps_run": int(ran), "rest_stop": bool(rest_stop)}
     return DrapeResult(X=Xd, report=report)

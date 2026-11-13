@@ -30,6 +30,13 @@ Plan 2026-11-12 fit-sdf-speed-drape, Task 9. Every field below is a closed-form 
      hypotenuse 14.14 mm <= 15 -> stop. 15 vertices (a 5-per-side triangular grid), max edge 0.01414 <= 0.015; the
      original 3 vertices keep indices 0..2 and their positions; a bool array is AND-ed on new vertices, an int array
      takes the edge's first end, a float array the mean.
+[X7] Early stop at rest (Ruling B11b). X1's cloth, 3000 substeps, rest_vmax 0.003, rest_substeps 100: the run stops
+     (``rest_stop`` True, ``substeps_run`` < 3000) and lands within rest_vmax x the substeps it skipped x dt of the
+     same cloth run to the end without the stop (a vertex at rest no longer speeds up: the slow creep that is left
+     covers at most that; measured 1.6 mm after a stop at 5 mm/s, 1629 of 3000 substeps). The growth is never cut
+     short: X2's patch
+     with grow 0.02 over 1500 substeps and the stop on runs at least ceil(0.6 x 1500) = 900 substeps. Without the
+     stop (X1) ``substeps_run`` == substeps and ``rest_stop`` False.
 Timings (JIT, run per case) are printed.
 """
 import json
@@ -164,6 +171,26 @@ def main() -> int:
     disp = np.linalg.norm(res.X - X, axis=1)
     check(disp.max() <= 0.010 + 1e-6 and disp.min() > 0.009,
           f"[X4] displacement {disp.min():.7f} .. {disp.max():.7f} (<= 0.010 + 1e-6, pushed to the bound)")
+
+    # [X7] early stop at rest
+    X, F = grid(21, 21, 0.01, (0.0, 0.5, 0.0))
+    pinned = np.isclose(X[:, 2], 0.0)
+    full = drape.run(X, F, X.copy(), pinned, far, params(a_bend=1e-6, substeps=3000), clear=0.004)
+    t = time.time()
+    rest = drape.run(X, F, X.copy(), pinned, far, params(a_bend=1e-6, substeps=3000, rest_vmax=0.003,
+                                                         rest_substeps=100), clear=0.004)
+    TIMES["X7"] = (rest.report["t_jit_s"], rest.report["t_run_s"], time.time() - t)
+    gap = np.linalg.norm(rest.X - full.X, axis=1).max()
+    check(rest.report["rest_stop"] and rest.report["substeps_run"] < 3000,
+          f"[X7] stopped at rest after {rest.report['substeps_run']} of 3000 substeps")
+    bound = 0.003 * (3000 - rest.report["substeps_run"]) * 1e-3
+    check(gap <= bound, f"[X7] within {bound * 1000:.2f} mm of the full run: {gap * 1000:.4f} mm")
+    check(full.report["substeps_run"] == 3000 and not full.report["rest_stop"],
+          f"[X7] without the stop: {full.report['substeps_run']} substeps, rest_stop {full.report['rest_stop']}")
+    X, F = grid(5, 5, 0.01, (-0.02, 0.15, -0.02))
+    grow = drape.run(X, F, X.copy(), np.zeros(len(X), bool), sphere_field(),
+                     params(grow=0.02, rest_vmax=0.003, rest_substeps=100), clear=0.004)
+    check(grow.report["substeps_run"] >= 900, f"[X7] the growth is never cut short: {grow.report['substeps_run']} >= 900")
 
     # [X5] determinism
     a = x5_case()

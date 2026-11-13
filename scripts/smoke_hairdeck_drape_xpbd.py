@@ -26,16 +26,22 @@ Fixture (metres, +y up, +z front). Body, skin joints [mixamorig:Hips, mixamorig:
 
 [D1] drape=True: every vertex of the drape=False result with y >= ear (1.5125) is array_equal (they are pinned:
      ``drape_pins``, and the drape returns the pinned bits unchanged).
-[D2] drape=True: every hair vertex below the ear line has body_sdf >= CARD_CLEAR_M - 0.001 = 0.003 (the drape keeps
-     CARD_CLEAR_M; 1 mm for the voxel field's trilinear slack, VOX_M 3.4 mm).
+[D2] drape=True: every hair vertex below the ear line has body_sdf >= DRAPE_CLEAR_M - 0.001 = 0.007 (the drape keeps
+     DRAPE_CLEAR_M, Ruling B11d; 1 mm for the voxel field's trilinear slack, VOX_M 3.4 mm).
 [D3] drape=True: the neck card's vertices below the head (y < 1.50) end behind the neck's back plane:
-     z < -0.05 + CARD_CLEAR_M = -0.046 (the start of each free vertex is its PLACED position, inside the neck at
+     z < -0.05 + DRAPE_CLEAR_M = -0.042 (the start of each free vertex is its PLACED position, inside the neck at
      z -0.02: 0.03 from the back surface, 0.05 from the sides, 0.07 from the front, so the growing body pushes it
      out backward).
 [D4] Short hair, drape=True: ``report.push.drape_xpbd`` == {"skipped": "no_free_vertex"}; garment, metrics and the
      rest of the report equal to drape=False.
 [D5] drape=False (and the default, ``HAIR_DRAPE_ON`` False) is byte-equal to commit 71306d21's ``fit_hairdeck`` on
      both fixtures: every garment array's bytes, the metrics, the verdict and the report (no ``drape_xpbd`` key).
+[D6] Ruling B11e, ``drape_below_ear`` directly: one card held only by its top (2 columns x 0.075 / 0.079, z 0, rows
+     every 5 mm from y 1.50 down to 1.4125 — no vertex at or above the ear line 1.5125), fitted (``Qf``) beside the
+     neck, placed (``Pw``) the same shape moved to x 0.000 / 0.004, z 0.03 — inside the neck. Pins = its top
+     CARD_PIN_TOP_M: rows 1.50 .. 1.49 = 6 vertices; the other 30 start at ``Qf`` (``started_fitted`` 30), so the card
+     hangs beside the neck: every vertex x >= 0.05 + DRAPE_CLEAR_M - 0.001 = 0.057 (started inside the neck the
+     growing body would push it out of the front, z > 0.05, 2 cm away against 5 cm to the side).
 Timings of the drape (``t_jit_s``, ``t_run_s``) are printed.
 """
 import importlib.util
@@ -244,13 +250,26 @@ def main() -> int:
         lo, hi = Xn.min(0) - SDF_MARGIN_M, Xn.max(0) + SDF_MARGIN_M
         sdf = body_sdf(body.positions, body.faces, vox=VOX_M, bounds=(lo, hi))
         d = sdf.sample(Xn[~head])
-        check(d.min() >= gh.CARD_CLEAR_M - 0.001, f"[D2] body_sdf below the ear >= {gh.CARD_CLEAR_M - 0.001}: min "
+        check(d.min() >= gh.DRAPE_CLEAR_M - 0.001, f"[D2] body_sdf below the ear >= {gh.DRAPE_CLEAR_M - 0.001}: min "
                                                   f"{d.min():.5f} (drape=False: {sdf.sample(Xo[~head]).min():.5f})")
         # [D3]
         nb = neck[Xn[neck, 1] < 1.50]
-        check(len(nb) > 0 and Xn[nb, 2].max() < -0.046,
-              f"[D3] the neck card below the head ends behind the neck: z max {Xn[nb, 2].max():.4f} < -0.046 "
+        check(len(nb) > 0 and Xn[nb, 2].max() < -0.042,
+              f"[D3] the neck card below the head ends behind the neck: z max {Xn[nb, 2].max():.4f} < -0.042 "
               f"(n {len(nb)}; its placed z -0.02)")
+
+        # [D6] a card held only by its top starts where the fit put it
+        rows = np.round(np.arange(1.50, 1.4125 - 1e-9, -0.005), 5)
+        Qc = np.array([[x, y, 0.0] for y in rows for x in (0.075, 0.079)])
+        Pc = Qc + np.array([-0.075, 0.0, 0.03])
+        Fc = np.array([f for i in range(len(rows) - 1)
+                       for f in ([2 * i, 2 * i + 1, 2 * i + 2], [2 * i + 1, 2 * i + 3, 2 * i + 2])])
+        Xc, ic = gh.drape_below_ear(Pc, Qc, Fc, body, ear_y=EAR)
+        check(ic.get("pinned_input") == 6 and ic.get("started_fitted") == len(Qc) - 6,
+              f"[D6] 6 pinned, {len(Qc) - 6} started fitted: {ic.get('pinned_input')}, {ic.get('started_fitted')}")
+        check(Xc[:, 0].min() >= 0.05 + gh.DRAPE_CLEAR_M - 0.001,
+              f"[D6] the card hangs beside the neck: x min {Xc[:, 0].min():.4f} >= {0.05 + gh.DRAPE_CLEAR_M - 0.001}"
+              f" (z max {Xc[:, 2].max():.4f})")
 
         # [D4] short hair
         Ps, Fs, _ = hair(short=True)
