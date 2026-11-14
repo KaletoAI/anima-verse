@@ -16,8 +16,8 @@
  *   5. Insole — local: pitch, heel seat, heel rise, insole cover, on a boot
  *      the shaft (class, collar height, shaft top, closed share, cap removed),
  *      and the type gates;
- *   6. Fit — per body (the base model, then in outfit body mode mesh every
- *      stored outfit body): scale, width applied / needed, extension and
+ *   6. Fit — per body (the base body, then the current body shape when it
+ *      is stored — Ruling A67, never older shapes): scale, width applied / needed, extension and
  *      slimming needed per side, lift, the collar above the ankle, on a boot
  *      the split (height per side, band, the four nodes) and the shaft chips,
  *      the fit gate chips; Re-fit (local, no hub job) and the width cap slider
@@ -448,7 +448,8 @@ export function FootwearSteps({ info, limits, busy, feedback, onRun, onWidthCap,
   }
   const fitBody = (row: FootwearFitRow) => {
     const m = row.metrics || {}
-    const label = row.base ? t('Base model') : t('Body shape {id}').replace('{id}', row.body_id || '')
+    // Ruling A67: the base body and the current body only (the server lists no older body shape).
+    const label = row.base ? t('Base body') : t('Current body')
     const fitted = row.status !== 'missing' && row.status !== 'refused'
     const numbers = fitted ? [
       num(m.k_m_per_unit) != null ? `${t('Scale')} ${m.k_m_per_unit.toFixed(3)} m/unit` : '',

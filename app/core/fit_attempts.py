@@ -867,29 +867,52 @@ def refusal_words(character_name: str, item_id: str, body: str, error: str) -> D
     return plain_reason(error, gates, on_shape=bool(body))
 
 
-def _bodies_of(character_name: str, item_id: str) -> List[str]:
-    """The outfit bodies the item has a fit, a refusal or an attempt on, whose rigged body is stored."""
-    from app.core import garment_footwear, garment_store as gs
-    stored = set(garment_footwear.stored_outfit_bodies(character_name))
-    found = {gs.body_of(p) for (iid, _f), files in gs.stored_groups(character_name).items() if iid == item_id
-             for p in files}
-    return sorted(b for b in found if b and b in stored)
+#: Ruling A67: the piece dialog's two bodies — the plain base and the body shape the worn outfit calls for.
+ROLE_BASE, ROLE_CURRENT = "base", "current"
+#: Why the current body shape cannot be re-fitted (its rigged body is not stored yet).
+CURRENT_NOT_BUILT = "This body shape is not built yet — the Figure tab's Build makes it"
+
+
+def dialog_shape(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None
+                 ) -> Tuple[str, bool]:
+    """Ruling A67 — ``(body id, stored)``: the body shape the piece dialog shows beside the base body. It is the
+    shape the worn outfit calls for (``figure.wanted_figure``: the current outfit body), "" when that is the plain
+    body, when the piece is meshed into it (an in-body piece is no fit there) or when the piece is neither an
+    own-mesh piece of that figure nor has a fit, refusal or attempt on it. ``stored``: its rigged body is stored
+    (``garment_footwear.stored_outfit_bodies``) — Re-fit needs it. Older body shapes are never returned: their fits
+    stay on disk for the artefact GC. Never raises."""
+    from app.core import figure, garment_footwear, garment_store as gs
+    try:
+        fig = figure.wanted_figure(character_name, profile=_profile(character_name, profile))
+        shape = fig.shape if gs.is_body_id(fig.shape) else ""
+        if not shape or (item_id in fig.in_body and item_id not in fig.in_body_own):
+            return "", False
+        if item_id not in fig.own and shape not in {gs.body_of(p) for (iid, _f), files
+                                                    in gs.stored_groups(character_name).items()
+                                                    if iid == item_id for p in files}:
+            return "", False
+        return shape, shape in set(garment_footwear.stored_outfit_bodies(character_name))
+    except Exception:  # noqa: BLE001 — the dialog shows the base body alone
+        logger.debug("Dialog shape of %s/%s failed", character_name, item_id, exc_info=True)
+        return "", False
 
 
 def bodies(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None,
            url_base: str = "") -> List[Dict[str, Any]]:
-    """The Details preview's body switch (Ruling A31): one entry per body the piece has a fit attempt on — the
-    plain body first, then each body shape (the current figure's first). Per entry ``{body ("" = plain), key
-    ("plain" | body id), label, status, reason, current (the figure stands on it now), url (the model to show,
+    """The piece dialog's body switch (Ruling A31; Ruling A67: two bodies at most) — the base body, then the body
+    shape the worn outfit calls for (``dialog_shape``) when there is one; older body shapes never appear. Per entry
+    ``{body ("" = plain), key ("plain" | body id), role (``ROLE_BASE`` | ``ROLE_CURRENT``), label, status, reason,
+    refit_block (why Re-fit cannot run on it, "" when it can: ``CURRENT_NOT_BUILT``), url (the model to show,
     versioned; None: nothing to show), built_at, marks [{kind, count, colour, label}], foot_pose, can_accept,
     accept_block (why not), accepted_at, arm_light (Ruling A47: ``garment_fit.arm_light`` of what is shown, None
     without), numbers (Ruling A50, ``body_numbers`` of what is shown: this body's own), fit (Ruling A50b,
-    ``body_fit_view``: what the dialog's fit row, chips and settings box show for this body; None = nothing)}``. ``status``: ``accepted`` (the gates accepted it), ``user_accepted``
-    (light green, "Accepted by you", ``reason`` the gates' refusal), ``refused`` (``reason``), ``stale`` (made
-    on an older body / piece / algorithm; refitted by the next Build), ``missing``. ``method_note``: how a body
-    shape's shoe was fitted (``FIT_METHOD_NOTES``, "" otherwise), ``variant`` "" or ``DERIVED``: a body shape's
-    refused derived shoe, kept beside the fresh fit that followed it, is an entry of its own right after its body
-    (key ``<body id>`` + ``DERIVED_KEY_SUFFIX``, Ruling A40). Read-only."""
+    ``body_fit_view``: what the dialog's fit row, chips and settings box show for this body; None = nothing)}``.
+    ``status``: ``accepted`` (the gates accepted it), ``user_accepted`` (light green, "Accepted by you", ``reason``
+    the gates' refusal), ``refused`` (``reason``), ``stale`` (made on an older body / piece / algorithm; refitted by
+    the next Build), ``missing``. ``method_note``: how a body shape's shoe was fitted (``FIT_METHOD_NOTES``, ""
+    otherwise), ``variant`` "" or ``DERIVED``: the current body shape's refused derived shoe, kept beside the fresh
+    fit that followed it, is an entry of its own right after its body (key ``<body id>`` + ``DERIVED_KEY_SUFFIX``,
+    Ruling A40). Read-only."""
     from urllib.parse import quote
     from app.core import garment_store as gs
     from app.core.http_files import content_version
@@ -899,24 +922,20 @@ def bodies(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any
             return []
     except ValueError:
         return []
-    current_shape = ""
-    try:
-        from app.core import figure
-        current_shape = figure.delivered_figure_cached(character_name, profile=profile).shape
-    except Exception:  # noqa: BLE001 — a marker, never a failure
-        pass
-    shapes = _bodies_of(character_name, item_id)
-    shapes.sort(key=lambda b: (b != current_shape, b))
-    names = shape_names(character_name, profile=profile) if shapes else {}
+    shape, stored = dialog_shape(character_name, item_id, profile=profile)
+    names = shape_names(character_name, profile=profile) if shape else {}
     out: List[Dict[str, Any]] = []
-    for body in [""] + shapes:
+    for body in [""] + ([shape] if shape else []):
         entries = [_entry(character_name, item_id, body, profile, names)]
         if body:
             derived = _derived_entry(character_name, item_id, body, profile, names)
             if derived is not None:
                 entries.append(derived)
         for entry in entries:
-            entry["current"] = (body or "plain") == (current_shape if gs.is_body_id(current_shape) else "plain")
+            entry["role"] = ROLE_CURRENT if body else ROLE_BASE
+            entry["refit_block"] = CURRENT_NOT_BUILT if body and not stored else ""
+            if body and not stored and entry["status"] == "missing":
+                entry["reason"] = CURRENT_NOT_BUILT
             shown = entry.pop("_shown", None)
             if shown is not None:
                 try:

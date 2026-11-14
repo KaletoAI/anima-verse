@@ -577,7 +577,20 @@ export function bodyWords(label: string, t: Tr = EN): string {
   return id ? t('Body shape {id}').replace('{id}', id[1]) : label
 }
 
-/** One body of the Details preview's body switch (Ruling A31, `fit_attempts.bodies`). */
+/** Ruling A67: a dialog body's short name — "Base body" or "Current body" (the derived shoe's entry included). */
+export function fitBodyName(b: Pick<FitBody, 'role'>, t: Tr = EN): string {
+  return b.role === 'current' ? t('Current body') : t('Base body')
+}
+
+/** Ruling A67: a dialog body's name with what is in the current body shape — "Current body (t-shirt, jeans)"; the
+ *  base body and a shape without piece names keep the short name. */
+export function fitBodyLongName(b: Pick<FitBody, 'role' | 'label'>, t: Tr = EN): string {
+  const named = b.role === 'current' ? /^Body shape \((.*)\)$/.exec(b.label) : null
+  return named ? t('Current body ({pieces})').replace('{pieces}', named[1]) : fitBodyName(b, t)
+}
+
+/** One body of the piece dialog's body switch (Ruling A31; Ruling A67: the base body and the current body only,
+ *  `fit_attempts.bodies`). */
 export interface FitBody {
   /** "" = the plain body, else the outfit body id. */
   body: string
@@ -603,8 +616,10 @@ export interface FitBody {
   method_note?: string
   /** "derived": a body shape's refused derived shoe, kept beside the fresh fit that followed it (Ruling A40). */
   variant?: '' | 'derived'
-  /** The figure stands on this body now. */
-  current: boolean
+  /** Ruling A67: "base" = the plain base body, "current" = the body shape the worn outfit calls for. */
+  role: 'base' | 'current'
+  /** Why Re-fit cannot run on this body ("" when it can) — the current body shape is not built yet. */
+  refit_block?: string
   /** Ruling A47: skin seen inside the sleeves of what is shown (`garment_fit.arm_light`), null before it existed. */
   arm_light?: ArmLight | null
   /** Ruling A50: this body's own numbers (`fit_attempts.body_numbers` of what is shown), {} when nothing is. */
@@ -640,9 +655,15 @@ export interface FitBodyNumbers {
 /** The slot of a body shape's Re-fit button (its run feedback, Ruling A50). */
 export const refitSlot = (body: string) => `fit|body:${body}`
 
-/** The body switch is worth showing when there is more than the plain body's accepted fit to see. */
+/** The body switch is worth showing when there is more than the base body's accepted fit to see. */
 export function showBodySwitch(bodies: FitBody[] | undefined): boolean {
   return !!bodies && (bodies.length > 1 || bodies.some((b) => b.status !== 'accepted'))
+}
+
+/** Ruling A67: the body the dialog opens on — the current body shape (its main entry, not a derived shoe), else
+ *  the base body. */
+export function defaultBodyKey(bodies: FitBody[] | undefined): string {
+  return (bodies || []).find((b) => b.role === 'current' && b.variant !== 'derived')?.key || 'plain'
 }
 
 /** The hair row as a step (checklist 8): light, state, the line under it. */

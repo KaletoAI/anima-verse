@@ -52,9 +52,10 @@
  * Ruling A37: "Use this" under every stored attempt of the clothing grid — POST
  * …/garments/{item}/images/{step}/{view}/attempts/{n}/use (0 jobs; a refused attempt becomes "Accepted by you").
  *
- * Above the preview of clothing and footwear, the body switch (FitBodySwitch, Ruling A31): one button per body
- * the piece was fitted on, the selected body's model (GET …/garments/{item}/fits/{body}/model — a refused fit
- * with the failing region marked), and Accept / Undo accept of a refused fit.
+ * Above the preview of clothing and footwear, the body switch (FitBodySwitch, Ruling A31; Ruling A67: the base body
+ * and the current body only, opened on the current body): the selected body's model (GET
+ * …/garments/{item}/fits/{body}/model — a refused fit with the failing region marked), and Accept / Undo accept of
+ * a refused fit.
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -82,7 +83,7 @@ import type {
 } from './useGarment'
 import {
   AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES, PIECE_STATE_LABELS,
-  bodyWords, closableDisabled, leavesOwnMesh, refitSlot, showBodySwitch, switchOffWarning, wearersLine,
+  closableDisabled, defaultBodyKey, fitBodyName, leavesOwnMesh, refitSlot, showBodySwitch, switchOffWarning, wearersLine,
 } from './figureModel'
 import type { FitBody, MeshMode, OwnMeshFiles, PieceState } from './figureModel'
 import { chainRunAll } from './baseBodyModel'
@@ -694,20 +695,23 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   const previewPose = PREVIEW_POSES.find((p) => p.key === pose) || PREVIEW_POSES[0]
   const fit = garment?.steps.fit
   const fitRecord = fit && fit.status !== 'missing' ? fit.metrics : null
-  // Ruling A31: the body switch — which body the preview shows, the piece as last fitted there.
+  // Ruling A31: the body switch — which body the preview shows, the piece as last fitted there. Ruling A67: the base
+  // body and the current body only; until the user picks one the dialog shows the current body.
   const bodies: FitBody[] = (info as { bodies?: FitBody[] } | null)?.bodies || []
-  const [bodyKey, setBodyKey] = useState('plain')
+  const [bodyKey, setBodyKey] = useState<string | null>(null)
   const switchOn = showBodySwitch(bodies)
-  const shownBody = switchOn ? bodies.find((b) => b.key === bodyKey) || bodies[0] : null
+  const shownBody = switchOn ? bodies.find((b) => b.key === (bodyKey ?? defaultBodyKey(bodies))) || bodies[0] : null
   // Ruling A50: with a body shape selected, Re-fit fits on THAT body (the plain body's fit first when it is due)
   // and every button says which body; the numbers beside the plain body's settings are named as the plain body's.
   const refitBody = shownBody?.body || ''
-  const refitOn = refitBody && shownBody ? bodyWords(shownBody.label, t) : ''
+  const refitOn = refitBody && shownBody ? fitBodyName(shownBody, t) : ''
+  // Ruling A67: Re-fit cannot run on a current body shape that is not built yet (the reason is shown instead).
+  const refitBlock = refitBody && shownBody?.refit_block ? t(shownBody.refit_block) : ''
   // Ruling A50b: under a selected body shape the fit row, the chips and the fit settings box show THAT body's fit
   // (its sleeve resolution, widening, chips, build time) — never the plain body's; the settings stay per piece.
   const shapeFit = refitBody && shownBody ? { name: refitOn, status: shownBody.status, fit: shownBody.fit ?? null }
     : null
-  const numbersOf = shapeFit ? refitOn : switchOn ? t('Plain body') : ''
+  const numbersOf = shapeFit ? refitOn : switchOn ? t('Base body') : ''
   const settingsInfo = shapeFit ? shapeFit.fit?.fit_settings ?? null : garment?.fit_settings ?? null
   const chipRecord = shapeFit ? shapeFit.fit?.metrics ?? null : fitRecord
   // A body shape's fit is judged without the placement push gates (`fit_body`, server `clothing_gates`).
@@ -785,7 +789,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             </>
           ) : (
             <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>
-              {shownBody && shownBody.key !== 'plain' ? t(noRunAll ? NO_ATTEMPT_KEPT : NO_ATTEMPT_KEPT_HERE) : t('No fitted mesh yet')}
+              {refitBlock || (shownBody && shownBody.key !== 'plain' ? t(noRunAll ? NO_ATTEMPT_KEPT : NO_ATTEMPT_KEPT_HERE)
+                  : t('No fitted mesh yet'))}
             </div>
           )}
           {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
@@ -826,6 +831,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             onMeshUse={(slot) => { void onMeshUse(slot) }}
             onRun={onRunFit}
             refitOn={refitOn}
+            refitBlock={refitBlock}
             shownFit={shapeFit}
             feedback={feedback}
             viewRuns={info.view_runs}
@@ -849,7 +855,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           ) : (
             <>
               <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>
-                {shownBody && shownBody.key !== 'plain' ? t(noRunAll ? NO_ATTEMPT_KEPT : NO_ATTEMPT_KEPT_HERE) : t('No fitted mesh yet')}
+                {refitBlock || (shownBody && shownBody.key !== 'plain' ? t(noRunAll ? NO_ATTEMPT_KEPT : NO_ATTEMPT_KEPT_HERE)
+                  : t('No fitted mesh yet'))}
               </div>
               {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
             </>
@@ -861,7 +868,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           ) : shapeFit && garment?.fit_settings ? (
             <div style={{ ...ROW, gap: 8, padding: '6px 8px', border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>
               <span>{refitOn}: {t('Not fitted yet on this body')}</span>
-              {noRunAll ? <span className="ga-hint">{t('The next Build refits it.')}</span> : (
+              {refitBlock ? <span className="ga-hint">{refitBlock}</span>
+                : noRunAll ? <span className="ga-hint">{t('The next Build refits it.')}</span> : (
                 <RunButton feedback={feedback} slot="fitsettings" disabled={busy}
                   title={t('Fits the piece on the selected body shape again on the CPU — 0 hub jobs. The plain body is fitted first when its fit is due.')}
                   label={`${t('Re-fit (0 hub jobs)')} · ${refitOn}`}

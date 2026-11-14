@@ -207,8 +207,28 @@
  *        → reason "The step stopped at the back view — the message is on mouse-over.", note "", action "Retry
  *          this step — no hub job".
  *      Source greps: the Pose and 3D tabs render BuildProblemNote, the Figure and Base body tabs BuildProblemView.
+ *
+ * [24] Ruling A67 — the piece dialog's body switch offers the base body and the current body only (the server's list:
+ *      scripts/smoke_dialog_two_bodies.py). Pure helpers: fitBodyName({role 'base'}) → "Base body", {role 'current'}
+ *      → "Current body"; fitBodyLongName of the current body labelled "Body shape (Blouse, Jeans)" → "Current body
+ *      (Blouse, Jeans)", of one labelled "Body shape ob0000000b" → "Current body", of the base → "Base body".
+ *      defaultBodyKey([plain, B, B-derived]) → B (the current body, never its derived shoe); ([plain]) → "plain";
+ *      ([]) → "plain". showBodySwitch([plain accepted, B]) → true; ([plain accepted]) → false (current == base: no
+ *      selector); ([plain refused]) → true (its verdict and Accept stay).
+ *      Rendered (react-dom/server, en, FitBodySwitch): the TWO-body payload of a figure with three stored shapes
+ *      ([plain accepted, B refused], B selected) → one role="group" with exactly two buttons, "Base body" and
+ *      "Current body", each with its light (a 10 px round span: green #3fb950 for the base, red #f85149 for B); the
+ *      verdict lines "Base body: accepted" and "▸ Current body (Blouse, Jeans): refused — x"; "Re-fit on this body
+ *      (0 hub jobs)" present; no "Plain body", no "Body shape" in the shown text (the current body's hover names its
+ *      shape). The ONE-body payload ([plain accepted]) → no
+ *      role="group", no button. The current body not built (refit_block = the server's CURRENT_NOT_BUILT) → no Re-fit
+ *      button, the reason shown instead.
+ *      Sources: WardrobeGarment opens on defaultBodyKey (useState<string | null>(null), `bodyKey ?? defaultBodyKey`)
+ *      and its Re-fit posts the selected body (`{ ...run, body: refitBody }` and `onRun({ step: 'fit', force: true,
+ *      body: b }`); FootwearSteps names its rows "Base body" / "Current body", never `Body shape {id}`; the de.json
+ *      keys of the new strings exist and "The figure stands on this body now" is gone.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -685,6 +705,82 @@ check('[23] at a view, not held, no job', [pn.reason, pn.note, pn.action],
 check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/characters/FieldPose.tsx')),
   /<BuildProblemNote\b/.test(src('frontend/src/tabs/characters/FieldModel3D.tsx')),
   /<BuildProblemView\b/.test(fieldFigure), /<BuildProblemView\b/.test(details)], [true, true, true, true]);
+
+// [24] Ruling A67 — the piece dialog's two bodies (header).
+{
+  const base = { body: '', key: 'plain', role: 'base', label: 'Plain body', status: 'accepted', reason: '',
+    reason_detail: '', piece_broken: false, url: null, built_at: null, marks: [], foot_pose: null, can_accept: false,
+    accept_block: '', accepted_at: null, method_note: '', variant: '', refit_block: '', arm_light: null, numbers: {},
+    fit: null };
+  const cur = { ...base, body: 'ob0000000b', key: 'ob0000000b', role: 'current', label: 'Body shape (Blouse, Jeans)',
+    status: 'refused', reason: 'x' };
+  const derived = { ...cur, key: 'ob0000000b-derived', variant: 'derived' };
+  check('[24] names', [m.fitBodyName(base), m.fitBodyName(cur), m.fitBodyLongName(cur),
+    m.fitBodyLongName({ role: 'current', label: 'Body shape ob0000000b' }), m.fitBodyLongName(base)],
+  ['Base body', 'Current body', 'Current body (Blouse, Jeans)', 'Current body', 'Base body']);
+  check('[24] defaultBodyKey', [m.defaultBodyKey([base, cur, derived]), m.defaultBodyKey([base]), m.defaultBodyKey([])],
+    ['ob0000000b', 'plain', 'plain']);
+  check('[24] showBodySwitch', [m.showBodySwitch([base, cur]), m.showBodySwitch([base]),
+    m.showBodySwitch([{ ...base, status: 'refused' }])], [true, false, true]);
+
+  const esbuild = esbuildModule();
+  const dir = await mkdtemp(join(tmpdir(), 'check-figure-ui-ssr-'));
+  let render;
+  try {
+    const entry = join(dir, 'entry.tsx');
+    const file = join(dir, 'ssr.cjs');
+    const at = (rel) => JSON.stringify(join(ROOT, rel));
+    writeFileSync(entry, [
+      `import { renderToStaticMarkup } from 'react-dom/server'`,
+      `import { I18nProvider } from ${at('frontend/src/i18n/I18nProvider.tsx')}`,
+      `import { ToastProvider } from ${at('frontend/src/lib/Toast.tsx')}`,
+      `import { FitBodySwitch } from ${at('frontend/src/tabs/characters/FitBodySwitch.tsx')}`,
+      `export const render = (bodies, selected) => renderToStaticMarkup(<I18nProvider><ToastProvider><FitBodySwitch`,
+      `  character="demo" itemId="jacket" bodies={bodies} selected={selected} onSelect={() => {}}`,
+      `  onChanged={() => {}} onRefit={() => {}} /></ToastProvider></I18nProvider>)`,
+    ].join('\n'));
+    await esbuild.build({
+      entryPoints: [entry], outfile: file, bundle: true, format: 'cjs', platform: 'node', jsx: 'automatic',
+      logLevel: 'silent', absWorkingDir: ROOT, nodePaths: [join(ROOT, 'node_modules')],
+      define: { 'process.env.NODE_ENV': '"production"' }, loader: { '.css': 'empty' },
+    });
+    render = require_(file).render;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  const text = (html) => html.replace(/<[^>]+>/g, '|').replace(/\|+/g, '|');
+  const two = render([base, cur], 'ob0000000b');
+  const group = /<div[^>]*role="group"[^>]*>([\s\S]*?)<\/div>/.exec(two)?.[1] || '';
+  const buttons = [...group.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((b) => b[1]);
+  check('[24] two bodies: one group, two buttons', [(two.match(/role="group"/g) || []).length, buttons.length], [1, 2]);
+  check('[24] button names', buttons.map((b) => text(b).split('|').filter(Boolean).join(' ')), ['Base body', 'Current body']);
+  check('[24] each button its light', buttons.map((b) => /border-radius:50%;background:([^;"]+)/.exec(b)?.[1] || null),
+    ['var(--success, #3fb950)', 'var(--danger, #f85149)']);
+  check('[24] verdict lines', [text(two).includes('|Base body: accepted|'),
+    text(two).includes('|▸ Current body (Blouse, Jeans): refused — x|')], [true, true]);
+  check('[24] Re-fit on the current body; no old names shown', [two.includes('Re-fit on this body (0 hub jobs)'),
+    text(two).includes('Plain body'), text(two).includes('Body shape')], [true, false, false]);
+  const one = render([base], 'plain');
+  check('[24] one body (current == base): no selector', [one.includes('role="group"'), (one.match(/<button/g) || []).length],
+    [false, 0]);
+  const block = "This body shape is not built yet — the Figure tab's Build makes it";
+  const unbuilt = render([base, { ...cur, status: 'missing', reason: block, refit_block: block }], 'ob0000000b');
+  check('[24] not built: the reason instead of Re-fit', [unbuilt.includes('Re-fit on this body'),
+    unbuilt.includes(block.replace("'", '&#x27;'))], [false, true]);
+
+  const wg = src('frontend/src/tabs/characters/WardrobeGarment.tsx');
+  check('[24] dialog opens on the current body, Re-fit posts the selected body', [
+    /useState<string \| null>\(null\)/.test(wg), /bodyKey \?\? defaultBodyKey\(bodies\)/.test(wg),
+    /\{ \.\.\.run, body: refitBody \}/.test(wg), /onRun\(\{ step: 'fit', force: true, body: b \}/.test(wg)],
+  [true, true, true, true]);
+  const fs = src('frontend/src/tabs/characters/FootwearSteps.tsx');
+  check('[24] footwear rows: Base body / Current body', [fs.includes("t('Current body')"), fs.includes("t('Base body')"),
+    fs.includes("t('Body shape {id}')")], [true, true, false]);
+  const de = JSON.parse(src('shared/languages/de.json')).translations;
+  check('[24] de.json keys', ['Base body', 'Current body', 'Current body ({pieces})',
+    'The body shape the worn outfit calls for: {shape}', block].map((k) => k in de)
+    .concat(['The figure stands on this body now' in de]), [true, true, true, true, true, false]);
+}
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

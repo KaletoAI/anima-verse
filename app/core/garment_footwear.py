@@ -1193,11 +1193,13 @@ def stored_outfit_bodies(character_name: str) -> List[str]:
 def _fits(character_name: str, item_id: str, fsig: Optional[str], base: Tuple[str, str], base_fit: Dict[str, Any],
           *, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
     """``fits`` of ``info``: the fit of ``fsig`` per body — the base model first (``base_fit`` = ``steps.fit``),
-    then one row per stored outfit body (meshed shape, ``stored_outfit_bodies``). Each row is
-    ``_fit_info`` plus ``body_id`` (the base signature / the outfit body id) and ``base`` (True on the base)."""
-    from app.core import garments
+    then the body shape the worn outfit calls for when it is stored (Ruling A67, ``fit_attempts.dialog_shape``:
+    the piece dialog shows the base body and the current body, never older shapes). Each row is ``_fit_info``
+    plus ``body_id`` (the base signature / the outfit body id) and ``base`` (True on the base)."""
+    from app.core import fit_attempts, garments
     rows: List[Dict[str, Any]] = [{"body_id": base[0] or None, "base": True, **base_fit}]
-    for body_id in stored_outfit_bodies(character_name):
+    shape, stored = fit_attempts.dialog_shape(character_name, item_id, profile=profile)
+    for body_id in ([shape] if shape and stored else []):
         body_sha = garments.body_sha256(character_name, body_id)
         rows.append({"body_id": body_id, "base": False,
                      **_fit_info(character_name, item_id, fsig, body_sha, body=body_id)})

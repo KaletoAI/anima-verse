@@ -1,7 +1,9 @@
 /**
- * The Details preview's body switch (Ruling A31): one button per body the piece has a fit attempt on — "Plain
- * body" and every "Body shape (<what is in it>)" — each with its status light and, under the buttons, the selected
- * body's verdict in plain words (the measured reasons on hover). The viewer beside shows that body WITH the piece
+ * The piece dialog's body switch (Ruling A31; Ruling A67: two bodies at most) — "Base body" (the plain base) and
+ * "Current body" (the body shape the worn outfit calls for, what is in it on hover and in its verdict line), each
+ * with its status light and, under the buttons, each body's verdict in plain words (the measured reasons on hover).
+ * Older body shapes never appear (the server lists only these two). When the current body IS the base body there
+ * is one body and no buttons — only its verdict (and Accept for a refused fit). The viewer beside shows that body WITH the piece
  * as last fitted there, a refused fit included, the region the refusing check measured marked in colour (legend
  * below the buttons; the server grafts the marks, the client only shows them).
  *
@@ -21,7 +23,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { StepLight } from './StepRows'
-import { ACCEPTED_BY_YOU, bodyWords } from './figureModel'
+import { ACCEPTED_BY_YOU, bodyWords, fitBodyLongName, fitBodyName } from './figureModel'
 import { refitSlot } from './figureModel'
 import type { FitBody } from './figureModel'
 import type { Light } from './hairstylesModel'
@@ -46,16 +48,18 @@ const ROW: CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', flex
 const ACCEPTED: CSSProperties = { color: 'var(--success, #3fb950)' }
 const REFUSED: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
 
-/** The button's words: the body, and for a body shape's kept derived shoe (Ruling A40) which shoe it is. */
+/** The button's words (Ruling A67): "Base body" / "Current body", and for the current body's kept derived shoe
+ *  (Ruling A40) which shoe it is. */
 function bodyName(b: FitBody, t: (s: string) => string): string {
-  return b.variant === 'derived' ? `${bodyWords(b.label, t)} · ${t(DERIVED_SHOE)}` : bodyWords(b.label, t)
+  return b.variant === 'derived' ? `${fitBodyName(b, t)} · ${t(DERIVED_SHOE)}` : fitBodyName(b, t)
 }
 
-/** "Plain body: accepted" / "Body shape (t-shirt): refused — the left trouser leg stands off the thigh"; a body
+/** "Base body: accepted" / "Current body (t-shirt): refused — the left trouser leg stands off the thigh"; a body
  *  shape's shoe names how it was fitted (Ruling A40). */
 function bodyVerdict(b: FitBody, t: (s: string) => string): string {
-  const head = `${bodyName(b, t)}: ${t(STATUS_TEXT[b.status])}`
-  const parts = [b.method_note ? t(b.method_note) : '', b.reason && b.status !== 'accepted' ? b.reason : '']
+  const name = b.variant === 'derived' ? `${fitBodyLongName(b, t)} · ${t(DERIVED_SHOE)}` : fitBodyLongName(b, t)
+  const head = `${name}: ${t(STATUS_TEXT[b.status])}`
+  const parts = [b.method_note ? t(b.method_note) : '', b.reason && b.status !== 'accepted' ? t(b.reason) : '']
   return [head, ...parts.filter(Boolean)].join(' — ')
 }
 
@@ -123,22 +127,25 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div style={ROW} role="group" aria-label={t('Body shown')}>
-        {bodies.map((b) => (
-          <button key={b.key} type="button" aria-pressed={b.key === shown.key}
-            className={`ga-btn ga-btn-sm${b.key === shown.key ? ' ga-btn-primary' : ''}`}
-            title={[bodyVerdict(b, t), b.reason_detail, b.current ? t('The figure stands on this body now') : '']
-              .filter(Boolean).join('\n')}
-            onClick={() => onSelect(b.key)}>
-            <span style={{ ...ROW, gap: 6, flexWrap: 'nowrap' }}>
-              <StepLight light={LIGHT[b.status]} />
-              {bodyName(b, t)}
-              {b.status === 'user_accepted'
-                ? <span style={b.key === shown.key ? undefined : ACCEPTED}>· {t(ACCEPTED_BY_YOU)}</span> : null}
-            </span>
-          </button>
-        ))}
-      </div>
+      {bodies.length > 1 ? (
+        <div style={ROW} role="group" aria-label={t('Body shown')}>
+          {bodies.map((b) => (
+            <button key={b.key} type="button" aria-pressed={b.key === shown.key}
+              className={`ga-btn ga-btn-sm${b.key === shown.key ? ' ga-btn-primary' : ''}`}
+              title={[bodyVerdict(b, t), b.reason_detail, b.role === 'current'
+                ? t('The body shape the worn outfit calls for: {shape}').replace('{shape}', bodyWords(b.label, t)) : '']
+                .filter(Boolean).join('\n')}
+              onClick={() => onSelect(b.key)}>
+              <span style={{ ...ROW, gap: 6, flexWrap: 'nowrap' }}>
+                <StepLight light={LIGHT[b.status]} />
+                {bodyName(b, t)}
+                {b.status === 'user_accepted'
+                  ? <span style={b.key === shown.key ? undefined : ACCEPTED}>· {t(ACCEPTED_BY_YOU)}</span> : null}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       {bodies.map((b) => (
         <div key={b.key} className="ga-hint"
           style={b.status === 'refused' ? REFUSED : b.status === 'user_accepted' ? ACCEPTED : undefined}
@@ -153,7 +160,9 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
       ))}
       <BodyNumbers body={shown} />
       {legend}
-      {onRefit && shown.body && shown.variant !== 'derived' ? (
+      {onRefit && shown.body && shown.variant !== 'derived' && shown.refit_block ? (
+        shown.reason === shown.refit_block ? null : <div className="ga-hint">{t(shown.refit_block)}</div>
+      ) : onRefit && shown.body && shown.variant !== 'derived' ? (
         <div style={ROW}>
           <RunButton feedback={feedback} slot={refitSlot(shown.body)} disabled={refitDisabled}
             title={t('Fits the piece on this body shape again on the CPU — 0 hub jobs. The plain body is fitted first when its fit is due. A refusal is shown here with its reason and the refused fit in the viewer.')}

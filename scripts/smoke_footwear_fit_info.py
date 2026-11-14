@@ -39,11 +39,11 @@ extension_deg_right 22.2, toe_room_mm_right 18.0, root_lift_m 0.052, k_m_per_uni
      metrics width_factor 1.05 (its own hand value); B has nothing -> missing; C has a recorded body failure of F
      on sha(C) (base_fit_sha = sha(base fit GLB), the current fit version, error "fit refused — x")
      -> status refused, error "x" (Ruling A31: the row's pill says "Refused (gate)", the reason drops the fit path's
-     own "fit refused — " prefix). ``fits`` = [base, then the three in sorted id order], each
-     ``base`` False. Since Task 6 of plan 2026-11-12-unified-worn-pieces no per-character mode gates the rows
-     (the old "retexture mode: base row only" case): with the coat taken off in [I4] the rows are still [bsig,
-     A, B, C]. A model3d/ file that is NOT an outfit body id (the base GLB, an outfit model "o…") is no
-     row.
+     own "fit refused — " prefix). Ruling A67: ``fits`` = [base, then the CURRENT body shape only]
+     (``fit_attempts.dialog_shape``, stubbed to (A, stored), then B, then C: [bsig, A] / [bsig, B] / [bsig, C],
+     the shape's row ``base`` False); the real ``dialog_shape`` names the coat's shape, which is not stored -> [bsig]
+     (older stored shapes never appear). With the coat taken off in [I4] the wanted figure is the plain body ->
+     [bsig]. A model3d/ file that is NOT an outfit body id (the base GLB, an outfit model "o…") is no row.
 [I3] The base record's foot_pose.source.fsig rewritten to "000000000000" -> ``foot_pose`` None, the
      ``preview_url`` stays (the GLB is still the current fsig's fit; the pose of another fit is never
      handed out). The fit GLB removed -> ``preview_url`` None, ``foot_pose`` None, ``fits[0].status``
@@ -259,13 +259,26 @@ def main() -> int:
         gs.record_body_failure("Demo", heels, F, C, error="fit refused — x", body_sha=shas[C],
                                base_fit_sha=sha(gs.garment_path("Demo", heels, F, "fit")),
                                fit_version=ff.FOOTWEAR_FIT_VERSION)
+        from app.core import fit_attempts
         info = garments.garment_info("Demo", heels)
-        rows = [(r.get("body_id"), r.get("base"), r.get("status"), r.get("error")) for r in info.get("fits") or []]
-        check("I2 rows", rows, [(bsig, True, "accepted", None), (A, False, "accepted", None),
-                                (B, False, "missing", None), (C, False, "refused", "x")])
-        near("I2 A width factor", (info["fits"][1]["metrics"] if len(info["fits"]) > 1 else {}).get("width_factor"),
-             1.05)
-        check("I2 B no metrics", info["fits"][2]["metrics"] if len(info["fits"]) > 2 else None, {})
+        check("I2 rows: the coat's shape is not stored, older shapes never appear",
+              [r.get("body_id") for r in info.get("fits") or []], [bsig])
+        real_shape = fit_attempts.dialog_shape
+        rows, infos = [], {}
+        try:
+            for body_id in ids:
+                fit_attempts.dialog_shape = lambda c, i, profile=None, _b=body_id: (_b, True)
+                infos[body_id] = garments.garment_info("Demo", heels)
+                rows.append([(r.get("body_id"), r.get("base"), r.get("status"), r.get("error"))
+                             for r in infos[body_id].get("fits") or []])
+        finally:
+            fit_attempts.dialog_shape = real_shape
+        base_row = (bsig, True, "accepted", None)
+        check("I2 rows", rows, [[base_row, (A, False, "accepted", None)], [base_row, (B, False, "missing", None)],
+                                [base_row, (C, False, "refused", "x")]])
+        near("I2 A width factor", (infos[A]["fits"][1]["metrics"] if len(infos[A]["fits"]) > 1 else {})
+             .get("width_factor"), 1.05)
+        check("I2 B no metrics", infos[B]["fits"][1]["metrics"] if len(infos[B]["fits"]) > 1 else None, {})
 
         # --- [I3] -------------------------------------------------------------------------------------------
         print("[I3] a pose of another fit is never handed out; no fit, no preview")
@@ -296,7 +309,7 @@ def main() -> int:
                                "parts": {"foot": 2000}}}})
         info = garments.garment_info("Demo", heels)
         row = info["fits"][0]
-        check("I4 rows whatever is worn", [r.get("body_id") for r in info["fits"]], [bsig, A, B, C])
+        check("I4 rows: the plain body is current", [r.get("body_id") for r in info["fits"]], [bsig])
         check("I4 shoe status", row["status"], "accepted")
         check("I4 shoe insole shaft", info["insole"]["shaft"], None)
         check("I4 shoe no slab rings", "slabs" in (info["insole"]["overlay"] or {}), False)

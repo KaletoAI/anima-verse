@@ -60,9 +60,11 @@ answer as scripted; ``refit_pool.run`` calls in-process; ``refine.decimate_to`` 
 [6] B: both refused: ``_Refused`` with the fresh fit's error; BOTH attempts kept — main slot ``fit_method``
     "fresh_fallback" (FRESH bytes), the derived slot (DERIVED bytes); no fit published. C: the derived shoe
     accepted: calls [derive] only, ``fit_method`` "derived"; a derived attempt kept there before is dropped.
-[7] The Details preview (``fit_attempts.bodies`` with ``fit_status`` stubbed per body; ``_current`` real): A ->
-    entry "A" accepted, ``method_note`` = FIT_METHOD_NOTES["fresh_fallback"], then entry "A-derived" (variant
-    "derived", refused, cannot be accepted: "This body already has an accepted fit"); B -> "B" refused with the
+[7] The Details preview (``fit_attempts.bodies`` with ``fit_status`` stubbed per body; ``_current`` real). Ruling
+    A67: the dialog lists the base body and the CURRENT body (``dialog_shape``, stubbed to A, then B, then C) — so
+    with A current the keys are exactly plain, A, A-derived (role base / current / current); A -> entry "A"
+    accepted, ``method_note`` = FIT_METHOD_NOTES["fresh_fallback"], then entry "A-derived" (variant "derived",
+    refused, cannot be accepted: "This body already has an accepted fit"); B current -> "B" refused with the
     fresh_fallback note and "B-derived" refused, can_accept. ``parse_key``: "plain" -> ("", ""), "B-derived" ->
     (B, "derived"), "plain-derived" -> ValueError. Accepting "B-derived" publishes the DERIVED bytes as B's fit
     (``user_accepted.slot`` "derived"); a new FRESH attempt of the main slot on B (other bytes) does NOT void it.
@@ -388,9 +390,19 @@ def footwear(tmp: Path) -> None:
             return {"fsig": F, "state": states[body], "failure": failure, "body_sha": f"sha-{body}",
                     "base_fit_sha": ""}
         patch(fit_attempts, "fit_status", status)
-        patch(fit_attempts, "_bodies_of", lambda c, i: [A, B, C])
-        entries = {e["key"]: e for e in fit_attempts.bodies("Demo", item, profile={})}
-        check("entry keys", sorted(entries), sorted(["plain", A, A + "-derived", B, B + "-derived", C]))
+        current = {"body": A}
+        patch(fit_attempts, "dialog_shape", lambda c, i, profile=None: (current["body"], True))
+
+        def bodies_on(body):
+            current["body"] = body
+            return {e["key"]: e for e in fit_attempts.bodies("Demo", item, profile={})}
+        entries = bodies_on(A)
+        check("A current: base + current only", [(k, e["role"]) for k, e in entries.items()],
+              [("plain", "base"), (A, "current"), (A + "-derived", "current")])
+        entries.update(bodies_on(B))
+        check("B current: base + current only", sorted(bodies_on(B)), sorted(["plain", B, B + "-derived"]))
+        entries.update(bodies_on(C))
+        check("C current: base + current only", sorted(bodies_on(C)), sorted(["plain", C]))
         check("A: accepted, fresh fit named", (entries[A]["status"], entries[A]["method_note"], entries[A]["variant"]),
               ("accepted", fit_attempts.FIT_METHOD_NOTES["fresh_fallback"], ""))
         e = entries[A + "-derived"]
@@ -422,7 +434,7 @@ def footwear(tmp: Path) -> None:
               (fit_path[B].read_bytes(), rec_b.get("fit_method"), (rec_b.get("user_accepted") or {}).get("slot")),
               (f"DERIVED-{B}-0".encode(), "derived", "derived"))
         states[B] = "accepted"
-        e = {x["key"]: x for x in fit_attempts.bodies("Demo", item, profile={})}
+        e = bodies_on(B)
         check("B-derived now user_accepted", (e[B]["status"], e[B + "-derived"]["status"]),
               ("user_accepted", "user_accepted"))
         # a new attempt of the MAIN slot (the fresh fit, other bytes) does not void the derived acceptance

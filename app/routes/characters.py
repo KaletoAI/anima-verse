@@ -2132,8 +2132,9 @@ def get_character_garment(character_name: str, item_id: str,
                                                   base_model_sha=base[1] if base else "").get(item_id),
                    left_out=left_out, in_body=in_body),
                "garment": info, "limits": _garment_limits(kind),
-               # Ruling A31: the Details preview's body switch — each body's fit attempt, its status and reason
-               # (``fit_attempts.bodies``; [] off the pipeline and for hair).
+               # Ruling A31: the Details preview's body switch — each body's fit attempt, its status and reason;
+               # Ruling A67: the base body and the current body only (``fit_attempts.bodies``; [] off the pipeline
+               # and for hair).
                "bodies": _fit_bodies(character_name, item_id, profile) if pipeline else [],
                # What the dialog's "Run all" runs now (Task UI1, rule R1): the chain from its first step that is
                # not current — ``garments.run_estimate``, the same plan the run takes; None off the pipeline.

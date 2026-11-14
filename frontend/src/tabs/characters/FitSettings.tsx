@@ -43,7 +43,7 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
   onSaved: () => void
   /** Opened from the Figure tab: no run buttons there (its Build refits). */
   noRunAll?: boolean
-  /** Ruling A50: the body the shown numbers belong to ("Plain body" while a body switch is shown; "" = unnamed). */
+  /** Ruling A50: the body the shown numbers belong to ("Base body" while a body switch is shown; "" = unnamed). */
   numbersOf?: string
   /** Ruling A50: the body shape the Re-fit fits on ("" = the plain body); the button names it. */
   refitOn?: string

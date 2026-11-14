@@ -373,7 +373,7 @@ function upToText(n: number, t: (s: string) => string): string {
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
   viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched, pieceName = '', meshAllowance = null,
-  refitOn = '', shownFit = null, onMeshUse, imageUseBusy }: {
+  refitOn = '', refitBlock = '', shownFit = null, onMeshUse, imageUseBusy }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -402,6 +402,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   /** Ruling A50: the body shape selected in the dialog's body switch ("" = the plain body) — Re-fit fits on it and
    *  says so. */
   refitOn?: string
+  /** Ruling A67: why Re-fit cannot run on the selected body ("" when it can) — the button is disabled with it. */
+  refitBlock?: string
   /** Ruling A50b: the selected body shape's fit — the fit row then shows THAT fit (status, widening, triangles,
    *  build time, chips, arm light), named with the body; null fit = "Not fitted yet on this body". Absent: the
    *  plain body's fit (the garment's own fit step). */
@@ -690,10 +692,10 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         <RunButton
           feedback={feedback}
           slot={runSlot({ step: 'fit' })}
-          disabled={busy || !garment || mesh?.status !== 'accepted'}
-          title={garment && mesh?.status !== 'accepted' ? t('Run the previous step first') : refitOn
+          disabled={busy || !garment || mesh?.status !== 'accepted' || !!refitBlock}
+          title={garment && mesh?.status !== 'accepted' ? t('Run the previous step first') : refitBlock || (refitOn
             ? t('Fits the piece on the selected body shape again on the CPU — 0 hub jobs. The plain body is fitted first when its fit is due.')
-            : t(STEP_HELP.fit)}
+            : t(STEP_HELP.fit))}
           label={refitOn ? `${t('Re-fit')} · ${refitOn}` : t('Re-fit')}
           onClick={() => onRun({ step: 'fit', force: true })}
         />
