@@ -2017,6 +2017,22 @@ def _served_foot_pose(character_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _served_extension(character_name: str, profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The extension groups of the model ``_served_url`` serves, in plain words (Ruling A64,
+    ``model3d.extension_presence``): the Figure tab's viewer writes them beside the figure — which groups carry
+    bones, which are covered by a worn piece (correct: no part, no bones) and which are missing. None without a
+    served model."""
+    from app.core import model3d
+    try:
+        full, _, _ = model3d.find_model3d_serving_tier(character_name, "")
+        if full is None:
+            return None
+        return model3d.extension_presence(character_name, model3d._read_sidecar(full), profile=profile) or None
+    except Exception:  # noqa: BLE001 — the caption is optional
+        logger.debug("Served extension groups of %s unreadable", character_name, exc_info=True)
+        return None
+
+
 def _item_jobs(steps: List[Step], name: str, item_id: str) -> Optional[int]:
     """The planned hub jobs of a piece's (``pieces``, by item) or the hair's
     chain step: 0 when nothing of it is planned, None when unknown."""
@@ -2409,7 +2425,8 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     """``GET /characters/{c}/figure``: ``{pipeline, humanoid, auto_build,
     status, changes, cost, build, wanted, delivered, served_url, served_built_at
     (when the served model was built — Ruling UI3 a), served_foot_pose (the
-    served model's fitted-shoe pose or None — Ruling A52), outfit (the
+    served model's fitted-shoe pose or None — Ruling A52), served_extension
+    (its extension groups in plain words or None — Ruling A64), outfit (the
     saved outfit worn now, "" when none matches), worn (each row with the
     ``jobs`` its chain step plans), hair (with ``jobs``), body (``plain.jobs``:
     ``_plain_jobs``)}``. ``status``: ``building`` while a run goes, else ``failed`` /
@@ -2423,7 +2440,8 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
         "auto_build": auto_build_on(character_name, profile=profile),
         "build": build, "served_url": _served_url(character_name),
         "served_built_at": _served_built_at(character_name),
-        "served_foot_pose": _served_foot_pose(character_name)}
+        "served_foot_pose": _served_foot_pose(character_name),
+        "served_extension": _served_extension(character_name, profile)}
     if not pipeline:
         return {**out, "status": "up_to_date", "changes": [], "cost": cost(character_name, []),
                 "wanted": None, "delivered": None, "outfit": "", "worn": [], "hair": None, "body": None}

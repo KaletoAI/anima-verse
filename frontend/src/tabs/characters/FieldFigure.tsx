@@ -14,7 +14,8 @@
  *   N hub jobs start" (POST …/figure/generation-pause {paused}) and the waiting jobs, each with Cancel behind an
  *   in-app confirmation (POST …/figure/waiting/cancel {id})); the pending changes with their cost, a failure;
  * - left: the figure DELIVERED now (`served_url`, the interim rule applied — never a half step), "Built <time>"
- *   in its corner; the mouse turns the figure;
+ *   in its corner; the mouse turns the figure; at the top right the served model's extension groups in plain words
+ *   (`served_extension`, ExtensionPresenceNote — Ruling A64: built, covered by a worn piece, missing);
  * - right: sub-tabs instead of scrolling —
  *   - "Worn now": the worn hairstyle first (name · mode, ↗ Hairstyles — where hairstyles are worn, made and set,
  *     Task 14), then every worn piece (name · mode, ↗ Wardrobe — the mode lives on the item, ruling P4), each a
@@ -46,6 +47,7 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from './Model3DViewer'
+import { ExtensionPresenceNote } from './ExtensionPresenceNote'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
 import { FigureStored } from './FigureStored'
 import { GenerationPausePanel, GenerationPauseSwitch } from './GenerationPausePanel'
@@ -173,7 +175,8 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
           {data.served_url ? (
             <Model3DViewer key={data.served_url} url={data.served_url} format="glb" height={600} subject="figure"
               builtAt={data.served_built_at} footPose={data.served_foot_pose ?? null}
-              clipGroup={data.served_foot_pose ? 'ground' : undefined} />
+              clipGroup={data.served_foot_pose ? 'ground' : undefined}
+              extensionNote={<ExtensionPresenceNote presence={data.served_extension} />} />
           ) : (
             <div className="ga-hint" style={{ height: 200, display: 'flex', alignItems: 'center',
               justifyContent: 'center', border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>

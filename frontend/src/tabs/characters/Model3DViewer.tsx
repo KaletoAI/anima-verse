@@ -309,7 +309,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
   meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model', extensionBones = false,
-  companions, onCompanionState, deform = null, resetViewOnDoubleClick = false }:
+  extensionNote = null, companions, onCompanionState, deform = null, resetViewOnDoubleClick = false }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; sideToolbar?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Whether the "Extension bones" overlay starts switched on (Rulings A45/A56, `extensionGroupOverlay.ts`): the
      *  surface each of `motion`'s non-hair groups moves, as a wire grid in one colour per group, faded by skin
@@ -317,6 +317,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  `motion` names such a group; off by default — every viewer starts with it off (Ruling A62), and the toggle's
      *  state lives only as long as the viewer, never saved. */
     extensionBones?: boolean
+    /** Ruling A64: what the shown model carries of the extension groups, in plain words (ExtensionPresenceNote) —
+     *  written at the foot of the toggle column, also when the model has no group at all, so a missing group
+     *  (covered by a worn piece, not built, not declared) is never a mystery. */
+    extensionNote?: ReactNode
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
     freshness?: Freshness | null
@@ -3061,7 +3065,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       {/* THE VIEW CONTROLS — one column at the top right, so no button has to
           know how many of its neighbours happen to be shown. */}
       {!loading && !error && (motion || onFrontalChange || keepCamera
-        || (leafBbox && hasLeaf) || collision?.capsules?.length) ? (
+        || (leafBbox && hasLeaf) || collision?.capsules?.length || extensionNote) ? (
         <div className="ga-viewer-toggles" style={{
           position: 'absolute', right: 6, top: 6, display: 'flex',
           flexDirection: 'column', alignItems: 'flex-end', gap: 4,
@@ -3162,6 +3166,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               {leafOpen ? t('Shut leaf') : t('Test swing')}
             </button>
           ) : null}
+          {extensionNote}
         </div>
       ) : null}
       {loading || error ? (

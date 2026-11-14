@@ -14,6 +14,7 @@ import type { FootPose } from '@anima/scene-render'
 import type { ArmLight, FitSettingsInfo } from './fitSettingsModel'
 import { filesLabel, sizeLabel } from './hairstylesModel'
 import type { Light } from './hairstylesModel'
+import type { ExtensionPresence } from './extensionPresence'
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
 export type MeshMode = 'own_mesh' | 'painted' | 'in_body'
@@ -310,6 +311,8 @@ export interface FigurePayload {
   /** The served model's fitted-shoe pose (`figure_build._served_foot_pose`, Ruling A52), null without a fitted
    *  shoe: the viewer turns the feet into the shoes with it and stands the figure on its heels. */
   served_foot_pose?: FootPose | null
+  /** Ruling A64: the served model's extension groups in plain words (`figure_build._served_extension`). */
+  served_extension?: ExtensionPresence | null
   /** Ruling A42: the character's pause of automatic generation (`generation_pause.state`). */
   generation_pause?: GenerationPause
   /** When the served model was built (Ruling UI3 a: the preview's caption); null without one. */

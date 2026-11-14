@@ -1264,6 +1264,8 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         part = attached_part_info(info["extension_rig"])
         if part is not None:
             info["attached_part"] = part
+        # Ruling A64: the served model's groups in plain words, for the line beside the viewer's toggles.
+        info["extension_presence"] = extension_presence(character_name, _read_sidecar(path), profile=profile)
         # Collision capsules of the served body (spec 2026-11-08): fitted and
         # stored once per file, None for a non-humanoid model.
         try:
@@ -1806,6 +1808,131 @@ def model_extension_state(character_name: str, signature: str) -> Optional[Dict[
     except Exception:  # noqa: BLE001 — the poll never fails on the box
         logger.exception("Extension state of %s (%s) failed", character_name, signature)
         return None
+
+
+# What the Figure and 3D-tab viewers say beside their toggles about the extension groups of the SHOWN model
+# (Ruling A64: ``extension_presence``). English, translated by the client (de.json keys).
+EXT_PRESENCE_COVERED = "Covered"
+EXT_PRESENCE_COVERED_REASON = ("Covered by {pieces} on this model: a covered slot has no part and no bones — "
+                               "correct, nothing to rebuild.")
+EXT_PRESENCE_NOT_ON_MODEL = ("Not on this model: it was built before the group applied. The next Build "
+                             "rebuilds it (local, no hub job).")
+
+
+def _covering_pieces(group: Dict[str, Any], pieces: Dict[str, str], opened: set,
+                     items: Dict[str, Any], *, part_slot: bool) -> List[str]:
+    """The item ids among ``pieces`` (``{clothing slot: item id}`` a model was built with) that hide ``group``:
+    a closed piece worn on, or ``covers``-ing, a clothing slot of the group's ``covered_by`` — the rule of
+    ``body_slots.is_slot_exposed`` (a piece worn open covers nothing, ``partially_covers`` does not count); for
+    an ``exposed_only`` group a piece with ``outfit_piece.exposed_detail`` shows it through. Only groups that
+    clothing removes count: an ``exposed_only`` group and the groups of a slot with a separate mesh part
+    (``part_slot`` — its part is built only where the slot is exposed, and under clothing there is no shape to
+    rig); any other group (a motion group under a shirt) is built under clothing too, so [] for it."""
+    if not group.get("exposed_only") and not part_slot:
+        return []
+    targets = {str(slot).strip().lower() for slot in group.get("covered_by") or []}
+    if not targets:
+        return []
+    out: List[str] = []
+    for slot, item_id in sorted((pieces or {}).items()):
+        if not item_id or item_id in opened or item_id in out:
+            continue
+        piece = ((items or {}).get(item_id) or {}).get("outfit_piece") or {}
+        if group.get("exposed_only") and piece.get("exposed_detail") is True:
+            continue
+        hides = {str(slot).strip().lower()} | {str(c).strip().lower() for c in piece.get("covers") or []}
+        if hides & targets:
+            out.append(item_id)
+    return out
+
+
+def extension_presence(character_name: str, meta: Dict[str, Any], *,
+                       profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The extension groups of ONE shown model in plain words (Ruling A64) — what the Figure tab's and the 3D tab's
+    viewers write beside their toggles, so a missing group is never a mystery. ``meta`` is the model's sidecar.
+
+    ``{built: [group ids with bones on this model], missing: [{id, light, state, reason, detail, pieces}],
+    not_declared: [package group ids that do not apply to this character]}``. ``missing`` holds every group the
+    character's slots declare (part off AND on, like ``extension_rig.extension_bone_names``) that the model does
+    not carry built:
+
+    - a group clothing removes (``exposed_only``, or a group of a slot with a separate mesh part) whose slot the
+      model's worn pieces (``figure.pieces`` / ``pieces``, ``figure.open`` worn open) cover → grey "Covered" with
+      the covering pieces' names: correct, an outfit covering the slot has no part and no bones;
+    - otherwise a group the model's own rig resolved → its ``extension_group_lights`` light (not found, failed,
+      due — e.g. an exposed slot that lost its part);
+    - otherwise a group the model's record does not name → yellow "Not on this model".
+
+    ``not_declared``: the groups of the loaded packages whose ``applies_to`` / template excludes this character
+    (a group of another body type) — named once, never a light. Never raises: {} on any failure."""
+    from app.core.body_slots import mesh_variant_token
+    from app.core.extension_rig import rig_groups_for
+    from app.plugins.registry import packages
+    try:
+        if profile is None:
+            from app.models.character import get_character_profile
+            profile = get_character_profile(character_name) or {}
+        every_part = "".join(mesh_variant_token(slot) for package in packages() for slot in package.body_slots
+                             if slot.mesh_part)
+        part_groups = {rig.id for package in packages() for slot in package.body_slots if slot.mesh_part
+                       for rig in slot.rigs}
+        declared: Dict[str, Dict[str, Any]] = {}
+        for variant in ("", every_part):
+            for group in rig_groups_for(character_name, profile, variant):
+                declared.setdefault(group["id"], group)
+        result = meta.get("extension_rig") if isinstance(meta.get("extension_rig"), dict) else {}
+        metrics = result.get("metrics") if isinstance(result.get("metrics"), dict) else {}
+        status = str(result.get("status") or "")
+        recorded = list(result.get("groups") or [])
+
+        def built(gid: str) -> bool:
+            metric = metrics.get(gid) if isinstance(metrics.get(gid), dict) else {}
+            if metric.get("status"):
+                return metric["status"] == "applied"
+            return status == "applied" and gid in recorded and not metric.get("reason")
+
+        figure_rec = meta.get("figure") if isinstance(meta.get("figure"), dict) else {}
+        pieces = figure_rec.get("pieces") if isinstance(figure_rec.get("pieces"), dict) else meta.get("pieces")
+        pieces = {str(k): str(v) for k, v in (pieces or {}).items() if v} if isinstance(pieces, dict) else {}
+        opened = {str(i) for i in figure_rec.get("open") or []}
+        items: Dict[str, Any] = {}
+        if pieces:
+            from app.core.motion_item_cache import item_snapshot
+            items = item_snapshot() or {}
+        variant = stored_mesh_variant(character_name, meta)
+        own = {g["id"]: g for g in _extension_groups_for(
+            meta, rig_groups_for(character_name, profile=profile, mesh_variant=variant))}
+        out_built: List[str] = []
+        missing: List[Dict[str, Any]] = []
+        for gid, group in declared.items():
+            if built(gid):
+                out_built.append(gid)
+                continue
+            covering = _covering_pieces(group, pieces, opened, items, part_slot=gid in part_groups)
+            if covering:
+                names = [str((items.get(i) or {}).get("name") or i) for i in covering]
+                missing.append({"id": gid, "light": "grey", "state": EXT_PRESENCE_COVERED,
+                                "reason": EXT_PRESENCE_COVERED_REASON, "detail": "", "pieces": names})
+                continue
+            if gid in own and gid in recorded:
+                light = extension_group_lights(profile, meta, [own[gid]], result, variant).get(gid) or {}
+                missing.append({"id": gid, "light": light.get("light") or "yellow",
+                                "state": light.get("state") or EXT_STATE_NOT_BUILT,
+                                "reason": light.get("reason") or EXT_REASON_NOT_FOUND,
+                                "detail": light.get("detail") or "", "pieces": []})
+                continue
+            missing.append({"id": gid, "light": "yellow", "state": EXT_STATE_NOT_BUILT,
+                            "reason": EXT_PRESENCE_NOT_ON_MODEL, "detail": "", "pieces": []})
+        every = []
+        for package in packages():
+            for slot in package.body_slots:
+                for rig in slot.rigs:
+                    if rig.id not in declared and rig.id not in every:
+                        every.append(rig.id)
+        return {"built": out_built, "missing": missing, "not_declared": sorted(every)}
+    except Exception:  # noqa: BLE001 — a caption, never a failure of the poll
+        logger.exception("Extension presence of %s failed", character_name)
+        return {}
 
 
 def _auto_covered_variant(character_name: str, path: Path, meta: Dict[str, Any], *,
