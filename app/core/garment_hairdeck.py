@@ -607,12 +607,25 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
     sel[sel] = sdf.sample(centroid[sel]) > -CAP_INNER_DEPTH_M
     if not sel.any():
         return (*empty, hairline, {"note": "no scalp triangle above the hairline near the hair"})
-    Fc = F[sel]
+    V, Fl, N, flipped = offset_patch(P, F[sel], sdf, CAP_OFFSET_M)
+    info = {"head_centre_xz": [round(float(cx), 5), round(float(cz), 5)],
+            "head_width_m": round(float(width), 5), "head_depth_m": round(float(depth), 5),
+            "front_hair_vertices": int(front.sum()), "flipped_faces": flipped,
+            "inner_wall_dropped": candidates - int(sel.sum())}
+    return V, Fl, N, hairline, info
+
+
+def offset_patch(P: np.ndarray, Fc: np.ndarray, sdf, offset: float
+                 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """``(positions, faces, normals, flipped)`` of the body triangles ``Fc`` (indices into ``P``) as their own patch,
+    moved ``offset`` out along the outward vertex normals. Face normals are oriented by the SDF gradient at the
+    centroid before they are accumulated into vertex normals — the generator body's winding is never trusted — and
+    the winding is flipped to match, so a face looks outward (``flipped`` = how many were)."""
     used, Fl = np.unique(Fc, return_inverse=True)
     Fl = Fl.reshape(-1, 3)
     V = P[used]
     fn = np.cross(V[Fl[:, 1]] - V[Fl[:, 0]], V[Fl[:, 2]] - V[Fl[:, 0]])
-    flip = (fn * sdf.grad(centroid[sel])).sum(1) < 0
+    flip = (fn * sdf.grad(V[Fl].mean(1))).sum(1) < 0
     fn[flip] *= -1
     Fl[flip] = Fl[flip][:, [0, 2, 1]]
     N = np.zeros_like(V)
@@ -622,12 +635,7 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
     grad = sdf.grad(V)
     fallback = grad / np.maximum(np.linalg.norm(grad, axis=1, keepdims=True), 1e-12)
     N = np.where(length > 1e-12, N / np.maximum(length, 1e-12), fallback)
-    V = V + CAP_OFFSET_M * N
-    info = {"head_centre_xz": [round(float(cx), 5), round(float(cz), 5)],
-            "head_width_m": round(float(width), 5), "head_depth_m": round(float(depth), 5),
-            "front_hair_vertices": int(front.sum()), "flipped_faces": int(flip.sum()),
-            "inner_wall_dropped": candidates - int(sel.sum())}
-    return V, Fl, N, hairline, info
+    return V + offset * N, Fl, N, int(flip.sum())
 
 
 # --- the fit -------------------------------------------------------------------------------------------------------

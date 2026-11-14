@@ -18,11 +18,15 @@ which the user approved after the drape ("ALLE Haare, auch die Fail sehen so gut
    centre toward the root, a little backward). Then the strands' own waves (shorter than ``DETAIL_WIN_M``) are put
    back on the draped curves (``detail_transfer``, the spike's ``detail=1``).
 3. **Clear the face** once more on the free points (``clear_face``: the box rule, then the body clearance, then the
-   box rule again).
+   box rule again). Then the over-stretched strands are settled (``settle_stretched``, ruling H-R13): a strand with
+   any segment longer than ``STRETCH_LIMIT`` x its rest length is re-sampled along its draped curve at its rest
+   arc lengths (then the face box and the body clearance once more), or dropped when the draped curve is shorter
+   than its rest length or that clearing stretches it again.
 4. **Cards** (``hair_cards.haar_cards``): ``N_CARDS`` k-means cards of ``N_SEG`` segments on the strip atlas, the
-   card colour the hairstyle's (``colour_linear``, else white), and a scalp cap under the hairline
-   (``garment_hairdeck._scalp_cap``, the registered roots as the hair it reaches for).
-5. **Skin**: ``garment_fit.hair_weights`` (Head -> Neck -> Spine2 by height); the cap all Head; no chain joints.
+   card colour the hairstyle's (``colour_linear``, else white), and a scalp layer under the root zone
+   (``scalp_layer``, ruling H-R12: the head's skin round the registered roots, offset out, opaque, in the hair
+   colour darkened by ``SCALP_SHADE``) so a parting reads as hair, not skin.
+5. **Skin**: ``garment_fit.hair_weights`` (Head -> Neck -> Spine2 by height); the layer all Head; no chain joints.
 6. **Gate** (``gate``, spec § 6.3.2), judged on what stays visible after the drape and the face clearing: no
    draped strand point above the chin deeper than ``INSIDE_HEAD_MM`` in the body, no card centreline across the
    eye box, the tips not clearly too short for the length class (``CLEARLY_SHORT_CM``). Everything else is
@@ -44,7 +48,7 @@ from app.core.garment_fit import VOX_M, FitResult, body_sdf, hair_weights, verte
 from app.core.glb_mesh import GarmentMesh, body_arrays
 
 #: Bumped when the HAAR fit's output changes for the same inputs (the boot refit sweep refits on the CPU).
-HAAR_FIT_VERSION = 1
+HAAR_FIT_VERSION = 2
 #: Gate (spec § 6.3.2): a draped strand point above the chin deeper than this (mm) in the body refuses the seed.
 INSIDE_HEAD_MM = 3.0
 #: Gate: the tip p50 relative to the shoulder top (cm, + = above) above this refuses the seed as clearly too short —
@@ -89,6 +93,21 @@ BALD_M = 0.01
 FRIZZ_WIN_M = 0.01
 #: Card centrelines are tested against the boxes at these fractions of each segment (and at the tip).
 CROSS_STEPS = (0.0, 0.25, 0.5, 0.75)
+#: Settling (H-R13): a draped segment longer than this many times its rest length marks its strand as stretched.
+STRETCH_LIMIT = 3.0
+#: ... against its rest length floored at this (m): the registration's push out of the skull leaves rest segments of
+#: a few micrometres, which any draped length would count as stretched (the ``seg_stretch_*`` metrics skip rest
+#: segments under the same 1 mm).
+STRETCH_REST_FLOOR_M = 0.001
+#: The scalp layer (H-R12): Head triangles (all three vertices Head weight > 0.5) whose centroid has a registered
+#: root within ``SCALP_REACH_M`` and whose three vertices lie no lower than ``SCALP_BELOW_M`` under the lowest of
+#: those roots (so the layer bridges a parting but never paints the forehead or the nape below the hairline), minus
+#: the inner wall (centroid deeper than ``VOX_M``); moved ``SCALP_OFFSET_M`` out; COLOR_0 = the hair colour x
+#: ``SCALP_SHADE`` on the atlas's opaque patch, so it reads like the shaded hair round it instead of lit skin.
+SCALP_REACH_M = 0.012
+SCALP_BELOW_M = 0.002
+SCALP_OFFSET_M = 0.0015
+SCALP_SHADE = 0.6
 
 
 # --- The gate ----------------------------------------------------------------------------------------------------
@@ -268,6 +287,78 @@ def clear_face(X: np.ndarray, pinned: np.ndarray, field, face_box) -> Tuple[np.n
     return X, {"box_points": first, "clearance_points": pushed, "box_points_again": second}
 
 
+def _over_limit(X: np.ndarray, seg0: np.ndarray, limit: float) -> np.ndarray:
+    """(S,) bool: a segment of ``X`` longer than ``limit`` x its rest length ``seg0`` (floored at
+    ``STRETCH_REST_FLOOR_M``)."""
+    seg = np.linalg.norm(np.diff(X, axis=1), axis=2)
+    return (seg > limit * np.maximum(seg0, STRETCH_REST_FLOOR_M)).any(1)
+
+
+def settle_stretched(Xd: np.ndarray, Xrest: np.ndarray, limit: float = STRETCH_LIMIT, *,
+                     pinned: Optional[np.ndarray] = None, field=None, face_box=None
+                     ) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+    """Ruling H-R13 on the draped strands ``Xd`` (S, K, 3) with their rest shape ``Xrest`` -> ``(X, keep, info)``.
+
+    A strand with any segment longer than ``limit`` x its rest length (rest floored at ``STRETCH_REST_FLOOR_M``)
+    is re-sampled: its K
+    points are put along its draped polyline at the rest arc lengths (root at 0), so no chord is longer than its rest
+    segment and the excess length leaves at the tip. When the draped polyline is shorter than the rest length that
+    is not possible, and the strand is dropped. With ``field`` and ``face_box`` (and ``pinned`` (S, K)), a re-sampled
+    point slid along its strand, so those strands get ``clear_face`` once more; one that is stretched beyond
+    ``limit`` again by it could not be re-sampled and is dropped too — no kept strand is stretched beyond ``limit``.
+    ``X`` = the kept strands (``keep`` (S,) bool); ``info`` = ``{stretched, resampled, dropped[, face]}``."""
+    X = np.array(Xd, np.float64, copy=True)
+    seg0 = np.linalg.norm(np.diff(np.asarray(Xrest, np.float64), axis=1), axis=2)
+    seg = np.linalg.norm(np.diff(X, axis=1), axis=2)
+    over = np.flatnonzero(_over_limit(X, seg0, limit))
+    keep = np.ones(len(X), bool)
+    moved = np.zeros(len(X), bool)
+    for s in over:
+        a0 = np.r_[0.0, np.cumsum(seg0[s])]
+        ad = np.r_[0.0, np.cumsum(seg[s])]
+        if ad[-1] < a0[-1] - 1e-9:
+            keep[s] = False
+            continue
+        X[s] = np.stack([np.interp(a0, ad, X[s, :, a]) for a in range(3)], 1)
+        moved[s] = True
+    info: Dict[str, Any] = {"stretched": int(len(over))}
+    if moved.any() and field is not None and face_box is not None:
+        idx = np.flatnonzero(moved)
+        pin = np.zeros(X.shape[:2], bool) if pinned is None else np.asarray(pinned, bool)
+        X[idx], info["face"] = clear_face(X[idx], pin[idx], field, face_box)
+        again = idx[_over_limit(X[idx], seg0[idx], limit)]
+        keep[again] = False
+    dropped = int((~keep).sum())
+    info.update(resampled=int(len(over)) - dropped, dropped=dropped)
+    return X[keep], keep, info
+
+
+def scalp_layer(body, head_w: np.ndarray, roots: np.ndarray, sdf
+                ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+    """``(positions, faces, normals, info)`` of the scalp layer under the root zone (module constants
+    ``SCALP_*``; faces index the returned positions)."""
+    from scipy.spatial import cKDTree
+    from app.core.garment_hairdeck import offset_patch
+    P = np.asarray(body.positions, np.float64)
+    F = np.asarray(body.faces, np.int64).reshape(-1, 3)
+    empty = (np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 3)))
+    roots = np.asarray(roots, np.float64).reshape(-1, 3)
+    head = np.flatnonzero((np.asarray(head_w) > 0.5)[F].all(1))
+    if not len(roots) or not len(head):
+        return (*empty, {"faces": 0, "note": "no roots or no head skin"})
+    cen = P[F[head]].mean(1)
+    near = cKDTree(roots).query_ball_point(cen, SCALP_REACH_M)
+    low = np.array([roots[n, 1].min() if n else np.inf for n in near])
+    sel = P[F[head], 1].min(1) >= low - SCALP_BELOW_M
+    reached = int(sel.sum())
+    sel[sel] = np.asarray(sdf.sample(cen[sel])) > -VOX_M
+    if not sel.any():
+        return (*empty, {"faces": 0, "note": "no head skin round the roots"})
+    V, Fl, N, flipped = offset_patch(P, F[head[sel]], sdf, SCALP_OFFSET_M)
+    return V, Fl, N, {"faces": int(len(Fl)), "vertices": int(len(V)), "flipped_faces": flipped,
+                      "inner_wall_dropped": reached - int(sel.sum()), "reach_m": SCALP_REACH_M}
+
+
 # --- Metrics -----------------------------------------------------------------------------------------------------
 
 def card_centrelines(V: np.ndarray, n_cards: int, rows: int = N_SEG + 1) -> np.ndarray:
@@ -346,6 +437,8 @@ def metrics(Xd: np.ndarray, Xreg: np.ndarray, C: np.ndarray, field, B: Dict[str,
         "scalp_uncovered_share": round(float((cover > BALD_M).mean()), 4),
         "frizz_rms_mm": _frizz_mm(Xreg, B["ear"]),
         "x_range_m": [round(float(v), 4) for v in (Xd[:, :, 0].min() - B["cx"], Xd[:, :, 0].max() - B["cx"])],
+        "stretched_resampled": 0,
+        "stretched_dropped": 0,
     }
 
 
@@ -359,13 +452,13 @@ def fit_haar(strands: np.ndarray, template_head: np.ndarray, rigged_base_glb: by
 
     ``template_head`` / ``template_faces``: the job's ``_head.obj`` (the faces drop FLAME's eyeballs);
     ``colour_linear``: the hairstyle colour (linear RGB 0..1; None = the atlas white); ``length_class``: the
-    hairstyle's (``garment_hair.hair_length_class``) for the gate. The garment is the cards plus the scalp cap as
+    hairstyle's (``garment_hair.hair_length_class``) for the gate. The garment is the cards plus the scalp layer as
     ONE primitive in the rigged bind space: the strip atlas as base colour (``hair_cards.strip_atlas``), each card's
-    UVs in its variant's column and the cap on the opaque patch, ``COLOR_0`` = the colour (alpha 1), Head -> Neck ->
-    Spine2 weights (``hair_weights``; the cap all Head), double-sided, no chain joints. ``report.vertices`` =
+    UVs in its variant's column and the scalp layer (``scalp_layer``) on the opaque patch, ``COLOR_0`` = the colour
+    on the cards and the colour x ``SCALP_SHADE`` on the layer (alpha 1), Head -> Neck -> Spine2 weights
+    (``hair_weights``; the layer all Head), double-sided, no chain joints. ``report.vertices`` =
     ``{hair, cap}`` (the cards first, ``hair_strands.haar_layout``), ``report.layout`` = ``"haar"``. ValueError for a
     base without a skin or strands that make no card."""
-    from app.core import garment_hairdeck as gh
     from app.core import hair_strands
     t_all = time.time()
     body = body_arrays(rigged_base_glb)
@@ -383,6 +476,9 @@ def fit_haar(strands: np.ndarray, template_head: np.ndarray, rigged_base_glb: by
     Xd, drape_report = drape_strands(Xreg, field, pinned, B["hc"], frame["face_box"])
     Xd = detail_transfer(Xreg, Xd, pinned, field)
     Xd, face = clear_face(Xd, pinned, field, frame["face_box"])
+    Xd, keep, settle = settle_stretched(Xd, Xreg, pinned=pinned, field=field, face_box=frame["face_box"])
+    if not keep.any():
+        raise ValueError("Every HAAR strand was stretched beyond repair by the drape")
     t_drape = time.time() - t0
     t0 = time.time()
     V, Fh, UV, card = hair_cards.haar_cards(Xd, field, n_cards=N_CARDS, n_seg=N_SEG, clear=CARD_CLEAR_M, seed=0,
@@ -390,15 +486,14 @@ def fit_haar(strands: np.ndarray, template_head: np.ndarray, rigged_base_glb: by
     n_cards = int(card.max()) + 1
     C = card_centrelines(V, n_cards)
     t_cards = time.time() - t0
-    m = metrics(Xd, Xreg, C, field, B, frame)
-    m.update({"icp_scale": reg["scale"], "icp_resid_p95_m": reg["icp_resid_p95_m"],
+    m = metrics(Xd, Xreg[keep], C, field, B, frame)
+    m.update({"stretched_resampled": settle["resampled"], "stretched_dropped": settle["dropped"],
+              "icp_scale": reg["scale"], "icp_resid_p95_m": reg["icp_resid_p95_m"],
               "root_resid_p95_m": reg["root_resid_p95_m"], "hairline_tilt_deg": reg["hairline_tilt_deg"]})
     ok, reasons = gate(m, length_class)
 
-    # scalp cap under the hairline: the registered roots are the hair it reaches for
-    head_w = B["head_w_col"]
-    Vc, Fc, Nc, hairline, cap_info = gh._scalp_cap(body, head_w, Xreg[:, 0], B["sdf"],
-                                                   (B["landmarks"] or {}).get("nasion_y"))
+    # the scalp layer under the root zone (every registered root, a dropped strand's too)
+    Vc, Fc, Nc, cap_info = scalp_layer(body, B["head_w_col"], Xreg[:, 0], B["sdf"])
     nc = len(Vc)
     names, J, W = hair_weights(V, body)
     Jc = np.zeros((nc, 4), np.int64)
@@ -407,13 +502,14 @@ def fit_haar(strands: np.ndarray, template_head: np.ndarray, rigged_base_glb: by
     Wc[:, 0] = 1.0
     rgb = np.clip(np.asarray(colour_linear if colour_linear is not None else (1.0, 1.0, 1.0), np.float64), 0, 1)
     colour = np.r_[rgb, 1.0]
+    shade = np.r_[rgb * SCALP_SHADE, 1.0]
     n_hair = len(V)
     garment = GarmentMesh(positions=np.vstack([V, Vc]), normals=np.vstack([vertex_normals(V, Fh), Nc]),
                           uvs=np.vstack([UV, np.tile(hair_cards.SOLID_UV, (nc, 1))]),
                           indices=np.vstack([Fh, np.asarray(Fc, np.int64) + n_hair]), joints=np.vstack([J, Jc]),
                           weights=np.vstack([W, Wc]), joint_names=list(names), image=hair_cards.strip_atlas(),
                           mime="image/png", material={"name": "hair", "doubleSided": True},
-                          colors=np.tile(colour, (n_hair + nc, 1)))
+                          colors=np.vstack([np.tile(colour, (n_hair, 1)), np.tile(shade, (nc, 1))]))
     report = {
         "layout": "haar",
         "fit_version": HAAR_FIT_VERSION,
@@ -428,8 +524,9 @@ def fit_haar(strands: np.ndarray, template_head: np.ndarray, rigged_base_glb: by
         "drape": dict(drape_report, pinned_points=int(pinned.sum()), field_dims=list(np.asarray(field.field).shape),
                       substeps=HAAR_DRAPE.substeps),
         "face": face,
+        "settle": settle,
         "cards": {"cards": n_cards, "segments": N_SEG, "vertices": int(n_hair), "faces": int(len(Fh))},
-        "cap": dict(cap_info, hairline_y=None if hairline is None else round(hairline, 5), faces=int(len(Fc))),
+        "cap": cap_info,
         "weights": {"joints": list(names), "all_head": int((W[:, 0] == 1).sum()),
                     "blended": int(((W[:, 0] < 1) & (W[:, 0] > 0)).sum())},
         "timing_s": {"register": reg["t_s"], "field": round(t_field, 2), "drape": round(t_drape, 2),
@@ -438,4 +535,5 @@ def fit_haar(strands: np.ndarray, template_head: np.ndarray, rigged_base_glb: by
     return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
 
 
-__all__ = ["HAAR_FIT_VERSION", "INSIDE_HEAD_MM", "CLEARLY_SHORT_CM", "CLASS_TARGET_CM", "gate", "fit_haar"]
+__all__ = ["HAAR_FIT_VERSION", "INSIDE_HEAD_MM", "CLEARLY_SHORT_CM", "CLASS_TARGET_CM", "STRETCH_LIMIT", "SCALP_SHADE",
+           "gate", "settle_stretched", "scalp_layer", "fit_haar"]
