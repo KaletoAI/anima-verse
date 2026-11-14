@@ -5486,6 +5486,10 @@
     "shape of its outfit not computable": "Form seines Outfits nicht berechenbar",
     "base unknown": "Basis unbekannt",
     "a run works on it": "ein Lauf arbeitet daran",
-    "needed by an outfit now": "gerade von einem Outfit gebraucht"
+    "needed by an outfit now": "gerade von einem Outfit gebraucht",
+    "Fit: its checks refused it — {reason}": "Anpassung: von den Prüfungen abgelehnt — {reason}",
+    "{what}: its gate refused it — {reason}": "{what}: von der Prüfung abgelehnt — {reason}",
+    "{what}: its gate refused it": "{what}: von der Prüfung abgelehnt",
+    "Its checks refused it; you accepted it.": "Die Prüfungen haben sie abgelehnt; du hast sie angenommen."
   }
 }

@@ -267,7 +267,9 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
     ``over`` / ``without`` — the names of the worn pieces under this one with
     and without a fit (``worn_layers``' entry of the piece, ``layers``): the
     chip says "fitted over <inner>" / "without <inner>". Both keys are left
-    out when nothing is worn under it."""
+    out when nothing is worn under it. ``accepted_by_user`` (``fitted`` only,
+    Ruling A69) — ``_user_accepted``: what of it the user accepted against its
+    checks; left out when nothing."""
     from app.core import base_body
     steps = info.get("steps") if isinstance(info.get("steps"), dict) else {}
     fit = steps.get("fit") if isinstance(steps.get("fit"), dict) else {}
@@ -305,7 +307,29 @@ def piece_status(info: Dict[str, Any], *, worn: bool, base_model_ready: bool,
         out["body"] = {k: info["body"].get(k) for k in ("body_id", "status", "error")}
     if layers and (layers.get("over") or layers.get("without")):
         out.update(over=list(layers.get("over") or []), without=list(layers.get("without") or []))
+    taken = _user_accepted(steps, fit) if state == STATE_FITTED else None
+    if taken:
+        out["accepted_by_user"] = taken
     return out
+
+
+def _user_accepted(steps: Dict[str, Any], fit: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Ruling A69: the Wardrobe chip's "Accepted by you" — ``{step, view, reason}`` of what the fitted piece uses
+    that its checks refused and the user accepted: the fit (``fit.user_accepted``), else the mesh
+    (``mesh.user_accepted``), else an image still holding its acceptance (the latest step first); None."""
+    block = fit.get("user_accepted") if isinstance(fit.get("user_accepted"), dict) else None
+    if block:
+        return {"step": "fit", "view": "", "reason": str(block.get("reason") or "")}
+    mesh = steps.get("mesh") if isinstance(steps.get("mesh"), dict) else {}
+    if mesh.get("user_accepted"):
+        return {"step": "mesh", "view": "", "reason": ""}
+    for step in reversed([k for k in steps if k not in ("mesh", "fit")]):
+        views = steps.get(step)
+        for view, tile in (views.items() if isinstance(views, dict) else ()):
+            taken = tile.get("user_accepted") if isinstance(tile, dict) else None
+            if isinstance(taken, dict) and taken.get("holds"):
+                return {"step": step, "view": str(view), "reason": "; ".join(str(r) for r in taken.get("reasons") or [])}
+    return None
 
 
 def _cover_slots(item: Dict[str, Any]) -> set:

@@ -678,6 +678,16 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
       <StepLabel garment={garment} step="fit" label={stepLabels.fit || 'Fit'} help={STEP_HELP.fit} />
       <div className="ga-step-grid-row" style={{ gridColumn: `span ${GARMENT_VIEWS.length}` }}>
         <GateIcon specs={fitChips} record={fitRecord} limits={limits.fit} extra={[fitText]} />
+        {!shownFit && fit?.status === 'accepted' && fit.user_accepted ? (
+          // Ruling A69: the plain body's fit its checks refused, accepted by the user — as an image or a mesh.
+          <span className="ga-run-badge"
+            title={[t('Its checks refused it; you accepted it.'), fit.user_accepted.reason,
+              fit.user_accepted.detail === fit.user_accepted.reason ? '' : fit.user_accepted.detail]
+              .filter(Boolean).join('\n')}
+            style={{ borderColor: 'var(--success, #3fb950)', color: 'var(--success, #3fb950)' }}>
+            {t('Accepted by you')}
+          </span>
+        ) : null}
         {armInfo?.arm_light && armInfo.arm_light.state !== 'none' ? (
           // Ruling A47: the arm light of the fit (skin seen inside the sleeves) — the selected body's (A50b).
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}

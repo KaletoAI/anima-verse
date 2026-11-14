@@ -972,6 +972,55 @@ def state(character_name: str) -> Dict[str, Any]:
             "finished_at": last.get("finished_at")}
 
 
+#: The Build steps whose failure names ONE piece (``Step.item_id``): its garment chain (``_chain``: the error
+#: "<garment step> — <reason>") and the Re-fit run's fit (``_run_refit``: ``fits``, the refused fit itself).
+PIECE_FAILURE_STEPS = ("pieces", "hair", "fits")
+_CHAIN_ERROR_STEP = re.compile(r"^([a-z_]+) — ")
+
+
+def _answered_by(name: str, error: str, steps: frozenset) -> bool:
+    """Whether a recorded failure of Build step ``name`` (``error``) is one of the garment ``steps`` a user's
+    acceptance answers: a chain failure at one of them, the Re-fit run's refused fit for ``fit``."""
+    if name == "fits":
+        return "fit" in steps
+    found = _CHAIN_ERROR_STEP.match(error)
+    return bool(found and found.group(1) in steps)
+
+
+def answer_piece_failure(character_name: str, item_id: str, steps) -> bool:
+    """Ruling A69: the user took a result of the piece ``item_id`` that its checks refused — a refused fit accepted
+    (``fit_attempts.accept``), a stored image or a kept mesh used (``garments.use_attempt`` / ``use_mesh``). The last
+    Build's failure of THAT piece at one of the garment ``steps`` is answered by it and goes from the Build's state:
+    the Figure tab's row, its head and the Build problem of the Figure and Pose tabs then follow the accepted result
+    instead of saying "Failed" until the next Build (Kai's jeans, 2026-11-14: the Build of 22:03 failed at the fit,
+    the user accepted that fit at 22:04, the figure was assembled with it — and the row said "Failed"). Every other
+    failure of the run stays; a Build that runs later records its own (a newer refusal shows again). Returns whether
+    anything went."""
+    wanted = frozenset(steps)
+    changed = False
+    with _lock:
+        last = _last.get(character_name)
+        failed = (last or {}).get("failed") or {}
+        for name in [n for n in PIECE_FAILURE_STEPS if n in failed]:
+            entry = failed[name]
+            items = dict(entry.get("items") or {entry.get("item_id"): entry.get("error")})
+            error = str(items.get(item_id) or "")
+            if item_id not in items or not _answered_by(name, error, wanted):
+                continue
+            items.pop(item_id)
+            changed = True
+            if not items:
+                failed.pop(name)
+                continue
+            first, first_error = next(iter(items.items()))
+            failed[name] = {**{k: v for k, v in entry.items() if k != "items"}, "item_id": first,
+                            "error": first_error, **({"items": items} if len(items) > 1 else {})}
+    if changed:
+        logger.info("Build %s: the failure of %s answered by the user's acceptance (%s)", character_name, item_id,
+                    ", ".join(sorted(wanted)))
+    return changed
+
+
 def _worker(character_name: str) -> None:
     while True:
         with _lock:
@@ -1890,9 +1939,9 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
     refused (Ruling A31 wording): ``fit_refused`` the reason in plain words, ``fit_refused_detail`` the measured
     reasons (the tooltip), ``refused_on`` what is in that body shape ("" unknown), ``piece_broken`` whether the
     reason points at the piece itself — only then ``regenerate_jobs`` is what its "Regenerate mesh" spends
-    (``_regenerate_jobs``), else None. ``accepted_by_user`` (Ruling A31): ``{on, reason}`` when the fit the
-    figure uses was refused by its checks and accepted by the user (``on``: "Plain body" / "Body shape (…)"),
-    else None."""
+    (``_regenerate_jobs``), else None. ``accepted_by_user`` (Ruling A31, A69 — ``_accepted_by_user``): ``{step,
+    on, reason, …}`` when the fit the figure uses (``on``: "Plain body" / "Body shape (…)"), its mesh or one of its
+    images was refused by its checks and accepted by the user, else None."""
     from app.core import figure, fit_attempts, garment_set
     from app.core.outfit_options import CLOSED, OPEN
     from app.models import inventory
@@ -1942,8 +1991,7 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
                      "failure": failure, "fit_refused": words["text"], "fit_refused_detail": words["detail"],
                      "refused_on": names.get(delivered.fit_refused_on, "") if refused else "",
                      "piece_broken": bool(words["piece"]), "piece_state": piece_state,
-                     "accepted_by_user": (fit_attempts.accepted_by_user(character_name, item_id, delivered.shape,
-                                                                         profile=profile, names=names)
+                     "accepted_by_user": (_accepted_by_user(character_name, item_id, delivered.shape, profile, names)
                                           if mode == garment_set.OWN_MESH and not refused else None),
                      "in_body_until": (None if item_id not in delivered.in_body_own
                                        else "mesh" if delivered.interim.get(item_id) == figure.INTERIM_IN_BODY
@@ -1953,6 +2001,23 @@ def _worn_rows(character_name: str, wanted, delivered, failed: Dict[str, Dict[st
                      "regenerate_jobs": (_regenerate_jobs(character_name, item_id, profile)
                                          if state == "fit_refused" and words["piece"] else None)})
     return rows
+
+
+def _accepted_by_user(character_name: str, item_id: str, shape: str, profile: Dict[str, Any],
+                      names: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """A worn row's ``accepted_by_user``: ``{step, on, reason, detail, at, view}`` when a result the figure uses for
+    the piece was refused by its checks and accepted by the user — its fit (Ruling A31, ``step`` "fit", ``on`` the
+    body), else its mesh or an image of its chain (Ruling A69, ``garments.user_taken``: ``step`` "mesh" / the image
+    step, ``view`` the image's view, ``on`` ""); None otherwise."""
+    from app.core import fit_attempts, garments
+    fit = fit_attempts.accepted_by_user(character_name, item_id, shape, profile=profile, names=names)
+    if fit is not None:
+        return {**fit, "step": "fit", "view": ""}
+    taken = garments.user_taken(character_name, item_id, profile=profile)
+    if taken is None:
+        return None
+    return {"step": taken["step"], "view": taken["view"], "on": "", "reason": "; ".join(taken["reasons"]),
+            "detail": "\n".join(taken["reasons"]), "at": taken["at"]}
 
 
 def _with_cached_failures(failed: Dict[str, Dict[str, Any]], steps: List[Step]) -> Dict[str, Dict[str, Any]]:

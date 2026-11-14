@@ -543,6 +543,10 @@ def accept(character_name: str, item_id: str, body: str, *, profile: Optional[Di
     with (_plain_guard(character_name, item_id) if not body else nullcontext()):
         with _lock(character_name, body):
             _accept_locked(character_name, item_id, body, profile, slot)
+    # Ruling A69: the last Build's failure of this piece at the fit is answered — the Figure tab's row follows the
+    # accepted fit ("Ready — Accepted by you"), never "Failed" until the next Build.
+    from app.core import figure_build
+    figure_build.answer_piece_failure(character_name, item_id, ("fit",))
     return {"item_id": item_id, "body": body, "accepted": True, "follow_up": follow_up(character_name)}
 
 

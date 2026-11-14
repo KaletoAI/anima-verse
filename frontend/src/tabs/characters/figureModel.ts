@@ -239,8 +239,12 @@ export interface FigureWornRow {
   refused_on?: string
   /** Ruling A31: the refusal points at the piece itself — only then a new mesh helps ("Regenerate mesh"). */
   piece_broken?: boolean
-  /** Ruling A31: the fit the figure uses was refused by its checks and accepted by the user. */
-  accepted_by_user?: { on: string; reason: string; detail: string; at: string | null } | null
+  /** Ruling A31: the fit the figure uses was refused by its checks and accepted by the user (`step` "fit", `on` the
+   *  body); Ruling A69: else its mesh (`step` "mesh") or an image of its chain (`step` worn/ghost/cutout, `view`)
+   *  taken with "Use this" although its gate refused it (`on` ""). */
+  accepted_by_user?: {
+    on: string; reason: string; detail: string; at: string | null; step?: string; view?: string
+  } | null
   /** Hub jobs its chain step plans (0 = none planned, null = unknown). */
   jobs: number | null
   /** Open / closed of a closable piece; null = not closable (NOT the readiness above). */
@@ -527,6 +531,26 @@ export const FIT_REFUSED_NOTE = 'Still shown: the figure built before. Re-fit tr
 /** The status light's words of a fit the user accepted although its checks refused it (Ruling A31). */
 export const ACCEPTED_BY_YOU = 'Accepted by you'
 
+/** The image steps of a clothing chain in the words of the garment window's step grid (Ruling A69's marker). */
+const IMAGE_STEP_WORDS: Record<string, string> = { worn: 'Worn views', ghost: 'Piece-only views', cutout: 'Cut-outs' }
+
+/** Ruling A69: what the user accepted against its checks and why it was refused, in one line — the fit ("Plain
+ *  body: its checks refused it — <reason>", Ruling A31's words), the mesh ("Mesh: its gate refused it — <reason>")
+ *  or an image ("Piece-only views · Back view: its gate refused it — <reason>"). */
+export function acceptedWhat(a: { step?: string; view?: string; on?: string; reason: string }, t: Tr = EN): string {
+  const step = a.step || 'fit'
+  if (step === 'fit') {
+    return a.on
+      ? t('{body}: its checks refused it — {reason}').replace('{body}', bodyWords(a.on, t)).replace('{reason}', a.reason)
+      : t('Fit: its checks refused it — {reason}').replace('{reason}', a.reason)
+  }
+  const what = step === 'mesh' ? t('Mesh')
+    : `${t(IMAGE_STEP_WORDS[step] || step)} · ${a.view === 'back' ? t('Back view') : t('Front view')}`
+  return a.reason
+    ? t('{what}: its gate refused it — {reason}').replace('{what}', what).replace('{reason}', a.reason)
+    : t('{what}: its gate refused it').replace('{what}', what)
+}
+
 /** A worn row as a step (checklist 8): its light, the state on the right, the reason in plain words under it and
  *  the mouse-over. Green ready (or accepted by you) · yellow due (waits for the Build, its own mesh missing) ·
  *  blue building · red failed or refused · grey left out. */
@@ -546,8 +570,7 @@ export function wornState(row: Pick<FigureWornRow, 'state' | 'mode' | 'jobs' | '
       ? {
         light: 'green',
         text: t('Ready — {accepted}').replace('{accepted}', t(ACCEPTED_BY_YOU)),
-        sub: t('{body}: its checks refused it — {reason}').replace('{body}', bodyWords(row.accepted_by_user.on, t))
-          .replace('{reason}', row.accepted_by_user.reason),
+        sub: acceptedWhat(row.accepted_by_user, t),
         detail: row.accepted_by_user.detail || '',
       }
       : { light: 'green', text: t('Ready'), sub: null, detail: '' }

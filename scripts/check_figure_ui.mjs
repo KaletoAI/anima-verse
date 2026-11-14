@@ -227,6 +227,18 @@
  *      and its Re-fit posts the selected body (`{ ...run, body: refitBody }` and `onRun({ step: 'fit', force: true,
  *      body: b }`); FootwearSteps names its rows "Base body" / "Current body", never `Body shape {id}`; the de.json
  *      keys of the new strings exist and "The figure stands on this body now" is gone.
+ * [25] Ruling A69 — a result its checks refused, accepted by the user, reads green with what and why:
+ *      wornState(ready, accepted_by_user {step fit, on "Plain body", reason "deep_push_share 0.1512 > 0.12"})
+ *        → {green, "Ready — Accepted by you", "Plain body: its checks refused it — deep_push_share 0.1512 > 0.12"}
+ *          (Ruling A31's words; a row without `step` reads the same — an older server);
+ *      {step mesh, on "", reason "largest component 0.82 < 0.9"} → sub "Mesh: its gate refused it — largest
+ *        component 0.82 < 0.9";
+ *      {step ghost, view back, reason "piece_share 0.02 < 0.03"} → "Piece-only views · Back view: its gate refused
+ *        it — piece_share 0.02 < 0.03"; {step worn, view front, reason ""} → "Worn views · Front view: its gate
+ *        refused it"; acceptedWhat({step fit, on "", reason r}) (the Wardrobe chip's fit) → "Fit: its checks
+ *        refused it — r".
+ *      Source greps: the Wardrobe chip adds ACCEPTED_BY_YOU on a fitted piece with `accepted_by_user`; the step
+ *      grid's fit row shows "Accepted by you" for `fit.user_accepted` (not under a selected body shape).
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -780,6 +792,26 @@ check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/
   check('[24] de.json keys', ['Base body', 'Current body', 'Current body ({pieces})',
     'The body shape the worn outfit calls for: {shape}', block].map((k) => k in de)
     .concat(['The figure stands on this body now' in de]), [true, true, true, true, true, false]);
+}
+
+// [25] Ruling A69
+const acc = (a) => { const w = m.wornState(row({ state: 'ready', mode: 'own_mesh', accepted_by_user: { detail: '',
+  at: null, ...a } })); return [w.light, w.text, w.sub]; };
+check('[25] fit on the plain body', acc({ step: 'fit', on: 'Plain body', reason: 'deep_push_share 0.1512 > 0.12' }),
+  ['green', 'Ready — Accepted by you', 'Plain body: its checks refused it — deep_push_share 0.1512 > 0.12']);
+check('[25] fit, older server (no step)', acc({ on: 'Plain body', reason: 'x' })[2], 'Plain body: its checks refused it — x');
+check('[25] mesh', acc({ step: 'mesh', on: '', reason: 'largest component 0.82 < 0.9' }),
+  ['green', 'Ready — Accepted by you', 'Mesh: its gate refused it — largest component 0.82 < 0.9']);
+check('[25] image', acc({ step: 'ghost', view: 'back', on: '', reason: 'piece_share 0.02 < 0.03' })[2],
+  'Piece-only views · Back view: its gate refused it — piece_share 0.02 < 0.03');
+check('[25] image without a reason', acc({ step: 'worn', view: 'front', on: '', reason: '' })[2],
+  'Worn views · Front view: its gate refused it');
+check('[25] the Wardrobe chip\'s fit', m.acceptedWhat({ step: 'fit', on: '', reason: 'r' }), 'Fit: its checks refused it — r');
+{
+  const wardrobe = src('frontend/src/tabs/characters/WardrobeGarment.tsx');
+  const grid = src('frontend/src/tabs/characters/GarmentStepGrid.tsx');
+  check('[25] Wardrobe chip + fit row', [/status\.accepted_by_user\) text \+= ` · \$\{t\(ACCEPTED_BY_YOU\)\}`/.test(wardrobe),
+    /!shownFit && fit\?\.status === 'accepted' && fit\.user_accepted/.test(grid)], [true, true]);
 }
 
 if (failures.length) {

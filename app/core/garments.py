@@ -2829,6 +2829,9 @@ def use_attempt(character_name: str, item_id: str, step: str, view: str, attempt
             failed = gs.status(character_name, item_id).get("failed") or {}
             if failed.get("step") in due:
                 gs.end(character_name, item_id, str(failed["step"]))
+            # Ruling A69: and the last Build's failure of the piece at those steps (the Figure tab's row).
+            from app.core import figure_build
+            figure_build.answer_piece_failure(character_name, item_id, due)
     finally:
         lock.release()
     estimate = run_estimate(character_name, item_id, profile=profile)
@@ -2871,6 +2874,9 @@ def use_mesh(character_name: str, item_id: str, n: int, *,
         failed = gs.status(character_name, item_id).get("failed") or {}
         if failed.get("step") in ("mesh", "fit"):
             gs.end(character_name, item_id, str(failed["step"]))
+    # Ruling A69: and the last Build's failure of the piece at its mesh or fit (the Figure tab's row).
+    from app.core import figure_build
+    figure_build.answer_piece_failure(character_name, item_id, ("mesh", "fit"))
     fit = start_garment(character_name, item_id, steps="fit", force=True, only=True)
     return {"item_id": item_id, **result, "fit": fit}
 
@@ -4228,6 +4234,36 @@ def _mesh_use_block(character_name: str, item_id: str) -> str:
     return ""
 
 
+def user_taken(character_name: str, item_id: str, *,
+               profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Ruling A69: what of a clothing piece's chain (current fingerprint) the user took although its gate refused
+    it and is still in use — the mesh (Ruling A58, ``use_mesh``: its record ``user_accepted``), else the image of
+    the latest step with one (Ruling A37, ``use_attempt``: its ``user_accepted`` block, holding while every input
+    is unchanged — ``garment_store.accepted_image``): ``{step, view, reasons, at}`` (``view`` "" for the mesh),
+    None without. The Figure tab's row and the Wardrobe chip mark the piece with it ("Accepted by you"); a fit the
+    user accepted is ``fit_attempts.accepted_by_user``. Never raises."""
+    from app.core import garment_store as gs
+    try:
+        if gs._garment_kind_or_none(item_id) != _clothing():
+            return None
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+        prepared = gs.garment_path(character_name, item_id, fsig, "prepared")
+        record = gs.read_record(prepared.with_suffix(".json"))
+        if prepared.is_file() and record.get("accepted") is True and record.get("user_accepted"):
+            return {"step": "mesh", "view": "", "reasons": [str(r) for r in record.get("user_reasons") or []],
+                    "at": record.get("picked_at")}
+        for step in reversed(gs.image_steps(_clothing())):
+            for view in gs.GARMENT_VIEWS:
+                final = gs.garment_path(character_name, item_id, fsig, "image", step=step, view=view)
+                block = gs.read_record(final.with_suffix(".json")).get("user_accepted")
+                if isinstance(block, dict) and gs.accepted_image(final):
+                    return {"step": step, "view": view, "reasons": [str(r) for r in block.get("reasons") or []],
+                            "at": block.get("at")}
+    except Exception:  # noqa: BLE001 — a marker, never a failure of the reader
+        logger.debug("User-taken results of %s/%s unreadable", character_name, item_id, exc_info=True)
+    return None
+
+
 def _mesh_info(character_name: str, item_id: str, fsig: str) -> Dict[str, Any]:
     """The Mesh row: ``{status, metrics, gates, tris, created_at, user_accepted, view, job}`` — ``job`` (Ruling A58)
     the piece's mesh job of this fsig in flight (``garment_mesh.running_job``: ``{id, started_at, hub_jobs,
@@ -4317,13 +4353,24 @@ def _mesh_view_info(character_name: str, item_id: str, fsig: str, record: Dict[s
 
 def _fit_info(character_name: str, item_id: str, fsig: str, base_model_sha: str,
               method: str = "edit_chain") -> Dict[str, Any]:
+    """The Fit row: ``{status, metrics, gates, tris, low, base_signature, created_at, user_accepted}`` —
+    ``user_accepted`` (Ruling A69) ``{at, reason, detail}`` when the fit in use on the plain body is one its checks
+    refused and the user accepted (``fit_attempts.accept``; ``reason`` in plain words, ``detail`` the measured
+    reasons), else None: the row says "Accepted by you", as an image or a mesh the user took does."""
+    from app.core import fit_attempts
     from app.core.garment_store import garment_path, read_record
     record = read_record(garment_path(character_name, item_id, fsig, "fit").with_suffix(".json"))
     metrics = record.get("metrics") or {}
-    out = {"status": _fit_state(character_name, item_id, fsig, base_model_sha, method),
+    status = _fit_state(character_name, item_id, fsig, base_model_sha, method)
+    block = fit_attempts.user_acceptance(record) if status == "accepted" else None
+    words = (fit_attempts.plain_reason(block["error"], (record.get("user_accepted") or {}).get("gates"))
+             if block else None)
+    out = {"status": status,
            "metrics": metrics, "gates": record.get("gates") or {}, "tris": metrics.get("tris"),
            "low": record.get("low"), "base_signature": record.get("base_signature"),
-           "created_at": record.get("created_at")}
+           "created_at": record.get("created_at"),
+           "user_accepted": ({"at": block["at"], "reason": words["text"], "detail": words["detail"]}
+                             if block and words else None)}
     if record.get("method"):
         out["colour"] = record.get("colour")
         out["refused_attempts"] = record.get("refused_attempts") or []

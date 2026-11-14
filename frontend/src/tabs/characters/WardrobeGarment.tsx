@@ -82,8 +82,9 @@ import type {
   PieceViewInfo,
 } from './useGarment'
 import {
-  AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES, PIECE_STATE_LABELS,
-  closableDisabled, defaultBodyKey, fitBodyName, leavesOwnMesh, refitSlot, showBodySwitch, switchOffWarning, wearersLine,
+  ACCEPTED_BY_YOU, AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES,
+  PIECE_STATE_LABELS, acceptedWhat, closableDisabled, defaultBodyKey, fitBodyName, leavesOwnMesh, refitSlot,
+  showBodySwitch, switchOffWarning, wearersLine,
 } from './figureModel'
 import type { FitBody, MeshMode, OwnMeshFiles, PieceState } from './figureModel'
 import { chainRunAll } from './baseBodyModel'
@@ -219,9 +220,14 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
     // Layered over the worn pieces under it (garment_layers); one without a fit is painted on.
     if (status.over?.length) text = t('Fitted over {items}').replace('{items}', status.over.join(', '))
     if (status.without?.length) text += ` · ${t('without {items}').replace('{items}', status.without.join(', '))}`
+    // Ruling A69: a result its checks refused, accepted by the user — still green, marked.
+    if (status.accepted_by_user) text += ` · ${t(ACCEPTED_BY_YOU)}`
   }
+  const why = status.state === 'fitted' && status.accepted_by_user
+    ? acceptedWhat(status.accepted_by_user, t) : ''
   return (
-    <span style={{ ...CHIP, border: `1px solid ${color}` }} title={`${text} · ${progress}`}>{text}</span>
+    <span style={{ ...CHIP, border: `1px solid ${color}` }}
+      title={[`${text} · ${progress}`, why].filter(Boolean).join('\n')}>{text}</span>
   )
 }
 

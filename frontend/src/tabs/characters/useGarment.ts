@@ -160,6 +160,9 @@ export interface GarmentFitInfo {
   low: { ok: boolean; tris?: number; ratio?: number; error?: string } | null
   base_signature: string | null
   created_at: string | null
+  /** Ruling A69: the fit in use was refused by its checks and accepted by the user (the reason in plain words, the
+   *  measured reasons in `detail`); null/absent otherwise. */
+  user_accepted?: { at: string | null; reason: string; detail: string } | null
 }
 
 /** How the hair is made (`garment_hair.HAIR_METHODS`); `body` = inside the body mesh, no hair mesh. */
@@ -658,6 +661,9 @@ export interface PieceStatus {
   over?: string[]
   /** Names of the worn own-mesh pieces under this one without a fit (painted on): fitted without them. */
   without?: string[]
+  /** Ruling A69 (`fitted` only): what of the fitted piece its checks refused and the user accepted — the fit, the
+   *  mesh or an image (`step`, `view` "" unless an image); null/absent when nothing. */
+  accepted_by_user?: { step: string; view: string; reason: string } | null
 }
 
 /** GET /characters/{n}/garments — the Wardrobe's own-mesh overview. */
