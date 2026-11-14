@@ -64,6 +64,19 @@
  *     is that reason; the detail "Tips: <reason>, tip height 4.0 → 0.1 / 5.2 → 0.0 mm, colour difference ΔE
  *     11.4 → 0.7 / 10.4 → 0.2" (one decimal each); with a switched-on part U beside it, the line is the reason, "; ",
  *     then U's "Applied 01:12 — …" line.
+ * [10] The Extension bones box in the Base body tab (Ruling A45):
+ *     extensionBoneNames({groups: {P: {bones: ["mixamorig:LeftBreast", "RightBreast"]}, H: {hair: true, bones:
+ *     ["hair_c01_0"]}}}) → ["leftbreast", "rightbreast"] (normBoneName, hair groups left out).
+ *     The overlay on a hand-built rig — root (scale 2) ▸ Spine2 at (0, 0.6, 0) ▸ the leaf LeftBreast at (0.05, 0.05,
+ *     0.04) in Spine2's frame, bound at rest (boneInverses from the rest pose): 1 bone drawn; upright swingDeg 0. The
+ *     leaf turned 30° about its parent's X: its +Y becomes (0, cos 30°, sin 30°), so swingDeg 30; the head in world
+ *     space is 2 × (0.05, 0.65, 0.04) = (0.1, 1.3, 0.08) and the drawn tip lies LEAF_LENGTH_M (0.06) × root scale 2 =
+ *     0.12 along that direction: (0.1, 1.3 + 0.12 × 0.866025 = 1.403923, 0.08 + 0.12 × 0.5 = 0.14).
+ *     Source greps: FieldBaseBody renders <ExtensionBonesBox inside `ga-ext-grid` after the first tip panel and before
+ *     the others (tipPanels.slice(0, 1) … extensionBox … tipPanels.slice(1)), hands the viewer `motion=` and
+ *     `extensionBones`; the CSS grid is `minmax(0, 1fr) minmax(0, 1fr)`, `align-items: start`, one column under an
+ *     `@container (max-width: 520px)`; the 3D tab's Model3DExtensions on the pipeline renders "Open Base body tab"
+ *     and returns before the box; FieldModel3D leaves the Bounce / Weight sliders out on the pipeline.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -239,6 +252,60 @@ check('[9] neutralised + smoothed', m.tipSmoothingLine(tipState({ version: 1, at
   'Smoothed and painted over — part is off; Applied 01:12 — max shift 4.5 mm, inverted normals 22 → 0');
 const panelOrder = ['<MeshRepairPanel', '<TipSmoothingPanel', '<ExtensionTipPanel'].map((tag) => baseTab.indexOf(tag));
 check('[8] panels in step order', panelOrder.every((at, i) => at >= 0 && (i === 0 || at > panelOrder[i - 1])), true);
+
+// [10]
+const overlay = await loadBundled('frontend/src/tabs/characters/extensionBoneOverlay.ts');
+check('[10] bone names', [...overlay.extensionBoneNames({ rev: 'r', groups: {
+  P: { bones: ['mixamorig:LeftBreast', 'RightBreast'] }, H: { hair: true, bones: ['hair_c01_0'] } } })],
+['leftbreast', 'rightbreast']);
+const THREE = require_(join(ROOT, 'node_modules/three/build/three.cjs'));
+const rigRoot = new THREE.Group();
+rigRoot.scale.setScalar(2);
+const spine = new THREE.Bone();
+spine.name = 'mixamorigSpine2';
+spine.position.set(0, 0.6, 0);
+const leaf = new THREE.Bone();
+leaf.name = 'mixamorigLeftBreast';
+leaf.position.set(0.05, 0.05, 0.04);
+spine.add(leaf);
+const skin = new THREE.SkinnedMesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
+rigRoot.add(spine, skin);
+rigRoot.updateMatrixWorld(true);
+skin.bind(new THREE.Skeleton([spine, leaf]));
+const ov = overlay.createExtensionBoneOverlay(THREE, rigRoot, { rev: 'r', groups: { P: { bones: ['mixamorig:LeftBreast'] } } });
+check('[10] one bone drawn', ov?.count, 1);
+ov.update();
+check('[10] upright swing', ov.swingDeg(), 0);
+leaf.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 6);
+rigRoot.updateMatrixWorld(true);
+ov.update();
+check('[10] turned 30°', ov.swingDeg(), 30);
+const pos = ov.group.children[0].geometry.getAttribute('position');
+check('[10] head and tip', [0, 1].map((i) => [pos.getX(i), pos.getY(i), pos.getZ(i)].map((v) => Math.round(v * 1e6) / 1e6)),
+  [[0.1, 1.3, 0.08], [0.1, 1.403923, 0.14]]);
+const holder = new THREE.Scene();
+holder.add(ov.group);
+ov.dispose();
+check('[10] dispose detaches', [ov.group.parent, holder.children.length], [null, 0]);
+const gridAt = baseTab.indexOf('className="ga-ext-grid"');
+const firstTip = baseTab.indexOf('tipPanels.slice(0, 1)', gridAt);
+const boxAt = baseTab.indexOf('{extensionBox}', gridAt);
+const restTips = baseTab.indexOf('tipPanels.slice(1)', gridAt);
+check('[10] box beside the first tip panel', gridAt > 0 && gridAt < firstTip && firstTip < boxAt && boxAt < restTips, true);
+check('[10] box element', /<ExtensionBonesBox legend=\{t\('Extension bones'\)\}/.test(baseTab), true);
+check('[10] viewer plays the base motion with the bone overlay',
+  /motion=\{ready \? previewMotion : undefined\} extensionBones/.test(baseTab), true);
+const css = src('frontend/src/styles/game-admin.css');
+check('[10] two equal columns, top-aligned',
+  /\.ga-ext-grid \{ display: grid; grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\);[^}]*align-items: start;/.test(css), true);
+check('[10] one column when narrow',
+  /@container \(max-width: 520px\) \{ \.ga-ext-grid \{ grid-template-columns: minmax\(0, 1fr\); \} \}/.test(css), true);
+const sidePanels = src('frontend/src/tabs/characters/Model3DSidePanels.tsx');
+const pipelineAt = sidePanels.indexOf('if (st.pipeline)');
+check('[10] 3D tab on the pipeline: only the way to the Base body tab', pipelineAt > 0
+  && sidePanels.indexOf("t('Open Base body tab')", pipelineAt) > pipelineAt
+  && sidePanels.indexOf("t('Open Base body tab')", pipelineAt) < sidePanels.indexOf('<ExtensionBonesBox', pipelineAt), true);
+check('[10] 3D tab: no sliders on the pipeline', /const sliderTools = rigless \|\| pipeline \? null : motionToolbar/.test(model3d), true);
 
 if (failures.length) {
   console.error('\nFAILED:\n' + failures.join('\n'));

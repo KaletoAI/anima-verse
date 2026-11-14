@@ -13,7 +13,8 @@ import { apiGet } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
 import type { Freshness } from './FreshnessBadge'
 import type { ModelStep } from './ModelSteps'
-import type { CollisionPayload } from '@anima/scene-render'
+import type { CollisionPayload, ExtensionRigDeclaration, SecondaryMotionPayload } from '@anima/scene-render'
+import type { ExtensionRigResult } from './FieldModel3D'
 import type { FaceCleanupState, FaceFields } from './ModelFaceActions'
 import type { FigurePayload, ModelStaleReason } from './figureModel'
 import type { BaseRunAll, MeshRepairState, TipSmoothingState } from './baseBodyModel'
@@ -140,6 +141,23 @@ export interface BaseSkinInfo {
   step: { applied?: boolean; outcome?: string; error?: string | null; at?: string } | null
 }
 
+/** The extension bones of the base model (Ruling A45): what the "Extension bones" box and the viewer show. */
+export interface BaseExtensionState {
+  /** The groups the base model carries. */
+  groups: ExtensionRigDeclaration[]
+  /** Its extension rig record (with the distance mesh's under `per_tier.low`). */
+  result: ExtensionRigResult
+  /** The stored tiers (`full`, and `low` once the distance mesh is built). */
+  tiers: string[]
+  low_tris?: number | null
+  /** The motion payload without the worn clothing and states — the base body is shown bare. */
+  motion?: SecondaryMotionPayload
+  /** The saved switches differ from the ones the rig was built with. */
+  due: boolean
+  /** The background rebuild of the extension bones runs on this model. */
+  running: boolean
+}
+
 export interface BaseBodyInfo {
   pipeline: boolean
   humanoid: boolean
@@ -160,6 +178,8 @@ export interface BaseBodyInfo {
   mesh_repair?: MeshRepairState | null
   /** The tip smoothing (`extension_tip.tip_smoothing_state`, Ruling A43; null = no switched-on tip part — no row). */
   tip_smoothing?: TipSmoothingState | null
+  /** The base model's extension bones (`model3d.model_extension_state`, Ruling A45; null without a stored model). */
+  extension?: BaseExtensionState | null
   /** The front's skin detail step (null for a non-humanoid). */
   skin?: BaseSkinInfo | null
   /** The Base body tab's "Run all" plan (`figure_build.base_run_all`). */
@@ -179,9 +199,9 @@ export const viewsRunning = (d: BaseBodyInfo | null | undefined) =>
 export const modelRunning = (d: BaseBodyInfo | null | undefined) =>
   d?.model?.status === 'running' || d?.outfit?.status === 'running'
 
-/** A tip Apply (extension rebuild of the base model) runs. */
+/** A tip Apply or the Extension bones box's Rebuild (extension rebuild of the base model) runs. */
 export const tipsRunning = (d: BaseBodyInfo | null | undefined) =>
-  !!d?.extension_tips?.some((group) => group.running)
+  !!d?.extension_tips?.some((group) => group.running) || !!d?.extension?.running
 
 const isActive = (d: BaseBodyInfo | null | undefined) =>
   viewsRunning(d) || modelRunning(d) || !!d?.face_cleanup?.running || tipsRunning(d) || !!d?.run_all?.running

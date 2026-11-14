@@ -43,6 +43,8 @@ import { areaKindOf } from '../props/propTypes'
 import type { AreaOutline, LeafBbox, MeshLayoutEntry,
   PropSlotValues } from '../props/propTypes'
 import { BuiltAtCaption } from './BuiltAtCaption'
+import { createExtensionBoneOverlay, extensionBoneNames } from './extensionBoneOverlay'
+import type { ExtensionBoneOverlay } from './extensionBoneOverlay'
 import { FreshnessCorner } from './FreshnessBadge'
 import type { Freshness } from './FreshnessBadge'
 
@@ -289,8 +291,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
-  meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model' }:
+  meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model', extensionBones = false }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; sideToolbar?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
+    /** Whether the "Extension bones" overlay starts switched on (Ruling A45, `extensionBoneOverlay.ts`): the bones
+     *  of `motion`'s non-hair groups drawn on top, redrawn every frame after the solver. The toggle is offered
+     *  whenever `motion` names such a group; off by default. */
+    extensionBones?: boolean
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
     freshness?: Freshness | null
@@ -526,6 +532,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   secondaryOnRef.current = secondaryOn
   const motionRef = useRef(motion)
   motionRef.current = motion
+  // The extension-bone overlay (Ruling A45): read per frame like the motion, so the toggle never reloads the model.
+  const [bonesOn, setBonesOn] = useState(extensionBones)
+  const bonesOnRef = useRef(bonesOn)
+  bonesOnRef.current = bonesOn
+  const hasExtensionBones = useMemo(() => extensionBoneNames(motion).size > 0, [motion])
+  /** The overlay's readout: the largest swing of a drawn bone from its bind pose (degrees); null = overlay off. */
+  const [bonesSwing, setBonesSwing] = useState<number | null>(null)
   // Per-strand hair and the figure preview (ruling H-R2): read per frame, so a dragged Stiffness or a new record
   // never reloads the model.
   const strandHairRef = useRef(strandHair)
@@ -1328,6 +1341,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         let garmentCollision: GarmentCollision | null = null
         let garmentShown: CollisionPayload | null | undefined
         disposers.push(() => garmentCollision?.dispose())
+        // The extension-bone overlay (Ruling A45) in the scene root, rebuilt when the toggle or the payload's
+        // revision changes.
+        let boneOverlay: ExtensionBoneOverlay | null = null
+        let bonesShown: string | null = null
+        let bonesClock = 0
+        let bonesRead: number | null = null
+        disposers.push(() => boneOverlay?.dispose())
         // The cutoff last applied to the materials on screen (`applyAlphaCutoff`); a new garment push swaps in
         // fresh material clones, so it is applied again then.
         let alphaShown: number | undefined
@@ -2618,6 +2638,23 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             if (collisionOverlay) scene.add(collisionOverlay.group)
           }
           collisionOverlay?.update()
+          const bonesWanted = bonesOnRef.current && motionRef.current ? motionRef.current.rev : null
+          if (bonesWanted !== bonesShown) {
+            boneOverlay?.dispose()
+            bonesShown = bonesWanted
+            boneOverlay = bonesWanted !== null ? createExtensionBoneOverlay(THREE, object, motionRef.current) : null
+            if (boneOverlay) scene.add(boneOverlay.group)
+          }
+          boneOverlay?.update()
+          bonesClock += realDelta
+          if (bonesClock >= 0.25) {
+            bonesClock = 0
+            const read = boneOverlay ? boneOverlay.swingDeg() : null
+            if (read !== bonesRead) {
+              bonesRead = read
+              setBonesSwing(read)
+            }
+          }
           if (garmentShown !== garmentPushRef.current) {
             garmentCollision?.dispose()
             garmentShown = garmentPushRef.current
@@ -2777,7 +2814,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           know how many of its neighbours happen to be shown. */}
       {!loading && !error && (motion || onFrontalChange || keepCamera
         || (leafBbox && hasLeaf) || collision?.capsules?.length) ? (
-        <div style={{
+        <div className="ga-viewer-toggles" style={{
           position: 'absolute', right: 6, top: 6, display: 'flex',
           flexDirection: 'column', alignItems: 'flex-end', gap: 4,
         }}>
@@ -2785,6 +2822,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             <button type="button" className="ga-btn ga-btn-sm"
               aria-pressed={secondaryOn} onClick={() => setSecondaryOn(on => !on)}>
               {t('Secondary motion')}
+            </button>
+          ) : null}
+          {hasExtensionBones ? (
+            <button type="button" className="ga-btn ga-btn-sm"
+              aria-pressed={bonesOn} onClick={() => setBonesOn(on => !on)}
+              title={t('Show the extension bones on the figure — drag the figure to tilt it and watch them hang')}>
+              {t('Extension bones')}
             </button>
           ) : null}
           {collision?.capsules?.length ? (
@@ -2879,6 +2923,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       </div>
       {!loading && !error ? <ModelTurnHint subject={subject} locked={frontal} turned={turned}
         onReset={() => turnResetRef.current?.()} /> : null}
+      {!loading && !error && bonesOn && hasExtensionBones && bonesSwing !== null ? (
+        <div className="ga-hint" style={{ fontSize: 11 }}>
+          {t('Extension bones: up to {n}° from their built pose · no jobs').replace('{n}', String(bonesSwing))}
+        </div>
+      ) : null}
       </div>
       {sideToolbar ? <aside className="ga-model3d-toolbar">
         {statusPanel}

@@ -1,8 +1,6 @@
 import { useI18n } from '../../i18n/I18nProvider'
 import { AnimationSituations } from './AnimationSituations'
-import { ExtensionMotionDraft } from './ExtensionMotionDraft'
-import { MotionPreviewHint } from './MotionPreviewHint'
-import type { Physics } from '../../lib/motionDraft'
+import { ExtensionBonesBox } from './ExtensionBonesBox'
 import { useModel3DPanel } from './model3dPanel'
 
 export function Model3DAnimations({ character }: { character: string }) {
@@ -18,75 +16,42 @@ export function Model3DAnimations({ character }: { character: string }) {
   </div>
 }
 
-export function Model3DExtensions({ character }: { character: string }) {
+/** The 3D tab's "Extension bones" section. On the base-body pipeline the box lives in the Base body tab beside
+ *  the tip panels and acts on the base model, whose switches the outfit models take (Ruling A45): here only the
+ *  way there. Off the pipeline (an animal, a temporary NPC — no base body) it is the box of the served model. */
+export function Model3DExtensions({ character, onOpenBaseBody }: {
+  character: string
+  /** Switches to the Base body tab. */
+  onOpenBaseBody?: () => void
+}) {
   const { t } = useI18n()
   const panel = useModel3DPanel(character)
   if (!panel) return <div className="ga-hint">{t('Loading…')}</div>
   const { st, pending, busy, rigless, mixamo, viewTier, extensionResult,
     canMeasure, model, setExtensionOption, setExtensionMotion, rebuildExtensions } = panel
-  return <>
-      {st.extension_groups?.length ? (
-        <fieldset className="ga-form ga-ext-panel">
-          <div className="ga-hint" aria-live="polite">
-            <strong>{t('Extension bones')} · {viewTier}: </strong>
-            {t(extensionResult?.status === 'applied' ? 'Applied'
-              : extensionResult?.status === 'failed' ? 'Failed'
-              : extensionResult?.status === 'not_found' ? 'Geometry not found'
-              : extensionResult?.status === 'none_applicable' ? 'No applicable groups'
-              : 'Not processed')}
-            {extensionResult?.reason ? ` · ${extensionResult.reason}` : ''}
-            {extensionResult?.metrics ? (
-              <details>
-                <summary>{t('Metrics')}</summary>
-                <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-                  {JSON.stringify(extensionResult.metrics, null, 2)}
-                </pre>
-              </details>
-            ) : null}
-          </div>
-
-          {st.extension_groups.map((group) => {
-            // An outfit model on the base body: a group the base switched off
-            // is off here too, whatever this model's own switch says.
-            const inherited = st.extension_inherited?.[group.id]
-            return (
-            <div key={group.id} className="ga-ext-row">
-              <strong>{group.id}</strong>
-              <label title={inherited ? t(inherited.reason) : undefined}>
-                <input type="checkbox" disabled={pending || busy || !st.model?.signature || !!inherited}
-                  checked={!inherited && st.options?.extension_rig_models?.[st.model?.signature || '']?.[group.id]?.enabled !== false}
-                  onChange={(event) => setExtensionOption(group.id, 'enabled', event.target.checked)} />
-                {' '}{t('Enabled')} <MotionPreviewHint field="enabled" />
-                {inherited ? <span className="ga-hint" style={{ marginLeft: 4 }}>{t(inherited.reason)}</span> : null}
-              </label>
-              {group.op === 'appendage_chain' ? (
-                <label>
-                  <input type="checkbox" disabled={pending || busy || !st.model?.signature}
-                    checked={st.options?.extension_rig_models?.[st.model?.signature || '']?.[group.id]?.flip === true}
-                    onChange={(event) => setExtensionOption(group.id, 'flip', event.target.checked)} />
-                  {' '}{t('Flip direction')} <MotionPreviewHint field="flip" />
-                </label>
-              ) : null}
-              {st.motion_defaults?.[group.id] ? <ExtensionMotionDraft
-                key={`${character}:${st.model?.signature || st.signature || ''}:${group.id}`}
-                controls={group.controls}
-                defaults={st.motion_defaults[group.id] as unknown as Physics}
-                overrides={st.options?.extension_motion?.[group.id] ?? {}}
-                disabled={pending || busy || rigless}
-                onSave={values => setExtensionMotion(group.id, values)} /> : null}
-            </div>
-            )
-          })}
-          <div className="ga-ext-row">
-            {model?.format === 'glb' && mixamo ? (
-              <button type="button" className="ga-btn ga-btn-sm" disabled={pending || !canMeasure}
-                onClick={rebuildExtensions}>{t('Rebuild extension bones')}</button>
-            ) : null}
-            <span className="ga-hint">{t('Enabled and flip are saved for this model; they take effect after rebuilding its extension bones.')}</span>
-          </div>
-        </fieldset>
-      ) : <div className="ga-hint">{t('No extension bones on this model.')}</div>}
-  </>
+  if (st.pipeline) {
+    return (
+      <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 8 }}>
+        <span className="ga-hint">{t('Set on the base body — the outfit models take its extension bones.')}</span>
+        {onOpenBaseBody ? (
+          <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>{t('Open Base body tab')}</button>
+        ) : null}
+      </div>
+    )
+  }
+  const signature = st.model?.signature || ''
+  return (
+    <ExtensionBonesBox groups={st.extension_groups ?? []} result={extensionResult} tier={viewTier}
+      signature={signature} switches={st.options?.extension_rig_models?.[signature]}
+      inherited={st.extension_inherited} motionDefaults={st.motion_defaults}
+      motionOverrides={st.options?.extension_motion} disabled={pending || busy} rigless={rigless}
+      draftKey={`${character}:${signature || st.signature || ''}`}
+      onSwitch={(id, key, value) => { void setExtensionOption(id, key, value) }}
+      onMotion={(id, values) => setExtensionMotion(id, values)}
+      rebuild={model?.format === 'glb' && mixamo ? {
+        label: t('Rebuild extension bones'), disabled: pending || !canMeasure, onClick: () => { void rebuildExtensions() },
+      } : null} />
+  )
 }
 
 export function Model3DGeneration({ character }: { character: string }) {

@@ -27,8 +27,18 @@
  * beside the preview, the base mesh repair (MeshRepairPanel, Ruling A34: status light, its settings saved on their
  * own, "Repair again" — local), the tip smoothing (TipSmoothingPanel, Ruling A43: status light with the reason,
  * "Built <time>", "Smooth again" — local; no settings of its own), the collision capsule sliders beside it too (live preview while dragging — the outfit
- * models inherit the base body's set), one panel per pair tip extension group (ExtensionTipPanel), and the
- * face/rig actions under it (ModelFaceActions); the Settings section closes the tab.
+ * models inherit the base body's set), one panel per pair tip extension group (ExtensionTipPanel) and the base
+ * model's "Extension bones" box (ExtensionBonesBox, Ruling A45) side by side in two equal columns — the box takes
+ * the second column of the first row, beside the first tip panel —, and the face/rig actions under it
+ * (ModelFaceActions); the Settings section closes the tab.
+ *
+ * The viewer shows the extension bones (Ruling A45): it plays the base model's motion (`plain_body.extension.motion`,
+ * no clothing — the base is bare) with the Bounce / Weight drafts of the box live, so dragging the figure tilts it
+ * and the bones hang under gravity (Ruling A41); its toggles (Secondary motion, Extension bones, Collision capsules,
+ * Extension collision) switch the overlays. A Full / Distance switch appears once the distance mesh exists. The
+ * box's switches are saved for the base model (POST …/model3d/options {signature, extension_rig}) and make the
+ * extension rebuild due — Run all or its Rebuild (POST …/model3d/extension-tip/apply, local) builds them; its
+ * motion values are saved character-wide (POST …/model3d/extension-motion) and act at once.
  *
  * A new base model (Run all, Regenerate, a face or rig action) starts the automatic Build when "Build
  * automatically" is on (`garments.after_base_model` → body change), so those say "then Build runs
@@ -60,6 +70,9 @@ import { ExtensionTipPanel } from './ExtensionTipPanel'
 import type { TipDots } from './ExtensionTipPanel'
 import { MeshRepairPanel } from './MeshRepairPanel'
 import { TipSmoothingPanel } from './TipSmoothingPanel'
+import { ExtensionBonesBox } from './ExtensionBonesBox'
+import { previewMotionSliders } from './motionFieldPreview'
+import type { Physics } from '../../lib/motionDraft'
 import { ModelFaceActions } from './ModelFaceActions'
 import { FaceSettings } from './FaceSettings'
 import { FieldSet } from './FieldSet'
@@ -69,7 +82,8 @@ import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
 import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, singleAction, staleBaseNote } from './figureModel'
 import type { ModelFollowup } from './figureModel'
-import { RUN_ALL_STATUS, faceDueLine, runAllButton, runAllStep, runAllWhat } from './baseBodyModel'
+import { RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, faceDueLine, runAllButton, runAllStep,
+  runAllWhat } from './baseBodyModel'
 import type { BaseRunAll } from './baseBodyModel'
 
 const TILE_HEIGHT = 128
@@ -287,6 +301,12 @@ export function FieldBaseBody({ character, onOpenFigure }: {
     })
   }, [])
   const surfacePoints = useMemo(() => Object.values(tipDots).flat(), [tipDots])
+  /** Which tier the viewer shows — a view state, never sent anywhere. */
+  const [viewTier, setViewTier] = useState<'full' | 'low'>('full')
+  /** The box's Bounce / Weight drafts per group while a slider moves, keyed to the base signature. */
+  const [sliderDrafts, setSliderDrafts] = useState<{ signature: string; groups: Record<string, Physics> }>(
+    { signature: '', groups: {} })
+  const [extPosting, setExtPosting] = useState(false)
 
   // A model run (face, rig) ended: re-read the base body (new model URL,
   // steps, face cleanup state).
@@ -342,6 +362,79 @@ export function FieldBaseBody({ character, onOpenFigure }: {
     startPoll(800)
   }, [pollStatus, startPoll])
 
+  // The Extension bones box (Ruling A45) on the base model.
+  const extSignature = info?.signature || ''
+  const extGroups = info?.extension?.groups
+  const extSwitches = st?.options?.extension_rig_models?.[extSignature]
+  const extMotion = st?.options?.extension_motion
+  /** Save one switch of the base model (rule R3: nothing is rebuilt — the poll then reports the rebuild due). */
+  const saveExtSwitch = useCallback(async (id: string, key: 'enabled' | 'flip', value: boolean) => {
+    if (!extSignature || extPosting) return
+    setExtPosting(true)
+    try {
+      await apiPost(`/characters/${enc}/model3d/options`, { signature: extSignature,
+        extension_rig: { ...extSwitches, [id]: { ...extSwitches?.[id], [key]: value } } })
+      toast(t('Saved'))
+      await reloadAll()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally { setExtPosting(false) }
+  }, [enc, extPosting, extSignature, extSwitches, reloadAll, t, toast])
+  /** Save a group's motion values character-wide; `slidersOnly` merges the Bounce / Weight pair into the rest. */
+  const saveExtMotion = useCallback(async (id: string, values?: Physics, slidersOnly = false) => {
+    setExtPosting(true)
+    try {
+      const overrides = structuredClone(extMotion ?? {})
+      if (slidersOnly) overrides[id] = { ...overrides[id], ...values }
+      else if (values === undefined || !Object.keys(values).length) delete overrides[id]
+      else overrides[id] = values
+      for (const group of extGroups ?? []) {
+        if (group.controls != null && overrides[group.id]) {
+          overrides[group.id] = Object.fromEntries(Object.entries(overrides[group.id])
+            .filter(([key]) => group.controls!.includes(key)))
+        }
+      }
+      await apiPost(`/characters/${enc}/model3d/extension-motion`, { extension_motion: overrides })
+      toast(t('Saved'))
+      await reloadAll()
+      if (slidersOnly) setSliderDrafts((previous) => {
+        const groups = { ...previous.groups }
+        delete groups[id]
+        return { ...previous, groups }
+      })
+      return true
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      return false
+    } finally { setExtPosting(false) }
+  }, [enc, extGroups, extMotion, reloadAll, t, toast])
+  /** Rebuild (rule R2, also when current): the base model's extension bones from the saved settings, on the CPU. */
+  const rebuildExt = useCallback(async () => {
+    if (!extSignature) return
+    setExtPosting(true)
+    try {
+      await apiPost(`/characters/${enc}/model3d/extension-tip/apply`, { signature: extSignature })
+      startPoll(800)
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally { setExtPosting(false) }
+  }, [enc, extSignature, startPoll, t, toast])
+  // The viewer's motion: the base model's payload with the box's slider drafts on top (only the controls a
+  // group declares count, as on the server).
+  const extPayload = info?.extension?.motion
+  const motionDefaults = st?.motion_defaults
+  const previewMotion = useMemo(() => {
+    const overrides = { ...extMotion }
+    for (const group of extGroups ?? []) {
+      if (group.controls != null && overrides[group.id]) {
+        overrides[group.id] = Object.fromEntries(Object.entries(overrides[group.id])
+          .filter(([key]) => group.controls!.includes(key)))
+      }
+    }
+    return previewMotionSliders(extPayload, motionDefaults, overrides,
+      sliderDrafts.signature === extSignature ? sliderDrafts.groups : {})
+  }, [extGroups, extMotion, extPayload, extSignature, motionDefaults, sliderDrafts])
+
   const viewLabel = (view: BaseView) =>
     view === 'front' ? t('Front view') : view === 'back' ? t('Back view') : view === 'left' ? t('Left view') : t('Right view')
 
@@ -361,8 +454,33 @@ export function FieldBaseBody({ character, onOpenFigure }: {
   const tipPanels = model?.url && ready ? info.extension_tips ?? [] : []
   const meshRepair = model?.url && ready ? info.mesh_repair ?? null : null
   const tipSmoothing = model?.url && ready ? info.tip_smoothing ?? null : null
+  const extension = model?.url && ready ? info.extension ?? null : null
+  const extBusy = modelBusy || extPosting || !!extension?.running
+  // The Extension bones box (Ruling A45): the base model's own switches; a pair tip group's Enabled is its tip
+  // panel's (the same switch), so the box leaves it there.
+  const extensionBox = extension ? (
+    <ExtensionBonesBox legend={t('Extension bones')} groups={extension.groups}
+      result={extension.result?.per_tier?.[viewTier] || extension.result} tier={viewTier}
+      signature={info.signature} switches={st?.options?.extension_rig_models?.[info.signature]}
+      switchedElsewhere={new Set(tipPanels.map((panel) => panel.id))}
+      motionDefaults={st?.motion_defaults} motionOverrides={st?.options?.extension_motion}
+      disabled={extBusy || !st} rigless={false} draftKey={`${character}:${info.signature}`}
+      onSwitch={(id, key, value) => { void saveExtSwitch(id, key, value) }}
+      onMotion={(id, values) => saveExtMotion(id, values)}
+      sliders={{
+        onPreview: (id, values) => setSliderDrafts((previous) => ({ signature: info.signature,
+          groups: { ...(previous.signature === info.signature ? previous.groups : {}), [id]: values } })),
+        onSave: (id, values) => saveExtMotion(id, values, true),
+      }}
+      note={extension.running ? t('Rebuilding…') : extension.due ? t(TIP_DUE_NOTE) : undefined}
+      rebuild={{
+        label: t(TIP_REBUILD_LABEL), primary: extension.due, disabled: extBusy,
+        title: t('Rebuilds the extension bones of the base model from the saved settings, also when they are built already.'),
+        onClick: () => { void rebuildExt() },
+      }} />
+  ) : null
   const asideTools = model?.url && ready && (model.collision !== undefined || tipPanels.length || meshRepair
-    || tipSmoothing) ? (
+    || tipSmoothing || extensionBox) ? (
     <>
       {/* The base mesh repair (Ruling A34): status light, settings saved on their own, Repair again (local). */}
       {meshRepair ? (
@@ -380,13 +498,24 @@ export function FieldBaseBody({ character, onOpenFigure }: {
           scales={info.collision_scales} disabled={modelBusy}
           onPreview={setCollisionPreview} onSaved={reloadAll} />
       ) : null}
-      {/* Pair tip groups: position, mirror and colour disc; the dots on the
-          model follow the sliders. */}
-      {tipPanels.map((panel) => (
-        <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
-          panel={panel} disabled={modelBusy} onPreview={onTipPreview}
-          onStarted={() => startPoll(800)} />
-      ))}
+      {/* Pair tip groups (position, mirror and colour disc; the dots on the model follow the sliders) and the
+          Extension bones box in two equal columns, top-aligned (Ruling A45): the box beside the first tip panel,
+          further tip panels below; one column on a narrow width. */}
+      {tipPanels.length || extensionBox ? (
+        <div className="ga-ext-grid">
+          {tipPanels.slice(0, 1).map((panel) => (
+            <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
+              panel={panel} disabled={modelBusy} onPreview={onTipPreview}
+              onStarted={() => startPoll(800)} />
+          ))}
+          {extensionBox}
+          {tipPanels.slice(1).map((panel) => (
+            <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
+              panel={panel} disabled={modelBusy} onPreview={onTipPreview}
+              onStarted={() => startPoll(800)} />
+          ))}
+        </div>
+      ) : null}
     </>
   ) : undefined
 
@@ -445,15 +574,31 @@ export function FieldBaseBody({ character, onOpenFigure }: {
         <div className="ga-basebody-model">
           {model?.url ? (
             <div className="ga-model3d-fit">
-              <Model3DViewer key={model.url} url={model.url} format="glb" height={480} sideToolbar subject="figure"
+              <Model3DViewer key={model.url} url={viewTier === 'low' && extension?.tiers?.includes('low')
+                ? `${model.url}${model.url.includes('?') ? '&' : '?'}tier=low` : model.url}
+                format="glb" height={480} sideToolbar subject="figure"
                 freshness={model.freshness} builtAt={model.created_at}
                 statusPanel={model.steps?.length ? <ModelSteps steps={model.steps} /> : undefined}
                 collision={collision} showCollision={!!collisionPreview}
+                motion={ready ? previewMotion : undefined} extensionBones
                 surfacePoints={surfacePoints} />
+              {/* Full / Distance (Ruling A45): which stored mesh the viewer and the box show; only once the
+                  distance mesh exists — asking for it here would start its build. */}
+              {extension?.tiers?.includes('low') ? (
+                <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 6 }}>
+                  <span className="ga-hint">{t('Showing')}</span>
+                  <button type="button" className={`ga-btn ga-btn-sm${viewTier === 'full' ? ' ga-btn-primary' : ''}`}
+                    aria-pressed={viewTier === 'full'} onClick={() => setViewTier('full')}>{t('Full')}</button>
+                  <button type="button" className={`ga-btn ga-btn-sm${viewTier === 'low' ? ' ga-btn-primary' : ''}`}
+                    aria-pressed={viewTier === 'low'} onClick={() => setViewTier('low')}>
+                    {t('Distance')}{extension.low_tris ? ` · ${extension.low_tris.toLocaleString()}` : ''}
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {asideTools || (st && model) ? (
-            <div className="ga-basebody-side">
+            <div className={`ga-basebody-side${tipPanels.length || extensionBox ? ' ga-basebody-side-wide' : ''}`}>
               {asideTools}
               {st && model ? (
                 <>

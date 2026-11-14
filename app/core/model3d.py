@@ -1601,6 +1601,45 @@ def _extension_groups_for(meta: Dict[str, Any], groups):
     return groups
 
 
+def model_extension_state(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
+    """The extension bones of ONE stored model, read off its own sidecar — what the Base body tab's
+    "Extension bones" box and viewer show for the base model (Ruling A45; the 3D tab reads the served outfit
+    model's off ``get_model3d_info``): ``groups`` (the declarations the model carries: ``rig_groups_for`` with
+    its own mesh variant, narrowed by ``_extension_groups_for``), ``result`` (its ``extension_rig`` record,
+    ``extension_metadata`` while none is stored, with the distance mesh's record under ``per_tier.low``),
+    ``tiers`` (``available_tiers``), ``low_tris``, ``motion`` (``motion_payload`` without the worn
+    clothing and states — the base body is shown bare), ``due`` (the saved switches differ from the ones the
+    rig was built with, ``extension_settings_changed``) and ``running`` (the background rebuild of
+    ``extension_tip.start_tip_rebuild`` runs on this model). None without a stored model; never raises."""
+    from app.core import extension_tip
+    from app.core.extension_rig import extension_metadata, motion_payload, rig_groups_for
+    from app.models.character import get_character_profile
+    try:
+        path = find_model3d(character_name, signature)
+        if path is None:
+            return None
+        meta = _read_sidecar(path)
+        profile = get_character_profile(character_name) or {}
+        groups = _extension_groups_for(meta, rig_groups_for(
+            character_name, profile=profile, mesh_variant=meta.get("mesh_variant") or ""))
+        result = meta.get("extension_rig") if isinstance(meta.get("extension_rig"), dict) else None
+        result = dict(result or extension_metadata(character_name, profile=profile, signature=signature))
+        low = tier_variant(path, LOW_TIER)
+        low_tris = None
+        if low:
+            low_meta = _read_sidecar(low)
+            low_tris = low_meta.get("tris")
+            if isinstance(low_meta.get("extension_rig"), dict):
+                result["per_tier"] = {**(result.get("per_tier") or {}), LOW_TIER: low_meta["extension_rig"]}
+        return {"groups": groups, "result": result, "tiers": available_tiers(path), "low_tris": low_tris,
+                "motion": motion_payload(character_name, profile=profile, apply_clothing=False, apply_states=False),
+                "due": bool(extension_settings_changed(character_name, path, meta)),
+                "running": extension_tip.rebuild_running(character_name) == signature}
+    except Exception:  # noqa: BLE001 — the poll never fails on the box
+        logger.exception("Extension state of %s (%s) failed", character_name, signature)
+        return None
+
+
 def _auto_covered_variant(character_name: str, path: Path, meta: Dict[str, Any], *,
                           force: bool = False) -> bool:
     """Keep ``covered/<bsig>.glb``: the base body ``path`` built once more

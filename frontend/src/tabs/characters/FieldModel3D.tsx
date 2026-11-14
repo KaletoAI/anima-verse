@@ -809,8 +809,11 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
         onPreview={setCollisionPreview} onSaved={load} />
     )
   ) : null
-  const asideTools = collisionPanel || (!rigless && motionToolbar?.some(Boolean))
-    ? <>{collisionPanel}{rigless ? null : motionToolbar}</> : undefined
+  // On the base-body pipeline the Bounce / Weight sliders sit in the Base body tab's Extension bones box
+  // (Ruling A45); the preview here plays the saved values on the outfit model.
+  const sliderTools = rigless || pipeline ? null : motionToolbar
+  const asideTools = collisionPanel || sliderTools?.some(Boolean)
+    ? <>{collisionPanel}{sliderTools}</> : undefined
 
   const fallback = pipeline?.fallback || null
   const buildBlocked = pending ? t('Locked: a 3D model job is running for this character')

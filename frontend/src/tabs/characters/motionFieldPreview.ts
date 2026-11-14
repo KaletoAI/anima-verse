@@ -19,7 +19,7 @@ export function previewHint(field: string, t: (text: string) => string) {
     live: t('Visible in the preview immediately.'),
     motion: t('Visible in the preview while the figure moves (play a clip).'),
     tilt: t('Visible when you drag the figure to tilt it; upright the rest shape already carries gravity.'),
-    rebuild: t('Takes effect after Rebuild extension bones.'),
+    rebuild: t('Takes effect after the extension bones are rebuilt.'),
   }
   return { category, hint: ['flatten', 'spill', 'stretch', 'spread', 'flatten_floor'].includes(field)
     ? t('Drag the figure to tilt it: direct posture targets, independent of gravity and frequency.')

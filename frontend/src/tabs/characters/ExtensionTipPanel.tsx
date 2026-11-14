@@ -65,8 +65,8 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
   const [showDots, setShowDots] = useState(true)
   const limit = panel.limits.offset_max_mm
   const busy = disabled || posting || panel.running
-  // This model's own switch for the group — the same one as the 3D tab's
-  // Enabled box (extension_rig_models[sig][group].enabled). Off: no tip bone,
+  // This model's own switch for the group (extension_rig_models[sig][group].enabled) — the Extension bones box
+  // beside it leaves the group's Enabled to this panel (Ruling A45). Off: no tip bone,
   // stub or disc; the controls rest until it is on again.
   const off = panel.enabled === false
   const locked = busy || off
@@ -138,7 +138,7 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
     <fieldset className="ga-fieldset ga-model3d-group" title={help}>
       <legend>{panel.label}</legend>
       <label style={{ display: 'flex', gap: 4, alignItems: 'center' }}
-        title={t('Off builds this model without the tips of this group: no tip bone, no stub, no colour disc. The same switch as Enabled in the 3D tab.')}>
+        title={t('Off builds this model without the tips of this group: no tip bone, no stub, no colour disc.')}>
         <input type="checkbox" checked={!off} disabled={busy}
           onChange={(event) => void send({ enabled: event.target.checked })} />
         {t('Enabled')}

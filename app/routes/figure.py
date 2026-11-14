@@ -134,11 +134,13 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
     smoothing (``tip_smoothing``, ``extension_tip.tip_smoothing_state``,
     Ruling A43 — None hides the row), the tip
     panels of its ``pair_tip`` groups (``extension_tips``,
-    ``extension_tip.tip_panels``) and the Base body tab's "Run all" plan
+    ``extension_tip.tip_panels``), its extension bones (``extension``,
+    ``model3d.model_extension_state``, Ruling A45 — the "Extension bones" box
+    and the viewer's motion preview) and the Base body tab's "Run all" plan
     (``run_all``, ``figure_build.base_run_all``). Never raises."""
     from app.core import collision, extension_tip, figure_build
     from app.core.model3d import (face_cleanup_state, face_info, find_model3d, get_model3d_options,
-                                  mesh_repair_state)
+                                  mesh_repair_state, model_extension_state)
     try:
         bsig = info.get("signature") or ""
         info["collision_scales"] = get_model3d_options(character_name).get("collision_scales") or {}
@@ -148,12 +150,14 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
         info["extension_tips"] = []
         info["mesh_repair"] = None
         info["tip_smoothing"] = None
+        info["extension"] = None
         if path is not None and model.get("status") != "running":
             info["mesh_repair"] = mesh_repair_state(character_name, bsig)
             info["tip_smoothing"] = extension_tip.tip_smoothing_state(character_name, bsig)
             model.update(face_info(character_name, path))
             model["collision"] = collision.ensure(character_name, bsig)
             info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
+            info["extension"] = model_extension_state(character_name, bsig)
     except Exception:  # noqa: BLE001 — the poll never fails on the extras
         logger.exception("Plain body extras of %s failed", character_name)
     info["run_all"] = figure_build.base_run_all(character_name)

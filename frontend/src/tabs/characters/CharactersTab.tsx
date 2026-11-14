@@ -1187,7 +1187,9 @@ export function CharactersTab() {
                       ),
                       // The 3D tab's side panels share the compact model-panel text size.
                       model3d_animations: <div className="ga-model3d-side"><Model3DAnimations character={selected} /></div>,
-                      model3d_extensions: <div className="ga-model3d-side"><Model3DExtensions character={selected} /></div>,
+                      model3d_extensions: <div className="ga-model3d-side"><Model3DExtensions character={selected}
+                        onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
+                          ? () => setSubTab('tab:base_body_tab') : undefined} /></div>,
                       model3d_generation: <div className="ga-model3d-side"><Model3DGeneration character={selected} /></div>,
                       // Backend globs / LoRA lists of the image-override
                       // record, all on the Image tab: one section per
