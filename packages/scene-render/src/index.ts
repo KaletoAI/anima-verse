@@ -191,6 +191,11 @@ export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, SQUEEZE_ROUNDS
   HAIR_REGIONS, EXTENSION_REGIONS, CLOTH_EXCLUDED_REGIONS, collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
 export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry, PushOptions } from './garmentCollision'
 
+export { PARTNER_MAX, PARTNER_COLLIDE_MAX, PARTNER_PUSH_MAX_M, PARTNER_HYST_M, PARTNER_RELEASE_DEG_S,
+  PARTNER_PREFILTER_SLACK_M, bodySphere, reachSphere, selectPartners, partnerCapsules, broadPhase, nearestCapsules,
+  contactAnglePair, releasedAngle, snapshotPartner } from './partnerContact'
+export type { Sphere, ChannelNow, PartnerCapsule, PartnerSnapshot } from './partnerContact'
+
 export { STRAND_ROWS, StrandMismatch, StrandSim, bindStrands, boxDepth, decodeStrandSdf, eyePointsEntered,
   invertAffine, lerpFrame, limitSegmentAngle, maxSdfDepthMm, restInsideBox, scalpCameras, scalpExposure, SCALP_CAMERA_FOV_DEG,
   strandCapsules, strandParams, strandSdfAt, strandTargets, STRAND_LIMITS, pickStrandFigures, RootInertia,
