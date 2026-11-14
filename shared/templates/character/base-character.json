@@ -191,30 +191,12 @@
       "fields": []
     },
     {
-      "id": "model3d_animations",
-      "label": "Situations",
-      "label_de": "Situationen",
+      "id": "model3d_details",
+      "label": "Model details",
+      "label_de": "Modelldetails",
       "column": 25,
       "row": 1,
-      "special": "model3d_animations",
-      "fields": []
-    },
-    {
-      "id": "model3d_extensions",
-      "label": "Extension bones",
-      "label_de": "Zusatz-Bones",
-      "column": 25,
-      "row": 2,
-      "special": "model3d_extensions",
-      "fields": []
-    },
-    {
-      "id": "model3d_generation",
-      "label": "Generation",
-      "label_de": "Erzeugung",
-      "column": 25,
-      "row": 3,
-      "special": "model3d_generation",
+      "special": "model3d_details",
       "fields": []
     },
     {

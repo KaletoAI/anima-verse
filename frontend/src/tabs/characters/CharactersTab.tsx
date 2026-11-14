@@ -22,7 +22,7 @@ import { TemplateTab, useExpressionSets } from '@anima/player-ui'
 import { BodyEditor } from '@anima/player-ui'
 import { StatsPanel } from './StatsPanel'
 import { FieldModel3D } from './FieldModel3D'
-import { Model3DAnimations, Model3DExtensions, Model3DGeneration } from './Model3DSidePanels'
+import { Model3DDetails } from './Model3DSidePanels'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FieldFigure } from './FieldFigure'
 import { FieldBaseBody } from './FieldBaseBody'
@@ -1187,12 +1187,10 @@ export function CharactersTab() {
                           onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
                             ? () => setSubTab('tab:base_body_tab') : undefined} />
                       ),
-                      // The 3D tab's side panels share the compact model-panel text size.
-                      model3d_animations: <div className="ga-model3d-side"><Model3DAnimations character={selected} /></div>,
-                      model3d_extensions: <div className="ga-model3d-side"><Model3DExtensions character={selected}
+                      // The 3D tab's right-hand panel: Steps · Model · Situations · Extension bones · Advanced (Task UI5).
+                      model3d_details: <Model3DDetails character={selected}
                         onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
-                          ? () => setSubTab('tab:base_body_tab') : undefined} /></div>,
-                      model3d_generation: <div className="ga-model3d-side"><Model3DGeneration character={selected} /></div>,
+                          ? () => setSubTab('tab:base_body_tab') : undefined} />,
                       // Backend globs / LoRA lists of the image-override
                       // record, all on the Image tab: one section per
                       // pipeline stage, each naming its keys (`slot_keys`).

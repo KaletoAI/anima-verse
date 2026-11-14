@@ -1,4 +1,8 @@
-import { clearModel3DPanel, publishModel3DPanel, useModel3DPanel } from './model3dPanel'
+import { createPortal } from 'react-dom'
+import { clearModel3DPanel, publishModel3DPanel, useModel3DPanel, useModel3DTargets } from './model3dPanel'
+import { localAction, model3dHead } from './model3dModel'
+import { StepLight } from './StepRows'
+import { LIGHT_COLOR } from './stepStyle'
 import { previewMotionSliders } from './motionFieldPreview'
 import { ExtensionMotionSliders } from './ExtensionMotionDraft'
 import type { Physics } from '../../lib/motionDraft'
@@ -237,6 +241,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [analysisResults, setAnalysisResults] = useState<Array<{ message: string; error: boolean }>>([])
   const panel = useModel3DPanel(character)
+  const targets = useModel3DTargets(character)
   useEffect(() => () => clearModel3DPanel(character), [character])
   const [clip, setClip] = useState({ character: '', url: '' })
   const playSituation = useCallback((url: string) => setClip({ character, url }), [character])
@@ -387,24 +392,6 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
     },
     [busy, enc, startPoll, t, toast],
   )
-
-  // Base-body pipeline, a stand-in on screen: build the CURRENT outfit's model the way an outfit change does
-  // (missing dressed views first, never forced — a stored body of its key is reused, no hub job).
-  const buildCurrent = useCallback(async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      const d = await apiPost<{ status?: string }>(`/characters/${enc}/model3d/build-current`, {})
-      toast(d?.status === 'views' ? t('Rendering the current outfit\'s dressed views first, then its model…')
-        : d?.status === 'queued' ? t('Build queued — it starts when the running model job ends')
-          : d?.status === 'current' ? t('The current outfit\'s model is built already')
-            : t('Building the current outfit\'s model…'))
-      startPoll()
-    } catch (e) {
-      toast(t('Error') + ': ' + (e as Error).message, 'error')
-      setBusy(false)
-    }
-  }, [busy, enc, startPoll, t, toast])
 
   // Collects a finished gateway job as the current outfit's model. A job that
   // is still queued/running changes nothing and only reports its progress.
@@ -674,7 +661,6 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
 
   const model = st.model
   const pipeline = st.pipeline || null
-  const baseReady = pipeline?.base_model === 'ready'
   const canRerig = pipeline ? pipeline.rerig_source : !!model?.has_unrigged_source
   // A nearest match is another combination's model served as stand-in —
   // there is nothing stored for THIS outfit to replace or delete.
@@ -812,57 +798,41 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
   // On the base-body pipeline the Bounce / Weight sliders sit in the Base body tab's Extension bones box
   // (Ruling A45); the preview here plays the saved values on the outfit model.
   const sliderTools = rigless || pipeline ? null : motionToolbar
-  const asideTools = collisionPanel || sliderTools?.some(Boolean)
+  // Beside the viewer only what changes it live (off the pipeline: the collision scales and the motion sliders);
+  // on the pipeline the capsule line is a fact of the Steps sub-tab and the viewer takes the whole column.
+  const asideTools = !pipeline && (collisionPanel || sliderTools?.some(Boolean))
     ? <>{collisionPanel}{sliderTools}</> : undefined
 
   const fallback = pipeline?.fallback || null
-  const buildBlocked = pending ? t('Locked: a 3D model job is running for this character')
-    : !baseReady ? t('Generate the rigged base model first (Base body tab)') : ''
+  // A stand-in on screen: said once; the flow head's Build builds the current outfit (Ruling A13b — the old
+  // "Build current outfit" button started the same Build).
   const fallbackBanner = fallback ? (
-    <div role="status" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div className="ga-hint" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
-        {fallback.served_signature
-          ? t('Showing {served} — current outfit not built yet ({current}).')
-            .replace('{served}', fallback.served_name || fallback.served_signature)
-            .replace('{current}', fallback.current_name || fallback.current_signature)
-          : t('Current outfit not built yet ({current}).')
-            .replace('{current}', fallback.current_name || fallback.current_signature)}
-      </div>
-      <div className="ga-face-actions-row">
-        <button type="button" className="ga-btn ga-btn-sm" disabled={!!buildBlocked} onClick={buildCurrent}
-          title={buildBlocked || t('Builds the current outfit\'s model like an outfit change: missing dressed views are rendered first; a stored body of the same outfit key is reused (no hub job).')}>
-          {pending ? t('Generating…') : t('Build current outfit')}
-        </button>
-      </div>
-      {buildBlocked ? <div className="ga-hint" style={{ fontStyle: 'italic' }}>{buildBlocked}</div> : null}
+    <div className="ga-hint" role="status" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
+      {fallback.served_signature
+        ? t('Showing {served} — current outfit not built yet ({current}).')
+          .replace('{served}', fallback.served_name || fallback.served_signature)
+          .replace('{current}', fallback.current_name || fallback.current_signature)
+        : t('Current outfit not built yet ({current}).')
+          .replace('{current}', fallback.current_name || fallback.current_signature)}
     </div>
   ) : null
+  const head = model3dHead({ pending, hasModel: !!model, rigError: !!model?.rig_error,
+    standIn: !!fallback || model?.match === 'nearest',
+    stale: !!model?.stale_base || model?.freshness?.state === 'stale' }, t)
 
-  return (
-    <div className="ga-form ga-model3d-tab">
-      {fallbackBanner}
+  // The Steps sub-tab (Model3DDetails): the model's steps, one line each, the numbers on mouse-over.
+  const stepsPart = model ? (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {statusPanel}
+      {pipeline ? collisionPanel : null}
+    </div>
+  ) : <div className="ga-hint">{t('No model yet — the steps show once it is built')}</div>
+
+  // The Model sub-tab: what the file is, what was measured, and the single steps on it with their cost.
+  const modelPart = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {model ? (
         <>
-          <div ref={previewRef} className="ga-model3d-fit">
-          <Model3DViewer
-            sideToolbar
-            subject="figure"
-            height={480}
-            statusPanel={statusPanel}
-            freshness={model.freshness}
-            builtAt={model.created_at}
-            motion={rigless ? undefined : previewMotion}
-            motionToolbar={asideTools}
-            url={viewerUrl}
-            format={model.format || 'fbx'}
-            clipUrl={mixamo ? panel?.playUrl || '' : ''}
-            embeddedTakes={model.rig === 'generic'}
-            clipLoops={model.clips}
-            textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
-            collision={collisionPreview ?? model.collision}
-            showCollision={!!collisionPreview}
-          />
-          </div>
           {hasRigMetrics && model.rig_metrics ? (
             <fieldset className="ga-fieldset">
               <legend>{t('Rig metrics')}</legend>
@@ -878,70 +848,6 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
               ))}
               {model.rig_metrics.landmark_fallback?.length ? <p className="ga-hint">{t('Landmark fallback')}: {model.rig_metrics.landmark_fallback.join(', ')}</p> : null}
             </fieldset>
-          ) : null}
-          {/* Shown whenever Blender is around, not only once a distance mesh
-              exists: asking for one that is missing is what makes the server
-              build it. The button says so, and a reload has it. */}
-          {canMeasure && model.format === 'glb' && !rigless ? (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Showing')}</span>
-              <button
-                type="button"
-                className={`ga-btn ga-btn-sm${viewTier === 'full' ? ' ga-btn-primary' : ''}`}
-                aria-pressed={viewTier === 'full'}
-                onClick={() => setViewTier('full')}
-              >
-                {t('Full')}
-                {measured?.tris ? ` · ${measured.tris.toLocaleString()}` : ''}
-              </button>
-              <button
-                type="button"
-                className={`ga-btn ga-btn-sm${viewTier === 'low' ? ' ga-btn-primary' : ''}`}
-                aria-pressed={viewTier === 'low'}
-                onClick={() => setViewTier('low')}
-              >
-                {t('Distance')}
-                {model.low_tris ? ` · ${model.low_tris.toLocaleString()}` : ''}
-              </button>
-              {!hasLow ? (
-                <span className="ga-hint">
-                  {t('none built yet — asking for it starts the build, reload in a moment')}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-          <div className="ga-model3d-controls">
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span className="ga-hint">{t('Preview state')}</span>
-            <select className="ga-input" value={previewState} disabled={rigless} onChange={event => setPreviewState(event.target.value)}>
-              <option value="">{t('Current (live)')}</option>
-              <option value="none">{t('None')}</option>
-              {previewFilters.map(row => <option key={row.id} value={row.id}>{row.label || row.id}</option>)}
-            </select>
-          </label>
-          </div>
-          {/* Only a Mixamo skeleton can play the shared clips. */}
-          {rigless ? (
-            <div className="ga-hint" role="status" style={model.rig_error ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}>
-              {st.pending
-                ? t('Mesh retained — rigging is running. Showing the new mesh statically.')
-                : model.rig_error
-                  ? `${t('Mesh retained — rigging failed. Showing the new mesh statically.')}: ${model.rig_error}`
-                  : t('Mesh retained — no rig yet. Use Re-rig from mesh to animate it.')}
-            </div>
-          ) : !mixamo ? (
-            <div className="ga-hint">
-              {t('Generic rig (no standard skeleton) — Mixamo clips will not drive this model.')}
-            </div>
-          ) : null}
-          {model.stale_base ? (
-            <div className="ga-hint" role="status" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
-              {staleModelText(model.stale_reason, t)}
-            </div>
-          ) : null}
-          {model.match === 'nearest' && !fallback ? (
-            <div className="ga-hint">
-              {t('No model for the current outfit yet — showing the stored model with the most similar outfit combination until one is generated.')}
-            </div>
           ) : null}
           <div className="ga-hint">
             {model.source === 'upload' ? t('uploaded') : t('generated')}
@@ -963,8 +869,8 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
                   one, and read as the first it looks like the figure is the
                   wrong size when it is only the width. */}
               <span title={t('Raw size of the mesh as stored. The 3D client scales every figure to the character height, so this is not the size on screen.')}>
-                {`${t('measured')}: ${t('h')} ${(measured.dims_m?.[2] ?? 0).toFixed(2)} m`}
-                {` · ${t('w')} ${(measured.dims_m?.[0] ?? 0).toFixed(2)} · ${t('d')} ${(measured.dims_m?.[1] ?? 0).toFixed(2)}`}
+                {`${t('measured')}: ${t('Height')} ${(measured.dims_m?.[2] ?? 0).toFixed(2)} m`}
+                {` · ${t('Width')} ${(measured.dims_m?.[0] ?? 0).toFixed(2)} · ${t('Depth')} ${(measured.dims_m?.[1] ?? 0).toFixed(2)}`}
               </span>
               {measured.bones
                 ? ` · ${measured.bones} ${t('bones')}${measured.mixamo_bones ? ' (mixamo)' : ''}`
@@ -1021,15 +927,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             </label>
           ) : null}
         </>
-      ) : (
-        <div className="ga-hint">
-          {pending
-            ? t('Generating the 3D model — this takes a few minutes.')
-            : pipeline
-              ? t('No 3D model for this outfit yet — the Figure tab’s Build makes it from the base body.')
-              : t('No 3D model for this outfit yet — upload one or generate it from the pose render.')}
-        </div>
-      )}
+      ) : null}
       {model ? <div className="ga-hint">
         {pipeline
           ? `${t('Built from the base body')} · ${pipeline.base_signature}`
@@ -1037,120 +935,68 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
       </div> : null}
       {model?.refined && !model.refined.retexture && model.refined.reason ? <p className="ga-hint" role="status">{t('Texture re-encoding failed — the model was published without this improvement.')}: {model.refined.reason}</p> : null}
       {model?.lod_error ? <p className="ga-hint" role="status">{t('Distance mesh rebuild failed')}: {model.lod_error}</p> : null}
-      {/* Model and Inspect are a few buttons each: one row. */}
-      <div className="ga-model3d-actions-row">
-        <div role="group" aria-label={t('Model')}>
-          <div className="ga-form-section-label">{t('Model')}</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            {pipeline ? (
-              // The Figure tab's Build (Ruling A13b) — same plan, same job count, no cascade of its own.
-              <FigureBuildButton character={character} onStarted={() => startPoll()} />
-            ) : (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                disabled={pending || !st.has_input}
-                onClick={openDialog}
-                title={!st.has_input ? t('No pose render for the current outfit — generate it first') : undefined}
-              >
-                {pending ? t('Generating…') : owned ? t('Regenerate') : t('Generate')}
-              </button>
-            )}
-            {!pipeline ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                disabled={pending}
-                onClick={() => fileRef.current?.click()}
-              >
-                {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
-              </button>
-            ) : null}
-            {model ? (
-              <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file?download=true`} download>
-                {t('Download')}
-              </a>
-            ) : null}
-            {/* Delete targets the CURRENT combination's entry — a nearest
-                stand-in belongs to another combination and has none to delete. */}
-            {owned ? (
-              <button
-                type="button"
-                className="ga-btn ga-btn-sm"
-                style={{ marginInlineStart: 12 }}
-                disabled={pending}
-                onClick={remove}
-                onBlur={() => setConfirmDelete(false)}
-              >
-                {confirmDelete ? t('Really delete?') : t('Delete')}
-              </button>
-            ) : null}
-          </div>
-        </div>
-        <div role="group" aria-label={t('Inspect')}>
-          <div className="ga-form-section-label">{t('Inspect')}</div>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            {model && canMeasure ? (
-              <button type="button" className="ga-btn ga-btn-sm" disabled={pending} onClick={analyze}
-                title={`${t('Reads the real size, triangle count and bone names out of the file. Does not change the model.')} ${t('Checks the geometry for the known bake defect (garments turned into flat surfaces). Reads only — the finding is shown, nothing is changed.')}`}>
-                {t('Analyze')}
-              </button>
-            ) : null}
-          </div>
-        </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        {model ? (
+          <a className="ga-btn ga-btn-sm" href={`/characters/${enc}/model3d/file?download=true`} download>
+            {t('Download')}
+          </a>
+        ) : null}
+        {model && canMeasure ? (
+          <button type="button" className="ga-btn ga-btn-sm" disabled={pending} onClick={analyze}
+            title={`${t('Reads the real size, triangle count and bone names out of the file. Does not change the model.')} ${t('Checks the geometry for the known bake defect (garments turned into flat surfaces). Reads only — the finding is shown, nothing is changed.')}`}>
+            {localAction('Analyze', t)}
+          </button>
+        ) : null}
+        {/* Only for a GLB this outfit owns — it rewrites the stored file. */}
+        {owned && canMeasure && model?.format === 'glb' ? (
+          <button type="button" className="ga-btn ga-btn-sm" disabled={pending} onClick={retexture}
+            title={t('Re-encodes the textures to JPEG — typically 60–90 % smaller with the geometry untouched. The original is kept, and the result is only used if it still validates.')}>
+            {localAction('Shrink textures', t)}
+          </button>
+        ) : null}
+        {owned && canMeasure && model?.format === 'glb' ? (
+          <button type="button" className="ga-btn ga-btn-sm" disabled={pending} onClick={buildLod}
+            title={t('Builds a reduced copy of this mesh for viewing at a distance. The full model is untouched — the client picks whichever fits the camera distance.')}>
+            {localAction(model.tiers?.includes('low') ? 'Rebuild distance mesh' : 'Build distance mesh', t)}
+          </button>
+        ) : null}
+        {/* Delete targets the CURRENT combination's entry — a nearest
+            stand-in belongs to another combination and has none to delete. */}
+        {owned ? (
+          <button type="button" className="ga-btn ga-btn-sm" style={{ marginInlineStart: 12 }} disabled={pending}
+            onClick={remove} onBlur={() => setConfirmDelete(false)}>
+            {confirmDelete ? t('Really delete?') : t('Delete')}
+          </button>
+        ) : null}
       </div>
-      <div role="group" aria-label={t('Improve')}>
-        <div className="ga-form-section-label">{t('Improve')}</div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-          {/* Only for a GLB this outfit owns — it rewrites the stored file. */}
-          {owned && canMeasure && model?.format === 'glb' ? (
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={pending}
-              onClick={retexture}
-              title={t('Re-encodes the textures to JPEG — typically 60–90 % smaller with the geometry untouched. The original is kept, and the result is only used if it still validates.')}
-            >
-              {t('Shrink textures')}
-            </button>
-          ) : null}
-          {owned && canMeasure && model?.format === 'glb' ? (
-            <button
-              type="button"
-              className="ga-btn ga-btn-sm"
-              disabled={pending}
-              onClick={buildLod}
-              title={t('Builds a reduced copy of this mesh for viewing at a distance. The full model is untouched — the client picks whichever fits the camera distance.')}
-            >
-              {model.tiers?.includes('low') ? t('Rebuild distance mesh') : t('Build distance mesh')}
-            </button>
-          ) : null}
-        </div>
         {/* Face cleanup, face retexture and the rig act on the model with
-            the retained source: off the pipeline this outfit's model, on it
-            the base body — whose actions live in the Base body tab. */}
-        {pipeline ? (
-          <div className="ga-face-actions-row">
-            <span className="ga-hint">{t('Face cleanup, face retexture, re-rig and collision capsules act on the base body.')}</span>
-            {onOpenBaseBody ? (
-              <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>{t('Open Base body tab')}</button>
-            ) : null}
-          </div>
-        ) : (
-          <ModelFaceActions character={character} st={st} face={model ?? null}
-            signature={model?.signature || st.signature || ''} cleanup={st.face_cleanup}
-            hasModel={!!model} canRerig={canRerig}
-            rerigBlocked={t('No retained unrigged mesh source. Generate a new model to enable re-rigging.')}
-            onReload={load} onStarted={startPoll} />
-        )}
-      </div>
+          the retained source: off the pipeline this outfit's model, on it
+          the base body — whose actions live in the Base body tab. */}
+      {pipeline ? (
+        <div className="ga-face-actions-row">
+          <span className="ga-hint">{t('Face cleanup, face retexture, re-rig and collision capsules act on the base body.')}</span>
+          {onOpenBaseBody ? (
+            <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>{t('Open Base body tab')}</button>
+          ) : null}
+        </div>
+      ) : (
+        <ModelFaceActions character={character} st={st} face={model ?? null}
+          signature={model?.signature || st.signature || ''} cleanup={st.face_cleanup}
+          hasModel={!!model} canRerig={canRerig}
+          rerigBlocked={t('No retained unrigged mesh source. Generate a new model to enable re-rigging.')}
+          onReload={load} onStarted={startPoll} />
+      )}
       <div aria-live="polite">
         {analysisResults.map((result, index) => <div key={index} className="ga-hint" role="status"
           style={result.error ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}>{result.message}</div>)}
       </div>
-      <details>
-        <summary className="ga-form-section-label" style={{ cursor: 'pointer' }}>{t('Advanced')}</summary>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
+    </div>
+  )
+
+  // The Advanced sub-tab: the rare actions.
+  const advancedPart = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', }}>
           {/* A gateway mesh job is an img2mesh result — the pipeline builds
               its outfit models from the base body instead. */}
           {!pipeline ? (
@@ -1231,7 +1077,132 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
           ) : null}
         </div>
       ) : null}
-      </details>
+    </div>
+  )
+
+  return (
+    <div className="ga-form ga-model3d-tab">
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <StepLight light={head.light} />
+        <strong style={{ color: LIGHT_COLOR[head.light] }}>{head.words}</strong>
+        {pipeline ? (
+          // The Figure tab's Build (Ruling A13b) — same plan, same job count, no cascade of its own.
+          <FigureBuildButton character={character} primary onStarted={() => startPoll()} />
+        ) : (
+          <>
+            <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={pending || !st.has_input}
+              onClick={openDialog}
+              title={!st.has_input ? t('No pose render for the current outfit — generate it first')
+                : t('The next dialog picks the mesh backend and shows its cost')}>
+              {pending ? t('Generating…') : owned ? t('Regenerate…') : t('Generate…')}
+            </button>
+            <button type="button" className="ga-btn ga-btn-sm" disabled={pending} onClick={() => fileRef.current?.click()}>
+              {owned ? t('Upload (replace)') : t('Upload GLB/FBX')}
+            </button>
+          </>
+        )}
+      </div>
+      {fallbackBanner}
+      {model ? (
+        <>
+          <div ref={previewRef} className="ga-model3d-fit">
+          <Model3DViewer
+            sideToolbar={!!asideTools}
+            subject="figure"
+            height={500}
+            freshness={model.freshness}
+            builtAt={model.created_at}
+            motion={rigless ? undefined : previewMotion}
+            motionToolbar={asideTools}
+            url={viewerUrl}
+            format={model.format || 'fbx'}
+            clipUrl={mixamo ? panel?.playUrl || '' : ''}
+            embeddedTakes={model.rig === 'generic'}
+            clipLoops={model.clips}
+            textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
+            collision={collisionPreview ?? model.collision}
+            showCollision={!!collisionPreview}
+          />
+          </div>
+          {/* The viewer's own controls: which mesh it shows and the preview state — one row. */}
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+          {canMeasure && model.format === 'glb' && !rigless ? (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <span className="ga-hint" style={{ whiteSpace: 'nowrap' }}>{t('Showing')}</span>
+              <button
+                type="button"
+                className={`ga-btn ga-btn-sm${viewTier === 'full' ? ' ga-btn-primary' : ''}`}
+                aria-pressed={viewTier === 'full'}
+                onClick={() => setViewTier('full')}
+              >
+                {t('Full')}
+                {measured?.tris ? ` · ${measured.tris.toLocaleString()}` : ''}
+              </button>
+              <button
+                type="button"
+                className={`ga-btn ga-btn-sm${viewTier === 'low' ? ' ga-btn-primary' : ''}`}
+                aria-pressed={viewTier === 'low'}
+                onClick={() => setViewTier('low')}
+              >
+                {t('Distance')}
+                {model.low_tris ? ` · ${model.low_tris.toLocaleString()}` : ''}
+              </button>
+              {!hasLow ? (
+                <span className="ga-hint">
+                  {t('none built yet — asking for it starts the build, reload in a moment')}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="ga-model3d-controls" style={{ flex: '1 1 220px' }}>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span className="ga-hint">{t('Preview state')}</span>
+            <select className="ga-input" value={previewState} disabled={rigless} onChange={event => setPreviewState(event.target.value)}>
+              <option value="">{t('Current (live)')}</option>
+              <option value="none">{t('None')}</option>
+              {previewFilters.map(row => <option key={row.id} value={row.id}>{row.label || row.id}</option>)}
+            </select>
+          </label>
+          </div>
+          </div>
+          {/* Only a Mixamo skeleton can play the shared clips. */}
+          {rigless ? (
+            <div className="ga-hint" role="status" style={model.rig_error ? { color: 'var(--ga-warn, #c77d0a)' } : undefined}>
+              {st.pending
+                ? t('Mesh retained — rigging is running. Showing the new mesh statically.')
+                : model.rig_error
+                  ? `${t('Mesh retained — rigging failed. Showing the new mesh statically.')}: ${model.rig_error}`
+                  : t('Mesh retained — no rig yet. Use Re-rig from mesh to animate it.')}
+            </div>
+          ) : !mixamo ? (
+            <div className="ga-hint">
+              {t('Generic rig (no standard skeleton) — Mixamo clips will not drive this model.')}
+            </div>
+          ) : null}
+          {model.stale_base ? (
+            <div className="ga-hint" role="status" style={{ color: 'var(--ga-warn, #c77d0a)' }}>
+              {staleModelText(model.stale_reason, t)}
+            </div>
+          ) : null}
+          {model.match === 'nearest' && !fallback ? (
+            <div className="ga-hint">
+              {t('No model for the current outfit yet — showing the stored model with the most similar outfit combination until one is generated.')}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className="ga-hint" style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: 12, textAlign: 'center' }}>
+          {pending
+            ? t('Generating the 3D model — this takes a few minutes.')
+            : pipeline
+              ? t('No 3D model for this outfit yet — the Figure tab’s Build makes it from the base body.')
+              : t('No 3D model for this outfit yet — upload one or generate it from the pose render.')}
+        </div>
+      )}
+      {/* The details sit in the panel beside (Model3DDetails); inline only if this tab has no such panel. */}
+      {targets ? createPortal(stepsPart, targets.steps) : stepsPart}
+      {targets ? createPortal(modelPart, targets.model) : modelPart}
+      {targets ? createPortal(advancedPart, targets.advanced) : advancedPart}
       <input
         ref={fileRef}
         type="file"

@@ -144,9 +144,11 @@ export function CollisionScales({ character, collision, scales, disabled, onPrev
           title={changed ? t('Unsaved changes') : undefined}
           onClick={() => void save(draft)}>{t('Save')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !changed}
-          onClick={() => setDraft(stored)}>{t('Revert')}</button>
+          title={t('Back to the saved values')}
+          onClick={() => setDraft(stored)}>{t('Discard changes')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={busy || same(stored, DEFAULTS)}
-          onClick={() => void save(DEFAULTS)}>{t('Reset')}</button>
+          title={t('Saves ×1.00 for every region')}
+          onClick={() => void save(DEFAULTS)}>{t('Reset to default')}</button>
       </div>
     </fieldset>
   )
