@@ -685,6 +685,40 @@ def base_step_in_flight(character_name: str) -> str:
     return ""
 
 
+#: The Build's steps that work on the plain (base) body itself (Ruling A55): only these count as base work in the
+#: Base body tab. Every other step builds the outfit on top of the base body and leaves it as it is.
+BASE_BUILD_STEPS = frozenset({"plain_body", "base_repair", "tip_smoothing"})
+#: The Base body tab's neutral line while only work on top of the base body runs (Ruling A55).
+OUTFIT_BUILDING = "An outfit model is building — the base body is not affected"
+
+
+def base_activity(character_name: str) -> Dict[str, str]:
+    """What of the character's 3D work runs now, split by whether it touches the base body (Ruling A55 — the Base
+    body tab's status follows only its own steps): ``base`` names the base-body work in flight — a Build at one of
+    ``BASE_BUILD_STEPS`` (that step's label) or ``base_step_in_flight`` (Run all, a view, the base model, a named
+    holder of the generation guard, a tip rebuild) — "" when none; ``other`` is ``OUTFIT_BUILDING`` while, with no
+    base work, an outfit model or garment is built (a Build at any other step, the outfit model's own run, an
+    unnamed holder of the generation guard), else "". A Build that has not reached its first step yet is neither.
+    Read-only, never raises."""
+    out = {"base": "", "other": ""}
+    try:
+        with _lock:
+            step = dict((_current.get(character_name) or {}).get("step") or {}) if character_name in _active else {}
+        name = str(step.get("name") or "")
+        if name in BASE_BUILD_STEPS:
+            out["base"] = str(step.get("label") or name)
+            return out
+        out["base"] = base_step_in_flight(character_name)
+        if out["base"]:
+            return out
+        from app.core import base_body, model3d
+        if name or base_body.outfit_running(character_name) or model3d.generation_running(character_name):
+            out["other"] = OUTFIT_BUILDING
+    except Exception:  # noqa: BLE001 — a label, never a failure of the poll
+        logger.debug("Base activity of %s not read", character_name, exc_info=True)
+    return out
+
+
 def _defer(character_name: str, reason: str, step: str) -> Dict[str, Any]:
     """An automatic start while a base step is in flight (Ruling A26 a): a deferral, not a failure (A22) — ONE
     waiter per character starts the automatic Build once no base step is in flight any more (it re-plans then;

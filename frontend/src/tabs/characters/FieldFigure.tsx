@@ -411,7 +411,7 @@ function BodySection({ data, character, onChanged, onOpenBaseBody }: {
   const names = (state: string) => data.worn.filter((r) => r.mode === state && r.state !== 'left_out').map((r) => r.name)
   const shapeNames = [...(data.hair?.mode === 'body' ? [t('hair')] : []), ...names('in_body')]
   const plainNote = data.changes.find((c) => c.key === 'body')?.note
-  const rows = bodyRows(data.body, shapeNames, names('painted'), t)
+  const rows = bodyRows(data.body, shapeNames, names('painted'), t, data.build.running ? data.build.step?.name ?? null : null)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {rows.map((r) => (

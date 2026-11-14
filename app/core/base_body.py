@@ -1412,6 +1412,13 @@ def _outfit_start(character_name: str, signature: str, stage: str) -> None:
         _outfit_running[(character_name, stage)] = signature
 
 
+def outfit_running(character_name: str) -> bool:
+    """Whether a stage of an outfit model of the character (its dressed views, its body shape or its model — any
+    signature) runs now. Never base-body work (Ruling A55, ``figure_build.base_activity``)."""
+    with _status_lock:
+        return any(name == character_name for name, _stage in _outfit_running)
+
+
 def _outfit_end(character_name: str, signature: str, stage: str, error: Optional[str], *,
                 interrupted: bool = False) -> None:
     """End a stage: a failure is stored for the signature; a success clears

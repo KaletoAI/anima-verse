@@ -420,13 +420,14 @@ export function baseModelRow(m: BaseModelInput | null | undefined, t: Tr = EN): 
 }
 
 /**
- * The flow head: Run all or a Build running, or a row running → blue "Building now"; a red row or Run all's last
- * error → red "A step failed"; Run all plans steps → yellow "1 step due" / "{n} steps due" (its steps; else the
- * yellow rows); else green "Up to date".
+ * The flow head: Run all running, base-body work in flight (`baseBusy` = `plain_body.activity.base` — a Build at a
+ * base step, a view, the base model, …; never an outfit model's build, Ruling A55) or a row running → blue "Building
+ * now"; a red row or Run all's last error → red "A step failed"; Run all plans steps → yellow "1 step due" / "{n}
+ * steps due" (its steps; else the yellow rows); else green "Up to date".
  */
-export function baseHead(r: BaseRunAll | null | undefined, lights: readonly BaseLight[], buildRunning: boolean,
+export function baseHead(r: BaseRunAll | null | undefined, lights: readonly BaseLight[], baseBusy: boolean,
   t: Tr = EN): { light: BaseLight; words: string } {
-  if (r?.running || buildRunning || lights.includes('blue')) return { light: 'blue', words: t('Building now') }
+  if (r?.running || baseBusy || lights.includes('blue')) return { light: 'blue', words: t('Building now') }
   if (lights.includes('red') || (r?.last?.error && !r.kind)) return { light: 'red', words: t('A step failed') }
   const due = r?.kind ? r.steps.length || 1 : lights.filter((l) => l === 'yellow').length
   if (due === 1) return { light: 'yellow', words: t('1 step due') }

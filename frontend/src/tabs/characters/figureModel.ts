@@ -593,11 +593,26 @@ export function hairState(hair: FigureHairRow, t: Tr = EN): { light: Light; text
   }
 }
 
+/** Which body row a running Build's step builds (Ruling A55, the reverse check: a row never reads "Current" while
+ *  the Build works on it). The other steps are the worn pieces' rows. */
+export const BUILD_STEP_BODY_ROW: Record<string, 'plain' | 'shape' | 'texture'> = {
+  plain_body: 'plain', base_repair: 'plain', tip_smoothing: 'plain', interim: 'shape', shape: 'shape', texture: 'texture',
+}
+
 /** The body the pieces are worn on as three steps (checklist 8): the plain body (its flow is the Base body tab),
  *  the body shape (what is in the body, meshed by the Build) and the texture (what is painted, painted by the
- *  Build). */
+ *  Build). `buildStep` = the running Build's step name (`build.step.name`, null when none runs): the row it builds
+ *  reads blue "Building now" (`BUILD_STEP_BODY_ROW`). */
 export function bodyRows(body: NonNullable<FigurePayload['body']>, shapeNames: string[], textureNames: string[],
-  t: Tr = EN): Array<{ key: 'plain' | 'shape' | 'texture'; name: string; light: Light; state: string; reason: string }> {
+  t: Tr = EN, buildStep: string | null = null): Array<{ key: 'plain' | 'shape' | 'texture'; name: string; light: Light;
+    state: string; reason: string }> {
+  const building = buildStep ? BUILD_STEP_BODY_ROW[buildStep] : undefined
+  return bodyRowsAtRest(body, shapeNames, textureNames, t)
+    .map((row) => row.key === building ? { ...row, light: 'blue' as Light, state: t('Building now') } : row)
+}
+
+function bodyRowsAtRest(body: NonNullable<FigurePayload['body']>, shapeNames: string[], textureNames: string[],
+  t: Tr): Array<{ key: 'plain' | 'shape' | 'texture'; name: string; light: Light; state: string; reason: string }> {
   const plain = body.plain.state
   const names = (list: string[]) => list.join(', ')
   return [

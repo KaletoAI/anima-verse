@@ -23,10 +23,11 @@
  * - R4 only the current flow: no T-pose path, no outfit-body wording.
  *
  * Layout (Task UI5, the user's tab checklist): the flow head across the top — the light with its words (`baseHead`:
- * "Up to date", "N steps due", "A step failed", "Building now"), Run all with its count, the link to the Figure tab and
- * Run all's plan in one line (`runAllPlanLine`, what it does on mouse-over). Then two columns: the base model's 3D
- * preview ("Built <time>" in its corner, Full / Distance under it) on the left; on the right one panel with sub-tabs
- * instead of scrolling —
+ * "Up to date", "N steps due", "A step failed", "Building now" — only for base-body work: an outfit model or garment
+ * built meanwhile is one neutral line under it, `plain_body.activity.other`, Ruling A55), Run all with its count, the
+ * link to the Figure tab and Run all's plan in one line (`runAllPlanLine`, what it does on mouse-over). Then two
+ * columns: the base model's 3D preview ("Built <time>" in its corner, Full / Distance under it) on the left; on the
+ * right one panel with sub-tabs instead of scrolling —
  * - Views (4): the four views two by two, small (a click enlarges one), each with its light and state in the label
  *   (`baseViewRow`), its Regenerate with the cost under it, the skin detail step under the front;
  * - Base model: its step row (`baseModelRow`) with "Regenerate the plain body's mesh — N hub jobs", the model's steps
@@ -87,7 +88,7 @@ import { FaceSettings } from './FaceSettings'
 import { useModel3DStatus } from './useModel3DStatus'
 import type { CollisionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
-import type { BaseBodyInfo, BaseView } from './useBaseBody'
+import type { BaseActivity, BaseBodyInfo, BaseView } from './useBaseBody'
 import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, singleAction, staleBaseNote } from './figureModel'
 import type { ModelFollowup } from './figureModel'
 import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
@@ -211,20 +212,23 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
 
 /** The tab's head (Task UI5): the light with its words, "Run all" (rule R1) with its count, its plan in one line,
  *  why it is disabled, its last error; the link to the Figure tab. */
-function RunAllHeader({ runAll, lights, busy, buildRunning, onRun, onOpenFigure }: {
+function RunAllHeader({ runAll, lights, busy, buildRunning, activity, onRun, onOpenFigure }: {
   runAll: BaseRunAll | null | undefined
   /** The step rows' lights (the views, the model). */
   lights: BaseLight[]
   busy: boolean
   /** A Build of the character runs: Run all waits for it (the server answers 409). */
   buildRunning: boolean
+  /** `plain_body.activity` (Ruling A55): only base-body work turns the head blue; an outfit build is one neutral
+   *  line. */
+  activity: BaseActivity | null | undefined
   onRun: () => void
   onOpenFigure?: () => void
 }) {
   const { t } = useI18n()
   const button = runAllButton(runAll, t)
   const disabled = busy || button.disabled || buildRunning
-  const head = baseHead(runAll, lights, buildRunning, t)
+  const head = baseHead(runAll, lights, !!activity?.base, t)
   const what = runAll ? runAllWhat(runAll.kind, t, runAll.face_due) : ''
   const plan = runAllPlanLine(runAll, t)
   const lastError = runAll && !runAll.running && runAll.last?.error ? runAll.last.error : ''
@@ -243,8 +247,12 @@ function RunAllHeader({ runAll, lights, busy, buildRunning, onRun, onOpenFigure 
         ) : null}
       </div>
       {plan ? <div className="ga-hint" style={{ fontSize: 12 }} title={what}>{t('Run all runs')}: {plan}</div> : null}
-      {buildRunning ? <div className="ga-hint" style={{ fontSize: 12 }}>{t('A Build runs for this character — Run all waits until it has ended.')}</div>
+      {/* A running Build disables Run all; the line says so only when Run all has something to run. */}
+      {buildRunning && !button.disabled ? <div className="ga-hint" style={{ fontSize: 12 }}>{t('A Build runs for this character — Run all waits until it has ended.')}</div>
         : button.reason ? <div className="ga-hint" style={{ fontSize: 12 }}>{button.reason}</div> : null}
+      {!activity?.base && activity?.other ? (
+        <div className="ga-hint" role="status" style={{ fontSize: 12 }}>{t(activity.other)}</div>
+      ) : null}
       {lastError ? <div className="ga-hint" style={{ ...ERROR_STYLE, fontSize: 12 }}>{t('Run all')}: {lastError}</div> : null}
     </div>
   )
@@ -506,8 +514,9 @@ export function FieldBaseBody({ character, onOpenFigure }: {
   return (
     <div>
     <RunAllHeader runAll={info.run_all} lights={lights} busy={posting || viewsRunning(info) || modelBusy}
-      buildRunning={!!figure?.build.running} onRun={() => { void runAll() }} onOpenFigure={onOpenFigure} />
-    {figure?.build.running ? <div className="ga-hint">{t(BUILD_RUNNING_NOTE)}</div> : null}
+      buildRunning={!!figure?.build.running} activity={info.activity} onRun={() => { void runAll() }}
+      onOpenFigure={onOpenFigure} />
+    {figure?.build.running && info.activity?.base ? <div className="ga-hint">{t(BUILD_RUNNING_NOTE)}</div> : null}
     <div className="ga-split ga-split-views ga-split-figure">
       <div className="ga-split-col">
         {model?.url ? (

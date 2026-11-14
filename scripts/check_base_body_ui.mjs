@@ -83,9 +83,10 @@
  *     older data"; current with warning W → yellow "Kept with a warning", "W"; current → green "Current".
  *     baseModelRow: none → yellow "Not built yet"; running → blue "Building now"; failed "boom" → red "Failed", "boom";
  *     unrigged → yellow "Static mesh without a rig"; ready but stale R → yellow "Outdated", "R"; ready → green "Ready".
- *     baseHead(runAll, lights, buildRunning): Run all running → blue "Building now"; a Build running → blue; a red
- *     light → red "A step failed"; nothing planned but the last Run all failed → red; plan of 3 steps → yellow "3 steps
- *     due" (Run all's steps, not the lights); a plan with an empty step list → "1 step due"; no plan, one yellow light
+ *     baseHead(runAll, lights, baseBusy): Run all running → blue "Building now"; base-body work in flight (the third
+ *     argument, `plain_body.activity.base` — never an outfit build, Ruling A55 / smoke_base_status_isolated.py) → blue;
+ *     a red light → red "A step failed"; nothing planned but the last Run all failed → red; plan of 3 steps → yellow
+ *     "3 steps due" (Run all's steps, not the lights); a plan with an empty step list → "1 step due"; no plan, one yellow light
  *     → "1 step due"; nothing → green "Up to date".
  *     runAllPlanLine([view back 1, mesh 1, cleanup 0, face 2, rig null]) → "Back view (1) · Mesh (1) · Face cleanup
  *     (local) · Face retexture (2) · Rig (cost unknown)"; no plan → "".

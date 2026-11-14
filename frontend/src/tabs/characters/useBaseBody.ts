@@ -198,8 +198,15 @@ export interface BaseBodyInfo {
   skin?: BaseSkinInfo | null
   /** The Base body tab's "Run all" plan (`figure_build.base_run_all`). */
   run_all?: BaseRunAll | null
+  /** What of the character's 3D work runs now (`figure_build.base_activity`, Ruling A55): `base` names base-body
+   *  work in flight (a Build at a base step, Run all, a view, the base model, …), `other` is the server's neutral
+   *  line while only an outfit model or garment is built — it never touches the base body's status. */
+  activity?: BaseActivity | null
   now?: string
 }
+
+/** `plain_body.activity` (Ruling A55). */
+export interface BaseActivity { base: string; other: string }
 
 const POLL_MS = 3000
 const POLL_SLOW_MS = 15000
@@ -219,7 +226,7 @@ export const tipsRunning = (d: BaseBodyInfo | null | undefined) =>
 
 const isActive = (d: BaseBodyInfo | null | undefined) =>
   viewsRunning(d) || modelRunning(d) || !!d?.face_cleanup?.running || tipsRunning(d) || !!d?.run_all?.running
-  || !!d?.mesh_repair?.running
+  || !!d?.mesh_repair?.running || !!d?.activity?.base || !!d?.activity?.other
 
 export function useBaseBody(character: string) {
   const enc = encodeURIComponent(character)

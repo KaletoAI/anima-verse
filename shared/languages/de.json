@@ -4770,6 +4770,7 @@
     "Upscale (face reference)": "Hochskalierung (Gesichtsreferenz)",
     "Face cleanup (local)": "Gesichtsbereinigung (lokal)",
     "A Build runs for this character — Run all waits until it has ended.": "Für diesen Charakter läuft ein Build — „Alles ausführen“ wartet, bis er beendet ist.",
+    "An outfit model is building — the base body is not affected": "Ein Outfit-Modell wird gebaut — der Grundkörper ist davon nicht betroffen",
     "A new view makes the base model stale — Run all or the next Build you start rebuilds it.": "Eine neue Ansicht macht das Grundmodell veraltet — „Alles ausführen“ oder der nächste Build, den du startest, baut es neu.",
     "A temporary NPC has no base body — its 3D model is made from its T-pose picture.": "Ein temporärer NPC hat keinen Grundkörper — sein 3D-Modell entsteht aus seinem T-Pose-Bild.",
     "An animal has no base body — its 3D model is made from its T-pose picture (3D tab).": "Ein Tier hat keinen Grundkörper — sein 3D-Modell entsteht aus seinem T-Pose-Bild (Tab 3D).",
