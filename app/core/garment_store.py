@@ -49,6 +49,8 @@ Each body (the base model in ``garments/``, an outfit body in its folder) also k
 item and the fit a user's acceptance of it displaced (Ruling A31, ``fit_attempts``)::
 
     attempts/{item}_{fsig}.glb + .json + .npz         the refused fit, its record, the marked region
+    attempts/derived/{item}_{fsig}.glb + .json + .npz a body shape's refused DERIVED shoe, kept beside the fresh
+                                                      fit that replaced it (Ruling A40, ``fit_attempts``)
     attempts/prev/{item}_{fsig}.glb + .json           the fit an acceptance displaced (for its undo)
     attempts/prev/low/{item}_{fsig}.glb               its distance tier
 
@@ -153,14 +155,16 @@ PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepa
                              # Ruling A31 (``fit_attempts``): the last refused fit per (item, body), and the fit an
                              # acceptance of it displaced
                              "attempt": "attempts", "attempt_prev": "attempts/prev",
-                             "attempt_prev_low": "attempts/prev/low"}
+                             "attempt_prev_low": "attempts/prev/low",
+                             # Ruling A40: a body shape's refused derived shoe beside the fresh fit's attempt
+                             "attempt_derived": "attempts/derived"}
 #: File suffix of a part other than ``glb`` (``limbs``: the refit's limb source, ``garment_source``).
 _PART_SUFFIX: Dict[str, str] = {"failed": "json", "limbs": "npz"}
 #: The parts keyed by an inner-layer signature ``lsig`` besides the fsig.
 LAYER_PARTS: Tuple[str, ...] = ("layer", "layer_low")
 #: The parts kept per body (``garment_path(body=…)``); the rest is shared.
 BODY_PARTS: Tuple[str, ...] = ("fit", "low", "failed", "layer", "layer_low", "attempt", "attempt_prev",
-                                "attempt_prev_low")
+                                "attempt_prev_low", "attempt_derived")
 #: Folder of the outfit bodies' fits under ``garments/``.
 BODIES_DIR = "bodies"
 #: An outfit body id (``base_body.OUTFIT_BODY_RE``).

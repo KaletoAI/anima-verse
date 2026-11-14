@@ -7,8 +7,8 @@ Here every refused fit of clothing and footwear (``garments._fit`` / ``garments.
 (the gates' verdict included) and the region the refusing gate measured. The Details preview shows each body's
 attempt with that region marked, and an admin may ACCEPT a refused fit.
 
-FILES (``garment_store`` parts ``attempt`` / ``attempt_prev`` / ``attempt_prev_low``; the base body's under
-``garments/``, an outfit body's under ``garments/bodies/<body id>/``)::
+FILES (``garment_store`` parts ``attempt`` / ``attempt_prev`` / ``attempt_prev_low`` / ``attempt_derived``; the base
+body's under ``garments/``, an outfit body's under ``garments/bodies/<body id>/``)::
 
     attempts/{item}_{fsig}.glb + .json + .npz       the attempt: the GLB as a fit would be published (none when the
                                                     gate refused before a fit was made), its record (``accepted``
@@ -17,6 +17,12 @@ FILES (``garment_store`` parts ``attempt`` / ``attempt_prev`` / ``attempt_prev_l
                                                     positions with their skin, per kind)
     attempts/prev/{item}_{fsig}.glb + .json         the fit an acceptance displaced (``accept``), put back by
     attempts/prev/low/{item}_{fsig}.glb             ``undo``
+    attempts/derived/{item}_{fsig}.glb + .json + .npz
+                                                    a body shape's refused DERIVED shoe (Ruling A40), kept beside the
+                                                    fresh fit that followed it (slot ``DERIVED``): the Details preview
+                                                    shows it as an entry of its own and it can be accepted like any
+                                                    attempt; voided like the others, dropped when a derived shoe is
+                                                    accepted on that body
 
 One attempt per (item, body): a new attempt of the item on that body replaces the older ones (another fsig's
 too, unless the user accepted it); a fit the gates accept drops the body's attempts (``drop``). The files are in
@@ -69,6 +75,13 @@ from app.core.log import get_logger
 logger = get_logger("fit_attempts")
 
 ATTEMPT, PREV, PREV_LOW = "attempt", "attempt_prev", "attempt_prev_low"
+#: The refused DERIVED shoe of a body shape, kept beside the fresh fit that followed it (Ruling A40).
+ATTEMPT_DERIVED = "attempt_derived"
+#: The attempt slots: "" the body's last attempt, ``DERIVED`` a body shape's refused derived shoe (Ruling A40).
+DERIVED = "derived"
+SLOTS: Dict[str, str] = {"": ATTEMPT, DERIVED: ATTEMPT_DERIVED}
+#: The Details preview key of a body's derived-shoe attempt: ``<body id>`` + this.
+DERIVED_KEY_SUFFIX = "-derived"
 #: The most points kept per mark kind (evenly thinned beyond it).
 MAX_MARKS = 1500
 #: Half the size of one marker octahedron (metres).
@@ -83,6 +96,12 @@ MARK_KINDS: Dict[str, Dict[str, str]] = {
 KINDS = ("clothing", "footwear")
 #: The status light's words of a user-accepted fit.
 ACCEPTED_BY_YOU = "Accepted by you"
+#: How a body shape's shoe was fitted (``garment_footwear.fit``, record ``fit_method``, Ruling A40) in the Details
+#: preview's words (the React switch translates them).
+FIT_METHOD_NOTES: Dict[str, str] = {
+    "derived": "the shoe as fitted on the plain body",
+    "fresh_fallback": "fitted fresh on this body shape — the shoe as fitted on the plain body did not fit here",
+}
 
 
 class AcceptError(ValueError):
@@ -243,8 +262,9 @@ def _lock(character_name: str, body: str):
     return keyed_lock("fit_attempt_plain", character_name)
 
 
-def _attempt_files(character_name: str, item_id: str, body: str) -> Dict[str, Dict[str, Path]]:
-    """fsig -> ``{glb, json, npz}`` of the item's attempt files on ``body`` (present or not)."""
+def _attempt_files(character_name: str, item_id: str, body: str, slot: str = "") -> Dict[str, Dict[str, Path]]:
+    """fsig -> ``{glb, json, npz}`` of the item's attempt files on ``body`` in ``slot`` (``SLOTS``; present or
+    not)."""
     from app.core import garment_store as gs
     out: Dict[str, Dict[str, Path]] = {}
     for (iid, fsig), files in gs.stored_groups(character_name).items():
@@ -254,7 +274,7 @@ def _attempt_files(character_name: str, item_id: str, body: str) -> Dict[str, Di
             if gs.body_of(p) != body:
                 continue
             try:
-                attempt = gs.garment_path(character_name, item_id, fsig, ATTEMPT, body=body)
+                attempt = gs.garment_path(character_name, item_id, fsig, SLOTS[slot], body=body)
             except ValueError:
                 continue
             if p.parent == attempt.parent:
@@ -287,30 +307,32 @@ def _remove_prev(character_name: str, item_id: str, fsig: str, body: str) -> Non
 
 def store(character_name: str, item_id: str, fsig: str, *, body: str, kind: str, record: Dict[str, Any],
           error: str, gates: Any, rigged: Optional[bytes] = None, garment: Any = None, glb: Optional[Path] = None,
-          tris: Optional[int] = None, marks: Optional[Dict[str, Optional[Dict[str, Any]]]] = None) -> None:
+          tris: Optional[int] = None, marks: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+          slot: str = "") -> None:
     """Keep a REFUSED fit of (item, fsig) on ``body`` ("" = the base model, else an outfit body id) as the body's
     last attempt (module docstring): the GLB — grafted here from ``rigged`` + ``garment`` as ``garments._publish_fit``
     grafts it, or the file ``glb`` a compute already wrote (moved in) —, ``record`` as the fit would be published
-    with ``accepted`` False and ``attempt``, and ``marks`` (kind -> ``mesh_marks`` or None). Never raises: a
-    refusal stays a refusal when its attempt cannot be kept."""
-    if kind not in KINDS:
+    with ``accepted`` False and ``attempt``, and ``marks`` (kind -> ``mesh_marks`` or None). ``slot`` (``SLOTS``):
+    ``DERIVED`` keeps a body shape's refused derived shoe beside the body's last attempt (Ruling A40). Never
+    raises: a refusal stays a refusal when its attempt cannot be kept."""
+    if kind not in KINDS or slot not in SLOTS:
         return
     try:
         _store(character_name, item_id, fsig, body=body, kind=kind, record=record, error=error, gates=gates,
-               rigged=rigged, garment=garment, glb=glb, tris=tris, marks=marks)
+               rigged=rigged, garment=garment, glb=glb, tris=tris, marks=marks, slot=slot)
     except Exception:  # noqa: BLE001 — the attempt is a view on the refusal, never its outcome
         logger.exception("Fit attempt %s/%s (%s) on %s not kept", character_name, item_id, fsig, body or "plain body")
 
 
 def _store(character_name: str, item_id: str, fsig: str, *, body: str, kind: str, record: Dict[str, Any],
            error: str, gates: Any, rigged: Optional[bytes], garment: Any, glb: Optional[Path], tris: Optional[int],
-           marks: Optional[Dict[str, Optional[Dict[str, Any]]]]) -> None:
+           marks: Optional[Dict[str, Optional[Dict[str, Any]]]], slot: str = "") -> None:
     from app.core import garment_store as gs, refit_pool
     from app.core.timeutils import utc_now_iso
     from app.models.character import get_character_dir
     if not get_character_dir(character_name).is_dir():
         return  # never mint the folders of a vanished character
-    path = gs.garment_path(character_name, item_id, fsig, ATTEMPT, body=body)
+    path = gs.garment_path(character_name, item_id, fsig, SLOTS[slot], body=body)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = refit_pool.temp_path(path)
     try:
@@ -325,12 +347,14 @@ def _store(character_name: str, item_id: str, fsig: str, *, body: str, kind: str
         kept = {k: v for k, v in (marks or {}).items() if k in MARK_KINDS and v and len(v["positions"])}
         with _lock(character_name, body):
             accepted = _user_accepted_fit(character_name, item_id, fsig, body)
-            if accepted and accepted.get("attempt_sha256") != sha:
+            # an acceptance is voided by a new attempt of ITS slot only (the fresh fit's attempt never voids the
+            # accepted derived shoe, Ruling A40)
+            if accepted and str(accepted.get("slot") or "") == slot and accepted.get("attempt_sha256") != sha:
                 # The fit changed: the acceptance of the old one is void (module docstring VOIDED).
                 logger.info("Fit acceptance %s/%s (%s) on %s void: a new attempt differs", character_name, item_id,
                             fsig, body or "plain body")
                 _undo_locked(character_name, item_id, fsig, body)
-            for other, files in _attempt_files(character_name, item_id, body).items():
+            for other, files in _attempt_files(character_name, item_id, body, slot).items():
                 if other != fsig and not _user_accepted_fit(character_name, item_id, other, body):
                     _remove_attempt(files)
                     _remove_prev(character_name, item_id, other, body)
@@ -348,33 +372,39 @@ def _store(character_name: str, item_id: str, fsig: str, *, body: str, kind: str
                 "attempt": {"at": utc_now_iso(), "error": error, "reasons": reasons, "gates": gates,
                             "glb_sha256": sha or None, "tris": tris, "marks": counts,
                             "body_id": body or str(record.get("body_id") or "")}})
-        logger.info("Fit attempt %s/%s (%s) on %s kept (refused%s)", character_name, item_id, fsig,
-                    body or "plain body", ", marked " + ", ".join(f"{k} {n}" for k, n in counts.items())
+        logger.info("Fit attempt %s/%s (%s) on %s kept%s (refused%s)", character_name, item_id, fsig,
+                    body or "plain body", f" as the {slot} attempt" if slot else "",
+                    ", marked " + ", ".join(f"{k} {n}" for k, n in counts.items())
                     if counts else "")
     finally:
         tmp.unlink(missing_ok=True)
 
 
-def drop(character_name: str, item_id: str, *, body: str) -> None:
+def drop(character_name: str, item_id: str, *, body: str, keep_derived: bool = False) -> None:
     """A fit the gates accepted on ``body``: the item's attempts there go (and the displaced fits kept for an
-    undo), except those of another fsig the user accepted. Never raises."""
+    undo), except those of another fsig the user accepted. ``keep_derived``: the refused derived shoe stays (the
+    accepted fit is the fresh fit that followed it, Ruling A40). Never raises."""
     try:
         with _lock(character_name, body):
-            for fsig, files in _attempt_files(character_name, item_id, body).items():
-                if _user_accepted_fit(character_name, item_id, fsig, body):
+            for slot in SLOTS:
+                if slot == DERIVED and keep_derived:
                     continue
-                _remove_attempt(files)
-                _remove_prev(character_name, item_id, fsig, body)
+                for fsig, files in _attempt_files(character_name, item_id, body, slot).items():
+                    if _user_accepted_fit(character_name, item_id, fsig, body):
+                        continue
+                    _remove_attempt(files)
+                    _remove_prev(character_name, item_id, fsig, body)
     except Exception:  # noqa: BLE001 — a cleanup, never a failure of the fit
         logger.exception("Fit attempts %s/%s on %s not dropped", character_name, item_id, body or "plain body")
 
 
-def attempt_of(character_name: str, item_id: str, body: str) -> Optional[Tuple[Optional[Path], Dict[str, Any],
-                                                                              Optional[Path]]]:
-    """``(glb or None, record, marks npz or None)`` of the item's newest attempt on ``body``, None without."""
+def attempt_of(character_name: str, item_id: str, body: str, slot: str = ""
+               ) -> Optional[Tuple[Optional[Path], Dict[str, Any], Optional[Path]]]:
+    """``(glb or None, record, marks npz or None)`` of the item's newest attempt on ``body`` in ``slot``
+    (``SLOTS``), None without."""
     from app.core import garment_store as gs
     best: Optional[Tuple[str, Optional[Path], Dict[str, Any], Optional[Path]]] = None
-    for _fsig, files in _attempt_files(character_name, item_id, body).items():
+    for _fsig, files in _attempt_files(character_name, item_id, body, slot).items():
         record = gs.read_record(files["json"])
         if not record.get("attempt"):
             continue
@@ -500,26 +530,28 @@ def _plain_guard(character_name: str, item_id: str):
     return guard()
 
 
-def accept(character_name: str, item_id: str, body: str, *, profile: Optional[Dict[str, Any]] = None
-           ) -> Dict[str, Any]:
-    """Publish the item's refused attempt on ``body`` as its fit, accepted by the user (module docstring).
-    ``AcceptError`` when there is no current refused attempt with a mesh; ``Busy`` while a garment run of the piece
-    holds the plain body's fits. Spends no job: a copy, a record and a distance tier (Blender, CPU). ``{item_id, body,
-    accepted True, follow_up}``."""
+def accept(character_name: str, item_id: str, body: str, *, profile: Optional[Dict[str, Any]] = None,
+           slot: str = "") -> Dict[str, Any]:
+    """Publish the item's refused attempt on ``body`` (in ``slot``: ``DERIVED`` = a body shape's refused derived
+    shoe, Ruling A40) as its fit, accepted by the user (module docstring). ``AcceptError`` when there is no current
+    refused attempt with a mesh; ``Busy`` while a garment run of the piece holds the plain body's fits. Spends no
+    job: a copy, a record and a distance tier (Blender, CPU). ``{item_id, body, accepted True, follow_up}``."""
     from contextlib import nullcontext
+    if slot not in SLOTS:
+        raise AcceptError(f"Unknown attempt {slot!r}")
     profile = _profile(character_name, profile)
     with (_plain_guard(character_name, item_id) if not body else nullcontext()):
         with _lock(character_name, body):
-            _accept_locked(character_name, item_id, body, profile)
+            _accept_locked(character_name, item_id, body, profile, slot)
     return {"item_id": item_id, "body": body, "accepted": True, "follow_up": follow_up(character_name)}
 
 
-def _accept_locked(character_name: str, item_id: str, body: str, profile: Dict[str, Any]) -> None:
+def _accept_locked(character_name: str, item_id: str, body: str, profile: Dict[str, Any], slot: str = "") -> None:
     import shutil
     from app.blender import refine
     from app.core import garment_store as gs, glb_mesh
     from app.core.timeutils import utc_now_iso
-    found = attempt_of(character_name, item_id, body)
+    found = attempt_of(character_name, item_id, body, slot)
     if found is None:
         raise AcceptError("No refused fit on this body to accept")
     glb, record, _marks = found
@@ -562,7 +594,7 @@ def _accept_locked(character_name: str, item_id: str, body: str, profile: Dict[s
     published.update(accepted=True, user_accepted={
         "at": utc_now_iso(), "error": attempt.get("error") or "", "reasons": list(attempt.get("reasons") or []),
         "gates": attempt.get("gates"), "attempt_sha256": sha, "body_id": body or str(record.get("body_id") or ""),
-        "fit_version": record.get("fit_version"), "failure": failure or None})
+        "fit_version": record.get("fit_version"), "failure": failure or None, "slot": slot})
     gs.write_record(fit.with_suffix(".json"), published)
     failed.unlink(missing_ok=True)
     tris = attempt.get("tris")
@@ -591,7 +623,8 @@ def undo(character_name: str, item_id: str, body: str) -> Dict[str, Any]:
         with _lock(character_name, body):
             found = attempt_of(character_name, item_id, body)
             fsigs = [str(found[1].get("fsig") or "")] if found else []
-            fsigs += [f for f in _attempt_files(character_name, item_id, body) if f not in fsigs]
+            for slot in SLOTS:
+                fsigs += [f for f in _attempt_files(character_name, item_id, body, slot) if f not in fsigs]
             for fsig in fsigs:
                 if _user_accepted_fit(character_name, item_id, fsig, body):
                     _undo_locked(character_name, item_id, fsig, body)
@@ -851,7 +884,10 @@ def bodies(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any
     versioned; None: nothing to show), built_at, marks [{kind, count, colour, label}], foot_pose, can_accept,
     accept_block (why not), accepted_at}``. ``status``: ``accepted`` (the gates accepted it), ``user_accepted``
     (light green, "Accepted by you", ``reason`` the gates' refusal), ``refused`` (``reason``), ``stale`` (made
-    on an older body / piece / algorithm; refitted by the next Build), ``missing``. Read-only."""
+    on an older body / piece / algorithm; refitted by the next Build), ``missing``. ``method_note``: how a body
+    shape's shoe was fitted (``FIT_METHOD_NOTES``, "" otherwise), ``variant`` "" or ``DERIVED``: a body shape's
+    refused derived shoe, kept beside the fresh fit that followed it, is an entry of its own right after its body
+    (key ``<body id>`` + ``DERIVED_KEY_SUFFIX``, Ruling A40). Read-only."""
     from urllib.parse import quote
     from app.core import garment_store as gs
     from app.core.http_files import content_version
@@ -872,17 +908,22 @@ def bodies(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any
     names = shape_names(character_name, profile=profile) if shapes else {}
     out: List[Dict[str, Any]] = []
     for body in [""] + shapes:
-        entry = _entry(character_name, item_id, body, profile, names)
-        entry["current"] = (body or "plain") == (current_shape if gs.is_body_id(current_shape) else "plain")
-        shown = entry.pop("_shown", None)
-        if shown is not None:
-            try:
-                entry["url"] = (f"{url_base or ''}/characters/{quote(character_name, safe='')}/garments/"
-                                f"{quote(item_id, safe='')}/fits/{entry['key']}/model?v={content_version(shown[0])}"
-                                f"{'m' if shown[1] else ''}")
-            except OSError:
-                entry["url"] = None
-        out.append(entry)
+        entries = [_entry(character_name, item_id, body, profile, names)]
+        if body:
+            derived = _derived_entry(character_name, item_id, body, profile, names)
+            if derived is not None:
+                entries.append(derived)
+        for entry in entries:
+            entry["current"] = (body or "plain") == (current_shape if gs.is_body_id(current_shape) else "plain")
+            shown = entry.pop("_shown", None)
+            if shown is not None:
+                try:
+                    entry["url"] = (f"{url_base or ''}/characters/{quote(character_name, safe='')}/garments/"
+                                    f"{quote(item_id, safe='')}/fits/{entry['key']}/model?"
+                                    f"v={content_version(shown[0])}{'m' if shown[1] else ''}")
+                except OSError:
+                    entry["url"] = None
+            out.append(entry)
     return out
 
 
@@ -915,7 +956,7 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
                              "status": "missing", "reason": "", "reason_detail": "", "piece_broken": False,
                              "url": None, "built_at": None, "marks": [],
                              "foot_pose": None, "can_accept": False, "accept_block": "", "accepted_at": None,
-                             "_shown": None}
+                             "method_note": "", "variant": "", "_shown": None}
 
     def words(error: str, gates: Any) -> None:
         plain = plain_reason(error, gates, on_shape=bool(body))
@@ -936,6 +977,10 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
     elif status["state"] in ("stale", "outdated") or (current_attempt and attempt):
         entry.update(status="stale", reason=("Made on an older body, piece or fit algorithm — "
                                              "the next Build fits it again"))
+    # how a body shape's shoe was fitted (Ruling A40): the fit's record when it is the body's fit, else the attempt's
+    method_of = fit_record if entry["status"] in ("accepted", "user_accepted") else (
+        record if entry["status"] == "refused" and current_attempt else {})
+    entry["method_note"] = FIT_METHOD_NOTES.get(str(method_of.get("fit_method") or ""), "") if body else ""
     # What the preview shows: the kept attempt (marked) when it is the body's last word — refused, or accepted
     # by the user —, else the fit itself.
     show_attempt = glb is not None and entry["status"] in ("refused", "user_accepted") and (
@@ -963,21 +1008,80 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
     return entry
 
 
-def shown_file(character_name: str, item_id: str, key: str) -> Optional[Tuple[Path, Optional[Path]]]:
-    """``(GLB, marks npz or None)`` the body switch shows for the body ``key`` ("plain" or an outfit body id) —
-    ``bodies``' choice; None when it shows nothing. ValueError for a bad key or item."""
+def _derived_entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any],
+                   names: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
+    """The body switch's entry of a body shape's refused DERIVED shoe (Ruling A40: kept beside the fresh fit that
+    followed it), ``_entry``'s shape; None without one of the body's current fit fingerprint. ``refused`` (it may
+    be accepted while it is current and the body holds no accepted fit), ``user_accepted`` (the body's fit IS
+    it), ``stale`` (made on an older body, shoe source or algorithm)."""
     from app.core import garment_store as gs
-    body = "" if key == "plain" else key
-    if body and not gs.is_body_id(body):
+    found = attempt_of(character_name, item_id, body, DERIVED)
+    if found is None:
+        return None
+    glb, record, marks_path = found
+    status = fit_status(character_name, item_id, body, profile=profile)
+    if not status["fsig"] or record.get("fsig") != status["fsig"]:
+        return None
+    attempt = record.get("attempt") or {}
+    fit_record = gs.read_record(gs.garment_path(character_name, item_id, status["fsig"], "fit",
+                                                body=body).with_suffix(".json"))
+    block = fit_record.get("user_accepted") if isinstance(fit_record.get("user_accepted"), dict) else {}
+    entry: Dict[str, Any] = {"body": body, "key": body + DERIVED_KEY_SUFFIX,
+                             "label": body_label(character_name, body, profile=profile, names=names or {}),
+                             "status": "refused", "reason": "", "reason_detail": "", "piece_broken": False,
+                             "url": None, "built_at": attempt.get("at"), "marks": [], "foot_pose":
+                             record.get("foot_pose"), "can_accept": False, "accept_block": "", "accepted_at": None,
+                             "method_note": FIT_METHOD_NOTES["derived"], "variant": DERIVED,
+                             "_shown": (glb, marks_path is not None) if glb is not None else None}
+    plain = plain_reason(str(attempt.get("error") or ""), attempt.get("gates"), on_shape=True)
+    entry.update(reason=plain["text"], reason_detail=plain["detail"], piece_broken=plain["piece"])
+    entry["marks"] = [{"kind": k, "count": int(n), **MARK_KINDS[k]}
+                      for k, n in sorted((attempt.get("marks") or {}).items()) if k in MARK_KINDS]
+    if (status["state"] == "accepted" and str(block.get("slot") or "") == DERIVED
+            and block.get("attempt_sha256") == attempt.get("glb_sha256")):
+        entry.update(status="user_accepted", accepted_at=block.get("at"))
+        return entry
+    why = _current(character_name, item_id, body, record, profile)
+    if why and status["state"] != "accepted":
+        entry.update(status="stale", reason=("Made on an older body, piece or fit algorithm — "
+                                             "the next Build fits it again"), reason_detail="")
+        return entry
+    entry["accept_block"] = ("This refusal came before a fit was made — there is nothing to accept"
+                             if glb is None else why)
+    entry["can_accept"] = not entry["accept_block"]
+    return entry
+
+
+def parse_key(key: str) -> Tuple[str, str]:
+    """``(body, slot)`` of a body switch key: "plain", an outfit body id, or an outfit body id +
+    ``DERIVED_KEY_SUFFIX`` (its derived-shoe attempt, Ruling A40). ValueError for anything else."""
+    from app.core import garment_store as gs
+    key = str(key or "")
+    slot = ""
+    if key.endswith(DERIVED_KEY_SUFFIX):
+        key, slot = key[:-len(DERIVED_KEY_SUFFIX)], DERIVED
+    body = "" if key == "plain" and not slot else key
+    if (body or slot) and not gs.is_body_id(body):
         raise ValueError(f"invalid body {str(key)[:40]!r}")
+    return body, slot
+
+
+def shown_file(character_name: str, item_id: str, key: str) -> Optional[Tuple[Path, Optional[Path]]]:
+    """``(GLB, marks npz or None)`` the body switch shows for the body ``key`` (``parse_key``: "plain", an outfit
+    body id, or a body shape's derived-shoe attempt) — ``bodies``' choice; None when it shows nothing. ValueError
+    for a bad key or item."""
+    from app.core import garment_store as gs
+    body, slot = parse_key(key)
     if gs._garment_kind(item_id) not in KINDS:
         raise ValueError(f"{item_id} has no fits to show here")
-    entry = _entry(character_name, item_id, body, _profile(character_name, None), {})
-    shown = entry.get("_shown")
+    profile = _profile(character_name, None)
+    entry = (_derived_entry(character_name, item_id, body, profile, {}) if slot
+             else _entry(character_name, item_id, body, profile, {}))
+    shown = (entry or {}).get("_shown")
     if not shown:
         return None
     path, marked = shown
     if not marked:
         return path, None
-    found = attempt_of(character_name, item_id, body)
+    found = attempt_of(character_name, item_id, body, slot)
     return path, (found[2] if found else None)

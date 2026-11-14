@@ -2886,8 +2886,9 @@ def _fit_bodies(character_name: str, item_id: str, profile: Dict[str, Any]) -> L
 def get_character_garment_fit_model(character_name: str, item_id: str, body: str, request: Request,
                                     _: Dict[str, Any] = Depends(require_admin)):
     """The Details preview's model of one body (Ruling A31, ``fit_attempts.shown_file``): ``body`` "plain" or an
-    outfit body id — the body's kept refused attempt with the refusing gate's region marked, or its fit. 400 for
-    a bad body, 404 when the body shows nothing."""
+    outfit body id — the body's kept refused attempt with the refusing gate's region marked, or its fit — or an
+    outfit body id + ``-derived`` (its refused derived shoe, Ruling A40). 400 for a bad body, 404 when the body
+    shows nothing."""
     from fastapi.responses import Response
     from app.core import fit_attempts
     from app.core.http_files import etag_matches, snapshot_response
@@ -2915,12 +2916,15 @@ def get_character_garment_fit_model(character_name: str, item_id: str, body: str
 
 
 def _fit_accept_call(fn, character_name: str, item_id: str, body: str) -> Dict[str, Any]:
-    from app.core import fit_attempts, garment_store as gs
+    from app.core import fit_attempts
     _require_character(character_name)
-    key = "" if body == "plain" else body
-    if key and not gs.is_body_id(key):
+    try:
+        key, slot = fit_attempts.parse_key(body)
+    except ValueError:
         raise HTTPException(status_code=400, detail=f"invalid body {body[:40]!r}")
     try:
+        if fn is fit_attempts.accept:
+            return fn(character_name, item_id, key, slot=slot)
         return fn(character_name, item_id, key)
     except fit_attempts.Busy as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -2933,8 +2937,8 @@ def _fit_accept_call(fn, character_name: str, item_id: str, body: str) -> Dict[s
 @router.post("/{character_name}/garments/{item_id}/fits/{body}/accept")
 def accept_character_garment_fit(character_name: str, item_id: str, body: str,
                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
-    """Ruling A31: accept the REFUSED fit of a clothing or footwear piece on one body ("plain" or an outfit body
-    id) — ``fit_attempts.accept``. Spends no job; the figure becomes due for a re-assembly (CPU only), which this
+    """Ruling A31: accept the REFUSED fit of a clothing or footwear piece on one body ("plain", an outfit body
+    id, or an outfit body id + ``-derived``: its refused derived shoe, Ruling A40) — ``fit_attempts.accept``. Spends no job; the figure becomes due for a re-assembly (CPU only), which this
     does not start (``follow_up``: the Build's estimate now). 409 when there is no current refused attempt to
     accept or a garment run holds the plain body's fits."""
     from app.core import fit_attempts

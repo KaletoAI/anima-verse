@@ -162,6 +162,19 @@ skin through the piece: the armhole of a jacket hanging off a T-pose arm. The ba
 patch there (15.9 cm2 at height 0.68 / 95 deg, 20.5 of the 52.7 cm2 there seen — a share of 0.39, below
 ``TORSO_OPEN_SHARE``), so the old area rule refused the base fit itself; measured beyond the base fit's share the
 patch is no hole.
+A piece's own SLEEVE covers its armhole (Ruling A40, ``_sleeve_over``). With the joint frames (A35) the same jacket
+on obf6474c3b read one patch of 31.8 cm2 in the LEFT armhole (height 0.79, angle 98 deg): skin of the armpit whose
+outward normal points up and out INTO the arm — along it the arm skin follows after 0.6 cm (median) and the sleeve
+only beyond the arm, 8.2 - 20.9 cm (p10 - p90) from the trunk skin, past ``TORSO_SEE_DEPTH_M``. Such skin is no
+gap: a ray step inside the body solid whose nearest body vertex is an ARM vertex is not counted against the gap
+tolerance (only the steps outside the arm are, as many as the straight pass takes to ``TORSO_SEE_DEPTH_M``), and
+a piece's surface met after the arm covers the skin. No new limit; a ray that crosses no arm finds nothing new, so
+a real gap — no piece over the skin, or only the bare arm (a sleeveless top) — stays seen. Measured 2026-11-14
+(largest hole, cm2; seen skin in the armholes left / right, height > 0.6, 60 - 130 deg):
+    Kai's jacket obf6474c3b       31.8 -> 5.4 (passes); armholes 49.5 / 8.0 -> 10.6 / 3.3 cm2
+    Kira's blazer 22354 / 2b67 / 3b3a   9.2 / 12.0 / 5.7 unchanged; armholes 13.7 / 26.6, 5.6 / 14.3, 1.9 / 4.0 ->
+                                  8.1 / 15.4, 4.5 / 14.2, 0.7 / 1.8; the V (front, |angle| < 20 deg) unchanged
+    the base fits (Kai's jacket, Kira's blazer) on their own base   seen skin unchanged (1158.7 / 180.1 cm2)
 
 LIMBS on outfit bodies: a vertex is off the limb only when it is ALSO farther than ``LIMB_OFF_M`` from the body's
 skin (its nearest body vertex) — the limb radius is one median per segment, so a thigh that is oval on one body and
@@ -227,6 +240,8 @@ TORSO_COVER_DELTA = 0.10
 TORSO_SEE_LATERAL_M = 0.012
 TORSO_SEE_FROM_M = 0.002
 TORSO_SEE_DEPTH_M = 0.08
+#: The ray's step; a step inside an arm of the body is no gap (``_sleeve_over``, Ruling A40).
+TORSO_SEE_STEP_M = 0.008
 #: Seen skin with the piece within this under it: the piece lies under an outer layer of the body (outside the body
 #: solid: baked hair over it — not a hole of the piece) or the body pokes through it (inside the solid: a hole).
 TORSO_UNDER_DEPTH_M = 0.05
@@ -242,8 +257,10 @@ TORSO_HOLE_CM2 = 15.0
 #: The version of the gates of a fit on an outfit body (``limb_gate``, ``torso_hole_gate``): a refusal recorded by
 #: another version no longer holds (``garment_store.body_failure``). 2: holes beyond the base fit's seen share, off
 #: the limb only when off the skin too (T15-F1, ruling A23 d). 3: the torso coverage counts the outer skin only, on
-#: frames from the bind joints (Ruling A35).
-BODY_GATES_VERSION = 3
+#: frames from the bind joints (Ruling A35). 4: the armhole under the piece's own sleeve is covered (``_sleeve_over``),
+#: and a refused derived shoe falls back to a fresh fit (``garment_footwear.fit``, Ruling A40) — a body refusal
+#: recorded before is judged again.
+BODY_GATES_VERSION = 4
 #: The image "step" name of the base view copies (``base_copy``).
 BASE_STEP = "base"
 #: Marker key of a copied record (``materialize``).
@@ -1028,6 +1045,52 @@ def _welded(body) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     return P[first], F, first
 
 
+def _arm_bone(name: str) -> bool:
+    """A normalised bone name of an arm (upper arm, forearm, hand, fingers)."""
+    return any(part in name for part in ("arm", "hand"))
+
+
+def _sleeve_over(P, F, arm: np.ndarray, origin: np.ndarray, direction: np.ndarray, tree) -> np.ndarray:
+    """Which skin rays (``origin`` + t x ``direction``, the outward normals ``_trunk_seen`` left seen) meet the
+    piece (``tree``: its surface samples) beyond an ARM of the body (Ruling A40): the ray is marched like the
+    straight pass (from ``TORSO_SEE_FROM_M`` in ``TORSO_SEE_STEP_M`` steps, a sample within
+    ``TORSO_SEE_LATERAL_M``), but a step inside the body solid (``body_field.body_solid`` of the welded body ``P`` /
+    ``F``) whose nearest body vertex is an arm vertex (``arm``, per vertex of ``P``) is no gap: only the steps
+    outside the arm count against the gap tolerance (as many steps as the straight pass takes up to
+    ``TORSO_SEE_DEPTH_M``). A sample counts once the ray has crossed the arm — the armhole skin under the piece's own
+    sleeve, the arm between them. A ray that crosses no arm finds nothing here (the straight pass already looked
+    as far), so a real gap — no piece over the skin, or only the bare arm — stays seen."""
+    from scipy.spatial import cKDTree
+    from app.core import body_field, garment_fit
+    hit = np.zeros(len(origin), bool)
+    if not len(origin) or not np.any(arm):
+        return hit
+    solid = body_field.body_solid(P, F, vox=garment_fit.VOX_M)
+    shape = np.asarray(solid.inside.shape)
+    nearest = cKDTree(P)
+    budget = len(np.arange(TORSO_SEE_FROM_M, TORSO_SEE_DEPTH_M, TORSO_SEE_STEP_M))
+    air = np.zeros(len(origin), np.int64)
+    crossed = np.zeros(len(origin), bool)
+    active = np.arange(len(origin))
+    t = TORSO_SEE_FROM_M
+    while len(active):      # ends: every step outside the arm uses the budget, the solid's grid is finite
+        X = origin[active] + t * direction[active]
+        idx = np.round((X - solid.lo) / solid.vox).astype(np.int64)
+        in_grid = ((idx >= 0) & (idx < shape)).all(1)
+        in_arm = np.zeros(len(active), bool)
+        in_arm[in_grid] = solid.inside[tuple(idx[in_grid].T)]
+        if in_arm.any():
+            in_arm[in_arm] = arm[nearest.query(X[in_arm], workers=fit_kernels.threads())[1]]
+        crossed[active[in_arm]] = True
+        d = tree.query(X, distance_upper_bound=TORSO_SEE_LATERAL_M, workers=fit_kernels.threads())[0]
+        found = (d <= TORSO_SEE_LATERAL_M) & crossed[active]
+        hit[active[found]] = True
+        air[active[~in_arm]] += 1
+        active = active[~found & (air[active] < budget)]
+        t += TORSO_SEE_STEP_M
+    return hit
+
+
 def _trunk_seen(positions, faces, body) -> Optional[Dict[str, Any]]:
     """The outer trunk skin of the rigged ``body`` (welded) and which of it is seen through the garment
     (``positions`` / ``faces``; block TORSO holes above): ``{P, F, area (per vertex, m2), region, seen (a hole:
@@ -1069,11 +1132,15 @@ def _trunk_seen(positions, faces, body) -> Optional[Dict[str, Any]]:
     under = np.full(len(rows), -1, np.int64)   # the garment sample found under the skin's outer layer
     if len(samples) and len(rows):
         tree = cKDTree(samples)
-        for step in np.arange(TORSO_SEE_FROM_M, TORSO_SEE_DEPTH_M, 0.008):
+        for step in np.arange(TORSO_SEE_FROM_M, TORSO_SEE_DEPTH_M, TORSO_SEE_STEP_M):
             todo = np.nonzero(~covered)[0]
             d = tree.query(P[rows[todo]] + step * out[todo], distance_upper_bound=TORSO_SEE_LATERAL_M,
                            workers=fit_kernels.threads())[0]
             covered[todo[d <= TORSO_SEE_LATERAL_M]] = True
+        todo = np.nonzero(~covered)[0]
+        if len(todo):
+            arm = np.isin(dominant, [i for i, n in enumerate(names) if _arm_bone(n)])
+            covered[todo[_sleeve_over(P, F, arm, P[rows[todo]], out[todo], tree)]] = True
         for step in np.arange(-TORSO_SEE_FROM_M, -TORSO_UNDER_DEPTH_M, -0.006):
             todo = np.nonzero(~covered & (under < 0))[0]
             d, j = tree.query(P[rows[todo]] + step * out[todo], distance_upper_bound=TORSO_SEE_LATERAL_M,

@@ -34,7 +34,11 @@ UNCUT body's (what ``fit_state`` compares to the stored model). A fit is
 keyed (item, fsig, body id) like a garment fit: two wearers make two fits of ONE source. An outfit body's fit is
 DERIVED from the accepted base fit of the same fsig (``derive_compute``, Ruling A35: the shoe rides the foot joints
 of the body shape, the base fit's cut is applied there; ``base_fit_sha256`` in its record — a replaced base fit makes
-it stale; without an accepted base fit there is none, ``BASE_FIT_MISSING``). A refused fit publishes nothing: the failure is recorded per fsig (the base: the run's
+it stale; without an accepted base fit there is none, ``BASE_FIT_MISSING``). A derived shoe the gates refuse (a body
+shape whose foot is much bigger than the plain body's: Kira's legacy body 22354, deep_outside 0.028) is kept as an
+attempt (``fit_attempts`` slot ``derived``) and the shoe is fitted FRESH on that body (``fit_compute``, Ruling A40);
+the record's ``fit_method`` says which (``DERIVED`` / ``FRESH_FALLBACK``), the Details preview names it. A refused fit
+publishes nothing: the failure is recorded per fsig (the base: the run's
 ``garments._note_outcome``; an outfit body: ``garment_store.record_body_failure``) and a fit of another body or
 an older ``garment_fit.FIT_VERSION`` is never served in its place (R11 ruling; the fsig holds the fit version).
 """
@@ -348,7 +352,7 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     from app.core import refit_pool
     tmp = refit_pool.temp_path(path)
 
-    def record_of(out: Dict[str, Any], accepted: bool) -> Dict[str, Any]:
+    def record_of(out: Dict[str, Any], accepted: bool, method: str = "") -> Dict[str, Any]:
         now = utc_now_iso()
         parents: Dict[str, Any] = {"body_id": body_id, "body_sha256": body_sha, "base_signature": bsig,
                                    "source": _source_parents(item_id, ssig)}
@@ -366,32 +370,53 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
             record["base_model_sha256"] = body_sha
         elif base_fit is not None:
             parents["base_fit_sha256"] = record["base_fit_sha256"] = hashlib.sha256(base_fit[0]).hexdigest()
+        if method:
+            record["fit_method"] = method
         return record
 
     from app.core import fit_attempts
+
+    def keep(out: Dict[str, Any], error: str, method: str, slot: str = "") -> None:
+        # Ruling A31: the refused attempt is kept per (item, body) — with its GLB when the cut ran; a body shape's
+        # refused derived shoe in its own slot beside the fresh fit's attempt (Ruling A40).
+        attempt = out.get("attempt")
+        fit_attempts.store(character_name, item_id, fsig, body=body, kind=kind,
+                           record=record_of(attempt, False, method) if attempt else
+                           {"kind": kind, "item_id": item_id, "fsig": fsig, "body_id": body_id,
+                            "body_sha256": body_sha, "fit_version": garment_fit.FIT_VERSION[kind],
+                            **({"fit_method": method} if method else {}),
+                            **({"base_model_sha256": body_sha} if not body else {}),
+                            **({"base_fit_sha256": hashlib.sha256(base_fit[0]).hexdigest()}
+                               if base_fit is not None else {})},
+                           error=error, gates=out["gates"], glb=tmp if attempt else None,
+                           tris=(attempt or {}).get("tris"), marks={"foot": out.get("marks")}, slot=slot)
+
+    method = ""
     try:
         if base_fit is not None:
+            method = DERIVED
             out = refit_pool.run(derive_compute, base_fit[0], base_fit[1], base_fit[2], insole, rigged, kind,
                                  item_id, fsig, str(tmp))
+            if not out["ok"]:
+                # Ruling A40: the plain body's shoe does not fit this body shape (a much bigger foot) — kept as an
+                # attempt, then the shoe is fitted fresh on the shape, as on the plain body.
+                derived_error = "fit refused — " + "; ".join(out["reasons"])
+                keep(out, derived_error, method, fit_attempts.DERIVED)
+                tmp.unlink(missing_ok=True)
+                logger.info("Footwear fit %s/%s (%s) on %s: the derived shoe was refused (%s) — fitting it fresh",
+                            character_name, item_id, fsig, body, derived_error)
+                method = FRESH_FALLBACK
+                out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap_override(profile, item_id),
+                                     kind, item_id, fsig, str(tmp))
         else:
             out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap_override(profile, item_id), kind,
                                  item_id, fsig, str(tmp))
         if not out["ok"]:
             error = "fit refused — " + "; ".join(out["reasons"])
-            # Ruling A31: the refused attempt is kept per (item, body) — with its GLB when the cut ran.
-            attempt = out.get("attempt")
-            fit_attempts.store(character_name, item_id, fsig, body=body, kind=kind,
-                               record=record_of(attempt, False) if attempt else
-                               {"kind": kind, "item_id": item_id, "fsig": fsig, "body_id": body_id,
-                                "body_sha256": body_sha, "fit_version": garment_fit.FIT_VERSION[kind],
-                                **({"base_model_sha256": body_sha} if not body else {}),
-                                **({"base_fit_sha256": hashlib.sha256(base_fit[0]).hexdigest()}
-                                   if base_fit is not None else {})},
-                               error=error, gates=out["gates"], glb=tmp if attempt else None,
-                               tris=(attempt or {}).get("tris"), marks={"foot": out.get("marks")})
+            keep(out, error, method)
             raise _Refused("fit", error, out["gates"])
         fit_record, cut_stats = out["record"], out["cut_stats"]
-        record = record_of(out, True)
+        record = record_of(out, True, method)
         now = record["created_at"]
         # A refit after a body change (the fsig has no base in it: the same path): the record remembers the
         # body it came from (``refitted.from_body_sha256``, Task 25) — the Wardrobe says so, the GC keeps nothing by it.
@@ -403,9 +428,10 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         low.unlink(missing_ok=True)
         os.replace(tmp, path)
         gs.write_record(path.with_suffix(".json"), record)
-        logger.info("Footwear fit %s/%s (%s): accepted on %s, width x%.3f, lift %.1f mm, cut %d faces removed / %d "
-                    "bisected", character_name, item_id, fsig, body or bsig, fit_record["scale"]["width_factor"],
-                    1000.0 * fit_record["root_lift_m"], cut_stats["removed_faces"], cut_stats["bisected_faces"])
+        logger.info("Footwear fit %s/%s (%s): accepted on %s%s, width x%.3f, lift %.1f mm, cut %d faces removed / "
+                    "%d bisected", character_name, item_id, fsig, body or bsig, f" ({method})" if method else "",
+                    fit_record["scale"]["width_factor"], 1000.0 * fit_record["root_lift_m"],
+                    cut_stats["removed_faces"], cut_stats["bisected_faces"])
     finally:
         tmp.unlink(missing_ok=True)
     tris = out["tris"]
@@ -422,7 +448,7 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     gs.write_record(path.with_suffix(".json"), record)
     if body:
         gs.clear_failure_on_body(character_name, item_id, fsig, body)
-    fit_attempts.drop(character_name, item_id, body=body)
+    fit_attempts.drop(character_name, item_id, body=body, keep_derived=method == FRESH_FALLBACK)
     if schedule:
         from app.core import garment_assembly
         garment_assembly.schedule(character_name)
@@ -430,6 +456,10 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
 
 
 BASE_FIT_MISSING = "The shoe is not fitted on the plain body yet — an outfit body wears the plain body's fit"
+#: How a body shape's shoe was fitted (record ``fit_method``, Ruling A40): ``DERIVED`` from the plain body's
+#: accepted fit (``derive_compute``, Ruling A35), or — that refused — fitted fresh on the shape (``fit_compute``).
+DERIVED = "derived"
+FRESH_FALLBACK = "fresh_fallback"
 
 
 def _base_fit_sha(character_name: str, item_id: str, fsig: str) -> str:

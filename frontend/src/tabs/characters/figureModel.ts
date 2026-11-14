@@ -457,6 +457,10 @@ export interface FitBody {
   /** Why it cannot be accepted ("" when it can). */
   accept_block: string
   accepted_at: string | null
+  /** How a body shape's shoe was fitted (Ruling A40, `fit_attempts.FIT_METHOD_NOTES`): "" or a fixed phrase. */
+  method_note?: string
+  /** "derived": a body shape's refused derived shoe, kept beside the fresh fit that followed it (Ruling A40). */
+  variant?: '' | 'derived'
   /** The figure stands on this body now. */
   current: boolean
 }

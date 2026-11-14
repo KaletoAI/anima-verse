@@ -30,14 +30,23 @@ const STATUS_TEXT: Record<FitBody['status'], string> = {
   accepted: 'accepted', user_accepted: ACCEPTED_BY_YOU, refused: 'refused', stale: 'out of date',
   missing: 'not fitted yet',
 }
+/** The kept derived shoe of a body shape (Ruling A40). */
+const DERIVED_SHOE = "the plain body's shoe"
 const ROW: CSSProperties = { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }
 const ACCEPTED: CSSProperties = { color: 'var(--success, #3fb950)' }
 const REFUSED: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
 
-/** "Plain body: accepted" / "Body shape (t-shirt): refused — the left trouser leg stands off the thigh". */
+/** The button's words: the body, and for a body shape's kept derived shoe (Ruling A40) which shoe it is. */
+function bodyName(b: FitBody, t: (s: string) => string): string {
+  return b.variant === 'derived' ? `${bodyWords(b.label, t)} · ${t(DERIVED_SHOE)}` : bodyWords(b.label, t)
+}
+
+/** "Plain body: accepted" / "Body shape (t-shirt): refused — the left trouser leg stands off the thigh"; a body
+ *  shape's shoe names how it was fitted (Ruling A40). */
 function bodyVerdict(b: FitBody, t: (s: string) => string): string {
-  const head = `${bodyWords(b.label, t)}: ${t(STATUS_TEXT[b.status])}`
-  return b.reason && b.status !== 'accepted' ? `${head} — ${b.reason}` : head
+  const head = `${bodyName(b, t)}: ${t(STATUS_TEXT[b.status])}`
+  const parts = [b.method_note ? t(b.method_note) : '', b.reason && b.status !== 'accepted' ? b.reason : '']
+  return [head, ...parts.filter(Boolean)].join(' — ')
 }
 
 /** The CPU follow-up in words: "re-assembly of the figure (CPU only)", or the steps with their hub jobs. */
@@ -108,7 +117,7 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
             onClick={() => onSelect(b.key)}>
             <span style={{ ...ROW, gap: 6, flexWrap: 'nowrap' }}>
               <StepLight light={LIGHT[b.status]} />
-              {bodyWords(b.label, t)}
+              {bodyName(b, t)}
               {b.status === 'user_accepted'
                 ? <span style={b.key === shown.key ? undefined : ACCEPTED}>· {t(ACCEPTED_BY_YOU)}</span> : null}
             </span>
