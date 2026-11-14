@@ -16,8 +16,9 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE LEDGER (K = HAIR_FR
 unit, Ruling H1a; zeta 0.5; limits 0.8..6.0 Hz)
 [1] freq_zeta: 0.32 -> (0.32·3.7 = 1.184, 0.5); 0.75 × 2.0 = 1.5 -> min(1.5·3.7 = 5.55, 6.0) = 5.55;
     0.2 × 0.5 = 0.1 -> max(0.1·3.7 = 0.37, 0.8) = 0.8. And 2.0 -> min(7.4, 6.0) = 6.0.
-[2] settings (Ruling H11: Swing defaults to HAIR_SWING_DEFAULT = False): {} -> {swing False, stiffness 1.0};
-    hair_swing "off" -> swing False; "on" -> True; "" or "maybe" -> the default, False;
+[2] settings (Ruling H-R1, strand-hair spec § 9: Swing defaults to HAIR_SWING_DEFAULT = True — Ruling H11 had it
+    off): {} -> {swing True, stiffness 1.0}; hair_swing "off" -> swing False (an explicit off stays off); "on" ->
+    True; "" or "maybe" -> the default, True;
     hair_stiffness "abc" -> 1.0, 2.5 (> 2.0) -> 1.0, true -> 1.0, "1.5" -> 1.5, 0.5 -> 0.5.
     The settings are the hairstyle's (plan 2026-11-12-unified-worn-pieces Task 13: ``garment`` keys of the item
     hair_demo, mode hairdeck): set_hair_motion(Demo, hair_demo, True, 0.4) -> ValueError (0.4 < 0.5),
@@ -47,7 +48,7 @@ unit, Ruling H1a; zeta 0.5; limits 0.8..6.0 Hz)
     returns groups {} for the same character (its early return ``if not declarations`` came first).
     Stiffness factor 1.5 (set_hair_motion) -> rev changes, freq_hz 2.22. Swing off -> groups {} and the rev equals
     the no-hair rev of the old code (``_revision({"declarations": []})``), so a character without hair keeps its
-    rev byte for byte. The fixture hairstyle has hair_swing "on" (the default is off since Ruling H11).
+    rev byte for byte. The fixture hairstyle has hair_swing "on" (explicit; the default is on since Ruling H-R1).
     served_chains cache: a second call with the garments/ directory unchanged does not call _newest_fit again
     (1 call for 2 polls); a new record file in garments/ (a newer fit, chain 3 stiffness 0.6) changes the
     directory mtime -> re-read, freq_hz = 0.6·3.7 = 2.22. A worn hairstyle in mode "body" -> None. No worn
@@ -63,9 +64,10 @@ unit, Ruling H1a; zeta 0.5; limits 0.8..6.0 Hz)
     Run all / Re-fit refits it); {swing true, stiffness null} -> 200 {swing true, stiffness 1.0}, stored ("on", no
     key), still no run; {swing true, stiffness 1.2} -> no run either (Stiffness is motion only).
     Unknown character -> 404. The profile write runs under the lock (scripts/smoke_profile_rmw_lock.py).
-[7] Fit fingerprint (Ruling H11): with the hairstyle's hair_swing "off", "" or "maybe" (Swing off)
-    ``garment_fsig`` is one value — the payload carries no ``swing`` key, as before Swing was a fit input; with
-    "on" it differs (``swing: True`` joins the payload). (The proof against ``garment_store.py`` at 47290755 went
+[7] Fit fingerprint (Ruling H11, default flipped by Ruling H-R1): with the hairstyle's hair_swing "off" (Swing
+    off) ``garment_fsig`` carries no ``swing`` key, as before Swing was a fit input; with "on", "" or "maybe" (the
+    default, now on) it is one other value (``swing: True`` joins the payload) — the fingerprint change that makes
+    every hairstyle on the default stale once (a CPU refit). (The proof against ``garment_store.py`` at 47290755 went
     with Task 13: that code reads the profile keys the hairstyle replaced; the migration's fingerprint identity is
     pinned by scripts/smoke_hairstyle_items.py.)
 """
@@ -178,13 +180,13 @@ def main() -> int:
 
         # --- [2] settings ----------------------------------------------------------
         print("[2] settings and set_hair_motion")
-        check("default swing off (H11)", hm.HAIR_SWING_DEFAULT, False)
-        check("{} -> defaults", hm.settings({}), {"swing": False, "stiffness": 1.0})
-        check("None -> defaults", hm.settings(None), {"swing": False, "stiffness": 1.0})
-        check("swing off", hm.settings({"hair_swing": "off"})["swing"], False)
+        check("default swing ON (Ruling H-R1)", hm.HAIR_SWING_DEFAULT, True)
+        check("{} -> defaults", hm.settings({}), {"swing": True, "stiffness": 1.0})
+        check("None -> defaults", hm.settings(None), {"swing": True, "stiffness": 1.0})
+        check("an explicit swing off stays off", hm.settings({"hair_swing": "off"})["swing"], False)
         check("swing 'on' -> on", hm.settings({"hair_swing": "on"})["swing"], True)
         for raw in ("", "maybe"):
-            check(f"swing {raw!r} -> the default", hm.settings({"hair_swing": raw})["swing"], False)
+            check(f"swing {raw!r} -> the default (on)", hm.settings({"hair_swing": raw})["swing"], True)
         for raw, want in (("abc", 1.0), (2.5, 1.0), (True, 1.0), ("1.5", 1.5), (0.5, 0.5), ("", 1.0)):
             check(f"stiffness {raw!r}", hm.settings({"hair_stiffness": raw})["stiffness"], want)
         raises("stiffness 0.4 refused", lambda: hm.set_hair_motion("Demo", "hair_demo", True, 0.4))
@@ -375,9 +377,9 @@ def main() -> int:
             garment = dict(inventory.get_item("hair_demo")["garment"], hair_swing=swing)
             inventory.update_item("hair_demo", {"garment": garment})
             return gs.garment_fsig("Demo", "hair_demo")
-        off = {raw: fsig_with(raw) for raw in ("off", "", "maybe")}
-        check("swing off / '' / maybe: one fsig", len(set(off.values())), 1)
-        check("swing on: another fsig", fsig_with("on") != off["off"], True)
+        on = {raw: fsig_with(raw) for raw in ("on", "", "maybe")}
+        check("swing on / '' / maybe (the default, H-R1): one fsig", len(set(on.values())), 1)
+        check("an explicit swing off: another fsig", fsig_with("off") != on["on"], True)
 
     print("ALL OK" if not FAILS else f"FAILED: {FAILS}")
     return 0 if not FAILS else 1

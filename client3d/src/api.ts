@@ -732,6 +732,11 @@ export interface ApiModel {
    *  normalisation). The client must NOT rescale it by the bounding box —
    *  hair above the crown would shrink the body again. */
   normalized?: boolean;
+  /** The strand record of the served full-tier hair (`model.hair_strands`,
+   *  docs/schnittstellen-3d.md "Hair strands"): where to fetch it and its
+   *  sha256 (the cache key). Null/absent = no per-strand hair (Swing off, no
+   *  HairDeck hair, no record). */
+  hairStrands?: { url: string; sha256: string } | null;
 }
 
 /** Scale anchors (backend-note-scale-anchors.md, v3): 0 means undeclared. */
@@ -780,6 +785,8 @@ export async function getCharacterModel(name: string): Promise<ApiModel | null> 
     textureUrl: m.texture_url ?? undefined,
     clips: m.clips,
     normalized: !!m.normalized,
+    hairStrands: m.hair_strands?.url && m.hair_strands?.sha256
+      ? { url: m.hair_strands.url, sha256: m.hair_strands.sha256 } : null,
   };
 }
 

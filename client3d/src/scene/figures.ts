@@ -19,9 +19,10 @@ import {
   createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox, createGarmentCollision,
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
+  createStrandHair, withoutHairGroups, STRAND_LIMITS,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
-  GarmentCollision, FootPose } from '@anima/scene-render';
+  GarmentCollision, FootPose, HairStrandRecord, StrandHair } from '@anima/scene-render';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import type { ApiModel } from '../api';
@@ -178,6 +179,9 @@ interface LoadedModel {
    *  template carries the shoes it was fitted for (`modelFootPose`); null
    *  for a bare figure, a stale fit or a swap to a template without them. */
   footPose?: FootPose | null;
+  /** The strand record of the full tier's hair (`ApiModel.hairStrands`);
+   *  null for the distance tier (it carries no strand binding) or without one. */
+  hairStrands?: { url: string; sha256: string } | null;
   name: string;
   template: THREE.Group;
   clips: THREE.AnimationClip[];
@@ -910,6 +914,10 @@ export class FigureLibrary {
   private apiSignature = new Map<string, string>();
   private apiRevision = new Map<string, string>();
   private motionState = new Map<string, { payload: MotionPayload | undefined }>();
+  /** Strand records by sha256 (`ApiModel.hairStrands`): the record, null when
+   *  it could not be had, a promise while it loads. Several figures of one
+   *  model — and a tier swap back — share one download. */
+  private strandRecords = new Map<string, HairStrandRecord | null | Promise<void>>();
   private modelQueue = createFocusQueue({ max: 3 }); // Limit concurrent model downloads and builds.
   private modelFocus: (name: string) => { distance: number; avatar: boolean } =
     () => ({ distance: 0, avatar: false });
@@ -1198,8 +1206,30 @@ export class FigureLibrary {
   }
   private clipListingAtLoad = new Map<string, string>();
 
+  /** The strand record `ref` names: the record, null when it cannot be had
+   *  (404, network, another record version), undefined while it loads (the
+   *  first call starts the download). */
+  strandRecord(ref: { url: string; sha256: string }): HairStrandRecord | null | undefined {
+    const hit = this.strandRecords.get(ref.sha256);
+    if (hit === undefined) {
+      this.strandRecords.set(ref.sha256, fetch(ref.url)
+        .then(async (res) => {
+          const record = res.ok ? await res.json() as HairStrandRecord : null;
+          this.strandRecords.set(ref.sha256, record && record.version === 1 ? record : null);
+        })
+        .catch((e) => {
+          console.warn('[figures] strand record not loadable:', ref.url, e);
+          this.strandRecords.set(ref.sha256, null);
+        }));
+      return undefined;
+    }
+    return hit instanceof Promise ? undefined : hit;
+  }
+
   private makeFigure(name: string, model: LoadedModel): Figure {
     const figure = new Figure(model);
+    const strands = model.hairStrands;
+    if (strands) figure.loadStrandRecord = () => this.strandRecord(strands);
     let epoch = 0;
     let preparing = false;
     figure.prepareClips = () => {
@@ -1826,6 +1856,7 @@ export class FigureLibrary {
       motion,
       collision: info.collision ?? null,
       footPose,
+      hairStrands: tier === 'full' ? info.hairStrands ?? null : null,
       name, template,
       clips: info.rig === 'none' ? [] : gltf.animations.filter((c) => c.tracks.length > 0),
       scale, height: rawHeight * scale, assignOnly: true, noClips: false, tier,
@@ -1945,6 +1976,23 @@ export class Figure {
   private readonly secondaryNextPosition = new THREE.Vector3();
   private secondaryPlaced = false;
   private secondaryFar: boolean;
+  /** The tier the figure's model was loaded at. */
+  readonly tier: FigureTier;
+
+  /** PER-STRAND HAIR (strand-hair spec § 6.2.2). The library hands the
+   *  figure its strand record through `loadStrandRecord` (a full-tier model
+   *  with `hairStrands` only); `prepareStrandHair` binds it to the hair mesh
+   *  once it has loaded (`createStrandHair`, nothing on the mesh changes yet),
+   *  and `NpcManager.tickStrandHair` switches it on for the figures the budget
+   *  admits (`setStrandHair`). While it runs, the hair chains are not solved
+   *  (`withoutHairGroups`), the hair mesh is out of the GPU garment push
+   *  (`excludeMesh`) and the sim steps after the mixer, before the secondary
+   *  motion. A record the mesh does not carry the binding of (Review Focus 2)
+   *  leaves the hair on its chains, with one console warning. */
+  loadStrandRecord?: () => HairStrandRecord | null | undefined;
+  private strand: StrandHair | null = null;
+  private strandRefused = false;
+  private strandOn = false;
 
   /** Explicit placement/LOD reset; a replacement Figure starts with fresh state. */
   resetSecondaryMotion() {
@@ -2212,6 +2260,7 @@ export class Figure {
     // template's stay shared and untouched); `dispose` frees them.
     this.garmentCollision = createGarmentCollision(THREE, inst, model.collision);
     this.secondaryFar = model.tier === 'low';
+    this.tier = model.tier;
 
     this.mixer = new THREE.AnimationMixer(inst);
     // A bridge clip runs ONCE; when it ends, the state it was headed for
@@ -2764,6 +2813,11 @@ export class Figure {
     this.disposed = true;
     this.prepareClips = undefined;
     this.secondary.dispose();
+    // The strand handle first: it puts the template's geometry back and frees
+    // the clone it made; the garment collision then restores the materials.
+    this.strand?.dispose();
+    this.strand = null;
+    this.strandOn = false;
     this.garmentCollision?.dispose();
     this.garmentCollision = null;
     this.ghost.dispose();
@@ -3096,15 +3150,23 @@ export class Figure {
     const now = performance.now();
     const realDelta = options.realDelta ?? (now - this.secondaryTime) / 1000;
     this.secondaryTime = now;
-    if (this.secondaryRev !== this.motion?.rev) {
-      this.secondary.configure(this.motion);
-      this.secondaryRev = this.motion?.rev;
+    // A figure whose hair runs per strand solves no hair chain.
+    const motion = this.strandOn ? withoutHairGroups(this.motion) : this.motion;
+    if (this.secondaryRev !== motion?.rev) {
+      this.secondary.configure(motion);
+      this.secondaryRev = motion?.rev;
     }
     const position = this.root.getWorldPosition(this.secondaryNextPosition);
     // Safety net for owners that replace placement directly: >2 m is a jump.
     if (this.secondaryPlaced && position.distanceTo(this.secondaryPosition) > 2) this.secondary.reset();
     this.secondaryPosition.copy(position);
     this.secondaryPlaced = true;
+    // The strands step on this frame's final pose (the sim reads the bones'
+    // world matrices); it resets itself on a long frame or a head jump.
+    if (this.strandOn && this.strand) {
+      this.root.updateMatrixWorld(true);
+      this.strand.update(realDelta, { frozen: options.frozen });
+    }
     this.secondary.update(realDelta, { frozen: options.frozen, far: options.far ?? this.secondaryFar });
     if (this.firstPerson && this.head) {
       this.head.scale.copy(this.headScale).multiplyScalar(1e-3);
@@ -3123,6 +3185,60 @@ export class Figure {
   setFirstPerson(on: boolean) {
     this.firstPerson = on && this.head !== null;
     if (!this.firstPerson) this.restoreHead();
+    else this.setStrandHair(false);   // the shrunk head hides the hair (spec § 6.2.2)
+  }
+
+  /** The bound strand handle, null before `prepareStrandHair` succeeded. */
+  get strandHair(): StrandHair | null {
+    return this.strand;
+  }
+
+  /** Runs per strand now. */
+  get strandRunning(): boolean {
+    return this.strandOn;
+  }
+
+  /** What the figure budget adds up for this figure: the handle's measured
+   *  (or, before its first run, estimated) ms per frame; the whole budget
+   *  without a handle. */
+  get strandCostMs(): number {
+    return this.strand?.costMs ?? STRAND_LIMITS.budgetMs;
+  }
+
+  /** Bind the strand record once it has loaded (the first call starts the
+   *  download): true when a handle is ready. False without a record, at the
+   *  distance tier, or for good when the record and the mesh do not belong
+   *  together (one warning). Changes nothing on the mesh. */
+  prepareStrandHair(): boolean {
+    if (this.strand) return true;
+    if (this.strandRefused || this.tier !== 'full' || !this.loadStrandRecord) return false;
+    const record = this.loadStrandRecord();
+    if (record === undefined) return false;
+    const inst = this.root.children[0];
+    const handle = record && inst ? createStrandHair(THREE, inst, record) : null;
+    if (!handle) {
+      this.strandRefused = true;
+      if (record) {
+        console.warn(`[figures] ${record.item_id}: the hair mesh does not carry the strand binding of record`
+          + ` ${record.fit_sha256.slice(0, 12)} — the hair stays on its chains`);
+      }
+      return false;
+    }
+    this.strand = handle;
+    return true;
+  }
+
+  /** Switch the per-strand hair on or off (only on with a ready handle and
+   *  not in first person). On: the sim reset to the current pose, the hair out
+   *  of the GPU push, the hair chains dropped from the motion. Off: the shared
+   *  geometry and skin back, the push and the chains with it. Both switches
+   *  are invisible at rest. */
+  setStrandHair(on: boolean) {
+    const want = on && !!this.strand && !this.firstPerson;
+    if (want === this.strandOn || !this.strand) return;
+    this.strandOn = want;
+    this.strand.setEnabled(want);
+    this.garmentCollision?.excludeMesh(this.strand.mesh, want);
   }
 
   private restoreHead() {

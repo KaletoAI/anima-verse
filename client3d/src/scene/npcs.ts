@@ -17,6 +17,8 @@ import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
 import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
+import { pickStrandFigures, STRAND_LIMITS } from '@anima/scene-render';
+import { strandCandidates, type StrandFigureView } from './strandBudget';
 import { WALK_CLEARANCE_M } from '../game/ground';
 import { GROUND_Y } from './ground';
 import { tagAnchorY, tagBadges, tagName, tagTravelling, tagVisible } from './nameTags';
@@ -317,6 +319,8 @@ export interface NpcState {
  *  ground reader, and what a route on its own floor (`route.floorY`) walks on. */
 const PLAIN_FLOOR_MOVE: GroundMove = { movement: 'walk_run', scope: 'wilderness', speed: 1,
   sink: { move: 0, idle: 0 }, water: null, swimFrom: SWIM_FROM_DEFAULT_M };
+
+const STRAND_SCRATCH = new THREE.Vector3();
 
 export class NpcManager {
   onPropEntryError: ((message: string) => void) | null = null;
@@ -853,6 +857,32 @@ export class NpcManager {
       if (d < near) this.figures.setFigureTier(name, 'full');
       else if (d > far) this.figures.setFigureTier(name, 'low');
     }
+  }
+
+  /** PER-STRAND HAIR, once per frame beside `tickFigureTiers` (strand-hair
+   *  spec § 6.2.2): the full-tier figures with a bound strand record are the
+   *  candidates (`strandCandidates` — never the camera's own body in first
+   *  person, never a hidden figure), `pickStrandFigures` admits at most two,
+   *  nearest first, within 8 m (a running one leaves at 9 m), by their
+   *  measured cost against an 8 ms budget; every other figure keeps its
+   *  chains or today's skin. A figure within the leave range starts loading
+   *  its record here (`prepareStrandHair`) — farther ones never download it. */
+  tickStrandHair(cameraPos: THREE.Vector3) {
+    const views: StrandFigureView[] = [];
+    const figures: Array<[string, Figure]> = [];
+    for (const [name, npc] of this.npcs) {
+      const figure = npc.figure;
+      if (!figure) continue;
+      figures.push([name, figure]);
+      const position = npc.root.getWorldPosition(STRAND_SCRATCH);
+      const firstPerson = name === this.firstPersonName;
+      const near = position.distanceTo(cameraPos) <= STRAND_LIMITS.leaveM;
+      const hasRecord = npc.root.visible && !firstPerson && near && figure.prepareStrandHair();
+      views.push({ name, position: { x: position.x, y: position.y, z: position.z }, tier: figure.tier,
+        hasRecord, firstPerson, costMs: figure.strandCostMs, running: figure.strandRunning });
+    }
+    const picked = pickStrandFigures(strandCandidates(views, cameraPos));
+    for (const [name, figure] of figures) figure.setStrandHair(picked.has(name));
   }
 
   /** Drop a figure so the next `update()` builds it again — e.g. when its 3D

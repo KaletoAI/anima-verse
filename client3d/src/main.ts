@@ -6813,6 +6813,9 @@ async function startApp(username: string, role: string) {
         storey.visible = storey.userData.level === tile.levelFilter;
       }
     }
+    // Per-strand hair for the nearest figures (budget: 2 figures, 8 m, 8 ms);
+    // decided before the tick so the figures step the hair this frame.
+    npcs.tickStrandHair(engine.camera.position);
     npcs.tick(dt, engine.dist, (lastMap ?? firstMap).game_rate === 0,
       engine.firstPerson ? { name: avatarName, viewYaw: viewHeading(engine.yaw) } : null);
     bob += dt * 2.2;

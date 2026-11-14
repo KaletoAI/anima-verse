@@ -12256,7 +12256,7 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   chains hang from (Head). Each joint is placed at that blend of the body joints' motions since bind (linear, as
   skinning blends) times its bind frame, times its own swing scaled to the row's `anchor_from` share; at zero swing
   the hair is exactly where today's skin puts it. The hair contact runs on that final frame (the tip turned about
-  the joint). Swing itself is a FIT input (profile `hair_swing`, default off): with Swing off the fit is today's
+  the joint). Swing itself is a FIT input (profile `hair_swing`, default ON since Ruling H-R1 — explicitly off stays off): with Swing off the fit is today's
   skin byte for byte and the payload has no hair group. Checks: `scripts/smoke_hair_today_skin.mjs` (hand-derived),
   `scripts/check_garment_collision.mjs --motion` (penetration on the real clips). Far LOD, no driven link or no payload → nothing is bound, no per-frame work. Checks:
   `scripts/smoke_extension_collision.mjs` (hand-derived), `scripts/check_extension_collision.mjs` (tip depth and
@@ -12353,6 +12353,24 @@ attributes' round trip, the full tier only, a mismatch refused, the assembly sta
 binding), and `scripts/smoke_hair_sim.mjs` (the sim on a quantized sphere head: exact rest, angle limit, tether,
 SDF depth and eye box under sway/walk, scalp exposure, HAAR without limit, follow rows under a pitched spine with
 the torso capsule).
+
+**The handle and the budget (3D client).** `hairSim.ts::createStrandHair(three, root, record)` binds a record to the
+figure's hair mesh (`null` without the two attributes or on `StrandMismatch`) and keeps its colliders: the record's
+capsules WITHOUT the head capsule (Ruling H-R7 — the head is the SDF's), taken into the hair mesh's bind space per
+frame. `update(realDelta, {frozen})` runs after the mixer and `updateMatrixWorld`, before the secondary motion:
+fixed `STRAND_DT` steps (at most `STRAND_MAX_STEPS`), a reset to the targets after a delta over
+`STRAND_RESET_DELTA_S` or a head jump over `STRAND_RESET_JUMP_M` (teleport, model swap, unfreeze), none while
+frozen, the rebuild only on a frame with a step; `costMs` is the measured sim + rebuild per frame (EMA). While a
+figure runs per strand its hair mesh leaves the garment push (`GarmentCollision.excludeMesh`) and its hair groups
+leave the spring chains (`secondaryMotion.withoutHairGroups`); off, both come back. `pickStrandFigures` admits per
+frame, nearest first, at most `STRAND_LIMITS.maxFigures` (2) figures within `enterM` (8 m; a running one leaves
+past `leaveM`, 9 m) whose summed `costMs` stays within `budgetMs` (8 ms); the first-person body never runs. The
+client (`client3d/src/scene/strandBudget.ts`, `NpcManager.tickStrandHair`) fetches `model.hair_strands` only for
+full-tier figures within `leaveM` and caches records by sha256. A record named for a model whose hair carries no
+`_STRAND_*` attributes is refused once with a console warning; that figure stays on the spring chains. Proofs:
+`scripts/smoke_strand_hair_handle.mjs`, `scripts/smoke_client_strand_wiring.mjs`; real hair:
+`scripts/hair_strands_export.py` + `scripts/check_hair_sim.mjs` (eye rows, SDF depth, scalp exposure against the
+bind rest and against today's skin, ms per frame on the library clips).
 
 ### Footwear (`foot_pose`, garment kind `footwear`)
 
@@ -12748,7 +12766,7 @@ the chain joints that carry weight and do not lie inside the head capsule at res
 character's Stiffness factor (clamped, rounded to 3 decimals). Collision runs against the `HAIR_REGIONS` capsules,
 the placement on today's skin through `anchor_blend` / `anchor_from` (see the hair-chain paragraph above). Admin
 surface: Game-Admin → Characters → Hairstyles, the selected hairstyle → Hair motion (`HairDeckPlacement.tsx`): the
-chain count (or "No spring chains in this hairstyle — hair moves with the head"), Swing (a checkbox, default off —
+chain count (or "No spring chains in this hairstyle — hair moves with the head"), Swing (a checkbox, default on since Ruling H-R1 —
 `POST /characters/{n}/hair/motion {swing, stiffness, item_id}` only saves it; the changed Swing makes the fit stale
 and the tab's Run all / Re-fit re-fits the hair on the CPU) and Stiffness (0.5–2.0, motion only, no refit).
 

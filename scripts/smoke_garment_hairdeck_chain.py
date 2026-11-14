@@ -409,7 +409,7 @@ def main() -> int:
               {"accepted": True, "attempt": 1, "seed": 42, "notes": ["input_alpha"], "error": None})
         check("fit inputs", (FIT_CALLS[0]["nohead"], FIT_CALLS[0]["proxy"], FIT_CALLS[0]["colour_target"]),
               (b"hair_seed42_nohead.glb-call1", b"hair_seed42.glb-call1", None))
-        check("fit swing: the default (off, Ruling H11)", FIT_CALLS[0]["swing"], False)
+        check("fit swing: the default (on, Ruling H-R1)", FIT_CALLS[0]["swing"], True)
         check("fit profile colour / class", (tuple(round(c, 5) for c in FIT_CALLS[0]["colour_profile"] or ()),
                                              FIT_CALLS[0]["length_class"]), (BLONDE, "medium"))
         fit = gs.garment_path("Demo", hid, f_hd, "fit")

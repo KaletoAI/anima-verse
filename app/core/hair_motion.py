@@ -47,12 +47,13 @@ SETTING_STIFFNESS = "hair_stiffness"
 #: The stored values of ``SETTING_SWING``; anything else (``""``) means ``HAIR_SWING_DEFAULT``.
 SWING_ON = "on"
 SWING_OFF = "off"
-#: Swing of a character that never chose (Ruling H11, 2026-11-12): OFF — the fit is then today's hair, byte for
-#: byte in its skin. It flips to True only when the acceptance (plan 2026-11-12-hairdeck-spring-chains, Task 8)
-#: shows the Swing-on hair's penetration at most today's + 1 percentage point in the worst pose
-#: (``scripts/check_garment_collision.mjs --motion``, hair ``excess``). Flipping it changes the fit fingerprint
-#: of every character on the default (``garment_store.garment_fsig``): their hair is refitted at the next run.
-HAIR_SWING_DEFAULT = False
+#: Swing of a hairstyle that never chose: ON since Ruling H-R1 (strand-hair spec § 9, 2026-11-14 — the user's
+#: requirement: every strand swings; Ruling H11 had it off). Swing on serves the strand record (per-strand hair for
+#: the nearest figures, ``hair_strands.served_file``) and binds the cards to their spring chains for everyone else.
+#: Flipping it changed the fit fingerprint of every HairDeck hairstyle on the default (``garment_store.garment_fsig``
+#: holds ``swing`` only when it is on): their fit is stale until a CPU refit from the stored seeds (no hub job); the
+#: old fit stays served meanwhile. A hairstyle whose Swing was explicitly switched off (stored ``"off"``) keeps it.
+HAIR_SWING_DEFAULT = True
 #: The bounds of the Stiffness factor (× HairDeck's per-chain stiffness).
 STIFFNESS_LIMITS: Tuple[float, float] = (0.5, 2.0)
 DEFAULT_STIFFNESS = 1.0
