@@ -20,9 +20,12 @@ import {
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox, createGarmentCollision,
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
   createStrandHair, withoutHairGroups, STRAND_LIMITS, STRAND_RECORD_VERSION,
+  bindCollision, bodySphere, reachSphere, partnerCapsules, snapshotPartner, COLLISION_VERSION,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
-  GarmentCollision, FootPose, HairStrandRecord, StrandHair } from '@anima/scene-render';
+  GarmentCollision, FootPose, HairStrandRecord, StrandHair, CollisionBinding, CapsuleNow, PartnerSnapshot,
+  Sphere } from '@anima/scene-render';
+import type { FrameFigure } from './partnerFrame';
 import { SubmergedGhost } from './submergedGhost';
 import { applyFigureTexture, zeroFigureMetalness } from './figureMaterials';
 import type { ApiModel } from '../api';
@@ -182,6 +185,11 @@ interface LoadedModel {
   /** The strand record of the full tier's hair (`ApiModel.hairStrands`);
    *  null for the distance tier (it carries no strand binding) or without one. */
   hairStrands?: { url: string; sha256: string } | null;
+  /** Set by `FigureLibrary.retireModels`: the model is out of the caches and
+   *  only drawn until its replacement is live. A figure of a retired model is
+   *  no partner any more and drops its partner binding (two-phase frame,
+   *  `Figure.partnerSnapshot`). */
+  retired?: boolean;
   name: string;
   template: THREE.Group;
   clips: THREE.AnimationClip[];
@@ -1428,6 +1436,9 @@ export class FigureLibrary {
     if (active) old.add(active);
     for (const m of this.tierCache.get(charName)?.values() ?? []) old.add(m);
     if (!old.size) return;
+    // Its figures stop being partners now and drop their partner binding
+    // (`Figure.partnerSnapshot`): nothing reads a retired instance.
+    for (const m of old) m.retired = true;
     const list = this.retired.get(charName) ?? [];
     list.push(...old);
     this.retired.set(charName, list);
@@ -1449,7 +1460,7 @@ export class FigureLibrary {
     for (const m of this.tierCache.get(charName)?.values() ?? []) inUse.add(m);
     let freed = 0;
     for (const m of list) {
-      if (inUse.has(m)) continue;
+      if (inUse.has(m)) { m.retired = false; continue; }
       this.disposeModel(m);
       freed += 1;
     }
@@ -1994,6 +2005,39 @@ export class Figure {
   private strandRefused = false;
   private strandOn = false;
 
+  /** THE TWO-PHASE FRAME (cross-person collision spec Part 1, `partnerFrame.ts`).
+   *  `update` is phase A — the pose: mixer, placement, height, foot pose,
+   *  bridge (and the secondary motion's configuration, which solves nothing)
+   *  — and records here what phase B needs; `updateSecondary` (phase B)
+   *  steps the strand hair and the secondary motion with the partners'
+   *  snapshots, then shrinks the head for first person. Phase B of every
+   *  figure runs after phase A of every figure (`NpcManager.tickSecondary`),
+   *  so a partner is read on its FINAL pose and the order the figures are
+   *  visited in does not matter. Secondary motion must never move back into
+   *  `update`. Null = nothing posed since the last phase B. Several phase A
+   *  calls before one phase B add their real time up. */
+  private pendingSecondary: { realDelta: number; frozen: boolean; far: boolean } | null = null;
+  /** The model this figure was built from (its `retired` flag) and the body's
+   *  collision payload. */
+  private readonly model: LoadedModel;
+  private readonly collisionPayload: CollisionPayload | null;
+  /** THE PARTNER BINDING: this figure's capsules as OTHER figures read them,
+   *  and its own body sphere for the frame plan. Bound lazily the first time
+   *  the figure is planned or selected, on the instance it then shows
+   *  (`partnerBoundOn`); dropped with the model it was bound on (`retired`,
+   *  `dispose`). It holds no GPU resource. `partnerRefused`: the payload
+   *  `bindCollision` refuses (another version, no capsules) — never retried. */
+  private partnerBinding: CollisionBinding | null = null;
+  private partnerBoundOn: THREE.Object3D | null = null;
+  private partnerRefused = false;
+  /** A sphere about the root that holds the body in its bind pose (the
+   *  plan's root prefilter): the half-diagonal of the figure's box over its
+   *  feet, at least the figure's height. */
+  private readonly bindRadius: number;
+  /** Partner capsules are handed to the strand sim / the GPU hair push right now. */
+  private strandPartners = false;
+  private gpuPartners = false;
+
   /** Explicit placement/LOD reset; a replacement Figure starts with fresh state. */
   resetSecondaryMotion() {
     this.secondary.reset();
@@ -2234,6 +2278,10 @@ export class Figure {
     this.travelBase = { x: inst.position.x, z: inst.position.z };
     this.root.add(inst);
     this.root.updateMatrixWorld(true);
+    this.model = model;
+    this.collisionPayload = model.collision ?? null;
+    const size = box.isEmpty() ? null : box.getSize(new THREE.Vector3());
+    this.bindRadius = Math.max(this.height, size ? Math.hypot(size.x / 2, size.y, size.z / 2) : 0);
     const rigBones: Record<string, THREE.Bone> = {};
     inst.traverse((o) => {
       const key = (o as THREE.Bone).isBone ? normBoneName(o.name) : '';
@@ -2812,6 +2860,10 @@ export class Figure {
   dispose() {
     this.disposed = true;
     this.prepareClips = undefined;
+    this.pendingSecondary = null;
+    // The partner binding belongs to the model it was bound on (no GPU resource).
+    this.partnerBinding = null;
+    this.partnerBoundOn = null;
     this.secondary.dispose();
     // The strand handle first: it puts the template's geometry back and frees
     // the clone it made; the garment collision then restores the materials.
@@ -3161,17 +3213,164 @@ export class Figure {
     if (this.secondaryPlaced && position.distanceTo(this.secondaryPosition) > 2) this.secondary.reset();
     this.secondaryPosition.copy(position);
     this.secondaryPlaced = true;
+    // Phase B's share (`pendingSecondary`): the strands and the secondary
+    // motion step in `updateSecondary`, once every figure has posed.
+    const pending = this.pendingSecondary;
+    this.pendingSecondary = {
+      realDelta: (pending?.realDelta ?? 0) + realDelta,
+      frozen: !!options.frozen,
+      far: options.far ?? this.secondaryFar,
+    };
+  }
+
+  /** PHASE B of the two-phase frame (`pendingSecondary`): the strand hair and
+   *  the secondary motion on this frame's final pose, against `partners` —
+   *  the other figures' capsules as snapshot before any phase B ran
+   *  (`NpcManager.tickSecondary`); `[]` when the figure reads none. A no-op
+   *  without a pending phase A. Frozen (the photo hold included) still runs
+   *  it, frozen. */
+  updateSecondary(partners: readonly PartnerSnapshot[]): void {
+    const pending = this.pendingSecondary;
+    if (!pending) return;
+    this.pendingSecondary = null;
+    if (this.disposed) return;
     // The strands step on this frame's final pose (the sim reads the bones'
-    // world matrices); it resets itself on a long frame or a head jump.
+    // world matrices); it resets itself on a long frame or a head jump. Their
+    // partners: every region of the partner set (the hair consumer).
     if (this.strandOn && this.strand) {
+      if (partners.length) {
+        this.strand.setPartners(hairPartnerCapsules(partners));
+        this.strandPartners = true;
+      } else if (this.strandPartners) {
+        this.strand.setPartners(null);
+        this.strandPartners = false;
+      }
       this.root.updateMatrixWorld(true);
-      this.strand.update(realDelta, { frozen: options.frozen });
+      this.strand.update(pending.realDelta, { frozen: pending.frozen });
     }
-    this.secondary.update(realDelta, { frozen: options.frozen, far: options.far ?? this.secondaryFar });
+    this.secondary.update(pending.realDelta, { frozen: pending.frozen, far: pending.far, partners });
     if (this.firstPerson && this.head) {
       this.head.scale.copy(this.headScale).multiplyScalar(1e-3);
       this.headShrunk = true;
     }
+  }
+
+  /** The partner binding on the instance shown now (`partnerBinding`), its
+   *  capsules recomputed from the current bones. Null for a retired model, a
+   *  disposed figure and a payload `bindCollision` refuses. */
+  private boundPartner(update = true): CollisionBinding | null {
+    if (this.disposed || this.model.retired) {
+      this.partnerBinding = null;
+      this.partnerBoundOn = null;
+      return null;
+    }
+    if (this.partnerRefused || !this.collisionPayload) return null;
+    const inst = this.root.children[0] ?? null;
+    if (!inst) return null;
+    if (this.partnerBoundOn !== inst) {
+      this.partnerBinding = bindCollision(THREE, inst, this.collisionPayload);
+      this.partnerBoundOn = this.partnerBinding ? inst : null;
+      if (!this.partnerBinding) {
+        this.partnerRefused = true;
+        return null;
+      }
+    }
+    // The bones are read in the world: the placement of the frame (owner,
+    // root, instance) first.
+    this.root.updateWorldMatrix(true, false);
+    this.root.updateMatrixWorld(true);
+    if (update) this.partnerBinding!.update();
+    return this.partnerBinding;
+  }
+
+  /** This figure for the frame plan (`planPartnerFrame`), null without a
+   *  collision payload this client can bind (another version, no capsules)
+   *  and for a retired model. `body()` / `reach()` bind lazily and are asked
+   *  only for a pair that passed the root prefilter; each answers once per
+   *  call of this method. `name` / `members` are the owner's (the figure
+   *  knows neither). */
+  frameFigure(name = '', members: readonly string[] = []): FrameFigure | null {
+    const payload = this.collisionPayload;
+    if (this.disposed || this.model.retired || this.partnerRefused || !payload
+      || payload.version !== COLLISION_VERSION || !payload.capsules?.length) return null;
+    const at = this.root.getWorldPosition(FRAME_SCRATCH);
+    const lever = this.secondary.reach();
+    const reader = !!this.pendingSecondary && !this.pendingSecondary.far
+      && (lever > 0 || this.strandOn || this.hasHairPush);
+    let body: Sphere | null | undefined;
+    const bodyNow = () => {
+      if (body === undefined) {
+        const binding = this.boundPartner();
+        body = binding ? bodySphere(binding.capsules.map(entry => entry.now)) : null;
+      }
+      return body;
+    };
+    return {
+      name, members, reader, lever,
+      root: [at.x, at.y, at.z],
+      bindRadius: this.bindRadius,
+      body: bodyNow,
+      reach: () => {
+        const b = bodyNow();
+        return b ? reachSphere(b, lever, this.hairSpheres()) : null;
+      },
+    };
+  }
+
+  /** The hair this figure's reach covers beyond its chains: the GPU-pushed
+   *  hair meshes' world spheres as last rendered, and the per-strand hair's
+   *  rows as last stepped. */
+  private hairSpheres(): Sphere[] {
+    const spheres: Sphere[] = [];
+    for (const entry of this.garmentCollision?.entries ?? []) {
+      if (entry.sphere && !this.strandRuns(entry.mesh)) spheres.push(entry.sphere);
+    }
+    if (this.strandOn && this.strand) {
+      const rows = this.strand.targets;
+      const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      for (let i = 0; i + 2 < rows.length; i += 3) {
+        for (let d = 0; d < 3; d++) {
+          lo[d] = Math.min(lo[d], rows[i + d]);
+          hi[d] = Math.max(hi[d], rows[i + d]);
+        }
+      }
+      if (lo[0] <= hi[0]) {
+        const c: [number, number, number] = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+        spheres.push({ c, r: Math.hypot(hi[0] - c[0], hi[1] - c[1], hi[2] - c[2]) });
+      }
+    }
+    return spheres;
+  }
+
+  /** This figure's capsules as a partner reads them in phase B (`snapshotPartner`
+   *  — the binding updated once on the current pose): binds lazily on the
+   *  instance shown now. Null for a payload `bindCollision` refuses, a
+   *  retired model or a disposed figure — the reader then skips it. `name`
+   *  is the owner's (it keys the reader's partner hysteresis). */
+  partnerSnapshot(interaction: { id: string; kind: string } | null, name = ''): PartnerSnapshot | null {
+    const binding = this.boundPartner(false);
+    return binding ? snapshotPartner(name, binding, interaction) : null;
+  }
+
+  /** `mesh` is the hair mesh the per-strand hair runs now (out of the GPU push). */
+  private strandRuns(mesh: THREE.Object3D): boolean {
+    return this.strandOn && !!this.strand && this.strand.mesh === mesh;
+  }
+
+  /** The figure's hair meshes are pushed on the GPU (a hair entry of the
+   *  garment push the per-strand hair has not taken over). */
+  get hasHairPush(): boolean {
+    return !!this.garmentCollision?.entries.some(entry => entry.kind === 'hair' && !this.strandRuns(entry.mesh));
+  }
+
+  /** The partner capsules (world, the hair consumer's regions) the GPU hair
+   *  push reads at render time; null or `[]` = none. Called after phase B
+   *  with the partners re-read on their final pose, so the push has no lag. */
+  setGpuPartners(capsules: readonly CapsuleNow[] | null): void {
+    const any = !!capsules?.length;
+    if (!any && !this.gpuPartners) return;
+    this.gpuPartners = any;
+    this.garmentCollision?.setPartners(any ? capsules : null);
   }
 
   /** Can this figure be its own first-person body (it has a head bone)? */
@@ -3262,3 +3461,14 @@ export class Figure {
 const EYE_SCRATCH = {
   pos: new THREE.Vector3(), quat: new THREE.Quaternion(), scale: new THREE.Vector3(),
 };
+const FRAME_SCRATCH = new THREE.Vector3();
+
+/** The world capsules of `partners` the hair consumer takes (`partnerCapsules('hair', …)`: every region,
+ *  `outer_trunk` replacing `torso`), in partner order. */
+export function hairPartnerCapsules(partners: readonly PartnerSnapshot[]): CapsuleNow[] {
+  const out: CapsuleNow[] = [];
+  for (const snap of partners) {
+    for (const { capsule } of partnerCapsules('hair', snap.capsules.map(capsule => ({ capsule })))) out.push(capsule.now);
+  }
+  return out;
+}

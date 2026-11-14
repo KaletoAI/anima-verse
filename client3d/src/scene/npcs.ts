@@ -16,8 +16,10 @@ import { SWIM_FROM_DEFAULT_M, floatRootY, groundSink,
 import { RIDE_ARRIVE_M, rideStep, type StairRide } from '../game/stairs';
 import type { PhotoSubject } from '../game/photoView';
 import { bodyYawForView, eyeHeight } from './cameraFraming';
-import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary } from './figures';
+import { BASE_FIGURE_HEIGHT_M, Figure, FigureLibrary, hairPartnerCapsules } from './figures';
 import { pickStrandFigures, STRAND_LIMITS } from '@anima/scene-render';
+import type { PartnerSnapshot } from '@anima/scene-render';
+import { planPartnerFrame, type FrameFigure } from './partnerFrame';
 import { strandCandidates, type StrandFigureView } from './strandBudget';
 import { WALK_CLEARANCE_M } from '../game/ground';
 import { GROUND_Y } from './ground';
@@ -248,6 +250,11 @@ export interface TravelRoute {
 export interface PairPlay {
   blend?: { from: PairPose; at: number };
   id: string;
+  /** the interaction's kind (`MapInteraction.kind`) — what a partner snapshot names */
+  kind: string;
+  /** every character of the interaction, this figure included (`MapInteraction.members`) —
+   *  the partners a figure reads first (two-phase frame, `planPartnerFrame`) */
+  members: string[];
   /** `<kind>__<role>` — the clip half this figure plays; `<kind>__<role>~<alt>`
    *  when the server names an ALT half (G6) */
   clip: string;
@@ -272,6 +279,9 @@ export interface PairPlay {
   rate: number;
   stamp: number;
 }
+
+/** A figure that reads no partner this frame (phase B, `tickSecondary`). */
+const NO_PARTNERS: readonly PartnerSnapshot[] = [];
 
 /** Scratch for the goal `update()` writes (one figure at a time). */
 const _goal = new THREE.Vector3();
@@ -1400,7 +1410,7 @@ export class NpcManager {
         at: performance.now(),
       };
       npc.interaction = {
-        blend, id: it.id, clip, base,
+        blend, id: it.id, kind: it.kind, members: Object.values(it.members ?? {}), clip, base,
         anchor: { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null },
         elapsed: it.elapsed_s, rate, stamp,
         clipT: pairClipPhase({ elapsedGameS: it.elapsed_s, rate, loop, loopCount, clipDurationS: clipDuration }).clipT,
@@ -1414,6 +1424,8 @@ export class NpcManager {
       return;
     }
     const cur = npc.interaction;
+    cur.kind = it.kind;
+    cur.members = Object.values(it.members ?? {});
     cur.rate = it.rate ?? 0;
     cur.anchor = { x: it.anchor.x, z: it.anchor.z, yaw: it.anchor.yaw, placeId: it.anchor.place_id ?? null };
     if (cur.stamp !== stamp) {
@@ -2279,6 +2291,64 @@ export class NpcManager {
         npc.sprite.scale.setScalar(spriteScale);
       }
       npc.label.visible = labelVisible;
+    }
+    this.tickSecondary();
+  }
+
+  /** PHASE B of the two-phase figure frame (`partnerFrame.ts`), once every
+   *  figure has posed in the loop above (phase A, `Figure.update`):
+   *   1. the plan — per reader the partners it reads this frame;
+   *   2. every selected partner snapshot ONCE, before any solve, so the
+   *      result does not depend on the order the figures are visited in;
+   *   3. `updateSecondary` for each figure posed this frame;
+   *   4. the partners of every GPU hair-push reader re-read on their FINAL
+   *      pose (their own phase B included) and 5. handed to its hair push,
+   *      which reads them at render time — no lag. */
+  private tickSecondary() {
+    const frames: FrameFigure[] = [];
+    for (const npc of this.npcs.values()) {
+      const frame = npc.figure?.frameFigure(npc.name, npc.interaction?.members ?? []);
+      if (frame) frames.push(frame);
+    }
+    const plan = frames.length > 1 ? planPartnerFrame(frames) : new Map<string, string[]>();
+    const interactionOf = (npc: Npc) => npc.interaction ? { id: npc.interaction.id, kind: npc.interaction.kind } : null;
+    const snapshots = new Map<string, PartnerSnapshot | null>();
+    for (const names of plan.values()) {
+      for (const name of names) {
+        if (snapshots.has(name)) continue;
+        const npc = this.npcs.get(name);
+        snapshots.set(name, npc?.figure?.partnerSnapshot(interactionOf(npc), name) ?? null);
+      }
+    }
+    const partnersOf = (name: string): readonly PartnerSnapshot[] => {
+      const names = plan.get(name);
+      if (!names?.length) return NO_PARTNERS;
+      const out: PartnerSnapshot[] = [];
+      for (const partner of names) {
+        const snap = snapshots.get(partner);
+        if (snap) out.push(snap);
+      }
+      return out;
+    };
+    for (const npc of this.npcs.values()) npc.figure?.updateSecondary(partnersOf(npc.name));
+    // The GPU hair push: the same selection, the partners re-read after every phase B.
+    const fresh = new Map<string, PartnerSnapshot | null>();
+    for (const npc of this.npcs.values()) {
+      const figure = npc.figure;
+      if (!figure) continue;
+      const names = figure.hasHairPush ? plan.get(npc.name) : undefined;
+      if (!names?.length) { figure.setGpuPartners(null); continue; }
+      const partners: PartnerSnapshot[] = [];
+      for (const name of names) {
+        if (!snapshots.get(name)) continue;
+        if (!fresh.has(name)) {
+          const partner = this.npcs.get(name);
+          fresh.set(name, partner?.figure?.partnerSnapshot(interactionOf(partner), name) ?? null);
+        }
+        const snap = fresh.get(name);
+        if (snap) partners.push(snap);
+      }
+      figure.setGpuPartners(partners.length ? hairPartnerCapsules(partners) : null);
     }
   }
 }

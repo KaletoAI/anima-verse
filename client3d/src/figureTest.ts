@@ -1,7 +1,7 @@
-// Diagnose-Seite: /figure-test.html?model=<Charaktername>&clip=idle
-// Rendert eine Figur isoliert, groß und neutral beleuchtet.
-// `model` ist PFLICHT: welche Charaktere es gibt, weiß nur die geladene Welt —
-// ein eingebauter Name wäre der Cast genau einer Welt.
+// Diagnostic page: /figure-test.html?model=<character name>&clip=idle
+// Renders one figure on its own, large and in neutral light.
+// `model` is REQUIRED: only the loaded world knows which characters exist —
+// a built-in name would be the cast of exactly one world.
 import * as THREE from 'three';
 import { FigureLibrary } from './scene/figures';
 
@@ -26,7 +26,7 @@ const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerH
 camera.position.set(0, 1.4, 3.4);
 camera.lookAt(0, 0.9, 0);
 
-// Interaktiv: Ziehen = drehen, Rad = zoomen, rechte Taste = verschieben
+// Interactive: drag = orbit, wheel = zoom, right button = pan
 let controls: import('three/addons/controls/OrbitControls.js').OrbitControls | null = null;
 import('three/addons/controls/OrbitControls.js').then(({ OrbitControls }) => {
   controls = new OrbitControls(camera, renderer.domElement);
@@ -78,14 +78,14 @@ if (rawUrl) {
     }
   });
 } else if (!who) {
-  document.title = 'Figur-Test: ?model= fehlt';
+  document.title = 'Figure test: ?model= missing';
   const hint = document.createElement('div');
   hint.style.cssText =
     'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;' +
     'font:16px/1.5 system-ui,sans-serif;color:#fff;text-align:center;padding:2rem';
   hint.textContent =
-    'Kein Modell gewählt. Aufruf: /figure-test.html?model=<Charaktername>'
-    + ' (optional &clip=idle|walk|run, oder &raw=/models/x.glb).';
+    'No model chosen. Usage: /figure-test.html?model=<character name>'
+    + ' (optional &clip=idle|walk|run, or &raw=/models/x.glb).';
   document.body.appendChild(hint);
 } else {
   const show = () => {
@@ -95,21 +95,21 @@ if (rawUrl) {
     figure = f;
     figure.play(clipKind);
     scene.add(figure.root);
-    document.title = `Figur-Test: ${who} (${clipKind})`;
+    document.title = `Figure test: ${who} (${clipKind})`;
     return true;
   };
-  // Server-Modelle kommen asynchron nach -> dann erneut versuchen
+  // Server models arrive asynchronously -> try again then
   lib.onModelReady = () => { show(); };
   lib.load({ only: who }).then(() => {
-    if (!show()) document.title = 'Lade Modell vom Server: ' + who;
+    if (!show()) document.title = 'Loading model from the server: ' + who;
   });
 }
 
-// Diagnose: ?diag=1 -> nach 3s Welt-Ausrichtung der Wirbelsäule loggen
+// Diagnostics: ?diag=1 -> after 3 s log the world orientation of the spine
 if (params.get('diag') === '1') {
   setTimeout(() => {
     const root = figure?.root ?? rawRoot;
-    if (!root) { console.log('[diag] kein Modell'); return; }
+    if (!root) { console.log('[diag] no model'); return; }
     root.updateMatrixWorld(true);
     const find = (re: RegExp) => {
       let hit: THREE.Object3D | null = null;
@@ -122,17 +122,19 @@ if (params.get('diag') === '1') {
       const hp = hips.getWorldPosition(new THREE.Vector3());
       const kp = head.getWorldPosition(new THREE.Vector3());
       const spine = kp.clone().sub(hp).normalize();
-      console.log(`[diag] Hips=(${hp.x.toFixed(2)},${hp.y.toFixed(2)},${hp.z.toFixed(2)}) Head=(${kp.x.toFixed(2)},${kp.y.toFixed(2)},${kp.z.toFixed(2)}) SpineUp-Y=${spine.y.toFixed(3)} ${spine.y > 0.8 ? 'AUFRECHT' : spine.y < 0.3 ? 'LIEGEND' : 'SCHRÄG'}`);
+      console.log(`[diag] Hips=(${hp.x.toFixed(2)},${hp.y.toFixed(2)},${hp.z.toFixed(2)}) Head=(${kp.x.toFixed(2)},${kp.y.toFixed(2)},${kp.z.toFixed(2)}) SpineUp-Y=${spine.y.toFixed(3)} ${spine.y > 0.8 ? 'UPRIGHT' : spine.y < 0.3 ? 'LYING' : 'TILTED'}`);
     } else {
-      console.log('[diag] Knochen nicht gefunden');
+      console.log('[diag] bones not found');
     }
   }, 3000);
 }
 
-const autoRotate = params.get('spin') === '1'; // Standard: selbst drehen per Maus
+const autoRotate = params.get('spin') === '1'; // default: turn it yourself with the mouse
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
+  // The two-phase figure frame: the pose, then the secondary motion (a lone figure reads no partner).
   figure?.update(dt);
+  figure?.updateSecondary([]);
   if (autoRotate) {
     if (figure) figure.root.rotation.y += dt * 0.4;
     if (rawRoot) rawRoot.rotation.y += dt * 0.4;
