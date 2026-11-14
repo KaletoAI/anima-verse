@@ -4,9 +4,10 @@
  * modules so fast refresh keeps working.
  */
 import type { CSSProperties } from 'react'
+import type { Freshness } from './FreshnessBadge'
 import type {
-  FootwearInfo, GarmentImageInfo, GarmentRunState, GateLimit, GateRecord, PieceViewDue, PieceViewOption, RecordLimits,
-  RunFeedback,
+  AttemptUsePlan, FootwearInfo, FromWornNumbers, GarmentImageInfo, GarmentRunState, GateLimit, GateRecord,
+  PieceViewDue, PieceViewInfo, PieceViewOption, PieceViewSource, RecordLimits, RunFeedback,
 } from './useGarment'
 
 export const TILE_HEIGHT = 200
@@ -175,6 +176,8 @@ export interface ChipResult {
    *  fit (footwear_fit: a boot shaft with no ring above the band) — shown as "n/a", never
    *  as a passing number. */
   na?: boolean
+  /** Ruling A46c: the limit only warns (`GateLimit.warn`) — beyond it the gate does not refuse. */
+  warn?: boolean
 }
 
 /** The chips of `record` under `specs` and the server's `limits` — the
@@ -204,9 +207,130 @@ export function chipResults(specs: ChipSpec[], record: Record<string, unknown> |
       shown: `${(value * spec.scale).toFixed(spec.digits)}${spec.unit ? ` ${spec.unit}` : ''}`,
       lim: limit ? limitText(limit, spec, height) : '',
       ok: limit ? passes(limit, value, height) : null,
+      ...(limit?.warn ? { warn: true } : {}),
     })
   }
   return out
+}
+
+/** Ruling A46c: the light of a gate record. `refused` — what the gate refuses: a gated chip beyond its limit, a
+ *  reason, or `ok` false; `warned` — the gate passes it, but a chip whose limit only warns (`warn`, the
+ *  registration caps) is beyond it; `passed` — a gated chip passes and nothing warns; `info` — numbers only. */
+export type LightState = 'refused' | 'warned' | 'passed' | 'info'
+
+export interface GateLight {
+  state: LightState
+  chips: ChipResult[]
+  reasons: string[]
+}
+
+export function gateLight(specs: ChipSpec[], record: Record<string, unknown> | null | undefined,
+  limits: Record<string, GateLimit> | undefined, view?: string): GateLight {
+  const chips = chipResults(specs, record, limits, view)
+  const raw = (record as GateRecord | null | undefined)?.reasons
+  const reasons = Array.isArray(raw) ? (raw as string[]) : []
+  const refused = chips.some((c) => c.ok === false && !c.warn) || reasons.length > 0
+    || (record as GateRecord | null | undefined)?.ok === false
+  const warned = !refused && chips.some((c) => c.ok === false && c.warn)
+  const state: LightState = refused ? 'refused' : warned ? 'warned'
+    : chips.some((c) => c.ok === true) ? 'passed' : 'info'
+  return { state, chips, reasons }
+}
+
+/** The warnings of a light in plain words: per chip beyond a limit that only warns, what it is and that the gate
+ *  does not refuse for it; a registration cap (`reg_*`) also says what that meant for the image. */
+export function warningLines(light: GateLight, t: (s: string) => string): string[] {
+  const out: string[] = []
+  for (const c of light.chips) {
+    if (c.ok !== false || !c.warn) continue
+    out.push(t('{label} {value} is outside {limit}: a warning, the gate does not refuse for it')
+      .replace('{label}', t(c.label)).replace('{value}', c.shown).replace('{limit}', c.lim))
+    if (c.key.startsWith('reg_')) {
+      out.push(t('The image was not moved onto the worn view; the gate measured it as rendered.'))
+    }
+  }
+  return out
+}
+
+/** Ruling A46c: the chips that apply to an image made from `source` — a chip whose limit is `generated_only` (the
+ *  registration of a generated ghost onto the worn view) never applies to one made from the worn view. */
+export function chipsForSource(specs: ChipSpec[], limits: Record<string, GateLimit> | undefined,
+  source: PieceViewSource | null | undefined): ChipSpec[] {
+  return source === 'worn' ? specs.filter((s) => !limits?.[s.key]?.generated_only) : specs
+}
+
+/** Ruling A46c: what drives a piece-only cell — the image in use for the view. `image`: the accepted image was
+ *  made from the source the view resolves to (or no source is resolved, or the view is being re-checked under
+ *  the current gate, A46b) — it drives the light. `pending`: the accepted image was made from the OTHER source
+ *  and is due to be made again from `source` — no image drives the cell, its light is information only, and the
+ *  accepted image shows as a small tile ("To be replaced"). */
+export function pieceCellMode(img: GarmentImageInfo | undefined, pieceView: PieceViewInfo | undefined,
+  checking: boolean): 'image' | 'pending' {
+  if (!img?.url || !pieceView || checking || !pieceView.made_from || !pieceView.source) return 'image'
+  return pieceView.made_from === pieceView.source ? 'image' : 'pending'
+}
+
+/** The light's lines of a piece-only view made from the worn view (Ruling A46c): its mask numbers — coverage,
+ *  holes filled, skin removed — and whether the pair agrees (`pair` of the garment, its pair step's views). */
+export function fromWornLines(numbers: FromWornNumbers | null | undefined,
+  pair: { step: string; agree: boolean } | null | undefined, t: (s: string) => string): string[] {
+  if (!numbers) return []
+  const share = num(numbers.piece_share)
+  const holes = num(numbers.holes_filled)
+  const skin = num(numbers.skin_removed_px)
+  return [
+    share !== null ? t('Piece: {pct} % of the figure').replace('{pct}', (share * 100).toFixed(1)) : '',
+    holes !== null ? t('Holes filled: {n}').replace('{n}', String(holes)) : '',
+    numbers.skin_removed ? t('Skin areas kept: the piece has the skin’s colour')
+      : skin !== null ? t('Skin areas removed: {n} px').replace('{n}', skin.toLocaleString('en-US')) : '',
+    pair && pair.step === 'ghost'
+      ? (pair.agree ? t('Matches the other view') : t('Does not match the other view')) : '',
+  ].filter(Boolean)
+}
+
+/** Ruling A46c: the tile meta beside a light — "current" never stands beside a refusal: a refused image keeps
+ *  its stale/no-data badge, a current one shows none (the light and the Refused badge say what it is). */
+export function metaBesideLight<T extends { freshness?: Freshness | null }>(meta: T, state: LightState): T {
+  return state === 'refused' && meta.freshness?.state === 'current' ? { ...meta, freshness: null } : meta
+}
+
+/** One small attempt tile of a cell (AttemptThumbs). `note` replaces "Use this" (the image the view no longer
+ *  uses, Ruling A46c). */
+export interface AttemptTile {
+  key: string
+  attempt: number
+  gate: GateRecord | null
+  url: string
+  note?: string
+  noteTitle?: string
+  /** The accepted image itself (no attempt file holds its bytes): named "Accepted", not by its attempt. */
+  accepted?: boolean
+}
+
+/** The attempt tiles of an image cell (Ruling A46c): every stored attempt, the one in use (`uses[n].in_use`: the
+ *  accepted file's bytes) judged by the accepted image's NEWEST record — a re-gate (A46b) writes the final's
+ *  record only, so its old attempt sidecar may still read "passed". `replaced` (a pending piece-only cell): the
+ *  accepted image is not used any more — the attempt in use carries the note, and without one in use the
+ *  accepted image becomes a tile of its own. */
+export function attemptTiles(img: GarmentImageInfo | undefined, uses: Record<string, AttemptUsePlan> | undefined,
+  replaced?: { note: string; title: string }): AttemptTile[] {
+  if (!img) return []
+  const finals = img.gates ? Object.values(img.gates) : []
+  const finalRecord = finals.length ? finals[finals.length - 1] : null
+  const inUse = Object.entries(uses || {}).find(([, p]) => p.in_use)?.[0]
+  const tiles: AttemptTile[] = (img.attempts || []).map((a) => {
+    const used = inUse === String(a.attempt)
+    return {
+      key: `attempt-${a.attempt}`, attempt: a.attempt, url: a.url,
+      gate: used && finalRecord ? finalRecord : a.gate,
+      ...(used && replaced ? { note: replaced.note, noteTitle: replaced.title } : {}),
+    }
+  })
+  if (replaced && img.url && inUse === undefined) {
+    tiles.unshift({ key: 'accepted', attempt: num(finalRecord?.attempt) ?? 0, url: img.url, gate: finalRecord,
+      note: replaced.note, noteTitle: replaced.title, accepted: true })
+  }
+  return tiles
 }
 
 /** The record the tile's chips show: the accepted final's (last of its

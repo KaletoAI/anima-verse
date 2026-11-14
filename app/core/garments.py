@@ -340,14 +340,21 @@ def _accepted(path: Path) -> bool:
 
 
 def _accepted_gate(path: Path) -> Optional[Dict[str, Any]]:
-    """The gate record of the attempt an accepted image came from."""
+    """The gate record of the attempt an accepted image came from. A view made from the worn view (Ruling A46,
+    ``attempt`` 0, ``source`` ``garment_from_worn.RECORD_SOURCE``) keeps its one gate record as ``first``
+    (Ruling A46c: before, attempt 0 read ``_ORDINALS[-1]`` — nothing — so its pair never counted as agreeing)."""
+    from app.core.garment_from_worn import RECORD_SOURCE
     from app.core.garment_store import read_record
     record = read_record(path.with_suffix(".json"))
     try:
-        ordinal = _ORDINALS[int(record.get("attempt") or 0) - 1]
-    except (IndexError, TypeError, ValueError):
+        attempt = int(record.get("attempt") or 0)
+    except (TypeError, ValueError):
         return None
-    gate = (record.get("gates") or {}).get(ordinal)
+    if attempt < 1:
+        ordinal = _ORDINALS[0] if record.get("source") == RECORD_SOURCE else None
+    else:
+        ordinal = _ORDINALS[attempt - 1] if attempt <= len(_ORDINALS) else None
+    gate = (record.get("gates") or {}).get(ordinal) if ordinal else None
     return gate if isinstance(gate, dict) else None
 
 
@@ -3950,6 +3957,9 @@ def _image_info(character_name: str, item_id: str, fsig: str, step: str, view: s
                               "reasons": block.get("reasons") or [], "holds": _accepted(final)}
                              if block and stamp is not None else None),
            **(image_tile_meta(final, record) if stamp is not None else {})}
+    # Ruling A46c: a piece-only view made from the worn view carries its mask numbers (the cell's light).
+    if isinstance(record.get("from_worn"), dict) and stamp is not None:
+        out["from_worn"] = record["from_worn"]
     # An empty drafted back (the base back unchanged) and the views it leaves out.
     if record.get("composite") == "empty":
         out["empty"] = True

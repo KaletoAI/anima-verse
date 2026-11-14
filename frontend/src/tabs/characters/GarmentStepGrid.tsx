@@ -28,6 +28,12 @@
  * worn view minus the body, no hub job). The choice saves on its own and runs nothing; every option names what
  * it makes due (the view, its cut-out, the mesh, the fit — hub jobs, the fit on the CPU) before it is picked,
  * the cell's light says where the view comes from and why, and what is due now stands under the picker.
+ * Ruling A46c: a piece-only cell's light describes the image IN USE for the view. Made from the worn view, it
+ * shows that image's mask numbers (coverage, holes filled, skin removed, pair agreement) and never a number of a
+ * generated image (the registration chips). Due from the other source, the cell has no image yet: its light is
+ * information only and the accepted image it replaces is a small tile ("To be replaced"). A chip whose limit only
+ * warns (the registration caps — the gate never refuses for them) lights yellow, not red, and "current" never
+ * stands beside a red light.
  * The hair row keeps its own layout (GarmentSteps).
  */
 import { Fragment } from 'react'
@@ -38,16 +44,17 @@ import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clock
 import { RunBadge, RunButton } from './GarmentSteps'
 import type { ImageStepSpec } from './GarmentSteps'
 import {
-  MESH_CHIPS, PIECE_VIEW_FROM, PIECE_VIEW_MADE, PIECE_VIEW_SOURCE, chipResults, num, pieceViewDueText,
-  pieceViewReason, queueText, shownRecord, upscaleText,
+  MESH_CHIPS, PIECE_VIEW_FROM, PIECE_VIEW_MADE, PIECE_VIEW_SOURCE, attemptTiles, chipResults, chipsForSource,
+  fromWornLines, gateLight, metaBesideLight, num, pieceCellMode, pieceViewDueText, pieceViewReason, queueText,
+  shownRecord, upscaleText, warningLines,
 } from './garmentStyle'
-import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
+import type { AttemptTile, ChipSpec, GarmentLimits, GarmentRunBody, LightState } from './garmentStyle'
 import { MeshJobFetch } from './MeshJobFetch'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type {
   AttemptUsePlan, AttemptUsePlans, GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit,
-  GateRecord, PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
+  PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
   ViewRunPlans,
 } from './useGarment'
 
@@ -62,14 +69,22 @@ const FIT_STATUS: Record<string, string> = {
   missing: 'Not fitted yet',
 }
 
+const LIGHT_COLOR: Record<LightState, string> = {
+  refused: 'var(--danger, #f85149)', warned: 'var(--warning, #d29922)', passed: 'var(--success, #3fb950)',
+  info: 'var(--text-muted, #8b949e)',
+}
+const LIGHT_GLYPH: Record<LightState, string> = { refused: '✕', warned: '!', passed: '✓', info: 'i' }
+
 const STATUS_ICON: CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   width: 18, height: 18, borderRadius: 9, fontSize: 11, fontWeight: 700, cursor: 'help', flex: 'none',
 }
 
-/** One status icon for a gate record: ✓ every gated number passes, ✕ one
- *  fails (or the record names reasons), • numbers only; the tooltip lists
- *  every chip with its limit and the reasons. */
+/** One status icon for a gate record (`gateLight`): ✓ every gated number
+ *  passes, ✕ the gate refuses (a gated number fails, or the record names
+ *  reasons), ! the gate passes but a number whose limit only warns is beyond
+ *  it (Ruling A46c), i numbers only; the tooltip lists every chip with its
+ *  limit, the warnings in plain words and the reasons. */
 export function GateIcon({ specs, record, limits, view, extra }: {
   specs: ChipSpec[]
   record: Record<string, unknown> | null | undefined
@@ -80,22 +95,19 @@ export function GateIcon({ specs, record, limits, view, extra }: {
 }) {
   const { t } = useI18n()
   if (!record && !extra?.length) return null
-  const chips = chipResults(specs, record, limits, view)
-  const reasons = Array.isArray((record as GateRecord | null | undefined)?.reasons)
-    ? ((record as GateRecord).reasons as string[]) : []
-  const failed = chips.some((c) => c.ok === false) || reasons.length > 0 || (record as GateRecord)?.ok === false
-  const passed = !failed && chips.some((c) => c.ok === true)
+  const light = gateLight(specs, record, limits, view)
   const lines = [
     ...(extra || []),
-    ...chips.map((c) => `${c.ok === false ? '✕' : c.ok ? '✓' : '·'} ${t(c.label)} ${c.shown}${c.lim
+    ...light.chips.map((c) => `${c.ok === false ? (c.warn ? '!' : '✕') : c.ok ? '✓' : '·'} ${t(c.label)} ${c.shown}${c.lim
       ? ` (${t('Limit')} ${c.lim})` : ` (${t('Reported, not gated')})`}`),
-    ...reasons.map((r) => `✕ ${r}`),
+    ...warningLines(light, t).map((w) => `! ${w}`),
+    ...light.reasons.map((r) => `✕ ${r}`),
   ]
-  const color = failed ? 'var(--danger, #f85149)' : passed ? 'var(--success, #3fb950)' : 'var(--text-muted, #8b949e)'
+  const color = LIGHT_COLOR[light.state]
   return (
     <span role="img" aria-label={lines.join('; ')} title={lines.join('\n')}
       style={{ ...STATUS_ICON, border: `1px solid ${color}`, color }}>
-      {failed ? '✕' : passed ? '✓' : 'i'}
+      {LIGHT_GLYPH[light.state]}
     </span>
   )
 }
@@ -146,9 +158,10 @@ function UseAttemptButton({ plan, label, attempt, disabled, onUse }: {
 
 /** The refused/replaced attempts of an image as tiny thumbnails (click =
  *  lightbox, reason and numbers on hover) — with "Use this" under each when
- *  the caller passes the plans (Ruling A37; the clothing grid). */
+ *  the caller passes the plans (Ruling A37; the clothing grid); a tile with a
+ *  `note` shows it instead (the image a piece-only view no longer uses, Ruling A46c). */
 export function AttemptThumbs({ attempts, label, chips, limits, view, uses, busy = false, onUse }: {
-  attempts: Array<{ attempt: number; gate: GateRecord | null; url: string }>
+  attempts: Array<Pick<AttemptTile, 'attempt' | 'gate' | 'url'> & Partial<AttemptTile>>
   label: string
   chips?: ChipSpec[]
   limits?: Record<string, GateLimit>
@@ -164,25 +177,28 @@ export function AttemptThumbs({ attempts, label, chips, limits, view, uses, busy
   return (
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'flex-start' }}>
       {attempts.map((a) => {
-        const alt = `${label} · ${t('Attempt')} ${a.attempt}`
+        const alt = a.accepted ? `${label} · ${t('Accepted')}` : `${label} · ${t('Attempt')} ${a.attempt}`
         const zoom = enlarge({ src: a.url, alt })
         const refused = a.gate?.ok === false || !!a.gate?.reasons?.length
         const tip = [
           alt,
+          a.note ? `${a.note}${a.noteTitle ? ` — ${a.noteTitle}` : ''}` : '',
           a.gate ? (refused ? t('Refused') : t('Passed')) : '',
           ...chipResults(chips || [], a.gate, limits, view)
-            .filter((c) => c.ok === false).map((c) => `✕ ${t(c.label)} ${c.shown} (${c.lim})`),
+            .filter((c) => c.ok === false).map((c) => `${c.warn ? '!' : '✕'} ${t(c.label)} ${c.shown} (${c.lim})`),
           ...(Array.isArray(a.gate?.reasons) ? (a.gate?.reasons as string[]) : []),
         ].filter(Boolean).join('\n')
-        const plan = uses?.[String(a.attempt)]
+        const plan = a.note ? undefined : uses?.[String(a.attempt)]
         return (
-          <div key={a.attempt} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+          <div key={a.key ?? a.attempt} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
             <img src={a.url} alt={alt} {...zoom} title={tip}
               style={{
                 ...zoom.style, width: 26, height: 34, objectFit: 'cover', borderRadius: 3,
                 border: `1px solid ${refused ? 'var(--danger, #f85149)' : 'var(--success, #3fb950)'}`,
               }} />
-            {plan && onUse ? (
+            {a.note ? (
+              <span className="ga-hint" style={{ fontSize: '0.7em' }} title={a.noteTitle}>{a.note}</span>
+            ) : plan && onUse ? (
               <UseAttemptButton plan={plan} label={label} attempt={a.attempt} disabled={busy}
                 onUse={() => onUse(a.attempt)} />
             ) : null}
@@ -382,28 +398,46 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
     const pieceView = step === 'ghost' && !img?.skipped ? garment?.piece_views?.[view] : undefined
     // Ruling A46b: re-gated under the current gate version now — the stored verdict's source and reason wait.
     const checking = !!garment?.regate_checking?.some((c) => c.step === step && c.view === view)
+    // Ruling A46c: the light describes the image IN USE. Due from the other source, no image drives the cell yet
+    // (`pending`): the accepted one it replaces is a small tile.
+    const pending = step === 'ghost' && pieceCellMode(img, pieceView, checking) === 'pending'
+    const dueFrom = pending && pieceView?.source
+      ? t('Due: made again from {source}').replace('{source}', t(PIECE_VIEW_FROM[pieceView.source])) : ''
+    const usedSource = step === 'ghost' && !pending ? pieceView?.made_from : undefined
+    const cellChips = chipsForSource(chips || [], chips ? limits[step] : undefined, usedSource)
+    const cellRecord = pending ? null : shownRecord(img)
+    const light = gateLight(cellChips, cellRecord, chips ? limits[step] : undefined, view)
     const sourceLines = pieceView?.why ? [
-      pieceView.made_from ? t(PIECE_VIEW_MADE[pieceView.made_from]) : '',
+      !pending && pieceView.made_from ? t(PIECE_VIEW_MADE[pieceView.made_from]) : '',
       !checking && pieceView.made_from && pieceView.source && pieceView.source !== pieceView.made_from
         ? t('Due: made again from {source}').replace('{source}', t(PIECE_VIEW_FROM[pieceView.source])) : '',
       checking ? '' : pieceViewReason(pieceView as PieceViewOption, t),
+      pending ? t('The image it replaces is shown as a small tile; it is not used.') : '',
+      ...(usedSource === 'worn' ? fromWornLines(img?.from_worn, garment?.pair, t) : []),
     ].filter(Boolean) : []
     const stateLines = [
       label,
-      img?.url ? (img.accepted ? t('Accepted') : t('Not accepted')) : img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet'),
+      pending ? '' : img?.url ? (img.accepted ? t('Accepted') : t('Not accepted')) : img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet'),
       checking ? t(CHECKING_TEXT) : '',
       ...sourceLines,
       img?.empty ? t('Nothing of the piece shows from behind — the base back unchanged') : '',
-      img?.created_at ? formatDateTime(img.created_at, clockSettings()) : '',
+      !pending && img?.created_at ? formatDateTime(img.created_at, clockSettings()) : '',
       step === 'cutout' && img?.url
         ? [img.side ? `${t('Square side')} ${img.side} px` : '', upscaleText(img.upscale, t)].filter(Boolean).join(' · ')
         : '',
     ].filter(Boolean)
+    const tiles = attemptTiles(img, useRuns?.[step]?.[view], pending && pieceView?.source ? {
+      note: t('To be replaced'),
+      title: t('Not used: the view is made again from {source}').replace('{source}', t(PIECE_VIEW_FROM[pieceView.source])),
+    } : undefined)
     return (
       <div key={view} className="ga-step-grid-cell"
         style={ring ? { outline: `2px solid ${ring}`, outlineOffset: -1 } : undefined}>
-        {img?.url ? (
-          <RefImage key={img.url} src={img.url} width={THUMB_W} height={THUMB_H} label={label} meta={img} compact />
+        {img?.url && !pending ? (
+          <RefImage key={img.url} src={img.url} width={THUMB_W} height={THUMB_H} label={label}
+            meta={metaBesideLight(img, light.state)} compact />
+        ) : pending ? (
+          <div className="ga-step-grid-empty" title={dueFrom}>{dueFrom}</div>
         ) : (
           <div className="ga-step-grid-empty" title={img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet')}>
             {img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet')}
@@ -412,10 +446,10 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         <div className="ga-step-grid-side">
           <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
             {img?.url || img?.attempts?.length ? (
-              <GateIcon specs={chips || []} record={shownRecord(img)} limits={chips ? limits[step] : undefined}
+              <GateIcon specs={cellChips} record={cellRecord} limits={chips ? limits[step] : undefined}
                 view={view} extra={stateLines} />
             ) : null}
-            {img?.url && img.user_accepted?.holds ? (
+            {pending ? null : img?.url && img.user_accepted?.holds ? (
               <span className="ga-run-badge"
                 title={[t('Its gate refused it; you chose it with “Use this”.'), ...img.user_accepted.reasons].join('\n')}
                 style={{ borderColor: 'var(--success, #3fb950)', color: 'var(--success, #3fb950)' }}>
@@ -478,7 +512,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
               />
             </>
           ) : null}
-          <AttemptThumbs attempts={img?.attempts ?? []} label={label} chips={chips}
+          <AttemptThumbs attempts={tiles} label={label} chips={chips}
             limits={chips ? limits[step] : undefined} view={view} uses={useRuns?.[step]?.[view]} busy={busy || !garment}
             onUse={onUse ? (n) => onUse(step, view, n) : undefined} />
         </div>

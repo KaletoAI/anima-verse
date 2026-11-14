@@ -48,6 +48,20 @@ export interface GarmentImageInfo extends ImageTileMeta {
   /** Ruling A37: the image was taken by the user although its gate refused it ("Use this"); `holds` false once
    *  an input changed (the view is then due again). */
   user_accepted?: { at: string | null; attempt: number | null; reasons: string[]; holds: boolean } | null
+  /** Ruling A46c: a piece-only view made from the worn view — its mask numbers (`garment_from_worn.piece_mask`). */
+  from_worn?: FromWornNumbers | null
+}
+
+/** The mask numbers of a piece-only view made from the worn view (`garment_from_worn.piece_mask`). */
+export interface FromWornNumbers {
+  /** The piece's pixels over the figure's. */
+  piece_share?: number
+  piece_px?: number
+  figure_px?: number
+  holes_filled?: number
+  skin_removed_px?: number
+  /** Set when the skin step was skipped (the piece has the skin's colour). */
+  skin_removed?: string
 }
 
 export interface GarmentMeshInfo {
@@ -501,6 +515,10 @@ export interface GateLimit {
   views?: string[]
   /** A record key holding this record's own limit (same op); `value` when the record lacks it. */
   record_key?: string
+  /** Ruling A46c: a value beyond the limit is a warning — the gate never refuses for it (the registration caps). */
+  warn?: boolean
+  /** Ruling A46c: the number exists for a generated image only, never for one made from the worn view. */
+  generated_only?: boolean
 }
 
 export interface HairInfo {

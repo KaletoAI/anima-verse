@@ -1754,7 +1754,10 @@ def limits(kind: str = "clothing") -> Dict[str, Dict[str, Dict[str, Any]]]:
     stay below / at most / at least), ``abs_le`` (|value| at most), ``range``
     (``value`` = [min, max]); clothing records are fractions of the figure
     height; ``views``: the views the limit is gated
-    on (all when absent). ValueError for another kind."""
+    on (all when absent); ``warn`` True: a value beyond the limit is a
+    warning, the gate never refuses for it; ``generated_only`` True: the
+    number exists for a generated image only and never applies to one made
+    from the worn view (Ruling A46c). ValueError for another kind."""
     if kind == "clothing":
         return {
             "worn": {
@@ -1786,6 +1789,12 @@ def limits(kind: str = "clothing") -> Dict[str, Dict[str, Dict[str, Any]]]:
 
 def _registration_limits() -> Dict[str, Dict[str, Any]]:
     """The caps of the ghost registration as chips (record keys ``reg_shift``
-    / ``reg_scale``, set by the chain): beyond them nothing was corrected."""
-    return {"reg_shift": {"op": "le", "value": REG_SHIFT_MAX},
-            "reg_scale": {"op": "range", "value": [REG_SCALE_MIN, REG_SCALE_MAX]}}
+    / ``reg_scale``, set by the chain): beyond them nothing was corrected.
+    Ruling A46c: they are no refusal — ``ghost_clothing_gate`` never reads
+    them; beyond a cap ``garment_images._register`` leaves the attempt as
+    rendered and the gate measures that image — so a value outside is a
+    ``warn``ing. They are ``generated_only``: a view made from the worn view
+    is in the worn view's frame by construction and never registered."""
+    return {"reg_shift": {"op": "le", "value": REG_SHIFT_MAX, "warn": True, "generated_only": True},
+            "reg_scale": {"op": "range", "value": [REG_SCALE_MIN, REG_SCALE_MAX], "warn": True,
+                          "generated_only": True}}

@@ -87,6 +87,53 @@ G = 120 + (y - 100) // 100, B = 90. The worn view = the base with a BAND x 120..
       ``regate_shown`` and its ``garment_info`` / ``piece_views_info`` re-gate nothing, its ``garment_images.py`` no
       ``regate_due`` — the payload kept the stored v6 verdict, which Auto reads as ("generated", "passes")
       (the "Before" check above) until a run.
+[8] Ruling A46c — a piece-only cell's light describes the image IN USE for the view. The Wardrobe's decisions
+    are pure functions of ``frontend/src/tabs/characters/garmentStyle.ts`` (``gateLight``, ``chipsForSource``,
+    ``pieceCellMode``, ``fromWornLines``, ``metaBesideLight``, ``attemptTiles``), bundled with esbuild and run in
+    node on the REAL payloads of the throwaway world (the "Strap top" of [7]); the chip specs are the ghost chips
+    the cell uses (keys, labels and digits as in WardrobeGarment.tsx GHOST_CHIPS).
+    1. From the worn view. Before: the [7] payload — the accepted ghost front is the generated band + strap,
+       its v7 record refused (``added_refused``), Auto -> worn, made from generated: the cell is PENDING (no image
+       drives it), its light ``info``, the accepted image a tile of its own (no attempt file is in use) with the
+       note "To be replaced" and the refused v7 record (ok False). With an attempt 1 file whose old sidecar
+       passed (v6, ok True) and is the one in use (``in_use``): that tile carries the final's v7 record
+       (refused) and the note, and no extra tile is added. Then the front is MADE from the worn view
+       (``garment_images._from_worn``, pair check none): the worn view is [1]'s (base + band), so the mask is
+       the band without its 4 corners, 12 796 px of the figure's 200 x 1400 = 280 000 (the rembg stub: every
+       pixel more than 2 from the grey; the skin's B 90 is 38 away) -> ``piece_share`` round(12 796 / 280 000,
+       5) = 0.0457, ``holes_filled`` 0, ``skin_removed_px`` 0; the payload's ghost front carries these as
+       ``from_worn``, its record no ``reg_*`` key, ok True. The cell is ``image``, its chips without the
+       ``generated_only`` registration chips, light ``passed``; the lines "Piece: 4.6 % of the figure",
+       "Holes filled: 0", "Skin areas removed: 0 px", and with the pair ``{step ghost, agree True}`` also
+       "Matches the other view" (``agree`` False: "Does not match the other view"). A from-worn record that
+       carried a stray ``reg_scale`` 0.774 still lights ``passed``: the chip does not apply to that source.
+       PAIR AGREEMENT of two from-worn views: the back's worn view is the base back (the same image as the
+       front's base) with the band, accepted; made from the worn view it is the same band mask. A from-worn
+       record is ``attempt`` 0 with its gate as ``gates.first``: ``garments._accepted_gate`` returns that
+       record for both views (the old code read ``_ORDINALS[0 - 1]`` = "third" -> None, so ``_pair`` saw no
+       front and the ghost step never counted as done), the payload's ``pair`` is ``{step ghost, agree True}``
+       (both hems the band's: same height) and ``run_estimate`` no longer names the ghost step: steps start at
+       the cut-out.
+    2. The registration is no refusal. ``ghost_clothing_gate`` never reads a registration (no ``reg_`` in its
+       source); the band ghost of [4] without a strap (the ghost IS the region: w_ratio 1.0, skin_left 0,
+       outside 0, added_reach 0) passes, and ``garment_images._with_registration`` with an outline estimate of
+       scale 0.774 (Glut's ghost back, beyond [0.93, 1.07], so not applied) adds ``reg_scale`` 0.774 and
+       ``reg_shift`` 0.0 and keeps ok True, reasons []. ``limits("clothing")["ghost"]`` marks both chips
+       ``warn`` and ``generated_only``. Generated and in use: light ``warned`` (not ``refused``) with the plain
+       words "Registration scale 0.774 is outside 0.930–1.070: a warning, the gate does not refuse for it" and
+       "The image was not moved onto the worn view; the gate measured it as rendered."; the same record with the
+       strap's refusal (ok False, one reason) -> ``refused``.
+    3. "current" never beside a red light: ``metaBesideLight`` drops a ``current`` freshness for ``refused``
+       (-> null), keeps it for ``warned`` and ``passed``, and keeps a ``stale`` one for ``refused``. A pending
+       cell shows no image tile at all (1.), so no badge.
+    Fails on the old code (5a81005030bbe0ee6f60e3fd33cf54f1959a5640 = A46b, ``OLD_A46B``): its
+    ``_accepted_gate`` returns None for the from-worn front's record; its garmentStyle.ts exports none of the six
+    functions, its step grid passes ``meta={img}`` and lights ``record={shownRecord(img)}`` — the accepted
+    image — whatever the view resolves to, and its GateIcon refuses on ANY chip beyond its limit. Its own
+    ``chipResults`` (bundled from that commit) on the warned record of 2. under the old limits (no ``warn``)
+    gives the ``reg_scale`` chip ok False, so the old rule lights it red while the tile keeps ``current``;
+    on the [7] payload the old cell is lit by the generated front's refused record (ok False) beside the
+    accepted image and its ``current`` badge although the view is due from the worn view.
 """
 import importlib.util
 import json
@@ -104,6 +151,7 @@ sys.path.insert(0, str(ROOT))
 
 OLD = "efcb9e4a9793dc23a5693528959e957a56abaeb0"
 OLD_A46 = "ff9cbd7aea2e2b94b4a0f35e6c87ae13afa82d7a"
+OLD_A46B = "5a81005030bbe0ee6f60e3fd33cf54f1959a5640"
 FAILS = []
 W, H = 400, 1536
 GREY = 128
@@ -483,6 +531,243 @@ def regate_part():
           (False, False, False, False))
 
 
+# The ghost chips of the Wardrobe cell (WardrobeGarment.tsx GHOST_CHIPS: key, label, scale, unit, digits).
+GHOST_SPECS = [
+    {"key": "w_ratio", "label": "Width ratio", "scale": 1, "unit": "", "digits": 3},
+    {"key": "skin_left", "label": "Skin left", "scale": 100, "unit": "%", "digits": 2},
+    {"key": "outside", "label": "Outside the worn piece", "scale": 100, "unit": "%", "digits": 1},
+    {"key": "added_reach", "label": "Added part reach", "scale": 100, "unit": "%", "digits": 1},
+    {"key": "reg_shift", "label": "Registration shift", "scale": 100, "unit": "%", "digits": 2},
+    {"key": "reg_scale", "label": "Registration scale", "scale": 1, "unit": "", "digits": 3},
+]
+
+CELL_JS = r"""
+import * as gs from %(module)s
+import { readFileSync } from 'node:fs'
+const fx = JSON.parse(readFileSync(%(fixture)s, 'utf8'))
+const t = (s) => s
+const out = { exports: ['gateLight', 'chipsForSource', 'pieceCellMode', 'fromWornLines', 'metaBesideLight',
+  'attemptTiles'].filter((n) => typeof gs[n] === 'function') }
+if (fx.old) {
+  // The old GateIcon rule (GarmentStepGrid at the old commit): refused on ANY chip beyond its limit.
+  const oldFailed = (record) => gs.chipResults(fx.specs, record, fx.oldLimits, 'back').some((c) => c.ok === false)
+    || (record.reasons || []).length > 0 || record.ok === false
+  out.warnedRecordRed = oldFailed(fx.warned)
+  const finals = Object.values(fx.pending.img.gates)
+  out.pendingCellRecordOk = finals[finals.length - 1].ok
+  out.pendingCellRed = oldFailed(finals[finals.length - 1])
+} else {
+  const kinds = (specs) => specs.map((s) => s.key)
+  const light = (specs, record) => gs.gateLight(specs, record, fx.limits, 'front')
+  // 1. pending
+  const pv = fx.pending.pv
+  out.pendingMode = gs.pieceCellMode(fx.pending.img, pv, false)
+  out.pendingCheckingMode = gs.pieceCellMode(fx.pending.img, pv, true)
+  out.pendingLight = light(fx.specs, null).state
+  const note = { note: 'To be replaced', title: 'Not used' }
+  out.pendingTiles = gs.attemptTiles(fx.pending.img, undefined, note)
+    .map((a) => ({ key: a.key, ok: a.gate ? a.gate.ok : null, note: a.note || null, url: a.url === fx.pending.img.url }))
+  const withAttempt = { ...fx.pending.img, attempts: [{ attempt: 1, url: 'try1', gate: { ok: true, gate_version: 6 } }] }
+  const uses = { '1': { passing: true, in_use: true, block: '', follow_up: null } }
+  out.inUseTiles = gs.attemptTiles(withAttempt, uses, note)
+    .map((a) => ({ key: a.key, ok: a.gate ? a.gate.ok : null, version: a.gate ? a.gate.gate_version : null, note: a.note || null }))
+  out.inUseTilesImageMode = gs.attemptTiles(withAttempt, uses, undefined)
+    .map((a) => ({ key: a.key, ok: a.gate ? a.gate.ok : null, note: a.note || null }))
+  // 1. made from the worn view
+  const wv = fx.worn
+  out.wornMode = gs.pieceCellMode(wv.img, wv.pv, false)
+  const wornSpecs = gs.chipsForSource(fx.specs, fx.limits, wv.pv.made_from)
+  out.wornSpecs = kinds(wornSpecs)
+  out.generatedSpecs = kinds(gs.chipsForSource(fx.specs, fx.limits, 'generated'))
+  const finals = Object.values(wv.img.gates)
+  const rec = finals[finals.length - 1]
+  out.wornRecordKeys = Object.keys(rec).filter((k) => k.startsWith('reg_'))
+  out.wornLight = light(wornSpecs, rec).state
+  out.wornStrayLight = light(wornSpecs, { ...rec, reg_scale: 0.774 }).state
+  out.wornLines = gs.fromWornLines(wv.img.from_worn, null, t)
+  out.wornLinesPayloadPair = gs.fromWornLines(wv.img.from_worn, wv.pair, t)
+  out.wornLinesPair = gs.fromWornLines(wv.img.from_worn, { step: 'ghost', agree: true }, t)
+  out.wornLinesNoPair = gs.fromWornLines(wv.img.from_worn, { step: 'ghost', agree: false }, t)
+  // 2. a generated ghost in use with the registration beyond its cap
+  const warned = light(fx.specs, fx.warned)
+  out.warnedState = warned.state
+  out.warnedChip = warned.chips.filter((c) => c.ok === false).map((c) => [c.key, c.shown, c.lim, !!c.warn])
+  out.warnedLines = gs.warningLines(warned, t)
+  out.refusedState = light(fx.specs, fx.refused).state
+  // 3. "current" never beside a red light
+  const cur = { freshness: { state: 'current' } }
+  out.metaRefused = gs.metaBesideLight(cur, 'refused').freshness
+  out.metaWarned = gs.metaBesideLight(cur, 'warned').freshness
+  out.metaPassed = gs.metaBesideLight(cur, 'passed').freshness
+  out.metaStale = gs.metaBesideLight({ freshness: { state: 'stale' } }, 'refused').freshness
+}
+console.log(JSON.stringify(out))
+"""
+
+
+def run_cell(tmp: Path, module: Path, fixture: dict, name: str):
+    esbuild = next((ROOT / p for p in ("node_modules/.bin/esbuild", "frontend/node_modules/.bin/esbuild",
+                                       "client3d/node_modules/.bin/esbuild") if (ROOT / p).exists()), None)
+    if esbuild is None or shutil.which("node") is None:
+        print("note esbuild or node missing — the cell logic is not checked")
+        FAILS.append("cell logic not checked")
+        return None
+    fx = tmp / f"{name}.json"
+    fx.write_text(json.dumps(fixture))
+    entry = tmp / f"{name}.mjs"
+    entry.write_text(CELL_JS % {"module": json.dumps(str(module)), "fixture": json.dumps(str(fx))})
+    bundle = tmp / f"{name}.bundle.mjs"
+    built = subprocess.run([str(esbuild), str(entry), "--bundle", "--platform=node", "--format=esm",
+                            "--log-level=error", f"--outfile={bundle}"], cwd=ROOT, capture_output=True, text=True)
+    if built.returncode != 0:
+        print(built.stderr)
+        FAILS.append(f"{name} bundle")
+        return None
+    run = subprocess.run(["node", str(bundle)], cwd=ROOT, capture_output=True, text=True)
+    try:
+        return json.loads((run.stdout.strip().splitlines() or [""])[-1])
+    except ValueError:
+        print(run.stdout, run.stderr)
+        FAILS.append(f"{name} run")
+        return None
+
+
+def cell_part():
+    import ast
+    import inspect
+    from app.core import base_body, garment_from_worn as fw, garment_gates as gg, garment_images, garments
+    from app.core import garment_store as gs
+    from app.models.character import get_character_dir
+    from app.models import inventory
+    print("[8] the cell's light describes the image in use (A46c)")
+    iid = next(i["id"] for i in inventory.list_items() if i.get("name") == "Strap top")
+    fsig = gs.garment_fsig("Demo", iid)
+    limits = gg.limits("clothing")["ghost"]
+    payload = garments.garment_info("Demo", iid)
+    pending = {"img": payload["steps"]["ghost"]["front"], "pv": payload["piece_views"]["front"]}
+    check("before: the accepted front generated, refused, due from the worn view",
+          (pending["pv"]["source"], pending["pv"]["made_from"],
+           list(pending["img"]["gates"].values())[-1].get("ok"), "from_worn" in pending["img"]),
+          ("worn", "generated", False, False))
+
+    # 2. the registration is no refusal (the gate's own record, Glut's scale 0.774)
+    check("the ghost gate never reads a registration", "reg_" in inspect.getsource(gg.ghost_clothing_gate), False)
+    plain = gate(gg)
+    check("the band ghost passes", (plain["ok"], plain["reasons"], plain["w_ratio"], plain["added_reach"]),
+          (True, [], 1.0, 0.0))
+    warned = garment_images._with_registration(plain, {"method": "outline", "scale": 0.774, "shift_abs": 0.0,
+                                                       "applied": False, "note": "beyond the correction caps"})
+    check("registration 0.774 added: ok kept", (warned["ok"], warned["reasons"], warned["reg_scale"],
+                                                warned["reg_shift"]), (True, [], 0.774, 0.0))
+    check("limits: the registration chips warn, generated only",
+          {k: (limits[k].get("warn"), limits[k].get("generated_only")) for k in ("reg_shift", "reg_scale")},
+          {"reg_shift": (True, True), "reg_scale": (True, True)})
+    refused = {**warned, "ok": False, "reasons": ["a part the worn piece does not have"]}
+
+    # 1. make the front from the worn view
+    refs = get_character_dir("Demo") / "model_refs"
+    bsig = base_body.base_signature("Demo")
+    choice = fw.resolve("Demo", iid, fsig, "front")
+    made = garment_images._from_worn("Demo", iid, fsig, "front", garment_images._kind_module(iid),
+                                     base=refs / f"tpose_{bsig}.png", refs_dir=refs, choice=choice, pair_check=None)
+    payload = garments.garment_info("Demo", iid)
+    worn = {"img": payload["steps"]["ghost"]["front"], "pv": payload["piece_views"]["front"]}
+    numbers = worn["img"].get("from_worn") or {}
+    check("made from the worn view: the payload's mask numbers",
+          (made.name.endswith("_ghost_front.png"), worn["pv"]["made_from"], worn["pv"]["source"], numbers.get("piece_px"), numbers.get("figure_px"),
+           numbers.get("piece_share"), numbers.get("holes_filled"), numbers.get("skin_removed_px")),
+          (True, "worn", "worn", 12796, 280000, round(12796 / 280000, 5), 0, 0))
+
+    # Pair agreement of two views made from the worn view.
+    from app.models.character import get_character_dir as _cdir
+    _b, _f, _region, _ghost, _ghost_m, worn_back = gate_inputs()
+    back_worn = gs.garment_path("Demo", iid, fsig, "image", step="worn", view="back")
+    back_worn.write_bytes(png_bytes(worn_back))
+    gs.write_record(back_worn.with_suffix(".json"), {
+        "accepted": True, "attempt": 1, "created_at": "2026-11-14T10:00:00+00:00", "fit": "composite",
+        "gates": {"first": {"view": "back", "ok": True, "reasons": [], "attempt": 1}}})
+    garment_images._from_worn("Demo", iid, fsig, "back", garment_images._kind_module(iid),
+                              base=refs / f"tpose_back_{bsig}.png", refs_dir=_cdir("Demo") / "model_refs",
+                              choice=fw.resolve("Demo", iid, fsig, "back"), pair_check=None)
+    front_record = gs.read_record(made.with_suffix(".json"))
+    check("a from-worn record: attempt 0, its gate as first; _accepted_gate returns it",
+          (front_record.get("attempt"), list(front_record.get("gates") or {}),
+           garments._accepted_gate(made) == front_record["gates"]["first"]), (0, ["first"], True))
+    payload = garments.garment_info("Demo", iid)
+    check("both views from the worn view: the pair agrees",
+          (payload["piece_views"]["back"]["made_from"], payload["pair"]), ("worn", {
+              "step": "ghost", "agree": True, "redo": None, "error": None}))
+    steps = garments.run_estimate("Demo", iid)["steps"]
+    check("the ghost step is done: the estimate starts at the cut-out", ("ghost" in steps, steps[:1]),
+          (False, ["cutout"]))
+    worn = {"img": payload["steps"]["ghost"]["front"], "pv": payload["piece_views"]["front"], "pair": payload["pair"]}
+
+    fixture = {"specs": GHOST_SPECS, "limits": limits, "pending": pending, "worn": worn, "warned": warned,
+               "refused": refused}
+    tmp = Path(tempfile.mkdtemp(prefix="a46c-cell-"))
+    try:
+        got = run_cell(tmp, ROOT / "frontend/src/tabs/characters/garmentStyle.ts", fixture, "new")
+        if got is not None:
+            check("1. pending: mode, while checking, light", (got["pendingMode"], got["pendingCheckingMode"],
+                                                            got["pendingLight"]), ("pending", "image", "info"))
+            check("1. pending: the accepted image a tile of its own, refused, 'To be replaced'", got["pendingTiles"],
+                  [{"key": "accepted", "ok": False, "note": "To be replaced", "url": True}])
+            check("1. pending: the attempt in use judged by the final's v7 record", got["inUseTiles"],
+                  [{"key": "attempt-1", "ok": False, "version": 7, "note": "To be replaced"}])
+            check("1. image mode: the in-use tile has the newest verdict, no note", got["inUseTilesImageMode"],
+                  [{"key": "attempt-1", "ok": False, "note": None}])
+            check("1. from the worn view: mode, chips, record, light",
+                  (got["wornMode"], got["wornSpecs"], got["generatedSpecs"], got["wornRecordKeys"], got["wornLight"],
+                   got["wornStrayLight"]),
+                  ("image", ["w_ratio", "skin_left", "outside", "added_reach"],
+                   [s["key"] for s in GHOST_SPECS], [], "passed", "passed"))
+            check("1. the mask numbers in the light", (got["wornLines"], got["wornLinesPair"][-1],
+                                                       got["wornLinesNoPair"][-1], got["wornLinesPayloadPair"][-1]),
+                  (["Piece: 4.6 % of the figure", "Holes filled: 0", "Skin areas removed: 0 px"],
+                   "Matches the other view", "Does not match the other view", "Matches the other view"))
+            check("2. generated, registration beyond its cap: warned",
+                  (got["warnedState"], got["warnedChip"], got["refusedState"]),
+                  ("warned", [["reg_scale", "0.774", "0.930–1.070", True]], "refused"))
+            check("2. the warning in plain words", got["warnedLines"],
+                  ["Registration scale 0.774 is outside 0.930–1.070: a warning, the gate does not refuse for it",
+                   "The image was not moved onto the worn view; the gate measured it as rendered."])
+            check("3. current never beside a red light",
+                  (got["metaRefused"], got["metaWarned"], got["metaPassed"], got["metaStale"]),
+                  (None, {"state": "current"}, {"state": "current"}, {"state": "stale"}))
+
+        print("  fails on the old code (" + OLD_A46B[:9] + ")")
+        old_style = subprocess.run(["git", "-C", str(ROOT), "show",
+                                    f"{OLD_A46B}:frontend/src/tabs/characters/garmentStyle.ts"],
+                                   capture_output=True, text=True, check=True).stdout
+        old_grid = subprocess.run(["git", "-C", str(ROOT), "show",
+                                   f"{OLD_A46B}:frontend/src/tabs/characters/GarmentStepGrid.tsx"],
+                                  capture_output=True, text=True, check=True).stdout
+        old_garments = subprocess.run(["git", "-C", str(ROOT), "show", f"{OLD_A46B}:app/core/garments.py"],
+                                      capture_output=True, text=True, check=True).stdout
+        tree = ast.parse(old_garments)
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_accepted_gate")
+        from typing import Any as _Any, Dict as _Dict, Optional as _Optional
+        scope = {"_ORDINALS": ("first", "second", "third"), "Path": Path, "Optional": _Optional, "Dict": _Dict,
+                 "Any": _Any}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), "old_garments", "exec"), scope)
+        check("old: _accepted_gate of the from-worn front is None", scope["_accepted_gate"](made), None)
+        old_module = tmp / "old" / "garmentStyle.ts"
+        old_module.parent.mkdir()
+        old_module.write_text(old_style)
+        old_limits = {k: {kk: vv for kk, vv in v.items() if kk not in ("warn", "generated_only")}
+                      for k, v in limits.items()}
+        old = run_cell(tmp, old_module, {**fixture, "old": True, "oldLimits": old_limits}, "old")
+        check("old grid: the accepted image's tile and record whatever the source",
+              ("meta={img}" in old_grid, "record={shownRecord(img)}" in old_grid,
+               "const failed = chips.some((c) => c.ok === false)" in old_grid), (True, True, True))
+        if old is not None:
+            check("old: none of the A46c functions; the warned record red; the pending cell lit refused",
+                  (old["exports"], old["warnedRecordRed"], old["pendingCellRecordOk"], old["pendingCellRed"]),
+                  ([], True, False, True))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     scratch = setup()
     try:
@@ -491,6 +776,7 @@ def main() -> int:
         part_old_code()
         world_parts()
         regate_part()
+        cell_part()
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall passed")

@@ -104,7 +104,8 @@ Geometry, W 600 x H 1000 on grey 128:
     covers it).
 [8] Hook + limits: position_reference(ghost) = garment_region (clothing),
     None for worn; limits("clothing") lists reg_shift (le 0.04) and
-    reg_scale (range [0.93, 1.07]) under ghost.
+    reg_scale (range [0.93, 1.07]) under ghost, both ``warn`` (no refusal)
+    and ``generated_only`` (Ruling A46c).
 """
 import os
 import sys
@@ -305,7 +306,8 @@ def main() -> int:
     check("clothing ghost = garment_region",
           bool(np.array_equal(garment_clothing.position_reference("ghost", **none), REGION)), True)
     check("clothing worn = None", garment_clothing.position_reference("worn", **none), None)
-    want = {"reg_shift": {"op": "le", "value": 0.04}, "reg_scale": {"op": "range", "value": [0.93, 1.07]}}
+    want = {"reg_shift": {"op": "le", "value": 0.04, "warn": True, "generated_only": True},
+            "reg_scale": {"op": "range", "value": [0.93, 1.07], "warn": True, "generated_only": True}}
     ghost_limits = gg.limits("clothing")["ghost"]
     check("limits clothing", {k: ghost_limits[k] for k in want}, want)
 
