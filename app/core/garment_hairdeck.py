@@ -135,6 +135,18 @@ CAP_INNER_DEPTH_M = VOX_M
 # 14.8 mm). Cut, the edge is the straight line where that level meets the head. CAP_TUCK_M keeps it under the hair:
 # the hair cards end at the hairline and the fill cards (``scalp_fill_cards``) run down to it, 3 mm past the cap.
 CAP_TUCK_M = 0.003
+# The cap never reaches below the brows in the face (Ruling A80, FIT_VERSION hair 15). The hairline above is the
+# lowest FRONT hair vertex, and on a fringe that is the fringe's tip, not where the hair grows: Vallerie's fringe
+# ends at 1.5335 m, on her nasion floor (1.5332), so the one level y = hairline + CAP_TUCK_M cut the cap 43.3 mm below
+# her brow line (1.5786) and 22.5 mm below her eye line (1.5578) — a brown band over forehead, brows and eyes,
+# because the fringe hangs in front of the face and every face triangle there has hair within CAP_REACH_M (Glut's
+# fringe fit: 21.1 mm below the brow). In the face sector the cap's floor (the hairline height its edge sits
+# CAP_TUCK_M above, ``cap_floor``) is lifted to the brow line of the placement landmarks: azimuth about the head's
+# centre (atan2(x - cx, z - cz), the face looks along +z) within FACE_SECTOR_DEG of the front, fading linearly to
+# the plain hairline over FACE_SECTOR_FADE_DEG (the temples; at 85 deg the sideburn in front of the ear follows the
+# hair as before). The fill cards land on the same floor. A fringe covers the forehead with its own hair cards.
+FACE_SECTOR_DEG = 60.0
+FACE_SECTOR_FADE_DEG = 25.0
 # Front hairline region: z > head centre z + 0.25 * head depth and |x - head cx| < 0.15 * head width. The plan said
 # 0.3 * width (+-5.1 cm on the spike's head): that strip reaches the face-framing strands, whose tips hang at eye
 # level (x +-4.5..5.6 cm, y 1.572), and the cap then covered forehead and temples (seen in the render, and 52 cap
@@ -711,17 +723,43 @@ def auto_width_scale(Q: np.ndarray, profile: Tuple[np.ndarray, np.ndarray], side
 
 # --- scalp cap -----------------------------------------------------------------------------------------------------
 
-def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optional[float] = None
+def face_weight(points: np.ndarray, centre_xz: Tuple[float, float]) -> np.ndarray:
+    """Per point how much of the face sector it lies in: 1 within ``FACE_SECTOR_DEG`` of the front (+z) about the
+    head centre ``centre_xz`` = ``(cx, cz)``, 0 beyond ``FACE_SECTOR_DEG + FACE_SECTOR_FADE_DEG``, linear between."""
+    X = np.asarray(points, np.float64).reshape(-1, 3)
+    azimuth = np.degrees(np.abs(np.arctan2(X[:, 0] - centre_xz[0], X[:, 2] - centre_xz[1])))
+    return np.clip((FACE_SECTOR_DEG + FACE_SECTOR_FADE_DEG - azimuth) / FACE_SECTOR_FADE_DEG, 0.0, 1.0)
+
+
+def cap_floor(hairline: float, brow_y: Optional[float], centre_xz: Tuple[float, float]):
+    """The cap's floor per point (Ruling A80): ``floor(points (N, 3)) -> (N,)`` heights, the hairline lifted towards
+    the brow line by ``face_weight`` where the hairline lies below the brow (a fringe): ``hairline + w * max(0,
+    brow - hairline)``. The cap's edge lies ``CAP_TUCK_M`` above it, the fill cards land on it. Without a brow (no
+    landmarks) or a hairline at or above it the floor is the hairline everywhere."""
+    lift = 0.0 if brow_y is None else max(0.0, float(brow_y) - float(hairline))
+
+    def floor(points: np.ndarray) -> np.ndarray:
+        X = np.asarray(points, np.float64).reshape(-1, 3)
+        if lift <= 0.0:
+            return np.full(len(X), float(hairline))
+        return float(hairline) + lift * face_weight(X, centre_xz)
+    return floor
+
+
+def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optional[float] = None,
+               brow_y: Optional[float] = None
                ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[float], Dict[str, Any]]:
     """``(positions, faces, normals, hairline_y, info)`` of the scalp cap (faces index the returned positions).
 
-    Rigged body triangles whose three vertices carry Head weight > 0.5, whose centroid lies above the front hairline
-    and whose nearest hair vertex is within ``CAP_REACH_M``, minus the inner-wall ones (centroid deeper than
-    ``CAP_INNER_DEPTH_M`` inside the body SDF); offset ``CAP_OFFSET_M`` along the outward vertex normals.
-    The front hairline is the lowest hair vertex with ``z > head cz + 0.25 depth`` and ``|x - head cx| < 0.15 width``
-    (head bbox = the Head-weighted vertices). Face normals are oriented by the SDF gradient at the centroid before
-    they are accumulated into vertex normals — the generator body's winding is never trusted — and the winding is
-    flipped to match, so a cap face looks outward.
+    Rigged body triangles whose three vertices carry Head weight > 0.5, reaching above the cap's edge and whose
+    nearest hair vertex is within ``CAP_REACH_M``, minus the inner-wall ones (centroid deeper than
+    ``CAP_INNER_DEPTH_M`` inside the body SDF), cut along the edge (``clip_patch``); offset ``CAP_OFFSET_M`` along
+    the outward vertex normals. The edge lies ``CAP_TUCK_M`` above the floor ``cap_floor``: the front hairline —
+    the lowest hair vertex with ``z > head cz + 0.25 depth`` and ``|x - head cx| < 0.15 width`` (head bbox = the
+    Head-weighted vertices) at or above ``floor_y`` (the nasion) — lifted to ``brow_y`` in the face sector (Ruling
+    A80). Face normals are oriented by the SDF gradient at the centroid before they are accumulated into vertex
+    normals — the generator body's winding is never trusted — and the winding is flipped to match, so a cap face
+    looks outward.
     """
     from scipy.spatial import cKDTree
     P, F = body.positions, body.faces
@@ -736,17 +774,22 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
     centroid = P[F].mean(1)
     near, _ = cKDTree(hair_X).query(centroid, distance_upper_bound=CAP_REACH_M * 1.0001)
     edge_y = hairline + CAP_TUCK_M
-    sel = head_v[F].all(1) & (P[F][:, :, 1].max(1) > edge_y) & (near <= CAP_REACH_M)
+    level = P[:, 1] - (cap_floor(hairline, brow_y, (cx, cz))(P) + CAP_TUCK_M)
+    sel = head_v[F].all(1) & (level[F].max(1) > 0) & (near <= CAP_REACH_M)
     candidates = int(sel.sum())
     sel[sel] = sdf.sample(centroid[sel]) > -CAP_INNER_DEPTH_M
     if not sel.any():
         return (*empty, hairline, {"note": "no scalp triangle above the hairline near the hair"})
-    Pc, Fcut = clip_patch(P, F[sel], P[:, 1] - edge_y)
+    Pc, Fcut = clip_patch(P, F[sel], level)
     V, Fl, N, flipped = offset_patch(Pc, Fcut, sdf, CAP_OFFSET_M)
+    lifted = brow_y is not None and brow_y > hairline
     info = {"head_centre_xz": [round(float(cx), 5), round(float(cz), 5)],
             "head_width_m": round(float(width), 5), "head_depth_m": round(float(depth), 5),
             "front_hair_vertices": int(front.sum()), "flipped_faces": flipped,
-            "inner_wall_dropped": candidates - int(sel.sum()), "edge_y": round(float(edge_y), 5)}
+            "inner_wall_dropped": candidates - int(sel.sum()), "edge_y": round(float(edge_y), 5),
+            "brow_y": None if brow_y is None else round(float(brow_y), 5),
+            "face_edge_y": round(float((brow_y if lifted else hairline) + CAP_TUCK_M), 5),
+            "face_lift_m": round(float(brow_y - hairline), 5) if lifted else 0.0}
     return V, Fl, N, hairline, info
 
 
@@ -811,17 +854,18 @@ def offset_patch(P: np.ndarray, Fc: np.ndarray, sdf, offset: float
     return V + offset * N, Fl, N, int(flip.sum())
 
 
-def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crown: np.ndarray, floor_y: float,
+def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crown: np.ndarray, floor_y,
                      front: Optional[Tuple[float, float]] = None
                      ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
     """``(V, F, UV, normals, card, report)`` of the flat cards that fill the open scalp (``FILL_COVER_M`` and the
     rest above): ``Vc`` / ``Fc`` the cap, ``hair`` the fitted hair cards' vertices, ``sdf`` the body, ``crown`` the
-    head's top point, ``floor_y`` the cap's hairline height (a card running down to it ends with a row exactly on
-    it), ``front`` = ``(z_min, y_max)``: cap triangles whose centroid lies in front of ``z_min`` and below ``y_max``
-    are open whatever hair lies near (the hair ending band, ``FILL_EDGE_BAND_M``). Each card is rows of two vertices
-    (left, right), root row first; ``card`` numbers the fill cards 0.. in order; ``UV`` u 0 / 1, v from 1 at the
-    root row to 0 at the tip row by the distance along the card — the whole strip on every card, so a card cut
-    short still ends in the strip's ragged tips, not mid-strand. A card that lands on the floor reaches v
+    head's top point, ``floor_y`` the cap's floor — a height, or per point (``cap_floor``: lifted to the brow in
+    the face, Ruling A80) — (a card running down to it ends with a row exactly on it), ``front`` = ``(z_min,
+    above_m)``: cap triangles whose centroid lies in front of ``z_min`` and less than ``above_m`` above the floor
+    are open whatever hair lies near (the hair ending band, ``CAP_TUCK_M + FILL_EDGE_BAND_M``). Each card is rows
+    of two vertices (left, right), root row first; ``card`` numbers the fill cards 0.. in order; ``UV`` u 0 / 1,
+    v from 1 at the root row to 0 at the tip row by the distance along the card — the whole strip on every card,
+    so a card cut short still ends in the strip's ragged tips, not mid-strand. A card that lands on the floor reaches v
     ``FILL_EDGE_V`` where it crosses the cap's edge (``CAP_TUCK_M`` above the floor) and 0 on the floor: its strands
     end around and below the cap's edge. Empty arrays without an open cap triangle."""
     from scipy.spatial import cKDTree
@@ -833,11 +877,16 @@ def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crow
     hair = np.asarray(hair, np.float64).reshape(-1, 3)
     if not len(Fc) or not len(hair):
         return (*empty, {"open_tris": 0, "cards": 0, "vertices": 0})
+    if callable(floor_y):
+        floor = floor_y
+    else:
+        def floor(points: np.ndarray) -> np.ndarray:
+            return np.full(len(np.asarray(points).reshape(-1, 3)), float(floor_y))
     centroid = Vc[Fc].mean(1)
     near, _ = cKDTree(hair).query(centroid)
     open_ = near > FILL_COVER_M
     if front is not None:
-        open_ |= (centroid[:, 2] > front[0]) & (centroid[:, 1] < front[1])
+        open_ |= (centroid[:, 2] > front[0]) & (centroid[:, 1] < floor(centroid) + front[1])
     seeds: List[np.ndarray] = []
     for c in centroid[open_]:
         if not seeds or np.linalg.norm(np.asarray(seeds) - c, axis=1).min() >= FILL_SPACING_M:
@@ -872,9 +921,11 @@ def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crow
             p, _, t = row0
             for k in range(1, half + 1):
                 q, n, t2 = onto(p + sign * step * t)
-                if q[1] < floor_y:
-                    # the last row lands on the floor: the step cut where it crosses floor_y
-                    f = (p[1] - floor_y) / max(p[1] - q[1], 1e-12)
+                over_q = q[1] - float(floor(q[None])[0])
+                if over_q < 0:
+                    # the last row lands on the floor: the step cut where it crosses the floor
+                    over_p = p[1] - float(floor(p[None])[0])
+                    f = over_p / max(over_p - over_q, 1e-12)
                     if f > FILL_LAND_MIN:
                         q, n, t2 = onto(p + f * sign * step * t)
                         if np.linalg.norm(t2) > 0.5:
@@ -894,11 +945,10 @@ def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crow
         centres = np.array([rows[k][0] for k in ks])
         run = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(centres, axis=0), axis=1))]
         vs = 1.0 - run / run[-1]
-        edge = floor_y + CAP_TUCK_M
-        if landed and centres[0, 1] > edge and centres[-1, 1] < edge:
-            i = int(np.flatnonzero(centres[:, 1] <= edge)[0])           # the first row at or below the cap's edge
-            s_e = run[i - 1] + (centres[i - 1, 1] - edge) / max(centres[i - 1, 1] - centres[i, 1], 1e-12) * (
-                run[i] - run[i - 1])
+        over = centres[:, 1] - (floor(centres) + CAP_TUCK_M)          # height over the cap's edge per row
+        if landed and over[0] > 0 and over[-1] < 0:
+            i = int(np.flatnonzero(over <= 0)[0])                        # the first row at or below the cap's edge
+            s_e = run[i - 1] + over[i - 1] / max(over[i - 1] - over[i], 1e-12) * (run[i] - run[i - 1])
             vs = np.where(run <= s_e, 1.0 - (1.0 - FILL_EDGE_V) * run / max(s_e, 1e-12),
                           FILL_EDGE_V * (run[-1] - run) / max(run[-1] - s_e, 1e-12))
         for k, v in zip(ks, vs):
@@ -1596,7 +1646,8 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
         colours, colour_info = _correct_colours(C, colour_target)
 
     # scalp cap
-    Vc, Fc, Nc, hairline, cap_info = _scalp_cap(body, head_w, Qp, sdf, placement["hairline_floor_y"])
+    brow_y = (placement.get("landmarks") or {}).get("brow_y")
+    Vc, Fc, Nc, hairline, cap_info = _scalp_cap(body, head_w, Qp, sdf, placement["hairline_floor_y"], brow_y)
     nc = len(Vc)
     cap_colour = np.r_[np.percentile(colours[:, :3], CAP_COLOUR_PERCENTILE, axis=0), 1.0]
     below = int((Vc[Fc].mean(1)[:, 1] < hairline).sum()) if len(Fc) else 0
@@ -1604,9 +1655,10 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     hair_card = hair_cards.hairdeck_cards(F, len(X), len(X))
     head_box = _head_box(body.positions, head_v)
     Vf, Ff, Uf, Nf, fill_card, fill_info = scalp_fill_cards(
-        Vc, Fc, X, sdf, np.array([head_box[0], top, head_box[1]]), hairline,
+        Vc, Fc, X, sdf, np.array([head_box[0], top, head_box[1]]),
+        hairline if hairline is None else cap_floor(hairline, brow_y, (head_box[0], head_box[1])),
         front=None if hairline is None else (head_box[1] + HAIRLINE_FRONT_DEPTH * head_box[3],
-                                             hairline + CAP_TUCK_M + FILL_EDGE_BAND_M))
+                                             CAP_TUCK_M + FILL_EDGE_BAND_M))
     nf = len(Vf)
     cap_colours = np.tile(cap_colour, (nc, 1))
     if nf:

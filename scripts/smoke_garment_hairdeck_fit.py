@@ -109,8 +109,9 @@ Fixture (metres, +y up, the body faces +z)
     - every card's root at x > 0 (the open side; the radial move keeps the azimuth);
     - no row turns: a card stops before a row whose direction turns by more than 60 deg (FILL_MAX_TURN_COS 0.5 —
       over the crown away-from-crown flips), so the meridian rule above holds for every card.
-    Hair over the whole cap (every cap vertex at r 0.105): no open triangle, no card. With ``front`` = (-1, 1.66)
-    (the hair-ending band, Ruling T-U2b) the cap triangles whose centroid lies below 1.66 are open whatever hair
+    Hair over the whole cap (every cap vertex at r 0.105): no open triangle, no card. With ``front`` = (-1, 0.01)
+    (the hair-ending band, Ruling T-U2b; 0.01 above the floor 1.65 since Ruling A80) the cap triangles whose
+    centroid lies below 1.66 are open whatever hair
     lies near: r 0.1015, rings 17..21 at y 1.66503 / 1.66090 / 1.65668 / 1.65227 / 1.64775; band 17's centroids
     (1.66365 / 1.66228) are above, bands 18 and 19 below (240 each), band 20's upper triangles (centroid 1.65076)
     in the cap (> 1.65) -> open_tris 240 + 240 + 120 = 600, cards > 0.
@@ -428,7 +429,7 @@ def scalp_fill(gh):
     full = (Ps - [0, 1.6, 0]) * (0.105 / 0.1015) + [0, 1.6, 0]
     V2, _, _, _, _, info2 = gh.scalp_fill_cards(Ps, Fc, full, sdf, np.array([0, 1.7, 0]), 1.65)
     check(len(V2) == 0 and info2["open_tris"] == 0 and info2["cards"] == 0, f"hair over all of the cap: none {info2}")
-    V3, _, _, _, _, info3 = gh.scalp_fill_cards(Ps, Fc, full, sdf, np.array([0, 1.7, 0]), 1.65, front=(-1.0, 1.66))
+    V3, _, _, _, _, info3 = gh.scalp_fill_cards(Ps, Fc, full, sdf, np.array([0, 1.7, 0]), 1.65, front=(-1.0, 0.01))
     check(info3["open_tris"] == 600 and info3["cards"] > 0, f"front band below 1.66: 600 open triangles {info3}")
 
 

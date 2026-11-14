@@ -170,6 +170,12 @@ SIDE_DEEP_M = 0.03
 #: version, no hair 14 fit was live yet): the cap is cut along a level line CAP_TUCK_M above the hairline instead of
 #: keeping whole triangles (Ylva's front edge: 5 teeth up to 10.6 mm -> 0), the fill cards run 3 mm past it, fill the
 #: band along it and lie 3 mm apart (forehead window hair 77 -> 90 %, cap 21 -> 7 %).
+#: hair 15 (2026-11-15, Ruling A80 — one CPU refit of every HairDeck fit, no hub job; only fringe fits change): the
+#: scalp cap never reaches below the brow line in the face (``garment_hairdeck.cap_floor``): on a fringe the front
+#: hairline is the fringe's tip, and the cap was cut at that one height all round the head — Vallerie's cap ended
+#: 43.3 mm below her brow and 22.5 mm below her eye line, Glut's fringe fit 21.1 mm below the brow. In the face sector
+#: the cap's floor is lifted to the brow (fading out over the temples), the fill cards land on it; the sides and the
+#: back keep the hairline. A fit whose hairline lies above the brow is rebuilt unchanged.
 #: clothing 10 (2026-11-14, Ruling A35 — one CPU refit of every clothing fit, no hub job): the limb and trunk frames
 #: of a refit / outfit-body transfer come from the skeleton's bind joints (``FRAME_BASIS``; Kai's jeans on
 #: ``obf6474c3b``: off the left thigh 0.1478 -> 0.0002), the sleeves are re-centred on their arms
@@ -200,7 +206,7 @@ SIDE_DEEP_M = 0.03
 #: weights wherever such a vertex is among a garment vertex's nearest, so Ruling A51's exemption of version 12 fits
 #: without a deep opening went with this version.
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 14, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 15, "clothing": 14, "footwear": FOOTWEAR_FIT_VERSION}
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
