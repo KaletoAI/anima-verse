@@ -78,9 +78,14 @@ body actions):
   bodies (``figure.stored``): ``{"stored": [{key, kind, bytes, built_for,
   built_for_name, outfits, last_used, reason, unneeded, deletable, running,
   current}]}``.
+* ``GET /characters/{c}/figure/stored/{key}/preview`` — what that Delete
+  would do (``figure.delete_preview``, Ruling A64): the files with their size,
+  the outfit models deleted with a shape, whether it is deletable and why
+  not; 404 when nothing of it is stored, 400 for a key of neither shape.
 * ``DELETE /characters/{c}/figure/stored/{key}`` — delete ONE of them
   (``figure.delete_stored``, an explicit collect, Ruling 5a): 409 while an
-  outfit would be built on it (a shape: ``figure.SHAPE_NEEDED``, a painted
+  outfit would be built on it or the worn figure stands on it (a shape:
+  ``figure.SHAPE_NEEDED`` / ``figure.SHAPE_CURRENT``, a painted
   body: ``outfit_bodies.PAINTED_NEEDED``), a run works on it or a Build of
   the character runs (``figure.BUILD_RUNNING``), 404 when nothing of it is
   stored, 400 for a key of neither shape.
@@ -330,6 +335,19 @@ def get_figure_stored(character_name: str, _: Dict[str, Any] = Depends(require_a
     from app.core import figure
     _require_character(character_name)
     return {"stored": figure.stored(character_name)}
+
+
+@router.get("/{character_name}/figure/stored/{key}/preview")
+def preview_figure_stored(character_name: str, key: str,
+                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import figure, outfit_bodies
+    _require_character(character_name)
+    try:
+        return figure.delete_preview(character_name, key)
+    except outfit_bodies.UnknownBody as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete("/{character_name}/figure/stored/{key}")

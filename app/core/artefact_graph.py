@@ -1071,6 +1071,81 @@ def body_chain(nodes: List[Node], root: Path, body_id: str) -> Set[str]:
     return keys
 
 
+def _body_delete_nodes(character_name: str, root: Path, body_id: str) -> List[Tuple[Node, bool]]:
+    """What ``delete_body`` takes for ``body_id``: ``[(node, running)]`` over the body's chain
+    (``body_chain``) — the body, its body fits and the outfit MODELS on it (an outfit's refs are its dressed
+    views, the texture's source, and stay); ``running`` = work in progress protects the node."""
+    nodes, _unknown = scan(character_name)
+    wanted = body_chain(nodes, root, body_id)
+    running, _items = running_keys(character_name)
+    out: List[Tuple[Node, bool]] = []
+    for node in nodes:
+        if node.key not in wanted or node.kind not in ("body", "body_fit", "outfit"):
+            continue
+        if node.kind == "outfit" and node.category != "meshes":
+            continue
+        out.append((node, node.key in running
+                    or (node.kind == "body_fit" and node.parents.get("body_id") in running)))
+    return out
+
+
+def delete_body_preview(character_name: str, body_id: str) -> Dict[str, Any]:
+    """What ``delete_body`` WOULD delete, read-only (Ruling A64: the confirmation lists it before the click):
+    ``{files: [path relative to the character folder], bytes, outfit_models: [signature], running: [key]}``.
+    ValueError for an id not shaped like an outfit body; every listed path lies inside the character folder."""
+    if not _OUTFIT_BODY_RE.fullmatch(str(body_id or "")):
+        raise ValueError(f"not an outfit body id: {str(body_id)[:40]!r}")
+    root = _char_dir(character_name)
+    out: Dict[str, Any] = {"files": [], "bytes": 0, "outfit_models": [], "running": []}
+    if not root.is_dir():
+        return out
+    resolved = root.resolve()
+    for node, running in _body_delete_nodes(character_name, root, body_id):
+        if running:
+            out["running"].append(node.key)
+            continue
+        if node.kind == "outfit":
+            out["outfit_models"].append(node.key)
+        for path in node.files:
+            try:
+                rel = path.resolve().relative_to(resolved)
+                size = path.stat().st_size
+            except (OSError, ValueError):
+                continue   # outside the character folder or gone: never listed, never deleted (``_remove``)
+            out["files"].append(rel.as_posix())
+            out["bytes"] += size
+    out["files"].sort()
+    return out
+
+
+def texture_files(character_name: str, tsig: str) -> Dict[str, Any]:
+    """The files of ONE painted body (its texture node), read-only: ``{files, bytes}`` like
+    ``delete_body_preview``; empty when nothing of it is stored. ValueError for a key not shaped like a tsig."""
+    from app.core import base_body
+    from app.core.outfit_cache_gc import TEXTURE_KEY_PREFIX
+    if not base_body.is_texture_signature(tsig):
+        raise ValueError(f"not a texture signature: {str(tsig)[:40]!r}")
+    root = _char_dir(character_name)
+    out: Dict[str, Any] = {"files": [], "bytes": 0, "outfit_models": [], "running": []}
+    if not root.is_dir():
+        return out
+    resolved = root.resolve()
+    nodes, _unknown = scan(character_name)
+    for node in nodes:
+        if node.kind != "texture" or node.key != TEXTURE_KEY_PREFIX + tsig:
+            continue
+        for path in node.files:
+            try:
+                rel = path.resolve().relative_to(resolved)
+                size = path.stat().st_size
+            except (OSError, ValueError):
+                continue
+            out["files"].append(rel.as_posix())
+            out["bytes"] += size
+    out["files"].sort()
+    return out
+
+
 def delete_body(character_name: str, body_id: str, *, reason: str = "outfit body deleted") -> Dict[str, Any]:
     """Explicit delete of ONE outfit body and its whole chain (``body_chain``)
     — the Figure tab's Delete (``figure.delete_stored``). Unlike ``collect`` the chain goes
@@ -1090,15 +1165,8 @@ def delete_body(character_name: str, body_id: str, *, reason: str = "outfit body
     if not root.is_dir():
         return report
     started = time.monotonic()
-    nodes, _unknown = scan(character_name)
-    wanted = body_chain(nodes, root, body_id)
-    running, _items = running_keys(character_name)
-    for node in nodes:
-        if node.key not in wanted or node.kind not in ("body", "body_fit", "outfit"):
-            continue
-        if node.kind == "outfit" and node.category != "meshes":
-            continue  # the outfit's refs are its dressed views — the texture's source, kept
-        if node.key in running or (node.kind == "body_fit" and node.parents.get("body_id") in running):
+    for node, running in _body_delete_nodes(character_name, root, body_id):
+        if running:
             report["skipped"].append({"key": node.key, "why": "running"})
             continue
         entry = _entry(node)

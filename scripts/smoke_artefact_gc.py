@@ -73,7 +73,7 @@ Expected, by hand from the spec + plan rulings (module docstring of artefact_gra
     figure.stored lists B1 B2 (shape, unneeded, deletable, not current; B1 built_for O1) and T1 T2 (texture, live
     by their fronts -> not deletable; T1 current = the worn O1's texture on the plain body). delete_stored: T2 ->
     LookupError PAINTED_NEEDED, "obdeadbeef" -> UnknownBody (404), "../x" -> ValueError (400), nothing changed;
-    back in mesh B1 is the worn shape -> LookupError SHAPE_NEEDED, nothing changed; retexture again: while the
+    back in mesh B1 is the worn shape -> LookupError SHAPE_CURRENT (Ruling A64), nothing changed; retexture again: while the
     character's Build lock is held (figure_build.build_lock, Ruling 10a / Task 11) B1 and T2 -> LookupError
     BUILD_RUNNING, nothing changed; after it B1 Bd1 Bh1 go (delete_body: the body and its fits), then the
     explicit collect takes B2 Bd2 Bh2.
@@ -471,7 +471,7 @@ def main() -> int:
         check("[4] back to mesh", set_mode(fx, "mesh"), "mesh")
         check("[4] back to mesh: 0 deletions", ag.collect_quietly("Demo4", "smoke")["deleted_files"], 0)
         same("[4] back to mesh", "Demo4", fx, ALL)
-        check("[4] delete_stored worn shape B1 -> 409", refused(fx["B1"]), ("LookupError", figure.SHAPE_NEEDED))
+        check("[4] delete_stored worn shape B1 -> 409", refused(fx["B1"]), ("LookupError", figure.SHAPE_CURRENT))
         same("[4] B1 kept", "Demo4", fx, ALL)
         check("[4] retexture again", set_mode(fx, "retexture"), "retexture")
         from app.core import figure_build
