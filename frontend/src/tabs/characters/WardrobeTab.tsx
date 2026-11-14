@@ -25,7 +25,7 @@ import { useToast } from '../../lib/Toast'
 import { FilterChipRow } from '../../components/FilterChipRow'
 import { FieldModelRefs } from './FieldModelRefs'
 import {
-  ClosableCheckbox, GarmentPieceDialog, MeshModeSelect, PieceStateToggle, PieceStatusChip, WearersLine,
+  ClosableCheckbox, GarmentPieceDialog, MaterialSelect, MeshModeSelect, PieceStateToggle, PieceStatusChip, WearersLine,
 } from './WardrobeGarment'
 import { closableDisabled, hairstyleLabel, meshModeOf } from './figureModel'
 import { useWardrobeGarments } from './useGarment'
@@ -534,6 +534,11 @@ export function WardrobeTab({ character, onOpenFigure }: {
                       setModeChanged((prev) => ({ ...prev, [it.item_id]: (prev[it.item_id] || 0) + 1 }))
                       void load()
                     }} />
+                  {garments.pipeline && garments.modes?.[it.item_id] === 'own_mesh'
+                    && garments.materials?.[it.item_id] ? (
+                      <MaterialSelect itemId={it.item_id} material={garments.materials[it.item_id]} disabled={busy}
+                        onChanged={() => { void reloadGarments() }} />
+                    ) : null}
                   <ClosableCheckbox itemId={it.item_id} closable={!!garments.closable?.[it.item_id]}
                     slots={it.slots} namesState={!!garments.names_state?.[it.item_id]} disabled={busy}
                     onChanged={() => { void reloadGarments() }} />

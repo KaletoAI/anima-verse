@@ -23,3 +23,27 @@ export function applyViewerTexture(object: Object3D, tex: Texture): void {
     }
   })
 }
+
+/**
+ * Metalness 0 on every material that carries a metal-roughness map (AV3D-14:
+ * a generated bake claims ~0.5 metalness over skin and cloth, and this viewer
+ * has no env map). A material whose glTF `extras.explicit_metallic` is true —
+ * a garment with a material preset that sets metal (Ruling A36,
+ * `app/core/piece_material.py`; GLTFLoader puts extras into `userData`) —
+ * keeps its metalness. Smoke: `scripts/smoke_piece_material.py`.
+ */
+export function zeroViewerMetalness(object: Object3D): void {
+  object.traverse((o: Object3D) => {
+    const mesh = o as Mesh
+    if (!mesh.isMesh) return
+    const mats: Material[] = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (const m of mats) {
+      const std = m as MeshStandardMaterial
+      if (!std.isMeshStandardMaterial || std.userData?.explicit_metallic === true) continue
+      if (std.metalnessMap) {
+        std.metalness = 0
+        std.needsUpdate = true
+      }
+    }
+  })
+}

@@ -25,7 +25,7 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   seatFootLift } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision } from '@anima/scene-render'
-import { applyViewerTexture } from './modelTexture'
+import { applyViewerTexture, zeroViewerMetalness } from './modelTexture'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
 import type { SceneModelSpec } from '../world/worldTypes'
@@ -1033,19 +1033,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         // metalness across skin — with the glTF default metallicFactor 1.0
         // and no env map the figure renders as the MR map's tint instead of
         // its base colour. This viewer is a diagnostic: kill metalness (the
-        // roughness channel of the same map stays active), colours stay true.
-        object.traverse((o: Object3D) => {
-          const mesh = o as Mesh
-          if (!mesh.isMesh) return
-          const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-          for (const m of mats) {
-            const std = m as MeshStandardMaterial
-            if (std.isMeshStandardMaterial && std.metalnessMap) {
-              std.metalness = 0
-              std.needsUpdate = true
-            }
-          }
-        })
+        // roughness channel of the same map stays active), colours stay true —
+        // except on a garment whose material preset sets it (Ruling A36).
+        zeroViewerMetalness(object)
 
         if (textureUrl) {
           const tex = await new THREE.TextureLoader().loadAsync(textureUrl)

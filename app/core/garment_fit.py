@@ -47,7 +47,7 @@ import numpy as np
 from app.core import fit_kernels
 from app.core.footwear_fit import FOOTWEAR_FIT_VERSION
 from app.core.garment_mesh import MIN_COMPONENT_SHARE as MESH_MIN_COMPONENT_SHARE
-from app.core.glb_mesh import BodyMesh, GarmentMesh
+from app.core.glb_mesh import BodyMesh, GarmentMesh, static_mr_image
 
 # R9 — fit constants in METRES (the spike's unit constants x 1.70)
 # Clearance from the REAL body surface. The spike asked for 0.004 units (0.0068 m), but its raw voxel field put the
@@ -2306,6 +2306,8 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
 
         garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material,
                                lining)
+        # The generator's roughness map rides on the same UVs (Ruling A36: the fit keeps it).
+        garment.mr_image, garment.mr_mime = static_mr_image(unrigged_garment_glb)
         crotch = crotch_height(body_r)
         hips = names.index(body_r.joint_names[joint_index(body_r, "hips")]) if skirt else -1
         report = {

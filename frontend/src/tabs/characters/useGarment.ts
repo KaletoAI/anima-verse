@@ -549,7 +549,20 @@ export interface WardrobeGarments {
   names_state?: Record<string, boolean>
   /** Build automatically is on: a toggle starts the Build. */
   auto_build?: boolean
+  /** The own mesh's material of every held outfit piece (Ruling A36, `piece_material.describe`): the stored
+   *  choice and the preset "auto" takes effect as ("" = the generated roughness map). */
+  materials?: Record<string, PieceMaterialInfo>
 }
+
+/** `outfit_piece.material` (Ruling A36): auto or a fixed preset. */
+export type PieceMaterial = 'auto' | 'leather' | 'denim' | 'knit' | 'cotton' | 'rubber' | 'metal'
+
+/** A piece's material choice and what "auto" resolves to ("" = the generated roughness map stays). */
+export interface PieceMaterialInfo {
+  choice: PieceMaterial
+  guess: '' | Exclude<PieceMaterial, 'auto'>
+}
+
 
 /** Why a view needs another one (`garments.view_needs`): made from that image (`source`), a back drafted from its
  *  front (`draft`), a front matched to the back's length (`pair`). */

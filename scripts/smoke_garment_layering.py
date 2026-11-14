@@ -54,7 +54,7 @@ Expected, derived by hand:
     - assemble(A) -> {full: assembled, low: assembled}; layers/coat_<F>_<lsig1>.glb + .json and
       layers/low/coat_<F>_<lsig1>.glb exist; the record: accepted, lsig1, base_model_sha256 sha(B),
       base_fit_sha256 sha(coat body fit), inner {slip: {fsig, sha256 sha(slip fit), lsig None}}; the assembled
-      sidecar garments.coat = {kind clothing, fsig F, sha256 sha(layer file), over lsig1}; garments.slip has no
+      sidecar garments.coat = {kind clothing, fsig F, sha256 sha(layer file), over lsig1, material "map"}; garments.slip has no
       ``over``; the assembled coat node: r in [0.1239, 0.1270] over y [1.10, 1.30], extras.garment.over [slip];
       the low tier's coat node too (32 segments). served(A, full) = the assembled file. Hub counters 0, the
       coat's body fit bytes unchanged.
@@ -409,7 +409,7 @@ def main() -> int:
         asm = mdir / "assembled" / "outfitA.glb"
         side = json.loads(asm.with_suffix(".json").read_text())
         check("assembled coat entry", side["garments"]["coat"],
-              {"kind": "clothing", "fsig": fsig["coat"], "sha256": sha(layer), "over": lsig1})
+              {"kind": "clothing", "fsig": fsig["coat"], "sha256": sha(layer), "over": lsig1, "material": "map"})
         check("assembled slip entry has no over", "over" in side["garments"]["slip"], False)
         n, g = node(asm.read_bytes(), "garment_clothing_coat")
         r = radii(g.positions)[band(g.positions, 1.10, 1.30)]
@@ -455,7 +455,7 @@ def main() -> int:
         check("assemble C", ga.assemble("Demo", "outfitC")["ok"], True)
         side = json.loads((mdir / "assembled" / "outfitC.json").read_text())
         check("C: coat entry = body fit", side["garments"]["coat"],
-              {"kind": "clothing", "fsig": fsig["coat"], "sha256": coat_body_sha})
+              {"kind": "clothing", "fsig": fsig["coat"], "sha256": coat_body_sha, "material": "map"})
         check("C: served", ga.served("Demo", bare_c, "full"), mdir / "assembled" / "outfitC.glb")
         planned = gl.plan("Demo", ["coat", "slip"], base_sha=base_sha, intended=["coat", "slip"])
         check("A again: stored layer valid", (planned["coat"]["lsig"], planned["coat"]["pending"]), (lsig2, False))

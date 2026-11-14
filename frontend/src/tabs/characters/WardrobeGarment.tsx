@@ -42,6 +42,10 @@
  * height groups ground / ground / seat); POST …/footwear/width-cap saves the
  * width cap the slider sets.
  *
+ * Ruling A36: the material select of an own-mesh piece (MaterialSelect — "Auto (→ Leather)" or a preset, saved at
+ * once on the ITEM like the mode; it spends no hub job and makes no new fit: the figures that wear the piece are
+ * re-assembled on the CPU, which the line under it names after a change).
+ *
  * Ruling A37: "Use this" under every stored attempt of the clothing grid — POST
  * …/garments/{item}/images/{step}/{view}/attempts/{n}/use (0 jobs; a refused attempt becomes "Accepted by you").
  *
@@ -67,7 +71,9 @@ import { FitBodySwitch } from './FitBodySwitch'
 import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
 import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
-import type { GarmentItemInfo, GarmentView, ItemWearers, PieceStatus } from './useGarment'
+import type {
+  GarmentItemInfo, GarmentView, ItemWearers, PieceMaterial, PieceMaterialInfo, PieceStatus,
+} from './useGarment'
 import {
   AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES, PIECE_STATE_LABELS,
   closableDisabled, showBodySwitch, wearersLine,
@@ -253,6 +259,76 @@ export function MeshModeSelect({ itemId, mode, pipeline, disabled, feet = false,
           {t('Only humanoid characters that are not temporary NPCs use modes')}
         </span>
       ) : null}
+    </span>
+  )
+}
+
+const MATERIAL_LABELS: Record<PieceMaterial, string> = {
+  auto: 'Auto', leather: 'Leather', denim: 'Denim', knit: 'Knit', cotton: 'Cotton', rubber: 'Rubber', metal: 'Metal',
+}
+const MATERIAL_HINT = 'How the own mesh shines: Auto guesses it from the name and description; a preset sets fixed roughness and shine. A change re-assembles the figure on the CPU — no hub job, no new fit.'
+const MATERIAL_ORDER: PieceMaterial[] = ['auto', 'leather', 'denim', 'cotton', 'knit', 'rubber', 'metal']
+
+/** The material select of an own-mesh piece (Ruling A36): "Auto (→ Leather)" — the preset the item's words
+ *  guess, or "Auto (generated)" when none matches and the generator's roughness map stays — or a fixed preset.
+ *  Saved at once on the ITEM (every wearer; the PUT replaces the whole outfit_piece, so the stored one is read
+ *  first and only `material` changes). It runs nothing: no hub job, no new fit — a change of the preset it takes
+ *  effect as re-assembles the wearers' figures on the CPU when they are next shown; the line under it says so
+ *  before the change and names the wearers after it. */
+export function MaterialSelect({ itemId, material, disabled, onChanged }: {
+  itemId: string
+  material: PieceMaterialInfo
+  disabled?: boolean
+  onChanged: () => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState(false)
+  const [due, setDue] = useState<string | null>(null)
+  const effective = (c: PieceMaterial) => (c === 'auto' ? material.guess : c)
+  const autoLabel = material.guess
+    ? t('Auto (→ {material})').replace('{material}', t(MATERIAL_LABELS[material.guess]))
+    : t('Auto (generated)')
+  const choose = async (next: PieceMaterial) => {
+    if (busy || next === material.choice) return
+    setBusy(true)
+    try {
+      const url = `/inventory/items/${encodeURIComponent(itemId)}`
+      const { item } = await apiGet<{ item: { outfit_piece?: Record<string, unknown> } }>(url)
+      await apiPut(url, { outfit_piece: { ...(item.outfit_piece || {}), material: next } })
+      if (effective(next) === effective(material.choice)) {
+        setDue(t('Same look as before — nothing to re-assemble'))
+      } else {
+        const wearers = await apiGet<ItemWearers>(`${url}/wearers`).catch(() => null)
+        const names = (wearers?.wearers || []).map((w) => w.name)
+        setDue(names.length
+          ? t('Now due: re-assembly on the CPU for {names} — 0 hub jobs, runs when the figure is next shown')
+            .replace('{names}', names.join(', '))
+          : t('Nobody wears it now — applies when it is worn'))
+      }
+      onChanged()
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+  const hint = t(MATERIAL_HINT)
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.75em' }} title={hint}>
+        <span style={{ opacity: 0.7 }}>{t('Material')}</span>
+        <select className="ga-input" style={{ width: 'auto', padding: '1px 4px', fontSize: '1em' }}
+          value={material.choice} disabled={disabled || busy} aria-label={t('Material')}
+          onChange={(e) => { void choose(e.target.value as PieceMaterial) }}>
+          {MATERIAL_ORDER.map((m) => (
+            <option key={m} value={m}>{m === 'auto' ? autoLabel : t(MATERIAL_LABELS[m])}</option>
+          ))}
+        </select>
+      </label>
+      <span className="ga-hint" style={{ fontSize: '0.7em' }}>
+        {due ?? t('Change: CPU re-assembly · 0 hub jobs')}
+      </span>
     </span>
   )
 }

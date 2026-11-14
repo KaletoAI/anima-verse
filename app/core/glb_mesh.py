@@ -31,6 +31,13 @@ Vertex colours (HairDeck card hair, plan 2026-11-09-hairdeck-hair): a garment ma
 code before colours existed. ``card_arrays`` reads one named node of a HairDeck result (``hair_cards`` /
 ``head_proxy``) in its scene space.
 
+Roughness (Ruling A36): a garment may carry its generator's metallic-roughness texture (``mr_image`` / ``mr_mime``;
+glTF: G = roughness, B = metallic). ``garment_arrays`` and ``static_mr_image`` read it, ``graft`` writes it as the
+material's ``metallicRoughnessTexture`` beside the base colour, so the fit and the assembly of both tiers keep the
+generator's predicted roughness (``metallicFactor`` stays the source's, 0 for a garment). A material override may
+drop it (``material_overrides`` ``pbrMetallicRoughness.metallicRoughnessTexture: None`` — a material preset,
+``piece_material``); then no image is written for it. Without ``mr_image`` a graft is byte-identical to before.
+
 Compressed geometry (``EXT_meshopt_compression`` / ``KHR_draco_mesh_compression``) is refused on every read and
 graft: the accessor reader would read compressed bytes as raw data.
 """
@@ -51,6 +58,8 @@ GARMENT_NODE_PREFIX = "garment_"
 EXTRA_ATTRIBUTE_RE = re.compile(r"^_STRAND_[A-Z]+$")
 COMPRESSION_EXTENSIONS = ("EXT_meshopt_compression", "KHR_meshopt_compression", "KHR_draco_mesh_compression")
 _TRS_KEYS = ("translation", "rotation", "scale", "matrix")
+#: ``graft`` material override keys merged key by key (Ruling A36), not replaced.
+_MERGED_MATERIAL_KEYS = ("pbrMetallicRoughness", "extensions", "extras")
 _ARRAY_BUFFER, _ELEMENT_ARRAY_BUFFER = 34962, 34963
 
 
@@ -108,6 +117,10 @@ class GarmentMesh:
     #: ``_STRAND_U`` float32 of ``hair_strands``), one value per vertex; ``graft`` writes them, ``garment_arrays``
     #: reads them back. Empty = none.
     extra_attributes: Dict[str, np.ndarray] = field(default_factory=dict)
+    #: The generator's metallic-roughness texture (G = roughness, B = metallic) on the same UVs as ``image``; empty =
+    #: none (the material's factors alone). ``graft`` writes it, ``garment_arrays`` reads it back (Ruling A36).
+    mr_image: bytes = b""
+    mr_mime: str = ""
 
 
 def accessor_array(parsed: dict, index: int) -> np.ndarray:
@@ -219,7 +232,6 @@ def _vertex_colors(parsed: dict, primitive: dict, count: int) -> Optional[np.nda
 
 def _primitive_image(parsed: dict, primitive: dict) -> Tuple[bytes, str, Dict[str, Any]]:
     """``(image bytes, mime, material dict)`` of a primitive's base colour; empty when it has none."""
-    from app.core.model_validate import texture_image_index
     gltf = parsed["gltf"]
     if "material" not in primitive:
         return b"", "", {}
@@ -227,14 +239,33 @@ def _primitive_image(parsed: dict, primitive: dict) -> Tuple[bytes, str, Dict[st
     info = (material.get("pbrMetallicRoughness") or {}).get("baseColorTexture")
     if not isinstance(info, dict):
         return b"", "", material
+    image, mime = _texture_bytes(parsed, info, "base-colour")
+    return image, mime, material
+
+
+def _texture_bytes(parsed: dict, info: dict, what: str) -> Tuple[bytes, str]:
+    """``(image bytes, mime)`` of the embedded image a texture info (``{"index": t}``) points at."""
+    from app.core.model_validate import texture_image_index
+    gltf = parsed["gltf"]
     image = gltf["images"][texture_image_index(gltf, gltf["textures"][info["index"]])]
     if "bufferView" not in image:
-        raise ValueError("The base-colour image is not embedded")
+        raise ValueError(f"The {what} image is not embedded")
     view = gltf["bufferViews"][image["bufferView"]]
     start = int(view.get("byteOffset", 0))
     if view.get("buffer", 0) != 0 or start + int(view["byteLength"]) > len(parsed["bin"]):
-        raise ValueError("The base-colour bufferView is invalid")
-    return bytes(parsed["bin"][start:start + int(view["byteLength"])]), image.get("mimeType", ""), material
+        raise ValueError(f"The {what} bufferView is invalid")
+    return bytes(parsed["bin"][start:start + int(view["byteLength"])]), image.get("mimeType", "")
+
+
+def _primitive_mr(parsed: dict, primitive: dict) -> Tuple[bytes, str]:
+    """``(image bytes, mime)`` of a primitive's metallic-roughness texture; empty when it has none (Ruling A36)."""
+    if "material" not in primitive:
+        return b"", ""
+    material = (parsed["gltf"].get("materials") or [])[primitive["material"]]
+    info = (material.get("pbrMetallicRoughness") or {}).get("metallicRoughnessTexture")
+    if not isinstance(info, dict):
+        return b"", ""
+    return _texture_bytes(parsed, info, "metallic-roughness")
 
 
 def _body_prims(parsed: dict) -> List[dict]:
@@ -554,7 +585,8 @@ def garment_arrays(glb: bytes, *, node_prefix: str = GARMENT_NODE_PREFIX, exact:
                        joint_names=_skin_joint_names(gltf, node["skin"]) if "skin" in node else [],
                        image=image, mime=mime, material=material, colors=_vertex_colors(parsed, prim, n),
                        joint_parents=_joint_parents(gltf, node["skin"]) if "skin" in node else {},
-                       extra_attributes=_extra_attributes(parsed, prim, n))
+                       extra_attributes=_extra_attributes(parsed, prim, n),
+                       **dict(zip(("mr_image", "mr_mime"), _primitive_mr(parsed, prim))))
 
 
 def _extra_attributes(parsed: dict, primitive: dict, count: int) -> Dict[str, np.ndarray]:
@@ -836,6 +868,18 @@ def static_arrays(glb: bytes) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bytes
     return np.concatenate(P), np.concatenate(F), np.concatenate(U), image, mime, material
 
 
+def static_mr_image(glb: bytes) -> Tuple[bytes, str]:
+    """``(image bytes, mime)`` of a generator/prepared GLB's metallic-roughness texture — that of the primitive
+    ``static_arrays`` takes its base colour from (the first with one); empty without (Ruling A36)."""
+    parsed = _parse(glb, "Mesh")
+    for mesh in parsed["gltf"].get("meshes") or []:
+        for prim in mesh.get("primitives") or []:
+            image, _mime, _mat = _primitive_image(parsed, prim)
+            if image:
+                return _primitive_mr(parsed, prim)
+    return b"", ""
+
+
 # --- writing ---------------------------------------------------------------------------------------------------------
 
 def pack_glb(gltf: dict, binary: bytes) -> bytes:
@@ -975,7 +1019,10 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
     naming a WEIGHTED garment joint the target skin lacks and that has no such ancestor (a listed joint without
     weight > 0 maps to target index 0 with weight 0), ``ValueError`` for compressed geometry, a name already present
     or broken garment arrays. ``material_overrides`` merges top-level material keys (such as ``doubleSided`` for a
-    boot shaft, boots spec 2026-11-11 § 6.1) into the grafted material after the texture pass-through. A
+    boot shaft, boots spec 2026-11-11 § 6.1) into the grafted material after the texture pass-through; the dict keys
+    ``pbrMetallicRoughness`` / ``extensions`` / ``extras`` merge key by key, a None value removing that key (a
+    ``metallicRoughnessTexture: None`` writes no roughness image at all), and every material extension named ends up in
+    ``extensionsUsed`` (Ruling A36). A
     hair-chain joint the target lacks and ``garment.joint_binds`` names is APPENDED to the target skin (module
     docstring), weighted or not. ``garment.extra_attributes`` become custom SCALAR vertex attributes of the
     primitive (``_check_extra``: uint16 / float32; ValueError naming one whose length is not the vertex count)."""
@@ -1126,12 +1173,13 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
     pbr = dict(material.get("pbrMetallicRoughness") or {})
     pbr.pop("metallicRoughnessTexture", None)
     pbr.pop("baseColorTexture", None)
-    if garment.image:
-        if garment.mime not in ("image/png", "image/jpeg", "image/webp"):
-            raise ValueError(f"Unsupported garment image type {garment.mime!r}")
+
+    def add_texture(image: bytes, mime: str, what: str) -> int:
+        if mime not in ("image/png", "image/jpeg", "image/webp"):
+            raise ValueError(f"Unsupported garment {what} image type {mime!r}")
         images = gltf.setdefault("images", [])
-        images.append({"bufferView": add_view(garment.image, None), "mimeType": garment.mime})
-        if garment.mime == "image/webp":
+        images.append({"bufferView": add_view(image, None), "mimeType": mime})
+        if mime == "image/webp":
             texture = {"extensions": {"EXT_texture_webp": {"source": len(images) - 1}}}
             used = gltf.setdefault("extensionsUsed", [])
             if "EXT_texture_webp" not in used:
@@ -1140,12 +1188,37 @@ def graft(target_glb: bytes, garment: GarmentMesh, *, name: str, extras: dict,
             texture = {"source": len(images) - 1}
         textures = gltf.setdefault("textures", [])
         textures.append(texture)
-        pbr["baseColorTexture"] = {"index": len(textures) - 1}
+        return len(textures) - 1
+
+    if garment.image:
+        pbr["baseColorTexture"] = {"index": add_texture(garment.image, garment.mime, "base-colour")}
+    overrides = material_overrides or {}
+    pbr_overrides = overrides.get("pbrMetallicRoughness")
+    # The generator's roughness map, unless an override drops it (a material preset sets fixed factors).
+    if garment.mr_image and not (isinstance(pbr_overrides, dict)
+                                 and "metallicRoughnessTexture" in pbr_overrides
+                                 and pbr_overrides["metallicRoughnessTexture"] is None):
+        pbr["metallicRoughnessTexture"] = {"index": add_texture(garment.mr_image, garment.mr_mime,
+                                                                "metallic-roughness")}
     material["pbrMetallicRoughness"] = pbr
     material["name"] = name
     material["alphaMode"] = "OPAQUE"
-    for key, value in (material_overrides or {}).items():
-        material[key] = copy.deepcopy(value)
+    for key, value in overrides.items():
+        if key in _MERGED_MATERIAL_KEYS and isinstance(value, dict):
+            # merged key by key; a None value removes that key
+            merged = dict(material.get(key) or {})
+            for sub, sub_value in value.items():
+                if sub_value is None:
+                    merged.pop(sub, None)
+                else:
+                    merged[sub] = copy.deepcopy(sub_value)
+            material[key] = merged
+        else:
+            material[key] = copy.deepcopy(value)
+    for extension in (material.get("extensions") or {}):
+        used = gltf.setdefault("extensionsUsed", [])
+        if extension not in used:
+            used.append(extension)
     materials = gltf.setdefault("materials", [])
     materials.append(material)
 

@@ -38,6 +38,11 @@ export function applyFigureTexture(template: THREE.Object3D, tex: THREE.Texture)
  * NOT touched. The material object stays the same one, so everything else
  * the loader set (vertex colours, side) stays as well.
  *
+ * The one exception: a garment material whose glTF `extras.explicit_metallic`
+ * is true (GLTFLoader: `userData`) — a material preset that SETS metal
+ * (Ruling A36, `app/core/piece_material.py`; its generator map is dropped
+ * there) keeps its metalness.
+ *
  * Returns one log line per standard material.
  */
 export function zeroFigureMetalness(template: THREE.Object3D): string[] {
@@ -48,6 +53,10 @@ export function zeroFigureMetalness(template: THREE.Object3D): string[] {
     for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
       const std = m as THREE.MeshStandardMaterial;
       if (!std.isMeshStandardMaterial) continue;
+      if (std.userData?.explicit_metallic === true) {
+        matLog.push(`metalness ${std.metalness} kept (material preset ${String(std.userData.anima_material ?? '')})`);
+        continue;
+      }
       const before = std.metalness;
       const mr = std.metalnessMap ? 'MR map' : 'no MR map';
       if (before !== 0) {

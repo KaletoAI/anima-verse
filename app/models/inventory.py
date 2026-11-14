@@ -451,6 +451,14 @@ def _clean_mesh_mode(raw) -> Optional[str]:
     return raw if raw in MESH_MODES else None
 
 
+def _clean_material(raw) -> Optional[str]:
+    """``outfit_piece.material``: the own mesh's material preset (Ruling A36, ``app/core/piece_material.py``). A
+    preset name is kept; ``auto`` or anything else is None — the caller stores no key and the piece guesses its
+    material. Never part of a 2D key (``_render_relevant_fields``): it changes only the 3D assembly, on the CPU."""
+    from app.core.piece_material import clean
+    return clean(raw)
+
+
 def _clean_closable(raw, slots: List[str]) -> bool:
     """``outfit_piece.closable``: whether the piece can be worn open (plan
     2026-11-12-unified-worn-pieces Addendum A). A bool is kept, anything else
@@ -703,6 +711,10 @@ def add_item(name: str,
         mesh_mode = _clean_mesh_mode(outfit_piece.get("mesh_mode"))
         if mesh_mode is not None:
             item["outfit_piece"]["mesh_mode"] = mesh_mode
+        # The own mesh's material preset (Ruling A36): stored only when it names a preset — "auto" is no key.
+        material = _clean_material(outfit_piece.get("material"))
+        if material is not None:
+            item["outfit_piece"]["material"] = material
         lift = _lift(outfit_piece.get("lift"))
         if lift is not None:
             item["outfit_piece"]["lift"] = lift
@@ -830,6 +842,7 @@ def update_item(item_id: str,
         # ``app/core/figure_migration.py`` judged it into the mode).
         prev_piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
         prev_mesh_mode = prev_piece.get("mesh_mode")
+        prev_material = prev_piece.get("material")
         # Same for ``closable``: kept when the update does not name it.
         prev_closable = prev_piece.get("closable")
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
@@ -863,6 +876,10 @@ def update_item(item_id: str,
             mesh_mode = _clean_mesh_mode(op.get("mesh_mode") if "mesh_mode" in op else prev_mesh_mode)
             if mesh_mode is not None:
                 item["outfit_piece"]["mesh_mode"] = mesh_mode
+            # Like the mode: kept when the update does not name it, "auto" / anything else clears it.
+            material = _clean_material(op.get("material") if "material" in op else prev_material)
+            if material is not None:
+                item["outfit_piece"]["material"] = material
             if "closable" in op:
                 item["outfit_piece"]["closable"] = _clean_closable(op.get("closable"), slots)
             elif prev_closable is not None:

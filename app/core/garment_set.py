@@ -476,7 +476,8 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
     closed), ``names_state`` ``{item_id: True}`` for a closable piece whose
     prompt fragment already names a state (ruling A6, the row's hint) and
     ``auto_build`` (``figure_build.auto_build_on``: a toggle then starts the
-    Build)."""
+    Build). ``materials`` ``{item_id: {choice, guess}}`` for every held outfit
+    piece (``piece_material.describe``, Ruling A36: the row's material select)."""
     from app.core import base_body, body_slots, garments
     profile = _profile_of(character_name, profile)
     pipeline = base_body.is_base_pipeline(character_name, profile=profile)
@@ -509,11 +510,14 @@ def wardrobe(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -
     closable = {item_id: closable_of(get_item(item_id)) for item_id in modes}
     names_state = {item_id: True for item_id, on in closable.items()
                    if on and outfit_options.fragment_names_state((get_item(item_id) or {}).get("prompt_fragment"))}
+    from app.core import piece_material
+    materials = {item_id: piece_material.describe(get_item(item_id)) for item_id in modes}
     return {"pipeline": pipeline, "items": items,
             "modes": modes, "overlaps": overlaps,
             "queue_running": queue["queue_running"], "queue": queue["queue"],
             "hem": _wardrobe_hem(character_name, profile, pipeline),
             "closable": closable, "piece_state": outfit_options.piece_states(profile), "names_state": names_state,
+            "materials": materials,
             "auto_build": figure_build.auto_build_on(character_name, profile=profile)}
 
 

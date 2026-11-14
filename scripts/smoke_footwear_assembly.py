@@ -61,7 +61,7 @@ Expected, by hand:
      bare model OSIG2 = A's bytes, sidecar {body_id A, body_sha256 sha(A), base_model_sha256 sha(base),
      mesh_items {unpainted [heels], mode mesh}}. With garment_store.accepted_fit / newest_accepted_fits replaced
      by raisers: assemble(Demo, OSIG2) -> full assembled from the BODY fit garments/bodies/A/heels_F.glb (made
-     by the build: CPU, HUB 0): sidecar garments {heels: {sha256 sha(body fit)}}, foot_pose.bones keyed
+     by the build: CPU, HUB 0): sidecar garments {heels: {sha256 sha(body fit), material "map"}}, foot_pose.bones keyed
      mixamorig:LeftFoot / LeftToeBase / RightFoot / RightToeBase, the body cut to 24 faces, the base-fit readers
      never read.
 [A7] A BOOT (boots plan Task 9; spec 2026-11-11 § 11): item ``boots`` = ``fx.flat_boot(shaft=0.16)`` (the clog whose
@@ -502,7 +502,7 @@ def main() -> int:
             check(f"A1 {tier} rig frames preserved", rig_frames_preserved(base_glb, blob).get("ok"), True)
             side = ga.read_sidecar(path)
             check(f"A1 {tier} sidecar garments", side.get("garments"),
-                  {heels: {"kind": "footwear", "fsig": F, "sha256": sha(fit)}})
+                  {heels: {"kind": "footwear", "fsig": F, "sha256": sha(fit), "material": "map"}})
             check(f"A1 {tier} sidecar foot_pose", side.get("foot_pose"),
                   {**want_fp, "source": {**want_fp["source"], "glb_sha256": hashlib.sha256(blob).hexdigest()}})
             check(f"A1 {tier} no warnings", side.get("garment_warnings"), None)
@@ -639,7 +639,7 @@ def main() -> int:
         check("A6 body fit made by the build", (body_fit.is_file(), HUB, READ_BASE), (True, [], []))
         side = ga.read_sidecar(asm2)
         check("A6 sidecar garments = the body fit", side.get("garments"),
-              {heels: {"kind": "footwear", "fsig": F, "sha256": sha(body_fit)}})
+              {heels: {"kind": "footwear", "fsig": F, "sha256": sha(body_fit), "material": "map"}})
         check("A6 foot_pose bones of the body", sorted((side.get("foot_pose") or {}).get("bones") or {}),
               ["mixamorig:LeftFoot", "mixamorig:LeftToeBase", "mixamorig:RightFoot", "mixamorig:RightToeBase"])
         check("A6 foot_pose source", (side["foot_pose"]["source"]["fsig"], side["foot_pose"]["source"]["glb_sha256"]),
@@ -696,7 +696,7 @@ def main() -> int:
             check(f"A7 {tier} foot_pose source", side["foot_pose"]["source"],
                   {"item_id": boots, "fsig": FB, "glb_sha256": hashlib.sha256(blob).hexdigest()})
             check(f"A7 {tier} sidecar garments", side.get("garments"),
-                  {boots: {"kind": "footwear", "fsig": FB, "sha256": sha(gs.garment_path("Demo", boots, FB, "fit" if tier == "full" else "low"))}})
+                  {boots: {"kind": "footwear", "fsig": FB, "sha256": sha(gs.garment_path("Demo", boots, FB, "fit" if tier == "full" else "low")), "material": "map"}})
         status, meta = meta_route()
         check("A7 /model/meta foot_pose = the boot assembly's", (status, meta.get("foot_pose")), (200, ga.read_sidecar(asm)["foot_pose"]))
         check("A7 no hub", HUB, [])

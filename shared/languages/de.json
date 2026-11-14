@@ -4937,6 +4937,18 @@
     "The front it was drafted from is not accepted": "Die Vorderansicht, aus der er entworfen wurde, ist nicht angenommen",
     "Drafted from an earlier front": "Aus einer früheren Vorderansicht entworfen",
     "The image it was made from is not accepted": "Das Bild, aus dem er gemacht wurde, ist nicht angenommen",
-    "Made from an earlier image of the step before": "Aus einem früheren Bild des vorigen Schritts gemacht"
+    "Made from an earlier image of the step before": "Aus einem früheren Bild des vorigen Schritts gemacht",
+    "Leather": "Leder",
+    "Denim": "Denim",
+    "Knit": "Strick",
+    "Cotton": "Baumwolle",
+    "Rubber": "Gummi",
+    "Auto (→ {material})": "Auto (→ {material})",
+    "Auto (generated)": "Auto (generiert)",
+    "Same look as before — nothing to re-assemble": "Gleiches Aussehen wie vorher — nichts neu zusammenzusetzen",
+    "Now due: re-assembly on the CPU for {names} — 0 hub jobs, runs when the figure is next shown": "Jetzt fällig: Neu-Zusammensetzen auf der CPU für {names} — 0 Hub-Jobs, läuft, wenn die Figur das nächste Mal gezeigt wird",
+    "Nobody wears it now — applies when it is worn": "Niemand trägt es gerade — gilt, sobald es getragen wird",
+    "How the own mesh shines: Auto guesses it from the name and description; a preset sets fixed roughness and shine. A change re-assembles the figure on the CPU — no hub job, no new fit.": "Wie das eigene Mesh glänzt: Auto errät es aus Name und Beschreibung; eine Vorgabe setzt feste Rauheit und Glanz. Eine Änderung setzt die Figur auf der CPU neu zusammen — kein Hub-Job, keine neue Anpassung.",
+    "Change: CPU re-assembly · 0 hub jobs": "Änderung: Neu-Zusammensetzen auf der CPU · 0 Hub-Jobs"
   }
 }

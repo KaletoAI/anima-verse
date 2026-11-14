@@ -182,8 +182,8 @@ def card_faces(indices: np.ndarray, uvs: np.ndarray, card: np.ndarray) -> np.nda
 
 def texture_garment(garment: Any, card: np.ndarray) -> Any:
     """A copy of the hair ``GarmentMesh`` with the strip atlas as its base colour (``image``, ``mime`` PNG), its
-    UVs mapped by ``variant_uvs`` and its faces without the cards' cross sections (``card_faces``). The material
+    UVs mapped by ``variant_uvs`` (no roughness map: it would not match those UVs) and its faces without the cards' cross sections (``card_faces``). The material
     keys of the card (MASK, cutoff) are the graft's ``alpha_overrides``, not part of the garment."""
-    return dataclasses.replace(garment, image=strip_atlas(), mime="image/png",
+    return dataclasses.replace(garment, image=strip_atlas(), mime="image/png", mr_image=b"", mr_mime="",
                                uvs=variant_uvs(garment.uvs, card),
                                indices=card_faces(garment.indices, garment.uvs, card))

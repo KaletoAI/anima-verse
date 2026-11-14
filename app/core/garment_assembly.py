@@ -77,6 +77,15 @@ sidecar's warnings first). The assembled sidecar then carries ``foot_pose``:
 the record's payload with ``source {item_id, fsig, glb_sha256}`` of THAT
 tier's assembled bytes (``served_foot_pose`` reads it for the routes; None
 whenever the bare file is served — never a pose without its shoe).
+
+Material (Ruling A36): a clothing or footwear piece is grafted with its
+material preset (``piece_material``: ``outfit_piece.material``, ``auto``
+guessed from the item's words) as ``material_overrides`` on both tiers; the
+sidecar entry carries ``material`` (``piece_material.state_key``), so a
+changed preset re-assembles on the CPU — never a refit. Without a preset a
+clothing piece keeps the generator's roughness map: the tier source's, else
+the full fit's, else — a fit grafted before the map was kept — that of the
+prepared mesh it was fitted from (same UVs, ``_roughness_map``).
 """
 import json
 import threading
@@ -352,6 +361,8 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
         low = garment_store.garment_path(character_name, item_id, fsig, "low")
         out.append({"item_id": item_id, "kind": kind, "fsig": fsig, "fit": fit[0],
                     "low": low if low.is_file() else None, "record": fit[1]})
+    for g in out:
+        g["item"] = items[g["item_id"]]     # its material (``_material``) is read from the same item
     layered = [g for g in out if g["kind"] == CLOTHING and g["fit"] is not None]
     # The boot hem (``outfit_options``, boots spec § 8): the worn ``bottom`` piece of the signature over the
     # chosen boot's shaft — the mode is read from the PROFILE (an assembly input, never a signature input).
@@ -478,6 +489,36 @@ def _hair_image(garment: Dict[str, Any], tier: str) -> Tuple[bytes, str]:
     return full.image, full.mime
 
 
+def _roughness_map(character_name: str, garment: Dict[str, Any], tier: str, mesh: Any) -> None:
+    """Give a clothing ``mesh`` (read from the tier source) the generator's roughness map when it lacks one: the
+    full fit's (a distance tier whose decimation dropped it), else that of the prepared mesh of the same item and
+    fsig — the fit's UVs are the prepared mesh's (``garment_fit._garment_out``), so a fit grafted before A36 gets
+    its map back without a refit. Nothing found: the mesh stays as it is."""
+    from app.core import glb_mesh
+    from app.core.garment_store import garment_path
+    if mesh.mr_image:
+        return
+    if _source(garment, tier) != garment["fit"]:
+        full = glb_mesh.garment_arrays(garment["fit"].read_bytes())
+        if full.mr_image:
+            mesh.mr_image, mesh.mr_mime = full.mr_image, full.mr_mime
+            return
+    prepared = garment_path(character_name, garment["item_id"], garment["fsig"], "prepared")
+    if prepared.is_file():
+        mesh.mr_image, mesh.mr_mime = glb_mesh.static_mr_image(prepared.read_bytes())
+
+
+def _material(garment: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """``(state key, graft overrides)`` of a clothing / footwear piece's material (``piece_material``), from the
+    item ``_wanted`` read (else read now)."""
+    from app.core import piece_material
+    item = garment.get("item")
+    if item is None:
+        from app.models.inventory import get_item
+        item = get_item(garment["item_id"])
+    return piece_material.state_key(item), piece_material.overrides(piece_material.resolve(item)[1])
+
+
 def _state(wanted: List[Dict[str, Any]], tier: str, *,
            alpha_cutoff: Optional[float] = None, character_name: str = "") -> Dict[str, Dict[str, Any]]:
     """The sidecar ``garments`` map an assembly of ``tier`` must carry — a
@@ -490,7 +531,8 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
     on the full tier a hair piece also adds ``strands`` — the sha256 of its
     fit's current strand record (``hair_strands.current_sha``, with the
     collision scales of ``character_name`` when given; "" without one), the
-    record whose per-vertex binding the build grafts (spec § 6.2.3)."""
+    record whose per-vertex binding the build grafts (spec § 6.2.3). Every
+    other piece adds ``material`` (``piece_material.state_key``, Ruling A36)."""
     from app.core.garment_set import HAIR
     out: Dict[str, Dict[str, Any]] = {}
     scales: Optional[Dict[str, float]] = None
@@ -509,6 +551,8 @@ def _state(wanted: List[Dict[str, Any]], tier: str, *,
         if hem:
             # the boot hem (``outfit_options``): a toggle or a fallback changes the state, so ``_current`` rebuilds
             entry["hem"] = {"mode": hem["mode"], "lsig": over["lsig"] if over else "", "fallback": hem.get("fallback")}
+        if g["kind"] != HAIR:
+            entry["material"] = _material(g)[0]
         if g["kind"] == HAIR:
             if alpha_cutoff is None:
                 from app.core import hair_cards
@@ -723,6 +767,7 @@ def _build(character_name: str, directory: Path, bare: Path,
     for garment in grafted:
         source = _source(garment, tier).read_bytes()
         extras = {"kind": garment["kind"], "item_id": garment["item_id"], "fsig": garment["fsig"]}
+        material_overrides = _material(garment)[1] if garment["kind"] != HAIR else None
         if garment["kind"] == FOOTWEAR:
             from app.core.footwear_fit import SIDES
             from app.core.garment_footwear import PARTS, node_name
@@ -741,10 +786,13 @@ def _build(character_name: str, directory: Path, bare: Path,
                         # the collar's bind height (footwear_fit step 9): the shaft's top for the GLB's readers
                         side_rec = ((garment.get("record") or {}).get("sides") or {}).get(side_name) or {}
                         node_extras["collar_bind_m"] = (side_rec.get("split") or {}).get("collar_bind_m")
-                    blob = glb_mesh.graft(blob, mesh, name=name, extras=node_extras)
+                    blob = glb_mesh.graft(blob, mesh, name=name, extras=node_extras,
+                                          material_overrides=material_overrides)
             continue
         mesh = glb_mesh.garment_arrays(source)
-        overrides = None
+        overrides = material_overrides
+        if garment["kind"] != HAIR and overrides is None:
+            _roughness_map(character_name, garment, tier, mesh)
         if garment["kind"] == HAIR:
             blob = _tint_scalp(blob, mesh, garment, tier, scalp_tints)
             # Alpha cards (spec § 6.1): MASK at the world cutoff; a tier source without its image takes the
