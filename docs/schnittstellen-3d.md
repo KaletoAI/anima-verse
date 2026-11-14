@@ -12478,8 +12478,9 @@ ankle (`y_split` = the Foot joint's height in the shod stand; per fit, never per
   open boundary loops under the shaft (anti-goal: 0).
 
 **Payload.** `foot_pose` sits in the ASSEMBLED sidecar only, beside `collision` and `extension_rig`, and is
-delivered as `model.foot_pose` by `GET /characters/{name}/model3d` and as `foot_pose` by
-`/characters/{name}/model/meta` (not in the worldmap poll — a client fetches the meta when `model_sig` changes).
+delivered as `model.foot_pose` by `GET /characters/{name}/model3d`, as `foot_pose` by
+`/characters/{name}/model/meta` (not in the worldmap poll — a client fetches the meta when `model_sig` changes) and
+as `served_foot_pose` by `GET /characters/{name}/figure` (beside `served_url`, the Figure tab's viewer).
 It is `null` whenever the served file is the bare one (no shoe fitted, or the assembly still being rebuilt — a pose
 is never served without its shoe; `garment_assembly.served_foot_pose`).
 
@@ -12546,9 +12547,17 @@ convention); the admin preview plays the unscaled model.
 before any measurement:** extension, then plant. client3d: `prepareShoes` (`figures.ts`) runs both on ONE probe
 clone and is called by `adaptExternalClips` (the library), `retargetClips` (the borrow path, no corrections) and
 `buildModel` (the model's embedded clips); `fitLibraryAsync` and `loadManifestModels` forward the pose;
-`modelFootPose` keeps the record only for a template that carries its shoes. The admin viewer (`Model3DViewer`,
-fed by the Wardrobe shoe preview's `foot_pose`) wraps both `bindRelativeClip` sites in `applyFootPose` and plants
-at both — the main clip in the ground group and the floor-plan marker figures in the ground group only. A clip
+`modelFootPose` keeps the record only for a template that carries its shoes. The admin viewer (`Model3DViewer`)
+wraps both `bindRelativeClip` sites in `applyFootPose` and plants at both — the main clip in the ground group and the
+floor-plan marker figures in the ground group only. **Every admin viewer of a shod model is handed its record**
+(Ruling A52): the Wardrobe shoe preview its fit's `foot_pose`, and every viewer of the SERVED figure the served one —
+the Figure tab (`served_foot_pose`) and the Pose tab (`model.foot_pose`) with `clipGroup` 'ground' when there is one
+(the still figure on its heels over the floor grid, the root up by `footPoseLiftM`), the 3D model tab
+(`model.foot_pose`) for its still figure and its clips. Without it the viewer shows the shoe as it is BOUND — turned
+back by the extension about the ankle: on Kira's Black Stilettos (Foot +26.2°, lift 49.9 mm) the bind pose put the
+heel tip 13 mm and the ball 35 mm under the floor, and the idle clip played on a bare foot (Foot −20.5°) the shoe's
+toe 82 mm up with its forepart 28° up, while the 3D client stood her on heel −0.5 / ball −2.5 mm.
+`scripts/smoke_heel_pose.py` keeps the call sites. A clip
 baked for the ground group that plays seated keeps the plant but gets lift 0.
 
 **Bind measurements exclude garment subtrees and, for a shod figure, come from the record** — `figureBox`,

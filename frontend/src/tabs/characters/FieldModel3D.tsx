@@ -6,7 +6,7 @@ import { LIGHT_COLOR } from './stepStyle'
 import { previewMotionSliders } from './motionFieldPreview'
 import { ExtensionMotionSliders } from './ExtensionMotionDraft'
 import type { Physics } from '../../lib/motionDraft'
-import type { SecondaryMotionPayload, ExtensionRigDeclaration, CollisionPayload } from '@anima/scene-render'
+import type { SecondaryMotionPayload, ExtensionRigDeclaration, CollisionPayload, FootPose } from '@anima/scene-render'
 import { CollisionScales } from './CollisionScales'
 /**
  * FieldModel3D — the character's 3D model for the current outfit. ONE model,
@@ -117,6 +117,10 @@ export interface Model3DInfo {
   /** The served body's collision capsules (app/core/collision.py); null for
    *  a model that gets none. */
   collision?: CollisionPayload | null
+  /** The fitted shoe's foot pose of the SERVED file (`garment_assembly.served_foot_pose`); null for the bare file.
+   *  Every viewer of the served figure passes it on (Ruling A52): the shoe is bound with its foot turned back by
+   *  the fit's extension, so without it the shoe stands bent up at the front with its heel through the floor. */
+  foot_pose?: FootPose | null
   filename?: string
   /** signature of the SERVED file (nearest match: another combination's) */
   signature?: string
@@ -1122,6 +1126,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
             collision={collisionPreview ?? model.collision}
             showCollision={!!collisionPreview}
+            footPose={model.foot_pose ?? null}
           />
           </div>
           {/* The viewer's own controls: which mesh it shows and the preview state — one row. */}

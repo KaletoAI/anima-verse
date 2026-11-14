@@ -10,6 +10,7 @@
  * Build (one per character) makes what is missing. Returned strings are
  * English; the components put them through `t()`.
  */
+import type { FootPose } from '@anima/scene-render'
 import type { ArmLight } from './fitSettingsModel'
 import type { Light } from './hairstylesModel'
 
@@ -253,6 +254,9 @@ export interface FigurePayload {
     finished_at: string | null
   }
   served_url: string | null
+  /** The served model's fitted-shoe pose (`figure_build._served_foot_pose`, Ruling A52), null without a fitted
+   *  shoe: the viewer turns the feet into the shoes with it and stands the figure on its heels. */
+  served_foot_pose?: FootPose | null
   /** Ruling A42: the character's pause of automatic generation (`generation_pause.state`). */
   generation_pause?: GenerationPause
   /** When the served model was built (Ruling UI3 a: the preview's caption); null without one. */

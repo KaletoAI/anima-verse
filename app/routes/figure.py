@@ -8,7 +8,8 @@ body actions):
   (``figure_build.figure_info``): ``{pipeline, humanoid, auto_build, status
   ("up_to_date" | "changes" | "building" | "failed"), changes
   (``figure.pending_changes``), cost (``figure_build.cost``), build
-  (``figure_build.state``), wanted, delivered, served_url, worn: [{slot,
+  (``figure_build.state``), wanted, delivered, served_url, served_foot_pose
+  (the served model's fitted-shoe pose, None without one — Ruling A52), worn: [{slot,
   item_id, name, mode, state, note, interim, left_out, failure, piece_state
   ("open" | "closed" | null — null: not closable; ``state`` is the
   readiness), other_state_jobs (own mesh only: the hub jobs of the other

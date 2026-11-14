@@ -102,7 +102,8 @@ export function FieldPose({ character, onOpen3D, onOpenFigure, onOpenBaseBody }:
               format={model.format || 'fbx'}
               textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}
               embeddedTakes={model.rig === 'generic'} clipLoops={model.clips}
-              freshness={model.freshness} collision={model.collision} builtAt={model.created_at} />
+              freshness={model.freshness} collision={model.collision} builtAt={model.created_at}
+              footPose={model.foot_pose ?? null} clipGroup={model.foot_pose ? 'ground' : undefined} />
           ) : (
             <div className="ga-hint" style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
               border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: 12, textAlign: 'center' }}>
