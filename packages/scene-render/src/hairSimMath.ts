@@ -15,21 +15,44 @@
  * (`Σ_b w_b · (bone_b now · bone_b bind⁻¹) · p_bind`). `rebuild` writes the vertices in head-bind space (the
  * strand hair is skinned to the Head alone while it runs).
  *
+ * GRAVITY (Ruling T-U3). The pendulum pull of the spike stands for gravity: the draped rest already carries it, and
+ * `k = g / arc` swings a displaced row back like a pendulum of its own length. That holds while the bind-space down
+ * (−ŷ) is the world's down; tilted, the pull alone held the rows on the TILTED rest — a figure bent forward to
+ * horizontal kept its hair sticking out level behind its head (`check_hair_sim --tilt`, the free chords' world-down
+ * component: Kira −0.121 tilted forward against 0.905 upright, Lirien −0.201 against 0.872). So every row is pulled
+ * towards `hang` = its target + `a / stiffness × (−ŷ − d)` (`gravity`), `d` its bind down now (the follow bones'
+ * −Y, by the row's follow weights) and `a` its free arc below where the card leaves the head (the run of rows
+ * resting on the head from the last pin on stays where the head holds it — hair lies on the scalp): a force
+ * `k·(target − x) + g·(−ŷ − d)`, the pull plus the gravity the tilted rest lacks. For a straight strand hanging from
+ * P along `d` the row at arc a has target P + a·d, and P + a·d + a·(−ŷ − d) = P − a·ŷ: it hangs straight down, at
+ * every tilt; upright `hang` is the target bit for bit, so the rest is untouched. The shift comes in with the tilt:
+ * none while `d` is within `GRAVITY_FREE_DEG` (20°) of the world's down — there the spike's tuned drape stands, and
+ * the game's nods and leans keep their metrics (with the shift from 0° Kira's `celebrating` had 23 flyaways against
+ * 15) — all of it from `GRAVITY_FULL_DEG` (45°) on, smoothstep between. `hang` stays on the row's own side
+ * of the head and the capsules: the way from the target is walked in up to `HANG_SAMPLES` steps and stops before the
+ * first one inside, the card takes the smallest share of its rows (hair behind a head tipped forward rests on the
+ * neck and the back instead of falling through them), and the face box and a last SDF rounding push it out
+ * (`pushRow` on `hang`). The angle limit and the tether measure against `hang`, not the tilted rest (both would hold
+ * the upper rows level). Measured with it: forward 0.276 / 0.065, back 0.496 / 0.720, sideways 0.499 / 0.520 (Kira /
+ * Lirien; hair on the back of a face-down head rests on it), the `laying` clip upright (its head horizontal) 0.474 /
+ * 0.774 against −0.063 / 0.033 before; upright 0.905 / 0.872 as before.
+ *
  * ONE STEP (spec § 6.2.1 items 1–7, `ChainSim.step`):
  *   1. pinned rows = their target; free rows: Verlet in the target's frame (Ruling H-R10: the damping works on the
  *      velocity relative to the target's — still air moves with the figure, a constant walk drags nothing — and
  *      the pull is towards the previous step's target, the one of the row's own time) with a pendulum pull towards the
  *      target, `k = g / max(free_arc, 0.03)` × stiffness (a "fly" row — above the ear line, resting > 3 cm off
- *      the head — `g / max(free_arc, fly_arc)`);
+ *      the head — `g / max(free_arc, fly_arc)`), shifted by gravity (`hang − target`, Ruling T-U3);
  *   2. `iterations` Gauss-Seidel passes of distance (i−1, i) with stiffness 1 and (i−2, i) with the bend
  *      stiffness (gradient on: `kb(f) = bend + (1 − bend)·max(0, 1 − f/0.5)²`);
- *   3. gradient on (`root_deg` > 0): the angle limit, carried down the strand (`limitSegmentAngle`);
+ *   3. gradient on (`root_deg` > 0): the angle limit against the `hang` chain, carried down the strand
+ *      (`limitSegmentAngle`);
  *   4. the head SDF (clearance ≤ the row's own rest clearance), then the capsules under the bind rule
  *      (`tipBindFactors`, `pushOutOfCapsules`), then the face keep-out box — all in head-bind space; a row a
  *      capsule or the box pushed back into the head goes out of the head SDF once more, and a capsule or the box
  *      pushes a row no further than its length reaches from its parent (Ruling H-R10: a raised arm held rows 32 mm
  *      deep in Lirien's head, celebrating, and a first free row 6 cm off its pinned parent);
- *   5. the tether of the upper free third (and of the rows that rest on the head from the last pin on);
+ *   5. the tether of the upper free third (and of the rows that rest on the head from the last pin on), to `hang`;
  *   6. the length clamp (Ruling H-R10): a free segment longer than `STRAND_STRETCH_MAX` × its target length is
  *      shortened towards its parent, root to tip — the collision and the tether run after the constraints, so
  *      without it a row pushed out (or held) alone stretched its card (Kira, sit: 1.43×; a held row in a swinging
@@ -59,6 +82,28 @@ const FLY_CLEAR = 0.03
 const CLEARANCE = 0.003
 /** The SDF outside its grid (m). */
 const SDF_OUTSIDE = 0.127
+/** Ruling T-U3: where gravity holds a row is checked against the colliders once it lies more than this (m) off the
+ *  row's target — a nodding head moves it less and skips the lookups. */
+const HANG_PROJECT_M = 0.002
+/** Ruling T-U3: the way from a row's target to where gravity holds it is checked against the colliders every this
+ *  many metres, in at most `HANG_SAMPLES` steps. */
+const HANG_SAMPLE_M = 0.02
+const HANG_SAMPLES = 4
+/** Ruling T-U3: the depth (m) a hang may keep in a collider and still count as clear (the SDF's own rounding). */
+const HANG_CLEAR_TOL_M = 0.0005
+/** Ruling T-U3: a row's down within this many degrees of the world's feels no gravity beyond the pull's own (the
+ *  tuned drape of the spike), from `GRAVITY_FULL_DEG` on all of it, smoothstep between. */
+const GRAVITY_FREE_DEG = 20
+const GRAVITY_FULL_DEG = 45
+const COS_FREE = Math.cos((GRAVITY_FREE_DEG * Math.PI) / 180)
+const COS_FULL = Math.cos((GRAVITY_FULL_DEG * Math.PI) / 180)
+/** The share of gravity for a row whose bind down has world-down component `c` (cos of its tilt). */
+function smoothShare(c: number): number {
+  if (c >= COS_FREE) return 0
+  if (c <= COS_FULL) return 1
+  const x = (COS_FREE - c) / (COS_FREE - COS_FULL)
+  return x * x * (3 - 2 * x)
+}
 /** The length clamp (Ruling H-R10): no free segment ends longer than this × its target length. */
 export const STRAND_STRETCH_MAX = 1.05
 /**
@@ -472,7 +517,14 @@ export function limitSegmentAngle(prev: Vec3, cur: Vec3, restDir: Vec3, cosLim: 
  *  the body capsules now (world; `capsuleNow` of `strandCapsules`, with `bind` = their bind-space ends as
  *  `bindCollision` gives them — the bind rule's reference). Keep each capsule's `bind` object the same from frame
  *  to frame: the per-row bind-rule factors are cached on it. */
-export interface StrandFrame { targets: Float32Array; head: Mat4; capsules: readonly CollideCapsule[] }
+export interface StrandFrame {
+  targets: Float32Array
+  head: Mat4
+  capsules: readonly CollideCapsule[]
+  /** The follow matrices the targets were made from (`record.follow.bones` order, world ← bind): each row's own
+   *  "down" for gravity (Ruling T-U3, `StrandSim.hang`). Without them every row takes the head's. */
+  follow?: readonly Mat4[]
+}
 
 /** The record's capsules the hair collides with (`HAIR_REGIONS`, at most `COLLIDE_MAX`), in record order — what
  *  `StrandFrame.capsules` carries now. */
@@ -519,6 +571,14 @@ export class StrandSim {
   private readonly Tp: Float32Array
   private tpOk = false
   private readonly Cl: Float64Array
+  /** Ruling T-U3: where gravity holds each row this step (world) — its target plus `reach / stiffness × (down −
+   *  the row's bind down now)`, kept out of the colliders (module docstring "GRAVITY"); the target itself while the
+   *  figure is upright. */
+  readonly hang: Float32Array
+  /** The follow weights per row (`record.follow.w`, rows × bones) and the bones' count. */
+  private readonly fw: Float32Array
+  private readonly nb: number
+  private readonly downs: Float64Array
 
   constructor(binding: StrandBinding, record: HairStrandRecord) {
     const S = binding.S, n = S * R
@@ -533,6 +593,10 @@ export class StrandSim {
     this.L1 = new Float32Array(n); this.L2 = new Float32Array(n)
     this.cosLim = new Float32Array(n); this.kb2 = new Float32Array(n); this.kFly = new Float32Array(n)
     this.Cl = new Float64Array(3 * n)
+    this.hang = new Float32Array(3 * n)
+    this.nb = Math.max(1, record.follow?.bones?.length ?? 1)
+    this.fw = Float32Array.from(record.follow?.w ?? [])
+    this.downs = new Float64Array(3 * this.nb)
     this.sdf = decodeStrandSdf(record.sdf)
     this.faceBox = record.face_box.slice(0, 5)
     const C0 = binding.C0, ear = record.ear_y
@@ -551,13 +615,14 @@ export class StrandSim {
         this.boxD0[p] = boxDepth(this.faceBox, x, y, z)[0]
       }
     }
-    this.X.set(C0); this.Xp.set(C0)
+    this.X.set(C0); this.Xp.set(C0); this.hang.set(C0)
   }
 
   /** Every row at its target, at rest. */
   reset(targets: Float32Array): void {
     this.X.set(targets.subarray(0, 3 * this.n)); this.Xp.set(targets.subarray(0, 3 * this.n))
     this.Tp.set(targets.subarray(0, 3 * this.n)); this.tpOk = true
+    this.hang.set(targets.subarray(0, 3 * this.n))
   }
 
   /** Carry every simulated row and its previous position by the affine `m` (world → world): the rows move with
@@ -581,22 +646,26 @@ export class StrandSim {
       this.flyKey = p.flyArc
       for (let q = 0; q < n; q++) this.kFly[q] = G / Math.max(this.arcFree[q], p.flyArc)
     }
-    // 1. pinned rows follow, free rows swing towards their target
+    // the rest lengths of the target chain
+    for (let q = 0; q < n; q++) {
+      const i = q % R, o = 3 * q
+      L1[q] = i > 0 ? Math.hypot(T[o] - T[o - 3], T[o + 1] - T[o - 2], T[o + 2] - T[o - 1]) : 0
+      L2[q] = i > 1 ? Math.hypot(T[o] - T[o - 6], T[o + 1] - T[o - 5], T[o + 2] - T[o - 4]) : 0
+    }
+    // Ruling T-U3: where gravity holds each row (module docstring "GRAVITY"), out of this step's colliders
+    const H = this.hang
+    this.colliders(frame, p)
+    this.gravity(frame, p)
+    // 1. pinned rows follow, free rows swing towards where gravity holds them (the target while upright)
     for (let q = 0; q < n; q++) {
       const o = 3 * q
       if (pin[q]) { X[o] = Xp[o] = T[o]; X[o + 1] = Xp[o + 1] = T[o + 1]; X[o + 2] = Xp[o + 2] = T[o + 2]; continue }
       const kk = (flySoft && this.fly[q] ? this.kFly[q] : k[q]) * ks * dt2
       for (let d = 0; d < 3; d++) {
         const xo = X[o + d], vr = T[o + d] - Tp[o + d]
-        const nx = xo + (xo - Xp[o + d] - vr) * (1 - damp) + vr - kk * (xo - Tp[o + d])
+        const nx = xo + (xo - Xp[o + d] - vr) * (1 - damp) + vr - kk * (xo - Tp[o + d] - (H[o + d] - T[o + d]))
         Xp[o + d] = xo; X[o + d] = nx
       }
-    }
-    // the rest lengths of the target chain
-    for (let q = 0; q < n; q++) {
-      const i = q % R, o = 3 * q
-      L1[q] = i > 0 ? Math.hypot(T[o] - T[o - 3], T[o + 1] - T[o - 2], T[o + 2] - T[o - 1]) : 0
-      L2[q] = i > 1 ? Math.hypot(T[o] - T[o - 6], T[o + 1] - T[o - 5], T[o + 2] - T[o - 4]) : 0
     }
     const grad = p.rootDeg > 0
     if (grad) this.limits(p)
@@ -612,15 +681,109 @@ export class StrandSim {
         }
       }
     }
-    // 3. the angle limit
-    if (grad) this.angleLimit(T, flySoft)
+    // 3. the angle limit, against the segment where gravity holds it
+    if (grad) this.angleLimit(H, flySoft)
     // 4. head SDF, capsules, face box (head-bind space)
-    this.collide(frame, p)
-    // 5. the tether
-    if (p.tether) this.tether(T, p, linearScale(frame.head))
+    this.collide()
+    // 5. the tether, to where gravity holds the row
+    if (p.tether) this.tether(H, p, linearScale(frame.head))
     // 6. the length clamp
     this.clampLengths()
     Tp.set(T.subarray(0, 3 * n))
+  }
+
+  /** Ruling T-U3 (module docstring "GRAVITY"): `hang` = every row's target plus `w · a / stiffness × (−ŷ − d)`, `w`
+   *  the share of gravity by the row's tilt (`smoothShare`), `d` the
+   *  row's bind-space down (−ŷ) carried into the world by its follow matrices (weighted, normalised; the head's
+   *  without `frame.follow`) and `a` its free arc below where its card leaves the head; then kept on the row's side
+   *  of the colliders, one share per card. Upright `d` = −ŷ and `hang` IS the target, bit for bit (a difference
+   *  under 1e-6 is taken as none). */
+  private gravity(frame: StrandFrame, p: StrandParams): void {
+    const { hang: H, pin, arcFree, fw, downs, onHead, n } = this, T = frame.targets
+    const fm = frame.follow && frame.follow.length === this.nb ? frame.follow : null
+    const nb = fm ? this.nb : 1
+    for (let b = 0; b < nb; b++) {
+      const m = fm ? fm[b] : frame.head
+      const x = -m[4], y = -m[5], z = -m[6], l = Math.hypot(x, y, z) || 1
+      downs[3 * b] = x / l; downs[3 * b + 1] = y / l; downs[3 * b + 2] = z / l
+    }
+    const ks = p.stiffness > 1e-3 ? p.stiffness : 1e-3
+    let share = 1, base = 0, run = true
+    for (let q = 0; q < n; q++) {
+      const o = 3 * q, i0 = q % R
+      if (i0 === 0) { base = 0; run = true; share = 1 }
+      H[o] = T[o]; H[o + 1] = T[o + 1]; H[o + 2] = T[o + 2]
+      // the run of rows resting on the head from the last pin on stays where the head holds it (the tether's run,
+      // `headClr`): hair lies on the scalp, and below it hangs from where it leaves the head (`base`, its free arc)
+      if (pin[q]) base = arcFree[q]
+      else if (run && onHead[q] > 0 && onHead[q] < p.headClr) base = arcFree[q]
+      else run = false
+      const reach = pin[q] ? 0 : (arcFree[q] - base) / ks
+      if (reach > 0) {
+        let dx = 0, dy = 0, dz = 0
+        if (fm) {
+          for (let b = 0; b < nb; b++) {
+            const w = fw[q * nb + b]
+            if (!w) continue
+            dx += w * downs[3 * b]; dy += w * downs[3 * b + 1]; dz += w * downs[3 * b + 2]
+          }
+          const l = Math.hypot(dx, dy, dz) || 1
+          dx /= l; dy /= l; dz /= l
+        } else { dx = downs[0]; dy = downs[1]; dz = downs[2] }
+        // the share of gravity the pull lacks: none within `GRAVITY_FREE_DEG` of upright (the pull's own drape is
+        // the spike's tuned rest there, and the game's nods and leans keep their metrics), all of it from
+        // `GRAVITY_FULL_DEG` on, smooth between
+        const w = smoothShare(-dy)
+        dx = -w * dx; dy = w * (-1 - dy); dz = -w * dz
+        if (Math.abs(dx) >= 1e-6 || Math.abs(dy) >= 1e-6 || Math.abs(dz) >= 1e-6) {
+          // Where gravity holds a row lies on the row's own side of every collider, like the row itself: the
+          // way from the target towards T + reach·Δ is walked in up to `HANG_SAMPLES` steps and ends before the
+          // first one inside the head or a capsule (hair behind a head that tips forward comes to rest on the neck
+          // and the back instead of falling through them to the chest). The card takes the smallest share of its
+          // rows (a tip does not pass a body its upper rows rest on, and one share keeps the hang chain's lengths
+          // those of the target chain plus the straight fall — a share per row stretched it where the share
+          // dropped); the rows are scaled to it at the card's last row.
+          const len = reach * Math.hypot(dx, dy, dz)
+          if (len >= HANG_PROJECT_M) {
+            const steps = Math.min(HANG_SAMPLES, Math.ceil(len / HANG_SAMPLE_M))
+            let k = 1
+            for (; k <= steps && k / steps <= share; k++) {
+              const s = (reach * k) / steps
+              H[o] = T[o] + s * dx; H[o + 1] = T[o + 1] + s * dy; H[o + 2] = T[o + 2] + s * dz
+              if (!this.clearOf(q, H)) break
+            }
+            share = Math.min(share, (k - 1) / steps)
+          }
+          H[o] = T[o] + reach * dx; H[o + 1] = T[o + 1] + reach * dy; H[o + 2] = T[o + 2] + reach * dz
+        }
+      }
+      if (i0 !== R - 1) continue
+      // the card's share, then out of the colliders (`pushRow` on `hang`: the face box, a last SDF rounding)
+      for (let r = q - (R - 1); r <= q; r++) {
+        const or = 3 * r, tx = T[or], ty = T[or + 1], tz = T[or + 2]
+        if (H[or] === tx && H[or + 1] === ty && H[or + 2] === tz) continue
+        if (share < 1) {
+          H[or] = tx + share * (H[or] - tx); H[or + 1] = ty + share * (H[or + 1] - ty); H[or + 2] = tz + share * (H[or + 2] - tz)
+        }
+        if (Math.hypot(H[or] - tx, H[or + 1] - ty, H[or + 2] - tz) >= HANG_PROJECT_M) this.pushRow(r, true, 2, H)
+      }
+    }
+  }
+
+  /** True when the point `X[3q..]` lies outside the head SDF (its rest clearance, less `HANG_CLEAR_TOL_M`) and
+   *  outside every capsule (the bind-rule radius, less the same tolerance). */
+  private clearOf(q: number, X: Float32Array): boolean {
+    const col = this.col
+    if (!col) return true
+    const { inv, local, fac } = col, o = 3 * q, nc = local.length
+    const wx = X[o], wy = X[o + 1], wz = X[o + 2]
+    const p: Vec3 = [inv[0] * wx + inv[4] * wy + inv[8] * wz + inv[12],
+      inv[1] * wx + inv[5] * wy + inv[9] * wz + inv[13], inv[2] * wx + inv[6] * wy + inv[10] * wz + inv[14]]
+    if (strandSdfAt(this.sdf, p[0], p[1], p[2], this.g) < this.clr[q] - HANG_CLEAR_TOL_M) return false
+    for (let c = 0; c < nc; c++) {
+      if (segDist(p, local[c].a, local[c].b) < local[c].r * fac[q * nc + c] - HANG_CLEAR_TOL_M) return false
+    }
+    return true
   }
 
   /** Ruling H-R10: root to tip, a free row whose segment to its parent is longer than `STRAND_STRETCH_MAX` × the
@@ -756,15 +919,21 @@ export class StrandSim {
   private col: { m: Mat4; inv: number[]; local: CollideCapsule[]; fac: Float32Array; scratch: CollideCapsule[];
     box: boolean } | null = null
 
-  /** The head SDF, the capsules and the face keep-out box, in head-bind space; each push goes back to world
-   *  through the head's linear part (a row nothing pushes is left untouched, bit for bit). */
-  private collide(frame: StrandFrame, p: StrandParams): void {
-    const { pin, n } = this, m = frame.head, inv = invertAffine(m)
+  /** This step's colliders in head-bind space (`col`): the head, the capsules with their bind-rule factors, the
+   *  face box. */
+  private colliders(frame: StrandFrame, p: StrandParams): void {
+    const m = frame.head, inv = invertAffine(m)
     const caps = frame.capsules ?? []
     const local = caps.map(c => capsuleInFrame(c, inv))
     const fac = caps.length ? this.factors(caps, local) : this.capFactors
     const scratch: CollideCapsule[] = local.map(c => ({ a: c.a, b: c.b, r: c.r }))
     this.col = { m, inv, local, fac, scratch, box: p.faceBox }
+  }
+
+  /** The head SDF, the capsules and the face keep-out box (`colliders`), in head-bind space; each push goes back to
+   *  world through the head's linear part (a row nothing pushes is left untouched, bit for bit). */
+  private collide(): void {
+    const { pin, n } = this
     for (let q = 0; q < n; q++) if (!pin[q]) this.pushRow(q)
   }
 
@@ -772,11 +941,12 @@ export class StrandSim {
    *  H-R10: a capsule or the face box pushes a row no further out than its length lets it be from its parent (the
    *  row before it, already pushed) — a parent inside a raised arm or deep in the face box left the first free row
    *  6 cm off it (Lirien celebrating: 1.27× its card); the head SDF pushes in full, `sdfSteps` gradient steps.
-   *  `body` false: the head SDF alone. */
-  private pushRow(q: number, body = true, sdfSteps = 1): void {
+   *  `body` false: the head SDF alone. `X`: the rows to push — the simulated ones, or where gravity holds them
+   *  (`hang`: a place, not a chain, so the capsules and the face box push it out in full, no length cap). */
+  private pushRow(q: number, body = true, sdfSteps = 1, X: Float32Array = this.X): void {
     const col = this.col
     if (!col) return
-    const { X, clr, g, sdf, L1 } = this, { m, inv, local, fac, scratch } = col
+    const { clr, g, sdf, L1 } = this, { m, inv, local, fac, scratch } = col
     const nc = local.length, fb = this.faceBox, d0 = this.boxD0
     const toLocal = (o: number): Vec3 => {
       const wx = X[o], wy = X[o + 1], wz = X[o + 2]
@@ -785,7 +955,7 @@ export class StrandSim {
     }
     const o = 3 * q
     const [lx, ly, lz] = toLocal(o)
-    const par = toLocal(o - 3), reach = L1[q] * STRAND_STRETCH_MAX
+    const par = toLocal(o - 3), reach = X === this.X ? L1[q] * STRAND_STRETCH_MAX : Infinity
     let x = lx, y = ly, z = lz
     // the head SDF: a row keeps its own rest clearance (at most 3 mm)
     const sdfPush = (): void => {
@@ -854,6 +1024,9 @@ export class StrandSim {
         if (d <= r) continue
         const s = r / d
         X[o] = tx + dx * s; X[o + 1] = ty + dy * s; X[o + 2] = tz + dz * s
+        // Ruling T-U3: the tether pulls towards where gravity holds the row, outside the colliders, but the straight
+        // way there may cross one — the colliders keep the last word over the tether too
+        this.pushRow(q)
       }
     }
   }

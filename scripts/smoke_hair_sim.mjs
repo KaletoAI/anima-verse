@@ -95,6 +95,24 @@
  *         0.000717738) (1e-9);
  *     (e) StrandSim.carry by Ry(90°): a card's rows and their previous positions turn with it (relative velocity
  *         kept: X − Xp turned by the same rotation, 1e-6).
+ * [14] GRAVITY (Ruling T-U3): the straight card of [6] at x 0.5 (outside the head grid: SDF 0.127 m, no capsule, no
+ *     face box, so nothing collides and no row rests on the head), rows 0.02 m apart from y 1.60 down, pins 2, follow
+ *     {Head: 1}, stiffness 1. The head turned +90° about +X through the last pin P = (0.5, 1.58, 0): the bind down
+ *     (0, −1, 0) becomes Rx(90°)·(0, −1, 0) = (0, 0, −1) — the figure lies face down and the target chain sticks out
+ *     level, row i at P + a·(0, 0, −1), a = 0.02·(i − 1), its free arc. Δ = (0, −1, 0) − (0, 0, −1) = (0, −1, 1), so
+ *     hang = P + a·(0, 0, −1) + a·(0, −1, 1) = P − a·ŷ: row 16 at (0.5, 1.28, 0), every row within 1e-6. The case is
+ *     real: the target chord P → row 16 has world-down component 0 (level); before T-U3 the pull held the rows there.
+ *     The hang chain keeps the target's lengths (0.02 m, vertical), so with no root stiffness (bend 0, root_deg 0 —
+ *     with it the root's bend holds the first rows on the way the level pinned segment points, a compromise, not a
+ *     place derivable by hand) the length constraints and the tether hold at it, and from the bind pose 4 s (240
+ *     steps) of the turned head settle every free row
+ *     within 1 mm of it (the swing is gone — damping 0.04 per step: 0.96^240 = 5.6e-5 of a 0.42 m swing is 0.02 mm;
+ *     what is left is the six Gauss-Seidel passes against the pull, measured 0.77 mm), the tip chord's world-down
+ *     component ≥ 0.999 (a chord 1 mm off vertical over 0.3 m: cos(1/300) = 0.999994). Upright (the identity)
+ *     hang == the targets exactly, bit for bit. The share of gravity by the tilt (90° ≥ 45°: all of it above):
+ *     turned 10° (< 20°) hang == the targets bit for bit; turned 32.5°: c = cos 32.5° = 0.8433914, x = (cos 20° − c)
+ *     / (cos 20° − cos 45°) = 0.0963026 / 0.2325864 = 0.4140457, share x²(3 − 2x) = 0.3723387, |Δ| = 2·sin 16.25° =
+ *     0.5596580, so row 16 (a 0.30) lies 0.3723387 · 0.30 · 0.5596580 = 0.0625147 m off its target (1e-6).
  * [T] TIMING (printed, not asserted): 700 curved cards (the same fan, 0.3° apart), sway, ms per step and per
  *     rebuild (spike reference: 4.4–5.9 ms per step).
  */
@@ -583,6 +601,63 @@ const rowOf = (sim, q) => [sim.X[3 * q], sim.X[3 * q + 1], sim.X[3 * q + 2]]
     err = Math.max(err, Math.abs(sim.X[3 * q + d] - turned(X0)(q, d)), Math.abs(sim.Xp[3 * q + d] - turned(Xp0)(q, d)))
   }
   check('[13e] carry(Ry 90°): rows and previous rows turned with it', err <= 1e-6, `max ${err.toExponential(2)}`)
+}
+
+// [14] gravity
+{
+  const fx = build([{ rows: straightRows(0.5, 0), pins: 2, side: [1, 0, 0] }])
+  const sim = makeSim(fx), I = rootMotion('off', 0, 0)
+  const c = Math.cos(Math.PI / 2), s = Math.sin(Math.PI / 2), P = [0.5, 1.58, 0]
+  // T(P) · Rx(+90°) · T(−P), column-major
+  const M = [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, P[1] - (c * P[1] - s * P[2]), P[2] - (s * P[1] + c * P[2]), 1]
+  const fI = frameOf(fx.record, I), fM = frameOf(fx.record, M)
+  sim.reset(fI.targets)
+  sim.step(DT, fI, prm)
+  let up = 0
+  for (let i = 0; i < 3 * R; i++) up = Math.max(up, Math.abs(sim.hang[i] - fI.targets[i]))
+  check('[14] upright: hang == the targets, bit for bit', up === 0, `max ${up}`)
+  const tipDown = A => { const d = [0, 1, 2].map(k => A[3 * 16 + k] - A[3 + k]); return -d[1] / Math.hypot(...d) }
+  check('[14] the target chord of the turned head is level (world-down 0: the case is real)',
+    Math.abs(tipDown(fM.targets)) <= 1e-6, tipDown(fM.targets).toFixed(7))
+  // no root stiffness (bend 0, root_deg 0: HAAR's gradient off) — with it the root's bend holds the first rows on the
+  // way the pinned segment points, a compromise rather than a hand-derivable place
+  const loose = { ...prm, bend: 0, rootDeg: 0 }
+  sim.reset(fI.targets)
+  for (let st = 0; st < 240; st++) sim.step(DT, fM, loose)
+  let hangErr = 0
+  for (let i = 1; i < R; i++) {
+    const want = [P[0], P[1] - 0.02 * (i - 1), P[2]]
+    hangErr = Math.max(hangErr, ...[0, 1, 2].map(k => Math.abs(sim.hang[3 * i + k] - want[k])))
+  }
+  check('[14] turned 90°: hang = P − a·ŷ (row 16 at (0.5, 1.28, 0)) within 1e-6', hangErr <= 1e-6,
+    `max ${hangErr.toExponential(2)} m, row 16 (${[0, 1, 2].map(k => sim.hang[48 + k].toFixed(5)).join(', ')})`)
+  let off = 0
+  for (let i = 2; i < R; i++) off = Math.max(off, Math.hypot(...[0, 1, 2].map(k => sim.X[3 * i + k] - sim.hang[3 * i + k])))
+  check('[14] after 4 s every free row within 1 mm of hang, the tip chord hangs (world-down ≥ 0.999)',
+    off <= 0.001 && tipDown(sim.X) >= 0.999, `max ${(off * 1000).toFixed(4)} mm, world-down ${tipDown(sim.X).toFixed(6)}`)
+}
+
+// [14] the share of gravity by the tilt
+{
+  const fx = build([{ rows: straightRows(0.5, 0), pins: 2, side: [1, 0, 0] }])
+  const sim = makeSim(fx), P = [0.5, 1.58, 0]
+  const turned = deg => {
+    const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a)
+    return [1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, P[1] - (c * P[1] - s * P[2]), P[2] - (s * P[1] + c * P[2]), 1]
+  }
+  const offAt = (deg, row) => {
+    const f = frameOf(fx.record, turned(deg))
+    sim.reset(f.targets)
+    sim.step(DT, f, prm)
+    let max = 0
+    for (let i = 0; i < 3 * R; i++) max = Math.max(max, Math.abs(sim.hang[i] - f.targets[i]))
+    return [max, Math.hypot(...[0, 1, 2].map(k => sim.hang[3 * row + k] - f.targets[3 * row + k]))]
+  }
+  const [ten] = offAt(10, 16)
+  check('[14] turned 10° (< 20°): hang == the targets, bit for bit', ten === 0, `max ${ten}`)
+  const [, mid] = offAt(32.5, 16)
+  check('[14] turned 32.5°: row 16 0.0625147 m off its target (share 0.3723387)', Math.abs(mid - 0.0625147) <= 1e-6,
+    `${mid.toFixed(7)} m`)
 }
 
 // [T] timing, 700 cards

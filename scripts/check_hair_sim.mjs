@@ -7,7 +7,7 @@
  * Usage:
  *   node scripts/check_hair_sim.mjs ASSEMBLED.glb STRANDS.json [--clips sit,celebrating,walk] [--json FILE]
  *        [--set female] [--loops 2] [--every 6] [--game] [--snap] [--ref REF_STRANDS.json] [--fps 20,30,60]
- *        [--stop 2]
+ *        [--stop 2] [--tilt]
  *   ASSEMBLED.glb = a skinned figure whose hair primitive carries `_STRAND_CARD` / `_STRAND_U` (the full tier, or
  *   the Hairstyles preview / `scripts/hair_strands_export.py`'s `<fit>.strands.glb`); STRANDS.json its record.
  *   Clips come from ANIMATION_CLIPS_DIR (default shared/models/clips), the retarget reference from
@@ -50,6 +50,12 @@
  * 135°, −180° (U-turn), 90°, −45° (2.5 m legs, a waypoint retired within `WAYPOINT_ARRIVE_M`), every other clip on
  * the spot turning 90°, 180°, −90°, 45° every 1.5 s. `--snap` adds the instant turns the client also makes
  * (`faceTowards(…, snap)`: a walk starting backwards, a 180° snap on the spot).
+ * `--tilt` (Ruling T-U3) turns the whole figure about its head's rest position the way a viewer drag does, on top
+ * of the clip: upright 2 s, then forward 90° (face down), upright, back −90° (face up), upright, a sideways roll of
+ * 90°, upright — each tilt eased over 1 s (cosine) and held 5 s, each upright held 3 s. Per phase it prints the free
+ * chords' world-down component (last pin → tip of the cards with ≥ 10 cm of free arc, averaged; 1 = hanging straight
+ * down) for the sim and for the targets (the hair glued to the head), and eye rows / SDF depth / stretch after the
+ * phase's first second, with the phase's last frame ("settled").
  * `--ref` (Ruling H-R8): a record of the same fit whose SDF reaches below the crop of STRANDS.json; the depth of
  * the rows BELOW the ear line in that SDF, split in front of the head centre (the jaw and cheeks, Head-rigid —
  * a real collision) and behind it (the neck, which the head-rigid SDF misplaces), for the sim and today's skin.
@@ -65,7 +71,7 @@ const REPO = process.env.HAIR_SIM_CHECK_BUNDLED ? process.cwd() : path.join(__di
 
 function parseArgs(argv) {
   const opts = { files: [], clips: ['sit', 'celebrating', 'walk'], set: '', loops: 2, every: 6, game: false,
-    snap: false, ref: '', fps: [60], stop: 0 }
+    snap: false, ref: '', fps: [60], stop: 0, tilt: false }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--clips') opts.clips = argv[++i].split(',').filter(Boolean)
@@ -78,6 +84,7 @@ function parseArgs(argv) {
     else if (a === '--ref') opts.ref = argv[++i]
     else if (a === '--fps') opts.fps = argv[++i].split(',').map(Number).filter((v) => v > 0)
     else if (a === '--stop') opts.stop = Math.max(0, Number(argv[++i]))
+    else if (a === '--tilt') opts.tilt = true
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`)
     else opts.files.push(a)
   }
@@ -359,6 +366,59 @@ async function main() {
     }
   }
 
+  /** The free chords' mean world-down component (module docstring `--tilt`): per card with ≥ 10 cm of free arc
+   *  the unit chord last pin → tip, −y averaged; of the simulated rows and of their targets (today's skin). */
+  const fall = () => {
+    const X = sim.X, T = handle.targets
+    let a = 0, b = 0, n = 0
+    for (let c = 0; c < S; c++) {
+      if (record.free_arc[c * R + R - 1] < 0.10) continue
+      const lp = 3 * (c * R + Math.max(1, record.pins[c]) - 1), tp = 3 * (c * R + R - 1)
+      const down = (P) => -(P[tp + 1] - P[lp + 1]) / (Math.hypot(P[tp] - P[lp], P[tp + 1] - P[lp + 1], P[tp + 2] - P[lp + 2]) || 1)
+      a += down(X); b += down(T); n++
+    }
+    return { sim: n ? a / n : 0, targets: n ? b / n : 0, cards: n }
+  }
+  /** `--tilt` (module docstring): the root turned about the head's rest position; a schedule of eases and holds,
+   *  the fall measured at the end of every hold. */
+  const TILT_PHASES = [['upright', 0, 0, 2], ['forward', 90, 0, 5], ['upright 2', 0, 0, 3], ['back', -90, 0, 5],
+    ['upright 3', 0, 0, 3], ['sideways', 0, 90, 5], ['upright 4', 0, 0, 3]]
+  const TILT_EASE_S = 1
+  const tiltSeconds = TILT_PHASES.reduce((s, ph, i) => s + ph[3] + (i ? TILT_EASE_S : 0), 0)
+  const tiltMotion = (falls, phase) => {
+    holder.position.set(0, 0, 0)
+    holder.quaternion.identity()
+    holder.updateMatrixWorld(true)
+    const h = headNow(), pivot = new THREE.Vector3(h[12], h[13], h[14])
+    const q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3()
+    let t = 0, from = [0, 0]
+    return (DT) => {
+      t += DT
+      let at = 0, pose = [0, 0]
+      for (let i = 0; i < TILT_PHASES.length; i++) {
+        const [name, pitch, roll, hold] = TILT_PHASES[i]
+        phase.name = name
+        const ease = i ? TILT_EASE_S : 0
+        if (t < at + ease) {
+          const s = 0.5 - 0.5 * Math.cos(Math.PI * (t - at) / ease)
+          from = i ? [TILT_PHASES[i - 1][1], TILT_PHASES[i - 1][2]] : [0, 0]
+          pose = [from[0] + (pitch - from[0]) * s, from[1] + (roll - from[1]) * s]
+          break
+        }
+        at += ease
+        pose = [pitch, roll]
+        if (t < at + hold) {
+          if (t + DT >= at + hold) falls[name] = fall()
+          break
+        }
+        at += hold
+      }
+      q.setFromEuler(e.set(pose[0] * Math.PI / 180, 0, -pose[1] * Math.PI / 180, 'XYZ'))
+      holder.quaternion.copy(q)
+      holder.position.copy(pivot).sub(v.copy(pivot).applyQuaternion(q))
+    }
+  }
+
   const bindExposure = scalpExposure(trisOf(posAttr()), scalp, cams)
   console.log(`== ${path.basename(modelPath)}: ${record.cards} cards, ${sim.n} rows, `
     + `${posAttr().length / 3} hair vertices, scalp ${scalp.length / 9} triangles, colliders [${handle.capsuleIds.join(', ')}]`)
@@ -386,10 +446,13 @@ async function main() {
     mixer.setTime(0)
     holder.position.set(0, 0, 0)
     holder.rotation.y = 0
-    const move = opts.game ? gameMotion(clip.name) : null
+    holder.quaternion.identity()
+    const falls = {}, phase = { name: '' }, perPhase = {}
+    const move = opts.tilt ? tiltMotion(falls, phase) : opts.game ? gameMotion(clip.name) : null
     holder.updateMatrixWorld(true)
     handle.update(1)   // a long delta: reset to this pose
-    const moving = Math.max(opts.game ? 900 : 120, Math.round(clip.duration * opts.loops * 60)) / 60
+    const moving = opts.tilt ? tiltSeconds
+      : Math.max(opts.game ? 900 : 120, Math.round(clip.duration * opts.loops * 60)) / 60
     const frames = Math.round((moving + opts.stop) * fps), stopAt = Math.round(moving * fps)
     const every = Math.max(1, Math.round(opts.every * fps / 60))
     let stopTip = 0, stopPeak = 0
@@ -422,8 +485,15 @@ async function main() {
         const b = bandDepth(head, sim.X), sb = bandDepth(head, handle.targets)
         for (let k = 0; k < 2; k++) { band[k] = Math.max(band[k], b[k]); skinBand[k] = Math.max(skinBand[k], sb[k]) }
       }
-      eye = Math.max(eye, eyePointsEntered(sim, head, record.eye_box, restEye))
+      const eyeNow = eyePointsEntered(sim, head, record.eye_box, restEye)
+      eye = Math.max(eye, eyeNow)
       const d = maxSdfDepthMm(sim, head, sim.sdf)
+      if (opts.tilt) {
+        const ph = perPhase[phase.name] ??= { eye: 0, depth: 0, stretch: 0 }
+        ph.eye = Math.max(ph.eye, eyeNow); ph.depth = Math.max(ph.depth, +d.toFixed(2))
+        ph.stretch = Math.max(ph.stretch, +st.ratio.toFixed(3))
+        ph.settled = { eye: eyeNow, depth: +d.toFixed(2), stretch: +st.ratio.toFixed(3) }   // the last frame: settled
+      }
       const w = deepest(head)
       above = Math.max(above, w.above_ear_mm)
       if (d > depth) { depth = d; where = w }
@@ -450,11 +520,20 @@ async function main() {
       cost_ema_ms: +handle.costMs.toFixed(2),
       max_card_stretch: +stretch.ratio.toFixed(3), stretch_card: stretch.card, stretch_frame: stretch.frame,
       max_flyaways: fly.count, flyaway_cards: fly.cards, flyaway_frame: fly.frame, flyaway_frames: flyFrames,
+      ...(opts.tilt ? { per_phase: perPhase, fall: Object.fromEntries(Object.entries(falls).map(([k, f]) => [k,
+        { sim: +f.sim.toFixed(3), targets: +f.targets.toFixed(3), cards: f.cards }])) } : {}),
       ...(opts.stop ? { stop_s: opts.stop, stop_tip_mm: +(stopTip * 1000).toFixed(1),
         stop_tip_peak_mm: +(stopPeak * 1000).toFixed(1) } : {}),
       ...(ref ? { below_ear_front_mm: +band[0].toFixed(2), below_ear_back_mm: +band[1].toFixed(2),
         skin_below_ear_front_mm: +skinBand[0].toFixed(2), skin_below_ear_back_mm: +skinBand[1].toFixed(2) } : {}) }
     report.clips[keyed ? `${clip.name}@${fps}` : clip.name] = row
+    if (opts.tilt) {
+      console.log(`   ${clip.name} tilt: free chords' world-down component, sim (targets):  `
+        + Object.entries(row.fall).map(([k, f]) => `${k} ${f.sim} (${f.targets})`).join('  ·  ') + `  [${row.fall.upright?.cards} cards]`)
+      console.log(`   ${''.padEnd(15)} per phase (eye / depth mm / stretch, after the first second): `
+        + Object.entries(row.per_phase).map(([k, v]) => `${k} ${v.eye}/${v.depth}/${v.stretch}`
+          + ` (settled ${v.settled.eye}/${v.settled.depth}/${v.settled.stretch})`).join('  ·  '))
+    }
     console.log(`   ${(keyed ? `${clip.name}@${fps}` : clip.name).padEnd(15)} eye ${eye}  depth ${row.max_sdf_depth_mm} mm (above the ear line ${row.above_ear_depth_mm}; skin ${row.skin_sdf_depth_mm}`
       + `${where ? `, deepest at frac ${row.deepest_row.free_frac}, ${row.deepest_row.above_ear_cm} cm above the ear line` : ''})  `
       + `Δ bind ${row.delta_bind_pp.join(' / ')} pp (p95 ${row.delta_bind_p95_pp.join(' / ')})  Δ skin ${row.delta_skin_pp.join(' / ')} pp  `

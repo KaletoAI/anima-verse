@@ -371,7 +371,7 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
       }
       for (let k = 1; k <= steps; k++) {
         poseAt((start + k * STRAND_DT) / span)
-        sim.step(STRAND_DT, { targets, head: stepHead, capsules: frameCaps }, params)
+        sim.step(STRAND_DT, { targets, head: stepHead, capsules: frameCaps, follow: stepFollow }, params)
       }
       keepPose()
       if (!steps) return

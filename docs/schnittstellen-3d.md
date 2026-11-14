@@ -12354,6 +12354,12 @@ two attributes into rest frames + per-vertex offsets (`StrandMismatch` when they
 `StrandSim.step` runs spec § 6.2.1 (Verlet + pendulum pull, length/bend passes, angle limit against the TARGET
 segment, head SDF + capsules under the bind rule + face box in head-bind space, tether) and `rebuild` writes the
 vertices in head-bind space. At rest every term is zero: the rebuilt mesh equals the bind mesh bit for bit.
+Ruling T-U3 (tilted hair falls): the pull, the angle limit and the tether aim at `StrandSim.hang`, the target
+shifted by `free arc below the scalp / stiffness × (world down − the row's bind down now)` — the follow bones' −Y by
+the row's weights (`StrandFrame.follow`, the head when absent), ramped in between 20° and 45° of tilt (below, the
+spike's tuned drape stands), kept on the row's side of the head and the capsules (one share per card, out of the
+face box). Upright it is the target bit for bit; a figure lying face down lets its
+hair hang towards the floor instead of keeping it level behind the head.
 Ruling H-R10 (the stray card and the flyaways of the game's turns): the Verlet step runs in the TARGET's frame —
 damping on the velocity relative to the target's, the pull towards the target of the row's own step (damped in
 world, a walk at 3.4 m/s was 8.2 m/s² of drag); the head SDF has the last word over a capsule or the face box
@@ -12372,7 +12378,9 @@ attributes' round trip, the full tier only, a mismatch refused, the assembly sta
 binding), and `scripts/smoke_hair_sim.mjs` (the sim on a quantized sphere head: exact rest, angle limit, tether,
 SDF depth and eye box under sway/walk, scalp exposure, HAAR without limit, follow rows under a pitched spine with
 the torso capsule; H-R10: length clamp, leading-run head tether, relative damping at walk speed, the head's last
-word, `RootInertia`). `scripts/check_hair_sim.mjs --game [--snap]` drives the real hair with the client's own turn
+word, `RootInertia`; T-U3: a card of a head turned 90° hangs straight down). `scripts/check_hair_sim.mjs --tilt`
+tilts the figure forward, back and sideways by 90° and reports the free chords' world-down component per phase;
+`--game [--snap]` drives the real hair with the client's own turn
 ease and walk speed (`client3d/src/game/npcWalk.ts`) and reports the longest card against its target (stretch) and
 the near-horizontal flyaways.
 
