@@ -998,6 +998,10 @@ def sweep(characters: Optional[Iterable[str]] = None, *, pause: float = SWEEP_PA
 def _run_sweep(delay: float) -> None:
     _nice_thread()
     time.sleep(delay)
+    # Ruling A72b: an acceptance voided before the carry-over existed holds again first (once per world), so the
+    # sweep refits the body shapes from the fit the user accepted.
+    from app.core import fit_attempts
+    fit_attempts.recover_voided_acceptances()
     done = sweep()
     if done:
         logger.info("Garment refit sweep: %s fit(s) refitted for %s", sum(map(len, done.values())),

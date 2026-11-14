@@ -54,6 +54,16 @@ user-accepted fit is never served once it is not current (``garments.body_fit``,
 that replaces it. A new attempt on the same (item, fsig, body) whose GLB differs from the accepted one undoes the
 acceptance (``store``); the same GLB keeps it. A fit the gates accept overwrites it (``drop``).
 
+CARRIED (Ruling A72b): a clothing refit of the piece on the same body whose refusal is the SAME set of gates, each
+value no worse than the accepted one by more than ``CARRY_TOLERANCE`` (``carries``), takes the acceptance over
+instead: the new attempt is published as the user-accepted fit (``user_accepted`` keeps its ``at`` and ``failure``
+and lists the hand-over in ``carried``), the fit the first acceptance displaced stays in ``attempts/prev/`` for an
+``undo``, and ``store`` returns True — the caller treats the fit as published. Kai's jeans, 2026-11-14: the fit
+version 14 refitted the accepted plain fit to the same deep push share 0.1512, voided the acceptance, and the body
+shape's refit then derived from the old mesh's fit and was refused. A refusal by a gate without a numeric metric
+(limbs, torso, frame) is never carried. An acceptance voided under the earlier rule is recovered once per world from
+the log (``recover_voided_acceptances``, the boot sweep).
+
 Hair is out of scope: its fits are never kept or accepted here.
 """
 from __future__ import annotations
@@ -96,6 +106,9 @@ MARK_KINDS: Dict[str, Dict[str, str]] = {
 KINDS = ("clothing", "footwear")
 #: The status light's words of a user-accepted fit.
 ACCEPTED_BY_YOU = "Accepted by you"
+#: Ruling A72b: how much worse (absolute, in the gate's own unit) a refused value may be than the value the user
+#: accepted for the acceptance to carry over to a refit (``carries``).
+CARRY_TOLERANCE = 0.005
 #: How a body shape's shoe was fitted (``garment_footwear.fit``, record ``fit_method``, Ruling A40) in the Details
 #: preview's words (the React switch translates them).
 FIT_METHOD_NOTES: Dict[str, str] = {
@@ -305,33 +318,145 @@ def _remove_prev(character_name: str, item_id: str, fsig: str, body: str) -> Non
         p.unlink(missing_ok=True)
 
 
+# --- Carrying an acceptance over (Ruling A72b) -----------------------------------------------------------------
+
+def refused_values(reasons: Any, gates: Any, metrics: Any = None) -> Optional[Dict[str, Tuple[str, float]]]:
+    """``{gate key: (kind "max"/"min", value)}`` of a refusal: each reason names its gate first (``garment_fit.gate``:
+    "deep_push_share 0.1512 > 0.12 (...)"), its kind is the gate's in ``gates["limits"]`` and its value the metric of
+    that key (``gates["metrics"]``, else ``metrics``). None when any reason is no numeric gate (a limb, torso or
+    frame refusal, a missing metric) or there is no reason — such a refusal is never compared."""
+    gates = gates if isinstance(gates, dict) else {}
+    limits = gates.get("limits") or {}
+    values = {**(metrics if isinstance(metrics, dict) else {}), **(gates.get("metrics") or {})}
+    out: Dict[str, Tuple[str, float]] = {}
+    for reason in reasons or []:
+        key = str(reason).split(" ", 1)[0].rstrip(":")
+        spec, value = limits.get(key), values.get(key)
+        if (not isinstance(spec, (list, tuple)) or len(spec) < 2 or spec[0] not in ("max", "min")
+                or isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value)):
+            return None
+        out[key] = (str(spec[0]), float(value))
+    return out or None
+
+
+def carries(accepted: Optional[Dict[str, Tuple[str, float]]], new: Optional[Dict[str, Tuple[str, float]]]) -> bool:
+    """Whether a refit's refusal ``new`` takes over the acceptance of the refusal ``accepted`` (both
+    ``refused_values``): the same set of refused gates, each of the same kind and no worse than the accepted value
+    by more than ``CARRY_TOLERANCE`` (a "max" gate's value at most that much higher, a "min" gate's at most that
+    much lower)."""
+    if not accepted or not new or set(accepted) != set(new):
+        return False
+    for key, (kind, value) in new.items():
+        was_kind, was = accepted[key]
+        if kind != was_kind:
+            return False
+        if (value > was + CARRY_TOLERANCE) if kind == "max" else (value < was - CARRY_TOLERANCE):
+            return False
+    return True
+
+
+def _block_values(block: Dict[str, Any], record: Dict[str, Any]) -> Optional[Dict[str, Tuple[str, float]]]:
+    """``refused_values`` of the refusal a ``user_accepted`` block accepted (its fit record ``record`` holds the
+    metrics when the block's gates do not)."""
+    return refused_values(block.get("reasons"), block.get("gates"), record.get("metrics"))
+
+
+def _publish_accepted(character_name: str, item_id: str, fsig: str, body: str, glb: Path, record: Dict[str, Any],
+                      block: Dict[str, Any], *, displace: bool) -> None:
+    """Publish the attempt GLB ``glb`` (its ``record``) as the user-accepted fit of (item, fsig, body) with the
+    ``user_accepted`` ``block``, under ``_lock``. ``displace``: the fit the path holds is the one an acceptance
+    displaces (moved to ``attempts/prev/`` for ``undo``); else it is the previously accepted fit, replaced (the
+    displaced one stays where the first acceptance put it). The recorded refusal (``failed/``) goes — the block
+    keeps one. A distance tier is decimated from the new fit."""
+    import shutil
+    from app.blender import refine
+    from app.core import garment_store as gs, glb_mesh
+    fit = gs.garment_path(character_name, item_id, fsig, "fit", body=body)
+    low = gs.garment_path(character_name, item_id, fsig, "low", body=body)
+    failed = gs.garment_path(character_name, item_id, fsig, "failed", body=body)
+    if displace:
+        prev = gs.garment_path(character_name, item_id, fsig, PREV, body=body)
+        prev_low = gs.garment_path(character_name, item_id, fsig, PREV_LOW, body=body)
+        _remove_prev(character_name, item_id, fsig, body)
+        if fit.is_file():
+            prev.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(fit, prev)
+            if fit.with_suffix(".json").is_file():
+                os.replace(fit.with_suffix(".json"), prev.with_suffix(".json"))
+            if low.is_file():
+                prev_low.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(low, prev_low)
+    fit.with_suffix(".json").unlink(missing_ok=True)
+    low.unlink(missing_ok=True)
+    fit.parent.mkdir(parents=True, exist_ok=True)
+    tmp = fit.with_name(f".{fit.name}.{os.getpid()}.accept.tmp")
+    try:
+        shutil.copyfile(glb, tmp)
+        os.replace(tmp, fit)
+    finally:
+        tmp.unlink(missing_ok=True)
+    attempt = record.get("attempt") or {}
+    published = {k: v for k, v in record.items() if k != "attempt"}
+    published.update(accepted=True, user_accepted=block)
+    gs.write_record(fit.with_suffix(".json"), published)
+    failed.unlink(missing_ok=True)
+    tris = attempt.get("tris")
+    try:
+        if not tris:
+            tris = len(glb_mesh.static_arrays(fit.read_bytes())[1])
+        dec = refine.decimate_to(fit, max(1, int(round(refine.lod_ratio("character") * int(tris)))), low,
+                                 tris=int(tris))
+    except Exception as e:  # noqa: BLE001 — the distance tier falls back to the full fit
+        dec = {"ok": False, "error": str(e) or type(e).__name__}
+    published["low"] = ({"ok": True, "tris": dec.get("tris"), "ratio": dec.get("ratio")} if dec.get("ok")
+                        else {"ok": False, "error": dec.get("error") or "decimation failed"})
+    gs.write_record(fit.with_suffix(".json"), published)
+    if not body:
+        gs.end(character_name, item_id, "fit")   # the run status's refusal of this fit is answered
+
+
+def _carried_block(block: Dict[str, Any], record: Dict[str, Any], *, sha: str, error: str, reasons: List[str],
+                   gates: Any, how: str) -> Dict[str, Any]:
+    """The ``user_accepted`` block of a fit the acceptance ``block`` carried over to (Ruling A72b): the first
+    acceptance's ``at`` and ``failure``, the new refusal and attempt, and the hand-over appended to ``carried``."""
+    from app.core.timeutils import utc_now_iso
+    return {**block, "error": error, "reasons": list(reasons), "gates": gates, "attempt_sha256": sha,
+            "fit_version": record.get("fit_version"),
+            "carried": [*list(block.get("carried") or []),
+                        {"at": utc_now_iso(), "how": how, "from_attempt_sha256": block.get("attempt_sha256"),
+                         "from_fit_version": block.get("fit_version"), "from_reasons": list(block.get("reasons") or [])}]}
+
+
 def store(character_name: str, item_id: str, fsig: str, *, body: str, kind: str, record: Dict[str, Any],
           error: str, gates: Any, rigged: Optional[bytes] = None, garment: Any = None, glb: Optional[Path] = None,
           tris: Optional[int] = None, marks: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
-          slot: str = "") -> None:
+          slot: str = "", carry: bool = False) -> bool:
     """Keep a REFUSED fit of (item, fsig) on ``body`` ("" = the base model, else an outfit body id) as the body's
     last attempt (module docstring): the GLB — grafted here from ``rigged`` + ``garment`` as ``garments._publish_fit``
     grafts it, or the file ``glb`` a compute already wrote (moved in) —, ``record`` as the fit would be published
     with ``accepted`` False and ``attempt``, and ``marks`` (kind -> ``mesh_marks`` or None). ``slot`` (``SLOTS``):
-    ``DERIVED`` keeps a body shape's refused derived shoe beside the body's last attempt (Ruling A40). Never
-    raises: a refusal stays a refusal when its attempt cannot be kept."""
+    ``DERIVED`` keeps a body shape's refused derived shoe beside the body's last attempt (Ruling A40). ``carry``
+    (the clothing fits, Ruling A72b): a user's acceptance on (item, fsig, body) whose refusal this one ``carries``
+    publishes this attempt as the user-accepted fit — True then, and the caller treats the fit as published. Never
+    raises: a refusal stays a refusal when its attempt cannot be kept (False)."""
     if kind not in KINDS or slot not in SLOTS:
-        return
+        return False
     try:
-        _store(character_name, item_id, fsig, body=body, kind=kind, record=record, error=error, gates=gates,
-               rigged=rigged, garment=garment, glb=glb, tris=tris, marks=marks, slot=slot)
+        return _store(character_name, item_id, fsig, body=body, kind=kind, record=record, error=error, gates=gates,
+                      rigged=rigged, garment=garment, glb=glb, tris=tris, marks=marks, slot=slot, carry=carry)
     except Exception:  # noqa: BLE001 — the attempt is a view on the refusal, never its outcome
         logger.exception("Fit attempt %s/%s (%s) on %s not kept", character_name, item_id, fsig, body or "plain body")
+        return False
 
 
 def _store(character_name: str, item_id: str, fsig: str, *, body: str, kind: str, record: Dict[str, Any],
            error: str, gates: Any, rigged: Optional[bytes], garment: Any, glb: Optional[Path], tris: Optional[int],
-           marks: Optional[Dict[str, Optional[Dict[str, Any]]]], slot: str = "") -> None:
+           marks: Optional[Dict[str, Optional[Dict[str, Any]]]], slot: str = "", carry: bool = False) -> bool:
     from app.core import garment_store as gs, refit_pool
     from app.core.timeutils import utc_now_iso
     from app.models.character import get_character_dir
     if not get_character_dir(character_name).is_dir():
-        return  # never mint the folders of a vanished character
+        return False  # never mint the folders of a vanished character
     path = gs.garment_path(character_name, item_id, fsig, SLOTS[slot], body=body)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = refit_pool.temp_path(path)
@@ -345,15 +470,26 @@ def _store(character_name: str, item_id: str, fsig: str, *, body: str, kind: str
             source = Path(glb)
         sha = _file_sha(source)
         kept = {k: v for k, v in (marks or {}).items() if k in MARK_KINDS and v and len(v["positions"])}
+        reasons = list((gates or {}).get("reasons") or []) if isinstance(gates, dict) else []
+        carried: Optional[Dict[str, Any]] = None
         with _lock(character_name, body):
             accepted = _user_accepted_fit(character_name, item_id, fsig, body)
             # an acceptance is voided by a new attempt of ITS slot only (the fresh fit's attempt never voids the
             # accepted derived shoe, Ruling A40)
             if accepted and str(accepted.get("slot") or "") == slot and accepted.get("attempt_sha256") != sha:
-                # The fit changed: the acceptance of the old one is void (module docstring VOIDED).
-                logger.info("Fit acceptance %s/%s (%s) on %s void: a new attempt differs", character_name, item_id,
-                            fsig, body or "plain body")
-                _undo_locked(character_name, item_id, fsig, body)
+                accepted_record = gs.read_record(
+                    gs.garment_path(character_name, item_id, fsig, "fit", body=body).with_suffix(".json"))
+                if (carry and sha and not slot
+                        and carries(_block_values(accepted, accepted_record),
+                                    refused_values(reasons, gates, record.get("metrics")))):
+                    # Ruling A72b: the same refusal, no worse — the acceptance carries over to this attempt.
+                    carried = _carried_block(accepted, record, sha=sha, error=error, reasons=reasons, gates=gates,
+                                             how="refit")
+                else:
+                    # The fit changed: the acceptance of the old one is void (module docstring VOIDED).
+                    logger.info("Fit acceptance %s/%s (%s) on %s void: a new attempt differs", character_name,
+                                item_id, fsig, body or "plain body")
+                    _undo_locked(character_name, item_id, fsig, body)
             for other, files in _attempt_files(character_name, item_id, body, slot).items():
                 if other != fsig and not _user_accepted_fit(character_name, item_id, other, body):
                     _remove_attempt(files)
@@ -366,16 +502,22 @@ def _store(character_name: str, item_id: str, fsig: str, *, body: str, kind: str
             counts = _write_marks(npz, kept) if kept else {}
             if not kept:
                 npz.unlink(missing_ok=True)
-            reasons = list((gates or {}).get("reasons") or []) if isinstance(gates, dict) else []
-            gs.write_record(path.with_suffix(".json"), {
+            kept_record = {
                 **record, "accepted": False,
                 "attempt": {"at": utc_now_iso(), "error": error, "reasons": reasons, "gates": gates,
                             "glb_sha256": sha or None, "tris": tris, "marks": counts,
-                            "body_id": body or str(record.get("body_id") or "")}})
+                            "body_id": body or str(record.get("body_id") or "")}}
+            gs.write_record(path.with_suffix(".json"), kept_record)
+            if carried is not None:
+                _publish_accepted(character_name, item_id, fsig, body, path, kept_record, carried, displace=False)
         logger.info("Fit attempt %s/%s (%s) on %s kept%s (refused%s)", character_name, item_id, fsig,
                     body or "plain body", f" as the {slot} attempt" if slot else "",
                     ", marked " + ", ".join(f"{k} {n}" for k, n in counts.items())
                     if counts else "")
+        if carried is not None:
+            logger.info("Fit %s/%s (%s) on %s: the user's acceptance carried over to the refit (refused: %s)",
+                        character_name, item_id, fsig, body or "plain body", error)
+        return carried is not None
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -551,9 +693,7 @@ def accept(character_name: str, item_id: str, body: str, *, profile: Optional[Di
 
 
 def _accept_locked(character_name: str, item_id: str, body: str, profile: Dict[str, Any], slot: str = "") -> None:
-    import shutil
-    from app.blender import refine
-    from app.core import garment_store as gs, glb_mesh
+    from app.core import garment_store as gs
     from app.core.timeutils import utc_now_iso
     found = attempt_of(character_name, item_id, body, slot)
     if found is None:
@@ -570,50 +710,13 @@ def _accept_locked(character_name: str, item_id: str, body: str, profile: Dict[s
         raise AcceptError(why)
     if _file_sha(glb) != sha:
         raise AcceptError("The kept attempt is damaged — re-fit to make it again")
-    fit = gs.garment_path(character_name, item_id, fsig, "fit", body=body)
-    low = gs.garment_path(character_name, item_id, fsig, "low", body=body)
     failed = gs.garment_path(character_name, item_id, fsig, "failed", body=body)
-    prev = gs.garment_path(character_name, item_id, fsig, PREV, body=body)
-    prev_low = gs.garment_path(character_name, item_id, fsig, PREV_LOW, body=body)
-    _remove_prev(character_name, item_id, fsig, body)
-    if fit.is_file():
-        prev.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(fit, prev)
-        if fit.with_suffix(".json").is_file():
-            os.replace(fit.with_suffix(".json"), prev.with_suffix(".json"))
-        if low.is_file():
-            prev_low.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(low, prev_low)
-    fit.with_suffix(".json").unlink(missing_ok=True)
-    low.unlink(missing_ok=True)
     failure = gs.read_record(failed) if failed.is_file() else {}
-    tmp = fit.with_name(f".{fit.name}.{os.getpid()}.accept.tmp")
-    try:
-        shutil.copyfile(glb, tmp)
-        os.replace(tmp, fit)
-    finally:
-        tmp.unlink(missing_ok=True)
     attempt = record.get("attempt") or {}
-    published = {k: v for k, v in record.items() if k != "attempt"}
-    published.update(accepted=True, user_accepted={
+    _publish_accepted(character_name, item_id, fsig, body, glb, record, {
         "at": utc_now_iso(), "error": attempt.get("error") or "", "reasons": list(attempt.get("reasons") or []),
         "gates": attempt.get("gates"), "attempt_sha256": sha, "body_id": body or str(record.get("body_id") or ""),
-        "fit_version": record.get("fit_version"), "failure": failure or None, "slot": slot})
-    gs.write_record(fit.with_suffix(".json"), published)
-    failed.unlink(missing_ok=True)
-    tris = attempt.get("tris")
-    try:
-        if not tris:
-            tris = len(glb_mesh.static_arrays(fit.read_bytes())[1])
-        dec = refine.decimate_to(fit, max(1, int(round(refine.lod_ratio("character") * int(tris)))), low,
-                                 tris=int(tris))
-    except Exception as e:  # noqa: BLE001 — the distance tier falls back to the full fit
-        dec = {"ok": False, "error": str(e) or type(e).__name__}
-    published["low"] = ({"ok": True, "tris": dec.get("tris"), "ratio": dec.get("ratio")} if dec.get("ok")
-                        else {"ok": False, "error": dec.get("error") or "decimation failed"})
-    gs.write_record(fit.with_suffix(".json"), published)
-    if not body:
-        gs.end(character_name, item_id, "fit")   # the run status's refusal of this fit is answered
+        "fit_version": record.get("fit_version"), "failure": failure or None, "slot": slot}, displace=True)
     logger.info("Fit %s/%s (%s) on %s accepted by the user (refused: %s)", character_name, item_id, fsig,
                 body or "plain body", attempt.get("error"))
 
@@ -670,6 +773,159 @@ def follow_up(character_name: str) -> Dict[str, Any]:
     (``figure_build.cost``: ``{hub_jobs, steps, note}``) — a re-assembly alone is CPU only (0 hub jobs)."""
     from app.core import figure_build
     return figure_build.cost(character_name)
+
+
+# --- Recovering an acceptance the earlier rule voided (Ruling A72b) ---------------------------------------------
+
+#: The world_kv marker of ``recover_voided_acceptances`` (once per world).
+RECOVERY_MARKER = "migration:fit_acceptance_voids_recovered"
+_LOG_LINE = re.compile(r"^\d\d:\d\d:\d\d \[fit_attempts\] INFO (.*)$")
+_KEY = r"(?P<c>.+?)/(?P<i>\S+) \((?P<f>[0-9a-f]+)\) on (?P<b>.+?)"
+_LOG_ACCEPTED = re.compile(r"^Fit " + _KEY + r" accepted by the user \(refused: (?P<e>.*)\)$")
+_LOG_VOID = re.compile(r"^Fit acceptance " + _KEY + r" void: a new attempt differs$")
+_LOG_UNDONE = re.compile(r"^Fit " + _KEY + r": the user's acceptance undone$")
+_LOG_CARRIED = re.compile(r"^Fit " + _KEY + r": the user's acceptance carried over")
+#: One gate reason as ``garment_fit.gate`` writes it: "<key> <value> > <limit> (<label>)" (or "<").
+_LOG_REASON = re.compile(r"^([a-z0-9_]+) (\S+) ([<>]) (\S+) \(")
+PLAIN_BODY_WORDS = "plain body"
+
+
+def logged_refusal(error: str) -> Optional[Dict[str, Any]]:
+    """``{reasons, gates {limits, metrics}}`` of a refusal as the log line of its acceptance names it ("fit refused
+    — deep_push_share 0.1512 > 0.12 (...)"), None when any reason is no numeric gate."""
+    text = str(error or "").split(" — ", 1)[-1]
+    reasons = [r for r in text.split("; ") if r]
+    limits: Dict[str, List[Any]] = {}
+    metrics: Dict[str, float] = {}
+    for reason in reasons:
+        m = _LOG_REASON.match(reason)
+        if not m:
+            return None
+        try:
+            metrics[m.group(1)], limit = float(m.group(2)), float(m.group(4))
+        except ValueError:
+            return None
+        limits[m.group(1)] = ["max" if m.group(3) == ">" else "min", limit]
+    return {"reasons": reasons, "gates": {"limits": limits, "metrics": metrics}} if reasons else None
+
+
+def voided_acceptances(lines) -> Dict[Tuple[str, str, str, str], str]:
+    """``{(character, item, fsig, body): accepted error}`` of the acceptances whose LAST event in the ``lines``
+    (``fit_attempts`` log lines, oldest first) is the automatic void of ``store`` ("void: a new attempt differs",
+    followed by its own undo line) — not a later acceptance, carry-over or the user's own undo. ``body`` "" is the
+    plain body."""
+    state: Dict[Tuple[str, str, str, str], Dict[str, Any]] = {}
+    for line in lines:
+        m = _LOG_LINE.match(str(line).rstrip("\n"))
+        if not m:
+            continue
+        text = m.group(1)
+        for pattern, event in ((_LOG_ACCEPTED, "accepted"), (_LOG_VOID, "void"), (_LOG_UNDONE, "undone"),
+                               (_LOG_CARRIED, "carried")):
+            hit = pattern.match(text)
+            if not hit:
+                continue
+            body = "" if hit.group("b") == PLAIN_BODY_WORDS else hit.group("b")
+            key = (hit.group("c"), hit.group("i"), hit.group("f"), body)
+            now = state.get(key) or {}
+            if event == "accepted":
+                state[key] = {"state": "accepted", "error": hit.group("e")}
+            elif event == "carried":
+                state[key] = {**now, "state": "accepted"}
+            elif event == "void":
+                state[key] = {**now, "state": "void", "undo_due": True}
+            elif now.get("state") == "void" and now.get("undo_due"):
+                state[key] = {**now, "undo_due": False}   # the void's own undo line
+            else:
+                state.pop(key, None)                      # the user's own undo
+            break
+    return {key: st["error"] for key, st in state.items() if st.get("state") == "void" and st.get("error")}
+
+
+def _log_files(log_dir: Path) -> List[Path]:
+    """The server logs, oldest first: the rotated ``archive/main_*.log`` (named by their time), then ``main.log``."""
+    return [*sorted((log_dir / "archive").glob("main_*.log")), log_dir / "main.log"]
+
+
+def _fit_attempt_lines(files: List[Path]):
+    for path in files:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if "[fit_attempts]" in line:
+                        yield line
+        except OSError:
+            continue
+
+
+def recover_voided_acceptances(log_dir: Optional[Path] = None, *, force: bool = False) -> List[Tuple[str, str, str]]:
+    """Ruling A72b, once per world (``RECOVERY_MARKER``; ``force`` runs it again): an acceptance ``store`` voided
+    before the carry-over existed holds again when the item's CURRENT attempt on that body is the same refusal, no
+    worse (``carries``) — the acceptance's refusal read back from its log line (``voided_acceptances``,
+    ``logged_refusal``). The attempt is published as the user-accepted fit as ``accept`` would (``_current`` must
+    hold); the assembly is scheduled. ``[(character, item, body)]`` recovered. Never raises."""
+    from app.core.db import transaction
+    from app.core.timeutils import utc_now_iso
+    from app.models.character import get_character_dir
+    recovered: List[Tuple[str, str, str]] = []
+    try:
+        with transaction() as conn:
+            if not force and conn.execute("SELECT 1 FROM world_kv WHERE key=?", (RECOVERY_MARKER,)).fetchone():
+                return recovered
+            conn.execute("INSERT OR REPLACE INTO world_kv (key, value) VALUES (?, ?)", (RECOVERY_MARKER, "1"))
+        if log_dir is None:
+            from app.utils.llm_logger import LOG_DIR as log_dir
+        voided = voided_acceptances(_fit_attempt_lines(_log_files(Path(log_dir))))
+        for (character, item_id, fsig, body), error in sorted(voided.items()):
+            old = logged_refusal(error)
+            if old is None or not get_character_dir(character).is_dir():
+                continue
+            try:
+                done = _recover_one(character, item_id, fsig, body, error, old, utc_now_iso)
+            except Exception:  # noqa: BLE001 — one piece never stops the others
+                logger.exception("Fit acceptance %s/%s (%s) on %s not recovered", character, item_id, fsig,
+                                 body or PLAIN_BODY_WORDS)
+                continue
+            if done:
+                recovered.append((character, item_id, body))
+                from app.core import garment_assembly
+                garment_assembly.schedule(character)
+    except Exception:  # noqa: BLE001 — a recovery, never a failure of the start
+        logger.exception("Recovering voided fit acceptances failed")
+    return recovered
+
+
+def _recover_one(character: str, item_id: str, fsig: str, body: str, error: str, old: Dict[str, Any],
+                 now) -> bool:
+    from contextlib import nullcontext
+    from app.core import garment_store as gs
+    guard = gs.run_item_lock(character, item_id) if not body else nullcontext()
+    with guard, _lock(character, body):
+        found = attempt_of(character, item_id, body)
+        if found is None:
+            return False
+        glb, record, _marks = found
+        attempt = record.get("attempt") or {}
+        sha = attempt.get("glb_sha256")
+        if (glb is None or record.get("fsig") != fsig or record.get("kind") != "clothing" or not sha
+                or _user_accepted_fit(character, item_id, fsig, body)
+                or not carries(refused_values(old["reasons"], old["gates"]),
+                               refused_values(attempt.get("reasons"), attempt.get("gates"), record.get("metrics")))
+                or _current(character, item_id, body, record, _profile(character, None))
+                or _file_sha(glb) != sha):
+            return False
+        failed = gs.garment_path(character, item_id, fsig, "failed", body=body)
+        failure = gs.read_record(failed) if failed.is_file() else {}
+        block = _carried_block({"at": now(), "error": error, "reasons": old["reasons"], "gates": old["gates"],
+                                "attempt_sha256": None, "body_id": body or str(record.get("body_id") or ""),
+                                "fit_version": None, "failure": failure or None, "slot": ""},
+                               record, sha=sha, error=str(attempt.get("error") or ""),
+                               reasons=list(attempt.get("reasons") or []), gates=attempt.get("gates"),
+                               how="recovered from the log")
+        _publish_accepted(character, item_id, fsig, body, glb, record, block, displace=True)
+    logger.info("Fit %s/%s (%s) on %s: the user's acceptance carried over to the refit (recovered from the log; "
+                "refused: %s)", character, item_id, fsig, body or PLAIN_BODY_WORDS, attempt.get("error"))
+    return True
 
 
 # --- Reading ------------------------------------------------------------------------------------------------
