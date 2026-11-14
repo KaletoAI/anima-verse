@@ -68,6 +68,7 @@ import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { FootwearSteps } from './FootwearSteps'
 import { Model3DViewer } from './Model3DViewer'
 import { FitBodySwitch } from './FitBodySwitch'
+import { FitSettings } from './FitSettings'
 import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
 import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
@@ -104,6 +105,8 @@ const STALE_LABELS: Record<string, string> = {
   base_changed: 'Base body changed',
   base_model_changed: 'Base model changed',
   fit_algorithm_updated: 'Fit algorithm updated',
+  // Ruling A47: the sleeves or the fit allowance changed (the fit re-runs on the CPU, 0 hub jobs).
+  fit_settings_changed: 'Fit settings changed',
   // Footwear (garment_footwear.info).
   item_image_changed: 'Item image changed',
   source_version_changed: 'Older source version',
@@ -167,7 +170,12 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'deep_push_share', label: 'Pushed > 3 cm', scale: 100, unit: '%', digits: 1 },
   { key: 'largest_component_share', label: 'Largest part', scale: 100, unit: '%', digits: 1 },
   { key: 'rigged_inside_share', label: 'Inside the body', scale: 100, unit: '%', digits: 2 },
+  // Ruling A47: stretched strips where the sleeves were laid onto the arm (gated).
+  { key: 'sleeve_shards', label: 'Stretched strips', scale: 1, unit: '', digits: 0 },
   // Reported, not gated.
+  { key: 'sleeve_skin_left_cm2', label: 'Skin in left sleeve', scale: 1, unit: 'cm²', digits: 1 },
+  { key: 'sleeve_skin_right_cm2', label: 'Skin in right sleeve', scale: 1, unit: 'cm²', digits: 1 },
+  { key: 'torso_tight_share', label: 'Trunk closer than 1.5 cm', scale: 100, unit: '%', digits: 0 },
   { key: 'rigged_clearance_p1_m', label: 'Clearance (p1)', scale: 1000, unit: 'mm', digits: 1 },
 ]
 
@@ -721,7 +729,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     body = (
       <div className="ga-garment-dialog-body">
         <div className="ga-garment-dialog-col">
-          {garment && garment.stale_reasons.length ? (
+          {/* A fit-settings change alone is shown (with its CPU-only Re-fit) in the fit settings beside the viewer. */}
+          {garment && garment.stale_reasons.some((r) => r !== 'fit_settings_changed') ? (
             <div style={{ ...ROW, gap: 8, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--warning, #d29922)' }}>
               <span style={WARN_STYLE} title={t('The previous mesh stays in use until the new one is fitted.')}>
                 {garment.stale_reasons.map((r) => t(STALE_LABELS[r] || r)).join(' · ')}
@@ -764,6 +773,10 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
               {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
             </>
           )}
+          {garment?.fit_settings ? (
+            <FitSettings character={character} itemId={itemId} info={garment.fit_settings} busy={busy}
+              feedback={feedback} onRun={onRun} onSaved={() => startPoll(0)} noRunAll={noRunAll} />
+          ) : null}
           <GateChips specs={FIT_CHIPS} record={fitRecord} limits={info.limits?.fit} />
           {fit?.low && fit.low.ok === false ? (
             <div className="ga-hint" style={WARN_STYLE}>

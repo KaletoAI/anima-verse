@@ -50,6 +50,8 @@ import {
 } from './garmentStyle'
 import type { AttemptTile, ChipSpec, GarmentLimits, GarmentRunBody, LightState } from './garmentStyle'
 import { MeshJobFetch } from './MeshJobFetch'
+import { StepLight } from './StepRows'
+import { armLightColour, armLightShort, armLightText } from './fitSettingsModel'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type {
@@ -583,6 +585,14 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
       <StepLabel garment={garment} step="fit" label={stepLabels.fit || 'Fit'} help={STEP_HELP.fit} />
       <div className="ga-step-grid-row" style={{ gridColumn: `span ${GARMENT_VIEWS.length}` }}>
         <GateIcon specs={fitChips} record={fitRecord} limits={limits.fit} extra={[fitText]} />
+        {garment?.fit_settings?.arm_light && garment.fit_settings.arm_light.state !== 'none' ? (
+          // Ruling A47: the arm light of the fit (skin seen inside the sleeves).
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
+            title={armLightText(garment.fit_settings.arm_light, garment.fit_settings.numbers, t)}>
+            <StepLight light={armLightColour(garment.fit_settings.arm_light)} />
+            {armLightShort(garment.fit_settings.arm_light, t)}
+          </span>
+        ) : null}
         <RunBadge mark={runMark(feedback, garment, order, 'fit')} />
         <span className="ga-hint" style={{ minWidth: 0 }}>{fitText}</span>
         <RunButton

@@ -1981,6 +1981,14 @@ class FootwearWidthCapRequest(BaseModel):
     cap: Any = None
 
 
+class GarmentFitSettingsRequest(BaseModel):
+    # Ruling A47: any of sleeves_left / sleeves_right / allowance — plain Any so garment_fit_settings.validate
+    # answers a 400 with its message (not a schema 422); a field left out is unchanged.
+    sleeves_left: Any = None
+    sleeves_right: Any = None
+    allowance: Any = None
+
+
 class PieceViewSourceRequest(BaseModel):
     # Ruling A46: "front" / "back" and "auto" / "generated" / "worn" — validated by garment_from_worn.set_choice.
     view: str
@@ -2703,6 +2711,40 @@ def set_character_garment_piece_view(character_name: str, item_id: str, body: Pi
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"piece_views": garments.piece_views_info(character_name, item_id, fsig)}
+
+
+@router.post("/{character_name}/garments/{item_id}/fit-settings")
+def set_character_garment_fit_settings(character_name: str, item_id: str, body: GarmentFitSettingsRequest,
+                                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A47 — the fit settings of an own-mesh clothing piece: ``sleeves_left`` / ``sleeves_right``
+    (auto / generated / wider / fitted) and ``allowance`` (auto / 0 / 3 / 6 / 10, percent of width), stored on the
+    character (``garment_fit_settings.set_fit_settings``). Runs nothing: a fit made with other settings reads due
+    and the next run refits it on the CPU (no hub job). ``{fit_settings}`` — ``garments.fit_settings_info`` now.
+    Admin-only. 404 for an item that is no clothing garment of the character, 400 for a bad value."""
+    from app.core import base_body, garment_fit_settings, garments
+    from app.core import garment_store as gs
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    try:
+        _item_, kind = garments._item(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if kind != "clothing":
+        raise HTTPException(status_code=404, detail="Only an own-mesh clothing piece has fit settings")
+    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    try:
+        saved = garment_fit_settings.set_fit_settings(character_name, item_id, changes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the character profile failed")
+    profile = get_character_profile(character_name) or {}
+    try:
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+    except ValueError:
+        fsig = ""
+    base = base_body.current_base(character_name, profile=profile) or ("", "")
+    return {"fit_settings": garments.fit_settings_info(character_name, item_id, fsig, base[1], profile)}
 
 
 def _fetch_garment_mesh_job(character_name: str, item_id: str, raw_job: str, *, footwear: bool) -> Dict[str, Any]:

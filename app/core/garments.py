@@ -593,7 +593,7 @@ def _mesh_done(character_name: str, item_id: str, fsig: str) -> bool:
 
 
 def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str,
-               method: str = "edit_chain") -> str:
+               method: str = "edit_chain", profile: Optional[Dict[str, Any]] = None) -> str:
     """``accepted`` (on the current base model, from the current prepared
     mesh — HairDeck: from its seed's hair, still stored unchanged under an
     accepted job; HAAR: from its seed's strands, still stored unchanged),
@@ -602,7 +602,8 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
     (accepted, but the prepared mesh / HairDeck hair / HAAR strands it was fitted from was
     replaced or removed) or ``missing``. Footwear (method ``shoe``):
     ``garment_footwear.fit_state`` on the base (``outdated`` there: the shoe
-    source mesh or its insole was replaced)."""
+    source mesh or its insole was replaced). A clothing fit made with other fit settings than the piece's current
+    ones (Ruling A47, ``garment_fit_settings``; ``profile`` read when not given) is ``stale`` too."""
     from app.core.garment_store import HAAR, HAIRDECK, SHOE, garment_path, read_record
     if method == SHOE:
         from app.core import garment_footwear
@@ -633,7 +634,22 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
     prepared = garment_path(character_name, item_id, fsig, "prepared")
     if (record.get("inputs") or {}).get("prepared_sha256") != _sha(prepared) or not prepared.is_file():
         return "outdated"
+    if _settings_changed(character_name, item_id, record, profile):
+        return "stale"  # Ruling A47: the fit settings changed — the chain re-runs the fit only (CPU)
     return "accepted"
+
+
+def _settings_changed(character_name: str, item_id: str, record: Dict[str, Any],
+                      profile: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether a clothing fit ``record`` was made with other fit settings than the piece's current ones
+    (``garment_fit_settings.changed``; other kinds have none)."""
+    from app.core import garment_fit_settings, garment_set
+    if str(record.get("kind") or "") != garment_set.CLOTHING:
+        return False
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    return garment_fit_settings.changed(record, profile, item_id)
 
 
 #: ``use_plans`` (Ruling A37): image views assumed as they would be after a "Use this" — ``{(step, view):
@@ -1319,12 +1335,14 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     limb_source = garment_source.limb_source(character_name, item_id, fsig) if frame.get("registered") else None
     # The compute (pure: bytes, masks, slots in — the fit out) runs on the refit pool when it is on
     # (``refit_pool``); everything around it reads and publishes here, under the caller's locks.
-    from app.core import refit_pool
+    from app.core import garment_fit_settings, refit_pool
+    # Ruling A47: the piece's fit settings (sleeves per side, the width allowance) — recorded with the fit.
+    fit_settings = garment_fit_settings.fit_settings(profile, item_id)
     result = refit_pool.run(garment_fit.fit_clothing, prepared_bytes, snapshot["unrigged"], snapshot["rigged"],
                             masks={"body": bald_mask, "garment": ghost_mask,
                                    "opening": garment_source.opening_masks(character_name, item_id, fsig)},
                             slots=slots,
-                            limb_source=limb_source)
+                            limb_source=limb_source, settings=fit_settings)
     limits = garment_fit.CLOTHING_GATES
     gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
              "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
@@ -1337,7 +1355,7 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
             "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                        "base_images": base_images,
                        "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
-                       "ghost_front_sha256": _sha(ghost)},
+                       "ghost_front_sha256": _sha(ghost), "fit_settings": fit_settings},
             **garment_source.fit_source(character_name, item_id, fsig, base_images), "frame": frame_,
             "created_at": utc_now_iso()}
 
@@ -1731,11 +1749,12 @@ def body_sha256(character_name: str, body_id: str) -> str:
 
 
 def body_fit_state(character_name: str, item_id: str, fsig: str, body_id: str, body_sha: str,
-                   base_fit_sha: str) -> str:
+                   base_fit_sha: str, profile: Optional[Dict[str, Any]] = None) -> str:
     """``accepted`` (on the body ``body_sha``, by the current fit algorithm,
     from the base fit ``base_fit_sha``), ``stale`` (made on other body
-    bytes, or by an older ``garment_fit.FIT_VERSION``), ``outdated``
-    (accepted on this body from another base fit) or ``missing``."""
+    bytes, or by an older ``garment_fit.FIT_VERSION``, or — clothing — with
+    other fit settings, Ruling A47), ``outdated`` (accepted on this body
+    from another base fit) or ``missing``."""
     from app.core.garment_fit import expected_fit_version
     from app.core.garment_store import garment_path, read_record
     fit = garment_path(character_name, item_id, fsig, "fit", body=body_id)
@@ -1745,6 +1764,8 @@ def body_fit_state(character_name: str, item_id: str, fsig: str, body_id: str, b
     if not body_sha or record.get("body_id") != body_id or record.get("body_sha256") != body_sha:
         return "stale"
     if record.get("fit_version") != expected_fit_version(record):
+        return "stale"
+    if _settings_changed(character_name, item_id, record, profile):
         return "stale"
     if not base_fit_sha or record.get("base_fit_sha256") != base_fit_sha:
         return "outdated"
@@ -1879,12 +1900,13 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             logger.warning("Garment fit %s/%s on %s: base fit unreadable for the limbs: %s", character_name,
                            item_id, body_id, e)
             limb_source = None
-        from app.core import refit_pool
+        from app.core import garment_fit_settings, refit_pool
+        fit_settings = garment_fit_settings.fit_settings(profile, item_id)
         result = refit_pool.run(garment_fit.fit_clothing, prepared_bytes, body["unrigged"], body["rigged"],
                                 masks={"body": body_mask, "garment": ghost_mask,
                                        "opening": garment_source.opening_masks(character_name, item_id, fsig)},
                                 slots=slots,
-                                limb_source=limb_source)
+                                limb_source=limb_source, settings=fit_settings)
         limits = garment_fit.CLOTHING_GATES
         gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
                  "limits": {key: [kind_, limit] for key, (kind_, limit, _label) in limits.items()}}
@@ -1893,7 +1915,8 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             # The state of the base fit it derives from (its own fsig), never the live worn state.
             "inputs": {**_kind_inputs(kind, character_name, profile, item_id, gs.fit_state(base_record)),
                        "prepared_sha256": hashlib.sha256(prepared_bytes).hexdigest(),
-                       "ghost_front_sha256": _sha(ghost), "body_front_sha256": _sha(front)},
+                       "ghost_front_sha256": _sha(ghost), "body_front_sha256": _sha(front),
+                       "fit_settings": fit_settings},
             "created_at": utc_now_iso()})
 
         def refuse(reasons: List[str], refusal: Dict[str, Any], marks: Optional[Dict[str, Any]] = None) -> None:
@@ -4415,6 +4438,48 @@ def _piece_view_due(view: str, source: str, made: Optional[str]) -> List[Dict[st
             {"step": "mesh", "jobs": costs["mesh"]}, {"step": "fit", "jobs": costs["fit"]}]
 
 
+def fit_settings_info(character_name: str, item_id: str, fsig: str, base_model_sha: str,
+                      profile: Dict[str, Any]) -> Dict[str, Any]:
+    """Ruling A47 — the fit settings of a clothing piece for the Wardrobe dialog: ``{settings (current), recorded
+    (those of the shown fit, None without one), due (a fit exists and was made with other settings: the next run
+    refits on the CPU, no hub job), sleeves {left, right: {setting, applied, reason, why, numbers}}, allowance
+    {setting, factor, trigger, numbers, attempts, inherited}, arm_light {state, sides, worst_cm2}, numbers
+    {deep_push_share, torso_tight_share, sleeve_shards, sleeve_skin_left_cm2, sleeve_skin_right_cm2, scale},
+    accepted (the shown fit passed its gates), built_at}``. The shown fit: the current fingerprint's fit on the
+    base model, else its newest refused attempt (``fit_attempts``)."""
+    from app.core import fit_attempts, garment_fit, garment_fit_settings, garment_store as gs
+    current = garment_fit_settings.fit_settings(profile, item_id)
+    record: Dict[str, Any] = {}
+    accepted = False
+    if fsig:
+        record = gs.read_record(gs.garment_path(character_name, item_id, fsig, "fit").with_suffix(".json"))
+        accepted = record.get("accepted") is True
+    if not record:
+        found = fit_attempts.attempt_of(character_name, item_id, "")
+        if found and found[1].get("fsig") == fsig:
+            record = found[1]
+    report = record.get("report") or {}
+    metrics = record.get("metrics") or {}
+    retry = report.get("scale_retry") or {}
+    numbers = {k: metrics.get(k) for k in ("deep_push_share", "torso_tight_share", "sleeve_shards",
+                                            "sleeve_skin_left_cm2", "sleeve_skin_right_cm2")}
+    numbers["scale"] = metrics.get("scale_retry")
+    made_with = garment_fit_settings.recorded(record) if record else None
+    return {
+        "settings": current, "recorded": made_with,
+        "due": bool(record) and made_with != current,
+        "sleeves": (report.get("transfer") or {}).get("sleeves") or {},
+        "allowance": retry.get("allowance"),
+        "arm_light": report.get("arm_light"),
+        "numbers": numbers, "accepted": accepted,
+        "built_at": record.get("created_at") or ((record.get("attempt") or {}).get("at") if record else None),
+        "choices": {"sleeves": list(garment_fit.SLEEVE_CHOICES), "allowance": list(garment_fit.ALLOWANCE_CHOICES)},
+        "limits": {"red_cm2": garment_fit.SKIN_RED_CM2, "deep": garment_fit.ALLOWANCE_DEEP,
+                   "tight": garment_fit.ALLOWANCE_TIGHT, "tight_m": garment_fit.TORSO_TIGHT_M,
+                   "max_factor": max(garment_fit.SCALE_RETRY_STEPS)},
+    }
+
+
 def piece_views_info(character_name: str, item_id: str, fsig: str,
                      item: Optional[Dict[str, Any]] = None, *,
                      checking: Optional[List[Dict[str, str]]] = None) -> Optional[Dict[str, Dict[str, Any]]]:
@@ -4565,6 +4630,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
             from app.core.garment_fit import expected_fit_version
             if record.get("fit_version") != expected_fit_version(record):
                 stale.append("fit_algorithm_updated")
+            if _settings_changed(character_name, item_id, record, profile):
+                stale.append("fit_settings_changed")
             if method == gs.HAIRDECK and gs.fit_method(record) == gs.HAIRDECK:
                 if used.get("hsig") != hsig:
                     stale.append("hairdeck_changed")
@@ -4636,6 +4703,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         # Ruling A46: where each piece-only view comes from (the setting, the reason, what is due).
         "piece_views": (piece_views_info(character_name, item_id, fsig, _item_, checking=checking)
                         if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
+        # Ruling A47: sleeves per side, the width allowance, the arm light of the shown fit.
+        "fit_settings": (fit_settings_info(character_name, item_id, fsig, base[1], profile)
+                         if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
         # Ruling A46b: the accepted images being re-gated under the current gate version now ([{step, view}]).
         "regate_checking": checking,
         "body": body, "body_id": body["body_id"] if body else None})

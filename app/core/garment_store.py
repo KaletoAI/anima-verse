@@ -1161,6 +1161,14 @@ def end(character_name: str, item_id: str, step: str, error: Optional[str] = Non
             _failed.pop(key, None)
 
 
+def forget_failed_step(character_name: str, item_id: str, step: str) -> None:
+    """Drop the item's in-memory failure when it is one of ``step`` (an input of that step changed: the refusal
+    no longer speaks for the next run — Ruling A47's fit settings)."""
+    with _status_lock:
+        if (_failed.get((character_name, item_id)) or {}).get("step") == step:
+            _failed.pop((character_name, item_id), None)
+
+
 def status(character_name: str, item_id: str) -> Dict[str, Any]:
     """``{running_step, started_at, failed: {step, error, gates, failed_at} | None}``."""
     key = (character_name, item_id)

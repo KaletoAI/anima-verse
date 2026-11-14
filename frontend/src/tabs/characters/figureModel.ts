@@ -10,6 +10,7 @@
  * Build (one per character) makes what is missing. Returned strings are
  * English; the components put them through `t()`.
  */
+import type { ArmLight } from './fitSettingsModel'
 import type { Light } from './hairstylesModel'
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
@@ -544,6 +545,8 @@ export interface FitBody {
   variant?: '' | 'derived'
   /** The figure stands on this body now. */
   current: boolean
+  /** Ruling A47: skin seen inside the sleeves of what is shown (`garment_fit.arm_light`), null before it existed. */
+  arm_light?: ArmLight | null
 }
 
 /** The body switch is worth showing when there is more than the plain body's accepted fit to see. */

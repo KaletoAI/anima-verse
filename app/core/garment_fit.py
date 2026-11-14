@@ -176,8 +176,14 @@ SIDE_DEEP_M = 0.03
 #: (``center_sleeves``) and their cuffs ride the arm (``sleeve_cuffs``; Kira's blazer: the forearm halves no longer
 #: stay at the hips), the garment's inside seen through an opening is left out (``opening_lining``; the blazer's V
 #: stays open), a native fit's sleeves are gated (``garment_source.check_sleeves``).
+#: clothing 11 (2026-11-14, Ruling A47 — one CPU refit of every clothing fit, no hub job): per piece and side the
+#: sleeves are placed by the piece's fit settings (``place_sleeves``; Auto lays a sleeve that sits off its arm or
+#: inside it onto the arm at 12 mm clearance — Kai's jacket on ``base634402e5``: skin seen in the sleeves 93 / 115 ->
+#: 2 / 1 cm2), the stretched strips of the placement are gated (``sleeve_shards``), an accepted fit that lies tight
+#: may widen by the width allowance (``scale_retry``, never beyond 1.08), the fit records its arm light
+#: (``arm_light``) and its settings (``inputs.fit_settings``, ``garment_fit_settings``).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 10, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 11, "footwear": FOOTWEAR_FIT_VERSION}
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -309,12 +315,22 @@ SKIRT_CENTRE_M = 0.02
 # ``accept/A8c``): jacket base 0.1601 / 0.0296 / 0.0493 (437 projected, 0 unreached), jacket obf 0.0352 / 0.0118 /
 # 0.0009; the others unchanged.
 DEEP_PUSH_M = 0.03
+#: Ruling A47 — a SHARD: a triangle of the region the sleeve placement moved whose longest edge is longer than
+#: ``SLEEVE_SHARD_M`` and more than ``SLEEVE_SHARD_RATIO`` times its pre-push length — the stretched strips the spike
+#: saw under the armpit (``sleeve_shards``). Kai's jacket ``item_555a7a01`` on ``base634402e5``: the push-out tearing
+#: the sleeves as generated leaves 243 such triangles in that region, laid onto the arm 0 - 2.
+SLEEVE_SHARD_M = 0.03
+SLEEVE_SHARD_RATIO = 3.0
+SLEEVE_SHARDS_MAX = 6
+
 CLOTHING_GATES = {
     "max_push_m": ("max", 0.10, "largest push-out"),
     "deep_push_share": ("max", 0.12, "share of vertices pushed out more than 3 cm"),
     "largest_component_share": ("min", MESH_MIN_COMPONENT_SHARE, "area share of the largest component"),
     "rigged_inside_share": ("max", 0.01, "share of vertices inside the rigged body after the transfer"),
     "rigged_deep_push_share": ("max", 0.12, "share of vertices pushed out more than 3 cm on the rigged body"),
+    # Ruling A47: no stretched strip in the sleeves placed onto the arm (``sleeve_shards``; 0 without such a sleeve).
+    "sleeve_shards": ("max", SLEEVE_SHARDS_MAX, "stretched strips where the sleeves were placed onto the arm"),
 }
 
 # Scale retry (2026-11-10): a clothing fit refused ONLY because the piece is too small for the body — every failing
@@ -1168,18 +1184,19 @@ def _ring_centre(a: np.ndarray, b: np.ndarray, closed: bool) -> Optional[np.ndar
     return c
 
 
-def center_sleeves(X: np.ndarray, Wg: np.ndarray, body: BodyMesh, *, adjacency=None
-                   ) -> Tuple[np.ndarray, Dict[str, Any]]:
+def center_sleeves(X: np.ndarray, Wg: np.ndarray, body: BodyMesh, *, adjacency=None,
+                   sides: Sequence[str] = ("left", "right")) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Re-centre the sleeves of ``X`` (rigged space; ``Wg`` the transfer's weights over ``body``'s joints) on the
     arms of the rigged ``body`` (block above). ``(X, report {side: {stations, offset_max_m, shift_max_m}})``;
-    an arm without sleeve vertices is left alone and not reported."""
+    an arm without sleeve vertices is left alone and not reported. ``sides``: the arms to re-centre (Ruling A47:
+    a sleeve laid onto its arm, ``fit_sleeve``, is not re-centred)."""
     X = np.asarray(X, np.float64)
     P = np.asarray(body.positions, np.float64)
     Wb = dense_weights(body)
     frames = limb_frames(body)
     D = np.zeros_like(X)
     report: Dict[str, Any] = {}
-    for side in ("left", "right"):
+    for side in sides:
         frame = frames.get(f"{side}_arm")
         cols = _arm_columns(body.joint_names, side)
         if frame is None or not cols:
@@ -1236,11 +1253,610 @@ def center_sleeves(X: np.ndarray, Wg: np.ndarray, body: BodyMesh, *, adjacency=N
     return X + D, report
 
 
+# --- sleeves laid onto the arm (Ruling A47) ----------------------------------------------------------------------------
+# A generated sleeve may hang 8 - 17 degrees steeper than the arm, up to 8 cm toward the body at the wrist, and be no
+# wider than the arm (spike 2026-11-14, ``a47-spike.md``: placed on the A-pose body, Kai's jacket / Kira's blazer —
+# sleeve radius minus arm radius after re-centring p50 -0.2 .. +0.1 cm, 0.37 - 0.79 of the upper-arm sleeve inside
+# the arm). The push-out then shoves the walls inside the arm out sideways and the front of the sleeve tears at the
+# elbow and forearm (skin seen inside the sleeves, front + back: Kai 268 cm2, Kira 24 cm2); re-centring after the push
+# (``center_sleeves``) comes too late, widening about the arm axis by 10 / 20 % leaves the holes.
+#
+# "Fitted to the arm" (``fit_sleeve``): every sleeve vertex of the PRE-PUSH placement, carried into the bind space by
+# the transfer's own skinning, is taken in the arm's cylindrical coordinates — its arc length along the arm chain, its
+# angle and distance around the sleeve's OWN centre line (per ``SLEEVE_STATION_M`` station the mid-range centre of
+# its ring) — and rebuilt around the rigged arm: angle kept, radius = the arm's own radius in that direction
+# (``_ArmSections``: per station x ``SLEEVE_SECTORS`` directions the median distance of the arm's skin vertices from
+# the arm's centre) + ``SLEEVE_FIT_CLEAR_M`` + ``SLEEVE_FIT_DETAIL`` of the vertex's own radial detail (its distance
+# minus the ring's median; the folds). The change blends in along the arm between ``SLEEVE_FIT_BLEND_M`` (from the
+# shoulder joint) and with the vertex's share of the arm in the transfer's weights; the displacement is then carried
+# harmonically into the garment within ``SLEEVE_BAND_M`` of the moved vertices (the armhole and the side seam: the
+# spike's straight blend left stretched shards under the armpit where it met torso vertices that did not move), and
+# the shards still left against the pre-push placement (``sleeve_shards``) are relaxed — again after the rigged
+# clearance pass, which may draw new ones; the rest is gated (``CLOTHING_GATES`` ``sleeve_shards``). The texture
+# and the UVs are the generator's. Measured in the spike on Kai's jacket / Kira's blazer: skin seen in the sleeves
+# 268 -> 30 cm2 and 24 -> 7 cm2; posed (arm down 60 deg, elbow 90 deg) inside share 0.032 / 0.011 against 0.028 /
+# 0.008 as generated; 6 mm clearance went inside more often posed (0.052 / 0.027).
+#
+# The choice per sleeve (``SLEEVE_CHOICES``, the piece's fit settings): "generated" = as generated, re-centred
+# (``center_sleeves``, today's fit); "wider" = that, then ``SLEEVE_WIDER`` radially about the arm's centre;
+# "fitted" = ``fit_sleeve``; "auto" = "fitted" when the measured sleeve (``measure_sleeve``, on the pre-push
+# placement) sits more than ``SLEEVE_AUTO_OFFSET_M`` off the arm's centre at a station beyond the armhole, its median
+# room around the arm is below ``SLEEVE_AUTO_CLEAR_M``, or more than ``SLEEVE_AUTO_INSIDE`` of it lies inside the arm —
+# else "generated" (a loose or puffy sleeve keeps its volume).
+SLEEVE_CHOICES: Tuple[str, ...] = ("auto", "generated", "wider", "fitted")
+SLEEVE_FIT_CLEAR_M = 0.012
+SLEEVE_FIT_DETAIL = 0.3
+SLEEVE_FIT_BLEND_M = (0.03, 0.10)
+SLEEVE_WIDER = 1.2
+SLEEVE_AUTO_OFFSET_M = 0.02
+SLEEVE_AUTO_CLEAR_M = 0.012
+SLEEVE_AUTO_INSIDE = 0.20
+SLEEVE_SECTORS = 16
+SLEEVE_BAND_M = 0.06
+SLEEVE_BAND_PASSES = 150
+#: The area ratio beyond which a triangle of the moved region counts as stretched (reported, ``sleeve_stretch``).
+SLEEVE_STRETCH_RATIO = 3.0
+SLEEVE_RELAX_PASSES = 10
+SLEEVE_RELAX_ROUNDS = 6
+#: Clearance (metres) below which a torso vertex of the fitted piece lies tight (``torso_tight_share``).
+TORSO_TIGHT_M = 0.015
+TORSO_MIN_SHARE = 0.10
+
+
+def _chain_param(Y: np.ndarray, pts: np.ndarray, reference) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``(s, seg, a, b)`` of the points ``Y`` against the polyline ``pts`` like ``_chain_coords``, but ``s`` is the
+    UNCLAMPED arc length (``cum[seg]`` + the position along that segment), so ``_chain_point`` rebuilds ``Y`` exactly."""
+    nseg = len(pts) - 1
+    frames = [_segment_frame(pts[i], pts[i + 1], reference) for i in range(nseg)]
+    cum = np.concatenate([[0.0], np.cumsum([f[3] for f in frames])])
+    best = np.full(len(Y), np.inf)
+    s, a, b = np.zeros(len(Y)), np.zeros(len(Y)), np.zeros(len(Y))
+    seg = np.zeros(len(Y), np.int64)
+    for i, (u, v, w, length) in enumerate(frames):
+        rel = Y - pts[i]
+        t = rel @ u
+        tc = np.clip(t, -np.inf if i == 0 else 0.0, np.inf if i == nseg - 1 else length)
+        d = np.linalg.norm(rel - tc[:, None] * u, axis=1)
+        m = d < best
+        best[m], seg[m], s[m] = d[m], i, cum[i] + t[m]
+        perp = rel[m] - t[m, None] * u
+        a[m], b[m] = perp @ v, perp @ w
+    return s, seg, a, b
+
+
+def _chain_point(pts: np.ndarray, reference, s: np.ndarray, seg: np.ndarray, a: np.ndarray, b: np.ndarray
+                 ) -> np.ndarray:
+    """The inverse of ``_chain_param``."""
+    nseg = len(pts) - 1
+    frames = [_segment_frame(pts[i], pts[i + 1], reference) for i in range(nseg)]
+    cum = np.concatenate([[0.0], np.cumsum([f[3] for f in frames])])
+    U = np.stack([frames[j][0] for j in seg])
+    V = np.stack([frames[j][1] for j in seg])
+    Wv = np.stack([frames[j][2] for j in seg])
+    return np.asarray(pts, np.float64)[seg] + (s - cum[seg])[:, None] * U + a[:, None] * V + b[:, None] * Wv
+
+
+def _fill_stations(values: np.ndarray, ok: np.ndarray) -> Optional[np.ndarray]:
+    """Rows of ``values`` (stations) without ``ok`` interpolated from the others along the station index (held at
+    the ends), then smoothed 1-2-1; None without any ``ok`` row."""
+    if not ok.any():
+        return None
+    idx = np.arange(len(values))
+    flat = values.reshape(len(values), -1)
+    out = np.stack([np.interp(idx, idx[ok], flat[ok, j]) for j in range(flat.shape[1])], 1)
+    padded = np.concatenate([out[:1], out, out[-1:]])
+    out = 0.25 * padded[:-2] + 0.5 * padded[1:-1] + 0.25 * padded[2:]
+    return out.reshape(values.shape)
+
+
+def _station_value(table: np.ndarray, s: np.ndarray) -> np.ndarray:
+    """Linear interpolation of a per-station table (station ``i`` centred at ``(i + 0.5) * SLEEVE_STATION_M``,
+    held beyond both ends) at the arc lengths ``s``."""
+    x = (np.asarray(s, np.float64) / SLEEVE_STATION_M) - 0.5
+    i0 = np.clip(np.floor(x).astype(np.int64), 0, len(table) - 1)
+    i1 = np.clip(i0 + 1, 0, len(table) - 1)
+    f = np.clip(x - np.floor(x), 0.0, 1.0)
+    f = np.where(x < 0, 0.0, np.where(x > len(table) - 1, 0.0, f))
+    shape = (-1,) + (1,) * (table.ndim - 1)
+    return table[i0] * (1 - f).reshape(shape) + table[i1] * f.reshape(shape)
+
+
+@dataclass
+class _ArmSections:
+    """One rigged arm in cylindrical stations: the chain (``pts``, ``reference``, segment lengths ``cum``), per
+    station (0 at the shoulder joint, ``SLEEVE_STATION_M`` apart) the arm's centre in the plane across the chain and
+    its radius in ``SLEEVE_SECTORS`` directions around that centre."""
+    pts: np.ndarray
+    reference: Any
+    cum: np.ndarray
+    centres: np.ndarray          # (n, 2)
+    radii: np.ndarray            # (n, SLEEVE_SECTORS)
+
+    def centre(self, s: np.ndarray) -> np.ndarray:
+        return _station_value(self.centres, s)
+
+    def radius(self, s: np.ndarray, theta: np.ndarray) -> np.ndarray:
+        """The arm's radius at arc length ``s`` toward ``theta`` (bilinear over stations x sectors)."""
+        table = _station_value(self.radii, s)                     # (m, sectors)
+        x = (np.asarray(theta, np.float64) + np.pi) / (2 * np.pi) * SLEEVE_SECTORS - 0.5
+        j0 = np.floor(x).astype(np.int64) % SLEEVE_SECTORS
+        j1 = (j0 + 1) % SLEEVE_SECTORS
+        f = x - np.floor(x)
+        rows = np.arange(len(table))
+        return table[rows, j0] * (1 - f) + table[rows, j1] * f
+
+    def where(self, s: float) -> str:
+        """The part of the arm at arc length ``s``: ``upper arm``, ``forearm`` or ``wrist`` (beyond the wrist joint)."""
+        if len(self.cum) > 1 and s < self.cum[1]:
+            return "upper arm"
+        if len(self.cum) > 2 and s < self.cum[2]:
+            return "forearm"
+        return "wrist"
+
+
+def arm_sections(body: BodyMesh, side: str, *, frames: Optional[Dict[str, Dict[str, Any]]] = None,
+                 Wb: Optional[np.ndarray] = None) -> Optional[_ArmSections]:
+    """``_ArmSections`` of the ``side`` arm of the rigged ``body`` from its skin vertices dominated by that arm
+    (arm-chain weight share > ``SLEEVE_ARM_SHARE``) from the shoulder joint outward; None without the arm chain."""
+    frames = limb_frames(body) if frames is None else frames
+    frame = frames.get(f"{side}_arm")
+    cols = _arm_columns(body.joint_names, side)
+    if frame is None or not cols:
+        return None
+    Wb = dense_weights(body) if Wb is None else Wb
+    P = np.asarray(body.positions, np.float64)
+    arm = Wb[:, cols].sum(1) > SLEEVE_ARM_SHARE
+    pts = np.asarray(frame["points"], np.float64)
+    ref = frame["reference"]
+    s, _seg, a, b = _chain_param(P[arm], pts, ref)
+    keep = s >= 0
+    s, a, b = s[keep], a[keep], b[keep]
+    if len(s) < SLEEVE_RING_MIN:
+        return None
+    n = int(s.max() // SLEEVE_STATION_M) + 1
+    k = np.clip((s // SLEEVE_STATION_M).astype(int), 0, n - 1)
+    centres = np.full((n, 2), np.nan)
+    radii = np.full((n, SLEEVE_SECTORS), np.nan)
+    for i in range(n):
+        m = k == i
+        c = _ring_centre(a[m], b[m], False)
+        if c is None:
+            continue
+        centres[i] = c
+        theta = np.arctan2(b[m] - c[1], a[m] - c[0])
+        r = np.hypot(a[m] - c[0], b[m] - c[1])
+        sector = ((theta + np.pi) / (2 * np.pi) * SLEEVE_SECTORS).astype(int) % SLEEVE_SECTORS
+        row = np.full(SLEEVE_SECTORS, np.nan)
+        for j in range(SLEEVE_SECTORS):
+            if (sector == j).any():
+                row[j] = float(np.median(r[sector == j]))
+        okj = ~np.isnan(row)
+        if okj.sum() >= 3:
+            idx = np.arange(SLEEVE_SECTORS)
+            radii[i] = np.interp(idx, idx[okj], row[okj], period=SLEEVE_SECTORS)
+    okc = ~np.isnan(centres[:, 0])
+    okr = ~np.isnan(radii[:, 0])
+    centres_f, radii_f = _fill_stations(centres, okc), _fill_stations(radii, okr)
+    if centres_f is None or radii_f is None:
+        return None
+    segs = [_segment_frame(pts[i], pts[i + 1], ref)[3] for i in range(len(pts) - 1)]
+    return _ArmSections(pts=pts, reference=ref, cum=np.concatenate([[0.0], np.cumsum(segs)]),
+                        centres=centres_f, radii=radii_f)
+
+
+def _sleeve_rings(s: np.ndarray, a: np.ndarray, b: np.ndarray, ring: np.ndarray, n: int
+                  ) -> Tuple[Optional[np.ndarray], np.ndarray, np.ndarray]:
+    """The sleeve's own centre line per station (closed rings only, the rest interpolated, smoothed), which stations
+    had a closed ring, and the ring's median radius about that centre per station -> ``(centres, closed, radius)``;
+    centres None without a closed ring."""
+    k = np.clip((s // SLEEVE_STATION_M).astype(int), 0, n - 1)
+    centres = np.full((n, 2), np.nan)
+    for i in range(n):
+        m = ring & (k == i) & (s >= 0)
+        c = _ring_centre(a[m], b[m], True)
+        if c is not None:
+            centres[i] = c
+    closed = ~np.isnan(centres[:, 0])
+    filled = _fill_stations(centres, closed)
+    if filled is None:
+        return None, closed, np.zeros(n)
+    c = _station_value(filled, s)
+    r = np.hypot(a - c[:, 0], b - c[:, 1])
+    radius = np.full(n, np.nan)
+    for i in range(n):
+        m = ring & (k == i)
+        if m.sum() >= 3:
+            radius[i] = float(np.median(r[m]))
+    rf = _fill_stations(radius[:, None], ~np.isnan(radius))
+    return filled, closed, (rf[:, 0] if rf is not None else np.zeros(n))
+
+
+def measure_sleeve(Xs: np.ndarray, share: np.ndarray, arm: _ArmSections, inside: Optional[np.ndarray] = None
+                   ) -> Optional[Dict[str, Any]]:
+    """How one sleeve sits on its arm (block above): ``Xs`` the garment in the bind space (the pre-push placement),
+    ``share`` per vertex the transfer weight on that arm's chain, ``inside`` per vertex whether it lies inside the
+    body. Over the sleeve's ring (``share`` > ``SLEEVE_ARM_SHARE``) beyond the armhole (stations from
+    ``SLEEVE_FIT_BLEND_M[1]`` on, the cuff's last station left out): ``{offset_max_m, offset_where (upper arm /
+    forearm / wrist), clear_p10_m, clear_p50_m, clear_p90_m (its distance from its own centre minus the arm's
+    radius in that direction), inside_share, stations, vertices}``. None without a closed ring there."""
+    rows = np.nonzero(share > 1e-4)[0]
+    ring_all = share[rows] > SLEEVE_ARM_SHARE
+    if int(ring_all.sum()) < SLEEVE_RING_MIN:
+        return None
+    s, _seg, a, b = _chain_param(Xs[rows], arm.pts, arm.reference)
+    top = float(s[ring_all].max())
+    n = max(int(top // SLEEVE_STATION_M) + 1, 1)
+    centres, closed, _radius = _sleeve_rings(s, a, b, ring_all, n)
+    if centres is None:
+        return None
+    first = int(np.ceil(SLEEVE_FIT_BLEND_M[1] / SLEEVE_STATION_M))
+    last = max(int(np.nonzero(closed)[0].max()) if closed.any() else -1, first)
+    stations = [i for i in range(first, last) if closed[i]]
+    if not stations:
+        return None
+    centre_s = (np.asarray(stations) + 0.5) * SLEEVE_STATION_M
+    offset = np.linalg.norm(centres[stations] - arm.centre(centre_s), axis=1)
+    worst = int(offset.argmax())
+    sel = ring_all & (s >= first * SLEEVE_STATION_M) & (s < last * SLEEVE_STATION_M)
+    c = _station_value(centres, s[sel])
+    theta = np.arctan2(b[sel] - c[:, 1], a[sel] - c[:, 0])
+    room = np.hypot(a[sel] - c[:, 0], b[sel] - c[:, 1]) - arm.radius(s[sel], theta)
+    p10, p50, p90 = (np.percentile(room, (10, 50, 90)) if len(room) else (np.nan,) * 3)
+    inner = float(np.asarray(inside)[rows[sel]].mean()) if inside is not None and sel.any() else float("nan")
+    return {"offset_max_m": round(float(offset[worst]), 4), "offset_where": arm.where(float(centre_s[worst])),
+            "clear_p10_m": round(float(p10), 4), "clear_p50_m": round(float(p50), 4),
+            "clear_p90_m": round(float(p90), 4), "inside_share": round(inner, 4),
+            "stations": len(stations), "vertices": int(sel.sum())}
+
+
+def auto_sleeve(numbers: Optional[Dict[str, Any]]) -> Tuple[str, List[Dict[str, Any]]]:
+    """The Auto choice for one measured sleeve (``measure_sleeve``) -> ``(choice, why)``: "fitted" when any rule of
+    the block above holds, each that holds in ``why`` (``{rule: offset, cm, where}`` / ``{rule: room, cm}`` /
+    ``{rule: inside, percent}``); else "generated" with the numbers that kept it (``rule: fits``). No numbers (no
+    sleeve measured): "generated", ``why`` empty."""
+    if not numbers:
+        return "generated", []
+    why: List[Dict[str, Any]] = []
+    if numbers["offset_max_m"] > SLEEVE_AUTO_OFFSET_M:
+        why.append({"rule": "offset", "cm": round(numbers["offset_max_m"] * 100, 1), "where": numbers["offset_where"]})
+    if math.isfinite(numbers["clear_p50_m"]) and numbers["clear_p50_m"] < SLEEVE_AUTO_CLEAR_M:
+        why.append({"rule": "room", "cm": round(numbers["clear_p50_m"] * 100, 1)})
+    if math.isfinite(numbers["inside_share"]) and numbers["inside_share"] > SLEEVE_AUTO_INSIDE:
+        why.append({"rule": "inside", "percent": int(round(numbers["inside_share"] * 100))})
+    if why:
+        return "fitted", why
+    return "generated", [{"rule": "fits", "cm": round(numbers["offset_max_m"] * 100, 1),
+                          "room_cm": round(numbers["clear_p50_m"] * 100, 1)}]
+
+
+def sleeve_reason_text(choice: str, why: List[Dict[str, Any]]) -> str:
+    """The plain-words reason of an Auto choice (``auto_sleeve``) — the English record text; the Wardrobe composes
+    the same words from ``why`` through its translation layer."""
+    parts = []
+    for item in why:
+        if item["rule"] == "offset":
+            parts.append(f"the sleeve sits {item['cm']:g} cm off the {item['where']}")
+        elif item["rule"] == "room":
+            parts.append("it is as thin as the arm" if item["cm"] <= 0.3
+                         else f"it is only {item['cm']:g} cm wider than the arm")
+        elif item["rule"] == "inside":
+            parts.append(f"{item['percent']} % of it lies inside the arm")
+        elif item["rule"] == "fits":
+            parts.append(f"the sleeve sits on the arm ({item['cm']:g} cm off its centre, "
+                         f"{item['room_cm']:g} cm of room)")
+    label = {"fitted": "Fitted to the arm", "generated": "As generated"}.get(choice, choice)
+    return f"Auto -> {label}" + (": " + " and ".join(parts) if parts else "")
+
+
+def fit_sleeve(X: np.ndarray, Xs: np.ndarray, share: np.ndarray, arm: _ArmSections) -> np.ndarray:
+    """The displacement (rows of ``X``) that lays one sleeve onto its arm (block above): ``X`` the garment in the
+    bind space now, ``Xs`` the same vertices as placed before the push (their sleeve shape), ``share`` per vertex
+    the transfer weight on that arm's chain. Rows of vertices off the sleeve are zero; the blend
+    (``SLEEVE_FIT_BLEND_M`` x ``share``) is in it, the band smoothing (``blend_sleeves``) is not."""
+    D = np.zeros_like(X)
+    rows = np.nonzero(share > 1e-4)[0]
+    ring = share[rows] > SLEEVE_ARM_SHARE
+    if int(ring.sum()) < SLEEVE_RING_MIN:
+        return D
+    s, seg, a, b = _chain_param(Xs[rows], arm.pts, arm.reference)
+    n = max(int(max(float(s[ring].max()), 0.0) // SLEEVE_STATION_M) + 1, 1)
+    centres, _closed, radius = _sleeve_rings(s, a, b, ring, n)
+    if centres is None:
+        return D
+    c = _station_value(centres, s)
+    theta = np.arctan2(b - c[:, 1], a - c[:, 0])
+    detail = np.hypot(a - c[:, 0], b - c[:, 1]) - _station_value(radius, s)
+    r = (arm.radius(s, theta) + SLEEVE_FIT_CLEAR_M
+         + np.maximum(SLEEVE_FIT_DETAIL * detail, -0.5 * SLEEVE_FIT_CLEAR_M))
+    ca = arm.centre(s)
+    T = _chain_point(arm.pts, arm.reference, s, seg, ca[:, 0] + r * np.cos(theta), ca[:, 1] + r * np.sin(theta))
+    lo, hi = SLEEVE_FIT_BLEND_M
+    beta = np.clip((s - lo) / (hi - lo), 0.0, 1.0) * np.clip(share[rows], 0.0, 1.0)
+    D[rows] = beta[:, None] * (T - X[rows])
+    return D
+
+
+def widen_sleeve(X: np.ndarray, share: np.ndarray, arm: _ArmSections, scale: float = SLEEVE_WIDER) -> np.ndarray:
+    """The displacement that widens one (re-centred) sleeve by ``scale`` radially about its arm's centre, blended in
+    like ``fit_sleeve``."""
+    D = np.zeros_like(X)
+    rows = np.nonzero(share > 1e-4)[0]
+    if not len(rows):
+        return D
+    s, seg, a, b = _chain_param(X[rows], arm.pts, arm.reference)
+    ca = arm.centre(s)
+    T = _chain_point(arm.pts, arm.reference, s, seg, ca[:, 0] + scale * (a - ca[:, 0]),
+                     ca[:, 1] + scale * (b - ca[:, 1]))
+    lo, hi = SLEEVE_FIT_BLEND_M
+    beta = np.clip((s - lo) / (hi - lo), 0.0, 1.0) * np.clip(share[rows], 0.0, 1.0)
+    D[rows] = beta[:, None] * (T - X[rows])
+    return D
+
+
+def _longest_edge(P: np.ndarray, F: np.ndarray) -> np.ndarray:
+    return np.maximum.reduce([np.linalg.norm(P[F[:, i]] - P[F[:, (i + 1) % 3]], axis=1) for i in range(3)])
+
+
+def sleeve_shards(X: np.ndarray, X0: np.ndarray, faces, region: np.ndarray) -> np.ndarray:
+    """Per face of ``faces``: a shard (block above) — it touches ``region``, its longest edge in ``X`` exceeds
+    ``SLEEVE_SHARD_M`` and ``SLEEVE_SHARD_RATIO`` times its longest edge in ``X0`` (the pre-push placement)."""
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    e = _longest_edge(X, F)
+    return (np.asarray(region, bool)[F].any(1) & (e > SLEEVE_SHARD_M)
+            & (e > SLEEVE_SHARD_RATIO * np.maximum(_longest_edge(X0, F), 1e-9)))
+
+
+def relax_sleeve_region(Y: np.ndarray, X0: np.ndarray, faces, adjacency, region: np.ndarray) -> int:
+    """Relax (in place) the vertices of the shards of ``region`` (``sleeve_shards`` against ``X0``):
+    ``SLEEVE_RELAX_PASSES`` Laplacian passes, the shards found anew for up to ``SLEEVE_RELAX_ROUNDS`` rounds -> the
+    number of vertices relaxed. Only the shards' own vertices move — relaxing every triangle whose AREA grew (the
+    crushed folds of the source opened up) or a ring around them pulled the neighbours long (Kai's jacket: 10 shards
+    before, 24 - 34 after)."""
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    A, deg = adjacency
+    loose_all = np.zeros(len(Y), bool)
+    for _ in range(SLEEVE_RELAX_ROUNDS):
+        bad = sleeve_shards(Y, X0, F, region)
+        if not bad.any():
+            break
+        loose = np.zeros(len(Y), bool)
+        loose[F[bad].ravel()] = True
+        loose_all |= loose
+        for _ in range(SLEEVE_RELAX_PASSES):
+            Y[loose] = 0.5 * Y[loose] + 0.5 * ((A @ Y) / deg)[loose]
+    return int(loose_all.sum())
+
+
+def blend_sleeves(X: np.ndarray, D: np.ndarray, Xs: np.ndarray, faces, adjacency
+                  ) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray]:
+    """Apply the sleeve displacement ``D`` (``fit_sleeve`` / ``widen_sleeve`` rows) to ``X`` with its edge carried
+    into the garment (block above): the moved vertices keep their (blended) displacement, every other vertex within
+    ``SLEEVE_BAND_M`` (along the mesh) of a moved one takes the harmonic blend between them and the unmoved rest
+    (``SLEEVE_BAND_PASSES`` Jacobi passes); then the shards left against the pre-push placement ``Xs`` are relaxed
+    (``relax_sleeve_region``). ``(X', report {band_vertices,
+    relaxed_vertices}, region)`` — ``region`` the vertices the step may have moved."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import dijkstra
+    moved = np.linalg.norm(D, axis=1) > 1e-6
+    report = {"band_vertices": 0, "relaxed_vertices": 0}
+    if not moved.any():
+        return X, report, moved
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    n = len(X)
+    length = np.maximum(np.linalg.norm(X[E[:, 0]] - X[E[:, 1]], axis=1), 1e-9)
+    graph = coo_matrix((length, (E[:, 0], E[:, 1])), shape=(n, n)).tocsr()
+    dist = dijkstra(graph, directed=False, indices=np.nonzero(moved)[0], min_only=True, limit=SLEEVE_BAND_M)
+    A, deg = adjacency
+    region = np.isfinite(dist)
+    free = region & ~moved
+    report["band_vertices"] = int(free.sum())
+    out = D.copy()
+    for _ in range(SLEEVE_BAND_PASSES):
+        out[free] = ((A @ out) / deg)[free]
+    Y = X + out
+    report["relaxed_vertices"] = relax_sleeve_region(Y, Xs, F, adjacency, region)
+    return Y, report, region
+
+
+def sleeve_stretch(X: np.ndarray, X0: np.ndarray, faces, region: np.ndarray) -> Dict[str, Any]:
+    """Area ratio of the triangles of ``faces`` touching ``region`` (vertex mask) in ``X`` against ``X0`` (the
+    pre-push placement in the bind space): ``{faces, over (beyond SLEEVE_STRETCH_RATIO), p99, max}``."""
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    tri = np.asarray(region, bool)[F].any(1)
+    if not tri.any():
+        return {"faces": 0, "over": 0, "shards": 0, "p99": 1.0, "max": 1.0}
+    ratio = triangle_areas(X, F[tri]) / np.maximum(triangle_areas(X0, F[tri]), 1e-12)
+    return {"faces": int(tri.sum()), "over": int((ratio > SLEEVE_STRETCH_RATIO).sum()),
+            "shards": int(sleeve_shards(X, X0, F, region).sum()),
+            "p99": round(float(np.percentile(ratio, 99)), 3), "max": round(float(ratio.max()), 3)}
+
+
+def sleeve_choices(settings: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """``{left, right}`` sleeve choices of a piece's fit settings (``sleeves_left`` / ``sleeves_right``); a missing
+    or unknown value is "auto"."""
+    settings = settings or {}
+    out = {}
+    for side in ("left", "right"):
+        value = settings.get(f"sleeves_{side}")
+        out[side] = value if value in SLEEVE_CHOICES else "auto"
+    return out
+
+
+def _arm_share(Wg: np.ndarray, joint_names, side: str) -> np.ndarray:
+    cols = _arm_columns(joint_names, side)
+    if not cols or Wg.shape[1] <= max(cols):
+        return np.zeros(len(Wg))
+    return Wg[:, cols].sum(1)
+
+
+def trunk_band(X: np.ndarray, Wg: np.ndarray, body: BodyMesh) -> np.ndarray:
+    """The trunk of a fitted piece (``torso_tight_share``): its vertices not carried by an arm, between the hips joint
+    and the shoulder joints of ``body`` — a leg or a sleeve is meant to sit close and is not counted. Empty when that is
+    less than ``TORSO_MIN_SHARE`` of the piece (trousers: the waistband alone)."""
+    from app.core.rig_contract import norm_bone_name
+    joints = {norm_bone_name(k): np.asarray(v, np.float64) for k, v in (body.joint_positions or {}).items()}
+    on_arm = _arm_share(Wg, body.joint_names, "left") + _arm_share(Wg, body.joint_names, "right")
+    trunk = on_arm <= SLEEVE_ARM_SHARE
+    hips = joints.get("hips")
+    shoulders = [joints[k][1] for k in ("leftarm", "rightarm") if k in joints]
+    if hips is not None and shoulders:
+        trunk &= (X[:, 1] > hips[1]) & (X[:, 1] < min(shoulders))
+    if not len(X) or trunk.mean() < TORSO_MIN_SHARE:
+        return np.zeros(len(X), bool)
+    return trunk
+
+
+def place_sleeves(X: np.ndarray, Xs: np.ndarray, Wg: np.ndarray, body: BodyMesh, *, faces, adjacency,
+                  choices: Dict[str, str], inside: Optional[np.ndarray] = None
+                  ) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray, np.ndarray]:
+    """Per side the sleeve choice (block above; ``choices`` from ``sleeve_choices``), measured on ``Xs`` (the
+    pre-push placement in the bind space; ``inside`` per vertex whether it lies inside the body there) and applied to
+    ``X`` -> ``(X', report {side: {setting, applied, why, reason, numbers, shift_max_m}}, fitted, region)`` —
+    ``fitted`` the vertex mask the fit laid onto the arm (their placement push is discarded: ``clothing_metrics``
+    counts them as not pushed), ``region`` the vertices the placement may have moved (``blend_sleeves``).
+    "generated" / "wider" re-centre that side first (``center_sleeves``)."""
+    X = np.asarray(X, np.float64)
+    Xs = np.asarray(Xs, np.float64)
+    frames = limb_frames(body)
+    Wb = dense_weights(body)
+    report: Dict[str, Any] = {}
+    applied: Dict[str, str] = {}
+    arms: Dict[str, _ArmSections] = {}
+    shares: Dict[str, np.ndarray] = {}
+    for side in ("left", "right"):
+        share = _arm_share(Wg, body.joint_names, side)
+        if int((share > SLEEVE_ARM_SHARE).sum()) < SLEEVE_RING_MIN:
+            continue
+        arm = arm_sections(body, side, frames=frames, Wb=Wb)
+        if arm is None:
+            continue
+        arms[side], shares[side] = arm, share
+        numbers = measure_sleeve(Xs, share, arm, inside)
+        setting = choices.get(side, "auto")
+        why: List[Dict[str, Any]] = []
+        if setting == "auto":
+            choice, why = auto_sleeve(numbers)
+        else:
+            choice = setting
+        applied[side] = choice
+        report[side] = {"setting": setting, "applied": choice, "why": why,
+                        "reason": sleeve_reason_text(choice, why) if setting == "auto" else "",
+                        "numbers": numbers}
+    centred = [side for side, choice in applied.items() if choice in ("generated", "wider")]
+    if centred:
+        X, centre_report = center_sleeves(X, Wg, body, adjacency=adjacency, sides=centred)
+        for side, rep in centre_report.items():
+            report[side]["centring"] = rep
+    D = np.zeros_like(X)
+    fitted = np.zeros(len(X), bool)
+    for side, choice in applied.items():
+        if choice == "fitted":
+            Ds = fit_sleeve(X, Xs, shares[side], arms[side])
+            fitted |= (np.linalg.norm(Ds, axis=1) > 0) & (shares[side] > SLEEVE_ARM_SHARE)
+        elif choice == "wider":
+            Ds = widen_sleeve(X, shares[side], arms[side])
+        else:
+            continue
+        D += Ds
+        report[side]["shift_max_m"] = round(float(np.linalg.norm(Ds, axis=1).max()), 4)
+    region = np.zeros(len(X), bool)
+    if np.any(D):
+        X, blend, region = blend_sleeves(X, D, Xs, faces, adjacency)
+        report["blend"] = blend
+    return X, report, fitted, region
+
+
+# --- skin seen in the sleeves (Ruling A47, the arm light) --------------------------------------------------------------
+# The fitted piece and its rigged body are drawn orthographically from the front and from the back (bind pose, the arms
+# out) into depth buffers of ``SKIN_PX_M`` pixels; per side, the sleeve's outline (the pixels of its faces —
+# vertices with more than ``SLEEVE_ARM_SHARE`` of their weight on that arm — holes filled, closed over
+# ``SKIN_CLOSE_PX``) is where the sleeve should hide the arm, and every pixel of it where the BODY is the nearest
+# surface is skin seen in the sleeve. Front + back, cm2 per side. The spike's numbers (``a47-spike.md``): Kai's jacket
+# as generated 125 / 143, fitted to the arm 12 / 18; Kira's blazer 15 / 9 and 3 / 4. The light: green with none,
+# yellow below ``SKIN_RED_CM2``, red from it.
+SKIN_PX_M = 0.002
+SKIN_CLOSE_PX = 2
+SKIN_DEPTH_EPS_M = 0.001
+SKIN_RED_CM2 = 30.0
+
+
+def _raster(P: np.ndarray, F: np.ndarray, lo: np.ndarray, shape: Tuple[int, int], px: float, sign: float
+            ) -> np.ndarray:
+    """Nearest depth per pixel of the triangles ``F`` over ``P`` seen along -z (``sign`` 1: from the front, the
+    largest z; -1: from the back) — barycentric samples at most half a pixel apart; -inf where nothing is."""
+    h, w = shape
+    depth = np.full(h * w, -np.inf)
+    if not len(F):
+        return depth.reshape(shape)
+    A, B, C = P[F[:, 0]], P[F[:, 1]], P[F[:, 2]]
+    edge = np.maximum.reduce([np.linalg.norm((B - A)[:, :2], axis=1), np.linalg.norm((C - B)[:, :2], axis=1),
+                              np.linalg.norm((A - C)[:, :2], axis=1)])
+    steps = np.clip(np.ceil(edge / (0.5 * px)).astype(np.int64), 1, 64)
+    for n in np.unique(steps):
+        sel = np.nonzero(steps == n)[0]
+        t = np.arange(n + 1) / n
+        uv = np.array([(a, b) for a in t for b in t if a + b <= 1.0 + 1e-9])
+        X = (A[sel, None] * (1.0 - uv.sum(1))[None, :, None] + B[sel, None] * uv[None, :, 0, None]
+             + C[sel, None] * uv[None, :, 1, None]).reshape(-1, 3)
+        col = np.floor((X[:, 0] - lo[0]) / px).astype(np.int64)
+        row = np.floor((X[:, 1] - lo[1]) / px).astype(np.int64)
+        ok = (col >= 0) & (col < w) & (row >= 0) & (row < h)
+        np.maximum.at(depth, row[ok] * w + col[ok], sign * X[ok, 2])
+    return depth.reshape(shape)
+
+
+def sleeve_skin_seen(X: np.ndarray, F: np.ndarray, shares: Dict[str, np.ndarray], body: BodyMesh,
+                     px: float = SKIN_PX_M) -> Dict[str, float]:
+    """Skin seen inside each sleeve's outline (block above) of the garment ``X`` / ``F`` on the rigged ``body``:
+    ``{side: cm2}`` for the sides of ``shares`` (per garment vertex its weight on that arm) that have a sleeve."""
+    from scipy import ndimage
+    X = np.asarray(X, np.float64)
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    P = np.asarray(body.positions, np.float64)
+    Fb = np.asarray(body.faces, np.int64).reshape(-1, 3)
+    out: Dict[str, float] = {}
+    sleeves = {side: share[F].min(1) > SLEEVE_ARM_SHARE for side, share in shares.items()
+               if (share[F].min(1) > SLEEVE_ARM_SHARE).sum() >= SLEEVE_RING_MIN}
+    if not sleeves:
+        return out
+    lo = np.minimum(X.min(0), P.min(0))[:2] - 4 * px
+    hi = np.maximum(X.max(0), P.max(0))[:2] + 4 * px
+    shape = (int(np.ceil((hi[1] - lo[1]) / px)) + 1, int(np.ceil((hi[0] - lo[0]) / px)) + 1)
+    disc = ndimage.generate_binary_structure(2, 1)
+    for sign in (1.0, -1.0):
+        body_d = _raster(P, Fb, lo, shape, px, sign)
+        garment_d = _raster(X, F, lo, shape, px, sign)
+        skin = np.isfinite(body_d) & (body_d > garment_d + SKIN_DEPTH_EPS_M)
+        for side, faces in sleeves.items():
+            outline = np.isfinite(_raster(X, F[faces], lo, shape, px, sign))
+            outline = ndimage.binary_closing(outline, disc, iterations=SKIN_CLOSE_PX, border_value=0)
+            outline = ndimage.binary_fill_holes(outline)
+            out[side] = out.get(side, 0.0) + float((outline & skin).sum()) * px * px * 1e4
+    return {side: round(cm2, 1) for side, cm2 in out.items()}
+
+
+def arm_light(skin: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The arm light of a fit from its ``sleeve_skin_cm2`` (``{side: cm2}``): ``{state (green / yellow / red / none),
+    sides {side: state}, worst_cm2}`` — green without skin seen (rounded to whole cm2), yellow below
+    ``SKIN_RED_CM2``, red from it; ``none`` without a measured sleeve."""
+    sides: Dict[str, str] = {}
+    for side, cm2 in sorted((skin or {}).items()):
+        if not isinstance(cm2, (int, float)) or isinstance(cm2, bool):
+            continue
+        sides[side] = "green" if round(cm2) <= 0 else ("yellow" if cm2 < SKIN_RED_CM2 else "red")
+    order = ("none", "green", "yellow", "red")
+    state = max(sides.values(), key=order.index) if sides else "none"
+    worst = max((float(v) for v in (skin or {}).values() if isinstance(v, (int, float))), default=0.0)
+    return {"state": state, "sides": sides, "worst_cm2": round(worst, 1)}
+
+
 def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: float, split_y: float,
                      idw_k: int = TRANSFER_IDW_K, clear_m: float = CLEAR_M, vox_m: float = VOX_M,
                      margin_m: float = SDF_MARGIN_M,
                      rigged_iterations: int = RIGGED_ITERATIONS,
-                     limbs: Optional[Dict[str, Any]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+                     limbs: Optional[Dict[str, Any]] = None, Q_pre=None,
+                     sleeves: Optional[Dict[str, str]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Carry welded clothing positions ``Q`` (unrigged units) into the rigged bind space (metres) by the body's own
     skinning -> ``(X, report)``. ``limbs`` (a refit, ``fit_clothing``): the source fit per welded vertex (``x0``,
     ``w0``, ``names0``, ``frames``, ``kinds``) — its limb part is aligned onto this body's limbs (``align_limbs``)
@@ -1260,8 +1876,13 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
        the skin under it — no tear between neighbours with different donors, nothing to smooth over. The fabric
        that bridged the closed armpit of the A-pose spans the open one in T-pose; ``relax_stretched`` spreads that
        stretch over its band.
-    3b. The sleeves are re-centred on their arms (``center_sleeves``, Ruling A35) — after the limb alignment of a
-       refit, so a sleeve the source left off its arm is taken back too.
+    3b. The sleeves are placed per side (``place_sleeves``, Ruling A47; ``sleeves`` = ``sleeve_choices``, None =
+       Auto on both): laid onto the arm (``fit_sleeve``) from their pre-push shape (``Q_pre``, the placement before
+       the push-out, skinned by the same weights; a refit takes its limb-aligned sleeves, None = ``Q``), or
+       re-centred on it (``center_sleeves``, Ruling A35) and, "wider", widened about it — after the limb alignment
+       of a refit, so a sleeve the source left off its arm is taken back too. ``report["sleeves"]`` holds the choice
+       and its numbers per side; ``report["sleeve_fitted"]`` (a vertex mask, not JSON — ``fit_clothing`` takes it
+       out) the vertices laid onto the arm.
     4. The clearance pass on the rigged body (SDF in metres, ``rigged_iterations`` iterations, smoothed in the
        first ``RIGGED_SMOOTH_UNTIL``), side-kept (``push_kept``); a vertex the skinning buried on the wrong side
        starts on the nearest body surface of its own side (``_transfer_sides``, ``_side_projection``).
@@ -1328,18 +1949,39 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         target = _frames_like(body_rigged, limbs["frames"])
         X, limb_report = align_limbs(X, limbs["x0"], limbs["w0"], limbs["names0"], limbs["frames"], target,
                                      kinds=limbs.get("kinds", ("arm", "leg")), adjacency=adjacency)
-    X, sleeve_report = center_sleeves(X, Wg, body_rigged, adjacency=adjacency)
-
-    lo, hi = X.min(0) - margin_m, X.max(0) + margin_m
+    if limbs is not None or Q_pre is None:
+        Xs = X.copy()
+    else:
+        Qk = np.asarray(Q_pre, np.float64) * float(k)
+        Xs = bones.apply(Qk, Wg)
+        relax_stretched(Xs, Qk, faces, adjacency)
+    lo = np.minimum(X.min(0), Xs.min(0)) - margin_m
+    hi = np.maximum(X.max(0), Xs.max(0)) + margin_m
     sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
+    X, sleeve_report, fitted, sleeve_region = place_sleeves(X, Xs, Wg, body_rigged, faces=faces,
+                                                            adjacency=adjacency, choices=sleeves or {},
+                                                            inside=sdf.sample(Xs) < 0)
+    if (X.min(0) < lo + 0.5 * margin_m).any() or (X.max(0) > hi - 0.5 * margin_m).any():
+        lo, hi = np.minimum(lo, X.min(0) - margin_m), np.maximum(hi, X.max(0) + margin_m)
+        sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
     toward = _transfer_sides(Q, X, body_unrigged, bones, Wg, sdf)
     start, side_report = _side_projection(sdf, X, toward, Pr, body_rigged.faces, clear_m)
     Xd = push_kept(X, adjacency, sdf, clear=clear_m, iterations=rigged_iterations,
                    smooth_until=RIGGED_SMOOTH_UNTIL, margin=SIDE_MARGIN_M, start=start)
+    if sleeve_region.any() and sleeve_shards(X + Xd, Xs, faces, sleeve_region).any():
+        # Ruling A47: a strip the clearance pass stretched in the placed sleeves is evened out, then held clear.
+        Y = X + Xd
+        relax_sleeve_region(Y, Xs, faces, adjacency, sleeve_region)
+        Xd = Y - X
+        Xd = Xd + push_kept(Y, adjacency, sdf, clear=clear_m, iterations=3, smooth_until=0, margin=SIDE_MARGIN_M)
     X = X + Xd
     rigged_push = np.linalg.norm(Xd, axis=1)
     d = sdf.sample(X)
     arm_cols = [i for i, n in enumerate(body_rigged.joint_names) if "arm" in norm_bone_name(n)]
+    # Ruling A47: how tight the trunk of the piece lies (the width allowance, ``scale_retry``) and how much the
+    # sleeve placement stretched the fabric against its pre-push shape.
+    trunk = trunk_band(X, Wg, body_rigged)
+    stretch = sleeve_stretch(X, Xs, faces, sleeve_region) if sleeve_region.any() else None
     report = {
         "method": "skinned",
         "scale_k": float(k),
@@ -1356,6 +1998,10 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "rigged_deep_push_share": float((rigged_push > DEEP_PUSH_M).mean()) if len(rigged_push) else 0.0,
         "rigged_clearance_p1_m": float(np.percentile(d, 1)),
         "rigged_inside_share": float((d < 0).mean()),
+        "torso_tight_share": float((d[trunk] < TORSO_TIGHT_M).mean()) if trunk.any() else 0.0,
+        "torso_gap_p50_m": float(np.median(d[trunk])) if trunk.any() else 0.0,
+        "sleeve_stretch": stretch,
+        "sleeve_fitted": fitted,
     }
     if limb_report is not None:
         report["limbs"] = limb_report
@@ -1992,12 +2638,19 @@ def skirt_leg_weights(X, W, *, legs, hips: int, crotch: float, smooth_m: float =
 
 # --- metrics + gate -----------------------------------------------------------------------------------------------------
 
-def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any]) -> Dict[str, Any]:
-    """Mesh gate numbers of a fitted clothing piece (``CLOTHING_GATES``), positions as in ``metrics``."""
+def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any],
+                     exclude: Optional[np.ndarray] = None) -> Dict[str, Any]:
+    """Mesh gate numbers of a fitted clothing piece (``CLOTHING_GATES``), positions as in ``metrics``. ``exclude``
+    (a vertex mask): counted as not pushed — the sleeves laid onto the arm (Ruling A47), whose placement push is
+    discarded (they are placed at the sleeve clearance instead; their own check is ``sleeve_shards``). They stay in
+    the share's denominator, as every vertex did when the gate limits were measured."""
     X = np.asarray(X, np.float64)
     Fw = np.asarray(Fw, np.int64).reshape(-1, 3)
     push = np.linalg.norm(np.asarray(Q_post, np.float64) - np.asarray(Q0_pre, np.float64), axis=1)
+    if exclude is not None and len(exclude) == len(push) and np.any(exclude):
+        push = np.where(np.asarray(exclude, bool), 0.0, push)
     _, share = components(X, Fw)
+    stretch = transfer_report.get("sleeve_stretch") or {}
     return {
         "max_push_m": round(float(push.max()) if len(push) else 0.0, 4),
         "moved_share": round(float((push > MOVED_EPS_M).mean()) if len(push) else 0.0, 4),
@@ -2008,6 +2661,11 @@ def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any]) -> 
         "rigged_push_p95_m": round(float(transfer_report.get("rigged_push_p95_m", float("nan"))), 4),
         "rigged_deep_push_share": round(float(transfer_report.get("rigged_deep_push_share", float("nan"))), 4),
         "rigged_clearance_p1_m": round(float(transfer_report.get("rigged_clearance_p1_m", float("nan"))), 4),
+        "torso_tight_share": round(float(transfer_report.get("torso_tight_share", float("nan"))), 4),
+        "torso_gap_p50_m": round(float(transfer_report.get("torso_gap_p50_m", float("nan"))), 4),
+        "sleeve_stretch_over": int(stretch.get("over") or 0),
+        "sleeve_shards": int(stretch.get("shards") or 0),
+        "sleeve_stretch_p99": float(stretch.get("p99") or 1.0),
         "tris": int(len(Fw)),
     }
 
@@ -2175,9 +2833,12 @@ def widen(Q, scale: float, *, centre_x: float, centre_z: float, half_width: floa
     return Q
 
 
-def push_numbers(Q0_pre, Q_post) -> Dict[str, float]:
-    """``max_push_m`` and ``deep_push_share`` of a push-out (positions in metres, as ``clothing_metrics``)."""
+def push_numbers(Q0_pre, Q_post, exclude: Optional[np.ndarray] = None) -> Dict[str, float]:
+    """``max_push_m`` and ``deep_push_share`` of a push-out (positions in metres, as ``clothing_metrics``; ``exclude``
+    as there)."""
     push = np.linalg.norm(np.asarray(Q_post, np.float64) - np.asarray(Q0_pre, np.float64), axis=1)
+    if exclude is not None and len(exclude) == len(push) and np.any(exclude):
+        push = np.where(np.asarray(exclude, bool), 0.0, push)
     return {"max_push_m": round(float(push.max()) if len(push) else 0.0, 4),
             "deep_push_share": round(float((push > DEEP_PUSH_M).mean()) if len(push) else 0.0, 4)}
 
@@ -2193,10 +2854,59 @@ def too_small(reasons: List[str]) -> bool:
     return bool(keys) and all(key in SCALE_RETRY_KEYS for key in keys)
 
 
+# Width allowance (Ruling A47): a fit that PASSES may still lie tight — the spike on Kai's jacket (``a47-spike.md``,
+# width-only about the torso axis): x1.00 deep push 0.111 / torso < 1.5 cm 21 %, x1.03 0.091 / 18 %, x1.06 0.079 /
+# 15 %, x1.10 0.069 / 11 % with flaps standing off below the armpits, x1.15 refused (a sleeve off the upper arm); the
+# hem and the collar moved at most 5 mm. So the automatic retry also widens an ACCEPTED fit whose deep push share
+# exceeds ``ALLOWANCE_DEEP`` or whose trunk lies tight (clearance below ``TORSO_TIGHT_M``) beyond
+# ``ALLOWANCE_TIGHT``: the steps of ``SCALE_RETRY_STEPS`` above the accepted scale (1.0, or the step a too-small
+# retry passed at; never beyond 1.08), smallest first; it takes the smallest step that passes every gate and clears
+# both numbers, else the smallest passing step that improves them (neither worse, one lower), else the fit as
+# accepted. A piece's fit settings may fix the allowance instead (``ALLOWANCE_CHOICES``, percent, width only: that
+# factor and no retry). A fit whose trunk is mapped from its base fit (outfit bodies) takes
+# its width from the base fit: no allowance there.
+ALLOWANCE_CHOICES: Tuple[Any, ...] = ("auto", 0, 3, 6, 10)
+ALLOWANCE_DEEP = 0.08
+ALLOWANCE_TIGHT = 0.18
+
+
+def allowance_choice(settings: Optional[Dict[str, Any]]) -> Any:
+    """The fit allowance of a piece's fit settings (``allowance``): "auto" or a percent of ``ALLOWANCE_CHOICES``
+    (a missing or unknown value is "auto")."""
+    value = (settings or {}).get("allowance", "auto")
+    if isinstance(value, bool):
+        return "auto"
+    if isinstance(value, (int, float)) and value in ALLOWANCE_CHOICES:
+        return int(value)
+    return "auto"
+
+
+def allowance_trigger(m: Dict[str, Any]) -> List[str]:
+    """The width-allowance rules an accepted fit's metrics meet (block above): ``deep_push_share`` /
+    ``torso_tight_share``."""
+    out = []
+    deep, tight = m.get("deep_push_share"), m.get("torso_tight_share")
+    if isinstance(deep, (int, float)) and math.isfinite(deep) and deep > ALLOWANCE_DEEP:
+        out.append("deep_push_share")
+    if isinstance(tight, (int, float)) and math.isfinite(tight) and tight > ALLOWANCE_TIGHT:
+        out.append("torso_tight_share")
+    return out
+
+
+def _improves(first: Dict[str, Any], other: Dict[str, Any]) -> bool:
+    keys = ("deep_push_share", "torso_tight_share")
+    a = [float(first.get(k) or 0.0) for k in keys]
+    b = [float(other.get(k) or 0.0) for k in keys]
+    return all(y <= x + 1e-9 for x, y in zip(a, b)) and any(y < x - 1e-9 for x, y in zip(a, b))
+
+
 def scale_retry(Q, push, finish, *, centre_x: float, centre_z: float, half_width: float,
-                steps: Tuple[float, ...] = SCALE_RETRY_STEPS) -> Tuple["FitResult", Dict[str, Any]]:
+                steps: Tuple[float, ...] = SCALE_RETRY_STEPS, allowance: Any = "auto",
+                widen_accepted: bool = True) -> Tuple["FitResult", Dict[str, Any]]:
     """Fit the placed garment ``Q``; when refused as ``too_small``, again widened (``widen``) by each of ``steps``
-    until one passes -> ``(result, info)``.
+    until one passes -> ``(result, info)``. Ruling A47: ``allowance`` a percent (``allowance_choice``) fits once at
+    that width and nothing else; "auto" with ``widen_accepted`` also widens an accepted fit that lies tight (the
+    width allowance, block above) — ``info["allowance"]`` ``{setting, trigger, numbers, factor, attempts}``.
 
     ``push(Qs)`` -> ``(Qp, disp, numbers)`` (the push-out of the placed positions and its ``push_numbers``),
     ``finish(Qs, Qp, disp)`` -> the ``FitResult`` of that push-out. A step whose push numbers already fail the
@@ -2204,11 +2914,51 @@ def scale_retry(Q, push, finish, *, centre_x: float, centre_z: float, half_width
     result (1.0 unwidened — a pass at 1.0, another refusal, or no step passed: then the unwidened refusal is
     returned), ``max_tried`` = the largest scale tried (1.0 without a retry), ``attempts`` = per tried scale
     (1.0 first) ``{scale, ok, reasons, deep_push_share, max_push_m}`` — empty without a retry."""
-    Qp, disp, _numbers = push(Q)
-    first = finish(Q, Qp, disp)
     info: Dict[str, Any] = {"factor": 1.0, "max_tried": 1.0, "attempts": [], "centre": [centre_x, centre_z],
                             "half_width_u": half_width}
-    if first.ok or not too_small(first.reasons):
+    if allowance != "auto":
+        scale = round(1.0 + float(allowance) / 100.0, 4)
+        Qs = widen(Q, scale, centre_x=centre_x, centre_z=centre_z, half_width=half_width)
+        Qp, disp, _numbers = push(Qs)
+        fixed = finish(Qs, Qp, disp)
+        info.update(factor=scale, max_tried=scale)
+        info["allowance"] = {"setting": allowance, "trigger": [], "factor": scale, "attempts": [],
+                             "numbers": {k: fixed.metrics.get(k) for k in ("deep_push_share", "torso_tight_share")}}
+        return fixed, info
+    def widen_more(accepted: "FitResult", at: float) -> "FitResult":
+        """The width allowance of an accepted fit at scale ``at`` (block above)."""
+        trigger = allowance_trigger(accepted.metrics) if widen_accepted else []
+        info["allowance"] = {"setting": "auto", "trigger": trigger, "factor": at, "attempts": [],
+                             "numbers": {k: accepted.metrics.get(k) for k in ("deep_push_share", "torso_tight_share")}}
+        if not trigger:
+            return accepted
+        improving: Optional[Tuple[float, "FitResult"]] = None
+        for scale in (s_ for s_ in steps if s_ > at + 1e-9):
+            info["max_tried"] = max(info["max_tried"], scale)
+            Qs = widen(Q, scale, centre_x=centre_x, centre_z=centre_z, half_width=half_width)
+            Qp, disp, _numbers = push(Qs)
+            result = finish(Qs, Qp, disp)
+            better = result.ok and _improves(accepted.metrics, result.metrics)
+            clears = better and not allowance_trigger(result.metrics)
+            info["allowance"]["attempts"].append({
+                "scale": scale, "ok": bool(result.ok), "reasons": list(result.reasons), "improves": bool(better),
+                "clears": bool(clears),
+                **{k: result.metrics.get(k) for k in ("deep_push_share", "torso_tight_share", "max_push_m")}})
+            if better and improving is None:
+                improving = (scale, result)
+            if clears:
+                improving = (scale, result)
+                break
+        if improving is None:
+            return accepted
+        info["factor"] = info["allowance"]["factor"] = improving[0]
+        return improving[1]
+
+    Qp, disp, _numbers = push(Q)
+    first = finish(Q, Qp, disp)
+    if first.ok:
+        return widen_more(first, 1.0), info
+    if not too_small(first.reasons):
         return first, info
 
     def attempt(scale, ok, reasons, m):
@@ -2229,12 +2979,13 @@ def scale_retry(Q, push, finish, *, centre_x: float, centre_z: float, half_width
         attempt(scale, result.ok, result.reasons, result.metrics)
         if result.ok:
             info["factor"] = scale
-            return result, info
+            return widen_more(result, scale), info
     return first, info
 
 
 def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_base_glb: bytes, *,
-                 masks, slots, limb_source: Optional[Dict[str, Any]] = None) -> FitResult:
+                 masks, slots, limb_source: Optional[Dict[str, Any]] = None,
+                 settings: Optional[Dict[str, Any]] = None) -> FitResult:
     """Fit a prepared (decimated) clothing mesh onto the rigged base body (dress spike ``fit_dress.py``).
 
     ``masks``: ``{"body": ..., "garment": ...}`` — the full-frame body mask of the bald front view the unrigged base
@@ -2261,6 +3012,13 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     ``{x0 (output vertices, 3), w0 (output vertices, len(names0)), names0, frames (its body's limb_frames),
     kinds}``; its limbs are aligned onto this body's (``align_limbs`` inside ``transfer_skinned``). Skipped
     (``report["transfer"]["limbs"]["skipped"]``) when its vertex count is not this fit's.
+
+    ``settings`` (Ruling A47, the piece's fit settings — ``garments.fit_settings``): ``sleeves_left`` /
+    ``sleeves_right`` (``SLEEVE_CHOICES``; ``place_sleeves``, report ``transfer.sleeves``) and ``allowance``
+    (``ALLOWANCE_CHOICES``; ``scale_retry``, report ``scale_retry.allowance``). The vertices laid onto the arm are
+    left out of the placement push numbers. ``metrics`` adds the skin seen in each sleeve
+    (``sleeve_skin_left_cm2`` / ``sleeve_skin_right_cm2``, ``sleeve_skin_seen``; ``report["arm_light"]``), the
+    trunk's tight share and the sleeve stretch.
     """
     body_mask, garment_mask = _mask(masks["body"]), _mask(masks["garment"])
     if body_mask.shape != garment_mask.shape:
@@ -2304,6 +3062,10 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
             limbs = {"x0": x0k, "w0": w0k, "names0": list(limb_source["names0"]),
                      "frames": limb_source["frames"], "kinds": tuple(limb_source.get("kinds") or ("arm", "leg"))}
     margin = SDF_MARGIN_M / k
+    choices = sleeve_choices(settings)
+    allowance = allowance_choice(settings)
+    # the vertices the first finished fit laid onto the arm: left out of every later push number (scale steps)
+    fitted_rows: List[Optional[np.ndarray]] = [None]
 
     def push(Qs):
         sdf = body_sdf(body_u.positions, body_u.faces, vox=VOX_M / k,
@@ -2311,11 +3073,15 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         disp = push_kept(Qs, _adjacency(Fk, len(Qs)), sdf, clear=CLEAR_M / k, iterations=PUSH_ITERATIONS,
                          smooth_until=PUSH_SMOOTH_UNTIL, margin=SIDE_MARGIN_M / k)
         Qp = Qs + disp
-        return Qp, disp, push_numbers(Qs * k, Qp * k)
+        return Qp, disp, push_numbers(Qs * k, Qp * k, exclude=fitted_rows[0])
 
     def finish(Qs, Qp, disp) -> FitResult:
         split_y = float(Qp[:, 1].max() - CLOTHING_WAIST_DROP * height_u)
-        X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y, limbs=limbs)
+        X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y, limbs=limbs,
+                                              Q_pre=Qs, sleeves=choices)
+        fitted = transfer_report.pop("sleeve_fitted", None)
+        if fitted_rows[0] is None and fitted is not None and np.any(fitted):
+            fitted_rows[0] = fitted
         if limbs_skipped:
             transfer_report["limbs"] = {"skipped": limbs_skipped}
         skirt = is_skirt(X, body_r, slots)
@@ -2325,7 +3091,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         remap[used] = np.arange(len(used))
         J = np.where(W > 0, remap[J], 0)
         names = [body_r.joint_names[i] for i in used]
-        m = clothing_metrics(X, Fk, Qs * k, Qp * k, transfer_report)
+        m = clothing_metrics(X, Fk, Qs * k, Qp * k, transfer_report, exclude=fitted)
         torso_mapped = "torso" in ((transfer_report.get("limbs") or {}).get("chains") or {})
         ok, reasons = gate(m, clothing_gates(torso_mapped=torso_mapped))
 
@@ -2357,9 +3123,25 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
 
     centre_x, centre_z = torso_axis(Q, body_u.positions, height_u=height_u)
+    # A trunk mapped from its base fit (outfit bodies) takes its width from that fit: no allowance here.
+    torso_source = bool(limbs) and "torso" in (limbs.get("frames") or {})
     result, info = scale_retry(Q, push, finish, centre_x=centre_x, centre_z=centre_z,
-                               half_width=CLOTHING_BODY_HALF_X * height_u)
+                               half_width=CLOTHING_BODY_HALF_X * height_u,
+                               allowance="auto" if torso_source else allowance, widen_accepted=not torso_source)
+    if torso_source and allowance != "auto" and isinstance(info.get("allowance"), dict):
+        info["allowance"]["inherited"] = True
     result.metrics["scale_retry"] = info["factor"]
     result.metrics["scale_retry_max"] = info["max_tried"]
     result.report["scale_retry"] = info
+    # Ruling A47: the skin seen in each sleeve of the fit as published (the arm light).
+    g = result.garment
+    Wd = np.zeros((len(g.positions), len(g.joint_names)))
+    np.add.at(Wd, (np.repeat(np.arange(len(g.positions)), g.joints.shape[1]), g.joints.ravel()), g.weights.ravel())
+    skin = sleeve_skin_seen(g.positions, g.indices,
+                            {side: _arm_share(Wd, g.joint_names, side) for side in ("left", "right")}, body_r)
+    for side in ("left", "right"):
+        result.metrics[f"sleeve_skin_{side}_cm2"] = skin.get(side)
+    result.report["arm_light"] = arm_light(skin)
+    result.report["fit_settings"] = {"sleeves_left": choices["left"], "sleeves_right": choices["right"],
+                                     "allowance": allowance}
     return result

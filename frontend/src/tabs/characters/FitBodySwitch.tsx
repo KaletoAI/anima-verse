@@ -19,6 +19,7 @@ import { StepLight } from './StepRows'
 import { ACCEPTED_BY_YOU, bodyWords } from './figureModel'
 import type { FitBody } from './figureModel'
 import type { Light } from './hairstylesModel'
+import { armLightColour, armLightShort } from './fitSettingsModel'
 
 /** The follow-up the server estimates after an acceptance or its undo (`figure_build.cost`). */
 interface FollowUp { hub_jobs: number | null; steps: Array<{ name: string; label: string; jobs: number | null }> }
@@ -129,6 +130,11 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
           style={b.status === 'refused' ? REFUSED : b.status === 'user_accepted' ? ACCEPTED : undefined}
           title={b.reason_detail || undefined}>
           {b.key === shown.key ? '▸ ' : ''}{bodyVerdict(b, t)}
+          {b.arm_light && b.arm_light.state !== 'none' ? (
+            <span style={{ ...ROW, display: 'inline-flex', gap: 4, marginLeft: 8, color: 'var(--text, inherit)' }}>
+              <StepLight light={armLightColour(b.arm_light)} />{armLightShort(b.arm_light, t)}
+            </span>
+          ) : null}
         </div>
       ))}
       {legend}

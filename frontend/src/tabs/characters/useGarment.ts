@@ -9,6 +9,7 @@
  * down), stopped when nothing runs, on unmount and when the URL changes
  * (another character or item; null = nothing to load).
  */
+import type { FitSettingsInfo } from './fitSettingsModel'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet, apiPost, type BootHemState } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
@@ -299,6 +300,8 @@ export interface GarmentInfo {
   preview_freshness?: Freshness | null
   /** Ruling A46: where each piece-only view comes from; null/absent for a piece without the choice. */
   piece_views?: Partial<Record<GarmentView, PieceViewInfo>> | null
+  /** Ruling A47: the sleeves per side, the width allowance and the arm light (`garments.fit_settings_info`). */
+  fit_settings?: FitSettingsInfo | null
   /** Ruling A46b: accepted images gated under an older gate version, being re-gated in the background now
    *  (`garments.regate_shown`); the panel polls until it is empty. */
   regate_checking?: Array<{ step: string; view: GarmentView }>

@@ -74,7 +74,8 @@ The UNRIGGED body is the same mesh (same UVs) with the arms turned 45 degrees do
       o 0.0375 (f 0.5) left LeftBreast 0.5 / Spine2 0.5   right RightBreast 0.3 / Spine2 0.7
       o 0.060 (f 0)    left Spine2 1                      right Spine2 1 (no extension bone)
 [4] Gates: the keys are max_push_m / deep_push_share / largest_component_share / rigged_inside_share /
-    rigged_deep_push_share (moved_share is reported, not gated — 2026-11-10; the rigged deep push gated since
+    rigged_deep_push_share / sleeve_shards (Ruling A47: 0 for a piece whose sleeves were not placed onto the arm, as
+    in every fixture below; moved_share is reported, not gated — 2026-11-10; the rigged deep push gated since
     2026-11-12, plan fit-sdf-speed-drape Task 7 — its max ``rigged_push_max_m`` reported, not gated, Ruling R7a: the
     numbers in the fixtures below are Kira's Black Blazer's rigged pass on base20d5701a measured that day,
     0.0199 m / 0.0 — not recorded for the spike dress, taken for it too); the spike dress numbers (max push 0.0293 units x 1.70 = 0.0498 m, one
@@ -387,9 +388,9 @@ def test_gates():
     from app.core import garment_fit as gf
     G = gf.CLOTHING_GATES
     check(set(G) == {"max_push_m", "deep_push_share", "largest_component_share", "rigged_inside_share",
-                     "rigged_deep_push_share"},
+                     "rigged_deep_push_share", "sleeve_shards"},
           f"[4] clothing gate keys ({sorted(G)})")
-    rigged = {"rigged_push_max_m": 0.0199, "rigged_deep_push_share": 0.0}
+    rigged = {"rigged_push_max_m": 0.0199, "rigged_deep_push_share": 0.0, "sleeve_shards": 0}
     spike = {"max_push_m": 0.0498, "deep_push_share": 0.079, "largest_component_share": 1.0,
              "rigged_inside_share": 0.0, **rigged}
     ok, reasons = gf.gate(spike, G)
