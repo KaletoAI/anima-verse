@@ -15,6 +15,7 @@ import type { Freshness } from './FreshnessBadge'
 import type { CollisionPayload, FootPose } from '@anima/scene-render'
 import type { GarmentRunBody } from './garmentStyle'
 import type { MeshMode } from './figureModel'
+import type { HaarPanel } from './hairstylesModel'
 
 export const GARMENT_VIEWS = ['front', 'back'] as const
 export type GarmentView = typeof GARMENT_VIEWS[number]
@@ -78,7 +79,7 @@ export interface GarmentFitInfo {
 }
 
 /** How the hair is made (`garment_hair.HAIR_METHODS`); `body` = inside the body mesh, no hair mesh. */
-export type HairMethod = 'body' | 'hairdeck'
+export type HairMethod = 'body' | 'hairdeck' | 'haar'
 
 /** Gate limits as a record stores them: `{key: ["max" | "min", limit]}`. */
 export type RecordLimits = Record<string, [string, number]>
@@ -484,6 +485,8 @@ export interface HairInfo {
   world_method: HairMethod
   /** The HairDeck section (null without a hair item). */
   hairdeck: HairDeckPanel | null
+  /** The HAAR variants of a HAAR hairstyle (`garments.haar_panel`; null for another mode). */
+  haar?: HaarPanel | null
   /** The kept results of the other methods, newest first ([] without one). */
   others: OtherMethodInfo[]
   /** The method is `body`: the hair is part of the body mesh — no steps, no run, no preview. */
@@ -492,8 +495,9 @@ export interface HairInfo {
   base_prompts?: Freshness | null
   /** Task 14 (GET …/hair?item_id=): this hairstyle is the plain body's. */
   plain?: boolean
-  /** What its "Run all" runs now (`garments.run_estimate`); null off the pipeline or without a hairstyle. */
-  run?: { steps: string[]; hub_jobs: number | null; note: string; refit: boolean } | null
+  /** What its "Run all" runs now (`garments.run_estimate`; HAAR adds `cpu_fits`); null off the pipeline or without
+   *  a hairstyle. */
+  run?: { steps: string[]; hub_jobs: number | null; note: string; refit: boolean; cpu_fits?: number } | null
   /** The current base model's file (the preview of a `body` hairstyle that is the plain body's); null without. */
   body_url?: string | null
   /** When that base model was built (Ruling UI3 a); null without one. */

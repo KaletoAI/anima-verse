@@ -15,8 +15,9 @@
  *       MESH_MODE_LABELS  own_mesh → "Own mesh", painted → "Painted", in_body → "In the body"
  *       HAIR_MODE_LABELS  hairdeck → "HairDeck", haar → "HAAR", body → "In the body"
  *     MESH_MODES / HAIR_MODES list them in that order (the select's order).
- * [2] hairModeDisabled: HAAR is listed but not built (ruling 6) → 'haar' = "not built yet";
- *     'hairdeck' and 'body' are selectable → null.
+ * [2] hairModeDisabled(mode, built): data-driven since H3 — with the server's built list ['hairdeck', 'haar', 'body']
+ *     every mode is selectable → null; a mode missing from the list (built ['hairdeck', 'body']) → "not built yet";
+ *     the default list is HAIR_MODES (all three).
  * [3] wearersLine(n, hubJobs) — ruling 3, "worn by K characters now" + "Build for them (cost)":
  *       (0, 0)    → text "worn by 0 characters now", button null, reason "Nobody wears it now"
  *       (2, 7)    → text "worn by 2 characters now", button "Build for them (7 hub jobs)", reason null
@@ -143,10 +144,12 @@
  *        a nameless entry {id "hair_x", name ""} → "hair_x · HairDeck".
  *      newHairstyleDisabled(description, mode) — the New hairstyle dialog's Create:
  *        ("", body) → "Describe the hairstyle"; ("   ", hairdeck) → "Describe the hairstyle" (blank = empty);
- *        ("a bun", haar) → "not built yet" (HAAR is listed disabled); ("a bun", hairdeck) → null; ("a bun", body) → null.
+ *        ("a bun", haar) → null (HAAR is built since H3), ("a bun", haar, built [hairdeck, body]) → "not built yet";
+ *        ("a bun", hairdeck) → null; ("a bun", body) → null.
  *      hairstyleActions(mode, run) — R1 Run all only where the flow has more than one step (HairDeck: hairdeck → fit),
  *      R2 single steps with their cost:
- *        (body, any) and (haar, any) → runAll / regenerate / refit all null (the Build makes a body hairstyle);
+ *        (body, any) → runAll / regenerate / refit all null (the Build makes a body hairstyle);
+ *        (haar, null) → runAll {"Run all", enabled}, no regenerate / refit (its cases: smoke_haar_variant_rows.mjs);
  *        (hairdeck, null) → runAll {"Run all", enabled} (no estimate: the server decides);
  *        (hairdeck, {steps [], hub_jobs 0}) → {"Everything is current", disabled};
  *        (hairdeck, {steps [hairdeck, fit], hub_jobs 1}) → "Run all: create + fit (1 hub job)";
@@ -226,7 +229,9 @@ check('[1] MESH_MODES order', m.MESH_MODES, ['own_mesh', 'painted', 'in_body']);
 check('[1] HAIR_MODES order', m.HAIR_MODES, ['hairdeck', 'haar', 'body']);
 
 // [2]
-check('[2] haar disabled', m.hairModeDisabled('haar'), 'not built yet');
+check('[2] haar selectable', [m.hairModeDisabled('haar'), m.hairModeDisabled('haar', ['hairdeck', 'haar', 'body'])],
+  [null, null]);
+check('[2] not in the built list', m.hairModeDisabled('haar', ['hairdeck', 'body']), 'not built yet');
 check('[2] hairdeck selectable', m.hairModeDisabled('hairdeck'), null);
 check('[2] body selectable', m.hairModeDisabled('body'), null);
 
@@ -473,13 +478,15 @@ check('[19] none worn: server order, stale flag ignored', [none.map((h) => h.id)
 check('[19] nameless', m.hairstyleRows([hs('hair_x', '', 'hairdeck')], '')[0].label, 'hair_x · HairDeck');
 check('[19] dialog: empty', m.newHairstyleDisabled('', 'body'), 'Describe the hairstyle');
 check('[19] dialog: blank', m.newHairstyleDisabled('   ', 'hairdeck'), 'Describe the hairstyle');
-check('[19] dialog: HAAR', m.newHairstyleDisabled('a bun', 'haar'), 'not built yet');
+check('[19] dialog: HAAR', [m.newHairstyleDisabled('a bun', 'haar'),
+  m.newHairstyleDisabled('a bun', 'haar', ['hairdeck', 'body'])], [null, 'not built yet']);
 check('[19] dialog: ok', [m.newHairstyleDisabled('a bun', 'hairdeck'), m.newHairstyleDisabled('a bun', 'body')],
   [null, null]);
 const nothing = { runAll: null, regenerate: null, refit: null };
 check('[19] body: no run of its own', m.hairstyleActions('body', { steps: [], hub_jobs: 0, note: '', refit: false }),
   nothing);
-check('[19] haar: no run', m.hairstyleActions('haar', null), nothing);
+check('[19] haar: Run all', m.hairstyleActions('haar', null),
+  { runAll: { label: 'Run all', disabled: false }, regenerate: null, refit: null });
 const run = (steps, hubJobs, refit = false) => ({ steps, hub_jobs: hubJobs, note: '', refit });
 check('[19] no estimate', m.hairstyleActions('hairdeck', null).runAll, { label: 'Run all', disabled: false });
 check('[19] current', m.hairstyleActions('hairdeck', run([], 0)).runAll,

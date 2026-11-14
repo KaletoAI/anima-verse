@@ -76,6 +76,7 @@ export const HAIRDECK_FIT_CHIPS: ChipSpec[] = [
 export const HAIR_STEP_LABELS: Record<string, string> = {
   queued: 'Queued',
   hairdeck: 'HairDeck',
+  haar: 'HAAR strands',
   fit: 'Fit',
 }
 

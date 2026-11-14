@@ -363,6 +363,30 @@ def set_haar_seed(character_name: str, item_id: str, seed: Optional[int]) -> boo
     return set_hairstyle_settings(character_name, item_id, {"haar_seed": seed})
 
 
+def set_hairstyle_description(character_name: str, item_id: str, description: str) -> bool:
+    """Store a hairstyle's text (``garment.description`` and the item's ``prompt_fragment``; a name that was made
+    from the old text, ``hairstyle_name``, follows the new one) in ONE read-modify-write of the item under
+    ``keyed_lock("garment_item", character_name)``. Runs nothing: what the text feeds reads due — HAAR's strands
+    (``garment_store.garment_ssig``), a HairDeck fit, the plain body's prompts of hair in the body. ValueError for
+    an empty text or an item that is no hairstyle of the character. The update result; True without a write when
+    unchanged."""
+    from app.core.keyed_lock import keyed_lock
+    from app.models import inventory
+    text = " ".join(str(description or "").split())
+    if not text:
+        raise ValueError("Describe the hairstyle")
+    with keyed_lock("garment_item", character_name):
+        item = _own_hairstyle(character_name, item_id)
+        old = hairstyle_description(item)
+        if text == old:
+            return True
+        garment = {**(item.get("garment") or {}), "description": text}
+        changes: Dict[str, Any] = {"garment": garment, "prompt_fragment": text}
+        if str(item.get("name") or "") in ("", hairstyle_name(old)):
+            changes["name"] = hairstyle_name(text)
+        return inventory.update_item(item["id"], changes) is not None
+
+
 def set_hair_colour(character_name: str, item_id: str, hex_colour: str) -> bool:
     """Store a hairstyle's manual hair colour (``hair_colour``, lower-case
     ``#rrggbb``); ``""`` = automatic (HairDeck's own colours). ValueError for

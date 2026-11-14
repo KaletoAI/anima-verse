@@ -31,10 +31,11 @@ Metrics per seed (inside_head_3mm, eye_cards, face_cards, tip_p50_rel_shoulder_c
   2: (0, 0, 1, −20)  passes;
   3: (5, 0, 0, −15)  refused: "5 strands sink more than 3 mm into the head".
 [1] run_estimate before: steps ["haar", "fit"], hub_jobs 3 (HUB_JOBS hair:haar = {haar 3, fit 0}), note
-    "haar 3 hub jobs (~30–55 s each) + 3 CPU fits (~25 s each)". run_garment -> ok, ran ["haar", "fit"]; 3
+    "haar 3 hub jobs (~30–55 s each) + 3 CPU fits (~25 s each)", cpu_fits 3 (the tab's cost line). run_garment -> ok, ran ["haar", "fit"]; 3
     generate_strands calls, prompt "long wavy brown hair", params {"seed": 1}, {"seed": 2}, {"seed": 3}, each with
     a hub stage s1/s2/s3; 3 fit calls (seeds 1, 2, 3) with length_class "long" and the colour above; the seed
-    folders s1..s3 hold Demo_haar_s<n>_strands.npy, Demo_haar_s<n>_head.obj, info.json; the record's seeds
+    folders s1..s3 hold Demo_haar_s<n>_strands.npy, Demo_haar_s<n>_head.obj, info.json and tile.png (the
+    variant's front | back picture, rendered at fit time); the record's seeds
     [1, 2, 3]; no hub operation left (settled = deleted).
 [2] Best: seeds 1 and 2 pass, seed 2 has fewer face cards (1 < 2) -> served 2. record.chosen 2; results "3"
     accepted False with exactly the inside-head reason. The run's fsig = garment_fsig now (seed 2) != the fsig
@@ -51,7 +52,10 @@ Metrics per seed (inside_head_3mm, eye_cards, face_cards, tip_p50_rel_shoulder_c
     6: (0, 0, 0, −12) — ties seed 4 on both, loses on the seed number. The haar step forced (its own button):
     ran ["haar", "fit"], generate 6 with seeds [4, 5, 6], fit 7 (only 4, 5, 6 — 1..3 still hold) -> served 4.
     haar_panel: seeds [1..6], served only on 4, passed [True, True, False, True, True, True], next_seeds
-    [7, 8, 9], jobs 3, status "passed".
+    [7, 8, 9], jobs 3, status "passed"; seed 1's tile_url "/characters/Demo/garments/<H>/haar/1/tile.png?v=…" (every
+    fitted seed folder holds a tile.png, see [1] s2 files); in_use 4 (the preview is the served fit), only seed 4
+    flagged in_use; route {routed True, backend "HAAR"} (an empty chain = the one txt2hair backend), and with the
+    pool emptied {routed False, backend None} (the tab then disables the strands and spends nothing).
 [6] H2 = create_hairstyle(Demo, "long straight hair", "haar") (not worn). Every seed (1, 2, 3) refused by
     eye_cards 2: run_garment -> ok False, step "fit", error starts "no variant passed — seed 1: 2 cards hang over
     the eyes"; generate 9, fit 10; accepted_fit(H2) None; haar_panel status "no variant passed". set_haar_seed(H2,
@@ -69,6 +73,10 @@ Metrics per seed (inside_head_3mm, eye_cards, face_cards, tip_p50_rel_shoulder_c
 [10] Refit sweep: HAAR_FIT_VERSION bumped to 4 -> outdated_fits lists H and H2 (method "haar");
     refit_character -> both refitted, no generate call, fit +9 (H: 6 seeds, served 4 among them; H2: 3 seeds,
     the pick 2 among them); both records fit_version 4; H served 4, H2 served 2.
+[10b] Routes: GET /garments/H/haar/1/tile.png -> 200 image/png (PNG magic); seed 77 -> 404. POST /hair/description
+    {"  "} -> 400; {"long wavy  black hair"} -> 200, description "long wavy black hair" (whitespace folded), run
+    {steps ["haar", "fit"], hub_jobs 3, cpu_fits 3} (a new text = a new ssig without seeds); the hair GET then
+    names "haar_changed" among the stale reasons and the new ssig has no seeds; no generate / fit call.
 [11] Outbound connections: 0.
 """
 import json
@@ -273,6 +281,7 @@ def main() -> int:
         check("steps_for haar", gs.steps_for("hair", "haar"), ("haar", "fit"))
         check("estimate before", brief(garments.run_estimate("Demo", hid)),
               (["haar", "fit"], 3, "haar 3 hub jobs (~30–55 s each) + 3 CPU fits (~25 s each)"))
+        check("estimate cpu fits", garments.run_estimate("Demo", hid).get("cpu_fits"), 3)
         f_before = gs.garment_fsig("Demo", hid)
         ssig = gs.garment_ssig("Demo", hid)
         res = garments.run_garment("Demo", hid)
@@ -286,7 +295,7 @@ def main() -> int:
         folder = gs.haar_dir("Demo", hid, ssig)
         check("seed folders", sorted(p.name for p in folder.iterdir()), ["record.json", "s1", "s2", "s3"])
         check("s2 files", sorted(p.name for p in (folder / "s2").iterdir()),
-              ["Demo_haar_s2_head.obj", "Demo_haar_s2_strands.npy", "info.json"])
+              ["Demo_haar_s2_head.obj", "Demo_haar_s2_strands.npy", "info.json", "tile.png"])
         rec = gs.haar_record("Demo", hid, ssig)
         check("record seeds", rec.get("seeds"), [1, 2, 3])
         check("no hub op left", [op.kind for op in hub_ops.list_ops()], [])
@@ -353,8 +362,16 @@ def main() -> int:
         check("panel seeds", [e["seed"] for e in panel["seeds"]], [1, 2, 3, 4, 5, 6])
         check("panel served", [e["seed"] for e in panel["seeds"] if e["served"]], [4])
         check("panel passed", [e["passed"] for e in panel["seeds"]], [True, True, False, True, True, True])
-        check("panel misc", (panel["next_seeds"], panel["jobs"], panel["status"], panel["picked"],
-                             panel["seeds"][0]["tile_url"]), ([7, 8, 9], 3, "passed", None, None))
+        check("panel misc", (panel["next_seeds"], panel["jobs"], panel["status"], panel["picked"]),
+              ([7, 8, 9], 3, "passed", None))
+        tile = panel["seeds"][0]["tile_url"] or ""
+        check("panel tile url", (tile.split("?v=")[0], "?v=" in tile),
+              (f"/characters/Demo/garments/{hid}/haar/1/tile.png", True))
+        check("panel in use / route", (panel["in_use"], [e["seed"] for e in panel["seeds"] if e["in_use"]],
+                                       panel["route"]), (4, [4], {"routed": True, "backend": "HAAR"}))
+        FakeService.pool.backends = []
+        check("unrouted", garments.haar_panel("Demo", hid)["route"], {"routed": False, "backend": None})
+        FakeService.pool.backends = [backend]
         f4 = gs.garment_fsig("Demo", hid)
         check("served 4", (res.get("fsig"), fit_record(hid, f4)["inputs"].get("seed")), (f4, 4))
 
@@ -452,6 +469,26 @@ def main() -> int:
             check(f"{item} refitted", (hit[1].get("fit_version"), hit[1]["inputs"]["seed"]) if hit else None,
                   (4, seed))
         check("nothing outdated", garment_refit.outdated_fits("Demo"), [])
+
+        # --- [10b] ---------------------------------------------------------------
+        print("[10b] tile + text routes")
+        before = counts()
+        with TestClient(app, raise_server_exceptions=False) as client:
+            r = client.get(f"/characters/Demo/garments/{hid}/haar/1/tile.png")
+            check("tile 1", (r.status_code, r.headers.get("content-type"), r.content[:8]),
+                  (200, "image/png", b"\x89PNG\r\n\x1a\n"))
+            check("tile 77", client.get(f"/characters/Demo/garments/{hid}/haar/77/tile.png").status_code, 404)
+            r = client.post("/characters/Demo/hair/description", json={"item_id": hid, "description": "  "})
+            check("text blank", r.status_code, 400)
+            r = client.post("/characters/Demo/hair/description",
+                            json={"item_id": hid, "description": "long wavy  black hair"})
+            run = (r.json().get("run") or {})
+            check("text saved", (r.status_code, r.json().get("description"), run.get("steps"), run.get("hub_jobs"),
+                                 run.get("cpu_fits")), (200, "long wavy black hair", ["haar", "fit"], 3, 3))
+            body = client.get(f"/characters/Demo/hair?item_id={hid}").json()
+            check("text due", ("haar_changed" in ((body.get("garment") or {}).get("stale_reasons") or []),
+                               (body.get("haar") or {}).get("seeds")), (True, []))
+        check("text runs nothing", (counts()[0] - before[0], counts()[1] - before[1]), (0, 0))
 
         # --- [11] ----------------------------------------------------------------
         print("[11] outbound connections")

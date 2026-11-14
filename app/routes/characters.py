@@ -1011,18 +1011,24 @@ def _mesh_match_context(character_name: str) -> Dict[str, Any]:
 
 
 def _hair_match_context() -> Dict[str, Any]:
-    """The hair match beside the mesh match: the hair_mesh world chain (shown
-    as the fallback) and every enabled img2hair backend name (match preview)."""
+    """The hair matches beside the mesh match: the hair_mesh (HairDeck) and hair_strands (HAAR) world chains (shown
+    as the fallback) and every enabled img2hair / txt2hair backend name (match preview)."""
     from app.core import config
-    from app.imagegen.backends.openai_mesh import HAIR_CATEGORY
+    from app.imagegen.backends.openai_mesh import HAIR_CATEGORY, STRANDS_CATEGORY
     from app.imagegen.service import get_image_service
     rules = config.get("image_generation.routing", {}) or {}
-    chain = rules.get("hair_mesh") if isinstance(rules, dict) else None
-    names = [b.name for b in get_image_service().backends
-             if b.instance_enabled and getattr(b, "MEDIA_TYPE", "image") == "mesh"
-             and (getattr(b, "category", "") or "") == HAIR_CATEGORY]
-    return {"hair_world_chain": [str(x) for x in chain] if isinstance(chain, list) else [],
-            "hair_backends": names}
+
+    def chain(occasion: str) -> List[str]:
+        value = rules.get(occasion) if isinstance(rules, dict) else None
+        return [str(x) for x in value] if isinstance(value, list) else []
+
+    def names(category: str) -> List[str]:
+        return [b.name for b in get_image_service().backends
+                if b.instance_enabled and getattr(b, "MEDIA_TYPE", "image") == "mesh"
+                and (getattr(b, "category", "") or "") == category]
+
+    return {"hair_world_chain": chain("hair_mesh"), "hair_backends": names(HAIR_CATEGORY),
+            "strands_world_chain": chain("hair_strands"), "strands_backends": names(STRANDS_CATEGORY)}
 
 
 def _image_match_chains() -> Dict[str, List[Dict[str, Any]]]:
@@ -1926,6 +1932,12 @@ class HairMethodRequest(BaseModel):
     item_id: str = ""
 
 
+class HairstyleTextRequest(BaseModel):
+    # The hairstyle's text; ``item_id`` "" = the worn hairstyle.
+    description: str = ""
+    item_id: str = ""
+
+
 class HaarSeedRequest(BaseModel):
     # The HAAR seed to serve, or null for automatic (the best passing seed); validated by garment_hair.set_haar_seed
     # (400, not 422). ``item_id`` "" = the worn hairstyle.
@@ -2397,6 +2409,33 @@ def set_character_haar_seed(character_name: str, body: HaarSeedRequest,
     return {"seed": panel.get("picked"), "served": panel.get("served"), "item_id": item_id}
 
 
+@router.post("/{character_name}/hair/description")
+def set_character_hairstyle_text(character_name: str, body: HairstyleTextRequest,
+                                 _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Save a hairstyle's text (``item_id`` "" = the worn one; ``garment_hair.set_hairstyle_description``). Runs
+    nothing: ``run`` is what its Run all would run afterwards (``garments.run_estimate``; None off the pipeline) —
+    the tab writes it beside the text. 400 for an empty text or an item that is no hairstyle of the character."""
+    from app.core import base_body, garment_hair, garments
+    from app.models.inventory import get_item
+    _require_character(character_name)
+    item_id = _hairstyle_id(character_name, body.item_id)
+    try:
+        if not garment_hair.is_hairstyle(get_item(item_id), character_name):
+            raise ValueError(f"{item_id[:80]!r} is no hairstyle of {character_name}")
+        saved = garment_hair.set_hairstyle_description(character_name, item_id, body.description)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
+    run = None
+    if base_body.is_base_pipeline(character_name):
+        try:
+            run = garments.run_estimate(character_name, item_id)
+        except Exception:  # noqa: BLE001 — a label, never a failure of the save
+            logger.exception("Hairstyle text: no run estimate for %s/%s", character_name, item_id)
+    return {"item_id": item_id, "description": garment_hair.hairstyle_description(get_item(item_id)), "run": run}
+
+
 @router.post("/{character_name}/hair/colour")
 def set_character_hair_colour(character_name: str, body: HairColourRequest,
                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
@@ -2858,6 +2897,24 @@ def get_character_garment_hairdeck_image(character_name: str, item_id: str, imag
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     media_type, _encoding = mimetypes.guess_type(str(path))
     return etag_file_response(path, request, media_type or "image/png")
+
+
+@router.get("/{character_name}/garments/{item_id}/haar/{seed}/tile.png")
+def get_character_garment_haar_tile(character_name: str, item_id: str, seed: int, request: Request,
+                                    _: Dict[str, Any] = Depends(require_admin)):
+    """The tile of HAAR seed ``seed`` under the hairstyle's CURRENT ssig (``garments.haar_tile_path``: front | back
+    of the fitted cards on the bald head, rendered on the CPU at fit time), with an ETag. 404 for an item that is
+    no hair of this character or a seed without a tile."""
+    from fastapi.responses import Response
+    from app.core import garments
+    _require_character(character_name)
+    try:
+        path = garments.haar_tile_path(character_name, item_id, seed)
+    except ValueError:
+        path = None
+    if path is None:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return etag_file_response(path, request, "image/png")
 
 
 @router.get("/{character_name}/garments/{item_id}/model")

@@ -12,7 +12,7 @@ import './imagegenOverride.css'
  * section per pipeline stage (`slot_keys` names the keys of the stage):
  * Pictures (renders, portrait, character LoRAs) → T-pose (main reference,
  * its views + garment edits, T-pose LoRAs) → Base body → Outfit views → 3D
- * (character mesh, the HairDeck hair mesh). The grouping is a template edit
+ * (character mesh, the HairDeck hair mesh, the HAAR hair strands). The grouping is a template edit
  * (base-character.json, tab `image_settings`), not code.
  *
  * A glob is position 0 in front of its occasion chain of the image routing
@@ -55,10 +55,12 @@ interface StoredOverride {
   mesh_backends?: string[]
   hair_world_chain?: string[]
   hair_backends?: string[]
+  strands_world_chain?: string[]
+  strands_backends?: string[]
   match_chains?: Record<string, MatchChain[]>
 }
 
-type GlobKind = 'image' | 'mesh' | 'hair'
+type GlobKind = 'image' | 'mesh' | 'hair' | 'strands'
 
 interface GlobDef {
   kind: GlobKind
@@ -135,6 +137,10 @@ const DEFS: Record<string, GlobDef | LoraDef> = {
   hair_mesh_workflow: {
     kind: 'hair', label: 'Hair mesh (HairDeck)', placeholder: 'HairDeck*',
     tip: 'Tried first for the hair cards made from one image of the character (hair mode HairDeck). Empty = the hair-cards chain.',
+  },
+  hair_strands_workflow: {
+    kind: 'strands', label: 'Hair strands (HAAR)', placeholder: 'HAAR*',
+    tip: 'Tried first for the hair strands made from a hairstyle\'s text (hair mode HAAR). Empty = the hair-strands chain.',
   },
   loras: {
     kind: 'loras', label: 'Character LoRAs', target: 'render', empty: 'None',
@@ -284,7 +290,8 @@ function GlobRow({ fieldKey, def, value, globValue, stored, backends, onChange }
     ? (stored.mesh_occasion === 'mesh_creature' ? t('Mesh (creature)') : t('Mesh (humanoid)'))
     : t(def.label)
   const names = def.kind === 'mesh' ? stored.mesh_backends || []
-    : def.kind === 'hair' ? stored.hair_backends || [] : backends
+    : def.kind === 'hair' ? stored.hair_backends || []
+      : def.kind === 'strands' ? stored.strands_backends || [] : backends
 
   // One line under the input: what this glob hits, or — empty — what runs
   // instead (the first non-empty fallback glob, else the chain). The full
@@ -314,6 +321,8 @@ function GlobRow({ fieldKey, def, value, globValue, stored, backends, onChange }
       status = t('chain') + ': ' + chainText(stored.mesh_world_chain || [])
     } else if (def.kind === 'hair') {
       status = t('chain') + ': ' + chainText(stored.hair_world_chain || [])
+    } else if (def.kind === 'strands') {
+      status = t('chain') + ': ' + chainText(stored.strands_world_chain || [])
     } else {
       // Its fallback globs are empty too: say so, then the chain that runs.
       const rows = stored.match_chains?.[fieldKey] || []

@@ -1,6 +1,8 @@
 /**
- * HairLiveControls — the settings of a HairDeck hairstyle that change its 3D preview, compact BESIDE the
+ * HairLiveControls — the settings of a HairDeck or HAAR hairstyle that change its 3D preview, compact BESIDE the
  * viewer (FieldHairstyles passes them as the viewer's toolbar; Task UI4, the user's checklist points 2 and 4).
+ * HAAR hair has no placement (its strands are registered on the head; strand-hair spec § 6.3.4): the group is
+ * hidden, colour and motion stay.
  *
  * Every slider acts on the preview WHILE it is dragged (the drafts go up through `onDraft`; FieldHairstyles
  * turns them into the viewer's live vertex map, colour tint and spring frequencies) and is SAVED on its own
@@ -70,10 +72,12 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-export function HairLiveControls({ character, itemId, hd, info, busy, previewSwings, strandIssue, onDraft, onRuler,
-  onSaved }: {
+export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, info, busy, previewSwings, strandIssue,
+  onDraft, onRuler, onSaved }: {
   character: string
   itemId: string
+  /** The hairstyle's mode: HAAR hides the placement and names its own colour sources. */
+  mode?: 'hairdeck' | 'haar'
   hd: HairDeckPanel
   /** The hair GET: what a save made due. */
   info: StepInput
@@ -147,44 +151,48 @@ export function HairLiveControls({ character, itemId, hd, info, busy, previewSwi
   const swingDue = settingDue('swing', info, t)
   const autoMark = (isManual: boolean) => (isManual ? '' : ` ${t('auto')}`)
   const mm = (m: number) => `${m >= 0 ? '+' : ''}${(m * 1000).toFixed(0)} mm`
+  const haar = mode === 'haar'
   const inUse = hd.colour.target ? `${t('Manual')} ${hd.colour.target}`
-    : hd.colour.profile ? `${t('Profile colour')} (${hd.colour.profile.name})` : t("HairDeck's own")
+    : hd.colour.profile ? `${t('Profile colour')} (${hd.colour.profile.name})`
+      : haar ? t('None named — the cards stay plain') : t("HairDeck's own")
 
   return (
     <>
-      <Group title={t('Placement')}>
-        <Slider label={t('Forward shift')} value={Math.round(cur.forward_m * 1000)}
-          shown={mm(cur.forward_m) + (touched.forward_m ? '' : autoMark(p.forward_m !== null))}
-          min={-Math.round(lim.forward_m * 1000)} max={Math.round(lim.forward_m * 1000)} step={1} disabled={off}
-          title={t('Moves the hair forward (+) or back (−). The cyan line in the preview is this shift, the ruler beside it has a tick per centimetre.')}
-          onChange={(v) => edit({ forward_m: v / 1000 })} onFocus={() => onRuler(true)} onBlur={() => onRuler(false)} />
-        <Slider label={t('Forward tilt')} value={cur.tilt_deg}
-          shown={`${cur.tilt_deg.toFixed(1)}°` + (touched.tilt_deg ? '' : autoMark(p.tilt_deg !== null))}
-          min={-lim.tilt_deg} max={lim.tilt_deg} step={0.5} disabled={off}
-          title={t('Pitches the hair forward (+) about the point the fit turned it about. Automatic brings the front hairline to the brow line.')}
-          onChange={(v) => edit({ tilt_deg: v })} />
-        <Slider label={t('Hair width')} value={cur.width_scale}
-          shown={`${cur.width_scale.toFixed(2)}×` + (touched.width_scale ? '' : autoMark(p.width_scale !== null))}
-          min={lim.width_scale[0]} max={lim.width_scale[1]} step={0.05} disabled={off}
-          title={t('Scales how far the hair reaches out beyond the sides of the head; 1 = as generated. The hairline stays.')}
-          onChange={(v) => edit({ width_scale: v })} />
-        <div style={BTN_ROW}>
-          <button type="button" className="ga-btn ga-btn-sm" disabled={off || !placement}
-            title={t('Saves the placement — nothing runs')}
-            onClick={() => { if (placement) void post('placement', { forward_m: sent('forward_m'),
-              tilt_deg: sent('tilt_deg'), width_scale: sent('width_scale') }) }}>
-            {t('Save')}
-          </button>
-          <button type="button" className="ga-btn ga-btn-sm" disabled={off || (!manual && !placement)}
-            title={t('Back to automatic — saved at once, nothing runs')}
-            onClick={() => { if (manual) void post('placement', { forward_m: null, tilt_deg: null, width_scale: null })
-              else { setPlacement(null); setTouched({}) } }}>
-            {t('Automatic')}
-          </button>
-        </div>
-        {placement ? <span className="ga-hint" style={{ fontSize: 10 }}>{t('Preview only — Save keeps it')}</span>
-          : placementDue ? <span style={DUE}>{placementDue}</span> : null}
-      </Group>
+      {haar ? null : (
+        <Group title={t('Placement')}>
+          <Slider label={t('Forward shift')} value={Math.round(cur.forward_m * 1000)}
+            shown={mm(cur.forward_m) + (touched.forward_m ? '' : autoMark(p.forward_m !== null))}
+            min={-Math.round(lim.forward_m * 1000)} max={Math.round(lim.forward_m * 1000)} step={1} disabled={off}
+            title={t('Moves the hair forward (+) or back (−). The cyan line in the preview is this shift, the ruler beside it has a tick per centimetre.')}
+            onChange={(v) => edit({ forward_m: v / 1000 })} onFocus={() => onRuler(true)} onBlur={() => onRuler(false)} />
+          <Slider label={t('Forward tilt')} value={cur.tilt_deg}
+            shown={`${cur.tilt_deg.toFixed(1)}°` + (touched.tilt_deg ? '' : autoMark(p.tilt_deg !== null))}
+            min={-lim.tilt_deg} max={lim.tilt_deg} step={0.5} disabled={off}
+            title={t('Pitches the hair forward (+) about the point the fit turned it about. Automatic brings the front hairline to the brow line.')}
+            onChange={(v) => edit({ tilt_deg: v })} />
+          <Slider label={t('Hair width')} value={cur.width_scale}
+            shown={`${cur.width_scale.toFixed(2)}×` + (touched.width_scale ? '' : autoMark(p.width_scale !== null))}
+            min={lim.width_scale[0]} max={lim.width_scale[1]} step={0.05} disabled={off}
+            title={t('Scales how far the hair reaches out beyond the sides of the head; 1 = as generated. The hairline stays.')}
+            onChange={(v) => edit({ width_scale: v })} />
+          <div style={BTN_ROW}>
+            <button type="button" className="ga-btn ga-btn-sm" disabled={off || !placement}
+              title={t('Saves the placement — nothing runs')}
+              onClick={() => { if (placement) void post('placement', { forward_m: sent('forward_m'),
+                tilt_deg: sent('tilt_deg'), width_scale: sent('width_scale') }) }}>
+              {t('Save')}
+            </button>
+            <button type="button" className="ga-btn ga-btn-sm" disabled={off || (!manual && !placement)}
+              title={t('Back to automatic — saved at once, nothing runs')}
+              onClick={() => { if (manual) void post('placement', { forward_m: null, tilt_deg: null, width_scale: null })
+                else { setPlacement(null); setTouched({}) } }}>
+              {t('Automatic')}
+            </button>
+          </div>
+          {placement ? <span className="ga-hint" style={{ fontSize: 10 }}>{t('Preview only — Save keeps it')}</span>
+            : placementDue ? <span style={DUE}>{placementDue}</span> : null}
+        </Group>
+      )}
 
       <Group title={t('Colour')}>
         <div style={BTN_ROW}>
@@ -201,7 +209,7 @@ export function HairLiveControls({ character, itemId, hd, info, busy, previewSwi
           </button>
         </div>
         <span className="ga-hint" style={{ fontSize: 10 }}
-          title={hd.colour.auto ? `${t("HairDeck's own")} ${hd.colour.auto}` : undefined}>
+          title={!haar && hd.colour.auto ? `${t("HairDeck's own")} ${hd.colour.auto}` : undefined}>
           {t('In use')}: {hd.colour.target ? <Swatch hex={hd.colour.target} /> : null} {inUse}
         </span>
         {colour ? <span className="ga-hint" style={{ fontSize: 10 }}>{t('Preview only — Save keeps it')}</span>
@@ -211,14 +219,18 @@ export function HairLiveControls({ character, itemId, hd, info, busy, previewSwi
       {chains ? (
         <Group title={t('Motion')}>
           <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11, cursor: 'pointer' }}
-            title={t('Swing on: the hair swings with motion but may touch the shoulders more. Saved at once — nothing runs; Re-fit then binds the hair to its spring chains (no hub job).')}>
-            <input type="checkbox" checked={chains.swing} disabled={off || (chains.fitted && chains.count === 0 && !chains.swing)}
+            title={haar ? t('Swing on: every strand swings with motion. Saved at once — nothing runs, nothing is due.')
+              : t('Swing on: the hair swings with motion but may touch the shoulders more. Saved at once — nothing runs; Re-fit then binds the hair to its spring chains (no hub job).')}>
+            <input type="checkbox" checked={chains.swing}
+              disabled={off || (!haar && chains.fitted && chains.count === 0 && !chains.swing)}
               onChange={(e) => { void post('motion', { swing: e.target.checked, stiffness: chains.stiffness }) }} />
             {t('Swing')}
-            <span className="ga-hint" style={{ fontSize: 10 }}>
-              {chains.fitted ? (chains.count ? t('{n} spring chains').replace('{n}', String(chains.count))
-                : t('no spring chains')) : t('chains after the next fit')}
-            </span>
+            {haar ? null : (
+              <span className="ga-hint" style={{ fontSize: 10 }}>
+                {chains.fitted ? (chains.count ? t('{n} spring chains').replace('{n}', String(chains.count))
+                  : t('no spring chains')) : t('chains after the next fit')}
+              </span>
+            )}
           </label>
           {swingDue ? <span style={DUE}>{swingDue}</span> : null}
           <Slider label={t('Stiffness')} value={stiffness ?? chains.stiffness}

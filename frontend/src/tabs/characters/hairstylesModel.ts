@@ -4,9 +4,13 @@
  * No React, no fetch: checked by `scripts/check_hairstyles_ui.mjs`.
  *
  * - `hairStepRows`: one row per step of the selected hairstyle's mode — HairDeck (a hub job) and Fit (on the
- *   CPU; it also binds the spring chains) for HairDeck hair, one row for hair in the body (its flow is the
- *   Figure tab's Build) and one for HAAR (not built yet). Each row has a traffic light, a short state, the
- *   reason in plain words (what changed, when, what fixes it) and its single button with the cost.
+ *   CPU; it also binds the spring chains) for HairDeck hair, HAAR strands (3 hub jobs, one per seed) and Fit (CPU,
+ *   one per seed) for HAAR hair, one row for hair in the body (its flow is the Figure tab's Build). Each row has a
+ *   traffic light, a short state, the reason in plain words (what changed, when, what fixes it) and its single
+ *   button with the cost.
+ * - `haarVariantRows` / `variantAction` / `haarRunCost`: the HAAR variants sub-tab (strand-hair spec § 6.3.4) — one
+ *   tile per seed with its light, its reason and its numbers, "In use" or "Use this — no hub job, CPU refit" — and
+ *   the cost line beside a HAAR Run all.
  * - `settingDue`: what a saved setting made due, written next to it.
  * - `placementMap` / `placementRuler`: the live placement preview — the fitted hair turned and moved by the
  *   difference between the dragged values and the ones the fit used, about the fit's own pivot — and the
@@ -26,6 +30,43 @@ export type When = (stamp: string | null | undefined) => string
 
 export type Light = 'green' | 'yellow' | 'red' | 'grey' | 'blue'
 
+/** One HAAR seed of the hair GET's `haar` panel (`garments.haar_panel`). */
+export interface HaarSeedEntry {
+  seed: number
+  /** null until the seed is fitted. */
+  passed: boolean | null
+  /** The gate's words (plain English with the numbers). */
+  reasons: string[]
+  metrics: Record<string, unknown>
+  /** The tile (front | back of the fitted cards on the bald head); null without one. */
+  tile_url: string | null
+  /** The seed a Re-fit serves (the fsig names it). */
+  served: boolean
+  /** The hairstyle's own pick (`haar_seed`). */
+  picked: boolean
+  /** The seed of the fit the preview shows. */
+  in_use?: boolean
+}
+
+/** The hair GET's `haar` panel (`garments.haar_panel`; null for another mode). */
+export interface HaarPanel {
+  ssig: string
+  status: 'missing' | 'unfitted' | 'passed' | 'no variant passed'
+  seeds: HaarSeedEntry[]
+  next_seeds: number[]
+  jobs: number
+  picked: number | null
+  served: number | null
+  in_use?: number | null
+  /** The backend the hair_strands occasion is meant to run on; `routed` false = none (nothing can be spent). */
+  route?: { routed: boolean; backend: string | null } | null
+}
+
+/** No backend for HAAR (stage H3's words); the tab links the settings page beside it. */
+export const HAAR_NO_ROUTE = 'No backend for occasion hair_strands — /admin/settings → Media Generation → Routing'
+/** Where the routing is edited (the settings page's section/page hash). */
+export const ROUTING_URL = '/admin/settings#image_generation/routing'
+
 /** The parts of GET /characters/{c}/hair a step row reads (`useGarment.HairInfo`). */
 export interface StepInput {
   pipeline: boolean
@@ -41,8 +82,12 @@ export interface StepInput {
     failed: { step: string; error: string } | null
     stale_reasons: string[]
     preview_built_at?: string | null
-    steps: { fit?: { status: string; created_at: string | null } }
+    steps: {
+      fit?: { status: string; created_at: string | null }
+      haar?: { status: string; seeds?: number[]; failed?: Record<string, string | null>; created_at: string | null }
+    }
   } | null
+  haar?: HaarPanel | null
   hairdeck: {
     status: 'accepted' | 'refused' | 'missing'
     created_at: string | null
@@ -85,11 +130,197 @@ export const STALE_TEXT: Record<string, string> = {
   colour_changed: 'The hair colour setting changed',
   placement_changed: 'The placement setting changed',
   swing_changed: 'The Swing setting changed',
+  haar_changed: 'The hairstyle text changed',
+  seed_changed: 'Another variant was picked',
 }
 
 /** The stale reasons that only the fit applies (all but a new HairDeck result). */
 const FIT_REASONS = ['description_changed', 'base_changed', 'base_model_changed', 'fit_algorithm_updated',
   'colour_changed', 'placement_changed', 'swing_changed']
+/** The stale reasons a HAAR fit applies (a new text asks HAAR again: the strands row). */
+const HAAR_FIT_REASONS = ['base_changed', 'base_model_changed', 'fit_algorithm_updated', 'colour_changed',
+  'seed_changed']
+
+/** "1 CPU fit" / "N CPU fits". */
+export function cpuFitsLabel(n: number, t: Tr = EN): string {
+  return n === 1 ? t('1 CPU fit') : t('{n} CPU fits').replace('{n}', String(n))
+}
+
+/** The cost line beside a HAAR Run all (rule: the cost before the click): "3 hub jobs (~30–55 s each) + 3 CPU fits
+ *  (~25 s each)" when the strands are due, "2 CPU fits (~25 s each), no hub job" when only fits are, "" else. */
+export function haarRunCost(run: { steps: string[]; hub_jobs: number | null; cpu_fits?: number } | null | undefined,
+  t: Tr = EN): string {
+  if (!run || !run.steps.length) return ''
+  const fits = run.cpu_fits ?? run.hub_jobs ?? 1
+  if (run.steps.includes('haar')) {
+    return t('{jobs} (~30–55 s each) + {fits} (~25 s each)').replace('{jobs}', jobsLabel(run.hub_jobs, t))
+      .replace('{fits}', cpuFitsLabel(fits, t))
+  }
+  return t('{fits} (~25 s each), no hub job').replace('{fits}', cpuFitsLabel(fits, t))
+}
+
+/** The HAAR rows (strand-hair spec § 6.3.4): "HAAR strands · 3 hub jobs" (redo = the next 3 seeds, then their CPU
+ *  fits) and "Fit · no hub job" (every new seed fitted on the CPU, the best passing one or the pick served). No
+ *  backend routed: the strands row says so and its button is off — nothing is spent. */
+function haarStepRows(info: StepInput, t: Tr, when: When): StepRow[] {
+  const g = info.garment
+  const hp = info.haar ?? null
+  const due = new Set(info.run?.steps || [])
+  const running = g?.running_step || null
+  const queued = running === 'queued'
+  const jobs = info.step_jobs?.haar ?? hp?.jobs ?? 3
+  const fitJobs = info.step_jobs?.fit ?? 0
+  const noRoute = hp?.route && !hp.route.routed ? t(HAAR_NO_ROUTE) : null
+  if (!info.pipeline) {
+    const reason = t('A temporary NPC has no figure — its hairstyles are not built.')
+    return [
+      { id: 'haar', name: t('HAAR strands · hub'), light: 'grey', state: t('Not built'), reason, detail: '', button: null },
+      { id: 'fit', name: t('Fit · CPU'), light: 'grey', state: t('Not built'), reason, detail: '', button: null },
+    ]
+  }
+  const step = g?.steps.haar
+  const seeds = hp?.seeds.length ?? step?.seeds?.length ?? 0
+  const cost = jobsLabel(jobs, t)
+  const haarRow: StepRow = {
+    id: 'haar', name: t('HAAR strands · hub'), light: 'grey', state: '', reason: '',
+    detail: [hp?.route?.backend ? `${t('Backend')} ${hp.route.backend}` : '',
+      hp?.seeds.length ? `${t('Seeds')} ${hp.seeds.map((e) => e.seed).join(', ')}` : '',
+      hp?.next_seeds.length ? `${t('Next seeds')} ${hp.next_seeds.join(', ')}` : '',
+      t('HAAR is licensed CC BY-NC 4.0 (non-commercial).')].filter(Boolean).join(' · '),
+    button: { label: t('HAAR strands · {cost}').replace('{cost}', cost), disabled: noRoute ? t('No backend routed') : null },
+  }
+  const failedSeeds = Object.entries(step?.failed || {}).filter(([, e]) => e).map(([s, e]) => `${t('seed')} ${s}: ${e}`)
+  if (running === 'haar' || (queued && due.has('haar'))) {
+    haarRow.light = 'blue'
+    haarRow.state = queued ? t('Queued') : t('Running')
+    haarRow.reason = t('HAAR makes {n} variants from the hairstyle text (~30–55 s each).').replace('{n}', String(jobs))
+  } else if (g?.failed?.step === 'haar') {
+    haarRow.light = 'red'
+    haarRow.state = t('Failed')
+    haarRow.reason = t('{error} — the button asks for the next {n} seeds ({cost}).').replace('{error}', g.failed.error)
+      .replace('{n}', String(jobs)).replace('{cost}', cost)
+  } else if (step?.status === 'accepted' && seeds) {
+    haarRow.light = 'green'
+    haarRow.state = t('Current')
+    haarRow.reason = t('{n} variants made {when} from the hairstyle text.').replace('{n}', String(seeds))
+      .replace('{when}', when(step.created_at) || t('earlier'))
+  } else if (noRoute) {
+    haarRow.light = 'red'
+    haarRow.state = t('No backend')
+    haarRow.reason = `${noRoute} — ${t('nothing is spent until one is set.')}`
+  } else if (step?.status === 'refused') {
+    haarRow.light = 'red'
+    haarRow.state = t('Refused')
+    haarRow.reason = t('HAAR delivered no strands ({errors}) — the button asks for the next {n} seeds ({cost}).')
+      .replace('{errors}', failedSeeds.join('; ') || t('no reason given')).replace('{n}', String(jobs))
+      .replace('{cost}', cost)
+  } else if (g?.stale_reasons.includes('haar_changed')) {
+    haarRow.light = 'yellow'
+    haarRow.state = t('Due')
+    haarRow.reason = t('{reason} after the hair in use was made ({when}) — Run all makes {n} new variants ({cost}).')
+      .replace('{reason}', t(STALE_TEXT.haar_changed)).replace('{when}', when(g.preview_built_at) || t('earlier'))
+      .replace('{n}', String(jobs)).replace('{cost}', cost)
+  } else {
+    haarRow.state = t('Not made yet')
+    haarRow.reason = t('No variants yet — Run all makes {n} from the hairstyle text ({cost}, ~30–55 s each).')
+      .replace('{n}', String(jobs)).replace('{cost}', cost)
+  }
+
+  const fit = g?.steps.fit
+  const fitReasons = (g?.stale_reasons || []).filter((r) => HAAR_FIT_REASONS.includes(r))
+  const inUse = hp?.in_use ?? null
+  const fitRow: StepRow = {
+    id: 'fit', name: t('Fit · CPU'), light: 'grey', state: '', reason: '',
+    detail: t('Fits every new variant on the base model on the CPU (~25 s each), checks it and uses the best passing one — or the one you picked under HAAR variants.'),
+    button: { label: t('Fit · {cost}').replace('{cost}', jobsLabel(fitJobs, t)),
+      disabled: seeds ? null : t('Needs the HAAR strands first') },
+  }
+  if (running === 'fit' || (queued && !due.has('haar') && due.has('fit'))) {
+    fitRow.light = 'blue'
+    fitRow.state = queued ? t('Queued') : t('Running')
+    fitRow.reason = t('Fitting the variants on the base model (~25 s each).')
+  } else if (g?.failed?.step === 'fit') {
+    fitRow.light = 'red'
+    fitRow.state = t('Failed')
+    fitRow.reason = t('{error} — pick a variant under HAAR variants (no hub job), or make new ones ({cost}).')
+      .replace('{error}', g.failed.error).replace('{cost}', cost)
+  } else if (seeds && fit?.status === 'accepted' && !due.has('fit')) {
+    fitRow.light = 'green'
+    fitRow.state = t('Current')
+    fitRow.reason = t('Fitted {when} on the current base model.').replace('{when}', when(fit.created_at) || t('earlier'))
+      + (inUse !== null ? ' ' + t('Variant {seed} in use.').replace('{seed}', String(inUse)) : '')
+  } else if (fitReasons.length && g?.preview_built_at) {
+    fitRow.light = 'yellow'
+    fitRow.state = t('Due')
+    fitRow.reason = t('{reasons} after the fit in use ({when}) — {fix}; that fit stays in use until then.')
+      .replace('{reasons}', staleWords(fitReasons, t, when(info.body_built_at)))
+      .replace('{when}', when(g.preview_built_at) || t('earlier'))
+      .replace('{fix}', due.has('haar') ? t('Run all makes the strands first, then fits')
+        : t('Re-fit applies it ({cost})').replace('{cost}', jobsLabel(fitJobs, t)))
+  } else {
+    fitRow.state = t('Not fitted yet')
+    fitRow.reason = seeds ? t('Re-fit makes it ({cost}).').replace('{cost}', jobsLabel(fitJobs, t))
+      : t('Waits for the HAAR strands.')
+  }
+  return [haarRow, fitRow]
+}
+
+/** A HAAR variant tile's light: passed · refused · not fitted yet. */
+export type VariantLight = 'ok' | 'bad' | 'wait'
+
+export interface VariantRow {
+  seed: number
+  light: VariantLight
+  /** Plain words: passed, or the gate's reasons. */
+  reason: string
+  /** Its numbers (mouse-over), one per line. */
+  numbers: string
+  served: boolean
+  picked: boolean
+  inUse: boolean
+  tileUrl: string
+}
+
+/** The numbers of a variant's mouse-over (the fit's metrics), in this order. */
+const VARIANT_NUMBERS: Array<[string, string, (v: number) => string]> = [
+  ['tip_p50_rel_shoulder_cm', 'Tips vs. shoulder (median)', (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)} cm`],
+  ['length_cm_p50', 'Length (median)', (v) => `${v.toFixed(1)} cm`],
+  ['inside_head_3mm', 'Strands over 3 mm in the head', (v) => String(Math.round(v))],
+  ['eye_cards', 'Cards over the eyes', (v) => String(Math.round(v))],
+  ['face_cards', 'Cards beside the face', (v) => String(Math.round(v))],
+  ['flyaway_tip_share', 'Flyaway tips', (v) => `${(v * 100).toFixed(1)} %`],
+  ['cards', 'Cards', (v) => String(Math.round(v))],
+  ['strands', 'Strands', (v) => String(Math.round(v))],
+]
+
+/** One tile per seed of the HAAR panel (module docstring), in the server's order. */
+export function haarVariantRows(panel: HaarPanel | null | undefined, t: Tr = EN): VariantRow[] {
+  return (panel?.seeds || []).map((e) => {
+    const numbers = VARIANT_NUMBERS.filter(([k]) => typeof e.metrics?.[k] === 'number' && Number.isFinite(e.metrics[k]))
+      .map(([k, label, fmt]) => `${t(label)}: ${fmt(e.metrics[k] as number)}`)
+    return {
+      seed: e.seed,
+      light: e.passed === null ? 'wait' : e.passed ? 'ok' : 'bad',
+      reason: e.passed === null ? t('Not fitted yet — the Fit step fits it (no hub job).')
+        : e.passed ? t('Passed every check.') : (e.reasons.join(' · ') || t('Refused')),
+      numbers: numbers.join('\n'),
+      served: !!e.served,
+      picked: !!e.picked,
+      inUse: !!e.in_use,
+      tileUrl: e.tile_url || '',
+    }
+  })
+}
+
+/** What a variant tile offers: "In use" (the previewed fit's seed — it stays in use until the Re-fit of another
+ *  pick), a pick or a better seed waiting for its Re-fit, else the button "Use this — no hub job, CPU refit" (saves
+ *  the pick, runs nothing). */
+export function variantAction(row: VariantRow, t: Tr = EN): { label: string; button: boolean } {
+  if (row.inUse) return { label: t('In use'), button: false }
+  if (row.picked) return { label: t('Picked — Re-fit applies it (no hub job)'), button: false }
+  if (row.served) return { label: t('Best — Re-fit applies it (no hub job)'), button: false }
+  return { label: t('Use this — no hub job, CPU refit'), button: true }
+}
 
 /** The base-body reasons: the line names when the base model was built. */
 const BASE_REASONS = ['base_changed', 'base_model_changed']
@@ -102,11 +333,7 @@ function staleWords(reasons: readonly string[], t: Tr, baseBuilt = ''): string {
 /** The rows of the selected hairstyle's steps (module docstring). */
 export function hairStepRows(info: StepInput, t: Tr = EN, when: When = (s) => s || ''): StepRow[] {
   const mode = info.method
-  if (mode === 'haar') {
-    return [{ id: 'haar', name: t('HAAR'), light: 'grey', state: t('Not built yet'),
-      reason: t('HAAR hair is not built yet — choose HairDeck or In the body under Settings.'), detail: '',
-      button: null }]
-  }
+  if (mode === 'haar') return haarStepRows(info, t, when)
   if (mode === 'body') {
     const stale = info.base_prompts?.state === 'stale'
     const row: StepRow = { id: 'body', name: t('Hair in the plain body'), light: 'grey', state: '', reason: '',
@@ -244,8 +471,7 @@ export function hairStepRows(info: StepInput, t: Tr = EN, when: When = (s) => s 
 
 /** One traffic light per hairstyle in the list (GET …/hairstyles: its freshness and the steps its Run all would
  *  run now, `due`): a current fit with a step due (a saved setting) is yellow too. */
-export function listLight(state: string | null | undefined, mode: string, due: readonly string[] = []): Light {
-  if (mode === 'haar') return 'grey'
+export function listLight(state: string | null | undefined, _mode: string, due: readonly string[] = []): Light {
   if (state === 'current') return due.length ? 'yellow' : 'green'
   return state === 'stale' ? 'yellow' : 'grey'
 }
@@ -254,7 +480,8 @@ export function listLight(state: string | null | undefined, mode: string, due: r
 export function listReason(freshness: { state: string; reason?: string | null } | null | undefined,
   due: readonly string[] = [], t: Tr = EN): string {
   if (freshness?.state === 'current') {
-    return due.length ? t('Due: {steps}').replace('{steps}', due.map((s) => t(s === 'fit' ? 'Fit' : 'HairDeck')).join(', '))
+    return due.length ? t('Due: {steps}').replace('{steps}', due.map((s) => t(s === 'fit' ? 'Fit'
+      : s === 'haar' ? 'HAAR strands' : 'HairDeck')).join(', '))
       : t('Current')
   }
   return freshness?.reason ? t(freshness.reason) : ''

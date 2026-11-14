@@ -22,9 +22,12 @@
  *       HairDeck result first".
  *     A refused HairDeck: red "Refused", "<error> — Regenerate tries a new seed (1 hub job)."
  *     A temporary NPC (pipeline false): two grey rows "Not built", no button.
- *     HAAR: one grey row "Not built yet", no button. Hair in the body worn as the plain body's hair: one green
+ *     HAAR with nothing made (the fixture's HairDeck-shaped garment: no HAAR seeds, step_jobs without haar → the
+ *       panel's default 3): two grey rows — "HAAR strands · 3 hub jobs" "Not made yet" and "Fit · no hub job" "Not
+ *       fitted yet" (a fit record without seeds is not current); the HAAR rows' other states are in
+ *       smoke_haar_variant_rows.mjs. Hair in the body worn as the plain body's hair: one green
  *       row "Current", "… — built <when>.", no button (its flow is the Figure tab's Build).
- * [3] listLight / listReason: haar → grey; current + no due → green "Current"; current + due [fit] → yellow
+ * [3] listLight / listReason: haar current → green like any mode (HAAR is built since H3); current + no due → green "Current"; current + due [fit] → yellow
  *     "Due: Fit"; stale → yellow with the server's reason; missing → grey.
  * [4] settingDue: placement with placement_changed and fit 0 jobs → "Saved, not applied — Re-fit applies it
  *     (no hub job)"; colour without colour_changed → null; stiffness → null (it acts on the motion at once).
@@ -151,7 +154,7 @@ check('[2] refused', brief(m.hairStepRows(refused, undefined, when))[0].slice(1,
 check('[2] temporary NPC', brief(m.hairStepRows(info({ pipeline: false }), undefined, when)).map((r) => r.slice(0, 3)
   .concat([r[4]])), [['hairdeck', 'grey', 'Not built', null], ['fit', 'grey', 'Not built', null]]);
 check('[2] HAAR', brief(m.hairStepRows(info({ method: 'haar' }), undefined, when)).map((r) => [r[0], r[1], r[2], r[4]]),
-  [['haar', 'grey', 'Not built yet', null]]);
+  [['haar', 'grey', 'Not made yet', 'HAAR strands · 3 hub jobs'], ['fit', 'grey', 'Not fitted yet', 'Fit · no hub job']]);
 check('[2] body, plain', brief(m.hairStepRows(info({ method: 'body', plain: true, base_prompts: { state: 'current' } }),
   undefined, when)), [['body', 'green', 'Current', 'The plain body was rendered with this hairstyle — built <B>.', null,
   null]]);
@@ -159,7 +162,7 @@ check('[2] body, plain', brief(m.hairStepRows(info({ method: 'body', plain: true
 // [3]
 check('[3] list lights', [m.listLight('current', 'haar'), m.listLight('current', 'hairdeck'),
   m.listLight('current', 'hairdeck', ['fit']), m.listLight('stale', 'hairdeck'), m.listLight('missing', 'body')],
-['grey', 'green', 'yellow', 'yellow', 'grey']);
+['green', 'green', 'yellow', 'yellow', 'grey']);
 check('[3] list reasons', [m.listReason({ state: 'current' }), m.listReason({ state: 'current' }, ['fit']),
   m.listReason({ state: 'stale', reason: 'Fitted on an older body' }), m.listReason(null)],
 ['Current', 'Due: Fit', 'Fitted on an older body', '']);

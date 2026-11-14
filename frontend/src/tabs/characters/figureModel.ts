@@ -13,7 +13,8 @@
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
 export type MeshMode = 'own_mesh' | 'painted' | 'in_body'
-/** How the hair reaches the figure; `haar` is listed but not built yet (ruling 6). */
+/** How the hair reaches the figure: HairDeck cards from the profile picture, HAAR strands from the text (H3), or
+ *  in the body. */
 export type HairMode = 'hairdeck' | 'haar' | 'body'
 
 /** The select's order. */
@@ -41,13 +42,14 @@ export const MESH_MODE_HINTS: Record<MeshMode, string> = {
 
 export const HAIR_MODE_HINTS: Record<HairMode, string> = {
   hairdeck: 'HairDeck makes hair cards from the profile picture in one step.',
-  haar: '',
+  haar: 'HAAR grows hair strands from the hairstyle’s text: 3 variants (3 hub jobs, ~30–55 s each), each fitted on the CPU (~25 s); the best passing one is used, or the one you pick. HAAR is licensed CC BY-NC 4.0 (non-commercial).',
   body: 'The base body is rendered with the hair, so the hair is part of the body mesh — no hair mesh, no hair job.',
 }
 
-/** Why a hair mode cannot be chosen (written under the select), null = selectable. */
-export function hairModeDisabled(m: HairMode): string | null {
-  return m === 'haar' ? 'not built yet' : null
+/** Why a hair mode cannot be chosen (written under the select), null = selectable: a mode the server does not
+ *  list as built (GET …/hairstyles `built_modes`; every mode when it names none). */
+export function hairModeDisabled(m: HairMode, built: readonly string[] = HAIR_MODES): string | null {
+  return built.includes(m) ? null : 'not built yet'
 }
 
 export function isMeshMode(v: unknown): v is MeshMode {
@@ -542,7 +544,7 @@ export interface HairstylesPayload {
   /** The mode a new hairstyle gets (the world's `base_body.hairstyle_default_mode`). */
   default_mode: HairMode
   modes: HairMode[]
-  /** The modes that can be chosen today (`haar` is not built yet). */
+  /** The modes that can be chosen today (`garment_hair.BUILT_MODES`). */
   built_modes: HairMode[]
 }
 
@@ -562,10 +564,11 @@ export function hairstyleRows(owned: readonly Hairstyle[], wornId: string, t: Tr
 }
 
 /** Why the New hairstyle dialog's Create is disabled (written under it), null = it can be created:
- *  an empty description first, then a mode that is not built (HAAR). */
-export function newHairstyleDisabled(description: string, mode: HairMode): string | null {
+ *  an empty description first, then a mode the server does not list as built (`built`). */
+export function newHairstyleDisabled(description: string, mode: HairMode,
+  built: readonly string[] = HAIR_MODES): string | null {
   if (!description.trim()) return 'Describe the hairstyle'
-  return hairModeDisabled(mode)
+  return hairModeDisabled(mode, built)
 }
 
 /** `garments.run_estimate` of a hairstyle (GET …/hair?item_id= `run`). */
@@ -574,6 +577,8 @@ export interface HairstyleRun {
   hub_jobs: number | null
   note: string
   refit: boolean
+  /** HAAR only: the CPU fits the run makes (one per seed it fits). */
+  cpu_fits?: number
 }
 
 /** The flow of the selected hairstyle as buttons (rules R1/R2):
@@ -582,12 +587,23 @@ export interface HairstyleRun {
  *    is due, "Everything is current" disabled when nothing is; no estimate → plain "Run all" (the server decides);
  *  - its single steps re-run even when current: "Regenerate hair (HairDeck) — 1 hub job" (a new seed, then the
  *    fit) and "Re-fit — no hub job";
- *  - `body` (and HAAR) have no run of their own: the hair is part of the body, the Figure tab's Build makes it. */
+ *  - HAAR has two steps too (strands → fit): "Run all · 3 hub jobs" when the strands are due, "Run all · no hub job"
+ *    when only the CPU fits are, "Everything is current" at 0 (strand-hair spec § 6.3.4); its cost line is
+ *    `haarRunCost`;
+ *  - `body` has no run of its own: the hair is part of the body, the Figure tab's Build makes it. */
 export function hairstyleActions(mode: HairMode, run: HairstyleRun | null | undefined, t: Tr = EN): {
   runAll: { label: string; disabled: boolean } | null
   regenerate: string | null
   refit: string | null
 } {
+  if (mode === 'haar') {
+    let haarAll: { label: string; disabled: boolean }
+    if (!run) haarAll = { label: t('Run all'), disabled: false }
+    else if (!run.steps.length) haarAll = { label: t('Everything is current'), disabled: true }
+    else if (run.hub_jobs === 0) haarAll = { label: t('Run all · no hub job'), disabled: false }
+    else haarAll = { label: t('Run all · {cost}').replace('{cost}', jobsTr(run.hub_jobs, t)), disabled: false }
+    return { runAll: haarAll, regenerate: null, refit: null }
+  }
   if (mode !== 'hairdeck') return { runAll: null, regenerate: null, refit: null }
   const regenerate = t('Regenerate hair (HairDeck) — {cost}').replace('{cost}', jobsTr(1, t))
   const refit = t('Re-fit — no hub job')

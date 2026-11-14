@@ -951,12 +951,37 @@ def _haar_colour(character_name: str, item_id: str, profile: Dict[str, Any]) -> 
             "name": None if override or not named else named["name"], "linear": linear}
 
 
+#: The tile of a fitted HAAR seed in its seed folder (``hair_variant_tile.tile_png``, the "HAAR variants" sub-tab).
+HAAR_TILE = "tile.png"
+
+
+def _haar_tile(folder: Path, seed: int, result: Any, body: Any) -> Optional[str]:
+    """Render the tile of a fitted seed into ``s{seed}/HAAR_TILE`` (CPU, ``hair_variant_tile``) -> its name; a seed
+    without a fit loses an older tile (None). A failed render is logged and never fails the fit (None)."""
+    import numpy as np
+    from app.core import garment_store as gs, hair_variant_tile
+    path = gs.haar_seed_dir(folder, seed) / HAAR_TILE
+    try:
+        if result is None:
+            path.unlink(missing_ok=True)
+            return None
+        g = result.garment
+        _write_atomic(path, hair_variant_tile.tile_png(
+            np.asarray(g.positions), np.asarray(g.indices).reshape(-1, 3), np.asarray(g.colors),
+            body.positions, body.faces))
+        return HAAR_TILE
+    except Exception:  # noqa: BLE001 — a tile is a picture of the fit, never a reason to lose it
+        logger.exception("HAAR tile of seed %s in %s failed", seed, folder)
+        return None
+
+
 def _fit_haar_seeds(character_name: str, item_id: str, ssig: str, seeds: List[int], rigged: bytes,
                     profile: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
     """Fit each stored seed of ``ssig`` onto ``rigged`` (``garment_haar.fit_haar`` on the refit pool; colour
     ``_haar_colour``, gate of the hairstyle's length class) without publishing: seed -> ``{seed, result,
-    strands_sha256, length_class, colour, error}`` — ``result`` None and ``error`` the reason when the fit
-    itself refused the strands (a ValueError)."""
+    strands_sha256, length_class, colour, error, tile}`` — ``result`` None and ``error`` the reason when the fit
+    itself refused the strands (a ValueError); ``tile`` the name of the tile rendered into the seed folder
+    (``_haar_tile``; None without)."""
     from app.core import garment_hair, garment_haar, refit_pool, strand_file
     from app.core import garment_store as gs
     folder = gs.haar_dir(character_name, item_id, ssig)
@@ -964,6 +989,7 @@ def _fit_haar_seeds(character_name: str, item_id: str, ssig: str, seeds: List[in
     length_class = garment_hair.hair_length_class(character_name, profile=profile, text=text)
     colour = _haar_colour(character_name, item_id, profile)
     out: Dict[int, Dict[str, Any]] = {}
+    body = None
     for seed in seeds:
         job = strand_file.read_strand_job(gs.haar_seed_dir(folder, seed))
         if job["head_V"] is None:
@@ -977,19 +1003,23 @@ def _fit_haar_seeds(character_name: str, item_id: str, ssig: str, seeds: List[in
                                              template_faces=job["head_F"])
         except ValueError as e:
             entry["error"] = str(e) or type(e).__name__
+        if entry["result"] is not None and body is None:
+            from app.core.glb_mesh import body_arrays
+            body = body_arrays(rigged)
+        entry["tile"] = _haar_tile(folder, seed, entry["result"], body)
         out[seed] = entry
     return out
 
 
 def _haar_result(fit: Dict[str, Any], base_sha: str) -> Dict[str, Any]:
     """The record's ``results[seed]`` of one fitted seed: ``{accepted, reasons, metrics, tile, length_class,
-    base_model_sha256, fit_version, strands_sha256}`` (``tile`` None: rendered by a later task)."""
+    base_model_sha256, fit_version, strands_sha256}`` (``tile`` the tile's name in the seed folder, None without)."""
     from app.core.garment_haar import HAAR_FIT_VERSION
     from app.core.timeutils import utc_now_iso
     result = fit["result"]
     return {"accepted": bool(result.ok) if result is not None else False,
             "reasons": list(result.reasons) if result is not None else [fit["error"]],
-            "metrics": dict(result.metrics) if result is not None else {}, "tile": None,
+            "metrics": dict(result.metrics) if result is not None else {}, "tile": fit.get("tile"),
             "length_class": fit["length_class"], "base_model_sha256": base_sha, "fit_version": HAAR_FIT_VERSION,
             "strands_sha256": fit["strands_sha256"], "fitted_at": utc_now_iso()}
 
@@ -2206,8 +2236,10 @@ def run_estimate(character_name: str, item_id: str, *,
         parts = [(s, max(n - BACK_JOBS[s], 0) if s in reused else n) for s, n in parts]
     full = sum(n for _s, n in parts)
     note = " + ".join(f"{s} {n}" for s, n in parts if n) or "no hub job"
+    cpu_fits = None
     if method == gs.HAAR:
-        note = _haar_estimate_note(character_name, item_id, hsig, base_sha, steps, int(costs.get("haar", 0)))
+        note, cpu_fits = _haar_estimate_note(character_name, item_id, hsig, base_sha, steps,
+                                             int(costs.get("haar", 0)))
     if reused:
         note += " (backs from the closed state)"
     if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN and not from_step:
@@ -2217,21 +2249,24 @@ def run_estimate(character_name: str, item_id: str, *,
                 is not None):
             return {"steps": steps, "hub_jobs": 0, "refit": True,
                     "note": f"refit from the previous base; up to {full} if the refit is refused"}
+    if cpu_fits is not None:
+        # A HAAR run's CPU fits (``_haar_estimate_note``): the tab names them beside its hub jobs.
+        return {"steps": steps, "hub_jobs": full, "note": note, "refit": False, "cpu_fits": cpu_fits}
     return {"steps": steps, "hub_jobs": full, "note": note, "refit": False}
 
 
 def _haar_estimate_note(character_name: str, item_id: str, ssig: str, base_sha: str, steps: List[str],
-                        jobs: int) -> str:
-    """The estimate's words for a HAAR run: "k hub jobs (~30–55 s each) + k CPU fits (~25 s each)" with the
-    strand step, else the CPU fits the fit step makes (the seeds without a current result, at least the served
-    one)."""
+                        jobs: int) -> Tuple[str, int]:
+    """The estimate's words for a HAAR run and its CPU fits: "k hub jobs (~30–55 s each) + k CPU fits (~25 s
+    each)" with the strand step, else the CPU fits the fit step makes (the seeds without a current result, at
+    least the served one)."""
     if "haar" in steps:
-        return f"haar {jobs} hub jobs (~30–55 s each) + {jobs} CPU fits (~25 s each)"
+        return f"haar {jobs} hub jobs (~30–55 s each) + {jobs} CPU fits (~25 s each)", jobs
     try:
         fits = max(1, len(_haar_due(character_name, item_id, ssig, base_sha)))
     except ValueError:
         fits = 1
-    return f"fit: {fits} CPU fit{'s' if fits != 1 else ''} (~25 s each), no hub job"
+    return f"fit: {fits} CPU fit{'s' if fits != 1 else ''} (~25 s each), no hub job", fits
 
 
 # --- A per-view run (Ruling A33) ---------------------------------------------------
@@ -4009,9 +4044,15 @@ def haar_panel(character_name: str, item_id: str, *,
     - ``status``: ``missing`` (no seed stored), ``unfitted`` (seeds without a fit verdict yet), ``passed`` (a
       seed passes), ``no variant passed`` (every fitted seed refused — a pick still serves one);
     - per seed: ``passed`` None until it is fitted; ``reasons`` the gate's words; ``metrics`` the fit's numbers
-      (mouse-over); ``tile_url`` None (the tile render is a later task); ``served`` the seed the fsig names
-      (``garment_store.haar_served_seed``); ``picked`` the hairstyle's ``haar_seed``;
-    - ``next_seeds``: the seeds the step's button asks for; ``jobs``: ``HAAR_SEEDS`` (its hub jobs).
+      (mouse-over); ``tile_url`` the seed's tile (``HAAR_TILE``, rendered at fit time; None without one);
+      ``served`` the seed the fsig names (``garment_store.haar_served_seed``: the one a Re-fit serves);
+      ``picked`` the hairstyle's ``haar_seed``; ``in_use`` the seed of the fit the preview shows (its record's
+      ``inputs.seed`` when it was made from this ``ssig``);
+    - ``in_use``: that seed (None without such a fit);
+    - ``next_seeds``: the seeds the step's button asks for; ``jobs``: ``HAAR_SEEDS`` (its hub jobs);
+    - ``route``: ``{routed, backend}`` — the backend the ``hair_strands`` occasion is meant to run on for the
+      character (``routing.intended_backend``: configuration only); ``routed`` False when there is none, so the
+      tab says so and spends nothing.
 
     None for an item that is no hair."""
     from app.core import garment_hair, garment_store as gs
@@ -4026,14 +4067,19 @@ def haar_panel(character_name: str, item_id: str, *,
     results = gs.haar_record(character_name, item_id, ssig).get("results") or {}
     served = gs.haar_served_seed(character_name, item_id, ssig, item=item)
     pick = gs.haar_pick(item)
+    in_use = _haar_in_use(character_name, item_id, ssig)
+    folder = gs.haar_dir(character_name, item_id, ssig)
     seeds = []
     for seed in stored:
         r = results.get(str(seed))
         r = r if isinstance(r, dict) else None
+        stamp = _stamp(gs.haar_seed_dir(folder, seed) / HAAR_TILE) if r and r.get("tile") else None
         seeds.append({"seed": seed, "passed": (r.get("accepted") is True) if r else None,
                       "reasons": list(r.get("reasons") or []) if r else [],
-                      "metrics": dict(r.get("metrics") or {}) if r else {}, "tile_url": None,
-                      "served": seed == served, "picked": seed == pick})
+                      "metrics": dict(r.get("metrics") or {}) if r else {},
+                      "tile_url": _url(character_name, item_id, f"haar/{seed}/{HAAR_TILE}", stamp)
+                      if stamp is not None else None,
+                      "served": seed == served, "picked": seed == pick, "in_use": seed == in_use})
     fitted = [e for e in seeds if e["passed"] is not None]
     if not seeds:
         status = "missing"
@@ -4045,7 +4091,51 @@ def haar_panel(character_name: str, item_id: str, *,
         status = NO_VARIANT_PASSED
     return gs.finite_json({"ssig": ssig, "status": status, "seeds": seeds,
                            "next_seeds": _haar_next_seeds(character_name, item_id, ssig), "jobs": HAAR_SEEDS,
-                           "picked": pick, "served": served})
+                           "picked": pick, "served": served, "in_use": in_use,
+                           "route": haar_route(character_name)})
+
+
+def haar_route(character_name: str) -> Dict[str, Any]:
+    """``{routed, backend}``: the backend the ``hair_strands`` occasion is meant to run on for the character
+    (``routing.intended_backend``, configuration only — no availability probe, no rotation turn); ``routed`` False
+    and ``backend`` None when there is none (no txt2hair backend entry, or a chain whose every entry is skipped)."""
+    from app.imagegen import routing, service
+    try:
+        backend = routing.intended_backend("hair_strands", character_name,
+                                           pool=getattr(service.get_image_service(), "pool", None))
+    except Exception:  # noqa: BLE001 — a label of the tab, never a failure of the GET
+        logger.exception("hair_strands route of %s unresolvable", character_name)
+        backend = None
+    name = getattr(backend, "name", None) if backend is not None else None
+    return {"routed": bool(name), "backend": name or None}
+
+
+def _haar_in_use(character_name: str, item_id: str, ssig: str) -> Optional[int]:
+    """The seed of the HAAR fit the hair preview shows (``preview_path``), when it was made from ``ssig``."""
+    from app.core import garment_store as gs
+    path = preview_path(character_name, item_id)
+    if path is None:
+        return None
+    record = gs.read_record(path.with_suffix(".json"))
+    inputs = record.get("inputs") or {}
+    if gs.fit_method(record) != gs.HAAR or inputs.get("ssig") != ssig:
+        return None
+    try:
+        return int(inputs.get("seed"))
+    except (TypeError, ValueError):
+        return None
+
+
+def haar_tile_path(character_name: str, item_id: str, seed: int) -> Optional[Path]:
+    """The tile of HAAR seed ``seed`` under the hairstyle's CURRENT ``ssig``; None when it is not there. ValueError
+    for an item that is no hair of the character."""
+    from app.core import garment_hair, garment_store as gs
+    _item_, kind = _item(character_name, item_id)
+    if kind != garment_hair.HAIR_KIND:
+        raise ValueError(f"{item_id[:80]!r} is no hair")
+    path = gs.haar_seed_dir(gs.haar_dir(character_name, item_id, gs.garment_ssig(character_name, item_id)),
+                            int(seed)) / HAAR_TILE
+    return path if path.is_file() else None
 
 
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:

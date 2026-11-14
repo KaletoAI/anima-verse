@@ -634,7 +634,8 @@
       "row": 1,
       "special": "imagegen_override",
       "slot_keys": ["mesh_workflow",
-                    { "key": "hair_mesh_workflow", "visible_when": { "feature": "humanoid" } }],
+                    { "key": "hair_mesh_workflow", "visible_when": { "feature": "humanoid" } },
+                    { "key": "hair_strands_workflow", "visible_when": { "feature": "humanoid" } }],
       "fields": []
     },
     {
