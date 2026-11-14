@@ -22,6 +22,16 @@ there).
   exit; scripts and smokes stay in-process unless they enable it.
 - **Start method** spawn (forking a threaded server is unsafe). A worker runs
   at nice 10 with one BLAS thread (set before numpy is imported there).
+- **Lifetime** (Ruling A64): a worker never outlives the server. ``shutdown``
+  (the lifespan exit) terminates the workers instead of letting them finish,
+  and every worker watches its parent (``_watch_parent``): once the server
+  process is gone — killed, crashed, stopped by the OOM killer, so no lifespan
+  exit ran — the worker exits within ``PARENT_POLL_S``. A spawned worker holds
+  the write end of its own call queue, so without the watch it would wait on
+  that queue forever. ``prctl(PR_SET_PDEATHSIG)`` is not used: it fires when
+  the THREAD that spawned the worker ends, and the pool spawns its workers from
+  whichever server thread submits first — a refit run's thread that ends long
+  before the server does.
 - **Failure**: an exception raised in the worker comes back as itself (the
   caller records it as today). A crashed worker breaks the pool
   (``BrokenProcessPool``): the pool is dropped (the next call creates a new
@@ -105,32 +115,104 @@ def enable(on: bool = True) -> None:
     _enabled = bool(on)
 
 
-def shutdown(wait: bool = False) -> None:
-    """Shut the pool down (the lifespan exit) and disable it; computing
-    workers are left to finish when ``wait`` is False."""
+#: Seconds a worker waits between two looks at its parent (``_watch_parent``).
+PARENT_POLL_S = 1.0
+#: Seconds ``shutdown`` gives a terminated worker before it is killed.
+TERMINATE_GRACE_S = 3.0
+
+
+def _worker_processes(pool: Any) -> list:
+    """The worker processes of ``pool`` (a ``ProcessPoolExecutor``) that are still alive."""
+    procs = getattr(pool, "_processes", None) or {}
+    out = []
+    for proc in list(procs.values()):
+        try:
+            if proc.is_alive():
+                out.append(proc)
+        except (OSError, ValueError, AssertionError):
+            continue
+    return out
+
+
+def _end_processes(procs: list, grace: float = TERMINATE_GRACE_S) -> None:
+    """SIGTERM every process of ``procs``, wait up to ``grace`` seconds in all, SIGKILL what is left."""
+    import time
+    for proc in procs:
+        try:
+            proc.terminate()
+        except (OSError, ValueError, AttributeError):
+            pass
+    deadline = time.monotonic() + grace
+    for proc in procs:
+        try:
+            proc.join(max(0.0, deadline - time.monotonic()))
+            if proc.is_alive():
+                proc.kill()
+                proc.join(1.0)
+        except (OSError, ValueError, AssertionError, AttributeError):
+            pass
+
+
+def shutdown(wait: bool = False, terminate: bool = True) -> None:
+    """Shut the pool down (the lifespan exit) and disable it. ``terminate``
+    (the default, Ruling A64): the workers are ended now — a computing one too,
+    its refit is lost and runs again on the next trigger — so none of them
+    outlives the server; ``wait`` True instead waits for the running calls."""
     global _pool, _pool_size, _enabled
     with _lock:
         pool, _pool, _pool_size = _pool, None, 0
         _enabled = False
-    if pool is not None:
-        try:
-            pool.shutdown(wait=wait, cancel_futures=True)
-        except Exception:  # noqa: BLE001
-            logger.exception("Refit pool: shutdown failed")
+    if pool is None:
+        return
+    procs = _worker_processes(pool) if terminate and not wait else []
+    try:
+        pool.shutdown(wait=wait, cancel_futures=True)
+    except Exception:  # noqa: BLE001
+        logger.exception("Refit pool: shutdown failed")
+    if procs:
+        _end_processes(procs)
+        logger.info("Refit pool: %d worker process(es) ended", len(procs))
 
 
 def _no_database(*_args: Any, **_kwargs: Any) -> Any:
     raise WorkerDatabaseAccess("a refit worker process never opens a database")
 
 
-def _initializer(blender_slots: Optional[tuple] = None, fit_threads: Optional[int] = None) -> None:
+def _watch_parent(parent_pid: int, interval: float = PARENT_POLL_S) -> None:
+    """In a worker: end this process as soon as its parent (the server, ``parent_pid``) is gone. A dead parent
+    leaves the worker reparented (to init or a subreaper), so ``os.getppid()`` no longer names it. Checked once
+    right away (the parent may have died while this worker started), then every ``interval`` seconds on a daemon
+    thread. ``os._exit``: nothing of a worker needs cleaning up, and a computing main thread must not hold it."""
+    import time
+
+    def gone() -> bool:
+        return os.getppid() != parent_pid
+
+    if gone():
+        os._exit(0)
+
+    def loop() -> None:
+        while True:
+            time.sleep(interval)
+            if gone():
+                os._exit(0)
+
+    threading.Thread(target=loop, name="refit-parent-watch", daemon=True).start()
+
+
+def _initializer(blender_slots: Optional[tuple] = None, fit_threads: Optional[int] = None,
+                 parent_pid: Optional[int] = None) -> None:
     """Runs first in every worker: no database, low priority, one BLAS thread;
     ``blender_slots`` (``runner.spawn_slots()`` of the server) pins the Blender
     limit's slot folder and count — a worker has no instance and no config;
     ``fit_threads`` is the worker's share of the cores for the fit kernels and
-    KD-tree queries (``fit_kernels.set_threads``; None keeps its default)."""
+    KD-tree queries (``fit_kernels.set_threads``; None keeps its default);
+    ``parent_pid`` (the server's pid) starts ``_watch_parent``, so the worker
+    ends with the server (Ruling A64)."""
     global _IN_WORKER
     _IN_WORKER = True
+    if parent_pid:
+        _watch_parent(int(parent_pid))
     if blender_slots:
         from app.blender import runner
         runner.pin_slots(*blender_slots)
@@ -157,7 +239,7 @@ def _new_pool(size: int) -> Any:
     # the cores less two, shared evenly by the workers
     fit_threads = max(1, ((os.cpu_count() or 1) - 2) // size)
     return ProcessPoolExecutor(max_workers=size, mp_context=multiprocessing.get_context("spawn"),
-                               initializer=_initializer, initargs=(runner.spawn_slots(), fit_threads))
+                               initializer=_initializer, initargs=(runner.spawn_slots(), fit_threads, os.getpid()))
 
 
 def _get_pool(size: int) -> Any:

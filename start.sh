@@ -152,6 +152,63 @@ wait_for_death() {
     return 0
 }
 
+# The process tree of a service (Ruling A64): the PID itself, every descendant (the refit pool's spawn
+# workers and their resource tracker) and, when the service leads its own process group (start_main starts it
+# through setsid), every member of that group. Collected BEFORE the service is stopped: once it is gone, its
+# children are reparented and can no longer be found through it. One PID per line.
+process_tree() {
+    local root="$1"
+    ps -eo pid=,ppid=,pgid= 2>/dev/null | awk -v root="$root" '
+        { parent[$1] = $2; group[$1] = $3; pids[NR] = $1 }
+        END {
+            keep[root] = 1
+            changed = 1
+            while (changed) {
+                changed = 0
+                for (i = 1; i <= NR; i++) {
+                    p = pids[i]
+                    if (!(p in keep) && (parent[p] in keep)) { keep[p] = 1; changed = 1 }
+                }
+            }
+            if (group[root] == root) {
+                for (i = 1; i <= NR; i++) if (group[pids[i]] == root) keep[pids[i]] = 1
+            }
+            print root
+            for (p in keep) if (p != root) print p
+        }'
+}
+
+# Stop a service and everything it started (Ruling A64): SIGTERM to the service (its lifespan exit ends the
+# refit workers), SIGKILL after 8 s, then whatever of its tree is still alive — a server that was killed or
+# crashed never ran that exit, and its spawn workers would otherwise outlive it (orphans holding GBs of RAM).
+stop_tree() {
+    local pid="$1"
+    local name="$2"
+    local tree
+    tree=$(process_tree "$pid")
+    kill "$pid" 2>/dev/null || true
+    if ! wait_for_death "$pid" 8; then
+        echo "[$name] Force killing PID $pid..."
+        kill -9 "$pid" 2>/dev/null || true
+        sleep 0.3
+    fi
+    local left=""
+    local p
+    for p in $tree; do
+        [[ "$p" == "$pid" || "$p" == "$$" ]] && continue
+        kill -0 "$p" 2>/dev/null && left="$left $p"
+    done
+    [[ -z "$left" ]] && return 0
+    echo "[$name] Stopping child process(es) left behind:$left"
+    # shellcheck disable=SC2086
+    kill $left 2>/dev/null || true
+    for p in $left; do
+        if ! wait_for_death "$p" 3; then
+            kill -9 "$p" 2>/dev/null || true
+        fi
+    done
+}
+
 # Stop processes matching the pattern OR listening on the port, then wait
 # until they have exited. Only then is it safe to call rotate_log.
 kill_port() {
@@ -167,20 +224,11 @@ kill_port() {
     fi
     [[ -z "$pids" ]] && return
 
+    # Waits for exit so shutdown logs cannot land in the newly cleared log file.
     for pid in $pids; do
         [[ "$pid" == "$$" ]] && continue
         echo "[$name] Stopping process on port $port (PID $pid)..."
-        kill "$pid" 2>/dev/null || true
-    done
-
-    # Wait for exit so shutdown logs cannot land in the newly cleared log file.
-    for pid in $pids; do
-        [[ "$pid" == "$$" ]] && continue
-        if ! wait_for_death "$pid" 8; then
-            echo "[$name] Force killing PID $pid..."
-            kill -9 "$pid" 2>/dev/null || true
-            sleep 0.3
-        fi
+        stop_tree "$pid" "$name"
     done
 }
 
@@ -194,7 +242,11 @@ start_main() {
     rotate_log "$MAIN_LOG"
     echo "[main] Starting main app on port $MAIN_PORT..."
     cd "$SCRIPT_DIR"
-    nohup "$SCRIPT_DIR/.venv/bin/python" -m uvicorn app.server:app --host 0.0.0.0 --port 8000 \
+    # Its own process group (setsid, where available — it does not fork here, so $! stays the server's PID):
+    # stop_tree then reaches every process the server started, its refit workers included (Ruling A64).
+    local launcher=()
+    command -v setsid >/dev/null 2>&1 && launcher=(setsid)
+    nohup "${launcher[@]}" "$SCRIPT_DIR/.venv/bin/python" -m uvicorn app.server:app --host 0.0.0.0 --port 8000 \
         >> "$MAIN_LOG" 2>&1 &
     local pid=$!
     echo "$pid" > "$MAIN_PID"
@@ -249,11 +301,7 @@ stop_service() {
             note=" (orphan, recovered via port $port)"
         fi
         echo "[$name] Stopping (PID $pid)$note..."
-        kill "$pid" 2>/dev/null || true
-        if ! wait_for_death "$pid" 8; then
-            echo "[$name] Force killing..."
-            kill -9 "$pid" 2>/dev/null || true
-        fi
+        stop_tree "$pid" "$name"
         rm -f "$pid_file"
         echo "[$name] Stopped"
     else
