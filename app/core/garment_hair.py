@@ -375,7 +375,7 @@ def set_hair_colour(character_name: str, item_id: str, hex_colour: str) -> bool:
 
 
 #: The setting keys of the HairDeck placement correction (``garment_hairdeck.fit_hairdeck``'s ``forward_m`` /
-#: ``tilt_deg`` / ``width_scale``); empty = automatic (width: 1, HairDeck's own).
+#: ``tilt_deg`` / ``width_scale``); empty = automatic (width: ``garment_hairdeck.auto_width_scale``).
 PLACEMENT_KEYS: Dict[str, str] = {"forward_m": "hair_forward_m", "tilt_deg": "hair_tilt_deg",
                                   "width_scale": "hair_width_scale"}
 #: Placement values that enter ``hair_placement`` (and so the fit fingerprint) only when set: a hair without a

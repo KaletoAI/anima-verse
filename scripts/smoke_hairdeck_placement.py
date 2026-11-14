@@ -129,6 +129,15 @@ measured on Kira's record (``hair_kira_3f3e184afa64.json``) and on her base ``ba
     colour_profile brunette: report colour method "lab_transfer", delta_e_before sqrt(28.85^2 + 12^2 + 18.89^2)
     = 36.51 (+- 0.05), every hair colour = brunette linear (+- 1e-3), metrics colour_delta_e <= 0.05; with a
     colour_target too, the target wins (method "gain").
+[11] Automatic width (FIT hair 14, ``side_reach`` / ``auto_width_scale``; user test 2026-11-14 T-U2, Ylva's hair
+    32 mm off her head at the ears). Ear line 1.53, so the band is 1.55 .. 1.61: six 10 mm bins. Per bin centre
+    (1.555 .. 1.605) two head points at x +-0.07 and 20 hair vertices, 10 at x +0.10 and 10 at -0.10, z 0 (head box
+    cx 0, cz 0, depth 0.2: hair within |z| < 0.3 * 0.2 = 0.06 counts). The head's half width (profile) 0.07 at
+    every height. Reach per bin = p99 |x| 0.10 - 0.07 = 30 mm, mean 30 mm > SIDE_REACH_MAX_M 24 mm.
+    ``narrow_sides`` puts |x| 0.10 at 0.07 + 0.03 s, so the reach is 30 s mm <= 24 for s <= 0.8: width 0.8
+    (bisection, rounded down to 0.01), reach after 24.0 mm. Ten more vertices at x 0.30, z 0.07 (outside the depth
+    window) change nothing. Hair at x +-0.09 (reach 20 mm): width 1, reach after = before. Hair at +-0.20 (130 mm):
+    even 0.6 leaves 78 mm -> WIDTH_AUTO_MIN 0.6. No hair in the band: reach None, width 1.
 """
 import math
 import sys
@@ -420,6 +429,27 @@ def main() -> int:
         r10b = gh.fit_hairdeck(nohead, proxy, body_glb, colour_target=(1.0, 0.5, 0.0), colour_profile=brunette,
                                **fx.NO_PLACEMENT)
         check(r10b.report["colour"]["method"] == "gain", "a manual target wins over the profile colour")
+
+        print("[11] automatic width")
+        centres = 1.555 + 0.01 * np.arange(6)
+        side_pts = np.array([[sx * 0.07, y, 0.0] for y in centres for sx in (1, -1)])
+        prof = (np.array([1.0, 2.0]), np.array([0.07, 0.07]))
+
+        def band_hair(x):
+            return np.array([[sx * x, y, 0.0] for y in centres for sx in (1, -1) for _ in range(10)])
+
+        H11 = np.vstack([band_hair(0.10), [[0.30, 1.58, 0.07]] * 10])
+        check(near(gh.side_reach(H11, side_pts, 0.0, 0.0, 0.2, 1.53), 0.030, 1e-9), "reach 30 mm (z 0.07 ignored)")
+        w11, r11 = gh.auto_width_scale(H11, prof, side_pts, 0.0, 0.0, 0.2, 1.53)
+        check(w11 == 0.8 and near(r11["reach_m"], 0.03, 1e-6) and near(r11["reach_after_m"], 0.024, 1e-6),
+              f"30 mm -> width 0.8, reach after 24 mm ({w11}, {r11})")
+        w12, r12 = gh.auto_width_scale(band_hair(0.09), prof, side_pts, 0.0, 0.0, 0.2, 1.53)
+        check(w12 == 1.0 and near(r12["reach_m"], 0.02, 1e-6) and r12["reach_after_m"] == r12["reach_m"],
+              f"20 mm -> width 1 ({w12}, {r12})")
+        w13, _ = gh.auto_width_scale(band_hair(0.20), prof, side_pts, 0.0, 0.0, 0.2, 1.53)
+        check(w13 == gh.WIDTH_AUTO_MIN == 0.6, f"130 mm -> WIDTH_AUTO_MIN 0.6 ({w13})")
+        w14, r14 = gh.auto_width_scale(band_hair(0.10) + [0, 0.2, 0], prof, side_pts, 0.0, 0.0, 0.2, 1.53)
+        check(w14 == 1.0 and r14["reach_m"] is None, f"no hair in the band: None, width 1 ({w14}, {r14})")
 
     print("ALL OK" if not FAILS else "FAILED: " + ", ".join(FAILS))
     return 1 if FAILS else 0

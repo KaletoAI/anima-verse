@@ -99,7 +99,7 @@ export function HairLiveControls({ character, itemId, hd, info, busy, previewSwi
   const stored: PlacementValues = {
     forward_m: p.forward_m ?? (p.fitted?.forward_source === 'default' ? fitted.forward_m : p.default_forward_m),
     tilt_deg: p.tilt_deg ?? fitted.tilt_deg,
-    width_scale: p.width_scale ?? 1,
+    width_scale: p.width_scale ?? fitted.width_scale,
   }
   const [placement, setPlacement] = useState<PlacementValues | null>(null)
   // Which placement values were dragged: an untouched one keeps its stored value (automatic stays automatic).

@@ -98,6 +98,15 @@ HAIR_DRAPE = drape.DrapeParams(substeps=2500, dt=1e-3, gravity=9.81, a_stretch=0
 HAIR_DRAPE_ON = True
 CARD_PIN_TOP_M = 0.01
 DRAPE_FIELD_DROP_M = 0.10
+# A card the drape tears (``drape_below_ear``): one free vertex starts inside the body on the far side of a ridge
+# from its neighbours (a shoulder top), the growing body pushes each out on its own nearer side and the edge between
+# them stretches (Kira 2026-11-14: 5 back cards whose tips parted across the shoulder, single card segments of 8-11 mm
+# rest drawn out to 25-128 mm — a lone straight thread over the shoulder blade; those vertices kept cycling at 0.25 m/s,
+# so her drape never came to rest). Torn = an edge with a free vertex longer than DRAPE_TEAR_STRETCH x its placed
+# length, floored at DRAPE_TEAR_FLOOR_M (a tip row is a fraction of a millimetre wide). A torn card is draped once more
+# from where the fit put it (outside the body, whole), every other vertex held; still torn, it keeps the fit's shape.
+DRAPE_TEAR_STRETCH = 3.0
+DRAPE_TEAR_FLOOR_M = 0.002
 # The face stays clear (``_clear_face``, after the push), Kira 2026-11-11 (~/claude-out/kira-hairdeck,
 # face_back.py): 100 hair vertices hung in the face box (brow .. chin, the inner FACE_CLEAR_SHARE of the face width
 # at that height, in front of the head's mid plane), p50 54 mm in front of that plane — HairDeck's side strands fall
@@ -125,6 +134,34 @@ CAP_INNER_DEPTH_M = VOX_M
 # triangles below that hairline). The centre strip (+-2.5 cm) finds the forehead hairline at the parting (1.645).
 HAIRLINE_FRONT_DEPTH = 0.25
 HAIRLINE_HALF_WIDTH = 0.15
+# Scalp fill (``scalp_fill_cards``, FIT_VERSION hair 14): where no hair card lies over the cap, flat alpha cards lie
+# on it. HairDeck's hair can leave the scalp bare between its cards — Ylva's centre parting sweeps its front cards
+# sideways and leaves a band from the parting to the hairline open (user test 2026-11-14: "too little hair over the
+# forehead (on the red area)" — the red is the cap, an opaque patch in the hair colour; in the front view the band
+# from her hairline 1.647 m to 1.70 m, +-5 cm, showed 48 % cap, 50 % hair cards). The cap stays; the fill cards show
+# strands over it. A cap triangle is open when no hair vertex lies within FILL_COVER_M of its centroid (the hair
+# lies 6.8 mm off the cap at the median, Ylva); seeds on the open ones, FILL_SPACING_M apart; each card is
+# FILL_LENGTH_M long and FILL_WIDTH_M wide (HairDeck's cards: 13.6 mm at their widest, p50), FILL_ROWS rows centred
+# on its seed, FILL_OFFSET_M above the body (between the cap's CAP_OFFSET_M and the cards' CARD_CLEAR_M), running
+# away from the crown in the scalp's tangent plane (root towards the crown): one direction field, so neighbouring
+# cards never cross (the hair cards' own flow was tried first: a centre parting's left and right sweeps met in the
+# open band and the fill cross-hatched). A card ends where it leaves the cap (no cap vertex within FILL_CAP_REACH_M)
+# or the cap's hairline height, so it never reaches the forehead, and where its direction turns by more than
+# acos(FILL_MAX_TURN_COS) in one row (a card that would run over the crown, where away-from-crown flips).
+FILL_COVER_M = 0.008
+FILL_MAX_TURN_COS = 0.5
+FILL_SPACING_M = 0.006
+FILL_LENGTH_M = 0.04
+FILL_WIDTH_M = 0.012
+FILL_ROWS = 9
+FILL_OFFSET_M = 0.0025
+FILL_CAP_REACH_M = 0.006
+# Under the fill the cap is shaded: in the hair colour the strands lay on it unseen. A cap vertex whose nearest hair
+# vertex is FILL_COVER_M or nearer keeps the cap colour (the cap under the hair cards stays as it was — a darker cap
+# there was rejected, CAP_COLOUR_PERCENTILE), one at FILL_SHADE_FULL_M or further takes FILL_CAP_SHADE of it, linear
+# between — so the gaps between the fill strands read as depth. The HAAR scalp layer uses the same 0.6.
+FILL_CAP_SHADE = 0.6
+FILL_SHADE_FULL_M = 0.010
 # The scalp cap takes the hair's median colour: the 20th percentile (until 2026-11-11) showed as a darker cap at the
 # parting and the crown (Kira's HairDeck renders).
 CAP_COLOUR_PERCENTILE = 50
@@ -158,12 +195,12 @@ GATE_TILT_STEP_DEG = 1.5
 #: Bounds of the manual values (the hair row's placement inputs; ``garment_hair.set_hair_placement``).
 TILT_LIMIT_DEG = 15.0
 FORWARD_LIMIT_M = 0.03
-#: Hair width (``narrow_sides``, per character, profile ``hair_width_scale``; None = 1, HairDeck's own width): the
+#: Hair width (``narrow_sides``, per character, profile ``hair_width_scale``; None = automatic, ``auto_width_scale``): the
 #: hair's lateral reach beyond the head scaled about the head's mid plane. Rosi 2026-11-12 (~/claude-out/rosi-hair2):
 #: the sides stand off the head by HairDeck's own volume — proxy -> hair at 1.52-1.56 m p50 11 / p90 29-34 mm in
 #: HairDeck's space (x the ICP scale 1.50, whose proxy is no wider than her head: half width 77.5 mm against
 #: 86.5 mm), placed 8-10 / 28-32 mm, final 12-15 / 28-33 mm; the push leaves the outer reach as it was (|x| p90
-#: 101 / 107 mm placed, 102 / 108 final). Nothing in the fit adds it, so it is a per-character taste, not a default.
+#: 101 / 107 mm placed, 102 / 108 final). Nothing in the fit adds it; the automatic width caps it at the ears.
 WIDTH_SCALE_LIMITS = (0.5, 1.5)
 #: The head's half width per height (``_side_profile``): Head- or Neck-weighted body vertices, the
 #: WIDTH_PROFILE_PERCENTILE of |x - cx| per WIDTH_PROFILE_BIN_M bin (an ear is no head width), smoothed over
@@ -171,6 +208,28 @@ WIDTH_SCALE_LIMITS = (0.5, 1.5)
 WIDTH_PROFILE_BIN_M = 0.005
 WIDTH_PROFILE_PERCENTILE = 95
 WIDTH_PROFILE_SMOOTH = 5
+#: Automatic hair width (``auto_width_scale``, FIT_VERSION hair 14; a manual width wins). Without one the hair kept
+#: HairDeck's own width, and HairDeck's volume at the ears is the image's: Ylva's wavy hair stood p99 32 mm beyond her
+#: head (ears included) at the ear band, a bell over the ears and jaw (user test 2026-11-14: "the hair stands far off the
+#: head at the ears"; the push adds 1.4 mm of that, the innermost hair lies at 3.6 mm in front of the ear).
+#: Measured as below on the placed hair of Anima Divide's HairDeck fits: Glut 20.7, Kira 23.3, Lirien 24.3 mm
+#: automatic and kept; Ylva 32.1 automatic (the user then set 0.75 by hand), Rosi 45.2 (she set 0.9 -> 40.0). The
+#: automatic width is the widest that keeps the SIDE REACH at most SIDE_REACH_MAX_M: Glut and Kira keep 1, Lirien
+#: 0.98, Ylva 0.78 (reach 23.8 mm); a manual width always wins.
+#: Side reach (``side_reach``): in SIDE_BIN_M bins of height over the band SIDE_BAND_M above the ear line and within
+#: SIDE_BAND_DEPTH of the head's depth from its middle (the ears, the temples and the sides of the cheeks), per bin
+#: the SIDE_REACH_PERCENTILE of the hair's |x - cx| minus the head's widest (Head- or Neck-weighted vertices, the
+#: ears included) — the mean over the bins with SIDE_MIN_VERTICES hair vertices. Measured on the placed hair with the
+#: forward shift and no tilt (a tilt about the x axis moves no vertex sideways); searched by bisection down to
+#: WIDTH_AUTO_MIN, rounded down to WIDTH_AUTO_STEP.
+SIDE_REACH_MAX_M = 0.024
+SIDE_BAND_M = (0.02, 0.08)
+SIDE_BAND_DEPTH = 0.3
+SIDE_BIN_M = 0.01
+SIDE_REACH_PERCENTILE = 99
+SIDE_MIN_VERTICES = 10
+WIDTH_AUTO_MIN = 0.6
+WIDTH_AUTO_STEP = 0.01
 #: Head centre profile for the landmarks: Head-weighted body vertices with |x - head cx| below this, in y bins.
 PROFILE_HALF_WIDTH_M = 0.02
 PROFILE_BIN_M = 0.005
@@ -576,6 +635,58 @@ def narrow_sides(Q: np.ndarray, profile: Tuple[np.ndarray, np.ndarray], cx: floa
     return Q
 
 
+def side_reach(Q: np.ndarray, side_pts: np.ndarray, cx: float, cz: float, depth: float, ear_y: float
+               ) -> Optional[float]:
+    """How far the hair ``Q`` reaches beyond the head at the ears (``SIDE_REACH_MAX_M``'s measure): over the bins
+    of ``SIDE_BIN_M`` from ``ear_y + SIDE_BAND_M[0]`` to ``ear_y + SIDE_BAND_M[1]``, the hair vertices with
+    ``|z - cz| < SIDE_BAND_DEPTH * depth``; per bin with at least ``SIDE_MIN_VERTICES`` of them and a head point
+    (``side_pts``: the Head- or Neck-weighted body vertices) the ``SIDE_REACH_PERCENTILE`` of ``|x - cx|`` minus
+    the largest ``|x - cx|`` of the head points in the bin; the mean over those bins (None without one)."""
+    Q = np.asarray(Q, np.float64)
+    S = np.asarray(side_pts, np.float64)
+    lo, hi = ear_y + SIDE_BAND_M[0], ear_y + SIDE_BAND_M[1]
+    n_bins = int(round((hi - lo) / SIDE_BIN_M))
+    hair = Q[(np.abs(Q[:, 2] - cz) < SIDE_BAND_DEPTH * depth) & (Q[:, 1] >= lo) & (Q[:, 1] < hi)]
+    hb = np.floor((hair[:, 1] - lo) / SIDE_BIN_M).astype(np.int64)
+    sb = np.floor((S[:, 1] - lo) / SIDE_BIN_M).astype(np.int64)
+    reach = []
+    for b in range(n_bins):
+        h, k = hair[hb == b], S[sb == b]
+        if len(h) >= SIDE_MIN_VERTICES and len(k):
+            reach.append(float(np.percentile(np.abs(h[:, 0] - cx), SIDE_REACH_PERCENTILE))
+                         - float(np.abs(k[:, 0] - cx).max()))
+    return float(np.mean(reach)) if reach else None
+
+
+def auto_width_scale(Q: np.ndarray, profile: Tuple[np.ndarray, np.ndarray], side_pts: np.ndarray, cx: float,
+                     cz: float, depth: float, ear_y: float) -> Tuple[float, Dict[str, Any]]:
+    """``(width_scale, report)`` of the automatic hair width: 1 when the placed hair ``Q``'s ``side_reach`` is at
+    most ``SIDE_REACH_MAX_M`` (or there is none), else the largest ``s`` in [``WIDTH_AUTO_MIN``, 1] whose
+    ``narrow_sides(Q, profile, cx, s)`` keeps it there — bisection, rounded down to ``WIDTH_AUTO_STEP`` —
+    ``WIDTH_AUTO_MIN`` when even that does not. ``report``: the reach before and after, the target."""
+    def reach(s: float) -> Optional[float]:
+        X = narrow_sides(Q, profile, cx, s) if s != 1.0 else Q
+        return side_reach(X, side_pts, cx, cz, depth, ear_y)
+
+    r1 = reach(1.0)
+    info: Dict[str, Any] = {"target_m": SIDE_REACH_MAX_M, "reach_m": None if r1 is None else round(r1, 5)}
+    if r1 is None or r1 <= SIDE_REACH_MAX_M:
+        return 1.0, dict(info, reach_after_m=info["reach_m"])
+    lo, hi = WIDTH_AUTO_MIN, 1.0
+    if (reach(lo) or 0.0) > SIDE_REACH_MAX_M:
+        s = lo
+    else:
+        for _ in range(30):
+            mid = (lo + hi) / 2
+            if (reach(mid) or 0.0) <= SIDE_REACH_MAX_M:
+                lo = mid
+            else:
+                hi = mid
+        s = max(WIDTH_AUTO_MIN, math.floor(lo / WIDTH_AUTO_STEP + 1e-6) * WIDTH_AUTO_STEP)
+    after = reach(s)
+    return round(s, 4), dict(info, reach_after_m=None if after is None else round(after, 5))
+
+
 # --- scalp cap -----------------------------------------------------------------------------------------------------
 
 def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optional[float] = None
@@ -636,6 +747,89 @@ def offset_patch(P: np.ndarray, Fc: np.ndarray, sdf, offset: float
     fallback = grad / np.maximum(np.linalg.norm(grad, axis=1, keepdims=True), 1e-12)
     N = np.where(length > 1e-12, N / np.maximum(length, 1e-12), fallback)
     return V + offset * N, Fl, N, int(flip.sum())
+
+
+def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crown: np.ndarray, floor_y: float
+                     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+    """``(V, F, UV, normals, card, report)`` of the flat cards that fill the open scalp (``FILL_COVER_M`` and the
+    rest above): ``Vc`` / ``Fc`` the cap, ``hair`` the fitted hair cards' vertices, ``sdf`` the body, ``crown`` the
+    head's top point, ``floor_y`` the cap's hairline height (no row below it). Each card is rows of two vertices
+    (left, right), root row first; ``card`` numbers the fill cards 0.. in order; ``UV`` u 0 / 1, v from 1 at the
+    root row to 0 at the tip row of the full ``FILL_ROWS`` (a card cut short keeps its rows' v). Empty arrays without
+    an open cap triangle."""
+    from scipy.spatial import cKDTree
+    from app.core.garment_fit import _unit
+    empty = (np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 2)), np.zeros((0, 3)),
+             np.zeros(0, np.int64))
+    Vc = np.asarray(Vc, np.float64)
+    Fc = np.asarray(Fc, np.int64).reshape(-1, 3)
+    hair = np.asarray(hair, np.float64).reshape(-1, 3)
+    if not len(Fc) or not len(hair):
+        return (*empty, {"open_tris": 0, "cards": 0, "vertices": 0})
+    centroid = Vc[Fc].mean(1)
+    near, _ = cKDTree(hair).query(centroid)
+    open_ = near > FILL_COVER_M
+    seeds: List[np.ndarray] = []
+    for c in centroid[open_]:
+        if not seeds or np.linalg.norm(np.asarray(seeds) - c, axis=1).min() >= FILL_SPACING_M:
+            seeds.append(c)
+    report: Dict[str, Any] = {"open_tris": int(open_.sum()), "cap_tris": int(len(Fc)), "cards": 0, "vertices": 0}
+    cap_tree = cKDTree(Vc)
+    crown = np.asarray(crown, np.float64)
+
+    def onto(p: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """``p`` moved to ``FILL_OFFSET_M`` above the body, its normal there and the away-from-crown tangent."""
+        n = _unit(np.asarray(sdf.grad(p[None]), np.float64))[0]
+        p = p - (float(sdf.sample(p[None])[0]) - FILL_OFFSET_M) * n
+        n = _unit(np.asarray(sdf.grad(p[None]), np.float64))[0]
+        t = (p - crown) - ((p - crown) @ n) * n
+        length = np.linalg.norm(t)
+        return p, n, (t / length if length > 1e-6 else np.zeros(3))
+
+    step = FILL_LENGTH_M / (FILL_ROWS - 1)
+    half = (FILL_ROWS - 1) // 2
+    V: List[np.ndarray] = []
+    UV: List[np.ndarray] = []
+    N: List[np.ndarray] = []
+    F: List[np.ndarray] = []
+    ids: List[np.ndarray] = []
+    for seed in seeds:
+        row0 = onto(seed)
+        if not np.linalg.norm(row0[2]) > 0.5:
+            continue
+        rows = {0: row0}
+        for sign in (1, -1):
+            p, _, t = row0
+            for k in range(1, half + 1):
+                p, n, t2 = onto(p + sign * step * t)
+                if (cap_tree.query(p)[0] > FILL_CAP_REACH_M or p[1] < floor_y
+                        or not np.linalg.norm(t2) > 0.5 or float(t2 @ t) < FILL_MAX_TURN_COS):
+                    break
+                rows[sign * k] = (p, n, t2)
+                t = t2
+        ks = sorted(rows)   # root (towards the crown, k < 0) first
+        if len(ks) < 3:
+            continue
+        base = sum(len(v) for v in V)
+        pts, nrm, uv = [], [], []
+        for k in ks:
+            p, n, t = rows[k]
+            b = _unit(np.cross(t, n)[None])[0] * (FILL_WIDTH_M / 2)   # left -> right; the faces look outward
+            v = 1.0 - (k + half) / (FILL_ROWS - 1)
+            pts += [p - b, p + b]
+            nrm += [n, n]
+            uv += [(0.0, v), (1.0, v)]
+        a = base + 2 * np.arange(len(ks) - 1)
+        F.append(np.concatenate([np.stack([a, a + 1, a + 3], 1), np.stack([a, a + 3, a + 2], 1)]))
+        V.append(np.asarray(pts))
+        N.append(np.asarray(nrm))
+        UV.append(np.asarray(uv))
+        ids.append(np.full(len(pts), len(ids), np.int64))
+    if not V:
+        return (*empty, report)
+    Vf = np.concatenate(V)
+    report.update(cards=len(V), vertices=int(len(Vf)))
+    return Vf, np.concatenate(F).astype(np.int64), np.concatenate(UV), np.concatenate(N), np.concatenate(ids), report
 
 
 # --- the fit -------------------------------------------------------------------------------------------------------
@@ -768,6 +962,18 @@ def drape_below_ear(Pw: np.ndarray, Qf: np.ndarray, Fw: np.ndarray, body, *,
     res = drape.run(X0, Fw, Pw, pinned, field, HAIR_DRAPE, clear=DRAPE_CLEAR_M, lra=True)
     Q = res.X
     free = ~pinned
+    torn = torn_cards(Q, Pw, Fw, card, free)
+    tear: Dict[str, Any] = {"cards": int(torn.sum()), "redraped": 0, "kept_fit": 0}
+    if torn.any():
+        redo = free & torn[card]
+        again = drape.run(np.where(redo[:, None], Qf, Q), Fw, Pw, ~redo, field, HAIR_DRAPE, clear=DRAPE_CLEAR_M,
+                          lra=True)
+        Q = np.where(redo[:, None], again.X, Q)
+        still = torn_cards(Q, Pw, Fw, card, redo)
+        back = redo & still[card]
+        Q[back] = Qf[back]
+        tear.update(redraped=int(torn.sum() - still.sum()), kept_fit=int(still.sum()),
+                    substeps_run=again.report.get("substeps_run"))
     d = field.sample(Q[free])
     moved = np.linalg.norm(Q[free] - Qf[free], axis=1)
     info = dict(res.report, ear_y=round(float(ear_y), 5), free=int(free.sum()),
@@ -776,7 +982,24 @@ def drape_below_ear(Pw: np.ndarray, Qf: np.ndarray, Fw: np.ndarray, body, *,
                 moved_p50_m=round(float(np.median(moved)), 4))
     info["pinned_input"] = int(pinned.sum())
     info["started_fitted"] = int((start_fitted & ~pinned).sum())
+    info["torn"] = tear
     return Q, info
+
+
+def torn_cards(Q: np.ndarray, rest: np.ndarray, Fw: np.ndarray, card: np.ndarray, free: np.ndarray) -> np.ndarray:
+    """Per card (bool, indexed by ``card``'s ids) whether an edge of ``Fw`` with a ``free`` vertex is longer in ``Q``
+    than ``DRAPE_TEAR_STRETCH`` x its length in ``rest``, floored at ``DRAPE_TEAR_FLOOR_M``."""
+    card = np.asarray(card, np.int64)
+    out = np.zeros(int(card.max()) + 1 if len(card) else 0, bool)
+    F = np.asarray(Fw, np.int64).reshape(-1, 3)
+    if not len(F):
+        return out
+    E = np.unique(np.sort(np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]), 1), axis=0)
+    E = E[free[E[:, 0]] | free[E[:, 1]]]
+    r0 = np.maximum(np.linalg.norm(rest[E[:, 0]] - rest[E[:, 1]], axis=1), DRAPE_TEAR_FLOOR_M)
+    long = np.linalg.norm(Q[E[:, 0]] - Q[E[:, 1]], axis=1) > DRAPE_TEAR_STRETCH * r0
+    out[np.unique(card[E[long, 0]])] = True
+    return out
 
 
 def _drape_frame(body) -> Optional[Tuple[float, float]]:
@@ -901,23 +1124,31 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
     cm deep into the upper back at tilt 0 (push 0.12-0.15); a forward tilt swings that curtain back out of it.
     A manual tilt is never searched: it is fitted as set, and the gate decides.
 
-    ``width_scale`` (None = 1) narrows or widens the placed hair's sides (``narrow_sides``) after the forward /
-    tilt and before the push; the hairline the tilt aims with lies inside the head's width, so it is not moved.
+    ``width_scale`` narrows or widens the placed hair's sides (``narrow_sides``) after the forward / tilt and before
+    the push; the hairline the tilt aims with lies inside the head's width, so it is not moved. None = automatic
+    (``auto_width_scale``, report ``width_auto``: 1 unless the hair stands more than ``SIDE_REACH_MAX_M`` off the
+    head at the ears).
 
     ``chain_points`` (HairDeck's spring-chain joints, already mapped with the hair's ``s, t`` like ``Q0``) get the
     same correction with the FINAL forward / tilt / width (gate search included): returned as
     ``push["chain_points"]``. They take no part in the push or in any decision here."""
     gates = GATES if gates is None else gates
     box = _head_box(body.positions, head_v)
-    width = 1.0 if width_scale is None else float(width_scale)
-    side_profile: Tuple[np.ndarray, np.ndarray] = (np.zeros(0), np.zeros(0))
-    if width != 1.0:
-        side_v = head_v.copy()
-        try:
-            side_v |= dense_weights(body)[:, joint_index(body, "neck")] > 0.5
-        except KeyError:
-            pass
-        side_profile = _side_profile(body.positions, side_v, box[0])
+    forward = DEFAULT_FORWARD_M if forward_m is None else float(forward_m)
+    side_v = head_v.copy()
+    try:
+        side_v |= dense_weights(body)[:, joint_index(body, "neck")] > 0.5
+    except (KeyError, AttributeError):   # no Neck joint / a body without a skin (the Head vertices alone)
+        pass
+    side_profile = _side_profile(body.positions, side_v, box[0])
+    width_auto = None
+    if width_scale is None:
+        from app.core.garment_fit import HAIR_EAR_LINE_FRACTION   # = garment_fit.ear_line_height
+        width, width_auto = auto_width_scale(adjust_placement(Q0, pivot, forward, 0.0), side_profile,
+                                             body.positions[side_v], box[0], box[1], box[3],
+                                             chin + HAIR_EAR_LINE_FRACTION * (top - chin))
+    else:
+        width = float(width_scale)
 
     def placed_points(X: np.ndarray, tilt: float) -> np.ndarray:
         Q = adjust_placement(X, pivot, forward, tilt) if (forward or tilt) else X
@@ -926,7 +1157,6 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
     def placed(tilt: float) -> np.ndarray:
         return placed_points(Q0, tilt)
 
-    forward = DEFAULT_FORWARD_M if forward_m is None else float(forward_m)
     landmarks, landmark_source, rejected = placement_landmarks(body.positions, head_v, chin, top)
     target = hairline_target(landmarks["brow_y"], landmarks["crown_y"]) if landmarks else None
     floor = landmarks["nasion_y"] if landmarks else None
@@ -975,7 +1205,8 @@ def _place_and_push(Q0: np.ndarray, pivot: np.ndarray, F: np.ndarray, U, body, h
     return pushed, {
         "forward_m": round(forward, 5), "forward_source": "default" if forward_m is None else "manual",
         "tilt_deg": round(tilt, 3), "tilt_source": "manual" if tilt_deg is not None else "auto",
-        "width_scale": round(width, 3), "width_source": "manual" if width_scale is not None else "default",
+        "width_scale": round(width, 3), "width_source": "manual" if width_scale is not None else "auto",
+        "width_auto": width_auto,
         "tilt_solve": how, "rounds": rounds, "pivot": [round(float(v), 5) for v in pivot], "landmarks": landmarks,
         "landmark_source": landmark_source, "landmarks_rejected": rejected,
         "hairline_ratio": HAIRLINE_BROW_RATIO, "hairline_target_y": r5(target),
@@ -1131,7 +1362,7 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     length class, e.g. ``"short"``) picks the gates (``gates_for``). ``forward_m`` / ``tilt_deg``: the placement correction after ``place_proxy`` (move
     along +z; forward pitch about x through the placed proxy centre), None = automatic (``DEFAULT_FORWARD_M``; the
     tilt that brings the front hairline to the brow line, ``_placement``). ``width_scale``: the sides' reach beyond
-    the head scaled (``narrow_sides``), None = 1. ValueError for a manual value beyond ``FORWARD_LIMIT_M`` /
+    the head scaled (``narrow_sides``), None = automatic (``auto_width_scale``). ValueError for a manual value beyond ``FORWARD_LIMIT_M`` /
     ``TILT_LIMIT_DEG`` / ``WIDTH_SCALE_LIMITS``. Returns the hair plus scalp cap as ONE garment (rigged bind space,
     Head -> Spine2 weights, cap all Head, ``COLOR_0``, double-sided, the strip atlas of ``hair_cards`` as base
     colour with each card's UVs in its variant's column and the cap on the opaque patch), the metrics and the gates'
@@ -1281,22 +1512,37 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     nc = len(Vc)
     cap_colour = np.r_[np.percentile(colours[:, :3], CAP_COLOUR_PERCENTILE, axis=0), 1.0]
     below = int((Vc[Fc].mean(1)[:, 1] < hairline).sum()) if len(Fc) else 0
-    Jc = np.zeros((nc, 4), np.int64)
+    # scalp fill: flat cards over the cap where no hair card lies (after the cap, rigid like it: all Head)
+    hair_card = hair_cards.hairdeck_cards(F, len(X), len(X))
+    head_box = _head_box(body.positions, head_v)
+    Vf, Ff, Uf, Nf, fill_card, fill_info = scalp_fill_cards(Vc, Fc, X, sdf, np.array([head_box[0], top, head_box[1]]),
+                                                            hairline)
+    nf = len(Vf)
+    cap_colours = np.tile(cap_colour, (nc, 1))
+    if nf:
+        near_cap, _ = cKDTree(X).query(Vc)
+        dark = np.clip((near_cap - FILL_COVER_M) / (FILL_SHADE_FULL_M - FILL_COVER_M), 0.0, 1.0)
+        cap_colours[:, :3] *= (1.0 - (1.0 - FILL_CAP_SHADE) * dark)[:, None]
+    Jc = np.zeros((nc + nf, 4), np.int64)
     Jc[:, 1] = 1
-    Wc = np.zeros((nc, 4))
+    Wc = np.zeros((nc + nf, 4))
     Wc[:, 0] = 1.0
 
     material = copy.deepcopy(material or {})
     material["doubleSided"] = True
-    garment = GarmentMesh(positions=np.vstack([X, Vc]), normals=np.vstack([normals, Nc]),
-                          uvs=np.vstack([np.asarray(U, np.float64), np.zeros((nc, 2))]),
-                          indices=np.vstack([F, Fc + len(X)]), joints=np.vstack([J, Jc]),
+    garment = GarmentMesh(positions=np.vstack([X, Vc, Vf]), normals=np.vstack([normals, Nc, Nf]),
+                          uvs=np.vstack([np.asarray(U, np.float64), np.zeros((nc, 2)), Uf]),
+                          indices=np.vstack([F, Fc + len(X), Ff + len(X) + nc]), joints=np.vstack([J, Jc]),
                           weights=np.vstack([W, Wc]), joint_names=names, image=b"", mime="", material=material,
-                          colors=np.vstack([colours, np.tile(cap_colour, (nc, 1))]), joint_parents=joint_parents,
-                          joint_binds=joint_binds)
+                          colors=np.vstack([colours, cap_colours, np.tile(cap_colour, (nf, 1))]),
+                          joint_parents=joint_parents, joint_binds=joint_binds)
     # Alpha cards (strand-hair spec § 6.1): the strip atlas as base colour, each card's UVs in its variant's
-    # column, the cap on the opaque patch; the MASK material keys are added by the graft (``_publish_fit``).
-    garment = hair_cards.texture_garment(garment, hair_cards.hairdeck_cards(F, len(X), len(X) + nc))
+    # column, the cap on the opaque patch; the MASK material keys are added by the graft (``_publish_fit``). The
+    # fill cards are numbered after the hair's.
+    card = hair_cards.hairdeck_cards(F, len(X), len(X) + nc + nf)
+    if nf:
+        card[len(X) + nc:] = int(hair_card.max()) + 1 + fill_card
+    garment = hair_cards.texture_garment(garment, card)
 
     m = {
         # the push-out after the drape (``_push_max``); the drape is reported in ``report.push.drape``
@@ -1338,7 +1584,8 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
                     offset_m=CAP_OFFSET_M, colour_linear=[round(float(v), 4) for v in cap_colour[:3]],
                     cranium_without_hair_within_2cm=round(float((near_hair > 0.02).mean()), 4)
                     if len(near_hair) else None),
-        "vertices": {"hair": int(len(X)), "cap": int(nc)},
+        "vertices": {"hair": int(len(X)), "cap": int(nc), "fill": int(nf)},
+        "fill": fill_info,
         "chains": chain_info,
     }
     if drape_xpbd is not None:

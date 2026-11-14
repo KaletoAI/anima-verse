@@ -171,7 +171,7 @@ export interface HairPlacement {
     tilt_source: 'auto' | 'manual' | null
     tilt_solve: string | null
     width_scale?: number | null
-    width_source?: 'default' | 'manual' | null
+    width_source?: 'auto' | 'manual' | null
     hairline_target_y: number | null
     hairline_y: number | null
   } | null

@@ -44,6 +44,10 @@ Fixture (metres, +y up, the body faces +z)
     The median of COLOR_0 is 0.25 per channel, gains 2.415 / 1.274 / 0.293 -> every corrected hair colour (hence
     the median) = (0.6038, 0.3185, 0.0732) +- 0.01, alpha 1. The scalp cap's colour is the median (CAP_COLOUR_PERCENTILE
     50, FIT_VERSION hair 6) of the corrected colours = the same value. Without a target the colours stay 0.25 (+- 1e-9) and colour_target None.
+    Since FIT_VERSION hair 14 the cap is shaded where fill cards lie on it ([7]): a cap vertex whose nearest hair
+    vertex is d away keeps the median for d <= FILL_COVER_M 0.008 and takes 1 - 0.4 * min(1, (d - 0.008) / 0.002) of
+    it beyond. The shell here lies 0.110 - 0.1015 = 8.5 mm off the cap, so the cap away from the inner layer is
+    shaded to 0.9 of the median or darker (the rule recounted per vertex); none darker than 0.6.
 [4] Scalp cap. Front hairline = lowest hair vertex with z > 0.05 and |x| < 0.03: the outer shell's lowest ring
     h = 0.010 -> y = 0.8 + 2 * (0.4 + 0.010) = 1.62 (its vertex at segment 0 is at x 0, z 0.108). The push leaves
     that ring where the placement put it (FIT_VERSION hair 7): the shell sits at the layer map's fixed point (see
@@ -60,6 +64,7 @@ Fixture (metres, +y up, the body faces +z)
     band 26's upper triangles 120 = 6240 triangles; the smoke recounts it by this rule from the fixture arrays and
     the reported hairline. cap_tris_below_hairline == 0, every cap centroid above the hairline, inner_wall_dropped 0; the cap
     vertices are offset 0.0015 along the outward normal -> radius 0.1015 +- 0.0005; every cap vertex Head 1.
+    The cap's vertices follow the hair's in the merged mesh (``report.vertices`` hair / cap), the fill cards after it.
     Two-wall body, ``_scalp_cap`` called with the same hair positions and that body's SDF: the outer sphere's
     triangles are the same set (cap count unchanged, every cap vertex at radius 0.1015); every inner-sphere triangle
     above the hairline passes the other three tests (Head 1, nearest hair >= 0.104 - 0.094 = 0.010 <= 0.03) but
@@ -83,6 +88,25 @@ Fixture (metres, +y up, the body faces +z)
     ``movable`` (Ruling B11a, the pass after the drape): only the +x ribbon's vertices below y 1.50 may move ->
     14 of them in the box (rows 1.43 .. 1.49, 2 columns), each leaves it; every other vertex keeps its bits; 26 stay
     in the box (the -x ribbon's 20 + the +x ribbon's rows 1.50 .. 1.52).
+[7] Scalp fill (``scalp_fill_cards``, FIT_VERSION hair 14; user test 2026-11-14 T-U2, the open band over Ylva's
+    forehead), called directly on a sphere: body = the exact sphere SDF r 0.1 at (0, 1.6, 0), crown (0, 1.7, 0), cap
+    = the uv sphere (61 bands, 120 segments) at r 0.1015 with the triangles whose centroid lies above 1.65, floor
+    1.65. Hair = the cap's vertices with x < 0 moved out to r 0.105 (3.5 mm over the cap). A cap triangle with a
+    vertex at x < 0 is never open (its centroid lies at most ~4 mm from that vertex, edges <= 2 pi 0.1015 / 120 =
+    5.3 mm, so its hair is within sqrt(4^2 + 3.5^2) = 5.3 mm < FILL_COVER_M 8 mm); each card:
+    - row centres at FILL_OFFSET_M 2.5 mm over the sphere: radius 0.1025 (+- 1e-9); the row's two vertices
+      FILL_WIDTH_M / 2 = 6 mm to either side in the tangent plane: 12 mm apart (+- 1e-9), radius
+      sqrt(0.1025^2 + 0.006^2) = 0.1026755 (+- 1e-6);
+    - away from the crown on a sphere centred under it = down the meridian: every row centre at its seed's azimuth
+      atan2(z, x) (+- 1e-9), y falling from the root row on;
+    - rows 0.04 / 8 = 5 mm apart along the tangent, put back on the 0.1025 sphere: chord 2 * 0.1025 *
+      sin(atan(0.005 / 0.1025) / 2) = 0.205 * sin(0.0243710) = 0.0049955 (+- 1e-6); at most FILL_ROWS 9 rows, at least 3; none below 1.65;
+    - v from 1 at the root row, 1/8 per row, the seed row (v 0.5) in every card; seed rows FILL_SPACING_M 6 mm or
+      more apart (seeds 6 mm apart on the cap, moved out from r <= 0.1015 to 0.1025);
+    - every seed at x > 0 (the open side; the radial move keeps the azimuth);
+    - no row turns: a card stops before a row whose direction turns by more than 60 deg (FILL_MAX_TURN_COS 0.5 —
+      over the crown away-from-crown flips), so the meridian rule above holds for every card.
+    Hair over the whole cap (every cap vertex at r 0.105): no open triangle, no card.
 """
 import json
 import math
@@ -333,6 +357,48 @@ def face_clear(gh):
     check(repf.get("skipped") == "fringe" and np.array_equal(Qf, V), f"a hairline at 1.50 <= brow is a fringe: kept {repf}")
 
 
+def scalp_fill(gh):
+    Ps, Fs = uv_sphere(0.1015, (0, 1.6, 0), 61, 120)
+    Ps, Fs = np.asarray(Ps, float), np.asarray(Fs)
+    Fc = Fs[Ps[Fs].mean(1)[:, 1] > 1.65]
+    sdf = _SphereSDF([0, 1.6, 0], 0.1)
+    out = (Ps[Ps[:, 0] < 0] - [0, 1.6, 0]) * (0.105 / 0.1015) + [0, 1.6, 0]
+    V, F, UV, N, card, info = gh.scalp_fill_cards(Ps, Fc, out, sdf, np.array([0, 1.7, 0]), 1.65)
+    print("       " + json.dumps(info))
+    check(info["cards"] > 0 and len(V) == len(UV) == len(N) == len(card), f"{info['cards']} cards")
+    rows_ok = width_ok = edge_ok = az_ok = down_ok = step_ok = v_ok = True
+    seeds = []
+    for c in range(int(card.max()) + 1):
+        Vk, Uk = V[card == c], UV[card == c]
+        L, R = Vk[0::2], Vk[1::2]
+        M = (L + R) / 2 - [0, 1.6, 0]
+        n = len(M)
+        rows_ok &= 3 <= n <= 9 and bool((M[:, 1] + 1.6 >= 1.65).all())
+        width_ok &= bool(np.allclose(np.linalg.norm(R - L, axis=1), 0.012, atol=1e-9))
+        edge_ok &= bool(np.allclose(np.linalg.norm(Vk - [0, 1.6, 0], axis=1), math.hypot(0.1025, 0.006), atol=1e-6))
+        rows_ok &= bool(np.allclose(np.linalg.norm(M, axis=1), 0.1025, atol=1e-9))
+        az = np.arctan2(M[:, 2], M[:, 0])
+        az_ok &= bool(np.allclose(az, az[0], atol=1e-9))
+        down_ok &= bool(np.all(np.diff(M[:, 1]) < 0))
+        step_ok &= bool(np.allclose(np.linalg.norm(np.diff(M, axis=0), axis=1), 0.0049955, atol=1e-6))
+        v = Uk[0::2, 1]
+        v_ok &= bool(np.allclose(np.diff(v), -0.125) and np.any(np.isclose(v, 0.5)) and v[0] <= 1.0)
+        seeds.append(M[np.isclose(v, 0.5)][0] + [0, 1.6, 0])
+    check(rows_ok, "3..9 rows, none below 1.65, row centres at r 0.1025")
+    check(width_ok and edge_ok, "rows 12 mm wide, their vertices at r 0.1026755")
+    check(az_ok and down_ok, "every card down its seed's meridian (away from the crown)")
+    check(step_ok, "rows 4.9955 mm apart")
+    check(v_ok, "v 1/8 per row from the root, the seed row v 0.5 in every card")
+    S = np.asarray(seeds)
+    dmin = min(np.linalg.norm(S[i] - S[j]) for i in range(len(S)) for j in range(i))
+    check(dmin >= 0.006, f"seed rows >= 6 mm apart ({dmin * 1000:.2f} mm)")
+    check(gh.FILL_MAX_TURN_COS == 0.5 and bool((S[:, 0] > 0).all()),
+          f"every seed on the open side (x min {S[:, 0].min():.4f})")
+    full = (Ps - [0, 1.6, 0]) * (0.105 / 0.1015) + [0, 1.6, 0]
+    V2, _, _, _, _, info2 = gh.scalp_fill_cards(Ps, Fc, full, sdf, np.array([0, 1.7, 0]), 1.65)
+    check(len(V2) == 0 and info2["open_tris"] == 0 and info2["cards"] == 0, f"hair over all of the cap: none {info2}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="hairdeck-fit-") as tmp:
         root = Path(tmp)
@@ -383,8 +449,16 @@ def main() -> int:
               f"corrected median {np.median(Ch[:, :3], 0).round(4).tolist()} = {lin.tolist()} +- 0.01")
         check(bool(np.all(Ch[:, 3] == 1)), "alpha 1")
         check(m["colour_target"] == list(target), f"colour_target recorded {m['colour_target']}")
-        Cc = np.asarray(g.colors[n_hair:])
-        check(len(Cc) > 0 and bool(np.all(np.abs(Cc[:, :3] - lin) <= 0.01)), "cap colour = median = target")
+        n_cap = rep["vertices"]["cap"]
+        Cc = np.asarray(g.colors[n_hair:n_hair + n_cap])
+        from scipy.spatial import cKDTree
+        d_cap, _ = cKDTree(np.asarray(g.positions[:n_hair])).query(np.asarray(g.positions[n_hair:n_hair + n_cap]))
+        shade = 1 - 0.4 * np.clip((d_cap - 0.008) / 0.002, 0, 1)
+        check(len(Cc) > 0 and bool(np.all(np.abs(Cc[:, :3] - lin * shade[:, None]) <= 0.01)),
+              "cap colour = median = target, shaded by the fill rule")
+        check(rep["vertices"]["fill"] > 0 and bool(np.all(shade[d_cap >= 0.0085] <= 0.9))
+              and float(shade.min()) >= 0.6, f"fill cards on the open cap ({rep['fill']}), the cap under them "
+              f"0.9 or darker, none below 0.6 (min {shade.min():.3f})")
         check(gh.CAP_COLOUR_PERCENTILE == 50, "the cap takes the median colour (CAP_COLOUR_PERCENTILE 50)")
         plain = gh.fit_hairdeck(nohead, proxy, body, colour_target=None, **NO_PLACEMENT)
         check(bool(np.all(np.abs(np.asarray(plain.garment.colors[:n_hair])[:, :3] - 0.25) <= 1e-9))
@@ -407,16 +481,16 @@ def main() -> int:
         check(rep["cap"]["inner_wall_dropped"] == 0, "single wall: nothing dropped as inner wall")
         check(m["cap_tris_below_hairline"] == 0, f"cap_tris_below_hairline {m['cap_tris_below_hairline']} == 0")
         I = np.asarray(g.indices)
-        cap_f = I[I.min(1) >= n_hair]
+        cap_f = I[(I.min(1) >= n_hair) & (I.max(1) < n_hair + n_cap)]
         check(len(cap_f) == m["cap_tris"], f"{len(cap_f)} cap faces in the merged mesh")
         P = np.asarray(g.positions)
         check(bool((P[cap_f].mean(1)[:, 1] > hl).all()), "every cap centroid above the hairline")
-        r = np.linalg.norm(P[n_hair:] - [0, 1.6, 0], axis=1)
+        r = np.linalg.norm(P[n_hair:n_hair + n_cap] - [0, 1.6, 0], axis=1)
         check(bool(np.all(np.abs(r - 0.1015) <= 0.0005)), f"cap offset 1.5 mm (radius {r.min():.5f}..{r.max():.5f})")
         Jc, Wc = np.asarray(g.joints[n_hair:]), np.asarray(g.weights[n_hair:])
         head_i = g.joint_names.index("mixamorig:Head")
         check(bool(np.all(Jc[:, 0] == head_i) and np.all(Wc[:, 0] == 1) and np.all(Wc[:, 1:] == 0)),
-              "cap weighted Head 1")
+              "cap (and fill) weighted Head 1")
         B = body_arrays(body)
         check(abs(rep["cranium"]["chin_y"] - 1.45) < 1e-6
               and int((dense_weights(B)[:, joint_index(B, "head")] > 0.5).sum()) > 0, "chin 1.45")
@@ -456,6 +530,9 @@ def main() -> int:
 
         print("[6] the face stays clear")
         face_clear(gh)
+
+        print("[7] scalp fill")
+        scalp_fill(gh)
 
     print("ALL OK" if not FAILS else "FAILED: " + ", ".join(FAILS))
     return 1 if FAILS else 0

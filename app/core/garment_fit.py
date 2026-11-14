@@ -160,6 +160,13 @@ SIDE_DEEP_M = 0.03
 #: hair 13 (2026-11-13, strand-hair plan Task 2 — one CPU refit of every HairDeck fit, no hub job): the cards carry
 #: the strip atlas of ``hair_cards`` as base colour (UVs mapped into the card's variant column, the cap on the opaque
 #: patch) and are grafted as glTF MASK with the world cutoff ``base_body.hair_alpha_cutoff``.
+#: hair 14 (2026-11-14, user test T-U1/T-U2 — one CPU refit of every HairDeck fit, no hub job): a card's strip is
+#: drawn at the card's own width per row (``hair_cards.width_uvs``; the whole strip used to be squeezed into the
+#: tapering tip, 0.08 of the card's width in its last 5 %, and alpha-tested into stray threads); the overlapping 8th
+#: atlas column is left out; a card the drape tears is draped once more from the fit (``DRAPE_TEAR_STRETCH``; Kira 5
+#: cards, segments drawn out 10-15x across the shoulder); open scalp gets flat fill cards over a shaded cap
+#: (``scalp_fill_cards``; Ylva's forehead band 50 -> 77 % hair); without a manual width the width is automatic
+#: (``auto_width_scale``; Ylva's reach beyond the head at the ears 32.1 -> 23.8 mm placed).
 #: clothing 10 (2026-11-14, Ruling A35 — one CPU refit of every clothing fit, no hub job): the limb and trunk frames
 #: of a refit / outfit-body transfer come from the skeleton's bind joints (``FRAME_BASIS``; Kai's jeans on
 #: ``obf6474c3b``: off the left thigh 0.1478 -> 0.0002), the sleeves are re-centred on their arms
@@ -167,7 +174,7 @@ SIDE_DEEP_M = 0.03
 #: stay at the hips), the garment's inside seen through an opening is left out (``opening_lining``; the blazer's V
 #: stays open), a native fit's sleeves are gated (``garment_source.check_sleeves``).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 13, "clothing": 10, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 10, "footwear": FOOTWEAR_FIT_VERSION}
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:

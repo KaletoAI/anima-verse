@@ -23,8 +23,12 @@ import numpy as np
 
 #: (width, height) of the strip atlas in pixels.
 ATLAS_SIZE: Tuple[int, int] = (1024, 1024)
-#: Strip variants side by side; a card's variant is its index mod this.
+#: Strip columns side by side in the atlas.
 ATLAS_VARIANTS = 8
+#: The columns a HairDeck card is mapped into (``variant_uvs``, its index mod this): all but the last, whose root end
+#: holds the cap's opaque patch (``SOLID_PATCH_PX``) — there a card's root showed as an opaque chip (strand-hair Task
+#: 12 concern 2: the root 64 px of the last column are alpha 1 on its right half, 0.32-0.47 mean alpha elsewhere).
+STRIP_VARIANTS = ATLAS_VARIANTS - 1
 #: The opaque patch (alpha 255) in the bottom-right corner — the root end of the last strip, where the strands
 #: are densest — in pixels.
 SOLID_PATCH_PX = 64
@@ -143,17 +147,51 @@ def hairdeck_cards(F: np.ndarray, n_hair: int, n_total: int) -> np.ndarray:
 
 
 def variant_uvs(uvs: np.ndarray, card: np.ndarray) -> np.ndarray:
-    """The card UVs mapped into their variant's column: ``u' = (card % ATLAS_VARIANTS + u) / ATLAS_VARIANTS``, ``v``
-    kept (root at v = 1); a vertex of card -1 (the cap) gets ``SOLID_UV``."""
+    """The card UVs mapped into their variant's column: ``u' = (card % STRIP_VARIANTS + u) / ATLAS_VARIANTS``,
+    ``v`` kept (root at v = 1); a vertex of card -1 (the cap) gets ``SOLID_UV``. ``STRIP_VARIANTS`` leaves out the
+    last column, whose root end is the cap's opaque patch."""
     uv = np.asarray(uvs, np.float64).reshape(-1, 2)
     card = np.asarray(card, np.int64).reshape(-1)
     if len(uv) != len(card):
         raise ValueError(f"variant_uvs: {len(uv)} UVs, {len(card)} card ids")
     out = uv.copy()
     hair = card >= 0
-    out[hair, 0] = (card[hair] % ATLAS_VARIANTS + uv[hair, 0]) / ATLAS_VARIANTS
+    out[hair, 0] = (card[hair] % STRIP_VARIANTS + uv[hair, 0]) / ATLAS_VARIANTS
     out[~hair] = SOLID_UV
     return out
+
+
+def width_uvs(uvs: np.ndarray, positions: np.ndarray, card: np.ndarray) -> np.ndarray:
+    """The card UVs with ``u`` narrowed about the strip's middle in proportion to the card's width at that row:
+    ``u' = 0.5 + (u - 0.5) * w / w_max`` — ``w`` the row's width (twice the largest distance of its vertices from
+    their mean; a row = the vertices of one card at one ``v``), ``w_max`` the card's widest row. The strand lines then
+    keep their width along the whole card, and a narrowing card holds fewer of them, as a lock of hair does. Mapped
+    the whole strip onto every row, a card tapering to a point squeezed all of the strip's 26-39 lines into its tip:
+    lines of a hundredth of a millimetre that the alpha test turned into stray threads (Rosi, Kira 2026-11-14:
+    HairDeck's cards narrow to 0.29 of their widest row at 85-90 % of their length, 0.08 at the tip). Vertices of
+    card -1 (the cap), and a card whose rows have no width, keep their UVs."""
+    uv = np.asarray(uvs, np.float64).reshape(-1, 2).copy()
+    P = np.asarray(positions, np.float64).reshape(-1, 3)
+    card = np.asarray(card, np.int64).reshape(-1)
+    if not (len(uv) == len(P) == len(card)):
+        raise ValueError(f"width_uvs: {len(uv)} UVs, {len(P)} positions, {len(card)} card ids")
+    hair = np.flatnonzero(card >= 0)
+    if not len(hair):
+        return uv
+    _, row = np.unique(np.stack([card[hair], np.round(uv[hair, 1], 6) * 1e6], 1), axis=0, return_inverse=True)
+    row = row.reshape(-1)
+    n_rows = int(row.max()) + 1
+    count = np.bincount(row, minlength=n_rows).astype(np.float64)
+    centre = np.stack([np.bincount(row, P[hair, a], n_rows) for a in range(3)], 1) / count[:, None]
+    radius = np.zeros(n_rows)
+    np.maximum.at(radius, row, np.linalg.norm(P[hair] - centre[row], axis=1))
+    row_card = np.zeros(n_rows, np.int64)
+    row_card[row] = card[hair]
+    widest = np.zeros(int(card.max()) + 1)
+    np.maximum.at(widest, row_card, radius)
+    share = np.where(widest[row_card] > 1e-9, radius / np.maximum(widest[row_card], 1e-12), 1.0)
+    uv[hair, 0] = 0.5 + (uv[hair, 0] - 0.5) * share[row]
+    return uv
 
 
 def card_faces(indices: np.ndarray, uvs: np.ndarray, card: np.ndarray) -> np.ndarray:
@@ -182,10 +220,11 @@ def card_faces(indices: np.ndarray, uvs: np.ndarray, card: np.ndarray) -> np.nda
 
 def texture_garment(garment: Any, card: np.ndarray) -> Any:
     """A copy of the hair ``GarmentMesh`` with the strip atlas as its base colour (``image``, ``mime`` PNG), its
-    UVs mapped by ``variant_uvs`` (no roughness map: it would not match those UVs) and its faces without the cards' cross sections (``card_faces``). The material
-    keys of the card (MASK, cutoff) are the graft's ``alpha_overrides``, not part of the garment."""
+    UVs narrowed by ``width_uvs`` and mapped by ``variant_uvs`` (no roughness map: it would not match those UVs) and
+    its faces without the cards' cross sections (``card_faces``). The material keys of the card (MASK, cutoff) are
+    the graft's ``alpha_overrides``, not part of the garment."""
     return dataclasses.replace(garment, image=strip_atlas(), mime="image/png", mr_image=b"", mr_mime="",
-                               uvs=variant_uvs(garment.uvs, card),
+                               uvs=variant_uvs(width_uvs(garment.uvs, garment.positions, card), card),
                                indices=card_faces(garment.indices, garment.uvs, card))
 
 

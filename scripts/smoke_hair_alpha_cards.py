@@ -18,8 +18,10 @@ Texel convention (glTF, what three's GLTFLoader reads with ``flipY = false``): t
     measured from the root (v = 1), so at v <= 0.04 (>= 96 % from the root) a line is either ended or inside its
     last 18 % fade, while at v = 0.5 every line runs at full alpha.
     Determinism: sha256 of ``strip_atlas()`` equals the sha256 after ``cache_clear()`` and a rebuild (seed 7).
-[2] variant_uvs: card 9, uv (0.5, 1.0) -> ((9 % 8 + 0.5) / 8, 1.0) = (1.5 / 8, 1.0) = (0.1875, 1.0);
-    card 0, uv (1.0, 0.0) -> ((0 + 1.0) / 8, 0.0) = (0.125, 0.0); card -1, uv (0.3, 0.7) -> SOLID_UV.
+[2] variant_uvs (FIT hair 14: STRIP_VARIANTS 7 — the 8th column holds the cap's opaque patch at its root end):
+    card 9, uv (0.5, 1.0) -> ((9 % 7 + 0.5) / 8, 1.0) = (2.5 / 8, 1.0) = (0.3125, 1.0); card 7, uv (0.5, 1.0) ->
+    (0.5 / 8, 1.0) = (0.0625, 1.0) (not the 8th column's 7.5 / 8); card 0, uv (1.0, 0.0) -> ((0 + 1.0) / 8, 0.0)
+    = (0.125, 0.0); card -1, uv (0.3, 0.7) -> SOLID_UV.
     texture_garment of a 3-vertex garment with these cards: image == strip_atlas(), mime "image/png", the UVs
     above, positions / indices / colours unchanged, the input garment untouched (a copy).
 [3] hairdeck_cards: two disjoint square tubes of 3 rows x 4 vertices (12 vertices each: tube A 0..11, tube B
@@ -38,6 +40,13 @@ Texel convention (glTF, what three's GLTFLoader reads with ``flipY = false``): t
     key = 0.15; with {"base_body": {"hair_alpha_cutoff": 0.12}} = 0.12; with 0.9 = 0.5 (clamped to the max);
     with 0.12: ``alpha_overrides() == {"alphaMode": "MASK", "alphaCutoff": 0.12, "doubleSided": True}`` and
     ``alpha_overrides(0.18)["alphaCutoff"] == 0.18``.
+[5] width_uvs (FIT hair 14; user test 2026-11-14 T-U1, thin stray threads at the tips): card 0 a diamond tube like
+    HairDeck's, rows v 1 / 0.5 / 0 at y 0 / -0.05 / -0.10 with half widths 0.010 / 0.005 / 0.001, per row the four
+    vertices (-w, y, 0) u 0, (0, y, w) u 0.5, (w, y, 0) u 1, (0, y, -w) u 0.5 -> the row's mean is (0, y, 0) and its
+    width share w / 0.010 = 1 / 0.5 / 0.1: u 0 -> 0.5 - 0.5 * share = 0 / 0.25 / 0.45, u 1 -> 1 / 0.75 / 0.55, u 0.5
+    stays 0.5; v unchanged. Card 1, three rows each a single point (no width): its UVs kept. A cap vertex (card -1):
+    kept. ``texture_garment`` of that garment = ``variant_uvs(width_uvs(...))``: card 0's row v 0.5 u 0 at
+    (0 + 0.25) / 8 = 0.03125.
 """
 import hashlib
 import io
@@ -110,7 +119,10 @@ def run_checks(tmp):
 
     # [2] variant UVs and the textured copy
     uv = hair_cards.variant_uvs(np.array([[0.5, 1.0], [1.0, 0.0], [0.3, 0.7]]), np.array([9, 0, -1]))
-    check(np.allclose(uv[0], (0.1875, 1.0)), f"[2] card 9 (0.5, 1) -> (0.1875, 1) (got {uv[0].tolist()})")
+    check(np.allclose(uv[0], (0.3125, 1.0)), f"[2] card 9 (0.5, 1) -> (0.3125, 1) (got {uv[0].tolist()})")
+    check(hair_cards.STRIP_VARIANTS == 7
+          and np.allclose(hair_cards.variant_uvs(np.array([[0.5, 1.0]]), np.array([7]))[0], (0.0625, 1.0)),
+          "[2] card 7 -> column 0 (0.0625), never the cap's column")
     check(np.allclose(uv[1], (0.125, 0.0)), f"[2] card 0 (1, 0) -> (0.125, 0) (got {uv[1].tolist()})")
     check(np.allclose(uv[2], hair_cards.SOLID_UV), f"[2] card -1 -> SOLID_UV (got {uv[2].tolist()})")
     from app.core.glb_mesh import GarmentMesh
@@ -165,6 +177,28 @@ def run_checks(tmp):
     check(hair_cards.alpha_overrides() == {"alphaMode": "MASK", "alphaCutoff": 0.12, "doubleSided": True},
           f"[4] alpha_overrides() (got {hair_cards.alpha_overrides()})")
     check(hair_cards.alpha_overrides(0.18)["alphaCutoff"] == 0.18, "[4] alpha_overrides(0.18)")
+
+    # [5] the strip at the card's own width
+    P5, U5 = [], []
+    for v, y, w in ((1.0, 0.0, 0.010), (0.5, -0.05, 0.005), (0.0, -0.10, 0.001)):
+        P5 += [(-w, y, 0), (0, y, w), (w, y, 0), (0, y, -w)]
+        U5 += [(0, v), (0.5, v), (1, v), (0.5, v)]
+    for v, y in ((1.0, 0.0), (0.5, -0.05), (0.0, -0.10)):
+        P5.append((0.3, y, 0))
+        U5.append((0.2, v))
+    P5.append((0, 0.2, 0))
+    U5.append((0.7, 0.4))
+    P5, U5 = np.array(P5, float), np.array(U5, float)
+    card5 = np.array([0] * 12 + [1] * 3 + [-1])
+    w5 = hair_cards.width_uvs(U5, P5, card5)
+    want = np.array([0, 0.5, 1, 0.5, 0.25, 0.5, 0.75, 0.5, 0.45, 0.5, 0.55, 0.5])
+    check(np.allclose(w5[:12, 0], want) and np.array_equal(w5[:, 1], U5[:, 1]),
+          f"[5] card 0: u per row 0/0.5/1, 0.25/0.5/0.75, 0.45/0.5/0.55, v kept (got {w5[:12, 0].round(4).tolist()})")
+    check(np.array_equal(w5[12:], U5[12:]), "[5] a card without width and the cap keep their UVs")
+    t5 = hair_cards.texture_garment(GarmentMesh(positions=P5, normals=None, uvs=U5, indices=np.array([[0, 1, 2]]),
+                                                joints=np.zeros((16, 4), np.int64), weights=np.eye(16, 4),
+                                                joint_names=["mixamorig:Head"], colors=np.full((16, 4), 0.5)), card5)
+    check(np.isclose(t5.uvs[4, 0], 0.03125), f"[5] texture_garment: row v 0.5, u 0 -> 0.03125 (got {t5.uvs[4, 0]})")
 
     print("PASS" if not FAILS else f"FAIL ({len(FAILS)})")
     return 0 if not FAILS else 1

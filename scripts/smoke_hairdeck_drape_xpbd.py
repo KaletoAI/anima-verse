@@ -43,6 +43,15 @@ Fixture (metres, +y up, +z front). Body, skin joints [mixamorig:Hips, mixamorig:
      CARD_PIN_TOP_M: rows 1.50 .. 1.49 = 6 vertices; the other 30 start at ``Qf`` (``started_fitted`` 30), so the card
      hangs beside the neck: every vertex x >= 0.05 + DRAPE_CLEAR_M - 0.001 = 0.057 (started inside the neck the
      growing body would push it out of the front, z > 0.05, 2 cm away against 5 cm to the side).
+     Since FIT hair 14 the comparison leaves out what hair 14 added (``base_comparable``; the scalp fill is stubbed
+     out like the strip atlas).
+[D7] ``torn_cards`` (FIT hair 14), by hand: card 0 a strip of two columns 10 mm apart, rows at y 0 / -10 / -20 mm
+     (faces (0,1,2) (1,3,2) (2,3,4) (3,5,4)), the top row pinned. Vertex 5 dropped 21 mm: edge 3-5 is 31 mm against
+     a rest of 10 = 3.1 x > DRAPE_TEAR_STRETCH 3 -> torn; dropped 19 mm: 29 mm = 2.9 x -> not torn. The same
+     stretch between the two PINNED top vertices (vertex 0 to x -25 mm: 0-1 is 35 mm = 3.5 x, but its free neighbour
+     2 only sqrt(25^2 + 10^2) = 26.9 mm against 10 = 2.69 x) -> not torn. Card 1, a tip
+     row 0.5 mm wide: its edge drawn to 5.5 mm (11 x) stays under 3 x the 2 mm floor (6 mm) -> not torn; to
+     6.5 mm -> torn.
 Timings of the drape (``t_jit_s``, ``t_run_s``) are printed.
 """
 import importlib.util
@@ -211,6 +220,23 @@ def blob(res, drop_xpbd=False):
         json.dumps(rep, sort_keys=True)
 
 
+def base_comparable(res):
+    """``blob(res)`` without what FIT hair 14 added to the report (``fill``, ``vertices.fill``, the automatic width's
+    ``placement.width_auto`` and ``width_source`` "auto" for the base's "default", the drape's ``torn``) — the
+    base commit has none of it."""
+    arrays, rest, metrics, ok, reasons, rep = blob(res)
+    rep = json.loads(rep)
+    rep.pop("fill", None)
+    rep.get("vertices", {}).pop("fill", None)
+    pl = rep.get("placement", {})
+    pl.pop("width_auto", None)
+    if pl.get("width_source") == "auto":
+        pl["width_source"] = "default"
+    if isinstance(rep.get("push", {}).get("drape_xpbd"), dict):
+        rep["push"]["drape_xpbd"].pop("torn", None)
+    return arrays, rest, metrics, ok, reasons, json.dumps(rep, sort_keys=True)
+
+
 def load_base(tmp: Path):
     src = subprocess.run(["git", "-C", str(ROOT), "show", f"{BASE_COMMIT}:app/core/garment_hairdeck.py"],
                          check=True, capture_output=True, text=True).stdout
@@ -232,6 +258,10 @@ def main() -> int:
         # here returns the untextured garment.
         from app.core import hair_cards
         hair_cards.texture_garment = lambda garment, card: garment
+        # Likewise the scalp fill (FIT hair 14, ``scalp_fill_cards``: flat cards on the open cap, the cap shaded under
+        # them): none here, so the cap keeps its colour; ``base_comparable`` leaves out the report keys hair 14 added.
+        gh.scalp_fill_cards = lambda *a, **k: (np.zeros((0, 3)), np.zeros((0, 3), np.int64), np.zeros((0, 2)),
+                                               np.zeros((0, 3)), np.zeros(0, np.int64), {})
         from app.core.garment_fit import SDF_MARGIN_M, VOX_M, body_sdf, ear_line_height
         from app.core.glb_mesh import body_arrays
 
@@ -299,10 +329,32 @@ def main() -> int:
         for label, nh, px, res, res_on in (("long", nohead, proxy, off, on), ("short", s_nohead, s_proxy, s_off, s_on)):
             ref = base.fit_hairdeck(nh, px, bglb, **kw)
             dflt = gh.fit_hairdeck(nh, px, bglb, **kw)
-            check(blob(res) == blob(ref), f"[D5] {label}: drape=False byte-equal to {BASE_COMMIT}")
+            check(base_comparable(res) == blob(ref), f"[D5] {label}: drape=False byte-equal to {BASE_COMMIT}")
             same = blob(dflt, drop_xpbd=True) == blob(res_on, drop_xpbd=True) and untimed(dflt) == untimed(res_on)
             check(same, f"[D5] {label}: the default (HAIR_DRAPE_ON True) byte-equal to drape=True (drape timings aside)")
             check("drape_xpbd" not in res.report["push"], f"[D5] {label}: no drape_xpbd key without the drape")
+        # [D7] torn cards, by hand
+        rest = np.array([[0, 0, 0], [0.01, 0, 0], [0, -0.01, 0], [0.01, -0.01, 0], [0, -0.02, 0], [0.01, -0.02, 0]],
+                        float)
+        F7 = np.array([[0, 1, 2], [1, 3, 2], [2, 3, 4], [3, 5, 4]])
+        card7 = np.zeros(6, np.int64)
+        free7 = np.array([False, False, True, True, True, True])
+        for drop, want in ((0.021, True), (0.019, False)):
+            Q7 = rest.copy()
+            Q7[5, 1] -= drop
+            got = gh.torn_cards(Q7, rest, F7, card7, free7)
+            check(bool(got[0]) is want, f"[D7] vertex 5 dropped {drop * 1000:.0f} mm: torn {want} (got {got.tolist()})")
+        Q7 = rest.copy()
+        Q7[0, 0] = -0.025
+        check(not gh.torn_cards(Q7, rest, F7, card7, free7)[0], "[D7] 3.5 x between the pinned vertices, 2.69 x to a free one: not torn")
+        tip = np.array([[0, 0, 0], [0.0005, 0, 0], [0, -0.01, 0]], float)
+        F8 = np.array([[0, 1, 2]])
+        for width, want in ((0.0055, False), (0.0065, True)):
+            Q8 = tip.copy()
+            Q8[1, 0] = width
+            got = gh.torn_cards(Q8, tip, F8, np.ones(3, np.int64), np.ones(3, bool))
+            check(len(got) == 2 and bool(got[1]) is want and not got[0],
+                  f"[D7] 0.5 mm tip edge drawn to {width * 1000:.1f} mm: torn {want} (2 mm floor) (got {got.tolist()})")
     if FAILS:
         print("FAILED: " + ", ".join(FAILS))
         return 1
