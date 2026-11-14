@@ -85,8 +85,9 @@ A hairstyle made by HAAR (strand-hair spec 2026-11-13 § 6.3) runs ``haar → fi
   then 4, 5, 6 …) into ``raw/{item}_{ssig}/s{seed}/`` — a plain run only when no seed is stored, the step's own
   button always (the next seeds; the older ones stay variants). One hub operation per run, resumed after a
   restart by collecting its submitted jobs (``HAAR_OP_KIND``);
-- ``fit``: ``garment_haar.fit_haar`` (CPU) of every seed without a current verdict, the verdicts in the
-  folder's record, the SERVED seed (the user's ``haar_seed`` while stored, else the best passing one) published
+- ``fit``: ``garment_haar.fit_haar`` (CPU) of every seed without a current verdict, the cards cut by the hairstyle's
+  ``hair_cut`` (Ruling A71; the uncut cards beside the seed as ``HAAR_CUT_SOURCE`` for the tab's live preview), the
+  verdicts in the folder's record, the SERVED seed (the user's ``haar_seed`` while stored, else the best passing one) published
   under the fsig that names it (``_haar_fit_step``). No passing seed and no pick refuses with
   ``NO_VARIANT_PASSED``.
 
@@ -1123,18 +1124,21 @@ def _haar_tile(folder: Path, seed: int, result: Any, body: Any) -> Optional[str]
 
 
 def _fit_haar_seeds(character_name: str, item_id: str, ssig: str, seeds: List[int], rigged: bytes,
-                    profile: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+                    profile: Dict[str, Any], *, on_base: bool = True) -> Dict[int, Dict[str, Any]]:
     """Fit each stored seed of ``ssig`` onto ``rigged`` (``garment_haar.fit_haar`` on the refit pool; colour
-    ``_haar_colour``, gate of the hairstyle's length class) without publishing: seed -> ``{seed, result,
-    strands_sha256, length_class, colour, error, tile}`` — ``result`` None and ``error`` the reason when the fit
-    itself refused the strands (a ValueError); ``tile`` the name of the tile rendered into the seed folder
-    (``_haar_tile``; None without)."""
+    ``_haar_colour``, the hairstyle's cut ``garment_hair.hair_cut``, gate of the hairstyle's length class) without
+    publishing: seed -> ``{seed, result, strands_sha256, length_class, colour, error, tile}`` — ``result`` None and
+    ``error`` the reason when the fit itself refused the strands (a ValueError); ``tile`` the name of the tile
+    rendered into the seed folder (``_haar_tile``; None without). ``on_base`` (a fit on the base model, not on an
+    outfit body): the uncut cards go into the seed folder too (``_haar_cut_source``) — the Hairstyles tab previews
+    a cut of the base fit from them."""
     from app.core import garment_hair, garment_haar, refit_pool, strand_file
     from app.core import garment_store as gs
     folder = gs.haar_dir(character_name, item_id, ssig)
     _settings, text = _hair_of(character_name, item_id)
     length_class = garment_hair.hair_length_class(character_name, profile=profile, text=text)
     colour = _haar_colour(character_name, item_id, profile)
+    cut = garment_hair.hair_cut(_settings)
     out: Dict[int, Dict[str, Any]] = {}
     body = None
     for seed in seeds:
@@ -1147,15 +1151,46 @@ def _fit_haar_seeds(character_name: str, item_id: str, ssig: str, seeds: List[in
         try:
             entry["result"] = refit_pool.run(garment_haar.fit_haar, job["strands"], job["head_V"], rigged,
                                              colour_linear=colour["linear"], length_class=length_class,
-                                             template_faces=job["head_F"])
+                                             template_faces=job["head_F"], cut=cut)
         except ValueError as e:
             entry["error"] = str(e) or type(e).__name__
         if entry["result"] is not None and body is None:
             from app.core.glb_mesh import body_arrays
             body = body_arrays(rigged)
         entry["tile"] = _haar_tile(folder, seed, entry["result"], body)
+        if on_base:
+            _haar_cut_source(folder, seed, entry["result"])
         out[seed] = entry
     return out
+
+
+#: The uncut cards of a fitted HAAR seed in its seed folder (``_haar_cut_source``, Ruling A71).
+HAAR_CUT_SOURCE = "cut_source.npz"
+
+
+def _haar_cut_source(folder: Path, seed: int, result: Any) -> None:
+    """Store the uncut card rails of a fit on the base model (``FitResult.arrays["cut_source"]``, float32 (K, R, 2,
+    3)) as ``s{seed}/HAAR_CUT_SOURCE`` with the landmark heights and its sha256 (the fit record's
+    ``report.cut.source_sha256`` names the same bytes, ``haar_cut_source``); a seed without a fit loses an older
+    one. A failed write is logged and never fails the fit (the preview then shows the built cut only)."""
+    import io
+    import json
+    import numpy as np
+    from app.core import garment_store as gs
+    path = gs.haar_seed_dir(folder, seed) / HAAR_CUT_SOURCE
+    try:
+        source = None if result is None else (getattr(result, "arrays", None) or {}).get("cut_source")
+        if source is None:
+            path.unlink(missing_ok=True)
+            return
+        cut = (result.report or {}).get("cut") or {}
+        out = io.BytesIO()
+        np.savez(out, rails=np.ascontiguousarray(source, np.float32),
+                 landmarks=np.array(json.dumps(cut.get("landmarks") or {})),
+                 source_sha256=np.array(str(cut.get("source_sha256") or "")))
+        _write_atomic(path, out.getvalue())
+    except Exception:  # noqa: BLE001 — a preview aid, never a reason to lose the fit
+        logger.exception("HAAR cut source of seed %s in %s failed", seed, folder)
 
 
 def _haar_result(fit: Dict[str, Any], base_sha: str) -> Dict[str, Any]:
@@ -1267,6 +1302,8 @@ def _haar_fit_record(character_name: str, item_id: str, kind: str, fsig: str, bs
         "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
                    "base_images": {v: _sha(p) for v, p in base_views.items()},
                    "ssig": ssig, "seed": fit["seed"], "colour": garment_hair.hair_colour_override(settings),
+                   # the cut the cards were made with (Ruling A71) — a cut saved meanwhile reads ``cut_changed``
+                   "cut": dict((result.report.get("cut") or {}).get("setting") or {}),
                    "strands_sha256": fit["strands_sha256"]},
         "colour": colour, "length_class": fit["length_class"], "created_at": utc_now_iso()}
 
@@ -1869,7 +1906,7 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             raise base_body.MissingInput("The base fit names no HAAR seed — run the hair chain")
         if _haar_strands_file(character_name, item_id, inputs) is None:
             raise base_body.MissingInput("The HAAR strands of the base fit are gone — run the hair chain")
-        fit = _fit_haar_seeds(character_name, item_id, ssig, [seed], body["rigged"], profile)[seed]
+        fit = _fit_haar_seeds(character_name, item_id, ssig, [seed], body["rigged"], profile, on_base=False)[seed]
         picked = bool((base_record.get("gates") or {}).get("picked"))
         if fit["result"] is None or (not fit["result"].ok and not picked):
             reasons = [fit["error"]] if fit["result"] is None else list(fit["result"].reasons)
@@ -4765,7 +4802,84 @@ def haar_panel(character_name: str, item_id: str, *,
     return gs.finite_json({"ssig": ssig, "status": status, "seeds": seeds,
                            "next_seeds": _haar_next_seeds(character_name, item_id, ssig), "jobs": HAAR_SEEDS,
                            "picked": pick, "served": served, "in_use": in_use,
-                           "route": haar_route(character_name)})
+                           "route": haar_route(character_name),
+                           "cut": haar_cut_panel(character_name, item_id, item=item)})
+
+
+def _haar_cut_file(character_name: str, item_id: str) -> Tuple[Optional[Path], Dict[str, Any]]:
+    """``(cut source file, the previewed fit's report.cut)`` of the HAAR fit the hair preview shows
+    (``preview_path``): the file only when its seed folder holds the uncut cards that fit was cut from (the sha256
+    in the file equals the record's ``report.cut.source_sha256``); ``(None, {})`` without a HAAR fit."""
+    import numpy as np
+    from app.core import garment_store as gs
+    path = preview_path(character_name, item_id)
+    if path is None:
+        return None, {}
+    record = gs.read_record(path.with_suffix(".json"))
+    if gs.fit_method(record) != gs.HAAR:
+        return None, {}
+    cut = (record.get("report") or {}).get("cut") or {}
+    inputs = record.get("inputs") or {}
+    sha = str(cut.get("source_sha256") or "")
+    try:
+        seed = int(inputs.get("seed"))
+        file = gs.haar_seed_dir(gs.haar_dir(character_name, item_id, str(inputs.get("ssig") or "")),
+                                seed) / HAAR_CUT_SOURCE
+        if not sha or not file.is_file():
+            return None, cut
+        with np.load(file, allow_pickle=False) as z:
+            if str(z["source_sha256"]) != sha:
+                return None, cut
+    except (TypeError, ValueError, OSError, KeyError):
+        return None, cut
+    return file, cut
+
+
+def haar_cut_panel(character_name: str, item_id: str, *, item: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The Cut control of a HAAR hairstyle (Ruling A71): ``saved`` the stored ``hair_cut`` (``{}`` = automatic),
+    ``built`` the cut of the fit the preview shows (None: no HAAR fit, or one from before the cut), ``landmarks``
+    that fit's heights (m) the "Ends at" choices name, ``source_url`` the uncut cards the preview cuts live
+    (``haar_cut_source``; None when the fit has none — the control then only saves), the limits and the Auto ends."""
+    from app.core import garment_hair, hair_cut
+    from app.models.inventory import get_item
+    settings = garment_hair.hairstyle_settings(item if item is not None else get_item(item_id))
+    file, cut = _haar_cut_file(character_name, item_id)
+    built = None
+    path = preview_path(character_name, item_id)
+    if path is not None and cut:
+        from app.core import garment_store as gs
+        inputs = gs.read_record(path.with_suffix(".json")).get("inputs") or {}
+        built = dict(inputs["cut"]) if isinstance(inputs.get("cut"), dict) else None
+    stamp = _stamp(file) if file is not None else None
+    return {"saved": garment_hair.hair_cut(settings), "built": built,
+            "landmarks": dict(cut.get("landmarks") or {}),
+            "source_url": _url(character_name, item_id, "haar-cut-source", stamp) if stamp is not None else None,
+            "limits": {"max_cm": list(hair_cut.MAX_CM_LIMITS), "ends_cm": list(hair_cut.ENDS_CM_LIMITS)},
+            "auto_ends_cm": round(hair_cut.ENDS_AUTO_M * 100, 1), "at": list(hair_cut.LANDMARKS)}
+
+
+def haar_cut_source(character_name: str, item_id: str) -> Optional[Dict[str, Any]]:
+    """The uncut cards of the HAAR fit the hair preview shows (``_haar_cut_file``) for the live Cut preview:
+    ``{version, cards, rows, rails (base64 float32, card-major, row, left/right, xyz), landmarks, source_sha256}``
+    — the inputs of ``hair_cut.cut_cards`` the server cut that fit from. None without one."""
+    import base64
+    import json
+    import numpy as np
+    from app.core import hair_cut
+    file, cut = _haar_cut_file(character_name, item_id)
+    if file is None:
+        return None
+    try:
+        with np.load(file, allow_pickle=False) as z:
+            rails = np.ascontiguousarray(z["rails"], "<f4")
+            heights = json.loads(str(z["landmarks"]))
+    except (OSError, ValueError, KeyError):
+        return None
+    if rails.ndim != 4 or rails.shape[2:] != (2, 3):
+        return None
+    return {"version": hair_cut.CUT_VERSION, "cards": int(rails.shape[0]), "rows": int(rails.shape[1]),
+            "rails": base64.b64encode(rails.tobytes()).decode("ascii"), "landmarks": heights,
+            "source_sha256": str(cut.get("source_sha256") or "")}
 
 
 def haar_route(character_name: str) -> Dict[str, Any]:
@@ -4983,8 +5097,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     the served fit's job), ``colour_changed`` (another colour override) and
     ``placement_changed`` (another manual forward/tilt, or a fit from before
     the placement correction). HAAR hair adds ``ssig`` and the stale reasons ``haar_changed`` (another
-    text or HAAR setting), ``seed_changed`` (another served seed: a pick or a better seed) and
-    ``colour_changed``.
+    text or HAAR setting), ``seed_changed`` (another served seed: a pick or a better seed),
+    ``colour_changed`` and ``cut_changed`` (another ``hair_cut``, Ruling A71).
     ``failed`` also reports the persisted failure of the current fsig after
     a restart (automatic triggers skip it until an explicit run).
     ``queue_position`` / ``queue_running`` (``queue_state``): the 1-based
@@ -5092,6 +5206,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                 if (used.get("colour") or "") != garment_hair.hair_colour_override(
                         garment_hair.hairstyle_settings(_item_)):
                     stale.append("colour_changed")
+                if (used.get("cut") or {}) != garment_hair.hair_cut(garment_hair.hairstyle_settings(_item_)):
+                    stale.append("cut_changed")
     preview = preview_path(character_name, item_id)
     preview_url = None
     if preview is not None:

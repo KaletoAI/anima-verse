@@ -119,7 +119,8 @@ HAIR_STALE_REASONS = {"description_changed": "Hair description changed",
                       "base_model_changed": "Base model changed",
                       "hairdeck_changed": "Profile picture or HairDeck settings changed",
                       "colour_changed": "Hair colour changed",
-                      "placement_changed": "Hair placement changed"}
+                      "placement_changed": "Hair placement changed",
+                      "cut_changed": "Hair cut changed"}
 # ... of an own-mesh outfit piece (kind clothing, the Wardrobe): its inputs are the item's.
 CLOTHING_STALE_REASONS = {"description_changed": "Piece description changed",
                           "base_changed": "Base body changed",

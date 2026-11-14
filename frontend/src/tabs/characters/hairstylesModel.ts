@@ -26,6 +26,7 @@
  * Returned strings are English; the caller passes `t`.
  */
 import { DRAG_TURN_DEG_PER_PX } from '../../lib/modelTurn'
+import type { HaarCutPanel, HairCut } from './hairCut'
 
 type Tr = (s: string) => string
 const EN: Tr = (s) => s
@@ -64,6 +65,8 @@ export interface HaarPanel {
   in_use?: number | null
   /** The backend the hair_strands occasion is meant to run on; `routed` false = none (nothing can be spent). */
   route?: { routed: boolean; backend: string | null } | null
+  /** The Cut control (Ruling A71, `garments.haar_cut_panel`). */
+  cut?: HaarCutPanel | null
 }
 
 /** No backend for HAAR (stage H3's words); the tab links the settings page beside it. */
@@ -136,6 +139,7 @@ export const STALE_TEXT: Record<string, string> = {
   swing_changed: 'The Swing setting changed',
   haar_changed: 'The hairstyle text changed',
   seed_changed: 'Another variant was picked',
+  cut_changed: 'The cut setting changed',
 }
 
 /** The stale reasons that only the fit applies (all but a new HairDeck result). */
@@ -143,7 +147,7 @@ const FIT_REASONS = ['description_changed', 'base_changed', 'base_model_changed'
   'colour_changed', 'placement_changed', 'swing_changed']
 /** The stale reasons a HAAR fit applies (a new text asks HAAR again: the strands row). */
 const HAAR_FIT_REASONS = ['base_changed', 'base_model_changed', 'fit_algorithm_updated', 'colour_changed',
-  'seed_changed']
+  'seed_changed', 'cut_changed']
 
 /** "1 CPU fit" / "N CPU fits". */
 export function cpuFitsLabel(n: number, t: Tr = EN): string {
@@ -493,10 +497,11 @@ export function listReason(freshness: { state: string; reason?: string | null } 
 
 /** What a saved setting made due — written next to it (rule: saving runs nothing). `kind` names the setting;
  *  null = nothing is due for it. */
-export function settingDue(kind: 'placement' | 'colour' | 'swing' | 'stiffness', info: StepInput,
+export function settingDue(kind: 'placement' | 'colour' | 'swing' | 'stiffness' | 'cut', info: StepInput,
   t: Tr = EN): string | null {
   if (kind === 'stiffness') return null
-  const reason = kind === 'placement' ? 'placement_changed' : kind === 'colour' ? 'colour_changed' : 'swing_changed'
+  const reason = kind === 'placement' ? 'placement_changed' : kind === 'colour' ? 'colour_changed'
+    : kind === 'cut' ? 'cut_changed' : 'swing_changed'
   if (!info.garment?.stale_reasons.includes(reason)) return null
   return t('Saved, not applied — Re-fit applies it ({cost})').replace('{cost}', jobsLabel(info.step_jobs?.fit ?? 0, t))
 }
@@ -788,4 +793,21 @@ export const NONE_SELECTED = '\u0000none'
 /** The selection after a delete (Ruling A59): the worn hairstyle of the reloaded list, else none. */
 export function afterDeleteSelection(list: { hairstyles: Array<{ id: string; worn: boolean }> } | null | undefined): string {
   return list?.hairstyles.find((h) => h.worn)?.id || NONE_SELECTED
+}
+
+// --- The HAAR Cut (Ruling A71) --------------------------------------------------------------------------------
+
+/** The landmark names of "Ends at", in plain words (`hair_cut.LANDMARKS`). */
+export const CUT_AT_LABELS: Record<string, string> = {
+  chin: 'Chin', shoulder: 'Shoulder', shoulder_blades: 'Shoulder blades', mid_back: 'Mid back', waist: 'Waist',
+}
+
+/** One line of what a cut does: "Full length · ends Auto (3 cm)", "Max 30 cm · ends 1.5 cm", "At the shoulder · …". */
+export function cutLabel(cut: HairCut | null | undefined, autoEndsCm: number, t: Tr = EN): string {
+  const c = cut ?? {}
+  const length = c.at ? t('Ends at {where}').replace('{where}', t(CUT_AT_LABELS[c.at] ?? c.at))
+    : c.max_cm != null ? t('Max {n} cm').replace('{n}', String(c.max_cm)) : t('Full length')
+  const ends = c.ends_cm != null ? t('soft tip {n} cm').replace('{n}', String(c.ends_cm))
+    : t('soft tip Auto ({n} cm)').replace('{n}', String(autoEndsCm))
+  return `${length} · ${ends}`
 }

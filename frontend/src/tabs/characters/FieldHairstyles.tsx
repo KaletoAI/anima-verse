@@ -43,6 +43,8 @@ import { stampLabel } from './freshnessText'
 import { GateChips, RecordNumbers, RunButton, RunStatusLine } from './GarmentSteps'
 import { EMPTY_TILE, HAIRDECK_FIT_CHIPS, HAIR_STEP_LABELS, WARN_STYLE, flatFit, num } from './garmentStyle'
 import type { GarmentRunBody } from './garmentStyle'
+import { cutOverride, cutRuler, decodeRails } from './hairCut'
+import type { HaarCutSource } from './hairCut'
 import { HairLiveControls } from './HairLiveControls'
 import type { HairDrafts } from './HairLiveControls'
 import { FigureBuildLine } from './HairstyleParts'
@@ -431,7 +433,7 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
   const { feedback, start, cancel } = useGarmentRun(character, itemId, info, startPoll)
   const [posting, setPosting] = useState(false)
   const [sub, setSub] = useState<'steps' | 'settings' | 'images'>('steps')
-  const [drafts, setDrafts] = useState<HairDrafts>({ placement: null, colour: null, stiffness: null })
+  const [drafts, setDrafts] = useState<HairDrafts>({ placement: null, colour: null, stiffness: null, cut: null })
   const [ruler, setRuler] = useState(false)
   const [side, setSide] = useState(false)
   const [modeSaved, setModeSaved] = useState(0)
@@ -453,6 +455,30 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
   const headCapsule = info?.collision?.capsules?.find((c) => c.region === 'head')
   const halfWidth = headCapsule?.r ?? 0.08
   const fitted = hd ? fittedPlacement(hd.placement) : null
+  // The HAAR Cut preview (Ruling A71): the uncut cards of the shown fit, fetched once per fit; a dragged cut is
+  // cut from them with the server's rule (hairCut.ts) and replaces the hair's cards in the viewer.
+  const cutUrl = isHaar ? haarPanel?.cut?.source_url ?? '' : ''
+  const [cutFetch, setCutFetch] = useState<{ url: string; source: HaarCutSource | null; rails: Float32Array | null } | null>(null)
+  useEffect(() => {
+    if (!cutUrl) return
+    let gone = false
+    apiGet<HaarCutSource>(cutUrl)
+      .then((source) => {
+        if (gone) return
+        const rails = source?.rails ? decodeRails(source.rails) : null
+        const ok = !!rails && rails.length === source.cards * source.rows * 6
+        setCutFetch({ url: cutUrl, source: ok ? source : null, rails: ok ? rails : null })
+      })
+      .catch(() => { if (!gone) setCutFetch({ url: cutUrl, source: null, rails: null }) })
+    return () => { gone = true }
+  }, [cutUrl])
+  const cutSource = cutFetch?.url === cutUrl && cutUrl ? cutFetch : null
+  const cutLive = !!cutSource?.source
+  const cutAdjust = useMemo(() => {
+    if (!drafts.cut || !cutSource?.source || !cutSource.rails) return null
+    const o = cutOverride(cutSource.source, cutSource.rails, drafts.cut)
+    return { positions: o.positions, v: o.v }
+  }, [drafts.cut, cutSource])
   const meshAdjust = useMemo(() => {
     if (!hd || !info?.item_id) return null
     // HAAR hair has no placement; its colour in use is the manual one, else the named one, else the atlas white.
@@ -462,9 +488,10 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
       : hd.colour.fitted?.applied === false ? hd.colour.auto
         : hd.colour.fitted?.target || hd.colour.target || hd.colour.profile?.hex || hd.colour.auto
     const tint = drafts.colour ? colourTint(shown, drafts.colour) : null
-    return map || tint ? { match: `garment_hair_${info.item_id}`, map, tint } : null
+    const cut = isHaar ? cutAdjust : null
+    return map || tint || cut ? { match: `garment_hair_${info.item_id}`, map, tint, cut } : null
   }, [hd, isHaar, info?.item_id, pivot, fitted?.forward_m, fitted?.tilt_deg, fitted?.width_scale, drafts.placement, // eslint-disable-line react-hooks/exhaustive-deps
-    drafts.colour, halfWidth])
+    drafts.colour, halfWidth, cutAdjust])
   // The per-strand preview (strand-hair spec § 6.2.5): the previewed fit's record, fetched once per previewed fit
   // while Swing is on; the dragged Stiffness goes to the sim live.
   const strandState = strandPreviewState(info ?? {}, hd?.chains?.swing ?? true)
@@ -488,10 +515,16 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
     : strandFetch?.key === strandKey ? t('No strand record for this fit — the hair stays still.')
       : t('Loading the strands…')
   const hairlineY = hd?.placement.fitted?.hairline_y ?? (pivot ? pivot[1] + 0.04 : null)
-  const polylines = useMemo(() => (ruler && pivot && hairlineY !== null
-    ? placementRuler(pivot, pivot[0] + halfWidth + 0.03, hairlineY,
-      drafts.placement?.forward_m ?? fitted?.forward_m ?? 0)
-    : undefined), [ruler, pivot, hairlineY, halfWidth, drafts.placement?.forward_m, fitted?.forward_m])
+  const polylines = useMemo(() => {
+    if (isHaar && drafts.cut && cutSource?.source && cutSource.rails) {
+      const lines = cutRuler(cutSource.source, cutSource.rails, drafts.cut)
+      return lines.length ? lines : undefined
+    }
+    return ruler && pivot && hairlineY !== null
+      ? placementRuler(pivot, pivot[0] + halfWidth + 0.03, hairlineY,
+        drafts.placement?.forward_m ?? fitted?.forward_m ?? 0)
+      : undefined
+  }, [ruler, pivot, hairlineY, halfWidth, drafts.placement?.forward_m, fitted?.forward_m, isHaar, drafts.cut, cutSource])
   const focus = useMemo(() => (pivot ? { center: [pivot[0], pivot[1] - 0.04, pivot[2] - 0.02] as Vec3,
     radius: 0.24, side } : null), [pivot, side])
 
@@ -534,6 +567,7 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
       motionToolbar={hd ? (
         <HairLiveControls character={character} itemId={itemId} mode={mode === 'haar' ? 'haar' : 'hairdeck'} hd={hd}
           info={info} busy={busy || !info.pipeline} previewSwings={strandState} strandIssue={strandIssue}
+          cutPanel={isHaar ? haarPanel?.cut ?? null : null} cutLive={cutLive}
           onDraft={onDraft} onRuler={setRuler} onSaved={reload} />
       ) : undefined} />
   ) : mode === 'body' && info.plain && info.body_url ? (
@@ -554,7 +588,8 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
       {fitted3d && hd && info.pipeline ? (
         <aside className="ga-model3d-toolbar" style={{ flex: '0 0 220px' }}>
           <HairLiveControls character={character} itemId={itemId} mode={mode === 'haar' ? 'haar' : 'hairdeck'} hd={hd}
-            info={info} busy={busy} previewSwings="no_preview" onDraft={onDraft} onRuler={setRuler} onSaved={reload} />
+            info={info} busy={busy} previewSwings="no_preview" cutPanel={isHaar ? haarPanel?.cut ?? null : null}
+            onDraft={onDraft} onRuler={setRuler} onSaved={reload} />
         </aside>
       ) : null}
     </div>

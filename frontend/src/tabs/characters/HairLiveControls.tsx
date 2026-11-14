@@ -12,6 +12,11 @@
  * - Placement: forward shift (mm), forward tilt (°), hair width (×); Automatic clears all three
  *   (POST /characters/{n}/hair/placement {forward_m, tilt_deg, width_scale, item_id}, null = automatic).
  * - Colour: a manual hair colour, Automatic clears it (POST …/hair/colour {hex, item_id}).
+ * - Cut (HAAR only, Ruling A71): Length — the whole length, a maximum length (cm) or where the hair ends on the body
+ *   (chin / shoulder / shoulder blades / mid back / waist) — and Ends, the soft tip (cm; Auto = the fit's default).
+ *   The preview cuts the uncut cards live with the server's rule (`hairCut.ts`); Save stores the setting only
+ *   (POST …/hair/cut {max_cm, at, ends_cm, item_id}, null = automatic) and the fit reads due — Re-fit cuts on the
+ *   CPU (no hub job).
  * - Motion: Swing (saved at once — a fit input) and Stiffness (POST …/hair/motion {swing, stiffness,
  *   item_id}); Stiffness acts on the motion only, nothing becomes due. The preview runs the game's per-strand sim
  *   (strand-hair spec § 6.2.5): Stiffness acts on it live while dragged (`setStiffness`); the group's hint says
@@ -22,8 +27,10 @@ import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { STRAND_PREVIEW_HINTS, fittedPlacement, settingDue } from './hairstylesModel'
+import { CUT_AT_LABELS, STRAND_PREVIEW_HINTS, cutLabel, fittedPlacement, settingDue } from './hairstylesModel'
 import type { PlacementValues, StepInput, StrandPreviewState } from './hairstylesModel'
+import { cutEqual, cutPostBody, normaliseCut } from './hairCut'
+import type { HaarCutPanel, HairCut } from './hairCut'
 import type { HairDeckPanel } from './useGarment'
 import { Swatch } from './HairstyleParts'
 
@@ -32,6 +39,8 @@ export interface HairDrafts {
   placement: PlacementValues | null
   colour: string | null
   stiffness: number | null
+  /** The dragged HAAR cut (null = the stored one). */
+  cut: HairCut | null
 }
 
 const GROUP: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2, padding: '4px 8px 6px' }
@@ -73,7 +82,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
 }
 
 export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, info, busy, previewSwings, strandIssue,
-  onDraft, onRuler, onSaved }: {
+  cutPanel = null, cutLive = false, onDraft, onRuler, onSaved }: {
   character: string
   itemId: string
   /** The hairstyle's mode: HAAR hides the placement and names its own colour sources. */
@@ -89,6 +98,10 @@ export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, inf
   /** Why the strands do not swing although they should (no record for this fit, loading) — shown instead of
    *  the `swings` hint; null otherwise. */
   strandIssue?: string | null
+  /** HAAR: the Cut control's block of the hair GET (`haar.cut`); null hides the group. */
+  cutPanel?: HaarCutPanel | null
+  /** The preview can cut live (the uncut cards of the shown fit are loaded). */
+  cutLive?: boolean
   onDraft: (d: HairDrafts) => void
   /** The forward-shift ruler is wanted in the preview (the slider is hovered or focused). */
   onRuler: (on: boolean) => void
@@ -112,17 +125,20 @@ export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, inf
   const [colour, setColour] = useState<string | null>(null)
   const chains = hd.chains
   const [stiffness, setStiffness] = useState<number | null>(null)
+  const [cut, setCut] = useState<HairCut | null>(null)
   const [posting, setPosting] = useState(false)
   const off = busy || posting
 
   // A new server answer: the drafts restart from it.
+  const cutSaved = normaliseCut(cutPanel?.saved)
   const serverKey = `${itemId}|${p.forward_m}|${p.tilt_deg}|${p.width_scale}|${hd.colour.target}|${chains?.stiffness}`
+    + `|${JSON.stringify(cutSaved)}`
   useEffect(() => {
-    setPlacement(null); setTouched({}); setColour(null); setStiffness(null)
+    setPlacement(null); setTouched({}); setColour(null); setStiffness(null); setCut(null)
   }, [serverKey])
   useEffect(() => {
-    onDraft({ placement, colour, stiffness })
-  }, [placement, colour, stiffness, onDraft])
+    onDraft({ placement, colour, stiffness, cut })
+  }, [placement, colour, stiffness, cut, onDraft])
 
   const post = async (path: string, body: Record<string, unknown>) => {
     if (posting) return
@@ -149,6 +165,20 @@ export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, inf
   const placementDue = settingDue('placement', info, t)
   const colourDue = settingDue('colour', info, t)
   const swingDue = settingDue('swing', info, t)
+  const cutDue = settingDue('cut', info, t)
+  const cutCur = cut ?? cutSaved
+  const cutLimits = cutPanel?.limits ?? { max_cm: [3, 150] as [number, number], ends_cm: [0.5, 12] as [number, number] }
+  const autoEnds = cutPanel?.auto_ends_cm ?? 3
+  const cutMode = cutCur.at ? `at:${cutCur.at}` : cutCur.max_cm != null ? 'max' : 'full'
+  const editCut = (patch: HairCut, drop?: 'max_cm' | 'at' | 'ends_cm') => {
+    const next: HairCut = { ...cutCur, ...patch }
+    if (drop) delete next[drop]
+    setCut(normaliseCut(next))
+  }
+  const landmarkTitle = (at: string) => {
+    const y = cutPanel?.landmarks?.[at]
+    return y != null ? `${t(CUT_AT_LABELS[at] ?? at)} · ${Math.round(y * 100)} cm` : t(CUT_AT_LABELS[at] ?? at)
+  }
   const autoMark = (isManual: boolean) => (isManual ? '' : ` ${t('auto')}`)
   const mm = (m: number) => `${m >= 0 ? '+' : ''}${(m * 1000).toFixed(0)} mm`
   const haar = mode === 'haar'
@@ -215,6 +245,65 @@ export function HairLiveControls({ character, itemId, mode = 'hairdeck', hd, inf
         {colour ? <span className="ga-hint" style={{ fontSize: 10 }}>{t('Preview only — Save keeps it')}</span>
           : colourDue ? <span style={DUE}>{colourDue}</span> : null}
       </Group>
+
+      {haar && cutPanel ? (
+        <Group title={t('Cut')}>
+          <label className="ga-model3d-slider" style={{ gap: 0, fontSize: 10 }}
+            title={t('Where every strand ends: the whole length, a maximum length from the root, or a height on the body. The preview cuts live; Save keeps it, Re-fit applies it (no hub job).')}>
+            <span>{t('Length')}</span>
+            <select className="ga-input" value={cutMode} disabled={off} aria-label={t('Length')}
+              style={{ fontSize: 11, padding: '1px 2px' }}
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === 'full') editCut({}, 'max_cm')
+                else if (v === 'max') {
+                  const fallback = Math.min(cutLimits.max_cm[1], Math.max(cutLimits.max_cm[0], 40))
+                  setCut(normaliseCut({ max_cm: cutCur.max_cm ?? fallback, ends_cm: cutCur.ends_cm }))
+                } else setCut(normaliseCut({ at: v.slice(3), ends_cm: cutCur.ends_cm }))
+              }}>
+              <option value="full">{t('Full length')}</option>
+              <option value="max">{t('Max length')}</option>
+              <optgroup label={t('Ends at')}>
+                {(cutPanel.at ?? []).map((at) => (
+                  <option key={at} value={`at:${at}`}>{landmarkTitle(at)}</option>
+                ))}
+              </optgroup>
+            </select>
+          </label>
+          {cutMode === 'max' ? (
+            <Slider label={t('Max length')} value={cutCur.max_cm ?? 40} shown={`${cutCur.max_cm ?? 40} cm`}
+              min={cutLimits.max_cm[0]} max={cutLimits.max_cm[1]} step={1} disabled={off}
+              title={t('Every strand is cut at this length from its root (along the strand); shorter strands stay.')}
+              onChange={(v) => editCut({ max_cm: v })} />
+          ) : null}
+          <Slider label={t('Ends')} value={cutCur.ends_cm ?? autoEnds}
+            shown={`${cutCur.ends_cm ?? autoEnds} cm` + (cutCur.ends_cm == null ? ` ${t('auto')}` : '')}
+            min={cutLimits.ends_cm[0]} max={cutLimits.ends_cm[1]} step={0.5} disabled={off}
+            title={t('How long the soft tip of each strand is: shorter removes more of the thin tail (a blunter cut), longer keeps wispier ends. Auto = {n} cm.').replace('{n}', String(autoEnds))}
+            onChange={(v) => editCut({ ends_cm: v })} />
+          <div style={BTN_ROW}>
+            <button type="button" className="ga-btn ga-btn-sm" disabled={off || !cut || cutEqual(cut, cutSaved)}
+              title={t('Saves the cut — nothing runs')}
+              onClick={() => { if (cut) void post('cut', cutPostBody(cut)) }}>
+              {t('Save')}
+            </button>
+            <button type="button" className="ga-btn ga-btn-sm"
+              disabled={off || (!Object.keys(cutSaved).length && !cut)}
+              title={t('Back to automatic — saved at once, nothing runs')}
+              onClick={() => { if (Object.keys(cutSaved).length) void post('cut', cutPostBody({}))
+                else setCut(null) }}>
+              {t('Automatic')}
+            </button>
+          </div>
+          <span className="ga-hint" style={{ fontSize: 10 }}>
+            {t('In use')}: {cutPanel.built ? cutLabel(cutPanel.built, autoEnds, t) : t('not cut yet — the next fit cuts it')}
+          </span>
+          {cut && !cutEqual(cut, cutSaved)
+            ? <span className="ga-hint" style={{ fontSize: 10 }}>{cutLive ? t('Preview only — Save keeps it')
+              : t('No live preview for this fit — Save, then Re-fit shows it')}</span>
+            : cutDue ? <span style={DUE}>{cutDue}</span> : null}
+        </Group>
+      ) : null}
 
       {chains ? (
         <Group title={t('Motion')}>

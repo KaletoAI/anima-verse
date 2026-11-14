@@ -528,8 +528,10 @@ def _clean_garment(raw) -> Dict[str, Any]:
     as stripped strings, plus — only when set — a hairstyle's ``mesh_mode``
     and ``description`` (stripped strings) and its HairDeck settings
     (``garment_hair.SETTING_KEYS``, a string or a number each; validated by
-    their setters). ValueError without a kind or a slot — the slot is the
-    mesh-item slot (a body slot's ``mesh_item``) the item is worn in."""
+    their setters — except ``hair_cut``, an object kept as ``hair_cut.normalise``
+    gives it, dropped when it does not normalise or is empty). ValueError without
+    a kind or a slot — the slot is the mesh-item slot (a body slot's
+    ``mesh_item``) the item is worn in."""
     from app.core.garment_hair import SETTING_KEYS
     if not isinstance(raw, dict):
         raise ValueError("garment must be an object with 'kind' and 'slot'")
@@ -542,6 +544,15 @@ def _clean_garment(raw) -> Dict[str, Any]:
             out[key] = value
     for key in SETTING_KEYS:
         value = raw.get(key)
+        if key == "hair_cut":
+            from app.core.hair_cut import normalise
+            try:
+                cut = normalise(value) if isinstance(value, dict) else {}
+            except ValueError:
+                cut = {}
+            if cut:
+                out[key] = cut
+            continue
         if isinstance(value, bool) or not isinstance(value, (str, int, float)):
             continue
         if isinstance(value, str):

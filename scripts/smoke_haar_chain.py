@@ -34,13 +34,13 @@ Metrics per seed (inside_head_3mm, eye_cards, face_cards, tip_p50_rel_shoulder_c
     "haar 3 hub jobs (~30–55 s each) + 3 CPU fits (~25 s each)", cpu_fits 3 (the tab's cost line). run_garment -> ok, ran ["haar", "fit"]; 3
     generate_strands calls, prompt "long wavy brown hair", params {"seed": 1}, {"seed": 2}, {"seed": 3}, each with
     a hub stage s1/s2/s3; 3 fit calls (seeds 1, 2, 3) with length_class "long" and the colour above; the seed
-    folders s1..s3 hold Demo_haar_s<n>_strands.npy, Demo_haar_s<n>_head.obj, info.json and tile.png (the
-    variant's front | back picture, rendered at fit time); the record's seeds
+    folders s1..s3 hold Demo_haar_s<n>_strands.npy, Demo_haar_s<n>_head.obj, info.json, tile.png (the variant's
+    front | back picture, rendered at fit time) and cut_source.npz (the uncut cards, Ruling A71); the record's seeds
     [1, 2, 3]; no hub operation left (settled = deleted).
 [2] Best: seeds 1 and 2 pass, seed 2 has fewer face cards (1 < 2) -> served 2. record.chosen 2; results "3"
     accepted False with exactly the inside-head reason. The run's fsig = garment_fsig now (seed 2) != the fsig
     before the run (seed None). The fit record: method "haar", inputs.seed 2, inputs.ssig = garment_ssig,
-    fit_version = HAAR_FIT_VERSION (3), gates {ok True, reasons [], picked False}, colour {target "#5c3b26",
+    fit_version = HAAR_FIT_VERSION (4), gates {ok True, reasons [], picked False}, colour {target "#5c3b26",
     source "profile", name "brown"}; accepted_fit serves it; the fit GLB has the node garment_hair_<H>.
 [3] run_estimate after: steps [], hub_jobs 0 ("Everything is current" in the tab). A second run_garment: ran [],
     no call (generate 3, fit 3).
@@ -70,15 +70,25 @@ Metrics per seed (inside_head_3mm, eye_cards, face_cards, tip_p50_rel_shoulder_c
     ok False, retry_later True, nothing persisted (cached_failure None), no seed stored, no hub operation left.
     A resume of an operation whose stage never reached the hub (seed 1 of H3, no job id) collects nothing and
     asks for nothing (generate unchanged).
-[10] Refit sweep: HAAR_FIT_VERSION bumped to 4 -> outdated_fits lists H and H2 (method "haar");
+[10] Refit sweep: HAAR_FIT_VERSION bumped to 5 -> outdated_fits lists H and H2 (method "haar");
     refit_character -> both refitted, no generate call, fit +9 (H: 6 seeds, served 4 among them; H2: 3 seeds,
-    the pick 2 among them); both records fit_version 4; H served 4, H2 served 2.
+    the pick 2 among them); both records fit_version 5; H served 4, H2 served 2.
 [10b] Routes: GET /garments/H/haar/1/tile.png -> 200 image/png (PNG magic); seed 77 -> 404. POST /hair/description
     {"  "} -> 400; {"long wavy  black hair"} -> 200, description "long wavy black hair" (whitespace folded), run
     {steps ["haar", "fit"], hub_jobs 3, cpu_fits 3} (a new text = a new ssig without seeds); the hair GET then
     names "haar_changed" among the stale reasons and the new ssig has no seeds; no generate / fit call.
+[10c] The cut (Ruling A71) on H2: POST /hair/cut {max_cm 1} -> 400 (limits 3..150); {max_cm 30, at "chin"} -> 400
+    (a length or a height); {at "shoulder", ends_cm 2} -> 200 {cut {at "shoulder", ends_cm 2.0}}, no call; the hair
+    GET names "cut_changed", haar.cut.saved = that cut, built {} (the fit was uncut), run {steps ["fit"], hub_jobs 0};
+    the fsig changed. run_garment -> ran ["fit"], no generate call, fit_haar got cut = {at "shoulder", ends_cm 2.0},
+    the record's inputs.cut is that cut and "cut_changed" is gone; the hair GET's haar.cut has built = that cut,
+    landmarks {shoulder 1.4} and a source_url whose GET is 200 {cards 2, rows 17, landmarks, rails = the stub's 204
+    float32 (card 0, row 16, left y = float32(1.28))}, 304 on its ETag. Back to automatic -> the fsig before the cut
+    (an uncut hairstyle keeps its fingerprint).
 [11] Outbound connections: 0.
 """
+import base64
+import hashlib
 import json
 import os
 import shutil
@@ -199,11 +209,12 @@ def main() -> int:
 
         strand_file.read_strand_job = read_and_note
 
-        def fit_stub(strands, template_head, rigged_base_glb, *, colour_linear, length_class, template_faces=None):
+        def fit_stub(strands, template_head, rigged_base_glb, *, colour_linear, length_class, template_faces=None,
+                     cut=None):
             seed = int(last["dir"].name[1:])
             FIT.append({"seed": seed, "item": last["dir"].parent.name, "strands": strands.shape,
                         "faces": None if template_faces is None else len(template_faces),
-                        "colour": colour_linear, "length_class": length_class})
+                        "colour": colour_linear, "length_class": length_class, "cut": cut})
             inside, eye, face, tip = mode["metrics"][seed]
             body = glb_mesh.body_arrays(rigged_base_glb)
             P, F = fx.cap(0.19, np.array([0.0, 1.58, 0.0]), n_el=9, nlon=24)
@@ -214,8 +225,16 @@ def main() -> int:
                 material={"doubleSided": True}, colors=np.tile([0.3, 0.2, 0.1, 1.0], (len(P), 1)))
             m = {"inside_head_3mm": inside, "eye_cards": eye, "face_cards": face, "tip_p50_rel_shoulder_cm": tip}
             ok, reasons = garment_haar.gate(m, length_class)
+            # two straight uncut cards of 17 rows (the Cut preview's source, Ruling A71)
+            rails = np.zeros((2, 17, 2, 3), np.float32)
+            rails[:, :, :, 1] = (1.6 - 0.02 * np.arange(17))[None, :, None]
+            rails[:, :, 1, 0] = 0.01
+            rails[1, :, :, 2] = 0.05
             return garment_fit.FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons,
-                                         report={"layout": "haar", "vertices": {"hair": len(P), "cap": 0}})
+                                         report={"layout": "haar", "vertices": {"hair": len(P), "cap": 0},
+                                                 "cut": {"setting": dict(cut or {}), "landmarks": {"shoulder": 1.4},
+                                                         "source_sha256": hashlib.sha256(rails.tobytes()).hexdigest()}},
+                                         arrays={"cut_source": rails})
 
         garment_haar.fit_haar = fit_stub
 
@@ -295,7 +314,7 @@ def main() -> int:
         folder = gs.haar_dir("Demo", hid, ssig)
         check("seed folders", sorted(p.name for p in folder.iterdir()), ["record.json", "s1", "s2", "s3"])
         check("s2 files", sorted(p.name for p in (folder / "s2").iterdir()),
-              ["Demo_haar_s2_head.obj", "Demo_haar_s2_strands.npy", "info.json", "tile.png"])
+              ["Demo_haar_s2_head.obj", "Demo_haar_s2_strands.npy", "cut_source.npz", "info.json", "tile.png"])
         rec = gs.haar_record("Demo", hid, ssig)
         check("record seeds", rec.get("seeds"), [1, 2, 3])
         check("no hub op left", [op.kind for op in hub_ops.list_ops()], [])
@@ -457,7 +476,7 @@ def main() -> int:
 
         # --- [10] ----------------------------------------------------------------
         print("[10] refit sweep on a HAAR fit-version bump")
-        garment_haar.HAAR_FIT_VERSION = 4
+        garment_haar.HAAR_FIT_VERSION = 5
         listed = sorted((i, m) for i, _k, _f, m in garment_refit.outdated_fits("Demo"))
         check("outdated", listed, sorted([(hid, "haar"), (h2, "haar")]))
         before = counts()
@@ -467,8 +486,51 @@ def main() -> int:
         for item, seed in ((hid, 4), (h2, 2)):
             hit = gs.accepted_fit("Demo", item, base_model_sha=base_sha)
             check(f"{item} refitted", (hit[1].get("fit_version"), hit[1]["inputs"]["seed"]) if hit else None,
-                  (4, seed))
+                  (5, seed))
         check("nothing outdated", garment_refit.outdated_fits("Demo"), [])
+
+        # --- [10c] ---------------------------------------------------------------
+        print("[10c] the cut (Ruling A71): saved, due, refitted on the CPU")
+        before = counts()
+        f_h2 = gs.garment_fsig("Demo", h2)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            r = client.post("/characters/Demo/hair/cut", json={"item_id": h2, "max_cm": 1})
+            check("cut 1 cm refused", r.status_code, 400)
+            r = client.post("/characters/Demo/hair/cut", json={"item_id": h2, "max_cm": 30, "at": "chin"})
+            check("length and height refused", r.status_code, 400)
+            r = client.post("/characters/Demo/hair/cut", json={"item_id": h2, "at": "shoulder", "ends_cm": 2})
+            check("cut saved", (r.status_code, r.json().get("cut")), (200, {"at": "shoulder", "ends_cm": 2.0}))
+            check("saving runs nothing", (counts()[0] - before[0], counts()[1] - before[1]), (0, 0))
+            body = client.get(f"/characters/Demo/hair?item_id={h2}").json()
+            check("cut due", ("cut_changed" in ((body.get("garment") or {}).get("stale_reasons") or []),
+                             ((body.get("haar") or {}).get("cut") or {}).get("saved"),
+                             ((body.get("haar") or {}).get("cut") or {}).get("built"), (body.get("run") or {}).get("steps"),
+                             (body.get("run") or {}).get("hub_jobs")),
+                  (True, {"at": "shoulder", "ends_cm": 2.0}, {}, ["fit"], 0))
+        check("cut changes fsig", gs.garment_fsig("Demo", h2) != f_h2, True)
+        res = garments.run_garment("Demo", h2)
+        check("re-fit cuts on the CPU", (res.get("ok"), res.get("ran"), counts()[0] - before[0], FIT[-1]["cut"]),
+              (True, ["fit"], 0, {"at": "shoulder", "ends_cm": 2.0}))
+        hit = gs.accepted_fit("Demo", h2, base_model_sha=base_sha)
+        check("record inputs.cut", hit[1]["inputs"].get("cut") if hit else None, {"at": "shoulder", "ends_cm": 2.0})
+        check("cut current", "cut_changed" in (garments.garment_info("Demo", h2).get("stale_reasons") or []), False)
+        with TestClient(app, raise_server_exceptions=False) as client:
+            panel = (client.get(f"/characters/Demo/hair?item_id={h2}").json().get("haar") or {}).get("cut") or {}
+            check("panel built / landmarks", (panel.get("built"), panel.get("landmarks"), bool(panel.get("source_url"))),
+                  ({"at": "shoulder", "ends_cm": 2.0}, {"shoulder": 1.4}, True))
+            r = client.get(panel.get("source_url") or "/none")
+            src = r.json() if r.status_code == 200 else {}
+            rails = np.frombuffer(base64.b64decode(src.get("rails") or ""), "<f4")
+            check("cut source", (r.status_code, src.get("cards"), src.get("rows"), src.get("landmarks"), rails.size,
+                                 float(rails.reshape(2, 17, 2, 3)[0, 16, 0, 1]) if rails.size == 204 else None),
+                  (200, 2, 17, {"shoulder": 1.4}, 204, float(np.float32(1.6 - 0.32))))
+            etag = r.headers.get("etag")
+            check("cut source 304", client.get(panel.get("source_url") or "/none",
+                                               headers={"If-None-Match": etag or "x"}).status_code, 304)
+            check("cut source of an uncut hairstyle", client.get(f"/characters/Demo/garments/{hid}/haar-cut-source")
+                  .status_code in (200, 404), True)
+        check("back to automatic", garment_hair.set_hair_cut("Demo", h2, {"max_cm": None, "at": None}), True)
+        check("automatic = the uncut fingerprint", gs.garment_fsig("Demo", h2), f_h2)
 
         # --- [10b] ---------------------------------------------------------------
         print("[10b] tile + text routes")

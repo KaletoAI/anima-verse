@@ -45,16 +45,21 @@ Expected (by hand):
       two counts, and the cards follow the spike's rule on the strands kept: K = min(700, (2100 - dropped) // 3)
       (the fixture's box shoulders stretch some strands where they hang past the box edge — the drop count is the
       drape's, the rule on it is checked); len(V) == K * 34 + cap (report.vertices.cap > 0), and every card's 17 rows
-      x 2 vertices are consecutive (card k = vertices [34k, 34k + 34), haar_layout) and run root to tip (UV v 1 at
-      its first row, 0 at its last).
+      x 2 vertices are consecutive (card k = vertices [34k, 34k + 34), haar_layout) and run root to tip — the A71
+      cut (hair_cut.cut_cards): UV v 1 at its first row, 1 - S_BODY = 0.25 at row 15, 1 - S_END = 0.05 at its last
+      (never 0: the wrapped root row), falling row by row.
   [4] material path: garment.image == strip_atlas(); COLOR_0 of the card vertices == colour_linear (alpha 1) and of
       the scalp layer (H-R12) == colour_linear x SCALP_SHADE 0.6 = (0.18, 0.12, 0.06), alpha 1; the layer on the
       opaque patch (UV == SOLID_UV); report.layout "haar"; no chain joints (joint_parents / joint_binds empty);
-      weights Head / Neck / Spine2; report.fit_version == HAAR_FIT_VERSION == 3 (H-R14 changed the cards).
+      weights Head / Neck / Spine2; report.fit_version == HAAR_FIT_VERSION == 4 (H-R14 changed the cards, A71 cut them).
   [5] record_for_fit on the grafted HAAR fit (method "haar", report.vertices from [3]): mode "haar", params ==
       PARAMS["haar"] (root_deg 0), cards == K; the npz binds card k + 1 to vertices [34k, 34k + 34) with u = the row
       (0, 0, 1, 1, …, 16, 16) and the cap 0.
   [6] determinism: a second fit_haar gives the same garment positions, bit for bit.
+  [6b] Ruling A71: r.arrays["cut_source"] is the (K, 17, 2, 3) float32 uncut rails and report.cut.source_sha256 the
+      sha256 of their bytes; the default fit's hair vertices = hair_cut.cut_cards({}) of them; a fit with cut
+      {max_cm 10} keeps report.vertices, the vertex count and the faces, every card's centreline is at most 10 cm,
+      and its grafted fit's strand record binds K cards with the same card / row arrays and capsule version as [5].
   [7] the scalp layer alone (``scalp_layer`` on the fixture body, ruling H-R12). The head sphere is 64 x 32: ring i
       at theta = i * 5.625 deg, so ring 7 = 39.375 deg (y 1.60 + 0.09 cos 39.375 = 1.66956), ring 8 = 45 deg
       (y 1.66364). Hand-built roots on the sphere: theta 0 .. 40 deg (step 1), phi step 2 deg, leaving out a
@@ -215,8 +220,8 @@ def run_checks(tmp):
     v = np.asarray(g.uvs)[:nv["hair"], 1].reshape(K, 17, 2)
     check(bool(one_card) and len(hair_f) == K * 32, f"[3] every hair face within one card's 34 vertices "
           f"({len(hair_f)} faces)")
-    check(np.allclose(v[:, 0], 1.0) and np.allclose(v[:, -1], 0.0) and (np.diff(v[:, :, 0], axis=1) < 0).all(),
-          "[3] rows root (v 1) to tip (v 0)")
+    check(np.allclose(v[:, 0], 1.0) and np.allclose(v[:, -2], 0.25) and np.allclose(v[:, -1], 0.05)
+          and (np.diff(v[:, :, 0], axis=1) < 0).all(), "[3] rows root (v 1) to tip (v 0.25, then 0.05 — the A71 cut)")
     lay = hs.haar_layout(g.positions, nv["hair"])
     check(lay.centrelines.shape == (K, 17, 3) and lay.card[nv["hair"]:].tolist() == [-1] * nv["cap"],
           f"[3] haar_layout: {K} cards of 17 rows, the cap rigid")
@@ -229,7 +234,7 @@ def run_checks(tmp):
     check(garment_haar.SCALP_SHADE == 0.6 and np.allclose(C[nv["hair"]:, :3], [0.18, 0.12, 0.06], atol=1e-12),
           f"[4] COLOR_0 of the scalp layer == colour x 0.6 = (0.18, 0.12, 0.06) (got {C[nv['hair'], :3]})")
     check(np.allclose(np.asarray(g.uvs)[nv["hair"]:], hair_cards.SOLID_UV), "[4] the layer on the opaque patch")
-    check(garment_haar.HAAR_FIT_VERSION == 3 and r.report["fit_version"] == 3, "[4] fit_version 3")
+    check(garment_haar.HAAR_FIT_VERSION == 4 and r.report["fit_version"] == 4, "[4] fit_version 4")
     check(r.report["layout"] == "haar" and not g.joint_parents and not g.joint_binds,
           "[4] layout haar, no chain joints")
     check([n.split(":")[-1] for n in g.joint_names] == ["Head", "Neck", "Spine2"], f"[4] joints {g.joint_names}")
@@ -257,6 +262,40 @@ def run_checks(tmp):
     r2 = garment_haar.fit_haar(S, TV, glb, colour_linear=COLOUR, length_class="medium", template_faces=TF)
     check(np.array_equal(np.asarray(r.garment.positions), np.asarray(r2.garment.positions)),
           "[6] a second fit gives the same positions, bit for bit")
+
+    # [6b] a user cut (Ruling A71): the same vertex layout, every card at most 10 cm, still bound
+    import hashlib
+    from app.core import hair_cut
+    src = r.arrays.get("cut_source")
+    check(src is not None and src.shape == (K, 17, 2, 3) and src.dtype == np.float32
+          and r.report["cut"]["source_sha256"] == hashlib.sha256(np.ascontiguousarray(src).tobytes()).hexdigest(),
+          "[6b] the uncut rails: (K, 17, 2, 3) float32, report.cut.source_sha256 names their bytes")
+    want, _v, _i = hair_cut.cut_cards(src.astype(np.float64), {}, r.report["cut"]["landmarks"])
+    check(np.allclose(np.asarray(r.garment.positions)[:nv["hair"]], want.reshape(-1, 3), atol=1e-6),
+          "[6b] the default fit = cut_cards({}) of its uncut rails")
+    r3 = garment_haar.fit_haar(S, TV, glb, colour_linear=COLOUR, length_class="medium", template_faces=TF,
+                               cut={"max_cm": 10})
+    g3 = r3.garment
+    check(r3.report["cut"]["setting"] == {"max_cm": 10.0} and r3.report["vertices"] == nv
+          and len(g3.positions) == len(g.positions) and np.array_equal(np.asarray(g3.indices), np.asarray(g.indices)),
+          f"[6b] cut max 10 cm: the same vertices {r3.report['vertices']} and faces")
+    lay3 = hs.haar_layout(g3.positions, nv["hair"])
+    arc = np.linalg.norm(np.diff(lay3.centrelines, axis=1), axis=2).sum(1)
+    check(float(arc.max()) <= 0.10 + 1e-5 and r3.report["cut"]["keep_cm"]["max"] <= 10.0,
+          f"[6b] every card at most 10 cm along its centreline (max {arc.max() * 100:.2f} cm)")
+    FSIG3 = "fedcba987654"
+    fit3 = gs.garment_path(CHAR, ITEM, FSIG3, "fit")
+    refit_pool.graft_file(glb, g3, f"garment_hair_{ITEM}", {"kind": "hair", "item_id": ITEM, "fsig": FSIG3},
+                          str(fit3), material_overrides=hair_cards.alpha_overrides())
+    gs.write_record(fit3.with_suffix(".json"), {"accepted": True, "kind": "hair", "item_id": ITEM, "fsig": FSIG3,
+                                                "method": "haar", "report": {"vertices": nv}})
+    rec3 = hs.record_for_fit(CHAR, fit3)
+    arrays3 = hs.vertex_arrays(fit3)
+    check(rec3 is not None and rec3["cards"] == K and (rec3.get("capsules") or {}).get("capsules")
+          and record is not None and rec3["capsules"]["version"] == record["capsules"]["version"]
+          and arrays3 is not None and np.array_equal(arrays3["card"], arrays["card"])
+          and np.array_equal(arrays3["u"], arrays["u"]),
+          "[6b] the cut fit's strand record binds the same cards, rows and capsule set (collision + sim)")
 
     # [7] the scalp layer alone
     B = strand_register.body_frame(body)

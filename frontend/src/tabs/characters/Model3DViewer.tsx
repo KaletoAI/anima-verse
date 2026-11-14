@@ -538,7 +538,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  whenever the prop changes, without reloading; null / no `map` and `tint` = the loaded mesh as it is.
      *  The Hairstyles tab drags its placement and colour sliders through it. */
     meshAdjust?: { match: string; map?: ((p: [number, number, number]) => [number, number, number]) | null
-      tint?: [number, number, number] | null } | null
+      tint?: [number, number, number] | null
+      /** Ruling A71, the HAAR Cut preview: the first `positions.length / 3` vertices of the matched mesh take these
+       *  positions and their uv.y these `v` (`hairCut.cutOverride`, the server's rule) — the strands pause while it
+       *  is shown, like under a `map`. */
+      cut?: { positions: Float32Array; v: Float32Array } | null } | null
     /** Frame a PART of the model instead of all of it (model mode): the camera looks at `center` (model units
      *  of the loaded scene) from far enough to hold a sphere of `radius`, from the front three-quarter or —
      *  `side` — from the model's +x side (its left), where a forward shift and a forward tilt read as lengths
@@ -1771,14 +1775,15 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
 
           // ── Live vertex preview (`meshAdjust`): the loaded positions and colour are kept, every change maps
           // them anew — the meshes are this load's own, so nothing shared is touched. ──
-          let adjustTargets: Array<{ mesh: Mesh; base: Float32Array; color: InstanceType<typeof THREE.Color> | null }> = []
+          let adjustTargets: Array<{ mesh: Mesh; base: Float32Array; baseV: Float32Array | null
+            color: InstanceType<typeof THREE.Color> | null }> = []
           let adjustMatch: string | null = null
           const applyMeshAdjust = () => {
             const adjust = meshAdjustRef.current
             const match = adjust?.match || ''
             // The strands own the hair vertices while they run: a placement map (and the capture of the loaded
             // positions) needs the mesh's own geometry back — the frame loop turns them on again without a map.
-            if (adjust?.map || match !== adjustMatch) strandOn(false)
+            if (adjust?.map || adjust?.cut || match !== adjustMatch) strandOn(false)
             if (match !== adjustMatch) {
               adjustMatch = match
               adjustTargets = []
@@ -1791,21 +1796,34 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                   for (let i = 0; i < pos.count; i++) {
                     base[i * 3] = pos.getX(i); base[i * 3 + 1] = pos.getY(i); base[i * 3 + 2] = pos.getZ(i)
                   }
+                  const uv = mesh.geometry.getAttribute('uv')
+                  const baseV = uv ? new Float32Array(uv.count) : null
+                  if (uv && baseV) for (let i = 0; i < uv.count; i++) baseV[i] = uv.getY(i)
                   const mat = mesh.material as MeshStandardMaterial | MeshStandardMaterial[]
                   const color = !Array.isArray(mat) && mat?.color ? mat.color.clone() : null
-                  adjustTargets.push({ mesh, base, color })
+                  adjustTargets.push({ mesh, base, baseV, color })
                 })
               }
             }
             for (const target of adjustTargets) {
               const pos = target.mesh.geometry.getAttribute('position')
               const map = adjust?.map
+              // A cut fits the mesh only when it names no more vertices than it has (the HAAR cards come first).
+              const cut = adjust?.cut && adjust.cut.positions.length <= pos.count * 3 ? adjust.cut : null
+              const nCut = cut ? cut.positions.length / 3 : 0
               // Running strands write these vertices themselves (a colour drag only tints).
               const own = !(strand?.enabled && target.mesh === strand.mesh)
               for (let i = 0; own && i < pos.count; i++) {
-                const p: [number, number, number] = [target.base[i * 3], target.base[i * 3 + 1], target.base[i * 3 + 2]]
+                const p: [number, number, number] = i < nCut && cut
+                  ? [cut.positions[i * 3], cut.positions[i * 3 + 1], cut.positions[i * 3 + 2]]
+                  : [target.base[i * 3], target.base[i * 3 + 1], target.base[i * 3 + 2]]
                 const q = map ? map(p) : p
                 pos.setXYZ(i, q[0], q[1], q[2])
+              }
+              const uv = target.mesh.geometry.getAttribute('uv')
+              if (own && uv && target.baseV) {
+                for (let i = 0; i < uv.count; i++) uv.setY(i, i < nCut && cut ? cut.v[i] : target.baseV[i])
+                uv.needsUpdate = true
               }
               if (own) {
                 pos.needsUpdate = true
@@ -2787,7 +2805,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         const tickStrands = (dt: number) => {
           const given = strandHairRef.current
           const record = given?.record ?? null
-          const paused = !!meshAdjustRef.current?.map
+          const paused = !!meshAdjustRef.current?.map || !!meshAdjustRef.current?.cut
           // A new record binds to the mesh's own (unmapped) positions: never while a placement map is shown.
           if (record !== strandRecord && !(record && paused)) {
             strandOn(false)

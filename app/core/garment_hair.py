@@ -166,7 +166,7 @@ BALD = "bald"
 #: The per-hairstyle settings, keys of the item's ``garment`` (they kept the
 #: names the profile keys had, so their readers read either mapping).
 SETTING_KEYS: Tuple[str, ...] = ("hair_colour", "hair_forward_m", "hair_tilt_deg", "hair_width_scale",
-                                 "hair_swing", "hair_stiffness", "haar_seed")
+                                 "hair_swing", "hair_stiffness", "haar_seed", "hair_cut")
 #: The longest hairstyle name ``create_hairstyle`` derives from a description.
 NAME_MAX = 48
 _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
@@ -361,6 +361,27 @@ def set_haar_seed(character_name: str, item_id: str, seed: Optional[int]) -> boo
         if isinstance(seed, bool) or not isinstance(seed, int) or seed < 1:
             raise ValueError("HAAR seed must be a positive integer or empty")
     return set_hairstyle_settings(character_name, item_id, {"haar_seed": seed})
+
+
+def hair_cut(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The HAAR cut of a hairstyle's settings (key ``hair_cut``, Ruling A71) as ``hair_cut.normalise`` gives it:
+    ``{max_cm?, at?, ends_cm?}``, ``{}`` = automatic (the whole length, Auto ends). A stored value that no longer
+    normalises (a limit changed) counts as automatic."""
+    from app.core import hair_cut as cut_rule
+    try:
+        return cut_rule.normalise((settings or {}).get("hair_cut"))
+    except ValueError:
+        return {}
+
+
+def set_hair_cut(character_name: str, item_id: str, value: Any) -> bool:
+    """Store a hairstyle's HAAR cut (``hair_cut``: ``hair_cut.normalise``d; ``{}`` / None = automatic, the key is
+    dropped) in ONE read-modify-write of the item (``set_hairstyle_settings``). Runs nothing: the cut is in the HAAR
+    fit fingerprint, so the fit step reads due and its CPU refit (no hub job) applies it. ValueError for a value
+    ``normalise`` refuses or an item that is no hairstyle of the character. The update result."""
+    from app.core import hair_cut as cut_rule
+    cut = cut_rule.normalise(value)
+    return set_hairstyle_settings(character_name, item_id, {"hair_cut": cut or None})
 
 
 def set_hairstyle_description(character_name: str, item_id: str, description: str) -> bool:

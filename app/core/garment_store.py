@@ -700,7 +700,8 @@ def garment_fsig(character_name: str, item_id: str, *,
                  method: Optional[str] = None, swing: Optional[bool] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
     (R10); hair made by HAAR adds ``{method, ssig, seed, colour}`` (the served
-    seed, ``haar_served_seed``; the colour override) and nothing of Swing;
+    seed, ``haar_served_seed``; the colour override), ``cut`` only when the hairstyle has one
+    (``garment_hair.hair_cut``, Ruling A71: an uncut hairstyle keeps its fingerprint) and nothing of Swing;
     hair made by HairDeck adds ``{method, hsig, colour, placement}``
     (the colour override, "" = automatic; the manual placement
     ``garment_hair.hair_placement``, None = automatic) and ``swing: True``
@@ -743,9 +744,13 @@ def garment_fsig(character_name: str, item_id: str, *,
         from app.models.inventory import get_item
         item = get_item(item_id)
         ssig = garment_ssig(character_name, item_id, profile=profile)
+        settings = garment_hair.hairstyle_settings(item)
         payload.update(method=HAAR, ssig=ssig,
                        seed=haar_served_seed(character_name, item_id, ssig, item=item),
-                       colour=garment_hair.hair_colour_override(garment_hair.hairstyle_settings(item)))
+                       colour=garment_hair.hair_colour_override(settings))
+        cut = garment_hair.hair_cut(settings)
+        if cut:
+            payload["cut"] = cut
     return _md5(payload)
 
 

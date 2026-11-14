@@ -2921,6 +2921,9 @@ class FitResult:
     ok: bool
     reasons: List[str]
     report: Dict[str, Any] = field(default_factory=dict)
+    #: Arrays the caller may store beside the fit, never in its record (HAAR: ``cut_source``, the uncut card rails
+    #: the Hairstyles tab previews a cut from — ``garments._haar_cut_source``). Empty = none.
+    arrays: Dict[str, Any] = field(default_factory=dict)
 
 
 def _mask(mask) -> np.ndarray:

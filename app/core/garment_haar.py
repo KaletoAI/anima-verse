@@ -23,7 +23,9 @@ which the user approved after the drape ("ALLE Haare, auch die Fail sehen so gut
    arc lengths (then the face box and the body clearance once more), or dropped when the draped curve is shorter
    than its rest length or that clearing stretches it again.
 4. **Cards** (``hair_cards.haar_cards``): ``N_CARDS`` k-means cards of ``N_SEG`` segments on the strip atlas (a card
-   of one or two strands that turns sharply is smoothed along its rows, ruling H-R14), the card colour the hairstyle's (``colour_linear``, else white), and a scalp layer under the root zone
+   of one or two strands that turns sharply is smoothed along its rows, ruling H-R14), cut by ``hair_cut.cut_cards``
+   (Ruling A71: the strip's thin tail squeezed into a short soft tip, never the wrapped texel row at v = 0, outlier
+   cards clamped, and the hairstyle's own cut ``cut`` — a length or a height on the body), the card colour the hairstyle's (``colour_linear``, else white), and a scalp layer under the root zone
    (``scalp_layer``, ruling H-R12: the head's skin round the registered roots, offset out, opaque, in the hair
    colour darkened by ``SCALP_SHADE``) so a parting reads as hair, not skin.
 5. **Skin**: ``garment_fit.hair_weights`` (Head -> Neck -> Spine2 by height); the layer all Head; no chain joints.
@@ -37,18 +39,20 @@ alias's sample job, on Kira and Lirien.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from app.core import drape, hair_cards, strand_register
+from app.core import drape, hair_cards, hair_cut, strand_register
 from app.core.garment_fit import VOX_M, FitResult, body_sdf, hair_weights, vertex_normals
 from app.core.glb_mesh import GarmentMesh, body_arrays
 
-#: Bumped when the HAAR fit's output changes for the same inputs (the boot refit sweep refits on the CPU).
-HAAR_FIT_VERSION = 3
+#: Bumped when the HAAR fit's output changes for the same inputs (the boot refit sweep refits on the CPU). 4: the
+#: cards are cut (Ruling A71, ``hair_cut``).
+HAAR_FIT_VERSION = 4
 #: Gate (spec § 6.3.2): a draped strand point above the chin deeper than this (mm) in the body refuses the seed.
 INSIDE_HEAD_MM = 3.0
 #: Gate: the tip p50 relative to the shoulder top (cm, + = above) above this refuses the seed as clearly too short —
@@ -446,13 +450,17 @@ def metrics(Xd: np.ndarray, Xreg: np.ndarray, C: np.ndarray, field, B: Dict[str,
 
 def fit_haar(strands: np.ndarray, template_head: np.ndarray, rigged_base_glb: bytes, *,
              colour_linear: Optional[Tuple[float, float, float]], length_class: Optional[str],
-             template_faces: Optional[np.ndarray] = None) -> FitResult:
+             template_faces: Optional[np.ndarray] = None, cut: Optional[Dict[str, Any]] = None) -> FitResult:
     """Fit HAAR ``strands`` (N, P, 3, the template head's space) onto the rigged base body (module docstring) ->
     ``FitResult``.
 
     ``template_head`` / ``template_faces``: the job's ``_head.obj`` (the faces drop FLAME's eyeballs);
     ``colour_linear``: the hairstyle colour (linear RGB 0..1; None = the atlas white); ``length_class``: the
-    hairstyle's (``garment_hair.hair_length_class``) for the gate. The garment is the cards plus the scalp layer as
+    hairstyle's (``garment_hair.hair_length_class``) for the gate; ``cut``: the hairstyle's ``hair_cut``
+    (``hair_cut.normalise``; None = automatic) — the cards are cut after the drape (``hair_cut.cut_cards`` on the
+    float32 rails): the gate's strand numbers (inside the head, the tip length) never depend on it, the card counts
+    (eye / face cards) are those of the cut cards — what is shown. ``arrays["cut_source"]`` = the uncut rails
+    (K, ``N_SEG`` + 1, 2, 3) float32 the preview cuts from, ``report.cut`` = what the cut did. The garment is the cards plus the scalp layer as
     ONE primitive in the rigged bind space: the strip atlas as base colour (``hair_cards.strip_atlas``), each card's
     UVs in its variant's column and the scalp layer (``scalp_layer``) on the opaque patch, ``COLOR_0`` = the colour
     on the cards and the colour x ``SCALP_SHADE`` on the layer (alpha 1), Head -> Neck -> Spine2 weights
@@ -484,6 +492,13 @@ def fit_haar(strands: np.ndarray, template_head: np.ndarray, rigged_base_glb: by
     V, Fh, UV, card = hair_cards.haar_cards(Xd, field, n_cards=N_CARDS, n_seg=N_SEG, clear=CARD_CLEAR_M, seed=0,
                                             centre=B["hc"])
     n_cards = int(card.max()) + 1
+    source = V.reshape(n_cards, N_SEG + 1, 2, 3).astype(np.float32)
+    cut = hair_cut.normalise(cut)
+    heights = hair_cut.landmarks(body, B)
+    Vcut, v_rows, cut_info = hair_cut.cut_cards(source.astype(np.float64), cut, heights)
+    V = Vcut.reshape(-1, 3)
+    UV = UV.copy()
+    UV[:, 1] = np.repeat(v_rows.ravel(), 2)
     C = card_centrelines(V, n_cards)
     t_cards = time.time() - t0
     m = metrics(Xd, Xreg[keep], C, field, B, frame)
@@ -532,7 +547,14 @@ def fit_haar(strands: np.ndarray, template_head: np.ndarray, rigged_base_glb: by
         "timing_s": {"register": reg["t_s"], "field": round(t_field, 2), "drape": round(t_drape, 2),
                      "cards": round(t_cards, 2), "total": round(time.time() - t_all, 2)},
     }
-    return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report)
+    keep_cm = cut_info["keep_m"] * 100
+    report["cut"] = {"version": hair_cut.CUT_VERSION, "setting": cut, "landmarks": heights,
+                     "clamp_m": round(float(cut_info["clamp_m"]), 5), "clamped": int(cut_info["clamped"]),
+                     "shortened": int(cut_info["shortened"]),
+                     "keep_cm": {"p50": round(float(np.median(keep_cm)), 1), "max": round(float(keep_cm.max()), 1)},
+                     "source_sha256": hashlib.sha256(np.ascontiguousarray(source).tobytes()).hexdigest()}
+    return FitResult(garment=garment, metrics=m, ok=ok, reasons=reasons, report=report,
+                     arrays={"cut_source": source})
 
 
 __all__ = ["HAAR_FIT_VERSION", "INSIDE_HEAD_MM", "CLEARLY_SHORT_CM", "CLASS_TARGET_CM", "STRETCH_LIMIT", "SCALP_SHADE",

@@ -1971,6 +1971,16 @@ class HairColourRequest(BaseModel):
     item_id: str = ""
 
 
+class HairCutRequest(BaseModel):
+    # Ruling A71: a HAAR hairstyle's cut — ``max_cm`` (a length) or ``at`` (a height on the body, one of
+    # ``hair_cut.LANDMARKS``), ``ends_cm`` the soft tip; null = automatic. Validated by ``hair_cut.normalise``.
+    # ``item_id`` "" = the worn hairstyle.
+    max_cm: Optional[float] = None
+    at: Optional[str] = None
+    ends_cm: Optional[float] = None
+    item_id: str = ""
+
+
 class HairPlacementRequest(BaseModel):
     # Numbers or null (automatic); plain Any so garment_hair.set_hair_placement
     # validates (400 with its message, not a schema 422). ``item_id`` "" = the worn hairstyle.
@@ -2580,6 +2590,28 @@ def set_character_hair_placement(character_name: str, body: HairPlacementRequest
         raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
     return {"width_scale": None,
             **garment_hair.hair_placement(garment_hair.hairstyle_settings(get_item(item_id)))}
+
+
+@router.post("/{character_name}/hair/cut")
+def set_character_hair_cut(character_name: str, body: HairCutRequest,
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Set a HAAR hairstyle's (``item_id`` "" = the worn one) cut (Ruling A71): ``max_cm`` cuts every card at that
+    length, ``at`` where it first drops below a height on the body (``hair_cut.LANDMARKS``; not both), ``ends_cm``
+    the soft tip (null = Auto); all null = automatic. 400 for a value beyond its limits. Saving runs nothing: the
+    cut is in the HAAR fit fingerprint, so the fit reads due and Re-fit / Run all applies it on the CPU (no hub
+    job). ``{cut}`` — the stored setting."""
+    from app.core import garment_hair
+    from app.models.inventory import get_item
+    _require_character(character_name)
+    item_id = _hairstyle_id(character_name, body.item_id)
+    try:
+        saved = garment_hair.set_hair_cut(character_name, item_id,
+                                          {"max_cm": body.max_cm, "at": body.at, "ends_cm": body.ends_cm})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
+    return {"cut": garment_hair.hair_cut(garment_hair.hairstyle_settings(get_item(item_id)))}
 
 
 @router.post("/{character_name}/hair/motion")
@@ -3269,6 +3301,22 @@ def get_character_garment_hair_strands(character_name: str, item_id: str, reques
         return _strands_response(request, None, "")
     data = hair_strands.encode(record)
     return _strands_response(request, data, hashlib.sha256(data).hexdigest())
+
+
+@router.get("/{character_name}/garments/{item_id}/haar-cut-source")
+def get_character_garment_haar_cut_source(character_name: str, item_id: str, request: Request,
+                                          _: Dict[str, Any] = Depends(require_admin)):
+    """The uncut cards of the HAAR fit the Hairstyles preview shows (Ruling A71, ``garments.haar_cut_source``): what
+    the tab's Cut control cuts live with the server's rule. ``ETag`` = ``"<source sha256>"``, 304 on a match; 404
+    without a HAAR preview fit or its uncut cards (a fit from before the cut)."""
+    import json as _json
+    from app.core import garments
+    _require_character(character_name)
+    payload = garments.haar_cut_source(character_name, item_id)
+    if payload is None:
+        return _strands_response(request, None, "")
+    return _strands_response(request, _json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+                             payload["source_sha256"])
 
 
 def _fit_bodies(character_name: str, item_id: str, profile: Dict[str, Any]) -> List[Dict[str, Any]]:
