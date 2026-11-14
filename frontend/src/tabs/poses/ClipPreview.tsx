@@ -31,6 +31,8 @@ import { apiGet } from '../../lib/api'
 import { loadTestFigure, standHipsRef } from '../characters/Model3DViewer'
 import { previewCalibration } from './clipPreviewPlacement'
 import { SliderInput } from '../../components/SliderInput'
+import { ModelTurnHint } from '../../components/ModelTurnHint'
+import { attachModelTurn, configureViewControls, isUpright, poseMatrix } from '../../lib/modelTurn'
 
 const FIGURE_H = 1.7
 
@@ -258,6 +260,9 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   // How many roles the loaded clip actually has: two or more is a pair or a
   // group to seat — a kind without halves plays solo whatever the pose says.
   const [roleCount, setRoleCount] = useState(0)
+  /** The drag turn (T-U4, `lib/modelTurn.ts`): turned at all (the Reset pose button) and how to undo it. */
+  const [turned, setTurned] = useState(false)
+  const turnResetRef = useRef<(() => void) | null>(null)
   const box = seatBox(roleCount, group)
   // A body to turn against: a pair or group clip AND a place type with one.
   const seated = !!box
@@ -328,13 +333,18 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         const key = new THREE.DirectionalLight(0xffffff, 1.2)
         key.position.set(2, 4, 3)
         scene.add(key)
-        scene.add(new THREE.GridHelper(8, 8, 0x7a8594, 0x3a4350))
+        // The stage — grid, calibration body, figures — turns as ONE under the drag (T-U4): the figures keep their
+        // relation to what they are dialled against; the lights stay.
+        const stage = new THREE.Group()
+        stage.matrixAutoUpdate = false
+        scene.add(stage)
+        stage.add(new THREE.GridHelper(8, 8, 0x7a8594, 0x3a4350))
         // The clip frame: origin = the marker anchor, +X = A → B. Seated on a
         // marker it carries the pair's turn and the root drop; without one it
         // stays the identity and the figures stand in world coordinates, as
         // they always did.
         const frame = new THREE.Group()
-        scene.add(frame)
+        stage.add(frame)
         // anchor: a small cross at the origin, +X marked (A → B)
         const axis = new THREE.AxesHelper(0.5)
         frame.add(axis)
@@ -382,7 +392,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
           // top — nothing is pushed out along the marker facing any more.
           for (const o of [mesh, edges]) {
             o.position.set(0, bh / 2, 0)
-            scene.add(o)
+            stage.add(o)
           }
 
           disposers.push(() => {
@@ -409,7 +419,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
             aid.position.set(across ? bw / 2 - 0.22 : 0,
               bh + (pillow ? 0.045 : 0.275),
               across ? 0 : -bd / 2 + (pillow ? 0.22 : 0.035))
-            scene.add(aid)
+            stage.add(aid)
             disposers.push(() => { aidGeom.dispose(); aidMat.dispose() })
           }
         }
@@ -419,6 +429,17 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         controls.target.set(0, 0.9, 0)
         controls.update()
         disposers.push(() => controls.dispose())
+        // T-U4: a drag turns the stage about the figure's centre, Shift + drag moves the view, the wheel zooms.
+        configureViewControls(THREE, controls)
+        const turn = attachModelTurn(host, { onChange: (pose) => setTurned(!isUpright(pose)) })
+        const resetTurn = () => turn.reset()
+        turnResetRef.current = resetTurn
+        disposers.push(() => {
+          turn.dispose()
+          if (turnResetRef.current === resetTurn) turnResetRef.current = null
+        })
+        const TURN_PIVOT: [number, number, number] = [0, 0.9, 0]
+        let lastTick = performance.now()
 
         // ── figures + clips ──
         const fbx = new FBXLoader()
@@ -503,6 +524,11 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
         const tick = () => {
           if (disposed) return
           raf = requestAnimationFrame(tick)
+          const now = performance.now()
+          turn.tick(Math.min(0.1, (now - lastTick) / 1000))
+          lastTick = now
+          stage.matrix.fromArray(poseMatrix(turn.pose, TURN_PIVOT))
+          stage.matrixWorldNeedsUpdate = true
           const w = winRef.current
           const start = w ? Math.min(Math.max(w.start, 0), fullDuration) : 0
           const end = w && w.end > start ? Math.min(w.end, fullDuration) : fullDuration
@@ -591,6 +617,7 @@ export function ClipPreview({ kind = '', set = '', height = 300, urls, window: w
   return (
     <div style={{ marginTop: 8 }}>
       <div ref={hostRef} style={{ width: '100%', height, borderRadius: 6, overflow: 'hidden', background: '#0d1117' }} />
+      <ModelTurnHint subject="figure" turned={turned} onReset={() => turnResetRef.current?.()} />
       <div className="ga-hint" style={{ marginTop: 4 }}>
         {status || (info
           ? (Number.isFinite(info.dist)

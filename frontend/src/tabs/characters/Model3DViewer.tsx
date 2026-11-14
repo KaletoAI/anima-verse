@@ -25,11 +25,14 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   seatFootLift, createStrandHair } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
   CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair } from '@anima/scene-render'
-import { dragTurnDeg, dragTurnRad, previewMotionAmp, previewRootPose, TURN_S } from './hairstylesModel'
+import { previewMotionAmp, previewRootPose, TURN_S } from './hairstylesModel'
 import type { PreviewMotionKind } from './hairstylesModel'
 import { applyViewerTexture, zeroViewerMetalness } from './modelTexture'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
+import { attachModelTurn, configureViewControls, isUpright, poseMatrix, wrapAngle } from '../../lib/modelTurn'
+import type { ModelTurnControl } from '../../lib/modelTurn'
+import { ModelTurnHint } from '../../components/ModelTurnHint'
 import type { SceneModelSpec } from '../world/worldTypes'
 import { buildMeasureAids, disposeAids, referenceFigure,
   type MeasureKey } from '../world/measureKit'
@@ -287,7 +290,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
-  meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote }:
+  meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model' }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
@@ -509,7 +512,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  still; `strandNote` says why). undefined = any other preview (the camera orbits as always). */
     strandHair?: { record: HairStrandRecord; stiffness: number } | null
     /** Why the hair stays still while `strandHair` is null (plain words, translated by the caller). */
-    strandNote?: string }) {
+    strandNote?: string
+    /** What a drag turns, for the hint under the viewer (T-U4, `ModelTurnHint`): a figure or a model. */
+    subject?: 'figure' | 'model' }) {
   const { t } = useI18n()
   const [takes, setTakes] = useState<string[]>([])
   const [take, setTake] = useState('')
@@ -536,8 +541,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const [strandMotion, setStrandMotion] = useState<PreviewMotionKind | null>(null)
   const strandMotionRef = useRef(strandMotion)
   strandMotionRef.current = strandMotion
-  /** The figure's drag turn (degrees, shown beside the viewer). */
-  const [turnDeg, setTurnDeg] = useState(0)
+  /** The model's drag turn and tilt (whole degrees; T-U4, `lib/modelTurn.ts`): the Reset pose button, the status. */
+  const [turnPose, setTurnPose] = useState({ turn: 0, tilt: 0 })
+  /** Eases the model back to upright (set by the loader, which owns the control). */
+  const turnResetRef = useRef<(() => void) | null>(null)
   /** What the strands do now: running (cards, the tips' largest distance from rest in mm), refused (the record
    *  does not fit the loaded hair mesh), paused (a placement preview reshapes the mesh), off (no record). */
   const [strandStatus, setStrandStatus] = useState<{ state: 'off' | 'running' | 'refused' | 'paused'; cards?: number;
@@ -906,26 +913,23 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         const controls = new OrbitControls(camera, renderer.domElement)
         controls.enableDamping = true
         disposers.push(() => controls.dispose())
+        // T-U4 (`lib/modelTurn.ts`): the pointer turns the MODEL, Shift + drag moves the view, the wheel zooms. The
+        // control is attached once the model has loaded (its pivot is the model's centre).
+        let modelTurn: ModelTurnControl | null = null
 
-        // THE FRONT VIEW'S LOCK (§ B1). Rotation off, zoom and pan on — the
-        // admin still has to get close to a panel and shift it into the
-        // middle, only the ANGLE is fixed. `enableRotate = false` alone would
-        // leave the left button (and the one-finger drag) doing nothing at
-        // all, so both are handed to the pan that is still allowed.
+        // THE FRONT VIEW'S LOCK (§ B1). The model stands straight on and does
+        // not turn; zoom and pan stay on — the admin still has to get close to
+        // a panel and shift it into the middle, only the ANGLE is fixed. The
+        // plain drag (and the one-finger drag) pans then.
         const applyFrontal = (on: boolean) => {
-          controls.enableRotate = !on
+          if (!on) { configureViewControls(THREE, controls); return }
+          controls.enableRotate = false
           controls.enableZoom = true
           controls.enablePan = true
-          controls.mouseButtons = {
-            LEFT: on ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
-            MIDDLE: THREE.MOUSE.DOLLY,
-            RIGHT: THREE.MOUSE.PAN,
-          }
-          controls.touches = {
-            ONE: on ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE,
-            TWO: THREE.TOUCH.DOLLY_PAN,
-          }
+          controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN }
+          controls.touches = { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN }
           controls.update()
+          modelTurn?.snapUpright()
         }
         applyFrontal(frontalRef.current)
         frontalFnRef.current = applyFrontal
@@ -1098,7 +1102,24 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         turnRoot.matrixAutoUpdate = false
         turnRoot.add(place)
         previewRoot.add(turnRoot)
+        // The overlays that annotate the model in world terms (dims, access points, marker figures) turn with it
+        // (T-U4): the same matrix as `turnRoot`. They are BUILT upright (`upright`), in the frame they always had.
+        const followTurn = new THREE.Group()
+        followTurn.matrixAutoUpdate = false
+        previewRoot.add(followTurn)
         scene.add(previewRoot)
+        /** Run `fn` with the model upright (no drag turn, no Tilt), the matrices updated, then put the turn back. */
+        const upright = <T,>(fn: () => T): T => {
+          const turn = turnRoot.matrix.clone(), tilt = previewRoot.quaternion.clone()
+          turnRoot.matrix.identity()
+          previewRoot.quaternion.identity()
+          previewRoot.updateMatrixWorld(true)
+          try { return fn() } finally {
+            turnRoot.matrix.copy(turn)
+            previewRoot.quaternion.copy(tilt)
+            previewRoot.updateMatrixWorld(true)
+          }
+        }
         const _r = rotationRef.current
         // 'YXZ' like place() in @anima/scene-render: yaw outermost, tilt and
         // roll in the already-turned frame. The preview must not disagree with
@@ -1585,13 +1606,14 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           const markerGroup = new THREE.Group()
           pivot.add(markerGroup)
           const dimsGroup = new THREE.Group()
-          scene.add(dimsGroup)
+          followTurn.add(dimsGroup)
           const accessGroup = new THREE.Group()
-          scene.add(accessGroup)
+          followTurn.add(accessGroup)
           // Preview figures anchor in WORLD space (they stand upright while
-          // the marker point rides the object through the orientation fix).
+          // the marker point rides the object through the orientation fix) —
+          // the upright world: they turn with the model's drag turn.
           const figGroup = new THREE.Group()
-          scene.add(figGroup)
+          followTurn.add(figGroup)
           // The scale kit — standing 1.70 m reference + metre grid. Its own
           // group so it lives and dies with one switch, untouched by the
           // marker figures above (those are POSED, at a marker; this one
@@ -2268,8 +2290,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               void (async () => {
                 const idx = await clipIndex()
                 if (disposed || figTokenRef.current !== figToken) return
-                place.updateMatrixWorld(true)
-                const world = pivot.localToWorld(local.clone())
+                const world = upright(() => pivot.localToWorld(local.clone()))
                 // WHICH part of the body the marker point carries: a seated
                 // body touches at the buttocks, so the root goes the place
                 // type's share of the figure height BELOW the marked surface.
@@ -2357,8 +2378,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             lbl(`H ${dims.height_m.toFixed(2)} m`, '#3fb950',
               [ob.max.x + out, (ob.min.y + ob.max.y) / 2, ob.max.z + out])
           }
-          overlayFnRef.current = rebuildOverlay
-          rebuildOverlay()
+          const rebuildUpright = () => upright(rebuildOverlay)
+          overlayFnRef.current = rebuildUpright
+          rebuildUpright()
           const showFigures = (show: boolean) => {
             markerGroup.visible = show
             figGroup.visible = show
@@ -2396,14 +2418,21 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             const ray = new THREE.Raycaster()
             ray.setFromCamera(ndc, camera)
             if (groundPickRef.current) {
+              const pick = groundPickRef.current
               const metre = figureHeightRef.current / FIGURE_HEIGHT_M
               if (!(metre > 0)) return
-              const box = new THREE.Box3().setFromObject(object)
-              const centre = box.getCenter(new THREE.Vector3())
-              const groundY = box.min.y - (groundOffsetRef.current || 0) * metre
-              const point = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY), new THREE.Vector3())
-              if (point) groundPickRef.current(accessLocalPoint([point.x, point.y, point.z], {
-                centreX: centre.x, centreZ: centre.z, groundY, unitsPerMetre: metre }))
+              // The ground is the UPRIGHT model's (T-U4: the drag may have turned it, the access grid with it):
+              // the ray goes into the upright frame, `upright · turned⁻¹`, and the box is measured there.
+              const turned = object.matrixWorld.clone()
+              upright(() => {
+                ray.ray.applyMatrix4(object.matrixWorld.clone().multiply(turned.invert()))
+                const box = new THREE.Box3().setFromObject(object)
+                const centre = box.getCenter(new THREE.Vector3())
+                const groundY = box.min.y - (groundOffsetRef.current || 0) * metre
+                const point = ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY), new THREE.Vector3())
+                if (point) pick(accessLocalPoint([point.x, point.y, point.z], {
+                  centreX: centre.x, centreZ: centre.z, groundY, unitsPerMetre: metre }))
+              })
               return
             }
             const hit = ray.intersectObject(object, true)[0]
@@ -2433,64 +2462,40 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
 
         setLoading(false)
 
-        // ── The figure preview (ruling H-R2) ── A left drag turns the FIGURE about the vertical axis through the
-        // focused head (or the model's centre), so the strands feel the turn; the camera orbits with the right
-        // button or Shift + left drag (OrbitControls: PAN with a modifier key rotates), and dollies with the wheel.
+        // ── The model turn (T-U4, `lib/modelTurn.ts`) ── A plain drag turns and tilts the MODEL about its centre —
+        // the focused part when the viewer focuses one (the Hairstyles preview: the head) — so simulated hair and
+        // extension bones feel it like any root motion; Shift + drag moves the view, the wheel zooms, a double-click
+        // (or Reset pose) stands it upright again. Off while the front view holds the model straight on.
         previewRoot.updateMatrixWorld(true)
         const focusAt = focusRef.current
         const turnPivot = previewRoot.worldToLocal(focusAt
           ? object.localToWorld(new THREE.Vector3(focusAt.center[0], focusAt.center[1], focusAt.center[2]))
           : new THREE.Box3().setFromObject(object).getCenter(new THREE.Vector3()))
-        let dragYaw = 0
-        let drag: { x: number; yaw: number; id: number } | null = null
-        if (turnModeRef.current) {
-          controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }
-          controls.update()
-          mount.style.cursor = 'grab'
-          const onDown = (e: PointerEvent) => {
-            if (!turnModeRef.current || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || !e.isPrimary) return
-            // Capture phase on the mount: OrbitControls on the canvas never sees this drag.
-            e.stopPropagation()
-            e.preventDefault()
-            drag = { x: e.clientX, yaw: dragYaw, id: e.pointerId }
-            mount.setPointerCapture?.(e.pointerId)
-            mount.style.cursor = 'grabbing'
-          }
-          const onMove = (e: PointerEvent) => {
-            if (!drag || e.pointerId !== drag.id) return
-            e.stopPropagation()
-            dragYaw = drag.yaw + dragTurnRad(e.clientX - drag.x)
-            const deg = Math.round((dragYaw * 180) / Math.PI)
-            setTurnDeg(((deg % 360) + 540) % 360 - 180)
-          }
-          const onUp = (e: PointerEvent) => {
-            if (!drag || e.pointerId !== drag.id) return
-            e.stopPropagation()
-            drag = null
-            if (mount.hasPointerCapture?.(e.pointerId)) mount.releasePointerCapture(e.pointerId)
-            mount.style.cursor = 'grab'
-          }
-          mount.addEventListener('pointerdown', onDown, true)
-          mount.addEventListener('pointermove', onMove, true)
-          mount.addEventListener('pointerup', onUp, true)
-          mount.addEventListener('pointercancel', onUp, true)
-          disposers.push(() => {
-            mount.removeEventListener('pointerdown', onDown, true)
-            mount.removeEventListener('pointermove', onMove, true)
-            mount.removeEventListener('pointerup', onUp, true)
-            mount.removeEventListener('pointercancel', onUp, true)
-            mount.style.cursor = ''
-          })
-        }
+        const turnAllowed = () => !frontalRef.current
+        const turnControl = attachModelTurn(mount, {
+          isEnabled: turnAllowed,
+          onChange: (pose) => {
+            const turn = Math.round((wrapAngle(pose.yaw) * 180) / Math.PI)
+            const tilt = Math.round((pose.pitch * 180) / Math.PI)
+            setTurnPose(prev => (prev.turn === turn && prev.tilt === tilt ? prev : { turn, tilt }))
+          },
+        })
+        modelTurn = turnControl
+        const resetTurn = () => turnControl.reset()
+        turnResetRef.current = resetTurn
+        disposers.push(() => {
+          turnControl.dispose()
+          if (modelTurn === turnControl) modelTurn = null
+          if (turnResetRef.current === resetTurn) turnResetRef.current = null
+        })
         // The motion buttons: the kind playing (or easing out), its clock and amplitude (`previewMotionAmp`).
         let motionKind: PreviewMotionKind | null = null
         let motionT = 0
         let motionAmp = 0
-        const turnMatrix = new THREE.Matrix4()
-        const turnStep = new THREE.Matrix4()
-        /** The root motion of this frame: T(pivot + offset) · Ry(drag + yaw) · Rx(pitch) · T(−pivot). */
+        /** The root motion of this frame: T(pivot + offset) · Ry(drag yaw + yaw) · Rx(drag pitch + pitch) · T(−pivot)
+         *  (`poseMatrix`), the motion buttons' part only in the Hairstyles preview. */
         const applyTurn = (dt: number) => {
-          const wanted = strandMotionRef.current
+          const wanted = turnModeRef.current ? strandMotionRef.current : null
           if (wanted && wanted !== motionKind) {
             motionKind = wanted
             motionT = 0
@@ -2504,14 +2509,15 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           }
           if (!wanted && motionAmp < 1e-4) { motionKind = null; motionAmp = 0 }
           const pose = motionKind ? previewRootPose(motionKind, motionT, motionAmp)
-            : { yaw: 0, pitch: 0, offset: [0, 0, 0] }
-          turnMatrix.makeTranslation(turnPivot.x + pose.offset[0], turnPivot.y + pose.offset[1],
-            turnPivot.z + pose.offset[2])
-          turnMatrix.multiply(turnStep.makeRotationY(dragYaw + pose.yaw))
-          turnMatrix.multiply(turnStep.makeRotationX(pose.pitch))
-          turnMatrix.multiply(turnStep.makeTranslation(-turnPivot.x, -turnPivot.y, -turnPivot.z))
-          turnRoot.matrix.copy(turnMatrix)
+            : { yaw: 0, pitch: 0, offset: [0, 0, 0] as [number, number, number] }
+          if (!turnAllowed() && !isUpright(turnControl.pose)) turnControl.snapUpright()
+          turnControl.tick(dt)
+          const drag = turnControl.pose
+          turnRoot.matrix.fromArray(poseMatrix({ yaw: drag.yaw + pose.yaw, pitch: drag.pitch + pose.pitch },
+            [turnPivot.x, turnPivot.y, turnPivot.z], [pose.offset[0], pose.offset[1], pose.offset[2]]))
           turnRoot.matrixWorldNeedsUpdate = true
+          followTurn.matrix.copy(turnRoot.matrix)
+          followTurn.matrixWorldNeedsUpdate = true
         }
         // The strands per frame: (re)bind a new record, on/off, the live Stiffness, the step, the status line.
         let statusClock = 0
@@ -2545,9 +2551,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           else if (!strand) next = { state: 'refused' }
           else if (!strand.enabled) next = { state: 'paused' }
           else {
-            // The tips' largest distance from where a rigid head would hold them (0 at rest).
+            // The tips' largest distance from where they rest — where gravity holds them on the turned and tilted
+            // figure (`sim.hang`, T-U3; 0 once they have settled, at any tilt).
             const cards = strandRecord.cards
-            const X = strand.sim.X, T = strand.targets, rows = strand.sim.n / cards
+            const X = strand.sim.X, T = strand.sim.hang, rows = strand.sim.n / cards
             let tip = 0
             for (let k = 0; k < cards; k++) {
               const q = 3 * (k * rows + rows - 1)
@@ -2603,7 +2610,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           }
           displayedTilt = rateLimitPreviewTilt(displayedTilt, tiltRef.current, realDelta)
           applyPreviewTilt(previewRoot, displayedTilt.forward, displayedTilt.sideways)
-          if (turnModeRef.current) applyTurn(Math.min(realDelta, 0.1))
+          applyTurn(Math.min(realDelta, 0.1))
           previewRoot.updateMatrixWorld(true)
           if (extensionShown !== extensionPushRef.current) {
             extensionShown = extensionPushRef.current
@@ -2686,6 +2693,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
     }
   }, [url, format, clipUrl, textureUrl, height, embeddedTakes, clipGroup, footPoseKey])
 
+  const turned = turnPose.turn !== 0 || turnPose.tilt !== 0
   return (
     <div className={previewTilt ? 'ga-model3d-preview' : undefined}>
       {embeddedTakes && takes.length > 0 ? (
@@ -2699,7 +2707,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           </select></label>
         </div>
       ) : null}
-      <div className={previewTilt ? 'ga-model3d-canvas' : undefined} style={{ position: 'relative' }}>
+      <div className={previewTilt ? 'ga-model3d-canvas' : undefined}>
+      <div style={{ position: 'relative' }}>
       <div
         ref={mountRef}
         style={{
@@ -2877,9 +2886,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         </div>
       ) : null}
       </div>
+      {!loading && !error ? <ModelTurnHint subject={subject} locked={frontal} turned={turned}
+        onReset={() => turnResetRef.current?.()} /> : null}
+      </div>
       {previewTilt ? <aside className="ga-model3d-toolbar">
         {statusPanel}
-      <div className="ga-fieldset ga-model3d-tilt">
+      {/* The Hairstyles preview tilts by dragging the figure (T-U4): the sliders only where no hair simulates. */}
+      {!turnMode ? <div className="ga-fieldset ga-model3d-tilt">
         <label className="ga-model3d-slider">{t('Tilt forward/back')} {tiltForward}°
           <input type="range" min={-90} max={90} value={tiltForward}
             title={t('+90 = lying on the back')}
@@ -2891,7 +2904,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         </label>
         <button type="button" className="ga-btn ga-btn-sm"
           onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
-      </div>
+      </div> : null}
         {turnMode ? (
           <div className="ga-fieldset ga-model3d-group">
             <span className="ga-fieldset-title" style={{ margin: 0, fontSize: 11 }}>{t('Motion preview')}</span>
@@ -2918,10 +2931,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
                     ? t('The strands rest while the placement preview is shown.')
                     : strandNote || t('The hair stays still.')}
             </span>
-            <span className="ga-hint" style={{ fontSize: 10 }}
-              title={t('Right drag or Shift + drag orbits the camera; the wheel zooms.')}>
-              {t('Drag turns the figure ({deg}° per 100 px) · turned {turn}° · no jobs')
-                .replace('{deg}', String(dragTurnDeg(100))).replace('{turn}', String(turnDeg))}
+            <span className="ga-hint" style={{ fontSize: 10 }}>
+              {t('Turned {turn}° · tilted {tilt}° — the hair falls with the figure · no jobs')
+                .replace('{turn}', String(turnPose.turn)).replace('{tilt}', String(turnPose.tilt))}
             </span>
           </div>
         ) : null}

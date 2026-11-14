@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { Object3D } from 'three'
 import { anchorFigureBind, clipHipsDrop, clipHeightOffsetM } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
+import { ModelTurnHint } from '../../components/ModelTurnHint'
+import { attachModelTurn, configureViewControls, isUpright, poseMatrix } from '../../lib/modelTurn'
 import { loadTestFigure, standHipsRef } from '../characters/Model3DViewer'
 import { loadPreviewClip, rootPath, rootAt } from './ClipPreview'
 import { previewCalibration, relativeTargetRoot } from './clipPreviewPlacement'
@@ -25,6 +27,9 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
   livePlacement.current = placement
   const { t } = useI18n()
   const [status, setStatus] = useState('')
+  /** The drag turn (T-U4, `lib/modelTurn.ts`): turned at all (the Reset pose button) and how to undo it. */
+  const [turned, setTurned] = useState(false)
+  const turnReset = useRef<(() => void) | null>(null)
   const key = JSON.stringify(segments)
   const partnerKey = JSON.stringify(placement?.targetPartners || [])
   const placementMode = !!placement
@@ -58,8 +63,12 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
         cleanup.push(releaseClips)
         const scene = new THREE.Scene()
         scene.add(new THREE.HemisphereLight(0xffffff, 0x556677, 2))
+        // The stage (grid and figures) turns as one under the drag (T-U4); the light stays.
+        const stage = new THREE.Group()
+        stage.matrixAutoUpdate = false
+        scene.add(stage)
         const grid = new THREE.GridHelper(8, 32, 0x7a8594, 0x3a4350)
-        scene.add(grid)
+        stage.add(grid)
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
         renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
         element.appendChild(renderer.domElement)
@@ -69,6 +78,16 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
         const controls = new OrbitControls(camera, renderer.domElement)
         controls.target.set(0, 0.8, 0)
         cleanup.push(() => controls.dispose())
+        // T-U4: a drag turns the stage about the figures' centre, Shift + drag moves the view, the wheel zooms.
+        configureViewControls(THREE, controls)
+        const turn = attachModelTurn(element, { onChange: (pose) => setTurned(!isUpright(pose)) })
+        const resetTurn = () => turn.reset()
+        turnReset.current = resetTurn
+        cleanup.push(() => {
+          turn.dispose()
+          if (turnReset.current === resetTurn) turnReset.current = null
+        })
+        let lastTick = performance.now()
         const resize = () => {
           const width = element.clientWidth || 400
           renderer.setSize(width, height)
@@ -101,7 +120,7 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
             }
           }
           anchorFigureBind(THREE, pivot, 1.7)
-          const root = new THREE.Group(); root.add(pivot); scene.add(root)
+          const root = new THREE.Group(); root.add(pivot); stage.add(root)
           root.updateMatrixWorld(true)
           const bindY = hips?.getWorldPosition(new THREE.Vector3()).y || 0.935
           const path = rootPath(clip, stand)
@@ -113,7 +132,10 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
           cleanup.push(() => { mixer.stopAllAction(); mixer.uncacheRoot(inst) })
           const heading = (time: number) => {
             action.reset().play(); mixer.setTime(time); root.updateMatrixWorld(true)
-            const v = new THREE.Vector3(0, 0, 1).applyQuaternion(hips?.getWorldQuaternion(new THREE.Quaternion()) || new THREE.Quaternion())
+            // in the stage's frame: the drag turn (T-U4) is not the clip's heading
+            const q = hips?.getWorldQuaternion(new THREE.Quaternion()) || new THREE.Quaternion()
+            q.premultiply(new THREE.Quaternion().setFromRotationMatrix(stage.matrixWorld).invert())
+            const v = new THREE.Vector3(0, 0, 1).applyQuaternion(q)
             return Math.atan2(v.x, v.z)
           }
           const start = specs[index]?.startS || 0
@@ -137,9 +159,9 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
         if (placementMode) {
           const reference = clone(source)
           anchorFigureBind(THREE, reference, 1.7)
-          reference.position.x = -1.8; scene.add(reference)
+          reference.position.x = -1.8; stage.add(reference)
         }
-        cleanup.push(() => scene.traverse((o) => {
+        cleanup.push(() => stage.traverse((o) => {
           if (o instanceof THREE.GridHelper) { o.geometry.dispose(); for (const m of [o.material].flat()) m.dispose() }
         }))
         const roots = chainRoots(players.slice(0, specs.length).map((p) => p.end))
@@ -149,6 +171,11 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
         setStatus('')
         const tick = () => {
           if (disposed) return
+          const now = performance.now()
+          turn.tick(Math.min(0.1, (now - lastTick) / 1000))
+          lastTick = now
+          stage.matrix.fromArray(poseMatrix(turn.pose, [0, 0.8, 0]))
+          stage.matrixWorldNeedsUpdate = true
           const elapsed = (performance.now() - started) / 1000
           const current = segmentAt(specs, Math.min(elapsed, duration))
           const frozen = livePlacement.current
@@ -194,7 +221,8 @@ export function TransitionScene({ segments, placement, height = 280, replay = 0,
     return () => { disposed = true; cancelAnimationFrame(raf); cleanup.reverse().forEach((fn) => fn()) }
   }, [key, partnerKey, placementMode, height, replay, t])
   return <><div ref={host} style={{ height, width: '100%', background: '#0d1117' }} />
-    <div className="ga-hint">{status || t('Figures 1.70 m · grid 0.25 m')}</div></>
+    <div className="ga-hint">{status || t('Figures 1.70 m · grid 0.25 m')}</div>
+    <ModelTurnHint subject="figure" turned={turned} onReset={() => turnReset.current?.()} /></>
 }
 
 export function TransitionSequencePreview({ segments, height, onEnded }: {

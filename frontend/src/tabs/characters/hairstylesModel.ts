@@ -17,6 +17,8 @@
  * - `wearButton`: the Wear button's label with what the Build after it costs.
  * Returned strings are English; the caller passes `t`.
  */
+import { DRAG_TURN_DEG_PER_PX } from '../../lib/modelTurn'
+
 type Tr = (s: string) => string
 const EN: Tr = (s) => s
 /** Formats a SYSTEM stamp for the reason lines ("12 Nov 20:31"); the component passes the clock-aware one. */
@@ -361,14 +363,14 @@ export function strandPreviewState(info: { preview_strands_url?: string | null }
 
 /** The Motion group's hint per state (English; the caller passes `t`). */
 export const STRAND_PREVIEW_HINTS: Record<StrandPreviewState, string> = {
-  swings: 'Tilt the figure above — every strand swings.',
+  swings: 'Drag the figure above to turn and tilt it — every strand swings.',
   swing_off: 'Swing is off — the hair stays still.',
   no_preview: 'No fitted hair yet — nothing to preview.',
 }
 
-/** Ruling H-R2: a drag in the Hairstyles preview turns the FIGURE about the vertical axis, this many degrees per
- *  pixel of horizontal drag (360 px = half a turn). */
-export const DRAG_TURN_DEG_PER_PX = 0.5
+/** Ruling H-R2: a drag in the Hairstyles preview turns the FIGURE, this many degrees per pixel of drag (360 px = half
+ *  a turn) — since T-U4 the one rate of every model viewer (`lib/modelTurn.ts`), which also tilts it. */
+export { DRAG_TURN_DEG_PER_PX }
 export const dragTurnDeg = (px: number): number => px * DRAG_TURN_DEG_PER_PX
 export const dragTurnRad = (px: number): number => (dragTurnDeg(px) * Math.PI) / 180
 

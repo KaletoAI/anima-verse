@@ -281,7 +281,7 @@ function HairstyleDetail({ character, entry, onChanged, onRunEnded, onOpenFigure
   const title = `${entry.name || entry.id} · ${t(HAIR_MODE_LABELS[mode])}`
   const preview = mode === 'hairdeck' && garment?.preview_url ? (
     <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={VIEWER_HEIGHT}
-      previewTilt freshness={garment.preview_freshness} builtAt={garment.preview_built_at}
+      previewTilt subject="figure" freshness={garment.preview_freshness} builtAt={garment.preview_built_at}
       alphaCutoff={info.alpha_cutoff} collision={info.collision} meshAdjust={meshAdjust} polylines={polylines} focus={focus}
       strandHair={strandHair}
       strandNote={strandState === 'swing_off' ? t('Swing is off — the hair stays still.') : strandIssue || undefined}
@@ -291,7 +291,7 @@ function HairstyleDetail({ character, entry, onChanged, onRunEnded, onOpenFigure
       ) : undefined} />
   ) : mode === 'body' && info.plain && info.body_url ? (
     <Model3DViewer key={info.body_url} url={info.body_url} format="glb" height={VIEWER_HEIGHT}
-      builtAt={info.body_built_at} />
+      builtAt={info.body_built_at} subject="figure" />
   ) : (
     <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
       <div className="ga-hint" style={{ ...EMPTY_TILE, flex: '0 1 440px', height: VIEWER_HEIGHT, padding: 16,

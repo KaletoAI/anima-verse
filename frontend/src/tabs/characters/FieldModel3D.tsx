@@ -843,6 +843,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
           <div ref={previewRef} className="ga-model3d-fit">
           <Model3DViewer
             previewTilt
+            subject="figure"
             height={480}
             statusPanel={statusPanel}
             freshness={model.freshness}

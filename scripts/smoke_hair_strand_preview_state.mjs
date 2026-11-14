@@ -10,7 +10,7 @@
  * [1] strandPreviewState({preview_strands_url: '/x'}, true) = 'swings'; (…, false) = 'swing_off';
  *     ({preview_strands_url: null}, true) = 'no_preview'; a missing url = 'no_preview' too.
  * [2] The Motion group's hint texts, verbatim from the brief:
- *       swings    "Tilt the figure above — every strand swings."
+ *       swings    "Drag the figure above to turn and tilt it — every strand swings."
  *       swing_off "Swing is off — the hair stays still."
  *       no_preview "No fitted hair yet — nothing to preview."
  * [3] Drag turn (H-R2: dragging turns the figure about the vertical axis): 0.5° per pixel, so 180 px = 90° =
@@ -85,7 +85,7 @@ check('[1] states', [
 
 // [2]
 check('[2] hints', m.STRAND_PREVIEW_HINTS, {
-  swings: 'Tilt the figure above — every strand swings.',
+  swings: 'Drag the figure above to turn and tilt it — every strand swings.',
   swing_off: 'Swing is off — the hair stays still.',
   no_preview: 'No fitted hair yet — nothing to preview.',
 });
