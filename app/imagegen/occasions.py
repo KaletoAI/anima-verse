@@ -19,6 +19,8 @@ Per occasion:
                       "img2mesh": an unrigged image-to-mesh backend;
                       "img2hair": hair cards from one character image
                       (HairDeck) — never matched by an img2mesh occasion;
+                      "txt2hair": hair strands from text (HAAR) — a
+                      params-only job, never matched by another occasion;
                       "mesh2rig": a standalone mesh-to-rig backend.
   rig                 Required delivery rig, never a backend property.
                       Rig occasions require a configured mesh2rig chain; an
@@ -203,6 +205,17 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
                            "char_spec_fallback": ""}),
                   "category": "img2hair", "requires_chain": False,
                   "hint": "Hair cards from one image of the character (e.g. HairDeck)."},
+    # HAAR (spec 2026-11-13-strand-hair § 6.3.3): hair strands from the
+    # hairstyle's text — its own category, a params-only job. Unrouted until
+    # an instance adds the backend entry (Ruling H-R6); the hint says how.
+    "hair_strands": {**_mesh("3D hair — strands from text", "Hair mode HAAR", "none",
+                             {"character_scoped": True, "char_spec_field": "hair_strands_workflow",
+                              "char_spec_fallback": ""}),
+                     "category": "txt2hair", "requires_chain": False,
+                     "hint": ("Hair strands from the hairstyle's text (HAAR). Needs a backend entry "
+                              "in Media Generation: type openai_mesh, alias (model) HAAR, category "
+                              "txt2hair. One hub job per seed, about 30–55 s each. HAAR is "
+                              "licensed CC BY-NC 4.0 (non-commercial).")},
     "pose_animation": {"label": "3D animation — pose clip", "media": "animation",
                        "category": "mesh2anim", "rig": "", "needs_ref_slot": False,
                        "style_use_cases": [], "covers": "Poses tab: generate animation",

@@ -1,0 +1,20 @@
+{
+ "seed": 7,
+ "prompt": "shoulder-length wavy hair",
+ "strands": 16,
+ "points": 100,
+ "space": "template_head",
+ "units": "m",
+ "version": "qm-haar-1",
+ "steps": 50,
+ "cfg": 1.5,
+ "upsample_res": 128,
+ "haar_commit": "766a29a9112d84e0b5d512f9b6d7de4f27d3e857",
+ "timing_s": {
+  "embed": 3.1,
+  "load": 18.2,
+  "generate": 4.1
+ },
+ "peak_vram_MiB": 4564,
+ "fixture": "trimmed from hub job 8132167be0a744a5b6c0890e891132cf: strands numpy.linspace(0, 11151, 16).astype(int) of 11152, all 100 points; head = its first 64 faces with their vertices"
+}

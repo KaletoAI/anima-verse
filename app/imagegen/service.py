@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.imagegen import ImageBackend, BACKEND_REGISTRY
 from app.imagegen.backends.openai_mesh import (HAIR_CATEGORY, MESH2MESH_CATEGORY,
-                                               MESH_UPLOAD_MAX_BYTES)
+                                               MESH_UPLOAD_MAX_BYTES, STRANDS_CATEGORY)
 from app.imagegen.base import (BackendBusyError, GenerationCancelled, HubJobLost,
                                MediaGenerationDisabled, media_generation_enabled)
 from app.imagegen.selection import BackendPool
@@ -116,7 +116,7 @@ _MESH_TOKEN_MAIN = "_00001_"
 _MESH_LOD_STAGE_RE = re.compile(r"_(\d+)$")
 
 # A hair-job result name as stored on disk: a plain file name, nothing that
-# could step out of the output directory (generate_hair).
+# could step out of the output directory (generate_hair, generate_strands).
 _SAFE_RESULT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 # Extension for a delivered file whose NAME has none — the mime is the second
@@ -1133,13 +1133,111 @@ class ImageService:
         return self._store_hair_files(result["files"], output_dir, used.name,
                                       route_meta(route), result.get("job_id", ""))
 
+    def list_strand_backends(self) -> List[ImageBackend]:
+        """Available txt2hair backends (HAAR) — disjoint from both
+        ``list_mesh_backends`` and ``list_hair_backends``."""
+        return [b for b in self.list_available_backends(media="mesh")
+                if getattr(b, "category", "") == STRANDS_CATEGORY]
+
+    def generate_strands(self, prompt: str, output_dir: str, *,
+                         backend_glob: str = "", character_name: str = "",
+                         params: Optional[Dict[str, Any]] = None,
+                         hub_stage=None) -> Dict[str, Any]:
+        """Hair strands from TEXT on the ``hair_strands`` occasion (a txt2hair
+        backend, e.g. the HAAR alias), on its backend channel — the text
+        counterpart of ``generate_hair``. A params-only job: the prompt goes
+        out as ``input_prompt``, no image and no file is sent.
+
+        ``params``: per-job values — ``seed`` and optionally ``mesh_name``
+        (the subject prefix of the unique ``input_name``; default
+        ``<character>_haar``). Every other alias param comes from the backend
+        entry's ``extra_params``.
+
+        The alias delivers ``<input_name>_strands.npy``,
+        ``<input_name>_head.obj`` and ``info.json`` (spec 2026-11-13-strand-hair
+        § 6.3.3); each is written as ``<output_dir>/<gateway name>``, and a
+        name that is not a plain file name is refused (ValueError) before
+        anything is written. Returns ``{"files": [{"name", "mime", "path"}],
+        "backend", "route", "job_id"}`` in the gateway's order.
+        ``app/core/strand_file.py`` reads them.
+
+        An explicit ``backend_glob`` never falls back. ``hub_stage``
+        (app/core/hub_ops.py): a job recorded before a restart is collected
+        and stored exactly like a fresh one, without a new submission."""
+        from app.imagegen.base import GatewayRejectedError
+        from app.imagegen.routing import resolve_spec, route_meta, run_routed
+        attached = self._hub_attached(hub_stage)
+        if attached is not None:
+            files, blobs = list(attached.get("files") or []), list(attached.get("blobs") or [])
+            if not blobs:
+                raise GatewayRejectedError("Strand job returned no files")
+            if len(files) != len(blobs):
+                raise GatewayRejectedError("Strand job results have incomplete metadata")
+            return self._store_hair_files([dict(f, blob=raw) for f, raw in zip(files, blobs)],
+                                          output_dir, attached.get("backend", ""),
+                                          dict(attached.get("route") or {}),
+                                          attached.get("job_id", ""), label="strand")
+        if not media_generation_enabled():
+            raise MediaGenerationDisabled("Media generation is disabled for this world")
+        prompt = str(prompt or "").strip()
+        if not prompt:
+            raise ValueError("A strand job needs the hairstyle's text")
+        request: Dict[str, Any] = dict(params or {})
+        subject = str(request.pop("mesh_name", "") or "").strip() \
+            or (f"{character_name}_haar" if character_name else "haar")
+        request.update(prompt=prompt, mesh_name=_unique_mesh_name(subject))
+        if hub_stage is not None:
+            request["hub_stage"] = hub_stage
+        primary = None
+        if backend_glob.strip():
+            _, primary = resolve_spec("hair_strands", backend_glob,
+                                      character=character_name, pool=self.pool)
+            if primary is None:
+                raise ValueError("Selected strand backend is unavailable — no automatic fallback")
+
+        def render(b):
+            def op(bb):
+                def generate():
+                    from app.imagegen.base import GatewayJobFailed
+                    try:
+                        blobs = bb.generate(prompt, "", dict(request),
+                                            log_meta={"agent_name": character_name, "media": "mesh"})
+                    except GatewayJobFailed as e:
+                        # A failed job stays what an empty one is here (no cooldown), with its cause.
+                        raise GatewayRejectedError(f"Strand job returned no files: {e}") from e
+                    if not blobs:
+                        raise GatewayRejectedError("Strand job returned no files")
+                    # Read on THIS (channel worker) thread: last_result_files is
+                    # thread-local, see generate_mesh.
+                    files = list(getattr(bb, "last_result_files", []) or [])
+                    if len(files) != len(blobs):
+                        raise GatewayRejectedError("Strand job results have incomplete metadata")
+                    return {"files": [dict(f, blob=raw) for f, raw in zip(files, blobs)],
+                            "job_id": getattr(bb, "last_job_id", "")}
+                return self.run_on_backend_channel(bb, generate, task_type="mesh_generation",
+                                                   agent_name=character_name)
+            return self.run_on_backend(b, op, character_name=character_name)
+
+        if primary is not None:
+            self._hub_note_backend(hub_stage, primary)
+            (result, used), route = render(primary), None
+        else:
+            (result, used), route = run_routed("hair_strands", render,
+                                               character=character_name, pool=self.pool,
+                                               on_route=self._hub_route_hook(hub_stage))
+        return self._store_hair_files(result["files"], output_dir, used.name,
+                                      route_meta(route), result.get("job_id", ""),
+                                      label="strand")
+
     @staticmethod
     def _store_hair_files(files: List[Dict[str, Any]], output_dir: str, backend_name: str,
-                          route: Dict[str, Any], job_id: str) -> Dict[str, Any]:
-        """Write every file of a hair job under its gateway name — shared by a
-        fresh run and a job collected after a restart. The names are checked
-        first (plain file name, no duplicates, resolved inside ``output_dir``)
-        so a hostile or broken name writes nothing at all."""
+                          route: Dict[str, Any], job_id: str, *,
+                          label: str = "hair") -> Dict[str, Any]:
+        """Write every file of a hair (or strand) job under its gateway name —
+        shared by a fresh run and a job collected after a restart. The names
+        are checked first (plain file name, no duplicates, resolved inside
+        ``output_dir``) so a hostile or broken name writes nothing at all.
+        ``label`` names the job kind in the error."""
         directory = Path(output_dir)
         root = directory.resolve()
         targets: List[Path] = []
@@ -1147,10 +1245,10 @@ class ImageService:
             name = str(f.get("name") or "")
             if (not _SAFE_RESULT_NAME.fullmatch(name) or name in (".", "..")
                     or Path(name).name != name):
-                raise ValueError(f"hair job delivered an unusable file name: {name!r}")
+                raise ValueError(f"{label} job delivered an unusable file name: {name!r}")
             target = directory / name
             if target.resolve().parent != root or target in targets:
-                raise ValueError(f"hair job delivered an unusable file name: {name!r}")
+                raise ValueError(f"{label} job delivered an unusable file name: {name!r}")
             targets.append(target)
         directory.mkdir(parents=True, exist_ok=True)
         out: List[Dict[str, str]] = []

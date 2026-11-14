@@ -44,6 +44,17 @@ the gateway (the alias default applies), so a stale name reaches nothing. Only
 params the alias declares are sent — except when the schema is unreadable, then
 the ``input_*`` names go out blind (worst case they are ignored).
 
+The txt2hair aliases (``HAAR``, config ``category: "txt2hair"``) take no input
+at all — a params-only job, neither ``images`` nor ``files``:
+
+    {"model": "HAAR", "mode": "async",
+     "params": {"input_name": "<character>_haar_s7-r…", "input_prompt": "…",
+                "seed": 7, …extra_params where declared}}
+
+and deliver ``<input_name>_strands.npy``, ``<input_name>_head.obj`` and
+``info.json`` (spec docs/superpowers/specs/2026-11-13-strand-hair-design.md
+§ 6.3.3; ``app/core/strand_file.py`` reads them).
+
 ``input_name`` decides the delivered FILE NAMES for mesh generation; standalone
 riggers receive only ``files.input_mesh_path`` and ``input_no_fingers``. For
 img2mesh it is always set;
@@ -83,6 +94,11 @@ MESH2MESH_CATEGORY = "mesh2mesh"
 # Purpose category of a hair alias (HairDeck): one character image in, hair
 # cards out. Kept apart from img2mesh so no mesh occasion ever picks it.
 HAIR_CATEGORY = "img2hair"
+
+# Purpose category of a strand alias (HAAR): text in, hair strands out. A
+# params-only job — no ``images``, no ``files``; never matched by any other
+# occasion than hair_strands.
+STRANDS_CATEGORY = "txt2hair"
 
 # Hard size limit of a file sent in ``files`` (mesh-client-spec § 1). The
 # gateway answers 413 above it; refusing here keeps a doomed job out of the
@@ -204,9 +220,10 @@ class OpenAIMeshBackend(ImageBackend):
         # do not expose it).
         self.mesh_steps = int(os.environ.get(f"{env_prefix}MESH_STEPS", "") or 0)
         # Extra alias params (config ``extra_params``, a JSON object) — read
-        # only by the img2hair category (HairDeck: input_steps, input_cfg, …),
-        # where every alias param beyond input_name and the seed comes from
-        # the backend entry, like mesh-unimate's. An unparsable value is
+        # only by the img2hair (HairDeck) and txt2hair (HAAR) categories
+        # (input_steps, input_cfg, …), where every alias param beyond
+        # input_name, the prompt and the seed comes from the backend entry,
+        # like mesh-unimate's. An unparsable value is
         # ignored with a warning, never sent half.
         self.extra_params: Dict[str, Any] = {}
         raw_extra = (os.environ.get(f"{env_prefix}EXTRA_PARAMS", "") or "").strip()
@@ -610,6 +627,8 @@ class OpenAIMeshBackend(ImageBackend):
             return {"input_no_fingers": bool(params.get("no_fingers", self.no_fingers))}
         if self.category == HAIR_CATEGORY:
             return self._hair_alias_params(params)
+        if self.category == STRANDS_CATEGORY:
+            return self._strand_alias_params(params)
         # input_name is ALWAYS set: it decides the delivered file names, and an
         # empty one makes the workflow reuse leftovers of a previous run. The
         # alias is the fallback so the files stay attributable.
@@ -707,8 +726,39 @@ class OpenAIMeshBackend(ImageBackend):
             alias_params["seed"] = int(seed)
         return alias_params
 
+    def _strand_alias_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """The ``params`` block of a txt2hair (HAAR) job: ``input_name``
+        (always), ``input_prompt`` (the hairstyle's text, as is) and the
+        per-job ``seed`` where the alias declares them, plus the backend
+        entry's ``extra_params`` where declared (step counts, cfg — never in
+        code). An unreadable schema sends them blind; the gateway ignores
+        unknown names. ``extra_params`` never override the name, the prompt
+        or the seed: those belong to the job."""
+        alias_params: Dict[str, Any] = {
+            "input_name": (str(params.get("mesh_name") or "").strip()
+                           or str(self.model or self.name or "strands").strip()),
+        }
+        prompt = str(params.get("prompt") or "")
+        if prompt and self._declares("input_prompt"):
+            alias_params["input_prompt"] = prompt
+        seed = params.get("seed")
+        if seed is not None and not isinstance(seed, bool) and self._declares("seed"):
+            alias_params["seed"] = int(seed)
+        for key, value in self.extra_params.items():
+            key = str(key).strip()
+            if key in ("input_name", "input_prompt", "seed"):
+                continue
+            if self._declares(key.lower()):
+                alias_params[key] = value
+            else:
+                logger.info("%s: extra param %s is not declared by the alias — dropped",
+                            self.name, key)
+        return alias_params
+
     def _generate(self, prompt: str, negative_prompt: str,
                   params: Dict[str, Any]) -> List[bytes]:
+        if self.category == STRANDS_CATEGORY:
+            return self._generate_strands(prompt, params)
         self._tls.result_files = []
         self._tls.photo_application = {}
         self._tls.result_rig = None
@@ -827,6 +877,37 @@ class OpenAIMeshBackend(ImageBackend):
         if not job_id:
             return []
 
+        self._tls.job_id = job_id
+        return self._collect(job_id, should_cancel=stage_cancel(params))
+
+    def _generate_strands(self, prompt: str, params: Dict[str, Any]) -> List[bytes]:
+        """A txt2hair (HAAR) job: params only — no ``images``, no ``files``.
+        The prompt travels as ``input_prompt``; the alias delivers
+        ``<input_name>_strands.npy``, ``<input_name>_head.obj`` and
+        ``info.json`` (spec 2026-11-13-strand-hair § 6.3.3)."""
+        self._tls.result_files = []
+        self._tls.photo_application = {}
+        self._tls.result_rig = None
+        self._tls.input_sha256s = []
+        self._tls.job_id = ""
+        self._tls.single_view = False
+        alias_params = self._strand_alias_params(
+            dict(params, prompt=prompt or str(params.get("prompt") or "")))
+        if not alias_params.get("input_prompt") and self._declares("input_prompt"):
+            raise GatewayRejectedError("Strand job needs a prompt")
+        payload: Dict[str, Any] = {
+            "model": params.get("model") or self.model,
+            "params": alias_params,
+            "mode": "async",
+        }
+        logger.info("%s: starting strand job (alias=%s, name='%s', seed=%s)", self.name,
+                    payload["model"], alias_params.get("input_name", "-"),
+                    alias_params.get("seed", "-"))
+        job_id = submit_job(self, f"{self.api_url}{self.mesh_endpoint}", payload, "Strands",
+                            **stage_kwargs(params, {"input_sha256s": [],
+                                                    "single_view": False}))
+        if not job_id:
+            return []
         self._tls.job_id = job_id
         return self._collect(job_id, should_cancel=stage_cancel(params))
 
