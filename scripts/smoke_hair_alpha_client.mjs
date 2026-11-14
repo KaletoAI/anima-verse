@@ -9,7 +9,7 @@
  * FIXTURE (three, no renderer): a figure group with the bones Hips (origin) → Spine (0, 1, 0); a skinned body
  * and a skinned hair mesh `garment_hair_y` (userData.garment.kind "hair"), two vertices each, bound to that
  * skeleton. The hair's MeshStandardMaterial carries what GLTFLoader makes of a glTF MASK material at cutoff 0.12:
- * `alphaTest` 0.12 and a `map` (a 1x1 DataTexture). Collision payload v4: one torso capsule Hips → Spine, r 0.1
+ * `alphaTest` 0.12 and a `map` (a 1x1 DataTexture). Collision payload (`COLLISION_VERSION`): one torso capsule Hips → Spine, r 0.1
  * (hair takes the torso region, `HAIR_REGIONS`).
  *
  * [1] createGarmentCollision: the hair mesh's material is replaced by a patched CLONE (not the template) that
@@ -52,6 +52,7 @@ if (!process.env.HAIR_ALPHA_BUNDLED) {
 }
 const THREE = await import('three')
 const { createGarmentCollision } = await import('../packages/scene-render/src/garmentCollision.ts')
+const { COLLISION_VERSION } = await import('../packages/scene-render/src/collision.ts')
 const { applyAlphaCutoff } = await import('../packages/scene-render/src/materials.ts')
 
 let failures = 0
@@ -89,7 +90,7 @@ function figure() {
   hair.bind(skeleton)
   return { fig, body, hair, hairMat, map }
 }
-const payload = { version: 4, capsules: [
+const payload = { version: COLLISION_VERSION, capsules: [
   { id: 'torso', a: 'mixamorig:Hips', b: 'mixamorig:Spine', r: 0.1, region: 'torso' }] }
 
 console.log('--- [1] createGarmentCollision keeps MASK ---')

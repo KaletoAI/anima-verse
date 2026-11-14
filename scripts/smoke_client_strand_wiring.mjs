@@ -41,6 +41,7 @@ async function loadClient() {
     const entry = [
       `export { strandCandidates } from '${src}/scene/strandBudget';`,
       `export { Figure } from '${src}/scene/figures';`,
+      `export { COLLISION_VERSION } from '${join(ROOT, 'packages/scene-render/src/collision')}';`,
     ].join('\n')
     const built = await esbuild.build({
       stdin: { contents: entry, resolveDir: join(ROOT, 'client3d'), loader: 'ts' },
@@ -62,7 +63,7 @@ const check = (label, ok, detail = '') => {
 }
 
 const THREE = await import('three')
-const { strandCandidates, Figure } = await loadClient()
+const { strandCandidates, Figure, COLLISION_VERSION } = await loadClient()
 
 // [1] / [2] candidates
 {
@@ -102,7 +103,7 @@ function record(cards = 2) {
     face_box: [-0.06, 0.06, 1.48, 1.66, 0.05], eye_box: [-0.04, 0.04, 1.55, 1.64, 0.05],
     sdf: { dims: [2, 2, 2], lo: [-0.2, 1.3, -0.2], vox: 0.4, order: 'x_fastest', unit: 'mm_int8',
       data: Buffer.from(new Int8Array(8).fill(127).buffer).toString('base64') },
-    capsules: { version: 4, capsules: CAPSULES, scales: {} }, params: PARAMS,
+    capsules: { version: COLLISION_VERSION, capsules: CAPSULES, scales: {} }, params: PARAMS,
     vertex_attributes: { card: '_STRAND_CARD', u: '_STRAND_U' } }
 }
 function template() {
@@ -151,7 +152,7 @@ const MOTION = { rev: 'm1', groups: {
   hair_c00: { bones: ['HairGen_c00_00'], hair: true, freq_hz: 1, zeta: 0.5 },
   tail: { bones: ['Tail_00'], freq_hz: 1, zeta: 0.5 } } }
 function model(tpl, tier = 'full') {
-  return { motion: { payload: MOTION }, collision: { version: 4, capsules: CAPSULES }, footPose: null,
+  return { motion: { payload: MOTION }, collision: { version: COLLISION_VERSION, capsules: CAPSULES }, footPose: null,
     hairStrands: tier === 'full' ? { url: '/x', sha256: 'abc' } : null, name: 'Fixture', template: tpl.fig,
     clips: [], scale: 1, height: 1.7, assignOnly: true, noClips: false, tier, libraryFits: false }
 }

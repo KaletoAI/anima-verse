@@ -106,12 +106,14 @@
  *       - shoe only → createGarmentCollision null (nothing to push);
  *       - collidingGarmentMeshes lists the clothing mesh, not the shoe;
  *       - the shoe's material stays the template (never patched).
- * [12] HAIR vs CLOTH regions (collision v4): one capsule per region (torso,
- *     leg, arm, head, shoulder_hair, chest, chest_hair, attached_part) in that
- *     order → hair takes torso, arm, head, shoulder_hair, chest_hair (its own
- *     chest set, never the inside-skin chest, never attached_part); cloth takes
- *     torso, leg, head, chest, attached_part (never arm, never the hair-only
- *     shoulder_hair / chest_hair).
+ * [12] HAIR vs CLOTH regions (collision v5): one capsule per region (torso,
+ *     leg, arm, head, shoulder_hair, chest, chest_hair, attached_part,
+ *     appendage) in that order → hair takes torso, arm, head, shoulder_hair,
+ *     chest_hair (its own chest set, never the inside-skin chest, never
+ *     attached_part or appendage); cloth takes torso, leg, head, chest,
+ *     attached_part, appendage (never arm, never the hair-only shoulder_hair /
+ *     chest_hair). `appendage` is an extension region (`EXTENSION_REGIONS`).
+ *     Every payload here carries the current `COLLISION_VERSION`.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -156,6 +158,7 @@ async function main() {
   }
 
   const G = await import('../packages/scene-render/src/garmentCollision.ts')
+  const { COLLISION_VERSION } = await import('../packages/scene-render/src/collision.ts')
   const THREE = await import('three')
   const { pushOutOfCapsules, capsuleInFrame, patchCollisionVertexShader, createGarmentCollision,
     COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, COLLIDE_GLSL_FUNCTION } = G
@@ -330,7 +333,7 @@ async function main() {
     for (const mesh of Object.values(meshes)) mesh.bind(skeleton)
     return { figure, hips, spine, meshes }
   }
-  const payload = { version: 4, capsules: [
+  const payload = { version: COLLISION_VERSION, capsules: [
     { id: 'torso', a: 'mixamorig:Hips', b: 'mixamorig:Spine', r: 0.1, region: 'torso' },
     { id: 'ghost', a: 'mixamorig:Hips', b: 'mixamorig:Missing', r: 0.1, region: 'torso' },
     { id: 'sleeve', a: 'mixamorig:Hips', b: 'mixamorig:Spine', r: 0.2, region: 'arm' }] }
@@ -477,12 +480,13 @@ async function main() {
   check('shoe only → null (nothing to push)', createGarmentCollision(THREE, shoeOnly.figure, payload) === null)
 
   console.log('--- [12] hair vs cloth regions ---')
-  const regions8 = ['torso', 'leg', 'arm', 'head', 'shoulder_hair', 'chest', 'chest_hair', 'attached_part']
+  const regions9 = ['torso', 'leg', 'arm', 'head', 'shoulder_hair', 'chest', 'chest_hair', 'attached_part', 'appendage']
     .map((region) => ({ capsule: { id: region, region } }))
-  const hairTook = garmentCapsules('hair', regions8).map((e) => e.capsule.region).join()
-  check('hair: torso, arm, head, shoulder_hair, chest_hair', hairTook === 'torso,arm,head,shoulder_hair,chest_hair', hairTook)
-  const clothTook = garmentCapsules('clothing', regions8).map((e) => e.capsule.region).join()
-  check('cloth: torso, leg, head, chest, attached_part', clothTook === 'torso,leg,head,chest,attached_part', clothTook)
+  const hairTook = garmentCapsules('hair', regions9).map((e) => e.capsule.region).join()
+  check('hair: torso, arm, head, shoulder_hair, chest_hair (no appendage)', hairTook === 'torso,arm,head,shoulder_hair,chest_hair', hairTook)
+  const clothTook = garmentCapsules('clothing', regions9).map((e) => e.capsule.region).join()
+  check('cloth: torso, leg, head, chest, attached_part, appendage', clothTook === 'torso,leg,head,chest,attached_part,appendage', clothTook)
+  check('appendage is an extension region', G.EXTENSION_REGIONS.includes('appendage'), G.EXTENSION_REGIONS.join())
 
   if (failures.length) {
     console.log(`\nFAIL — ${failures.length} check(s): ${failures.join('; ')}`)

@@ -29,8 +29,8 @@
  *   RECORD: cards 2, rows 17, rest = the row centres (x_k, 1.60 − 0.02·i, −0.10), pins 2 per card, free_arc
  *   0 on rows 0–1 then 0.02·(i − 1), free_frac (i − 1)/15, follow {bones [mixamorig:Head], w 1}, ear_y 1.50, an
  *   SDF of 2×2×2 voxels at +127 mm (+0.127 m — nothing touches the head), face_box / eye_box in front of the face
- *   (z0 0.05 > −0.10: no row is ever inside), the spike defaults as params. Capsules (version 4): `head` (region
- *   head, Neck → Head, r 0.2) and `torso` (region torso, Spine2 → Neck, r 0.12).
+ *   (z0 0.05 > −0.10: no row is ever inside), the spike defaults as params. Capsules (the current
+ *   `COLLISION_VERSION`): `head` (region head, Neck → Head, r 0.2) and `torso` (region torso, Spine2 → Neck, r 0.12).
  * [1] createStrandHair → a handle; it drives the hair mesh; its colliders are ['torso'] — the head capsule left out
  *     (Ruling H-R7: the head SDF covers the head); disabled until `setEnabled(true)`.
  * [2] setEnabled(true): mesh.geometry !== the template geometry; every card vertex's skin is (3, 0, 0, 0) /
@@ -98,6 +98,11 @@
  *     three, a kick every frame.
  * [12] A frame of 0.3 s (> STRAND_RESET_DELTA_S 0.25, a stalled tab) still resets: after it every row equals its
  *     target exactly.
+ * [13] Review Focus 1 of CX1 (collision v5): a stored record keeps the capsule list its fit froze, under the version of
+ *     that day — a record whose `capsules.version` is 4 still binds its colliders after the bump: capsuleIds ==
+ *     ['torso'], the same list as [1] (the strand's own frozen copy is bound under `COLLISION_VERSION`, never under
+ *     the record's version, which the version check of `bindCollision` would refuse). Fails on aaf2fc349 with only
+ *     `COLLISION_VERSION` set to 5 (the colliders silently dropped: capsuleIds []).
  * [7] createGarmentCollision over the fixture: the hair mesh wears a patched clone; excludeMesh(hair, true) →
  *     hair.material IS the original (unpatched) object again; excludeMesh(hair, false) → the same patched clone as
  *     before (identity), its depth material the patched one.
@@ -128,6 +133,7 @@ const { createStrandHair } = await import('../packages/scene-render/src/hairSim.
 const { pickStrandFigures, STRAND_LIMITS, STRAND_ROWS } = await import('../packages/scene-render/src/hairSimMath.ts')
 const { withoutHairGroups } = await import('../packages/scene-render/src/secondaryMotion.ts')
 const { createGarmentCollision } = await import('../packages/scene-render/src/garmentCollision.ts')
+const { COLLISION_VERSION } = await import('../packages/scene-render/src/collision.ts')
 
 let failures = 0
 const check = (label, ok, detail = '') => {
@@ -161,7 +167,7 @@ const CAPSULES = [
   { id: 'torso', a: 'mixamorig:Spine2', b: 'mixamorig:Neck', r: 0.12, region: 'torso' },
 ]
 
-function record(cards = 2) {
+function record(cards = 2, capsuleVersion = COLLISION_VERSION) {
   const rest = [], pins = [], freeArc = [], freeFrac = [], w = []
   for (let k = 0; k < cards; k++) {
     pins.push(2)
@@ -178,7 +184,7 @@ function record(cards = 2) {
     face_box: [-0.06, 0.06, 1.48, 1.66, 0.05], eye_box: [-0.04, 0.04, 1.55, 1.64, 0.05],
     sdf: { dims: [2, 2, 2], lo: [-0.2, 1.3, -0.2], vox: 0.4, order: 'x_fastest', unit: 'mm_int8',
       data: Buffer.from(new Int8Array(8).fill(127).buffer).toString('base64') },
-    capsules: { version: 4, capsules: CAPSULES, scales: {} }, params: PARAMS,
+    capsules: { version: capsuleVersion, capsules: CAPSULES, scales: {} }, params: PARAMS,
     vertex_attributes: { card: '_STRAND_CARD', u: '_STRAND_U' } }
 }
 
@@ -352,7 +358,7 @@ const NCARD = 2 * R * 2
   const torsoBind = (placed) => {
     const { fig: g } = figure()
     if (placed) { g.position.set(2, 0, -3); g.updateMatrixWorld(true) }
-    const gc = createGarmentCollision(THREE, g, { version: 4, capsules: CAPSULES })
+    const gc = createGarmentCollision(THREE, g, { version: COLLISION_VERSION, capsules: CAPSULES })
     gc.update()
     const entry = gc.entries[0]
     const bind = entry.local[entry.capsules.findIndex(c => c.capsule.id === 'torso')].bind
@@ -463,7 +469,7 @@ const NCARD = 2 * R * 2
 {
   const { fig, hair } = figure()
   const original = hair.material
-  const gc = createGarmentCollision(THREE, fig, { version: 4, capsules: CAPSULES })
+  const gc = createGarmentCollision(THREE, fig, { version: COLLISION_VERSION, capsules: CAPSULES })
   const patched = hair.material, patchedDepth = hair.customDepthMaterial
   check('[7] the hair wears a patched clone', !!gc && patched !== original)
   gc.excludeMesh(hair, true)
@@ -473,6 +479,15 @@ const NCARD = 2 * R * 2
   check('[7] excludeMesh(false): patched again, the same clone', hair.material === patched
     && hair.customDepthMaterial === patchedDepth)
   gc.dispose()
+}
+
+// [13] a record of an older collision version keeps its colliders
+{
+  const { fig } = figure()
+  const h = createStrandHair(THREE, fig, record(2, 4))
+  check('[13] a capsules.version 4 record still binds its colliders: capsuleIds == the v4 list ["torso"]',
+    JSON.stringify(h?.capsuleIds) === '["torso"]', JSON.stringify(h?.capsuleIds))
+  h?.dispose()
 }
 
 console.log(failures ? `${failures} check(s) FAILED` : 'all checks passed')

@@ -12166,10 +12166,10 @@ by `/characters/{name}/model/meta`, next to `extension_rig` (not in the worldmap
 model meta when `model_sig` changes). `null` for a model that gets none.
 
 ```
-{"version": 4,
+{"version": 5,
  "capsules": [{"id", "a", "b", "r", "region", "a_pos"?, "b_pos"?}],
  "skipped":  [{"id", "a", "b", "reason"}],
- "scales": {"leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part"},
+ "scales": {"leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part", "appendage"},
  "source": "own" | "base",
  "base_signature"?, "sha256", "computed_at", "error"?}
 ```
@@ -12195,6 +12195,13 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   clavicle's dominant-weighted vertices — the shoulder top between the thin `chest` capsule and the upper arm.
   Own scale (`shoulder_hair`, "Shoulders (hair)"); hair-only like `chest_hair` (`HAIR_ONLY_REGIONS`). Numbers:
   `SHOULDER_MEASURED` in `app/core/collision.py`.
+- **Appendage capsules (version 5).** `appendage_chain` → region `appendage` (p50, margin 0, own scale
+  "Appendage"): one capsule per chain bone of a chain the generator drew into the body mesh, fitted like the other
+  extension sets (`attached_part` stays the region of a part built onto the body). Cloth and the extension-bone
+  contact use it, hair does not (`EXTENSION_REGIONS`; `HAIR_REGIONS`). A drawn part is sparse in the mesh, so a link
+  under 16 own vertices is `skipped`; numbers in `EXTENSION_MEASURED`. `COLLISION_VERSION` (`collision.ts`) is THE
+  version every reader compares against; a strand-hair record's frozen capsule list is bound under it, never under
+  the record's own `capsules.version` (a payload bump would drop the colliders of every record fitted before it).
 - **Endpoint rule.** An endpoint WITHOUT `a_pos`/`b_pos` is the joint's position. An endpoint WITH one is a
   bind-space point (the space of the body's POSITION accessor) fixed to that joint: it moves like a body vertex
   skinned 100 % to the joint, `p_now = boneWorld · inverse(boneBindWorld) · p_bind`. The head capsule uses it
@@ -12281,7 +12288,7 @@ with the per-vertex binding), keyed by the fit GLB's sha256 and the character's 
  "follow": {"bones": [Head, Neck, Spine2], "w": [S*17*len(bones) floats]},   // rows sum to 1
  "ear_y", "face_box": [x0, x1, y0, y1, z0], "eye_box": [x0, x1, y0, y1, z0], "landmarks": "profile" | "fallback",
  "sdf": {"dims": [nx, ny, nz], "lo": [x, y, z], "vox", "order": "x_fastest", "unit": "mm_int8", "data": base64},
- "capsules": {"version": 4, "capsules": [CollisionCapsule], "scales": {…}},
+ "capsules": {"version": V, "capsules": [CollisionCapsule], "scales": {…}},   // V = collision version at fit time
  "params": {"damping", "stiffness", "bend", "iterations", "root_deg", "root_frac", "fly_soft", "fly_arc",
             "tether", "tether_r0", "tether_r1", "tether_head", "head_clr", "face_box"},
  "vertex_attributes": {"card": "_STRAND_CARD", "u": "_STRAND_U"}}

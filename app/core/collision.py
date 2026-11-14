@@ -7,7 +7,7 @@ once per model and applied by both renderers every frame (``@anima/scene-render`
 
 PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
 
-    {"version": 4,
+    {"version": 5,
      "capsules": [{"id": "left_thigh", "a": "mixamorig:LeftUpLeg", "b": "mixamorig:LeftLeg",
                    "r": 0.1, "region": "leg"},
                   {"id": "head", "a": "mixamorig:Head", "b": "mixamorig:Head",
@@ -17,7 +17,7 @@ PAYLOAD (sidecar key ``collision``, delivered next to ``extension_rig``)::
      "skipped":  [{"id": "left_shin", "a": "mixamorig:LeftLeg", "b": "LeftFoot",
                    "reason": "joint LeftFoot missing"}],
      "scales":   {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 1.0, "shoulder_hair": 1.0, "chest": 1.0,
-                 "chest_hair": 1.0, "attached_part": 1.0},
+                 "chest_hair": 1.0, "attached_part": 1.0, "appendage": 1.0},
      "source":   "own" | "base",       # fitted on this file / the base body it was built on
      "base_signature": "<bsig>",       # only with source "base"
      "sha256":   "<file the set describes>",
@@ -53,13 +53,18 @@ else; the post-rig chain (``model3d._auto_collision``) refreshes it right after 
 
 EXTENSION CAPSULES (version 2). The spring-driven extension bones a package declares get capsules too — one per
 chain bone of every group whose OP is in ``EXTENSION_CAPSULES`` (never by group or bone name), region by op
-(``chest`` for ``pair_protrusion``, ``attached_part`` for ``attached_part``), each with its own region scale. They
+(``chest`` for ``pair_protrusion``, ``attached_part`` for ``attached_part``, ``appendage`` for ``appendage_chain``
+since version 5), each with its own region scale. They
 follow the table's capsules in the payload. Version 3 adds the hair-only ``chest_hair`` set on ``pair_protrusion``
 (out to the skin plus the hair clearance; its own scale). Version 4 adds the hair-only ``shoulder_hair`` pair of the
 table (``left_shoulder_hair`` / ``right_shoulder_hair``, shoulder → upper arm joint, SHOULDER_MEASURED): the gap
 between the thin chest capsule and the upper arm where swinging HairDeck chains and the hair lying on the shoulders
-sank in. Which renderer pushes what out of them is the renderers' call
-(``garmentCollision.ts`` ``garmentCapsules``; ``secondaryMotion.ts`` never pushes a chain out of its own).
+sank in. Version 5 gives the ``appendage_chain`` op its own extension capsules, region ``appendage`` with its own
+scale: ``attached_part`` covers only a part BUILT onto the body, and a chain the generator drew into the mesh had no
+capsule at all — partner contact and the declared channels need one on every chain. Fitted like every extension set
+(the body vertices whose dominant weight is the chain bone; EXTENSION_MEASURED has the quantile). Which renderer
+pushes what out of them is the renderers' call (``garmentCollision.ts`` ``garmentCapsules``; ``secondaryMotion.ts``
+never pushes a chain out of its own).
 
 FITTING (``fit_capsules``) — the S1 spike's method: for each capsule the body vertices whose DOMINANT skin
 weight is the capsule's start bone, their distances to the bone segment ``a→b`` (bind pose; joint positions =
@@ -78,9 +83,9 @@ from app.core.log import get_logger
 
 logger = get_logger("collision")
 
-VERSION = 4
+VERSION = 5
 #: The fixed table's regions, then the extension regions (``EXTENSION_CAPSULES``).
-REGIONS = ("leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part")
+REGIONS = ("leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part", "appendage")
 SCALE_MIN, SCALE_MAX = 0.5, 1.5
 #: A start bone owning fewer body vertices than this gives no capsule (a quantile of a handful is noise).
 MIN_VERTICES = 16
@@ -177,6 +182,7 @@ HAIR_CLEARANCE_M = 0.006
 EXTENSION_CAPSULES: Dict[str, Tuple[Tuple[str, float, float], ...]] = {
     "pair_protrusion": (("chest", 0.50, 0.0), ("chest_hair", 0.95, HAIR_CLEARANCE_M)),
     "attached_part": (("attached_part", 0.75, 0.0),),
+    "appendage_chain": (("appendage", 0.50, 0.0),),
 }
 
 #: Share of a last link's own vertices (farthest along its axis) whose mean is its tip.
@@ -197,8 +203,23 @@ TIP_SHARE = 0.01
 #:   attached_part, three bodies (Dario, Hannibal Krumb, Stefan Grahl), five links each: the links are tubes, the
 #:     distances tight (p50…p90 within 2 mm, the base link ≤ 7 mm): p75 r 2.4–2.6 / 1.7–1.8 / 2.4–2.6 cm, max
 #:     outside ≤ 3.0 mm (one voxel) on every link → p75; p85 the base link 3.6 % > 3 mm, p90 37 %.
-#:   Margin 0 for both: like the torso, an extension capsule keeps hair and cloth from sinking DEEP, it must never
-#:   float them (the renderers' bind rule also caps each push at the bind-pose distance).
+#:   appendage_chain (2026-11-14, collision v5; every stored full-tier model of the test world whose ``extension_rig``
+#:     is ``applied`` with an ``appendage_chain`` group — four models of three characters, five-link chains;
+#:     read-only copies): a part the generator drew is sparse in the mesh, 12–137 own vertices per link (a built
+#:     ``attached_part`` link has 640–1600), so a link under ``MIN_VERTICES`` is skipped (one to three of five on
+#:     three models). Two bodies close. Model A, all five links fitted: the chain axis leaves the volume from the
+#:     second link on (axis depth inside median 0–6 mm), so no radius stays inside — p50 max outside 13–35 mm,
+#:     > 5 mm 3.6–45 % per link; p75 max 18–49 mm; p90 26–56 mm. Model B, three links fitted, axis 5–12 mm inside:
+#:     p50 the inner links r 0.83 / 0.54 cm, max outside 3.0 / 4.2 mm, > 3 mm 0 / 0.13 %; the last link (tip rule)
+#:     r 1.17 cm, max 9.0 mm, 13.9 % > 5 mm; p75 r 1.43 / 0.88 / 1.78 cm, max 7.3 / 7.3 / 15.6 mm, > 5 mm 3.9 /
+#:     2.4 / 44 %; p90 max 10.4–22.6 mm, > 5 mm 19–59 %. The open bodies (left out): p50 max 3.0–9.5 mm, > 5 mm
+#:     0–21 %; p75 max 6.7–17.5 mm. → p50, the largest quantile that keeps model B's inner links within the 5-mm
+#:     threshold. No quantile keeps model A, or model B's last link, there: the last link's own vertices lie
+#:     0.9–2.0 cm from an axis only 5 mm deep (its p10 already exceeds the depth) — the drawn mesh, not the radius.
+#:     The method reproduces the attached_part numbers below (Dario / Hannibal Krumb p75 r 2.4–2.6 / 1.7–1.8 cm,
+#:     max outside 3.0 / 0 mm). Script and per-link numbers: the CX1 ledger.
+#:   Margin 0 for all three: like the torso, an extension capsule keeps hair and cloth from sinking DEEP, it must
+#:   never float them (the renderers' bind rule also caps each push at the bind-pose distance).
 #:   chest_hair (2026-11-11, the same six bodies, outside distance of the capsule surface; clearance 6 mm, so
 #:     "> 9 mm" = more than the clearance + one voxel out): p95 + 6 mm r 6.4 / 5.6–5.9 / 5.4–5.7 / 4.6–4.7 /
 #:     6.0–6.1 / 6.5–6.7 cm; outside p95 6.7 / 8.5–10.8 / 17–19 / 6.7–7.3 / 9.0–12.4 / 6.7–9.5 mm, > 9 mm

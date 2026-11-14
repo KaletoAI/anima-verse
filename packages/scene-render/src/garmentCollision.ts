@@ -89,11 +89,13 @@ type Three = typeof import('three')
 
 /**
  * Capsules one garment mesh's shader holds (uniform array length). Kept at
- * 16 with collision v2–v4: the most a kind selects today is cloth 8 (table
- * without the arms and the hair-only shoulders) + 2 chest + 5 attached-part
- * links = 15, hair 3 + 4 + 1 + 2 shoulder_hair + 2 chest_hair = 12, footwear 0. A body with more extension links than fit keeps the
- * FIRST in payload order (`garmentCapsules`) — deterministic, the table's
- * capsules never drop.
+ * 16 with collision v2–v5: the most a kind selects today is cloth 8 (table
+ * without the arms and the hair-only shoulders) + 2 chest + 5 links of one
+ * chain = 15 — one chain's links are `attached_part` (built) or `appendage`
+ * (drawn), the slot's switch picks the op — hair 3 + 4 + 1 +
+ * 2 shoulder_hair + 2 chest_hair = 12, footwear 0. A body with more extension
+ * links than fit keeps the FIRST in payload order (`garmentCapsules`) —
+ * deterministic, the table's capsules never drop.
  */
 export const COLLIDE_MAX = 16
 /** Passes over all capsules (a vertex pushed out of one capsule into a neighbour is pushed again). */
@@ -296,7 +298,7 @@ export function garmentKind(o: Object3D): string | null {
  * caps each push at the vertex's bind distance, so no size lifts hair in
  * the bind pose. The default's surface lies out to the skin plus the fit's
  * clearance (outside p95 6.7 mm on Kira — `EXTENSION_MEASURED`).
- * Never `attached_part` (hair does not reach it).
+ * Never `attached_part` or `appendage` (hair does not reach them).
  * `shoulder_hair` (collision v4): the top of the shoulders, which no other
  * capsule covers — hair lying there and swinging HairDeck chains sank in
  * (`app/core/collision.py` SHOULDER_MEASURED).
@@ -304,7 +306,7 @@ export function garmentKind(o: Object3D): string | null {
 export const HAIR_REGIONS: readonly string[] = ['torso', 'arm', 'head', 'shoulder_hair', 'chest_hair']
 
 /** The extension regions (`app/core/collision.py` `EXTENSION_CAPSULES`): capsules on spring-driven bones. */
-export const EXTENSION_REGIONS: readonly string[] = ['chest', 'chest_hair', 'attached_part']
+export const EXTENSION_REGIONS: readonly string[] = ['chest', 'chest_hair', 'attached_part', 'appendage']
 
 /**
  * Capsule regions that never push CLOTH (every kind but hair and footwear,

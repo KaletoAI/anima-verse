@@ -58,7 +58,7 @@
  */
 import type { BufferAttribute, BufferGeometry, Object3D, SkinnedMesh } from 'three'
 import { normBoneName } from './clipRetarget'
-import { bindCollision, jointNowFrom } from './collision'
+import { bindCollision, COLLISION_VERSION, jointNowFrom } from './collision'
 import type { CollisionBinding, Mat4, Vec3 } from './collision'
 import { capsuleInFrame } from './garmentCollision'
 import type { CollideCapsule } from './garmentCollision'
@@ -173,10 +173,12 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
   // Colliders (Ruling H-R7): the record's hair capsules without the head region, bound to the body skeleton; the
   // bind-pose ends in the hair primitive's geometry space, once — through inverse(bindMatrix), never the attached
   // mode's `bindMatrixInverse` (inverse(matrixWorld) NOW: the bind-rule factors would follow where the figure
-  // stands; a card of a centred preview hung 128 mm off its rest, strand-hair Task 10).
+  // stands; a card of a centred preview hung 128 mm off its rest, strand-hair Task 10). The list is the strand's
+  // own frozen copy, bound under `COLLISION_VERSION`: under the record's own number every payload bump would drop
+  // the colliders of a record fitted before it (CX1, collision v5).
   const capsules = strandCapsules(record).filter(c => c.region !== SKIPPED_REGION)
   const collision: CollisionBinding | null = capsules.length
-    ? bindCollision(three, root, { version: record.capsules.version, capsules }) : null
+    ? bindCollision(three, root, { version: COLLISION_VERSION, capsules }) : null
   const geometryFromBind = new three.Matrix4().copy(mesh.bindMatrix).invert().elements
   const binds = (collision?.capsules ?? []).map(c => {
     const l = capsuleInFrame(c.bind, geometryFromBind)

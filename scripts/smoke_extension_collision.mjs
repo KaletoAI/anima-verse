@@ -68,6 +68,7 @@ if (!process.env.EXT_COLLISION_BUNDLED) {
 }
 const THREE = await import('three')
 const { createSecondaryMotion, extensionCapsules, tipBindFactors } = await import('../packages/scene-render/src/secondaryMotion.ts')
+const { COLLISION_VERSION } = await import('../packages/scene-render/src/collision.ts')
 
 const defaults = { freq_hz: 2, zeta: 1, gravity: 0, gravity_scale: 1, gain: 0,
   max_deg: 30, sag_max_deg: 45, spill_max_deg: 0, head_sag: 1, axis_gain: [1, 1, 1],
@@ -113,7 +114,7 @@ const tipOf = (ext) => { ext.updateWorldMatrix(true, false); return new THREE.Ve
 const headOf = (ext) => new THREE.Vector3().setFromMatrixPosition(ext.matrixWorld)
 const group = (over = {}) => ({ rev: 'fixture', groups: { g: { ...defaults, bones: ['Ext'], ...over } } })
 const armCapsule = { id: 'left_upper_arm', a: 'mixamorig:LeftArm', b: 'mixamorig:LeftForeArm', r: 0.1, region: 'arm' }
-const payload = (...capsules) => ({ version: 4, capsules })
+const payload = (...capsules) => ({ version: COLLISION_VERSION, capsules })
 
 console.log('--- [1] pure helpers ---')
 {

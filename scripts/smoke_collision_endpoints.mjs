@@ -38,7 +38,9 @@
  *     A capsule naming a joint the figure lacks is in `missing`, not drawn;
  *     a garment skinned mesh's skeleton is never used (its bones are not
  *     looked at — a capsule naming only a garment bone is missing);
- *     version 4 / no capsules → null.
+ *     the version before / after `COLLISION_VERSION` or no capsules → null
+ *     (the payload of [4] carries `COLLISION_VERSION`, so no later bump
+ *     touches this file).
  * [5] Wireframe lines of r = 0.1, length 0.4: every vertex lies within
  *     r of the axis segment y ∈ [−0.2, 0.2] (distance ≤ r + 1e-9), the
  *     extreme y is ±(0.2 + 0.1·sin(π/2)) = ±0.3, the count is even (pairs).
@@ -73,7 +75,7 @@ async function main() {
     process.exit(run.status ?? 1)
   }
 
-  const { jointNowFrom, capsuleNow, capsuleLineSegments, bindCollision, capsuleWireframe } =
+  const { jointNowFrom, capsuleNow, capsuleLineSegments, bindCollision, capsuleWireframe, COLLISION_VERSION } =
     await import('../packages/scene-render/src/collision.ts')
   const THREE = await import('three')
 
@@ -155,7 +157,7 @@ async function main() {
   head.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2)
   figure.updateMatrixWorld(true)
   const payload = {
-    version: 4,
+    version: COLLISION_VERSION,
     capsules: [capsule,
       { id: 'left_shin', a: 'mixamorig:LeftLeg', b: 'mixamorig:LeftFoot', r: 0.09, region: 'leg' },
       { id: 'neck_only', a: 'mixamorig:Neck', b: 'mixamorig:Neck', r: 0.05, region: 'torso' }],
@@ -180,9 +182,10 @@ async function main() {
   binding.update()
   const straight = binding.capsules[0].now
   check('update(): unrotated head → b = (0.2, 1.52, 0.03)', vnear(straight.b, [0.2, 1.52, 0.03]), fmt(straight.b))
-  check('version 3 (an older set) → null', bindCollision(THREE, figure, { ...payload, version: 3 }) === null)
-  check('version 5 → null', bindCollision(THREE, figure, { ...payload, version: 5 }) === null)
-  check('no capsules → null', bindCollision(THREE, figure, { version: 4, capsules: [] }) === null)
+  check('the version before (an older set) → null',
+    bindCollision(THREE, figure, { ...payload, version: COLLISION_VERSION - 1 }) === null)
+  check('the version after → null', bindCollision(THREE, figure, { ...payload, version: COLLISION_VERSION + 1 }) === null)
+  check('no capsules → null', bindCollision(THREE, figure, { version: COLLISION_VERSION, capsules: [] }) === null)
   check('null payload → null', bindCollision(THREE, figure, null) === null)
 
   console.log('--- [5] wireframe ---')

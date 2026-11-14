@@ -68,8 +68,13 @@ export interface CollisionPayload {
  * refitted by the server on its next read.
  * 3: the hair-only `chest_hair` capsules (`HAIR_ONLY_REGIONS`).
  * 4: the hair-only `shoulder_hair` pair of the table (shoulder → upper arm).
+ * 5: the `appendage` extension capsules (op `appendage_chain`, a chain drawn
+ * into the body mesh; `attached_part` stays the region of a built part).
+ * THE version: every reader compares against this constant (a record that
+ * froze an older list, the strand hair's, binds it under this one — never
+ * under its own number, `hairSim.ts`).
  */
-export const COLLISION_VERSION = 4
+export const COLLISION_VERSION = 5
 
 /**
  * Regions whose capsules are for HAIR only (`garmentCollision.ts`
@@ -269,7 +274,7 @@ export function bindCollision(three: Three, root: Object3D, payload: CollisionPa
 /** Region colours of the debug wireframe. */
 export const CAPSULE_REGION_COLORS: Record<string, number> = {
   leg: 0xff9f1c, arm: 0x2ec4b6, torso: 0x7bd389, head: 0xe0aaff,
-  chest: 0xff6b9a, chest_hair: 0xffc94d, shoulder_hair: 0xf4a259, attached_part: 0x5ab0ff,
+  chest: 0xff6b9a, chest_hair: 0xffc94d, shoulder_hair: 0xf4a259, attached_part: 0x5ab0ff, appendage: 0x9b8cff,
 }
 
 interface WireState { r: number; length: number }

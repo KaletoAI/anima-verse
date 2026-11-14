@@ -138,6 +138,7 @@ if (!process.env.HAIR_SIM_BUNDLED) {
 }
 
 const M = await import('../packages/scene-render/src/hairSimMath.ts')
+const { COLLISION_VERSION } = await import('../packages/scene-render/src/collision.ts')
 const { STRAND_ROWS, StrandSim, StrandMismatch, bindStrands, strandTargets, strandParams, limitSegmentAngle,
   eyePointsEntered, restInsideBox, maxSdfDepthMm, scalpExposure, scalpCameras, invertAffine } = M
 
@@ -214,7 +215,7 @@ function build(cards, { bones = ['mixamorig:Head'], followOf = () => [1], capsul
   const record = { version: 1, item_id: 'hair_fixture', fsig: '0123456789ab', mode: 'hairdeck', fit_sha256: '0',
     frame: 'head_bind', head_bone: 'mixamorig:Head', rows: R, cards: cards.length, rest, pins,
     free_arc: freeArc, free_frac: freeFrac, follow: { bones, w }, ear_y: EAR, face_box: FACE_BOX, eye_box: EYE_BOX,
-    landmarks: 'fallback', sdf: SDF, capsules: { version: 4, capsules, scales: {} }, params,
+    landmarks: 'fallback', sdf: SDF, capsules: { version: COLLISION_VERSION, capsules, scales: {} }, params,
     vertex_attributes: { card: '_STRAND_CARD', u: '_STRAND_U' } }
   const prim = { pos: Float32Array.from(pos), nrm: Float32Array.from(nrm), card: Uint16Array.from(card),
     u: Float32Array.from(u) }

@@ -23,7 +23,7 @@ Each ring: 720 evenly spaced θ at 9 stations t = 0.1..0.9 of the segment (all s
 to the segment is the distance to the axis).
 
 Expected, derived by hand:
-[1] fit_capsules on the full body: 14 capsules (collision v4), nothing skipped.
+[1] fit_capsules on the full body: 14 capsules (the current ``collision.VERSION``), nothing skipped.
     A uniform ring has ONE distance, so every quantile = its radius:
       legs  0.060 + 6 mm = 0.066 (left/right thigh, left/right shin)
       arms  0.040 + 6 mm = 0.046 (left/right upper arm, left/right forearm)
@@ -93,6 +93,18 @@ Expected, derived by hand:
     A chain joint the model lacks → skipped "joint … missing".
     ``extension_chains(meta)``: status "applied", groups [bump, tip], ops {bump: pair_protrusion, tip: pair_tip}
     → [{group bump, op pair_protrusion, chains from the declaration}]; status "failed" → []; no record → [].
+[9] APPENDAGE (collision v5): op ``appendage_chain`` (region appendage, margin 0), chain [TestApp1, TestApp2] IN
+    THE BODY NODE (a part the generator drew itself is body mesh, weighted to the chain): TestApp1 (0, 0.9, 0.12) →
+    TestApp2 (0, 0.9, 0.22), a ring r 0.03 around it weighted TestApp1; a ring r 0.025 around (0, 0.9, 0.22) →
+    (0, 0.9, 0.30) weighted TestApp2. A ring has ONE distance, so every quantile equals its radius:
+      app:testapp1 — a TestApp1, b TestApp2 (the next link's joint), no b_pos, r 0.030, region appendage;
+      app:testapp2 — the tip rule as PART2 of [8]: axis TestApp1 → TestApp2 = +z, the top 1 % are ties of the top
+        station z = 0.292 → tip (0, 0.9, 0.292), height 0.072, r 0.025, b_pos (0, 0.9, 0.22 + 0.072 − 0.025) =
+        (0, 0.9, 0.267), a = b = TestApp2.
+    Scale appendage 1.2 → r 0.036 and 0.030; b_pos z = 0.22 + 0.072 − 0.030 = 0.262. Scale attached_part 1.2 → both
+    unchanged (the region is the op's own). The payload version is ``collision.VERSION`` ≥ 5 (v5 brought the
+    region; a later bump keeps it). ``validate_scales`` knows ``appendage``. ``extension_chains`` keeps a group of
+    op appendage_chain.
 """
 import hashlib
 import json
@@ -264,7 +276,7 @@ def main() -> int:
     full = collision.fit_capsules(body, scales=None)
     r = radii(full)
     check("14 capsules, none skipped", (len(full["capsules"]), full["skipped"]), (14, []))
-    check("version", full["version"], 4)
+    check("version", full["version"], collision.VERSION)
     for cid in ("left_thigh", "right_thigh", "left_shin", "right_shin"):
         near(cid, r.get(cid), 0.066, 0.0003)
     for cid in ("left_upper_arm", "right_upper_arm", "left_forearm", "right_forearm"):
@@ -317,7 +329,7 @@ def main() -> int:
             check(f"refused {bad!r}", "ValueError", "ValueError")
     check("defaults filled", collision.validate_scales({"head": 0.8}),
           {"leg": 1.0, "arm": 1.0, "torso": 1.0, "head": 0.8, "shoulder_hair": 1.0, "chest": 1.0,
-           "chest_hair": 1.0, "attached_part": 1.0})
+           "chest_hair": 1.0, "attached_part": 1.0, "appendage": 1.0})
 
     print("[4] garment nodes are not body")
     near("left_thigh with a garment", radii(collision.fit_capsules(make_body(garment=True))).get("left_thigh"),
@@ -341,7 +353,7 @@ def main() -> int:
     rec = collision.ensure_path("Demo", own, scales=defaults)
     sha = hashlib.sha256(body).hexdigest()
     check("own record", (rec["version"], rec["source"], rec["sha256"], rec["scales"], len(rec["capsules"])),
-          (4, "own", sha, defaults, 14))
+          (collision.VERSION, "own", sha, defaults, 14))
     stored = json.loads(own.with_suffix(".json").read_text())
     check("written into the sidecar, rest kept", (stored["collision"]["sha256"], stored["rig"]), (sha, "mixamo"))
     check("fitted once", len(calls), 1)
@@ -505,6 +517,43 @@ def main() -> int:
         check("extension_chains: not applied → none",
               collision.extension_chains({"extension_rig": {**rig, "status": "failed"}}), [])
         check("extension_chains: no record → none", collision.extension_chains({}), [])
+    finally:
+        loader.declared_packages = real_declared
+
+    print("[9] appendage capsules")
+    app_joints = {"TestApp1": (0, 0.9, 0.12), "TestApp2": (0, 0.9, 0.22)}
+    app_rings = [("TestApp1", ring_z((0, 0.9, 0.12), (0, 0.9, 0.22), 0.03)),
+                 ("TestApp2", ring_z((0, 0.9, 0.22), (0, 0.9, 0.30), 0.025))]
+    app_body = make_body(extra_joints=app_joints, extra_parts=app_rings)
+    app_groups = [{"group": "app", "op": "appendage_chain", "chains": [["mixamorig:TestApp1", "mixamorig:TestApp2"]]}]
+    fit = collision.fit_capsules(app_body, extension=app_groups)
+    check("payload version: v5 brought the appendage region (later bumps keep it)",
+          (fit["version"] == collision.VERSION, collision.VERSION >= 5), (True, True))
+    check("the table's 14, then app1, app2", [c["id"] for c in fit["capsules"]][14:], ["app:testapp1", "app:testapp2"])
+    check("nothing skipped", fit["skipped"], [])
+    app1, app2 = (fit["capsules"][14:16] + [{}, {}])[:2]
+    near("app1 r (ring)", app1.get("r"), 0.030, 0.0002)
+    check("app1 ends at the next link, region appendage",
+          (app1.get("a"), app1.get("b"), "b_pos" in app1, app1.get("region")),
+          ("mixamorig:TestApp1", "mixamorig:TestApp2", False, "appendage"))
+    near("app2 r (ring)", app2.get("r"), 0.025, 0.0002)
+    check("app2 tip rule", (app2.get("a"), app2.get("b"), app2.get("b_pos"), app2.get("region")),
+          ("mixamorig:TestApp2", "mixamorig:TestApp2", [0.0, 0.9, 0.267], "appendage"))
+    scaled = collision.fit_capsules(app_body, scales={"appendage": 1.2}, extension=app_groups)["capsules"][14:16]
+    near("appendage × 1.2: app1", scaled[0]["r"] if scaled else None, 0.036, 0.0002)
+    near("appendage × 1.2: app2", scaled[1]["r"] if len(scaled) > 1 else None, 0.030, 0.0002)
+    near("appendage × 1.2: app2 b_pos z", scaled[1]["b_pos"][2] if len(scaled) > 1 else None, 0.262, 0.0002)
+    other = collision.fit_capsules(app_body, scales={"attached_part": 1.2}, extension=app_groups)["capsules"][14:16]
+    check("attached_part × 1.2: appendage unchanged", [c["r"] for c in other], [0.03, 0.025])
+    check("validate_scales knows appendage", collision.validate_scales({"appendage": 1.3}).get("appendage"), 1.3)
+    loader.declared_packages = lambda: [SimpleNamespace(body_slots=[SimpleNamespace(rigs=[
+        SimpleNamespace(id="app", chains=[[{"bone": "mixamorig:TestApp1", "parent": "Hips"},
+                                           {"bone": "mixamorig:TestApp2", "parent": "mixamorig:TestApp1"}]])])])]
+    try:
+        check("extension_chains keeps an appendage_chain group",
+              collision.extension_chains({"extension_rig": {"status": "applied", "groups": ["app"],
+                                                            "group_ops": {"app": "appendage_chain"}}}),
+              [{"group": "app", "op": "appendage_chain", "chains": [["mixamorig:TestApp1", "mixamorig:TestApp2"]]}])
     finally:
         loader.declared_packages = real_declared
 
