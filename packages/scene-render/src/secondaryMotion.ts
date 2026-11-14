@@ -61,6 +61,34 @@
  *    the tip's distance to that capsule in the bind pose (bind-pose tip from
  *    the bone's `boneInverse`, bind-pose capsule `BoundCapsule.bind`), so the
  *    contact moves nothing in the bind pose.
+ *  - PARTNER CAPSULES (`update(dt, { partners })`, cross-person collision
+ *    spec Parts 1–3, rules in `partnerContact.ts`): the figure is the READER,
+ *    each `PartnerSnapshot` another figure's capsules in world space. A
+ *    reader only ever turns its OWN links — push only, along the way out of
+ *    the capsules, never toward a partner; the partner is never moved. Per
+ *    consumer (`partnerCapsules`): a hair chain takes every partner region,
+ *    an extension chain all but `HAIR_ONLY_REGIONS`. Per chain the broad
+ *    phase (`broadPhase`) keeps the capsules within the chain's lever (+ the
+ *    exit radius) of its ROOT joint; its links test only those.
+ *    NO BIND RULE: a partner has no bind relation to the reader, so its
+ *    capsules apply at FULL radius. The own and the partner capsules go
+ *    through ONE search (`contactAnglePair`), capped by the same swing
+ *    budget: the smallest turn outside both; when none within the budget
+ *    is, the turn with the smallest OWN depth, the partner depth breaking
+ *    ties — the OWN BODY WINS. HYSTERESIS, partner contacts only: a partner
+ *    capsule that pushed the tip last frame (the tip inside it before the
+ *    turn) tests with r + `PARTNER_HYST_M`; the applied turn falls by at
+ *    most `PARTNER_RELEASE_DEG_S` (`releasedAngle`; engaging is immediate) —
+ *    a held turn keeps the last way out when nothing pushes any more, and
+ *    gives way to the plain turn whenever it would put the tip deeper into
+ *    an own capsule. Neither rule touches the spring state. A partner's
+ *    BODY capsules are exact in the frame (its pose is final before any
+ *    secondary solve); its EXTENSION capsules carry that partner's swing of
+ *    the PREVIOUS frame on its current body — one frame behind, as between
+ *    one figure's own chains. Without `partners` (or with `[]`) and no
+ *    release pending, the path is the own-only one above and allocates
+ *    nothing; a link whose chain kept no partner capsule and holds no turn
+ *    stays on it too.
  *  - INERT: no driven link, no payload, or far LOD → no binding, no work.
  */
 import type { Bone, Matrix4, Quaternion, Object3D, SkinnedMesh, Vector3 } from 'three'
@@ -70,6 +98,8 @@ import type { BoundCapsule, CollisionBinding, CollisionPayload, Vec3 } from './c
 import { inGarment } from './figure'
 import { HAIR_REGIONS, pushOutOfCapsules } from './garmentCollision'
 import type { CollideCapsule, PushOptions } from './garmentCollision'
+import { broadPhase, contactAnglePair, partnerCapsules, PARTNER_HYST_M, releasedAngle } from './partnerContact'
+import type { PartnerCapsule, PartnerSnapshot } from './partnerContact'
 type Three = typeof import('three')
 
 export interface MotionGroup {
@@ -135,12 +165,17 @@ export interface SecondaryMotionPayload {
 }
 export interface SecondaryMotion {
   configure(payload?: SecondaryMotionPayload): void
-  update(realDelta: number, options?: { frozen?: boolean; far?: boolean }): void
+  /** `partners`: the other figures' capsules this frame (module docstring, PARTNER CAPSULES). */
+  update(realDelta: number, options?: { frozen?: boolean; far?: boolean; partners?: readonly PartnerSnapshot[] }): void
   /** The body's `collision` payload the extension tips are kept outside of (module docstring); null = off. */
   setCollision(payload?: CollisionPayload | null): void
+  /** The longest driven lever: from a chain's root joint to the tip of one of its links (the sum of the
+   *  links' joint-to-tip levers on the way), world metres at the current state `length`; 0 without links. */
+  reach(): number
   /** Inspection (checks, debug overlays): every link with contacts — its tip in world space as last
-   *  rendered, its bone frame tip, and the ids of the capsules it is kept outside of. */
-  contactTips(): { bone: string; tip: Vec3; tipLocal: Vec3; capsules: string[] }[]
+   *  rendered, its bone frame tip, the ids of the own capsules it is kept outside of, and the partner
+   *  capsules that pushed it in the last frame (`"<partner>:<capsule id>"`). */
+  contactTips(): { bone: string; tip: Vec3; tipLocal: Vec3; capsules: string[]; partner: string[] }[]
   reset(): void
   dispose(): void
 }
@@ -379,7 +414,22 @@ interface Particle {
   ancestors: Set<string>
   /** The capsules this tip is kept outside of, with the bind-rule radius factor; empty = no contact. */
   contacts: { bound: BoundCapsule; factor: number }[]
+  /** The first link of this link's chain (itself for a root): the partner broad phase runs against its joint. */
+  chainRoot: Particle | null
+  /** Root only: the chain's links, root first (their levers add up to the chain's lever). */
+  chainLinks: Particle[]
+  /** Root only: the update the partner broad phase below belongs to, and its surviving pool entries. */
+  partnerFrame: number
+  partnerNear: PartnerEntry[]
+  /** The partner capsules that pushed the tip in the last frame (`"<partner>:<capsule id>"`; PARTNER CAPSULES). */
+  partnerPushed: string[]
+  /** The turn applied in the last frame while a partner contact held it (degrees; 0 = none), and its axis
+   *  (in the frame the turn is expressed in: the anchor frame, or the hair bone's pre-contact world). */
+  partnerDeg: number
+  partnerAxis: Vector3 | null
 }
+/** One partner capsule of the frame's pool, with its contact key. */
+interface PartnerEntry { key: string; now: PartnerCapsule['now'] }
 /** Maximum transverse compensation: strong flattening must not inflate the mesh. */
 const SPREAD_CAP = 1.6
 const DEFAULT_AXIS_GAIN: [number, number, number] = [1, 1, 1]
@@ -451,6 +501,7 @@ export function createSecondaryMotion(
         delegate?.setCollision(payload)
       },
       contactTips() { return delegate?.contactTips() ?? [] },
+      reach() { return delegate?.reach() ?? 0 },
       reset() { delegate?.reset() },
       dispose() { delegate?.dispose(); stopped = true },
     }
@@ -609,6 +660,8 @@ export function createSecondaryMotion(
     const nextParticles: Particle[] = []
     const nextRigids: Bind[] = []
     const nextHair: Bind[] = []
+    /** Each new particle's chain root bone (the partner broad phase's joint). */
+    const rootBinds = new Map<Particle, Bind>()
     for (const b of hairBones) b.todayBlend = undefined
     for (const params of Object.values(next?.groups ?? {})) {
       const chain = params.bones.map(name => byName.get(normBoneName(name)))
@@ -758,7 +811,8 @@ export function createSecondaryMotion(
           staticWeight: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           staticWeightFrom: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
           staticWeightTo: (2 * Math.PI * params.freq_hz) ** 2 < 1e-12 ? 0 : 1,
-          tipLocal: new three.Vector3(), ancestors: new Set(), contacts: [] }
+          tipLocal: new three.Vector3(), ancestors: new Set(), contacts: [],
+          chainRoot: null, chainLinks: [], partnerFrame: 0, partnerNear: [], partnerPushed: [], partnerDeg: 0, partnerAxis: null }
         if (particle.restTo !== to) {
           particle.restFrom = particle.rest
           particle.restTo = to
@@ -778,6 +832,7 @@ export function createSecondaryMotion(
         else particle.tipLocal.copy(bind.centroid).multiplyScalar(2)
         let chainRoot = bind
         for (let n = bind.bone.parent; n && members.has(n as Bone); n = n.parent) chainRoot = binds.get(n as Bone)!
+        rootBinds.set(particle, chainRoot)
         particle.ancestors.clear()
         for (let n = chainRoot.bone.parent; n; n = n.parent) if ((n as Bone).isBone) particle.ancestors.add(normBoneName(n.name))
         for (const blend of [chainRoot.anchorBlend, bind.anchorBlend]) {
@@ -841,10 +896,35 @@ export function createSecondaryMotion(
       return depth
     }
     particles = nextParticles.sort((a, b) => drivenDepth(a) - drivenDepth(b))
+    // Partner broad phase per chain: each link's root particle (itself when its root is not driven), root first.
+    const particleOf = new Map(particles.map(st => [st.bind, st]))
+    for (const st of particles) { st.chainLinks = []; st.partnerFrame = 0; st.partnerNear = [] }
+    for (const st of particles) {
+      st.chainRoot = particleOf.get(rootBinds.get(st) ?? st.bind) ?? st
+      st.chainRoot.chainLinks.push(st)
+    }
     prepareCollision()
   }
   const reset = () => {
-    for (const st of particles) { st.p = null; st.target = null; st.anchorRotation = null; st.v.set(0, 0, 0) }
+    for (const st of particles) {
+      st.p = null; st.target = null; st.anchorRotation = null; st.v.set(0, 0, 0)
+      st.partnerDeg = 0; st.partnerPushed = []
+    }
+    releasing = 0
+  }
+  /** Links whose last frame held a partner turn (PARTNER CAPSULES): while > 0 the partner path runs on. */
+  let releasing = 0
+  /** The last update ran the partner path: the first one without it clears the links' partner state. */
+  let pairedLast = false
+  /** A chain's lever: the sum of its links' joint-to-tip levers, world metres at the current state `length`
+   *  (the scale of the body bone the chain hangs from); `stretch` adds the longitudinal squash maximum. */
+  const chainLever = (root: Particle, stretch: boolean) => {
+    const scale = root.bind.bone.parent?.matrixWorld.getMaxScaleOnAxis() ?? 1
+    let sum = 0
+    for (const st of root.chainLinks) {
+      sum += st.tipLocal.length() * Math.max(0, st.params.length ?? 1) * (stretch ? Math.max(1, st.params.squash[1]) : 1)
+    }
+    return sum * scale
   }
   const anchor = new three.Matrix4(), anchorFull = new three.Matrix4(), inverseAnchor = new three.Matrix4(), scale = new three.Matrix4(), rotationMatrix = new three.Matrix4()
   const anchorQ = new three.Quaternion(), restQ = new three.Quaternion(), dynamicQ = new three.Quaternion(), identityQ = new three.Quaternion()
@@ -933,6 +1013,171 @@ export function createSecondaryMotion(
     world.premultiply(translationMatrix.makeTranslation(-head.x, -head.y, -head.z))
       .premultiply(rotationMatrix).premultiply(translationMatrix.makeTranslation(head.x, head.y, head.z))
   }
+  // --- partner contact (module docstring, PARTNER CAPSULES) ---
+  /** The frame's partner pool per consumer (rebuilt each update with partners), and the update counter. */
+  const partnerPool: { hair: PartnerEntry[]; extension: PartnerEntry[] } = { hair: [], extension: [] }
+  const partnerNows: { hair: PartnerCapsule['now'][]; extension: PartnerCapsule['now'][] } = { hair: [], extension: [] }
+  let partnerUpdate = 0
+  const fillPartnerPool = (partners: readonly PartnerSnapshot[]) => {
+    partnerUpdate++
+    for (const consumer of ['hair', 'extension'] as const) {
+      const pool = partnerPool[consumer], nows = partnerNows[consumer]
+      pool.length = 0; nows.length = 0
+      for (const snap of partners) {
+        const kept = partnerCapsules(consumer, snap.capsules.map(capsule => ({ capsule })))
+        for (const { capsule } of kept) { pool.push({ key: `${snap.name}:${capsule.id}`, now: capsule.now }); nows.push(capsule.now) }
+      }
+    }
+  }
+  /** One link's capsules for the pair search: own (bind rule) and partner (full radius, + the exit radius for a
+   *  capsule that pushed last frame), the partner keys alongside. */
+  const pairOwn: CollideCapsule[] = [], pairPartner: CollideCapsule[] = [], pairKeys: string[] = []
+  const pairJoint = new three.Vector3()
+  const gatherPair = (st: Particle, own: boolean, joint: Vector3) => {
+    pairOwn.length = 0; pairPartner.length = 0; pairKeys.length = 0
+    if (own) for (const { bound, factor } of st.contacts) pairOwn.push({ a: bound.now.a, b: bound.now.b, r: bound.now.r * factor })
+    const root = st.chainRoot ?? st
+    const consumer = st.paramsTo.hair ? 'hair' : 'extension'
+    if (root.partnerFrame !== partnerUpdate) {
+      // The broad phase per chain, against its root joint: this link's when it is the root, else the root's
+      // bone as already written this update (roots are solved before their links).
+      if (root !== st) joint = pairJoint.setFromMatrixPosition(root.bind.bone.matrixWorld)
+      root.partnerFrame = partnerUpdate
+      root.partnerNear.length = 0
+      const nows = partnerNows[consumer]
+      if (nows.length) {
+        const kept = broadPhase([joint.x, joint.y, joint.z], chainLever(root, true) + PARTNER_HYST_M, nows)
+        for (const i of kept) root.partnerNear.push(partnerPool[consumer][i])
+      }
+    }
+    for (const { key, now } of root.partnerNear) {
+      pairPartner.push({ a: now.a, b: now.b, r: now.r + (st.partnerPushed.includes(key) ? PARTNER_HYST_M : 0) })
+      pairKeys.push(key)
+    }
+  }
+  /** [own, partner] depth of `tipWorld`: how far each push moves it (the own one with `options`, SQUEEZE for hair). */
+  const pairDepth = (options: PushOptions | undefined): [number, number] => {
+    const p: Vec3 = [tipWorld.x, tipWorld.y, tipWorld.z]
+    const o = pairOwn.length ? pushOutOfCapsules(p, pairOwn, 1, undefined, options) : p
+    const q = pairPartner.length ? pushOutOfCapsules(p, pairPartner) : p
+    return [Math.hypot(o[0] - p[0], o[1] - p[1], o[2] - p[2]), Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2])]
+  }
+  /** The way out of `tipWorld`: the partner push first, then the own one on top (the own body has the last word). */
+  const pairWayOut = (options: PushOptions | undefined): Vec3 => {
+    const p: Vec3 = [tipWorld.x, tipWorld.y, tipWorld.z]
+    const q = pairPartner.length ? pushOutOfCapsules(p, pairPartner) : p
+    return pairOwn.length ? pushOutOfCapsules(q, pairOwn, 1, undefined, options) : q
+  }
+  /** The partner keys whose capsule holds `tipWorld` (at its test radius): the capsules that push this frame. */
+  const pairPushing = (): string[] => {
+    const out: string[] = []
+    pairPartner.forEach((c, i) => {
+      const abx = c.b[0] - c.a[0], aby = c.b[1] - c.a[1], abz = c.b[2] - c.a[2]
+      const apx = tipWorld.x - c.a[0], apy = tipWorld.y - c.a[1], apz = tipWorld.z - c.a[2]
+      const len2 = abx * abx + aby * aby + abz * abz
+      const t = len2 > 1e-12 ? Math.min(1, Math.max(0, (apx * abx + apy * aby + apz * abz) / len2)) : 0
+      if (c.r - Math.hypot(apx - abx * t, apy - aby * t, apz - abz * t) >= COLLIDE_SLACK) out.push(pairKeys[i])
+    })
+    return out
+  }
+  /**
+   * The pair search of one link (PARTNER CAPSULES), shared by both contact
+   * kinds: `tipAt(angle)` puts `tipWorld` at the tip turned by `angle` about
+   * `contactAxis` (in the caller's frame), `wayOut()` sets `contactAxis` from
+   * the way out at angle 0 (false: no usable axis), `options` is the own push's.
+   * Returns the turn to apply (radians; 0 = none) with `contactAxis` set to its
+   * axis, and updates the link's hysteresis state; `storeAxis` / `loadAxis`
+   * keep the held turn's axis in a frame that rides the body.
+   */
+  const pairTurn = (st: Particle, limit: number, dt: number, options: PushOptions | undefined,
+    tipAt: (angle: number) => void, wayOut: (out: Vec3) => boolean,
+    storeAxis: () => void, loadAxis: () => void): number => {
+    tipAt(0)
+    const depth0 = pairDepth(options)
+    const pushed = pairPushing()
+    let want = 0, axis = false
+    if (depth0[0] >= COLLIDE_SLACK || depth0[1] >= COLLIDE_SLACK) {
+      axis = wayOut(pairWayOut(options))
+      if (axis) {
+        const angle = contactAnglePair(turn => { tipAt(turn); return pairDepth(options) }, depth0, limit)
+        if (angle !== null) want = angle
+      }
+    }
+    let applied = want
+    const held = Math.min(limit, releasedAngle(st.partnerDeg, want * 180 / Math.PI, dt) * Math.PI / 180)
+    if (held > want && (axis || st.partnerAxis)) {
+      if (!axis) loadAxis()
+      // The own body wins: a held turn may not put the tip deeper into an own capsule than the plain turn does.
+      tipAt(want)
+      const ownWant = pairOwn.length ? pairDepth(options)[0] : 0
+      tipAt(held)
+      const ownHeld = pairOwn.length ? pairDepth(options)[0] : 0
+      if (ownHeld <= Math.max(ownWant, COLLIDE_SLACK)) { applied = held; axis = true }
+    }
+    if (applied > 0 && axis) storeAxis()
+    st.partnerDeg = pushed.length || applied > want ? applied * 180 / Math.PI : 0
+    st.partnerPushed = pushed
+    return axis ? applied : 0
+  }
+  /** `keepTipOutside` with the partners (PARTNER CAPSULES): the same frame and turn, the pair search. */
+  const keepTipOutsidePair = (st: Particle, dynamic: Quaternion, rest: Quaternion, limit: number, dt: number,
+    own: boolean) => {
+    if (!(limit > 0)) { st.partnerDeg = 0; st.partnerPushed = []; return }
+    gatherPair(st, own, pairJoint.setFromMatrixPosition(anchor))
+    if (!pairPartner.length && st.partnerDeg === 0) {
+      st.partnerPushed = []
+      if (own && st.contacts.length) keepTipOutside(st, dynamic, rest, limit)
+      return
+    }
+    contactLocal.makeRotationFromQuaternion(contactQ.copy(dynamic).multiply(rest))
+      .premultiply(translationMatrix).multiply(scale)
+    tipAnchor.copy(st.tipLocal).applyMatrix4(contactLocal)
+    lever.copy(tipAnchor).sub(shiftPart)
+    contactInverse.copy(anchor).invert()
+    const angle = pairTurn(st, limit, dt, undefined,
+      turn => { tipWorld.copy(lever).applyAxisAngle(contactAxis, turn).add(shiftPart).applyMatrix4(anchor) },
+      out => {
+        // The way out, in the anchor frame: the pushed point minus the tip.
+        contactAxis.set(out[0], out[1], out[2]).applyMatrix4(contactInverse).sub(tipAnchor)
+        contactAxis.crossVectors(lever, contactAxis)
+        if (contactAxis.lengthSq() < 1e-20 || lever.lengthSq() < 1e-12) return false
+        contactAxis.normalize()
+        return true
+      },
+      () => { (st.partnerAxis ??= new three.Vector3()).copy(contactAxis) },
+      () => { contactAxis.copy(st.partnerAxis!) })
+    if (angle > 0) dynamic.premultiply(contactQ.setFromAxisAngle(contactAxis, angle))
+  }
+  /** `keepHairTipOutside` with the partners: the turn about the bone's head in world space; the held axis is
+   *  kept in the bone's pre-contact world frame. */
+  const keepHairTipOutsidePair = (st: Particle, world: Matrix4, limit: number, dt: number, own: boolean) => {
+    if (!(limit > 0)) { st.partnerDeg = 0; st.partnerPushed = []; return }
+    head.setFromMatrixPosition(world)
+    gatherPair(st, own, head)
+    if (!pairPartner.length && st.partnerDeg === 0) {
+      st.partnerPushed = []
+      if (own && st.contacts.length) keepHairTipOutside(st, world, limit)
+      return
+    }
+    tipWorld.copy(st.tipLocal).applyMatrix4(world)
+    lever.copy(tipWorld).sub(head)
+    const angle = pairTurn(st, limit, dt, SQUEEZE,
+      turn => { tipWorld.copy(lever).applyAxisAngle(contactAxis, turn).add(head) },
+      out => {
+        tipWorld.copy(lever).add(head)
+        contactAxis.set(out[0], out[1], out[2]).sub(tipWorld)
+        contactAxis.crossVectors(lever, contactAxis)
+        if (contactAxis.lengthSq() < 1e-20 || lever.lengthSq() < 1e-12) return false
+        contactAxis.normalize()
+        return true
+      },
+      () => { (st.partnerAxis ??= new three.Vector3()).copy(contactAxis).transformDirection(contactInverse.copy(world).invert()) },
+      () => { contactAxis.copy(st.partnerAxis!).transformDirection(world) })
+    if (!(angle > 0)) return
+    rotationMatrix.makeRotationAxis(contactAxis, angle)
+    world.premultiply(translationMatrix.makeTranslation(-head.x, -head.y, -head.z))
+      .premultiply(rotationMatrix).premultiply(translationMatrix.makeTranslation(head.x, head.y, head.z))
+  }
   /** Rest frame at the blend of the anchor bones' motions since bind: the bind
    *  head moved as linear skinning moved the tissue (sum of share x delta x head),
    *  the rotation is the normalised share-weighted sum of their delta rotations.
@@ -974,12 +1219,17 @@ export function createSecondaryMotion(
     },
     contactTips() {
       const tip = new three.Vector3()
-      return particles.filter(st => st.contacts.length).map(st => {
+      return particles.filter(st => st.contacts.length || st.partnerPushed.length || st.partnerDeg > 0).map(st => {
         tip.copy(st.tipLocal).applyMatrix4(st.bind.bone.matrixWorld)
         return { bone: st.bind.bone.name, tip: [tip.x, tip.y, tip.z] as Vec3,
           tipLocal: [st.tipLocal.x, st.tipLocal.y, st.tipLocal.z] as Vec3,
-          capsules: st.contacts.map(c => c.bound.capsule.id) }
+          capsules: st.contacts.map(c => c.bound.capsule.id), partner: [...st.partnerPushed] }
       })
+    },
+    reach() {
+      let longest = 0
+      for (const st of particles) if (st.chainRoot === st) longest = Math.max(longest, chainLever(st, false))
+      return longest
     },
     update(realDelta, options = {}) {
       if (disposed || (!particles.length && !hairBones.length)) return
@@ -990,6 +1240,12 @@ export function createSecondaryMotion(
       // Capsules ride body joints no extension link drives: read them once, before the links.
       const colliding = !!collision && !far
       if (colliding) collision!.update()
+      // Partner contact (PARTNER CAPSULES): with partners, or while a held turn is still releasing.
+      const partners = options.partners
+      const pairing = !far && (!!partners?.length || releasing > 0)
+      if (pairing) fillPartnerPool(partners ?? [])
+      else if (pairedLast) for (const st of particles) { st.partnerPushed = []; st.partnerDeg = 0 }
+      pairedLast = pairing
       driven.clear()
       // A carried hair joint is at its rigid rest for the solve (HAIR CHAINS).
       for (const b of hairBones) b.bone.matrix.copy(b.local)
@@ -1268,7 +1524,10 @@ export function createSecondaryMotion(
         }
         shiftPart.copy(head).add(headShift).applyMatrix4(inverseAnchor)
         translationMatrix.makeTranslation(shiftPart.x, shiftPart.y, shiftPart.z)
-        if (colliding && st.contacts.length && !b.todayBlend) {
+        if (pairing && !b.todayBlend) {
+          keepTipOutsidePair(st, dynamicQ, restQ,
+            Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180, dt, colliding)
+        } else if (colliding && st.contacts.length && !b.todayBlend) {
           keepTipOutside(st, dynamicQ, restQ,
             Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180)
         }
@@ -1328,13 +1587,19 @@ export function createSecondaryMotion(
             for (let i = 0; i < 16; i++) todayDelta.elements[i] += share * delta.elements[i]
           }
           const world = today.world.copy(todayDelta).multiply(today.bind).multiply(deviation)
-          if (st && colliding && st.contacts.length) {
+          if (st && pairing) {
+            keepHairTipOutsidePair(st, world, Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180, dt, colliding)
+          } else if (st && colliding && st.contacts.length) {
             keepHairTipOutside(st, world, Math.max(st.params.max_deg, st.params.sag_max_deg ?? 0) * st.motionShare * Math.PI / 180)
           }
           b.bone.matrix.copy(localBase.copy(hairParent ? hairParent.world : parent.matrixWorld).invert().multiply(world))
           b.bone.matrixWorld.copy(world)
           b.bone.matrixWorldNeedsUpdate = true
         }
+      }
+      if (pairing) {
+        releasing = 0
+        for (const st of particles) if (st.partnerDeg > 0) releasing++
       }
       // Publish all non-driven descendants once after the chain is complete.
       root.updateMatrixWorld(true)
