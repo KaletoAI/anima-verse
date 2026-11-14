@@ -135,6 +135,9 @@ E) WORLD-LEVEL WRITES ARE ADMIN-ONLY (user decision 2026-09-21) — the table
    403, anonymous 401). Task 10: GET /characters/{c}/figure/stored and
    DELETE …/figure/stored/{key} the same way (their own require_admin). Task UI1:
    POST /characters/{c}/base-body/run-all the same way (player 403, anonymous 401).
+   Ruling A74b: GET / POST /characters/{c}/figure/outfit-reference, POST
+   …/outfit-reference/upload and DELETE …/outfit-reference/{key} the same way
+   (their own require_admin: player 403, anonymous 401).
 
    Prefix neighbours: ``_under`` is segment-wise, so /worldly, /rulesx,
    /eventsful, /intentsful and /inventory/itemsy are NOT under the rules above
@@ -686,8 +689,13 @@ figure_client = TestClient(figure_app)
 for _m, _p in [("GET", "/inventory/items/apple/wearers"), ("POST", "/inventory/items/apple/build-wearers"),
                ("POST", "/characters/Mara/figure/auto-build"),
                ("GET", "/characters/Mara/figure/stored"), ("DELETE", "/characters/Mara/figure/stored/obdeadbeef"),
-               ("POST", "/characters/Mara/base-body/run-all")]:
-    _kw = {"json": {"enabled": False}} if _p.endswith("auto-build") else {}
+               ("POST", "/characters/Mara/base-body/run-all"),
+               ("GET", "/characters/Mara/figure/outfit-reference"),
+               ("POST", "/characters/Mara/figure/outfit-reference"),
+               ("POST", "/characters/Mara/figure/outfit-reference/upload"),
+               ("DELETE", "/characters/Mara/figure/outfit-reference/ordeadbeef00")]:
+    _kw = ({"json": {"enabled": False}} if _p.endswith("auto-build")
+           else {"json": {"image": "x.png"}} if _p.endswith("outfit-reference") and _m == "POST" else {})
     check(f"user {_m} {_p} (real route)",
           figure_client.request(_m, _p, headers={"x-test-user": "user"}, **_kw).status_code, 403)
     check(f"anon {_m} {_p} (real route)", figure_client.request(_m, _p, **_kw).status_code, 401)

@@ -36,7 +36,10 @@
  *   - "Body": the plain body (its views, model, face and rig live in the Base body tab — one line and "Open Base
  *     body tab"), the body shape and the texture as step rows, and the stored bodies and textures (FigureStored,
  *     Delete behind an in-app confirmation);
- *   - "Dressed views" (Ruling A70, from the dissolved Pose tab): one line that the Build renders them, then one step
+ *   - "Dressed views" (Ruling A70, from the dissolved Pose tab): one line that the Build renders them, the worn
+ *     outfit's "Reference image" row (Ruling A74b, OutfitReferenceRow: pick from the gallery, upload, clear — saving
+ *     only saves; while something is painted the dressed front is then an edit of that picture, due with its cost),
+ *     then one step
  *     row per dressed view (FieldModelRefs `layout="steps"`): light, state, reason, small thumbnails that enlarge,
  *     where the view comes from — painted on the body's view, or a copy of the body shape's / plain body's view
  *     (↗ Body / ↗ Base body) — and its own button with its true cost: "Regenerate this view — 1 image job" for an
@@ -60,6 +63,7 @@ import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
 import { FigureStored } from './FigureStored'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FigureOutfitModel } from './FigureOutfitModel'
+import { OutfitReferenceRow } from './OutfitReferenceRow'
 import { VIEWS_BY_BUILD } from './dressedViewsModel'
 import { GenerationPausePanel, GenerationPauseSwitch } from './GenerationPausePanel'
 import { BuildProblemView } from './BuildProblem'
@@ -132,6 +136,8 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
   }), [post, t, toast])
 
   const reload = useCallback(() => startPoll(0), [startPoll])
+  /** Bumped by a saved outfit reference (Ruling A74b): the dressed views read again and show as due. */
+  const [refVersion, setRefVersion] = useState(0)
 
   /** Ruling A42: pause (no jobs) / resume (the held jobs start — the button names how many) / cancel one. */
   const setPaused = useCallback((paused: boolean) => post('figure/generation-pause', { paused }, () => {
@@ -226,9 +232,12 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
           {/* Kept mounted while hidden: it polls the views and counts them for the sub-tab's label. */}
           <div style={sub === 'views' ? { display: 'flex', flexDirection: 'column', gap: 6 } : { display: 'none' }}>
             <span className="ga-hint">{t(VIEWS_BY_BUILD)}</span>
+            {/* Ruling A74b: the worn outfit's reference image — its dressed front is an edit of that picture. */}
+            <OutfitReferenceRow character={character} onChanged={() => { setRefVersion((n) => n + 1); reload() }}
+              refreshKey={`${data.build.running ? 'running' : 'idle'}:${data.served_built_at || ''}:${data.outfit || ''}:${(data.worn || []).map((w) => w.item_id).join(',')}`} />
             <FieldModelRefs character={character} kinds={TPOSE} layout="steps" onOpenBaseBody={onOpenBaseBody}
               onOpenBody={openBody} onLights={onViewLights}
-              refreshKey={`${data.build.running ? 'running' : 'idle'}:${data.served_built_at || ''}`} />
+              refreshKey={`${data.build.running ? 'running' : 'idle'}:${data.served_built_at || ''}:${refVersion}`} />
           </div>
         </div>
       </div>

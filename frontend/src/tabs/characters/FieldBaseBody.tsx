@@ -28,7 +28,10 @@
  * link to the Figure tab and Run all's plan in one line (`runAllPlanLine`, what it does on mouse-over). Then two
  * columns: the base model's 3D preview ("Built <time>" in its corner, Full / Distance under it) on the left; on the
  * right one panel with sub-tabs instead of scrolling —
- * - Views (4): the four views two by two, small (a click enlarges one), each with its light and state in the label
+ * - Views (4): what the front is made from above them (Ruling A74b, `FrontReferenceRow`: the profile image small,
+ *   "Reference: profile image" — the front is an edit of it — or the line that there is none and the front is made
+ *   from text; a front made from another picture is outdated, said there and on its tile), then the four views two
+ *   by two, small (a click enlarges one), each with its light and state in the label
  *   (`baseViewRow`), its Regenerate with the cost under it, the skin detail step under the front;
  * - Base model: its step row (`baseModelRow`) with "Regenerate the plain body's mesh — N hub jobs", the model's steps
  *   one line each, the base mesh repair (MeshRepairPanel, Ruling A34: status light, its settings saved on their own,
@@ -68,8 +71,8 @@
  * Backend (app/routes/characters.py, app/routes/figure.py, app/core/base_body.py):
  * GET /characters/{n}/figure?plain=1 (`plain_body`: views, model, face fields, collision, face cleanup,
  * run_all; the rest of the answer is the figure — `body.plain.jobs`, `auto_build`; polled while something runs —
- * useBaseBody), POST …/base-body/run-all, POST …/base-body/images {view, force} (409 without a profile picture
- * or, for a side view, the front), POST …/base-body/model {force} (409 while another 3D run of the character is
+ * useBaseBody), POST …/base-body/run-all, POST …/base-body/images {view, force} (409 for a side view without
+ * the front; no profile picture = the front is made from text, Ruling A74b), POST …/base-body/model {force} (409 while another 3D run of the character is
  * going), POST …/base-body/skin-step (the front's skin detail edit on the stored neutral front; GET
  * …/images/front?variant=neutral serves it), GET …/model3d (useModel3DStatus), POST …/model3d/options (the
  * settings).
@@ -97,7 +100,7 @@ import { FaceSettings } from './FaceSettings'
 import { useModel3DStatus } from './useModel3DStatus'
 import type { CollisionPayload, SecondaryMotionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
-import type { BaseActivity, BaseBodyInfo, BaseView, ExtensionTipPanelInfo } from './useBaseBody'
+import type { BaseActivity, BaseBodyInfo, BaseFrontReference, BaseView, ExtensionTipPanelInfo } from './useBaseBody'
 import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, singleAction, staleBaseNote } from './figureModel'
 import type { ModelFollowup } from './figureModel'
 import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
@@ -217,6 +220,40 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
         </>
       )}
       onRender={() => onRender(view, !!url)} />
+  )
+}
+
+/** Above the four views (Ruling A74b): what the front is made from — the profile image, small (a click enlarges
+ *  it), labelled "Reference: profile image", or the line that there is none and the front is made from text. A
+ *  stored front made from something else says why it is outdated; only Regenerate / Run all re-renders it. */
+function FrontReferenceRow({ reference }: { reference: BaseFrontReference | null | undefined }) {
+  const { t } = useI18n()
+  if (!reference) return null
+  const outdated = !reference.current && reference.reason
+  return (
+    <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 8 }}>
+      {reference.method === 'reference' && reference.url ? (
+        <div style={{ width: 60, flex: '0 0 auto' }}>
+          <RefImage key={reference.url} src={reference.url} height={80} label={t('Reference: profile image')}
+            compact />
+        </div>
+      ) : null}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <strong style={{ fontSize: 12 }}>
+          {reference.method === 'reference' ? t('Reference: profile image') : t('Reference: none')}
+        </strong>
+        <span className="ga-hint" style={{ overflowWrap: 'anywhere' }}>
+          {reference.method === 'reference'
+            ? t('The front is an edit of the profile image: build, face and proportions come from the picture. A new profile image makes the front outdated — Regenerate or Run all renders it again.')
+            : t(reference.note)}
+        </span>
+        {outdated ? (
+          <span className="ga-hint" style={{ color: LIGHT_COLOR.yellow, overflowWrap: 'anywhere' }}>
+            {t(reference.reason)}
+          </span>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
@@ -621,6 +658,7 @@ export function FieldBaseBody({ character, onOpenFigure }: {
         <SubTabs tabs={tabs} value={sub} onChange={setSub} />
         {sub === 'views' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <FrontReferenceRow reference={info.front_reference} />
             <div className="ga-basebody-views">
               {BASE_VIEWS.map((view) => (
                 <ViewTile key={view} info={info} view={view} label={viewLabel(view)} jobs={jobs}

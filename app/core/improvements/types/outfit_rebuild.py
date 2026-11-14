@@ -17,6 +17,10 @@ The cost before start is ``base_body.rebuild_cost`` (first attempts). The
 base body itself is never rebuilt here, and a base built with older prompt
 wording is not stale for this type (``outfit_info`` judges identity only).
 
+An outfit whose model is stale only because its reference image (Ruling
+A74b, ``outfit_references``) was set, changed or cleared is not a candidate:
+that render is started by a person.
+
 No automatic re-spend: an outfit whose last build failed (``outfit_info``
 ``failed``, in memory until a restart or a click on "Rebuild from base") is
 not a candidate; a build that ends refused raises ``CandidateRefused`` —
@@ -78,10 +82,22 @@ def _judge(name: str, sig: str, profile: Dict[str, Any],
     info = info or base_body.outfit_info(name, signature=sig)
     if info.get("status") != "stale":
         return None
+    if info.get("stale_reason") == "figure" and _reference_only(name, sig, profile):
+        return None   # Ruling A74b: a new outfit reference image is rendered only by a Build a person starts
     cost = base_body.rebuild_cost(name, sig, profile=profile, stale_reason=info.get("stale_reason"))
     if cost.get("views_needed") is not False and not _auto_tpose(name):
         return None
     return info, cost
+
+
+def _reference_only(name: str, sig: str, profile: Dict[str, Any]) -> bool:
+    """Whether the outfit's model is stale only because its reference image
+    was set, changed or cleared (``outfit_references.reference_only_change``)."""
+    from app.core import model3d
+    from app.core.outfit_references import reference_only_change
+    path = model3d.find_model3d(name, sig, include_stale=True)
+    meta = model3d._read_sidecar(path) if path else {}
+    return bool(meta) and reference_only_change(name, meta, profile=profile)
 
 
 def _label(name: str, sig: str, saved: str, reason: Optional[str]) -> str:

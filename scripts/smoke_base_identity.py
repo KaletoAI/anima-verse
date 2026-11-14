@@ -169,8 +169,11 @@ def main() -> int:
         check("foreign identity: not taken", base_body.base_signature(name, profile=stored), identity)
         for f in refs.glob("*c0ffee00*"):
             f.unlink()
+        # Ruling A74b: the front records what it was made from — here the current profile image, so the
+        # front's freshness is decided by its prompts alone (a front without the record is "made from text").
         write_set(refs, "basec0ffee00", reference="Demo_1.png", created="2026-11-11T10:00:00+00:00",
-                  extra={"base_identity": identity, "prompt_fingerprint": fingerprint})
+                  extra={"base_identity": identity, "prompt_fingerprint": fingerprint,
+                         "front_reference": base_body.front_reference(name, profile=stored)})
         (refs / "tpose_back_basec0ffee00.json").write_text(json.dumps({
             "base_signature": "basec0ffee00", "created_at": "2026-11-11T10:05:00+00:00",
             "base_identity": identity, "prompt_fingerprint": "000000000000"}))

@@ -219,17 +219,30 @@ def texture_key(character_name: str, sets: WornSets, *, shape: str, bsig: str, v
     pieces>))`` — byte-identical for the same pieces. Meshed shape: ``"tex"``
     + the first 12 hex of sha256 over ``{"version", "shape", "base_variant",
     "dress_text"}`` with the own-mesh AND in-body pieces left out; ``""``
-    when nothing is painted there (every dress text empty)."""
-    from app.core import base_body
-    profile = _dressed_profile(_profile_of(character_name, profile), sets, items)
+    when nothing is painted there (every dress text empty).
+
+    An outfit with a reference image (Ruling A74b, ``outfit_references``)
+    whose figure paints something adds the picture's content
+    (``outfit_reference``) to either key: its dressed front is an edit of
+    that picture, so its texture is its own. Without a reference — or with
+    nothing painted — the key is byte-identical to the one before."""
+    from app.core import base_body, outfit_references
+    original = _profile_of(character_name, profile)
+    reference = outfit_references.texture_part(character_name, sets.pieces, sets.open, profile=original)
+    profile = _dressed_profile(original, sets, items)
     if is_plain(shape):
-        return base_body.texture_signature(base_body.texture_inputs(
+        plain = base_body.texture_inputs(
             character_name, pieces=dict(sets.pieces), items=list(items or []), variant=variant,
-            mesh_effective=sorted(sets.own), bsig=bsig, profile=profile))
+            mesh_effective=sorted(sets.own), bsig=bsig, profile=profile)
+        if reference and any(plain["dress_text"].values()):
+            plain["outfit_reference"] = reference
+        return base_body.texture_signature(plain)
     texts = _dress_texts(character_name, sets, left_out=(*sets.own, *sets.in_body), items=items, profile=profile)
     if not any(texts.values()):
         return ""
     inputs = {"version": SHAPE_TEXTURE_VERSION, "shape": shape, "base_variant": variant, "dress_text": texts}
+    if reference:
+        inputs["outfit_reference"] = reference
     return "tex" + hashlib.sha256(_canonical(inputs)).hexdigest()[:12]
 
 
@@ -1083,8 +1096,9 @@ def pending_changes(character_name: str, *, profile: Optional[Dict[str, Any]] = 
     mesh is ready or taken out, with ``note`` ``INTERIM_IN_BODY`` /
     ``READY_IN_BODY`` — ruling A11; a piece meshed in by the refusal branch
     is delivered as wanted), then ``body`` when the plain body is missing or was
-    rendered with older prompts (``base_body.OLDER_PROMPTS``; its ``note`` =
-    ``BASE_MISSING`` / ``BASE_OUTDATED``, ruling 8a), then ``hair`` (named
+    rendered with older prompts (``base_body.OLDER_PROMPTS``) or its front
+    from another reference (``base_body.front_reference_state``, Ruling A74b;
+    its ``note`` = ``BASE_MISSING`` / ``BASE_OUTDATED``, ruling 8a), then ``hair`` (named
     after the worn hairstyle) when the hair is not delivered as its mode says
     or another hairstyle than the worn one is shown. Read-only.
 
@@ -1159,6 +1173,11 @@ def _pending(character_name: str, wanted: "Figure", delivered: "Figure",
     elif not hair_rebuild and not base_body.prompts_current(character_name, wanted.bsig, profile=profile):
         out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built",
                     "delivered": base_body.OLDER_PROMPTS, "note": BASE_OUTDATED})
+    elif not hair_rebuild and not (front_ref := base_body.front_reference_state(
+            character_name, wanted.bsig, profile=profile))["current"]:
+        # Ruling A74b: the front was made from another reference — only a Build you start refreshes it (8a).
+        out.append({"key": BODY_KEY, "name": "Plain body", "wanted": "built",
+                    "delivered": front_ref["reason"], "note": BASE_OUTDATED})
     from app.core.garment_hair import worn_hairstyle
     hairstyle = worn_hairstyle(character_name, profile)
     hair_name = str((hairstyle or {}).get("name") or "Hair")

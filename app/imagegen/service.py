@@ -2371,6 +2371,10 @@ class ImageService:
             # reference loop in generate_from_input.
             "reference_image_override": ctx.get("reference_image_override", ""),
             "record_provenance": bool(ctx.get("record_provenance", False)),
+            # The render EDITS its reference image (the base front from the
+            # profile image, an outfit's front from its reference — Ruling
+            # A74b): a routed backend that cannot slot it is not applicable.
+            "require_reference": bool(ctx.get("require_reference", False)),
             "to_avatar_gallery": ctx.get("to_avatar_gallery", False),
             "gallery_character": ctx.get("gallery_character", ""),
             "image_use_case": ctx.get("image_use_case", ""),
@@ -2903,8 +2907,12 @@ class ImageService:
                 face_refs = {"reference_images": {}, "has_reference_slots": False}
 
             # Certification is valid only when the explicit, frozen reference
-            # actually conditions THIS attempt, including routed re-runs.
-            if input_data.get("record_provenance"):
+            # actually conditions THIS attempt, including routed re-runs. An
+            # edit of a reference image (``require_reference``) needs the
+            # same: a backend without a reference slot would draw from the
+            # text alone — never silently (Ruling A74b); routing moves on to
+            # the next chain entry without a cooldown.
+            if input_data.get("record_provenance") or input_data.get("require_reference"):
                 reference = str(input_data.get("reference_image_override") or "").strip()
                 # The slot holds the containment gate's RESOLVED path; compare
                 # resolved forms so a relative or symlinked storage dir matches.
@@ -2918,7 +2926,9 @@ class ImageService:
                         Path(reference).resolve() not in slotted):
                     from app.imagegen.base import BackendNotApplicableError
                     raise BackendNotApplicableError(
-                        backend, "The routed backend takes no reference image; the face view needs one")
+                        backend, "The routed backend takes no reference image; the face view needs one"
+                        if input_data.get("record_provenance") else
+                        "The routed backend takes no reference image; this render is an edit of one")
 
             # Post-processing happens externally (pull model, see
             # postprocess_trigger.py + /api/images). The generation itself

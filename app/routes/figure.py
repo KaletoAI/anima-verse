@@ -89,6 +89,21 @@ body actions):
   body: ``outfit_bodies.PAINTED_NEEDED``), a run works on it or a Build of
   the character runs (``figure.BUILD_RUNNING``), 404 when nothing of it is
   stored, 400 for a key of neither shape.
+* ``GET  /characters/{c}/figure/outfit-reference`` — the Figure tab's "Reference
+  image" row of the outfit worn now (Ruling A74b, ``outfit_references.info``):
+  ``{key, label, record, url, gone, applies, note, source, jobs, others}``.
+* ``POST /characters/{c}/figure/outfit-reference {image}`` — pick a picture of
+  the character's gallery as the worn outfit's reference image
+  (``outfit_references.set_reference``): it SAVES ONLY — nothing renders; the
+  dressed front shows as due with its cost until a Build. 400 for a file not
+  in the gallery or not an image; 503 when the profile was not saved.
+* ``POST /characters/{c}/figure/outfit-reference/upload`` (multipart ``file``)
+  — the same with an uploaded picture: capped (``guard_content_length`` /
+  ``read_upload_capped``) and checked by its bytes (``ensure_image``), stored
+  in the gallery, then picked. 400/413/415 as the gallery upload.
+* ``DELETE /characters/{c}/figure/outfit-reference/{key}`` — clear one
+  outfit's reference (``outfit_references.clear_reference``); saves only.
+  404 when that outfit has none.
 * ``POST /characters/{c}/model3d/build-current`` — the 3D tab's "Build current
   outfit" while it serves a stand-in (``model3d_pipeline.build_current_outfit``:
   the character's Build, a click — ``{status: started | queued | current}``);
@@ -96,7 +111,7 @@ body actions):
 """
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.core.auth_dependency import require_admin
@@ -376,3 +391,70 @@ def build_current_outfit_model(character_name: str,
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- Outfit reference images (Ruling A74b) ---------------------------------
+
+
+class OutfitReferenceRequest(BaseModel):
+    image: str
+
+
+@router.get("/{character_name}/figure/outfit-reference")
+def get_outfit_reference(character_name: str, _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import outfit_references
+    _require_character(character_name)
+    return outfit_references.info(character_name)
+
+
+def _set_outfit_reference(character_name: str, image: str) -> Dict[str, Any]:
+    from app.core import outfit_references
+    try:
+        outfit_references.set_reference(character_name, image)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return outfit_references.info(character_name)
+
+
+@router.post("/{character_name}/figure/outfit-reference")
+def set_outfit_reference(character_name: str, body: OutfitReferenceRequest,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    _require_character(character_name)
+    return _set_outfit_reference(character_name, body.image)
+
+
+@router.post("/{character_name}/figure/outfit-reference/upload")
+async def upload_outfit_reference(character_name: str, request: Request,
+                                  _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from starlette.concurrency import run_in_threadpool
+    from app.core import outfit_references
+    from app.core.upload_limits import ensure_image, guard_content_length, read_upload_capped
+    _require_character(character_name)
+    guard_content_length(request, what="Reference image")
+    form = await request.form()
+    file = form.get("file")
+    if file is None or not getattr(file, "filename", ""):
+        raise HTTPException(status_code=400, detail="No file uploaded")
+    data = await read_upload_capped(file, what="Reference image")
+    ensure_image(data, filename=file.filename, what="Reference image")
+    try:
+        name = await run_in_threadpool(outfit_references.store_upload, character_name, data, file.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return await run_in_threadpool(_set_outfit_reference, character_name, name)
+
+
+@router.delete("/{character_name}/figure/outfit-reference/{key}")
+def clear_outfit_reference(character_name: str, key: str,
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import outfit_references
+    _require_character(character_name)
+    try:
+        cleared = outfit_references.clear_reference(character_name, key)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    if not cleared:
+        raise HTTPException(status_code=404, detail="This outfit has no reference image")
+    return outfit_references.info(character_name)

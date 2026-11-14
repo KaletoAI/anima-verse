@@ -528,13 +528,17 @@ export function FieldModelRefs({
     const copy = action.jobs === 0
     const source = info.pipeline && info.dressed_source ? info.dressed_source : null
     const plainShape = !!source && source.shape.startsWith('base')
-    const fromLine = !source ? null : (
+    // The outfit-reference note belongs to the front (main view) only: the other views stay edits of the shape's.
+    const fromLine = (main: boolean) => !source ? null : (
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <span className="ga-hint" title={copy ? action.note : undefined}>
           {source.source === 'shape' ? t('Copy of the body shape’s view — nothing painted')
             : source.source === 'plain' ? t('Copy of the plain body’s view — nothing painted')
               : plainShape ? t('Painted on the plain body’s view') : t('Painted on the body shape’s view')}
         </span>
+        {main && source.source === 'painted' && source.reference ? (
+          <span className="ga-hint">· {t('the front is an edit of the outfit’s reference image')}</span>
+        ) : null}
         {plainShape ? (onOpenBaseBody ? (
           <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}
             title={t('The plain body’s views are made in the Base body tab')}>↗ {t('Base body')}</button>
@@ -566,7 +570,7 @@ export function FieldModelRefs({
           <div style={ROW_BODY}>
             {info.tpose ? thumb(`/characters/${enc}/model-refs/tpose`, t('Front view'), info.tpose, 'main') : null}
             <div style={ROW_ACTIONS}>
-              {fromLine}
+              {fromLine(true)}
               {regen('main', info.pipeline ? `${t(MAIN_FOLLOWUP)}\n${t(VIEW_FOLLOWUP)}` : '')}
             </div>
           </div>
@@ -583,7 +587,7 @@ export function FieldModelRefs({
                 {draft ? thumb(`/characters/${enc}/model-refs/tpose_${view}_draft`, draftLabel(view), draft, `${view}-draft`)
                   : null}
                 <div style={ROW_ACTIONS}>
-                  {fromLine}
+                  {fromLine(false)}
                   {regen(view, info.pipeline ? t(VIEW_FOLLOWUP) : '')}
                 </div>
               </div>

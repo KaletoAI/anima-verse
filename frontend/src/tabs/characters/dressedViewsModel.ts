@@ -98,6 +98,8 @@ export interface DressedSource {
   shape: string
   /** Image jobs of one view's render: 1 for an edit, 0 for a copy. */
   jobs: number
+  /** Painted: the outfit has its own reference image — its front is an edit of that picture (Ruling A74b). */
+  reference?: boolean
 }
 
 /** A copy of the body shape's view: nothing is painted on the figure. */
@@ -120,4 +122,50 @@ export function viewAction(src: DressedSource | null | undefined, t: Tr = EN): {
     return { label: t('Copy this view again from the plain body — no job'), note: t(PLAIN_COPY_NOTE), jobs: 0 }
   }
   return { label: singleAction('view', 1, t), note: '', jobs: 1 }
+}
+
+/** GET …/figure/outfit-reference (Ruling A74b, `outfit_references.info`): the reference image of the outfit worn now. */
+export interface OutfitReferenceInfo {
+  key: string
+  label: string
+  record: { image: string; sha256: string; label?: string; set_at?: string } | null
+  url: string
+  /** The record names a picture that is not in the gallery any more. */
+  gone: boolean
+  /** Something is painted on the figure: the dressed front is an edit of the picture. */
+  applies: boolean
+  /** Why a set picture is not used now (nothing painted). */
+  note: string
+  source: string
+  /** Image jobs of the dressed views due now (null = unknown). */
+  jobs: number | null
+  others: { key: string; label: string; image: string; url: string; set_at: string }[]
+}
+
+/**
+ * The "Reference image" step row of the outfit worn now (Ruling A74b): none set → grey "Not set" with what the
+ * views are made from instead; set but the picture is gone → red "Picture gone"; set but nothing painted → grey
+ * "Not used now" with the server's reason; set and the dressed views not made from it yet → yellow "Due" with the
+ * job count; else green "Used".
+ */
+export function outfitReferenceRow(info: OutfitReferenceInfo, t: Tr = EN): {
+  name: string; light: Light; state: string; reason: string; detail: string
+} {
+  const name = `${t('Reference image')} · ${info.label}`
+  const detail = t('An outfit here is the worn combination of clothing pieces (with the pieces worn open).')
+  if (!info.record) {
+    return { name, light: 'grey', state: t('Not set'), detail,
+      reason: t('Optional. Without one the dressed front is an edit of the body’s front (or a copy of the body shape’s view). Set a picture of the character wearing this outfit to make the front from it.') }
+  }
+  if (info.gone) {
+    return { name, light: 'red', state: t('Picture gone'), detail,
+      reason: t('The picture is not in the gallery any more — pick another one or clear it.') }
+  }
+  if (!info.applies) return { name, light: 'grey', state: t('Not used now'), detail, reason: t(info.note) }
+  if (info.jobs !== 0) {
+    return { name, light: 'yellow', state: t('Due'), detail,
+      reason: t('The dressed front is made from this picture with the next Build — saving rendered nothing.') }
+  }
+  return { name, light: 'green', state: t('Used'), detail,
+    reason: t('The dressed front is an edit of this picture.') }
 }

@@ -518,7 +518,8 @@ def main() -> int:
         check("old use cases are all still shipped", set(old_ucs) <= set(config._DEFAULT_IMAGE_USE_CASES), True)
         check("new use cases are additions",
               sorted(set(config._DEFAULT_IMAGE_USE_CASES) - set(old_ucs)),
-              ["base_back", "base_front", "base_side", "base_view_back", "base_view_side",
+              # base_front_edit: Ruling A74b, the front as an edit of the profile image / an outfit's picture.
+              ["base_back", "base_front", "base_front_edit", "base_side", "base_view_back", "base_view_side",
                "footwear_source", "outfit_edit"])
         # Review 2026-11-11: face_view (style emptied) and profile (rules
         # positive, character slot) changed on purpose; Ruling A29: tpose_back /

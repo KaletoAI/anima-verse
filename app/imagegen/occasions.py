@@ -112,10 +112,11 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     # tpose_view once.
     "base_front": _image(
         "Base body — front", "Base body tab: the bald A-pose base-body front",
-        ["base_front"],
+        ["base_front", "base_front_edit"],
         {"character_scoped": True, "char_spec_field": "base_front_workflow",
          "char_spec_fallback": ("tpose_workflow", "workflow")},
-        hint="Identity comes from the profile picture; an accurate (non-turbo) "
+        hint="An edit of the profile picture (a backend that takes a reference "
+             "image is required while there is one); an accurate (non-turbo) "
              "model is recommended."),
     "base_view": _image(
         "Base body — back/side views", "Base body tab: base-body back, left and right (edits of the front)",
@@ -123,8 +124,9 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
         {"character_scoped": True, "char_spec_field": "base_view_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_front": _image(
-        "Outfit — front edit", "Figure tab, Dressed views: the dressed front (edit of the base front)",
-        ["outfit_edit"],
+        "Outfit — front edit", "Figure tab, Dressed views: the dressed front (edit of the base front, or of "
+                               "the outfit's reference image)",
+        ["outfit_edit", "base_front_edit"],
         {"character_scoped": True, "char_spec_field": "outfit_front_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_back_draft": _image(

@@ -410,7 +410,7 @@ function jobsTr(hubJobs: number | null, t: Tr): string {
   return hubJobs === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(hubJobs))
 }
 
-function imageJobsTr(jobs: number | null, t: Tr): string {
+export function imageJobsTr(jobs: number | null, t: Tr): string {
   if (jobs === null) return t('cost unknown')
   return jobs === 1 ? t('1 image job') : t('{n} image jobs').replace('{n}', String(jobs))
 }

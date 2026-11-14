@@ -206,6 +206,8 @@ export interface BaseBodyInfo {
   extension?: BaseExtensionState | null
   /** The front's skin detail step (null for a non-humanoid). */
   skin?: BaseSkinInfo | null
+  /** What the front is made from (Ruling A74b, `base_body._front_reference_info`; null for a non-humanoid). */
+  front_reference?: BaseFrontReference | null
   /** The Base body tab's "Run all" plan (`figure_build.base_run_all`). */
   run_all?: BaseRunAll | null
   /** What of the character's 3D work runs now (`figure_build.base_activity`, Ruling A55): `base` names base-body
@@ -213,6 +215,18 @@ export interface BaseBodyInfo {
    *  line while only an outfit model or garment is built — it never touches the base body's status. */
   activity?: BaseActivity | null
   now?: string
+}
+
+/** `plain_body.front_reference` (Ruling A74b): the front is an edit of the profile image (`method` "reference",
+ *  `url` the picture) or made from text without one (`note` says so); `current` false = the stored front was made
+ *  from something else (`reason`) — only Regenerate / Run all re-renders it. */
+export interface BaseFrontReference {
+  method: 'reference' | 'text'
+  image: string
+  url: string
+  current: boolean
+  reason: string
+  note: string
 }
 
 /** `plain_body.activity` (Ruling A55). */

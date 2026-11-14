@@ -604,6 +604,147 @@ def base_prompts_freshness(character_name: str, *,
     return freshness(CURRENT)
 
 
+# --- The base front from a reference image (Ruling A74b) -------------------
+#
+# The user, 2026-11-14: the text-only front gave every character nearly the
+# same build. While the character HAS a profile image the base front is an
+# EDIT of it (use case ``BASE_FRONT_EDIT_USE_CASE``: the edit instruction,
+# then ``edit_character``, then the framing and light of the base front, then
+# the pose text — the prompt of the user's validated hub job c265fd78); the
+# build, the face and the proportions come from the picture. Without one the
+# front is the text render as before. ``front_reference`` is what the front
+# is made from NOW and is recorded in the front's sidecar; a stored front
+# whose record differs (another picture, the same name with other content,
+# another edit text — or no record: made from text) is OUTDATED with
+# ``front_reference_state``'s reason. That is a separate axis from
+# ``prompt_fingerprint`` on purpose: an ``OLDER_PROMPTS`` base is something
+# the ``base_refresh`` improvement re-renders by itself at idle time; a front
+# made from another reference is re-rendered only by a person's click (the
+# Base body tab's Regenerate / Run all, a manual Build — ``base_refresh_plan``
+# reason ``reference`` only with ``missing=True``). Nothing runs because the
+# method changed.
+
+#: The use case of the front made from a reference image (``config``: style,
+#: negative). Also the outfit's dressed front made from its own reference
+#: (``outfit_references``).
+BASE_FRONT_EDIT_USE_CASE = "base_front_edit"
+#: ``front_reference["method"]``.
+FRONT_FROM_REFERENCE = "reference"
+FRONT_FROM_TEXT = "text"
+#: The front tile's reasons (``front_reference_state``), plain words for the UI.
+FRONT_MADE_FROM_TEXT = "Made from text alone — Regenerate makes the front from the profile image"
+FRONT_OTHER_REFERENCE = "Made from another profile image — Regenerate makes the front from the current one"
+FRONT_OTHER_EDIT_TEXT = "Made with an older edit text — Regenerate makes the front with the current one"
+FRONT_NO_PROFILE_NOW = "Made from a profile image there is none of now — Regenerate makes the front from text"
+#: The Base body tab's line when there is no profile image (decision 2 of the brief).
+NO_PROFILE_IMAGE_NOTE = "No profile image — the front is made from text alone. Set a profile image to make it from that picture."
+
+
+def edit_character(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The character block of the front made from the profile image: the head
+    (the plain body's hair text, else ``BALD_HEAD``), ``BODY_TEXT`` and the
+    packages' base-body texts (``body_slots.base_body_fragments`` — what a
+    clothed picture cannot show). Never gender, age, height or the build
+    slots of ``base_appearance``: the picture shows them, and naming them is
+    what made every front the same build (user 2026-11-14; the validated job
+    c265fd78 names none of them)."""
+    from app.core.body_slots import base_body_fragments
+    profile = _profile_of(character_name, profile)
+    head = hair_text(character_name, profile=profile) or BALD_HEAD
+    return ", ".join(p for p in (head, BODY_TEXT, *base_body_fragments(character_name, profile=profile)) if p)
+
+
+def _edit_fingerprint(character_name: str, profile: Dict[str, Any]) -> str:
+    """12 hex over the texts the front edit is made with (block, pose text,
+    negative) — part of ``front_reference``."""
+    prompt, negative = base_prompt(character_name, "front", profile=profile)
+    raw = json.dumps([edit_character(character_name, profile=profile), prompt, negative], ensure_ascii=False)
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def front_reference(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What the base front is made from NOW: ``{"method": "reference",
+    "image": <profile file name>, "sha256": <its content>, "prompt": <edit
+    text fingerprint>}`` while the character has a readable profile image,
+    else ``{"method": "text"}``."""
+    from app.core.model_refs import current_profile_image
+    profile = _profile_of(character_name, profile)
+    image = current_profile_image(character_name, profile=profile)
+    sha = file_sha256(image)
+    if image is None or not sha:
+        return {"method": FRONT_FROM_TEXT}
+    return {"method": FRONT_FROM_REFERENCE, "image": image.name, "sha256": sha,
+            "prompt": _edit_fingerprint(character_name, profile)}
+
+
+def stored_front_reference(character_name: str, bsig: str) -> Optional[Dict[str, Any]]:
+    """The ``front_reference`` record of the stored base front of ``bsig``
+    (``{"method": "text"}`` for a front rendered before the record existed —
+    every such front was made from text), None without a stored front."""
+    from app.core.model_refs import find_ref_image
+    if find_ref_image(character_name, _kind("front"), bsig) is None:
+        return None
+    record = _front_sidecar(character_name, bsig).get("front_reference")
+    return dict(record) if isinstance(record, dict) and record.get("method") else {"method": FRONT_FROM_TEXT}
+
+
+def front_reference_state(character_name: str, bsig: Optional[str] = None, *,
+                          profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``{wanted, stored, current, reason}`` of the stored base front against
+    ``front_reference`` (module section above). ``current`` True without a
+    stored front (that one is missing, not outdated); ``reason`` "" when
+    current, else one of ``FRONT_MADE_FROM_TEXT`` / ``FRONT_OTHER_REFERENCE``
+    / ``FRONT_OTHER_EDIT_TEXT`` / ``FRONT_NO_PROFILE_NOW``. Read-only."""
+    profile = _profile_of(character_name, profile)
+    bsig = bsig or base_signature(character_name, profile=profile)
+    wanted = front_reference(character_name, profile=profile)
+    stored = stored_front_reference(character_name, bsig)
+    reason = ""
+    if stored is not None and stored != wanted:
+        if wanted["method"] == FRONT_FROM_TEXT:
+            reason = FRONT_NO_PROFILE_NOW
+        elif stored.get("method") != FRONT_FROM_REFERENCE:
+            reason = FRONT_MADE_FROM_TEXT
+        elif (stored.get("image"), stored.get("sha256")) != (wanted["image"], wanted["sha256"]):
+            reason = FRONT_OTHER_REFERENCE
+        else:
+            reason = FRONT_OTHER_EDIT_TEXT
+    return {"wanted": wanted, "stored": stored, "current": not reason, "reason": reason}
+
+
+def _frozen_reference(path: Path, refs_dir: Path):
+    """A private copy of the reference picture ``path`` for the length of a
+    run (every hand-gate attempt edits the same bytes): in a temp dir inside
+    ``refs_dir`` (the reference containment gate accepts it), the file name
+    kept (the sidecar records the reference by name), a transparent picture
+    flattened onto the neutral grey of ``model_refs.neutral_view_reference``.
+    Yields ``(copy, sha256 of the ORIGINAL bytes copied)`` — the content the
+    run edits, as ``front_reference`` / the outfit record name it."""
+    import contextlib
+    import io
+    import tempfile
+
+    @contextlib.contextmanager
+    def frozen():
+        from PIL import Image
+        from app.core.model_refs import VIEW_REFERENCE_BACKGROUND
+        data = path.read_bytes()
+        with tempfile.TemporaryDirectory(prefix=".editref_", dir=refs_dir) as tmp:
+            out = Path(tmp) / path.name
+            with Image.open(io.BytesIO(data)) as im:
+                if im.mode in ("RGBA", "LA", "PA") or "transparency" in im.info:
+                    rgba = im.convert("RGBA")
+                    flat = Image.new("RGBA", rgba.size, VIEW_REFERENCE_BACKGROUND + (255,))
+                    flat.alpha_composite(rgba)
+                    out = out.with_suffix(".png")
+                    flat.convert("RGB").save(out)
+                else:
+                    out.write_bytes(data)
+            yield out, hashlib.sha256(data).hexdigest()
+
+    return frozen()
+
+
 def is_base_pipeline(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
     """Whether the character is on the base-body pipeline: every humanoid is
     (Ruling A13 — the per-character switch and its ``model_pipeline`` profile
@@ -740,17 +881,15 @@ def check_renderable(character_name: str, *, view: Optional[str] = None,
                      profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The profile, or ValueError when no base body can be rendered: an
     unknown view, a non-humanoid character (animals keep the whole-body
-    path), or no profile image (the identity of the base body comes from
-    it — ``MissingInput``), or a single view without its front
-    (``MissingFront``)."""
+    path) or a single view without its front (``MissingFront``). No profile
+    image is no refusal (Ruling A74b): the front is then made from text
+    alone (``front_reference``)."""
     if view is not None and view not in BASE_VIEWS:
         raise ValueError(f"unknown base-body view: {view!r}")
     profile = _profile_of(character_name, profile)
-    from app.core.model_refs import current_profile_image, find_ref_image, is_humanoid
+    from app.core.model_refs import find_ref_image, is_humanoid
     if not is_humanoid(character_name, profile=profile):
         raise ValueError("The base body is for humanoid characters only")
-    if current_profile_image(character_name, profile=profile) is None:
-        raise MissingInput("No profile picture. Set a profile picture, then render the base body")
     if view not in (None, "front") and find_ref_image(
             character_name, "tpose", base_signature(character_name, profile=profile)) is None:
         raise MissingFront("A base-body view requires the front image")
@@ -799,8 +938,14 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                          force: bool = False, raise_load: bool = False) -> Dict[str, Optional[str]]:
     """Render the base-body views. Blocking — call from a worker thread.
 
-    Front first (the ``tpose`` render path: use case ``base_front``, occasion
-    ``base_front``, the profile image as identity reference), then
+    Front first (the ``tpose`` render path, occasion ``base_front``): with a
+    profile image an EDIT of it (Ruling A74b — use case
+    ``BASE_FRONT_EDIT_USE_CASE``, ``edit_character`` in the style's slot,
+    the profile image frozen for the run as ``reference_image`` with
+    ``require_reference``: a routed backend without a reference slot is not
+    applicable, never a silent text render), without one the text render
+    (use case ``base_front``); the front's sidecar records
+    ``front_reference``. Then
     back/left/right as edits of the front on grey (occasion ``base_view``,
     use cases ``base_view_back`` / ``base_view_side``; ``BASE_USE_CASES``).
     The front hands its ``base_character`` block to the style's
@@ -869,6 +1014,7 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
         bsig = base_signature(character_name, profile=profile)
         identity = base_identity(character_name, profile=profile)
         fingerprint = prompt_fingerprint(character_name, profile=profile)
+        front_ref = front_reference(character_name, profile=profile)
         refs_dir = get_model_refs_dir(character_name)
         wanted = BASE_VIEWS if view is None else (view,)
         todo = [v for v in wanted
@@ -884,14 +1030,21 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
 
         def draw(v: str, stem: Path, reference: Optional[Path]) -> Optional[Path]:
             prompt, negative = base_prompt(character_name, v, profile=profile)
-            character = base_character(character_name, v, profile=profile)
+            # Ruling A74b: the front with a profile image is an edit of it (``reference`` = its frozen copy).
+            edit = v == "front" and reference is not None
+            character = (edit_character(character_name, profile=profile) if edit
+                         else base_character(character_name, v, profile=profile))
+            extra = {"base_signature": bsig, "base_identity": identity, "prompt_fingerprint": fingerprint,
+                     "prompt_rules": PROMPT_RULES}
+            if v == "front":
+                extra["front_reference"] = front_ref
             return expression_regen.render_character_image(
                 character_name,
                 output_stem=stem,
                 equipped_pieces={}, equipped_items=[],
                 pose_prompt="", expression_prompt="",
                 bare_prompt=prompt, extra_negative=negative,
-                image_use_case=BASE_USE_CASES[v],
+                image_use_case=BASE_FRONT_EDIT_USE_CASE if edit else BASE_USE_CASES[v],
                 style_character=character,
                 occasion="base_front" if v == "front" else "base_view",
                 override_width=width, override_height=height,
@@ -899,14 +1052,31 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                 mesh_input_profile=mesh_profile,
                 back_view=v == "back",
                 reference_image=reference,
-                sidecar_extra={"base_signature": bsig, "base_identity": identity,
-                               "prompt_fingerprint": fingerprint, "prompt_rules": PROMPT_RULES},
+                require_reference=edit,
+                sidecar_extra=extra,
                 # The character's identity/pose LoRAs as on its tpose
                 # render (tpose_loras, else loras); no slot LoRAs.
                 character_loras=True, **({"raise_load": True} if raise_load else {}))
 
         def draw_front(final: Path) -> Tuple[Optional[Path], Optional[str]]:
-            """``(stored path, warning)`` of the gated front attempts."""
+            """``(stored path, warning)`` of the gated front attempts — each an
+            edit of the frozen profile image while there is one (Ruling A74b)."""
+            import contextlib
+            from app.core.model_refs import current_profile_image
+            profile_image = (current_profile_image(character_name, profile=profile)
+                             if front_ref["method"] == FRONT_FROM_REFERENCE else None)
+            if profile_image is None and front_ref["method"] == FRONT_FROM_REFERENCE:
+                front_ref.clear()   # the picture went since the read above: the text render, recorded so
+                front_ref["method"] = FRONT_FROM_TEXT
+            with contextlib.ExitStack() as stack:
+                reference: Optional[Path] = None
+                if profile_image is not None:
+                    reference, frozen_sha = stack.enter_context(_frozen_reference(profile_image, refs_dir))
+                    # The picture changed between the read above and the copy: record what is edited.
+                    front_ref["sha256"] = frozen_sha
+                return gated_front(final, reference)
+
+        def gated_front(final: Path, reference: Optional[Path]) -> Tuple[Optional[Path], Optional[str]]:
             attempts: List[Tuple[Path, Dict[str, Any]]] = []
             with tempfile.TemporaryDirectory(prefix=".handgate_", dir=refs_dir,
                                              ignore_cleanup_errors=True) as staging:
@@ -914,7 +1084,7 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                     stem = Path(staging) / f"attempt{n}" / final.name
                     stem.parent.mkdir()
                     try:
-                        path = draw("front", stem, None)
+                        path = draw("front", stem, reference)
                     except Exception as e:  # noqa: BLE001 — keep what was rendered
                         if not attempts:
                             raise
@@ -1060,6 +1230,7 @@ def base_info(character_name: str) -> Dict[str, Any]:
             logger.exception("Hair summary of %s failed", character_name)
     return {"pipeline": pipeline, "humanoid": humanoid,
             "signature": signature, "images": images, "image_meta": image_meta,
+            "front_reference": _front_reference_info(character_name, signature, profile) if humanoid else None,
             "prompt_fingerprint": current,
             "skin": _skin_info(character_name, signature) if humanoid else None,
             "status": base_status(character_name),
@@ -1067,6 +1238,30 @@ def base_info(character_name: str) -> Dict[str, Any]:
             "outfit": outfit_info(character_name, base_sig=signature) if pipeline else None,
             "hair": hair,
             "now": _iso(utc_now())}
+
+
+def _front_reference_info(character_name: str, signature: str,
+                          profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The Base body tab's reference line (Ruling A74b): ``{method, image,
+    url (the profile image, its mtime as cache key — "" without one),
+    current, reason, note}``; None when it cannot be read."""
+    try:
+        from app.core.model_refs import current_profile_image
+        state = front_reference_state(character_name, signature or None, profile=profile)
+        wanted = state["wanted"]
+        image = current_profile_image(character_name, profile=profile) if wanted["method"] == FRONT_FROM_REFERENCE else None
+        try:
+            stamp = image.stat().st_mtime_ns if image else None
+        except OSError:
+            stamp = None
+        url = (f"/characters/{quote(character_name, safe='')}/images/{quote(image.name, safe='')}?v={stamp}"
+               if image is not None and stamp is not None else "")
+        return {"method": wanted["method"], "image": wanted.get("image", ""), "url": url,
+                "current": state["current"], "reason": state["reason"],
+                "note": NO_PROFILE_IMAGE_NOTE if wanted["method"] == FRONT_FROM_TEXT else ""}
+    except Exception:  # noqa: BLE001 — the poll never fails on it
+        logger.exception("Front reference info of %s failed", character_name)
+        return None
 
 
 def _skin_info(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
@@ -2005,6 +2200,13 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
         return None
     if getattr(fig, "texture", "") and composite_outdated(meta):
         return None  # Ruling A24: composited by older rules — re-composited from its stored draft
+    if meta.get("dressed") is not False:
+        # Ruling A74b: an edit made for another outfit reference picture (or for none, or without the one set now)
+        # is no view of this outfit — a copy of the shape's view never uses a reference.
+        from app.core import outfit_references
+        if str(meta.get("outfit_reference_sha256") or "") != outfit_references.wanted_sha(
+                character_name, getattr(fig, "pieces", None) or {}, getattr(fig, "open", ()) or ()):
+            return None
     return path
 
 
@@ -2811,7 +3013,7 @@ def _store_front(character_name: str, tsig: str, bsig: str, base_front: Optional
 
 
 def _adopt_texture_views(character_name: str, *, tsig: str, bsig: str, texts: Dict[str, str],
-                         base_views: Dict[str, Optional[Path]]) -> Optional[Path]:
+                         base_views: Dict[str, Optional[Path]], reference_sha: str = "") -> Optional[Path]:
     """Fill the store of ``tsig`` from dressed views of OTHER outfits that
     prove the same texture: a front made from the current base front whose
     sidecar names the same ``dress_text`` — or, recorded before the store
@@ -2822,7 +3024,8 @@ def _adopt_texture_views(character_name: str, *, tsig: str, bsig: str, texts: Di
     back is never sent an outfit text (its draft follows the front), so the
     front's text decides. The newest matching front wins. Returns the
     store's front, or None when nothing matches."""
-    found = _adoptable_texture_views(character_name, bsig=bsig, texts=texts, base_views=base_views)
+    found = _adoptable_texture_views(character_name, bsig=bsig, texts=texts, base_views=base_views,
+                                     reference_sha=reference_sha)
     if found is None:
         return None
     key, views = found
@@ -2832,10 +3035,13 @@ def _adopt_texture_views(character_name: str, *, tsig: str, bsig: str, texts: Di
 
 
 def _adoptable_texture_views(character_name: str, *, bsig: str, texts: Dict[str, str],
-                             base_views: Dict[str, Optional[Path]]) -> Optional[Tuple[str, List[str]]]:
+                             base_views: Dict[str, Optional[Path]],
+                             reference_sha: str = "") -> Optional[Tuple[str, List[str]]]:
     """``(outfit signature, views)`` ``_adopt_texture_views`` would adopt
     (its docstring), or None — read-only (the Build's estimate counts those
-    views as copies, ``dressed_view_estimate``)."""
+    views as copies, ``dressed_view_estimate``). Only a front made from the
+    same outfit reference picture (``outfit_reference_sha256``, "" = none;
+    Ruling A74b) proves the same texture."""
     from app.core.model_refs import get_model_refs_dir
     front_text = texts.get("front") or ""
     if not front_text:
@@ -2853,6 +3059,8 @@ def _adoptable_texture_views(character_name: str, *, bsig: str, texts: Dict[str,
         recorded = meta.get("dress_text")
         if not (recorded == front_text if isinstance(recorded, str) else meta.get("prompt") == prompt):
             continue
+        if str(meta.get("outfit_reference_sha256") or "") != reference_sha:
+            continue  # Ruling A74b: made from another outfit reference picture (or none)
         image = _image_at(refs / f"tpose_{key}")
         if image is None:
             continue
@@ -2918,7 +3126,10 @@ def dressed_view_estimate(character_name: str, fig, signature: str, *,
             return sum(jobs.values())
         profile = _profile_of(character_name, profile)
         texts = figure_texts(character_name, fig, list(profile.get("equipped_items") or []), profile=profile)
-        adopted = _adoptable_texture_views(character_name, bsig=on, texts=texts, base_views=base_views)
+        from app.core import outfit_references
+        adopted = _adoptable_texture_views(character_name, bsig=on, texts=texts, base_views=base_views,
+                                           reference_sha=outfit_references.wanted_sha(
+                                               character_name, fig.pieces, fig.open, profile=profile))
         if adopted is None:
             return sum(jobs.values())
         source_front = find_ref_image(character_name, "tpose", adopted[0])
@@ -2947,7 +3158,7 @@ def dressed_view_estimate(character_name: str, fig, signature: str, *,
 def _reuse_texture_views(character_name: str, *, signature: str, tsig: str, bsig: str, todo: List[str],
                          texts: Dict[str, str], base_views: Dict[str, Optional[Path]],
                          pieces: Optional[Dict[str, str]], items: Optional[list], profile: Dict[str, Any],
-                         mesh: Dict[str, Any]) -> Dict[str, Path]:
+                         mesh: Dict[str, Any], reference_sha: str = "") -> Dict[str, Path]:
     """Copy the views of ``todo`` the texture store holds for ``tsig`` into
     the outfit (``tpose[_<view>]_<signature>`` + drafts), filling the store
     from other outfits first when it has no front (``_adopt_texture_views``).
@@ -2956,7 +3167,8 @@ def _reuse_texture_views(character_name: str, *, signature: str, tsig: str, bsig
     job. Returns ``{view: outfit path}`` of the copied views."""
     from app.core.model_refs import find_ref_image, get_model_refs_dir
     front = (_store_front(character_name, tsig, bsig, base_views.get("front"))
-             or _adopt_texture_views(character_name, tsig=tsig, bsig=bsig, texts=texts, base_views=base_views))
+             or _adopt_texture_views(character_name, tsig=tsig, bsig=bsig, texts=texts, base_views=base_views,
+                                     reference_sha=reference_sha))
     if front is None:
         return {}
     refs = get_model_refs_dir(character_name)
@@ -3023,9 +3235,11 @@ def _sync_texture_views(character_name: str, *, signature: str, tsig: str, fig,
     if store_front is None:
         _store_texture_views(character_name, signature, tsig, own, texts)
         return
+    from app.core import outfit_references
     kwargs = dict(signature=signature, tsig=tsig, bsig=on, texts=texts, base_views=base_views,
                   pieces=manifest.get("pieces") or {}, items=manifest.get("items") or [], profile=profile,
-                  mesh=_dict_of(manifest.get("mesh_items")))
+                  mesh=_dict_of(manifest.get("mesh_items")),
+                  reference_sha=outfit_references.wanted_sha(character_name, fig.pieces, fig.open))
     front_sha = file_sha256(store_front)
     if file_sha256(outfit["front"]) != front_sha:
         if _newer(outfit["front"], store_front):
@@ -3220,8 +3434,9 @@ def dressed_view_source(character_name: str, *, profile: Optional[Dict[str, Any]
       mesh): the view is a COPY of the body shape's own view (``tpose[_<view>]_<ob…>``), no job;
     * ``plain`` — nothing worn is painted on the plain body: a copy of the plain body's view, no job.
 
-    ``{source, shape, jobs}`` — ``jobs`` of one view's render. Read-only (the memoised figure, polled by the
-    views' info)."""
+    ``{source, shape, jobs}`` — ``jobs`` of one view's render; a painted figure adds ``reference: True`` when the outfit
+    has its own reference image, so its FRONT is an edit of that picture (Ruling A74b). Read-only (the memoised
+    figure, polled by the views' info)."""
     from app.core import figure as figure_mod
     from app.core.model_refs import current_outfit_state
     profile = _profile_of(character_name, profile)
@@ -3230,7 +3445,12 @@ def dressed_view_source(character_name: str, *, profile: Optional[Dict[str, Any]
                                              items=list(items or []))
     texts = {} if not figure_mod.is_plain(fig.shape) else figure_texts(character_name, fig, items, profile=profile)
     if _paints(fig, texts):
-        return {"source": VIEW_SOURCE_PAINTED, "shape": fig.shape, "jobs": 1}
+        # Ruling A74b: with the outfit's own reference image the front is an edit of that picture.
+        from app.core import outfit_references
+        out = {"source": VIEW_SOURCE_PAINTED, "shape": fig.shape, "jobs": 1}
+        if outfit_references.wanted_sha(character_name, fig.pieces, fig.open, profile=profile):
+            out["reference"] = True
+        return out
     source = VIEW_SOURCE_PLAIN if figure_mod.is_plain(fig.shape) else VIEW_SOURCE_SHAPE
     return {"source": source, "shape": fig.shape, "jobs": 0}
 
@@ -3332,19 +3552,96 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
         return {}
     texts = figure_texts(character_name, fig, items, profile=profile)
     dressed = _paints(fig, texts)
+    # Ruling A74b: the outfit's own reference picture — its dressed front is an edit of it while something is painted.
+    from app.core import outfit_references
+    record = outfit_references.record_for(character_name, fig.pieces, fig.open, profile=profile) if dressed else None
+    reference = ({"path": outfit_references.image_path(character_name, record), "sha256": record["sha256"]}
+                 if record else None)
     return _render_views(character_name, signature=signature, pieces=pieces, items=items, todo=todo, force=force,
                          on=on, registrations=registrations, texts=texts, tsig=fig.texture, mesh=mesh,
                          dressed=dressed, bald=_bald_edit(character_name, profile, meshed=meshed),
                          profile=mesh_profile, raise_load=raise_load,
                          current=lambda v: dressed_image(character_name, v, signature, bsig, fig=fig),
-                         hair=_shape_hair(character_name, profile, meshed=meshed))
+                         hair=_shape_hair(character_name, profile, meshed=meshed), reference=reference)
+
+
+#: The character block of an outfit's dressed front made from its reference
+#: picture (Ruling A74b), after the head words: the clothing is the
+#: picture's — never named (Ruling A29: a view change never names it).
+OUTFIT_REFERENCE_BODY = "wearing exactly the clothing of the person in the picture and nothing else"
+
+
+def outfit_edit_prompt(character_name: str, *, text: str, bald: bool, hair: Optional[str],
+                       profile: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str]:
+    """``(character block, prompt, negative)`` of an outfit's dressed front
+    made from its reference picture: the block is the head of the body the
+    outfit is painted on (``BALD_HEAD`` for a bald one or under an own hair
+    mesh — ``bald`` —, else its hair text; ``hair`` as ``dress_prompt``'s)
+    and ``OUTFIT_REFERENCE_BODY``, for ``BASE_FRONT_EDIT_USE_CASE``'s slot;
+    the prompt is the base front's pose text (with the hair clauses of a
+    haired body); the negative is the dressed front's (``dress_negative`` of
+    the outfit text ``text``, ``HAIR_NEGATIVE`` when bald) and
+    ``POSE_NEGATIVE``."""
+    from app.core.garment_hair import BALD
+    profile = _profile_of(character_name, profile)
+    worn_hair = hair_text(character_name, profile=profile) if hair is None else ("" if hair == BALD else hair)
+    haired = bool(worn_hair) and not bald
+    block = ", ".join((worn_hair if haired else BALD_HEAD, OUTFIT_REFERENCE_BODY))
+    prompt = _haired_front_pose(character_name, worn_hair, profile) if haired else _pose_text("front")
+    negative = dress_negative(text, keep_hair=haired)
+    if bald:
+        negative = f"{negative}, {HAIR_NEGATIVE}"
+    return block, prompt, f"{negative}, {POSE_NEGATIVE}"
+
+
+def _reference_front(character_name: str, *, signature: str, reference: Dict[str, Any], refs_dir: Path,
+                     pieces: Optional[Dict[str, str]], items: Optional[list], profile: Dict[str, Any], text: str,
+                     bald: bool, hair: Optional[str], on: str, registration: Optional[Path],
+                     extra: Dict[str, Any], load_kwargs: Dict[str, Any]) -> Optional[Path]:
+    """The dressed front of ``signature`` as an EDIT of the outfit's reference
+    picture (Ruling A74b): ``reference`` = ``{path, sha256}``; the picture is
+    frozen for the render (``_frozen_reference``), the edit is
+    ``outfit_edit_prompt`` under ``BASE_FRONT_EDIT_USE_CASE`` on the dressed
+    front's routing (occasion ``outfit_front``) with ``require_reference`` —
+    a routed backend without a reference slot is not applicable, never a text
+    render. The sidecar records the shape ``on`` and its front's content
+    (``base_image_sha256`` — the view belongs to that body like an edit of
+    it), ``outfit_reference_sha256`` / ``outfit_reference_image`` and
+    ``extra``. ``OutfitError`` when the picture is gone or changed since it
+    was picked."""
+    from app.core import expression_regen
+    from app.core.model_refs import _tpose_size
+    from app.core.outfit_references import REFERENCE_GONE
+    source = reference.get("path")
+    if source is None:
+        raise OutfitError(REFERENCE_GONE)
+    block, prompt, negative = outfit_edit_prompt(character_name, text=text, bald=bald, hair=hair, profile=profile)
+    width, height = _tpose_size()
+    with _frozen_reference(Path(source), refs_dir) as (frozen, sha):
+        if sha != reference.get("sha256"):
+            raise OutfitError("The outfit's reference image changed since it was picked — pick it again")
+        return expression_regen.render_character_image(
+            character_name,
+            output_stem=refs_dir / f"tpose_{signature}",
+            equipped_pieces=dict(pieces or {}), equipped_items=list(items or []),
+            pose_prompt="", expression_prompt="",
+            bare_prompt=prompt, extra_negative=negative,
+            image_use_case=BASE_FRONT_EDIT_USE_CASE, style_character=block,
+            occasion="outfit_front",
+            override_width=width, override_height=height,
+            apply_state_modifiers=False,
+            mesh_input_profile=profile,
+            reference_image=frozen, require_reference=True,
+            sidecar_extra={"base_signature": on, "dressed": True, "base_image_sha256": file_sha256(registration),
+                           "outfit_reference_sha256": sha, "outfit_reference_image": Path(source).name, **extra},
+            character_loras=True, **load_kwargs)
 
 
 def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[str, str]], items: Optional[list],
                   todo: List[str], force: bool, on: str, registrations: Dict[str, Optional[Path]],
                   texts: Dict[str, str], tsig: str, mesh: Dict[str, Any], dressed: bool, bald: bool,
                   profile: Dict[str, Any], raise_load: bool, current, hair: Optional[str] = None,
-                  hair_edit: bool = False) -> Dict[str, Optional[str]]:
+                  hair_edit: bool = False, reference: Optional[Dict[str, Any]] = None) -> Dict[str, Optional[str]]:
     """The render pass of ``generate_dressed_images`` (and of a shape's own
     views, ``prepare_shape``): the views ``todo`` of ``signature`` edited
     from the views ``registrations`` of the shape ``on`` with the dress
@@ -3353,7 +3650,11 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
     wears ``pieces`` / ``items``; ``current(view)`` is the stored view that
     counts now (the dressed front the back is drafted from). ``hair`` /
     ``hair_edit``: ``dress_prompt``'s (the shape's hair when it is not the
-    plain body's; a shape's own views put it on)."""
+    plain body's; a shape's own views put it on). ``reference`` (Ruling
+    A74b, an outfit's own picture: ``{path, sha256}``, ``path`` None when it
+    is gone): the dressed front is an EDIT of that picture
+    (``_reference_front``) instead of the shape's front, and every view
+    written records ``outfit_reference_sha256``."""
     import shutil
     from app.core import expression_regen
     from app.core.garment_images import square_reference
@@ -3364,6 +3665,7 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
     load_kwargs = {"raise_load": True} if raise_load else {}
     interrupted = False
     mesh_extra = {"mesh_items": mesh} if mesh else {}
+    ref_extra = {"outfit_reference_sha256": reference["sha256"]} if reference else {}
     _outfit_start(character_name, signature, "images")
     try:
         if not dressed:
@@ -3390,11 +3692,32 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
             if not force and is_texture_signature(tsig):
                 reused = _reuse_texture_views(character_name, signature=signature, tsig=tsig, bsig=on,
                                               todo=todo, texts=texts, base_views=registrations, pieces=pieces,
-                                              items=items, profile=profile, mesh=mesh)
+                                              items=items, profile=profile, mesh=mesh,
+                                              reference_sha=reference["sha256"] if reference else "")
                 for v, path in reused.items():
                     results[_kind(v)] = str(path)
                 todo = [v for v in todo if v not in reused]
-            if "front" in todo:
+            if "front" in todo and reference is not None:
+                try:
+                    path = _reference_front(character_name, signature=signature, reference=reference,
+                                            refs_dir=refs_dir, pieces=pieces, items=items, profile=profile,
+                                            text=texts.get("front", ""), bald=bald, hair=hair, on=on,
+                                            registration=registrations["front"],
+                                            extra={**mesh_extra, "texture_signature": tsig,
+                                                   "dress_text": texts.get("front", "")},
+                                            load_kwargs=load_kwargs)
+                    if path is None:
+                        errors.append("Dressed front edit of the outfit's reference image failed")
+                except Exception as e:  # noqa: BLE001 — one view never kills the pass
+                    if raise_load and _is_load(e):
+                        interrupted = True
+                        raise
+                    path = None
+                    errors.append(str(e) if isinstance(e, OutfitError)
+                                  else f"Dressed front edit of the outfit's reference image failed: {e}")
+                    logger.warning("Dressed %s front (%s) from its reference failed: %s", character_name, signature, e)
+                results["tpose"] = str(path) if path else None
+            elif "front" in todo:
                 prompt, negative = dress_prompt(character_name, "front", pieces=pieces, items=items,
                                                 profile=profile, text=texts.get("front", ""), bald=bald,
                                                 hair=hair, hair_edit=hair_edit)
@@ -3448,7 +3771,7 @@ def _render_views(character_name: str, *, signature: str, pieces: Optional[Dict[
                             character_name, v, signature=signature, bsig=on, pieces=pieces, items=items,
                             profile=profile, front=front, base_views=registrations, refs_dir=refs_dir,
                             size=(width, height), mesh_items=_ref_sidecar(front).get("mesh_items") or None,
-                            texture={"texture_signature": tsig, "dress_text": texts.get(v, "")},
+                            texture={"texture_signature": tsig, "dress_text": texts.get(v, ""), **ref_extra},
                             reuse_draft=not force, hair=hair, **load_kwargs)
                         if warning:
                             logger.warning("Dressed %s %s (%s): %s", v, character_name, signature, warning)
@@ -5233,6 +5556,7 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
 
 #: ``base_refresh_plan`` reason → the text the improvement step shows.
 REFRESH_REASON_TEXT = {"older_prompts": "older prompts",
+                       "reference": "made from another reference",
                        "views": "views not refreshed yet",
                        "model": "model built from older views",
                        "mesh_mismatch": "the mesh does not match its views",
@@ -5291,6 +5615,11 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
     * ``model`` — every view current, the stored base model not built from
       them (``model_overview.base_model_freshness`` stale): the model alone
       — a refresh that stopped before the model.
+    * ``reference`` (only with ``missing=True`` — the Build and the Base
+      body tab's Run all, a person's click; the ``base_refresh`` improvement
+      never spends on it, Ruling A74b): the stored front was made from
+      another reference than ``front_reference`` names now (or from text
+      while there is a profile image): every view, then the model.
     * ``mesh_mismatch`` (only with ``missing=True`` — the Build and the Base
       body tab's Run all, a person's click; the improvement never spends on
       it, Ruling A61): every view current, but the body retexture worker
@@ -5308,6 +5637,8 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
         return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "missing"} if missing else plan
     if prompts["state"] == model_overview.STALE:
         return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "older_prompts"}
+    if missing and not front_reference_state(character_name, bsig, profile=profile)["current"]:
+        return {**plan, "views": list(BASE_VIEWS), "model": True, "reason": "reference"}
     states = base_view_states(character_name, profile=profile)
     views = [v for v in BASE_VIEWS if v != "front" and states[v]["state"] != model_overview.CURRENT]
     if views:

@@ -675,6 +675,28 @@ _DEFAULT_IMAGE_USE_CASES = {
             "prompt_instruction": "Describe the character head-to-toe on a plain background with flat even lighting. Do not mention pose or facial expression.",
         },
     },
+    # The base-body front made FROM A REFERENCE IMAGE (Ruling A74b, user
+    # 2026-11-14: the text-only front gave every character nearly the same
+    # build): an edit of the profile image — or of an outfit's own reference,
+    # the dressed front — whose style opens with the edit instruction of the
+    # user's validated hub job c265fd78 ("change the view and position of the
+    # character in the picture to"), then the ``{character}`` block
+    # (base_body.edit_character / outfit_edit_character: the head and the
+    # body text, never the build words — the picture shows the build), then
+    # the framing and lighting clauses of ``base_front``. The pose text
+    # follows after a comma. Negatives as ``base_front``.
+    "base_front_edit": {
+        "keywords": {
+            "prompt_style": "change the view and position of the character in the picture to {character}, full body view, head to toe, both feet and both hands fully inside the frame, empty margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure and the face, sharp focus, high detail",
+            "prompt_negative": _NEG_TPOSE,
+            "prompt_instruction": "",
+        },
+        "natural": {
+            "prompt_style": "change the view and position of the character in the picture to {character}, the whole figure from head to feet inside the frame with both hands inside it and empty margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the whole figure and the face, sharp focus",
+            "prompt_negative": _NEG_TPOSE,
+            "prompt_instruction": "",
+        },
+    },
     "base_back": {
         "keywords": {
             "prompt_style": "render of a realistic 3D character model, lifelike skin{fabric} textures, {character}, full body view, head to toe, full arm span visible with both hands fully inside the frame, plain neutral background, flat even shadowless lighting, uniform illumination, sharp focus, high detail",
@@ -893,11 +915,17 @@ def fill_character_slot(style: str, character: Optional[str]) -> str:
     character = character.strip().strip(",").strip()
     if CHARACTER_SLOT not in style:
         return ", ".join(p for p in (character, style) if p)
-    pieces = [piece.strip().strip(",").strip() for piece in style.split(CHARACTER_SLOT)]
+    raw = style.split(CHARACTER_SLOT)
+    pieces = [piece.strip().strip(",").strip() for piece in raw]
     joined: List[str] = [pieces[0]]
     for piece in pieces[1:]:
         joined.extend((character, piece))
-    return ", ".join(p for p in joined if p)
+    out = ", ".join(p for p in joined if p)
+    # A slot that continues a sentence ("… in the picture to {character}", Ruling A74b) takes the block after a
+    # space, not after a comma — every other slot keeps its comma separators.
+    if character and len(raw) == 2 and raw[0].strip() and not raw[0].rstrip().endswith(","):
+        out = out.replace(f"{pieces[0]}, {character}", f"{pieces[0]} {character}", 1)
+    return out
 
 
 def join_style_prompt(style: str, prompt: str, character: Optional[str] = None) -> str:

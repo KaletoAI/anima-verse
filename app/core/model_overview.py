@@ -126,6 +126,10 @@ CLOTHING_STALE_REASONS = {"description_changed": "Piece description changed",
                           "base_changed": "Base body changed",
                           "base_model_changed": "Base model changed"}
 FITTED_ON_OLDER_BASE = "Fitted on an older base model"
+#: Ruling A74b: a dressed view made for another outfit reference image than the one set now.
+OUTFIT_REFERENCE_SET = "Made before the outfit's reference image was set — the Build renders it from the picture"
+OUTFIT_REFERENCE_CHANGED = "Made from another reference image of the outfit — the Build renders it from the current one"
+OUTFIT_REFERENCE_CLEARED = "Made from a reference image that was cleared — the Build renders it without one"
 
 
 def freshness(state: str, reason: str = "") -> Dict[str, Any]:
@@ -1282,6 +1286,13 @@ def annotate_base_info(character_name: str, info: Dict[str, Any]) -> Dict[str, A
                 tile["freshness"] = base_view_freshness(
                     view, str(tile.get("created_at") or ""), front_created,
                     prompts=(str(tile.get("prompt_fingerprint") or ""), current_prompts))
+        # Ruling A74b: a front made from another reference than the one it is made from now (or from text while
+        # there is a profile image) is outdated — said on the front tile; only a click re-renders it.
+        reference = info.get("front_reference") or {}
+        front_tile = meta.get("front")
+        if (isinstance(front_tile, dict) and reference and not reference.get("current", True)
+                and (front_tile.get("freshness") or {}).get("state") == CURRENT):
+            front_tile["freshness"] = freshness(STALE, str(reference.get("reason") or ""))
         model = info.get("model")
         if bsig and isinstance(model, dict):
             overview = base_model_overview(character_name, bsig)
@@ -1483,6 +1494,14 @@ def annotate_model_refs_info(character_name: str, info: Dict[str, Any]) -> Dict[
             if path is not None and on and base_body.dressed_image(character_name, view, signature, bsig,
                                                                    fig=delivered()) is None:
                 off_rule = FIGURE_CHANGED
+                if record.get("dressed") is not False:
+                    # Ruling A74b: made for another outfit reference picture than the one set now (or none).
+                    from app.core import outfit_references
+                    fig = delivered()
+                    wanted_ref = outfit_references.wanted_sha(character_name, fig.pieces, fig.open)
+                    if str(record.get("outfit_reference_sha256") or "") != wanted_ref:
+                        off_rule = (OUTFIT_REFERENCE_SET if wanted_ref and not record.get("outfit_reference_sha256")
+                                    else OUTFIT_REFERENCE_CLEARED if not wanted_ref else OUTFIT_REFERENCE_CHANGED)
             tile["freshness"] = dressed_freshness(
                 record, bsig=on if meshed else bsig, base_view_sha=view_sha,
                 mesh_ready=bool(base_body.mesh_items_ready(character_name, record, bsig=bsig)), off_rule=off_rule)

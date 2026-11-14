@@ -8,7 +8,12 @@ Runs against a THROWAWAY world + instance with a copy of the repo's ``human``
 package — no real world, no image backend, no server process, no GPU. The
 expected values below are derived by hand from the brief and the code rules:
 
-Fixtures: ``Demo`` (template human-default, profile image Demo_1.png,
+Ruling A74b (2026-11-15): the front of a character WITH a profile image is an
+EDIT of that picture — the checks below that changed say so; the old values
+are in the history of this file (base d1ca15228).
+
+Fixtures: ``Demo`` (template human-default, profile image Demo_1.png — the
+fixture's 8x8 RGBA picture, transparent but for one opaque pixel,
 ``outfit_imagegen`` {loras: [char-lora 0.8], tpose_loras: [pose-lora 0.6]},
 body slot ``marking.look`` = "slot-lora-x" — a ``lora_select`` attribute of
 the fixture package ``fixture_lora`` (apply_to human-default, always
@@ -20,9 +25,13 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
 [1] Recorder in place of ``expression_regen.render_character_image`` (writes an
     8x8 RGBA PNG, transparent but for one opaque pixel, to ``<stem>.png``).
     generate_base_images("Demo") makes 4 calls, in BASE_VIEWS order:
-      front: occasion "base_front", image_use_case "base_front", reference_image None
-             (the profile image is slotted by render_character_image's
-             profile_only payload, as for every tpose render), stem
+      front: occasion "base_front", image_use_case "base_front_edit"
+             (Ruling A74b), reference_image = a frozen copy of the profile
+             image NAMED Demo_1.png inside model_refs/.editref_<random>/ (not
+             the gallery file itself; its transparent corner flattened onto
+             the grey (128, 128, 128) of the view references; the dir is gone
+             afterwards), require_reference True (a backend without a
+             reference slot is not applicable — the views pass False), stem
              model_refs/.handgate_<random>/attempt1/tpose_<bsig> (the hand
              gate's staging dir; the recorder's 8x8 image has no figure to
              measure, so attempt 1 passes and lands on model_refs/tpose_<bsig>);
@@ -36,13 +45,18 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
       left/right: use case "base_view_side", stems tpose_left_<bsig> /
              tpose_right_<bsig>.
     Every call: bare_prompt/extra_negative = base_prompt(view) (prompt,
-    negative), style_character = base_character(view) (the block for the
-    style's {character} slot on the front, None on back/left/right), NO negative_prompt (it would REPLACE the use-case negative),
+    negative), style_character = edit_character() on the front (Ruling
+    A74b: head + BODY_TEXT + the packages' base-body texts — no gender, age,
+    height or build: the picture shows them), base_character(view) = None on
+    back/left/right, NO negative_prompt (it would REPLACE the use-case negative),
     equipped {} / [], apply_state_modifiers False, size _tpose_size() =
     (1024, 1024) (no config override), sidecar_extra {"base_signature": bsig,
     "base_identity": base_identity(Demo), "prompt_fingerprint":
     prompt_fingerprint(Demo), "prompt_rules": "a74a"} (the identity split of
-    2026-11-11; ``prompt_rules`` marks a view rendered since Ruling A74a).
+    2026-11-11; ``prompt_rules`` marks a view rendered since Ruling A74a), the
+    front's plus "front_reference": {"method": "reference", "image":
+    "Demo_1.png", "sha256": sha256 of Demo_1.png's bytes, "prompt":
+    base_body._edit_fingerprint(Demo)} (Ruling A74b).
     While the front renders, base_info status front.running is True.
     Afterwards find_ref_image(Demo, "tpose", bsig) is model_refs/tpose_<bsig>.png
     and find_ref_image(Demo, "tpose_left", bsig) the left file; the return
@@ -50,8 +64,12 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     A second call without force renders nothing and returns {}.
     view="left", force=True renders ONLY left (1 call, reference = front name).
     view="back" without force (cached) renders nothing.
-[2] Refusals: an unknown view, DemoFox (animal) and DemoBare (no profile
-    image) raise ValueError without a render. DemoFail: front returns None ->
+[2] Refusals: an unknown view and DemoFox (animal) raise ValueError without
+    a render. DemoBare (no profile image) is NO refusal any more (Ruling A74b,
+    decision 2): 4 renders, the front the text render as before — use case
+    "base_front", reference None, require_reference False, style_character
+    base_character(front), sidecar front_reference {"method": "text"}.
+    DemoFail: front returns None ->
     result {"front": None}, no view render (they need the front), status
     front.failed True and back/left/right failed with error "front render
     failed"; a view of DemoFail then raises ValueError (no front).
@@ -64,10 +82,11 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     JSON payload, writes the "generated" file into the images dir) and a
     recording postprocess_outfit_image:
       front payload: prompt == base_prompt(front)[0] (bare), image_use_case
-      "base_front", occasion "base_front", style_character ==
-      base_character(front), negative_prompt_extra == BASE_NEGATIVE, no
-      "negative_prompt" key, profile_only True, no reference_image_override,
-      clothed False (no fabric clause in the use-case style);
+      "base_front_edit", occasion "base_front", style_character ==
+      edit_character(), negative_prompt_extra == BASE_NEGATIVE, no
+      "negative_prompt" key, profile_only True, reference_image_override
+      ending with "/Demo_1.png" inside model_refs/.editref_*,
+      require_reference True, clothed False (no fabric clause in the use-case style);
       back payload: use case "base_view_back", occasion "base_view", NO
       style_character key (the edit view sends its short prompt alone),
       reference_image_override ends with "/tpose_<bsig>.png";
@@ -87,9 +106,10 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
 [5] Service: resolve_negative_prompt({"negative_prompt_extra": X}, UC) is
     "UC, X"; with an explicit negative N it is "N, X"; without extra it is UC.
     _parse_input keeps "negative_prompt_extra" and "style_character" (the
-    whitelist; a payload without the key parses to None). For the base_front
-    use case the merged negative starts with config._NEG_TPOSE (the same
-    shipped negative as tpose) and ends with BASE_NEGATIVE.
+    whitelist; a payload without the key parses to None) and
+    "require_reference". For the base_front and base_front_edit use cases the
+    merged negative starts with config._NEG_TPOSE (the same shipped negative
+    as tpose) and ends with BASE_NEGATIVE.
 [6] Routes (characters + figure routers on a bare FastAPI app, real sessions):
     player GET /characters/Demo/figure?plain=1 -> 403; admin -> 200 with
     plain_body.signature bsig (since Task 11 of plan 2026-11-12-unified-worn-pieces
@@ -97,7 +117,9 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     400 for DemoFox / 200 {pipeline: true} for Demo) is checked in smoke_pipeline_switch_removed; POST .../images
     {view: "left", force: true} -> 202 {started: true} and, once the worker
     is done, exactly one render (left); {view: "sideways"} -> 422; DemoFox
-    images -> 400; DemoBare images -> 409; GET .../images/front -> 200 with
+    images -> 400; DemoBare images -> 202 (Ruling A74b: no profile image =
+    the text render, no refusal; its views are stored by [2], so nothing
+    renders); GET .../images/front -> 200 with
     the PNG; unknown character (figure?plain=1) -> 404.
 """
 import json
@@ -224,10 +246,16 @@ def main() -> int:
                   ("attempt1", refs, True))
             check("view stem dir", {c["stem"].parent for c in CALLS[1:]}, {refs})
             check("staging gone", [p.name for p in refs.iterdir() if p.is_dir()], [])
+            import hashlib
+            profile_file = get_character_images_dir("Demo") / "Demo_1.png"
+            check("front reference: frozen copy of the profile image",
+                  (CALLS[0]["ref"].name, CALLS[0]["ref"].parent.parent, CALLS[0]["ref"].parent.name.startswith(".editref_"),
+                   CALLS[0]["ref"] == profile_file, CALLS[0]["corner"]),
+                  ("Demo_1.png", refs, True, False, (128, 128, 128)))
+            check("require_reference", [bool(c.get("require_reference")) for c in CALLS], [True, False, False, False])
             check("occasions", [c["occasion"] for c in CALLS], ["base_front", "base_view", "base_view", "base_view"])
             check("use cases", [c["image_use_case"] for c in CALLS],
-                  ["base_front", "base_view_back", "base_view_side", "base_view_side"])
-            check("front reference", CALLS[0]["ref"], None)
+                  ["base_front_edit", "base_view_back", "base_view_side", "base_view_side"])
             check("view reference names", [c["ref"].name for c in CALLS[1:]], [f"tpose_{bsig}.png"] * 3)
             check("view reference is a copy", any(c["ref"] == refs / f"tpose_{bsig}.png" for c in CALLS[1:]), False)
             check("view reference on grey", [c["corner"] for c in CALLS[1:]], [(128, 128, 128)] * 3)
@@ -237,14 +265,19 @@ def main() -> int:
                 check(f"{view} bare_prompt", call["bare_prompt"], prompt)
                 check(f"{view} extra_negative", call["extra_negative"], negative)
                 check(f"{view} style_character", call.get("style_character"),
-                      base_body.base_character("Demo", view))
+                      base_body.edit_character("Demo") if view == "front" else base_body.base_character("Demo", view))
                 check(f"{view} no replacing negative", call.get("negative_prompt", ""), "")
                 check(f"{view} equipped", (call["equipped_pieces"], call["equipped_items"]), ({}, []))
                 check(f"{view} no state modifiers", call["apply_state_modifiers"], False)
                 check(f"{view} size", (call["override_width"], call["override_height"]), (1024, 1024))
-                check(f"{view} sidecar_extra", call["sidecar_extra"],
-                      {"base_signature": bsig, "base_identity": base_body.base_identity("Demo"),
-                       "prompt_fingerprint": base_body.prompt_fingerprint("Demo"), "prompt_rules": "a74a"})
+                want_extra = {"base_signature": bsig, "base_identity": base_body.base_identity("Demo"),
+                              "prompt_fingerprint": base_body.prompt_fingerprint("Demo"), "prompt_rules": "a74a"}
+                if view == "front":
+                    want_extra["front_reference"] = {
+                        "method": "reference", "image": "Demo_1.png",
+                        "sha256": hashlib.sha256(profile_file.read_bytes()).hexdigest(),
+                        "prompt": base_body._edit_fingerprint("Demo", get_character_profile("Demo"))}
+                check(f"{view} sidecar_extra", call["sidecar_extra"], want_extra)
             check("front was running during its render", CALLS[0]["running"], True)
             check("find_ref_image front", model_refs.find_ref_image("Demo", "tpose", bsig), refs / f"tpose_{bsig}.png")
             check("find_ref_image left", model_refs.find_ref_image("Demo", "tpose_left", bsig),
@@ -265,14 +298,21 @@ def main() -> int:
 
             print("[2] refusals and a failing front")
             for label, kwargs in (("unknown view", {"character_name": "Demo", "view": "top"}),
-                                  ("animal", {"character_name": "DemoFox"}),
-                                  ("no profile image", {"character_name": "DemoBare"})):
+                                  ("animal", {"character_name": "DemoFox"})):
                 try:
                     base_body.generate_base_images(**kwargs)
                     check(label, "no error", "ValueError")
                 except ValueError:
                     check(label, "ValueError", "ValueError")
             check("refusals render nothing", len(CALLS), 0)
+            out = base_body.generate_base_images("DemoBare")
+            check("no profile image: the text render", (len(CALLS), sorted(out)), (4, sorted(views)))
+            bare = CALLS[0]
+            check("no profile image: front", (bare["image_use_case"], bare["ref"], bool(bare.get("require_reference")),
+                                              bare.get("style_character"), bare["sidecar_extra"].get("front_reference")),
+                  ("base_front", None, False, base_body.base_character("DemoBare", "front"), {"method": "text"}))
+            check("no profile image: front_reference text", base_body.front_reference("DemoBare"), {"method": "text"})
+            CALLS.clear()
             out = base_body.generate_base_images("DemoFail")
             check("failed front result", out, {"front": None})
             check("failed front: no view render", len(CALLS), 1)
@@ -337,12 +377,16 @@ def main() -> int:
         check("4 payloads", len(payloads), 4)
         front, back = payloads[0], payloads[1]
         check("front prompt bare", front["prompt"], base_body.base_prompt("Demo", "front")[0])
-        check("front use case/occasion", (front["image_use_case"], front["occasion"]), ("base_front", "base_front"))
-        check("front style_character", front.get("style_character"), base_body.base_character("Demo", "front"))
+        check("front use case/occasion", (front["image_use_case"], front["occasion"]),
+              ("base_front_edit", "base_front"))
+        check("front style_character", front.get("style_character"), base_body.edit_character("Demo"))
         check("front extra negative", front.get("negative_prompt_extra"), base_body.BASE_NEGATIVE)
         check("front no replacing negative", "negative_prompt" in front, False)
         check("front profile_only", front["profile_only"], True)
-        check("front no reference override", "reference_image_override" in front, False)
+        check("front reference override: the frozen profile image",
+              (Path(front.get("reference_image_override", "")).name,
+               Path(front.get("reference_image_override", "")).parent.name.startswith(".editref_"),
+               front.get("require_reference")), ("Demo_1.png", True, True))
         check("front clothed", front["clothed"], False)
         check("back use case/occasion", (back["image_use_case"], back["occasion"]), ("base_view_back", "base_view"))
         check("back no style_character", "style_character" in back, False)
@@ -369,15 +413,16 @@ def main() -> int:
         check("no extra", resolve_negative_prompt({}, "UC"), "UC")
         parsed = ImageService._parse_input(ImageService.__new__(ImageService), json.dumps(front))
         check("whitelist keeps extra", parsed.get("negative_prompt_extra"), base_body.BASE_NEGATIVE)
-        check("whitelist keeps style_character", parsed.get("style_character"),
-              base_body.base_character("Demo", "front"))
+        check("whitelist keeps style_character", parsed.get("style_character"), base_body.edit_character("Demo"))
+        check("whitelist keeps require_reference", parsed.get("require_reference"), True)
         check("no key parses to None",
               ImageService._parse_input(ImageService.__new__(ImageService), json.dumps(plain)).get(
                   "style_character", "(dropped)"), None)
-        uc = config.get_use_case_prompts("base_front", "", clothed=False)["prompt_negative"]
-        merged = resolve_negative_prompt(parsed, uc)
-        check("tpose negative kept", merged.startswith(config._NEG_TPOSE), True)
-        check("base negative appended", merged.endswith(base_body.BASE_NEGATIVE), True)
+        for use_case in ("base_front", "base_front_edit"):
+            uc = config.get_use_case_prompts(use_case, "", clothed=False)["prompt_negative"]
+            merged = resolve_negative_prompt(parsed, uc)
+            check(f"{use_case}: tpose negative kept", merged.startswith(config._NEG_TPOSE), True)
+            check(f"{use_case}: base negative appended", merged.endswith(base_body.BASE_NEGATIVE), True)
 
         print("[6] routes")
         from fastapi import FastAPI
@@ -412,8 +457,8 @@ def main() -> int:
                 check("bad view", client.post("/characters/Demo/base-body/images",
                                               json={"view": "sideways"}).status_code, 422)
                 check("animal images", client.post("/characters/DemoFox/base-body/images", json={}).status_code, 400)
-                check("no profile image", client.post("/characters/DemoBare/base-body/images",
-                                                      json={}).status_code, 409)
+                check("no profile image: no refusal", client.post("/characters/DemoBare/base-body/images",
+                                                                  json={}).status_code, 202)
                 r = client.get("/characters/Demo/base-body/images/front")
                 check("serve front", (r.status_code, r.content[:4]), (200, b"\x89PNG"))
                 check("unknown character", client.get("/characters/Nobody/figure?plain=1").status_code, 404)

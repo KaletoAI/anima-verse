@@ -987,7 +987,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
                            style_character: Optional[str] = None,
                            raise_load: bool = False,
                            crop_back_to: Optional[Tuple[Any, Tuple[int, int], Tuple[int, int]]] = None,
-                           name_outfit: bool = True
+                           name_outfit: bool = True,
+                           require_reference: bool = False
                            ) -> Optional[Path]:
     """Render explicit content to a caller-owned stem, without expression policy.
 
@@ -1021,6 +1022,10 @@ def render_character_image(character_name: str, *, output_stem: Path,
     ``MediaGenerationDisabled`` of the render is RAISED instead of ending in
     None — a chain that persists refusals must never record load as one.
     Every other caller keeps None for every failure.
+    ``require_reference`` (Ruling A74b): the render is an EDIT of
+    ``reference_image`` — a routed backend that does not slot it is not
+    applicable (``BackendNotApplicableError``: the routing tries the next
+    chain entry, no cooldown); the render never falls back to the text alone.
     ``name_outfit=False`` (Ruling A29): the render only CHANGES THE VIEW of a
     ``reference_image`` that already shows the figure dressed (the T-pose
     back/side views of ``model_refs``) — the prompt names no clothing: the
@@ -1241,6 +1246,8 @@ def render_character_image(character_name: str, *, output_stem: Path,
         payload["prompt_by_family"] = {"keywords": bare_prompt_keywords}
     if reference_image is not None:
         payload["reference_image_override"] = str(reference_image)
+        if require_reference:
+            payload["require_reference"] = True
 
     if outfit_w:
         payload["override_width"] = outfit_w
