@@ -406,3 +406,156 @@ def tip_panels(character_name: str, signature: str) -> List[Dict[str, Any]]:
                        "due": due,
                        "error": last.get("error") or "" if last.get("signature") == signature else ""})
     return panels
+
+
+# --- Tip smoothing (Ruling A43) ------------------------------------------------------------------------------------
+#
+# Before a ``pair_tip`` group builds its stub, ``extension_bones.tip_mesh`` smooths the source skin over the part's
+# footprint and the moved vertices get the surface's own normals (Ruling A34). It runs inside the extension rebuild;
+# this record makes it visible on its own: ``meta["tip_smoothing"]`` of a base model =
+# ``{version, at, status: built|failed, error, groups: {group: {applied, reason, max_shift_mm, moved, radius_mm,
+# passes, inverted: [before, after], off_60: [before, after], region_mm}}}``, written by every extension build of a
+# base body that carries a ``pair_tip`` group (``model3d._extension_rig_once``). A base whose tip groups lack it, or
+# carry an older ``version``, is due: Run all, the Build or "Smooth again" rerun the extension step (CPU, no hub job).
+
+#: The tip smoothing's version: a record of an older one makes the step due. 1 = Laplacian smoothing over the
+#: footprint + surface normals (Ruling A34), recorded with the normal counts (Ruling A43).
+TIP_SMOOTHING_VERSION = 1
+
+
+def _source_smooth(values: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    for row in values.get("placement") or []:
+        if isinstance(row, dict) and isinstance(row.get("source_smooth"), dict):
+            return row["source_smooth"]
+    return None
+
+
+def tip_smoothing_group(values: Dict[str, Any]) -> Dict[str, Any]:
+    """One group's entry of the record from the extension script's metrics of that group (pure)."""
+    values = values if isinstance(values, dict) else {}
+    smooth = _source_smooth(values)
+    normals = values.get("tip_normals") if isinstance(values.get("tip_normals"), dict) else {}
+    rows = [row for row in values.get("placement") or [] if isinstance(row, dict)]
+    entry: Dict[str, Any] = {"applied": False, "reason": "", "max_shift_mm": None, "moved": 0,
+                             "radius_mm": None, "passes": None,
+                             "inverted": normals.get("inverted"), "off_60": normals.get("off_60"),
+                             "region_mm": normals.get("region_mm")}
+    status = str(values.get("status") or ("applied" if rows else "not_found"))
+    if status not in ("applied", ""):
+        entry["reason"] = f"Tip part not built: {values.get('reason') or status}"
+    elif smooth is None and rows and all(row.get("tip_source") == "mesh" for row in rows):
+        entry["reason"] = "The model's own tip is kept — nothing replaced, nothing smoothed"
+    elif smooth is None:
+        entry["reason"] = "Not smoothed"
+    else:
+        entry.update(max_shift_mm=smooth.get("max_shift_mm"), moved=int(smooth.get("moved") or 0),
+                     radius_mm=round(float(smooth.get("radius_m") or 0) * 1000, 2),
+                     passes=smooth.get("iterations"))
+        entry["applied"] = entry["moved"] > 0
+        if not entry["applied"]:
+            entry["reason"] = "Already smooth — nothing moved"
+    return entry
+
+
+def tip_smoothing_record(metrics: Dict[str, Any], tip_ids: List[str], at: str) -> Dict[str, Any]:
+    """The record of a published extension build whose ``pair_tip`` groups are ``tip_ids`` (pure)."""
+    return {"version": TIP_SMOOTHING_VERSION, "at": at, "status": "built", "error": "",
+            "groups": {gid: tip_smoothing_group((metrics or {}).get(gid) or {}) for gid in tip_ids}}
+
+
+def tip_smoothing_failed(previous: Any, error: str, at: str) -> Dict[str, Any]:
+    """The record after an extension build of the tip groups that published nothing: the model keeps what it had
+    (the previous groups stay listed); ``status`` failed with the reason, not due again until a rebuild is asked
+    for (no retry loop in automatic Builds)."""
+    groups = (previous or {}).get("groups") if isinstance(previous, dict) else None
+    return {"version": TIP_SMOOTHING_VERSION, "at": at, "status": "failed", "error": error or "Extension rebuild failed",
+            "groups": dict(groups or {})}
+
+
+def tip_smoothing_due(record: Any, tip_ids: List[str]) -> bool:
+    """Whether a base model with the ``pair_tip`` groups ``tip_ids`` needs its tip smoothing: no record, a record of
+    an older version, or one that does not cover every group (pure). False without tip groups."""
+    if not tip_ids:
+        return False
+    if not isinstance(record, dict):
+        return True
+    try:
+        version = int(record.get("version") or 0)
+    except (TypeError, ValueError):
+        version = 0
+    if version < TIP_SMOOTHING_VERSION:
+        return True
+    return record.get("status") != "failed" and not set(tip_ids) <= set((record.get("groups") or {}).keys())
+
+
+def _mm(value: Any) -> str:
+    return f"{float(value):.1f}"
+
+
+def tip_smoothing_summary(record: Optional[Dict[str, Any]], due: bool) -> Tuple[str, str]:
+    """``(light, text)`` of the record (English, the model step's detail; the tab builds its own translated line):
+    ``ok`` applied · ``warn`` due · ``error`` the last build failed · ``off`` nothing to smooth."""
+    if not isinstance(record, dict) or due and int(record.get("version") or 0) < TIP_SMOOTHING_VERSION:
+        return "warn", "Not applied to this model yet — rebuilds the extension bones (local, no hub job)"
+    if record.get("status") == "failed":
+        return "error", f"Last rebuild failed: {record.get('error') or 'unknown error'}"
+    groups = [g for g in (record.get("groups") or {}).values() if isinstance(g, dict)]
+    applied = [g for g in groups if g.get("applied")]
+    if due:
+        return "warn", "A tip part is not covered yet — rebuilds the extension bones (local, no hub job)"
+    if not applied:
+        reasons = sorted({str(g.get("reason") or "Not smoothed") for g in groups})
+        return "off", "; ".join(reasons) or "Not smoothed"
+    shift = max(float(g.get("max_shift_mm") or 0) for g in applied)
+    text = f"Applied — max shift {_mm(shift)} mm"
+    inverted = [g.get("inverted") for g in applied if isinstance(g.get("inverted"), list) and len(g["inverted"]) == 2]
+    if inverted:
+        text += f", inverted normals {sum(i[0] for i in inverted)} → {sum(i[1] for i in inverted)}"
+    return "ok", text
+
+
+def tip_smoothing_state(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
+    """The Base body tab's tip smoothing row of the stored base model ``signature``: ``{groups: [{id, label}],
+    record, due, light, summary, running, last}``; None without a stored humanoid base model or when it carries no
+    switched-on ``pair_tip`` group (the row is hidden). ``running`` / ``last``: the extension rebuild of the
+    character ("Smooth again" = ``start_tip_rebuild``). Never raises (None)."""
+    from app.core.model3d import _mesh_repair_target, _read_sidecar, find_model3d, required_rig
+    try:
+        path = find_model3d(character_name, signature) if signature else None
+        if path is None:
+            return None
+        meta = _read_sidecar(path)
+        meta.setdefault("rig", required_rig(character_name))
+        if not _mesh_repair_target(meta, path):
+            return None
+        groups = [g for g in _tip_groups(character_name, signature, meta=meta) if g["enabled"]]
+    except Exception:  # noqa: BLE001 — the poll never fails on the row
+        logger.exception("Tip smoothing state of %s (%s) failed", character_name, signature)
+        return None
+    if not groups:
+        return None
+    record = meta.get("tip_smoothing") if isinstance(meta.get("tip_smoothing"), dict) else None
+    due = tip_smoothing_due(record, [g["id"] for g in groups])
+    light, text = tip_smoothing_summary(record, due)
+    with _lock:
+        running = _running.get(character_name) == signature
+        last = dict(_results.get(character_name) or {})
+    return {"groups": [{"id": g["id"], "label": g.get("label") or g["id"]} for g in groups],
+            "record": record, "due": due, "light": light, "summary": text, "running": running,
+            "last": last if last.get("signature") == signature else None,
+            "version": TIP_SMOOTHING_VERSION}
+
+
+def model_tip_smoothing_due(character_name: str, path, meta: Dict[str, Any]) -> bool:
+    """Whether the stored base model ``path`` (sidecar ``meta``) needs its tip smoothing (``tip_smoothing_due`` over
+    its switched-on ``pair_tip`` groups). False for any other model, after a failed extension build (its own row
+    says so) and when the groups cannot be read."""
+    from app.core.model3d import _mesh_repair_target
+    if not _mesh_repair_target(meta, path) or (meta.get("extension_rig") or {}).get("status") == "failed":
+        return False
+    try:
+        tip_ids = [g["id"] for g in _tip_groups(character_name, path.stem, meta=meta) if g["enabled"]]
+    except Exception:  # noqa: BLE001 — a due check never fails the caller
+        logger.debug("Tip groups of %s (%s) not readable", character_name, path, exc_info=True)
+        return False
+    return tip_smoothing_due(meta.get("tip_smoothing"), tip_ids)

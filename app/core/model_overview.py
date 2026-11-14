@@ -304,6 +304,34 @@ def _mesh_repair_step(meta: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return step("mesh_repair", label, WARNING if record.get("unfilled") else DONE, summary(record), numbers)
 
 
+def _tip_smoothing_step(state: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The tip smoothing of a base model (Ruling A43; ``extension_tip.tip_smoothing_state``): applied with its max
+    shift and inverted normals before → after, due on a model built before its record, or nothing to smooth. None
+    when the model carries no switched-on ``pair_tip`` group (no row)."""
+    if not state:
+        return None
+    label = "Tip smoothing"
+    record = _dict(state.get("record"))
+    numbers: Dict[str, Any] = {}
+    groups = [g for g in _dict(record.get("groups")).values() if isinstance(g, dict)]
+    shifts = [float(g["max_shift_mm"]) for g in groups if g.get("applied") and g.get("max_shift_mm") is not None]
+    if shifts:
+        numbers["max_shift_mm"] = max(shifts)
+    inverted = [g["inverted"] for g in groups if isinstance(g.get("inverted"), list) and len(g["inverted"]) == 2]
+    if inverted:
+        numbers["inverted_before"] = sum(int(i[0]) for i in inverted)
+        numbers["inverted_after"] = sum(int(i[1]) for i in inverted)
+    if record.get("version") is not None:
+        numbers["version"] = record.get("version")
+    detail = str(state.get("summary") or "")
+    if record.get("at"):
+        detail += f" · built {record['at']}"
+    status = {"ok": DONE, "warn": WARNING, "error": FAILED, "off": SKIPPED}.get(str(state.get("light")), WARNING)
+    if not record:
+        status = NOT_RECORDED
+    return step("tip_smoothing", label, status, detail, numbers)
+
+
 def _extension_step(state: Dict[str, Any], *, source: str = "") -> Dict[str, Any]:
     if not state:
         return step("extension_rig", "Extension rig", SKIPPED, "No extension groups")
@@ -570,14 +598,16 @@ def _covered_step(record: Dict[str, Any], *, exists: bool, current: Optional[boo
 
 def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any]],
                      covered_exists: bool = False, covered_current: Optional[bool] = None,
-                     collision_current: Optional[bool] = None) -> List[Dict[str, Any]]:
+                     collision_current: Optional[bool] = None,
+                     tip_smoothing: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """The steps of a base model (pure). ``meta``: its sidecar;
     ``front_meta``: the sidecar of the current base front image (its
     ``hand_gate``), None without one; ``covered_exists`` / ``covered_current``:
     whether ``model3d/covered/<bsig>.glb`` exists and was built from the
     model's current clean prerig source (None = unknown);
     ``collision_current``: whether the stored capsule set still describes
-    the file (None = unknown)."""
+    the file (None = unknown); ``tip_smoothing``: the model's tip smoothing state
+    (``extension_tip.tip_smoothing_state``, Ruling A43), None = no row."""
     blender = _dict(meta.get("blender"))
     rows = [_hand_gate_step(front_meta), _mesh_step(meta), _face_cleanup_step(meta),
             *_face_steps(_dict(meta.get("face_retexture"))),
@@ -585,6 +615,7 @@ def base_model_steps(meta: Dict[str, Any], *, front_meta: Optional[Dict[str, Any
     for row in (_head_twist_step(blender), _posture_step(blender), _normalize_step(blender),
                 _limb_weights_step(blender, str(meta.get("rig") or "")),
                 _mesh_repair_step(meta),
+                _tip_smoothing_step(tip_smoothing),
                 _extension_step(_dict(meta.get("extension_rig"))),
                 _covered_step(_dict(meta.get("covered_variant")), exists=covered_exists, current=covered_current),
                 _collision_step(meta, current=collision_current),
@@ -1198,7 +1229,9 @@ def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, An
             except OSError:
                 covered_current = None
     from app.core import collision
+    from app.core.extension_tip import tip_smoothing_state
     steps = base_model_steps(meta, front_meta=_sidecar(front) if front else None,
+                             tip_smoothing=tip_smoothing_state(character_name, bsig),
                              covered_exists=covered.is_file(), covered_current=covered_current,
                              collision_current=(collision.is_current(meta.get("collision"),
                                                                      collision.identity(path, meta)[1],

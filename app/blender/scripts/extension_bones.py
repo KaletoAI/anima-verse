@@ -902,6 +902,53 @@ def refresh_normals(meshes, snapshot):
     return refreshed
 
 
+# Metres: the region around each tip whose normals the tip smoothing record
+# counts (Ruling A43; the radius the A34 diagnosis measured in).
+TIP_NORMAL_REGION_M = .04
+# A normal more than this far off its surface counts as "off" (cos 60 deg).
+TIP_NORMAL_OFF_COS = .5
+
+
+def normal_census(meshes, centres):
+    """How the shading normals near ``centres`` (world points) stand to the
+    surface (Ruling A43): ``{vertices, inverted, off_60}`` — the vertices
+    within ``TIP_NORMAL_REGION_M`` of a centre, those of them with a corner
+    normal pointing against the surface's own smooth normal (into the body:
+    a dark hole in the skin) and those more than 60 deg off it. The surface
+    normal of a vertex sums ``vertex.normal`` over its coincident copies, as
+    ``refresh_normals`` does."""
+    vertices = inverted = off = 0
+    for mesh in meshes:
+        data = mesh.data
+        world = mesh.matrix_world
+        near = {v.index for v in data.vertices if any(((world@v.co)-c).length <= TIP_NORMAL_REGION_M for c in centres)}
+        if not near:
+            continue
+        key = lambda v: tuple(round(c/COINCIDENT_EPSILON_M) for c in v.co)
+        keys = {i:key(data.vertices[i]) for i in near}
+        wanted = set(keys.values())
+        sums = {}
+        for v in data.vertices:
+            k = key(v)
+            if k in wanted:
+                sums[k] = sums.get(k,Vector())+v.normal
+        corners = data.corner_normals
+        worst = {}
+        for loop in data.loops:
+            i = loop.vertex_index
+            if i not in near:
+                continue
+            surface = sums[keys[i]]
+            if surface.length < 1e-12:
+                continue
+            d = Vector(corners[loop.index].vector).dot(surface.normalized())
+            worst[i] = min(worst.get(i,1.),d)
+        vertices += len(near)
+        inverted += sum(d < 0 for d in worst.values())
+        off += sum(d < TIP_NORMAL_OFF_COS for d in worst.values())
+    return {'vertices':vertices,'inverted':inverted,'off_60':off}
+
+
 # Metres per step of the tip offset walk along the surface.
 TIP_WALK_STEP_M = .0005
 # Millimetres: the tip offset range per direction (the server clamps the
@@ -2653,6 +2700,7 @@ def extension_bones(args):
         return skip('; '.join(k+': '+v for k,v in failed.items()),failed,'failed' if malformed else 'not_found')
     soft,prepared,tip_info = {},{},{}
     snapshot = None   # vertex positions before the first tip op (refresh_normals)
+    census = {}       # group -> (tip centres, normal census before its tip op) — Ruling A43
     # A colour placement always pins the re-plan; a geometry placement only
     # when a tip group stands on it (its crest apex is the tip suggestion).
     tip_sources = {g.get('depends_on') for g in enabled if g['op']=='pair_tip'}
@@ -2673,6 +2721,8 @@ def extension_bones(args):
             rows,tip_info[g['id']] = tip_positions(meshes,pinned[g['depends_on']],g.get('tip_override'))
             if snapshot is None:
                 snapshot = position_snapshot(meshes)
+            centres = [Vector(row['tip']) for row in rows]
+            census[g['id']] = (centres,normal_census(meshes,centres))
             prepared[g['id']] = tip_mesh(meshes,p,rows)
         if prepared:
             co,edges,owners,normals,faces = mesh_arrays(meshes)
@@ -2702,6 +2752,14 @@ def extension_bones(args):
             for g,_,plan in plans:
                 if g['id'] in prepared:
                     plan[2]['normals_refreshed'] = refreshed
+                    # The tip smoothing record (Ruling A43): the normals near
+                    # the tips before the tip op and now.
+                    centres,before_census = census[g['id']]
+                    after_census = normal_census(meshes,centres)
+                    plan[2]['tip_normals'] = {'region_mm':TIP_NORMAL_REGION_M*1000,
+                                              'vertices':[before_census['vertices'],after_census['vertices']],
+                                              'inverted':[before_census['inverted'],after_census['inverted']],
+                                              'off_60':[before_census['off_60'],after_census['off_60']]}
     except (ValueError,KeyError,TypeError,IndexError) as e:
         return skip(str(e),status='failed')
     for g in enabled:

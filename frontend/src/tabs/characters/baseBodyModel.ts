@@ -8,9 +8,10 @@
 
 /** What "Run all" runs now (`figure_build.base_run_all`): the plain body's refresh, the face cleanup of the
  *  stored base mesh, its missing or outdated face retexture, the base mesh repair after a saved repair setting or a
- *  new repair version (Ruling A34), the extension rebuild after saved tip settings (Task UI2) — "" when every step is
- *  current. */
-export type RunAllKind = '' | 'plain_body' | 'face_cleanup' | 'face_retexture' | 'mesh_repair' | 'extension_rig'
+ *  new repair version (Ruling A34), the extension rebuild of a base whose tip smoothing is not recorded yet (Ruling
+ *  A43), the extension rebuild after saved tip settings (Task UI2) — "" when every step is current. */
+export type RunAllKind = '' | 'plain_body' | 'face_cleanup' | 'face_retexture' | 'mesh_repair' | 'tip_smoothing'
+  | 'extension_rig'
 
 /** `plain_body.run_all` of GET …/figure?plain=1. */
 export interface BaseRunAll {
@@ -59,6 +60,7 @@ export function runAllWhat(kind: RunAllKind, t: Tr = EN, faceDue: BaseRunAll['fa
       ? t('Face values changed — not applied yet: redoes the face retexture with the saved values')
       : t('Adds the missing face retexture to the base model')
     case 'mesh_repair': return t('The base mesh is not repaired with the saved settings: repairs it, then rebuilds the extension bones (local)')
+    case 'tip_smoothing': return t('Tip smoothing not applied to this model yet: rebuilds the extension bones (local, no hub job)')
     case 'extension_rig': return t('Tip settings saved, not built yet: rebuilds the extension bones of the base model')
     default: return ''
   }
@@ -87,6 +89,7 @@ export function runAllStep(name: string, t: Tr = EN): string {
     case 'rig': return t('Rig')
     case 'cleanup': return t('Face cleanup (local)')
     case 'repair': return t('Mesh repair (local)')
+    case 'tip_smoothing': return t('Tip smoothing (local)')
     case 'extension': return t('Extension bones (local)')
     default: return name
   }
@@ -234,4 +237,92 @@ export function meshRepairLine(state: MeshRepairState, t: Tr = EN): string {
     line = parts.length ? parts.join(' · ') : t('Closed — no hole')
   }
   return state.due && r ? `${line} · ${t('settings changed — Repair again applies them')}` : line
+}
+
+// --- Tip smoothing (Ruling A43: its own row with a record; it runs inside the extension rebuild) --------------------
+
+/** One group's entry of the record (`extension_tip.tip_smoothing_group`). */
+export interface TipSmoothingGroup {
+  applied: boolean
+  reason: string
+  max_shift_mm: number | null
+  moved: number
+  radius_mm: number | null
+  passes: number | null
+  /** Normals near the tips pointing into the body / more than 60° off their surface: [before, after]. */
+  inverted: [number, number] | null
+  off_60: [number, number] | null
+  region_mm: number | null
+}
+
+/** `plain_body.tip_smoothing` of GET …/figure?plain=1 (`extension_tip.tip_smoothing_state`); null = no switched-on
+ *  tip part on the base model (the row is hidden). */
+export interface TipSmoothingState {
+  groups: Array<{ id: string; label: string }>
+  record: {
+    version: number; at: string; status: 'built' | 'failed'; error: string
+    groups: Record<string, TipSmoothingGroup>
+  } | null
+  /** No record of the current version (a model built before it): the next extension rebuild applies it. */
+  due: boolean
+  light: 'ok' | 'warn' | 'error' | 'off'
+  /** The server's English line (the model step's tooltip). */
+  summary: string
+  /** The extension rebuild of the character runs ("Smooth again"). */
+  running: boolean
+  last: { signature: string; error: string; at: string } | null
+  version: number
+}
+
+/** The button: the extension rebuild of the base model, which smooths the tips again — local, no hub job. */
+export const TIP_SMOOTH_AGAIN_LABEL = 'Smooth again (local, no hub job)'
+export const TIP_SMOOTHING_DUE_LINE = 'Not applied to this model yet — rebuilds the extension bones (local, no hub job)'
+
+/** The status line beside the light: "Applied 01:12 — max shift 4.5 mm, inverted normals 22 → 0", or why nothing was
+ *  smoothed, or that it is due. `time` formats the record's time (the tab's clock settings). */
+export function tipSmoothingLine(state: TipSmoothingState, t: Tr = EN, time: (iso: string) => string = (iso) => iso): string {
+  const r = state.record
+  if (!r || (state.due && (r.version ?? 0) < state.version)) return t(TIP_SMOOTHING_DUE_LINE)
+  if (r.status === 'failed') return t('Last rebuild failed: {error}').replace('{error}', r.error || '?')
+  if (state.due) return t('A tip part is not covered yet — rebuilds the extension bones (local, no hub job)')
+  const groups = Object.values(r.groups || {})
+  const applied = groups.filter((g) => g.applied)
+  if (!applied.length) {
+    const reasons = Array.from(new Set(groups.map((g) => g.reason || 'Not smoothed')))
+    return reasons.map((reason) => t(reason)).join('; ') || t('Not smoothed')
+  }
+  const shift = Math.max(...applied.map((g) => g.max_shift_mm ?? 0))
+  let line = t('Applied {time} — max shift {mm} mm').replace('{time}', time(r.at)).replace('{mm}', shift.toFixed(1))
+  const inverted = applied.map((g) => g.inverted).filter((v): v is [number, number] => Array.isArray(v) && v.length === 2)
+  if (inverted.length) {
+    line += t(', inverted normals {before} → {after}')
+      .replace('{before}', String(inverted.reduce((a, v) => a + v[0], 0)))
+      .replace('{after}', String(inverted.reduce((a, v) => a + v[1], 0)))
+  }
+  return line
+}
+
+/** The light's colour class (ModelSteps' dots). */
+export function tipSmoothingDot(light: TipSmoothingState['light']): string {
+  return meshRepairDot(light)
+}
+
+/** One line per group for the tooltip (the numbers behind the status line). */
+export function tipSmoothingDetail(state: TipSmoothingState, t: Tr = EN): string[] {
+  const r = state.record
+  if (!r) return []
+  const label = (id: string) => state.groups.find((g) => g.id === id)?.label || id
+  return Object.entries(r.groups || {}).map(([id, g]) => {
+    const parts: string[] = []
+    if (!g.applied) parts.push(t(g.reason || 'Not smoothed'))
+    else {
+      parts.push(t('max shift {mm} mm').replace('{mm}', (g.max_shift_mm ?? 0).toFixed(1)))
+      parts.push(t('{n} vertices moved').replace('{n}', String(g.moved)))
+      if (g.radius_mm !== null) parts.push(t('radius {mm} mm').replace('{mm}', g.radius_mm.toFixed(1)))
+      if (g.passes !== null) parts.push(t('{n} passes').replace('{n}', String(g.passes)))
+    }
+    if (g.inverted) parts.push(t('inverted normals {before} → {after}').replace('{before}', String(g.inverted[0])).replace('{after}', String(g.inverted[1])))
+    if (g.off_60) parts.push(t('normals off by more than 60° {before} → {after}').replace('{before}', String(g.off_60[0])).replace('{after}', String(g.off_60[1])))
+    return `${label(id)}: ${parts.join(', ')}`
+  })
 }

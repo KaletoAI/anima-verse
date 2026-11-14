@@ -1793,7 +1793,10 @@ def _extension_rig_once(character_name: str, path: Path,
     # A base body's mesh is repaired on the way (Ruling A34, ``_repaired_base``): a record of other settings (or
     # of an older repair version) makes the rebuild due even when the extension groups are current.
     repair_due = _mesh_repair_due(character_name, path, meta)
-    if not repair_due and previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
+    # The same for a base body's tip smoothing (Ruling A43): no record of the current version makes it due.
+    from app.core.extension_tip import model_tip_smoothing_due
+    tip_due = model_tip_smoothing_due(character_name, path, meta)
+    if not repair_due and not tip_due and previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
             and source_current and not part_failed)):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
     groups = [g for g in _extension_groups_for(meta, resolved_extension_groups(
@@ -1853,6 +1856,7 @@ def _extension_rig_once(character_name: str, path: Path,
         return {"ok": False, "applied": False, "extension_rig": state, "error": state["reason"]}
     _publish_sidecar(source, source_meta)
     if not groups:
+        meta.pop("tip_smoothing", None)
         clean = _repaired_base(character_name, source.read_bytes(), meta)
         changed = path.read_bytes() != clean
         if changed:
@@ -1924,10 +1928,18 @@ def _extension_rig_once(character_name: str, path: Path,
             if not verdict.get("ok"):
                 publish = False
                 state["reason"] = "; ".join(verdict.get("errors") or [])
+        # The tip smoothing record of a base body (Ruling A43, ``extension_tip.tip_smoothing_record``).
+        from app.core import extension_tip
+        tip_ids = ([g["id"] for g in remaining if g["op"] == "pair_tip"]
+                   if _mesh_repair_target(meta, path) else [])
         if publish:
             _publish_model_bytes(path, staged.read_bytes())
             meta["blender"] = source_meta.get("blender") or {}
             state.update(status="applied", has_applied=part_applied or bool(remaining and result.get("applied")))
+            if tip_ids:
+                meta["tip_smoothing"] = extension_tip.tip_smoothing_record(state["metrics"], tip_ids, utc_now_iso())
+            else:
+                meta.pop("tip_smoothing", None)
         else:
             state["status"] = data.get("status") if data.get("status") in ("not_found", "failed") else "failed"
             # Nothing was published: the stored model keeps the repair it had.
@@ -1935,6 +1947,9 @@ def _extension_rig_once(character_name: str, path: Path,
                 meta.pop("mesh_repair", None)
             else:
                 meta["mesh_repair"] = repair_before
+            if tip_ids:
+                meta["tip_smoothing"] = extension_tip.tip_smoothing_failed(
+                    meta.get("tip_smoothing"), state["reason"] or data.get("reason") or "", utc_now_iso())
         state["per_tier"][LOW_TIER if path.parent.name == LOW_TIER else FULL_TIER] = {
             key: state[key] for key in ("fingerprint", "groups", "status", "reason", "metrics", "attempted", "attempted_at")}
         return {"ok": state["status"] != "failed", "applied": publish,

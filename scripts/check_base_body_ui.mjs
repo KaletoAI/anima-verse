@@ -52,6 +52,13 @@
  *     saved values (facePhotoOf / faceControlsOf); FieldModelRefs renders its "Generate" only when not every kind
  *     is the Build's (`pipelineViews ? null`) and lists Auto boxes only for kinds the Build does not decide;
  *     WardrobeGarment labels Run all with chainRunAll.
+ * [8] Tip smoothing (Ruling A43): runAllStep("tip_smoothing") → "Tip smoothing (local)"; runAllWhat("tip_smoothing")
+ *     → "Tip smoothing not applied to this model yet: rebuilds the extension bones (local, no hub job)";
+ *     tipSmoothingLine: no record (due) → "Not applied to this model yet — rebuilds the extension bones (local, no hub
+ *     job)"; a record {T applied, max_shift_mm 4.546, inverted [22, 0]} with the time "01:12" → "Applied 01:12 — max
+ *     shift 4.5 mm, inverted normals 22 → 0"; status failed, error "boom" → "Last rebuild failed: boom"; a kept own
+ *     tip (applied false, reason R) → R. FieldBaseBody renders <MeshRepairPanel, <TipSmoothingPanel and
+ *     <ExtensionTipPanel in that source order.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -197,6 +204,25 @@ check('[7] Pose tab: Auto only for kinds the Build does not decide',
   /kindList\.filter\(\(kind\) => !buildDecides\(kind\)\)\.map/.test(refs), true);
 check('[7] piece dialog labels Run all by chainRunAll',
   /chainRunAll\(info\?\.run, t\)/.test(src('frontend/src/tabs/characters/WardrobeGarment.tsx')), true);
+
+// [8]
+check('[8] run-all step label', m.runAllStep('tip_smoothing'), 'Tip smoothing (local)');
+check('[8] run-all what', m.runAllWhat('tip_smoothing'),
+  'Tip smoothing not applied to this model yet: rebuilds the extension bones (local, no hub job)');
+const tipState = (record, o = {}) => ({ groups: [{ id: 'T', label: 'Tips' }], record, due: false, light: 'ok',
+  summary: '', running: false, last: null, version: 1, ...o });
+const tipGroup = (o) => ({ applied: true, reason: '', max_shift_mm: 4.546, moved: 2522, radius_mm: 18.73, passes: 292,
+  inverted: [22, 0], off_60: [92, 43], region_mm: 40, ...o });
+check('[8] due without a record', m.tipSmoothingLine(tipState(null, { due: true })),
+  'Not applied to this model yet — rebuilds the extension bones (local, no hub job)');
+check('[8] applied with numbers', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: 'built', error: '',
+  groups: { T: tipGroup({}) } }), undefined, () => '01:12'), 'Applied 01:12 — max shift 4.5 mm, inverted normals 22 → 0');
+check('[8] failed', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: 'failed', error: 'boom', groups: {} })),
+  'Last rebuild failed: boom');
+check('[8] kept own tip', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: 'built', error: '',
+  groups: { T: tipGroup({ applied: false, reason: 'R', max_shift_mm: null, inverted: null }) } })), 'R');
+const panelOrder = ['<MeshRepairPanel', '<TipSmoothingPanel', '<ExtensionTipPanel'].map((tag) => baseTab.indexOf(tag));
+check('[8] panels in step order', panelOrder.every((at, i) => at >= 0 && (i === 0 || at > panelOrder[i - 1])), true);
 
 if (failures.length) {
   console.error('\nFAILED:\n' + failures.join('\n'));

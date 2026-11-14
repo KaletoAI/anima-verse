@@ -25,7 +25,8 @@
  * Layout: the Run all header across the top; then two columns — the four views stacked and small on the left (a
  * click enlarges one), the base model's 3D preview with everything that acts on it on the right: its steps
  * beside the preview, the base mesh repair (MeshRepairPanel, Ruling A34: status light, its settings saved on their
- * own, "Repair again" — local), the collision capsule sliders beside it too (live preview while dragging — the outfit
+ * own, "Repair again" — local), the tip smoothing (TipSmoothingPanel, Ruling A43: status light with the reason,
+ * "Built <time>", "Smooth again" — local; no settings of its own), the collision capsule sliders beside it too (live preview while dragging — the outfit
  * models inherit the base body's set), one panel per pair tip extension group (ExtensionTipPanel), and the
  * face/rig actions under it (ModelFaceActions); the Settings section closes the tab.
  *
@@ -58,6 +59,7 @@ import { CollisionScales } from './CollisionScales'
 import { ExtensionTipPanel } from './ExtensionTipPanel'
 import type { TipDots } from './ExtensionTipPanel'
 import { MeshRepairPanel } from './MeshRepairPanel'
+import { TipSmoothingPanel } from './TipSmoothingPanel'
 import { ModelFaceActions } from './ModelFaceActions'
 import { FaceSettings } from './FaceSettings'
 import { FieldSet } from './FieldSet'
@@ -358,12 +360,20 @@ export function FieldBaseBody({ character, onOpenFigure }: {
   const collision = collisionPreview ?? model?.collision
   const tipPanels = model?.url && ready ? info.extension_tips ?? [] : []
   const meshRepair = model?.url && ready ? info.mesh_repair ?? null : null
-  const asideTools = model?.url && ready && (model.collision !== undefined || tipPanels.length || meshRepair) ? (
+  const tipSmoothing = model?.url && ready ? info.tip_smoothing ?? null : null
+  const asideTools = model?.url && ready && (model.collision !== undefined || tipPanels.length || meshRepair
+    || tipSmoothing) ? (
     <>
       {/* The base mesh repair (Ruling A34): status light, settings saved on their own, Repair again (local). */}
       {meshRepair ? (
         <MeshRepairPanel character={character} state={meshRepair} disabled={modelBusy}
           onSaved={reloadAll} onStarted={() => startPoll(800)} />
+      ) : null}
+      {/* The tip smoothing (Ruling A43): its own row between the mesh repair and the extension bones — status
+          light with the reason, Built time, Smooth again (local). Hidden without a switched-on tip part. */}
+      {tipSmoothing ? (
+        <TipSmoothingPanel character={character} signature={info.signature} state={tipSmoothing}
+          disabled={modelBusy} onStarted={() => startPoll(800)} />
       ) : null}
       {model.collision !== undefined ? (
         <CollisionScales character={character} collision={model.collision}

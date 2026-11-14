@@ -16,7 +16,7 @@ import type { ModelStep } from './ModelSteps'
 import type { CollisionPayload } from '@anima/scene-render'
 import type { FaceCleanupState, FaceFields } from './ModelFaceActions'
 import type { FigurePayload, ModelStaleReason } from './figureModel'
-import type { BaseRunAll, MeshRepairState } from './baseBodyModel'
+import type { BaseRunAll, MeshRepairState, TipSmoothingState } from './baseBodyModel'
 
 export const BASE_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BaseView = typeof BASE_VIEWS[number]
@@ -158,6 +158,8 @@ export interface BaseBodyInfo {
   extension_tips?: ExtensionTipPanelInfo[]
   /** The base mesh repair (`model3d.mesh_repair_state`; null without a stored humanoid base model). */
   mesh_repair?: MeshRepairState | null
+  /** The tip smoothing (`extension_tip.tip_smoothing_state`, Ruling A43; null = no switched-on tip part — no row). */
+  tip_smoothing?: TipSmoothingState | null
   /** The front's skin detail step (null for a non-humanoid). */
   skin?: BaseSkinInfo | null
   /** The Base body tab's "Run all" plan (`figure_build.base_run_all`). */

@@ -117,6 +117,8 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
     region scales (``collision_scales``), the face cleanup of the base
     source (``face_cleanup``, ``model3d.face_cleanup_state``), the base mesh
     repair (``mesh_repair``, ``model3d.mesh_repair_state``), the tip
+    smoothing (``tip_smoothing``, ``extension_tip.tip_smoothing_state``,
+    Ruling A43 — None hides the row), the tip
     panels of its ``pair_tip`` groups (``extension_tips``,
     ``extension_tip.tip_panels``) and the Base body tab's "Run all" plan
     (``run_all``, ``figure_build.base_run_all``). Never raises."""
@@ -131,8 +133,10 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
         path = find_model3d(character_name, bsig) if bsig and isinstance(model, dict) else None
         info["extension_tips"] = []
         info["mesh_repair"] = None
+        info["tip_smoothing"] = None
         if path is not None and model.get("status") != "running":
             info["mesh_repair"] = mesh_repair_state(character_name, bsig)
+            info["tip_smoothing"] = extension_tip.tip_smoothing_state(character_name, bsig)
             model.update(face_info(character_name, path))
             model["collision"] = collision.ensure(character_name, bsig)
             info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
