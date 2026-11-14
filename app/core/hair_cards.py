@@ -248,6 +248,14 @@ HAAR_PUSH_ITERATIONS = 6
 #: (``SOLID_PATCH_PX``). A HAAR card's root lies on the crown in plain view from above; in that column its first
 #: segment sampled the patch and showed as a solid chip (Kira, the sample job: ~1/8 of the crown cards).
 HAAR_VARIANTS = ATLAS_VARIANTS - 1
+#: Thin cards (ruling H-R14): a card of at most ``HAAR_THIN_MEMBERS`` strands follows one wavy strand, whose waves
+#: are shorter than two rows alias into a zigzag (Lirien, very long wavy s1: one single-strand card turning 40-62
+#: deg at six rows). Its centreline gets up to ``HAAR_SMOOTH_PASSES`` passes of the [1/4, 1/2, 1/4] filter along its
+#: rows (root and tip fixed) while any row turns sharper than ``HAAR_SHARP_TURN_DEG``. A card of more strands is
+#: their mean, which averages the waves out, and is left as it is.
+HAAR_THIN_MEMBERS = 2
+HAAR_SHARP_TURN_DEG = 45.0
+HAAR_SMOOTH_PASSES = 8
 
 
 def _resample(P: np.ndarray, n: int) -> np.ndarray:
@@ -260,6 +268,30 @@ def _resample(P: np.ndarray, n: int) -> np.ndarray:
         for a in range(3):
             out[i, :, a] = np.interp(q, cum[i], P[i, :, a])
     return out
+
+
+def turn_deg(c: np.ndarray) -> np.ndarray:
+    """The turn (deg) at each interior row of the polyline ``c`` (R, 3): the angle between its two segments."""
+    d = np.diff(np.asarray(c, np.float64), axis=0)
+    d = d / np.maximum(np.linalg.norm(d, axis=1, keepdims=True), 1e-12)
+    return np.degrees(np.arccos(np.clip((d[1:] * d[:-1]).sum(1), -1.0, 1.0)))
+
+
+def smooth_thin(c: np.ndarray, members: int) -> Tuple[np.ndarray, int]:
+    """A card centreline ``c`` (R, 3) of ``members`` strands, smoothed by ruling H-R14 -> ``(c', passes)``: a thin
+    card (``members <= HAAR_THIN_MEMBERS``) with a row turning sharper than ``HAAR_SHARP_TURN_DEG`` gets passes of
+    ``c'[i] = c[i-1] / 4 + c[i] / 2 + c[i+1] / 4`` on the interior rows (root and tip stay) until no row does, at most
+    ``HAAR_SMOOTH_PASSES``. One pass flattens a zigzag that alternates every row onto its middle line. Every other
+    card comes back unchanged (``passes`` 0)."""
+    c = np.asarray(c, np.float64)
+    if members > HAAR_THIN_MEMBERS or len(c) < 3:
+        return c, 0
+    passes = 0
+    while passes < HAAR_SMOOTH_PASSES and turn_deg(c).max() > HAAR_SHARP_TURN_DEG:
+        c = c.copy()
+        c[1:-1] = 0.25 * c[:-2] + 0.5 * c[1:-1] + 0.25 * c[2:]
+        passes += 1
+    return c, passes
 
 
 def haar_cards(X: np.ndarray, sdf, *, n_cards: int = 700, n_seg: int = 16, clear: float = 0.004, seed: int = 0,
@@ -276,7 +308,8 @@ def haar_cards(X: np.ndarray, sdf, *, n_cards: int = 700, n_seg: int = 16, clear
     1) (k + 1))`` and every card vertex is then pushed ``clear`` out of ``sdf``. ``UV``: the strip atlas, u
     ``HAAR_U_INSET`` .. ``1 - HAAR_U_INSET`` in the column of variant ``k % HAAR_VARIANTS`` (``u' = (variant + u) /
     ATLAS_VARIANTS``), v 1 at the root .. 0 at the tip. ``card`` (n,) the card of each vertex. An empty cluster gives
-    no card (cards are renumbered densely)."""
+    no card (cards are renumbered densely). A thin card's centreline is smoothed first (``smooth_thin``, ruling
+    H-R14); its width still comes from its strands' spread round their unsmoothed mean."""
     from scipy.cluster.vq import kmeans2
     from app.core.garment_fit import _unit
     X = np.asarray(X, np.float64)
@@ -297,7 +330,8 @@ def haar_cards(X: np.ndarray, sdf, *, n_cards: int = 700, n_seg: int = 16, clear
         if not m.any():
             continue
         P = U[m]
-        c = P.mean(0)
+        c0 = P.mean(0)
+        c, _ = smooth_thin(c0, len(P))
         tan = _unit(np.gradient(c, axis=0))
         nrm = np.asarray(sdf.grad(c), np.float64)
         if centre is not None:
@@ -306,7 +340,7 @@ def haar_cards(X: np.ndarray, sdf, *, n_cards: int = 700, n_seg: int = 16, clear
         nrm = nrm - (nrm * tan).sum(1, keepdims=True) * tan
         nrm = _unit(nrm)
         bi = np.cross(tan, nrm)
-        spread = np.abs(((P - c) * bi[None]).sum(2)).max(0) if len(P) > 1 else np.zeros(rows)
+        spread = np.abs(((P - c0) * bi[None]).sum(2)).max(0) if len(P) > 1 else np.zeros(rows)
         w = np.clip(2 * spread + HAAR_WIDTH_PAD_M, *HAAR_WIDTH_LIMITS) * taper
         half = (bi * (w / 2)[:, None])
         V.append(np.stack([c - half, c + half], 1).reshape(-1, 3))

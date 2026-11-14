@@ -23,7 +23,7 @@ Expected (by hand from those rules):
   [5] short, tip 40.0 -> passes (short is never refused); no class (None), tip 25.0 -> passes
   [6] inside_head_3mm 1 -> refused (one reason); eye_cards 1 -> refused (one reason); all three at once (inside 1,
       eye 1, tip 13.1 medium) -> three reasons; a missing number refuses
-  [7] the constants verbatim: HAAR_FIT_VERSION 2 (H-R12 / H-R13 changed the fit), INSIDE_HEAD_MM 3.0,
+  [7] the constants verbatim: HAAR_FIT_VERSION 3 (H-R12 / H-R13, then H-R14, changed the fit), INSIDE_HEAD_MM 3.0,
       CLEARLY_SHORT_CM, CLASS_TARGET_CM, STRETCH_LIMIT 3.0, STRETCH_REST_FLOOR_M 0.001
   [8] settle_stretched (ruling H-R13), three strands of 4 points, rest along +x at 0, 0.25, 0.5, 0.75 m (strand C:
       0, 0.25, 0.3125, 0.5625 — rest segments 0.25, 0.0625, 0.25); numbers in powers of two, so exact:
@@ -117,7 +117,7 @@ def main():
     ok, reasons = g(m(tip=float("nan")), "long")
     check(not ok and len(reasons) == 1, f"[6] a non-finite tip refuses for a gated class ({reasons})")
     # [7]
-    check(gh.HAAR_FIT_VERSION == 2, "[7] HAAR_FIT_VERSION 2")
+    check(gh.HAAR_FIT_VERSION == 3, "[7] HAAR_FIT_VERSION 3")
     check(gh.STRETCH_LIMIT == 3.0 and gh.STRETCH_REST_FLOOR_M == 0.001, "[7] STRETCH_LIMIT 3.0, rest floor 1 mm")
     check(gh.INSIDE_HEAD_MM == 3.0, "[7] INSIDE_HEAD_MM 3.0")
     check(gh.CLEARLY_SHORT_CM == {"medium": 13.0, "long": -1.0, "very long": -15.0}, "[7] CLEARLY_SHORT_CM")

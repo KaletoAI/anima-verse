@@ -39,7 +39,7 @@ Metrics per seed (inside_head_3mm, eye_cards, face_cards, tip_p50_rel_shoulder_c
 [2] Best: seeds 1 and 2 pass, seed 2 has fewer face cards (1 < 2) -> served 2. record.chosen 2; results "3"
     accepted False with exactly the inside-head reason. The run's fsig = garment_fsig now (seed 2) != the fsig
     before the run (seed None). The fit record: method "haar", inputs.seed 2, inputs.ssig = garment_ssig,
-    fit_version = HAAR_FIT_VERSION (2), gates {ok True, reasons [], picked False}, colour {target "#5c3b26",
+    fit_version = HAAR_FIT_VERSION (3), gates {ok True, reasons [], picked False}, colour {target "#5c3b26",
     source "profile", name "brown"}; accepted_fit serves it; the fit GLB has the node garment_hair_<H>.
 [3] run_estimate after: steps [], hub_jobs 0 ("Everything is current" in the tab). A second run_garment: ran [],
     no call (generate 3, fit 3).
@@ -66,9 +66,9 @@ Metrics per seed (inside_head_3mm, eye_cards, face_cards, tip_p50_rel_shoulder_c
     ok False, retry_later True, nothing persisted (cached_failure None), no seed stored, no hub operation left.
     A resume of an operation whose stage never reached the hub (seed 1 of H3, no job id) collects nothing and
     asks for nothing (generate unchanged).
-[10] Refit sweep: HAAR_FIT_VERSION bumped to 3 -> outdated_fits lists H and H2 (method "haar");
+[10] Refit sweep: HAAR_FIT_VERSION bumped to 4 -> outdated_fits lists H and H2 (method "haar");
     refit_character -> both refitted, no generate call, fit +9 (H: 6 seeds, served 4 among them; H2: 3 seeds,
-    the pick 2 among them); both records fit_version 3; H served 4, H2 served 2.
+    the pick 2 among them); both records fit_version 4; H served 4, H2 served 2.
 [11] Outbound connections: 0.
 """
 import json
@@ -440,7 +440,7 @@ def main() -> int:
 
         # --- [10] ----------------------------------------------------------------
         print("[10] refit sweep on a HAAR fit-version bump")
-        garment_haar.HAAR_FIT_VERSION = 3
+        garment_haar.HAAR_FIT_VERSION = 4
         listed = sorted((i, m) for i, _k, _f, m in garment_refit.outdated_fits("Demo"))
         check("outdated", listed, sorted([(hid, "haar"), (h2, "haar")]))
         before = counts()
@@ -450,7 +450,7 @@ def main() -> int:
         for item, seed in ((hid, 4), (h2, 2)):
             hit = gs.accepted_fit("Demo", item, base_model_sha=base_sha)
             check(f"{item} refitted", (hit[1].get("fit_version"), hit[1]["inputs"]["seed"]) if hit else None,
-                  (3, seed))
+                  (4, seed))
         check("nothing outdated", garment_refit.outdated_fits("Demo"), [])
 
         # --- [11] ----------------------------------------------------------------

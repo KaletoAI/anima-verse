@@ -22,8 +22,8 @@ which the user approved after the drape ("ALLE Haare, auch die Fail sehen so gut
    any segment longer than ``STRETCH_LIMIT`` x its rest length is re-sampled along its draped curve at its rest
    arc lengths (then the face box and the body clearance once more), or dropped when the draped curve is shorter
    than its rest length or that clearing stretches it again.
-4. **Cards** (``hair_cards.haar_cards``): ``N_CARDS`` k-means cards of ``N_SEG`` segments on the strip atlas, the
-   card colour the hairstyle's (``colour_linear``, else white), and a scalp layer under the root zone
+4. **Cards** (``hair_cards.haar_cards``): ``N_CARDS`` k-means cards of ``N_SEG`` segments on the strip atlas (a card
+   of one or two strands that turns sharply is smoothed along its rows, ruling H-R14), the card colour the hairstyle's (``colour_linear``, else white), and a scalp layer under the root zone
    (``scalp_layer``, ruling H-R12: the head's skin round the registered roots, offset out, opaque, in the hair
    colour darkened by ``SCALP_SHADE``) so a parting reads as hair, not skin.
 5. **Skin**: ``garment_fit.hair_weights`` (Head -> Neck -> Spine2 by height); the layer all Head; no chain joints.
@@ -48,7 +48,7 @@ from app.core.garment_fit import VOX_M, FitResult, body_sdf, hair_weights, verte
 from app.core.glb_mesh import GarmentMesh, body_arrays
 
 #: Bumped when the HAAR fit's output changes for the same inputs (the boot refit sweep refits on the CPU).
-HAAR_FIT_VERSION = 2
+HAAR_FIT_VERSION = 3
 #: Gate (spec § 6.3.2): a draped strand point above the chin deeper than this (mm) in the body refuses the seed.
 INSIDE_HEAD_MM = 3.0
 #: Gate: the tip p50 relative to the shoulder top (cm, + = above) above this refuses the seed as clearly too short —
