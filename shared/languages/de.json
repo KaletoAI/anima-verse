@@ -5576,6 +5576,20 @@
     "Partner capsules that pushed an extension or hair chain just now. The hair mesh is pushed on the graphics card and is not listed.": "Partnerkapseln, die gerade eine Erweiterungs- oder Haarkette weggedrückt haben. Das Haar-Mesh wird auf der Grafikkarte verdrängt und erscheint hier nicht.",
     "Pushing: {list}": "Drückt: {list}",
     "No chain touches the probe": "Keine Kette berührt die Sonde",
-    "Preview only — nothing is saved · no jobs": "Nur Vorschau — nichts wird gespeichert · keine Jobs"
+    "Preview only — nothing is saved · no jobs": "Nur Vorschau — nichts wird gespeichert · keine Jobs",
+    "Shows the outfit worn now": "Zeigt das jetzt getragene Outfit",
+    "Not the whole outfit": "Nicht das ganze Outfit",
+    "Shown without {pieces}: this is not the outfit worn now until the missing pieces are on it.": "Gezeigt ohne {pieces}: Das ist nicht das jetzt getragene Outfit, bis die fehlenden Teile daran sind.",
+    "Putting the pieces on": "Teile werden angezogen",
+    "Shown without {pieces} for a moment: the CPU puts them on now (no hub job).": "Kurz ohne {pieces} gezeigt: Die CPU zieht sie gerade an (kein Hub-Job).",
+    "Another outfit's model": "Modell eines anderen Outfits",
+    "No model of the outfit worn now yet: the model of the closest outfit is shown until the Build makes this one.": "Vom jetzt getragenen Outfit gibt es noch kein Modell: Das Modell des ähnlichsten Outfits wird gezeigt, bis der Build dieses macht.",
+    "This outfit's model from before the base body changed is shown until the Build makes it again.": "Das Modell dieses Outfits von vor der Änderung des Grundkörpers wird gezeigt, bis der Build es neu macht.",
+    "Its fit on this body was refused": "Seine Anpassung an diesen Körper wurde abgelehnt",
+    "Its fit on the base body was refused": "Seine Anpassung an den Grundkörper wurde abgelehnt",
+    "It has no accepted fit on this body": "Es hat keine angenommene Anpassung an diesen Körper",
+    "Its fit on this body is made now": "Seine Anpassung an diesen Körper wird gerade gemacht",
+    "The model was built on an older base body; the piece's fit is for the current one": "Das Modell wurde auf einem älteren Grundkörper gebaut; die Anpassung des Teils gilt für den aktuellen",
+    "Not on the figure shown now": "Nicht an der jetzt gezeigten Figur"
   }
 }

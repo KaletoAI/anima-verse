@@ -254,6 +254,74 @@ def marked_glb(glb: Path, marks_path: Optional[Path], item_id: str) -> bytes:
     return blob
 
 
+# --- Covered attached parts in a preview (Ruling A75) ----------------------------------------------------------
+#
+# A fit on the PLAIN body is published with the plain body as it is: the rigged base, which carries the attached
+# part of every exposed slot with a separate mesh part (``body_slots`` ``mesh_part``, the node marked
+# ``extras.attached_part = <group id>`` by the part scripts). The outfit model never shows such a part under
+# clothing (its mesh variant resolves the part off where the outfit covers the slot), but the Details previews
+# served that fit GLB as stored, so a covering piece showed the part straight through it. The previews now drop
+# the part's mesh where the worn outfit covers its slot; the stored fit stays whole (the assembly reads only its
+# garment node).
+
+def covered_part_groups(character_name: str, item_id: str, *,
+                        profile: Optional[Dict[str, Any]] = None) -> List[str]:
+    """The extension groups whose attached part a preview of ``item_id`` must not show, sorted: every rig group of a
+    body slot with a separate mesh part (``mesh_part``) that the worn outfit covers — ``item_id`` counted as worn in
+    its own slots when it is not worn now (it is the piece the preview shows). Covered is
+    ``body_slots.is_slot_exposed`` False, the one exposure rule of every image and model path: a closed piece on, or
+    ``covers``-ing, a clothing slot of the body slot's ``covered_by``; a piece worn open covers nothing,
+    ``partially_covers`` does not count. [] when nothing is covered or on any failure (the preview then shows the
+    stored file)."""
+    try:
+        from app.core.body_slots import is_slot_exposed
+        from app.models.inventory import get_item
+        from app.plugins.registry import packages
+        profile = _profile(character_name, profile)
+        pieces = {str(k): str(v) for k, v in (profile.get("equipped_pieces") or {}).items() if v}
+        if item_id not in pieces.values():
+            for slot in ((get_item(item_id) or {}).get("outfit_piece") or {}).get("slots") or []:
+                pieces[str(slot)] = item_id
+        view = {**profile, "equipped_pieces": pieces}
+        out = set()
+        for package in packages():
+            for slot in package.body_slots:
+                if slot.mesh_part and not is_slot_exposed(slot, view):
+                    out.update(rig.id for rig in slot.rigs)
+        return sorted(out)
+    except Exception:  # noqa: BLE001 — a preview detail, never a failure of the route
+        logger.exception("Covered part groups of %s/%s unreadable", character_name, item_id)
+        return []
+
+
+def covered_parts_token(groups: List[str]) -> str:
+    """The preview version's suffix for ``groups`` (``covered_part_groups``): "" when none, else ``-h`` + 8 hex
+    digits — a change of what is covered changes the served bytes, so it changes their ETag."""
+    if not groups:
+        return ""
+    return "-h" + hashlib.sha1(",".join(sorted(groups)).encode("utf-8")).hexdigest()[:8]
+
+
+def without_covered_parts(glb: bytes, groups: List[str]) -> bytes:
+    """``glb`` without the attached parts of ``groups``: every node whose ``extras.attached_part`` names one of them
+    loses its ``mesh`` and ``skin`` (it keeps its place in the node tree; the buffers stay, an unreferenced mesh is
+    never drawn). ``glb`` itself when no such node exists or ``groups`` is empty."""
+    if not groups:
+        return glb
+    from app.core.glb_mesh import pack_glb
+    from app.core.model_validate import parse_glb
+    parsed = parse_glb(glb)
+    gltf = parsed["gltf"]
+    wanted = set(groups)
+    hit = False
+    for node in gltf.get("nodes") or []:
+        if "mesh" in node and str((node.get("extras") or {}).get("attached_part") or "") in wanted:
+            node.pop("mesh")
+            node.pop("skin", None)
+            hit = True
+    return pack_glb(gltf, parsed["bin"]) if hit else glb
+
+
 # --- Store ----------------------------------------------------------------------------------------------
 
 def _file_sha(path: Optional[Path]) -> str:
@@ -1185,6 +1253,8 @@ def bodies(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any
     shape, stored = dialog_shape(character_name, item_id, profile=profile)
     names = shape_names(character_name, profile=profile) if shape else {}
     out: List[Dict[str, Any]] = []
+    # Ruling A75: the shown bytes drop a covered attached part, so the URL names what is covered.
+    covered = covered_parts_token(covered_part_groups(character_name, item_id, profile=profile))
     for body in [""] + ([shape] if shape else []):
         entries = [_entry(character_name, item_id, body, profile, names)]
         if body:
@@ -1201,7 +1271,7 @@ def bodies(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any
                 try:
                     entry["url"] = (f"{url_base or ''}/characters/{quote(character_name, safe='')}/garments/"
                                     f"{quote(item_id, safe='')}/fits/{entry['key']}/model?"
-                                    f"v={content_version(shown[0])}{'m' if shown[1] else ''}")
+                                    f"v={content_version(shown[0])}{'m' if shown[1] else ''}{covered}")
                 except OSError:
                     entry["url"] = None
             out.append(entry)

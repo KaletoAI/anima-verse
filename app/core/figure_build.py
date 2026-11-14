@@ -1845,6 +1845,26 @@ _RUNNERS: Dict[str, Callable[[str, Step, bool], str]] = {
 INTERIM_SHOWN = "The figure built before stays shown until its own mesh is ready"
 
 
+#: The note of a worn piece the served figure does not carry (Ruling A75) — replaces ``INTERIM_SHOWN``, which
+#: claimed the figure built before (WITH the piece) stays shown.
+NOT_ON_FIGURE = "Not on the figure shown now"
+
+
+def _not_on_figure(served_state: Optional[Dict[str, Any]], changes: List[Dict[str, Any]],
+                   worn: List[Dict[str, Any]]) -> None:
+    """The rows of a piece the served figure lacks (``_served_state`` ``missing``, not only pending) say so: an
+    ``INTERIM_SHOWN`` note becomes ``NOT_ON_FIGURE`` in the change row and the worn row (Ruling A75)."""
+    gone = {m["item_id"] for m in (served_state or {}).get("missing") or [] if not m.get("pending")}
+    if not gone:
+        return
+    for change in changes:
+        if change.get("key") in gone and change.get("note") == INTERIM_SHOWN:
+            change["note"] = NOT_ON_FIGURE
+    for row in worn:
+        if row.get("item_id") in gone and row.get("note") == INTERIM_SHOWN:
+            row["note"] = NOT_ON_FIGURE
+
+
 def _waiting_wording(changes: List[Dict[str, Any]], worn: List[Dict[str, Any]]) -> None:
     """While no interim body is built (Ruling A15 b), the rows of the pieces it would hold say what is shown
     instead (``INTERIM_SHOWN``): the change's note, and the worn row's note with ``in_body_until`` / ``interim``
@@ -2060,6 +2080,112 @@ def _served_built_at(character_name: str) -> Optional[str]:
         return model_overview.built_at(garment_assembly.served(character_name, full, model3d.FULL_TIER))
     except Exception:  # noqa: BLE001 — the caption is optional
         logger.debug("Served model stamp of %s unreadable", character_name, exc_info=True)
+        return None
+
+
+# What the Figure tab's viewer says about the figure it shows (Ruling A75; the character-tab checklist point 8: a
+# light and the reason in plain words). English, translated by the client (de.json keys).
+SERVED_COMPLETE = "Shows the outfit worn now"
+SERVED_WITHOUT = "Not the whole outfit"
+SERVED_WITHOUT_REASON = "Shown without {pieces}: this is not the outfit worn now until the missing pieces are on it."
+SERVED_ASSEMBLING = "Putting the pieces on"
+SERVED_ASSEMBLING_REASON = "Shown without {pieces} for a moment: the CPU puts them on now (no hub job)."
+SERVED_STAND_IN = "Another outfit's model"
+SERVED_STAND_IN_REASON = ("No model of the outfit worn now yet: the model of the closest outfit is shown until the "
+                          "Build makes this one.")
+SERVED_OLDER_BASE = "Built on an older base body"
+SERVED_OLDER_BASE_REASON = "This outfit's model from before the base body changed is shown until the Build makes it again."
+#: A missing piece's reason (``missing[].reason``); a refusal's measured text goes into ``missing[].detail``.
+PIECE_REFUSED = "Its fit on this body was refused"
+PIECE_NO_FIT = "It has no accepted fit on this body"
+PIECE_REFUSED_PLAIN = "Its fit on the base body was refused"
+PIECE_PENDING = "Its fit on this body is made now"
+PIECE_OLDER_BASE = "The model was built on an older base body; the piece's fit is for the current one"
+
+
+def _plain_fit_refusal(character_name: str, item_id: str, profile: Optional[Dict[str, Any]]) -> str:
+    """The recorded refusal (its error text) of the piece's fit on the plain body (``fit_attempts.fit_status``) — a
+    piece without that fit has none on a body shape either —, "" without one."""
+    from app.core import fit_attempts
+    try:
+        failure = fit_attempts.fit_status(character_name, item_id, "", profile=profile).get("failure")
+    except Exception:  # noqa: BLE001 — the reason falls back to the general one
+        logger.debug("Plain fit status of %s/%s unreadable", character_name, item_id, exc_info=True)
+        return ""
+    error = str((failure or {}).get("error") or "") if isinstance(failure, dict) else ""
+    return error
+
+
+def _served_state(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """What the figure the viewer shows (``_served_url``: ``model3d.find_model3d_serving`` and the file
+    ``garment_assembly.served`` delivers for it) is, compared with the outfit worn now — so a figure that lacks a
+    piece is never shown as if it were the outfit (Ruling A75):
+    ``{light, state, reason, pieces, notes, missing: [{item_id, name, reason, detail, pending}]}`` — ``reason`` may hold
+    ``{pieces}`` (the missing pieces' names, joined), filled in by the client after translating; ``notes`` further
+    sentences —, None without a served model.
+
+    - ``match`` "nearest" (a stand-in of another outfit) → yellow ``SERVED_STAND_IN`` (its pieces are not this
+      outfit's, nothing is compared);
+    - an own-mesh piece the served model's texture leaves to its garment (``effective_mesh_items`` of its bare
+      sidecar) that the served bytes do not carry (the assembled sidecar's ``garments``; none when the bare file is
+      served) → ``missing``, each with its reason (``detail``: a refusal's measured text): a fit refused on the model's body (``garment_assembly._wanted``
+      ``left_off``, read only — ``PIECE_REFUSED``), a fit refused on the plain body already (``PIECE_REFUSED_PLAIN``,
+      ``_plain_fit_refusal``), a fit still to be made (``pending``, ``PIECE_PENDING``), a
+      model from an older base body (``PIECE_OLDER_BASE``) or no accepted fit there (``PIECE_NO_FIT``). Any not
+      pending → red ``SERVED_WITHOUT`` (the stored model stays served: the serving path re-assembles it without the
+      piece); only pending → blue ``SERVED_ASSEMBLING``;
+    - else ``match`` "stale" (this outfit on an older base body) → yellow ``SERVED_OLDER_BASE``; else green
+      ``SERVED_COMPLETE``. A red or blue state of a stale model carries ``SERVED_OLDER_BASE_REASON`` in ``notes``.
+    Never raises (None on failure)."""
+    from app.core import garment_assembly, model3d
+    from app.models.inventory import get_item
+    try:
+        path, match = model3d.find_model3d_serving(character_name)
+        if path is None:
+            return None
+        if match == "nearest":
+            return {"light": "yellow", "state": SERVED_STAND_IN, "reason": SERVED_STAND_IN_REASON, "pieces": "",
+                    "notes": [], "missing": []}
+        notes = [SERVED_OLDER_BASE_REASON] if match == "stale" else []
+        bare_meta = model3d._read_sidecar(path)
+        worn = (profile or {}).get("equipped_mesh_pieces")
+        hair = {str(v) for v in worn.values() if v} if isinstance(worn, dict) else set()
+        clothing = sorted(set(garment_assembly.effective_mesh_items(bare_meta)) - hair)
+        missing: List[Dict[str, Any]] = []
+        if clothing:
+            served = garment_assembly.served(character_name, path, model3d.FULL_TIER)
+            carried = (set(garment_assembly.read_sidecar(Path(served)).get("garments") or {})
+                       if served is not None and Path(served) != Path(path) else set())
+            left_off: Dict[str, str] = {}
+            wanted = {g["item_id"]: g for g in garment_assembly._wanted(character_name, profile,
+                                                                        bare_meta=bare_meta, left_off=left_off)}
+            for item_id in clothing:
+                if item_id in carried:
+                    continue
+                pending, detail = item_id in wanted, ""
+                if item_id in left_off:
+                    reason, detail = PIECE_REFUSED, left_off[item_id]
+                elif pending:
+                    reason = PIECE_PENDING
+                elif detail := _plain_fit_refusal(character_name, item_id, profile):
+                    reason = PIECE_REFUSED_PLAIN
+                else:
+                    reason = PIECE_OLDER_BASE if match == "stale" else PIECE_NO_FIT
+                missing.append({"item_id": item_id, "name": str((get_item(item_id) or {}).get("name") or item_id),
+                                "reason": reason, "detail": detail, "pending": pending})
+        pieces = ", ".join(m["name"] for m in missing)
+        if missing and not all(m["pending"] for m in missing):
+            return {"light": "red", "state": SERVED_WITHOUT, "reason": SERVED_WITHOUT_REASON, "pieces": pieces,
+                    "notes": notes, "missing": missing}
+        if missing:
+            return {"light": "blue", "state": SERVED_ASSEMBLING, "reason": SERVED_ASSEMBLING_REASON,
+                    "pieces": pieces, "notes": notes, "missing": missing}
+        if match == "stale":
+            return {"light": "yellow", "state": SERVED_OLDER_BASE, "reason": SERVED_OLDER_BASE_REASON, "pieces": "",
+                    "notes": [], "missing": []}
+        return {"light": "green", "state": SERVED_COMPLETE, "reason": "", "pieces": "", "notes": [], "missing": []}
+    except Exception:  # noqa: BLE001 — a caption of the viewer, never a failure of the poll
+        logger.exception("Served figure state of %s unreadable", character_name)
         return None
 
 
@@ -2473,7 +2599,8 @@ def figure_info(character_name: str) -> Dict[str, Any]:
 def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[str, Any]) -> Dict[str, Any]:
     """``GET /characters/{c}/figure``: ``{pipeline, humanoid, auto_build,
     status, changes, cost, build, wanted, delivered, served_url, served_built_at
-    (when the served model was built — Ruling UI3 a), served_foot_pose (the
+    (when the served model was built — Ruling UI3 a), served_state (what that model is against the outfit worn
+    now — Ruling A75, ``_served_state``), served_foot_pose (the
     served model's fitted-shoe pose or None — Ruling A52), outfit (the
     saved outfit worn now, "" when none matches), worn (each row with the
     ``jobs`` its chain step plans), hair (with ``jobs``), body (``plain.jobs``:
@@ -2528,6 +2655,8 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     worn = _worn_rows(character_name, wanted, delivered, failures, build["running"], profile)
     if _interim_waits(character_name, delivered, built):
         _waiting_wording(changes, worn)
+    served_state = _served_state(character_name, profile=profile)
+    _not_on_figure(served_state, changes, worn)
     hair = _hair_row(character_name, profile, wanted, delivered, failures, build["running"])
     for row in worn:
         row["jobs"] = _item_jobs(steps, "pieces", row["item_id"])
@@ -2535,7 +2664,7 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     return {**out, "status": status, "changes": changes, "cost": cost(character_name, steps),
             "wanted": wanted.as_dict(), "delivered": delivered.as_dict(),
             "outfit": _outfit_name(character_name, wanted.pieces),
-            "worn": worn, "hair": hair, "body": body,
+            "worn": worn, "hair": hair, "body": body, "served_state": served_state,
             "problem": None if build["running"] else _build_problem(character_name, steps, failures, delivered)}
 
 

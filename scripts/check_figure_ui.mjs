@@ -276,6 +276,17 @@
  *        coverage of the visible surface: 92.0 % · Garment filled in without a view: 3.1 %", one step → no "No
  *        model steps recorded"; FieldFigure (fixture payload) opened on `views`: the tab labels "Dressed views" and "Outfit
  *        model", the Build line, "Worn now (…)" tab once; opened on `model`: the outfit row with "92.0 %".
+ * [27] Ruling A75 — servedLines(served_state, t), the viewer's status of the figure it shows:
+ *      null → []; green {state "Shows the outfit worn now", reason ""} → one head line, light green, text the state
+ *      alone, title "";
+ *      red {state "Not the whole outfit", reason "Shown without {pieces}: …", pieces "Jeans", notes [n1],
+ *        missing [{name Jeans, reason "Its fit on the base body was refused", detail "deep_push_share 0.1512 > 0.12"}]}
+ *        → head "Not the whole outfit — Shown without Jeans: this is not the outfit worn now until the missing pieces
+ *        are on it.", light red, title n1; then "Jeans: Its fit on the base body was refused", light null, title the
+ *        detail; translated with de.json the head starts "Nicht das ganze Outfit — Gezeigt ohne Jeans:" and the
+ *        piece line is "Jeans: Seine Anpassung an den Grundkörper wurde abgelehnt";
+ *      every English key the server sends (figure_build SERVED_* / PIECE_* / NOT_ON_FIGURE) has a de.json entry;
+ *      FieldFigure renders <ServedStateNote state={data.served_state} /> in the viewer column.
  */
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -1093,6 +1104,34 @@ check('[25] the Wardrobe chip\'s fit', m.acceptedWhat({ step: 'fit', on: '', rea
   const grid = src('frontend/src/tabs/characters/GarmentStepGrid.tsx');
   check('[25] Wardrobe chip + fit row', [/status\.accepted_by_user\) text \+= ` · \$\{t\(ACCEPTED_BY_YOU\)\}`/.test(wardrobe),
     /!shownFit && fit\?\.status === 'accepted' && fit\.user_accepted/.test(grid)], [true, true]);
+}
+
+// [27] Ruling A75 — the viewer's status of the figure it shows.
+{
+  const id = (k) => k;
+  check('[27] none', m.servedLines(null, id), []);
+  check('[27] complete', m.servedLines({ light: 'green', state: 'Shows the outfit worn now', reason: '', missing: [] }, id),
+    [{ light: 'green', text: 'Shows the outfit worn now', title: '', head: true }]);
+  const red = { light: 'red', state: 'Not the whole outfit', pieces: 'Jeans', notes: ['n1'],
+    reason: 'Shown without {pieces}: this is not the outfit worn now until the missing pieces are on it.',
+    missing: [{ item_id: 'i', name: 'Jeans', reason: 'Its fit on the base body was refused',
+      detail: 'deep_push_share 0.1512 > 0.12', pending: false }] };
+  check('[27] without a piece', m.servedLines(red, id), [
+    { light: 'red', text: 'Not the whole outfit — Shown without Jeans: this is not the outfit worn now until the missing pieces are on it.',
+      title: 'n1', head: true },
+    { light: null, text: 'Jeans: Its fit on the base body was refused', title: 'deep_push_share 0.1512 > 0.12', head: false }]);
+  const de = JSON.parse(src('shared/languages/de.json')).translations;
+  const tde = (k) => de[k] ?? k;
+  const lines = m.servedLines(red, tde);
+  check('[27] German', [lines[0].text.startsWith('Nicht das ganze Outfit — Gezeigt ohne Jeans:'), lines[1].text],
+    [true, 'Jeans: Seine Anpassung an den Grundkörper wurde abgelehnt']);
+  const py = src('app/core/figure_build.py');
+  const keys = [...py.matchAll(/^(?:SERVED_[A-Z_]+|PIECE_[A-Z_]+|NOT_ON_FIGURE)(?:, [A-Z_]+)* = ("(?:[^"\\]|\\.)*")/gm)]
+    .map((x) => JSON.parse(x[1]));
+  check('[27] server keys found', keys.length >= 14, true);
+  check('[27] server keys translated', keys.filter((k) => !(k in de)), []);
+  check('[27] FieldFigure renders it',
+    /<ServedStateNote state=\{data\.served_state\} \/>/.test(src('frontend/src/tabs/characters/FieldFigure.tsx')), true);
 }
 
 if (failures.length) {

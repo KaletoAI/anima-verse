@@ -3261,7 +3261,7 @@ def get_character_garment_model(character_name: str, item_id: str, request: Requ
     unknown method; 404 without a fit or for an item that is no garment of
     this character."""
     from fastapi.responses import Response
-    from app.core import garments, hair_strands
+    from app.core import fit_attempts, garments, hair_strands
     from app.core.garment_hair import HAIR_MODES
     if method and method not in HAIR_MODES:
         raise HTTPException(status_code=400, detail=f"method must be one of {', '.join(HAIR_MODES)}")
@@ -3273,6 +3273,10 @@ def get_character_garment_model(character_name: str, item_id: str, request: Requ
         version = ""
     if not version:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    # Ruling A75: the plain body's attached part is not shown where the worn outfit covers its slot.
+    hidden = fit_attempts.covered_part_groups(character_name, item_id)
+    covered = fit_attempts.covered_parts_token(hidden)
+    version += covered
     asked = request.query_params.get("v")
     if etag_matches(request.headers.get("if-none-match"), f'"{version}"'):
         cache = "public, max-age=31536000, immutable" if asked == version else "no-cache"
@@ -3281,6 +3285,7 @@ def get_character_garment_model(character_name: str, item_id: str, request: Requ
     if built is None:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     data, version = built
+    data, version = fit_attempts.without_covered_parts(data, hidden), version + covered
     cache = "public, max-age=31536000, immutable" if asked == version else "no-cache"
     return Response(content=data, media_type="model/gltf-binary",
                     headers={"ETag": f'"{version}"', "Cache-Control": cache})
@@ -3346,18 +3351,26 @@ def get_character_garment_fit_model(character_name: str, item_id: str, body: str
     if shown is None:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
     path, marks = shown
-    if marks is None:
+    # Ruling A75: the plain body's attached part is not shown where the worn outfit covers its slot.
+    hidden = fit_attempts.covered_part_groups(character_name, item_id)
+    if marks is None and not hidden:
         return snapshot_response(path, request, media_type="model/gltf-binary",
                                  version=request.query_params.get("v"))
     try:
-        st, mst = path.stat(), marks.stat()
+        st = path.stat()
+        mst = marks.stat() if marks is not None else None
     except OSError:
         return Response(status_code=404, headers={"Cache-Control": "no-cache"})
-    etag = f'"a31-{st.st_size:x}-{st.st_mtime_ns:x}-{mst.st_size:x}-{mst.st_mtime_ns:x}"'
+    marked = f"-{mst.st_size:x}-{mst.st_mtime_ns:x}" if mst is not None else ""
+    etag = f'"a31-{st.st_size:x}-{st.st_mtime_ns:x}{marked}{fit_attempts.covered_parts_token(hidden)}"'
     headers = {"ETag": etag, "Cache-Control": "no-cache"}
     if etag_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
-    return Response(content=fit_attempts.marked_glb(path, marks, item_id), media_type="model/gltf-binary",
+    try:
+        blob = fit_attempts.marked_glb(path, marks, item_id) if marks is not None else path.read_bytes()
+    except OSError:
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    return Response(content=fit_attempts.without_covered_parts(blob, hidden), media_type="model/gltf-binary",
                     headers=headers)
 
 

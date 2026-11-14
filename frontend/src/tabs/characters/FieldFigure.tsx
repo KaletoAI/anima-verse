@@ -14,7 +14,9 @@
  *   N hub jobs start" (POST …/figure/generation-pause {paused}) and the waiting jobs, each with Cancel behind an
  *   in-app confirmation (POST …/figure/waiting/cancel {id})); the pending changes with their cost, a failure;
  * - left: the figure DELIVERED now (`served_url`, the interim rule applied — never a half step), "Built <time>"
- *   in its corner; the mouse turns the figure; no extension-bone note (Ruling A73 — the 3D tab keeps it);
+ *   in its corner; the mouse turns the figure; no extension-bone note (Ruling A73 — the 3D tab keeps it); over it
+ *   what that figure is against the outfit worn now (Ruling A75, `served_state`): its light and reason, one line
+ *   per piece it lacks — a figure without a piece is never shown as if it were the outfit;
  * - right: sub-tabs instead of scrolling —
  *   - "Worn now": the worn hairstyle first (name · mode, ↗ Hairstyles — where hairstyles are worn, made and set,
  *     Task 14), then every worn piece (name · mode, ↗ Wardrobe — the mode lives on the item, ruling P4), each a
@@ -67,8 +69,8 @@ import { useFigure } from './useFigure'
 import {
   BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS,
   NO_BASE_BODY_NOTE, REFIT_LABEL, autoBuildNote, baseBodyLine, bodyRows, buildButton, changeLine, hairState,
-  headerLine, noBaseBody, planRows, regenerateMeshLabel, retryLabel, stateMeshAction, stateToggleNote, statusLight,
-  wornState,
+  headerLine, noBaseBody, planRows, regenerateMeshLabel, retryLabel, servedLines, stateMeshAction, stateToggleNote,
+  statusLight, wornState,
 } from './figureModel'
 import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
 
@@ -193,6 +195,7 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
       ) : null}
       <div className="ga-split ga-split-views ga-split-figure">
         <div className="ga-split-col">
+          <ServedStateNote state={data.served_state} />
           {/* The figure gets the wider column and no tilt toolbar (user 2026-11-13): the canvas fills the column. */}
           {data.served_url ? (
             <Model3DViewer key={data.served_url} url={data.served_url} format="glb" height={600} subject="figure"
@@ -233,6 +236,27 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
         <GarmentPieceDialog character={character} itemId={openPiece.id} name={openPiece.name} noRunAll
           onStatus={noop} onClose={() => { setOpenPiece(null); reload() }} />
       ) : null}
+    </div>
+  )
+}
+
+/** Ruling A75: what the shown figure is against the outfit worn now — its light and reason over the viewer, one
+ *  line per piece it lacks (the measured refusal on mouse-over). A figure without a piece is never shown as if it
+ *  were the outfit. */
+function ServedStateNote({ state }: { state: FigurePayload['served_state'] }) {
+  const { t } = useI18n()
+  const lines = servedLines(state, t)
+  if (!lines.length) return null
+  return (
+    <div className="ga-served-state" style={{ display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 4 }}>
+      {lines.map((line, i) => (
+        <span key={i} title={line.title || undefined} className={line.head ? undefined : 'ga-hint'}
+          style={{ display: 'flex', gap: 6, alignItems: 'baseline', paddingLeft: line.head ? 0 : 16,
+            color: line.head && state ? LIGHT_COLOR[state.light] : undefined, fontWeight: line.head ? 600 : undefined }}>
+          {line.light ? <StepLight light={line.light} /> : null}
+          <span>{line.text}</span>
+        </span>
+      ))}
     </div>
   )
 }

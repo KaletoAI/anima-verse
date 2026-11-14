@@ -318,6 +318,9 @@ export interface FigurePayload {
   generation_pause?: GenerationPause
   /** When the served model was built (Ruling UI3 a: the preview's caption); null without one. */
   served_built_at?: string | null
+  /** Ruling A75: what the served figure is against the outfit worn now (`figure_build._served_state`); null without
+   *  a served model, absent from an older server. */
+  served_state?: ServedState | null
   /** The saved outfit worn now, "" when none matches. */
   outfit: string
   worn: FigureWornRow[]
@@ -443,6 +446,32 @@ export function headerLine(status: FigureStatus, changes: number, t: Tr = EN): s
 }
 
 /** The flow head's light (checklist 8): green up to date · yellow changes · red a step failed · blue building. */
+/** One piece the served figure lacks (Ruling A75): `reason` an English key, `detail` the measured refusal. */
+export interface ServedMissing { item_id: string; name: string; reason: string; detail?: string; pending?: boolean }
+
+/** `figure_build._served_state`: `reason` may hold `{pieces}`; `notes` are further sentences. */
+export interface ServedState {
+  light: Light
+  state: string
+  reason: string
+  pieces?: string
+  notes?: string[]
+  missing: ServedMissing[]
+}
+
+/** The viewer's status lines of the served figure (Ruling A75; checklist point 8): the head line (light, state and
+ *  reason, the notes on mouse-over), then one line per missing piece — "<name>: <reason>", its measured refusal on
+ *  mouse-over. [] without a state. */
+export function servedLines(s: ServedState | null | undefined, t: (k: string) => string):
+  { light: Light | null; text: string; title: string; head: boolean }[] {
+  if (!s) return []
+  const reason = s.reason ? t(s.reason).replace('{pieces}', s.pieces || '') : ''
+  const head = { light: s.light, text: reason ? `${t(s.state)} — ${reason}` : t(s.state),
+    title: (s.notes || []).map((n) => t(n)).join(' '), head: true }
+  return [head, ...s.missing.map((m) => ({ light: null, text: `${m.name}: ${t(m.reason)}`, title: m.detail || '',
+    head: false }))]
+}
+
 export function statusLight(status: FigureStatus): Light {
   return status === 'up_to_date' ? 'green' : status === 'building' ? 'blue' : status === 'failed' ? 'red' : 'yellow'
 }

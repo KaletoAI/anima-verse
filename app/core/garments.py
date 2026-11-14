@@ -4592,9 +4592,13 @@ def other_methods_info(character_name: str, item_id: str, *,
     hits = [(m, h) for m, h in hits if h is not None]
     hits.sort(key=lambda mh: _stamp(mh[1][0]) or 0, reverse=True)
     out: List[Dict[str, Any]] = []
+    # Ruling A75: the preview drops a covered attached part — the URL names what is covered (the route's version).
+    from app.core.fit_attempts import covered_part_groups, covered_parts_token
+    covered = covered_parts_token(covered_part_groups(character_name, item_id, profile=profile)) if hits else ""
     for method, (path, record, on_base) in hits:
         try:
-            url: Optional[str] = _url(character_name, item_id, "model", preview_version(path), f"&method={method}")
+            url: Optional[str] = _url(character_name, item_id, "model", preview_version(path) + covered,
+                                      f"&method={method}")
         except OSError:
             url = None
         out.append({"method": method, "preview_url": url, "created_at": record.get("created_at"),
@@ -5230,7 +5234,10 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     preview_url = None
     if preview is not None:
         try:
-            preview_url = _url(character_name, item_id, "model", preview_version(preview))
+            # Ruling A75: the preview drops a covered attached part — the URL names what is covered.
+            from app.core.fit_attempts import covered_part_groups, covered_parts_token
+            preview_url = _url(character_name, item_id, "model", preview_version(preview) + covered_parts_token(
+                covered_part_groups(character_name, item_id, profile=profile)))
         except OSError:
             preview_url = None
     try:
