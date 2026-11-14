@@ -40,6 +40,11 @@ numbers plus ``ok`` / ``reasons``; ``stored_raw`` on a re-judged stored
 raw). The prepared GLB exists only when its
 record is accepted; an accepted pair is reused unless ``force`` (R13).
 
+Ruling A48a: every REFUSED attempt of the last run keeps its decimated mesh and its raw output
+(``garments/attempts/mesh/{item}_{fsig}.try{n}[.raw].glb``, ``keep_attempt``) — the Wardrobe's Mesh row shows
+each beside the accepted mesh. A new run (fresh attempts, a re-judged stored raw, a collected job) drops the
+files of the run before (``clear_attempts``); an attempt that failed outright has no file.
+
 Runs on the caller's worker thread (the orchestration holds
 ``garment_store.char_lock``); the generation itself goes through
 ``get_image_service().generate_mesh`` and thus the backend channel, the
@@ -241,9 +246,11 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
                     record["collected_job"] = stored["collected_job"]
                 if old.get("attempts"):
                     record["earlier_attempts"] = old["attempts"]  # what the older gate made of them
+                clear_attempts(name, item_id, fsig)
                 os.replace(candidate, prepared)
                 gs.write_record(record_path, record)
                 return prepared
+        clear_attempts(name, item_id, fsig)
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 entry = _attempt(name, kind, cut, raw, candidate, attempt)
@@ -258,6 +265,8 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
                                                          accepted=False, error=error))
                 raise MeshAttemptFailed(error, attempts) from e
             attempts.append(entry)
+            if not entry["ok"]:
+                keep_attempt(name, item_id, fsig, attempt, candidate, raw)
             logger.info("garment mesh %s/%s attempt %d: %s tris -> %s, largest component %.4f%s",
                         name, item_id, attempt, entry["tris_raw"], entry["tris_prepared"],
                         entry["largest_component_share"], "" if entry["ok"] else " (refused)")
@@ -297,6 +306,46 @@ def _record(kind: str, item_id: str, fsig: str, last: Dict[str, Any], attempts: 
     if error:
         record["error"] = error
     return record
+
+
+def clear_attempts(name: str, item_id: str, fsig: str) -> None:
+    """Drop the kept refused attempts of ``fsig`` (Ruling A48a): a new run's record lists its own attempts."""
+    from app.core import garment_store as gs
+    folder = gs.garment_path(name, item_id, fsig, "mesh_attempt", attempt=1).parent
+    if not folder.is_dir():
+        return
+    for path in folder.glob(f"{item_id}_{fsig}.try*.glb"):
+        if gs.parse_name(path) == (item_id, fsig):
+            path.unlink(missing_ok=True)
+
+
+def keep_attempt(name: str, item_id: str, fsig: str, attempt: int, candidate: Path, raw: Path) -> None:
+    """Keep refused ``attempt``: its decimated ``candidate`` and its ``raw`` output, copied beside the step
+    (Ruling A48a; the files are replaced atomically). Best effort — a failed copy loses the tile, never the run."""
+    import shutil
+    from app.core import garment_store as gs
+    for part, source in (("mesh_attempt", candidate), ("mesh_attempt_raw", raw)):
+        try:
+            if not Path(source).is_file():
+                continue
+            dest = gs.garment_path(name, item_id, fsig, part, attempt=attempt)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_name(f".{dest.name}.{os.getpid()}.tmp")
+            shutil.copyfile(source, tmp)
+            os.replace(tmp, dest)
+        except (OSError, ValueError) as e:
+            logger.warning("garment mesh %s/%s: refused attempt %d not kept (%s): %s", name, item_id, attempt,
+                           part, e)
+
+
+def attempt_files(name: str, item_id: str, fsig: str, attempt: int) -> Dict[str, Optional[Path]]:
+    """``{"prepared": path | None, "raw": path | None}`` of kept refused ``attempt`` (Ruling A48a)."""
+    from app.core import garment_store as gs
+    out: Dict[str, Optional[Path]] = {}
+    for which, part in (("prepared", "mesh_attempt"), ("raw", "mesh_attempt_raw")):
+        path = gs.garment_path(name, item_id, fsig, part, attempt=attempt)
+        out[which] = path if path.is_file() else None
+    return out
 
 
 #: The crumb numbers of ``component_numbers`` an attempt entry and the step record carry.
@@ -448,6 +497,7 @@ def collect_job(name: str, item_id: str, fsig: str, job_id: str) -> Dict[str, An
                     "" if entry["ok"] else (" (refused, accepted mesh kept)" if kept else " (refused)"))
         if entry["ok"]:
             prepared.parent.mkdir(parents=True, exist_ok=True)
+            clear_attempts(name, item_id, fsig)
             os.replace(delivered, raw)
             os.replace(candidate, prepared)
             gs.write_record(record_path, record)
@@ -458,6 +508,8 @@ def collect_job(name: str, item_id: str, fsig: str, job_id: str) -> Dict[str, An
         if kept:
             return refused  # the accepted mesh stays exactly as it is
         os.replace(delivered, raw)
+        clear_attempts(name, item_id, fsig)
+        keep_attempt(name, item_id, fsig, 1, candidate, raw)
         prepared.unlink(missing_ok=True)
         gs.write_record(record_path, record)
         return {**refused, "record": record}

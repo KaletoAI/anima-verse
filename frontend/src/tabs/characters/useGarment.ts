@@ -78,6 +78,45 @@ export interface GarmentMeshInfo {
   gates: GateRecord[]
   tris: number | null
   created_at: string | null
+  /** Ruling A48a: the Mesh row's 3D view — the mesh files and the refused attempts with their kept files. */
+  view?: GarmentMeshView
+}
+
+/** One mesh file of the Mesh row (Ruling A48a): `url` versioned by content, `body_url` its body view (JSON). */
+export interface GarmentMeshFile { url: string; body_url: string; tris: number | null }
+
+/** A refused (or failed) attempt of the mesh step's last run; its files are kept only when it was refused. */
+export interface GarmentMeshAttempt {
+  attempt: number
+  ok: false
+  reasons: string[]
+  error: string
+  tris_raw?: number | null
+  tris_prepared?: number | null
+  largest_component_share?: number | null
+  prepared: GarmentMeshFile | null
+  raw: GarmentMeshFile | null
+}
+
+export interface GarmentMeshView {
+  prepared: GarmentMeshFile | null
+  raw: GarmentMeshFile | null
+  attempts: GarmentMeshAttempt[]
+}
+
+/** `GET …/mesh/{which}/body` (Ruling A48a): the share of the mesh's area inside the base body and the overlays. */
+export interface GarmentMeshBodyView {
+  key: string
+  share: number
+  face_share: number
+  faces: number
+  inside_faces: number
+  bsig: string
+  placement: { scale: number; offset: [number, number, number]; k: number }
+  computed_at: string
+  seconds: number
+  ghost_url: string
+  inside_url: string | null
 }
 
 export interface GarmentFitInfo {

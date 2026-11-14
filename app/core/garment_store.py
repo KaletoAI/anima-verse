@@ -54,6 +54,12 @@ item and the fit a user's acceptance of it displaced (Ruling A31, ``fit_attempts
     attempts/prev/{item}_{fsig}.glb + .json           the fit an acceptance displaced (for its undo)
     attempts/prev/low/{item}_{fsig}.glb               its distance tier
 
+The mesh step keeps every REFUSED attempt of its last run beside the accepted mesh (Ruling A48a,
+``garment_mesh``; shared, not per body)::
+
+    attempts/mesh/{item}_{fsig}.try{n}.glb            the decimated mesh of refused attempt n
+    attempts/mesh/{item}_{fsig}.try{n}.raw.glb        that attempt's generator output
+
 Images, the raw/prepared mesh and the HairDeck job stay shared (per fsig /
 hsig): a fit on a body is CPU work from them (``garments.fit_on_body``),
 never a hub job. Every fit record names its parents: ``item_id``, ``fsig``,
@@ -181,7 +187,9 @@ PART_DIRS: Dict[str, str] = {"image": "images", "raw": "raw", "prepared": "prepa
                              "attempt": "attempts", "attempt_prev": "attempts/prev",
                              "attempt_prev_low": "attempts/prev/low",
                              # Ruling A40: a body shape's refused derived shoe beside the fresh fit's attempt
-                             "attempt_derived": "attempts/derived"}
+                             "attempt_derived": "attempts/derived",
+                             # Ruling A48a (``garment_mesh``): the refused attempts of the mesh step's last run
+                             "mesh_attempt": "attempts/mesh", "mesh_attempt_raw": "attempts/mesh"}
 #: File suffix of a part other than ``glb`` (``limbs``: the refit's limb source, ``garment_source``).
 _PART_SUFFIX: Dict[str, str] = {"failed": "json", "limbs": "npz"}
 #: The parts keyed by an inner-layer signature ``lsig`` besides the fsig.
@@ -206,6 +214,10 @@ _IMAGE_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[a-z]+_[a-z]+(?:\.try[0-9]+
 #: {item}_{fsig}.strands.{json,npz} (``hair_strands.sidecar_paths``) — in the group of their fit, so they go with it
 #: (Ruling H-R3)
 _MESH_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"(?:\.(?:glb|json|npz)|\.strands\.(?:json|npz))")
+#: attempts/mesh/: {item}_{fsig}.try{n}.glb and its raw {…}.try{n}.raw.glb (Ruling A48a)
+_MESH_ATTEMPT_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"\.try[0-9]+(?:\.raw)?\.glb")
+#: The parts of a refused mesh attempt -> the tail of their file name after ``.try{n}``.
+MESH_ATTEMPT_PARTS: Dict[str, str] = {"mesh_attempt": ".glb", "mesh_attempt_raw": ".raw.glb"}
 #: layers/ and layers/low/: {item}_{fsig}_{lsig}.{glb,json}
 _LAYER_NAME_RE = re.compile(_ITEM + "_" + _FSIG + r"_[0-9a-f]{12}\.(?:glb|json)")
 
@@ -265,7 +277,9 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
     """The file of one garment part (see the module docstring for the layout).
 
     ``part`` is ``image`` (needs an image ``step`` and a ``view``; ``attempt``
-    > 0 names that attempt's file), ``raw``, ``prepared``, ``fit``, ``low``,
+    > 0 names that attempt's file), ``raw``, ``prepared``, ``mesh_attempt`` /
+    ``mesh_attempt_raw`` (a refused attempt of the mesh step, needs its
+    ``attempt`` > 0), ``fit``, ``low``,
     ``failed`` (a JSON record, ``record_failure``), or ``layer`` /
     ``layer_low`` (a layered fit, needs its ``lsig``). ``body`` (the
     ``BODY_PARTS`` only; the others are shared and ignore it): "" or a base
@@ -294,6 +308,10 @@ def garment_path(character_name: str, item_id: str, fsig: str, part: str, *,
             raise ValueError(f"no garment view {view!r}")
         tail = f".try{int(attempt)}.png" if attempt else ".png"
         path = root / PART_DIRS[part] / f"{iid}_{fsig}_{step}_{view}{tail}"
+    elif part in MESH_ATTEMPT_PARTS:
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            raise ValueError(f"a mesh attempt needs its number, not {attempt!r}")
+        path = root / PART_DIRS[part] / f"{iid}_{fsig}.try{attempt}{MESH_ATTEMPT_PARTS[part]}"
     elif part in LAYER_PARTS:
         if not isinstance(lsig, str) or not _FSIG_RE.fullmatch(lsig):
             raise ValueError(f"invalid layer fingerprint {str(lsig)[:40]!r}")
@@ -329,6 +347,8 @@ def parse_name(path: Path) -> Optional[Tuple[str, str]]:
     layers = PART_DIRS["layer"]
     if path.parent.name == layers or (path.parent.name == "low" and path.parent.parent.name == layers):
         pattern = _LAYER_NAME_RE
+    elif path.parent.name == "mesh" and path.parent.parent.name == PART_DIRS["attempt"]:
+        pattern = _MESH_ATTEMPT_NAME_RE
     else:
         pattern = _IMAGE_NAME_RE if path.parent.name == PART_DIRS["image"] else _MESH_NAME_RE
     match = pattern.fullmatch(path.name)

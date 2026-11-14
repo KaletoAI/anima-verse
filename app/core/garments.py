@@ -4008,7 +4008,59 @@ def _mesh_info(character_name: str, item_id: str, fsig: str) -> Dict[str, Any]:
     metrics = {k: record.get(k) for k in ("largest_component_share", "tris_raw", "tris_prepared", "ratio",
                                           "backend") if k in record}
     return {"status": status, "metrics": metrics, "gates": record.get("attempts") or [],
-            "tris": record.get("tris_prepared"), "created_at": record.get("created_at")}
+            "tris": record.get("tris_prepared"), "created_at": record.get("created_at"),
+            "view": _mesh_view_info(character_name, item_id, fsig, record, accepted=status == "accepted")}
+
+
+def _mesh_view_info(character_name: str, item_id: str, fsig: str, record: Dict[str, Any], *,
+                    accepted: bool) -> Dict[str, Any]:
+    """The Mesh row's 3D view (Ruling A48a, ``garment_mesh_view``): ``{prepared, raw, attempts}`` — each mesh
+    file ``{url, body_url, tris}`` (``url`` versioned by content; ``body_url`` the body view's JSON; ``tris``
+    counted in the file, ``garment_mesh_view.file_triangles``) or None, and
+    every refused or failed attempt of the step record's last run ``{attempt, ok, reasons, error, tris_raw,
+    tris_prepared, largest_component_share, prepared, raw}`` with its kept files (``garment_mesh.attempt_files``;
+    None when nothing was kept — a failed attempt has no mesh)."""
+    from app.core import garment_mesh, garment_mesh_view
+    from app.core.garment_store import garment_path
+    from app.core.http_files import content_version
+
+    def file(path: Optional[Path], which: str, attempt: int, tris: Any) -> Optional[Dict[str, Any]]:
+        if path is None or not path.is_file():
+            return None
+        try:
+            version = content_version(path)
+        except OSError:
+            return None
+        extra = f"&attempt={attempt}" if attempt else ""
+        body = (f"/characters/{quote(character_name, safe='')}/garments/{quote(item_id, safe='')}/mesh/{which}/body"
+                + (f"?attempt={attempt}" if attempt else ""))
+        return {"url": _url(character_name, item_id, f"mesh/{which}", version, extra), "body_url": body,
+                "tris": garment_mesh_view.file_triangles(path, version) or tris}
+
+    out: Dict[str, Any] = {
+        "prepared": file(garment_path(character_name, item_id, fsig, "prepared"), "prepared", 0,
+                         record.get("tris_prepared")) if accepted else None,
+        "raw": file(garment_path(character_name, item_id, fsig, "raw"), "raw", 0, record.get("tris_raw")),
+        "attempts": [],
+    }
+    for entry in record.get("attempts") or []:
+        if not isinstance(entry, dict) or entry.get("ok") is True:
+            continue
+        try:
+            number = int(entry.get("attempt") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= number <= garment_mesh.MAX_ATTEMPTS:
+            continue
+        kept = garment_mesh.attempt_files(character_name, item_id, fsig, number)
+        out["attempts"].append({
+            "attempt": number, "ok": False, "reasons": list(entry.get("reasons") or []),
+            "error": entry.get("error") or "",
+            **{k: entry.get(k) for k in ("tris_raw", "tris_prepared", "largest_component_share")},
+            "prepared": file(kept["prepared"], "prepared", number, entry.get("tris_prepared")),
+            "raw": file(kept["raw"], "raw", number, entry.get("tris_raw")),
+        })
+    return out
 
 
 def _fit_info(character_name: str, item_id: str, fsig: str, base_model_sha: str,

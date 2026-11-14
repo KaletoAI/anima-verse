@@ -756,6 +756,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             onPieceView={(view, choice) => { void onPieceView(view, choice) }}
             meshFetchUrl={meshFetchUrl}
             onMeshFetched={onMeshFetched}
+            pieceName={info.name || name}
           />
         </div>
         <div className="ga-garment-dialog-col">

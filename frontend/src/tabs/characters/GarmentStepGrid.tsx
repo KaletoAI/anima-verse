@@ -34,6 +34,10 @@
  * information only and the accepted image it replaces is a small tile ("To be replaced"). A chip whose limit only
  * warns (the registration caps — the gate never refuses for them) lights yellow, not red, and "current" never
  * stands beside a red light.
+ * Ruling A48a: the Mesh row shows the mesh in 3D — the accepted mesh as a small tile (a click opens the viewer
+ * with Prepared / Raw, the base body as a ghost and the faces inside it in red, the share inside as a number),
+ * each refused attempt of the last run as a tile of its own beside it (GarmentMeshView). Its Regenerate names
+ * its hub job.
  * The hair row keeps its own layout (GarmentSteps).
  */
 import { Fragment } from 'react'
@@ -49,6 +53,7 @@ import {
   shownRecord, upscaleText, warningLines,
 } from './garmentStyle'
 import type { AttemptTile, ChipSpec, GarmentLimits, GarmentRunBody, LightState } from './garmentStyle'
+import { GarmentMeshTiles } from './GarmentMeshView'
 import { MeshJobFetch } from './MeshJobFetch'
 import { StepLight } from './StepRows'
 import { armLightColour, armLightShort, armLightText } from './fitSettingsModel'
@@ -59,6 +64,9 @@ import type {
   PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
   ViewRunPlans,
 } from './useGarment'
+
+/** First attempt plus one more when the gate refuses it (`garment_mesh.MAX_ATTEMPTS`). */
+const MESH_ATTEMPTS = 2
 
 /** Thumbnail height of an image cell (px). */
 const THUMB_H = 112
@@ -325,7 +333,7 @@ function upToText(n: number, t: (s: string) => string): string {
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
-  viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched }: {
+  viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched, pieceName = '' }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -347,6 +355,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   meshFetchUrl?: string | null
   /** The mesh record changed through a fetched job: reload the panel. */
   onMeshFetched?: () => void
+  /** The piece's name (the mesh viewer's title). */
+  pieceName?: string
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -522,10 +532,14 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
     )
   }
 
+  // The counts of the stored files when the view names them (the tiles and the viewer show those), else the
+  // decimator's record (it counts before the export drops degenerate triangles).
+  const trisRaw = mesh?.view?.raw?.tris ?? mesh?.metrics.tris_raw
+  const trisPrepared = mesh?.view?.prepared?.tris ?? mesh?.metrics.tris_prepared
   const meshText = [
     !mesh || mesh.status === 'missing' ? t('Not built yet') : mesh.status === 'refused' ? t('Refused') : t('Accepted'),
-    mesh?.metrics.tris_raw != null && mesh.metrics.tris_prepared != null
-      ? `${t('Triangles')} ${mesh.metrics.tris_raw.toLocaleString()} → ${mesh.metrics.tris_prepared.toLocaleString()}`
+    trisRaw != null && trisPrepared != null
+      ? `${t('Triangles')} ${trisRaw.toLocaleString()} → ${trisPrepared.toLocaleString()}`
       : '',
     mesh?.metrics.backend || '',
     mesh?.created_at ? formatDateTime(mesh.created_at, clockSettings()) : '',
@@ -576,10 +590,15 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
           slot={runSlot({ step: 'mesh' })}
           disabled={busy || !garment || !cutoutsReady}
           title={garment && !cutoutsReady ? t('Run the previous step first') : t(STEP_HELP.mesh)}
+          ariaLabel={`${mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')} · ${t('Mesh')} · ${upToText(MESH_ATTEMPTS, t)}`}
           label={mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
           onClick={() => onRun({ step: 'mesh', force: true })}
         />
+        <span className="ga-hint" title={t(STEP_HELP.mesh)}>
+          {`${upToText(MESH_ATTEMPTS, t)} · ${t('then the fit on the CPU')}`}
+        </span>
         <MeshJobFetch url={garment ? meshFetchUrl : null} disabled={busy} onDone={() => onMeshFetched?.()} />
+        <GarmentMeshTiles view={mesh?.view} builtAt={mesh?.created_at ?? null} pieceName={pieceName} />
       </div>
 
       <StepLabel garment={garment} step="fit" label={stepLabels.fit || 'Fit'} help={STEP_HELP.fit} />

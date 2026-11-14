@@ -2831,6 +2831,93 @@ def get_character_garment_image(character_name: str, item_id: str, step: str, vi
     return etag_file_response(path, request, "image/png")
 
 
+def _garment_mesh_args(character_name: str, item_id: str, which: str, attempt: int) -> None:
+    """Shared checks of the Mesh row's 3D view routes (Ruling A48a): 400 for a bad ``which`` / ``attempt``, 404
+    for an item id the item filter changes (``safe_item_id``) or an unknown character."""
+    from app.core import garment_mesh, garment_mesh_view
+    from app.models.inventory import safe_item_id
+    if which not in garment_mesh_view.WHICH:
+        raise HTTPException(status_code=400, detail=f"which must be one of {', '.join(garment_mesh_view.WHICH)}")
+    if not 0 <= attempt <= garment_mesh.MAX_ATTEMPTS:
+        raise HTTPException(status_code=400, detail=f"attempt must be 0..{garment_mesh.MAX_ATTEMPTS}")
+    if safe_item_id(item_id) != item_id:
+        raise HTTPException(status_code=404, detail="Unknown item")
+    _require_character(character_name)
+
+
+@router.get("/{character_name}/garments/{item_id}/mesh/{which}")
+def get_character_garment_mesh(character_name: str, item_id: str, which: str, request: Request,
+                               attempt: int = 0, _: Dict[str, Any] = Depends(require_admin)):
+    """Ruling A48a: one mesh file of the piece's CURRENT fsig — ``prepared`` (the accepted decimated mesh) or
+    ``raw`` (the generator output); ``attempt`` 1..n = that kept refused attempt's file
+    (``garment_mesh_view.mesh_file``). Versioned by content (``snapshot_response``: ETag, 304, immutable with a
+    matching ``v``). Admin-only. 400 for a bad which / attempt, 404 for a file that is not there or an item that
+    is no garment of this character."""
+    from app.core import garment_mesh_view
+    from app.core.http_files import snapshot_response
+    _garment_mesh_args(character_name, item_id, which, attempt)
+
+    def resolve() -> Optional[Path]:
+        try:
+            return garment_mesh_view.mesh_file(character_name, item_id, which, attempt)
+        except ValueError:
+            return None
+    return snapshot_response(None, request, media_type="model/gltf-binary",
+                             version=request.query_params.get("v"), resolve=resolve)
+
+
+@router.get("/{character_name}/garments/{item_id}/mesh/{which}/body")
+def get_character_garment_mesh_body(character_name: str, item_id: str, which: str, request: Request,
+                                    attempt: int = 0, _: Dict[str, Any] = Depends(require_admin)):
+    """Ruling A48a: the body view of one mesh file (``garment_mesh_view.body_view``) — the share of its area
+    inside the base body, the face counts and the placement — plus ``ghost_url`` (the base body as a ghost, in
+    the mesh's frame) and ``inside_url`` (the faces inside the body; None without any). Computed once per mesh
+    and body and cached by content (``ETag`` = ``"<key>"``, 304 on a match). Admin-only. 400 for a bad which /
+    attempt, 404 without the mesh, 409 with the plain reason when the body cannot be shown (no base model, no
+    piece-only front view, a frame the fit refuses)."""
+    from fastapi.responses import JSONResponse, Response
+    from app.core import garment_mesh_view
+    _garment_mesh_args(character_name, item_id, which, attempt)
+    try:
+        view = garment_mesh_view.body_view(character_name, item_id, which, attempt)
+    except garment_mesh_view.ViewUnavailable as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except (LookupError, ValueError):
+        return Response(status_code=404, headers={"Cache-Control": "no-cache"})
+    etag = f'"{view["key"]}"'
+    headers = {"ETag": etag, "Cache-Control": "no-cache"}
+    if etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(status_code=304, headers=headers)
+    base = (f"/characters/{quote(character_name, safe='')}/garments/{quote(item_id, safe='')}/mesh/{which}/body")
+    extra = f"&attempt={attempt}" if attempt else ""
+    return JSONResponse({**view, "ghost_url": f"{base}/ghost?v={view['key']}{extra}",
+                         "inside_url": f"{base}/inside?v={view['key']}{extra}" if view.get("inside_faces") else None},
+                        headers=headers)
+
+
+@router.get("/{character_name}/garments/{item_id}/mesh/{which}/body/{overlay}")
+def get_character_garment_mesh_overlay(character_name: str, item_id: str, which: str, overlay: str,
+                                       request: Request, attempt: int = 0,
+                                       _: Dict[str, Any] = Depends(require_admin)):
+    """Ruling A48a: an overlay GLB of the body view — ``ghost`` (the base body in the mesh's frame) or ``inside``
+    (the mesh's faces inside the body) — computed with the view when it is not cached
+    (``garment_mesh_view.overlay_path``), versioned by content. Admin-only. 400 for a bad which / attempt /
+    overlay, 404 when there is nothing to show."""
+    from app.core import garment_mesh_view
+    from app.core.http_files import snapshot_response
+    if overlay not in garment_mesh_view.OVERLAYS:
+        raise HTTPException(status_code=400, detail=f"overlay must be one of {', '.join(garment_mesh_view.OVERLAYS)}")
+    _garment_mesh_args(character_name, item_id, which, attempt)
+
+    def resolve() -> Optional[Path]:
+        try:
+            return garment_mesh_view.overlay_path(character_name, item_id, which, attempt, overlay)
+        except (garment_mesh_view.ViewUnavailable, LookupError, ValueError):
+            return None
+    return snapshot_response(None, request, media_type="model/gltf-binary",
+                             version=request.query_params.get("v"), resolve=resolve)
+
+
 @router.post("/{character_name}/garments/{item_id}/images/{step}/{view}/attempts/{attempt}/use")
 def use_character_garment_attempt(character_name: str, item_id: str, step: str, view: str, attempt: int,
                                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

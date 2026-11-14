@@ -5318,6 +5318,24 @@
     "The mesh has no protrusion here, so there is nothing to rig. Turn on the slot's own mesh part in the body editor to have the part built.": "Das Mesh hat hier keine Ausformung, also gibt es nichts zu riggen. Das eigene Mesh-Teil des Slots im Körper-Editor einschalten, damit das Teil gebaut wird.",
     "No matching shape was found in the mesh here, so these bones were not built.": "Im Mesh wurde hier keine passende Form gefunden, daher wurden diese Bones nicht gebaut.",
     "The build failed. Rebuild (local, no hub job) tries again.": "Der Bau ist fehlgeschlagen. „Neu bauen“ (lokal, kein Hub-Job) versucht es erneut.",
-    "The groups changed since the last build. Rebuild (local, no hub job) or Run all builds them.": "Die Gruppen haben sich seit dem letzten Bau geändert. „Neu bauen“ (lokal, kein Hub-Job) oder „Alles ausführen“ baut sie."
+    "The groups changed since the last build. Rebuild (local, no hub job) or Run all builds them.": "Die Gruppen haben sich seit dem letzten Bau geändert. „Neu bauen“ (lokal, kein Hub-Job) oder „Alles ausführen“ baut sie.",
+    "Accepted mesh": "Angenommenes Mesh",
+    "Raw mesh": "Rohes Mesh",
+    "Click to open the 3D view": "Klicken öffnet die 3D-Ansicht",
+    "Open the 3D view": "3D-Ansicht öffnen",
+    "No preview": "Keine Vorschau",
+    "No mesh was kept": "Es wurde kein Mesh behalten",
+    "The body view failed": "Die Körperansicht ist fehlgeschlagen",
+    "Share of the mesh area whose faces lie inside the base body, placed as the fit places the piece (before the fit pushes it out).": "Anteil der Mesh-Fläche, deren Flächen im Grundkörper liegen – so platziert, wie die Anpassung das Stück platziert (bevor sie es hinausschiebt).",
+    "Mesh file": "Mesh-Datei",
+    "The decimated mesh the fit takes": "Das reduzierte Mesh, das die Anpassung verwendet",
+    "The mesh as the generator delivered it": "Das Mesh, wie der Generator es geliefert hat",
+    "Raw": "Roh",
+    "The base body as a translucent ghost, placed as the fit places the piece": "Der Grundkörper halbdurchsichtig, so platziert, wie die Anpassung das Stück platziert",
+    "Faces whose centres lie inside the base body, in red": "Flächen, deren Mittelpunkt im Grundkörper liegt, in Rot",
+    "Share inside the body": "Anteil im Körper",
+    "of the mesh area": "der Mesh-Fläche",
+    "Placing the mesh on the body…": "Mesh wird auf den Körper gesetzt…",
+    "then the fit on the CPU": "danach die Anpassung auf der CPU"
   }
 }

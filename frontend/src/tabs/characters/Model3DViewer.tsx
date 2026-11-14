@@ -275,6 +275,15 @@ export interface TilePlacement {
   figureHeightWorld?: number
 }
 
+/** One extra GLB of `Model3DViewer`'s `companions` (Ruling A48a). */
+export interface ViewerCompanion {
+  key: string
+  url: string
+  /** `ghost`: translucent grey-blue, never hides the model; `mark`: flat red, drawn over the model's own faces. */
+  style: 'ghost' | 'mark'
+  visible: boolean
+}
+
 export interface ActionAccessOverlay {
   role: 'actor' | 'partner'
   label: string
@@ -291,7 +300,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
-  meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model', extensionBones = false }:
+  meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model', extensionBones = false,
+  companions, onCompanionState }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; sideToolbar?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Whether the "Extension bones" overlay starts switched on (Ruling A45, `extensionBoneOverlay.ts`): the bones
      *  of `motion`'s non-hair groups drawn on top, redrawn every frame after the solver. The toggle is offered
@@ -468,6 +478,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  its pivot with (ruling R13) — and back, so the cut can be judged
      *  before a door is placed anywhere. Model mode only. */
     leafBbox?: LeafBbox | null
+    /** Extra GLBs drawn WITH the model, in the loaded model's own frame (they hang under the same pivot, so they
+     *  frame, turn and move with it) — Ruling A48a: the base body as a translucent `ghost`, the faces inside it as a
+     *  red `mark` drawn over the model's own. Loaded after the model, one by one, without reloading it; `visible`
+     *  switches live. Not part of the framing or the mesh numbers. */
+    companions?: ViewerCompanion[]
+    /** A companion started loading, finished or failed (`error`: it is not shown). */
+    onCompanionState?: (key: string, state: 'loading' | 'ready' | 'error') => void
     /** The model's collision capsules (`model.collision`, server
      *  app/core/collision.py). With capsules the viewer offers "Collision
      *  capsules": wireframes on the PLAYING figure, placed every frame by
@@ -590,6 +607,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const rotationRef = useRef(rotation)
   rotationRef.current = rotation
   const placeFnRef = useRef<((p: TilePlacement) => void) | null>(null)
+  const companionsRef = useRef(companions)
+  companionsRef.current = companions
+  const onCompanionStateRef = useRef(onCompanionState)
+  onCompanionStateRef.current = onCompanionState
+  const companionFnRef = useRef<(() => void) | null>(null)
+  const companionsKey = (companions || []).map((c) => `${c.key}|${c.url}|${c.style}|${c.visible ? 1 : 0}`).join(';')
   /** Reference-size overlay of the current placement (own sprites/materials). */
   const aidsRef = useRef<Object3D | null>(null)
   const placementRef = useRef(placement)
@@ -730,6 +753,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   useEffect(() => { areaFnRef.current?.() }, [areaOutlines])
   useEffect(() => { polylineFnRef.current?.() }, [polylines])
   useEffect(() => { meshAdjustFnRef.current?.() }, [meshAdjust])
+  useEffect(() => { companionFnRef.current?.() }, [companionsKey])
   useEffect(() => { if (focusKey) refitFnRef.current?.() }, [focusKey])
   useEffect(() => { slotFnRef.current?.() }, [slots])
   // Disarming the tool drops whatever was half-drawn: a ring that survived
@@ -2473,6 +2497,78 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             if (canvasRef.current === renderer.domElement) canvasRef.current = null
           })
         }
+
+        // ── Companions (Ruling A48a) ── Extra GLBs under the pivot, in the model's own frame: loaded one by one
+        // after the model (a slow one never holds the model back), restyled, switched on and off live.
+        const companionObjs = new Map<string, { url: string; style: ViewerCompanion['style']; obj: Object3D | null }>()
+        const disposeCompanion = (obj: Object3D) => {
+          obj.removeFromParent()
+          obj.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            mesh.geometry?.dispose?.()
+            const m = mesh.material as Material | Material[] | undefined
+            if (Array.isArray(m)) m.forEach((x) => x.dispose?.())
+            else m?.dispose?.()
+          })
+        }
+        const styleCompanion = (obj: Object3D, style: ViewerCompanion['style']) => {
+          obj.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            if (!mesh.isMesh) return
+            const old = mesh.material as Material | Material[]
+            mesh.material = style === 'ghost'
+              ? new THREE.MeshStandardMaterial({ color: 0x9fb3cc, roughness: 0.9, metalness: 0, transparent: true,
+                opacity: 0.3, depthWrite: false, side: THREE.DoubleSide })
+              : new THREE.MeshBasicMaterial({ color: 0xf85149, side: THREE.DoubleSide, polygonOffset: true,
+                polygonOffsetFactor: -2, polygonOffsetUnits: -4 })
+            mesh.renderOrder = style === 'ghost' ? 2 : 1
+            if (Array.isArray(old)) old.forEach((m) => m.dispose?.())
+            else old?.dispose?.()
+          })
+        }
+        const applyCompanions = () => {
+          const list = companionsRef.current || []
+          for (const [key, entry] of [...companionObjs]) {
+            const want = list.find((c) => c.key === key)
+            if (!want || want.url !== entry.url || want.style !== entry.style) {
+              if (entry.obj) disposeCompanion(entry.obj)
+              companionObjs.delete(key)
+            }
+          }
+          for (const c of list) {
+            const entry = companionObjs.get(c.key)
+            if (entry) {
+              if (entry.obj) entry.obj.visible = c.visible
+              continue
+            }
+            const fresh: { url: string; style: ViewerCompanion['style']; obj: Object3D | null } =
+              { url: c.url, style: c.style, obj: null }
+            companionObjs.set(c.key, fresh)
+            onCompanionStateRef.current?.(c.key, 'loading')
+            ;(async () => {
+              const { createGLTFLoader } = await import('../../lib/gltfLoader')
+              const gltf = await createGLTFLoader().loadAsync(c.url)
+              if (disposed || companionObjs.get(c.key) !== fresh) {
+                disposeCompanion(gltf.scene)
+                return
+              }
+              styleCompanion(gltf.scene, c.style)
+              fresh.obj = gltf.scene
+              gltf.scene.visible = !!(companionsRef.current || []).find((x) => x.key === c.key)?.visible
+              pivot.add(gltf.scene)
+              onCompanionStateRef.current?.(c.key, 'ready')
+            })().catch(() => {
+              if (!disposed && companionObjs.get(c.key) === fresh) onCompanionStateRef.current?.(c.key, 'error')
+            })
+          }
+        }
+        companionFnRef.current = applyCompanions
+        disposers.push(() => {
+          if (companionFnRef.current === applyCompanions) companionFnRef.current = null
+          for (const entry of companionObjs.values()) if (entry.obj) disposeCompanion(entry.obj)
+          companionObjs.clear()
+        })
+        applyCompanions()
 
         setLoading(false)
 
