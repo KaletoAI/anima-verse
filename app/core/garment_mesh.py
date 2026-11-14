@@ -40,10 +40,23 @@ numbers plus ``ok`` / ``reasons``; ``stored_raw`` on a re-judged stored
 raw). The prepared GLB exists only when its
 record is accepted; an accepted pair is reused unless ``force`` (R13).
 
-Ruling A48a: every REFUSED attempt of the last run keeps its decimated mesh and its raw output
+Ruling A48a: every REFUSED attempt keeps its decimated mesh and its raw output
 (``garments/attempts/mesh/{item}_{fsig}.try{n}[.raw].glb``, ``keep_attempt``) — the Wardrobe's Mesh row shows
-each beside the accepted mesh. A new run (fresh attempts, a re-judged stored raw, a collected job) drops the
-files of the run before (``clear_attempts``); an attempt that failed outright has no file.
+each beside the mesh in use; an attempt that failed outright has no file.
+
+Ruling A58 — the KEPT meshes of an fsig: slots ``try1`` .. ``try{KEPT_MAX}`` of that folder, each described by
+an entry of the step record's ``kept`` list (``{n, origin, ok, reasons, created_at, tris_raw, tris_prepared,
+largest_component_share, backend, …}``). Origins: ``attempt`` (a refused attempt), ``previous`` (the mesh that was
+in use before a run or a pick replaced it) and ``job`` (a run's result that finished while the user had chosen
+another mesh). The record is the piece's mesh JSON; every write of it — a run's publish, a kept attempt, the
+user's pick (``use_kept``) — happens under ``mesh_lock`` (``keyed_lock("garment_mesh", "<name>:<item>")``), which
+is NEVER held across the hub call. While a run's mesh job runs (``running_job``: its id, start, hub-job count),
+the user may pick any kept mesh ("Use this"); the pick writes ``chosen_during_job`` (the job's id) into the
+record. When the job ends, its publish reads that marker under the same lock: picked during the run, its result
+becomes a kept mesh (origin ``job``, ``chosen_during_job`` True) and the user's pick stays; else it becomes the
+piece's mesh as before and the mesh it replaces is kept (origin ``previous``). A full set of slots drops its
+oldest refused attempt first, then its oldest kept mesh. The generator writes into a staging file beside the raw
+mesh, so the raw file of the mesh in use is never overwritten mid-run.
 
 Runs on the caller's worker thread (the orchestration holds
 ``garment_store.char_lock``); the generation itself goes through
@@ -51,8 +64,10 @@ Runs on the caller's worker thread (the orchestration holds
 decimation is a Blender process on the CPU.
 """
 import os
+import threading
+import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.log import get_logger
 
@@ -85,6 +100,16 @@ MIN_COMPONENT_SHARE = 0.90
 GATE_VERSION = 2
 #: Fresh backend calls before the step is refused (R5).
 MAX_ATTEMPTS = 2
+#: Ruling A58: slots of the kept meshes of one fsig (refused attempts, the meshes a run or a pick replaced, a
+#: result that finished while another mesh was chosen). Enough for two runs of two attempts plus the meshes in
+#: between; a full set drops its oldest refused attempt first (``_free_slot``).
+KEPT_MAX = 6
+#: ``kept`` entry origins (Ruling A58).
+KEPT_ATTEMPT = "attempt"
+KEPT_PREVIOUS = "previous"
+KEPT_JOB = "job"
+#: The line a result that finished while the user had chosen another mesh carries (Ruling A58).
+NOT_APPLIED = "Finished while another mesh was chosen — not applied"
 
 
 class MeshAttemptFailed(RuntimeError):
@@ -184,7 +209,214 @@ def _gate(share: float) -> List[str]:
     return []
 
 
-def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path:
+class KeptUnusable(ValueError):
+    """``use_kept``: the slot holds no kept mesh (a route answers 409)."""
+
+
+# --- Ruling A58: the running mesh job and the piece's mesh lock -------------------------------------------------
+
+_jobs_lock = threading.Lock()
+#: (name, item) -> the mesh job of the run in flight: ``{id, fsig, started_at, hub_jobs, max_hub_jobs, phase}``.
+_jobs: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+
+def mesh_lock(name: str, item_id: str):
+    """The piece's mesh lock (Ruling A58): every write of the step record, of the prepared / raw mesh and of the kept
+    meshes of any fsig of the piece. Never held across a hub call; lock order: the run locks
+    (``garment_store.char_lock`` / ``run_item_lock``) before it, nothing holding it waits for them."""
+    from app.core.keyed_lock import keyed_lock
+    return keyed_lock("garment_mesh", f"{name}:{item_id}")
+
+
+def running_job(name: str, item_id: str, fsig: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """A copy of the piece's mesh job in flight (``generate``) — of ``fsig`` when given — or None."""
+    with _jobs_lock:
+        job = _jobs.get((name, item_id))
+        if job is None or (fsig is not None and job.get("fsig") != fsig):
+            return None
+        return dict(job)
+
+
+def _begin_job(name: str, item_id: str, fsig: str) -> str:
+    from app.core.timeutils import utc_now_iso
+    job_id = uuid.uuid4().hex[:12]
+    with _jobs_lock:
+        _jobs[(name, item_id)] = {"id": job_id, "fsig": fsig, "started_at": utc_now_iso(), "hub_jobs": 0,
+                                  "max_hub_jobs": MAX_ATTEMPTS, "phase": "starting"}
+    return job_id
+
+
+def _job_update(name: str, item_id: str, job_id: str, **changes: Any) -> None:
+    with _jobs_lock:
+        job = _jobs.get((name, item_id))
+        if job is not None and job.get("id") == job_id:
+            job.update(changes)
+
+
+def _end_job(name: str, item_id: str, job_id: str) -> None:
+    with _jobs_lock:
+        job = _jobs.get((name, item_id))
+        if job is not None and job.get("id") == job_id:
+            _jobs.pop((name, item_id), None)
+
+
+# --- Ruling A58: kept meshes --------------------------------------------------------------------------------------
+
+#: The numbers a kept entry carries from its attempt (or from the record of the mesh it was).
+_ENTRY_KEYS = ("tris_raw", "tris_prepared", "ratio", "backend", "routing", "largest_component_share",
+               "fallback_from", "collected_job", "stored_raw", "largest_component_share_all", "dropped_share",
+               "dropped_components", "components_kept")
+
+
+def kept_entries(record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The valid ``kept`` entries of a step record (Ruling A58), slot numbers 1..KEPT_MAX, each slot once, in slot
+    order (a tile keeps its place when "Use this" swaps its mesh)."""
+    out: List[Dict[str, Any]] = []
+    seen = set()
+    for entry in record.get("kept") or []:
+        if not isinstance(entry, dict):
+            continue
+        n = entry.get("n")
+        if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= KEPT_MAX or n in seen:
+            continue
+        seen.add(n)
+        out.append(entry)
+    return sorted(out, key=lambda e: e["n"])
+
+
+def _drop_slot(name: str, item_id: str, fsig: str, n: int) -> None:
+    from app.core import garment_store as gs
+    for part in MESH_PARTS:
+        gs.garment_path(name, item_id, fsig, part, attempt=n).unlink(missing_ok=True)
+
+
+#: The file parts of a kept slot.
+MESH_PARTS = ("mesh_attempt", "mesh_attempt_raw")
+
+
+def _free_slot(name: str, item_id: str, fsig: str, kept: List[Dict[str, Any]]) -> int:
+    """A free slot for a new kept mesh; a full set drops its oldest refused attempt first, then its oldest kept
+    mesh (``kept`` is changed in place; the caller writes the record)."""
+    used = {e["n"] for e in kept}
+    for n in range(1, KEPT_MAX + 1):
+        if n not in used:
+            _drop_slot(name, item_id, fsig, n)  # a stray file of an older record
+            return n
+    refused = [e for e in kept if e.get("origin") == KEPT_ATTEMPT]
+    victim = min(refused or kept, key=lambda e: (str(e.get("created_at") or ""), e["n"]))
+    kept.remove(victim)
+    _drop_slot(name, item_id, fsig, victim["n"])
+    return victim["n"]
+
+
+def _move_into(source: Path, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(source, dest)
+
+
+def _keep(name: str, item_id: str, fsig: str, kept: List[Dict[str, Any]], prepared: Path, raw: Optional[Path],
+          entry: Dict[str, Any], *, move: bool) -> int:
+    """Store a mesh as a kept slot (caller holds ``mesh_lock``): its decimated ``prepared`` and its ``raw`` file
+    (moved, or copied when ``move`` is False — ``keep_attempt``), plus ``entry`` (with its new ``n``) appended to
+    ``kept``. The slot number."""
+    from app.core import garment_store as gs
+    n = _free_slot(name, item_id, fsig, kept)
+    if move:
+        _move_into(prepared, gs.garment_path(name, item_id, fsig, "mesh_attempt", attempt=n))
+        if raw is not None and Path(raw).is_file():
+            _move_into(raw, gs.garment_path(name, item_id, fsig, "mesh_attempt_raw", attempt=n))
+    else:
+        keep_attempt(name, item_id, fsig, n, prepared, raw if raw is not None else Path(""))
+    kept.append({**entry, "n": n})
+    return n
+
+
+def _entry_of_attempt(entry: Dict[str, Any], origin: str, **extra: Any) -> Dict[str, Any]:
+    from app.core.timeutils import utc_now_iso
+    out = {"origin": origin, "ok": bool(entry.get("ok")), "reasons": list(entry.get("reasons") or []),
+           "attempt": entry.get("attempt"), "created_at": entry.get("created_at") or utc_now_iso(),
+           **{k: entry[k] for k in _ENTRY_KEYS if k in entry}}
+    out.update(extra)
+    return out
+
+
+def _entry_of_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The kept entry of the mesh a record describes now (it is about to be replaced): ``previous``."""
+    return {"origin": KEPT_PREVIOUS, "ok": not record.get("user_accepted"),
+            "reasons": list(record.get("user_reasons") or []), "created_at": record.get("created_at"),
+            **{k: record[k] for k in _ENTRY_KEYS if k in record}}
+
+
+def _picked_during(record: Dict[str, Any], job_id: str) -> bool:
+    marker = record.get("chosen_during_job")
+    return isinstance(marker, dict) and marker.get("job") == job_id
+
+
+def _keep_refused(name: str, item_id: str, fsig: str, entry: Dict[str, Any], candidate: Path, raw: Path) -> None:
+    """A refused attempt becomes a kept mesh at once (Ruling A48a/A58), under the mesh lock; the mesh in use stays."""
+    from app.core import garment_store as gs
+    if not Path(candidate).is_file():
+        return
+    record_path = gs.garment_path(name, item_id, fsig, "prepared").with_suffix(".json")
+    try:
+        with mesh_lock(name, item_id):
+            record = gs.read_record(record_path)
+            kept = kept_entries(record)
+            _keep(name, item_id, fsig, kept, candidate, raw, _entry_of_attempt(entry, KEPT_ATTEMPT), move=False)
+            if record:
+                record["kept"] = kept
+            else:
+                record = {"accepted": False, "kind": "clothing", "item_id": item_id, "fsig": fsig, "attempts": [],
+                          "kept": kept}
+            gs.write_record(record_path, record)
+    except (OSError, ValueError) as e:
+        logger.warning("garment mesh %s/%s: refused attempt %s not kept: %s", name, item_id, entry.get("attempt"), e)
+
+
+def _publish(name: str, item_id: str, fsig: str, kind: str, job_id: str, last: Dict[str, Any],
+             attempts: List[Dict[str, Any]], candidate: Path, staged_raw: Path, *,
+             extra: Optional[Dict[str, Any]] = None, error: str = "") -> bool:
+    """The end of a run's mesh step, under the mesh lock (Ruling A58). Picked during the run (the record's
+    ``chosen_during_job`` names ``job_id``): an accepted result becomes a kept mesh (origin ``job``) and the pick
+    stays — False. Else the result is published as before — accepted: the new prepared + raw mesh and record, the
+    mesh it replaces kept as ``previous``; refused (``last`` not ok): the record says refused and the mesh in use is
+    kept as ``previous`` — True."""
+    from app.core import garment_store as gs
+    from app.core.timeutils import utc_now_iso
+    prepared = gs.garment_path(name, item_id, fsig, "prepared")
+    record_path = prepared.with_suffix(".json")
+    raw = gs.garment_path(name, item_id, fsig, "raw")
+    with mesh_lock(name, item_id):
+        current = gs.read_record(record_path)
+        kept = kept_entries(current)
+        if _picked_during(current, job_id):
+            if last.get("ok") and Path(candidate).is_file():
+                _keep(name, item_id, fsig, kept, candidate, staged_raw,
+                      _entry_of_attempt({**last, "created_at": utc_now_iso()}, KEPT_JOB, job=job_id,
+                                        chosen_during_job=True), move=True)
+            current["kept"] = kept
+            gs.write_record(record_path, current)
+            return False
+        if prepared.is_file() and current.get("accepted") is True:
+            _keep(name, item_id, fsig, kept, prepared, raw if raw.is_file() else None, _entry_of_record(current),
+                  move=True)
+        record = _record(kind, item_id, fsig, last, attempts, accepted=bool(last.get("ok")), error=error)
+        record.update(extra or {})
+        record["kept"] = kept
+        if Path(staged_raw).is_file():
+            os.replace(staged_raw, raw)
+        if last.get("ok"):
+            os.replace(candidate, prepared)
+        else:
+            # Refused: an older accepted mesh of this fsig must not stay behind a record that now says otherwise
+            # (it was kept above).
+            prepared.unlink(missing_ok=True)
+        gs.write_record(record_path, record)
+        return True
+
+
+def generate(name: str, item_id: str, fsig: str, *, force: bool = False,
+             outcome: Optional[Dict[str, Any]] = None) -> Path:
     """The prepared (decimated) garment mesh of ``item_id`` under ``fsig``.
 
     Reuses an accepted prepared mesh unless ``force``. Without ``force`` a
@@ -204,6 +436,12 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
     front, ``view_images`` adds back/left/right; ``"animal"`` would treat the
     main image as a LEFT profile. Props use the same default.
 
+    Ruling A58: the run is the piece's mesh job (``running_job``) from its first attempt to its publish; each
+    refused attempt is kept at once, the result is published under ``mesh_lock`` (``_publish``). When the user
+    chose another mesh during the run (``use_kept``), the result is kept beside it and NOT applied:
+    ``outcome["applied"]`` False (``outcome`` is filled when given), the returned path is the mesh in use, and
+    neither ``MeshGateRefused`` nor ``MeshAttemptFailed`` is raised (the attempts are kept / logged).
+
     FileNotFoundError when a cut-out is missing; ``MeshGateRefused`` after
     two gate refusals; ``MeshAttemptFailed`` (a RuntimeError, chained to the
     cause — ``NoRouteError``, ``BackendBusyError``, ``MediaGenerationDisabled``,
@@ -211,10 +449,13 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
     further attempt, every attempt's record rides on the exception. After an
     earlier refused attempt the step record is written as refused (with all
     attempts, the error last) and the prepared mesh removed; a failure of
-    the FIRST attempt writes nothing beyond the raw file.
+    the FIRST attempt writes nothing.
     """
     from app.core import garment_store as gs
 
+    if outcome is None:
+        outcome = {}
+    outcome["applied"] = True
     prepared = gs.garment_path(name, item_id, fsig, "prepared")
     record_path = prepared.with_suffix(".json")
     if not force and prepared.is_file() and gs.read_record(record_path).get("accepted") is True:
@@ -231,60 +472,134 @@ def generate(name: str, item_id: str, fsig: str, *, force: bool = False) -> Path
     raw = gs.garment_path(name, item_id, fsig, "raw")
     raw.parent.mkdir(parents=True, exist_ok=True)
     prepared.parent.mkdir(parents=True, exist_ok=True)
-    # Decimated here first and renamed onto ``prepared`` only once accepted,
-    # so a prepared GLB never exists without its accepted record.
-    candidate = prepared.with_name(f".{prepared.stem}.candidate.glb")
+    job_id = _begin_job(name, item_id, fsig)
+    # Decimated here first and renamed onto ``prepared`` only once accepted, so a prepared GLB never exists without
+    # its accepted record; the generator writes beside the raw mesh in use (Ruling A58: it stays until the publish).
+    candidate = prepared.with_name(f".{prepared.stem}.{job_id}.candidate.glb")
+    staged_raw = raw.with_name(f".{raw.stem}.{job_id}.glb")
 
     attempts: List[Dict[str, Any]] = []
     try:
         if not force:
             old = gs.read_record(record_path)
+            _job_update(name, item_id, job_id, phase="prepare")
             stored = _stored_attempt(name, item_id, kind, cut, raw, candidate, old)
             if stored is not None:
-                record = _record(kind, item_id, fsig, stored, [stored], accepted=True)
+                extra: Dict[str, Any] = {}
                 if stored.get("collected_job"):
-                    record["collected_job"] = stored["collected_job"]
+                    extra["collected_job"] = stored["collected_job"]
                 if old.get("attempts"):
-                    record["earlier_attempts"] = old["attempts"]  # what the older gate made of them
-                clear_attempts(name, item_id, fsig)
-                os.replace(candidate, prepared)
-                gs.write_record(record_path, record)
+                    extra["earlier_attempts"] = old["attempts"]  # what the older gate made of them
+                applied = _publish(name, item_id, fsig, kind, job_id, stored, [stored], candidate, staged_raw,
+                                   extra=extra)
+                outcome["applied"] = applied
                 return prepared
-        clear_attempts(name, item_id, fsig)
         for attempt in range(1, MAX_ATTEMPTS + 1):
+            _job_update(name, item_id, job_id, hub_jobs=attempt, phase="hub")
             try:
-                entry = _attempt(name, kind, cut, raw, candidate, attempt)
+                entry = _attempt(name, kind, cut, staged_raw, candidate, attempt)
             except Exception as e:  # noqa: BLE001 — recorded with the attempts before it, then re-raised
                 error = str(e) or type(e).__name__
                 attempts.append({"attempt": attempt, "ok": False, "error": error, "reasons": [error]})
                 logger.info("garment mesh %s/%s attempt %d failed: %s", name, item_id, attempt, error)
                 gated = [a for a in attempts if "largest_component_share" in a]
-                if gated:
-                    prepared.unlink(missing_ok=True)
-                    gs.write_record(record_path, _record(kind, item_id, fsig, gated[-1], attempts,
-                                                         accepted=False, error=error))
+                with mesh_lock(name, item_id):
+                    picked = _picked_during(gs.read_record(record_path), job_id)
+                    if gated and not picked:
+                        _publish(name, item_id, fsig, kind, job_id, gated[-1], attempts, candidate, staged_raw,
+                                 error=error)
+                if picked:
+                    outcome.update(applied=False, error=error)
+                    return prepared
                 raise MeshAttemptFailed(error, attempts) from e
+            _job_update(name, item_id, job_id, phase="prepare")
+            from app.core.timeutils import utc_now_iso
+            entry["created_at"] = utc_now_iso()
             attempts.append(entry)
             if not entry["ok"]:
-                keep_attempt(name, item_id, fsig, attempt, candidate, raw)
+                _keep_refused(name, item_id, fsig, entry, candidate, staged_raw)
             logger.info("garment mesh %s/%s attempt %d: %s tris -> %s, largest component %.4f%s",
                         name, item_id, attempt, entry["tris_raw"], entry["tris_prepared"],
                         entry["largest_component_share"], "" if entry["ok"] else " (refused)")
             if entry["ok"]:
                 break
         last = attempts[-1]
-        record = _record(kind, item_id, fsig, last, attempts, accepted=bool(last["ok"]))
-        if last["ok"]:
-            os.replace(candidate, prepared)
-            gs.write_record(record_path, record)
-            return prepared
-        # Refused: an older accepted mesh of this fsig must not stay behind
-        # a record that now says otherwise.
-        prepared.unlink(missing_ok=True)
-        gs.write_record(record_path, record)
-        raise MeshGateRefused("mesh", None, attempts)
+        _job_update(name, item_id, job_id, phase="publish")
+        applied = _publish(name, item_id, fsig, kind, job_id, last, attempts, candidate, staged_raw)
+        outcome["applied"] = applied
+        if applied and not last["ok"]:
+            raise MeshGateRefused("mesh", None, attempts)
+        if not applied:
+            logger.info("garment mesh %s/%s: %s (job %s)", name, item_id, NOT_APPLIED, job_id)
+        return prepared
     finally:
+        _end_job(name, item_id, job_id)
         candidate.unlink(missing_ok=True)
+        staged_raw.unlink(missing_ok=True)
+
+
+def use_kept(name: str, item_id: str, fsig: str, n: int) -> Dict[str, Any]:
+    """Ruling A58, "Use this" on kept mesh ``n`` of ``fsig``: it becomes the piece's mesh (prepared + raw + the
+    step record's numbers, ``user_accepted`` when its gate refused it) and the mesh in use until now takes its slot
+    (origin ``previous``) — a swap of files, no job. Under ``mesh_lock``: a running job's publish never interleaves.
+    While the piece's mesh job of this fsig runs, the record gets ``chosen_during_job`` = ``{job, at, n}`` — the
+    job's result is then kept beside it, not applied (``_publish``). The caller makes the fit due / runs it.
+    ``{n, user_accepted, during_job}``. ``KeptUnusable`` for a slot without a kept mesh file."""
+    import shutil
+    import tempfile
+    from app.core import garment_store as gs
+    from app.core.timeutils import utc_now_iso
+    prepared = gs.garment_path(name, item_id, fsig, "prepared")
+    record_path = prepared.with_suffix(".json")
+    raw = gs.garment_path(name, item_id, fsig, "raw")
+    kind = _kind(item_id)
+    with mesh_lock(name, item_id):
+        record = gs.read_record(record_path)
+        kept = kept_entries(record)
+        entry = next((e for e in kept if e["n"] == n), None)
+        files = attempt_files(name, item_id, fsig, n) if 1 <= n <= KEPT_MAX else {"prepared": None, "raw": None}
+        if entry is None or files["prepared"] is None:
+            raise KeptUnusable(f"No kept mesh {n} of this piece")
+        kept.remove(entry)
+        prepared.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=".use-", dir=prepared.parent))
+        try:
+            os.replace(files["prepared"], staging / "prepared.glb")
+            if files["raw"] is not None:
+                os.replace(files["raw"], staging / "raw.glb")
+            if prepared.is_file() and record.get("accepted") is True:
+                # The mesh in use takes the freed slot: "Use this" there brings it back.
+                previous = _entry_of_record(record)
+                _move_into(prepared, gs.garment_path(name, item_id, fsig, "mesh_attempt", attempt=n))
+                if raw.is_file():
+                    _move_into(raw, gs.garment_path(name, item_id, fsig, "mesh_attempt_raw", attempt=n))
+                kept.append({**previous, "n": n})
+            else:
+                prepared.unlink(missing_ok=True)
+            if (staging / "raw.glb").is_file():
+                os.replace(staging / "raw.glb", raw)
+            os.replace(staging / "prepared.glb", prepared)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+        last = {"tris_raw": entry.get("tris_raw"), "tris_prepared": entry.get("tris_prepared"),
+                "ratio": entry.get("ratio"), "backend": entry.get("backend", ""), "routing": entry.get("routing") or {},
+                "largest_component_share": entry.get("largest_component_share"),
+                **{k: entry[k] for k in _ENTRY_KEYS if k in entry and k not in ("stored_raw",)}}
+        user_accepted = not entry.get("ok")
+        new = _record(kind, item_id, fsig, last,
+                      [{**{k: v for k, v in entry.items() if k not in ("n", "origin")},
+                        "attempt": entry.get("attempt") or 1, "ok": bool(entry.get("ok"))}], accepted=True)
+        new["created_at"] = entry.get("created_at") or new["created_at"]
+        new.update(picked_from=n, picked_at=utc_now_iso(), kept=kept)
+        if user_accepted:
+            new.update(user_accepted=True, user_reasons=list(entry.get("reasons") or []))
+        job = running_job(name, item_id, fsig)
+        if job is not None:
+            new["chosen_during_job"] = {"job": job["id"], "at": utc_now_iso(), "n": n}
+        gs.write_record(record_path, new)
+    logger.info("garment mesh %s/%s: kept mesh %d (%s) in use%s", name, item_id, n, entry.get("origin"),
+                f" — during mesh job {job['id']}, its result stays a kept mesh" if job else "")
+    return {"n": n, "user_accepted": user_accepted, "during_job": job is not None}
 
 
 def _record(kind: str, item_id: str, fsig: str, last: Dict[str, Any], attempts: List[Dict[str, Any]], *,
@@ -309,7 +624,8 @@ def _record(kind: str, item_id: str, fsig: str, last: Dict[str, Any], attempts: 
 
 
 def clear_attempts(name: str, item_id: str, fsig: str) -> None:
-    """Drop the kept refused attempts of ``fsig`` (Ruling A48a): a new run's record lists its own attempts."""
+    """Drop every kept mesh file of ``fsig`` (Ruling A48a/A58) — with the step record they belong to
+    (``garments._drop_mesh``: new images replace the mesh step's input)."""
     from app.core import garment_store as gs
     folder = gs.garment_path(name, item_id, fsig, "mesh_attempt", attempt=1).parent
     if not folder.is_dir():
@@ -320,8 +636,9 @@ def clear_attempts(name: str, item_id: str, fsig: str) -> None:
 
 
 def keep_attempt(name: str, item_id: str, fsig: str, attempt: int, candidate: Path, raw: Path) -> None:
-    """Keep refused ``attempt``: its decimated ``candidate`` and its ``raw`` output, copied beside the step
-    (Ruling A48a; the files are replaced atomically). Best effort — a failed copy loses the tile, never the run."""
+    """Copy a mesh into kept slot ``attempt``: its decimated ``candidate`` and its ``raw`` output (Ruling A48a; the
+    files are replaced atomically; the caller records the slot's ``kept`` entry). Best effort — a failed copy loses
+    the tile, never the run."""
     import shutil
     from app.core import garment_store as gs
     for part, source in (("mesh_attempt", candidate), ("mesh_attempt_raw", raw)):
@@ -339,7 +656,7 @@ def keep_attempt(name: str, item_id: str, fsig: str, attempt: int, candidate: Pa
 
 
 def attempt_files(name: str, item_id: str, fsig: str, attempt: int) -> Dict[str, Optional[Path]]:
-    """``{"prepared": path | None, "raw": path | None}`` of kept refused ``attempt`` (Ruling A48a)."""
+    """``{"prepared": path | None, "raw": path | None}`` of kept slot ``attempt`` (Ruling A48a/A58)."""
     from app.core import garment_store as gs
     out: Dict[str, Optional[Path]] = {}
     for which, part in (("prepared", "mesh_attempt"), ("raw", "mesh_attempt_raw")):
@@ -497,21 +814,31 @@ def collect_job(name: str, item_id: str, fsig: str, job_id: str) -> Dict[str, An
                     "" if entry["ok"] else (" (refused, accepted mesh kept)" if kept else " (refused)"))
         if entry["ok"]:
             prepared.parent.mkdir(parents=True, exist_ok=True)
-            clear_attempts(name, item_id, fsig)
-            os.replace(delivered, raw)
-            os.replace(candidate, prepared)
-            gs.write_record(record_path, record)
+            with mesh_lock(name, item_id):
+                # Ruling A58: the mesh it replaces is kept (``previous``), the kept meshes stay with the record.
+                current = gs.read_record(record_path)
+                slots = kept_entries(current)
+                if prepared.is_file() and current.get("accepted") is True:
+                    _keep(name, item_id, fsig, slots, prepared, raw if raw.is_file() else None,
+                          _entry_of_record(current), move=True)
+                record["kept"] = slots
+                os.replace(delivered, raw)
+                os.replace(candidate, prepared)
+                gs.write_record(record_path, record)
             return {"status": "accepted", "job_id": full, "record": record}
         refused = {"status": "refused", "job_id": full, "reasons": list(entry["reasons"]), "kept": kept,
                    "largest_component_share": entry["largest_component_share"],
                    "error": f"garment mesh refused ({', '.join(entry['reasons'])})"}
         if kept:
             return refused  # the accepted mesh stays exactly as it is
-        os.replace(delivered, raw)
-        clear_attempts(name, item_id, fsig)
-        keep_attempt(name, item_id, fsig, 1, candidate, raw)
-        prepared.unlink(missing_ok=True)
-        gs.write_record(record_path, record)
+        with mesh_lock(name, item_id):
+            slots = kept_entries(gs.read_record(record_path))
+            os.replace(delivered, raw)
+            _keep(name, item_id, fsig, slots, candidate, raw,
+                  _entry_of_attempt({**entry, "created_at": record.get("created_at")}, KEPT_ATTEMPT), move=False)
+            record["kept"] = slots
+            prepared.unlink(missing_ok=True)
+            gs.write_record(record_path, record)
         return {**refused, "record": record}
     finally:
         shutil.rmtree(staging, ignore_errors=True)

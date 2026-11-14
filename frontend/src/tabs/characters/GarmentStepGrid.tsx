@@ -40,7 +40,7 @@
  * its hub job.
  * The hair row keeps its own layout (GarmentSteps).
  */
-import { Fragment } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useEnlarge } from '../../components/ZoomButton'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -61,8 +61,8 @@ import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type { FitBody, FitBodyFit } from './figureModel'
 import type {
-  AttemptUsePlan, AttemptUsePlans, GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit,
-  PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
+  AttemptUsePlan, AttemptUsePlans, GarmentImageStep, GarmentInfo, GarmentMeshJob, GarmentRunState, GarmentView,
+  GateLimit, PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
   ViewRunPlans,
 } from './useGarment'
 
@@ -337,13 +337,42 @@ function jobsText(n: number, t: (s: string) => string): string {
 }
 
 /** "up to 1 hub job" / "up to 3 hub jobs" / "no hub job" (first attempts; a refused attempt retries). */
+/** Ruling A58: the running mesh job of the Mesh row — since when (and how long), which hub job of up to how many,
+ *  and, when another mesh was chosen during it, that its result will stay a kept mesh. Ticks every second. */
+function MeshJobLine({ job }: { job: GarmentMeshJob }) {
+  const { t } = useI18n()
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+  const started = Date.parse(job.started_at)
+  const seconds = Number.isFinite(started) ? Math.max(0, Math.round((now - started) / 1000)) : null
+  const elapsed = seconds == null ? '' : seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`
+  const hub = t('hub job {n} of up to {max}').replace('{n}', String(Math.max(1, job.hub_jobs)))
+    .replace('{max}', String(job.max_hub_jobs))
+  const title = [
+    t('A mesh job of this piece runs. Choosing a kept mesh and Re-fit work meanwhile (CPU, 0 hub jobs).'),
+    job.chosen ? t('Another mesh was chosen during the job: its result will stay a kept mesh, not applied.')
+      : t('Its result becomes the mesh of the piece unless you choose another mesh first.'),
+  ].join('\n')
+  return (
+    <span className="ga-run-badge ga-run-badge-live" title={title}
+      style={{ borderColor: 'var(--accent, #6aa9ff)', color: 'var(--accent, #6aa9ff)', whiteSpace: 'nowrap' }}>
+      {`${t('Mesh job running')} · ${t('since {time}').replace('{time}', formatDateTime(job.started_at, clockSettings()))}`}
+      {elapsed ? ` (${elapsed})` : ''}{` · ${hub}`}
+      {job.chosen ? ` · ${t('another mesh chosen')}` : ''}
+    </span>
+  )
+}
+
 function upToText(n: number, t: (s: string) => string): string {
   return n === 0 ? t('no hub job') : n === 1 ? t('up to 1 hub job') : t('up to {n} hub jobs').replace('{n}', String(n))
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
   viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched, pieceName = '',
-  refitOn = '', shownFit = null }: {
+  refitOn = '', shownFit = null, onMeshUse, imageUseBusy }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -374,6 +403,12 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
    *  build time, chips, arm light), named with the body; null fit = "Not fitted yet on this body". Absent: the
    *  plain body's fit (the garment's own fit step). */
   shownFit?: { name: string; status: FitBody['status']; fit: FitBodyFit | null } | null
+  /** Ruling A58: "Use this" on kept mesh `slot` (0 hub jobs, then the fit on the CPU) — usable while a mesh job
+   *  runs; the caller posts it and reloads. Absent = no button. */
+  onMeshUse?: (slot: number) => void
+  /** "Use this" on an image attempt: busy also while a run of the piece holds its run lock (a new image would drop
+   *  the mesh a running mesh job makes). Defaults to `busy`. */
+  imageUseBusy?: boolean
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -542,7 +577,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
             </>
           ) : null}
           <AttemptThumbs attempts={tiles} label={label} chips={chips}
-            limits={chips ? limits[step] : undefined} view={view} uses={useRuns?.[step]?.[view]} busy={busy || !garment}
+            limits={chips ? limits[step] : undefined} view={view} uses={useRuns?.[step]?.[view]}
+            busy={(imageUseBusy ?? busy) || !garment}
             onUse={onUse ? (n) => onUse(step, view, n) : undefined} />
         </div>
       </div>
@@ -553,8 +589,11 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   // decimator's record (it counts before the export drops degenerate triangles).
   const trisRaw = mesh?.view?.raw?.tris ?? mesh?.metrics.tris_raw
   const trisPrepared = mesh?.view?.prepared?.tris ?? mesh?.metrics.tris_prepared
+  // Ruling A58: the piece's mesh job in flight — its time and hub-job count; the tiles and Re-fit stay usable.
+  const meshJob = mesh?.job ?? null
   const meshText = [
-    !mesh || mesh.status === 'missing' ? t('Not built yet') : mesh.status === 'refused' ? t('Refused') : t('Accepted'),
+    !mesh || mesh.status === 'missing' ? t('Not built yet') : mesh.status === 'refused' ? t('Refused')
+      : mesh.user_accepted ? t('Accepted by you') : t('Accepted'),
     trisRaw != null && trisPrepared != null
       ? `${t('Triangles')} ${trisRaw.toLocaleString()} → ${trisPrepared.toLocaleString()}`
       : '',
@@ -609,20 +648,25 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         <GateIcon specs={MESH_CHIPS} record={mesh?.metrics} limits={limits.mesh} extra={[meshText, ...meshAttempts]} />
         <RunBadge mark={runMark(feedback, garment, order, 'mesh')} />
         <span className="ga-hint" style={{ minWidth: 0 }}>{meshText}</span>
+        {meshJob ? <MeshJobLine job={meshJob} /> : null}
         <RunButton
           feedback={feedback}
           slot={runSlot({ step: 'mesh' })}
           disabled={busy || !garment || !cutoutsReady}
-          title={garment && !cutoutsReady ? t('Run the previous step first') : t(STEP_HELP.mesh)}
-          ariaLabel={`${mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')} · ${t('Mesh')} · ${upToText(MESH_ATTEMPTS, t)}`}
+          title={garment && !cutoutsReady ? t('Run the previous step first')
+            : [t(STEP_HELP.mesh), meshJob ? t('queues behind the running job') : ''].filter(Boolean).join('\n')}
+          ariaLabel={`${mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')} · ${t('Mesh')} · ${upToText(MESH_ATTEMPTS, t)}${meshJob ? ` · ${t('queues behind the running job')}` : ''}`}
           label={mesh && mesh.status !== 'missing' ? t('Regenerate') : t('Generate')}
           onClick={() => onRun({ step: 'mesh', force: true })}
         />
         <span className="ga-hint" title={t(STEP_HELP.mesh)}>
-          {`${upToText(MESH_ATTEMPTS, t)} · ${t('then the fit on the CPU')}`}
+          {`${upToText(MESH_ATTEMPTS, t)} · ${t('then the fit on the CPU')}${meshJob ? ` · ${t('queues behind the running job')}` : ''}`}
         </span>
-        <MeshJobFetch url={garment ? meshFetchUrl : null} disabled={busy} onDone={() => onMeshFetched?.()} />
-        <GarmentMeshTiles view={mesh?.view} builtAt={mesh?.created_at ?? null} pieceName={pieceName} />
+        {/* Collecting a job by its id waits for the running job (its step holds the run lock). */}
+        <MeshJobFetch url={garment ? meshFetchUrl : null} disabled={busy || !!meshJob}
+          disabledReason={meshJob ? t('Waits for the running mesh job of this piece') : ''} onDone={() => onMeshFetched?.()} />
+        <GarmentMeshTiles view={mesh?.view} builtAt={mesh?.created_at ?? null} pieceName={pieceName}
+          userAccepted={!!mesh?.user_accepted} onUse={onMeshUse} useDisabled={busy || !garment} />
       </div>
 
       <StepLabel garment={garment} step="fit" label={stepLabels.fit || 'Fit'} help={STEP_HELP.fit} />
@@ -636,7 +680,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
             {shownFit ? `${shownFit.name}: ` : ''}{armLightShort(armInfo.arm_light, t)}
           </span>
         ) : null}
-        <RunBadge mark={runMark(feedback, garment, order, 'fit')} />
+        {/* A Re-fit beside the queue — or beside the piece's own mesh job (Ruling A58) — runs now. */}
+        <RunBadge mark={garment?.queue_beside ? 'generating' : runMark(feedback, garment, order, 'fit')} />
         <span className="ga-hint" style={{ minWidth: 0 }}>{fitText}</span>
         <RunButton
           feedback={feedback}

@@ -2894,8 +2894,8 @@ def _garment_mesh_args(character_name: str, item_id: str, which: str, attempt: i
     from app.models.inventory import safe_item_id
     if which not in garment_mesh_view.WHICH:
         raise HTTPException(status_code=400, detail=f"which must be one of {', '.join(garment_mesh_view.WHICH)}")
-    if not 0 <= attempt <= garment_mesh.MAX_ATTEMPTS:
-        raise HTTPException(status_code=400, detail=f"attempt must be 0..{garment_mesh.MAX_ATTEMPTS}")
+    if not 0 <= attempt <= garment_mesh.KEPT_MAX:
+        raise HTTPException(status_code=400, detail=f"attempt must be 0..{garment_mesh.KEPT_MAX}")
     if safe_item_id(item_id) != item_id:
         raise HTTPException(status_code=404, detail="Unknown item")
     _require_character(character_name)
@@ -2906,7 +2906,7 @@ def get_character_garment_mesh(character_name: str, item_id: str, which: str, re
                                attempt: int = 0, _: Dict[str, Any] = Depends(require_admin)):
     """Ruling A48a: one mesh file of the piece's CURRENT fsig — ``prepared`` (the accepted decimated mesh) or
     ``raw`` (the generator output); ``attempt`` 1..n = that kept refused attempt's file
-    (``garment_mesh_view.mesh_file``). Versioned by content (``snapshot_response``: ETag, 304, immutable with a
+    (``garment_mesh_view.mesh_file``; Ruling A58: any kept mesh slot). Versioned by content (``snapshot_response``: ETag, 304, immutable with a
     matching ``v``). Admin-only. 400 for a bad which / attempt, 404 for a file that is not there or an item that
     is no garment of this character."""
     from app.core import garment_mesh_view
@@ -2972,6 +2972,29 @@ def get_character_garment_mesh_overlay(character_name: str, item_id: str, which:
             return None
     return snapshot_response(None, request, media_type="model/gltf-binary",
                              version=request.query_params.get("v"), resolve=resolve)
+
+
+@router.post("/{character_name}/garments/{item_id}/mesh/attempts/{attempt}/use")
+def use_character_garment_mesh(character_name: str, item_id: str, attempt: int,
+                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A58, "Use this" on a kept mesh of the piece (slot ``attempt``: a refused attempt, an earlier mesh, a
+    result that finished while another mesh was chosen): it becomes the piece's mesh and its fit starts on the CPU
+    (``garments.use_mesh``) — no hub job. Allowed while the piece's mesh job runs (its result then stays a kept
+    mesh). ``{item_id, n, user_accepted, during_job, fit}``. Admin-only. 400 for a bad slot, 404 for an item that is
+    no clothing garment of this character, 409 when the slot holds no mesh or another step of the piece runs."""
+    from app.core import garment_mesh, garments
+    from app.models.inventory import safe_item_id
+    if not 1 <= attempt <= garment_mesh.KEPT_MAX:
+        raise HTTPException(status_code=400, detail=f"attempt must be 1..{garment_mesh.KEPT_MAX}")
+    if safe_item_id(item_id) != item_id:
+        raise HTTPException(status_code=404, detail="Unknown item")
+    _require_character(character_name)
+    try:
+        return garments.use_mesh(character_name, item_id, attempt)
+    except (garment_mesh.KeptUnusable, garments.UseBusy) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/{character_name}/garments/{item_id}/images/{step}/{view}/attempts/{attempt}/use")

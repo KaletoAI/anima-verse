@@ -31,7 +31,8 @@ Fixture GLBs (positions, TEXCOORD_0, uint32 indices; 2 disjoint quads = 4 tris):
 [1] generate(Demo, H, F) with the service writing GOOD:
     - ONE generate_mesh call with occasion "mesh_garment", face_num 100000,
       view_images {"back": <cutout back>} (keys {"back"}),
-      source_image_path = <cutout front>, output_path = garments/raw/H_F.glb,
+      source_image_path = <cutout front>, output_path = a staging file beside garments/raw/H_F.glb
+      (``.H_F.<job>.glb``, gone after the run — Ruling A58),
       mesh_name "Demo-clothing", character_name "Demo", material "dielectric",
       alpha "opaque";
     - runner: "measure" on the raw file (4 tris), then "lod" with
@@ -350,7 +351,12 @@ def main() -> int:
         check("view_images keys", set((kw.get("view_images") or {}).keys()), {"back"})
         check("back view path", (kw.get("view_images") or {}).get("back"), str(cut["back"]))
         check("front path", str(kw.get("source_image_path")), str(cut["front"]))
-        check("output_path", str(kw.get("output_path")), str(gs.garment_path("Demo", hid, F, "raw")))
+        # Ruling A58: the generator writes a staging file beside the raw mesh in use; the publish moves it on.
+        staged = Path(str(kw.get("output_path")))
+        raw_path = gs.garment_path("Demo", hid, F, "raw")
+        check("output_path: staging beside the raw", (staged.parent == raw_path.parent,
+                                                      staged.name.startswith(f".{raw_path.stem}."),
+                                                      staged.suffix, staged.exists()), (True, True, ".glb", False))
         check("mesh_name", kw.get("mesh_name"), "Demo-clothing")
         check("character_name", kw.get("character_name"), "Demo")
         check("material", kw.get("material"), "dielectric")

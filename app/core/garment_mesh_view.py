@@ -122,16 +122,16 @@ def file_triangles(path: Path, version: str) -> Optional[int]:
 
 
 def mesh_file(character_name: str, item_id: str, which: str, attempt: int = 0) -> Optional[Path]:
-    """The mesh file ``which`` (``prepared`` / ``raw``) of the piece's CURRENT fsig — of the kept refused
-    ``attempt`` when > 0 (``garment_mesh.attempt_files``) — or None when it is not there. The prepared mesh is
+    """The mesh file ``which`` (``prepared`` / ``raw``) of the piece's CURRENT fsig — of the kept mesh
+    ``attempt`` when > 0 (``garment_mesh.attempt_files``, Ruling A58) — or None when it is not there. The prepared mesh is
     served only with its accepted record (``garment_mesh``: it exists only then). ValueError for a bad ``which``,
     attempt or item."""
     from app.core import garment_mesh
     from app.core import garment_store as gs
     if which not in WHICH:
         raise ValueError(f"which must be one of {', '.join(WHICH)}")
-    if isinstance(attempt, bool) or not isinstance(attempt, int) or not 0 <= attempt <= garment_mesh.MAX_ATTEMPTS:
-        raise ValueError(f"attempt must be 0..{garment_mesh.MAX_ATTEMPTS}")
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or not 0 <= attempt <= garment_mesh.KEPT_MAX:
+        raise ValueError(f"attempt must be 0..{garment_mesh.KEPT_MAX}")
     fsig = current_fsig(character_name, item_id)
     if attempt:
         return garment_mesh.attempt_files(character_name, item_id, fsig, attempt)[which]

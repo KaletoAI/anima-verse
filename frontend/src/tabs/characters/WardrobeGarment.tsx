@@ -580,7 +580,10 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   // Rule R1 (Task UI1): the label carries what Run all runs now; nothing due → "Everything is current".
   const runAll = chainRunAll(info?.run, t)
   const running = garmentRunning(info)
-  const busy = feedback.pending !== null || running
+  // Ruling A58: while the piece's run is in its mesh job, nothing is disabled because of the job — the kept meshes'
+  // "Use this" and Re-fit run beside it (CPU), every other run click queues behind it.
+  const meshJob = garment?.steps.mesh?.job ?? null
+  const busy = feedback.pending !== null || (running && !meshJob)
   const onRun = (body: GarmentRunBody, slot?: string) => { void start(body, slot) }
   /** The width cap (null = the default) is SAVED on its own (Task UI2, rule R3): nothing runs; the fit's
    *  fingerprint changes, so the fit row shows it as due and Run all — or the row's Re-fit — re-fits (local). */
@@ -606,6 +609,26 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
       const due = d.follow_up.hub_jobs == null ? t('cost unknown')
         : t('Now due: {note}').replace('{note}', d.follow_up.note)
       toast(`${d.user_accepted ? t('Accepted by you') : t('In use')} · ${due}`, 'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setUsing(false)
+    }
+    startPoll(0)
+  }
+  /** Ruling A58, "Use this mesh": a kept mesh becomes the piece's mesh and its fit starts on the CPU — 0 hub jobs; also
+   *  while a mesh job runs (its result then stays a kept mesh). */
+  const onMeshUse = async (slot: number) => {
+    if (using) return
+    setUsing(true)
+    try {
+      const d = await apiPost<{ user_accepted: boolean; during_job: boolean; fit: { beside?: boolean; queued?: boolean } }>(
+        `/characters/${enc}/garments/${encodeURIComponent(itemId)}/mesh/attempts/${slot}/use`, {})
+      toast([
+        d.user_accepted ? t('Accepted by you') : t('In use'),
+        d.fit?.queued ? t('the fit queues (CPU, 0 hub jobs)') : t('fitting on the CPU (0 hub jobs)'),
+        d.during_job ? t('the running job’s result will stay a kept mesh') : '',
+      ].filter(Boolean).join(' · '), 'success')
     } catch (e) {
       toast(t('Error') + ': ' + (e as Error).message, 'error')
     } finally {
@@ -766,6 +789,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             limits={{ ...(info.limits || {}), fit: fitLimits }}
             fitChips={FIT_CHIPS}
             busy={busy || using}
+            imageUseBusy={busy || using || running}
+            onMeshUse={(slot) => { void onMeshUse(slot) }}
             onRun={onRunFit}
             refitOn={refitOn}
             shownFit={shapeFit}
@@ -856,8 +881,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
               slot="all"
               primary
               disabled={busy || !garment || runAll.disabled}
-              title={[t('Runs every step that is missing or out of date'), info.run?.note || '', footwearPlan]
-                .filter(Boolean).join('\n')}
+              title={[t('Runs every step that is missing or out of date'), info.run?.note || '', footwearPlan,
+                meshJob ? t('queues behind the running job') : ''].filter(Boolean).join('\n')}
               onClick={() => onRun({}, 'all')}
               label={runAll.label}
             />

@@ -23,10 +23,12 @@ interface FetchAnswer {
   kept?: boolean
 }
 
-export function MeshJobFetch({ url, disabled, onDone }: {
+export function MeshJobFetch({ url, disabled, disabledReason = '', onDone }: {
   /** POST /characters/{c}/garments/{item}/mesh/fetch (footwear: …/footwear/mesh/fetch); null hides it. */
   url: string | null
   disabled?: boolean
+  /** Why "Fetch" waits, written under it while it is disabled (e.g. a mesh job of the piece is running). */
+  disabledReason?: string
   /** The step's record changed (accepted or refused): reload the panel. */
   onDone: () => void
 }) {
@@ -112,6 +114,7 @@ export function MeshJobFetch({ url, disabled, onDone }: {
               {pending ? t('Fetching…') : t('Fetch')}
             </button>
           </div>
+          {disabled && disabledReason ? <div className="ga-hint">{disabledReason}</div> : null}
           {result ? (
             <div className="ga-hint" role="status" style={{
               ...(result.tone === 'error' ? ERROR_STYLE : result.tone === 'warn' ? WARN_STYLE : {}),

@@ -1,10 +1,11 @@
 /**
  * GarmentMeshView — the Mesh row's 3D view of an own-mesh clothing piece (Ruling A48a).
  *
- * `GarmentMeshTiles`: the accepted mesh as a small still tile (a click opens the viewer, the way a small image
- * enlarges), "Built <time>" and its triangle count under it, and beside it one tile per refused attempt of the
- * step's last run — with the same viewer — or, for an attempt that failed outright, a slim placeholder with the
- * error (no mesh was kept).
+ * `GarmentMeshTiles`: the mesh in use as a small still tile (a click opens the viewer, the way a small image
+ * enlarges), its gate light, "Built <time>" and its triangle count under it, and beside it one tile per KEPT mesh
+ * (Ruling A58: a refused attempt, the mesh a run or a pick replaced, a result that finished while another mesh was
+ * chosen — "not applied") with the same viewer and "Use this mesh" (0 hub jobs, then the fit on the CPU; usable
+ * while a mesh job runs) — or, for an attempt that failed outright, a slim placeholder with the error.
  *
  * `GarmentMeshViewer`: the shared viewer (`Model3DViewer`; drag turns the model, Shift+drag moves the view,
  * `lib/modelTurn.ts`) in a dialog of its own, its switches compact beside it:
@@ -24,6 +25,7 @@ import { Model3DViewer } from './Model3DViewer'
 import type { ViewerCompanion } from './Model3DViewer'
 import { stampLabel } from './freshnessText'
 import { meshSnapshot } from './meshSnapshot'
+import { StepLight } from './StepRows'
 import type { GarmentMeshAttempt, GarmentMeshBodyView, GarmentMeshFile, GarmentMeshView } from './useGarment'
 
 const TILE_W = 84
@@ -31,7 +33,7 @@ const TILE_H = 112
 
 type Which = 'prepared' | 'raw'
 
-/** One thing the viewer can show: the accepted mesh or a refused attempt, each with its prepared and raw file. */
+/** One thing the viewer can show: the mesh in use or a kept mesh, each with its prepared and raw file. */
 export interface MeshSource {
   id: string
   label: string
@@ -41,27 +43,45 @@ export interface MeshSource {
   refused: boolean
   /** Why it was refused (plain words, the gate's reasons). */
   note: string
+  /** Ruling A58: the kept mesh's slot (the `Use this` target); 0 for the mesh in use. */
+  slot: number
+  /** Ruling A58: what the kept mesh is (refused attempt / earlier mesh / a job's result). */
+  origin: GarmentMeshAttempt['origin'] | 'in_use'
+  /** Finished while another mesh was chosen — kept, not applied (Ruling A58). */
+  notApplied: boolean
+  /** Why "Use this" waits ("" when it can). */
+  useBlock: string
 }
 
-/** The sources of the Mesh row: the accepted mesh first, then every refused attempt that kept a file. */
-function meshSources(view: GarmentMeshView | undefined, builtAt: string | null,
+/** The kept mesh's name in the tile and the viewer (Ruling A58). */
+function keptLabel(a: GarmentMeshAttempt, t: (s: string) => string): string {
+  if (a.origin === 'previous') return t('Earlier mesh')
+  if (a.origin === 'job') return t('Result of the job')
+  return `${t('Attempt')}${a.run_attempt ? ` ${a.run_attempt}` : ''} · ${a.ok ? t('Accepted') : t('Refused')}`
+}
+
+/** The sources of the Mesh row: the mesh in use first, then every kept mesh that kept a file. */
+function meshSources(view: GarmentMeshView | undefined, builtAt: string | null, userAccepted: boolean,
   t: (s: string) => string): MeshSource[] {
   if (!view) return []
   const out: MeshSource[] = []
   if (view.prepared || view.raw) {
-    out.push({ id: 'accepted', label: view.prepared ? t('Accepted mesh') : t('Raw mesh'), prepared: view.prepared,
-      raw: view.raw, builtAt, refused: !view.prepared, note: '' })
+    out.push({ id: 'accepted', label: view.prepared ? (userAccepted ? t('Mesh in use · accepted by you') : t('Accepted mesh'))
+      : t('Raw mesh'), prepared: view.prepared, raw: view.raw, builtAt, refused: !view.prepared, note: '', slot: 0,
+    origin: 'in_use', notApplied: false, useBlock: '' })
   }
   for (const a of view.attempts) {
     if (!a.prepared && !a.raw) continue
-    out.push({ id: `attempt-${a.attempt}`, label: `${t('Attempt')} ${a.attempt} · ${t('Refused')}`,
-      prepared: a.prepared, raw: a.raw, builtAt, refused: true, note: attemptNote(a, t) })
+    out.push({ id: `attempt-${a.attempt}`, label: keptLabel(a, t), prepared: a.prepared, raw: a.raw,
+      builtAt: a.created_at ?? builtAt, refused: !a.ok, note: attemptNote(a, t), slot: a.attempt,
+      origin: a.origin, notApplied: !!a.chosen_during_job, useBlock: a.use_block || '' })
   }
   return out
 }
 
 function attemptNote(a: GarmentMeshAttempt, t: (s: string) => string): string {
   return [
+    a.chosen_during_job ? t(NOT_APPLIED) : '',
     a.largest_component_share != null
       ? `${t('Largest part')} ${(a.largest_component_share * 100).toFixed(1)} %` : '',
     ...(a.reasons || []),
@@ -69,12 +89,21 @@ function attemptNote(a: GarmentMeshAttempt, t: (s: string) => string): string {
   ].filter(Boolean).join('\n')
 }
 
+/** The line under a result that finished while another mesh was chosen (Ruling A58). */
+const NOT_APPLIED = 'Finished while another mesh was chosen — not applied'
+
 function trisText(n: number | null | undefined): string {
   return n != null ? `${n.toLocaleString()} △` : ''
 }
 
-/** A still picture of one mesh (meshSnapshot) — a click opens the viewer. */
-function MeshTile({ source, onOpen }: { source: MeshSource; onOpen: () => void }) {
+/** A still picture of one mesh (meshSnapshot) — a click opens the viewer; its gate light beside the caption and,
+ *  for a kept mesh, "Use this" under it (0 hub jobs, then the fit on the CPU — Ruling A58). */
+function MeshTile({ source, onOpen, onUse, useDisabled }: {
+  source: MeshSource
+  onOpen: () => void
+  onUse?: (slot: number) => void
+  useDisabled: boolean
+}) {
   const { t } = useI18n()
   useClockSettings()
   const file = source.prepared || source.raw
@@ -91,8 +120,12 @@ function MeshTile({ source, onOpen }: { source: MeshSource; onOpen: () => void }
   if (!file) return null
   const built = stampLabel(source.builtAt)
   const colour = source.refused ? 'var(--danger, #f85149)' : 'var(--success, #3fb950)'
-  const title = [source.label, source.note, `${t('Triangles')} ${file.tris?.toLocaleString() ?? '–'}`,
+  const gate = source.refused ? t('Gate: refused') : t('Gate: passed')
+  const title = [source.label, gate, source.note, `${t('Triangles')} ${file.tris?.toLocaleString() ?? '–'}`,
     built ? `${t('Built')} ${built}` : '', t('Click to open the 3D view')].filter(Boolean).join('\n')
+  const useTitle = source.useBlock ? t(source.useBlock) : [t('Use this mesh — 0 hub jobs, then the fit on the CPU'),
+    source.refused ? t('Its gate refused it: using it counts as your acceptance.') : '',
+    t('While a mesh job runs, its result then stays a kept mesh.')].filter(Boolean).join('\n')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, width: TILE_W }}>
       <button type="button" onClick={onOpen} title={title} aria-label={`${t('Open the 3D view')} · ${source.label}`}
@@ -104,34 +137,63 @@ function MeshTile({ source, onOpen }: { source: MeshSource; onOpen: () => void }
         <span aria-hidden style={{ position: 'absolute', top: 2, right: 3, fontSize: 10, opacity: 0.8 }}>3D</span>
       </button>
       <span className="ga-hint" style={{ fontSize: '0.7em', textAlign: 'center', lineHeight: 1.2 }} title={title}>
-        {source.refused && source.id !== 'accepted' ? `${t('Attempt')} ${source.id.split('-')[1]} · ${t('Refused')}`
-          : built ? `${t('Built')} ${built}` : source.label}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+          <StepLight light={source.refused ? 'red' : 'green'} title={gate} />
+          {source.origin === 'in_use' ? t('In use') : source.label}
+        </span>
+        <br />{built ? `${t('Built')} ${built}` : ''}
         <br />{trisText(file.tris)}
       </span>
+      {source.notApplied ? (
+        <span className="ga-hint" style={{ fontSize: '0.68em', textAlign: 'center', lineHeight: 1.2,
+          color: 'var(--warning, #d29922)' }} title={t(NOT_APPLIED)}>
+          {t(NOT_APPLIED)}
+        </span>
+      ) : null}
+      {onUse && source.slot > 0 ? (
+        <button type="button" className="ga-btn ga-btn-sm" style={{ fontSize: '0.72em', padding: '1px 6px' }}
+          disabled={useDisabled || !!source.useBlock} title={useTitle}
+          aria-label={`${t('Use this mesh')} · ${source.label} · ${t('0 hub jobs')}`}
+          onClick={() => onUse(source.slot)}>
+          {t('Use this mesh')}
+        </button>
+      ) : null}
+      {onUse && source.slot > 0 && source.useBlock ? (
+        <span className="ga-hint" style={{ fontSize: '0.68em', textAlign: 'center', lineHeight: 1.2 }}>
+          {t(source.useBlock)}
+        </span>
+      ) : null}
     </div>
   )
 }
 
-/** The Mesh row's tiles: the accepted mesh, then each refused attempt (a failed one as a slim placeholder). */
-export function GarmentMeshTiles({ view, builtAt, pieceName }: {
+/** The Mesh row's tiles: the mesh in use, then each kept mesh (a failed attempt as a slim placeholder). */
+export function GarmentMeshTiles({ view, builtAt, pieceName, userAccepted = false, onUse, useDisabled = false }: {
   view: GarmentMeshView | undefined
   builtAt: string | null
   pieceName: string
+  /** The mesh in use was chosen against its gate (Ruling A58). */
+  userAccepted?: boolean
+  /** Ruling A58: "Use this" on kept mesh `slot` (0 hub jobs; the caller posts it and reloads). Absent = no button. */
+  onUse?: (slot: number) => void
+  useDisabled?: boolean
 }) {
   const { t } = useI18n()
-  const sources = useMemo(() => meshSources(view, builtAt, t), [view, builtAt, t])
+  const sources = useMemo(() => meshSources(view, builtAt, userAccepted, t), [view, builtAt, userAccepted, t])
   const [open, setOpen] = useState<string | null>(null)
   if (!view) return null
   const failed = view.attempts.filter((a) => !a.prepared && !a.raw)
   if (!sources.length && !failed.length) return null
   return (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start', flexBasis: '100%' }}>
-      {sources.map((s) => <MeshTile key={s.id} source={s} onOpen={() => setOpen(s.id)} />)}
-      {failed.map((a) => (
-        <div key={`failed-${a.attempt}`} className="ga-step-grid-empty" style={{ width: TILE_W, height: TILE_H }}
-          title={[`${t('Attempt')} ${a.attempt} · ${t('Failed')}`, attemptNote(a, t), t('No mesh was kept')]
+      {sources.map((s) => (
+        <MeshTile key={s.id} source={s} onOpen={() => setOpen(s.id)} onUse={onUse} useDisabled={useDisabled} />
+      ))}
+      {failed.map((a, i) => (
+        <div key={`failed-${i}`} className="ga-step-grid-empty" style={{ width: TILE_W, height: TILE_H }}
+          title={[`${t('Attempt')} ${a.run_attempt ?? ''} · ${t('Failed')}`, attemptNote(a, t), t('No mesh was kept')]
             .filter(Boolean).join('\n')}>
-          {`${t('Attempt')} ${a.attempt} · ${t('Failed')}`}
+          {`${t('Attempt')} ${a.run_attempt ?? ''} · ${t('Failed')}`}
         </div>
       ))}
       {open ? (

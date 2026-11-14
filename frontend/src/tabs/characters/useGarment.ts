@@ -78,19 +78,45 @@ export interface GarmentMeshInfo {
   gates: GateRecord[]
   tris: number | null
   created_at: string | null
-  /** Ruling A48a: the Mesh row's 3D view — the mesh files and the refused attempts with their kept files. */
+  /** Ruling A58: the mesh in use was chosen with "Use this" although its gate refused it. */
+  user_accepted?: boolean
+  /** Ruling A58: the piece's mesh job of this fingerprint in flight; null when none runs. */
+  job?: GarmentMeshJob | null
+  /** Ruling A48a: the Mesh row's 3D view — the mesh files and the kept meshes with their files. */
   view?: GarmentMeshView
+}
+
+/** Ruling A58: the running mesh job of a piece — since when, which hub job of how many, and whether another mesh
+ *  was chosen during it (`chosen`: its result then stays a kept mesh). */
+export interface GarmentMeshJob {
+  id: string
+  started_at: string
+  hub_jobs: number
+  max_hub_jobs: number
+  phase: 'starting' | 'hub' | 'prepare' | 'publish' | string
+  chosen: boolean
 }
 
 /** One mesh file of the Mesh row (Ruling A48a): `url` versioned by content, `body_url` its body view (JSON). */
 export interface GarmentMeshFile { url: string; body_url: string; tris: number | null }
 
-/** A refused (or failed) attempt of the mesh step's last run; its files are kept only when it was refused. */
+/** A kept mesh of the piece (Ruling A58): a refused attempt (`attempt`), the mesh in use before a run or a pick
+ *  replaced it (`previous`), a result that finished while another mesh was chosen (`job`) — or an attempt that
+ *  failed outright (`failed`, `attempt` 0, no files). `attempt` is its slot (the URLs' `attempt=`). */
 export interface GarmentMeshAttempt {
   attempt: number
-  ok: false
+  origin: 'attempt' | 'previous' | 'job' | 'failed'
+  ok: boolean
   reasons: string[]
   error: string
+  created_at?: string | null
+  backend?: string
+  /** The attempt number within its run. */
+  run_attempt?: number | null
+  /** Finished while another mesh was chosen — kept, not applied. */
+  chosen_during_job?: boolean
+  /** Why "Use this" waits ("" when it can). */
+  use_block?: string
   tris_raw?: number | null
   tris_prepared?: number | null
   largest_component_share?: number | null
@@ -953,7 +979,9 @@ export function useGarmentRun(character: string, itemId: string,
     setCancelState(null)
     try {
       const answer = await apiPost<RunAnswer>(`/characters/${enc}/garments/${encodeURIComponent(itemId)}/run`, body)
-      setTarget({ body, since: info, queue: queuePlace(answer) })
+      // A refit beside the queue (Ruling A30) — or beside the piece's own mesh job (Ruling A58) — is shown by the
+      // server's `queue_beside`; as a target it would read "Queued" behind a run it does not wait for.
+      setTarget(answer?.beside ? null : { body, since: info, queue: queuePlace(answer) })
       if (answer?.queued) void loadOthers()
       startPoll(300)
     } catch (e) {

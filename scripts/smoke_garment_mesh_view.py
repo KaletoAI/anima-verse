@@ -39,7 +39,7 @@ grid lines).
     immutable with ``?v=``; ``mesh/raw`` -> the raw bytes; ``mesh/prepared?attempt=1`` -> the attempt's bytes;
     ``?attempt=2`` -> 404; which "nope" -> 400; attempt 7 -> 400; item "..%2Fsecret" and "dress%20x" -> 404.
     The panel (``GET …/garments/dress``): ``steps.mesh.view`` names prepared / raw with their versioned URLs and
-    attempt 1 (reasons ["torn"]) with its prepared + raw files. Triangles are COUNTED IN THE FILE, not taken from
+    attempt 1 (reasons ["torn"]; the record's ``kept`` entry of slot 1, Ruling A58) with its prepared + raw files. Triangles are COUNTED IN THE FILE, not taken from
     the record: the raw file holds the 768-triangle cube (record tris_raw 900) -> 768; attempt 1's prepared file
     is the n 2 box, 6 · 2² · 2 = 48 (record 50) -> 48.
 [5] The body view (``mesh/prepared/body``), body = the box of [2] (unrigged = rigged, k 1, voxel 3.4 mm), the
@@ -222,7 +222,10 @@ def main() -> int:
                   "attempts": [{"attempt": 1, "ok": False, "reasons": ["torn"], "tris_raw": 120,
                                 "tris_prepared": 50, "largest_component_share": 0.5},
                                {"attempt": 2, "ok": True, "reasons": [], "tris_raw": 900, "tris_prepared": 768,
-                                "largest_component_share": 1.0}]}
+                                "largest_component_share": 1.0}],
+                  # Ruling A58: the kept meshes are listed in ``kept`` (slot 1 = the refused attempt 1).
+                  "kept": [{"n": 1, "origin": "attempt", "attempt": 1, "ok": False, "reasons": ["torn"],
+                            "tris_raw": 120, "tris_prepared": 50, "largest_component_share": 0.5}]}
         gs.write_record(prepared.with_suffix(".json"), record)
 
         print("[3] kept refused attempts")

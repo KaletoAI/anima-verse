@@ -895,13 +895,16 @@ def _run_hairdeck(character_name: str, item_id: str, hsig: str, profile: Dict[st
 
 def _drop_mesh(character_name: str, item_id: str, fsig: str) -> None:
     """New images replace the input of the mesh step: its raw + prepared mesh
-    of this fsig go. The fit stays — it keeps being served until a new one is
-    accepted (R11) and reads as ``outdated`` meanwhile."""
+    of this fsig go, with the meshes kept beside it (Ruling A58: they were made from the replaced images). The fit
+    stays — it keeps being served until a new one is accepted (R11) and reads as ``outdated`` meanwhile."""
+    from app.core import garment_mesh
     from app.core.garment_store import garment_path
-    for part in ("raw", "prepared"):
-        path = garment_path(character_name, item_id, fsig, part)
-        path.unlink(missing_ok=True)
-        path.with_suffix(".json").unlink(missing_ok=True)
+    with garment_mesh.mesh_lock(character_name, item_id):
+        for part in ("raw", "prepared"):
+            path = garment_path(character_name, item_id, fsig, part)
+            path.unlink(missing_ok=True)
+            path.with_suffix(".json").unlink(missing_ok=True)
+        garment_mesh.clear_attempts(character_name, item_id, fsig)
 
 
 # --- HAAR (strand-hair spec 2026-11-13 § 6.3) ------------------------------------
@@ -1287,7 +1290,17 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     """Fit the prepared mesh of an own-mesh outfit piece onto the current
     base model and store it (see the module docstring). ``_Refused`` when
     the fit gate refuses; ValueError for any other kind (hair is HairDeck's
-    or the body mesh's)."""
+    or the body mesh's). Under the piece's mesh lock (Ruling A58, ``garment_mesh.mesh_lock``): a pick of another
+    mesh or a mesh job's publish never swaps the prepared mesh under a running fit, and two fits of the piece
+    (the chain's and a Re-fit beside its mesh job) never write at once."""
+    from app.core import garment_mesh
+    with garment_mesh.mesh_lock(character_name, item_id):
+        return _fit_locked(character_name, item_id, kind, fsig, bsig, profile)
+
+
+def _fit_locked(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
+                profile: Dict[str, Any]) -> Path:
+    """``_fit`` under the piece's mesh lock."""
     from app.core import base_body, garment_fit, garment_set
     if kind != garment_set.CLOTHING:
         raise ValueError(f"The edit-chain fit is for clothing, not {kind!r}")
@@ -2823,6 +2836,45 @@ def use_attempt(character_name: str, item_id: str, step: str, view: str, attempt
             "follow_up": {k: estimate.get(k) for k in ("steps", "hub_jobs", "note")}}
 
 
+def use_mesh(character_name: str, item_id: str, n: int, *,
+             profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Ruling A58, "Use this" on kept mesh ``n`` of the piece's worn state: it becomes the piece's mesh
+    (``garment_mesh.use_kept`` — the mesh in use takes its slot) and its fit on the plain body starts on the CPU
+    (``start_garment`` of the fit alone: beside a running mesh job of the piece, else as any Re-fit). No hub job.
+    Allowed while the piece's run is in its mesh job (``garment_mesh.running_job``) — the job's result then stays a
+    kept mesh — or when no run of the piece holds its run lock; ``UseBusy`` otherwise (``MESH_USE_BUSY``).
+    ``{item_id, n, user_accepted, during_job, fit}`` — ``fit`` the start answer of the fit (``start_garment``).
+    ``garment_mesh.KeptUnusable`` for a slot without a kept mesh, ValueError for a piece without a mesh step."""
+    from app.core import garment_mesh
+    from app.core import garment_store as gs
+    from app.models.character import get_character_profile
+    _item_, kind = _item(character_name, item_id)
+    if kind != _clothing():
+        raise ValueError("Only an own-mesh clothing piece has kept meshes")
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+    lock = gs.run_item_lock(character_name, item_id)
+    held = lock.acquire(blocking=False)
+    try:
+        if not held and garment_mesh.running_job(character_name, item_id) is None:
+            raise UseBusy(MESH_USE_BUSY)
+        result = garment_mesh.use_kept(character_name, item_id, fsig, n)
+    finally:
+        if held:
+            lock.release()
+    # The mesh step's refusal no longer speaks for this fsig (a mesh is in use); a later one (the fit) neither.
+    failure = gs.chain_failure(character_name, item_id, fsig)
+    if failure is not None and failure.get("step") in ("mesh", "fit"):
+        gs.clear_failure(character_name, item_id, fsig)
+    if not result["during_job"]:
+        failed = gs.status(character_name, item_id).get("failed") or {}
+        if failed.get("step") in ("mesh", "fit"):
+            gs.end(character_name, item_id, str(failed["step"]))
+    fit = start_garment(character_name, item_id, steps="fit", force=True, only=True)
+    return {"item_id": item_id, **result, "fit": fit}
+
+
 def _check_view_run(character_name: str, item_id: str, step: str, view: str, *, state: Optional[str],
                     prerequisites: bool) -> None:
     """``check_run``'s per-view rule (Ruling A33): ValueError for a view that is not made (an empty drafted
@@ -3090,7 +3142,16 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             elif step == "mesh":
                 f = forced or dirty
                 if f or not _mesh_done(character_name, item_id, fsig):
-                    garment_mesh.generate(character_name, item_id, fsig, force=f)
+                    outcome: Dict[str, Any] = {}
+                    garment_mesh.generate(character_name, item_id, fsig, force=f, outcome=outcome)
+                    if outcome.get("applied") is False:
+                        # Ruling A58: another mesh was chosen during the job — its result stays a kept mesh, the
+                        # chosen one is fitted beside the run (``use_mesh``); nothing after the mesh runs here.
+                        gs.end(character_name, item_id, step)
+                        ran.append(step)
+                        return {"ok": True, "fsig": fsig, "ran": ran, "not_applied": True,
+                                "note": garment_mesh.NOT_APPLIED, **({"error_kept": outcome["error"]}
+                                                                    if outcome.get("error") else {})}
                     produced = True
             elif step == "hairdeck":
                 if forced or not _done(character_name, item_id, kind, fsig, step, base_sha, method, hsig):
@@ -3292,6 +3353,9 @@ class _Job:
         self.track = ""
         #: Runs beside the character's FIFO (Ruling A30, ``_side``): a CPU refit of an item nothing else runs.
         self.beside = False
+        #: Ruling A58: a beside refit of the item whose OWN run is in its mesh job (``_during_mesh_ok_locked``) — it
+        #: holds no run lock (the run does), only the piece's mesh lock inside the fit (``_fit_during_mesh``).
+        self.during_mesh = False
 
     @property
     def plain(self) -> bool:
@@ -3494,6 +3558,8 @@ def _execute(character_name: str, job: "_Job") -> Optional[str]:
                         str(failure.get("error") or "")[:120])
             job.result = {"ok": False, "fsig": failure.get("fsig"), "step": failure.get("step"),
                           "error": failure.get("error"), "cached": True, "ran": []}
+        elif job.during_mesh:
+            job.result = _fit_during_mesh(character_name, job)
         elif job.body:
             job.result = _refit_body_job(character_name, job)
         elif job.beside:
@@ -3528,8 +3594,9 @@ def _side_worker(character_name: str, job: "_Job") -> None:
             if not side:
                 _side.pop(character_name, None)
             current = _current.get(character_name)
-            if (current is not None and current.item_id == job.item_id) or any(
-                    j.item_id == job.item_id for j in _queues.get(character_name) or ()):
+            # A refit beside its own run's mesh job (Ruling A58) leaves that run's status as it is.
+            if not job.during_mesh and ((current is not None and current.item_id == job.item_id) or any(
+                    j.item_id == job.item_id for j in _queues.get(character_name) or ())):
                 gs.start(character_name, job.item_id, QUEUED)
             job.done.set()
 
@@ -3555,6 +3622,63 @@ def _beside_ok_locked(character_name: str, item_id: str) -> bool:
     if character_name in _held or item_id in (_side.get(character_name) or {}):
         return False
     return all(j.item_id != item_id for j in _queues.get(character_name) or ())
+
+
+def _during_mesh_ok_locked(character_name: str, item_id: str) -> bool:
+    """Ruling A58: whether a CPU refit of ``item_id`` may start beside the FIFO although the FIFO runs the SAME item
+    (caller holds ``_lock`` and has checked the base): that run is in its mesh job (``garment_mesh.running_job`` —
+    it waits on the hub; the fit takes the piece's mesh lock, never the run lock), and the item has no run waiting
+    or beside and no refit sweep holds the character."""
+    current = _current.get(character_name)
+    if character_name not in _active or current is None or current.item_id != item_id:
+        return False
+    if character_name in _held or item_id in (_side.get(character_name) or {}):
+        return False
+    if any(j.item_id == item_id for j in _queues.get(character_name) or ()):
+        return False
+    from app.core import garment_mesh
+    return garment_mesh.running_job(character_name, item_id) is not None
+
+
+def _fit_during_mesh(character_name: str, job: "_Job") -> Dict[str, Any]:
+    """Ruling A58: the Re-fit of a clothing piece beside its own run's mesh job — the plain body's fit of the worn
+    state (``_fit``, under the piece's mesh lock; with a ``body`` only when that fit is not accepted), then the body
+    shape's (``refit_on_body``). The run's status is not touched (it stays in its mesh step). The result of
+    ``run_garment`` / ``refit_on_body``."""
+    from app.core import base_body, fit_attempts
+    from app.core import garment_store as gs
+    from app.models.character import get_character_profile
+    item_id = job.item_id
+    _item_, kind = _item(character_name, item_id)
+    fsig = ""
+    try:
+        if kind != _clothing():
+            raise ValueError("Only clothing is fitted beside its mesh job")
+        profile = get_character_profile(character_name) or {}
+        state = gs.item_state(character_name, item_id, profile)
+        run_profile = _run_profile(profile, item_id, state)
+        if run_profile is None:
+            raise ValueError(NOT_WORN_OPEN_ERROR.format(name=_item_.get("name") or item_id))
+        base = base_body.current_base(character_name, profile=run_profile)
+        if base is None:
+            raise ValueError(f"{character_name} is not on the base-body pipeline")
+        bsig, _base_sha = base
+        fsig = gs.garment_fsig(character_name, item_id, profile=run_profile)
+        if not job.body or fit_attempts.fit_status(character_name, item_id, "")["state"] != "accepted":
+            _fit(character_name, item_id, kind, fsig, bsig, run_profile)
+            logger.info("Garment %s/%s: refit beside the mesh job accepted", character_name, item_id)
+    except _Refused as e:
+        logger.info("Garment %s/%s: refit beside the mesh job refused: %s", character_name, item_id, e.error)
+        return {"ok": False, "fsig": fsig, "step": "fit", "error": e.error, "gates": e.gates, "ran": []}
+    except (ValueError, base_body.MissingInput) as e:
+        return {"ok": False, "fsig": fsig, "step": "fit", "error": str(e), "gates": None, "ran": []}
+    if job.body:
+        return refit_on_body(character_name, item_id, job.body)
+    try:
+        base_body.after_mesh_item_ready(character_name, item_id)
+    except Exception:  # noqa: BLE001 — the fit itself succeeded
+        logger.exception("Outfit rebuild after the fit of %s/%s failed", character_name, item_id)
+    return {"ok": True, "fsig": fsig, "ran": ["fit"]}
 
 
 def busy(character_name: str) -> bool:
@@ -3637,7 +3761,10 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     another item (``_side_worker``, ``_beside_ok_locked``) — ``{started True,
     queued False, position 0, behind None, beside True}`` — unless a base-body
     step or the 3D generation guard is in flight (``_base_in_flight``) or a
-    refit sweep holds the character: then it queues as before.
+    refit sweep holds the character: then it queues as before. Ruling A58: the
+    same when the run in flight is the item's OWN run and it is in its mesh job
+    (``_during_mesh_ok_locked``, ``_fit_during_mesh``) — the Re-fit and the fit
+    of "Use this" never wait for the hub.
 
     ``body`` (Ruling A50, a fit-only run of a clothing or footwear piece): the outfit body the Re-fit fits on
     (``refit_on_body``, after the plain body's fit when that is due) — "" the plain body; ValueError otherwise
@@ -3660,8 +3787,11 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
         # is the same as one started while the refit computes — as with an idle FIFO today.
         beside = not _base_in_flight(character_name)
     with _lock:
-        if beside and _beside_ok_locked(character_name, item_id):
+        during_mesh = beside and not _beside_ok_locked(character_name, item_id) and _during_mesh_ok_locked(
+            character_name, item_id)
+        if beside and (during_mesh or _beside_ok_locked(character_name, item_id)):
             wanted.beside = True
+            wanted.during_mesh = during_mesh
             wanted.track, track = track, ""
             _side.setdefault(character_name, {})[item_id] = wanted
             if not gs.status(character_name, item_id).get("running_step"):
@@ -4084,20 +4214,44 @@ def _image_info(character_name: str, item_id: str, fsig: str, step: str, view: s
     return out
 
 
+#: Ruling A58: why "Use this" on a kept mesh waits — another step of the piece's run holds its run lock.
+MESH_USE_BUSY = "A garment run of this piece is in another step — use the mesh after it"
+
+
+def _mesh_use_block(character_name: str, item_id: str) -> str:
+    """Why "Use this" on a kept mesh cannot run now ("" when it can, Ruling A58): a run of the piece holds its run
+    lock outside its mesh job (an image step, the fit). During the mesh job a pick is allowed."""
+    from app.core import garment_mesh
+    from app.core.garment_store import run_item_lock
+    if run_item_lock(character_name, item_id).locked() and garment_mesh.running_job(character_name, item_id) is None:
+        return MESH_USE_BUSY
+    return ""
+
+
 def _mesh_info(character_name: str, item_id: str, fsig: str) -> Dict[str, Any]:
+    """The Mesh row: ``{status, metrics, gates, tris, created_at, user_accepted, view, job}`` — ``job`` (Ruling A58)
+    the piece's mesh job of this fsig in flight (``garment_mesh.running_job``: ``{id, started_at, hub_jobs,
+    max_hub_jobs, phase, chosen}`` — ``chosen`` the user picked another mesh during it), None when none runs."""
+    from app.core import garment_mesh
     from app.core.garment_store import garment_path, read_record
     prepared = garment_path(character_name, item_id, fsig, "prepared")
     record = read_record(prepared.with_suffix(".json"))
     if prepared.is_file() and record.get("accepted") is True:
         status = "accepted"
-    elif record:
+    elif record.get("attempts"):
         status = "refused"
     else:
         status = "missing"
     metrics = {k: record.get(k) for k in ("largest_component_share", "tris_raw", "tris_prepared", "ratio",
                                           "backend") if k in record}
+    job = garment_mesh.running_job(character_name, item_id, fsig)
+    if job is not None:
+        marker = record.get("chosen_during_job")
+        job = {k: job.get(k) for k in ("id", "started_at", "hub_jobs", "max_hub_jobs", "phase")}
+        job["chosen"] = isinstance(marker, dict) and marker.get("job") == job["id"]
     return {"status": status, "metrics": metrics, "gates": record.get("attempts") or [],
             "tris": record.get("tris_prepared"), "created_at": record.get("created_at"),
+            "user_accepted": bool(record.get("user_accepted")) and status == "accepted", "job": job,
             "view": _mesh_view_info(character_name, item_id, fsig, record, accepted=status == "accepted")}
 
 
@@ -4105,10 +4259,12 @@ def _mesh_view_info(character_name: str, item_id: str, fsig: str, record: Dict[s
                     accepted: bool) -> Dict[str, Any]:
     """The Mesh row's 3D view (Ruling A48a, ``garment_mesh_view``): ``{prepared, raw, attempts}`` — each mesh
     file ``{url, body_url, tris}`` (``url`` versioned by content; ``body_url`` the body view's JSON; ``tris``
-    counted in the file, ``garment_mesh_view.file_triangles``) or None, and
-    every refused or failed attempt of the step record's last run ``{attempt, ok, reasons, error, tris_raw,
-    tris_prepared, largest_component_share, prepared, raw}`` with its kept files (``garment_mesh.attempt_files``;
-    None when nothing was kept — a failed attempt has no mesh)."""
+    counted in the file, ``garment_mesh_view.file_triangles``) or None. ``attempts`` (Ruling A58): every KEPT mesh of
+    the fsig (the record's ``kept``, ``garment_mesh.kept_entries``) with its files — ``{attempt (its slot), origin
+    (attempt / previous / job), ok, reasons, error, created_at, backend, tris_raw, tris_prepared,
+    largest_component_share, chosen_during_job, use_block, prepared, raw}`` (``use_block``: why "Use this" waits,
+    "" when it can), then each attempt of the record's run that failed outright (``attempt`` 0, ``run_attempt`` its
+    number, no files)."""
     from app.core import garment_mesh, garment_mesh_view
     from app.core.garment_store import garment_path
     from app.core.http_files import content_version
@@ -4132,23 +4288,30 @@ def _mesh_view_info(character_name: str, item_id: str, fsig: str, record: Dict[s
         "raw": file(garment_path(character_name, item_id, fsig, "raw"), "raw", 0, record.get("tris_raw")),
         "attempts": [],
     }
-    for entry in record.get("attempts") or []:
-        if not isinstance(entry, dict) or entry.get("ok") is True:
-            continue
-        try:
-            number = int(entry.get("attempt") or 0)
-        except (TypeError, ValueError):
-            continue
-        if not 1 <= number <= garment_mesh.MAX_ATTEMPTS:
-            continue
+    block = _mesh_use_block(character_name, item_id)
+    for entry in garment_mesh.kept_entries(record):
+        number = entry["n"]
         kept = garment_mesh.attempt_files(character_name, item_id, fsig, number)
+        if kept["prepared"] is None and kept["raw"] is None:
+            continue
         out["attempts"].append({
-            "attempt": number, "ok": False, "reasons": list(entry.get("reasons") or []),
-            "error": entry.get("error") or "",
+            "attempt": number, "origin": entry.get("origin") or garment_mesh.KEPT_ATTEMPT,
+            "ok": bool(entry.get("ok")), "reasons": list(entry.get("reasons") or []),
+            "error": entry.get("error") or "", "created_at": entry.get("created_at"),
+            "backend": entry.get("backend") or "", "run_attempt": entry.get("attempt"),
+            "chosen_during_job": bool(entry.get("chosen_during_job")),
             **{k: entry.get(k) for k in ("tris_raw", "tris_prepared", "largest_component_share")},
+            "use_block": block if kept["prepared"] is not None else "No decimated mesh was kept",
             "prepared": file(kept["prepared"], "prepared", number, entry.get("tris_prepared")),
             "raw": file(kept["raw"], "raw", number, entry.get("tris_raw")),
         })
+    for entry in record.get("attempts") or []:
+        if not isinstance(entry, dict) or entry.get("ok") is True or "largest_component_share" in entry:
+            continue
+        out["attempts"].append({"attempt": 0, "run_attempt": entry.get("attempt"), "origin": "failed", "ok": False,
+                                "reasons": list(entry.get("reasons") or []), "error": entry.get("error") or "",
+                                "created_at": record.get("created_at"), "use_block": "No mesh was kept",
+                                "prepared": None, "raw": None})
     return out
 
 

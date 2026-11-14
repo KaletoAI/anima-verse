@@ -230,7 +230,7 @@ def main() -> int:
             gs.write_record(target.with_suffix(".json"), {"accepted": True, "side": 1024})
             return target
 
-        def mesh_generate(character_name, item_id, fsig_, force=False):
+        def mesh_generate(character_name, item_id, fsig_, force=False, outcome=None):  # outcome: Ruling A58
             renders.append(("mesh", "", "forced" if force else "", ""))
             prepared = gs.garment_path(character_name, item_id, fsig_, "prepared")
             prepared.parent.mkdir(parents=True, exist_ok=True)
