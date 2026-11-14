@@ -21,6 +21,8 @@
  * - `wearButton`: the Wear button's label with what the Build after it costs.
  * - `standardHairText` / `newHairstyleText`: the "New hairstyle" dialog's description field (Ruling A54) — it opens
  *   with the standard text, offers "Reset to standard text" once edited, and says before Create when there is none.
+ * - `deleteSummary` / `deleteCost` / `afterDeleteSelection`: the Delete confirmation (Ruling A59) — what goes, what
+ *   the Build after it costs, and the selection after it (the worn hairstyle, else none).
  * Returned strings are English; the caller passes `t`.
  */
 import { DRAG_TURN_DEG_PER_PX } from '../../lib/modelTurn'
@@ -706,4 +708,84 @@ export function newHairstyleText(standard: string, description: string):
     fromStandard: !!std && text === std,
     hint: !std && !text ? NO_HAIR_TEXT : null,
   }
+}
+
+/** GET …/hairstyles/{id}/delete-preview (Ruling A59, `hairstyle_delete.delete_preview`): what deleting it removes. */
+export interface DeletePreview {
+  item_id: string
+  name: string
+  worn: boolean
+  plain: boolean
+  last: boolean
+  files: Array<{ label: string; files: number; bytes: number }>
+  total_files: number
+  total_bytes: number
+  item_files: number
+  assembled: number
+  shapes: Array<{ key: string; deletable: boolean; why: string }>
+  outfit_sets: string[]
+  /** What the Build after the delete costs; `steps` its step labels (shown on mouse-over). */
+  estimate: { hub_jobs: number | null; automatic: boolean; note: string; steps?: string[] } | null
+}
+
+/** Bytes as "12 B", "340 KB", "1.2 MB". */
+export function sizeLabel(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function filesLabel(n: number, t: Tr): string {
+  return n === 1 ? t('1 file') : t('{n} files').replace('{n}', String(n))
+}
+
+/** What the Build after the delete costs (the preview's `estimate`, like the Wear button's): "Build automatically"
+ *  on → the Build starts by itself; off → nothing runs on the click. 0 hub jobs = local, on the CPU. */
+export function deleteCost(estimate: DeletePreview['estimate'], t: Tr = EN): string {
+  if (!estimate) return t('no figure — nothing is built')
+  if (estimate.hub_jobs === 0) {
+    return estimate.automatic ? t('the Build starts by itself — local, no hub job')
+      : t('nothing runs now; the Build you start then is local, no hub job')
+  }
+  return (estimate.automatic ? t('the Build starts by itself — {cost}')
+    : t('nothing runs now; the Build you start then costs {cost}')).replace('{cost}', jobsLabel(estimate.hub_jobs, t))
+}
+
+/** The Delete confirmation's content (Ruling A59): `removed` — one line per thing that goes (the item, each group
+ *  of generated files with its count and size, the assembled models, the body shapes); `notes` — what follows
+ *  (the worn note with the Build's real cost, the plain body, the last hairstyle, the outfit sets, the shapes that
+ *  stay), always ending with "This cannot be undone.". */
+export function deleteSummary(p: DeletePreview, t: Tr = EN): { removed: string[]; notes: string[] } {
+  const removed = [p.item_files ? t('The hairstyle item and its picture') : t('The hairstyle item')]
+  for (const f of p.files) removed.push(`${t(f.label)}: ${filesLabel(f.files, t)} (${sizeLabel(f.bytes)})`)
+  if (!p.files.length) removed.push(t('No generated files are stored for it.'))
+  if (p.assembled) {
+    removed.push(t('Assembled models with this hair: {files} — re-assembled without it on the CPU')
+      .replace('{files}', filesLabel(p.assembled, t)))
+  }
+  const gone = p.shapes.filter((s) => s.deletable).length
+  if (gone) removed.push(t('Body shapes with only this hair: {n}').replace('{n}', String(gone)))
+  const notes: string[] = []
+  const cost = deleteCost(p.estimate, t)
+  if (p.worn) notes.push(t('This hairstyle is worn — the figure will be rebuilt without hair ({cost}).').replace('{cost}', cost))
+  else if (p.plain) notes.push(t('The plain body was made with this hairstyle — the figure will be rebuilt ({cost}).').replace('{cost}', cost))
+  if (p.last) notes.push(t('It is the last hairstyle — the character then has none.'))
+  if (p.outfit_sets.length) {
+    notes.push(t('Outfit sets that wear it then leave the hair as it is: {sets}.').replace('{sets}', p.outfit_sets.join(', ')))
+  }
+  const kept = p.shapes.length - gone
+  if (kept) {
+    notes.push(t('Body shapes kept for now: {n} — the Figure tab offers them once nothing stands on them.')
+      .replace('{n}', String(kept)))
+  }
+  notes.push(t('This cannot be undone.'))
+  return { removed, notes }
+}
+
+/** The selection after a delete: no hairstyle selected. */
+export const NONE_SELECTED = '\u0000none'
+
+/** The selection after a delete (Ruling A59): the worn hairstyle of the reloaded list, else none. */
+export function afterDeleteSelection(list: { hairstyles: Array<{ id: string; worn: boolean }> } | null | undefined): string {
+  return list?.hairstyles.find((h) => h.worn)?.id || NONE_SELECTED
 }

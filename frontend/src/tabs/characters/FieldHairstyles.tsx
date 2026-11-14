@@ -25,6 +25,11 @@
  *     refit", which saves the pick and runs nothing).
  * HAAR without a routed backend (occasion hair_strands) says so beside Run all with a link to the routing and
  * spends nothing: Run all and the strands step are off.
+ * Ruling A59: every hairstyle card has "Delete" — an in-app confirmation (createPortal) names the hairstyle, what
+ * goes (the item, its generated files per group with count and size, the assembled models, the body shapes with
+ * only its hair), the worn note with what the Build after it costs, and that it cannot be undone
+ * (GET …/hairstyles/{id}/delete-preview, DELETE …/hairstyles/{id}); afterwards the list reloads and the selection
+ * moves to the worn hairstyle, else to none.
  * A temporary NPC has no figure: the list and the settings stay, no step runs.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -32,7 +37,7 @@ import { createPortal } from 'react-dom'
 import { STRAND_RECORD_VERSION } from '@anima/scene-render'
 import type { HairStrandRecord } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiGet, apiPost } from '../../lib/api'
+import { apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { stampLabel } from './freshnessText'
 import { GateChips, RecordNumbers, RunButton, RunStatusLine } from './GarmentSteps'
@@ -42,11 +47,11 @@ import { HairLiveControls } from './HairLiveControls'
 import type { HairDrafts } from './HairLiveControls'
 import { FigureBuildLine } from './HairstyleParts'
 import {
-  HAAR_NO_ROUTE, ROUTING_URL, colourTint, fittedPlacement, haarRunCost, haarVariantRows, hairStepRows, jobsLabel,
-  listLight, listReason, newHairstyleText, placementIdentity, placementMap, placementRuler, standardHairText,
-  strandPreviewState, variantAction, wearButton,
+  HAAR_NO_ROUTE, NONE_SELECTED, ROUTING_URL, afterDeleteSelection, colourTint, deleteSummary, fittedPlacement,
+  haarRunCost, haarVariantRows, hairStepRows, jobsLabel, listLight, listReason, newHairstyleText, placementIdentity,
+  placementMap, placementRuler, standardHairText, strandPreviewState, variantAction, wearButton,
 } from './hairstylesModel'
-import type { HaarPanel, Light, Vec3, VariantLight } from './hairstylesModel'
+import type { DeletePreview, HaarPanel, Light, Vec3, VariantLight } from './hairstylesModel'
 import { Model3DViewer } from './Model3DViewer'
 import { StepLight, StepRowView } from './StepRows'
 import { LIGHT_COLOR, PANEL } from './stepStyle'
@@ -155,6 +160,78 @@ function NewHairstyleDialog({ character, defaultMode, built, standard, onClose, 
               onClick={() => { void create() }}>{t('Create')}</button>
           </div>
           {reason && !field.hint ? <span className="ga-hint">{t(reason)}</span> : null}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+/** The Delete confirmation (Ruling A59): loads what the delete removes (GET …/delete-preview) and names it — the
+ *  hairstyle, the files per group, the assembled models and body shapes, the worn note with the Build's cost, the
+ *  outfit sets, and that it cannot be undone. Delete runs DELETE …/hairstyles/{id}. */
+function DeleteHairstyleDialog({ character, entry, onClose, onDeleted }: {
+  character: string
+  entry: { id: string; label: string }
+  onClose: () => void
+  onDeleted: (report: { worn: boolean; plain: boolean; deleted_files: number }) => void
+}) {
+  const { t } = useI18n()
+  const { toast } = useToast()
+  const path = `/characters/${encodeURIComponent(character)}/hairstyles/${encodeURIComponent(entry.id)}`
+  const [preview, setPreview] = useState<DeletePreview | null>(null)
+  const [error, setError] = useState('')
+  const [posting, setPosting] = useState(false)
+  useEffect(() => {
+    let gone = false
+    apiGet<DeletePreview>(`${path}/delete-preview`)
+      .then((p) => { if (!gone) setPreview(p) })
+      .catch((e) => { if (!gone) setError((e as Error).message) })
+    return () => { gone = true }
+  }, [path])
+  const remove = async () => {
+    if (posting) return
+    setPosting(true)
+    try {
+      onDeleted(await apiDelete<{ worn: boolean; plain: boolean; deleted_files: number }>(path))
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+      setPosting(false)
+    }
+  }
+  const summary = preview ? deleteSummary(preview, t) : null
+  return createPortal(
+    <div className="ga-modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget && !posting) onClose() }}>
+      <div className="ga-modal" role="dialog" aria-modal="true" aria-label={t('Delete hairstyle')}
+        style={{ maxWidth: 560 }}>
+        <div className="ga-modal-header"><h3>{t('Delete hairstyle')}</h3></div>
+        <div className="ga-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
+          <div>{t('Delete “{name}”?').replace('{name}', preview?.name || entry.label)}</div>
+          {error ? <div className="ga-hint" style={WARN_STYLE}>{error}</div> : null}
+          {!summary && !error ? <div className="ga-hint">{t('Loading…')}</div> : null}
+          {summary ? (
+            <>
+              <div>
+                <div className="ga-form-hint">{t('Removed')}</div>
+                <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>
+                  {summary.removed.map((line) => <li key={line}>{line}</li>)}
+                </ul>
+              </div>
+              {summary.notes.map((line, i) => (
+                <div key={line} className="ga-hint"
+                  title={i === 0 && (preview?.worn || preview?.plain) ? (preview?.estimate?.steps || []).join(' · ') || undefined
+                    : undefined}
+                  style={i === summary.notes.length - 1 || (preview?.worn && i === 0) ? WARN_STYLE : undefined}>
+                  {line}
+                </div>
+              ))}
+            </>
+          ) : null}
+        </div>
+        <div className="ga-modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+          <button type="button" className="ga-btn" disabled={posting} onClick={onClose}>{t('Cancel')}</button>
+          <button type="button" className="ga-btn ga-btn-danger" disabled={!preview || posting}
+            onClick={() => { void remove() }}>{posting ? t('Deleting…') : t('Delete')}</button>
         </div>
       </div>
     </div>,
@@ -691,16 +768,20 @@ export function FieldHairstyles({ character, onOpenFigure }: {
   const [error, setError] = useState('')
   const [selected, setSelected] = useState('')
   const [dialog, setDialog] = useState(false)
+  const [deleting, setDeleting] = useState<{ id: string; label: string } | null>(null)
   const [posting, setPosting] = useState(false)
   // Bumped by every Wear / mode change: the Build line shows (and reloads).
   const [changed, setChanged] = useState(0)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<HairstylesList | null> => {
     try {
-      setList(await apiGet<HairstylesList>(`/characters/${enc}/hairstyles`))
+      const next = await apiGet<HairstylesList>(`/characters/${enc}/hairstyles`)
+      setList(next)
       setError('')
+      return next
     } catch (e) {
       setError((e as Error).message)
+      return null
     }
   }, [enc])
   useEffect(() => { void load() }, [load])
@@ -725,7 +806,7 @@ export function FieldHairstyles({ character, onOpenFigure }: {
 
   const wornId = list.hairstyles.find((h) => h.worn)?.id || ''
   const rows = hairstyleRows(list.hairstyles, wornId, t) as Array<HairstyleEntry & { label: string }>
-  const current = rows.find((h) => h.id === selected) || rows[0] || null
+  const current = selected === NONE_SELECTED ? null : rows.find((h) => h.id === selected) || rows[0] || null
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '230px minmax(0, 1fr)', gap: 16, alignItems: 'start',
@@ -763,6 +844,11 @@ export function FieldHairstyles({ character, onOpenFigure }: {
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {h.label}
                 </span>
+                <button type="button" className="ga-btn ga-btn-sm ga-btn-danger" disabled={posting}
+                  title={t('Deletes this hairstyle with its files — asks first')}
+                  onClick={(e) => { e.stopPropagation(); setDeleting({ id: h.id, label: h.label }) }}>
+                  {t('Delete')}
+                </button>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.8em' }}>
                 <span className="ga-hint" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
@@ -789,7 +875,8 @@ export function FieldHairstyles({ character, onOpenFigure }: {
             onChanged={() => { setChanged((v) => v + 1); void load() }} onRunEnded={reloadList} />
         ) : (
           <div className="ga-hint" style={{ ...EMPTY_TILE, height: 200, padding: 16 }}>
-            {t('Create a hairstyle with “New hairstyle” — creating runs nothing.')}
+            {rows.length ? t('No hairstyle is worn — pick one from the list.')
+              : t('Create a hairstyle with “New hairstyle” — creating runs nothing.')}
           </div>
         )}
       </div>
@@ -797,6 +884,17 @@ export function FieldHairstyles({ character, onOpenFigure }: {
         <NewHairstyleDialog character={character} defaultMode={list.default_mode} built={list.built_modes || HAIR_MODES}
           standard={standardHairText(list)} onClose={() => setDialog(false)}
           onCreated={(id) => { setDialog(false); setSelected(id); void load() }} />
+      ) : null}
+      {deleting ? (
+        <DeleteHairstyleDialog character={character} entry={deleting} onClose={() => setDeleting(null)}
+          onDeleted={(report) => {
+            setDeleting(null)
+            toast(t('Hairstyle deleted — {files} removed.').replace('{files}',
+              report.deleted_files === 1 ? t('1 file') : t('{n} files').replace('{n}', String(report.deleted_files))),
+            'success')
+            if (report.worn || report.plain) setChanged((v) => v + 1)
+            void load().then((next) => setSelected(afterDeleteSelection(next)))
+          }} />
       ) : null}
     </div>
   )

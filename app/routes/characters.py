@@ -2379,6 +2379,47 @@ def wear_character_hairstyle(character_name: str, item_id: str,
     return {"worn": item_id}
 
 
+def _hairstyle_delete_errors(fn, *args):
+    """``hairstyle_delete``'s errors as HTTP answers: 400 an invalid id or a shared item, 404 no hairstyle of the
+    character, 409 a run or a Build works now, 500 a failed write."""
+    from app.core import hairstyle_delete
+    try:
+        return fn(*args)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except hairstyle_delete.HairstyleBusy as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{character_name}/hairstyles/{item_id}/delete-preview")
+def get_character_hairstyle_delete_preview(character_name: str, item_id: str,
+                                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """What deleting the hairstyle ``item_id`` removes — the confirmation's content (Ruling A59,
+    ``hairstyle_delete.delete_preview``): its files per group, the assembled models grafting it, the body shapes
+    with its hair, the outfit sets that wear it, whether it is worn / the plain body's / the last one, and what the
+    Build after it costs (``estimate``). Read-only; 400 for an invalid id, 404 for no hairstyle of the character."""
+    from app.core import hairstyle_delete
+    _require_character(character_name)
+    return _hairstyle_delete_errors(hairstyle_delete.delete_preview, character_name, item_id)
+
+
+@router.delete("/{character_name}/hairstyles/{item_id}")
+def delete_character_hairstyle(character_name: str, item_id: str,
+                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Delete the hairstyle ``item_id`` with its files (Ruling A59, ``hairstyle_delete.delete_hairstyle``): the
+    item, its ownership, its generated files under ``garments/``, the assembled models grafting it and the body
+    shapes only it stands on. The worn one may go (the character then wears no hairstyle; the Build is requested
+    like a Wear), the last one too. 400 for an invalid id or a shared item, 404 for no hairstyle of the character,
+    409 while a run of it or a Build works."""
+    from app.core import hairstyle_delete
+    _require_character(character_name)
+    return _hairstyle_delete_errors(hairstyle_delete.delete_hairstyle, character_name, item_id)
+
+
 @router.post("/{character_name}/hair/method")
 def set_character_hair_method(character_name: str, body: HairMethodRequest,
                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:

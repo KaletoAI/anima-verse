@@ -74,6 +74,33 @@
  *     Sources: the dialog's field state starts from `standard` (`useState(standard)`), the tab passes
  *     `standard={standardHairText(list)}` of the hairstyles GET, the reset link sets the field back to `standard`,
  *     and the route puts `appearance_hair_text` into the hairstyles GET.
+ * [13] Delete a hairstyle (Ruling A59).
+ *     sizeLabel: 12 → "12 B"; 2048 → "2 KB"; 1572864 (1.5·1024²) → "1.5 MB".
+ *     deleteCost: null (no figure) → "no figure — nothing is built"; automatic 0 → "the Build starts by itself — local,
+ *       no hub job"; automatic 9 → "the Build starts by itself — 9 hub jobs"; manual 0 → "nothing runs now; the Build
+ *       you start then is local, no hub job"; manual 3 → "… costs 3 hub jobs"; manual null → "… costs cost unknown".
+ *     deleteSummary of the worn, plain and last hairstyle with files [HairDeck jobs 3 / 2048 B, Fits and strand
+ *       records 1 / 1572864 B], a picture, 2 assembled files, shapes [ob1 deletable, ob2 kept], sets ["Day"] and the
+ *       estimate automatic 0:
+ *       removed = ["The hairstyle item and its picture", "HairDeck jobs: 3 files (2 KB)", "Fits and strand records:
+ *         1 file (1.5 MB)", "Assembled models with this hair: 2 files — re-assembled without it on the CPU",
+ *         "Body shapes with only this hair: 1"];
+ *       notes = ["This hairstyle is worn — the figure will be rebuilt without hair (the Build starts by itself —
+ *         local, no hub job).", "It is the last hairstyle — the character then has none.", "Outfit sets that wear it
+ *         then leave the hair as it is: Day.", "Body shapes kept for now: 1 — the Figure tab offers them once nothing
+ *         stands on them.", "This cannot be undone."].
+ *     An unworn hairstyle without files or picture: removed ["The hairstyle item", "No generated files are stored for
+ *       it."], notes ["This cannot be undone."]. The plain body's (not worn), estimate manual 5: the first note
+ *       "The plain body was made with this hairstyle — the figure will be rebuilt (nothing runs now; the Build you
+ *       start then costs 5 hub jobs)."
+ *     afterDeleteSelection: the worn id of the reloaded list ("b" of [a, b worn]); none worn → NONE_SELECTED; null
+ *       (the reload failed) → NONE_SELECTED.
+ *     Sources: every card has a "Delete" button that opens the dialog (`setDeleting({ id: h.id`) and stops the
+ *     card's click; the dialog is a createPortal to document.body, loads `…/delete-preview`, shows
+ *     `deleteSummary(preview, t)`, deletes with `apiDelete` and has Cancel; no native dialog; after the delete the
+ *     selection is `afterDeleteSelection(next)` of the reloaded list and a NONE_SELECTED selection shows no detail;
+ *     the route file has `@router.delete("/{character_name}/hairstyles/{item_id}")` and the preview GET, both with
+ *     `Depends(require_admin)`.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -283,6 +310,51 @@ check('[11] no client carries a cutoff of its own', [sources.length > 100, hardC
   check('[12] wiring', [/useState\(standard\)/.test(dialog), /standard=\{standardHairText\(list\)\}/.test(tab),
     /onClick=\{\(\) => setDescription\(standard\)\}/.test(dialog), /t\(field\.hint\)/.test(dialog),
     /"appearance_hair_text": \(garment_hair\.appearance_hair_text\(/.test(hairstylesGet)], [true, true, true, true, true]);
+}
+
+// [13]
+{
+  check('[13] sizeLabel', [m.sizeLabel(12), m.sizeLabel(2048), m.sizeLabel(1572864)], ['12 B', '2 KB', '1.5 MB']);
+  const est = (hub_jobs, automatic) => ({ hub_jobs, automatic, note: '' });
+  check('[13] deleteCost', [m.deleteCost(null), m.deleteCost(est(0, true)), m.deleteCost(est(9, true)),
+    m.deleteCost(est(0, false)), m.deleteCost(est(3, false)), m.deleteCost(est(null, false))],
+  ['no figure — nothing is built', 'the Build starts by itself — local, no hub job',
+    'the Build starts by itself — 9 hub jobs', 'nothing runs now; the Build you start then is local, no hub job',
+    'nothing runs now; the Build you start then costs 3 hub jobs',
+    'nothing runs now; the Build you start then costs cost unknown']);
+  const base = { item_id: 'hair_kai', name: 'Short black hair', worn: false, plain: false, last: false, files: [],
+    total_files: 0, total_bytes: 0, item_files: 0, assembled: 0, shapes: [], outfit_sets: [], estimate: null };
+  const worn = { ...base, worn: true, plain: true, last: true, item_files: 1, assembled: 2,
+    files: [{ label: 'HairDeck jobs', files: 3, bytes: 2048 }, { label: 'Fits and strand records', files: 1, bytes: 1572864 }],
+    shapes: [{ key: 'ob1', deletable: true, why: '' }, { key: 'ob2', deletable: false, why: 'x' }],
+    outfit_sets: ['Day'], estimate: est(0, true) };
+  check('[13] deleteSummary worn', m.deleteSummary(worn), {
+    removed: ['The hairstyle item and its picture', 'HairDeck jobs: 3 files (2 KB)', 'Fits and strand records: 1 file (1.5 MB)',
+      'Assembled models with this hair: 2 files — re-assembled without it on the CPU', 'Body shapes with only this hair: 1'],
+    notes: ['This hairstyle is worn — the figure will be rebuilt without hair (the Build starts by itself — local, no hub job).',
+      'It is the last hairstyle — the character then has none.', 'Outfit sets that wear it then leave the hair as it is: Day.',
+      'Body shapes kept for now: 1 — the Figure tab offers them once nothing stands on them.', 'This cannot be undone.'],
+  });
+  check('[13] deleteSummary bare', m.deleteSummary(base),
+    { removed: ['The hairstyle item', 'No generated files are stored for it.'], notes: ['This cannot be undone.'] });
+  check('[13] deleteSummary plain', m.deleteSummary({ ...base, plain: true, estimate: est(5, false) }).notes[0],
+    'The plain body was made with this hairstyle — the figure will be rebuilt (nothing runs now; the Build you start then costs 5 hub jobs).');
+  check('[13] afterDeleteSelection', [
+    m.afterDeleteSelection({ hairstyles: [{ id: 'a', worn: false }, { id: 'b', worn: true }] }),
+    m.afterDeleteSelection({ hairstyles: [{ id: 'a', worn: false }] }) === m.NONE_SELECTED,
+    m.afterDeleteSelection(null) === m.NONE_SELECTED], ['b', true, true]);
+  const dlg = (tab.match(/function DeleteHairstyleDialog[\s\S]*?\n}\n/) || [''])[0];
+  const route = readFileSync(join(ROOT, 'app/routes/characters.py'), 'utf8');
+  const del = (route.match(/@router\.delete\("\/\{character_name\}\/hairstyles\/\{item_id\}"\)[\s\S]*?\n\n\n/) || [''])[0];
+  const prev = (route.match(/@router\.get\("\/\{character_name\}\/hairstyles\/\{item_id\}\/delete-preview"\)[\s\S]*?\n\n\n/) || [''])[0];
+  check('[13] wiring', [
+    /onClick=\{\(e\) => \{ e\.stopPropagation\(\); setDeleting\(\{ id: h\.id/.test(tab),
+    /return createPortal\([\s\S]*?document\.body,\s*\)/.test(dlg), /delete-preview/.test(dlg),
+    /deleteSummary\(preview, t\)/.test(dlg), /apiDelete</.test(dlg), /t\('Cancel'\)/.test(dlg),
+    /window\.(prompt|alert|confirm)\(/.test(dlg), /setSelected\(afterDeleteSelection\(next\)\)/.test(tab),
+    /selected === NONE_SELECTED \? null/.test(tab),
+    /Depends\(require_admin\)/.test(del), /Depends\(require_admin\)/.test(prev)],
+  [true, true, true, true, true, true, false, true, true, true, true]);
 }
 
 if (failures.length) {
