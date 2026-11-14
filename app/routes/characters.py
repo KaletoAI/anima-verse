@@ -2123,8 +2123,9 @@ def get_character_garment(character_name: str, item_id: str,
                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """The Wardrobe's panel of one own-mesh piece (or any garment of the
     character): ``{pipeline, item_id, name, kind, mesh_mode, worn, status,
-    garment, limits, run, view_runs, use_runs}`` (``run``: ``garments.run_estimate`` — the dialog's "Run all" label;
-    ``use_runs``: ``garments.use_plans`` — "Use this" on each stored attempt, Ruling A37;
+    garment, limits, run, view_runs, use_runs, use_undo}`` (``run``: ``garments.run_estimate`` — the dialog's "Run
+    all" label; ``use_runs``: ``garments.use_plans`` — "Use this" on each stored attempt, Ruling A37; ``use_undo``:
+    ``garments.use_undo_state`` — Undo of the last "Use this", Ruling A79;
     ``view_runs``: ``garments.view_plans`` — each per-view button's jobs, follow-up and missing prerequisites,
     None without per-view runs; ``mesh_mode``: the item's mode,
     ``garment_set.mesh_mode_of``; None for hair) — ``garment`` is ``garments.garment_info`` (a
@@ -2179,7 +2180,9 @@ def get_character_garment(character_name: str, item_id: str,
                # Ruling A33: what each per-view button of the step grid spends and needs, before the click.
                "view_runs": garments.view_plans(character_name, item_id, profile=profile) if pipeline else None,
                # Ruling A37: "Use this" on each stored attempt — passing / by the user, why not, the cost after.
-               "use_runs": garments.use_plans(character_name, item_id, profile=profile) if pipeline else None}
+               "use_runs": garments.use_plans(character_name, item_id, profile=profile) if pipeline else None,
+               # Ruling A79: what Undo of the last "Use this" takes back, and whether it still can.
+               "use_undo": garments.use_undo_state(character_name, item_id, profile=profile) if pipeline else None}
     from app.core.model_overview import annotate_garment
     return annotate_garment(payload)
 
@@ -3111,6 +3114,26 @@ def use_character_garment_attempt(character_name: str, item_id: str, step: str, 
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{character_name}/garments/{item_id}/images/undo-use")
+def undo_character_garment_attempt_use(character_name: str, item_id: str,
+                                       _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A79: Undo of the piece's last "Use this" (``garments.undo_use``) — the images, the mesh and the
+    recorded refusal as they were before that click. Spends no job. Admin-only. 409 when there is nothing to undo,
+    the image was replaced since or a garment run of the piece is in progress; 404 for a piece without image
+    steps."""
+    from app.core import garment_use_undo, garments
+    from app.models.inventory import safe_item_id
+    if safe_item_id(item_id) != item_id:
+        raise HTTPException(status_code=404, detail="Unknown item")
+    _require_character(character_name)
+    try:
+        return garments.undo_use(character_name, item_id)
+    except (garment_use_undo.UndoUnavailable, garments.UseBusy) as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/{character_name}/garments/{item_id}/footwear/image/{which}")

@@ -2877,7 +2877,8 @@ def use_attempt(character_name: str, item_id: str, step: str, view: str, attempt
     image (``garment_images.use_attempt``: a refused one accepted by the user) — no job. Under the item's run
     lock (``garment_store.run_item_lock``, never waiting: ``UseBusy`` while a run holds it). The later images
     of the view go, the mesh with them (``_drop_mesh``: the fit reads outdated and stays served until a new one
-    is accepted); a recorded refusal of this step or a later one is answered (the chain may run again).
+    is accepted); a recorded refusal of this step or a later one is answered (the chain may run again). What
+    the click replaces or drops is kept for its Undo first (Ruling A79, ``undo_use``).
     ``{item_id, step, view, attempt, changed, passing, user_accepted, follow_up}`` — ``follow_up`` the chain's
     estimate now (``run_estimate``). ``garment_images.AttemptUnusable`` / ValueError for a bad request."""
     from app.core import garment_images
@@ -2896,8 +2897,20 @@ def use_attempt(character_name: str, item_id: str, step: str, view: str, attempt
     if not lock.acquire(blocking=False):
         raise UseBusy("A garment run of this piece is in progress — use the attempt after it")
     try:
-        result = garment_images.use_attempt(character_name, item_id, fsig, step, view, attempt)
-        if result["changed"]:
+        # Ruling A79: what the click replaces or drops is kept for its Undo (``garment_use_undo``).
+        from app.core import garment_use_undo
+        try:
+            target = gs.garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
+            gate = gs.read_record(target.with_suffix(".json")).get("gate") if target.is_file() else None
+            garment_use_undo.snapshot(character_name, item_id, fsig, step, view, attempt,
+                                      passing=isinstance(gate, dict) and gate.get("ok") is True)
+            result = garment_images.use_attempt(character_name, item_id, fsig, step, view, attempt)
+        except BaseException:
+            garment_use_undo.discard(character_name, item_id, fsig)
+            raise
+        if not result["changed"]:
+            garment_use_undo.discard(character_name, item_id, fsig)
+        else:
             _drop_mesh(character_name, item_id, fsig)
             order = image_steps(kind)
             due = set(order[order.index(step):]) | {"mesh", "fit"}
@@ -2910,10 +2923,51 @@ def use_attempt(character_name: str, item_id: str, step: str, view: str, attempt
             # Ruling A69: and the last Build's failure of the piece at those steps (the Figure tab's row).
             from app.core import figure_build
             figure_build.answer_piece_failure(character_name, item_id, due)
+            garment_use_undo.commit(character_name, item_id, fsig)
     finally:
         lock.release()
     estimate = run_estimate(character_name, item_id, profile=profile)
     return {"item_id": item_id, "step": step, "view": view, "attempt": attempt, **result,
+            "follow_up": {k: estimate.get(k) for k in ("steps", "hub_jobs", "note")}}
+
+
+def use_undo_state(character_name: str, item_id: str, *,
+                   profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Ruling A79: what Undo of the piece's last "Use this" would take back (``garment_use_undo.state``, the worn
+    state's group) — None without one."""
+    from app.core import garment_use_undo
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    ctx = _view_context(character_name, item_id, profile, None)
+    if ctx is None:
+        return None
+    return garment_use_undo.state(character_name, item_id, ctx["fsig"])
+
+
+def undo_use(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Ruling A79: Undo of the piece's last "Use this" — the images, the mesh, the kept mesh attempts and the
+    recorded refusal as they were before the click (``garment_use_undo.undo``); no job. Under the item's run lock
+    like the click (``UseBusy`` while a run holds it). ``{item_id, step, view, attempt, restored, removed,
+    follow_up}`` — ``follow_up`` the chain's estimate now. ``garment_use_undo.UndoUnavailable`` when there is
+    nothing to undo or the image was replaced since; ValueError for a piece without image steps."""
+    from app.core import garment_store as gs
+    from app.core import garment_use_undo
+    from app.models.character import get_character_profile
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    ctx = _view_context(character_name, item_id, profile, None)
+    if ctx is None:
+        raise ValueError("This piece has no image steps to take an attempt from")
+    lock = gs.run_item_lock(character_name, item_id)
+    if not lock.acquire(blocking=False):
+        raise UseBusy("A garment run of this piece is in progress — undo after it")
+    try:
+        result = garment_use_undo.undo(character_name, item_id, ctx["fsig"])
+    finally:
+        lock.release()
+    estimate = run_estimate(character_name, item_id, profile=profile)
+    return {"item_id": item_id, **result,
             "follow_up": {k: estimate.get(k) for k in ("steps", "hub_jobs", "note")}}
 
 

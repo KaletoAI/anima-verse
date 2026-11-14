@@ -330,7 +330,12 @@ def scan(character_name: str) -> Tuple[List[Node], List[Path]]:
                         by_lsig.setdefault(p.stem[len(f"{item_id}_{fsig}_"):], []).append(p)
                     else:
                         plain.append(p)
-                nodes.append(Node(gkey, "garment", "garments", plain,
+                # Ruling A79: the group's "Use this" snapshot (its Undo) goes with the group.
+                from app.core import garment_use_undo
+                undo = garment_use_undo.undo_dir(character_name, item_id, fsig)
+                undo_dirs = [d for d in (undo, undo.with_name(f"{undo.name}.pending")) if d.is_dir()]
+                plain += [f for d in undo_dirs for f in sorted(d.rglob("*")) if f.is_file()]
+                nodes.append(Node(gkey, "garment", "garments", plain, dirs=undo_dirs,
                                   parents={"item_id": item_id, "fsig": fsig}))
                 for lsig, lfiles in sorted(by_lsig.items()):
                     inner: List[str] = []

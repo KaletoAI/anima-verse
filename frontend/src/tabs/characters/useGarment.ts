@@ -9,6 +9,7 @@
  * down), stopped when nothing runs, on unmount and when the URL changes
  * (another character or item; null = nothing to load).
  */
+import type { UseUndoState } from './refusedAttemptsModel'
 import type { FitSettingsInfo } from './fitSettingsModel'
 import type { AllowanceView } from './fitWiden'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -786,6 +787,8 @@ export interface GarmentItemInfo {
   view_runs?: ViewRunPlans | null
   /** "Use this" on each stored attempt (`garments.use_plans`, Ruling A37); null without per-view runs. */
   use_runs?: AttemptUsePlans | null
+  /** Ruling A79: what Undo of the last "Use this" takes back (`garments.use_undo_state`); null without one. */
+  use_undo?: UseUndoState | null
 }
 
 /** A step runs or the item waits in the character's garment queue

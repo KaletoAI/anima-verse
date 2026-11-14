@@ -51,6 +51,9 @@
  *
  * Ruling A37: "Use this" under every stored attempt of the clothing grid — POST
  * …/garments/{item}/images/{step}/{view}/attempts/{n}/use (0 jobs; a refused attempt becomes "Accepted by you").
+ * Ruling A79: above the grid, "Refused images" (GarmentRefusedAttempts) — every view whose attempts were all refused,
+ * each attempt small and enlargeable with its reasons in plain words and "Use this attempt" with its cost; and the
+ * Undo of the last "Use this" (POST …/garments/{item}/images/undo-use, 0 jobs).
  *
  * Above the preview of clothing and footwear, the body switch (FitBodySwitch, Ruling A31; Ruling A67: the base body
  * and the current body only, opened on the current body): the selected body's model (GET
@@ -67,6 +70,7 @@ import { useToast } from '../../lib/Toast'
 import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
 import { GarmentStepGrid } from './GarmentStepGrid'
+import { GarmentRefusedAttempts } from './GarmentRefusedAttempts'
 import type { ImageStepSpec } from './GarmentSteps'
 import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyText, pieceViewDueText } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
@@ -658,6 +662,24 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     }
     startPoll(0)
   }
+  /** Ruling A79, Undo of the last "Use this": the images, the mesh and the refusal of before come back — 0 jobs;
+   *  the toast names what is due now. */
+  const onUndoUse = async () => {
+    if (using) return
+    setUsing(true)
+    try {
+      const d = await apiPost<{ follow_up: { hub_jobs: number | null; note: string } }>(
+        `/characters/${enc}/garments/${encodeURIComponent(itemId)}/images/undo-use`, {})
+      const due = d.follow_up.hub_jobs == null ? t('cost unknown')
+        : t('Now due: {note}').replace('{note}', d.follow_up.note)
+      toast(`${t('Undone')} · ${due}`, 'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setUsing(false)
+    }
+    startPoll(0)
+  }
   /** Ruling A58, "Use this mesh": a kept mesh becomes the piece's mesh and its fit starts on the CPU — 0 hub jobs; also
    *  while a mesh job runs (its result then stays a kept mesh). */
   const onMeshUse = async (slot: number) => {
@@ -846,6 +868,10 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             </div>
           ) : null}
           <RefitNotice garment={garment} feedback={feedback} busy={busy} onRun={onRun} />
+          {/* Ruling A79: the refused views with their attempts, "Use this attempt" and the Undo of the last one. */}
+          <GarmentRefusedAttempts garment={garment} useRuns={info.use_runs} useUndo={info.use_undo}
+            busy={busy || using || running} onUse={(step, view, attempt) => { void onUse(step, view, attempt) }}
+            onUndo={() => { void onUndoUse() }} />
           <GarmentStepGrid
             garment={garment}
             imageSteps={IMAGE_STEPS}

@@ -283,7 +283,11 @@ def occupied_zones(slots: Iterable[str]) -> Tuple[str, ...]:
 # Ghost gate version 7 (Ruling A46, 2026-11-14): a part the ghost ADDS beyond
 # the worn piece is refused by how far it REACHES, not by its area — the block
 # "Added parts" below ``CLOTH_FAR``.
-GHOST_GATE_VERSION = 7
+# Ghost gate version 8 (Ruling A79, 2026-11-15): the worn hem leaves out only
+# the worn pixels that are SKIN in the same light (``worn_skin``), not a piece
+# in shadow — the block "Hem and centre gap" below ``HEM_AGREE``; the attempts
+# refused under 7 are judged again by the chain before it renders.
+GHOST_GATE_VERSION = 8
 CLOTH_TOP_DY_WARN = 0.0055  # |top edge offset| / Hb from which it is recorded as a warning
 CLOTH_CENTRE_DX_WARN = 0.007  # |centre offset| / Hb from which it is recorded as a warning
 CLOTH_W_RATIO_MIN = 0.80
@@ -421,6 +425,37 @@ HEM_AGREE = 0.02            # |hem front − hem back| and |ghost hem − worn h
 # GAP_MIN and the other does not — 7x the highest closed one, 0.43 of the
 # lowest open one. One open piece only, black: a ghost whose inside is
 # lighter than GAP_DARK of its panels reads closed.
+#
+# Skin in the worn hem (Ruling A79, 2026-11-15). Ylva's laced linen blouse
+# (item_laced_linen_blouse, fsig a4166095ab54): both ghost fronts were the
+# blouse as worn — attempt 1 the same length, peplum and laces — and both were
+# refused "ends at another height", ghost 0.46146 / 0.46568 against a worn
+# hem of 0.32788. The worn hem was wrong: of the 18826 band pixels of the
+# worn region (centre column 222, ± 38 px; y0 49, Hb 947, 437 x 1024,
+# BiRefNet masks as cached) the plain test "within SKIN_DRGB of the skin
+# sample" (164, 110, 82) took 1878 out — the cream in the shadow of the
+# corset's lacing and the peplum folds (median (134, 118, 99), mean |ΔRGB|
+# 21 to the skin), the same pixels Ruling A32 found in the ghost backs. They
+# lie as thin rows across the lacing, so every column fell apart into runs
+# of a few dozen rows and the longest of most ended under the bust (median
+# row 359.5, 0.32788); without any exclusion the hem is 0.46885. The worn
+# region is now measured without its pixels that are skin by the test
+# ``skin_left`` uses (``worn_skin``: within SKIN_DRGB of the skin AND at
+# least as near the skin as the piece's own colour in the pixel's light;
+# the flagged cream is 5.1 from the piece, 19.0 from the skin): 412 band
+# pixels stay out (1346 of the region's 13717), and the worn hem is
+# 0.46146 — attempt 1 |Δ| 0.0, attempt 2 0.0042 (its turned-down
+# collar is a defect no gate measures). Lit skin stays skin: the re-shaded
+# crotch below Kira's cutaway blazer is warm skin beside a black piece, so it
+# stays out as before. Re-measured on copies of every stored ghost of the
+# world (2026-11-15, 64 images with cached masks): the worn hem moves only
+# where the piece is light — Ylva's blouse front (0.32788 -> 0.46146), Rosi's
+# 2acdd59b293a front (0.50234 -> 0.62792, its accepted ghost 0.61702: |Δ|
+# 0.1147 -> 0.0109), Kira's bodysuit 2860e5a646c0 front (0.46004 -> 0.48992,
+# ghost 0.4788) and Glut's slip (0.0048 / 0.007 -> 0.0069 / 0.0007); no
+# accepted ghost is refused by it, and the truly longer ones stay refused
+# (Kai's jacket back attempt 1 0.0758, Kira's bodysuit back attempt 1 0.0557,
+# Lirien's c7760b7c back attempts 0.2976 / 0.054).
 HEM_BAND = 0.04             # ± Hb around the figure's centre column whose garment rows give the hem
 HEM_BAND_MIN = 0.5          # share of the band's columns that must be kept for a measured hem
 HEM_RUN_MIN = 0.25          # a column's run counts from this share of the mask's own height
@@ -825,6 +860,24 @@ def skin_pixels(ghost_rgb, ghost_mask, skin, piece, height: int) -> np.ndarray:
     return near & core
 
 
+def worn_skin(worn_rgb, region, skin) -> Optional[np.ndarray]:
+    """The worn view's pixels the worn hem leaves out (Ruling A79, the block
+    "Hem and centre gap"): within ``SKIN_DRGB`` of ``skin`` and at least as
+    near the skin as the piece's own colour (``piece_colour`` of ``region``)
+    in the pixel's own light (``shade_distance``; a tie is skin, as in
+    ``skin_pixels``) — a belly or crotch the edit re-shaded, never the piece
+    in shadow. Without a piece colour the first test alone. None without a
+    worn image or a skin sample."""
+    if worn_rgb is None or skin is None:
+        return None
+    rgb = np.asarray(worn_rgb, dtype=np.float32)[..., :3]
+    near = np.abs(rgb - np.asarray(skin, dtype=np.float32)).mean(2) <= SKIN_DRGB
+    piece = piece_colour(worn_rgb, region)
+    if piece is not None:
+        near &= shade_distance(rgb, skin) <= shade_distance(rgb, piece)
+    return near
+
+
 def skin_colour(base_rgb, base_mask) -> Optional[np.ndarray]:
     """The skin of the base view: the median RGB of the base figure's pixels
     on rows y0 + 0.60·Hb .. y0 + 0.66·Hb (``SKIN_SAMPLE_ROWS``, the bare
@@ -1071,9 +1124,9 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     measured (ruling 13d); ``skin_left`` still counts there (feet left in the
     image), ``h_ratio`` / ``hem_t`` are reported.
     Gate version 4 (Ruling A17, the block "Hem and centre gap"): ``hem_c`` of
-    the ghost and ``worn_hem_c`` of the region without its skin-coloured
-    pixels (``worn_rgb`` within ``SKIN_DRGB`` of the skin sample;
-    ``centre_hem``) — refused when they differ by more than ``HEM_AGREE``
+    the ghost and ``worn_hem_c`` of the region without its skin pixels
+    (``worn_skin``: since gate version 8, Ruling A79, skin in the same light,
+    never the piece in shadow; ``centre_hem``) — refused when they differ by more than ``HEM_AGREE``
     (not for ``length_free``; ``hem_refused``); a ``closable`` piece's FRONT
     with ``worn_rgb`` records ``centre_gap`` / ``worn_centre_gap``
     (``centre_gap`` on ``gap_rows``) and is refused when exactly one of
@@ -1168,10 +1221,7 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     # the ghost as it is: its openings are NOT left out (``body_openings``
     # counts the hips between two cuffs as one, and the bulge below Kai's
     # jacket back lay exactly there).
-    worn_skin = None
-    if worn_rgb is not None and skin is not None:
-        worn_skin = np.abs(np.asarray(worn_rgb, dtype=np.float32)[..., :3] - skin).mean(2) <= SKIN_DRGB
-    hem_c, worn_hem_c = centre_hem(ghost, m0), centre_hem(region, m0, exclude=worn_skin)
+    hem_c, worn_hem_c = centre_hem(ghost, m0), centre_hem(region, m0, exclude=worn_skin(worn_rgb, region, skin))
     hem_refused = (not length_free and hem_c is not None and worn_hem_c is not None
                    and abs(hem_c - worn_hem_c) > HEM_AGREE)
     look_refused = False

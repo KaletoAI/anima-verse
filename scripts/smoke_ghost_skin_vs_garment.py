@@ -211,10 +211,10 @@ def regate_part():
     """[5] (module docstring)."""
     from app.core.garment_store import garment_path, read_record, write_record
     print("[5] re-judged before any render")
-    check("GATE_VERSIONS ghost", (garment_clothing.GATE_VERSIONS.get("ghost"), gg.GHOST_GATE_VERSION), (7, 7))
-    check("version 5 stale, 7 not (A46)",
+    check("GATE_VERSIONS ghost", (garment_clothing.GATE_VERSIONS.get("ghost"), gg.GHOST_GATE_VERSION), (8, 8))
+    check("version 5 stale, 8 not (A79)",
           (gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 5}),
-           gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 7})), (True, False))
+           gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 8})), (True, False))
     who, item, fsig = "Demo", "item_demo_blouse", "a1b2c3d4e5f6"
     stored = {1: "2", 2: "1b"}
     for n, case in stored.items():
@@ -258,7 +258,7 @@ def regate_part():
     t1 = read_record(garment_path(who, item, fsig, "image", step="ghost", view="back", attempt=1)
                      .with_suffix(".json")).get("gate") or {}
     check("attempt 1 judged again, still refused for skin",
-          (t1.get("ok"), t1.get("regated_from"), t1.get("gate_version"), bool(skin_reason(t1))), (False, 5, 7, True))
+          (t1.get("ok"), t1.get("regated_from"), t1.get("gate_version"), bool(skin_reason(t1))), (False, 5, 8, True))
     t2 = read_record(garment_path(who, item, fsig, "image", step="ghost", view="back", attempt=2)
                      .with_suffix(".json")).get("gate") or {}
     check("attempt 2 judged again, accepted", (t2.get("ok"), t2.get("regated_from"), t2.get("skin_left")),

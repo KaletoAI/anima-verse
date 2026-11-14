@@ -28,7 +28,8 @@
  *     and the CPU assembly only, hub steps stay due for the Build — Ruling FR-I2; 409 while a Build runs),
  *     Regenerate mesh (POST …/garments/{item}/run {step: "mesh", force, chain}, only when the refusal points at
  *     the piece itself — Ruling A23), Details (an own-mesh piece's chain dialog, GarmentPieceDialog — a WORN
- *     piece's only entry, opened without its "Run all", Ruling 10a); a closable piece has Closed / Open
+ *     piece's only entry, opened without its "Run all", Ruling 10a; "Details — use a refused image" when every
+ *     attempt of an image view was refused, Ruling A79: the dialog's "Refused images" takes one by hand); a closable piece has Closed / Open
  *     (PieceStateToggle, saved at once — Task 11b) with what the switch starts and costs beside it, and an
  *     own-mesh closable piece the single action that builds its OTHER state's mesh ("Build the open mesh — 6
  *     hub jobs", POST …/garments/{item}/run {state}; the Build only ever makes the worn state's);
@@ -70,6 +71,7 @@ import { BuildProblemView } from './BuildProblem'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
 import { LIGHT_COLOR, PANEL } from './stepStyle'
 import { useFigure } from './useFigure'
+import { imageRefusal } from './refusedAttemptsModel'
 import {
   BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS,
   NO_BASE_BODY_NOTE, REFIT_LABEL, autoBuildNote, baseBodyLine, bodyRows, buildButton, changeLine, hairState,
@@ -409,8 +411,13 @@ function WornRows({ data, character, busy, onRetry, onOpenWardrobe, onOpenHairst
                 <button type="button" className="ga-btn ga-btn-sm" aria-haspopup="dialog"
                   title={row.state === 'fit_refused'
                     ? t('Details shows the refused fit on each body, marked where it fails, and can accept it.')
-                    : t('The piece’s mesh steps, each redone on its own, with their cost')}
-                  onClick={() => onOpenPiece(row.item_id, row.name)}>{t('Details')}</button>
+                    : row.state === 'failed' && imageRefusal(row.failure)
+                      ? t('Details shows each refused image with its reasons; “Use this attempt” takes one by hand (no hub job, Undo puts it back).')
+                      : t('The piece’s mesh steps, each redone on its own, with their cost')}
+                  onClick={() => onOpenPiece(row.item_id, row.name)}>
+                  {row.state === 'failed' && imageRefusal(row.failure) ? t('Details — use a refused image')
+                    : t('Details')}
+                </button>
               ) : null}
               {row.state === 'failed' ? retry : null}
               {row.state === 'fit_refused' ? (
