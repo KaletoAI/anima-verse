@@ -72,7 +72,7 @@ mean |p - (mean(p) / mean(c)) x c|.
     version 5): [1] 0.05, [1b] 0.05, [3] 0.00545 refused "skin left"; [2]
     0.025 refused there too.
 [5] Re-judged before any render: GATE_VERSIONS["ghost"] = GHOST_GATE_VERSION
-    = 6, a version 5 record is stale, a version 6 one is not.
+    = 7 since Ruling A46 (6 at A32), a version 5 record is stale, a version 7 one is not.
     ``_regate_stored`` on two stored attempts refused under 5 (attempt 1 =
     GHOST_2, attempt 2 = GHOST_1B): attempt 1 is gated again and still
     refused (regated_from 5), attempt 2 passes and is published as the
@@ -211,10 +211,10 @@ def regate_part():
     """[5] (module docstring)."""
     from app.core.garment_store import garment_path, read_record, write_record
     print("[5] re-judged before any render")
-    check("GATE_VERSIONS ghost", (garment_clothing.GATE_VERSIONS.get("ghost"), gg.GHOST_GATE_VERSION), (6, 6))
-    check("version 5 stale, 6 not",
+    check("GATE_VERSIONS ghost", (garment_clothing.GATE_VERSIONS.get("ghost"), gg.GHOST_GATE_VERSION), (7, 7))
+    check("version 5 stale, 7 not (A46)",
           (gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 5}),
-           gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 6})), (True, False))
+           gi._stale_gate(garment_clothing, "ghost", {"ok": False, "gate_version": 7})), (True, False))
     who, item, fsig = "Demo", "item_demo_blouse", "a1b2c3d4e5f6"
     stored = {1: "2", 2: "1b"}
     for n, case in stored.items():
@@ -258,7 +258,7 @@ def regate_part():
     t1 = read_record(garment_path(who, item, fsig, "image", step="ghost", view="back", attempt=1)
                      .with_suffix(".json")).get("gate") or {}
     check("attempt 1 judged again, still refused for skin",
-          (t1.get("ok"), t1.get("regated_from"), t1.get("gate_version"), bool(skin_reason(t1))), (False, 5, 6, True))
+          (t1.get("ok"), t1.get("regated_from"), t1.get("gate_version"), bool(skin_reason(t1))), (False, 5, 7, True))
     t2 = read_record(garment_path(who, item, fsig, "image", step="ghost", view="back", attempt=2)
                      .with_suffix(".json")).get("gate") or {}
     check("attempt 2 judged again, accepted", (t2.get("ok"), t2.get("regated_from"), t2.get("skin_left")),

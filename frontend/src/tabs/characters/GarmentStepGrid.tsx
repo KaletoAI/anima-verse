@@ -24,6 +24,10 @@
  * estimate on the button; fit and assembly on the CPU). A refused attempt
  * taken this way shows "Accepted by you" on the view until an image it was
  * made from changes ("Acceptance voided").
+ * Ruling A46: each piece-only view has "Piece-only views from" — Auto, Generated (the image edit) or From the worn view (the
+ * worn view minus the body, no hub job). The choice saves on its own and runs nothing; every option names what
+ * it makes due (the view, its cut-out, the mesh, the fit — hub jobs, the fit on the CPU) before it is picked,
+ * the cell's light says where the view comes from and why, and what is due now stands under the picker.
  * The hair row keeps its own layout (GarmentSteps).
  */
 import { Fragment } from 'react'
@@ -33,14 +37,18 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { RunBadge, RunButton } from './GarmentSteps'
 import type { ImageStepSpec } from './GarmentSteps'
-import { MESH_CHIPS, chipResults, num, queueText, shownRecord, upscaleText } from './garmentStyle'
+import {
+  MESH_CHIPS, PIECE_VIEW_FROM, PIECE_VIEW_MADE, PIECE_VIEW_SOURCE, chipResults, num, pieceViewDueText,
+  pieceViewReason, queueText, shownRecord, upscaleText,
+} from './garmentStyle'
 import type { ChipSpec, GarmentLimits, GarmentRunBody } from './garmentStyle'
 import { MeshJobFetch } from './MeshJobFetch'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type {
   AttemptUsePlan, AttemptUsePlans, GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit,
-  GateRecord, RunFeedback, ViewNeed, ViewRunPlan, ViewRunPlans,
+  GateRecord, PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
+  ViewRunPlans,
 } from './useGarment'
 
 /** Thumbnail height of an image cell (px). */
@@ -212,7 +220,7 @@ export function StepLabel({ garment, step, label, help }: {
 /** What each step makes and what its Regenerate costs (tooltips). */
 const STEP_HELP: Record<string, string> = {
   worn: 'Worn views: the base body wearing this piece — the front an image edit of the base front, the back a draft composited onto the base back on the CPU (no second render; when nothing of the piece shows from behind, the back stays the base back). Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — that view only; a new front drafts the back again from it in the same run. The later images and the mesh are dropped, Run all or the Build makes them again.',
-  ghost: 'Piece-only views: the piece alone, the body removed, aligned to the worn view. The front takes its length from the accepted back, so the back comes first. Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — that view only; the later images of the view and the mesh are dropped, Run all or the Build makes them again.',
+  ghost: 'Piece-only views: the piece alone, the body removed, aligned to the worn view. The front takes its length from the accepted back, so the back comes first. Each view comes from the image edit (Generated) or from the worn view minus the base body (no hub job) — “Piece-only views from” under the view; Auto keeps the edit for a loose piece and takes the worn view when the edit is refused or adds a part the worn piece does not have. Regenerate: one hub image job for a generated view (a second attempt when the gate refuses it), none from the worn view — that view only; the later images of the view and the mesh are dropped, Run all or the Build makes them again.',
   cutout: 'Cut-outs: the piece-only views squared and upscaled as the mesh input. Regenerate: local crop plus a routed upscale job — this step only; the mesh is dropped, Run all or the Build makes it and the fit again.',
   mesh: 'Mesh: a 3D mesh built from both cut-outs and decimated. Regenerate: one hub mesh job (a second attempt when the gate refuses it) — this step only; the fit then reads outdated and stays in use until Re-fit, Run all or the Build fits it again.',
   fit: 'Fit: the mesh fitted onto the rigged body it is worn on (the plain body, or a body shape). Re-fit runs locally — no hub job.',
@@ -223,6 +231,60 @@ const NEED_TEXT: Record<ViewNeed, string> = {
   source: 'This image is made from that one.',
   draft: 'The back is drafted from the front.',
   pair: 'The front takes its length from the back.',
+}
+
+function dueJobs(due: PieceViewDue[]): number {
+  return due.reduce((n, d) => n + d.jobs, 0)
+}
+
+/** "Piece-only views from" of one piece-only view (Ruling A46): the picker (each option with what it makes due), the plain
+ *  reason under it and what is due now. Saving runs nothing. */
+function PieceViewSourcePicker({ info, label, disabled, onSet }: {
+  info: PieceViewInfo
+  label: string
+  disabled: boolean
+  onSet: (choice: PieceViewChoice) => void
+}) {
+  const { t } = useI18n()
+  const options = info.options
+  if (!options) return null
+  const text = (choice: PieceViewChoice) => {
+    const o = options[choice]
+    const name = choice === 'auto' ? `${t('Auto')} (→ ${t(PIECE_VIEW_SOURCE[o.source])})` : t(PIECE_VIEW_SOURCE[choice])
+    if (choice === info.choice || !o.due.length) return name
+    return `${name} · ${t('then {n}').replace('{n}', upToText(dueJobs(o.due), t))} + ${t('fit')}`
+  }
+  const reason = info.why ? pieceViewReason(info as PieceViewOption, t) : ''
+  const due = info.due || []
+  const title = [
+    `${t('Piece-only views from')} · ${label}`,
+    reason,
+    ...(['auto', 'generated', 'worn'] as PieceViewChoice[]).map((c) => {
+      const o = options[c]
+      return `${text(c)}${o.due.length ? ` — ${t('makes due')}: ${pieceViewDueText(o.due, t)}` : ` — ${t('nothing becomes due')}`}`
+    }),
+    t('Saving runs nothing: Run all or the Build makes what is due.'),
+  ].filter(Boolean).join('\n')
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <label style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.75em' }}
+        title={title}>
+        <span>{t('Piece-only views from')}</span>
+        <select className="ga-input" style={{ fontSize: '0.95em', padding: '0 2px', maxWidth: '100%' }}
+          value={info.choice} disabled={disabled} aria-label={`${t('Piece-only views from')} · ${label}`}
+          onChange={(e) => onSet(e.target.value as PieceViewChoice)}>
+          {(['auto', 'generated', 'worn'] as PieceViewChoice[]).map((c) => (
+            <option key={c} value={c}>{text(c)}</option>
+          ))}
+        </select>
+      </label>
+      {due.length ? (
+        <div className="ga-hint" style={{ fontSize: '0.7em', color: 'var(--warning, #d29922)' }} title={reason}>
+          {t('Now due')}: {pieceViewDueText(due, t)}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 /** "1 hub job" / "3 hub jobs" / "no hub job". */
@@ -236,7 +298,7 @@ function upToText(n: number, t: (s: string) => string): string {
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
-  viewRuns = null, useRuns = null, onUse, meshFetchUrl = null, onMeshFetched }: {
+  viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -251,6 +313,9 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   useRuns?: AttemptUsePlans | null
   /** "Use this" clicked on `attempt` of `view` of `step` (0 jobs; the caller posts it and reloads). */
   onUse?: (step: string, view: GarmentView, attempt: number) => void
+  /** Ruling A46: "Piece-only views from" of a view changed (saves only; the caller posts it and reloads). Absent =
+   *  no picker. */
+  onPieceView?: (view: GarmentView, choice: PieceViewChoice) => void
   /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
   meshFetchUrl?: string | null
   /** The mesh record changed through a fetched job: reload the panel. */
@@ -304,9 +369,18 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
     const slot = runSlot({ step, view })
     const ring = mark === 'redo' ? 'var(--warning, #d29922)' : mark || feedback?.pending === slot
       ? 'var(--accent, #6aa9ff)' : null
+    // Ruling A46: where a piece-only view comes from, and why — in the cell's light.
+    const pieceView = step === 'ghost' && !img?.skipped ? garment?.piece_views?.[view] : undefined
+    const sourceLines = pieceView?.why ? [
+      pieceView.made_from ? t(PIECE_VIEW_MADE[pieceView.made_from]) : '',
+      pieceView.made_from && pieceView.source && pieceView.source !== pieceView.made_from
+        ? t('Due: made again from {source}').replace('{source}', t(PIECE_VIEW_FROM[pieceView.source])) : '',
+      pieceViewReason(pieceView as PieceViewOption, t),
+    ].filter(Boolean) : []
     const stateLines = [
       label,
       img?.url ? (img.accepted ? t('Accepted') : t('Not accepted')) : img?.skipped ? t('Not made: nothing of the piece shows from behind') : t('No render yet'),
+      ...sourceLines,
       img?.empty ? t('Nothing of the piece shows from behind — the base back unchanged') : '',
       img?.created_at ? formatDateTime(img.created_at, clockSettings()) : '',
       step === 'cutout' && img?.url
@@ -368,6 +442,10 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
             />
             {cost ? <span className="ga-hint" title={costTitle}>{cost}</span> : null}
           </div>
+          {pieceView?.options && onPieceView ? (
+            <PieceViewSourcePicker info={pieceView} label={label} disabled={busy || !garment}
+              onSet={(choice) => onPieceView(view, choice)} />
+          ) : null}
           {needs ? (
             <>
               <div className="ga-hint" title={needsTitle}>{needs}</div>

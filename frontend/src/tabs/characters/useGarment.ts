@@ -211,6 +211,32 @@ export interface GarmentRefit {
   created_at: string | null
 }
 
+/** Ruling A46, "Piece-only views from": the setting of one view (server `garment_from_worn`). */
+export type PieceViewChoice = 'auto' | 'generated' | 'worn'
+/** What a piece-only view is made from: the image edit or the worn view minus the body. */
+export type PieceViewSource = 'generated' | 'worn'
+/** One step a source change makes due (`garments._piece_view_due`): first attempts; the fit is CPU work. */
+export interface PieceViewDue { step: 'ghost' | 'cutout' | 'mesh' | 'fit'; view?: GarmentView; jobs: number }
+/** Where a choice makes the view come from, why (`why` keys `garment_from_worn.REASONS`, `detail` a gate
+ *  reason or a reach, shown as it is) and what it makes due. */
+export interface PieceViewOption {
+  source: PieceViewSource
+  why: string
+  detail: string
+  reason: string
+  due: PieceViewDue[]
+}
+/** One view's "Piece-only views from" (`garments.piece_views_info`): the setting, its effect now, the source of
+ *  the accepted image (null without one) and every choice's effect before it is saved. */
+export interface PieceViewInfo extends Partial<PieceViewOption> {
+  choice: PieceViewChoice
+  auto?: boolean
+  made_from?: PieceViewSource | null
+  options?: Record<PieceViewChoice, PieceViewOption>
+  /** The view is not made (an empty drafted back). */
+  skipped?: boolean
+}
+
 export interface GarmentInfo {
   item_id: string
   kind: string
@@ -253,6 +279,8 @@ export interface GarmentInfo {
   refit?: GarmentRefit | null
   /** Current fsig fit on screen, or an older one and why (server). */
   preview_freshness?: Freshness | null
+  /** Ruling A46: where each piece-only view comes from; null/absent for a piece without the choice. */
+  piece_views?: Partial<Record<GarmentView, PieceViewInfo>> | null
 }
 
 /** The run state every garment panel carries (clothing, hair and footwear alike): what the run

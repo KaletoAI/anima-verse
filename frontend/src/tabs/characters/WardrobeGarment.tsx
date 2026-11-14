@@ -63,7 +63,7 @@ import { useClockSettings } from '../../lib/clockFormat'
 import { GarmentFailure, GateChips, RefitNotice, RunButton, RunStatusLine } from './GarmentSteps'
 import { GarmentStepGrid } from './GarmentStepGrid'
 import type { ImageStepSpec } from './GarmentSteps'
-import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyText } from './garmentStyle'
+import { FOOTWEAR_STEP_LABELS, ROW, WARN_STYLE, footwearRunPlan, meshNotReadyText, pieceViewDueText } from './garmentStyle'
 import type { ChipSpec, GarmentRunBody } from './garmentStyle'
 import { FootwearSteps } from './FootwearSteps'
 import { Model3DViewer } from './Model3DViewer'
@@ -72,7 +72,8 @@ import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
 import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
 import type {
-  GarmentItemInfo, GarmentView, ItemWearers, PieceMaterial, PieceMaterialInfo, PieceStatus,
+  GarmentItemInfo, GarmentView, ItemWearers, PieceMaterial, PieceMaterialInfo, PieceStatus, PieceViewChoice,
+  PieceViewInfo,
 } from './useGarment'
 import {
   AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES, PIECE_STATE_LABELS,
@@ -151,6 +152,8 @@ const GHOST_CHIPS: ChipSpec[] = [
   { key: 'w_ratio', label: 'Width ratio', scale: 1, unit: '', digits: 3 },
   { key: 'skin_left', label: 'Skin left', scale: 100, unit: '%', digits: 2 },
   { key: 'outside', label: 'Outside the worn piece', scale: 100, unit: '%', digits: 1 },
+  // Ruling A46: how far a part the worn piece does not have reaches past it (a fraction of the figure height).
+  { key: 'added_reach', label: 'Added part reach', scale: 100, unit: '%', digits: 1 },
   { key: 'neck_fill', label: 'Neckline filled', scale: 100, unit: '%', digits: 0 },
   // The correction applied before the gate (garment_images._register); the offsets
   // above are its residual. Fractions of the figure height / a factor.
@@ -600,6 +603,24 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     }
     startPoll(0)
   }
+  /** Ruling A46, "Piece-only views from": SAVED on its own — nothing runs; the toast names what is due now (the
+   *  view, its cut-out, the mesh and the fit; Run all or the Build makes them). */
+  const onPieceView = async (view: GarmentView, choice: PieceViewChoice) => {
+    if (using) return
+    setUsing(true)
+    try {
+      const d = await apiPost<{ piece_views: Partial<Record<GarmentView, PieceViewInfo>> | null }>(
+        `/characters/${enc}/garments/${encodeURIComponent(itemId)}/piece-views`, { view, choice })
+      const due = d.piece_views?.[view]?.due || []
+      toast(`${t('Saved')} · ${due.length ? `${t('Now due')}: ${pieceViewDueText(due, t)}` : t('nothing becomes due')}`,
+        'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setUsing(false)
+    }
+    startPoll(0)
+  }
   // "Fetch finished job…" on the mesh row: the shoe source's own route for footwear.
   const meshFetchUrl = info?.pipeline && itemId
     ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}/${footwear ? 'footwear/mesh' : 'mesh'}/fetch` : null
@@ -723,6 +744,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             viewRuns={info.view_runs}
             useRuns={info.use_runs}
             onUse={(step, view, attempt) => { void onUse(step, view, attempt) }}
+            onPieceView={(view, choice) => { void onPieceView(view, choice) }}
             meshFetchUrl={meshFetchUrl}
             onMeshFetched={onMeshFetched}
           />

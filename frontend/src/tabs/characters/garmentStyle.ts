@@ -5,7 +5,8 @@
  */
 import type { CSSProperties } from 'react'
 import type {
-  FootwearInfo, GarmentImageInfo, GarmentRunState, GateLimit, GateRecord, RecordLimits, RunFeedback,
+  FootwearInfo, GarmentImageInfo, GarmentRunState, GateLimit, GateRecord, PieceViewDue, PieceViewOption, RecordLimits,
+  RunFeedback,
 } from './useGarment'
 
 export const TILE_HEIGHT = 200
@@ -261,4 +262,45 @@ export function recordLimits(raw: RecordLimits | null | undefined): Record<strin
     out[key] = { op: pair[0] === 'min' ? 'ge' : 'le', value: pair[1] }
   }
   return Object.keys(out).length ? out : undefined
+}
+
+/** Ruling A46: the reasons of the piece-only view's source (`garment_from_worn.REASONS`, same keys and words). */
+const PIECE_VIEW_REASONS: Record<string, string> = {
+  set_generated: 'Generated: you chose the image edit (the body removed by the edit model)',
+  set_worn: 'From the worn view: you chose it (the worn view minus the body, no hub job)',
+  loose: 'Auto → Generated: a loose piece — the body hides parts of it in the worn view (the inside at the neck, sleeves or hem), only the edit draws them',
+  by_hand: 'Auto → Generated: you took this attempt with “Use this”',
+  added: 'Auto → From the worn view: the generated view adds a part the worn piece does not have',
+  refused: 'Auto → From the worn view: the generated view was refused',
+  passes: 'Auto → Generated: a close-fitting piece — the edit is used while it passes its gate; refused, the view is made from the worn view',
+}
+
+export const PIECE_VIEW_SOURCE: Record<string, string> = { generated: 'Generated', worn: 'From the worn view' }
+/** The light's line on the accepted image's source. */
+export const PIECE_VIEW_MADE: Record<string, string> = {
+  generated: 'Made by the image edit', worn: 'Made from the worn view minus the body',
+}
+export const PIECE_VIEW_FROM: Record<string, string> = {
+  generated: 'the image edit', worn: 'the worn view minus the body',
+}
+
+/** The reason of a source in the UI language; a reach (`added`) reads as a share of the figure height. */
+export function pieceViewReason(o: Pick<PieceViewOption, 'why' | 'detail' | 'reason'>,
+  t: (s: string) => string): string {
+  const base = PIECE_VIEW_REASONS[o.why]
+  if (!base) return o.reason
+  if (!o.detail) return t(base)
+  const reach = Number(o.detail)
+  return o.why === 'added' && Number.isFinite(reach)
+    ? `${t(base)} (${t('it reaches {pct} % of the figure height past it').replace('{pct}', (reach * 100).toFixed(1))})`
+    : `${t(base)}: ${o.detail}`
+}
+
+/** What a source change makes due, in words: "piece-only view: no hub job · cut-out: 1 hub job · …". */
+export function pieceViewDueText(due: PieceViewDue[], t: (s: string) => string): string {
+  return due.map((d) => {
+    const word = d.step === 'ghost' ? t('piece-only view') : d.step === 'cutout' ? t('cut-out')
+      : d.step === 'mesh' ? t('mesh') : t('fit')
+    return `${word}: ${d.step === 'fit' ? t('on the CPU') : (d.jobs === 0 ? t('no hub job') : d.jobs === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(d.jobs)))}`
+  }).join(' · ')
 }

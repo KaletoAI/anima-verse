@@ -709,9 +709,13 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
     Cached: an accepted final of this fsig is returned unless ``force``.
     ``base_body.MissingInput`` when the base view or the source step's
     accepted image is missing; ``GateRefused`` after ``ATTEMPTS`` failed
-    attempts (the attempt files and their gate records stay for the UI)."""
-    from app.core import base_body, expression_regen
-    from app.core.garment_store import garment_path, read_record, write_record
+    attempts (the attempt files and their gate records stay for the UI).
+
+    Ruling A46: the kind's ``FROM_WORN_STEP`` (clothing ``ghost``) is made from the worn view instead when
+    ``piece_source`` names it (``garment_from_worn``: no render), and under Auto on a close-fitting piece a
+    view whose generated attempts are all refused is made so in the same call."""
+    from app.core import base_body
+    from app.core.garment_store import garment_path, read_record
     from app.core.model_refs import find_ref_image, get_model_refs_dir
     from app.models.character import get_character_profile
 
@@ -752,6 +756,78 @@ def run_edit_step(character_name: str, item_id: str, fsig: str, step: str, view:
         source = garment_path(character_name, item_id, fsig, "image", step=source_step, view=view)
         if not _accepted(source):
             raise base_body.MissingInput(f"The {source_step} {view} image is missing — run that step first")
+    choice = piece_source(character_name, item_id, fsig, step, view)
+    if choice is not None and choice["source"] == "worn":
+        # Ruling A46: the piece-only view from the worn view minus the base view — no render.
+        return _from_worn(character_name, item_id, fsig, view, kind, base=base, refs_dir=refs_dir,
+                          choice=choice, pair_check=pair_check)
+    try:
+        return _render_edit_step(character_name, item_id, fsig, step, view, kind, profile=profile, base=base,
+                                 source=source, refs_dir=refs_dir, final=final, pair_check=pair_check,
+                                 prompt_hints=prompt_hints)
+    except GateRefused as e:
+        # Ruling A46: Auto on a close-fitting piece — a refused generated view is made from the worn view now.
+        after = piece_source(character_name, item_id, fsig, step, view) if choice is not None else None
+        if after is None or not after.get("auto") or after["source"] != "worn":
+            raise
+        logger.info("Garment %s %s %s: the generated view was refused — Auto makes it from the worn view",
+                    character_name, step, view)
+        try:
+            return _from_worn(character_name, item_id, fsig, view, kind, base=base, refs_dir=refs_dir,
+                              choice=after, pair_check=pair_check)
+        except GateRefused as worn:
+            raise GateRefused(step, view, [*e.records, *worn.records]) from e
+
+
+def piece_source(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Optional[Dict[str, Any]]:
+    """Ruling A46: what ``view`` of ``step`` is made from (``garment_from_worn.resolve``) when the kind can make
+    that step from the worn view (``FROM_WORN_STEP``); None for every other step."""
+    kind = _kind_module(item_id)
+    if getattr(kind, "FROM_WORN_STEP", None) != step:
+        return None
+    from app.core import garment_from_worn
+    return garment_from_worn.resolve(character_name, item_id, fsig, view)
+
+
+def source_due(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
+    """Ruling A46: the accepted image of ``view`` of ``step`` was made from another source than its setting
+    names now (``garment_from_worn.source_due``) — due, made again; False for a step without the choice."""
+    kind = _kind_module(item_id)
+    if getattr(kind, "FROM_WORN_STEP", None) != step:
+        return False
+    from app.core import garment_from_worn
+    return garment_from_worn.source_due(character_name, item_id, fsig, view)
+
+
+def _from_worn(character_name: str, item_id: str, fsig: str, view: str, kind, *, base: Path, refs_dir: Path,
+               choice: Dict[str, Any],
+               pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]]) -> Path:
+    """Ruling A46: make ``view`` of the kind's ``FROM_WORN_STEP`` from the worn view
+    (``garment_from_worn.make_view``), gated like a rendered attempt but never registered (it is in the worn
+    view's frame by construction)."""
+    from app.core import base_body, garment_from_worn
+    from app.core.garment_store import garment_path
+    step = kind.FROM_WORN_STEP
+    source = garment_path(character_name, item_id, fsig, "image", step=kind.EDIT_STEPS[step]["source"], view=view)
+    if not _accepted(source):
+        raise base_body.MissingInput(f"The worn {view} image is missing — run that step first")
+    base_size, gate_args, _position = _gate_inputs(kind, step, base, source, refs_dir, item_id)
+
+    def gate_record(path: Path) -> Dict[str, Any]:
+        return kind.gate(step, view, edit_rgb=_rgb(path, base_size), edit_mask=_mask(path, base_size), **gate_args)
+
+    return garment_from_worn.make_view(character_name, item_id, fsig, view, base=base, refs_dir=refs_dir,
+                                       choice=choice, gate_record=gate_record, pair_check=pair_check)
+
+
+def _render_edit_step(character_name: str, item_id: str, fsig: str, step: str, view: str, kind, *,
+                      profile: Dict[str, Any], base: Path, source: Path, refs_dir: Path, final: Path,
+                      pair_check: Optional[Callable[[Dict[str, Any]], Optional[str]]],
+                      prompt_hints: Optional[Dict[str, Any]]) -> Path:
+    """The rendered (generated) edit of ``view`` of ``step`` (``run_edit_step``): stored attempts judged again
+    first, then up to ``ATTEMPTS`` renders. ``GateRefused`` when every attempt is refused."""
+    from app.core import expression_regen
+    from app.core.garment_store import garment_path, read_record, write_record
     prompt, negative = kind.edit_prompt(character_name, step, view, profile=profile, item_id=item_id,
                                         **(prompt_hints or {}))
 
@@ -906,6 +982,8 @@ def regate_accepted(character_name: str, item_id: str, fsig: str, step: str, vie
         return None  # the closed state's back: re-gated by the closed group's run
     if isinstance(sidecar.get("user_accepted"), dict):
         return None  # Ruling A37: taken by the user against its gate — never judged again
+    if sidecar.get("source") == "worn_minus_base":
+        return None  # Ruling A46: made from the worn view — the same image again on every run, never judged again
     try:
         ordinal = _ORDINALS[int(sidecar.get("attempt") or 1) - 1]
     except (IndexError, TypeError, ValueError):

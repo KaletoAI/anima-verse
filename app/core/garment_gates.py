@@ -280,7 +280,10 @@ def occupied_zones(slots: Iterable[str]) -> Tuple[str, ...]:
 # same light, and never on the ghost's own outline — the block "Skin or
 # piece" below ``SKIN_LEFT_MAX``; the attempts refused under 5 are judged
 # again by the chain before it renders.
-GHOST_GATE_VERSION = 6
+# Ghost gate version 7 (Ruling A46, 2026-11-14): a part the ghost ADDS beyond
+# the worn piece is refused by how far it REACHES, not by its area — the block
+# "Added parts" below ``CLOTH_FAR``.
+GHOST_GATE_VERSION = 7
 CLOTH_TOP_DY_WARN = 0.0055  # |top edge offset| / Hb from which it is recorded as a warning
 CLOTH_CENTRE_DX_WARN = 0.007  # |centre offset| / Hb from which it is recorded as a warning
 CLOTH_W_RATIO_MIN = 0.80
@@ -322,6 +325,39 @@ SKIN_LEFT_MAX = 0.005       # skin outside the garment region / garment area
 GHOST_RIM = GARMENT_OPEN    # px @1536 of the ghost's outline left out of skin_left
 CLOTH_OUTSIDE_MAX = 0.05    # largest ghost part beyond CLOTH_FAR / garment area (and the near warning)
 CLOTH_FAR = 0.02            # Hb: ghost pixels farther than this from the region form ``outside``'s parts
+# Added parts (Ruling A46, 2026-11-14). Glut's scale top (item_glut_harnisch,
+# fsig 4ef4525e4ac1): the worn front is strapless — scale cups, crossed chains
+# below — and the ACCEPTED ghost front (attempt 2) drew two shoulder straps
+# up from the cups. ``outside`` passed it at 0.0197 (limit 0.05): a strap
+# is thin, the far part of each one holds 2 % of the region's area.
+# The straps are what reaches FARTHEST: ``added_reach`` = per connected
+# part of the ghost pixels beyond the region's margin that are no opening
+# (the parts ``outside_near`` counts), at least ADDED_MIN_PART of the region's
+# area, the distance of its farthest pixel from the worn region's bounding
+# box (Euclidean, 0 inside it), over Hb; the largest over the parts. Re-gated
+# on copies (BiRefNet-DIS masks, the files as stored, 2026-11-14):
+#   Glut scale top ghost front (accepted, the straps)   0.0428 / 0.0428   (two straps, 0.033 / 0.032 of the area)
+#   Glut scale top ghost back  (accepted, cup insides)  0.0204
+#   Kira  skirt 3024cbe4 front / back        0.0 / 0.0
+#   Kira  bodysuit 5bfe0cbc (2966 front, 8a64 both)  0.0021, 0.0 / 0.0  (2966 back attempts 0.0057 / 0.0)
+#   Ylva  laced linen blouse back attempts 1 / 2      0.0021 / 0.0
+#   Kai   jacket 555a7a01 backs (accepted)            0.0246 (3749, a5e7), fronts 0.0 .. 0.0146
+#   Kai   jeans 6c41aa2c                              back 0.0232 / 0.0014, front 0.0057 / 0.0049
+#   Glut  slip (glut_schurz) front / back             0.0076 / 0.0;  Rosi 2d62894b all 0.0
+#   refused defects: Kai jeans back attempt 1 0.0344 (width 1.26), Kai jacket back attempt 1 0.0855,
+#                    Glut scale top back attempts of 16:28 0.1745 / 0.064
+# -> 0.03 Hb (≈ 5 cm on a 1.70 m figure): 1.22x the highest correct one (Kai's jacket back, its sleeve
+# cuffs a little longer than worn), 0.70x the straps. A part below ADDED_MIN_PART (0.001 of the region,
+# 16x under a strap's) is a speck of the matte, never measured. Only a THIN part counts: its pixels over its
+# reach (a strap's width; a hem that hangs lower has the piece's width) at most ADDED_THIN_MAX — a longer
+# hem is the hem gate's (``hem_refused``) and its snap's (Ruling A27), not an added part. Thickness of the
+# farthest part on the same copies: Glut's straps 0.0102 Hb; the correct ones 0.0048 (Glut's slip, reach
+# 0.0076) and 0.039 .. 0.125 (Kai's jacket cuffs 0.0389, his jeans 0.1249); the hem smokes' longer hems
+# (smoke_ghost_hem_snap / _reference, reach 0.034 / 0.031) the piece's width.
+# -> 0.02 Hb (≈ 3.4 cm): 2x a strap, half of Kai's cuffs.
+ADDED_REACH_MAX = 0.03      # Hb: farthest an added part may reach past the worn piece's box
+ADDED_MIN_PART = 0.001      # share of the region's area from which a part beyond it is measured
+ADDED_THIN_MAX = 0.02       # Hb: a part up to this thick (its pixels over its reach) is a strap, not a hem
 NECKLINE_MIN_DEPTH = 0.012  # notch depth / Hb from which the garment has a neckline
 NECKLINE_BAND = 0.03        # ± this share of the garment width around its centre column
 HEM_AGREE = 0.02            # |hem front − hem back| and |ghost hem − worn hem|, fractions of Hb
@@ -732,10 +768,12 @@ def piece_colour(worn_rgb, region) -> Optional[np.ndarray]:
 def shade_distance(rgb, colour) -> np.ndarray:
     """Per pixel the mean |ΔRGB| to ``colour`` scaled to the pixel's own
     brightness (mean of RGB; ``colour`` in the pixel's light or shadow) —
-    a hue comparison in RGB units (block "Skin or piece")."""
+    a hue comparison in RGB units (block "Skin or piece"). ``colour`` is one
+    RGB colour or an image of the same shape (per pixel; Ruling A46's piece
+    from the worn view compares the worn view with the base this way)."""
     rgb = np.asarray(rgb, dtype=np.float32)[..., :3]
-    colour = np.asarray(colour, dtype=np.float32)
-    scale = rgb.mean(-1, keepdims=True) / max(float(colour.mean()), 1.0)
+    colour = np.asarray(colour, dtype=np.float32)[..., :3]
+    scale = rgb.mean(-1, keepdims=True) / np.maximum(colour.mean(-1, keepdims=True), 1.0)
     return np.abs(rgb - scale * colour).mean(-1)
 
 
@@ -1041,6 +1079,10 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     (``centre_gap`` on ``gap_rows``) and is refused when exactly one of
     them reaches ``GAP_MIN`` (the ghost open where the piece is worn
     closed, or closed where it is worn open; ``look_refused``).
+    Gate version 7 (Ruling A46, the block "Added parts"): ``added_reach`` /
+    ``added_part`` of the parts ``outside_near`` counts (``added_parts``) —
+    refused above ``ADDED_REACH_MAX`` (``added_refused``: a strap or chain the
+    worn piece does not have; thin, so ``outside`` misses it).
     Calibration: the "Clothing" block above."""
     from scipy import ndimage
     _check(base_rgb, base_mask, ghost_rgb, ghost_mask)
@@ -1097,6 +1139,7 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     labels, count = ndimage.label(far)
     outside = float(np.bincount(labels.ravel())[1:].max() / area) if count else 0.0
     opening_seen = float((beyond & inside).sum() / area)
+    added = added_parts(rest, a, hb, area)
     neck_fill = float((ghost & neck["notch"]).sum() / neck["notch"].sum()) if has_neckline else None
     iou = float((region & ghost).sum() / max((region | ghost).sum(), 1))
     warnings = []
@@ -1116,6 +1159,11 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
     if outside > CLOTH_OUTSIDE_MAX:
         reasons.append(f"more than the garment in the image: a part of {_r(outside, 4)} more than "
                        f"{CLOTH_FAR} Hb beyond the worn piece > {CLOTH_OUTSIDE_MAX}")
+    # Ruling A46: a thin added part (a strap) carries little area, so ``outside`` misses it — its reach does not.
+    added_refused = added["reach"] > ADDED_REACH_MAX
+    if added_refused:
+        reasons.append(f"a part the worn piece does not have: it reaches {_r(added['reach'], 4)} Hb past the "
+                       f"worn piece > {ADDED_REACH_MAX} Hb (a strap, chain or band added by the edit)")
     # The worn region without skin (a belly or crotch the edit re-shaded) —
     # the ghost as it is: its openings are NOT left out (``body_openings``
     # counts the hips between two cuffs as one, and the bulge below Kai's
@@ -1146,12 +1194,50 @@ def ghost_clothing_gate(base_rgb, base_mask, garment_mask, ghost_rgb, ghost_mask
             "h_ratio": round(h_ratio, 3), "iou": round(iou, 3), "skin_left": _r(skin_left, 5),
             "outside": _r(outside, 5), "outside_near": _r(outside_near, 5), "opening_seen": _r(opening_seen, 5),
             "neckline_depth": _r(depth, 4), "neck_fill": _r(neck_fill, 3),
+            "added_reach": _r(added["reach"], 4), "added_part": _r(added["part"], 5),
+            "added_thick": _r(added["thick"], 4),
+            "added_refused": bool(added_refused),
             "bottom": b[3], "hem_t": _r((b[3] - y0) / hb, 5),
             "hem_c": _r(hem_c, 5), "worn_hem_c": _r(worn_hem_c, 5), **gaps,
             "hem_refused": bool(hem_refused), "look_refused": bool(look_refused),
             **({"length_free": True, "hem_row": hem} if length_free else {}),
             "gate_version": GHOST_GATE_VERSION, "warnings": warnings,
             "ok": not reasons, "reasons": reasons}
+
+
+def added_parts(rest, bbox, hb: int, area: int) -> Dict[str, float]:
+    """How far the ghost's THIN added parts reach past the worn piece (Ruling A46, the block "Added parts"):
+    ``rest`` = the ghost pixels beyond the worn region's margin that are no opening (``ghost_clothing_gate``),
+    ``bbox`` = the worn region's box ``[x0, y0, x1, y1]``. Per connected part of ``rest`` of at least
+    ``ADDED_MIN_PART`` of the region's ``area``: its farthest pixel's distance from the box (Euclidean, 0
+    inside it) and its thickness = its pixels over that distance (a strap: its width; a hem hanging lower:
+    the piece's width), both over Hb. ``{reach, part, thick}`` of the THIN part (thickness up to
+    ``ADDED_THIN_MAX``) that reaches farthest (``part`` its area over the region's); all 0.0 without one."""
+    from scipy import ndimage
+    none = {"reach": 0.0, "part": 0.0, "thick": 0.0}
+    rest = np.asarray(rest, dtype=bool)
+    if not rest.any() or bbox is None or hb <= 0:
+        return none
+    x0, y0, x1, y1 = bbox
+    h, w = rest.shape
+    xs = np.arange(w, dtype=np.float32)
+    ys = np.arange(h, dtype=np.float32)
+    dx = np.maximum(np.maximum(x0 - xs, xs - x1), 0.0)
+    dy = np.maximum(np.maximum(y0 - ys, ys - y1), 0.0)
+    dist = np.hypot(dy[:, None], dx[None, :])
+    labels, count = ndimage.label(rest)
+    if not count:
+        return none
+    pixels = np.bincount(labels.ravel(), minlength=count + 1)[1:].astype(float)
+    reach_px = np.asarray(ndimage.maximum(dist, labels, np.arange(1, count + 1)), dtype=float)
+    share = pixels / max(int(area), 1)
+    thick = pixels / np.maximum(reach_px, 1.0) / hb
+    reach = reach_px / hb
+    reach[(share < ADDED_MIN_PART) | (thick > ADDED_THIN_MAX)] = 0.0
+    k = int(np.argmax(reach))
+    if reach[k] <= 0.0:
+        return none
+    return {"reach": float(reach[k]), "part": float(share[k]), "thick": float(thick[k])}
 
 
 def _hem_row(region: np.ndarray, height: int) -> int:
@@ -1691,6 +1777,7 @@ def limits(kind: str = "clothing") -> Dict[str, Dict[str, Dict[str, Any]]]:
                 "w_ratio": {"op": "range", "value": [CLOTH_W_RATIO_MIN, CLOTH_W_RATIO_MAX]},
                 "skin_left": {"op": "le", "value": SKIN_LEFT_MAX},
                 "outside": {"op": "le", "value": CLOTH_OUTSIDE_MAX},
+                "added_reach": {"op": "le", "value": ADDED_REACH_MAX},
                 **_registration_limits(),
             },
         }

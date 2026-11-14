@@ -528,13 +528,15 @@ _ASSUMED: ContextVar[Optional[Dict[Tuple[str, str], Optional[Dict[str, Any]]]]] 
 
 def _view_done(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
     """Whether one view of an image step is accepted and current (or skipped) — ``_done``'s rule per view."""
-    from app.core.garment_images import skipped_view, stale_accepted, stale_model_fit
+    from app.core.garment_images import skipped_view, source_due, stale_accepted, stale_model_fit
     assumed = _ASSUMED.get()
     if assumed and (step, view) in assumed:
         return assumed[(step, view)] is not None
     return ((_accepted(_image(character_name, item_id, fsig, step, view))
              and not stale_model_fit(character_name, item_id, fsig, step, view)
-             and not stale_accepted(character_name, item_id, fsig, step, view))
+             and not stale_accepted(character_name, item_id, fsig, step, view)
+             # Ruling A46: made from another source than the piece-only setting names now.
+             and not source_due(character_name, item_id, fsig, step, view))
             or skipped_view(character_name, item_id, fsig, step, view))
 
 
@@ -2227,6 +2229,37 @@ def run_estimate(character_name: str, item_id: str, *,
         kept = sum(1 for v in gs.GARMENT_VIEWS if _view_done(character_name, item_id, fsig, first, v)
                    or ((first, v) not in assumed and rejudge_expected(character_name, item_id, fsig, first, v)))
         parts[0] = (first, max(parts[0][1] - kept, 0))
+    if method == gs.EDIT_CHAIN and not from_step:
+        # Ruling A46: a piece-only view made from the worn view costs no job (the run makes the views that are not
+        # done; a later step's views all — less the ones from the worn view). When the setting alone makes the
+        # step with the choice due, a later step's view whose own and earlier views stay done is kept too: a new image
+        # drops only the later images of ITS view (``garment_images._drop_later``) — a setting change of the back
+        # re-makes the back's cut-out, not the front's.
+        from app.core import garment_images
+        choice_step = getattr(_kind_module(kind), "FROM_WORN_STEP", None)
+        image_order = [s for s, _n in parts if s in gs.IMAGE_STEPS]
+        # Only when the setting alone makes the first step due: every view of it that is not done was made from
+        # another source (no re-judged attempt, no stale image — those keep the whole later step).
+        setting_only = first == choice_step and all(
+            _view_done(character_name, item_id, fsig, first, v)
+            or (garment_images.source_due(character_name, item_id, fsig, first, v)
+                and not garment_images.rejudge_expected(character_name, item_id, fsig, first, v))
+            for v in gs.GARMENT_VIEWS)
+        for i, (s, n) in enumerate(parts):
+            if n and s in gs.IMAGE_STEPS and setting_only and s != first:
+                upto = image_order[:image_order.index(s) + 1]
+                kept_later = sum(1 for v in gs.GARMENT_VIEWS
+                                 if all(_view_done(character_name, item_id, fsig, e, v) for e in upto))
+                parts[i] = (s, max(n - kept_later, 0))
+                n = parts[i][1]
+            if n and s in gs.IMAGE_STEPS:
+                worn_views = [v for v in gs.GARMENT_VIEWS
+                              if (garment_images.piece_source(character_name, item_id, fsig, s, v) or {})
+                              .get("source") == "worn"
+                              and not (s == first and (_view_done(character_name, item_id, fsig, s, v)
+                                                       or garment_images.rejudge_expected(
+                                                           character_name, item_id, fsig, s, v)))]
+                parts[i] = (s, max(n - len(worn_views), 0))
     reused = []
     if kind == _clothing() and method == gs.EDIT_CHAIN and state == "open":
         # Ruling F15 i-1: the open state's backs are the closed state's — copied when it has them.
@@ -2336,6 +2369,8 @@ def _view_cost(character_name: str, item_id: str, kind: str, fsig: str, step: st
     total = int(costs.get(step, 0))
     back = BACK_JOBS.get(step, total // 2)
     jobs = back if view == "back" else total - back
+    if (garment_images.piece_source(character_name, item_id, fsig, step, view) or {}).get("source") == "worn":
+        return 0  # Ruling A46: made from the worn view minus the base view — no render
     if not front_changes and garment_images.rejudge_expected(character_name, item_id, fsig, step, view):
         return 0
     if (open_state and view == "back" and not forced and step in BACK_JOBS
@@ -2805,7 +2840,9 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
             if step in gs.IMAGE_STEPS:
                 for v in _view_order(kind, step):
                     # Ruling A17 (d): an accepted view the current gate refuses is rendered again, not reused.
-                    stale = garment_images.stale_accepted(character_name, item_id, fsig, step, v)
+                    stale = (garment_images.stale_accepted(character_name, item_id, fsig, step, v)
+                             # Ruling A46: the piece-only setting names another source than the image's.
+                             or garment_images.source_due(character_name, item_id, fsig, step, v))
                     f = (forced and (view is None or v == view)) or stale
                     # Checked per view: a new front of a drafted step (clothing
                     # ``worn``) drops the back it was drafted from.
@@ -4245,6 +4282,61 @@ def haar_tile_path(character_name: str, item_id: str, seed: int) -> Optional[Pat
     return path if path.is_file() else None
 
 
+def _piece_view_due(view: str, source: str, made: Optional[str]) -> List[Dict[str, Any]]:
+    """What becomes due when the accepted piece-only ``view`` (made from ``made``) is to come from ``source``
+    (Ruling A46): nothing when they agree; else the view again (0 jobs from the worn view, 1 rendered), its
+    cut-out (its routed upscale), the mesh and the fit (CPU) — first attempts, ``HUB_JOBS``."""
+    if made is None or made == source:
+        return []
+    costs = HUB_JOBS["clothing:edit_chain"]
+    ghost = 0 if source == "worn" else (BACK_JOBS["ghost"] if view == "back" else costs["ghost"] - BACK_JOBS["ghost"])
+    return [{"step": "ghost", "view": view, "jobs": ghost},
+            {"step": "cutout", "view": view, "jobs": costs["cutout"] // 2},
+            {"step": "mesh", "jobs": costs["mesh"]}, {"step": "fit", "jobs": costs["fit"]}]
+
+
+def piece_views_info(character_name: str, item_id: str, fsig: str,
+                     item: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Ruling A46, the Wardrobe's "Piece-only views from" per view: ``{view: {choice, source, reason, auto,
+    made_from, due, options}}`` — ``choice`` the setting (auto / generated / worn), ``source`` what the view
+    is made from now and ``why`` / ``detail`` / ``reason`` why (``garment_from_worn.resolve``), ``made_from`` the
+    source of the accepted piece-only image (None without one), ``due`` what is due because they differ
+    (``_piece_view_due``: ``[{step, view?, jobs}]``), ``options`` the same for every choice
+    (``{choice: {source, why, detail, reason, due}}`` — what a change would make due, before it is saved); ``skipped`` for
+    a view that is not made (an empty drafted back). None for a kind without the choice. Read from the files
+    and the item only."""
+    from app.core import garment_from_worn as fw
+    from app.core import garment_images
+    from app.core.garment_store import GARMENT_VIEWS, read_record
+    from app.models.inventory import get_item
+    if getattr(_kind_module(garment_images._item_kind(item_id)), "FROM_WORN_STEP", None) != fw.STEP:
+        return None
+    item = item if item is not None else (get_item(item_id) or {})
+    out: Dict[str, Dict[str, Any]] = {}
+    for view in GARMENT_VIEWS:
+        skipped = garment_images.skipped_view(character_name, item_id, fsig, fw.STEP, view)
+        if skipped:
+            out[view] = {"choice": fw.choice_of(item, view), "skipped": skipped}
+            continue
+        final = _image(character_name, item_id, fsig, fw.STEP, view)
+        made = fw.made_from(read_record(final.with_suffix(".json"))) if _accepted(final) else None
+        options: Dict[str, Dict[str, Any]] = {}
+        for choice in fw.CHOICES:
+            piece = dict(item.get("outfit_piece") or {})
+            setting = fw.clean_setting(piece.get(fw.SETTING_KEY))
+            setting.pop(view, None)
+            if choice != fw.AUTO:
+                setting[view] = choice
+            piece[fw.SETTING_KEY] = setting
+            r = fw.resolve(character_name, item_id, fsig, view, item={**item, "outfit_piece": piece})
+            options[choice] = {"source": r["source"], "why": r["why"], "detail": r["detail"],
+                               "reason": r["reason"], "due": _piece_view_due(view, r["source"], made)}
+        now = fw.resolve(character_name, item_id, fsig, view, item=item)
+        out[view] = {**now, "made_from": made, "due": _piece_view_due(view, now["source"], made),
+                     "options": options}
+    return out
+
+
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     """UI info of one garment (the hair row, the own-mesh dialog): fsig, the method and its
     source, description, every step's files and gate numbers (the steps of
@@ -4413,6 +4505,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         # Ruling UI3 a: when the previewed fit was made (the 3D preview's caption).
         "preview_built_at": model_overview.built_at(preview) if preview_url else None,
         "served_fsig": served_fsig, "refit": refit,
+        # Ruling A46: where each piece-only view comes from (the setting, the reason, what is due).
+        "piece_views": (piece_views_info(character_name, item_id, fsig, _item_)
+                        if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
         "body": body, "body_id": body["body_id"] if body else None})
 
 def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:

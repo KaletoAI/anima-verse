@@ -425,9 +425,9 @@ def chain_part(gg, gc, root: Path):
     print("  run B: a front against the worn hems, then the back again (b + c)")
     store_v3("back", BACK_LATE, hem_t=0.67568)
     again = garment_images.regate_accepted("Demo", jid, fsig, "ghost", "back")
-    check("BACK_LATE re-gated: the current version (A32: 6), still accepted",
+    check("BACK_LATE re-gated: the current version (A46: 7), still accepted",
           (again.get("gate_version"), again.get("ok"), again.get("hem_c"), again.get("regated_from"),
-           garment_images.stale_accepted("Demo", jid, fsig, "ghost", "back")), (6, True, 0.67568, 3, False))
+           garment_images.stale_accepted("Demo", jid, fsig, "ghost", "back")), (7, True, 0.67568, 3, False))
     late_record = first_gate("back")
     final("front").unlink()
     final("front").with_suffix(".json").unlink()

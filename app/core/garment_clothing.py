@@ -134,6 +134,9 @@ GHOST_NEGATIVE = ("person", "skin", "head", "arms", "hands", "legs", "feet", "ma
 #: only when it is nearer the skin than the piece in the same light, off the
 #: ghost's outline (``garment_gates.skin_pixels``) — the attempts refused
 #: under 5 are judged again first.
+#: ``ghost`` 7 (Ruling A46, 2026-11-14): a part the ghost adds beyond the
+#: worn piece is refused by its reach (``garment_gates.added_parts``: a
+#: strap drawn on a strapless piece) — an ACCEPTED ghost re-gated so is stale.
 GATE_VERSIONS: Dict[str, int] = {"worn": WORN_GATE_VERSION, "ghost": GHOST_GATE_VERSION}
 #: The steps whose ACCEPTED images are re-gated from their files when their
 #: record predates the step's gate version (``garment_images.regate_accepted``,
@@ -142,12 +145,16 @@ GATE_VERSIONS: Dict[str, int] = {"worn": WORN_GATE_VERSION, "ghost": GHOST_GATE_
 #: piece (``hem_refused``: a stored ghost back that hangs below its worn back)
 #: and a closable front's open / closed look (``look_refused``). A re-gated
 #: image refused for an older rule only records it and stays in use.
-REGATE_ACCEPTED_STEPS: Dict[str, Tuple[str, ...]] = {"ghost": ("hem_refused", "look_refused")}
+#: ``ghost`` 7 adds ``added_refused`` (Ruling A46: a strap the worn piece does not have).
+REGATE_ACCEPTED_STEPS: Dict[str, Tuple[str, ...]] = {"ghost": ("hem_refused", "look_refused", "added_refused")}
 #: The pair check (Ruling A17): a front ghost attempt against the WORN back's
 #: hem (``pair_reason``), the accepted ghost pair against each other
 #: (``pair_agree``), and the view farther from its worn view rendered again
 #: when they disagree (``pair_redo``).
 PAIR_STEP = "ghost"
+#: Ruling A46: the step whose views can be made from the worn view minus the base view instead of rendered
+#: (``garment_from_worn``; the Wardrobe's "Piece-only views from" setting per view).
+FROM_WORN_STEP = "ghost"
 PAIR_REFUSED = "front and back garment end at different heights"
 
 

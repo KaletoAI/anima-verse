@@ -459,6 +459,14 @@ def _clean_material(raw) -> Optional[str]:
     return clean(raw)
 
 
+def _clean_piece_views(raw) -> Dict[str, str]:
+    """``outfit_piece.piece_views`` (Ruling A46): per view where the own mesh's piece-only image comes from —
+    ``generated`` or ``worn``; Auto (and anything else) is no key (``garment_from_worn.clean_setting``). Never
+    part of a 2D key (``_render_relevant_fields``): it changes only the own mesh's input, made on demand."""
+    from app.core.garment_from_worn import clean_setting
+    return clean_setting(raw)
+
+
 def _clean_closable(raw, slots: List[str]) -> bool:
     """``outfit_piece.closable``: whether the piece can be worn open (plan
     2026-11-12-unified-worn-pieces Addendum A). A bool is kept, anything else
@@ -715,6 +723,9 @@ def add_item(name: str,
         material = _clean_material(outfit_piece.get("material"))
         if material is not None:
             item["outfit_piece"]["material"] = material
+        piece_views = _clean_piece_views(outfit_piece.get("piece_views"))
+        if piece_views:
+            item["outfit_piece"]["piece_views"] = piece_views
         lift = _lift(outfit_piece.get("lift"))
         if lift is not None:
             item["outfit_piece"]["lift"] = lift
@@ -843,6 +854,7 @@ def update_item(item_id: str,
         prev_piece = item.get("outfit_piece") if isinstance(item.get("outfit_piece"), dict) else {}
         prev_mesh_mode = prev_piece.get("mesh_mode")
         prev_material = prev_piece.get("material")
+        prev_piece_views = prev_piece.get("piece_views")
         # Same for ``closable``: kept when the update does not name it.
         prev_closable = prev_piece.get("closable")
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
@@ -880,6 +892,10 @@ def update_item(item_id: str,
             material = _clean_material(op.get("material") if "material" in op else prev_material)
             if material is not None:
                 item["outfit_piece"]["material"] = material
+            # Ruling A46, "Piece-only views from": kept when the update does not name it, Auto = no key.
+            piece_views = _clean_piece_views(op.get("piece_views") if "piece_views" in op else prev_piece_views)
+            if piece_views:
+                item["outfit_piece"]["piece_views"] = piece_views
             if "closable" in op:
                 item["outfit_piece"]["closable"] = _clean_closable(op.get("closable"), slots)
             elif prev_closable is not None:

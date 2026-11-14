@@ -439,7 +439,7 @@ def gates_part(gg, kept):
           (True, -0.01001, 0.0066, 0.0, ["garment top moved"], gg.GHOST_GATE_VERSION))
     check("limits clothing", {k: sorted(v) for k, v in gg.limits("clothing").items()},
           {"worn": ["garment_share", "head_garment", "outside_xor"],
-           "ghost": ["outside", "reg_scale", "reg_shift", "skin_left", "w_ratio"]})
+           "ghost": ["added_reach", "outside", "reg_scale", "reg_shift", "skin_left", "w_ratio"]})
     check("limits() = clothing", gg.limits(), gg.limits("clothing"))
     try:
         gg.limits("hair")

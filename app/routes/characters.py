@@ -1981,6 +1981,12 @@ class FootwearWidthCapRequest(BaseModel):
     cap: Any = None
 
 
+class PieceViewSourceRequest(BaseModel):
+    # Ruling A46: "front" / "back" and "auto" / "generated" / "worn" — validated by garment_from_worn.set_choice.
+    view: str
+    choice: str
+
+
 class GarmentRunRequest(BaseModel):
     # Plain strings, validated by garments.start_garment: an unknown step or
     # view is a 400 with its message, not a schema 422.
@@ -2671,6 +2677,32 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{character_name}/garments/{item_id}/piece-views")
+def set_character_garment_piece_view(character_name: str, item_id: str, body: PieceViewSourceRequest,
+                                     _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A46, "Piece-only views from": store where the piece-only image of ``view`` of an own-mesh
+    clothing piece comes from — ``auto``, ``generated`` (the image edit) or ``worn`` (the worn view minus the
+    base view, no hub job) — on the ITEM (``garment_from_worn.set_choice``). Runs nothing: a view whose
+    accepted image came from another source reads due, with its cut-out, the mesh and the fit after it.
+    ``{piece_views}`` — ``garments.piece_views_info`` now (each view's source, reason and what is due).
+    Admin-only. 404 for an item that is no clothing garment of the character, 400 for a bad view or choice."""
+    from app.core import garment_from_worn, garments
+    from app.core import garment_store as gs
+    _require_character(character_name)
+    try:
+        _item_, kind = garments._item(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if kind != "clothing":
+        raise HTTPException(status_code=404, detail="Only an own-mesh clothing piece has piece-only views")
+    try:
+        garment_from_worn.set_choice(character_name, item_id, body.view, body.choice)
+        fsig = gs.garment_fsig(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"piece_views": garments.piece_views_info(character_name, item_id, fsig)}
 
 
 def _fetch_garment_mesh_job(character_name: str, item_id: str, raw_job: str, *, footwear: bool) -> Dict[str, Any]:
