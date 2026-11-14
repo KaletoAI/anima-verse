@@ -52,9 +52,10 @@ ROOTS: the worn outfit; the outfit combinations the character can still
 produce (``outfit_cache_gc``'s outfit rule — manifest re-sign against the
 inventory, else the reachable set over it; what the outfit batch pre-builds,
 saved outfit sets included); the CURRENT base signature (none for a
-non-humanoid; unknown = nothing base-derived is judged); the equipped / held
-own-mesh garments with their current fsig (``outfit_cache_gc._garment_roots``,
-R11 served fit included). No mode: a worn piece's mode is on its item and
+non-humanoid; unknown = nothing base-derived is judged); the OWNED garments —
+equipped, every owned hairstyle worn or not (Ruling A59b), held own-mesh
+pieces — with their current fsig (``outfit_cache_gc._garment_roots``, R11
+served fit included). No mode: a worn piece's mode is on its item and
 enters the predicted keys below.
 
 REACHABILITY (one function each, ``_judge``):
@@ -218,7 +219,7 @@ class Roots:
     #: garment keys kept (``garment:<item>_<fsig>``), None = not computable
     garment_keep: Optional[Set[str]] = None
     garment_items: Set[str] = field(default_factory=set)
-    #: the kept hair items; their current hsig is computed only when a
+    #: the kept hair items (every owned hairstyle); their current hsig is computed only when a
     #: HairDeck job folder exists (``_hair_hsig``)
     hair_items: Set[str] = field(default_factory=set)
     running_sigs: Set[str] = field(default_factory=set)
@@ -729,7 +730,7 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
         elif node.key in roots.garment_keep:
             node.reachable, node.reason = True, "kept fit"
         else:
-            node.reachable, node.reason = False, "no held garment uses this fingerprint"
+            node.reachable, node.reason = False, "no owned garment uses this fingerprint"
         garment_ok[node.key] = node.reachable
     # A layered fit lives with its garment group — and dies with an inner piece (boots spec § 12).
     from app.models.inventory import get_item
@@ -778,7 +779,7 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
         if roots.garment_keep is None:
             node.reachable, node.reason = True, "garment roots unknown"
         elif item not in roots.garment_items:
-            node.reachable, node.reason = False, "item not held"
+            node.reachable, node.reason = False, "item not owned"
         elif "" in current or hsig in current:
             node.reachable, node.reason = True, "current HairDeck / HAAR job"
         elif hsig in kept_hsigs.get(item, set()):

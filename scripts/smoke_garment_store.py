@@ -75,8 +75,10 @@ the base model is model3d/BSIG.glb with bytes b"model-1".
     purge_stale(Demo, [garment:H_OLD_B, garment:hair_gone_..., garment:H_F]):
     H_F is not stale -> skipped 1; deleted 6 files (OLDB: 4, ORPH: 2); every
     CUR and FALL file and notes.txt still exist.
-    Unequipped (equipped_mesh_pieces {}): every garment group is stale (no
-    equipped item) -> 2 more stale keys (CUR, FALL).
+    Unequipped (equipped_mesh_pieces {}): nothing more is stale — the
+    hairstyle is still OWNED (Ruling A59b: an unworn hairstyle keeps its
+    files). Its item deleted: every garment group of it is stale -> 2 stale
+    keys (CUR, FALL).
 """
 import hashlib
 import json
@@ -336,7 +338,11 @@ def main() -> int:
 
         check("unequip", inventory.unequip_mesh_piece("Demo", "hair"), True)
         rep = gc.verify_cache("Demo")
-        check("unequipped: all stale",
+        check("unequipped but owned: nothing stale (A59b)",
+              sorted(s for s in rep["stale_signatures"] if s.startswith("garment:")), [])
+        check("item deleted", inventory.delete_item(hid), True)
+        rep = gc.verify_cache("Demo")
+        check("item deleted: all stale",
               sorted(s for s in rep["stale_signatures"] if s.startswith("garment:")),
               sorted([k_cur, k_fall]))
 

@@ -55,11 +55,14 @@ No manifest is read for them.
 
 **Garments** (``app/core/garment_store.py``) live in ``characters/<name>/garments/``
 and are grouped by ``(item, fsig)``; the report names such a group
-``garment:<item>_<fsig>``. Valid are the CURRENT-fsig files of every equipped
-garment item and of every own-mesh outfit piece the character holds
-(``garment_set.held_clothing``; a run in flight writes exactly those) and the group of the fit
-that is served instead while the current one is not accepted yet — the newest
-accepted fit on the current base model (``garment_store.accepted_fit``, R11).
+``garment:<item>_<fsig>``. Valid are the CURRENT-fsig files of every garment the
+character OWNS — every equipped garment item, every hairstyle it owns, worn or
+not (``garment_hair.hairstyles``, Ruling A59b: several are owned, one is worn,
+and switching back must never cost a job), and every own-mesh outfit piece it
+holds (``garment_set.held_clothing``; a run in flight writes exactly those) —
+and the group of the fit that is served instead while the current one is not
+accepted yet — the newest accepted fit on the current base model
+(``garment_store.accepted_fit``, R11).
 Every other recognised garment group is stale; a file whose name the store
 does not recognise is never judged. When the keep set cannot be computed, no
 garment group is judged at all.
@@ -401,17 +404,22 @@ def _texture_files(character_name: str) -> Dict[str, List[Path]]:
 
 def _garment_roots(character_name: str) -> Optional[Tuple[Set[str], Set[str], Set[str]]]:
     """``(keep, items, hair items)`` — the garment roots of the artefact
-    graph. ``keep``: the garment groups that stay — per garment item, every
-    equipped mesh piece (hair) and every own-mesh outfit piece the character
-    HOLDS or wears (``garment_set.held_clothing``: a dress in the wardrobe
-    keeps its fit, plan 2026-11-09-base-body-phase5-mesh-items Task 4) — the
+    graph. ``keep``: the garment groups that stay — per garment item the
+    character OWNS: every equipped mesh piece, every hairstyle it owns, worn or
+    not (``garment_hair.hairstyles`` — the ownership ``hairstyle_delete``
+    goes by; Ruling A59b: an unworn hairstyle keeps its fits, strand records,
+    HairDeck / HAAR jobs, attempts and body-shape fits, so wearing it again
+    costs no job) and every own-mesh outfit piece it HOLDS or wears
+    (``garment_set.held_clothing``: a dress in the wardrobe keeps its fit,
+    plan 2026-11-09-base-body-phase5-mesh-items Task 4) — the
     current fsig, the fit served on the current base model, and per method
     (a fit record's ``method``) the newest accepted fit on the current base
     model and the newest accepted fit at all — so switching the hair method
     back never costs a generation (plan 2026-11-09-hairdeck-hair, Review
     Focus 3). An older accepted fit of the same method is stale. ``items``:
-    the kept items (a deleted item keeps nothing); ``hair items``: the kept
-    hair garments (their HairDeck jobs are judged by ``artefact_graph``).
+    the kept items (a deleted item keeps nothing; a hairstyle the character
+    no longer owns keeps nothing either); ``hair items``: the kept hair
+    garments (their HairDeck / HAAR jobs are judged by ``artefact_graph``).
     FOOTWEAR (plan 2026-11-10-footwear-rigid-shoes Task 26): a feet item
     keeps its current footwear fsig group and the shoe fit served on the
     current base model — nothing per other method: the clothing edit-chain
@@ -424,14 +432,15 @@ def _garment_roots(character_name: str) -> Optional[Tuple[Set[str], Set[str], Se
     None when the roots cannot be computed (then nothing is judged — never
     delete on a guess)."""
     try:
-        from app.core import base_body, garment_set, garment_store
+        from app.core import base_body, garment_hair, garment_set, garment_store
         from app.models.inventory import get_equipped_mesh_pieces, get_item
         keep: Set[str] = set()
         kept_items: Set[str] = set()
         hair: Set[str] = set()
         base = base_body.current_base(character_name)
         items = sorted({*get_equipped_mesh_pieces(character_name).values(),
-                        *garment_set.held_clothing(character_name)})
+                        *(str(h.get("id") or "") for h in garment_hair.hairstyles(character_name)),
+                        *garment_set.held_clothing(character_name)} - {""})
         for item_id in items:
             item = get_item(item_id)
             if item is None:
