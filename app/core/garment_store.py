@@ -509,7 +509,7 @@ def _md5(payload: Dict[str, Any]) -> str:
 
 def garment_fsig(character_name: str, item_id: str, *,
                  profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None,
-                 method: Optional[str] = None) -> str:
+                 method: Optional[str] = None, swing: Optional[bool] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
     (R10); hair made by HairDeck adds ``{method, hsig, colour, placement}``
     (the colour override, "" = automatic; the manual placement
@@ -526,6 +526,9 @@ def garment_fsig(character_name: str, item_id: str, *,
     is the one it had before the option. ``method`` (hair only): the
     fingerprint the hairstyle would have in that mode — None = its own mode
     (the Wardrobe hair row's "Other method" preview asks for the mode it left).
+    ``swing`` (HairDeck only): the fingerprint with that Swing — None = the
+    hairstyle's own (the refit sweep asks for the Swing-off one a fit from
+    before Ruling H-R1 was made under, ``garment_refit.swing_default_fits``).
     ValueError when ``item_id`` is no garment of a known kind (or for a bad
     ``state``)."""
     kind = _garment_kind(item_id)
@@ -543,7 +546,7 @@ def garment_fsig(character_name: str, item_id: str, *,
                        colour=garment_hair.hair_colour_override(settings),
                        placement=garment_hair.hair_placement(settings))
         from app.core import hair_motion
-        if hair_motion.swing_on(settings):
+        if hair_motion.swing_on(settings) if swing is None else swing:
             payload["swing"] = True
     return _md5(payload)
 

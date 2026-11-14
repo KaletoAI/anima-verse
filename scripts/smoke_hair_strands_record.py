@@ -43,6 +43,13 @@ Expected (by hand):
       APEX of the distance cone: trilinear interpolation between nodes of the 6.8 mm grid up to 3.4 * sqrt(3) =
       5.9 mm away reads shallower by up to 5.9 mm (and the voxel EDT inside by about one 3.4 mm voxel), so
       -90 - 4 <= decoded <= -90 + 4 + 5.9.
+      Ruling H-R8 (record version 2): the payload starts at the chin — its lo y is the last row of the 6.8 mm
+      payload grid at or below the chin (chin - 0.0068 < lo_y <= chin), k = (lo_y - field lo_y) / 0.0068 a whole
+      number > 0 (the field starts 0.05 below the chin), and the neck behind the jaw is cut: a payload voxel below
+      ear_y AND behind cz reads +127, every other one is the field at (2ix, 2(iy + k), 2iz). On the sphere (cz = 0):
+      (0, ear_y - 0.02, -0.03) = (0, 1.5425, -0.03) is inside the head in the full field (hypot(0.0575, 0.03) -
+      0.09 = -25.1 mm) and reads +127 mm from the record; (0, 1.5425, +0.03) reads the field (within 2 mm); the pins
+      were counted on the full field ([1] unchanged).
   [7] face_box == [cx-0.06, cx+0.06, chin, brow+0.01, cz+0.25*head_d] with the landmarks the smoke computes
       through head_landmarks (a sphere has no face: brow = top - 0.09); params == PARAMS["hairdeck"];
       PARAMS["haar"] == the same with root_deg 0; head_bone mixamorig:Head; frame head_bind; rows 17
@@ -341,8 +348,31 @@ def run_checks(tmp):
     nx, ny, nz = s["dims"]
     qa = np.frombuffer(q, np.int8)
     ix, iy, iz = nx // 2, ny // 2, nz // 2
-    check(int(qa[ix + nx * (iy + ny * iz)]) == int(np.clip(round(sdf.field[2 * ix, 2 * iy, 2 * iz] * 1000), -127, 127)),
-          "[6] byte (ix, iy, iz) == the field at (2ix, 2iy, 2iz)")
+    step = 2 * gf.VOX_M
+    k = (s["lo"][1] - float(sdf.lo[1])) / step
+    check(abs(k - round(k)) < 1e-4 and round(k) > 0, f"[6] the payload starts {k:.4f} payload rows above the field")
+    k = int(round(k))
+    check(frame["chin"] - step < s["lo"][1] <= frame["chin"] + 1e-6,
+          f"[6] payload lo y {s['lo'][1]:.4f} = the last row at or below the chin {frame['chin']:.4f}")
+    ys = float(sdf.lo[1]) + step * (k + np.arange(ny))
+    zs = float(sdf.lo[2]) + step * np.arange(nz)
+    bad = 0
+    for jy in range(ny):
+        for jz in range(nz):
+            for jx in (0, nx // 2, nx - 1):
+                want = 127 if (ys[jy] < frame["ear"] and zs[jz] < frame["cz"]) else \
+                    int(np.clip(round(sdf.field[2 * jx, 2 * (jy + k), 2 * jz] * 1000), -127, 127))
+                bad += int(qa[jx + nx * (jy + ny * jz)]) != want
+    check(bad == 0, f"[6] every byte: +127 below ear_y behind cz, else the field at (2ix, 2(iy + k), 2iz) ({bad} off)")
+    back = [[0, record["ear_y"] - 0.02, frame["cz"] - 0.03]]
+    front = [[0, record["ear_y"] - 0.02, frame["cz"] + 0.03]]
+    full_back, full_front = (float(sdf.sample(np.array(p))[0]) for p in (back, front))
+    rec_back, rec_front = (hs.decode_sdf(s, p)[0] for p in (back, front))
+    check(full_back < 0 and abs(rec_back * 1000 - 127) < 1e-9,
+          f"[6] the neck behind cz: inside the full field ({full_back * 1000:.1f} mm), the record reads "
+          f"{rec_back * 1000:.0f} mm")
+    check(abs(rec_front - full_front) <= 0.002,
+          f"[6] the jaw in front of cz: the record {rec_front * 1000:.1f} mm == the field {full_front * 1000:.1f} mm (2 mm)")
 
     # [7] boxes and parameters
     P = body.positions
@@ -360,7 +390,7 @@ def run_checks(tmp):
     check(hs.PARAMS["hairdeck"]["root_deg"] == 10 and hs.PARAMS["hairdeck"]["iterations"] == 6
           and hs.PARAMS["hairdeck"]["tether_head"] == 0.012, "[7] the spec § 6.2.1 table")
     check(record["head_bone"] == "mixamorig:Head" and record["frame"] == "head_bind" and record["rows"] == 17
-          and record["version"] == hs.RECORD_VERSION == 1, "[7] head_bone / frame / rows / version")
+          and record["version"] == hs.RECORD_VERSION == 2, "[7] head_bone / frame / rows / version")
     check(record["vertex_attributes"] == {"card": "_STRAND_CARD", "u": "_STRAND_U"}, "[7] vertex_attributes")
     check(abs(record["ear_y"] - gf.ear_line_height(body)) < 1e-6, f"[7] ear_y {record['ear_y']}")
     check(record["capsules"]["version"] == 4 and isinstance(record["capsules"]["capsules"], list),
@@ -444,16 +474,16 @@ def run_checks(tmp):
 
     # [11] Ruling H-R5: the Hairstyles preview GLB carries the full tier's binding. preview_glb(fit) = the fit with
     #      _STRAND_CARD / _STRAND_U on the hair primitive, equal to the npz ([4]: 284 values, A 1, B 2, cap 0); the
-    #      body and the hair's own attributes unchanged; version = sha256(fit)[:16] + ".s1" == preview_version(fit).
+    #      body and the hair's own attributes unchanged; version = sha256(fit)[:16] + ".s2" == preview_version(fit).
     #      A fit of another method: the stored bytes, version = content_version (no suffix).
     from app.core.http_files import content_version
     json_path.unlink()
     record = hs.record_for_fit(CHAR, fit)
     built = hs.preview_glb(CHAR, fit)
     fit_bytes = fit.read_bytes()
-    want_version = hashlib.sha256(fit_bytes).hexdigest()[:16] + ".s1"
+    want_version = hashlib.sha256(fit_bytes).hexdigest()[:16] + ".s2"
     check(built is not None and built[1] == want_version == hs.preview_version(fit),
-          f"[11] preview version {built[1] if built else None} == sha16 + '.s1' == preview_version")
+          f"[11] preview version {built[1] if built else None} == sha16 + '.s2' == preview_version")
     arrays = hs.vertex_arrays(fit)
     served = glb_mesh.garment_arrays(built[0], node_prefix=NAME, exact=True)
     plain = glb_mesh.garment_arrays(fit_bytes, node_prefix=NAME, exact=True)

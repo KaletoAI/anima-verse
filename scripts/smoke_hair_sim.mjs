@@ -60,10 +60,41 @@
  *     2 s in the pitched pose. The pitch swings the capsule's lower part back INTO the hanging long card (its
  *     axis point (0, 1.15, 0) goes to (0, 1.30 − 0.15·cos30, −0.15·sin30) = (0, 1.1701, −0.075), 20 mm from the
  *     row at (0, 1.15, −0.095) — 60 mm deep): without the capsule a row passes > 10 mm deep through it during the
- *     2 s (the case is real); with it no row is inside deeper than its bind depth after 2 s, nor at the end of
- *     any step on the way (+1e-6; the push is the last word of a step except the tether, whose targets ride the
- *     capsule).
+ *     2 s (the case is real); with it no row is inside deeper than its bind depth after 2 s (+1e-6), nor at the
+ *     end of any step on the way deeper than the sagitta of one clamped segment (Ruling H-R10: the length clamp's
+ *     last shortening may cut the capsule by a chord, 0.08 − √(0.08² − (0.03·1.05/2)²) = 1.57 mm).
  * [8] StrandMismatch: a `_STRAND_CARD` of 62 for a 61-card record, and a `_STRAND_U` one value short.
+ * RULING H-R10 (each step with dt 0 starts from X = Xp: no velocity, no pull; iterations 0, bend 0, root_deg 0 —
+ * only the part under test acts):
+ * [9] LENGTH CLAMP: a straight card at x 0.5 (outside the SDF grid), pins 2, row 9 held 0.10 m out along +x →
+ *     the card's arc 0.32 − 0.04 + 2·hypot(0.10, 0.02) = 0.48396 (1.51× — the case is real). After one step
+ *     every free segment ≤ 1.05 × 0.02 (+1e-6) and row 9 = row 8 + (0.10, −0.02, 0) · 0.021 / 0.1019804 =
+ *     (0.5205922, 1.4358816, 0) within 1e-6 (shortened towards its parent, follow-the-leader).
+ * [10] HEAD TETHER, LEADING RUN ONLY: the curved card at θ 180° with row 3 lifted 4 cm off the sphere (radially;
+ *     not resting on the head), so rows 4..6 rest on the head AFTER a free row; upper-third tether out of reach
+ *     (tether_r0 = tether_r1 = 10 m). Rows 4..16 turned 25° about +X through row 3, away from the head (lengths
+ *     kept: the clamp does nothing; every row stays outside the head SDF + 3 mm and behind the face plane): row 6
+ *     ends > 12 mm from its target, so the old rule (every head-resting row within tether_head) would have
+ *     moved it → after one step rows 4..16 are where they were (1e-6).
+ * [11] DAMPING RELATIVE TO THE TARGET: the straight card at x 0.5 on a figure moving at 3.4 m/s along +z (the
+ *     game's WALK_SPEED) from a rest start, 4 s: at the end every row is within 1 mm of its target (the start's
+ *     swing decays by 0.96^240 = 5.6e-5). Damped in world, the steady lag of the tip (free arc 0.30, k = 9.81/0.30)
+ *     would be e = d·v·dt / (k·dt²) = 0.04 · 3.4 · (1/60) / (32.7 / 3600) = 0.2496 m before the constraints — the
+ *     gale that blew every card horizontal; pulled towards the NEXT step's target the rows settled 107 mm behind.
+ * [12] THE HEAD HAS THE LAST WORD: a straight card at the back, z −0.095 from y 1.60 down (row 2 at (0, 1.56,
+ *     −0.095): 13.1 mm off the sphere, clearance min(3 mm, 13.1) = 3 mm); one capsule a = b = (0, 1.56, −0.135),
+ *     r 0.06 (bind far away: radius factor 1). The capsule pushes row 2 to z −0.075 — hypot(0.04, 0.075) =
+ *     0.085, 5 mm inside the head → after one step every free row's SDF ≥ its clearance − 0.5 mm (the SDF
+ *     pushed once more, one gradient step on the quantized field).
+ * [13] RootInertia (STRAND_ROOT_LIMITS accel 0.25π² = 2.4674 m/s², angAccel (15°)·π² = 2.5839 rad/s², 60 fps):
+ *     (a) a root moving at 1 m/s along x from its first frame: every carry the identity (1e-9) — felt whole;
+ *     (b) a root at rest that accelerates at 1 m/s² (< 2.4674) for 1 s: every carry the identity (1e-9);
+ *     (c) a 1 m snap along x after rest: the felt velocity grows by 2.4674/60 = 0.0411234 m/s, the felt move is
+ *         0.0411234/60 = 0.000685390 m → the carry is a translation by 0.999314610 m (1e-9), no rotation;
+ *     (d) a 90° yaw snap after rest: the felt angle (2.5839/60)/60 = 0.000717738 rad → the carry is Ry(π/2 −
+ *         0.000717738) (1e-9);
+ *     (e) StrandSim.carry by Ry(90°): a card's rows and their previous positions turn with it (relative velocity
+ *         kept: X − Xp turned by the same rotation, 1e-6).
  * [T] TIMING (printed, not asserted): 700 curved cards (the same fan, 0.3° apart), sway, ms per step and per
  *     rebuild (spike reference: 4.4–5.9 ms per step).
  */
@@ -404,8 +435,8 @@ for (const kind of ['sway', 'walk']) {
   check('[7] without the capsule the long card passes through the pitched torso (> 10 mm: the case is real)',
     freeWorst > 0.010, `${(freeWorst * 1000).toFixed(1)} mm`)
   const [end, worst] = pitched(caps)
-  check('[7] with it, after 2 s (and after every step) no row is inside the torso capsule deeper than at bind',
-    end <= 1e-6 && worst <= 1e-6,
+  check('[7] with it, after 2 s no row is inside the torso capsule deeper than at bind (on the way: a chord, 1.57 mm)',
+    end <= 1e-6 && worst <= 0.00157,
     `end ${(end * 1000).toFixed(4)} mm, worst over the 2 s ${(worst * 1000).toFixed(4)} mm`)
 }
 
@@ -419,6 +450,139 @@ for (const kind of ['sway', 'walk']) {
   threw = null
   try { bindStrands(fx.record, fx.prim.pos, fx.prim.nrm, fx.prim.card, fx.prim.u.subarray(1)) } catch (e) { threw = e }
   check('[8] _STRAND_U one short → StrandMismatch', threw instanceof StrandMismatch, String(threw?.message))
+}
+
+// --- Ruling H-R10 ------------------------------------------------------------------------------------------------
+const { RootInertia, STRAND_ROOT_LIMITS, STRAND_STRETCH_MAX } = M
+const still = { ...prm, iterations: 0, bend: 0, rootDeg: 0, tether: false }
+const near = (a, b, tol) => a.every((v, i) => Math.abs(v - b[i]) <= tol)
+const rowOf = (sim, q) => [sim.X[3 * q], sim.X[3 * q + 1], sim.X[3 * q + 2]]
+
+// [9] the length clamp
+{
+  const fx = build([{ rows: straightRows(0.5, 0), pins: 2, side: [0, 0, 1] }])
+  const sim = makeSim(fx), I = rootMotion('off', 0, 0), f = frameOf(fx.record, I)
+  sim.reset(f.targets)
+  sim.X[27] += 0.10; sim.Xp[27] += 0.10
+  let arc = 0
+  for (let i = 1; i < R; i++) arc += Math.hypot(...[0, 1, 2].map(d => sim.X[3 * i + d] - sim.X[3 * i - 3 + d]))
+  check('[9] row 9 held out: the card 1.51× its length (the case is real)', Math.abs(arc / 0.32 - 1.5124) < 1e-3,
+    `${(arc / 0.32).toFixed(4)}×`)
+  sim.step(0, f, still)
+  let worst = 0
+  for (let i = 2; i < R; i++) worst = Math.max(worst, Math.hypot(...[0, 1, 2].map(d => sim.X[3 * i + d] - sim.X[3 * i - 3 + d])))
+  check('[9] after one step every free segment ≤ 1.05 × 0.02', STRAND_STRETCH_MAX === 1.05 && worst <= 0.021 + 1e-6,
+    `${worst.toFixed(7)} m`)
+  check('[9] row 9 → (0.5205922, 1.4358816, 0)', near(rowOf(sim, 9), [0.5205922, 1.4358816, 0], 1e-6),
+    rowOf(sim, 9).map(v => v.toFixed(7)).join(', '))
+}
+
+// [10] the head tether holds the leading run of head-resting rows only
+{
+  const theta = Math.PI, rows = curvedRows(theta)
+  const r3 = rows[3], rr = Math.hypot(r3[0] - C[0], r3[1] - C[1], r3[2] - C[2])
+  rows[3] = r3.map((v, d) => C[d] + (v - C[d]) * (rr + 0.04) / rr)
+  const fx = build([{ rows, pins: 3, side: [Math.cos(theta), 0, -Math.sin(theta)] }])
+  const sim = makeSim(fx), I = rootMotion('off', 0, 0), f = frameOf(fx.record, I)
+  const p = { ...still, tether: true, tetherR0: 10, tetherR1: 10 }
+  const turn = sign => {
+    sim.reset(f.targets)
+    const a = sign * 25 * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), p3 = rowOf(sim, 3)
+    for (let i = 4; i < R; i++) {
+      const dy = sim.X[3 * i + 1] - p3[1], dz = sim.X[3 * i + 2] - p3[2]
+      sim.X[3 * i + 1] = sim.Xp[3 * i + 1] = p3[1] + c * dy - sn * dz
+      sim.X[3 * i + 2] = sim.Xp[3 * i + 2] = p3[2] + sn * dy + c * dz
+    }
+    return Math.hypot(...[0, 1, 2].map(d => sim.X[18 + d] - C[d]))
+  }
+  const sign = turn(1) > turn(-1) ? 1 : -1
+  turn(sign)
+  const before = Float32Array.from(sim.X)
+  const sdf = M.decodeStrandSdf(fx.record.sdf)
+  let clear = Infinity
+  for (let i = 4; i < R; i++) clear = Math.min(clear, M.strandSdfAt(sdf, ...rowOf(sim, i)))
+  const d6 = Math.hypot(...[0, 1, 2].map(d => sim.X[18 + d] - f.targets[18 + d]))
+  check('[10] rows 4..6 rest on the head after the lifted row 3; row 6 turned > 12 mm off its target, all clear',
+    sim.onHead[3] >= 0.03 && [4, 5, 6].every(i => sim.onHead[i] > 0 && sim.onHead[i] < 0.03) && d6 > 0.012
+    && clear > 0.003, `row 6 ${(d6 * 1000).toFixed(1)} mm, clearance ${(clear * 1000).toFixed(1)} mm`)
+  sim.step(0, f, p)
+  let moved = 0
+  for (let i = 12; i < 3 * R; i++) moved = Math.max(moved, Math.abs(sim.X[i] - before[i]))
+  check('[10] after one step rows 4..16 untouched (no head tether after a free row)', moved <= 1e-6,
+    `max move ${moved.toExponential(2)} m`)
+}
+
+// [11] damping relative to the target: a constant walk drags nothing
+{
+  const fx = build([{ rows: straightRows(0.5, 0), pins: 2, side: [0, 0, 1] }])
+  const sim = makeSim(fx), at = t => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 3.4 * t, 1]
+  sim.reset(frameOf(fx.record, at(0)).targets)
+  let f
+  for (let st = 1; st <= 240; st++) {
+    f = frameOf(fx.record, at(st * DT)); sim.step(DT, f, prm)
+  }
+  let lag = 0
+  for (let q = 0; q < R; q++) lag = Math.max(lag, Math.hypot(...[0, 1, 2].map(d => sim.X[3 * q + d] - f.targets[3 * q + d])))
+  check('[11] 4 s at 3.4 m/s: every row within 1 mm of its target', lag <= 0.001, `${(lag * 1000).toFixed(3)} mm`)
+}
+
+// [12] a capsule never leaves a row inside the head
+{
+  const fx = build([{ rows: straightRows(0, -0.095), pins: 2, side: [1, 0, 0] }])
+  const sim = makeSim(fx), I = rootMotion('off', 0, 0)
+  const cap = { a: [0, 1.56, -0.135], b: [0, 1.56, -0.135], r: 0.06, bind: { a: [0, 0, 5], b: [0, 0, 5] } }
+  const f = frameOf(fx.record, I, [cap])
+  sim.reset(f.targets)
+  const sdf = M.decodeStrandSdf(fx.record.sdf)
+  sim.step(0, f, { ...still, faceBox: false })
+  let worst = Infinity, at = -1
+  for (let i = 2; i < R; i++) {
+    const m = M.strandSdfAt(sdf, ...rowOf(sim, i)) - Math.min(0.003, M.strandSdfAt(sdf, ...fx.record.rest.slice(3 * i, 3 * i + 3)))
+    if (m < worst) { worst = m; at = i }
+  }
+  check('[12] after one step every free row keeps its clearance (−0.5 mm)', worst >= -0.0005,
+    `worst ${(worst * 1000).toFixed(2)} mm at row ${at}, row 2 at z ${sim.X[8].toFixed(4)}`)
+}
+
+// [13] RootInertia
+{
+  const tr = (x, y = 0, z = 0) => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]
+  const ry = a => [Math.cos(a), 0, -Math.sin(a), 0, 0, 1, 0, 0, Math.sin(a), 0, Math.cos(a), 0, 0, 0, 0, 1]
+  const isId = m => m === null || near(m, tr(0), 1e-9)
+  check('[13] limits 2.4674 m/s², 2.5839 rad/s²', Math.abs(STRAND_ROOT_LIMITS.accel - 2.4674011) < 1e-6
+    && Math.abs(STRAND_ROOT_LIMITS.angAccel - 2.5838563) < 1e-6,
+    `${STRAND_ROOT_LIMITS.accel.toFixed(7)}, ${STRAND_ROOT_LIMITS.angAccel.toFixed(7)}`)
+  let ri = new RootInertia(), all = true
+  for (let st = 0; st < 120; st++) all = isId(ri.update(tr(st * DT), DT)) && all
+  check('[13a] 1 m/s from the first frame: every carry the identity', all)
+  ri = new RootInertia(); all = true
+  for (let st = 0; st < 120; st++) {
+    const t = Math.max(0, st * DT - 1)
+    all = isId(ri.update(tr(0.5 * t * t), DT)) && all
+  }
+  check('[13b] at rest, then 1 m/s² for 1 s: every carry the identity', all)
+  ri = new RootInertia()
+  for (let st = 0; st < 10; st++) ri.update(tr(0), DT)
+  const c = ri.update(tr(1), DT)
+  check('[13c] a 1 m snap: the carry is a translation by 0.999314610 m',
+    c !== null && near(c, tr(0.99931461), 1e-9), c ? c.slice(12, 15).map(v => v.toFixed(9)).join(', ') : 'null')
+  ri = new RootInertia()
+  for (let st = 0; st < 10; st++) ri.update(tr(0), DT)
+  const r = ri.update(ry(Math.PI / 2), DT)
+  check('[13d] a 90° yaw snap: the carry is Ry(π/2 − 0.000717738)', r !== null && near(r, ry(Math.PI / 2 - 0.000717738), 1e-9),
+    r ? `angle ${Math.atan2(r[8], r[0]).toFixed(9)}` : 'null')
+  const fx = build([{ rows: straightRows(0.5, 0), pins: 2, side: [0, 0, 1] }])
+  const sim = makeSim(fx)
+  sim.reset(frameOf(fx.record, tr(0)).targets)
+  for (let q = 0; q < sim.X.length; q++) sim.Xp[q] -= 0.001 * (q % 3 === 2 ? 1 : 0)
+  const X0 = Float32Array.from(sim.X), Xp0 = Float32Array.from(sim.Xp), m = ry(Math.PI / 2)
+  sim.carry(m)
+  const turned = A => (q, d) => m[d] * A[3 * q] + m[4 + d] * A[3 * q + 1] + m[8 + d] * A[3 * q + 2]
+  let err = 0
+  for (let q = 0; q < sim.n; q++) for (let d = 0; d < 3; d++) {
+    err = Math.max(err, Math.abs(sim.X[3 * q + d] - turned(X0)(q, d)), Math.abs(sim.Xp[3 * q + d] - turned(Xp0)(q, d)))
+  }
+  check('[13e] carry(Ry 90°): rows and previous rows turned with it', err <= 1e-6, `max ${err.toExponential(2)}`)
 }
 
 // [T] timing, 700 cards

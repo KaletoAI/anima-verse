@@ -19,7 +19,7 @@ import {
   createSecondaryMotion, bindRelativeValues, hipsTrackMedian, mapHipsTrack, normBoneName, restCorrections, restPoseOf,
   rigHipsHeight, standingHipsRef, clipHeightGroup, clipHeightOffsetM, clipShiftM, figureBox, createGarmentCollision,
   applyFootPose, footPoseLiftM, footPoseMatches, plantFootPose, transplantedRestPose, seatFootLift,
-  createStrandHair, withoutHairGroups, STRAND_LIMITS,
+  createStrandHair, withoutHairGroups, STRAND_LIMITS, STRAND_RECORD_VERSION,
 } from '@anima/scene-render';
 import type { SecondaryMotion, RestCorrection, RestPose, ClipHeightOffsetsCm, ClipShiftCm, CollisionPayload,
   GarmentCollision, FootPose, HairStrandRecord, StrandHair } from '@anima/scene-render';
@@ -1215,7 +1215,7 @@ export class FigureLibrary {
       this.strandRecords.set(ref.sha256, fetch(ref.url)
         .then(async (res) => {
           const record = res.ok ? await res.json() as HairStrandRecord : null;
-          this.strandRecords.set(ref.sha256, record && record.version === 1 ? record : null);
+          this.strandRecords.set(ref.sha256, record && record.version === STRAND_RECORD_VERSION ? record : null);
         })
         .catch((e) => {
           console.warn('[figures] strand record not loadable:', ref.url, e);

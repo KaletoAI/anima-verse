@@ -48,6 +48,11 @@
  *     again by 0.05 m: the position buffer is unchanged, bit for bit.
  * [6] withoutHairGroups({rev 'r1', groups {hair_c00: {hair: true}, tail: {}}}) → group keys ['tail'], rev 'r1:strands';
  *     the same input gives the same object (a per-frame call allocates nothing); undefined stays undefined.
+ * [8] Ruling H-R10, the game's yaw snap (`faceTowards(dir, snap = true)`): the figure stands 30 frames, then turns
+ *     90° about +Y in ONE frame (the head on the axis: no jump reset). The targets move > 0.1 m (the cards hang
+ *     0.10 m behind the axis); `RootInertia` feels (2.5839 / 60) / 60 = 0.000718 rad of it and carries the rest, so
+ *     after that update every row is within 1 mm of its target (without the carry a free row moved only d = 4 % of
+ *     its target's 0.1 m in that step and the card flew out behind the turn).
  * [7] createGarmentCollision over the fixture: the hair mesh wears a patched clone; excludeMesh(hair, true) →
  *     hair.material IS the original (unpatched) object again; excludeMesh(hair, false) → the same patched clone as
  *     before (identity), its depth material the patched one.
@@ -262,6 +267,26 @@ const NCARD = 2 * R * 2
   h.update(1 / 60, { frozen: true })
   const after = hair.geometry.getAttribute('position').array
   check('[5] frozen: the position buffer unchanged, bit for bit', before.every((v, i) => Object.is(v, after[i])))
+  h.dispose()
+}
+
+// [8] a 90° yaw snap is carried
+{
+  const { fig } = figure()
+  const h = createStrandHair(THREE, fig, record())
+  h.setEnabled(true)
+  for (let f = 0; f < 30; f++) { fig.updateMatrixWorld(true); h.update(1 / 60) }
+  const before = Float32Array.from(h.targets)
+  fig.rotation.y = Math.PI / 2
+  fig.updateMatrixWorld(true)
+  h.update(1 / 60)
+  let moved = 0, err = 0
+  for (let q = 0; q < h.sim.X.length; q += 3) {
+    moved = Math.max(moved, Math.hypot(h.targets[q] - before[q], h.targets[q + 1] - before[q + 1], h.targets[q + 2] - before[q + 2]))
+    err = Math.max(err, Math.hypot(h.sim.X[q] - h.targets[q], h.sim.X[q + 1] - h.targets[q + 1], h.sim.X[q + 2] - h.targets[q + 2]))
+  }
+  check('[8] the snap moved the targets > 0.1 m (the case is real)', moved > 0.1, `${moved.toFixed(4)} m`)
+  check('[8] after the snap every row within 1 mm of its target (carried)', err <= 0.001, `${(err * 1000).toFixed(3)} mm`)
   h.dispose()
 }
 

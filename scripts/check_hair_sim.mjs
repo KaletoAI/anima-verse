@@ -6,7 +6,7 @@
  *
  * Usage:
  *   node scripts/check_hair_sim.mjs ASSEMBLED.glb STRANDS.json [--clips sit,celebrating,walk] [--json FILE]
- *        [--set female] [--loops 2] [--every 6]
+ *        [--set female] [--loops 2] [--every 6] [--game] [--snap] [--ref REF_STRANDS.json]
  *   ASSEMBLED.glb = a skinned figure whose hair primitive carries `_STRAND_CARD` / `_STRAND_U` (the full tier, or
  *   the Hairstyles preview / `scripts/hair_strands_export.py`'s `<fit>.strands.glb`); STRANDS.json its record.
  *   Clips come from ANIMATION_CLIPS_DIR (default shared/models/clips), the retarget reference from
@@ -30,7 +30,21 @@
  *    opaque hair, in head-bind space. Reported as the peak minus the BIND rest (`Δ bind`) — the criterion, ≤ +2 pp —
  *    (and its p95 over the samples: a peak of one frame against a held one) and minus today's skin in the same frame (`Δ skin`: every row at its target, what the hair looks like without
  *    the sim) — the share the sim itself adds;
- *  - ms per frame: the handle's update (targets, capsules, steps, rebuild), mean / p95, and its cost EMA.
+ *  - ms per frame: the handle's update (targets, capsules, steps, rebuild), mean / p95, and its cost EMA;
+ *  - stretch (Ruling H-R10): the longest card relative to its target chain (arc of the 17 simulated rows / arc of
+ *    their targets), the worst frame's card — criterion ≤ 1.1;
+ *  - flyaways (Ruling H-R10): the most cards in one frame whose free chord (last pin → tip, world) lies within 20°
+ *    of the horizontal while its target chord hangs more than 45° below it (cards with ≥ 10 cm of free arc).
+ *
+ * `--game` (Ruling H-R10) moves the figure the way the 3D client does instead of on the spot: its yaw eased towards
+ * the wanted facing by client3d's own `easeNpcYaw` (`game/npcWalk.ts`, a 10/s exponential ease — the NPC turning
+ * code and the avatar's eased steering), walk at `WALK_SPEED` along a polyline whose corners turn 45°, −90°,
+ * 135°, −180° (U-turn), 90°, −45° (2.5 m legs, a waypoint retired within `WAYPOINT_ARRIVE_M`), every other clip on
+ * the spot turning 90°, 180°, −90°, 45° every 1.5 s. `--snap` adds the instant turns the client also makes
+ * (`faceTowards(…, snap)`: a walk starting backwards, a 180° snap on the spot).
+ * `--ref` (Ruling H-R8): a record of the same fit whose SDF reaches below the crop of STRANDS.json; the depth of
+ * the rows BELOW the ear line in that SDF, split in front of the head centre (the jaw and cheeks, Head-rigid —
+ * a real collision) and behind it (the neck, which the head-rigid SDF misplaces), for the sim and today's skin.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -42,7 +56,8 @@ const __dirname = path.dirname(__filename)
 const REPO = process.env.HAIR_SIM_CHECK_BUNDLED ? process.cwd() : path.join(__dirname, '..')
 
 function parseArgs(argv) {
-  const opts = { files: [], clips: ['sit', 'celebrating', 'walk'], set: '', loops: 2, every: 6 }
+  const opts = { files: [], clips: ['sit', 'celebrating', 'walk'], set: '', loops: 2, every: 6, game: false,
+    snap: false, ref: '' }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--clips') opts.clips = argv[++i].split(',').filter(Boolean)
@@ -50,6 +65,9 @@ function parseArgs(argv) {
     else if (a === '--set') opts.set = argv[++i]
     else if (a === '--loops') opts.loops = Math.max(1, Number(argv[++i]))
     else if (a === '--every') opts.every = Math.max(1, Number(argv[++i]))
+    else if (a === '--game') opts.game = true
+    else if (a === '--snap') opts.snap = true
+    else if (a === '--ref') opts.ref = argv[++i]
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`)
     else opts.files.push(a)
   }
@@ -133,6 +151,7 @@ async function main() {
   const { MeshoptDecoder } = await import('three/examples/jsm/libs/meshopt_decoder.module.js')
   const SR = await import('../packages/scene-render/src/index.ts')
   const { adaptExternalClips } = await import('../client3d/src/scene/figures.ts')
+  const { easeNpcYaw, facingYaw, WALK_SPEED, WAYPOINT_ARRIVE_M } = await import('../client3d/src/game/npcWalk.ts')
   const { restPoseOf, restCorrections, rigHipsHeight, normBoneName, inGarment, createStrandHair, jointNowFrom,
     invertAffine, eyePointsEntered, restInsideBox, maxSdfDepthMm, scalpCameras, scalpExposure } = SR
 
@@ -162,7 +181,10 @@ async function main() {
   const b0 = new THREE.Box3().setFromObject(template)
   const s0 = b0.getSize(new THREE.Vector3())
   if (s0.z > s0.y * 1.5) template.rotation.x = -Math.PI / 2
-  template.updateMatrixWorld(true)
+  // The figure's root (client: `Figure.root`, turned and moved by the game; `--game`).
+  const holder = new THREE.Group()
+  holder.add(template)
+  holder.updateMatrixWorld(true)
   const corrections = restCorrections(THREE, donorRest, template)
   const adapted = adaptExternalClips(library.map((c) => c.clone()), template, corrections, donorHipsY)
 
@@ -239,34 +261,138 @@ async function main() {
     sim.X.set(saved)
     return d
   }
+  // Ruling H-R10: card length against its target chain, and the near-horizontal flyaways (module docstring).
+  const R = 17, S = record.cards
+  const cardStretch = () => {
+    const X = sim.X, T = handle.targets
+    let worst = 0, card = -1
+    for (let c = 0; c < S; c++) {
+      let ax = 0, at = 0
+      for (let i = 1; i < R; i++) {
+        const o = 3 * (c * R + i), b = o - 3
+        ax += Math.hypot(X[o] - X[b], X[o + 1] - X[b + 1], X[o + 2] - X[b + 2])
+        at += Math.hypot(T[o] - T[b], T[o + 1] - T[b + 1], T[o + 2] - T[b + 2])
+      }
+      const r = at > 1e-6 ? ax / at : 1
+      if (r > worst) { worst = r; card = c }
+    }
+    return { ratio: worst, card }
+  }
+  const elev = (dx, dy, dz) => Math.atan2(dy, Math.hypot(dx, dz)) * 180 / Math.PI
+  const flyaways = () => {
+    const X = sim.X, T = handle.targets, out = []
+    for (let c = 0; c < S; c++) {
+      if (record.free_arc[c * R + R - 1] < 0.10) continue
+      const lp = 3 * (c * R + Math.max(1, record.pins[c]) - 1), tp = 3 * (c * R + R - 1)
+      const te = elev(T[tp] - T[lp], T[tp + 1] - T[lp + 1], T[tp + 2] - T[lp + 2])
+      if (te > -45) continue
+      if (elev(X[tp] - X[lp], X[tp + 1] - X[lp + 1], X[tp + 2] - X[lp + 2]) >= -20) out.push(c)
+    }
+    return out
+  }
+  // Ruling H-R8: rows below the ear line in the reference SDF (front: the jaw and cheeks; back: the neck).
+  const ref = opts.ref ? SR.decodeStrandSdf(JSON.parse(fs.readFileSync(opts.ref, 'utf8')).sdf) : null
+  const bandDepth = (head, pts) => {
+    const inv = invertAffine(head), C0 = sim.binding.C0
+    let front = 0, back = 0
+    for (let q = 0; q < sim.n; q++) {
+      if (sim.pin[q]) continue
+      const x0 = pts[3 * q], y0 = pts[3 * q + 1], z0 = pts[3 * q + 2]
+      const hy = inv[1] * x0 + inv[5] * y0 + inv[9] * z0 + inv[13]
+      if (hy >= record.ear_y) continue
+      const hx = inv[0] * x0 + inv[4] * y0 + inv[8] * z0 + inv[12], hz = inv[2] * x0 + inv[6] * y0 + inv[10] * z0 + inv[14]
+      const d = Math.min(0, SR.strandSdfAt(ref, C0[3 * q], C0[3 * q + 1], C0[3 * q + 2])) - SR.strandSdfAt(ref, hx, hy, hz)
+      if (hz > cz) front = Math.max(front, d); else back = Math.max(back, d)
+    }
+    return [front * 1000, back * 1000]
+  }
+
+  /** The root motion of `--game` (module docstring): per frame the root's yaw and position. */
+  const DT = 1 / 60
+  const gameMotion = (kind) => {
+    const turns = [45, -90, 135, -180, 90, -45]
+    const st = { x: 0, z: 0, yaw: 0, target: 0, t: 0, leg: 0, way: [], snaps: 0 }
+    if (kind === 'walk') {
+      let h = 0, px = 0, pz = 0
+      for (let i = 0; i <= turns.length; i++) {
+        px += 2.5 * Math.sin(h); pz += 2.5 * Math.cos(h)
+        st.way.push({ x: px, z: pz })
+        if (i < turns.length) h += turns[i] * Math.PI / 180
+      }
+      if (opts.snap) { st.yaw = Math.PI; st.target = Math.PI }    // facing back: the walk starts with a snap
+    }
+    return () => {
+      st.t += DT
+      if (kind === 'walk') {
+        let w = st.way[st.leg]
+        if (w && Math.hypot(w.x - st.x, w.z - st.z) < WAYPOINT_ARRIVE_M && st.leg < st.way.length - 1) w = st.way[++st.leg]
+        if (!w) w = st.way.at(-1)
+        const dx = w.x - st.x, dz = w.z - st.z, dist = Math.hypot(dx, dz)
+        if (dist > 1e-3) {
+          const yaw = facingYaw({ x: dx, y: 0, z: dz })
+          if (opts.snap && st.t <= DT * 1.5) { st.yaw = yaw; st.snaps++ }    // `faceTowards(dir, true)` at the start
+          st.target = yaw
+          const step = Math.min(dist, WALK_SPEED * DT)
+          st.x += dx / dist * step; st.z += dz / dist * step
+        }
+        if (st.leg === st.way.length - 1 && dist < 1e-3) {             // the end: back to the start
+          st.way.reverse(); st.leg = 0
+        }
+      } else if (kind !== 'sit') {
+        const k = Math.floor(st.t / 1.5), at = [0, 90, 270, 180, 225]
+        const want = at[k % at.length] * Math.PI / 180
+        if (opts.snap && k % at.length === 3 && st.target !== want) { st.yaw = want; st.snaps++ }   // a 180° snap
+        st.target = want
+      }
+      st.yaw = easeNpcYaw(st.yaw, st.target, DT)
+      holder.position.set(st.x, 0, st.z)
+      holder.rotation.y = st.yaw
+    }
+  }
+
   const bindExposure = scalpExposure(trisOf(posAttr()), scalp, cams)
   console.log(`== ${path.basename(modelPath)}: ${record.cards} cards, ${sim.n} rows, `
     + `${posAttr().length / 3} hair vertices, scalp ${scalp.length / 9} triangles, colliders [${handle.capsuleIds.join(', ')}]`)
   console.log(`   bind rest exposure (back/135/225): ${bindExposure.map(pct).join(' / ')} %`)
 
-  const report = { model: path.basename(modelPath), record: path.basename(recordPath), cards: record.cards,
+  const report = { model: path.basename(modelPath), record: path.basename(recordPath), game: opts.game, snap: opts.snap,
+    cards: record.cards,
     rows: sim.n, colliders: handle.capsuleIds, clip_files: clipFiles, bind_exposure_pct: bindExposure.map(pct),
     clips: {} }
-  const DT = 1 / 60
   for (const clip of adapted) {
     const mixer = new THREE.AnimationMixer(template)
     const action = mixer.clipAction(clip)
     action.play()
     mixer.setTime(0)
-    template.updateMatrixWorld(true)
+    holder.position.set(0, 0, 0)
+    holder.rotation.y = 0
+    const move = opts.game ? gameMotion(clip.name) : null
+    holder.updateMatrixWorld(true)
     handle.update(1)   // a long delta: reset to this pose
-    const frames = Math.max(120, Math.round(clip.duration * opts.loops / DT))
+    const frames = Math.max(opts.game ? 900 : 120, Math.round(clip.duration * opts.loops / DT))
     let eye = 0, depth = 0, skinDeep = 0, where = null, above = 0
+    let stretch = { ratio: 0, card: -1, frame: 0 }, fly = { count: 0, cards: [], frame: 0 }, flyFrames = 0
+    const band = [0, 0], skinBand = [0, 0]
     const series = [[], [], []]
     const peakBind = [0, 0, 0], peakSkin = [-1, -1, -1], peakAbs = [0, 0, 0], ms = []
     for (let f = 1; f <= frames; f++) {
+      move?.()
       mixer.update(DT)
-      template.updateMatrixWorld(true)
+      holder.updateMatrixWorld(true)
       const t0 = performance.now()
       handle.update(DT)
       ms.push(performance.now() - t0)
       if (f < 60) continue
+      const st = cardStretch()
+      if (st.ratio > stretch.ratio) stretch = { ...st, frame: f }
+      const fl = flyaways()
+      if (fl.length) flyFrames++
+      if (fl.length > fly.count) fly = { count: fl.length, cards: fl.slice(0, 12), frame: f }
       const head = headNow()
+      if (ref) {
+        const b = bandDepth(head, sim.X), sb = bandDepth(head, handle.targets)
+        for (let k = 0; k < 2; k++) { band[k] = Math.max(band[k], b[k]); skinBand[k] = Math.max(skinBand[k], sb[k]) }
+      }
       eye = Math.max(eye, eyePointsEntered(sim, head, record.eye_box, restEye))
       const d = maxSdfDepthMm(sim, head, sim.sdf)
       const w = deepest(head)
@@ -292,12 +418,20 @@ async function main() {
       deepest_row: where && { free_frac: +where.frac.toFixed(2), above_ear_cm: +where.above_ear_cm.toFixed(1) },
       peak_exposure_pct: peakAbs.map(pct), delta_bind_pp: peakBind.map(pct), delta_skin_pp: peakSkin.map(pct),
       ms_per_frame_mean: +mean.toFixed(2), ms_per_frame_p95: +quantile(ms, 0.95).toFixed(2),
-      cost_ema_ms: +handle.costMs.toFixed(2) }
+      cost_ema_ms: +handle.costMs.toFixed(2),
+      max_card_stretch: +stretch.ratio.toFixed(3), stretch_card: stretch.card, stretch_frame: stretch.frame,
+      max_flyaways: fly.count, flyaway_cards: fly.cards, flyaway_frame: fly.frame, flyaway_frames: flyFrames,
+      ...(ref ? { below_ear_front_mm: +band[0].toFixed(2), below_ear_back_mm: +band[1].toFixed(2),
+        skin_below_ear_front_mm: +skinBand[0].toFixed(2), skin_below_ear_back_mm: +skinBand[1].toFixed(2) } : {}) }
     report.clips[clip.name] = row
     console.log(`   ${clip.name.padEnd(12)} eye ${eye}  depth ${row.max_sdf_depth_mm} mm (above the ear line ${row.above_ear_depth_mm}; skin ${row.skin_sdf_depth_mm}`
       + `${where ? `, deepest at frac ${row.deepest_row.free_frac}, ${row.deepest_row.above_ear_cm} cm above the ear line` : ''})  `
       + `Δ bind ${row.delta_bind_pp.join(' / ')} pp (p95 ${row.delta_bind_p95_pp.join(' / ')})  Δ skin ${row.delta_skin_pp.join(' / ')} pp  `
       + `${row.ms_per_frame_mean} ms/frame (p95 ${row.ms_per_frame_p95})`)
+    console.log(`   ${''.padEnd(12)} stretch ${row.max_card_stretch} (card ${row.stretch_card}, frame ${row.stretch_frame})  `
+      + `flyaways ${row.max_flyaways} (frame ${row.flyaway_frame}, ${row.flyaway_frames} frames; cards ${row.flyaway_cards.join(',')})`
+      + (ref ? `  below the ear line in the reference SDF: front ${row.below_ear_front_mm} / back ${row.below_ear_back_mm} mm`
+        + ` (skin ${row.skin_below_ear_front_mm} / ${row.skin_below_ear_back_mm})` : ''))
   }
   if (opts.json) fs.writeFileSync(opts.json, JSON.stringify(report, null, 2))
 }

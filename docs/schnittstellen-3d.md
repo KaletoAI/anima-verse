@@ -12256,7 +12256,7 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   chains hang from (Head). Each joint is placed at that blend of the body joints' motions since bind (linear, as
   skinning blends) times its bind frame, times its own swing scaled to the row's `anchor_from` share; at zero swing
   the hair is exactly where today's skin puts it. The hair contact runs on that final frame (the tip turned about
-  the joint). Swing itself is a FIT input (profile `hair_swing`, default ON since Ruling H-R1 — explicitly off stays off): with Swing off the fit is today's
+  the joint). Swing itself is a FIT input (profile `hair_swing`, default ON since Ruling H-R1 — explicitly off stays off; a HairDeck fit made on the default before that, with Swing off, is refitted on the CPU from its stored seeds at the next start under the new fsig, `garment_refit.swing_default_fits`, Ruling H-R9 — no hub job): with Swing off the fit is today's
   skin byte for byte and the payload has no hair group. Checks: `scripts/smoke_hair_today_skin.mjs` (hand-derived),
   `scripts/check_garment_collision.mjs --motion` (penetration on the real clips). Far LOD, no driven link or no payload → nothing is bound, no per-frame work. Checks:
   `scripts/smoke_extension_collision.mjs` (hand-derived), `scripts/check_extension_collision.mjs` (tip depth and
@@ -12268,11 +12268,11 @@ The per-strand hair simulation (strand-hair spec `docs/superpowers/specs/2026-11
 § 6.2) runs in both renderers on data the server computes once per hair fit (`app/core/hair_strands.py`). A client
 detects no cards, rows, pins, colliders or face boxes itself.
 
-**Record v1** — compact JSON, cached as `<fit stem>.strands.json` beside the fit (plus `<fit stem>.strands.npz`
+**Record v2** — compact JSON, cached as `<fit stem>.strands.json` beside the fit (plus `<fit stem>.strands.npz`
 with the per-vertex binding), keyed by the fit GLB's sha256 and the character's collision scales:
 
 ```
-{"version": 1, "item_id", "fsig", "mode": "hairdeck" | "haar", "fit_sha256",
+{"version": 2, "item_id", "fsig", "mode": "hairdeck" | "haar", "fit_sha256",
  "frame": "head_bind", "head_bone": "mixamorig:Head", "rows": 17, "cards": S,
  "rest":      [S*17*3 floats, m],      // per card 17 centreline rows, root first
  "pins":      [S ints >= 1],           // the leading pinned rows of each card
@@ -12297,7 +12297,15 @@ with the per-vertex binding), keyed by the fit GLB's sha256 and the character's 
   · p_bind` with the row's Head / Neck / Spine2 blend (`garment_fit.hair_weights` at the row). Pinned rows are
   `{Head: 1}`. A skin without a Neck lists two bones.
 - **SDF.** `garment_fit.body_sdf` of the fit body, cropped to `x cx ± 0.15`, `y chin − 0.05 … top + 0.06`,
-  `z cz ± 0.16` m, every second voxel of `VOX_M` (6.8 mm); int8 millimetres clamped to ±127, x fastest: byte
+  `z cz ± 0.16` m (the grid the pins are counted on), sent from the CHIN up with the NECK cut away (Ruling H-R8,
+  record v2, `hair_strands.SDF_FLOOR` / `SDF_NECK`): the payload's lowest row is the last one of its grid at or
+  below the chin (`lo` is that row), and every voxel below `ear_y` AND behind the head's centre plane `cz` reads
+  +127 (outside). The SDF rides the head rigidly; the neck below 5 cm under the chin, and the neck between chin and
+  ear behind the jaw, turned with the head and held hair that rightly follows Neck / Spine2 35–50 mm "inside" (a
+  card resting there was pushed along it: Kira, sit, 1.77× its length). Measured on Kira and Lirien with the game's
+  turns and snaps: the chin floor alone left 13.9 / 21.1 mm (celebrating, snap), the ear-line floor let hair
+  35–47 mm into the jaw, chin + neck cut ≤ 1.04 mm. The neck is the capsules'. Every second
+  voxel of `VOX_M` (6.8 mm); int8 millimetres clamped to ±127, x fastest: byte
   `(ix, iy, iz)` at `ix + nx·(iy + ny·iz)`. Outside the grid it reads +0.127 m. Exact within 6 voxels outside the
   body (`SDF_EXACT_BAND_VOX`); inside, the voxel EDT reads up to about one voxel shallow.
 - **Boxes.** Face keep-out (used by the sim): `|x − cx| < 6 cm`, `chin < y < brow + 1 cm`, `z > cz + 0.25·head_d`;
@@ -12322,7 +12330,8 @@ has one entry per vertex:
 
 three's GLTFLoader exposes them as `geometry.attributes._strand_card` / `_strand_u`. The Hairstyles preview GLB
 (`GET /characters/{name}/garments/{item_id}/model`, a HairDeck fit) carries the same two on its hair primitive
-(`hair_strands.preview_glb`, Ruling H-R5), versioned `<content version>.s1` (`hair_strands.preview_version`, also
+(`hair_strands.preview_glb`, Ruling H-R5), versioned `<content version>.s<record version>` (`.s2`;
+`hair_strands.preview_version`, also
 the `v` of the hair GET's `preview_url`). The distance tier (`low_url`) carries neither. The assembly's hair state carries `strands` = the record's sha256, so a new record
 re-assembles on the CPU. A record whose `cards` or vertex binding does not match the served primitive leaves the
 hair on its skin — never scrambled.
@@ -12345,6 +12354,16 @@ two attributes into rest frames + per-vertex offsets (`StrandMismatch` when they
 `StrandSim.step` runs spec § 6.2.1 (Verlet + pendulum pull, length/bend passes, angle limit against the TARGET
 segment, head SDF + capsules under the bind rule + face box in head-bind space, tether) and `rebuild` writes the
 vertices in head-bind space. At rest every term is zero: the rebuilt mesh equals the bind mesh bit for bit.
+Ruling H-R10 (the stray card and the flyaways of the game's turns): the Verlet step runs in the TARGET's frame —
+damping on the velocity relative to the target's, the pull towards the target of the row's own step (damped in
+world, a walk at 3.4 m/s was 8.2 m/s² of drag); the head SDF has the last word over a capsule or the face box
+that pushed a row back into the head; the head tether holds only the leading run of head-resting rows after the
+last pin (a row resting on the head again after free rows, held alone, pinned the middle of a swinging card:
+3.6×); a final length clamp shortens every free segment to `STRAND_STRETCH_MAX` (1.05) × its target length, root
+to tip, each moved row out of the colliders again. `RootInertia` (per handle) lets the sim feel the figure root's
+motion only up to `STRAND_ROOT_LIMITS` (the spike's tuning motions: 2.47 m/s², 2.58 rad/s²) and carries the rest
+rigidly (`StrandSim.carry`, rows, previous rows and previous targets): a yaw snap or the 10/s turn ease turns the
+hair with the body. The client reads records of `STRAND_RECORD_VERSION` (2) only.
 
 **Proofs (§ B5a).** `scripts/smoke_hair_strands_record.py` (the record on a hand-built head and two cards: pins,
 rest, free arc, `u`, follow rows, SDF decoding, boxes, cache), `scripts/smoke_hair_strands_graft.py` (the
@@ -12352,7 +12371,10 @@ attributes' round trip, the full tier only, a mismatch refused, the assembly sta
 `scripts/smoke_hair_strands_route.py` (ETag/304/404, admin-only preview, `model.hair_strands`, the preview GLB's
 binding), and `scripts/smoke_hair_sim.mjs` (the sim on a quantized sphere head: exact rest, angle limit, tether,
 SDF depth and eye box under sway/walk, scalp exposure, HAAR without limit, follow rows under a pitched spine with
-the torso capsule).
+the torso capsule; H-R10: length clamp, leading-run head tether, relative damping at walk speed, the head's last
+word, `RootInertia`). `scripts/check_hair_sim.mjs --game [--snap]` drives the real hair with the client's own turn
+ease and walk speed (`client3d/src/game/npcWalk.ts`) and reports the longest card against its target (stretch) and
+the near-horizontal flyaways.
 
 **The handle and the budget (3D client).** `hairSim.ts::createStrandHair(three, root, record)` binds a record to the
 figure's hair mesh (`null` without the two attributes or on `StrandMismatch`) and keeps its colliders: the record's

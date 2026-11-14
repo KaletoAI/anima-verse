@@ -85,6 +85,20 @@ record's inputs.prepared_sha256 = sha256 of those bytes.
     (the refusal holds, ``garment_store.body_failure``); the base fit's bytes
     change (b"BASE:cR v2") -> another base fit -> listed
     [(cR, clothing, 777.., ob0000000a)].
+[6] Ruling H-R9, the Swing default (hair_motion.HAIR_SWING_DEFAULT on since H-R1): HairDeck hair hS on the
+    default (no stored hair_swing), current fsig 555555555555 (Swing on: no fit), its Swing-off fsig
+    444444444444 (``garment_fsig(swing=False)``) holding an accepted HairDeck fit of the CURRENT fit version
+    (13) made with Swing off (inputs.swing False, served seed 5):
+    (a) outdated_fits does not list hS (the version is current, the fsig another — the gap) ->
+        swing_default_fits(Demo) = [(hS, 444.., 555..)]; work_count counts it;
+    (b) refit_character fits the stored seeds under 555.. — the served seed 5 first (attempt 2) and publishes
+        it under 555..; one log line "Garment refit Demo/hS (hair, 444.. -> 555..): Swing default on: ok";
+        0 hub / HairDeck calls;
+    (c) a fit under 555.. now -> nothing listed;
+    (d) an explicit "off" or "on" (stored hair_swing) -> not listed; the old fit made with Swing on
+        (inputs.swing True) -> not listed; HAIR_SWING_DEFAULT False -> [];
+    (e) no stored seed passes -> refused, the failure stamped (fit_version 13, inputs_id of 555..) -> held:
+        not listed at the next start, nothing fitted.
 """
 import hashlib
 import json
@@ -166,7 +180,9 @@ def main() -> int:
         FSIG = {"hA": "a" * 12, "cB": "b" * 12, "cC": "c" * 12, "cD": "e" * 12, "hE": "f" * 12,
                 "hH": "9" * 12}
         METHOD = {"hH": gs.HAIRDECK}
-        gs.garment_fsig = lambda name, item_id, profile=None: FSIG[item_id]
+        OFF_FSIG = {}    # [6]: the Swing-off fingerprint of a hairstyle on the Swing default
+        gs.garment_fsig = lambda name, item_id, profile=None, swing=None: (
+            OFF_FSIG.get(item_id) if swing is False else None) or FSIG[item_id]
         gs.garment_method = lambda name, item_id, profile=None: METHOD.get(item_id, gs.EDIT_CHAIN)
         gs.garment_hsig = lambda name, item_id, profile=None: "8" * 12
         SCHEDULED, DECIMATED = [], []
@@ -425,6 +441,60 @@ def main() -> int:
         cr_fit.write_bytes(b"BASE:cR v2")
         check("another base fit: listed", garment_refit.outdated_body_fits("Demo"),
               [("cR", "clothing", "7" * 12, BODY)])
+
+        # --- [6] the Swing default (Ruling H-R9) -------------------------------------------------------
+        print("[6] a HairDeck fit the Swing default left behind is refitted under the current fsig")
+        from app.core import hair_motion
+        from app.models import inventory
+        ITEMS = {"hS": {"id": "hS", "garment": {}}}
+        real_get_item = inventory.get_item
+        inventory.get_item = lambda item_id: ITEMS.get(item_id) or real_get_item(item_id)
+        s_old, s_new = "4" * 12, "5" * 12
+        FSIG["hS"], OFF_FSIG["hS"], METHOD["hS"] = s_new, s_old, gs.HAIRDECK
+        put("hS", "hair", s_old, SHA, FV["hair"], method=gs.HAIRDECK, extra={"inputs": {"seed": 5, "swing": False}})
+        SWING_PUB = []
+        garments._publish_hairdeck = (lambda name, item_id, kind, fsig, bsig, hsig, profile, snapshot, fit, fits:
+                                      SWING_PUB.append((item_id, fsig, fit["seed"])))
+        VERDICT.clear(), VERDICT.update({3: True, 5: True})
+        FITTED.clear()
+        check("(a) outdated_fits: not hS", [i for i, *_r in garment_refit.outdated_fits("Demo") if i == "hS"], [])
+        check("(a) swing_default_fits", garment_refit.swing_default_fits("Demo"), [("hS", s_old, s_new)])
+        check("(a) work_count counts it", garment_refit.work_count("Demo") >= 1, True)
+        lines.lines.clear()
+        done = garment_refit.refit_character("Demo") or []
+        check("(b) refitted", "hS" in done, True)
+        check("(b) served seed first, published under the current fsig", (FITTED, SWING_PUB),
+              ([(5, 2)], [("hS", s_new, 5)]))
+        check("(b) log", [line for line in lines.lines if line.startswith("Garment refit Demo/hS")],
+              [f"Garment refit Demo/hS (hair, {s_old} -> {s_new}): Swing default on: ok"])
+        check("(b) no hub / HairDeck call", HUB, [])
+        put("hS", "hair", s_new, SHA, FV["hair"], method=gs.HAIRDECK, extra={"inputs": {"seed": 5, "swing": True}})
+        check("(c) a fit under the current fsig: nothing listed", garment_refit.swing_default_fits("Demo"), [])
+        gs.garment_path("Demo", "hS", s_new, "fit").with_suffix(".json").unlink()
+        gs.garment_path("Demo", "hS", s_new, "fit").unlink()
+        check("(c) gone again: listed", garment_refit.swing_default_fits("Demo"), [("hS", s_old, s_new)])
+        for value in (hair_motion.SWING_OFF, hair_motion.SWING_ON):
+            ITEMS["hS"]["garment"] = {hair_motion.SETTING_SWING: value}
+            check(f"(d) explicit {value!r}: not listed", garment_refit.swing_default_fits("Demo"), [])
+        ITEMS["hS"]["garment"] = {}
+        put("hS", "hair", s_old, SHA, FV["hair"], method=gs.HAIRDECK, extra={"inputs": {"seed": 5, "swing": True}})
+        check("(d) the old fit swings already: not listed", garment_refit.swing_default_fits("Demo"), [])
+        put("hS", "hair", s_old, SHA, FV["hair"], method=gs.HAIRDECK, extra={"inputs": {"seed": 5, "swing": False}})
+        hair_motion.HAIR_SWING_DEFAULT = False
+        check("(d) default off: []", garment_refit.swing_default_fits("Demo"), [])
+        hair_motion.HAIR_SWING_DEFAULT = True
+        VERDICT.clear(), VERDICT.update({3: False, 5: False})
+        FITTED.clear(), SWING_PUB.clear()
+        done = garment_refit.refit_character("Demo") or []
+        check("(e) refused: not refitted, nothing published", ("hS" in done, SWING_PUB), (False, []))
+        failure = gs.chain_failure("Demo", "hS", s_new, base_model_sha=SHA) or {}
+        check("(e) refusal stamped", (failure.get("step"), failure.get("fit_version"), failure.get("inputs_id")),
+              ("fit", FV["hair"], garment_refit.inputs_id("Demo", "hS", s_new, gs.HAIRDECK, SHA)))
+        check("(e) held: not listed", garment_refit.swing_default_fits("Demo"), [])
+        FITTED.clear()
+        garment_refit.refit_character("Demo")
+        check("(e) next start: nothing fitted", FITTED, [])
+        check("(e) no hub / HairDeck call", HUB, [])
 
     print("ALL OK" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
     return 1 if FAILS else 0

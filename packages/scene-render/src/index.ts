@@ -192,7 +192,8 @@ export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry } from './
 
 export { STRAND_ROWS, StrandMismatch, StrandSim, bindStrands, boxDepth, decodeStrandSdf, eyePointsEntered,
   invertAffine, limitSegmentAngle, maxSdfDepthMm, restInsideBox, scalpCameras, scalpExposure, SCALP_CAMERA_FOV_DEG,
-  strandCapsules, strandParams, strandSdfAt, strandTargets, STRAND_LIMITS, pickStrandFigures } from './hairSimMath'
+  strandCapsules, strandParams, strandSdfAt, strandTargets, STRAND_LIMITS, pickStrandFigures, RootInertia,
+  STRAND_ROOT_LIMITS, STRAND_STRETCH_MAX, STRAND_RECORD_VERSION } from './hairSimMath'
 export type { HairStrandRecord, StrandBinding, StrandFrame, StrandParams, StrandSdf, StrandCandidate,
   StrandLimits } from './hairSimMath'
 

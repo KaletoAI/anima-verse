@@ -38,6 +38,16 @@ the current base model) and on every outfit body (``refused_body_fits``,
 the body stored unchanged, the fsig of the served base fit). A new refusal
 is recorded stamped, so it is not retried again.
 
+The Swing default (Ruling H-R9): ``hair_motion.HAIR_SWING_DEFAULT`` flipped
+on (H-R1), and Swing is in a HairDeck fit's fingerprint — a hairstyle that
+never chose its Swing got a NEW fsig without a fit, the Swing-off fit of the
+old fsig stayed served, and the version check above never sees another fsig.
+``swing_default_fits`` lists exactly those (their stored setting is the
+default, the Swing-off fsig holds an accepted Swing-off fit on the current
+base model, the current fsig none); the sweep refits their stored seeds under
+the current fsig (``_refit_hairdeck``, the served seed of the old fit first).
+An explicit Swing (``"off"`` / ``"on"``) is never listed.
+
 Refit before re-render (``garment_source``): every refit here fits through
 ``garments._fit`` / ``fit_on_body``, so a group refitted from a source made
 on an older base is registered from its own base copy like the chain does.
@@ -170,6 +180,52 @@ def outdated_fits(character_name: str, *, profile: Optional[Dict[str, Any]] = No
         if held_refusal(character_name, item_id, kind, fsig, method, base[1], profile=profile):
             continue
         out.append((item_id, kind, fsig, method))
+    return out
+
+
+def swing_default_fits(character_name: str, *, profile: Optional[Dict[str, Any]] = None
+                       ) -> List[Tuple[str, str, str]]:
+    """``[(item_id, old fsig, current fsig)]`` of the character's HairDeck hairstyles on the Swing DEFAULT (no
+    stored ``hair_swing``; Ruling H-R9, module docstring) whose current fsig has no accepted fit on the current base
+    model while the fsig they would have with Swing off (``garment_store.garment_fsig(swing=False)``) holds an
+    accepted HairDeck fit made with Swing off (``inputs.swing`` false) on it — the fits ``HAIR_SWING_DEFAULT``
+    flipping on left behind. By item id; never one whose refit of the current fsig the current fit version refused
+    already from the same inputs (``held_refusal``). Empty while the default is off."""
+    from app.core import base_body, garment_hair, garment_set, hair_motion, garment_store as gs
+    from app.models.inventory import get_item
+    if not hair_motion.HAIR_SWING_DEFAULT:
+        return []
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    base = base_body.current_base(character_name, profile=profile)
+    if base is None or not base[1]:
+        return []
+
+    def accepted(item_id: str, fsig: str) -> Dict[str, Any]:
+        record = gs.read_record(gs.garment_path(character_name, item_id, fsig, "fit").with_suffix(".json"))
+        return record if record.get("accepted") is True and record.get("base_model_sha256") == base[1] else {}
+
+    out: List[Tuple[str, str, str]] = []
+    for item_id in sorted({iid for iid, _fsig in gs.stored_groups(character_name)}):
+        try:
+            if gs.garment_method(character_name, item_id, profile=profile) != gs.HAIRDECK:
+                continue
+            settings = garment_hair.hairstyle_settings(get_item(item_id))
+            if settings.get(hair_motion.SETTING_SWING) in (hair_motion.SWING_ON, hair_motion.SWING_OFF):
+                continue
+            current = gs.garment_fsig(character_name, item_id, profile=profile)
+            old = gs.garment_fsig(character_name, item_id, profile=profile, swing=False)
+        except ValueError:
+            continue
+        if old == current or accepted(item_id, current):
+            continue
+        record = accepted(item_id, old)
+        if gs.fit_method(record) != gs.HAIRDECK or (record.get("inputs") or {}).get("swing"):
+            continue
+        if held_refusal(character_name, item_id, garment_set.HAIR, current, gs.HAIRDECK, base[1], profile=profile):
+            continue
+        out.append((item_id, old, current))
     return out
 
 
@@ -570,16 +626,17 @@ def _busy(character_name: str) -> bool:
 
 
 def _refit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
-                    profile: Dict[str, Any]) -> None:
-    """Refit HairDeck hair from its stored seeds — the served seed first and
-    kept when it passes, else the best passing one (``_choose_seed``). Never
-    runs HairDeck: ``_Refused`` when no stored seed passes."""
+                    profile: Dict[str, Any], *, served_fsig: Optional[str] = None) -> None:
+    """Refit HairDeck hair from its stored seeds under ``fsig`` — the served seed (of the fit under
+    ``served_fsig``, default ``fsig``) first and kept when it passes, else the best passing one
+    (``_choose_seed``). Never runs HairDeck: ``_Refused`` when no stored seed passes."""
     from app.core import base_body, garments, garment_store as gs
     hsig = gs.garment_hsig(character_name, item_id, profile=profile)
     seeds = garments._stored_seeds(character_name, item_id, hsig)
     if garments._hairdeck_files(character_name, item_id, hsig)[0] is None or not seeds:
         raise base_body.MissingInput("The HairDeck hair is missing — run the hairdeck step first")
-    record = gs.read_record(gs.garment_path(character_name, item_id, fsig, "fit").with_suffix(".json"))
+    record = gs.read_record(gs.garment_path(character_name, item_id, served_fsig or fsig, "fit")
+                            .with_suffix(".json"))
     served = (record.get("inputs") or {}).get("seed")
     order = ([served] if served in seeds else []) + [s for s in seeds if s != served]
     snapshot = base_body._snapshot_base_model(character_name, bsig)
@@ -597,10 +654,41 @@ def _refit_hairdeck(character_name: str, item_id: str, kind: str, fsig: str, bsi
                                fits[chosen], fits)
 
 
+def _refit_swing_default(character_name: str, profile: Dict[str, Any], base: Tuple[str, str]) -> List[str]:
+    """Refit ``swing_default_fits`` under their current fsig from the stored seeds (caller holds the run lock;
+    Ruling H-R9), reported and noted like every refit, a refusal stamped (``refusal_stamp``). Returns the item
+    ids fitted."""
+    from app.core import base_body, garment_set, garments, garment_store as gs
+    done: List[str] = []
+    for item_id, old_fsig, fsig in swing_default_fits(character_name, profile=profile):
+        stamp = refusal_stamp(character_name, item_id, garment_set.HAIR, fsig, gs.HAIRDECK, base[1], profile=profile)
+        gs.start(character_name, item_id, "fit")
+        try:
+            _refit_hairdeck(character_name, item_id, garment_set.HAIR, fsig, base[0], profile, served_fsig=old_fsig)
+        except base_body.MissingInput as e:
+            gs.end(character_name, item_id, "fit")
+            logger.info("Garment refit %s/%s (%s): skipped — %s", character_name, item_id, fsig, e)
+            continue
+        except garments._Refused as e:
+            result = garments._refusal(character_name, item_id, fsig, "fit", e.error, e.gates, [])
+        except Exception as e:  # noqa: BLE001 — reported as the fit's failure, the sweep goes on
+            result = garments._refusal(character_name, item_id, fsig, "fit", str(e) or type(e).__name__, None, [])
+        else:
+            gs.end(character_name, item_id, "fit")
+            result = {"ok": True, "fsig": fsig, "ran": ["fit"]}
+            done.append(item_id)
+        if not result.get("ok"):
+            result["refusal_stamp"] = stamp
+        garments._note_outcome(character_name, item_id, result)
+        logger.info("Garment refit %s/%s (hair, %s -> %s): Swing default on: %s", character_name, item_id, old_fsig,
+                    fsig, "ok" if result.get("ok") else f"refused — {result.get('error')}")
+    return done
+
+
 def refit_character(character_name: str) -> Optional[List[str]]:
-    """Refit the character's outdated fits (``outdated_fits``, the too-small
-    refusals ``refused_fits``, then ``outdated_body_fits`` /
-    ``refused_body_fits``) under its garment run lock (``garments.hold_all``:
+    """Refit the character's outdated fits (``outdated_fits``, the Swing
+    default's ``swing_default_fits``, the too-small refusals ``refused_fits``,
+    then ``outdated_body_fits`` / ``refused_body_fits``) under its garment run lock (``garments.hold_all``:
     no CPU refit starts beside the FIFO meanwhile, Ruling A30). None when a
     chain runs (lock held / FIFO active / a refit beside it) — nothing was
     touched; else the item ids refitted (``"<item>@<body id>"`` for a fit on
@@ -657,6 +745,7 @@ def refit_character(character_name: str) -> Optional[List[str]]:
                         kind, fsig, old.get("fit_version"), garment_fit.FIT_VERSION[kind],
                         "ok" if result.get("ok") else f"refused — {result.get('error')}")
         if base is not None and base[1]:
+            done += _refit_swing_default(character_name, profile, base)
             done += _retry_refused(character_name, profile, base[0], done)
             done += _refit_bodies(character_name, profile, base[1])
             done += _refit_footwear(character_name, profile, base)
@@ -677,8 +766,9 @@ def work_count(character_name: str, *, profile: Optional[Dict[str, Any]] = None)
         | set(refused_body_fits(character_name, profile=profile))
     shoes = {i for i, _old, _new in outdated_footwear_fits(character_name, profile=profile)} \
         | set(outdated_footwear_sources(character_name, profile=profile))
+    swing = {i for i, _old, _new in swing_default_fits(character_name, profile=profile)}
     postures = outfit_bodies.stale_posture_bodies(character_name, profile=profile)
-    return len(base) + len(bodies) + len(shoes) + len(postures)
+    return len(base) + len(bodies) + len(shoes) + len(swing) + len(postures)
 
 
 def _count(character_name: str) -> Optional[int]:

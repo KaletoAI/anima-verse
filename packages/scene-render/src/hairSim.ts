@@ -31,6 +31,11 @@
  * still (nothing is written). The rebuild runs once per frame that stepped; a frame without a step leaves the
  * hair where the last one put it, carried by the head.
  *
+ * THE ROOT'S MOTION (Ruling H-R10). Before the steps of a frame the simulated rows are carried by the part of the
+ * root's (`root`, the figure instance) motion the strands do not feel (`RootInertia`, `STRAND_ROOT_LIMITS`): the
+ * game's 10/s turn ease, its snaps and its walk starts at full speed in one frame flung the free rows out
+ * horizontally; within the spike's tuning motions everything is felt as before.
+ *
  * COST. `costMs` is an EMA of the measured sim + rebuild milliseconds per stepping frame — what the figure
  * budget (`pickStrandFigures`) adds up. Before the first run it is an estimate from the card count
  * (`STRAND_MS_PER_CARD`).
@@ -43,7 +48,7 @@ import { bindCollision, jointNowFrom } from './collision'
 import type { CollisionBinding, Mat4, Vec3 } from './collision'
 import { capsuleInFrame } from './garmentCollision'
 import type { CollideCapsule } from './garmentCollision'
-import { bindStrands, invertAffine, StrandMismatch, strandCapsules, strandParams, StrandSim,
+import { bindStrands, invertAffine, RootInertia, StrandMismatch, strandCapsules, strandParams, StrandSim,
   strandTargets } from './hairSimMath'
 import type { HairStrandRecord, StrandParams } from './hairSimMath'
 
@@ -187,6 +192,7 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
   let lastHead: Vec3 | null = null
   let costMs = record.cards * STRAND_MS_PER_CARD
   let costRan = false
+  const inertia = new RootInertia()
 
   const rebuild = () => {
     if (!posOut || !nrmOut) return
@@ -197,6 +203,8 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
   const reset = () => {
     sim.reset(targets)
     acc = 0
+    inertia.reset()
+    inertia.update(root.matrixWorld.elements, 0)    // records the root; the next frame measures its motion
     rebuild()
   }
 
@@ -250,6 +258,8 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
       const jump = lastHead ? Math.hypot(h[0] - lastHead[0], h[1] - lastHead[1], h[2] - lastHead[2]) : 0
       lastHead = h
       if (!(realDelta <= STRAND_RESET_DELTA_S) || jump > STRAND_RESET_JUMP_M) { reset(); return }
+      const carry = inertia.update(root.matrixWorld.elements, realDelta)
+      if (carry) sim.carry(carry)
       acc = Math.min(acc + Math.max(0, realDelta), STRAND_MAX_STEPS * STRAND_DT)
       let steps = 0
       while (acc >= STRAND_DT - 1e-9 && steps < STRAND_MAX_STEPS) {

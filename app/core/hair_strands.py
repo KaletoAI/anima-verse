@@ -16,7 +16,9 @@ The record (``build_record``):
 - ``free_arc`` / ``free_frac``: arc from the last pin (0 on pins) and its fraction of the card's free arc.
 - ``follow``: per row the Head / Neck / Spine2 blend of today's skin (``garment_fit.hair_weights`` at the row);
   pinned rows are ``{Head: 1}`` (they sit on the scalp and move with it).
-- ``sdf``: the head of the fit's body (``garment_fit.body_sdf``) cropped to the head, int8 millimetres, x fastest.
+- ``sdf``: the head of the fit's body (``garment_fit.body_sdf``) cropped to the head and served from the chin up,
+  the neck behind the jaw cut away (``SDF_FLOOR`` / ``SDF_NECK``, Ruling H-R8: the neck is the capsules'), int8
+  millimetres, x fastest.
 - ``face_box`` / ``eye_box`` from the head landmarks, ``ear_y`` the ear line, ``capsules`` the fit body's capsule
   set (``collision.fit_capsules``, with the extension capsules of the body the fit was made on — e.g.
   ``chest_hair`` —, ``fit_extension``; the client keeps the hair regions), ``params`` the mode's parameter set.
@@ -43,8 +45,10 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-#: Bumped when the record's content changes meaning; a sidecar of another version is rebuilt.
-RECORD_VERSION = 1
+#: Bumped when the record's content changes meaning; a sidecar of another version is rebuilt (on the CPU, by the
+#: next assembly or preview that asks for it). 2: the SDF ends at the head (Ruling H-R8, ``SDF_FLOOR``,
+#: ``SDF_NECK``).
+RECORD_VERSION = 2
 #: Simulated rows per card (root first): 16 segments.
 ROWS = 17
 SEGMENTS = ROWS - 1
@@ -62,6 +66,16 @@ SDF_ABOVE_TOP = 0.06
 SDF_HALF_Z = 0.16
 SDF_STRIDE = 2
 SDF_CLAMP_MM = 127
+#: Ruling H-R8: the SERVED SDF ends at this landmark of ``head_frame`` (its lowest payload row at most one payload
+#: voxel below it), and with ``SDF_NECK`` every voxel below the ear line AND behind the head's centre plane ``cz``
+#: reads outside. The SDF rides the head bone rigidly, so the neck volume below the head turned with the head and
+#: put hair that rightly follows Neck / Spine2 35-50 mm "inside" (task-8/9 report); the body capsules and the fit
+#: collider cover the neck. Measured on Kira and Lirien (sit / celebrating / walk, the game's turns and snaps,
+#: task-9b report): ending at the chin alone left the neck between chin and ear (13.9 / 21.1 mm deep, celebrating
+#: with a snap); ending at the ear line let hair 35-47 mm into the jaw; chin + the neck cut: ≤ 1.04 mm. The pins
+#: still read the whole crop (``pin_rows``: hair resting on the nape).
+SDF_FLOOR = "chin"
+SDF_NECK = True
 #: Face keep-out box (the spike's ``drape.eye_box(face=True)``): ``|x - cx| < FACE_HALF_X``, chin .. brow +
 #: ``FACE_BROW_UP``, in front of ``cz + FACE_PLANE * head_d``.
 FACE_HALF_X = 0.06
@@ -209,13 +223,26 @@ def head_sdf(body, frame: Dict[str, Any]):
     return gf.body_sdf(np.asarray(body.positions, np.float64), F, vox=gf.VOX_M, bounds=(lo, hi))
 
 
-def sdf_payload(sdf) -> Dict[str, Any]:
+def sdf_payload(sdf, floor_y: Optional[float] = None, neck: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
     """The record's ``sdf``: every ``SDF_STRIDE``-th voxel of ``sdf`` from its ``lo``, int8 millimetres clamped
-    to ±``SDF_CLAMP_MM``, x fastest, base64."""
+    to ±``SDF_CLAMP_MM``, x fastest, base64. ``floor_y`` (m, Ruling H-R8): the payload rows below it are left out —
+    its lowest row is the last one at or below ``floor_y`` (at most one payload voxel below it), on the same grid.
+    ``neck`` = ``(y, z)``: every payload voxel below ``y`` AND behind ``z`` reads ``SDF_CLAMP_MM`` (outside)."""
     field = np.asarray(sdf.field, np.float64)[::SDF_STRIDE, ::SDF_STRIDE, ::SDF_STRIDE]
+    lo = np.asarray(sdf.lo, np.float64).copy()
+    step = float(sdf.vox) * SDF_STRIDE
+    if floor_y is not None:
+        k = int(min(max(math.floor((float(floor_y) - lo[1]) / step + 1e-9), 0), field.shape[1] - 2))
+        field = field[:, k:, :]
+        lo[1] += k * step
+    if neck is not None:
+        field = field.copy()
+        ys = lo[1] + step * np.arange(field.shape[1])
+        zs = lo[2] + step * np.arange(field.shape[2])
+        field[:, (ys < neck[0])[:, None] & (zs < neck[1])[None, :]] = SDF_CLAMP_MM / 1000.0
     q = np.clip(np.round(field * 1000.0), -SDF_CLAMP_MM, SDF_CLAMP_MM).astype(np.int8)
     data = np.ascontiguousarray(q.transpose(2, 1, 0)).tobytes()
-    return {"dims": [int(v) for v in q.shape], "lo": [round(float(v), 6) for v in sdf.lo],
+    return {"dims": [int(v) for v in q.shape], "lo": [round(float(v), 6) for v in lo],
             "vox": round(float(sdf.vox) * SDF_STRIDE, 6), "order": "x_fastest", "unit": "mm_int8",
             "data": base64.b64encode(data).decode("ascii")}
 
@@ -312,7 +339,7 @@ def build_record(fit_glb: bytes, *, mode: str, item_id: str, fsig: str, layout: 
         "face_box": [round(float(v), 6) for v in frame["face_box"]],
         "eye_box": [round(float(v), 6) for v in frame["eye_box"]],
         "landmarks": frame["landmarks"],
-        "sdf": sdf_payload(sdf),
+        "sdf": sdf_payload(sdf, floor_y=frame[SDF_FLOOR], neck=(frame["ear"], frame["cz"]) if SDF_NECK else None),
         "capsules": {"version": fitted["version"], "capsules": fitted["capsules"], "scales": fitted["scales"]},
         "params": dict(PARAMS[mode]),
         "vertex_attributes": dict(VERTEX_ATTRIBUTES),
