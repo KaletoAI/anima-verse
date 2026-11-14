@@ -47,10 +47,10 @@
  * [6] Source greps — the Delete: StoredDeleteDialog renders through createPortal to document.body, loads
  *     `${path}/preview`, deletes with apiDelete(path), and shows no Delete button when the preview says not deletable
  *     (`preview && !preview.deletable ? null`); FigureStored uses StoredDeleteDialog and no ConfirmDialog, labels its
- *     button "Delete…", writes refusalText under a row that cannot be deleted; FitBodySwitch renders "Delete this body
- *     shape…" for a shape (`shown.body && shown.variant !== 'derived'`), disabled on the current body (`shown.role === 'current'`, Ruling A67), with
- *     STANDS_ON as the reason, and opens StoredDeleteDialog with kind="shape". No window.confirm anywhere in these
- *     files. de.json holds a key for every string of [1]–[3] and the two buttons.
+ *     button "Delete…", writes refusalText under a row that cannot be deleted. The piece dialog's body switch offers
+ *     no Delete (Ruling A64 after A67: it lists only the base body and the current body, and the current one is
+ *     never deletable) — FitBodySwitch names no StoredDeleteDialog and no "Delete this body shape". No
+ *     window.confirm anywhere in these files. de.json holds a key for every string of [1]–[3] and the list's button.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -202,11 +202,8 @@ has('[6] stored list: Delete…', stored, "t('Delete…')");
 has('[6] stored list: refusal in words', stored, 'refusalText(');
 has('[6] stored list: a light per row', stored, '<StepLight light={storedState(e, t).light} />');
 const sw = src('frontend/src/tabs/characters/FitBodySwitch.tsx');
-has('[6] body switch: Delete this body shape…', sw, "t('Delete this body shape…')");
-has('[6] body switch: only a shape', sw, "{shown.body && shown.variant !== 'derived' ? (");
-has('[6] body switch: disabled when current', sw, "disabled={busy || shown.role === 'current'}");
-has('[6] body switch: says why', sw, 't(STANDS_ON)');
-has('[6] body switch: opens the dialog', sw, 'kind="shape"');
+lacks('[6] body switch: no Delete dialog (A67)', sw, 'StoredDeleteDialog');
+lacks('[6] body switch: no Delete button (A67)', sw, 'Delete this body shape');
 for (const [name, text] of [['dialog', dialog], ['stored', stored], ['switch', sw]]) {
   lacks(`[6] ${name}: no window.confirm`, text, 'window.confirm');
 }
@@ -219,7 +216,7 @@ const keys = ['Extension bones: none on this model', 'Extension bones on this mo
   'An outfit that needs this body shape again meshes it anew (hub jobs).',
   'An outfit that needs this painted body again paints it anew (hub jobs).',
   'Wearing one of those outfits again builds its model anew.', 'A run works on {n} of its parts — those stay.',
-  'Delete this body shape…', 'Delete…', 'a run works on it', 'needed by an outfit now', 'in use now',
+  'Delete…', 'a run works on it', 'needed by an outfit now', 'in use now',
   'kept only by an outfit model built on it', 'stored, not needed now'];
 eq('[6] de.json keys', keys.filter((k) => !de[k]), []);
 if (!existsSync(join(ROOT, 'frontend/src/tabs/characters/storedDeleteModel.ts'))) fails.push('model missing');

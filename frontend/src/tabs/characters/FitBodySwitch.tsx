@@ -16,9 +16,6 @@
  * inside the sleeves per side and the trunk coverage against the source (`numbers`, never the plain body's under a
  * body shape) — and for a body shape "Re-fit on this body": the piece fitted on it again on the CPU (0 hub jobs;
  * the plain body's fit first when that is due), a refusal shown red with its reason and its attempt in the viewer.
- *
- * Ruling A64: a body shape the figure does not stand on has "Delete this body shape…" (StoredDeleteDialog: the files,
- * MB, the outfit models built on it and what becomes due, or why it is kept); the one it stands on says so instead.
  */
 import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -33,7 +30,6 @@ import type { Light } from './hairstylesModel'
 import { armLightColour, armLightShort, armLightText, trunkCoverText } from './fitSettingsModel'
 import type { FitSettingsInfo } from './fitSettingsModel'
 import { RunButton } from './GarmentSteps'
-import { StoredDeleteDialog } from './StoredDeleteDialog'
 import type { RunFeedback } from './useGarment'
 
 /** The follow-up the server estimates after an acceptance or its undo (`figure_build.cost`). */
@@ -94,7 +90,6 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
   const { toast } = useToast()
   const [busy, setBusy] = useState(false)
   const [after, setAfter] = useState<{ key: string; text: string } | null>(null)
-  const [deleting, setDeleting] = useState<FitBody | null>(null)
   const shown = bodies.find((b) => b.key === selected) || bodies[0]
   if (!shown) return null
 
@@ -205,30 +200,9 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
           {after.text} {t('The Figure tab shows it as due.')}
         </div>
       ) : null}
-      {shown.body && shown.variant !== 'derived' ? (
-        <div style={ROW}>
-          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || shown.role === 'current'}
-            title={shown.role === 'current' ? undefined
-              : t('Shows the files, their size and what becomes due before anything is deleted — no jobs.')}
-            onClick={() => setDeleting(shown)}>
-            {t('Delete this body shape…')}
-          </button>
-          <span className="ga-hint">
-            {shown.role === 'current' ? t(STANDS_ON) : t('Stored for reuse; deleting it spends nothing.')}
-          </span>
-        </div>
-      ) : null}
-      {deleting ? (
-        <StoredDeleteDialog character={character} entryKey={deleting.body} kind="shape" label={bodyName(deleting, t)}
-          onClose={() => setDeleting(null)}
-          onDeleted={() => { setDeleting(null); onSelect('plain'); onChanged() }} />
-      ) : null}
     </div>
   )
 }
-
-/** The disabled Delete's reason under a body shape the figure stands on (Ruling A64). */
-const STANDS_ON = 'The figure stands on this body shape now — it is deleted only once nothing is worn on it.'
 
 /** Ruling A50: the shown body's own numbers, each line named with the body — never another body's. */
 function BodyNumbers({ body }: { body: FitBody }) {
