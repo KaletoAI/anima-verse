@@ -90,6 +90,11 @@ DRESSED_VIEW_CHANGED = {"front": "Dressed front changed after this model",
                         "right": "Dressed right view changed after this model"}
 # Ruling UI3 c: the action that resolves a stale base model (the Base body tab's Run all re-plans it).
 RUN_ALL_REBUILDS = "Run all rebuilds it"
+#: A base model the body retexture worker refused against one of its own views (Ruling A61).
+MESH_VIEW_MISMATCH = {"front": "The mesh does not match its front view — the outfit cannot be painted onto it",
+                      "back": "The mesh does not match its back view — the outfit cannot be painted onto it",
+                      "left": "The mesh does not match its left view — the outfit cannot be painted onto it",
+                      "right": "The mesh does not match its right view — the outfit cannot be painted onto it"}
 POSE_RENDER_CHANGED = "Pose render changed since this model"
 STAND_IN = "Stand-in: model of another outfit"
 PROFILE_CHANGED = "The profile picture changed"
@@ -1237,9 +1242,13 @@ def base_model_overview(character_name: str, bsig: str) -> Optional[Dict[str, An
                                                                      collision.identity(path, meta)[1],
                                                                      collision.character_scales(character_name))
                                                 if meta.get("collision") else None))
-    return {"steps": steps,
-            "freshness": base_model_freshness(meta, _base_view_shas(character_name, bsig),
-                                              _base_view_stamps(character_name, bsig))}
+    fresh = base_model_freshness(meta, _base_view_shas(character_name, bsig), _base_view_stamps(character_name, bsig))
+    mismatch = base_body.mesh_view_mismatch(character_name, bsig) if fresh["state"] == CURRENT else None
+    if mismatch is not None:
+        # Ruling A61: the body retexture worker refused this mesh against one of its own views.
+        fresh = freshness(STALE, MESH_VIEW_MISMATCH.get(mismatch["view"], MESH_VIEW_MISMATCH["back"]))
+        fresh.update(action=RUN_ALL_REBUILDS, mismatch_view=mismatch["view"], detail=mismatch["error"])
+    return {"steps": steps, "freshness": fresh}
 
 
 def outfit_body_overview(character_name: str, body_id: str) -> Optional[Dict[str, Any]]:

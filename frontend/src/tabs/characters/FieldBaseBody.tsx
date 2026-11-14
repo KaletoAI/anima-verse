@@ -98,6 +98,7 @@ import type { ModelFollowup } from './figureModel'
 import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
   runAllButton, runAllPlanLine, runAllWhat } from './baseBodyModel'
 import type { BaseLight, BaseRunAll, TipDots } from './baseBodyModel'
+import { BuildProblemView } from './BuildProblem'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
 import { LIGHT_COLOR, PANEL } from './stepStyle'
 
@@ -543,6 +544,13 @@ export function FieldBaseBody({ character, onOpenFigure }: {
       buildRunning={!!figure?.build.running} activity={info.activity} onRun={() => { void runAll() }}
       onOpenFigure={onOpenFigure} />
     {figure?.build.running && info.activity?.base ? <div className="ga-hint">{t(BUILD_RUNNING_NOTE)}</div> : null}
+    {/* Ruling A61: the base mesh does not match its own views — Run all makes it again (the plain body step). */}
+    {figure?.problem?.kind === 'mesh_mismatch' && figure.problem.body === 'plain' && !figure.build.running ? (
+      <div style={{ marginBottom: 8 }}>
+        <BuildProblemView problem={figure.problem} busy={posting || viewsRunning(info) || modelBusy}
+          onRun={() => { void runAll() }} />
+      </div>
+    ) : null}
     <div className="ga-split ga-split-views ga-split-figure">
       <div className="ga-split-col">
         {model?.url ? (

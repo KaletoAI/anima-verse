@@ -196,6 +196,17 @@
  *        hub job".
  *      Source greps: FieldFigure draws its rows with StepRowView, its panel with SubTabs (Worn now · Build plan ·
  *      Body), the viewer with `builtAt`; neither it nor figureModel writes a ✓ or ⏳ glyph any more.
+ * [23] Ruling A61 — a failed Build step says itself (checklist point 8), problemText(p):
+ *      {kind mesh_mismatch, step_label "Assemble the figure", view back, body plain, jobs 3}
+ *        → title "Assemble the figure failed — Back view", the reason names "its own back view" and says
+ *          re-rendering does not help, action "Make the base mesh again — 3 hub jobs", note MESH_HELD_NOTE;
+ *        body shape, jobs 1 → action "Make the body shape mesh again — 1 hub job";
+ *      {kind failed, step_label "Texture", view "", detail "boom", jobs null, held true}
+ *        → title "Texture failed", reason FAILED_PLAIN (the message "boom" only on mouse-over: it is the worker's
+ *          English), action "Retry this step — cost unknown", note HELD_NOTE; at the back view, held false, jobs 0
+ *        → reason "The step stopped at the back view — the message is on mouse-over.", note "", action "Retry
+ *          this step — no hub job".
+ *      Source greps: the Pose and 3D tabs render BuildProblemNote, the Figure and Base body tabs BuildProblemView.
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -653,6 +664,27 @@ check('[21] Figure tab source', [/<StepRowView\b/.test(fieldFigure), /<SubTabs\b
     [/createPortal\(/.test(meshView), /if \(large\) setLarge\(false\)/.test(meshView), /resetViewOnDoubleClick/.test(meshView),
       /window\.(prompt|alert|confirm)/.test(meshView)], [true, true, true, false]);
 }
+
+// [23] Ruling A61
+const prob = (o) => ({ kind: 'mesh_mismatch', step: 'assemble', step_label: 'Assemble the figure', view: 'back',
+  body: 'plain', detail: 'GLBBodyRetexture: back view: …', action: 'rebuild_mesh', jobs: 3, held: true, ...o });
+const pm = m.problemText(prob({}));
+check('[23] mesh mismatch, plain body', [pm.title, pm.reason.includes('its own back view'),
+  pm.reason.includes('Rendering the view again does not help'), pm.action, pm.note, pm.detail],
+  ['Assemble the figure failed — Back view', true, true, 'Make the base mesh again — 3 hub jobs', m.MESH_HELD_NOTE,
+    'GLBBodyRetexture: back view: …']);
+check('[23] mesh mismatch, body shape', m.problemText(prob({ body: 'shape', jobs: 1 })).action,
+  'Make the body shape mesh again — 1 hub job');
+const pf = m.problemText(prob({ kind: 'failed', step: 'texture', step_label: 'Texture', view: '', body: '',
+  detail: 'boom', action: 'retry', jobs: null }));
+check('[23] other failure', [pf.title, pf.reason, pf.action, pf.note, pf.detail],
+  ['Texture failed', m.FAILED_PLAIN, 'Retry this step — cost unknown', m.HELD_NOTE, 'boom']);
+const pn = m.problemText(prob({ kind: 'failed', held: false, jobs: 0 }));
+check('[23] at a view, not held, no job', [pn.reason, pn.note, pn.action],
+  ['The step stopped at the back view — the message is on mouse-over.', '', 'Retry this step — no hub job']);
+check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/characters/FieldPose.tsx')),
+  /<BuildProblemNote\b/.test(src('frontend/src/tabs/characters/FieldModel3D.tsx')),
+  /<BuildProblemView\b/.test(fieldFigure), /<BuildProblemView\b/.test(details)], [true, true, true, true]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

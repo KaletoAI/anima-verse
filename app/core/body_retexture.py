@@ -36,6 +36,10 @@ class RetextureFailed(RuntimeError):
     """The worker ran and failed: exit code != 0, timeout, or no proof."""
 
 
+#: How a timed-out run's ``RetextureFailed`` message begins — no refusal of its inputs (Ruling A61).
+TIMED_OUT = "Body retexture worker timed out"
+
+
 def _worker_dir() -> Path:
     raw = str(config.get("body_retexture.worker_dir", "") or "").strip()
     if not raw:
@@ -141,7 +145,7 @@ def retexture(glb_in: Path, views: dict[str, tuple[Path, Path]], out_glb: Path,
     except subprocess.TimeoutExpired:
         _kill_group(proc)
         logger.warning("Body retexture timed out after %d s: %s", timeout, Path(glb_in).name)
-        raise RetextureFailed(f"Body retexture worker timed out after {timeout} s") from None
+        raise RetextureFailed(f"{TIMED_OUT} after {timeout} s") from None
     except BaseException:
         _kill_group(proc)
         raise

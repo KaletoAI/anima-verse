@@ -1420,11 +1420,13 @@ def outfit_running(character_name: str) -> bool:
 
 
 def _outfit_end(character_name: str, signature: str, stage: str, error: Optional[str], *,
-                interrupted: bool = False) -> None:
+                interrupted: bool = False, refused: bool = False) -> None:
     """End a stage: a failure is stored for the signature; a success clears
     a failure of the same stage (a model success clears every failure).
     ``interrupted`` (load or the media switch stopped the stage): the stage
-    ends without touching any failure record — neither stored nor cleared."""
+    ends without touching any failure record — neither stored nor cleared.
+    ``refused`` (Ruling A61): the failure is one the same inputs repeat
+    (``outfit_refusal``)."""
     from app.core.timeutils import utc_now
     with _status_lock:
         if _outfit_running.get((character_name, stage)) == signature:
@@ -1433,7 +1435,7 @@ def _outfit_end(character_name: str, signature: str, stage: str, error: Optional
             return
         key = (character_name, signature)
         if error is not None:
-            _outfit_failed[key] = {"stage": stage, "error": error, "failed_at": utc_now()}
+            _outfit_failed[key] = {"stage": stage, "error": error, "failed_at": utc_now(), "refused": refused}
         elif stage == "model" or (_outfit_failed.get(key) or {}).get("stage") == stage:
             _outfit_failed.pop(key, None)
 
@@ -1444,6 +1446,14 @@ def outfit_failure(character_name: str, signature: str) -> str:
     when a view stays missing, Ruling C4)."""
     with _status_lock:
         return str((_outfit_failed.get((character_name, signature)) or {}).get("error") or "")
+
+
+def outfit_refusal(character_name: str, signature: str) -> str:
+    """The last failure of the outfit MODEL of ``signature`` when it is one the same inputs repeat (Ruling A61:
+    not a missing worker, a timeout or load), else ""."""
+    with _status_lock:
+        record = dict(_outfit_failed.get((character_name, signature)) or {})
+    return str(record.get("error") or "") if record.get("stage") == "model" and record.get("refused") else ""
 
 
 def _is_load(e: BaseException) -> bool:
@@ -2026,6 +2036,166 @@ def dressed_view_refusals(character_name: str, fig, signature: str) -> Dict[str,
     views of ``fig.shape``; Ruling FR-I3)."""
     return refused_views(character_name, signature, fig.shape,
                          current=lambda v: dressed_image(character_name, v, signature, fig.bsig, fig=fig))
+
+
+# --- Refusals of the outfit model's paint step (Ruling A61) -------------------------------------------------------
+#
+# The body retexture worker fits each registration view (the body's own view, ``tpose[_<view>]_<body>``) onto a
+# render of the body's unrigged mesh BEFORE it looks at the dressed image (GLBBodyRetexture ``_prepare_view``:
+# ``affine_registration(render mask, registration mask)``). When it refuses that fit ("<view> view: the image
+# silhouette does not match the mesh render …" / "… dense registration failed …"), the MESH does not show what its
+# own views show (Kira 2026-11-14: the base mesh had gone back to the 2026-11-12 mesh, Finding A38) — no dressed view
+# can fix it, re-rendering the view cannot either; only a new mesh from the current views can. Such a refusal is
+# recorded per body (``model_refs/drafts/refused/mesh/<body>.json``) with what it depends on: the body's unrigged
+# source and that registration view. While both are the same, the body counts as due (the plain body:
+# ``base_refresh_plan`` reason ``mesh_mismatch``; a meshed shape: ``figure_build`` plans its rebuild) — a manual Build
+# makes the mesh again, an automatic one never spends on it.
+#
+# Every other refusal of the paint step (any ``build_outfit_model`` error that is not load, a missing worker or a
+# timeout) is recorded for its figure with the fingerprint of its inputs (``assemble_inputs``,
+# ``model_refs/drafts/refused/assemble/<signature>.json``): an automatic Build does not run the assembly again while
+# the inputs are the same (``figure_build.plan`` lists it "failed — Retry"); a manual Build retries it once.
+
+#: Subfolders of ``VIEW_REFUSED_DIR`` (subfolders: the outfit cache GC lists only the folder's own files).
+MESH_REFUSED_DIR = "mesh"
+ASSEMBLE_REFUSED_DIR = "assemble"
+#: The worker's refusals of a registration fit (GLBBodyRetexture ``_prepare_view``): the view, then the cause.
+_REGISTRATION_REFUSAL = re.compile(
+    r"\b(front|back|left|right) view: (?:the image silhouette does not match the mesh render"
+    r"|dense registration failed)")
+
+
+def registration_refusal_view(error: str) -> str:
+    """The view whose registration fit the body retexture worker refused in ``error`` ("" for any other error)."""
+    match = _REGISTRATION_REFUSAL.search(error or "")
+    return match.group(1) if match else ""
+
+
+def _refusal_dir(character_name: str, kind: str) -> Path:
+    from app.models.character import get_character_dir
+    return get_character_dir(character_name) / "model_refs" / DRAFT_DIR / VIEW_REFUSED_DIR / kind
+
+
+def _body_source(character_name: str, body: str) -> Path:
+    """The unrigged source of the body ``body`` (the plain body's signature or a shape id) in the REAL model
+    directory — what the worker renders."""
+    from app.models.character import get_character_dir
+    return get_character_dir(character_name) / "model3d" / "unrigged" / f"{body}.glb"
+
+
+def _mesh_inputs(character_name: str, body: str, view: str) -> Dict[str, str]:
+    from app.core.model_refs import find_ref_image
+    return {"body_source_sha256": file_sha256(_body_source(character_name, body)),
+            "registration_sha256": file_sha256(find_ref_image(character_name, _kind(view), body))}
+
+
+def _write_record(path: Path, record: Dict[str, Any]) -> bool:
+    if not path.parents[3].is_dir():   # characters/<name>: never mint the folders of a vanished character
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, json.dumps(record, ensure_ascii=False, indent=2).encode("utf-8"))
+        return True
+    except OSError:
+        logger.warning("Refusal record %s not written", path, exc_info=True)
+        return False
+
+
+def _read_record(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def record_mesh_mismatch(character_name: str, body: str, view: str, error: str) -> None:
+    """Record that the worker refused the registration fit of ``view`` on the body ``body`` (block above). Never
+    raises."""
+    from app.core.timeutils import utc_now_iso
+    if not body or view not in BASE_VIEWS:
+        return
+    path = _refusal_dir(character_name, MESH_REFUSED_DIR) / f"{body}.json"
+    if _write_record(path, {"body": body, "view": view, "error": error, "inputs": _mesh_inputs(character_name, body, view),
+                            "refused_at": utc_now_iso()}):
+        logger.warning("Outfit model %s: the mesh of %s does not match its %s view — the body is due for a new mesh",
+                       character_name, body, view)
+        _invalidate_figure()
+
+
+def mesh_view_mismatch(character_name: str, body: str) -> Optional[Dict[str, str]]:
+    """``{body, view, error, refused_at}`` while a recorded registration refusal of the body ``body`` still holds:
+    the same unrigged source and the same registration view (block above); None otherwise. Read-only."""
+    if not body:
+        return None
+    record = _read_record(_refusal_dir(character_name, MESH_REFUSED_DIR) / f"{body}.json")
+    view = str((record or {}).get("view") or "")
+    if not record or view not in BASE_VIEWS or not record.get("error"):
+        return None
+    inputs = _mesh_inputs(character_name, body, view)
+    if not inputs["body_source_sha256"] or record.get("inputs") != inputs:
+        return None
+    return {"body": body, "view": view, "error": str(record["error"]), "refused_at": str(record.get("refused_at") or "")}
+
+
+def assemble_inputs(character_name: str, signature: str, fig) -> Dict[str, Any]:
+    """What the outfit model of ``signature`` as the figure ``fig`` is painted from (Ruling A61): the figure, the
+    plain body's model, the body's model and unrigged source, the body's registration views, the dressed views
+    (when something is painted) and the worker. Read-only (content hashes, memoised by ``file_sha256``)."""
+    from app.core import config
+    from app.core.model_refs import find_ref_image
+    from app.models.character import get_character_dir
+    root = get_character_dir(character_name) / "model3d"
+    body = fig.shape
+    return {"figure": fig.as_dict(), "base_model_sha256": base_model_sha256(character_name, fig.bsig),
+            "body_sha256": file_sha256(root / f"{body}.glb"),
+            "body_source_sha256": file_sha256(_body_source(character_name, body)),
+            "registrations": {v: file_sha256(find_ref_image(character_name, _kind(v), body)) for v in dressed_views()},
+            "views": texture_view_shas(character_name, signature, fig.bsig, fig=fig) if fig.texture else {},
+            "worker": str(config.get("body_retexture.worker_dir", "") or "")}
+
+
+def record_assemble_refusal(character_name: str, signature: str, fig, error: str) -> None:
+    """Record that the outfit model of ``signature`` as ``fig`` was refused with ``error`` (block above). Never
+    raises."""
+    from app.core.timeutils import utc_now_iso
+    try:
+        inputs = assemble_inputs(character_name, signature, fig)
+    except Exception:  # noqa: BLE001 — without its inputs there is no record (the next Build tries again)
+        logger.warning("Assembly refusal of %s (%s) not recorded", character_name, signature, exc_info=True)
+        return
+    path = _refusal_dir(character_name, ASSEMBLE_REFUSED_DIR) / f"{signature}.json"
+    if _write_record(path, {"signature": signature, "error": error, "inputs": inputs, "refused_at": utc_now_iso()}):
+        _invalidate_figure()
+
+
+def clear_assemble_refusal(character_name: str, signature: str) -> None:
+    try:
+        (_refusal_dir(character_name, ASSEMBLE_REFUSED_DIR) / f"{signature}.json").unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
+
+
+def assemble_refusal(character_name: str, signature: str, fig) -> Optional[Dict[str, str]]:
+    """``{error, refused_at}`` while the recorded refusal of the outfit model of ``signature`` holds for ``fig``:
+    every input of ``assemble_inputs`` is the same; None otherwise. Read-only."""
+    record = _read_record(_refusal_dir(character_name, ASSEMBLE_REFUSED_DIR) / f"{signature}.json")
+    if not record or not record.get("error"):
+        return None
+    try:
+        if record.get("inputs") != assemble_inputs(character_name, signature, fig):
+            return None
+    except Exception:  # noqa: BLE001 — inputs unreadable: no verdict, the Build may try
+        return None
+    return {"error": str(record["error"]), "refused_at": str(record.get("refused_at") or "")}
+
+
+def _invalidate_figure() -> None:
+    try:
+        from app.core import figure
+        figure.invalidate()
+    except Exception:  # noqa: BLE001 — a memo, never a failure
+        logger.debug("Figure memo not invalidated", exc_info=True)
 
 
 def fit_gate_warning(attempts: int, record: Dict[str, Any], view: str = "back") -> str:
@@ -3790,6 +3960,8 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
     from app.core.timeutils import utc_now_iso
     _outfit_start(character_name, signature, "model")
     error: Optional[str] = None
+    refused = False
+    fig = None
     task_id = ""
     try:
         try:
@@ -4041,12 +4213,18 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
             ValueError) as e:
         error = str(e) or type(e).__name__
         logger.warning("Outfit model %s (%s) failed: %s", character_name, signature, error)
+        # Ruling A61: a refusal that the same inputs would repeat — not a worker that is missing or ran out of time.
+        refused = not isinstance(e, body_retexture.RetextureUnavailable) and not error.startswith(
+            body_retexture.TIMED_OUT)
+        view = registration_refusal_view(error) if isinstance(e, body_retexture.RetextureFailed) else ""
+        if view and fig is not None:
+            record_mesh_mismatch(character_name, fig.shape, view, error)
         return {"ok": False, "error": error}
     except Exception as e:
         error = str(e) or type(e).__name__
         raise
     finally:
-        _outfit_end(character_name, signature, "model", error)
+        _outfit_end(character_name, signature, "model", error, refused=refused)
         if task_id:
             try:
                 get_task_queue().track_finish(task_id, error=error or "")
@@ -4910,6 +5088,7 @@ def rebuild_cost(character_name: str, signature: str, *, profile: Optional[Dict[
 REFRESH_REASON_TEXT = {"older_prompts": "older prompts",
                        "views": "views not refreshed yet",
                        "model": "model built from older views",
+                       "mesh_mismatch": "the mesh does not match its views",
                        "missing": "missing"}
 #: Hub jobs of one base view render on its first attempt (the front's hand
 #: gate may render it up to ``HAND_GATE_ATTEMPTS`` times).
@@ -4963,6 +5142,12 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
     * ``model`` — every view current, the stored base model not built from
       them (``model_overview.base_model_freshness`` stale): the model alone
       — a refresh that stopped before the model.
+    * ``mesh_mismatch`` (only with ``missing=True`` — the Build and the Base
+      body tab's Run all, a person's click; the improvement never spends on
+      it, Ruling A61): every view current, but the body retexture worker
+      refused the stored base mesh against one of them
+      (``mesh_view_mismatch``): the model alone, a fresh mesh from the
+      current views.
     * ``""`` — nothing to do, or (without ``missing``) no stored front (a
       missing base is not an older one)."""
     from app.core import model3d, model_overview
@@ -4985,6 +5170,8 @@ def base_refresh_plan(character_name: str, *, profile: Optional[Dict[str, Any]] 
             model3d._read_sidecar(path),
             model_overview._base_view_shas(character_name, bsig))["state"] == model_overview.STALE:
         return {**plan, "model": True, "reason": "model"}
+    if missing and path is not None and mesh_view_mismatch(character_name, bsig) is not None:
+        return {**plan, "model": True, "reason": "mesh_mismatch"}
     return plan
 
 

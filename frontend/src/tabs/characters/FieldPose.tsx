@@ -17,10 +17,13 @@
  *   - "Outfit model": its status as a step row (`outfitRow`: ready with the proof's numbers, outdated with the
  *     reason, failed with the error, the views the guard left out as warnings) and the model's steps (ModelSteps,
  *     one line per step, the numbers on mouse-over).
+ * Under the flow head a failed Build step says itself (BuildProblemNote, Ruling A61): the step, the reason, the view
+ * and the action that fixes it with its cost.
  * Generating a model off the pipeline (mesh backend dialog, upload) stays in the 3D tab.
  */
 import { useCallback, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
+import { BuildProblemNote } from './BuildProblem'
 import { FieldModelRefs } from './FieldModelRefs'
 import { FigureBuildButton } from './FigureBuildButton'
 import { Model3DViewer } from './Model3DViewer'
@@ -94,6 +97,13 @@ export function FieldPose({ character, onOpen3D, onOpenFigure, onOpenBaseBody }:
         {onOpen3D ? <button type="button" className="ga-btn ga-btn-sm" onClick={onOpen3D}>↗ {t('3D')}</button> : null}
       </div>
       {info?.pipeline ? <div className="ga-hint">{t(VIEWS_BY_BUILD)}</div> : null}
+      {info?.pipeline ? (
+        // Ruling A61: which step failed, why, for which view, and the action that fixes it with its cost.
+        <BuildProblemNote character={character} onStarted={() => { startBasePoll(500); startPoll(800) }}
+          extra={onOpenBaseBody ? (
+            <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>↗ {t('Base body')}</button>
+          ) : null} />
+      ) : null}
       <div className="ga-split ga-split-views ga-split-figure">
         <div className="ga-split-col">
           {!st ? <div className="ga-hint">{t('Loading…')}</div> : model ? (

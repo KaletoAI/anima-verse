@@ -318,6 +318,9 @@ export interface FigurePayload {
   outfit: string
   worn: FigureWornRow[]
   hair: FigureHairRow | null
+  /** Ruling A61: what failed and what fixes it (`figure_build._build_problem`); null when nothing failed or while a
+   *  Build runs. Absent from an older server. */
+  problem?: BuildProblem | null
   body: {
     plain: FigureBodyPart & {
       jobs?: { view: number | null; front: number | null; model: number | null; after_front: number | null
@@ -869,3 +872,70 @@ export function hairstyleActions(mode: HairMode, run: HairstyleRun | null | unde
 
 /** Under a setting of the selected hairstyle after a save (rule R3): nothing ran. */
 export const HAIRSTYLE_SAVED_NOTE = 'Saved — nothing runs. Run all or Re-fit applies it (no hub job).'
+
+/**
+ * A failed step of the Build as the tabs that run it say it (Ruling A61, checklist point 8: the step, the reason in
+ * plain words, the view, the action that fixes it with its cost). `kind` mesh_mismatch: the body the outfit is
+ * painted on has a mesh that does not match its own `view` — a manual Build (`action` rebuild_mesh) makes it again
+ * first, `jobs` that step's hub jobs; `kind` failed: any other failed step, `detail` its error, `action` retry (a
+ * manual Build), `jobs` what the Build spends. `held`: automatic Builds do not repeat it until its inputs change.
+ */
+export interface BuildProblem {
+  kind: 'mesh_mismatch' | 'failed'
+  step: string
+  step_label: string
+  view: string
+  body: 'plain' | 'shape' | ''
+  detail: string
+  action: 'rebuild_mesh' | 'retry'
+  jobs: number | null
+  held: boolean
+}
+
+const VIEW_WORDS: Record<string, string> = { front: 'Front view', back: 'Back view', left: 'Left view',
+  right: 'Right view' }
+/** The same inside a sentence. */
+const VIEW_PHRASES: Record<string, string> = { front: 'front view', back: 'back view', left: 'left view',
+  right: 'right view' }
+export const MESH_MISMATCH_PLAIN = 'The base body’s 3D mesh does not match its own {view}: the mesh was made from '
+  + 'other images, so the outfit cannot be painted onto it. Rendering the view again does not help — the mesh has to '
+  + 'be made again from the current views.'
+export const MESH_MISMATCH_SHAPE = 'The body shape’s 3D mesh does not match its own {view}, so the outfit cannot be '
+  + 'painted onto it. Rendering the view again does not help — the mesh has to be made again from its views.'
+export const HELD_NOTE = 'Automatic Builds do not repeat this step until its inputs change — the button runs it once '
+  + 'more.'
+/** The reason of any other failed step: the worker's own message stays on mouse-over (it is not translated). */
+export const FAILED_AT_VIEW = 'The step stopped at the {view} — the message is on mouse-over.'
+export const FAILED_PLAIN = 'The step stopped with an error — the message is on mouse-over.'
+export const MESH_HELD_NOTE = 'Automatic Builds never make a mesh — only this button does.'
+
+/** The lines of a `BuildProblem`: `title` "<step> failed — <view>", `reason` in plain words, `action` the button
+ *  with its cost, `note` why nothing repeats it by itself, `detail` the raw message (mouse-over). */
+export function problemText(p: BuildProblem, t: Tr = EN): {
+  title: string; reason: string; action: string; note: string; detail: string
+} {
+  const view = VIEW_WORDS[p.view] ? t(VIEW_WORDS[p.view]) : ''
+  const step = t(p.step_label)
+  const title = view ? t('{step} failed — {view}').replace('{step}', step).replace('{view}', view)
+    : t('{step} failed').replace('{step}', step)
+  const cost = p.jobs === 0 ? t('no hub job') : jobsTr(p.jobs, t)
+  if (p.kind === 'mesh_mismatch') {
+    const viewWord = VIEW_PHRASES[p.view] ? t(VIEW_PHRASES[p.view]) : t('views')
+    return {
+      title,
+      reason: t(p.body === 'shape' ? MESH_MISMATCH_SHAPE : MESH_MISMATCH_PLAIN).replace('{view}', viewWord),
+      action: t(p.body === 'shape' ? 'Make the body shape mesh again — {cost}' : 'Make the base mesh again — {cost}')
+        .replace('{cost}', cost),
+      note: t(MESH_HELD_NOTE),
+      detail: p.detail,
+    }
+  }
+  const viewPhrase = VIEW_PHRASES[p.view] ? t(VIEW_PHRASES[p.view]) : ''
+  return {
+    title,
+    reason: viewPhrase ? t(FAILED_AT_VIEW).replace('{view}', viewPhrase) : t(FAILED_PLAIN),
+    action: t('Retry this step — {cost}').replace('{cost}', cost),
+    note: p.held ? t(HELD_NOTE) : '',
+    detail: p.detail,
+  }
+}

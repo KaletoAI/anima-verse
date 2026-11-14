@@ -38,6 +38,7 @@ import type { FaceCleanupState, FaceReferenceState } from './ModelFaceActions'
 import type { ModelStep } from './ModelSteps'
 import type { Freshness } from './FreshnessBadge'
 import { OutfitBatchDialog } from './OutfitBatchDialog'
+import { BuildProblemNote } from './BuildProblem'
 import { FigureBuildButton } from './FigureBuildButton'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { staleModelText } from './figureModel'
@@ -1106,6 +1107,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
           </>
         )}
       </div>
+      {pipeline ? <BuildProblemNote character={character} onStarted={() => startPoll()} /> : null}
       {fallbackBanner}
       {model ? (
         <>

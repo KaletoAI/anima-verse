@@ -49,6 +49,7 @@ import { Model3DViewer } from './Model3DViewer'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
 import { FigureStored } from './FigureStored'
 import { GenerationPausePanel, GenerationPauseSwitch } from './GenerationPausePanel'
+import { BuildProblemView } from './BuildProblem'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
 import { LIGHT_COLOR, PANEL } from './stepStyle'
 import { useFigure } from './useFigure'
@@ -223,6 +224,8 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause 
   // A worn piece's failure is written in its own row; the head names only the others (an assembly, a texture).
   const wornIds = new Set(data.worn.map((r) => r.item_id))
   const failed = Object.entries(data.build.failed || {}).filter(([, f]) => !f.item_id || !wornIds.has(f.item_id))
+  // The step the problem box says in full is not repeated in the one-line list.
+  const others = failed.filter(([name]) => name !== data.problem?.step)
   const light = statusLight(data.status)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -263,9 +266,11 @@ function FigureHeader({ data, posting, autoSaved, onBuild, onAutoBuild, onPause 
           {t('Due')}: {data.changes.map((c) => changeLine(c, t)).join(' · ')}
         </div>
       ) : null}
-      {!running && failed.length ? (
+      {/* Ruling A61: the failed step said in full — the step, the reason, the view, the fix with its cost. */}
+      {!running && data.problem ? <BuildProblemView problem={data.problem} busy={posting} onRun={onBuild} /> : null}
+      {!running && others.length ? (
         <div className="ga-hint" style={ERROR_STYLE}>
-          {failed.map(([name, f]) => `${name}: ${f.error}`).join(' · ')}
+          {others.map(([name, f]) => `${name}: ${f.error}`).join(' · ')}
         </div>
       ) : null}
     </div>

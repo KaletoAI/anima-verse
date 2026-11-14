@@ -150,6 +150,7 @@ from the failed step (``garments.run_queued(explicit=True)``; the chain
 re-judges stored attempts under the current gate versions first).
 """
 import logging
+import re
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -480,6 +481,8 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         no_base = refresh.get("reason") == "missing"   # no stored front or no base model
         label = ("Plain body: " + " + ".join(parts) if no_base or not figure.hair_needs_rebuild(
             character_name, wanted, profile=profile) else HAIR_REBUILD_LABEL.format(parts=" + ".join(parts)))
+        if refresh.get("reason") == "mesh_mismatch":   # Ruling A61
+            label = MESH_MISMATCH_LABEL.format(body="Plain body", parts=" + ".join(parts))
         steps.append(Step("plain_body", label,
                           sum(jobs for _step, jobs in rebuild),
                           manual=figure.BASE_MISSING if no_base else figure.BASE_OUTDATED))
@@ -518,7 +521,14 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         delivered.notes.get(item_id) == figure.READY_IN_BODY for item_id in delivered.in_body_own)) else ""
 
     meshed = not figure.is_plain(wanted.shape)
-    if meshed and (rebased or not figure._shape_stored(character_name, wanted.shape, bsig)):
+    shape_stored = meshed and not rebased and figure._shape_stored(character_name, wanted.shape, bsig)
+    if shape_stored and base_body.mesh_view_mismatch(character_name, wanted.shape) is not None:
+        # Ruling A61: the stored shape's mesh does not match its own views — a manual Build meshes it again
+        # (``_run_shape``: ``prepare_shape(rebuild=True)``), an automatic one never spends on it.
+        stages = model3d.mesh_hub_stages(character_name, wanted.shape)
+        steps.append(Step("shape", MESH_MISMATCH_LABEL.format(body="Body shape", parts=" + ".join(stages)),
+                          len(stages), manual=MESH_MISMATCH_MANUAL))
+    if meshed and (rebased or not shape_stored):
         # Ruling C4: every view the shape needs is refreshed before it is meshed (a stale one re-made).
         views = set_jobs if rebased else base_body.shape_view_jobs(character_name, wanted.shape, bsig)
         stages = model3d.mesh_hub_stages(character_name, wanted.shape)
@@ -540,10 +550,16 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
         if step is not None:
             steps.append(step)
 
+    # Ruling A61: the assembly of the figure delivered now was refused for exactly these inputs — an automatic Build
+    # does not run it again (nor the CPU work that only feeds it); a manual one retries it once.
+    held = None if rebased else _assemble_held(character_name, signature, delivered)
     if wanted.texture:
-        shape_built = not any(s.name == "shape" for s in steps)
+        # A shape meshed again from its stored views (Ruling A61) keeps them: its dressed views stay current.
+        shape_built = not any(s.name == "shape" and s.manual != MESH_MISMATCH_MANUAL for s in steps)
         views_missing = rebased or not shape_built or _views_missing(character_name, wanted, signature)
-        if views_missing or built is None or built.texture != wanted.texture or built.shape != wanted.shape:
+        if held is not None and not explicit and not views_missing:
+            pass   # nothing to render; the paint itself is the held assembly
+        elif views_missing or built is None or built.texture != wanted.texture or built.shape != wanted.shape:
             views = (set_jobs if rebased or not shape_built
                      else base_body.dressed_view_estimate(character_name, wanted, signature, profile=profile)
                      if views_missing else 0)
@@ -556,7 +572,7 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     # Ruling FR-I3: a view refused for its inputs is a cached failure too — an automatic Build plans nothing
     # that needs it (no other views, fits or assembly); a manual one retries it once.
     view_hold = not explicit and any(s.failed and s.name in VIEW_STEPS for s in steps)
-    hold = (bool(refused) or view_hold) and not explicit
+    hold = (bool(refused) or view_hold or held is not None) and not explicit
     if (not painted_interim and not waits and not refused and not view_hold
             and not any(s.name in ("interim", "texture") for s in _runnable(steps, explicit))
             and _views_missing(character_name, delivered, signature)):
@@ -579,10 +595,32 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
                                    or garment_refit.work_count(character_name, profile=profile) > 0):
         steps.append(Step("fits", "Fits on the CPU", 0))
 
-    if not hold and (_runnable(steps, explicit) or (not painted_interim and not waits
-                                                    and (built is None or built.as_dict() != delivered.as_dict()))):
-        steps.append(Step("assemble", "Assemble the figure", 0))
+    if held is not None and not refused and not view_hold:
+        # Listed "failed — Retry" (Ruling A61): ``_runnable`` drops it from an automatic Build.
+        steps.append(Step("assemble", ASSEMBLE_LABEL + FAILED_SUFFIX, 0, failed=held["error"]))
+    elif not hold and (_runnable(steps, explicit) or (not painted_interim and not waits
+                                                      and (built is None or built.as_dict() != delivered.as_dict()))):
+        steps.append(Step("assemble", ASSEMBLE_LABEL, 0))
     return steps
+
+
+#: The assembly step's label: the outfit model of the figure delivered now (the paint), then the garment assembly.
+ASSEMBLE_LABEL = "Assemble the figure"
+#: A body (the plain body or a meshed shape) whose mesh the paint step refused against its own views (Ruling A61).
+MESH_MISMATCH_LABEL = "{body}: new mesh — the stored one does not match its views ({parts})"
+#: ``Step.manual`` of a body shape meshed again for that reason (Ruling A61; ruling 8a: never automatically).
+MESH_MISMATCH_MANUAL = "The body shape's mesh does not match its views — Build to mesh it again"
+
+
+def _assemble_held(character_name: str, signature: str, delivered) -> Optional[Dict[str, str]]:
+    """The recorded refusal of the assembly of ``signature`` as ``delivered`` while its inputs are the same
+    (``base_body.assemble_refusal``, Ruling A61), else None. Never raises (a plan never fails on it)."""
+    from app.core import base_body
+    try:
+        return base_body.assemble_refusal(character_name, signature, delivered)
+    except Exception:  # noqa: BLE001
+        logger.debug("Build %s: assembly refusal not read", character_name, exc_info=True)
+        return None
 
 
 def cost(character_name: str, steps: Optional[List[Step]] = None) -> Dict[str, Any]:
@@ -1476,8 +1514,11 @@ def _run_shape(character_name: str, step: Step, explicit: bool = False) -> str:
     if figure.is_plain(shape):
         return ""
     _retry_refused_views(character_name, step, explicit, shape)
+    # Ruling A61: a stored shape whose mesh the paint step refused against its views is meshed again (manual only).
+    rebuild = explicit and base_body.mesh_view_mismatch(character_name, shape) is not None
     with model3d.shape_guard(character_name, shape, lambda: _now(character_name)[1].shape == shape):
-        result = base_body.prepare_shape(character_name, wanted, items=items, signature=wanted.signature)
+        result = base_body.prepare_shape(character_name, wanted, items=items, signature=wanted.signature,
+                                         rebuild=rebuild)
     if result is not None and not result.get("ok") and not result.get("superseded"):
         return str(result.get("error") or "Body shape build failed")
     _profile, wanted_now, _d, _items = _now(character_name)
@@ -1733,7 +1774,12 @@ def _run_assemble(character_name: str, step: Step, explicit: bool = False) -> st
         return str(views.get("error") or "views failed")
     error = _outfit_model(character_name, wanted.signature)
     if not error:
+        base_body.clear_assemble_refusal(character_name, wanted.signature)
         garment_assembly.schedule(character_name, wanted.signature)
+    elif base_body.outfit_refusal(character_name, wanted.signature) == error:
+        # Ruling A61: the same inputs would be refused again — recorded for the figure delivered NOW, the one the
+        # next plan judges; an automatic Build waits for a person or a change of the inputs.
+        base_body.record_assemble_refusal(character_name, wanted.signature, _now(character_name)[2], error)
     return error
 
 
@@ -2370,7 +2416,7 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     ``changes`` when the plan has steps (failed: the last run recorded a
     failure, or a planned chain failed for its input — ``Step.failed``),
     else ``up_to_date``. ``auto_build`` = ``auto_build_on``."""
-    from app.core import figure, model_refs
+    from app.core import base_body, figure, model_refs
     pipeline = on_pipeline(character_name, profile=profile)
     out: Dict[str, Any] = {
         "pipeline": pipeline, "humanoid": model_refs.is_humanoid(character_name, profile=profile),
@@ -2401,6 +2447,10 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     elif hair_rebuild:   # the hair's row stands for the plain body's rebuild (ruling F13 a)
         from app.core.base_body import OLDER_PROMPTS
         plain_state, plain_note = "older_prompts", OLDER_PROMPTS
+    elif (plain_mismatch := base_body.mesh_view_mismatch(character_name, wanted.bsig)) is not None:
+        # Ruling A61: the stored base mesh does not match its own views — outdated until a manual Build meshes it.
+        from app.core.model_overview import MESH_VIEW_MISMATCH
+        plain_state, plain_note = "older_prompts", MESH_VIEW_MISMATCH.get(plain_mismatch.get("view", ""), "")
     else:
         plain_state, plain_note = "ready", ""
     body = {"plain": {"key": wanted.bsig, "state": plain_state, "note": plain_note},
@@ -2420,4 +2470,60 @@ def _figure_info(character_name: str, *, profile: Dict[str, Any], build: Dict[st
     return {**out, "status": status, "changes": changes, "cost": cost(character_name, steps),
             "wanted": wanted.as_dict(), "delivered": delivered.as_dict(),
             "outfit": _outfit_name(character_name, wanted.pieces),
-            "worn": worn, "hair": hair, "body": body}
+            "worn": worn, "hair": hair, "body": body,
+            "problem": None if build["running"] else _build_problem(character_name, steps, failures, delivered)}
+
+
+#: ``problem.kind`` (Ruling A61): the body's mesh does not match its own views / any other failed step.
+PROBLEM_MESH, PROBLEM_FAILED = "mesh_mismatch", "failed"
+#: A failed step's label when the plan does not list it any more.
+STEP_LABELS = {"plain_body": "Plain body", "base_repair": MESH_REPAIR_LABEL, "tip_smoothing": TIP_SMOOTHING_LABEL,
+               "interim": "Interim texture", "shape": "Body shape", "pieces": "Own mesh", "hair": "Hair",
+               "texture": "Texture", "fits": "Fits on the CPU", "assemble": ASSEMBLE_LABEL}
+_VIEW_IN_ERROR = re.compile(r"\b(front|back|left|right)(?: view\b|:)")
+
+
+def _build_problem(character_name: str, steps: List[Step], failures: Dict[str, Dict[str, Any]],
+                   delivered) -> Optional[Dict[str, Any]]:
+    """What the tabs that run the Build say about a failed step (Ruling A61; the character-tab checklist point 8:
+    which step, the reason in plain words, the view, the action that fixes it and its cost), None when nothing
+    failed. ``{kind, step, step_label, view, body, detail, action, jobs, held}``:
+
+    * ``mesh_mismatch`` — the body the figure is painted on (``body``: ``plain`` / ``shape``) has a mesh the body
+      retexture worker refused against its own ``view`` (``base_body.mesh_view_mismatch``): ``action``
+      ``rebuild_mesh`` = a manual Build, which makes the mesh again first; ``jobs`` that step's hub jobs.
+    * ``failed`` — the first failed step in ``STEP_ORDER`` (the last run's or a cached one): ``detail`` its error,
+      ``view`` a view the error names, ``action`` ``retry`` = a manual Build; ``jobs`` the plan's hub jobs (None when
+      unknown).
+
+    ``held``: automatic Builds do not run the step again until its inputs change (a cached failure). Never raises."""
+    from app.core import base_body, figure
+    try:
+        by_name = {s.name: s for s in steps}
+        mismatch = base_body.mesh_view_mismatch(character_name, delivered.shape)
+        if mismatch is not None:
+            plain = figure.is_plain(delivered.shape)
+            fix = by_name.get("plain_body" if plain else "shape")
+            return {"kind": PROBLEM_MESH, "step": "assemble", "step_label": ASSEMBLE_LABEL, "view": mismatch["view"],
+                    "body": "plain" if plain else "shape", "detail": mismatch["error"], "action": "rebuild_mesh",
+                    "jobs": fix.jobs if fix is not None else None, "held": True}
+        name = next((n for n in STEP_ORDER if n in failures), None)
+        if name is None:
+            name = next((n for n in failures), None)
+        if name is None:
+            return None
+        entry = failures[name]
+        detail = str(entry.get("error") or "")
+        planned = by_name.get(name)
+        label = (planned.running_label(True).removesuffix(RETRY_SUFFIX) if planned is not None
+                 else STEP_LABELS.get(name, name.replace("_", " ").capitalize()))
+        found = _VIEW_IN_ERROR.search(detail)
+        unknown = any(s.jobs is None for s in _runnable(steps, True))
+        return {"kind": PROBLEM_FAILED, "step": name, "step_label": label,
+                "view": base_body.registration_refusal_view(detail) or (found.group(1) if found else ""),
+                "body": "", "detail": detail, "action": "retry",
+                "jobs": None if unknown else sum(int(s.jobs or 0) for s in _runnable(steps, True)),
+                "held": bool(planned is not None and planned.failed)}
+    except Exception:  # noqa: BLE001 — a line of the tab, never a failure of the poll
+        logger.debug("Build problem of %s not read", character_name, exc_info=True)
+        return None
