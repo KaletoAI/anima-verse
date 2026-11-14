@@ -482,7 +482,7 @@ def _current(character_name: str, item_id: str, body: str, record: Dict[str, Any
     kind = str(record.get("kind") or "")
     if kind not in KINDS:
         return "Only clothing and footwear fits can be accepted"
-    if record.get("fit_version") != garment_fit.FIT_VERSION.get(kind):
+    if record.get("fit_version") != garment_fit.expected_fit_version(record):
         return "The fit algorithm changed since this attempt — re-fit to see the current one"
     status = fit_status(character_name, item_id, body, profile=profile)
     if status["state"] == "accepted":

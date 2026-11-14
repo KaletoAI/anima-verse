@@ -186,8 +186,17 @@ SIDE_DEEP_M = 0.03
 #: and refits from another base change): ``map_torso`` bridges a hollow of the source body down to
 #: ``TORSO_BRIDGE_M`` where the target grew, instead of carrying the piece out with the growth (Kai's open jacket
 #: on ``obf6474c3b``: trunk front 0.75 / source 0.85, largest hole 35 cm2 -> 0.82 / 0.85, 2.5 cm2 — accepted).
+#: clothing 13 (2026-11-14, Ruling A51 — a CPU refit of the clothing fits it can change, no hub job): an opening
+#: the worn view shows as body counts however flush the mesh fills it (``opening_lining``, ``OPEN_SHOWN_SHARE``;
+#: Kira's blazer on the remeshed ``8a64a2576446``: 0 -> 3591 faces left out, the V 0.5 / 0.1 / 0.9 -> 13.7 / 10.5 /
+#: 7.3 cm wide at 0.17 / 0.21 / 0.25). Only a fit whose opening report kept a component at least
+#: ``OPEN_SHOWN_RECESS_PX`` deep can change: a version 12 clothing fit without one stays current
+#: (``expected_fit_version``, ``opening_may_open``, ``CLOTHING_OPENING_UNCHANGED``).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 12, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 13, "footwear": FOOTWEAR_FIT_VERSION}
+#: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when their opening report holds
+#: no component Ruling A51 could leave out (``opening_may_open``).
+CLOTHING_OPENING_UNCHANGED = 12
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -201,8 +210,23 @@ def fit_version_for(kind: str, method: str = "") -> Optional[int]:
 
 def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
     """``fit_version_for`` of a fit record (its ``kind`` and ``method``) — what its ``fit_version`` must say to be
-    current."""
-    return fit_version_for(str(record.get("kind") or ""), str(record.get("method") or ""))
+    current. A clothing fit of ``CLOTHING_OPENING_UNCHANGED`` whose opening report holds no component version 13 could
+    leave out (``opening_may_open``) is current as it is: version 13 changed nothing for it (Ruling A51)."""
+    kind = str(record.get("kind") or "")
+    if (kind == "clothing" and record.get("fit_version") == CLOTHING_OPENING_UNCHANGED
+            and not opening_may_open(record)):
+        return CLOTHING_OPENING_UNCHANGED
+    return fit_version_for(kind, str(record.get("method") or ""))
+
+
+def opening_may_open(record: Dict[str, Any]) -> bool:
+    """Whether the fit ``record``'s opening report (``report.opening``, ``opening_lining``) holds a component the fit
+    kept although its inside lies ``OPEN_SHOWN_RECESS_PX`` behind its ring — the only components Ruling A51 can leave
+    out (the worn-view evidence and the outline are not in an older report, so such a fit is refitted)."""
+    opening = (record.get("report") or {}).get("opening")
+    components = opening.get("components") if isinstance(opening, dict) else None
+    return any(isinstance(c, dict) and not c.get("dropped")
+               and float(c.get("recess_px") or 0.0) >= OPEN_SHOWN_RECESS_PX for c in (components or []))
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).
@@ -490,6 +514,28 @@ def place_by_framing(Pd, body_P, body_mask, garment_mask) -> np.ndarray:
 # the blazer: one opening of 13666 px (recess 24.8 px), 1538 faces left out, the back intact; fitted, the V is
 # 7.0 / 6.1 / 2.6 cm wide at 0.17 / 0.21 / 0.25 (the neckline's top stays closed where the inside is the back of the
 # collar, a single layer).
+# Ruling A51 (2026-11-14): the recess test of step 3 misses an inside the mesher builds almost FLUSH with the front.
+# The blazer's mesh of the same image group made again (UniForge3D multiview, 16:50) closes the V with a sheet that
+# runs from the back of the collar forward to the V's lowest point: the same 13666 px opening measured a recess of
+# only 10.4 px, nothing was left out, and the fit laid the dark sheet onto the chest — the V black again. The worn
+# view says what the opening is: there the worn front shows the BODY itself inside the garment's outline. ``shown``
+# (the third mask of ``garment_source.opening_masks``) holds those pixels — the ghost-mask pixels on the base figure
+# where the worn view does not differ from the base view it was edited from (``garment_from_worn.piece_mask``, the A46
+# worn-minus-base mask: everything outside the piece is the body as the base shows it). A component the recess test
+# keeps is an opening all the same when at least ``OPEN_SHOWN_SHARE`` of it is shown body, its inside still lies
+# ``OPEN_SHOWN_RECESS_PX`` behind its ring (shallow, but behind: a skirt's slit or a belly above a waistband shows the
+# body too, with the garment's front around it) and the garment encloses it (at most ``OPEN_SHOWN_OUTLINE_MAX`` of its
+# ring outside the garment mask: an opening inside the outline, not a notch at its edge); its seeds are its vertices
+# on shown pixels with garment ``OPEN_LAYER_PX`` behind them, and the inside grows from them as in step 4. A hand the
+# worn view held in front of the garment is no shown body (the base has no hand there: worn and base differ), and a
+# single layer — the back panel, the back of the collar — still never goes (``layered``). Without the evidence (no
+# base copy of the image group, another framing) the recess test alone decides, as before. On the remeshed blazer: the
+# 13666 px V (shown 0.965, outline 0.146) goes, 3591 faces; the hem's 3074 px (recess 5.1, outline 0.396, at the edge)
+# stays; fitted, the V is 13.7 / 10.5 / 7.3 cm wide at 0.17 / 0.21 / 0.25 on the base body and 11.7 / 9.9 / 7.4 on the
+# outfit body (the earlier mesh ``2860e5a646c0``, by the recess alone: 13.3 / 11.8 / 8.0). Unchanged, vertex for
+# vertex: that earlier mesh (2220 faces), Kai's jacket (its 628 px recess 1.3), Kai's jeans (the waistband's 4868 px,
+# outline 0.467), Kira's skirt (the slit, recess -33.9) and Glut's scale top (the gaps between its straps: outline
+# 0.456 / 0.564 at its two largest).
 OPEN_DIFF = 80
 OPEN_ERODE_PX = 3
 OPEN_MIN_SHARE = 0.002
@@ -503,16 +549,28 @@ OPEN_REACH_PX = 10
 OPEN_LOCAL_PX = 40
 OPEN_STEP_PX = 10
 OPEN_FILL_PASSES = 6
+#: Share of an opening component that must be shown body in the worn view (``shown``) for it to count without the
+#: full recess (Ruling A51) ...
+OPEN_SHOWN_SHARE = 0.5
+#: ... while its inside still lies at least this far (median, px) behind the ring around it — shallow, but behind ...
+OPEN_SHOWN_RECESS_PX = 5
+#: ... and the garment encloses it: at most this share of its ring (``OPEN_RING_PX``) lies outside the garment mask.
+OPEN_SHOWN_OUTLINE_MAX = 0.25
+#: Most sampling steps per face edge of the dense depth images (``_depth_images``, Ruling A51): a face that long gets
+#: (401 x 402) / 2 = 80 601 samples; the remeshed blazer's longest face is 57 px, its median 10.
+OPEN_DENSE_MAX = 400
 
 
-def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask) -> Tuple[np.ndarray, Dict[str, Any]]:
+def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask,
+                   shown=None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Per vertex of the garment mesh (``Pd`` / ``Fd``, its own coordinates) whether it is the inside seen through
     an opening (block above) — a face whose three vertices are is left out (``_open_faces``); ``opening`` /
-    ``garment_mask`` in the ghost view's OWN frame (one size, unregistered).
-    ``(lining, report {components: [{pixels, recess_px, dropped}], faces})``."""
+    ``garment_mask`` / ``shown`` (optional: the pixels where the worn view shows the body, Ruling A51) in the ghost
+    view's OWN frame (one size, unregistered).
+    ``(lining, report {components: [{pixels, recess_px, shown?, outline?, by?, dropped}], shown, faces})`` —
+    ``shown`` the component's share of shown body and ``outline`` its ring's share outside the garment mask (with the
+    evidence), ``by`` ``"recess"`` / ``"shown"`` for a dropped one."""
     from scipy import ndimage
-    from scipy.sparse import coo_matrix
-    from scipy.sparse.csgraph import connected_components
     Pd = np.asarray(Pd, np.float64)
     F = np.asarray(Fd, np.int64).reshape(-1, 3)
     report: Dict[str, Any] = {"components": [], "faces": 0}
@@ -522,14 +580,16 @@ def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask) -> Tup
     if op.shape != gm.shape or not (op & gm).any() or len(Pd) == 0:
         return lining, report
     op = ndimage.binary_opening(op & gm, iterations=OPEN_ERODE_PX) & gm
+    sh = _mask(shown) & gm if shown is not None and np.asarray(shown).shape == gm.shape else None
+    report["shown"] = sh is not None
     labels, n = ndimage.label(op)
     sd, cd, md = _frame(Pd, gm)
     h, w = gm.shape
     ix = np.clip(np.round(cd[0] + (Pd[:, 0] - md[0]) / sd).astype(int), 0, w - 1)
     iy = np.clip(np.round(cd[1] - (Pd[:, 1] - md[1]) / sd).astype(int), 0, h - 1)
     depth = (Pd[:, 2] - md[2]) / sd                  # pixels toward the viewer
-    front, back = _depth_images(np.stack([cd[0] + (Pd[:, 0] - md[0]) / sd, cd[1] - (Pd[:, 1] - md[1]) / sd,
-                                          depth], 1), F, (h, w))
+    S = np.stack([cd[0] + (Pd[:, 0] - md[0]) / sd, cd[1] - (Pd[:, 1] - md[1]) / sd, depth], 1)
+    front, back = _depth_images(S, F, (h, w))
     # front-most there AND with garment behind it: a surface that is the only layer at its pixel is a back wall
     # (the back panel, the back of the collar), which stays — leaving it out would leave a hole through the piece.
     on_front = depth >= front[iy, ix] - OPEN_FRONT_TOL_PX
@@ -539,6 +599,7 @@ def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask) -> Tup
     recessed = ndimage.maximum_filter(front, size=2 * OPEN_LOCAL_PX + 1)[iy, ix] - depth >= OPEN_STEP_PX
     seeds = np.zeros(len(Pd), bool)
     accepted = np.zeros((h, w), bool)
+    accepted_shown = np.zeros((h, w), bool)
     sizes = np.bincount(labels.ravel(), minlength=n + 1)
     for c in range(1, n + 1):
         if sizes[c] < OPEN_MIN_SHARE * gm.sum():
@@ -550,48 +611,104 @@ def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask) -> Tup
         if inside.sum() < 3 or around.sum() < 3:
             continue
         recess = float(np.median(depth[around]) - np.median(depth[inside]))
-        dropped = recess >= OPEN_RECESS_PX
-        report["components"].append({"pixels": int(sizes[c]), "recess_px": round(recess, 1),
-                                     "dropped": bool(dropped)})
-        if dropped:
+        entry: Dict[str, Any] = {"pixels": int(sizes[c]), "recess_px": round(recess, 1)}
+        by = "recess" if recess >= OPEN_RECESS_PX else None
+        if sh is not None:
+            share = float((comp & sh).sum()) / float(sizes[c])
+            full_ring = ndimage.binary_dilation(comp, iterations=OPEN_RING_PX) & ~op
+            outline = float((full_ring & ~gm).sum()) / max(float(full_ring.sum()), 1.0)
+            entry.update(shown=round(share, 3), outline=round(outline, 3))
+            if (by is None and share >= OPEN_SHOWN_SHARE and recess >= OPEN_SHOWN_RECESS_PX
+                    and outline <= OPEN_SHOWN_OUTLINE_MAX):
+                by = "shown"     # the worn view shows the body here: an opening however flush the mesh fills it
+        entry["dropped"] = by is not None
+        if by:
+            entry["by"] = by
+        report["components"].append(entry)
+        if by == "recess":
             seeds |= inside & layered & recessed
             accepted |= comp
-    if not seeds.any():
-        return lining, report
-    # Grow over the mesh: the inside reaches past the worn view's opening, under the lapels that close in when
-    # worn — front-most there, recessed behind the front within OPEN_LOCAL_PX, connected to a seed.
-    region = ndimage.binary_dilation(accepted, iterations=OPEN_REACH_PX)[iy, ix] & layered
-    grow = seeds | (region & recessed)
-    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
-    E = E[grow[E].all(1)]
-    graph = coo_matrix((np.ones(len(E)), (E[:, 0], E[:, 1])), shape=(len(Pd), len(Pd)))
-    _, comp_of = connected_components(graph, directed=False)
-    lining = grow & np.isin(comp_of, np.unique(comp_of[seeds]))
-    # Close the pinholes the depth test leaves in the inside (a front vertex of the region whose neighbours are
-    # mostly inside is inside).
-    A = (_adjacency(F, len(Pd))[0] > 0).astype(np.float64)
-    half = 0.5 * np.asarray(A.sum(1)).ravel()
-    for _ in range(OPEN_FILL_PASSES):
-        lining = lining | (region & (A @ lining.astype(np.float64) >= np.maximum(half, 0.5)))
+        elif by == "shown":
+            accepted_shown |= comp
+    A = (_adjacency(F, len(Pd))[0] > 0).astype(np.float64) if (accepted | accepted_shown).any() else None
+    if seeds.any():
+        # Grow over the mesh: the inside reaches past the worn view's opening, under the lapels that close in when
+        # worn — front-most there, recessed behind the front within OPEN_LOCAL_PX, connected to a seed.
+        region = ndimage.binary_dilation(accepted, iterations=OPEN_REACH_PX)[iy, ix] & layered
+        lining |= _grow_lining(F, A, seeds, region, recessed)
+    # Ruling A51, a component shown as body: its seeds are its vertices on shown pixels with garment at least
+    # OPEN_LAYER_PX behind them (``ahead``), front-most or not — a flush inside is a sheet with two faces, and its rear
+    # face, hidden behind the front one in the ghost, would be the surface left on the skin. The back wall is never
+    # ahead. ``ahead`` is measured on depth images sampled at every pixel of each face (``dense``): the multiview
+    # mesher's long faces leave the 4-step sampling's back image with holes, where the inside itself is the deepest
+    # surface and so counts as a back wall.
+    seeds_shown = np.zeros(len(Pd), bool)
+    if accepted_shown.any():
+        _front_d, back_d = _depth_images(S, F, (h, w), dense=True)
+        ahead = depth - back_d[iy, ix] >= OPEN_LAYER_PX
+        seeds_shown = (accepted_shown & sh)[iy, ix] & ahead & recessed
+    if seeds_shown.any():
+        # The same growth through the vertices ahead; then a vertex that is ahead and recessed joins when it is the
+        # third vertex of a face whose other two are inside: the mesher spans long faces from the inside sheet to the
+        # lining under the lapels, and each such face, kept for its one outside vertex, lay across the opening once
+        # fitted.
+        region = ndimage.binary_dilation(accepted_shown, iterations=OPEN_REACH_PX)[iy, ix] & ahead
+        inner = _grow_lining(F, A, seeds_shown, region, recessed)
+        count = inner[F].sum(1)
+        bridge = F[count == 2][~inner[F[count == 2]]]
+        join = np.zeros(len(Pd), bool)
+        join[bridge] = True
+        inner |= join & ahead & recessed
+        lining |= inner
     report["faces"] = int(lining[F].all(1).sum())
     return lining, report
 
 
-def _depth_images(S: np.ndarray, F: np.ndarray, shape: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
+def _grow_lining(F: np.ndarray, A, seeds: np.ndarray, region: np.ndarray, recessed: np.ndarray) -> np.ndarray:
+    """The inside grown from ``seeds`` over the mesh ``F`` (``opening_lining`` step 4): the vertices of ``region``
+    recessed behind the front, connected to a seed, then ``OPEN_FILL_PASSES`` passes closing the pinholes (a vertex
+    of the region whose neighbours in ``A`` are mostly inside is inside)."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    n = len(seeds)
+    grow = seeds | (region & recessed)
+    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    E = E[grow[E].all(1)]
+    graph = coo_matrix((np.ones(len(E)), (E[:, 0], E[:, 1])), shape=(n, n))
+    _, comp_of = connected_components(graph, directed=False)
+    lining = grow & np.isin(comp_of, np.unique(comp_of[seeds]))
+    half = 0.5 * np.asarray(A.sum(1)).ravel()
+    for _ in range(OPEN_FILL_PASSES):
+        lining = lining | (region & (A @ lining.astype(np.float64) >= np.maximum(half, 0.5)))
+    return lining
+
+
+def _depth_images(S: np.ndarray, F: np.ndarray, shape: Tuple[int, int],
+                  dense: bool = False) -> Tuple[np.ndarray, np.ndarray]:
     """``(front, back)``: per pixel the largest / smallest depth of the faces ``F`` over the pixel-space points
-    ``S`` (x px, y px, depth px), sampled ``OPEN_FACE_SAMPLES`` steps per edge and closed over ``OPEN_GAP_PX``."""
+    ``S`` (x px, y px, depth px), sampled ``OPEN_FACE_SAMPLES`` steps per edge and closed over ``OPEN_GAP_PX``;
+    ``dense`` (Ruling A51): each face sampled at least once per pixel of its longest edge (up to
+    ``OPEN_DENSE_MAX`` steps), so a long face leaves no hole."""
     from scipy import ndimage
     h, w = shape
-    t = np.linspace(0.0, 1.0, OPEN_FACE_SAMPLES + 1)
-    uv = np.array([(a, b) for a in t for b in t if a + b <= 1.0 + 1e-9])
-    A, B, C = S[F[:, 0]], S[F[:, 1]], S[F[:, 2]]
-    pts = (A[:, None] * (1.0 - uv.sum(1))[None, :, None] + B[:, None] * uv[None, :, 0, None]
-           + C[:, None] * uv[None, :, 1, None]).reshape(-1, 3)
-    sx = np.clip(np.round(pts[:, 0]).astype(int), 0, w - 1)
-    sy = np.clip(np.round(pts[:, 1]).astype(int), 0, h - 1)
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    if dense and len(F):
+        edge = np.max([np.linalg.norm(S[F[:, i], :2] - S[F[:, (i + 1) % 3], :2], axis=1) for i in range(3)], axis=0)
+        steps = np.clip(np.ceil(edge).astype(int), OPEN_FACE_SAMPLES, OPEN_DENSE_MAX)
+    else:
+        steps = np.full(len(F), OPEN_FACE_SAMPLES)
     front, back = np.full((h, w), -np.inf), np.full((h, w), np.inf)
-    np.maximum.at(front, (sy, sx), pts[:, 2])
-    np.minimum.at(back, (sy, sx), pts[:, 2])
+    for n in np.unique(steps):
+        G = F[steps == n]
+        t = np.linspace(0.0, 1.0, int(n) + 1)
+        uv = np.array([(a, b) for a in t for b in t if a + b <= 1.0 + 1e-9])
+        A, B, C = S[G[:, 0]], S[G[:, 1]], S[G[:, 2]]
+        pts = (A[:, None] * (1.0 - uv.sum(1))[None, :, None] + B[:, None] * uv[None, :, 0, None]
+               + C[:, None] * uv[None, :, 1, None]).reshape(-1, 3)
+        sx = np.clip(np.round(pts[:, 0]).astype(int), 0, w - 1)
+        sy = np.clip(np.round(pts[:, 1]).astype(int), 0, h - 1)
+        np.maximum.at(front, (sy, sx), pts[:, 2])
+        np.minimum.at(back, (sy, sx), pts[:, 2])
     return (ndimage.maximum_filter(front, size=OPEN_GAP_PX), ndimage.minimum_filter(back, size=OPEN_GAP_PX))
 
 
@@ -3024,9 +3141,9 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     the widened placement. ``metrics["scale_retry"]`` = the applied factor (1.0 unwidened), ``scale_retry_max`` =
     the largest tried (1.0 without a retry), ``report["scale_retry"]`` the attempts with their gate numbers.
 
-    ``masks["opening"]`` (optional, ``garment_source.opening_masks``): ``(opening, ghost mask)`` in the ghost's own
-    frame — the garment's inside seen through an opening is left out before the fit (``opening_lining``, Ruling
-    A35), ``report["opening"]``.
+    ``masks["opening"]`` (optional, ``garment_source.opening_masks``): ``(opening, ghost mask[, shown])`` in the
+    ghost's own frame — the garment's inside seen through an opening is left out before the fit (``opening_lining``,
+    Ruling A35; ``shown``, the worn view's body pixels, Ruling A51), ``report["opening"]``.
 
     ``limb_source`` (a refit — ``garment_source``): the source fit of the same prepared mesh on another base,
     ``{x0 (output vertices, 3), w0 (output vertices, len(names0)), names0, frames (its body's limb_frames),

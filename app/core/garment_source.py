@@ -632,11 +632,14 @@ def fit_masks(character_name: str, item_id: str, fsig: str, *, body_front: Path,
     return body_mask, ghost_mask, {"registered": True, "registration": reg, "source_bsig": source.get("bsig")}
 
 
-def opening_masks(character_name: str, item_id: str, fsig: str) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """``(opening, ghost mask)`` of the group ``fsig`` in the ghost front's OWN frame (its size, never registered):
-    the ghost-mask pixels where the accepted worn front differs from the ghost front by more than
+def opening_masks(character_name: str, item_id: str, fsig: str
+                  ) -> Optional[Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]]:
+    """``(opening, ghost mask, shown)`` of the group ``fsig`` in the ghost front's OWN frame (its size, never
+    registered): the ghost-mask pixels where the accepted worn front differs from the ghost front by more than
     ``garment_fit.OPEN_DIFF`` in some channel — where the worn view shows the body through the garment (the V of an
-    open blazer) and the ghost the garment's inside (``garment_fit.opening_lining``). ``None`` without both images or
+    open blazer) and the ghost the garment's inside (``garment_fit.opening_lining``). ``shown`` (Ruling A51): the
+    ghost-mask pixels where the worn front shows the body itself — on the figure of the group's base copy and outside
+    the piece the worn front adds to it (``shown_body``); None without the evidence. ``None`` without both images or
     when their sizes differ (no pixel correspondence)."""
     from PIL import Image
     from app.core import garment_fit, garment_images as gi, garment_store as gs
@@ -648,9 +651,34 @@ def opening_masks(character_name: str, item_id: str, fsig: str) -> Optional[Tupl
         if g.size != w.size:
             return None
         size = g.size
-        diff = np.abs(np.asarray(w.convert("RGB"), np.int16) - np.asarray(g.convert("RGB"), np.int16)).max(2)
+        worn_rgb = np.asarray(w.convert("RGB"))
+        diff = np.abs(worn_rgb.astype(np.int16) - np.asarray(g.convert("RGB"), np.int16)).max(2)
     mask = gi._mask(ghost, size)
-    return (diff > garment_fit.OPEN_DIFF) & mask, mask
+    shown = shown_body(character_name, item_id, fsig, worn_rgb)
+    return (diff > garment_fit.OPEN_DIFF) & mask, mask, (shown & mask if shown is not None else None)
+
+
+def shown_body(character_name: str, item_id: str, fsig: str, worn_rgb: np.ndarray) -> Optional[np.ndarray]:
+    """The pixels of the worn front ``worn_rgb`` (its own frame) where it shows the body as the base view it was
+    edited from shows it (Ruling A51): the figure of the group's base copy (``base_copy``, front) outside the piece
+    mask of ``garment_from_worn.piece_mask`` (the worn view minus the base, Ruling A46). None without the base copy,
+    for another size or framing (``FromWornRefused``)."""
+    from app.core import garment_from_worn
+    from app.core.model_refs import get_model_refs_dir
+    copy = base_copy(character_name, item_id, fsig, "front")
+    if not copy.is_file():
+        return None
+    try:
+        base_rgb, figure, _alpha = garment_from_worn._base_arrays(copy, get_model_refs_dir(character_name))
+        if base_rgb.shape != worn_rgb.shape:
+            return None
+        piece, _feather, numbers = garment_from_worn.piece_mask(base_rgb, figure, worn_rgb)
+    except garment_from_worn.FromWornRefused as e:
+        logger.info("Garment %s/%s %s: no shown-body evidence for the openings: %s", character_name, item_id,
+                    fsig, e)
+        return None
+    dx, dy = numbers["alignment"]["shift"]
+    return garment_from_worn._shifted(np.asarray(figure, bool), dx, dy) & ~piece
 
 
 def warp_mask(mask: np.ndarray, reg: Dict[str, Any]) -> np.ndarray:

@@ -46,9 +46,11 @@ does.
      ``"fit refused — " + "; ".join(reasons)`` written by ``garment_store.record_failure(step "fit")`` under
      ``paths.init(<tmp>)``, read back: it carries the reason with the key ``rigged_deep_push_share``, the value
      (``1`` as ``gate`` formats it, ``{value:g}``) and the limit ``0.12``, plus ``scale_retry`` (a fit refusal).
-[H4] The version bumps: ``FIT_VERSION`` hair 14 / clothing 12 (8 in phase A, 9 with Task 7 fix 1's side
+[H4] The version bumps: ``FIT_VERSION`` hair 14 / clothing 13 (8 in phase A, 9 with Task 7 fix 1's side
      projection, 10 with Ruling A35's joint frames, sleeves and openings, 11 with Ruling A47's sleeves laid onto the
-     arm, width allowance and arm light, 12 with Ruling A50's trunk bridge on body shapes; hair 14: user test T-U1/T-U2) / footwear 18 (= ``FOOTWEAR_FIT_VERSION``;
+     arm, width allowance and arm light, 12 with Ruling A50's trunk bridge on body shapes,
+     13 with Ruling A51's openings the worn view shows;
+     hair 14: user test T-U1/T-U2) / footwear 18 (= ``FOOTWEAR_FIT_VERSION``;
      18: an outfit body's shoe is derived from the plain body's fit, Ruling A35), ``garment_layers.LAYER_VERSION`` 2.
 [H5] Ruling R7b on an outfit body (``garment_footwear.body_fit``; stubs: the shoe's current fsig
      ``fedcba987654``, its source ready, the stored body bytes ``"b" * 64``, the fit refuses). Stored: the shoe's
@@ -238,10 +240,10 @@ def test_h3(gf, reasons):
 
 def test_h4(gf):
     from app.core import footwear_fit, garment_layers
-    check(gf.FIT_VERSION == {"hair": 14, "clothing": 12, "footwear": 18} and footwear_fit.FOOTWEAR_FIT_VERSION == 18
+    check(gf.FIT_VERSION == {"hair": 14, "clothing": 13, "footwear": 18} and footwear_fit.FOOTWEAR_FIT_VERSION == 18
           and garment_layers.LAYER_VERSION == 2,
           f"[H4] FIT_VERSION {gf.FIT_VERSION}, FOOTWEAR_FIT_VERSION {footwear_fit.FOOTWEAR_FIT_VERSION}, "
-          f"LAYER_VERSION {garment_layers.LAYER_VERSION} (want hair 14 / clothing 12 / footwear 18, layers 2)")
+          f"LAYER_VERSION {garment_layers.LAYER_VERSION} (want hair 14 / clothing 13 / footwear 18, layers 2)")
 
 
 def test_h5():

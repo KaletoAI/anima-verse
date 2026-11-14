@@ -689,9 +689,19 @@ def main() -> int:
         check("refit record", (rec5b.get("accepted"), rec5b.get("fit_version"), rec5b.get("base_model_sha256")),
               (True, garment_fit.FIT_VERSION["clothing"], new_sha))
         check("accepted again", garments._fit_state("Demo", hid, f1, new_sha), "accepted")
-        older = {**rec5b, "fit_version": garment_fit.FIT_VERSION["clothing"] - 1}
+        older = {**rec5b, "fit_version": garment_fit.FIT_VERSION["clothing"] - 2}
         gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), older)
         check("older version stale", garments._fit_state("Demo", hid, f1, new_sha), "stale")
+        # Ruling A51: a CLOTHING_OPENING_UNCHANGED fit is stale only when its opening report kept a component.
+        kept = {"components": [{"pixels": 900, "recess_px": 8.0, "dropped": False}], "faces": 0}
+        prev = {**rec5b, "fit_version": garment_fit.CLOTHING_OPENING_UNCHANGED,
+               "report": {**(rec5b.get("report") or {}), "opening": None}}
+        gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), prev)
+        check("previous version without an opening kept: current", garments._fit_state("Demo", hid, f1, new_sha),
+              "accepted")
+        gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"),
+                        {**prev, "report": {**prev["report"], "opening": kept}})
+        check("previous version with an opening kept: stale", garments._fit_state("Demo", hid, f1, new_sha), "stale")
         gs.write_record(gs.garment_path("Demo", hid, f1, "fit").with_suffix(".json"), rec5b)
 
         # --- [6] new bsig ---------------------------------------------------------------
