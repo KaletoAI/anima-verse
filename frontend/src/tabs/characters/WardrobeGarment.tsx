@@ -78,8 +78,8 @@ import { ModelSteps } from './ModelSteps'
 import type { ModelStep } from './ModelSteps'
 import { footwearOf, garmentRunning, useGarment, useGarmentRun } from './useGarment'
 import type {
-  GarmentItemInfo, GarmentView, ItemWearers, PieceMaterial, PieceMaterialInfo, PieceStatus, PieceViewChoice,
-  PieceViewInfo,
+  CutoutOpeningChoice, CutoutOpeningInfo, GarmentItemInfo, GarmentView, ItemWearers, PieceMaterial,
+  PieceMaterialInfo, PieceStatus, PieceViewChoice, PieceViewInfo,
 } from './useGarment'
 import {
   ACCEPTED_BY_YOU, AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES,
@@ -694,6 +694,24 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
     }
     startPoll(0)
   }
+  /** Ruling A60, "Openings from the worn view": SAVED on its own — nothing runs; the toast names what is due now
+   *  (the cut-out, the mesh and the fit; Run all or the Build makes them). */
+  const onCutoutOpening = async (view: GarmentView, choice: CutoutOpeningChoice) => {
+    if (using) return
+    setUsing(true)
+    try {
+      const d = await apiPost<{ cutout_openings: Partial<Record<GarmentView, CutoutOpeningInfo>> | null }>(
+        `/characters/${enc}/garments/${encodeURIComponent(itemId)}/cutout-openings`, { view, choice })
+      const due = d.cutout_openings?.[view]?.due || []
+      toast(`${t('Saved')} · ${due.length ? `${t('Now due')}: ${pieceViewDueText(due, t)}` : t('nothing becomes due')}`,
+        'success')
+    } catch (e) {
+      toast(t('Error') + ': ' + (e as Error).message, 'error')
+    } finally {
+      setUsing(false)
+    }
+    startPoll(0)
+  }
   // "Fetch finished job…" on the mesh row: the shoe source's own route for footwear.
   const meshFetchUrl = info?.pipeline && itemId
     ? `/characters/${enc}/garments/${encodeURIComponent(itemId)}/${footwear ? 'footwear/mesh' : 'mesh'}/fetch` : null
@@ -844,6 +862,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             useRuns={info.use_runs}
             onUse={(step, view, attempt) => { void onUse(step, view, attempt) }}
             onPieceView={(view, choice) => { void onPieceView(view, choice) }}
+            onCutoutOpening={(view, choice) => { void onCutoutOpening(view, choice) }}
             meshFetchUrl={meshFetchUrl}
             onMeshFetched={onMeshFetched}
             pieceName={info.name || name}

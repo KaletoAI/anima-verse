@@ -49,8 +49,8 @@ import { RunBadge, RunButton } from './GarmentSteps'
 import type { ImageStepSpec } from './GarmentSteps'
 import {
   MESH_CHIPS, PIECE_VIEW_FROM, PIECE_VIEW_MADE, PIECE_VIEW_SOURCE, attemptTiles, chipResults, chipsForSource,
-  fromWornLines, gateLight, metaBesideLight, num, pieceCellMode, pieceViewDueText, pieceViewReason, queueText,
-  shownRecord, upscaleText, warningLines,
+  fromWornLines, gateLight, metaBesideLight, num, openingChip, openingLines, pieceCellMode, pieceViewDueText,
+  pieceViewReason, queueText, shownRecord, upscaleText, warningLines,
 } from './garmentStyle'
 import type { AttemptTile, ChipSpec, GarmentLimits, GarmentRunBody, LightState } from './garmentStyle'
 import { GarmentMeshTiles } from './GarmentMeshView'
@@ -62,8 +62,8 @@ import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
 import type { FitBody, FitBodyFit } from './figureModel'
 import type {
-  AttemptUsePlan, AttemptUsePlans, GarmentImageStep, GarmentInfo, GarmentMeshJob, GarmentRunState, GarmentView,
-  GateLimit, PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
+  AttemptUsePlan, AttemptUsePlans, CutoutOpeningChoice, CutoutOpeningInfo, GarmentImageStep, GarmentInfo,
+  GarmentMeshJob, GarmentRunState, GarmentView, GateLimit, PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
   ViewRunPlans,
 } from './useGarment'
 
@@ -257,7 +257,7 @@ export function StepLabel({ garment, step, label, help }: {
 const STEP_HELP: Record<string, string> = {
   worn: 'Worn views: the base body wearing this piece — the front an image edit of the base front, the back a draft composited onto the base back on the CPU (no second render; when nothing of the piece shows from behind, the back stays the base back). Regenerate: one hub image job for that view (a second attempt when the gate refuses it) — that view only; a new front drafts the back again from it in the same run. The later images and the mesh are dropped, Run all or the Build makes them again.',
   ghost: 'Piece-only views: the piece alone, the body removed, aligned to the worn view. The front takes its length from the accepted back, so the back comes first. Each view comes from the image edit (Generated) or from the worn view minus the base body (no hub job) — “Piece-only views from” under the view; Auto keeps the edit for a loose piece and takes the worn view when the edit is refused or adds a part the worn piece does not have. Regenerate: one hub image job for a generated view (a second attempt when the gate refuses it), none from the worn view — that view only; the later images of the view and the mesh are dropped, Run all or the Build makes them again.',
-  cutout: 'Cut-outs: the piece-only views squared and upscaled as the mesh input. Regenerate: local crop plus a routed upscale job — this step only; the mesh is dropped, Run all or the Build makes it and the fit again.',
+  cutout: 'Cut-outs: the piece-only views squared and upscaled as the mesh input, transparent where the worn view shows the body through an opening of the piece. Regenerate: local crop plus a routed upscale job (none when the piece-only view is unchanged: its colours are reused) — this step only; a changed cut-out drops the mesh, Run all or the Build makes it and the fit again.',
   mesh: 'Mesh: a 3D mesh built from both cut-outs and decimated. Regenerate: one hub mesh job (a second attempt when the gate refuses it) — this step only; the fit then reads outdated and stays in use until Re-fit, Run all or the Build fits it again.',
   fit: 'Fit: the mesh fitted onto the rigged body it is worn on (the plain body, or a body shape). Re-fit runs locally — no hub job.',
 }
@@ -332,6 +332,57 @@ function PieceViewSourcePicker({ info, label, disabled, onSet }: {
   )
 }
 
+const OPENING_CHOICE: Record<CutoutOpeningChoice, string> = { auto: 'Auto', off: 'Off' }
+
+/** "Openings from the worn view" of one cut-out view (Ruling A60): the picker (each option with what it makes due)
+ *  and what is due now. Saving runs nothing. */
+function CutoutOpeningsPicker({ info, label, disabled, onSet }: {
+  info: CutoutOpeningInfo
+  label: string
+  disabled: boolean
+  onSet: (choice: CutoutOpeningChoice) => void
+}) {
+  const { t } = useI18n()
+  const options = info.options
+  if (!options) return null
+  const text = (choice: CutoutOpeningChoice) => {
+    const o = options[choice]
+    const name = t(OPENING_CHOICE[choice])
+    if (choice === info.choice || !o.due.length) return name
+    return `${name} · ${t('then {n}').replace('{n}', upToText(dueJobs(o.due), t))} + ${t('fit')}`
+  }
+  const due = info.due || []
+  const title = [
+    `${t('Openings from the worn view')} · ${label}`,
+    t('Auto: the cut-out is transparent where the worn view shows the body through an enclosed opening of the piece (a neckline, an open front), so the mesh gets a real hole. Off: the cut-out stays as the piece-only view shows it.'),
+    ...(['auto', 'off'] as CutoutOpeningChoice[]).map((c) => {
+      const o = options[c]
+      return `${text(c)}${o.due.length ? ` — ${t('makes due')}: ${pieceViewDueText(o.due, t)}` : ` — ${t('nothing becomes due')}`}`
+    }),
+    t('Saving runs nothing: Run all or the Build makes what is due.'),
+  ].join('\n')
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <label style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.75em' }}
+        title={title}>
+        <span>{t('Openings from the worn view')}</span>
+        <select className="ga-input" style={{ fontSize: '0.95em', padding: '0 2px', maxWidth: '100%' }}
+          value={info.choice} disabled={disabled} aria-label={`${t('Openings from the worn view')} · ${label}`}
+          onChange={(e) => onSet(e.target.value as CutoutOpeningChoice)}>
+          {(['auto', 'off'] as CutoutOpeningChoice[]).map((c) => (
+            <option key={c} value={c}>{text(c)}</option>
+          ))}
+        </select>
+      </label>
+      {due.length ? (
+        <div className="ga-hint" style={{ fontSize: '0.7em', color: 'var(--warning, #d29922)' }}>
+          {t('Now due')}: {pieceViewDueText(due, t)}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /** "1 hub job" / "3 hub jobs" / "no hub job". */
 function jobsText(n: number, t: (s: string) => string): string {
   return n === 0 ? t('no hub job') : n === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(n))
@@ -372,8 +423,8 @@ function upToText(n: number, t: (s: string) => string): string {
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
-  viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched, pieceName = '', meshAllowance = null,
-  refitOn = '', refitBlock = '', shownFit = null, onMeshUse, imageUseBusy }: {
+  viewRuns = null, useRuns = null, onUse, onPieceView, onCutoutOpening, meshFetchUrl = null, onMeshFetched, pieceName = '',
+  meshAllowance = null, refitOn = '', refitBlock = '', shownFit = null, onMeshUse, imageUseBusy }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -391,6 +442,9 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   /** Ruling A46: "Piece-only views from" of a view changed (saves only; the caller posts it and reloads). Absent =
    *  no picker. */
   onPieceView?: (view: GarmentView, choice: PieceViewChoice) => void
+  /** Ruling A60: "Openings from the worn view" of a cut-out view changed (saves only; the caller posts it and
+   *  reloads). Absent = no picker. */
+  onCutoutOpening?: (view: GarmentView, choice: CutoutOpeningChoice) => void
   /** "Fetch finished job…" on the mesh row (MeshJobFetch): its POST url, null hides it. */
   meshFetchUrl?: string | null
   /** The mesh record changed through a fetched job: reload the panel. */
@@ -473,6 +527,9 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
     const dueFrom = pending && pieceView?.source
       ? t('Due: made again from {source}').replace('{source}', t(PIECE_VIEW_FROM[pieceView.source])) : ''
     const usedSource = step === 'ghost' && !pending ? pieceView?.made_from : undefined
+    // Ruling A60: the cut-out's opening from the worn view (its chip, the light's lines, the picker).
+    const openingInfo = step === 'cutout' && !img?.skipped ? garment?.cutout_openings?.[view] : undefined
+    const chip = step === 'cutout' && img?.url ? openingChip(img.opening, t) : null
     const cellChips = chipsForSource(chips || [], chips ? limits[step] : undefined, usedSource)
     const cellRecord = pending ? null : shownRecord(img)
     const light = gateLight(cellChips, cellRecord, chips ? limits[step] : undefined, view)
@@ -494,6 +551,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
       step === 'cutout' && img?.url
         ? [img.side ? `${t('Square side')} ${img.side} px` : '', upscaleText(img.upscale, t)].filter(Boolean).join(' · ')
         : '',
+      ...openingLines(openingInfo, t),
     ].filter(Boolean)
     const tiles = attemptTiles(img, useRuns?.[step]?.[view], pending && pieceView?.source ? {
       note: t('To be replaced'),
@@ -504,7 +562,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         style={ring ? { outline: `2px solid ${ring}`, outlineOffset: -1 } : undefined}>
         {img?.url && !pending ? (
           <RefImage key={img.url} src={img.url} width={THUMB_W} height={THUMB_H} label={label}
-            meta={metaBesideLight(img, light.state)} compact />
+            meta={metaBesideLight(img, light.state)} compact checker={step === 'cutout'} />
         ) : pending ? (
           <div className="ga-step-grid-empty" title={dueFrom}>{dueFrom}</div>
         ) : (
@@ -533,6 +591,18 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
             ) : null}
             <RunBadge mark={mark}
               title={mark === 'queued' ? queueText(garment, feedback, stepLabels, t) : undefined} />
+            {openingInfo?.due?.length ? (
+              <span className="ga-run-badge" title={openingLines(openingInfo, t).join('\n')}
+                style={{ borderColor: 'var(--warning, #d29922)', color: 'var(--warning, #d29922)' }}>
+                {t('Due')}
+              </span>
+            ) : null}
+            {chip ? (
+              <span className="ga-run-badge" title={chip.title}
+                style={chip.cut ? { borderColor: 'var(--accent, #6aa9ff)', color: 'var(--accent, #6aa9ff)' } : undefined}>
+                {chip.label}
+              </span>
+            ) : null}
             {pairRedo ? (
               <span className="ga-run-badge"
                 title={[garment?.pair?.error || '', t('Regenerate this view — or Run all renders it again.')]
@@ -560,6 +630,10 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
           {pieceView?.options && onPieceView ? (
             <PieceViewSourcePicker info={pieceView} label={label} disabled={busy || !garment}
               onSet={(choice) => onPieceView(view, choice)} />
+          ) : null}
+          {openingInfo?.options && onCutoutOpening ? (
+            <CutoutOpeningsPicker info={openingInfo} label={label} disabled={busy || !garment}
+              onSet={(choice) => onCutoutOpening(view, choice)} />
           ) : null}
           {needs ? (
             <>

@@ -49,6 +49,9 @@ const BADGE_STYLE: CSSProperties = {
   boxSizing: 'border-box',
 }
 
+/** A light checkerboard: transparent pixels read as transparent, not as the panel's dark background. */
+const CHECKER = 'repeating-conic-gradient(#c9c9c9 0% 25%, #f2f2f2 0% 50%) 50% / 10px 10px'
+
 /** Badge overrides for small tiles. */
 const COMPACT_BADGE: CSSProperties = { padding: '0 3px', fontSize: 10, lineHeight: '14px' }
 
@@ -61,6 +64,7 @@ export function RefImage({
   meta,
   action,
   compact = false,
+  checker = false,
 }: {
   src: string
   height: number
@@ -74,6 +78,8 @@ export function RefImage({
   action?: ReactNode
   /** Small tile: smaller badges and insets. */
   compact?: boolean
+  /** A checkerboard behind the picture, so its transparent parts show (a cut-out with an opening, Ruling A60). */
+  checker?: boolean
 }) {
   // Re-render once the server-configured clock format and timezone arrive.
   useClockSettings()
@@ -100,7 +106,7 @@ export function RefImage({
           objectFit: 'contain',
           borderRadius: radius,
           border: '1px solid var(--border, #30363d)',
-          background: 'rgba(255, 255, 255, 0.04)',
+          background: checker ? CHECKER : 'rgba(255, 255, 255, 0.04)',
           visibility: hidden ? 'hidden' : undefined,
         }}
         onLoad={(e) => {

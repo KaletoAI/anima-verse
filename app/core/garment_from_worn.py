@@ -179,10 +179,14 @@ def _disc(radius: int) -> List[Tuple[int, int]]:
             if dx * dx + dy * dy <= radius * radius]
 
 
-def piece_mask(base_rgb, base_mask, worn_rgb) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
+def piece_mask(base_rgb, base_mask, worn_rgb, *,
+               framing_vouched: bool = False) -> Tuple[np.ndarray, np.ndarray, Dict[str, Any]]:
     """``(mask, alpha, numbers)`` of the piece in a worn view (module docstring): ``base_rgb`` the base view
     flattened on the neutral grey, ``base_mask`` its figure (bool), ``worn_rgb`` the worn view — same shape.
-    ``alpha`` = the mask feathered (float 0..1). ``FromWornRefused`` for another framing or no piece."""
+    ``alpha`` = the mask feathered (float 0..1). ``FromWornRefused`` for another framing or no piece.
+    ``framing_vouched`` (Ruling A60, ``garment_openings.vouched_by_worn_gate``): another check has measured the
+    framing (the worn gate's outline outside the garment), so a framing cost above ``ALIGN_COST_MAX`` does not
+    refuse — that cost grows with the piece's own area (``garment_openings`` docstring 1)."""
     from scipy import ndimage
     from app.core import garment_gates as gg
     base = np.asarray(base_rgb, dtype=np.float32)[..., :3]
@@ -197,7 +201,7 @@ def piece_mask(base_rgb, base_mask, worn_rgb) -> Tuple[np.ndarray, np.ndarray, D
         raise FromWornRefused("no figure in the base view", numbers)
     framing = align(worn, base)
     numbers["alignment"] = framing
-    if not framing["ok"]:
+    if not framing["ok"] and not framing_vouched:
         raise FromWornRefused(f"the worn view is not in the base view's framing: a mean difference of "
                               f"{framing['cost']} > {ALIGN_COST_MAX} at the best shift {framing['shift']}", numbers)
     dx, dy = framing["shift"]

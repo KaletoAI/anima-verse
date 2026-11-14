@@ -43,6 +43,8 @@ export interface GarmentImageInfo extends ImageTileMeta {
   /** Cut-out only: the routed upscale (`status` applied · lanczos · not_needed). */
   upscale?: Record<string, unknown> | null
   side?: number | null
+  /** Ruling A60, cut-out only: the opening it was made with (null: made before the openings were looked for). */
+  opening?: CutoutOpening | null
   /** The drafted back is an EMPTY composite: the base back unchanged. */
   empty?: boolean
   /** Why this view is not made (the steps after an empty drafted back). */
@@ -327,6 +329,33 @@ export interface PieceViewInfo extends Partial<PieceViewOption> {
   checking?: boolean
 }
 
+/** Ruling A60, "Openings from the worn view": the setting of one cut-out view (server `garment_openings`). */
+export type CutoutOpeningChoice = 'auto' | 'off'
+/** The opening a cut-out was made with: `found` the worn view shows enclosed body inside the piece, `applied` it is
+ *  cut (Auto), `share` its pixels over the cut-out's garment pixels, `reason` why none was found. */
+export interface CutoutOpening {
+  applied?: boolean
+  found?: boolean
+  px?: number | null
+  share?: number | null
+  choice?: CutoutOpeningChoice
+  reason?: string | null
+}
+/** One view's "Openings from the worn view" (`garments.cutout_openings_info`): the setting, the cut-out's record,
+ *  what is due now and what each choice would make due before it is saved. */
+export interface CutoutOpeningInfo {
+  choice: CutoutOpeningChoice
+  made?: boolean
+  opening?: CutoutOpening | null
+  /** Made before the openings were looked for: current; its own button makes it again on the CPU. */
+  legacy?: boolean
+  /** Made again, the cut-out reuses its own colours (no hub job). */
+  reusable?: boolean
+  due?: PieceViewDue[]
+  options?: Record<CutoutOpeningChoice, { due: PieceViewDue[] }>
+  skipped?: boolean | string
+}
+
 export interface GarmentInfo {
   item_id: string
   kind: string
@@ -371,6 +400,8 @@ export interface GarmentInfo {
   preview_freshness?: Freshness | null
   /** Ruling A46: where each piece-only view comes from; null/absent for a piece without the choice. */
   piece_views?: Partial<Record<GarmentView, PieceViewInfo>> | null
+  /** Ruling A60: per view whether the cut-out opens where the worn view shows the body; null/absent otherwise. */
+  cutout_openings?: Partial<Record<GarmentView, CutoutOpeningInfo>> | null
   /** Ruling A47: the sleeves per side, the width allowance and the arm light (`garments.fit_settings_info`). */
   fit_settings?: FitSettingsInfo | null
   /** Ruling A46b: accepted images gated under an older gate version, being re-gated in the background now

@@ -2016,6 +2016,12 @@ class PieceViewSourceRequest(BaseModel):
     choice: str
 
 
+class CutoutOpeningsRequest(BaseModel):
+    # Ruling A60: "front" / "back" and "auto" / "off" — validated by garment_openings.set_choice.
+    view: str
+    choice: str
+
+
 class GarmentRunRequest(BaseModel):
     # Plain strings, validated by garments.start_garment: an unknown step or
     # view is a 400 with its message, not a schema 422.
@@ -2789,6 +2795,31 @@ def set_character_garment_piece_view(character_name: str, item_id: str, body: Pi
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"piece_views": garments.piece_views_info(character_name, item_id, fsig)}
+
+
+@router.post("/{character_name}/garments/{item_id}/cutout-openings")
+def set_character_garment_cutout_openings(character_name: str, item_id: str, body: CutoutOpeningsRequest,
+                                          _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Ruling A60, "Openings from the worn view": whether the cut-out of ``view`` of an own-mesh clothing piece is
+    made transparent where the worn view shows the body through an enclosed opening of the piece — ``auto`` or
+    ``off`` — on the ITEM (``garment_openings.set_choice``). Runs nothing: a cut-out that carries another opening
+    reads due, with the mesh and the fit after it. ``{cutout_openings}`` — ``garments.cutout_openings_info`` now.
+    Admin-only. 404 for an item that is no clothing garment of the character, 400 for a bad view or choice."""
+    from app.core import garment_openings, garments
+    from app.core import garment_store as gs
+    _require_character(character_name)
+    try:
+        _item_, kind = garments._item(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if kind != "clothing":
+        raise HTTPException(status_code=404, detail="Only an own-mesh clothing piece has cut-out openings")
+    try:
+        garment_openings.set_choice(character_name, item_id, body.view, body.choice)
+        fsig = gs.garment_fsig(character_name, item_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"cutout_openings": garments.cutout_openings_info(character_name, item_id, fsig)}
 
 
 @router.post("/{character_name}/garments/{item_id}/fit-settings")

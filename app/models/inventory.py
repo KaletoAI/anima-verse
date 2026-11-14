@@ -467,6 +467,15 @@ def _clean_piece_views(raw) -> Dict[str, str]:
     return clean_setting(raw)
 
 
+def _clean_cutout_openings(raw) -> Dict[str, str]:
+    """``outfit_piece.cutout_openings`` (Ruling A60): per view whether the own mesh's cut-out is opened where the
+    worn view shows the body through the piece — ``off``; Auto (and anything else) is no key
+    (``garment_openings.clean_setting``). Never part of a 2D key (``_render_relevant_fields``): it changes only the
+    own mesh's input, made on demand."""
+    from app.core.garment_openings import clean_setting
+    return clean_setting(raw)
+
+
 def _clean_closable(raw, slots: List[str]) -> bool:
     """``outfit_piece.closable``: whether the piece can be worn open (plan
     2026-11-12-unified-worn-pieces Addendum A). A bool is kept, anything else
@@ -726,6 +735,9 @@ def add_item(name: str,
         piece_views = _clean_piece_views(outfit_piece.get("piece_views"))
         if piece_views:
             item["outfit_piece"]["piece_views"] = piece_views
+        cutout_openings = _clean_cutout_openings(outfit_piece.get("cutout_openings"))
+        if cutout_openings:
+            item["outfit_piece"]["cutout_openings"] = cutout_openings
         lift = _lift(outfit_piece.get("lift"))
         if lift is not None:
             item["outfit_piece"]["lift"] = lift
@@ -855,6 +867,7 @@ def update_item(item_id: str,
         prev_mesh_mode = prev_piece.get("mesh_mode")
         prev_material = prev_piece.get("material")
         prev_piece_views = prev_piece.get("piece_views")
+        prev_cutout_openings = prev_piece.get("cutout_openings")
         # Same for ``closable``: kept when the update does not name it.
         prev_closable = prev_piece.get("closable")
         prev_exposed_detail = _clean_exposed_detail((item.get("outfit_piece") or {}).get("exposed_detail"))
@@ -896,6 +909,11 @@ def update_item(item_id: str,
             piece_views = _clean_piece_views(op.get("piece_views") if "piece_views" in op else prev_piece_views)
             if piece_views:
                 item["outfit_piece"]["piece_views"] = piece_views
+            # Ruling A60, "Openings from the worn view": kept when the update does not name it, Auto = no key.
+            cutout_openings = _clean_cutout_openings(op.get("cutout_openings") if "cutout_openings" in op
+                                                     else prev_cutout_openings)
+            if cutout_openings:
+                item["outfit_piece"]["cutout_openings"] = cutout_openings
             if "closable" in op:
                 item["outfit_piece"]["closable"] = _clean_closable(op.get("closable"), slots)
             elif prev_closable is not None:

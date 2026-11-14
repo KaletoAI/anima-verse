@@ -130,6 +130,9 @@ PAIR_STEP = "ghost"
 #: Ruling A46: the step whose views can be made from the worn view minus the base view instead of rendered
 #: (``garment_from_worn``; the Wardrobe's "Piece-only views from" setting per view).
 FROM_WORN_STEP = "ghost"
+#: Ruling A60: the cut-out is made transparent where the worn view shows the body through an enclosed opening of the
+#: piece (``garment_openings``; the Wardrobe's "Openings from the worn view" setting per view).
+CUTOUT_OPENINGS = True
 PAIR_REFUSED = "front and back garment end at different heights"
 
 

@@ -329,6 +329,15 @@ def _sha(path: Optional[Path]) -> str:
     return file_sha256(path)
 
 
+def _cutout_sha(character_name: str, item_id: str, fsig: str, step: str, view: str) -> Optional[str]:
+    """The sha256 of the accepted cut-out of ``view`` before its step runs again ("" without one); None for any other
+    step. Ruling A60: a cut-out made again with the same bytes drops nothing after it."""
+    if step != "cutout":
+        return None
+    path = _image(character_name, item_id, fsig, step, view)
+    return _sha(path) if path.is_file() else ""
+
+
 def _image(character_name: str, item_id: str, fsig: str, step: str, view: str, attempt: int = 0) -> Path:
     from app.core.garment_store import garment_path
     return garment_path(character_name, item_id, fsig, "image", step=step, view=view, attempt=attempt)
@@ -2431,6 +2440,13 @@ def run_estimate(character_name: str, item_id: str, *,
         kept = sum(1 for v in gs.GARMENT_VIEWS if _view_done(character_name, item_id, fsig, first, v)
                    or ((first, v) not in assumed and rejudge_expected(character_name, item_id, fsig, first, v)))
         parts[0] = (first, max(parts[0][1] - kept, 0))
+        if first == "cutout":
+            # Ruling A60: a cut-out due for its opening alone is made again from its own colours — no upscale.
+            from app.core.garment_images import cutout_reusable
+            reused = sum(1 for v in gs.GARMENT_VIEWS if (first, v) not in assumed
+                         and not _view_done(character_name, item_id, fsig, first, v)
+                         and cutout_reusable(character_name, item_id, fsig, v))
+            parts[0] = (first, max(parts[0][1] - reused, 0))
     if method == gs.EDIT_CHAIN and not from_step:
         # Ruling A46: a piece-only view made from the worn view costs no job (the run makes the views that are not
         # done; a later step's views all — less the ones from the worn view). When the setting alone makes the
@@ -2573,6 +2589,8 @@ def _view_cost(character_name: str, item_id: str, kind: str, fsig: str, step: st
     jobs = back if view == "back" else total - back
     if (garment_images.piece_source(character_name, item_id, fsig, step, view) or {}).get("source") == "worn":
         return 0  # Ruling A46: made from the worn view minus the base view — no render
+    if step == "cutout" and garment_images.cutout_reusable(character_name, item_id, fsig, view):
+        return 0  # Ruling A60: made again from its own stored colours (same piece-only image) — no upscale
     if not front_changes and garment_images.rejudge_expected(character_name, item_id, fsig, step, view):
         return 0
     if (open_state and view == "back" and not forced and step in BACK_JOBS
@@ -2693,6 +2711,11 @@ def _plan_of(character_name: str, item_id: str, ctx: Dict[str, Any], step: str, 
                                   **args)}
               for s, v, why in _follow_ups(kind, step, view)]
     jobs = 0 if skipped else _view_cost(character_name, item_id, kind, fsig, step, view, forced=True, **args)
+    if step == "cutout" and not skipped and any(m["view"] == view for m in missing):
+        # Ruling A60: a new piece-only image comes first — the cut-out cannot reuse its stored colours.
+        total = int(ctx["costs"].get(step, 0))
+        back = BACK_JOBS.get(step, total // 2)
+        jobs = back if view == "back" else total - back
     return {"step": step, "view": view, "jobs": jobs, "skipped": skipped or None,
             "missing": missing, "prerequisite_jobs": sum(m["jobs"] for m in missing),
             "follow_up": follow, "follow_up_jobs": sum(f["jobs"] for f in follow)}
@@ -3049,6 +3072,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                 if garment_images.skipped_view(character_name, item_id, fsig, step, v):
                     continue  # an empty drafted back: no later back image
                 gs.start(character_name, item_id, step)
+                before = _cutout_sha(character_name, item_id, fsig, step, v)
                 if step == "cutout":
                     garment_images.cut_out(character_name, item_id, fsig, v, force=f)
                 else:
@@ -3061,7 +3085,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                                                  state=image_state,
                                                  before_composite=_composite_guard(character_name, bsig,
                                                                                    base_views, step))
-                _drop_mesh(character_name, item_id, fsig)
+                if before is None or before != _cutout_sha(character_name, item_id, fsig, step, v):
+                    _drop_mesh(character_name, item_id, fsig)
                 _inputs_unchanged(character_name, item_id, fsig, step, state)
                 gs.end(character_name, item_id, step)
                 if step not in ran:
@@ -3098,6 +3123,7 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                         continue  # a model fit of before Task 11g is re-made (Ruling C2)
                     if garment_images.skipped_view(character_name, item_id, fsig, step, v):
                         continue  # an empty drafted back: no later back image
+                    before = _cutout_sha(character_name, item_id, fsig, step, v)
                     if step == "cutout":
                         garment_images.cut_out(character_name, item_id, fsig, v, force=f)
                     else:
@@ -3111,6 +3137,11 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                                                      state=image_state,
                                                      before_composite=_composite_guard(character_name, bsig,
                                                                                        base_views, step))
+                    if before is not None and before == _cutout_sha(character_name, item_id, fsig, step, v):
+                        # Ruling A60: a cut-out made again with the same pixels (its opening setting changed, but
+                        # no opening was found) keeps the mesh made from it.
+                        _inputs_unchanged(character_name, item_id, fsig, step, state)
+                        continue
                     produced = True
                     # Right away: a refusal of the next view must not leave a
                     # mesh behind that was built from the replaced image.
@@ -4217,6 +4248,10 @@ def _image_info(character_name: str, item_id: str, fsig: str, step: str, view: s
     if step == "cutout" and record:
         out["upscale"] = record.get("upscale")
         out["side"] = record.get("side")
+        # Ruling A60: the opening the cut-out was made with (the tile's chip); None before the openings existed.
+        opening = record.get("opening") if isinstance(record.get("opening"), dict) else None
+        out["opening"] = ({k: opening.get(k) for k in ("applied", "found", "px", "share", "choice", "reason")}
+                          if opening else None)
     return out
 
 
@@ -4789,6 +4824,50 @@ def _piece_view_due(view: str, source: str, made: Optional[str]) -> List[Dict[st
             {"step": "mesh", "jobs": costs["mesh"]}, {"step": "fit", "jobs": costs["fit"]}]
 
 
+def _opening_due(view: str, due: bool, reusable: bool) -> List[Dict[str, Any]]:
+    """What a cut-out due for its opening makes due (Ruling A60): the cut-out (no job when it reuses its stored
+    colours, else its routed upscale), the mesh and the fit (CPU) — first attempts, ``HUB_JOBS``."""
+    if not due:
+        return []
+    costs = HUB_JOBS["clothing:edit_chain"]
+    return [{"step": "cutout", "view": view, "jobs": 0 if reusable else costs["cutout"] // 2},
+            {"step": "mesh", "jobs": costs["mesh"]}, {"step": "fit", "jobs": costs["fit"]}]
+
+
+def cutout_openings_info(character_name: str, item_id: str, fsig: str,
+                         item: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Ruling A60, the Wardrobe's "Openings from the worn view" per view: ``{view: {choice, made, opening, legacy,
+    due, options, reusable}}`` — ``choice`` the setting (auto / off), ``made`` an accepted cut-out exists,
+    ``opening`` the record it was made with (``{applied, found, px, share, reason, …}``; None without one),
+    ``legacy`` it was made before the openings were looked for (current; its own button makes it again),
+    ``due`` what is due because the setting applies another opening (``_opening_due``: ``[{step, view?, jobs}]``),
+    ``options`` ``{choice: {due}}`` — what a change would make due, before it is saved; ``reusable`` the cut-out
+    made again reuses its stored colours (no hub job). ``skipped`` for a view that is not made. None for a kind
+    without the openings. Read from the files and the item only."""
+    from app.core import garment_images, garment_openings as go
+    from app.core.garment_store import GARMENT_VIEWS, read_record
+    from app.models.inventory import get_item
+    if not getattr(_kind_module(garment_images._item_kind(item_id)), "CUTOUT_OPENINGS", False):
+        return None
+    item = item if item is not None else (get_item(item_id) or {})
+    out: Dict[str, Dict[str, Any]] = {}
+    for view in GARMENT_VIEWS:
+        choice = go.choice_of(item, view)
+        skipped = garment_images.skipped_view(character_name, item_id, fsig, "cutout", view)
+        if skipped:
+            out[view] = {"choice": choice, "skipped": skipped}
+            continue
+        final = _image(character_name, item_id, fsig, "cutout", view)
+        made = _accepted(final)
+        record = read_record(final.with_suffix(".json")) if made else {}
+        opening = go.recorded(record)
+        reusable = made and garment_images.cutout_reusable(character_name, item_id, fsig, view)
+        options = {c: {"due": _opening_due(view, made and go.due(record, c), reusable)} for c in go.CHOICES}
+        out[view] = {"choice": choice, "made": made, "opening": opening, "legacy": made and opening is None,
+                     "reusable": reusable, "due": options[choice]["due"], "options": options}
+    return out
+
+
 def fit_settings_info(character_name: str, item_id: str, fsig: str, base_model_sha: str,
                       profile: Dict[str, Any]) -> Dict[str, Any]:
     """Ruling A47 — the fit settings of a clothing piece for the Wardrobe dialog: ``{settings (current), recorded
@@ -5066,6 +5145,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
         # Ruling A46: where each piece-only view comes from (the setting, the reason, what is due).
         "piece_views": (piece_views_info(character_name, item_id, fsig, _item_, checking=checking)
                         if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
+        # Ruling A60: per view whether the cut-out opens where the worn view shows the body (setting, record, due).
+        "cutout_openings": (cutout_openings_info(character_name, item_id, fsig, _item_)
+                            if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),
         # Ruling A47: sleeves per side, the width allowance, the arm light of the shown fit.
         "fit_settings": (fit_settings_info(character_name, item_id, fsig, base[1], profile)
                          if fsig and method == gs.EDIT_CHAIN and kind == _clothing() else None),

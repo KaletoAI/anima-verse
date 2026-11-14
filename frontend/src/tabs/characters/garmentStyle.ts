@@ -6,8 +6,9 @@
 import type { CSSProperties } from 'react'
 import type { Freshness } from './FreshnessBadge'
 import type {
-  AttemptUsePlan, FootwearInfo, FromWornNumbers, GarmentImageInfo, GarmentRunState, GateLimit, GateRecord,
-  PieceViewDue, PieceViewInfo, PieceViewOption, PieceViewSource, RecordLimits, RunFeedback,
+  AttemptUsePlan, CutoutOpening, CutoutOpeningInfo, FootwearInfo, FromWornNumbers, GarmentImageInfo,
+  GarmentRunState, GateLimit, GateRecord, PieceViewDue, PieceViewInfo, PieceViewOption, PieceViewSource,
+  RecordLimits, RunFeedback,
 } from './useGarment'
 
 export const TILE_HEIGHT = 200
@@ -431,4 +432,67 @@ export function pieceViewDueText(due: PieceViewDue[], t: (s: string) => string):
       : d.step === 'mesh' ? t('mesh') : t('fit')
     return `${word}: ${d.step === 'fit' ? t('on the CPU') : (d.jobs === 0 ? t('no hub job') : d.jobs === 1 ? t('1 hub job') : t('{n} hub jobs').replace('{n}', String(d.jobs)))}`
   }).join(' · ')
+}
+
+// --- Ruling A60: openings from the worn view in the cut-out ------------------------------------------------------
+
+/** The server's plain reasons why a cut-out has no opening (`garment_openings`), said through `t()`; another
+ *  reason (with numbers in it) is shown as it is. */
+export const OPENING_REASONS: Record<string, string> = {
+  'no accepted worn view': 'no accepted worn view',
+  'no base copy of the image group (the base view the worn view was edited from)':
+    'no base copy of the image group (the base view the worn view was edited from)',
+  'the worn view shows no body inside the piece': 'the worn view shows no body inside the piece',
+  'no enclosed opening: the body the worn view shows inside the piece reaches its edge':
+    'no enclosed opening: the body the worn view shows inside the piece reaches its edge',
+  'the piece-only view was not moved onto the worn view (its registration is beyond the caps)':
+    'the piece-only view was not moved onto the worn view (its registration is beyond the caps)',
+  'the opening lies outside the cut-out': 'the opening lies outside the cut-out',
+}
+
+function pct(share: number | null | undefined): string {
+  return share != null && Number.isFinite(share) ? (share * 100).toFixed(1) : '?'
+}
+
+/** The cut-out tile's opening chip: "Opening 7.1 %" when cut, "Opening off" when one was found but not cut; null
+ *  when none was found or the cut-out predates the openings. */
+export function openingChip(o: CutoutOpening | null | undefined,
+  t: (s: string) => string): { label: string; title: string; cut: boolean } | null {
+  if (!o || !o.found) return null
+  const share = pct(o.share)
+  if (o.applied) {
+    return {
+      label: t('Opening {pct} %').replace('{pct}', share),
+      title: t('Transparent where the worn view shows the body through the piece: {pct} % of the piece')
+        .replace('{pct}', share),
+      cut: true,
+    }
+  }
+  return {
+    label: t('Opening off'),
+    title: t('The worn view shows the body through an opening ({pct} % of the piece); Off keeps the cut-out closed')
+      .replace('{pct}', share),
+    cut: false,
+  }
+}
+
+/** The cut-out cell light's lines on its opening: what the cut-out carries, why none, and what is due now. */
+export function openingLines(info: CutoutOpeningInfo | undefined, t: (s: string) => string): string[] {
+  if (!info || info.skipped || !info.made) return []
+  const o = info.opening
+  const lines: string[] = []
+  if (info.legacy) {
+    lines.push(info.reusable
+      ? t('Openings not looked for: made before they existed. Regenerate it to look (no hub job).')
+      : t('Openings not looked for: made before they existed. Regenerate it to look.'))
+  } else if (o?.applied) {
+    lines.push(t('Opening from the worn view cut: {pct} % of the piece').replace('{pct}', pct(o.share)))
+  } else if (o?.found) {
+    lines.push(t('Opening found ({pct} % of the piece), not cut: Off').replace('{pct}', pct(o.share)))
+  } else {
+    const reason = o?.reason || ''
+    lines.push(`${t('No opening')}${reason ? `: ${OPENING_REASONS[reason] ? t(OPENING_REASONS[reason]) : reason}` : ''}`)
+  }
+  if (info.due?.length) lines.push(`${t('Now due')}: ${pieceViewDueText(info.due, t)}`)
+  return lines
 }

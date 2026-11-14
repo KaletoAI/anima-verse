@@ -791,7 +791,10 @@ def piece_source(character_name: str, item_id: str, fsig: str, step: str, view: 
 
 def source_due(character_name: str, item_id: str, fsig: str, step: str, view: str) -> bool:
     """Ruling A46: the accepted image of ``view`` of ``step`` was made from another source than its setting
-    names now (``garment_from_worn.source_due``) — due, made again; False for a step without the choice."""
+    names now (``garment_from_worn.source_due``) — due, made again; False for a step without the choice.
+    Ruling A60: the cut-out carries another opening than its setting applies now (``cutout_due``)."""
+    if step == "cutout":
+        return cutout_due(character_name, item_id, fsig, view)
     kind = _kind_module(item_id)
     if getattr(kind, "FROM_WORN_STEP", None) != step:
         return False
@@ -1646,14 +1649,24 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
     go through the routed upscale (``upscale`` occasion) and then a Lanczos
     top-up; an upscale that fails leaves Lanczos alone (sidecar
     ``upscale: {status: "lanczos", reason}``). The sidecar records the box,
-    the side and the upscale route. Cached unless ``force``."""
+    the side and the upscale route. Cached unless ``force`` — or unless its
+    opening is due (``cutout_due``).
+
+    Ruling A60: the alpha is cut where the worn view shows the body through an
+    enclosed opening of the piece (``garment_openings.for_cutout``, the
+    setting "Openings from the worn view"; sidecar ``opening``). A cut-out made
+    again from the SAME piece-only image (its ``source_sha256``) whose upscale
+    did not fall back reuses its own stored colours (``_stored_colours``: the
+    upscale of the same input, transparent pixels included) — no hub job; the
+    sidecar says ``colours: "reused"``."""
     from PIL import Image
-    from app.core import base_body
+    import numpy as np
+    from app.core import base_body, garment_openings
     from app.core.garment_store import garment_path, write_record
     from app.core.timeutils import utc_now_iso
 
     target = garment_path(character_name, item_id, fsig, "image", step="cutout", view=view)
-    if not force and _accepted(target):
+    if not force and _accepted(target) and not cutout_due(character_name, item_id, fsig, view):
         return target
     kind = _kind_module(item_id)
     ghost = garment_path(character_name, item_id, fsig, "image", step="ghost", view=view)
@@ -1670,13 +1683,17 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
     side = int(CUTOUT_PAD * max(x1 - x0, y1 - y0))
     cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
     crop = (cx - side // 2, cy - side // 2, cx - side // 2 + side, cy - side // 2 + side)
-    colours = rgb.crop(crop)       # outside the frame: black, but alpha 0 there
     alpha_sq = alpha.crop(crop)
 
     upscale: Dict[str, Any]
-    if side >= CUTOUT_MIN_SIDE:
+    stored = _stored_colours(target, data, [x0, y0, x1, y1], side)
+    if stored is not None:
+        colours, upscale = stored
+    elif side >= CUTOUT_MIN_SIDE:
+        colours = rgb.crop(crop)       # outside the frame: black, but alpha 0 there
         upscale = {"status": "not_needed"}
     else:
+        colours = rgb.crop(crop)
         buf = io.BytesIO()
         colours.save(buf, format="PNG")
         try:
@@ -1693,6 +1710,10 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
         colours = colours.resize((final_side, final_side), Image.Resampling.LANCZOS)
     if alpha_sq.size != (final_side, final_side):
         alpha_sq = alpha_sq.resize((final_side, final_side), Image.Resampling.LANCZOS)
+    crop_record = {"bbox": [x0, y0, x1, y1], "side": side, "size": [final_side, final_side]}
+    alpha_sq, opening = garment_openings.for_cutout(
+        character_name, item_id, fsig, view, ghost_mask=np.asarray(alpha) >= MASK_THRESHOLD, colours=colours,
+        alpha=alpha_sq, record=crop_record)
     out = colours.convert("RGBA")
     out.putalpha(alpha_sq)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1702,12 +1723,58 @@ def cut_out(character_name: str, item_id: str, fsig: str, view: str, *, force: b
     from app.core.base_body import file_sha256
     write_record(target.with_suffix(".json"), {
         "garment": {"item_id": item_id, "fsig": fsig, "step": "cutout", "view": view},
-        "source": ghost.name, "source_sha256": file_sha256(ghost),
-        "bbox": [x0, y0, x1, y1], "side": side, "size": [final_side, final_side],
-        "upscale": upscale, "accepted": True, "created_at": utc_now_iso()})
-    logger.info("Garment cut-out %s %s: side %d -> %d (%s)", character_name, view, side, final_side,
-                upscale.get("status"))
+        "source": ghost.name, "source_sha256": file_sha256(ghost), **crop_record,
+        "upscale": upscale, **({"colours": "reused"} if stored is not None else {}),
+        "opening": opening, "accepted": True, "created_at": utc_now_iso()})
+    logger.info("Garment cut-out %s %s: side %d -> %d (%s%s), opening %s", character_name, view, side, final_side,
+                upscale.get("status"), ", colours reused" if stored is not None else "",
+                "cut" if opening.get("applied") else ("found, off" if opening.get("found") else "none"))
     return target
+
+
+def _stored_colours(target: Path, ghost_bytes: bytes, bbox: List[int], side: int):
+    """``(colours, upscale record)`` of the stored cut-out when it was made from the same piece-only image (its
+    record's ``source_sha256``) with the same box and its upscale did not fall back (Ruling A60: an opening made
+    again needs no new upscale); else None."""
+    import hashlib
+    from PIL import Image
+    from app.core.garment_store import read_record
+    if not target.is_file():
+        return None
+    record = read_record(target.with_suffix(".json"))
+    upscale = record.get("upscale") if isinstance(record.get("upscale"), dict) else {}
+    if (record.get("source_sha256") != hashlib.sha256(ghost_bytes).hexdigest() or record.get("bbox") != bbox
+            or record.get("side") != side or upscale.get("status") not in ("applied", "not_needed")):
+        return None
+    try:
+        with Image.open(target) as im:
+            colours = im.convert("RGB")
+    except OSError:
+        return None
+    return colours, upscale
+
+
+def cutout_due(character_name: str, item_id: str, fsig: str, view: str) -> bool:
+    """Ruling A60: the accepted cut-out of ``view`` carries another opening than the setting applies now
+    (``garment_openings.cutout_due``) — False for a kind without the openings."""
+    if not getattr(_kind_module(item_id), "CUTOUT_OPENINGS", False):
+        return False
+    from app.core import garment_openings
+    return garment_openings.cutout_due(character_name, item_id, fsig, view)
+
+
+def cutout_reusable(character_name: str, item_id: str, fsig: str, view: str) -> bool:
+    """Whether the cut-out of ``view`` made again now reuses its stored colours (``_stored_colours`` against the
+    accepted piece-only image as it is): no hub job. Read from the files only."""
+    from app.core.base_body import file_sha256
+    from app.core.garment_store import garment_path, read_record
+    target = garment_path(character_name, item_id, fsig, "image", step="cutout", view=view)
+    ghost = garment_path(character_name, item_id, fsig, "image", step="ghost", view=view)
+    if not (_accepted(target) and _accepted(ghost)):
+        return False
+    record = read_record(target.with_suffix(".json"))
+    upscale = record.get("upscale") if isinstance(record.get("upscale"), dict) else {}
+    return record.get("source_sha256") == file_sha256(ghost) and upscale.get("status") in ("applied", "not_needed")
 
 
 #: A final back image of an image step: ``{item}_{fsig}_{step}_back.png``.
