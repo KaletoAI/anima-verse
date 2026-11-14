@@ -39,19 +39,9 @@ export function localAction(label: string, t: Tr = EN): string {
   return `${t(label)} — ${t('local, no hub job')}`
 }
 
-/**
- * The extension groups the served outfit model carries that its base model does not (a part built only with this
- * outfit): their ids in the outfit's order. Null base groups (no base model stored) → none; a group id twice → once.
- */
-export function outfitOnlyGroups(outfit: readonly string[], base: readonly string[] | null | undefined): string[] {
-  if (!base) return []
-  const known = new Set(base)
-  return outfit.filter((id, index) => !known.has(id) && outfit.indexOf(id) === index)
-}
-
-/** The read-only line naming them (the 3D tab's Extension bones on the pipeline). */
-export function outfitOnlyLine(ids: readonly string[], t: Tr = EN): string {
-  if (!ids.length) return ''
-  return t('Only on this outfit model: {ids} — built with the outfit; no switch for them, a character with a base '
-    + 'body switches its extension bones on the base body').replace('{ids}', ids.join(', '))
+/** Whether the 3D tab has an "Extension bones" sub-tab (Ruling A66): only OFF the base-body pipeline (an animal, a
+ *  temporary NPC — the served model's own box) and only when that model carries extension groups. On the pipeline the
+ *  groups, their switches and the state preview live in the Base body tab (Ruling A45), so the 3D tab has none. */
+export function hasExtensionSection(st: { pipeline?: unknown; extension_groups?: readonly unknown[] }): boolean {
+  return !st.pipeline && !!st.extension_groups?.length
 }

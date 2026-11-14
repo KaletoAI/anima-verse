@@ -1187,10 +1187,9 @@ export function CharactersTab() {
                           onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
                             ? () => setSubTab('tab:base_body_tab') : undefined} />
                       ),
-                      // The 3D tab's right-hand panel: Steps · Model · Situations · Extension bones · Advanced (Task UI5).
-                      model3d_details: <Model3DDetails character={selected}
-                        onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
-                          ? () => setSubTab('tab:base_body_tab') : undefined} />,
+                      // The 3D tab's right-hand panel: Steps · Model · Situations · (off the pipeline) Extension
+                      // bones · Advanced (Task UI5, Ruling A66).
+                      model3d_details: <Model3DDetails character={selected} />,
                       // Backend globs / LoRA lists of the image-override
                       // record, all on the Image tab: one section per
                       // pipeline stage, each naming its keys (`slot_keys`).

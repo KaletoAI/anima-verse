@@ -17,7 +17,7 @@ import type { CollisionPayload, ExtensionRigDeclaration, SecondaryMotionPayload 
 import type { ExtensionRigResult } from './FieldModel3D'
 import type { FaceCleanupState, FaceFields } from './ModelFaceActions'
 import type { FigurePayload, ModelStaleReason } from './figureModel'
-import type { BaseRunAll, MeshRepairState, TipSmoothingState } from './baseBodyModel'
+import type { BaseRunAll, MeshRepairState, PreviewStateChoice, TipSmoothingState } from './baseBodyModel'
 
 export const BASE_VIEWS = ['front', 'back', 'left', 'right'] as const
 export type BaseView = typeof BASE_VIEWS[number]
@@ -169,6 +169,8 @@ export interface BaseExtensionState {
   running: boolean
   /** The groups the Extension bones box lists: those without a tip panel (Ruling A53). */
   box_groups?: string[]
+  /** The states the viewer's state preview offers (Ruling A66): those whose bone pose moves one of the groups. */
+  states?: PreviewStateChoice[]
 }
 
 /** A group's light in the Extension bones box (`model3d.extension_group_lights`): English state and reason

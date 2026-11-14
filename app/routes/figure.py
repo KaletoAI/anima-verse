@@ -48,6 +48,12 @@ body actions):
   redo is refused (``detail`` says which); 503 when the profile could not be
   read. ``plain_body.run_all`` of ``GET …/figure?plain=1`` is its plan
   (``figure_build.base_run_all``: kind, steps, hub_jobs, note, running, last).
+* ``GET  /characters/{c}/base-body/state-motion?state=<id>`` — the Base body tab's state preview (Ruling A66):
+  ``{"state", "motion"}``, the base model's motion as ``plain_body.extension.motion`` has it (no clothing — the
+  base is bare) with ONLY that state's ``bone_pose`` applied (``extension_rig.motion_payload(apply_clothing=False,
+  preview_states=[state])``). Nothing is saved and nothing runs; 404 for an unknown character or a state that
+  carries no ``bone_pose``. ``plain_body.extension.states`` lists the states it offers
+  (``prompt_filters.bone_pose_states`` over the base model's groups).
 * ``POST /characters/{c}/base-body/mesh-repair`` — the Base body tab's "Repair again" (Ruling A34,
   ``base_mesh_repair.start_repair``): the stored base model's mesh repair with the saved settings, then its
   extension rig on the repaired mesh — local, no hub job. 202 ``{"started": True}``; 404 without a stored base
@@ -137,7 +143,7 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
     panels of its ``pair_tip`` groups (``extension_tips``,
     ``extension_tip.tip_panels``), its extension bones (``extension``,
     ``model3d.model_extension_state``, Ruling A45 — the "Extension bones" box
-    and the viewer's motion preview; a tip group's light and motion controls
+    and the viewer's motion preview; with ``states``, the state picker's choices, Ruling A66; a tip group's light and motion controls
     sit in its tip panel, the box lists the rest — ``box_groups``,
     ``extension_tip.group_tip_settings``, Ruling A53), the Base body tab's "Run
     all" plan (``run_all``, ``figure_build.base_run_all``) and what of the
@@ -162,13 +168,38 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
             model.update(face_info(character_name, path))
             model["collision"] = collision.ensure(character_name, bsig)
             info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
-            info["extension"] = model_extension_state(character_name, bsig)
+            info["extension"] = _with_preview_states(model_extension_state(character_name, bsig))
             extension_tip.group_tip_settings(info["extension_tips"], info["extension"])
     except Exception:  # noqa: BLE001 — the poll never fails on the extras
         logger.exception("Plain body extras of %s failed", character_name)
     info["run_all"] = figure_build.base_run_all(character_name)
     info["activity"] = figure_build.base_activity(character_name)
     return info
+
+
+def _with_preview_states(extension):
+    """The base model's extension state with ``states``: what the Base body tab's state picker offers (Ruling A66,
+    ``prompt_filters.bone_pose_states`` over the model's groups — empty without groups). None stays None."""
+    if extension is None:
+        return None
+    from app.core.prompt_filters import bone_pose_states
+    extension["states"] = bone_pose_states([group["id"] for group in extension.get("groups") or []])
+    return extension
+
+
+@router.get("/{character_name}/base-body/state-motion")
+def base_state_motion(character_name: str, state: str,
+                      _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The base model's motion with one state applied — a preview, never stored (module docstring)."""
+    from app.core.extension_rig import motion_payload
+    from app.core.prompt_filters import load_filters
+    from app.models.character import get_character_profile
+    _require_character(character_name)
+    if not any(row["id"] == state and row.get("bone_pose") for row in load_filters()):
+        raise HTTPException(status_code=404, detail="State not found or without a bone pose")
+    profile = get_character_profile(character_name) or {}
+    return {"state": state, "motion": motion_payload(character_name, profile=profile, apply_clothing=False,
+                                                     preview_states=[state])}
 
 
 @router.post("/{character_name}/figure/build", status_code=202)

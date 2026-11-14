@@ -12946,6 +12946,14 @@ including an empty value. It never changes stored conditions or model identity.
 Without the parameter, the visible admin preview refreshes motion every five seconds
 through live reconfiguration, without reloading the mesh. Preview-only Tilt controls
 rotate the figure root before the solver step; +90 forward/back means lying on the back.
+Since Ruling A66 the 3D tab shows that picker only off the base-body pipeline (an animal, a
+temporary NPC) and only for a model with extension groups. On the pipeline the state preview
+sits beside the Base body tab's viewer: `GET /characters/{name}/figure?plain=1` lists the
+offered states as `plain_body.extension.states` (`[{id, label}]`, the states whose
+`bone_pose` names one of the base model's groups, by name), and the admin
+`GET /characters/{name}/base-body/state-motion?state=<id>` answers `{state, motion}`: the
+base model's motion without clothing (like `plain_body.extension.motion`) with only that
+state applied. It stores nothing; a state without `bone_pose` or an unknown one is 404.
 
 
 Worldmap character `motion` and `/characters/{name}/model3d` metadata return the

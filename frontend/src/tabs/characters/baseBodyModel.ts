@@ -481,3 +481,44 @@ export function runAllPlanLine(r: BaseRunAll | null | undefined, t: Tr = EN): st
     return `${label} (${step.jobs === null ? t('cost unknown') : step.jobs})`
   }).join(' · ')
 }
+
+// --- The state preview beside the viewer (Ruling A66) -------------------------------------------------------------
+
+/** One state the picker offers (`plain_body.extension.states`, `prompt_filters.bone_pose_states`): a state whose
+ *  bone pose moves at least one of the base model's extension groups, by its readable name. */
+export interface PreviewStateChoice { id: string; label: string }
+
+/** What GET …/base-body/state-motion answered for one pick, keyed to the state and the base model it was asked for. */
+export interface PickedStateMotion<M> { state: string; signature: string; motion: M }
+
+/** The line beside the picker when it offers states: a preview, nothing is stored or started. */
+export const STATE_PREVIEW_NOTE = 'Preview only — nothing is saved, nothing runs.'
+/** The base model carries no extension group: no picker, this line instead. */
+export const STATE_PREVIEW_NO_GROUPS = 'This base model has no extension bones — a state has nothing to move here.'
+/** Groups, but no state's bone pose names one of them. */
+export const STATE_PREVIEW_NO_STATES = 'No state moves the extension bones of this base model.'
+
+/** The picker beside the viewer: "None (at rest)" first, then each offered state by its name (else its id); without
+ *  groups or without a state that moves them, no options and the line that says why. */
+export function statePicker(groupCount: number, states: readonly PreviewStateChoice[] | null | undefined,
+  t: Tr = EN): { options: Array<{ value: string; label: string }>; note: string } {
+  if (groupCount <= 0) return { options: [], note: t(STATE_PREVIEW_NO_GROUPS) }
+  if (!states?.length) return { options: [], note: t(STATE_PREVIEW_NO_STATES) }
+  return {
+    options: [{ value: '', label: t('None (at rest)') }, ...states.map((s) => ({ value: s.id, label: s.label || s.id }))],
+    note: t(STATE_PREVIEW_NOTE),
+  }
+}
+
+/** The GET that computes one state's motion on the bare base model (a read — the preview never posts). */
+export function stateMotionUrl(character: string, state: string): string {
+  return `/characters/${encodeURIComponent(character)}/base-body/state-motion?state=${encodeURIComponent(state)}`
+}
+
+/** The motion the viewer plays: at rest (`plain_body.extension.motion`) with nothing picked, the picked state's motion
+ *  once it arrived for exactly that state and base model — until then (and for a pick of another model) the rest. */
+export function viewerStateMotion<M>(rest: M | undefined, selected: string, picked: PickedStateMotion<M> | null,
+  signature: string): M | undefined {
+  if (!selected) return rest
+  return picked && picked.state === selected && picked.signature === signature ? picked.motion : rest
+}

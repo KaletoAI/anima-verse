@@ -5112,7 +5112,6 @@
     "Full": "Voll",
     "Distance": "Fernmodell",
     "Rebuild extension bones": "Zusatz-Bones neu bauen",
-    "Set on the base body — the outfit models take its extension bones.": "Im Grundkörper eingestellt — die Outfit-Modelle übernehmen seine Zusatz-Bones.",
     "Secondary motion": "Nachschwingen",
     "Show the surface each extension group moves as a grid, faint where it moves less — drag the figure to tilt it and watch it hang": "Zeigt als Gitter die Fläche, die jede Zusatz-Gruppe bewegt, blass wo sie weniger bewegt — die Figur ziehen, um sie zu kippen, und zusehen, wie sie hängt",
     "Grid colour per extension group": "Gitterfarbe je Zusatz-Gruppe",
@@ -5255,7 +5254,6 @@
     "Showing a stand-in": "Zeigt einen Platzhalter",
     "Shrink textures": "Texturen verkleinern",
     "Model details": "Modelldetails",
-    "Only on this outfit model: {ids} — built with the outfit; no switch for them, a character with a base body switches its extension bones on the base body": "Nur an diesem Outfit-Modell: {ids} — mit dem Outfit gebaut; dafür gibt es keinen Schalter, ein Charakter mit Grundkörper schaltet seine Zusatz-Bones am Grundkörper",
     "Back to the saved values": "Zurück zu den gespeicherten Werten",
     "Saves ×1.00 for every region": "Speichert ×1,00 für jede Region",
     "Shoulders (hair)": "Schultern (Haar)",
@@ -5455,6 +5453,11 @@
     "The mesh does not match its right view — the outfit cannot be painted onto it": "Das Mesh passt nicht zu seiner Ansicht rechts — das Outfit lässt sich nicht darauf malen",
     "The body shape's mesh does not match its views — Build to mesh it again": "Das Mesh der Körperform passt nicht zu ihren Ansichten — Build macht es neu",
     "The step stopped at the {view} — the message is on mouse-over.": "Der Schritt brach bei der {view} ab — die Meldung steht im Mouse-over.",
-    "The step stopped with an error — the message is on mouse-over.": "Der Schritt brach mit einem Fehler ab — die Meldung steht im Mouse-over."
+    "The step stopped with an error — the message is on mouse-over.": "Der Schritt brach mit einem Fehler ab — die Meldung steht im Mouse-over.",
+    "None (at rest)": "Keiner (Ruhelage)",
+    "Preview only — nothing is saved, nothing runs.": "Nur Vorschau — nichts wird gespeichert, nichts läuft.",
+    "This base model has no extension bones — a state has nothing to move here.": "Dieses Grundmodell hat keine Zusatz-Bones — ein Zustand kann hier nichts bewegen.",
+    "No state moves the extension bones of this base model.": "Kein Zustand bewegt die Zusatz-Bones dieses Grundmodells.",
+    "Shows the extension bones as this state moves them. Rest angle and size show at once; gravity and spring when you drag the figure or play a clip.": "Zeigt die Zusatz-Bones so, wie dieser Zustand sie bewegt. Ruhewinkel und Größe sofort; Schwerkraft und Federung, wenn du die Figur ziehst oder einen Clip abspielst."
   }
 }

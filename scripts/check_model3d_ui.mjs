@@ -16,14 +16,15 @@
  *       stale                                       → yellow "Outdated"
  *       none of these                               → green "Up to date"
  * [2] localAction("Analyze") → "Analyze — local, no hub job" (the cost words of a single step that runs on this server).
- * [3] outfitOnlyGroups(outfit, base):
- *       (["tail", "ears"], ["ears"]) → ["tail"]; (["tail", "tail"], []) → ["tail"] (once);
- *       (["ears"], ["ears"]) → []; (["tail"], null) → [] (no base model: nothing to compare);
- *       outfitOnlyLine(["tail", "wings"]) names both, comma-separated: contains "tail, wings"; outfitOnlyLine([]) → "".
+ * [3] hasExtensionSection(st) — the 3D tab's Extension bones sub-tab (and its Preview state), Ruling A66: only off
+ *     the base-body pipeline and only with groups on the served model (on the pipeline both live in the Base body tab):
+ *       pipeline {…}, groups [G]  → false;  pipeline null, groups [] → false;  pipeline null, groups [G] → true;
+ *       {} (not loaded yet)       → false.
  * [4] Source greps: FieldModel3D renders the flow head (StepLight + model3dHead), FigureBuildButton on the pipeline,
  *     the viewer with `builtAt`, no "Build current outfit" (POST model3d/build-current is the Figure tab's Build,
  *     Ruling A13b — the head's Build is that one), no <details> (Advanced is a sub-tab), its parts portalled into
- *     Model3DDetails' targets; Model3DSidePanels has Model3DDetails with SubTabs and names the outfit-only groups;
+ *     Model3DDetails' targets; Model3DSidePanels has Model3DDetails with SubTabs, its Extension bones tab only through
+ *     hasExtensionSection, no pipeline pointer ("Set on the base body") and no outfit-only line any more;
  *     the character template has the one `model3d_details` section instead of the three side sections;
  *     CollisionScales' two reset buttons have distinct labels ("Discard changes", "Reset to default").
  */
@@ -86,9 +87,10 @@ check('[1] up to date', head({}), ['green', 'Up to date']);
 check('[2] local action', m.localAction('Analyze'), 'Analyze — local, no hub job');
 
 // [3]
-check('[3] outfit-only', [m.outfitOnlyGroups(['tail', 'ears'], ['ears']), m.outfitOnlyGroups(['tail', 'tail'], []),
-  m.outfitOnlyGroups(['ears'], ['ears']), m.outfitOnlyGroups(['tail'], null)], [['tail'], ['tail'], [], []]);
-check('[3] the line', [m.outfitOnlyLine(['tail', 'wings']).includes('tail, wings'), m.outfitOnlyLine([])], [true, '']);
+const G = { id: 'G' };
+check('[3] extension section', [m.hasExtensionSection({ pipeline: { rerig_source: true }, extension_groups: [G] }),
+  m.hasExtensionSection({ pipeline: null, extension_groups: [] }), m.hasExtensionSection({ pipeline: null, extension_groups: [G] }),
+  m.hasExtensionSection({})], [false, false, true, false]);
 
 // [4]
 const fm = src('frontend/src/tabs/characters/FieldModel3D.tsx');
@@ -102,8 +104,9 @@ check('[4] FieldModel3D: no duplicate Build, no <details>', [/build-current/.tes
 check('[4] FieldModel3D: parts in the panel', [/createPortal\(stepsPart, targets\.steps\)/.test(fm),
   /createPortal\(modelPart, targets\.model\)/.test(fm), /createPortal\(advancedPart, targets\.advanced\)/.test(fm)],
   [true, true, true]);
-check('[4] Model3DDetails: sub-tabs, outfit-only line', [/export function Model3DDetails\b/.test(side),
-  /<SubTabs\b/.test(side), /outfitOnlyLine\(only, t\)/.test(side)], [true, true, true]);
+check('[4] Model3DDetails: sub-tabs, Extension bones off the pipeline only', [/export function Model3DDetails\b/.test(side),
+  /<SubTabs\b/.test(side), /hasExtensionSection\(panel\.st\)/.test(side), /Set on the base body|outfitOnly/.test(side)],
+[true, true, true, false]);
 const tpl = JSON.parse(src('shared/templates/character/base-character.json'));
 const specials = tpl.sections.filter((s) => s.column === 25 && s.special).map((s) => s.special);
 check('[4] template: one details section', specials, ['model3d_details']);

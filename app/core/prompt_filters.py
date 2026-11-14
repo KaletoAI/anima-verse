@@ -503,6 +503,20 @@ def collect_bone_poses(character_name, location_id="", profile=None):
     return sorted(out, key=lambda state: state["id"])
 
 
+def bone_pose_states(group_ids):
+    """The states a preview can show on a model with these extension groups (Ruling A66): every state whose
+    ``bone_pose`` names at least one of ``group_ids``, as ``{id, label}`` (label = the state's readable name, else
+    its id), sorted by that name. A state that moves none of the groups is left out — picking it would change
+    nothing."""
+    wanted = set(group_ids or ())
+    out = []
+    for state in load_filters():
+        pose = state.get("bone_pose") or {}
+        if isinstance(pose, dict) and wanted.intersection(pose):
+            out.append({"id": state["id"], "label": (state.get("label") or "").strip() or state["id"]})
+    return sorted(out, key=lambda state: (state["label"].casefold(), state["id"]))
+
+
 # The move clips a state may replace (§ A11 ``locomotion``): the WALK and the
 # RUN pose of a moving figure. Swimming and crawling are the GROUND's word and
 # stay out of reach — a hovering figure that crosses a lake still swims.

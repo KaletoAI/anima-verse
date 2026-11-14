@@ -1,6 +1,6 @@
 import { createPortal } from 'react-dom'
 import { clearModel3DPanel, publishModel3DPanel, useModel3DPanel, useModel3DTargets } from './model3dPanel'
-import { localAction, model3dHead } from './model3dModel'
+import { hasExtensionSection, localAction, model3dHead } from './model3dModel'
 import { StepLight } from './StepRows'
 import { LIGHT_COLOR } from './stepStyle'
 import { previewMotionSliders } from './motionFieldPreview'
@@ -259,13 +259,17 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
   previewContextRef.current = `${enc}:${previewState}`
   const previewStateRef = useRef(previewState)
   previewStateRef.current = previewState
+  // The state preview lives here only OFF the base-body pipeline (an animal, a temporary NPC) and only for a model
+  // with extension groups; on the pipeline it sits beside the Base body tab's viewer (Ruling A66).
+  const statePreviewHere = hasExtensionSection(st)
   useEffect(() => {
+    if (!statePreviewHere) return
     let cancelled = false
     apiGet<{ filters?: typeof previewFilters }>('/admin/prompt-filters/data')
       .then(data => { if (!cancelled) setPreviewFilters((data.filters || []).filter(row => Object.keys(row.bone_pose || {}).length > 0)) })
       .catch(() => { if (!cancelled) setPreviewFilters([]) })
     return () => { cancelled = true }
-  }, [])
+  }, [statePreviewHere])
 
   // Bumped on every Analyze run and on a character switch: a run whose token is
   // no longer current must not write results into another character's panel.
@@ -1131,7 +1135,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             footPose={model.foot_pose ?? null}
           />
           </div>
-          {/* The viewer's own controls: which mesh it shows and the preview state — one row. */}
+          {/* The viewer's own controls: which mesh it shows and (off the pipeline) the preview state — one row. */}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           {canMeasure && model.format === 'glb' && !rigless ? (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1161,6 +1165,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
               ) : null}
             </div>
           ) : null}
+          {statePreviewHere ? (
           <div className="ga-model3d-controls" style={{ flex: '1 1 220px' }}>
           <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}><span className="ga-hint">{t('Preview state')}</span>
             <select className="ga-input" value={previewState} disabled={rigless} onChange={event => setPreviewState(event.target.value)}>
@@ -1170,6 +1175,7 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             </select>
           </label>
           </div>
+          ) : null}
           </div>
           {/* Only a Mixamo skeleton can play the shared clips. */}
           {rigless ? (

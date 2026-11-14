@@ -50,7 +50,11 @@
  * and the bones hang under gravity (Ruling A41); its toggles (Secondary motion, Extension bones, Collision capsules,
  * Extension collision) switch the overlays; the Extension bones grid starts off, like each tip panel's "Show markers"
  * (Ruling A62 — view switches of the open tab, never saved). A Full / Distance switch appears once the distance mesh
- * exists. The
+ * exists. Beside it the state preview (Ruling A66, moved here from the 3D tab): "Preview state" picks None (at rest) or a
+ * state whose bone pose moves one of the base model's groups (`plain_body.extension.states`); the viewer then plays
+ * that state's motion on the bare base (GET …/base-body/state-motion?state=…, a read — nothing is saved, nothing
+ * runs), with the box's slider drafts on top. It moves the extension parts themselves, so it works with the
+ * Extension bones grid off. Without groups (or without a state that moves them) a line says so instead. The
  * box's switches are saved for the base model (POST …/model3d/options {signature, extension_rig}) and make the
  * extension rebuild due — Run all or its Rebuild (POST …/model3d/extension-tip/apply, local) builds them; its
  * motion values are saved character-wide (POST …/model3d/extension-motion) and act at once.
@@ -73,7 +77,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
-import { apiPost } from '../../lib/api'
+import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { clockSettings, formatDateTime, useClockSettings } from '../../lib/clockFormat'
 import { Model3DViewer } from './Model3DViewer'
@@ -84,20 +88,21 @@ import { CollisionScales } from './CollisionScales'
 import { ExtensionTipPanel } from './ExtensionTipPanel'
 import { MeshRepairPanel } from './MeshRepairPanel'
 import { TipSmoothingPanel } from './TipSmoothingPanel'
+import { StatePreviewRow } from './StatePreviewRow'
 import { ExtensionBonesBox } from './ExtensionBonesBox'
 import { previewMotionSliders } from './motionFieldPreview'
 import type { Physics } from '../../lib/motionDraft'
 import { ModelFaceActions } from './ModelFaceActions'
 import { FaceSettings } from './FaceSettings'
 import { useModel3DStatus } from './useModel3DStatus'
-import type { CollisionPayload } from '@anima/scene-render'
+import type { CollisionPayload, SecondaryMotionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseActivity, BaseBodyInfo, BaseView, ExtensionTipPanelInfo } from './useBaseBody'
 import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, singleAction, staleBaseNote } from './figureModel'
 import type { ModelFollowup } from './figureModel'
 import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
-  runAllButton, runAllPlanLine, runAllWhat } from './baseBodyModel'
-import type { BaseLight, BaseRunAll, TipDots } from './baseBodyModel'
+  runAllButton, runAllPlanLine, runAllWhat, stateMotionUrl, statePicker, viewerStateMotion } from './baseBodyModel'
+import type { BaseLight, BaseRunAll, PickedStateMotion, TipDots } from './baseBodyModel'
 import { BuildProblemView } from './BuildProblem'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
 import { LIGHT_COLOR, PANEL } from './stepStyle'
@@ -328,6 +333,11 @@ export function FieldBaseBody({ character, onOpenFigure }: {
     { signature: '', groups: {} })
   const [extPosting, setExtPosting] = useState(false)
   const [sub, setSub] = useState<BaseTab>('views')
+  /** The state preview (Ruling A66): the picked state ('' = none, at rest) and its motion once it arrived — view
+   *  state of the open tab, never sent anywhere but the GET. */
+  const [previewState, setPreviewState] = useState('')
+  const [stateMotion, setStateMotion] = useState<PickedStateMotion<SecondaryMotionPayload> | null>(null)
+  const [stateError, setStateError] = useState('')
 
   // A model run (face, rig) ended: re-read the base body (new model URL,
   // steps, face cleanup state).
@@ -444,6 +454,24 @@ export function FieldBaseBody({ character, onOpenFigure }: {
   // group declares count, as on the server).
   const extPayload = info?.extension?.motion
   const motionDefaults = st?.motion_defaults
+  // The state preview (Ruling A66): a pick no longer offered (the state was deleted, the groups changed) counts as none.
+  const picker = statePicker(extGroups?.length ?? 0, info?.extension?.states, t)
+  const pickedState = picker.options.some((option) => option.value === previewState) ? previewState : ''
+  // Fetch the picked state's motion; again when the base motion changes (a saved value, a rebuild) — a read only.
+  const restRev = extPayload?.rev
+  useEffect(() => {
+    if (!pickedState || !extSignature) return
+    let cancelled = false
+    setStateError('')
+    apiGet<{ state: string; motion: SecondaryMotionPayload }>(stateMotionUrl(character, pickedState))
+      .then((data) => {
+        if (!cancelled) setStateMotion({ state: pickedState, signature: extSignature, motion: data.motion })
+      })
+      .catch((e) => { if (!cancelled) setStateError((e as Error).message) })
+    return () => { cancelled = true }
+  }, [character, extSignature, pickedState, restRev])
+  const restOrState = viewerStateMotion(extPayload, pickedState, stateMotion, extSignature)
+  const stateLoading = !!pickedState && !stateError && restOrState === extPayload
   const previewMotion = useMemo(() => {
     const overrides = { ...extMotion }
     for (const group of extGroups ?? []) {
@@ -452,9 +480,9 @@ export function FieldBaseBody({ character, onOpenFigure }: {
           .filter(([key]) => group.controls!.includes(key)))
       }
     }
-    return previewMotionSliders(extPayload, motionDefaults, overrides,
+    return previewMotionSliders(restOrState, motionDefaults, overrides,
       sliderDrafts.signature === extSignature ? sliderDrafts.groups : {})
-  }, [extGroups, extMotion, extPayload, extSignature, motionDefaults, sliderDrafts])
+  }, [extGroups, extMotion, restOrState, extSignature, motionDefaults, sliderDrafts])
 
   const viewLabel = (view: BaseView) =>
     view === 'front' ? t('Front view') : view === 'back' ? t('Back view') : view === 'left' ? t('Left view') : t('Right view')
@@ -574,6 +602,11 @@ export function FieldBaseBody({ character, onOpenFigure }: {
                   {t('Distance')}{extension.low_tris ? ` · ${extension.low_tris.toLocaleString()}` : ''}
                 </button>
               </div>
+            ) : null}
+            {/* The state preview (Ruling A66): beside the viewer, live, nothing saved. */}
+            {ready ? (
+              <StatePreviewRow picker={picker} value={pickedState} loading={stateLoading} error={stateError}
+                onChange={(state) => { setStateError(''); setPreviewState(state) }} />
             ) : null}
           </>
         ) : (

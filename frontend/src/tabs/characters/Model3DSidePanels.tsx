@@ -3,11 +3,10 @@ import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { AnimationSituations } from './AnimationSituations'
 import { ExtensionBonesBox } from './ExtensionBonesBox'
+import { hasExtensionSection } from './model3dModel'
 import { publishModel3DTargets, useModel3DPanel } from './model3dPanel'
-import { outfitOnlyGroups, outfitOnlyLine } from './model3dModel'
 import { SubTabs } from './StepRows'
 import { PANEL } from './stepStyle'
-import { useBaseBody } from './useBaseBody'
 
 export function Model3DAnimations({ character }: { character: string }) {
   const { t } = useI18n()
@@ -22,37 +21,15 @@ export function Model3DAnimations({ character }: { character: string }) {
   </div>
 }
 
-/** The 3D tab's "Extension bones" section. On the base-body pipeline the box lives in the Base body tab beside
- *  the tip panels and acts on the base model, whose switches the outfit models take (Ruling A45): here only the
- *  way there. Off the pipeline (an animal, a temporary NPC — no base body) it is the box of the served model. */
-export function Model3DExtensions({ character, onOpenBaseBody }: {
-  character: string
-  /** Switches to the Base body tab. */
-  onOpenBaseBody?: () => void
-}) {
+/** The 3D tab's "Extension bones" sub-tab — only OFF the base-body pipeline (an animal, a temporary NPC: no base
+ *  body) and only for a served model with extension groups (`hasExtensionSection`): the box of the served model. On
+ *  the pipeline the box, its switches and the state preview live in the Base body tab (Rulings A45, A66). */
+export function Model3DExtensions({ character }: { character: string }) {
   const { t } = useI18n()
   const panel = useModel3DPanel(character)
-  const { info } = useBaseBody(character)
   if (!panel) return <div className="ga-hint">{t('Loading…')}</div>
   const { st, pending, busy, rigless, mixamo, viewTier, extensionResult,
     canMeasure, model, setExtensionOption, setExtensionMotion, rebuildExtensions } = panel
-  if (st.pipeline) {
-    // A group the served outfit model carries and the base model does not has no switch anywhere (Task UI5):
-    // named read-only, so it is not a mystery in the viewer.
-    const only = outfitOnlyGroups((st.extension_groups ?? []).map((group) => group.id),
-      info?.extension ? info.extension.groups.map((group) => group.id) : null)
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 8 }}>
-          <span className="ga-hint">{t('Set on the base body — the outfit models take its extension bones.')}</span>
-          {onOpenBaseBody ? (
-            <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>{t('Open Base body tab')}</button>
-          ) : null}
-        </div>
-        {only.length ? <div className="ga-hint">{outfitOnlyLine(only, t)}</div> : null}
-      </div>
-    )
-  }
   const signature = st.model?.signature || ''
   return (
     <ExtensionBonesBox groups={st.extension_groups ?? []} result={extensionResult} tier={viewTier}
@@ -95,14 +72,11 @@ const HIDDEN: CSSProperties = { display: 'none' }
 /**
  * The 3D tab's right-hand panel (Task UI5, the tab checklist: sub-tabs instead of scrolling): Steps (the model's
  * steps, one line each), Model (its facts and single steps, the off-pipeline generation switch), Situations (the
- * clips that play), Extension bones and Advanced. Steps, Model and Advanced are FieldModel3D's own parts, rendered
- * into this panel's elements (publishModel3DTargets → createPortal); the rest are the side panels above.
+ * clips that play), Extension bones (off the pipeline with groups only — `hasExtensionSection`, Ruling A66) and
+ * Advanced. Steps, Model and Advanced are FieldModel3D's own parts, rendered into this panel's elements
+ * (publishModel3DTargets → createPortal); the rest are the side panels above.
  */
-export function Model3DDetails({ character, onOpenBaseBody }: {
-  character: string
-  /** Switches to the Base body tab. */
-  onOpenBaseBody?: () => void
-}) {
+export function Model3DDetails({ character }: { character: string }) {
   const { t } = useI18n()
   const panel = useModel3DPanel(character)
   const [sub, setSub] = useState<DetailTab>('steps')
@@ -119,24 +93,27 @@ export function Model3DDetails({ character, onOpenBaseBody }: {
     return () => publishModel3DTargets(character, null)
   }, [character, publish])
   const count = panel?.model?.steps?.length
+  const extensions = !!panel && hasExtensionSection(panel.st)
+  // The Extension bones sub-tab left (the model went onto the pipeline, its groups went): show the Steps.
+  const current: DetailTab = sub === 'extensions' && !extensions ? 'steps' : sub
   const tabs: Array<{ id: DetailTab; label: string }> = [
     { id: 'steps', label: count ? `${t('Steps')} (${count})` : t('Steps') },
     { id: 'model', label: t('Model') },
     { id: 'situations', label: t('Situations') },
-    { id: 'extensions', label: t('Extension bones') },
+    ...(extensions ? [{ id: 'extensions' as const, label: t('Extension bones') }] : []),
     { id: 'advanced', label: t('Advanced') },
   ]
   return (
     <div className="ga-model3d-side" style={PANEL}>
-      <SubTabs tabs={tabs} value={sub} onChange={setSub} />
-      <div ref={steps} style={sub === 'steps' ? undefined : HIDDEN} />
-      <div style={sub === 'model' ? { display: 'flex', flexDirection: 'column', gap: 8 } : HIDDEN}>
+      <SubTabs tabs={tabs} value={current} onChange={setSub} />
+      <div ref={steps} style={current === 'steps' ? undefined : HIDDEN} />
+      <div style={current === 'model' ? { display: 'flex', flexDirection: 'column', gap: 8 } : HIDDEN}>
         {panel && !panel.st.pipeline ? <Model3DGeneration character={character} /> : null}
         <div ref={model} />
       </div>
-      {sub === 'situations' ? <Model3DAnimations character={character} /> : null}
-      {sub === 'extensions' ? <Model3DExtensions character={character} onOpenBaseBody={onOpenBaseBody} /> : null}
-      <div ref={advanced} style={sub === 'advanced' ? undefined : HIDDEN} />
+      {current === 'situations' ? <Model3DAnimations character={character} /> : null}
+      {current === 'extensions' ? <Model3DExtensions character={character} /> : null}
+      <div ref={advanced} style={current === 'advanced' ? undefined : HIDDEN} />
     </div>
   )
 }

@@ -73,8 +73,8 @@
  *     the others (tipPanels.slice(0, 1) … extensionBox … tipPanels.slice(1)) — only for the groups without a tip
  *     panel (`boxGroups`, Ruling A53) and only when there is one; hands the viewer `motion=` (the overlay starts off,
  *     see [13]); the CSS grid is `minmax(0, 1fr) minmax(0, 1fr)`, `align-items: start`, one column under an
- *     `@container (max-width: 520px)`; the 3D tab's Model3DExtensions on the pipeline renders "Open Base body tab"
- *     and returns before the box; FieldModel3D leaves the Bounce / Weight sliders out on the pipeline.
+ *     `@container (max-width: 520px)`; FieldModel3D leaves the Bounce / Weight sliders out on the pipeline (the 3D
+ *     tab's Extension bones sub-tab is off the pipeline only — [14] and check_model3d_ui.mjs [3]).
  * [11] The tab checklist (Task UI5):
  *     baseViewRow: running → blue "Rendering"; failed "E" → red "Failed", "E"; nothing stored → yellow "Not rendered
  *     yet"; stale {reason R, action A} → yellow "Outdated", "R", mouse-over "R\nA"; stale without a reason → "Made from
@@ -134,6 +134,35 @@
  *     (`setBonesOn(on => !on)`, aria-pressed) and the frame loop builds the overlay of [12] once it is on — the
  *     overlay itself is [12]'s numbers. Neither switch is persisted: no localStorage / usePersistentState in the
  *     viewer or the tip panel.
+ * [14] The state preview beside the base body viewer (Ruling A66, moved from the 3D tab):
+ *     statePicker(groups, states):
+ *       0 groups, any states                      → no options, "This base model has no extension bones — a state has
+ *                                                   nothing to move here."
+ *       2 groups, []                              → no options, "No state moves the extension bones of this base model."
+ *       2 groups, [{lifted, "Lifted"}, {calm, ""}] → options ["" "None (at rest)", lifted "Lifted", calm "calm" (no
+ *                                                   label: the id)], "Preview only — nothing is saved, nothing runs."
+ *     stateMotionUrl("demo x", "a/b") → "/characters/demo%20x/base-body/state-motion?state=a%2Fb" (a GET).
+ *     The motion handed to the viewer = previewMotionSliders(viewerStateMotion(rest, picked state, fetched, signature),
+ *     defaults, overrides, drafts). Rest R: group G {rest_deg 0, length 1, max_deg 30}; the fetched state S for
+ *     "lifted" on signature "s1": G {rest_deg 12, length 1.5, max_deg 15}; defaults G {max_deg 30}:
+ *       nothing picked                             → R itself;
+ *       "lifted" picked, S arrived for "lifted"/s1 → S itself (rest_deg 12, length 1.5);
+ *       "calm" picked while only S is there        → R (it loads; never another state's motion);
+ *       S fetched for signature "s0" (another base model) → R;
+ *       "lifted" + a Bounce 2 draft on G           → the state stays under the draft: max_deg 15 × min(180, 30·2) /
+ *                                                   min(180, 30·1) = 30, rest_deg 12, length 1.5;
+ *       back to "" (None)                          → R again (rest restored).
+ *     The row rendered (react-dom/server, en) with the picker of the third case: a <select> with exactly those three
+ *     options in that order and the note; with the picker of the first case: no <select>, the no-groups line.
+ *     Source greps: FieldBaseBody hands the viewer `motion={ready ? previewMotion : undefined}`, previewMotion is
+ *     `previewMotionSliders(restOrState, …)` with `restOrState = viewerStateMotion(extPayload, pickedState, stateMotion,
+ *     extSignature)`, the motion is fetched with `apiGet<…>(stateMotionUrl(character, pickedState))`, the row
+ *     <StatePreviewRow sits after the viewer; the state preview code (StatePreviewRow.tsx, the block between
+ *     `const picker = statePicker(` and previewMotion) holds no apiPost / POST — nothing is saved, nothing runs; it
+ *     does not depend on the grid switch (no `bonesOn` / `extensionBones` in it), so a state moves the parts with the
+ *     grid off. The 3D tab: Model3DSidePanels lists the Extension bones sub-tab only through `hasExtensionSection`
+ *     (off the pipeline, with groups) and no longer carries the pipeline pointer ("Set on the base body"), FieldModel3D
+ *     renders "Preview state" only under `statePreviewHere ?` with `statePreviewHere = hasExtensionSection(st)`.
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -196,6 +225,32 @@ async function renderTipPanelFresh(panel) {
       define: { 'process.env.NODE_ENV': '"production"' }, loader: { '.css': 'empty' },
     });
     return require_(file).render(panel);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** The state preview row rendered once (react-dom/server, en) with a given picker. */
+async function renderStateRow(picker) {
+  const esbuild = esbuildModule();
+  const dir = await mkdtemp(join(tmpdir(), 'check-base-body-ui-row-'));
+  try {
+    const entry = join(dir, 'entry.tsx');
+    const file = join(dir, 'ssr.cjs');
+    const at = (rel) => JSON.stringify(join(ROOT, rel));
+    writeFileSync(entry, [
+      `import { renderToStaticMarkup } from 'react-dom/server'`,
+      `import { I18nProvider } from ${at('frontend/src/i18n/I18nProvider.tsx')}`,
+      `import { StatePreviewRow } from ${at('frontend/src/tabs/characters/StatePreviewRow.tsx')}`,
+      `export const render = (picker) => renderToStaticMarkup(<I18nProvider><StatePreviewRow picker={picker}`,
+      `  value="" loading={false} error="" onChange={() => {}} /></I18nProvider>)`,
+    ].join('\n'));
+    await esbuild.build({
+      entryPoints: [entry], outfile: file, bundle: true, format: 'cjs', platform: 'node', jsx: 'automatic',
+      logLevel: 'silent', absWorkingDir: ROOT, nodePaths: [join(ROOT, 'node_modules')],
+      define: { 'process.env.NODE_ENV': '"production"' }, loader: { '.css': 'empty' },
+    });
+    return require_(file).render(picker);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -436,10 +491,6 @@ check('[10] two equal columns, top-aligned',
 check('[10] one column when narrow',
   /@container \(max-width: 520px\) \{ \.ga-ext-grid \{ grid-template-columns: minmax\(0, 1fr\); \} \}/.test(css), true);
 const sidePanels = src('frontend/src/tabs/characters/Model3DSidePanels.tsx');
-const pipelineAt = sidePanels.indexOf('if (st.pipeline)');
-check('[10] 3D tab on the pipeline: only the way to the Base body tab', pipelineAt > 0
-  && sidePanels.indexOf("t('Open Base body tab')", pipelineAt) > pipelineAt
-  && sidePanels.indexOf("t('Open Base body tab')", pipelineAt) < sidePanels.indexOf('<ExtensionBonesBox', pipelineAt), true);
 check('[10] 3D tab: no sliders on the pipeline', /const sliderTools = rigless \|\| pipeline \? null : motionToolbar/.test(model3d), true);
 
 // [11]
@@ -525,6 +576,54 @@ check('[13] the toggle turns it on and the frame loop builds the overlay', [
     .test(viewerSrc)], [true, true]);
 check('[13] neither switch is persisted', [viewerSrc, tipSrc].map((x) => /localStorage|sessionStorage|usePersistentState/.test(x)),
   [false, false]);
+
+// [14]
+check('[14] no groups', m.statePicker(0, [{ id: 'lifted', label: 'Lifted' }]),
+  { options: [], note: 'This base model has no extension bones — a state has nothing to move here.' });
+check('[14] no state moves them', m.statePicker(2, []),
+  { options: [], note: 'No state moves the extension bones of this base model.' });
+const picker = m.statePicker(2, [{ id: 'lifted', label: 'Lifted' }, { id: 'calm', label: '' }]);
+check('[14] the declared states', picker, { options: [{ value: '', label: 'None (at rest)' },
+  { value: 'lifted', label: 'Lifted' }, { value: 'calm', label: 'calm' }], note: 'Preview only — nothing is saved, nothing runs.' });
+check('[14] the GET', m.stateMotionUrl('demo x', 'a/b'), '/characters/demo%20x/base-body/state-motion?state=a%2Fb');
+const sliders = await loadBundled('frontend/src/tabs/characters/motionFieldPreview.ts');
+const R = { rev: 'r', groups: { G: { bones: ['b'], rest_deg: 0, length: 1, max_deg: 30 } } };
+const S = { rev: 's', groups: { G: { bones: ['b'], rest_deg: 12, length: 1.5, max_deg: 15 } } };
+const fetched = { state: 'lifted', signature: 's1', motion: S };
+const handed = (selected, picked, drafts = {}) => sliders.previewMotionSliders(
+  m.viewerStateMotion(R, selected, picked, 's1'), { G: { max_deg: 30 } }, {}, drafts);
+check('[14] nothing picked → rest', handed('', fetched) === R, true);
+check('[14] a pick drives the viewer with that state', handed('lifted', fetched) === S, true);
+check('[14] another pick loads: rest, never another state', handed('calm', fetched) === R, true);
+check('[14] a pick of another base model → rest', handed('lifted', { ...fetched, signature: 's0' }) === R, true);
+const drafted = handed('lifted', fetched, { G: { bounce: 2 } }).groups.G;
+check('[14] the Bounce draft rides on the state', [drafted.max_deg, drafted.rest_deg, drafted.length], [30, 12, 1.5]);
+check('[14] None restores rest', handed('', fetched) === R, true);
+const rowHtml = await renderStateRow(picker);
+const optionsHtml = [...rowHtml.matchAll(/<option value="([^"]*)"[^>]*>([^<]*)<\/option>/g)].map((x) => [x[1], x[2]]);
+check('[14] the row lists the declared states', [/<select/.test(rowHtml), optionsHtml,
+  rowHtml.includes('Preview only — nothing is saved, nothing runs.')],
+[true, [['', 'None (at rest)'], ['lifted', 'Lifted'], ['calm', 'calm']], true]);
+const emptyRow = await renderStateRow(m.statePicker(0, []));
+check('[14] no groups: the line, no picker', [/<select/.test(emptyRow),
+  emptyRow.includes('This base model has no extension bones')], [false, true]);
+check('[14] the viewer plays the state motion', [/motion=\{ready \? previewMotion : undefined\}/.test(baseTab),
+  /previewMotionSliders\(restOrState,/.test(baseTab),
+  /const restOrState = viewerStateMotion\(extPayload, pickedState, stateMotion, extSignature\)/.test(baseTab),
+  /apiGet<[^>]*>\(stateMotionUrl\(character, pickedState\)\)/.test(baseTab)], [true, true, true, true]);
+check('[14] the row sits after the viewer', baseTab.indexOf('<Model3DViewer') > 0
+  && baseTab.indexOf('<StatePreviewRow', baseTab.indexOf('<Model3DViewer')) > 0, true);
+const stateBlock = baseTab.slice(baseTab.indexOf('const picker = statePicker('), baseTab.indexOf('const previewMotion = useMemo'))
+  + src('frontend/src/tabs/characters/StatePreviewRow.tsx');
+check('[14] a read only, independent of the grid', [stateBlock.length > 400, /apiPost|'POST'|method:/.test(stateBlock),
+  /bonesOn|extensionBones/.test(stateBlock)], [true, false, false]);
+check('[14] the 3D tab: no pipeline pointer, the sub-tab only via hasExtensionSection', [
+  /Set on the base body/.test(sidePanels), /\.\.\.\(extensions \? \[\{ id: 'extensions'/.test(sidePanels),
+  /const extensions = !!panel && hasExtensionSection\(panel\.st\)/.test(sidePanels)], [false, true, true]);
+check('[14] the 3D tab: Preview state only off the pipeline', [
+  /const statePreviewHere = hasExtensionSection\(st\)/.test(model3d),
+  /\{statePreviewHere \? \([\s\S]{0,200}t\('Preview state'\)/.test(model3d),
+  (model3d.match(/t\('Preview state'\)/g) || []).length], [true, true, 1]);
 
 if (failures.length) {
   console.error('\nFAILED:\n' + failures.join('\n'));
