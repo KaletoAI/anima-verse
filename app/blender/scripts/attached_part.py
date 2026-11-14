@@ -4,6 +4,7 @@ World coordinates are metres, front is -Y and up is +Z. The body is finalized
 before sampling the field. The open shell blends into its texture and weights.
 """
 import copy
+import heapq
 import math
 import sys
 from pathlib import Path
@@ -16,7 +17,6 @@ import bpy
 import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
-from mathutils.kdtree import KDTree
 
 DEFAULTS = {
     'size_factor': 1.0, 'anchor_bone': 'Hips', 'anchor_drop': .09,
@@ -50,12 +50,18 @@ DEFAULTS = {
     # free shaft it stays tight so a lifted shaft does not drag the sack along.
     'pod_web': {'blend': .016, 'until': .4},
     'pod_link': .7, 'pod_link_distance': .03, 'k_tip_pods': .004, 'k_body': .016,
-    'body_window': {'radius': .03, 'fall': .02}, 'skin_sink': .003,
+    # The fillet settles on the skin sunk this deep: at 3 mm it rose steeply
+    # out of the skin and drew a rim around the root (Ruling A65b).
+    'body_window': {'radius': .03, 'fall': .02}, 'skin_sink': .0008,
     'hidden_band': {'lateral': .025, 'above': -.02, 'radius': .045, 'depth': .006},
     'flatten': {'lateral': .055, 'down': .035, 'below': .065, 'above': .01,
                 'front': .03, 'normal_front': .2, 'iterations': 150},
     'reweight': {'from': .045, 'to': .095},
     'tone': {'shaft': [.9, .83, .8], 'tip': [1.04, .84, .82]}, 'border_lift': .010,
+    # The attachment seam: the fillet lands on the skin `lift` above it, its
+    # height falls off over `band` and its normals turn to the body's over
+    # `normal_band`, so the part grows out of the body instead of sitting on it.
+    'seam': {'lift': .0004, 'band': .006, 'normal_band': .012},
     'texture': {'bake': 1024, 'patch_max': 256, 'flood': .07, 'blur': 9, 'tone_tolerance': .15},
     'voxel': .0014, 'smooth': {'iterations': 2, 'factor': .5}, 'decimate': .3,
     'protrusion_warn_mm': 12.,
@@ -111,7 +117,7 @@ def parameters(raw):
     for section, keys in (('body_window', ['radius', 'fall']), ('relief', ['rise', 'fall']),
                            ('texture', ['bake', 'patch_max', 'flood', 'blur', 'tone_tolerance']),
                            ('pods.folds', ['wavelength', 'width', 'wobble_wavelength', 'raphe_width', 'root_fall']),
-                           ('pod_web', ['until'])):
+                           ('pod_web', ['until']), ('seam', ['band', 'normal_band'])):
         values = settings
         for part_ in section.split('.'):
             values = values[part_]
@@ -132,6 +138,8 @@ def parameters(raw):
                            ('hidden_band', ['lateral', 'radius', 'depth'])):
         if any(settings[section][key] < 0 for key in keys):
             raise ValueError('Invalid ' + section + ' length')
+    if settings['seam']['lift'] < 0:
+        raise ValueError('Invalid seam lift')
     if settings['anchor_drop'] < 0 or settings['root_sink'] < 0 or settings['skin_sink'] < 0 or settings['girth_max'] < 1 or settings['tip_girth'] < 1:
         raise ValueError('Invalid root offset or base flare')
     if not 0 <= settings['smooth']['factor'] <= 1 or not 0 <= settings['flatten']['normal_front'] <= 1:
@@ -596,7 +604,8 @@ def build_part(group, companions, output):
             if not c or min(c) < 0:
                 continue
             flip = A_[tuple(idx)] ^ (axis == 1)
-            quads.append(c[::-1] if flip else c)
+            # Counter-clockwise seen from outside: the part's normals face out.
+            quads.append(c if flip else c[::-1])
     quads = np.array(quads)
     print('verts', len(positions), 'quads', len(quads))
 
@@ -675,6 +684,11 @@ def build_part(group, companions, output):
         return pixels[int(uvp.y % 1 * texture_height) % texture_height, int(uvp.x % 1 * texture_width) % texture_width, :3]
 
 
+    def nearest_skin(point):
+        q, _, fi, _ = bvh.find_nearest(body_inverse @ Vector(point))
+        return body_matrix @ q, fi
+
+
     # The part's tone comes from the skin where it attaches: rings around the
     # root, from the shaft's girth out to the edge of the body fillet, projected
     # onto the outer skin. The belly 5-15 cm higher is often paler than the groin.
@@ -701,11 +715,30 @@ def build_part(group, companions, output):
         vertex_colors[i, :3] = under * skin_weight[i] + tone * (1 - skin_weight[i])
         vertex_colors[i, 3] = 1
     # Transfer skin weights at the border; known part weights elsewhere.
-    kd = KDTree(len(body.data.vertices))
-    for v in body.data.vertices:
-        kd.insert(body_matrix @ v.co, v.index)
-    kd.balance()
     gname = {g.index: g.name for g in body.vertex_groups}
+
+
+    def skin_share(q, fi):
+        """Inverse-distance shares of the corners of body polygon ``fi`` at world point ``q``."""
+        poly = body.data.polygons[fi]
+        share = []
+        for li in poly.loop_indices:
+            vi = body.data.loops[li].vertex_index
+            share.append((li, vi, 1 / ((body_matrix @ body.data.vertices[vi].co - q).length + 1e-5)))
+        total = sum(w for _, _, w in share)
+        return [(li, vi, w / total) for li, vi, w in share]
+
+
+    def skin_weights_at(q, fi):
+        """Body weights interpolated across the nearest polygon: the nearest
+        vertex alone steps from one vertex's weights to the next along the seam."""
+        out_ = {}
+        for _, vi, share in skin_share(q, fi):
+            groups_ = body.data.vertices[vi].groups
+            tot_ = sum(g.weight for g in groups_) or 1
+            for g in groups_:
+                out_[gname[g.group]] = out_.get(gname[g.group], 0) + share * g.weight / tot_
+        return out_
 
 
     link_edges = [settings['first_link_start'] + (tip_start - settings['first_link_start']) * k / (link_count - 1) for k in range(link_count)] + [1.0]
@@ -762,12 +795,10 @@ def build_part(group, companions, output):
         # a fillet share above .5 to 1 creates a weight step under chain lift.
         wroot = fillet_weight[i]
         if wroot > 0:
-            _, bi, _ = kd.find(Vector(skin_nearest[i][0]))
-            bw = {gname[g.group]: g.weight for g in body.data.vertices[bi].groups}
-            tot_ = sum(bw.values()) or 1
+            bw = skin_weights_at(*skin_nearest[i])
             w = {k_: x_ * (1 - wroot) for k_, x_ in w.items()}
             for k_, x_ in bw.items():
-                w[k_] = w.get(k_, 0) + wroot * x_ / tot_
+                w[k_] = w.get(k_, 0) + wroot * x_
         vertex_weights.append(w)
 
 
@@ -862,6 +893,76 @@ def build_part(group, companions, output):
                 current = next((entry.weight for entry in vertex.groups if entry.group == vg.index), 0.)
                 vg.add([i], current + take, 'REPLACE')
     print('part tris', sum(len(poly.vertices) - 2 for poly in partobj.data.polygons))
+
+    # The attachment seam (Ruling A65b). Smoothing an open border curls it off
+    # the skin, and the fillet's own normals shade it apart from the body: the
+    # part looked set onto the body. The fillet share above the skin now falls
+    # onto it with a cubic profile (tangent at the skin, `lift` above it), and
+    # its normals turn to the body's corner normals. Away from the fillet and
+    # an open border nothing moves: a pod resting on a thigh keeps its shape.
+    seam = settings['seam']
+    final_pd = smin(final_ds, final_dc, pod_link_k(final_t))
+    fillet_share = np.clip(final_pd / body_blend, 0, 1)
+    fillet_share = fillet_share * fillet_share * (3 - 2 * fillet_share)
+    # An open border lands on the skin whatever its height, wherever it is (a
+    # pod's edge in the thigh fold too); the strip within `band` of it,
+    # measured along the mesh, follows it down.
+    along = np.full(len(final_positions), np.inf)
+    nbr_ = [[] for _ in range(len(final_positions))]
+    for e_ in partobj.data.edges:
+        a_, b_ = e_.vertices
+        l_ = float(np.linalg.norm(final_positions[a_] - final_positions[b_]))
+        nbr_[a_].append((b_, l_))
+        nbr_[b_].append((a_, l_))
+    heap_ = [(0., i) for i in final_border]
+    for _, i in heap_:
+        along[i] = 0.
+    heapq.heapify(heap_)
+    while heap_:
+        d_, i = heapq.heappop(heap_)
+        if d_ > along[i] or d_ > seam['band']:
+            continue
+        for j_, l_ in nbr_[i]:
+            if d_ + l_ < along[j_]:
+                along[j_] = d_ + l_
+                heapq.heappush(heap_, (d_ + l_, j_))
+    strip = np.clip(1 - along / seam['band'], 0, 1)
+    strip = strip * strip * (3 - 2 * strip)
+    seam_share = np.maximum(fillet_share, strip)
+    corner_normals = body.data.corner_normals
+    pme = partobj.data
+    body_normal, skin_height = [], np.zeros(len(final_positions))
+    seam_moved = 0
+    for i, point in enumerate(final_positions):
+        point = Vector(point)
+        q, _, fi, _ = bvh.find_nearest(body_inverse @ point)
+        q = body_matrix @ q
+        nb = sum((corner_normals[li].vector * share for li, _, share in skin_share(q, fi)), Vector())
+        nb = (normal_matrix @ nb).normalized()
+        body_normal.append(nb)
+        height = (point - q).dot(nb) - seam['lift']
+        skin_height[i] = height
+        if height <= 0 or seam_share[i] <= 0:
+            continue
+        g = float(np.clip(1 - height / seam['band'], 0, 1))
+        move = height * max(g * g * (3 - 2 * g), strip[i]) * seam_share[i]
+        if move > 1e-7:
+            pme.vertices[i].co = body_inverse @ (point - nb * move)
+            skin_height[i] -= move
+            seam_moved += 1
+    pme.update()
+    custom = []
+    # The same share later wears the body's own texture (see the bake).
+    seam_attribute = pme.attributes.new('seam', 'FLOAT', 'POINT')
+    for v in pme.vertices:
+        i = v.index
+        g = float(np.clip(1 - max(skin_height[i], 0) / seam['normal_band'], 0, 1))
+        c = max(g * g * (3 - 2 * g), strip[i]) * seam_share[i]
+        own = (normal_matrix @ v.normal).normalized()
+        custom.append(tuple((inverse_normal_matrix @ own.lerp(body_normal[i], c)).normalized()))
+        seam_attribute.data[i].value = c
+    pme.normals_split_custom_set_from_vertices(custom)
+    print('seam vertices moved', seam_moved)
 
     # Extract a clean skin square from the UV island at the root. Only texels
     # near the root's skin tone count: clothing painted onto the body (a top
@@ -1000,6 +1101,8 @@ def build_part(group, companions, output):
     sc_.render.engine = 'CYCLES'; sc_.cycles.device = 'CPU'; sc_.cycles.samples = 1
     sc_.render.bake.margin = 8
     bpy.ops.object.bake(type='EMIT')
+    seam_texels = project_body_texture(partobj, bimg, nt, lambda P: np.array([skin_texel(*nearest_skin(p)) for p in P]), root)
+    print('seam texels from the body texture', seam_texels)
     bimg.pack()
     nt.nodes.clear()
     out = N_('ShaderNodeOutputMaterial'); bsdf = N_('ShaderNodeBsdfPrincipled'); tex_ = N_('ShaderNodeTexImage'); tex_.image = bimg
@@ -1010,6 +1113,7 @@ def build_part(group, companions, output):
         me_.color_attributes.remove(me_.color_attributes[0])
     me_.attributes.remove(me_.attributes['tip'])
     me_.attributes.remove(me_.attributes['skin'])
+    me_.attributes.remove(me_.attributes['seam'])
     for im in (im_shaft, im_tip):
         bpy.data.images.remove(im)
     print('baked', BS)
@@ -1022,9 +1126,67 @@ def build_part(group, companions, output):
         'skin_patch_px': S_, 'skin_patch_cm': S_ * mpp * 100,
         'tip_vertices': tip_count,
         'border_vertices': len(final_border),
+        'seam_vertices': seam_moved,
         'cracked_seam_groups': int(seam_cracks), 'flatten_outward_m': flatten_outward,
         'inner_wall_faces': bvh.inner_wall_faces, 'stray_faces': stray_faces,
     }
+
+
+def project_body_texture(partobj, baked, tree, sample_skin, root):
+    """Lay the body's own texture over the seam share of the baked atlas.
+
+    Vertex colours sample the skin only at the vertices, a few mm apart, so
+    the part's edge showed a blurred copy of the skin beside the real one
+    (Ruling A65b). Two more EMIT bakes on the part's UVs give every atlas texel
+    its 'seam' share and its point on the part; each texel with a share takes
+    the body's texel at the nearest outer-skin point (``sample_skin``, sRGB like
+    the atlas) by that share. Both bakes keep the scene's margin, so texels
+    just outside a UV island (sampled by texture filtering) take part too. A
+    ray projection would meet the inner wall of a double-walled body in front
+    of the flattened skin.
+    """
+    size = baked.size[0]
+    share_image = bpy.data.images.new('part_seam_share', size, size, alpha=False, float_buffer=True)
+    point_image = bpy.data.images.new('part_seam_point', size, size, alpha=False, float_buffer=True)
+    span = .25   # metres either side of the root the point bake encodes
+    tree.nodes.clear()
+    out = tree.nodes.new('ShaderNodeOutputMaterial')
+    emit = tree.nodes.new('ShaderNodeEmission')
+    tree.links.new(emit.outputs['Emission'], out.inputs['Surface'])
+    target = tree.nodes.new('ShaderNodeTexImage')
+    tree.nodes.active = target
+    share = tree.nodes.new('ShaderNodeAttribute')
+    share.attribute_name = 'seam'
+    tree.links.new(share.outputs['Fac'], emit.inputs['Color'])
+    target.image = share_image
+    bpy.ops.object.bake(type='EMIT')
+    geometry = tree.nodes.new('ShaderNodeNewGeometry')
+    offset = tree.nodes.new('ShaderNodeVectorMath')
+    offset.operation = 'MULTIPLY_ADD'
+    offset.inputs[1].default_value = (.5 / span,) * 3
+    offset.inputs[2].default_value = tuple(.5 - c * .5 / span for c in root)
+    tree.links.new(geometry.outputs['Position'], offset.inputs[0])
+    tree.links.new(offset.outputs['Vector'], emit.inputs['Color'])
+    target.image = point_image
+    bpy.ops.object.bake(type='EMIT')
+    weight = np.empty(size * size * 4, np.float32)
+    share_image.pixels.foreach_get(weight)
+    weight = np.clip(weight.reshape(size, size, 4)[..., 0], 0, 1)
+    points = np.empty(size * size * 4, np.float32)
+    point_image.pixels.foreach_get(points)
+    points = (points.reshape(size, size, 4)[..., :3] - .5) * 2 * span + np.array(tuple(root))
+    base = np.empty(size * size * 4, np.float32)
+    baked.pixels.foreach_get(base)
+    base = base.reshape(size, size, 4)
+    texels = np.argwhere(weight > .01)
+    if len(texels):
+        colours = sample_skin(points[texels[:, 0], texels[:, 1]])
+        w_ = weight[texels[:, 0], texels[:, 1]][:, None]
+        base[texels[:, 0], texels[:, 1], :3] = base[texels[:, 0], texels[:, 1], :3] * (1 - w_) + colours * w_
+        baked.pixels.foreach_set(base.ravel())
+    bpy.data.images.remove(share_image)
+    bpy.data.images.remove(point_image)
+    return len(texels)
 
 
 def attached_part(args):

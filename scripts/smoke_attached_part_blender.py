@@ -182,7 +182,9 @@ def blender_smoke(directory):
         # the anchor itself plus the pods bone, which is parented to the anchor and
         # does not follow a chain lift (a straight sweep brings the pods up to the
         # root border). Pod contacts elsewhere do not need skin weights.
-        if v.index in border and (point - attachment_root).length < .025:
+        # The fillet settles .8 mm under the skin (Ruling A65b), so its open
+        # border runs 25-45 mm from the root here: the ring within 35 mm.
+        if v.index in border and (point - attachment_root).length < .035:
             assert w.get('mixamorig:Hips', 0) + w.get('PartPods', 0) > .5, (tuple(point), w)
             root_border_count += 1
         if v.index in border:

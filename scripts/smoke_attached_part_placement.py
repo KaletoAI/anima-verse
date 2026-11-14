@@ -58,23 +58,26 @@ OLD_COMMIT = 'e557f8a65e1a59b18ec93af5200699b1ac7abfcc'
 SIZES = (1.0, 1.6)
 
 
-def skin_y(z):
-    """The fixture's front skin at height z (see the docstring)."""
-    if z >= .997:
+def skin_y(z, ledge=True):
+    """The fixture's front skin at height z (see the docstring); without the
+    ledge the tilted plane runs on below the root."""
+    if z >= .997 or not ledge:
         return -.065 + .3 * (z - 1.0)
     return -.065 + .3 * (.997 - 1.0) + .065 * min(1., (.997 - z) / .012)
 
 
-def blender_side(scripts, directory):
+def make_fixture(scripts, out, ledge=True):
+    """Write the tilted synthetic body (see the docstring) to ``out``/fixture.glb.
+
+    Returns the fixture path and the root and skin normal found by the
+    builder's ray, independently of the builder. Runs inside Blender; the seam
+    smoke shares it."""
     import bpy
-    import math
     import numpy as np
     from mathutils import Vector
     from mathutils.bvhtree import BVHTree
     sys.path.insert(0, scripts)
     import _common
-    import attached_part
-    out = Path(directory)
     _common.reset_scene()
     arm = bpy.data.objects.new('Rig', bpy.data.armatures.new('Rig'))
     bpy.context.collection.objects.link(arm)
@@ -93,7 +96,7 @@ def blender_side(scripts, directory):
     vertices, faces = [], []
     for z in np.linspace(.72, 1.34, 125):
         for x in np.linspace(-.18, .18, 73):
-            vertices.append((x, skin_y(z), z))
+            vertices.append((x, skin_y(z, ledge), z))
     for iz in range(124):
         for ix in range(72):
             a = iz * 73 + ix
@@ -143,6 +146,16 @@ def blender_side(scripts, directory):
     normal = (skin.matrix_world.to_3x3() @ normal).normalized()
     normal = Vector((0, normal.y, normal.z)).normalized()
     root = skin.matrix_world @ hit - normal * .006
+    return fixture, root, normal
+
+
+def blender_side(scripts, directory):
+    import bpy
+    import numpy as np
+    sys.path.insert(0, scripts)
+    import attached_part
+    out = Path(directory)
+    fixture, root, normal = make_fixture(scripts, out)
     results = {'root': list(root), 'normal': list(normal), 'sizes': {}}
     chain = [{'bone': 'PartLink' + str(i + 1), 'parent': 'Hips' if i == 0 else 'PartLink' + str(i)} for i in range(5)]
     companion = {'id': 'pods', 'op': 'attached_part_bone', 'chains': [[{'bone': 'PartPods', 'parent': 'Hips'}]], 'params': {}}
