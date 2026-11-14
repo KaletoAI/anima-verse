@@ -213,8 +213,8 @@ def occupied_zones(slots: Iterable[str]) -> Tuple[str, ...]:
 # the sleeve's 27). The limits stay as the warning thresholds (the hair
 # gate's 8 px / the S1 calibration above). The wrong side is not measured
 # here — the position limits caught the open front a ``GHOST`` back once drew
-# only by its numbers (``garment_clothing.GHOST_KEEP``: +0.0259 / -0.0130);
-# the back prompt names the side since ruling 13e.
+# only by its numbers (the pre-A57 ``garment_clothing.GHOST_KEEP``: +0.0259 /
+# -0.0130); the back prompt names the side since ruling 13e (``GHOST_SIDE``).
 #
 # Width — ``w_ratio`` is WIDENED, not dropped: it is the guard against a
 # cut-off piece (a lost sleeve takes a jacket to ~0.6-0.75). The mesher gets

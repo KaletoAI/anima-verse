@@ -62,8 +62,11 @@ written, 1-based, split on whitespace).
     around, seen directly from behind, back view, same A-pose, same framing,
     completely bald," is 17 words), ends with "in the frame."; it carries no
     "{" slot and ``draft_prompt`` returns it as it is.
-[7] Ghosts: garment_clothing.GHOST with noun "red dress": "position" is word
-    9 and "width" word 11 of 49, no "no " in it; garment_hair._GHOST["front"]
+[7] Ghosts: garment_clothing.GHOST is the user's text (Ruling A57): it
+    starts "Remove the person completely,", "position" is word 13 ("Remove
+    the person completely, leaving only the clothes in the exact same" is 12
+    words) of 44 (23 up to "mannequin." + 21 in the second sentence), no
+    "{" slot and no "no " in it; garment_hair._GHOST["front"]
     starts "Keep the hair exactly as it is: the same position, outer outline,
     width", contains neither "inner side" nor "no "; the back ends "seen
     from behind.". garment_hair.length insertion: the front with length_t ->
@@ -226,9 +229,10 @@ def main() -> int:
         from app.core import garment_clothing
 
         print("[7] ghosts")
-        ghost = garment_clothing.GHOST.format(noun="red dress")
-        check("position at word 9, width at word 11, 49 words",
-              (word_at(ghost, "position"), word_at(ghost, "width"), len(words(ghost))), (9, 11, 49))
+        ghost = garment_clothing.GHOST
+        check("the user's text: opening, position at word 13, 44 words, no slot",
+              (ghost.startswith("Remove the person completely,"), word_at(ghost, "position"), len(words(ghost)),
+               "{" in ghost), (True, 13, 44, False))
         check("no negation", "no " in ghost, False)
         from app.core import garment_hair
         front, back = garment_hair._GHOST["front"], garment_hair._GHOST["back"]

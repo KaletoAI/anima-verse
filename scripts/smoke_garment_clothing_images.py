@@ -103,27 +103,19 @@ Geometry (the canvas of the former smoke_garment_ghost_pair.py), W 1024 x H 1200
       they now wear only a knee-length green linen dress with short sleeves."
     worn back  = no edit prompt: ValueError "drafted from the worn front"
       (the draft + fit back: scripts/smoke_garment_clothing_back.py)
-    ghost front (the dress has a top slot: no waistband piece) = GHOST:
-      "The same green dress in exactly the same position, size, width and
-      framing, keeping its worn three-dimensional shape as if on an
-      invisible body (ghost mannequin product photo): the person is removed,
-      the inside of the garment is visible at the neck opening, sleeves and
-      hem, plain grey background."
-    ghost back (ruling 13e: every back says GHOST_KEEP; not a waistband
-      piece -> sleeves, neck opening; Task 11e: the back names its view) =
-      "Keep the green dress exactly as it is, seen from behind, the back
-      view stays a back view: the same position, outer outline, width and
-      framing, the sleeves at exactly the same angle as in the image, the
-      same background. Remove the person completely so the green dress
-      keeps its worn three-dimensional shape on an invisible body (ghost
-      mannequin product photo); the inside is visible at the neck opening,
-      sleeves and hem."
-    A waistband piece ("Grey Trousers", slots [bottom]) says GHOST_KEEP on
-      both views, the legs and the waistband: front "Keep the grey trousers
-      exactly as it is, seen from the front: … the legs apart at exactly the
-      same angle as in the image, … the inside is visible at the waistband
-      and the leg openings."; the back the same with "seen from behind, the
-      back view stays a back view".
+    ghost front (the dress has a top slot: no waistband piece) = the
+      user's text, word for word (Ruling A57, no noun):
+      "Remove the person completely, leaving only the clothes in the exact
+      same position, pose, and shape as if worn by an invisible mannequin.
+      Reconstruct the inside of the collar, sleeves, and hem naturally, and
+      fill in the background behind the removed body parts seamlessly."
+    ghost back = that + " Seen from behind; the back view stays a back
+      view." (ruling 13e: a back names its side).
+    A waistband piece ("Grey Trousers", slots [bottom]): the user's text
+      with "the collar, sleeves, and hem" -> "the waistband and the leg
+      openings" ("… Reconstruct the inside of the waistband and the leg
+      openings naturally, …"), then on the back the side sentence, then on
+      both " The legs stay apart at exactly the same angle as in the image."
     negatives: worn = DRESS_GARMENT_NEGATIVE minus "dress" -> "loose
       clothing, baggy, skirt, jacket, shoes, socks, hair"; ghost = that +
       ", person, skin, head, arms, hands, legs, feet, mannequin, hanger".
@@ -234,23 +226,19 @@ W, H = 1024, 1200
 FRAGMENT = "a knee-length green linen dress with short sleeves."
 WORN_FRONT = ("Keep the image exactly as it is. Only change their clothing: they now wear only a knee-length "
               "green linen dress with short sleeves.")
-GHOST_PROMPT = ("The same green dress in exactly the same position, size, width and framing, keeping its worn "
-                "three-dimensional shape as if on an invisible body (ghost mannequin product photo): the person "
-                "is removed, the inside of the garment is visible at the neck opening, sleeves and hem, plain "
-                "grey background.")
-GHOST_BACK_PROMPT = ("Keep the green dress exactly as it is, seen from behind, the back view stays a back view: "
-                     "the same position, outer outline, "
-                     "width and framing, the sleeves at exactly the same angle as in the image, the same background. "
-                     "Remove the person completely so the green dress keeps its worn three-dimensional shape on an "
-                     "invisible body (ghost mannequin product photo); the inside is visible at the neck opening, "
-                     "sleeves and hem.")
-
-
-def trousers_ghost(side):
-    return ("Keep the grey trousers exactly as it is, " + side + ": the same position, outer outline, width and "
-            "framing, the legs apart at exactly the same angle as in the image, the same background. Remove the "
-            "person completely so the grey trousers keeps its worn three-dimensional shape on an invisible body "
-            "(ghost mannequin product photo); the inside is visible at the waistband and the leg openings.")
+GHOST_PROMPT = ("Remove the person completely, leaving only the clothes in the exact same position, pose, and "
+                "shape as if worn by an invisible mannequin. Reconstruct the inside of the collar, sleeves, and "
+                "hem naturally, and fill in the background behind the removed body parts seamlessly.")
+GHOST_BACK_PROMPT = GHOST_PROMPT + " Seen from behind; the back view stays a back view."
+TROUSERS_GHOST_FRONT = ("Remove the person completely, leaving only the clothes in the exact same position, pose, "
+                        "and shape as if worn by an invisible mannequin. Reconstruct the inside of the waistband "
+                        "and the leg openings naturally, and fill in the background behind the removed body parts "
+                        "seamlessly. The legs stay apart at exactly the same angle as in the image.")
+TROUSERS_GHOST_BACK = ("Remove the person completely, leaving only the clothes in the exact same position, pose, "
+                       "and shape as if worn by an invisible mannequin. Reconstruct the inside of the waistband "
+                       "and the leg openings naturally, and fill in the background behind the removed body parts "
+                       "seamlessly. Seen from behind; the back view stays a back view. The legs stay apart at "
+                       "exactly the same angle as in the image.")
 
 
 _OLD_GHOST_PROMPT = ("The same green dress alone, as if worn by an invisible person (ghost mannequin): no head, no "
@@ -553,9 +541,9 @@ def main() -> int:
         tid = inventory.add_item(name="Grey Trousers", category="outfit_piece", prompt_fragment="grey trousers",
                                  outfit_piece={"slots": ["bottom"]})["id"]
         check("trousers ghost front", garment_clothing.edit_prompt("Demo", "ghost", "front", item_id=tid)[0],
-              trousers_ghost("seen from the front"))
+              TROUSERS_GHOST_FRONT)
         check("trousers ghost back", garment_clothing.edit_prompt("Demo", "ghost", "back", item_id=tid)[0],
-              trousers_ghost("seen from behind, the back view stays a back view"))
+              TROUSERS_GHOST_BACK)
         raises("no fragment", lambda: garment_clothing.edit_prompt("Demo", "worn", "front", item_id=bare),
                ValueError, "has no prompt fragment")
 

@@ -27,7 +27,8 @@ shortened and said positively (Qwen2.1-Turbo ignores negatives):
   lapels, buttons and the open V on a back view under a back-of-head), and
   ``back_reasons`` refuses a back that does not follow its front;
 - ``ghost``: an edit of the accepted worn image — the piece alone, as if on
-  an invisible body, the inside visible at the openings.
+  an invisible mannequin, the inside visible at the openings (the user's
+  wording, Ruling A57).
 
 Unlike hair, nothing about the piece is derived from the character: the item
 is the same for every wearer, the mesh fit is per wearer (``garment_store``).
@@ -68,50 +69,24 @@ EDIT_STEPS: Dict[str, Dict[str, Any]] = {"worn": {"source": "base", "views": ("f
                                          "ghost": {"source": "worn"}}
 
 WORN = "Keep the image exactly as it is. Only change their clothing: they now wear only {fragment}."
-#: Position, size and width first — they are what the ghost gates measure
-#: (centre / width ratio) and they stood as the last clause of 49 words
-#: before the review of 2026-11-11; the removed person is said once,
-#: positively, through the ghost-mannequin picture. Front and back get the
-#: same text and one reference (the worn view of that side). Trousers
-#: (clone, Kai, item_750811f7, 2026-11-11): the ghost BACK came out as a
-#: centred product shot, ×1.59 / ×1.45 tall, attempt 1 showing the FRONT
-#: (fly placket) — corrected by the waistband registration
-#: (``register_estimate``), the straight legs still refuse (width 0.85).
-#: Since ruling 13e ``GHOST`` is the FRONT of a piece without a waistband
-#: only; the other ghosts say ``GHOST_KEEP``.
-GHOST = ("The same {noun} in exactly the same position, size, width and framing, keeping its worn "
-         "three-dimensional shape as if on an invisible body (ghost mannequin product photo): the person is "
-         "removed, the inside of the garment is visible at the neck opening, sleeves and hem, plain grey "
-         "background.")
-#: The ghost of a waistband piece (both views) and the ghost BACK of every
-#: other piece (ruling 13e): keep the piece as it is, name the side once,
-#: then the stance (``GHOST_STANCE``), then the openings
-#: (``GHOST_OPENINGS``). Measured on Qwen2.1 Turbo (clone, 2026-11-11,
-#: gated after the waistband registration, ``~/claude-out/footwear/p3b/
-#: ghost_back_wording.jpg``): Kai's trousers back 3 of 4 accepted — w_ratio
-#: 1.021 / 1.067 (refused) / 1.015 / 0.991, outside <= 0.0144, all a real
-#: back (welt pockets, legs apart); as rendered top -0.350 / -0.024 /
-#: -0.030 / -0.066 Hb, so the waistband registration still does the
-#: framing. ``GHOST`` there: 0 of 2 (width 0.850 / 0.844 after registration,
-#: straight legs, the front's fly). Kai's leather jacket back, one seed:
-#: ``GHOST_KEEP`` a real back, top +0.0187 / centre -0.0094 / width 1.002
-#: (refused, outline registration 0.928 just beyond its cap); ``GHOST`` an
-#: open FRONT with the lining shown, +0.0259 / -0.0130 / 0.941 (refused) —
-#: worse on every number, so tops take it for the back. The trousers FRONT
-#: (never rendered before): ``GHOST_KEEP`` with "seen from the front" ×1.19
-#: wide, top -0.142 Hb (``GHOST`` ×1.37, -0.323) — refused under the capped
-#: outline registration; with the waistband registration it would pass
-#: (w_ratio 1.003, outside 0.023) — so it registers the front too (ruling 13f).
-GHOST_KEEP = ("Keep the {noun} exactly as it is, {side}: the same position, outer outline, width and framing, "
-              "{stance}, the same background. Remove the person completely so the {noun} keeps its worn "
-              "three-dimensional shape on an invisible body (ghost mannequin product photo); the inside is "
-              "visible at {openings}.")
-GHOST_SIDE = {"front": "seen from the front", "back": "seen from behind, the back view stays a back view"}
-#: Per kind of piece: waistband pieces (``garment_gates.waistband_piece``) / the rest.
-GHOST_STANCE = {True: "the legs apart at exactly the same angle as in the image",
-                False: "the sleeves at exactly the same angle as in the image"}
-GHOST_OPENINGS = {True: "the waistband and the leg openings", False: "the neck opening, sleeves and hem"}
-#: The noun of a piece without a name.
+#: The ghost texts (Ruling A57, 2026-11-14). The base text of EVERY ghost
+#: view is the USER'S OWN prompt, word for word (hub job 29e09f8a, Qwen
+#: image edit: an off-shoulder blouse, the person removed, the inside of the
+#: neckline and hem shown, pose and position kept) — do not "improve" it;
+#: change it only on the user's word. The older wording ("The same {noun} …"
+#: / ``GHOST_KEEP`` "Keep the {noun} exactly as it is …", see git history) was
+#: measured on 2026-11-11: a back without its side drew a front and waistband
+#: legs came out straight — hence the side and stance lines after the user's text.
+GHOST = ("Remove the person completely, leaving only the clothes in the exact same position, pose, and shape "
+         "as if worn by an invisible mannequin. Reconstruct the inside of the collar, sleeves, and hem "
+         "naturally, and fill in the background behind the removed body parts seamlessly.")
+#: A waistband piece (``garment_gates.waistband_piece``, both views): its openings in place of the collar's.
+GHOST_WAISTBAND = GHOST.replace("the collar, sleeves, and hem", "the waistband and the leg openings")
+#: After the user's text on every BACK view.
+GHOST_SIDE = {"back": "Seen from behind; the back view stays a back view."}
+#: After the user's text (and the side) on both views of a waistband piece.
+GHOST_STANCE = "The legs stay apart at exactly the same angle as in the image."
+#: The noun of a piece without a name (``garment_noun``).
 DEFAULT_NOUN = "garment"
 #: The ghost's extra negative terms (spike ``NEG_GHOST``); the use case
 #: ``garment_edit`` adds the shared part. Kept for backends that read
@@ -202,8 +177,9 @@ def state_of(item: Dict[str, Any], profile: Optional[Dict[str, Any]], state: Opt
 
 
 def garment_noun(item: Dict[str, Any]) -> str:
-    """The noun of the ghost prompt: the item's name in lower case
-    ("Green Dress" -> "green dress"), ``"garment"`` without a name."""
+    """The piece's noun: the item's name in lower case ("Green Dress" ->
+    "green dress"), ``"garment"`` without a name. The ghost prompt said it
+    until Ruling A57; it stays a fingerprint input (``fsig_inputs``)."""
     name = " ".join(str(item.get("name") or "").split())
     return name.lower() if name else DEFAULT_NOUN
 
@@ -212,7 +188,9 @@ def fsig_inputs(character_name: str, item: Dict[str, Any], *,
                 profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None) -> Dict[str, Any]:
     """What a clothing piece contributes to the garment fingerprint
     (``garment_store.garment_fsig``): its prompt fragment, its noun (the
-    lower-cased name the ghost prompt says — a rename re-renders the ghost),
+    lower-cased name; the ghost prompt no longer says it since Ruling A57,
+    but it stays here so no stored fingerprint changes — a rename still
+    re-renders the ghost),
     slots, covers, partially covers and the pronouns of the character's
     profile. Worn OPEN (``state``, None → the profile's worn state,
     ``state_of``) the fragment says the open phrase (``fragment``) and
@@ -257,8 +235,8 @@ def edit_prompt(character_name: str, step: str, view: str, *,
     fragment in the state ``profile`` wears the piece in (``state_of``: open
     adds the open phrase); the worn
     BACK is no edit (``draft_prompt``, then the composite).
-    ``ghost`` (the worn image): the piece alone, the item's name as the
-    noun — ``ghost_prompt``; the BACK's negative is built from the back
+    ``ghost`` (the worn image): the piece alone — ``ghost_prompt``
+    (no noun, Ruling A57); the BACK's negative is built from the back
     text (``_back_text_of``). ValueError for an unknown step or
     view, the worn back, a missing item, or a piece without a prompt
     fragment."""
@@ -279,20 +257,23 @@ def edit_prompt(character_name: str, step: str, view: str, *,
         text = _back_text_of(item)
     negative = ", ".join(t for t in (_worn_negative(text), *GHOST_NEGATIVE) if t)
     slots = (item.get("outfit_piece") or {}).get("slots") or []
-    return ghost_prompt(garment_noun(item), slots, view), negative
+    return ghost_prompt(slots, view), negative
 
 
-def ghost_prompt(noun: str, slots, view: str) -> str:
-    """The ghost prompt of a piece with ``slots`` for ``view``: ``GHOST_KEEP``
-    for a waistband piece (both views) and for every back (the side, the
-    stance and the openings of its kind), ``GHOST`` for the front of a piece
-    without a waistband."""
+def ghost_prompt(slots, view: str) -> str:
+    """The ghost prompt of a piece with ``slots`` for ``view`` (Ruling A57):
+    the user's text (``GHOST``; a waistband piece says its waistband and
+    leg openings, ``GHOST_WAISTBAND``), then the side on a back
+    (``GHOST_SIDE``), then the stance of a waistband piece
+    (``GHOST_STANCE``)."""
     from app.core.garment_gates import waistband_piece
     waist = waistband_piece(slots)
-    if view == "front" and not waist:
-        return GHOST.format(noun=noun)
-    return GHOST_KEEP.format(noun=noun, side=GHOST_SIDE[view], stance=GHOST_STANCE[waist],
-                             openings=GHOST_OPENINGS[waist])
+    parts = [GHOST_WAISTBAND if waist else GHOST]
+    if view in GHOST_SIDE:
+        parts.append(GHOST_SIDE[view])
+    if waist:
+        parts.append(GHOST_STANCE)
+    return " ".join(parts)
 
 
 def _fragment_of(item: Dict[str, Any], *, state: str = "closed") -> str:

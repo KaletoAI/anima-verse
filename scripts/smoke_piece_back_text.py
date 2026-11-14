@@ -37,10 +37,10 @@ Expected values, derived by hand from the code's constants:
     ``view_text(front)`` = F; ``fsig_inputs[prompt_fragment_back]`` = B
     and the fsig differs from [2]'s. The worn FRONT edit = "Keep the image
     exactly as it is. Only change their clothing: they now wear only F."
-    and the ghost FRONT = ``GHOST`` with noun "grey blazer" — identical with
-    and without the field. The ghost BACK = ``GHOST_KEEP`` with side "seen
-    from behind, the back view stays a back view" (sleeves, neck opening:
-    no waistband piece). A field EQUAL to the front (F) keeps [2]'s fsig and
+    and the ghost FRONT = ``GHOST`` (the user's text, no noun, Ruling A57)
+    — identical with and without the field. The ghost BACK = ``GHOST`` +
+    " Seen from behind; the back view stays a back view." (no waistband
+    piece: no stance line). A field EQUAL to the front (F) keeps [2]'s fsig and
     inputs (the old keys).
 [4] The dressed drafts name their view: ``base_body.draft_prompt(Demo, v)``
     for back / left / right = ``DRAFT_PROMPTS[v]`` (no clothing), so it
@@ -178,7 +178,7 @@ def main() -> int:
         ghost_front = garment_clothing.edit_prompt("Demo", "ghost", "front", item_id=jid)
         check("worn front", worn_front[0],
               f"Keep the image exactly as it is. Only change their clothing: they now wear only {F}.")
-        check("ghost front", ghost_front[0], garment_clothing.GHOST.format(noun="grey blazer"))
+        check("ghost front", ghost_front[0], garment_clothing.GHOST)
 
         print("[3] field B: the back wins")
         set_back(B)
@@ -195,10 +195,7 @@ def main() -> int:
         check("ghost front byte-identical", garment_clothing.edit_prompt("Demo", "ghost", "front", item_id=jid),
               ghost_front)
         check("ghost back", garment_clothing.edit_prompt("Demo", "ghost", "back", item_id=jid)[0],
-              garment_clothing.GHOST_KEEP.format(noun="grey blazer",
-                                                 side="seen from behind, the back view stays a back view",
-                                                 stance="the sleeves at exactly the same angle as in the image",
-                                                 openings="the neck opening, sleeves and hem"))
+              garment_clothing.GHOST + " Seen from behind; the back view stays a back view.")
         set_back(F)
         check("field equal to the front keeps the inputs", garment_clothing.fsig_inputs("Demo", jid), inputs_empty)
         check("... and the fsig", gs.garment_fsig("Demo", jid), fsig_empty)
