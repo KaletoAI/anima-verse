@@ -37,8 +37,9 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
 [H1] Base views of Long (method body). APPEARANCE = "female, 30 years old,
      green eyes, olive skin, average height, athletic build" (the human build
      slot carries the height; smoke_base_body_prompt [1]).
-     front block = "sfw, long brunette hair, " + BODY_TEXT (the natural-skin
-       body text of 2026-11-13) + ", " + APPEARANCE
+     front block = "long brunette hair, " + BODY_TEXT (the natural-skin
+       body text of 2026-11-13, Ruling A74a: no safe-content tag before it)
+       + ", " + APPEARANCE
        (the hair text where BALD_HEAD stood);
      front prompt = BASE_FRONT_POSE_PROMPT + ", no hair on the chest or in
        front of the shoulders, chest, collarbones and front of the shoulders
@@ -50,7 +51,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
        behind the shoulders, the whole figure from head to feet in the frame."
        — left / right the same head clause in their sentences;
      negative (all views) = "hat, hood, headscarf, wig, clothing, underwear,
-       jewellery, detailed anatomy, hands touching body, fists, curled fingers,
+       jewellery, hands touching body, fists, curled fingers,
        fused fingers, mitten hands, cropped feet, feet cut off, cropped legs,
        close-up, portrait crop" (human declares no base_body_negative).
      Every view: "completely bald" / BALD_HEAD absent, "long brunette hair"
@@ -63,8 +64,7 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
      Back draft of Long: DRAFT_PROMPTS["back"] (Ruling A29: no clothing —
      "exactly as on the person in the reference image, the same length, cut
      and colour, and nothing else") with the same head clause as the back
-     view, negative "hat, hood, headscarf, wig, detailed anatomy, " +
-     POSE_NEGATIVE; Deck's draft = DRAFT_PROMPTS["back"] as it is (the bald
+     view, negative "hat, hood, headscarf, wig, " + POSE_NEGATIVE; Deck's draft = DRAFT_PROMPTS["back"] as it is (the bald
      wording), its negative = the start hash's.
      Dressed front edit (dress_text stubbed "they now wear a blue shirt"):
      Long opens with "Keep the image exactly as it is: the same person, same
@@ -161,14 +161,14 @@ def old_names(path: str, names) -> dict:
 
 
 APPEARANCE = "female, 30 years old, green eyes, olive skin, average height, athletic build"
-BODY_TEXT = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin"
+BODY_TEXT = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
 CHEST = ("no hair on the chest or in front of the shoulders, chest, collarbones and front of the shoulders "
          "fully uncovered")
 REF = "the same hairstyle, hair length and hair volume as the reference"
 BEHIND = "the hair falls behind the shoulders"
 POSE_NEG = ("hands touching body, fists, curled fingers, fused fingers, mitten hands, cropped feet, "
             "feet cut off, cropped legs, close-up, portrait crop")
-HAIRED_NEG = "hat, hood, headscarf, wig, clothing, underwear, jewellery, detailed anatomy, " + POSE_NEG
+HAIRED_NEG = "hat, hood, headscarf, wig, clothing, underwear, jewellery, " + POSE_NEG
 VIEW_TAIL = {
     "back": "The same person turned around, seen directly from behind, back view, same A-pose, same framing, ",
     "left": "The same person turned to a strict left side profile view, same A-pose, same framing, ",
@@ -222,6 +222,15 @@ def main() -> int:
         # the hair method): the START module gets today's text, so these proofs
         # still compare only what the hair method touches.
         old_bb.BODY_TEXT = base_body.BODY_TEXT
+        # So did the base texts of Ruling A74a (2026-11-14: no safe-content tag,
+        # no anatomy word in the negatives): today's texts again, the negative's
+        # default head included (bound when the old function was defined).
+        old_bb.BASE_BLOCK_HEAD = ""
+        for const in ("BODY_NEGATIVE", "BASE_NEGATIVE", "HAIRED_BASE_NEGATIVE", "DRAFT_NEGATIVE",
+                      "HAIRED_DRAFT_NEGATIVE"):
+            if hasattr(old_bb, const):
+                setattr(old_bb, const, getattr(base_body, const))
+        old_bb.base_negative.__kwdefaults__["head"] = base_body.BASE_NEGATIVE
 
         base = {"template": "human-default", "gender": "female", "age": 30, "height": 168,
                 "character_appearance": "wears a red scarf",
@@ -276,7 +285,7 @@ def main() -> int:
         print("[H1] base view prompts")
         from app.core.model_refs import BASE_FRONT_POSE_PROMPT
         front_block = base_body.base_character("Long", "front", profile=P["Long"])
-        check("Long front block", front_block, f"sfw, long brunette hair, {BODY_TEXT}, {APPEARANCE}")
+        check("Long front block", front_block, f"long brunette hair, {BODY_TEXT}, {APPEARANCE}")
         front, negative = base_body.base_prompt("Long", "front", profile=P["Long"])
         check("Long front prompt", front, f"{BASE_FRONT_POSE_PROMPT}, {CHEST}, {BEHIND}")
         check("Long front negative", negative, HAIRED_NEG)
@@ -308,7 +317,7 @@ def main() -> int:
 
         draft, negative = base_body.draft_prompt("Long", "back", profile=P["Long"])
         check("Long back draft", draft, f"{VIEW_TAIL['back']}long brunette hair, {REF}, {BEHIND}, {CLOTHES_REF}, {END}")
-        check("Long draft negative", negative, "hat, hood, headscarf, wig, detailed anatomy, " + POSE_NEG)
+        check("Long draft negative", negative, "hat, hood, headscarf, wig, " + POSE_NEG)
         deck_draft = base_body.draft_prompt("Deck", "back", profile=P["Deck"])
         check("Deck draft: the bald sentence (Ruling A29)", deck_draft[0], base_body.DRAFT_PROMPTS["back"])
         check(f"Deck draft negative == {START}", deck_draft[1],

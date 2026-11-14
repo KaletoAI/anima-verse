@@ -41,7 +41,8 @@ feature ``humanoid: false``, profile image). ``bsig`` = base_signature(Demo).
     equipped {} / [], apply_state_modifiers False, size _tpose_size() =
     (1024, 1024) (no config override), sidecar_extra {"base_signature": bsig,
     "base_identity": base_identity(Demo), "prompt_fingerprint":
-    prompt_fingerprint(Demo)} (the identity split of 2026-11-11).
+    prompt_fingerprint(Demo), "prompt_rules": "a74a"} (the identity split of
+    2026-11-11; ``prompt_rules`` marks a view rendered since Ruling A74a).
     While the front renders, base_info status front.running is True.
     Afterwards find_ref_image(Demo, "tpose", bsig) is model_refs/tpose_<bsig>.png
     and find_ref_image(Demo, "tpose_left", bsig) the left file; the return
@@ -243,7 +244,7 @@ def main() -> int:
                 check(f"{view} size", (call["override_width"], call["override_height"]), (1024, 1024))
                 check(f"{view} sidecar_extra", call["sidecar_extra"],
                       {"base_signature": bsig, "base_identity": base_body.base_identity("Demo"),
-                       "prompt_fingerprint": base_body.prompt_fingerprint("Demo")})
+                       "prompt_fingerprint": base_body.prompt_fingerprint("Demo"), "prompt_rules": "a74a"})
             check("front was running during its render", CALLS[0]["running"], True)
             check("find_ref_image front", model_refs.find_ref_image("Demo", "tpose", bsig), refs / f"tpose_{bsig}.png")
             check("find_ref_image left", model_refs.find_ref_image("Demo", "tpose_left", bsig),

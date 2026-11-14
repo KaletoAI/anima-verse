@@ -2,7 +2,7 @@
 
 Every humanoid character is on the ``base_body`` model pipeline
 (``is_base_pipeline``; an animal never is) and gets ONE base body: four A-pose views
-(front/back/left/right) of a bald, anatomically neutral figure, rendered from
+(front/back/left/right) of a bald, unclothed figure, rendered from
 the character's profile image, and one model built from them. Outfits are
 painted onto that body later (spec
 ``docs/superpowers/specs/2026-11-08-base-body-outfits-design.md`` § A).
@@ -60,7 +60,7 @@ the plain views edited to that hair (``dress_prompt(hair=…)``).
 The prompt layout (user directive 2026-11-09, "character details always
 first"): the front's style (``base_front``) opens with its subject
 clause, then its ``{character}`` slot takes the CHARACTER BLOCK
-(``base_character``: "sfw, no clothing, " + ``base_appearance``), then the rest
+(``base_character``: the head, ``BODY_TEXT`` and ``base_appearance``), then the rest
 of the style; the base prompt (``base_prompt``: pose, bald head, body text)
 follows after a comma. The image service fills the slot
 (``config.fill_character_slot``, payload key ``style_character``).
@@ -103,15 +103,14 @@ BASE_BODY_VERSION = 2
 # at word 167 and 191 of 199). Positive wording only — a CFG-free model
 # draws what a negation names ("no hair", "without anatomical detail").
 BALD_HEAD = "completely bald with a smooth bare scalp"
-#: Natural skin tone with a plain chest and groin: the spike text of
-#: 2026-11-12 10:50 (hub job 10c82251) without its "fine natural body
-#: hair" — the bald/haired base must not name hair. The earlier "smooth
-#: featureless mannequin-like ... plain smooth skin" made every base front
-#: a pale plastic doll (user report 2026-11-13).
-BODY_TEXT = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin"
-#: Opens the character block of the base front ("no clothing" is carried by
-#: BODY_TEXT's "unclothed" since 2026-11-11).
-BASE_BLOCK_HEAD = "sfw"
+#: Natural skin: the spike text of 2026-11-12 10:50 (hub job 10c82251)
+#: without its "fine natural body hair" — the bald/haired base must not name
+#: hair. The earlier "smooth featureless" wording made every base front a
+#: pale plastic doll (user report 2026-11-13). Ruling A74a (2026-11-14): the
+#: body text no longer asks for a plain surface, and the block no longer
+#: opens with a safe-content tag — the base front shows the body as the
+#: character's description and the active packs' slots make it.
+BODY_TEXT = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
 #: Use case (style, negative) per base view — their own, so the whole-body
 #: T-pose path keeps "tpose" / "tpose_back" / "tpose_side" untouched. The
 #: edit views' use cases carry no style: their whole prompt is the short
@@ -159,7 +158,9 @@ BASE_VIEW_PROMPTS = {
 
 HAIR_NEGATIVE = ("hair, long hair, short hair, ponytail, braid, bun, fringe, bangs, wig, headscarf, hat, hood, "
                  "stubble on the scalp, hair on the shoulders, hair on the back")
-BODY_NEGATIVE = "clothing, underwear, jewellery, detailed anatomy"
+#: Ruling A74a: no anatomy words — what a pack's slots describe is the pack's
+#: business (``base_body_negative``), and the base front is no longer kept plain.
+BODY_NEGATIVE = "clothing, underwear, jewellery"
 POSE_NEGATIVE = ("hands touching body, fists, curled fingers, fused fingers, mitten hands, cropped feet, "
                  "feet cut off, cropped legs, close-up, portrait crop")
 BASE_NEGATIVE = ", ".join((HAIR_NEGATIVE, BODY_NEGATIVE, POSE_NEGATIVE))
@@ -307,7 +308,7 @@ def _haired_front_pose(character_name: str, hair: str, profile: Dict[str, Any]) 
 def base_character(character_name: str, view: str, *,
                    profile: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """The CHARACTER BLOCK of one base view, for the style's ``{character}``
-    slot: on the front ``BASE_BLOCK_HEAD``, ``BALD_HEAD``, ``BODY_TEXT`` and
+    slot: on the front ``BALD_HEAD``, ``BODY_TEXT`` and
     ``base_appearance`` — the words that shape the figure, right after the
     style's subject sentence (review 2026-11-11). None on back/left/right —
     an edit of the front takes the body from the image, and its prompt is the
@@ -321,7 +322,7 @@ def base_character(character_name: str, view: str, *,
     profile = _profile_of(character_name, profile)
     appearance = base_appearance(character_name, profile=profile, base_fragments=True)
     head = hair_text(character_name, profile=profile) or BALD_HEAD
-    return ", ".join(p for p in (BASE_BLOCK_HEAD, head, BODY_TEXT, appearance) if p)
+    return ", ".join(p for p in (head, BODY_TEXT, appearance) if p)
 
 
 def base_prompt(character_name: str, view: str, *,
@@ -399,6 +400,98 @@ def prompt_fingerprint(character_name: str, *, profile: Optional[Dict[str, Any]]
     return hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
 
 
+# --- Ruling A74a carry-over --------------------------------------------------
+# Ruling A74a (2026-11-14) dropped clauses from the base prompts — the block's
+# safe-content tag, the plain-surface clause of ``BODY_TEXT``, the anatomy
+# word of ``BODY_NEGATIVE`` / ``DRAFT_NEGATIVE`` and, in the packs, the "no …"
+# clause of a ``base_body_prompt`` and the ``base_body_negative`` terms. That
+# changes every ``prompt_fingerprint`` and, through ``base_appearance``, the
+# ``base_identity`` of a character whose slot rendered such a clause: every
+# stored base would have turned ``OLDER_PROMPTS`` (the Build and the
+# ``base_refresh`` improvement re-render it) or gone missing. So a base view
+# rendered BEFORE the ruling — its sidecar has no ``prompt_rules`` — stays
+# current while today's texts only DROP comma clauses from the ones it
+# recorded (``prompt``, ``final_prompt``, ``negative_prompt``, the front's
+# ``skin_step``); a real change (a hair text, another appearance word, the
+# skin step switched) adds or rewrites a clause and ages it as before. A view
+# rendered since records ``PROMPT_RULES`` and goes by its fingerprint alone,
+# so a later wording change ages bases as it always did. The comparison reads
+# the view's own record — the old wording is nowhere in the code.
+
+#: Recorded in every base view's sidecar (``prompt_rules``) since Ruling A74a.
+PROMPT_RULES = "a74a"
+#: The ``BASE_BODY_VERSION`` of the carry-over: a bump re-renders every base
+#: on purpose, so it ends the carry-over of identities (``_carried_front``).
+_CARRY_BODY_VERSION = 2
+
+
+def _clauses(text: Any) -> set:
+    return {c.strip() for c in str(text or "").split(",") if c.strip()}
+
+
+def _drops_only(current: Optional[str], recorded: Any) -> bool:
+    """Whether ``current`` names no comma clause that ``recorded`` lacks."""
+    return _clauses(current) <= _clauses(recorded)
+
+
+def _view_carried(character_name: str, view: str, meta: Dict[str, Any], profile: Dict[str, Any]) -> bool:
+    """Whether a base ``view`` whose sidecar is ``meta`` was rendered before
+    Ruling A74a with today's texts plus clauses since dropped: no
+    ``prompt_rules``, the same prompt, today's negative clauses all in its
+    recorded negative and — on the front — today's character block all in its
+    recorded final prompt and the same skin step (``base_skin.fingerprint_part``
+    against its ``skin_step`` record; none while the switch is off)."""
+    if not meta or meta.get("prompt_rules"):
+        return False
+    prompt, negative = base_prompt(character_name, view, profile=profile)
+    if str(meta.get("prompt") or "") != prompt or not _drops_only(negative, meta.get("negative_prompt")):
+        return False
+    if view != "front":
+        return True
+    if not _drops_only(base_character(character_name, view, profile=profile), meta.get("final_prompt")):
+        return False
+    from app.core import base_skin
+    skin = base_skin.fingerprint_part(profile)
+    record = meta.get("skin_step") if isinstance(meta.get("skin_step"), dict) else {}
+    if skin is None:
+        return not record.get("version")
+    return all(record.get(key) == value for key, value in skin.items())
+
+
+def recorded_fingerprint(character_name: str, signature: str, view: str, meta: Dict[str, Any], *,
+                         current: str, profile: Optional[Dict[str, Any]] = None) -> str:
+    """The ``prompt_fingerprint`` a stored base view counts as rendered with:
+    its sidecar's (``meta``), or ``current`` when the Ruling A74a carry-over
+    holds for it — the front by ``_view_carried``; another view by its own
+    texts, with the front's recorded fingerprint (one render's global inputs,
+    the skin step among them) and a front that is carried itself."""
+    recorded = str(meta.get("prompt_fingerprint") or "")
+    if not recorded or recorded == current or meta.get("prompt_rules"):
+        return recorded
+    profile = _profile_of(character_name, profile)
+    if view != "front":
+        front = _front_sidecar(character_name, signature)
+        if recorded != str(front.get("prompt_fingerprint") or ""):
+            return recorded
+        if not _view_carried(character_name, "front", front, profile):
+            return recorded
+    return current if _view_carried(character_name, view, meta, profile) else recorded
+
+
+def _carried_front(meta: Dict[str, Any], appearance: str, profile_image: str) -> bool:
+    """Whether a stored front sidecar ``meta`` whose recorded ``base_identity``
+    is not today's stands for today's identity by the Ruling A74a carry-over:
+    rendered before the ruling, ``BASE_BODY_VERSION`` unchanged, from the
+    current profile image, and today's base appearance only drops clauses
+    from its recorded final prompt (a changed attribute value, height, age
+    or gender adds one — a new body, as before)."""
+    if meta.get("prompt_rules") or BASE_BODY_VERSION != _CARRY_BODY_VERSION or not profile_image:
+        return False
+    refs_used = meta.get("reference_images")
+    first = refs_used.get("input_reference_image_1") if isinstance(refs_used, dict) else None
+    return first == profile_image and _drops_only(appearance, meta.get("final_prompt"))
+
+
 def _front_sidecar(character_name: str, signature: str) -> Dict[str, Any]:
     """The base front's sidecar (``model_refs/tpose_<sig>.json``), {} without one."""
     from app.core.model_refs import get_model_refs_dir
@@ -410,12 +503,15 @@ def _front_sidecar(character_name: str, signature: str) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _stored_base_for(character_name: str, identity: str, profile_image: str) -> Optional[str]:
+def _stored_base_for(character_name: str, identity: str, profile_image: str,
+                     appearance: str = "") -> Optional[str]:
     """The signature of the stored base set that belongs to ``identity``:
-    the newest front sidecar that names it (``base_identity``), else — a set
-    rendered before identities were recorded (no ``base_identity`` key) —
-    the newest one whose reference was the current profile image. None when
-    nothing stored fits. Read-only: nothing is renamed or rewritten."""
+    the newest front sidecar that names it (``base_identity``), else the
+    newest one rendered before Ruling A74a that stands for it by the carry-over
+    (``_carried_front`` with today's ``appearance``), else — a set rendered
+    before identities were recorded (no ``base_identity`` key) — the newest
+    one whose reference was the current profile image. None when nothing
+    stored fits. Read-only: nothing is renamed or rewritten."""
     from app.core.model_refs import get_model_refs_dir
     refs = get_model_refs_dir(character_name)
     try:
@@ -423,6 +519,7 @@ def _stored_base_for(character_name: str, identity: str, profile_image: str) -> 
     except OSError:
         return None
     named: List[Tuple[str, str]] = []
+    carried: List[Tuple[str, str]] = []
     legacy: List[Tuple[str, str]] = []
     for name in names:
         signature = name[len("tpose_"):-len(".json")]
@@ -433,12 +530,14 @@ def _stored_base_for(character_name: str, identity: str, profile_image: str) -> 
         if meta.get("base_identity"):
             if meta.get("base_identity") == identity:
                 named.append((stamp, signature))
+            elif appearance and _carried_front(meta, appearance, profile_image):
+                carried.append((stamp, signature))
             continue
         refs_used = meta.get("reference_images")
         first = refs_used.get("input_reference_image_1") if isinstance(refs_used, dict) else None
         if profile_image and first == profile_image:
             legacy.append((stamp, signature))
-    for pool in (named, legacy):
+    for pool in (named, carried, legacy):
         if pool:
             return max(pool)[1]
     return None
@@ -455,15 +554,21 @@ def base_signature(character_name: str, *, profile: Optional[Dict[str, Any]] = N
     from app.core.model_refs import find_ref_image
     if find_ref_image(character_name, "tpose", identity) is not None:
         return identity
-    stored = _stored_base_for(character_name, identity, _profile_image_id(character_name, profile)[0])
+    stored = _stored_base_for(character_name, identity, _profile_image_id(character_name, profile)[0],
+                              base_appearance(character_name, profile=profile, base_fragments=True))
     return stored or identity
 
 
 def prompts_current(character_name: str, signature: str, *, profile: Optional[Dict[str, Any]] = None) -> bool:
     """Whether the stored base ``signature`` was rendered with the current
-    prompt texts (its front sidecar's ``prompt_fingerprint``)."""
+    prompt texts (its front sidecar's ``prompt_fingerprint``, through the
+    Ruling A74a carry-over: ``recorded_fingerprint``)."""
     meta = _front_sidecar(character_name, signature)
-    return bool(meta) and meta.get("prompt_fingerprint") == prompt_fingerprint(character_name, profile=profile)
+    if not meta:
+        return False
+    current = prompt_fingerprint(character_name, profile=profile)
+    return recorded_fingerprint(character_name, signature, "front", meta, current=current,
+                                profile=profile) == current
 
 
 def stored_base_haired(character_name: str, bsig: str) -> Optional[bool]:
@@ -795,7 +900,7 @@ def generate_base_images(character_name: str, *, view: Optional[str] = None,
                 back_view=v == "back",
                 reference_image=reference,
                 sidecar_extra={"base_signature": bsig, "base_identity": identity,
-                               "prompt_fingerprint": fingerprint},
+                               "prompt_fingerprint": fingerprint, "prompt_rules": PROMPT_RULES},
                 # The character's identity/pose LoRAs as on its tpose
                 # render (tpose_loras, else loras); no slot LoRAs.
                 character_loras=True, **({"raise_load": True} if raise_load else {}))
@@ -925,6 +1030,7 @@ def base_info(character_name: str) -> Dict[str, Any]:
     signature = base_signature(character_name, profile=profile) if humanoid else ""
     images: Dict[str, Optional[str]] = {}
     image_meta: Dict[str, Optional[Dict[str, Any]]] = {}
+    current = prompt_fingerprint(character_name, profile=profile) if humanoid else ""
     for view in BASE_VIEWS:
         path = find_ref_image(character_name, _kind(view), signature) if signature else None
         try:
@@ -936,8 +1042,10 @@ def base_info(character_name: str) -> Dict[str, Any]:
         if stamp is not None:
             tile = image_tile_meta(path)
             # The texts this view was rendered with (model_overview compares
-            # them with the current ones for the OLDER_PROMPTS note).
-            tile["prompt_fingerprint"] = str(_view_sidecar(path).get("prompt_fingerprint") or "")
+            # them with the current ones for the OLDER_PROMPTS note; the
+            # Ruling A74a carry-over through ``recorded_fingerprint``).
+            tile["prompt_fingerprint"] = recorded_fingerprint(character_name, signature, view, _view_sidecar(path),
+                                                              current=current, profile=profile)
             image_meta[view] = tile
         else:
             image_meta[view] = None
@@ -952,7 +1060,7 @@ def base_info(character_name: str) -> Dict[str, Any]:
             logger.exception("Hair summary of %s failed", character_name)
     return {"pipeline": pipeline, "humanoid": humanoid,
             "signature": signature, "images": images, "image_meta": image_meta,
-            "prompt_fingerprint": prompt_fingerprint(character_name, profile=profile) if humanoid else "",
+            "prompt_fingerprint": current,
             "skin": _skin_info(character_name, signature) if humanoid else None,
             "status": base_status(character_name),
             "model": base_model_info(character_name, signature),
@@ -1236,9 +1344,9 @@ def side_arm_margin() -> float:
 #: the ``DRESS_KEEP`` sentence is the whole prompt, like the base views.
 DRESS_USE_CASE = "outfit_edit"
 #: The draft keeps the base negative minus its no-clothing words.
-DRAFT_NEGATIVE = ", ".join((HAIR_NEGATIVE, "detailed anatomy", POSE_NEGATIVE))
+DRAFT_NEGATIVE = ", ".join((HAIR_NEGATIVE, POSE_NEGATIVE))
 #: ``DRAFT_NEGATIVE`` of a haired base (``hair_text``): headwear only.
-HAIRED_DRAFT_NEGATIVE = ", ".join((HEADWEAR_NEGATIVE, "detailed anatomy", POSE_NEGATIVE))
+HAIRED_DRAFT_NEGATIVE = ", ".join((HEADWEAR_NEGATIVE, POSE_NEGATIVE))
 #: An image whose alpha never drops below this carries no matte (``cut_out``).
 CUTOUT_ALPHA = 16
 #: Drafts per two-step view at most: a draft whose composite fails its
@@ -5140,7 +5248,8 @@ def base_view_states(character_name: str, *, profile: Optional[Dict[str, Any]] =
                      ) -> Dict[str, Dict[str, str]]:
     """``{view: freshness}`` of the stored base views — what the Base body
     tab shows on each tile (``model_overview.base_view_freshness`` with the
-    view's recorded ``prompt_fingerprint`` against the current one, as
+    view's recorded ``prompt_fingerprint`` — ``recorded_fingerprint``, the
+    Ruling A74a carry-over — against the current one, as
     ``annotate_base_info`` calls it); ``missing`` for a view without a file."""
     from app.core import model_overview
     from app.core.model_refs import find_ref_image, image_tile_meta
@@ -5151,7 +5260,8 @@ def base_view_states(character_name: str, *, profile: Optional[Dict[str, Any]] =
     for view in BASE_VIEWS:
         path = find_ref_image(character_name, _kind(view), bsig)
         tiles[view] = ((str(image_tile_meta(path).get("created_at") or ""),
-                        str(_view_sidecar(path).get("prompt_fingerprint") or "")) if path else None)
+                        recorded_fingerprint(character_name, bsig, view, _view_sidecar(path), current=current,
+                                             profile=profile)) if path else None)
     front_created = (tiles.get("front") or ("", ""))[0]
     out: Dict[str, Dict[str, str]] = {}
     for view, tile in tiles.items():

@@ -50,9 +50,10 @@ frag text — an unfilled placeholder drops the fragment.
         body, legs clearly apart with open space visible between them"
     BALD = "completely bald, smooth clean-shaven head with no hair at all,
     the bare scalp and the bare back of the head fully visible, natural
-    eyebrows" (no ears clause), BODY = "a smooth, featureless mannequin-like
-    body without anatomical detail" ("sfw, no clothing" moved into the block),
-    no framing sentence. base_character(front) = "sfw, no clothing, " + [1].
+    eyebrows" (no ears clause), BODY = the natural-skin body text, written
+    out below (Ruling A74a, 2026-11-14: no safe-content tag opens the block
+    and the body text no longer asks for a plain surface), no framing
+    sentence. base_character(front) = BALD + ", " + BODY + ", " + [1].
     The word "hair" occurs once in the prompt (BALD's "with no hair at all").
 [3] Back (user test 2026-11-09: the long texts made Qwen invent things):
     base_prompt = VIEW_BACK, the whole prompt of the edit, written out
@@ -60,7 +61,7 @@ frag text — an unfilled placeholder drops the fragment.
 [4] Left/right: VIEW_LEFT / VIEW_RIGHT (written out below), no block;
     use cases base_front / base_view_back / base_view_side / base_view_side.
 [5] Negative (all views) = BASE = HAIR_NEG + ", clothing, underwear,
-    jewellery, detailed anatomy, " + POSE_NEG, then the ``base_body_negative``
+    jewellery, " + POSE_NEG (no anatomy word since Ruling A74a), then the ``base_body_negative``
     of every slot that APPLIES to Demo (flag irrelevant): marking applies
     (no applies_to) -> ", visible marking" (the loader strips the blanks);
     spot is male-only -> nothing. human declares none. So
@@ -103,7 +104,7 @@ frag text — an unfilled placeholder drops the fragment.
     "garments"), no "no clothing", no ``base_body_prompt`` text. For the
     long-tail profile of [10] the same sentence, and neither "long tail" nor
     "mannequin" appears in it. Negative = HAIR_NEG +
-    ", detailed anatomy, " + POSE_NEG (BASE without "clothing, underwear,
+    ", " + POSE_NEG (BASE without "clothing, underwear,
     jewellery") + ", visible marking".
 [12] The FINAL front prompt — what the image service sends: the base_front
     natural style with the block in its {character} slot
@@ -218,28 +219,29 @@ FEET = ("the whole figure from head to feet inside the frame with both hands ins
         "the head and below the feet")
 FEET_KW = "both feet and both hands fully inside the frame, empty margin above the head and below the feet"
 BALD = "completely bald with a smooth bare scalp"
-BODY = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin"
-BLOCK_HEAD = "sfw, " + BALD + ", " + BODY
+BODY = "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin"
+BLOCK_HEAD = BALD + ", " + BODY
 APPEARANCE = "female, 30 years old, green eyes, olive skin, average height, athletic build"
 APPEARANCE_BACK = "female, 30 years old, olive skin, average height, athletic build"
 HAIR_NEG = ("hair, long hair, short hair, ponytail, braid, bun, fringe, bangs, wig, headscarf, hat, hood, "
             "stubble on the scalp, hair on the shoulders, hair on the back")
 POSE_NEG = ("hands touching body, fists, curled fingers, fused fingers, mitten hands, cropped feet, feet cut off, "
             "cropped legs, close-up, portrait crop")
-BASE = HAIR_NEG + ", clothing, underwear, jewellery, detailed anatomy, " + POSE_NEG
+BASE = HAIR_NEG + ", clothing, underwear, jewellery, " + POSE_NEG
 NEGATIVE = BASE + ", visible marking"
 # [12] The base front after the prompt review (2026-11-11), written out by
 # hand with clean separators and the neutral stand-in fragments of frag_a /
-# frag_b: subject sentence, the character block (sfw, bald, mannequin body,
+# frag_b: subject sentence, the character block (bald, body text,
 # appearance), ONE framing clause, background, ONE lighting clause, focus,
-# then the pose text. Counted by hand: subject 15 words, block head 33 ("sfw"
-# 1, bald 7, body 25 — the natural-skin body text of 2026-11-13), appearance
-# 18 (incl. the two 3-word fixture fragments), framing 25, background 3,
-# lighting 11, focus 2, pose 40 = 147 words; "completely" is word 17 and
-# "unclothed" word 25 (15 + 1 + 7 + 2).
-TARGET = ("a full-body render of the character as a realistic 3D figure with lifelike skin textures, sfw, "
+# then the pose text. Counted by hand: subject 15 words, block head 22 (bald
+# 7, body 15 — the natural-skin body text of 2026-11-13 without the
+# plain-surface clause, Ruling A74a), appearance 18 (incl. the two 3-word
+# fixture fragments), framing 25, background 3, lighting 11, focus 2, pose
+# 40 = 136 words; "completely" is word 16 and "unclothed" word 24
+# (15 + 7 + 2).
+TARGET = ("a full-body render of the character as a realistic 3D figure with lifelike skin textures, "
           "completely bald with a smooth bare scalp, an unclothed body with realistic natural skin, visible pores, "
-          "subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin, "
+          "subtle skin tone variation, matte skin, "
           "female, 26 years old, blue eyes, light skin, average height, athletic build, slot fragment a, "
           "slot fragment b, the whole figure from head to feet inside the frame with both hands inside it and empty "
           "margin above the head and below the feet, plain neutral background, flat even shadowless lighting on the "
@@ -439,7 +441,7 @@ def main() -> int:
         print("[11] back draft")
         prompt, negative = base_body.draft_prompt(name, "back", profile=stored)
         check("draft prompt", prompt, DRAFT_BACK)
-        check("draft negative", negative, HAIR_NEG + ", detailed anatomy, " + POSE_NEG + ", visible marking")
+        check("draft negative", negative, HAIR_NEG + ", " + POSE_NEG + ", visible marking")
         prompt, _ = base_body.draft_prompt(name, "back", profile=long_tail)
         check("draft ignores the body slots", prompt, DRAFT_BACK)
         check("no 'no clothing' in the draft", "no clothing" in prompt, False)
@@ -464,8 +466,8 @@ def main() -> int:
         check("front final == TARGET", front_final, TARGET)
         check("block right after the subject", front_final.startswith(SUBJECT + ", " + BLOCK_HEAD + ", female"), True)
         words = front_final.split()
-        check("bald at word 17, unclothed at word 25, 147 words",
-              (words.index("completely") + 1, words.index("unclothed") + 1, len(words)), (17, 25, 147))
+        check("bald at word 16, unclothed at word 24, 136 words",
+              (words.index("completely") + 1, words.index("unclothed") + 1, len(words)), (16, 24, 136))
         check("pose right after the style", ", sharp focus, standing upright facing the camera" in front_final, True)
         for view, want in (("back", VIEW_BACK), ("left", VIEW_LEFT), ("right", VIEW_RIGHT)):
             for family in ("natural", "keywords"):

@@ -656,7 +656,7 @@ _DEFAULT_IMAGE_USE_CASES = {
     # ``{character}`` slot right after the subject clause takes the caller's
     # character block (``style_character``, filled in get_use_case_prompts) —
     # since the prompt review of 2026-11-11 the block also carries the bald
-    # head and the mannequin body (base_body.base_character), so the words
+    # head and the body text (base_body.base_character), so the words
     # that shape the figure sit in the first 30 words instead of at 167/191
     # of 199. The pose text follows the style after a comma. ONE framing
     # clause (the feet/margin wording of the user test 2026-11-09: without it
@@ -872,9 +872,9 @@ def image_model_to_family(image_model: str) -> str:
 #: exactly as written — an admin who edits the text keeps what they typed.
 FABRIC_CLAUSE = " and fabric"
 
-#: Where a style takes the caller's CHARACTER BLOCK (the base-body views:
-#: "sfw, no clothing, <appearance>" right after the subject clause, user
-#: directive 2026-11-09 — character details first).
+#: Where a style takes the caller's CHARACTER BLOCK (the base-body front:
+#: head, body text and appearance, ``base_body.base_character``, right after
+#: the subject clause, user directive 2026-11-09 — character details first).
 CHARACTER_SLOT = "{character}"
 
 

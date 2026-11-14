@@ -2,31 +2,43 @@
 ``claude-out/kai-base-skin/edit-step/``: ``edit_spike.py``, ``analyse.py``,
 ``measurements.json``).
 
-WHY. The base front was rendered with a "smooth featureless mannequin-like"
-body text so the anatomy stays neutral — and it looked like plastic: no
-pores, no tone variation (``base_body.BODY_TEXT`` names natural skin since
-2026-11-13; this step stays as the second safeguard). Asking the text-to-image render for real skin brought the
-anatomy back. The winner of the spike keeps the neutral render and adds the
+WHY. The base front was rendered with a "smooth featureless" body text — and
+it looked like plastic: no pores, no tone variation (``base_body.BODY_TEXT``
+names natural skin since 2026-11-13, and since Ruling A74a the base prompts
+no longer keep the body plain; this step stays as the second safeguard for
+the skin). The winner of the spike keeps the neutral render and adds the
 skin afterwards in two steps:
 
 1. ONE image edit of the stored neutral front (occasion ``outfit_front``,
    the routing of the dressed front edit; use case
    ``base_body.DRESS_USE_CASE`` — no style, no negative), the front on
    neutral grey padded to the square T-pose size, prompt ``skin_prompt``.
-   The edit draws real skin — and also moves the face, and paints nipples
-   or creases where the neutral body has none.
+   The edit draws real skin — and also moves the face, and paints shapes
+   or creases the neutral front does not have.
 2. A local CPU frequency transfer (``transfer_detail``): shape, colour and
    face come from the neutral front, only the fine detail (the edit minus
    its Gaussian blur at ``SKIN_SIGMA``) from the edit, and not where the
-   edit's nipple-scale band departs from the neutral one by more than
-   ``SKIN_GUARD_DL`` L* (a shape the edit invented). The alpha is the
-   neutral front's.
+   edit's fine-shape band (``_band``) departs from the neutral one by more
+   than ``SKIN_GUARD_DL`` L* (a shape the edit invented or moved). The alpha
+   is the neutral front's.
 
 Measured on the spike (Kai, Glut; Qwen2.1 Turbo, the winner ``A+hf3.0g``):
 skin detail (``body_hf``; reference photo 3.26) Kai 0.78 -> 1.69, Glut
-1.04 -> 1.57; chest and groin blob/contrast x1.00-1.01 of the neutral;
-silhouette IoU 1.0; face SSIM 1.0; hand gate ok. The raw edit alone: face
-SSIM 0.60-0.64, chest blob x1.44 on Kai.
+1.04 -> 1.57; torso blob/contrast x1.00-1.01 of the neutral; silhouette
+IoU 1.0; face SSIM 1.0; hand gate ok. The raw edit alone: face SSIM
+0.60-0.64, torso blob x1.44 on Kai.
+
+THE GUARD SINCE RULING A74a. The base front now shows the body's own detail
+on purpose, so the guard no longer stands for "the neutral body has none".
+It never did compare against a plain body, though: it compares the edit
+with the NEUTRAL front it edits, and it refuses nothing — it only takes no
+fine detail from the edit where the two depart (the one refusal of the step
+is the silhouette, ``MIN_DIRECT_IOU``). Detail the neutral front already
+shows and the edit keeps passes; detail the edit moves or redraws keeps the
+neutral front's own there — taking the edit's high-pass over a shifted shape
+would draw it twice. So the guard stays as it is: its purpose (shape comes
+from the neutral front) is unchanged, and ``SKIN_GUARD_DL`` is part of
+``fingerprint_part``, so retuning it would age every stored base.
 
 STORAGE. The neutral front stays as ``model_refs/tpose_neutral_<bsig>.png``
 (+ sidecar; ``outfit_cache_gc.REF_PREFIXES`` files it under the base
@@ -76,8 +88,8 @@ SKIN_BODY_HAIR_MALE = ", with fine natural body hair on the forearms and the low
 
 #: Gaussian sigma (px, at the stored front's size) splitting shape from detail.
 SKIN_SIGMA = 3.0
-#: L* departure of the nipple-scale band (G3 - G15 of L*) above which the
-#: edit invented a shape there — no detail is taken from it.
+#: L* departure of the fine-shape band (G3 - G15 of L*) above which the
+#: edit invented or moved a shape there — no detail is taken from it.
 SKIN_GUARD_DL = 3.0
 #: The invented-shape mask grows by this many pixels.
 SKIN_GUARD_DILATE = 6
@@ -194,8 +206,8 @@ def frequency_transfer(neutral: np.ndarray, edit: np.ndarray, neutral_mask: np.n
     ``SKIN_SIGMA``; it replaces the neutral's own detail with the weight of
     the feathered keep mask: the figure of both (the neutral's shrunk by
     ``SKIN_BODY_ERODE``) minus the face (``face_region``) minus where the
-    nipple-scale band of L* departs by more than ``SKIN_GUARD_DL`` (dilated
-    ``SKIN_GUARD_DILATE``) — a shape the edit invented."""
+    fine-shape band of L* departs by more than ``SKIN_GUARD_DL`` (dilated
+    ``SKIN_GUARD_DILATE``) — a shape the edit invented or moved."""
     from scipy import ndimage
     a = np.asarray(neutral, dtype=np.float64)
     b = np.asarray(edit, dtype=np.float64)

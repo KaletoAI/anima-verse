@@ -41,7 +41,8 @@ EXPECTED, BY HAND FROM THE BRIEF (D1-D5) AND THE HUMAN MANIFEST
     description "long blonde hair", hair_forward_m 0.004} (no second item), worn, plain; no hair_method /
     hair_forward_m left in the profile.
     No rebuild — byte for byte against the OLD code (8ffa6e64) on the pre-migration storage: base_identity
-    (Kai, Ana) equal, prompt_fingerprint equal (the plain body's hair text is the one the old code rendered
+    (Kai, Ana) equal, prompt_fingerprint equal (the old code with today's base texts of Ruling A74a, which
+    changed them on its own; the plain body's hair text is the one the old code rendered
     the base with: Kai T, Ana "" — HairDeck hair had a bald base), base_body.hair_text equal; Kai's base
     files (every file under model_refs/ and model3d/) unchanged (sha256), the stored base's prompts current
     (base_prompts_freshness "current"); wanted_figure(Kai): shape = bsig, hair "body", hair_style "".
@@ -101,6 +102,12 @@ config.load(paths.get_config_path(), instance_path=Path(os.environ["INSTANCE_DIR
 from app.plugins.loader import discover_packages
 discover_packages(Path(sys.argv[1]), force=True)
 from app.core import base_body
+# Ruling A74a (2026-11-14) changed the base texts on its own — not part of the hairstyle migration: the old
+# code gets today's texts (the negative's default head included, bound when the function was defined), so
+# the proof compares only what the migration touches.
+for key, value in json.loads(os.environ["A74A_TEXTS"]).items():
+    setattr(base_body, key, value)
+base_body.base_negative.__kwdefaults__["head"] = base_body.BASE_NEGATIVE
 out = {}
 for name in sys.argv[2:]:
     out[name] = {"identity": base_body.base_identity(name), "fingerprint": base_body.prompt_fingerprint(name),
@@ -146,8 +153,13 @@ def old_code(root: Path, names) -> dict:
                               ":(exclude)shared/surface_textures", ":(exclude)shared/bench",
                               ":(exclude)shared/test-vectors"], check=True, capture_output=True).stdout
     subprocess.run(["tar", "-x", "-C", str(old)], input=archive, check=True)
+    from app.core import base_body
+    a74a = {"BASE_BLOCK_HEAD": "", **{key: getattr(base_body, key) for key in (
+        "BODY_TEXT", "BODY_NEGATIVE", "BASE_NEGATIVE", "HAIRED_BASE_NEGATIVE", "DRAFT_NEGATIVE",
+        "HAIRED_DRAFT_NEGATIVE")}}
     run = subprocess.run([sys.executable, "-c", OLD_PROBE, str(root / "plugins"), *names], cwd=str(old),
-                         capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(old)})
+                         capture_output=True, text=True,
+                         env={**os.environ, "PYTHONPATH": str(old), "A74A_TEXTS": json.dumps(a74a)})
     line = next((ln for ln in run.stdout.splitlines() if ln.startswith("RESULT ")), "")
     if not line:
         print(run.stdout[-2000:], run.stderr[-3000:])

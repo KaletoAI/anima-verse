@@ -45,9 +45,10 @@ written, 1-based, split on whitespace).
     names "lighting" once and neither "relit" nor "uniform illumination".
     base_body.BALD_HEAD == "completely bald with a smooth bare scalp",
     BODY_TEXT == "an unclothed body with realistic natural skin, visible
-    pores, subtle skin tone variation, matte skin, a plain smooth chest and
-    groin like a store mannequin", BASE_BLOCK_HEAD == "sfw"; none of the three contains
-    "no " or "without". model_refs.BASE_FRONT_POSE_PROMPT is 40 words.
+    pores, subtle skin tone variation, matte skin" (Ruling A74a: no
+    plain-surface clause, and the block opens with the head — no
+    safe-content tag, ``BASE_BLOCK_HEAD`` is gone); neither contains "no "
+    or "without". model_refs.BASE_FRONT_POSE_PROMPT is 40 words.
 [5] Dressed front: DRESS_USE_CASE == "outfit_edit", whose style and negative
     are empty in both families; base_body._edit_prompt("front", "they now
     wear a red dress") starts with "Keep the image exactly as it is" and
@@ -198,11 +199,10 @@ def main() -> int:
               (nat.count("lighting"), "relit" in nat, "uniform illumination" in nat), (1, False, False))
         check("BALD_HEAD", base_body.BALD_HEAD, "completely bald with a smooth bare scalp")
         check("BODY_TEXT", base_body.BODY_TEXT,
-              "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin, a plain smooth chest and groin like a store mannequin")
-        check("BASE_BLOCK_HEAD", base_body.BASE_BLOCK_HEAD, "sfw")
+              "an unclothed body with realistic natural skin, visible pores, subtle skin tone variation, matte skin")
+        check("no BASE_BLOCK_HEAD (Ruling A74a)", hasattr(base_body, "BASE_BLOCK_HEAD"), False)
         check("no negation in the block words",
-              any(w in t for t in (base_body.BALD_HEAD, base_body.BODY_TEXT, base_body.BASE_BLOCK_HEAD)
-                  for w in ("no ", "without")), False)
+              any(w in t for t in (base_body.BALD_HEAD, base_body.BODY_TEXT) for w in ("no ", "without")), False)
         from app.core import model_refs
         check("pose text 40 words", len(words(model_refs.BASE_FRONT_POSE_PROMPT)), 40)
 
