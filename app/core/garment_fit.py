@@ -166,7 +166,10 @@ SIDE_DEEP_M = 0.03
 #: atlas column is left out; a card the drape tears is draped once more from the fit (``DRAPE_TEAR_STRETCH``; Kira 5
 #: cards, segments drawn out 10-15x across the shoulder); open scalp gets flat fill cards over a shaded cap
 #: (``scalp_fill_cards``; Ylva's forehead band 50 -> 77 % hair); without a manual width the width is automatic
-#: (``auto_width_scale``; Ylva's reach beyond the head at the ears 32.1 -> 23.8 mm placed).
+#: (``auto_width_scale``; Ylva's reach beyond the head at the ears 32.1 -> 23.8 mm placed). Ruling T-U2b (same
+#: version, no hair 14 fit was live yet): the cap is cut along a level line CAP_TUCK_M above the hairline instead of
+#: keeping whole triangles (Ylva's front edge: 5 teeth up to 10.6 mm -> 0), the fill cards run 3 mm past it, fill the
+#: band along it and lie 3 mm apart (forehead window hair 77 -> 90 %, cap 21 -> 7 %).
 #: clothing 10 (2026-11-14, Ruling A35 — one CPU refit of every clothing fit, no hub job): the limb and trunk frames
 #: of a refit / outfit-body transfer come from the skeleton's bind joints (``FRAME_BASIS``; Kai's jeans on
 #: ``obf6474c3b``: off the left thigh 0.1478 -> 0.0002), the sleeves are re-centred on their arms

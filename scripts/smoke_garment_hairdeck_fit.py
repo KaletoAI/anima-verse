@@ -44,10 +44,10 @@ Fixture (metres, +y up, the body faces +z)
     The median of COLOR_0 is 0.25 per channel, gains 2.415 / 1.274 / 0.293 -> every corrected hair colour (hence
     the median) = (0.6038, 0.3185, 0.0732) +- 0.01, alpha 1. The scalp cap's colour is the median (CAP_COLOUR_PERCENTILE
     50, FIT_VERSION hair 6) of the corrected colours = the same value. Without a target the colours stay 0.25 (+- 1e-9) and colour_target None.
-    Since FIT_VERSION hair 14 the cap is shaded where fill cards lie on it ([7]): a cap vertex whose nearest hair
-    vertex is d away keeps the median for d <= FILL_COVER_M 0.008 and takes 1 - 0.4 * min(1, (d - 0.008) / 0.002) of
-    it beyond. The shell here lies 0.110 - 0.1015 = 8.5 mm off the cap, so the cap away from the inner layer is
-    shaded to 0.9 of the median or darker (the rule recounted per vertex); none darker than 0.6.
+    Since FIT_VERSION hair 14 the cap is shaded where fill cards lie on it ([7]; Ruling T-U2b: by the distance d to
+    the nearest FILL vertex): 0.6 of the median for d <= FILL_SHADE_NEAR_M 0.006, the median for d >= 0.010,
+    1 - 0.4 * (0.010 - d) / 0.004 between (recounted per vertex). The shell here lies 0.110 - 0.1015 = 8.5 mm off the
+    cap, so most of the cap is open and filled: cap vertices at 0.6 exist, none darker.
 [4] Scalp cap. Front hairline = lowest hair vertex with z > 0.05 and |x| < 0.03: the outer shell's lowest ring
     h = 0.010 -> y = 0.8 + 2 * (0.4 + 0.010) = 1.62 (its vertex at segment 0 is at x 0, z 0.108). The push leaves
     that ring where the placement put it (FIT_VERSION hair 7): the shell sits at the layer map's fixed point (see
@@ -55,14 +55,18 @@ Fixture (metres, +y up, the body faces +z)
     shell (0.010 out > CARD_CLEAR_M). -> hairline = icp_scale * 0.41 + icp t_y +- 0.0002 (the observed 1.9999 x 0.41
     + 0.80002 = 1.61998), and in [1.619, 1.625] (the [1] tolerances on scale and t_y). Until hair 6 the spread lifted
     the ring 1.3 mm (1.62134).
-    Cap = head-sphere triangles (all three vertices Head > 0.5) with centroid above the hairline and a hair vertex
-    within 0.03 (the shell is 0.01 away), whose centroid is not deeper than CAP_INNER_DEPTH_M = VOX_M 0.0034 inside
-    the body SDF. Centroids of the outer sphere's triangles: band k (polar angles pi k/61 .. pi (k+1)/61) has two
-    triangles per segment at y = 1.6 + 0.1 (2 cos a + cos b) / 3 and 1.6 + 0.1 (cos a + 2 cos b) / 3; a chord
-    centroid lies < 0.1 mm inside the sphere, so the depth filter keeps all of them. Band 25: 1.62629 / 1.62463,
-    band 26: 1.62129 / 1.61961. With the observed hairline 1.61998 that is the pole band 120 + bands 1..25 x 240 +
-    band 26's upper triangles 120 = 6240 triangles; the smoke recounts it by this rule from the fixture arrays and
-    the reported hairline. cap_tris_below_hairline == 0, every cap centroid above the hairline, inner_wall_dropped 0; the cap
+    Cap = head-sphere triangles (all three vertices Head > 0.5) reaching above the cap's edge, the hairline +
+    CAP_TUCK_M 0.003 (FIT_VERSION hair 14, Ruling T-U2b), with a hair vertex within 0.03 of the centroid (the shell
+    is 0.01 away), whose centroid is not deeper than CAP_INNER_DEPTH_M = VOX_M 0.0034 inside the body SDF; each CUT
+    at the edge level (``clip_patch``): all three vertices at or above it -> 1 triangle, two -> 2, one -> 1. Rings
+    of the outer sphere (r 0.1, polar angle pi i / 61): ring 25 at 1.6 + 0.1 cos(25 pi / 61) = 1.627951, ring 26 at
+    1.622966. With the observed hairline 1.619974 the edge is 1.622974 (reported 1.62297): ring 26 lies 8 um below
+    it, so the pole band
+    120 + bands 1..24 x 240 + band 25 cut (120 triangles with two vertices on ring 25 -> 2 each, 120 with one -> 1
+    each = 360) = 6240 triangles; the smoke recounts it by this rule from the fixture arrays and the reported
+    hairline (``clip_count``). Until hair 14 whole triangles with the centroid above the hairline were kept (the same
+    6240 here, by chance — on a real forehead their teeth hung up to 10.6 mm below their neighbours).
+    cap_tris_below_hairline == 0, every cap centroid above the hairline, inner_wall_dropped 0; the cap
     vertices are offset 0.0015 along the outward normal -> radius 0.1015 +- 0.0005; every cap vertex Head 1.
     The cap's vertices follow the hair's in the merged mesh (``report.vertices`` hair / cap), the fill cards after it.
     Two-wall body, ``_scalp_cap`` called with the same hair positions and that body's SDF: the outer sphere's
@@ -101,12 +105,24 @@ Fixture (metres, +y up, the body faces +z)
       atan2(z, x) (+- 1e-9), y falling from the root row on;
     - rows 0.04 / 8 = 5 mm apart along the tangent, put back on the 0.1025 sphere: chord 2 * 0.1025 *
       sin(atan(0.005 / 0.1025) / 2) = 0.205 * sin(0.0243710) = 0.0049955 (+- 1e-6); at most FILL_ROWS 9 rows, at least 3; none below 1.65;
-    - v from 1 at the root row, 1/8 per row, the seed row (v 0.5) in every card; seed rows FILL_SPACING_M 6 mm or
-      more apart (seeds 6 mm apart on the cap, moved out from r <= 0.1015 to 0.1025);
-    - every seed at x > 0 (the open side; the radial move keeps the azimuth);
+    - v from 1 at the root row to 0 at the tip (below);
+    - every card's root at x > 0 (the open side; the radial move keeps the azimuth);
     - no row turns: a card stops before a row whose direction turns by more than 60 deg (FILL_MAX_TURN_COS 0.5 —
       over the crown away-from-crown flips), so the meridian rule above holds for every card.
-    Hair over the whole cap (every cap vertex at r 0.105): no open triangle, no card.
+    Hair over the whole cap (every cap vertex at r 0.105): no open triangle, no card. With ``front`` = (-1, 1.66)
+    (the hair-ending band, Ruling T-U2b) the cap triangles whose centroid lies below 1.66 are open whatever hair
+    lies near: r 0.1015, rings 17..21 at y 1.66503 / 1.66090 / 1.65668 / 1.65227 / 1.64775; band 17's centroids
+    (1.66365 / 1.66228) are above, bands 18 and 19 below (240 each), band 20's upper triangles (centroid 1.65076)
+    in the cap (> 1.65) -> open_tris 240 + 240 + 120 = 600, cards > 0.
+    v by the distance along the card (Ruling T-U2b: a card cut short still ends in the strip's tips): rows equally
+    spaced -> v 1, 1 - 1/(n-1), .. 0 (+- 1e-9) on every card that does not reach the floor; a card that lands ends
+    with a row on the floor: y 1.65 (+- 0.5 mm: the step is cut where its straight line crosses the floor, then put
+    back on the sphere), its chord shorter than a full row's.
+[8] ``clip_patch`` by hand: triangle (0,0,0) (1,0,0) (0,1,0). Level y - 0.25: vertex 2 alone above -> one triangle
+    (2, (0,0.25,0), (0.75,0.25,0)), area 0.5 * 0.75^2 = 0.28125, normal +z kept. Level 0.25 - y: vertices 0, 1 above
+    -> two triangles, area 0.5 - 0.28125 = 0.21875, normal +z. Two triangles (0,1,2) (1,3,2) with 3 = (1,1,0), level
+    y - 0.5: the shared edge 1-2 is crossed once -> 3 new vertices, not 4: (0,0.5), (0.5,0.5), (1,0.5); kept area =
+    the square's upper half 0.5.
 """
 import json
 import math
@@ -293,10 +309,18 @@ def hair_glbs(inner=True):
     return out[0], out[1]
 
 
-def centroid_count(r, hairline):
-    """Triangles of the fixture head sphere of radius ``r`` whose centroid lies above ``hairline``."""
+def clip_count(r, edge):
+    """Triangles of the fixture head sphere of radius ``r`` cut at y ``edge``: three vertices at or above -> 1,
+    two -> 2, one -> 1."""
     P, F = uv_sphere(r, (0, 1.6, 0), 61, 120)
-    return int((P[F].mean(1)[:, 1] > hairline).sum())
+    up = (np.asarray(P)[F][:, :, 1] >= edge).sum(1)
+    return int((up == 3).sum() + 2 * (up == 2).sum() + (up == 1).sum())
+
+
+def reach_count(r, edge):
+    """Triangles of the fixture head sphere of radius ``r`` with a vertex above y ``edge`` (the cap's candidates)."""
+    P, F = uv_sphere(r, (0, 1.6, 0), 61, 120)
+    return int((np.asarray(P)[F][:, :, 1].max(1) > edge).sum())
 
 
 class _SphereSDF:
@@ -366,8 +390,8 @@ def scalp_fill(gh):
     V, F, UV, N, card, info = gh.scalp_fill_cards(Ps, Fc, out, sdf, np.array([0, 1.7, 0]), 1.65)
     print("       " + json.dumps(info))
     check(info["cards"] > 0 and len(V) == len(UV) == len(N) == len(card), f"{info['cards']} cards")
-    rows_ok = width_ok = edge_ok = az_ok = down_ok = step_ok = v_ok = True
-    seeds = []
+    rows_ok = width_ok = edge_ok = az_ok = down_ok = step_ok = v_ok = land_ok = True
+    seeds, n_landed = [], 0
     for c in range(int(card.max()) + 1):
         Vk, Uk = V[card == c], UV[card == c]
         L, R = Vk[0::2], Vk[1::2]
@@ -380,23 +404,55 @@ def scalp_fill(gh):
         az = np.arctan2(M[:, 2], M[:, 0])
         az_ok &= bool(np.allclose(az, az[0], atol=1e-9))
         down_ok &= bool(np.all(np.diff(M[:, 1]) < 0))
-        step_ok &= bool(np.allclose(np.linalg.norm(np.diff(M, axis=0), axis=1), 0.0049955, atol=1e-6))
         v = Uk[0::2, 1]
-        v_ok &= bool(np.allclose(np.diff(v), -0.125) and np.any(np.isclose(v, 0.5)) and v[0] <= 1.0)
-        seeds.append(M[np.isclose(v, 0.5)][0] + [0, 1.6, 0])
+        chords = np.linalg.norm(np.diff(M, axis=0), axis=1)
+        landed = bool(chords[-1] < 0.0049955 - 1e-6)
+        if landed:
+            land_ok &= abs(M[-1, 1] + 1.6 - 1.65) <= 0.0005
+            step_ok &= bool(np.allclose(chords[:-1], 0.0049955, atol=1e-6))
+            n_landed += 1
+        else:
+            v_ok &= bool(np.allclose(v, 1 - np.arange(n) / (n - 1), atol=1e-9))
+            step_ok &= bool(np.allclose(chords, 0.0049955, atol=1e-6))
+        v_ok &= bool(np.isclose(v[0], 1.0) and np.isclose(v[-1], 0.0) and np.all(np.diff(v) < 0))
+        seeds.append(M[0] + [0, 1.6, 0])
     check(rows_ok, "3..9 rows, none below 1.65, row centres at r 0.1025")
     check(width_ok and edge_ok, "rows 12 mm wide, their vertices at r 0.1026755")
     check(az_ok and down_ok, "every card down its seed's meridian (away from the crown)")
-    check(step_ok, "rows 4.9955 mm apart")
-    check(v_ok, "v 1/8 per row from the root, the seed row v 0.5 in every card")
+    check(step_ok, "rows 4.9955 mm apart (a landing row shorter)")
+    check(land_ok and n_landed > 0, f"{n_landed} cards land with a row on the floor 1.65 (+- 0.5 mm)")
+    check(v_ok, "v from 1 at the root to 0 at the tip, by the distance along the card")
     S = np.asarray(seeds)
-    dmin = min(np.linalg.norm(S[i] - S[j]) for i in range(len(S)) for j in range(i))
-    check(dmin >= 0.006, f"seed rows >= 6 mm apart ({dmin * 1000:.2f} mm)")
     check(gh.FILL_MAX_TURN_COS == 0.5 and bool((S[:, 0] > 0).all()),
-          f"every seed on the open side (x min {S[:, 0].min():.4f})")
+          f"every card on the open side (root x min {S[:, 0].min():.4f})")
     full = (Ps - [0, 1.6, 0]) * (0.105 / 0.1015) + [0, 1.6, 0]
     V2, _, _, _, _, info2 = gh.scalp_fill_cards(Ps, Fc, full, sdf, np.array([0, 1.7, 0]), 1.65)
     check(len(V2) == 0 and info2["open_tris"] == 0 and info2["cards"] == 0, f"hair over all of the cap: none {info2}")
+    V3, _, _, _, _, info3 = gh.scalp_fill_cards(Ps, Fc, full, sdf, np.array([0, 1.7, 0]), 1.65, front=(-1.0, 1.66))
+    check(info3["open_tris"] == 600 and info3["cards"] > 0, f"front band below 1.66: 600 open triangles {info3}")
+
+
+def clip_by_hand(gh):
+    def area(P, F):
+        return float(0.5 * np.linalg.norm(np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]]), axis=1).sum())
+
+    def normals_z(P, F):
+        return bool((np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]])[:, 2] > 0).all())
+    T = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], float)
+    F = np.array([[0, 1, 2]])
+    P1, F1 = gh.clip_patch(T, F, T[:, 1] - 0.25)
+    check(len(F1) == 1 and np.isclose(area(P1, F1), 0.28125) and normals_z(P1, F1)
+          and np.allclose(sorted(map(tuple, P1[F1[0]].round(9).tolist())), [(0, 0.25, 0), (0, 1, 0), (0.75, 0.25, 0)]),
+          f"one vertex above: 1 triangle, area 0.28125 ({area(P1, F1)})")
+    P2, F2 = gh.clip_patch(T, F, 0.25 - T[:, 1])
+    check(len(F2) == 2 and np.isclose(area(P2, F2), 0.21875) and normals_z(P2, F2),
+          f"two above: 2 triangles, area 0.21875 ({area(P2, F2)})")
+    Q = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0]], float)
+    P3, F3 = gh.clip_patch(Q, np.array([[0, 1, 2], [1, 3, 2]]), Q[:, 1] - 0.5)
+    new = P3[4:]
+    check(len(new) == 3 and np.allclose(sorted(map(tuple, new[:, :2].round(9).tolist())), [(0, 0.5), (0.5, 0.5), (1, 0.5)])
+          and np.isclose(area(P3, F3), 0.5) and normals_z(P3, F3),
+          f"shared edge crossed once: 3 new vertices, area 0.5 ({len(new)}, {area(P3, F3)})")
 
 
 def main() -> int:
@@ -452,13 +508,12 @@ def main() -> int:
         n_cap = rep["vertices"]["cap"]
         Cc = np.asarray(g.colors[n_hair:n_hair + n_cap])
         from scipy.spatial import cKDTree
-        d_cap, _ = cKDTree(np.asarray(g.positions[:n_hair])).query(np.asarray(g.positions[n_hair:n_hair + n_cap]))
-        shade = 1 - 0.4 * np.clip((d_cap - 0.008) / 0.002, 0, 1)
+        d_cap, _ = cKDTree(np.asarray(g.positions[n_hair + n_cap:])).query(np.asarray(g.positions[n_hair:n_hair + n_cap]))
+        shade = 1 - 0.4 * np.clip((0.010 - d_cap) / 0.004, 0, 1)
         check(len(Cc) > 0 and bool(np.all(np.abs(Cc[:, :3] - lin * shade[:, None]) <= 0.01)),
               "cap colour = median = target, shaded by the fill rule")
-        check(rep["vertices"]["fill"] > 0 and bool(np.all(shade[d_cap >= 0.0085] <= 0.9))
-              and float(shade.min()) >= 0.6, f"fill cards on the open cap ({rep['fill']}), the cap under them "
-              f"0.9 or darker, none below 0.6 (min {shade.min():.3f})")
+        check(rep["vertices"]["fill"] > 0 and bool((shade == 0.6).any()) and float(shade.min()) >= 0.6,
+              f"fill cards on the open cap ({rep['fill']}), the cap under them 0.6, none darker")
         check(gh.CAP_COLOUR_PERCENTILE == 50, "the cap takes the median colour (CAP_COLOUR_PERCENTILE 50)")
         plain = gh.fit_hairdeck(nohead, proxy, body, colour_target=None, **NO_PLACEMENT)
         check(bool(np.all(np.abs(np.asarray(plain.garment.colors[:n_hair])[:, :3] - 0.25) <= 1e-9))
@@ -475,9 +530,11 @@ def main() -> int:
         placed_ring = m["icp_scale"] * 0.41 + rep["icp"]["translation"][1]
         check(abs(hl - placed_ring) <= 0.0002 and 1.619 <= hl <= 1.625,
               f"hairline {hl} = the placed ring {placed_ring:.5f} +- 0.2 mm (not pushed), in [1.619, 1.625]")
-        want = centroid_count(0.1, hl)
-        check(m["cap_tris"] == want and want > 0,
-              f"cap_tris {m['cap_tris']} == {want} (outer triangles above the hairline)")
+        edge = hl + 0.003
+        check(gh.CAP_TUCK_M == 0.003 and abs(rep["cap"]["edge_y"] - edge) < 1e-5, f"cap edge {rep['cap']['edge_y']}")
+        want = clip_count(0.1, edge)
+        check(m["cap_tris"] == want and want == 6240,
+              f"cap_tris {m['cap_tris']} == {want} == 6240 (outer triangles cut at the edge)")
         check(rep["cap"]["inner_wall_dropped"] == 0, "single wall: nothing dropped as inner wall")
         check(m["cap_tris_below_hairline"] == 0, f"cap_tris_below_hairline {m['cap_tris_below_hairline']} == 0")
         I = np.asarray(g.indices)
@@ -500,7 +557,7 @@ def main() -> int:
                         bounds=(Xh.min(0) - SDF_MARGIN_M, Xh.max(0) + SDF_MARGIN_M))
         V2, F2, _, hl2, info2 = gh._scalp_cap(B2, dense_weights(B2)[:, joint_index(B2, "head")], Xh, sdf2)
         r2 = np.linalg.norm(V2 - [0, 1.6, 0], axis=1)
-        inner_want = centroid_count(0.094, hl2)
+        inner_want = reach_count(0.094, hl2 + 0.003)
         check(abs(hl2 - hl) <= 1e-5 and len(F2) == want, f"two walls: cap {len(F2)} == {want} outer triangles")
         check(bool(np.all(np.abs(r2 - 0.1015) <= 0.0005)), f"two walls: every cap vertex on the outer wall "
               f"(radius {r2.min():.5f}..{r2.max():.5f})")
@@ -533,6 +590,9 @@ def main() -> int:
 
         print("[7] scalp fill")
         scalp_fill(gh)
+
+        print("[8] clip_patch")
+        clip_by_hand(gh)
 
     print("ALL OK" if not FAILS else "FAILED: " + ", ".join(FAILS))
     return 1 if FAILS else 0
