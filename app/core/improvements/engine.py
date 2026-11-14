@@ -188,6 +188,41 @@ def _needs_media(type_id: str) -> bool:
     return True if improvement_type is None else bool(improvement_type.needs_media)
 
 
+def _held_by_pause(row: Dict[str, Any]) -> str:
+    """The character whose paused automatic generation holds this step (Ruling A42), else "": a type that
+    generates media (``needs_media``; the CPU-only ones run) working on one character
+    (``ImprovementType.subject_character``)."""
+    if not _needs_media(row["type_id"]):
+        return ""
+    improvement_type = registry.get(row["type_id"])
+    if improvement_type is None:
+        return ""
+    from app.core import generation_pause
+    name = improvement_type.subject_character(row["candidate_key"])
+    return name if name and generation_pause.is_paused(name) else ""
+
+
+def held_rows(character_name: str) -> List[Dict[str, Any]]:
+    """The pending steps the character's pause holds (Ruling A42), in queue order — a forced entry ("Run now",
+    a click) is not held."""
+    forced = {i["id"] for i in store.list_all() if i["forced"]}
+    return [r for r in ordered_queue() if r["status"] == "pending" and r["improvement_id"] not in forced
+            and _held_by_pause(r) == character_name]
+
+
+def cancel_held(character_name: str, improvement_id: str, key: str) -> bool:
+    """The Figure tab's Cancel of a held step (Ruling A42): skipped like a step that was given up, retryable in
+    the Improvements tab, no attempt counted — nothing of it ran. True when it was held."""
+    from app.core import generation_pause
+    if not any(r["improvement_id"] == improvement_id and r["candidate_key"] == key
+               for r in held_rows(character_name)):
+        return False
+    store.mark_result(improvement_id, key, status="skipped", error=generation_pause.IMPROVEMENT_CANCELLED,
+                      count_attempt=False)
+    _close_if_finished(improvement_id)
+    return True
+
+
 def run_now(improvement_id: str) -> Dict[str, Any]:
     """The admin's "Run now": force the entry and submit its next pending step
     NOW — the following ones go out tick by tick, all past the idle window,
@@ -302,6 +337,7 @@ def tick() -> Dict[str, Any]:
     now = utc_now()
     deferred = 0
     held = 0
+    paused = 0
     # Forced entries go first even when the gates are open: the admin asked
     # for them. Stable sort, so each group keeps the queue order.
     rows = sorted(ordered_queue(), key=lambda r: r["improvement_id"] not in forced)
@@ -312,6 +348,10 @@ def tick() -> Dict[str, Any]:
             continue
         if media_off and _needs_media(row["type_id"]):
             held += 1
+            continue
+        if row["improvement_id"] not in forced and _held_by_pause(row):
+            # Ruling A42: the subject's automatic generation is paused — the step waits for the Resume.
+            paused += 1
             continue
         # A step that just came back busy waits out BUSY_DEFER_S so the steps
         # behind it get their turn — forced or not, or a dead backend would be
@@ -330,7 +370,8 @@ def tick() -> Dict[str, Any]:
     # last BUSY_DEFER_S — nothing is submitted this tick.
     return {"scanned": scanned, "submitted": "",
             "reason": ("media_off" if held else
-                       "deferred" if deferred else "empty")}
+                       "deferred" if deferred else
+                       "character_paused" if paused else "empty")}
 
 
 def periodic_tick() -> None:
@@ -377,6 +418,12 @@ def handle_step(payload: Dict[str, Any]) -> Dict[str, Any]:
         # else will ever come back to it.
         _close_if_finished(improvement_id)
         return {"skipped": message}
+
+    if not improvement["forced"] and _held_by_pause({"type_id": improvement["type_id"], "candidate_key": key}):
+        # Ruling A42: the subject was paused while the task waited — back to pending, no attempt; the tick holds
+        # it until the Resume.
+        store.mark_result(improvement_id, key, status="pending", count_attempt=False)
+        return {"held": key}
 
     candidate = Candidate(key, step["candidate_label"],
                           hub_jobs=step.get("hub_jobs"), note=step.get("note") or "")

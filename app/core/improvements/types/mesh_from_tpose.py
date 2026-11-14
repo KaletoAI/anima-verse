@@ -71,6 +71,9 @@ class MeshFromTpose(ImprovementType):
                     f"{name} · {_short_signature(signature)}"))
         return sorted(out, key=lambda c: (c.label.lower(), c.key))
 
+    def subject_character(self, key: str) -> str:
+        return split_key(key)[0]
+
     def is_done(self, candidate: Candidate, params: Dict[str, Any]) -> bool:
         name, signature = split_key(candidate.key)
         from app.core.model_refs import is_state_fork

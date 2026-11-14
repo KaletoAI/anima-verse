@@ -132,6 +132,15 @@ follow-up (``start``), never interleaving steps. A mode change of an item
 (``inventory.update_item``) calls nothing — its wearers are listed by
 ``wearers`` and built on request (the Items' "Build for them").
 
+Paused (Ruling A42, ``generation_pause``): while the character's automatic
+generation is paused ``request`` starts nothing — the trigger is held
+(``generation_pause.hold_build``) and Resume asks again; an automatic run
+going when the pause comes finishes the step in flight and stops before the
+next one (``state()['paused']``, ``generation_pause.BUILD_PAUSED``), held the
+same way; a chain it waits for that becomes held in the garment FIFO stops it
+too (``BuildPaused``). A manual Build never consults the pause, and its start
+drops a held automatic Build (it builds the same figure).
+
 A garment chain that failed for its current fsig (``garments.cached_failure``)
 is listed as "failed — Retry" with 0 counted jobs (``Step.failed``). An
 automatic Build never runs it (the failure is reported, nothing spent); a
@@ -178,6 +187,11 @@ SHAPE_MOVED = "the body shape {shape} is no longer wanted (now {now})"
 VIEWS_MOVED = "the figure changed while its views rendered ({fields})"
 #: The reason of the follow-up a superseded run keeps.
 SUPERSEDED_REASON = "superseded"
+
+
+class BuildPaused(Exception):
+    """An automatic Build met the character's pause of automatic generation (Ruling A42): its chain waits held in
+    the garment FIFO. The run ends there — neither a failure nor superseded — and is held for the Resume."""
 
 
 class StepSuperseded(Exception):
@@ -771,7 +785,20 @@ def start(character_name: str, *, reason: str, automatic: bool = False) -> Dict[
     threading.Thread(target=_worker, args=(character_name,), daemon=True,
                      name=f"figure-build-{character_name}").start()
     logger.info("Build %s started (%s%s)", character_name, reason, ", automatic" if automatic else "")
+    if not automatic:
+        _drop_held_build(character_name)
     return {"status": "started"}
+
+
+def _drop_held_build(character_name: str) -> None:
+    """A manual Build covers a held automatic one (Ruling A42): it plans the figure wanted now."""
+    try:
+        from app.core import generation_pause
+        if generation_pause.is_paused(character_name):
+            from app.core.task_queue import get_task_queue
+            get_task_queue().drop_trigger(character_name, "build")
+    except Exception:  # noqa: BLE001 — the held entry only stays listed
+        logger.debug("Held Build of %s not dropped", character_name, exc_info=True)
 
 
 # --- Automatic ------------------------------------------------------------------------
@@ -808,7 +835,9 @@ def request(character_name: str, trigger: str) -> bool:
     started or was kept as the follow-up. Else False — the change stays in
     ``figure.pending_changes``; a profile that cannot be read is recorded as
     the Build's failure (ruling F13 e). A request while a base-body step runs is
-    deferred until it is done (Ruling A26 a) — True as well. Never raises."""
+    deferred until it is done (Ruling A26 a) — True as well. While the
+    character's automatic generation is paused the request is held instead
+    (Ruling A42, ``generation_pause.hold_build``) — False. Never raises."""
     try:
         try:
             profile = _read_profile(character_name)
@@ -817,6 +846,10 @@ def request(character_name: str, trigger: str) -> bool:
             return False
         if not on_pipeline(character_name, profile=profile) or not auto_build_on(character_name, profile=profile):
             logger.debug("Build %s not requested (%s): off the pipeline or not automatic", character_name, trigger)
+            return False
+        from app.core import generation_pause
+        if generation_pause.hold_build(character_name, trigger):
+            # Ruling A42: paused — nothing starts; Resume asks again (the change stays marked meanwhile).
             return False
         return start(character_name, reason=trigger, automatic=True).get("status") in ("started", "queued",
                                                                                        "deferred")
@@ -850,7 +883,8 @@ def state(character_name: str) -> Dict[str, Any]:
     count}``), ``queued`` the follow-ups kept (0 or 1); ``failed`` /
     ``skipped`` / ``finished_at`` of the last run that had steps;
     ``superseded`` its ``{step, label, note}`` when it ended superseded
-    (Ruling A18), else None; ``deferred`` the reason of an automatic Build that
+    (Ruling A18), else None; ``paused`` its ``{step, label, note}`` when the
+    character's pause stopped it (Ruling A42), else None; ``deferred`` the reason of an automatic Build that
     waits for a base step (Ruling A26 a), else None."""
     with _lock:
         deferred = _deferred.get(character_name)
@@ -859,7 +893,7 @@ def state(character_name: str) -> Dict[str, Any]:
         queued = len(_queues.get(character_name) or ())
         last = dict(_last.get(character_name) or {})
     return {"running": running, "step": current.get("step") if running else None, "queued": queued,
-            "deferred": deferred,
+            "deferred": deferred, "paused": dict(last["paused"]) if last.get("paused") else None,
             "failed": dict(last.get("failed") or {}), "skipped": list(last.get("skipped") or []),
             "superseded": dict(last["superseded"]) if last.get("superseded") else None,
             "reason": current.get("reason") if running else last.get("reason"),
@@ -877,6 +911,10 @@ def _worker(character_name: str) -> None:
             reason, automatic = queue.popleft()
             refit_item = _refit_items.pop(character_name, "") if reason == REFIT_REASON else ""
             _current[character_name] = {"reason": reason, "step": None, "steps": []}
+        if automatic and not refit_item:
+            from app.core import generation_pause
+            if generation_pause.hold_build(character_name, reason):
+                continue   # Ruling A42: a kept automatic follow-up waits for the Resume
         try:
             with build_lock(character_name):
                 if refit_item:
@@ -1029,8 +1067,14 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
     failed: Dict[str, Dict[str, Any]] = {}
     skipped: List[str] = []
     superseded: Optional[Dict[str, str]] = None
+    paused: Optional[Dict[str, str]] = None
+    from app.core import generation_pause
     try:
         for index, step in enumerate(steps, 1):
+            if automatic and generation_pause.is_paused(character_name):
+                # Ruling A42: the step before has finished; nothing after it starts — held for the Resume.
+                paused = _paused_here(character_name, reason, step, queue, task_id)
+                break
             shown = step.running_label(explicit)
             label = f"Build · {character_name} ({index}/{len(steps)} {shown})"
             with _lock:
@@ -1062,6 +1106,10 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
                     if step.name == "plain_body":
                         _wait_base_views(character_name)
                     error = _run_step(character_name, step, explicit)
+                except BuildPaused:
+                    # Ruling A42: the chain of this step waits held in the garment FIFO.
+                    paused = _paused_here(character_name, reason, step, queue, task_id)
+                    break
                 except StepSuperseded as e:
                     # Ruling A18: the figure moved — not a failure; ONE follow-up builds the figure wanted now.
                     superseded = {"step": step.name, "label": step.label, "note": str(e)}
@@ -1112,12 +1160,27 @@ def _run_planned(character_name: str, reason: str, profile: Dict[str, Any], *, a
         with _lock:
             _pins.pop(character_name, None)
             _last[character_name] = {"failed": failed, "skipped": skipped, "reason": reason,
-                                     "finished_at": utc_now_iso(), "superseded": superseded}
+                                     "finished_at": utc_now_iso(), "superseded": superseded, "paused": paused}
         if queue is not None and task_id:
             try:
                 queue.track_finish(task_id, error="; ".join(f"{k}: {v['error']}" for k, v in failed.items()))
             except Exception:  # noqa: BLE001
                 logger.debug("Build track %s not finished", task_id, exc_info=True)
+
+
+def _paused_here(character_name: str, reason: str, step: Step, queue, task_id: str) -> Dict[str, str]:
+    """An automatic run stopped by the pause before ``step`` (Ruling A42): held for the Resume; the run's
+    ``paused`` record."""
+    from app.core import generation_pause
+    generation_pause.hold_build(character_name, reason)
+    note = generation_pause.BUILD_PAUSED.format(step=step.label)
+    logger.info("Build %s: automatic generation paused — stopped before %s", character_name, step.label)
+    if queue is not None and task_id:
+        try:
+            queue.track_update_label(task_id, f"Build · {character_name} — paused before {step.label}")
+        except Exception:  # noqa: BLE001
+            logger.debug("Build track %s not relabelled", task_id, exc_info=True)
+    return {"step": step.name, "label": step.label, "note": note}
 
 
 # --- Steps (each returns "" or the error) --------------------------------------------
@@ -1130,7 +1193,7 @@ def _run_step(character_name: str, step: Step, explicit: bool) -> str:
             with model3d.generation_slot(character_name):
                 return _RUNNERS[step.name](character_name, step, explicit)
         return _RUNNERS[step.name](character_name, step, explicit)
-    except StepSuperseded:
+    except (StepSuperseded, BuildPaused):
         raise  # Ruling A18: not the step's failure — ``_run_planned`` ends the run and keeps the follow-up
     except Exception as e:  # noqa: BLE001 — the step failed, the run goes on
         logger.exception("Build %s: %s failed", character_name, step.label)
@@ -1409,6 +1472,8 @@ def _chain(character_name: str, item_id: str, explicit: bool) -> str:
     result = runs.get(item_id) or {}
     if result.get("ok"):
         return ""
+    if result.get("paused"):
+        raise BuildPaused(str(result.get("error") or ""))
     error = str(result.get("error") or "chain failed")
     return f"{result['step']} — {error}" if result.get("step") else error
 

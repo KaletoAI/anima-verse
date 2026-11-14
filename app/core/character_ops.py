@@ -1710,9 +1710,12 @@ def build_body_slots(character_name: str) -> Dict[str, Any]:
 def _regenerate_mesh_part(character_name):
     """Render missing neutral inputs, then request the missing mesh outside profile locks. Off the figure
     pipeline only (a non-humanoid's whole-body model): on it a switch change marks the figure due and nothing
-    more (Ruling FR-I5, ``apply_body_slot_values``)."""
-    from app.core import model_refs, model3d
+    more (Ruling FR-I5, ``apply_body_slot_values``). Held while the character's automatic generation is paused
+    (Ruling A42, ``generation_pause``: Resume schedules it again)."""
+    from app.core import generation_pause, model_refs, model3d
     from app.imagegen.base import MediaGenerationDisabled
+    if generation_pause.hold(character_name, "mesh_part", "3D model after a body part change (automatic)"):
+        return
     try:
         pieces, items, signature = model_refs.current_outfit_state(character_name)
         if model3d.find_model3d(character_name, signature):

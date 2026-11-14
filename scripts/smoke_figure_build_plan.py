@@ -605,7 +605,9 @@ def route_section(root: Path):
     check("[7] admin GET cost has hub_jobs", "hub_jobs" in (body.get("cost") or {}), True)
     check("[7] admin GET build state keys", sorted(body.get("build") or {}),
           sorted(["running", "step", "queued", "failed", "skipped", "superseded", "reason", "finished_at",
-                  "deferred"]))
+                  "deferred", "paused"]))
+    check("[7] admin GET generation_pause (Ruling A42)", sorted(body.get("generation_pause") or {}),
+          sorted(["paused", "since", "waiting", "running", "resume_jobs", "resume_unknown"]))
     check("[7] player GET", client.get("/characters/Kira/figure", headers={"x-test-user": "user"}).status_code, 403)
     check("[7] player POST build",
           client.post("/characters/Kira/figure/build", headers={"x-test-user": "user"}).status_code, 403)

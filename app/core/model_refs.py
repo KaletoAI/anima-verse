@@ -1302,7 +1302,8 @@ def _fire_kind(character_name: str, kind: str) -> None:
     the newer timer, or the manual trigger that cancelled it, covers the
     latest state. The auto toggle is re-read: switched off since arming means
     nothing to render. The Build timer asks the Build (``figure_build.request``
-    re-reads "Build automatically" itself)."""
+    re-reads "Build automatically" itself). While the character's automatic
+    generation is paused the render is held (Ruling A42, ``generation_pause``)."""
     key = (character_name, kind)
     with _lock:
         entry = _pending_timers.get(key)
@@ -1315,7 +1316,15 @@ def _fire_kind(character_name: str, kind: str) -> None:
         return
     if not get_auto_kinds(character_name).get(kind):
         return
+    from app.core import generation_pause
+    if generation_pause.hold(character_name, f"model_refs:{kind}",
+                             f"Outfit reference render · {_KIND_LABELS.get(kind, kind)} (automatic)", {"kind": kind}):
+        return   # Ruling A42: paused — Resume renders it
     _fire_kinds(character_name, (kind,))
+
+
+#: How a held automatic reference render is named in the Figure tab's waiting list (Ruling A42).
+_KIND_LABELS = {"tpose": "T-pose", "pose": "pose"}
 
 
 def schedule_outfit_render(character_name: str) -> None:

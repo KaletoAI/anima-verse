@@ -5,9 +5,12 @@
  * a Build runs (`build.running`; no give-up — a step may wait minutes in a
  * queue, after ~2 min the tick slows down), stopped on unmount / character
  * switch. `startPoll(delay)` after an own action (a Build, a single action of
- * the Body details) re-reads and keeps ticking while the Build runs.
+ * the Body details) re-reads and keeps ticking while the Build runs. The push
+ * topic `generation` (Ruling A42: the character's pause or its waiting jobs
+ * changed — admins only) re-reads once.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { syncHub } from '@anima/player-ui'
 import { apiGet } from '../../lib/api'
 import type { FigurePayload } from './figureModel'
 
@@ -60,7 +63,8 @@ export function useFigure(character: string) {
     setError('')
     if (!character) return stopPoll
     startPoll()
-    return stopPoll
+    const off = syncHub().onTopics(['generation'], () => startPoll(0))
+    return () => { off(); stopPoll() }
   }, [character, startPoll, stopPoll])
 
   return { data, error, startPoll }

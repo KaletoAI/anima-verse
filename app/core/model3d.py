@@ -4240,7 +4240,11 @@ def maybe_auto_generate_for_outfit(character_name: str) -> bool:
     2026-11-12-unified-worn-pieces Task 8) — the hook is an "outfit change"
     request of the character's Build (``figure_build.request``), which
     builds the outfit model as one of its steps when "Build automatically"
-    is on; True when a Build was started or kept as its follow-up."""
+    is on; True when a Build was started or kept as its follow-up.
+
+    Paused (Ruling A42, ``generation_pause``): off the pipeline the run is
+    held (Resume calls this hook again); on it ``figure_build.request`` holds
+    the Build."""
     try:
         from app.core.base_body import is_base_pipeline
         if is_base_pipeline(character_name):
@@ -4253,6 +4257,9 @@ def maybe_auto_generate_for_outfit(character_name: str) -> bool:
             return False
         if not find_ref_image(character_name, "tpose", signature):
             return False  # render failed / not there yet — wait for the next pass
+        from app.core import generation_pause
+        if generation_pause.hold(character_name, "auto_mesh", "3D model of the current outfit (automatic)"):
+            return False  # Ruling A42: paused — Resume asks again
     except Exception as e:
         logger.debug("Model3D auto check for %s failed: %s",
                      character_name, e)

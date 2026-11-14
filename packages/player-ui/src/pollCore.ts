@@ -1,5 +1,6 @@
 /** Shared polling state machine. The host owns the clock and visibility events. */
-export type SyncTopic = 'presence' | 'scene' | 'notices' | 'self' | 'world' | 'clips';
+/** `generation` reaches admins only: a character's paused automatic generation changed (Ruling A42). */
+export type SyncTopic = 'presence' | 'scene' | 'notices' | 'self' | 'world' | 'clips' | 'generation';
 export interface EndpointSpec {
   intervalMs: number;
   pushedIntervalMs?: number;

@@ -4,7 +4,9 @@ The channel carries TOPICS, never data ("invalidate, don't replicate"): a
 client refetches the matching, already fog-filtered route. Timing and kind of
 a signal are information too, so a topic only goes to connections whose avatar
 perceives the change (spec plan-3d-naehe-push-p4.md § B3). ``Everyone`` is for
-world structure and the public Instagram feed only.
+world structure and the public Instagram feed only. ``Admins`` reaches the
+connections of admin users only — for admin-only state such as a character's
+paused automatic generation (topic ``generation``, Ruling A42).
 
 Thread-safe: writers run on worker threads (skills, scheduler, agent loop,
 travel ticker). Matching a recipient and queueing happen under the
@@ -20,7 +22,7 @@ from app.core.log import get_logger
 
 logger = get_logger("sync_topics")
 
-TOPICS: Tuple[str, ...] = ("presence", "scene", "notices", "self", "world", "clips")
+TOPICS: Tuple[str, ...] = ("presence", "scene", "notices", "self", "world", "clips", "generation")
 BATCH_S = 0.25  # At most four bundled topic frames per second.
 HEARTBEAT_S = 15.0  # Keep idle proxy connections alive.
 CHECK_S = 60.0  # Bound session and avatar staleness to a minute.
@@ -51,8 +53,13 @@ class Avatars:
     names: Tuple[str, ...]
 
 
-Recipient = Union[Everyone, Avatar, AtLocation, Avatars]
-_RECIPIENT_TYPES = (Everyone, Avatar, AtLocation, Avatars)
+@dataclass(frozen=True)
+class Admins:
+    """The connections of admin users (their role when the stream was opened)."""
+
+
+Recipient = Union[Everyone, Avatar, AtLocation, Avatars, Admins]
+_RECIPIENT_TYPES = (Everyone, Avatar, AtLocation, Avatars, Admins)
 
 
 @dataclass(eq=False)
@@ -63,6 +70,7 @@ class Connection:
     location: str
     wake: Optional[Callable[[], None]] = None
     abort: Optional[Callable[[], None]] = None
+    admin: bool = False               # the user's role was admin when the stream opened (``Admins``)
     closed: bool = False
     bind_rev: int = 0                 # bumps on ANY binding change (avatar or location)
     _pending: List[str] = field(default_factory=list)
@@ -81,6 +89,8 @@ class Connection:
             return bool(r.loc_id) and r.loc_id == self.location
         if isinstance(r, Avatars):
             return bool(self.avatar) and self.avatar in r.names
+        if isinstance(r, Admins):
+            return self.admin
         return False
 
     def _offer(self, topics, recips) -> bool:
@@ -173,10 +183,10 @@ def _reap_loop() -> None:
         reap()
 
 
-def register(user_id, token, avatar, location, wake=None, abort=None) -> Connection:
+def register(user_id, token, avatar, location, wake=None, abort=None, admin=False) -> Connection:
     global _reaper
     conn = Connection(user_id=user_id, token=token, avatar=avatar or "",
-                      location=location or "", wake=wake, abort=abort)
+                      location=location or "", wake=wake, abort=abort, admin=bool(admin))
     with _lock:
         _conns.append(conn)
         if _reaper is None:

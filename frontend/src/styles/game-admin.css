@@ -3558,3 +3558,12 @@ a.ga-btn {
   line-height: 1;
   vertical-align: 1px;
 }
+
+/* Ruling A42 — the Figure tab's "Pause automatic generation" block: a status light, Resume with its cost, the
+   waiting jobs one compact line each with Cancel. */
+.ga-gen-pause { border: 1px solid var(--warning, #d29922); border-radius: 8px; padding: 8px 10px; display: flex;
+  flex-direction: column; gap: 6px; }
+.ga-gen-pause-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px;
+  max-height: 180px; overflow-y: auto; font-size: 12px; }
+.ga-gen-pause-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ga-gen-pause-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

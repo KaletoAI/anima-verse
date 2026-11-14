@@ -786,6 +786,13 @@ def start_expression_attempt(request, *, force=False, ignore_feature_gate=False)
 
 
 def trigger_expression_generation(request, *, force=False, ignore_cooldown=False, ignore_feature_gate=False, coalesce=True):
+    """The AUTOMATIC expression render (a mood change, a scene image, a viewer's cache warm-up): False when
+    nothing was started. Not started while the character's automatic generation is paused (Ruling A42,
+    ``generation_pause``) — and not recorded either: the render belongs to the moment, the next mood asks again.
+    A click goes through ``start_expression_attempt``, which never consults the pause."""
+    from app.core import generation_pause
+    if generation_pause.is_paused(request.character):
+        return False
     if not force and get_cached_expression(request):
         return False
     if not _allowed(request, ignore_feature_gate):

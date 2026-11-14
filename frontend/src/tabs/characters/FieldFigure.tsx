@@ -40,6 +40,11 @@
  *   settings live in the Base body tab since Task UI1 — FieldBaseBody) and the
  *   stored bodies and textures collapsed (FigureStored, Delete).
  *
+ * - "Pause automatic generation" (Ruling A42, GenerationPausePanel): the switch beside "Build automatically",
+ *   while paused the status light with its reason, what runs now and finishes, "Resume — N hub jobs start"
+ *   (POST …/figure/generation-pause {paused}) and the waiting jobs, each with Cancel behind an in-app
+ *   confirmation (POST …/figure/waiting/cancel {id}). The tab re-reads on the push topic `generation`.
+ *
  * Nothing here starts a chain except Build and Retry (both POST
  * …/figure/build — a manual Build, which retries a cached chain failure,
  * ruling 7a) and the other state's single action. Every humanoid is on the
@@ -56,12 +61,13 @@ import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from './Model3DViewer'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
 import { FigureStored } from './FigureStored'
+import { GenerationPausePanel, GenerationPauseSwitch } from './GenerationPausePanel'
 import { useFigure } from './useFigure'
 import {
   BUILD_DEFERRED_NOTE, BUILD_RUNNING_NOTE, BUILD_STATUS, ESTIMATE_NOTE, HAIR_MODE_LABELS, MESH_MODE_LABELS, NO_BASE_BODY_NOTE, baseBodyLine, bodyLine,
   buildButton, changeLine, hairState, headerLine, noBaseBody, regenerateMeshLabel, stateMeshAction, wornState,
 } from './figureModel'
-import type { FigurePayload, FigureWornRow, HairMode, PieceState } from './figureModel'
+import type { FigurePayload, FigureWornRow, GenerationPause, HairMode, PieceState, WaitingJob } from './figureModel'
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
 /** A fit the user accepted although its checks refused it (Ruling A31): the green of an accepted light. */
@@ -121,6 +127,14 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
 
   const reload = useCallback(() => startPoll(0), [startPoll])
 
+  /** Ruling A42: pause (no jobs) / resume (the held jobs start — the button names how many) / cancel one. */
+  const setPaused = useCallback((paused: boolean) => post('figure/generation-pause', { paused }, () => {
+    toast(paused ? t('Automatic generation paused') : t('Resumed — the held jobs start'), 'success')
+  }), [post, t, toast])
+  const cancelWaiting = useCallback((job: WaitingJob) => post('figure/waiting/cancel', { id: job.id }, () => {
+    toast(t('Cancelled — it will not run'), 'success')
+  }), [post, t, toast])
+
   /** Ruling A23 b: a piece whose fit on the body shape was refused — fit it again (CPU), or make its mesh anew.
    *  Re-fit (Ruling FR-I2) runs that piece's CPU fit and the CPU assembly only; while a Build runs it answers 409. */
   const refit = useCallback((row: FigureWornRow) => post('figure/refit', { item_id: row.item_id }, (d) => {
@@ -165,7 +179,12 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
       </div>
       <div className="ga-split-col">
         <FigureHeader data={data} posting={posting} onBuild={build}
-          onAutoBuild={(enabled) => { void post('figure/auto-build', { enabled }) }} />
+          onAutoBuild={(enabled) => { void post('figure/auto-build', { enabled }) }}
+          onPause={() => { void setPaused(true) }} />
+        {data.generation_pause ? (
+          <GenerationPausePanel gp={data.generation_pause} busy={posting} onResume={() => { void setPaused(false) }}
+            onCancel={(job) => { void cancelWaiting(job) }} />
+        ) : null}
         <WornTable data={data} character={character} busy={posting} onRetry={build} onOpenWardrobe={onOpenWardrobe}
           onOpenHairstyles={onOpenHairstyles}
           onOpenPiece={(id, name) => setOpenPiece({ id, name })} onStateMesh={buildStateMesh} onChanged={reload}
@@ -180,11 +199,17 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
   )
 }
 
-function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
+/** Before the first poll with the field (an older server): not paused, nothing waits. */
+const NOT_PAUSED: GenerationPause = { paused: false, since: null, waiting: [], running: [], resume_jobs: 0,
+  resume_unknown: 0 }
+
+function FigureHeader({ data, posting, onBuild, onAutoBuild, onPause }: {
   data: FigurePayload
   posting: boolean
   onBuild: () => void
   onAutoBuild: (enabled: boolean) => void
+  /** Ruling A42: "Pause automatic generation" (no jobs). */
+  onPause: () => void
 }) {
   const { t } = useI18n()
   const button = buildButton(data, t)
@@ -206,6 +231,7 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
             onChange={(e) => onAutoBuild(e.target.checked)} />
           <span>{t('Build automatically')}</span>
         </label>
+        <GenerationPauseSwitch gp={data.generation_pause ?? NOT_PAUSED} busy={posting} onPause={onPause} />
       </div>
       {button.disabled ? <div className="ga-hint">{button.disabled}</div>
         : data.cost.hub_jobs ? <div className="ga-hint">{t(ESTIMATE_NOTE)}</div> : null}
@@ -217,6 +243,9 @@ function FigureHeader({ data, posting, onBuild, onAutoBuild }: {
         </div>
       ) : null}
       {!running && data.build.deferred ? <div className="ga-hint">{t(BUILD_DEFERRED_NOTE)}</div> : null}
+      {!running && data.build.paused ? (
+        <div className="ga-hint">{t('Paused before {step} — Resume builds the rest').replace('{step}', data.build.paused.label)}</div>
+      ) : null}
       {data.changes.length ? (
         <div className="ga-hint">
           {data.changes.map((c) => changeLine(c, t)).join(' · ')}

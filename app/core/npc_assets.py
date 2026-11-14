@@ -144,6 +144,10 @@ def submit_assets_job(name: str, location_id: str, room_id: str = "",
                       place: bool = True) -> str:
     """Queue the finishing job for one NPC. Returns the task id ("" = deduped).
 
+    Automatic generation work of the NPC (``character_hold``): while its
+    automatic generation is paused (Ruling A42, ``generation_pause``) the job
+    stays pending in the queue and runs after the Resume.
+
     Deduplicated per character: a second placement attempt for an NPC that is
     already being finished must not start a second run of the same three
     generations.
@@ -178,7 +182,7 @@ def submit_assets_job(name: str, location_id: str, room_id: str = "",
          "radius_m": float(radius_m or 0), "home": home or None,
          "place": bool(place)},
         queue_name="background", agent_name=name, max_retries=ASSET_RETRIES,
-        deduplicate=True)
+        deduplicate=True, character_hold=True)
 
 
 def on_outfit_description_changed(name: str, old: str, new: str) -> Optional[str]:

@@ -12,6 +12,12 @@ Features:
     a label for the UI and for pausing, it does not route to its own worker
   - Priorities (lower value = higher priority)
   - Pause/resume per queue name (survives a restart)
+  - Per-character hold (Ruling A42, ``app/core/generation_pause.py``): a task
+    submitted as AUTOMATIC generation work of a character (``submit(...,
+    character_hold=True)``, ``agent_name`` = the character) is not dequeued
+    while that character's automatic generation is paused — it stays pending,
+    the queue view marks it ``held``, and Resume lets it run in its original
+    order (priority, then age). A task a person started is never held.
   - Tasks can be moved (queue, priority)
   - Configurable auto-retry
   - Tracked tasks: externally running jobs (GPU, TTS) are registered in the
@@ -101,6 +107,23 @@ _SCHEMA_STMTS = [
         paused     INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT    NOT NULL
     )""",
+    # Ruling A42: the characters whose automatic generation is paused (one row
+    # per paused character; Resume deletes it).
+    """CREATE TABLE IF NOT EXISTS character_generation_paused (
+        agent_name TEXT PRIMARY KEY,
+        since      TEXT NOT NULL
+    )""",
+    # Ruling A42: automatic triggers that fired while their character was
+    # paused (one per character and key — a repeat keeps the first stamp, so
+    # Resume replays them in the order they were first held).
+    """CREATE TABLE IF NOT EXISTS character_held_triggers (
+        agent_name TEXT NOT NULL,
+        key        TEXT NOT NULL,
+        label      TEXT NOT NULL DEFAULT '',
+        payload    TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (agent_name, key)
+    )""",
 ]
 
 
@@ -128,10 +151,17 @@ class TaskQueue:
         # for hours (a hub job collected after a restart): the stale reaper
         # leaves them alone. Process-local, like the reaper itself.
         self._held_tracks: set = set()
+        # Ruling A42: the characters whose automatic generation is paused —
+        # the persisted table mirrored in memory (this object is its only
+        # writer), so the many trigger checks never touch the DB.
+        self._paused_characters: Dict[str, str] = {}
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
         self._reset_stale_running()
+        with self._connect() as conn:
+            self._paused_characters = {r["agent_name"]: r["since"] for r in conn.execute(
+                "SELECT agent_name, since FROM character_generation_paused").fetchall()}
 
     # ------------------------------------------------------------------
     # DB helpers
@@ -157,6 +187,8 @@ class TaskQueue:
                 ("provider", "TEXT DEFAULT ''"),
                 ("task_origin", "TEXT DEFAULT 'queued'"),
                 ("progress", "TEXT DEFAULT ''"),
+                # Ruling A42: automatic generation work of ``agent_name`` — held while it is paused.
+                ("character_hold", "INTEGER DEFAULT 0"),
             ]:
                 try:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} {typedef}")
@@ -327,8 +359,13 @@ class TaskQueue:
         queue_name: str = "",
         priority: int = 20,
         agent_name: str = "", max_retries: int = -1,
-        deduplicate: bool = False) -> str:
+        deduplicate: bool = False, character_hold: bool = False) -> str:
         """Persist a task and wake a worker. Returns task_id.
+
+        character_hold: the task is AUTOMATIC generation work of the character
+                     ``agent_name`` (Ruling A42): while that character's
+                     automatic generation is paused it is not dequeued.
+                     Never for a task a person started.
 
         queue_name: informational label (for UI display), no routing effect.
         deduplicate: if True, skip submission when a task with the same
@@ -373,12 +410,13 @@ class TaskQueue:
             conn.execute(
                 """INSERT INTO tasks
                    (task_id, queue_name, task_type, priority, status, payload,
-                    created_at, agent_name, user_id, max_retries)
-                   VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)""",
+                    created_at, agent_name, user_id, max_retries, character_hold)
+                   VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)""",
                 (
                     task_id, queue_name, task_type, priority,
                     json.dumps(payload, ensure_ascii=False),
-                    now, agent_name, user_id, max_retries))
+                    now, agent_name, user_id, max_retries,
+                    1 if (character_hold and agent_name) else 0))
             conn.commit()
 
         logger.info(
@@ -464,6 +502,107 @@ class TaskQueue:
         self._wake_event.set()
         logger.info("Queue fortgesetzt: %s", queue_name)
         return True
+
+    # --- Ruling A42: per-character pause of automatic generation -------------
+
+    def character_paused(self, agent_name: str) -> bool:
+        """Whether the character's automatic generation is paused (memory, no DB read)."""
+        return bool(agent_name) and agent_name in self._paused_characters
+
+    def character_paused_since(self, agent_name: str) -> str:
+        """The SYSTEM stamp the character was paused at, "" when it is not paused."""
+        return self._paused_characters.get(agent_name, "")
+
+    def set_character_paused(self, agent_name: str, paused: bool) -> bool:
+        """Persist the character's pause (``app/core/generation_pause.py`` is the
+        caller). Resuming wakes the workers, so its held tasks run in order.
+        True when the state changed."""
+        if not agent_name:
+            return False
+        now = utc_now_iso()
+        with self._write_lock, self._connect() as conn:
+            if paused:
+                if agent_name in self._paused_characters:
+                    return False
+                conn.execute("INSERT OR REPLACE INTO character_generation_paused (agent_name, since) "
+                             "VALUES (?, ?)", (agent_name, now))
+                conn.commit()
+                self._paused_characters[agent_name] = now
+            else:
+                if agent_name not in self._paused_characters:
+                    return False
+                conn.execute("DELETE FROM character_generation_paused WHERE agent_name=?", (agent_name,))
+                conn.commit()
+                self._paused_characters.pop(agent_name, None)
+        if not paused:
+            self._wake_event.set()
+        logger.info("Automatic generation of %s %s", agent_name, "paused" if paused else "resumed")
+        return True
+
+    def held_tasks(self, agent_name: str) -> List[Dict[str, Any]]:
+        """The character's pending automatic generation tasks (``character_hold``),
+        in the order they will run (priority, then age) — held while it is paused."""
+        conn = self._connect()
+        try:
+            return [dict(r) for r in conn.execute(
+                """SELECT task_id, task_type, label, payload, queue_name, created_at
+                   FROM tasks WHERE status='pending' AND agent_name=?
+                   AND COALESCE(character_hold, 0)=1
+                   AND (task_origin='queued' OR task_origin IS NULL)
+                   ORDER BY priority ASC, created_at ASC, rowid ASC""", (agent_name,)).fetchall()]
+        finally:
+            conn.close()
+
+    def running_tasks_of(self, agent_name: str) -> List[Dict[str, Any]]:
+        """The character's tasks running now (queued and tracked) — they finish."""
+        conn = self._connect()
+        try:
+            return [dict(r) for r in conn.execute(
+                """SELECT task_id, task_type, label, task_origin FROM tasks
+                   WHERE status='running' AND agent_name=? ORDER BY started_at""",
+                (agent_name,)).fetchall()]
+        finally:
+            conn.close()
+
+    def hold_trigger(self, agent_name: str, key: str, label: str,
+                     payload: Optional[Dict[str, Any]] = None) -> None:
+        """Record an automatic trigger that fired while its character was paused.
+        A repeat of the key keeps the FIRST stamp (its place in the replay
+        order) and takes the newest label and payload."""
+        now = utc_now_iso()
+        with self._write_lock, self._connect() as conn:
+            conn.execute(
+                """INSERT INTO character_held_triggers (agent_name, key, label, payload, created_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(agent_name, key) DO UPDATE SET label=excluded.label, payload=excluded.payload""",
+                (agent_name, key, label, json.dumps(payload or {}, ensure_ascii=False), now))
+            conn.commit()
+
+    def held_triggers(self, agent_name: str) -> List[Dict[str, Any]]:
+        """The character's held triggers in the order they were first held."""
+        conn = self._connect()
+        try:
+            out = []
+            for r in conn.execute(
+                    """SELECT key, label, payload, created_at FROM character_held_triggers
+                       WHERE agent_name=? ORDER BY created_at, rowid""", (agent_name,)).fetchall():
+                d = dict(r)
+                try:
+                    d["payload"] = json.loads(d["payload"] or "{}")
+                except ValueError:
+                    d["payload"] = {}
+                out.append(d)
+            return out
+        finally:
+            conn.close()
+
+    def drop_trigger(self, agent_name: str, key: str) -> bool:
+        """Forget one held trigger. True when it was held."""
+        with self._write_lock, self._connect() as conn:
+            cur = conn.execute("DELETE FROM character_held_triggers WHERE agent_name=? AND key=?",
+                               (agent_name, key))
+            conn.commit()
+        return bool(cur.rowcount)
 
     def cancel_task(self, task_id: str) -> bool:
         """Cancels a pending or running task. Returns True if cancelled."""
@@ -593,10 +732,14 @@ class TaskQueue:
             pending = [
                 dict(r) for r in conn.execute(
                     """SELECT task_id, task_type, priority, created_at, queue_name,
-                              agent_name, label, provider, task_origin
+                              agent_name, label, provider, task_origin, character_hold
                        FROM tasks WHERE status='pending'
                        ORDER BY priority, created_at LIMIT 50""").fetchall()
             ]
+            paused_characters = dict(self._paused_characters)
+            for row in pending:
+                # Ruling A42: held while its character's automatic generation is paused.
+                row["held"] = bool(row.pop("character_hold", 0)) and row.get("agent_name") in paused_characters
             running_rows = conn.execute(
                 """SELECT task_id, task_type, priority, started_at, queue_name,
                           agent_name, label, provider, task_origin
@@ -673,7 +816,10 @@ class TaskQueue:
         own tasks only. Otherwise one pending task of a paused queue (and
         "default" is what the AgentLoop pause switch pauses) stops every other
         queue behind it — background, improvements, instagram (LLM-4).
-        Priority ordering is unchanged.
+        Priority ordering is unchanged; tasks of one priority and second run in
+        the order they were submitted (``rowid``). Ruling A42: a pending task marked
+        ``character_hold`` whose ``agent_name`` is paused is excluded the same
+        way, so it keeps its place and runs in order after the Resume.
         """
         now = utc_now_iso()
         with self._write_lock, self._connect() as conn:
@@ -683,6 +829,11 @@ class TaskQueue:
             if paused:
                 pause_clause = (" AND queue_name NOT IN ("
                                 + ",".join("?" * len(paused)) + ")")
+            # Ruling A42: a paused character's automatic generation tasks stay pending.
+            held = sorted(self._paused_characters)
+            if held:
+                pause_clause += (" AND NOT (COALESCE(character_hold, 0)=1 AND agent_name IN ("
+                                 + ",".join("?" * len(held)) + "))")
             row = conn.execute(
                 f"""SELECT task_id, task_type, payload, priority, queue_name,
                           agent_name, retry_count, max_retries
@@ -690,8 +841,8 @@ class TaskQueue:
                    WHERE status='pending'
                    AND (task_origin='queued' OR task_origin IS NULL)
                    {pause_clause}
-                   ORDER BY priority ASC, created_at ASC
-                   LIMIT 1""", tuple(paused)).fetchone()
+                   ORDER BY priority ASC, created_at ASC, rowid ASC
+                   LIMIT 1""", (*paused, *held)).fetchone()
             if not row:
                 return None
             conn.execute(

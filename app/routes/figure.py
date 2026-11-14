@@ -56,6 +56,17 @@ body actions):
   automatically" (``figure_build.set_auto_build``): ``{"auto_build":
   figure_build.auto_build_on(c)}`` (off as well while the world switch of
   the automatic renders is off). Switching it off never stops a run.
+* ``POST /characters/{c}/figure/generation-pause {paused}`` — "Pause
+  automatic generation" (Ruling A42, ``generation_pause.set_paused``): while
+  paused nothing automatic starts for the character, its waiting automatic
+  jobs are held, a running job finishes, clicks still run; Resume releases
+  the held jobs in their original order. Answers ``generation_pause.state``
+  — also carried by ``GET …/figure`` as ``generation_pause``: ``{paused,
+  since, waiting: [{id, source, tab, label, detail, jobs}], running,
+  resume_jobs, resume_unknown}``.
+* ``POST /characters/{c}/figure/waiting/cancel {id}`` — Cancel ONE waiting
+  entry of ``generation_pause.waiting`` through its queue's own cancel
+  (``generation_pause.cancel``); 404 when it does not wait any more.
 * ``GET  /characters/{c}/figure/stored`` — the stored body shapes and painted
   bodies (``figure.stored``): ``{"stored": [{key, kind, bytes, built_for,
   built_for_name, outfits, last_used, reason, unneeded, deletable, running,
@@ -96,6 +107,9 @@ def get_figure(character_name: str, plain: bool = False,
     from app.core import figure_build
     _require_character(character_name)
     info = figure_build.figure_info(character_name)
+    # Ruling A42: outside the memoised payload — the pause and its waiting list move on their own.
+    from app.core import generation_pause
+    info["generation_pause"] = generation_pause.state(character_name)
     if plain:
         info["plain_body"] = _plain_body(character_name)
     return info
@@ -240,6 +254,33 @@ def set_auto_build(character_name: str, body: AutoBuildRequest,
     if not figure_build.set_auto_build(character_name, body.enabled):
         raise HTTPException(status_code=500, detail="The setting was not saved")
     return {"auto_build": figure_build.auto_build_on(character_name)}
+
+
+class GenerationPauseRequest(BaseModel):
+    paused: bool
+
+
+@router.post("/{character_name}/figure/generation-pause")
+def set_generation_pause(character_name: str, body: GenerationPauseRequest,
+                         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import generation_pause
+    _require_character(character_name)
+    return generation_pause.set_paused(character_name, body.paused)
+
+
+class WaitingCancelRequest(BaseModel):
+    id: str
+
+
+@router.post("/{character_name}/figure/waiting/cancel")
+def cancel_waiting(character_name: str, body: WaitingCancelRequest,
+                   _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    from app.core import generation_pause
+    _require_character(character_name)
+    try:
+        return generation_pause.cancel(character_name, body.id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.get("/{character_name}/figure/stored")

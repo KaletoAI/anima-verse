@@ -166,6 +166,17 @@
  *      `/hairstyles`, Wear posts `/hairstyles/{id}/wear`, the detail reads `/hair?item_id=`; R3 — the placement,
  *      colour and Swing saves (HairLiveControls, one `post(path, body)` adding `item_id`) start no garment run; FieldFigure's hair row shows
  *      `hair.name` and links to the Hairstyles tab.
+ * [20] Ruling A42 — "Pause automatic generation" (GenerationPausePanel):
+ *      pauseLine: not paused → "Automatic generation on"; paused with 2 waiting → "Automatic generation paused —
+ *        2 jobs held"; with 1 → "… — 1 job held" (singular).
+ *      resumeLabel: nothing waits → "Resume — nothing waits"; resume_jobs 7, unknown 0 → "Resume — 7 hub jobs
+ *        start"; 1, 0 → "Resume — 1 hub job starts"; 3, 1 → "Resume — 3 hub jobs start (+1 job of unknown cost)";
+ *        3, 2 → "… (+2 jobs of unknown cost)".
+ *      waitingLine({label "Wardrobe · Blazer", detail "worn 2 + mesh 1", jobs 3}) → "Waiting: Wardrobe · Blazer ·
+ *        worn 2 + mesh 1 — 3 hub jobs"; detail "" and jobs null → "Waiting: Build (automatic) — cost unknown"; jobs 0
+ *        → "… — no hub job".
+ *      Source greps: the panel's Cancel opens ConfirmDialog (no native dialog); FieldFigure posts
+ *      `figure/generation-pause` and `figure/waiting/cancel`; useFigure re-reads on the topic `generation`.
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -367,9 +378,11 @@ check('[12] skin step: stale-base note under the button', /staleBaseNote\(/.test
 const fieldFigure = src('frontend/src/tabs/characters/FieldFigure.tsx');
 // Every POST of the tab goes through its one `post(path, …)` helper (one apiPost call).
 const posts = [...fieldFigure.matchAll(/\bpost\(\s*['`]([^'`]+)['`]/g)].map((x) => x[1].replace(/\$\{[^}]*\}/g, '{}'));
+// Ruling A42 adds the pause (spends nothing; Resume releases what the user already let wait) and Cancel.
 check('[12] FieldFigure starts only the Build (+ the other state\'s mesh, the CPU Re-fit)', [[...new Set(posts)].sort(),
   (fieldFigure.match(/\bapiPost\b/g) || []).length],
-  [['figure/auto-build', 'figure/build', 'figure/refit', 'garments/{}/run'], 2]);
+  [['figure/auto-build', 'figure/build', 'figure/generation-pause', 'figure/refit', 'figure/waiting/cancel',
+    'garments/{}/run'], 2]);
 const tmpl = JSON.parse(src('shared/templates/character/base-character.json') || '{"tabs":[],"sections":[]}');
 const tab = tmpl.tabs.find((x) => x.id === 'figure_tab') || {};
 const section = tmpl.sections.find((x) => x.id === 'figure') || {};
@@ -525,6 +538,31 @@ check('[19] R3: placement, colour and Swing saved with item_id, no run', [
   [true, true, true, true, false]);
 check('[19] Figure tab hair row: name + mode, link to Hairstyles', [/\{hair\.name \|\| t\('Hair'\)\}/.test(fieldFigure),
   /<td style=\{CELL\}>\{hairstyles\}<\/td>/.test(fieldFigure)], [true, true]);
+
+// [20] Ruling A42: "Pause automatic generation".
+const gp = (n, jobs, unknown) => ({ paused: true, since: 's', running: [], resume_jobs: jobs, resume_unknown: unknown,
+  waiting: Array.from({ length: n }, (_, i) => ({ id: `task:${i}`, source: 'task', tab: '', label: 'x', detail: '',
+    jobs: 1 })) });
+check('[20] pauseLine', [m.pauseLine({ ...gp(0, 0, 0), paused: false }), m.pauseLine(gp(2, 2, 0)), m.pauseLine(gp(1, 1, 0))],
+  ['Automatic generation on', 'Automatic generation paused — 2 jobs held', 'Automatic generation paused — 1 job held']);
+check('[20] resumeLabel', [m.resumeLabel(gp(0, 0, 0)), m.resumeLabel(gp(2, 7, 0)), m.resumeLabel(gp(1, 1, 0)),
+  m.resumeLabel(gp(4, 3, 1)), m.resumeLabel(gp(5, 3, 2))],
+  ['Resume — nothing waits', 'Resume — 7 hub jobs start', 'Resume — 1 hub job starts',
+    'Resume — 3 hub jobs start (+1 job of unknown cost)', 'Resume — 3 hub jobs start (+2 jobs of unknown cost)']);
+check('[20] waitingLine', [
+  m.waitingLine({ id: 'garment:b', source: 'garment', tab: 'Wardrobe', label: 'Wardrobe · Blazer',
+    detail: 'worn 2 + mesh 1', jobs: 3 }),
+  m.waitingLine({ id: 'trigger:build', source: 'trigger', tab: '', label: 'Build (automatic)', detail: '', jobs: null }),
+  m.waitingLine({ id: 'trigger:build', source: 'trigger', tab: '', label: 'Build (automatic)', detail: '', jobs: 0 })],
+  ['Waiting: Wardrobe · Blazer · worn 2 + mesh 1 — 3 hub jobs', 'Waiting: Build (automatic) — cost unknown',
+    'Waiting: Build (automatic) — no hub job']);
+const pauseSrc = src('frontend/src/tabs/characters/GenerationPausePanel.tsx');
+const useFigureSrc = src('frontend/src/tabs/characters/useFigure.ts');
+check('[20] Cancel behind ConfirmDialog, posts, push topic', [
+  /<ConfirmDialog open=\{asking !== null\}/.test(pauseSrc), /window\.confirm/.test(pauseSrc),
+  /post\('figure\/generation-pause', \{ paused \}/.test(fieldFigure),
+  /post\('figure\/waiting\/cancel', \{ id: job\.id \}/.test(fieldFigure),
+  /onTopics\(\['generation'\]/.test(useFigureSrc)], [true, false, true, true, true]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

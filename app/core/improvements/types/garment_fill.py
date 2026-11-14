@@ -124,7 +124,8 @@ def _judge(result: Dict[str, Any]) -> None:
         if result.get("fit") == NO_BASE:
             raise CandidateRefused("fit — no base model to fit onto")
         return
-    if result.get("retry_later"):
+    if result.get("retry_later") or result.get("paused"):
+        # Load, or the wearer's automatic generation is paused (Ruling A42: the run waits held in its FIFO).
         raise CandidateBusy(str(result.get("error") or "the garment backend is busy"))
     raise CandidateRefused(f"{result.get('step') or 'run'} — {result.get('error') or 'refused'}")
 

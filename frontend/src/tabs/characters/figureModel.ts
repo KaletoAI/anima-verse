@@ -243,12 +243,16 @@ export interface FigurePayload {
     queued: number
     /** Ruling A26 a: the reason of an automatic Build that waits for a base-body step, else null. */
     deferred?: string | null
+    /** Ruling A42: the automatic run the character's pause stopped before `step`, else null. */
+    paused?: { step: string; label: string; note: string } | null
     failed: Record<string, { error: string; item_id?: string; items?: Record<string, string> }>
     skipped: string[]
     reason: string | null
     finished_at: string | null
   }
   served_url: string | null
+  /** Ruling A42: the character's pause of automatic generation (`generation_pause.state`). */
+  generation_pause?: GenerationPause
   /** When the served model was built (Ruling UI3 a: the preview's caption); null without one. */
   served_built_at?: string | null
   /** The saved outfit worn now, "" when none matches. */
@@ -265,6 +269,66 @@ export interface FigurePayload {
     /** `state`: ready · missing · none (nothing painted). */
     texture: FigureBodyPart
   } | null
+}
+
+/** One job that waits while the character's automatic generation is paused (`generation_pause.waiting`). */
+export interface WaitingJob {
+  /** What Cancel names (`POST …/figure/waiting/cancel {id}`). */
+  id: string
+  source: 'trigger' | 'garment' | 'task' | 'improvement'
+  /** The tab the job belongs to ("Wardrobe", "Hairstyles", "Footwear", "Improvements"), "" for none. */
+  tab: string
+  label: string
+  /** What it would run ("worn 2 + ghost 2 + mesh 1", the Build's steps), "" when nothing is known. */
+  detail: string
+  /** First-attempt hub jobs; null = unknown. */
+  jobs: number | null
+}
+
+/** `GET …/figure`'s `generation_pause` (Ruling A42). */
+export interface GenerationPause {
+  paused: boolean
+  /** SYSTEM stamp the pause began, null when not paused. */
+  since: string | null
+  waiting: WaitingJob[]
+  /** What runs now and finishes (plain labels). */
+  running: string[]
+  /** The known first-attempt hub jobs of the waiting jobs, and how many have no estimate. */
+  resume_jobs: number
+  resume_unknown: number
+}
+
+/** The status light's line (checklist 8): what holds and how much. */
+export function pauseLine(gp: GenerationPause, t: Tr = EN): string {
+  if (!gp.paused) return t('Automatic generation on')
+  const n = gp.waiting.length
+  return n === 1 ? t('Automatic generation paused — 1 job held')
+    : t('Automatic generation paused — {n} jobs held').replace('{n}', String(n))
+}
+
+/** Why, written under the light. */
+export const PAUSE_REASON = 'Nothing starts by itself for this character: outfit changes, a new body or a finished '
+  + 'piece only collect. Buttons you press still run. A job that is already running finishes.'
+
+/** The Resume button with its cost (checklist 9): the known hub jobs, plus how many jobs have no estimate. */
+export function resumeLabel(gp: GenerationPause, t: Tr = EN): string {
+  if (!gp.waiting.length) return t('Resume — nothing waits')
+  const known = gp.resume_jobs === 1 ? t('Resume — 1 hub job starts')
+    : t('Resume — {n} hub jobs start').replace('{n}', String(gp.resume_jobs))
+  if (!gp.resume_unknown) return known
+  return `${known} ${gp.resume_unknown === 1 ? t('(+1 job of unknown cost)')
+    : t('(+{n} jobs of unknown cost)').replace('{n}', String(gp.resume_unknown))}`
+}
+
+/** One compact line of the waiting list: "Waiting: Wardrobe · Blazer · worn 2 + mesh 1 — 3 hub jobs" ("no hub job"
+ *  for 0: a held Build whose pieces wait in their own lines). */
+export function waitingLine(job: WaitingJob, t: Tr = EN): string {
+  // The server's label leads with the owning tab ("Wardrobe · Blazer"): the tab name is translated, the item not.
+  const lead = job.tab && job.label.startsWith(`${job.tab} · `)
+  const label = lead ? `${t(job.tab)}${job.label.slice(job.tab.length)}` : job.label
+  const head = `${t('Waiting')}: ${label}`
+  const detail = job.detail ? ` · ${job.detail}` : ''
+  return `${head}${detail} — ${job.jobs === 0 ? t('no hub job') : jobsTr(job.jobs, t)}`
 }
 
 /** "1 change" / "N changes". */

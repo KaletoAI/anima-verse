@@ -3039,6 +3039,9 @@ class _Job:
         #: the failure it must honour may have been recorded by the run it
         #: waited behind (Task 21 fix round).
         self.automatic = automatic
+        #: A click asked for this run (it started it, or attached to it while it waited): never held by the
+        #: character's pause of automatic generation (Ruling A42).
+        self.clicked = not automatic
         self.done = threading.Event()
         self.result: Dict[str, Any] = {}
         #: The tracked CPU task of a fit-only run (``refit_pool.track``), "" for any other run.
@@ -3078,13 +3081,84 @@ def _end_track(job: "_Job", error: str = "", *, discard: bool = False) -> None:
     job.track = ""
 
 
+def _held_locked(character_name: str, job: "_Job") -> bool:
+    """Ruling A42: an automatic run no click asked for waits while the character's automatic generation is
+    paused (``generation_pause``) — it stays in the FIFO, the worker passes over it."""
+    if job.clicked or not job.automatic:
+        return False
+    from app.core import generation_pause
+    return generation_pause.is_paused(character_name)
+
+
+def _pop_runnable_locked(character_name: str) -> Optional["_Job"]:
+    """Take the first job of the character's FIFO that is not held (Ruling A42; caller holds ``_lock``). The
+    held ones keep their places. None when every waiting job is held (or none waits)."""
+    queue = _queues.get(character_name)
+    for job in list(queue or ()):
+        if not _held_locked(character_name, job):
+            queue.remove(job)
+            return job
+    return None
+
+
+def held_items(character_name: str) -> List[str]:
+    """The item ids of the character's held runs (Ruling A42), in FIFO order, each once."""
+    with _lock:
+        return list(dict.fromkeys(j.item_id for j in _queues.get(character_name) or ()
+                                  if _held_locked(character_name, j)))
+
+
+def release_held(character_name: str) -> None:
+    """Resume (Ruling A42): start the worker for the runs that were held, in their FIFO order."""
+    with _lock:
+        if character_name in _active or not _queues.get(character_name):
+            return   # a worker runs (it takes them next) or nothing waits
+        _active.add(character_name)
+        try:
+            _spawn_locked(character_name)
+        except Exception:
+            _active.discard(character_name)
+            raise
+
+
+def cancel_held(character_name: str, item_id: str) -> int:
+    """The Figure tab's Cancel of a held run (Ruling A42): only the item's HELD runs leave the FIFO (a click's
+    run of it stays) — like ``cancel_garment``: their waiters get the cancelled result, their ``queued`` mark
+    ends unless the item still has a run. The number of runs taken out."""
+    from app.core import garment_store as gs
+    with _lock:
+        queue = _queues.get(character_name)
+        dropped = [j for j in queue or () if j.item_id == item_id and _held_locked(character_name, j)]
+        for job in dropped:
+            queue.remove(job)
+        current = _current.get(character_name)
+        still = (current is not None and current.item_id == item_id) or any(
+            j.item_id == item_id for j in queue or ()) or item_id in (_side.get(character_name) or {})
+        if dropped and not still:
+            gs.end(character_name, item_id, QUEUED)
+        if queue is not None and not queue and character_name not in _active:
+            _queues.pop(character_name, None)
+        for job in dropped:
+            job.result = {"ok": False, "cancelled": True, "error": CANCELLED, "ran": []}
+            job.done.set()
+            _end_track(job, discard=True)
+    if dropped:
+        logger.info("Garment %s/%s: %d held run(s) cancelled", character_name, item_id, len(dropped))
+    return len(dropped)
+
+
 def _spawn_locked(character_name: str) -> None:
     """Start the worker of a character whose queue was just filled (caller
-    holds ``_lock`` and has added the character to ``_active``). The head
-    job becomes the character's ``_current`` run here, so the queue view
-    never shows a run that is about to start as waiting."""
+    holds ``_lock`` and has added the character to ``_active``). The first
+    job that is not held (Ruling A42) becomes the character's ``_current``
+    run here, so the queue view never shows a run that is about to start as
+    waiting. When every waiting job is held no worker starts (the character
+    leaves ``_active``; ``release_held`` starts it on Resume)."""
     queue = _queues[character_name]
-    job = queue.popleft()
+    job = _pop_runnable_locked(character_name)
+    if job is None:
+        _active.discard(character_name)
+        return
     _current[character_name] = job
     try:
         threading.Thread(target=_worker, args=(character_name,), daemon=True,
@@ -3093,6 +3167,7 @@ def _spawn_locked(character_name: str) -> None:
         _current.pop(character_name, None)
         queue.appendleft(job)
         raise
+
 
 
 def _abort_spawn_locked(character_name: str, item_id: str) -> None:
@@ -3124,13 +3199,19 @@ def _worker(character_name: str) -> None:
             # failed before its first step (a step replaces the mark).
             gs.end(character_name, job.item_id, QUEUED, error=error)
             queue = _queues.get(character_name)
-            if queue:
-                _current[character_name] = queue.popleft()
-                if job.item_id in {_current[character_name].item_id, *(j.item_id for j in queue)}:
+            # Ruling A42: the next run that is not held; held runs keep their places in the FIFO.
+            nxt = _pop_runnable_locked(character_name) if queue else None
+            if nxt is not None:
+                _current[character_name] = nxt
+                if job.item_id in {nxt.item_id, *(j.item_id for j in queue)}:
                     # The item runs again (a click while it ran): it waits again.
                     gs.start(character_name, job.item_id, QUEUED)
             else:
-                _queues.pop(character_name, None)
+                if queue:
+                    if job.item_id in {j.item_id for j in queue}:
+                        gs.start(character_name, job.item_id, QUEUED)   # a held run of the same item waits
+                else:
+                    _queues.pop(character_name, None)
                 _current.pop(character_name, None)
                 _active.discard(character_name)
             job.done.set()
@@ -3342,6 +3423,8 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
         if job is None:
             job = wanted
             queue.append(job)
+        # A click is never held by the pause (Ruling A42) — nor the waiting run it attached to.
+        job.clicked = True
         if track and not job.track:
             job.track, track = track, ""
         if not gs.status(character_name, item_id).get("running_step"):
@@ -3380,14 +3463,16 @@ def enqueue_garment(character_name: str, item_id: str, *, automatic: bool = True
     check_run(character_name, item_id)
     with _lock:
         queue = _queues.setdefault(character_name, deque())
-        for job in queue:
-            if job.item_id == item_id and job.plain:
-                job.automatic = job.automatic and automatic
-                return job
-        job = _Job(item_id, None, None, False, automatic=automatic)
-        queue.append(job)
-        if not gs.status(character_name, item_id).get("running_step"):
-            gs.start(character_name, item_id, QUEUED)
+        job = next((j for j in queue if j.item_id == item_id and j.plain), None)
+        if job is not None:
+            job.automatic = job.automatic and automatic
+            if not automatic:
+                job.clicked = True   # a manual Build asked: never held (Ruling A42)
+        else:
+            job = _Job(item_id, None, None, False, automatic=automatic)
+            queue.append(job)
+            if not gs.status(character_name, item_id).get("running_step"):
+                gs.start(character_name, item_id, QUEUED)
         if character_name not in _active:
             _active.add(character_name)
             try:
@@ -3468,7 +3553,9 @@ def run_queued(character_name: str, item_ids: Iterable[str], *,
     """Run the chains of ``item_ids`` through the character's FIFO and wait
     for every one (blocking — the Build calls it). item id ->
     ``run_garment``'s result, or ``{ok: False, error}`` for an item that
-    could not be queued. An automatic trigger: an item whose chain failed
+    could not be queued, or ``{ok: False, paused: True, error}`` for an
+    automatic run held by the character's pause (Ruling A42: it stays in the
+    FIFO, Resume runs it; the caller stops waiting). An automatic trigger: an item whose chain failed
     for its current fsig (``cached_failure``) is not run — its result is
     that failure with ``cached: True``. ``explicit`` (a manual Build, ruling
     7a of plan 2026-11-12-unified-worn-pieces): the persisted failure of the
@@ -3498,9 +3585,29 @@ def run_queued(character_name: str, item_ids: Iterable[str], *,
         except ValueError as e:
             out[item_id] = {"ok": False, "error": str(e)}
     for item_id, job in jobs.items():
-        job.done.wait()
-        out[item_id] = dict(job.result or {"ok": False, "error": "the run ended without a result"})
+        while not job.done.wait(HELD_POLL_S):
+            if _job_held(character_name, job):
+                # Ruling A42: the character's automatic generation was paused while this run waited — it stays
+                # in the FIFO (Resume runs it), the caller does not wait for it.
+                out[item_id] = {"ok": False, "paused": True, "error": HELD_ERROR, "ran": []}
+                from app.core import generation_pause
+                generation_pause.notify_waiting(character_name)
+                break
+        else:
+            out[item_id] = dict(job.result or {"ok": False, "error": "the run ended without a result"})
     return out
+
+
+#: How often ``run_queued`` looks whether a waiting automatic run became held (Ruling A42).
+HELD_POLL_S = 0.5
+#: ``run_queued``'s result of a run held by the pause (Ruling A42, ``generation_pause``).
+HELD_ERROR = "Held — automatic generation of this character is paused"
+
+
+def _job_held(character_name: str, job: "_Job") -> bool:
+    """Whether ``job`` waits in the character's FIFO and is held (Ruling A42)."""
+    with _lock:
+        return job in (_queues.get(character_name) or ()) and _held_locked(character_name, job)
 
 
 def _clear_cached_failure(character_name: str, item_id: str) -> None:

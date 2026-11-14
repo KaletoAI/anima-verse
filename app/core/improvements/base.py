@@ -68,6 +68,16 @@ class ImprovementType:
         closed as done."""
         raise NotImplementedError
 
+    #: The candidate-key heads whose second part is a character name (``character:<name>[:…]``).
+    CHARACTER_KEY_HEADS = ("character", "base", "clothing", "outfit", "gallery")
+
+    def subject_character(self, key: str) -> str:
+        """The character a candidate works on, "" when it is no single character's (a location, a prop, an
+        item shared by its wearers). The engine holds the steps of a character whose automatic generation is
+        paused (Ruling A42); a type whose keys do not start ``<head>:<name>`` overrides this."""
+        head, _sep, rest = str(key or "").partition(":")
+        return rest.split(":", 1)[0] if head in self.CHARACTER_KEY_HEADS and rest else ""
+
     def apply(self, candidate: Candidate, params: Dict[str, Any], task_id: str) -> Optional[str]:
         """Synchronous; returns only after the asset is persisted.  May raise
         BackendBusyError (step stays pending) or any other Exception (attempt).

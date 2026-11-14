@@ -110,7 +110,7 @@ async def _serve(scope, receive, send) -> None:
 
     conn = sync_topics.register(user_id, token, "", "",
                                 wake=lambda: loop.call_soon_threadsafe(wake.set),
-                                abort=_abort)
+                                abort=_abort, admin=user.get("role") == users.ROLE_ADMIN)
 
     try:
         async def tracked(message) -> None:
