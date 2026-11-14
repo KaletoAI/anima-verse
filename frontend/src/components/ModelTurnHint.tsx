@@ -5,15 +5,19 @@ import { useI18n } from '../i18n/I18nProvider'
  * The one-line hint under every model viewer (T-U4, `lib/modelTurn.ts`): what the mouse does there, and — once the
  * drag has turned the model — the "Reset pose" button that stands it upright again (`onReset`; a double-click does
  * the same). `subject` names what turns: a figure (characters, clips) or a model (props, buildings, garments).
- * `locked`: the view is held straight on (a front view), so a drag moves the view instead.
+ * `locked`: the view is held straight on (a front view), so a drag moves the view instead. `resetsView` (Ruling
+ * A48c): the viewer's double-click also frames the view again, and the hint says so.
  */
-export function ModelTurnHint({ subject = 'model', locked = false, turned = false, onReset, style }: {
+export function ModelTurnHint({ subject = 'model', locked = false, turned = false, onReset, style, resetsView = false }: {
   subject?: 'figure' | 'model'; locked?: boolean; turned?: boolean; onReset?: () => void; style?: CSSProperties
+  resetsView?: boolean
 }) {
   const { t } = useI18n()
   const text = locked
     ? t('Front view: drag moves the view · Wheel: zoom')
-    : subject === 'figure'
+    : resetsView
+      ? t('Drag: turn the model · Shift+drag: move the view · Wheel: zoom · Double-click: upright and framed again')
+      : subject === 'figure'
       ? t('Drag: turn the figure · Shift+drag: move the view · Wheel: zoom · Double-click: upright')
       : t('Drag: turn the model · Shift+drag: move the view · Wheel: zoom · Double-click: upright')
   return (

@@ -5404,6 +5404,22 @@
     "the running job’s result will stay a kept mesh": "das Ergebnis des laufenden Jobs bleibt ein aufbewahrtes Mesh",
     "Waits for the running mesh job of this piece": "Wartet auf den laufenden Mesh-Job dieses Teils",
     "No decimated mesh was kept": "Es wurde kein reduziertes Mesh behalten",
-    "A garment run of this piece is in another step — use the mesh after it": "Ein Lauf dieses Teils ist in einem anderen Schritt — nimm das Mesh danach"
+    "A garment run of this piece is in another step — use the mesh after it": "Ein Lauf dieses Teils ist in einem anderen Schritt — nimm das Mesh danach",
+    "Auto step — not a setting": "Auto-Stufe — keine Einstellung",
+    "Fit allowance preview": "Vorschau der Weitenzugabe",
+    "Preview what Auto took on the stored fit": "Zeigt, was Auto bei der gespeicherten Anpassung gewählt hat",
+    "Auto: decided at the next fit": "Auto: entscheidet bei der nächsten Anpassung",
+    "Gap between the widened piece and the body over its trunk (between hips and shoulders, within the width the allowance scales), before the fit pushes it out; negative = inside the body": "Abstand zwischen dem geweiteten Teil und dem Körper am Rumpf (zwischen Hüfte und Schultern, innerhalb der Breite, die die Zugabe skaliert), bevor die Anpassung es nach außen schiebt; negativ = im Körper",
+    "Gap to the body (trunk)": "Abstand zum Körper (Rumpf)",
+    "median": "Median",
+    "No trunk band on this piece": "Dieses Teil hat keinen Rumpfbereich",
+    "Preview on the prepared mesh — the fit applies it on the body": "Vorschau am vorbereiteten Mesh — die Anpassung wendet sie am Körper an",
+    "Preview on the raw mesh — the fit applies it on the body": "Vorschau am Roh-Mesh — die Anpassung wendet sie am Körper an",
+    "Only Auto reaches this step; settable: +0, +3, +6, +10 %": "Diese Stufe erreicht nur Auto; einstellbar: +0, +3, +6, +10 %",
+    "Saves the allowance for this piece and runs nothing; the fit becomes due (0 hub jobs)": "Speichert die Zugabe für dieses Teil und führt nichts aus; die Anpassung wird fällig (0 Hub-Jobs)",
+    "Back to the normal view": "Zurück zur normalen Ansicht",
+    "Opens the same view at about 90 % of the window; Esc goes back": "Öffnet dieselbe Ansicht auf etwa 90 % des Fensters; Esc geht zurück",
+    "Larger view": "Größere Ansicht",
+    "Drag: turn the model · Shift+drag: move the view · Wheel: zoom · Double-click: upright and framed again": "Ziehen: Modell drehen · Umschalt+Ziehen: Ansicht verschieben · Mausrad: Zoom · Doppelklick: aufrecht und neu eingerahmt"
   }
 }

@@ -802,6 +802,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             meshFetchUrl={meshFetchUrl}
             onMeshFetched={onMeshFetched}
             pieceName={info.name || name}
+            meshAllowance={garment?.fit_settings ? { character, itemId, info: garment.fit_settings, busy,
+              onSaved: () => startPoll(0) } : null}
           />
         </div>
         <div className="ga-garment-dialog-col">

@@ -621,6 +621,39 @@ check('[21] Figure tab source', [/<StepRowView\b/.test(fieldFigure), /<SubTabs\b
   /builtAt=\{data\.served_built_at\}/.test(fieldFigure), /[✓⏳]/.test(fieldFigure), /[✓⏳]/.test(figureModelSrc)],
   [true, true, true, false, false]);
 
+// [22] Ruling A48c — the mesh view's fit allowance (`fitWiden.ts`, pure helpers; the rule's parity with the fit is
+//      scripts/smoke_fit_widen_parity.py). Hand-derived: +3 % → ×1.03, Auto has no factor of its own; ×1.04 is an
+//      automatic step and no setting, ×1.10 is +10 %; Auto's factor is read only from a fit made with Auto (a fit set to
+//      +10 % says nothing about Auto); "Pz8=" is base64 of the bytes 63, 63 (bits 0..5); the factor list
+//      [1, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1] puts ×1.06 at bit 4; a gap of −3 mm reads "−3.0 mm".
+{
+  const w = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/fitWiden.ts'));
+  const choices = ['auto', 0, 3, 6, 10];
+  check('[22] choice factors', [w.choiceFactor(3), w.choiceFactor(0), w.choiceFactor(10), w.choiceFactor('auto')],
+    [1.03, 1, 1.1, null]);
+  check('[22] factor → choice', [w.factorChoice(1.04, choices), w.factorChoice(1.1, choices), w.factorChoice(1, choices)],
+    [null, 10, 0]);
+  check('[22] Auto factor from the stored fit', [
+    w.autoFactor({ allowance: { setting: 'auto', factor: 1.04, trigger: [] } }),
+    w.autoFactor({ allowance: { setting: 10, factor: 1.1, trigger: [] } }),
+    w.autoFactor({ allowance: { setting: 'auto', factor: 1.04, trigger: [], inherited: true } }),
+    w.autoFactor(null)], [1.04, null, null, null]);
+  const factors = [1, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1];
+  check('[22] labels, bits, mask', [w.factorText(1.04), w.factorText(1), w.maskBit(factors, 1.06), w.maskBit(factors, 1.05),
+    Array.from(w.decodeMask('Pz8=')), w.mmText(-3), w.mmText(12.44), w.mmText(null)],
+    ['×1.04', '×1.00', 4, -1, [63, 63], '−3.0 mm', '12.4 mm', '–']);
+  const table = { factors, steps: factors.map((f, i) => ({ factor: f, share: i / 10, face_share: 0, inside_faces: 0,
+    gap_p50_mm: null, gap_min_mm: null })) };
+  check('[22] step lookup', [w.stepAt(table, 1.06)?.share, w.stepAt(table, 1.05), w.stepAt(null, 1)], [0.4, null, null]);
+  const xyz = [0.25, 1, 0.05, 0.6, 0.5, -0.05];
+  w.widenInPlace(xyz, 1.06, { centre_x: 0.1, centre_z: -0.05, half_width: 0.2 });
+  check('[22] widen (smoke_fit_widen_parity [1])', xyz.map((v) => Math.round(v * 1e9) / 1e9), [0.259, 1, 0.056, 0.612, 0.5, -0.05]);
+  const meshView = src('frontend/src/tabs/characters/GarmentMeshView.tsx');
+  check('[22] viewer source: larger view portalled, Esc goes back first, zoom reset on double-click, no native dialogs',
+    [/createPortal\(/.test(meshView), /if \(large\) setLarge\(false\)/.test(meshView), /resetViewOnDoubleClick/.test(meshView),
+      /window\.(prompt|alert|confirm)/.test(meshView)], [true, true, true, false]);
+}
+
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);
   for (const f of failures) console.error(`  ${f}`);

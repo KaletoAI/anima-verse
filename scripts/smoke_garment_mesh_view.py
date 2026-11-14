@@ -52,6 +52,31 @@ grid lines).
     -> 1, hits +2; If-None-Match with the ETag -> 304.
 [6] Auth: the player session -> 403 on the mesh, body and overlay routes; with the server's gate
     (``auth_gate_middleware``) an anonymous GET of ``mesh/prepared`` -> 401 and nothing computed.
+
+Ruling A48c — the fit allowance's preview numbers (``allowance_factors`` / ``widen_axis`` / ``trunk_band_rows`` /
+``allowance_table``):
+[5b] The body view of [5] carries ``allowance``: factors (1.0, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1) — 1.0, the
+    settable +3 / +6 / +10 % and the automatic steps 1.02 .. 1.08, sorted; its first step's share is the view's
+    share (0.125 ± 0.01). The axis in the mesh frame: the body's median x 0 and its band's depth middle z 0, the
+    half width 0.12 · 1.7 = 0.204 in the body frame -> mapped back with s 0.2, t (0, 1, 0): (0 − 0)/0.2 = 0,
+    (0 − 0)/0.2 = 0, 0.204/0.2 = 1.02 (± 1e-6). The red overlay holds 96 faces and the mask 96 bytes, each with
+    bit 0 (inside at 1.0) set.
+[7] ``allowance_table`` on a cylinder: body = a closed cylinder of radius R 0.10 about the y axis (256 sides, the
+    side's flats lie 0.10 · cos(π/256) = 0.099992 from the axis — 0.008 mm, nothing at this tolerance), y 0 .. 0.3
+    in 151 rings (2 mm apart: the body's surface voxelisation samples each triangle 5 × 5, so it must be dense);
+    piece = an open tube of radius r 0.092 (96 sides, 11 rings at y 0.10 .. 0.20), placed as is (s 1, t 0, k 1:
+    one unit = 1 m), axis (0, 0), half width 0.5 (every vertex within it: x and z are both scaled by f, so the tube
+    stays round with radius 0.092 · f). Voxel 1 mm.
+    a. Gap = 0.092 · f − 0.100, in mm (every band vertex at the same radius, so the median = the minimum):
+       f 1.00 -> −8.00, 1.02 -> −6.16, 1.03 -> −5.24, 1.04 -> −4.32, 1.06 -> −2.48, 1.08 -> −0.64, 1.10 -> +1.20
+       (± 0.5 mm: the field's trilinear sampling at 1 mm).
+    b. Inside: a triangle's centroid lies at radius r·f·(1 + 2 cos(2π/96))/3 = r·f·0.998573 (two corners on one
+       ring, one on the next, all at the same angle span): at 1.08 0.099217 (0.78 mm inside the body), at 1.10
+       0.101058 (1.06 mm outside) -> share 1.0 for every f up to 1.08 and 0.0 at 1.10; every face's mask byte
+       has bits 0 .. 5 set and bit 6 clear = 63.
+    c. The band: with trunk heights (0.115, 0.185) the rings at 0.12 .. 0.18 = 7 · 96 = 672 vertices; with the
+       half width 0.05 instead (no heights): per ring the points with |0.092 cos a| ≤ 0.05, |cos a| ≤ 0.5435, a in
+       [57.1°, 122.9°] and its mirror — at 3.75° spacing k 16 .. 32 = 17 points, twice -> 34 per ring, 374 in all.
 """
 import json
 import os
@@ -101,6 +126,27 @@ def box(lo, hi, n):
             F.append(np.stack([a, c, d], -1).reshape(-1, 3))
             P.append(pts)
     return np.concatenate(P), np.concatenate(F)
+
+
+def cylinder(r, n, y0, y1, *, rings=2, closed=False):
+    """A cylinder of radius r about the y axis: n sides, ``rings`` rings from y0 to y1 (welded, quads split in two),
+    with a fan cap at each end when ``closed``."""
+    import numpy as np
+    a = np.arange(n) * 2 * np.pi / n
+    ys = np.linspace(y0, y1, rings)
+    P = np.array([[r * np.cos(t), y, r * np.sin(t)] for y in ys for t in a])
+    F = []
+    for i in range(rings - 1):
+        for j in range(n):
+            p, q = i * n + j, i * n + (j + 1) % n
+            F += [[p, q, q + n], [p, q + n, p + n]]
+    if closed:
+        bottom, top = len(P), len(P) + 1
+        P = np.vstack([P, [[0, y0, 0], [0, y1, 0]]])
+        last = (rings - 1) * n
+        for j in range(n):
+            F += [[bottom, (j + 1) % n, j], [top, last + j, last + (j + 1) % n]]
+    return P, np.array(F)
 
 
 def masks():
@@ -317,6 +363,19 @@ def main() -> int:
                                          headers={"If-None-Match": r.headers.get("etag", "")}).status_code, 304)
             check("overlay nope", client.get(f"{base_url}/prepared/body/nope").status_code, 400)
 
+            print("[5b] the allowance block of the body view (Ruling A48c)")
+            al = body.get("allowance") or {}
+            check("factors", al.get("factors"), [1.0, 1.02, 1.03, 1.04, 1.06, 1.08, 1.1])
+            near("first step = the view's share", ((al.get("steps") or [{}])[0]).get("share"), 0.125, 0.01)
+            ax = al.get("axis") or {}
+            near("axis centre x (mesh frame)", ax.get("centre_x"), 0.0, 1e-6)
+            near("axis centre z (mesh frame)", ax.get("centre_z"), 0.0, 1e-6)
+            near("axis half width (mesh frame)", ax.get("half_width"), 1.02, 1e-6)
+            import base64
+            mask = base64.b64decode(al.get("mask") or "")
+            check("mask: one byte per overlay face, bit 0 set", (al.get("mask_faces"), len(mask),
+                                                                 all(b & 1 for b in mask)), (96, 96, True))
+
             print("[6] auth")
             client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_USER])
             for url in (f"{base_url}/prepared", f"{base_url}/prepared/body", f"{base_url}/prepared/body/ghost"):
@@ -330,6 +389,25 @@ def main() -> int:
             check("anonymous mesh", anon.get(f"{base_url}/prepared", headers={"accept": "*/*"}).status_code, 401)
             check("anonymous body", anon.get(f"{base_url}/raw/body", headers={"accept": "*/*"}).status_code, 401)
         check("anonymous computed nothing", garment_mesh_view.info()["computes"], computes)
+
+        print("[7] allowance_table on a cylinder (hand-derived)")
+        cyl_P, cyl_F = cylinder(0.10, 256, 0.0, 0.3, rings=151, closed=True)
+        tube_P, tube_F = cylinder(0.092, 96, 0.10, 0.20, rings=11)
+        axis = {"centre_x": 0.0, "centre_z": 0.0, "half_width": 0.5}
+        table = garment_mesh_view.allowance_table(tube_P, tube_F, cyl_P, cyl_F, s=1.0, t=np.zeros(3), axis=axis,
+                                                  vox=0.001, k=1.0, trunk_y=None)
+        gaps = {1.0: -8.0, 1.02: -6.16, 1.03: -5.24, 1.04: -4.32, 1.06: -2.48, 1.08: -0.64, 1.1: 1.2}
+        for st in table["steps"]:
+            near(f"gap p50 at x{st['factor']}", st["gap_p50_mm"], gaps[st["factor"]], 0.5)
+            near(f"gap min at x{st['factor']}", st["gap_min_mm"], gaps[st["factor"]], 0.5)
+        check("share per factor", [st["share"] for st in table["steps"]], [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0])
+        check("mask bytes", (int(table["bits"].min()), int(table["bits"].max()), int(table["union"].sum())),
+              (63, 63, len(tube_F)))
+        check("band, every vertex", table["band_vertices"], 11 * 96)
+        rows = garment_mesh_view.trunk_band_rows(tube_P, axis, (0.115, 0.185))
+        check("band between the trunk heights", int(rows.sum()), 672)
+        rows = garment_mesh_view.trunk_band_rows(tube_P, {**axis, "half_width": 0.05}, None)
+        check("band within the half width", int(rows.sum()), 374)
 
     print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall checks passed")
     return 1 if FAILS else 0

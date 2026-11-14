@@ -10,6 +10,7 @@
  * (another character or item; null = nothing to load).
  */
 import type { FitSettingsInfo } from './fitSettingsModel'
+import type { AllowanceView } from './fitWiden'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiGet, apiPost, type BootHemState } from '../../lib/api'
 import type { ImageTileMeta } from './RefImage'
@@ -143,6 +144,8 @@ export interface GarmentMeshBodyView {
   seconds: number
   ghost_url: string
   inside_url: string | null
+  /** Ruling A48c: the fit allowance's axis and, per factor, the share inside and the trunk gap. */
+  allowance?: AllowanceView
 }
 
 export interface GarmentFitInfo {

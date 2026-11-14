@@ -54,6 +54,7 @@ import {
 } from './garmentStyle'
 import type { AttemptTile, ChipSpec, GarmentLimits, GarmentRunBody, LightState } from './garmentStyle'
 import { GarmentMeshTiles } from './GarmentMeshView'
+import type { MeshAllowance } from './GarmentMeshView'
 import { MeshJobFetch } from './MeshJobFetch'
 import { StepLight } from './StepRows'
 import { armLightColour, armLightShort, armLightText } from './fitSettingsModel'
@@ -371,7 +372,7 @@ function upToText(n: number, t: (s: string) => string): string {
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
-  viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched, pieceName = '',
+  viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched, pieceName = '', meshAllowance = null,
   refitOn = '', shownFit = null, onMeshUse, imageUseBusy }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
@@ -396,6 +397,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   onMeshFetched?: () => void
   /** The piece's name (the mesh viewer's title). */
   pieceName?: string
+  /** Ruling A48c: the plain body's fit allowance, previewed and saved beside the mesh viewer; null = none. */
+  meshAllowance?: MeshAllowance | null
   /** Ruling A50: the body shape selected in the dialog's body switch ("" = the plain body) — Re-fit fits on it and
    *  says so. */
   refitOn?: string
@@ -666,7 +669,8 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
         <MeshJobFetch url={garment ? meshFetchUrl : null} disabled={busy || !!meshJob}
           disabledReason={meshJob ? t('Waits for the running mesh job of this piece') : ''} onDone={() => onMeshFetched?.()} />
         <GarmentMeshTiles view={mesh?.view} builtAt={mesh?.created_at ?? null} pieceName={pieceName}
-          userAccepted={!!mesh?.user_accepted} onUse={onMeshUse} useDisabled={busy || !garment} />
+          userAccepted={!!mesh?.user_accepted} onUse={onMeshUse} useDisabled={busy || !garment}
+          allowance={meshAllowance} />
       </div>
 
       <StepLabel garment={garment} step="fit" label={stepLabels.fit || 'Fit'} help={STEP_HELP.fit} />

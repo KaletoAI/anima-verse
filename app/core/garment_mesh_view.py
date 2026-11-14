@@ -21,6 +21,19 @@ surface): a face is inside when the field at its centroid is negative. The share
 Everything the client draws is in the MESH's own frame, so the mesh file is served unchanged: the ghost is the body
 mapped back by ``(X - t) / s`` and the red overlay is the inside faces of the mesh itself, each a small static GLB.
 
+**The fit allowance (Ruling A48c).** The viewer previews the piece's width allowance (Ruling A47,
+``garment_fit.scale_retry``) live against the body: the fit widens the PLACED piece about the body's torso axis
+(``garment_fit.widen``: z scaled about the axis, x scaled within ``CLOTHING_BODY_HALF_X · height`` of it and shifted
+beyond, y untouched) before its push. Placement is a uniform scale plus an offset, so the same widening in the
+mesh's own frame is ``widen`` about the axis mapped back (``(c - t) / s``, half width ``/ s``) — the client runs
+that one rule (``frontend/src/tabs/characters/fitWiden.ts``, a port with a parity smoke) on the shown mesh and the
+red overlay. The server measures every factor the allowance can take (``allowance_factors``: the settable choices
+and the automatic steps) once, with the same body field: the share inside the body, and the gap to the body over
+the piece's trunk band (``trunk_band_rows``: the welded vertices within the widening's half width of the axis,
+between the hips and the shoulder joints) as p50 and minimum in mm. The red overlay holds every face that is inside
+at ANY factor; ``allowance.mask`` says per overlay face (one byte, bit ``i`` = ``allowance_factors()[i]``) at which
+factors it is inside, so the client shows exactly the faces of the factor being previewed.
+
 Computed once per input set and cached on disk under ``<storage>/.cache/garment_mesh_view/<key>.{json,ghost.glb,
 inside.glb}`` — ``key`` is a hash of ``VIEW_VERSION`` and the content versions of the mesh file, both base models,
 the bald front view, the ghost front and the group's base copy (the inputs of the placement and the field). A key
@@ -29,6 +42,7 @@ files. ``_INFO`` counts computations and cache hits (``scripts/smoke_garment_mes
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -47,8 +61,9 @@ logger = get_logger("garment_mesh_view")
 WHICH: Tuple[str, ...] = ("prepared", "raw")
 #: The two cached overlays (``overlay_path``).
 OVERLAYS: Tuple[str, ...] = ("ghost", "inside")
-#: Stamped into the cache key: a change of the placement or the inside rule computes every view again.
-VIEW_VERSION = 1
+#: Stamped into the cache key: a change of the placement or the inside rule computes every view again
+#: (2: Ruling A48c, the allowance table and the union overlay).
+VIEW_VERSION = 2
 #: The ghost's colour (RGBA) and the inside faces' (the client draws them translucent / on top).
 GHOST_RGBA = [0.62, 0.70, 0.80, 1.0]
 INSIDE_RGBA = [0.97, 0.32, 0.29, 1.0]
@@ -218,6 +233,109 @@ def placement(P, F, body_P, masks) -> Tuple[float, np.ndarray]:
     return s, t
 
 
+def allowance_factors() -> Tuple[float, ...]:
+    """Every width factor the fit allowance can apply (Ruling A47): 1.0, the settable choices
+    (``garment_fit.ALLOWANCE_CHOICES`` in percent) and the automatic steps (``SCALE_RETRY_STEPS``), sorted —
+    at most 8, so one mask byte per face holds them all."""
+    from app.core import garment_fit as gf
+    out = {1.0} | {round(float(v), 4) for v in gf.SCALE_RETRY_STEPS}
+    out |= {round(1.0 + float(c) / 100.0, 4) for c in gf.ALLOWANCE_CHOICES if c != "auto"}
+    factors = tuple(sorted(out))
+    assert len(factors) <= 8
+    return factors
+
+
+def widen_axis(P, F, s: float, t, body_P) -> Dict[str, float]:
+    """The axis the fit widens about (``garment_fit.torso_axis`` on the placed welded mesh without its crumbs, half
+    width ``CLOTHING_BODY_HALF_X`` of the body height — ``fit_clothing``'s ``scale_retry`` call), in the MESH's
+    own frame (``(c - t) / s``, half width ``/ s``): ``{centre_x, centre_z, half_width}``."""
+    from app.core import garment_fit as gf
+    body_P = np.asarray(body_P, np.float64)
+    Pw, Fw, _inv = gf.weld(P, F)
+    Pk, _Fk, _keep = gf.drop_small(Pw, Fw)
+    height_u = float(np.ptp(body_P[:, 1]))
+    t = np.asarray(t, np.float64)
+    cx, cz = gf.torso_axis(Pk * s + t, body_P, height_u=height_u)
+    return {"centre_x": float((cx - t[0]) / s), "centre_z": float((cz - t[2]) / s),
+            "half_width": float(gf.CLOTHING_BODY_HALF_X * height_u / s)}
+
+
+def trunk_band_rows(Q, axis_body: Dict[str, float], trunk_y: Optional[Tuple[float, float]]) -> np.ndarray:
+    """The rows of the placed vertices ``Q`` (body frame) the gap is read over: within the widening's half width of
+    the axis in x (the part the allowance scales; a sleeve beyond it is only shifted) and, with ``trunk_y``
+    ``(hips y, shoulder y)`` in the same frame, between them (``garment_fit.trunk_band``'s heights)."""
+    Q = np.asarray(Q, np.float64)
+    rows = np.abs(Q[:, 0] - axis_body["centre_x"]) <= axis_body["half_width"]
+    if trunk_y is not None:
+        rows &= (Q[:, 1] > trunk_y[0]) & (Q[:, 1] < trunk_y[1])
+    return rows
+
+
+def trunk_heights(body_u_P, body_r) -> Optional[Tuple[float, float]]:
+    """``(hips y, lowest shoulder y)`` of the rigged body's joints carried to the unrigged body's frame by their
+    share of the height (the two frames differ by the scale ``k`` and may differ in origin); None without them."""
+    from app.core.rig_contract import norm_bone_name
+    joints = {norm_bone_name(k): np.asarray(v, np.float64) for k, v in (body_r.joint_positions or {}).items()}
+    hips = joints.get("hips")
+    shoulders = [joints[k][1] for k in ("leftarm", "rightarm") if k in joints]
+    if hips is None or not shoulders:
+        return None
+    yr = np.asarray(body_r.positions, np.float64)[:, 1]
+    yu = np.asarray(body_u_P, np.float64)[:, 1]
+    span_r, span_u = float(np.ptp(yr)), float(np.ptp(yu))
+    if not (span_r > 0 and span_u > 0):
+        return None
+    to_u = lambda y: float(yu.min() + (y - yr.min()) / span_r * span_u)  # noqa: E731
+    return to_u(float(hips[1])), to_u(float(min(shoulders)))
+
+
+def allowance_table(P, F, body_P, body_F, *, s: float, t, axis: Dict[str, float], vox: float, k: float,
+                    trunk_y: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
+    """Per factor of ``allowance_factors`` the widened piece against the body (block above): ``{factors, steps
+    [{factor, share, face_share, inside_faces, gap_p50_mm, gap_min_mm}], band_vertices, union (mask of the faces
+    inside at any factor), bits (per face, bit i = inside at factors[i])}``. ``P, F`` in the mesh frame, ``(s, t)``
+    the placement, ``axis`` in the mesh frame (``widen_axis``), ``k`` metres per body unit."""
+    from app.core import garment_fit as gf
+    P = np.asarray(P, np.float64)
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    t = np.asarray(t, np.float64)
+    factors = allowance_factors()
+    axis_body = {"centre_x": axis["centre_x"] * s + t[0], "centre_z": axis["centre_z"] * s + t[2],
+                 "half_width": axis["half_width"] * s}
+    Q = P * s + t
+
+    def widened(X, f):
+        return gf.widen(X, f, centre_x=axis_body["centre_x"], centre_z=axis_body["centre_z"],
+                        half_width=axis_body["half_width"])
+    Pw, _Fw, _inv = gf.weld(P, F)
+    Qw = Pw * s + t
+    rows = trunk_band_rows(Qw, axis_body, trunk_y)
+    lo = np.minimum(Q.min(0), widened(Q, factors[-1]).min(0))
+    hi = np.maximum(Q.max(0), widened(Q, factors[-1]).max(0))
+    margin = gf.SDF_MARGIN_M * vox / gf.VOX_M
+    sdf = gf.body_sdf(np.asarray(body_P, np.float64), np.asarray(body_F, np.int64).reshape(-1, 3), vox=vox,
+                      bounds=(lo - margin, hi + margin))
+    area = None
+    bits = np.zeros(len(F), np.uint8)
+    steps = []
+    for i, f in enumerate(factors):
+        Qf = widened(Q, f)
+        centroids = Qf[F].mean(axis=1) if len(F) else np.zeros((0, 3))
+        mask = sdf.sample(centroids) < 0 if len(F) else np.zeros(0, bool)
+        bits |= (mask.astype(np.uint8) << i)
+        area = gf.triangle_areas(Qf, F)
+        total = float(area.sum())
+        share = float(area[mask].sum() / total) if total > 0 else (float(mask.mean()) if len(mask) else 0.0)
+        gap = sdf.sample(widened(Qw[rows], f)) * k * 1000.0 if rows.any() else np.zeros(0)
+        steps.append({"factor": f, "share": round(share, 4),
+                      "face_share": round(float(mask.mean()) if len(mask) else 0.0, 4),
+                      "inside_faces": int(mask.sum()),
+                      "gap_p50_mm": round(float(np.median(gap)), 1) if len(gap) else None,
+                      "gap_min_mm": round(float(gap.min()), 1) if len(gap) else None})
+    return {"factors": list(factors), "steps": steps, "band_vertices": int(rows.sum()), "union": bits > 0,
+            "bits": bits}
+
+
 def overlay_glb(P, F, rgba, *, name: str) -> bytes:
     """A static GLB of the faces ``F`` over ``P`` (only the vertices they use), one flat colour, double-sided."""
     from app.core.glb_mesh import static_glb
@@ -288,14 +406,24 @@ def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[
         raise ViewUnavailable(f"The piece cannot be placed on this body: {e}")
     P, F, _U, _image, _mime, _material = static_arrays(inputs["mesh"].read_bytes())
     s, t = placement(P, F, body_u.positions, {"body": body_mask, "garment": ghost_mask})
-    mask, share, face_share = inside_faces(P * s + t, F, body_u.positions, body_u.faces, vox=garment_fit.VOX_M / k)
+    vox = garment_fit.VOX_M / k
+    mask, share, face_share = inside_faces(P * s + t, F, body_u.positions, body_u.faces, vox=vox)
+    # Ruling A48c: the allowance table; the red overlay holds the faces inside at ANY factor, ``mask`` names which.
+    axis = widen_axis(P, F, s, t, body_u.positions)
+    table = allowance_table(P, F, body_u.positions, body_u.faces, s=s, t=t, axis=axis, vox=vox, k=k,
+                            trunk_y=trunk_heights(body_u.positions, body_r))
+    union = table.pop("union") | mask
+    bits = table.pop("bits")[union]
     files = _cache_files(inputs["key"])
     _write_atomic(files["ghost"], overlay_glb((body_u.positions - t) / s, body_u.faces, GHOST_RGBA, name="body"))
-    if mask.any():
-        _write_atomic(files["inside"], overlay_glb(P, F[mask], INSIDE_RGBA, name="inside"))
+    if union.any():
+        _write_atomic(files["inside"], overlay_glb(P, F[union], INSIDE_RGBA, name="inside"))
+    allowance = {"axis": axis, **table, "mask_faces": int(union.sum()),
+                 "mask": base64.b64encode(bits.astype(np.uint8).tobytes()).decode("ascii")}
     result = {"key": inputs["key"], "share": round(share, 4), "face_share": round(face_share, 4),
               "faces": int(len(F)), "inside_faces": int(mask.sum()), "bsig": inputs["bsig"],
               "placement": {"scale": s, "offset": [float(v) for v in t], "k": float(k)},
+              "allowance": allowance,
               "computed_at": utc_now_iso(), "seconds": round(time.monotonic() - started, 2)}
     _write_atomic(files["json"], json.dumps(result).encode("utf-8"))
     logger.info("Mesh view %s/%s %s: %d of %d faces inside the body (%.1f %% of the area) in %.1f s",
@@ -310,14 +438,16 @@ def _cached(key: str) -> Optional[Dict[str, Any]]:
         result = json.loads(files["json"].read_text("utf-8"))
     except (OSError, ValueError):
         return None
-    if not files["ghost"].is_file() or (result.get("inside_faces") and not files["inside"].is_file()):
+    if not files["ghost"].is_file() or (((result.get("allowance") or {}).get("mask_faces") or result.get("inside_faces"))
+                                        and not files["inside"].is_file()):
         return None
     return result
 
 
 def body_view(character_name: str, item_id: str, which: str, attempt: int = 0) -> Dict[str, Any]:
     """The body view of the mesh ``which`` / ``attempt``: ``{key, share, face_share, faces, inside_faces, bsig,
-    placement {scale, offset, k}, computed_at, seconds}`` — from the cache, or computed now (blocking; Blender is
+    placement {scale, offset, k}, allowance {axis, factors, steps, band_vertices, mask_faces, mask}, computed_at,
+    seconds}`` — from the cache, or computed now (blocking; Blender is
     not involved, the body field is numpy). ``LookupError`` without the mesh, ``ViewUnavailable`` when the body
     cannot be shown, ValueError for a bad ``which`` / attempt / item."""
     from app.core.keyed_lock import keyed_lock

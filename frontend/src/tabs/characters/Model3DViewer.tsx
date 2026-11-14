@@ -282,7 +282,15 @@ export interface ViewerCompanion {
   /** `ghost`: translucent grey-blue, never hides the model; `mark`: flat red, drawn over the model's own faces. */
   style: 'ghost' | 'mark'
   visible: boolean
+  /** Ruling A48c: the companion follows the viewer's `deform` (it is part of the shown mesh, e.g. its red faces). */
+  follow?: boolean
+  /** Ruling A48c: show only the faces whose byte in `bits` (one per face, in the file's order) has bit `bit`. */
+  faceBits?: { bits: Uint8Array; bit: number } | null
 }
+
+/** Ruling A48c: a live position map of the shown model — `map` rewrites flat xyz positions (in the loaded model's
+ *  own frame) in place, always starting from the positions as loaded; a new `key` applies it again. */
+export interface ViewerDeform { key: string; map: (xyz: Float32Array) => void }
 
 export interface ActionAccessOverlay {
   role: 'actor' | 'partner'
@@ -301,7 +309,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
   meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model', extensionBones = false,
-  companions, onCompanionState }:
+  companions, onCompanionState, deform = null, resetViewOnDoubleClick = false }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; sideToolbar?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Whether the "Extension bones" overlay starts switched on (Rulings A45/A56, `extensionGroupOverlay.ts`): the
      *  surface each of `motion`'s non-hair groups moves, as a wire grid in one colour per group, faded by skin
@@ -486,6 +494,11 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
     companions?: ViewerCompanion[]
     /** A companion started loading, finished or failed (`error`: it is not shown). */
     onCompanionState?: (key: string, state: 'loading' | 'ready' | 'error') => void
+    /** Ruling A48c: a live position map of the model and its `follow` companions (`ViewerDeform`); null = as loaded.
+     *  Applied without reloading anything (the fit allowance's preview). */
+    deform?: ViewerDeform | null
+    /** Ruling A48c: a double-click also frames the view again (zoom and pan back), not only the pose. */
+    resetViewOnDoubleClick?: boolean
     /** The model's collision capsules (`model.collision`, server
      *  app/core/collision.py). With capsules the viewer offers "Collision
      *  capsules": wireframes on the PLAYING figure, placed every frame by
@@ -617,6 +630,17 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   onCompanionStateRef.current = onCompanionState
   const companionFnRef = useRef<(() => void) | null>(null)
   const companionsKey = (companions || []).map((c) => `${c.key}|${c.url}|${c.style}|${c.visible ? 1 : 0}`).join(';')
+  const deformRef = useRef(deform)
+  deformRef.current = deform
+  const deformFnRef = useRef<(() => void) | null>(null)
+  const deformKey = `${deform?.key || ''}|${(companions || []).map((c) => `${c.key}:${c.follow ? 1 : 0}:${
+    c.faceBits ? c.faceBits.bit : '-'}`).join(';')}`
+  const resetViewOnDblRef = useRef(resetViewOnDoubleClick)
+  resetViewOnDblRef.current = resetViewOnDoubleClick
+  // The viewer's height is read live (Ruling A48c: the larger view grows the SAME viewer — a new height resizes the
+  // canvas and keeps the model, the camera and the pose).
+  const heightRef = useRef(height)
+  heightRef.current = height
   /** Reference-size overlay of the current placement (own sprites/materials). */
   const aidsRef = useRef<Object3D | null>(null)
   const placementRef = useRef(placement)
@@ -758,6 +782,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   useEffect(() => { polylineFnRef.current?.() }, [polylines])
   useEffect(() => { meshAdjustFnRef.current?.() }, [meshAdjust])
   useEffect(() => { companionFnRef.current?.() }, [companionsKey])
+  useEffect(() => { deformFnRef.current?.() }, [deformKey])
   useEffect(() => { if (focusKey) refitFnRef.current?.() }, [focusKey])
   useEffect(() => { slotFnRef.current?.() }, [slots])
   // Disarming the tool drops whatever was half-drawn: a ring that survived
@@ -905,10 +930,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         const scene = new THREE.Scene()
         scene.background = null
 
-        const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 5000)
+        const camera = new THREE.PerspectiveCamera(45, width / heightRef.current, 0.1, 5000)
         const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-        renderer.setSize(width, height)
+        renderer.setSize(width, heightRef.current)
         mount.appendChild(renderer.domElement)
 
         // Teardown is wired up the moment the WebGL context exists — BEFORE the
@@ -1624,6 +1649,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               target: controls.target.toArray() as [number, number, number],
               radius,
             }
+            // The camera as plain numbers on the mount (position, target): what a UI check compares.
+            mount.dataset.camera = [...camStateRef.current.pos, ...camStateRef.current.target]
+              .map((v) => v.toFixed(4)).join(',')
           }
           saveCam()
           controls.addEventListener('change', saveCam)
@@ -2560,6 +2588,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               fresh.obj = gltf.scene
               gltf.scene.visible = !!(companionsRef.current || []).find((x) => x.key === c.key)?.visible
               pivot.add(gltf.scene)
+              deformCompanion(c.key, gltf.scene)
               onCompanionStateRef.current?.(c.key, 'ready')
             })().catch(() => {
               if (!disposed && companionObjs.get(c.key) === fresh) onCompanionStateRef.current?.(c.key, 'error')
@@ -2572,7 +2601,109 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           for (const entry of companionObjs.values()) if (entry.obj) disposeCompanion(entry.obj)
           companionObjs.clear()
         })
+
+        // ── Live deformation (Ruling A48c) ── `deform` rewrites the positions of the model and of every companion
+        // with `follow`, in the model's own frame, always from the positions as loaded (kept per geometry the first
+        // time); `faceBits` narrows a companion to the faces whose byte has the bit. Nothing is reloaded.
+        const deformRoot = (root: Object3D, map: ViewerDeform['map'] | null) => {
+          root.updateMatrixWorld(true)
+          const rootInv = root.matrixWorld.clone().invert()
+          const toRoot = new THREE.Matrix4()
+          const toLocal = new THREE.Matrix4()
+          const v = new THREE.Vector3()
+          root.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            if (!mesh.isMesh || (o as { isSkinnedMesh?: boolean }).isSkinnedMesh) return
+            const geo = mesh.geometry
+            const pos = geo.getAttribute('position')
+            if (!pos) return
+            const ud = geo.userData as { deformBase?: Float32Array }
+            if (!map && !ud.deformBase) return
+            if (!ud.deformBase) {
+              const base = new Float32Array(pos.count * 3)
+              for (let i = 0; i < pos.count; i++) {
+                base[3 * i] = pos.getX(i); base[3 * i + 1] = pos.getY(i); base[3 * i + 2] = pos.getZ(i)
+              }
+              ud.deformBase = base
+            }
+            const work = Float32Array.from(ud.deformBase)
+            if (map) {
+              toRoot.multiplyMatrices(rootInv, mesh.matrixWorld)
+              const identity = toRoot.equals(new THREE.Matrix4())
+              if (!identity) {
+                for (let i = 0; i < pos.count; i++) {
+                  v.set(work[3 * i], work[3 * i + 1], work[3 * i + 2]).applyMatrix4(toRoot)
+                  work[3 * i] = v.x; work[3 * i + 1] = v.y; work[3 * i + 2] = v.z
+                }
+              }
+              map(work)
+              if (!identity) {
+                toLocal.copy(toRoot).invert()
+                for (let i = 0; i < pos.count; i++) {
+                  v.set(work[3 * i], work[3 * i + 1], work[3 * i + 2]).applyMatrix4(toLocal)
+                  work[3 * i] = v.x; work[3 * i + 1] = v.y; work[3 * i + 2] = v.z
+                }
+              }
+            }
+            for (let i = 0; i < pos.count; i++) pos.setXYZ(i, work[3 * i], work[3 * i + 1], work[3 * i + 2])
+            pos.needsUpdate = true
+            geo.computeBoundingSphere()
+            geo.computeBoundingBox()
+          })
+        }
+        const maskFaces = (root: Object3D, fb: ViewerCompanion['faceBits']) => {
+          root.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            if (!mesh.isMesh) return
+            const geo = mesh.geometry
+            const ud = geo.userData as { maskBase?: Uint32Array }
+            if (!fb && !ud.maskBase) return
+            if (!ud.maskBase) {
+              const pos = geo.getAttribute('position')
+              ud.maskBase = geo.index ? Uint32Array.from(geo.index.array as ArrayLike<number>)
+                : Uint32Array.from({ length: pos ? pos.count : 0 }, (_, i) => i)
+            }
+            const base = ud.maskBase
+            const faces = Math.floor(base.length / 3)
+            if (!fb || fb.bit < 0 || fb.bits.length !== faces) {
+              // No mask, or one that does not describe this geometry: every face, as loaded.
+              geo.setIndex(new THREE.BufferAttribute(Uint32Array.from(base), 1))
+              return
+            }
+            const keep: number[] = []
+            for (let f = 0; f < faces; f++) {
+              if ((fb.bits[f] >> fb.bit) & 1) keep.push(base[3 * f], base[3 * f + 1], base[3 * f + 2])
+            }
+            geo.setIndex(new THREE.BufferAttribute(Uint32Array.from(keep), 1))
+          })
+        }
+        const deformCompanion = (key: string, obj: Object3D) => {
+          const c = (companionsRef.current || []).find((x) => x.key === key)
+          deformRoot(obj, c?.follow ? deformRef.current?.map ?? null : null)
+          maskFaces(obj, c?.faceBits ?? null)
+        }
+        const applyDeform = () => {
+          deformRoot(object, deformRef.current?.map ?? null)
+          for (const [key, entry] of companionObjs) if (entry.obj) deformCompanion(key, entry.obj)
+          // The deformed model's extent in its own frame (min x, max x, min z, max z) as plain numbers on the mount:
+          // what a UI check compares with the rule (`scripts/check_figure_ui.mjs`'s harness, Ruling A48c).
+          const box = new THREE.Box3()
+          object.updateMatrixWorld(true)
+          const rootInv = object.matrixWorld.clone().invert()
+          object.traverse((o: Object3D) => {
+            const mesh = o as Mesh
+            if (!mesh.isMesh || !mesh.geometry.boundingBox) return
+            box.union(mesh.geometry.boundingBox.clone().applyMatrix4(
+              new THREE.Matrix4().multiplyMatrices(rootInv, mesh.matrixWorld)))
+          })
+          mount.dataset.modelBox = [box.min.x, box.max.x, box.min.z, box.max.z].map((v) => v.toFixed(5)).join(',')
+          mount.dataset.deform = deformRef.current?.key || ''
+        }
+        deformFnRef.current = applyDeform
+        disposers.push(() => { if (deformFnRef.current === applyDeform) deformFnRef.current = null })
         applyCompanions()
+        object.traverse((o: Object3D) => { const m = o as Mesh; if (m.isMesh) m.geometry.computeBoundingBox() })
+        applyDeform()
 
         setLoading(false)
 
@@ -2595,6 +2726,18 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           },
         })
         modelTurn = turnControl
+        // Ruling A48c: where the caller asks for it, the double-click frames the view again too (zoom, pan).
+        const onDoubleView = (e: MouseEvent) => {
+          if (!resetViewOnDblRef.current || e.shiftKey) return
+          // The damped pan / turn of the last drag would keep moving the camera after the reset: spend it first.
+          const damping = controls.enableDamping
+          controls.enableDamping = false
+          controls.update()
+          controls.enableDamping = damping
+          refitFnRef.current?.()
+        }
+        mount.addEventListener('dblclick', onDoubleView)
+        disposers.push(() => mount.removeEventListener('dblclick', onDoubleView))
         const resetTurn = () => turnControl.reset()
         turnResetRef.current = resetTurn
         disposers.push(() => {
@@ -2686,6 +2829,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         let raf: number | null = null
         let renderVisible = false
         let renderWidth = width
+        let renderHeight = heightRef.current
         const animate = () => {
           raf = null
           if (disposed || !renderVisible) return
@@ -2786,11 +2930,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             if (raf !== null) { cancelAnimationFrame(raf); raf = null }
             return
           }
-          if (w !== renderWidth) {
+          const h = heightRef.current
+          if (w !== renderWidth || h !== renderHeight) {
             renderWidth = w
-            camera.aspect = w / height
+            renderHeight = h
+            camera.aspect = w / h
             camera.updateProjectionMatrix()
-            renderer.setSize(w, height)
+            renderer.setSize(w, h)
           }
           if (!renderVisible) {
             renderVisible = true
@@ -2820,7 +2966,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       disposed = true
       cleanup?.()
     }
-  }, [url, format, clipUrl, textureUrl, height, embeddedTakes, clipGroup, footPoseKey])
+  }, [url, format, clipUrl, textureUrl, embeddedTakes, clipGroup, footPoseKey])
 
   const turned = turnPose.turn !== 0 || turnPose.tilt !== 0
   return (
@@ -3036,7 +3182,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         </div>
       ) : null}
       </div>
-      {!loading && !error ? <ModelTurnHint subject={subject} locked={frontal} turned={turned}
+      {!loading && !error ? <ModelTurnHint subject={subject} locked={frontal} turned={turned} resetsView={resetViewOnDoubleClick}
         onReset={() => turnResetRef.current?.()} /> : null}
       {!loading && !error && bonesOn && hasExtensionBones && bonesSwing !== null ? (
         <div className="ga-hint" style={{ fontSize: 11 }}>

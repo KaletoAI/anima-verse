@@ -2927,7 +2927,9 @@ def get_character_garment_mesh_body(character_name: str, item_id: str, which: st
                                     attempt: int = 0, _: Dict[str, Any] = Depends(require_admin)):
     """Ruling A48a: the body view of one mesh file (``garment_mesh_view.body_view``) — the share of its area
     inside the base body, the face counts and the placement — plus ``ghost_url`` (the base body as a ghost, in
-    the mesh's frame) and ``inside_url`` (the faces inside the body; None without any). Computed once per mesh
+    the mesh's frame) and ``inside_url`` (the faces inside the body at any allowance factor, Ruling A48c —
+    ``allowance.mask`` says at which; None without any) and ``allowance`` (the axis the fit widens about and, per
+    factor, the share inside and the trunk gap: ``garment_mesh_view.allowance_table``). Computed once per mesh
     and body and cached by content (``ETag`` = ``"<key>"``, 304 on a match). Admin-only. 400 for a bad which /
     attempt, 404 without the mesh, 409 with the plain reason when the body cannot be shown (no base model, no
     piece-only front view, a frame the fit refuses)."""
@@ -2947,7 +2949,9 @@ def get_character_garment_mesh_body(character_name: str, item_id: str, which: st
     base = (f"/characters/{quote(character_name, safe='')}/garments/{quote(item_id, safe='')}/mesh/{which}/body")
     extra = f"&attempt={attempt}" if attempt else ""
     return JSONResponse({**view, "ghost_url": f"{base}/ghost?v={view['key']}{extra}",
-                         "inside_url": f"{base}/inside?v={view['key']}{extra}" if view.get("inside_faces") else None},
+                         "inside_url": (f"{base}/inside?v={view['key']}{extra}"
+                                        if (view.get("allowance") or {}).get("mask_faces") or view.get("inside_faces")
+                                        else None)},
                         headers=headers)
 
 
