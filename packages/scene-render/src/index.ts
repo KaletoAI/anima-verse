@@ -185,10 +185,11 @@ export { COLLISION_VERSION, HAIR_ONLY_REGIONS, PARTNER_ONLY_REGIONS, CAPSULE_REG
 export type { CollisionCapsule, CollisionPayload, CapsuleNow, JointNow, BoundCapsule, CollisionBinding,
   CollisionOverlay } from './collision'
 
-export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, COLLIDE_GLSL_DECLARATIONS, COLLIDE_GLSL_FUNCTION,
+export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, SQUEEZE_ROUNDS, SQUEEZE_STEPS, SQUEEZE_MIN_N,
+  COLLIDE_GLSL_DECLARATIONS, COLLIDE_GLSL_FUNCTION, COLLIDE_GLSL_FUNCTION_SQUEEZE,
   COLLIDE_GLSL_APPLY, pushOutOfCapsules, capsuleInFrame, patchCollisionVertexShader, garmentKind, garmentCapsules,
   HAIR_REGIONS, EXTENSION_REGIONS, CLOTH_EXCLUDED_REGIONS, collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
-export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry } from './garmentCollision'
+export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry, PushOptions } from './garmentCollision'
 
 export { STRAND_ROWS, StrandMismatch, StrandSim, bindStrands, boxDepth, decodeStrandSdf, eyePointsEntered,
   invertAffine, lerpFrame, limitSegmentAngle, maxSdfDepthMm, restInsideBox, scalpCameras, scalpExposure, SCALP_CAMERA_FOV_DEG,

@@ -19,7 +19,7 @@
  * but `CLOTH_EXCLUDED_REGIONS` (an arm passes through cloth; pushing the
  * cloth out of the arm drives it into the body — the numbers are on the
  * constants). At most `COLLIDE_MAX` per mesh, the FIRST ones in payload
- * order — deterministic: the server's table (17; its three partner-only
+ * order — deterministic: the server's table (18; its four partner-only
  * `outer_trunk` capsules push no garment, `PARTNER_ONLY_REGIONS`) comes
  * first, the extension capsules (one per chain bone, `app/core/collision.py`)
  * after it.
@@ -41,6 +41,37 @@
  * exclusion of the head capsule alone, measured first, left the upper-arm
  * lift in place).
  *
+ * SQUEEZE (hair only — plan R10, spec
+ * `docs/superpowers/specs/2026-11-13-cross-person-collision-design.md` "Added
+ * 2026-11-13 — squeeze rule"). The passes resolve one capsule after the
+ * other, so a point squeezed between two (hair a raised upper arm presses
+ * onto the chest) ends where the LAST applied capsule put it — inside the
+ * other. A hair vertex (`#ifdef COLLIDE_SQUEEZE`, the define set for kind
+ * hair) and a hair chain tip (`secondaryMotion.ts` `keepHairTipOutside`)
+ * resolve them together (`PushOptions.squeeze`), radii capped by the bind
+ * rule:
+ *  1. S = the capsules containing p; none → p stays.
+ *  2. Per round (at most `SQUEEZE_ROUNDS`): one capsule in round 1 → the
+ *     exact radial push; otherwise N = unit(Σ n_i), n_i the unit vector from
+ *     capsule i's closest axis point to the ORIGINAL p; |Σ n_i| <
+ *     `SQUEEZE_MIN_N` (opposite normals) → the ordinary passes; the exit t by
+ *     `SQUEEZE_STEPS` bisection steps on [0, 2·max r_S] for "p + tN outside
+ *     every capsule of S" (2·max r_S not outside them all → the ordinary
+ *     passes); q = p + t·N. q inside capsules not in S → they join S, next
+ *     round; otherwise (or after the last round) q.
+ *  3. Without `squeeze` (cloth, extension tips): the passes, unchanged.
+ * SQUEEZE_MEASURED (2026-11-14, `scripts/check_garment_collision.mjs`, the
+ * spec's case: a copy of Kira's draped hair model with its served-equivalent
+ * payload, "celebrating" sample t = 18.525 s, static; `--no-squeeze` for
+ * before): the hair vertices deeper than 5 mm beyond their bind depth (the
+ * check's `excess`) 457 → 304 (0.85 → 0.57 % of the hair), their depth below
+ * the skin p50/p90/max 12.3/26.7/52.5 → 11.5/31.2/52.5 mm (`excess_depth_mm`);
+ * next to the chest_hair extension capsule 225 → 87, the Spine2 skin 179 →
+ * 163, the arm 39 → 44. The other samples are unchanged; show-through at
+ * t = 18.525 s 5.96 → 3.94 %. The rule moves a point out of the capsules
+ * only: where their surfaces end inside the skin, a point outside every
+ * capsule still counts as under the skin (the max did not move).
+ *
  * WHERE THE CAPSULES COME FROM. `bindCollision` (`collision.ts`, the ONE
  * endpoint rule) gives them in world space; per garment mesh they are taken
  * into that mesh's local space (`capsuleInFrame`, inverse `matrixWorld`) —
@@ -52,10 +83,12 @@
  *
  * ONE SOURCE. The push exists twice — `pushOutOfCapsules` (TypeScript; the
  * motion check `scripts/check_garment_collision.mjs` runs it) and
- * `COLLIDE_GLSL_FUNCTION` (the shader). The GLSL is written in scalar
- * statements so `scripts/smoke_garment_collision.mjs` can execute THAT
- * string (a mechanical GLSL→JS rewrite) and assert both give the same
- * points; the constants of both come from the exports here.
+ * `COLLIDE_GLSL_FUNCTION` / `COLLIDE_GLSL_FUNCTION_SQUEEZE` (the shader). The
+ * GLSL is written in scalar statements (the squeeze edition adds two local
+ * float arrays) so `scripts/smoke_garment_collision.mjs` and
+ * `scripts/smoke_collision_squeeze.mjs` can execute THAT string (a
+ * mechanical GLSL→JS rewrite) and assert both give the same points; the
+ * constants of both come from the exports here.
  *
  * SHADOWS. Each patched mesh gets its own `customDepthMaterial` /
  * `customDistanceMaterial` with the same patch and the SAME uniform objects,
@@ -107,6 +140,12 @@ export const COLLIDE_PASSES = 2
 export const COLLIDE_EPS = 1e-12
 /** A vertex this close to the axis has no outward direction and stays where it is. */
 export const COLLIDE_MIN_D = 1e-6
+/** SQUEEZE: rounds at most (a round's exit point inside further capsules adds them to S and runs again). */
+export const SQUEEZE_ROUNDS = 3
+/** SQUEEZE: bisection steps on [0, 2·max r_S] for the exit along the combined normal. */
+export const SQUEEZE_STEPS = 16
+/** SQUEEZE: a combined normal shorter than this (opposite normals) has no direction — the ordinary passes apply. */
+export const SQUEEZE_MIN_N = 1e-3
 
 /** The GLSL float literal of a number (always with a decimal point or exponent). */
 function glslFloat(v: number): string {
@@ -130,21 +169,8 @@ export const COLLIDE_GLSL_DECLARATIONS = [
   '#endif',
 ].join('\n')
 
-/**
- * THE PUSH, shader edition. Capsule i: axis `collideA[i].xyz` →
- * `collideB[i].xyz`, radius `collideA[i].w`, all in mesh-local space.
- * BIND RULE (`collideBindA[i].w` ≥ 0): the same capsule in the BIND pose,
- * `collideBindA[i].xyz` → `collideBindB[i].xyz` in the mesh's geometry
- * space; the vertex's bind distance `d0` to it (from the unskinned
- * `position`) caps the radius — `rr = min(r, d0)`: the vertex is pushed back
- * to where it lay from that capsule in the bind pose, never further. What
- * the fit put inside a capsule (hair on the scalp, on the shoulders) stays
- * where it is; only what the pose drives deeper is pushed (module docstring).
- * Scalar statements on purpose (see "ONE SOURCE" above) — keep it that way.
- */
-export const COLLIDE_GLSL_FUNCTION = `
-vec3 collidePush( vec3 p ) {
-  for ( int it = 0; it < COLLIDE_PASSES; it ++ ) {
+/** The ordinary passes (scalar statements): the body of both editions of `collidePush`. */
+const COLLIDE_GLSL_PASSES = `  for ( int it = 0; it < COLLIDE_PASSES; it ++ ) {
     for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
       if ( i >= collideCount ) break;
       float ax = collideA[ i ].x;
@@ -188,6 +214,188 @@ vec3 collidePush( vec3 p ) {
       }
     }
   }
+`
+
+/**
+ * THE PUSH, shader edition. Capsule i: axis `collideA[i].xyz` →
+ * `collideB[i].xyz`, radius `collideA[i].w`, all in mesh-local space.
+ * BIND RULE (`collideBindA[i].w` ≥ 0): the same capsule in the BIND pose,
+ * `collideBindA[i].xyz` → `collideBindB[i].xyz` in the mesh's geometry
+ * space; the vertex's bind distance `d0` to it (from the unskinned
+ * `position`) caps the radius — `rr = min(r, d0)`: the vertex is pushed back
+ * to where it lay from that capsule in the bind pose, never further. What
+ * the fit put inside a capsule (hair on the scalp, on the shoulders) stays
+ * where it is; only what the pose drives deeper is pushed (module docstring).
+ * Scalar statements on purpose (see "ONE SOURCE" above) — keep it that way.
+ */
+export const COLLIDE_GLSL_FUNCTION = `
+vec3 collidePush( vec3 p ) {
+${COLLIDE_GLSL_PASSES}  return p;
+}
+`
+
+/** GLSL statements: (dx, dy, dz) = point (x, y, z) minus capsule `i`'s closest axis point, `d` its length. */
+function glslAxisOffset(x: string, y: string, z: string, pad: string): string {
+  return [
+    'float ax = collideA[ i ].x;',
+    'float ay = collideA[ i ].y;',
+    'float az = collideA[ i ].z;',
+    'float abx = collideB[ i ].x - ax;',
+    'float aby = collideB[ i ].y - ay;',
+    'float abz = collideB[ i ].z - az;',
+    `float apx = ${x} - ax;`,
+    `float apy = ${y} - ay;`,
+    `float apz = ${z} - az;`,
+    'float len2 = abx * abx + aby * aby + abz * abz;',
+    'float t = len2 > COLLIDE_EPS ? clamp( ( apx * abx + apy * aby + apz * abz ) / len2, 0.0, 1.0 ) : 0.0;',
+    'float dx = apx - abx * t;',
+    'float dy = apy - aby * t;',
+    'float dz = apz - abz * t;',
+    'float d = sqrt( dx * dx + dy * dy + dz * dz );',
+  ].map(line => pad + line).join('\n')
+}
+
+/**
+ * THE PUSH, shader edition WITH the SQUEEZE rule (module docstring) — the
+ * same function name and signature as `COLLIDE_GLSL_FUNCTION`; the patch
+ * compiles it under `#ifdef COLLIDE_SQUEEZE` (hair only). S (`sIn`) = the
+ * capsules `p` lies inside, radii capped by the bind rule (`sr`); a point in
+ * none stays and skips the passes. Each round (`SQUEEZE_ROUNDS`): one capsule
+ * in round 1 → the exact radial push; otherwise along N = unit(Σ n_i) (n_i
+ * from capsule i's closest axis point to the ORIGINAL `p`), the exit `hi`
+ * found by `SQUEEZE_STEPS` bisection steps on [0, 2·max r_S] (step 0 tests
+ * `hi` itself). |Σ n_i| < `SQUEEZE_MIN_N` or 2·max r_S not outside them all
+ * → `fail`: `p` untouched, the ordinary passes run. The exit point inside
+ * capsules not in S → they join S, next round; otherwise (or after the last
+ * round) it is the result. Scalar statements plus two local float arrays —
+ * `scripts/smoke_collision_squeeze.mjs` executes this string.
+ */
+export const COLLIDE_GLSL_FUNCTION_SQUEEZE = `
+vec3 collidePush( vec3 p ) {
+  float sr[ COLLIDE_MAX ];
+  float sIn[ COLLIDE_MAX ];
+  float sCount = 0.0;
+  for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
+    if ( i >= collideCount ) break;
+    float r = collideA[ i ].w;
+    if ( collideBindA[ i ].w >= 0.0 ) {
+      float bx = collideBindA[ i ].x;
+      float by = collideBindA[ i ].y;
+      float bz = collideBindA[ i ].z;
+      float bbx = collideBindB[ i ].x - bx;
+      float bby = collideBindB[ i ].y - by;
+      float bbz = collideBindB[ i ].z - bz;
+      float bpx = position.x - bx;
+      float bpy = position.y - by;
+      float bpz = position.z - bz;
+      float bl2 = bbx * bbx + bby * bby + bbz * bbz;
+      float bt = bl2 > COLLIDE_EPS ? clamp( ( bpx * bbx + bpy * bby + bpz * bbz ) / bl2, 0.0, 1.0 ) : 0.0;
+      float ex = bpx - bbx * bt;
+      float ey = bpy - bby * bt;
+      float ez = bpz - bbz * bt;
+      r = min( r, sqrt( ex * ex + ey * ey + ez * ez ) );
+    }
+    sr[ i ] = r;
+${glslAxisOffset('p.x', 'p.y', 'p.z', '    ')}
+    sIn[ i ] = d < r ? 1.0 : 0.0;
+    sCount += sIn[ i ];
+  }
+  float sDone = sCount < 0.5 ? 1.0 : 0.0;
+  float qx = p.x;
+  float qy = p.y;
+  float qz = p.z;
+  for ( int k = 0; k < SQUEEZE_ROUNDS; k ++ ) {
+    if ( sDone > 0.5 ) break;
+    float fail = 0.0;
+    if ( k == 0 && sCount < 1.5 ) {
+      for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
+        if ( i >= collideCount ) break;
+        if ( sIn[ i ] > 0.5 ) {
+${glslAxisOffset('p.x', 'p.y', 'p.z', '          ')}
+          if ( d > COLLIDE_MIN_D ) {
+            float kk = sr[ i ] / d - 1.0;
+            qx = p.x + dx * kk;
+            qy = p.y + dy * kk;
+            qz = p.z + dz * kk;
+          }
+        }
+      }
+    } else {
+      float nx = 0.0;
+      float ny = 0.0;
+      float nz = 0.0;
+      float rMax = 0.0;
+      for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
+        if ( i >= collideCount ) break;
+        if ( sIn[ i ] > 0.5 ) {
+${glslAxisOffset('p.x', 'p.y', 'p.z', '          ')}
+          if ( d > COLLIDE_MIN_D ) {
+            nx += dx / d;
+            ny += dy / d;
+            nz += dz / d;
+          }
+          rMax = sr[ i ] > rMax ? sr[ i ] : rMax;
+        }
+      }
+      float nl = sqrt( nx * nx + ny * ny + nz * nz );
+      if ( nl < SQUEEZE_MIN_N ) {
+        fail = 1.0;
+      } else {
+        nx = nx / nl;
+        ny = ny / nl;
+        nz = nz / nl;
+        float lo = 0.0;
+        float hi = 2.0 * rMax;
+        for ( int s = 0; s <= SQUEEZE_STEPS; s ++ ) {
+          float tt = s == 0 ? hi : 0.5 * ( lo + hi );
+          float ox = p.x + nx * tt;
+          float oy = p.y + ny * tt;
+          float oz = p.z + nz * tt;
+          float clear = 1.0;
+          for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
+            if ( i >= collideCount ) break;
+            if ( sIn[ i ] > 0.5 ) {
+${glslAxisOffset('ox', 'oy', 'oz', '              ')}
+              if ( d < sr[ i ] ) clear = 0.0;
+            }
+          }
+          if ( s == 0 ) {
+            if ( clear < 0.5 ) {
+              fail = 1.0;
+              break;
+            }
+          } else if ( clear > 0.5 ) {
+            hi = tt;
+          } else {
+            lo = tt;
+          }
+        }
+        qx = p.x + nx * hi;
+        qy = p.y + ny * hi;
+        qz = p.z + nz * hi;
+      }
+    }
+    if ( fail > 0.5 ) break;
+    float added = 0.0;
+    for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
+      if ( i >= collideCount ) break;
+      if ( sIn[ i ] < 0.5 ) {
+${glslAxisOffset('qx', 'qy', 'qz', '        ')}
+        if ( d < sr[ i ] ) {
+          sIn[ i ] = 1.0;
+          added += 1.0;
+        }
+      }
+    }
+    sCount += added;
+    if ( added < 0.5 || k == SQUEEZE_ROUNDS - 1 ) sDone = 1.0;
+  }
+  if ( sDone > 0.5 ) {
+    p.x = qx;
+    p.y = qy;
+    p.z = qz;
+  } else {
+${COLLIDE_GLSL_PASSES}  }
   return p;
 }
 `
@@ -217,19 +425,34 @@ function segmentDistance(p: Vec3, a: Vec3, b: Vec3): number {
   return Math.hypot(apx - abx * t, apy - aby * t, apz - abz * t)
 }
 
-/**
- * THE PUSH, TypeScript edition — the same steps as `COLLIDE_GLSL_FUNCTION`
- * (the smoke runs both): `p` pushed out of the first `COLLIDE_MAX` capsules,
- * `COLLIDE_PASSES` passes, then `weight` (0..1, the `_COLLIDE` value) blends
- * between the original and the pushed point. Capsules and point in one space;
- * `bindP` = the vertex's unskinned position (geometry space) for the BIND
- * RULE of a capsule carrying `bind` (radius capped at the bind distance;
- * without `bindP` the rule is not applied).
- */
-export function pushOutOfCapsules(p: Vec3, capsules: readonly CollideCapsule[], weight = 1, bindP?: Vec3): Vec3 {
+/** Options of `pushOutOfCapsules`. */
+export interface PushOptions {
+  /**
+   * The SQUEEZE rule (module docstring; hair only, plan R10): a point inside
+   * several capsules leaves along their combined normal instead of the
+   * ordinary passes' "last applied capsule wins". Absent = the ordinary passes.
+   */
+  squeeze?: boolean
+  /** Another figure's capsules (partner contact) — declared for the partner push, not read yet. */
+  partners?: readonly CapsuleNow[]
+}
+
+/** (dx, dy, dz, d) of `p` from capsule `c`'s closest axis point — the shader's arithmetic, step for step. */
+function axisOffset(x: number, y: number, z: number, c: CapsuleNow, out: Float64Array): Float64Array {
+  const ax = c.a[0], ay = c.a[1], az = c.a[2]
+  const abx = c.b[0] - ax, aby = c.b[1] - ay, abz = c.b[2] - az
+  const apx = x - ax, apy = y - ay, apz = z - az
+  const len2 = abx * abx + aby * aby + abz * abz
+  const t = len2 > COLLIDE_EPS ? Math.min(1, Math.max(0, (apx * abx + apy * aby + apz * abz) / len2)) : 0
+  const dx = apx - abx * t, dy = apy - aby * t, dz = apz - abz * t
+  out[0] = dx; out[1] = dy; out[2] = dz; out[3] = Math.sqrt(dx * dx + dy * dy + dz * dz)
+  return out
+}
+
+/** The ordinary passes: `COLLIDE_PASSES` passes over the capsules in payload order (`COLLIDE_GLSL_PASSES`). */
+function ordinaryPasses(p: Vec3, capsules: readonly CollideCapsule[], radii: readonly number[]): Vec3 {
   let x = p[0], y = p[1], z = p[2]
-  const n = Math.min(capsules.length, COLLIDE_MAX)
-  const radii = capsules.slice(0, n).map(c => (c.bind && bindP ? Math.min(c.r, segmentDistance(bindP, c.bind.a, c.bind.b)) : c.r))
+  const n = radii.length
   for (let it = 0; it < COLLIDE_PASSES; it++) {
     for (let i = 0; i < n; i++) {
       const { a, b } = capsules[i]
@@ -246,6 +469,86 @@ export function pushOutOfCapsules(p: Vec3, capsules: readonly CollideCapsule[], 
       }
     }
   }
+  return [x, y, z]
+}
+
+/**
+ * The SQUEEZE rule (`COLLIDE_GLSL_FUNCTION_SQUEEZE`, the same steps): the
+ * squeezed point, or null when the ordinary passes apply (|Σ n_i| below
+ * `SQUEEZE_MIN_N`, or 2·max r_S not outside every capsule of S).
+ */
+function squeezeOut(p: Vec3, capsules: readonly CollideCapsule[], radii: readonly number[]): Vec3 | null {
+  const n = radii.length
+  const off = new Float64Array(4)
+  const inS = new Uint8Array(n)
+  let count = 0
+  for (let i = 0; i < n; i++) {
+    if (axisOffset(p[0], p[1], p[2], capsules[i], off)[3] < radii[i]) { inS[i] = 1; count++ }
+  }
+  if (!count) return [p[0], p[1], p[2]]
+  let qx = p[0], qy = p[1], qz = p[2]
+  for (let k = 0; k < SQUEEZE_ROUNDS; k++) {
+    if (k === 0 && count === 1) {
+      // the exact radial push out of the one capsule
+      for (let i = 0; i < n; i++) {
+        if (!inS[i]) continue
+        const [dx, dy, dz, d] = axisOffset(p[0], p[1], p[2], capsules[i], off)
+        if (d > COLLIDE_MIN_D) {
+          const kk = radii[i] / d - 1
+          qx = p[0] + dx * kk; qy = p[1] + dy * kk; qz = p[2] + dz * kk
+        }
+      }
+    } else {
+      let nx = 0, ny = 0, nz = 0, rMax = 0
+      for (let i = 0; i < n; i++) {
+        if (!inS[i]) continue
+        const [dx, dy, dz, d] = axisOffset(p[0], p[1], p[2], capsules[i], off)
+        if (d > COLLIDE_MIN_D) { nx += dx / d; ny += dy / d; nz += dz / d }
+        rMax = radii[i] > rMax ? radii[i] : rMax
+      }
+      const nl = Math.sqrt(nx * nx + ny * ny + nz * nz)
+      if (nl < SQUEEZE_MIN_N) return null
+      nx = nx / nl; ny = ny / nl; nz = nz / nl
+      let lo = 0, hi = 2 * rMax
+      for (let s = 0; s <= SQUEEZE_STEPS; s++) {
+        const tt = s === 0 ? hi : 0.5 * (lo + hi)
+        const ox = p[0] + nx * tt, oy = p[1] + ny * tt, oz = p[2] + nz * tt
+        let clear = true
+        for (let i = 0; i < n; i++) {
+          if (inS[i] && axisOffset(ox, oy, oz, capsules[i], off)[3] < radii[i]) clear = false
+        }
+        if (s === 0) { if (!clear) return null }
+        else if (clear) hi = tt
+        else lo = tt
+      }
+      qx = p[0] + nx * hi; qy = p[1] + ny * hi; qz = p[2] + nz * hi
+    }
+    let added = 0
+    for (let i = 0; i < n; i++) {
+      if (!inS[i] && axisOffset(qx, qy, qz, capsules[i], off)[3] < radii[i]) { inS[i] = 1; added++ }
+    }
+    count += added
+    if (!added || k === SQUEEZE_ROUNDS - 1) break
+  }
+  return [qx, qy, qz]
+}
+
+/**
+ * THE PUSH, TypeScript edition — the same steps as `COLLIDE_GLSL_FUNCTION`
+ * (the smoke runs both): `p` pushed out of the first `COLLIDE_MAX` capsules,
+ * `COLLIDE_PASSES` passes, then `weight` (0..1, the `_COLLIDE` value) blends
+ * between the original and the pushed point. Capsules and point in one space;
+ * `bindP` = the vertex's unskinned position (geometry space) for the BIND
+ * RULE of a capsule carrying `bind` (radius capped at the bind distance;
+ * without `bindP` the rule is not applied). `options.squeeze` = the SQUEEZE
+ * rule first (`COLLIDE_GLSL_FUNCTION_SQUEEZE`, module docstring), the
+ * passes only where it does not apply; without it the passes alone.
+ */
+export function pushOutOfCapsules(p: Vec3, capsules: readonly CollideCapsule[], weight = 1, bindP?: Vec3,
+  options?: PushOptions): Vec3 {
+  const n = Math.min(capsules.length, COLLIDE_MAX)
+  const radii = capsules.slice(0, n).map(c => (c.bind && bindP ? Math.min(c.r, segmentDistance(bindP, c.bind.a, c.bind.b)) : c.r))
+  const [x, y, z] = (options?.squeeze ? squeezeOut(p, capsules, radii) : null) ?? ordinaryPasses(p, capsules, radii)
   const w = Math.min(1, Math.max(0, weight))
   return [p[0] + (x - p[0]) * w, p[1] + (y - p[1]) * w, p[2] + (z - p[2]) * w]
 }
@@ -255,12 +558,35 @@ export function capsuleInFrame(capsule: CapsuleNow, m: Mat4): CapsuleNow {
   return { a: transformPoint(m, capsule.a), b: transformPoint(m, capsule.b), r: capsule.r * linearScale(m) }
 }
 
-/** Patch a vertex shader source (idempotent): declarations after `common`, the push after `skinning_vertex`. */
-export function patchCollisionVertexShader(source: string): string {
+/**
+ * The push's function block of the patch: the plain edition, or — `squeeze`
+ * (hair) — the squeeze edition with its constants under
+ * `#ifdef COLLIDE_SQUEEZE` (the material's define) and the plain one under
+ * `#else`. Without `squeeze` the block names no `COLLIDE_SQUEEZE` at all.
+ */
+function collideFunctionBlock(squeeze: boolean): string {
+  if (!squeeze) return COLLIDE_GLSL_FUNCTION
+  return [
+    '#ifdef COLLIDE_SQUEEZE',
+    `#define SQUEEZE_ROUNDS ${SQUEEZE_ROUNDS}`,
+    `#define SQUEEZE_STEPS ${SQUEEZE_STEPS}`,
+    `#define SQUEEZE_MIN_N ${glslFloat(SQUEEZE_MIN_N)}`,
+    COLLIDE_GLSL_FUNCTION_SQUEEZE,
+    '#else',
+    COLLIDE_GLSL_FUNCTION,
+    '#endif',
+  ].join('\n')
+}
+
+/**
+ * Patch a vertex shader source (idempotent): declarations after `common`, the push after `skinning_vertex`;
+ * `squeeze` (hair) brings the SQUEEZE edition of the push (`collideFunctionBlock`).
+ */
+export function patchCollisionVertexShader(source: string, squeeze = false): string {
   if (source.includes('collidePush(')) return source
   if (!source.includes('#include <common>') || !source.includes('#include <skinning_vertex>')) return source
   return source
-    .replace('#include <common>', `#include <common>\n${COLLIDE_GLSL_DECLARATIONS}\n${COLLIDE_GLSL_FUNCTION}`)
+    .replace('#include <common>', `#include <common>\n${COLLIDE_GLSL_DECLARATIONS}\n${collideFunctionBlock(squeeze)}`)
     .replace('#include <skinning_vertex>', `#include <skinning_vertex>\n${COLLIDE_GLSL_APPLY}`)
 }
 
@@ -439,7 +765,7 @@ export function createGarmentCollision(three: Three, root: Object3D,
   const DEFAULT_CACHE_KEY = three.Material.prototype.customProgramCacheKey
   // `source` = the material `mat` was cloned from: `Material.clone()` copies neither `onBeforeCompile` nor
   // `customProgramCacheKey`, so a compile hook the template's material carries is chained from there.
-  const patch = (mat: Material, uniforms: CollideUniforms, weighted: boolean, source: Material = mat) => {
+  const patch = (mat: Material, uniforms: CollideUniforms, weighted: boolean, squeeze: boolean, source: Material = mat) => {
     const prevCompile = source.onBeforeCompile
     const prevKey = source.customProgramCacheKey
     // three's default cache key IS `onBeforeCompile.toString()` — snapshot it
@@ -453,10 +779,11 @@ export function createGarmentCollision(three: Three, root: Object3D,
       shader.uniforms.collideBindA = uniforms.collideBindA
       shader.uniforms.collideBindB = uniforms.collideBindB
       shader.uniforms.collideCount = uniforms.collideCount
-      shader.vertexShader = patchCollisionVertexShader(shader.vertexShader)
+      shader.vertexShader = patchCollisionVertexShader(shader.vertexShader, squeeze)
     }
-    mat.customProgramCacheKey = () => `${baseKey ?? prevKey.call(source)}|collide${weighted ? 'W' : ''}`
+    mat.customProgramCacheKey = () => `${baseKey ?? prevKey.call(source)}|collide${weighted ? 'W' : ''}${squeeze ? 'S' : ''}`
     if (weighted) mat.defines = { ...(mat.defines ?? {}), COLLIDE_WEIGHT: '' }
+    if (squeeze) mat.defines = { ...(mat.defines ?? {}), COLLIDE_SQUEEZE: '' }
     mat.needsUpdate = true
     return mat
   }
@@ -507,9 +834,11 @@ export function createGarmentCollision(three: Three, root: Object3D,
       collideCount: { value: 0 },
     }
     const weighted = !!mesh.geometry?.getAttribute('_collide')
+    // The SQUEEZE rule pushes hair only (plan R10): cloth keeps the ordinary passes.
+    const squeeze = kind === 'hair'
     const original = mesh.material
     const owned: Material[] = []
-    const cloneOf = (m: Material) => { const c = patch(m.clone(), uniforms, weighted, m); owned.push(c); return c }
+    const cloneOf = (m: Material) => { const c = patch(m.clone(), uniforms, weighted, squeeze, m); owned.push(c); return c }
     mesh.material = Array.isArray(original) ? original.map(cloneOf) : cloneOf(original)
     const depthMat = new three.MeshDepthMaterial({ depthPacking: three.RGBADepthPacking })
     const distanceMat = new three.MeshDistanceMaterial()
@@ -523,8 +852,8 @@ export function createGarmentCollision(three: Three, root: Object3D,
         d.alphaTest = masked.alphaTest
       }
     }
-    const depth = patch(depthMat, uniforms, weighted)
-    const distance = patch(distanceMat, uniforms, weighted)
+    const depth = patch(depthMat, uniforms, weighted, squeeze)
+    const distance = patch(distanceMat, uniforms, weighted, squeeze)
     owned.push(depth, distance)
     const state: State = {
       entry: { mesh, kind, capsules, local: [] }, binds, uniforms, original, owned,

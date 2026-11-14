@@ -126,13 +126,18 @@ import { fileURLToPath } from 'url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-/** The mechanical GLSL→JS rewrite of `COLLIDE_GLSL_FUNCTION` (scalar statements only). */
+/**
+ * The mechanical GLSL→JS rewrite of `COLLIDE_GLSL_FUNCTION` (scalar statements only) — also of its squeeze
+ * edition `COLLIDE_GLSL_FUNCTION_SQUEEZE` (`smoke_collision_squeeze.mjs`), whose local `float name[ N ];` arrays
+ * become zero-filled JS arrays of length N.
+ */
 export function glslPushToJs(glsl, defines) {
   let body = glsl
     .replace(/vec3\s+collidePush\s*\(\s*vec3\s+p\s*\)\s*\{/, 'function collidePush(p0) { const p = { x: p0[0], y: p0[1], z: p0[2] };')
     .replace(/\bfloat\s+/g, 'let ')
     .replace(/\bint\s+/g, 'let ')
     .replace(/return p;/, 'return [p.x, p.y, p.z];')
+    .replace(/\blet\s+(\w+)\s*\[\s*(\w+)\s*\]\s*;/g, 'let $1 = new Array($2).fill(0);')
   if (/\bvec[234]\b|\bmat[234]\b/.test(body)) throw new Error('GLSL push uses vector types — not scalar any more')
   const names = Object.keys(defines)
   // eslint-disable-next-line no-new-func
@@ -505,4 +510,5 @@ async function main() {
   console.log('\nOK — garment push, shader twin, patch and binding as derived')
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+// Run only as the entry (plain or bundled) — `smoke_collision_squeeze.mjs` imports `glslPushToJs` from here.
+if (/smoke_garment_collision(_bundled)?\.mjs$/.test(process.argv[1] ?? '')) main().catch((e) => { console.error(e); process.exit(1) })

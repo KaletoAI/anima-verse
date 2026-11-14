@@ -69,7 +69,7 @@ import { bindCollision, HAIR_ONLY_REGIONS, PARTNER_ONLY_REGIONS } from './collis
 import type { BoundCapsule, CollisionBinding, CollisionPayload, Vec3 } from './collision'
 import { inGarment } from './figure'
 import { HAIR_REGIONS, pushOutOfCapsules } from './garmentCollision'
-import type { CollideCapsule } from './garmentCollision'
+import type { CollideCapsule, PushOptions } from './garmentCollision'
 type Three = typeof import('three')
 
 export interface MotionGroup {
@@ -150,6 +150,8 @@ const CONTACT_SCAN = 12
 const CONTACT_REFINE = 14
 /** A tip moved less than this (metres) by the push counts as outside. */
 const COLLIDE_SLACK = 1e-6
+/** The hair chains' push options: the SQUEEZE rule (hair only — extension tips keep the ordinary passes, plan R10). */
+const SQUEEZE: PushOptions = { squeeze: true }
 
 /** The turn angle in [0, limit] that takes a tip out of the capsules (`depthAt(angle)` = its depth after that
  *  turn, `depth0` at 0): the first outside angle of a `CONTACT_SCAN` scan, refined by bisection; when no angle
@@ -902,14 +904,17 @@ export function createSecondaryMotion(
     dynamic.premultiply(contactQ.setFromAxisAngle(contactAxis, angle))
   }
   /** A hair bone's contact on today's skin (HAIR CHAINS): its final world is
-   *  turned about its own head, the same search as `keepTipOutside`. */
+   *  turned about its own head, the same search as `keepTipOutside`, with the
+   *  hair's SQUEEZE push (`garmentCollision.ts`): a tip between two capsules
+   *  (a raised upper arm over the chest) reads its depth and way out along
+   *  their combined normal, never from the capsule applied last. */
   const keepHairTipOutside = (st: Particle, world: Matrix4, limit: number) => {
     if (!(limit > 0)) return
     const capsules: CollideCapsule[] = st.contacts.map(({ bound, factor }) =>
       ({ a: bound.now.a, b: bound.now.b, r: bound.now.r * factor }))
     head.setFromMatrixPosition(world)
     tipWorld.copy(st.tipLocal).applyMatrix4(world)
-    const pushed = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules)
+    const pushed = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules, 1, undefined, SQUEEZE)
     const depth0 = Math.hypot(pushed[0] - tipWorld.x, pushed[1] - tipWorld.y, pushed[2] - tipWorld.z)
     if (depth0 < COLLIDE_SLACK) return
     lever.copy(tipWorld).sub(head)
@@ -919,7 +924,7 @@ export function createSecondaryMotion(
     contactAxis.normalize()
     const angle = contactAngle(turn => {
       tipWorld.copy(lever).applyAxisAngle(contactAxis, turn).add(head)
-      const p = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules)
+      const p = pushOutOfCapsules([tipWorld.x, tipWorld.y, tipWorld.z], capsules, 1, undefined, SQUEEZE)
       return Math.hypot(p[0] - tipWorld.x, p[1] - tipWorld.y, p[2] - tipWorld.z)
     }, depth0, limit)
     if (angle === null) return

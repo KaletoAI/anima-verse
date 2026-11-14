@@ -21,6 +21,8 @@
  *        [--motion MOTION.json]       also run every clip WITH the secondary motion (see SECONDARY MOTION)
  *        [--fps 60] [--loops 2]       simulation rate and loops of a motion run; the LAST loop is sampled
  *        [--area BONE,BONE]       also report the AREA share (see AREA) for these bones (normalised names)
+ *        [--no-squeeze]           hair pushed WITHOUT the squeeze rule (the passes alone — comparison only;
+ *                                 the renderers squeeze hair)
  *   Clips come from ANIMATION_CLIPS_DIR (default shared/models/clips), the retarget
  *   reference from ANIMATION_RIG_FILE (default shared/models/rig/reference.fbx) — read only.
  *   Self-bundling via esbuild; runs without the server and without a world.
@@ -37,7 +39,11 @@
  * space and every garment vertex goes through `pushOutOfCapsules` there — the
  * TypeScript twin of the shader (`scripts/smoke_garment_collision.mjs` proves
  * the twin), weighted by `_collide` when the mesh carries it, with the
- * vertex's unskinned position as the bind point (the hair's bind rule).
+ * vertex's unskinned position as the bind point (the hair's bind rule), a
+ * hair mesh with the SQUEEZE rule (`PushOptions.squeeze`, as its shader's
+ * `COLLIDE_SQUEEZE` define; `--no-squeeze` = the passes alone, comparison).
+ * Per sample `excess_depth_mm` = p50 / p90 / max of how deep the vertices
+ * counted in `excess_after` lie below the skin (the depth field below).
  *
  * METRIC — the S1 spike's `motion_pen.py`, ported: the body's triangles
  * (every skinned mesh outside a garment subtree) are sampled on a barycentric
@@ -130,6 +136,7 @@ function parseArgs(argv) {
     else if (a === '--fps') opts.fps = Math.max(10, Number(argv[++i]))
     else if (a === '--loops') opts.loops = Math.max(1, Number(argv[++i]))
     else if (a === '--area') opts.area = argv[++i].split(',').filter(Boolean)
+    else if (a === '--no-squeeze') opts.noSqueeze = true
     else if (a.startsWith('--')) throw new Error(`unknown option ${a}`)
     else opts.models.push(a)
   }
@@ -529,6 +536,8 @@ async function main() {
       }
       return pos
     }
+    /** The renderers' push options of a garment entry: hair squeezes (its shader's `COLLIDE_SQUEEZE`). */
+    const squeezeOf = (entry) => ({ squeeze: entry.kind === 'hair' && !opts.noSqueeze })
     /** The renderers' push, on the CPU: per garment mesh in ITS local space. */
     /** `only` = {entry, k}: push only that entry's mesh, out of its k-th capsule alone — the bind-lift attribution. */
     const push = (src, only = null) => {
@@ -546,7 +555,7 @@ async function main() {
           const caps = only ? p.entry.local.slice(only.k, only.k + 1) : p.entry.local
           // the unskinned position = the bind rule's bind point (geometry space, as the shader's `position`)
           const q = pushOutOfCapsules([v.x, v.y, v.z], caps, p.weight ? p.weight.getX(i) : 1,
-            [p.pos.getX(i), p.pos.getY(i), p.pos.getZ(i)])
+            [p.pos.getX(i), p.pos.getY(i), p.pos.getZ(i)], squeezeOf(p.entry))
           v.set(q[0], q[1], q[2]).applyMatrix4(p.mesh.matrixWorld)
           const dist = Math.hypot(v.x - src[o], v.y - src[o + 1], v.z - src[o + 2])
           if (dist > 1e-6) moved++
@@ -663,6 +672,16 @@ async function main() {
       }
       return n / idx.length
     }
+    /** p50 / p90 / max (mm) of the depth below the skin of the vertices `excess` counts. */
+    const excessDepth = (field, P, idx) => {
+      const deep = []
+      for (const i of idx) {
+        const d = field.depthAt(P[i * 3], P[i * 3 + 1], P[i * 3 + 2])
+        if (d > DEPTH && d > bindDepth[i] + DEPTH) deep.push(d)
+      }
+      deep.sort((a, b) => a - b)
+      return { n: deep.length, p50: mm1(quantileOf(deep, 0.5)), p90: mm1(quantileOf(deep, 0.9)), max: mm1(deep.at(-1) ?? 0) }
+    }
     const share = (field, P, idx) => {
       if (!idx.length) return null
       let n = 0
@@ -730,6 +749,7 @@ async function main() {
         t: +t.toFixed(3),
         before: share(field, before, garmentIdx), after: share(field, after, garmentIdx),
         excess_before: excess(field, before, garmentIdx), excess_after: excess(field, after, garmentIdx),
+        excess_depth_mm: excessDepth(field, after, garmentIdx),
         hip_sides_before: share(field, before, hipSides), hip_sides_after: share(field, after, hipSides),
         hip_band_after: share(field, after, hipBand), moved_share: moved / garmentIdx.length,
         // the garment split at the Spine1 joint's bind height: below = skirt/hips, above = bodice/sleeves
@@ -851,6 +871,7 @@ async function main() {
           + (area.length ? ` | area ${pct(max('area_before'))} → ${pct(max('area_after'))} (excess ${pct(max('area_excess_before'))} → ${pct(max('area_excess_after'))})` : ''))
         console.log(`  ${''.padEnd(16)} show-through before ${rows.map((r) => pct(r.show_before)).join(' ')} | after ${rows.map((r) => pct(r.show_after)).join(' ')}`
           + ` | mean ${pct(mm.clips[label].show_before_mean)} → ${pct(mm.clips[label].show_after_mean)} | depth max ${mm.clips[label].show_depth_max_mm} mm`)
+        console.log(`  ${''.padEnd(16)} excess depth below the skin mm p50/p90/max ${rows.map((r) => `${r.excess_depth_mm.p50}/${r.excess_depth_mm.p90}/${r.excess_depth_mm.max} (n ${r.excess_depth_mm.n})`).join(' | ')}`)
       }
     }
     gc.dispose()

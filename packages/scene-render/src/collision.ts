@@ -71,8 +71,9 @@ export interface CollisionPayload {
  * 5: the `appendage` extension capsules (op `appendage_chain`, a chain drawn
  * into the body mesh; `attached_part` stays the region of a built part).
  * 6: the partner-only `outer_trunk` set of the table (`outer_hips` /
- * `outer_spine` / `outer_chest`, fitted to the trunk's front and back
- * profile, axis moved off the joints by `a_pos`/`b_pos`;
+ * `outer_waist` / `outer_spine` / `outer_chest` — the Hips segment in two
+ * halves — fitted to the trunk's cross-section: axis through the middle of
+ * the front-to-back profile, moved off the joints by `a_pos`/`b_pos`;
  * `PARTNER_ONLY_REGIONS`).
  * THE version: every reader compares against this constant (a record that
  * froze an older list, the strand hair's, binds it under this one — never
