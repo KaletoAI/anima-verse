@@ -21,8 +21,8 @@ body actions):
   model's ``steps`` / ``freshness`` (``model_overview.annotate_base_info``),
   its face fields, collision capsules, ``collision_scales``,
   ``face_cleanup`` and ``extension_tips`` (``_plain_body_extras``) — what the
-  Figure tab's collapsed "Plain body" details and the Pose tab's outfit
-  status read. It is computed for every character (off the pipeline too),
+  Figure tab's collapsed "Plain body" details and its Outfit model sub-tab
+  read. It is computed for every character (off the pipeline too),
   and only when asked, because it is heavier than the Build's own poll.
 * ``POST /characters/{c}/figure/build`` — 202 ``figure_build.start(reason=
   "manual")``: ``{"status": "started" | "queued" | "current"}``; 409 off the

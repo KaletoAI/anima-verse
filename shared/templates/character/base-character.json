@@ -76,12 +76,6 @@
       "columns": [30]
     },
     {
-      "id": "tpose_tab",
-      "label": "Pose",
-      "label_de": "Pose",
-      "columns": [26]
-    },
-    {
       "id": "model3d_tab",
       "label": "3D",
       "label_de": "3D",
@@ -180,15 +174,6 @@
       "special": "figure",
       "fields": [],
       "visible_when": { "feature": "humanoid" }
-    },
-    {
-      "id": "model_refs",
-      "label": "Pose (image-to-3D input)",
-      "label_de": "Pose (Bild→3D-Input)",
-      "column": 26,
-      "row": 0,
-      "special": "model_refs",
-      "fields": []
     },
     {
       "id": "model3d_details",

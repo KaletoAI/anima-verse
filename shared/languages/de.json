@@ -5210,7 +5210,6 @@
     "{n} steps due": "{n} Schritte fällig",
     "Render all views — 1 image job": "Alle Ansichten rendern — 1 Bild-Job",
     "Render all views — {n} image jobs": "Alle Ansichten rendern — {n} Bild-Jobs",
-    "The Figure tab’s Build renders these views and builds the outfit model from them.": "Der Build im Figur-Tab rendert diese Ansichten und baut daraus das Outfit-Modell.",
     "A back or side view is a draft rendered from the dressed front, composited onto the base view on the CPU — no second render.": "Eine Rücken- oder Seitenansicht ist ein Entwurf aus der angezogenen Frontansicht, auf der CPU auf die Grundansicht montiert — kein zweites Rendering.",
     "Then the outfit model is due: the Build repaints it on the CPU — no hub job": "Danach ist das Outfit-Modell fällig: der Build bemalt es auf der CPU neu — kein Hub-Job",
     "The back view is then due too — its draft is made from this view (1 image job)": "Die Rückansicht ist dann auch fällig — ihr Entwurf entsteht aus dieser Ansicht (1 Bild-Job)",
@@ -5486,6 +5485,21 @@
     "Fit: its checks refused it — {reason}": "Anpassung: von den Prüfungen abgelehnt — {reason}",
     "{what}: its gate refused it — {reason}": "{what}: von der Prüfung abgelehnt — {reason}",
     "{what}: its gate refused it": "{what}: von der Prüfung abgelehnt",
-    "Its checks refused it; you accepted it.": "Die Prüfungen haben sie abgelehnt; du hast sie angenommen."
+    "Its checks refused it; you accepted it.": "Die Prüfungen haben sie abgelehnt; du hast sie angenommen.",
+    "The Build above renders these views and builds the outfit model from them.": "Der Build oben erzeugt diese Ansichten und baut daraus das Outfit-Modell.",
+    "Copied from the body shape’s view — nothing is painted on this figure: its pieces are in the body shape or have their own mesh.": "Aus der Ansicht der Körperform kopiert — auf diese Figur wird nichts gemalt: ihre Teile stecken in der Körperform oder haben ein eigenes Mesh.",
+    "Copied from the plain body’s view — nothing worn is painted on it.": "Aus der Ansicht des Grundkörpers kopiert — nichts Getragenes wird darauf gemalt.",
+    "Copy this view again from the body shape — no job": "Diese Ansicht erneut aus der Körperform kopieren — kein Job",
+    "Copy this view again from the plain body — no job": "Diese Ansicht erneut aus dem Grundkörper kopieren — kein Job",
+    "Copying the view from its body shape — no job": "Ansicht wird aus ihrer Körperform kopiert — kein Job",
+    "Copy of the body shape’s view — nothing painted": "Kopie der Ansicht der Körperform — nichts gemalt",
+    "Copy of the plain body’s view — nothing painted": "Kopie der Ansicht des Grundkörpers — nichts gemalt",
+    "Painted on the plain body’s view": "Auf die Ansicht des Grundkörpers gemalt",
+    "Painted on the body shape’s view": "Auf die Ansicht der Körperform gemalt",
+    "The plain body’s views are made in the Base body tab": "Die Ansichten des Grundkörpers entstehen im Tab Grundkörper",
+    "The body shape and its pieces: the Body sub-tab": "Die Körperform und ihre Teile: der Unter-Tab Körper",
+    "Dressed views": "Bekleidete Ansichten",
+    "The outfit’s views of the figure: the input of its texture and model": "Die Ansichten der Figur im Outfit: die Grundlage ihrer Textur und ihres Modells",
+    "The current outfit’s model and its steps": "Das Modell des aktuellen Outfits und seine Schritte"
   }
 }

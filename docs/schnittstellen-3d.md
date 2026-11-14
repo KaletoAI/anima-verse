@@ -12570,7 +12570,7 @@ clone and is called by `adaptExternalClips` (the library), `retargetClips` (the 
 wraps both `bindRelativeClip` sites in `applyFootPose` and plants at both — the main clip in the ground group and the
 floor-plan marker figures in the ground group only. **Every admin viewer of a shod model is handed its record**
 (Ruling A52): the Wardrobe shoe preview its fit's `foot_pose`, and every viewer of the SERVED figure the served one —
-the Figure tab (`served_foot_pose`) and the Pose tab (`model.foot_pose`) with `clipGroup` 'ground' when there is one
+the Figure tab (`served_foot_pose`, the Pose tab's own viewer went with it in Ruling A70) with `clipGroup` 'ground' when there is one
 (the still figure on its heels over the floor grid, the root up by `footPoseLiftM`), the 3D model tab
 (`model.foot_pose`) for its still figure and its clips. Without it the viewer shows the shoe as it is BOUND — turned
 back by the extension about the ankle: on Kira's Black Stilettos (Foot +26.2°, lift 49.9 mm) the bind pose put the

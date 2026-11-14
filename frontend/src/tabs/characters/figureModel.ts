@@ -811,7 +811,7 @@ export function baseBodyLine(state: string, t: Tr = EN): string {
 /** Why a stored outfit model is stale (`base_body.outfit_info` / `model3d` info `stale_reason`). */
 export type ModelStaleReason = 'older_base' | 'before_pipeline' | 'detail_changed' | 'figure' | 'outfit_body'
 
-/** The line under a stale outfit model (Pose tab, 3D tab). `before_pipeline` is a model made without the base
+/** The line under a stale outfit model (the Figure tab's Outfit model, the 3D tab). `before_pipeline` is a model made without the base
  *  body — since Ruling A13 every humanoid's old model, until its first Build makes the base body. */
 export function staleModelText(reason: string | null | undefined, t: Tr = EN): string {
   switch (reason) {

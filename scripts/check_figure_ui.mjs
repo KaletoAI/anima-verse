@@ -71,7 +71,7 @@
  *     AUTO_BUILD_NOTE = "then Build runs automatically"; staleBaseNote(7) (the skin step's note, the base-skin
  *     review) → "Makes the base model stale — the next Build you start rebuilds it (7 hub jobs)" (Task 11h: an
  *     automatic Build never rebuilds the plain body, ruling 8a — was "the next Build rebuilds it").
- *     staleModelText (Task 11h, the Pose and 3D tabs' line under a stale outfit model): 'before_pipeline' →
+ *     staleModelText (Task 11h, the Figure tab's Outfit model and the 3D tab's line under a stale outfit model): 'before_pipeline' →
  *     "Made without the base body — the Figure tab’s Build replaces it"; 'outfit_body' → "Built on an older body
  *     shape — rebuild it"; 'figure' → "Built as another figure than the worn pieces show now — rebuild it";
  *     null / 'older_base' → "Built on an older base body — rebuild it".
@@ -130,8 +130,8 @@
  *     named, Task UI5); ready → {green, "Ready"}. ESTIMATE_NOTE = "Hub jobs are an estimate — retries extra"
  *     (F13 c) and FieldFigure puts it on the Build button (its mouse-over) and the changes through changeLine.
  * [17] Ruling A13b (source greps): FigureBuildButton posts only figure/build and labels itself with
- *       buildButton (the Figure tab's "Build (N jobs)"); FieldPose (Pose tab; BaseBodyOutfitStatus until Task UI5) and FieldModel3D (3D tab)
- *       render it instead of "Rebuild outfit model" / "Rebuild from base body" (no model3d/generate); the
+ *       buildButton (the Figure tab's "Build (N jobs)"); FieldModel3D (3D tab) renders it instead of
+ *       "Rebuild from base body" (no model3d/generate; the Pose tab that did too dissolved, Ruling A70); the
  *       Wardrobe chip has no status.painted branch.
  * [18] Task UI2 (user 2026-11-13: "the tilt dialog is not needed in the Figure tab; make the 3D preview wider")
  *      — source greps: the Figure tab's Model3DViewer has no `sideToolbar` (since Ruling A41 no viewer has Tilt
@@ -206,7 +206,7 @@
  *          English), action "Retry this step — cost unknown", note HELD_NOTE; at the back view, held false, jobs 0
  *        → reason "The step stopped at the back view — the message is on mouse-over.", note "", action "Retry
  *          this step — no hub job".
- *      Source greps: the Pose and 3D tabs render BuildProblemNote, the Figure and Base body tabs BuildProblemView.
+ *      Source greps: the 3D tab renders BuildProblemNote, the Figure and Base body tabs BuildProblemView.
  *
  * [24] Ruling A67 — the piece dialog's body switch offers the base body and the current body only (the server's list:
  *      scripts/smoke_dialog_two_bodies.py). Pure helpers: fitBodyName({role 'base'}) → "Base body", {role 'current'}
@@ -239,8 +239,41 @@
  *        refused it — r".
  *      Source greps: the Wardrobe chip adds ACCEPTED_BY_YOU on a fitted piece with `accepted_by_user`; the step
  *      grid's fit row shows "Accepted by you" for `fit.user_accepted` (not under a selected body shape).
+ * [26] Ruling A70 — the Pose tab dissolves into the Figure tab's "Dressed views" and "Outfit model" sub-tabs:
+ *      dressedViewsModel (the Pose tab's poseModel, folded from check_pose_ui): viewRow — running → blue
+ *        "Rendering"; nothing stored → yellow "Not rendered yet"; current → green "Current"; the draft stale {R, A}
+ *        → yellow "Outdated", "R", mouse-over "R\nA"; view stale V + draft stale D → "V" first; warning W → yellow
+ *        "Kept with a warning", "W"; stale V + warning W → mouse-over "V\nW"; stale without reason → "Made from older
+ *        data". outfitRow — running → blue "Building now" (warnings hidden); failed boom → red "Failed"; stale →
+ *        yellow "Outdated", staleText; missing → yellow "Not built yet", "The Build makes it"; ready → green "Ready",
+ *        the proof line; ready + [w1, w2] → yellow "Ready — with warnings", "w1", "w1\nw2". renderAllLabel 0 / 2 /
+ *        -1 → 1 / 3 / 1 image jobs. viewAction (what a view's button does, server base_body.dressed_view_source):
+ *        painted or unknown → "Regenerate this view — 1 image job", 1 job, no note; shape → "Copy this view again
+ *        from the body shape — no job", 0, SHAPE_COPY_NOTE; plain → "… from the plain body — no job", 0,
+ *        PLAIN_COPY_NOTE. VIEWS_BY_BUILD = "The Build above renders these views and builds the outfit model from them."
+ *      No Pose tab: base-character.json has neither `tpose_tab` nor `model_refs`; CharactersTab has no model_refs slot
+ *      and no FieldPose; FieldPose.tsx and poseModel.ts are gone. Its links: no quoted "Pose tab" string is left in
+ *      frontend/src, player-ui or app; the occasions outfit_front / outfit_back_draft / outfit_side_draft read
+ *      "Figure tab, Dressed views: …"; FieldFigure has the sub-tabs `views` and `model`, renders FieldModelRefs
+ *      steps with onOpenBaseBody and onOpenBody (= setSub('body')), the VIEWS_BY_BUILD line and FigureOutfitModel.
+ *      A view's button posts generateBody(view, …): generateBody('back' | 'main', [tpose], pipeline) → exactly
+ *      {kinds [tpose], view}; no view on the pipeline with Auto off → {kinds [tpose]}; off it → {kinds []}. The 3D
+ *      tab's "Pose render" sub-tab (off the pipeline only — `poseRender`; a chosen Pose render whose character went onto
+ *      the pipeline falls back to Steps) renders FieldModelRefs steps.
+ *      Rendered from fixtures (react-dom/server): Main + Back on the pipeline —
+ *        shape copy (ob0a1b2c3d, 0 jobs): the rows "Main view" 1 and "Back view" 1, the copy
+ *          button 2, no "Regenerate this view", "Copy of the body shape’s view — nothing painted" 2, a ↗ Body
+ *          button 2, the face view note 1;
+ *        painted: "Regenerate this view — 1 image job" 2, "Painted on the body shape’s view" 2, no "no job";
+ *        plain copy (base1234abcd): the plain copy button 2, ↗ Base body 3 (2 rows + the face view note);
+ *        off the pipeline (main + the enabled left view, not rendered): Regenerate 2, "Render all views — 2 image
+ *          jobs" 1, Auto 1, no "nothing painted";
+ *      OutfitModelRows ready with texels 0.92 / 0.031: "Outfit model (base body)", "Ready", the reason "Garment
+ *        coverage of the visible surface: 92.0 % · Garment filled in without a view: 3.1 %", one step → no "No
+ *        model steps recorded"; FieldFigure (fixture payload) opened on `views`: the tab labels "Dressed views" and "Outfit
+ *        model", the Build line, "Worn now (…)" tab once; opened on `model`: the outfit row with "92.0 %".
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -270,6 +303,62 @@ async function loadBundled(src) {
     await esbuild.build({
       entryPoints: [src], outfile: file, bundle: true, format: 'esm',
       platform: 'neutral', logLevel: 'silent', absWorkingDir: ROOT,
+    });
+    return await import(`file://${file}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The two new sub-tabs rendered with react-dom/server (no DOM, no effects): FieldModelRefs from its `initialInfo`,
+ * OutfitModelRows from its props, FieldFigure with useFigure / useBaseBody / useModel3DStatus answering the
+ * fixtures in globalThis.__A70_FIGURE__ / __A70_BASE__ / __A70_M3D__ (stub modules; everything else is the real code).
+ */
+async function loadRendered() {
+  const esbuild = esbuildModule();
+  const dir = await mkdtemp(join(tmpdir(), 'check-figure-ui-render-'));
+  const chars = join(ROOT, 'frontend/src/tabs/characters');
+  try {
+    const stub = (name, body) => {
+      const f = join(dir, `${name}.ts`);
+      writeFileSync(f, body);
+      return f;
+    };
+    const stubs = {
+      useFigure: stub('useFigure', `export function useFigure() {
+  return { data: globalThis.__A70_FIGURE__ ?? null, error: '', startPoll: () => undefined } }`),
+      useBaseBody: stub('useBaseBody', `export * from ${JSON.stringify(join(chars, 'useBaseBody.ts'))}
+export function useBaseBody() {
+  return { info: globalThis.__A70_BASE__ ?? null, figure: null, setInfo: () => undefined, startPoll: () => undefined } }`),
+      useModel3DStatus: stub('useModel3DStatus', `export function useModel3DStatus() {
+  return { st: globalThis.__A70_M3D__ ?? null, setSt: () => undefined, load: () => undefined, startPoll: () => undefined } }`),
+    };
+    const entry = stub('entry', `
+import { createElement } from 'react'
+import { renderToString } from 'react-dom/server'
+import { I18nProvider } from ${JSON.stringify(join(ROOT, 'frontend/src/i18n/I18nProvider.tsx'))}
+import { ToastProvider } from ${JSON.stringify(join(ROOT, 'frontend/src/lib/Toast.tsx'))}
+export { FieldFigure } from ${JSON.stringify(join(chars, 'FieldFigure.tsx'))}
+export { FieldModelRefs, generateBody } from ${JSON.stringify(join(chars, 'FieldModelRefs.tsx'))}
+export { OutfitModelRows } from ${JSON.stringify(join(chars, 'FigureOutfitModel.tsx'))}
+export const h = createElement
+export const render = (el) => renderToString(createElement(I18nProvider, null, createElement(ToastProvider, null, el)))
+`);
+    const file = join(dir, 'rendered.mjs');
+    await esbuild.build({
+      entryPoints: [entry], outfile: file, bundle: true, format: 'esm', platform: 'node', jsx: 'automatic',
+      logLevel: 'silent', absWorkingDir: ROOT, loader: { '.css': 'empty', '.png': 'empty', '.svg': 'empty' },
+      nodePaths: [join(ROOT, 'frontend/node_modules'), join(ROOT, 'node_modules')],
+      banner: { js: "import { createRequire as __cr } from 'module'; const require = __cr(import.meta.url);" },
+      plugins: [{
+        name: 'a70-hooks',
+        setup(build) {
+          build.onResolve({ filter: /^\.\/(useFigure|useBaseBody|useModel3DStatus)$/ }, (a) => (
+            a.importer.startsWith(dir) || !a.importer.startsWith(chars) ? undefined
+              : { path: stubs[a.path.slice(2)] }));
+        },
+      }],
     });
     return await import(`file://${file}`);
   } finally {
@@ -525,15 +614,12 @@ check('[16] estimate note', m.ESTIMATE_NOTE, 'Hub jobs are an estimate — retri
 check('[16] FieldFigure uses them', [/t\(ESTIMATE_NOTE\)/.test(fieldFigure),
   /data\.changes\.map\(\(c\) => changeLine\(c, t\)\)/.test(fieldFigure)], [true, true]);
 
-// [17] Ruling A13b: the Pose tab's and the 3D tab's rebuild buttons are the Figure tab's Build.
+// [17] Ruling A13b: the 3D tab's rebuild button is the Figure tab's Build (the Pose tab's went with it, Ruling A70).
 const fbb = src('frontend/src/tabs/characters/FigureBuildButton.tsx');
-const bbos = src('frontend/src/tabs/characters/FieldPose.tsx');
 const fm3 = src('frontend/src/tabs/characters/FieldModel3D.tsx');
 check('[17] FigureBuildButton posts only figure/build, labelled by buildButton',
   [[...fbb.matchAll(/apiPost[^(]*\(`\/characters\/\$\{enc\}\/([^`?]+)/g)].map((x) => x[1]),
     /buildButton\(data, t\)/.test(fbb)], [['figure/build'], true]);
-check('[17] Pose tab: the Build, no model3d/generate', [/<FigureBuildButton/.test(bbos), /model3d\/generate/.test(bbos),
-  /Rebuild outfit model/.test(bbos)], [true, false, false]);
 check('[17] 3D tab: the Build instead of "Rebuild from base body"', [/<FigureBuildButton/.test(fm3),
   /rebuildFromBase|Rebuild from base body'/.test(fm3)], [true, false]);
 check('[17] Wardrobe: no painted status branch', /status\.painted/.test(src('frontend/src/tabs/characters/WardrobeGarment.tsx')),
@@ -714,9 +800,170 @@ check('[23] other failure', [pf.title, pf.reason, pf.action, pf.note, pf.detail]
 const pn = m.problemText(prob({ kind: 'failed', held: false, jobs: 0 }));
 check('[23] at a view, not held, no job', [pn.reason, pn.note, pn.action],
   ['The step stopped at the back view — the message is on mouse-over.', '', 'Retry this step — no hub job']);
-check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/characters/FieldPose.tsx')),
-  /<BuildProblemNote\b/.test(src('frontend/src/tabs/characters/FieldModel3D.tsx')),
-  /<BuildProblemView\b/.test(fieldFigure), /<BuildProblemView\b/.test(details)], [true, true, true, true]);
+check('[23] tabs render it', [/<BuildProblemNote\b/.test(src('frontend/src/tabs/characters/FieldModel3D.tsx')),
+  /<BuildProblemView\b/.test(fieldFigure), /<BuildProblemView\b/.test(details)], [true, true, true]);
+
+// [26] Ruling A70: the Pose tab dissolved into the Figure tab's Dressed views and Outfit model sub-tabs.
+{
+  let dv;
+  try {
+    dv = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/dressedViewsModel.ts'));
+  } catch (e) {
+    failures.push(`[26] dressedViewsModel.ts not loadable: ${e.message}`);
+  }
+  if (dv) {
+    // viewRow (folded from check_pose_ui [1])
+    const cur = { state: 'current' };
+    const tile = (freshness = cur, extra = {}) => ({ filename: 'f.png', freshness, ...extra });
+    const vr = (info, draft, running = false) => { const r = dv.viewRow(info, draft, running); return [r.light, r.state, r.reason]; };
+    check('[26] viewRow running', vr(tile(), tile(), true), ['blue', 'Rendering', '']);
+    check('[26] viewRow nothing stored', vr(null, null), ['yellow', 'Not rendered yet', '']);
+    check('[26] viewRow current', vr(tile(), tile()), ['green', 'Current', '']);
+    const draftStale = dv.viewRow(tile(), tile({ state: 'stale', reason: 'R', action: 'A' }), false);
+    check('[26] viewRow draft stale', [draftStale.light, draftStale.state, draftStale.reason, draftStale.detail],
+      ['yellow', 'Outdated', 'R', 'R\nA']);
+    check('[26] viewRow the view first', vr(tile({ state: 'stale', reason: 'V' }), tile({ state: 'stale', reason: 'D' }))[2], 'V');
+    check('[26] viewRow warning', vr(tile(cur, { warning: 'W' }), null), ['yellow', 'Kept with a warning', 'W']);
+    check('[26] viewRow stale + warning', dv.viewRow(tile({ state: 'stale', reason: 'V' }, { warning: 'W' }), null, false).detail, 'V\nW');
+    check('[26] viewRow stale without a reason', vr(tile({ state: 'stale' }), null)[2], 'Made from older data');
+    // outfitRow (folded from check_pose_ui [2])
+    const o = (status, extra = {}) => ({ status, error: '', warnings: [], ...extra });
+    const or = (x) => { const r = dv.outfitRow(x, 'S', 'P'); return [r.light, r.state, r.reason, r.detail]; };
+    check('[26] outfitRow running', or(o('running', { warnings: ['w'] })), ['blue', 'Building now', '', '']);
+    check('[26] outfitRow failed', or(o('failed', { error: 'boom' })), ['red', 'Failed', 'boom', 'boom']);
+    check('[26] outfitRow stale', or(o('stale')).slice(0, 3), ['yellow', 'Outdated', 'S']);
+    check('[26] outfitRow missing', or(o('missing')).slice(0, 3), ['yellow', 'Not built yet', 'The Build makes it']);
+    check('[26] outfitRow ready', or(o('ready')), ['green', 'Ready', 'P', 'P']);
+    check('[26] outfitRow ready with warnings', or(o('ready', { warnings: ['w1', 'w2'] })),
+      ['yellow', 'Ready — with warnings', 'w1', 'w1\nw2']);
+    // renderAllLabel (folded from check_pose_ui [4]; off the pipeline, now the 3D tab's Pose render)
+    check('[26] render all', [dv.renderAllLabel(0), dv.renderAllLabel(2), dv.renderAllLabel(-1)],
+      ['Render all views — 1 image job', 'Render all views — 3 image jobs', 'Render all views — 1 image job']);
+    // viewAction: what a view's button does — an edit (1 image job) or a copy (no job)
+    const va = (src) => { const a = dv.viewAction(src); return [a.label, a.jobs, a.note]; };
+    check('[26] viewAction edit', va({ source: 'painted', shape: 'ob0a1b2c3d', jobs: 1 }),
+      ['Regenerate this view — 1 image job', 1, '']);
+    check('[26] viewAction unknown source = the edit', va(null), ['Regenerate this view — 1 image job', 1, '']);
+    check('[26] viewAction shape copy', va({ source: 'shape', shape: 'ob0a1b2c3d', jobs: 0 }),
+      ['Copy this view again from the body shape — no job', 0, dv.SHAPE_COPY_NOTE]);
+    check('[26] viewAction plain copy', va({ source: 'plain', shape: 'base1234abcd', jobs: 0 }),
+      ['Copy this view again from the plain body — no job', 0, dv.PLAIN_COPY_NOTE]);
+    check('[26] VIEWS_BY_BUILD', dv.VIEWS_BY_BUILD,
+      'The Build above renders these views and builds the outfit model from them.');
+  }
+
+  // No Pose tab: the template, the slot, the files.
+  const tpl = JSON.parse(src('shared/templates/character/base-character.json') || '{}');
+  const ids = [...(tpl.tabs || []), ...(tpl.sections || [])].map((b) => b.id);
+  const chars = src('frontend/src/tabs/characters/CharactersTab.tsx');
+  check('[26] no Pose tab in the template / the slots / the tree', [ids.includes('tpose_tab'), ids.includes('model_refs'),
+    /\bmodel_refs\s*:/.test(chars), /'model_refs'/.test(chars), /FieldPose/.test(chars),
+    existsSync(join(ROOT, 'frontend/src/tabs/characters/FieldPose.tsx')),
+    existsSync(join(ROOT, 'frontend/src/tabs/characters/poseModel.ts'))], [false, false, false, false, false, false, false]);
+  // Its links now open the Figure tab: no "Pose tab" left in the UI or server strings; the views' ↗ Body opens the
+  // Figure tab's Body sub-tab; the occasions name the Figure tab's Dressed views.
+  const walk = (dir, ext) => {
+    const out = [];
+    for (const e of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+      const p = `${dir}/${e.name}`;
+      if (e.isDirectory()) out.push(...walk(p, ext));
+      else if (ext.some((x) => e.name.endsWith(x))) out.push(p);
+    }
+    return out;
+  };
+  const poseTab = [...walk('frontend/src', ['.ts', '.tsx']), ...walk('packages/player-ui/src', ['.ts', '.tsx']),
+    ...walk('app', ['.py'])].filter((p) => /(['"`])[^'"`\n]*\bPose tab\b[^'"`\n]*\1/.test(src(p)));
+  check('[26] no "Pose tab" string left in frontend/src, player-ui, app', poseTab, []);
+  check('[26] FieldFigure: the two sub-tabs, the views with ↗ Body / ↗ Base body, the outfit model',
+    [/id: 'views' as const, label:/.test(fieldFigure), /id: 'model' as const, label: t\('Outfit model'\)/.test(fieldFigure),
+      /<FieldModelRefs character=\{character\} kinds=\{TPOSE\} layout="steps" onOpenBaseBody=\{onOpenBaseBody\}/.test(fieldFigure),
+      /onOpenBody=\{openBody\}/.test(fieldFigure), /const openBody = useCallback\(\(\) => setSub\('body'\), \[\]\)/.test(fieldFigure),
+      /t\(VIEWS_BY_BUILD\)/.test(fieldFigure), /<FigureOutfitModel\b/.test(fieldFigure)], [true, true, true, true, true, true, true]);
+  const occ = src('app/imagegen/occasions.py');
+  check('[26] occasions name the Figure tab', ['outfit_front', 'outfit_back_draft', 'outfit_side_draft'].map((k) =>
+    new RegExp(`"${k}": _image\\(\\s*"[^"]+", "Figure tab, Dressed views: `).test(occ)), [true, true, true]);
+  // Regenerate on a view posts exactly that view's job.
+  const refsSrc = src('frontend/src/tabs/characters/FieldModelRefs.tsx');
+  check('[26] a view button posts generateBody(view, …)', [/onClick=\{\(\) => generate\(view\)\}/.test(refsSrc),
+    /\/model-refs\/generate`,\s*generateBody\(view, kindList,/.test(refsSrc), /\{action\.label\}/.test(refsSrc),
+    /singleAction\('view', 1, t\)/.test(refsSrc)], [true, true, true, false]);
+  check('[26] FieldModelRefs: steps layout (no stack), the face view link + its switch (from check_pose_ui [5])',
+    [/layout === 'steps'/.test(refsSrc), /'stack'/.test(refsSrc), /onClick=\{onOpenBaseBody\}/.test(refsSrc),
+      /setView\('face', e\.target\.checked\)/.test(refsSrc)], [true, false, true, true]);
+  // Off the pipeline the T-pose views moved to the 3D tab's "Pose render" sub-tab.
+  const side = src('frontend/src/tabs/characters/Model3DSidePanels.tsx');
+  check('[26] 3D tab: Pose render off the pipeline only', [
+    /const poseRender = !!panel && !panel\.st\.pipeline\b/.test(side)
+      && /\(poseRender \? \[\{ id: 'pose' as const, label: t\('Pose render'\) \}\]/.test(side)
+      && /\(sub === 'pose' && !poseRender\) \? 'steps'/.test(side),
+    /<FieldModelRefs character=\{character\} kinds=\{TPOSE\} layout="steps" \/>/.test(side)], [true, true]);
+
+  // Rendered from fixtures (react-dom/server; the hooks of FieldFigure / FigureOutfitModel answer the fixture).
+  let r;
+  try {
+    r = await loadRendered();
+  } catch (e) {
+    failures.push(`[26] the sub-tabs not renderable: ${String(e.message).slice(0, 400)}`);
+  }
+  if (r) try {
+    const b = r.generateBody;
+    check('[26] generateBody: one view = exactly its job', [b('back', ['tpose'], { pipeline: true }),
+      b('main', ['tpose'], { pipeline: true }), b(undefined, ['tpose'], { pipeline: true, auto: { tpose: false } }),
+      b(undefined, ['tpose'], { pipeline: false, auto: { tpose: false } })],
+    [{ kinds: ['tpose'], view: 'back' }, { kinds: ['tpose'], view: 'main' }, { kinds: ['tpose'] }, { kinds: [] }]);
+    const refsInfo = (source, extra = {}) => ({
+      signature: 'osig', pipeline: true, build: { running: false, step: '' }, status: {}, auto: { tpose: true, pose: true },
+      now: '2026-11-14T21:00:00Z', drafts: { back: null },
+      tpose: { filename: 'tpose_osig.png', created_at: '2026-11-14T20:00:00Z', freshness: { state: 'current' } },
+      views: { back: { enabled: true, info: { filename: 'tpose_back_osig.png', freshness: { state: 'current' } } },
+        face: { enabled: false, info: null } },
+      face_view: { exists: false, stale: false, rendering: false, url: '/f' },
+      dressed_source: source, ...extra });
+    const count = (html, s) => html.split(s).length - 1;
+    const steps = (info, links = true) => r.render(r.h(r.FieldModelRefs, { character: 'Kai', kinds: ['tpose'], layout: 'steps',
+      initialInfo: info, ...(links ? { onOpenBody: () => undefined, onOpenBaseBody: () => undefined } : {}) }));
+    const shape = steps(refsInfo({ source: 'shape', shape: 'ob0a1b2c3d', jobs: 0 }));
+    check('[26] Dressed views, shape copy: two rows say it and cost no job, ↗ Body each', [
+      count(shape, 'Main view</strong>'), count(shape, 'Back view</strong>'),
+      count(shape, 'Copy this view again from the body shape — no job'), count(shape, 'Regenerate this view'),
+      count(shape, 'Copy of the body shape’s view — nothing painted'), count(shape, 'Body</button>'),
+      count(shape, 'Face view: it textures the plain body’s face')], [1, 1, 2, 0, 2, 2, 1]);
+    const painted = steps(refsInfo({ source: 'painted', shape: 'ob0a1b2c3d', jobs: 1 }));
+    check('[26] Dressed views, painted: 1 image job each', [count(painted, 'Regenerate this view — 1 image job'),
+      count(painted, 'Painted on the body shape’s view'), count(painted, 'no job')], [2, 2, 0]);
+    const plain = steps(refsInfo({ source: 'plain', shape: 'base1234abcd', jobs: 0 }));
+    check('[26] Dressed views, plain copy: ↗ Base body each (+ the face view note)', [
+      count(plain, 'Copy this view again from the plain body — no job'), count(plain, 'Base body</button>')], [2, 3]);
+    const off = steps({ signature: 'asig', pipeline: false, status: {}, auto: { tpose: true }, now: '2026-11-14T21:00:00Z',
+      tpose: { filename: 'tpose_asig.png', freshness: { state: 'current' } },
+      views: { left: { enabled: true, info: null } } }, false);
+    check('[26] off the pipeline (3D tab): edits, Render all, Auto', [count(off, 'Regenerate this view — 1 image job'),
+      count(off, 'Render all views — 2 image jobs'), count(off, '>Auto<'), count(off, 'nothing painted')], [2, 1, 1, 0]);
+    const outfit = r.render(r.h(r.OutfitModelRows, { outfit: { status: 'ready', error: '', warnings: [], stale_reason: null,
+      proof: { texels: { garment_share_of_exposed: 0.92, unseen_filled_share_of_exposed_garment: 0.031 } } },
+    steps: [{ id: 'mesh', label: 'Mesh', status: 'done', detail: '', numbers: {} }] }));
+    check('[26] Outfit model: the step row with the proof numbers, the steps', [count(outfit, 'Outfit model (base body)'),
+      count(outfit, '>Ready<'),
+      count(outfit, '>Garment coverage of the visible surface: 92.0 % · Garment filled in without a view: 3.1 %<'),
+      count(outfit, 'No model steps recorded')], [1, 1, 1, 0]);
+    globalThis.__A70_FIGURE__ = { humanoid: true, pipeline: true, auto_build: false, status: 'current', outfit: 'Casual',
+      build: { running: false, step: null, failed: {}, deferred: null, paused: null }, served_url: null,
+      served_built_at: null, served_foot_pose: null, changes: [], cost: { hub_jobs: 0, steps: [] }, worn: [], hair: null,
+      body: null, problem: null, generation_pause: null };
+    const views = r.render(r.h(r.FieldFigure, { character: 'Kai', initialSub: 'views' }));
+    check('[26] FieldFigure opens on Dressed views: its tab, the Build line, the hidden others', [
+      count(views, '>Dressed views<'), count(views, '>Outfit model<'), count(views, 'The Build above renders these views'),
+      count(views, '>Worn now (')], [1, 1, 1, 1]);
+    globalThis.__A70_BASE__ = { pipeline: true, outfit: { status: 'ready', error: '', warnings: [], stale_reason: null,
+      proof: { texels: { garment_share_of_exposed: 0.92 } } } };
+    globalThis.__A70_M3D__ = { model: { steps: [] } };
+    const model = r.render(r.h(r.FieldFigure, { character: 'Kai', initialSub: 'model' }));
+    check('[26] FieldFigure opens on Outfit model: its rows (the hooks answer the fixture)', [
+      count(model, 'Outfit model (base body)'), count(model, '>Garment coverage of the visible surface: 92.0 %<')], [1, 1]);
+  } catch (e) {
+    failures.push(`[26] rendering failed: ${String(e.stack || e).slice(0, 600)}`);
+  }
+}
 
 // [24] Ruling A67 — the piece dialog's two bodies (header).
 {

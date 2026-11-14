@@ -1,6 +1,7 @@
 /**
- * RefImage — the ONE image tile of the character tabs (Base body, Pose with
- * the dressed outfit views, T-pose and extra views, Hair): the picture plus
+ * RefImage — the ONE image tile of the character tabs (Base body, Figure
+ * with the dressed outfit views, 3D with an off-pipeline T-pose and its
+ * extra views, Hair): the picture plus
  * three corner badges, and a click that opens it in the shared Lightbox.
  *
  * Lower left: when the image was made (`createdAt` — the sidecar's stamp,

@@ -27,7 +27,6 @@ import { FieldModelRefs } from './FieldModelRefs'
 import { FieldFigure } from './FieldFigure'
 import { FieldBaseBody } from './FieldBaseBody'
 import { FieldHairstyles } from './FieldHairstyles'
-import { FieldPose } from './FieldPose'
 import { TemplateSelector } from './TemplateSelector'
 import { tmplText, type DynamicData } from '@anima/player-ui'
 import { SecretsEditor } from './SecretsEditor'
@@ -141,7 +140,7 @@ function sectionIsGeneric(s: TmplSectionRaw): boolean {
 // exactly when its sections have a slot here; without this it would be
 // filtered out as "no generic fields".
 const SPECIAL_SLOTS = new Set([
-  'placement', 'body_editor', 'pose_ref', 'model_refs', 'model3d_gen', 'figure', 'base_body',
+  'placement', 'body_editor', 'pose_ref', 'model3d_gen', 'figure', 'base_body',
   'stats', 'model3d_animations', 'model3d_extensions', 'model3d_generation',
   'imagegen_override',
 ])
@@ -660,8 +659,8 @@ export function CharactersTab() {
   )
 
   /** Remember edited keys of the image-override record instead of PUTting
-   *  them. The sections showing them sit on several tabs (Image, Pose, Base
-   *  body, Hair, 3D) and each queues only its own key; the route takes a
+   *  them. The sections showing them sit on several tabs (Image, Base body,
+   *  Hair, 3D) and each queues only its own key; the route takes a
    *  partial record, so the Save sends just what was edited. */
   const queueImagegen = useCallback((patch: Record<string, unknown>) => {
     setBuf((b) => queueFields(b, IMAGEGEN_TARGET, patch))
@@ -1154,8 +1153,10 @@ export function CharactersTab() {
                           savedSignal={savedSignal}
                         />
                       ),
-                      // The Figure tab: one preview, one Build, the worn pieces
-                      // and the body; the modes are edited in the Wardrobe.
+                      // The Figure tab: one preview, one Build, the worn pieces, the
+                      // body, the dressed views and the outfit model (Ruling A70: the
+                      // Pose tab's views and model live here); the modes are edited
+                      // in the Wardrobe.
                       figure: (
                         <FieldFigure key={selected} character={selected}
                           onOpenWardrobe={subTabs.some((s) => s.id === 'wardrobe')
@@ -1171,16 +1172,6 @@ export function CharactersTab() {
                         <FieldBaseBody key={selected} character={selected}
                           onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
                             ? () => setSubTab('tab:figure_tab') : undefined} />
-                      ),
-                      // Pose renders left, the outfit model built from them right.
-                      model_refs: (
-                        <FieldPose key={selected} character={selected}
-                          onOpen3D={fieldTabs.some((g) => g.id === 'tab:model3d_tab')
-                            ? () => setSubTab('tab:model3d_tab') : undefined}
-                          onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
-                            ? () => setSubTab('tab:figure_tab') : undefined}
-                          onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
-                            ? () => setSubTab('tab:base_body_tab') : undefined} />
                       ),
                       model3d_gen: (
                         <FieldModel3D key={selected} character={selected}

@@ -38,9 +38,10 @@ Expected, by hand:
     file -> None; a raising lookup -> None. ``figure_build._figure_info`` (off the pipeline, every other input
     stubbed) carries ``served_foot_pose`` = that record beside ``served_url``.
 [4] EVERY VIEWER OF THE SERVED FIGURE PASSES IT (text scan of ``frontend/src``): each ``<Model3DViewer`` whose URL is
-    the served figure — ``data.served_url`` (FieldFigure.tsx), ``/model3d/file`` (FieldPose.tsx; FieldModel3D.tsx
-    through ``viewerUrl``), all under ``frontend/src/tabs/characters`` — passes ``footPose=`` from the served record (``served_foot_pose`` / ``foot_pose``);
-    FieldFigure and FieldPose, which show the still figure, also pass ``clipGroup`` 'ground' when the record is there
+    the served figure — ``data.served_url`` (FieldFigure.tsx), ``/model3d/file`` (FieldModel3D.tsx through
+    ``viewerUrl``; the Pose tab's own viewer went with that tab, Ruling A70), all under
+    ``frontend/src/tabs/characters`` — passes ``footPose=`` from the served record (``served_foot_pose`` / ``foot_pose``);
+    FieldFigure, which shows the still figure, also passes ``clipGroup`` 'ground' when the record is there
     (the floor grid at the bare soles and the root lifted by ``footPoseLiftM``). The Wardrobe's shoe preview keeps its
     ``footPose``. A served-figure viewer found anywhere else without ``footPose`` fails.
 [5] A CLIP FRAME KEEPS THE OFFSET (``applyFootPose`` in node; the bone chain of ``smoke_foot_pose.mjs``: Foot at
@@ -63,9 +64,10 @@ FAILS BEFORE / PASSES AFTER — against main before the fix (33d69c57569c82987d9
     SMOKE_REPO="$d" ./.venv/bin/python scripts/smoke_heel_pose.py
 
 ``SMOKE_REPO`` points [3] (``app`` is imported from there) and [4] (the scan) at that tree; [1], [2] and [5] run the
-same code there and pass. It reports 8 failures: [3] ``_served_foot_pose`` missing and the payload without
-``served_foot_pose`` (two); [4] the three served-figure viewers without ``footPose`` (three), FieldFigure / FieldPose
-without ``clipGroup`` (two) and the stray scan naming those three files (one).
+same code there and pass. It reports 6 failures: [3] ``_served_foot_pose`` missing and the payload without
+``served_foot_pose`` (two); [4] the two served-figure viewers without ``footPose`` (two), FieldFigure without
+``clipGroup`` (one) and the stray scan naming the files without it (one). (8 before Ruling A70, while the Pose tab's
+viewer — FieldPose.tsx — was a site of its own.)
 """
 from __future__ import annotations
 
@@ -183,7 +185,6 @@ def part_payload() -> None:
 #: file -> (what marks its viewer as the served figure, the foot pose expression it must pass, clipGroup expected)
 SITES = {
     "FieldFigure.tsx": ("data.served_url", "data.served_foot_pose", True),
-    "FieldPose.tsx": ("/model3d/file", "model.foot_pose", True),
     "FieldModel3D.tsx": ("viewerUrl", "model.foot_pose", False),
 }
 

@@ -23,9 +23,9 @@ Expected values, derived by hand from that decision (no snapshot of output):
     negative that forbids the pose the positive asks for cancels it. They DO
     contain "T-pose" and "arms raised to shoulder height" (the old pose moves
     into the negative so it cannot return).
-[4] `shared/templates/character/base-character.json`: tab `tpose_tab` has
-    label "Pose" / label_de "Pose"; section `model_refs` has label
-    "Pose (image-to-3D input)".
+[4] `shared/templates/character/base-character.json`: neither the tab
+    `tpose_tab` nor the section `model_refs` exists — the Pose tab dissolved
+    into the Figure tab's Dressed views and Outfit model sub-tabs (Ruling A70).
 [5] Animals are untouched: `ANIMAL_POSE_PROMPT_DEFAULT` names no A-pose.
 
 Usage: ./.venv/bin/python scripts/smoke_apose_prompts.py
@@ -86,12 +86,8 @@ def main():
             for b in tpl.get(key, []) or []:
                 if isinstance(b, dict) and b.get("id"):
                     blocks[b["id"]] = b
-        tab = blocks.get("tpose_tab", {})
-        check("[4] tpose_tab label == 'Pose'", tab.get("label") == "Pose", repr(tab))
-        check("[4] tpose_tab label_de == 'Pose'", tab.get("label_de") == "Pose", repr(tab))
-        sec = blocks.get("model_refs", {})
-        check("[4] model_refs label == 'Pose (image-to-3D input)'",
-              sec.get("label") == "Pose (image-to-3D input)", repr(sec))
+        check("[4] no tpose_tab (Ruling A70)", "tpose_tab" not in blocks, repr(blocks.get("tpose_tab")))
+        check("[4] no model_refs section (Ruling A70)", "model_refs" not in blocks, repr(blocks.get("model_refs")))
 
         # [5] animals untouched
         check("[5] animal pose names no A-pose", "A-pose" not in mr.ANIMAL_POSE_PROMPT_DEFAULT)

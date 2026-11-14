@@ -1,7 +1,7 @@
 /**
  * useModel3DStatus — `GET /characters/{name}/model3d` for the tabs that act
  * on a character's model without being the 3D tab itself (the Figure tab's
- * face and rig actions, the Pose tab's outfit-model preview). One load, then
+ * face and rig actions, its Outfit model sub-tab). One load, then
  * a 3 s tick while the server reports a model run (`pending`); after ~2 min
  * the tick slows down. Stopped on unmount / character switch. The 3D tab
  * (FieldModel3D) keeps its own poll — it also drives the preview states.

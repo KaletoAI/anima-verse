@@ -1,6 +1,6 @@
 /**
- * FigureBuildButton — the Figure tab's Build on another screen (Ruling A13b): the Pose tab's outfit-model status
- * and the 3D tab's Model row start the same `POST …/figure/build` with the same label and job count
+ * FigureBuildButton — the Figure tab's Build on another screen (Ruling A13b): the 3D tab's flow head starts the
+ * same `POST …/figure/build` with the same label and job count
  * ("Build (N jobs)" / "Build base body (N jobs)", `figureModel.buildButton`) — never a cascade of their own.
  * Reads `GET …/figure` through useFigure (polled while a Build runs); renders nothing off the pipeline.
  */
@@ -13,7 +13,7 @@ import { useFigure } from './useFigure'
 
 export function FigureBuildButton({ character, onStarted, primary = false }: {
   character: string
-  /** The flow head's one primary button (the Pose tab). */
+  /** The flow head's one primary button (the 3D tab). */
   primary?: boolean
   /** A Build was started or queued (the caller re-reads its own status). */
   onStarted?: () => void

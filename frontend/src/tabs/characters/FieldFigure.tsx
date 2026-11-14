@@ -34,7 +34,15 @@
  *   - "Build plan": what the Build runs, one row per step with its light and cost;
  *   - "Body": the plain body (its views, model, face and rig live in the Base body tab — one line and "Open Base
  *     body tab"), the body shape and the texture as step rows, and the stored bodies and textures (FigureStored,
- *     Delete behind an in-app confirmation).
+ *     Delete behind an in-app confirmation);
+ *   - "Dressed views" (Ruling A70, from the dissolved Pose tab): one line that the Build renders them, then one step
+ *     row per dressed view (FieldModelRefs `layout="steps"`): light, state, reason, small thumbnails that enlarge,
+ *     where the view comes from — painted on the body's view, or a copy of the body shape's / plain body's view
+ *     (↗ Body / ↗ Base body) — and its own button with its true cost: "Regenerate this view — 1 image job" for an
+ *     edit, "Copy this view again from the body shape — no job" for a copy (`viewAction`); the face view's note
+ *     with the link to the Base body tab. Kept mounted while hidden: it polls the views and counts them;
+ *   - "Outfit model" (Ruling A70): the current outfit's model as a step row with the proof's numbers and its own
+ *     steps (FigureOutfitModel).
  *
  * Nothing here starts a chain except Build and Retry (both POST …/figure/build — a manual Build) and the single
  * steps of a piece. Every humanoid is on the figure pipeline (Ruling A13); one without a plain body yet keeps the
@@ -50,6 +58,9 @@ import { Model3DViewer } from './Model3DViewer'
 import { ExtensionPresenceNote } from './ExtensionPresenceNote'
 import { GarmentPieceDialog, PieceStateToggle } from './WardrobeGarment'
 import { FigureStored } from './FigureStored'
+import { FieldModelRefs } from './FieldModelRefs'
+import { FigureOutfitModel } from './FigureOutfitModel'
+import { VIEWS_BY_BUILD } from './dressedViewsModel'
 import { GenerationPausePanel, GenerationPauseSwitch } from './GenerationPausePanel'
 import { BuildProblemView } from './BuildProblem'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
@@ -71,10 +82,16 @@ const BUTTONS: CSSProperties = { display: 'flex', gap: 4, flexWrap: 'wrap', alig
 
 const noop = () => undefined
 
-type Sub = 'worn' | 'plan' | 'body'
+export type FigureSub = 'worn' | 'plan' | 'body' | 'views' | 'model'
+type Sub = FigureSub
 
-export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpenBaseBody }: {
+/** The dressed views are the T-pose kind's (a literal kept stable for FieldModelRefs' poll). */
+const TPOSE: ('tpose')[] = ['tpose']
+
+export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpenBaseBody, initialSub = 'worn' }: {
   character: string
+  /** The sub-tab it opens on (a link into the Dressed views or the Outfit model; the check renders each). */
+  initialSub?: Sub
   /** Opens the Wardrobe tab, where the modes are edited. */
   onOpenWardrobe?: () => void
   /** Opens the Hairstyles tab (Task 14), where the hairstyles and their modes are edited. */
@@ -87,8 +104,12 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
   const { data, error, startPoll } = useFigure(character)
   const [posting, setPosting] = useState(false)
   const [openPiece, setOpenPiece] = useState<{ id: string; name: string } | null>(null)
-  const [sub, setSub] = useState<Sub>('worn')
+  const [sub, setSub] = useState<Sub>(initialSub)
   const [autoSaved, setAutoSaved] = useState(false)
+  // The dressed views' lights, comma-joined (FieldModelRefs `onLights`): the sub-tab names how many there are.
+  const [viewLights, setViewLights] = useState('')
+  const onViewLights = useCallback((l: string) => setViewLights(l), [])
+  const openBody = useCallback(() => setSub('body'), [])
   const enc = encodeURIComponent(character)
 
   const post = useCallback(async (path: string, body: unknown, ok?: (d: Record<string, unknown>) => void) => {
@@ -158,6 +179,9 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
     { id: 'plan' as const, label: `${t('Build plan')} (${data.cost.steps.length})`,
       title: t('What the Build runs') },
     { id: 'body' as const, label: t('Body') },
+    { id: 'views' as const, label: viewLights ? `${t('Dressed views')} (${viewLights.split(',').length})`
+      : t('Dressed views'), title: t('The outfit’s views of the figure: the input of its texture and model') },
+    { id: 'model' as const, label: t('Outfit model'), title: t('The current outfit’s model and its steps') },
   ]
 
   return (
@@ -193,9 +217,19 @@ export function FieldFigure({ character, onOpenWardrobe, onOpenHairstyles, onOpe
               onRefit={refit} onRegenerateMesh={regenerateMesh} />
           ) : sub === 'plan' ? (
             <PlanRows data={data} />
-          ) : (
+          ) : sub === 'body' ? (
             <BodySection data={data} character={character} onChanged={reload} onOpenBaseBody={onOpenBaseBody} />
-          )}
+          ) : sub === 'model' ? (
+            <FigureOutfitModel character={character}
+              refresh={`${data.build.running ? 'running' : 'idle'}:${data.served_built_at || ''}`} />
+          ) : null}
+          {/* Kept mounted while hidden: it polls the views and counts them for the sub-tab's label. */}
+          <div style={sub === 'views' ? { display: 'flex', flexDirection: 'column', gap: 6 } : { display: 'none' }}>
+            <span className="ga-hint">{t(VIEWS_BY_BUILD)}</span>
+            <FieldModelRefs character={character} kinds={TPOSE} layout="steps" onOpenBaseBody={onOpenBaseBody}
+              onOpenBody={openBody} onLights={onViewLights}
+              refreshKey={`${data.build.running ? 'running' : 'idle'}:${data.served_built_at || ''}`} />
+          </div>
         </div>
       </div>
       {openPiece ? (

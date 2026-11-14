@@ -2,8 +2,10 @@
  * FieldModelRefs — the character's reference renders in the CURRENT outfit.
  * Two kinds: `pose` (default-pose wardrobe preview) and `tpose` (input for the
  * image-to-3D pipeline). Which kinds are shown is chosen by the `kinds` prop —
- * the wardrobe shows only the default pose (`layout="row"`), the Pose tab only the
- * T-pose and its views as step rows (`layout="steps"`, Task UI5).
+ * the wardrobe shows only the default pose (`layout="row"`); the T-pose and its
+ * views as step rows (`layout="steps"`, Task UI5) are the Figure tab's "Dressed
+ * views" on the figure pipeline (Ruling A70) and the 3D tab's "Pose render" off it
+ * (an animal, a temporary NPC).
  *
  * Backend: GET /characters/{name}/model-refs (info),
  * GET .../model-refs/{tpose|pose} (image), POST .../model-refs/generate.
@@ -29,8 +31,8 @@ import { ImageGenDialog } from '../../components/ImageGenDialog'
 import type { ImageGenSubmit } from '../../components/ImageGenDialog'
 import { RefImage } from './RefImage'
 import { StepRowView } from './StepRows'
-import { singleAction } from './figureModel'
-import { DRAFT_NOTE, MAIN_FOLLOWUP, VIEW_FOLLOWUP, renderAllLabel, viewRow } from './poseModel'
+import { DRAFT_NOTE, MAIN_FOLLOWUP, VIEW_FOLLOWUP, renderAllLabel, viewAction, viewRow } from './dressedViewsModel'
+import type { DressedSource } from './dressedViewsModel'
 import type { Freshness } from './FreshnessBadge'
 
 interface RefInfo {
@@ -61,7 +63,7 @@ interface KindStatus {
   due_at?: string | null
 }
 
-interface RefsInfo {
+export interface RefsInfo {
   face_view?: {
     exists: boolean; stale: boolean; rendering: boolean; created_at?: string; width?: number; height?: number; url: string
     /** Dialog prefill: the face prompt a render would use, and its reference. */
@@ -88,6 +90,9 @@ interface RefsInfo {
   /** Base-body pipeline: the character's Build (it renders the dressed views; a manual
    *  render of them is refused while it runs — 409, shown under the images). */
   build?: { running: boolean; step?: string }
+  /** Base-body pipeline: where a view's render comes from now — an edit (1 image job) or a copy of the body
+   *  shape's view (no job; Ruling A70). Null when the server could not judge it. */
+  dressed_source?: DressedSource | null
   // Per image — a running default-pose render must not lock the 3D tab's
   // T-pose button (and vice versa): with several backends they run in parallel.
   status?: Partial<Record<RefKind, KindStatus>>
@@ -110,12 +115,26 @@ type RefKind = 'pose' | 'tpose'
 /** Thumbnail size of a step row (small: a click enlarges). */
 const STEP_THUMB_W = 84
 const STEP_THUMB_H = 140
+/** A step row: its thumbnails, then where the view comes from and its button beside them (checklist point 5). */
+const ROW_BODY = { display: 'flex', gap: 8, alignItems: 'flex-start' } as const
+const ROW_ACTIONS = { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0, flex: 1 } as const
 /** A server-reported state is shown only after persisting this long. */
 const HINT_AFTER_S = 20
 /** Poll cadence while something runs or is scheduled; slows after ~2 min. */
 const POLL_MS = 3000
 const POLL_SLOW_MS = 15000
 const POLL_SLOW_AFTER = 40
+
+/**
+ * The body of POST …/model-refs/generate: one view → exactly that view's job (`{kinds: ['tpose'], view}` — an
+ * explicit view ignores the auto toggles and replaces only that image); none → this panel's checked kinds, and on
+ * the pipeline always the T-pose pass.
+ */
+export function generateBody(view: string | undefined, kinds: readonly RefKind[], info: Pick<RefsInfo, 'pipeline' | 'auto'>):
+  { kinds: RefKind[]; view?: string } {
+  if (view) return { kinds: ['tpose'], view }
+  return { kinds: kinds.filter((k) => (!!info.pipeline && k === 'tpose') || info.auto?.[k] !== false), view }
+}
 
 /** Seconds from `since` to `now` (server stamps); -1 when either is missing. */
 function ageSeconds(now?: string, since?: string | null): number {
@@ -158,23 +177,31 @@ export function FieldModelRefs({
   refreshKey = '',
   layout = 'row',
   onOpenBaseBody,
+  onOpenBody,
   onLights,
+  initialInfo,
 }: {
   character: string
   kinds?: RefKind[]
   refreshKey?: string
-  /** `steps`: the Pose tab's views — one step row per dressed view with its light, small thumbnails (a click
-   *  enlarges) and its own Regenerate (Task UI5). `row`: the default-pose tile of the Wardrobe and General tabs. */
+  /** `steps`: the dressed views — one step row per view with its light, small thumbnails (a click enlarges) and
+   *  its own Regenerate (Task UI5; the Figure tab's Dressed views, Ruling A70). `row`: the default-pose tile of the
+   *  Wardrobe and General tabs. */
   layout?: 'row' | 'steps'
-  /** `steps`: switches to the Base body tab (the face view is the plain body's). */
+  /** `steps`: switches to the Base body tab (the face view is the plain body's; a copy of its view). */
   onOpenBaseBody?: () => void
+  /** `steps`: switches to the Figure tab's Body sub-tab (a copy of the body shape's view). */
+  onOpenBody?: () => void
   /** `steps`: the views' lights, comma-joined, for the tab's flow head. */
   onLights?: (lights: string) => void
+  /** What is shown before the first load answers (scripts/check_figure_ui.mjs renders a fixture with it); the
+   *  load replaces it. */
+  initialInfo?: RefsInfo
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
   const enc = encodeURIComponent(character)
-  const [info, setInfo] = useState<RefsInfo>({})
+  const [info, setInfo] = useState<RefsInfo>(initialInfo ?? {})
   const [bust, setBust] = useState(1)
   // The user's own click: immediate feedback, cleared once the backend
   // reports our kinds idle again.
@@ -259,12 +286,11 @@ export function FieldModelRefs({
     if (busy) return
     setBusy(true)
     try {
-      // An explicit view ignores the auto toggles and replaces only that
-      // image. The general Generate button still fires this tab's checked kinds.
-      const wanted = view ? ['tpose'] : kindList.filter((k) => (!!info.pipeline && k === 'tpose') || info.auto?.[k] !== false)
       setGenError('')
-      await apiPost(`/characters/${enc}/model-refs/generate`, { kinds: wanted, view })
-      toast(t('Generating…'))
+      const d = await apiPost<{ status?: string }>(`/characters/${enc}/model-refs/generate`,
+        generateBody(view, kindList, { pipeline: info.pipeline, auto: info.auto }))
+      // Ruling A70: nothing is painted on the figure — the server copies the view from its shape again (no job).
+      toast(d?.status === 'copying' ? t('Copying the view from its body shape — no job') : t('Generating…'))
       // A beat for the worker thread to register as running before the first
       // status read — an idle read here would clear `busy` too early.
       startPoll(1000)
@@ -348,7 +374,7 @@ export function FieldModelRefs({
   // On the figure pipeline the T-pose pass is a step of the Build: the Figure tab's
   // "Build automatically" decides (one switch per thing), so this toggle is off-limits.
   const buildDecides = (kind: RefKind) => !!info.pipeline && kind === 'tpose'
-  /** Every kind of this tab is the Build's (the Pose tab on the pipeline). */
+  /** Every kind of this view is the Build's (the dressed views on the pipeline). */
   const pipelineViews = kindList.every(buildDecides)
   // What Generate fires: the checked kinds, and on the pipeline always the T-pose pass.
   const fires = (kind: RefKind) => buildDecides(kind) || autoOn(kind)
@@ -472,10 +498,11 @@ export function FieldModelRefs({
   const draftViews = info.pipeline
     ? DRAFT_ORDER.filter((v) => info.views?.[v] && info.drafts && v in info.drafts) : []
 
-  // The Pose tab (`layout="steps"`, Task UI5): one step row per dressed view — light, state, reason (mouse-over:
-  // the full reason and what resolves it), small thumbnails that enlarge on a click and the view's own Regenerate
-  // with its cost. The face view is the plain body's (Base body tab, face retexture) on the pipeline: a link and the
-  // one setting of the views pass that renders it.
+  // `layout="steps"` (Task UI5; the Figure tab's Dressed views, Ruling A70): one step row per dressed view — light,
+  // state, reason (mouse-over: the full reason and what resolves it), where the view comes from (an edit, or a copy
+  // of the body shape's view with the link to where that view lives), small thumbnails that enlarge on a click and
+  // the view's own button with its true cost. The face view is the plain body's (Base body tab, face retexture) on
+  // the pipeline: a link and the one setting of the views pass that renders it.
   const tposeRunning = !!st('tpose')?.running || building
   const mainRow = viewRow(info.tpose, null, tposeRunning, t)
   const extraViews = VIEW_ORDER.filter((v) => v !== 'face' && info.views?.[v]?.enabled)
@@ -496,14 +523,35 @@ export function FieldModelRefs({
     const viewDisabled = (needsMain: boolean): string | null =>
       building ? t(BUILD_RUNS_VIEWS) : busy || running ? t('Rendering…') : needsMain && !info.tpose
         ? t('Render the main view first') : null
+    // Ruling A70: an edit costs 1 image job; a copy of the body shape's view costs none and says so.
+    const action = viewAction(info.pipeline ? info.dressed_source : null, t)
+    const copy = action.jobs === 0
+    const source = info.pipeline && info.dressed_source ? info.dressed_source : null
+    const plainShape = !!source && source.shape.startsWith('base')
+    const fromLine = !source ? null : (
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span className="ga-hint" title={copy ? action.note : undefined}>
+          {source.source === 'shape' ? t('Copy of the body shape’s view — nothing painted')
+            : source.source === 'plain' ? t('Copy of the plain body’s view — nothing painted')
+              : plainShape ? t('Painted on the plain body’s view') : t('Painted on the body shape’s view')}
+        </span>
+        {plainShape ? (onOpenBaseBody ? (
+          <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}
+            title={t('The plain body’s views are made in the Base body tab')}>↗ {t('Base body')}</button>
+        ) : null) : onOpenBody ? (
+          <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBody}
+            title={t('The body shape and its pieces: the Body sub-tab')}>↗ {t('Body')}</button>
+        ) : null}
+      </div>
+    )
     const regen = (view: 'main' | typeof VIEW_ORDER[number], title: string) => {
       const why = viewDisabled(view !== 'main')
       return (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button type="button" className="ga-btn ga-btn-sm" disabled={!!why} title={why || title}
+          <button type="button" className="ga-btn ga-btn-sm" disabled={!!why} title={why || (copy ? action.note : title)}
             onClick={() => generate(view)}
             aria-label={`${t('Regenerate')} · ${view === 'main' ? t('Main view') : viewLabel(view)}`}>
-            {singleAction('view', 1, t)}
+            {action.label}
           </button>
           {why && why !== t('Rendering…') ? <span className="ga-hint">{why}</span> : null}
         </div>
@@ -515,23 +563,30 @@ export function FieldModelRefs({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
         {genError ? <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{genError}</div> : null}
         <StepRowView row={{ name: t('Main view'), ...mainRow }}>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={ROW_BODY}>
             {info.tpose ? thumb(`/characters/${enc}/model-refs/tpose`, t('Front view'), info.tpose, 'main') : null}
+            <div style={ROW_ACTIONS}>
+              {fromLine}
+              {regen('main', info.pipeline ? `${t(MAIN_FOLLOWUP)}\n${t(VIEW_FOLLOWUP)}` : '')}
+            </div>
           </div>
-          {regen('main', info.pipeline ? `${t(MAIN_FOLLOWUP)}\n${t(VIEW_FOLLOWUP)}` : '')}
         </StepRowView>
         {extraRows.map(({ view, row }) => {
           const draft = info.pipeline ? info.drafts?.[view] : null
           const vi = info.views?.[view]?.info
           return (
             <StepRowView key={view} row={{ name: viewLabel(view), ...row,
-              detail: [row.detail, draft !== undefined && info.pipeline ? t(DRAFT_NOTE) : ''].filter(Boolean).join('\n') }}>
-              <div style={{ display: 'flex', gap: 6 }}>
+              detail: [row.detail, draft !== undefined && info.pipeline && !copy ? t(DRAFT_NOTE) : '']
+                .filter(Boolean).join('\n') }}>
+              <div style={ROW_BODY}>
                 {vi ? thumb(`/characters/${enc}/model-refs/tpose_${view}`, viewLabel(view), vi, view) : null}
                 {draft ? thumb(`/characters/${enc}/model-refs/tpose_${view}_draft`, draftLabel(view), draft, `${view}-draft`)
                   : null}
+                <div style={ROW_ACTIONS}>
+                  {fromLine}
+                  {regen(view, info.pipeline ? t(VIEW_FOLLOWUP) : '')}
+                </div>
               </div>
-              {regen(view, info.pipeline ? t(VIEW_FOLLOWUP) : '')}
             </StepRowView>
           )
         })}

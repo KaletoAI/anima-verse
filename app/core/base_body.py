@@ -3088,6 +3088,45 @@ def figure_texts(character_name: str, fig, items: Optional[list], *,
                           mesh_items=left, piece_state=state) for v in dressed_views()}
 
 
+#: Where the dressed views of a figure come from (``dressed_view_source``, Ruling A70).
+VIEW_SOURCE_PAINTED = "painted"
+VIEW_SOURCE_SHAPE = "shape"
+VIEW_SOURCE_PLAIN = "plain"
+
+
+def _paints(fig, texts: Dict[str, str]) -> bool:
+    """Whether the dressed views of the figure ``fig`` are edits (something is painted) or copies of its shape's
+    views: on a meshed shape exactly when the figure has a texture (Ruling A50), on the plain body when the dress
+    text of the front is not empty (``figure_texts``). THE decision of ``generate_dressed_images``."""
+    from app.core import figure as figure_mod
+    return bool(fig.texture) if not figure_mod.is_plain(fig.shape) else bool(texts.get("front"))
+
+
+def dressed_view_source(character_name: str, *, profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Where a render of a dressed view of the worn outfit comes from now (Ruling A70) — the branch
+    ``generate_dressed_images`` takes for the figure delivered NOW (``_paints``):
+
+    * ``painted`` — an edit of the shape's front, a back / side view a draft composited onto the shape's view:
+      ONE image job per view (a forced render skips the texture store and the stored draft);
+    * ``shape`` — nothing is painted on the meshed body shape (its pieces are in the body or have their own
+      mesh): the view is a COPY of the body shape's own view (``tpose[_<view>]_<ob…>``), no job;
+    * ``plain`` — nothing worn is painted on the plain body: a copy of the plain body's view, no job.
+
+    ``{source, shape, jobs}`` — ``jobs`` of one view's render. Read-only (the memoised figure, polled by the
+    views' info)."""
+    from app.core import figure as figure_mod
+    from app.core.model_refs import current_outfit_state
+    profile = _profile_of(character_name, profile)
+    pieces, items, _signature = current_outfit_state(character_name)
+    fig = figure_mod.delivered_figure_cached(character_name, profile=profile, pieces=dict(pieces or {}),
+                                             items=list(items or []))
+    texts = {} if not figure_mod.is_plain(fig.shape) else figure_texts(character_name, fig, items, profile=profile)
+    if _paints(fig, texts):
+        return {"source": VIEW_SOURCE_PAINTED, "shape": fig.shape, "jobs": 1}
+    source = VIEW_SOURCE_PLAIN if figure_mod.is_plain(fig.shape) else VIEW_SOURCE_SHAPE
+    return {"source": source, "shape": fig.shape, "jobs": 0}
+
+
 def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, str]],
                             items: Optional[list], signature: str, force: bool = False,
                             view: Optional[str] = None, raise_load: bool = False) -> Dict[str, Optional[str]]:
@@ -3184,7 +3223,7 @@ def generate_dressed_images(character_name: str, *, pieces: Optional[Dict[str, s
         _outfit_end(character_name, signature, "images", SHAPE_VIEWS_MISSING if meshed else BASE_IMAGES_MISSING)
         return {}
     texts = figure_texts(character_name, fig, items, profile=profile)
-    dressed = bool(fig.texture) if meshed else bool(texts.get("front"))
+    dressed = _paints(fig, texts)
     return _render_views(character_name, signature=signature, pieces=pieces, items=items, todo=todo, force=force,
                          on=on, registrations=registrations, texts=texts, tsig=fig.texture, mesh=mesh,
                          dressed=dressed, bald=_bald_edit(character_name, profile, meshed=meshed),

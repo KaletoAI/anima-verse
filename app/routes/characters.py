@@ -1569,7 +1569,11 @@ async def generate_character_model_refs(character_name: str,
     (explicit, no fallback), ``loras`` and ``negative_prompt`` — for this
     run only, nothing is stored. 409 ``figure_build.VIEWS_BUILD_RUNNING``
     for the dressed views of a base-body character while its Build runs
-    (ruling F16)."""
+    (ruling F16). One dressed view of a pipeline character answers what
+    the click does (Ruling A70, ``base_body.dressed_view_source``):
+    ``{status: "generating", jobs: 1, source: "painted"}`` — an edit — or
+    ``{status: "copying", jobs: 0, source: "shape" | "plain"}`` — nothing
+    is painted on the figure, the view is its shape's view copied again."""
     from app.core.model_refs import (
         REF_KINDS, tpose_views_for_character, current_outfit_state, find_ref_image,
         trigger_now,
@@ -1620,8 +1624,24 @@ async def generate_character_model_refs(character_name: str,
                                 detail="No profile picture. Set a profile picture, then render the face view")
     else:
         _refuse_views_while_building(character_name, kinds)
+    source = _dressed_source(character_name, kinds, view)
     trigger_now(character_name, kinds=kinds, tpose_view=view, face_render=face_render)
-    return {"status": "generating"}
+    if source is not None and source["jobs"] == 0:
+        # Ruling A70: nothing is painted on this figure — the view is copied from its shape's view again, no job.
+        return {"status": "copying", "jobs": 0, "source": source["source"]}
+    return {"status": "generating", **({"jobs": 1, "source": source["source"]} if source else {})}
+
+
+def _dressed_source(character_name: str, kinds, view) -> Optional[Dict[str, Any]]:
+    """Ruling A70: for ONE dressed view of a base-body-pipeline character (``view`` main / back / a side, kind
+    ``tpose``), where its render comes from (``base_body.dressed_view_source``); None for anything else (all the
+    views, the face view, the default pose, a character off the pipeline)."""
+    from app.core import base_body
+    if view in (None, "face") or kinds is None or "tpose" not in kinds:
+        return None
+    if not base_body.is_base_pipeline(character_name):
+        return None
+    return base_body.dressed_view_source(character_name)
 
 
 def _refuse_views_while_building(character_name: str, kinds) -> None:

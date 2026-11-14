@@ -358,8 +358,8 @@ check('[7] switches moved out of ModelFaceActions', /\bsetOption\b/.test(faceAct
 check('[7] dialog starts from the saved values', [/facePhotoOf\(/.test(faceActions), /faceControlsOf\(/.test(faceActions)],
   [true, true]);
 const refs = src('frontend/src/tabs/characters/FieldModelRefs.tsx');
-check('[7] Pose tab: no Generate on the pipeline', /\{pipelineViews \? null : \(/.test(refs), true);
-check('[7] Pose tab: Auto only for kinds the Build does not decide',
+check('[7] Dressed views: no Generate on the pipeline', /\{pipelineViews \? null : \(/.test(refs), true);
+check('[7] Dressed views: Auto only for kinds the Build does not decide',
   /kindList\.filter\(\(kind\) => !buildDecides\(kind\)\)\.map/.test(refs), true);
 check('[7] piece dialog labels Run all by chainRunAll',
   /chainRunAll\(info\?\.run, t\)/.test(src('frontend/src/tabs/characters/WardrobeGarment.tsx')), true);

@@ -1,7 +1,7 @@
 /**
  * BuildProblem — what failed in the character's Build and the action that fixes it (Ruling A61; the tab checklist
  * point 8: the step, the reason in plain words, the view, the action with its cost). Shown under the flow head of
- * every tab that runs the Build: Pose, Figure, Base body and 3D.
+ * every tab that runs the Build: Figure, Base body and 3D.
  * - `BuildProblemView` draws a `BuildProblem` (`GET …/figure` `problem`, `figureModel.problemText`): a red light,
  *   "<step> failed — <view>", the reason, the button that fixes it naming its hub jobs, and why automatic Builds
  *   do not repeat it; the worker's own message on mouse-over.

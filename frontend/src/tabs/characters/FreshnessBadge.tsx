@@ -2,7 +2,7 @@
  * FreshnessBadge — the ONE corner badge of the character tabs that says
  * whether an image or a 3D preview comes from current data. The server
  * decides (`app/core/model_overview.py`): every image info and model payload
- * of the Base body, Pose, Hair and 3D tabs carries
+ * of the Base body, Figure (Dressed views), Hair and 3D tabs carries
  * `freshness: {state, reason}`:
  *
  *   current  green  "current"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Base body: the Pose tab's Generate refuses without the base views
+"""Base body: the dressed views' Generate (Figure tab, Dressed views) refuses without the base views
 (``POST /characters/{n}/model-refs/generate``, bug E of 2026-11-09).
 
 Usage:

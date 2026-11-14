@@ -63,7 +63,7 @@ order ``STEP_ORDER`` (a step with nothing to do is not in it):
    (the paint itself is Blender on the CPU, done by the assembly). Also
    ("Views: …") when no interim / texture step is planned but a view of
    the figure delivered NOW is not current for it (``dressed_image`` — the
-   Pose tab's predicate; ruling F16).
+   predicate of the Figure tab's Dressed views; ruling F16).
 7. ``fits`` — the CPU refits (``garment_refit.refit_character``, tracked).
 8. ``assemble`` — the outfit model of the figure delivered THEN, built from
    whatever is built (the interim rule), then the garment assembly
@@ -576,8 +576,8 @@ def plan(character_name: str, *, profile: Optional[Dict[str, Any]] = None,
     if (not painted_interim and not waits and not refused and not view_hold
             and not any(s.name in ("interim", "texture") for s in _runnable(steps, explicit))
             and _views_missing(character_name, delivered, signature)):
-        # Ruling F16: the views of the figure delivered NOW, judged like the Pose tab (``dressed_image``) — a
-        # view made for another figure is never "nothing to build" while the tab calls it stale.
+        # Ruling F16: the views of the figure delivered NOW, judged like the Dressed views (``dressed_image``) — a
+        # view made for another figure is never "nothing to build" while the sub-tab calls it stale.
         views = base_body.dressed_view_estimate(character_name, delivered, signature, profile=profile)
         label = (_views_label("Views", views, copied=True) if views or delivered.texture
                  else "Views: copied from the body's views")
@@ -991,7 +991,7 @@ def answer_piece_failure(character_name: str, item_id: str, steps) -> bool:
     """Ruling A69: the user took a result of the piece ``item_id`` that its checks refused — a refused fit accepted
     (``fit_attempts.accept``), a stored image or a kept mesh used (``garments.use_attempt`` / ``use_mesh``). The last
     Build's failure of THAT piece at one of the garment ``steps`` is answered by it and goes from the Build's state:
-    the Figure tab's row, its head and the Build problem of the Figure and Pose tabs then follow the accepted result
+    the Figure tab's row, its head and the Build problem of the Figure and 3D tabs then follow the accepted result
     instead of saying "Failed" until the next Build (Kai's jeans, 2026-11-14: the Build of 22:03 failed at the fit,
     the user accepted that fit at 22:04, the figure was assembled with it — and the row said "Failed"). Every other
     failure of the run stays; a Build that runs later records its own (a newer refusal shows again). Returns whether
@@ -2066,7 +2066,7 @@ def _served_built_at(character_name: str) -> Optional[str]:
 def _served_foot_pose(character_name: str) -> Optional[Dict[str, Any]]:
     """The ``foot_pose`` of the model ``_served_url`` serves (Ruling A52): the assembly sidecar's record when the
     assembly with a fitted shoe is served (``garment_assembly.served_foot_pose``), else None. The Figure tab hands
-    it to its viewer, as ``GET …/model3d`` hands ``model.foot_pose`` to the Pose and 3D model tabs: a served shoe is
+    it to its viewer, as ``GET …/model3d`` hands ``model.foot_pose`` to the 3D model tab: a served shoe is
     bound with its foot turned BACK by the fit's extension (``footwear_fit`` step 7), so a viewer that shows it
     without the record shows the shoe bent up at the front and its heel through the floor. The viewer applies it
     only to a model carrying exactly that shoe (``footPoseMatches``), so a stale pose beside a newer file is a

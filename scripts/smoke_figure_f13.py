@@ -141,13 +141,13 @@ Expected, derived by hand from the rulings:
     word (rendered from the closed texts); with a composite stub that fails
     its checks the worn back drafts twice (draft, composite, draft,
     composite) and is refused.
-[j] Ruling F16 (the Pose tab's Regenerate during a running Build looked
+[j] Ruling F16 (the Pose tab's — since Ruling A70 the Figure tab's Dressed views' — Regenerate during a running Build looked
     dropped: the render thread waited behind the Build's garment chains).
     ``figure_build._active`` holds Demo -> ``POST …/model-refs/generate
     {kinds: [tpose]}`` raises 409 ``VIEWS_BUILD_RUNNING`` and fires nothing;
     ``get_model_refs_info(Demo)["build"]`` == {running True, step ""} (no
     step in flight). Without the Build: {"status": "generating"}, fired once
-    with kinds ("tpose",); build {running False, step ""}. Plan vs Pose tab:
+    with kinds ("tpose",); build {running False, step ""}. Plan vs Dressed views:
     wanted == delivered == built (no texture, no interim, no chains, no
     refits, plain body current) — ``dressed_image`` None -> [Step("texture",
     "Views: copied from the body's views", 0), Step("assemble", …, 0)];
@@ -759,15 +759,15 @@ def main() -> int:
             try:
                 check("Build runs: 409, nothing fired", (generate(), fired),
                       ((409, figure_build.VIEWS_BUILD_RUNNING), []))
-                check("Pose tab sees the Build", model_refs.get_model_refs_info("Demo").get("build"),
+                check("Dressed views see the Build", model_refs.get_model_refs_info("Demo").get("build"),
                       {"running": True, "step": ""})
             finally:
                 with figure_build._lock:
                     figure_build._active.discard("Demo")
             check("no Build: 200 + fired", (generate(), fired), ({"status": "generating"}, [("tpose",)]))
-            check("Pose tab: no Build", model_refs.get_model_refs_info("Demo").get("build"),
+            check("Dressed views: no Build", model_refs.get_model_refs_info("Demo").get("build"),
                   {"running": False, "step": ""})
-        # The plan and the Pose tab judge the views alike (base_body.dressed_image): a delivered figure whose model
+        # The plan and the Dressed views judge the views alike (base_body.dressed_image): a delivered figure whose model
         # is built and that has no texture / interim -> "Views" step while a view is not current, nothing else.
         _w, d = figure._delivered("Demo", profile=prof())
         bare = dataclasses.replace(d, texture="", interim={})

@@ -1,16 +1,18 @@
 /**
- * poseModel — the pure helpers of the Pose tab (Task UI5, the tab checklist): the light, state and reason of each
- * dressed view and of the outfit model built from them, and the flow head's words. No React, no fetch — the check
- * script (scripts/check_pose_ui.mjs) bundles this file alone.
+ * dressedViewsModel — the pure helpers of the Figure tab's "Dressed views" and "Outfit model" sub-tabs (Ruling A70;
+ * until then the Pose tab, Task UI5): the light, state and reason of each dressed view and of the outfit model built
+ * from them, and what a view's single button does — an edit (1 image job) or a copy of the body shape's view (no
+ * job). No React, no fetch — the check script (scripts/check_figure_ui.mjs) bundles this file alone.
  */
 import type { Light } from './hairstylesModel'
 import type { Freshness } from './FreshnessBadge'
+import { singleAction } from './figureModel'
 
 type Tr = (s: string) => string
 const EN: Tr = (s) => s
 
 /** What the server reports of one stored render (model-refs info). */
-export interface PoseRender {
+export interface ViewRender {
   filename?: string
   created_at?: string
   model?: string
@@ -19,15 +21,15 @@ export interface PoseRender {
 }
 
 /** One step row of the tab (rendered by StepRowView). */
-export interface PoseRow {
+export interface ViewRow {
   light: Light
   state: string
   reason: string
   detail: string
 }
 
-/** The views are rendered by the character's Build on the figure pipeline (said once under the flow head). */
-export const VIEWS_BY_BUILD = 'The Figure tab’s Build renders these views and builds the outfit model from them.'
+/** The views are rendered by the character's Build (said once on top of the Dressed views sub-tab). */
+export const VIEWS_BY_BUILD = 'The Build above renders these views and builds the outfit model from them.'
 /** A back or side view is composited from its draft (the back row's mouse-over). */
 export const DRAFT_NOTE = 'A back or side view is a draft rendered from the dressed front, composited onto the base '
   + 'view on the CPU — no second render.'
@@ -42,8 +44,8 @@ export const MAIN_FOLLOWUP = 'The back view is then due too — its draft is mad
  * (the view's first); kept although its fit check failed → yellow "Kept with a warning", the warning as reason;
  * else green "Current". The mouse-over names the reason in full and the action that resolves it.
  */
-export function viewRow(info: PoseRender | null | undefined, draft: PoseRender | null | undefined, running: boolean,
-  t: Tr = EN): PoseRow {
+export function viewRow(info: ViewRender | null | undefined, draft: ViewRender | null | undefined, running: boolean,
+  t: Tr = EN): ViewRow {
   if (running) return { light: 'blue', state: t('Rendering'), reason: '', detail: '' }
   if (!info) return { light: 'yellow', state: t('Not rendered yet'), reason: '', detail: '' }
   const stale = [info.freshness, draft?.freshness].find((f) => f?.state === 'stale')
@@ -57,7 +59,7 @@ export function viewRow(info: PoseRender | null | undefined, draft: PoseRender |
 }
 
 /** The outfit model's status on the pipeline (`base_info.outfit`). */
-export interface PoseOutfit {
+export interface OutfitStatus {
   status: 'running' | 'failed' | 'stale' | 'ready' | 'missing'
   error: string
   warnings: string[]
@@ -69,7 +71,7 @@ export interface PoseOutfit {
  * ready → green "Ready", the proof's numbers (`proofLine`). Views the guard left out are warnings: the first is the
  * reason of a ready model (yellow then), all of them on mouse-over.
  */
-export function outfitRow(o: PoseOutfit, staleText: string, proofLine: string, t: Tr = EN): PoseRow {
+export function outfitRow(o: OutfitStatus, staleText: string, proofLine: string, t: Tr = EN): ViewRow {
   const warnings = o.status === 'running' ? [] : (o.warnings || [])
   const detail = warnings.join('\n')
   if (o.status === 'running') return { light: 'blue', state: t('Building now'), reason: '', detail: '' }
@@ -80,22 +82,42 @@ export function outfitRow(o: PoseOutfit, staleText: string, proofLine: string, t
   return { light: 'green', state: t('Ready'), reason: proofLine, detail: proofLine }
 }
 
-/**
- * The flow head from the rows' lights: a Build running → blue "Building now"; a red row → red "A step failed";
- * yellow rows → yellow "1 step due" / "{n} steps due"; else green "Up to date". Grey rows count as nothing to do.
- */
-export function poseHead(lights: readonly Light[], buildRunning: boolean, t: Tr = EN): { light: Light; words: string } {
-  if (buildRunning || lights.includes('blue')) return { light: 'blue', words: t('Building now') }
-  if (lights.includes('red')) return { light: 'red', words: t('A step failed') }
-  const due = lights.filter((l) => l === 'yellow').length
-  if (due === 1) return { light: 'yellow', words: t('1 step due') }
-  if (due > 1) return { light: 'yellow', words: t('{n} steps due').replace('{n}', String(due)) }
-  return { light: 'green', words: t('Up to date') }
-}
-
 /** Off the pipeline: what "Render all views" costs — the main view and every switched-on extra view. */
 export function renderAllLabel(views: number, t: Tr = EN): string {
   const n = 1 + Math.max(0, views)
   return (n === 1 ? t('Render all views — 1 image job') : t('Render all views — {n} image jobs'))
     .replace('{n}', String(n))
+}
+
+/** Where a dressed view comes from now (server `base_body.dressed_view_source`, `GET …/model-refs`
+ *  `dressed_source`; Ruling A70). */
+export type ViewSource = 'painted' | 'shape' | 'plain'
+export interface DressedSource {
+  source: ViewSource
+  /** The body shape the views are made on: the plain body (`base…`) or a meshed shape (`ob…`). */
+  shape: string
+  /** Image jobs of one view's render: 1 for an edit, 0 for a copy. */
+  jobs: number
+}
+
+/** A copy of the body shape's view: nothing is painted on the figure. */
+export const SHAPE_COPY_NOTE = 'Copied from the body shape’s view — nothing is painted on this figure: its pieces are '
+  + 'in the body shape or have their own mesh.'
+/** A copy of the plain body's view: nothing worn is painted. */
+export const PLAIN_COPY_NOTE = 'Copied from the plain body’s view — nothing worn is painted on it.'
+
+/**
+ * What one dressed view's single button does (Ruling A70): an edit → "Regenerate this view — 1 image job"
+ * (`singleAction`); a copy of the body shape's view → "Copy this view again from the body shape — no job"; of the
+ * plain body's → "… from the plain body — no job". Unknown (an older server) → the edit's words. `note` is the
+ * row's line saying where the view comes from ("" for an edit).
+ */
+export function viewAction(src: DressedSource | null | undefined, t: Tr = EN): { label: string; note: string; jobs: number } {
+  if (src?.source === 'shape') {
+    return { label: t('Copy this view again from the body shape — no job'), note: t(SHAPE_COPY_NOTE), jobs: 0 }
+  }
+  if (src?.source === 'plain') {
+    return { label: t('Copy this view again from the plain body — no job'), note: t(PLAIN_COPY_NOTE), jobs: 0 }
+  }
+  return { label: singleAction('view', 1, t), note: '', jobs: 1 }
 }

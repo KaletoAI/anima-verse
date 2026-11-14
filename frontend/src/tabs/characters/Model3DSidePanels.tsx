@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { AnimationSituations } from './AnimationSituations'
 import { ExtensionBonesBox } from './ExtensionBonesBox'
+import { FieldModelRefs } from './FieldModelRefs'
 import { hasExtensionSection } from './model3dModel'
 import { publishModel3DTargets, useModel3DPanel } from './model3dPanel'
 import { SubTabs } from './StepRows'
@@ -66,15 +67,20 @@ export function Model3DGeneration({ character }: { character: string }) {
   )
 }
 
-type DetailTab = 'steps' | 'model' | 'situations' | 'extensions' | 'advanced'
+type DetailTab = 'steps' | 'model' | 'pose' | 'situations' | 'extensions' | 'advanced'
+/** The pose render is the T-pose kind's (a literal kept stable for FieldModelRefs' poll). */
+const TPOSE: ('tpose')[] = ['tpose']
 const HIDDEN: CSSProperties = { display: 'none' }
 
 /**
  * The 3D tab's right-hand panel (Task UI5, the tab checklist: sub-tabs instead of scrolling): Steps (the model's
- * steps, one line each), Model (its facts and single steps, the off-pipeline generation switch), Situations (the
- * clips that play), Extension bones (off the pipeline with groups only — `hasExtensionSection`, Ruling A66) and
- * Advanced. Steps, Model and Advanced are FieldModel3D's own parts, rendered into this panel's elements
- * (publishModel3DTargets → createPortal); the rest are the side panels above.
+ * steps, one line each), Model (its facts and single steps, the off-pipeline generation switch), off the pipeline
+ * Pose render (an animal's or a temporary NPC's T-pose render and its views, the input of the mesh: one step row
+ * each with its Regenerate, "Render all views", Auto and the view switches — Ruling A70 moved it here from the
+ * dissolved Pose tab; on the pipeline the dressed views are the Figure tab's), Situations (the clips that play),
+ * Extension bones (off the pipeline with groups only — `hasExtensionSection`, Ruling A66) and Advanced. Steps,
+ * Model and Advanced are FieldModel3D's own parts, rendered into this panel's elements (publishModel3DTargets →
+ * createPortal); the rest are the side panels above.
  */
 export function Model3DDetails({ character }: { character: string }) {
   const { t } = useI18n()
@@ -95,10 +101,13 @@ export function Model3DDetails({ character }: { character: string }) {
   const count = panel?.model?.steps?.length
   const extensions = !!panel && hasExtensionSection(panel.st)
   // The Extension bones sub-tab left (the model went onto the pipeline, its groups went): show the Steps.
-  const current: DetailTab = sub === 'extensions' && !extensions ? 'steps' : sub
+  // The Pose render left the same way (the character went onto the pipeline): show the Steps.
+  const poseRender = !!panel && !panel.st.pipeline
+  const current: DetailTab = (sub === 'extensions' && !extensions) || (sub === 'pose' && !poseRender) ? 'steps' : sub
   const tabs: Array<{ id: DetailTab; label: string }> = [
     { id: 'steps', label: count ? `${t('Steps')} (${count})` : t('Steps') },
     { id: 'model', label: t('Model') },
+    ...(poseRender ? [{ id: 'pose' as const, label: t('Pose render') }] : []),
     { id: 'situations', label: t('Situations') },
     ...(extensions ? [{ id: 'extensions' as const, label: t('Extension bones') }] : []),
     { id: 'advanced', label: t('Advanced') },
@@ -111,6 +120,7 @@ export function Model3DDetails({ character }: { character: string }) {
         {panel && !panel.st.pipeline ? <Model3DGeneration character={character} /> : null}
         <div ref={model} />
       </div>
+      {current === 'pose' ? <FieldModelRefs character={character} kinds={TPOSE} layout="steps" /> : null}
       {current === 'situations' ? <Model3DAnimations character={character} /> : null}
       {current === 'extensions' ? <Model3DExtensions character={character} /> : null}
       <div ref={advanced} style={current === 'advanced' ? undefined : HIDDEN} />

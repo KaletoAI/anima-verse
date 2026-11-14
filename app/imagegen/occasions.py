@@ -111,24 +111,24 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     # config._migrate_base_body_routing seeds the chains from tpose /
     # tpose_view once.
     "base_front": _image(
-        "Base body — front", "Pose tab: the bald A-pose base-body front",
+        "Base body — front", "Base body tab: the bald A-pose base-body front",
         ["base_front"],
         {"character_scoped": True, "char_spec_field": "base_front_workflow",
          "char_spec_fallback": ("tpose_workflow", "workflow")},
         hint="Identity comes from the profile picture; an accurate (non-turbo) "
              "model is recommended."),
     "base_view": _image(
-        "Base body — back/side views", "Pose tab: base-body back, left and right (edits of the front)",
+        "Base body — back/side views", "Base body tab: base-body back, left and right (edits of the front)",
         ["base_view_back", "base_view_side"],
         {"character_scoped": True, "char_spec_field": "base_view_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_front": _image(
-        "Outfit — front edit", "Pose tab: the dressed front (edit of the base front)",
+        "Outfit — front edit", "Figure tab, Dressed views: the dressed front (edit of the base front)",
         ["outfit_edit"],
         {"character_scoped": True, "char_spec_field": "outfit_front_workflow",
          "char_spec_fallback": "tpose_view_workflow"}),
     "outfit_back_draft": _image(
-        "Outfit — back draft", "Pose tab: back draft, an edit of the dressed front turned around",
+        "Outfit — back draft", "Figure tab, Dressed views: back draft, an edit of the dressed front turned around",
         ["base_view_back"],
         {"character_scoped": True, "char_spec_field": "outfit_back_draft_workflow",
          "char_spec_fallback": "tpose_view_workflow"},
@@ -143,7 +143,7 @@ OCCASIONS: Dict[str, Dict[str, Any]] = {
     # its back draft glob, then the T-pose views glob;
     # config._migrate_outfit_side_routing seeds the chain from the back's.
     "outfit_side_draft": _image(
-        "Outfit — side draft", "Pose tab: left/right draft, an edit of the dressed front in profile",
+        "Outfit — side draft", "Figure tab, Dressed views: left/right draft, an edit of the dressed front in profile",
         ["base_view_side"],
         {"character_scoped": True, "char_spec_field": "outfit_side_draft_workflow",
          "char_spec_fallback": ("outfit_back_draft_workflow", "tpose_view_workflow")},
