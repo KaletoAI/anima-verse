@@ -182,8 +182,12 @@ SIDE_DEEP_M = 0.03
 #: 2 / 1 cm2), the stretched strips of the placement are gated (``sleeve_shards``), an accepted fit that lies tight
 #: may widen by the width allowance (``scale_retry``, never beyond 1.08), the fit records its arm light
 #: (``arm_light``) and its settings (``inputs.fit_settings``, ``garment_fit_settings``).
+#: clothing 12 (2026-11-14, Ruling A50 — one CPU refit of every clothing fit, no hub job; only fits on body shapes
+#: and refits from another base change): ``map_torso`` bridges a hollow of the source body down to
+#: ``TORSO_BRIDGE_M`` where the target grew, instead of carrying the piece out with the growth (Kai's open jacket
+#: on ``obf6474c3b``: trunk front 0.75 / source 0.85, largest hole 35 cm2 -> 0.82 / 0.85, 2.5 cm2 — accepted).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 11, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 12, "footwear": FOOTWEAR_FIT_VERSION}
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -2261,8 +2265,9 @@ def align_limbs(X, X0, W0, names0, source: Dict[str, Dict[str, Any]], target: Di
 # the target's: height proportional between the hip joint (the mean of both
 # Hips / UpLeg joints) and the neck joint (Spine2 / Neck), in metres below and above them; around the trunk axis
 # (the chain of joint points, interpolated by height) its clearance over the body SURFACE in its direction is kept
-# in metres — the surface radius ``R(v, theta)`` per normalised height v (``TORSO_V`` bins) and angle (``TORSO_THETA``
-# bins) is the outermost trunk vertex there, gaps filled along the height and smoothed 3 x 3 — so a deeper chest
+# in metres (a bridge over a hollow only down to ``TORSO_BRIDGE_M`` where the target grew) — the surface radius
+# ``R(v, theta)`` per normalised height v (``TORSO_V`` bins) and angle (``TORSO_THETA`` bins) is the outermost trunk
+# vertex there, gaps filled along the height and smoothed 3 x 3 — so a deeper chest
 # carries the front panel out with it. Blended with the limbs by the source skin weights (``align_limbs``).
 _LIMB_BONE_PARTS = ("arm", "hand", "leg", "foot", "toe")
 _HEAD_BONE_PARTS = ("head", "eye", "jaw")
@@ -2280,6 +2285,16 @@ def trunk_bone(name: str) -> bool:
     return torso_bone(name) and not any(part in name for part in _HEAD_BONE_PARTS)
 TORSO_V = (-0.6, 1.4, 0.02)
 TORSO_THETA = 36
+#: ``map_torso`` (Ruling A50): clearance over the source surface up to this is kept in metres; beyond it the piece
+#: BRIDGES a hollow (the small of the back, under the open front's edges) and the target's outward growth there
+#: (``R_target - R_source`` in that direction, its in-body shirt) is taken out of the bridge, never below this. Kai's
+#: open leather jacket on obf6474c3b (in-body underwear + t-shirt; R +3.3 cm at the small of the back, +1.8 cm at
+#: the lower front) was carried out 5 - 7 cm off the shirt and refused — front 0.75 / source 0.85, side 0.85 / 0.92,
+#: back 0.88 / 0.95, a 35 cm2 hole at the lower back; with the bridge rule 0.82 / 0.85, 0.93 / 0.92, 1.00 / 0.95,
+#: largest hole 2.5 cm2: accepted. Kira's blazer and skirt on obf043ed6a and Kai's jeans on obf6474c3b move by at
+#: most 0.007 of any share. 1 / 2 / 3 cm for the jacket: front 0.85 / 0.82 / 0.79, trunk closer than 1.5 cm
+#: 0.36 / 0.30 / 0.24 (the plain body's fit 0.16) — 2 cm passes every gate with margin and stays looser than 1 cm.
+TORSO_BRIDGE_M = 0.02
 
 
 def torso_frame(body: BodyMesh, basis: str = FRAME_BASIS) -> Optional[Dict[str, Any]]:
@@ -2385,7 +2400,12 @@ def map_torso(X0, source: Dict[str, Any], target: Dict[str, Any]) -> np.ndarray:
                             target["hip_y"] + v * span_t))
     if span_s <= 0:
         return X0.copy()
-    radius = np.maximum(_torso_radius(target, _torso_v(y_t, target), theta) + clearance, 0.0)
+    r_t = _torso_radius(target, _torso_v(y_t, target), theta)
+    # Ruling A50: clearance beyond ``TORSO_BRIDGE_M`` bridges a hollow of the source body; where the target's surface
+    # lies further out, that growth fills the hollow under the bridge instead of carrying the piece out with it.
+    grow = np.maximum(r_t - _torso_radius(source, v, theta), 0.0)
+    clearance = np.where(clearance > TORSO_BRIDGE_M, np.maximum(clearance - grow, TORSO_BRIDGE_M), clearance)
+    radius = np.maximum(r_t + clearance, 0.0)
     axis = _torso_axis(y_t, target)
     return np.stack([axis[:, 0] + np.sin(theta) * radius, y_t, axis[:, 1] + np.cos(theta) * radius], 1)
 

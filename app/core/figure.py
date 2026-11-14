@@ -985,8 +985,11 @@ def _delivered(character_name: str, *, profile: Dict[str, Any], pieces: Optional
     if meshed and choice.refusal:
         texture = ""
     else:
+        # Ruling A50: a piece left out for its refused fit is not painted either — it is unpainted like a grafted
+        # one (``base_body.figure_texts`` / ``mesh_items_unpainted`` leave both out), so it stays out of the key.
+        unpainted = set(own) | set(fit_refused)
         texture_sets = replace(sets, in_body=tuple(choice.in_body), painted=tuple(choice.painted),
-                               own={item_id: sets.own[item_id] for item_id in own})
+                               own={item_id: kind for item_id, kind in sets.own.items() if item_id in unpainted})
         texture = texture_key(character_name, texture_sets, shape=choice.shape, bsig=bsig, variant=choice.variant,
                               items=items, profile=profile)
     delivered = Figure(signature=wanted.signature, bsig=bsig, shape=choice.shape, texture=texture,

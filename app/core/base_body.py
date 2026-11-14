@@ -1874,6 +1874,10 @@ def dressed_image(character_name: str, view: str, signature: str, bsig: str, *, 
                                                  piece_state=dict(manifest.get("piece_state") or {}))
     if fig.bsig != bsig or fig.shape != on or mesh_items_unpainted(meta) != sorted({*fig.own, *fig.left_out}):
         return None  # made for another figure
+    if is_outfit_body_signature(on) and (meta.get("dressed") is not False) != bool(getattr(fig, "texture", "")):
+        # Ruling A50: on a meshed shape a figure paints something exactly when it has a texture — an edit made for a
+        # painted figure is no view of one that paints nothing (a copy of the shape's view), nor the other way round.
+        return None
     if getattr(fig, "texture", "") and composite_outdated(meta):
         return None  # Ruling A24: composited by older rules — re-composited from its stored draft
     return path
@@ -3818,7 +3822,9 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
             profile=profile)
         texts = figure_texts(character_name, fig, items, profile=profile)
         tsig = fig.texture
-        dressed_now = _ref_sidecar(front_now).get("dressed") is not False
+        # Ruling A50: on a meshed shape the FIGURE says whether anything is painted (its texture key), never a
+        # stored view — a figure with no texture needs is the shape itself and asks the texture store nothing.
+        dressed_now = (bool(tsig) if meshed else _ref_sidecar(front_now).get("dressed") is not False)
         if meshed:
             source = _snapshot_shape(character_name, on, bsig)
             if dressed_now and source["unrigged"] is None:
