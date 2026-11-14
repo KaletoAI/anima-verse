@@ -37,8 +37,12 @@
  * [6] placementRuler, pivot z 0.03, forward 14 mm: 1 rail + 16 ticks (−5 … +10 cm) + 4 cyan lines (the shift
  *     twice, 2 mm apart, and two end bars) = 21; the rail runs z −0.02 … 0.13; the tick at the pivot (cm 5) is
  *     12 mm long, cm 6 is 6 mm; the shift runs z 0.03 … 0.044. Forward 0 → 17 lines (no shift drawn).
- * [7] previewMotion, chain stiffness 0.4, per_stiffness 3.7, 0.8 … 6.0 Hz: factor 2 → 3.7·0.4·2 = 2.96 Hz,
- *     rev "hair-preview:2.00"; factor 5 → 7.4 clamped to 6 Hz; fit_swing false → undefined.
+ * [7] The preview runs the strands, not the chains (strand-hair plan 2026-11-13 Task 10, spec § 6.2.5): the HairDeck
+ *     preview passes `strandHair=` and no `motion=` (the chains stay the server's distance fallback), the client
+ *     helper `previewMotion` is gone; the viewer runs `createStrandHair(THREE, …)` with the three it imported
+ *     DYNAMICALLY (`await import('three')`) and has no static value import of three (the admin's lazy chunk stays);
+ *     the motion buttons Sway / Walk / Turn / Stop are in the viewer, and their three titles and the drag hint
+ *     say "no jobs".
  * [8] hexToLinear: #ffffff → [1,1,1]; #000000 → [0,0,0]; #808080 → ((128/255 + 0.055)/1.055)^2.4 = 0.21586;
  *     "red" → null. colourTint(#808080 → #ffffff) = 1/0.21586 = 4.63 → clamped 4; (#ffffff → #808080) = 0.21586;
  *     same colour → null.
@@ -182,12 +186,18 @@ check('[6] ruler lines', [ruler.length, ruler[0].points.map((p) => r7(p[2])), r7
 check('[6] no shift drawn at 0', m.placementRuler(pivot, 0.12, 1.6, 0).length, 17);
 
 // [7]
-const pm = { groups: { hair_c00: { bones: ['b0'], freq_hz: 1.48, zeta: 0.5 } }, chain_stiffness: { hair_c00: 0.4 },
-  freq: { per_stiffness: 3.7, min_hz: 0.8, max_hz: 6 }, fit_swing: true };
-const two = m.previewMotion(pm, 2);
-check('[7] factor 2', [two.rev, two.groups.hair_c00.freq_hz, two.groups.hair_c00.bones], ['hair-preview:2.00', 2.96, ['b0']]);
-check('[7] clamped', m.previewMotion(pm, 5).groups.hair_c00.freq_hz, 6);
-check('[7] Swing off', m.previewMotion({ ...pm, fit_swing: false }, 1), undefined);
+{
+  const viewerSrc = readFileSync(join(ROOT, 'frontend/src/tabs/characters/Model3DViewer.tsx'), 'utf8');
+  const tabSrc = readFileSync(join(ROOT, 'frontend/src/tabs/characters/FieldHairstyles.tsx'), 'utf8');
+  const hairdeck = (tabSrc.match(/<Model3DViewer\b[\s\S]*?\/>/g) || []).find((v) => /preview_url/.test(v)) || '';
+  check('[7] strands, not chains', [/strandHair=\{/.test(hairdeck), /\bmotion=\{/.test(hairdeck),
+    typeof m.previewMotion], [true, false, 'undefined']);
+  check('[7] three injected, lazily', [/createStrandHair\(THREE,/.test(viewerSrc),
+    /const THREE = await import\('three'\)/.test(viewerSrc), /^import (?!type)[^\n]*from 'three'/m.test(viewerSrc)],
+  [true, true, false]);
+  check('[7] motion buttons, no jobs', [["'sway'", "'walk'", "'turn'", "t('Stop')"].every((k) => viewerSrc.includes(k)),
+    (viewerSrc.match(/preview only, no jobs/g) || []).length, /· no jobs'\)/.test(viewerSrc)], [true, 3, true]);
+}
 
 // [8]
 check('[8] hexToLinear', [m.hexToLinear('#ffffff'), m.hexToLinear('#000000'), m.hexToLinear('#808080').map(r5),

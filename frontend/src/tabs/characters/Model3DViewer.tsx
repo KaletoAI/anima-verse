@@ -22,9 +22,11 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   standingHipsRef, clipHeightOffsetM, clipHeightGroup, createCollisionOverlay, collidingGarmentMeshes,
   createGarmentCollision, applyAlphaCutoff, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
   footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose,
-  seatFootLift } from '@anima/scene-render'
+  seatFootLift, createStrandHair } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
-  CollisionOverlay, CollisionPayload, FootPose, GarmentCollision } from '@anima/scene-render'
+  CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair } from '@anima/scene-render'
+import { dragTurnDeg, dragTurnRad, previewMotionAmp, previewRootPose, TURN_S } from './hairstylesModel'
+import type { PreviewMotionKind } from './hairstylesModel'
 import { applyViewerTexture, zeroViewerMetalness } from './modelTexture'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet } from '../../lib/api'
@@ -285,7 +287,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   frontal = false, onFrontalChange, keepCamera = false,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
-  meshAdjust = null, focus = null, alphaCutoff }:
+  meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
@@ -497,7 +499,17 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
      *  of the loaded scene) from far enough to hold a sphere of `radius`, from the front three-quarter or —
      *  `side` — from the model's +x side (its left), where a forward shift and a forward tilt read as lengths
      *  and angles. "Reset view" returns to it; a change of the prop re-frames. null = the whole model. */
-    focus?: { center: [number, number, number]; radius: number; side?: boolean } | null }) {
+    focus?: { center: [number, number, number]; radius: number; side?: boolean } | null
+    /** Per-strand hair (strand-hair spec § 6.2.5, coordinator ruling H-R2): the strand record of the previewed
+     *  fit and the live Stiffness factor — the preview runs the game's `createStrandHair` on the loaded model
+     *  (bound to the hair mesh carrying `_STRAND_CARD` / `_STRAND_U`), with the same parameters. Given at all
+     *  (also null), the preview is a FIGURE preview: a left drag turns the figure about the vertical axis
+     *  (`DRAG_TURN_DEG_PER_PX`) so the hair reacts, right drag or Shift+drag orbits the camera, and the motion
+     *  buttons Sway / Walk / Turn / Stop sit in the toolbar beside the viewer. null = no record (the hair stays
+     *  still; `strandNote` says why). undefined = any other preview (the camera orbits as always). */
+    strandHair?: { record: HairStrandRecord; stiffness: number } | null
+    /** Why the hair stays still while `strandHair` is null (plain words, translated by the caller). */
+    strandNote?: string }) {
   const { t } = useI18n()
   const [takes, setTakes] = useState<string[]>([])
   const [take, setTake] = useState('')
@@ -514,6 +526,22 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   tiltRef.current = { forward: previewTilt ? tiltForward : 0, sideways: previewTilt ? tiltSideways : 0 }
   const motionRef = useRef(motion)
   motionRef.current = motion
+  // Per-strand hair and the figure preview (ruling H-R2): read per frame, so a dragged Stiffness or a new record
+  // never reloads the model.
+  const strandHairRef = useRef(strandHair)
+  strandHairRef.current = strandHair
+  const turnMode = strandHair !== undefined
+  const turnModeRef = useRef(turnMode)
+  turnModeRef.current = turnMode
+  const [strandMotion, setStrandMotion] = useState<PreviewMotionKind | null>(null)
+  const strandMotionRef = useRef(strandMotion)
+  strandMotionRef.current = strandMotion
+  /** The figure's drag turn (degrees, shown beside the viewer). */
+  const [turnDeg, setTurnDeg] = useState(0)
+  /** What the strands do now: running (cards, the tips' largest distance from rest in mm), refused (the record
+   *  does not fit the loaded hair mesh), paused (a placement preview reshapes the mesh), off (no record). */
+  const [strandStatus, setStrandStatus] = useState<{ state: 'off' | 'running' | 'refused' | 'paused'; cards?: number;
+    tipMm?: number }>({ state: 'off' })
   const footPoseRef = useRef(footPose)
   footPoseRef.current = footPose
   /** The loader re-runs when the pose of ANOTHER fit arrives, not on every
@@ -1064,7 +1092,12 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         const place = new THREE.Group()
         place.add(orient)
         const previewRoot = new THREE.Group()
-        previewRoot.add(place)
+        // The figure preview's root motion (ruling H-R2: the drag turn, Sway / Walk / Turn) sits between the tilt
+        // and the placement — identity everywhere else.
+        const turnRoot = new THREE.Group()
+        turnRoot.matrixAutoUpdate = false
+        turnRoot.add(place)
+        previewRoot.add(turnRoot)
         scene.add(previewRoot)
         const _r = rotationRef.current
         // 'YXZ' like place() in @anima/scene-render: yaw outermost, tilt and
@@ -1287,6 +1320,18 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         setGarmentPushable(collidingGarmentMeshes(object).length > 0)
         const clock = new THREE.Clock()
         pivot.updateMatrixWorld(true)
+        // Per-strand hair (strand-hair spec § 6.2.5): the handle of the record now given, created on the frame the
+        // record (identity) changes; on only while no placement preview reshapes the hair mesh (`meshAdjust` map —
+        // the strands rebuild the vertices the map would move). Out of the garment push while on, as in the client.
+        let strand: StrandHair | null = null
+        let strandRecord: HairStrandRecord | null = null
+        let strandStiffness = 1
+        const strandOn = (on: boolean) => {
+          if (!strand || strand.enabled === on) return
+          strand.setEnabled(on)
+          garmentCollision?.excludeMesh(strand.mesh, on)
+        }
+        disposers.push(() => { strand?.dispose(); strand = null })
 
         if (placementRef.current) {
           // ── Stage mode: the location's reference square in WORLD metres,
@@ -1634,6 +1679,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           const applyMeshAdjust = () => {
             const adjust = meshAdjustRef.current
             const match = adjust?.match || ''
+            // The strands own the hair vertices while they run: a placement map (and the capture of the loaded
+            // positions) needs the mesh's own geometry back — the frame loop turns them on again without a map.
+            if (adjust?.map || match !== adjustMatch) strandOn(false)
             if (match !== adjustMatch) {
               adjustMatch = match
               adjustTargets = []
@@ -1655,14 +1703,18 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             for (const target of adjustTargets) {
               const pos = target.mesh.geometry.getAttribute('position')
               const map = adjust?.map
-              for (let i = 0; i < pos.count; i++) {
+              // Running strands write these vertices themselves (a colour drag only tints).
+              const own = !(strand?.enabled && target.mesh === strand.mesh)
+              for (let i = 0; own && i < pos.count; i++) {
                 const p: [number, number, number] = [target.base[i * 3], target.base[i * 3 + 1], target.base[i * 3 + 2]]
                 const q = map ? map(p) : p
                 pos.setXYZ(i, q[0], q[1], q[2])
               }
-              pos.needsUpdate = true
-              target.mesh.geometry.computeBoundingBox()
-              target.mesh.geometry.computeBoundingSphere()
+              if (own) {
+                pos.needsUpdate = true
+                target.mesh.geometry.computeBoundingBox()
+                target.mesh.geometry.computeBoundingSphere()
+              }
               const mat = target.mesh.material as MeshStandardMaterial
               if (target.color && !Array.isArray(mat) && mat.color) {
                 const tint = adjust?.tint
@@ -2381,6 +2433,135 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
 
         setLoading(false)
 
+        // ── The figure preview (ruling H-R2) ── A left drag turns the FIGURE about the vertical axis through the
+        // focused head (or the model's centre), so the strands feel the turn; the camera orbits with the right
+        // button or Shift + left drag (OrbitControls: PAN with a modifier key rotates), and dollies with the wheel.
+        previewRoot.updateMatrixWorld(true)
+        const focusAt = focusRef.current
+        const turnPivot = previewRoot.worldToLocal(focusAt
+          ? object.localToWorld(new THREE.Vector3(focusAt.center[0], focusAt.center[1], focusAt.center[2]))
+          : new THREE.Box3().setFromObject(object).getCenter(new THREE.Vector3()))
+        let dragYaw = 0
+        let drag: { x: number; yaw: number; id: number } | null = null
+        if (turnModeRef.current) {
+          controls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }
+          controls.update()
+          mount.style.cursor = 'grab'
+          const onDown = (e: PointerEvent) => {
+            if (!turnModeRef.current || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || !e.isPrimary) return
+            // Capture phase on the mount: OrbitControls on the canvas never sees this drag.
+            e.stopPropagation()
+            e.preventDefault()
+            drag = { x: e.clientX, yaw: dragYaw, id: e.pointerId }
+            mount.setPointerCapture?.(e.pointerId)
+            mount.style.cursor = 'grabbing'
+          }
+          const onMove = (e: PointerEvent) => {
+            if (!drag || e.pointerId !== drag.id) return
+            e.stopPropagation()
+            dragYaw = drag.yaw + dragTurnRad(e.clientX - drag.x)
+            const deg = Math.round((dragYaw * 180) / Math.PI)
+            setTurnDeg(((deg % 360) + 540) % 360 - 180)
+          }
+          const onUp = (e: PointerEvent) => {
+            if (!drag || e.pointerId !== drag.id) return
+            e.stopPropagation()
+            drag = null
+            if (mount.hasPointerCapture?.(e.pointerId)) mount.releasePointerCapture(e.pointerId)
+            mount.style.cursor = 'grab'
+          }
+          mount.addEventListener('pointerdown', onDown, true)
+          mount.addEventListener('pointermove', onMove, true)
+          mount.addEventListener('pointerup', onUp, true)
+          mount.addEventListener('pointercancel', onUp, true)
+          disposers.push(() => {
+            mount.removeEventListener('pointerdown', onDown, true)
+            mount.removeEventListener('pointermove', onMove, true)
+            mount.removeEventListener('pointerup', onUp, true)
+            mount.removeEventListener('pointercancel', onUp, true)
+            mount.style.cursor = ''
+          })
+        }
+        // The motion buttons: the kind playing (or easing out), its clock and amplitude (`previewMotionAmp`).
+        let motionKind: PreviewMotionKind | null = null
+        let motionT = 0
+        let motionAmp = 0
+        const turnMatrix = new THREE.Matrix4()
+        const turnStep = new THREE.Matrix4()
+        /** The root motion of this frame: T(pivot + offset) · Ry(drag + yaw) · Rx(pitch) · T(−pivot). */
+        const applyTurn = (dt: number) => {
+          const wanted = strandMotionRef.current
+          if (wanted && wanted !== motionKind) {
+            motionKind = wanted
+            motionT = 0
+            if (wanted === 'turn') motionAmp = 1   // the turn eases itself in from rest
+          }
+          motionAmp = previewMotionAmp(motionAmp, wanted ? 1 : 0, dt)
+          if (motionKind) motionT += dt
+          if (wanted === 'turn' && motionT >= TURN_S) {
+            strandMotionRef.current = null
+            setStrandMotion(null)
+          }
+          if (!wanted && motionAmp < 1e-4) { motionKind = null; motionAmp = 0 }
+          const pose = motionKind ? previewRootPose(motionKind, motionT, motionAmp)
+            : { yaw: 0, pitch: 0, offset: [0, 0, 0] }
+          turnMatrix.makeTranslation(turnPivot.x + pose.offset[0], turnPivot.y + pose.offset[1],
+            turnPivot.z + pose.offset[2])
+          turnMatrix.multiply(turnStep.makeRotationY(dragYaw + pose.yaw))
+          turnMatrix.multiply(turnStep.makeRotationX(pose.pitch))
+          turnMatrix.multiply(turnStep.makeTranslation(-turnPivot.x, -turnPivot.y, -turnPivot.z))
+          turnRoot.matrix.copy(turnMatrix)
+          turnRoot.matrixWorldNeedsUpdate = true
+        }
+        // The strands per frame: (re)bind a new record, on/off, the live Stiffness, the step, the status line.
+        let statusClock = 0
+        let shownStatus = ''
+        const tickStrands = (dt: number) => {
+          const given = strandHairRef.current
+          const record = given?.record ?? null
+          const paused = !!meshAdjustRef.current?.map
+          // A new record binds to the mesh's own (unmapped) positions: never while a placement map is shown.
+          if (record !== strandRecord && !(record && paused)) {
+            strandOn(false)
+            strand?.dispose()
+            strandRecord = record
+            strand = record ? createStrandHair(THREE, object, record) : null
+            strandStiffness = NaN
+          }
+          if (strand && given && given.stiffness !== strandStiffness) {
+            strandStiffness = given.stiffness
+            strand.setStiffness(strandStiffness)
+          }
+          if (strand && !paused && !strand.enabled) {
+            meshAdjustFnRef.current?.()   // the template's own positions back before the strands take over
+            strandOn(true)
+          }
+          if (strand?.enabled) strand.update(dt)
+          statusClock += dt
+          if (statusClock < 0.25 && shownStatus) return
+          statusClock = 0
+          let next: { state: 'off' | 'running' | 'refused' | 'paused'; cards?: number; tipMm?: number }
+          if (!strandRecord) next = { state: 'off' }
+          else if (!strand) next = { state: 'refused' }
+          else if (!strand.enabled) next = { state: 'paused' }
+          else {
+            // The tips' largest distance from where a rigid head would hold them (0 at rest).
+            const cards = strandRecord.cards
+            const X = strand.sim.X, T = strand.targets, rows = strand.sim.n / cards
+            let tip = 0
+            for (let k = 0; k < cards; k++) {
+              const q = 3 * (k * rows + rows - 1)
+              tip = Math.max(tip, Math.hypot(X[q] - T[q], X[q + 1] - T[q + 1], X[q + 2] - T[q + 2]))
+            }
+            next = { state: 'running', cards, tipMm: Math.round(tip * 1000) }
+          }
+          const key = JSON.stringify(next)
+          if (key !== shownStatus) {
+            shownStatus = key
+            setStrandStatus(next)
+          }
+        }
+
         let raf: number | null = null
         let renderVisible = false
         let renderWidth = width
@@ -2422,6 +2603,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           }
           displayedTilt = rateLimitPreviewTilt(displayedTilt, tiltRef.current, realDelta)
           applyPreviewTilt(previewRoot, displayedTilt.forward, displayedTilt.sideways)
+          if (turnModeRef.current) applyTurn(Math.min(realDelta, 0.1))
           previewRoot.updateMatrixWorld(true)
           if (extensionShown !== extensionPushRef.current) {
             extensionShown = extensionPushRef.current
@@ -2429,6 +2611,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           }
           secondary?.update(realDelta)
           object.updateMatrixWorld(true)
+          // The strands after the pose of the frame is final (the client: after the mixer and the matrices).
+          if (turnModeRef.current || strand) tickStrands(realDelta)
           if (collisionShown !== collisionRef.current) {
             collisionOverlay?.dispose()
             collisionShown = collisionRef.current
@@ -2440,6 +2624,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             garmentCollision?.dispose()
             garmentShown = garmentPushRef.current
             garmentCollision = createGarmentCollision(THREE, object, garmentShown)
+            if (strand?.enabled) garmentCollision?.excludeMesh(strand.mesh, true)
             alphaShown = undefined
           }
           const cutoff = alphaCutoffRef.current
@@ -2707,6 +2892,39 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         <button type="button" className="ga-btn ga-btn-sm"
           onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
       </div>
+        {turnMode ? (
+          <div className="ga-fieldset ga-model3d-group">
+            <span className="ga-fieldset-title" style={{ margin: 0, fontSize: 11 }}>{t('Motion preview')}</span>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {([['sway', t('Sway'), t('Sways the figure ±15° about the head — preview only, no jobs')],
+                ['walk', t('Walk'), t('Walks the figure 25 cm back and forth — preview only, no jobs')],
+                ['turn', t('Turn'), t('Turns the figure 180° and back — preview only, no jobs')],
+              ] as const).map(([kind, label, title]) => (
+                <button key={kind} type="button" className={`ga-btn ga-btn-sm${strandMotion === kind ? ' ga-btn-primary' : ''}`}
+                  aria-pressed={strandMotion === kind} title={title} disabled={loading || !!error}
+                  onClick={() => setStrandMotion(kind)}>{label}</button>
+              ))}
+              <button type="button" className="ga-btn ga-btn-sm" disabled={loading || !!error || !strandMotion}
+                title={t('Eases the figure back to rest — the hair settles')}
+                onClick={() => setStrandMotion(null)}>{t('Stop')}</button>
+            </div>
+            <span className="ga-hint" style={{ fontSize: 10 }}>
+              {strandStatus.state === 'running'
+                ? t('Every strand swings · {n} strands · tips {mm} mm from rest')
+                  .replace('{n}', String(strandStatus.cards ?? 0)).replace('{mm}', String(strandStatus.tipMm ?? 0))
+                : strandStatus.state === 'refused'
+                  ? t('The preview model does not carry this record’s strand binding — the hair stays still.')
+                  : strandStatus.state === 'paused'
+                    ? t('The strands rest while the placement preview is shown.')
+                    : strandNote || t('The hair stays still.')}
+            </span>
+            <span className="ga-hint" style={{ fontSize: 10 }}
+              title={t('Right drag or Shift + drag orbits the camera; the wheel zooms.')}>
+              {t('Drag turns the figure ({deg}° per 100 px) · turned {turn}° · no jobs')
+                .replace('{deg}', String(dragTurnDeg(100))).replace('{turn}', String(turnDeg))}
+            </span>
+          </div>
+        ) : null}
         {motionToolbar}
       </aside> : null}
     </div>

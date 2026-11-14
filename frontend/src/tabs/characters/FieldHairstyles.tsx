@@ -12,8 +12,11 @@
  *     POST …/garments/{item}/run {}); a body hairstyle's flow belongs to the Figure tab — only a link to it;
  *   - the 3D preview (the hair fitted on the plain body, "Built <time>" in its corner, framed on the head) with
  *     the settings that change it BESIDE it (HairLiveControls): placement, colour, Swing / Stiffness — each acts
- *     live while dragged (a vertex map, a colour tint, the spring frequencies) and is saved on its own, nothing
+ *     live while dragged (a vertex map, a colour tint, the strands' stiffness) and is saved on its own, nothing
  *     runs; the forward shift shows a centimetre ruler and the shift itself in the preview while hovered;
+ *   - the preview runs the game's per-strand sim on the previewed fit's strand record (`preview_strands_url`,
+ *     strand-hair spec § 6.2.5, ruling H-R2): a drag turns the figure so the hair reacts, Sway / Walk / Turn /
+ *     Stop beside the viewer; with Swing off, or without a record, the hair stays still and says why;
  *   - sub-tabs: Steps (one row per step: traffic light, the reason in plain words, its single button that redoes
  *     the step even when current, with its cost), Settings (mode, text, colour and placement facts) and HairDeck
  *     images (three small tiles, a click enlarges).
@@ -22,6 +25,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { STRAND_RECORD_VERSION } from '@anima/scene-render'
+import type { HairStrandRecord } from '@anima/scene-render'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -33,9 +38,10 @@ import { HairLiveControls } from './HairLiveControls'
 import type { HairDrafts } from './HairLiveControls'
 import { FigureBuildLine } from './HairstyleParts'
 import {
-  colourTint, fittedPlacement, hairStepRows, jobsLabel, listLight, listReason, placementIdentity, placementMap, placementRuler, previewMotion, wearButton,
+  colourTint, fittedPlacement, hairStepRows, jobsLabel, listLight, listReason, placementIdentity, placementMap, placementRuler,
+  strandPreviewState, wearButton,
 } from './hairstylesModel'
-import type { Light, PreviewMotionInput, StepRow, Vec3 } from './hairstylesModel'
+import type { Light, StepRow, Vec3 } from './hairstylesModel'
 import { Model3DViewer } from './Model3DViewer'
 import { RefImage } from './RefImage'
 import {
@@ -59,7 +65,6 @@ type HairstylesList = Omit<HairstylesPayload, 'hairstyles'> & {
 /** GET …/hair with the Task UI4 additions. */
 type HairDetail = HairInfo & {
   step_jobs?: Record<string, number>
-  preview_motion?: PreviewMotionInput | null
 }
 
 const VIEWER_HEIGHT = 580
@@ -219,8 +224,28 @@ function HairstyleDetail({ character, entry, onChanged, onRunEnded, onOpenFigure
     return map || tint ? { match: `garment_hair_${info.item_id}`, map, tint } : null
   }, [hd, info?.item_id, pivot, fitted?.forward_m, fitted?.tilt_deg, fitted?.width_scale, drafts.placement, // eslint-disable-line react-hooks/exhaustive-deps
     drafts.colour, halfWidth])
-  const motion = useMemo(() => previewMotion(info?.preview_motion,
-    drafts.stiffness ?? hd?.chains?.stiffness ?? 1), [info?.preview_motion, drafts.stiffness, hd?.chains?.stiffness])
+  // The per-strand preview (strand-hair spec § 6.2.5): the previewed fit's record, fetched once per previewed fit
+  // while Swing is on; the dragged Stiffness goes to the sim live.
+  const strandState = strandPreviewState(info ?? {}, hd?.chains?.swing ?? true)
+  const strandKey = strandState === 'swings' && info?.preview_strands_url
+    ? `${info.preview_strands_url}|${garment?.preview_url ?? ''}` : ''
+  const [strandFetch, setStrandFetch] = useState<{ key: string; record: HairStrandRecord | null } | null>(null)
+  useEffect(() => {
+    if (!strandKey) return
+    let gone = false
+    const url = strandKey.slice(0, strandKey.indexOf('|'))
+    apiGet<HairStrandRecord>(url)
+      .then((record) => { if (!gone) setStrandFetch({ key: strandKey, record: record?.version === STRAND_RECORD_VERSION ? record : null }) })
+      .catch(() => { if (!gone) setStrandFetch({ key: strandKey, record: null }) })
+    return () => { gone = true }
+  }, [strandKey])
+  const strandRecord = strandFetch?.key === strandKey ? strandFetch.record : null
+  const strandStiffness = drafts.stiffness ?? hd?.chains?.stiffness ?? 1
+  const strandHair = useMemo(() => (strandRecord ? { record: strandRecord, stiffness: strandStiffness } : null),
+    [strandRecord, strandStiffness])
+  const strandIssue = strandState !== 'swings' || strandRecord ? null
+    : strandFetch?.key === strandKey ? t('No strand record for this fit — the hair stays still.')
+      : t('Loading the strands…')
   const hairlineY = hd?.placement.fitted?.hairline_y ?? (pivot ? pivot[1] + 0.04 : null)
   const polylines = useMemo(() => (ruler && pivot && hairlineY !== null
     ? placementRuler(pivot, pivot[0] + halfWidth + 0.03, hairlineY,
@@ -257,10 +282,12 @@ function HairstyleDetail({ character, entry, onChanged, onRunEnded, onOpenFigure
   const preview = mode === 'hairdeck' && garment?.preview_url ? (
     <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={VIEWER_HEIGHT}
       previewTilt freshness={garment.preview_freshness} builtAt={garment.preview_built_at}
-      alphaCutoff={info.alpha_cutoff} collision={info.collision} motion={motion} meshAdjust={meshAdjust} polylines={polylines} focus={focus}
+      alphaCutoff={info.alpha_cutoff} collision={info.collision} meshAdjust={meshAdjust} polylines={polylines} focus={focus}
+      strandHair={strandHair}
+      strandNote={strandState === 'swing_off' ? t('Swing is off — the hair stays still.') : strandIssue || undefined}
       motionToolbar={hd ? (
         <HairLiveControls character={character} itemId={itemId} hd={hd} info={info} busy={busy || !info.pipeline}
-          previewSwings={motion ? 'yes' : 'no_swing'} onDraft={onDraft} onRuler={setRuler} onSaved={reload} />
+          previewSwings={strandState} strandIssue={strandIssue} onDraft={onDraft} onRuler={setRuler} onSaved={reload} />
       ) : undefined} />
   ) : mode === 'body' && info.plain && info.body_url ? (
     <Model3DViewer key={info.body_url} url={info.body_url} format="glb" height={VIEWER_HEIGHT}

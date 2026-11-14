@@ -11,13 +11,12 @@
  * - `placementMap` / `placementRuler`: the live placement preview — the fitted hair turned and moved by the
  *   difference between the dragged values and the ones the fit used, about the fit's own pivot — and the
  *   centimetre ruler with the forward shift drawn at the head.
- * - `previewMotion`: the live Stiffness preview — the previewed fit's spring groups with the dragged factor.
+ * - `strandPreviewState` / `previewRootPose`: the per-strand preview (strand-hair spec § 6.2.5, ruling H-R2) — whether
+ *   the hair swings, the drag turn and the motion buttons' root motion (Sway, Walk, Turn).
  * - `colourTint`: the live colour preview — a multiplier of the hair's vertex colours.
  * - `wearButton`: the Wear button's label with what the Build after it costs.
  * Returned strings are English; the caller passes `t`.
  */
-import type { SecondaryMotionPayload, MotionGroup } from '@anima/scene-render'
-
 type Tr = (s: string) => string
 const EN: Tr = (s) => s
 /** Formats a SYSTEM stamp for the reason lines ("12 Nov 20:31"); the component passes the clock-aware one. */
@@ -350,27 +349,65 @@ export function placementRuler(pivot: Vec3, x: number, y: number, forwardM: numb
   return lines
 }
 
-/** The live Stiffness preview (GET …/hair `preview_motion`): every group's frequency for the dragged factor —
- *  `clamp(per_stiffness × chain stiffness × factor, min_hz, max_hz)`, as `hair_motion.freq_zeta` computes it.
- *  undefined when the fit has no swinging cards (made with Swing off, or no chains). */
-export interface PreviewMotionInput {
-  groups: Record<string, MotionGroup & { freq_hz?: number }>
-  chain_stiffness: Record<string, number>
-  freq: { per_stiffness: number; min_hz: number; max_hz: number }
-  fit_swing: boolean
+/** What the preview's per-strand hair does (strand-hair spec § 6.2.5): `swings` — the previewed fit has a strand
+ *  record (`preview_strands_url`) and Swing is on, the preview runs the game's sim; `swing_off` — Swing is off, the
+ *  hair stays still; `no_preview` — no fitted hair to preview. */
+export type StrandPreviewState = 'swings' | 'swing_off' | 'no_preview'
+
+export function strandPreviewState(info: { preview_strands_url?: string | null }, swing: boolean): StrandPreviewState {
+  if (!info.preview_strands_url) return 'no_preview'
+  return swing ? 'swings' : 'swing_off'
 }
 
-export function previewMotion(pm: PreviewMotionInput | null | undefined, factor: number):
-  SecondaryMotionPayload | undefined {
-  if (!pm || !pm.fit_swing || !Object.keys(pm.groups).length) return undefined
-  const groups: Record<string, MotionGroup> = {}
-  for (const [id, group] of Object.entries(pm.groups)) {
-    const s = pm.chain_stiffness[id]
-    const freq = s === undefined ? group.freq_hz
-      : Math.round(Math.max(pm.freq.min_hz, Math.min(pm.freq.max_hz, pm.freq.per_stiffness * s * factor)) * 1000) / 1000
-    groups[id] = { ...group, freq_hz: freq } as MotionGroup
+/** The Motion group's hint per state (English; the caller passes `t`). */
+export const STRAND_PREVIEW_HINTS: Record<StrandPreviewState, string> = {
+  swings: 'Tilt the figure above — every strand swings.',
+  swing_off: 'Swing is off — the hair stays still.',
+  no_preview: 'No fitted hair yet — nothing to preview.',
+}
+
+/** Ruling H-R2: a drag in the Hairstyles preview turns the FIGURE about the vertical axis, this many degrees per
+ *  pixel of horizontal drag (360 px = half a turn). */
+export const DRAG_TURN_DEG_PER_PX = 0.5
+export const dragTurnDeg = (px: number): number => px * DRAG_TURN_DEG_PER_PX
+export const dragTurnRad = (px: number): number => (dragTurnDeg(px) * Math.PI) / 180
+
+/** The preview's motion buttons (Ruling H-R2), ported from the spike viewer's `rootMotion` plus a turn. */
+export type PreviewMotionKind = 'sway' | 'walk' | 'turn'
+/** The turn: 180° out over `TURN_OUT_S`, held `TURN_HOLD_S`, back over `TURN_OUT_S` (cosine ease, zero speed at
+ *  both ends). Its peak angular acceleration (π/2)·(π/2.5)² = 2.48 rad/s² stays under the strands' felt limit
+ *  (`STRAND_ROOT_LIMITS.angAccel` 2.58 rad/s²), so the whole turn is felt by the hair. */
+export const TURN_OUT_S = 2.5
+export const TURN_HOLD_S = 1
+export const TURN_S = 2 * TURN_OUT_S + TURN_HOLD_S
+/** How fast a motion eases in and out (s, the spike's ramp). */
+const AMP_RAMP_S = 0.5
+const DEG = Math.PI / 180
+
+/** The figure root's motion at time `t` (s) and amplitude `amp` (0..1): a yaw and a pitch about the head (rad) and
+ *  an offset (m, x/y/z). Sway: yaw ±15° and pitch ±5° at 0.5 Hz; walk: ±25 cm along z at 0.5 Hz with a 3 cm bob at
+ *  1 Hz (the spike's `rootMotion`); turn: 180° and back over `TURN_S`. amp 0 is the rest pose. */
+export function previewRootPose(kind: PreviewMotionKind, t: number, amp: number): { yaw: number; pitch: number;
+  offset: Vec3 } {
+  if (kind === 'sway') {
+    return { yaw: amp * 15 * DEG * Math.sin(2 * Math.PI * 0.5 * t),
+      pitch: amp * 5 * DEG * Math.sin(2 * Math.PI * 0.5 * t + Math.PI / 2), offset: [0, 0, 0] }
   }
-  return { rev: `hair-preview:${factor.toFixed(2)}`, groups }
+  if (kind === 'walk') {
+    return { yaw: 0, pitch: 0,
+      offset: [0, amp * 0.015 * (1 - Math.cos(2 * Math.PI * 1.0 * t)), amp * 0.25 * Math.sin(2 * Math.PI * 0.5 * t)] }
+  }
+  let yaw = 0
+  if (t <= 0 || t >= TURN_S) yaw = 0
+  else if (t < TURN_OUT_S) yaw = (Math.PI / 2) * (1 - Math.cos((Math.PI * t) / TURN_OUT_S))
+  else if (t <= TURN_OUT_S + TURN_HOLD_S) yaw = Math.PI
+  else yaw = (Math.PI / 2) * (1 + Math.cos((Math.PI * (t - TURN_OUT_S - TURN_HOLD_S)) / TURN_OUT_S))
+  return { yaw: amp * yaw, pitch: 0, offset: [0, 0, 0] }
+}
+
+/** The amplitude after `dt` seconds easing towards `target` (the spike's ramp; never past the target). */
+export function previewMotionAmp(amp: number, target: number, dt: number): number {
+  return amp + (target - amp) * Math.min(1, Math.max(0, dt) / AMP_RAMP_S)
 }
 
 /** sRGB `#rrggbb` → linear [r, g, b] (0..1); null for anything else. */

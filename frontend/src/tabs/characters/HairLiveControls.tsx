@@ -11,15 +11,17 @@
  *   (POST /characters/{n}/hair/placement {forward_m, tilt_deg, width_scale, item_id}, null = automatic).
  * - Colour: a manual hair colour, Automatic clears it (POST …/hair/colour {hex, item_id}).
  * - Motion: Swing (saved at once — a fit input) and Stiffness (POST …/hair/motion {swing, stiffness,
- *   item_id}); Stiffness acts on the motion only, nothing becomes due.
+ *   item_id}); Stiffness acts on the motion only, nothing becomes due. The preview runs the game's per-strand sim
+ *   (strand-hair spec § 6.2.5): Stiffness acts on it live while dragged (`setStiffness`); the group's hint says
+ *   whether the strands swing (`strandPreviewState`, `STRAND_PREVIEW_HINTS`).
  */
 import { useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
-import { fittedPlacement, settingDue } from './hairstylesModel'
-import type { PlacementValues, StepInput } from './hairstylesModel'
+import { STRAND_PREVIEW_HINTS, fittedPlacement, settingDue } from './hairstylesModel'
+import type { PlacementValues, StepInput, StrandPreviewState } from './hairstylesModel'
 import type { HairDeckPanel } from './useGarment'
 import { Swatch } from './HairstyleParts'
 
@@ -68,7 +70,8 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
   )
 }
 
-export function HairLiveControls({ character, itemId, hd, info, busy, previewSwings, onDraft, onRuler, onSaved }: {
+export function HairLiveControls({ character, itemId, hd, info, busy, previewSwings, strandIssue, onDraft, onRuler,
+  onSaved }: {
   character: string
   itemId: string
   hd: HairDeckPanel
@@ -76,9 +79,12 @@ export function HairLiveControls({ character, itemId, hd, info, busy, previewSwi
   info: StepInput
   /** A hair step runs or a request is in flight: nothing is saved meanwhile. */
   busy: boolean
-  /** `yes`: the previewed fit has swinging cards (made with Swing on), the Stiffness preview acts; `no_swing`: the
-   *  fit was made with Swing off; `no_preview`: there is no fitted hair to preview yet. */
-  previewSwings: 'yes' | 'no_swing' | 'no_preview'
+  /** `swings`: the preview runs every strand, the Stiffness drag acts on it; `swing_off`: Swing is off, the hair
+   *  stays still; `no_preview`: there is no fitted hair to preview yet (`strandPreviewState`). */
+  previewSwings: StrandPreviewState
+  /** Why the strands do not swing although they should (no record for this fit, loading) — shown instead of
+   *  the `swings` hint; null otherwise. */
+  strandIssue?: string | null
   onDraft: (d: HairDrafts) => void
   /** The forward-shift ruler is wanted in the preview (the slider is hovered or focused). */
   onRuler: (on: boolean) => void
@@ -217,7 +223,7 @@ export function HairLiveControls({ character, itemId, hd, info, busy, previewSwi
           {swingDue ? <span style={DUE}>{swingDue}</span> : null}
           <Slider label={t('Stiffness')} value={stiffness ?? chains.stiffness}
             shown={`${(stiffness ?? chains.stiffness).toFixed(1)}×`} min={chains.limits[0]} max={chains.limits[1]}
-            step={0.1} disabled={off || (chains.fitted && chains.count === 0)}
+            step={0.1} disabled={off || previewSwings === 'swing_off'}
             title={t('Higher stiffness springs back faster. It changes the motion only — nothing is re-fitted.')}
             onChange={(v) => setStiffness(v)} />
           <div style={BTN_ROW}>
@@ -234,10 +240,7 @@ export function HairLiveControls({ character, itemId, hd, info, busy, previewSwi
             </button>
           </div>
           <span className="ga-hint" style={{ fontSize: 10 }}>
-            {previewSwings === 'yes' ? t('Tilt the figure above to see the swing.')
-              : previewSwings === 'no_swing'
-                ? t('This fit has no swinging cards (made with Swing off) — the preview stays still.')
-                : t('No fitted hair yet — nothing to preview.')}
+            {previewSwings === 'swings' && strandIssue ? strandIssue : t(STRAND_PREVIEW_HINTS[previewSwings])}
           </span>
         </Group>
       ) : null}

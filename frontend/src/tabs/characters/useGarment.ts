@@ -501,6 +501,9 @@ export interface HairInfo {
   /** The world's hair-card alpha cutoff (`base_body.hair_alpha_cutoff`, strand-hair spec § 6.1): the preview
    *  applies it to the MASK cards of the fit it shows. */
   alpha_cutoff?: number
+  /** The strand record of the previewed fit (`GET …/garments/{item}/hair-strands`, strand-hair spec § 6.2.3): the
+   *  Hairstyles preview runs the game's per-strand sim on it; null without a preview fit. */
+  preview_strands_url?: string | null
 }
 
 const POLL_MS = 3000
