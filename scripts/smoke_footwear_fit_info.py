@@ -35,8 +35,9 @@ extension_deg_right 22.2, toe_room_mm_right 18.0, root_lift_m 0.052, k_m_per_uni
 [I2] Demo wears a coat in mode in_body (wanted figure in_body [coat]; taken off again for [I4]) with three stored
      outfit bodies (model3d/<id>.glb, ids sorted A < B < C by construction:
      ``ob_id`` of three texture signatures, then sorted): A carries an accepted record of F on
-     sha(A) -> status accepted, metrics width_factor 1.05 (its own hand value); B has nothing -> missing;
-     C has a recorded body failure of F on sha(C) (base_fit_sha "", the current fit version, error "fit refused — x")
+     sha(A), derived from the base fit (``base_fit_sha256`` = sha(base fit GLB), Ruling A35) -> status accepted,
+     metrics width_factor 1.05 (its own hand value); B has nothing -> missing; C has a recorded body failure of F
+     on sha(C) (base_fit_sha = sha(base fit GLB), the current fit version, error "fit refused — x")
      -> status refused, error "x" (Ruling A31: the row's pill says "Refused (gate)", the reason drops the fit path's
      own "fit refused — " prefix). ``fits`` = [base, then the three in sorted id order], each
      ``base`` False. Since Task 6 of plan 2026-11-12-unified-worn-pieces no per-character mode gates the rows
@@ -202,6 +203,9 @@ def main() -> int:
             if on_base:
                 record["base_model_sha256"] = body_sha
                 record["parents"]["base_model_sha256"] = body_sha
+            else:  # derived from the base fit (Ruling A35)
+                base_fit_sha = sha(gs.garment_path("Demo", heels, F, "fit"))
+                record["base_fit_sha256"] = record["parents"]["base_fit_sha256"] = base_fit_sha
             gs.write_record(path.with_suffix(".json"), record)
             return path
 
@@ -252,7 +256,8 @@ def main() -> int:
             shas[body_id] = hashlib.sha256(data).hexdigest()
         (mdir / "o0123456789ab.glb").write_bytes(b"an outfit model, no body")
         write_fit(A, shas[A], width_factor=1.05, on_base=False)
-        gs.record_body_failure("Demo", heels, F, C, error="fit refused — x", body_sha=shas[C], base_fit_sha="",
+        gs.record_body_failure("Demo", heels, F, C, error="fit refused — x", body_sha=shas[C],
+                               base_fit_sha=sha(gs.garment_path("Demo", heels, F, "fit")),
                                fit_version=ff.FOOTWEAR_FIT_VERSION)
         info = garments.garment_info("Demo", heels)
         rows = [(r.get("body_id"), r.get("base"), r.get("status"), r.get("error")) for r in info.get("fits") or []]

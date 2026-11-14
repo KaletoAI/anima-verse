@@ -118,6 +118,18 @@ Measured 2026-11-10, Kira's blazer on her five outfit bodies (front / side / bac
 refused one (0.216). The displacement smoothing (``garment_fit.LIMB_SMOOTH_PASSES`` 150) took the upper-arm
 skin showing through the sleeves of 3b3a / 62aad from 0.12 / 0.17 to 0.02 / 0.00 (body vertices outside the
 sleeve).
+Since Ruling A35 only the OUTER trunk skin is counted (``TORSO_COVER_OUTER_M``): a body shape meshed with a hidden
+inner layer (Kai's ``obf6474c3b``: at the lower back, under the shirt hem, a layer 7 - 8 cm from the trunk axis under
+the outer skin at 10 - 13 cm) counted that layer as uncovered skin, which no garment can cover — his jacket's back
+read 0.74 against the base fit's 0.97 and was refused. Re-measured
+2026-11-14 with the joint frames and the outer skin (fit / base fit, front; side; back):
+    Kira's blazer 22354   0.98 / 0.99; 0.97 / 1.00; 1.00 / 0.99   (before: 0.98 / 0.99; 0.94 / 0.99; 0.99 / 0.99)
+                  2b67    0.99 / 0.99; 0.95 / 1.00; 1.00 / 0.99   (before: 0.99 / 0.99; 0.94 / 0.99; 0.92 / 0.99)
+                  3b3a    0.97 / 0.99; 0.99 / 1.00; 1.00 / 0.99   (before: 0.98 / 0.99; 0.95 / 0.99; 0.98 / 0.99)
+    Kai's jacket obf6474c3b  1.00 / 1.00; 0.93 / 0.97; 0.88 / 0.95   (before: 0.97 / 0.98; 0.96 / 0.99; 0.74 / 0.97)
+    Kai's jeans obf6474c3b   0.95 / 0.88; 0.98 / 0.95; 1.00 / 1.00   (before: 0.82 / 0.91; 0.97 / 1.00; 0.87 / 0.84)
+The largest drop the share now passes is 0.072 (the jacket's back; that fit is refused by its armhole, the hole
+gate below); the limit 0.10 stays.
 
 A share cannot see ONE big hole. After the trunk transfer the skin still showed through at the side of the chest
 (3b3a, 62aad) and on the upper back (3b3a): three of the five outfit bodies are hollow SHELLS whose cavity reaches
@@ -200,6 +212,10 @@ TORSO_COVER_M = 0.04
 TORSO_V_RANGE = (-0.1, 1.0)
 TORSO_BANDS = 10
 TORSO_SECTORS = 12
+#: Only the OUTER trunk skin is counted (Ruling A35): per ``TORSO_COVER_OUTER_BINS`` (heights over
+#: ``TORSO_V_RANGE`` x angles) the trunk vertices within ``TORSO_COVER_OUTER_M`` of the bin's outermost one.
+TORSO_COVER_OUTER_BINS = (40, 48)
+TORSO_COVER_OUTER_M = 0.02
 #: A cell the source covers at least this much belongs to the area the fit must keep covered.
 TORSO_SOURCE_COVERED = 0.5
 #: The covered share of that area may fall at most this below the source's (front / side / back each).
@@ -225,8 +241,9 @@ TORSO_OPEN_SHARE = 0.5
 TORSO_HOLE_CM2 = 15.0
 #: The version of the gates of a fit on an outfit body (``limb_gate``, ``torso_hole_gate``): a refusal recorded by
 #: another version no longer holds (``garment_store.body_failure``). 2: holes beyond the base fit's seen share, off
-#: the limb only when off the skin too (T15-F1, ruling A23 d).
-BODY_GATES_VERSION = 2
+#: the limb only when off the skin too (T15-F1, ruling A23 d). 3: the torso coverage counts the outer skin only, on
+#: frames from the bind joints (Ruling A35).
+BODY_GATES_VERSION = 3
 #: The image "step" name of the base view copies (``base_copy``).
 BASE_STEP = "base"
 #: Marker key of a copied record (``materialize``).
@@ -598,6 +615,27 @@ def fit_masks(character_name: str, item_id: str, fsig: str, *, body_front: Path,
     return body_mask, ghost_mask, {"registered": True, "registration": reg, "source_bsig": source.get("bsig")}
 
 
+def opening_masks(character_name: str, item_id: str, fsig: str) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """``(opening, ghost mask)`` of the group ``fsig`` in the ghost front's OWN frame (its size, never registered):
+    the ghost-mask pixels where the accepted worn front differs from the ghost front by more than
+    ``garment_fit.OPEN_DIFF`` in some channel — where the worn view shows the body through the garment (the V of an
+    open blazer) and the ghost the garment's inside (``garment_fit.opening_lining``). ``None`` without both images or
+    when their sizes differ (no pixel correspondence)."""
+    from PIL import Image
+    from app.core import garment_fit, garment_images as gi, garment_store as gs
+    ghost = gs.garment_path(character_name, item_id, fsig, "image", step="ghost", view="front")
+    worn = gs.garment_path(character_name, item_id, fsig, "image", step="worn", view="front")
+    if not ghost.is_file() or not worn.is_file():
+        return None
+    with Image.open(ghost) as g, Image.open(worn) as w:
+        if g.size != w.size:
+            return None
+        size = g.size
+        diff = np.abs(np.asarray(w.convert("RGB"), np.int16) - np.asarray(g.convert("RGB"), np.int16)).max(2)
+    mask = gi._mask(ghost, size)
+    return (diff > garment_fit.OPEN_DIFF) & mask, mask
+
+
 def warp_mask(mask: np.ndarray, reg: Dict[str, Any]) -> np.ndarray:
     """``garment_gates.warp`` unless the registration is negligible."""
     if reg.get("negligible"):
@@ -846,6 +884,38 @@ def check_limbs(character_name: str, item_id: str, fsig: str, positions, rigged_
     return limb_gate(limb_numbers(positions, glb_mesh.body_arrays(rigged_glb), marks=marks), source)
 
 
+def check_sleeves(positions, rigged_glb: bytes, *, marks: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The sleeve backstop of a fit WITHOUT a limb source (a native fit on its own base, Ruling A35):
+    ``{ok, reasons, fit, limit, failing [(chain, segment)]}`` (``failing`` like ``limb_gate``'s, for ``limb_marks``;
+    ``marks`` like ``limb_numbers``') — per arm segment (upper arm / forearm) the share of the piece's vertices on it
+    that are off the arm (``limb_numbers``) may be at most ``LIMB_OFF_DELTA``, the refit limit (``limb_gate``)
+    measured against an ideal source that sits on the arm (share 0). None when the piece has no sleeve.
+
+    Measured 2026-11-14 (shares upper arm / forearm, left; right):
+        Kira's blazer item_5bfe0cbc (8a64a2576446) accepted 00:15   0.073 / 0.432; 0.010 / 0.501  the cuffs on the
+                                                                   thighs (a web from the sleeve to the hip)
+        the same fit, cuffs bound to the arm + re-centred (A35)     0.007 / 0.000; 0.011 / 0.000
+        Kai's leather jacket item_555a7a01 (3749e6028b55) accepted  0.009 / 0.013; 0.000 / 0.210  right sleeve bent
+                                                                   back off the forearm
+        the same fit, sleeves re-centred (A35)                      0.014 / 0.000; 0.003 / 0.000
+    The source share a refit is held to was <= 0.018 on Kira's native blazer (LIMBS); 0.10 lies between every
+    good share (<= 0.015) and the smallest broken one (0.210)."""
+    from app.core import glb_mesh
+    numbers = limb_numbers(positions, glb_mesh.body_arrays(rigged_glb), marks=marks) or {}
+    arms = {name: got for name, got in numbers.items() if name.endswith("_arm") and got}
+    if not arms:
+        return None
+    reasons, failing = [], []
+    for name, got in sorted(arms.items()):
+        for seg, share in enumerate(got["off"]):
+            if share is not None and share > LIMB_OFF_DELTA:
+                failing.append((name, seg))
+                reasons.append(f"{name.replace('_', ' ')}: the sleeve is off the {('upper arm', 'forearm')[seg]} — "
+                               f"{share} of its vertices beyond the arm + {LIMB_OFF_M * 100:.0f} cm "
+                               f"(limit {LIMB_OFF_DELTA})")
+    return {"ok": not reasons, "reasons": reasons, "fit": arms, "limit": LIMB_OFF_DELTA, "failing": failing}
+
+
 # --- Torso coverage (outfit bodies) -----------------------------------------------------------------------
 
 def torso_cover(positions, body, *, marks: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -866,10 +936,17 @@ def torso_cover(positions, body, *, marks: Optional[Dict[str, Any]] = None) -> O
     P = np.asarray(body.positions, np.float64)
     trunk_rows = np.nonzero(np.isin(garment_fit.dense_weights(body).argmax(1), cols))[0]
     T = P[trunk_rows]
-    v, theta, _rho = garment_fit._torso_coords(T, frame)
+    v, theta, rho = garment_fit._torso_coords(T, frame)
     lo, hi = TORSO_V_RANGE
     inside = (v >= lo) & (v < hi)
-    T, v, theta, trunk_rows = T[inside], v[inside], theta[inside], trunk_rows[inside]
+    T, v, theta, rho, trunk_rows = T[inside], v[inside], theta[inside], rho[inside], trunk_rows[inside]
+    nv, nt = TORSO_COVER_OUTER_BINS
+    key = (np.clip(((v - lo) / (hi - lo) * nv).astype(int), 0, nv - 1) * nt
+           + ((theta + np.pi) / (2 * np.pi) * nt).astype(int) % nt)
+    outermost = np.full(nv * nt, -np.inf)
+    np.maximum.at(outermost, key, rho)
+    outer = rho >= outermost[key] - TORSO_COVER_OUTER_M
+    T, v, theta, trunk_rows = T[outer], v[outer], theta[outer], trunk_rows[outer]
     band = np.clip(((v - lo) / (hi - lo) * TORSO_BANDS).astype(int), 0, TORSO_BANDS - 1)
     sector = ((theta + np.pi) / (2 * np.pi) * TORSO_SECTORS).astype(int) % TORSO_SECTORS
     X = np.asarray(positions, np.float64)

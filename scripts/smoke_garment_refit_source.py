@@ -92,7 +92,9 @@ the whole trunk by dy: ``garment_gates.register`` finds shift_px [dy, 0]
           forearm"; reach unchanged 0.48.
     A limb the source covers, gone: refused. A source without limbs: ok.
 [8] Wiring: a refit whose source covers the arms (source_limbs stubbed to the
-    LONG numbers) and whose fit hangs off them (limb_numbers stubbed to HANG):
+    LONG numbers) and whose fit hangs off them (limb_numbers stubbed to HANG; the native fit's sleeve backstop
+    ``check_sleeves``, which reads the same limb_numbers, stubbed to None — the rendered chain's own fit is not
+    what [8] wires):
     B4 (dy 60; from the [6] group on B3, dy 80: shift -20 px = 0.02 Hb, inside
     the caps) -> the limb gate refuses the refit, the same run renders the
     chain: ok, 4 renders, 1 mesh call, the fit refitted False, no file carries
@@ -624,8 +626,10 @@ def main() -> int:
         # --- [8] ---------------------------------------------------------------------
         print("[8] a refit whose sleeve hangs off the arm is refused -> the chain renders")
         real_source_limbs, real_limb_numbers = garment_source.source_limbs, garment_source.limb_numbers
+        real_check_sleeves = garment_source.check_sleeves
         garment_source.source_limbs = lambda *a, **k: long_
         garment_source.limb_numbers = lambda *a, **k: hang
+        garment_source.check_sleeves = lambda *a, **k: None
         try:
             b4 = use_profile_image(4)
             write_base(b4, 60)
@@ -634,6 +638,7 @@ def main() -> int:
             res = garments.run_garment("Demo", hid)
         finally:
             garment_source.source_limbs, garment_source.limb_numbers = real_source_limbs, real_limb_numbers
+            garment_source.check_sleeves = real_check_sleeves
         check("ok, whole chain", (res.get("ok"), res.get("ran")), (True, ["worn", "ghost", "cutout", "mesh", "fit"]))
         check("4 renders, 1 mesh", delta(before)[:2], (4, 1))
         rec8 = fit_record(f4)

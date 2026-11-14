@@ -19,7 +19,7 @@ width 0.085, height 0.02; 1056 faces / 816 vertices: per foot 516 / 384 — sole
 grids — plus 12 / 24 per leg column) with its sidecar and
 unrigged copy. Item ``heels`` (feet, own mesh) held by Demo; its current source folder holds the closed flat
 clog of ``_footwear_fixtures.clog`` as ``prepared.glb`` (``glb_mesh.static_glb``), ``insole.json`` =
-``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 8, fit version 17: the
+``footwear_insole.analyse`` of it and every item step recorded accepted (insole version 8, fit version 18: the
 cut applied and gated, toes conformed, the foot measured below the ankle, a boot split at the ankle) — the item steps are done, a run only fits. Item ``boots``: the
 closed flat boot ``flat_boot(shaft=0.16)`` of the boots round (the clog with a 16-cm tube over x in [0, 0.10]),
 its prepared.glb's material ``doubleSided`` False; item ``pumps``: the wedge pump itself. The clog is the one
@@ -50,7 +50,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      node, fit version 6); its body (garment nodes excluded) is
      the CUT base: 24 faces / 48 vertices (fewer than the bare body's 1056 / 816), and in both sides' cut
      frames no remaining vertex lies below the cap inside the footprint (``footwear_cut._Side.g`` >= -1e-9 for
-     every one). Record: method "shoe", kind "footwear", version 17, fit_version 17, accepted, ssig = the current
+     every one). Record: method "shoe", kind "footwear", version 18, fit_version 18, accepted, ssig = the current
      ssig, body_id = bsig, body_sha256 = base_model_sha256 = sha(base) (the UNCUT bytes), base_signature bsig,
      parents {body_id, body_sha256, base_model_sha256, base_signature, source {ssig, empty_sha256 =
      sha(empty.png), mesh_sha256 = sha(prepared.glb), insole_version 8}}; scale.k_m_per_unit 1.023599
@@ -79,11 +79,13 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
 [P4] Mesh mode, outfit body A (its own bytes: the joints renamed "mixamorig:<name>", the Mixamo chain): with the
      base-fit readers (garment_store.accepted_fit / newest_accepted_fits, garments.fit_on_body /
      body_fit_state) replaced by raisers, garments.body_fit(…, base_fit=(missing path, {}), build False) ->
-     pending True, fit None; garment_footwear.body_fit(build True) -> fit garments/bodies/<A>/heels_<F>.glb +
-     low/, record body_id A, body_sha256 sha(A), base_signature bsig, NO base_model_sha256 (neither top level
-     nor in parents) and no base_fit_sha256; extension 0, root lift 0.010236 (the same feet); the body cut
-     the same way (24 faces); foot_pose bones "mixamorig:LeftFoot" (the body's own joint names); two shoe
-     nodes. garments.body_fit (build False)
+     pending True, fit None; garment_footwear.body_fit(build True) -> the shoe of the accepted base fit of F
+     carried onto A (``derive_compute``, Ruling A35) -> fit garments/bodies/<A>/heels_<F>.glb + low/, record
+     body_id A, body_sha256 sha(A), base_signature bsig, NO base_model_sha256 (neither top level nor in parents),
+     base_fit_sha256 = derived.base_fit_sha256 = sha(the base fit GLB); extension 0, root lift 0.010236 (the
+     same feet: every joint and the soles where the base's are, sole shift 0); the body cut the same way (24
+     faces); foot_pose bones "mixamorig:LeftFoot" (the body's own joint names, renamed from the base fit's);
+     two shoe nodes. garments.body_fit (build False)
      then returns that file; fit_state(…, sha(A), body=A) accepted, with sha(base) stale; with a wrong body sha
      -> fit None, not pending. HUB 0.
 [P5] The boot is SPLIT, not refused (fit version 6, boots plan Task 6; scripts/smoke_footwear_split.py has the
@@ -105,8 +107,8 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      to the heels' (the split changes no pose); the assembly reads each node by exact name
      (garment_arrays(exact=True)); run_garment(Demo, boots) afterwards -> ran [] . On body A a stored boots fit of
      an older fit version (fit_version 0, accepted on sha(A)) is NOT served: body_fit(build True) refits on A
-     (fit_pair calls +1) and publishes bodies/A/boots_<FB>.glb with four nodes, fit_state accepted; a second
-     build does not fit again.
+     (derived from the boots' base fit: derive calls +1, fit_pair calls +0) and publishes bodies/A/boots_<FB>.glb
+     with four nodes, fit_state accepted; a second build does not derive again.
 [P6] Without a base model (Mira: on the pipeline, no model file) run_garment(Mira, heels) -> {ok True, ran [],
      fit "no_base"}; info steps.fit.status "missing".
 [P7] The cut gates refuse (Task 15). fit(Demo, pumps) — the wedge pump, whose fit gates pass (smoke_footwear_fit.py)
@@ -120,7 +122,7 @@ visible_n 0 -> visible_poke 0, throat ledge 0.
      containing "slim_needed 0.2563 > 0.18" (1 - 1.05 / 1.4119 = 0.2563, +-1e-3; gates.slim_needed {ok False,
      gating True}); on 80cdcd96 the default cap 1.10 already refused it there (slim 0.2209). The cap back to the
      default. An older fit reads stale: a pumps record of fit_version 14 (and 13, 12), accepted on the current
-     base bytes -> fit_state "stale" (16 too: phase A's previous version; fit_version 17 -> "accepted").
+     base bytes -> fit_state "stale" (16 and 17 too: earlier versions; fit_version 18 -> "accepted").
 """
 import hashlib
 import json
@@ -250,6 +252,13 @@ def main() -> int:
             FIT_CALLS.append(1)
             return real_fit_pair(*a, **k)
         footwear_fit.fit_pair = counting_fit_pair
+        DERIVE_CALLS = []
+        real_derive = gf.derive_compute
+
+        def counting_derive(*a, **k):
+            DERIVE_CALLS.append(1)
+            return real_derive(*a, **k)
+        gf.derive_compute = counting_derive
 
         # --- fixture ----------------------------------------------------------------------------------------
         human = {"template": "human-roleplay", "gender": "female", "age": 30, "height": 168,
@@ -340,8 +349,8 @@ def main() -> int:
         check("P1 record identity", {k: rec.get(k) for k in (
             "method", "kind", "item_id", "fsig", "ssig", "version", "fit_version", "accepted", "body_id",
             "body_sha256", "base_model_sha256", "base_signature")},
-            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 17,
-             "fit_version": 17, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
+            {"method": "shoe", "kind": "footwear", "item_id": heels, "fsig": F, "ssig": ssig, "version": 18,
+             "fit_version": 18, "accepted": True, "body_id": bsig, "body_sha256": base_sha,
              "base_model_sha256": base_sha, "base_signature": bsig})
         # a shoe's record: the fit gates + the cut gates without the split-only ones (footwear_cut.SHAFT_CUT_GATES)
         gate_names = list(footwear_fit.FIT_GATES) + [k for k in footwear_cut.CUT_GATES if k not in footwear_cut.SHAFT_CUT_GATES]
@@ -442,7 +451,7 @@ def main() -> int:
             check("P3 non-footwear refused", "ValueError", "ValueError")
 
         # --- [P4] ---------------------------------------------------------------------------------------------
-        print("[P4] mesh mode: fitted on the outfit body from the source")
+        print("[P4] mesh mode: the outfit body wears the base fit's shoe (Ruling A35)")
         A = ob_id("tex" + "a" * 12)
         body_a = repack(base_glb, generator="outfit body A", prefix="mixamorig:")
         (mdir / f"{A}.glb").write_bytes(body_a)
@@ -473,10 +482,11 @@ def main() -> int:
         check("P4 build", (entry["fit"], entry["pending"], entry["error"]), (body_fit_path, False, ""))
         check("P4 low tier", entry["low"], body_fit_path.parent / "low" / f"heels_{F}.glb")
         rec_a = entry["record"]
+        base_fit_sha = hashlib.sha256(gs.garment_path("Demo", heels, F, "fit").read_bytes()).hexdigest()
         check("P4 record", ({k: rec_a.get(k) for k in ("body_id", "body_sha256", "base_signature")},
                             "base_model_sha256" in rec_a, "base_model_sha256" in rec_a.get("parents", {}),
-                            "base_fit_sha256" in rec_a),
-              ({"body_id": A, "body_sha256": sha_a, "base_signature": bsig}, False, False, False))
+                            rec_a.get("base_fit_sha256"), (rec_a.get("derived") or {}).get("base_fit_sha256")),
+              ({"body_id": A, "body_sha256": sha_a, "base_signature": bsig}, False, False, base_fit_sha, base_fit_sha))
         near("P4 extension", rec_a["sides"]["left"]["extension"]["deg"], 0.0, 1e-6)
         near("P4 root lift", rec_a["root_lift_m"], 0.010236, 1e-5)
         check("P4 body cut on A", len(glb_mesh.body_arrays(body_fit_path.read_bytes()).faces), 24)
@@ -557,16 +567,17 @@ def main() -> int:
         gs.write_record(old.with_suffix(".json"), {"accepted": True, "kind": "footwear", "item_id": boots,
                                                    "fsig": FB, "body_id": A, "body_sha256": sha_a,
                                                    "fit_version": 0})
-        calls = len(FIT_CALLS)
+        calls, derives = len(FIT_CALLS), len(DERIVE_CALLS)
         entry = gf.body_fit("Demo", boots, body_id=A, body_sha=sha_a, profile=profile, build=True)
         check("P5 older fit version never served: refitted on A", (entry["fit"], entry["pending"], entry["error"]),
               (old, False, ""))
         check("P5 refit on A: four nodes", sorted(shoe_nodes(old.read_bytes(), boots)),
               sorted([f"garment_footwear_{boots}_{s_}" for s_ in ("left", "right", "left_shaft", "right_shaft")]))
         check("P5 fit_state on A", gf.fit_state("Demo", boots, FB, sha_a, body=A), "accepted")
-        check("P5 one fit call", len(FIT_CALLS) - calls, 1)
+        check("P5 derived from the base fit: one derive, no fit call",
+              (len(DERIVE_CALLS) - derives, len(FIT_CALLS) - calls), (1, 0))
         gf.body_fit("Demo", boots, body_id=A, body_sha=sha_a, profile=profile, build=True)
-        check("P5 no second attempt", len(FIT_CALLS) - calls, 1)
+        check("P5 no second attempt", (len(DERIVE_CALLS) - derives, len(FIT_CALLS) - calls), (1, 0))
         gs.accepted_fit, gs.newest_accepted_fits, garments.fit_on_body, garments.body_fit_state = saved
 
         # --- [P6] ---------------------------------------------------------------------------------------------
@@ -617,7 +628,7 @@ def main() -> int:
         check("P7 no hub", HUB, [])
         old = gs.garment_path("Demo", pumps, FP, "fit")
         shutil.copyfile(fit_path, old)
-        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "accepted")):
+        for version, want in ((14, "stale"), (13, "stale"), (12, "stale"), (15, "stale"), (16, "stale"), (17, "stale"), (18, "accepted")):
             gs.write_record(old.with_suffix(".json"), {
                 "accepted": True, "kind": "footwear", "item_id": pumps, "fsig": FP, "body_id": bsig,
                 "body_sha256": wide_sha, "base_model_sha256": wide_sha, "fit_version": version,

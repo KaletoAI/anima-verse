@@ -309,7 +309,11 @@ from app.core.footwear_gates import check_gates
 #: 17 (plan 2026-11-12 fit-sdf-speed-drape phase A): the body field is the three-axis slice-filled solid for every
 #:    fit (Task 1; the footwear push had the y-slices only, ``fill_slices=True``), computed faster (Task 2) and
 #:    cached per body on a body-anchored lattice (Task 5) — the shaft push moves by up to a voxel. One CPU refit.
-FOOTWEAR_FIT_VERSION = 17
+#: 18 (Ruling A35): an outfit body's fit is DERIVED from the accepted base fit (``garment_footwear.derive_compute``:
+#:    the shoe rides the shape's foot joints, raised by its sole, the base fit's cut applied there) instead of fitted
+#:    fresh on the shape's own foot (Kai's ``obf6474c3b``: "Foot too high", 30 mm at the ball). A base fit refits to
+#:    the same geometry (a new fsig); every outfit body's fit is derived again from it. One CPU refit.
+FOOTWEAR_FIT_VERSION = 18
 #: Toe room: the insole arc is the longer foot plus this (metres).
 ALLOW_M = 0.005
 #: Half-width of the Foot -> ToeBase smoothstep around the ball (metres).

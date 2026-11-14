@@ -163,7 +163,8 @@ Expected, derived by hand from the brief:
     (``build_chains``; was: after_base_model) run only dress — the plan
     lists coat as failed (ruling 7a).
 [7] _fit dispatch (Task 3, 0b532d33): garments._fit for kind clothing
-    calls garment_fit.fit_clothing (slots [top], masks body + garment) and
+    calls garment_fit.fit_clothing (slots [top], masks body + garment +
+    opening — the worn-vs-ghost diff, Ruling A35) and
     gates with CLOTHING_GATES; the stub refuses -> _Refused(step "fit", "fit
     refused — stub refusal"). Kind hair is a ValueError before any fit (the
     hair edit chain and its ``fit_hair`` are gone, hair-from-body spec
@@ -764,7 +765,7 @@ def main() -> int:
         def refuse(name):
             def stub(*args, **kw):
                 CALLS.append((name, kw.get("slots"), sorted((kw.get("masks") or {}).keys())))
-                return types.SimpleNamespace(ok=False, reasons=["stub refusal"], metrics={})
+                return types.SimpleNamespace(ok=False, reasons=["stub refusal"], metrics={}, report={}, garment=None)
             return stub
 
         garment_fit.fit_clothing = refuse("fit_clothing")
@@ -793,7 +794,7 @@ def main() -> int:
             check("hair: no edit-chain fit", "no error", "ValueError")
         except ValueError:
             check("hair: no edit-chain fit", "ValueError", "ValueError")
-        check("dispatch", CALLS, [("fit_clothing", ["top"], ["body", "garment"])])
+        check("dispatch", CALLS, [("fit_clothing", ["top"], ["body", "garment", "opening"])])
 
         # --- [8] a failed chain is not retried automatically ------------------------------
         print("[8] cached failure: explicit run / fsig change retry, automatic triggers skip")

@@ -815,7 +815,9 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
     # (``refit_pool``); everything around it reads and publishes here, under the caller's locks.
     from app.core import refit_pool
     result = refit_pool.run(garment_fit.fit_clothing, prepared_bytes, snapshot["unrigged"], snapshot["rigged"],
-                            masks={"body": bald_mask, "garment": ghost_mask}, slots=slots,
+                            masks={"body": bald_mask, "garment": ghost_mask,
+                                   "opening": garment_source.opening_masks(character_name, item_id, fsig)},
+                            slots=slots,
                             limb_source=limb_source)
     limits = garment_fit.CLOTHING_GATES
     gates = {"ok": bool(result.ok), "reasons": list(result.reasons),
@@ -855,6 +857,17 @@ def _fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: str,
                {"limb": fit_attempts.mesh_marks(result.garment, garment_source.limb_marks(limb_marks, limbs))})
     if limbs is not None:
         frame = {**frame, "limbs": limbs}
+    else:
+        # A native fit has no source to hold its sleeves to: they sit on the arms (Ruling A35).
+        sleeve_marks: Dict[str, Any] = {}
+        sleeves = garment_source.check_sleeves(result.garment.positions, snapshot["rigged"], marks=sleeve_marks)
+        if sleeves is not None and not sleeves["ok"]:
+            refuse("fit refused — " + "; ".join(sleeves["reasons"]),
+                   {"ok": False, "reasons": sleeves["reasons"], "sleeves": sleeves},
+                   {"limb": fit_attempts.mesh_marks(result.garment,
+                                                    garment_source.limb_marks(sleeve_marks, sleeves))})
+        if sleeves is not None:
+            frame = {**frame, "sleeves": sleeves}
 
     record: Dict[str, Any] = record_of(True, frame)
     return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], result, record)
@@ -1344,7 +1357,9 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
             limb_source = None
         from app.core import refit_pool
         result = refit_pool.run(garment_fit.fit_clothing, prepared_bytes, body["unrigged"], body["rigged"],
-                                masks={"body": body_mask, "garment": ghost_mask}, slots=slots,
+                                masks={"body": body_mask, "garment": ghost_mask,
+                                       "opening": garment_source.opening_masks(character_name, item_id, fsig)},
+                                slots=slots,
                                 limb_source=limb_source)
         limits = garment_fit.CLOTHING_GATES
         gates = {"ok": bool(result.ok), "reasons": list(result.reasons),

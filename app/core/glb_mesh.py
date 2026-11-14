@@ -63,6 +63,9 @@ class BodyMesh:
     joints: np.ndarray               # (n, 4) int64, zeros when unskinned
     weights: np.ndarray              # (n, 4) float64, zeros when unskinned
     joint_names: List[str] = field(default_factory=list)   # skin 0, in skin order
+    #: ``norm_bone_name(joint) -> (3,)`` bind position of the joint's head (``joint_bind_matrices``' translation, the
+    #: same space as ``positions``); empty without a skin carrying inverse bind matrices.
+    joint_positions: Dict[str, np.ndarray] = field(default_factory=dict)
 
 
 @dataclass
@@ -269,7 +272,16 @@ def body_arrays(glb: bytes) -> BodyMesh:
         W.append(_vertex_attr(parsed, prim, "WEIGHTS_0", n, 4, np.float64))
         base += n
     return BodyMesh(positions=np.concatenate(P), faces=np.concatenate(F), uvs=np.concatenate(U),
-                    joints=np.concatenate(J), weights=np.concatenate(W), joint_names=_skin_joint_names(gltf, 0))
+                    joints=np.concatenate(J), weights=np.concatenate(W), joint_names=_skin_joint_names(gltf, 0),
+                    joint_positions=_joint_heads(parsed))
+
+
+def _joint_heads(parsed: dict) -> Dict[str, np.ndarray]:
+    """``BodyMesh.joint_positions`` of a parsed GLB: ``_bind_frames``' translations, {} when it has none."""
+    try:
+        return {name: matrix[:3, 3].copy() for name, matrix in _bind_frames(parsed).items()}
+    except (ValueError, KeyError, IndexError):
+        return {}
 
 
 _PRIM_FIXED = ("POSITION", "JOINTS_0", "WEIGHTS_0")
@@ -664,8 +676,12 @@ def joint_bind_matrices(glb: bytes) -> Dict[str, np.ndarray]:
     """``norm_bone_name(joint) -> inverse(inverseBindMatrix)`` for the joints of skin 0: each joint's bind frame
     (4x4) in the body's accessor space — the space ``body_arrays`` positions live in. The first joint of a
     normalised name wins. ValueError for a GLB without a skin with inverse bind matrices."""
+    return _bind_frames(_parse(glb, "Body"))
+
+
+def _bind_frames(parsed: dict) -> Dict[str, np.ndarray]:
+    """``joint_bind_matrices`` of a parsed GLB."""
     from app.core.rig_contract import norm_bone_name
-    parsed = _parse(glb, "Body")
     gltf = parsed["gltf"]
     skins = gltf.get("skins") or []
     if not skins or "inverseBindMatrices" not in skins[0]:

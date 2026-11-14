@@ -17,11 +17,11 @@ path is a recorder that counts: ``service.get_image_service``,
 ``garment_store.garment_fsig`` / ``garment_method`` / ``garment_hsig`` come
 from fixed tables.
 
-Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 13 clothing 9 footwear = FOOTWEAR_FIT_VERSION):
+Fixture, character Demo (fsig = 12 hex; FV = FIT_VERSION, hair 13 clothing 10 footwear = FOOTWEAR_FIT_VERSION):
   item   kind      stored fsig  current fsig  base sha  fit_version  method
   hA     hair      aaaaaaaaaaaa same          SHA       (none)       edit_chain
-  cB     clothing  bbbbbbbbbbbb same          SHA       8 (FV - 1)   edit_chain
-  cC     clothing  cccccccccccc same          SHA       9 (= FV)     edit_chain
+  cB     clothing  bbbbbbbbbbbb same          SHA       9 (FV - 1)   edit_chain
+  cC     clothing  cccccccccccc same          SHA       10 (= FV)    edit_chain
   cD     clothing  dddddddddddd eeeeeeeeeeee  SHA       1            edit_chain
   hE     hair      ffffffffffff same          OTHER     (none)       edit_chain
 Each edit-chain item has prepared/{item}_{fsig}.glb (bytes b"P"+item) and its
@@ -36,8 +36,8 @@ record's inputs.prepared_sha256 = sha256 of those bytes.
 [3] Released: sweep([Demo], pause 0) -> {Demo: [cB, hA]}; _fit called for
     cB then hA (the order of [1]), each once; 0 hub calls; 2 assembly
     schedules (one per published fit); exactly 2 log lines "Garment refit
-    Demo/<item>" ending "ok", naming "fit_version 8 -> 9" (cB: a fit of the previous clothing version is outdated) and "None -> 13" (hA);
-    records of hA / cB: accepted, fit_version 13 / 8, base sha SHA; _fit_state
+    Demo/<item>" ending "ok", naming "fit_version 9 -> 10" (cB: a fit of the previous clothing version is outdated) and "None -> 13" (hA);
+    records of hA / cB: accepted, fit_version 13 / 10, base sha SHA; _fit_state
     "accepted"; cC: GLB bytes and record byte-identical, mtime unchanged; cD
     and hE records unchanged. A second sweep -> {} (nothing left).
 [4] HairDeck hair hH (method hairdeck, fsig 999999999999, hsig
@@ -81,7 +81,7 @@ record's inputs.prepared_sha256 = sha256 of those bytes.
 [5c] Ruling R7c on the outfit body: cR's body fit under 777.. on ob0000000a
     accepted on the body bytes "BODY" by fit_version 7 (outdated) with a body
     failure recorded on "BODY" from the served base fit (sha256 of
-    b"BASE:cR") by fit_version 9 (= FV clothing) -> outdated_body_fits = []
+    b"BASE:cR") by fit_version 10 (= FV clothing) -> outdated_body_fits = []
     (the refusal holds, ``garment_store.body_failure``); the base fit's bytes
     change (b"BASE:cR v2") -> another base fit -> listed
     [(cR, clothing, 777.., ob0000000a)].
@@ -142,7 +142,7 @@ def main() -> int:
         SHA, OTHER = "s" * 64, "o" * 64
         FV = garment_fit.FIT_VERSION
         # Footwear follows garment_fit.FOOTWEAR_FIT_VERSION (bumped by the boots plan): read, not pinned.
-        check("FIT_VERSION", FV, {"hair": 13, "clothing": 9, "footwear": garment_fit.FOOTWEAR_FIT_VERSION})
+        check("FIT_VERSION", FV, {"hair": 13, "clothing": 10, "footwear": garment_fit.FOOTWEAR_FIT_VERSION})
         charmod.get_character_dir("Demo", create=True)
         garments_root = gs._root("Demo")
         garments_root.mkdir(parents=True, exist_ok=True)
@@ -211,8 +211,8 @@ def main() -> int:
             gs.write_record(fit.with_suffix(".json"), record)
 
         put("hA", "hair", "a" * 12, SHA, None)
-        put("cB", "clothing", "b" * 12, SHA, 8)
-        put("cC", "clothing", "c" * 12, SHA, 9)
+        put("cB", "clothing", "b" * 12, SHA, FV["clothing"] - 1)
+        put("cC", "clothing", "c" * 12, SHA, FV["clothing"])
         put("cD", "clothing", "d" * 12, SHA, 1)
         put("hE", "hair", "f" * 12, OTHER, None)
 
@@ -256,9 +256,9 @@ def main() -> int:
         check("assembly schedules", SCHEDULED, ["Demo", "Demo"])
         refits = [line for line in lines.lines if line.startswith("Garment refit Demo/")]
         check("log lines", len(refits), 2)
-        check("log cB", "fit_version 8 -> 9: ok" in refits[0] and "Demo/cB" in refits[0], True)
+        check("log cB", f"fit_version {FV['clothing'] - 1} -> {FV['clothing']}: ok" in refits[0] and "Demo/cB" in refits[0], True)
         check("log hA", "fit_version None -> 13: ok" in refits[1] and "Demo/hA" in refits[1], True)
-        for item_id, fsig, version in (("hA", "a" * 12, 13), ("cB", "b" * 12, 9)):
+        for item_id, fsig, version in (("hA", "a" * 12, 13), ("cB", "b" * 12, FV["clothing"])):
             r = json.loads(rec(item_id, fsig))
             check(f"{item_id} record", (r.get("accepted"), r.get("fit_version"), r.get("base_model_sha256")),
                   (True, version, SHA))
@@ -420,7 +420,7 @@ def main() -> int:
                          "body_sha256": "BODY", "fit_version": 7})
         gs.record_body_failure("Demo", "cR", "7" * 12, BODY, error="fit on the outfit body refused — x",
                                body_sha="BODY", base_fit_sha=hashlib.sha256(b"BASE:cR").hexdigest(),
-                               fit_version=9)
+                               fit_version=FV["clothing"])
         check("held on the body", garment_refit.outdated_body_fits("Demo"), [])
         cr_fit.write_bytes(b"BASE:cR v2")
         check("another base fit: listed", garment_refit.outdated_body_fits("Demo"),

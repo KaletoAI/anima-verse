@@ -31,9 +31,10 @@ fsig, side, part}``), its record (the fit's, ``cut`` included, every gate
 of both tables under ``gates`` with ``gating`` True, the cut's stats and per-side diagnostics under
 ``diagnostics.<side>.cut``) and the ``low/`` tier decimated from it. The body sha in the record is the
 UNCUT body's (what ``fit_state`` compares to the stored model). A fit is
-keyed (item, fsig, body id) like a garment fit: two wearers make two fits of ONE source. Footwear never derives
-a body fit from the base fit (``body_fit`` fits the source on the outfit body directly; there is no
-``base_fit_sha256``). A refused fit publishes nothing: the failure is recorded per fsig (the base: the run's
+keyed (item, fsig, body id) like a garment fit: two wearers make two fits of ONE source. An outfit body's fit is
+DERIVED from the accepted base fit of the same fsig (``derive_compute``, Ruling A35: the shoe rides the foot joints
+of the body shape, the base fit's cut is applied there; ``base_fit_sha256`` in its record — a replaced base fit makes
+it stale; without an accepted base fit there is none, ``BASE_FIT_MISSING``). A refused fit publishes nothing: the failure is recorded per fsig (the base: the run's
 ``garments._note_outcome``; an outfit body: ``garment_store.record_body_failure``) and a fit of another body or
 an older ``garment_fit.FIT_VERSION`` is never served in its place (R11 ruling; the fsig holds the fit version).
 """
@@ -318,6 +319,7 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
     folder = footwear_source.source_dir(item_id, ssig)
     prepared = (folder / "prepared.glb").read_bytes()
     insole = gs.read_record(folder / "insole.json")
+    base_fit: Optional[Tuple[bytes, Dict[str, Any], bytes]] = None
     if body:
         if not gs.is_body_id(body):
             raise ValueError(f"not an outfit body id: {str(body)[:40]!r}")
@@ -325,6 +327,10 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         rigged, body_sha = snapshot["rigged"], snapshot["sha"]
         bsig = str((snapshot["meta"].get("outfit_body") or {}).get("base_signature") or "")
         body_id = body
+        # Ruling A35: an outfit body wears the shoe of the plain body's fit (``derive_compute``)
+        base_fit = _accepted_base_fit(character_name, item_id, fsig, profile)
+        if base_fit is None:
+            raise base_body.MissingInput(BASE_FIT_MISSING)
     else:
         base = base_body.current_base(character_name, profile=profile)
         if not base:
@@ -358,12 +364,18 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         if not body:
             parents["base_model_sha256"] = body_sha
             record["base_model_sha256"] = body_sha
+        elif base_fit is not None:
+            parents["base_fit_sha256"] = record["base_fit_sha256"] = hashlib.sha256(base_fit[0]).hexdigest()
         return record
 
     from app.core import fit_attempts
     try:
-        out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap_override(profile, item_id), kind,
-                             item_id, fsig, str(tmp))
+        if base_fit is not None:
+            out = refit_pool.run(derive_compute, base_fit[0], base_fit[1], base_fit[2], insole, rigged, kind,
+                                 item_id, fsig, str(tmp))
+        else:
+            out = refit_pool.run(fit_compute, prepared, insole, rigged, width_cap_override(profile, item_id), kind,
+                                 item_id, fsig, str(tmp))
         if not out["ok"]:
             error = "fit refused — " + "; ".join(out["reasons"])
             # Ruling A31: the refused attempt is kept per (item, body) — with its GLB when the cut ran.
@@ -372,7 +384,9 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
                                record=record_of(attempt, False) if attempt else
                                {"kind": kind, "item_id": item_id, "fsig": fsig, "body_id": body_id,
                                 "body_sha256": body_sha, "fit_version": garment_fit.FIT_VERSION[kind],
-                                **({"base_model_sha256": body_sha} if not body else {})},
+                                **({"base_model_sha256": body_sha} if not body else {}),
+                                **({"base_fit_sha256": hashlib.sha256(base_fit[0]).hexdigest()}
+                                   if base_fit is not None else {})},
                                error=error, gates=out["gates"], glb=tmp if attempt else None,
                                tris=(attempt or {}).get("tris"), marks={"foot": out.get("marks")})
             raise _Refused("fit", error, out["gates"])
@@ -413,6 +427,33 @@ def fit(character_name: str, item_id: str, fsig: str, *, body: str = "", profile
         from app.core import garment_assembly
         garment_assembly.schedule(character_name)
     return path
+
+
+BASE_FIT_MISSING = "The shoe is not fitted on the plain body yet — an outfit body wears the plain body's fit"
+
+
+def _base_fit_sha(character_name: str, item_id: str, fsig: str) -> str:
+    """sha256 of the stored base fit GLB of ``fsig`` ("" without one)."""
+    from app.core import garment_store as gs
+    from app.core.base_body import file_sha256
+    path = gs.garment_path(character_name, item_id, fsig, "fit")
+    return file_sha256(path) if path.is_file() else ""
+
+
+def _accepted_base_fit(character_name: str, item_id: str, fsig: str,
+                       profile: Dict[str, Any]) -> Optional[Tuple[bytes, Dict[str, Any], bytes]]:
+    """``(fit GLB, record, uncut base model)`` of the ACCEPTED base fit of ``fsig`` on the current base model
+    (``fit_state`` "accepted"), else None — what an outfit body's fit derives from (``derive_compute``)."""
+    import hashlib
+    from app.core import base_body, garment_store as gs
+    base = base_body.current_base(character_name, profile=profile)
+    if not base:
+        return None
+    rigged = base_body._snapshot_base_model(character_name, base[0])["rigged"]
+    if fit_state(character_name, item_id, fsig, hashlib.sha256(rigged).hexdigest()) != "accepted":
+        return None
+    path = gs.garment_path(character_name, item_id, fsig, "fit")
+    return path.read_bytes(), gs.read_record(path.with_suffix(".json")), rigged
 
 
 def fit_compute(prepared: bytes, insole: Dict[str, Any], rigged: bytes, cap: Optional[float], kind: str,
@@ -484,6 +525,189 @@ def _attempt_out(att: Dict[str, Any], rigged: bytes, kind: str, item_id: str, fs
     return {"record": result.record, "foot_pose": result.foot_pose, "cut_stats": cut_stats,
             "rest": footwear_rest.rest_measurement(rigged), "glb_sha256": hashlib.sha256(blob).hexdigest(),
             "tris": len(glb_mesh.static_arrays(blob)[1])}
+
+
+def derive_compute(base_fit: bytes, base_record: Dict[str, Any], base_rigged: bytes, insole: Dict[str, Any],
+                   rigged: bytes, kind: str, item_id: str, fsig: str, out: str) -> Dict[str, Any]:
+    """The fit of an OUTFIT body (a body shape) derived from the accepted base fit of the same fsig (Ruling A35) —
+    ``fit_compute``'s contract. A body shape's foot is meshed from its own views (Kai's ``obf6474c3b``: the forefoot
+    30 mm high at the ball against 25.5 / 27.6 mm on the plain body, deep_outside 2.4 %): fitted fresh, the shoe's
+    toe box had to be raised (``fit_height``) and the foot was refused ("Foot too high"). The shoe a character wears
+    is the one fitted on the plain body; on the shape it rides the same bones:
+
+    - every vertex of the base fit's shoe parts is carried by its own skin — joint by joint the shape's bind frame
+      times the inverse of the base's (``J_shape · J_base^-1``), blended with its weights: the shoe keeps its place
+      in each bone's frame (placement, extension, toe counter and contacts are bone-local in the record) — the foot
+      part raised by how much higher the shape's sole sits under its Foot joint than the plain body's
+      (``SOLE_SHIFT``: the mean of the heel and ball contacts of ``footwear_fit.measure_feet``, bind height above
+      the Foot joint; the uncut ``base_rigged`` is the plain body). Kai's ``obf6474c3b`` sits 4.5 / 11.3 mm
+      (left / right) higher on its soles than ``base634402e5``; without it the shoes kept the plain body's
+      ankle-to-sole heights, the right foot floated inside its shoe and the lifts differed by 11.9 mm;
+    - the base fit's ``cut`` (bone-local, ``footwear_cut.cut_description``) is applied to the shape's primitives
+      with the shape's joints — the foot under the shoe is conformed, slimmed and removed there, never the shoe
+      raised — and judged by the cut gates (``_fit_attempt``);
+    - per side the lift onto the shape's floor (``floor − Pf[1, 3]``, ``Pf = B_f · J_f · placement · FrameM^-1``
+      with the extension ``B_f`` about the shape's foot joint), the root lift, the lift asymmetry and the stand
+      floor (the posed shoe's lowest point) are measured again and gated like a fit (``footwear_fit.FIT_GATES``);
+      a boot's ``collar_bind_m`` rides the Leg joint; ``foot_pose`` carries the shape's bind contacts.
+
+    ``{ok: False, reasons, gates}`` (plus ``attempt`` / ``marks`` when the cut gates refused a cut fit, as
+    ``fit_compute``, Ruling A31) or ``{ok: True, record, foot_pose, cut_stats, rest, glb_sha256, tris}``; the record
+    names the base fit (``derived.base_fit_sha256``), its bone names are the shape's own spelling."""
+    import copy
+    import hashlib
+    from types import SimpleNamespace
+    from app.core import footwear_fit, glb_mesh
+    from app.core.footwear_fit import _about, _apply, _frame_matrix, _unit
+    from app.core.rig_contract import norm_bone_name
+    record = copy.deepcopy(base_record)
+    for key in ("accepted", "parents", "fitted_at", "created_at", "low", "refitted", "body_id", "body_sha256",
+                "base_model_sha256", "base_signature", "foot_pose", "fit_version", "method", "kind", "item_id",
+                "fsig", "ssig"):
+        record.pop(key, None)
+    Jb, Js = glb_mesh.joint_bind_matrices(base_fit), glb_mesh.joint_bind_matrices(rigged)
+    moved = {name: Js[name] @ np.linalg.inv(Jb[name]) for name in Jb if name in Js}
+    body = glb_mesh.body_arrays(rigged)
+    # bone names in the record are the body's own (``measure_feet``): the shape's spelling ("mixamorig:LeftFoot")
+    own_names = {norm_bone_name(str(n)): str(n) for n in body.joint_names}
+
+    def own(name: Any) -> str:
+        return own_names.get(norm_bone_name(str(name)), str(name))
+    try:
+        feet_b = footwear_fit.measure_feet(glb_mesh.body_arrays(base_rigged), glb_mesh.joint_bind_matrices(base_rigged))
+        feet_s = footwear_fit.measure_feet(body, Js)
+    except ValueError as e:
+        return {"ok": False, "reasons": [str(e)], "gates": {"ok": False}}
+
+    def sole(fm: Any) -> float:
+        return 0.5 * (float(fm.heel_contact[1]) + float(fm.ball_contact[1])) - float(fm.ankle[1])
+    floor = float(np.asarray(body.positions, np.float64)[:, 1].min())
+    FrameM_inv = np.linalg.inv(_frame_matrix(insole))
+    parts: Dict[str, Dict[str, Any]] = {}
+    lifts: Dict[str, float] = {}
+    lowest: List[float] = []
+    contacts_pose: Dict[str, List[Dict[str, Any]]] = {}
+    for side, rec in (record.get("sides") or {}).items():
+        parts[side] = {}
+        side_parts: Dict[str, Any] = {}
+        for part in PARTS:
+            try:
+                mesh = glb_mesh.garment_arrays(base_fit, node_prefix=node_name(item_id, side, part), exact=True)
+            except ValueError:
+                continue
+            side_parts[part] = mesh
+        if "foot" not in side_parts:
+            return {"ok": False, "reasons": [f"The base fit has no {side} shoe"], "gates": {"ok": False}}
+        fkey, tkey = f"{side}foot", f"{side}toebase"
+        if fkey not in Js or tkey not in Js or fkey not in Jb or tkey not in Jb:
+            return {"ok": False, "reasons": [f"The body has no {side} foot joints"], "gates": {"ok": False}}
+        Jf, Jt = Js[fkey], Js[tkey]
+        shift = np.eye(4)
+        shift[1, 3] = sole(feet_s[side]) - sole(feet_b[side])
+        rec["sole_shift_m"] = float(shift[1, 3])
+        side_moved = {**moved, fkey: shift @ moved[fkey], tkey: shift @ moved[tkey]}
+        # the cut and the placement ride the raised foot part: world -> cut through the shift back
+        rec["placement_bind"] = np.linalg.inv(Jf) @ shift @ Jf @ np.asarray(rec["placement_bind"], np.float64)
+        desc = ((record.get("cut") or {}).get("sides") or {}).get(side)
+        if desc is not None:
+            desc["foot_joint"], desc["toe_joint"] = own(desc["foot_joint"]), own(desc["toe_joint"])
+            desc["frame"] = (np.asarray(desc["frame"], np.float64) @ np.linalg.inv(Jf) @ np.linalg.inv(shift)
+                             @ Jf).tolist()
+        axis = _unit(Jf[:3, :3] @ np.asarray(rec["extension"]["axis_local"], np.float64))
+        Bf = _about(Jf[:3, 3], axis, np.radians(float(rec["extension"]["deg"])))
+        Bt = _about(_apply(Bf, Jt[:3, 3]), axis, np.radians(float(rec["toe_counter"]["deg"]))) @ Bf
+        posed_by = {fkey: Bf, tkey: Bt}
+        side_low = np.inf
+        for part, mesh in side_parts.items():
+            names = [norm_bone_name(n) for n in mesh.joint_names]
+            X = np.asarray(mesh.positions, np.float64)
+            Xh = np.concatenate([X, np.ones((len(X), 1))], axis=1)
+            new, posed = np.zeros_like(X), np.zeros_like(X)
+            J, W = np.asarray(mesh.joints, np.int64), np.asarray(mesh.weights, np.float64)
+            for slot in range(J.shape[1]):
+                for col, name in enumerate(names):
+                    sel = (J[:, slot] == col) & (W[:, slot] > 0)
+                    if not sel.any():
+                        continue
+                    T = side_moved.get(name, np.eye(4))
+                    Y = (Xh[sel] @ T.T)[:, :3]
+                    new[sel] += W[sel, slot, None] * Y
+                    B = posed_by.get(name, np.eye(4))
+                    posed[sel] += W[sel, slot, None] * _apply(B, Y)
+            total = W.sum(1, keepdims=True)
+            new = np.where(total > 0, new / np.maximum(total, 1e-12), X)
+            posed = np.where(total > 0, posed / np.maximum(total, 1e-12), X)
+            side_low = min(side_low, float(posed[:, 1].min()))
+            parts[side][part] = glb_mesh.GarmentMesh(
+                positions=new, normals=mesh.normals, uvs=mesh.uvs, indices=mesh.indices, joints=mesh.joints,
+                weights=mesh.weights, joint_names=list(mesh.joint_names), image=mesh.image, mime=mesh.mime,
+                material=mesh.material, colors=mesh.colors)
+        placement = np.asarray(rec["placement_bind"], np.float64)
+        Pf = Bf @ Jf @ placement @ FrameM_inv
+        placement_base = np.asarray(base_record["sides"][side]["placement_bind"], np.float64)
+        Pf_base = (_about(Jb[fkey][:3, 3], _unit(Jb[fkey][:3, :3] @ np.asarray(rec["extension"]["axis_local"],
+                                                                                np.float64)),
+                          np.radians(float(rec["extension"]["deg"]))) @ Jb[fkey] @ placement_base @ FrameM_inv)
+        lifts[side] = floor - float(Pf[1, 3])
+        rec["lift_m"] = lifts[side]
+        lowest.append(side_low)
+        # contacts: the same point of the shoe frame, posed on this body and taken back to its bind
+        recs, pose = [], []
+        base_b = {fkey: _about(Jb[fkey][:3, 3], _unit(Jb[fkey][:3, :3] @ np.asarray(rec["extension"]["axis_local"],
+                                                                                    np.float64)),
+                               np.radians(float(rec["extension"]["deg"])))}
+        base_b[tkey] = (_about(_apply(base_b[fkey], Jb[tkey][:3, 3]),
+                               _unit(Jb[fkey][:3, :3] @ np.asarray(rec["extension"]["axis_local"], np.float64)),
+                               np.radians(float(rec["toe_counter"]["deg"]))) @ base_b[fkey])
+        for c in rec.get("contacts") or []:
+            key = norm_bone_name(str(c["bone"]))
+            if key not in base_b or key not in Jb:
+                continue
+            posed_base = _apply(base_b[key], _apply(Jb[key], np.asarray(c["pos_local"], np.float64)))
+            pt = _apply(np.linalg.inv(Pf_base), posed_base)
+            pos = _apply(np.linalg.inv(posed_by[key]), _apply(Pf, pt))
+            recs.append({**c, "bone": own(c["bone"]), "pos_local": _apply(np.linalg.inv(Js[key]), pos)})
+            pose.append({"bone": own(c["bone"]), "pos": pos, "role": c.get("role")})
+        rec["contacts"] = recs
+        contacts_pose[side] = pose
+        split = rec.get("split") or {}
+        if split.get("is_boot") and split.get("collar_bind_m") is not None and "shaft" in side_parts:
+            leg = norm_bone_name(side_parts["shaft"].joint_names[2]) if len(side_parts["shaft"].joint_names) > 2 else ""
+            if leg in moved:
+                p = np.array([Jb[leg][0, 3], float(split["collar_bind_m"]), Jb[leg][2, 3]])
+                split["collar_bind_m"] = float(_apply(moved[leg], p)[1])
+    if not lifts:
+        return {"ok": False, "reasons": ["The base fit has no sides"], "gates": {"ok": False}}
+    root_lift = max(lifts.values())
+    record["root_lift_m"] = root_lift
+    metrics = {"lift_asymmetry_mm": abs(lifts.get("left", root_lift) - lifts.get("right", root_lift)) * 1000.0,
+               "stand_floor_mm": (min(lowest) + root_lift - floor) * 1000.0}
+    table = {name: (footwear_fit.FIT_GATES[name][0], footwear_fit.FIT_GATES[name][1], footwear_fit.GATE_LABELS[name])
+             for name in metrics}
+    ok, reasons = footwear_fit.check_gates(metrics, table)
+    gates = record.setdefault("gates", {})
+    for name, value in metrics.items():
+        kind_, limit = footwear_fit.FIT_GATES[name]
+        gates[name] = {"value": value, "limit": list(limit) if isinstance(limit, tuple) else limit,
+                       "ok": footwear_fit.check_gates({name: value}, {name: table[name]})[0], "gating": True}
+    record["derived"] = {"base_fit_sha256": hashlib.sha256(base_fit).hexdigest(),
+                         "base_lifts_m": {s: (base_record.get("sides") or {}).get(s, {}).get("lift_m") for s in lifts}}
+    if not ok:
+        return {"ok": False, "reasons": list(reasons), "gates": {"ok": False, "reasons": list(reasons), **gates}}
+    # the bones' axes and angles are bone-local: the base fit's, unchanged (under the shape's bone names)
+    bones = {own(name): value for name, value in ((base_record.get("foot_pose") or {}).get("bones") or {}).items()}
+    foot_pose = footwear_fit._r({"version": footwear_fit.FOOT_POSE_VERSION, "bones": bones,
+                                 "root_lift_m": root_lift, "contacts": contacts_pose})
+    result = SimpleNamespace(ok=True, reasons=[], record=record, parts=parts, foot_pose=foot_pose)
+    att = _fit_attempt(result, glb_mesh.body_primitive_arrays(rigged), Js)
+    result.record = footwear_fit._r(result.record)
+    if not att["ok"]:
+        refused: Dict[str, Any] = {"ok": False, "reasons": att["reasons"], "gates": att["gates"]}
+        if "replaced" in att:  # Ruling A31: the refused attempt, as ``fit_compute`` keeps it
+            refused["attempt"] = _attempt_out(att, rigged, kind, item_id, fsig, out)
+            refused["marks"] = att.get("marks")
+        return refused
+    return {"ok": True, **_attempt_out(att, rigged, kind, item_id, fsig, out)}
 
 
 def _fit_attempt(result: Any, prims: List["glb_mesh.Prim"], joints: Dict[str, np.ndarray]) -> Dict[str, Any]:
@@ -572,6 +796,9 @@ def fit_state(character_name: str, item_id: str, fsig: str, body_sha: str, *, bo
     if body:
         if not body_sha or record.get("body_id") != body or record.get("body_sha256") != body_sha:
             return "stale"
+        # derived from the plain body's fit (Ruling A35): stale once that fit is replaced
+        if record.get("base_fit_sha256") != _base_fit_sha(character_name, item_id, fsig):
+            return "stale"
     elif not body_sha or record.get("base_model_sha256") != body_sha:
         return "stale"
     if record.get("fit_version") != FIT_VERSION.get(KIND):
@@ -597,8 +824,8 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str, 
     """``garments.body_fit`` of a footwear piece: what an outfit model on the outfit body ``body_id`` (made of the
     body bytes ``body_sha``) carries of it — ``{fit, low, record, fsig, pending, error}``, same shape.
 
-    Fits the item's source on the outfit body directly (``fit`` with ``body``), never from the base fit (there
-    is no ``base_fit_sha256``). ``build`` (the assembly build, never serving) fits a missing / stale / outdated
+    Derives the fit from the accepted base fit of the same fsig (``fit`` with ``body`` -> ``derive_compute``,
+    Ruling A35; ``base_fit_sha256`` in the record and in the failure key). ``build`` (the assembly build, never serving) fits a missing / stale / outdated
     one first, serialised per body; a refusal or failure is recorded per body (``record_body_failure``, the
     fit version as the third key). While the current fsig's fit is not usable and none is pending, the newest
     graftable fit of the item on these body bytes under another fsig (an older fit version: the version is part
@@ -620,7 +847,8 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str, 
 
     def current() -> Tuple[str, Optional[Dict[str, Any]]]:
         state = fit_state(character_name, item_id, fsig, body_sha, body=body_id)
-        failure = (gs.body_failure(character_name, item_id, fsig, body_id, body_sha=body_sha, base_fit_sha="",
+        failure = (gs.body_failure(character_name, item_id, fsig, body_id, body_sha=body_sha,
+                                   base_fit_sha=_base_fit_sha(character_name, item_id, fsig),
                                    fit_version=version) if state != "accepted" else None)
         return state, failure
 
@@ -638,7 +866,8 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str, 
                     logger.warning("Footwear fit %s/%s (%s) on outfit body %s failed: %s", character_name, item_id,
                                    fsig, body_id, error)
                     gs.record_body_failure(character_name, item_id, fsig, body_id, error=error, body_sha=body_sha,
-                                           base_fit_sha="", fit_version=version)
+                                           base_fit_sha=_base_fit_sha(character_name, item_id, fsig),
+                                           fit_version=version)
                 state, failure = current()
     record = gs.read_record(fit_path.with_suffix(".json"))
     # A fit the USER accepted (Ruling A31) serves only while it is the accepted fit by today's state (the shoe
@@ -803,7 +1032,8 @@ def _fit_info(character_name: str, item_id: str, fsig: Optional[str], body_sha: 
     error = None
     if status != "accepted" and fsig:
         if body:
-            failure = gs.body_failure(character_name, item_id, fsig, body, body_sha=body_sha, base_fit_sha="",
+            failure = gs.body_failure(character_name, item_id, fsig, body, body_sha=body_sha,
+                                      base_fit_sha=_base_fit_sha(character_name, item_id, fsig),
                                       fit_version=FIT_VERSION.get(KIND))
         else:
             failure = gs.chain_failure(character_name, item_id, fsig, base_model_sha=body_sha)

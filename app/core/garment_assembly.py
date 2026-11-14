@@ -306,8 +306,8 @@ def _wanted(character_name: str, profile: Optional[Dict[str, Any]] = None, *,
             if item.get("category") != "garment" or kind not in garment_store.GARMENT_VERSION:
                 continue
         if on_body and kind == FOOTWEAR:
-            # Fitted on the outfit body from the shoe source (spec § 5.8):
-            # there is no base fit to derive it from, so none is required.
+            # Derived on the outfit body from the shoe's accepted base fit
+            # (``garment_footwear.derive_compute``, Ruling A35).
             from app.core import garment_footwear
             entry = garment_footwear.body_fit(character_name, item_id, body_id=body_id,
                                               body_sha=str(bare_meta.get("body_sha256") or ""),

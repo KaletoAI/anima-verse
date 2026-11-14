@@ -277,7 +277,7 @@ def outdated_body_fits(character_name: str, *, profile: Optional[Dict[str, Any]]
     bodies that the sweep refits: accepted on the body as it is stored now,
     ``fit_version`` older or missing, made under the fsig of the fit the base
     model serves now (``garment_store.accepted_fit``; footwear: its current
-    fsig — a shoe on a body is refitted from its source by ``_refit_footwear``),
+    fsig — a shoe on a body is derived from its base fit, ``garment_footwear.body_fit``),
     its refit not refused already on these body bytes from the same base fit by
     the current version (``garment_store.body_failure``, Ruling R7c); by
     (item, fsig), then body."""
@@ -343,8 +343,8 @@ def _refit_bodies(character_name: str, profile: Dict[str, Any], base_sha: str) -
             # Serialised with the assembly builds' fits on the same body (``garments.body_fit``).
             with keyed_lock("garment_body_fit", f"{character_name}:{body_id}"):
                 if kind == "footwear":
-                    # The shoe is fitted on the outfit body directly (``garment_footwear.body_fit``, ``build``:
-                    # a stale / older-version fit is made now, CPU only), the base fit is not read.
+                    # The shoe on the outfit body is derived from its base fit (``garment_footwear.body_fit``,
+                    # ``build``: a stale / older-version fit is made now, CPU only — Ruling A35).
                     from app.core import garment_footwear
                     garment_footwear.body_fit(character_name, item_id, body_id=body_id,
                                               body_sha=garments.body_sha256(character_name, body_id),

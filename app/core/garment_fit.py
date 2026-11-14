@@ -160,8 +160,14 @@ SIDE_DEEP_M = 0.03
 #: hair 13 (2026-11-13, strand-hair plan Task 2 — one CPU refit of every HairDeck fit, no hub job): the cards carry
 #: the strip atlas of ``hair_cards`` as base colour (UVs mapped into the card's variant column, the cap on the opaque
 #: patch) and are grafted as glTF MASK with the world cutoff ``base_body.hair_alpha_cutoff``.
+#: clothing 10 (2026-11-14, Ruling A35 — one CPU refit of every clothing fit, no hub job): the limb and trunk frames
+#: of a refit / outfit-body transfer come from the skeleton's bind joints (``FRAME_BASIS``; Kai's jeans on
+#: ``obf6474c3b``: off the left thigh 0.1478 -> 0.0002), the sleeves are re-centred on their arms
+#: (``center_sleeves``) and their cuffs ride the arm (``sleeve_cuffs``; Kira's blazer: the forearm halves no longer
+#: stay at the hips), the garment's inside seen through an opening is left out (``opening_lining``; the blazer's V
+#: stays open), a native fit's sleeves are gated (``garment_source.check_sleeves``).
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 13, "clothing": 9, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 13, "clothing": 10, "footwear": FOOTWEAR_FIT_VERSION}
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).
@@ -407,6 +413,149 @@ def place_by_framing(Pd, body_P, body_mask, garment_mask) -> np.ndarray:
     Q[:, 1] = mb[1] - (py - cb[1]) * sb
     Q[:, 2] = mb[2] + (Pd[:, 2] - md[2]) * (sb / sd)
     return Q
+
+
+# --- openings (Ruling A35) -------------------------------------------------------------------------------------------
+# A ghost view shows the garment without its wearer, so through an OPENING — the V of a blazer, a neckline — it shows
+# the garment's own inside, and the mesher builds that inside as a surface across the opening. Worn, the body stands in
+# front of it: in the worn view the same pixels show skin. Laid on the body by the framing, that surface lies inside
+# the trunk and the push-out carried it onto the skin — it CLOSED the opening (Kira's black blazer ``item_5bfe0cbc``
+# fit 8a64a2576446, 2026-11-14: the V 10.5 / 9.6 / 7.5 cm wide at 0.17 / 0.21 / 0.25 of the body height below its top
+# after the placement, 0.3 / 0.6 / 0.9 cm after the push; the 37 - 41 vertices over the sternum came from 2.6 - 3.0 cm
+# inside the chest, at the midline). The inside is found on the IMAGES and the mesh alone (``opening_lining``), never
+# on the body, so every fit of one prepared mesh leaves out the same faces and keeps one vertex order
+# (``_out_index``). All lengths are pixels of the ghost view (the mesh framed onto its mask like ``place_by_framing``,
+# depth scaled like the height):
+# 1. the opening: the ghost-mask pixels where the worn view differs from the ghost by more than ``OPEN_DIFF``
+#    (``garment_source.opening_masks``), opened by ``OPEN_ERODE_PX``, components of at least ``OPEN_MIN_SHARE`` of the
+#    mask;
+# 2. the mesh's front and back per pixel (its faces sampled ``OPEN_FACE_SAMPLES`` steps per edge, closed over
+#    ``OPEN_GAP_PX``); a vertex is on the front within ``OPEN_FRONT_TOL_PX`` of it, LAYERED when the garment reaches
+#    ``OPEN_LAYER_PX`` behind it too — a surface that is the only layer at its pixel is a back wall (the back panel,
+#    the back of the collar) and is never left out, or the piece would get a hole;
+# 3. a component is an opening when its front lies at least ``OPEN_RECESS_PX`` (median) behind the front in a ring
+#    ``OPEN_RING_PX`` around it — a recessed inside, not a hand the worn view held in front of the garment; its
+#    layered front vertices that lie ``OPEN_STEP_PX`` behind the front within ``OPEN_LOCAL_PX`` are the seeds (the
+#    opening's own rim, where the mask's border pixels fall, is the front itself);
+# 4. the inside reaches past the worn view's opening (worn, the lapels close in over it): from the seeds over the
+#    mesh through layered front vertices within ``OPEN_REACH_PX`` of the opening that lie ``OPEN_STEP_PX`` behind the
+#    front within ``OPEN_LOCAL_PX`` (a recessed surface; the lapel's own fold is not), then ``OPEN_FILL_PASSES``
+#    passes close the pinholes (a layered front vertex there whose neighbours are mostly inside).
+# A face whose three vertices are inside is not fitted: through the opening the body shows, as in the worn view. On
+# the blazer: one opening of 13666 px (recess 24.8 px), 1538 faces left out, the back intact; fitted, the V is
+# 7.0 / 6.1 / 2.6 cm wide at 0.17 / 0.21 / 0.25 (the neckline's top stays closed where the inside is the back of the
+# collar, a single layer).
+OPEN_DIFF = 80
+OPEN_ERODE_PX = 3
+OPEN_MIN_SHARE = 0.002
+OPEN_GAP_PX = 3
+OPEN_FACE_SAMPLES = 4
+OPEN_FRONT_TOL_PX = 12
+OPEN_RING_PX = 6
+OPEN_RECESS_PX = 15
+OPEN_LAYER_PX = 30
+OPEN_REACH_PX = 10
+OPEN_LOCAL_PX = 40
+OPEN_STEP_PX = 10
+OPEN_FILL_PASSES = 6
+
+
+def opening_lining(Pd: np.ndarray, Fd: np.ndarray, opening, garment_mask) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Per vertex of the garment mesh (``Pd`` / ``Fd``, its own coordinates) whether it is the inside seen through
+    an opening (block above) — a face whose three vertices are is left out (``_open_faces``); ``opening`` /
+    ``garment_mask`` in the ghost view's OWN frame (one size, unregistered).
+    ``(lining, report {components: [{pixels, recess_px, dropped}], faces})``."""
+    from scipy import ndimage
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    Pd = np.asarray(Pd, np.float64)
+    F = np.asarray(Fd, np.int64).reshape(-1, 3)
+    report: Dict[str, Any] = {"components": [], "faces": 0}
+    lining = np.zeros(len(Pd), bool)
+    gm = _mask(garment_mask)
+    op = _mask(opening)
+    if op.shape != gm.shape or not (op & gm).any() or len(Pd) == 0:
+        return lining, report
+    op = ndimage.binary_opening(op & gm, iterations=OPEN_ERODE_PX) & gm
+    labels, n = ndimage.label(op)
+    sd, cd, md = _frame(Pd, gm)
+    h, w = gm.shape
+    ix = np.clip(np.round(cd[0] + (Pd[:, 0] - md[0]) / sd).astype(int), 0, w - 1)
+    iy = np.clip(np.round(cd[1] - (Pd[:, 1] - md[1]) / sd).astype(int), 0, h - 1)
+    depth = (Pd[:, 2] - md[2]) / sd                  # pixels toward the viewer
+    front, back = _depth_images(np.stack([cd[0] + (Pd[:, 0] - md[0]) / sd, cd[1] - (Pd[:, 1] - md[1]) / sd,
+                                          depth], 1), F, (h, w))
+    # front-most there AND with garment behind it: a surface that is the only layer at its pixel is a back wall
+    # (the back panel, the back of the collar), which stays — leaving it out would leave a hole through the piece.
+    on_front = depth >= front[iy, ix] - OPEN_FRONT_TOL_PX
+    layered = on_front & (depth - back[iy, ix] >= OPEN_LAYER_PX)
+    # recessed: at least OPEN_STEP_PX behind the front within OPEN_LOCAL_PX — the opening's own rim (the lapel edge
+    # the mask's border pixels fall on) is the front itself and never the inside
+    recessed = ndimage.maximum_filter(front, size=2 * OPEN_LOCAL_PX + 1)[iy, ix] - depth >= OPEN_STEP_PX
+    seeds = np.zeros(len(Pd), bool)
+    accepted = np.zeros((h, w), bool)
+    sizes = np.bincount(labels.ravel(), minlength=n + 1)
+    for c in range(1, n + 1):
+        if sizes[c] < OPEN_MIN_SHARE * gm.sum():
+            continue
+        comp = labels == c
+        ring = ndimage.binary_dilation(comp, iterations=OPEN_RING_PX) & ~op & gm
+        inside = on_front & comp[iy, ix]
+        around = on_front & ring[iy, ix]
+        if inside.sum() < 3 or around.sum() < 3:
+            continue
+        recess = float(np.median(depth[around]) - np.median(depth[inside]))
+        dropped = recess >= OPEN_RECESS_PX
+        report["components"].append({"pixels": int(sizes[c]), "recess_px": round(recess, 1),
+                                     "dropped": bool(dropped)})
+        if dropped:
+            seeds |= inside & layered & recessed
+            accepted |= comp
+    if not seeds.any():
+        return lining, report
+    # Grow over the mesh: the inside reaches past the worn view's opening, under the lapels that close in when
+    # worn — front-most there, recessed behind the front within OPEN_LOCAL_PX, connected to a seed.
+    region = ndimage.binary_dilation(accepted, iterations=OPEN_REACH_PX)[iy, ix] & layered
+    grow = seeds | (region & recessed)
+    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    E = E[grow[E].all(1)]
+    graph = coo_matrix((np.ones(len(E)), (E[:, 0], E[:, 1])), shape=(len(Pd), len(Pd)))
+    _, comp_of = connected_components(graph, directed=False)
+    lining = grow & np.isin(comp_of, np.unique(comp_of[seeds]))
+    # Close the pinholes the depth test leaves in the inside (a front vertex of the region whose neighbours are
+    # mostly inside is inside).
+    A = (_adjacency(F, len(Pd))[0] > 0).astype(np.float64)
+    half = 0.5 * np.asarray(A.sum(1)).ravel()
+    for _ in range(OPEN_FILL_PASSES):
+        lining = lining | (region & (A @ lining.astype(np.float64) >= np.maximum(half, 0.5)))
+    report["faces"] = int(lining[F].all(1).sum())
+    return lining, report
+
+
+def _depth_images(S: np.ndarray, F: np.ndarray, shape: Tuple[int, int]) -> Tuple[np.ndarray, np.ndarray]:
+    """``(front, back)``: per pixel the largest / smallest depth of the faces ``F`` over the pixel-space points
+    ``S`` (x px, y px, depth px), sampled ``OPEN_FACE_SAMPLES`` steps per edge and closed over ``OPEN_GAP_PX``."""
+    from scipy import ndimage
+    h, w = shape
+    t = np.linspace(0.0, 1.0, OPEN_FACE_SAMPLES + 1)
+    uv = np.array([(a, b) for a in t for b in t if a + b <= 1.0 + 1e-9])
+    A, B, C = S[F[:, 0]], S[F[:, 1]], S[F[:, 2]]
+    pts = (A[:, None] * (1.0 - uv.sum(1))[None, :, None] + B[:, None] * uv[None, :, 0, None]
+           + C[:, None] * uv[None, :, 1, None]).reshape(-1, 3)
+    sx = np.clip(np.round(pts[:, 0]).astype(int), 0, w - 1)
+    sy = np.clip(np.round(pts[:, 1]).astype(int), 0, h - 1)
+    front, back = np.full((h, w), -np.inf), np.full((h, w), np.inf)
+    np.maximum.at(front, (sy, sx), pts[:, 2])
+    np.minimum.at(back, (sy, sx), pts[:, 2])
+    return (ndimage.maximum_filter(front, size=OPEN_GAP_PX), ndimage.minimum_filter(back, size=OPEN_GAP_PX))
+
+
+def _open_faces(F: np.ndarray, lining: Optional[np.ndarray]) -> np.ndarray:
+    """Per face of ``F`` (indices into ``lining``'s vertices) whether it stays: not all three vertices lining."""
+    F = np.asarray(F, np.int64).reshape(-1, 3)
+    if lining is None or not len(F):
+        return np.ones(len(F), bool)
+    return ~np.asarray(lining, bool)[F].all(1)
 
 
 # --- body SDF / push-out ---------------------------------------------------------------------------------------------
@@ -882,6 +1031,186 @@ def sleeve_vertices(Q, body_P, parts, faces, upper) -> np.ndarray:
     return (near > 0) & np.isin(labels, seeds)
 
 
+#: How far (metres, along the garment mesh) a sleeve's cuff may reach beyond its arm-nearest part (``sleeve_cuffs``).
+SLEEVE_CUFF_REACH_M = 0.10
+
+
+def sleeve_cuffs(Q, body_P, parts, faces, upper, sleeve, k: float) -> np.ndarray:
+    """Per garment vertex the arm part (1 / 2, ``_donor_parts``; 0 none) of a sleeve's CUFF: a vertex below the
+    waist that is not a sleeve (``sleeve_vertices``) but lies within ``SLEEVE_CUFF_REACH_M`` (``Q`` in unrigged
+    units, ``k`` to metres) of that arm's sleeve along the garment mesh, through such vertices only. The ghost may
+    draw the sleeves nearer the trunk than the body's arms hang: placed on the A-pose body, the cuff hangs beside the
+    thigh, its nearest skin is the leg, ``sleeve_vertices`` stops where the arm-nearest part ends and the cuff took
+    the thigh's weights — in the T-pose it stayed at the hips, a web of fabric from the sleeve to the hip (Kira's
+    black blazer ``item_5bfe0cbc`` fit 8a64a2576446, 2026-11-14: 1143 cuff vertices beside 10040 sleeve vertices,
+    5058 of those below the waist). The cuff takes its weights from that arm's skin only. Within the reach,
+    nothing but the cuff is met on that fit (the cuff tubes are their own surfaces); a skirt panel fused to a
+    hanging cuff would ride the arm for at most the reach."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import dijkstra
+    from scipy.spatial import cKDTree
+    Q = np.asarray(Q, np.float64)
+    n = len(Q)
+    out = np.zeros(n, np.int64)
+    sleeve = np.asarray(sleeve, bool)
+    cand = ~np.asarray(upper, bool) & ~sleeve
+    if not cand.any() or not sleeve.any():
+        return out
+    near = np.asarray(parts)[cKDTree(np.asarray(body_P, np.float64)).query(Q, workers=fit_kernels.threads())[1]]
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    length = np.linalg.norm(Q[E[:, 0]] - Q[E[:, 1]], axis=1) * float(k)
+    best = np.full(n, np.inf)
+    for side in (1, 2):
+        seeds = np.nonzero(sleeve & (near == side))[0]
+        if not len(seeds):
+            continue
+        ok = (sleeve & (near == side)) | cand
+        m = ok[E[:, 0]] & ok[E[:, 1]]
+        graph = coo_matrix((np.maximum(length[m], 1e-9), (E[m, 0], E[m, 1])), shape=(n, n)).tocsr()
+        dist = dijkstra(graph, directed=False, indices=seeds, min_only=True, limit=SLEEVE_CUFF_REACH_M)
+        take = cand & (dist <= SLEEVE_CUFF_REACH_M) & (dist < best)
+        out[take], best[take] = side, dist[take]
+    return out
+
+
+# --- sleeve centring (Ruling A35) --------------------------------------------------------------------------------------
+# A sleeve is re-centred on its arm in the rigged space, before the clearance pass. The mesher may draw a sleeve off
+# its arm: Kai's leather jacket came from two views that disagree on the sleeves' reach, and the mesher bent the
+# RIGHT sleeve back — its forearm ring centred 4.9 cm behind the forearm, 21 % of the forearm sleeve more than 4 cm
+# off the arm (and off the skin), the forearm's front out of the sleeve; the left sleeve sat within 1 cm. Per
+# station (``SLEEVE_STATION_M`` along the arm chain from the shoulder joint, ``limb_frames``) the centre of the
+# sleeve ring (the vertices the transfer gave mostly to that arm, the mid-range of their 2nd - 98th percentile in the
+# plane across the arm) is compared with the centre of the ARM'S OWN cross-section there (the body vertices
+# dominated by that arm's bones) — not the joint line, which stands 1 - 2 cm above the skin centre on the generated
+# arms (centred on it a sleeve's top would be pushed into the arm). Whatever the offset has beyond
+# ``SLEEVE_SLACK_M`` (the drape of a loose sleeve in the T-pose keeps its place) is taken back; a station without a
+# closed ring (fewer than ``SLEEVE_RING_MIN`` vertices, or fewer than ``SLEEVE_RING_SECTORS`` of 8 directions around
+# its own centre occupied) takes its neighbours' correction. The correction ramps in from the shoulder joint to the
+# middle of the upper arm (``SLEEVE_RAMP_SHARE``: the armhole stays where the trunk holds it), scales with the
+# vertex's share of the arm in the transfer's weights (the blend into the shoulder) and is smoothed over the mesh
+# (``SLEEVE_SMOOTH_PASSES``). The gate behind it is ``garment_source.check_sleeves``.
+SLEEVE_STATION_M = 0.02
+SLEEVE_SLACK_M = 0.01
+SLEEVE_RING_MIN = 12
+SLEEVE_RING_SECTORS = 6
+SLEEVE_RAMP_SHARE = 0.5
+SLEEVE_SMOOTH_PASSES = 10
+SLEEVE_ARM_SHARE = 0.5
+
+
+def _arm_columns(joint_names, side: str) -> List[int]:
+    """Skin columns of one arm chain (``_donor_parts``' rule: the side's bones naming an arm or a hand)."""
+    from app.core.rig_contract import norm_bone_name
+    return [i for i, n in enumerate(joint_names)
+            if norm_bone_name(n).startswith(side) and any(t in norm_bone_name(n) for t in ("arm", "hand"))]
+
+
+def _chain_coords(Y: np.ndarray, pts: np.ndarray, reference) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """``(s, seg, a, b)`` of the points ``Y`` against the polyline ``pts``: the arc length along it of the nearest
+    point (the first segment extended backwards, the last forwards), its segment and the two coordinates across
+    that segment (``_segment_frame`` axes v, w)."""
+    nseg = len(pts) - 1
+    frames = [_segment_frame(pts[i], pts[i + 1], reference) for i in range(nseg)]
+    cum = np.concatenate([[0.0], np.cumsum([f[3] for f in frames])])
+    best = np.full(len(Y), np.inf)
+    s = np.zeros(len(Y))
+    seg = np.zeros(len(Y), np.int64)
+    a = np.zeros(len(Y))
+    b = np.zeros(len(Y))
+    for i, (u, v, w, length) in enumerate(frames):
+        rel = Y - pts[i]
+        t = rel @ u
+        tc = np.clip(t, -np.inf if i == 0 else 0.0, np.inf if i == nseg - 1 else length)
+        radial = rel - tc[:, None] * u
+        d = np.linalg.norm(radial, axis=1)
+        m = d < best
+        best[m], s[m], seg[m] = d[m], cum[i] + tc[m], i
+        a[m], b[m] = (rel[m] - t[m, None] * u) @ v, (rel[m] - t[m, None] * u) @ w
+    return s, seg, a, b
+
+
+def _ring_centre(a: np.ndarray, b: np.ndarray, closed: bool) -> Optional[np.ndarray]:
+    """The mid-range centre of one station's ring (2nd - 98th percentile); None for too few points or, with
+    ``closed``, a ring open on more than ``8 - SLEEVE_RING_SECTORS`` of 8 directions around that centre."""
+    if len(a) < SLEEVE_RING_MIN:
+        return None
+    c = np.array([0.5 * (np.percentile(a, 2) + np.percentile(a, 98)), 0.5 * (np.percentile(b, 2) + np.percentile(b, 98))])
+    if closed:
+        sectors = ((np.arctan2(b - c[1], a - c[0]) + np.pi) / (2 * np.pi) * 8).astype(int) % 8
+        if len(np.unique(sectors)) < SLEEVE_RING_SECTORS:
+            return None
+    return c
+
+
+def center_sleeves(X: np.ndarray, Wg: np.ndarray, body: BodyMesh, *, adjacency=None
+                   ) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Re-centre the sleeves of ``X`` (rigged space; ``Wg`` the transfer's weights over ``body``'s joints) on the
+    arms of the rigged ``body`` (block above). ``(X, report {side: {stations, offset_max_m, shift_max_m}})``;
+    an arm without sleeve vertices is left alone and not reported."""
+    X = np.asarray(X, np.float64)
+    P = np.asarray(body.positions, np.float64)
+    Wb = dense_weights(body)
+    frames = limb_frames(body)
+    D = np.zeros_like(X)
+    report: Dict[str, Any] = {}
+    for side in ("left", "right"):
+        frame = frames.get(f"{side}_arm")
+        cols = _arm_columns(body.joint_names, side)
+        if frame is None or not cols:
+            continue
+        share = Wg[:, cols].sum(1) if Wg.shape[1] > max(cols) else np.zeros(len(X))
+        rows = np.nonzero(share > 1e-4)[0]
+        ring = share[rows] > SLEEVE_ARM_SHARE
+        if int(ring.sum()) < SLEEVE_RING_MIN:
+            continue
+        pts = np.asarray(frame["points"], np.float64)
+        ref = frame["reference"]
+        s, seg, a, b = _chain_coords(X[rows], pts, ref)
+        arm = Wb[:, cols].sum(1) > SLEEVE_ARM_SHARE
+        sa, _sega, aa, ba = _chain_coords(P[arm], pts, ref)
+        top = float(max(s[ring].max(), 0.0))
+        n = int(top // SLEEVE_STATION_M) + 1
+        k = np.clip((s // SLEEVE_STATION_M).astype(int), -1, n - 1)
+        ka = (sa // SLEEVE_STATION_M).astype(int)
+        excess = np.full((n, 2), np.nan)
+        offset_max = 0.0
+        for i in range(n):
+            m = ring & (k == i)
+            c = _ring_centre(a[m], b[m], True)
+            ma = ka == i
+            ca = _ring_centre(aa[ma], ba[ma], False)
+            if c is None or ca is None:
+                continue
+            d = c - ca
+            norm = float(np.linalg.norm(d))
+            offset_max = max(offset_max, norm)
+            excess[i] = d * max(0.0, 1.0 - SLEEVE_SLACK_M / norm) if norm > 0 else 0.0
+        ok = ~np.isnan(excess[:, 0])
+        if not ok.any():
+            continue
+        idx = np.arange(n)
+        excess = np.stack([np.interp(idx, idx[ok], excess[ok, j]) for j in range(2)], 1)
+        padded = np.concatenate([excess[:1], excess, excess[-1:]])
+        excess = 0.25 * padded[:-2] + 0.5 * padded[1:-1] + 0.25 * padded[2:]
+        upper = float(np.linalg.norm(pts[1] - pts[0]))
+        ramp = np.clip(s / max(SLEEVE_RAMP_SHARE * upper, 1e-6), 0.0, 1.0)
+        e = excess[np.clip(k, 0, n - 1)]
+        segframes = [_segment_frame(pts[i], pts[i + 1], ref) for i in range(len(pts) - 1)]
+        V = np.stack([segframes[j][1] for j in seg])
+        Wv = np.stack([segframes[j][2] for j in seg])
+        D[rows] -= ((ramp * share[rows])[:, None] * (e[:, :1] * V + e[:, 1:] * Wv))
+        report[side] = {"stations": int(ok.sum()), "offset_max_m": round(offset_max, 4)}
+    if adjacency is not None and SLEEVE_SMOOTH_PASSES > 0 and np.any(D):
+        D = _smooth(D, adjacency, SLEEVE_SMOOTH_PASSES)
+    shift = np.linalg.norm(D, axis=1)
+    for side in report:
+        cols = _arm_columns(body.joint_names, side)
+        on = Wg[:, cols].sum(1) > SLEEVE_ARM_SHARE
+        report[side]["shift_max_m"] = round(float(shift[on].max()) if on.any() else 0.0, 4)
+    return X + D, report
+
+
 def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces, k: float, split_y: float,
                      idw_k: int = TRANSFER_IDW_K, clear_m: float = CLEAR_M, vox_m: float = VOX_M,
                      margin_m: float = SDF_MARGIN_M,
@@ -897,7 +1226,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
        body weights of the ELIGIBLE unrigged body vertices around it — the same rule as ``transfer``: at or above
        ``split_y`` only forearm/hand donors are excluded (a sleeve rides the upper arm through the A -> T motion),
        below it every arm/shoulder bone (a skirt next to a hanging hand stays on the hips) — except on the SLEEVES
-       (``sleeve_vertices``), which take the whole arm chain at any height. The blend is taken within
+       (``sleeve_vertices``), which take the whole arm chain at any height, and their CUFFS (``sleeve_cuffs``,
+       Ruling A35), which take their own arm's skin only. The blend is taken within
        ONE PART (``_donor_parts``: each arm chain, the rest) — the part whose skin is nearest to the garment vertex —
        so a sleeve hanging next to the torso is a sleeve and not a noisy mix of arm and torso.
     3. Linear blend skinning of ``k * Q`` with those weights (the body itself is skinned that way). A vertex far
@@ -905,6 +1235,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
        the skin under it — no tear between neighbours with different donors, nothing to smooth over. The fabric
        that bridged the closed armpit of the A-pose spans the open one in T-pose; ``relax_stretched`` spreads that
        stretch over its band.
+    3b. The sleeves are re-centred on their arms (``center_sleeves``, Ruling A35) — after the limb alignment of a
+       refit, so a sleeve the source left off its arm is taken back too.
     4. The clearance pass on the rigged body (SDF in metres, ``rigged_iterations`` iterations, smoothed in the
        first ``RIGGED_SMOOTH_UNTIL``), side-kept (``push_kept``); a vertex the skinning buried on the wrong side
        starts on the nearest body surface of its own side (``_transfer_sides``, ``_side_projection``).
@@ -952,25 +1284,26 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         return out
     upper = Q[:, 1] >= split_y
     sleeve = sleeve_vertices(Q, Pb, parts, faces, upper)
+    cuff = sleeve_cuffs(Q, Pb, parts, faces, upper, sleeve, k)
     Wg = np.zeros((len(Q), Wb.shape[1]))
-    lower, top = ~upper & ~sleeve, upper & ~sleeve
+    lower, top = ~upper & ~sleeve & (cuff == 0), upper & ~sleeve
     if lower.any():
         Wg[lower] = blend(eligible(_ARM_TOKENS), np.nonzero(lower)[0])
     if top.any():
         Wg[top] = blend(eligible(_LOWER_ARM_TOKENS), np.nonzero(top)[0])
     if sleeve.any():
         Wg[sleeve] = blend(np.arange(len(Pb)), np.nonzero(sleeve)[0])
+    for side in (1, 2):
+        if (cuff == side).any():
+            Wg[cuff == side] = blend(np.nonzero(parts == side)[0], np.nonzero(cuff == side)[0])
     X = bones.apply(Q * float(k), Wg)
     relaxed = relax_stretched(X, Q * float(k), faces, adjacency)
     limb_report = None
     if limbs is not None:
-        target = limb_frames(body_rigged)
-        if "torso" in limbs["frames"]:
-            torso = torso_frame(body_rigged)
-            if torso is not None:
-                target["torso"] = torso
+        target = _frames_like(body_rigged, limbs["frames"])
         X, limb_report = align_limbs(X, limbs["x0"], limbs["w0"], limbs["names0"], limbs["frames"], target,
                                      kinds=limbs.get("kinds", ("arm", "leg")), adjacency=adjacency)
+    X, sleeve_report = center_sleeves(X, Wg, body_rigged, adjacency=adjacency)
 
     lo, hi = X.min(0) - margin_m, X.max(0) + margin_m
     sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
@@ -991,6 +1324,7 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "sleeve_share": float((Wg[:, arm_cols].sum(1) > 0.5).mean()) if arm_cols and len(Wg) else 0.0,
         "sleeve_vertices": int(sleeve.sum()),
         "sleeve_below_waist": int((sleeve & ~upper).sum()),
+        "sleeve_cuff_vertices": int((cuff > 0).sum()),
         "relaxed_vertices": int(relaxed),
         "rigged_push_max_m": float(rigged_push.max()) if len(rigged_push) else 0.0,
         "rigged_push_p95_m": float(np.percentile(rigged_push, 95)) if len(rigged_push) else 0.0,
@@ -1000,6 +1334,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     }
     if limb_report is not None:
         report["limbs"] = limb_report
+    if sleeve_report:
+        report["sleeves"] = sleeve_report
     return X, report
 
 
@@ -1009,8 +1345,15 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
 # A piece made on one base and fitted onto another keeps its torso by the silhouette registration; its sleeves and
 # trouser legs follow the TARGET limbs: every garment vertex the SOURCE fit skinned to a limb bone is re-expressed
 # from the source base's limb frames into the target base's (``align_limbs``) before the rigged clearance pass.
-# Chain = proximal joint -> middle joint -> distal joint (-> tip): the joint points are the mean of the body vertices
-# carrying both neighbouring bones above ``LIMB_JOINT_SHARED`` (the bind arrays carry no joint positions); a
+# Chain = proximal joint -> middle joint -> distal joint (-> tip): the joint points are the skeleton's BIND joints
+# (``BodyMesh.joint_positions``, the heads of Arm / ForeArm / Hand, UpLeg / Leg / Foot — ``FRAME_BASIS`` "joints",
+# Ruling A35); a body without them (or a source frame of the older basis, ``_frames_like``) takes the mean of the
+# body vertices carrying both neighbouring bones above ``LIMB_JOINT_SHARED`` (basis "weights"). The weight ring is
+# where the rigger's blend lies, not the joint: on Kai's plain body ``base634402e5`` the hip ring of the leg sits at
+# x 0.043 while the LeftUpLeg joint is at 0.091 (the blend reaches into the groin), its thigh axis tilted 8.6 / 9.1
+# deg (L / R) against 0.4 / 3.4 on the body shape ``obf6474c3b``, whose ring sits at the joint — the transfer
+# re-expressed his jeans from a tilted, thin thigh into a straight, thick one and flared the upper thigh 4 - 5 cm
+# (off the thigh 0.1478, source 0.0); from the joints the same jeans sit 0.0002 off. A
 # segment's radius is the median distance of its bone's dominant vertices to it. Per bone: the vertex's distance
 # ALONG the chain from the proximal joint is kept in metres (the piece keeps its own length — user ruling
 # 2026-11-10: the length is irrelevant, it must sit on the body) and clamped to the chain's end (hand tip, ankle);
@@ -1047,9 +1390,35 @@ def segment_distance(X: np.ndarray, a, b) -> np.ndarray:
     return np.linalg.norm(X - (a + t[:, None] * d), axis=1)
 
 
-def limb_frames(body: BodyMesh) -> Dict[str, Dict[str, Any]]:
+#: Where the chain points of the limb and trunk frames come from (block above): "joints" (the bind joints) or
+#: "weights" (the weight-ring centroids — the fallback, and every frame stored before Ruling A35).
+FRAME_BASIS = "joints"
+
+
+def _weight_joint(W: np.ndarray, P: np.ndarray, a: int, b: int) -> Optional[np.ndarray]:
+    """The weight-ring centroid of the joint between bones ``a`` and ``b`` (skin columns): the body vertices
+    carrying both above ``LIMB_JOINT_SHARED``; None for fewer than 3."""
+    shared = (W[:, a] > LIMB_JOINT_SHARED) & (W[:, b] > LIMB_JOINT_SHARED)
+    return P[shared].mean(0) if shared.sum() >= 3 else None
+
+
+def _chain_points(body: BodyMesh, W: np.ndarray, P: np.ndarray, pairs, keys, basis: str
+                  ) -> Tuple[Optional[List[np.ndarray]], str]:
+    """The points of the joints ``pairs`` (skin columns of the two neighbouring bones) whose child bones are
+    ``keys`` (normalised names): with ``basis`` "joints" and every key among ``body.joint_positions`` the bind
+    joints, else the weight rings (None when one is missing). ``(points, basis used)``."""
+    joints = getattr(body, "joint_positions", None) or {}
+    if basis == "joints" and all(k in joints for k in keys):
+        return [np.asarray(joints[k], np.float64) for k in keys], "joints"
+    points = [_weight_joint(W, P, a, b) for a, b in pairs]
+    return (None if any(p is None for p in points) else points), "weights"
+
+
+def limb_frames(body: BodyMesh, basis: str = FRAME_BASIS) -> Dict[str, Dict[str, Any]]:
     """The limb chains of a rigged body (block above): ``{chain: {points [[x, y, z], ...], radii [...], bones {bone
-    key: segment}, reference, kind}}`` (JSON-ready). A chain whose joints cannot be found is missing."""
+    key: segment}, reference, kind, basis}}`` (JSON-ready). ``basis`` (``FRAME_BASIS``): the chain points from the
+    bind joints ("joints"; a chain whose joints the body does not carry falls back) or the weight rings
+    ("weights"); ``basis`` in the result is the one used. A chain whose joints cannot be found is missing."""
     W = dense_weights(body)
     P = np.asarray(body.positions, np.float64)
     dominant = W.argmax(1)
@@ -1061,13 +1430,9 @@ def limb_frames(body: BodyMesh) -> Dict[str, Dict[str, Any]]:
                    for pair in spec["joints"] for bone in pair}
         except KeyError:
             continue
-        points = []
-        for a, b in spec["joints"]:
-            shared = (W[:, idx[a]] > LIMB_JOINT_SHARED) & (W[:, idx[b]] > LIMB_JOINT_SHARED)
-            if shared.sum() < 3:
-                break
-            points.append(P[shared].mean(0))
-        if len(points) < len(spec["joints"]):
+        points, used = _chain_points(body, W, P, [(idx[a], idx[b]) for a, b in spec["joints"]],
+                                     [_limb_key(side, b) for _a, b in spec["joints"]], basis)
+        if points is None:
             continue
         if spec["tip"]:
             tip = P[dominant == idx[spec["tip"]]]
@@ -1086,8 +1451,30 @@ def limb_frames(body: BodyMesh) -> Dict[str, Dict[str, Any]]:
                          else (radii[-1] if radii else 0.0))
         out[name] = {"points": [[float(c) for c in p] for p in points], "radii": radii,
                      "bones": {_limb_key(side, b): min(seg, nseg - 1) for b, seg in spec["bones"].items()},
-                     "reference": list(spec["reference"]), "kind": spec["kind"]}
+                     "reference": list(spec["reference"]), "kind": spec["kind"], "basis": used}
     return out
+
+
+def frame_basis(frame: Dict[str, Any]) -> str:
+    """The basis a stored frame was made with (``limb_frames`` / ``torso_frame``): one without the key predates
+    Ruling A35 and is "weights"."""
+    return str(frame.get("basis") or "weights")
+
+
+def _frames_like(body: BodyMesh, source: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """This body's frames for the source frames ``source`` (``align_limbs``), each made with the SAME basis as
+    the source's chain — a limb source stored before Ruling A35 (weight rings, ``garment_source.limb_source``)
+    is re-expressed between weight-ring frames, as it was made."""
+    target: Dict[str, Dict[str, Any]] = {}
+    limbs = {name: frame for name, frame in source.items() if name != "torso"}
+    for basis in sorted({frame_basis(f) for f in limbs.values()}):
+        target.update({name: frame for name, frame in limb_frames(body, basis=basis).items()
+                       if name in limbs and frame_basis(limbs[name]) == basis})
+    if "torso" in source:
+        torso = torso_frame(body, basis=frame_basis(source["torso"]))
+        if torso is not None:
+            target["torso"] = torso
+    return target
 
 
 def _segment_frame(a, b, reference) -> Tuple[np.ndarray, np.ndarray, np.ndarray, float]:
@@ -1224,19 +1611,27 @@ TORSO_V = (-0.6, 1.4, 0.02)
 TORSO_THETA = 36
 
 
-def torso_frame(body: BodyMesh) -> Optional[Dict[str, Any]]:
+def torso_frame(body: BodyMesh, basis: str = FRAME_BASIS) -> Optional[Dict[str, Any]]:
     """The trunk of a rigged body (block above): ``{points [[x, y, z], ...] (hip, joints up to the neck),
-    hip_y, neck_y, radius [[...] per v bin] (TORSO_THETA per bin), kind "torso"}``; None without the joints."""
+    hip_y, neck_y, radius [[...] per v bin] (TORSO_THETA per bin), kind "torso", basis}``; None without the
+    joints. ``basis`` like ``limb_frames``: the points are the bind joints (the hip = the mean of both UpLeg joints,
+    then Spine / Spine1 / Spine2 / Neck) or, falling back per point, the weight rings between the neighbouring
+    bones. On Kai's plain body the weight ring of Spine stood 7.7 cm in front of the body shape's at the lower back
+    (z +0.035 against -0.042), so ``map_torso`` read the clearance of his jacket in mismatched directions."""
     from app.core.rig_contract import norm_bone_name
     W = dense_weights(body)
     P = np.asarray(body.positions, np.float64)
     names = [norm_bone_name(n) for n in body.joint_names]
+    joints = getattr(body, "joint_positions", None) or {}
+    used = {"joints" if basis == "joints" else "weights"}
 
     def joint(a: str, b: str) -> Optional[np.ndarray]:
         if a not in names or b not in names:
             return None
-        shared = (W[:, names.index(a)] > LIMB_JOINT_SHARED) & (W[:, names.index(b)] > LIMB_JOINT_SHARED)
-        return P[shared].mean(0) if shared.sum() >= 3 else None
+        if basis == "joints" and b in joints:
+            return np.asarray(joints[b], np.float64)
+        used.add("weights")
+        return _weight_joint(W, P, names.index(a), names.index(b))
 
     legs = [joint("hips", "leftupleg"), joint("hips", "rightupleg")]
     chain = [joint("hips", "spine"), joint("spine", "spine1"), joint("spine1", "spine2"), joint("spine2", "neck")]
@@ -1248,7 +1643,7 @@ def torso_frame(body: BodyMesh) -> Optional[Dict[str, Any]]:
     trunk = np.isin(W.argmax(1), [i for i, n in enumerate(names) if trunk_bone(n)])
     T = P[trunk]
     frame = {"points": [[float(c) for c in p] for p in points], "hip_y": float(hip[1]), "neck_y": float(neck[1]),
-             "kind": "torso"}
+             "kind": "torso", "basis": "weights" if "weights" in used else "joints"}
     v, theta, rho = _torso_coords(T, frame)
     lo, hi, step = TORSO_V
     nv = int(round((hi - lo) / step))
@@ -1641,18 +2036,18 @@ def vertex_normals(X: np.ndarray, F: np.ndarray) -> np.ndarray:
     return np.where(norm > 1e-12, N / np.maximum(norm, 1e-12), np.array([0.0, 1.0, 0.0]))
 
 
-def _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material) -> GarmentMesh:
+def _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material,
+                 lining: Optional[np.ndarray] = None) -> GarmentMesh:
     """The fitted garment on the prepared GLB's vertices (UV seams intact), minus the dropped components: ``X``,
     ``J``, ``W`` are per kept welded vertex (``Fk`` their faces), ``new_of_welded`` maps welded -> kept (-1 dropped)
-    and ``inv`` prepared -> welded."""
+    and ``inv`` prepared -> welded; ``lining`` (per kept vertex): the faces seen through an opening are left out
+    (``opening_lining``), and with them the vertices only they used."""
+    face_ok = _out_faces(Fd, inv, new_of_welded, lining)
     vmap = new_of_welded[inv]
     kept_v = np.nonzero(vmap >= 0)[0]
     orig_new = np.full(len(Pd), -1, np.int64)
     orig_new[kept_v] = np.arange(len(kept_v))
     Fo = np.asarray(Fd, np.int64).reshape(-1, 3)
-    Fwo = inv[Fo]
-    face_ok = ((Fwo[:, 0] != Fwo[:, 1]) & (Fwo[:, 1] != Fwo[:, 2]) & (Fwo[:, 0] != Fwo[:, 2])
-               & (vmap[Fo] >= 0).all(1))
     faces = orig_new[Fo[face_ok]]
     used = np.unique(faces)
     final = np.full(len(kept_v), -1, np.int64)
@@ -1664,17 +2059,29 @@ def _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime
                        image=image, mime=mime, material=material)
 
 
-def _out_index(Pd, Fd, inv, new_of_welded) -> np.ndarray:
+def _out_faces(Fd, inv, new_of_welded, lining: Optional[np.ndarray] = None) -> np.ndarray:
+    """Per prepared face whether ``_garment_out`` keeps it: not degenerate after the weld, all vertices kept, not
+    lining (``_open_faces``)."""
+    vmap = new_of_welded[inv]
+    Fo = np.asarray(Fd, np.int64).reshape(-1, 3)
+    Fwo = inv[Fo]
+    face_ok = ((Fwo[:, 0] != Fwo[:, 1]) & (Fwo[:, 1] != Fwo[:, 2]) & (Fwo[:, 0] != Fwo[:, 2])
+               & (vmap[Fo] >= 0).all(1))
+    if lining is not None and face_ok.any():
+        face_ok[face_ok] = _open_faces(vmap[Fo[face_ok]], lining)
+    return face_ok
+
+
+def _out_index(Pd, Fd, inv, new_of_welded, lining: Optional[np.ndarray] = None) -> np.ndarray:
     """Per output vertex of ``_garment_out`` its kept welded vertex (the same rule) — the vertex order of every fit
-    of this prepared mesh, whatever body it was fitted on."""
+    of this prepared mesh, whatever body it was fitted on (the lining is found on the mesh and the ghost images
+    alone, so it is the same on every body)."""
+    face_ok = _out_faces(Fd, inv, new_of_welded, lining)
     vmap = new_of_welded[inv]
     kept_v = np.nonzero(vmap >= 0)[0]
     orig_new = np.full(len(Pd), -1, np.int64)
     orig_new[kept_v] = np.arange(len(kept_v))
     Fo = np.asarray(Fd, np.int64).reshape(-1, 3)
-    Fwo = inv[Fo]
-    face_ok = ((Fwo[:, 0] != Fwo[:, 1]) & (Fwo[:, 1] != Fwo[:, 2]) & (Fwo[:, 0] != Fwo[:, 2])
-               & (vmap[Fo] >= 0).all(1))
     used = np.unique(orig_new[Fo[face_ok]])
     return vmap[kept_v[used]]
 
@@ -1821,6 +2228,10 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     the widened placement. ``metrics["scale_retry"]`` = the applied factor (1.0 unwidened), ``scale_retry_max`` =
     the largest tried (1.0 without a retry), ``report["scale_retry"]`` the attempts with their gate numbers.
 
+    ``masks["opening"]`` (optional, ``garment_source.opening_masks``): ``(opening, ghost mask)`` in the ghost's own
+    frame — the garment's inside seen through an opening is left out before the fit (``opening_lining``, Ruling
+    A35), ``report["opening"]``.
+
     ``limb_source`` (a refit — ``garment_source``): the source fit of the same prepared mesh on another base,
     ``{x0 (output vertices, 3), w0 (output vertices, len(names0)), names0, frames (its body's limb_frames),
     kinds}``; its limbs are aligned onto this body's (``align_limbs`` inside ``transfer_skinned``). Skipped
@@ -1834,6 +2245,18 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         _prepare(unrigged_garment_glb, unrigged_base_glb, rigged_base_glb)
     if len(Pk) == 0:
         raise ValueError("The garment mesh has no faces")
+    lining, open_report = None, None
+    if masks.get("opening") is not None:
+        lining, open_report = opening_lining(Pk, Fk, *masks["opening"])
+        if lining.any():
+            stay = _open_faces(Fk, lining)
+            keep2 = np.unique(Fk[stay])
+            new2 = np.full(len(Pk), -1, np.int64)
+            new2[keep2] = np.arange(len(keep2))
+            Pk, Fk, lining = Pk[keep2], new2[Fk[stay]], lining[keep2]
+            new_of_welded = np.where(new_of_welded >= 0, new2[np.maximum(new_of_welded, 0)], -1)
+        else:
+            lining = None
     uv_correspondence(body_u, body_r)
     height_u = float(np.ptp(body_u.positions[:, 1]))
     height_r = float(np.ptp(body_r.positions[:, 1]))
@@ -1845,7 +2268,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     Q, dz = align_band_depth(Q, body_u.positions, height_u=height_u)
     limbs, limbs_skipped = None, ""
     if limb_source is not None:
-        src = _out_index(Pd, Fd, inv, new_of_welded)
+        src = _out_index(Pd, Fd, inv, new_of_welded, lining)
         x0 = np.asarray(limb_source["x0"], np.float64)
         if len(x0) != len(src):
             limbs_skipped = f"the source has {len(x0)} vertices, this fit {len(src)}"
@@ -1881,7 +2304,8 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         torso_mapped = "torso" in ((transfer_report.get("limbs") or {}).get("chains") or {})
         ok, reasons = gate(m, clothing_gates(torso_mapped=torso_mapped))
 
-        garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material)
+        garment = _garment_out(Pd, Fd, Ud, inv, new_of_welded, X, Fk, J, W, names, image, mime, material,
+                               lining)
         crotch = crotch_height(body_r)
         hips = names.index(body_r.joint_names[joint_index(body_r, "hips")]) if skirt else -1
         report = {
@@ -1889,6 +2313,7 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
             "vertices": {"prepared": int(len(Pd)), "welded": int(len(Pw)), "kept": int(len(Pk)),
                          "out": int(len(garment.positions))},
             "dropped_components_faces": int(len(Fw0) - len(Fk)),
+            "opening": open_report,
             "depth_shift_u": dz,
             "push": {"moved": int((np.linalg.norm(disp, axis=1) > MOVED_EPS_M / k).sum()),
                      "max_m": float(np.linalg.norm(disp, axis=1).max() * k) if len(disp) else 0.0},

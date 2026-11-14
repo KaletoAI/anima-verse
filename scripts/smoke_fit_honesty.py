@@ -46,19 +46,22 @@ does.
      ``"fit refused — " + "; ".join(reasons)`` written by ``garment_store.record_failure(step "fit")`` under
      ``paths.init(<tmp>)``, read back: it carries the reason with the key ``rigged_deep_push_share``, the value
      (``1`` as ``gate`` formats it, ``{value:g}``) and the limit ``0.12``, plus ``scale_retry`` (a fit refusal).
-[H4] The phase-A version bump: ``FIT_VERSION`` hair 11 / clothing 9 (8 in phase A, 9 with Task 7 fix 1's side
-     projection) / footwear 17 (= ``FOOTWEAR_FIT_VERSION``), ``garment_layers.LAYER_VERSION`` 2.
+[H4] The version bumps: ``FIT_VERSION`` hair 13 / clothing 10 (8 in phase A, 9 with Task 7 fix 1's side
+     projection, 10 with Ruling A35's joint frames, sleeves and openings) / footwear 18 (= ``FOOTWEAR_FIT_VERSION``;
+     18: an outfit body's shoe is derived from the plain body's fit, Ruling A35), ``garment_layers.LAYER_VERSION`` 2.
 [H5] Ruling R7b on an outfit body (``garment_footwear.body_fit``; stubs: the shoe's current fsig
      ``fedcba987654``, its source ready, the stored body bytes ``"b" * 64``, the fit refuses). Stored: the shoe's
      fit of the OLD fsig ``0123456789ab`` on ``ob0000000a`` — accepted, fit_version 16, ``body_sha256`` "b" * 64,
      with ``cut.sides`` and ``foot_pose`` (graftable).
      (a) serving (build False): the current fsig has no fit, the source is ready, the body bytes match, no failure
          -> pending True, fit None (the assembly is not current, a build is asked; nothing to fall back to yet).
-     (b) the build (build True): the fit refuses -> a body failure for the current fsig (fit_version 17), and the
+     (b) the build (build True): the fit refuses -> a body failure for the current fsig (fit_version 18, no base
+         fit: ``base_fit_sha`` ""), and the
          old fit is served: fit = the old GLB, fsig ``0123456789ab``, pending False, error the refusal's text.
      (c) the old record without ``cut.sides`` -> nothing graftable: fit None.
      (d) graftable again but made on other body bytes (``body_sha256`` "c" * 64) -> fit None (never another body's).
-     (e) the current fsig's fit accepted on the body (fit_version 17, "b" * 64) -> served itself, fsig
+     (e) the current fsig's fit accepted on the body (fit_version 18, "b" * 64), derived from the base fit of
+         that fsig (``base_fit_sha256`` = the sha256 of the stored base fit, Ruling A35) -> served itself, fsig
          ``fedcba987654``.
 """
 import math
@@ -234,10 +237,10 @@ def test_h3(gf, reasons):
 
 def test_h4(gf):
     from app.core import footwear_fit, garment_layers
-    check(gf.FIT_VERSION == {"hair": 13, "clothing": 9, "footwear": 17} and footwear_fit.FOOTWEAR_FIT_VERSION == 17
+    check(gf.FIT_VERSION == {"hair": 13, "clothing": 10, "footwear": 18} and footwear_fit.FOOTWEAR_FIT_VERSION == 18
           and garment_layers.LAYER_VERSION == 2,
           f"[H4] FIT_VERSION {gf.FIT_VERSION}, FOOTWEAR_FIT_VERSION {footwear_fit.FOOTWEAR_FIT_VERSION}, "
-          f"LAYER_VERSION {garment_layers.LAYER_VERSION} (want hair 13 / clothing 9 / footwear 17, layers 2)")
+          f"LAYER_VERSION {garment_layers.LAYER_VERSION} (want hair 13 / clothing 10 / footwear 18, layers 2)")
 
 
 def test_h5():
@@ -269,7 +272,7 @@ def test_h5():
     a = served()
     check(a["pending"] is True and a["fit"] is None, f"[H5] (a) serving: pending, nothing grafted yet ({a})")
     b = served(build=True)
-    failure = gs.body_failure("Demo", item, cur_fsig, body, body_sha=sha, base_fit_sha="", fit_version=17)
+    failure = gs.body_failure("Demo", item, cur_fsig, body, body_sha=sha, base_fit_sha="", fit_version=18)
     check(failure is not None and "visible_poke" in str(failure.get("error")),
           f"[H5] (b) the refusal recorded on the body for the current fsig ({failure})")
     check(b["fit"] == old and b["fsig"] == old_fsig and b["pending"] is False and "visible_poke" in b["error"],
@@ -281,7 +284,11 @@ def test_h5():
     d = served()
     check(d["fit"] is None, f"[H5] (d) an old fit on other body bytes is never grafted ({d})")
     put(old_fsig, 16, sha, graftable)
-    cur = put(cur_fsig, 17, sha, graftable)
+    base_fit = gs.garment_path("Demo", item, cur_fsig, "fit")
+    base_fit.parent.mkdir(parents=True, exist_ok=True)
+    base_fit.write_bytes(b"BASE FIT")
+    import hashlib
+    cur = put(cur_fsig, 18, sha, {**graftable, "base_fit_sha256": hashlib.sha256(b"BASE FIT").hexdigest()})
     e = served()
     check(e["fit"] == cur and e["fsig"] == cur_fsig, f"[H5] (e) the accepted current fit is served ({e})")
 
