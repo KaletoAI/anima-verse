@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Check of Ruling A64's two UI pieces — the extension line beside the model viewer (Figure tab and 3D tab) and the
+ * Check of Ruling A64's two UI pieces — the extension line beside the model viewer (3D tab only since Ruling A73) and the
  * Delete of a stored body shape (Figure tab's stored list and the piece dialog's body switch): the pure helpers of
  * `frontend/src/tabs/characters/extensionPresence.ts` and `storedDeleteModel.ts`, the note rendered once
  * (react-dom/server), and the wiring by source greps.
@@ -41,9 +41,10 @@
  * [4] The note rendered once (en, react-dom/server) with [1]'s payload holds the three lines' text; with null it
  *     renders nothing ("").
  * [5] Source greps — the viewer: Model3DViewer takes `extensionNote` and renders `{extensionNote}`, and its toggle
- *     column shows when only the note is there (`|| extensionNote)`); FieldFigure passes
- *     `<ExtensionPresenceNote presence={data.served_extension} />`, FieldModel3D
- *     `<ExtensionPresenceNote presence={model.extension_presence} />`.
+ *     column shows when only the note is there (`|| extensionNote)`); FieldModel3D passes
+ *     `<ExtensionPresenceNote presence={model.extension_presence} />`. Ruling A73 (user: "Im Figur-Tab 3D-Vorschau
+ *     den Text raus"): FieldFigure names neither `extensionNote` nor `ExtensionPresenceNote`, and the Figure payload
+ *     type (figureModel.ts) and figure_build.py carry no `served_extension`.
  * [6] Source greps — the Delete: StoredDeleteDialog renders through createPortal to document.body, loads
  *     `${path}/preview`, deletes with apiDelete(path), and shows no Delete button when the preview says not deletable
  *     (`preview && !preview.deletable ? null`); FigureStored uses StoredDeleteDialog and no ConfirmDialog, labels its
@@ -183,8 +184,12 @@ const viewer = src('frontend/src/tabs/characters/Model3DViewer.tsx');
 has('[5] viewer takes extensionNote', viewer, 'extensionNote?: ReactNode');
 has('[5] viewer renders it', viewer, '{extensionNote}');
 has('[5] the column shows for the note alone', viewer, '|| extensionNote)');
-has('[5] Figure tab passes served_extension', src('frontend/src/tabs/characters/FieldFigure.tsx'),
-  '<ExtensionPresenceNote presence={data.served_extension} />');
+const figureTab = src('frontend/src/tabs/characters/FieldFigure.tsx');
+lacks('[5] Figure tab: no note (A73)', figureTab, 'extensionNote');
+lacks('[5] Figure tab: no ExtensionPresenceNote (A73)', figureTab, 'ExtensionPresenceNote');
+lacks('[5] Figure payload type: no served_extension (A73)', src('frontend/src/tabs/characters/figureModel.ts'),
+  'served_extension');
+lacks('[5] figure_build: no served_extension (A73)', src('app/core/figure_build.py'), 'served_extension');
 has('[5] 3D tab passes extension_presence', src('frontend/src/tabs/characters/FieldModel3D.tsx'),
   '<ExtensionPresenceNote presence={model.extension_presence} />');
 

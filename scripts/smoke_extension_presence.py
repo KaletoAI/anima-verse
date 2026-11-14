@@ -34,9 +34,10 @@ Hand-derived (``rig_groups_for`` with part off → chain; with part on → chain
     motion group clothing does not remove (no exposed_only, no mesh part) → NOT "Covered" even under the shirt:
     yellow, not on this model (its record names no group); with item_shirt_see (exposed_detail true) tip is not
     covered either (→ yellow, not on this model).
-[7] wiring (source greps): ``get_model3d_info`` sets ``extension_presence``; the Figure payload carries
-    ``served_extension``; Model3DViewer renders ``extensionNote``; FieldFigure and FieldModel3D pass
-    ExtensionPresenceNote; every English string of the note has a de.json key.
+[7] wiring (source greps): ``get_model3d_info`` sets ``extension_presence``; Model3DViewer renders ``extensionNote``;
+    FieldModel3D passes ExtensionPresenceNote; every English string of the note has a de.json key. Ruling A73: the
+    Figure tab shows no note — FieldFigure names no ExtensionPresenceNote and the Figure payload carries no
+    ``served_extension`` (figure_build.py names it nowhere).
 """
 import json
 import sys
@@ -170,10 +171,9 @@ with tempfile.TemporaryDirectory() as tmp:
     tab3d = (ROOT / 'frontend/src/tabs/characters/FieldModel3D.tsx').read_text()
     helper = (ROOT / 'frontend/src/tabs/characters/extensionPresence.ts').read_text()
     check('info["extension_presence"] = extension_presence(' in m3d, "[7] get_model3d_info sets extension_presence")
-    check('"served_extension": _served_extension(character_name, profile)' in fb, "[7] Figure payload served_extension")
+    check('served_extension' not in fb, "[7] A73: the Figure payload carries no served_extension")
     check('{extensionNote}' in viewer and 'extensionNote = null' in viewer, "[7] Model3DViewer renders extensionNote")
-    check('extensionNote={<ExtensionPresenceNote presence={data.served_extension} />}' in fig,
-          "[7] FieldFigure passes the note")
+    check('ExtensionPresenceNote' not in fig and 'extensionNote' not in fig, "[7] A73: FieldFigure passes no note")
     check('extensionNote={<ExtensionPresenceNote presence={model.extension_presence} />}' in tab3d,
           "[7] FieldModel3D passes the note")
     de = json.loads((ROOT / 'shared/languages/de.json').read_text(encoding='utf-8'))['translations']

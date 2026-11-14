@@ -1,10 +1,9 @@
 /**
- * The extension groups of the SHOWN model in plain words (Ruling A64) — the line the Figure tab's and the 3D tab's
- * viewers write beside their toggles, so a missing group is never a mystery: which groups carry bones on this model,
+ * The extension groups of the SHOWN model in plain words (Ruling A64) — the line the 3D tab's viewer writes beside
+ * its toggles (the Figure tab's viewer shows none since Ruling A73), so a missing group is never a mystery: which groups carry bones on this model,
  * which are covered by a worn piece (correct: a covered slot has no part and no bones), which are missing and why.
  *
- * Server: `model3d.extension_presence` — the Figure payload's `served_extension`, the 3D tab's
- * `model.extension_presence`. The server's English sentences are translated here (de.json keys).
+ * Server: `model3d.extension_presence` — the 3D tab's `model.extension_presence`. The server's English sentences are translated here (de.json keys).
  */
 import type { Light } from './hairstylesModel'
 

@@ -137,7 +137,11 @@
  *      — source greps: the Figure tab's Model3DViewer has no `sideToolbar` (since Ruling A41 no viewer has Tilt
  *      sliders at all; the drag turns and tilts the figure), height 600; the grid is the class `ga-split-figure` with columns minmax(360px, 1.2fr) minmax(320px, 1fr)
  *      in game-admin.css (at a 1280 px window the right column keeps ~440 px for the header, Build and pieces) and
- *      collapses to one column under 1000 px like every `ga-split-views`.
+ *      collapses to one column under 1000 px like every `ga-split-views`. Ruling A73 (user: "Im Figur-Tab
+ *      3D-Vorschau den Text raus"): the Figure viewer writes no extension-bone note — its Model3DViewer has no
+ *      `extensionNote`, FieldFigure names no ExtensionPresenceNote; the 3D tab's viewer still passes
+ *      `extensionNote={<ExtensionPresenceNote presence={model.extension_presence} />}`. (Source greps only: the
+ *      viewer renders its toggle column after the model has loaded, so a server render never shows the note.)
  *
  * Task 14 — the Hairstyles tab (Rulings P2/P3, the user's rule R1–R4; helpers in figureModel.ts):
  * [19] hairstyleRows(owned, wornId) — the worn hairstyle first, then the server's order; label "<name> · <mode
@@ -632,6 +636,11 @@ check('[18] Figure preview without the side toolbar, height 600',
 check('[18] Figure grid by class, no inline columns',
   [/className="ga-split ga-split-views ga-split-figure"/.test(fieldFigure), /gridTemplateColumns/.test(fieldFigure)],
   [true, false]);
+check('[18] A73: the Figure viewer has no extension note, the 3D tab keeps it',
+  [/extensionNote/.test(figureViewer), /ExtensionPresenceNote/.test(fieldFigure),
+    src('frontend/src/tabs/characters/FieldModel3D.tsx')
+      .includes('extensionNote={<ExtensionPresenceNote presence={model.extension_presence} />}')],
+  [false, false, true]);
 const adminCss = src('frontend/src/styles/game-admin.css');
 check('[18] its columns', /\.ga-split-views\.ga-split-figure \{ grid-template-columns: minmax\(360px, 1\.2fr\) minmax\(320px, 1fr\); \}/
   .test(adminCss), true);

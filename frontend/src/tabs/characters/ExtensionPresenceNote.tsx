@@ -1,7 +1,7 @@
 /**
  * ExtensionPresenceNote — the viewer's line about the shown model's extension groups (Ruling A64,
  * `extensionPresence.ts`): one row per line, its light first, the record's own reason on mouse-over. Rendered in
- * the viewer's toggle column (Model3DViewer `extensionNote`) of the Figure tab and the 3D tab.
+ * the viewer's toggle column (Model3DViewer `extensionNote`) of the 3D tab (the Figure tab shows none — Ruling A73).
  */
 import { useI18n } from '../../i18n/I18nProvider'
 import { StepLight } from './StepRows'
