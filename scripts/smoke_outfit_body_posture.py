@@ -49,7 +49,7 @@ atan(tan θ / cos φ).
     own lean, never base + body: the matched output run again against the
     same target turns < 0.05° and writes nothing ("nothing to do"); the base
     itself matched against its own lean stays at 5.0 (not 10.0). The viewer
-    Tilt sliders are a preview rotation only (never stored), so no stored
+    drag tilt is a preview rotation only (never stored), so no stored
     tilt can enter the target. The side fixture matched to (5, 0) ends at
     forward 5.0 ± 0.5, sideways 0 ± 0.5 (both components in one turn).
 [5] ``model3d._auto_posture_match`` on a body sidecar whose parent record

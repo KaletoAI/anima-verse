@@ -129,8 +129,8 @@
  *       render it instead of "Rebuild outfit model" / "Rebuild from base body" (no model3d/generate); the
  *       Wardrobe chip has no status.painted branch.
  * [18] Task UI2 (user 2026-11-13: "the tilt dialog is not needed in the Figure tab; make the 3D preview wider")
- *      — source greps: the Figure tab's Model3DViewer has no `previewTilt` (the tilt toolbar stays in the other
- *      tabs), height 600; the grid is the class `ga-split-figure` with columns minmax(360px, 1.2fr) minmax(320px, 1fr)
+ *      — source greps: the Figure tab's Model3DViewer has no `sideToolbar` (since Ruling A41 no viewer has Tilt
+ *      sliders at all; the drag turns and tilts the figure), height 600; the grid is the class `ga-split-figure` with columns minmax(360px, 1.2fr) minmax(320px, 1fr)
  *      in game-admin.css (at a 1280 px window the right column keeps ~440 px for the header, Build and pieces) and
  *      collapses to one column under 1000 px like every `ga-split-views`.
  *
@@ -453,8 +453,8 @@ check('[17] Wardrobe: no painted status branch', /status\.painted/.test(src('fro
 
 // [18] Task UI2: the Figure tab's preview — no tilt toolbar, wider and taller.
 const figureViewer = (fieldFigure.match(/<Model3DViewer[^>]*\/>/) || [''])[0];
-check('[18] Figure preview without previewTilt, height 600',
-  [/previewTilt/.test(figureViewer), /height=\{600\}/.test(figureViewer)], [false, true]);
+check('[18] Figure preview without the side toolbar, height 600',
+  [/sideToolbar/.test(figureViewer), /height=\{600\}/.test(figureViewer)], [false, true]);
 check('[18] Figure grid by class, no inline columns',
   [/className="ga-split ga-split-views ga-split-figure"/.test(fieldFigure), /gridTemplateColumns/.test(fieldFigure)],
   [true, false]);

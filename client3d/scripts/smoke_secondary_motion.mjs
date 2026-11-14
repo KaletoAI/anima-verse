@@ -130,7 +130,10 @@ try {
   const fields = [...motionType.match(/interface MotionGroup \{([\s\S]*?)\}/)[1].matchAll(/^  (\w+):/gm)].map(match => match[1]).filter(field => field !== 'bones');
   for (const field of fields) assert.ok(hints.motionFieldPreview[field], `missing preview category: ${field}`);
   const tiltViewerSource = await readFile('frontend/src/tabs/characters/Model3DViewer.tsx', 'utf8');
-  assert.ok(tiltViewerSource.includes('applyPreviewTilt(previewRoot') && tiltViewerSource.indexOf('applyPreviewTilt(previewRoot') < tiltViewerSource.indexOf('secondary?.update(realDelta)'), 'tilt before solver');
+  // Ruling A41: the Tilt sliders are gone — the drag turn (`applyTurn`, `lib/modelTurn.ts`) is how a viewer tilts
+  // the figure, so it must move the root before the solver reads gravity.
+  assert.ok(!tiltViewerSource.includes('applyPreviewTilt') && tiltViewerSource.includes('applyTurn(Math.min(realDelta')
+    && tiltViewerSource.indexOf('applyTurn(Math.min(realDelta') < tiltViewerSource.indexOf('secondary?.update(realDelta)'), 'drag tilt before solver');
 
   const fieldSource=await readFile('frontend/src/tabs/characters/FieldModel3D.tsx','utf8');
   assert.match(tiltViewerSource,/ga-model3d-toolbar/);
@@ -883,7 +886,7 @@ try {
   near(restSag.point().distanceTo(restExpected),0);restSag.solver.dispose();
   console.log('ok static sag uses rotated rest independently of dynamic max_deg');
   const tilted = fixture({ gain: 0, flatten:1, squash:[.5,3] });
-  hints.applyPreviewTilt(tilted.root, 90, 0);
+  tilted.root.rotation.set(-Math.PI / 2, 0, 0);   // lying on the back: what a 90° drag tilt does to the root
   tilted.solver.update(0);
   const tiltD = 9.81 / (4 * Math.PI) ** 2;
   near(tilted.point().length(), .5);

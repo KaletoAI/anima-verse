@@ -469,7 +469,7 @@ function HairstyleDetail({ character, entry, built, onChanged, onRunEnded, onOpe
   const fitted3d = mode === 'hairdeck' || mode === 'haar'
   const preview = fitted3d && garment?.preview_url ? (
     <Model3DViewer key={garment.preview_url} url={garment.preview_url} format="glb" height={VIEWER_HEIGHT}
-      previewTilt subject="figure" freshness={garment.preview_freshness} builtAt={garment.preview_built_at}
+      sideToolbar subject="figure" freshness={garment.preview_freshness} builtAt={garment.preview_built_at}
       alphaCutoff={info.alpha_cutoff} collision={info.collision} meshAdjust={meshAdjust} polylines={polylines} focus={focus}
       strandHair={strandHair}
       strandNote={strandState === 'swing_off' ? t('Swing is off — the hair stays still.') : strandIssue || undefined}

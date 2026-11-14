@@ -445,7 +445,7 @@ export function FieldBaseBody({ character, onOpenFigure }: {
         <div className="ga-basebody-model">
           {model?.url ? (
             <div className="ga-model3d-fit">
-              <Model3DViewer key={model.url} url={model.url} format="glb" height={480} previewTilt subject="figure"
+              <Model3DViewer key={model.url} url={model.url} format="glb" height={480} sideToolbar subject="figure"
                 freshness={model.freshness} builtAt={model.created_at}
                 statusPanel={model.steps?.length ? <ModelSteps steps={model.steps} /> : undefined}
                 collision={collision} showCollision={!!collisionPreview}

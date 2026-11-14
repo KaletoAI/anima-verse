@@ -37,7 +37,7 @@ function PoseOutfitModel({ character, onOpen3D, onOpenFigure }: {
       </div>
       {!st ? <div className="ga-hint">{t('Loading…')}</div> : model ? (
         <div className="ga-model3d-fit">
-          <Model3DViewer key={`${model.signature || ''}:${bust}`} previewTilt height={480} subject="figure"
+          <Model3DViewer key={`${model.signature || ''}:${bust}`} sideToolbar height={480} subject="figure"
             url={`/characters/${enc}/model3d/file?v=${encodeURIComponent(bust)}`}
             format={model.format || 'fbx'}
             textureUrl={model.texture_url ? `${model.texture_url}?v=${bust}` : ''}

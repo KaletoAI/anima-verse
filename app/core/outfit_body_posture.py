@@ -39,10 +39,10 @@ outfit build on it; a re-rig matches inside its chain. A changed body file
 makes the outfit models on it stale (``body_sha256``) and its garment fits
 refit (``garments.body_fit`` keys them by body sha).
 
-TILT. The Tilt sliders of the Base body / Outfit body viewers are a
-preview rotation of the displayed figure only (``applyPreviewTilt``), never
-stored and never baked: the match reads the stored REST bones of both
-models, so the base's own lean is the target and nothing is added twice —
+TILT. Dragging a figure in a viewer (``frontend/src/lib/modelTurn.ts``; the
+Tilt sliders are gone since Ruling A41) turns and tilts the displayed figure
+only, never stored and never baked: the match reads the stored REST bones of
+both models, so the base's own lean is the target and nothing is added twice —
 a viewer tilt then turns base and body alike on top of the same posture.
 """
 from __future__ import annotations

@@ -1,5 +1,4 @@
 import type { ModelWater } from '../props/propTypes'
-import { applyPreviewTilt, rateLimitPreviewTilt } from './motionFieldPreview'
 import { accessWorldPoint, accessLocalPoint } from '../props/accessGeometry'
 /**
  * Model3DViewer — interactive preview of a generated character mesh.
@@ -282,7 +281,7 @@ export interface ActionAccessOverlay {
   yaw: number
 }
 
-export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, freshness, builtAt, previewTilt = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
+export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, freshness, builtAt, sideToolbar = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
   offsetY = 0, offsetX = 0, offsetZ = 0,
   placement, onBounds, markers, lightPoint, surfacePoints, waterRegions, onPickModelPoint, dimsOverlay,
   figureHeight = 0, scaleFigure = false, groundOffsetM = 0,
@@ -291,7 +290,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   areaOutlines, polylines, slots, meshLayout, drawing = false, drawThrough = false,
   onPolygonFaces, onDrawCancel, leafBbox, collision, showCollision = false, footPose = null, clipGroup,
   meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model' }:
-  { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; previewTilt?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
+  { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; sideToolbar?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
     freshness?: Freshness | null
@@ -525,10 +524,6 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const [secondaryOn, setSecondaryOn] = useState(true)
   const secondaryOnRef = useRef(secondaryOn)
   secondaryOnRef.current = secondaryOn
-  const [tiltForward, setTiltForward] = useState(0)
-  const [tiltSideways, setTiltSideways] = useState(0)
-  const tiltRef = useRef({ forward: 0, sideways: 0 })
-  tiltRef.current = { forward: previewTilt ? tiltForward : 0, sideways: previewTilt ? tiltSideways : 0 }
   const motionRef = useRef(motion)
   motionRef.current = motion
   // Per-strand hair and the figure preview (ruling H-R2): read per frame, so a dragged Stiffness or a new record
@@ -1096,8 +1091,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         const place = new THREE.Group()
         place.add(orient)
         const previewRoot = new THREE.Group()
-        // The figure preview's root motion (ruling H-R2: the drag turn, Sway / Walk / Turn) sits between the tilt
-        // and the placement — identity everywhere else.
+        // The figure preview's root motion (ruling H-R2: the drag turn, Sway / Walk / Turn) sits between the
+        // preview root and the placement — identity everywhere else. Since Ruling A41 the drag is the ONLY way a
+        // viewer tilts the figure (the Tilt sliders are gone): extension bones feel gravity through this matrix.
         const turnRoot = new THREE.Group()
         turnRoot.matrixAutoUpdate = false
         turnRoot.add(place)
@@ -1108,15 +1104,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         followTurn.matrixAutoUpdate = false
         previewRoot.add(followTurn)
         scene.add(previewRoot)
-        /** Run `fn` with the model upright (no drag turn, no Tilt), the matrices updated, then put the turn back. */
+        /** Run `fn` with the model upright (no drag turn), the matrices updated, then put the turn back. */
         const upright = <T,>(fn: () => T): T => {
-          const turn = turnRoot.matrix.clone(), tilt = previewRoot.quaternion.clone()
+          const turn = turnRoot.matrix.clone()
           turnRoot.matrix.identity()
-          previewRoot.quaternion.identity()
           previewRoot.updateMatrixWorld(true)
           try { return fn() } finally {
             turnRoot.matrix.copy(turn)
-            previewRoot.quaternion.copy(tilt)
             previewRoot.updateMatrixWorld(true)
           }
         }
@@ -2572,7 +2566,6 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         let raf: number | null = null
         let renderVisible = false
         let renderWidth = width
-        let displayedTilt = { forward: 0, sideways: 0 }
         const animate = () => {
           raf = null
           if (disposed || !renderVisible) return
@@ -2608,8 +2601,6 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             secondary?.configure(secondaryEnabled ? motionRef.current : undefined)
             if (!secondaryEnabled) secondary?.reset()
           }
-          displayedTilt = rateLimitPreviewTilt(displayedTilt, tiltRef.current, realDelta)
-          applyPreviewTilt(previewRoot, displayedTilt.forward, displayedTilt.sideways)
           applyTurn(Math.min(realDelta, 0.1))
           previewRoot.updateMatrixWorld(true)
           if (extensionShown !== extensionPushRef.current) {
@@ -2695,7 +2686,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
 
   const turned = turnPose.turn !== 0 || turnPose.tilt !== 0
   return (
-    <div className={previewTilt ? 'ga-model3d-preview' : undefined}>
+    <div className={sideToolbar ? 'ga-model3d-preview' : undefined}>
       {embeddedTakes && takes.length > 0 ? (
         <div className="ga-row">
           <label>{t('Embedded take')} <select value={take} onChange={event => setTake(event.target.value)}>
@@ -2707,7 +2698,7 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           </select></label>
         </div>
       ) : null}
-      <div className={previewTilt ? 'ga-model3d-canvas' : undefined}>
+      <div className={sideToolbar ? 'ga-model3d-canvas' : undefined}>
       <div style={{ position: 'relative' }}>
       <div
         ref={mountRef}
@@ -2889,22 +2880,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
       {!loading && !error ? <ModelTurnHint subject={subject} locked={frontal} turned={turned}
         onReset={() => turnResetRef.current?.()} /> : null}
       </div>
-      {previewTilt ? <aside className="ga-model3d-toolbar">
+      {sideToolbar ? <aside className="ga-model3d-toolbar">
         {statusPanel}
-      {/* The Hairstyles preview tilts by dragging the figure (T-U4): the sliders only where no hair simulates. */}
-      {!turnMode ? <div className="ga-fieldset ga-model3d-tilt">
-        <label className="ga-model3d-slider">{t('Tilt forward/back')} {tiltForward}°
-          <input type="range" min={-90} max={90} value={tiltForward}
-            title={t('+90 = lying on the back')}
-            onChange={event => setTiltForward(Number(event.target.value))} />
-        </label>
-        <label className="ga-model3d-slider">{t('Tilt sideways')} {tiltSideways}°
-          <input type="range" min={-90} max={90} value={tiltSideways}
-            onChange={event => setTiltSideways(Number(event.target.value))} />
-        </label>
-        <button type="button" className="ga-btn ga-btn-sm"
-          onClick={() => { setTiltForward(0); setTiltSideways(0) }}>{t('Reset tilt')}</button>
-      </div> : null}
         {turnMode ? (
           <div className="ga-fieldset ga-model3d-group">
             <span className="ga-fieldset-title" style={{ margin: 0, fontSize: 11 }}>{t('Motion preview')}</span>
