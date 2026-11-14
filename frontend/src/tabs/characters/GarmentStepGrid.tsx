@@ -59,6 +59,7 @@ import { StepLight } from './StepRows'
 import { armLightColour, armLightShort, armLightText } from './fitSettingsModel'
 import { RefImage } from './RefImage'
 import { GARMENT_VIEWS, runMark, runSlot } from './useGarment'
+import type { FitBody, FitBodyFit } from './figureModel'
 import type {
   AttemptUsePlan, AttemptUsePlans, GarmentImageStep, GarmentInfo, GarmentRunState, GarmentView, GateLimit,
   PieceViewChoice, PieceViewDue, PieceViewInfo, PieceViewOption, RunFeedback, ViewNeed, ViewRunPlan,
@@ -77,6 +78,14 @@ const FIT_STATUS: Record<string, string> = {
   stale: 'Fitted on an older base model',
   outdated: 'Fitted from a replaced mesh',
   missing: 'Not fitted yet',
+}
+/** A selected body shape's fit in the fit row (Ruling A50b, `fit_attempts` entry status). */
+const BODY_FIT_STATUS: Record<FitBody['status'], string> = {
+  accepted: 'Accepted',
+  user_accepted: 'Accepted by you',
+  refused: 'Refused',
+  stale: 'Out of date on this body',
+  missing: 'Not fitted yet on this body',
 }
 
 const LIGHT_COLOR: Record<LightState, string> = {
@@ -334,7 +343,7 @@ function upToText(n: number, t: (s: string) => string): string {
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
   viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched, pieceName = '',
-  refitOn = '' }: {
+  refitOn = '', shownFit = null }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -359,8 +368,12 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   /** The piece's name (the mesh viewer's title). */
   pieceName?: string
   /** Ruling A50: the body shape selected in the dialog's body switch ("" = the plain body) — Re-fit fits on it and
-   *  says so; the row's own numbers are then named as the plain body's. */
+   *  says so. */
   refitOn?: string
+  /** Ruling A50b: the selected body shape's fit — the fit row then shows THAT fit (status, widening, triangles,
+   *  build time, chips, arm light), named with the body; null fit = "Not fitted yet on this body". Absent: the
+   *  plain body's fit (the garment's own fit step). */
+  shownFit?: { name: string; status: FitBody['status']; fit: FitBodyFit | null } | null
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -551,11 +564,17 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   const meshAttempts = mesh?.status === 'refused'
     ? mesh.gates.map((g, i) => `${t('Attempt')} ${num(g.attempt) ?? i + 1}: ${(g.reasons || []).join('; ') || '–'}`)
     : []
-  const fitRecord = fit && fit.status !== 'missing'
+  const plainRecord = fit && fit.status !== 'missing'
     ? fit.metrics
     : garment?.failed?.step === 'fit' && garment.failed.gates?.metrics
       ? (garment.failed.gates.metrics as Record<string, unknown>)
       : null
+  // Ruling A50b: under a selected body shape every number of this row is that body's fit.
+  const fitRecord = shownFit
+    ? (shownFit.fit ? { ...shownFit.fit.metrics, reasons: shownFit.fit.reasons } : null) : plainRecord
+  const armInfo = shownFit ? shownFit.fit?.fit_settings ?? null : garment?.fit_settings ?? null
+  const fitTris = shownFit ? shownFit.fit?.tris : fit?.tris
+  const fitBuilt = shownFit ? shownFit.fit?.created_at : fit?.created_at
   // garment_fit.scale_retry: the factor a too-small piece was widened by (1.0 = not widened), the largest tried.
   const widened = num(fitRecord?.scale_retry)
   const triedUpTo = num(fitRecord?.scale_retry_max)
@@ -565,10 +584,11 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
       ? t('Widened up to {pct} %, still too small').replace('{pct}', String(Math.round((triedUpTo - 1) * 100)))
       : ''
   const fitText = [
-    t(FIT_STATUS[fit?.status || 'missing']),
+    shownFit ? `${shownFit.name}: ${t(shownFit.fit ? BODY_FIT_STATUS[shownFit.status] : BODY_FIT_STATUS.missing)}`
+      : t(FIT_STATUS[fit?.status || 'missing']),
     widenText,
-    fit?.tris ? `${t('Triangles')} ${fit.tris.toLocaleString()}` : '',
-    fit?.created_at ? formatDateTime(fit.created_at, clockSettings()) : '',
+    fitTris ? `${t('Triangles')} ${fitTris.toLocaleString()}` : '',
+    fitBuilt ? formatDateTime(fitBuilt, clockSettings()) : '',
   ].filter(Boolean).join(' · ')
 
   return (
@@ -608,12 +628,12 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
       <StepLabel garment={garment} step="fit" label={stepLabels.fit || 'Fit'} help={STEP_HELP.fit} />
       <div className="ga-step-grid-row" style={{ gridColumn: `span ${GARMENT_VIEWS.length}` }}>
         <GateIcon specs={fitChips} record={fitRecord} limits={limits.fit} extra={[fitText]} />
-        {garment?.fit_settings?.arm_light && garment.fit_settings.arm_light.state !== 'none' ? (
-          // Ruling A47: the arm light of the fit (skin seen inside the sleeves).
+        {armInfo?.arm_light && armInfo.arm_light.state !== 'none' ? (
+          // Ruling A47: the arm light of the fit (skin seen inside the sleeves) — the selected body's (A50b).
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
-            title={armLightText(garment.fit_settings.arm_light, garment.fit_settings.numbers, t)}>
-            <StepLight light={armLightColour(garment.fit_settings.arm_light)} />
-            {refitOn ? `${t('Plain body')}: ` : ''}{armLightShort(garment.fit_settings.arm_light, t)}
+            title={armLightText(armInfo.arm_light, armInfo.numbers, t)}>
+            <StepLight light={armLightColour(armInfo.arm_light)} />
+            {shownFit ? `${shownFit.name}: ` : ''}{armLightShort(armInfo.arm_light, t)}
           </span>
         ) : null}
         <RunBadge mark={runMark(feedback, garment, order, 'fit')} />

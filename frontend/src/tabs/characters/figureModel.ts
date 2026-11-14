@@ -11,7 +11,7 @@
  * English; the components put them through `t()`.
  */
 import type { FootPose } from '@anima/scene-render'
-import type { ArmLight } from './fitSettingsModel'
+import type { ArmLight, FitSettingsInfo } from './fitSettingsModel'
 import type { Light } from './hairstylesModel'
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
@@ -553,6 +553,21 @@ export interface FitBody {
   arm_light?: ArmLight | null
   /** Ruling A50: this body's own numbers (`fit_attempts.body_numbers` of what is shown), {} when nothing is. */
   numbers?: FitBodyNumbers
+  /** Ruling A50b: this body's fit as the dialog's fit row, chips and settings box show it (`body_fit_view`);
+   *  null when the body shows nothing. */
+  fit?: FitBodyFit | null
+}
+
+/** One body's fit for the piece dialog (Ruling A50b, `fit_attempts.body_fit_view`). */
+export interface FitBodyFit {
+  metrics: Record<string, unknown>
+  tris: number | null
+  created_at: string | null
+  gates_ok: boolean
+  /** The refusing gate's reasons ([] when accepted). */
+  reasons: string[]
+  /** The fit settings box of this body's fit (footwear: null). */
+  fit_settings: FitSettingsInfo | null
 }
 
 /** A body's own fit numbers (Ruling A50): the sleeve skin per side, the push / tightness shares, the trunk

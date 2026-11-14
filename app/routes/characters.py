@@ -2060,7 +2060,10 @@ def _garment_limits(kind: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
         return {}
     return {**garment_gates.limits(kind),
             "mesh": {"largest_component_share": {"op": "ge", "value": garment_mesh.MIN_COMPONENT_SHARE}},
-            "fit": _gate_limits(garment_fit.CLOTHING_GATES)}
+            "fit": _gate_limits(garment_fit.CLOTHING_GATES),
+            # Ruling A50b: a fit on a body shape is placed from the plain body's fit — its placement push numbers
+            # are recorded, not gated (``garment_fit.clothing_gates``); the chips of a selected body shape use these.
+            "fit_body": _gate_limits(garment_fit.clothing_gates(torso_mapped=True))}
 
 
 @router.get("/{character_name}/garments")

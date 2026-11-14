@@ -44,6 +44,14 @@ is a table is named per section. Expected values, derived by hand from Ruling A5
     c) a fit record with frame.torso.shares (an accepted body fit) -> those shares;
     d) the entry: status "refused", reason non-empty (the plain words of the refusal), numbers == b), arm_light
        the attempt's, ``_shown`` the attempt's GLB (the viewer shows the refused attempt), can_accept True.
+[4e] Ruling A50b — the entry's ``fit`` (``body_fit_view``, what the dialog's fit row, chips and fit settings box
+    show under the selected body; ``_garment_kind`` clothing, profile {} = the default settings): metrics == the
+    attempt's metrics, created_at the attempt's "2026-11-14T19:00:00Z", gates_ok False, reasons [the refusal];
+    fit_settings: arm_light the attempt's (worst 3.5), numbers sleeve skin 2.8 / 3.5 and scale 1.0, built_at the
+    attempt's — none of the plain record's 1.8 / 1.5 / 1.08; settings the piece's (shared: auto / auto / auto).
+    Nothing shown ({}) -> None (the dialog says "Not fitted yet on this body"). A body shape's chips are judged by
+    ``garment_fit.clothing_gates(torso_mapped=True)`` (the route's ``fit_body`` limits): CLOTHING_GATES without
+    deep_push_share and max_push_m (the placement push, recorded not gated).
 [5] A figure with no texture needs on a meshed shape assembles without the texture store
     (``base_body.build_outfit_model``; tables: pipeline on, ``base_signature`` "bsig", the front view of the
     signature stored with sidecar dressed True — a view edited for an earlier PAINTED figure —, the delivered
@@ -259,6 +267,8 @@ def test_numbers(tmp: Path) -> None:
     glb = tmp / "attempt.glb"
     glb.write_bytes(b"glTF")
     real = (fa.fit_status, fa.attempt_of, fa.body_label, fa._current, gs.garment_path, gs.read_record)
+    real_kind = gs._garment_kind
+    gs._garment_kind = lambda item_id: "clothing"
     fa.fit_status = lambda name, item_id, body, **_: {
         "fsig": "0123456789ab", "state": "outdated", "failure": {"error": REFUSAL}, "body_sha": "s",
         "base_fit_sha": "b"}
@@ -275,8 +285,24 @@ def test_numbers(tmp: Path) -> None:
         check("[4d] its own arm light", entry["arm_light"], ATTEMPT["report"]["arm_light"])
         check("[4d] the viewer shows the refused attempt", entry["_shown"], (glb, False))
         check("[4d] it may be accepted", entry["can_accept"], True)
+        fit = entry["fit"]
+        check("[4e] the body's metrics", fit["metrics"], ATTEMPT["metrics"])
+        check("[4e] its time, verdict and reasons", (fit["created_at"], fit["gates_ok"], fit["reasons"]),
+              ("2026-11-14T19:00:00Z", False, [REFUSAL]))
+        box = fit["fit_settings"]
+        check("[4e] the settings box: this body's arm light", box["arm_light"], ATTEMPT["report"]["arm_light"])
+        check("[4e] the settings box: this body's numbers",
+              (box["numbers"]["sleeve_skin_left_cm2"], box["numbers"]["sleeve_skin_right_cm2"], box["numbers"]["scale"],
+               box["built_at"]), (2.8, 3.5, 1.0, "2026-11-14T19:00:00Z"))
+        check("[4e] the settings are the piece's", box["settings"],
+              {"allowance": "auto", "sleeves_left": "auto", "sleeves_right": "auto"})
+        check("[4e] nothing shown, no fit", fa.body_fit_view("item_jacket", {}, {}, accepted=False), None)
+        from app.core import garment_fit as gfit
+        check("[4e] a body shape's fit gates", sorted(gfit.clothing_gates(torso_mapped=True)),
+              sorted(k for k in gfit.CLOTHING_GATES if k not in ("deep_push_share", "max_push_m")))
     finally:
         fa.fit_status, fa.attempt_of, fa.body_label, fa._current, gs.garment_path, gs.read_record = real
+        gs._garment_kind = real_kind
 
 
 class _Fig:

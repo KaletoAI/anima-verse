@@ -521,6 +521,8 @@ export function WearersLine({ itemId, version }: {
 
 /** The body switch's empty viewer: a body whose refusal came before attempts were kept (Ruling A31). */
 const NO_ATTEMPT_KEPT = 'No fit kept for this body — Re-fit in the Figure tab fits it again and keeps it (CPU only)'
+/** Ruling A50b: in the Wardrobe the dialog has the body's own Re-fit. */
+const NO_ATTEMPT_KEPT_HERE = 'No fit kept for this body — Re-fit on this body fits it and keeps it (CPU only)'
 
 /** The steps dialog of one own-mesh piece: a wide modal (portal to
  *  document.body) — top bar with the piece, its ONE status (state, queue
@@ -645,7 +647,15 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   // and every button says which body; the numbers beside the plain body's settings are named as the plain body's.
   const refitBody = shownBody?.body || ''
   const refitOn = refitBody && shownBody ? bodyWords(shownBody.label, t) : ''
-  const numbersOf = switchOn ? t('Plain body') : ''
+  // Ruling A50b: under a selected body shape the fit row, the chips and the fit settings box show THAT body's fit
+  // (its sleeve resolution, widening, chips, build time) — never the plain body's; the settings stay per piece.
+  const shapeFit = refitBody && shownBody ? { name: refitOn, status: shownBody.status, fit: shownBody.fit ?? null }
+    : null
+  const numbersOf = shapeFit ? refitOn : switchOn ? t('Plain body') : ''
+  const settingsInfo = shapeFit ? shapeFit.fit?.fit_settings ?? null : garment?.fit_settings ?? null
+  const chipRecord = shapeFit ? shapeFit.fit?.metrics ?? null : fitRecord
+  // A body shape's fit is judged without the placement push gates (`fit_body`, server `clothing_gates`).
+  const fitLimits = shapeFit ? info?.limits?.fit_body ?? info?.limits?.fit : info?.limits?.fit
   const onRunFit = (run: GarmentRunBody, slot?: string) =>
     onRun(refitBody && run.step === 'fit' ? { ...run, body: refitBody } : run, slot)
   const bodySwitch = switchOn ? (
@@ -719,7 +729,7 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             </>
           ) : (
             <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>
-              {shownBody && shownBody.key !== 'plain' ? t(NO_ATTEMPT_KEPT) : t('No fitted mesh yet')}
+              {shownBody && shownBody.key !== 'plain' ? t(noRunAll ? NO_ATTEMPT_KEPT : NO_ATTEMPT_KEPT_HERE) : t('No fitted mesh yet')}
             </div>
           )}
           {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
@@ -753,11 +763,12 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             garment={garment}
             imageSteps={IMAGE_STEPS}
             stepLabels={STEP_LABELS}
-            limits={info.limits || {}}
+            limits={{ ...(info.limits || {}), fit: fitLimits }}
             fitChips={FIT_CHIPS}
             busy={busy || using}
             onRun={onRunFit}
             refitOn={refitOn}
+            shownFit={shapeFit}
             feedback={feedback}
             viewRuns={info.view_runs}
             useRuns={info.use_runs}
@@ -778,22 +789,32 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           ) : (
             <>
               <div className="ga-step-grid-empty" style={{ width: '100%', height: 120 }}>
-                {shownBody && shownBody.key !== 'plain' ? t(NO_ATTEMPT_KEPT) : t('No fitted mesh yet')}
+                {shownBody && shownBody.key !== 'plain' ? t(noRunAll ? NO_ATTEMPT_KEPT : NO_ATTEMPT_KEPT_HERE) : t('No fitted mesh yet')}
               </div>
               {info.steps?.length ? <ModelSteps steps={info.steps} /> : null}
             </>
           )}
-          {garment?.fit_settings ? (
-            <FitSettings character={character} itemId={itemId} info={garment.fit_settings} busy={busy}
+          {settingsInfo ? (
+            <FitSettings character={character} itemId={itemId} info={settingsInfo} busy={busy}
               feedback={feedback} onRun={onRunFit} onSaved={() => startPoll(0)} noRunAll={noRunAll}
               numbersOf={numbersOf} refitOn={refitOn} />
-          ) : null}
-          {numbersOf && fitRecord ? (
-            <div className="ga-hint" style={{ ...ROW, gap: 6 }}>
-              {numbersOf}:<GateChips specs={FIT_CHIPS} record={fitRecord} limits={info.limits?.fit} />
+          ) : shapeFit && garment?.fit_settings ? (
+            <div style={{ ...ROW, gap: 8, padding: '6px 8px', border: '1px solid var(--border, #30363d)', borderRadius: 6 }}>
+              <span>{refitOn}: {t('Not fitted yet on this body')}</span>
+              {noRunAll ? <span className="ga-hint">{t('The next Build refits it.')}</span> : (
+                <RunButton feedback={feedback} slot="fitsettings" disabled={busy}
+                  title={t('Fits the piece on the selected body shape again on the CPU — 0 hub jobs. The plain body is fitted first when its fit is due.')}
+                  label={`${t('Re-fit (0 hub jobs)')} · ${refitOn}`}
+                  onClick={() => onRunFit({ step: 'fit', force: true }, 'fitsettings')} />
+              )}
             </div>
-          ) : <GateChips specs={FIT_CHIPS} record={fitRecord} limits={info.limits?.fit} />}
-          {fit?.low && fit.low.ok === false ? (
+          ) : null}
+          {numbersOf && chipRecord ? (
+            <div className="ga-hint" style={{ ...ROW, gap: 6 }}>
+              {numbersOf}:<GateChips specs={FIT_CHIPS} record={chipRecord} limits={fitLimits} />
+            </div>
+          ) : <GateChips specs={FIT_CHIPS} record={chipRecord} limits={fitLimits} />}
+          {!shapeFit && fit?.low && fit.low.ok === false ? (
             <div className="ga-hint" style={WARN_STYLE}>
               {t('Distance tier failed — the full piece is used')}: {fit.low.error}
             </div>

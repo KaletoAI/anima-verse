@@ -883,7 +883,8 @@ def bodies(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any
     ("plain" | body id), label, status, reason, current (the figure stands on it now), url (the model to show,
     versioned; None: nothing to show), built_at, marks [{kind, count, colour, label}], foot_pose, can_accept,
     accept_block (why not), accepted_at, arm_light (Ruling A47: ``garment_fit.arm_light`` of what is shown, None
-    without), numbers (Ruling A50, ``body_numbers`` of what is shown: this body's own)}``. ``status``: ``accepted`` (the gates accepted it), ``user_accepted``
+    without), numbers (Ruling A50, ``body_numbers`` of what is shown: this body's own), fit (Ruling A50b,
+    ``body_fit_view``: what the dialog's fit row, chips and settings box show for this body; None = nothing)}``. ``status``: ``accepted`` (the gates accepted it), ``user_accepted``
     (light green, "Accepted by you", ``reason`` the gates' refusal), ``refused`` (``reason``), ``stale`` (made
     on an older body / piece / algorithm; refitted by the next Build), ``missing``. ``method_note``: how a body
     shape's shoe was fitted (``FIT_METHOD_NOTES``, "" otherwise), ``variant`` "" or ``DERIVED``: a body shape's
@@ -934,6 +935,29 @@ def _built_at(path: Optional[Path]) -> Optional[str]:
         return built_at(path) if path is not None else None
     except ValueError:
         return None
+
+
+def body_fit_view(item_id: str, record: Dict[str, Any], profile: Dict[str, Any], *,
+                  accepted: bool) -> Optional[Dict[str, Any]]:
+    """Ruling A50b — what the piece dialog's fit row, gate chips and fit settings box show of THIS body's fit
+    (``record``: the fit or kept attempt the entry shows; None when it shows nothing): ``{metrics, tris,
+    created_at, gates_ok, reasons (the refusing gate's, [] when accepted), fit_settings}`` — ``fit_settings`` ``garments.fit_settings_view`` of the record against
+    the piece's settings now (sleeves and allowance are per piece, shared by every body; their Auto resolution
+    comes from this body's fit), None for footwear."""
+    if not record:
+        return None
+    from app.core import garment_fit_settings, garment_store as gs, garments
+    metrics = record.get("metrics") or {}
+    attempt = record.get("attempt") or {}
+    fit_settings = None
+    if gs._garment_kind(item_id) == "clothing":
+        fit_settings = garments.fit_settings_view(record, garment_fit_settings.fit_settings(profile, item_id),
+                                                  accepted=accepted)
+    gates = attempt.get("gates") if attempt else record.get("gates")
+    reasons = [] if accepted else [str(r) for r in ((gates or {}).get("reasons") or [])]
+    return {"metrics": metrics, "tris": metrics.get("tris") or attempt.get("tris"),
+            "created_at": record.get("created_at") or attempt.get("at"),
+            "gates_ok": accepted, "reasons": reasons, "fit_settings": fit_settings}
 
 
 #: ``body_numbers``: the metrics a body's entry carries (Ruling A50).
@@ -1023,6 +1047,8 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
     shown_record = record if show_attempt else (fit_record if entry["_shown"] is not None else {})
     entry["arm_light"] = (shown_record.get("report") or {}).get("arm_light")
     entry["numbers"] = body_numbers(shown_record)
+    entry["fit"] = body_fit_view(item_id, shown_record, profile, accepted=entry["status"] in ("accepted",
+                                                                                           "user_accepted"))
     if entry["status"] == "refused":
         if found is None or not current_attempt:
             entry["accept_block"] = ("No attempt kept for this refusal (made before attempts were kept) — "
@@ -1061,7 +1087,8 @@ def _derived_entry(character_name: str, item_id: str, body: str, profile: Dict[s
                              "method_note": FIT_METHOD_NOTES["derived"], "variant": DERIVED,
                              "_shown": (glb, marks_path is not None) if glb is not None else None,
                              "arm_light": (record.get("report") or {}).get("arm_light"),
-                             "numbers": body_numbers(record)}
+                             "numbers": body_numbers(record), "fit": body_fit_view(item_id, record, profile,
+                                                                                    accepted=False)}
     plain = plain_reason(str(attempt.get("error") or ""), attempt.get("gates"), on_shape=True)
     entry.update(reason=plain["text"], reason_detail=plain["detail"], piece_broken=plain["piece"])
     entry["marks"] = [{"kind": k, "count": int(n), **MARK_KINDS[k]}

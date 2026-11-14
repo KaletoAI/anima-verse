@@ -4588,7 +4588,7 @@ def fit_settings_info(character_name: str, item_id: str, fsig: str, base_model_s
     {deep_push_share, torso_tight_share, sleeve_shards, sleeve_skin_left_cm2, sleeve_skin_right_cm2, scale},
     accepted (the shown fit passed its gates), built_at}``. The shown fit: the current fingerprint's fit on the
     base model, else its newest refused attempt (``fit_attempts``)."""
-    from app.core import fit_attempts, garment_fit, garment_fit_settings, garment_store as gs
+    from app.core import fit_attempts, garment_fit_settings, garment_store as gs
     current = garment_fit_settings.fit_settings(profile, item_id)
     record: Dict[str, Any] = {}
     accepted = False
@@ -4599,6 +4599,14 @@ def fit_settings_info(character_name: str, item_id: str, fsig: str, base_model_s
         found = fit_attempts.attempt_of(character_name, item_id, "")
         if found and found[1].get("fsig") == fsig:
             record = found[1]
+    return fit_settings_view(record, current, accepted=accepted)
+
+
+def fit_settings_view(record: Dict[str, Any], current: Dict[str, Any], *, accepted: bool) -> Dict[str, Any]:
+    """``fit_settings_info``'s shape for ONE fit record (or kept attempt; {} = none): what the fit settings box
+    shows of the fit it describes — the plain body's (``fit_settings_info``) or, Ruling A50b, a body shape's
+    (``fit_attempts`` entry ``fit``). ``current``: the piece's settings now (shared by every body)."""
+    from app.core import garment_fit, garment_fit_settings
     report = record.get("report") or {}
     metrics = record.get("metrics") or {}
     retry = report.get("scale_retry") or {}
