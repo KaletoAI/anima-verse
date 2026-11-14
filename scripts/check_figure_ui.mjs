@@ -130,7 +130,7 @@
  *     named, Task UI5); ready → {green, "Ready"}. ESTIMATE_NOTE = "Hub jobs are an estimate — retries extra"
  *     (F13 c) and FieldFigure puts it on the Build button (its mouse-over) and the changes through changeLine.
  * [17] Ruling A13b (source greps): FigureBuildButton posts only figure/build and labels itself with
- *       buildButton (the Figure tab's "Build (N jobs)"); BaseBodyOutfitStatus (Pose tab) and FieldModel3D (3D tab)
+ *       buildButton (the Figure tab's "Build (N jobs)"); FieldPose (Pose tab; BaseBodyOutfitStatus until Task UI5) and FieldModel3D (3D tab)
  *       render it instead of "Rebuild outfit model" / "Rebuild from base body" (no model3d/generate); the
  *       Wardrobe chip has no status.painted branch.
  * [18] Task UI2 (user 2026-11-13: "the tilt dialog is not needed in the Figure tab; make the 3D preview wider")
@@ -484,7 +484,7 @@ check('[16] FieldFigure uses them', [/t\(ESTIMATE_NOTE\)/.test(fieldFigure),
 
 // [17] Ruling A13b: the Pose tab's and the 3D tab's rebuild buttons are the Figure tab's Build.
 const fbb = src('frontend/src/tabs/characters/FigureBuildButton.tsx');
-const bbos = src('frontend/src/tabs/characters/BaseBodyOutfitStatus.tsx');
+const bbos = src('frontend/src/tabs/characters/FieldPose.tsx');
 const fm3 = src('frontend/src/tabs/characters/FieldModel3D.tsx');
 check('[17] FigureBuildButton posts only figure/build, labelled by buildButton',
   [[...fbb.matchAll(/apiPost[^(]*\(`\/characters\/\$\{enc\}\/([^`?]+)/g)].map((x) => x[1]),

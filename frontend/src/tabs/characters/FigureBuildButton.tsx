@@ -11,8 +11,10 @@ import { useToast } from '../../lib/Toast'
 import { BUILD_RUNNING_NOTE, BUILD_STATUS, buildButton } from './figureModel'
 import { useFigure } from './useFigure'
 
-export function FigureBuildButton({ character, onStarted }: {
+export function FigureBuildButton({ character, onStarted, primary = false }: {
   character: string
+  /** The flow head's one primary button (the Pose tab). */
+  primary?: boolean
   /** A Build was started or queued (the caller re-reads its own status). */
   onStarted?: () => void
 }) {
@@ -42,7 +44,7 @@ export function FigureBuildButton({ character, onStarted }: {
   const button = buildButton(data, t)
   return (
     <>
-      <button type="button" className="ga-btn ga-btn-sm" disabled={posting || !!button.disabled}
+      <button type="button" className={`ga-btn ga-btn-sm${primary ? ' ga-btn-primary' : ''}`} disabled={posting || !!button.disabled}
         title={button.disabled || t(data.cost.note)} onClick={build}>
         {button.label}
       </button>

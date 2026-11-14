@@ -1178,7 +1178,9 @@ export function CharactersTab() {
                           onOpen3D={fieldTabs.some((g) => g.id === 'tab:model3d_tab')
                             ? () => setSubTab('tab:model3d_tab') : undefined}
                           onOpenFigure={fieldTabs.some((g) => g.id === 'tab:figure_tab')
-                            ? () => setSubTab('tab:figure_tab') : undefined} />
+                            ? () => setSubTab('tab:figure_tab') : undefined}
+                          onOpenBaseBody={fieldTabs.some((g) => g.id === 'tab:base_body_tab')
+                            ? () => setSubTab('tab:base_body_tab') : undefined} />
                       ),
                       model3d_gen: (
                         <FieldModel3D key={selected} character={selected}

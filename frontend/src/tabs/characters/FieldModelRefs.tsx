@@ -2,7 +2,8 @@
  * FieldModelRefs — the character's reference renders in the CURRENT outfit.
  * Two kinds: `pose` (default-pose wardrobe preview) and `tpose` (input for the
  * image-to-3D pipeline). Which kinds are shown is chosen by the `kinds` prop —
- * the wardrobe shows only the default pose, the 3D tab only the T-pose.
+ * the wardrobe shows only the default pose (`layout="row"`), the Pose tab only the
+ * T-pose and its views as step rows (`layout="steps"`, Task UI5).
  *
  * Backend: GET /characters/{name}/model-refs (info),
  * GET .../model-refs/{tpose|pose} (image), POST .../model-refs/generate.
@@ -27,6 +28,9 @@ import { useToast } from '../../lib/Toast'
 import { ImageGenDialog } from '../../components/ImageGenDialog'
 import type { ImageGenSubmit } from '../../components/ImageGenDialog'
 import { RefImage } from './RefImage'
+import { StepRowView } from './StepRows'
+import { singleAction } from './figureModel'
+import { DRAFT_NOTE, MAIN_FOLLOWUP, VIEW_FOLLOWUP, renderAllLabel, viewRow } from './poseModel'
 import type { Freshness } from './FreshnessBadge'
 
 interface RefInfo {
@@ -103,8 +107,9 @@ const DRAFT_ORDER = ['back', 'left', 'right'] as const
 
 type RefKind = 'pose' | 'tpose'
 
-/** Tile height of the stacked layout (small: a click enlarges). */
-const STACK_TILE = 150
+/** Thumbnail size of a step row (small: a click enlarges). */
+const STEP_THUMB_W = 84
+const STEP_THUMB_H = 140
 /** A server-reported state is shown only after persisting this long. */
 const HINT_AFTER_S = 20
 /** Poll cadence while something runs or is scheduled; slows after ~2 min. */
@@ -152,14 +157,19 @@ export function FieldModelRefs({
   kinds = ['pose', 'tpose'],
   refreshKey = '',
   layout = 'row',
+  onOpenBaseBody,
+  onLights,
 }: {
   character: string
   kinds?: RefKind[]
   refreshKey?: string
-  /** `stack`: one narrow column of small tiles (the Pose tab's left column,
-   *  next to the outfit model's preview) — the main view, then every extra
-   *  view with its draft beside it. A click enlarges a tile. */
-  layout?: 'row' | 'stack'
+  /** `steps`: the Pose tab's views — one step row per dressed view with its light, small thumbnails (a click
+   *  enlarges) and its own Regenerate (Task UI5). `row`: the default-pose tile of the Wardrobe and General tabs. */
+  layout?: 'row' | 'steps'
+  /** `steps`: switches to the Base body tab (the face view is the plain body's). */
+  onOpenBaseBody?: () => void
+  /** `steps`: the views' lights, comma-joined, for the tab's flow head. */
+  onLights?: (lights: string) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -462,6 +472,127 @@ export function FieldModelRefs({
   const draftViews = info.pipeline
     ? DRAFT_ORDER.filter((v) => info.views?.[v] && info.drafts && v in info.drafts) : []
 
+  // The Pose tab (`layout="steps"`, Task UI5): one step row per dressed view — light, state, reason (mouse-over:
+  // the full reason and what resolves it), small thumbnails that enlarge on a click and the view's own Regenerate
+  // with its cost. The face view is the plain body's (Base body tab, face retexture) on the pipeline: a link and the
+  // one setting of the views pass that renders it.
+  const tposeRunning = !!st('tpose')?.running || building
+  const mainRow = viewRow(info.tpose, null, tposeRunning, t)
+  const extraViews = VIEW_ORDER.filter((v) => v !== 'face' && info.views?.[v]?.enabled)
+  const extraRows = extraViews.map((view) => ({ view, row: viewRow(info.views?.[view]?.info,
+    info.pipeline ? info.drafts?.[view] : null, tposeRunning, t) }))
+  const stepLights = layout === 'steps' && info.signature !== undefined
+    ? [mainRow.light, ...extraRows.map((r) => r.row.light)].join(',') : ''
+  useEffect(() => { if (stepLights) onLights?.(stepLights) }, [stepLights, onLights])
+
+  if (layout === 'steps') {
+    const thumb = (src: string, lbl: string, meta: RefInfo | null | undefined, k: string) => (
+      <div key={k} style={{ width: STEP_THUMB_W, minWidth: 0 }}>
+        <RefImage key={`${k}-${bust}`} src={`${src}?v=${bust}`} width={STEP_THUMB_W} height={STEP_THUMB_H} radius={6}
+          compact label={lbl} meta={meta} />
+        <div className="ga-hint" style={{ fontSize: 11 }}>{lbl}</div>
+      </div>
+    )
+    const viewDisabled = (needsMain: boolean): string | null =>
+      building ? t(BUILD_RUNS_VIEWS) : busy || running ? t('Rendering…') : needsMain && !info.tpose
+        ? t('Render the main view first') : null
+    const regen = (view: 'main' | typeof VIEW_ORDER[number], title: string) => {
+      const why = viewDisabled(view !== 'main')
+      return (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button type="button" className="ga-btn ga-btn-sm" disabled={!!why} title={why || title}
+            onClick={() => generate(view)}
+            aria-label={`${t('Regenerate')} · ${view === 'main' ? t('Main view') : viewLabel(view)}`}>
+            {singleAction('view', 1, t)}
+          </button>
+          {why && why !== t('Rendering…') ? <span className="ga-hint">{why}</span> : null}
+        </div>
+      )
+    }
+    const faceInfo = info.views?.face
+    const faceOn = !!faceInfo?.enabled
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+        {genError ? <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{genError}</div> : null}
+        <StepRowView row={{ name: t('Main view'), ...mainRow }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {info.tpose ? thumb(`/characters/${enc}/model-refs/tpose`, t('Front view'), info.tpose, 'main') : null}
+          </div>
+          {regen('main', info.pipeline ? `${t(MAIN_FOLLOWUP)}\n${t(VIEW_FOLLOWUP)}` : '')}
+        </StepRowView>
+        {extraRows.map(({ view, row }) => {
+          const draft = info.pipeline ? info.drafts?.[view] : null
+          const vi = info.views?.[view]?.info
+          return (
+            <StepRowView key={view} row={{ name: viewLabel(view), ...row,
+              detail: [row.detail, draft !== undefined && info.pipeline ? t(DRAFT_NOTE) : ''].filter(Boolean).join('\n') }}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {vi ? thumb(`/characters/${enc}/model-refs/tpose_${view}`, viewLabel(view), vi, view) : null}
+                {draft ? thumb(`/characters/${enc}/model-refs/tpose_${view}_draft`, draftLabel(view), draft, `${view}-draft`)
+                  : null}
+              </div>
+              {regen(view, info.pipeline ? t(VIEW_FOLLOWUP) : '')}
+            </StepRowView>
+          )
+        })}
+        {faceInfo && info.pipeline ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span className="ga-hint">{t('Face view: it textures the plain body’s face — regenerated in the Base body tab')}</span>
+              {onOpenBaseBody ? (
+                <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenBaseBody}>↗ {t('Base body')}</button>
+              ) : null}
+            </div>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}
+              title={t('Render a face close-up for face retexture')}>
+              <input type="checkbox" checked={faceOn} onChange={(e) => setView('face', e.target.checked)} />
+              <span>{t('Render a missing face view with these views')}</span>
+              <span className="ga-hint">{faceOn ? t('Saved — the next views render adds it if missing (1 image job)')
+                : t('Saved — nothing runs')}</span>
+            </label>
+          </div>
+        ) : faceInfo ? renderView('face', STEP_THUMB_H) : null}
+        {info.pipeline ? null : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid var(--border, #30363d)',
+            paddingTop: 6 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={blocked || !anyAuto}
+                title={t('Re-renders the current combination, every switched-on view included')}
+                onClick={() => generate()}>
+                {showGenerating ? t('Generating…') : renderAllLabel(extraViews.length, t)}
+              </button>
+              {showQueued ? (
+                <span className="ga-hint">
+                  {dueIn > 0 ? t('Render queued · starts in {s} s').replace('{s}', String(Math.round(dueIn)))
+                    : t('Render queued')}
+                </span>
+              ) : null}
+            </div>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              {kindList.map((kind) => (
+                <label key={kind} style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
+                  title={t('Render this image automatically after outfit changes')}>
+                  <input type="checkbox" checked={autoOn(kind)} onChange={(e) => setAuto(kind, e.target.checked)} />
+                  <span>{t('Auto')}</span>
+                </label>
+              ))}
+              {toggleViews.map((view) => (
+                <label key={view} style={{ display: 'flex', gap: 4, alignItems: 'center', cursor: 'pointer' }}
+                  title={view === 'face' ? t('Render a face close-up for face retexture')
+                    : t('Render this extra pose view for multi-view 3D generation')}>
+                  <input type="checkbox" checked={!!info.views?.[view]?.enabled}
+                    onChange={(e) => setView(view, e.target.checked)} />
+                  <span>{viewLabel(view)}</span>
+                </label>
+              ))}
+            </div>
+            <span className="ga-hint">{t('Saved at once — a view switched on renders with the next render (1 image job each)')}</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="ga-form">
       {genError ? <div className="ga-hint" style={{ color: 'var(--danger, #f85149)' }}>{genError}</div> : null}
@@ -470,46 +601,6 @@ export function FieldModelRefs({
           {t(BUILD_RUNS_VIEWS)}{info.build?.step ? ` · ${info.build.step}` : ''}
         </div>
       ) : null}
-      {layout === 'stack' ? (
-        <div className="ga-view-stack">
-          {kindList.map((kind) => (
-            <div key={kind} style={{ minWidth: 0 }}>
-              <div className="ga-hint">{kind === 'tpose' ? t('Main view') : label(kind)}</div>
-              {info[kind] ? (
-                <RefImage key={`${kind}-${bust}`} src={`/characters/${enc}/model-refs/${kind}?v=${bust}`}
-                  height={STACK_TILE} radius={6} compact label={label(kind)} meta={info[kind]}
-                  action={kind === 'tpose' ? (
-                    <button type="button" className="ga-btn ga-btn-sm" style={{ fontSize: 10, padding: '1px 5px' }}
-                      disabled={blocked} onClick={() => generate('main')}
-                      aria-label={`${t('Regenerate')} · ${t('Main view')}`}>
-                      {t('Regenerate')}
-                    </button>
-                  ) : undefined} />
-              ) : (
-                <>
-                  <div className="ga-hint">{t('No render yet')}</div>
-                  {kind === 'tpose' ? (
-                    <button type="button" className="ga-btn ga-btn-sm" disabled={blocked} onClick={() => generate('main')}
-                      aria-label={`${t('Regenerate')} · ${t('Main view')}`}>
-                      {t('Regenerate')} · {t('Main view')}
-                    </button>
-                  ) : null}
-                </>
-              )}
-            </div>
-          ))}
-          {kindList.includes('tpose') ? VIEW_ORDER.filter((v) => info.views?.[v]?.enabled).map((view) => (
-            // A dressed back/side view and the draft it was composited from, side
-            // by side; a view without a stored draft keeps the full width.
-            (draftViews as string[]).includes(view) && info.drafts?.[view] ? (
-              <div key={view} className="ga-view-pair">
-                {renderView(view, STACK_TILE)}
-                {renderDraft(view as typeof DRAFT_ORDER[number], STACK_TILE)}
-              </div>
-            ) : renderView(view, STACK_TILE)
-          )) : null}
-        </div>
-      ) : (
       <div style={{ display: 'flex', gap: 8 }}>
         {kindList.map((kind) => {
           const ri = info[kind]
@@ -565,7 +656,6 @@ export function FieldModelRefs({
           )
         })}
       </div>
-      )}
       <div className="ga-hint">
         {kindList.includes('tpose') && info.pipeline
           ? t(BUILD_MAKES_VIEWS)

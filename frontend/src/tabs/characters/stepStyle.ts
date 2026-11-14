@@ -7,7 +7,8 @@ export const LIGHT_COLOR: Record<Light, string> = {
   yellow: 'var(--warning, #d29922)',
   red: 'var(--danger, #f85149)',
   grey: 'var(--text-muted, #6e7681)',
-  blue: 'var(--accent, #58a6ff)',
+  // A fixed blue: the theme's accent is green, and "running" must not read as "current".
+  blue: '#58a6ff',
 }
 
 /** The frame of a tab's right-hand panel (the sub-tabs and their content). */
