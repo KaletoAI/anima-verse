@@ -5,7 +5,8 @@
  * and the group's motion values (saved character-wide, live in the preview), and the rebuild button.
  *
  * Two homes (Ruling A45): the Base body tab, beside the tip panels, acting on the base model — the outfit models
- * built on it take its switches; and the 3D tab for a character off the base-body pipeline (an animal, a
+ * built on it take its switches; there the caller passes only the groups WITHOUT a tip panel (`box_groups`): a tip
+ * group's light, switch, factors and Rebuild sit in its own tip panel (Ruling A53); and the 3D tab for a character off the base-body pipeline (an animal, a
  * temporary NPC), acting on the served model. The owner holds the state and the requests; this box only renders.
  */
 import type { ExtensionRigDeclaration, SecondaryMotionPayload } from '@anima/scene-render'
@@ -28,8 +29,6 @@ export interface ExtensionBonesBoxProps {
   switches: Record<string, { enabled?: boolean; flip?: boolean }> | undefined
   /** Switches the model takes from its base model, shown locked (`extension_inherited`). */
   inherited?: Record<string, { enabled: boolean; reason: string }>
-  /** Groups whose Enabled switch lives in their own tip panel beside this box (Base body tab). */
-  switchedElsewhere?: ReadonlySet<string>
   motionDefaults: SecondaryMotionPayload['groups'] | undefined
   motionOverrides: Record<string, Physics> | undefined
   disabled: boolean
@@ -54,7 +53,7 @@ export interface ExtensionBonesBoxProps {
   rebuild?: { label: string; title?: string; disabled: boolean; primary?: boolean; onClick: () => void } | null
 }
 
-export function ExtensionBonesBox({ groups, result, tier, signature, switches, inherited, switchedElsewhere,
+export function ExtensionBonesBox({ groups, result, tier, signature, switches, inherited,
   motionDefaults, motionOverrides, disabled, rigless, draftKey, onSwitch, onMotion, sliders, lights, note,
   legend, rebuild }: ExtensionBonesBoxProps) {
   const { t } = useI18n()
@@ -101,17 +100,13 @@ export function ExtensionBonesBox({ groups, result, tier, signature, switches, i
                 {light.detail && light.light === 'red' ? <span className="ga-hint"> ({light.detail})</span> : null}
               </span>
             ) : null}
-            {switchedElsewhere?.has(group.id) ? (
-              <span className="ga-hint">{t('Enabled: in its tip panel')}</span>
-            ) : (
-              <label title={locked ? t(locked.reason) : undefined}>
-                <input type="checkbox" disabled={disabled || !signature || !!locked}
-                  checked={!locked && own?.enabled !== false}
-                  onChange={(event) => onSwitch(group.id, 'enabled', event.target.checked)} />
-                {' '}{t('Enabled')} <MotionPreviewHint field="enabled" />
-                {locked ? <span className="ga-hint" style={{ marginLeft: 4 }}>{t(locked.reason)}</span> : null}
-              </label>
-            )}
+            <label title={locked ? t(locked.reason) : undefined}>
+              <input type="checkbox" disabled={disabled || !signature || !!locked}
+                checked={!locked && own?.enabled !== false}
+                onChange={(event) => onSwitch(group.id, 'enabled', event.target.checked)} />
+              {' '}{t('Enabled')} <MotionPreviewHint field="enabled" />
+              {locked ? <span className="ga-hint" style={{ marginLeft: 4 }}>{t(locked.reason)}</span> : null}
+            </label>
             {group.op === 'appendage_chain' ? (
               <label>
                 <input type="checkbox" disabled={disabled || !signature}

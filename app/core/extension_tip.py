@@ -51,7 +51,7 @@ def _rgb(colour: str) -> Tuple[int, int, int]:
 def paint_texels(image: bytes, mime: str, discs: List[Dict[str, Any]]) -> Tuple[bytes, int]:
     """``image`` with every disc blended in: ``discs`` = ``[{size: [w, h],
     texels: [x, y, alpha 1..255, ...], color: "#rrggbb"}]`` (``disc_mask``,
-    rows top-down; optional ``colors``: one RGB row per texel instead of the one ``color``). Per texel
+    rows top-down). Per texel
     ``out = in * (1 - a) + colour * a``. A JPEG keeps
     its own quantisation tables (no second, coarser generation), PNG/WebP stay
     lossless. Returns ``(bytes, texels painted)``; with no texel the input
@@ -75,8 +75,7 @@ def paint_texels(image: bytes, mime: str, discs: List[Dict[str, Any]]) -> Tuple[
             if (w, h) != (width, height):
                 xs, ys = xs * width // w, ys * height // h
             alpha = (texels[:, 2] / 255.0)[:, None]
-            colour = (np.asarray(disc["colors"], dtype=np.float32).reshape(-1, 3) if disc.get("colors") is not None
-                      else np.asarray(_rgb(disc["color"]), dtype=np.float32))
+            colour = np.asarray(_rgb(disc["color"]), dtype=np.float32)
             rgb[ys, xs] = rgb[ys, xs] * (1 - alpha) + colour * alpha
             painted_at.update(zip(xs.tolist(), ys.tolist()))
         painted = Image.fromarray(np.clip(np.rint(rgb), 0, 255).astype(np.uint8), "RGB")
@@ -100,93 +99,6 @@ def paint_texels(image: bytes, mime: str, discs: List[Dict[str, Any]]) -> Tuple[
     return out.getvalue(), len(painted_at)
 
 
-def _lab(rgb):
-    """CIE L*a*b* (D65) of sRGB rows ``(..., 3)`` in 0..255."""
-    import numpy as np
-    c = np.asarray(rgb, dtype=np.float64) / 255.0
-    c = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
-    xyz = c @ np.array([[0.4124, 0.2126, 0.0193], [0.3576, 0.7152, 0.1192], [0.1805, 0.0722, 0.9505]])
-    xyz = xyz / np.array([0.95047, 1.0, 1.08883])
-    f = np.where(xyz > (6 / 29) ** 3, np.cbrt(xyz), xyz / (3 * (6 / 29) ** 2) + 4 / 29)
-    return np.stack([116 * f[..., 1] - 16, 500 * (f[..., 0] - f[..., 1]), 200 * (f[..., 1] - f[..., 2])], -1)
-
-
-def _decode_rgb(image: bytes):
-    import numpy as np
-    from PIL import Image
-    with Image.open(io.BytesIO(image)) as source:
-        return np.asarray(source.convert("RGB"), dtype=np.float64)
-
-
-def _scaled(values, size, columns, shape):
-    """Texel rows ``[x, y, ...]`` of an image of ``size`` mapped onto an image of ``shape`` (h, w)."""
-    import numpy as np
-    rows = np.asarray(values or [], dtype=np.int64).reshape(-1, columns)
-    w, h = size
-    height, width = shape[:2]
-    if len(rows) and (w, h) != (width, height):
-        rows = rows.copy()
-        rows[:, 0], rows[:, 1] = rows[:, 0] * width // w, rows[:, 1] * height // h
-    return rows
-
-
-def neutral_colour(rgb, side: Dict[str, Any]) -> Optional[str]:
-    """The skin colour around a switched-off tip part (Ruling A44; the record's colour, the ΔE reference): the
-    per-channel median of the ring texels
-    (``side["ring"]``, ``extension_bones.neutral_mask``) in the decoded base colour ``rgb``; None without a ring."""
-    import numpy as np
-    ring = _scaled(side.get("ring"), side.get("size") or [0, 0], 2, rgb.shape)
-    if not len(ring):
-        return None
-    median = np.median(rgb[ring[:, 1], ring[:, 0]], axis=0)
-    return "#" + "".join(f"{int(round(v)):02x}" for v in np.clip(median, 0, 255))
-
-
-def neutral_fill(rgb, side: Dict[str, Any]):
-    """The colours to paint ``side["paint"]`` with (``(n, 3)`` floats, one per paint texel), or None without a ring:
-    per channel a plane ``a + b u + c w`` fitted to the ring texels, so the baked light gradient across the region
-    carries on instead of a flat disc. ``u, w`` = where the texel lies on the surface (``side["ring_at"]`` /
-    ``["paint_at"]``, mm in the tip's tangent frame: one plane across UV seams); without them, its texel position. The fit is trimmed three times (texels whose colour lies
-    more than 2.5 x the median distance + 1 from the plane drop out: a speck, a seam, the part's own colour bleeding
-    into the ring) and its values are clipped to the colour range of the ring texels kept."""
-    import numpy as np
-    ring = _scaled(side.get("ring"), side.get("size") or [0, 0], 2, rgb.shape)
-    paint = _scaled(side.get("paint"), side.get("size") or [0, 0], 3, rgb.shape)
-    if not len(ring):
-        return None
-    colours = rgb[ring[:, 1], ring[:, 0]]
-    ring_at, paint_at = side.get("ring_at"), side.get("paint_at")
-    if ring_at is not None and paint_at is not None and len(ring_at) == 2 * len(ring) and len(paint_at) == 2 * len(paint):
-        ring = np.asarray(ring_at, dtype=np.float64).reshape(-1, 2)
-        paint = np.asarray(paint_at, dtype=np.float64).reshape(-1, 2)
-    design = lambda rows: np.stack([np.ones(len(rows)), rows[:, 0], rows[:, 1]], 1).astype(np.float64)
-    keep = np.ones(len(ring), bool)
-    for _ in range(3):
-        if keep.sum() < 6:
-            break
-        coef = np.linalg.lstsq(design(ring[keep]), colours[keep], rcond=None)[0]
-        distance = np.linalg.norm(colours - design(ring) @ coef, axis=1)
-        keep = distance <= 2.5 * np.median(distance[keep]) + 1.0
-    if keep.sum() < 6:
-        median = np.median(colours, axis=0)
-        return np.repeat(median[None], len(paint), 0)
-    coef = np.linalg.lstsq(design(ring[keep]), colours[keep], rcond=None)[0]
-    low, high = colours[keep].min(0), colours[keep].max(0)
-    return np.clip(design(paint) @ coef, low, high)
-
-
-def neutral_delta_e(rgb, side: Dict[str, Any], colour: str) -> Optional[float]:
-    """CIE76 ΔE between ``colour`` and the mean of the fully painted texels of ``side`` in ``rgb`` — before the
-    paint: how far the part's colour stands out from the skin; after it: what is left of it."""
-    import numpy as np
-    paint = _scaled(side.get("paint"), side.get("size") or [0, 0], 3, rgb.shape)
-    core = paint[paint[:, 2] >= 255] if len(paint) else paint
-    if not len(core):
-        return None
-    mean = rgb[core[:, 1], core[:, 0]].mean(axis=0)
-    return round(float(np.linalg.norm(_lab(mean) - _lab(np.asarray(_rgb(colour), dtype=np.float64)))), 2)
-
-
 def paint_disc_masks(path, groups: List[Dict[str, Any]], metrics: Dict[str, Any]) -> Dict[str, Any]:
     """The extension script's ``metrics`` without the texel lists
     (``disc_mask``): each such group gets a ``disc`` summary instead
@@ -194,34 +106,15 @@ def paint_disc_masks(path, groups: List[Dict[str, Any]], metrics: Dict[str, Any]
     diameter, soft edge). With ``path`` (the staged GLB the script wrote)
     the discs are painted into its base colour (``paint_texels``); ``path``
     None (no model was produced) paints nothing. A paint failure keeps the
-    model unpainted and says why — it never fails the build.
-
-    A switched-off tip part that leaves a neutral surface (Ruling A44) brings
-    a ``neutral_mask`` instead: per side the texels to paint over and the
-    ring around them. Each side is painted with the ring's colours carried
-    across (``neutral_fill``), before any disc; the group gets a ``neutral``
-    summary (``status``, ``reason``, ``texture_pixels``, per side ``colour``
-    and ``delta_e`` [before, after] — ``neutral_delta_e``)."""
+    model unpainted and says why — it never fails the build. A switched-off
+    tip part that leaves a neutral surface paints nothing: only its mesh is
+    levelled (Ruling A53)."""
     from app.core.extension_rig import DISC_DEFAULTS
     settings = {group["id"]: {**DISC_DEFAULTS, **((group.get("tip_override") or {}).get("disc") or {})}
                 for group in groups}
     out: Dict[str, Any] = {}
     discs: List[Tuple[str, Dict[str, Any]]] = []
-    neutral: List[Tuple[str, List[Dict[str, Any]]]] = []
     for group_id, values in metrics.items():
-        if isinstance(values, dict) and "neutral_mask" in values:
-            values = dict(values)
-            mask = values.pop("neutral_mask") or {}
-            summary = {"status": "applied", "reason": "", "texture_pixels": 0, "sides": []}
-            if mask.get("error"):
-                summary.update(status="failed", reason=str(mask["error"]))
-            elif path is None:
-                summary.update(status="skipped", reason="No model was produced")
-            else:
-                neutral.append((group_id, [side for side in mask.get("sides") or [] if isinstance(side, dict)]))
-            values["neutral"] = summary
-            out[group_id] = values
-            continue
         if not isinstance(values, dict) or "disc_mask" not in values:
             out[group_id] = values
             continue
@@ -239,42 +132,20 @@ def paint_disc_masks(path, groups: List[Dict[str, Any]], metrics: Dict[str, Any]
                                      "color": disc["color"]}))
         values["disc"] = summary
         out[group_id] = values
-    if (discs or neutral) and path is not None:
+    if discs and path is not None:
         from app.core.base_body import base_color_image, replace_base_color
         try:
             glb = path.read_bytes()
             image, mime = base_color_image(glb)
-            source = _decode_rgb(image) if neutral else None
-            covers: List[Tuple[str, Dict[str, Any], Dict[str, Any]]] = []
-            for group_id, sides in neutral:
-                for side in sides:
-                    colour = neutral_colour(source, side)
-                    if colour is None:
-                        continue
-                    cover = {"size": side.get("size") or [0, 0], "texels": side.get("paint") or [], "color": colour,
-                             "colors": neutral_fill(source, side)}
-                    covers.append((group_id, side, cover))
-            painted, count = paint_texels(image, mime, [cover for _, _, cover in covers] + [disc for _, disc in discs])
+            painted, count = paint_texels(image, mime, [disc for _, disc in discs])
             if painted != image:
                 path.write_bytes(replace_base_color(glb, painted, mime))
-            after = _decode_rgb(painted) if covers else None
-            for group_id, side, cover in covers:
-                summary = out[group_id]["neutral"]
-                summary["texture_pixels"] = count
-                summary["sides"].append({"colour": cover["color"],
-                                         "delta_e": [neutral_delta_e(source, side, cover["color"]),
-                                                     neutral_delta_e(after, side, cover["color"])]})
-            for group_id, sides in neutral:
-                if not out[group_id]["neutral"]["sides"]:
-                    out[group_id]["neutral"].update(status="failed", reason="No skin found around the part to sample")
             for group_id, _ in discs:
                 out[group_id]["disc"]["texture_pixels"] = count
         except (ValueError, OSError) as exc:
             logger.warning("Colour disc not painted into %s: %s", path, exc)
             for group_id, _ in discs:
                 out[group_id]["disc"].update(status="failed", reason=f"Painting failed: {exc}")
-            for group_id, _ in neutral:
-                out[group_id]["neutral"].update(status="failed", reason=f"Painting failed: {exc}")
     return out
 
 
@@ -541,25 +412,51 @@ def tip_panels(character_name: str, signature: str) -> List[Dict[str, Any]]:
     return panels
 
 
+def group_tip_settings(panels: List[Dict[str, Any]], extension: Optional[Dict[str, Any]]) -> None:
+    """One place per tip group (Ruling A53): each tip panel gets what the "Extension bones" box used to show for
+    its group — ``light`` (the group's ``extension_group_lights`` entry, None without one), ``controls`` (the
+    motion values the group declares, e.g. length and girth factors; [] without a declaration) and ``built_at`` (when
+    the model's extension rig was last built with something applied, else None) — and the box's
+    ``box_groups`` lists only the groups WITHOUT a tip panel (the box no longer shows tip groups). ``groups`` and
+    ``lights`` stay whole: the viewer's motion preview reads every group. Mutates in place; a missing
+    ``extension`` (no stored model) leaves the panels with ``light`` None and ``controls`` []."""
+    ids = {panel["id"] for panel in panels}
+    groups = {g.get("id"): g for g in ((extension or {}).get("groups") or []) if isinstance(g, dict)}
+    lights = (extension or {}).get("lights") or {}
+    result = (extension or {}).get("result") or {}
+    built_at = result.get("attempted_at") if result.get("status") == "applied" else None
+    for panel in panels:
+        group = groups.get(panel["id"]) or {}
+        panel["light"] = lights.get(panel["id"])
+        panel["controls"] = list(group.get("controls") or [])
+        panel["built_at"] = built_at
+    if extension is not None:
+        extension["box_groups"] = [gid for gid in groups if gid not in ids]
+
+
 # --- Tip smoothing (Ruling A43) ------------------------------------------------------------------------------------
 #
-# Before a ``pair_tip`` group builds its stub, ``extension_bones.tip_mesh`` smooths the source skin over the part's
-# footprint and the moved vertices get the surface's own normals (Ruling A34). It runs inside the extension rebuild;
-# this record makes it visible on its own: ``meta["tip_smoothing"]`` of a base model =
-# ``{version, at, status: built|failed, error, groups: {group: {applied, reason, max_shift_mm, moved, radius_mm,
-# passes, inverted: [before, after], off_60: [before, after], region_mm}}}``, written by every extension build of a
-# base body that carries a ``pair_tip`` group (``model3d._extension_rig_once``). A base whose tip groups lack it, or
-# carry an older ``version``, is due: Run all, the Build or "Smooth again" rerun the extension step (CPU, no hub job).
+# Before a ``pair_tip`` group builds its stub, ``extension_bones.tip_mesh`` levels the source bump — the part the
+# mesher modelled where the source group located it, before any offset — onto the surface around it (Ruling A53, the
+# levelling of Ruling A44); a tip an offset moved away is not levelled where it sits (no source bump there, and a
+# quadric fitted on the curve's flank flattens it); the moved vertices get the surface's own normals (Ruling A34). It runs inside the extension rebuild; this record makes it
+# visible on its own: ``meta["tip_smoothing"]`` of a base model = ``{version, at, status: built|failed, error,
+# groups: {group: {applied, reason, max_shift_mm, moved, radius_mm, passes, inverted: [before, after], off_60:
+# [before, after], region_mm, bump_mm: [[before, after] per side], tip_from_source_mm: [per side]}}}``, written by
+# every extension build of a base body that carries a ``pair_tip`` group (``model3d._extension_rig_once``). A base
+# whose tip groups lack it, or carry an older ``version``, is due: Run all, the Build or "Smooth again" rerun the
+# extension step (CPU, no hub job).
 #
 # A ``pair_tip`` group switched off on the base model whose declaration says ``when_off: neutralise`` (Ruling A44)
-# shares the row: the extension build smooths the skin where the part would sit (``extension_bones.neutralise_mesh``)
-# and paints it over with the skin colour of the ring around it (``paint_disc_masks``); its record entry carries
-# ``mode: "neutralised"`` with the tip height and the colour difference before → after. Each group's entry must be of
-# the mode its switch asks for, so switching the part on or off makes the step due.
+# shares the row: the extension build levels the source bump the same way (``extension_bones.neutralise_mesh``) and
+# leaves the texture as it is (Ruling A53); its record entry carries ``mode: "neutralised"`` with the tip height
+# before → after. Each group's entry must be of the mode its switch asks for, so switching the part on or off makes
+# the step due.
 
 #: The tip smoothing's version: a record of an older one makes the step due. 1 = Laplacian smoothing over the
-#: footprint + surface normals (Ruling A34), recorded with the normal counts (Ruling A43).
-TIP_SMOOTHING_VERSION = 1
+#: footprint + surface normals (Ruling A34), recorded with the normal counts (Ruling A43); 2 = the source bump levelled
+#: onto the fitted surface under a part that is on, and a part that is off levels the mesh only (Ruling A53).
+TIP_SMOOTHING_VERSION = 2
 
 
 def _source_smooth(values: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -567,6 +464,15 @@ def _source_smooth(values: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if isinstance(row, dict) and isinstance(row.get("source_smooth"), dict):
             return row["source_smooth"]
     return None
+
+
+def _levelled_sides(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Per side the source bump's height above the fitted surface [before, after] (mm) and the placed tip's distance
+    from the source apex (mm) — ``extension_bones.level_sides``."""
+    sides = [row.get("source_level") if isinstance(row.get("source_level"), dict) else row for row in rows]
+    return {"bump_mm": [side.get("bump_mm") for side in sides if side.get("bump_mm") is not None],
+            "tip_from_source_mm": [side.get("tip_from_source_mm") for side in sides
+                                   if side.get("tip_from_source_mm") is not None]}
 
 
 def tip_smoothing_group(values: Dict[str, Any]) -> Dict[str, Any]:
@@ -578,12 +484,10 @@ def tip_smoothing_group(values: Dict[str, Any]) -> Dict[str, Any]:
     entry: Dict[str, Any] = {"applied": False, "reason": "", "max_shift_mm": None, "moved": 0,
                              "radius_mm": None, "passes": None,
                              "inverted": normals.get("inverted"), "off_60": normals.get("off_60"),
-                             "region_mm": normals.get("region_mm")}
+                             "region_mm": normals.get("region_mm"), **_levelled_sides(rows)}
     status = str(values.get("status") or ("applied" if rows else "not_found"))
     if status not in ("applied", ""):
         entry["reason"] = f"Tip part not built: {values.get('reason') or status}"
-    elif smooth is None and rows and all(row.get("tip_source") == "mesh" for row in rows):
-        entry["reason"] = "The model's own tip is kept — nothing replaced, nothing smoothed"
     elif smooth is None:
         entry["reason"] = "Not smoothed"
     else:
@@ -591,45 +495,40 @@ def tip_smoothing_group(values: Dict[str, Any]) -> Dict[str, Any]:
                      radius_mm=round(float(smooth.get("radius_m") or 0) * 1000, 2),
                      passes=smooth.get("iterations"))
         entry["applied"] = entry["moved"] > 0
-        if not entry["applied"]:
+        if smooth.get("error"):
+            entry["reason"] = f"Source bump not levelled: {smooth['error']}"
+        elif not entry["applied"]:
             entry["reason"] = "Already smooth — nothing moved"
     return entry
 
 
-#: The reason of a neutralised group (Ruling A44).
-NEUTRALISED_REASON = "Smoothed and painted over — part is off"
+#: The reason of a neutralised group (Ruling A44; only the mesh since Ruling A53).
+NEUTRALISED_REASON = "Smoothed — part is off"
 
 
 def tip_neutral_group(values: Dict[str, Any]) -> Dict[str, Any]:
     """One switched-off group's entry of the record (Ruling A44) from the extension script's metrics of that group
-    (pure): ``mode`` neutralised, the smoothing's numbers, per side ``height_mm`` (the mesh's own tip above its
-    surroundings, [before, after]) and ``delta_e`` (the part's colour against the ring, [before, after]),
-    ``painted`` texels; ``applied`` when anything moved or was painted."""
+    (pure): ``mode`` neutralised, the levelling's numbers, per side ``height_mm`` (the mesh's own tip above its
+    surroundings, [before, after]) and ``bump_mm`` (the source bump above the fitted surface, [before, after]);
+    ``applied`` when anything moved. The texture is never touched (Ruling A53)."""
     values = values if isinstance(values, dict) else {}
     smooth = values.get("source_smooth") if isinstance(values.get("source_smooth"), dict) else None
     normals = values.get("tip_normals") if isinstance(values.get("tip_normals"), dict) else {}
     rows = [row for row in values.get("placement") or [] if isinstance(row, dict)]
-    paint = values.get("neutral") if isinstance(values.get("neutral"), dict) else {}
     entry: Dict[str, Any] = {"mode": "neutralised", "applied": False, "reason": "", "max_shift_mm": None, "moved": 0,
                              "radius_mm": None, "passes": None,
                              "inverted": normals.get("inverted"), "off_60": normals.get("off_60"),
                              "region_mm": normals.get("region_mm"),
                              "height_mm": [[row.get("height_before_mm"), row.get("height_after_mm")] for row in rows],
-                             "delta_e": [side.get("delta_e") for side in paint.get("sides") or []
-                                         if isinstance(side, dict)],
-                             "colours": [side.get("colour") for side in paint.get("sides") or []
-                                         if isinstance(side, dict)],
-                             "painted": int(paint.get("texture_pixels") or 0)}
+                             "bump_mm": _levelled_sides(rows)["bump_mm"]}
     if values.get("status") != "neutralised":
         entry["reason"] = str(values.get("reason") or "Nothing located where the part would sit — nothing changed")
         return entry
     if smooth:
         entry.update(max_shift_mm=smooth.get("max_shift_mm"), moved=int(smooth.get("moved") or 0),
                      radius_mm=round(float(smooth.get("radius_m") or 0) * 1000, 2), passes=smooth.get("iterations"))
-    entry["applied"] = entry["moved"] > 0 or entry["painted"] > 0
+    entry["applied"] = entry["moved"] > 0
     entry["reason"] = NEUTRALISED_REASON
-    if paint.get("status") not in (None, "applied"):
-        entry["reason"] = f"Smoothed; not painted over: {paint.get('reason') or paint.get('status')}"
     return entry
 
 

@@ -128,6 +128,12 @@ export interface ExtensionTipPanelInfo {
   due?: boolean
   /** The last Apply's error ('' when it succeeded). */
   error: string
+  /** The group's light (Ruling A53: in its tip panel, no longer in the Extension bones box). */
+  light?: ExtensionGroupLight | null
+  /** The motion values the group declares (e.g. `length`, `girth`), edited in the panel. */
+  controls?: string[]
+  /** When the model's extension rig was last built (null: never applied). */
+  built_at?: string | null
 }
 
 /** The base front's skin detail step (`base_skin.info`). */
@@ -161,6 +167,8 @@ export interface BaseExtensionState {
   lights?: Record<string, ExtensionGroupLight>
   /** The background rebuild of the extension bones runs on this model. */
   running: boolean
+  /** The groups the Extension bones box lists: those without a tip panel (Ruling A53). */
+  box_groups?: string[]
 }
 
 /** A group's light in the Extension bones box (`model3d.extension_group_lights`): English state and reason

@@ -402,18 +402,19 @@ detail_changed`). 2D renders are unaffected. The core never names the group.
 `when_off` (`nothing` | `neutralise`, default `nothing`; `pair_tip` groups only) says
 what a group leaves where it would sit while a base model has it switched off
 (the base body tip panel's switch). `nothing` keeps the source surface as the
-mesher made it. `neutralise` levels it: the region of the part's colour marker
-(max(1.2 × R, 12 mm), fading over 0.8 × that; R = the marker's equal-area
-radius, without a marker the stub radius) is flat-subdivided and moved along the
-surface normal onto a quadratic fitted to the outer skin on the ring 1.8–2.5 ×
-that radius, so the curve stays and the mesher's own tip, disc or crater goes; a
-second sheet under it is only lowered and ends 1 mm below the skin. The base
-colour there is painted over with the median colour of the ring 1.6–2.0 × R
-(full out to 1.15 × R, fading to nothing at 1.45 × R). No bone is built. The
-base body tab's "Tip smoothing (local)" row reports it ("Smoothed and painted
-over — part is off", tip height and colour difference ΔE before → after);
-switching the part on or off makes that row due. When the source placement is
-missing nothing changes and the row says so. CPU only, in the extension rebuild.
+mesher made it. `neutralise` levels it: around the source's apex (where the
+source group located the part — its colour marker or crest, an offset moves only
+a part that is on), the region max(1.2 × R, 12 mm, stub radius + wall + 3 mm),
+fading over 0.8 × that (R = the marker's equal-area radius, without a marker the
+stub radius), is flat-subdivided and moved along the surface normal onto a
+quadratic fitted to the outer skin on the ring 1.8–2.5 × that radius, so the
+curve stays and the mesher's own tip, disc or crater goes; a second sheet under
+it is only lowered and ends 1 mm below the skin. Only the mesh changes: the
+texture stays as it is (Ruling A53). No bone is built. The base body tab's "Tip
+smoothing (local)" row reports it ("Smoothed — part is off", tip height and the
+source bump above the fitted surface before → after); switching the part on or
+off makes that row due. When the source placement is missing nothing changes
+and the row says so. CPU only, in the extension rebuild.
 
 `clothing_lift_default: {<clothing slot>: 0..1}` (mapping, default empty; keys
 must be in the body slot's `covered_by`) declares which clothing slots LIFT a
@@ -644,15 +645,23 @@ model on the base body inherits the base's `enabled: false` of a `pair_tip` grou
 (`extension_rig.inherited_extension_switches`): part of its effective overrides
 and so of its fingerprint — an existing outfit turns stale, one built later has
 no tip — and its own switch cannot turn it back on (the 3D tab shows it locked,
-"Switched off on the base body").
-A tip the mesher already modelled is measured on the outer skin (depth map by rays
-from in front, surface fitted on the 8–15 mm ring): when the pair's mean height is
-at least 2.5 mm it is kept — no fill, no stub, the bone spans it base to apex and
-its weight radius follows the measured width (`tip_source: mesh`, `tip_length_m`,
-`tip_radius_m`). On a double-walled body (UniForge: an inner wall a few mm below
-the skin) the inner wall neither defines the surface nor moves, and the fill levels
-only the tip (8 mm, `applied locally`) — the wide fill could push the skin through
-the inner wall. Single-walled bodies keep the wide fill unchanged.
+"Switched off on the base body"). The Base body tab shows one box per tip group with everything of
+it (Ruling A53): its light with the reason and "Built <time>", the Enabled box, the position sliders, markers,
+mirror, colour disc, the group's declared motion `controls` (length and diameter factors — saved character-wide,
+they act at once), Save / Discard changes / Reset to default and its own "Rebuild (local, no hub job)"; the
+"Extension bones" box beside it lists only the groups without a tip panel (`box_groups` of the plain body's
+`extension`, `extension_tip.group_tip_settings`).
+The stub replaces whatever the mesher modelled for the part (Ruling A53): before
+the fill, the source bump is levelled exactly as `when_off: neutralise` levels it
+(above), around the source's apex — also when an offset moved the tip away from
+it. The placed tip's own region is not levelled: no source bump sits there, and
+a quadratic fitted around a tip moved onto the curve's flank flattens the curve.
+The record (`tip_smoothing`) carries per side the bump's height above the fitted
+surface before → after and the placed tip's distance from the source apex. On a
+double-walled body (UniForge: an inner wall a few mm below the skin) the inner
+wall neither defines the surface nor moves, and the fill levels only the tip
+(8 mm, `applied locally`) — the wide fill could push the skin through the inner
+wall. Single-walled bodies keep the wide fill unchanged.
 
 | Required parameter | Example | Constraint / meaning |
 |---|---|---|

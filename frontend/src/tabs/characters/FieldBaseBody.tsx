@@ -34,9 +34,12 @@
  *   one line each, the base mesh repair (MeshRepairPanel, Ruling A34: status light, its settings saved on their own,
  *   "Repair again" — local), the tip smoothing (TipSmoothingPanel, Ruling A43) and the face/rig actions
  *   (ModelFaceActions) with their cost;
- * - Extension bones: one panel per pair tip extension group (ExtensionTipPanel) and the base model's "Extension
- *   bones" box (ExtensionBonesBox, Ruling A45) side by side in two equal columns — the box takes the second column of
- *   the first row, beside the first tip panel; ONE Rebuild, the box's (the tip panels' was the same request);
+ * - Extension bones: one box per pair tip extension group (ExtensionTipPanel, Ruling A53: its light with the reason
+ *   and "Built <time>", Enabled, position sliders, markers, mirror, colour disc, length and diameter factors, Save /
+ *   Discard changes / Reset to default and its "Rebuild (local, no hub job)") and the base model's "Extension bones"
+ *   box (ExtensionBonesBox, Ruling A45) for the groups WITHOUT a tip panel (`box_groups`), side by side in two equal
+ *   columns — the box beside the first tip panel; without such groups there is no box, and a lone tip panel spans
+ *   both columns;
  * - Collision capsules: the region sliders (live preview while dragging — the outfit models inherit the base body's
  *   set);
  * - Settings (rule R3).
@@ -88,7 +91,7 @@ import { FaceSettings } from './FaceSettings'
 import { useModel3DStatus } from './useModel3DStatus'
 import type { CollisionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
-import type { BaseActivity, BaseBodyInfo, BaseView } from './useBaseBody'
+import type { BaseActivity, BaseBodyInfo, BaseView, ExtensionTipPanelInfo } from './useBaseBody'
 import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, singleAction, staleBaseNote } from './figureModel'
 import type { ModelFollowup } from './figureModel'
 import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
@@ -472,13 +475,15 @@ export function FieldBaseBody({ character, onOpenFigure }: {
   const tipSmoothing = model?.url && ready ? info.tip_smoothing ?? null : null
   const extension = model?.url && ready ? info.extension ?? null : null
   const extBusy = modelBusy || extPosting || !!extension?.running
-  // The Extension bones box (Ruling A45): the base model's own switches; a pair tip group's Enabled is its tip
-  // panel's (the same switch), so the box leaves it there.
-  const extensionBox = extension ? (
-    <ExtensionBonesBox legend={t('Extension bones')} groups={extension.groups}
+  // The Extension bones box (Ruling A45): the base model's own switches for the groups WITHOUT a tip panel — a tip
+  // group's light, switch, factors and Rebuild sit in its own tip panel (Ruling A53). No such group → no box.
+  const tipIds = new Set(tipPanels.map((panel) => panel.id))
+  const boxGroups = (extension?.groups ?? []).filter((group) => extension?.box_groups
+    ? extension.box_groups.includes(group.id) : !tipIds.has(group.id))
+  const extensionBox = extension && boxGroups.length ? (
+    <ExtensionBonesBox legend={t('Extension bones')} groups={boxGroups}
       result={extension.result?.per_tier?.[viewTier] || extension.result} tier={viewTier}
       signature={info.signature} switches={st?.options?.extension_rig_models?.[info.signature]}
-      switchedElsewhere={new Set(tipPanels.map((panel) => panel.id))}
       motionDefaults={st?.motion_defaults} motionOverrides={st?.options?.extension_motion}
       disabled={extBusy || !st} rigless={false} draftKey={`${character}:${info.signature}`}
       onSwitch={(id, key, value) => { void saveExtSwitch(id, key, value) }}
@@ -497,6 +502,26 @@ export function FieldBaseBody({ character, onOpenFigure }: {
         onClick: () => { void rebuildExt() },
       }} />
   ) : null
+  // A tip group's box: its settings, its factors (motion values, saved character-wide, live in the viewer while a
+  // slider moves) and its Rebuild.
+  const lone = tipPanels.length === 1 && !extensionBox
+  const tipPanel = (panel: ExtensionTipPanelInfo) => (
+    <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
+      panel={panel} disabled={modelBusy || extPosting} onPreview={onTipPreview} wide={lone}
+      onStarted={() => startPoll(800)}
+      motion={st?.motion_defaults?.[panel.id] ? {
+        defaults: st.motion_defaults[panel.id] as unknown as Physics,
+        overrides: st.options?.extension_motion?.[panel.id],
+        onSave: (values) => saveExtMotion(panel.id, values, true),
+        onReset: () => saveExtMotion(panel.id, undefined),
+        onPreview: (values) => setSliderDrafts((previous) => {
+          const groups = { ...(previous.signature === info.signature ? previous.groups : {}) }
+          if (values) groups[panel.id] = values
+          else delete groups[panel.id]
+          return { signature: info.signature, groups }
+        }),
+      } : undefined} />
+  )
   const viewRows = BASE_VIEWS.map((view) => baseViewRow({ running: !!info.status?.[view]?.running,
     failed: !!info.status?.[view]?.failed, error: info.status?.[view]?.error, warning: info.status?.[view]?.warning,
     stored: !!info.images?.[view], freshness: info.image_meta?.[view]?.freshness }, t))
@@ -605,24 +630,16 @@ export function FieldBaseBody({ character, onOpenFigure }: {
           </div>
         ) : null}
         {sub === 'extensions' ? (
-          // Pair tip groups (position, mirror and colour disc; the dots on the model follow the sliders) and the
-          // Extension bones box in two equal columns, top-aligned (Ruling A45): the box beside the first tip panel,
-          // further tip panels below; one column on a narrow width. One Rebuild — the box's (the tip panels' was
-          // the same POST …/extension-tip/apply).
+          // One box per pair tip group (everything of the group; the dots on the model follow the sliders) and the
+          // Extension bones box for the other groups in two equal columns, top-aligned (Rulings A45, A53): the box
+          // beside the first tip panel, further tip panels below; a lone tip panel spans both columns; one column on
+          // a narrow width.
           tipPanels.length || extensionBox ? (
             <div className="ga-basebody-ext">
               <div className="ga-ext-grid">
-                {tipPanels.slice(0, 1).map((panel) => (
-                  <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
-                    panel={panel} disabled={modelBusy} onPreview={onTipPreview}
-                    onStarted={() => startPoll(800)} rebuildElsewhere={!!extensionBox} />
-                ))}
+                {tipPanels.slice(0, 1).map(tipPanel)}
                 {extensionBox}
-                {tipPanels.slice(1).map((panel) => (
-                  <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
-                    panel={panel} disabled={modelBusy} onPreview={onTipPreview}
-                    onStarted={() => startPoll(800)} rebuildElsewhere={!!extensionBox} />
-                ))}
+                {tipPanels.slice(1).map(tipPanel)}
               </div>
             </div>
           ) : noModelYet

@@ -2985,6 +2985,8 @@ a.ga-btn {
 /* Tip panels and the Extension bones box: two equal columns, top-aligned; one column on a narrow width. */
 .ga-ext-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .ga-ext-grid > * { margin: 0; min-width: 0; box-sizing: border-box; }
+/* A lone tip panel (no Extension bones box beside it) spans both columns (Ruling A53). */
+.ga-ext-grid > .ga-ext-wide { grid-column: 1 / -1; }
 /* The model viewers' overlay toggles (top right): a switched-on overlay reads as pressed. */
 .ga-viewer-toggles > .ga-btn[aria-pressed="true"] { border-color: var(--accent, var(--primary)); background: rgba(56, 139, 253, 0.28); color: var(--text); }
 @container (max-width: 520px) { .ga-ext-grid { grid-template-columns: minmax(0, 1fr); } }

@@ -260,9 +260,10 @@ export interface TipSmoothingGroup {
   mode?: 'smoothed' | 'neutralised'
   /** Neutralised: per side the height of the model's own tip above its surroundings, [before, after] in mm. */
   height_mm?: Array<[number | null, number | null]>
-  /** Neutralised: per side the colour difference (ΔE) of the part's area against the skin around it, [before, after]. */
-  delta_e?: Array<[number | null, number | null]>
-  painted?: number
+  /** Per side the source bump's height above the surface fitted around it, [before, after] in mm (Ruling A53). */
+  bump_mm?: Array<[number | null, number | null]>
+  /** Switched on: per side the placed tip's distance from the source apex in mm (an offset moves it away). */
+  tip_from_source_mm?: Array<number | null>
 }
 
 /** `plain_body.tip_smoothing` of GET …/figure?plain=1 (`extension_tip.tip_smoothing_state`); null = no switched-on
@@ -288,7 +289,7 @@ export interface TipSmoothingState {
 export const TIP_SMOOTH_AGAIN_LABEL = 'Smooth again (local, no hub job)'
 export const TIP_SMOOTHING_DUE_LINE = 'Not applied to this model yet — rebuilds the extension bones (local, no hub job)'
 /** The reason of a switched-off tip part that leaves a neutral surface (Ruling A44; the server's `NEUTRALISED_REASON`). */
-export const NEUTRALISED_LINE = 'Smoothed and painted over — part is off'
+export const NEUTRALISED_LINE = 'Smoothed — part is off'
 
 /** The status line beside the light: "Applied 01:12 — max shift 4.5 mm, inverted normals 22 → 0", or why nothing was
  *  smoothed, or that it is due. `time` formats the record's time (the tab's clock settings). */
@@ -341,8 +342,8 @@ export function tipSmoothingDetail(state: TipSmoothingState, t: Tr = EN): string
       parts.push(t(g.reason || NEUTRALISED_LINE))
       const height = pairs(g.height_mm, 1)
       if (height) parts.push(t('tip height {values} mm').replace('{values}', height))
-      const colour = pairs(g.delta_e, 1)
-      if (colour) parts.push(t('colour difference ΔE {values}').replace('{values}', colour))
+      const bump = pairs(g.bump_mm, 1)
+      if (bump) parts.push(t('source bump {values} mm').replace('{values}', bump))
       return `${label(id)}: ${parts.join(', ')}`
     }
     if (!g.applied) parts.push(t(g.reason || 'Not smoothed'))
@@ -351,6 +352,8 @@ export function tipSmoothingDetail(state: TipSmoothingState, t: Tr = EN): string
       parts.push(t('{n} vertices moved').replace('{n}', String(g.moved)))
       if (g.radius_mm !== null) parts.push(t('radius {mm} mm').replace('{mm}', g.radius_mm.toFixed(1)))
       if (g.passes !== null) parts.push(t('{n} passes').replace('{n}', String(g.passes)))
+      const bump = pairs(g.bump_mm, 1)
+      if (bump) parts.push(t('source bump {values} mm').replace('{values}', bump))
     }
     if (g.inverted) parts.push(t('inverted normals {before} → {after}').replace('{before}', String(g.inverted[0])).replace('{after}', String(g.inverted[1])))
     if (g.off_60) parts.push(t('normals off by more than 60° {before} → {after}').replace('{before}', String(g.off_60[0])).replace('{after}', String(g.off_60[1])))

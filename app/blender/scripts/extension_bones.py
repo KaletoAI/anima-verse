@@ -32,11 +32,6 @@ COINCIDENT_EPSILON_M = 1e-5
 # hair or fabric blobs 48 mm and more; accepted primary tips reach 34 mm,
 # which is why this is only the fallback and not a filter on the primary pair.
 MARKER_APEX_REACH_M = .02
-# Metres: a tip the mesher already modelled is kept as it is from this height
-# on (no fill, no stub; the bone spans it base to apex). Measured 2026-10-25 on
-# the outer skin: UniForge bodies 1.5-7 mm (Ylva 4.9/6.7), Trellis bodies
-# without a modelled tip 0-1.3 mm. Below, the tip is filled and a stub built.
-EXISTING_TIP_MIN_M = .0025
 # Metres: the fallback fill when the wide ring does not fit levels only the tip,
 # out to the inner edge of the ring its own surface is fitted on (8 mm).
 LOCAL_FILL_RADIUS_M = .008
@@ -747,44 +742,33 @@ def subdivide_around(mesh, centres, radii):
     mesh.data.update()
 
 
-def tip_mesh(meshes, p, placement):
+def tip_mesh(meshes, p, placement, sources):
+    """Prepare the skin for the stubs at ``placement`` (the placed tips) and
+    return ``(rows, vertices before)``. The stub REPLACES whatever the mesher
+    modelled for the part (Ruling A53): first every side's source bump — at
+    ``sources``, where the source group located it (its colour marker or
+    crest), before any offset — is levelled onto the surface around it, the
+    same fitted-surface levelling a switched-off part gets (``level_sides``).
+    Only then are the frames taken and the stub's fill made. Each row carries
+    the levelling's numbers (``source_smooth``, the record's shape) and per
+    side ``source_level``: the source bump's height above the fitted surface
+    before and after (mm), the mesh's own tip height there before and after
+    (``existing_tip``, mm) and the placed tip's distance from the source
+    apex (mm)."""
     tips = [Vector(row['tip']) for row in placement]
     radius = tip_radius(p,placement)
     before = sum(len(mesh.data.vertices) for mesh in meshes)
     for mesh in meshes:
         subdivide_around(mesh,tips,[level*radius for level in p['subdivide_radii']])
+    levelled,smoothing,inner = level_sides(meshes,p,radius,sources,placement)
     tree = world_tree(meshes)
-    inner = inner_walls(meshes,tips,radius,p,tree)
-    frame = lambda tip,tree: tip_frame(meshes,tip,p,radius,inner,tree)
-    frames = [frame(tip,tree) for tip in tips]
-    # One decision for the pair: a tip just above the threshold on one side and
-    # just below on the other must not end up as one kept tip and one stub.
-    keep = statistics.mean(f[4]['protrusion'] for f in frames) >= EXISTING_TIP_MIN_M
-    smoothing = None
-    if not keep:
-        # The stub replaces the source's own tip (Ruling A34): whatever the
-        # mesher modelled there (a fold, a crater) is smoothed away first, over
-        # the part's footprint; the frames are taken again on the result.
-        smoothing = smooth_source(meshes,tips,radius,p,inner)
-        if smoothing['moved']:
-            tree = world_tree(meshes)
-            frames = [frame(tip,tree) for tip in tips]
+    frames = [tip_frame(meshes,tip,p,radius,inner,tree) for tip in tips]
     rows = []
-    for tip,normal,a,b,existing in frames:
+    for (tip,normal,a,b,existing),side in zip(frames,levelled):
         def coords(point):
             d = point-tip
             u,w,h = d.dot(a),d.dot(b),d.dot(normal)
             return u,w,h,math.hypot(u,w)
-        if keep:
-            # The mesher modelled the tip: keep it, the bone spans it base to apex
-            # (floors keep a flatter partner side from a degenerate bone).
-            apex = Vector(existing['apex'])
-            length = max(existing['protrusion'],EXISTING_TIP_MIN_M/2)
-            rows.append({'tip':list(apex-normal*length),'axis':list(normal),'radius':radius,
-                         'fill':'skipped: existing tip','fill_rms':None,'fill_moved':0,'fill_kept_by_tolerance':0,
-                         'tip_source':'mesh','tip_length_m':length,'tip_radius_m':max(existing['radius'],p['tip_diameter']/4),
-                         'existing_tip_m':existing['protrusion'],'inner_wall_vertices':len(inner)})
-            continue
         unique = {}
         for index,mesh in enumerate(meshes):
             for vertex in mesh.data.vertices:
@@ -811,8 +795,7 @@ def tip_mesh(meshes, p, placement):
         fill_outer,fill_blend,fill = p['fill_radius']*radius,p['fill_blend']*radius,'applied'
         if coef is None and existing['coef'] is not None and existing['rms'] <= p['fill_rms_max']:
             # The wide ring over a coarse or strongly curved breast does not fit,
-            # the tip's own 8-15 mm ring does: level just the tip, so a modelled
-            # tip below the keep threshold is not stacked under the stub.
+            # the tip's own 8-15 mm ring does: level just the tip.
             coef,fill_outer,fill_blend,fill = existing['coef'],LOCAL_FILL_RADIUS_M,LOCAL_FILL_BLEND_M,'applied locally ('+reason+')'
         moved,kept = 0,0
         if coef is not None:
@@ -838,35 +821,34 @@ def tip_mesh(meshes, p, placement):
                      'fill_rms':rms,'fill_moved':moved,'fill_kept_by_tolerance':kept,
                      'tip_source':'stub','tip_length_m':p['tip_length'],'tip_radius_m':p['tip_diameter']/2,
                      'existing_tip_m':existing['protrusion'],'inner_wall_vertices':len(inner),
-                     'source_smooth':smoothing})
-    stubs = [Vector(row['tip']) for row in rows if row['tip_source']=='stub']
+                     'source_smooth':smoothing,'source_level':side})
+    stubs = [Vector(row['tip']) for row in rows]
     if p['tip_subdivide'] > 0 and stubs:
         for mesh in meshes:
             subdivide_around(mesh,stubs,[p['tip_subdivide']])
     return rows, before
 
 
-# The neutral surface of a tip part that is switched off (Ruling A44, the op's
-# ``when_off: neutralise``). The mesher models the part where the colour marker
-# is (a raised disc, a tip, a crater, often as a second sheet over the skin), so
-# the region to level is the marker's: full strength out to
-# max(NEUTRAL_SCALE x R, NEUTRAL_MIN_M) (R = the part's scale, ``tip_radius``),
+# The levelled surface where a tip part sits or would sit (Ruling A44 for a
+# part that is switched off, the op's ``when_off: neutralise``; Ruling A53 for
+# one that is on: the stub replaces the mesher's own). The mesher models the
+# part where the colour marker is (a raised disc, a tip, a crater, often as a
+# second sheet over the skin), so the region to level is the marker's: full
+# strength out to max(NEUTRAL_SCALE x R, NEUTRAL_MIN_M, the stub's footprint +
+# LEVEL_MARGIN_M) (R = the part's scale, ``tip_radius``; ``level_full``),
 # fading over NEUTRAL_BLEND x that; the surface it is levelled to is a quadratic
 # fitted to the outer skin on the ring NEUTRAL_FIT beyond the fade (in
 # multiples of the full radius) — so the curve the part sits on stays. Measured
 # on a body whose mesher drew a raised disc with a crater (Ylva, edges ~6 mm):
-# Laplacian smoothing over a fixed rim (the stub's ``smooth_source``) left a
-# funnel and pushed the sheet under the disc through the skin; levelling does
-# neither. A narrower fade (0.3) or a fit ring nearer the disc (1.3-1.8) left
-# a visible step at the rim, where the disc's skirt meets the fitted surface.
-# The region is flat-subdivided first (NEUTRAL_SUBDIVIDE, x the full radius)
-# so the fade has vertices to bend on. A vertex under another sheet (an inner
-# wall, ``inner_walls``) is never raised and ends NEUTRAL_GAP_M below the
-# levelled skin, so nothing pokes through. Vertices further than
-# NEUTRAL_DEPTH_M from the fitted surface are other parts of the body.
-# Colour, in multiples of R: painted over fully out to
-# NEUTRAL_PAINT_RADIUS - SOFT/2, fading to nothing at + SOFT/2; the skin
-# colour is the median of the ring NEUTRAL_RING, just outside the paint.
+# Laplacian smoothing over a fixed rim left a funnel and pushed the sheet under
+# the disc through the skin; levelling does neither. A narrower fade (0.3) or a
+# fit ring nearer the disc (1.3-1.8) left a visible step at the rim, where the
+# disc's skirt meets the fitted surface. The region is flat-subdivided first
+# (NEUTRAL_SUBDIVIDE, x the full radius) so the fade has vertices to bend on. A
+# vertex under another sheet (an inner wall, ``inner_walls``) is never raised
+# and ends NEUTRAL_GAP_M below the levelled skin, so nothing pokes through.
+# Vertices further than NEUTRAL_DEPTH_M from the fitted surface are other parts
+# of the body. Only the mesh changes: the texture stays as it is (Ruling A53).
 NEUTRAL_SCALE = 1.2
 NEUTRAL_MIN_M = .012
 NEUTRAL_BLEND = .8
@@ -874,9 +856,9 @@ NEUTRAL_FIT = (1.8, 2.5)
 NEUTRAL_SUBDIVIDE = (1.9, 1.5)
 NEUTRAL_GAP_M = .001
 NEUTRAL_DEPTH_M = (.015, .03)
-NEUTRAL_PAINT_RADIUS = 1.3
-NEUTRAL_PAINT_SOFT = .3
-NEUTRAL_RING = (1.6, 2.0)
+# Metres beyond the stub's own footprint (its radius plus its wall) that the
+# levelling always reaches at full strength.
+LEVEL_MARGIN_M = .003
 
 
 def _quadratic(u, w):
@@ -937,95 +919,95 @@ def level_surface(meshes, tip, normal, full, inner):
             'full_radius_mm':round(full*1000,2),'blend_mm':round(blend*1000,2)}
 
 
-def neutralise_mesh(meshes, p, placement):
-    """The neutral surface where a switched-off tip part would sit (Ruling
-    A44): the region of each side is flat-subdivided and levelled onto the
-    surface around it (``level_surface``); no stub, no bone. Returns one row
-    per side — ``{tip, axis, radius, tip_source: neutral, height_before_mm,
-    height_after_mm, level}``: the height of the mesh's own tip above its
-    surroundings (``existing_tip``) before and after, and the levelling's
-    numbers — and the numbers of the side that moved most, in the shape of
-    the stub's smoothing (``source_smooth``)."""
-    tips = [Vector(row['tip']) for row in placement]
-    radius = tip_radius(p,placement)
-    full = max(NEUTRAL_SCALE*radius,NEUTRAL_MIN_M)
-    for mesh in meshes:
-        subdivide_around(mesh,tips,[level*full for level in NEUTRAL_SUBDIVIDE])
+def level_full(p, radius):
+    """The full-strength radius of the levelling (metres; module notes above)."""
+    return max(NEUTRAL_SCALE*radius,NEUTRAL_MIN_M,p['tip_diameter']/2+p['tip_wall']+LEVEL_MARGIN_M)
+
+
+def level_sides(meshes, p, radius, sources, placed=None):
+    """Level each side's source bump onto the surface around it
+    (``level_surface``) at ``sources`` — the apex the source group located
+    (its colour marker or crest), before any offset: where the mesher modelled
+    the part. ``placed``: the tips of a part that is on, after their offset;
+    their own region is never levelled — no source bump sits there, and a
+    quadratic fitted around a tip moved onto the curve's flank flattens the
+    curve (measured on Ylva, 30 mm down and in: a 15-27 mm deep dish). Each
+    source region is flat-subdivided first, as far as the stub's subdivision
+    (``tip_mesh``, around the placed tips) has not done so. Returns ``(sides,
+    smoothing, inner)``: per side ``{bump_mm: [before, after], height_mm:
+    [before, after], tip_from_source_mm, level}`` — the bump's highest point
+    above the fitted surface, the mesh's own tip above its surroundings
+    (``existing_tip``) at the source, the placed tip's distance from the
+    source apex (None without ``placed``), the levelling's numbers — then the
+    numbers of the side that moved most in the record's shape, and the
+    inner-wall vertices. A source with no surface around it raises ValueError
+    for a part that is off; for one that is on, the side records ``error``
+    and the stub is built on the skin as it is."""
+    origins = [Vector(row['tip']) for row in sources]
+    targets = [Vector(row['tip']) for row in placed] if placed else [None]*len(origins)
+    full = level_full(p,radius)
+    # A source the stub's subdivision already reached takes only the passes
+    # it still lacks, so the region is never cut finer than either would cut
+    # it alone.
+    for o in origins:
+        done = sum(1 for level in p['subdivide_radii']
+                   if placed and any((o-t).length <= level*radius for t in targets))
+        passes = [level*full for level in NEUTRAL_SUBDIVIDE][done:]
+        if passes:
+            for mesh in meshes:
+                subdivide_around(mesh,[o],passes)
     tree = world_tree(meshes)
-    inner = inner_walls(meshes,tips,radius,p,tree)
-    frames = [tip_frame(meshes,tip,p,radius,inner,tree) for tip in tips]
-    levels = [level_surface(meshes,tip,normal,full,inner) for tip,normal,_,_,_ in frames]
+    inner = inner_walls(meshes,origins+[t for t in targets if t is not None],radius,p,tree)
+    frames = [tip_frame(meshes,o,p,radius,inner,tree) for o in origins]
+    levels,errors = [],[]
+    for o,(_,normal,_,_,_) in zip(origins,frames):
+        try:
+            levels.append(level_surface(meshes,o,normal,full,inner))
+            errors.append('')
+        except ValueError as e:
+            # A part that is on is still built on the unlevelled skin; one that
+            # is off has nothing else to do and fails.
+            if not placed:
+                raise
+            levels.append(None)
+            errors.append(str(e))
+    tree = world_tree(meshes)
+    sides = []
+    for o,t,(_,_,_,_,existing),level,error in zip(origins,targets,frames,levels,errors):
+        after = tip_frame(meshes,o,p,radius,inner,tree)[4]
+        sides.append({'bump_mm':[level['bump_before_mm'],level['bump_after_mm']] if level else None,
+                      'height_mm':[round(existing['protrusion']*1000,3),round(after['protrusion']*1000,3)],
+                      'tip_from_source_mm':round((t-o).length*1000,2) if t is not None else None,
+                      'level':level,**({'error':error} if error else {})})
+    done = [level for level in levels if level]
+    top = max(done,key=lambda level:level['max_shift_mm']) if done else None
+    smoothing = {'radius_m':full,'blend_m':NEUTRAL_BLEND*full,'iterations':None,
+                 'moved':sum(level['moved'] for level in done),'max_shift_mm':top['max_shift_mm'] if top else 0.,
+                 'inner_wall_vertices':len(inner)}
+    if any(errors):
+        smoothing['error'] = next(error for error in errors if error)
+    return sides,smoothing,inner
+
+
+def neutralise_mesh(meshes, p, sources):
+    """The neutral surface where a switched-off tip part would sit (Ruling
+    A44): each side's source bump at ``sources`` (the source group's apex) is
+    levelled onto the surface around it (``level_sides``); no stub, no bone,
+    and the texture stays as it is (Ruling A53). Returns one row per side —
+    ``{tip, axis, radius, tip_source: neutral, height_before_mm,
+    height_after_mm, bump_mm, level}`` — and the numbers of the side that
+    moved most, in the shape of the stub's ``source_smooth``."""
+    radius = tip_radius(p,sources)
+    sides,smoothing,inner = level_sides(meshes,p,radius,sources)
     tree = world_tree(meshes)
     rows = []
-    for (tip,normal,_,_,existing),level in zip(frames,levels):
-        after = tip_frame(meshes,tip,p,radius,inner,tree)[4]
+    for row,side in zip(sources,sides):
+        tip = Vector(row['tip'])
+        normal = tip_frame(meshes,tip,p,radius,inner,tree)[1]
         rows.append({'tip':list(tip),'axis':list(normal),'radius':radius,'tip_source':'neutral',
-                     'height_before_mm':round(existing['protrusion']*1000,3),
-                     'height_after_mm':round(after['protrusion']*1000,3),'level':level})
-    top = max(levels,key=lambda level:level['max_shift_mm'])
-    smoothing = {'radius_m':top['full_radius_mm']/1000,'blend_m':top['blend_mm']/1000,'iterations':None,
-                 'moved':sum(level['moved'] for level in levels),'max_shift_mm':top['max_shift_mm'],
-                 'inner_wall_vertices':len(inner)}
+                     'height_before_mm':side['height_mm'][0],'height_after_mm':side['height_mm'][1],
+                     'bump_mm':side['bump_mm'],'level':side['level']})
     return rows,smoothing
-
-
-def neutral_mask(meshes, rows):
-    """Per side the texels to paint over and the ring to take the skin colour
-    from (``disc_texels``): ``{sides: [{size, paint: [x, y, alpha, ...],
-    paint_at: [u, w, ...], ring: [x, y, ...], ring_at: [u, w, ...]}]}`` or
-    ``{error}`` (``*_at``: where each texel lies on the surface, mm). The
-    caller samples the ring in the base-colour image and paints it in."""
-    sides = []
-    try:
-        for row in rows:
-            radius = row['radius']
-            paint = disc_texels(meshes,[row],NEUTRAL_PAINT_RADIUS*radius,NEUTRAL_PAINT_SOFT*radius,with_at=True)
-            outer = disc_texels(meshes,[row],NEUTRAL_RING[1]*radius,0.,with_at=True)
-            inner = disc_texels(meshes,[row],NEUTRAL_RING[0]*radius,0.)
-            within = {(x,y) for x,y in zip(inner['texels'][0::3],inner['texels'][1::3])}
-            ring,ring_at = [],[]
-            for x,y,u,w in zip(outer['texels'][0::3],outer['texels'][1::3],outer['at'][0::2],outer['at'][1::2]):
-                if (x,y) not in within:
-                    ring.extend((x,y))
-                    ring_at.extend((u,w))
-            sides.append({'size':paint['size'],'paint':paint['texels'],'paint_at':paint['at'],
-                          'ring':ring,'ring_at':ring_at})
-    except ValueError as e:
-        return {'error':str(e)}
-    return {'sides':sides}
-
-
-def smooth_source(meshes, tips, radius, p, inner):
-    """Laplacian-smooth the source surface around ``tips`` before the stub is
-    built (``base_mesh_repair.smooth_region``; Ruling A34). Radius = the
-    part's footprint, ``fill_radius`` x the tip radius
-    (``base_mesh_repair.tip_smooth_radius``); falloff = the fill's own blend
-    width. Inner-wall vertices (``inner``: (mesh index, vertex index)) stay
-    fixed and are nobody's neighbour. Returns the numbers for the metrics."""
-    _common.app_root_on_path()
-    from app.core import base_mesh_repair
-    co,edges,owners,normals,faces = mesh_arrays(meshes)
-    offsets,offset = [],0
-    for mesh in meshes:
-        offsets.append(offset)
-        offset += len(mesh.data.vertices)
-    fixed = np.zeros(len(co),bool)
-    for index,vertex in inner:
-        fixed[offsets[index]+vertex] = True
-    footprint = base_mesh_repair.tip_smooth_radius(p['fill_radius'],radius)
-    new,info = base_mesh_repair.smooth_region(np.array([tuple(c) for c in co]),np.array(edges,dtype=np.int64).reshape(-1,2),
-                                              [tuple(t) for t in tips],footprint,p['fill_blend']*radius,fixed=fixed,
-                                              min_wall=DOUBLE_WALL_MIN_VERTICES)
-    old = np.array([tuple(c) for c in co])
-    moved = np.flatnonzero(np.linalg.norm(new-old,axis=1) > 1e-9)
-    for i in moved:
-        mesh,vi = owners[i]
-        mesh.data.vertices[vi].co = mesh.matrix_world.inverted()@Vector(tuple(new[i]))
-    for mesh in meshes:
-        mesh.data.update()
-    return {'radius_m':info['radius_m'],'blend_m':p['fill_blend']*radius,'iterations':info['iterations'],
-            'moved':info['moved'],'max_shift_mm':round(info['max_shift_m']*1000,3),'edge_mm':round(info['edge_m']*1000,3),
-            'folds_released':info.get('folds_released',0)}
 
 
 def position_snapshot(meshes):
@@ -1425,9 +1407,6 @@ def tip_plan(group, p, co, source, rows, before, meshes):
         rc = row['tip_radius_m']
         minimum = min(1-3*x*x+2*x*x*x-6*((rc+wall)/band+x)*x*(1-x) for x in np.linspace(0.,1.,10001))
         row['girth_fold_free_max'] = float(1+1/-minimum) if minimum < 0 else None
-        if row['tip_source'] == 'mesh':
-            row['stub_height'] = row['tip_length_m']
-            continue
         tip,axis = Vector(row['tip']),Vector(row['axis'])
         walled = tree is not None and row.get('inner_wall_vertices',0) > 0
         heights = []
@@ -2707,8 +2686,7 @@ def measure(arm, meshes, edges, plans):
                     delta = point-tip
                     axial = delta.dot(axis)
                     r = (delta-axis*axial).length
-                    side = (0 <= axial <= length/2 if row.get('tip_source') == 'mesh'
-                            else axial >= -p['weight_depth'] and tip_height(r,p) > lw/2)
+                    side = axial >= -p['weight_depth'] and tip_height(r,p) > lw/2
                     if abs(r-rc) < p['tip_wall']/2 and side:
                         moved = posed[i]-tip
                         ring.append((moved-axis*moved.dot(axis)).length)
@@ -2886,7 +2864,8 @@ def extension_bones(args):
     snapshot = None   # vertex positions before the first tip op (refresh_normals)
     census = {}       # group -> (tip centres, normal census before its tip op) — Ruling A43
     # Switched-off tip parts that leave a neutral surface (Ruling A44): never
-    # bones, only the smoothing and the paint-over of where they would sit.
+    # bones, only the levelling of where they would sit — the mesh only, the
+    # texture stays as it is (Ruling A53).
     neutral_groups = [g for g in args['params'].get('neutralise') or [] if g.get('op')=='pair_tip']
     neutral = {}      # group -> (rows, smoothing)
     # A colour placement always pins the re-plan; a geometry placement only
@@ -2911,20 +2890,22 @@ def extension_bones(args):
                 snapshot = position_snapshot(meshes)
             centres = [Vector(row['tip']) for row in rows]
             census[g['id']] = (centres,normal_census(meshes,centres))
-            prepared[g['id']] = tip_mesh(meshes,p,rows)
+            prepared[g['id']] = tip_mesh(meshes,p,rows,pinned[g['depends_on']])
         for g in neutral_groups:
             # Where the part would sit: the same placement it uses when on.
             if g.get('depends_on') not in pinned or g.get('depends_on') in soft:
                 soft[g['id']] = {'status':'not_found','mode':'neutralised',
                                  'reason':'Nothing located where the part would sit — nothing changed'}
                 continue
+            # The source bump is levelled where the source group found it — an
+            # offset moves only a part that is on (Ruling A53).
             p = parameters(g)
-            rows,_ = tip_positions(meshes,pinned[g['depends_on']],g.get('tip_override'))
+            sources = pinned[g['depends_on']]
             if snapshot is None:
                 snapshot = position_snapshot(meshes)
-            centres = [Vector(row['tip']) for row in rows]
+            centres = [Vector(row['tip']) for row in sources]
             census[g['id']] = (centres,normal_census(meshes,centres))
-            neutral[g['id']] = neutralise_mesh(meshes,p,rows)
+            neutral[g['id']] = neutralise_mesh(meshes,p,sources)
         if prepared or neutral:
             co,edges,owners,normals,faces = mesh_arrays(meshes)
             plans,failed,malformed = plan_sources(pinned)
@@ -3081,8 +3062,7 @@ def extension_bones(args):
                         'tip_normals':{'region_mm':TIP_NORMAL_REGION_M*1000,
                                        'vertices':[before_census['vertices'],after_census['vertices']],
                                        'inverted':[before_census['inverted'],after_census['inverted']],
-                                       'off_60':[before_census['off_60'],after_census['off_60']]},
-                        'neutral_mask':neutral_mask(meshes,rows)}
+                                       'off_60':[before_census['off_60'],after_census['off_60']]}}
     metrics.update(soft)
     output=Path(args['out_dir'])/'model.glb'
     bpy.ops.export_scene.gltf(filepath=str(output),export_format='GLB',export_apply=False,export_yup=True,export_skins=True,export_animations=True,export_morph=True,export_all_influences=False,export_extras=True)

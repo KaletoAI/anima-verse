@@ -22,21 +22,6 @@ continues the surrounding curvature (Liepa 2003, "Filling holes in meshes"). Eve
 new vertices (UVs, colours, morph-target deltas, tangents) is the harmonic interpolation of the rim's values; skin
 weights too, per joint over the rim's joints, then the four largest, renormalised to sum 1; normals are the
 filled surface's own. A closed body comes back unchanged, byte for byte.
-
-**Chest-tip smoothing** (``tip_smooth_radius`` / ``smooth_region``). A ``pair_tip`` extension part that builds a
-stub REPLACES the source's own tip (``extension_bones.tip_mesh``); whatever the mesher modelled there — a fold, a
-crater, its own tip beside the colour marker — is only in the way. So, before the part's fill, the source tip
-region is Laplacian-smoothed (umbrella passes, ``SMOOTH_STEP``). Its radius is the part's own footprint: the area
-its fill re-levels, ``fill_radius`` (pack param) x the tip radius (the colour marker's equal-area radius) — the inner
-edge of the ring the fill fits its surface on, so the smoothing never moves the points that fit is made from. The
-falloff is the fill's own blend width (``fill_blend`` x the tip radius). The number of passes follows from the
-radius and the local edge length: N umbrella steps diffuse over ~ sqrt(N) edges, so N = ceil((R / edge)^2)
-smooths every feature up to the footprint. Plain Laplacian, not Taubin: measured on Kira ``base20d5701a`` the
-mesher's own tip 14.7 mm beside the marker is a few-mm-wide ridge that Taubin's pass band keeps (it moved 0.44 mm)
-and the plain passes level (4.5 mm), while the chest around it sinks by a median 0.1-0.4 mm only — the
-fixed footprint edge holds the bulge. Inner walls of a double-walled body stay fixed and are nobody's
-neighbour — except a small patch of them (fewer than the double-wall minimum of ``extension_bones``): that is a
-fold of the skin turned inwards, the very thing to smooth away. Without a part nothing is smoothed — the tips stay as the mesher made them.
 """
 from __future__ import annotations
 
@@ -58,8 +43,6 @@ DEFAULT_MAX_HOLE_CM = 4.0
 MAX_HOLE_CM_RANGE = (0.5, 20.0)
 #: A fill edge longer than this many mean rim edges is split (the patch gets the rim's own resolution).
 REFINE_FACTOR = 1.5
-#: Step of one umbrella (Laplacian) smoothing pass: each vertex moves half-way to its neighbours' mean.
-SMOOTH_STEP = 0.5
 
 
 # --- Settings --------------------------------------------------------------------------------------------------
@@ -586,106 +569,6 @@ def summary(record: Optional[Dict[str, Any]]) -> str:
         parts.append(f"{len(unfilled)} hole{'s' if len(unfilled) != 1 else ''} left open"
                      + (f" ({', '.join(sizes)} — {reason})" if sizes else f" ({reason})"))
     return " · ".join(parts) if parts else "Closed — no hole"
-
-
-# --- Chest-tip smoothing (also run inside Blender) ----------------------------------------------------------------
-
-def tip_smooth_radius(fill_radius: float, tip_radius: float) -> float:
-    """The footprint of a ``pair_tip`` part, metres: the area its fill re-levels — ``fill_radius`` (the pack's
-    param, in tip radii) x ``tip_radius`` (the colour marker's equal-area radius, or half the declared stub
-    diameter without a marker; ``extension_bones.tip_mesh``)."""
-    return float(fill_radius) * float(tip_radius)
-
-
-def _smoothstep(t: np.ndarray) -> np.ndarray:
-    t = np.clip(t, 0.0, 1.0)
-    return t * t * (3.0 - 2.0 * t)
-
-
-def _components(mask: np.ndarray, edges: np.ndarray) -> np.ndarray:
-    """Component label per vertex of the subgraph ``edges`` restricted to ``mask`` (-1 outside the mask)."""
-    parent = np.arange(len(mask))
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-    for a, b in edges[mask[edges[:, 0]] & mask[edges[:, 1]]]:
-        ra, rb = find(int(a)), find(int(b))
-        if ra != rb:
-            parent[ra] = rb
-    labels = np.array([find(i) for i in range(len(mask))])
-    labels[~mask] = -1
-    return labels
-
-
-def smooth_region(positions: np.ndarray, edges: np.ndarray, centres: Sequence[Sequence[float]], radius: float,
-                  blend: float, *, fixed: Optional[np.ndarray] = None, min_wall: int = 0, tol: float = WELD_M
-                  ) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """Laplacian-smooth the surface within ``radius`` of any of ``centres`` (module docstring).
-
-    ``positions`` (n, 3), ``edges`` (m, 2) raw vertex pairs; ``fixed`` (n,) bool: vertices that never move and
-    are nobody's neighbour (an inner wall); a connected patch of ``fixed`` vertices smaller than ``min_wall`` is
-    not a wall but a fold of the skin (a flap turned inwards passes the inner-wall test) and is smoothed with the
-    rest. Weight per vertex = smoothstep((radius - r) / blend): 1 well inside,
-    0 at the footprint's edge. Positional copies move together. Returns ``(new positions, {iterations, moved,
-    max_shift_m, edge_m, radius_m})``."""
-    P = np.asarray(positions, np.float64)
-    out = P.copy()
-    info = {"iterations": 0, "moved": 0, "max_shift_m": 0.0, "edge_m": 0.0, "radius_m": float(radius)}
-    if not len(P) or radius <= 0:
-        return out, info
-    fixed = np.zeros(len(P), bool) if fixed is None else np.asarray(fixed, bool)
-    w = weld(P, tol)
-    G = int(w.max()) + 1
-    X = np.zeros((G, 3))
-    X[w] = P
-    gfixed = np.zeros(G, bool)
-    np.logical_or.at(gfixed, w, fixed)
-    E = w[np.asarray(edges, np.int64).reshape(-1, 2)]
-    E = E[E[:, 0] != E[:, 1]]
-    released = 0
-    if min_wall > 0 and gfixed.any():
-        labels = _components(gfixed, E)
-        sizes = np.bincount(labels[labels >= 0])
-        small = gfixed & (labels >= 0) & (sizes[np.maximum(labels, 0)] < min_wall)
-        released = int(small.sum())
-        gfixed &= ~small
-    info["folds_released"] = released
-    C = np.asarray(centres, np.float64).reshape(-1, 3)
-    r = np.min(np.linalg.norm(X[:, None, :] - C[None, :, :], axis=2), axis=1)
-    weight = _smoothstep((radius - r) / max(blend, 1e-12))
-    weight[gfixed] = 0.0
-    active = np.flatnonzero(weight > 0)
-    if not len(active):
-        return out, info
-    E = E[~gfixed[E[:, 0]] & ~gfixed[E[:, 1]]]
-    E = np.unique(np.sort(E, 1), axis=0)
-    # only edges that touch the region (and its fixed one-ring) matter
-    region = np.zeros(G, bool)
-    region[active] = True
-    E = E[region[E[:, 0]] | region[E[:, 1]]]
-    if not len(E):
-        return out, info
-    deg = np.bincount(E.ravel(), minlength=G).astype(np.float64)
-    edge_len = float(np.linalg.norm(X[E[:, 0]] - X[E[:, 1]], axis=1).mean())
-    iterations = int(math.ceil((radius / max(edge_len, 1e-12)) ** 2))
-    step = (weight * SMOOTH_STEP)[:, None]
-    Y = X.copy()
-    ok = deg > 0
-    for _ in range(iterations):
-        acc = np.zeros_like(Y)
-        np.add.at(acc, E[:, 0], Y[E[:, 1]])
-        np.add.at(acc, E[:, 1], Y[E[:, 0]])
-        delta = np.zeros_like(Y)
-        delta[ok] = acc[ok] / deg[ok, None] - Y[ok]
-        Y = Y + step * delta
-    shift = np.linalg.norm(Y - X, axis=1)
-    out = Y[w]
-    info.update(iterations=iterations, moved=int((shift[w] > 1e-9).sum()), max_shift_m=float(shift.max()),
-                edge_m=edge_len)
-    return out, info
 
 
 # --- "Repair again" (the Base body tab) ---------------------------------------------------------------------------

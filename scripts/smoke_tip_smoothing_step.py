@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Tip smoothing is its own visible step with a record, due on base models built before it (Ruling A43).
 
-Before a ``pair_tip`` group builds its stub, ``extension_bones.tip_mesh`` smooths the source skin over the part's
-footprint and refreshes the normals (Ruling A34). It runs inside the extension rebuild; A43 records it on the base
+Before a ``pair_tip`` group builds its stub, ``extension_bones.tip_mesh`` levels the source bump onto the surface
+around it (Ruling A53, the levelling of A44) and refreshes the normals (Ruling A34). It runs inside the extension rebuild; A43 records it on the base
 model (``meta["tip_smoothing"]``, ``extension_tip.TIP_SMOOTHING_VERSION``), makes a base without that record due
 (Run all kind ``tip_smoothing``, Build step ``tip_smoothing``) and shows it as its own row (``tip_smoothing_state``,
 the model step ``tip_smoothing`` between ``mesh_repair`` and ``extension_rig``).
@@ -18,7 +18,10 @@ validation and the mesh repair are stubbed as current.
 
 The script's metrics of T (the numbers measured on the Kira copy, see a43-report.md): both placement rows carry
 ``source_smooth = {radius_m 0.0187333, iterations 292, moved 2522, max_shift_mm 4.546}``, ``tip_source "stub"``;
-``tip_normals = {region_mm 40, inverted [3, 0], off_60 [7, 0]}``.
+``tip_normals = {region_mm 40, inverted [3, 0], off_60 [7, 0]}``; per side ``source_level`` (Ruling A53: the source
+bump above the fitted surface before → after and the placed tip's distance from the source apex — the A53 Kira copy):
+``{bump_mm [1.81, 0.0], tip_from_source_mm 0.0}`` and ``{bump_mm [3.431, 0.0], tip_from_source_mm 0.0}``. ``V`` below
+is ``TIP_SMOOTHING_VERSION`` (2 since Ruling A53).
 
 [1] Marker missing → due. The sidecar's extension state is current (same fingerprint, applied, source current) and
     has NO ``tip_smoothing``: ``tip_smoothing_due(None, ["T"])`` True; ``model_tip_smoothing_due`` True;
@@ -30,19 +33,21 @@ The script's metrics of T (the numbers measured on the Kira copy, see a43-report
     unpinned, and depends on ``plain_body``.
 [2] After the extension rebuild → applied, with the numbers. ``_extension_rig_once(force=False)`` is NOT a no-op
     (Blender called once) although the extension fingerprint is current; the record is
-    ``{version 1, status built, groups: {T: {applied True, max_shift_mm 4.546, moved 2522, radius_mm 18.73
-    (0.0187333 m x 1000, 2 decimals), passes 292, inverted [3, 0], off_60 [7, 0], region_mm 40}}}``; due False;
+    ``{version V, status built, groups: {T: {applied True, max_shift_mm 4.546, moved 2522, radius_mm 18.73
+    (0.0187333 m x 1000, 2 decimals), passes 292, inverted [3, 0], off_60 [7, 0], region_mm 40, bump_mm [[1.81, 0.0],
+    [3.431, 0.0]], tip_from_source_mm [0.0, 0.0]}}}``; due False;
     summary "Applied — max shift 4.5 mm, inverted normals 3 → 0", light "ok"; the model step is "done" with
-    numbers {max_shift_mm 4.546, inverted_before 3, inverted_after 0, version 1}; ``base_run_all`` → kind "" (current).
+    numbers {max_shift_mm 4.546, inverted_before 3, inverted_after 0, version V}; ``base_run_all`` → kind "" (current).
     A second ``_extension_rig_once(force=False)`` is a no-op (Blender not called again).
     A failed rebuild of a due model (a record of version 0; Blender answers not applied) keeps the groups and records
     status "failed" with the current version → not due, light "error" (no retry loop in automatic Builds).
-    A kept own tip (rows ``tip_source "mesh"``, no ``source_smooth``) → applied False, reason "The model's own tip is
-    kept — nothing replaced, nothing smoothed", light "off".
+    Rows without a levelling (no ``source_smooth``) → applied False, reason "Not smoothed", light "off" (a kept own
+    tip no longer exists, Ruling A53); a levelling that could not reach a side (``source_smooth.error``) → reason
+    "Source bump not levelled: <error>".
 [3] No tip groups → no row: with the declarations [P] only, ``tip_smoothing_state`` is None, the model steps carry
     no ``tip_smoothing`` row, ``model_tip_smoothing_due`` False, and ``base_run_all`` stays "" (current).
     The same with T switched off for the model (``extension_rig_models[base1][T].enabled`` False).
-[4] The version bump makes it due: with ``TIP_SMOOTHING_VERSION`` 2 the record of [2] (version 1) → due True, light
+[4] The version bump makes it due: with ``TIP_SMOOTHING_VERSION`` V + 1 the record of [2] (version V) → due True, light
     "warn", the "Not applied to this model yet" summary, Run all kind "tip_smoothing" again.
 
 Fails on c5dccfb4: ImportError — ``extension_tip`` has no ``tip_smoothing_due``.
@@ -70,6 +75,7 @@ from app.core.keyed_lock import keyed_lock  # noqa: E402
 from app.models.character import get_character_dir, get_character_profile, save_character_profile  # noqa: E402
 
 FAILS = []
+V = extension_tip.TIP_SMOOTHING_VERSION
 
 
 def check(label, got, want=True):
@@ -86,8 +92,10 @@ DECLARED = {"groups": [P, T]}
 
 SMOOTH = {"radius_m": 0.0187333, "blend_m": 0.0026762, "iterations": 292, "moved": 2522, "max_shift_mm": 4.546,
           "edge_mm": 1.097, "folds_released": 15}
-TIP_METRICS = {"placement": [{"tip": [0.05, -0.1, 1.3], "tip_source": "stub", "source_smooth": SMOOTH},
-                             {"tip": [-0.05, -0.1, 1.3], "tip_source": "stub", "source_smooth": SMOOTH}],
+TIP_METRICS = {"placement": [{"tip": [0.05, -0.1, 1.3], "tip_source": "stub", "source_smooth": SMOOTH,
+                              "source_level": {"bump_mm": [1.81, 0.0], "tip_from_source_mm": 0.0}},
+                             {"tip": [-0.05, -0.1, 1.3], "tip_source": "stub", "source_smooth": SMOOTH,
+                              "source_level": {"bump_mm": [3.431, 0.0], "tip_from_source_mm": 0.0}}],
                "tip_normals": {"region_mm": 40.0, "vertices": [524, 13297], "inverted": [3, 0], "off_60": [7, 0]},
                "normals_refreshed": 13198}
 BLENDER = {"answer": {"applied": True, "data": {"status": "applied", "metrics": {"P": {"placement": []},
@@ -192,17 +200,18 @@ try:
     result = model3d._extension_rig_once(C, model, meta, force=False)
     check("[2] not a no-op", (bool(result.get("noop")), BLENDER["calls"]), (False, 1))
     record = meta.get("tip_smoothing") or {}
-    check("[2] record head", (record.get("version"), record.get("status")), (1, "built"))
+    check("[2] record head", (record.get("version"), record.get("status")), (V, "built"))
     check("[2] record of T", record.get("groups", {}).get("T"),
           {"applied": True, "reason": "", "max_shift_mm": 4.546, "moved": 2522, "radius_mm": 18.73, "passes": 292,
-           "inverted": [3, 0], "off_60": [7, 0], "region_mm": 40.0})
+           "inverted": [3, 0], "off_60": [7, 0], "region_mm": 40.0, "bump_mm": [[1.81, 0.0], [3.431, 0.0]],
+           "tip_from_source_mm": [0.0, 0.0]})
     model3d._publish_sidecar(model, meta)
     state = tip_smoothing_state(C, BSIG)
     check("[2] due after the rebuild", state["due"], False)
     check("[2] summary", (state["light"], state["summary"]), ("ok", "Applied — max shift 4.5 mm, inverted normals 3 → 0"))
     row = next(r for r in steps_of(meta) if r["id"] == "tip_smoothing")
     check("[2] step row", (row["status"], row["numbers"]),
-          ("done", {"max_shift_mm": 4.546, "inverted_before": 3, "inverted_after": 0, "version": 1}))
+          ("done", {"max_shift_mm": 4.546, "inverted_before": 3, "inverted_after": 0, "version": V}))
     check("[2] Run all current", run_all()["kind"], "")
     again = model3d._extension_rig_once(C, model, model3d._read_sidecar(model), force=False)
     check("[2] second build is a no-op", (bool(again.get("noop")), BLENDER["calls"]), (True, 1))
@@ -216,11 +225,14 @@ try:
           ("failed", ["T"]))
     check("[2] failed record not due", tip_smoothing_due(failed, ["T"]), False)
     check("[2] failed light", extension_tip.tip_smoothing_summary(failed, False)[0], "error")
-    kept = extension_tip.tip_smoothing_group({"placement": [{"tip_source": "mesh"}, {"tip_source": "mesh"}]})
-    check("[2] kept own tip", (kept["applied"], kept["reason"]),
-          (False, "The model's own tip is kept — nothing replaced, nothing smoothed"))
-    check("[2] kept own tip light", extension_tip.tip_smoothing_summary(
-        tip_smoothing_record({"T": {"placement": [{"tip_source": "mesh"}]}}, ["T"], "x"), False)[0], "off")
+    bare = extension_tip.tip_smoothing_group({"placement": [{"tip_source": "stub"}, {"tip_source": "stub"}]})
+    check("[2] rows without a levelling", (bare["applied"], bare["reason"]), (False, "Not smoothed"))
+    check("[2] rows without a levelling: light", extension_tip.tip_smoothing_summary(
+        tip_smoothing_record({"T": {"placement": [{"tip_source": "stub"}]}}, ["T"], "x"), False)[0], "off")
+    unlevelled = extension_tip.tip_smoothing_group({"placement": [{"tip_source": "stub", "source_smooth": {
+        **SMOOTH, "error": "no surface around the part to level"}}]})
+    check("[2] a side the levelling could not reach says so", unlevelled["reason"],
+          "Source bump not levelled: no surface around the part to level")
     BLENDER["answer"] = {"applied": True, "data": {"status": "applied", "metrics": {"P": {}, "T": TIP_METRICS}}}
 
     # [3] no tip groups → no row
@@ -239,12 +251,12 @@ try:
 
     # [4] the version bump makes it due
     write_sidecar(tip_smoothing=tip_smoothing_record({"T": TIP_METRICS}, ["T"], "2026-11-14T00:12:00+00:00"))
-    check("[4] version 1 current", tip_smoothing_state(C, BSIG)["due"], False)
-    with patch.object(extension_tip, "TIP_SMOOTHING_VERSION", 2):
+    check("[4] current version: current", tip_smoothing_state(C, BSIG)["due"], False)
+    with patch.object(extension_tip, "TIP_SMOOTHING_VERSION", V + 1):
         state = tip_smoothing_state(C, BSIG)
-        check("[4] version 2: due", (state["due"], state["light"], state["summary"]),
+        check("[4] next version: due", (state["due"], state["light"], state["summary"]),
               (True, "warn", "Not applied to this model yet — rebuilds the extension bones (local, no hub job)"))
-        check("[4] version 2: Run all", run_all()["kind"], "tip_smoothing")
+        check("[4] next version: Run all", run_all()["kind"], "tip_smoothing")
 finally:
     for p in patches:
         p.stop()

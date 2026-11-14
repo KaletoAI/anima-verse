@@ -137,10 +137,12 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
     panels of its ``pair_tip`` groups (``extension_tips``,
     ``extension_tip.tip_panels``), its extension bones (``extension``,
     ``model3d.model_extension_state``, Ruling A45 — the "Extension bones" box
-    and the viewer's motion preview), the Base body tab's "Run all" plan
-    (``run_all``, ``figure_build.base_run_all``) and what of the character's 3D
-    work runs now, base-body work apart from outfit work (``activity``,
-    ``figure_build.base_activity``, Ruling A55). Never raises."""
+    and the viewer's motion preview; a tip group's light and motion controls
+    sit in its tip panel, the box lists the rest — ``box_groups``,
+    ``extension_tip.group_tip_settings``, Ruling A53), the Base body tab's "Run
+    all" plan (``run_all``, ``figure_build.base_run_all``) and what of the
+    character's 3D work runs now, base-body work apart from outfit work
+    (``activity``, ``figure_build.base_activity``, Ruling A55). Never raises."""
     from app.core import collision, extension_tip, figure_build
     from app.core.model3d import (face_cleanup_state, face_info, find_model3d, get_model3d_options,
                                   mesh_repair_state, model_extension_state)
@@ -161,6 +163,7 @@ def _plain_body_extras(character_name: str, info: Dict[str, Any]) -> Dict[str, A
             model["collision"] = collision.ensure(character_name, bsig)
             info["extension_tips"] = extension_tip.tip_panels(character_name, bsig)
             info["extension"] = model_extension_state(character_name, bsig)
+            extension_tip.group_tip_settings(info["extension_tips"], info["extension"])
     except Exception:  # noqa: BLE001 — the poll never fails on the extras
         logger.exception("Plain body extras of %s failed", character_name)
     info["run_all"] = figure_build.base_run_all(character_name)

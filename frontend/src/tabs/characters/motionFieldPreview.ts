@@ -58,6 +58,14 @@ export function previewMotionSliders(payload: SecondaryMotionPayload | undefined
       const after = Math.min(limit, raw * Number(draft[slider] ?? 1) ** power)
       next[field] = before > 0 ? Math.min(limit, current[field] * after / before) : current[field]
     }
+    // A tip panel's length / diameter factor drafts (Ruling A53): the drafted value replaces the saved one, the
+    // resolved clothing/state factors stay (the server clamps the result to 0.25..4).
+    for (const field of ['length', 'girth'] as const) {
+      if (!(field in draft)) continue
+      const savedValue = Number(saved[field] ?? base[field] ?? 1)
+      next[field] = savedValue > 0 ? Math.max(0.25, Math.min(4, current[field] * Number(draft[field]) / savedValue))
+        : current[field]
+    }
     groups[id] = next
   }
   return { ...payload, groups, rev: `${payload.rev}:toolbar:${JSON.stringify(drafts)}` }

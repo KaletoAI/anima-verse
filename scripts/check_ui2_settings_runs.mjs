@@ -21,7 +21,7 @@
  *     base model"; runAllStep('extension') → "Extension bones (local)". ExtensionTipPanel: Save posts
  *     …/model3d/extension-tip (no /apply in that call); a separate Rebuild posts …/model3d/extension-tip/apply and is
  *     labelled TIP_REBUILD_LABEL "Rebuild (local, no hub job)"; no "Apply" button text is left; the due state shows
- *     TIP_DUE_NOTE.
+ *     TIP_DUE_NOTE — since Ruling A53 as the panel's yellow light over a green record, else in the state line.
  * [3] Gap 2 — ExpressionsTab posts …/expressions/{file}/regenerate, its button is disabled by `!e.regenerate?.ok`
  *     and the caption under it comes from regenerateCaption (the job count or the server's reason).
  * [4] Sweep — the footwear width cap is saved only: WardrobeGarment's onWidthCap posts …/footwear/width-cap and
@@ -109,7 +109,9 @@ check('[2] Save posts the settings only', [/model3d\/extension-tip`/.test(sendFn
 check('[2] Rebuild posts /apply', /model3d\/extension-tip\/apply`/.test(rebuildFn), true);
 check('[2] buttons', [/>\{t\('Save'\)\}<\/button>/.test(tip), /\{t\(TIP_REBUILD_LABEL\)\}/.test(tip),
   /\{t\('Apply'\)\}/.test(tip)], [true, true, false]);
-check('[2] due state shown', /panel\.due \? t\(TIP_DUE_NOTE\)/.test(tip), true);
+// Ruling A53: over a green record the due state is the panel's light (yellow, TIP_DUE_NOTE), else the state line.
+check('[2] due state shown', [/panel\.due && !dueLight \? t\(TIP_DUE_NOTE\)/.test(tip),
+  /light: 'yellow' as const, state: TIP_DUE_NOTE/.test(tip)], [true, true]);
 
 // [3]
 const expressions = src('frontend/src/tabs/characters/ExpressionsTab.tsx');

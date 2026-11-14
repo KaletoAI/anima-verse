@@ -23,10 +23,15 @@ root amplifies this to <.0027*sqrt(2*.12e-6/.0045)=.020 mm
 (use .025 mm for exact synthetic height probes).
 Modelled tip: a cosine bump of 4 mm height and 6 mm radius, pushed along -Y
 and centred on the marker vertex (x and z are multiples of the 2.5 mm spacing),
-is kept: no fill, no stub, no vertex within 20 mm moves. Its length along the
-cap normal, tilted asin(.01/.106)=5.42 deg from -Y, is .004*cos(5.42 deg)=
-3.982 mm; the ring quadric misses the cap by <.0054 mm and a 2.5 mm chord by
-.0025**2/(8*.106)=.007 mm, so .05 mm covers it. Bone head-to-tail = that length.
+with a raised ring of 4-5 mm out to 10 mm, is REPLACED (Ruling A53): it is
+levelled onto the surface around it before the stub is built — full strength
+out to max(1.2 R, 12 mm) = 12 mm, so the whole 10 mm disc — and the stub is a
+stub (tip_source stub, length .005). The levelled surface is a quadratic fitted
+on the cap 21.6-30 mm out: it misses the sphere inside 12 mm by the r^4 term,
+.0216**2*.03**2/(8*.106**3)=.044 mm, so every vertex within 10 mm of the tip
+(before the stub is raised) lies within .3 mm of the sphere. The bump's height
+above the fitted surface is recorded before (at least the 4 mm disc) and after
+(0 by construction: inside the full radius the skin IS the fitted surface).
 Geometry (C, both markers rejected): the tip group is still built, at the
 pair's geometry crest (tip_source geometry). By the bump's symmetry the crest
 is its centre (+-.15,-.15,1.4) within one .0025 grid cell, the suggestion is
@@ -146,16 +151,16 @@ elif kind=='C':
  assert sum(n.get('name') in ('TipLeft','TipRight') for n in doc['nodes'])==2
 elif job['params'].get('modelled',False):
  rows=result['metrics']['Tip']['placement']
- for name,row in zip(('TipLeft','TipRight'),rows):
+ for side,(name,row) in zip((1,-1),zip(('TipLeft','TipRight'),rows)):
   t,axis=Vector(row['tip']),Vector(row['axis'])
-  assert row['tip_source']=='mesh' and row['fill']=='skipped: existing tip',row
-  assert abs(row['tip_length_m']-.004*math.cos(math.asin(.01/.106)))<.00005,row
-  assert abs(row['stub_height']-row['tip_length_m'])<1e-9,row
+  assert row['tip_source']=='stub' and abs(row['tip_length_m']-.005)<1e-12,row
+  level=row['source_level']
+  assert level['bump_mm'][0]>=3.9 and level['bump_mm'][1]<.3 and level['tip_from_source_mm']==0.,level
   assert (arm.data.bones[name].head_local-t).length<1e-4
-  assert (arm.data.bones[name].tail_local-(t+axis*row['tip_length_m'])).length<1e-4
-  for v in obj.data.vertices:
-   if (captured['co'][v.index]-t).length<.02:
-    assert (v.co-captured['co'][v.index]).length<1e-6,(v.index,list(v.co))
+  for point in captured['co']:
+   if math.hypot(point.x-t.x,point.z-t.z)<.010:
+    sphere=-.044-math.sqrt(.106**2-(point.x-side*.15)**2-(point.z-1.4)**2)
+    assert abs(point.y-sphere)<.0003,(list(point),sphere)
 else:
  metrics=result['metrics']['Tip']; rows=metrics['placement']
  assert metrics['vertices_after']>metrics['vertices_before']

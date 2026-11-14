@@ -57,20 +57,21 @@
  *     tipSmoothingLine: no record (due) → "Not applied to this model yet — rebuilds the extension bones (local, no hub
  *     job)"; a record {T applied, max_shift_mm 4.546, inverted [22, 0]} with the time "01:12" → "Applied 01:12 — max
  *     shift 4.5 mm, inverted normals 22 → 0"; status failed, error "boom" → "Last rebuild failed: boom"; a kept own
- *     tip (applied false, reason R) → R. FieldBaseBody renders <MeshRepairPanel, <TipSmoothingPanel and
- *     <ExtensionTipPanel in that source order.
- * [9] A switched-off tip part left neutral (Ruling A44): a record entry {mode neutralised, reason "Smoothed and painted
- *     over — part is off", height_mm [[3.982, .05], [5.188, .004]], delta_e [[11.43, .69], [10.37, .22]]} → the line
- *     is that reason; the detail "Tips: <reason>, tip height 4.0 → 0.1 / 5.2 → 0.0 mm, colour difference ΔE
- *     11.4 → 0.7 / 10.4 → 0.2" (one decimal each); with a switched-on part U beside it, the line is the reason, "; ",
- *     then U's "Applied 01:12 — …" line.
+ *     tip (applied false, reason R) → R. FieldBaseBody renders <MeshRepairPanel, <TipSmoothingPanel and the tip
+ *     panels (`tipPanels.slice(0, 1).map(tipPanel)`) in that source order.
+ * [9] A switched-off tip part left neutral (Rulings A44, A53 — the mesh only): a record entry {mode neutralised,
+ *     reason "Smoothed — part is off", height_mm [[3.982, .05], [5.188, .004]], bump_mm [[7.58, 0], [12.68, 0]]} → the
+ *     line is that reason; the detail "Tips: <reason>, tip height 4.0 → 0.1 / 5.2 → 0.0 mm, source bump 7.6 → 0.0 /
+ *     12.7 → 0.0 mm" (one decimal each); with a switched-on part U beside it, the line is the reason, "; ", then U's
+ *     "Applied 01:12 — …" line. NEUTRALISED_LINE is "Smoothed — part is off" (the server's NEUTRALISED_REASON).
  * [10] The Extension bones box in the Base body tab (Ruling A45; the overlay is A56's, see [12]):
  *     extensionGroupIds({groups: {P: {bones: ["mixamorig:ExtA", "ExtB"]}, H: {hair: true, bones: ["hair_c01_0"]},
  *     E: {bones: []}}}) → ["P"] (hair groups and groups without bones left out).
  *     The readout on the hand-built rig of [12] (the extension bone ExtA bound at rest under Spine2): upright
  *     swingDeg 0; ExtA turned 30° about its parent's X: its +Y becomes (0, cos 30°, sin 30°), so swingDeg 30.
  *     Source greps: FieldBaseBody renders <ExtensionBonesBox inside `ga-ext-grid` after the first tip panel and before
- *     the others (tipPanels.slice(0, 1) … extensionBox … tipPanels.slice(1)), hands the viewer `motion=` and
+ *     the others (tipPanels.slice(0, 1) … extensionBox … tipPanels.slice(1)) — only for the groups without a tip
+ *     panel (`boxGroups`, Ruling A53) and only when there is one; hands the viewer `motion=` and
  *     `extensionBones`; the CSS grid is `minmax(0, 1fr) minmax(0, 1fr)`, `align-items: start`, one column under an
  *     `@container (max-width: 520px)`; the 3D tab's Model3DExtensions on the pipeline renders "Open Base body tab"
  *     and returns before the box; FieldModel3D leaves the Bounce / Weight sliders out on the pipeline.
@@ -87,9 +88,9 @@
  *     → "1 step due"; nothing → green "Up to date".
  *     runAllPlanLine([view back 1, mesh 1, cleanup 0, face 2, rig null]) → "Back view (1) · Mesh (1) · Face cleanup
  *     (local) · Face retexture (2) · Rig (cost unknown)"; no plan → "".
- *     Source greps: FieldBaseBody has SubTabs, no <details>, the viewer without a side toolbar and with builtAt; the
- *     tip panels get rebuildElsewhere={!!extensionBox} and ExtensionTipPanel leaves its Rebuild out then (one Rebuild,
- *     the box's — both POSTed …/extension-tip/apply); the tip panel, the mesh repair panel, the motion values and
+ *     Source greps: FieldBaseBody has SubTabs, no <details>, the viewer without a side toolbar and with builtAt; each
+ *     tip panel carries its own Rebuild (Ruling A53: no `rebuildElsewhere`); the tip panel, the mesh repair panel, the
+ *     motion values and
  *     the collision sliders say "Discard changes" and (where a reset exists) "Reset to default", never "Revert" /
  *     "Reset" (both "Zurücksetzen" in German); the motion value rows show the name before " (" or ";" with the full
  *     wording as mouse-over.
@@ -276,17 +277,19 @@ check('[8] failed', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: '
 check('[8] kept own tip', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: 'built', error: '',
   groups: { T: tipGroup({ applied: false, reason: 'R', max_shift_mm: null, inverted: null }) } })), 'R');
 // [9]
-const neutral = tipGroup({ mode: 'neutralised', reason: 'Smoothed and painted over — part is off', inverted: null,
-  off_60: null, height_mm: [[3.982, 0.05], [5.188, 0.004]], delta_e: [[11.43, 0.69], [10.37, 0.22]] });
+const neutral = tipGroup({ mode: 'neutralised', reason: 'Smoothed — part is off', inverted: null,
+  off_60: null, height_mm: [[3.982, 0.05], [5.188, 0.004]], bump_mm: [[7.58, 0], [12.68, 0]] });
+check('[9] NEUTRALISED_LINE', m.NEUTRALISED_LINE, 'Smoothed — part is off');
 check('[9] neutralised line', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: 'built', error: '',
-  groups: { T: neutral } })), 'Smoothed and painted over — part is off');
+  groups: { T: neutral } })), 'Smoothed — part is off');
 check('[9] neutralised detail', m.tipSmoothingDetail(tipState({ version: 1, at: 'x', status: 'built', error: '',
   groups: { T: neutral } }))[0],
-  'Tips: Smoothed and painted over — part is off, tip height 4.0 → 0.1 / 5.2 → 0.0 mm, colour difference ΔE 11.4 → 0.7 / 10.4 → 0.2');
+  'Tips: Smoothed — part is off, tip height 4.0 → 0.1 / 5.2 → 0.0 mm, source bump 7.6 → 0.0 / 12.7 → 0.0 mm');
 check('[9] neutralised + smoothed', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: 'built', error: '',
   groups: { T: neutral, U: tipGroup({}) } }), undefined, () => '01:12'),
-  'Smoothed and painted over — part is off; Applied 01:12 — max shift 4.5 mm, inverted normals 22 → 0');
-const panelOrder = ['<MeshRepairPanel', '<TipSmoothingPanel', '<ExtensionTipPanel'].map((tag) => baseTab.indexOf(tag));
+  'Smoothed — part is off; Applied 01:12 — max shift 4.5 mm, inverted normals 22 → 0');
+// The tip panels render through the tab's `tipPanel` helper (Ruling A53); their place is where the grid maps it.
+const panelOrder = ['<MeshRepairPanel', '<TipSmoothingPanel', 'tipPanels.slice(0, 1).map(tipPanel)'].map((tag) => baseTab.indexOf(tag));
 check('[8] panels in step order', panelOrder.every((at, i) => at >= 0 && (i === 0 || at > panelOrder[i - 1])), true);
 
 // [10]
@@ -421,8 +424,8 @@ const baseViewer = (baseTab.match(/<Model3DViewer[\s\S]*?\/>/) || [''])[0];
 check('[11] sub-tabs, no <details>, viewer', [/<SubTabs\b/.test(baseTab), /<details>/.test(baseTab),
   /sideToolbar/.test(baseViewer), /builtAt=\{model\.created_at\}/.test(baseViewer)], [true, false, false, true]);
 const tipSrc = src('frontend/src/tabs/characters/ExtensionTipPanel.tsx');
-check('[11] one Rebuild', [(baseTab.match(/rebuildElsewhere=\{!!extensionBox\}/g) || []).length,
-  /\{rebuildElsewhere \? null : <button/.test(tipSrc)], [2, true]);
+check('[11] each tip panel has its own Rebuild', [/rebuildElsewhere/.test(baseTab + tipSrc),
+  (tipSrc.match(/t\(TIP_REBUILD_LABEL\)/g) || []).length], [false, 1]);
 const labelled = ['ExtensionTipPanel', 'MeshRepairPanel', 'ExtensionMotionDraft', 'CollisionScales']
   .map((f) => src(`frontend/src/tabs/characters/${f}.tsx`));
 check('[11] distinct reset labels', labelled.map((x) => [/t\('Discard changes'\)/.test(x), /t\('(Revert|Reset)'\)/.test(x)]),

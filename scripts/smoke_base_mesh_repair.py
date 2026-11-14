@@ -35,15 +35,6 @@ w = (z + r) / 2r — joint 0 carries the top). Expected, derived by hand:
 [5] The largest hole setting at 0.5 cm and the 20-degree hole (~3 cm across): not filled, record unfilled
     [{size_cm, reason "larger than the largest hole to fill"}], the bytes returned unchanged, the summary
     "1 hole left open (… cm — larger than the largest hole to fill)". Switched off: status skipped, same bytes.
-[6] Tip smoothing radius = the part's footprint: ``tip_smooth_radius(fill_radius, tip_radius)`` =
-    fill_radius x tip_radius: 2.1 x 8.92 mm = 18.732 mm (Kira's measured marker radius and the pack's
-    fill_radius); a marker twice as large -> 37.464 mm; fill_radius 3 -> 26.76 mm.
-    ``smooth_region`` on a 1 mm grid plane (60 x 60 mm, z = 0) with two 3 mm bumps (Gaussian, sigma 1.5 mm):
-    one at the centre (inside the 18.73 mm footprint) and one 25 mm out (outside it, beyond the 2.68 mm blend):
-    the inner bump drops below 20 % of its height, every vertex farther than R from the centre keeps its exact
-    coordinates, and N = ceil((R / edge)^2) passes are run (edge = the mean edge of the region, here 1.17 mm with
-    the grid's diagonals -> ceil((18.732 / edge)^2), compared with the run's own edge). A fixed vertex never moves;
-    a fixed patch of 4 vertices with ``min_wall`` 100 counts as a fold (released, ``folds_released`` 4) and moves.
 [7] Settings: defaults {enabled True, max_hole_cm 4.0}; 0.4 and 21 cm, a string, an unknown key -> ValueError;
     the fingerprint changes with max_hole_cm and with VERSION.
 [8] model3d: a base body's staged bytes are repaired (``_repaired_base``: record in meta, version VERSION, the
@@ -226,40 +217,6 @@ def main() -> int:
           and R.summary(rec).endswith("cm — larger than the largest hole to fill)"), R.summary(rec))
     out, rec = R.repair_glb(holed, {"enabled": False})
     check("switched off", out is holed and rec["status"] == "skipped" and R.summary(rec) == "Switched off")
-
-    print("[6] tip smoothing follows the part's footprint")
-    check("2.1 x 8.92 mm", abs(R.tip_smooth_radius(2.1, 0.00892) - 0.018732) < 1e-9)
-    check("marker twice as large", abs(R.tip_smooth_radius(2.1, 0.01784) - 0.037464) < 1e-9)
-    check("fill_radius 3", abs(R.tip_smooth_radius(3.0, 0.00892) - 0.02676) < 1e-9)
-    n = 61
-    xs = (np.arange(n) - 30) * 0.001
-    X, Y = np.meshgrid(xs, xs, indexing="ij")
-    Z = (0.003 * np.exp(-(X ** 2 + Y ** 2) / (2 * 0.0015 ** 2))
-         + 0.003 * np.exp(-((X - 0.025) ** 2 + Y ** 2) / (2 * 0.0015 ** 2)))
-    grid = np.stack([X.ravel(), Y.ravel(), Z.ravel()], 1)
-    idx = np.arange(n * n).reshape(n, n)
-    edges = np.concatenate([np.stack([idx[:-1, :].ravel(), idx[1:, :].ravel()], 1),
-                            np.stack([idx[:, :-1].ravel(), idx[:, 1:].ravel()], 1),
-                            np.stack([idx[:-1, :-1].ravel(), idx[1:, 1:].ravel()], 1)])
-    radius, blend = R.tip_smooth_radius(2.1, 0.00892), 0.3 * 0.00892
-    fixed = np.zeros(len(grid), bool)
-    fixed_one = int(idx[30, 40])           # 10 mm out, inside the footprint
-    fixed[fixed_one] = True
-    smoothed, info = R.smooth_region(grid, edges, [(0, 0, 0)], radius, blend, fixed=fixed)
-    centre = int(idx[30, 30])
-    check("inner bump below 20 %", smoothed[centre, 2] < 0.2 * grid[centre, 2],
-          f"{smoothed[centre, 2] * 1000:.3f} of {grid[centre, 2] * 1000:.3f} mm")
-    far = np.linalg.norm(grid[:, :2], axis=1) > radius
-    check("outside the footprint untouched", bool(np.array_equal(smoothed[far], grid[far])))
-    check("the outer bump untouched", smoothed[int(idx[55, 30]), 2] == grid[int(idx[55, 30]), 2])
-    check("passes = ceil((R / edge)^2)", info["iterations"] == math.ceil((radius / info["edge_m"]) ** 2),
-          f"{info['iterations']} with edge {info['edge_m'] * 1000:.3f} mm")
-    check("fixed vertex unmoved", bool(np.array_equal(smoothed[fixed_one], grid[fixed_one])))
-    patch = np.zeros(len(grid), bool)
-    patch[[int(idx[30, 31]), int(idx[30, 32]), int(idx[31, 31]), int(idx[31, 32])]] = True
-    smoothed2, info2 = R.smooth_region(grid, edges, [(0, 0, 0)], radius, blend, fixed=patch, min_wall=100)
-    check("a small fixed patch is a fold: released and smoothed",
-          info2["folds_released"] == 4 and not np.array_equal(smoothed2[patch], grid[patch]), str(info2))
 
     print("[7] settings")
     check("defaults", R.validated_settings(None) == {"enabled": True, "max_hole_cm": 4.0})
