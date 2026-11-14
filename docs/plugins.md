@@ -2004,14 +2004,14 @@ pod_link: 0.7
 pod_link_distance: 0.03
 k_tip_pods: 0.004
 k_body: 0.016
-body_window: {radius: 0.03, fall: 0.02} # both scale with size_factor
+body_window: {radius: 0.03, fall: 0.02, recede: 2} # radius and fall scale with size_factor
 skin_sink: 0.0008
 hidden_band: {lateral: 0.025, above: -0.02, radius: 0.045, depth: 0.006}
 flatten: {lateral: 0.055, down: 0.035, below: 0.065, above: 0.01, front: 0.03, normal_front: 0.2, iterations: 150}
 reweight: {from: 0.045, to: 0.095}
 tone: {shaft: [0.9, 0.83, 0.8], tip: [1.04, 0.84, 0.82]}
 border_lift: 0.010
-seam: {lift: 0.0004, band: 0.006, normal_band: 0.012}
+seam: {tuck: 0.0004, band: 0.006, normal_band: 0.012}
 texture: {bake: 1024, patch_max: 256, flood: 0.07, blur: 9}
 voxel: 0.0014
 smooth: {iterations: 2, factor: 0.5}
@@ -2026,20 +2026,34 @@ steps smoothly up to `tip_girth` over `tip_rim` of the length, then the rounded 
 uses `tip_girth*(1-u**2.4)**.55`.
 Flattening relaxes the front window and moves coincident seam copies together,
 only inward. Radial reweighting transfers only `*UpLeg` weights to the anchor.
-The body union is confined to `body_window`; the hidden band retains up to
-`depth` under the skin. The fillet settles on the skin sunk `skin_sink` deep, so it
+The body union is confined to `body_window`: beyond `radius + fall` the body field
+sinks `recede` metres per metre of distance into the body, so where the part merely
+touches skin there (a pod on a thigh or in a fold) it keeps its own closed surface
+instead of a cut edge that a pose pulls open (Ruling A65c). The hidden band retains
+up to `depth` under the skin. An open border loop besides the attachment's (the one
+passing closest to the root) whose vertices mostly lie in the outer half of the fall
+(blend radius under `k_body / 2`) and not deep in the body (median skin distance
+above two voxels under the skin) is a hole, cut where the union no longer forms a
+fillet: the build runs the surface net again with the body field sunk within
+`k_body` of that loop's vertices, up to three times. A pod rising out of the skin
+nearer the root keeps its fillet loop. The fillet settles on the skin sunk `skin_sink` deep, so it
 leaves the skin nearly tangent instead of rising steeply out of it (Ruling A65b).
 After smoothing and decimation the seam pass lands the fillet share and the strip
-within `seam.band` (along the mesh) of every open border on the skin: a vertex
-standing `h` above `seam.lift` moves down by `h * max(s(1 - h/band), strip) * share`
-(`s` the smoothstep, `share` the larger of the fillet share and the strip), so an open
-border sits `lift` above the skin and the profile meets it tangentially. The seam
+within `seam.band` (along the mesh) of every open border onto the skin: a vertex
+standing `h` above the landing level `seam.tuck` under the skin moves down by
+`h * max(s(1 - h/band), strip) * share` (`s` the smoothstep, `share` the larger of the
+fillet share and the strip), so an open border ends `tuck` under the skin and the
+profile meets it tangentially; a border edge in a fold is landed twice more against
+the nearest skin. An edge standing on the skin showed as a dark serrated line
+(Ruling A65c). The seam
 smoke (`scripts/smoke_attached_part_seam.py`) derives the remaining crease by hand.
 Its normals turn to the body's interpolated corner normals over `seam.normal_band`,
 and by the same share its baked texels take the body's texel at the nearest
 outer-skin point (two extra EMIT bakes: share and position per texel).
 The fillet's weights are the nearest body polygon's corner weights, interpolated by
-inverse distance (the nearest vertex alone stepped along the seam).
+inverse distance (the nearest vertex alone stepped along the seam). Every open border
+and its strip take them too (share `max(fillet share, strip)`), `*UpLeg` included: on
+the part's own weights a border rose up to 4 mm off the skin when the chain lifted.
 The part's faces wind counter-clockwise seen from outside, so its normals face out.
 Texture detail comes from the body's UV island at its original texel scale;
 the tip uses a blurred patch. Vertex colours are converted from sRGB to linear
@@ -2049,7 +2063,8 @@ material uses the single baked atlas at roughness .55.
 Per-group metrics include `status`, `reason`, `size_factor`, `protrusion_mm`,
 `flattened_vertices`, `reweighted_vertices`, `part_tris`, `skin_patch_px`,
 `skin_patch_cm`, `tip_vertices`, `border_vertices`, and `seam_vertices` (moved onto the
-skin by the seam pass). Geometry metrics use the
+skin by the seam pass), `hole_border_vertices` (border vertices of holes the build
+closed) and `hole_border_vertices_left`. Geometry metrics use the
 final reduced mesh. `protrusion_mm` tells whether the generated body still carries a
 part: how far anything on the midline 2–16 cm below the anchor reaches in front of the
 belly line 6–12 cm above it, measured on the original body before flattening. A drawn

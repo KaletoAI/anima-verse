@@ -17,6 +17,7 @@ import bpy
 import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
+from mathutils.kdtree import KDTree
 
 DEFAULTS = {
     'size_factor': 1.0, 'anchor_bone': 'Hips', 'anchor_drop': .09,
@@ -50,18 +51,23 @@ DEFAULTS = {
     # free shaft it stays tight so a lifted shaft does not drag the sack along.
     'pod_web': {'blend': .016, 'until': .4},
     'pod_link': .7, 'pod_link_distance': .03, 'k_tip_pods': .004, 'k_body': .016,
+    # Beyond radius + fall the body field recedes `recede` metres per metre into
+    # the body: there the part only touches skin and keeps its own closed
+    # surface, which a pose can pull off the skin without opening it (Ruling A65c).
+    'body_window': {'radius': .03, 'fall': .02, 'recede': 2.},
     # The fillet settles on the skin sunk this deep: at 3 mm it rose steeply
     # out of the skin and drew a rim around the root (Ruling A65b).
-    'body_window': {'radius': .03, 'fall': .02}, 'skin_sink': .0008,
+    'skin_sink': .0008,
     'hidden_band': {'lateral': .025, 'above': -.02, 'radius': .045, 'depth': .006},
     'flatten': {'lateral': .055, 'down': .035, 'below': .065, 'above': .01,
                 'front': .03, 'normal_front': .2, 'iterations': 150},
     'reweight': {'from': .045, 'to': .095},
     'tone': {'shaft': [.9, .83, .8], 'tip': [1.04, .84, .82]}, 'border_lift': .010,
-    # The attachment seam: the fillet lands on the skin `lift` above it, its
-    # height falls off over `band` and its normals turn to the body's over
+    # The attachment seam: the fillet lands `tuck` under the skin, its height
+    # falls off over `band` and its normals turn to the body's over
     # `normal_band`, so the part grows out of the body instead of sitting on it.
-    'seam': {'lift': .0004, 'band': .006, 'normal_band': .012},
+    # An open border standing on the skin showed as a dark serrated line.
+    'seam': {'tuck': .0004, 'band': .006, 'normal_band': .012},
     'texture': {'bake': 1024, 'patch_max': 256, 'flood': .07, 'blur': 9, 'tone_tolerance': .15},
     'voxel': .0014, 'smooth': {'iterations': 2, 'factor': .5}, 'decimate': .3,
     'protrusion_warn_mm': 12.,
@@ -114,7 +120,7 @@ def parameters(raw):
         raise ValueError('Invalid first_link_start')
     if settings['reweight']['from'] < 0 or settings['reweight']['to'] <= settings['reweight']['from']:
         raise ValueError('Invalid radial reweight interval')
-    for section, keys in (('body_window', ['radius', 'fall']), ('relief', ['rise', 'fall']),
+    for section, keys in (('body_window', ['radius', 'fall', 'recede']), ('relief', ['rise', 'fall']),
                            ('texture', ['bake', 'patch_max', 'flood', 'blur', 'tone_tolerance']),
                            ('pods.folds', ['wavelength', 'width', 'wobble_wavelength', 'raphe_width', 'root_fall']),
                            ('pod_web', ['until']), ('seam', ['band', 'normal_band'])):
@@ -138,8 +144,8 @@ def parameters(raw):
                            ('hidden_band', ['lateral', 'radius', 'depth'])):
         if any(settings[section][key] < 0 for key in keys):
             raise ValueError('Invalid ' + section + ' length')
-    if settings['seam']['lift'] < 0:
-        raise ValueError('Invalid seam lift')
+    if settings['seam']['tuck'] < 0:
+        raise ValueError('Invalid seam tuck')
     if settings['anchor_drop'] < 0 or settings['root_sink'] < 0 or settings['skin_sink'] < 0 or settings['girth_max'] < 1 or settings['tip_girth'] < 1:
         raise ValueError('Invalid root offset or base flare')
     if not 0 <= settings['smooth']['factor'] <= 1 or not 0 <= settings['flatten']['normal_front'] <= 1:
@@ -196,6 +202,32 @@ class OuterSkin:
 
     def ray_cast(self, origin, direction):
         return self._mapped(self.tree.ray_cast(origin, direction))
+
+
+def border_strip(points, edge_counts, border, band):
+    """Smoothstep share falling from 1 on an open border to 0 at ``band`` metres
+    from it, the distance measured along the mesh edges (``edge_counts`` maps
+    each edge, a vertex index pair, to its face count)."""
+    along = np.full(len(points), np.inf)
+    neighbours = [[] for _ in range(len(points))]
+    for a, b in edge_counts:
+        length = float(np.linalg.norm(np.asarray(points[a]) - np.asarray(points[b])))
+        neighbours[a].append((b, length))
+        neighbours[b].append((a, length))
+    heap = [(0., i) for i in border]
+    for _, i in heap:
+        along[i] = 0.
+    heapq.heapify(heap)
+    while heap:
+        d, i = heapq.heappop(heap)
+        if d > along[i] or d > band:
+            continue
+        for j, length in neighbours[i]:
+            if d + length < along[j]:
+                along[j] = d + length
+                heapq.heappush(heap, (d + length, j))
+    share = np.clip(1 - along / band, 0, 1)
+    return share * share * (3 - 2 * share)
 
 
 def skin_texel_fallback(pixels):
@@ -397,6 +429,15 @@ def build_part(group, companions, output):
         d = np.linalg.norm(P - np.array(tuple(root)), axis=1)
         return body_blend * np.clip(1 - (d - settings['body_window']['radius'] * size_factor) / (settings['body_window']['fall'] * size_factor), 0, 1)
 
+    attach_reach = (settings['body_window']['radius'] + settings['body_window']['fall']) * size_factor
+
+
+    def recede(P):
+        """How far the body field sinks beyond the attachment window: none
+        inside it, then steeply, so the part's own surface takes over."""
+        d = np.linalg.norm(P - np.array(tuple(root)), axis=1)
+        return np.maximum(d - attach_reach, 0) * settings['body_window']['recede']
+
 
     def ellip(P, c, r):
         q = (P - np.array(tuple(c))) @ FR.T / r
@@ -551,113 +592,193 @@ def build_part(group, companions, output):
         q, n = body_matrix @ q, (normal_matrix @ n).normalized()
         v = point - q
         db[i] = v.length * (1 if v.dot(n) >= 0 else -1)
-    U = smin(part, db + settings['skin_sink'], k_body(grid_points))
-    field = U.reshape(nx, ny, nz)
     print('field done, band', len(band))
 
 
-    # Surface nets: one average crossing vertex per active cell.
-    inside = field < 0
-    cell_any = np.zeros((nx - 1, ny - 1, nz - 1), int)
-    for dx in (0, 1):
-        for dy in (0, 1):
-            for dz in (0, 1):
-                cell_any += inside[dx:nx - 1 + dx, dy:ny - 1 + dy, dz:nz - 1 + dz]
-    active = (cell_any > 0) & (cell_any < 8)
-    cid = -np.ones(active.shape, int)
-    cells = np.argwhere(active)
-    cid[active] = np.arange(len(cells))
-    corner = np.array([[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)])
-    edges = [(a_, b_) for a_ in range(8) for b_ in range(a_ + 1, 8) if np.abs(corner[a_] - corner[b_]).sum() == 1]
-    vacc = np.zeros((len(cells), 3))
-    vcnt = np.zeros(len(cells))
-    for a_, b_ in edges:
-        ia, ib = cells + corner[a_], cells + corner[b_]
-        fa, fb = field[tuple(ia.T)], field[tuple(ib.T)]
-        cr = (fa < 0) != (fb < 0)
-        tt = np.where(cr, fa / np.where(fa - fb == 0, 1e-12, fa - fb), 0)
-        crossings = lo + (ia + (ib - ia) * tt[:, None]) * voxel
-        vacc[cr] += crossings[cr]
-        vcnt[cr] += 1
-    positions = vacc / np.maximum(vcnt, 1)[:, None]
-    quads = []
-    for axis in range(3):
-        o1, o2 = [ax for ax in range(3) if ax != axis]
-        sl = [slice(0, nx), slice(0, ny), slice(0, nz)]
-        sl[axis] = slice(0, field.shape[axis] - 1)
-        A_ = inside[tuple(sl)]
-        sl2 = list(sl)
-        sl2[axis] = slice(1, field.shape[axis])
-        B_ = inside[tuple(sl2)]
-        for idx in np.argwhere(A_ != B_):
-            if idx[o1] == 0 or idx[o2] == 0:
+    def opened(P, holes):
+        """The body field sinks away within `body_blend` of a hole's border."""
+        if holes is None or not len(holes):
+            return np.zeros(len(P))
+        tree = KDTree(len(holes))
+        for j, point in enumerate(holes):
+            tree.insert(point, j)
+        tree.balance()
+        near = np.array([tree.find(Vector(point))[2] for point in P])
+        # 10 cm: deeper than any body distance sampled in the band.
+        return np.clip(1 - near / body_blend, 0, 1) * .1
+
+
+    def shell(holes):
+        """Surface-net the union and keep the visible shell (with its hidden band at the root)."""
+        sink = recede(grid_points)
+        sink[band] += opened(grid_points[band], holes)
+        U = smin(part, db + settings['skin_sink'] + sink, k_body(grid_points))
+        field = U.reshape(nx, ny, nz)
+
+
+        # Surface nets: one average crossing vertex per active cell.
+        inside = field < 0
+        cell_any = np.zeros((nx - 1, ny - 1, nz - 1), int)
+        for dx in (0, 1):
+            for dy in (0, 1):
+                for dz in (0, 1):
+                    cell_any += inside[dx:nx - 1 + dx, dy:ny - 1 + dy, dz:nz - 1 + dz]
+        active = (cell_any > 0) & (cell_any < 8)
+        cid = -np.ones(active.shape, int)
+        cells = np.argwhere(active)
+        cid[active] = np.arange(len(cells))
+        corner = np.array([[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)])
+        edges = [(a_, b_) for a_ in range(8) for b_ in range(a_ + 1, 8) if np.abs(corner[a_] - corner[b_]).sum() == 1]
+        vacc = np.zeros((len(cells), 3))
+        vcnt = np.zeros(len(cells))
+        for a_, b_ in edges:
+            ia, ib = cells + corner[a_], cells + corner[b_]
+            fa, fb = field[tuple(ia.T)], field[tuple(ib.T)]
+            cr = (fa < 0) != (fb < 0)
+            tt = np.where(cr, fa / np.where(fa - fb == 0, 1e-12, fa - fb), 0)
+            crossings = lo + (ia + (ib - ia) * tt[:, None]) * voxel
+            vacc[cr] += crossings[cr]
+            vcnt[cr] += 1
+        positions = vacc / np.maximum(vcnt, 1)[:, None]
+        quads = []
+        for axis in range(3):
+            o1, o2 = [ax for ax in range(3) if ax != axis]
+            sl = [slice(0, nx), slice(0, ny), slice(0, nz)]
+            sl[axis] = slice(0, field.shape[axis] - 1)
+            A_ = inside[tuple(sl)]
+            sl2 = list(sl)
+            sl2[axis] = slice(1, field.shape[axis])
+            B_ = inside[tuple(sl2)]
+            for idx in np.argwhere(A_ != B_):
+                if idx[o1] == 0 or idx[o2] == 0:
+                    continue
+                c = []
+                for d1, d2 in ((0, 0), (1, 0), (1, 1), (0, 1)):
+                    q = idx.copy()
+                    q[o1] -= d1
+                    q[o2] -= d2
+                    if q[o1] >= cid.shape[o1] or q[o2] >= cid.shape[o2] or q[axis] >= cid.shape[axis]:
+                        c = None
+                        break
+                    c.append(cid[tuple(q)])
+                if not c or min(c) < 0:
+                    continue
+                flip = A_[tuple(idx)] ^ (axis == 1)
+                # Counter-clockwise seen from outside: the part's normals face out.
+                quads.append(c if flip else c[::-1])
+        quads = np.array(quads)
+        print('verts', len(positions), 'quads', len(quads))
+
+
+        # Keep the shell, including a short hidden band at the root.
+        shaft_distance, part_station = shaft_sdf(positions)
+        pod_distance = pods_sdf(positions)
+        part_distance = smin(shaft_distance, pod_distance, pod_link_k(part_station))
+        skin_distance = np.empty(len(positions))
+        skin_nearest = []
+        for i, point in enumerate(positions):
+            q, n, fi, _ = bvh.find_nearest(body_inverse @ Vector(point))
+            q, n = body_matrix @ q, (normal_matrix @ n).normalized()
+            skin_distance[i] = (Vector(point) - q).dot(n)
+            skin_nearest.append((q, fi))
+        near_root = (np.abs(positions[:, 0] - root.x) < settings['hidden_band']['lateral'] * size_factor) & (positions[:, 2] > root.z + settings['hidden_band']['above'] * size_factor) & (np.linalg.norm(positions - np.array(tuple(root)), axis=1) < settings['hidden_band']['radius'] * size_factor)
+        # Beyond the window the part's own surface stays, under the skin too: a pod
+        # resting on a thigh or a crease of the body there kept a cut edge that a
+        # pose pulled open, or a hole where the body's walls cross (Ruling A65c).
+        free_surface = (recede(positions) + opened(positions, holes) > 0) & (np.abs(part_distance) < .5 * voxel)
+        keepv = (part_distance < 1.15 * body_blend) & (np.where(near_root, skin_distance > -settings['hidden_band']['depth'], skin_distance > .0006) | free_surface)
+        quads = quads[keepv[quads].all(1)]
+        # Every visible piece carries part surface (a flat body can split the
+        # shaft from the pods). An island that is all skin fillet comes from a
+        # folded inner wall where the thighs meet the body: drop it.
+        parent_ = np.arange(len(positions))
+
+        def find_(i):
+            while parent_[i] != i:
+                parent_[i] = parent_[parent_[i]]
+                i = parent_[i]
+            return i
+        for face in quads:
+            r0 = find_(face[0])
+            for vi in face[1:]:
+                r1 = find_(vi)
+                if r1 != r0:
+                    parent_[r1] = r0
+        stray_faces = 0
+        if len(quads):
+            vertex_roots = np.array([find_(i) for i in range(len(positions))])
+            face_vertices = np.unique(quads)
+            on_part = np.unique(vertex_roots[face_vertices[np.abs(part_distance[face_vertices]) < voxel]])
+            keep_face = np.isin(vertex_roots[quads[:, 0]], on_part)
+            stray_faces = int(np.count_nonzero(~keep_face))
+            quads = quads[keep_face]
+        print('stray faces dropped', stray_faces)
+        used = np.unique(quads)
+        remap = -np.ones(len(positions), int)
+        remap[used] = np.arange(len(used))
+        if not len(used):
+            raise ValueError('Part field produced no visible faces')
+        return (positions[used], remap[quads], shaft_distance[used], part_station[used], pod_distance[used],
+                part_distance[used], [skin_nearest[i] for i in used], skin_distance[used], stray_faces)
+
+
+    def hole_borders(positions, quads, skin_distance):
+        """Vertices of the open border loops that are holes: besides the loop
+        passing closest to the root, every loop lying mostly in the outer half
+        of the window's fall, where the union no longer forms a fillet and only
+        cuts, and not deep in the body (where the part's own surface ends
+        hidden beyond the window). A pod rising out of the skin nearer the root
+        keeps its fillet loop."""
+        count = {}
+        for face in quads:
+            for a, b in zip(face, np.roll(face, -1)):
+                edge = (min(int(a), int(b)), max(int(a), int(b)))
+                count[edge] = count.get(edge, 0) + 1
+        link = {}
+        for (a, b), c in count.items():
+            if c == 1:
+                link.setdefault(a, []).append(b)
+                link.setdefault(b, []).append(a)
+        loops, seen = [], set()
+        for start in link:
+            if start in seen:
                 continue
-            c = []
-            for d1, d2 in ((0, 0), (1, 0), (1, 1), (0, 1)):
-                q = idx.copy()
-                q[o1] -= d1
-                q[o2] -= d2
-                if q[o1] >= cid.shape[o1] or q[o2] >= cid.shape[o2] or q[axis] >= cid.shape[axis]:
-                    c = None
-                    break
-                c.append(cid[tuple(q)])
-            if not c or min(c) < 0:
-                continue
-            flip = A_[tuple(idx)] ^ (axis == 1)
-            # Counter-clockwise seen from outside: the part's normals face out.
-            quads.append(c if flip else c[::-1])
-    quads = np.array(quads)
-    print('verts', len(positions), 'quads', len(quads))
+            loop, stack = [], [start]
+            seen.add(start)
+            while stack:
+                v = stack.pop()
+                loop.append(v)
+                for w in link[v]:
+                    if w not in seen:
+                        seen.add(w)
+                        stack.append(w)
+            loops.append(loop)
+        if len(loops) < 2:
+            return []
+        distance = np.linalg.norm(positions - np.array(tuple(root)), axis=1)
+        attachment = min(range(len(loops)), key=lambda k: distance[loops[k]].min())
+        share = k_body(positions) / body_blend
+        return [v for k, loop in enumerate(loops)
+                if k != attachment and np.median(share[loop]) < .5 and np.median(skin_distance[loop]) > -2 * voxel
+                for v in loop]
 
 
-    # Keep the shell, including a short hidden band at the root.
-    shaft_distance, part_station = shaft_sdf(positions)
-    pod_distance = pods_sdf(positions)
-    part_distance = smin(shaft_distance, pod_distance, pod_link_k(part_station))
-    skin_distance = np.empty(len(positions))
-    skin_nearest = []
-    for i, point in enumerate(positions):
-        q, n, fi, _ = bvh.find_nearest(body_inverse @ Vector(point))
-        q, n = body_matrix @ q, (normal_matrix @ n).normalized()
-        skin_distance[i] = (Vector(point) - q).dot(n)
-        skin_nearest.append((q, fi))
-    near_root = (np.abs(positions[:, 0] - root.x) < settings['hidden_band']['lateral'] * size_factor) & (positions[:, 2] > root.z + settings['hidden_band']['above'] * size_factor) & (np.linalg.norm(positions - np.array(tuple(root)), axis=1) < settings['hidden_band']['radius'] * size_factor)
-    keepv = (part_distance < 1.15 * body_blend) & np.where(near_root, skin_distance > -settings['hidden_band']['depth'], skin_distance > .0006)
-    quads = quads[keepv[quads].all(1)]
-    # Every visible piece carries part surface (a flat body can split the
-    # shaft from the pods). An island that is all skin fillet comes from a
-    # folded inner wall where the thighs meet the body: drop it.
-    parent_ = np.arange(len(positions))
-
-    def find_(i):
-        while parent_[i] != i:
-            parent_[i] = parent_[parent_[i]]
-            i = parent_[i]
-        return i
-    for face in quads:
-        r0 = find_(face[0])
-        for vi in face[1:]:
-            r1 = find_(vi)
-            if r1 != r0:
-                parent_[r1] = r0
-    stray_faces = 0
-    if len(quads):
-        vertex_roots = np.array([find_(i) for i in range(len(positions))])
-        face_vertices = np.unique(quads)
-        on_part = np.unique(vertex_roots[face_vertices[np.abs(part_distance[face_vertices]) < voxel]])
-        keep_face = np.isin(vertex_roots[quads[:, 0]], on_part)
-        stray_faces = int(np.count_nonzero(~keep_face))
-        quads = quads[keep_face]
-    print('stray faces dropped', stray_faces)
-    used = np.unique(quads)
-    remap = -np.ones(len(positions), int)
-    remap[used] = np.arange(len(used))
-    if not len(used):
-        raise ValueError('Part field produced no visible faces')
-    positions, quads = positions[used], remap[quads]
-    shaft_distance, part_station, pod_distance, part_distance = shaft_distance[used], part_station[used], pod_distance[used], part_distance[used]
-    skin_nearest = [skin_nearest[i] for i in used]
-    skin_distance = skin_distance[used]
+    (positions, quads, shaft_distance, part_station, pod_distance, part_distance,
+     skin_nearest, skin_distance, stray_faces) = shell(None)
+    # A loop hole_borders names is a hole: the body field cut the part where it only met skin
+    # (a crease whose walls cross, a thigh). The field gives way around it and
+    # the part keeps its own surface there (Ruling A65c).
+    # Closing one can uncover a smaller one beside it: up to three passes.
+    hole_points = []
+    for _ in range(3):
+        holes = hole_borders(positions, quads, skin_distance)
+        if not holes:
+            break
+        hole_points += [tuple(p) for p in positions[holes]]
+        (positions, quads, shaft_distance, part_station, pod_distance, part_distance,
+         skin_nearest, skin_distance, stray_faces) = shell(hole_points)
+    holes_left = len(hole_borders(positions, quads, skin_distance))
+    print('hole border vertices opened', len(hole_points), 'left', holes_left)
     print('kept verts', len(positions), 'quads', len(quads))
 
 
@@ -668,7 +789,8 @@ def build_part(group, companions, output):
     tone_p = (.5 + .5 * tip_weight) * (1 - fillet_weight)
 
     wl = np.clip(1 - skin_distance / settings['border_lift'], 0, 1)
-    wl = wl * wl * (3 - 2 * wl)
+    # Only where the part is attached: the free surface beyond the window keeps its tone.
+    wl = wl * wl * (3 - 2 * wl) * (k_body(positions) / body_blend)
     skin_weight = np.maximum(fillet_weight, wl)
     from mathutils.geometry import barycentric_transform
     body.data.calc_loop_triangles()
@@ -775,6 +897,7 @@ def build_part(group, companions, output):
             edge = tuple(sorted((int(a), int(b))))
             boundary_edges[edge] = boundary_edges.get(edge, 0) + 1
     border = {vi for edge, count in boundary_edges.items() if count == 1 for vi in edge}
+    glue = border_strip(positions, boundary_edges, border, settings['seam']['band'])
     vertex_weights = []
     for i, point in enumerate(positions):
         ws_ = shaft_weights(max(part_station[i], 0))
@@ -789,11 +912,11 @@ def build_part(group, companions, output):
         for d_, f_ in ((ws_, mix), (wc_, 1 - mix)):
             for k_, x_ in d_.items():
                 w[k_] = w.get(k_, 0) + x_ * f_
-        # Only the skin fillet at the root takes the skin's weights; a border where the
-        # part merely touches other skin (pods against the thighs) keeps part weights.
-        # Keep the continuous reference share even at open borders: forcing
-        # a fillet share above .5 to 1 creates a weight step under chain lift.
-        wroot = fillet_weight[i]
+        # The skin fillet takes the skin's weights, and so does every open border
+        # with its strip (`seam.band` along the mesh): a border on part weights
+        # rose off the skin when the chain lifted (4 mm, Ruling A65c). Beyond the
+        # window the part is closed and has no border. Both shares are continuous.
+        wroot = max(fillet_weight[i], glue[i])
         if wroot > 0:
             bw = skin_weights_at(*skin_nearest[i])
             w = {k_: x_ * (1 - wroot) for k_, x_ in w.items()}
@@ -866,6 +989,10 @@ def build_part(group, companions, output):
     dec.ratio = settings['decimate']
     bpy.ops.object.modifier_move_to_index(modifier='Decimate', index=0)
     bpy.ops.object.modifier_apply(modifier='Decimate')
+    # The decimation can leave a face twice; the glTF export validates the mesh
+    # and drops the copy, which opened a pinhole no border pass had seen.
+    # Validate now, so every border is final from here on.
+    partobj.data.validate()
     final_positions = np.array([tuple(body_matrix @ v.co) for v in partobj.data.vertices])
     final_ds, final_t = shaft_sdf(final_positions)
     final_dc = pods_sdf(final_positions)
@@ -874,20 +1001,27 @@ def build_part(group, companions, output):
         for edge in poly.edge_keys:
             edge_counts[edge] = edge_counts.get(edge, 0) + 1
     final_border = {vi for edge, count in edge_counts.items() if count == 1 for vi in edge}
+    seam = settings['seam']
+    strip = border_strip(final_positions, edge_counts, final_border, seam['band'])
     # Preserve the reference's interpolated weights after both modifiers.
     # Reclassifying a smoothed vertex by its new station creates hard seams.
     tip_count = int(np.count_nonzero((final_t >= tip_start + .015) & (final_ds < final_dc)))
     for vertex in partobj.data.vertices:
         i = vertex.index
         # Incidental skin contacts must not give the free shell thigh motion.
-        # The root's skin transfer remains intact within the 35 mm root ball.
-        if (Vector(final_positions[i]) - root).length > .035:
+        # The root's skin transfer remains intact within the 35 mm root ball,
+        # and a border strip keeps the skin's weights: it moves with the skin.
+        if (Vector(final_positions[i]) - root).length > .035 and strip[i] < 1:
             take = 0.
-            for entry in list(vertex.groups):
-                vg = partobj.vertex_groups[entry.group]
+            for group_, weight_ in [(e.group, e.weight) for e in vertex.groups]:
+                vg = partobj.vertex_groups[group_]
                 if vg.name.endswith('UpLeg'):
-                    take += entry.weight
-                    vg.remove([i])
+                    moved_ = weight_ * (1 - strip[i])
+                    take += moved_
+                    if weight_ - moved_ > 1e-4:
+                        vg.add([i], weight_ - moved_, 'REPLACE')
+                    else:
+                        vg.remove([i])
             if take:
                 vg = partobj.vertex_groups.get(anchor_name) or partobj.vertex_groups.new(name=anchor_name)
                 current = next((entry.weight for entry in vertex.groups if entry.group == vg.index), 0.)
@@ -897,37 +1031,14 @@ def build_part(group, companions, output):
     # The attachment seam (Ruling A65b). Smoothing an open border curls it off
     # the skin, and the fillet's own normals shade it apart from the body: the
     # part looked set onto the body. The fillet share above the skin now falls
-    # onto it with a cubic profile (tangent at the skin, `lift` above it), and
-    # its normals turn to the body's corner normals. Away from the fillet and
-    # an open border nothing moves: a pod resting on a thigh keeps its shape.
-    seam = settings['seam']
+    # onto it with a cubic profile (tangent at the skin, its edge `tuck` under
+    # it: Ruling A65c), and its normals turn to the body's corner normals. Away
+    # from the fillet and an open border nothing moves.
     final_pd = smin(final_ds, final_dc, pod_link_k(final_t))
     fillet_share = np.clip(final_pd / body_blend, 0, 1)
     fillet_share = fillet_share * fillet_share * (3 - 2 * fillet_share)
-    # An open border lands on the skin whatever its height, wherever it is (a
-    # pod's edge in the thigh fold too); the strip within `band` of it,
-    # measured along the mesh, follows it down.
-    along = np.full(len(final_positions), np.inf)
-    nbr_ = [[] for _ in range(len(final_positions))]
-    for e_ in partobj.data.edges:
-        a_, b_ = e_.vertices
-        l_ = float(np.linalg.norm(final_positions[a_] - final_positions[b_]))
-        nbr_[a_].append((b_, l_))
-        nbr_[b_].append((a_, l_))
-    heap_ = [(0., i) for i in final_border]
-    for _, i in heap_:
-        along[i] = 0.
-    heapq.heapify(heap_)
-    while heap_:
-        d_, i = heapq.heappop(heap_)
-        if d_ > along[i] or d_ > seam['band']:
-            continue
-        for j_, l_ in nbr_[i]:
-            if d_ + l_ < along[j_]:
-                along[j_] = d_ + l_
-                heapq.heappush(heap_, (d_ + l_, j_))
-    strip = np.clip(1 - along / seam['band'], 0, 1)
-    strip = strip * strip * (3 - 2 * strip)
+    # An open border lands under the skin whatever its height, wherever it is;
+    # the strip within `band` of it, measured along the mesh, follows it down.
     seam_share = np.maximum(fillet_share, strip)
     corner_normals = body.data.corner_normals
     pme = partobj.data
@@ -940,7 +1051,8 @@ def build_part(group, companions, output):
         nb = sum((corner_normals[li].vector * share for li, _, share in skin_share(q, fi)), Vector())
         nb = (normal_matrix @ nb).normalized()
         body_normal.append(nb)
-        height = (point - q).dot(nb) - seam['lift']
+        # Height over the landing level `tuck` under the skin.
+        height = (point - q).dot(nb) + seam['tuck']
         skin_height[i] = height
         if height <= 0 or seam_share[i] <= 0:
             continue
@@ -950,6 +1062,25 @@ def build_part(group, companions, output):
             pme.vertices[i].co = body_inverse @ (point - nb * move)
             skin_height[i] -= move
             seam_moved += 1
+    # In a fold the move can bring an edge over the opposite skin: land it again.
+    for _ in range(2):
+        for i in final_border:
+            point = body_matrix @ pme.vertices[i].co
+            q, normal_, _, _ = bvh.find_nearest(body_inverse @ point)
+            height = (point - body_matrix @ q).dot((normal_matrix @ normal_).normalized()) + seam['tuck']
+            if height > 1e-6:
+                pme.vertices[i].co = body_inverse @ (point - (normal_matrix @ normal_).normalized() * height)
+    # Decimation blended a trace of the part's bones back into the border; on
+    # the skin's weights alone it stays where the skin is in every pose.
+    for i in final_border:
+        point = body_matrix @ pme.vertices[i].co
+        q, _, fi, _ = bvh.find_nearest(body_inverse @ point)
+        for entry in list(pme.vertices[i].groups):
+            partobj.vertex_groups[entry.group].remove([i])
+        for name_, weight_ in skin_weights_at(body_matrix @ q, fi).items():
+            if weight_ > 1e-4:
+                vg = partobj.vertex_groups.get(name_) or partobj.vertex_groups.new(name=name_)
+                vg.add([i], weight_, 'REPLACE')
     pme.update()
     custom = []
     # The same share later wears the body's own texture (see the bake).
@@ -1127,6 +1258,7 @@ def build_part(group, companions, output):
         'tip_vertices': tip_count,
         'border_vertices': len(final_border),
         'seam_vertices': seam_moved,
+        'hole_border_vertices': len(hole_points), 'hole_border_vertices_left': holes_left,
         'cracked_seam_groups': int(seam_cracks), 'flatten_outward_m': flatten_outward,
         'inner_wall_faces': bvh.inner_wall_faces, 'stray_faces': stray_faces,
     }

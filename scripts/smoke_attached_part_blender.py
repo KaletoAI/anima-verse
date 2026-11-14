@@ -3,8 +3,8 @@
 
 Hand-derived checks: five declared links plus one companion add six joints to
 52 base joints. Distal tip chain weights belong to the last link; geometric pod
-blends remain. The root border follows skin while incidental pod borders keep
-part weights. Coincident front-grid copies must share
+blends remain. The root border follows skin; away from the 35 mm root ball
+only an open border's strip (within seam.band of it) carries thigh weights. Coincident front-grid copies must share
 one displacement and dot(displacement, original normal) <= 1e-6. Hidden means
 signed distance < -0.0005 m; after opposing +/-30 degree leg rotations, no such
 vertex may exceed +0.001 m. One material owns one embedded part image.
@@ -171,12 +171,22 @@ def blender_smoke(directory):
             best = min(best, (point - (a + (b - a) * h)).length - .0165)
         return best
     pod_far = 0
+    # An open border and its strip within seam.band (along the mesh, so within
+    # it in a straight line too) carry the skin's weights, thighs included
+    # (Ruling A65c): they lie on the skin and move with it. The seam pass then
+    # lands border and strip on the skin, which moves them apart by a few mm:
+    # 1.5 band allowed (measured 6.6 mm for a 6 mm band).
+    border_kd = KDTree(len(border))
+    for vi in border:
+        border_kd.insert(part.matrix_world @ part.data.vertices[vi].co, vi)
+    border_kd.balance()
+    seam_band = attached_part.parameters({})['seam']['band']
 
     for v in part.data.vertices:
         w = weights(part,v)
         point = part.matrix_world @ v.co
         if any(name.endswith('UpLeg') for name in w):
-            assert (point - attachment_root).length <= .035, (tuple(point), w)
+            assert (point - attachment_root).length <= .035 or border_kd.find(point)[2] <= 1.5 * seam_band, (tuple(point), w)
         # At the root the body's 45 mm full radial reweight makes it pure
         # anchor. The root border must stay anchor-dominated after interpolation:
         # the anchor itself plus the pods bone, which is parented to the anchor and

@@ -66,12 +66,14 @@ def skin_y(z, ledge=True):
     return -.065 + .3 * (.997 - 1.0) + .065 * min(1., (.997 - z) / .012)
 
 
-def make_fixture(scripts, out, ledge=True):
+def make_fixture(scripts, out, ledge=True, floor=None):
     """Write the tilted synthetic body (see the docstring) to ``out``/fixture.glb.
 
-    Returns the fixture path and the root and skin normal found by the
-    builder's ray, independently of the builder. Runs inside Blender; the seam
-    smoke shares it."""
+    ``floor``: the height of an extra upward-facing skin quad under the pods
+    (x +-.06, y -.10 to -.01, in front of the receded skin). Returns the
+    fixture path and the root and skin normal found by the builder's ray,
+    independently of the builder. Runs inside Blender; the seam and closed-shell
+    smokes share it."""
     import bpy
     import numpy as np
     from mathutils import Vector
@@ -104,6 +106,10 @@ def make_fixture(scripts, out, ledge=True):
     start = len(vertices)
     vertices.extend([(-.18, .065, .72), (.18, .065, .72), (.18, .065, 1.34), (-.18, .065, 1.34)])
     faces.append((start + 3, start + 2, start + 1, start))
+    if floor is not None:
+        start = len(vertices)
+        vertices.extend([(-.06, -.10, floor), (.06, -.10, floor), (.06, -.01, floor), (-.06, -.01, floor)])
+        faces.append((start, start + 1, start + 2, start + 3))
     me = bpy.data.meshes.new('Body')
     me.from_pydata(vertices, [], faces)
     me.update()

@@ -15,13 +15,13 @@ between the part's shading normal and n, taken without its sign (min(a,
 180 - a)): a double-sided material shades a reversed face from its other side.
 
 Hand-derived expectations from the declared defaults (k_body .016,
-skin_sink .0008, seam.lift .0004, seam.band .006, seam.normal_band .012):
+skin_sink .0008, seam.tuck .0004, seam.band .006, seam.normal_band .012):
 - Step: every open border vertex there is in the strip (its distance along the
-  mesh to a border is 0, strip = 1), so the seam pass moves one at h > lift by
-  (h - lift) x max(s(..), 1) x max(fillet, 1) = h - lift: it ends exactly lift
-  above the skin. A border vertex at or under lift stays where it is. So no open
-  border vertex stands more than lift + .05 mm (export rounding) = 0.45 mm
-  above the skin (the target was a step of at most 1 mm).
+  mesh to a border is 0, strip = 1), so the seam pass moves one at h > -tuck by
+  (h + tuck) x max(s(..), 1) x max(fillet, 1) = h + tuck: it ends exactly tuck
+  under the skin (Ruling A65c; A65b left it .4 mm above). A border vertex at or
+  under -tuck stays where it is. So no open border vertex stands higher than
+  -tuck + .05 mm (export rounding) = -0.35 mm: none stands on the skin.
 - Border crease: there the normal weight is max(s(1 - 0/.012), 1) x 1 = 1, so
   the shading normal IS the body's corner normal, here n: 0 degrees, allowed
   1 degree for the custom-normal encoding.
@@ -31,10 +31,12 @@ skin_sink .0008, seam.lift .0004, seam.band .006, seam.normal_band .012):
   k - a + b = 2 sqrt(k b) = .00716, i.e. a = 9.64 mm, and grad U =
   (1 - .224) grad b + .224 grad a (.224 = .00716 / 2k). grad b = n and
   grad a a unit vector, so the surface normal lies within asin(.224/.776) =
-  16.8 degrees of n. The seam pass (h <= lift there) turns the shading normal
-  towards n with the fillet share s(a/k) = s(.6025) = .652, which leaves
-  atan(.348 sin 16.8 / (.348 cos 16.8 + .652)) = 5.8 degrees at most; allowed
-  8 degrees for the 2 mm voxel net, smoothing and decimation (target: p95 at
+  16.8 degrees of n. The seam pass turns the shading normal towards n with
+  at least the fillet share s(a/k) = s(.6025) = .652, which leaves
+  atan(.348 sin 16.8 / (.348 cos 16.8 + .652)) = 5.8 degrees at most (h = 0
+  lies tuck above the landing level, so the pass lowers the crossing a little
+  further out, where the share only grows); allowed 8 degrees for the 2 mm
+  voxel net, smoothing, decimation and that lowered profile (target: p95 at
   most 15 degrees).
 - Orientation: the faces wind counter-clockwise seen from outside, so at the
   apex (the vertex farthest from the root) the shading normal points away from
@@ -59,7 +61,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BLENDER = Path.home() / 'tools/blender-5.2.2-linux-x64/blender'
 OLD_COMMIT = 'a269ae4d218c2510fa6ed35e48a8b5995aca8357'
 SIZES = (1.0, 1.6)
-LIFT_MM, STEP_TOLERANCE_MM, CREASE_LIMIT_DEG, CROSSING_LIMIT_DEG = .4, .05, 1.0, 8.0
+TUCK_MM, STEP_TOLERANCE_MM, CREASE_LIMIT_DEG, CROSSING_LIMIT_DEG = .4, .05, 1.0, 8.0
 
 
 def blender_side(scripts, directory):
@@ -151,10 +153,10 @@ def failures(data):
             out.append(f'size {size}: no open border on the skin around the root')
             continue
         step = max(r['h_mm'] for r in border)
-        if step > LIFT_MM + STEP_TOLERANCE_MM:
-            out.append(f'size {size}: open border up to {step:.2f} mm above the skin, '
-                       f'expected at most {LIFT_MM + STEP_TOLERANCE_MM:.2f}')
-        on_skin = [r['crease_deg'] for r in border if r['h_mm'] > -.1]
+        if step > -TUCK_MM + STEP_TOLERANCE_MM:
+            out.append(f'size {size}: open border up to {step:.2f} mm off the skin, '
+                       f'expected at most {-TUCK_MM + STEP_TOLERANCE_MM:.2f}')
+        on_skin = [r['crease_deg'] for r in border if r['h_mm'] > -TUCK_MM - .1]
         crease = max(on_skin) if on_skin else 0.
         if crease > CREASE_LIMIT_DEG:
             out.append(f'size {size}: border normal {crease:.1f} deg off the skin normal, expected at most {CREASE_LIMIT_DEG}')
@@ -177,7 +179,7 @@ def main():
             border = row['border']
             print(f'size {size}: {len(border)} border vertices on the skin around the root, step max',
                   round(max(r['h_mm'] for r in border), 2), 'mm, border crease max',
-                  round(max((r['crease_deg'] for r in border if r['h_mm'] > -.1), default=0.), 2),
+                  round(max((r['crease_deg'] for r in border if r['h_mm'] > -TUCK_MM - .1), default=0.), 2),
                   'deg; crossing crease max', round(max(row['crossing'], default=0.), 2), 'deg over',
                   len(row['crossing']), 'edges; apex facing', round(row['apex_facing'], 2))
         # The same checks against the builder before Ruling A65b.
@@ -190,7 +192,7 @@ def main():
         old_problems = failures(run_blender(str(old), str(Path(directory) / 'old')))
         assert len(old_problems) >= 6, old_problems
         print('old builder', OLD_COMMIT[:9], 'fails', len(old_problems), 'checks, e.g.', old_problems[0])
-    print('PASS attached_part seam: the border lies on the skin and shades with the body')
+    print('PASS attached_part seam: the border tucks under the skin and shades with the body')
 
 
 if __name__ == '__main__':
