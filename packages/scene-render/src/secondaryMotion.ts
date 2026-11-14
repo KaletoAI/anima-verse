@@ -69,7 +69,9 @@
  *    consumer (`partnerCapsules`): a hair chain takes every partner region,
  *    an extension chain all but `HAIR_ONLY_REGIONS`. Per chain the broad
  *    phase (`broadPhase`) keeps the capsules within the chain's lever (+ the
- *    exit radius) of its ROOT joint; its links test only those.
+ *    exit radius) of its ROOT joint; its links test only those — at most
+ *    `COLLIDE_MAX` (the push's cap per list), the farthest from the root
+ *    joint dropped (`nearestCapsules`).
  *    NO BIND RULE: a partner has no bind relation to the reader, so its
  *    capsules apply at FULL radius. The own and the partner capsules go
  *    through ONE search (`contactAnglePair`), capped by the same swing
@@ -96,9 +98,9 @@ import { normBoneName } from './clipRetarget'
 import { bindCollision, HAIR_ONLY_REGIONS, PARTNER_ONLY_REGIONS } from './collision'
 import type { BoundCapsule, CollisionBinding, CollisionPayload, Vec3 } from './collision'
 import { inGarment } from './figure'
-import { HAIR_REGIONS, pushOutOfCapsules } from './garmentCollision'
+import { COLLIDE_MAX, HAIR_REGIONS, pushOutOfCapsules } from './garmentCollision'
 import type { CollideCapsule, PushOptions } from './garmentCollision'
-import { broadPhase, contactAnglePair, partnerCapsules, PARTNER_HYST_M, releasedAngle } from './partnerContact'
+import { broadPhase, contactAnglePair, nearestCapsules, partnerCapsules, PARTNER_HYST_M, releasedAngle } from './partnerContact'
 import type { PartnerCapsule, PartnerSnapshot } from './partnerContact'
 type Three = typeof import('three')
 
@@ -1046,7 +1048,14 @@ export function createSecondaryMotion(
       root.partnerNear.length = 0
       const nows = partnerNows[consumer]
       if (nows.length) {
-        const kept = broadPhase([joint.x, joint.y, joint.z], chainLever(root, true) + PARTNER_HYST_M, nows)
+        const at: Vec3 = [joint.x, joint.y, joint.z]
+        let kept = broadPhase(at, chainLever(root, true) + PARTNER_HYST_M, nows)
+        // The push takes at most COLLIDE_MAX capsules per list: beyond it the FARTHEST from the root joint drop
+        // (`nearestCapsules`), the survivors keep their pool order.
+        if (kept.length > COLLIDE_MAX) {
+          const all = kept
+          kept = nearestCapsules({ c: at, r: 0 }, all.map(i => nows[i]), COLLIDE_MAX).map(k => all[k]).sort((p, q) => p - q)
+        }
         for (const i of kept) root.partnerNear.push(partnerPool[consumer][i])
       }
     }

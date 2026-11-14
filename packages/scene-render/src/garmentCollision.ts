@@ -72,6 +72,33 @@
  * only: where their surfaces end inside the skin, a point outside every
  * capsule still counts as under the skin (the max did not move).
  *
+ * PARTNERS (hair only — spec
+ * `docs/superpowers/specs/2026-11-13-cross-person-collision-design.md`
+ * Parts 2–3, plan Task 6). A hair mesh is also pushed out of OTHER figures'
+ * capsules, so hair without swing (no hair group in the motion payload) keeps
+ * out of a partner too. `setPartners` hands them in (world space); in each
+ * hair mesh's render hooks the `PARTNER_COLLIDE_MAX` nearest to the mesh's
+ * world bounding sphere (`nearestCapsules`; the geometry's sphere carried by
+ * the joint with the most skin weight) go into the mesh's frame, a SECOND
+ * uniform block (`partnerA/B`, `partnerCount`) under `#ifdef COLLIDE_PARTNER`
+ * — only the count changes from frame to frame: no recompile. The rule:
+ *  - no bind rule (a partner has no bind relation to this figure);
+ *  - push only, faded per vertex (D7): d = the vertex's distance from the
+ *    axis where the push starts, depth = r − d, f = clamp((1.5·M − depth) /
+ *    (0.5·M), 0, 1) with M = `PARTNER_PUSH_MAX_M`, radius r' = d + depth·f
+ *    (fixed for the vertex, so a second pass does not undo the fade); a push
+ *    of more than 1.5·M is none — a partner driven deep through the hair
+ *    leaves it inside rather than flipping it across;
+ *  - in every pass the partner capsules come FIRST, the own ones after: the
+ *    own body has the last word (a strand trapped between the two bodies ends
+ *    on the partner's surface, never inside its own body);
+ *  - the squeeze sets hold the partner capsules with f > 0 (r' = 0 otherwise)
+ *    along with the own ones (`COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER`).
+ * No other garment kind uses the block: pushed out of a partner's limb, cloth
+ * would be driven into its own body, pair clips author intended contact, and
+ * the own set already fills its uniform budget (spec Part 2). The strand hair
+ * gets the same capsules through `StrandHair.setPartners` (`hairSim.ts`).
+ *
  * WHERE THE CAPSULES COME FROM. `bindCollision` (`collision.ts`, the ONE
  * endpoint rule) gives them in world space; per garment mesh they are taken
  * into that mesh's local space (`capsuleInFrame`, inverse `matrixWorld`) —
@@ -83,10 +110,12 @@
  *
  * ONE SOURCE. The push exists twice — `pushOutOfCapsules` (TypeScript; the
  * motion check `scripts/check_garment_collision.mjs` runs it) and
- * `COLLIDE_GLSL_FUNCTION` / `COLLIDE_GLSL_FUNCTION_SQUEEZE` (the shader). The
- * GLSL is written in scalar statements (the squeeze edition adds two local
- * float arrays) so `scripts/smoke_garment_collision.mjs` and
- * `scripts/smoke_collision_squeeze.mjs` can execute THAT string (a
+ * `COLLIDE_GLSL_FUNCTION` / `COLLIDE_GLSL_FUNCTION_SQUEEZE` /
+ * `COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER` (the shader). The GLSL is written in
+ * scalar statements (the squeeze editions add local float arrays — two per
+ * capsule list) so `scripts/smoke_garment_collision.mjs`,
+ * `scripts/smoke_collision_squeeze.mjs` and
+ * `scripts/smoke_partner_hair_push.mjs` can execute THAT string (a
  * mechanical GLSL→JS rewrite) and assert both give the same points; the
  * constants of both come from the exports here.
  *
@@ -116,9 +145,11 @@
  * `three` is injected, never imported.
  */
 import type { Material, Object3D, SkinnedMesh, Texture, Vector4, WebGLProgramParametersWithUniforms } from 'three'
-import { bindCollision, HAIR_ONLY_REGIONS, linearScale, PARTNER_ONLY_REGIONS, transformPoint } from './collision'
+import { bindCollision, HAIR_ONLY_REGIONS, jointNowFrom, linearScale, PARTNER_ONLY_REGIONS, transformPoint } from './collision'
 import type { BoundCapsule, CapsuleNow, CollisionBinding, CollisionPayload, Mat4, Vec3 } from './collision'
 import { isGarmentNode } from './figure'
+import { nearestCapsules, PARTNER_COLLIDE_MAX, PARTNER_PUSH_MAX_M } from './partnerContact'
+import type { Sphere } from './partnerContact'
 
 type Three = typeof import('three')
 
@@ -169,9 +200,23 @@ export const COLLIDE_GLSL_DECLARATIONS = [
   '#endif',
 ].join('\n')
 
-/** The ordinary passes (scalar statements): the body of both editions of `collidePush`. */
-const COLLIDE_GLSL_PASSES = `  for ( int it = 0; it < COLLIDE_PASSES; it ++ ) {
-    for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
+/**
+ * The partner block's `#define`s + uniforms (PARTNERS, module docstring) —
+ * after `COLLIDE_GLSL_DECLARATIONS`, under `#ifdef COLLIDE_PARTNER`, only in a
+ * patch made with `partner` (hair). `partnerB[i].w` is unused.
+ */
+export const COLLIDE_GLSL_PARTNER_DECLARATIONS = [
+  '#ifdef COLLIDE_PARTNER',
+  `#define PARTNER_COLLIDE_MAX ${PARTNER_COLLIDE_MAX}`,
+  `#define COLLIDE_PARTNER_PUSH_MAX ${glslFloat(PARTNER_PUSH_MAX_M)}`,
+  'uniform vec4 partnerA[ PARTNER_COLLIDE_MAX ];',
+  'uniform vec4 partnerB[ PARTNER_COLLIDE_MAX ];',
+  'uniform int partnerCount;',
+  '#endif',
+].join('\n')
+
+/** One pass over the own list (scalar statements), bind rule included. */
+const GLSL_PASS_OWN = `    for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
       if ( i >= collideCount ) break;
       float ax = collideA[ i ].x;
       float ay = collideA[ i ].y;
@@ -213,7 +258,11 @@ const COLLIDE_GLSL_PASSES = `  for ( int it = 0; it < COLLIDE_PASSES; it ++ ) {
         p.z += dz * k;
       }
     }
-  }
+`
+
+/** The ordinary passes (scalar statements): the body of the plain edition of `collidePush`, the squeeze one's fallback. */
+const COLLIDE_GLSL_PASSES = `  for ( int it = 0; it < COLLIDE_PASSES; it ++ ) {
+${GLSL_PASS_OWN}  }
 `
 
 /**
@@ -234,15 +283,27 @@ ${COLLIDE_GLSL_PASSES}  return p;
 }
 `
 
+/**
+ * One capsule list of the shader: its uniforms, length (define), count
+ * (uniform) and — in the squeeze editions — its local arrays of membership in
+ * S and of the effective radius. The own list (`collide*`) and the partner
+ * list (`partner*`, `#ifdef COLLIDE_PARTNER`).
+ */
+interface GlslList { A: string; B: string; max: string; count: string; inS: string; r: string }
+const GLSL_OWN: GlslList = { A: 'collideA', B: 'collideB', max: 'COLLIDE_MAX', count: 'collideCount', inS: 'sIn', r: 'sr' }
+const GLSL_PARTNER: GlslList = {
+  A: 'partnerA', B: 'partnerB', max: 'PARTNER_COLLIDE_MAX', count: 'partnerCount', inS: 'pIn', r: 'pr',
+}
+
 /** GLSL statements: (dx, dy, dz) = point (x, y, z) minus capsule `i`'s closest axis point, `d` its length. */
-function glslAxisOffset(x: string, y: string, z: string, pad: string): string {
+function glslAxisOffset(x: string, y: string, z: string, pad: string, list: GlslList = GLSL_OWN): string {
   return [
-    'float ax = collideA[ i ].x;',
-    'float ay = collideA[ i ].y;',
-    'float az = collideA[ i ].z;',
-    'float abx = collideB[ i ].x - ax;',
-    'float aby = collideB[ i ].y - ay;',
-    'float abz = collideB[ i ].z - az;',
+    `float ax = ${list.A}[ i ].x;`,
+    `float ay = ${list.A}[ i ].y;`,
+    `float az = ${list.A}[ i ].z;`,
+    `float abx = ${list.B}[ i ].x - ax;`,
+    `float aby = ${list.B}[ i ].y - ay;`,
+    `float abz = ${list.B}[ i ].z - az;`,
     `float apx = ${x} - ax;`,
     `float apy = ${y} - ay;`,
     `float apz = ${z} - az;`,
@@ -270,14 +331,17 @@ function glslAxisOffset(x: string, y: string, z: string, pad: string): string {
  * round) it is the result. Scalar statements plus two local float arrays —
  * `scripts/smoke_collision_squeeze.mjs` executes this string.
  */
-export const COLLIDE_GLSL_FUNCTION_SQUEEZE = `
-vec3 collidePush( vec3 p ) {
-  float sr[ COLLIDE_MAX ];
-  float sIn[ COLLIDE_MAX ];
-  float sCount = 0.0;
-  for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
-    if ( i >= collideCount ) break;
-    float r = collideA[ i ].w;
+/**
+ * One GLSL `for` over a capsule list per entry of `lists` (in that order),
+ * the body written by `body` for that list (lines ending in a newline).
+ */
+function glslEach(lists: readonly GlslList[], pad: string, body: (list: GlslList) => string): string {
+  return lists.map(L => `${pad}for ( int i = 0; i < ${L.max}; i ++ ) {\n${pad}  if ( i >= ${L.count} ) break;\n${body(L)}${pad}}\n`)
+    .join('')
+}
+
+/** The squeeze set's setup of the own list: the radius capped by the bind rule (`sr`), membership in S (`sIn`). */
+const GLSL_SETUP_OWN = `    float r = collideA[ i ].w;
     if ( collideBindA[ i ].w >= 0.0 ) {
       float bx = collideBindA[ i ].x;
       float by = collideBindA[ i ].y;
@@ -299,8 +363,44 @@ vec3 collidePush( vec3 p ) {
 ${glslAxisOffset('p.x', 'p.y', 'p.z', '    ')}
     sIn[ i ] = d < r ? 1.0 : 0.0;
     sCount += sIn[ i ];
-  }
-  float sDone = sCount < 0.5 ? 1.0 : 0.0;
+`
+
+/**
+ * The squeeze set's setup of the partner list (PARTNERS, module docstring):
+ * no bind rule; the radius from the point the push starts with — depth
+ * = r − d, f = clamp((1.5·M − depth) / (0.5·M), 0, 1), r' = d + depth·f
+ * (`pr`), 0 when f = 0 (the capsule is left out); membership in S (`pIn`).
+ */
+const GLSL_SETUP_PARTNER = `${glslAxisOffset('p.x', 'p.y', 'p.z', '    ', GLSL_PARTNER)}
+    float depth = partnerA[ i ].w - d;
+    float f = clamp( ( 1.5 * COLLIDE_PARTNER_PUSH_MAX - depth ) / ( 0.5 * COLLIDE_PARTNER_PUSH_MAX ), 0.0, 1.0 );
+    float r = f > 0.0 ? d + depth * f : 0.0;
+    pr[ i ] = r;
+    pIn[ i ] = d < r ? 1.0 : 0.0;
+    sCount += pIn[ i ];
+`
+
+/** One pass over the partner list with its fixed radii `pr` (the partner edition's passes run it before the own list). */
+const GLSL_PASS_PARTNER = `    for ( int i = 0; i < PARTNER_COLLIDE_MAX; i ++ ) {
+      if ( i >= partnerCount ) break;
+${glslAxisOffset('p.x', 'p.y', 'p.z', '      ', GLSL_PARTNER)}
+      if ( d < pr[ i ] && d > COLLIDE_MIN_D ) {
+        float k = pr[ i ] / d - 1.0;
+        p.x += dx * k;
+        p.y += dy * k;
+        p.z += dz * k;
+      }
+    }
+`
+
+/** The squeeze edition over `lists` (own; partner + own), with `passes` as its fallback (module docstring). */
+function glslSqueezeFunction(lists: readonly GlslList[], passes: string): string {
+  const setup = (L: GlslList) => (L === GLSL_PARTNER ? GLSL_SETUP_PARTNER : GLSL_SETUP_OWN)
+  const arrays = lists.map(L => `  float ${L.r}[ ${L.max} ];\n  float ${L.inS}[ ${L.max} ];\n`).join('')
+  return `
+vec3 collidePush( vec3 p ) {
+${arrays}  float sCount = 0.0;
+${glslEach(lists, '  ', setup)}  float sDone = sCount < 0.5 ? 1.0 : 0.0;
   float qx = p.x;
   float qy = p.y;
   float qz = p.z;
@@ -308,36 +408,30 @@ ${glslAxisOffset('p.x', 'p.y', 'p.z', '    ')}
     if ( sDone > 0.5 ) break;
     float fail = 0.0;
     if ( k == 0 && sCount < 1.5 ) {
-      for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
-        if ( i >= collideCount ) break;
-        if ( sIn[ i ] > 0.5 ) {
-${glslAxisOffset('p.x', 'p.y', 'p.z', '          ')}
+${glslEach(lists, '      ', L => `        if ( ${L.inS}[ i ] > 0.5 ) {
+${glslAxisOffset('p.x', 'p.y', 'p.z', '          ', L)}
           if ( d > COLLIDE_MIN_D ) {
-            float kk = sr[ i ] / d - 1.0;
+            float kk = ${L.r}[ i ] / d - 1.0;
             qx = p.x + dx * kk;
             qy = p.y + dy * kk;
             qz = p.z + dz * kk;
           }
         }
-      }
-    } else {
+`)}    } else {
       float nx = 0.0;
       float ny = 0.0;
       float nz = 0.0;
       float rMax = 0.0;
-      for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
-        if ( i >= collideCount ) break;
-        if ( sIn[ i ] > 0.5 ) {
-${glslAxisOffset('p.x', 'p.y', 'p.z', '          ')}
+${glslEach(lists, '      ', L => `        if ( ${L.inS}[ i ] > 0.5 ) {
+${glslAxisOffset('p.x', 'p.y', 'p.z', '          ', L)}
           if ( d > COLLIDE_MIN_D ) {
             nx += dx / d;
             ny += dy / d;
             nz += dz / d;
           }
-          rMax = sr[ i ] > rMax ? sr[ i ] : rMax;
+          rMax = ${L.r}[ i ] > rMax ? ${L.r}[ i ] : rMax;
         }
-      }
-      float nl = sqrt( nx * nx + ny * ny + nz * nz );
+`)}      float nl = sqrt( nx * nx + ny * ny + nz * nz );
       if ( nl < SQUEEZE_MIN_N ) {
         fail = 1.0;
       } else {
@@ -352,14 +446,11 @@ ${glslAxisOffset('p.x', 'p.y', 'p.z', '          ')}
           float oy = p.y + ny * tt;
           float oz = p.z + nz * tt;
           float clear = 1.0;
-          for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
-            if ( i >= collideCount ) break;
-            if ( sIn[ i ] > 0.5 ) {
-${glslAxisOffset('ox', 'oy', 'oz', '              ')}
-              if ( d < sr[ i ] ) clear = 0.0;
+${glslEach(lists, '          ', L => `            if ( ${L.inS}[ i ] > 0.5 ) {
+${glslAxisOffset('ox', 'oy', 'oz', '              ', L)}
+              if ( d < ${L.r}[ i ] ) clear = 0.0;
             }
-          }
-          if ( s == 0 ) {
+`)}          if ( s == 0 ) {
             if ( clear < 0.5 ) {
               fail = 1.0;
               break;
@@ -377,17 +468,14 @@ ${glslAxisOffset('ox', 'oy', 'oz', '              ')}
     }
     if ( fail > 0.5 ) break;
     float added = 0.0;
-    for ( int i = 0; i < COLLIDE_MAX; i ++ ) {
-      if ( i >= collideCount ) break;
-      if ( sIn[ i ] < 0.5 ) {
-${glslAxisOffset('qx', 'qy', 'qz', '        ')}
-        if ( d < sr[ i ] ) {
-          sIn[ i ] = 1.0;
+${glslEach(lists, '    ', L => `      if ( ${L.inS}[ i ] < 0.5 ) {
+${glslAxisOffset('qx', 'qy', 'qz', '        ', L)}
+        if ( d < ${L.r}[ i ] ) {
+          ${L.inS}[ i ] = 1.0;
           added += 1.0;
         }
       }
-    }
-    sCount += added;
+`)}    sCount += added;
     if ( added < 0.5 || k == SQUEEZE_ROUNDS - 1 ) sDone = 1.0;
   }
   if ( sDone > 0.5 ) {
@@ -395,10 +483,45 @@ ${glslAxisOffset('qx', 'qy', 'qz', '        ')}
     p.y = qy;
     p.z = qz;
   } else {
-${COLLIDE_GLSL_PASSES}  }
+${passes}  }
   return p;
 }
 `
+}
+
+/**
+ * THE PUSH, shader edition WITH the SQUEEZE rule (module docstring) — the
+ * same function name and signature as `COLLIDE_GLSL_FUNCTION`; the patch
+ * compiles it under `#ifdef COLLIDE_SQUEEZE` (hair only). S (`sIn`) = the
+ * capsules `p` lies inside, radii capped by the bind rule (`sr`); a point in
+ * none stays and skips the passes. Each round (`SQUEEZE_ROUNDS`): one capsule
+ * in round 1 → the exact radial push; otherwise along N = unit(Σ n_i) (n_i
+ * from capsule i's closest axis point to the ORIGINAL `p`), the exit `hi`
+ * found by `SQUEEZE_STEPS` bisection steps on [0, 2·max r_S] (step 0 tests
+ * `hi` itself). |Σ n_i| < `SQUEEZE_MIN_N` or 2·max r_S not outside them all
+ * → `fail`: `p` untouched, the ordinary passes run. The exit point inside
+ * capsules not in S → they join S, next round; otherwise (or after the last
+ * round) it is the result. Scalar statements plus two local float arrays —
+ * `scripts/smoke_collision_squeeze.mjs` executes this string.
+ */
+export const COLLIDE_GLSL_FUNCTION_SQUEEZE = glslSqueezeFunction([GLSL_OWN], COLLIDE_GLSL_PASSES)
+
+/**
+ * THE PUSH, shader edition with the SQUEEZE rule AND the partner block
+ * (PARTNERS, module docstring) — compiled under `#ifdef COLLIDE_PARTNER`
+ * inside the squeeze block (hair only). The same steps as
+ * `COLLIDE_GLSL_FUNCTION_SQUEEZE` over two lists, the partner capsules
+ * (`partnerA/B`, `partnerCount`; radius `pr` faded by the required push,
+ * no bind rule) before the own ones in every loop — S holds both, the
+ * fallback passes push out of the partner capsules first, then out of the
+ * own ones. `partnerCount` 0 gives the squeeze edition's points.
+ * `scripts/smoke_partner_hair_push.mjs` and `smoke_garment_collision.mjs`
+ * execute this string.
+ */
+export const COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER = glslSqueezeFunction([GLSL_PARTNER, GLSL_OWN],
+  `  for ( int it = 0; it < COLLIDE_PASSES; it ++ ) {
+${GLSL_PASS_PARTNER}${GLSL_PASS_OWN}  }
+`)
 
 /** The call — after `#include <skinning_vertex>` (and before displacement / projection). */
 export const COLLIDE_GLSL_APPLY = `
@@ -433,7 +556,16 @@ export interface PushOptions {
    * ordinary passes' "last applied capsule wins". Absent = the ordinary passes.
    */
   squeeze?: boolean
-  /** Another figure's capsules (partner contact) — declared for the partner push, not read yet. */
+  /**
+   * Other figures' capsules (PARTNERS, module docstring; the space of `p`):
+   * no bind rule, each radius faded by the push it requires (D7 — r' =
+   * d + (r − d)·f, f = clamp((1.5·M − (r − d)) / (0.5·M), 0, 1), M =
+   * `PARTNER_PUSH_MAX_M`, d from the starting point), applied BEFORE the own
+   * capsules in every pass and part of the squeeze sets. The first
+   * `PARTNER_COLLIDE_MAX` are used, as the shader's uniform block holds them:
+   * order them nearest first (`nearestCapsules`) so a cut drops the farthest.
+   * Absent or empty = the push without partners, bit for bit.
+   */
   partners?: readonly CapsuleNow[]
 }
 
@@ -447,6 +579,18 @@ function axisOffset(x: number, y: number, z: number, c: CapsuleNow, out: Float64
   const dx = apx - abx * t, dy = apy - aby * t, dz = apz - abz * t
   out[0] = dx; out[1] = dy; out[2] = dz; out[3] = Math.sqrt(dx * dx + dy * dy + dz * dz)
   return out
+}
+
+/**
+ * A partner capsule's radius for the point `p` the push starts with (D7,
+ * `GLSL_SETUP_PARTNER` step for step): depth = r − d, f = clamp((1.5·M −
+ * depth) / (0.5·M), 0, 1), r' = d + depth·f; 0 when f = 0 (left out).
+ */
+function partnerRadius(p: Vec3, c: CapsuleNow, off: Float64Array): number {
+  const d = axisOffset(p[0], p[1], p[2], c, off)[3]
+  const depth = c.r - d
+  const f = Math.min(1, Math.max(0, (1.5 * PARTNER_PUSH_MAX_M - depth) / (0.5 * PARTNER_PUSH_MAX_M)))
+  return f > 0 ? d + depth * f : 0
 }
 
 /** The ordinary passes: `COLLIDE_PASSES` passes over the capsules in payload order (`COLLIDE_GLSL_PASSES`). */
@@ -543,12 +687,23 @@ function squeezeOut(p: Vec3, capsules: readonly CollideCapsule[], radii: readonl
  * without `bindP` the rule is not applied). `options.squeeze` = the SQUEEZE
  * rule first (`COLLIDE_GLSL_FUNCTION_SQUEEZE`, module docstring), the
  * passes only where it does not apply; without it the passes alone.
+ * `options.partners` = the first `PARTNER_COLLIDE_MAX` partner capsules
+ * (PARTNERS, module docstring) ahead of the own ones in every pass and
+ * squeeze set — with `squeeze` the twin of `COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER`.
  */
 export function pushOutOfCapsules(p: Vec3, capsules: readonly CollideCapsule[], weight = 1, bindP?: Vec3,
   options?: PushOptions): Vec3 {
   const n = Math.min(capsules.length, COLLIDE_MAX)
-  const radii = capsules.slice(0, n).map(c => (c.bind && bindP ? Math.min(c.r, segmentDistance(bindP, c.bind.a, c.bind.b)) : c.r))
-  const [x, y, z] = (options?.squeeze ? squeezeOut(p, capsules, radii) : null) ?? ordinaryPasses(p, capsules, radii)
+  let used: readonly CollideCapsule[] = capsules
+  let radii = capsules.slice(0, n).map(c => (c.bind && bindP ? Math.min(c.r, segmentDistance(bindP, c.bind.a, c.bind.b)) : c.r))
+  const partners = options?.partners?.length ? options.partners.slice(0, PARTNER_COLLIDE_MAX) : null
+  if (partners) {
+    // One list, partners first — the shader runs the partner loop before the own one everywhere.
+    const off = new Float64Array(4)
+    used = [...partners, ...capsules.slice(0, n)]
+    radii = [...partners.map(c => partnerRadius(p, c, off)), ...radii]
+  }
+  const [x, y, z] = (options?.squeeze ? squeezeOut(p, used, radii) : null) ?? ordinaryPasses(p, used, radii)
   const w = Math.min(1, Math.max(0, weight))
   return [p[0] + (x - p[0]) * w, p[1] + (y - p[1]) * w, p[2] + (z - p[2]) * w]
 }
@@ -563,15 +718,21 @@ export function capsuleInFrame(capsule: CapsuleNow, m: Mat4): CapsuleNow {
  * (hair) — the squeeze edition with its constants under
  * `#ifdef COLLIDE_SQUEEZE` (the material's define) and the plain one under
  * `#else`. Without `squeeze` the block names no `COLLIDE_SQUEEZE` at all.
+ * `partner` (with `squeeze`; hair) puts the partner edition under
+ * `#ifdef COLLIDE_PARTNER` inside the squeeze block, the squeeze edition under
+ * its `#else`; without it nothing names `COLLIDE_PARTNER`.
  */
-function collideFunctionBlock(squeeze: boolean): string {
+function collideFunctionBlock(squeeze: boolean, partner: boolean): string {
   if (!squeeze) return COLLIDE_GLSL_FUNCTION
+  const edition = partner
+    ? ['#ifdef COLLIDE_PARTNER', COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER, '#else', COLLIDE_GLSL_FUNCTION_SQUEEZE, '#endif']
+    : [COLLIDE_GLSL_FUNCTION_SQUEEZE]
   return [
     '#ifdef COLLIDE_SQUEEZE',
     `#define SQUEEZE_ROUNDS ${SQUEEZE_ROUNDS}`,
     `#define SQUEEZE_STEPS ${SQUEEZE_STEPS}`,
     `#define SQUEEZE_MIN_N ${glslFloat(SQUEEZE_MIN_N)}`,
-    COLLIDE_GLSL_FUNCTION_SQUEEZE,
+    ...edition,
     '#else',
     COLLIDE_GLSL_FUNCTION,
     '#endif',
@@ -580,13 +741,17 @@ function collideFunctionBlock(squeeze: boolean): string {
 
 /**
  * Patch a vertex shader source (idempotent): declarations after `common`, the push after `skinning_vertex`;
- * `squeeze` (hair) brings the SQUEEZE edition of the push (`collideFunctionBlock`).
+ * `squeeze` (hair) brings the SQUEEZE edition of the push, `partner` (with `squeeze`; hair) the partner
+ * declarations and edition (`collideFunctionBlock`). `partner` without `squeeze` is ignored — only the squeeze
+ * block has a partner edition, and hair, the one kind with partners, always squeezes.
  */
-export function patchCollisionVertexShader(source: string, squeeze = false): string {
+export function patchCollisionVertexShader(source: string, squeeze = false, partner = false): string {
   if (source.includes('collidePush(')) return source
   if (!source.includes('#include <common>') || !source.includes('#include <skinning_vertex>')) return source
+  const withPartner = squeeze && partner
+  const declarations = withPartner ? `${COLLIDE_GLSL_DECLARATIONS}\n${COLLIDE_GLSL_PARTNER_DECLARATIONS}` : COLLIDE_GLSL_DECLARATIONS
   return source
-    .replace('#include <common>', `#include <common>\n${COLLIDE_GLSL_DECLARATIONS}\n${collideFunctionBlock(squeeze)}`)
+    .replace('#include <common>', `#include <common>\n${declarations}\n${collideFunctionBlock(squeeze, withPartner)}`)
     .replace('#include <skinning_vertex>', `#include <skinning_vertex>\n${COLLIDE_GLSL_APPLY}`)
 }
 
@@ -708,6 +873,55 @@ interface CollideUniforms {
   collideCount: { value: number }
 }
 
+/** The partner block's uniforms (hair only; PARTNERS, module docstring). */
+interface PartnerUniforms {
+  partnerA: { value: Vector4[] }
+  partnerB: { value: Vector4[] }
+  partnerCount: { value: number }
+}
+
+/**
+ * A skinned mesh's bounding sphere in its geometry space, and the joint with
+ * the most skin weight that carries it into the world (`meshSphereNow`).
+ * Ties keep the lower joint index; no skin attributes → joint 0.
+ */
+function meshSphereBind(mesh: SkinnedMesh): { c: Vec3; r: number; joint: number } {
+  const pos = mesh.geometry.getAttribute('position')
+  let lo: Vec3 = [Infinity, Infinity, Infinity], hi: Vec3 = [-Infinity, -Infinity, -Infinity]
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i)
+    lo = [Math.min(lo[0], x), Math.min(lo[1], y), Math.min(lo[2], z)]
+    hi = [Math.max(hi[0], x), Math.max(hi[1], y), Math.max(hi[2], z)]
+  }
+  const c: Vec3 = pos.count ? [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2] : [0, 0, 0]
+  let r = 0
+  for (let i = 0; i < pos.count; i++) r = Math.max(r, Math.hypot(pos.getX(i) - c[0], pos.getY(i) - c[1], pos.getZ(i) - c[2]))
+  const si = mesh.geometry.getAttribute('skinIndex'), sw = mesh.geometry.getAttribute('skinWeight')
+  const weight = new Map<number, number>()
+  if (si && sw) {
+    for (let i = 0; i < si.count; i++) {
+      for (let k = 0; k < 4; k++) {
+        const j = si.getComponent(i, k), w = sw.getComponent(i, k)
+        if (w > 0) weight.set(j, (weight.get(j) ?? 0) + w)
+      }
+    }
+  }
+  let joint = 0, best = -1
+  for (const [j, w] of [...weight.entries()].sort((p, q) => p[0] - q[0])) if (w > best) { joint = j; best = w }
+  return { c, r, joint }
+}
+
+/** The bounding sphere of `meshSphereBind` in the world now: through its joint's bind→world (`jointNowFrom`). */
+function meshSphereNow(mesh: SkinnedMesh, bind: { c: Vec3; r: number; joint: number }): Sphere {
+  const bones = mesh.skeleton?.bones ?? []
+  const j = bind.joint < bones.length ? bind.joint : -1
+  const m = j >= 0
+    ? jointNowFrom(mesh.matrixWorld.elements, mesh.bindMatrixInverse.elements, bones[j].matrixWorld.elements,
+      mesh.skeleton.boneInverses[j].elements, mesh.bindMatrix.elements).bindToWorld
+    : mesh.matrixWorld.elements
+  return { c: transformPoint(m, bind.c), r: bind.r * linearScale(m) }
+}
+
 /** One patched garment mesh. */
 export interface GarmentCollisionEntry {
   readonly mesh: SkinnedMesh
@@ -716,6 +930,14 @@ export interface GarmentCollisionEntry {
   readonly capsules: readonly BoundCapsule[]
   /** The capsules in this mesh's local space as of the last update — what the shader holds (incl. `bind`). */
   readonly local: readonly CollideCapsule[]
+  /**
+   * Hair: the mesh's world bounding sphere as of the last update (its geometry's sphere carried by the joint with
+   * the most skin weight) — what the partner capsules are ranked against. Null for every other kind.
+   */
+  readonly sphere: Sphere | null
+  /** Hair: the partner capsules in this mesh's local space as of the last update, nearest first — what the
+   *  partner block holds (PARTNERS, module docstring). Always empty for every other kind. */
+  readonly partners: readonly CapsuleNow[]
 }
 
 export interface GarmentCollision {
@@ -731,6 +953,13 @@ export interface GarmentCollision {
    * (strand-hair spec § 6.2.2).
    */
   excludeMesh(mesh: SkinnedMesh, on: boolean): void
+  /**
+   * Other figures' capsules (world space) for the hair meshes' partner block (PARTNERS, module docstring); null or
+   * `[]` = none. Kept until the next call; each hair mesh's render hooks take the `PARTNER_COLLIDE_MAX` nearest to
+   * its world bounding sphere into its frame. Only `partnerCount` and the partner uniforms change: no recompile, the
+   * program cache key stays. Every other garment kind ignores them.
+   */
+  setPartners(capsules: readonly CapsuleNow[] | null): void
   /** Restore the original materials and hooks, free the owned clones. */
   dispose(): void
 }
@@ -747,9 +976,12 @@ export function createGarmentCollision(three: Three, root: Object3D,
   if (!binding) return null
 
   interface State {
-    entry: { mesh: SkinnedMesh; kind: string | null; capsules: BoundCapsule[]; local: CollideCapsule[] }
+    entry: { mesh: SkinnedMesh; kind: string | null; capsules: BoundCapsule[]; local: CollideCapsule[];
+      sphere: Sphere | null; partners: CapsuleNow[] }
     binds: Array<{ a: Vec3; b: Vec3 }>
     uniforms: CollideUniforms
+    /** Hair: the partner block's uniforms and the bind sphere it ranks against; null for every other kind. */
+    partner: { uniforms: PartnerUniforms; bindSphere: { c: Vec3; r: number; joint: number } } | null
     original: Material | Material[]
     owned: Material[]
     depth: Material | undefined
@@ -765,7 +997,8 @@ export function createGarmentCollision(three: Three, root: Object3D,
   const DEFAULT_CACHE_KEY = three.Material.prototype.customProgramCacheKey
   // `source` = the material `mat` was cloned from: `Material.clone()` copies neither `onBeforeCompile` nor
   // `customProgramCacheKey`, so a compile hook the template's material carries is chained from there.
-  const patch = (mat: Material, uniforms: CollideUniforms, weighted: boolean, squeeze: boolean, source: Material = mat) => {
+  const patch = (mat: Material, uniforms: CollideUniforms, partner: PartnerUniforms | null, weighted: boolean,
+    squeeze: boolean, source: Material = mat) => {
     const prevCompile = source.onBeforeCompile
     const prevKey = source.customProgramCacheKey
     // three's default cache key IS `onBeforeCompile.toString()` — snapshot it
@@ -779,17 +1012,40 @@ export function createGarmentCollision(three: Three, root: Object3D,
       shader.uniforms.collideBindA = uniforms.collideBindA
       shader.uniforms.collideBindB = uniforms.collideBindB
       shader.uniforms.collideCount = uniforms.collideCount
-      shader.vertexShader = patchCollisionVertexShader(shader.vertexShader, squeeze)
+      if (partner) {
+        shader.uniforms.partnerA = partner.partnerA
+        shader.uniforms.partnerB = partner.partnerB
+        shader.uniforms.partnerCount = partner.partnerCount
+      }
+      shader.vertexShader = patchCollisionVertexShader(shader.vertexShader, squeeze, !!partner)
     }
     mat.customProgramCacheKey = () => `${baseKey ?? prevKey.call(source)}|collide${weighted ? 'W' : ''}${squeeze ? 'S' : ''}`
     if (weighted) mat.defines = { ...(mat.defines ?? {}), COLLIDE_WEIGHT: '' }
     if (squeeze) mat.defines = { ...(mat.defines ?? {}), COLLIDE_SQUEEZE: '' }
+    if (partner) mat.defines = { ...(mat.defines ?? {}), COLLIDE_PARTNER: '' }
     mat.needsUpdate = true
     return mat
   }
 
   const states: State[] = []
   let lastBindingFrame = -1
+  /** The partner capsules of `setPartners` (world), shared by every hair mesh. */
+  let partnerWorld: readonly CapsuleNow[] = []
+  /** Hair: the sphere now, then the `PARTNER_COLLIDE_MAX` nearest partner capsules into the mesh's frame `inv`. */
+  const writePartners = (state: State, inv: Mat4) => {
+    const partner = state.partner
+    if (!partner) return
+    const { mesh } = state.entry
+    const sphere = meshSphereNow(mesh, partner.bindSphere)
+    state.entry.sphere = sphere
+    const picked = partnerWorld.length ? nearestCapsules(sphere, partnerWorld, PARTNER_COLLIDE_MAX) : []
+    state.entry.partners = picked.map(k => capsuleInFrame(partnerWorld[k], inv))
+    state.entry.partners.forEach((c, i) => {
+      partner.uniforms.partnerA.value[i].set(c.a[0], c.a[1], c.a[2], c.r)
+      partner.uniforms.partnerB.value[i].set(c.b[0], c.b[1], c.b[2], 0)
+    })
+    partner.uniforms.partnerCount.value = state.entry.partners.length
+  }
   const writeUniforms = (state: State) => {
     const { mesh, capsules } = state.entry
     const inv = new three.Matrix4().copy(mesh.matrixWorld).invert().elements
@@ -806,6 +1062,7 @@ export function createGarmentCollision(three: Three, root: Object3D,
       state.uniforms.collideBindB.value[i].set(bind.b[0], bind.b[1], bind.b[2], 0)
     })
     state.uniforms.collideCount.value = state.entry.local.length
+    writePartners(state, inv)
   }
   const frameUpdate = (state: State, frame: number) => {
     if (state.frame === frame) return
@@ -836,9 +1093,22 @@ export function createGarmentCollision(three: Three, root: Object3D,
     const weighted = !!mesh.geometry?.getAttribute('_collide')
     // The SQUEEZE rule pushes hair only (plan R10): cloth keeps the ordinary passes.
     const squeeze = kind === 'hair'
+    // The partner block, hair only (spec Part 2): no other garment kind is pushed out of a partner.
+    const partner: State['partner'] = kind === 'hair' ? {
+      uniforms: {
+        partnerA: { value: Array.from({ length: PARTNER_COLLIDE_MAX }, () => new three.Vector4()) },
+        partnerB: { value: Array.from({ length: PARTNER_COLLIDE_MAX }, () => new three.Vector4()) },
+        partnerCount: { value: 0 },
+      },
+      bindSphere: meshSphereBind(mesh),
+    } : null
     const original = mesh.material
     const owned: Material[] = []
-    const cloneOf = (m: Material) => { const c = patch(m.clone(), uniforms, weighted, squeeze, m); owned.push(c); return c }
+    const cloneOf = (m: Material) => {
+      const c = patch(m.clone(), uniforms, partner?.uniforms ?? null, weighted, squeeze, m)
+      owned.push(c)
+      return c
+    }
     mesh.material = Array.isArray(original) ? original.map(cloneOf) : cloneOf(original)
     const depthMat = new three.MeshDepthMaterial({ depthPacking: three.RGBADepthPacking })
     const distanceMat = new three.MeshDistanceMaterial()
@@ -852,11 +1122,11 @@ export function createGarmentCollision(three: Three, root: Object3D,
         d.alphaTest = masked.alphaTest
       }
     }
-    const depth = patch(depthMat, uniforms, weighted, squeeze)
-    const distance = patch(distanceMat, uniforms, weighted, squeeze)
+    const depth = patch(depthMat, uniforms, partner?.uniforms ?? null, weighted, squeeze)
+    const distance = patch(distanceMat, uniforms, partner?.uniforms ?? null, weighted, squeeze)
     owned.push(depth, distance)
     const state: State = {
-      entry: { mesh, kind, capsules, local: [] }, binds, uniforms, original, owned,
+      entry: { mesh, kind, capsules, local: [], sphere: null, partners: [] }, binds, uniforms, partner, original, owned,
       depth: mesh.customDepthMaterial, distance: mesh.customDistanceMaterial,
       ownHooks: { render: Object.prototype.hasOwnProperty.call(mesh, 'onBeforeRender'), shadow: Object.prototype.hasOwnProperty.call(mesh, 'onBeforeShadow') },
       beforeRender: mesh.onBeforeRender, beforeShadow: mesh.onBeforeShadow, frame: -1,
@@ -895,6 +1165,11 @@ export function createGarmentCollision(three: Three, root: Object3D,
       mesh.customDistanceMaterial = on ? state.distance : state.patched.distance
       if (!on) state.frame = -1   // the next render writes the uniforms from the current matrices
     },
+    setPartners(capsules: readonly CapsuleNow[] | null) {
+      partnerWorld = capsules?.length ? [...capsules] : []
+      // the next hook of a hair mesh writes them, also within a frame whose uniforms were already written
+      for (const state of states) if (state.partner) state.frame = -1
+    },
     dispose() {
       for (const state of states) {
         const { mesh } = state.entry
@@ -909,6 +1184,7 @@ export function createGarmentCollision(three: Three, root: Object3D,
         for (const m of state.owned) m.dispose()
       }
       states.length = 0
+      partnerWorld = []
     },
   }
 }

@@ -50,6 +50,18 @@
  *     points near a capsule axis, so > 600 of them are pushed; about half the
  *     capsules under the bind rule with a random bind point and bind capsule)
  *     gives the same point as pushOutOfCapsules (≤ 1e-12 m).
+ * [7b] ONE SOURCE with PARTNERS: COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER (the
+ *     partner block, hair) run as JS on 3000 random points × random own sets
+ *     of 0–20 (half under the bind rule) × random partner sets of 0–11 (the
+ *     first PARTNER_COLLIDE_MAX = 8 are used, as the uniform block holds
+ *     them; 70 % of the points near a partner axis, so their depth spans the
+ *     whole fade 0 … 1.5·PARTNER_PUSH_MAX_M and beyond) gives the same point
+ *     as pushOutOfCapsules(p, own, 1, bindP, { squeeze: true, partners })
+ *     (≤ 1e-12 m); > 600 points differ from the push without partners (the
+ *     sample exercises the block), > 100 of them by a faded partner (0 < f < 1).
+ *     With no partner (partnerCount 0) the partner edition gives the squeeze
+ *     edition's point bit for bit, and `partners: []` in TS is the push
+ *     without the option bit for bit.
  * [8] The patch on three's real sources (standard, depth, distance): the
  *     declarations once after `#include <common>`, the push once right after
  *     `#include <skinning_vertex>` (before `#include <project_vertex>`), the
@@ -129,7 +141,8 @@ const __dirname = path.dirname(__filename)
 /**
  * The mechanical GLSL→JS rewrite of `COLLIDE_GLSL_FUNCTION` (scalar statements only) — also of its squeeze
  * edition `COLLIDE_GLSL_FUNCTION_SQUEEZE` (`smoke_collision_squeeze.mjs`), whose local `float name[ N ];` arrays
- * become zero-filled JS arrays of length N.
+ * become zero-filled JS arrays of length N, and of the partner edition `COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER`
+ * (`smoke_partner_hair_push.mjs`, [7b] here): the partner uniforms are the three trailing parameters.
  */
 export function glslPushToJs(glsl, defines) {
   let body = glsl
@@ -142,7 +155,7 @@ export function glslPushToJs(glsl, defines) {
   const names = Object.keys(defines)
   // eslint-disable-next-line no-new-func
   return new Function(...names, 'collideA', 'collideB', 'collideBindA', 'collideBindB', 'collideCount', 'position',
-    'clamp', 'sqrt', 'min', `${body}\nreturn collidePush;`)
+    'clamp', 'sqrt', 'min', 'partnerA', 'partnerB', 'partnerCount', `${body}\nreturn collidePush;`)
 }
 
 async function main() {
@@ -278,6 +291,69 @@ async function main() {
   check('GLSL text and TS function agree on 3000 points', worst <= 1e-12, `worst ${worst}`)
   check('the sample actually pushes (> 600 points moved)', moved > 600, `${moved} moved`)
   check('the bind rule actually limits (> 300 points differ from the plain push)', bindLimited > 300, `${bindLimited} limited`)
+
+  console.log('--- [7b] ONE SOURCE with partners ---')
+  {
+    const { COLLIDE_GLSL_FUNCTION_SQUEEZE, COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER, SQUEEZE_ROUNDS, SQUEEZE_STEPS,
+      SQUEEZE_MIN_N } = G
+    const { PARTNER_COLLIDE_MAX, PARTNER_PUSH_MAX_M } = await import('../packages/scene-render/src/partnerContact.ts')
+    const sqDefines = { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, SQUEEZE_ROUNDS, SQUEEZE_STEPS, SQUEEZE_MIN_N }
+    const pDefines = { ...sqDefines, PARTNER_COLLIDE_MAX, COLLIDE_PARTNER_PUSH_MAX: PARTNER_PUSH_MAX_M }
+    const sqFactory = glslPushToJs(COLLIDE_GLSL_FUNCTION_SQUEEZE, sqDefines)
+    const pFactory = glslPushToJs(COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER, pDefines)
+    const v4 = (v, w) => ({ x: v[0], y: v[1], z: v[2], w })
+    const run = (fac, defs, p, own, partners, bindP) => {
+      const used = own.slice(0, COLLIDE_MAX), pu = partners.slice(0, PARTNER_COLLIDE_MAX)
+      return fac(...Object.values(defs), used.map((c) => v4(c.a, c.r)), used.map((c) => v4(c.b, 0)),
+        used.map((c) => (c.bind ? v4(c.bind.a, 0) : v4([0, 0, 0], -1))), used.map((c) => (c.bind ? v4(c.bind.b, 0) : v4([0, 0, 0], 0))),
+        used.length, { x: bindP[0], y: bindP[1], z: bindP[2] }, (v, lo, hi) => Math.min(hi, Math.max(lo, v)), Math.sqrt,
+        Math.min, pu.map((c) => v4(c.a, c.r)), pu.map((c) => v4(c.b, 0)), pu.length)(p)
+    }
+    const randomCapsule = () => {
+      const a = [rnd() - 0.5, rnd() * 2, rnd() - 0.5]
+      const b = rnd() < 0.15 ? [...a] : [a[0] + (rnd() - 0.5) * 0.6, a[1] + (rnd() - 0.5) * 0.6, a[2] + (rnd() - 0.5) * 0.6]
+      return { a, b, r: 0.02 + rnd() * 0.2 }
+    }
+    const segD = (p, c) => {
+      const ab = c.b.map((v, i) => v - c.a[i]), ap = p.map((v, i) => v - c.a[i])
+      const l2 = ab[0] ** 2 + ab[1] ** 2 + ab[2] ** 2
+      const t = l2 > 1e-12 ? Math.min(1, Math.max(0, (ap[0] * ab[0] + ap[1] * ab[1] + ap[2] * ab[2]) / l2)) : 0
+      return Math.hypot(ap[0] - ab[0] * t, ap[1] - ab[1] * t, ap[2] - ab[2] * t)
+    }
+    let worstP = 0, worstNone = 0, plainSame = true, byPartner = 0, faded = 0
+    for (let n = 0; n < 3000; n++) {
+      const own = Array.from({ length: Math.floor(rnd() * 21) }, () => {
+        const c = randomCapsule()
+        if (rnd() < 0.5) c.bind = { a: jitter(c.a, 0.1), b: jitter(c.b, 0.1) }
+        return c
+      })
+      const partners = Array.from({ length: Math.floor(rnd() * 12) }, randomCapsule)
+      const c0 = partners.length && rnd() < 0.7 ? partners[Math.floor(rnd() * Math.min(partners.length, PARTNER_COLLIDE_MAX))] : null
+      const u = rnd()
+      const p = c0 ? jitter(c0.a.map((v, i) => v + (c0.b[i] - v) * u), 0.2) : [rnd() - 0.5, rnd() * 2, rnd() - 0.5]
+      const bindP = rnd() < 0.5 ? jitter(p, 0.15) : [p[0] + 2, p[1], p[2]]
+      const ts = pushOutOfCapsules(p, own, 1, bindP, { squeeze: true, partners })
+      const gl = run(pFactory, pDefines, p, own, partners, bindP)
+      worstP = Math.max(worstP, Math.hypot(gl[0] - ts[0], gl[1] - ts[1], gl[2] - ts[2]))
+      const without = pushOutOfCapsules(p, own, 1, bindP, { squeeze: true })
+      if (Math.hypot(ts[0] - without[0], ts[1] - without[1], ts[2] - without[2]) > 1e-9) {
+        byPartner++
+        if (partners.slice(0, PARTNER_COLLIDE_MAX).some((c) => {
+          const depth = c.r - segD(p, c)
+          return depth > PARTNER_PUSH_MAX_M && depth < 1.5 * PARTNER_PUSH_MAX_M
+        })) faded++
+      }
+      const g0 = run(pFactory, pDefines, p, own, [], bindP), s0 = run(sqFactory, sqDefines, p, own, [], bindP)
+      worstNone = Math.max(worstNone, Math.hypot(g0[0] - s0[0], g0[1] - s0[1], g0[2] - s0[2]))
+      const e = pushOutOfCapsules(p, own, 1, bindP, { squeeze: true, partners: [] })
+      if (!e.every((v, i) => Object.is(v, without[i]))) plainSame = false
+    }
+    check('GLSL partner edition and TS (squeeze + partners) agree on 3000 points', worstP <= 1e-12, `worst ${worstP}`)
+    check('the sample exercises the partner block (> 600 points moved by partners)', byPartner > 600, `${byPartner} moved`)
+    check('… > 100 of them with a partner in its fade (0 < f < 1)', faded > 100, `${faded} faded`)
+    check('partnerCount 0: the partner edition gives the squeeze edition\'s points bit for bit', worstNone === 0, `worst ${worstNone}`)
+    check('TS partners: [] is the push without the option, bit for bit', plainSame)
+  }
 
   console.log('--- [8] shader patch on three\'s sources ---')
   const count = (s, needle) => s.split(needle).length - 1

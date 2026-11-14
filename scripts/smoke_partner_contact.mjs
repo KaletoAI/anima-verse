@@ -45,6 +45,14 @@
  *     leaves it only at 35.7° > the 25° budget, while the partner needs 5.737°: no angle is outside both. The own
  *     depth decides: the tip ends at ≈ 2.866° (±0.02), at least 0.03 − 1e-5 from the own axis, still inside the
  *     partner (0.0250 < 0.03).
+ * [8] THE CAP DROPS THE FARTHEST: one snapshot of 20 capsules, all region `arm` (r 0.01 unless named), listed in
+ *     this order: 19 capsules f0 … f18 parallel to z through (−0.10, −0.027 + 0.003·k), then the D1 capsule `c`
+ *     through (0.10, −0.02), r 0.03, LAST. Broad phase at the root joint (the origin), lever 0.10 + 0.003: an fk lies
+ *     hypot(0.10, y_k) ≤ 0.10358 ≤ 0.113 from it, `c` 0.10198 ≤ 0.133 → all 20 kept, more than the push's 16
+ *     (COLLIDE_MAX). Ranked by distance − r (`nearestCapsules`): `c` 0.07198, the fk ≥ 0.09 → the 16 nearest are `c`
+ *     and f2 … f16 (|y_k| ≤ 0.021); f0, f1, f17, f18 (|y_k| 0.024 / 0.027) drop. The fk sit at x ≤ −0.09, the tip at
+ *     x ≥ 0.1·cos 25° = 0.0906: none of them touches it, so the turn is D1's 5.737° (±0.02) and the row's partner is
+ *     ['p:c']. Dropping by list order instead keeps f0 … f15 and loses `c`: no turn (the case fails on 09b3143f3).
  */
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -271,6 +279,21 @@ console.log('--- [7] own wins ---')
   check('the tip stays outside the own capsule', own >= 0.03 - 1e-5, own.toFixed(6))
   check('it turns as far as the own body lets it (2.866°)', Math.abs(turn - 2.866) <= 0.02, turn.toFixed(4))
   check('the rest stays inside the partner', partner < 0.03 && Math.abs(partner - 0.0250) < 1e-3, partner.toFixed(6))
+}
+
+console.log('--- [8] the cap drops the farthest ---')
+{
+  const f = rig()
+  const motion = createSecondaryMotion(THREE, f.root, group())
+  const far = Array.from({ length: 19 }, (_, k) => ({ id: `f${k}`, region: 'arm',
+    now: { a: [-0.10, -0.027 + 0.003 * k, -1], b: [-0.10, -0.027 + 0.003 * k, 1], r: 0.01 } }))
+  const snap = { name: 'p', channels: [], interaction: null,
+    capsules: [...far, { id: 'c', region: 'arm', now: { a: [0.1, -0.02, -1], b: [0.1, -0.02, 1], r: 0.03 } }] }
+  motion.update(1 / 60, { partners: [snap] })
+  const turn = turnOf(f)
+  check('20 capsules, c listed last: c survives the 16-cap, the tip turns 5.737°', Math.abs(turn - 5.737) <= 0.02, turn.toFixed(4))
+  check('… and the row\'s partner is [p:c]', JSON.stringify(motion.contactTips()[0]?.partner) === '["p:c"]',
+    JSON.stringify(motion.contactTips().map(r => r.partner)))
 }
 
 console.log(failures ? `\n${failures} check(s) FAILED` : '\nall checks passed')

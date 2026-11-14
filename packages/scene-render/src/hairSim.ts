@@ -26,6 +26,15 @@
  * the hair primitive's geometry space once (the bind-rule reference, kept as the same objects every frame —
  * `StrandSim` caches its per-row factors on them).
  *
+ * PARTNERS (cross-person collision plan Ruling R1; spec `docs/superpowers/specs/2026-11-13-cross-person-collision-
+ * design.md` Parts 2–3). `setPartners` hands in other figures' capsules (world): each frame the ones nearest to the
+ * hair's rest centre carried by the head join the sim's frame capsules WITHOUT `bind` (no bind rule: full radius),
+ * AHEAD of the own ones — the pushes run in list order, so the own body has the last word, as in the GPU push.
+ * They hold for every step of the frame (a snapshot has no last-frame pose to interpolate from). The sim's capsule
+ * list stays within `COLLIDE_MAX`, which `pushOutOfCapsules` would cut: at most `PARTNER_COLLIDE_MAX` and at most
+ * `COLLIDE_MAX` − the own count, the farthest dropped. While partners are given the list keeps all those slots
+ * (unused ones r 0, inert), so the sim's per-row bind factors are recomputed only when partners come or go.
+ *
  * THE CLOCK (spec § 6.2.2, Ruling H-R11). The sim steps at a fixed 60 Hz whatever the frame rate: a frame of
  * `realDelta` seconds takes the 1/60 s steps that fit into it plus the remainder the last frame carried over (1–4 at
  * 15–60 fps), the new remainder waits for the next frame. Every step sees the figure AT ITS OWN TIME: the follow
@@ -58,10 +67,11 @@
  */
 import type { BufferAttribute, BufferGeometry, Object3D, SkinnedMesh } from 'three'
 import { normBoneName } from './clipRetarget'
-import { bindCollision, COLLISION_VERSION, jointNowFrom } from './collision'
-import type { CollisionBinding, Mat4, Vec3 } from './collision'
-import { capsuleInFrame } from './garmentCollision'
+import { bindCollision, COLLISION_VERSION, jointNowFrom, transformPoint } from './collision'
+import type { CapsuleNow, CollisionBinding, Mat4, Vec3 } from './collision'
+import { capsuleInFrame, COLLIDE_MAX } from './garmentCollision'
 import type { CollideCapsule } from './garmentCollision'
+import { nearestCapsules, PARTNER_COLLIDE_MAX } from './partnerContact'
 import { bindStrands, invertAffine, lerpFrame, RootInertia, StrandMismatch, strandCapsules, strandParams, StrandSim,
   strandTargets } from './hairSimMath'
 import type { HairStrandRecord, StrandParams } from './hairSimMath'
@@ -103,6 +113,9 @@ export interface StrandHair {
   setEnabled(on: boolean): void
   /** The Stiffness slider: × the record's `params.stiffness`. */
   setStiffness(factor: number): void
+  /** Other figures' capsules (world) the rows are kept out of (module docstring, PARTNERS); null or `[]` = none.
+   *  Kept until the next call. */
+  setPartners(capsules: readonly CapsuleNow[] | null): void
   /** Step the frame (fixed 1/60 s with the remainder carried, ≤ 4 steps over the pose interpolated from the last
    *  frame; resets on a delta > 0.25 s or a head jump; `frozen` holds still). */
   update(realDelta: number, opts?: { frozen?: boolean }): void
@@ -185,6 +198,31 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
     return { a: l.a, b: l.b }
   })
   const frameCaps: CollideCapsule[] = binds.map(bind => ({ a: [0, 0, 0] as Vec3, b: [0, 0, 0] as Vec3, r: 0, bind }))
+  // Partners (module docstring, PARTNERS): their slots ahead of the own capsules, no `bind`; the hair's rest centre
+  // (the box centre of the record's rows, head-bind space) ranks them.
+  const partnerSlots = Math.max(0, Math.min(PARTNER_COLLIDE_MAX, COLLIDE_MAX - frameCaps.length))
+  const partnerCaps: CollideCapsule[] = Array.from({ length: partnerSlots },
+    () => ({ a: [0, 0, 0] as Vec3, b: [0, 0, 0] as Vec3, r: 0 }))
+  const withPartners: CollideCapsule[] = [...partnerCaps, ...frameCaps]
+  let partnerWorld: readonly CapsuleNow[] = []
+  const restCentre: Vec3 = (() => {
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]
+    for (let o = 0; o + 2 < record.rest.length; o += 3) {
+      for (let d = 0; d < 3; d++) { lo[d] = Math.min(lo[d], record.rest[o + d]); hi[d] = Math.max(hi[d], record.rest[o + d]) }
+    }
+    return lo[0] <= hi[0] ? [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2] : [0, 0, 0]
+  })()
+  /** The capsules of this frame's steps: the own ones, or — with partners — the nearest partners ahead of them. */
+  const stepCapsules = (): CollideCapsule[] => {
+    if (!partnerWorld.length || !partnerSlots) return frameCaps
+    const picked = nearestCapsules({ c: transformPoint(nowHead, restCentre), r: 0 }, partnerWorld, partnerSlots)
+    partnerCaps.forEach((pc, k) => {
+      const c = k < picked.length ? partnerWorld[picked[k]] : null
+      for (let d = 0; d < 3; d++) { pc.a[d] = c ? c.a[d] : 0; pc.b[d] = c ? c.b[d] : 0 }
+      pc.r = c ? c.r : 0
+    })
+    return withPartners
+  }
 
   // The pose of this frame (`now*`), of the last one (`from*`, carried by the root carry) and of the step (`step*`,
   // `targets`, `frameCaps`) — Ruling H-R11, module docstring "THE CLOCK".
@@ -344,6 +382,9 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
     setStiffness(factor: number) {
       params.stiffness = base.stiffness * (Number.isFinite(factor) && factor > 0 ? factor : 1)
     },
+    setPartners(capsules: readonly CapsuleNow[] | null) {
+      partnerWorld = capsules?.length ? [...capsules] : []
+    },
     update(realDelta: number, opts: { frozen?: boolean } = {}) {
       if (!owned || opts.frozen) return
       const t0 = performance.now()
@@ -371,9 +412,10 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
       } else {
         acc = Math.max(0, acc + delta - steps * STRAND_DT)
       }
+      const capsules = steps ? stepCapsules() : frameCaps
       for (let k = 1; k <= steps; k++) {
         poseAt((start + k * STRAND_DT) / span)
-        sim.step(STRAND_DT, { targets, head: stepHead, capsules: frameCaps, follow: stepFollow }, params)
+        sim.step(STRAND_DT, { targets, head: stepHead, capsules, follow: stepFollow }, params)
       }
       keepPose()
       if (!steps) return
@@ -382,7 +424,10 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
       costMs = costRan ? costMs + (ms - costMs) * COST_EMA : ms
       costRan = true
     },
-    dispose() { handle.setEnabled(false) },
+    dispose() {
+      handle.setEnabled(false)
+      partnerWorld = []
+    },
   }
   return handle
 }

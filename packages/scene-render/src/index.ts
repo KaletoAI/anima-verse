@@ -186,9 +186,9 @@ export type { CollisionCapsule, CollisionPayload, CapsuleNow, JointNow, BoundCap
   CollisionOverlay } from './collision'
 
 export { COLLIDE_MAX, COLLIDE_PASSES, COLLIDE_EPS, COLLIDE_MIN_D, SQUEEZE_ROUNDS, SQUEEZE_STEPS, SQUEEZE_MIN_N,
-  COLLIDE_GLSL_DECLARATIONS, COLLIDE_GLSL_FUNCTION, COLLIDE_GLSL_FUNCTION_SQUEEZE,
-  COLLIDE_GLSL_APPLY, pushOutOfCapsules, capsuleInFrame, patchCollisionVertexShader, garmentKind, garmentCapsules,
-  HAIR_REGIONS, EXTENSION_REGIONS, CLOTH_EXCLUDED_REGIONS, collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
+  COLLIDE_GLSL_DECLARATIONS, COLLIDE_GLSL_PARTNER_DECLARATIONS, COLLIDE_GLSL_FUNCTION, COLLIDE_GLSL_FUNCTION_SQUEEZE,
+  COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER, COLLIDE_GLSL_APPLY, pushOutOfCapsules, capsuleInFrame,
+  patchCollisionVertexShader, garmentKind, garmentCapsules, HAIR_REGIONS, EXTENSION_REGIONS, CLOTH_EXCLUDED_REGIONS, collidingGarmentMeshes, createGarmentCollision } from './garmentCollision'
 export type { CollideCapsule, GarmentCollision, GarmentCollisionEntry, PushOptions } from './garmentCollision'
 
 export { PARTNER_MAX, PARTNER_COLLIDE_MAX, PARTNER_PUSH_MAX_M, PARTNER_HYST_M, PARTNER_RELEASE_DEG_S,
