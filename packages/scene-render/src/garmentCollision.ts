@@ -19,8 +19,10 @@
  * but `CLOTH_EXCLUDED_REGIONS` (an arm passes through cloth; pushing the
  * cloth out of the arm drives it into the body — the numbers are on the
  * constants). At most `COLLIDE_MAX` per mesh, the FIRST ones in payload
- * order — deterministic: the server's table (14) comes first, the extension
- * capsules (one per chain bone, `app/core/collision.py`) after it.
+ * order — deterministic: the server's table (17; its three partner-only
+ * `outer_trunk` capsules push no garment, `PARTNER_ONLY_REGIONS`) comes
+ * first, the extension capsules (one per chain bone, `app/core/collision.py`)
+ * after it.
  *
  * BIND RULE (every garment). A vertex is never pushed further from a
  * capsule than it lay in the BIND pose: the radius is capped per vertex and
@@ -81,7 +83,7 @@
  * `three` is injected, never imported.
  */
 import type { Material, Object3D, SkinnedMesh, Texture, Vector4, WebGLProgramParametersWithUniforms } from 'three'
-import { bindCollision, HAIR_ONLY_REGIONS, linearScale, transformPoint } from './collision'
+import { bindCollision, HAIR_ONLY_REGIONS, linearScale, PARTNER_ONLY_REGIONS, transformPoint } from './collision'
 import type { BoundCapsule, CapsuleNow, CollisionBinding, CollisionPayload, Mat4, Vec3 } from './collision'
 import { isGarmentNode } from './figure'
 
@@ -89,8 +91,9 @@ type Three = typeof import('three')
 
 /**
  * Capsules one garment mesh's shader holds (uniform array length). Kept at
- * 16 with collision v2–v5: the most a kind selects today is cloth 8 (table
- * without the arms and the hair-only shoulders) + 2 chest + 5 links of one
+ * 16 with collision v2–v6: the most a kind selects today is cloth 8 (table
+ * without the arms, the hair-only shoulders and the partner-only outer
+ * trunk) + 2 chest + 5 links of one
  * chain = 15 — one chain's links are `attached_part` (built) or `appendage`
  * (drawn), the slot's switch picks the op — hair 3 + 4 + 1 +
  * 2 shoulder_hair + 2 chest_hair = 12, footwear 0. A body with more extension
@@ -298,7 +301,9 @@ export function garmentKind(o: Object3D): string | null {
  * caps each push at the vertex's bind distance, so no size lifts hair in
  * the bind pose. The default's surface lies out to the skin plus the fit's
  * clearance (outside p95 6.7 mm on Kira — `EXTENSION_MEASURED`).
- * Never `attached_part` or `appendage` (hair does not reach them).
+ * Never `attached_part` or `appendage` (hair does not reach them), never the
+ * partner-only `outer_trunk` (`PARTNER_ONLY_REGIONS`: it reaches past the
+ * figure's own back and sides).
  * `shoulder_hair` (collision v4): the top of the shoulders, which no other
  * capsule covers — hair lying there and swinging HairDeck chains sank in
  * (`app/core/collision.py` SHOULDER_MEASURED).
@@ -329,9 +334,11 @@ export const EXTENSION_REGIONS: readonly string[] = ['chest', 'chest_hair', 'att
  * Neither floats cloth fitted over it at bind (the bind rule caps the radius
  * at the vertex's bind distance). The hair-only regions (`HAIR_ONLY_REGIONS`,
  * out to the skin plus the hair clearance) never push cloth: cloth keeps the
- * inside-skin `chest` set.
+ * inside-skin `chest` set. Nor do the partner-only regions
+ * (`PARTNER_ONLY_REGIONS`, collision v6): the outer trunk set is another
+ * figure's collider, around this one it would float the cloth off the back.
  */
-export const CLOTH_EXCLUDED_REGIONS: readonly string[] = ['arm', ...HAIR_ONLY_REGIONS]
+export const CLOTH_EXCLUDED_REGIONS: readonly string[] = ['arm', ...HAIR_ONLY_REGIONS, ...PARTNER_ONLY_REGIONS]
 
 /**
  * Which bound capsules push a garment of `kind`, in payload order (the

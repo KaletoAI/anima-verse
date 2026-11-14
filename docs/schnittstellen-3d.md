@@ -12166,17 +12166,18 @@ by `/characters/{name}/model/meta`, next to `extension_rig` (not in the worldmap
 model meta when `model_sig` changes). `null` for a model that gets none.
 
 ```
-{"version": 5,
+{"version": 6,
  "capsules": [{"id", "a", "b", "r", "region", "a_pos"?, "b_pos"?}],
  "skipped":  [{"id", "a", "b", "reason"}],
- "scales": {"leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part", "appendage"},
+ "scales": {"leg", "arm", "torso", "head", "shoulder_hair", "chest", "chest_hair", "attached_part", "appendage",
+            "outer_trunk"},
  "source": "own" | "base",
  "base_signature"?, "sha256", "computed_at", "error"?}
 ```
 
 - `a`/`b` — joint names as in the model (compare with `normBoneName`); `r` — metres of the bind space;
-  `region` — `leg` / `arm` / `torso` / `head` / `shoulder_hair` (the fixed table, 14 capsules) or an extension
-  region.
+  `region` — `leg` / `arm` / `torso` / `head` / `shoulder_hair` / `outer_trunk` (the fixed table, 17 capsules) or
+  an extension region.
 - **Extension capsules (version 2).** After the table, one capsule per chain bone of every APPLIED extension
   group (`extension_rig.status "applied"`) whose op is in `EXTENSION_CAPSULES` (`app/core/collision.py`):
   `pair_protrusion` → region `chest` (radius = p50 of the bone's dominant-weighted vertex distances, margin 0),
@@ -12202,6 +12203,16 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   under 16 own vertices is `skipped`; numbers in `EXTENSION_MEASURED`. `COLLISION_VERSION` (`collision.ts`) is THE
   version every reader compares against; a strand-hair record's frozen capsule list is bound under it, never under
   the record's own `capsules.version` (a payload bump would drop the colliders of every record fitted before it).
+- **Outer trunk capsules (version 6, partners only).** The table's `outer_hips` / `outer_spine` / `outer_chest`,
+  region `outer_trunk` (own scale "Outer trunk (partners)"), span the torso set's three segments (Hips → Spine1 →
+  Spine2 → Neck) but are fitted to the trunk's front and back profile: per segment `a→b`, axis `e` = unit(b − a),
+  front `f` = the `LeftFoot → LeftToeBase` direction across `e`, `z` = (v − a)·f over the start bone's
+  dominant-weighted vertices, `F` = quantile(z, 0.98), `B` = quantile(−z, 0.98); radius (F + B)/2 (× scale), and
+  both endpoints carry positions moved by o = (F − B)/2 along `f` (`a_pos` = a + o·f, `b_pos` = b + o·f, endpoint
+  rule). Without `LeftFoot` / `LeftToeBase` all three are `skipped` ("joint … missing"). Only ANOTHER figure's
+  contact reads them (`PARTNER_ONLY_REGIONS` in `collision.ts`): the figure's own hair, cloth and extension-bone
+  contact never do — the inside-skin `torso` set stays theirs. Numbers: `OUTER_MEASURED` in
+  `app/core/collision.py`.
 - **Endpoint rule.** An endpoint WITHOUT `a_pos`/`b_pos` is the joint's position. An endpoint WITH one is a
   bind-space point (the space of the body's POSITION accessor) fixed to that joint: it moves like a body vertex
   skinned 100 % to the joint, `p_now = boneWorld · inverse(boneBindWorld) · p_bind`. The head capsule uses it

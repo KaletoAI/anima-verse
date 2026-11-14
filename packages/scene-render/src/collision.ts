@@ -70,11 +70,15 @@ export interface CollisionPayload {
  * 4: the hair-only `shoulder_hair` pair of the table (shoulder → upper arm).
  * 5: the `appendage` extension capsules (op `appendage_chain`, a chain drawn
  * into the body mesh; `attached_part` stays the region of a built part).
+ * 6: the partner-only `outer_trunk` set of the table (`outer_hips` /
+ * `outer_spine` / `outer_chest`, fitted to the trunk's front and back
+ * profile, axis moved off the joints by `a_pos`/`b_pos`;
+ * `PARTNER_ONLY_REGIONS`).
  * THE version: every reader compares against this constant (a record that
  * froze an older list, the strand hair's, binds it under this one — never
  * under its own number, `hairSim.ts`).
  */
-export const COLLISION_VERSION = 5
+export const COLLISION_VERSION = 6
 
 /**
  * Regions whose capsules are for HAIR only (`garmentCollision.ts`
@@ -86,6 +90,18 @@ export const COLLISION_VERSION = 5
  * chains do, `hairChainCapsules`).
  */
 export const HAIR_ONLY_REGIONS: readonly string[] = ['chest_hair', 'shoulder_hair']
+
+/**
+ * Regions whose capsules only ANOTHER figure's contact reads (cross-person
+ * collision, spec `2026-11-13-cross-person-collision-design.md`):
+ * `outer_trunk` (collision v6) is fitted to the trunk's front and back
+ * profile (`app/core/collision.py` OUTER_MEASURED), a circle that reaches
+ * past the back and the trunk's sides — the figure's own hair
+ * (`HAIR_REGIONS`), cloth (`CLOTH_EXCLUDED_REGIONS`) and extension-bone
+ * contact (`extensionCapsules`) never use it; the inside-skin `torso` set
+ * stays theirs.
+ */
+export const PARTNER_ONLY_REGIONS: readonly string[] = ['outer_trunk']
 
 /** A capsule in the current frame, world space. */
 export interface CapsuleNow { a: Vec3; b: Vec3; r: number }
@@ -275,6 +291,7 @@ export function bindCollision(three: Three, root: Object3D, payload: CollisionPa
 export const CAPSULE_REGION_COLORS: Record<string, number> = {
   leg: 0xff9f1c, arm: 0x2ec4b6, torso: 0x7bd389, head: 0xe0aaff,
   chest: 0xff6b9a, chest_hair: 0xffc94d, shoulder_hair: 0xf4a259, attached_part: 0x5ab0ff, appendage: 0x9b8cff,
+  outer_trunk: 0x3ddbd9,
 }
 
 interface WireState { r: number; length: number }

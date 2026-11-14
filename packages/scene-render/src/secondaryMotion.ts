@@ -24,7 +24,9 @@
  *    capsules it sits in, nor out of the extension capsules riding its own
  *    links, and a child group hanging from it (a tip link) not out of them
  *    either; only out of the arms, legs, head and OTHER chains' extension
- *    capsules (Review Focus 2 of the collision plan). An extension capsule of
+ *    capsules (Review Focus 2 of the collision plan); never out of a hair-only
+ *    or a partner-only capsule (`HAIR_ONLY_REGIONS`, `PARTNER_ONLY_REGIONS` —
+ *    the outer trunk set of collision v6 is another figure's collider). An extension capsule of
  *    another chain is read where its bones were at the start of the frame
  *    (the capsules are updated once, before the links move) — one frame
  *    behind that chain's own swing.
@@ -63,7 +65,7 @@
  */
 import type { Bone, Matrix4, Quaternion, Object3D, SkinnedMesh, Vector3 } from 'three'
 import { normBoneName } from './clipRetarget'
-import { bindCollision, HAIR_ONLY_REGIONS } from './collision'
+import { bindCollision, HAIR_ONLY_REGIONS, PARTNER_ONLY_REGIONS } from './collision'
 import type { BoundCapsule, CollisionBinding, CollisionPayload, Vec3 } from './collision'
 import { inGarment } from './figure'
 import { HAIR_REGIONS, pushOutOfCapsules } from './garmentCollision'
@@ -195,18 +197,21 @@ function contactAngle(depthAt: (angle: number) => number, depth0: number, limit:
  * joint `a` is NOT one of `ancestors` (normalised names of the bones that
  * carry the chain — its root's ancestors and `anchor_blend` bones — and of
  * its own subtree: the root, its links and any child group below them), and
- * none of a hair-only region (`HAIR_ONLY_REGIONS`, outside the skin).
- * Pure; payload order is kept.
+ * none of a hair-only region (`HAIR_ONLY_REGIONS`, outside the skin) or a
+ * partner-only region (`PARTNER_ONLY_REGIONS`, the outer trunk set another
+ * figure's contact reads). Pure; payload order is kept.
  */
 export function extensionCapsules<T extends { capsule: { a: string; region?: string } }>(bound: readonly T[], ancestors: ReadonlySet<string>): T[] {
   return bound.filter(entry => !ancestors.has(normBoneName(entry.capsule.a))
-    && !HAIR_ONLY_REGIONS.includes(entry.capsule.region ?? ''))
+    && !HAIR_ONLY_REGIONS.includes(entry.capsule.region ?? '')
+    && !PARTNER_ONLY_REGIONS.includes(entry.capsule.region ?? ''))
 }
 
 /**
  * Which capsules a HAIR chain (`MotionGroup.hair`) may collide with: every
  * bound capsule whose region is in `HAIR_REGIONS` — the set that pushes the
- * hair cards themselves — in payload order. Ancestors are NOT excluded: the
+ * hair cards themselves (never the partner-only `outer_trunk`) — in payload
+ * order. Ancestors are NOT excluded: the
  * chain hangs from Head, and the head and torso capsules are exactly what it
  * must not swing into. Pure.
  */

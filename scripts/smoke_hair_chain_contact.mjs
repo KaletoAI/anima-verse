@@ -13,7 +13,8 @@
  *     left_upper_arm, left_shoulder_hair, chest_hair. `extensionCapsules` of a chain under Head (ancestors head,
  *     neck, spine2, spine1, spine, hips) is unchanged: head and chest are ancestor capsules, shoulder_hair and
  *     chest_hair are hair-only → left_upper_arm and the pack capsule (its start joint Breast_L is no ancestor of
- *     the chain).
+ *     the chain). A capsule of the partner-only region outer_trunk (collision v6, a Spine1) added at the end →
+ *     neither list takes it (both lists unchanged).
  *
  * FIXTURE (metres, every bind rotation identity, one body skin with all bones):
  *   Hips (0,0,0) → Head (0,1.6,0) = H → HairGen_c00_00 at local (0,0.1,−0.07) = J0 (0,1.7,−0.07)
@@ -174,6 +175,11 @@ console.log('--- [1] pure: hairChainCapsules / extensionCapsules ---')
   const ext = extensionCapsules(bound, new Set(['head', 'neck', 'spine2', 'spine1', 'spine', 'hips'])).map(e => e.capsule.id)
   check('extensionCapsules unchanged: ancestors and hair-only dropped',
     JSON.stringify(ext) === JSON.stringify(['left_upper_arm', 'pack:Breast_L']), ext.join(' '))
+  const withOuter = [...bound, { capsule: { id: 'outer_spine', a: 'mixamorig:Spine1', region: 'outer_trunk' } }]
+  const hairOuter = typeof hairChainCapsules === 'function' ? hairChainCapsules(withOuter).map(e => e.capsule.id) : []
+  check('hair chains never take outer_trunk (partner contact only)', JSON.stringify(hairOuter) === JSON.stringify(kept), hairOuter.join(' '))
+  const extOuter = extensionCapsules(withOuter, new Set(['head', 'neck'])).map(e => e.capsule.id)
+  check('extension chains never take outer_trunk (partner contact only)', !extOuter.includes('outer_spine'), extOuter.join(' '))
 }
 
 console.log('--- [2] contact with the head capsule ---')

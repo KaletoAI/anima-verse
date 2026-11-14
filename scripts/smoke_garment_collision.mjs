@@ -113,6 +113,9 @@
  *     attached_part or appendage); cloth takes torso, leg, head, chest,
  *     attached_part, appendage (never arm, never the hair-only shoulder_hair /
  *     chest_hair). `appendage` is an extension region (`EXTENSION_REGIONS`).
+ *     Collision v6: a tenth capsule of region outer_trunk (partner contact
+ *     only, `PARTNER_ONLY_REGIONS`) appended → hair and cloth take exactly the
+ *     same ids as without it; `CLOTH_EXCLUDED_REGIONS` lists outer_trunk.
  *     Every payload here carries the current `COLLISION_VERSION`.
  */
 import { spawnSync } from 'child_process'
@@ -487,6 +490,13 @@ async function main() {
   const clothTook = garmentCapsules('clothing', regions9).map((e) => e.capsule.region).join()
   check('cloth: torso, leg, head, chest, attached_part, appendage', clothTook === 'torso,leg,head,chest,attached_part,appendage', clothTook)
   check('appendage is an extension region', G.EXTENSION_REGIONS.includes('appendage'), G.EXTENSION_REGIONS.join())
+  const regions10 = [...regions9, { capsule: { id: 'outer_trunk', region: 'outer_trunk' } }]
+  const ids = (kind) => garmentCapsules(kind, regions10).map((e) => e.capsule.id).join()
+  check('hair: outer_trunk never (partner contact only)', ids('hair') === 'torso,arm,head,shoulder_hair,chest_hair', ids('hair'))
+  check('cloth: outer_trunk never (partner contact only)', ids('cloth') === 'torso,leg,head,chest,attached_part,appendage', ids('cloth'))
+  const { PARTNER_ONLY_REGIONS } = await import('../packages/scene-render/src/collision.ts')
+  check('PARTNER_ONLY_REGIONS = [outer_trunk]', JSON.stringify(PARTNER_ONLY_REGIONS) === '["outer_trunk"]', String(PARTNER_ONLY_REGIONS))
+  check('CLOTH_EXCLUDED_REGIONS lists outer_trunk', G.CLOTH_EXCLUDED_REGIONS.includes('outer_trunk'), G.CLOTH_EXCLUDED_REGIONS.join())
 
   if (failures.length) {
     console.log(`\nFAIL — ${failures.length} check(s): ${failures.join('; ')}`)

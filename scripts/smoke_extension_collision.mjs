@@ -14,7 +14,9 @@
  *   tip = the own vertex (weight > 0.5) reaching farthest along that lever = (0,0,0.4) in Ext's frame
  *   = world (0,1,0.5) in the bind pose; lever length 0.4.
  *
- * [1] pure: `extensionCapsules` drops a capsule whose start joint is an ancestor (prefix-insensitive);
+ * [1] pure: `extensionCapsules` drops a capsule whose start joint is an ancestor (prefix-insensitive),
+ *     and every capsule of a partner-only region (collision v6, `PARTNER_ONLY_REGIONS`): one capsule per
+ *     region torso / arm / outer_trunk / appendage, no ancestors → torso, arm, appendage;
  *     `tipBindFactors` — tip (0,1,0.5) vs capsule (0,1,0)→(0,1.5,0) r 0.6: d0 = 0.5 → factor 0.5/0.6;
  *     vs the arm capsule r 0.1 (d0 = |(0,1,0.5)−(1,1.05,0.5)| = 1.00125) → 1.
  * [2] ARM CONTACT (gravity 0, gain 0 — the link is static): LeftArm turned 180° about +Y puts the
@@ -121,6 +123,9 @@ console.log('--- [1] pure helpers ---')
   const bound = [{ capsule: { a: 'mixamorig:Spine2' } }, { capsule: { a: 'LeftArm' } }, { capsule: { a: 'Hips' } }]
   const kept = extensionCapsules(bound, new Set(['spine2', 'hips']))
   check('ancestor start joints dropped, order kept', kept.length === 1 && kept[0].capsule.a === 'LeftArm')
+  const regions = ['torso', 'arm', 'outer_trunk', 'appendage'].map(region => ({ capsule: { id: region, a: `mixamorig:J_${region}`, region } }))
+  const own = extensionCapsules(regions, new Set()).map(e => e.capsule.id).join()
+  check('partner-only region (outer_trunk) never turns an own tip', own === 'torso,arm,appendage', own)
   const f = tipBindFactors([0, 1, 0.5], [{ a: [0, 1, 0], b: [0, 1.5, 0], r: 0.6 }, { a: [1, 1.05, 0.5], b: [2, 1.05, 0.5], r: 0.1 }])
   check('bind factor inside = d0/r', Math.abs(f[0] - 0.5 / 0.6) < 1e-12, String(f[0]))
   check('bind factor outside = 1', f[1] === 1)

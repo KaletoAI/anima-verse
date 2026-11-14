@@ -1,7 +1,7 @@
 /**
  * CollisionScales — the character's collision-capsule radius scale per body
- * region (leg / arm / torso / head, and the extension regions chest /
- * chest (hair) / attached part / appendage, 0.5–1.5), saved to
+ * region (leg / arm / torso / head / outer trunk, and the extension regions
+ * chest / chest (hair) / attached part / appendage, 0.5–1.5), saved to
  * `POST /characters/{c}/model3d/collision/scales`. The server stores the
  * override (`model3d_opts.collision_scales`) and recomputes the capsule set of
  * every stored model — on the base-body pipeline the base body's set first,
@@ -23,6 +23,10 @@
  * hair only), separate from "Chest" (inside the skin; it pushes cloth).
  * "Appendage" is the chain a generator drew into the body mesh (op
  * `appendage_chain`, collision v5); "Attached part" the one built onto it.
+ * "Outer trunk (partners)" (collision v6) is always shown: the trunk set fitted
+ * to the front and back profile that only ANOTHER figure's contact reads
+ * (`PARTNER_ONLY_REGIONS`) — every humanoid set has it, unlike the extension
+ * regions.
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { CollisionPayload } from '@anima/scene-render'
@@ -30,17 +34,19 @@ import { useI18n } from '../../i18n/I18nProvider'
 import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 
-const COLLISION_REGIONS = ['leg', 'arm', 'torso', 'head', 'shoulder_hair', 'chest', 'chest_hair', 'attached_part', 'appendage'] as const
+const COLLISION_REGIONS = ['leg', 'arm', 'torso', 'head', 'shoulder_hair', 'outer_trunk', 'chest', 'chest_hair', 'attached_part', 'appendage'] as const
 type CollisionScaleMap = Record<(typeof COLLISION_REGIONS)[number], number>
 /** Regions shown only where the set has capsules in them (module docstring). */
 const EXTENSION_REGIONS: ReadonlySet<string> = new Set(['chest', 'chest_hair', 'attached_part', 'appendage'])
 
 const REGION_LABELS: Record<(typeof COLLISION_REGIONS)[number], string> = {
-  leg: 'Legs', arm: 'Arms', torso: 'Torso', head: 'Head', shoulder_hair: 'Shoulders (hair)', chest: 'Chest',
+  leg: 'Legs', arm: 'Arms', torso: 'Torso', head: 'Head', shoulder_hair: 'Shoulders (hair)',
+  outer_trunk: 'Outer trunk (partners)', chest: 'Chest',
   chest_hair: 'Chest (hair)', attached_part: 'Attached part', appendage: 'Appendage',
 }
 const DEFAULTS: CollisionScaleMap = {
-  leg: 1, arm: 1, torso: 1, head: 1, shoulder_hair: 1, chest: 1, chest_hair: 1, attached_part: 1, appendage: 1,
+  leg: 1, arm: 1, torso: 1, head: 1, shoulder_hair: 1, outer_trunk: 1, chest: 1, chest_hair: 1, attached_part: 1,
+  appendage: 1,
 }
 
 const full = (scales?: Partial<Record<string, number>> | null): CollisionScaleMap =>

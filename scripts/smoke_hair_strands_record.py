@@ -393,8 +393,9 @@ def run_checks(tmp):
           and record["version"] == hs.RECORD_VERSION == 2, "[7] head_bone / frame / rows / version")
     check(record["vertex_attributes"] == {"card": "_STRAND_CARD", "u": "_STRAND_U"}, "[7] vertex_attributes")
     check(abs(record["ear_y"] - gf.ear_line_height(body)) < 1e-6, f"[7] ear_y {record['ear_y']}")
-    check(record["capsules"]["version"] == 4 and isinstance(record["capsules"]["capsules"], list),
-          f"[7] capsules v4 ({len(record['capsules']['capsules'])} capsules)")
+    from app.core import collision
+    check(record["capsules"]["version"] == collision.VERSION and isinstance(record["capsules"]["capsules"], list),
+          f"[7] capsules v{collision.VERSION} ({len(record['capsules']['capsules'])} capsules)")
 
     # [8] the cache
     json_path, npz_path = hs.sidecar_paths(fit)
