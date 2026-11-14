@@ -63,9 +63,14 @@ EXPECTED, BY HAND FROM THE BRIEF (D1-D5) AND THE HUMAN MANIFEST
 [5] create_hairstyle(Kai, "a bun", "bogus") -> ValueError "hair mode must be one of"; nothing created.
     GET /characters/Kai/hairstyles (get_character_hairstyles): keys {hairstyles, default_mode "body", modes
     ["hairdeck", "haar", "body"] (HAIR_MODES), built_modes ["hairdeck", "haar", "body"] (BUILT_MODES, HAAR
-    built since strand-hair Task 13)}; three entries,
-    the worn S first, each {id, name, description, mode, worn, plain, freshness}; the first hairstyle plain + "current",
-    S "missing" (its body shape is made by a Build), D (HairDeck, no fit) "missing".
+    built since strand-hair Task 13), pipeline, auto_build (Task UI4), appearance_hair_text (Ruling A54)};
+    three entries,
+    the worn S first, each {id, name, description, mode, worn, plain, freshness, wear, due (Task UI4)}; the first
+    hairstyle plain + "current", S "missing" (its body shape is made by a Build), D (HairDeck, no fit) "missing".
+    Ruling A54 — the standard text the New-hairstyle dialog opens with: Kai's ``appearance_hair_text`` is T (his
+    Appearance is unchanged by the hairstyles); Bom's is "" (bald), and create_hairstyle(Bom, "") is the
+    ValueError "No hair set — describe the hairstyle, or fill in the hair in Appearance" the dialog shows as a
+    hint before Create.
 """
 import hashlib
 import json
@@ -342,11 +347,15 @@ def main() -> int:
         payload = get_character_hairstyles("Kai")
         check("payload keys", (sorted(payload), payload.get("default_mode"), payload.get("modes"),
                                payload.get("built_modes")),
-              (["built_modes", "default_mode", "hairstyles", "modes"], "body", ["hairdeck", "haar", "body"],
-               ["hairdeck", "haar", "body"]))
+              (["appearance_hair_text", "auto_build", "built_modes", "default_mode", "hairstyles", "modes",
+                "pipeline"], "body", ["hairdeck", "haar", "body"], ["hairdeck", "haar", "body"]))
         rows = payload.get("hairstyles") or []
         check("entry keys", [sorted(r) for r in rows][:1],
-              [["description", "freshness", "id", "mode", "name", "plain", "worn"]])
+              [["description", "due", "freshness", "id", "mode", "name", "plain", "wear", "worn"]])
+        check("standard text (A54)", payload.get("appearance_hair_text"), T)
+        check("bald: no standard text (A54)", get_character_hairstyles("Bom").get("appearance_hair_text"), "")
+        raises("bald: the hint's message", lambda: garment_hair.create_hairstyle("Bom", "", ""), ValueError,
+               "No hair set — describe the hairstyle, or fill in the hair in Appearance")
         check("rows", [(r["id"], r["mode"], r["worn"], r["plain"], r["freshness"]["state"]) for r in rows],
               [(second, "body", True, False, "missing"),
                *sorted([(kai_id, "body", False, True, "current"), (deck, "hairdeck", False, False, "missing")])])

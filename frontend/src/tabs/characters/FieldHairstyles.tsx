@@ -43,7 +43,8 @@ import type { HairDrafts } from './HairLiveControls'
 import { FigureBuildLine } from './HairstyleParts'
 import {
   HAAR_NO_ROUTE, ROUTING_URL, colourTint, fittedPlacement, haarRunCost, haarVariantRows, hairStepRows, jobsLabel,
-  listLight, listReason, placementIdentity, placementMap, placementRuler, strandPreviewState, variantAction, wearButton,
+  listLight, listReason, newHairstyleText, placementIdentity, placementMap, placementRuler, standardHairText,
+  strandPreviewState, variantAction, wearButton,
 } from './hairstylesModel'
 import type { HaarPanel, Light, Vec3, VariantLight } from './hairstylesModel'
 import { Model3DViewer } from './Model3DViewer'
@@ -75,20 +76,25 @@ type HairDetail = HairInfo & {
 
 const VIEWER_HEIGHT = 580
 /** The "New hairstyle" dialog: description + mode (every mode the server lists as built). Create starts
- *  nothing; the new hairstyle is not worn (except a character's first one — the server decides). */
-function NewHairstyleDialog({ character, defaultMode, built, onClose, onCreated }: {
+ *  nothing; the new hairstyle is not worn (except a character's first one — the server decides).
+ *  Ruling A54: the description opens with the standard text (`standard`, the Appearance's hair text the server
+ *  would use for an empty one), editable before Create; "Reset to standard text" brings it back. Without a
+ *  standard text the field stays empty and the server's message stands under it before Create. */
+function NewHairstyleDialog({ character, defaultMode, built, standard, onClose, onCreated }: {
   character: string
   defaultMode: HairMode
   built: readonly string[]
+  standard: string
   onClose: () => void
   onCreated: (itemId: string) => void
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
-  const [description, setDescription] = useState('')
+  const [description, setDescription] = useState(standard)
   const [mode, setMode] = useState<HairMode>(hairModeDisabled(defaultMode, built) ? 'body' : defaultMode)
   const [posting, setPosting] = useState(false)
   const reason = newHairstyleDisabled(description, mode, built)
+  const field = newHairstyleText(standard, description)
   const create = async () => {
     if (reason || posting) return
     setPosting(true)
@@ -108,12 +114,24 @@ function NewHairstyleDialog({ character, defaultMode, built, onClose, onCreated 
         style={{ maxWidth: 560 }}>
         <div className="ga-modal-header"><h3>{t('New hairstyle')}</h3></div>
         <div className="ga-modal-body" style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 170px', gap: 10 }}>
-          <label className="ga-form-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {t('Description')}
-            <textarea className="ga-input" rows={3} value={description} disabled={posting}
-              placeholder={t('e.g. shoulder-length wavy auburn hair with a side parting')}
-              onChange={(e) => setDescription(e.target.value)} />
-          </label>
+          <div className="ga-form-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {t('Description')}
+              <textarea className="ga-input" rows={3} value={description} disabled={posting}
+                placeholder={t('e.g. shoulder-length wavy auburn hair with a side parting')}
+                onChange={(e) => setDescription(e.target.value)} />
+            </label>
+            {field.hint ? <span className="ga-hint" role="note" style={WARN_STYLE}>{t(field.hint)}</span> : null}
+            {field.fromStandard ? <span className="ga-hint">{t('Standard text from the hair in Appearance')}</span> : null}
+            {field.reset ? (
+              <button type="button" disabled={posting} title={standard}
+                style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                  color: 'var(--accent, #58a6ff)', textDecoration: 'underline', fontSize: '0.95em' }}
+                onClick={() => setDescription(standard)}>
+                {t('Reset to standard text')}
+              </button>
+            ) : null}
+          </div>
           <label className="ga-form-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {t('Mode')}
             <select className="ga-input" value={mode} disabled={posting} aria-label={t('Hair mode')}
@@ -136,7 +154,7 @@ function NewHairstyleDialog({ character, defaultMode, built, onClose, onCreated 
             <button type="button" className="ga-btn ga-btn-primary" disabled={!!reason || posting}
               onClick={() => { void create() }}>{t('Create')}</button>
           </div>
-          {reason ? <span className="ga-hint">{t(reason)}</span> : null}
+          {reason && !field.hint ? <span className="ga-hint">{t(reason)}</span> : null}
         </div>
       </div>
     </div>,
@@ -777,7 +795,7 @@ export function FieldHairstyles({ character, onOpenFigure }: {
       </div>
       {dialog ? (
         <NewHairstyleDialog character={character} defaultMode={list.default_mode} built={list.built_modes || HAIR_MODES}
-          onClose={() => setDialog(false)}
+          standard={standardHairText(list)} onClose={() => setDialog(false)}
           onCreated={(id) => { setDialog(false); setSelected(id); void load() }} />
       ) : null}
     </div>

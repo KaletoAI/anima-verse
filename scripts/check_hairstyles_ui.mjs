@@ -59,6 +59,21 @@
  *     client source (frontend/src, client3d/src, packages/<pkg>/src) carries a cutoff of its own: no assignment of a
  *     non-zero number to `alphaTest` and no `alphaCutoff` number literal — except `client3d/src/scene/impostors.ts`
  *     (0.5: the client's own billboard material for distant props, no glTF material and no hair).
+ * [12] The New-hairstyle dialog opens with the standard text (Ruling A54). GET …/hairstyles carries
+ *     `appearance_hair_text` T = "short black hair, wavy hair with a side parting":
+ *       standardHairText({appearance_hair_text: "  short black hair,\n wavy hair with a side parting "}) = T
+ *       (whitespace collapsed like the server's create_hairstyle); {} / null / {appearance_hair_text: null} → "".
+ *     newHairstyleText(standard, field):
+ *       (T, T)        → reset false, fromStandard true,  hint null   (the field as it opens);
+ *       (T, " " + T)  → the same (blank ends do not count);
+ *       (T, "a bun")  → reset true,  fromStandard false, hint null   ("Reset to standard text" offered);
+ *       (T, "")       → reset true,  fromStandard false, hint null   (Create's own "Describe the hairstyle");
+ *       ("", "")      → reset false, fromStandard false, hint NO_HAIR_TEXT (said before Create);
+ *       ("", "a bun") → reset false, fromStandard false, hint null.
+ *     NO_HAIR_TEXT is the server's message word for word (the ValueError in garment_hair.create_hairstyle).
+ *     Sources: the dialog's field state starts from `standard` (`useState(standard)`), the tab passes
+ *     `standard={standardHairText(list)}` of the hairstyles GET, the reset link sets the field back to `standard`,
+ *     and the route puts `appearance_hair_text` into the hairstyles GET.
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -250,6 +265,25 @@ const hardCoded = sources.filter((f) => {
   return /alphaTest\s*[:=]\s*(0*\.\d*[1-9]|[1-9])/.test(text) || /alphaCutoff\s*[:=]\s*\d/.test(text);
 }).map((f) => f.slice(ROOT.length)).filter((f) => f !== 'client3d/src/scene/impostors.ts');
 check('[11] no client carries a cutoff of its own', [sources.length > 100, hardCoded], [true, []]);
+
+// [12]
+{
+  const T = 'short black hair, wavy hair with a side parting';
+  check('[12] standardHairText', [m.standardHairText({ appearance_hair_text: '  short black hair,\n wavy hair with a side parting ' }),
+    m.standardHairText({}), m.standardHairText(null), m.standardHairText({ appearance_hair_text: null })], [T, '', '', '']);
+  const st = (std, d) => { const r = m.newHairstyleText(std, d); return [r.reset, r.fromStandard, r.hint]; };
+  check('[12] newHairstyleText', [st(T, T), st(T, ` ${T}`), st(T, 'a bun'), st(T, ''), st('', ''), st('', 'a bun')],
+    [[false, true, null], [false, true, null], [true, false, null], [true, false, null],
+      [false, false, m.NO_HAIR_TEXT], [false, false, null]]);
+  const serverHair = readFileSync(join(ROOT, 'app/core/garment_hair.py'), 'utf8');
+  check('[12] the hint is the server\'s message', serverHair.includes(`raise ValueError("${m.NO_HAIR_TEXT}")`), true);
+  const dialog = (tab.match(/function NewHairstyleDialog[\s\S]*?\n}\n/) || [''])[0];
+  const route = readFileSync(join(ROOT, 'app/routes/characters.py'), 'utf8');
+  const hairstylesGet = (route.match(/def get_character_hairstyles[\s\S]*?\n\n\n/) || [''])[0];
+  check('[12] wiring', [/useState\(standard\)/.test(dialog), /standard=\{standardHairText\(list\)\}/.test(tab),
+    /onClick=\{\(\) => setDescription\(standard\)\}/.test(dialog), /t\(field\.hint\)/.test(dialog),
+    /"appearance_hair_text": \(garment_hair\.appearance_hair_text\(/.test(hairstylesGet)], [true, true, true, true, true]);
+}
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

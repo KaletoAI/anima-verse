@@ -19,6 +19,8 @@
  *   the hair swings, the drag turn and the motion buttons' root motion (Sway, Walk, Turn).
  * - `colourTint`: the live colour preview — a multiplier of the hair's vertex colours.
  * - `wearButton`: the Wear button's label with what the Build after it costs.
+ * - `standardHairText` / `newHairstyleText`: the "New hairstyle" dialog's description field (Ruling A54) — it opens
+ *   with the standard text, offers "Reset to standard text" once edited, and says before Create when there is none.
  * Returned strings are English; the caller passes `t`.
  */
 import { DRAG_TURN_DEG_PER_PX } from '../../lib/modelTurn'
@@ -676,4 +678,32 @@ export function wearButton(wear: { hub_jobs: number | null; automatic: boolean }
   }
   return { label: t('Wear · no job now'),
     title: t('Nothing runs on the click; the Build you start then costs {cost}').replace('{cost}', jobsLabel(wear.hub_jobs, t)) }
+}
+
+
+/** The server's message for a new hairstyle without any text (`garment_hair.create_hairstyle`): the dialog shows it
+ *  as a hint BEFORE Create when there is no standard text (Ruling A54), instead of the 400 after it. */
+export const NO_HAIR_TEXT = 'No hair set — describe the hairstyle, or fill in the hair in Appearance'
+
+/** The standard text a new hairstyle starts from (GET …/hairstyles `appearance_hair_text`: the Appearance's hair
+ *  text, what the server uses for an empty description), whitespace collapsed like the server does; "" without
+ *  one (a bald character, or a payload from before Ruling A54). The dialog's field opens with it. */
+export function standardHairText(payload: { appearance_hair_text?: string | null } | null | undefined): string {
+  return String(payload?.appearance_hair_text || '').split(/\s+/).filter(Boolean).join(' ')
+}
+
+/** The state of the dialog's description field against the standard text (Ruling A54):
+ *  - `reset`: "Reset to standard text" is offered — there is a standard text and the field differs from it
+ *    (blank-insensitive at the ends);
+ *  - `fromStandard`: the field holds the standard text unchanged (the line under it names where it comes from);
+ *  - `hint`: `NO_HAIR_TEXT` while there is no standard text and the field is blank — said before Create. */
+export function newHairstyleText(standard: string, description: string):
+  { reset: boolean; fromStandard: boolean; hint: string | null } {
+  const std = standard.trim()
+  const text = description.trim()
+  return {
+    reset: !!std && text !== std,
+    fromStandard: !!std && text === std,
+    hint: !std && !text ? NO_HAIR_TEXT : null,
+  }
 }

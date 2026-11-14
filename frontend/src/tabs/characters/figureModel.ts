@@ -696,6 +696,8 @@ export interface HairstylesPayload {
   modes: HairMode[]
   /** The modes that can be chosen today (`garment_hair.BUILT_MODES`). */
   built_modes: HairMode[]
+  /** Ruling A54: the standard text a new hairstyle starts from (the Appearance's hair text; "" without hair). */
+  appearance_hair_text?: string
 }
 
 /** "<name> · <mode label>" — a hairstyle as the list and the outfit-set select name it. */

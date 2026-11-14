@@ -2307,9 +2307,13 @@ def get_character_hairstyles(character_name: str,
     Run all would run now (``garments.run_estimate`` ``steps``; ``[]`` when
     current, off the pipeline or for another mode), so a saved setting shows
     in the list too; ``pipeline`` / ``auto_build`` the character's figure
-    pipeline and "Build automatically". Read-only; admin only like its
-    sibling hair routes (Ruling FR-minors)."""
+    pipeline and "Build automatically". Ruling A54: ``appearance_hair_text``
+    the standard text a new hairstyle starts from (``garment_hair.appearance_hair_text``,
+    what ``create_hairstyle`` uses for an empty description; "" for a bald or
+    non-humanoid character) — the "New hairstyle" dialog opens with it in its
+    field. Read-only; admin only like its sibling hair routes (Ruling FR-minors)."""
     from app.core import figure_build, garment_hair, garments
+    from app.core.model_refs import is_humanoid
     from app.models.character import get_character_profile
     _require_character(character_name)
     profile = get_character_profile(character_name) or {}
@@ -2329,7 +2333,9 @@ def get_character_hairstyles(character_name: str,
             "default_mode": garment_hair.default_mode(),
             "modes": list(garment_hair.HAIR_MODES), "built_modes": list(garment_hair.BUILT_MODES),
             "pipeline": bool(pipeline),
-            "auto_build": bool(pipeline and figure_build.auto_build_on(character_name, profile=profile))}
+            "auto_build": bool(pipeline and figure_build.auto_build_on(character_name, profile=profile)),
+            "appearance_hair_text": (garment_hair.appearance_hair_text(character_name, profile=profile)
+                                     if is_humanoid(character_name, profile=profile) else "")}
 
 
 @router.post("/{character_name}/hairstyles", status_code=201)
