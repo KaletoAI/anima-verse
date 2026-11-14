@@ -1799,10 +1799,13 @@ def _extension_rig_once(character_name: str, path: Path,
     if not repair_due and not tip_due and previous.get("attempted") and previous.get("status") in ("applied", "not_found", "none_applicable") and previous.get("fingerprint") == fingerprint and (not force or (previous.get("status") == "applied"
             and source_current and not part_failed)):
         return {"ok": previous.get("status") != "failed", "applied": False, "noop": True, "extension_rig": previous}
-    groups = [g for g in _extension_groups_for(meta, resolved_extension_groups(
-                  character_name, profile=profile, signature=path.stem, mesh_variant=mesh_variant,
-                  overrides=overrides))
-              if g["enabled"]]
+    resolved = _extension_groups_for(meta, resolved_extension_groups(
+        character_name, profile=profile, signature=path.stem, mesh_variant=mesh_variant, overrides=overrides))
+    groups = [g for g in resolved if g["enabled"]]
+    # A base body's switched-off tip parts that leave a neutral surface (Ruling A44, ``when_off: neutralise``).
+    from app.core.extension_tip import smoothing_ids
+    neutral_ids = smoothing_ids(resolved)[1] if _mesh_repair_target(meta, path) else []
+    neutralise = [g for g in resolved if g["id"] in neutral_ids]
     state = {"fingerprint": fingerprint, "groups": [g["id"] for g in declarations],
              "group_ops": {g["id"]: g["op"] for g in declarations},
              "group_params": {g["id"]: g["params"] for g in declarations if g["op"] in ("attached_part", "inset_part")},
@@ -1901,7 +1904,7 @@ def _extension_rig_once(character_name: str, path: Path,
             if not applied:
                 staged.write_bytes(before_part)
         if remaining:
-            result = refine.apply_script(staged, "extension_bones", {"groups": remaining},
+            result = refine.apply_script(staged, "extension_bones", {"groups": remaining, "neutralise": neutralise},
                                          validator=validator,
                                          require_smaller=False, keep_original=False,
                                          base_joints_only=True)
@@ -1910,7 +1913,8 @@ def _extension_rig_once(character_name: str, path: Path,
             # which starts from the clean source's texture every time.
             from app.core.extension_tip import paint_disc_masks
             state["metrics"].update(paint_disc_masks(
-                staged if result.get("applied") else None, remaining, data.get("metrics") or data.get("groups") or {}))
+                staged if result.get("applied") else None, remaining + neutralise,
+                data.get("metrics") or data.get("groups") or {}))
             if not result.get("applied"):
                 for group in remaining:
                     state["metrics"].setdefault(group["id"], {
@@ -1932,12 +1936,15 @@ def _extension_rig_once(character_name: str, path: Path,
         from app.core import extension_tip
         tip_ids = ([g["id"] for g in remaining if g["op"] == "pair_tip"]
                    if _mesh_repair_target(meta, path) else [])
+        # Neutralised only where the extension script ran (it needs the part's source placement).
+        neutral_ids = neutral_ids if remaining else []
         if publish:
             _publish_model_bytes(path, staged.read_bytes())
             meta["blender"] = source_meta.get("blender") or {}
             state.update(status="applied", has_applied=part_applied or bool(remaining and result.get("applied")))
-            if tip_ids:
-                meta["tip_smoothing"] = extension_tip.tip_smoothing_record(state["metrics"], tip_ids, utc_now_iso())
+            if tip_ids or neutral_ids:
+                meta["tip_smoothing"] = extension_tip.tip_smoothing_record(state["metrics"], tip_ids, utc_now_iso(),
+                                                                           neutral_ids)
             else:
                 meta.pop("tip_smoothing", None)
         else:
@@ -1947,7 +1954,7 @@ def _extension_rig_once(character_name: str, path: Path,
                 meta.pop("mesh_repair", None)
             else:
                 meta["mesh_repair"] = repair_before
-            if tip_ids:
+            if tip_ids or neutral_ids:
                 meta["tip_smoothing"] = extension_tip.tip_smoothing_failed(
                     meta.get("tip_smoothing"), state["reason"] or data.get("reason") or "", utc_now_iso())
         state["per_tier"][LOW_TIER if path.parent.name == LOW_TIER else FULL_TIER] = {

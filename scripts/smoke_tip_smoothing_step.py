@@ -169,7 +169,7 @@ try:
     check("[1] state light", (state or {}).get("light"), "warn")
     check("[1] state summary", (state or {}).get("summary"),
           "Not applied to this model yet — rebuilds the extension bones (local, no hub job)")
-    check("[1] state groups", (state or {}).get("groups"), [{"id": "T", "label": "Tips"}])
+    check("[1] state groups", (state or {}).get("groups"), [{"id": "T", "label": "Tips", "mode": "smoothed"}])
     check("[1] Build: tip smoothing due", figure_build._tip_smoothing_due(C, BSIG), True)
     plan_now = run_all()
     check("[1] Run all kind", plan_now["kind"], "tip_smoothing")

@@ -253,12 +253,19 @@ export interface TipSmoothingGroup {
   inverted: [number, number] | null
   off_60: [number, number] | null
   region_mm: number | null
+  /** "neutralised": the part is switched off and leaves a neutral surface (Ruling A44); absent = smoothed. */
+  mode?: 'smoothed' | 'neutralised'
+  /** Neutralised: per side the height of the model's own tip above its surroundings, [before, after] in mm. */
+  height_mm?: Array<[number | null, number | null]>
+  /** Neutralised: per side the colour difference (ΔE) of the part's area against the skin around it, [before, after]. */
+  delta_e?: Array<[number | null, number | null]>
+  painted?: number
 }
 
 /** `plain_body.tip_smoothing` of GET …/figure?plain=1 (`extension_tip.tip_smoothing_state`); null = no switched-on
  *  tip part on the base model (the row is hidden). */
 export interface TipSmoothingState {
-  groups: Array<{ id: string; label: string }>
+  groups: Array<{ id: string; label: string; mode?: 'smoothed' | 'neutralised' }>
   record: {
     version: number; at: string; status: 'built' | 'failed'; error: string
     groups: Record<string, TipSmoothingGroup>
@@ -277,6 +284,8 @@ export interface TipSmoothingState {
 /** The button: the extension rebuild of the base model, which smooths the tips again — local, no hub job. */
 export const TIP_SMOOTH_AGAIN_LABEL = 'Smooth again (local, no hub job)'
 export const TIP_SMOOTHING_DUE_LINE = 'Not applied to this model yet — rebuilds the extension bones (local, no hub job)'
+/** The reason of a switched-off tip part that leaves a neutral surface (Ruling A44; the server's `NEUTRALISED_REASON`). */
+export const NEUTRALISED_LINE = 'Smoothed and painted over — part is off'
 
 /** The status line beside the light: "Applied 01:12 — max shift 4.5 mm, inverted normals 22 → 0", or why nothing was
  *  smoothed, or that it is due. `time` formats the record's time (the tab's clock settings). */
@@ -285,7 +294,15 @@ export function tipSmoothingLine(state: TipSmoothingState, t: Tr = EN, time: (is
   if (!r || (state.due && (r.version ?? 0) < state.version)) return t(TIP_SMOOTHING_DUE_LINE)
   if (r.status === 'failed') return t('Last rebuild failed: {error}').replace('{error}', r.error || '?')
   if (state.due) return t('A tip part is not covered yet — rebuilds the extension bones (local, no hub job)')
-  const groups = Object.values(r.groups || {})
+  const all = Object.values(r.groups || {})
+  // A switched-off part (Ruling A44): its own reason first, then the switched-on parts' line, if any.
+  const neutral = all.filter((g) => g.mode === 'neutralised')
+  const groups = all.filter((g) => g.mode !== 'neutralised')
+  if (neutral.length) {
+    const texts = Array.from(new Set(neutral.map((g) => t(g.reason || NEUTRALISED_LINE))))
+    if (groups.length) texts.push(tipSmoothingLine({ ...state, record: { ...r, groups: Object.fromEntries(groups.map((g, i) => [String(i), g])) } }, t, time))
+    return texts.join('; ')
+  }
   const applied = groups.filter((g) => g.applied)
   if (!applied.length) {
     const reasons = Array.from(new Set(groups.map((g) => g.reason || 'Not smoothed')))
@@ -314,6 +331,17 @@ export function tipSmoothingDetail(state: TipSmoothingState, t: Tr = EN): string
   const label = (id: string) => state.groups.find((g) => g.id === id)?.label || id
   return Object.entries(r.groups || {}).map(([id, g]) => {
     const parts: string[] = []
+    const pairs = (rows: Array<[number | null, number | null]> | undefined, digits: number) =>
+      (rows || []).filter((v) => v && v[0] !== null && v[1] !== null)
+        .map((v) => `${(v[0] as number).toFixed(digits)} → ${(v[1] as number).toFixed(digits)}`).join(' / ')
+    if (g.mode === 'neutralised') {
+      parts.push(t(g.reason || NEUTRALISED_LINE))
+      const height = pairs(g.height_mm, 1)
+      if (height) parts.push(t('tip height {values} mm').replace('{values}', height))
+      const colour = pairs(g.delta_e, 1)
+      if (colour) parts.push(t('colour difference ΔE {values}').replace('{values}', colour))
+      return `${label(id)}: ${parts.join(', ')}`
+    }
     if (!g.applied) parts.push(t(g.reason || 'Not smoothed'))
     else {
       parts.push(t('max shift {mm} mm').replace('{mm}', (g.max_shift_mm ?? 0).toFixed(1)))

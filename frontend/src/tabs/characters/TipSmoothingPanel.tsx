@@ -11,8 +11,12 @@
  * - "Smooth again (local, no hub job)" — the extension rebuild of the base model (POST
  *   …/model3d/extension-tip/apply, the tip panels' Rebuild), also when it is current (rule R2).
  *
+ * A tip part switched off whose declaration leaves a neutral surface (Ruling A44, `when_off: neutralise`) shares the
+ * row: "Smoothed and painted over — part is off", its tip height and colour difference before → after in the tooltip.
+ *
  * It has no settings of its own: the footprint is the tip part's (its fill radius × the marker radius), so nothing
- * is saved here. Hidden when the base model carries no switched-on tip part (`plain_body.tip_smoothing` null).
+ * is saved here. Hidden when the base model carries neither a switched-on tip part nor a neutralised one
+ * (`plain_body.tip_smoothing` null).
  */
 import { useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -50,7 +54,7 @@ export function TipSmoothingPanel({ character, signature, state, disabled, onSta
   }
 
   const detail = tipSmoothingDetail(state, t).join('\n')
-  const help = t('Before a tip part is built, the base skin is smoothed over the part’s footprint and the moved skin gets the surface’s own normals, so no fold or dark spot stays under it. It runs inside the extension bones rebuild — on this computer, no hub job. No settings of its own: the footprint comes from the tip part.')
+  const help = t('Before a tip part is built, the base skin is smoothed over the part’s footprint and the moved skin gets the surface’s own normals, so no fold or dark spot stays under it. A tip part that is switched off is levelled onto the surface around it and painted over with the skin colour there instead. It runs inside the extension bones rebuild — on this computer, no hub job. No settings of its own: the footprint comes from the tip part.')
   return (
     // minWidth 0: a fieldset is min-content wide by default; the reason wraps instead of widening the side column.
     <fieldset className="ga-fieldset ga-model3d-group" title={help} style={{ minWidth: 0 }}>

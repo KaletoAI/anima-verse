@@ -399,6 +399,22 @@ outfit sidecar records `base_variant` (`covered`/`rigged`); a piece whose flag
 changes makes its wearers' outfit models stale (`stale_reason:
 detail_changed`). 2D renders are unaffected. The core never names the group.
 
+`when_off` (`nothing` | `neutralise`, default `nothing`; `pair_tip` groups only) says
+what a group leaves where it would sit while a base model has it switched off
+(the base body tip panel's switch). `nothing` keeps the source surface as the
+mesher made it. `neutralise` levels it: the region of the part's colour marker
+(max(1.2 × R, 12 mm), fading over 0.8 × that; R = the marker's equal-area
+radius, without a marker the stub radius) is flat-subdivided and moved along the
+surface normal onto a quadratic fitted to the outer skin on the ring 1.8–2.5 ×
+that radius, so the curve stays and the mesher's own tip, disc or crater goes; a
+second sheet under it is only lowered and ends 1 mm below the skin. The base
+colour there is painted over with the median colour of the ring 1.6–2.0 × R
+(full out to 1.15 × R, fading to nothing at 1.45 × R). No bone is built. The
+base body tab's "Tip smoothing (local)" row reports it ("Smoothed and painted
+over — part is off", tip height and colour difference ΔE before → after);
+switching the part on or off makes that row due. When the source placement is
+missing nothing changes and the row says so. CPU only, in the extension rebuild.
+
 `clothing_lift_default: {<clothing slot>: 0..1}` (mapping, default empty; keys
 must be in the body slot's `covered_by`) declares which clothing slots LIFT a
 rig group and by how much when a worn piece sets no `outfit_piece.lift` of its

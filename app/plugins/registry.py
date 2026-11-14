@@ -111,6 +111,10 @@ class RigSpec:
     # keeps a second model without these groups (``model3d/covered/``), and an
     # outfit whose worn pieces cover the slot is built from that one.
     exposed_only: bool = False
+    # What a ``pair_tip`` group leaves where it would sit while a model has it
+    # switched off: "nothing" (the source surface as it is) or "neutralise"
+    # (the skin smoothed and painted over with the colour around it).
+    when_off: str = "nothing"
     # How much a worn piece in a clothing slot lifts this group when the piece
     # sets no ``outfit_piece.lift`` of its own: ``{clothing slot: 0..1}``.
     # Only the slots named here lift the group at all (``motion_payload``).
@@ -254,6 +258,12 @@ class RigSpec:
         if not isinstance(exposed_only, bool):
             raise ValueError("rig.exposed_only must be a boolean")
         spec.exposed_only = exposed_only
+        when_off = raw.get("when_off", "nothing")
+        if when_off not in ("nothing", "neutralise"):
+            raise ValueError("rig.when_off must be 'nothing' or 'neutralise'")
+        if when_off != "nothing" and raw["op"].strip() != "pair_tip":
+            raise ValueError("rig.when_off applies to pair_tip groups only")
+        spec.when_off = when_off
         lift = raw.get("clothing_lift_default", {})
         if not isinstance(lift, dict) or any(
                 not isinstance(slot, str) or not slot.strip()

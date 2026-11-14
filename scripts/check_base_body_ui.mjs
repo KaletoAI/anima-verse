@@ -59,6 +59,11 @@
  *     shift 4.5 mm, inverted normals 22 → 0"; status failed, error "boom" → "Last rebuild failed: boom"; a kept own
  *     tip (applied false, reason R) → R. FieldBaseBody renders <MeshRepairPanel, <TipSmoothingPanel and
  *     <ExtensionTipPanel in that source order.
+ * [9] A switched-off tip part left neutral (Ruling A44): a record entry {mode neutralised, reason "Smoothed and painted
+ *     over — part is off", height_mm [[3.982, .05], [5.188, .004]], delta_e [[11.43, .69], [10.37, .22]]} → the line
+ *     is that reason; the detail "Tips: <reason>, tip height 4.0 → 0.1 / 5.2 → 0.0 mm, colour difference ΔE
+ *     11.4 → 0.7 / 10.4 → 0.2" (one decimal each); with a switched-on part U beside it, the line is the reason, "; ",
+ *     then U's "Applied 01:12 — …" line.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -221,6 +226,17 @@ check('[8] failed', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: '
   'Last rebuild failed: boom');
 check('[8] kept own tip', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: 'built', error: '',
   groups: { T: tipGroup({ applied: false, reason: 'R', max_shift_mm: null, inverted: null }) } })), 'R');
+// [9]
+const neutral = tipGroup({ mode: 'neutralised', reason: 'Smoothed and painted over — part is off', inverted: null,
+  off_60: null, height_mm: [[3.982, 0.05], [5.188, 0.004]], delta_e: [[11.43, 0.69], [10.37, 0.22]] });
+check('[9] neutralised line', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: 'built', error: '',
+  groups: { T: neutral } })), 'Smoothed and painted over — part is off');
+check('[9] neutralised detail', m.tipSmoothingDetail(tipState({ version: 1, at: 'x', status: 'built', error: '',
+  groups: { T: neutral } }))[0],
+  'Tips: Smoothed and painted over — part is off, tip height 4.0 → 0.1 / 5.2 → 0.0 mm, colour difference ΔE 11.4 → 0.7 / 10.4 → 0.2');
+check('[9] neutralised + smoothed', m.tipSmoothingLine(tipState({ version: 1, at: 'x', status: 'built', error: '',
+  groups: { T: neutral, U: tipGroup({}) } }), undefined, () => '01:12'),
+  'Smoothed and painted over — part is off; Applied 01:12 — max shift 4.5 mm, inverted normals 22 → 0');
 const panelOrder = ['<MeshRepairPanel', '<TipSmoothingPanel', '<ExtensionTipPanel'].map((tag) => baseTab.indexOf(tag));
 check('[8] panels in step order', panelOrder.every((at, i) => at >= 0 && (i === 0 || at > panelOrder[i - 1])), true);
 
