@@ -146,10 +146,26 @@ def hides_exposed_detail(groups, pieces, items):
 
 
 def extension_bone_names(character_name, profile=None):
-    """Validation context: full names mapped to parent and group identity."""
-    return {link["bone"]: {"parent": link["parent"], "group": group["id"]}
-            for group in rig_groups_for(character_name, profile)
-            for chain in group["chains"] for link in chain}
+    """Validation context: full names mapped to parent and group identity.
+
+    The bones of every group the character's slots declare with their separate mesh part off AND on — never only
+    the resolution of the outfit worn now: a stored model's bones follow the mesh it was rendered for (the base
+    body shows the part its unclothed inputs carry, Ruling A49; an outfit model the part its own outfit leaves
+    exposed), so a model built under one outfit is not refused while another is worn."""
+    from app.core.body_slots import mesh_variant_token
+    from app.plugins.registry import packages
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    every_part = "".join(mesh_variant_token(slot) for package in packages() for slot in package.body_slots
+                         if slot.mesh_part)
+    names = {}
+    for variant in ("", every_part):
+        for group in rig_groups_for(character_name, profile, variant):
+            for chain in group["chains"]:
+                for link in chain:
+                    names.setdefault(link["bone"], {"parent": link["parent"], "group": group["id"]})
+    return names
 
 
 # Bump an operation when its builder changes geometry for the same declaration;
@@ -582,12 +598,13 @@ def motion_payload(character_name, profile=None, *, apply_clothing=True, apply_s
     return {"rev": _revision(inputs), "groups": groups}
 
 
-def extension_metadata(character_name, profile=None, signature=None):
-    """Reserved sidecar state; P0 never claims an application succeeded."""
+def extension_metadata(character_name, profile=None, signature=None, mesh_variant=None):
+    """Reserved sidecar state; P0 never claims an application succeeded.
+    ``mesh_variant`` is the stored model's token (see ``rig_groups_for``)."""
     if profile is None:
         from app.models.character import get_character_profile
         profile = get_character_profile(character_name) or {}
-    groups = rig_groups_for(character_name, profile)
+    groups = rig_groups_for(character_name, profile, mesh_variant)
     overrides = model_extension_overrides(profile, signature)
     return {"fingerprint": extension_rig_fingerprint(groups, overrides),
             "groups": [g["id"] for g in groups],

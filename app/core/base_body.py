@@ -1017,8 +1017,9 @@ def generate_base_model(character_name: str, *, force: bool = False,
     The staged mesh run of ``model3d.generate_for_current_outfit`` with
     ``signature=<bsig>`` and ``base=True`` (frozen into the hub-op inputs):
     source ``tpose_<bsig>``, every stored base view, the character's mesh
-    occasion; after the rig no anatomy parts and no distance tier, the
-    sidecar records ``"base": true`` and the unrigged checkpoint
+    occasion; after the rig the parts its unclothed views were rendered for
+    (Ruling A49) and no distance tier, the sidecar records ``"base": true``
+    and the mesh variant of its front, and the unrigged checkpoint
     ``model3d/unrigged/<bsig>.glb`` stays. Cached per base signature unless
     ``force``.
 
@@ -4052,8 +4053,8 @@ def build_outfit_model(character_name: str, signature: str, *, force: bool = Fal
 # via the character's mesh occasion → face cleanup (per-character switch)
 # → face retexture before the rig when the character has it on → rig via the
 # ``rig_humanoid`` chain → texture re-encode → normalize (posture restore from
-# the retained unrigged source) → extension rig (no anatomy-part batches, like
-# the base) → collision capsules). Routing per step as on the old path,
+# the retained unrigged source) → extension rig (no part batches) → collision
+# capsules). Routing per step as on the old path,
 # per-character overrides included.
 #
 # Body id = SHAPE KEY (``figure.shape_key_of`` over ``figure.shape_inputs``):

@@ -23,10 +23,12 @@ pure pieces.
       trousers slot legs (plain group's slot only)   -> False
       exposed_detail "true" (a string, not True)     -> True  (only real true)
     without an exposed_only group                    -> False
-[3] _extension_groups_for: a base drops PART_OPS (attached_part); a covered
-    variant (base + base_variant covered) also drops exposed_only; an outfit
+[3] _extension_groups_for: a base keeps PART_OPS (attached_part — Ruling A49: the
+    base body is the unclothed body and shows the part); a covered variant
+    (base + base_variant covered) drops the part and exposed_only; an outfit
     built from it (base_variant covered, no base) keeps the part, drops the
-    exposed_only group; a rigged outfit keeps all three.
+    exposed_only group; a rigged outfit keeps all three; an outfit body drops
+    the part.
 [4] restore_face_texels, base colour 4x4 (100,50,25,255), atlas 4x4
     (0,0,0,255) with (0,0) already (100,50,25,255); face mask texels 0,1,4
     (row-major: (0,0),(1,0),(0,1)) -> packbits bytes C8 00:
@@ -175,10 +177,11 @@ def main() -> int:
     decl = [{"id": "part", "op": "attached_part"}, {"id": "d", "op": "pair_tip", "exposed_only": True},
             {"id": "j", "op": "jiggle"}]
     ids = lambda meta: [g["id"] for g in model3d._extension_groups_for(meta, decl)]  # noqa: E731
-    check("base", ids({"base": True}), ["d", "j"])
+    check("base", ids({"base": True}), ["part", "d", "j"])
     check("covered variant", ids({"base": True, "base_variant": "covered"}), ["j"])
     check("outfit on covered", ids({"base_variant": "covered"}), ["part", "j"])
     check("outfit on rigged", ids({"base_variant": "rigged"}), ["part", "d", "j"])
+    check("outfit body", ids({"outfit_body": {"parent": "x"}}), ["d", "j"])
 
     print("[4] restore_face_texels")
     skin = (100, 50, 25, 255)

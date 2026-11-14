@@ -1872,7 +1872,13 @@ for the part, each declared group keeps its ID and chains. "Rendered for the
 part" means the stored model's `mesh_variant` carries the slot token
 `|mesh:<package>.<slot>=on` — which it only does when the slot was exposed in
 that model's outfit (without a stored model, the worn outfit decides the same
-way). Otherwise the switch reads `"off"` for every rig condition: no part op
+way). A base body is rendered unclothed, so its record carries the token of its
+front image, never the worn outfit's; an older base record without one takes the
+token from that front's sidecar while the front is still the image the model was
+built from, and otherwise none (Ruling A49). The base body builds the part; an
+outfit model painted onto it that covers the slot is rebuilt from the clean
+source without it, and inherits no collision capsule of a group it does not
+carry. Otherwise the switch reads `"off"` for every rig condition: no part op
 and no group conditioned on `attributes.<switch>: ["on"]` is built over
 clothing or over anatomy the generator drew itself. An `appendage_chain` becomes `attached_part`; other
 operations keep their op. Parameters combine the declared rig parameters and

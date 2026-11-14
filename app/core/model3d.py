@@ -1259,7 +1259,8 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
         # Which resolutions exist for THIS file. "full" is always there (it is
         # the file itself); "low" only once it has been built.
         from app.core.extension_rig import extension_metadata
-        info.setdefault("extension_rig", extension_metadata(character_name, profile=profile, signature=path.stem))
+        info.setdefault("extension_rig", extension_metadata(character_name, profile=profile, signature=path.stem,
+                                                            mesh_variant=stored_mesh_variant(character_name, _read_sidecar(path))))
         part = attached_part_info(info["extension_rig"])
         if part is not None:
             info["attached_part"] = part
@@ -1334,7 +1335,7 @@ def get_model3d_info(character_name: str, *, preview_states=None) -> Dict[str, A
     served_meta = _read_sidecar(path) if path else {}
     out["extension_groups"] = rig_groups_for(
         character_name, profile=profile,
-        mesh_variant=(served_meta.get("mesh_variant") or "") if path else None)
+        mesh_variant=stored_mesh_variant(character_name, served_meta) if path else None)
     # Switches an outfit model takes from its base model (shown locked).
     out["extension_inherited"] = inherited_extension_switches(
         profile, path.stem, served_meta, _extension_groups_for(served_meta, out["extension_groups"])) if path else {}
@@ -1545,7 +1546,7 @@ def _read_sidecar(path: Path) -> Dict[str, Any]:
         return {}
 
 
-# Extension-group operations that build an anatomy part (and its bone).
+# Extension-group operations that build a procedural part (and its bone).
 PART_OPS = ("attached_part", "attached_part_bone", "inset_part")
 
 
@@ -1589,16 +1590,170 @@ def _auto_collision(character_name: str, path: Path, meta: Dict[str, Any]) -> bo
 
 
 def _extension_groups_for(meta: Dict[str, Any], groups):
-    """The extension groups a model of ``meta`` carries: a base body — and
-    an outfit body (``meta["outfit_body"]``) — never
-    the anatomy parts (``PART_OPS``, they belong to the outfit models), the
-    covered variant of a base body — and an outfit built from it
-    (``base_variant: "covered"``) — never the ``exposed_only`` groups."""
-    if meta.get("base") or meta.get("outfit_body"):
+    """The extension groups a model of ``meta`` carries.
+
+    The base body is the unclothed body (Ruling A49): it carries every group
+    its own mesh variant (``stored_mesh_variant``) resolves, the part
+    operations (``PART_OPS``) included, so the Base body tab shows the part
+    the slot's switch asks for. An outfit model painted onto the base never
+    keeps it under clothing: its own mesh variant resolves the part off where
+    the outfit covers the slot, and its extension rig then rebuilds it from
+    the clean prerig without the part (``_extension_rig_once``,
+    ``_stale_part_groups``). The covered variant of a base body
+    (``base_variant: "covered"`` on the base record itself) and an outfit
+    body (``meta["outfit_body"]``, a mesh made from a dressed render) carry
+    no part operation; the covered variant — and an outfit built from it —
+    no ``exposed_only`` group either."""
+    if meta.get("outfit_body") or (meta.get("base") and meta.get("base_variant") == "covered"):
         groups = [g for g in groups if g["op"] not in PART_OPS]
     if meta.get("base_variant") == "covered":
         groups = [g for g in groups if not g.get("exposed_only")]
     return groups
+
+
+def stored_mesh_variant(character_name: str, meta: Dict[str, Any]) -> str:
+    """The mesh variant a stored model was rendered for (``model_refs.mesh_variant``: the
+    ``|mesh:<package>.<slot>=on`` token of every slot whose separate mesh part was on and exposed in its mesh
+    inputs) — what ``extension_rig.rig_groups_for`` resolves the model's part groups by.
+
+    An outfit model records it from its T-pose manifest; "" without one. A base body records it since Ruling
+    A49 (its build copies the token its front recorded; its extension rig adds it to an older record). A base
+    record from before that has none, and the worn outfit must not decide for it (the base is always rendered
+    unclothed): its INPUTS decide — the ``mesh_variant`` the sidecar of its front image recorded
+    (``model_refs/<source_image>.json``), but only while that front is still the image the model was built
+    from (its sha256 equals the record's ``source_image_sha256``). A front rendered again since, a front
+    without a record, or a record without a source hash gives "": a base built from images made before the
+    part switch was turned on never claims the part — its mesh may carry the generator's own shape there."""
+    if "mesh_variant" in meta or not meta.get("base"):
+        return str(meta.get("mesh_variant") or "")
+    source_name = str(meta.get("source_image") or "")
+    expected = str(meta.get("source_image_sha256") or "")
+    if not source_name or not expected or Path(source_name).name != source_name:
+        return ""
+    from app.core.base_body import file_sha256
+    from app.core.model_refs import get_model_refs_dir
+    front = get_model_refs_dir(character_name) / source_name
+    if file_sha256(front) != expected:
+        return ""
+    try:
+        record = json.loads(front.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    return str(record.get("mesh_variant") or "") if isinstance(record, dict) else ""
+
+
+def _stale_part_groups(previous: Dict[str, Any], declarations) -> List[str]:
+    """The part groups (``PART_OPS``) the model's current bytes carry from ``previous`` (its extension rig
+    record — on an outfit model the copy of its base's) that ``declarations`` no longer build as a part: an
+    outfit painted onto a base that shows the part, worn where the outfit covers the slot. Its rebuild must
+    publish the clean body even when nothing else is found."""
+    if not previous.get("has_applied", previous.get("status") == "applied"):
+        return []
+    now = {g["id"] for g in declarations if g["op"] in PART_OPS}
+    metrics = previous.get("metrics") or {}
+    return sorted(gid for gid, op in (previous.get("group_ops") or {}).items()
+                  if op in PART_OPS and gid not in now
+                  and ((metrics.get(gid) or {}).get("status") or "applied") == "applied")
+
+
+# The per-group light of the Base body tab's "Extension bones" box (Ruling A49): ``extension_group_lights``.
+# English, translated by the client (de.json keys).
+EXT_STATE_BUILT = "Built"
+EXT_STATE_OFF = "Off"
+EXT_STATE_DUE = "Due"
+EXT_STATE_NOT_BUILT = "Not built"
+EXT_STATE_FAILED = "Failed"
+EXT_REASON_OFF = "Switched off for this model; a rebuild leaves it out."
+EXT_REASON_NOT_YET = "Not built yet. Rebuild (local, no hub job) builds it."
+EXT_REASON_NEW_GROUP = "Not part of the last build. Rebuild (local, no hub job) builds it."
+EXT_REASON_PART_DUE = ("The mesh has no protrusion here: the part is set as its own mesh part, but these bones were "
+                       "built while the base counted as clothed. Rebuild (local, no hub job) builds the part.")
+EXT_REASON_OP_CHANGED = ("The slot's part switch changed since these bones were built. Rebuild (local, no hub job) "
+                         "builds them anew.")
+EXT_REASON_OLD_INPUTS = ("The mesh has no protrusion here. The slot's own mesh part is on, but this base was "
+                         "rendered before it was turned on: render the base views again (hub jobs) to build the part.")
+EXT_REASON_SWITCH_OFF = ("The mesh has no protrusion here, so there is nothing to rig. Turn on the slot's own mesh "
+                         "part in the body editor to have the part built.")
+EXT_REASON_NOT_FOUND = "No matching shape was found in the mesh here, so these bones were not built."
+EXT_REASON_FAILED = "The build failed. Rebuild (local, no hub job) tries again."
+
+
+def _part_slot_of(group_id: str):
+    """The body slot whose separate mesh part (``mesh_part.rigs``) names ``group_id``, None without one."""
+    from app.plugins.registry import packages
+    for package in packages():
+        for slot in package.body_slots:
+            if slot.mesh_part and group_id in slot.mesh_part.rigs:
+                return slot
+    return None
+
+
+def extension_groups_changed(meta: Dict[str, Any], groups) -> bool:
+    """Whether the groups (ids and ops) ``groups`` resolves for a stored model differ from the ones its extension
+    rig record was built with — e.g. a base body that now counts as unclothed (Ruling A49) and builds a part
+    where the record searched the mesh. False without an attempted record (its own run builds it)."""
+    record = meta.get("extension_rig") or {}
+    if not record.get("attempted"):
+        return False
+    return dict(record.get("group_ops") or {}) != {g["id"]: g["op"] for g in groups}
+
+
+def extension_group_lights(profile: Dict[str, Any], meta: Dict[str, Any], groups, result: Dict[str, Any],
+                           mesh_variant: str) -> Dict[str, Dict[str, str]]:
+    """``{group id: {light, state, reason, detail}}`` — one traffic light per group the model carries (``groups``,
+    resolved with ``enabled``) against its extension rig record ``result``, so a group whose build found nothing
+    never reads as simply active (Ruling A49). ``light``: green built · yellow due or not built · red failed ·
+    grey off. ``reason`` is the plain sentence (what happened, what fixes it), ``detail`` the record's own reason.
+
+    A group that found nothing (``not_found``, or a group metric with a reason) is explained by its slot: the
+    record searched the mesh where the model now builds the slot's part (the base counted as clothed when it was
+    built) → rebuild; the part is on but the model's inputs were rendered before it → render the base views again;
+    the slot offers a part that is off → turn it on; otherwise no matching shape was found."""
+    from app.core.body_slots import mesh_part_active, mesh_variant_token
+    recorded_ops = result.get("group_ops") or {}
+    metrics = result.get("metrics") or {}
+    status = str(result.get("status") or "")
+    lights: Dict[str, Dict[str, str]] = {}
+    for group in groups:
+        gid = group["id"]
+        metric = metrics.get(gid) if isinstance(metrics.get(gid), dict) else {}
+        detail = str(metric.get("reason") or "")
+
+        def light(colour: str, state: str, reason: str, detail: str = detail) -> Dict[str, str]:
+            return {"light": colour, "state": state, "reason": reason, "detail": detail}
+
+        if group.get("enabled") is False:
+            lights[gid] = light("grey", EXT_STATE_OFF, EXT_REASON_OFF, "")
+            continue
+        if not result.get("attempted"):
+            lights[gid] = light("yellow", EXT_STATE_DUE, EXT_REASON_NOT_YET, "")
+            continue
+        recorded = recorded_ops.get(gid)
+        if recorded is None:
+            lights[gid] = light("yellow", EXT_STATE_DUE, EXT_REASON_NEW_GROUP, "")
+            continue
+        found = metric.get("status") == "applied" or (
+            status == "applied" and not detail and metric.get("status") not in ("failed", "not_found"))
+        if recorded != group["op"]:
+            part_now = group["op"] in PART_OPS and recorded not in PART_OPS
+            lights[gid] = light("yellow", EXT_STATE_NOT_BUILT if part_now and not found else EXT_STATE_DUE,
+                                EXT_REASON_PART_DUE if part_now and not found else EXT_REASON_OP_CHANGED)
+            continue
+        if metric.get("status") == "failed" or (status == "failed" and not found):
+            lights[gid] = light("red", EXT_STATE_FAILED, EXT_REASON_FAILED,
+                                detail or str(result.get("reason") or ""))
+            continue
+        if found:
+            lights[gid] = light("green", EXT_STATE_BUILT, "", "")
+            continue
+        slot = _part_slot_of(gid)
+        if slot is not None and group["op"] not in PART_OPS:
+            reason = (EXT_REASON_OLD_INPUTS if mesh_part_active(slot, profile)
+                      and mesh_variant_token(slot) not in mesh_variant else EXT_REASON_SWITCH_OFF)
+        else:
+            reason = EXT_REASON_NOT_FOUND
+        lights[gid] = light("yellow", EXT_STATE_NOT_BUILT, reason, detail or str(result.get("reason") or ""))
+    return lights
 
 
 def model_extension_state(character_name: str, signature: str) -> Optional[Dict[str, Any]]:
@@ -1609,10 +1764,16 @@ def model_extension_state(character_name: str, signature: str) -> Optional[Dict[
     ``extension_metadata`` while none is stored, with the distance mesh's record under ``per_tier.low``),
     ``tiers`` (``available_tiers``), ``low_tris``, ``motion`` (``motion_payload`` without the worn
     clothing and states — the base body is shown bare), ``due`` (the saved switches differ from the ones the
-    rig was built with, ``extension_settings_changed``) and ``running`` (the background rebuild of
-    ``extension_tip.start_tip_rebuild`` runs on this model). None without a stored model; never raises."""
+    rig was built with, ``extension_settings_changed``), ``due_reason`` (``"groups"`` when the groups themselves
+    changed since that build — ``extension_groups_changed``, e.g. a base that counts as unclothed now (Ruling
+    A49) — else ``"settings"``; "" when not due), ``lights`` (``extension_group_lights``: one traffic light per
+    group, so a group that found nothing never reads as simply active) and ``running`` (the background rebuild of
+    ``extension_tip.start_tip_rebuild`` runs on this model). The groups resolve with the model's OWN mesh variant
+    (``stored_mesh_variant``) — never the worn outfit: the base body is always unclothed. None without a stored
+    model; never raises."""
     from app.core import extension_tip
-    from app.core.extension_rig import extension_metadata, motion_payload, rig_groups_for
+    from app.core.extension_rig import (effective_extension_overrides, extension_metadata, motion_payload,
+                                       resolved_extension_groups, rig_groups_for)
     from app.models.character import get_character_profile
     try:
         path = find_model3d(character_name, signature)
@@ -1620,10 +1781,15 @@ def model_extension_state(character_name: str, signature: str) -> Optional[Dict[
             return None
         meta = _read_sidecar(path)
         profile = get_character_profile(character_name) or {}
-        groups = _extension_groups_for(meta, rig_groups_for(
-            character_name, profile=profile, mesh_variant=meta.get("mesh_variant") or ""))
+        variant = stored_mesh_variant(character_name, meta)
+        groups = _extension_groups_for(meta, rig_groups_for(character_name, profile=profile, mesh_variant=variant))
         result = meta.get("extension_rig") if isinstance(meta.get("extension_rig"), dict) else None
-        result = dict(result or extension_metadata(character_name, profile=profile, signature=signature))
+        result = dict(result or extension_metadata(character_name, profile=profile, signature=signature,
+                                                   mesh_variant=variant))
+        resolved = _extension_groups_for(meta, resolved_extension_groups(
+            character_name, profile=profile, signature=signature, mesh_variant=variant,
+            overrides=effective_extension_overrides(profile, signature, meta, groups)))
+        due = bool(extension_settings_changed(character_name, path, meta))
         low = tier_variant(path, LOW_TIER)
         low_tris = None
         if low:
@@ -1633,7 +1799,9 @@ def model_extension_state(character_name: str, signature: str) -> Optional[Dict[
                 result["per_tier"] = {**(result.get("per_tier") or {}), LOW_TIER: low_meta["extension_rig"]}
         return {"groups": groups, "result": result, "tiers": available_tiers(path), "low_tris": low_tris,
                 "motion": motion_payload(character_name, profile=profile, apply_clothing=False, apply_states=False),
-                "due": bool(extension_settings_changed(character_name, path, meta)),
+                "due": due,
+                "due_reason": ("groups" if extension_groups_changed(meta, groups) else "settings") if due else "",
+                "lights": extension_group_lights(profile, meta, resolved, result, variant),
                 "running": extension_tip.rebuild_running(character_name) == signature}
     except Exception:  # noqa: BLE001 — the poll never fails on the box
         logger.exception("Extension state of %s (%s) failed", character_name, signature)
@@ -1662,7 +1830,7 @@ def _auto_covered_variant(character_name: str, path: Path, meta: Dict[str, Any],
     target = path.parent / COVERED_DIR / path.name
     profile = get_character_profile(character_name) or {}
     declarations = _extension_groups_for(meta, rig_groups_for(
-        character_name, profile=profile, mesh_variant=meta.get("mesh_variant") or ""))
+        character_name, profile=profile, mesh_variant=stored_mesh_variant(character_name, meta)))
     removed = sorted(g["id"] for g in declarations if g.get("exposed_only"))
     before = meta.get("covered_variant")
     if not removed or path.suffix.lower() != ".glb" or meta.get("rig") != "mixamo":
@@ -1699,7 +1867,7 @@ def _auto_covered_variant(character_name: str, path: Path, meta: Dict[str, Any],
         _publish_sidecar(Path(tmp) / "prerig" / path.name, source_meta)
         covered_meta: Dict[str, Any] = {"rig": "mixamo", "base": True, "base_variant": "covered",
                                         "blender": source_meta.get("blender") or {},
-                                        "mesh_variant": meta.get("mesh_variant") or ""}
+                                        "mesh_variant": stored_mesh_variant(character_name, meta)}
         result = _extension_rig_once(character_name, work, covered_meta, force=True)
         state = covered_meta.get("extension_rig") or {}
         if not result.get("ok") or state.get("status") == "failed":
@@ -1808,14 +1976,23 @@ def _extension_rig_once(character_name: str, path: Path,
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name) or {}
     # The part follows how THIS mesh was rendered: a source drawn with
-    # clothing (or anatomy) over the slot never gets a procedural part.
-    mesh_variant = meta.get("mesh_variant") or ""
+    # clothing (or anatomy) over the slot never gets a procedural part. A
+    # base body is rendered unclothed: its record keeps the token its inputs
+    # carried (Ruling A49 — an older record gets it here, derived from them).
+    mesh_variant = stored_mesh_variant(character_name, meta)
+    if meta.get("base") and not meta.get("base_variant"):
+        meta["mesh_variant"] = mesh_variant
     declarations = rig_groups_for(character_name, profile=profile, mesh_variant=mesh_variant)
-    # A base body gets every extension group BUT the anatomy parts: those
-    # belong to the outfit models painted onto it (spec B.4), which inherit
-    # this rig with its jiggle/secondary bones. A covered variant (and an
-    # outfit built from it) leaves the exposed-only groups out as well.
+    # The groups THIS model carries (``_extension_groups_for``): the base body
+    # every group with its part; its covered variant and an outfit body no
+    # part, the covered variant (and an outfit built from it) no exposed-only
+    # group. An outfit inherits the base's rig with its secondary bones.
     declarations = _extension_groups_for(meta, declarations)
+    # Parts the current bytes carry that this model no longer builds (an
+    # outfit copied from a base that shows the part, worn where the outfit
+    # covers the slot): its rebuild publishes the clean body even when
+    # nothing else is found.
+    stale_parts = _stale_part_groups(meta.get("extension_rig") or {}, declarations)
     overrides = effective_extension_overrides(profile, path.stem, meta, declarations)
     fingerprint = extension_rig_fingerprint(declarations, overrides)
     previous = meta.get("extension_rig") or {}
@@ -1965,7 +2142,7 @@ def _extension_rig_once(character_name: str, path: Path,
         state["reason"] = data.get("reason") or result.get("error") or ""
         # A failed part publishes a validated clean body (with other extensions
         # when available), replacing any stale part from a previous build.
-        publish = bool(result.get("applied")) or bool(batches)
+        publish = bool(result.get("applied")) or bool(batches) or bool(stale_parts)
         if publish:
             verdict = validator(staged.read_bytes())
             if not verdict.get("ok"):
@@ -1980,7 +2157,12 @@ def _extension_rig_once(character_name: str, path: Path,
         if publish:
             _publish_model_bytes(path, staged.read_bytes())
             meta["blender"] = source_meta.get("blender") or {}
-            state.update(status="applied", has_applied=part_applied or bool(remaining and result.get("applied")))
+            if result.get("applied") or batches:
+                state.update(status="applied", has_applied=part_applied or bool(remaining and result.get("applied")))
+            else:
+                # Published only to take a stale part off (``stale_parts``): the clean body, nothing built.
+                state.update(status=data.get("status") if data.get("status") in ("not_found", "failed")
+                             else "failed", has_applied=False)
             if tip_ids or neutral_ids:
                 meta["tip_smoothing"] = extension_tip.tip_smoothing_record(state["metrics"], tip_ids, utc_now_iso(),
                                                                            neutral_ids)
@@ -2011,7 +2193,7 @@ def _extension_state_current(character_name: str, path: Path, meta: Dict[str, An
     from app.models.character import get_character_profile
     profile = get_character_profile(character_name) or {}
     declarations = _extension_groups_for(meta, rig_groups_for(
-        character_name, profile=profile, mesh_variant=meta.get("mesh_variant") or ""))
+        character_name, profile=profile, mesh_variant=stored_mesh_variant(character_name, meta)))
     previous = meta.get("extension_rig") or {}
     return bool(previous.get("attempted")
                 and previous.get("status") in ("applied", "not_found", "none_applicable")
@@ -2137,16 +2319,31 @@ def extension_settings_changed(character_name: str, path: Path, meta: Optional[D
         return False
     profile = get_character_profile(character_name) or {}
     declarations = _extension_groups_for(meta, rig_groups_for(
-        character_name, profile=profile, mesh_variant=meta.get("mesh_variant") or ""))
+        character_name, profile=profile, mesh_variant=stored_mesh_variant(character_name, meta)))
     return previous.get("fingerprint") != extension_rig_fingerprint(
         declarations, effective_extension_overrides(profile, path.stem, meta, declarations))
+
+
+def extension_due_reason(character_name: str, path: Path, meta: Optional[Dict[str, Any]] = None) -> str:
+    """Why the stored model ``path`` is due for an extension rebuild: ``"groups"`` when the groups themselves
+    changed since its build (``extension_groups_changed`` — e.g. a base body that counts as unclothed now, Ruling
+    A49), ``"settings"`` when only saved settings did (``extension_settings_changed``), "" when not due."""
+    from app.core.extension_rig import rig_groups_for
+    from app.models.character import get_character_profile
+    meta = _read_sidecar(path) if meta is None else meta
+    if not extension_settings_changed(character_name, path, meta):
+        return ""
+    profile = get_character_profile(character_name) or {}
+    groups = _extension_groups_for(meta, rig_groups_for(
+        character_name, profile=profile, mesh_variant=stored_mesh_variant(character_name, meta)))
+    return "groups" if extension_groups_changed(meta, groups) else "settings"
 
 
 def extension_state_current(character_name: str, path: Path, meta: Dict[str, Any]) -> bool:
     """Public form of ``_extension_state_current`` (the Improvements type's
     completion check): the stored extension state of ``path`` matches what a
-    rebuild would produce now — with the groups THIS model carries (a base
-    body without the anatomy parts, a covered variant without the
+    rebuild would produce now — with the groups THIS model carries
+    (``_extension_groups_for``: a covered variant without the parts and the
     exposed-only groups)."""
     return _extension_state_current(character_name, path, meta)
 
@@ -2763,7 +2960,7 @@ def build_lod(character_name: str, signature: Optional[str] = None, *,
         # and only the enabled ones — a group switched off for this model was never built.
         from app.core.extension_rig import resolved_extension_groups
         measured_groups = [g for g in resolved_extension_groups(character_name, signature=path.stem,
-                                                                mesh_variant=meta.get("mesh_variant") or "")
+                                                                mesh_variant=stored_mesh_variant(character_name, meta))
                            if g["enabled"] and g["op"] not in ("attached_part", "attached_part_bone", "inset_part")]
         if (meta.get("extension_rig") or {}).get("status") == "applied" and measured_groups:
             measured = runner.run("extension_bones", inputs={"model": next(iter(res["outputs"].values()))},
@@ -2914,6 +3111,15 @@ def migrate_legacy_model_store_once() -> None:
 def _char_lock(character_name: str) -> threading.Lock:
     with _lock:
         return _char_locks.setdefault(character_name, threading.Lock())
+
+
+def _ref_mesh_variant(ref_image: Path) -> str:
+    """The ``mesh_variant`` the sidecar of the T-pose render ``ref_image`` recorded, "" without one."""
+    try:
+        meta = json.loads(ref_image.with_suffix(".json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return str(meta.get("mesh_variant") or "") if isinstance(meta, dict) else ""
 
 
 def _ref_manifest(ref_image: Path) -> Dict[str, Any]:
@@ -3316,7 +3522,7 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
     ``base_body.prepare_shape``) builds a MESHED SHAPE instead: the sidecar
     manifest to freeze (``{"outfit_body": <parent record>, "base_variant":
     …}``) replaces the outfit manifest, every stored view of the body id
-    goes in (like the base), the anatomy-part batches and the distance tier
+    goes in (like the base), the part batches and the distance tier
     are skipped (``outfit_body`` in the sidecar). Before an outfit run the
     shape of the outfit's wanted figure is made sure of first, and the
     outfit's views follow the figure then delivered
@@ -3325,9 +3531,10 @@ def generate_for_current_outfit(character_name: str, *, force: bool = False,
 
     ``base=True`` (with ``signature`` = the base signature,
     ``base_body.generate_base_model``) builds the base body instead: every
-    stored base view goes in whatever the view toggles say, the anatomy-part
-    extension batches and the distance tier are skipped, the sidecar records
-    ``"base": true``. The flag is frozen into the record, so a resume behaves
+    stored base view goes in whatever the view toggles say, the extension
+    rig builds the parts its unclothed front was rendered for (Ruling A49:
+    the sidecar records that front's ``mesh_variant``), the distance tier is
+    skipped, the sidecar records ``"base": true``. The flag is frozen into the record, so a resume behaves
     the same.
 
     A character on the base-body pipeline (``base_body.is_base_pipeline``)
@@ -3536,9 +3743,12 @@ def _generate_for_current_outfit(character_name: str, *, force: bool = False,
                 "source_image_sha256": hashlib.sha256(source_bytes).hexdigest(),
                 "view_images": {v: Path(p).name for v, p in view_images.items()},
                 "view_images_sha256": {v: hashlib.sha256(blob).hexdigest() for v, blob in view_bytes.items()},
-                # A base body stands for no outfit: no piece manifest; an
-                # outfit body carries its parent record instead.
-                "manifest": {} if base else dict(outfit_body) if outfit_body is not None else _ref_manifest(src),
+                # A base body stands for no outfit: no piece manifest, only
+                # the mesh variant its unclothed front was rendered for
+                # (Ruling A49, ``stored_mesh_variant``); an outfit body
+                # carries its parent record instead.
+                "manifest": ({"mesh_variant": _ref_mesh_variant(src)} if base
+                             else dict(outfit_body) if outfit_body is not None else _ref_manifest(src)),
                 **({"base": True} if base else {}),
                 **face_inputs,
             }, label=f"{'Base-body 3D model' if base else 'Outfit-body 3D model' if outfit_body else '3D model'}: "
@@ -3768,7 +3978,7 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
         meta["face_cleanup"] = face_cleanup
     _auto_retexture(character_name, path, meta)
     _auto_normalize(character_name, path, meta)
-    # Reads meta["base"]: a base body skips the anatomy-part batches.
+    # Reads meta["base"] and ``mesh_variant``: a base body builds the parts its unclothed inputs were rendered for.
     _auto_extension_rig(character_name, path, meta)
     # AFTER the re-encode and the normalisation: the numbers have to
     # describe the file that is actually served, not the one the backend
@@ -3779,7 +3989,8 @@ def _character_mesh_stages(character_name: str, op) -> Dict[str, Any]:
     # build costs under a second against the minutes this generation just
     # took.
     from app.core.extension_rig import extension_metadata
-    meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem))
+    meta.setdefault("extension_rig", extension_metadata(character_name, signature=path.stem,
+                                                        mesh_variant=stored_mesh_variant(character_name, meta)))
     _publish_sidecar(path, meta)
     if not base:
         request_lod(character_name, path)

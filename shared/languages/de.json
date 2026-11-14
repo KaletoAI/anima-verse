@@ -5307,6 +5307,17 @@
     "Shown fit": "Gezeigte Anpassung",
     "Left sleeve": "Linker Ärmel",
     "Right sleeve": "Rechter Ärmel",
-    "Set: no extra width": "Eingestellt: keine zusätzliche Weite"
+    "Set: no extra width": "Eingestellt: keine zusätzliche Weite",
+    "Build record": "Bauprotokoll",
+    "Switched off for this model; a rebuild leaves it out.": "Für dieses Modell ausgeschaltet; ein Neubau lässt es weg.",
+    "Not built yet. Rebuild (local, no hub job) builds it.": "Noch nicht gebaut. „Neu bauen“ (lokal, kein Hub-Job) baut es.",
+    "Not part of the last build. Rebuild (local, no hub job) builds it.": "War beim letzten Bau nicht dabei. „Neu bauen“ (lokal, kein Hub-Job) baut es.",
+    "The mesh has no protrusion here: the part is set as its own mesh part, but these bones were built while the base counted as clothed. Rebuild (local, no hub job) builds the part.": "Das Mesh hat hier keine Ausformung: das Teil ist als eigenes Mesh-Teil eingestellt, aber diese Bones wurden gebaut, als der Grundkörper noch als bekleidet galt. „Neu bauen“ (lokal, kein Hub-Job) baut das Teil.",
+    "The slot's part switch changed since these bones were built. Rebuild (local, no hub job) builds them anew.": "Der Teil-Schalter des Slots hat sich seit dem Bau dieser Bones geändert. „Neu bauen“ (lokal, kein Hub-Job) baut sie neu.",
+    "The mesh has no protrusion here. The slot's own mesh part is on, but this base was rendered before it was turned on: render the base views again (hub jobs) to build the part.": "Das Mesh hat hier keine Ausformung. Das eigene Mesh-Teil des Slots ist an, aber dieser Grundkörper wurde gerendert, bevor es eingeschaltet wurde: die Ansichten des Grundkörpers neu rendern (Hub-Jobs), um das Teil zu bauen.",
+    "The mesh has no protrusion here, so there is nothing to rig. Turn on the slot's own mesh part in the body editor to have the part built.": "Das Mesh hat hier keine Ausformung, also gibt es nichts zu riggen. Das eigene Mesh-Teil des Slots im Körper-Editor einschalten, damit das Teil gebaut wird.",
+    "No matching shape was found in the mesh here, so these bones were not built.": "Im Mesh wurde hier keine passende Form gefunden, daher wurden diese Bones nicht gebaut.",
+    "The build failed. Rebuild (local, no hub job) tries again.": "Der Bau ist fehlgeschlagen. „Neu bauen“ (lokal, kein Hub-Job) versucht es erneut.",
+    "The groups changed since the last build. Rebuild (local, no hub job) or Run all builds them.": "Die Gruppen haben sich seit dem letzten Bau geändert. „Neu bauen“ (lokal, kein Hub-Job) oder „Alles ausführen“ baut sie."
   }
 }

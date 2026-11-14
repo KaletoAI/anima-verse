@@ -42,9 +42,10 @@ copy of that body, so the base's set is its set — the base sidecar's record is
 meta (``base_body.build_outfit_model``), and when it is missing or outdated the outfit's own file is fitted
 under the same identity (body nodes only — ``glb_mesh.body_arrays`` skips grafted garments). A rebuilt or
 retextured base never leaves a stale set on the outfit served: the outfit's record names the base sha it was
-built on, so it always describes the body actually in the file. An outfit model on a MESHED SHAPE (an outfit
-body, sidecar ``body_id`` = ``ob…``) carries that body's set the same way (``source "body"``, ``sha256`` = its
-``body_sha256``).
+built on, so it always describes the body actually in the file. The inherited set leaves out the extension
+capsules of every group the outfit does not carry built (a part the base shows and the outfit covers). An outfit
+model on a MESHED SHAPE (an outfit body, sidecar ``body_id`` = ``ob…``) carries that body's set the same way
+(``source "body"``, ``sha256`` = its ``body_sha256``).
 
 A record is CURRENT when ``version``, ``sha256`` (the identity above) and ``scales`` (the character's region
 scales, ``model3d_opts.collision_scales``) all match. ``ensure`` / ``ensure_path`` recompute and store anything
@@ -552,11 +553,17 @@ def refresh(character_name: str, path: Path, meta: Dict[str, Any], *,
         if record.get("source") == source and (source != "base"
                                                or record.get("base_signature") == meta.get("base_signature")):
             return False
-        # The base body's record copied with the base meta: the same set, labelled as inherited.
+        # The base body's record copied with the base meta: the same set, labelled as inherited — without the
+        # capsules of extension groups this model does not carry built (Ruling A49: the base shows the part an
+        # outfit covering the slot leaves out, so its bones are not in the outfit's file).
         relabelled = {k: v for k, v in record.items() if k != "base_signature"}
         relabelled["source"] = source
         if source == "base":
             relabelled["base_signature"] = str(meta.get("base_signature") or "")
+            carried = {entry["group"] for entry in extension_chains(meta)}
+            relabelled["capsules"] = [c for c in record.get("capsules") or []
+                                      if ":" not in str(c.get("id") or "")
+                                      or str(c.get("id")).split(":", 1)[0] in carried]
         meta["collision"] = relabelled
         return True
     try:

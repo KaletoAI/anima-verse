@@ -90,7 +90,7 @@ import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
 import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, singleAction, staleBaseNote } from './figureModel'
 import type { ModelFollowup } from './figureModel'
-import { RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
+import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
   runAllButton, runAllPlanLine, runAllWhat } from './baseBodyModel'
 import type { BaseLight, BaseRunAll } from './baseBodyModel'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
@@ -480,7 +480,9 @@ export function FieldBaseBody({ character, onOpenFigure }: {
           groups: { ...(previous.signature === info.signature ? previous.groups : {}), [id]: values } })),
         onSave: (id, values) => saveExtMotion(id, values, true),
       }}
-      note={extension.running ? t('Rebuilding…') : extension.due ? t(TIP_DUE_NOTE) : undefined}
+      lights={extension.lights}
+      note={extension.running ? t('Rebuilding…')
+        : extension.due ? t(extension.due_reason === 'groups' ? EXT_DUE_GROUPS_NOTE : TIP_DUE_NOTE) : undefined}
       rebuild={{
         label: t(TIP_REBUILD_LABEL), primary: extension.due, disabled: extBusy,
         title: t('Rebuilds the extension bones of the base model from the saved settings, also when they are built already.'),

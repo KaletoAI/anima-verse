@@ -154,8 +154,22 @@ export interface BaseExtensionState {
   motion?: SecondaryMotionPayload
   /** The saved switches differ from the ones the rig was built with. */
   due: boolean
+  /** Why it is due: `groups` — the groups themselves changed since the build (Ruling A49); `settings` — a saved
+   *  setting; '' — not due. */
+  due_reason?: 'groups' | 'settings' | ''
+  /** One traffic light per group (Ruling A49): a group whose build found nothing never reads as simply active. */
+  lights?: Record<string, ExtensionGroupLight>
   /** The background rebuild of the extension bones runs on this model. */
   running: boolean
+}
+
+/** A group's light in the Extension bones box (`model3d.extension_group_lights`): English state and reason
+ *  (translated by the client), `detail` = the build record's own reason (shown as is). */
+export interface ExtensionGroupLight {
+  light: 'green' | 'yellow' | 'red' | 'grey'
+  state: string
+  reason: string
+  detail: string
 }
 
 export interface BaseBodyInfo {

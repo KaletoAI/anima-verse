@@ -165,6 +165,9 @@ export function chainRunAll(run: { steps: string[]; hub_jobs: number | null; ref
 
 /** The panel's state line after a save: the saved settings are not built yet (`extension_tips[].due`). */
 export const TIP_DUE_NOTE = 'Saved — not built yet. Rebuild (local, no hub job) or Run all builds it.'
+/** The Extension bones box's state line when the groups themselves changed since the build (Ruling A49:
+ *  `plain_body.extension.due_reason` = `groups`, e.g. a base that counts as unclothed now). */
+export const EXT_DUE_GROUPS_NOTE = 'The groups changed since the last build. Rebuild (local, no hub job) or Run all builds them.'
 /** The Rebuild button's label: the CPU extension rebuild of the base model, no hub job. */
 export const TIP_REBUILD_LABEL = 'Rebuild (local, no hub job)'
 

@@ -14,6 +14,8 @@ import type { Physics } from '../../lib/motionDraft'
 import { ExtensionMotionDraft, ExtensionMotionSliders } from './ExtensionMotionDraft'
 import { MotionPreviewHint } from './MotionPreviewHint'
 import type { ExtensionRigResult } from './FieldModel3D'
+import { StepLight } from './StepRows'
+import type { ExtensionGroupLight } from './useBaseBody'
 
 export interface ExtensionBonesBoxProps {
   groups: ExtensionRigDeclaration[]
@@ -42,6 +44,8 @@ export interface ExtensionBonesBoxProps {
     onPreview: (id: string, values: Physics) => void
     onSave: (id: string, values: Physics) => Promise<boolean>
   }
+  /** One light per group (Base body tab, Ruling A49): its build state and the reason in plain words. */
+  lights?: Record<string, ExtensionGroupLight>
   /** A line under the state, e.g. "Saved — not built yet …". */
   note?: string
   /** Given: the box is a framed group with this legend, like the tip panels it sits beside (Base body tab); the
@@ -51,7 +55,7 @@ export interface ExtensionBonesBoxProps {
 }
 
 export function ExtensionBonesBox({ groups, result, tier, signature, switches, inherited, switchedElsewhere,
-  motionDefaults, motionOverrides, disabled, rigless, draftKey, onSwitch, onMotion, sliders, note,
+  motionDefaults, motionOverrides, disabled, rigless, draftKey, onSwitch, onMotion, sliders, lights, note,
   legend, rebuild }: ExtensionBonesBoxProps) {
   const { t } = useI18n()
   const tierLabel = tier === 'low' ? t('Distance') : t('Full')
@@ -85,9 +89,18 @@ export function ExtensionBonesBox({ groups, result, tier, signature, switches, i
         const own = switches?.[group.id]
         const hasSliders = !!sliders && !!motionDefaults?.[group.id]
           && (group.controls == null || group.controls.some((key) => ['bounce', 'weight'].includes(key)))
+        const light = lights?.[group.id]
         return (
           <div key={group.id} className="ga-ext-row">
             <strong>{group.id}</strong>
+            {light ? (
+              <span className="ga-ext-light" data-light={light.light}
+                title={light.detail ? `${t('Build record')}: ${light.detail}` : undefined}>
+                <StepLight light={light.light} /> <strong>{t(light.state)}</strong>
+                {light.reason ? <> — {t(light.reason)}</> : null}
+                {light.detail && light.light === 'red' ? <span className="ga-hint"> ({light.detail})</span> : null}
+              </span>
+            ) : null}
             {switchedElsewhere?.has(group.id) ? (
               <span className="ga-hint">{t('Enabled: in its tip panel')}</span>
             ) : (

@@ -2122,9 +2122,11 @@ def base_run_all(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
                     "note": "tip smoothing not applied to this model yet: extension rebuild (local)",
                     "steps": [*tip, {"name": EXTENSION_STEP, "jobs": 0}]}
         path = model3d.find_model3d(character_name, bsig) if bsig else None
-        if path is not None and model3d.extension_settings_changed(character_name, path):
+        due_reason = model3d.extension_due_reason(character_name, path) if path is not None else ""
+        if due_reason:
             return {**out, "kind": RUN_ALL_EXTENSION, "hub_jobs": 0,
-                    "note": "tip settings saved, not built yet: extension rebuild (local)",
+                    "note": ("extension groups changed since the last build: extension rebuild (local)"
+                             if due_reason == "groups" else "tip settings saved, not built yet: extension rebuild (local)"),
                     "steps": [*tip, {"name": EXTENSION_STEP, "jobs": 0}]}
         return out
     except Exception as e:  # noqa: BLE001 — a label, never a failure of the poll

@@ -33,13 +33,18 @@ Expected, derived by hand from the brief (Task 4) and the code rules:
       (mesh_occasion_for_rig("mixamo")), view_images keys exactly
       {back, left, right} (all base views, whatever the toggles say), the
       source image a frozen copy named tpose_<bsig>.png;
-    - the frozen hub-op inputs carry base True, signature bsig, manifest {};
+    - the frozen hub-op inputs carry base True, signature bsig, manifest
+      {mesh_variant: ""} — only the mesh variant its front's sidecar recorded
+      (Ruling A49; Demo's is "", it has no slot with a separate part);
     - model3d/<bsig>.glb exists, its sidecar has base True, rig "mixamo",
       signature bsig and NO "pieces" key; model3d/unrigged/<bsig>.glb
       exists and its sidecar has base True;
-    - apply_script was called exactly once, with operation
-      "extension_bones" and groups [jiggle] — no attached_part/inset_part
-      batch; the extension state's group_ops lists only jiggle;
+    - the sidecar records mesh_variant "" (the token of its front);
+    - apply_script batches in order: attached_part [part, part_bone],
+      inset_part [inset], extension_bones [jiggle] — Ruling A49: the base body
+      is the unclothed body and builds the part groups its declarations
+      resolve (the stubbed declarations carry them whatever the variant); the
+      extension state's group_ops lists all four;
     - request_lod was never called.
     base_info(Demo)["model"]: signature bsig, status "ready", created_at the
     sidecar's, url "/characters/Demo/model3d/file?signature=<bsig>&v=<16 hex>".
@@ -49,8 +54,8 @@ Expected, derived by hand from the brief (Task 4) and the code rules:
 [2] Resume: a fresh hub-op record with the SAME frozen inputs (base True),
     run through the registered resume entry ``_op_thread_resume(
     _generate_for_current_outfit)`` (which passes no base argument):
-    ok; again apply_script once with extension_bones [jiggle] only, no
-    request_lod; the sidecar still has base True.
+    ok; again the three batches of [1], no request_lod; the sidecar still
+    has base True.
 [3] Outfit run (no flag): generate_for_current_outfit(Demo, force=True):
     ok; occasion "mesh_humanoid", no view_images (the toggles are off by
     default); apply_script batches in order: attached_part [part, part_bone],
@@ -262,7 +267,7 @@ def main() -> int:
             check("views", sorted(MESH_CALLS[0]["views"]), ["back", "left", "right"])
             check("source", MESH_CALLS[0]["source"], f"tpose_{bsig}.png")
             check("frozen inputs", {k: CREATED[0].get(k) for k in ("base", "signature", "manifest")},
-                  {"base": True, "signature": bsig, "manifest": {}})
+                  {"base": True, "signature": bsig, "manifest": {"mesh_variant": ""}})
             model = model_dir / f"{bsig}.glb"
             meta = model3d._read_sidecar(model)
             check("model published", model.is_file(), True)
@@ -272,9 +277,13 @@ def main() -> int:
             unrigged = model_dir / "unrigged" / f"{bsig}.glb"
             check("unrigged kept", unrigged.is_file(), True)
             check("unrigged sidecar base", model3d._read_sidecar(unrigged).get("base"), True)
-            check("extension batches", batches(), [("extension_bones", ["jiggle"])])
+            check("base mesh_variant", meta.get("mesh_variant"), "")
+            check("extension batches", batches(), [("attached_part", ["part", "part_bone"]),
+                                                   ("inset_part", ["inset"]),
+                                                   ("extension_bones", ["jiggle"])])
             check("extension group_ops", (meta.get("extension_rig") or {}).get("group_ops"),
-                  {"jiggle": "jiggle"})
+                  {"part": "attached_part", "part_bone": "attached_part_bone", "inset": "inset_part",
+                   "jiggle": "jiggle"})
             check("no request_lod", LOD_CALLS, [])
             info = base_body.base_info("Demo")["model"]
             check("info model", {k: info.get(k) for k in ("signature", "status", "created_at")},
@@ -306,7 +315,9 @@ def main() -> int:
             op.reload()
             resumed = model3d._op_thread_resume(model3d._generate_for_current_outfit)(op)
             check("resume ok", resumed.get("ok"), True)
-            check("resume batches", batches(), [("extension_bones", ["jiggle"])])
+            check("resume batches", batches(), [("attached_part", ["part", "part_bone"]),
+                                                ("inset_part", ["inset"]),
+                                                ("extension_bones", ["jiggle"])])
             check("resume no request_lod", LOD_CALLS, [])
             check("resume sidecar base", model3d._read_sidecar(model).get("base"), True)
 

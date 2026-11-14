@@ -337,7 +337,7 @@ def _tip_groups(character_name: str, signature: str, *, profile=None, meta=None)
     """The ``pair_tip`` groups the stored model ``signature`` carries, each
     with its effective ``tip_override``."""
     from app.core.extension_rig import effective_extension_overrides, resolved_extension_groups, rig_groups_for
-    from app.core.model3d import _extension_groups_for, _read_sidecar, find_model3d
+    from app.core.model3d import _extension_groups_for, _read_sidecar, find_model3d, stored_mesh_variant
     from app.models.character import get_character_profile
     if meta is None:
         path = find_model3d(character_name, signature)
@@ -346,7 +346,8 @@ def _tip_groups(character_name: str, signature: str, *, profile=None, meta=None)
         meta = _read_sidecar(path)
     if profile is None:
         profile = get_character_profile(character_name) or {}
-    mesh_variant = meta.get("mesh_variant") or ""
+    # The model's own mesh variant: a base body's resolves as unclothed (Ruling A49).
+    mesh_variant = stored_mesh_variant(character_name, meta)
     declarations = _extension_groups_for(meta, rig_groups_for(character_name, profile=profile,
                                                               mesh_variant=mesh_variant))
     groups = resolved_extension_groups(

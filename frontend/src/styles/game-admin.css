@@ -3025,6 +3025,9 @@ a.ga-btn {
 .ga-ext-panel .ga-hint { font-size: 12px; color: var(--text-muted, #8b949e); margin: 0; }
 .ga-ext-panel details > summary { font-size: 12px; cursor: pointer; }
 .ga-ext-row { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+/* A group's build light (Ruling A49): its own line under the group id. */
+.ga-ext-light { flex: 1 1 100%; font-size: 12px; line-height: 1.35; }
+.ga-ext-light > span[aria-hidden] { margin-right: 4px; vertical-align: -1px; }
 .ga-ext-fields { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 .ga-ext-fields > label { display: inline-flex; align-items: center; gap: 6px; }
 .ga-ext-fields .ga-input { width: 4.5em; flex: none; padding: 2px 6px; }
