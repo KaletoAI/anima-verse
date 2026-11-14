@@ -400,6 +400,19 @@ def get_item_wearers_route(item_id: str, _admin=Depends(require_admin)) -> Dict[
     return {"item_id": item_id, "mode": garment_set.mesh_mode_of(item) or "", "wearers": rows, "cost": cost}
 
 
+@router.get("/items/{item_id}/own-mesh-files")
+def get_item_own_mesh_files_route(item_id: str, _admin=Depends(require_admin)) -> Dict[str, Any]:
+    """What switching the piece off its own mesh hands to the cleanup (Ruling A63,
+    ``artefact_graph.own_mesh_files``): ``{item_id, mode, kind, files, bytes, hub_jobs, note, characters: [{name,
+    files, bytes, hub_jobs, note}], world: {files, bytes}}``. Read-only; the Wardrobe's mode select asks before
+    switching when ``files`` > 0. Admin-only — it names other characters."""
+    from app.core import artefact_graph
+    try:
+        return artefact_graph.own_mesh_files(item_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+
 @router.post("/items/{item_id}/build-wearers")
 def build_item_wearers_route(item_id: str, _admin=Depends(require_admin)) -> Dict[str, Any]:
     """"Build for them": one Build per wearer (``figure_build.start``, a

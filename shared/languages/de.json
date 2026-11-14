@@ -5421,6 +5421,15 @@
     "Back to the normal view": "Zurück zur normalen Ansicht",
     "Opens the same view at about 90 % of the window; Esc goes back": "Öffnet dieselbe Ansicht auf etwa 90 % des Fensters; Esc geht zurück",
     "Larger view": "Größere Ansicht",
-    "Drag: turn the model · Shift+drag: move the view · Wheel: zoom · Double-click: upright and framed again": "Ziehen: Modell drehen · Umschalt+Ziehen: Ansicht verschieben · Mausrad: Zoom · Doppelklick: aufrecht und neu eingerahmt"
+    "Drag: turn the model · Shift+drag: move the view · Wheel: zoom · Double-click: upright and framed again": "Ziehen: Modell drehen · Umschalt+Ziehen: Ansicht verschieben · Mausrad: Zoom · Doppelklick: aufrecht und neu eingerahmt",
+    "Switch anyway": "Trotzdem umstellen",
+    "no answer": "keine Antwort",
+    "Stored for {names}.": "Gespeichert für {names}.",
+    "This piece’s own mesh and its fits ({files}, {size}) will be removed by the next cleanup.": "Das eigene Mesh dieses Teils und seine Anpassungen ({files}, {size}) werden beim nächsten Aufräumen gelöscht.",
+    "Switching back to Own mesh later costs up to {n} hub jobs (mesh) plus the fit on the CPU.": "Später zurück auf Eigenes Mesh kostet bis zu {n} Hub-Jobs (Mesh) plus die Anpassung auf der CPU.",
+    "Switching back to Own mesh later costs up to 1 hub job (mesh) plus the fit on the CPU.": "Später zurück auf Eigenes Mesh kostet bis zu 1 Hub-Job (Mesh) plus die Anpassung auf der CPU.",
+    "Switching back to Own mesh later costs hub jobs again (count unknown: {note}) plus the fit on the CPU.": "Später zurück auf Eigenes Mesh kostet erneut Hub-Jobs (Anzahl unbekannt: {note}) plus die Anpassung auf der CPU.",
+    "The stored files of its own mesh could not be counted ({error}). The next cleanup may remove them; switching back to Own mesh would then cost hub jobs again.": "Die gespeicherten Dateien seines eigenen Meshes ließen sich nicht zählen ({error}). Das nächste Aufräumen kann sie löschen; zurück auf Eigenes Mesh würde dann erneut Hub-Jobs kosten.",
+    "Switch to “{mode}”?": "Modus auf „{mode}“ umstellen?"
   }
 }

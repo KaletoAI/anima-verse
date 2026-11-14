@@ -117,6 +117,10 @@ RULINGS.
   improvements cleanup, the admin route, the Figure tab's Delete). Bodies
   the boot re-key left stale under their old ids follow the same rule.
   ``figure.stored_unneeded`` lists them.
+  This does NOT cover a piece's own mesh: switched to painted / in the body, the item is no own-mesh kind,
+  ``_garment_roots`` keeps nothing of it and its fingerprint groups, layered fits and body fits go at the
+  next collect. Ruling A63 keeps that rule and warns instead: ``own_mesh_files`` counts, before the switch,
+  what this judgement keeps now and what making it again costs (the Wardrobe's mode select asks first).
 
 SAFETY. Never deleted: what is running — a live model stage of the
 signature, an open hub operation on it (``hub_ops`` subject
@@ -1188,6 +1192,129 @@ def item_holders(item_id: str) -> List[str]:
         if any(e.get("item_id") == item_id for e in entries) or any(
                 key[0] == item_id for key in garment_store.stored_groups(name)):
             out.append(name)
+    return out
+
+
+#: The node kinds that hold a garment item's own files (``scan``): its fingerprint groups, its layered fits, its
+#: fits on outfit bodies and its HairDeck / HAAR job folders.
+ITEM_NODE_KINDS = ("garment", "layer", "body_fit", "hairdeck")
+
+
+def _files_under(path: Path) -> List[Path]:
+    if path.is_dir() and not path.is_symlink():
+        return [p for p in path.rglob("*") if p.is_file() and not p.is_symlink()]
+    return [path] if path.is_file() and not path.is_symlink() else []
+
+
+def _rebuild_estimate(character_name: str, item: Dict[str, Any], kind: str,
+                      nodes: List[Node]) -> Tuple[Optional[int], str]:
+    """``(hub jobs, note)`` of making the piece's own mesh again for the character from its first step
+    (``garments.run_estimate`` forced from the first step of its chain — every image, the mesh, the fit). A
+    closable clothing piece counts each state whose current fingerprint group is among ``nodes`` (the worn state
+    when none is). ``(None, why)`` when it cannot be estimated."""
+    from app.core import garment_set, garments, garment_store as gs
+    item_id = str(item.get("id") or "")
+    states: List[Optional[str]] = [None]
+    if kind == garment_set.CLOTHING and garment_set.closable_of(item):
+        fsigs = {str(n.parents.get("fsig") or "") for n in nodes}
+        found: List[Optional[str]] = []
+        for state in ("closed", "open"):
+            try:
+                if gs.garment_fsig(character_name, item_id, state=state) in fsigs:
+                    found.append(state)
+            except ValueError:
+                continue
+        states = found or [None]
+    try:
+        first = gs.steps_for(kind, gs.kind_method(kind, character_name, {}, item_id=item_id))[0]
+    except (ValueError, IndexError) as exc:
+        return None, str(exc)
+    total, notes = 0, []
+    for state in states:
+        est = garments.run_estimate(character_name, item_id, state=state, from_step=first)
+        if est.get("hub_jobs") is None:
+            return None, str(est.get("note") or "cost unknown")
+        total += int(est["hub_jobs"])
+        notes.append(str(est.get("note") or "") + (f" ({state})" if state and len(states) > 1 else ""))
+    return total, " · ".join(n for n in notes if n)
+
+
+def own_mesh_files(item_id: str) -> Dict[str, Any]:
+    """What switching an own-mesh outfit piece to ``painted`` / ``in_body`` hands to the cleanup (Ruling A63) —
+    read-only, deletes nothing.
+
+    The cleanup itself is unchanged: off own mesh the item is no own-mesh kind (``garment_set.garment_kind_of`` →
+    None), so ``outfit_cache_gc._garment_roots`` keeps nothing of it and every one of its nodes is unreachable for
+    the next collect. Counted here is what is KEPT now and would go then — per character with garment files of it
+    (``item_holders``), the nodes of this item (``ITEM_NODE_KINDS``) that THIS module's judgement (``analyse``)
+    calls reachable today: the current fingerprint group (images, prepared mesh, fit, ``low/``, ``failed/``,
+    attempts), the served and the newest accepted fits, the layered fits and the fits on live outfit bodies. What
+    is unreachable already goes at the next collect whatever the mode, so it is not counted. A judgement that cannot
+    be computed counts every node of the item (an upper bound — a warning never understates). FOOTWEAR also has the
+    world shoe source ``<world>/footwear/<item>/`` (``footwear_source.collect``): the files its dry run keeps now —
+    off own mesh the whole folder goes at the next daily sweep.
+
+    ``{item_id, mode, kind, files, bytes, hub_jobs, note, characters: [{name, files, bytes, hub_jobs, note}],
+    world: {files, bytes}}`` — ``hub_jobs`` what making it again costs (``_rebuild_estimate``): clothing the sum
+    over the characters (each makes its own chain), footwear the largest one (the shoe source is made once per
+    item, the fit is CPU work); None with ``note`` when one cannot be estimated. A piece that is not an own mesh
+    now has nothing kept as one: zeros (switching ``painted`` ↔ ``in_body`` drops no own-mesh file). LookupError
+    for an unknown item."""
+    from app.core import footwear_source, garment_set
+    from app.models.inventory import get_item
+    item = get_item(item_id)
+    if item is None:
+        raise LookupError(f"Item {str(item_id)[:80]!r} not found")
+    kind = garment_set.garment_kind_of(item)
+    out: Dict[str, Any] = {"item_id": item_id, "mode": garment_set.mesh_mode_of(item) or "", "kind": kind or "",
+                           "files": 0, "bytes": 0, "hub_jobs": 0, "note": "", "characters": [],
+                           "world": {"files": 0, "bytes": 0}}
+    if kind not in garment_set.OWN_MESH_PIECE_KINDS:
+        return out
+    unknown: List[str] = []
+    jobs: List[int] = []
+    for name in item_holders(item_id):
+        try:
+            analysis = analyse(name, explicit=True, deadline=time.monotonic() + HOOK_BUDGET_S)
+            nodes = [n for n in analysis.nodes if n.kind in ITEM_NODE_KINDS
+                     and n.parents.get("item_id") == item_id and n.reachable]
+        except Exception:  # noqa: BLE001 — count every node of the item rather than none
+            logger.exception("Own-mesh files of %s: judgement of %s failed — counting every file", item_id, name)
+            nodes = [n for n in scan(name)[0] if n.kind in ITEM_NODE_KINDS and n.parents.get("item_id") == item_id]
+        files = [p for n in nodes for p in n.files]
+        if not files:
+            continue
+        size = sum(n.size() for n in nodes)
+        hub, note = _rebuild_estimate(name, item, kind, nodes)
+        out["characters"].append({"name": name, "files": len(files), "bytes": size, "hub_jobs": hub, "note": note})
+        if hub is None:
+            unknown.append(f"{name}: {note}")
+        else:
+            jobs.append(hub)
+    if kind == garment_set.FOOTWEAR:
+        try:
+            folder = footwear_source.item_dir(item_id)
+            report = footwear_source.collect(dry_run=True)
+            gone = {p for path in report["removed"] for p in _files_under(Path(path))}
+            kept = [p for p in _files_under(folder) if p not in gone]
+            out["world"] = {"files": len(kept), "bytes": sum(p.stat().st_size for p in kept)}
+        except (OSError, ValueError):
+            logger.exception("Own-mesh files of %s: shoe source unreadable", item_id)
+        if out["world"]["files"] and not out["characters"]:
+            # Only the shoe source is stored: its chain is estimated through any character holding the piece.
+            holders = [n for n in item_holders(item_id) if garment_set.holds(n, item_id)]
+            hub, note = _rebuild_estimate(holders[0], item, kind, []) if holders else (None, "nobody holds it")
+            if hub is None:
+                unknown.append(note)
+            else:
+                jobs.append(hub)
+    out["files"] = sum(c["files"] for c in out["characters"]) + out["world"]["files"]
+    out["bytes"] = sum(c["bytes"] for c in out["characters"]) + out["world"]["bytes"]
+    if unknown:
+        out["hub_jobs"], out["note"] = None, "; ".join(unknown)
+    else:
+        out["hub_jobs"] = (max(jobs) if kind == garment_set.FOOTWEAR else sum(jobs)) if jobs else 0
+        out["note"] = " · ".join(f"{c['name']}: {c['note']}" for c in out["characters"] if c["note"])
     return out
 
 

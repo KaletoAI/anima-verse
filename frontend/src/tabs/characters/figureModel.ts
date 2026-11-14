@@ -12,6 +12,7 @@
  */
 import type { FootPose } from '@anima/scene-render'
 import type { ArmLight, FitSettingsInfo } from './fitSettingsModel'
+import { filesLabel, sizeLabel } from './hairstylesModel'
 import type { Light } from './hairstylesModel'
 
 /** How an outfit piece reaches the figure (`garment_set.MESH_MODES`). */
@@ -150,6 +151,58 @@ export const BUILD_DEFERRED_NOTE = 'An automatic Build waits for the running bas
 /** `t()` of the caller; the helpers default to English (the check reads that). */
 type Tr = (s: string) => string
 const EN: Tr = (s) => s
+
+// --- Switching a piece off its own mesh (Ruling A63) ----------------------------------------------------
+
+/** GET /inventory/items/{item}/own-mesh-files (`artefact_graph.own_mesh_files`): the stored own-mesh files the next
+ *  cleanup removes once the piece is no own mesh, and what making them again costs (`hub_jobs` null = unknown,
+ *  `note` says why). */
+export interface OwnMeshFiles {
+  item_id: string
+  mode: string
+  kind: string
+  files: number
+  bytes: number
+  hub_jobs: number | null
+  note: string
+  characters: Array<{ name: string; files: number; bytes: number; hub_jobs: number | null; note: string }>
+  world: { files: number; bytes: number }
+}
+
+/** The switch leaves Own mesh — the only switch that can hand stored files to the cleanup (Painted ↔ In the body
+ *  drops no own-mesh file: the server counts 0 for a piece that is no own mesh). */
+export function leavesOwnMesh(current: MeshMode, next: MeshMode): boolean {
+  return current === 'own_mesh' && next !== 'own_mesh'
+}
+
+/** The in-app confirmation before switching `current` → `next` (Ruling A63), or null when there is nothing to
+ *  confirm: the switch does not leave Own mesh, or the server counted no stored own-mesh file. `error`: the count
+ *  could not be read — the confirmation then says so (never a silent switch). */
+export function switchOffWarning(current: MeshMode, next: MeshMode, info: OwnMeshFiles | null, error = '',
+  t: Tr = EN): { title: string; message: string } | null {
+  if (!leavesOwnMesh(current, next)) return null
+  const title = t('Switch to “{mode}”?').replace('{mode}', t(MESH_MODE_LABELS[next]))
+  if (error || !info) {
+    return {
+      title,
+      message: t('The stored files of its own mesh could not be counted ({error}). The next cleanup may remove them; switching back to Own mesh would then cost hub jobs again.')
+        .replace('{error}', error || t('no answer')),
+    }
+  }
+  if (info.files <= 0) return null
+  const removed = t('This piece’s own mesh and its fits ({files}, {size}) will be removed by the next cleanup.')
+    .replace('{files}', filesLabel(info.files, t)).replace('{size}', sizeLabel(info.bytes))
+  const cost = info.hub_jobs === null
+    ? t('Switching back to Own mesh later costs hub jobs again (count unknown: {note}) plus the fit on the CPU.')
+      .replace('{note}', info.note)
+    : info.hub_jobs === 1
+      ? t('Switching back to Own mesh later costs up to 1 hub job (mesh) plus the fit on the CPU.')
+      : t('Switching back to Own mesh later costs up to {n} hub jobs (mesh) plus the fit on the CPU.')
+        .replace('{n}', String(info.hub_jobs))
+  const names = info.characters.map((c) => c.name)
+  const whose = names.length > 1 ? ' ' + t('Stored for {names}.').replace('{names}', names.join(', ')) : ''
+  return { title, message: `${removed} ${cost}${whose}` }
+}
 
 export type FigureStatus = 'up_to_date' | 'changes' | 'building' | 'failed'
 

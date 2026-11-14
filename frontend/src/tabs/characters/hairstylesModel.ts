@@ -735,7 +735,7 @@ export function sizeLabel(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function filesLabel(n: number, t: Tr): string {
+export function filesLabel(n: number, t: Tr): string {
   return n === 1 ? t('1 file') : t('{n} files').replace('{n}', String(n))
 }
 

@@ -7,7 +7,10 @@
  * same for every wearer: Own mesh (a finished mesh fitted on top), Painted (on
  * the body's texture) or In the body (meshed as part of the body). Per row:
  * the mode select (MeshModeSelect — saved at once, spends nothing; disabled
- * for a non-humanoid, the only character off the figure pipeline), after a change the wearers line (WearersLine —
+ * for a non-humanoid, the only character off the figure pipeline; leaving Own mesh while its mesh and fits are
+ * stored asks first in an in-app confirmation — Ruling A63: the next cleanup removes them, and the confirmation
+ * names the files and the hub jobs switching back costs, GET /inventory/items/{item}/own-mesh-files), after a
+ * change the wearers line (WearersLine —
  * "worn by K characters now" and one "Build for them (cost)"), and for an
  * own-mesh piece its status chip (server: `garment_set.piece_status`) and
  * "Mesh steps", which opens the piece's dialog (GarmentPieceDialog): the
@@ -56,6 +59,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { ConfirmDialog } from '@anima/player-ui'
 import { useI18n } from '../../i18n/I18nProvider'
 import { apiGet, apiPost, apiPut, setPieceState } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
@@ -78,9 +82,9 @@ import type {
 } from './useGarment'
 import {
   AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES, PIECE_STATE_LABELS,
-  bodyWords, closableDisabled, refitSlot, showBodySwitch, wearersLine,
+  bodyWords, closableDisabled, leavesOwnMesh, refitSlot, showBodySwitch, switchOffWarning, wearersLine,
 } from './figureModel'
-import type { FitBody, MeshMode, PieceState } from './figureModel'
+import type { FitBody, MeshMode, OwnMeshFiles, PieceState } from './figureModel'
 import { chainRunAll } from './baseBodyModel'
 
 /** A piece worn in slot feet alone is footwear (`garment_set.garment_kind_of`): a shoe or a boot (boots spec
@@ -223,7 +227,8 @@ export function PieceStatusChip({ status, name }: { status: PieceStatus; name: s
 /** The mode select of one outfit piece (ruling 3): Own mesh · Painted · In the
  *  body, saved at once on the ITEM (every wearer) and spending nothing — the
  *  PUT replaces the whole outfit_piece, so the stored one is read first and
- *  only `mesh_mode` changes. For a non-humanoid (off the figure pipeline —
+ *  only `mesh_mode` changes. Leaving Own mesh with stored own-mesh files waits for the confirmation (Ruling A63,
+ *  `switchOffWarning`): Cancel keeps the mode, "Switch anyway" saves it. For a non-humanoid (off the figure pipeline —
  *  every humanoid is on it) it is disabled with the reason under it. `onChanged` gets the saved mode (the row then shows its
  *  wearers line). */
 export function MeshModeSelect({ itemId, mode, pipeline, disabled, feet = false, onChanged }: {
@@ -239,11 +244,12 @@ export function MeshModeSelect({ itemId, mode, pipeline, disabled, feet = false,
   const { t } = useI18n()
   const { toast } = useToast()
   const [busy, setBusy] = useState(false)
-  const choose = async (next: MeshMode) => {
-    if (busy || next === mode) return
+  /** The open confirmation (Ruling A63): the mode asked for and what the switch hands to the cleanup. */
+  const [ask, setAsk] = useState<{ next: MeshMode; title: string; message: string } | null>(null)
+  const url = `/inventory/items/${encodeURIComponent(itemId)}`
+  const save = async (next: MeshMode) => {
     setBusy(true)
     try {
-      const url = `/inventory/items/${encodeURIComponent(itemId)}`
       const { item } = await apiGet<{ item: { outfit_piece?: Record<string, unknown> } }>(url)
       await apiPut(url, { outfit_piece: { ...(item.outfit_piece || {}), mesh_mode: next } })
       onChanged(next)
@@ -252,6 +258,29 @@ export function MeshModeSelect({ itemId, mode, pipeline, disabled, feet = false,
     } finally {
       setBusy(false)
     }
+  }
+  const choose = async (next: MeshMode) => {
+    if (busy || next === mode) return
+    if (leavesOwnMesh(mode, next)) {
+      // Leaving Own mesh hands its stored mesh and fits to the next cleanup: the server counts them first, and
+      // the switch waits for "Switch anyway" when there are any (the select keeps the mode until then).
+      setBusy(true)
+      let info: OwnMeshFiles | null = null
+      let error = ''
+      try {
+        info = await apiGet<OwnMeshFiles>(`${url}/own-mesh-files`)
+      } catch (e) {
+        error = (e as Error).message || String(e)
+      } finally {
+        setBusy(false)
+      }
+      const warning = switchOffWarning(mode, next, info, error, t)
+      if (warning) {
+        setAsk({ next, ...warning })
+        return
+      }
+    }
+    await save(next)
   }
   const hint = [t(MESH_MODE_HINTS[mode]), mode === 'own_mesh' && feet ? t(OWN_MESH_SHOE_HINT) : '',
     t('Applies to every wearer; 2D images stay unchanged. Changing it spends nothing.')].filter(Boolean).join(' ')
@@ -270,6 +299,10 @@ export function MeshModeSelect({ itemId, mode, pipeline, disabled, feet = false,
           {t('Only humanoid characters that are not temporary NPCs use modes')}
         </span>
       ) : null}
+      <ConfirmDialog open={ask !== null} title={ask?.title || ''} message={ask?.message || ''}
+        confirmLabel={t('Switch anyway')} danger
+        onConfirm={() => { const next = ask?.next; setAsk(null); if (next) void save(next) }}
+        onClose={() => setAsk(null)} />
     </span>
   )
 }
