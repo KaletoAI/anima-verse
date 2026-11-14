@@ -1,8 +1,9 @@
 /**
  * FitSettings — Ruling A47: the fit settings of an own-mesh clothing piece beside its 3D preview in the piece
  * dialog (GarmentPieceDialog): the arm light of the shown fit (skin seen inside the sleeves, front + back), per side
- * "Sleeves: Auto | As generated | Wider | Fitted to the arm" with what Auto chose and why, and "Fit allowance: Auto |
- * +0 | +3 | +6 | +10 % (width only)" with the numbers it acts on. Each select SAVES on its own (POST
+ * "Sleeves: Auto | As generated | Wider | Fitted to the arm" with what Auto chose and why, "Width allowance: Auto |
+ * +0 | +3 | +6 | +10 %" with the numbers it acts on and (Ruling A68) "Depth allowance: +0 | +3 | +6 | +10 %" — room
+ * in front of and behind the trunk, no Auto. Each select SAVES on its own (POST
  * …/garments/{item}/fit-settings) and runs nothing; a fit made with other settings reads "Fit due — refits on the
  * CPU, 0 hub jobs" with its Re-fit beside it (the Figure tab: the next Build refits it).
  */
@@ -18,10 +19,13 @@ import type { GarmentRunBody } from './garmentStyle'
 import { StepLight } from './StepRows'
 import { stampLabel } from './freshnessText'
 import {
-  ALLOWANCE_CHOICES, ALLOWANCE_HINT, SLEEVE_CHOICES, SLEEVE_HINTS, SLEEVE_LABELS, allowanceLabel, allowanceNumbers,
-  allowanceReason, armLightColour, armLightText, sleeveReason,
+  ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_CHOICES, DEPTH_HINT, SLEEVE_CHOICES, SLEEVE_HINTS, SLEEVE_LABELS,
+  allowanceLabel, allowanceNumbers, allowanceReason, armLightColour, armLightText, depthLabel, depthReason,
+  sleeveReason,
 } from './fitSettingsModel'
-import type { AllowanceChoice, FitSettingsInfo, FitSettingsValues, SleeveChoice, SleeveSideKey } from './fitSettingsModel'
+import type {
+  AllowanceChoice, DepthChoice, FitSettingsInfo, FitSettingsValues, SleeveChoice, SleeveSideKey,
+} from './fitSettingsModel'
 
 const PANEL: CSSProperties = {
   display: 'grid', gridTemplateColumns: 'auto minmax(150px, 190px) 1fr', gap: '4px 8px', alignItems: 'center',
@@ -111,7 +115,7 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
       </div>
       {sleeveRow('left')}
       {sleeveRow('right')}
-      <label htmlFor="fit-allowance">{t('Fit allowance')}</label>
+      <label htmlFor="fit-allowance">{t('Width allowance')}</label>
       <select id="fit-allowance" className="ga-input" style={SELECT} value={String(values.allowance)}
         disabled={busy || saving !== null} title={t(ALLOWANCE_HINT)}
         onChange={(e) => {
@@ -123,7 +127,18 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
         ))}
       </select>
       <span className="ga-hint" style={REASON} title={t(ALLOWANCE_HINT)}>
-        {t('(width only)')} {info.recorded ? allowanceReason(info, t) : ''}
+        {info.recorded ? allowanceReason(info, t) : t('Decided at the first fit')}
+      </span>
+      <label htmlFor="fit-depth">{t('Depth allowance')}</label>
+      <select id="fit-depth" className="ga-input" style={SELECT} value={String(values.depth ?? 0)}
+        disabled={busy || saving !== null} title={t(DEPTH_HINT)}
+        onChange={(e) => { void save({ depth: Number(e.target.value) as DepthChoice }) }}>
+        {DEPTH_CHOICES.map((c) => (
+          <option key={c} value={String(c)}>{depthLabel(c)}</option>
+        ))}
+      </select>
+      <span className="ga-hint" style={REASON} title={t(DEPTH_HINT)}>
+        {info.recorded ? depthReason(info, t) : t('Auto never adds depth')}
       </span>
       {info.recorded ? (
         <div style={SPAN} className="ga-hint" title={t(ALLOWANCE_HINT)}>

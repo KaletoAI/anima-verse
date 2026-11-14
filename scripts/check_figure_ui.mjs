@@ -783,6 +783,31 @@ check('[21] Figure tab source', [/<StepRowView\b/.test(fieldFigure), /<SubTabs\b
       /window\.(prompt|alert|confirm)/.test(meshView)], [true, true, true, false]);
 }
 
+// [22b] Ruling A68 — the depth allowance's helpers (`fitWiden.ts`; parity: smoke_fit_widen_parity.py [4]..[6]).
+//      Hand-derived: +10 % of the half depth 0.2 is 0.02, without the depth frame 0; frame cx 0, cz 0.02, x_limit
+//      0.12, y_limit 1.3, ramp 0.03, ease 0.01: (0, 1, 0.15) in front +0.01, (0, 1, 0.035) at the side +0.005,
+//      (0.13, 1, 0.15) a sleeve 0, (0, 1.35, -0.1) the neck opening 0; the gaps of depth +6 % at ×1.06 are the
+//      third pair of that step; "+6 %"; the panel labels no longer say "(width only)" and Save posts the changes.
+{
+  const w = await loadBundled(join(ROOT, 'frontend/src/tabs/characters/fitWiden.ts'));
+  const ax = { centre_x: 0, centre_z: 0.02, half_width: 0.2, x_limit: 0.12, y_limit: 1.3, ramp: 0.03, half_depth: 0.2 };
+  const r = (v) => Math.round(v * 1e12) / 1e12;
+  check('[22b] ease of a choice', [r(w.depthEase(ax, 10)), w.depthEase({ centre_x: 0, centre_z: 0, half_width: 1 }, 10),
+    w.depthEase(null, 6)], [0.02, 0, 0]);
+  check('[22b] depth shift by hand', [r(w.depthShift(0, 1, 0.15, 0.01, ax)), r(w.depthShift(0, 1, 0.035, 0.01, ax)),
+    r(w.depthShift(0.13, 1, 0.15, 0.01, ax)), r(w.depthShift(0, 1.35, -0.1, 0.01, ax)), r(w.depthShift(0, 1, -0.1, 0.01, ax))],
+  [0.01, 0.005, 0, 0, -0.01]);
+  const view = { factors: [1, 1.06], depth: { choices: [0, 3, 6, 10], ease_mm: [0, 3.6, 7.2, 12] },
+    steps: [1, 1.06].map((f) => ({ factor: f, depth_gaps: [[1, 2], [3, 4], [f === 1 ? 5 : 5.3, 6], [7, 8]] })) };
+  check('[22b] gaps lookup', [w.depthGapsAt(view, 1.06, 6), w.depthGapsAt(view, 1.06, 5), w.depthGapsAt(null, 1, 0),
+    w.depthText(6)], [[5.3, 6], null, null, '+6 %']);
+  const meshView = src('frontend/src/tabs/characters/GarmentMeshView.tsx');
+  const fitSettings = src('frontend/src/tabs/characters/FitSettings.tsx');
+  check('[22b] sources: depth slider beside the viewer, no "(width only)", both settings saved, depth select',
+    [/data-allowance-depth=/.test(meshView), /\(width only\)/.test(meshView + fitSettings),
+      /change\.depth = depth/.test(meshView), /id="fit-depth"/.test(fitSettings)], [true, false, true, true]);
+}
+
 // [23] Ruling A61
 const prob = (o) => ({ kind: 'mesh_mismatch', step: 'assemble', step_label: 'Assemble the figure', view: 'back',
   body: 'plain', detail: 'GLBBodyRetexture: back view: …', action: 'rebuild_mesh', jobs: 3, held: true, ...o });

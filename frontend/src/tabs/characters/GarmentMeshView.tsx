@@ -19,7 +19,8 @@
  * - Ruling A48c: the fit allowance beside it (`AllowancePanel`): a slider previews every factor the allowance can
  *   apply, widening the shown mesh live with the fit's own rule (`fitWiden.ts`, a port of `garment_fit.widen`);
  *   the share inside, the red faces and the gap to the body over the trunk follow it (the server's table per
- *   factor). Save stores a settable choice: the fit becomes due, nothing runs.
+ *   factor). Ruling A68: a second slider previews the depth allowance (`garment_fit.depth_shift`, ported as
+ *   `easeInPlace`) with the gap front / back. Save stores the settable choices: the fit becomes due, nothing runs.
  * Nothing here spends a job.
  */
 import { useEffect, useMemo, useState } from 'react'
@@ -31,10 +32,12 @@ import { useClockSettings } from '../../lib/clockFormat'
 import { useToast } from '../../lib/Toast'
 import { Model3DViewer } from './Model3DViewer'
 import type { ViewerCompanion, ViewerDeform } from './Model3DViewer'
-import { ALLOWANCE_CHOICES, ALLOWANCE_HINT, allowanceLabel } from './fitSettingsModel'
-import type { AllowanceChoice, FitSettingsInfo } from './fitSettingsModel'
-import { autoFactor, choiceFactor, decodeMask, factorChoice, factorText, maskBit, mmText, stepAt, widenInPlace }
-  from './fitWiden'
+import { ALLOWANCE_CHOICES, ALLOWANCE_HINT, DEPTH_HINT, allowanceLabel } from './fitSettingsModel'
+import type { AllowanceChoice, DepthChoice, FitSettingsInfo } from './fitSettingsModel'
+import {
+  autoFactor, choiceFactor, decodeMask, depthEase, depthGapsAt, depthText, easeInPlace, factorChoice, factorText,
+  maskBit, mmText, stepAt, widenInPlace,
+} from './fitWiden'
 import type { AllowanceView } from './fitWiden'
 import { stampLabel } from './freshnessText'
 import { meshSnapshot } from './meshSnapshot'
@@ -240,15 +243,19 @@ function largeHeight(): number {
 
 /** The fit allowance beside the viewer (Ruling A48c): a slider over every factor the allowance can apply (the
  *  settable choices and Auto's steps) previews the widening live, "Auto → ×1.0x" names what Auto took on the stored
- *  fit, the gap to the body over the trunk and the share inside follow the preview, and Save stores a settable
- *  choice (the fit becomes due, nothing runs). */
-function AllowancePanel({ allowance, table, factor, onFactor, choice, onChoice, shown }: {
+ *  fit, the gap to the body over the trunk and the share inside follow the preview. Ruling A68: a second slider
+ *  previews the depth allowance (room in front of and behind the trunk, the fit adds it after its push-out) with the
+ *  gap front / back beside the trunk gap. Save stores the settable choices that changed (the fit becomes due, nothing
+ *  runs). */
+function AllowancePanel({ allowance, table, factor, onFactor, choice, onChoice, depth, onDepth, shown }: {
   allowance: MeshAllowance | null
   table: AllowanceView
   factor: number
   onFactor: (f: number) => void
   choice: AllowanceChoice | null
   onChoice: (c: AllowanceChoice | null) => void
+  depth: DepthChoice
+  onDepth: (d: DepthChoice) => void
   shown: Which
 }) {
   const { t } = useI18n()
@@ -257,18 +264,29 @@ function AllowancePanel({ allowance, table, factor, onFactor, choice, onChoice, 
   const [savedNote, setSavedNote] = useState('')
   const info = allowance?.info || null
   const saved = info?.settings.allowance ?? null
+  const savedDepth: DepthChoice = info?.settings.depth ?? 0
   const auto = autoFactor(info)
   const step = stepAt(table, factor)
   const index = Math.max(0, table.factors.findIndex((f) => Math.abs(f - factor) < 1e-6))
   const choiceName = choice === null ? t('Auto step — not a setting') : allowanceLabel(choice, t)
-  const canSave = !!allowance && choice !== null && choice !== saved && !saving && !allowance.busy
+  const depthChoices = (table.depth?.choices as DepthChoice[] | undefined) || []
+  const depthIndex = Math.max(0, depthChoices.indexOf(depth))
+  const easeMm = table.depth?.ease_mm?.[depthIndex] ?? null
+  const gaps = depthGapsAt(table, factor, depth)
+  const change: { allowance?: AllowanceChoice; depth?: DepthChoice } = {}
+  if (choice !== null && choice !== saved) change.allowance = choice
+  if (depthChoices.length && depth !== savedDepth) change.depth = depth
+  const changed = Object.keys(change).length > 0
+  const canSave = !!allowance && changed && !saving && !allowance.busy
+  const saveLabel = [change.allowance != null ? allowanceLabel(change.allowance, t) : '',
+    change.depth != null ? `${t('depth')} ${depthText(change.depth)}` : ''].filter(Boolean).join(' · ')
   const save = async () => {
-    if (!allowance || choice === null) return
+    if (!allowance || !changed) return
     setSaving(true)
     try {
       const d = await apiPost<{ fit_settings: FitSettingsInfo }>(
         `/characters/${encodeURIComponent(allowance.character)}/garments/${encodeURIComponent(allowance.itemId)}/fit-settings`,
-        { allowance: choice })
+        change)
       const note = d.fit_settings.due ? t('Fit due — refits on the CPU, 0 hub jobs') : t('nothing becomes due')
       setSavedNote(note)
       toast(`${t('Saved')} · ${note}`, 'success')
@@ -283,18 +301,23 @@ function AllowancePanel({ allowance, table, factor, onFactor, choice, onChoice, 
     <div role="group" aria-label={t('Fit allowance')}
       style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 8px', borderRadius: 6,
         border: '1px solid var(--border, #30363d)' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }} title={t(ALLOWANCE_HINT)}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
         <strong>{t('Fit allowance')}</strong>
-        <span className="ga-hint">{t('(width only)')}</span>
-        <span style={{ marginLeft: 'auto', fontWeight: 600 }} data-allowance-factor={factor}>{factorText(factor)}</span>
+        <span style={{ marginLeft: 'auto', fontWeight: 600 }} data-allowance-factor={factor}
+          data-allowance-depth={depth}>
+          {depthChoices.length ? `${factorText(factor)} · ${depthText(depth)}` : factorText(factor)}
+        </span>
       </div>
-      <input type="range" min={0} max={table.factors.length - 1} step={1} value={index}
-        aria-label={t('Fit allowance preview')} aria-valuetext={`${factorText(factor)} · ${choiceName}`}
-        onChange={(e) => {
-          const f = table.factors[Number(e.target.value)] ?? 1
-          onFactor(f)
-          onChoice(factorChoice(f, ALLOWANCE_CHOICES))
-        }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={t(ALLOWANCE_HINT)}>
+        <span className="ga-hint" style={{ width: 44 }}>{t('Width')}</span>
+        <input type="range" min={0} max={table.factors.length - 1} step={1} value={index} style={{ flex: '1 1 0', minWidth: 0 }}
+          aria-label={t('Width allowance preview')} aria-valuetext={`${factorText(factor)} · ${choiceName}`}
+          onChange={(e) => {
+            const f = table.factors[Number(e.target.value)] ?? 1
+            onFactor(f)
+            onChoice(factorChoice(f, ALLOWANCE_CHOICES))
+          }} />
+      </div>
       <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
         <button type="button" className={`ga-btn ga-btn-sm${choice === 'auto' ? ' ga-btn-primary' : ''}`}
           aria-pressed={choice === 'auto'}
@@ -307,6 +330,22 @@ function AllowancePanel({ allowance, table, factor, onFactor, choice, onChoice, 
       {auto == null ? (
         <span className="ga-hint">{t('Auto: decided at the next fit')}</span>
       ) : null}
+      {depthChoices.length ? (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={t(DEPTH_HINT)}>
+            <span className="ga-hint" style={{ width: 44 }}>{t('Depth')}</span>
+            <input type="range" min={0} max={depthChoices.length - 1} step={1} value={depthIndex}
+              style={{ flex: '1 1 0', minWidth: 0 }}
+              aria-label={t('Depth allowance preview')}
+              aria-valuetext={`${depthText(depth)}${easeMm != null ? ` · ${easeMm.toFixed(1)} mm` : ''}`}
+              onChange={(e) => onDepth(depthChoices[Number(e.target.value)] ?? 0)} />
+          </div>
+          <span className="ga-hint" title={t(DEPTH_HINT)}>
+            {`${depthText(depth)} = ${easeMm != null ? easeMm.toFixed(1) : '–'} mm ${t('more room in front and behind')} · ${
+              t('Auto never adds depth')}`}
+          </span>
+        </>
+      ) : null}
       <div title={t('Gap between the widened piece and the body over its trunk (between hips and shoulders, within the width the allowance scales), before the fit pushes it out; negative = inside the body')}>
         <span className="ga-hint">{t('Gap to the body (trunk)')}</span>
         <div data-allowance-gap="" style={{ fontVariantNumeric: 'tabular-nums' }}>
@@ -315,6 +354,14 @@ function AllowancePanel({ allowance, table, factor, onFactor, choice, onChoice, 
             : t('No trunk band on this piece')}
         </div>
       </div>
+      {depthChoices.length ? (
+        <div title={t('Median gap of the trunk straight in front and straight behind (within 35°), widened and with the depth added, before the fit pushes it out; the fit adds the depth after its push-out, so where the piece lies inside the body it ends this much further out than the clearance')}>
+          <span className="ga-hint">{t('Gap front / back (mm)')}</span>
+          <div data-allowance-depth-gap="" style={{ fontVariantNumeric: 'tabular-nums' }}>
+            {gaps ? `${mmText(gaps[0])} / ${mmText(gaps[1])}` : t('No trunk band on this piece')}
+          </div>
+        </div>
+      ) : null}
       <span className="ga-hint">
         {shown === 'prepared' ? t('Preview on the prepared mesh — the fit applies it on the body')
           : t('Preview on the raw mesh — the fit applies it on the body')}
@@ -322,11 +369,12 @@ function AllowancePanel({ allowance, table, factor, onFactor, choice, onChoice, 
       {allowance ? (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <button type="button" className="ga-btn ga-btn-sm" disabled={!canSave} onClick={() => { void save() }}
-            title={choice === null ? t('Only Auto reaches this step; settable: +0, +3, +6, +10 %')
+            title={choice === null && !change.depth ? t('Only Auto reaches this step; settable: +0, +3, +6, +10 %')
               : t('Saves the allowance for this piece and runs nothing; the fit becomes due (0 hub jobs)')}>
-            {choice !== null && choice !== saved ? `${t('Save')} · ${allowanceLabel(choice, t)}` : t('Save')}
+            {changed ? `${t('Save')} · ${saveLabel}` : t('Save')}
           </button>
-          <span className="ga-hint">{`${t('Saved')}: ${saved != null ? allowanceLabel(saved, t) : '–'}`}</span>
+          <span className="ga-hint">{`${t('Saved')}: ${saved != null ? allowanceLabel(saved, t) : '–'}${
+            depthChoices.length ? ` · ${t('depth')} ${depthText(savedDepth)}` : ''}`}</span>
         </div>
       ) : null}
       {info?.due || savedNote ? (
@@ -370,6 +418,8 @@ export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initia
   const [choice, setChoice] = useState<AllowanceChoice | null>(savedChoice)
   const [factor, setFactor] = useState<number>(() => (savedChoice === 'auto'
     ? autoFactor(allowance?.info) ?? 1 : choiceFactor(savedChoice) ?? 1))
+  // Ruling A68: the depth allowance previewed (a settable choice; Auto never adds depth).
+  const [depth, setDepth] = useState<DepthChoice>(allowance?.info.settings.depth ?? 0)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -406,10 +456,11 @@ export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initia
   const bits = useMemo(() => (table ? decodeMask(table.mask) : null), [table])
   const bit = table ? maskBit(table.factors, factor) : -1
   const axis = table?.axis
-  const deform = useMemo<ViewerDeform | null>(() => (axis && Math.abs(factor - 1) > 1e-9 ? {
-    key: `${view?.key}:${factor}`,
-    map: (xyz: Float32Array) => widenInPlace(xyz, factor, axis),
-  } : null), [axis, factor, view?.key])
+  const ease = depthEase(axis, depth)
+  const deform = useMemo<ViewerDeform | null>(() => (axis && (Math.abs(factor - 1) > 1e-9 || ease !== 0) ? {
+    key: `${view?.key}:${factor}:${depth}`,
+    map: (xyz: Float32Array) => { widenInPlace(xyz, factor, axis); easeInPlace(xyz, ease, axis) },
+  } : null), [axis, factor, depth, ease, view?.key])
   const step = stepAt(table, factor)
 
   const companions: ViewerCompanion[] = []
@@ -514,7 +565,7 @@ export function GarmentMeshViewer({ sources, initial, pieceName, onClose, initia
             )}
             {table && allowance ? (
               <AllowancePanel allowance={allowance} table={table} factor={factor} onFactor={setFactor}
-                choice={choice} onChoice={setChoice} shown={shown} />
+                choice={choice} onChoice={setChoice} depth={depth} onDepth={setDepth} shown={shown} />
             ) : null}
             <div className="ga-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               <span>{`${t('Triangles')} ${file.tris?.toLocaleString() ?? '–'}`}</span>

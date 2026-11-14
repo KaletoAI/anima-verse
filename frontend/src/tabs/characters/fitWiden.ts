@@ -7,7 +7,13 @@
  *   - x is scaled about `centre_x` within `half_width` of it and SHIFTED beyond by the widening at `half_width`:
  *     `x' = x + (scale − 1) · clip(x − centre_x, −half_width, half_width)` — a sleeve keeps its length;
  *   - y (the length) never changes; scale 1 leaves everything as it is.
- * This file is the ONE port of that rule for the client (`scripts/smoke_fit_widen_parity.py` checks it against the
+ * Ruling A68 — THE DEPTH RULE is `garment_fit.depth_shift` (the fit adds it AFTER its push-out): z moves away from
+ * the torso's depth centre `centre_z` by `ease · wz · wx · wy` with
+ *   - `wz = clip((z − centre_z) / ramp, −1, 1)` (full in front and behind, a ramp through the sides),
+ *   - `wx = clip((x_limit − |x − centre_x|) / ramp, 0, 1)` (none toward the sleeves),
+ *   - `wy = clip((y_limit − y) / ramp, 0, 1)` (none at the collar and the neck opening);
+ * `ease` = the depth choice in percent of the torso's half depth (`depthEase`). x and y never change.
+ * This file is the ONE port of those rules for the client (`scripts/smoke_fit_widen_parity.py` checks it against the
  * Python on a synthetic mesh, with hand-derived numbers). The server sends the axis in the shown mesh's own frame
  * (`garment_mesh_view.widen_axis`: the placement is a uniform scale plus an offset, so widening the placed piece
  * equals widening the mesh about the mapped-back axis), and per factor what the fit allowance can apply the share
@@ -17,8 +23,12 @@
  */
 import type { AllowanceChoice, FitSettingsInfo } from './fitSettingsModel'
 
-/** The axis the fit widens about, in the shown mesh's frame (`garment_mesh_view.widen_axis`). */
-export interface WidenAxis { centre_x: number; centre_z: number; half_width: number }
+/** The axis the fit widens about, in the shown mesh's frame (`garment_mesh_view.widen_axis`), with the depth
+ *  allowance's frame (Ruling A68; absent on a view computed without it). */
+export interface WidenAxis {
+  centre_x: number; centre_z: number; half_width: number
+  ramp?: number; x_limit?: number; y_limit?: number; half_depth?: number
+}
 
 /** One factor of the body view's allowance table (`garment_mesh_view.allowance_table`). */
 export interface AllowanceStep {
@@ -28,6 +38,8 @@ export interface AllowanceStep {
   inside_faces: number
   gap_p50_mm: number | null
   gap_min_mm: number | null
+  /** Ruling A68: per depth choice (`AllowanceView.depth.choices`) [front, back] median gap, mm, before the push. */
+  depth_gaps?: Array<[number | null, number | null]>
 }
 
 /** The body view's `allowance` block. */
@@ -36,6 +48,8 @@ export interface AllowanceView {
   factors: number[]
   steps: AllowanceStep[]
   band_vertices: number
+  /** Ruling A68: the depth choices (percent) and their shift in mm on this body. */
+  depth?: { choices: number[]; ease_mm: number[] }
   mask_faces: number
   /** base64, one byte per face of the red overlay: bit i = inside the body at `factors[i]`. */
   mask: string
@@ -58,6 +72,42 @@ export function widenInPlace(xyz: Float32Array | Float64Array | number[], scale:
     xyz[i] = xyz[i] + (scale - 1) * Math.max(-hw, Math.min(hw, dx))
     xyz[i + 2] = axis.centre_z + (xyz[i + 2] - axis.centre_z) * scale
   }
+}
+
+/** Ruling A68: the depth shift (in the axis' units) of a depth choice in percent; 0 without the depth frame. */
+export function depthEase(axis: WidenAxis | null | undefined, depth: number): number {
+  return axis?.half_depth != null ? (depth / 100) * axis.half_depth : 0
+}
+
+/** `garment_fit.depth_shift` on one point: the z shift. */
+export function depthShift(x: number, y: number, z: number, ease: number, axis: WidenAxis): number {
+  if (ease === 0 || axis.ramp == null || axis.x_limit == null || axis.y_limit == null) return 0
+  const r = axis.ramp
+  const wz = Math.max(-1, Math.min(1, (z - axis.centre_z) / r))
+  const wx = Math.max(0, Math.min(1, (axis.x_limit - Math.abs(x - axis.centre_x)) / r))
+  const wy = Math.max(0, Math.min(1, (axis.y_limit - y) / r))
+  return ease * wz * wx * wy
+}
+
+/** `garment_fit.depth_ease` on flat xyz positions, in place (after `widenInPlace`, as the preview shows it). */
+export function easeInPlace(xyz: Float32Array | Float64Array | number[], ease: number, axis: WidenAxis): void {
+  if (ease === 0) return
+  for (let i = 0; i + 2 < xyz.length; i += 3) {
+    xyz[i + 2] = xyz[i + 2] + depthShift(xyz[i], xyz[i + 1], xyz[i + 2], ease, axis)
+  }
+}
+
+/** The depth row's gaps [front, back] at `factor` and the depth choice `depth`, or null. */
+export function depthGapsAt(view: AllowanceView | null | undefined, factor: number,
+  depth: number): [number | null, number | null] | null {
+  const step = stepAt(view, factor)
+  const i = (view?.depth?.choices || []).indexOf(depth)
+  return step?.depth_gaps && i >= 0 ? step.depth_gaps[i] ?? null : null
+}
+
+/** "+6 %" */
+export function depthText(depth: number): string {
+  return `+${depth} %`
 }
 
 /** The width factor of a fixed allowance choice (percent): +3 → 1.03; Auto has none of its own. */

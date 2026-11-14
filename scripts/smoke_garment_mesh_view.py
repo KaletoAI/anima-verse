@@ -77,6 +77,24 @@ Ruling A48c — the fit allowance's preview numbers (``allowance_factors`` / ``w
     c. The band: with trunk heights (0.115, 0.185) the rings at 0.12 .. 0.18 = 7 · 96 = 672 vertices; with the
        half width 0.05 instead (no heights): per ring the points with |0.092 cos a| ≤ 0.05, |cos a| ≤ 0.5435, a in
        [57.1°, 122.9°] and its mirror — at 3.75° spacing k 16 .. 32 = 17 points, twice -> 34 per ring, 374 in all.
+
+Ruling A68 — the depth allowance in the view (``widen_axis``' depth frame, ``allowance.depth``, ``depth_gaps``):
+[5c] The body view of [5]: the box body has no joints, so ``depth_limits`` falls back to x_limit 0.75 · 0.204 −
+    ramp 0.03 · 1.7 (0.051) = 0.102 and y_limit 1.7 − 0.21 · 1.7 = 1.343 (body frame); half depth: the body band
+    (3 .. 15 % of 1.7 below the garment's top 1.2) spans the box's z ±0.1 -> 0.1. In the mesh frame (s 0.2,
+    t (0, 1, 0)): ramp 0.051/0.2 = 0.255, x_limit 0.51, y_limit (1.343 − 1)/0.2 = 1.715, half depth 0.5.
+    ``allowance.depth``: choices [0, 3, 6, 10], ease in mm = choice/100 · 0.1 m · k 1 -> [0, 3, 6, 10]; every step
+    carries 4 ``depth_gaps``.
+[7d] ``allowance_table`` on the cylinder of [7] with a depth frame in the axis (x_limit 0.5 and y_limit 1.0 —
+    every vertex at full weight —, ramp 0.01, half depth 0.04 -> ease = 0.4 · the choice in mm): the front sector
+    (within 35° of +z: the tube's angles a with x = r cos a, z = r sin a in [55°, 125°] -> k 15 .. 33 at 3.75°, 19
+    per ring) and the back sector (19 per ring) move by +e / −e (|z| ≥ 0.092 · sin 55° = 0.075 ≫ the ramp). The gap of a
+    sector point = sqrt(x² + (z ± e)²) − R grows with |sin a|, symmetric about 90° / 270°, so the median (10th of
+    19, the same on every ring) is the point at a = 90° / 270°: 92·f + 0.4·d − 100 mm on both sides — f 1.00: d 0
+    −8.0, 3 −6.8, 6 −5.6, 10 −4.0; f 1.10: 1.2, 2.4, 3.6, 5.2 (± 0.5 mm). The half depth is kept small so every
+    gap stays within ``SDF_EXACT_BAND_VOX`` (6) voxels of 1 mm outside the body, where the field is exact (beyond
+    it the EDT reads about a voxel short; the real view's voxel is 3.4 mm / k, a band of about 2 cm). The ease
+    in mm is the choice / 100 · 0.04 m = [0, 1.2, 2.4, 4.0].
 """
 import json
 import os
@@ -376,6 +394,16 @@ def main() -> int:
             check("mask: one byte per overlay face, bit 0 set", (al.get("mask_faces"), len(mask),
                                                                  all(b & 1 for b in mask)), (96, 96, True))
 
+            print("[5c] the depth frame of the body view (Ruling A68)")
+            near("ramp (mesh frame)", ax.get("ramp"), 0.255, 1e-6)
+            near("x_limit (mesh frame)", ax.get("x_limit"), 0.51, 1e-6)
+            near("y_limit (mesh frame)", ax.get("y_limit"), 1.715, 1e-6)
+            near("half depth (mesh frame)", ax.get("half_depth"), 0.5, 1e-6)
+            check("depth choices / ease mm", ((al.get("depth") or {}).get("choices"),
+                                              (al.get("depth") or {}).get("ease_mm")),
+                  ([0, 3, 6, 10], [0.0, 3.0, 6.0, 10.0]))
+            check("depth gaps per step", [len(st.get("depth_gaps") or []) for st in al.get("steps") or []], [4] * 7)
+
             print("[6] auth")
             client.cookies.set(sessions.SESSION_COOKIE_NAME, tokens[users.ROLE_USER])
             for url in (f"{base_url}/prepared", f"{base_url}/prepared/body", f"{base_url}/prepared/body/ghost"):
@@ -408,6 +436,18 @@ def main() -> int:
         check("band between the trunk heights", int(rows.sum()), 672)
         rows = garment_mesh_view.trunk_band_rows(tube_P, {**axis, "half_width": 0.05}, None)
         check("band within the half width", int(rows.sum()), 374)
+        check("no depth frame, no depth gaps", ("depth" in table, "depth_gaps" in table["steps"][0]), (False, False))
+
+        print("[7d] depth gaps on the cylinder (Ruling A68, hand-derived)")
+        axis_d = {**axis, "ramp": 0.01, "x_limit": 0.5, "y_limit": 1.0, "half_depth": 0.04}
+        table = garment_mesh_view.allowance_table(tube_P, tube_F, cyl_P, cyl_F, s=1.0, t=np.zeros(3), axis=axis_d,
+                                                  vox=0.001, k=1.0, trunk_y=None)
+        check("ease mm", table["depth"], {"choices": [0, 3, 6, 10], "ease_mm": [0.0, 1.2, 2.4, 4.0]})
+        for st in table["steps"]:
+            for d, (front, back) in zip((0, 3, 6, 10), st["depth_gaps"]):
+                want = 92.0 * st["factor"] + 0.4 * d - 100.0
+                near(f"front at x{st['factor']} +{d} %", front, want, 0.5)
+                near(f"back at x{st['factor']} +{d} %", back, want, 0.5)
 
     print("\nFAILED: " + ", ".join(FAILS) if FAILS else "\nall checks passed")
     return 1 if FAILS else 0

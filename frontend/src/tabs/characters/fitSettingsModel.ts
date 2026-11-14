@@ -1,12 +1,15 @@
 /**
  * Ruling A47 — the fit settings of an own-mesh clothing piece (server: `garments.fit_settings_info`, saved by
- * POST /characters/{n}/garments/{item}/fit-settings): the sleeves per side, the width allowance, the arm light.
+ * POST /characters/{n}/garments/{item}/fit-settings): the sleeves per side, the width allowance, the depth allowance
+ * (Ruling A68), the arm light.
  * Pure helpers (types, labels, the plain-words reasons composed through the translation layer).
  */
 import type { Light } from './hairstylesModel'
 
 export type SleeveChoice = 'auto' | 'generated' | 'wider' | 'fitted'
 export type AllowanceChoice = 'auto' | 0 | 3 | 6 | 10
+/** Ruling A68: room in front of and behind the trunk, percent of the torso's half depth (no Auto). */
+export type DepthChoice = 0 | 3 | 6 | 10
 export type SleeveSideKey = 'left' | 'right'
 
 /** One rule of the Auto choice (`garment_fit.auto_sleeve`). */
@@ -46,10 +49,19 @@ export interface AllowanceInfo {
   inherited?: boolean
 }
 
+/** Ruling A68: the depth allowance the shown fit was made with (`report.depth`). */
+export interface DepthInfo {
+  setting: DepthChoice
+  ease_mm: number
+  half_depth_mm: number
+  inherited?: boolean
+}
+
 export interface FitSettingsValues {
   sleeves_left: SleeveChoice
   sleeves_right: SleeveChoice
   allowance: AllowanceChoice
+  depth: DepthChoice
 }
 
 export interface FitSettingsInfo {
@@ -60,14 +72,16 @@ export interface FitSettingsInfo {
   due: boolean
   sleeves: Partial<Record<SleeveSideKey, SleeveSide>>
   allowance: AllowanceInfo | null
+  depth?: DepthInfo | null
   arm_light: ArmLight | null
   numbers: {
     deep_push_share?: number | null; torso_tight_share?: number | null; sleeve_shards?: number | null
     sleeve_skin_left_cm2?: number | null; sleeve_skin_right_cm2?: number | null; scale?: number | null
+    trunk_front_gap_p50_m?: number | null; trunk_back_gap_p50_m?: number | null
   }
   accepted: boolean
   built_at: string | null
-  choices?: { sleeves: SleeveChoice[]; allowance: AllowanceChoice[] }
+  choices?: { sleeves: SleeveChoice[]; allowance: AllowanceChoice[]; depth?: DepthChoice[] }
   limits?: { red_cm2: number; deep: number; tight: number; tight_m: number; max_factor: number }
 }
 
@@ -75,6 +89,7 @@ type T = (s: string) => string
 
 export const SLEEVE_CHOICES: SleeveChoice[] = ['auto', 'generated', 'wider', 'fitted']
 export const ALLOWANCE_CHOICES: AllowanceChoice[] = ['auto', 0, 3, 6, 10]
+export const DEPTH_CHOICES: DepthChoice[] = [0, 3, 6, 10]
 
 export const SLEEVE_LABELS: Record<SleeveChoice, string> = {
   auto: 'Auto', generated: 'As generated', wider: 'Wider', fitted: 'Fitted to the arm',
@@ -90,7 +105,14 @@ export function allowanceLabel(choice: AllowanceChoice, t: T): string {
   return choice === 'auto' ? t('Auto') : `+${choice} %`
 }
 
-export const ALLOWANCE_HINT = 'Width only, about the body’s centre. Auto widens a fit that passes but lies tight — more than 8 % pushed out over 3 cm, or more than 18 % of the trunk closer than 1.5 cm — by the smallest step up to 8 % that passes every check. A fixed value fits exactly that much wider, with no automatic step.'
+export const ALLOWANCE_HINT = 'Widens the piece about the body’s centre before the fit pushes it out: the sides, and front and back in proportion (where the piece lies inside the body, the push-out takes that back). Auto widens a fit that passes but lies tight — more than 8 % pushed out over 3 cm, or more than 18 % of the trunk closer than 1.5 cm — by the smallest step up to 8 % that passes every check. A fixed value fits exactly that much wider, with no automatic step.'
+
+/** Ruling A68. */
+export const DEPTH_HINT = 'Room in front of and behind the trunk, added after the fit pushes the piece out: the front and the back stand off by this share of the torso’s half depth. Sleeves, the collar and the neck opening keep their size. Auto never adds depth; the default is +0 %.'
+
+export function depthLabel(choice: DepthChoice): string {
+  return `+${choice} %`
+}
 
 const WHERE: Record<string, string> = { 'upper arm': 'upper arm', forearm: 'forearm', wrist: 'wrist' }
 
@@ -169,11 +191,20 @@ export function allowanceNumbers(info: FitSettingsInfo, t: T): string {
   const scale = n.scale ?? info.allowance?.factor ?? 1
   const width = scale > 1.0001 ? t('width +{pct} %').replace('{pct}', String(Math.round((scale - 1) * 100)))
     : t('width as generated')
-  return [
+  const parts = [
     `${t('Pushed out over 3 cm')} ${pct(n.deep_push_share)}`,
     `${t('Trunk closer than 1.5 cm')} ${pct(n.torso_tight_share, 0)}`,
     width,
-  ].join(' · ')
+  ]
+  const d = info.depth
+  if (d && d.setting > 0) {
+    parts.push(t('depth +{pct} % ({mm} mm)').replace('{pct}', String(d.setting)).replace('{mm}', d.ease_mm.toFixed(1)))
+  }
+  if (n.trunk_front_gap_p50_m != null && n.trunk_back_gap_p50_m != null) {
+    parts.push(`${t('Gap front / back')} ${(n.trunk_front_gap_p50_m * 1000).toFixed(1)} / ${
+      (n.trunk_back_gap_p50_m * 1000).toFixed(1)} mm`)
+  }
+  return parts.join(' · ')
 }
 
 /** Why Auto widened (or did not): the trigger and the step it took. */
@@ -188,4 +219,14 @@ export function allowanceReason(info: FitSettingsInfo, t: T): string {
   return a.factor > 1.0001
     ? t('Auto: {why} — widened {pct} %').replace('{why}', why).replace('{pct}', String(Math.round((a.factor - 1) * 100)))
     : t('Auto: {why} — no wider step passed every check').replace('{why}', why)
+}
+
+/** Ruling A68: what the shown fit did in depth, in plain words (a fit made before A68 carries no depth: none). */
+export function depthReason(info: FitSettingsInfo, t: T): string {
+  const d = info.depth
+  if (!d) return info.recorded ? t('Shown fit: no extra depth') : ''
+  if (d.inherited) return t('On a body shape the depth comes from the plain body’s fit')
+  return d.setting > 0
+    ? t('Shown fit: {mm} mm more room in front and behind').replace('{mm}', d.ease_mm.toFixed(1))
+    : t('Shown fit: no extra depth')
 }

@@ -1828,6 +1828,24 @@ def trunk_band(X: np.ndarray, Wg: np.ndarray, body: BodyMesh) -> np.ndarray:
     return trunk
 
 
+def _front_back_gaps(X: np.ndarray, d: np.ndarray, trunk: np.ndarray, body_P) -> Dict[str, Optional[float]]:
+    """Ruling A68: ``trunk_front_gap_p50_m`` / ``trunk_back_gap_p50_m`` — the median clearance ``d`` of the trunk
+    vertices in front of / behind the trunk (``front_back_rows`` about the torso axis of the piece ``X`` on the body
+    ``body_P``, ``torso_axis``); None for an empty sector or without a trunk."""
+    out: Dict[str, Optional[float]] = {"trunk_front_gap_p50_m": None, "trunk_back_gap_p50_m": None}
+    if not trunk.any():
+        return out
+    try:
+        cx, cz = torso_axis(X, body_P, height_u=float(np.ptp(np.asarray(body_P)[:, 1])))
+    except ValueError:
+        return out
+    front, back = front_back_rows(X[trunk], cx, cz)
+    dt = d[trunk]
+    for key, rows in (("trunk_front_gap_p50_m", front), ("trunk_back_gap_p50_m", back)):
+        out[key] = float(np.median(dt[rows])) if rows.any() else None
+    return out
+
+
 def place_sleeves(X: np.ndarray, Xs: np.ndarray, Wg: np.ndarray, body: BodyMesh, *, faces, adjacency,
                   choices: Dict[str, str], inside: Optional[np.ndarray] = None
                   ) -> Tuple[np.ndarray, Dict[str, Any], np.ndarray, np.ndarray]:
@@ -1977,7 +1995,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
                      margin_m: float = SDF_MARGIN_M,
                      rigged_iterations: int = RIGGED_ITERATIONS,
                      limbs: Optional[Dict[str, Any]] = None, Q_pre=None,
-                     sleeves: Optional[Dict[str, str]] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
+                     sleeves: Optional[Dict[str, str]] = None,
+                     ease_z: Optional[np.ndarray] = None) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Carry welded clothing positions ``Q`` (unrigged units) into the rigged bind space (metres) by the body's own
     skinning -> ``(X, report)``. ``limbs`` (a refit, ``fit_clothing``): the source fit per welded vertex (``x0``,
     ``w0``, ``names0``, ``frames``, ``kinds``) — its limb part is aligned onto this body's limbs (``align_limbs``)
@@ -2007,6 +2026,9 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     4. The clearance pass on the rigged body (SDF in metres, ``rigged_iterations`` iterations, smoothed in the
        first ``RIGGED_SMOOTH_UNTIL``), side-kept (``push_kept``); a vertex the skinning buried on the wrong side
        starts on the nearest body surface of its own side (``_transfer_sides``, ``_side_projection``).
+    5. Ruling A68: ``ease_z`` (per vertex, unrigged units — ``depth_shift`` of ``Q``) is added to the rigged z
+       (times ``k``) as the last step: the depth allowance never changes which part a vertex rides or how the
+       clearance pass moves it, and every number of the report is measured with it.
     """
     from scipy.spatial import cKDTree
     from app.core.rig_contract import norm_bone_name
@@ -2097,6 +2119,11 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         Xd = Xd + push_kept(Y, adjacency, sdf, clear=clear_m, iterations=3, smooth_until=0, margin=SIDE_MARGIN_M)
     X = X + Xd
     rigged_push = np.linalg.norm(Xd, axis=1)
+    if ease_z is not None and np.any(ease_z):
+        X[:, 2] += np.asarray(ease_z, np.float64) * float(k)
+        if (X.min(0) < lo + 0.5 * margin_m).any() or (X.max(0) > hi - 0.5 * margin_m).any():
+            lo, hi = np.minimum(lo, X.min(0) - margin_m), np.maximum(hi, X.max(0) + margin_m)
+            sdf = body_sdf(Pr, body_rigged.faces, vox=vox_m, bounds=(lo, hi))
     d = sdf.sample(X)
     arm_cols = [i for i, n in enumerate(body_rigged.joint_names) if "arm" in norm_bone_name(n)]
     # Ruling A47: how tight the trunk of the piece lies (the width allowance, ``scale_retry``) and how much the
@@ -2121,6 +2148,7 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "rigged_inside_share": float((d < 0).mean()),
         "torso_tight_share": float((d[trunk] < TORSO_TIGHT_M).mean()) if trunk.any() else 0.0,
         "torso_gap_p50_m": float(np.median(d[trunk])) if trunk.any() else 0.0,
+        **_front_back_gaps(X, d, trunk, Pr),
         "sleeve_stretch": stretch,
         "sleeve_fitted": fitted,
     }
@@ -2800,6 +2828,8 @@ def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any],
         "rigged_clearance_p1_m": round(float(transfer_report.get("rigged_clearance_p1_m", float("nan"))), 4),
         "torso_tight_share": round(float(transfer_report.get("torso_tight_share", float("nan"))), 4),
         "torso_gap_p50_m": round(float(transfer_report.get("torso_gap_p50_m", float("nan"))), 4),
+        **{key: (round(float(transfer_report[key]), 4) if transfer_report.get(key) is not None else None)
+           for key in ("trunk_front_gap_p50_m", "trunk_back_gap_p50_m")},
         "sleeve_stretch_over": int(stretch.get("over") or 0),
         "sleeve_shards": int(stretch.get("shards") or 0),
         "sleeve_stretch_p99": float(stretch.get("p99") or 1.0),
@@ -2970,6 +3000,100 @@ def widen(Q, scale: float, *, centre_x: float, centre_z: float, half_width: floa
     return Q
 
 
+# Depth allowance (Ruling A68): room in front of and behind the trunk. Measured 2026-11-14 on Kira's Black Blazer
+# (``a68-report.md``): the width allowance's ``widen`` already scales z about the torso band's depth centre, but BEFORE
+# the push-out — at chest height the placed front lies 19 to 32 mm inside the body, so the push sets the front and the
+# back to its clearance at every factor (fitted front / back median 11.9 / 12.9 mm at x1.00, 12.0 / 13.8 mm at x1.10).
+# A scale before the push cannot give room there, so the depth allowance acts AFTER the push-out: ``depth_shift`` of
+# the pushed placement moves z away from the torso's depth centre ``centre_z`` (the middle of the torso band's depth,
+# ``torso_axis`` — not a bone, which lies behind it) by ``ease``, the choice in percent of the torso band's half depth
+# (``torso_half_depth``): +10 % stands the front and the back off as a 10 % deeper torso would. The shift is full
+# beyond ``DEPTH_RAMP`` of the height from ``centre_z`` and ramps linearly through it (the sides stay joined); it fades
+# out over the same distance before ``x_limit`` (the arm joints' distance from the centre line less one ramp: a sleeve
+# is never made deeper) and below ``y_limit`` (the arm joints' height: the collar and the neck opening keep their
+# size). The fit adds it to the rigged piece's z as the last step of the transfer (``transfer_skinned`` step 5), so it
+# never changes which part a vertex rides; the push numbers (``deep_push_share``, ``max_push_m``) measure the push
+# alone, every gate of the rigged body judges the fit with the room added. 0 = no shift — the default, so a fit made
+# before A68 is unchanged and not due. Auto (the width allowance) never adds depth.
+DEPTH_CHOICES: Tuple[int, ...] = (0, 3, 6, 10)
+DEPTH_RAMP = 0.03
+
+
+def depth_choice(settings: Optional[Dict[str, Any]]) -> int:
+    """The depth allowance of a piece's fit settings (``depth``): a percent of ``DEPTH_CHOICES`` (a missing or
+    unknown value is 0)."""
+    value = (settings or {}).get("depth", 0)
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value in DEPTH_CHOICES:
+        return int(value)
+    return 0
+
+
+def torso_half_depth(Q, body_P, *, height_u: float, band=CLOTHING_DEPTH_BAND,
+                     half_x: float = CLOTHING_BODY_HALF_X) -> float:
+    """Half the depth of the body band of ``torso_axis`` (its z extent / 2) — what a depth percent is a share of."""
+    _bq, bb, _xc = _depth_bands(np.asarray(Q, np.float64), np.asarray(body_P, np.float64), height_u=height_u,
+                                band=band, half_x=half_x)
+    return float((bb[:, 2].max() - bb[:, 2].min()) / 2)
+
+
+def depth_limits(body_u_P, body_r, *, height_u: float) -> Tuple[float, float]:
+    """``(x_limit, y_limit)`` of ``depth_shift`` in the unrigged body's frame: the arm joints' mean distance from the
+    body's centre line in x less one ``DEPTH_RAMP``, and the lower arm joint's height — carried from the rigged body
+    by its share of the height (the frames differ by a scale and an origin). Without arm joints: 0.75 of the
+    widening's half width less one ramp, and 0.21 of the height below the body's top (about the shoulders)."""
+    from app.core.rig_contract import norm_bone_name
+    P = np.asarray(body_u_P, np.float64)
+    ramp = DEPTH_RAMP * height_u
+    joints = {norm_bone_name(k): np.asarray(v, np.float64) for k, v in (getattr(body_r, "joint_positions", None)
+                                                                         or {}).items()}
+    arms = [joints[k] for k in ("leftarm", "rightarm") if k in joints]
+    R = np.asarray(body_r.positions, np.float64)
+    span_r, span_u = float(np.ptp(R[:, 1])), float(np.ptp(P[:, 1]))
+    if arms and span_r > 0 and span_u > 0:
+        sc = span_u / span_r
+        cx_r = float(np.median(R[:, 0]))
+        x_limit = float(np.mean([abs(a[0] - cx_r) for a in arms]) * sc) - ramp
+        y_limit = float(P[:, 1].min() + (min(a[1] for a in arms) - R[:, 1].min()) * sc)
+        return x_limit, y_limit
+    return 0.75 * CLOTHING_BODY_HALF_X * height_u - ramp, float(P[:, 1].max() - 0.21 * height_u)
+
+
+def depth_shift(Q, ease: float, *, centre_x: float, centre_z: float, x_limit: float, y_limit: float,
+                ramp: float) -> np.ndarray:
+    """The depth allowance (block above) per position of ``Q`` (body frame): the z shift ``ease · wz · wx · wy`` with
+    ``wz = clip((z - centre_z) / ramp, -1, 1)``, ``wx = clip((x_limit - |x - centre_x|) / ramp, 0, 1)``,
+    ``wy = clip((y_limit - y) / ramp, 0, 1)``. x and y never change."""
+    Q = np.asarray(Q, np.float64)
+    if ease == 0.0 or not len(Q):
+        return np.zeros(len(Q))
+    wz = np.clip((Q[:, 2] - centre_z) / ramp, -1.0, 1.0)
+    wx = np.clip((x_limit - np.abs(Q[:, 0] - centre_x)) / ramp, 0.0, 1.0)
+    wy = np.clip((y_limit - Q[:, 1]) / ramp, 0.0, 1.0)
+    return ease * wz * wx * wy
+
+
+#: The front / back of the trunk (``front_back_rows``): within this angle (degrees) of straight ahead (+z) / behind.
+FRONT_BACK_DEG = 35.0
+
+
+def front_back_rows(Q, centre_x: float, centre_z: float) -> Tuple[np.ndarray, np.ndarray]:
+    """``(front, back)`` row masks of the positions ``Q``: within ``FRONT_BACK_DEG`` of +z / -z seen from the vertical
+    axis ``(centre_x, centre_z)`` — the gaps "front / back" of the depth allowance (Ruling A68)."""
+    Q = np.asarray(Q, np.float64)
+    if not len(Q):
+        return np.zeros(0, bool), np.zeros(0, bool)
+    ang = np.degrees(np.arctan2(Q[:, 0] - centre_x, Q[:, 2] - centre_z))
+    return np.abs(ang) <= FRONT_BACK_DEG, np.abs(ang) >= 180.0 - FRONT_BACK_DEG
+
+
+def depth_ease(Q, ease: float, **frame: float) -> np.ndarray:
+    """``Q`` with ``depth_shift`` added to z (a copy) — what the mesh view previews (``fitWiden.ts``
+    ``easeInPlace``)."""
+    Q = np.array(Q, np.float64)
+    Q[:, 2] += depth_shift(Q, ease, **frame)
+    return Q
+
+
 def push_numbers(Q0_pre, Q_post, exclude: Optional[np.ndarray] = None) -> Dict[str, float]:
     """``max_push_m`` and ``deep_push_share`` of a push-out (positions in metres, as ``clothing_metrics``; ``exclude``
     as there)."""
@@ -2999,8 +3123,9 @@ def too_small(reasons: List[str]) -> bool:
 # ``ALLOWANCE_TIGHT``: the steps of ``SCALE_RETRY_STEPS`` above the accepted scale (1.0, or the step a too-small
 # retry passed at; never beyond 1.08), smallest first; it takes the smallest step that passes every gate and clears
 # both numbers, else the smallest passing step that improves them (neither worse, one lower), else the fit as
-# accepted. A piece's fit settings may fix the allowance instead (``ALLOWANCE_CHOICES``, percent, width only: that
-# factor and no retry). A fit whose trunk is mapped from its base fit (outfit bodies) takes
+# accepted. A piece's fit settings may fix the allowance instead (``ALLOWANCE_CHOICES``, percent: that ``widen``
+# factor and no retry — the sides, and the depth in proportion before the push-out; room in front and behind after
+# the push-out is the separate depth allowance, Ruling A68). A fit whose trunk is mapped from its base fit (outfit bodies) takes
 # its width from the base fit: no allowance there.
 ALLOWANCE_CHOICES: Tuple[Any, ...] = ("auto", 0, 3, 6, 10)
 ALLOWANCE_DEEP = 0.08
@@ -3152,7 +3277,8 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
 
     ``settings`` (Ruling A47, the piece's fit settings — ``garments.fit_settings``): ``sleeves_left`` /
     ``sleeves_right`` (``SLEEVE_CHOICES``; ``place_sleeves``, report ``transfer.sleeves``) and ``allowance``
-    (``ALLOWANCE_CHOICES``; ``scale_retry``, report ``scale_retry.allowance``). The vertices laid onto the arm are
+    (``ALLOWANCE_CHOICES``; ``scale_retry``, report ``scale_retry.allowance``) and ``depth`` (Ruling A68,
+    ``DEPTH_CHOICES``; ``depth_shift`` after the push-out, report ``depth``). The vertices laid onto the arm are
     left out of the placement push numbers. ``metrics`` adds the skin seen in each sleeve
     (``sleeve_skin_left_cm2`` / ``sleeve_skin_right_cm2``, ``sleeve_skin_seen``; ``report["arm_light"]``), the
     trunk's tight share and the sleeve stretch.
@@ -3201,6 +3327,10 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     margin = SDF_MARGIN_M / k
     choices = sleeve_choices(settings)
     allowance = allowance_choice(settings)
+    depth = depth_choice(settings)
+    # Ruling A68: the depth allowance's shift in body units and its frame (set below, before the first finish).
+    ease_u: List[float] = [0.0]
+    depth_args: List[Dict[str, float]] = [{}]
     # the vertices the first finished fit laid onto the arm: left out of every later push number (scale steps)
     fitted_rows: List[Optional[np.ndarray]] = [None]
 
@@ -3214,8 +3344,10 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
 
     def finish(Qs, Qp, disp) -> FitResult:
         split_y = float(Qp[:, 1].max() - CLOTHING_WAIST_DROP * height_u)
+        # Ruling A68: the depth allowance of the pushed placement, added on the rigged body (``depth_shift``).
+        ease_z = depth_shift(Qp, ease_u[0], **depth_args[0]) if ease_u[0] else None
         X, transfer_report = transfer_skinned(Qp, body_u, body_r, faces=Fk, k=k, split_y=split_y, limbs=limbs,
-                                              Q_pre=Qs, sleeves=choices)
+                                              Q_pre=Qs, sleeves=choices, ease_z=ease_z)
         fitted = transfer_report.pop("sleeve_fitted", None)
         if fitted_rows[0] is None and fitted is not None and np.any(fitted):
             fitted_rows[0] = fitted
@@ -3262,6 +3394,12 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
     centre_x, centre_z = torso_axis(Q, body_u.positions, height_u=height_u)
     # A trunk mapped from its base fit (outfit bodies) takes its width from that fit: no allowance here.
     torso_source = bool(limbs) and "torso" in (limbs.get("frames") or {})
+    # Ruling A68: the depth allowance — on such a trunk inherited from the base fit as well.
+    half_depth = torso_half_depth(Q, body_u.positions, height_u=height_u)
+    x_limit, y_limit = depth_limits(body_u.positions, body_r, height_u=height_u)
+    depth_args[0] = {"centre_x": centre_x, "centre_z": centre_z, "x_limit": x_limit, "y_limit": y_limit,
+                     "ramp": DEPTH_RAMP * height_u}
+    ease_u[0] = 0.0 if torso_source else depth / 100.0 * half_depth
     result, info = scale_retry(Q, push, finish, centre_x=centre_x, centre_z=centre_z,
                                half_width=CLOTHING_BODY_HALF_X * height_u,
                                allowance="auto" if torso_source else allowance, widen_accepted=not torso_source)
@@ -3280,5 +3418,8 @@ def fit_clothing(unrigged_garment_glb: bytes, unrigged_base_glb: bytes, rigged_b
         result.metrics[f"sleeve_skin_{side}_cm2"] = skin.get(side)
     result.report["arm_light"] = arm_light(skin)
     result.report["fit_settings"] = {"sleeves_left": choices["left"], "sleeves_right": choices["right"],
-                                     "allowance": allowance}
+                                     "allowance": allowance, "depth": depth}
+    result.report["depth"] = {"setting": depth, "ease_mm": round(ease_u[0] * k * 1000.0, 1),
+                              "half_depth_mm": round(half_depth * k * 1000.0, 1),
+                              "inherited": bool(torso_source and depth)}
     return result

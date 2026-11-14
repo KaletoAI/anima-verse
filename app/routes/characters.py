@@ -2002,11 +2002,12 @@ class FootwearWidthCapRequest(BaseModel):
 
 
 class GarmentFitSettingsRequest(BaseModel):
-    # Ruling A47: any of sleeves_left / sleeves_right / allowance — plain Any so garment_fit_settings.validate
-    # answers a 400 with its message (not a schema 422); a field left out is unchanged.
+    # Ruling A47: any of sleeves_left / sleeves_right / allowance (and depth, Ruling A68) — plain Any so
+    # garment_fit_settings.validate answers a 400 with its message (not a schema 422); a field left out is unchanged.
     sleeves_left: Any = None
     sleeves_right: Any = None
     allowance: Any = None
+    depth: Any = None
 
 
 class PieceViewSourceRequest(BaseModel):
@@ -2794,7 +2795,8 @@ def set_character_garment_piece_view(character_name: str, item_id: str, body: Pi
 def set_character_garment_fit_settings(character_name: str, item_id: str, body: GarmentFitSettingsRequest,
                                        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Ruling A47 — the fit settings of an own-mesh clothing piece: ``sleeves_left`` / ``sleeves_right``
-    (auto / generated / wider / fitted) and ``allowance`` (auto / 0 / 3 / 6 / 10, percent of width), stored on the
+    (auto / generated / wider / fitted), ``allowance`` (auto / 0 / 3 / 6 / 10, percent of width) and ``depth``
+    (Ruling A68: 0 / 3 / 6 / 10, percent of the torso's half depth, added after the push-out), stored on the
     character (``garment_fit_settings.set_fit_settings``). Runs nothing: a fit made with other settings reads due
     and the next run refits it on the CPU (no hub job). ``{fit_settings}`` — ``garments.fit_settings_info`` now.
     Admin-only. 404 for an item that is no clothing garment of the character, 400 for a bad value."""
@@ -2949,8 +2951,9 @@ def get_character_garment_mesh_body(character_name: str, item_id: str, which: st
     """Ruling A48a: the body view of one mesh file (``garment_mesh_view.body_view``) — the share of its area
     inside the base body, the face counts and the placement — plus ``ghost_url`` (the base body as a ghost, in
     the mesh's frame) and ``inside_url`` (the faces inside the body at any allowance factor, Ruling A48c —
-    ``allowance.mask`` says at which; None without any) and ``allowance`` (the axis the fit widens about and, per
-    factor, the share inside and the trunk gap: ``garment_mesh_view.allowance_table``). Computed once per mesh
+    ``allowance.mask`` says at which; None without any) and ``allowance`` (the axis the fit widens about with the
+    depth allowance's frame and, per factor, the share inside, the trunk gap and per depth choice the gap front /
+    back, Ruling A68: ``garment_mesh_view.allowance_table``). Computed once per mesh
     and body and cached by content (``ETag`` = ``"<key>"``, 304 on a match). Admin-only. 400 for a bad which /
     attempt, 404 without the mesh, 409 with the plain reason when the body cannot be shown (no base model, no
     piece-only front view, a frame the fit refuses)."""

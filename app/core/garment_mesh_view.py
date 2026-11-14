@@ -34,6 +34,17 @@ between the hips and the shoulder joints) as p50 and minimum in mm. The red over
 at ANY factor; ``allowance.mask`` says per overlay face (one byte, bit ``i`` = ``allowance_factors()[i]``) at which
 factors it is inside, so the client shows exactly the faces of the factor being previewed.
 
+**The depth allowance (Ruling A68).** The fit adds room in front of and behind the trunk AFTER its push-out
+(``garment_fit.depth_shift``: z away from the torso's depth centre by a percent of the torso's half depth, faded out
+toward the sleeves and the collar). The axis carries its frame too (``ramp``, ``x_limit``, ``y_limit``,
+``half_depth``, mapped into the mesh frame like the axis), so the client previews the same shift
+(``fitWiden.ts`` ``easeInPlace``) on top of the widening. Per width factor the table adds, for every depth choice,
+the gap in front of and behind the trunk (``depth_gaps``, aligned with ``allowance.depth.choices``): the median gap of
+the trunk band's vertices within ``garment_fit.FRONT_BACK_DEG`` of straight ahead / behind, widened and shifted —
+before the push-out, like the trunk gap (the fit adds the depth AFTER its push, so where the piece lies inside the
+body the fit's result stands off by about the shift from its clearance; the fit records what it measured,
+``metrics.trunk_front_gap_p50_m`` / ``trunk_back_gap_p50_m``).
+
 Computed once per input set and cached on disk under ``<storage>/.cache/garment_mesh_view/<key>.{json,ghost.glb,
 inside.glb}`` — ``key`` is a hash of ``VIEW_VERSION`` and the content versions of the mesh file, both base models,
 the bald front view, the ghost front and the group's base copy (the inputs of the placement and the field). A key
@@ -62,8 +73,8 @@ WHICH: Tuple[str, ...] = ("prepared", "raw")
 #: The two cached overlays (``overlay_path``).
 OVERLAYS: Tuple[str, ...] = ("ghost", "inside")
 #: Stamped into the cache key: a change of the placement or the inside rule computes every view again
-#: (2: Ruling A48c, the allowance table and the union overlay).
-VIEW_VERSION = 2
+#: (2: Ruling A48c, the allowance table and the union overlay; 3: Ruling A68, the depth frame and gaps).
+VIEW_VERSION = 3
 #: The ghost's colour (RGBA) and the inside faces' (the client draws them translucent / on top).
 GHOST_RGBA = [0.62, 0.70, 0.80, 1.0]
 INSIDE_RGBA = [0.97, 0.32, 0.29, 1.0]
@@ -245,19 +256,57 @@ def allowance_factors() -> Tuple[float, ...]:
     return factors
 
 
-def widen_axis(P, F, s: float, t, body_P) -> Dict[str, float]:
+def widen_axis(P, F, s: float, t, body_P, body_r=None) -> Dict[str, float]:
     """The axis the fit widens about (``garment_fit.torso_axis`` on the placed welded mesh without its crumbs, half
     width ``CLOTHING_BODY_HALF_X`` of the body height — ``fit_clothing``'s ``scale_retry`` call), in the MESH's
-    own frame (``(c - t) / s``, half width ``/ s``): ``{centre_x, centre_z, half_width}``."""
+    own frame (``(c - t) / s``, half width ``/ s``): ``{centre_x, centre_z, half_width}``; with the rigged body
+    ``body_r`` also the depth allowance's frame (Ruling A68, ``fit_clothing``'s ``depth_shift`` arguments):
+    ``ramp``, ``x_limit``, ``half_depth`` (lengths, ``/ s``) and ``y_limit`` (a height, ``(y - t_y) / s``)."""
     from app.core import garment_fit as gf
     body_P = np.asarray(body_P, np.float64)
     Pw, Fw, _inv = gf.weld(P, F)
     Pk, _Fk, _keep = gf.drop_small(Pw, Fw)
     height_u = float(np.ptp(body_P[:, 1]))
     t = np.asarray(t, np.float64)
-    cx, cz = gf.torso_axis(Pk * s + t, body_P, height_u=height_u)
-    return {"centre_x": float((cx - t[0]) / s), "centre_z": float((cz - t[2]) / s),
-            "half_width": float(gf.CLOTHING_BODY_HALF_X * height_u / s)}
+    Q = Pk * s + t
+    cx, cz = gf.torso_axis(Q, body_P, height_u=height_u)
+    out = {"centre_x": float((cx - t[0]) / s), "centre_z": float((cz - t[2]) / s),
+           "half_width": float(gf.CLOTHING_BODY_HALF_X * height_u / s)}
+    if body_r is not None:
+        x_limit, y_limit = gf.depth_limits(body_P, body_r, height_u=height_u)
+        out.update(ramp=float(gf.DEPTH_RAMP * height_u / s), x_limit=float(x_limit / s),
+                   y_limit=float((y_limit - t[1]) / s),
+                   half_depth=float(gf.torso_half_depth(Q, body_P, height_u=height_u) / s))
+    return out
+
+
+def depth_frame_body(axis: Dict[str, float], s: float, t) -> Optional[Dict[str, float]]:
+    """``garment_fit.depth_shift``'s frame in the BODY's frame from a mesh-frame ``axis`` (``widen_axis``), plus
+    ``half_depth``; None without the depth fields."""
+    if "x_limit" not in axis:
+        return None
+    t = np.asarray(t, np.float64)
+    return {"centre_x": axis["centre_x"] * s + t[0], "centre_z": axis["centre_z"] * s + t[2],
+            "x_limit": axis["x_limit"] * s, "y_limit": axis["y_limit"] * s + t[1], "ramp": axis["ramp"] * s,
+            "half_depth": axis["half_depth"] * s}
+
+
+def depth_gaps(Qb, sdf, frame: Dict[str, float], *, k: float, depths=None) -> list:
+    """Per depth choice ``[front, back]``: the median gap (mm, ``sdf`` the body field) of the trunk-band vertices
+    ``Qb`` (body frame, already widened) in front of / behind the trunk (``garment_fit.front_back_rows`` about
+    ``(centre_x, centre_z)``, taken before the shift) after the depth shift (``garment_fit.depth_ease``) — before the
+    fit's push-out, like the trunk gap; None for an empty sector."""
+    from app.core import garment_fit as gf
+    Qb = np.asarray(Qb, np.float64)
+    depths = gf.DEPTH_CHOICES if depths is None else depths
+    front, back = gf.front_back_rows(Qb, frame["centre_x"], frame["centre_z"])
+    args = {key: frame[key] for key in ("centre_x", "centre_z", "x_limit", "y_limit", "ramp")}
+    out = []
+    for depth in depths:
+        gap = sdf.sample(gf.depth_ease(Qb, depth / 100.0 * frame["half_depth"], **args)) * k * 1000.0 \
+            if len(Qb) else np.zeros(0)
+        out.append([round(float(np.median(gap[m])), 1) if m.any() else None for m in (front, back)])
+    return out
 
 
 def trunk_band_rows(Q, axis_body: Dict[str, float], trunk_y: Optional[Tuple[float, float]]) -> np.ndarray:
@@ -292,9 +341,10 @@ def trunk_heights(body_u_P, body_r) -> Optional[Tuple[float, float]]:
 def allowance_table(P, F, body_P, body_F, *, s: float, t, axis: Dict[str, float], vox: float, k: float,
                     trunk_y: Optional[Tuple[float, float]] = None) -> Dict[str, Any]:
     """Per factor of ``allowance_factors`` the widened piece against the body (block above): ``{factors, steps
-    [{factor, share, face_share, inside_faces, gap_p50_mm, gap_min_mm}], band_vertices, union (mask of the faces
-    inside at any factor), bits (per face, bit i = inside at factors[i])}``. ``P, F`` in the mesh frame, ``(s, t)``
-    the placement, ``axis`` in the mesh frame (``widen_axis``), ``k`` metres per body unit."""
+    [{factor, share, face_share, inside_faces, gap_p50_mm, gap_min_mm, depth_gaps}], depth {choices, ease_mm},
+    band_vertices, union (mask of the faces inside at any factor), bits (per face, bit i = inside at factors[i])}``.
+    ``P, F`` in the mesh frame, ``(s, t)`` the placement, ``axis`` in the mesh frame (``widen_axis``), ``k`` metres
+    per body unit. ``depth_gaps`` (Ruling A68, ``depth_gaps``) only with the depth frame in ``axis``."""
     from app.core import garment_fit as gf
     P = np.asarray(P, np.float64)
     F = np.asarray(F, np.int64).reshape(-1, 3)
@@ -303,6 +353,7 @@ def allowance_table(P, F, body_P, body_F, *, s: float, t, axis: Dict[str, float]
     axis_body = {"centre_x": axis["centre_x"] * s + t[0], "centre_z": axis["centre_z"] * s + t[2],
                  "half_width": axis["half_width"] * s}
     Q = P * s + t
+    frame = depth_frame_body(axis, s, t)
 
     def widened(X, f):
         return gf.widen(X, f, centre_x=axis_body["centre_x"], centre_z=axis_body["centre_z"],
@@ -312,6 +363,10 @@ def allowance_table(P, F, body_P, body_F, *, s: float, t, axis: Dict[str, float]
     rows = trunk_band_rows(Qw, axis_body, trunk_y)
     lo = np.minimum(Q.min(0), widened(Q, factors[-1]).min(0))
     hi = np.maximum(Q.max(0), widened(Q, factors[-1]).max(0))
+    if frame is not None:
+        # The field must reach the largest depth shift too (it samples clamped beyond its bounds).
+        ease_max = max(gf.DEPTH_CHOICES) / 100.0 * frame["half_depth"]
+        lo, hi = lo - np.array([0.0, 0.0, ease_max]), hi + np.array([0.0, 0.0, ease_max])
     margin = gf.SDF_MARGIN_M * vox / gf.VOX_M
     sdf = gf.body_sdf(np.asarray(body_P, np.float64), np.asarray(body_F, np.int64).reshape(-1, 3), vox=vox,
                       bounds=(lo - margin, hi + margin))
@@ -326,14 +381,22 @@ def allowance_table(P, F, body_P, body_F, *, s: float, t, axis: Dict[str, float]
         area = gf.triangle_areas(Qf, F)
         total = float(area.sum())
         share = float(area[mask].sum() / total) if total > 0 else (float(mask.mean()) if len(mask) else 0.0)
-        gap = sdf.sample(widened(Qw[rows], f)) * k * 1000.0 if rows.any() else np.zeros(0)
-        steps.append({"factor": f, "share": round(share, 4),
-                      "face_share": round(float(mask.mean()) if len(mask) else 0.0, 4),
-                      "inside_faces": int(mask.sum()),
-                      "gap_p50_mm": round(float(np.median(gap)), 1) if len(gap) else None,
-                      "gap_min_mm": round(float(gap.min()), 1) if len(gap) else None})
-    return {"factors": list(factors), "steps": steps, "band_vertices": int(rows.sum()), "union": bits > 0,
-            "bits": bits}
+        band = widened(Qw[rows], f) if rows.any() else np.zeros((0, 3))
+        gap = sdf.sample(band) * k * 1000.0 if rows.any() else np.zeros(0)
+        step = {"factor": f, "share": round(share, 4),
+                "face_share": round(float(mask.mean()) if len(mask) else 0.0, 4),
+                "inside_faces": int(mask.sum()),
+                "gap_p50_mm": round(float(np.median(gap)), 1) if len(gap) else None,
+                "gap_min_mm": round(float(gap.min()), 1) if len(gap) else None}
+        if frame is not None:
+            step["depth_gaps"] = depth_gaps(band, sdf, frame, k=k)
+        steps.append(step)
+    out = {"factors": list(factors), "steps": steps, "band_vertices": int(rows.sum()), "union": bits > 0,
+           "bits": bits}
+    if frame is not None:
+        out["depth"] = {"choices": list(gf.DEPTH_CHOICES),
+                        "ease_mm": [round(c / 100.0 * frame["half_depth"] * k * 1000.0, 1) for c in gf.DEPTH_CHOICES]}
+    return out
 
 
 def overlay_glb(P, F, rgba, *, name: str) -> bytes:
@@ -409,7 +472,7 @@ def _compute(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Dict[
     vox = garment_fit.VOX_M / k
     mask, share, face_share = inside_faces(P * s + t, F, body_u.positions, body_u.faces, vox=vox)
     # Ruling A48c: the allowance table; the red overlay holds the faces inside at ANY factor, ``mask`` names which.
-    axis = widen_axis(P, F, s, t, body_u.positions)
+    axis = widen_axis(P, F, s, t, body_u.positions, body_r)
     table = allowance_table(P, F, body_u.positions, body_u.faces, s=s, t=t, axis=axis, vox=vox, k=k,
                             trunk_y=trunk_heights(body_u.positions, body_r))
     union = table.pop("union") | mask
@@ -446,7 +509,7 @@ def _cached(key: str) -> Optional[Dict[str, Any]]:
 
 def body_view(character_name: str, item_id: str, which: str, attempt: int = 0) -> Dict[str, Any]:
     """The body view of the mesh ``which`` / ``attempt``: ``{key, share, face_share, faces, inside_faces, bsig,
-    placement {scale, offset, k}, allowance {axis, factors, steps, band_vertices, mask_faces, mask}, computed_at,
+    placement {scale, offset, k}, allowance {axis, factors, steps, depth, band_vertices, mask_faces, mask}, computed_at,
     seconds}`` — from the cache, or computed now (blocking; Blender is
     not involved, the body field is numpy). ``LookupError`` without the mesh, ``ViewUnavailable`` when the body
     cannot be shown, ValueError for a bad ``which`` / attempt / item."""

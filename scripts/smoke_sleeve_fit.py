@@ -61,10 +61,13 @@ sector radius 0.04; 28 stations of SLEEVE_STATION_M 0.02 cover s 0 .. 0.56).
     never beyond 1.08: max(SCALE_RETRY_STEPS) == 1.08 and every tried scale <= 1.08.
     Width only: ``widen`` keeps y — (0.3, 1.2, 0.1) widened 1.08 about (0, 0) with half width 10 -> (0.324, 1.2,
     0.108).
-[6] Fit settings: ``normalise`` fills every key with "auto" and drops unknown values; a record made with the defaults
+[6] Fit settings: ``normalise`` fills every key with its default ("auto"; Ruling A68's ``depth`` 0) and drops
+    unknown values (depth 5 -> 0); a record made with the defaults
     and a profile asking sleeves_left "fitted" -> ``changed`` True (the fit is due), the same settings -> False, a
     record WITHOUT ``inputs.fit_settings`` reads as the defaults; ``validate`` refuses an unknown key, a bad sleeve
-    choice and allowance 5; ``garments._settings_changed`` judges a clothing record so and never a footwear one.
+    choice, allowance 5 and depth 5 / "auto"; ``garments._settings_changed`` judges a clothing record so and never a
+    footwear one. Ruling A68: a record made before the depth setting (no ``depth`` key) under a profile without one
+    is NOT due (missing = 0), the same record under depth 6 is.
 [7] Fails on the old code: at commit 8e6d8c65a (before Ruling A47) app/core/garment_fit.py has no ``fit_sleeve``,
     no ``sleeve_shards`` gate and FIT_VERSION clothing 10; garment_fit_settings.py does not exist.
 """
@@ -259,22 +262,30 @@ def test_allowance(gf):
 def test_settings():
     print("[6] fit settings make the fit due")
     from app.core import garment_fit_settings as fs, garments
-    check("[6] normalise", fs.normalise({"sleeves_left": "fitted", "sleeves_right": "bogus", "allowance": 5})
-          == {"sleeves_left": "fitted", "sleeves_right": "auto", "allowance": "auto"})
+    check("[6] normalise", fs.normalise({"sleeves_left": "fitted", "sleeves_right": "bogus", "allowance": 5,
+                                         "depth": 5})
+          == {"sleeves_left": "fitted", "sleeves_right": "auto", "allowance": "auto", "depth": 0})
+    pre_a68 = {"kind": "clothing", "inputs": {"fit_settings": {"sleeves_left": "auto", "sleeves_right": "auto",
+                                                              "allowance": 10}}}
+    check("[6] a fit made before the depth setting is not due",
+          not fs.changed(pre_a68, {fs.SETTINGS_KEY: {"item_a": {"allowance": 10}}}, "item_a"))
+    check("[6] ... and due under depth +6 %",
+          fs.changed(pre_a68, {fs.SETTINGS_KEY: {"item_a": {"allowance": 10, "depth": 6}}}, "item_a"))
     record = {"kind": "clothing", "inputs": {"fit_settings": fs.defaults()}}
     profile = {fs.SETTINGS_KEY: {"item_a": {"sleeves_left": "fitted"}}}
     check("[6] another setting -> due", fs.changed(record, profile, "item_a"))
     check("[6] the same settings -> not due", not fs.changed(record, {}, "item_a"))
     check("[6] a record without settings reads as the defaults", not fs.changed({"inputs": {}}, {}, "item_a"))
-    for bad in ({"colour": "red"}, {"sleeves_left": "baggy"}, {"allowance": 5}, {}):
+    for bad in ({"colour": "red"}, {"sleeves_left": "baggy"}, {"allowance": 5}, {"depth": 5}, {"depth": "auto"},
+                {"depth": True}, {}):
         try:
             fs.validate(bad)
             ok = False
         except ValueError:
             ok = True
         check(f"[6] validate refuses {bad}", ok)
-    check("[6] validate keeps good values", fs.validate({"allowance": 6, "sleeves_right": "wider"})
-          == {"allowance": 6, "sleeves_right": "wider"})
+    check("[6] validate keeps good values", fs.validate({"allowance": 6, "sleeves_right": "wider", "depth": 10})
+          == {"allowance": 6, "sleeves_right": "wider", "depth": 10})
     check("[6] garments._settings_changed: clothing record due",
           garments._settings_changed("Demo", "item_a", record, profile))
     check("[6] ... a footwear record never", not garments._settings_changed("Demo", "item_a",
