@@ -196,6 +196,9 @@ export { PARTNER_MAX, PARTNER_COLLIDE_MAX, PARTNER_PUSH_MAX_M, PARTNER_HYST_M, P
   contactAnglePair, releasedAngle, snapshotPartner } from './partnerContact'
 export type { Sphere, ChannelNow, PartnerCapsule, PartnerSnapshot } from './partnerContact'
 
+export { PROBE_NAME, PROBE_COLOR, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot } from './partnerProbe'
+export type { ProbeSourceCapsule, ProbePose } from './partnerProbe'
+
 export { STRAND_ROWS, StrandMismatch, StrandSim, bindStrands, boxDepth, decodeStrandSdf, eyePointsEntered,
   invertAffine, lerpFrame, limitSegmentAngle, maxSdfDepthMm, restInsideBox, scalpCameras, scalpExposure, SCALP_CAMERA_FOV_DEG,
   strandCapsules, strandParams, strandSdfAt, strandTargets, STRAND_LIMITS, pickStrandFigures, RootInertia,

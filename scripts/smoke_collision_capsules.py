@@ -143,6 +143,19 @@ Expected, derived by hand:
     point). Toe-out cancels: LeftToeBase (0.15, 0.02, 0.12), RightToeBase (−0.15, 0.02, 0.12) → the sum (0, −0.12,
     0.24), f = +z exactly → r 0.10, outer_spine a_pos (0, 1.2, 0.03) unchanged. Both feet count: only LeftToeBase at
     z = −0.12 → the sum (0, −0.12, 0) lies along e → the four outer capsules skipped "no front direction".
+[11] BIND POSE (the admin viewer's partner probe, cross-person Task 8): ``bind_pose_capsules(body, fit)`` on the full
+    fixture gives the 18 table capsules in payload order, each {id, region, a, b, r}. An endpoint without a position is
+    its joint's bind position = the negated translation of its inverse bind matrix = the node translation:
+    left_thigh a = LeftUpLeg (0.1, 0.95, 0), b = LeftLeg (0.1, 0.5, 0), r = the fit's 0.066; head a = Head
+    (0, 1.6, 0), b = its b_pos (0, 1.7996, 0) as given ([1]); outer_spine a / b = its a_pos / b_pos (0, 1.2, 0) /
+    (0, 1.35, 0). A capsule whose joint the file lacks is left out: the same record on the body without LeftFoot →
+    17 (left_shin gone, the outer four keep their joints Hips … Neck — only the FIT's front rule needed that joint).
+    The route ``GET /characters/{c}/model3d/collision/bind-pose`` (the real characters router, the gate and the
+    stubbed session of ``smoke_auth_gate.py``; the served model is <tmp>/characters/Mara/model3d/sig1.glb with the fit
+    in its sidecar — ``find_model3d_serving`` stubbed to it, there is no world DB): a player → 403 (its
+    require_admin; ``model3d`` is a public character segment, so the gate lets it through), an admin → 200
+    {signature "sig1", capsules = bind_pose_capsules}, the sidecar unchanged byte for byte (no write); a sidecar
+    without ``collision`` → 404.
 """
 import hashlib
 import json
@@ -664,6 +677,64 @@ def main() -> int:
     check("no LeftToeBase: the outer four skipped", [(s["id"], s["reason"]) for s in notoe["skipped"]],
           [(cid, "joint LeftToeBase missing") for cid in OUTER])
     check("no LeftToeBase: the 14 others fitted", [c["id"] for c in notoe["capsules"]], [c["id"] for c in full["capsules"]][:14])
+
+    print("[11] the bind pose of a stored set (partner probe)")
+    bind = collision.bind_pose_capsules(body, full)
+    by_bind = {c["id"]: c for c in bind}
+    check("18 capsules in payload order", [c["id"] for c in bind], [c["id"] for c in full["capsules"]])
+    check("entry keys", sorted(bind[0]) if bind else None, ["a", "b", "id", "r", "region"])
+    thigh_b = by_bind.get("left_thigh") or {}
+    check("left_thigh a = LeftUpLeg, b = LeftLeg", (thigh_b.get("a"), thigh_b.get("b"), thigh_b.get("region")),
+          ([0.1, 0.95, 0.0], [0.1, 0.5, 0.0], "leg"))
+    near("left_thigh r = the fit's", thigh_b.get("r"), 0.066, 0.0003)
+    head_b = by_bind.get("head") or {}
+    check("head a = Head, b = its b_pos", (head_b.get("a"), head_b.get("b")), ([0.0, 1.6, 0.0], [0.0, 1.7996, 0.0]))
+    spine_b = by_bind.get("outer_spine") or {}
+    check("outer_spine a / b = its a_pos / b_pos", (spine_b.get("a"), spine_b.get("b")),
+          ([0.0, 1.2, 0.0], [0.0, 1.35, 0.0]))
+    nofoot_bind = collision.bind_pose_capsules(make_body(drop=("LeftFoot",)), full)
+    check("a joint the file lacks: left out (17, no left_shin)",
+          (len(nofoot_bind), "left_shin" in {c["id"] for c in nofoot_bind}), (TABLE - 1, False))
+
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+    from app.core import auth_dependency, model3d
+    from app.models.character import get_character_dir
+    from app.routes import characters as characters_route
+    users = {"user": {"id": "u_user", "username": "demo", "role": "user", "allowed_characters": ["Mara"]},
+             "admin": {"id": "u_admin", "username": "demo", "role": "admin", "allowed_characters": []}}
+
+    def stub_session_user(request: Request):
+        return users.get(request.headers.get("x-test-user", ""))
+
+    real_session, real_serving = auth_dependency._get_session_user, model3d.find_model3d_serving
+    model_dir = get_character_dir("Mara", create=True) / "model3d"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    served = model_dir / "sig1.glb"
+    served.write_bytes(body)
+    side = served.with_suffix(".json")
+    side.write_text(json.dumps({"rig": "mixamo", "collision": {**full, "source": "own", "sha256": "x"}}))
+    before = side.read_bytes()
+    auth_dependency._get_session_user = stub_session_user
+    model3d.find_model3d_serving = lambda name: (served, "exact") if name == "Mara" else (None, "")
+    try:
+        route_app = FastAPI()
+        route_app.middleware("http")(auth_dependency.auth_gate_middleware)
+        route_app.middleware("http")(auth_dependency.user_context_middleware)
+        route_app.include_router(characters_route.router)
+        route_client = TestClient(route_app)
+        url = "/characters/Mara/model3d/collision/bind-pose"
+        check("route: a player is refused", route_client.get(url, headers={"x-test-user": "user"}).status_code, 403)
+        answer = route_client.get(url, headers={"x-test-user": "admin"})
+        check("route: an admin gets it", answer.status_code, 200)
+        check("route: {signature, capsules}", answer.json() if answer.status_code == 200 else None,
+              {"signature": "sig1", "capsules": json.loads(json.dumps(bind))})
+        check("route: nothing written", side.read_bytes(), before)
+        side.write_text(json.dumps({"rig": "mixamo"}))
+        check("route: no stored set → 404",
+              route_client.get(url, headers={"x-test-user": "admin"}).status_code, 404)
+    finally:
+        auth_dependency._get_session_user, model3d.find_model3d_serving = real_session, real_serving
 
     print("FAIL" if FAILS else "OK", f"({len(FAILS)} failures)" if FAILS else "")
     return 1 if FAILS else 0

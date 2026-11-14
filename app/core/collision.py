@@ -833,3 +833,44 @@ def summary(record: Any) -> Dict[str, Any]:
         radii[capsule.get("region")] = [min(low, r), max(high, r)]
     return {"count": len(record.get("capsules") or []), "skipped": len(record.get("skipped") or []),
             "radii": {k: [round(v[0], 1), round(v[1], 1)] for k, v in radii.items()}}
+
+
+def bind_pose_capsules(rigged_glb: bytes, record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """A stored set in the BIND POSE of its model (the admin viewer's partner probe, "Another character"):
+    ``[{id, region, a: [x, y, z], b: [x, y, z], r}]`` in payload order, in the space of the body's POSITION accessor
+    (the ENDPOINT RULE at rest: an endpoint without ``a_pos`` / ``b_pos`` is its joint's bind position, the inverse
+    of its inverse bind matrix; one with a position is that position as given). A capsule whose joint the file lacks
+    is left out, as ``bindCollision`` leaves it out. Pure; ValueError for a file without a skin."""
+    from app.core import glb_mesh
+    from app.core.rig_contract import norm_bone_name
+    parsed = glb_mesh._parse(rigged_glb, "Model")
+    gltf = parsed["gltf"]
+    skins, nodes = gltf.get("skins") or [], gltf.get("nodes") or []
+    if not skins or "inverseBindMatrices" not in skins[0]:
+        raise ValueError("The model has no skin with inverse bind matrices")
+    joints = skins[0].get("joints") or []
+    ibm = _matrices(parsed, skins[0]["inverseBindMatrices"])
+    if len(ibm) != len(joints) or not joints:
+        raise ValueError("The skin's inverse bind matrices do not match its joints")
+    positions = np.linalg.inv(ibm)[:, :3, 3]
+    index_of: Dict[str, int] = {}
+    for i, joint in enumerate(joints):
+        index_of.setdefault(norm_bone_name(str(nodes[joint].get("name") or "")), i)
+
+    def endpoint(capsule: Dict[str, Any], end: str) -> Optional[List[float]]:
+        index = index_of.get(norm_bone_name(str(capsule.get(end) or "")))
+        if index is None:
+            return None
+        given = capsule.get(f"{end}_pos")
+        if isinstance(given, (list, tuple)) and len(given) == 3:
+            return [float(v) for v in given]
+        return [round(float(v), 5) for v in positions[index]]
+
+    out: List[Dict[str, Any]] = []
+    for capsule in (record or {}).get("capsules") or []:
+        a, b = endpoint(capsule, "a"), endpoint(capsule, "b")
+        if a is None or b is None or not float(capsule.get("r") or 0) > 0:
+            continue
+        out.append({"id": str(capsule.get("id") or ""), "region": str(capsule.get("region") or ""),
+                    "a": a, "b": b, "r": float(capsule["r"])})
+    return out

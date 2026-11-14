@@ -12,8 +12,8 @@ import { accessWorldPoint, accessLocalPoint } from '../props/accessGeometry'
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode, MouseEvent as ReactMouseEvent } from 'react'
-import type { AnimationClip, Material, Mesh, MeshStandardMaterial, Object3D,
-  Quaternion, Vector3 } from 'three'
+import type { AnimationClip, GridHelper, LineSegments, Material, Mesh, MeshStandardMaterial, Object3D,
+  Quaternion, SkinnedMesh, Vector3 } from 'three'
 import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   installSkinnedNormalCorrection, createSecondaryMotion, bindRelativeClip, clipHipsDrop, disposeSlotMaterials, figureRootY,
   hipsTrackMedian, leafPivot, markerSlots, pairPoints, pairYaw,
@@ -21,9 +21,14 @@ import { FIGURE_HEIGHT_M, anchorFigureBind, applySlotMaterials,
   standingHipsRef, clipHeightOffsetM, clipHeightGroup, createCollisionOverlay, collidingGarmentMeshes,
   createGarmentCollision, applyAlphaCutoff, applyFootPose, applyFootPoseToPose, figureBox, footPoseLiftM,
   footPoseMatches, transplantedRestPose, measureClipGround, clipGroundOffset, plantFootPose,
-  seatFootLift, createStrandHair } from '@anima/scene-render'
+  seatFootLift, createStrandHair, bindCollision, inGarment, transformPoint, linearScale, capsuleWireframe,
+  placeCapsuleWireframe, partnerCapsules, probeCapsules, probeSweepOffset, probeSweptPose, probeSnapshot,
+  PROBE_COLOR } from '@anima/scene-render'
 import type { SecondaryMotion, SecondaryMotionPayload, RestPose, ClipHeightOffsetsCm,
-  CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair } from '@anima/scene-render'
+  CollisionOverlay, CollisionPayload, FootPose, GarmentCollision, HairStrandRecord, StrandHair, CapsuleNow,
+  PartnerSnapshot, ProbeSourceCapsule } from '@anima/scene-render'
+import { PartnerProbeControls } from './PartnerProbeControls'
+import type { PartnerProbeSettings } from './PartnerProbeControls'
 import { previewMotionAmp, previewRootPose, TURN_S } from './hairstylesModel'
 import type { PreviewMotionKind } from './hairstylesModel'
 import { applyViewerTexture, zeroViewerMetalness } from './modelTexture'
@@ -298,6 +303,33 @@ export interface ActionAccessOverlay {
   x: number
   z: number
   yaw: number
+}
+
+/** Where the partner probe starts: behind the figure, facing it, close enough that a sweep crosses the hair that
+ *  hangs there. */
+const PARTNER_PROBE_DEFAULTS: PartnerProbeSettings = {
+  source: 'self', character: '', x: 0, z: -0.35, yaw: 0, sweep: false, speed: 0.2, span: 0.15,
+}
+
+/** The first skinned BODY mesh under `root` (never a garment's, `inGarment`) — the frame a capsule's bind positions
+ *  live in. */
+function findBodyMesh(root: Object3D): SkinnedMesh | null {
+  const found: SkinnedMesh[] = []
+  root.traverse(o => {
+    const mesh = o as SkinnedMesh
+    if (!found.length && mesh.isSkinnedMesh && mesh.skeleton && !inGarment(mesh)) found.push(mesh)
+  })
+  return found[0] ?? null
+}
+
+/** The world capsules of `partners` the hair consumer takes (`partnerCapsules('hair', …)`), partner by partner — the
+ *  strand hair's and the GPU hair push's partners (the 3D client's `hairPartnerCapsules`). */
+function hairCapsulesOf(partners: readonly PartnerSnapshot[]): CapsuleNow[] {
+  const out: CapsuleNow[] = []
+  for (const snap of partners) {
+    for (const { capsule } of partnerCapsules('hair', snap.capsules.map(capsule => ({ capsule })))) out.push(capsule.now)
+  }
+  return out
 }
 
 export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel, freshness, builtAt, sideToolbar = false, embeddedTakes = false, clipLoops, clipUrl = '', textureUrl = '', height = 320, rotation,
@@ -623,6 +655,17 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   const [extensionPushOn, setExtensionPushOn] = useState(true)
   const extensionPushRef = useRef<CollisionPayload | null>(null)
   extensionPushRef.current = extensionPushOn && collision?.capsules?.length ? collision : null
+  // THE PARTNER PROBE (cross-person collision, plan Task 8): a stand-in partner body of capsules the admin moves
+  // against the figure (`PartnerProbeControls`), read per frame like a partner figure — the extension and hair chains
+  // (`secondary.update({ partners })`), the strand hair and the GPU hair push (`setPartners`, the hair consumer's
+  // regions). Off at every start; a preview only, nothing is saved.
+  const [probeOn, setProbeOn] = useState(false)
+  const [probeSettings, setProbeSettings] = useState<PartnerProbeSettings>(PARTNER_PROBE_DEFAULTS)
+  const [probeOther, setProbeOther] = useState<ProbeSourceCapsule[] | null>(null)
+  const [probeContacts, setProbeContacts] = useState<string[]>([])
+  const probeShownOn = probeOn && !!collision?.capsules?.length
+  const probeRef = useRef({ on: probeShownOn, settings: probeSettings, other: probeOther, payload: collision ?? null })
+  probeRef.current = { on: probeShownOn, settings: probeSettings, other: probeOther, payload: collision ?? null }
   const mountRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   // Triangle/vertex count of the loaded mesh — every preview shows it, so
@@ -1429,6 +1472,107 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           garmentCollision?.excludeMesh(strand.mesh, on)
         }
         disposers.push(() => { strand?.dispose(); strand = null })
+        // THE PARTNER PROBE (plan Task 8). Its source capsules live in the body mesh's POSITION space (the bind-pose
+        // route's space; the shown body's own `BoundCapsule.bind` taken back through inverse(bindMatrix)), are placed
+        // there (`probeCapsules`: mirror, yaw, x/z) and go to the world through the body mesh's matrix with the
+        // figure's DRAG turn but WITHOUT the motion buttons (Sway / Walk / Turn): the drag is the viewer's only way to
+        // look from another side, so the probe turns with it, while a motion moves the figure against a probe that
+        // stands still. Its wireframes and grid belong to this viewer (the disposer below), never to the model.
+        const probeBody = findBodyMesh(object)
+        const probeGroup = new THREE.Group()
+        probeGroup.name = 'partner-probe'
+        probeGroup.visible = false
+        scene.add(probeGroup)
+        const probeLines: LineSegments[] = []
+        let probeGrid: GridHelper | null = null
+        const dropProbeLines = () => {
+          for (const line of probeLines.splice(0)) {
+            line.removeFromParent()
+            line.geometry.dispose()
+            ;(line.material as Material).dispose()
+          }
+        }
+        disposers.push(() => {
+          dropProbeLines()
+          if (probeGrid) {
+            probeGrid.removeFromParent()
+            probeGrid.geometry.dispose()
+            ;(probeGrid.material as Material).dispose()
+            probeGrid = null
+          }
+          probeGroup.removeFromParent()
+        })
+        let probeSelfFor: CollisionPayload | null | undefined
+        let probeSelf: ProbeSourceCapsule[] | null = null
+        let probeT = 0
+        let probeClock = 0
+        let probeContactsShown = ''
+        let strandProbe = false
+        let gpuProbe = false
+        const probeFrameMatrix = new THREE.Matrix4()
+        const dragTurn = new THREE.Matrix4()
+        /** The shown body's own capsules in its bind pose, in the body mesh's POSITION space. */
+        const probeSelfCapsules = (payload: CollisionPayload | null): ProbeSourceCapsule[] | null => {
+          const binding = probeBody ? bindCollision(THREE, object, payload) : null
+          if (!binding || !probeBody) return null
+          const back = new THREE.Matrix4().copy(probeBody.bindMatrix).invert().elements
+          const k = linearScale(back)
+          return binding.capsules.map(entry => ({ id: entry.capsule.id, region: entry.capsule.region,
+            a: transformPoint(back, entry.bind.a), b: transformPoint(back, entry.bind.b), r: entry.bind.r * k }))
+        }
+        /** The probe of this frame as a partner (`[]` when off or without a source); places its wireframes. */
+        const probeFrame = (dt: number): PartnerSnapshot[] => {
+          const probe = probeRef.current
+          let source: ProbeSourceCapsule[] | null = null
+          if (probe.on && probeBody) {
+            if (probe.settings.source === 'other') source = probe.other
+            else {
+              if (probe.payload !== probeSelfFor) {
+                probeSelfFor = probe.payload
+                probeSelf = probeSelfCapsules(probe.payload)
+              }
+              source = probeSelf
+            }
+          }
+          if (!source?.length || !probeBody) {
+            probeGroup.visible = false
+            probeT = 0
+            return []
+          }
+          probeT = probe.settings.sweep ? probeT + dt : 0
+          const offset = probe.settings.sweep ? probeSweepOffset(probeT, probe.settings.speed, probe.settings.span) : 0
+          const placed = probeCapsules(source, probeSweptPose(probe.settings, offset), probe.settings.source === 'self')
+          // previewRoot · drag · inverse(previewRoot · turn) · body: the body's world matrix with the drag turn only.
+          probeFrameMatrix.copy(turnRoot.matrixWorld).invert().premultiply(dragTurn).premultiply(previewRoot.matrixWorld)
+            .multiply(probeBody.matrixWorld)
+          const m = probeFrameMatrix.elements
+          const k = linearScale(m)
+          const world = placed.map(c => ({ id: c.id, region: c.region,
+            now: { a: transformPoint(m, c.now.a), b: transformPoint(m, c.now.b), r: c.now.r * k } }))
+          if (probeLines.length !== world.length) {
+            dropProbeLines()
+            for (const c of world) {
+              const line = capsuleWireframe(THREE, c.now, PROBE_COLOR)
+              line.matrixAutoUpdate = false
+              line.name = `probe:${c.id}`
+              probeGroup.add(line)
+              probeLines.push(line)
+            }
+          }
+          world.forEach((c, i) => placeCapsuleWireframe(THREE, probeLines[i], c.now))
+          // The metres against a grid (10 cm cells) at the figure's ground level (y 0 of its frame) — unless the clip's
+          // floor grid is there.
+          if (floorWorldY === null) {
+            if (!probeGrid) {
+              probeGrid = new THREE.GridHelper(2, 20, 0x58a6ff, 0x30363d)
+              probeGroup.add(probeGrid)
+            }
+            const origin = transformPoint(m, [0, 0, 0])
+            probeGrid.position.set(origin[0], origin[1], origin[2])
+          }
+          probeGroup.visible = true
+          return [probeSnapshot(world)]
+        }
 
         if (placementRef.current) {
           // ── Stage mode: the location's reference square in WORLD metres,
@@ -2795,6 +2939,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           const drag = turnControl.pose
           turnRoot.matrix.fromArray(poseMatrix({ yaw: drag.yaw + pose.yaw, pitch: drag.pitch + pose.pitch },
             [turnPivot.x, turnPivot.y, turnPivot.z], [pose.offset[0], pose.offset[1], pose.offset[2]]))
+          // The drag alone (the partner probe turns with it — the drag is how a viewer looks from another side).
+          dragTurn.fromArray(poseMatrix({ yaw: drag.yaw, pitch: drag.pitch }, [turnPivot.x, turnPivot.y, turnPivot.z],
+            [0, 0, 0]))
           turnRoot.matrixWorldNeedsUpdate = true
           followTurn.matrix.copy(turnRoot.matrix)
           followTurn.matrixWorldNeedsUpdate = true
@@ -2894,10 +3041,32 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             extensionShown = extensionPushRef.current
             secondary?.setCollision(extensionShown)
           }
-          secondary?.update(realDelta)
+          // The partner probe in the client's phase-B order: the figure's pose is final, then the secondary motion
+          // and the strands read the partner (Task 7's two-phase frame).
+          const probePartners = probeFrame(Math.min(realDelta, 0.1))
+          const probeHair = probePartners.length ? hairCapsulesOf(probePartners) : null
+          secondary?.update(realDelta, { partners: probePartners })
           object.updateMatrixWorld(true)
+          if (strand?.enabled && probeHair) {
+            strand.setPartners(probeHair)
+            strandProbe = true
+          } else if (strandProbe) {
+            strand?.setPartners(null)
+            strandProbe = false
+          }
           // The strands after the pose of the frame is final (the client: after the mixer and the matrices).
           if (turnModeRef.current || strand) tickStrands(realDelta)
+          probeClock += realDelta
+          if (probeClock >= 0.25) {
+            probeClock = 0
+            const touching = probePartners.length && secondary
+              ? [...new Set(secondary.contactTips().flatMap(row => row.partner))].sort() : []
+            const key = touching.join(',')
+            if (key !== probeContactsShown) {
+              probeContactsShown = key
+              setProbeContacts(touching)
+            }
+          }
           if (collisionShown !== collisionRef.current) {
             collisionOverlay?.dispose()
             collisionShown = collisionRef.current
@@ -2929,6 +3098,15 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
             garmentCollision = createGarmentCollision(THREE, object, garmentShown)
             if (strand?.enabled) garmentCollision?.excludeMesh(strand.mesh, true)
             alphaShown = undefined
+            gpuProbe = false
+          }
+          // The hair meshes' GPU push reads the probe too (the hair consumer's regions, nearest first in the push).
+          if (probeHair) {
+            garmentCollision?.setPartners(probeHair)
+            gpuProbe = true
+          } else if (gpuProbe) {
+            garmentCollision?.setPartners(null)
+            gpuProbe = false
           }
           const cutoff = alphaCutoffRef.current
           if (typeof cutoff === 'number' && cutoff !== alphaShown) {
@@ -2992,6 +3170,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   }, [url, format, clipUrl, textureUrl, embeddedTakes, clipGroup, footPoseKey])
 
   const turned = turnPose.turn !== 0 || turnPose.tilt !== 0
+  const probeControls = (
+    <PartnerProbeControls value={probeSettings} onChange={setProbeSettings} onOtherCapsules={setProbeOther}
+      contacts={probeContacts} />
+  )
   return (
     <div className={sideToolbar ? 'ga-model3d-preview' : undefined}>
       {embeddedTakes && takes.length > 0 ? (
@@ -3136,6 +3318,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
               {t('Extension collision')}
             </button>
           ) : null}
+          {collision?.capsules?.length ? (
+            <button type="button" className="ga-btn ga-btn-sm"
+              aria-pressed={probeShownOn} onClick={() => setProbeOn(on => !on)}
+              title={t('A stand-in partner body of capsules to move against the figure — how hair and chains react, without a second character · preview only')}>
+              {t('Partner probe')}
+            </button>
+          ) : null}
           {/* The front view is a MODE the owner holds (§ B1): pressed, the
               model stands straight on and the orbit is locked — the state a
               ring may be drawn in. */}
@@ -3213,9 +3402,13 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           {t('Extension bones: up to {n}° from their built pose · no jobs').replace('{n}', String(bonesSwing))}
         </div>
       ) : null}
+      {probeShownOn && !sideToolbar && !loading && !error ? (
+        <div style={{ maxWidth: 300, marginTop: 6 }}>{probeControls}</div>
+      ) : null}
       </div>
       {sideToolbar ? <aside className="ga-model3d-toolbar">
         {statusPanel}
+        {probeShownOn && !loading && !error ? probeControls : null}
         {turnMode ? (
           <div className="ga-fieldset ga-model3d-group">
             <span className="ga-fieldset-title" style={{ margin: 0, fontSize: 11 }}>{t('Motion preview')}</span>

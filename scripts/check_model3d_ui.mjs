@@ -27,6 +27,13 @@
  *     hasExtensionSection, no pipeline pointer ("Set on the base body") and no outfit-only line any more;
  *     the character template has the one `model3d_details` section instead of the three side sections;
  *     CollisionScales' two reset buttons have distinct labels ("Discard changes", "Reset to default").
+ * [5] The partner probe (cross-person collision Task 8), source greps of Model3DViewer: the "Partner probe" toggle
+ *     (off at start: `useState(false)`), its controls in the side toolbar (`PartnerProbeControls`), the probe read
+ *     as a partner by the secondary motion (`secondary?.update(realDelta, { partners: probePartners })`), the strand
+ *     hair and the GPU hair push (`strand.setPartners(probeHair)`, `garmentCollision?.setPartners(probeHair)`), its
+ *     wireframes and grid freed by a viewer disposer (`dropProbeLines()` inside `disposers.push`). The controls offer
+ *     both sources and call the admin bind-pose route. The headless screenshots are `~/claude-out/cross-person/cx8/`
+ *     (harness outside the repo, see the Task 8 report).
  */
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -113,6 +120,19 @@ check('[4] template: one details section', specials, ['model3d_details']);
 const cs = src('frontend/src/tabs/characters/CollisionScales.tsx');
 check('[4] CollisionScales: distinct reset labels', [/t\('Discard changes'\)/.test(cs), /t\('Reset to default'\)/.test(cs),
   /t\('Revert'\)/.test(cs)], [true, true, false]);
+
+// [5]
+const viewerSrc = src('frontend/src/tabs/characters/Model3DViewer.tsx');
+const probeSrc = src('frontend/src/tabs/characters/PartnerProbeControls.tsx');
+check('[5] viewer: the toggle, off at start, the controls', [/t\('Partner probe'\)/.test(viewerSrc),
+  /const \[probeOn, setProbeOn\] = useState\(false\)/.test(viewerSrc), /<PartnerProbeControls\b/.test(viewerSrc)],
+  [true, true, true]);
+check('[5] viewer: read as a partner by every consumer', [/secondary\?\.update\(realDelta, \{ partners: probePartners \}\)/.test(viewerSrc),
+  /strand\.setPartners\(probeHair\)/.test(viewerSrc), /garmentCollision\?\.setPartners\(probeHair\)/.test(viewerSrc)],
+  [true, true, true]);
+check('[5] viewer: the probe lines freed by a disposer', /disposers\.push\(\(\) => \{\s*dropProbeLines\(\)/.test(viewerSrc), true);
+check('[5] controls: both sources, the bind-pose route', [/This body, mirrored/.test(probeSrc), /Another character/.test(probeSrc),
+  /model3d\/collision\/bind-pose/.test(probeSrc)], [true, true, true]);
 
 if (failures.length) {
   console.error(`\nFAIL (${failures.length})`);

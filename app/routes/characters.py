@@ -4093,6 +4093,35 @@ def recompute_character_model3d_collision(
     return {"ok": bool(record) and not record.get("error"), "signature": signature, "collision": record}
 
 
+@router.get("/{character_name}/model3d/collision/bind-pose")
+def get_character_collision_bind_pose(character_name: str,
+        _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The capsule set of the served full-tier model in its bind pose (``collision.bind_pose_capsules``) — the
+    stand-in body of the admin viewer's partner probe ("Another character"). ``{signature, capsules}``; 404 for a
+    character without a served model or without a stored set. Reads only: nothing is fitted or written."""
+    from app.core import collision
+    from app.core.keyed_lock import keyed_lock
+    from app.core.model3d import _read_sidecar, find_model3d_serving, get_model3d_dir
+    if not get_character_dir(character_name).exists():
+        raise HTTPException(404, "Character not found")
+    path, _match = find_model3d_serving(character_name)
+    if path is None or path.suffix.lower() != ".glb":
+        raise HTTPException(404, "No model")
+    with keyed_lock("model3d_publication", str(get_model3d_dir(character_name))):
+        record = _read_sidecar(path).get("collision")
+        if not isinstance(record, dict) or record.get("error") or not record.get("capsules"):
+            raise HTTPException(404, "No collision capsules")
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise HTTPException(404, "No model") from exc
+    try:
+        capsules = collision.bind_pose_capsules(data, record)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"signature": path.stem, "capsules": capsules}
+
+
 @router.post("/{character_name}/model3d/collision/scales")
 async def set_character_collision_scales(character_name: str, request: Request,
         _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
