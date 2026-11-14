@@ -22,9 +22,11 @@
  * …/model3d/extension-tip/apply {signature}: the CPU extension rebuild in the
  * background, no hub job; the caller polls until `running` ends.
  *
- * While the position sliders move, `onPreview` hands the caller dots for the
- * viewer: the built tip moved by the draft's difference along the surface
- * tangents there — a preview only; the build walks the real surface.
+ * While "Show markers" is on, `onPreview` hands the caller dots for the
+ * viewer (`tipPreviewDots`): the built tip moved by the draft's difference
+ * along the surface tangents there — a preview only; the build walks the real
+ * surface. The box starts off on every load (Ruling A62, not saved); moving a
+ * position slider turns it on.
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useI18n } from '../../i18n/I18nProvider'
@@ -35,12 +37,8 @@ import { useToast } from '../../lib/Toast'
 import { stampLabel } from './freshnessText'
 import { StepLight } from './StepRows'
 import type { ExtensionTipOverride, ExtensionTipPanelInfo } from './useBaseBody'
-import { TIP_DUE_NOTE, TIP_REBUILD_LABEL } from './baseBodyModel'
-
-export type TipDots = Array<{ at: [number, number, number]; color: string }>
-
-const BUILT_COLOR = '#3fb950'
-const DRAFT_COLOR = '#f0b35c'
+import { TIP_DUE_NOTE, TIP_MARKERS_START_SHOWN, TIP_REBUILD_LABEL, tipPreviewDots } from './baseBodyModel'
+import type { TipDots } from './baseBodyModel'
 
 function draftOf(panel: ExtensionTipPanelInfo): ExtensionTipOverride {
   const stored = panel.override
@@ -110,8 +108,9 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
   const factorsChanged = keyOf(factorDraft) !== storedFactorsKey
   const changed = tipChanged || factorsChanged
   const hasFactorOverride = factors.some((f) => motion?.overrides?.[f.key] !== undefined)
-  // The dots cover the very tips they mark: hidden on request, back on as soon as a slider moves.
-  const [showDots, setShowDots] = useState(true)
+  // The dots cover the very tips they mark: off on every load (Ruling A62 — a view switch of the open tab, never
+  // saved), on by the box, and on as soon as a slider moves.
+  const [showDots, setShowDots] = useState(TIP_MARKERS_START_SHOWN)
   const limit = panel.limits.offset_max_mm
   const busy = disabled || posting || panel.running
   // This model's own switch for the group (extension_rig_models[sig][group].enabled) — only here: the Extension
@@ -121,22 +120,8 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
   const locked = busy || off
 
   useEffect(() => {
-    const dots: TipDots = []
-    panel.sides.forEach((side, i) => {
-      if (!side) return
-      const base = side.tip ?? side.suggested
-      const built = side.tip ? side.offset_mm : [0, 0]
-      const offset = draft.offsets[draft.mirror ? 0 : i]
-      const du = (offset.up - built[0]) / 1000
-      const dout = (offset.out - built[1]) / 1000
-      const moved = Math.abs(du) > 1e-9 || Math.abs(dout) > 1e-9
-      dots.push({
-        at: [0, 1, 2].map((k) => base[k] + du * side.tangent_up[k] + dout * side.tangent_out[k]) as [number, number, number],
-        color: moved ? DRAFT_COLOR : BUILT_COLOR,
-      })
-    })
-    onPreview(panel.id, showDots && !off && dots.length ? dots : null)
-  }, [draft, off, onPreview, panel.id, panel.sides, showDots])
+    onPreview(panel.id, tipPreviewDots(panel, draft, showDots, off))
+  }, [draft, off, onPreview, panel, showDots])
   useEffect(() => () => onPreview(panel.id, null), [onPreview, panel.id])
 
   const setOffset = (i: number, key: 'up' | 'out', value: number) => { setShowDots(true); setDraft((previous) => {

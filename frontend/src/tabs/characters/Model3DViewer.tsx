@@ -314,7 +314,8 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
     /** Whether the "Extension bones" overlay starts switched on (Rulings A45/A56, `extensionGroupOverlay.ts`): the
      *  surface each of `motion`'s non-hair groups moves, as a wire grid in one colour per group, faded by skin
      *  weight and skinned with the mesh, plus a colour legend beside the toggle. The toggle is offered whenever
-     *  `motion` names such a group; off by default. */
+     *  `motion` names such a group; off by default — every viewer starts with it off (Ruling A62), and the toggle's
+     *  state lives only as long as the viewer, never saved. */
     extensionBones?: boolean
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */

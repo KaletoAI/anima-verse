@@ -71,8 +71,8 @@
  *     swingDeg 0; ExtA turned 30° about its parent's X: its +Y becomes (0, cos 30°, sin 30°), so swingDeg 30.
  *     Source greps: FieldBaseBody renders <ExtensionBonesBox inside `ga-ext-grid` after the first tip panel and before
  *     the others (tipPanels.slice(0, 1) … extensionBox … tipPanels.slice(1)) — only for the groups without a tip
- *     panel (`boxGroups`, Ruling A53) and only when there is one; hands the viewer `motion=` and
- *     `extensionBones`; the CSS grid is `minmax(0, 1fr) minmax(0, 1fr)`, `align-items: start`, one column under an
+ *     panel (`boxGroups`, Ruling A53) and only when there is one; hands the viewer `motion=` (the overlay starts off,
+ *     see [13]); the CSS grid is `minmax(0, 1fr) minmax(0, 1fr)`, `align-items: start`, one column under an
  *     `@container (max-width: 520px)`; the 3D tab's Model3DExtensions on the pipeline renders "Open Base body tab"
  *     and returns before the box; FieldModel3D leaves the Bounce / Weight sliders out on the pipeline.
  * [11] The tab checklist (Task UI5):
@@ -114,8 +114,28 @@
  *     nothing.
  *     Source greps: Model3DViewer builds createExtensionGroupOverlay (no bone lines module left) and renders the
  *     legend `ga-ext-legend` from the overlay's groups with groupColorCss.
+ * [13] Both switches start off (Ruling A62) — view switches of the open tab, held in component state only (no
+ *     localStorage, no profile option), so a fresh load is always off:
+ *     TIP_MARKERS_START_SHOWN is false. tipPreviewDots on a hand-built panel — left {suggested (0.1, 1.3, 0.2), built
+ *     tip (0.1, 1.28, 0.19), tangent_up (0, 1, 0), tangent_out (1, 0, 0), offset 0}, right {suggested (−0.1, 1.3, 0.2),
+ *     not built, tangent_out (−1, 0, 0)}, a zero draft:
+ *       hidden (the fresh load)              → null (no dots reach the viewer);
+ *       shown (the box ticked)               → left at its built tip (0.1, 1.28, 0.19), right at its suggestion
+ *                                              (−0.1, 1.3, 0.2), both "#3fb950" (built);
+ *       left up 4 mm, out 2 mm               → du 0.004, dout 0.002: left (0.102, 1.284, 0.19) "#f0b35c" (draft),
+ *                                              right unchanged;
+ *       the same with mirror                 → right takes offsets[0] too: (−0.1 − 0.002, 1.304, 0.2) = (−0.102,
+ *                                              1.304, 0.2), draft colour;
+ *       shown but the group off              → null; shown but no side found → null.
+ *     The panel rendered fresh (react-dom/server, en): its "Show markers" box is unchecked; it starts from
+ *     TIP_MARKERS_START_SHOWN, the box sets it, a moved slider sets it true, and the dots come from tipPreviewDots.
+ *     The viewer: `extensionBones = false` and `useState(extensionBones)`; no other file names `extensionBones`, so
+ *     the Base body, 3D and Figure tabs' viewers all start with the grid off; the toggle flips it
+ *     (`setBonesOn(on => !on)`, aria-pressed) and the frame loop builds the overlay of [12] once it is on — the
+ *     overlay itself is [12]'s numbers. Neither switch is persisted: no localStorage / usePersistentState in the
+ *     viewer or the tip panel.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -147,6 +167,35 @@ async function loadBundled(src) {
       platform: 'neutral', logLevel: 'silent', absWorkingDir: ROOT,
     });
     return await import(`file://${file}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** The tip panel rendered once, as a fresh load does (react-dom/server: no effects, no clicks), inside the i18n and
+ *  toast providers — one bundle, so React is a single instance. */
+async function renderTipPanelFresh(panel) {
+  const esbuild = esbuildModule();
+  const dir = await mkdtemp(join(tmpdir(), 'check-base-body-ui-ssr-'));
+  try {
+    const entry = join(dir, 'entry.tsx');
+    const file = join(dir, 'ssr.cjs');
+    const at = (rel) => JSON.stringify(join(ROOT, rel));
+    writeFileSync(entry, [
+      `import { renderToStaticMarkup } from 'react-dom/server'`,
+      `import { I18nProvider } from ${at('frontend/src/i18n/I18nProvider.tsx')}`,
+      `import { ToastProvider } from ${at('frontend/src/lib/Toast.tsx')}`,
+      `import { ExtensionTipPanel } from ${at('frontend/src/tabs/characters/ExtensionTipPanel.tsx')}`,
+      `export const render = (panel) => renderToStaticMarkup(<I18nProvider><ToastProvider><ExtensionTipPanel`,
+      `  character="demo" signature="s" panel={panel} disabled={false} onPreview={() => {}} onStarted={() => {}} />`,
+      `</ToastProvider></I18nProvider>)`,
+    ].join('\n'));
+    await esbuild.build({
+      entryPoints: [entry], outfile: file, bundle: true, format: 'cjs', platform: 'node', jsx: 'automatic',
+      logLevel: 'silent', absWorkingDir: ROOT, nodePaths: [join(ROOT, 'node_modules')],
+      define: { 'process.env.NODE_ENV': '"production"' }, loader: { '.css': 'empty' },
+    });
+    return require_(file).render(panel);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -379,8 +428,8 @@ const boxAt = baseTab.indexOf('{extensionBox}', gridAt);
 const restTips = baseTab.indexOf('tipPanels.slice(1)', gridAt);
 check('[10] box beside the first tip panel', gridAt > 0 && gridAt < firstTip && firstTip < boxAt && boxAt < restTips, true);
 check('[10] box element', /<ExtensionBonesBox legend=\{t\('Extension bones'\)\}/.test(baseTab), true);
-check('[10] viewer plays the base motion with the bone overlay',
-  /motion=\{ready \? previewMotion : undefined\} extensionBones/.test(baseTab), true);
+check('[10] viewer plays the base motion',
+  /motion=\{ready \? previewMotion : undefined\}/.test(baseTab), true);
 const css = src('frontend/src/styles/game-admin.css');
 check('[10] two equal columns, top-aligned',
   /\.ga-ext-grid \{ display: grid; grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\);[^}]*align-items: start;/.test(css), true);
@@ -432,6 +481,50 @@ check('[11] distinct reset labels', labelled.map((x) => [/t\('Discard changes'\)
   [[true, false], [true, false], [true, false], [true, false]]);
 check('[11] motion values: the name, the full wording on mouse-over',
   /title=\{t\(label\)\}>[\s\S]{0,80}\{t\(label\)\.split\(\/ \\\(\|;\/\)\[0\]\}/.test(labelled[2]), true);
+
+// [13]
+check('[13] markers start hidden', m.TIP_MARKERS_START_SHOWN, false);
+const tipSides = [
+  { side: 'left', suggested: [0.1, 1.3, 0.2], tip: [0.1, 1.28, 0.19], tangent_up: [0, 1, 0], tangent_out: [1, 0, 0], offset_mm: [0, 0] },
+  { side: 'right', suggested: [-0.1, 1.3, 0.2], tip: null, tangent_up: [0, 1, 0], tangent_out: [-1, 0, 0], offset_mm: [0, 0] },
+];
+const zeroDraft = { offsets: [{ up: 0, out: 0 }, { up: 0, out: 0 }], mirror: false };
+const movedDraft = { offsets: [{ up: 4, out: 2 }, { up: 0, out: 0 }], mirror: false };
+const dotsOf = (d) => d && d.map((x) => ({ at: x.at.map((v) => Math.round(v * 1e6) / 1e6), color: x.color }));
+check('[13] fresh load: no dots', m.tipPreviewDots({ sides: tipSides }, zeroDraft, m.TIP_MARKERS_START_SHOWN, false), null);
+check('[13] shown: built tip + suggestion', dotsOf(m.tipPreviewDots({ sides: tipSides }, zeroDraft, true, false)),
+  [{ at: [0.1, 1.28, 0.19], color: '#3fb950' }, { at: [-0.1, 1.3, 0.2], color: '#3fb950' }]);
+check('[13] left moved', dotsOf(m.tipPreviewDots({ sides: tipSides }, movedDraft, true, false)),
+  [{ at: [0.102, 1.284, 0.19], color: '#f0b35c' }, { at: [-0.1, 1.3, 0.2], color: '#3fb950' }]);
+check('[13] mirrored', dotsOf(m.tipPreviewDots({ sides: tipSides }, { ...movedDraft, mirror: true }, true, false)),
+  [{ at: [0.102, 1.284, 0.19], color: '#f0b35c' }, { at: [-0.102, 1.304, 0.2], color: '#f0b35c' }]);
+check('[13] group off / no side', [m.tipPreviewDots({ sides: tipSides }, zeroDraft, true, true),
+  m.tipPreviewDots({ sides: [null, null] }, zeroDraft, true, false)], [null, null]);
+const tipHtml = await renderTipPanelFresh({
+  id: 'G', label: 'G', enabled: true, active: true, status: 'applied', reason: '', tip_source: 'colour', sides: tipSides,
+  override: null, disc: null, running: false, due: false, error: '', light: null, controls: [], built_at: null,
+  limits: { offset_max_mm: 30, diameter_mm: [10, 50], soft_max_mm: 10,
+    disc_defaults: { enabled: false, color: '#c07a72', diameter_mm: 28, soft_mm: 3 } },
+});
+const markerBox = (tipHtml.match(/<input([^>]*)\/>Show markers/) || [])[1];
+check('[13] panel renders "Show markers" unchecked', [markerBox !== undefined, /\bchecked/.test(markerBox ?? 'checked')], [true, false]);
+check('[13] panel: start value, the box, a moved slider, the dots helper', [
+  /useState\(TIP_MARKERS_START_SHOWN\)/.test(tipSrc),
+  /checked=\{showDots\} onChange=\{\(event\) => setShowDots\(event\.target\.checked\)\}/.test(tipSrc),
+  /const setOffset = [^\n]*\{ setShowDots\(true\)/.test(tipSrc),
+  /onPreview\(panel\.id, tipPreviewDots\(panel, draft, showDots, off\)\)/.test(tipSrc)], [true, true, true, true]);
+const frontFiles = (dir) => readdirSync(join(ROOT, dir), { recursive: true }).filter((f) => /\.tsx?$/.test(f))
+  .map((f) => join(dir, f));
+const namesOverlayStart = ['frontend/src', 'packages/player-ui/src', 'client3d/src'].flatMap(frontFiles)
+  .filter((f) => !f.endsWith('Model3DViewer.tsx') && /\bextensionBones\b/.test(src(f)));
+check('[13] viewer starts with the grid off, everywhere', [/\bextensionBones = false\b/.test(viewerSrc),
+  /const \[bonesOn, setBonesOn\] = useState\(extensionBones\)/.test(viewerSrc), namesOverlayStart], [true, true, []]);
+check('[13] the toggle turns it on and the frame loop builds the overlay', [
+  /aria-pressed=\{bonesOn\} onClick=\{\(\) => setBonesOn\(on => !on\)\}/.test(viewerSrc),
+  /bonesWanted = bonesOnRef\.current && motionRef\.current \? motionRef\.current\.rev : null[\s\S]{0,300}createExtensionGroupOverlay\(/
+    .test(viewerSrc)], [true, true]);
+check('[13] neither switch is persisted', [viewerSrc, tipSrc].map((x) => /localStorage|sessionStorage|usePersistentState/.test(x)),
+  [false, false]);
 
 if (failures.length) {
   console.error('\nFAILED:\n' + failures.join('\n'));

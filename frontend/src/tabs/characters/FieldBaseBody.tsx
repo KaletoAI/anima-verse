@@ -48,7 +48,9 @@
  * The viewer shows the extension bones (Ruling A45): it plays the base model's motion (`plain_body.extension.motion`,
  * no clothing — the base is bare) with the Bounce / Weight drafts of the box live, so dragging the figure tilts it
  * and the bones hang under gravity (Ruling A41); its toggles (Secondary motion, Extension bones, Collision capsules,
- * Extension collision) switch the overlays. A Full / Distance switch appears once the distance mesh exists. The
+ * Extension collision) switch the overlays; the Extension bones grid starts off, like each tip panel's "Show markers"
+ * (Ruling A62 — view switches of the open tab, never saved). A Full / Distance switch appears once the distance mesh
+ * exists. The
  * box's switches are saved for the base model (POST …/model3d/options {signature, extension_rig}) and make the
  * extension rebuild due — Run all or its Rebuild (POST …/model3d/extension-tip/apply, local) builds them; its
  * motion values are saved character-wide (POST …/model3d/extension-motion) and act at once.
@@ -80,7 +82,6 @@ import { ViewRenderTile } from './ViewRenderTile'
 import { RefImage } from './RefImage'
 import { CollisionScales } from './CollisionScales'
 import { ExtensionTipPanel } from './ExtensionTipPanel'
-import type { TipDots } from './ExtensionTipPanel'
 import { MeshRepairPanel } from './MeshRepairPanel'
 import { TipSmoothingPanel } from './TipSmoothingPanel'
 import { ExtensionBonesBox } from './ExtensionBonesBox'
@@ -96,7 +97,7 @@ import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, sing
 import type { ModelFollowup } from './figureModel'
 import { EXT_DUE_GROUPS_NOTE, RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
   runAllButton, runAllPlanLine, runAllWhat } from './baseBodyModel'
-import type { BaseLight, BaseRunAll } from './baseBodyModel'
+import type { BaseLight, BaseRunAll, TipDots } from './baseBodyModel'
 import { StepLight, StepRowView, SubTabs } from './StepRows'
 import { LIGHT_COLOR, PANEL } from './stepStyle'
 
@@ -551,7 +552,7 @@ export function FieldBaseBody({ character, onOpenFigure }: {
               format="glb" height={600} subject="figure"
               freshness={model.freshness} builtAt={model.created_at}
               collision={collision} showCollision={!!collisionPreview}
-              motion={ready ? previewMotion : undefined} extensionBones
+              motion={ready ? previewMotion : undefined}
               surfacePoints={surfacePoints} />
             {/* Full / Distance (Ruling A45): which stored mesh the viewer and the box show; only once the
                 distance mesh exists — asking for it here would start its build. */}

@@ -5,6 +5,7 @@
  * what is current, R3 settings saved on their own). No React, no fetch: checked by
  * `scripts/check_base_body_ui.mjs`. Returned strings are English; the components put them through `t()`.
  */
+import type { ExtensionTipOverride, ExtensionTipPanelInfo } from './useBaseBody'
 
 /** What "Run all" runs now (`figure_build.base_run_all`): the plain body's refresh, the face cleanup of the
  *  stored base mesh, its missing or outdated face retexture, the base mesh repair after a saved repair setting or a
@@ -170,6 +171,38 @@ export const TIP_DUE_NOTE = 'Saved — not built yet. Rebuild (local, no hub job
 export const EXT_DUE_GROUPS_NOTE = 'The groups changed since the last build. Rebuild (local, no hub job) or Run all builds them.'
 /** The Rebuild button's label: the CPU extension rebuild of the base model, no hub job. */
 export const TIP_REBUILD_LABEL = 'Rebuild (local, no hub job)'
+
+/** The dots a tip panel hands the viewer: one per side, where the tip sits. */
+export type TipDots = Array<{ at: [number, number, number]; color: string }>
+/** A tip that sits where it was built / one the draft moved. */
+export const TIP_BUILT_COLOR = '#3fb950'
+export const TIP_DRAFT_COLOR = '#f0b35c'
+/** Whether a tip panel's "Show markers" starts on (Ruling A62: off on every load). A view switch of the open tab
+ *  only — never saved; moving a position slider turns it on. */
+export const TIP_MARKERS_START_SHOWN = false
+
+/** The dots of one tip panel for the viewer, or null when there are none to draw (markers hidden, the group off, no
+ *  side found): the built tip (else the suggestion) moved by the draft's difference to the built offset along the
+ *  surface tangents there — a preview only; the build walks the real surface. */
+export function tipPreviewDots(panel: Pick<ExtensionTipPanelInfo, 'sides'>, draft: Pick<ExtensionTipOverride, 'offsets' | 'mirror'>,
+  shown: boolean, off: boolean): TipDots | null {
+  if (!shown || off) return null
+  const dots: TipDots = []
+  panel.sides.forEach((side, i) => {
+    if (!side) return
+    const base = side.tip ?? side.suggested
+    const built = side.tip ? side.offset_mm : [0, 0]
+    const offset = draft.offsets[draft.mirror ? 0 : i]
+    const du = (offset.up - built[0]) / 1000
+    const dout = (offset.out - built[1]) / 1000
+    const moved = Math.abs(du) > 1e-9 || Math.abs(dout) > 1e-9
+    dots.push({
+      at: [0, 1, 2].map((k) => base[k] + du * side.tangent_up[k] + dout * side.tangent_out[k]) as [number, number, number],
+      color: moved ? TIP_DRAFT_COLOR : TIP_BUILT_COLOR,
+    })
+  })
+  return dots.length ? dots : null
+}
 
 // --- Base mesh repair (Ruling A34: holes filled on the CPU; saved on its own, "Repair again" runs it) ---------
 
