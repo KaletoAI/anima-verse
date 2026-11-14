@@ -170,7 +170,8 @@ def extension_bone_names(character_name, profile=None):
 
 # Bump an operation when its builder changes geometry for the same declaration;
 # defaults live in the Blender scripts, so only that part variant rebuilds.
-PART_BUILDS = {"attached_part": 6, "inset_part": 3}
+# attached_part 7: the pods hang from the root instead of 3.5 cm below it (Ruling A65).
+PART_BUILDS = {"attached_part": 7, "inset_part": 3}
 # The same for the other operations; pair_tip 1: a geometry apex (no colour
 # marker) is a tip suggestion too, and the tip override moves it.
 OP_BUILDS = {**PART_BUILDS, "pair_tip": 1}

@@ -162,6 +162,15 @@ def blender_smoke(directory):
     tip_head = arm.matrix_world @ tip_bone.head_local
     tip_axis = (arm.matrix_world.to_3x3() @ (tip_bone.tail_local-tip_bone.head_local)).normalized()
     pod_center = arm.matrix_world @ arm.data.bones['PartPods'].head_local
+    sweep_line = [attachment_root] + [arm.matrix_world @ arm.data.bones[link['bone']].head_local for link in chain] + [tip_head + tip_axis * (arm.data.bones['PartLink5'].length)]
+
+    def sweep_distance(point):
+        best = 1.
+        for a, b in zip(sweep_line[:-1], sweep_line[1:]):
+            h = min(1., max(0., (point - a).dot(b - a) / (b - a).length_squared))
+            best = min(best, (point - (a + (b - a) * h)).length - .0165)
+        return best
+    pod_far = 0
 
     for v in part.data.vertices:
         w = weights(part,v)
@@ -200,10 +209,16 @@ def blender_smoke(directory):
         delta = point-pod_center
         if .012 < abs(delta.x) < .03 and -.025 < delta.z < -.012 and -.025 < delta.y < -.008 and v.index not in border:
             assert w.get('PartPods',0)>.5, (tuple(point),w)
-            assert set(w)<={'PartPods','PartLink1','mixamorig:Hips'}, w
+            # The sweep/pods weight ramp spans 15 mm to each side of their
+            # equal-distance surface; since the pods hang from the root (Ruling
+            # A65) this box's front reaches the sweep, so the farther links are
+            # checked only beyond the ramp plus 3 mm for decimation.
+            if sweep_distance(point) > .018:
+                assert set(w)<={'PartPods','PartLink1','mixamorig:Hips'}, w
+                pod_far += 1
             pod_count += 1
     assert border and root_border_count > 10, (len(border), root_border_count)
-    assert tip_count>10 and pod_count>10,(tip_count,pod_count)
+    assert tip_count>10 and pod_count>10 and pod_far>10,(tip_count,pod_count,pod_far)
     def evaluated(obj):
         ev = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()); mesh=ev.to_mesh()
         points=[obj.matrix_world@v.co for v in mesh.vertices]; ev.to_mesh_clear(); return points

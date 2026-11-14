@@ -1954,6 +1954,11 @@ Nested mappings can override individual keys; unknown keys at any depth,
 nonfinite numbers, booleans as numbers and invalid intervals are rejected.
 `size_factor` is supplied by the declaration's size table. Length/radius scale
 by that factor; pod dimensions scale by `(1 + .55*(size_factor-1))*pod_scale`.
+The pods hang plumb from the root: `down` (scaled) runs along world down and
+`back` (metres, like each ellipsoid's `back`) along world back (+Y), not along
+the skin normal. With the defaults the union's top (the last ellipsoid: `down`
+-.008, z radius .016) sits at the root's height, so the part leaves the body at
+the pods' upper front (Ruling A65).
 Ridge radii `r0`/`r1` are metres. `tip_offset` is a fraction subtracted from
 `tip_start`, and relief terms are `[amplitude, frequency, angular_phase, offset]`.
 
@@ -1985,14 +1990,14 @@ ridges:
 ridge_blend: 0.0018
 pod_scale: 1.2
 pods:
-  down: 0.046
-  back: 0.018
+  down: 0.024   # x pod scale: the union's top sits at the root's height
+  back: 0.010
   blend: 0.008
   ellipsoids:
-    - {lateral: 0.012, down: 0.006, back: 0, radii: [0.014, 0.013, 0.024]}
-    - {lateral: -0.012, down: 0.002, back: 0, radii: [0.014, 0.013, 0.024]}
-    - {lateral: 0, down: 0.012, back: 0, radii: [0.016, 0.011, 0.013]}
-    - {lateral: 0, down: -0.008, back: 0.006, radii: [0.013, 0.010, 0.012]}
+    - {lateral: 0.012, down: 0.006, back: 0, radii: [0.014, 0.011, 0.024]}
+    - {lateral: -0.012, down: 0.002, back: 0, radii: [0.014, 0.011, 0.024]}
+    - {lateral: 0, down: 0.012, back: 0, radii: [0.016, 0.0095, 0.013]}
+    - {lateral: 0, down: -0.008, back: 0.006, radii: [0.016, 0.012, 0.016]}
 pod_link: 0.7
 pod_link_distance: 0.03
 k_tip_pods: 0.004

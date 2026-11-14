@@ -31,7 +31,12 @@ DEFAULTS = {
         {'t0': .2, 'tip_offset': .08, 'phase': -.6, 'wobble': .2, 'freq': 1.1, 'offset': 2.1, 'r0': .0012, 'r1': .0007},
         {'t0': .1, 'tip_offset': .02, 'phase': math.pi, 'wobble': .03, 'freq': 1., 'offset': 0., 'r0': .0007, 'r1': .0005}],
     'ridge_blend': .0018, 'pod_scale': 1.2,
-    'pods': {'down': .046, 'back': .018, 'blend': .008, 'ellipsoids': [
+    # The pods hang from the root: the union's top (the last ellipsoid, .008 up
+    # and .016 tall, both x pod scale) sits at the root's height, the pod centre
+    # .024 x pod scale below it and 10 mm behind, so the part leaves the body at
+    # the pods' upper front (Ruling A65; .046 / .018 along the skin normal left
+    # a gap of skin between them).
+    'pods': {'down': .024, 'back': .010, 'blend': .008, 'ellipsoids': [
         {'lateral': .012, 'down': .006, 'back': 0., 'radii': [.014, .011, .024]},
         {'lateral': -.012, 'down': .002, 'back': 0., 'radii': [.014, .011, .024]},
         {'lateral': 0., 'down': .012, 'back': 0., 'radii': [.016, .0095, .013]},
@@ -364,8 +369,12 @@ def build_part(group, companions, output):
 
 
     pod_factor = (1 + .55 * (size_factor - 1)) * settings['pod_scale']
-    pod_center = root + down * settings['pods']['down'] * pod_factor - surface_normal * settings['pods']['back']
-    pod_ellipsoids = [(pod_center + lat * e['lateral'] * pod_factor + down * e['down'] * pod_factor - surface_normal * e['back'], np.array(e['radii']) * pod_factor) for e in settings['pods']['ellipsoids']]
+    # The pods hang plumb from the root: down is world down and back is world
+    # back (+Y), whatever the skin's tilt there, so the union's top stays at the
+    # root's height on sloping skin too.
+    back = Vector((0, 1, 0))
+    pod_center = root + down * settings['pods']['down'] * pod_factor + back * settings['pods']['back']
+    pod_ellipsoids = [(pod_center + lat * e['lateral'] * pod_factor + down * e['down'] * pod_factor + back * e['back'], np.array(e['radii']) * pod_factor) for e in settings['pods']['ellipsoids']]
     FR = np.array([tuple(lat), tuple(surface_normal), tuple(upv)])
 
 
@@ -512,7 +521,10 @@ def build_part(group, companions, output):
 
 
     # Sample root-local unions of sweep, ridges, pods and body skin.
-    pts = np.vstack([centerline, *[np.array(tuple(c)) + np.diag(r) for c, r in pod_ellipsoids], *[np.array(tuple(c)) - np.diag(r) for c, r in pod_ellipsoids]])
+    # The grid also spans the sweep's top above the root plus its body fillet:
+    # with only the 20 mm margin a wide root was cut off flat there.
+    crown = root + upv * (shaft_radius * girth_max + body_blend)
+    pts = np.vstack([centerline, [tuple(crown)], *[np.array(tuple(c)) + np.diag(r) for c, r in pod_ellipsoids], *[np.array(tuple(c)) - np.diag(r) for c, r in pod_ellipsoids]])
     lo, hi = pts.min(0) - .02, pts.max(0) + .02
     nx, ny, nz = (np.ceil((hi - lo) / voxel)).astype(int) + 1
     if int(nx) * int(ny) * int(nz) > 8_000_000:
