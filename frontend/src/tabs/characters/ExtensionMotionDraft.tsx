@@ -37,7 +37,10 @@ export function ExtensionMotionDraft({ defaults, overrides, controls, disabled, 
   }
   // Compact: label and a short number input inline, the three buttons in one row.
   const content = <div className="ga-ext-fields">
-    {visibleFields.map(([key, label]) => <label key={key}>{t(label)} <MotionPreviewHint field={key.startsWith('axis_gain_') ? 'axis_gain' : key.startsWith('squash_') ? 'squash' : key} />
+    {/* The name only (the part before " (" or ";"); the full wording with its scale on mouse-over — keeps a row on
+        one line in a half-width column. */}
+    {visibleFields.map(([key, label]) => <label key={key} title={t(label)}>
+      <span className="ga-ext-field-name">{t(label).split(/ \(|;/)[0]}</span> <MotionPreviewHint field={key.startsWith('axis_gain_') ? 'axis_gain' : key.startsWith('squash_') ? 'squash' : key} />
       <input className="ga-input" type="text" inputMode="decimal" disabled={disabled}
         value={draft.values[key] ?? ''} aria-invalid={!valid(key)}
         style={!valid(key) ? { borderColor: 'var(--ga-danger, #c44)' } : undefined}
@@ -48,8 +51,10 @@ export function ExtensionMotionDraft({ defaults, overrides, controls, disabled, 
     <span className="ga-ext-actions">
       <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => void save()}
         title={changed ? t('Unsaved changes') : undefined}>{t('Save')}</button>
-      <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} onClick={() => setDraft(makeDraft({ ...defaults, ...overrides }))}>{t('Revert')}</button>
-      <button type="button" className="ga-btn ga-btn-sm" disabled={disabled} onClick={() => void save(true)}>{t('Reset')}</button>
+      <button type="button" className="ga-btn ga-btn-sm" disabled={disabled || !changed || !allValid} title={t('Back to the saved values')}
+        onClick={() => setDraft(makeDraft({ ...defaults, ...overrides }))}>{t('Discard changes')}</button>
+      <button type="button" className="ga-btn ga-btn-sm" disabled={disabled} onClick={() => void save(true)}
+        title={t('Saves the defaults of this group')}>{t('Reset to default')}</button>
       {changed && <span className="ga-hint">{t('Unsaved changes')}</span>}
     </span>
   </div>

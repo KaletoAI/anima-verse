@@ -39,7 +39,7 @@ function draftOf(panel: ExtensionTipPanelInfo): ExtensionTipOverride {
 
 const keyOf = (value: ExtensionTipOverride) => JSON.stringify(value)
 
-export function ExtensionTipPanel({ character, signature, panel, disabled, onPreview, onStarted }: {
+export function ExtensionTipPanel({ character, signature, panel, disabled, onPreview, onStarted, rebuildElsewhere }: {
   character: string
   /** The model the panel acts on (the base signature). */
   signature: string
@@ -47,6 +47,8 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
   disabled: boolean
   onPreview: (group: string, dots: TipDots | null) => void
   onStarted: () => void
+  /** The Extension bones box beside it carries the one Rebuild (the same POST …/extension-tip/apply). */
+  rebuildElsewhere?: boolean
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -207,15 +209,16 @@ export function ExtensionTipPanel({ character, signature, panel, disabled, onPre
           title={changed ? t('Unsaved changes') : undefined}
           onClick={() => void send({ tip: draft })}>{t('Save')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={locked || !changed}
-          onClick={() => setDraft(stored)}>{t('Revert')}</button>
+          title={t('Back to the saved values')}
+          onClick={() => setDraft(stored)}>{t('Discard changes')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={locked || !panel.override}
           title={t('Saves the defaults (nothing is rebuilt)')}
-          onClick={() => void send({ tip: null })}>{t('Reset')}</button>
-        <button type="button" className={`ga-btn ga-btn-sm${panel.due ? ' ga-btn-primary' : ''}`}
+          onClick={() => void send({ tip: null })}>{t('Reset to default')}</button>
+        {rebuildElsewhere ? null : <button type="button" className={`ga-btn ga-btn-sm${panel.due ? ' ga-btn-primary' : ''}`}
           disabled={busy || changed}
           title={changed ? t('Save or revert the changes first — Rebuild builds the saved settings')
             : t('Rebuilds the extension bones of the base model from the saved settings, also when they are built already.')}
-          onClick={() => void rebuild()}>{t(TIP_REBUILD_LABEL)}</button>
+          onClick={() => void rebuild()}>{t(TIP_REBUILD_LABEL)}</button>}
       </div>
     </fieldset>
   )

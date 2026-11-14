@@ -36,9 +36,11 @@ function emptyTile(height: number): CSSProperties {
   }
 }
 
-export function ViewRenderTile({ label, url, meta, height, running, status, failed, error, warning, disabled,
+export function ViewRenderTile({ label, lead, url, meta, height, running, status, failed, error, warning, disabled,
   disabledTitle, disabledReason, note, actionTitle, onRender }: {
   label: string
+  /** Before the label, e.g. the view's step light. */
+  lead?: ReactNode
   url: string | null
   meta?: ImageTileMeta | null
   height: number
@@ -67,7 +69,9 @@ export function ViewRenderTile({ label, url, meta, height, running, status, fail
   return (
     <div style={{ minWidth: 0 }}>
       <div className="ga-face-actions-row" style={{ justifyContent: 'space-between', marginBottom: 2 }}>
-        <span className="ga-hint">{label}</span>
+        <span className="ga-hint" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          {lead}{label}
+        </span>
         <button
           type="button"
           className="ga-btn ga-btn-sm"

@@ -2993,13 +2993,9 @@ a.ga-btn {
 .ga-inline-pick { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
 .ga-inline-pick > .ga-input { width: auto; max-width: 24em; }
 .ga-model3d-actions-row { display: flex; flex-wrap: wrap; gap: 6px 28px; align-items: flex-start; }
-/* The Figure tab's plain body: preview + checklist/tilt, then a column with the collision
-   sliders over the face/rig actions (under the preview when narrow). */
-.ga-basebody-model { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
-.ga-basebody-model > .ga-model3d-fit { flex: 0 1 680px; min-width: 0; }
-.ga-basebody-side { flex: 1 1 260px; min-width: 240px; max-width: 380px; display: flex; flex-direction: column; gap: 12px; }
-/* With tip panels or the Extension bones box the side column is wider, so the two sit side by side (Ruling A45). */
-.ga-basebody-side-wide { flex-basis: 520px; max-width: 760px; container-type: inline-size; }
+/* The Base body tab (Task UI5): the four views two by two in the panel; the extension grid's container. */
+.ga-basebody-views { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+.ga-basebody-ext { container-type: inline-size; }
 /* Tip panels and the Extension bones box: two equal columns, top-aligned; one column on a narrow width. */
 .ga-ext-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .ga-ext-grid > * { margin: 0; min-width: 0; box-sizing: border-box; }
@@ -3031,12 +3027,13 @@ a.ga-btn {
 .ga-ext-row { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 .ga-ext-fields { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 .ga-ext-fields > label { display: inline-flex; align-items: center; gap: 6px; }
-.ga-ext-fields .ga-input { width: 7em; flex: none; padding: 2px 6px; }
-.ga-ext-actions { display: inline-flex; gap: 6px; align-items: center; }
+.ga-ext-fields .ga-input { width: 4.5em; flex: none; padding: 2px 6px; }
+.ga-ext-field-name { white-space: nowrap; }
+.ga-ext-actions { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ga-ext-actions .ga-btn { white-space: nowrap; }
 /* The Bounce / Weight sliders inside the box (Base body tab): a full-width row under the group's switches. */
 .ga-ext-sliders { flex: 1 1 100%; display: flex; flex-direction: column; gap: 2px; }
 .ga-ext-sliders .ga-model3d-slider { gap: 0; font-size: 11px; }
-.ga-view-stack { display: flex; flex-direction: column; gap: 8px; }
 .ga-view-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 @media (max-width: 1000px) {
   .ga-split-views, .ga-split-views.ga-split-figure { grid-template-columns: minmax(0, 1fr); }

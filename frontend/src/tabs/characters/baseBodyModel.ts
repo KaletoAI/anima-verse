@@ -354,3 +354,90 @@ export function tipSmoothingDetail(state: TipSmoothingState, t: Tr = EN): string
     return `${label(id)}: ${parts.join(', ')}`
   })
 }
+
+// ---- Task UI5: the tab checklist (lights per step, the flow head, the plan in one line) ----
+
+/** A step's traffic light (hairstylesModel's `Light`, repeated here so this file stays import-free). */
+export type BaseLight = 'green' | 'yellow' | 'red' | 'grey' | 'blue'
+
+/** One step row (StepRowView). */
+export interface BaseRow { light: BaseLight; state: string; reason: string; detail: string }
+
+/** What a base view row reads (`plain_body.status[view]`, `images[view]`, `image_meta[view].freshness`). */
+export interface BaseViewInput {
+  running: boolean
+  failed: boolean
+  error?: string | null
+  warning?: string | null
+  stored: boolean
+  freshness?: { state: string; reason?: string; action?: string } | null
+}
+
+/**
+ * One base view as a step: rendering now → blue "Rendering"; its last render failed → red "Failed", the error;
+ * nothing stored → yellow "Not rendered yet"; outdated → yellow "Outdated", the server's reason (mouse-over: reason and
+ * action); kept with a warning → yellow "Kept with a warning"; else green "Current".
+ */
+export function baseViewRow(v: BaseViewInput, t: Tr = EN): BaseRow {
+  if (v.running) return { light: 'blue', state: t('Rendering'), reason: '', detail: '' }
+  if (v.failed) return { light: 'red', state: t('Failed'), reason: v.error || '', detail: v.error || '' }
+  if (!v.stored) return { light: 'yellow', state: t('Not rendered yet'), reason: '', detail: '' }
+  if (v.freshness?.state === 'stale') {
+    const reason = t(v.freshness.reason || 'Made from older data')
+    return { light: 'yellow', state: t('Outdated'), reason,
+      detail: [reason, v.freshness.action ? t(v.freshness.action) : ''].filter(Boolean).join('\n') }
+  }
+  if (v.warning) return { light: 'yellow', state: t('Kept with a warning'), reason: v.warning, detail: v.warning }
+  return { light: 'green', state: t('Current'), reason: '', detail: '' }
+}
+
+/** What the base model row reads (`plain_body.model`). */
+export interface BaseModelInput {
+  status: 'running' | 'failed' | 'unrigged' | 'ready'
+  error?: string
+  freshness?: { state: string; reason?: string; action?: string } | null
+}
+
+/**
+ * The base model as a step: none → yellow "Not built yet"; running → blue "Building now"; failed → red "Failed", the
+ * error; a static mesh → yellow "Static mesh without a rig"; outdated → yellow "Outdated", the reason; else green
+ * "Ready".
+ */
+export function baseModelRow(m: BaseModelInput | null | undefined, t: Tr = EN): BaseRow {
+  if (!m) return { light: 'yellow', state: t('Not built yet'), reason: '', detail: '' }
+  if (m.status === 'running') return { light: 'blue', state: t('Building now'), reason: '', detail: '' }
+  if (m.status === 'failed') return { light: 'red', state: t('Failed'), reason: m.error || '', detail: m.error || '' }
+  if (m.status === 'unrigged') return { light: 'yellow', state: t('Static mesh without a rig'), reason: '', detail: '' }
+  if (m.freshness?.state === 'stale') {
+    const reason = t(m.freshness.reason || 'Made from older data')
+    return { light: 'yellow', state: t('Outdated'), reason,
+      detail: [reason, m.freshness.action ? t(m.freshness.action) : ''].filter(Boolean).join('\n') }
+  }
+  return { light: 'green', state: t('Ready'), reason: '', detail: '' }
+}
+
+/**
+ * The flow head: Run all or a Build running, or a row running → blue "Building now"; a red row or Run all's last
+ * error → red "A step failed"; Run all plans steps → yellow "1 step due" / "{n} steps due" (its steps; else the
+ * yellow rows); else green "Up to date".
+ */
+export function baseHead(r: BaseRunAll | null | undefined, lights: readonly BaseLight[], buildRunning: boolean,
+  t: Tr = EN): { light: BaseLight; words: string } {
+  if (r?.running || buildRunning || lights.includes('blue')) return { light: 'blue', words: t('Building now') }
+  if (lights.includes('red') || (r?.last?.error && !r.kind)) return { light: 'red', words: t('A step failed') }
+  const due = r?.kind ? r.steps.length || 1 : lights.filter((l) => l === 'yellow').length
+  if (due === 1) return { light: 'yellow', words: t('1 step due') }
+  if (due > 1) return { light: 'yellow', words: t('{n} steps due').replace('{n}', String(due)) }
+  return { light: 'green', words: t('Up to date') }
+}
+
+/** Run all's plan in one line (replaces the collapsed list), the hub jobs per step in brackets, a local step (0
+ *  jobs) by its label alone: "Back view (1) · Mesh (1) · Face cleanup (local)". */
+export function runAllPlanLine(r: BaseRunAll | null | undefined, t: Tr = EN): string {
+  if (!r?.kind || !r.steps.length) return ''
+  return r.steps.map((step) => {
+    const label = runAllStep(step.name, t)
+    if (step.jobs === 0) return label
+    return `${label} (${step.jobs === null ? t('cost unknown') : step.jobs})`
+  }).join(' · ')
+}

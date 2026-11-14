@@ -4770,7 +4770,6 @@
     "Skin detail step": "Hautdetail-Schritt",
     "Upscale (face reference)": "Hochskalierung (Gesichtsreferenz)",
     "Face cleanup (local)": "Gesichtsbereinigung (lokal)",
-    "What Run all runs": "Was „Alles ausführen“ ausführt",
     "A Build runs for this character — Run all waits until it has ended.": "Für diesen Charakter läuft ein Build — „Alles ausführen“ wartet, bis er beendet ist.",
     "A new view makes the base model stale — Run all or the next Build you start rebuilds it.": "Eine neue Ansicht macht das Grundmodell veraltet — „Alles ausführen“ oder der nächste Build, den du startest, baut es neu.",
     "A temporary NPC has no base body — its 3D model is made from its T-pose picture.": "Ein temporärer NPC hat keinen Grundkörper — sein 3D-Modell entsteht aus seinem T-Pose-Bild.",
@@ -5246,6 +5245,10 @@
     "Only on this outfit model: {ids} — built with the outfit; no switch for them, a character with a base body switches its extension bones on the base body": "Nur an diesem Outfit-Modell: {ids} — mit dem Outfit gebaut; dafür gibt es keinen Schalter, ein Charakter mit Grundkörper schaltet seine Zusatz-Bones am Grundkörper",
     "Back to the saved values": "Zurück zu den gespeicherten Werten",
     "Saves ×1.00 for every region": "Speichert ×1,00 für jede Region",
-    "Shoulders (hair)": "Schultern (Haar)"
+    "Shoulders (hair)": "Schultern (Haar)",
+    "Comes with the base model — none built yet": "Kommt mit dem Grundmodell — noch keins gebaut",
+    "Saves the defaults of this group": "Speichert die Standardwerte dieser Gruppe",
+    "Run all runs": "„Alles ausführen“ erledigt",
+    "No collision capsules on this model": "Keine Kollisionskapseln an diesem Modell"
   }
 }

@@ -77,6 +77,24 @@
  *     `extensionBones`; the CSS grid is `minmax(0, 1fr) minmax(0, 1fr)`, `align-items: start`, one column under an
  *     `@container (max-width: 520px)`; the 3D tab's Model3DExtensions on the pipeline renders "Open Base body tab"
  *     and returns before the box; FieldModel3D leaves the Bounce / Weight sliders out on the pipeline.
+ * [11] The tab checklist (Task UI5):
+ *     baseViewRow: running → blue "Rendering"; failed "E" → red "Failed", "E"; nothing stored → yellow "Not rendered
+ *     yet"; stale {reason R, action A} → yellow "Outdated", "R", mouse-over "R\nA"; stale without a reason → "Made from
+ *     older data"; current with warning W → yellow "Kept with a warning", "W"; current → green "Current".
+ *     baseModelRow: none → yellow "Not built yet"; running → blue "Building now"; failed "boom" → red "Failed", "boom";
+ *     unrigged → yellow "Static mesh without a rig"; ready but stale R → yellow "Outdated", "R"; ready → green "Ready".
+ *     baseHead(runAll, lights, buildRunning): Run all running → blue "Building now"; a Build running → blue; a red
+ *     light → red "A step failed"; nothing planned but the last Run all failed → red; plan of 3 steps → yellow "3 steps
+ *     due" (Run all's steps, not the lights); a plan with an empty step list → "1 step due"; no plan, one yellow light
+ *     → "1 step due"; nothing → green "Up to date".
+ *     runAllPlanLine([view back 1, mesh 1, cleanup 0, face 2, rig null]) → "Back view (1) · Mesh (1) · Face cleanup
+ *     (local) · Face retexture (2) · Rig (cost unknown)"; no plan → "".
+ *     Source greps: FieldBaseBody has SubTabs, no <details>, the viewer without a side toolbar and with builtAt; the
+ *     tip panels get rebuildElsewhere={!!extensionBox} and ExtensionTipPanel leaves its Rebuild out then (one Rebuild,
+ *     the box's — both POSTed …/extension-tip/apply); the tip panel, the mesh repair panel, the motion values and
+ *     the collision sliders say "Discard changes" and (where a reset exists) "Reset to default", never "Revert" /
+ *     "Reset" (both "Zurücksetzen" in German); the motion value rows show the name before " (" or ";" with the full
+ *     wording as mouse-over.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -306,6 +324,46 @@ check('[10] 3D tab on the pipeline: only the way to the Base body tab', pipeline
   && sidePanels.indexOf("t('Open Base body tab')", pipelineAt) > pipelineAt
   && sidePanels.indexOf("t('Open Base body tab')", pipelineAt) < sidePanels.indexOf('<ExtensionBonesBox', pipelineAt), true);
 check('[10] 3D tab: no sliders on the pipeline', /const sliderTools = rigless \|\| pipeline \? null : motionToolbar/.test(model3d), true);
+
+// [11]
+const vrow = (o) => { const r = m.baseViewRow({ running: false, failed: false, stored: true, ...o }); return [r.light, r.state, r.reason]; };
+check('[11] view running', vrow({ running: true }), ['blue', 'Rendering', '']);
+check('[11] view failed', vrow({ failed: true, error: 'E' }), ['red', 'Failed', 'E']);
+check('[11] view missing', vrow({ stored: false }), ['yellow', 'Not rendered yet', '']);
+check('[11] view stale', m.baseViewRow({ running: false, failed: false, stored: true,
+  freshness: { state: 'stale', reason: 'R', action: 'A' } }).detail, 'R\nA');
+check('[11] view stale reason', vrow({ freshness: { state: 'stale', reason: 'R' } }), ['yellow', 'Outdated', 'R']);
+check('[11] view stale without a reason', vrow({ freshness: { state: 'stale' } })[2], 'Made from older data');
+check('[11] view warning', vrow({ warning: 'W', freshness: { state: 'current' } }), ['yellow', 'Kept with a warning', 'W']);
+check('[11] view current', vrow({ freshness: { state: 'current' } }), ['green', 'Current', '']);
+const mrow = (o) => { const r = m.baseModelRow(o); return [r.light, r.state, r.reason]; };
+check('[11] model rows', [mrow(null), mrow({ status: 'running' }), mrow({ status: 'failed', error: 'boom' }),
+  mrow({ status: 'unrigged' }), mrow({ status: 'ready', freshness: { state: 'stale', reason: 'R' } }), mrow({ status: 'ready' })],
+[['yellow', 'Not built yet', ''], ['blue', 'Building now', ''], ['red', 'Failed', 'boom'],
+  ['yellow', 'Static mesh without a rig', ''], ['yellow', 'Outdated', 'R'], ['green', 'Ready', '']]);
+const bh = (r, l, b = false) => { const h = m.baseHead(r, l, b); return [h.light, h.words]; };
+const step = (name, jobs) => ({ name, jobs });
+check('[11] head', [bh(ra({ running: true }), []), bh(null, ['green'], true), bh(null, ['green', 'red']),
+  bh(ra({ last: { error: 'x', finished_at: '' } }), ['green']),
+  bh(ra({ kind: 'plain_body', steps: [step('mesh', 1), step('face', 2), step('rig', 1)] }), ['green']),
+  bh(ra({ kind: 'face_cleanup', steps: [] }), ['green']), bh(null, ['yellow', 'green']), bh(ra({}), ['green', 'green'])],
+[['blue', 'Building now'], ['blue', 'Building now'], ['red', 'A step failed'], ['red', 'A step failed'],
+  ['yellow', '3 steps due'], ['yellow', '1 step due'], ['yellow', '1 step due'], ['green', 'Up to date']]);
+check('[11] plan line', [m.runAllPlanLine(ra({ kind: 'plain_body', steps: [step('view back', 1), step('mesh', 1),
+  step('cleanup', 0), step('face', 2), step('rig', null)] })), m.runAllPlanLine(ra({}))],
+['Back view (1) · Mesh (1) · Face cleanup (local) · Face retexture (2) · Rig (cost unknown)', '']);
+const baseViewer = (baseTab.match(/<Model3DViewer[\s\S]*?\/>/) || [''])[0];
+check('[11] sub-tabs, no <details>, viewer', [/<SubTabs\b/.test(baseTab), /<details>/.test(baseTab),
+  /sideToolbar/.test(baseViewer), /builtAt=\{model\.created_at\}/.test(baseViewer)], [true, false, false, true]);
+const tipSrc = src('frontend/src/tabs/characters/ExtensionTipPanel.tsx');
+check('[11] one Rebuild', [(baseTab.match(/rebuildElsewhere=\{!!extensionBox\}/g) || []).length,
+  /\{rebuildElsewhere \? null : <button/.test(tipSrc)], [2, true]);
+const labelled = ['ExtensionTipPanel', 'MeshRepairPanel', 'ExtensionMotionDraft', 'CollisionScales']
+  .map((f) => src(`frontend/src/tabs/characters/${f}.tsx`));
+check('[11] distinct reset labels', labelled.map((x) => [/t\('Discard changes'\)/.test(x), /t\('(Revert|Reset)'\)/.test(x)]),
+  [[true, false], [true, false], [true, false], [true, false]]);
+check('[11] motion values: the name, the full wording on mouse-over',
+  /title=\{t\(label\)\}>[\s\S]{0,80}\{t\(label\)\.split\(\/ \\\(\|;\/\)\[0\]\}/.test(labelled[2]), true);
 
 if (failures.length) {
   console.error('\nFAILED:\n' + failures.join('\n'));

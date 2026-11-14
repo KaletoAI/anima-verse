@@ -22,15 +22,24 @@
  *   due the same way (local, no hub job).
  * - R4 only the current flow: no T-pose path, no outfit-body wording.
  *
- * Layout: the Run all header across the top; then two columns — the four views stacked and small on the left (a
- * click enlarges one), the base model's 3D preview with everything that acts on it on the right: its steps
- * beside the preview, the base mesh repair (MeshRepairPanel, Ruling A34: status light, its settings saved on their
- * own, "Repair again" — local), the tip smoothing (TipSmoothingPanel, Ruling A43: status light with the reason,
- * "Built <time>", "Smooth again" — local; no settings of its own), the collision capsule sliders beside it too (live preview while dragging — the outfit
- * models inherit the base body's set), one panel per pair tip extension group (ExtensionTipPanel) and the base
- * model's "Extension bones" box (ExtensionBonesBox, Ruling A45) side by side in two equal columns — the box takes
- * the second column of the first row, beside the first tip panel —, and the face/rig actions under it
- * (ModelFaceActions); the Settings section closes the tab.
+ * Layout (Task UI5, the user's tab checklist): the flow head across the top — the light with its words (`baseHead`:
+ * "Up to date", "N steps due", "A step failed", "Building now"), Run all with its count, the link to the Figure tab and
+ * Run all's plan in one line (`runAllPlanLine`, what it does on mouse-over). Then two columns: the base model's 3D
+ * preview ("Built <time>" in its corner, Full / Distance under it) on the left; on the right one panel with sub-tabs
+ * instead of scrolling —
+ * - Views (4): the four views two by two, small (a click enlarges one), each with its light and state in the label
+ *   (`baseViewRow`), its Regenerate with the cost under it, the skin detail step under the front;
+ * - Base model: its step row (`baseModelRow`) with "Regenerate the plain body's mesh — N hub jobs", the model's steps
+ *   one line each, the base mesh repair (MeshRepairPanel, Ruling A34: status light, its settings saved on their own,
+ *   "Repair again" — local), the tip smoothing (TipSmoothingPanel, Ruling A43) and the face/rig actions
+ *   (ModelFaceActions) with their cost;
+ * - Extension bones: one panel per pair tip extension group (ExtensionTipPanel) and the base model's "Extension
+ *   bones" box (ExtensionBonesBox, Ruling A45) side by side in two equal columns — the box takes the second column of
+ *   the first row, beside the first tip panel; ONE Rebuild, the box's (the tip panels' was the same request);
+ * - Collision capsules: the region sliders (live preview while dragging — the outfit models inherit the base body's
+ *   set);
+ * - Settings (rule R3).
+ * The sliders that change the 3D model sit in the panel beside the viewer and act on it live.
  *
  * The viewer shows the extension bones (Ruling A45): it plays the base model's motion (`plain_body.extension.motion`,
  * no clothing — the base is bare) with the Bounce / Weight drafts of the box live, so dragging the figure tilts it
@@ -75,18 +84,22 @@ import { previewMotionSliders } from './motionFieldPreview'
 import type { Physics } from '../../lib/motionDraft'
 import { ModelFaceActions } from './ModelFaceActions'
 import { FaceSettings } from './FaceSettings'
-import { FieldSet } from './FieldSet'
 import { useModel3DStatus } from './useModel3DStatus'
 import type { CollisionPayload } from '@anima/scene-render'
 import { BASE_VIEWS, modelRunning, tipsRunning, useBaseBody, viewsRunning } from './useBaseBody'
 import type { BaseBodyInfo, BaseView } from './useBaseBody'
 import { AUTO_BUILD_NOTE, BUILD_RUNNING_NOTE, ESTIMATE_NOTE, modelFollowup, singleAction, staleBaseNote } from './figureModel'
 import type { ModelFollowup } from './figureModel'
-import { RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, faceDueLine, runAllButton, runAllStep,
-  runAllWhat } from './baseBodyModel'
-import type { BaseRunAll } from './baseBodyModel'
+import { RUN_ALL_STATUS, TIP_DUE_NOTE, TIP_REBUILD_LABEL, baseHead, baseModelRow, baseViewRow, faceDueLine,
+  runAllButton, runAllPlanLine, runAllWhat } from './baseBodyModel'
+import type { BaseLight, BaseRunAll } from './baseBodyModel'
+import { StepLight, StepRowView, SubTabs } from './StepRows'
+import { LIGHT_COLOR, PANEL } from './stepStyle'
 
 const TILE_HEIGHT = 128
+
+/** The right-hand panel's sub-tabs (Task UI5). */
+type BaseTab = 'views' | 'model' | 'extensions' | 'collision' | 'settings'
 
 const ERROR_STYLE: CSSProperties = { color: 'var(--danger, #f85149)', overflowWrap: 'anywhere' }
 
@@ -175,8 +188,11 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
   // click.
   const followup = !jobs?.model_followup ? '' : view === 'front' ? staleBaseNote(jobs.after_front, t)
     : modelFollowup(jobs.model_followup, t)
+  const row = baseViewRow({ running: !!st?.running, failed: !!st?.failed, error: st?.error, warning: st?.warning,
+    stored: !!url, freshness: info.image_meta?.[view]?.freshness }, t)
   return (
-    <ViewRenderTile label={label} url={url} meta={info.image_meta?.[view]} height={TILE_HEIGHT}
+    <ViewRenderTile label={`${label} · ${row.state}`} url={url} meta={info.image_meta?.[view]} height={TILE_HEIGHT}
+      lead={<StepLight light={row.light} title={row.detail || row.state} />}
       running={!!st?.running} failed={!!st?.failed} error={st?.error} warning={st?.warning}
       disabled={busy || needsFront} disabledReason={needsFront ? t('Render the front view first') : undefined}
       actionTitle={cost && followup ? `${cost} · ${followup}` : cost}
@@ -193,9 +209,12 @@ function ViewTile({ info, view, label, busy, jobs, onRender, onSkinStep }: {
   )
 }
 
-/** The tab's head: "Run all" (rule R1) with its count, what it runs, the plan collapsed, its last error. */
-function RunAllHeader({ runAll, busy, buildRunning, onRun, onOpenFigure }: {
+/** The tab's head (Task UI5): the light with its words, "Run all" (rule R1) with its count, its plan in one line,
+ *  why it is disabled, its last error; the link to the Figure tab. */
+function RunAllHeader({ runAll, lights, busy, buildRunning, onRun, onOpenFigure }: {
   runAll: BaseRunAll | null | undefined
+  /** The step rows' lights (the views, the model). */
+  lights: BaseLight[]
   busy: boolean
   /** A Build of the character runs: Run all waits for it (the server answers 409). */
   buildRunning: boolean
@@ -205,40 +224,28 @@ function RunAllHeader({ runAll, busy, buildRunning, onRun, onOpenFigure }: {
   const { t } = useI18n()
   const button = runAllButton(runAll, t)
   const disabled = busy || button.disabled || buildRunning
+  const head = baseHead(runAll, lights, buildRunning, t)
   const what = runAll ? runAllWhat(runAll.kind, t, runAll.face_due) : ''
+  const plan = runAllPlanLine(runAll, t)
   const lastError = runAll && !runAll.running && runAll.last?.error ? runAll.last.error : ''
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
-      <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <button type="button" className="ga-btn ga-btn-primary" disabled={disabled}
-          title={runAll?.note || undefined} onClick={onRun}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <StepLight light={head.light} />
+        <strong style={{ color: LIGHT_COLOR[head.light] }}>{head.words}</strong>
+        <button type="button" className="ga-btn ga-btn-sm ga-btn-primary" disabled={disabled}
+          title={[what, runAll?.kind && runAll.hub_jobs ? t(ESTIMATE_NOTE) : '', runAll?.note || ''].filter(Boolean)
+            .join('\n') || undefined} onClick={onRun}>
           {button.label}
         </button>
-        {what ? <span className="ga-hint">{what}</span> : null}
         {onOpenFigure ? (
-          <button type="button" className="ga-btn ga-btn-sm" style={{ marginLeft: 'auto' }} onClick={onOpenFigure}>
-            {t('Open Figure tab')}
-          </button>
+          <button type="button" className="ga-btn ga-btn-sm" onClick={onOpenFigure}>↗ {t('Figure')}</button>
         ) : null}
       </div>
-      {buildRunning ? <div className="ga-hint">{t('A Build runs for this character — Run all waits until it has ended.')}</div>
-        : button.reason ? <div className="ga-hint">{button.reason}</div>
-        : runAll?.kind && runAll.hub_jobs ? <div className="ga-hint">{t(ESTIMATE_NOTE)}</div> : null}
-      {runAll?.kind && runAll.steps.length ? (
-        <details>
-          <summary style={{ cursor: 'pointer' }} className="ga-hint">{t('What Run all runs')}</summary>
-          <ol style={{ margin: '4px 0 0 18px', padding: 0 }} className="ga-hint">
-            {runAll.steps.map((step, i) => (
-              <li key={`${step.name}:${i}`}>
-                {runAllStep(step.name, t)}
-                {step.jobs === null ? ` — ${t('cost unknown')}` : step.jobs ? ` — ${step.jobs === 1 ? t('1 hub job')
-                  : t('{n} hub jobs').replace('{n}', String(step.jobs))}` : ` — ${t('local')}`}
-              </li>
-            ))}
-          </ol>
-        </details>
-      ) : null}
-      {lastError ? <div className="ga-hint" style={ERROR_STYLE}>{t('Run all')}: {lastError}</div> : null}
+      {plan ? <div className="ga-hint" style={{ fontSize: 12 }} title={what}>{t('Run all runs')}: {plan}</div> : null}
+      {buildRunning ? <div className="ga-hint" style={{ fontSize: 12 }}>{t('A Build runs for this character — Run all waits until it has ended.')}</div>
+        : button.reason ? <div className="ga-hint" style={{ fontSize: 12 }}>{button.reason}</div> : null}
+      {lastError ? <div className="ga-hint" style={{ ...ERROR_STYLE, fontSize: 12 }}>{t('Run all')}: {lastError}</div> : null}
     </div>
   )
 }
@@ -254,7 +261,7 @@ function BaseSettings({ character, info, st, pending, onReload }: {
 }) {
   const { t } = useI18n()
   return (
-    <FieldSet title={t('Settings')}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div className="ga-hint">{t('Saved on their own — nothing runs. A setting that makes a step due shows in Run all.')}</div>
       {st ? <FaceSettings character={character} st={st} pending={pending} onReload={onReload}
         dueLine={faceDueLine(info.run_all, t)} />
@@ -265,7 +272,7 @@ function BaseSettings({ character, info, st, pending, onReload }: {
           {' — '}{t('a world setting (Game-Admin → Setup); it applies to the next front render')}
         </div>
       ) : null}
-    </FieldSet>
+    </div>
   )
 }
 
@@ -307,6 +314,7 @@ export function FieldBaseBody({ character, onOpenFigure }: {
   const [sliderDrafts, setSliderDrafts] = useState<{ signature: string; groups: Record<string, Physics> }>(
     { signature: '', groups: {} })
   const [extPosting, setExtPosting] = useState(false)
+  const [sub, setSub] = useState<BaseTab>('views')
 
   // A model run (face, rig) ended: re-read the base body (new model URL,
   // steps, face cleanup state).
@@ -479,143 +487,149 @@ export function FieldBaseBody({ character, onOpenFigure }: {
         onClick: () => { void rebuildExt() },
       }} />
   ) : null
-  const asideTools = model?.url && ready && (model.collision !== undefined || tipPanels.length || meshRepair
-    || tipSmoothing || extensionBox) ? (
-    <>
-      {/* The base mesh repair (Ruling A34): status light, settings saved on their own, Repair again (local). */}
-      {meshRepair ? (
-        <MeshRepairPanel character={character} state={meshRepair} disabled={modelBusy}
-          onSaved={reloadAll} onStarted={() => startPoll(800)} />
-      ) : null}
-      {/* The tip smoothing (Ruling A43): its own row between the mesh repair and the extension bones — status
-          light with the reason, Built time, Smooth again (local). Hidden without a switched-on tip part. */}
-      {tipSmoothing ? (
-        <TipSmoothingPanel character={character} signature={info.signature} state={tipSmoothing}
-          disabled={modelBusy} onStarted={() => startPoll(800)} />
-      ) : null}
-      {model.collision !== undefined ? (
-        <CollisionScales character={character} collision={model.collision}
-          scales={info.collision_scales} disabled={modelBusy}
-          onPreview={setCollisionPreview} onSaved={reloadAll} />
-      ) : null}
-      {/* Pair tip groups (position, mirror and colour disc; the dots on the model follow the sliders) and the
-          Extension bones box in two equal columns, top-aligned (Ruling A45): the box beside the first tip panel,
-          further tip panels below; one column on a narrow width. */}
-      {tipPanels.length || extensionBox ? (
-        <div className="ga-ext-grid">
-          {tipPanels.slice(0, 1).map((panel) => (
-            <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
-              panel={panel} disabled={modelBusy} onPreview={onTipPreview}
-              onStarted={() => startPoll(800)} />
-          ))}
-          {extensionBox}
-          {tipPanels.slice(1).map((panel) => (
-            <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
-              panel={panel} disabled={modelBusy} onPreview={onTipPreview}
-              onStarted={() => startPoll(800)} />
-          ))}
-        </div>
-      ) : null}
-    </>
-  ) : undefined
+  const viewRows = BASE_VIEWS.map((view) => baseViewRow({ running: !!info.status?.[view]?.running,
+    failed: !!info.status?.[view]?.failed, error: info.status?.[view]?.error, warning: info.status?.[view]?.warning,
+    stored: !!info.images?.[view], freshness: info.image_meta?.[view]?.freshness }, t))
+  const modelRow = baseModelRow(model, t)
+  const lights = [...viewRows.map((row) => row.light), modelRow.light]
+  const noModelYet = <div className="ga-hint">{t('Comes with the base model — none built yet')}</div>
+  const tabs: Array<{ id: BaseTab; label: string }> = [
+    { id: 'views', label: `${t('Views')} (${BASE_VIEWS.length})` },
+    { id: 'model', label: t('Base model') },
+    { id: 'extensions', label: t('Extension bones') },
+    { id: 'collision', label: t('Collision capsules') },
+    { id: 'settings', label: t('Settings') },
+  ]
 
   return (
     <div>
-    <RunAllHeader runAll={info.run_all} busy={posting || viewsRunning(info) || modelBusy}
+    <RunAllHeader runAll={info.run_all} lights={lights} busy={posting || viewsRunning(info) || modelBusy}
       buildRunning={!!figure?.build.running} onRun={() => { void runAll() }} onOpenFigure={onOpenFigure} />
     {figure?.build.running ? <div className="ga-hint">{t(BUILD_RUNNING_NOTE)}</div> : null}
-    <div className="ga-split ga-split-views">
+    <div className="ga-split ga-split-views ga-split-figure">
       <div className="ga-split-col">
-        <div className="ga-view-stack">
-          {BASE_VIEWS.map((view) => (
-            <ViewTile key={view} info={info} view={view} label={viewLabel(view)} jobs={jobs}
-              busy={posting} onRender={(v, force) => post('images', { view: v, force })}
-              onSkinStep={() => post('skin-step', {})} />
-          ))}
-        </div>
-        {jobs ? <div className="ga-hint">{t('A new view makes the base model stale — Run all or the next Build you start rebuilds it.')}</div> : null}
+        {model?.url ? (
+          <>
+            <Model3DViewer key={model.url} url={viewTier === 'low' && extension?.tiers?.includes('low')
+              ? `${model.url}${model.url.includes('?') ? '&' : '?'}tier=low` : model.url}
+              format="glb" height={600} subject="figure"
+              freshness={model.freshness} builtAt={model.created_at}
+              collision={collision} showCollision={!!collisionPreview}
+              motion={ready ? previewMotion : undefined} extensionBones
+              surfacePoints={surfacePoints} />
+            {/* Full / Distance (Ruling A45): which stored mesh the viewer and the box show; only once the
+                distance mesh exists — asking for it here would start its build. */}
+            {extension?.tiers?.includes('low') ? (
+              <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 6 }}>
+                <span className="ga-hint">{t('Showing')}</span>
+                <button type="button" className={`ga-btn ga-btn-sm${viewTier === 'full' ? ' ga-btn-primary' : ''}`}
+                  aria-pressed={viewTier === 'full'} onClick={() => setViewTier('full')}>{t('Full')}</button>
+                <button type="button" className={`ga-btn ga-btn-sm${viewTier === 'low' ? ' ga-btn-primary' : ''}`}
+                  aria-pressed={viewTier === 'low'} onClick={() => setViewTier('low')}>
+                  {t('Distance')}{extension.low_tris ? ` · ${extension.low_tris.toLocaleString()}` : ''}
+                </button>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div className="ga-hint" style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '1px solid var(--border, #30363d)', borderRadius: 6, padding: 12, textAlign: 'center' }}>
+            {model?.status === 'running' ? t('Generating…') : t('No base model yet')}
+          </div>
+        )}
       </div>
 
-      <div className="ga-split-col">
-        <div className="ga-face-actions-row">
-          <span className="ga-fieldset-title" style={{ margin: 0 }}>{t('Base model')}</span>
-          <span className="ga-hint">
-            {!model ? t('No base model yet')
-              : model.status === 'running' ? t('Generating…')
-              : model.status === 'failed' ? t('Failed')
-              : model.status === 'unrigged' ? t('Static mesh without a rig')
-              : t('Ready')}
-            {model?.created_at && model.status !== 'running'
-              ? ` · ${formatDateTime(model.created_at, clockSettings())}` : ''}
-          </span>
-          <button
-            type="button"
-            className="ga-btn ga-btn-sm"
-            disabled={modelBusy || !info.images?.front}
-            title={!info.images?.front ? t('Render the base body views first')
-              : t('Builds the base model anew from the four views: mesher, then face cleanup, face retexture and rig as switched on below.')}
-            onClick={() => post('model', { force: !!model })}
-          >
-            {model ? t('Regenerate') : t('Generate model')}
-          </button>
-        </div>
-        {!info.images?.front ? (
-          <div className="ga-hint">{t('Render the base body views first')}</div>
-        ) : jobs ? (
-          <ActionLine text={singleAction('model', jobs.model, t)} auto={autoBuild} />
-        ) : null}
-        {model?.status === 'failed' && model.error ? (
-          <div className="ga-hint" style={ERROR_STYLE}>{model.error}</div>
-        ) : null}
-        {/* Left to right: the preview; the step checklist and tilt beside
-            it; then a column with the collision sliders on top (the viewer
-            shows the draft capsules while a slider moves) and the face and
-            rig actions below. */}
-        <div className="ga-basebody-model">
-          {model?.url ? (
-            <div className="ga-model3d-fit">
-              <Model3DViewer key={model.url} url={viewTier === 'low' && extension?.tiers?.includes('low')
-                ? `${model.url}${model.url.includes('?') ? '&' : '?'}tier=low` : model.url}
-                format="glb" height={480} sideToolbar subject="figure"
-                freshness={model.freshness} builtAt={model.created_at}
-                statusPanel={model.steps?.length ? <ModelSteps steps={model.steps} /> : undefined}
-                collision={collision} showCollision={!!collisionPreview}
-                motion={ready ? previewMotion : undefined} extensionBones
-                surfacePoints={surfacePoints} />
-              {/* Full / Distance (Ruling A45): which stored mesh the viewer and the box show; only once the
-                  distance mesh exists — asking for it here would start its build. */}
-              {extension?.tiers?.includes('low') ? (
-                <div className="ga-face-actions-row" style={{ alignItems: 'center', gap: 6 }}>
-                  <span className="ga-hint">{t('Showing')}</span>
-                  <button type="button" className={`ga-btn ga-btn-sm${viewTier === 'full' ? ' ga-btn-primary' : ''}`}
-                    aria-pressed={viewTier === 'full'} onClick={() => setViewTier('full')}>{t('Full')}</button>
-                  <button type="button" className={`ga-btn ga-btn-sm${viewTier === 'low' ? ' ga-btn-primary' : ''}`}
-                    aria-pressed={viewTier === 'low'} onClick={() => setViewTier('low')}>
-                    {t('Distance')}{extension.low_tris ? ` · ${extension.low_tris.toLocaleString()}` : ''}
-                  </button>
-                </div>
-              ) : null}
+      <div className="ga-split-col" style={PANEL}>
+        <SubTabs tabs={tabs} value={sub} onChange={setSub} />
+        {sub === 'views' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="ga-basebody-views">
+              {BASE_VIEWS.map((view) => (
+                <ViewTile key={view} info={info} view={view} label={viewLabel(view)} jobs={jobs}
+                  busy={posting} onRender={(v, force) => post('images', { view: v, force })}
+                  onSkinStep={() => post('skin-step', {})} />
+              ))}
             </div>
-          ) : null}
-          {asideTools || (st && model) ? (
-            <div className={`ga-basebody-side${tipPanels.length || extensionBox ? ' ga-basebody-side-wide' : ''}`}>
-              {asideTools}
-              {st && model ? (
-                <>
-                  {jobs ? <ActionLine text={singleAction('face', 1, t)} auto={autoBuild} /> : null}
-                  <ModelFaceActions character={character} st={st} face={model}
-                    signature={info.signature} cleanup={info.face_cleanup ?? st.face_cleanup}
-                    hasModel={!!model.url} canRerig={!!st.pipeline?.rerig_source}
-                    rerigBlocked={t('The base body has no retained unrigged mesh — regenerate the base model (Regenerate beside “Base model”).')}
-                    onReload={reloadAll} onStarted={onModelRunStarted} settingsElsewhere />
-                </>
-              ) : null}
+            {jobs ? <div className="ga-hint">{t('A new view makes the base model stale — Run all or the next Build you start rebuilds it.')}</div> : null}
+          </div>
+        ) : null}
+        {sub === 'model' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <StepRowView row={{ name: t('Base model'), ...modelRow,
+              button: !info.images?.front ? { disabled: t('Render the base body views first') } : null }}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                <button type="button" className="ga-btn ga-btn-sm" disabled={modelBusy || !info.images?.front}
+                  title={t('Builds the base model anew from the four views: mesher, then face cleanup, face retexture and rig as switched on below.')
+                    + (autoBuild ? ` — ${t(AUTO_BUILD_NOTE)}` : '')}
+                  onClick={() => post('model', { force: !!model })}>
+                  {jobs ? singleAction('model', jobs.model, t) : model ? t('Regenerate') : t('Generate model')}
+                </button>
+                {model?.created_at && model.status !== 'running' ? (
+                  <span className="ga-hint">{t('Built')} {formatDateTime(model.created_at, clockSettings())}</span>
+                ) : null}
+              </div>
+            </StepRowView>
+            {model?.steps?.length ? <ModelSteps steps={model.steps} /> : null}
+            {/* The base mesh repair (Ruling A34): status light, settings saved on their own, Repair again (local). */}
+            {meshRepair ? (
+              <MeshRepairPanel character={character} state={meshRepair} disabled={modelBusy}
+                onSaved={reloadAll} onStarted={() => startPoll(800)} />
+            ) : null}
+            {/* The tip smoothing (Ruling A43): status light with the reason, Built time, Smooth again (local). Hidden
+                without a switched-on tip part. */}
+            {tipSmoothing ? (
+              <TipSmoothingPanel character={character} signature={info.signature} state={tipSmoothing}
+                disabled={modelBusy} onStarted={() => startPoll(800)} />
+            ) : null}
+            {st && model ? (
+              <>
+                {jobs ? <ActionLine text={singleAction('face', 1, t)} auto={autoBuild} /> : null}
+                <ModelFaceActions character={character} st={st} face={model}
+                  signature={info.signature} cleanup={info.face_cleanup ?? st.face_cleanup}
+                  hasModel={!!model.url} canRerig={!!st.pipeline?.rerig_source}
+                  rerigBlocked={t('The base body has no retained unrigged mesh — regenerate the base model (Regenerate beside “Base model”).')}
+                  onReload={reloadAll} onStarted={onModelRunStarted} settingsElsewhere />
+              </>
+            ) : null}
+          </div>
+        ) : null}
+        {sub === 'extensions' ? (
+          // Pair tip groups (position, mirror and colour disc; the dots on the model follow the sliders) and the
+          // Extension bones box in two equal columns, top-aligned (Ruling A45): the box beside the first tip panel,
+          // further tip panels below; one column on a narrow width. One Rebuild — the box's (the tip panels' was
+          // the same POST …/extension-tip/apply).
+          tipPanels.length || extensionBox ? (
+            <div className="ga-basebody-ext">
+              <div className="ga-ext-grid">
+                {tipPanels.slice(0, 1).map((panel) => (
+                  <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
+                    panel={panel} disabled={modelBusy} onPreview={onTipPreview}
+                    onStarted={() => startPoll(800)} rebuildElsewhere={!!extensionBox} />
+                ))}
+                {extensionBox}
+                {tipPanels.slice(1).map((panel) => (
+                  <ExtensionTipPanel key={panel.id} character={character} signature={info.signature}
+                    panel={panel} disabled={modelBusy} onPreview={onTipPreview}
+                    onStarted={() => startPoll(800)} rebuildElsewhere={!!extensionBox} />
+                ))}
+              </div>
             </div>
-          ) : null}
-        </div>
+          ) : noModelYet
+        ) : null}
+        {sub === 'collision' ? (
+          !(model?.url && ready) ? noModelYet
+            : model.collision === undefined ? <div className="ga-hint">{t('No collision capsules on this model')}</div>
+            : (
+              <CollisionScales character={character} collision={model.collision}
+                scales={info.collision_scales} disabled={modelBusy}
+                onPreview={setCollisionPreview} onSaved={reloadAll} />
+            )
+        ) : null}
+        {sub === 'settings' ? (
+          <BaseSettings character={character} info={info} st={st} pending={modelBusy} onReload={reloadAll} />
+        ) : null}
       </div>
     </div>
-    <BaseSettings character={character} info={info} st={st} pending={modelBusy} onReload={reloadAll} />
     </div>
   )
 }

@@ -107,7 +107,8 @@ export function MeshRepairPanel({ character, state, disabled, onSaved, onStarted
           title={t('Saves the settings without running anything')}
           onClick={() => void save()}>{t('Save')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={locked || !changed}
-          onClick={() => setDraft(stored)}>{t('Revert')}</button>
+          title={t('Back to the saved values')}
+          onClick={() => setDraft(stored)}>{t('Discard changes')}</button>
         <button type="button" className="ga-btn ga-btn-sm" disabled={locked || changed}
           title={changed ? t('Save or revert the settings first') : t('Repairs the base mesh again with the saved settings, then rebuilds its extension bones — on this computer, no hub job. Fitted outfit pieces refit afterwards.')}
           onClick={() => void repair()}>{t('Repair again (local, no hub job)')}</button>
