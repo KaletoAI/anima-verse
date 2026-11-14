@@ -12281,6 +12281,85 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   `scripts/smoke_extension_collision.mjs` (hand-derived), `scripts/check_extension_collision.mjs` (tip depth and
   tip offset from rest on the real clips, contact off/on).
 
+#### Partner contact (cross-person)
+
+Stage 1 of the cross-person collision (spec `docs/superpowers/specs/2026-11-13-cross-person-collision-design.md`
+Parts 1–3, plan `docs/superpowers/plans/2026-11-14-cross-person-collision.md`): a figure's hair and extension chains
+are also kept out of OTHER figures' capsules. The payload is unchanged (collision version 6; the partner-only
+`outer_trunk` set above is its only server part); the rules live once in `packages/scene-render/src/partnerContact.ts`
+and both renderers apply them (the 3D client to the figures on the map, the admin viewer to its probe,
+`partnerProbe.ts`).
+
+- **Selection** (per reader, per frame). A READER is a figure posed this frame, not in the far tier, with a driven
+  link or a GPU hair push. A pair first passes the ROOT prefilter (`client3d/src/scene/partnerFrame.ts`):
+  |root_r − root_p| ≤ bindRadius_r + lever_r + bindRadius_p + `PARTNER_PREFILTER_SLACK_M`; only then are the
+  spheres read. BODY SPHERE = the mean of all capsule endpoints in the current frame, radius = the largest endpoint
+  distance plus that capsule's r; the reader's REACH SPHERE = its body sphere grown by its longest driven lever and
+  by the hair meshes' bounding spheres. Candidates are the figures whose body sphere touches the reach sphere
+  (gap ≤ 0); members of the reader's running pair interaction first, then the smallest gap, at most `PARTNER_MAX`
+  (`selectPartners`).
+- **Two-phase frame.** Phase A poses every figure (`Figure.update`); between the phases `planPartnerFrame` selects the
+  partners and `NpcManager.tickSecondary` snapshots each selected partner ONCE (`snapshotPartner`); phase B runs
+  each reader's strand hair and secondary motion against its partners' snapshots (`Figure.updateSecondary`), so the
+  result does not depend on the order the figures are visited in. A partner's body capsules are exact in the frame;
+  its extension capsules carry that partner's swing of the previous frame. The GPU hair push re-reads the partners on
+  their final pose (`setGpuPartners`, after phase B). No partner (`partners` absent or `[]`) is today's frame bit for
+  bit and allocates nothing.
+- **Consumers** (`partnerCapsules`, payload order kept):
+
+  | Consumer | Reads | Partner capsules it takes | Mechanism |
+  |---|---|---|---|
+  | hair chains (`hair: true` groups) | `SecondaryMotion.update(dt, {partners})` | every region, the hair-only ones included | link turn, Part 3 rules |
+  | extension chains (every other driven group) | `SecondaryMotion.update(dt, {partners})` | every region except `HAIR_ONLY_REGIONS` | link turn, Part 3 rules |
+  | hair meshes (GPU push, garment kind `hair`) | `GarmentCollision.setPartners` | as hair chains; the `PARTNER_COLLIDE_MAX` nearest to the mesh's bounding sphere | second uniform block `#ifdef COLLIDE_PARTNER` |
+  | strand hair | `StrandHair.setPartners` | as hair chains; at most `PARTNER_COLLIDE_MAX` and the free slots under `COLLIDE_MAX` | partner slots ahead of the own capsules |
+  | cloth, footwear | — | none | — |
+
+  Every consumer drops `torso` when the partner's set has `outer_trunk` (the outer set encloses it). The figure's
+  OWN `outer_trunk` capsules push nothing of its own (`PARTNER_ONLY_REGIONS`).
+- **Part 3 rules** (link turn). Per chain a broad phase keeps the partner capsules within the chain's lever
+  (+ `PARTNER_HYST_M`) of its root joint (`broadPhase`), at most `COLLIDE_MAX`, the farthest dropped. NO BIND RULE —
+  a partner capsule applies at full radius. ONE search over the own and the partner depths (`contactAnglePair`),
+  capped by the link's swing budget: the smallest turn outside both; when none within the budget is, the turn with
+  the smallest OWN depth, the partner depth breaking ties — the own body always wins. HYSTERESIS: a partner capsule
+  that pushed the tip last frame tests with r + `PARTNER_HYST_M`; the applied partner turn falls by at most
+  `PARTNER_RELEASE_DEG_S` (`releasedAngle`, engaging is immediate). The spring state is never touched.
+- **GPU hair push.** No bind rule; push only, faded per vertex: depth = r − d (d = the vertex's distance from the
+  axis where the push starts), f = clamp((1.5·M − depth) / (0.5·M), 0, 1) with M = `PARTNER_PUSH_MAX_M`, radius
+  r' = d + depth·f — a partner more than 1.5·M deep leaves the vertex inside rather than flipping it across. In
+  every pass the partner capsules come FIRST, the own ones after (the own body has the last word).
+- **The squeeze.** A hair vertex resolves the capsules it lies in TOGETHER (exit along the combined normal,
+  `SQUEEZE_ROUNDS` / `SQUEEZE_STEPS`); the squeeze sets hold the partner capsules with f > 0 along with the own ones
+  (`COLLIDE_GLSL_FUNCTION_SQUEEZE_PARTNER`), so hair squeezed between two figures ends on the partner's surface,
+  never inside its own body.
+- **Constants (measured 2026-11-15, `scripts/check_partner_collision.mjs`)**: `PARTNER_MAX` 4 (every other role of a
+  group clip), `PARTNER_COLLIDE_MAX` 8, `PARTNER_PUSH_MAX_M` 0.04, `PARTNER_HYST_M` 0.0015,
+  `PARTNER_RELEASE_DEG_S` 90 (1.5° a frame at 60 fps), `PARTNER_PREFILTER_SLACK_M` 1.0. Inputs: a pair clip of
+  4.03 s (both halves, two loops, the second measured), model A with HairDeck hair (11 hair chain groups, Swing on)
+  and an extension group, model B with an extension group, both collision v6; mm inside the PARTNER, off → on:
+
+  | Reading | Off | On |
+  |---|---|---|
+  | A hair vertices, chains + GPU push (max / p90 / share > 1 mm) | 48.2 / 29.6 / 1.82 % | 8.3 / 6.6 / 0.01 % |
+  | A hair vertices, GPU push alone (Swing off) | 40.0 / 17.7 / 1.80 % | 0 / 0 / 0 % |
+  | A hair vertices, strand hair | 52.8 / 28.8 / 1.70 % | 14.5 / 5.7 / 0.73 % |
+  | A hair chain tips (max / share) | 25.6 / 5.4 % | 17.4 / 2.5 % |
+  | A extension tips (max / share) | 45.8 / 31.0 % | 0 / 0 % |
+
+  `PARTNER_PUSH_MAX_M`: the smallest value that leaves no vertex inside with the GPU push alone (0.035 leaves
+  11.4 mm, 0.03 19.6 mm). `PARTNER_HYST_M`: the smallest exit radius without flapping at the contact edge of a
+  0.5 m/s probe sweep (0 and 1 mm leave single frame-to-frame jumps of 17–25 mm; from 1.5 mm none above 2.2 mm; a
+  larger one only adds its own step to every onset). Back-and-forth (a delta reversing between frames) stays
+  ≤ 0.1 mm p95 at every tested setting; what remains is the onset of contact itself — a tip at rest that the probe
+  starts carrying jumps by the probe's speed, 4–8 mm a frame at 0.5 m/s, which no constant removes.
+  `PARTNER_RELEASE_DEG_S`: the slowest rate no sweep reading of which is worse than at 240°/s (60°/s turns more
+  often). Cost per reader and frame (node, `performance.now`, a loaded 28-core host): `snapshotMs` ≈ 0.02;
+  a lone figure 0.00 added; four partners add 0.03–0.11 ms to the secondary motion of a figure with one extension
+  group and 0.13–0.36 ms to one with eleven hair chain groups (halving `PARTNER_COLLIDE_MAX` changes nothing).
+  Checks: `scripts/smoke_partner_rules.mjs`, `scripts/smoke_partner_contact.mjs`, `scripts/smoke_partner_frame.mjs`,
+  `scripts/smoke_partner_probe.mjs`, `scripts/smoke_partner_hair_push.mjs` (hand-derived);
+  `scripts/check_partner_collision.mjs` (the numbers above, on read-only copies of two models and a pair clip).
+
 ### Hair strands (`hair_strands`)
 
 The per-strand hair simulation (strand-hair spec `docs/superpowers/specs/2026-11-13-strand-hair-design.md`

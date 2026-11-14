@@ -54,9 +54,9 @@
  *     e) an outside window narrower than a scan step: own 0, partner =
  *        max(0, |θ − 4.5| − 0.05), budget 10 (scan step 0.8333, samples 4.1667
  *        and 5.0 both inside) → the window's near edge 4.45 (±0.01).
- * [6] D7 releasedAngle (PARTNER_RELEASE_DEG_S 240, dt 1/60 → 4° per frame):
- *     (prev 10, want 0) = max(0, 6, 0) = 6; (10, 8) = 8; (3, 0) = max(0, −1, 0)
- *     = 0; engaging is immediate: (0, 7) = 7.
+ * [6] D7 releasedAngle (PARTNER_RELEASE_DEG_S 90, dt 1/60 → 1.5° per frame):
+ *     (prev 10, want 0) = max(0, 8.5, 0) = 8.5; (10, 9) = max(9, 8.5, 0) = 9;
+ *     (1, 0) = max(0, −0.5, 0) = 0; engaging is immediate: (0, 7) = 7.
  * [7] Consumer filters, one capsule per region torso, outer_trunk, chest_hair,
  *     shoulder_hair, arm:
  *     hair → outer_trunk, chest_hair, shoulder_hair, arm (torso dropped, R7);
@@ -69,9 +69,9 @@
  * [9] snapshotPartner on a stub binding: `update()` called exactly once, the
  *     snapshot holds the capsules AFTER that update (ids, regions, ends),
  *     channels [], interaction passed through; a later update leaves it intact.
- * [10] The starting constants of the plan's Global Constraints: PARTNER_MAX 4,
- *     PARTNER_COLLIDE_MAX 8, PARTNER_PUSH_MAX_M 0.04, PARTNER_HYST_M 0.003,
- *     PARTNER_RELEASE_DEG_S 240, PARTNER_PREFILTER_SLACK_M 1.0.
+ * [10] The constants measured by the plan's Task 9 (scripts/check_partner_collision.mjs):
+ *     PARTNER_MAX 4, PARTNER_COLLIDE_MAX 8, PARTNER_PUSH_MAX_M 0.04,
+ *     PARTNER_HYST_M 0.0015, PARTNER_RELEASE_DEG_S 90, PARTNER_PREFILTER_SLACK_M 1.0.
  */
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -174,9 +174,9 @@ async function main() {
   check('[5e] a window the scan stepped over: near edge 4.45', near(a5e, 4.45, 0.01), String(a5e))
 
   // [6] D7 releasedAngle
-  check('[6] D7 (10, 0, 1/60) = 6', near(releasedAngle(10, 0, 1 / 60), 6, 1e-9), String(releasedAngle(10, 0, 1 / 60)))
-  check('[6] D7 (10, 8, 1/60) = 8', near(releasedAngle(10, 8, 1 / 60), 8, 1e-9), String(releasedAngle(10, 8, 1 / 60)))
-  check('[6] D7 (3, 0, 1/60) = 0', releasedAngle(3, 0, 1 / 60) === 0, String(releasedAngle(3, 0, 1 / 60)))
+  check('[6] D7 (10, 0, 1/60) = 8.5', near(releasedAngle(10, 0, 1 / 60), 8.5, 1e-9), String(releasedAngle(10, 0, 1 / 60)))
+  check('[6] D7 (10, 9, 1/60) = 9', near(releasedAngle(10, 9, 1 / 60), 9, 1e-9), String(releasedAngle(10, 9, 1 / 60)))
+  check('[6] D7 (1, 0, 1/60) = 0', releasedAngle(1, 0, 1 / 60) === 0, String(releasedAngle(1, 0, 1 / 60)))
   check('[6] engaging is immediate: (0, 7, 1/60) = 7', releasedAngle(0, 7, 1 / 60) === 7)
 
   // [7] Consumer filters
@@ -220,8 +220,8 @@ async function main() {
   check('[9] a later update leaves the snapshot intact', snap.capsules.every(c => c.now.a[0] === 1))
 
   // [10] constants
-  const want = { PARTNER_MAX: 4, PARTNER_COLLIDE_MAX: 8, PARTNER_PUSH_MAX_M: 0.04, PARTNER_HYST_M: 0.003,
-    PARTNER_RELEASE_DEG_S: 240, PARTNER_PREFILTER_SLACK_M: 1.0 }
+  const want = { PARTNER_MAX: 4, PARTNER_COLLIDE_MAX: 8, PARTNER_PUSH_MAX_M: 0.04, PARTNER_HYST_M: 0.0015,
+    PARTNER_RELEASE_DEG_S: 90, PARTNER_PREFILTER_SLACK_M: 1.0 }
   for (const [k, v] of Object.entries(want)) check(`[10] ${k} = ${v}`, P[k] === v, String(P[k]))
 
   if (failures.length) {

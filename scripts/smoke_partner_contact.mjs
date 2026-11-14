@@ -21,23 +21,25 @@
  *     √((0.1 cos4° − 0.1)² + (0.1 sin4° + 0.02)²) = 0.026977 → 3.02 ±0.02 mm stay inside.
  * [2] NO BIND RULE: with the bind factor (bind tip 0.02 from the axis → radius capped at 0.02) the tip would lie on
  *     the surface and nothing would move; the partner capsule applies at full radius → the turn exists (> 5°).
- * [3] HYSTERESIS (PARTNER_HYST_M 0.003): c through (0.10, −0.031), r 0.03 — the tip is 0.031 from the axis.
+ * [3] HYSTERESIS (PARTNER_HYST_M 0.0015): c through (0.10, −0.031), r 0.03 — the tip is 0.031 from the axis.
  *     A fresh link: outside at r → not pushed (tip stays (0.10,0,0), partner []). After a frame in which c pushed
  *     (c through (0.10, −0.029): 1 mm deep → 0.02(1 − cosθ) + 0.0058 sinθ = 0.03² − 0.029² → θ = 0.573°), the
- *     same c at −0.031 tests with r 0.033: 0.02(1 − cosθ) + 0.0062 sinθ = 0.033² − 0.031² → θ = 1.146°, the tip
- *     ends 0.033 from the axis. The release floor of that frame is 0.573° − 240°/s · 1/60 s < 0 → no influence.
- * [4] RELEASE (PARTNER_RELEASE_DEG_S 240): max_deg 10, c through (0.10, −0.01), r 0.03 (20 mm deep). At 10° the
+ *     same c at −0.031 tests with r 0.0315: 0.02(1 − cosθ) + 0.0062 sinθ = 0.0315² − 0.031² → θ = 0.286°, the tip
+ *     ends 0.0315 from the axis. The release floor of that frame is 0.573° − 90°/s · 1/60 s = −0.927° < 0.286° →
+ *     no influence.
+ * [4] RELEASE (PARTNER_RELEASE_DEG_S 90): max_deg 10, c through (0.10, −0.01), r 0.03 (20 mm deep). At 10° the
  *     distance is √((0.1 cos10° − 0.1)² + (0.1 sin10° + 0.01)²) = 0.027407 < 0.03 → no angle in the budget is
  *     outside: the shallowest one, 10° (±0.01). The capsule removed (`partners: []`, and a snapshot without it):
- *     next frame at dt 1/60 → 10° − 240/60 = 6° (exactly the previous turn − 4°), then − 4° again, then 0 and
- *     the link drops out of `contactTips` (back on the plain path).
+ *     next frame at dt 1/60 → 10° − 90/60 = 8.5° (exactly the previous turn − 1.5°), then 7°, 5.5°, 4°, 2.5°, 1°
+ *     (the previous − 1.5° each), then max(1° − 1.5°, 0) = 0 and the link drops out of `contactTips` (back on the
+ *     plain path).
  * [5] CONSUMERS (spec Part 1 table): the D1 capsule with region `chest_hair` pushes a hair chain (`hair: true`,
  *     5.737°) and not an extension chain (0°); with region `outer_trunk` it pushes both (5.737°). An OWN capsule
  *     OwnA→OwnB moved to the D1 place, r 0.03 (bind distance 0.5 → bind factor 1): region `outer_trunk` never
  *     pushes (hair and extension: 0°); the control, region `arm`, pushes both (5.737°).
  * [5b] The same on the hair loop's path (a hair group with `anchor_blend` { TestLink: { Hips: 1 } }, `anchor_from`
  *     Hips: today's skin is Hips, the swing share 1, so the drawn frame is the rigid one): chest_hair → 5.737°;
- *     the release of [4] → 10°, then the previous − 4°.
+ *     the release of [4] → 10°, then the previous − 1.5°.
  * [6] INERT: no `partners` and `partners: []` give bitwise-identical bone matrices over 60 frames of a swinging
  *     link (gain 1, gravity 1, own `arm` capsule bound, Hips turning).
  * [7] OWN WINS: own `arm` capsule through (0.10, +0.035), r 0.03 (tip 0.035 from it: outside), and the D1 partner
@@ -47,8 +49,8 @@
  *     partner (0.0250 < 0.03).
  * [8] THE CAP DROPS THE FARTHEST: one snapshot of 20 capsules, all region `arm` (r 0.01 unless named), listed in
  *     this order: 19 capsules f0 … f18 parallel to z through (−0.10, −0.027 + 0.003·k), then the D1 capsule `c`
- *     through (0.10, −0.02), r 0.03, LAST. Broad phase at the root joint (the origin), lever 0.10 + 0.003: an fk lies
- *     hypot(0.10, y_k) ≤ 0.10358 ≤ 0.113 from it, `c` 0.10198 ≤ 0.133 → all 20 kept, more than the push's 16
+ *     through (0.10, −0.02), r 0.03, LAST. Broad phase at the root joint (the origin), lever 0.10 + 0.0015: an fk lies
+ *     hypot(0.10, y_k) ≤ 0.10358 ≤ 0.1115 from it, `c` 0.10198 ≤ 0.1315 → all 20 kept, more than the push's 16
  *     (COLLIDE_MAX). Ranked by distance − r (`nearestCapsules`): `c` 0.07198, the fk ≥ 0.09 → the 16 nearest are `c`
  *     and f2 … f16 (|y_k| ≤ 0.021); f0, f1, f17, f18 (|y_k| 0.024 / 0.027) drop. The fk sit at x ≤ −0.09, the tip at
  *     x ≥ 0.1·cos 25° = 0.0906: none of them touches it, so the turn is D1's 5.737° (±0.02) and the row's partner is
@@ -171,9 +173,9 @@ console.log('--- [3] hysteresis ---')
   check('frame 1: c pushes (0.573°)', Math.abs(first - 0.573) <= 0.02, first.toFixed(4))
   held.update(1 / 60, { partners: [snapshot(0.1, -0.031)] })
   const d = axisDistance(tipOf(g), 0.1, -0.031)
-  check('frame 2: pushed to r + 0.003 = 0.033', Math.abs(d - 0.033) <= 2e-5, d.toFixed(6))
+  check('frame 2: pushed to r + 0.0015 = 0.0315', Math.abs(d - 0.0315) <= 2e-5, d.toFixed(6))
   const second = turnOf(g)
-  check('frame 2: 1.146°', Math.abs(second - 1.146) <= 0.02, second.toFixed(4))
+  check('frame 2: 0.286°', Math.abs(second - 0.286) <= 0.02, second.toFixed(4))
   check('frame 2: partner [p:c]', JSON.stringify(held.contactTips()[0]?.partner) === '["p:c"]')
 }
 
@@ -186,13 +188,13 @@ for (const [label, gone] of [['partners: []', []], ['a snapshot without the caps
   check(`${label}: frame at the 10° budget`, Math.abs(first - 10) <= 0.01, first.toFixed(4))
   motion.update(1 / 60, { partners: gone })
   const second = turnOf(f)
-  check(`${label}: next frame 6° (the previous − 4°)`, Math.abs(second - (first - 4)) <= 1e-6 && Math.abs(second - 6) <= 0.01, second.toFixed(6))
+  check(`${label}: next frame 8.5° (the previous − 1.5°)`, Math.abs(second - (first - 1.5)) <= 1e-6 && Math.abs(second - 8.5) <= 0.01, second.toFixed(6))
+  const steps = []
+  for (let k = 2; k <= 6; k++) { motion.update(1 / 60, { partners: gone }); steps.push(turnOf(f) - (first - 1.5 * k)) }
+  check(`${label}: then 7°, 5.5°, 4°, 2.5°, 1°`, steps.every((x) => Math.abs(x) <= 1e-6), steps.map((x) => x.toExponential(1)).join(' '))
   motion.update(1 / 60, { partners: gone })
-  const third = turnOf(f)
-  check(`${label}: then 2°`, Math.abs(third - (first - 8)) <= 1e-6, third.toFixed(6))
-  motion.update(1 / 60, { partners: gone })
-  const fourth = turnOf(f)
-  check(`${label}: then 0°, no row`, Math.abs(fourth) < 1e-9 && motion.contactTips().length === 0, fourth.toFixed(9))
+  const last = turnOf(f)
+  check(`${label}: then 0°, no row`, Math.abs(last) < 1e-9 && motion.contactTips().length === 0, last.toFixed(9))
 }
 
 console.log('--- [5] consumers ---')
@@ -239,7 +241,7 @@ console.log('--- [5b] hair on today\'s skin ---')
   const first = turnOf(g)
   held.update(1 / 60, { partners: [] })
   const second = turnOf(g)
-  check('today\'s-skin release: 10° then 6°', Math.abs(first - 10) <= 0.01 && Math.abs(second - (first - 4)) <= 1e-6,
+  check('today\'s-skin release: 10° then 8.5°', Math.abs(first - 10) <= 0.01 && Math.abs(second - (first - 1.5)) <= 1e-6,
     `${first.toFixed(4)} → ${second.toFixed(6)}`)
 }
 

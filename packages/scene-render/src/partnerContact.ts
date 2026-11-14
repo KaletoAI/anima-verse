@@ -28,18 +28,30 @@
 import { HAIR_ONLY_REGIONS } from './collision'
 import type { CapsuleNow, CollisionBinding, Vec3 } from './collision'
 
-// --- constants (starting values; the builder sets the final ones from the plan's Task 9 check script) -----------
+// --- constants (measured by `scripts/check_partner_collision.mjs`, plan Task 9; the numbers: docs/schnittstellen-3d.md,
+// "Partner contact (cross-person)") ---------------------------------------------------------------------------------
 
 /** At most this many partners per reader: every other role of a group clip (roles a–e). */
 export const PARTNER_MAX = 4
-/** At most this many partner capsules in the GPU hair push's own uniform block. */
+/** At most this many partner capsules in the GPU hair push's own uniform block. Halving it saved no measurable time. */
 export const PARTNER_COLLIDE_MAX = 8
-/** A GPU partner push above this (metres) fades to no push by 1.5 × this value (no vertex jumps across). */
+/**
+ * A GPU partner push above this (metres) fades to no push by 1.5 × this value (no vertex jumps across). Measured:
+ * the smallest value that leaves no hair vertex inside the partner on the pair clip with the GPU push alone (0.035
+ * leaves 11.4 mm, 0.04 leaves 0 mm; the deepest vertex without contact sits 40 mm deep).
+ */
 export const PARTNER_PUSH_MAX_M = 0.04
-/** Exit radius: a partner capsule that pushed a tip last frame tests with r + this (metres). */
-export const PARTNER_HYST_M = 0.003
-/** Release rate: the applied partner contact angle falls by at most this many degrees per second. */
-export const PARTNER_RELEASE_DEG_S = 240
+/**
+ * Exit radius: a partner capsule that pushed a tip last frame tests with r + this (metres). Measured: the smallest
+ * value without frame-to-frame flapping at the contact edge of a 0.5 m/s probe sweep (0 and 1 mm leave single jumps of
+ * 17–25 mm, 1.5 mm none above 2.2 mm); a larger one only adds its own step to every contact onset.
+ */
+export const PARTNER_HYST_M = 0.0015
+/**
+ * Release rate: the applied partner contact angle falls by at most this many degrees per second (1.5° a frame at
+ * 60 fps). Measured: the slowest rate that keeps no sweep reading worse than at 240°/s; 60°/s turns more often.
+ */
+export const PARTNER_RELEASE_DEG_S = 90
 /** Root-distance prefilter slack (metres) before any partner is bound (plan ruling R8); the sphere test decides. */
 export const PARTNER_PREFILTER_SLACK_M = 1.0
 
