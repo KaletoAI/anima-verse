@@ -47,9 +47,10 @@ MIN_SIDE 1024, else 0) + empty 1 + cutout 0 + mesh 1 + insole 0 + fit 0):
 [E4] Hairstyle H (ensure_hairstyle: the first one, the world default mode
      hairdeck), nothing cached, H's mode per case (plan Task 13: the mode is
      the hairstyle's): hairdeck -> 1 (steps [hairdeck, fit]); body -> no
-     steps, 0, note "Hair comes from the body mesh"; haar (stored on the
-     item directly — the setter refuses it) -> no steps, 0, note "HAAR hair
-     is not built yet".
+     steps, 0, note "Hair comes from the body mesh"; haar (strand-hair Task
+     13: HUB_JOBS hair:haar = {haar 3, fit 0}, no seed stored) -> steps
+     [haar, fit], 3, note "haar 3 hub jobs (~30–55 s each) + 3 CPU fits
+     (~25 s each)".
 [E5] Footwear S (feet piece, own_mesh): item image 800 px (longer side <
      1024: the source step upscales) -> 1 + 1 + 0 + 1 + 0 + 0 = 3, steps all
      6; a 1200 px image -> 2 (the source step is free); source..mesh done
@@ -186,9 +187,9 @@ def main() -> int:
         check("hairdeck", brief(estimate(hid)), (["hairdeck", "fit"], 1, "hairdeck 1", False))
         check("mode body", garment_hair.set_hairstyle_mode("Demo", hid, "body"), True)
         check("body: no steps", brief(estimate(hid)), ([], 0, "Hair comes from the body mesh", False))
-        garment = dict(inventory.get_item(hid)["garment"], mesh_mode="haar")
-        check("mode haar stored", inventory.update_item(hid, {"garment": garment}) is not None, True)
-        check("haar: no steps", brief(estimate(hid)), ([], 0, "HAAR hair is not built yet", False))
+        check("mode haar", garment_hair.set_hairstyle_mode("Demo", hid, "haar"), True)
+        check("haar: 3 strand jobs", brief(estimate(hid)),
+              (["haar", "fit"], 3, "haar 3 hub jobs (~30–55 s each) + 3 CPU fits (~25 s each)", False))
         check("back to hairdeck", garment_hair.set_hairstyle_mode("Demo", hid, "hairdeck"), True)
 
         print("[E5] footwear")

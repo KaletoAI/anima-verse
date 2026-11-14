@@ -1926,6 +1926,13 @@ class HairMethodRequest(BaseModel):
     item_id: str = ""
 
 
+class HaarSeedRequest(BaseModel):
+    # The HAAR seed to serve, or null for automatic (the best passing seed); validated by garment_hair.set_haar_seed
+    # (400, not 422). ``item_id`` "" = the worn hairstyle.
+    seed: Optional[Any] = None
+    item_id: str = ""
+
+
 class HairColourRequest(BaseModel):
     # "#rrggbb" or "" (automatic); validated by garment_hair.set_hair_colour. ``item_id`` "" = the worn hairstyle.
     hex: str = ""
@@ -2124,7 +2131,9 @@ def get_character_hair(character_name: str, item_id: str = "",
     (``method_source`` ``"hairstyle"``), ``world_method`` the world's default mode for a new hairstyle
     (``garment_hair.default_mode``); ``item_id`` / ``equipped`` the worn hairstyle (else the first owned one,
     not equipped); ``hairdeck`` the HairDeck section of the current
-    ``hsig`` (``garments.hairdeck_panel``, None without an item) and
+    ``hsig`` (``garments.hairdeck_panel``, None without an item), ``haar`` the HAAR variants of a HAAR
+    hairstyle (``garments.haar_panel``: seeds with their verdicts, the served and the picked one, the next
+    seeds; None for another mode) and
     ``others`` the kept results of the methods not selected, newest first
     (``garments.other_methods_info``, ``[]`` without an item). Every image carries a ``freshness`` and both previews a
     ``preview_freshness`` (``model_overview.annotate_hair``). ``hair_in_body``: the method is ``body`` — the hair
@@ -2160,7 +2169,7 @@ def get_character_hair(character_name: str, item_id: str = "",
     item_id = item["id"] if item else None
     worn = profile.get("equipped_mesh_pieces")
     equipped = bool(item_id and isinstance(worn, dict) and worn.get(garment_hair.HAIR_KIND) == item_id)
-    info = hairdeck = None
+    info = hairdeck = haar = None
     others: List[Dict[str, Any]] = []
     # Hair in the body mesh: no hair item is run or served — the tab shows the
     # method and the base body's prompt freshness instead of the steps.
@@ -2168,9 +2177,11 @@ def get_character_hair(character_name: str, item_id: str = "",
         try:
             info = garments.garment_info(character_name, item_id)
             hairdeck = garments.hairdeck_panel(character_name, item_id, profile=profile)
+            haar = (garments.haar_panel(character_name, item_id, profile=profile)
+                    if garment_hair.hairstyle_mode(item) == garment_hair.HAAR_MODE else None)
             others = garments.other_methods_info(character_name, item_id, profile=profile)
         except ValueError:
-            info = hairdeck = None
+            info = hairdeck = haar = None
             others = []
     method = garment_hair.hairstyle_mode(item) if item else garment_hair.default_mode()
     method_source = "hairstyle" if item else "world"
@@ -2224,7 +2235,7 @@ def get_character_hair(character_name: str, item_id: str = "",
                                if text else None))},
                 "method": method, "method_source": method_source,
                 "world_method": garment_hair.default_mode(),
-                "hairdeck": hairdeck, "others": others,
+                "hairdeck": hairdeck, "haar": haar, "others": others,
                 "hair_in_body": in_body,
                 "base_prompts": (base_body.base_prompts_freshness(character_name, profile=profile)
                                  if in_body and pipeline else None),
@@ -2263,10 +2274,10 @@ def get_character_hairstyles(character_name: str,
     (``garment_hair.hairstyle_list``); ``plain`` marks the hairstyle the
     plain body is the body of, ``default_mode`` the mode a new one gets,
     ``modes`` every mode, ``built_modes`` the ones that can be chosen
-    (``haar`` is not built yet). Task UI4: every hairstyle not worn carries
+    (every mode since HAAR, strand-hair spec § 6.3). Task UI4: every hairstyle not worn carries
     ``wear`` — what its Wear button spends after the click
     (``garment_hair.wear_estimate``: ``{hub_jobs, automatic, note}``, None
-    off the pipeline) and every HairDeck hairstyle ``due`` — the steps its
+    off the pipeline) and every HairDeck or HAAR hairstyle ``due`` — the steps its
     Run all would run now (``garments.run_estimate`` ``steps``; ``[]`` when
     current, off the pipeline or for another mode), so a saved setting shows
     in the list too; ``pipeline`` / ``auto_build`` the character's figure
@@ -2282,7 +2293,7 @@ def get_character_hairstyles(character_name: str,
         row["wear"] = (garment_hair.wear_estimate(character_name, row["id"], profile=profile)
                        if pipeline and not row["worn"] else None)
         due: List[str] = []
-        if pipeline and row["mode"] == garment_hair.HAIRDECK_MODE:
+        if pipeline and row["mode"] in (garment_hair.HAIRDECK_MODE, garment_hair.HAAR_MODE):
             try:
                 due = list(garments.run_estimate(character_name, row["id"], profile=profile).get("steps") or [])
             except Exception:  # noqa: BLE001 — a list light, never a failure of the list
@@ -2300,8 +2311,8 @@ def create_character_hairstyle(character_name: str, body: HairstyleCreateRequest
                                _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Create a hairstyle (``description`` "" = the Appearance's hair text,
     ``mode`` "" = the world default). Starts nothing and wears nothing —
-    except a character's first hairstyle, which is worn. 400 for ``haar``
-    (not built yet), an unknown mode, a non-humanoid or no text. ``{item_id}``."""
+    except a character's first hairstyle, which is worn. 400 for an unknown
+    mode, a non-humanoid or no text. ``{item_id}``."""
     from app.core import garment_hair
     _require_character(character_name)
     try:
@@ -2335,8 +2346,8 @@ def set_character_hair_method(character_name: str, body: HairMethodRequest,
                               _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Set a hairstyle's mode (``item_id`` "" = the worn one): ``""`` (the
     world default ``base_body.hairstyle_default_mode``), ``"body"`` (in the
-    body mesh) or ``"hairdeck"``; ``"haar"`` is a 400 (not built yet), as is
-    anything else. No GPU work starts: the served model is re-assembled."""
+    body mesh), ``"hairdeck"`` or ``"haar"``; anything else is a 400. No GPU
+    work starts: the served model is re-assembled."""
     from app.core import garment_assembly, garment_hair
     _require_character(character_name)
     item_id = _hairstyle_id(character_name, body.item_id)
@@ -2353,6 +2364,37 @@ def set_character_hair_method(character_name: str, body: HairMethodRequest,
     from app.models.inventory import get_item
     return {"method": garment_hair.hairstyle_mode(get_item(item_id)), "method_source": "hairstyle",
             "item_id": item_id}
+
+
+@router.post("/{character_name}/hair/haar-seed")
+def set_character_haar_seed(character_name: str, body: HaarSeedRequest,
+                            _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """Pick the HAAR variant a hairstyle (``item_id`` "" = the worn one) serves: ``seed`` a stored seed, or null
+    for automatic (the best passing seed, strand-hair spec § 6.3.1). A refused seed may be picked (its reasons
+    stay shown). Runs nothing: the fit fingerprint names the served seed, so Re-fit applies it on the CPU — no
+    hub job. 400 for a value that is no positive integer, or a seed the hairstyle has not stored. ``{seed,
+    served}`` — the stored pick and the seed served once refitted."""
+    from app.core import garment_hair, garment_store as gs, garments
+    from app.models.inventory import get_item
+    _require_character(character_name)
+    item_id = _hairstyle_id(character_name, body.item_id)
+    seed = body.seed
+    if seed is not None and (isinstance(seed, bool) or not isinstance(seed, int)):
+        raise HTTPException(status_code=400, detail="HAAR seed must be a positive integer or null")
+    try:
+        if not garment_hair.is_hairstyle(get_item(item_id), character_name):
+            raise ValueError(f"{item_id[:80]!r} is no hairstyle of {character_name}")
+        if seed is not None:
+            ssig = gs.garment_ssig(character_name, item_id)
+            if seed not in gs.haar_seeds(character_name, item_id, ssig):
+                raise ValueError(f"HAAR seed {seed} is not stored for this hairstyle")
+        saved = garment_hair.set_haar_seed(character_name, item_id, seed)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not saved:
+        raise HTTPException(status_code=500, detail="Saving the hairstyle failed")
+    panel = garments.haar_panel(character_name, item_id) or {}
+    return {"seed": panel.get("picked"), "served": panel.get("served"), "item_id": item_id}
 
 
 @router.post("/{character_name}/hair/colour")

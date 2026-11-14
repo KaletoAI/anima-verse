@@ -149,16 +149,14 @@ def pronouns(profile: Dict[str, Any]) -> Tuple[str, str]:
 # ``SETTING_KEYS`` of its ``garment`` (``hairstyle_settings``).
 
 #: How a hairstyle reaches the figure: HairDeck (one profile picture -> hair
-#: cards -> fit), HAAR (not built yet) or ``body`` (the hair is part of the
-#: body mesh — no hair mesh, no hair job).
+#: cards -> fit), HAAR (the hairstyle's text -> strands, one hub job per seed ->
+#: fit) or ``body`` (the hair is part of the body mesh — no hair mesh, no hair job).
 HAIRDECK_MODE, HAAR_MODE, BODY_MODE = "hairdeck", "haar", "body"
 HAIR_MODES: Tuple[str, ...] = (HAIRDECK_MODE, HAAR_MODE, BODY_MODE)
 #: The modes a hairstyle can be made with today.
-BUILT_MODES: Tuple[str, ...] = (HAIRDECK_MODE, BODY_MODE)
+BUILT_MODES: Tuple[str, ...] = (HAIRDECK_MODE, HAAR_MODE, BODY_MODE)
 #: The world default of a new hairstyle when the world names no valid one.
 DEFAULT_HAIR_MODE = BODY_MODE
-#: ``create_hairstyle`` / ``set_hairstyle_mode`` refuse HAAR with this (ValueError).
-HAAR_NOT_BUILT = "HAAR hair is not built yet"
 #: Why a ``body`` hairstyle has no hair run.
 HAIR_IN_BODY = "Hair comes from the body mesh"
 #: Profile key: the id of the hairstyle the plain body is the body of (D3).
@@ -168,7 +166,7 @@ BALD = "bald"
 #: The per-hairstyle settings, keys of the item's ``garment`` (they kept the
 #: names the profile keys had, so their readers read either mapping).
 SETTING_KEYS: Tuple[str, ...] = ("hair_colour", "hair_forward_m", "hair_tilt_deg", "hair_width_scale",
-                                 "hair_swing", "hair_stiffness")
+                                 "hair_swing", "hair_stiffness", "haar_seed")
 #: The longest hairstyle name ``create_hairstyle`` derives from a description.
 NAME_MAX = 48
 _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
@@ -176,7 +174,7 @@ _HEX_COLOUR = re.compile(r"#[0-9a-fA-F]{6}")
 
 def default_mode() -> str:
     """The world setting ``base_body.hairstyle_default_mode`` — the mode a
-    new hairstyle gets when none is named (an unknown value, or ``haar``, =
+    new hairstyle gets when none is named (an unknown value =
     ``DEFAULT_HAIR_MODE``)."""
     from app.core import config
     from app.core.config_schema import field_default
@@ -331,8 +329,7 @@ def set_hairstyle_settings(character_name: str, item_id: str, values: Dict[str, 
 
 def set_hairstyle_mode(character_name: str, item_id: str, mode: str) -> bool:
     """Set a hairstyle's mode (``""`` = the world's ``default_mode``).
-    ValueError for an unknown mode, ``HAAR_NOT_BUILT`` for ``haar``, or an
-    item that is no hairstyle of the character. Starts nothing: a mode
+    ValueError for an unknown mode or an item that is no hairstyle of the character. Starts nothing: a mode
     change of the plain body's hairstyle changes the base prompts (the plain
     body shows "older prompts" until a Build), of another hairstyle its
     shape (ruling P1)."""
@@ -350,11 +347,20 @@ def set_hairstyle_mode(character_name: str, item_id: str, mode: str) -> bool:
 
 def _checked_mode(mode: str) -> str:
     mode = str(mode or "").strip() or default_mode()
-    if mode == HAAR_MODE:
-        raise ValueError(HAAR_NOT_BUILT)
     if mode not in BUILT_MODES:
         raise ValueError(f"hair mode must be one of: {', '.join(BUILT_MODES)}")
     return mode
+
+
+def set_haar_seed(character_name: str, item_id: str, seed: Optional[int]) -> bool:
+    """Store the HAAR seed a hairstyle serves (``haar_seed``; None = automatic: the best passing seed) in ONE
+    read-modify-write of the item under its lock (``set_hairstyle_settings``). Runs nothing: the fsig names the
+    served seed, so the fit step reads due and its CPU refit (no hub job) applies it. ValueError for a seed that
+    is no positive integer or an item that is no hairstyle of the character. The update result."""
+    if seed is not None:
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 1:
+            raise ValueError("HAAR seed must be a positive integer or empty")
+    return set_hairstyle_settings(character_name, item_id, {"haar_seed": seed})
 
 
 def set_hair_colour(character_name: str, item_id: str, hex_colour: str) -> bool:
@@ -639,8 +645,7 @@ def create_hairstyle(character_name: str, description: str, mode: str = "") -> s
 
     ``description`` the hairstyle's text (empty: the Appearance's hair text,
     ``appearance_hair_text``); ``mode`` one of ``BUILT_MODES`` (``""``: the
-    world's ``default_mode``). ValueError for ``haar`` (``HAAR_NOT_BUILT``),
-    an unknown mode, a non-humanoid, a species without a hair slot, or no
+    world's ``default_mode``). ValueError for an unknown mode, a non-humanoid, a species without a hair slot, or no
     text at all. Starts nothing; the new hairstyle is not worn — except the
     character's FIRST one, which is worn and becomes the plain body's
     hairstyle (``BASE_HAIRSTYLE_KEY``)."""
@@ -773,9 +778,9 @@ def hairstyle_list(character_name: str, *, profile: Optional[Dict[str, Any]] = N
     (``model_overview.freshness`` shape ``{state, reason}``): a ``body``
     hairstyle is ``current`` when it is the plain body's (its hair is in the
     plain body) and ``missing`` otherwise (its body shape is made by a
-    Build); a HairDeck one is ``current`` with an accepted fit on the
+    Build); a HairDeck or HAAR one is ``current`` with an accepted fit on the
     current base model, ``stale`` with an older fit only, ``missing``
-    without; HAAR ``missing``. Read-only."""
+    without. Read-only."""
     from app.core import base_body, garment_store
     from app.core.model_overview import CURRENT, MISSING, STALE, freshness
     profile = _profile_of(character_name, profile)
@@ -788,17 +793,16 @@ def hairstyle_list(character_name: str, *, profile: Optional[Dict[str, Any]] = N
         mode = hairstyle_mode(item)
         if mode == BODY_MODE:
             fresh = freshness(CURRENT) if item_id == plain else freshness(MISSING, "Body shape made by a Build")
-        elif mode == HAIRDECK_MODE:
+        else:
             try:
                 served = (garment_store.accepted_fit(character_name, item_id, base_model_sha=base[1],
                                                      profile=profile) if base and base[1] else None)
-                newest = garment_store.newest_accepted_fits(character_name, item_id).get(garment_store.HAIRDECK)
+                newest = garment_store.newest_accepted_fits(character_name, item_id).get(mode)
             except ValueError:
                 served = newest = None
+            name = "HairDeck" if mode == HAIRDECK_MODE else "HAAR"
             fresh = (freshness(CURRENT) if served else freshness(STALE, "Fitted on an older body") if newest
-                     else freshness(MISSING, "No HairDeck fit yet"))
-        else:
-            fresh = freshness(MISSING, HAAR_NOT_BUILT)
+                     else freshness(MISSING, f"No {name} fit yet"))
         out.append({"id": item_id, "name": str(item.get("name") or item_id),
                     "description": hairstyle_description(item), "mode": mode,
                     "worn": item_id == worn, "plain": item_id == plain, "freshness": fresh})

@@ -73,8 +73,8 @@ mesh and only re-fits; the fit record's ``base_model_sha256`` decides that.
 A hairstyle has its own mode (``garment_hair.hairstyle_mode``; spec
 ``2026-11-11-hair-from-body-design.md``, plan 2026-11-12-unified-worn-pieces
 Task 13): ``body`` — the hair is part of the body mesh, no steps, no files —,
-HairDeck — steps ``("hairdeck", "fit")`` (``steps_for``) — and HAAR (not built
-yet: no steps). HairDeck
+HairDeck — steps ``("hairdeck", "fit")`` (``steps_for``) — and HAAR — steps
+``("haar", "fit")``. HairDeck
 turns the profile picture into hair cards; its files live in ONE folder per
 ``hsig``::
 
@@ -92,6 +92,23 @@ edit-chain payload (``_edit_payload``) plus ``method``, ``hsig``, the colour ove
 ``hair_colour``) and the placement (its ``hair_forward_m`` / ``hair_tilt_deg``). The fit is the same ``{item}_{fsig}.glb`` +
 record (its record says ``method: "hairdeck"``; a record without ``method`` is an edit-chain fit — of hair, one of
 the removed method, never served); ``prepared/`` is not used by HairDeck.
+
+HAAR (strand-hair spec 2026-11-13 § 6.3) turns the hairstyle's TEXT into strands, one hub job per seed; its
+seeds live in ONE folder per ``ssig``::
+
+    raw/{item}_{ssig}/s{seed}/                        one strand job (``<name>_strands.npy``,
+                                                      ``<name>_head.obj``, ``info.json``)
+    raw/{item}_{ssig}/record.json                     {seeds, results: {seed: {accepted,
+                                                      reasons, metrics, tile, length_class,
+                                                      base_model_sha256, fit_version,
+                                                      strands_sha256}}, chosen, jobs}
+
+``ssig`` = md5[:12] over the hairstyle's text (the prompt), the ``extra_params`` of the backend the
+``hair_strands`` occasion is meant to run on and ``HAAR_VERSION`` (``garment_ssig``). A seed folder appears
+whole (it is renamed into place). ``results`` are the per-seed fit verdicts on the base model they name; the
+SERVED seed (``haar_served_seed``) is the hairstyle's ``haar_seed`` while that seed is stored, else the best
+passing one (``haar_best_seed``, spec § 6.3.1). The HAAR fsig is the edit-chain payload plus ``method``,
+``ssig``, the served ``seed`` and the colour override — Swing is not in it (HAAR has no chains).
 
 The SOURCE of an image group (``garment_source``, refit before re-render)::
 
@@ -140,8 +157,15 @@ EDIT_CHAIN = "edit_chain"
 HAIRDECK = "hairdeck"
 #: Hair inside the body mesh (``garment_hair.BODY_MODE``): no steps, no fit, nothing served.
 BODY = "body"
-#: HAIR not built yet (``garment_hair.HAAR_MODE``): no steps, no fit, nothing served.
+#: Hair strands from the hairstyle's text (``garment_hair.HAAR_MODE``): steps ``HAAR_STEPS``.
 HAAR = "haar"
+#: The steps of hair made by HAAR (``steps_for``): the strand jobs (one per seed), then the CPU fit.
+HAAR_STEPS: Tuple[str, ...] = ("haar", "fit")
+#: Bumped when the HAAR job's inputs change meaning (part of ``ssig``).
+HAAR_VERSION = 1
+#: The record of a HAAR job folder (``haar_dir``).
+HAAR_RECORD = "record.json"
+_SEED_DIR_RE = re.compile(r"s([1-9][0-9]{0,8})")
 #: The only method of footwear (no method choice for ``feet``).
 SHOE = "shoe"
 GARMENT_VIEWS: Tuple[str, ...] = ("front", "back")
@@ -393,18 +417,20 @@ def kind_method(kind: str, character_name: str, profile: Dict[str, Any], *, item
 
 def steps_for(kind: str, method: str) -> Tuple[str, ...]:
     """The step order of ``kind`` made with ``method``: hair by HairDeck is
-    ``HAIRDECK_STEPS``, hair in the body mesh (``BODY``) has none — ``()``,
-    nothing ever runs — and neither has HAAR (not built yet), footwear only by ``shoe`` (``FOOTWEAR_STEPS``; the
+    ``HAIRDECK_STEPS``, by HAAR ``HAAR_STEPS``, hair in the body mesh (``BODY``) has none — ``()``,
+    nothing ever runs —, footwear only by ``shoe`` (``FOOTWEAR_STEPS``; the
     edit chain is never run for a feet piece), clothing only by the edit
     chain (``GARMENT_STEPS[kind]``). ValueError for an unknown kind or method
-    (hair by any other method too — only ``body`` and HairDeck remain)."""
+    (hair by any other method too — only ``body``, HairDeck and HAAR remain)."""
     if kind not in GARMENT_STEPS:
         raise ValueError(f"unknown garment kind {kind!r}")
     if kind == "hair":
-        if method in (BODY, HAAR):
+        if method == BODY:
             return ()
         if method == HAIRDECK:
             return HAIRDECK_STEPS
+        if method == HAAR:
+            return HAAR_STEPS
         raise ValueError(f"unknown hair method {method!r}")
     if kind == "footwear":
         if method != SHOE:
@@ -437,21 +463,33 @@ def garment_method(character_name: str, item_id: str, *,
     return kind_method(kind, character_name, _profile_of(character_name, profile), item_id=item_id)
 
 
-def hairdeck_backend_params(character_name: str) -> Dict[str, Any]:
-    """The ``extra_params`` of the backend the ``hair_mesh`` occasion is meant
-    to run on for the character (``routing.intended_backend``: configuration
-    only, so a cooldown never changes it); {} when there is none."""
+def _intended_params(occasion: str, character_name: str) -> Dict[str, Any]:
+    """The ``extra_params`` of the backend ``occasion`` is meant to run on for the character
+    (``routing.intended_backend``: configuration only, so a cooldown never changes it); {} when there is none."""
     from app.imagegen import routing, service
     pool = getattr(service.get_image_service(), "pool", None)
     if pool is None:
         return {}
     try:
-        backend = routing.intended_backend("hair_mesh", character_name, pool=pool)
+        backend = routing.intended_backend(occasion, character_name, pool=pool)
     except Exception:  # noqa: BLE001 — a fingerprint never fails on the routing config
-        logger.exception("HairDeck backend of %s unresolvable", character_name)
+        logger.exception("%s backend of %s unresolvable", occasion, character_name)
         return {}
     params = getattr(backend, "extra_params", None) if backend is not None else None
     return dict(params) if isinstance(params, dict) else {}
+
+
+def hairdeck_backend_params(character_name: str) -> Dict[str, Any]:
+    """The ``extra_params`` of the backend the ``hair_mesh`` occasion is meant
+    to run on for the character (``routing.intended_backend``: configuration
+    only, so a cooldown never changes it); {} when there is none."""
+    return _intended_params("hair_mesh", character_name)
+
+
+def strands_backend_params(character_name: str) -> Dict[str, Any]:
+    """The ``extra_params`` of the backend the ``hair_strands`` occasion (HAAR) is meant to run on for the
+    character; {} when there is none."""
+    return _intended_params("hair_strands", character_name)
 
 
 def garment_hsig(character_name: str, item_id: str, *,
@@ -474,6 +512,136 @@ def garment_hsig(character_name: str, item_id: str, *,
                **garment_beard.hsig_inputs(character_name, profile=profile)}
     digest = hashlib.md5(json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8"))
     return digest.hexdigest()[:12]
+
+
+def haar_prompt(item_id: str) -> str:
+    """The prompt of a HAAR hairstyle's strand jobs: its text as is (``garment_hair.hairstyle_description``)."""
+    from app.core import garment_hair
+    from app.models.inventory import get_item
+    return garment_hair.hairstyle_description(get_item(str(item_id or "")))
+
+
+def garment_ssig(character_name: str, item_id: str, *,
+                 profile: Optional[Dict[str, Any]] = None) -> str:
+    """md5[:12] over ``{prompt, extra_params, version}``: the hairstyle's text (``haar_prompt``), the
+    ``extra_params`` of the intended ``hair_strands`` backend (``strands_backend_params``) and ``HAAR_VERSION``.
+    Names the HAAR job folder (``haar_dir``). Neither the base nor the colour is in it: changing them re-fits the
+    stored seeds, never asks HAAR again. ``profile`` is accepted for symmetry with ``garment_hsig``."""
+    payload = {"prompt": haar_prompt(item_id), "extra_params": strands_backend_params(character_name),
+               "version": HAAR_VERSION}
+    return _md5(payload)
+
+
+def haar_dir(character_name: str, item_id: str, ssig: str) -> Path:
+    """``garments/raw/{item}_{ssig}/`` — the folder of a HAAR hairstyle's strand jobs (``s{seed}/`` per seed +
+    ``record.json``). ValueError like ``hairdeck_dir``. Creates nothing."""
+    from app.models.inventory import safe_item_id
+    iid = safe_item_id(item_id)
+    if not iid or iid != item_id:
+        raise ValueError(f"invalid garment item id {str(item_id)[:80]!r}")
+    if not isinstance(ssig, str) or not _FSIG_RE.fullmatch(ssig):
+        raise ValueError(f"invalid HAAR fingerprint {str(ssig)[:40]!r}")
+    root = _root(character_name)
+    path = root / PART_DIRS["raw"] / f"{iid}_{ssig}"
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise ValueError(f"garment path escapes {root}")
+    return path
+
+
+def haar_seed_dir(folder: Path, seed: int) -> Path:
+    """``<haar_dir>/s{seed}``."""
+    return Path(folder) / f"s{int(seed)}"
+
+
+def haar_seeds(character_name: str, item_id: str, ssig: str) -> List[int]:
+    """Every seed stored in the HAAR folder of ``ssig`` (a ``s{seed}/`` folder holding a strand file and a head
+    file), ascending. A seed folder is renamed into place whole, so a listed seed is complete."""
+    from app.core import strand_file
+    folder = haar_dir(character_name, item_id, ssig)
+    if not folder.is_dir():
+        return []
+    out: List[int] = []
+    for sub in folder.iterdir():
+        match = _SEED_DIR_RE.fullmatch(sub.name)
+        if not match or not sub.is_dir():
+            continue
+        names = [p.name for p in sub.iterdir() if p.is_file()]
+        if any(n.endswith(strand_file.STRANDS_SUFFIXES) for n in names) \
+                and any(n.endswith(strand_file.HEAD_SUFFIX) for n in names):
+            out.append(int(match.group(1)))
+    return sorted(out)
+
+
+def haar_record(character_name: str, item_id: str, ssig: str) -> Dict[str, Any]:
+    """The HAAR folder's ``record.json`` ({} without one)."""
+    return read_record(haar_dir(character_name, item_id, ssig) / HAAR_RECORD)
+
+
+def haar_rank(result: Dict[str, Any]) -> Tuple[float, float]:
+    """The ranking key of one passing seed's result (spec § 6.3.1): ``(face_cards, |tip p50 - class target|)``
+    — the class target ``garment_haar.CLASS_TARGET_CM`` of the result's ``length_class`` (0 without a class),
+    a missing number ranks last."""
+    from app.core.garment_haar import CLASS_TARGET_CM
+    metrics = result.get("metrics") or {}
+
+    def number(key: str) -> float:
+        try:
+            value = float(metrics.get(key))
+        except (TypeError, ValueError):
+            return math.inf
+        return value if math.isfinite(value) else math.inf
+
+    cls = " ".join(str(result.get("length_class") or "").lower().split())
+    target = CLASS_TARGET_CM.get(cls)
+    tip = number("tip_p50_rel_shoulder_cm")
+    if not math.isfinite(tip):
+        off = math.inf
+    else:
+        off = abs(tip - target) if target is not None else 0.0
+    return number("face_cards"), off
+
+
+def haar_best_seed(results: Dict[Any, Dict[str, Any]]) -> Optional[int]:
+    """The best PASSING seed of ``results`` (seed -> result; keys may be the record's strings): fewest face cards,
+    then the tip nearest the class target, then the lowest seed (spec § 6.3.1). None when none passes."""
+    passing = []
+    for key, result in results.items():
+        try:
+            seed = int(key)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(result, dict) and result.get("accepted") is True:
+            passing.append((haar_rank(result), seed))
+    return min(passing)[1] if passing else None
+
+
+def haar_pick(item: Optional[Dict[str, Any]]) -> Optional[int]:
+    """The hairstyle's ``haar_seed`` setting as an int, None = automatic."""
+    from app.core import garment_hair
+    value = garment_hair.hairstyle_settings(item).get("haar_seed")
+    if isinstance(value, bool):
+        return None
+    try:
+        seed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return seed if seed > 0 else None
+
+
+def haar_served_seed(character_name: str, item_id: str, ssig: str, *,
+                     item: Optional[Dict[str, Any]] = None) -> Optional[int]:
+    """The seed a HAAR hairstyle serves under ``ssig``: its ``haar_seed`` while that seed is stored (a pick of a
+    refused seed too — the user saw its reasons), else the best passing stored seed with a result
+    (``haar_best_seed``), else None."""
+    if item is None:
+        from app.models.inventory import get_item
+        item = get_item(item_id)
+    stored = haar_seeds(character_name, item_id, ssig)
+    pick = haar_pick(item)
+    if pick is not None and pick in stored:
+        return pick
+    results = haar_record(character_name, item_id, ssig).get("results") or {}
+    return haar_best_seed({s: results[str(s)] for s in stored if isinstance(results.get(str(s)), dict)})
 
 
 def _edit_payload(character_name: str, item_id: str, kind: str, profile: Dict[str, Any], *,
@@ -511,7 +679,9 @@ def garment_fsig(character_name: str, item_id: str, *,
                  profile: Optional[Dict[str, Any]] = None, state: Optional[str] = None,
                  method: Optional[str] = None, swing: Optional[bool] = None) -> str:
     """md5[:12] over ``{kind, <kind inputs>, version, bsig, base_images}``
-    (R10); hair made by HairDeck adds ``{method, hsig, colour, placement}``
+    (R10); hair made by HAAR adds ``{method, ssig, seed, colour}`` (the served
+    seed, ``haar_served_seed``; the colour override) and nothing of Swing;
+    hair made by HairDeck adds ``{method, hsig, colour, placement}``
     (the colour override, "" = automatic; the manual placement
     ``garment_hair.hair_placement``, None = automatic) and ``swing: True``
     only when the hair swings on its spring chains (``hair_motion.swing_on``,
@@ -548,6 +718,14 @@ def garment_fsig(character_name: str, item_id: str, *,
         from app.core import hair_motion
         if hair_motion.swing_on(settings) if swing is None else swing:
             payload["swing"] = True
+    elif method == HAAR:
+        from app.core import garment_hair
+        from app.models.inventory import get_item
+        item = get_item(item_id)
+        ssig = garment_ssig(character_name, item_id, profile=profile)
+        payload.update(method=HAAR, ssig=ssig,
+                       seed=haar_served_seed(character_name, item_id, ssig, item=item),
+                       colour=garment_hair.hair_colour_override(garment_hair.hairstyle_settings(item)))
     return _md5(payload)
 
 
@@ -618,7 +796,7 @@ def user_accept_holds(record: Dict[str, Any], character_name: str = "") -> bool:
     if not isinstance(record.get("user_accepted"), dict):
         return True
     from app.core import garment_fit
-    if record.get("fit_version") != garment_fit.FIT_VERSION.get(str(record.get("kind") or "")):
+    if record.get("fit_version") != garment_fit.expected_fit_version(record):
         return False
     kind = str(record.get("kind") or "")
     on_base = not is_body_id(str(record.get("body_id") or ""))
@@ -754,7 +932,8 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     with the CURRENT method (``fit_method``; a switched method never serves
     the other method's hair), else None. An empty ``base_model_sha`` (no base
     model) has no fit. A footwear fit of an older fit version is served
-    while it can be grafted (``_accepted_on``, Ruling R7b). Hair whose method is ``BODY`` is never
+    while it can be grafted (``_accepted_on``, Ruling R7b). A HAAR fit is served like a HairDeck one (its
+    current fsig names the served seed). Hair whose method is ``BODY`` is never
     served: the hair is part of the body mesh. Per open / closed state (plan
     2026-11-12-unified-worn-pieces Task 11b, ruling A2): ``state`` names the
     fsig and filters the fallback — asked for one state, a piece is never
@@ -774,7 +953,7 @@ def accepted_fit(character_name: str, item_id: str, *, base_model_sha: str,
     except ValueError:
         current, method = None, EDIT_CHAIN
         state = state if state in ("open", "closed") else "closed"
-    if method in (BODY, HAAR):
+    if method == BODY:
         return None
     if current is not None:
         path = garment_path(character_name, item_id, current, "fit")

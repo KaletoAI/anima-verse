@@ -113,7 +113,7 @@ def register_builtin_kinds() -> None:
     import importlib
     for module in ("app.core.model3d", "app.core.props", "app.core.location_model3d",
                    "app.core.pose_animation", "app.core.pose_transition", "app.skills.animate", "app.routes.instagram",
-                   "app.skills.video_generation_skill"):
+                   "app.skills.video_generation_skill", "app.core.garments"):
         try:
             importlib.import_module(module)
         except Exception as e:  # noqa: BLE001 — one broken module must not stop the rest

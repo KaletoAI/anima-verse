@@ -44,13 +44,15 @@ def _body_failed(name: str, item_id: str, kind: str, fsig: str, body_id: str, ba
     fitted on the body directly, its failure names no base fit."""
     from app.core import garment_fit, garment_set, garments, garment_store as gs
     base_fit_sha = ""
+    version = garment_fit.FIT_VERSION.get(kind)
     if kind != garment_set.FOOTWEAR:
         hit = gs.accepted_fit(name, item_id, base_model_sha=base_sha, profile=profile)
         if hit is None:
             return False
         base_fit_sha = garments._sha(hit[0])
+        version = garment_fit.expected_fit_version(hit[1])
     return gs.body_failure(name, item_id, fsig, body_id, body_sha=garments.body_sha256(name, body_id),
-                           base_fit_sha=base_fit_sha, fit_version=garment_fit.FIT_VERSION.get(kind)) is not None
+                           base_fit_sha=base_fit_sha, fit_version=version) is not None
 
 
 def _units(name: str, profile: Dict[str, Any]) -> List[_Work]:

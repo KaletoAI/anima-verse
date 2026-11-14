@@ -29,10 +29,10 @@ image Demo_1.png, on the base-body pipeline, a ready base model
 EXPECTED VALUES, DERIVED BY HAND FROM THE SPEC AND THE CONSTANTS
 
 [H0] Schema default ``base_body.hairstyle_default_mode`` = "body", choices
-     ["body", "hairdeck"] (HAAR is not built), label "In the body mesh";
+     ["body", "hairdeck", "haar"], label "In the body mesh";
      ``default_mode()`` "body"; ``hair_mode`` Long "body", Deck "hairdeck",
      Bald "" (no hairstyle); an unknown world value ("nonsense") resolves to
-     "body", and so do the removed "edit_chain" / "subtract" and "haar";
+     "body", and so do the removed "edit_chain" / "subtract" ("haar" stays "haar");
      ``hair_in_body`` Long True, Deck False.
 [H1] Base views of Long (method body). APPEARANCE = "female, 30 years old,
      green eyes, olive skin, average height, athletic build" (the human build
@@ -257,16 +257,18 @@ def main() -> int:
         print("[H0] the method and its default")
         field = config_scope.schema_for(config_scope.WORLD)["base_body"]["fields"]["hairstyle_default_mode"]
         check("schema default", field["default"], "body")
-        check("schema choices", field["choices"], ["body", "hairdeck"])
+        check("schema choices", field["choices"], ["body", "hairdeck", "haar"])
         check("schema label", field["choice_labels"]["body"], "In the body mesh")
         check("world default", garment_hair.default_mode(), "body")
         check("modes", (garment_hair.hair_mode("Long"), garment_hair.hair_mode("Deck"), garment_hair.hair_mode("Bald")),
               ("body", "hairdeck", ""))
         config._CONFIG.setdefault("base_body", {})["hairstyle_default_mode"] = "nonsense"
         check("unknown world value -> body", garment_hair.default_mode(), "body")
-        for gone in ("edit_chain", "subtract", "haar"):
+        for gone in ("edit_chain", "subtract"):
             config._CONFIG["base_body"]["hairstyle_default_mode"] = gone
             check(f"world value {gone} -> body", garment_hair.default_mode(), "body")
+        config._CONFIG["base_body"]["hairstyle_default_mode"] = "haar"
+        check("world value haar", garment_hair.default_mode(), "haar")
         config._CONFIG.pop("base_body", None)
         check("hair_in_body", (garment_hair.hair_in_body("Long"), garment_hair.hair_in_body("Deck")), (True, False))
 

@@ -169,6 +169,21 @@ SIDE_DEEP_M = 0.03
 #: footwear: its own fit (``footwear_fit``), versioned there.
 FIT_VERSION: Dict[str, int] = {"hair": 13, "clothing": 10, "footwear": FOOTWEAR_FIT_VERSION}
 
+
+def fit_version_for(kind: str, method: str = "") -> Optional[int]:
+    """The current fit version of a ``kind`` fit made with ``method``: HAAR hair has its own
+    (``garment_haar.HAAR_FIT_VERSION``), every other fit ``FIT_VERSION[kind]``; None for an unknown kind."""
+    if kind == "hair" and method == "haar":
+        from app.core.garment_haar import HAAR_FIT_VERSION
+        return HAAR_FIT_VERSION
+    return FIT_VERSION.get(kind)
+
+
+def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
+    """``fit_version_for`` of a fit record (its ``kind`` and ``method``) — what its ``fit_version`` must say to be
+    current."""
+    return fit_version_for(str(record.get("kind") or ""), str(record.get("method") or ""))
+
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).
 CLOTHING_DEPTH_BAND = (0.03, 0.15)

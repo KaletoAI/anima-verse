@@ -504,6 +504,17 @@ def _hair_hsig(character_name: str, item_id: str) -> str:
         return ""
 
 
+def _hair_ssig(character_name: str, item_id: str) -> str:
+    """The item's current HAAR fingerprint (its strand folder ``raw/{item}_{ssig}``), "" when it cannot be
+    computed (its jobs are kept then)."""
+    try:
+        from app.core import garment_store
+        return garment_store.garment_ssig(character_name, item_id)
+    except Exception:  # noqa: BLE001 — unknown ssig: never delete on a guess
+        logger.exception("Artefact GC %s: HAAR fingerprint of %s unavailable", character_name, item_id)
+        return ""
+
+
 def _check_deadline(deadline: Optional[float], character_name: str) -> None:
     if deadline is not None and time.monotonic() > deadline:
         raise GcOverBudget(f"artefact GC of {character_name} over its time budget")
@@ -752,21 +763,24 @@ def _judge(character_name: str, nodes: List[Node], roots: Roots,
         for p in node.files:
             if p.suffix == ".json" and p.parent.name == "garments" and not garment_store.is_strands_sidecar(p):
                 inputs = _json(p).get("inputs")
-                if isinstance(inputs, dict) and inputs.get("hsig"):
-                    kept_hsigs.setdefault(node.parents["item_id"], set()).add(str(inputs["hsig"]))
-    current_hsig: Dict[str, str] = {}
+                # A HairDeck fit names its job by ``hsig``, a HAAR fit its strand folder by ``ssig``.
+                for key in ("hsig", "ssig"):
+                    if isinstance(inputs, dict) and inputs.get(key):
+                        kept_hsigs.setdefault(node.parents["item_id"], set()).add(str(inputs[key]))
+    current_hsig: Dict[str, Tuple[str, str]] = {}
     for node in nodes:
         if node.kind != "hairdeck":
             continue
         item, hsig = node.parents["item_id"], node.parents["hsig"]
         if item in roots.hair_items and item not in current_hsig:
-            current_hsig[item] = _hair_hsig(character_name, item)
+            current_hsig[item] = (_hair_hsig(character_name, item), _hair_ssig(character_name, item))
+        current = current_hsig.get(item, ("", ""))
         if roots.garment_keep is None:
             node.reachable, node.reason = True, "garment roots unknown"
         elif item not in roots.garment_items:
             node.reachable, node.reason = False, "item not held"
-        elif current_hsig.get(item, "") in ("", hsig):
-            node.reachable, node.reason = True, "current HairDeck job"
+        elif "" in current or hsig in current:
+            node.reachable, node.reason = True, "current HairDeck / HAAR job"
         elif hsig in kept_hsigs.get(item, set()):
             node.reachable, node.reason = True, "job of a kept fit"
         else:

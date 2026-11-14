@@ -60,9 +60,10 @@ EXPECTED, BY HAND FROM THE BRIEF (D1-D5) AND THE HUMAN MANIFEST
     worn, equipped_mesh_pieces.hair = S, ``figure_build.request`` called ONCE ("outfit_change") and the Build
     debounce timer the piece change armed is disarmed (no ``(Kai, BUILD_TIMER)`` timer left). Applied again
     (nothing changes): no further request. The preview route's payload names hairstyle S.
-[5] create_hairstyle(Kai, "a bun", "haar") -> ValueError "HAAR hair is not built yet"; nothing created.
+[5] create_hairstyle(Kai, "a bun", "bogus") -> ValueError "hair mode must be one of"; nothing created.
     GET /characters/Kai/hairstyles (get_character_hairstyles): keys {hairstyles, default_mode "body", modes
-    ["hairdeck", "haar", "body"] (HAIR_MODES), built_modes ["hairdeck", "body"] (BUILT_MODES)}; three entries,
+    ["hairdeck", "haar", "body"] (HAIR_MODES), built_modes ["hairdeck", "haar", "body"] (BUILT_MODES, HAAR
+    built since strand-hair Task 13)}; three entries,
     the worn S first, each {id, name, description, mode, worn, plain, freshness}; the first hairstyle plain + "current",
     S "missing" (its body shape is made by a Build), D (HairDeck, no fit) "missing".
 """
@@ -333,16 +334,16 @@ def main() -> int:
         check("applied again: no request", requests, [("Kai", "outfit_change")])
 
         # --- [5] ---------------------------------------------------------------------------------------------
-        print("[5] HAAR and the list")
-        raises("haar refused", lambda: garment_hair.create_hairstyle("Kai", "a bun", "haar"), ValueError,
-               "HAAR hair is not built yet")
+        print("[5] an unknown mode and the list")
+        raises("unknown mode refused", lambda: garment_hair.create_hairstyle("Kai", "a bun", "bogus"), ValueError,
+               "hair mode must be one of")
         check("nothing created", len(garment_hair.hairstyles("Kai")), 3)
         from app.routes.characters import get_character_hairstyles
         payload = get_character_hairstyles("Kai")
         check("payload keys", (sorted(payload), payload.get("default_mode"), payload.get("modes"),
                                payload.get("built_modes")),
               (["built_modes", "default_mode", "hairstyles", "modes"], "body", ["hairdeck", "haar", "body"],
-               ["hairdeck", "body"]))
+               ["hairdeck", "haar", "body"]))
         rows = payload.get("hairstyles") or []
         check("entry keys", [sorted(r) for r in rows][:1],
               [["description", "freshness", "id", "mode", "name", "plain", "worn"]])

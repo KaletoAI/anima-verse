@@ -77,6 +77,17 @@ A hairstyle made by HairDeck (``garment_hair.hairstyle_mode``; plan
   A gate refusal of the attempt-1 job re-runs ``hairdeck`` once with that
   job's seed + 1 and fits again; a second refusal refuses with both attempts.
 
+A hairstyle made by HAAR (strand-hair spec 2026-11-13 § 6.3) runs ``haar → fit``:
+
+- ``haar``: ``HAAR_SEEDS`` strand jobs (``generate_strands``, the hairstyle's text as the prompt, seeds 1, 2, 3,
+  then 4, 5, 6 …) into ``raw/{item}_{ssig}/s{seed}/`` — a plain run only when no seed is stored, the step's own
+  button always (the next seeds; the older ones stay variants). One hub operation per run, resumed after a
+  restart by collecting its submitted jobs (``HAAR_OP_KIND``);
+- ``fit``: ``garment_haar.fit_haar`` (CPU) of every seed without a current verdict, the verdicts in the
+  folder's record, the SERVED seed (the user's ``haar_seed`` while stored, else the best passing one) published
+  under the fsig that names it (``_haar_fit_step``). No passing seed and no pick refuses with
+  ``NO_VARIANT_PASSED``.
+
 Footwear (kind ``footwear``, method ``shoe``; plan
 ``docs/superpowers/plans/2026-11-10-footwear-rigid-shoes.md``) runs
 ``garment_footwear.run_chain`` instead (``_run_locked`` dispatches it first):
@@ -468,13 +479,14 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
                method: str = "edit_chain") -> str:
     """``accepted`` (on the current base model, from the current prepared
     mesh — HairDeck: from its seed's hair, still stored unchanged under an
-    accepted job), ``stale`` (accepted on another base model, or by an
-    older fit algorithm: ``garment_fit.FIT_VERSION``), ``outdated``
-    (accepted, but the prepared mesh / HairDeck hair it was fitted from was
+    accepted job; HAAR: from its seed's strands, still stored unchanged),
+    ``stale`` (accepted on another base model, or by an
+    older fit algorithm: ``garment_fit.expected_fit_version``), ``outdated``
+    (accepted, but the prepared mesh / HairDeck hair / HAAR strands it was fitted from was
     replaced or removed) or ``missing``. Footwear (method ``shoe``):
     ``garment_footwear.fit_state`` on the base (``outdated`` there: the shoe
     source mesh or its insole was replaced)."""
-    from app.core.garment_store import HAIRDECK, SHOE, garment_path, read_record
+    from app.core.garment_store import HAAR, HAIRDECK, SHOE, garment_path, read_record
     if method == SHOE:
         from app.core import garment_footwear
         return garment_footwear.fit_state(character_name, item_id, fsig, base_model_sha)
@@ -484,8 +496,8 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
         return "missing"
     if not base_model_sha or record.get("base_model_sha256") != base_model_sha:
         return "stale"
-    from app.core.garment_fit import FIT_VERSION
-    if record.get("fit_version") != FIT_VERSION.get(str(record.get("kind"))):
+    from app.core.garment_fit import expected_fit_version
+    if record.get("fit_version") != expected_fit_version(record):
         return "stale"  # fitted by an older fit algorithm: the chain re-runs the fit only
     if method == HAIRDECK:
         inputs = record.get("inputs") or {}
@@ -494,6 +506,11 @@ def _fit_state(character_name: str, item_id: str, fsig: str, base_model_sha: str
         except ValueError:
             return "outdated"
         if nohead is None or inputs.get("nohead_sha256") != _sha(nohead):
+            return "outdated"
+        return "accepted"
+    if method == HAAR:
+        strands = _haar_strands_file(character_name, item_id, record.get("inputs") or {})
+        if strands is None or (record.get("inputs") or {}).get("strands_sha256") != _sha(strands):
             return "outdated"
         return "accepted"
     prepared = garment_path(character_name, item_id, fsig, "prepared")
@@ -536,6 +553,10 @@ def _done(character_name: str, item_id: str, kind: str, fsig: str, step: str, ba
         return _mesh_done(character_name, item_id, fsig)
     if step == "hairdeck":
         return _hairdeck_files(character_name, item_id, hsig)[0] is not None
+    if step == "haar":
+        # ``hsig`` carries the HAAR ssig: the step is done once any seed is stored for it.
+        from app.core.garment_store import haar_seeds
+        return bool(haar_seeds(character_name, item_id, hsig))
     if step == "fit":
         return _fit_state(character_name, item_id, fsig, base_model_sha, method) == "accepted"
     return False
@@ -748,6 +769,342 @@ def _drop_mesh(character_name: str, item_id: str, fsig: str) -> None:
         path.with_suffix(".json").unlink(missing_ok=True)
 
 
+# --- HAAR (strand-hair spec 2026-11-13 § 6.3) ------------------------------------
+#
+# The hairstyle's text goes to HAAR as the prompt; each seed is one hub job (``ImageService.generate_strands``)
+# whose files land in ``raw/{item}_{ssig}/s{seed}/`` (``garment_store.haar_dir``). The ``haar`` step makes the
+# NEXT ``HAAR_SEEDS`` seeds — a plain run only when none is stored, the step's own button (forced) always,
+# keeping the older ones. The ``fit`` step (CPU) fits every stored seed that has no current result on the base
+# model, records each verdict in the folder's record (``results``) and publishes the SERVED seed
+# (``garment_store.haar_served_seed``: the user's pick while it is stored, else the best passing one) under the
+# fsig that names it. A run's jobs are one hub operation (``hub_ops``, kind ``HAAR_OP_KIND``, one stage per
+# seed): after a restart the resumer collects the jobs already submitted into their seed folders — it never
+# submits a new one and never fits.
+
+#: Seeds per HAAR run (spec § 6.3.1): three hub jobs give a choice without spending four.
+HAAR_SEEDS = 3
+#: The ``hub_ops`` kind of a HAAR run's strand jobs.
+HAAR_OP_KIND = "garment_haar"
+#: The fit step's refusal when no stored seed passes and none is picked (the Steps row's words).
+NO_VARIANT_PASSED = "no variant passed"
+
+
+def _haar_strands_file(character_name: str, item_id: str, inputs: Dict[str, Any]) -> Optional[Path]:
+    """The strand file a HAAR fit was made from (its ``inputs.ssig`` / ``inputs.seed``), None when it is gone."""
+    from app.core import garment_store as gs
+    from app.core import strand_file
+    try:
+        folder = gs.haar_seed_dir(gs.haar_dir(character_name, item_id, str(inputs.get("ssig") or "")),
+                                  int(inputs.get("seed")))
+    except (TypeError, ValueError):
+        return None
+    if not folder.is_dir():
+        return None
+    hits = sorted(p for p in folder.iterdir() if p.is_file() and p.name.endswith(strand_file.STRANDS_SUFFIXES))
+    return hits[0] if len(hits) == 1 else None
+
+
+def _haar_next_seeds(character_name: str, item_id: str, ssig: str) -> List[int]:
+    """The next ``HAAR_SEEDS`` seeds of ``ssig``: after the highest one stored or ever asked for (1, 2, 3 first)."""
+    from app.core import garment_store as gs
+    seen = set(gs.haar_seeds(character_name, item_id, ssig))
+    for value in gs.haar_record(character_name, item_id, ssig).get("seeds") or []:
+        try:
+            seen.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    start = max(seen) + 1 if seen else 1
+    return list(range(start, start + HAAR_SEEDS))
+
+
+def _write_haar_record(character_name: str, item_id: str, ssig: str, change) -> Dict[str, Any]:
+    """Read-modify-write of the HAAR folder's record (``change(record)`` edits it in place; the caller holds the
+    item's run lock). Returns the record written."""
+    from app.core import garment_store as gs
+    folder = gs.haar_dir(character_name, item_id, ssig)
+    folder.mkdir(parents=True, exist_ok=True)
+    record = gs.read_record(folder / gs.HAAR_RECORD)
+    change(record)
+    gs.write_record(folder / gs.HAAR_RECORD, record)
+    return record
+
+
+def _haar_stages(op: Any, *, resume: bool = False) -> Dict[str, Any]:
+    """The strand jobs of a HAAR operation (fresh run and resume): per seed of ``op.inputs["seeds"]`` whose folder
+    is not stored yet, one ``generate_strands`` with the stage ``s{seed}`` into a staging folder, checked by the
+    reader (``strand_file.read_strand_job``) and renamed into ``s{seed}/`` whole. A resume only collects a stage
+    that reached the hub (a job id, a collected result or the posting gap) — never a new submission. Load,
+    the media switch and a cancel end the run at once (the seeds stored so far stay); any other failure of a
+    seed is recorded (``jobs[seed].error``) and the next seed runs. ``{ok, stored, errors}``; RuntimeError when
+    a fresh run stored no seed at all."""
+    import shutil
+    from app.core import garment_store as gs
+    from app.core import strand_file
+    from app.core.timeutils import utc_now_iso
+    from app.imagegen import service
+    from app.imagegen.base import GenerationCancelled, GpuTaskCancelled
+    character_name, item_id, ssig = op.inputs["character"], op.inputs["item_id"], op.inputs["ssig"]
+    prompt = str(op.inputs.get("prompt") or "")
+    folder = gs.haar_dir(character_name, item_id, ssig)
+    folder.mkdir(parents=True, exist_ok=True)
+    stored: List[int] = []
+    errors: Dict[str, str] = {}
+    for seed in [int(s) for s in op.inputs.get("seeds") or []]:
+        target = gs.haar_seed_dir(folder, seed)
+        if target.is_dir():
+            continue
+        stage = op.stage(f"s{seed}")
+        if resume:
+            job = stage.job
+            if not (job.get("job_id") or job.get("collected") or job.get("collection_error")
+                    or job.get("phase") == "posting"):
+                continue  # never reached the hub: a resume submits nothing
+        staging = folder / f".s{seed}.{os.getpid()}.{threading.get_ident()}.tmp"
+        shutil.rmtree(staging, ignore_errors=True)
+        staging.mkdir()
+        try:
+            result = service.get_image_service().generate_strands(
+                prompt, str(staging), character_name=character_name, params={"seed": seed}, hub_stage=stage)
+            summary = strand_file.strand_summary(strand_file.read_strand_job(staging)["strands"])
+            os.replace(staging, target)
+        except Exception as e:  # noqa: BLE001 — sorted below: load / cancel end the run, the rest is per seed
+            shutil.rmtree(staging, ignore_errors=True)
+            if _is_load(e) or isinstance(e, (GenerationCancelled, GpuTaskCancelled)):
+                raise
+            errors[str(seed)] = str(e) or type(e).__name__
+            logger.warning("HAAR %s/%s (%s): seed %s failed: %s", character_name, item_id, ssig, seed,
+                           errors[str(seed)])
+            _write_haar_record(character_name, item_id, ssig, lambda r: r.setdefault("jobs", {}).update(
+                {str(seed): {"error": errors[str(seed)], "created_at": utc_now_iso()}}))
+            continue
+        stored.append(seed)
+        entry = {"backend": result.get("backend"), "job_id": result.get("job_id"), "route": result.get("route"),
+                 "files": [str(f.get("name") or "") for f in result.get("files") or []], "strands": summary,
+                 "error": None, "created_at": utc_now_iso()}
+        _write_haar_record(character_name, item_id, ssig,
+                           lambda r: r.setdefault("jobs", {}).update({str(seed): entry}))
+        logger.info("HAAR %s/%s (%s): seed %s stored, %s strands x %s points", character_name, item_id, ssig, seed,
+                    summary["strands"], summary["points"])
+    if not stored and errors and not resume:
+        raise RuntimeError("HAAR delivered no strands — " + "; ".join(f"seed {s}: {e}" for s, e in errors.items()))
+    return {"ok": True, "stored": stored, "errors": errors}
+
+
+def _run_haar(character_name: str, item_id: str, ssig: str, seeds: List[int]) -> List[int]:
+    """Ask HAAR for ``seeds`` of the hairstyle's text as ONE hub operation (``HAAR_OP_KIND``, a stage per seed;
+    ``_haar_stages``). The record's ``seeds`` names every seed ever asked for (the next run continues after
+    them). ``MissingInput`` for a hairstyle without text. Returns the seeds stored by this run."""
+    from app.core import base_body, hub_ops
+    from app.core import garment_store as gs
+    prompt = gs.haar_prompt(item_id)
+    if not prompt:
+        raise base_body.MissingInput("The hairstyle has no text — HAAR makes the hair from it")
+
+    def asked(record: Dict[str, Any]) -> None:
+        known = {int(s) for s in record.get("seeds") or [] if str(s).isdigit()}
+        record["seeds"] = sorted(known | set(seeds))
+
+    _write_haar_record(character_name, item_id, ssig, asked)
+    op = hub_ops.create(HAAR_OP_KIND, f"garment_haar:{character_name}:{item_id}:{ssig}",
+                        {"character": character_name, "item_id": item_id, "ssig": ssig, "seeds": list(seeds),
+                         "prompt": prompt},
+                        label=f"HAAR strands · {character_name}")
+    result = hub_ops.execute(op, lambda: _haar_stages(op))
+    return list(result.get("stored") or [])
+
+
+def _haar_resume(op: Any) -> Any:
+    from app.core import hub_ops
+    return hub_ops.resume(op, lambda: _haar_stages(op, resume=True), agent_name=op.inputs.get("character", ""))
+
+
+def _haar_reserve(op: Any):
+    """The resumer's guard: the item's run lock (a plain ``threading.Lock``), so no chain run of the item starts
+    while its jobs are collected."""
+    from app.core import garment_store as gs
+    lock = gs.run_item_lock(op.inputs["character"], op.inputs["item_id"])
+    lock.acquire()
+    return lock.release
+
+
+def _register_hub_kinds() -> None:
+    from app.core import hub_ops
+    hub_ops.register_kind(HAAR_OP_KIND, resume=_haar_resume, track_type="garment_haar", reserve=_haar_reserve)
+
+
+_register_hub_kinds()
+
+
+def _haar_colour(character_name: str, item_id: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    """The HAAR hair colour: ``{target, source, name, linear}`` — the override (``source`` "override"), else the
+    hairstyle text's named colour ("profile"), else none ("atlas": the strip atlas white); ``linear`` the linear
+    RGB the cards get (None for the atlas)."""
+    from app.core import garment_hair
+    from app.core.garment_hairdeck import srgb_to_linear
+    settings, text = _hair_of(character_name, item_id)
+    override = garment_hair.hair_colour_override(settings)
+    named = garment_hair.profile_hair_colour(character_name, profile=profile, text=text)
+    target = override or (named["hex"] if named else "")
+    linear = (tuple(round(float(v), 6) for v in srgb_to_linear(garment_hair.colour_target(target)))
+              if target else None)
+    return {"target": target or None, "source": "override" if override else "profile" if named else "atlas",
+            "name": None if override or not named else named["name"], "linear": linear}
+
+
+def _fit_haar_seeds(character_name: str, item_id: str, ssig: str, seeds: List[int], rigged: bytes,
+                    profile: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+    """Fit each stored seed of ``ssig`` onto ``rigged`` (``garment_haar.fit_haar`` on the refit pool; colour
+    ``_haar_colour``, gate of the hairstyle's length class) without publishing: seed -> ``{seed, result,
+    strands_sha256, length_class, colour, error}`` — ``result`` None and ``error`` the reason when the fit
+    itself refused the strands (a ValueError)."""
+    from app.core import garment_hair, garment_haar, refit_pool, strand_file
+    from app.core import garment_store as gs
+    folder = gs.haar_dir(character_name, item_id, ssig)
+    _settings, text = _hair_of(character_name, item_id)
+    length_class = garment_hair.hair_length_class(character_name, profile=profile, text=text)
+    colour = _haar_colour(character_name, item_id, profile)
+    out: Dict[int, Dict[str, Any]] = {}
+    for seed in seeds:
+        job = strand_file.read_strand_job(gs.haar_seed_dir(folder, seed))
+        if job["head_V"] is None:
+            from app.core import base_body
+            raise base_body.MissingInput(f"HAAR seed {seed} has no head file")
+        entry: Dict[str, Any] = {"seed": seed, "result": None, "error": None, "length_class": length_class,
+                                 "colour": colour, "strands_sha256": _sha(Path(job["strands_path"]))}
+        try:
+            entry["result"] = refit_pool.run(garment_haar.fit_haar, job["strands"], job["head_V"], rigged,
+                                             colour_linear=colour["linear"], length_class=length_class,
+                                             template_faces=job["head_F"])
+        except ValueError as e:
+            entry["error"] = str(e) or type(e).__name__
+        out[seed] = entry
+    return out
+
+
+def _haar_result(fit: Dict[str, Any], base_sha: str) -> Dict[str, Any]:
+    """The record's ``results[seed]`` of one fitted seed: ``{accepted, reasons, metrics, tile, length_class,
+    base_model_sha256, fit_version, strands_sha256}`` (``tile`` None: rendered by a later task)."""
+    from app.core.garment_haar import HAAR_FIT_VERSION
+    from app.core.timeutils import utc_now_iso
+    result = fit["result"]
+    return {"accepted": bool(result.ok) if result is not None else False,
+            "reasons": list(result.reasons) if result is not None else [fit["error"]],
+            "metrics": dict(result.metrics) if result is not None else {}, "tile": None,
+            "length_class": fit["length_class"], "base_model_sha256": base_sha, "fit_version": HAAR_FIT_VERSION,
+            "strands_sha256": fit["strands_sha256"], "fitted_at": utc_now_iso()}
+
+
+def _haar_result_current(result: Any, base_sha: str, strands_sha: str) -> bool:
+    """A stored seed result still holds: made on ``base_sha`` by the current HAAR fit from these strands."""
+    from app.core.garment_haar import HAAR_FIT_VERSION
+    return (isinstance(result, dict) and result.get("base_model_sha256") == base_sha
+            and result.get("fit_version") == HAAR_FIT_VERSION and result.get("strands_sha256") == strands_sha)
+
+
+def _haar_due(character_name: str, item_id: str, ssig: str, base_sha: str) -> List[int]:
+    """The stored seeds of ``ssig`` whose result does not hold on ``base_sha`` (``_haar_result_current``)."""
+    from app.core import garment_store as gs
+    results = gs.haar_record(character_name, item_id, ssig).get("results") or {}
+    out = []
+    for seed in gs.haar_seeds(character_name, item_id, ssig):
+        strands = _haar_strands_file(character_name, item_id, {"ssig": ssig, "seed": seed})
+        if strands is None or not _haar_result_current(results.get(str(seed)), base_sha, _sha(strands)):
+            out.append(seed)
+    return out
+
+
+def _haar_seed_summary(results: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """``[{seed, ok, reasons, face_cards, tip_p50_rel_shoulder_cm}]`` of every seed result, by seed."""
+    out = []
+    for key, r in sorted(results.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
+        if not isinstance(r, dict):
+            continue
+        m = r.get("metrics") or {}
+        out.append({"seed": int(key), "ok": r.get("accepted") is True, "reasons": list(r.get("reasons") or []),
+                    "face_cards": m.get("face_cards"), "tip_p50_rel_shoulder_cm": m.get("tip_p50_rel_shoulder_cm")})
+    return out
+
+
+def _haar_fit_step(character_name: str, item_id: str, kind: str, bsig: str, profile: Dict[str, Any]) -> str:
+    """The ``fit`` step of HAAR hair (CPU, never a hub job): every stored seed of the current ``ssig`` without a
+    current result on the base model is fitted (``_fit_haar_seeds``) and its verdict recorded; then the SERVED
+    seed (``garment_store.haar_served_seed``) is published — fitted once more with the current colour when this
+    step did not just fit it — under the fsig that names it, which is returned. ``MissingInput`` without a
+    stored seed; ``_Refused`` (``NO_VARIANT_PASSED`` + every seed's reasons) when none passes and none is
+    picked. A picked seed is served even when its gate refused it (its record says ``gates.ok`` False,
+    ``gates.picked`` True)."""
+    from app.core import base_body
+    from app.core import garment_store as gs
+    from app.models.inventory import get_item
+    ssig = gs.garment_ssig(character_name, item_id, profile=profile)
+    seeds = gs.haar_seeds(character_name, item_id, ssig)
+    if not seeds:
+        raise base_body.MissingInput("The HAAR strands are missing — run the haar step first")
+    snapshot = base_body._snapshot_base_model(character_name, bsig)
+    base_sha = hashlib.sha256(snapshot["rigged"]).hexdigest()
+    due = _haar_due(character_name, item_id, ssig, base_sha)
+    fits = _fit_haar_seeds(character_name, item_id, ssig, due, snapshot["rigged"], profile)
+    record = _write_haar_record(character_name, item_id, ssig, lambda r: r.setdefault("results", {}).update(
+        {str(seed): _haar_result(fit, base_sha) for seed, fit in fits.items()}))
+    item = get_item(item_id)
+    served = gs.haar_served_seed(character_name, item_id, ssig, item=item)
+    results = record.get("results") or {}
+    if served is None:
+        summary = _haar_seed_summary({str(s): results.get(str(s)) for s in seeds})
+        _write_haar_record(character_name, item_id, ssig, lambda r: r.update(chosen=None))
+        raise _Refused("fit", f"{NO_VARIANT_PASSED} — " + "; ".join(
+            f"seed {e['seed']}: " + ("; ".join(e["reasons"]) or "refused") for e in summary),
+            {"attempts": summary})
+    fit = fits.get(served)
+    if fit is None or fit["result"] is None:
+        fit = _fit_haar_seeds(character_name, item_id, ssig, [served], snapshot["rigged"], profile)[served]
+    if fit["result"] is None:
+        raise _Refused("fit", f"HAAR seed {served}: {fit['error']}", {"seed": served, "reasons": [fit["error"]]})
+    _write_haar_record(character_name, item_id, ssig, lambda r: r.update(chosen=served))
+    fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+    _publish_haar(character_name, item_id, kind, fsig, bsig, ssig, profile, snapshot, fit,
+                  picked=gs.haar_pick(item) == served, seeds=_haar_seed_summary(
+                      {str(s): results.get(str(s)) for s in seeds}))
+    logger.info("HAAR fit %s/%s: seed %s served of %s", character_name, item_id, served,
+                [(e["seed"], e["ok"], e["face_cards"]) for e in _haar_seed_summary(
+                    {str(s): results.get(str(s)) for s in seeds})])
+    return fsig
+
+
+def _haar_fit_record(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, ssig: str,
+                     profile: Dict[str, Any], fit: Dict[str, Any], *, picked: bool) -> Dict[str, Any]:
+    """The fit record of a HAAR fit (base model or outfit body; the caller adds its body keys)."""
+    from app.core import base_body, garment_hair
+    from app.core.garment_store import GARMENT_VIEWS, HAAR
+    from app.core.model_refs import find_ref_image
+    from app.core.timeutils import utc_now_iso
+    result = fit["result"]
+    settings, _text = _hair_of(character_name, item_id)
+    base_views = {v: find_ref_image(character_name, base_body._kind(v), bsig) for v in GARMENT_VIEWS}
+    colour = dict(fit["colour"])
+    colour.pop("linear", None)
+    return {
+        "accepted": True, "kind": kind, "item_id": item_id, "fsig": fsig, "method": HAAR,
+        "metrics": result.metrics, "report": result.report,
+        "gates": {"ok": bool(result.ok), "reasons": list(result.reasons), "picked": bool(picked)},
+        "inputs": {**_kind_inputs(kind, character_name, profile, item_id),
+                   "base_images": {v: _sha(p) for v, p in base_views.items()},
+                   "ssig": ssig, "seed": fit["seed"], "colour": garment_hair.hair_colour_override(settings),
+                   "strands_sha256": fit["strands_sha256"]},
+        "colour": colour, "length_class": fit["length_class"], "created_at": utc_now_iso()}
+
+
+def _publish_haar(character_name: str, item_id: str, kind: str, fsig: str, bsig: str, ssig: str,
+                  profile: Dict[str, Any], snapshot: Dict[str, Any], fit: Dict[str, Any], *, picked: bool,
+                  seeds: List[Dict[str, Any]]) -> Path:
+    """Publish the served seed's fit on the base model (``_publish_fit``)."""
+    rigged_sha = hashlib.sha256(snapshot["rigged"]).hexdigest()
+    record = {**_haar_fit_record(character_name, item_id, kind, fsig, bsig, ssig, profile, fit, picked=picked),
+              "base_signature": bsig, "base_model_sha256": rigged_sha, "body_id": bsig, "body_sha256": rigged_sha,
+              "seeds": seeds}
+    return _publish_fit(character_name, item_id, kind, fsig, bsig, snapshot["rigged"], fit["result"], record)
+
+
 # --- The fit step ---------------------------------------------------------------
 
 def _write_atomic(path: Path, data: bytes) -> None:
@@ -901,7 +1258,7 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
     from app.blender import refine
     from app.core import garment_fit, refit_pool
     from app.core.garment_store import garment_path, write_record
-    record["fit_version"] = garment_fit.FIT_VERSION[kind]
+    record["fit_version"] = garment_fit.fit_version_for(kind, str(record.get("method") or ""))
     if (record.get("inputs") or {}).get("state") == "open":
         record["state"] = "open"
     fit = garment_path(character_name, item_id, fsig, "fit", body=body)
@@ -925,8 +1282,7 @@ def _publish_fit(character_name: str, item_id: str, kind: str, fsig: str, bsig: 
     finally:
         tmp.unlink(missing_ok=True)
     write_record(fit.with_suffix(".json"), record)
-    logger.info("Garment fit %s/%s (%s): accepted on %s, %s tris", character_name, item_id, fsig, body or bsig,
-                result.metrics.get("tris"))
+    logger.info("Garment fit %s/%s (%s): accepted on %s, %s tris", character_name, item_id, fsig, body or bsig, tris)
 
     target = max(1, int(round(refine.lod_ratio("character") * tris)))
     try:
@@ -1231,7 +1587,7 @@ def body_fit_state(character_name: str, item_id: str, fsig: str, body_id: str, b
     from the base fit ``base_fit_sha``), ``stale`` (made on other body
     bytes, or by an older ``garment_fit.FIT_VERSION``), ``outdated``
     (accepted on this body from another base fit) or ``missing``."""
-    from app.core.garment_fit import FIT_VERSION
+    from app.core.garment_fit import expected_fit_version
     from app.core.garment_store import garment_path, read_record
     fit = garment_path(character_name, item_id, fsig, "fit", body=body_id)
     record = read_record(fit.with_suffix(".json"))
@@ -1239,7 +1595,7 @@ def body_fit_state(character_name: str, item_id: str, fsig: str, body_id: str, b
         return "missing"
     if not body_sha or record.get("body_id") != body_id or record.get("body_sha256") != body_sha:
         return "stale"
-    if record.get("fit_version") != FIT_VERSION.get(str(record.get("kind"))):
+    if record.get("fit_version") != expected_fit_version(record):
         return "stale"
     if not base_fit_sha or record.get("base_fit_sha256") != base_fit_sha:
         return "outdated"
@@ -1251,8 +1607,8 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
     """Fit the garment of the base fit ``base_fit`` (``(fit GLB, record)``,
     the fit served on the base model) onto the outfit body ``body_id`` and
     publish it under ``(item, fsig, body id)`` (block above). ``_Refused``
-    when the gate refuses, ``MissingInput`` when a source is gone (the
-    prepared mesh / ghost front / HairDeck seed, the body or its front
+    when the gate refuses (HAAR: not for a seed the user picked against its gate), ``MissingInput`` when a
+    source is gone (the prepared mesh / ghost front / HairDeck seed / HAAR strands, the body or its front
     view). Never runs a generator."""
     from app.core import base_body, garment_fit, garment_set, glb_mesh, hair_motion
     from app.core import garment_store as gs
@@ -1312,6 +1668,25 @@ def fit_on_body(character_name: str, item_id: str, *, body_id: str, base_fit: Tu
                                        result.report.get("colour") or {}),
             "length_class": length_class, "placement": _placement_summary(result.report.get("placement")),
             "created_at": utc_now_iso()})
+    elif gs.fit_method(base_record) == gs.HAAR:
+        inputs = base_record.get("inputs") or {}
+        ssig = str(inputs.get("ssig") or "")
+        try:
+            seed = int(inputs.get("seed"))
+        except (TypeError, ValueError):
+            raise base_body.MissingInput("The base fit names no HAAR seed — run the hair chain")
+        if _haar_strands_file(character_name, item_id, inputs) is None:
+            raise base_body.MissingInput("The HAAR strands of the base fit are gone — run the hair chain")
+        fit = _fit_haar_seeds(character_name, item_id, ssig, [seed], body["rigged"], profile)[seed]
+        picked = bool((base_record.get("gates") or {}).get("picked"))
+        if fit["result"] is None or (not fit["result"].ok and not picked):
+            reasons = [fit["error"]] if fit["result"] is None else list(fit["result"].reasons)
+            raise _Refused("fit", "fit on the outfit body refused — " + "; ".join(reasons),
+                           {"ok": False, "reasons": reasons, "seed": seed})
+        result = fit["result"]
+        record.update({k: v for k, v in _haar_fit_record(character_name, item_id, kind, fsig, bsig, ssig, profile,
+                                                         fit, picked=picked).items()
+                       if k not in ("accepted", "kind", "item_id", "fsig")})
     elif kind != garment_set.CLOTHING:
         # Hair fits of the removed methods (hair views → mesh, subtract): nothing refits them any more.
         raise ValueError(f"No fit on an outfit body for a {kind} fit by {gs.fit_method(base_record)!r}")
@@ -1460,7 +1835,7 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
                 "error": "no fit to derive from"}
     fsig = parsed[1]
     fit_path = gs.garment_path(character_name, item_id, fsig, "fit", body=body_id)
-    version = garment_fit.FIT_VERSION.get(str(base_record.get("kind") or ""))
+    version = garment_fit.expected_fit_version(base_record)
 
     def current() -> Tuple[str, str, Optional[Dict[str, Any]]]:
         base_fit_sha = _sha(Path(path))
@@ -1541,7 +1916,7 @@ def body_fit_info(character_name: str, item_id: str, *,
     record = gs.read_record(gs.garment_path(character_name, item_id, fsig, "fit", body=body_id).with_suffix(".json"))
     status = body_fit_state(character_name, item_id, fsig, body_id, body_sha, base_fit_sha)
     failure = (gs.body_failure(character_name, item_id, fsig, body_id, body_sha=body_sha, base_fit_sha=base_fit_sha,
-                               fit_version=garment_fit.FIT_VERSION.get(str(base_fit[1].get("kind") or "")))
+                               fit_version=garment_fit.expected_fit_version(base_fit[1]))
                if status != "accepted" else None)
     out.update(fsig=fsig, status="failed" if failure else status, error=str((failure or {}).get("error") or ""),
                created_at=record.get("created_at"), metrics=record.get("metrics") or {},
@@ -1594,7 +1969,7 @@ def run_garment(character_name: str, item_id: str, *, steps: Union[None, str, It
     step.
 
     The steps are those of the item's CURRENT method
-    (``garment_store.steps_for``; hair by HairDeck: ``hairdeck``, ``fit``;
+    (``garment_store.steps_for``; hair by HairDeck: ``hairdeck``, ``fit``; by HAAR: ``haar``, ``fit``;
     footwear: the shoe chain, ``garment_footwear.run_chain``).
 
     Returns ``{ok: True, fsig, ran: [steps that produced output]}`` or
@@ -1703,7 +2078,7 @@ def cached_failure(character_name: str, item_id: str, *,
 #: 2026-11-11-improvements-figure-pipeline § 6.1 / § 6.5), keyed ``<kind>:<method>``:
 #: the clothing ``worn`` = the front edit + the back draft (its composite is CPU, Task 11g); a
 #: two-view image step = one edit per view; ``mesh`` = one img2mesh job;
-#: HairDeck = its one job. The clothing ``cutout`` = one routed upscale per view (front + back: a cut-out below
+#: HairDeck = its one job, HAAR = one per seed. The clothing ``cutout`` = one routed upscale per view (front + back: a cut-out below
 #: ``garment_images.CUTOUT_MIN_SIDE`` goes through the ``upscale`` occasion — counted on first attempts, Ruling A25);
 #: the insole and every fit are CPU work. Footwear ``source`` is computed per item (the
 #: upscale, only for an item image below ``footwear_source.MIN_SIDE``). A
@@ -1712,6 +2087,8 @@ def cached_failure(character_name: str, item_id: str, *,
 HUB_JOBS: Dict[str, Dict[str, int]] = {
     "clothing:edit_chain": {"worn": 2, "ghost": 2, "cutout": 2, "mesh": 1, "fit": 0},
     "hair:hairdeck": {"hairdeck": 1, "fit": 0},
+    # HAAR: one strand job per seed (``HAAR_SEEDS``); the fit of every seed is CPU work.
+    "hair:haar": {"haar": HAAR_SEEDS, "fit": 0},
     # Hair in the body mesh: no steps, no job (the base views carry the hair).
     "hair:body": {},
     "footwear:shoe": {"source": 0, "empty": 1, "cutout": 0, "mesh": 1, "insole": 0, "fit": 0},
@@ -1797,7 +2174,8 @@ def run_estimate(character_name: str, item_id: str, *,
     try:
         state = gs.item_state(character_name, item_id, profile, state)
         fsig = gs.garment_fsig(character_name, item_id, profile=profile, state=state)
-        hsig = gs.garment_hsig(character_name, item_id, profile=profile) if method == gs.HAIRDECK else ""
+        hsig = (gs.garment_hsig(character_name, item_id, profile=profile) if method == gs.HAIRDECK
+                else gs.garment_ssig(character_name, item_id, profile=profile) if method == gs.HAAR else "")
         if from_step and from_step not in order:
             return _unknown_estimate(f"no step {from_step} for {kind} by {method}")
         first = from_step or next((s for s in order
@@ -1828,6 +2206,8 @@ def run_estimate(character_name: str, item_id: str, *,
         parts = [(s, max(n - BACK_JOBS[s], 0) if s in reused else n) for s, n in parts]
     full = sum(n for _s, n in parts)
     note = " + ".join(f"{s} {n}" for s, n in parts if n) or "no hub job"
+    if method == gs.HAAR:
+        note = _haar_estimate_note(character_name, item_id, hsig, base_sha, steps, int(costs.get("haar", 0)))
     if reused:
         note += " (backs from the closed state)"
     if first in gs.IMAGE_STEPS and method == gs.EDIT_CHAIN and not from_step:
@@ -1838,6 +2218,20 @@ def run_estimate(character_name: str, item_id: str, *,
             return {"steps": steps, "hub_jobs": 0, "refit": True,
                     "note": f"refit from the previous base; up to {full} if the refit is refused"}
     return {"steps": steps, "hub_jobs": full, "note": note, "refit": False}
+
+
+def _haar_estimate_note(character_name: str, item_id: str, ssig: str, base_sha: str, steps: List[str],
+                        jobs: int) -> str:
+    """The estimate's words for a HAAR run: "k hub jobs (~30–55 s each) + k CPU fits (~25 s each)" with the
+    strand step, else the CPU fits the fit step makes (the seeds without a current result, at least the served
+    one)."""
+    if "haar" in steps:
+        return f"haar {jobs} hub jobs (~30–55 s each) + {jobs} CPU fits (~25 s each)"
+    try:
+        fits = max(1, len(_haar_due(character_name, item_id, ssig, base_sha)))
+    except ValueError:
+        fits = 1
+    return f"fit: {fits} CPU fit{'s' if fits != 1 else ''} (~25 s each), no hub job"
 
 
 # --- A per-view run (Ruling A33) ---------------------------------------------------
@@ -2204,12 +2598,10 @@ def _grafted_kinds() -> Tuple[str, ...]:
 
 
 def _no_steps_note(kind: str, method: str) -> str:
-    """Why a garment of ``kind`` made with ``method`` has no steps (hair in the body mesh, HAAR not built)."""
+    """Why a garment of ``kind`` made with ``method`` has no steps (hair in the body mesh)."""
     from app.core import garment_hair
     if method == garment_hair.BODY_MODE:
         return garment_hair.HAIR_IN_BODY
-    if method == garment_hair.HAAR_MODE:
-        return garment_hair.HAAR_NOT_BUILT
     return f"no steps for {kind} by {method}"
 
 
@@ -2290,6 +2682,8 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
         fsig = gs.garment_fsig(character_name, item_id, profile=profile)
         if method == gs.HAIRDECK:
             hsig = gs.garment_hsig(character_name, item_id, profile=profile)
+        elif method == gs.HAAR:
+            hsig = gs.garment_ssig(character_name, item_id, profile=profile)  # the HAAR job's fingerprint
         if method == gs.EDIT_CHAIN:
             _regate_accepted(character_name, item_id, kind, fsig, state if kind == _clothing() else None)
         if wanted is None:
@@ -2446,11 +2840,20 @@ def _run_locked(character_name: str, item: Dict[str, Any], kind: str,
                     if forced:
                         regenerated_seed = seed
                     produced = True
+            elif step == "haar":
+                # A plain run asks HAAR only when no seed is stored; the step's own (forced) run always asks for
+                # the NEXT seeds and keeps the older ones (spec § 6.3.1).
+                if forced or not _done(character_name, item_id, kind, fsig, step, base_sha, method, hsig):
+                    _run_haar(character_name, item_id, hsig, _haar_next_seeds(character_name, item_id, hsig))
+                    produced = True
             elif step == "fit":
                 if forced or dirty or _fit_state(character_name, item_id, fsig, base_sha, method) != "accepted":
                     if method == gs.HAIRDECK:
                         _hairdeck_fit_step(character_name, item_id, kind, fsig, bsig, hsig, profile, ran,
                                            prefer_seed=regenerated_seed)
+                    elif method == gs.HAAR:
+                        # The fsig names the served seed: the fit is published under the one it names now.
+                        fsig = _haar_fit_step(character_name, item_id, kind, bsig, profile)
                     else:
                         _fit(character_name, item_id, kind, fsig, bsig, profile)
                     produced = True
@@ -3132,7 +3535,7 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
     Returns the store's answer plus ``step`` (and ``fsig``): ``status`` ``accepted`` / ``refused`` /
     ``step_failed`` / ``queued`` / ``running`` / ``unknown`` / ``forbidden`` / ``failed`` / ``rig_mismatch``
     / ``error``. ValueError for an item that is no garment of the character, a footwear piece on the
-    garment route (or the reverse, ``footwear``), or hair (HairDeck or the body mesh: no mesh job);
+    garment route (or the reverse, ``footwear``), or hair (HairDeck, HAAR or the body mesh: no mesh job);
     ``base_body.MissingInput`` / FileNotFoundError when the step's input is missing. Blocking."""
     from app.core import base_body, garment_mesh, garment_store as gs
     from app.models.character import get_character_profile
@@ -3143,8 +3546,8 @@ def collect_mesh_job(character_name: str, item_id: str, job_id: str, *, footwear
     profile = get_character_profile(character_name) or {}
     method = gs.kind_method(kind, character_name, profile, item_id=item_id)
     order = gs.steps_for(kind, method)
-    if method == gs.HAIRDECK:
-        raise ValueError("Hair made by HairDeck has no mesh job to fetch")
+    if method in (gs.HAIRDECK, gs.HAAR):
+        raise ValueError(f"Hair made by {'HairDeck' if method == gs.HAIRDECK else 'HAAR'} has no mesh job to fetch")
     _require_steps(kind, order, method)
     step = "mesh"
     if kind == _footwear():
@@ -3583,6 +3986,68 @@ def hairdeck_panel(character_name: str, item_id: str, *,
             "input_source": "beard_free" if sent is not None and sent != source else "profile"}
 
 
+def _haar_info(character_name: str, item_id: str, ssig: str) -> Dict[str, Any]:
+    """The HAAR step of ``ssig``: ``{ssig, status accepted|refused|missing, seeds, failed, created_at}`` —
+    ``accepted`` with a stored seed, ``refused`` when every job asked for failed, ``missing`` otherwise."""
+    from app.core import garment_store as gs
+    if not ssig:
+        return {"ssig": ssig, "status": "missing", "seeds": [], "failed": {}, "created_at": None}
+    seeds = gs.haar_seeds(character_name, item_id, ssig)
+    record = gs.haar_record(character_name, item_id, ssig)
+    jobs = record.get("jobs") or {}
+    failed = {k: v.get("error") for k, v in jobs.items() if isinstance(v, dict) and v.get("error")}
+    stamps = [v.get("created_at") for v in jobs.values() if isinstance(v, dict) and v.get("created_at")]
+    return {"ssig": ssig, "status": "accepted" if seeds else "refused" if failed else "missing", "seeds": seeds,
+            "failed": failed, "created_at": max(stamps) if stamps else None}
+
+
+def haar_panel(character_name: str, item_id: str, *,
+               profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The HAAR variants of a hairstyle under its CURRENT ``ssig`` (whichever mode it has): ``{ssig, status,
+    seeds: [{seed, passed, reasons, metrics, tile_url, served, picked}], next_seeds, jobs, picked, served}``.
+
+    - ``status``: ``missing`` (no seed stored), ``unfitted`` (seeds without a fit verdict yet), ``passed`` (a
+      seed passes), ``no variant passed`` (every fitted seed refused — a pick still serves one);
+    - per seed: ``passed`` None until it is fitted; ``reasons`` the gate's words; ``metrics`` the fit's numbers
+      (mouse-over); ``tile_url`` None (the tile render is a later task); ``served`` the seed the fsig names
+      (``garment_store.haar_served_seed``); ``picked`` the hairstyle's ``haar_seed``;
+    - ``next_seeds``: the seeds the step's button asks for; ``jobs``: ``HAAR_SEEDS`` (its hub jobs).
+
+    None for an item that is no hair."""
+    from app.core import garment_hair, garment_store as gs
+    from app.models.character import get_character_profile
+    if profile is None:
+        profile = get_character_profile(character_name) or {}
+    item, kind = _item(character_name, item_id)
+    if kind != garment_hair.HAIR_KIND:
+        return None
+    ssig = gs.garment_ssig(character_name, item_id, profile=profile)
+    stored = gs.haar_seeds(character_name, item_id, ssig)
+    results = gs.haar_record(character_name, item_id, ssig).get("results") or {}
+    served = gs.haar_served_seed(character_name, item_id, ssig, item=item)
+    pick = gs.haar_pick(item)
+    seeds = []
+    for seed in stored:
+        r = results.get(str(seed))
+        r = r if isinstance(r, dict) else None
+        seeds.append({"seed": seed, "passed": (r.get("accepted") is True) if r else None,
+                      "reasons": list(r.get("reasons") or []) if r else [],
+                      "metrics": dict(r.get("metrics") or {}) if r else {}, "tile_url": None,
+                      "served": seed == served, "picked": seed == pick})
+    fitted = [e for e in seeds if e["passed"] is not None]
+    if not seeds:
+        status = "missing"
+    elif any(e["passed"] for e in fitted):
+        status = "passed"
+    elif len(fitted) < len(seeds):
+        status = "unfitted"
+    else:
+        status = NO_VARIANT_PASSED
+    return gs.finite_json({"ssig": ssig, "status": status, "seeds": seeds,
+                           "next_seeds": _haar_next_seeds(character_name, item_id, ssig), "jobs": HAAR_SEEDS,
+                           "picked": pick, "served": served})
+
+
 def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     """UI info of one garment (the hair row, the own-mesh dialog): fsig, the method and its
     source, description, every step's files and gate numbers (the steps of
@@ -3595,7 +4060,9 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     ``hairdeck_changed`` (another profile picture or HairDeck setting than
     the served fit's job), ``colour_changed`` (another colour override) and
     ``placement_changed`` (another manual forward/tilt, or a fit from before
-    the placement correction).
+    the placement correction). HAAR hair adds ``ssig`` and the stale reasons ``haar_changed`` (another
+    text or HAAR setting), ``seed_changed`` (another served seed: a pick or a better seed) and
+    ``colour_changed``.
     ``failed`` also reports the persisted failure of the current fsig after
     a restart (automatic triggers skip it until an explicit run).
     ``queue_position`` / ``queue_running`` (``queue_state``): the 1-based
@@ -3637,6 +4104,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     except ValueError:
         fsig = None
     hsig = gs.garment_hsig(character_name, item_id, profile=profile) if fsig and method == gs.HAIRDECK else None
+    ssig = gs.garment_ssig(character_name, item_id, profile=profile) if fsig and method == gs.HAAR else None
     base = base_body.current_base(character_name, profile=profile) or ("", "")
     steps: Dict[str, Any] = {}
     if fsig:
@@ -3647,6 +4115,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                 steps[step] = _mesh_info(character_name, item_id, fsig)
             elif step == "hairdeck":
                 steps[step] = _hairdeck_info(character_name, item_id, hsig or "")
+            elif step == "haar":
+                steps[step] = _haar_info(character_name, item_id, ssig or "")
             elif step == "fit":
                 steps[step] = _fit_info(character_name, item_id, fsig, base[1], method)
     pair = None
@@ -3675,8 +4145,8 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                 stale.append("base_changed")
             elif record.get("base_model_sha256") != base[1]:
                 stale.append("base_model_changed")
-            from app.core.garment_fit import FIT_VERSION
-            if record.get("fit_version") != FIT_VERSION.get(str(record.get("kind"))):
+            from app.core.garment_fit import expected_fit_version
+            if record.get("fit_version") != expected_fit_version(record):
                 stale.append("fit_algorithm_updated")
             if method == gs.HAIRDECK and gs.fit_method(record) == gs.HAIRDECK:
                 if used.get("hsig") != hsig:
@@ -3688,6 +4158,14 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
                     stale.append("placement_changed")
                 if bool(used.get("swing")) != hair_motion.swing_on(settings):
                     stale.append("swing_changed")
+            if method == gs.HAAR and gs.fit_method(record) == gs.HAAR:
+                if used.get("ssig") != ssig:
+                    stale.append("haar_changed")
+                elif used.get("seed") != gs.haar_served_seed(character_name, item_id, ssig or "", item=_item_):
+                    stale.append("seed_changed")
+                if (used.get("colour") or "") != garment_hair.hair_colour_override(
+                        garment_hair.hairstyle_settings(_item_)):
+                    stale.append("colour_changed")
     preview = preview_path(character_name, item_id)
     preview_url = None
     if preview is not None:
@@ -3729,7 +4207,7 @@ def garment_info(character_name: str, item_id: str) -> Dict[str, Any]:
     # finite_json: a NaN in an in-memory failure's gates must not fail the whole tab's JSON encoding
     return gs.finite_json({
         "item_id": item_id, "kind": kind, "fsig": fsig, "method": method, "method_source": method_source,
-        "hsig": hsig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
+        "hsig": hsig, "ssig": ssig, "description": inputs.get("description") or inputs.get("prompt_fragment") or "",
         "steps": steps, "stale_reasons": stale, "pair": pair,
         "running_step": status["running_step"], "started_at": status["started_at"],
         "queue_position": queue["queue_position"], "queue_running": queue["queue_running"],
@@ -3745,7 +4223,7 @@ def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     — status ``running`` / ``failed`` / ``ready`` (current fit accepted on
     the current base model) / ``stale`` (an older fit is served) /
     ``missing``; None without a worn hairstyle, off the pipeline, or for a
-    worn hairstyle that is no HairDeck hair (in the body mesh, HAAR)."""
+    worn hairstyle in the body mesh (HairDeck and HAAR hair have a mesh)."""
     from app.core import base_body, garment_store as gs
     from app.core.garment_hair import HAIR_KIND
     if profile is None:
@@ -3756,13 +4234,13 @@ def hair_summary(character_name: str, *, profile: Optional[Dict[str, Any]] = Non
     base = base_body.current_base(character_name, profile=profile)
     if not item_id or base is None:
         return None
-    from app.core.garment_hair import HAIRDECK_MODE, hairstyle_mode
+    from app.core.garment_hair import HAAR_MODE, HAIRDECK_MODE, hairstyle_mode
     try:
         worn_item, _kind = _item(character_name, item_id)
     except ValueError:
         return None
-    if hairstyle_mode(worn_item) != HAIRDECK_MODE:
-        return None  # in the body mesh (or HAAR): no hair mesh is wanted or served
+    if hairstyle_mode(worn_item) not in (HAIRDECK_MODE, HAAR_MODE):
+        return None  # in the body mesh: no hair mesh is wanted or served
     status = gs.status(character_name, item_id)
     if status["running_step"]:
         state = "running"

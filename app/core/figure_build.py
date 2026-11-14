@@ -354,12 +354,14 @@ def _chain_step(character_name: str, name: str, item_id: str, label: str,
 
 
 def _hair_step(character_name: str, profile: Dict[str, Any]) -> Optional[Step]:
-    """The HairDeck chain of the worn hairstyle (``garment_hair.worn_hairstyle``); None without one."""
+    """The hair chain (HairDeck or HAAR) of the worn hairstyle (``garment_hair.worn_hairstyle``); None without
+    one."""
     from app.core import garment_hair
     item = garment_hair.worn_hairstyle(character_name, profile)
     if not item or not item.get("id"):
         return None
-    label = f"Hair · {item.get('name') or 'Hairstyle'} (HairDeck)"
+    method = "HAAR" if garment_hair.hairstyle_mode(item) == garment_hair.HAAR_MODE else "HairDeck"
+    label = f"Hair · {item.get('name') or 'Hairstyle'} ({method})"
     return _chain_step(character_name, "hair", str(item["id"]), label, profile)
 
 
@@ -1647,7 +1649,8 @@ def _hair_row(character_name: str, profile: Dict[str, Any], wanted, delivered,
     if wanted.hair == figure.HAIR_BODY:
         return {**head, "state": state, "note": HAIR_WAITS_SHAPE, "rebuild": False}
     shown = "in the body" if delivered.hair == figure.HAIR_BODY else "bald"
-    return {**head, "state": state, "note": f"Shown {shown} until its HairDeck mesh is built",
+    method = "HAAR" if head["mode"] == garment_hair.HAAR_MODE else "HairDeck"
+    return {**head, "state": state, "note": f"Shown {shown} until its {method} mesh is built",
             "rebuild": False}
 
 

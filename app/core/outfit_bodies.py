@@ -206,7 +206,7 @@ def refit_body(character_name: str, body_id: str, item_id: str = "") -> Dict[str
                 error = getattr(e, "error", None) or str(e) or type(e).__name__
                 gs.record_body_failure(character_name, item_id, fsig, body_id, error=str(error), body_sha=body_sha,
                                        base_fit_sha=garments._sha(base_fit[0]),
-                                       fit_version=garment_fit.FIT_VERSION.get(str(base_fit[1].get("kind") or "")))
+                                       fit_version=garment_fit.expected_fit_version(base_fit[1]))
                 failed.append({"name": name, "error": str(error)})
     ok = bool(fitted) or not failed
     logger.info("Outfit body %s of %s refitted: %d fitted, %d failed, %d skipped", body_id, character_name,

@@ -29,9 +29,10 @@ EXPECTED VALUES, DERIVED BY HAND FROM THE TASK BRIEF AND THE RULINGS
     ("body"/"hairdeck"/"haar"), an item without one or with an unknown /
     removed value ("bogus", "edit_chain", "subtract") is "hairdeck" (hair items
     were made for HairDeck only before hairstyles). ``default_mode``: an
-    absent, unknown, removed or "haar" world value is "body".
-    ``set_hairstyle_mode(H, "")`` = the world default "hairdeck"; "haar" is a
-    ValueError naming "not built yet", "bogus" a ValueError.
+    absent, unknown or removed world value is "body", "haar" stays "haar"
+    (built since strand-hair Task 13). ``set_hairstyle_mode(H, "")`` = the
+    world default "hairdeck"; "haar" is stored (then back to "hairdeck"),
+    "bogus" a ValueError naming the modes.
     Schema: field_default("base_body", "hairstyle_default_mode") == "body",
     the path is world-scope (config_scope.scope_of) and the section names a
     world_group that is one of WORLD_GROUPS (so Game-Admin -> Setup shows it).
@@ -360,21 +361,26 @@ def main() -> int:
         for stored in ("body", "hairdeck", "haar"):
             check(f"stored {stored}",
                   garment_hair.hairstyle_mode({"garment": {"kind": "hair", "mesh_mode": stored}}), stored)
-        for gone in ("bogus", "edit_chain", "subtract", "haar"):
+        for gone in ("bogus", "edit_chain", "subtract"):
             config._CONFIG["base_body"] = {"hairstyle_default_mode": gone}
             check(f"world {gone} -> default", garment_hair.default_mode(), "body")
+        config._CONFIG["base_body"] = {"hairstyle_default_mode": "haar"}
+        check("world haar", garment_hair.default_mode(), "haar")
         config._CONFIG["base_body"] = {"hairstyle_default_mode": "hairdeck"}
         check("world hairdeck", garment_hair.default_mode(), "hairdeck")
         check("set body", garment_hair.set_hairstyle_mode("Demo", hid, "body"), True)
         check("body stored", garment_hair.hair_mode("Demo"), "body")
         check("set '' -> world default", (garment_hair.set_hairstyle_mode("Demo", hid, ""),
                                          garment_hair.hair_mode("Demo")), (True, "hairdeck"))
-        for bad, phrase in (("haar", "not built yet"), ("bogus", "")):
-            try:
-                garment_hair.set_hairstyle_mode("Demo", hid, bad)
-                check(f"set {bad} raises", False, True)
-            except ValueError as e:
-                check(f"set {bad} raises", phrase in str(e), True)
+        check("set haar", (garment_hair.set_hairstyle_mode("Demo", hid, "haar"), garment_hair.hair_mode("Demo")),
+              (True, "haar"))
+        check("set hairdeck again", (garment_hair.set_hairstyle_mode("Demo", hid, "hairdeck"),
+                                     garment_hair.hair_mode("Demo")), (True, "hairdeck"))
+        try:
+            garment_hair.set_hairstyle_mode("Demo", hid, "bogus")
+            check("set bogus raises", False, True)
+        except ValueError as e:
+            check("set bogus raises", "hair mode must be one of" in str(e), True)
         check("schema default", field_default("base_body", "hairstyle_default_mode"), "body")
         check("world scope", config_scope.scope_of("base_body.hairstyle_default_mode"), "world")
         check("world group listed", SECTIONS["base_body"].get("world_group") in {g["id"] for g in WORLD_GROUPS},

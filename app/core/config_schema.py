@@ -128,16 +128,20 @@ SECTIONS = {
             "hairstyle_default_mode": {
                 "type": "select",
                 "label": "Default hairstyle mode",
-                "choices": ["body", "hairdeck"],
+                "choices": ["body", "hairdeck", "haar"],
                 "choice_labels": {"body": "In the body mesh",
-                                  "hairdeck": "HairDeck (one image → hair cards)"},
+                                  "hairdeck": "HairDeck (one image → hair cards)",
+                                  "haar": "HAAR (the hairstyle's text → hair strands)"},
                 "default": "body",
                 "description": "The mode a NEW hairstyle gets (a character's first one is made from its "
                                "Appearance). Every hairstyle keeps its own mode afterwards. In the body mesh: "
                                "the hair is part of the body — the plain body is rendered with it, another such "
                                "hairstyle becomes its own body shape; no hair job. HairDeck: one job turns the "
                                "profile picture into hair cards (needs an img2hair backend, occasion "
-                               "hair_mesh), fitted onto a bald body.",
+                               "hair_mesh), fitted onto a bald body. HAAR: the hairstyle's text becomes hair "
+                               "strands, one job per seed (3 per run, ~30–55 s each; needs a txt2hair backend, "
+                               "occasion hair_strands), each draped onto a bald body on the CPU; the best "
+                               "passing variant is served.",
             },
             "hair_alpha_cutoff": {
                 "type": "float",

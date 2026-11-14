@@ -459,7 +459,7 @@ def fit_status(character_name: str, item_id: str, body: str, *,
         base_fit_sha = garments._sha(base_fit[0])
         state = garments.body_fit_state(character_name, item_id, fsig, body, body_sha, base_fit_sha)
         failure = (gs.body_failure(character_name, item_id, fsig, body, body_sha=body_sha, base_fit_sha=base_fit_sha,
-                                   fit_version=garment_fit.FIT_VERSION.get(str(base_fit[1].get("kind") or "")))
+                                   fit_version=garment_fit.expected_fit_version(base_fit[1]))
                    if state != "accepted" else None)
         return {**out, "fsig": fsig, "state": state, "failure": failure, "body_sha": body_sha,
                 "base_fit_sha": base_fit_sha}

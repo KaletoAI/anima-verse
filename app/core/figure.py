@@ -68,7 +68,7 @@ class WornSets:
     painted: Tuple[str, ...]      # sorted, mode painted (+ every non-garment worn piece)
     own: Dict[str, str]           # item id -> "clothing" | "footwear" (mode own_mesh)
     hair_in_body: bool            # garment_hair.hair_in_body: the worn hairstyle's mode is ``body``
-    hair_item: str                # worn HairDeck hairstyle id, "" otherwise
+    hair_item: str                # worn HairDeck or HAAR hairstyle id (a grafted hair mesh), "" otherwise
     #: The worn ``{slot: item id}`` the sets were resolved from — the dress
     #: texts of ``shape_inputs`` / ``texture_key`` are composed from it.
     pieces: Dict[str, str] = field(default_factory=dict)
@@ -110,7 +110,7 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
     empty off the pipeline) among ``pieces``; in-body pieces need the
     pipeline as well; everything else — mode painted, or no outfit piece at
     all — is painted. ``hair_item``: the worn hairstyle when it is HairDeck
-    hair, else ``""``. ``open``: the worn closable pieces worn open —
+    or HAAR hair (a grafted hair mesh), else ``""``. ``open``: the worn closable pieces worn open —
     ``piece_state`` (``{item_id: "open"}``), None → the profile's
     (``outfit_options.piece_states``). ``hair_shape`` / ``hair_style``: the
     worn hairstyle against the plain body's (``garment_hair.shape_hair`` /
@@ -139,7 +139,7 @@ def worn_sets(character_name: str, *, pieces: Optional[Dict[str, str]] = None,
     return WornSets(in_body=tuple(in_body), painted=tuple(painted), own=dict(sorted(own.items())),
                     hair_in_body=mode == garment_hair.BODY_MODE,
                     hair_item=(garment_hair.worn_hair_id(character_name, profile)
-                               if mode == garment_hair.HAIRDECK_MODE else ""),
+                               if mode in (garment_hair.HAIRDECK_MODE, garment_hair.HAAR_MODE) else ""),
                     pieces=dict(worn), open=tuple(opened),
                     hair_shape=garment_hair.shape_hair(character_name, profile) if hair_pipeline else "",
                     hair_style=garment_hair.hair_style_id(character_name, profile) if hair_pipeline else "")
@@ -392,7 +392,8 @@ SHOWN_CLOSED = "Shown closed until its open mesh is built"
 OPEN_MESH_MISSING = "worn open — open mesh missing"
 #: The note of the hair's pending change when the hair is wanted in the body but the plain body is bald (F13 a).
 HAIR_REBUILD = "in the body → plain body rebuild"
-#: ``Figure.hair``.
+#: ``Figure.hair``. ``HAIR_HAIRDECK`` names a GRAFTED hair mesh — HairDeck or HAAR (the value predates HAAR
+#: and is part of stored figures, so it is kept).
 HAIR_BODY, HAIR_HAIRDECK, HAIR_BALD = "body", "hairdeck", "bald"
 #: ``pending_changes`` keys of the body and the hair.
 BODY_KEY, HAIR_KEY = "body", "hair"
@@ -655,11 +656,11 @@ def _fit_on(character_name: str, item_id: str, *, shape: str, base_sha: str,
 
 def interim_hair_fit(character_name: str, *, bsig: str, base_sha: str,
                      profile: Optional[Dict[str, Any]] = None) -> Optional[Tuple[Any, Dict[str, Any]]]:
-    """The HairDeck fit served while the hair is wanted IN the body but the
+    """The HairDeck / HAAR fit served while the hair is wanted IN the body but the
     plain body ``bsig`` was rendered bald (``base_body.stored_base_haired``
     False — the hair mode was switched, only a rebuild puts the hair in;
-    ruling F13 a): ``(fit GLB, record)`` of the newest accepted HairDeck fit
-    of the worn own hair item (``garment_hair.worn_hair_id``) on the base
+    ruling F13 a): ``(fit GLB, record)`` of the newest accepted HairDeck or
+    HAAR fit of the worn own hair item (``garment_hair.worn_hair_id``) on the base
     model ``base_sha``, None otherwise (hair not in the body, a haired or
     unknown plain body, no worn hair item, no such fit). Read-only — the
     delivered figure's rule 3 and the garment assembly ask it."""
@@ -672,8 +673,17 @@ def interim_hair_fit(character_name: str, *, bsig: str, base_sha: str,
     item_id = garment_hair.worn_hair_id(character_name, profile)
     if not item_id:
         return None
-    return garment_store.newest_accepted_fits(character_name, item_id, base_model_sha=base_sha).get(
-        garment_store.HAIRDECK)
+    # The hairstyle is in the body NOW, so its method names neither graft: the newer of its HairDeck and HAAR
+    # fits (strand-hair Task 13; the GLB mtime decides like ``newest_accepted_fits``, HairDeck on a tie).
+    fits = garment_store.newest_accepted_fits(character_name, item_id, base_model_sha=base_sha)
+    found = [fits[m] for m in (garment_store.HAIRDECK, garment_store.HAAR) if fits.get(m)]
+
+    def mtime(hit: Tuple[Any, Dict[str, Any]]) -> int:
+        try:
+            return hit[0].stat().st_mtime_ns
+        except OSError:
+            return 0
+    return max(found, key=mtime) if found else None
 
 
 def _interim_hair_on(character_name: str, *, shape: str, bsig: str, base_sha: str,
