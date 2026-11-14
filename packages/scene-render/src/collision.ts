@@ -237,9 +237,13 @@ export function bindCollision(three: Three, root: Object3D, payload: CollisionPa
     })
   })
   // A joint in the bind pose: the bone's world matrix IS inverse(boneInverse) and the mesh's world matrix its
-  // bindMatrix, so a vertex fixed to it goes through `bindMatrix` (the endpoint rule with the bind matrices).
+  // bindMatrix, so a vertex fixed to it goes through `bindMatrix` (the endpoint rule with the bind matrices). The
+  // inverse is inverse(bindMatrix) — NOT the mesh's `bindMatrixInverse`, which the default `attached` bind mode
+  // keeps at inverse(matrixWorld) of NOW: a figure bound away from where it was loaded (placed in the world, or
+  // centred by an admin preview) got its bind capsules shifted by that offset (strand-hair Task 10).
   const jointAtBind = (ref: JointRef): JointNow => jointNowFrom(ref.mesh.bindMatrix.elements,
-    ref.mesh.bindMatrixInverse.elements, new three.Matrix4().copy(ref.mesh.skeleton.boneInverses[ref.index]).invert().elements,
+    new three.Matrix4().copy(ref.mesh.bindMatrix).invert().elements,
+    new three.Matrix4().copy(ref.mesh.skeleton.boneInverses[ref.index]).invert().elements,
     ref.mesh.skeleton.boneInverses[ref.index].elements, ref.mesh.bindMatrix.elements)
   const bound: Array<BoundCapsule & { ja: JointRef; jb: JointRef }> = []
   const missing: string[] = []

@@ -156,12 +156,15 @@ export function createStrandHair(three: Three, root: Object3D, record: HairStran
   const params: StrandParams = { ...base }
 
   // Colliders (Ruling H-R7): the record's hair capsules without the head region, bound to the body skeleton; the
-  // bind-pose ends in the hair primitive's geometry space, once.
+  // bind-pose ends in the hair primitive's geometry space, once — through inverse(bindMatrix), never the attached
+  // mode's `bindMatrixInverse` (inverse(matrixWorld) NOW: the bind-rule factors would follow where the figure
+  // stands; a card of a centred preview hung 128 mm off its rest, strand-hair Task 10).
   const capsules = strandCapsules(record).filter(c => c.region !== SKIPPED_REGION)
   const collision: CollisionBinding | null = capsules.length
     ? bindCollision(three, root, { version: record.capsules.version, capsules }) : null
+  const geometryFromBind = new three.Matrix4().copy(mesh.bindMatrix).invert().elements
   const binds = (collision?.capsules ?? []).map(c => {
-    const l = capsuleInFrame(c.bind, mesh.bindMatrixInverse.elements)
+    const l = capsuleInFrame(c.bind, geometryFromBind)
     return { a: l.a, b: l.b }
   })
   const frameCaps: CollideCapsule[] = binds.map(bind => ({ a: [0, 0, 0] as Vec3, b: [0, 0, 0] as Vec3, r: 0, bind }))

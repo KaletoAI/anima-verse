@@ -485,8 +485,11 @@ export function createGarmentCollision(three: Three, root: Object3D,
     const kind = garmentKind(mesh)
     const capsules = garmentCapsules(kind, binding.capsules)
     if (!capsules.length) continue
-    // Bind rule: the bind-pose capsules (body bind world) in THIS mesh's geometry space — where `position` is.
-    const binds = capsules.map(c => capsuleInFrame(c.bind, mesh.bindMatrixInverse.elements))
+    // Bind rule: the bind-pose capsules (body bind world) in THIS mesh's geometry space — where `position` is:
+    // inverse(bindMatrix), not the attached mode's `bindMatrixInverse` (inverse(matrixWorld) now, which follows
+    // where the figure stands).
+    const geometryFromBind = new three.Matrix4().copy(mesh.bindMatrix).invert().elements
+    const binds = capsules.map(c => capsuleInFrame(c.bind, geometryFromBind))
     const uniforms: CollideUniforms = {
       collideA: { value: Array.from({ length: COLLIDE_MAX }, () => new three.Vector4()) },
       collideB: { value: Array.from({ length: COLLIDE_MAX }, () => new three.Vector4()) },

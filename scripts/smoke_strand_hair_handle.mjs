@@ -53,6 +53,17 @@
  *     0.10 m behind the axis); `RootInertia` feels (2.5839 / 60) / 60 = 0.000718 rad of it and carries the rest, so
  *     after that update every row is within 1 mm of its target (without the carry a free row moved only d = 4 % of
  *     its target's 0.1 m in that step and the card flew out behind the turn).
+ * [9] A figure bound away from where it was loaded (strand-hair Task 10: the 3D client places figures anywhere, the
+ *     Hairstyles preview centres its model). The fixture is built at the origin (its skins bound there), then the
+ *     figure stands at (2, 0, −3) before `createStrandHair`. three's default `attached` bind mode keeps
+ *     `bindMatrixInverse` at inverse(matrixWorld) NOW, so the bind-pose capsule ends must come from inverse(
+ *     `bindMatrix`) (here the identity): the torso capsule's bind ends stay (0, 1.30, 0) → (0, 1.45, 0) — not
+ *     (−2, 1.30, 3) / (−4, 1.30, 6) as through the attached inverse once or twice. The rows of y 1.30 … 1.44 lie
+ *     hypot(0.03, 0.10) = 0.1044 m from the torso axis, inside its 0.12 m: the bind rule shrinks the radius to that
+ *     rest distance, so at rest nothing is pushed — 60 updates leave every row on its target within 1e-5 m (float32
+ *     at 3 m). With the shifted ends the rule saw those rows far outside, kept r = 0.12 and pushed them out by
+ *     ≈ 15.6 mm. The garment push has the same bind rule: `entries[0].local[torso].bind` of the placed figure
+ *     equals the one at the origin within 1e-9.
  * [7] createGarmentCollision over the fixture: the hair mesh wears a patched clone; excludeMesh(hair, true) →
  *     hair.material IS the original (unpatched) object again; excludeMesh(hair, false) → the same patched clone as
  *     before (identity), its depth material the patched one.
@@ -288,6 +299,37 @@ const NCARD = 2 * R * 2
   check('[8] the snap moved the targets > 0.1 m (the case is real)', moved > 0.1, `${moved.toFixed(4)} m`)
   check('[8] after the snap every row within 1 mm of its target (carried)', err <= 0.001, `${(err * 1000).toFixed(3)} mm`)
   h.dispose()
+}
+
+// [9] a figure bound away from where it was loaded
+{
+  const { fig } = figure()
+  fig.position.set(2, 0, -3)
+  fig.updateMatrixWorld(true)
+  const h = createStrandHair(THREE, fig, record())
+  h.setEnabled(true)
+  for (let f = 0; f < 60; f++) { fig.updateMatrixWorld(true); h.update(1 / 60) }
+  let err = 0
+  for (let q = 0; q < h.sim.X.length; q += 3) {
+    err = Math.max(err, Math.hypot(h.sim.X[q] - h.targets[q], h.sim.X[q + 1] - h.targets[q + 1], h.sim.X[q + 2] - h.targets[q + 2]))
+  }
+  check('[9] placed at (2, 0, −3): at rest every row on its target within 1e-5 m', err <= 1e-5, `${err.toExponential(2)} m`)
+  h.dispose()
+  const torsoBind = (placed) => {
+    const { fig: g } = figure()
+    if (placed) { g.position.set(2, 0, -3); g.updateMatrixWorld(true) }
+    const gc = createGarmentCollision(THREE, g, { version: 4, capsules: CAPSULES })
+    gc.update()
+    const entry = gc.entries[0]
+    const bind = entry.local[entry.capsules.findIndex(c => c.capsule.id === 'torso')].bind
+    gc.dispose()
+    return [...bind.a, ...bind.b]
+  }
+  const atOrigin = torsoBind(false), placed = torsoBind(true)
+  const d = Math.max(...atOrigin.map((v, i) => Math.abs(v - placed[i])))
+  check('[9] the garment bind rule: the placed torso bind ends = the ones at the origin (0, 1.30, 0) → (0, 1.45, 0)',
+    d <= 1e-9 && Math.abs(atOrigin[1] - 1.30) < 1e-6 && Math.abs(atOrigin[4] - 1.45) < 1e-6 && Math.abs(atOrigin[0]) < 1e-9,
+    `${atOrigin.map(v => +v.toFixed(4))} vs ${placed.map(v => +v.toFixed(4))}`)
 }
 
 // [6] withoutHairGroups
