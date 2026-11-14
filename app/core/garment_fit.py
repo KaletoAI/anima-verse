@@ -190,13 +190,17 @@ SIDE_DEEP_M = 0.03
 #: the worn view shows as body counts however flush the mesh fills it (``opening_lining``, ``OPEN_SHOWN_SHARE``;
 #: Kira's blazer on the remeshed ``8a64a2576446``: 0 -> 3591 faces left out, the V 0.5 / 0.1 / 0.9 -> 13.7 / 10.5 /
 #: 7.3 cm wide at 0.17 / 0.21 / 0.25). Only a fit whose opening report kept a component at least
-#: ``OPEN_SHOWN_RECESS_PX`` deep can change: a version 12 clothing fit without one stays current
-#: (``expected_fit_version``, ``opening_may_open``, ``CLOTHING_OPENING_UNCHANGED``).
+#: ``OPEN_SHOWN_RECESS_PX`` deep could change: a version 12 clothing fit without one stayed current until 14.
+#: clothing 14 (2026-11-14, Ruling A72 — one CPU refit of every clothing fit, no hub job): a body vertex whose UV
+#: match lies elsewhere on the rigged body donates the skin of its nearest matched neighbour
+#: (``trusted_donor_weights``; Kira's ``base20d5701a``: 490 such vertices, 54 at the navel matched onto the right
+#: arm — the waistband of her black slit skirt rode the arm as a "sleeve" and stood 37 cm out to the right, 118
+#: vertices, edges up to 23 cm -> no sleeve, longest edge 4.8 cm, as placed), and the fit is gated on its longest
+#: new edge (``new_edge_max_m``, ``NEW_EDGE_MAX_M``). Every clothing fit is refitted: the repaired donors change the
+#: weights wherever such a vertex is among a garment vertex's nearest, so Ruling A51's exemption of version 12 fits
+#: without a deep opening went with this version.
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 13, "footwear": FOOTWEAR_FIT_VERSION}
-#: The clothing fit version whose fits stay current under ``FIT_VERSION["clothing"]`` when their opening report holds
-#: no component Ruling A51 could leave out (``opening_may_open``).
-CLOTHING_OPENING_UNCHANGED = 12
+FIT_VERSION: Dict[str, int] = {"hair": 14, "clothing": 14, "footwear": FOOTWEAR_FIT_VERSION}
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
@@ -210,23 +214,9 @@ def fit_version_for(kind: str, method: str = "") -> Optional[int]:
 
 def expected_fit_version(record: Dict[str, Any]) -> Optional[int]:
     """``fit_version_for`` of a fit record (its ``kind`` and ``method``) — what its ``fit_version`` must say to be
-    current. A clothing fit of ``CLOTHING_OPENING_UNCHANGED`` whose opening report holds no component version 13 could
-    leave out (``opening_may_open``) is current as it is: version 13 changed nothing for it (Ruling A51)."""
-    kind = str(record.get("kind") or "")
-    if (kind == "clothing" and record.get("fit_version") == CLOTHING_OPENING_UNCHANGED
-            and not opening_may_open(record)):
-        return CLOTHING_OPENING_UNCHANGED
-    return fit_version_for(kind, str(record.get("method") or ""))
+    current."""
+    return fit_version_for(str(record.get("kind") or ""), str(record.get("method") or ""))
 
-
-def opening_may_open(record: Dict[str, Any]) -> bool:
-    """Whether the fit ``record``'s opening report (``report.opening``, ``opening_lining``) holds a component the fit
-    kept although its inside lies ``OPEN_SHOWN_RECESS_PX`` behind its ring — the only components Ruling A51 can leave
-    out (the worn-view evidence and the outline are not in an older report, so such a fit is refitted)."""
-    opening = (record.get("report") or {}).get("opening")
-    components = opening.get("components") if isinstance(opening, dict) else None
-    return any(isinstance(c, dict) and not c.get("dropped")
-               and float(c.get("recess_px") or 0.0) >= OPEN_SHOWN_RECESS_PX for c in (components or []))
 
 # Clothing (phase 5) — the dress spike ``fit_dress.py``. Placement: fractions of the unrigged body height.
 #: Depth band of the garment below its top (spike 0.03 .. 0.15 units on a 1.0-high body).
@@ -350,6 +340,20 @@ DEEP_PUSH_M = 0.03
 SLEEVE_SHARD_M = 0.03
 SLEEVE_SHARD_RATIO = 3.0
 SLEEVE_SHARDS_MAX = 6
+#: Ruling A72 — the longest NEW edge (``new_edge_max``): the largest growth of an edge of the fitted piece over its
+#: length in the placed piece (the placement before the push-out, at the fit's width allowance), metres. Nothing in
+#: the fit may carry two neighbours that far apart but the pose change from the A-pose generator body to the T-pose
+#: rig, and its largest opening is the ARMPIT: the arm turns by theta about the shoulder joint, and the fabric at the
+#: armpit fold, r below the joint, that rides the arm leaves the fabric beside it that rides the trunk by
+#: 2 r sin(theta / 2). Measured on the three bases (theta between the Arm and Spine2 bone transforms, r from the Arm
+#: joint to the nearest trunk vertex below it): Kira ``base20d5701a`` 76.8 deg, 0.114 m -> 0.142 m; Ylva
+#: ``base5fe6bd6a`` 75.9 deg, 0.131 m -> 0.161 m; Kai ``base634402e5`` 59.8 deg, 0.168 m -> 0.167 m. The limit is the
+#: largest, rounded up: 0.17 m. A vertex that rides a limb from farther than the armpit (Kira's skirt waistband on the
+#: right arm, its UV-mismatched navel donors) opens more: 0.209 - 0.224 m on the four widths of that fit. Every other
+#: fit re-run that day stays far below: Kira's blazer 0.080 - 0.094 m and Kai's leather jacket 0.082 - 0.094 m (both
+#: with the sleeves laid onto the arm), Kai's jeans 0.071 m, Ylva's wrap skirt 0.103 m, the repaired slit skirt
+#: 0.015 - 0.021 m.
+NEW_EDGE_MAX_M = 0.17
 
 CLOTHING_GATES = {
     "max_push_m": ("max", 0.10, "largest push-out"),
@@ -359,6 +363,8 @@ CLOTHING_GATES = {
     "rigged_deep_push_share": ("max", 0.12, "share of vertices pushed out more than 3 cm on the rigged body"),
     # Ruling A47: no stretched strip in the sleeves placed onto the arm (``sleeve_shards``; 0 without such a sleeve).
     "sleeve_shards": ("max", SLEEVE_SHARDS_MAX, "stretched strips where the sleeves were placed onto the arm"),
+    # Ruling A72: no sliver the placed piece does not have (``new_edge_max``).
+    "new_edge_max_m": ("max", NEW_EDGE_MAX_M, "longest edge the fit grew beyond the placed piece"),
 }
 
 # Scale retry (2026-11-10): a clothing fit refused ONLY because the piece is too small for the body — every failing
@@ -1133,6 +1139,35 @@ def bone_transforms(body_unrigged: BodyMesh, body_rigged: BodyMesh, corr: np.nda
         "body_lbs_res_p99_m": float(np.percentile(res, 99)),
     }
     return out
+
+
+def trusted_donor_weights(Pb: np.ndarray, Pr_corr: np.ndarray, bones: BoneTransforms, Wb: np.ndarray, k: float
+                          ) -> Tuple[np.ndarray, np.ndarray]:
+    """Ruling A72 — the donor skin of the unrigged body, with every UV MISMATCH repaired -> ``(Wb', mismatched)``.
+
+    ``Wb`` (folded, normalised) holds per unrigged body vertex the skin of its UV match ``Pr_corr`` on the rigged
+    body (``uv_correspondence``). Where the rigged base does not carry the unrigged vertex's UV, the nearest UV can
+    lie on another island: on Kira's ``base20d5701a`` 490 of 67038 vertices (243 of them without an exact UV) —
+    54 at the navel matched onto the right upper arm / forearm and the left shoulder. ``bone_transforms`` already
+    drops such vertices from its bone cores (``BONE_CORE_OUTLIER_M``), but the transfer took their skin as it was:
+    the waistband of Kira's black slit skirt beside the navel had the right arm as its nearest donor PART, became a
+    "sleeve" (``sleeve_vertices``), rode the whole arm chain into the T-pose and stood 37 cm out to the right — the
+    sliver from the skirt's centre to the right side (fit ``a9bb05bf45f3``, 118 vertices, edges up to 23 cm).
+
+    A vertex is mismatched when the bones carry it, by the skin of its match, farther than ``BONE_CORE_OUTLIER_M``
+    from that match: measured on ``base20d5701a`` the body's own residual is p99 16 mm, and nothing lies between
+    5 and 10 cm (5 vertices 4 - 5 cm, then 22 at 10 - 15 cm and 468 beyond); on ``obf043ed6a`` nothing between 2 and
+    10 cm (64 UV twins beyond). Such a vertex takes the skin of the nearest matched vertex of the unrigged body."""
+    from scipy.spatial import cKDTree
+    res = np.linalg.norm(bones.apply(np.asarray(Pb, np.float64) * float(k), Wb) - np.asarray(Pr_corr), axis=1)
+    bad = res > BONE_CORE_OUTLIER_M
+    if not bad.any() or bad.all():
+        return Wb, bad
+    good = np.nonzero(~bad)[0]
+    nn = cKDTree(Pb[good]).query(Pb[bad], workers=fit_kernels.threads())[1]
+    out = Wb.copy()
+    out[bad] = Wb[good[nn]]
+    return out, bad
 
 
 def relax_stretched(X: np.ndarray, X0: np.ndarray, faces, adjacency, *, ratio: float = STRETCH_RELAX_RATIO,
@@ -2039,6 +2074,8 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
     bones = bone_transforms(body_unrigged, body_rigged, corr, k)
     Wb = bones.fold_weights(dense_weights(body_rigged)[corr])
     Wb /= np.maximum(Wb.sum(1, keepdims=True), 1e-12)
+    # Ruling A72: a body vertex whose UV match lies elsewhere on the rigged body donates its neighbour's skin.
+    Wb, mismatched = trusted_donor_weights(Pb, Pr[corr], bones, Wb, k)
 
     def eligible(tokens) -> np.ndarray:
         cols = [i for i, n in enumerate(body_rigged.joint_names) if any(t in norm_bone_name(n) for t in tokens)]
@@ -2135,6 +2172,7 @@ def transfer_skinned(Q, body_unrigged: BodyMesh, body_rigged: BodyMesh, *, faces
         "scale_k": float(k),
         **side_report,
         "uv_dist_p99": float(np.percentile(uv_dist, 99)),
+        "uv_mismatched_donors": int(mismatched.sum()),
         **bones.report,
         "sleeve_share": float((Wg[:, arm_cols].sum(1) > 0.5).mean()) if arm_cols and len(Wg) else 0.0,
         "sleeve_vertices": int(sleeve.sum()),
@@ -2803,12 +2841,25 @@ def skirt_leg_weights(X, W, *, legs, hips: int, crotch: float, smooth_m: float =
 
 # --- metrics + gate -----------------------------------------------------------------------------------------------------
 
+def new_edge_max(X: np.ndarray, X0: np.ndarray, faces) -> float:
+    """Ruling A72 — the largest growth (metres) of an edge of ``faces`` from ``X0`` (the placed piece) to ``X`` (the
+    fit), 0.0 without faces."""
+    F = np.asarray(faces, np.int64).reshape(-1, 3)
+    if not len(F):
+        return 0.0
+    E = np.unique(np.sort(np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]), axis=1), axis=0)
+    X, X0 = np.asarray(X, np.float64), np.asarray(X0, np.float64)
+    grown = (np.linalg.norm(X[E[:, 0]] - X[E[:, 1]], axis=1) - np.linalg.norm(X0[E[:, 0]] - X0[E[:, 1]], axis=1))
+    return float(grown.max())
+
+
 def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any],
                      exclude: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """Mesh gate numbers of a fitted clothing piece (``CLOTHING_GATES``), positions as in ``metrics``. ``exclude``
     (a vertex mask): counted as not pushed — the sleeves laid onto the arm (Ruling A47), whose placement push is
     discarded (they are placed at the sleeve clearance instead; their own check is ``sleeve_shards``). They stay in
-    the share's denominator, as every vertex did when the gate limits were measured."""
+    the share's denominator, as every vertex did when the gate limits were measured. ``new_edge_max_m`` (Ruling A72):
+    the longest edge the fit grew beyond the placed piece ``Q0_pre``."""
     X = np.asarray(X, np.float64)
     Fw = np.asarray(Fw, np.int64).reshape(-1, 3)
     push = np.linalg.norm(np.asarray(Q_post, np.float64) - np.asarray(Q0_pre, np.float64), axis=1)
@@ -2833,6 +2884,7 @@ def clothing_metrics(X, Fw, Q0_pre, Q_post, transfer_report: Dict[str, Any],
         "sleeve_stretch_over": int(stretch.get("over") or 0),
         "sleeve_shards": int(stretch.get("shards") or 0),
         "sleeve_stretch_p99": float(stretch.get("p99") or 1.0),
+        "new_edge_max_m": round(new_edge_max(X, Q0_pre, Fw), 4),
         "tris": int(len(Fw)),
     }
 

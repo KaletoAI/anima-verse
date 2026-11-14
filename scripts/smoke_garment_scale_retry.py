@@ -109,7 +109,8 @@ def run(rho, finish_extra=None):
     def finish(Qs, Qp, disp):
         scale = round(float(np.linalg.norm(Qs[:, [0, 2]], axis=1).mean()) / rho, 2)
         m = {**gf.push_numbers(Qs, Qp), "largest_component_share": 1.0, "rigged_inside_share": 0.0,
-             "rigged_push_max_m": 0.0, "rigged_deep_push_share": 0.0, "sleeve_shards": 0}
+             "rigged_push_max_m": 0.0, "rigged_deep_push_share": 0.0, "sleeve_shards": 0,
+             "new_edge_max_m": 0.0}
         m.update((finish_extra or (lambda s: {}))(scale))
         calls["finish"].append(scale)
         ok, reasons = gf.gate(m, gf.CLOTHING_GATES)
@@ -129,7 +130,8 @@ def main() -> int:
 
     print("[2] too_small")
     base = {"max_push_m": 0.05, "deep_push_share": 0.05, "largest_component_share": 0.99, "rigged_inside_share": 0.0,
-            "rigged_push_max_m": 0.0, "rigged_deep_push_share": 0.0, "sleeve_shards": 0}
+            "rigged_push_max_m": 0.0, "rigged_deep_push_share": 0.0, "sleeve_shards": 0,
+            "new_edge_max_m": 0.0}
 
     def reasons(**over):
         return gf.gate({**base, **over}, gf.CLOTHING_GATES)[1]

@@ -178,6 +178,8 @@ const FIT_CHIPS: ChipSpec[] = [
   { key: 'rigged_inside_share', label: 'Inside the body', scale: 100, unit: '%', digits: 2 },
   // Ruling A47: stretched strips where the sleeves were laid onto the arm (gated).
   { key: 'sleeve_shards', label: 'Stretched strips', scale: 1, unit: '', digits: 0 },
+  // Ruling A72: the longest edge the fit grew beyond the placed piece (gated) — a sliver the mesh does not have.
+  { key: 'new_edge_max_m', label: 'Longest new edge', scale: 100, unit: 'cm', digits: 1 },
   // Reported, not gated.
   { key: 'sleeve_skin_left_cm2', label: 'Skin in left sleeve', scale: 1, unit: 'cm²', digits: 1 },
   { key: 'sleeve_skin_right_cm2', label: 'Skin in right sleeve', scale: 1, unit: 'cm²', digits: 1 },
