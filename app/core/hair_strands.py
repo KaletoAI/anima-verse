@@ -25,6 +25,8 @@ The record (``build_record``):
 
 HairDeck's layout (``hairdeck_layout``): its cards are square tubes, 4 vertices per row, rows root first, the hair
 vertices first in raw order and the scalp cap after them (``garment_hairdeck.fit_hairdeck``, ``report.vertices``).
+HAAR's layout (``haar_layout``): its cards are strips of exactly ``ROWS`` rows of 2 vertices, root first, card k the
+vertices ``[2 ROWS k, 2 ROWS (k + 1))``, the cap after them (``garment_haar.fit_haar``, ``hair_cards.haar_cards``).
 """
 from __future__ import annotations
 
@@ -105,6 +107,8 @@ _HAIRDECK_PARAMS: Dict[str, Any] = {
     "face_box": True}
 PARAMS: Dict[str, Dict[str, Any]] = {"hairdeck": dict(_HAIRDECK_PARAMS),
                                      "haar": {**_HAIRDECK_PARAMS, "root_deg": 0}}
+#: The fit methods (``garment_store.fit_method``) that get a strand record: their names are ``PARAMS``' keys.
+STRAND_MODES = ("hairdeck", "haar")
 
 _LOGGED: set = set()
 _LOGGED_LOCK = threading.Lock()
@@ -153,6 +157,28 @@ def hairdeck_layout(P: np.ndarray, F: np.ndarray, n_hair: int) -> StrandLayout:
         frac = a / a[-1]
         u[idx] = np.repeat(frac * SEGMENTS, 4)
         C[k] = np.stack([np.interp(t, frac, Ct[:, d]) for d in range(3)], 1)
+    return StrandLayout(card=card, u=u, centrelines=C)
+
+
+def haar_layout(V: np.ndarray, n_hair: int) -> StrandLayout:
+    """The strand layout of a HAAR hair mesh (``garment_haar.fit_haar``): card k = vertices ``[34 k, 34 k + 34)``
+    (``ROWS`` rows of 2, root first), ``u`` = the row index, the centreline row = the mean of its two vertices;
+    vertices from ``n_hair`` on (the cap) are rigid (card -1, u 0). ValueError when ``n_hair`` is not whole cards
+    or a card has no length."""
+    V = np.asarray(V, np.float64).reshape(-1, 3)
+    n_hair = int(n_hair)
+    per = 2 * ROWS
+    if n_hair <= 0 or n_hair % per or n_hair > len(V):
+        raise ValueError(f"haar_layout: {n_hair} hair vertices of {len(V)} are not whole cards of {per}")
+    S = n_hair // per
+    idx = np.arange(n_hair)
+    card = np.full(len(V), -1, np.int64)
+    card[:n_hair] = idx // per
+    u = np.zeros(len(V), np.float64)
+    u[:n_hair] = (idx % per) // 2
+    C = V[:n_hair].reshape(S, ROWS, 2, 3).mean(2)
+    if not (np.linalg.norm(np.diff(C, axis=1), axis=2).sum(1) > 1e-9).all():
+        raise ValueError("haar_layout: a card has no length")
     return StrandLayout(card=card, u=u, centrelines=C)
 
 
@@ -459,8 +485,9 @@ def record_for_fit(character_name: str, fit_path: Path) -> Optional[Dict[str, An
     """The strand record of the hair fit ``fit_path``: read from its sidecars when they are current (this
     version, the fit's sha256, the character's collision scales), else built and written atomically (the npz
     first, the JSON last) under ``keyed_lock("hair_strands", fit)``. The mode is the fit record's ``method``
-    (HairDeck: ``report.vertices.hair`` hair vertices). None — logged once per fit content — for a fit of
-    another method, without a hair node or fit record, or with an unreadable GLB."""
+    (HairDeck / HAAR: ``report.vertices.hair`` hair vertices, ``hairdeck_layout`` / ``haar_layout``). None — logged
+    once per fit content — for a fit of another method, without a hair node or fit record, or with an unreadable
+    GLB."""
     from app.core import collision
     from app.core import garment_store as gs
     from app.core.glb_mesh import garment_arrays
@@ -475,7 +502,7 @@ def record_for_fit(character_name: str, fit_path: Path) -> Optional[Dict[str, An
         key = (str(fit_path), fit_sha)
         fit_record = gs.read_record(fit_path.with_suffix(".json"))
         mode = gs.fit_method(fit_record)
-        if mode != gs.HAIRDECK:
+        if mode not in STRAND_MODES:
             _log_once(key, "Hair strands %s: no record for a %s fit", fit_path.name, mode)
             return None
         scales = collision.character_scales(character_name)
@@ -488,7 +515,8 @@ def record_for_fit(character_name: str, fit_path: Path) -> Optional[Dict[str, An
             garment = garment_arrays(blob, node_prefix="garment_hair_")
             if not 0 < n_hair <= len(garment.positions):
                 raise ValueError(f"{n_hair} hair vertices of {len(garment.positions)}")
-            layout = hairdeck_layout(garment.positions, garment.indices, n_hair)
+            layout = (haar_layout(garment.positions, n_hair) if mode == gs.HAAR
+                      else hairdeck_layout(garment.positions, garment.indices, n_hair))
             record, arrays = build_record(blob, mode=mode, item_id=str(fit_record.get("item_id") or ""),
                                           fsig=str(fit_record.get("fsig") or ""), layout=layout, scales=scales,
                                           extension=fit_extension(character_name, fit_record))
@@ -524,18 +552,18 @@ def vertex_arrays(fit_path: Path) -> Optional[Dict[str, np.ndarray]]:
 
 def preview_version(fit_path: Path) -> str:
     """The content version of the Hairstyles preview GLB of the fit ``fit_path`` (``preview_glb``): the fit
-    file's (``http_files.content_version``), with ``.s<RECORD_VERSION>`` appended for a HairDeck fit — its
+    file's (``http_files.content_version``), with ``.s<RECORD_VERSION>`` appended for a HairDeck or HAAR fit — its
     preview carries the strand binding, so a client cache of the bare fit never stands in for it. OSError for an
     unreadable fit."""
     from app.core import garment_store as gs
     from app.core.http_files import content_version
     version = content_version(Path(fit_path))
     record = gs.read_record(Path(fit_path).with_suffix(".json"))
-    return f"{version}.s{RECORD_VERSION}" if gs.fit_method(record) == gs.HAIRDECK else version
+    return f"{version}.s{RECORD_VERSION}" if gs.fit_method(record) in STRAND_MODES else version
 
 
 def preview_glb(character_name: str, fit_path: Path) -> Optional[Tuple[bytes, str]]:
-    """``(bytes, version)`` of the Hairstyles preview GLB of the fit ``fit_path`` (Ruling H-R5): a HairDeck fit
+    """``(bytes, version)`` of the Hairstyles preview GLB of the fit ``fit_path`` (Ruling H-R5): a HairDeck or HAAR fit
     with ``_STRAND_CARD`` / ``_STRAND_U`` on its hair primitive — the same per-vertex binding the full tier
     carries (``garment_assembly._attach_strands``), so the preview's sim binds like the 3D client's — when its
     record (``record_for_fit``, built on the CPU when missing) was made of these very bytes; every other fit, or
@@ -549,7 +577,7 @@ def preview_glb(character_name: str, fit_path: Path) -> Optional[Tuple[bytes, st
     except OSError:
         return None
     sha = hashlib.sha256(blob).hexdigest()
-    if gs.fit_method(gs.read_record(fit_path.with_suffix(".json"))) != gs.HAIRDECK:
+    if gs.fit_method(gs.read_record(fit_path.with_suffix(".json"))) not in STRAND_MODES:
         return blob, sha[:16]
     version = f"{sha[:16]}.s{RECORD_VERSION}"
     record = record_for_fit(character_name, fit_path)

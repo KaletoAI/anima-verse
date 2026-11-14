@@ -187,3 +187,105 @@ def texture_garment(garment: Any, card: np.ndarray) -> Any:
     return dataclasses.replace(garment, image=strip_atlas(), mime="image/png", mr_image=b"", mr_mime="",
                                uvs=variant_uvs(garment.uvs, card),
                                indices=card_faces(garment.indices, garment.uvs, card))
+
+
+# --- HAAR cards -------------------------------------------------------------------------------------------------
+
+#: A HAAR card's width (m): twice the spread of its strands across it + ``HAAR_WIDTH_PAD_M``, clamped to
+#: ``HAAR_WIDTH_LIMITS``, tapered to ``HAAR_TIP_TAPER`` of that at the tip (the spike's ``cards.build``).
+HAAR_WIDTH_PAD_M = 0.004
+HAAR_WIDTH_LIMITS: Tuple[float, float] = (0.006, 0.030)
+HAAR_TIP_TAPER = 0.7
+#: The k-means feature weight of the root (it keeps a card's strands growing from one place) and its iterations.
+HAAR_ROOT_WEIGHT = 3.0
+HAAR_KMEANS_ITER = 20
+#: A card row farther than this from the body takes its normal from the head centre (a flyaway), not the SDF.
+HAAR_FAR_M = 0.05
+#: A strip's inset from the column edges in u (the strand lines start 6 px into a 128 px strip).
+HAAR_U_INSET = 0.04
+#: Passes of the clearance push of the card vertices.
+HAAR_PUSH_ITERATIONS = 6
+#: The strip variants a HAAR card uses: all but the last column, whose root end holds the cap's opaque patch
+#: (``SOLID_PATCH_PX``). A HAAR card's root lies on the crown in plain view from above; in that column its first
+#: segment sampled the patch and showed as a solid chip (Kira, the sample job: ~1/8 of the crown cards).
+HAAR_VARIANTS = ATLAS_VARIANTS - 1
+
+
+def _resample(P: np.ndarray, n: int) -> np.ndarray:
+    P = np.asarray(P, np.float64)
+    seg = np.linalg.norm(np.diff(P, axis=1), axis=2)
+    cum = np.concatenate([np.zeros((len(P), 1)), np.cumsum(seg, 1)], 1)
+    out = np.empty((len(P), n, 3))
+    for i in range(len(P)):
+        q = np.linspace(0, cum[i, -1], n)
+        for a in range(3):
+            out[i, :, a] = np.interp(q, cum[i], P[i, :, a])
+    return out
+
+
+def haar_cards(X: np.ndarray, sdf, *, n_cards: int = 700, n_seg: int = 16, clear: float = 0.004, seed: int = 0,
+               centre: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Alpha cards from draped strands ``X`` (S, P, 3) — the HAAR spike's ``cards.build`` (strand-hair spec § 6.3.1
+    step 4) -> ``(V, F, UV, card)``.
+
+    The strands are resampled to ``n_seg + 1`` rows and clustered by k-means (``scipy.cluster.vq.kmeans2``,
+    k-means++ seeded by ``seed``, so a refit is bitwise the same) on ``[root * HAAR_ROOT_WEIGHT, row n_seg/3, row
+    2 n_seg/3, tip]`` into K = min(``n_cards``, S // 3) clusters. A card is its cluster's mean curve: the normal at
+    each row is the body ``sdf``'s gradient (outward; a row farther than ``HAAR_FAR_M`` from the body: radial from
+    ``centre`` when given), made perpendicular to the tangent; the width runs across ``tangent x normal``. Each card
+    has ``n_seg + 1`` rows of 2 vertices (left, right), root first: card k is vertices ``[2 (n_seg + 1) k, 2 (n_seg +
+    1) (k + 1))`` and every card vertex is then pushed ``clear`` out of ``sdf``. ``UV``: the strip atlas, u
+    ``HAAR_U_INSET`` .. ``1 - HAAR_U_INSET`` in the column of variant ``k % HAAR_VARIANTS`` (``u' = (variant + u) /
+    ATLAS_VARIANTS``), v 1 at the root .. 0 at the tip. ``card`` (n,) the card of each vertex. An empty cluster gives
+    no card (cards are renumbered densely)."""
+    from scipy.cluster.vq import kmeans2
+    from app.core.garment_fit import _unit
+    X = np.asarray(X, np.float64)
+    if X.ndim != 3 or X.shape[2] != 3 or X.shape[1] < 2:
+        raise ValueError(f"haar_cards: strands of shape {X.shape}")
+    rows = int(n_seg) + 1
+    U = _resample(X, rows)
+    feat = np.concatenate([U[:, 0] * HAAR_ROOT_WEIGHT, U[:, n_seg // 3], U[:, 2 * n_seg // 3], U[:, -1]], 1)
+    K = min(int(n_cards), len(U) // 3)
+    if K < 1:
+        raise ValueError(f"haar_cards: {len(U)} strands make no card")
+    _, lab = kmeans2(feat, K, seed=int(seed), minit="++", iter=HAAR_KMEANS_ITER)
+    taper = np.linspace(1.0, HAAR_TIP_TAPER, rows)
+    V, UV, card = [], [], []
+    k_out = 0
+    for k in range(K):
+        m = lab == k
+        if not m.any():
+            continue
+        P = U[m]
+        c = P.mean(0)
+        tan = _unit(np.gradient(c, axis=0))
+        nrm = np.asarray(sdf.grad(c), np.float64)
+        if centre is not None:
+            far = np.asarray(sdf.sample(c)) > HAAR_FAR_M
+            nrm[far] = (c - np.asarray(centre, np.float64))[far]
+        nrm = nrm - (nrm * tan).sum(1, keepdims=True) * tan
+        nrm = _unit(nrm)
+        bi = np.cross(tan, nrm)
+        spread = np.abs(((P - c) * bi[None]).sum(2)).max(0) if len(P) > 1 else np.zeros(rows)
+        w = np.clip(2 * spread + HAAR_WIDTH_PAD_M, *HAAR_WIDTH_LIMITS) * taper
+        half = (bi * (w / 2)[:, None])
+        V.append(np.stack([c - half, c + half], 1).reshape(-1, 3))
+        v = 1.0 - np.arange(rows) / n_seg
+        UV.append(np.stack([np.stack([np.full(rows, HAAR_U_INSET), v], 1),
+                            np.stack([np.full(rows, 1 - HAAR_U_INSET), v], 1)], 1).reshape(-1, 2))
+        card.append(np.full(2 * rows, k_out, np.int64))
+        k_out += 1
+    V = np.concatenate(V)
+    card = np.concatenate(card)
+    UVa = np.concatenate(UV)
+    UVa[:, 0] = (card % HAAR_VARIANTS + UVa[:, 0]) / ATLAS_VARIANTS
+    a = (np.arange(k_out)[:, None] * 2 * rows + 2 * np.arange(n_seg)[None, :]).ravel()
+    F = np.concatenate([np.stack([a, a + 1, a + 3], 1), np.stack([a, a + 3, a + 2], 1)], 1).reshape(-1, 3)
+    for _ in range(HAAR_PUSH_ITERATIONS):
+        d = np.asarray(sdf.sample(V))
+        m = d < clear
+        if not m.any():
+            break
+        V[m] += (clear - d[m])[:, None] * _unit(np.asarray(sdf.grad(V[m])))
+    return V, F.astype(np.int64), UVa, card
