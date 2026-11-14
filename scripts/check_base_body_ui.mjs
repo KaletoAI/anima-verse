@@ -64,14 +64,11 @@
  *     is that reason; the detail "Tips: <reason>, tip height 4.0 → 0.1 / 5.2 → 0.0 mm, colour difference ΔE
  *     11.4 → 0.7 / 10.4 → 0.2" (one decimal each); with a switched-on part U beside it, the line is the reason, "; ",
  *     then U's "Applied 01:12 — …" line.
- * [10] The Extension bones box in the Base body tab (Ruling A45):
- *     extensionBoneNames({groups: {P: {bones: ["mixamorig:LeftBreast", "RightBreast"]}, H: {hair: true, bones:
- *     ["hair_c01_0"]}}}) → ["leftbreast", "rightbreast"] (normBoneName, hair groups left out).
- *     The overlay on a hand-built rig — root (scale 2) ▸ Spine2 at (0, 0.6, 0) ▸ the leaf LeftBreast at (0.05, 0.05,
- *     0.04) in Spine2's frame, bound at rest (boneInverses from the rest pose): 1 bone drawn; upright swingDeg 0. The
- *     leaf turned 30° about its parent's X: its +Y becomes (0, cos 30°, sin 30°), so swingDeg 30; the head in world
- *     space is 2 × (0.05, 0.65, 0.04) = (0.1, 1.3, 0.08) and the drawn tip lies LEAF_LENGTH_M (0.06) × root scale 2 =
- *     0.12 along that direction: (0.1, 1.3 + 0.12 × 0.866025 = 1.403923, 0.08 + 0.12 × 0.5 = 0.14).
+ * [10] The Extension bones box in the Base body tab (Ruling A45; the overlay is A56's, see [12]):
+ *     extensionGroupIds({groups: {P: {bones: ["mixamorig:ExtA", "ExtB"]}, H: {hair: true, bones: ["hair_c01_0"]},
+ *     E: {bones: []}}}) → ["P"] (hair groups and groups without bones left out).
+ *     The readout on the hand-built rig of [12] (the extension bone ExtA bound at rest under Spine2): upright
+ *     swingDeg 0; ExtA turned 30° about its parent's X: its +Y becomes (0, cos 30°, sin 30°), so swingDeg 30.
  *     Source greps: FieldBaseBody renders <ExtensionBonesBox inside `ga-ext-grid` after the first tip panel and before
  *     the others (tipPanels.slice(0, 1) … extensionBox … tipPanels.slice(1)), hands the viewer `motion=` and
  *     `extensionBones`; the CSS grid is `minmax(0, 1fr) minmax(0, 1fr)`, `align-items: start`, one column under an
@@ -96,6 +93,26 @@
  *     the collision sliders say "Discard changes" and (where a reset exists) "Reset to default", never "Revert" /
  *     "Reset" (both "Zurücksetzen" in German); the motion value rows show the name before " (" or ";" with the full
  *     wording as mouse-over.
+ * [12] The extension-group overlay (Ruling A56): the surface a group moves, as a weighted wire, not bone lines.
+ *     A skinned strip of one triangle — v0 (0, 0, 0), v1 (0.1, 0, 0), v2 (0.2, 0.1, 0), all with normal (0, 0, 1) —
+ *     on the skeleton [Spine2, ExtA]: v0 weight 1 to ExtA; v1 0.5 to ExtA + 0.5 to Spine2; v2 1 to Spine2 (0 to
+ *     ExtA). weightedRegion(strip, {1}, 0.1): v0 (1 > 0.1) and v1 (0.5 > 0.1) are in, v2 (0) is out → vertices
+ *     [0, 1], alpha [1, 0.5], and of the triangle's edges only v0–v1 has both ends in → edges [0, 1]. A threshold of
+ *     0.6 keeps v0 alone (vertices [0], no edge).
+ *     The overlay of group G {bones: ["mixamorig:ExtA"]} on root (scale 2) ▸ Spine2 ▸ ExtA + the strip: 1 wire, the
+ *     legend list [{id G, colour 0, 2 vertices}]; the wire's index [0, 1]; its colour alphas [1, 0.5]; its skin
+ *     indices of v1 [1, 0, 0, 0] with weights [0.5, 0.5, 0, 0] (copied as they stand); its positions are the
+ *     strip's pushed OFFSET_M (0.0015 m) out along the normal in the strip's own units — the world scale is 2, so
+ *     0.0015 / 2 = 0.00075: (0, 0, 0.00075) and (0.1, 0, 0.00075); it is skinned by the strip's OWN skeleton
+ *     object (isSkinnedMesh, same skeleton), so the GPU deforms it with the mesh. After update() its matrix is the
+ *     strip's world matrix (scale 2).
+ *     A pure chain — group C {bones: ["ChainA"]} that skins nothing, with a plain one-triangle mesh hung under ChainA
+ *     — takes that attached part: 3 vertices, alpha 1 each, 3 edges, not skinned.
+ *     dispose(): the overlay group and its wire leave the scene; exactly the wire's own geometry and material fire
+ *     "dispose" — the strip's geometry and material, the part's geometry and the skeleton's bone texture fire
+ *     nothing.
+ *     Source greps: Model3DViewer builds createExtensionGroupOverlay (no bone lines module left) and renders the
+ *     legend `ga-ext-legend` from the overlay's groups with groupColorCss.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -273,39 +290,86 @@ const panelOrder = ['<MeshRepairPanel', '<TipSmoothingPanel', '<ExtensionTipPane
 check('[8] panels in step order', panelOrder.every((at, i) => at >= 0 && (i === 0 || at > panelOrder[i - 1])), true);
 
 // [10]
-const overlay = await loadBundled('frontend/src/tabs/characters/extensionBoneOverlay.ts');
-check('[10] bone names', [...overlay.extensionBoneNames({ rev: 'r', groups: {
-  P: { bones: ['mixamorig:LeftBreast', 'RightBreast'] }, H: { hair: true, bones: ['hair_c01_0'] } } })],
-['leftbreast', 'rightbreast']);
+const overlay = await loadBundled('frontend/src/tabs/characters/extensionGroupOverlay.ts');
+check('[10] group ids', overlay.extensionGroupIds({ rev: 'r', groups: {
+  P: { bones: ['mixamorig:ExtA', 'ExtB'] }, H: { hair: true, bones: ['hair_c01_0'] }, E: { bones: [] } } }), ['P']);
 const THREE = require_(join(ROOT, 'node_modules/three/build/three.cjs'));
-const rigRoot = new THREE.Group();
-rigRoot.scale.setScalar(2);
+const disposed = [];
+const spy = (obj, name) => { obj.addEventListener('dispose', () => disposed.push(name)); return obj; };
+const rigRoot = new THREE.Scene();
+const figureRoot = new THREE.Group();
+figureRoot.scale.setScalar(2);
+rigRoot.add(figureRoot);
 const spine = new THREE.Bone();
 spine.name = 'mixamorigSpine2';
 spine.position.set(0, 0.6, 0);
 const leaf = new THREE.Bone();
-leaf.name = 'mixamorigLeftBreast';
+leaf.name = 'mixamorig:ExtA';
 leaf.position.set(0.05, 0.05, 0.04);
 spine.add(leaf);
-const skin = new THREE.SkinnedMesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
-rigRoot.add(spine, skin);
+const chain = new THREE.Bone();
+chain.name = 'ChainA';
+chain.position.set(0, 0.1, 0);
+spine.add(chain);
+const strip = spy(new THREE.BufferGeometry(), 'strip geometry');
+strip.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0.1, 0, 0, 0.2, 0.1, 0], 3));
+strip.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3));
+strip.setAttribute('skinIndex', new THREE.Uint16BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0], 4));
+strip.setAttribute('skinWeight', new THREE.Float32BufferAttribute([1, 0, 0, 0, 0.5, 0.5, 0, 0, 1, 0, 0, 0], 4));
+strip.setIndex([0, 1, 2]);
+const skin = new THREE.SkinnedMesh(strip, spy(new THREE.MeshBasicMaterial(), 'strip material'));
+const part = new THREE.Mesh(spy(new THREE.BufferGeometry(), 'part geometry'), new THREE.MeshBasicMaterial());
+part.geometry.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, 0.01, 0, 0, 0, 0.01, 0], 3));
+chain.add(part);
+figureRoot.add(spine, skin);
 rigRoot.updateMatrixWorld(true);
-skin.bind(new THREE.Skeleton([spine, leaf]));
-const ov = overlay.createExtensionBoneOverlay(THREE, rigRoot, { rev: 'r', groups: { P: { bones: ['mixamorig:LeftBreast'] } } });
-check('[10] one bone drawn', ov?.count, 1);
+skin.bind(new THREE.Skeleton([spine, leaf, chain]));
+skin.skeleton.boneTexture = { dispose: () => disposed.push('bone texture') };
+const groupsG = { rev: 'r', groups: { G: { bones: ['mixamorig:ExtA'] } } };
+const ov = overlay.createExtensionGroupOverlay(THREE, figureRoot, groupsG);
+rigRoot.add(ov.group);
 ov.update();
 check('[10] upright swing', ov.swingDeg(), 0);
 leaf.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 6);
 rigRoot.updateMatrixWorld(true);
-ov.update();
 check('[10] turned 30°', ov.swingDeg(), 30);
-const pos = ov.group.children[0].geometry.getAttribute('position');
-check('[10] head and tip', [0, 1].map((i) => [pos.getX(i), pos.getY(i), pos.getZ(i)].map((v) => Math.round(v * 1e6) / 1e6)),
-  [[0.1, 1.3, 0.08], [0.1, 1.403923, 0.14]]);
-const holder = new THREE.Scene();
-holder.add(ov.group);
+leaf.quaternion.identity();
+rigRoot.updateMatrixWorld(true);
+
+// [12]
+const round = (a) => Array.from(a, (v) => Math.round(v * 1e6) / 1e6);
+const region = overlay.weightedRegion(strip, new Set([1]), 0.1);
+check('[12] region of the strip', [region.vertices, region.alpha, region.edges], [[0, 1], [1, 0.5], [0, 1]]);
+const tight = overlay.weightedRegion(strip, new Set([1]), 0.6);
+check('[12] a higher threshold', [tight.vertices, tight.edges], [[0], []]);
+check('[12] one wire, the legend', [ov.count, ov.groups], [1, [{ id: 'G', color: 0, vertices: 2 }]]);
+const wire = ov.group.children[0];
+const wg = wire.geometry;
+check('[12] wire index and alphas', [Array.from(wg.getIndex().array),
+  [0, 1].map((i) => wg.getAttribute('color').getW(i))], [[0, 1], [1, 0.5]]);
+check('[12] wire skin of v1', [[0, 1, 2, 3].map((k) => wg.getAttribute('skinIndex').getComponent(1, k)),
+  [0, 1, 2, 3].map((k) => wg.getAttribute('skinWeight').getComponent(1, k))], [[1, 0, 0, 0], [0.5, 0.5, 0, 0]]);
+check('[12] wire sits OFFSET_M above the skin', round(wg.getAttribute('position').array), [0, 0, 0.00075, 0.1, 0, 0.00075]);
+check('[12] skinned by the strip\'s own skeleton', [wire.isSkinnedMesh, wire.skeleton === skin.skeleton, wire.isLineSegments],
+  [true, true, true]);
+check('[12] wire takes the strip\'s world matrix', round(wire.matrixWorld.elements), round(skin.matrixWorld.elements));
+const chainOv = overlay.createExtensionGroupOverlay(THREE, figureRoot, { rev: 'c', groups: { C: { bones: ['ChainA'] } } });
+const cw = chainOv?.group.children[0];
+check('[12] a pure chain takes its attached part', [chainOv?.groups, Array.from(cw.geometry.getIndex().array).length / 2,
+  [0, 1, 2].map((i) => cw.geometry.getAttribute('color').getW(i)), !!cw.isSkinnedMesh],
+[[{ id: 'C', color: 0, vertices: 3 }], 3, [1, 1, 1], false]);
+chainOv.dispose();
+disposed.length = 0;
+spy(wg, 'wire geometry');
+spy(wire.material, 'wire material');
 ov.dispose();
-check('[10] dispose detaches', [ov.group.parent, holder.children.length], [null, 0]);
+check('[12] dispose frees only its own', [ov.group.parent, rigRoot.children.length, wire.parent, disposed.sort()],
+  [null, 1, null, ['wire geometry', 'wire material']]);
+const viewerSrc = src('frontend/src/tabs/characters/Model3DViewer.tsx');
+check('[12] viewer: group overlay and legend', [/createExtensionGroupOverlay\(THREE, object, motionRef\.current\)/.test(viewerSrc),
+  existsSync(join(ROOT, 'frontend/src/tabs/characters/extensionBoneOverlay.ts')),
+  /className="ga-ext-legend"[\s\S]{0,400}bonesLegend\.map[\s\S]{0,300}groupColorCss\(g\.color\)/.test(viewerSrc)],
+[true, false, true]);
 const gridAt = baseTab.indexOf('className="ga-ext-grid"');
 const firstTip = baseTab.indexOf('tipPanels.slice(0, 1)', gridAt);
 const boxAt = baseTab.indexOf('{extensionBox}', gridAt);

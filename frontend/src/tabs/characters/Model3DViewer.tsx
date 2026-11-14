@@ -43,8 +43,8 @@ import { areaKindOf } from '../props/propTypes'
 import type { AreaOutline, LeafBbox, MeshLayoutEntry,
   PropSlotValues } from '../props/propTypes'
 import { BuiltAtCaption } from './BuiltAtCaption'
-import { createExtensionBoneOverlay, extensionBoneNames } from './extensionBoneOverlay'
-import type { ExtensionBoneOverlay } from './extensionBoneOverlay'
+import { createExtensionGroupOverlay, extensionGroupIds, groupColorCss } from './extensionGroupOverlay'
+import type { ExtensionGroupOverlay } from './extensionGroupOverlay'
 import { FreshnessCorner } from './FreshnessBadge'
 import type { Freshness } from './FreshnessBadge'
 
@@ -303,9 +303,10 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   meshAdjust = null, focus = null, alphaCutoff, strandHair, strandNote, subject = 'model', extensionBones = false,
   companions, onCompanionState }:
   { url: string; format: string; embeddedTakes?: boolean; clipLoops?: Record<string, { loop: boolean }>; motion?: SecondaryMotionPayload; motionToolbar?: ReactNode; statusPanel?: ReactNode; sideToolbar?: boolean; clipUrl?: string; textureUrl?: string; height?: number;
-    /** Whether the "Extension bones" overlay starts switched on (Ruling A45, `extensionBoneOverlay.ts`): the bones
-     *  of `motion`'s non-hair groups drawn on top, redrawn every frame after the solver. The toggle is offered
-     *  whenever `motion` names such a group; off by default. */
+    /** Whether the "Extension bones" overlay starts switched on (Rulings A45/A56, `extensionGroupOverlay.ts`): the
+     *  surface each of `motion`'s non-hair groups moves, as a wire grid in one colour per group, faded by skin
+     *  weight and skinned with the mesh, plus a colour legend beside the toggle. The toggle is offered whenever
+     *  `motion` names such a group; off by default. */
     extensionBones?: boolean
     /** Current / outdated / no data of the shown model (server verdict,
      *  app/core/model_overview.py) — a badge in the top left corner. */
@@ -549,13 +550,16 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
   secondaryOnRef.current = secondaryOn
   const motionRef = useRef(motion)
   motionRef.current = motion
-  // The extension-bone overlay (Ruling A45): read per frame like the motion, so the toggle never reloads the model.
+  // The extension-group overlay (Rulings A45/A56): read per frame like the motion, so the toggle never reloads the
+  // model.
   const [bonesOn, setBonesOn] = useState(extensionBones)
   const bonesOnRef = useRef(bonesOn)
   bonesOnRef.current = bonesOn
-  const hasExtensionBones = useMemo(() => extensionBoneNames(motion).size > 0, [motion])
-  /** The overlay's readout: the largest swing of a drawn bone from its bind pose (degrees); null = overlay off. */
+  const hasExtensionBones = useMemo(() => extensionGroupIds(motion).length > 0, [motion])
+  /** The overlay's readout: the largest swing of a group bone from its bind pose (degrees); null = overlay off. */
   const [bonesSwing, setBonesSwing] = useState<number | null>(null)
+  /** The legend beside the toggle: the groups the overlay found a surface for, with their colour index. */
+  const [bonesLegend, setBonesLegend] = useState<ExtensionGroupOverlay['groups']>([])
   // Per-strand hair and the figure preview (ruling H-R2): read per frame, so a dragged Stiffness or a new record
   // never reloads the model.
   const strandHairRef = useRef(strandHair)
@@ -1365,9 +1369,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
         let garmentCollision: GarmentCollision | null = null
         let garmentShown: CollisionPayload | null | undefined
         disposers.push(() => garmentCollision?.dispose())
-        // The extension-bone overlay (Ruling A45) in the scene root, rebuilt when the toggle or the payload's
-        // revision changes.
-        let boneOverlay: ExtensionBoneOverlay | null = null
+        // The extension-group overlay (Rulings A45/A56) in the scene root, rebuilt when the toggle or the payload's
+        // revision changes; it frees only what it created.
+        let boneOverlay: ExtensionGroupOverlay | null = null
         let bonesShown: string | null = null
         let bonesClock = 0
         let bonesRead: number | null = null
@@ -2738,8 +2742,9 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           if (bonesWanted !== bonesShown) {
             boneOverlay?.dispose()
             bonesShown = bonesWanted
-            boneOverlay = bonesWanted !== null ? createExtensionBoneOverlay(THREE, object, motionRef.current) : null
+            boneOverlay = bonesWanted !== null ? createExtensionGroupOverlay(THREE, object, motionRef.current) : null
             if (boneOverlay) scene.add(boneOverlay.group)
+            setBonesLegend(boneOverlay ? boneOverlay.groups : [])
           }
           boneOverlay?.update()
           bonesClock += realDelta
@@ -2923,9 +2928,23 @@ export function Model3DViewer({ url, format, motion, motionToolbar, statusPanel,
           {hasExtensionBones ? (
             <button type="button" className="ga-btn ga-btn-sm"
               aria-pressed={bonesOn} onClick={() => setBonesOn(on => !on)}
-              title={t('Show the extension bones on the figure — drag the figure to tilt it and watch them hang')}>
+              title={t('Show the surface each extension group moves as a grid, faint where it moves less — drag the figure to tilt it and watch it hang')}>
               {t('Extension bones')}
             </button>
+          ) : null}
+          {hasExtensionBones && bonesOn && bonesLegend.length ? (
+            <div className="ga-ext-legend" title={t('Grid colour per extension group')} style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, padding: '2px 6px',
+              borderRadius: 4, background: 'rgba(13,17,23,0.72)', color: '#e6edf3', fontSize: 11,
+            }}>
+              {bonesLegend.map((g) => (
+                <span key={g.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  {g.id}
+                  <span aria-hidden="true" style={{ width: 10, height: 10, borderRadius: 2,
+                    border: `2px solid ${groupColorCss(g.color)}`, background: `${groupColorCss(g.color)}55` }} />
+                </span>
+              ))}
+            </div>
           ) : null}
           {collision?.capsules?.length ? (
             <button type="button" className="ga-btn ga-btn-sm"
