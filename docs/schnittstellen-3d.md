@@ -12203,16 +12203,17 @@ model meta when `model_sig` changes). `null` for a model that gets none.
   under 16 own vertices is `skipped`; numbers in `EXTENSION_MEASURED`. `COLLISION_VERSION` (`collision.ts`) is THE
   version every reader compares against; a strand-hair record's frozen capsule list is bound under it, never under
   the record's own `capsules.version` (a payload bump would drop the colliders of every record fitted before it).
-- **Outer trunk capsules (version 6, partners only).** The table's `outer_hips` / `outer_spine` / `outer_chest`,
-  region `outer_trunk` (own scale "Outer trunk (partners)"), span the torso set's three segments (Hips → Spine1 →
-  Spine2 → Neck) but are fitted to the trunk's front and back profile: per segment `a→b`, axis `e` = unit(b − a),
-  front `f` = the `LeftFoot → LeftToeBase` direction across `e`, `z` = (v − a)·f over the start bone's
-  dominant-weighted vertices, `F` = quantile(z, 0.98), `B` = quantile(−z, 0.98); radius (F + B)/2 (× scale), and
-  both endpoints carry positions moved by o = (F − B)/2 along `f` (`a_pos` = a + o·f, `b_pos` = b + o·f, endpoint
-  rule). Without `LeftFoot` / `LeftToeBase` all three are `skipped` ("joint … missing"). Only ANOTHER figure's
-  contact reads them (`PARTNER_ONLY_REGIONS` in `collision.ts`): the figure's own hair, cloth and extension-bone
-  contact never do — the inside-skin `torso` set stays theirs. Numbers: `OUTER_MEASURED` in
-  `app/core/collision.py`.
+- **Outer trunk capsules (version 6, partners only).** The table's `outer_hips` / `outer_waist` / `outer_spine` /
+  `outer_chest`, region `outer_trunk` (own scale "Outer trunk (partners)"), cover the torso set's three segments
+  (Hips → Spine1 in two halves, Spine1 → Spine2, Spine2 → Neck) but follow the trunk's cross-section: per segment
+  `a→b`, axis `e` = unit(b − a), front `f` = the two feet's summed foot → toe direction across `e`; over every body
+  vertex, the axis runs through the middle of the front-to-back profile at the capsule's two ends, and the radius is
+  the 0.25-quantile of the half-depth (front or back, whichever is farther) of the midline profile around that axis
+  (× scale). Both endpoints carry positions fixed to the start joint (`a_pos` / `b_pos`, endpoint rule); the chest's
+  `b_pos` lies r below Neck so its cap ends at the Neck joint. Without a foot or toe joint all four are `skipped`
+  ("joint … missing"). Only ANOTHER figure's contact reads them (`PARTNER_ONLY_REGIONS` in `collision.ts`): the
+  figure's own hair, cloth and extension-bone contact never do — the inside-skin `torso` set stays theirs. The rule
+  and numbers: `CAPSULES` and `OUTER_MEASURED` in `app/core/collision.py`.
 - **Endpoint rule.** An endpoint WITHOUT `a_pos`/`b_pos` is the joint's position. An endpoint WITH one is a
   bind-space point (the space of the body's POSITION accessor) fixed to that joint: it moves like a body vertex
   skinned 100 % to the joint, `p_now = boneWorld · inverse(boneBindWorld) · p_bind`. The head capsule uses it

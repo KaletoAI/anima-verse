@@ -66,15 +66,17 @@ capsule at all — partner contact and the declared channels need one on every c
 pushes what out of them is the renderers' call (``garmentCollision.ts`` ``garmentCapsules``; ``secondaryMotion.ts``
 never pushes a chain out of its own).
 
-VERSION 6 — OUTER TRUNK (partners only). The table's ``outer_hips`` / ``outer_spine`` / ``outer_chest`` (region
-``outer_trunk``, end rule ``"outer"``, own scale) span the same three segments as the inside-skin torso set, but are
-fitted to the trunk's FRONT AND BACK PROFILE: the torso capsules sit around the spine joints, which lie close to the
-back, so they reach 4–8 cm while the front surface lies 11–15 cm from the bone — another person's hair or extension
-chain would stop only after sinking several centimetres into the front. The outer capsule's axis is moved off the
-joints along the body's front direction (``a_pos`` / ``b_pos``, both fixed to the segment's joints), and its radius
-is half the front-to-back depth (the rule at ``CAPSULES``). Only the PARTNER contact of another figure reads them
-(``collision.ts`` ``PARTNER_ONLY_REGIONS``): the figure's own hair, cloth and extension-bone contact never do — the
-circle reaches past the back and the trunk sides of its own body. OUTER_MEASURED has the numbers.
+VERSION 6 — OUTER TRUNK (partners only). The table's ``outer_hips`` / ``outer_waist`` / ``outer_spine`` /
+``outer_chest`` (region ``outer_trunk``, end rules ``"outer"`` / ``"outer_capped"``, own scale) cover the same three
+segments as the inside-skin torso set (the Hips segment in two halves), but follow the trunk's CROSS-SECTION: the
+torso capsules sit around the spine joints, which lie close to the back, so they reach 4–8 cm while the front
+surface lies 11–15 cm from the bone — another person's hair or extension chain would stop only after sinking several
+centimetres into the front. The outer capsule's axis runs through the middle of the body's front-to-back profile
+(``a_pos`` / ``b_pos``, fixed to the segment's start joint), its radius is a low quantile of the half-depth along
+that axis, and the chest's top cap ends at the Neck joint (the rule at ``CAPSULES``). Only the PARTNER contact of
+another figure reads them (``collision.ts`` ``PARTNER_ONLY_REGIONS``): the figure's own hair, cloth and
+extension-bone contact never do — the circle reaches past the trunk sides of its own body. OUTER_MEASURED has the
+numbers.
 
 FITTING (``fit_capsules``) — the S1 spike's method: for each capsule the body vertices whose DOMINANT skin
 weight is the capsule's start bone, their distances to the bone segment ``a→b`` (bind pose; joint positions =
@@ -137,13 +139,23 @@ MIN_VERTICES = 16
 #: around Spine2→Neck) and the upper arm, where hair lies. Cloth and the extension-bone contact never use it
 #: (it reaches out of the skin like ``chest_hair``). SHOULDER_MEASURED below.
 #:
-#: Outer trunk (partners only, version 6; module docstring) — end rule ``"outer"``, per segment ``a→b`` and the start
-#: bone's owned vertices ``v``: axis ``e`` = unit(b − a); front ``f`` = the foot direction across the axis,
-#: unit((toe − foot) − ((toe − foot)·e)·e) with foot/toe = ``FRONT_FROM`` / ``FRONT_TO``; ``z_v`` = (v − a)·f, ``F`` =
-#: quantile(z, q) (the front extent), ``B`` = quantile(−z, q) (the back extent); the axis offset ``o`` = (F − B)/2
-#: and the radius r = ((F + B)/2 · unit + margin) · scale, so the capsule's surface meets the front at ``F`` and the
-#: back at ``B``; ``a_pos`` = a + o·f, ``b_pos`` = b + o·f (bind space, fixed to ``a`` / ``b`` — the ENDPOINT RULE).
-#: A missing foot or toe joint skips all three ("joint … missing"). OUTER_MEASURED below has the quantile.
+#: Outer trunk (partners only, version 6; module docstring) — end rules ``"outer"`` / ``"outer_capped"``, per joint
+#: segment ``a→b`` of length L: axis ``e`` = unit(b − a); front ``f`` = the feet's direction across the axis,
+#: unit(t − (t·e)·e) with t = the sum of (toe − foot) over the ``FRONT`` pairs; lateral ``l`` = e × f. Over EVERY
+#: body vertex v (``body_arrays``: no garment, no attached part): s = (v − a)·e, z = (v − a)·f, l = (v − a)·l.
+#:   centre at height h: the midpoint (max z + min z)/2 of the vertices with |l| < ``OUTER_PROFILE_HALF_WIDTH_M`` in
+#:     the ``OUTER_SLICE_M`` slice around h, moved inside [0, L] (at a joint: the slice just inside the segment);
+#:   profile: per ``OUTER_SLICE_M`` slice [s0, s0 + slice) for s0 = 0, slice, … < L − slice/2, with at least
+#:     ``OUTER_MIN_SLICE_VERTICES`` vertices of |l| < ``OUTER_MIDLINE_HALF_WIDTH_M``: front = max z, back = min z at
+#:     the slice middle s.
+#: A capsule covers the part [lo·L, hi·L] of its segment (``OUTER_SPAN``, default the whole): centres c0 / c1 at its
+#: two ends, c(s) linear between them; per profile slice inside the part the need n = max(front − c(s), c(s) − back);
+#: ``"outer_capped"`` (the cap ends at ``b``): with t = hi·L − s, a slice whose n exceeds t needs (n² + t²)/(2t) (the
+#: sphere around the axis end that reaches it); radius r = (quantile(n, q) · unit + margin) · scale;
+#: ``a_pos`` = a + lo·(b − a) + c0·f, ``b_pos`` = a + hi·(b − a) + c1·f — and for ``"outer_capped"`` ``b_pos`` moves back
+#: towards ``a_pos`` until it lies r/unit below the end along ``e`` (never past ``a_pos``) — bind space, fixed to ``a``
+#: (the ENDPOINT RULE). A missing foot or toe joint skips all four ("joint … missing"), a part without a centre or a
+#: profile slice "no trunk profile". OUTER_MEASURED below has the variants and the quantile.
 CAPSULES: Tuple[Tuple[str, str, str, str, float, float, str], ...] = (
     ("left_thigh", "LeftUpLeg", "LeftLeg", "leg", 0.95, 0.006, "joint"),
     ("left_shin", "LeftLeg", "LeftFoot", "leg", 0.95, 0.006, "joint"),
@@ -159,48 +171,65 @@ CAPSULES: Tuple[Tuple[str, str, str, str, float, float, str], ...] = (
     ("head", "Head", "Head", "head", 0.50, 0.0, "crown"),
     ("left_shoulder_hair", "LeftShoulder", "LeftArm", "shoulder_hair", 0.95, 0.006, "joint"),
     ("right_shoulder_hair", "RightShoulder", "RightArm", "shoulder_hair", 0.95, 0.006, "joint"),
-    ("outer_hips", "Hips", "Spine1", "outer_trunk", 0.98, 0.0, "outer"),
-    ("outer_spine", "Spine1", "Spine2", "outer_trunk", 0.98, 0.0, "outer"),
-    ("outer_chest", "Spine2", "Neck", "outer_trunk", 0.98, 0.0, "outer"),
+    ("outer_hips", "Hips", "Spine1", "outer_trunk", 0.25, 0.0, "outer"),
+    ("outer_waist", "Hips", "Spine1", "outer_trunk", 0.25, 0.0, "outer"),
+    ("outer_spine", "Spine1", "Spine2", "outer_trunk", 0.25, 0.0, "outer"),
+    ("outer_chest", "Spine2", "Neck", "outer_trunk", 0.25, 0.0, "outer_capped"),
 )
 #: The joint that, with the start bone, gives the body axis of the crown rule.
 CROWN_AXIS_FROM = "Hips"
-#: The joints whose bind direction (from → to, across the segment axis) is the body's FRONT for the outer rule — the
-#: rig contract has no front joint; the foot points forward in the bind pose.
-FRONT_FROM = "LeftFoot"
-FRONT_TO = "LeftToeBase"
+#: The joint pairs whose summed bind direction (foot → toe, across the segment axis) is the body's FRONT for the outer
+#: rule — the rig contract has no front joint; the feet point forward in the bind pose, and the two together cancel
+#: their toe-out (OUTER_MEASURED: one foot alone is 6–15° off and misses the target).
+FRONT: Tuple[Tuple[str, str], ...] = (("LeftFoot", "LeftToeBase"), ("RightFoot", "RightToeBase"))
+#: The outer rule's part of its joint segment (fractions of L) per capsule id; an id not listed covers the whole.
+OUTER_SPAN: Dict[str, Tuple[float, float]] = {"outer_hips": (0.0, 0.5), "outer_waist": (0.5, 1.0)}
+#: The outer rule's profile: slice height, the half-width of the slices that give the centre, the half-width of the
+#: midline slices that give the front and back, and the fewest midline vertices a slice needs (metres at rest).
+OUTER_SLICE_M = 0.01
+OUTER_PROFILE_HALF_WIDTH_M = 0.10
+OUTER_MIDLINE_HALF_WIDTH_M = 0.02
+OUTER_MIN_SLICE_VERTICES = 4
 
 #: HEAD_MEASURED (crown rule, 2026-11-09, same five bodies as the torso; body axis Hips→Head): crown above the
 #: Head joint 18.9 / 20.3 / 19.4 / 16.1 / 18.7 cm; p50 radius 7.1 / 7.8 / 7.5 / 6.9 / 8.1 cm; ``b_pos`` 11.7 /
 #: 12.5 / 11.9 / 9.3 / 10.6 cm above the Head joint; the capsule's top lands within 6 mm of the body's top
 #: (1.694–1.701 m on 1.700-m bodies).
 
-#: OUTER_MEASURED (2026-11-14, collision v6, cross-person plan Task 2; read-only copies of the TORSO block's five
-#: bodies, in its order; the outer rule above, margin 0). "front"/"back" = the TORSO block's median profile along the
-#: rule's front ``f`` (per 1-cm slice of the trunk, |lateral| < 10 cm); "> 5 mm" = the share of the bind-pose capsule
-#: surface (caps and sides included) more than 5 mm outside the body volume, voxelised as EXTENSION_MEASURED (all five
-#: volumes close). Front = LeftFoot → LeftToeBase across the axis: 13.7 / 5.7 / 8.4 / 15.0 / 13.5° off the body's +z
-#: (the foot's toe-out).
-#:   outer_hips   F − front q95 −9.4 / −11.0 / −14.0 / −17.1 / −17.0 mm, q98 −6.3 / −6.4 / −9.3 / −9.1 / −11.1,
-#:                q99 −3.8 / −4.8 / −7.1 / −3.7 / −8.7; B − back (q98) +63 / +73 / +73 / +93 / +85 mm (the Hips
-#:                vertices reach below the joint, and their back quantile lies there, not on the back the segment
-#:                spans); r (q98) 11.6 / 11.6 / 11.1 / 14.9 / 12.8 cm, o −0.7 … −0.2 cm; > 5 mm q95 27–34 %,
-#:                q98 33–44 %, q99 35–50 % (q98: the back side 92–93 %, the trunk sides 38–55 %).
-#:   outer_spine  F − front q95 −29 / −30 / −9 / −21 / −38 mm, q98 −25.0 / −26.3 / −4.7 / −16.2 / −34.1,
-#:                q99 −23 / −25 / −3 / −13 / −31; B − back (q98) −10.5 / −17.2 / −14.2 / −27.3 / −14.6 mm;
-#:                r (q98) 9.4 / 9.2 / 8.9 / 9.7 / 9.8 cm, o +2.6 … +4.6 cm; > 5 mm q95 1.0–6.3 %, q98 3.0–9.2 %,
-#:                q99 4.6–11.8 %.
-#:   outer_chest  F − front q95 +3 / +16 / +21 / +29 / +49 mm, q98 +10.1 / +25.3 / +26.6 / +48.6 / +60.6,
-#:                q99 +15 / +29 / +30 / +53 / +65; B − back (q98) −3.8 / −4.1 / −3.2 / −11.5 / −6.4 mm;
-#:                r (q98) 10.4 / 10.3 / 9.9 / 12.7 / 12.9 cm; > 5 mm q95 29–38 %, q98 34–44 %, q99 36–47 %
-#:                (q98: the cap above Neck 68–77 %, the front 54–91 % — the Spine2 vertices reach forward below
-#:                the segment, and the circle is wider than the body above the Neck joint).
-#:   → q 0.98 kept: no quantile keeps F within ±5 mm of the front profile on every segment (q99 comes closest on
-#:   the hips, but the spine stays 3–31 mm short and the chest 15–65 mm over), so the lower outside share of q95
-#:   does not qualify. Variants measured, not taken (the rule is the plan's): the start bone's vertices restricted
-#:   to the segment's slab → hips B − back +39…+69 mm, > 5 mm 23–40 %, chest 32–38 %; the front from both feet
-#:   (no toe-out yaw) → about the same as the rule; both → hips 22–38 %, chest 29–32 %. Script and raw numbers:
-#:   the CX2 ledger (task-2 report).
+#: OUTER_MEASURED (2026-11-14, collision v6, cross-person plan Task 2 fix round 1; read-only copies of the TORSO
+#: block's five bodies, in its order; margin 0, scale 1). Per segment: "out" = the share of the bind-pose capsule
+#: surface (caps and sides) more than 5 mm outside the body volume (voxelised as EXTENSION_MEASURED); "sink" = how far
+#: a point coming straight in along ``f`` from the skin's front (F) or back (B) on the midline (|l| ≤ 2 cm, every 1-cm
+#: slice) travels before it is inside ANY of the partner's capsules (outer set, head, arms, legs); "band" = the same
+#: at |l| ≤ 8 cm. Target: out ≤ 10 % and sink ≤ 3 cm on every segment and body.
+#:   The first rule (the start bone's vertices, F/B = quantile 0.98 of z, axis at the joints ± o) floated the partner
+#:   6–9 cm off the lower back and 1–6 cm ahead of the front: out hips 33–44 %, chest 34–44 %.
+#:   Variants, worst body per segment (out % / sink F/B cm), one capsule per segment unless stated:
+#:     axis through the profile's median centre, r = quantile of the vertex distance: q 0.9 hips 70 / 0.0/1.0,
+#:       spine 47, chest 65 % (q 0.3: hips 24 % / 1.0/6.0, chest 34 %) — no quantile meets both;
+#:     the same per lateral half (2 per segment, 6 in all): q 0.3 hips 25 %, q 0.9 hips 61 % — worse;
+#:     + the chest cap ending at Neck: chest 13 % at q 0.3, 48 % at q 0.9 — the hips still miss;
+#:     axis fitted to the per-slice centres (tilted), r = vertex distance: spine 42–62 % (the fit tilts off the
+#:       front bulge) — out;
+#:     axis from the end centres, r = quantile of the half-depth need (one per segment, capped chest): q 0.2 hips
+#:       14.4 % / 3.8/3.0, spine 4.2 %, chest 5.1 % / 1.4/3.0 — the hips miss (the back of the hips bulges below the
+#:       segment's middle: the back side alone 63–67 % out);
+#:     THE RULE (the same, Hips segment in two halves, 4 capsules): q 0.2 hips 6.4 % / 2.2/2.6, spine 4.2 % / 2.2/2.0,
+#:       chest 5.1 % / 1.4/3.0; q 0.3 hips 9.2 % / 1.6/2.0, spine 5.4 %, chest 6.7 % / 1.2/3.0; q 0.4 hips 11.4 %.
+#:   q 0.25 (the table), per body:
+#:     outer_hips + outer_waist  r 9.6+8.2 / 8.8+8.4 / 8.2+7.8 / 11.6+9.1 / 9.7+8.6 cm; out 4.8 / 3.2 / 3.0 / 7.5 /
+#:                5.7 %, max 19.7 / 19.7 / 17.2 / 34.3 / 24.4 mm (the back side 21–42 %); sink F/B 1.0/1.4 /
+#:                1.6/2.0 / 1.6/2.0 / 1.0/1.8 / 1.8/2.4 cm;
+#:     outer_spine  r 9.1 / 9.0 / 8.5 / 9.4 / 9.5 cm; out 2.2 / 0.9 / 1.0 / 4.9 / 1.5 %, max 10.8–15.0 mm; sink
+#:                1.4/1.6 / 1.8/1.2 / 1.6/1.6 / 1.4/1.4 / 2.2/1.8 cm;
+#:     outer_chest  r 8.7 / 8.9 / 8.1 / 9.1 / 9.1 cm; out 1.3 / 2.0 / 1.2 / 2.7 / 5.9 %, max 9.9–19.9 mm; sink
+#:                0.8/2.8 / 1.0/3.0 / 1.4/2.0 / 1.2/2.8 / 1.2/2.6 cm.
+#:   Not in the target: the top 2 cm below Neck (the chest cap narrows there; midline sink 4.6–7.2 cm, on the fourth
+#:   body nothing covers it), and the band — at |l| 8 cm a circle's chord is thin, sinks 3.4–8.4 cm, and on some
+#:   bodies a ray at the hips or chest sides passes between the capsules (30 cm, nothing hit).
+#:   Front: both feet (``FRONT``); the left foot alone (yawed 6–15° by its toe-out) gives out 15 / 13 / 21 % and a
+#:   chest sink of 4.0 cm at q 0.3 — the target missed. GPU partner budget 8 capsules: the set takes 4. Scripts and
+#:   raw numbers: the CX2 ledger (task-2 report).
 
 #: SHOULDER_MEASURED (2026-11-12, plan 2026-11-12-hairdeck-spring-chains Task 6, Ruling H3 revised; read-only copies
 #: of Kira's base 20d5701a and Rosi's base ed6cab12 with their HairDeck fits — Kira seeds 42/44, Rosi 42 — and the
@@ -406,8 +435,8 @@ def fit_capsules(rigged_glb: bytes, *, scales: Optional[Dict[str, Any]] = None,
         needed = [(start, a_index), (end, b_index)]
         if end_rule == "crown":
             needed.append((CROWN_AXIS_FROM, index_of.get(norm_bone_name(CROWN_AXIS_FROM))))
-        elif end_rule == "outer":
-            needed += [(joint, index_of.get(norm_bone_name(joint))) for joint in (FRONT_FROM, FRONT_TO)]
+        elif end_rule in ("outer", "outer_capped"):
+            needed += [(joint, index_of.get(norm_bone_name(joint))) for pair in FRONT for joint in pair]
         missing = list(dict.fromkeys(n for n, i in needed if i is None))
         if missing:
             skipped.append({"id": capsule_id, "a": a_name, "b": b_name,
@@ -437,21 +466,19 @@ def fit_capsules(rigged_glb: bytes, *, scales: Optional[Dict[str, Any]] = None,
         if float(np.linalg.norm(b - a)) < 1e-4:
             skipped.append({"id": capsule_id, "a": a_name, "b": b_name, "reason": "degenerate segment"})
             continue
-        if end_rule == "outer":
-            axis = (b - a) / np.linalg.norm(b - a)
-            toe = positions[index_of[norm_bone_name(FRONT_TO)]] - positions[index_of[norm_bone_name(FRONT_FROM)]]
-            front = toe - (toe @ axis) * axis
-            if float(np.linalg.norm(front)) < 1e-4:
-                skipped.append({"id": capsule_id, "a": a_name, "b": b_name, "reason": "no front direction"})
+        if end_rule in ("outer", "outer_capped"):
+            toe = sum((positions[index_of[norm_bone_name(to)]] - positions[index_of[norm_bone_name(frm)]]
+                       for frm, to in FRONT), np.zeros(3))
+            fitted = _fit_outer(body.positions, a, b, toe, OUTER_SPAN.get(capsule_id, (0.0, 1.0)),
+                                capped=end_rule == "outer_capped", quantile=quantile, margin=margin,
+                                scale=scales[region], unit=unit)
+            if isinstance(fitted, str):
+                skipped.append({"id": capsule_id, "a": a_name, "b": b_name, "reason": fitted})
                 continue
-            front = front / np.linalg.norm(front)
-            depth = (owned - a) @ front
-            ahead, behind = float(np.quantile(depth, quantile)), float(np.quantile(-depth, quantile))
-            offset = front * (ahead - behind) / 2.0
-            radius = ((ahead + behind) / 2.0 * unit + margin) * scales[region]
+            radius, a_pos, b_pos = fitted
             capsules.append({"id": capsule_id, "a": a_name, "b": b_name, "r": round(radius, 4), "region": region,
-                             "a_pos": [round(float(v), 4) for v in a + offset],
-                             "b_pos": [round(float(v), 4) for v in b + offset]})
+                             "a_pos": [round(float(v), 4) for v in a_pos],
+                             "b_pos": [round(float(v), 4) for v in b_pos]})
             continue
         distance = float(np.quantile(_segment_distances(owned, a, b), quantile))
         radius = (distance * unit + margin) * scales[region]
@@ -466,6 +493,54 @@ def fit_capsules(rigged_glb: bytes, *, scales: Optional[Dict[str, Any]] = None,
                                 body_positions=figure_positions, dominant=figure_dominant, unit=unit,
                                 scales=scales, capsules=capsules, skipped=skipped)
     return {"version": VERSION, "capsules": capsules, "skipped": skipped, "scales": scales}
+
+
+def _fit_outer(points: np.ndarray, a: np.ndarray, b: np.ndarray, toe: np.ndarray, span: Tuple[float, float], *,
+               capped: bool, quantile: float, margin: float, scale: float,
+               unit: float) -> "Tuple[float, np.ndarray, np.ndarray] | str":
+    """One outer-trunk capsule (the rule at ``CAPSULES``): ``(radius, a_pos, b_pos)``, or the skip reason."""
+    length = float(np.linalg.norm(b - a))
+    axis = (b - a) / length
+    front = toe - (toe @ axis) * axis
+    if float(np.linalg.norm(front)) < 1e-4:
+        return "no front direction"
+    front = front / np.linalg.norm(front)
+    rel = points - a
+    s, z, lateral = rel @ axis, rel @ front, np.abs(rel @ np.cross(axis, front))
+    slice_h = OUTER_SLICE_M / unit
+    wide = lateral < OUTER_PROFILE_HALF_WIDTH_M / unit
+    midline = lateral < OUTER_MIDLINE_HALF_WIDTH_M / unit
+
+    def centre(height: float) -> Optional[float]:
+        lo = min(max(height - slice_h / 2, 0.0), length - slice_h)
+        m = wide & (s >= lo) & (s < lo + slice_h)
+        return float((z[m].max() + z[m].min()) / 2) if m.any() else None
+
+    s_lo, s_hi = span[0] * length, span[1] * length
+    c0, c1 = centre(s_lo), centre(s_hi)
+    needs = []
+    for s0 in np.arange(0.0, length - slice_h / 2, slice_h):
+        middle = float(s0 + slice_h / 2)
+        if not s_lo <= middle <= s_hi:
+            continue
+        m = midline & (s >= s0) & (s < s0 + slice_h)
+        if int(m.sum()) < OUTER_MIN_SLICE_VERTICES or c0 is None or c1 is None:
+            continue
+        c = c0 + (c1 - c0) * (middle - s_lo) / (s_hi - s_lo)
+        need = max(float(z[m].max()) - c, c - float(z[m].min()))
+        if capped:
+            t = max(s_hi - middle, 1e-4)
+            if need > t:
+                need = (need * need + t * t) / (2 * t)
+        needs.append(need)
+    if not needs:
+        return "no trunk profile"
+    radius = (float(np.quantile(needs, quantile)) * unit + margin) * scale
+    a_pos = a + (b - a) * span[0] + front * c0
+    b_pos = a + (b - a) * span[1] + front * c1
+    if capped:
+        b_pos = a_pos + (b_pos - a_pos) * max(1.0 - radius / unit / (s_hi - s_lo), 0.0)
+    return radius, a_pos, b_pos
 
 
 def _fit_extension_capsules(extension: Optional[List[Dict[str, Any]]], *, index_of: Dict[str, int],

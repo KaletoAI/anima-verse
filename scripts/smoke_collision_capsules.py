@@ -11,7 +11,8 @@ FIXTURE — a synthetic skinned GLB (``make_body``): Mixamo joints (``mixamorig:
 translation = bind position, inverse bind matrix = translation by its negative), one body mesh whose every
 vertex is weighted 1.0 to ONE joint:
   legs   LeftUpLeg (0.1, 0.95, 0) → LeftLeg (0.1, 0.5, 0) → LeftFoot (0.1, 0.08, 0), right mirrored in x;
-         LeftToeBase (0.1, 0.02, 0.12) (no vertices; with LeftFoot it gives the outer rule's front);
+         LeftToeBase (0.1, 0.02, 0.12), RightToeBase (−0.1, 0.02, 0.12) (no vertices; with the feet they give the
+         outer rule's front);
          rings of radius 0.06 around UpLeg→Leg (weighted UpLeg) and Leg→Foot (weighted Leg);
   arms   LeftArm (0.2, 1.45, 0) → LeftForeArm (0.5, 1.45, 0) → LeftHand (0.75, 1.45, 0), right mirrored;
          rings of radius 0.04 around Arm→ForeArm (weighted Arm) and ForeArm→Hand (weighted ForeArm);
@@ -22,10 +23,11 @@ vertex is weighted 1.0 to ONE joint:
   head   Head (0, 1.6, 0), HeadTop_End (0, 1.8, 0); a capsule SURFACE of radius 0.09 around 1.6..1.8 (rings
          + two hemispheres of 10 rows × 72, polar angle φ = 0.1..π/2), weighted Head ("head sphere 0.09").
 Each ring: 720 evenly spaced θ at 9 stations t = 0.1..0.9 of the segment (all strictly inside, so the distance
-to the segment is the distance to the axis).
+to the segment is the distance to the axis); the torso's ellipse rings at a station every 5 mm instead, from 2.5 mm
+in (s = 0.0025, 0.0075, … < L — two in every 1-cm slice of the outer rule's profile; the distances are the same).
 
 Expected, derived by hand:
-[1] fit_capsules on the full body: 17 capsules (14 + the 3 outer; the current ``collision.VERSION``), nothing
+[1] fit_capsules on the full body: 18 capsules (14 + the 4 outer; the current ``collision.VERSION``), nothing
     skipped.
     A uniform ring has ONE distance, so every quantile = its radius:
       legs  0.060 + 6 mm = 0.066 (left/right thigh, left/right shin)
@@ -43,30 +45,38 @@ Expected, derived by hand:
       spine q = 0.10: sin²(0.05π) = 0.024472 → sqrt(0.0100 + 0.0044·0.024472) = 0.10054 → 0.1005
       chest q = 0.10: same → 0.1005
     (p95 would give sqrt(0.0100 + 0.0044·0.99384) = 0.1199 — the table's torso quantile is what is checked.)
-    OUTER (end rule "outer", region outer_trunk, q 0.98, margin 0), per segment a→b on the start bone's ring:
-      axis e = +y; toe − foot = (0, −0.06, 0.12), its part across e = (0, 0, 0.12) → front f = +z;
-      z_v = (v − a)·f = 0.10 sin θ. For θ uniform P(sin θ ≤ s) = 1/2 + arcsin(s)/π, so the 0.98-quantile is
-      sin(0.48π) = cos(0.02π) = 0.998027 → F = B = 0.0998027 (−z is the same distribution);
-      o = (F − B)/2 = 0, r = (F + B)/2 = 0.0998; a_pos = a, b_pos = b:
-        outer_hips  Hips → Spine1, a_pos (0, 1.0, 0),  b_pos (0, 1.2, 0);
-        outer_spine Spine1 → Spine2, a_pos (0, 1.2, 0), b_pos (0, 1.35, 0);
-        outer_chest Spine2 → Neck, a_pos (0, 1.35, 0), b_pos (0, 1.5, 0).
+    OUTER (end rules "outer" / "outer_capped", region outer_trunk, q 0.25, margin 0): axis e = +y; the two
+      (toe − foot) = (±0, −0.06, 0.12) sum to (0, −0.12, 0.24), across e (0, 0, 0.24) → front f = +z, lateral = x.
+      Only the torso rings lie in the trunk's slices with |x| < 10 cm (legs below Hips, arms beyond |x| 0.2, the
+      shoulder rings at |x| ≥ 0.065 only above y 1.40 with |z| ≤ 0.05 — never the extreme); the midline (|x| < 2 cm)
+      of every 1-cm slice holds the ellipse's θ within 9.6° of ±90° (about 76 per station ≥ 4), whose z reaches
+      ±0.10 exactly (θ = 90° and 270° are on the grid). So every centre is 0 and every need n = 0.10 (z ± 0.10
+      around 0); a ring has one need, so the quantile is 0.10 → r = 0.10 on all four:
+        outer_hips  a Hips, b Spine1, part [0, 0.5]: a_pos (0, 1.0, 0), b_pos (0, 1.1, 0);
+        outer_waist a Hips, b Spine1, part [0.5, 1]: a_pos (0, 1.1, 0), b_pos (0, 1.2, 0);
+        outer_spine Spine1 → Spine2: a_pos (0, 1.2, 0), b_pos (0, 1.35, 0);
+        outer_chest Spine2 → Neck, capped: L = 0.15, slices s = 0.005 … 0.145 (15), t = 0.15 − s; for s ≤ 0.045
+          t ≥ 0.105 ≥ n → 0.10 (five slices); s = 0.055 → (0.01 + 0.095²)/0.19 = 0.100132, rising to 1.0025 at
+          s = 0.145; the 0.25-quantile sits at index 3.5 of the 15 sorted → between two 0.10 → r = 0.10;
+          b_pos moves back to r below Neck: (0, 1.35 + 0.15·(1 − 0.10/0.15), 0) = (0, 1.40, 0) — the top cap ends
+          at Neck (1.50).
     Tolerance 0.3 mm (discrete θ, 0.1-mm rounding). Joint names come back as in the model ("mixamorig:…").
-[2] Without HeadTop_End: still 17 capsules, the head identical (the crown rule needs no crown joint). Without
-    Head: head skipped "joint Head missing". Without LeftFoot: left_shin and the three outer capsules skipped
+[2] Without HeadTop_End: still 18 capsules, the head identical (the crown rule needs no crown joint). Without
+    Head: head skipped "joint Head missing". Without LeftFoot: left_shin and the four outer capsules skipped
     "joint LeftFoot missing" (the outer rule's front needs it), everything else unchanged — no crash.
 [3] Region scale 1.2 everywhere → every radius × 1.2 (thigh 0.0792, upper arm 0.0552, hips 0.1200, spine
-    0.1206, shoulder 0.0672, head 0.1080 with b_pos y = 1.889550 − 0.108 = 1.7816, outer 0.0998·1.2 = 0.1198,
-    ±0.4 mm); {"leg": 1.2} alone → legs 0.0792, arms stay 0.046; {"outer_trunk": 1.2} alone → the three outer
-    radii 0.1198, their a_pos/b_pos unchanged (o is not scaled), every other radius unchanged. validate_scales refuses
+    0.1206, shoulder 0.0672, head 0.1080 with b_pos y = 1.889550 − 0.108 = 1.7816, outer 0.10·1.2 = 0.12,
+    ±0.4 mm); {"leg": 1.2} alone → legs 0.0792, arms stay 0.046; {"outer_trunk": 1.2} alone → the four outer
+    radii 0.12, their a_pos and the hips/waist/spine b_pos unchanged (the centre is not scaled), outer_chest b_pos
+    keeps its cap at Neck: y = 1.35 + 0.15·(1 − 0.12/0.15) = 1.38; every other radius unchanged. validate_scales refuses
     0.4, 1.6, "x", an unknown region; fills missing regions with 1.0.
 [4] A grafted garment node (``garment_dress_x``, a ring of radius 0.30 weighted LeftUpLeg) changes nothing:
     left_thigh stays 0.066 (body_arrays skips garment nodes).
 [5] The stored record (``collision.ensure_path`` on <tmp>/model3d/<sig>.glb + sidecar, scales passed in):
-    own model → record {current version, source own, sha256 = sha of the file, scales = defaults, 17 capsules},
+    own model → record {current version, source own, sha256 = sha of the file, scales = defaults, 18 capsules},
     written into the
-    sidecar; a second call fits nothing (fit counter unchanged); new file bytes (no LeftFoot: 17 − left_shin −
-    3 outer = 13 capsules) → refitted (counter +1).
+    sidecar; a second call fits nothing (fit counter unchanged); new file bytes (no LeftFoot: 18 − left_shin −
+    4 outer = 13 capsules) → refitted (counter +1).
     Outfit (sidecar source "base_body", base_signature B, base_model_sha256 S) carrying the base record
     (source own, sha256 S) → current, relabelled {source base, base_signature B}, NOT refitted.
     The same outfit with base_model_sha256 S2 (built on another base) → refitted on its own file, record
@@ -77,10 +87,10 @@ Expected, derived by hand:
     the record (source own); the result's ``noop`` stays the extension rig's answer (True here — a no-op
     rebuild publishes no sidecar; the next ensure_path stores the set).
 [7] model_overview: base_model_steps / outfit_model_steps carry a "collision" row after extension_rig:
-      record with 17 capsules → done "17 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · head
-      9.0 cm · shoulder_hair 5.6 cm · outer_trunk 10.0 cm", numbers count 17; on the outfit "… · from the base
+      record with 18 capsules → done "18 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · head
+      9.0 cm · shoulder_hair 5.6 cm · outer_trunk 10.0 cm", numbers count 18; on the outfit "… · from the base
       model"; none → missing "Not computed"; error → failed with the error; skipped capsules → warning "13 capsules
-      · … · skipped left_shin (joint LeftFoot missing), outer_hips (joint LeftFoot missing), …".
+      · … · skipped left_shin (joint LeftFoot missing), outer_hips (joint LeftFoot missing), outer_waist …, …".
 [8] Extension capsules (collision v2, ``EXTENSION_CAPSULES``; generic joint names, no package needed):
     BUMP — op ``pair_protrusion`` (p50, margin 0, region chest), one-link chain [TestBump], joint H = (0, 1.30,
       0.05); its own vertices = a Fibonacci sphere of N = 4000 points, radius R = 0.05 around c = (0, 1.30, 0.10)
@@ -100,8 +110,11 @@ Expected, derived by hand:
       the points with distance > R·x is the share with |ζ| < sqrt(1 − x²) = 0.05 → x = sqrt(1 − 0.05²) = 0.998749,
       p95 = 0.049937; r = 0.049937 + 0.006 = 0.055937; the cap ends at the tip pushed out by the margin:
       b_pos = H + u·(0.0995 + 0.006 − 0.055937) = (0, 1.30, 0.099563); id "bump:testbump:chest_hair".
-    Payload order: the 17 table capsules, then BUMP, BUMP HAIR, PART1, PART2 (ids "<group>:<normalised bone>").
-    No group (``extension`` None / only an op outside the table, e.g. ``pair_tip``) → the 17 capsules only.
+    The table's capsules are unchanged but ``outer_spine``: the outer rule reads EVERY body vertex, and the bump is
+    body mesh inside the Spine1 → Spine2 slices reaching z 0.15 > 0.10, so outer_spine grows (only checked as
+    larger — the sphere's slices move the end centre as well).
+    Payload order: the 18 table capsules, then BUMP, BUMP HAIR, PART1, PART2 (ids "<group>:<normalised bone>").
+    No group (``extension`` None / only an op outside the table, e.g. ``pair_tip``) → the 18 capsules only.
     Scale chest 1.2 → BUMP r = 0.051962, b_pos z = 0.05 + 0.0995 − 0.051962 = 0.097538; BUMP HAIR and PART
     unchanged. Scale chest_hair 1.2 → BUMP HAIR r = 0.067125, b_pos z = 0.05 + 0.0995 + 0.0072 − 0.067125
     = 0.089575; BUMP unchanged. HAIR_CLEARANCE_M = garment_fit.HAIR_CLEAR_M.
@@ -120,13 +133,16 @@ Expected, derived by hand:
     unchanged (the region is the op's own). The payload version is ``collision.VERSION`` ≥ 5 (v5 brought the
     region; a later bump keeps it). ``validate_scales`` knows ``appendage``. ``extension_chains`` keeps a group of
     op appendage_chain.
-[10] OUTER RULE (collision v6), ``torso_shift`` 0.03: the rings' centres at z = +0.03, the joints unchanged. Then
-    z_v = 0.03 + 0.10 sin θ → F = 0.03 + 0.0998027 = 0.1298027, B = −0.03 + 0.0998027 = 0.0698027;
-    o = (F − B)/2 = 0.03, r = (F + B)/2 = 0.0998; outer_spine a_pos = Spine1 + o·f = (0, 1.2, 0.03), b_pos =
-    (0, 1.35, 0.03); outer_hips a_pos (0, 1.0, 0.03). The table's inside-skin torso capsules keep their joints
-    (no positions). Without LeftToeBase: outer_hips / outer_spine / outer_chest skipped "joint LeftToeBase
-    missing", the 14 others fitted. Front follows the toe: LeftToeBase moved to (0.1, 0.02, −0.12) → f = −z,
-    z_v = −(0.03 + 0.10 sin θ) → o = −0.03 along −z, so a_pos is again (0, 1.2, 0.03) (the same physical point).
+[10] OUTER RULE (collision v6), ``torso_shift`` 0.03: the rings' centres at z = +0.03, the joints unchanged. Every
+    slice's front/back is 0.03 ± 0.10 → every centre c = 0.03, every need 0.10 → r = 0.10 (the chest as in [1]);
+    the axis runs through the centres: outer_hips a_pos (0, 1.0, 0.03), outer_waist a_pos (0, 1.1, 0.03),
+    outer_spine a_pos = Spine1 + c·f = (0, 1.2, 0.03), b_pos (0, 1.35, 0.03), outer_chest b_pos (0, 1.40, 0.03).
+    The table's inside-skin torso capsules keep their joints (no positions). Without LeftToeBase: the four outer
+    capsules skipped "joint LeftToeBase missing", the 14 others fitted. Front follows the feet: both toes moved to
+    z = −0.12 → f = −z, z = −(0.03 + …) → c = −0.03 along −z, so a_pos is again (0, 1.2, 0.03) (the same physical
+    point). Toe-out cancels: LeftToeBase (0.15, 0.02, 0.12), RightToeBase (−0.15, 0.02, 0.12) → the sum (0, −0.12,
+    0.24), f = +z exactly → r 0.10, outer_spine a_pos (0, 1.2, 0.03) unchanged. Both feet count: only LeftToeBase at
+    z = −0.12 → the sum (0, −0.12, 0) lies along e → the four outer capsules skipped "no front direction".
 """
 import hashlib
 import json
@@ -142,8 +158,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 FAILS = []
-#: The table's capsules on the full fixture: 14 (leg, arm, torso, head, shoulder_hair) + 3 outer_trunk.
-TABLE = 17
+#: The table's capsules on the full fixture: 14 (leg, arm, torso, head, shoulder_hair) + 4 outer_trunk.
+TABLE = 18
+OUTER = ["outer_hips", "outer_waist", "outer_spine", "outer_chest"]
 
 
 def check(label, got, want):
@@ -165,6 +182,7 @@ JOINTS = {
     "Head": (0, 1.6, 0), "HeadTop_End": (0, 1.8, 0),
     "LeftUpLeg": (0.1, 0.95, 0), "LeftLeg": (0.1, 0.5, 0), "LeftFoot": (0.1, 0.08, 0), "LeftToeBase": (0.1, 0.02, 0.12),
     "RightUpLeg": (-0.1, 0.95, 0), "RightLeg": (-0.1, 0.5, 0), "RightFoot": (-0.1, 0.08, 0),
+    "RightToeBase": (-0.1, 0.02, 0.12),
     "LeftShoulder": (0.05, 1.45, 0), "RightShoulder": (-0.05, 1.45, 0),
     "LeftArm": (0.2, 1.45, 0), "LeftForeArm": (0.5, 1.45, 0), "LeftHand": (0.75, 1.45, 0),
     "RightArm": (-0.2, 1.45, 0), "RightForeArm": (-0.5, 1.45, 0), "RightHand": (-0.75, 1.45, 0),
@@ -172,13 +190,13 @@ JOINTS = {
 N_THETA, STATIONS = 720, np.linspace(0.1, 0.9, 9)
 
 
-def ring(a, b, rx, rz=None):
+def ring(a, b, rx, rz=None, stations=None):
     """Points around segment a→b: the axis is y (vertical segments) or x (arms)."""
     a, b = np.asarray(a, float), np.asarray(b, float)
     th = np.arange(N_THETA) * 2 * np.pi / N_THETA
     rz = rx if rz is None else rz
     out = []
-    for t in STATIONS:
+    for t in STATIONS if stations is None else stations:
         c = a + t * (b - a)
         if abs(b[0] - a[0]) > abs(b[1] - a[1]):   # along x: circle in y/z
             out.append(np.stack([np.full_like(th, c[0]), c[1] + rx * np.cos(th), c[2] + rz * np.sin(th)], 1))
@@ -219,7 +237,9 @@ def body_parts(joints, torso_shift=0.0):
         parts.append((f"{side}Shoulder", ring(JOINTS[f"{side}Shoulder"], JOINTS[f"{side}Arm"], 0.05)))
     for a, b in (("Hips", "Spine1"), ("Spine1", "Spine2"), ("Spine2", "Neck")):
         shift = np.array([0.0, 0.0, torso_shift])
-        parts.append((a, ring(np.add(JOINTS[a], shift), np.add(JOINTS[b], shift), 0.12, 0.10)))
+        length = float(np.linalg.norm(np.subtract(JOINTS[b], JOINTS[a])))
+        stations = np.arange(0.0025, length, 0.005) / length     # every 5 mm, from 2.5 mm in
+        parts.append((a, ring(np.add(JOINTS[a], shift), np.add(JOINTS[b], shift), 0.12, 0.10, stations)))
     parts.append(("Head", head_surface(JOINTS["Head"], JOINTS["HeadTop_End"], 0.09)))
     return [(j, p) for j, p in parts if j in joints]
 
@@ -300,7 +320,7 @@ def main() -> int:
     print("[1] fit on the synthetic body")
     full = collision.fit_capsules(body, scales=None)
     r = radii(full)
-    check("17 capsules, none skipped", (len(full["capsules"]), full["skipped"]), (TABLE, []))
+    check("18 capsules, none skipped", (len(full["capsules"]), full["skipped"]), (TABLE, []))
     check("version", full["version"], collision.VERSION)
     for cid in ("left_thigh", "right_thigh", "left_shin", "right_shin"):
         near(cid, r.get(cid), 0.066, 0.0003)
@@ -321,29 +341,28 @@ def main() -> int:
     check("limbs carry no positions", any("a_pos" in c or "b_pos" in c for c in full["capsules"]
                                           if c["id"] != "head" and c["region"] != "outer_trunk"), False)
     outer = {c["id"]: c for c in full["capsules"] if c["region"] == "outer_trunk"}
-    check("outer ids, after the table's 14", [c["id"] for c in full["capsules"]][14:],
-          ["outer_hips", "outer_spine", "outer_chest"])
-    for cid, a, b, ya, yb in (("outer_hips", "Hips", "Spine1", 1.0, 1.2), ("outer_spine", "Spine1", "Spine2", 1.2, 1.35),
-                              ("outer_chest", "Spine2", "Neck", 1.35, 1.5)):
+    check("outer ids, after the table's 14", [c["id"] for c in full["capsules"]][14:], OUTER)
+    for cid, a, b, ya, yb in (("outer_hips", "Hips", "Spine1", 1.0, 1.1), ("outer_waist", "Hips", "Spine1", 1.1, 1.2),
+                              ("outer_spine", "Spine1", "Spine2", 1.2, 1.35),
+                              ("outer_chest", "Spine2", "Neck", 1.35, 1.4)):
         cap = outer.get(cid, {})
-        near(f"{cid} r (F + B)/2", cap.get("r"), 0.0998027, 0.0003)
+        near(f"{cid} r = the need 0.10", cap.get("r"), 0.10, 0.0003)
         check(f"{cid} joints / region", (cap.get("a"), cap.get("b"), cap.get("region")),
               (f"mixamorig:{a}", f"mixamorig:{b}", "outer_trunk"))
-        check(f"{cid} a_pos / b_pos (o = 0)", (cap.get("a_pos"), cap.get("b_pos")), ([0.0, ya, 0.0], [0.0, yb, 0.0]))
+        check(f"{cid} a_pos / b_pos (centre 0)", (cap.get("a_pos"), cap.get("b_pos")), ([0.0, ya, 0.0], [0.0, yb, 0.0]))
     thigh = next(c for c in full["capsules"] if c["id"] == "left_thigh")
     check("joint names as in the model", (thigh["a"], thigh["b"], thigh["region"]),
           ("mixamorig:LeftUpLeg", "mixamorig:LeftLeg", "leg"))
 
     print("[2] missing joints are skipped and reported")
     notop = collision.fit_capsules(make_body(drop=("HeadTop_End",)))
-    check("no HeadTop_End: 17 capsules, head identical", (len(notop["capsules"]), notop["skipped"],
+    check("no HeadTop_End: 18 capsules, head identical", (len(notop["capsules"]), notop["skipped"],
           next(c for c in notop["capsules"] if c["id"] == "head")), (TABLE, [], head))
     nohead = collision.fit_capsules(make_body(drop=("Head",)))
     check("head skipped", [(s["id"], s["reason"]) for s in nohead["skipped"]], [("head", "joint Head missing")])
     nofoot = collision.fit_capsules(make_body(drop=("LeftFoot",)))
-    check("left_shin and the outer three skipped", [(s["id"], s["reason"]) for s in nofoot["skipped"]],
-          [("left_shin", "joint LeftFoot missing"), ("outer_hips", "joint LeftFoot missing"),
-           ("outer_spine", "joint LeftFoot missing"), ("outer_chest", "joint LeftFoot missing")])
+    check("left_shin and the outer four skipped", [(s["id"], s["reason"]) for s in nofoot["skipped"]],
+          [("left_shin", "joint LeftFoot missing")] + [(cid, "joint LeftFoot missing") for cid in OUTER])
     check("the rest unchanged", {k: v for k, v in radii(nofoot).items()},
           {k: v for k, v in r.items() if k != "left_shin" and not k.startswith("outer_")})
 
@@ -351,7 +370,7 @@ def main() -> int:
     scaled = radii(collision.fit_capsules(body, scales={k: 1.2 for k in collision.REGIONS}))
     for cid, want in (("left_thigh", 0.0792), ("left_upper_arm", 0.0552), ("hips", 0.12002),
                       ("spine", 0.12065), ("head", 0.108), ("left_shoulder_hair", 0.0672),
-                      ("outer_hips", 0.11976), ("outer_spine", 0.11976), ("outer_chest", 0.11976)):
+                      ("outer_hips", 0.12), ("outer_waist", 0.12), ("outer_spine", 0.12), ("outer_chest", 0.12)):
         near(f"{cid} × 1.2", scaled.get(cid), want, 0.0004)
     legs = radii(collision.fit_capsules(body, scales={"leg": 1.2}))
     scaled_head = next(c for c in collision.fit_capsules(body, scales={"head": 1.2})["capsules"] if c["id"] == "head")
@@ -360,14 +379,15 @@ def main() -> int:
     near("leg only: upper arm unchanged", legs.get("left_upper_arm"), 0.046, 0.0003)
     outer_fit = collision.fit_capsules(body, scales={"outer_trunk": 1.2})
     outer_scaled = radii(outer_fit)
-    for cid in ("outer_hips", "outer_spine", "outer_chest"):
-        near(f"outer_trunk only: {cid}", outer_scaled.get(cid), 0.11976, 0.0004)
+    for cid in OUTER:
+        near(f"outer_trunk only: {cid}", outer_scaled.get(cid), 0.12, 0.0004)
     check("outer_trunk only: every other radius unchanged",
           {k: v for k, v in outer_scaled.items() if not k.startswith("outer_")},
           {k: v for k, v in r.items() if not k.startswith("outer_")})
-    check("outer_trunk only: positions unchanged (o is not scaled)",
+    check("outer_trunk only: positions unchanged but the capped chest end (the centre is not scaled)",
           [(c["a_pos"], c["b_pos"]) for c in outer_fit["capsules"] if c["region"] == "outer_trunk"],
-          [(c["a_pos"], c["b_pos"]) for c in full["capsules"] if c["region"] == "outer_trunk"])
+          [(c["a_pos"], c["b_pos"] if c["id"] != "outer_chest" else [0.0, 1.38, 0.0])
+           for c in full["capsules"] if c["region"] == "outer_trunk"])
     for bad in ({"leg": 0.4}, {"arm": 1.6}, {"torso": "x"}, {"tail": 1.0}, [1.0]):
         try:
             collision.validate_scales(bad)
@@ -475,7 +495,7 @@ def main() -> int:
         rows = [(s["status"], s["detail"], s["numbers"]) for s in steps if s["id"] == "collision"]
         return rows[0] if rows else None
 
-    want = ("17 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · head 9.0 cm · shoulder_hair 5.6 cm"
+    want = ("18 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · head 9.0 cm · shoulder_hair 5.6 cm"
             " · outer_trunk 10.0 cm")
     got = row(mo.base_model_steps({"rig": "mixamo", "collision": record}, front_meta=None))
     check("base: done", got and got[:2], ("done", want))
@@ -493,7 +513,8 @@ def main() -> int:
     check("skipped: warning", got and got[:2],
           ("warning", "13 capsules · leg 6.6 cm · arm 4.6 cm · torso 10.0–10.1 cm · head 9.0 cm · shoulder_hair "
                       "5.6 cm · skipped left_shin (joint LeftFoot missing), outer_hips (joint LeftFoot missing), "
-                      "outer_spine (joint LeftFoot missing), outer_chest (joint LeftFoot missing)"))
+                      "outer_waist (joint LeftFoot missing), outer_spine (joint LeftFoot missing), outer_chest "
+                      "(joint LeftFoot missing)"))
     outfit_meta = {"rig": "mixamo", "source": "base_body", "collision": {**record, "source": "base"}}
     got = row(mo.outfit_model_steps(outfit_meta, base=None, base_meta=None, wanted_variant=None, deciders=[],
                                     shown=[], dressed_records={}, garments=[], tiers=["full"]))
@@ -516,7 +537,11 @@ def main() -> int:
     ids = [c["id"] for c in fit["capsules"]]
     check("table first, then bump, bump hair, part1, part2", ids[TABLE:],
           ["bump:testbump", "bump:testbump:chest_hair", "part:testpart1", "part:testpart2"])
-    check("the table's 17 unchanged", radii({"capsules": fit["capsules"][:TABLE]}), r)
+    check("the table's 18 unchanged but outer_spine", {k: v for k, v in radii({"capsules": fit["capsules"][:TABLE]}).items()
+                                                      if k != "outer_spine"},
+          {k: v for k, v in r.items() if k != "outer_spine"})
+    check("outer_spine covers the bump (the outer rule reads every body vertex)",
+          radii(fit).get("outer_spine", 0) > r["outer_spine"], True)
     bump, bump_hair, part1, part2 = fit["capsules"][TABLE:TABLE + 4]
     near("bump r = R·sqrt(0.75)", bump["r"], 0.043301, 0.0002)
     check("bump endpoints / region", (bump["a"], bump["b"], bump["region"]),
@@ -533,8 +558,8 @@ def main() -> int:
           ("mixamorig:TestPart1", "mixamorig:TestPart2", False, "attached_part"))
     near("part2 r (ring)", part2["r"], 0.025, 0.0002)
     check("part2 tip rule", part2.get("b_pos"), [0.0, 0.9, 0.267])
-    check("no group: 17 capsules", len(collision.fit_capsules(ext_body)["capsules"]), TABLE)
-    check("op outside the table: 17 capsules", len(collision.fit_capsules(
+    check("no group: 18 capsules", len(collision.fit_capsules(ext_body)["capsules"]), TABLE)
+    check("op outside the table: 18 capsules", len(collision.fit_capsules(
         ext_body, extension=[{"group": "t", "op": "pair_tip", "chains": [["mixamorig:TestBump"]]}])["capsules"]), TABLE)
     scaled = collision.fit_capsules(ext_body, scales={"chest": 1.2}, extension=groups)["capsules"]
     near("chest × 1.2", scaled[TABLE]["r"], 0.051962, 0.0002)
@@ -579,7 +604,7 @@ def main() -> int:
     fit = collision.fit_capsules(app_body, extension=app_groups)
     check("payload version: v5 brought the appendage region (later bumps keep it)",
           (fit["version"] == collision.VERSION, collision.VERSION >= 5), (True, True))
-    check("the table's 17, then app1, app2", [c["id"] for c in fit["capsules"]][TABLE:],
+    check("the table's 18, then app1, app2", [c["id"] for c in fit["capsules"]][TABLE:],
           ["app:testapp1", "app:testapp2"])
     check("nothing skipped", fit["skipped"], [])
     app1, app2 = (fit["capsules"][TABLE:TABLE + 2] + [{}, {}])[:2]
@@ -612,23 +637,32 @@ def main() -> int:
     check("payload version: v6 brought the outer set (later bumps keep it)", collision.VERSION >= 6, True)
     shifted = collision.fit_capsules(make_body(torso_shift=0.03))
     by_id = {c["id"]: c for c in shifted["capsules"]}
-    spine = by_id.get("outer_spine", {})
-    near("shifted: outer_spine r = (F + B)/2", spine.get("r"), 0.0998027, 0.0003)
-    for k, want in enumerate((0.0, 1.2, 0.03)):
-        near(f"shifted: outer_spine a_pos[{k}] = Spine1 + o·f", (spine.get("a_pos") or [None] * 3)[k], want, 0.0003)
-    for k, want in enumerate((0.0, 1.35, 0.03)):
-        near(f"shifted: outer_spine b_pos[{k}]", (spine.get("b_pos") or [None] * 3)[k], want, 0.0003)
-    near("shifted: outer_hips a_pos z", ((by_id.get("outer_hips") or {}).get("a_pos") or [0, 0, None])[2], 0.03, 0.0003)
+    for cid in OUTER:
+        near(f"shifted: {cid} r = the need 0.10", (by_id.get(cid) or {}).get("r"), 0.10, 0.0003)
+    for cid, key, want in (("outer_hips", "a_pos", (0.0, 1.0, 0.03)), ("outer_waist", "a_pos", (0.0, 1.1, 0.03)),
+                           ("outer_spine", "a_pos", (0.0, 1.2, 0.03)), ("outer_spine", "b_pos", (0.0, 1.35, 0.03)),
+                           ("outer_chest", "b_pos", (0.0, 1.40, 0.03))):
+        for k, w in enumerate(want):
+            near(f"shifted: {cid} {key}[{k}] through the centres", ((by_id.get(cid) or {}).get(key) or [None] * 3)[k],
+                 w, 0.0003)
     check("shifted: the inside-skin torso set keeps its joints",
           [("a_pos" in by_id[c]) or ("b_pos" in by_id[c]) for c in ("hips", "spine", "chest")], [False, False, False])
-    back = collision.fit_capsules(make_body(torso_shift=0.03, extra_joints={"LeftToeBase": (0.1, 0.02, -0.12)}))
+    back = collision.fit_capsules(make_body(torso_shift=0.03, extra_joints={"LeftToeBase": (0.1, 0.02, -0.12),
+                                                                            "RightToeBase": (-0.1, 0.02, -0.12)}))
     back_spine = next((c for c in back["capsules"] if c["id"] == "outer_spine"), {})
-    near("front from the toe: reversed toe, same a_pos z", (back_spine.get("a_pos") or [0, 0, None])[2], 0.03, 0.0003)
-    near("front from the toe: reversed toe, same r", back_spine.get("r"), 0.0998027, 0.0003)
+    near("front from the feet: reversed toes, same a_pos z", (back_spine.get("a_pos") or [0, 0, None])[2], 0.03, 0.0003)
+    near("front from the feet: reversed toes, same r", back_spine.get("r"), 0.10, 0.0003)
+    splay = collision.fit_capsules(make_body(torso_shift=0.03, extra_joints={"LeftToeBase": (0.15, 0.02, 0.12),
+                                                                             "RightToeBase": (-0.15, 0.02, 0.12)}))
+    splay_spine = next((c for c in splay["capsules"] if c["id"] == "outer_spine"), {})
+    check("toe-out cancels: outer_spine a_pos unchanged", splay_spine.get("a_pos"), [0.0, 1.2, 0.03])
+    near("toe-out cancels: r", splay_spine.get("r"), 0.10, 0.0003)
+    one = collision.fit_capsules(make_body(torso_shift=0.03, extra_joints={"LeftToeBase": (0.1, 0.02, -0.12)}))
+    check("both feet count: opposite toes leave no front", [(s["id"], s["reason"]) for s in one["skipped"]],
+          [(cid, "no front direction") for cid in OUTER])
     notoe = collision.fit_capsules(make_body(drop=("LeftToeBase",)))
-    check("no LeftToeBase: the outer three skipped", [(s["id"], s["reason"]) for s in notoe["skipped"]],
-          [("outer_hips", "joint LeftToeBase missing"), ("outer_spine", "joint LeftToeBase missing"),
-           ("outer_chest", "joint LeftToeBase missing")])
+    check("no LeftToeBase: the outer four skipped", [(s["id"], s["reason"]) for s in notoe["skipped"]],
+          [(cid, "joint LeftToeBase missing") for cid in OUTER])
     check("no LeftToeBase: the 14 others fitted", [c["id"] for c in notoe["capsules"]], [c["id"] for c in full["capsules"]][:14])
 
     print("FAIL" if FAILS else "OK", f"({len(FAILS)} failures)" if FAILS else "")

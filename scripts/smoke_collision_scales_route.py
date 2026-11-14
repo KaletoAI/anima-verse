@@ -169,7 +169,7 @@ def main() -> int:
     check("generic: none", out["models"]["cccccccccccc"], {"ok": True, "count": 0, "none": True})
     check("generic: no collision key", "collision" in json.loads(generic.with_suffix(".json").read_text()), False)
     check("answer per humanoid model", (out["models"]["base00000001"]["count"], out["models"]["aaaaaaaaaaaa"]["source"]),
-          (17, "base"))
+          (fixture.TABLE, "base"))
     check("2D and model files untouched", snapshot(), files_before)
     check("sidecars: only the collision key changed", {p.name: sidecar_rest(p) for p in (base, outfit)}, rest_before)
 
