@@ -32,8 +32,6 @@ import { ApiError, apiDelete, apiGet, apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { MeshBackendDialog } from '../../components/MeshBackendDialog'
 import { Model3DViewer } from './Model3DViewer'
-import { ExtensionPresenceNote } from './ExtensionPresenceNote'
-import type { ExtensionPresence } from './extensionPresence'
 import { ModelSteps } from './ModelSteps'
 import { ModelFaceActions } from './ModelFaceActions'
 import type { FaceCleanupState, FaceReferenceState } from './ModelFaceActions'
@@ -117,8 +115,6 @@ export interface Model3DInfo {
   face_reference?: FaceReferenceState | null
   model_rev?: string
   extension_rig?: ExtensionRigResult
-  /** Ruling A64: the served model's extension groups in plain words (`model3d.extension_presence`). */
-  extension_presence?: ExtensionPresence | null
   /** The served body's collision capsules (app/core/collision.py); null for
    *  a model that gets none. */
   collision?: CollisionPayload | null
@@ -1137,7 +1133,6 @@ export function FieldModel3D({ character, onOpenBaseBody }: {
             collision={collisionPreview ?? model.collision}
             showCollision={!!collisionPreview}
             footPose={model.foot_pose ?? null}
-            extensionNote={<ExtensionPresenceNote presence={model.extension_presence} />}
           />
           </div>
           {/* The viewer's own controls: which mesh it shows and (off the pipeline) the preview state — one row. */}
