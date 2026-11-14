@@ -1870,8 +1870,9 @@ body_slots:
 `rigs` maps rig IDs from the same slot to `params` and `attribute_params`.
 Each attribute parameter names a declared attribute and maps a subset of its
 options to finite numbers (booleans are rejected). Unmapped attribute values
-leave the operation default in place. `tpose_prompt` is a non-empty string
-with the usual fragment placeholders. `lora_patterns` is an optional list of
+leave the operation default in place. `tpose_prompt` is optional; when given
+it is a non-empty string with the usual fragment placeholders, and without it
+the mesh input names nothing for the active part (Ruling A74a). `lora_patterns` is an optional list of
 non-empty glob strings; matching is case insensitive for active exposed mesh
 inputs. Operation-specific parameters are validated at execution. Old singular
 rig and size declarations are rejected. A malformed declaration rejects the package.
@@ -1905,7 +1906,8 @@ mesh with its own baked material. The companion carries the pods; without it
 they follow the anchor bone. Other rig operations keep their existing rules.
 
 Only mesh-input occasions `tpose` and `tpose_view` replace an exposed slot's
-fragment with `tpose_prompt` and suppress its slot LoRAs. Covered slots, ordinary
+fragment with `tpose_prompt` (or drop it when the slot declares none) and
+suppress its slot LoRAs. Covered slots, ordinary
 expressions, outfit previews and pose references retain their normal behavior.
 The main render and enabled extra views share the mesh variant. Changing the
 switch schedules missing T-pose inputs followed by the missing mesh, regardless

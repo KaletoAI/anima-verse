@@ -2,7 +2,8 @@
 
 Hand-derived expectations: one slot switch selects one rig; two size choices
 map to 1 and 1.5. A companion has exactly one link and zero parameters.
-Invalid references, empty text and non-finite values must fail; zero is valid.
+Invalid references, empty text and non-finite values must fail; zero is valid;
+a missing tpose_prompt parses to "" (optional since Ruling A74a).
 All declarations are synthetic; no plugin discovery or world reads occur.
 """
 import sys
@@ -22,6 +23,8 @@ with tempfile.TemporaryDirectory() as tmp:
                rigs={'part': {'params': {}, 'attribute_params': {
                    'size_factor': {'attribute': 'size', 'values': {'small': 1, 'large': 1.5}}}}})
     assert MeshPartSpec.parse(raw, attrs, [rig]).rigs['part']['attribute_params']['size_factor']['values']['large'] == 1.5
+    # tpose_prompt is optional since Ruling A74a: absent -> "" (the mesh input names nothing for the part).
+    assert MeshPartSpec.parse({k: v for k, v in raw.items() if k != 'tpose_prompt'}, attrs, [rig]).tpose_prompt == ''
     invalid = [{'switch': 'missing'}, {'tpose_prompt': ''}, {'lora_patterns': ['']},
                {'lora_patterns': 'fixture'}, {'rig': 'part'}, {'size_attribute': 'size'},
                {'size_factors': {}}, {'params': {}}, {'rigs': {'missing': {}}}]

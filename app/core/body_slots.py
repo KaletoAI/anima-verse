@@ -406,6 +406,7 @@ def prompt_fragments(character_name: str,
             tpl = (str(slot_stored.get("exposed_prompt", "") or "").strip()
                    or spec.prompt.get("exposed", ""))
             if mesh_input and mesh_part_active(spec, profile):
+                # "" when the slot declares none (Ruling A74a): the part is not named at all.
                 tpl = spec.mesh_part.tpose_prompt
             exposed_vals = dict(vals)
             defaulted = set()

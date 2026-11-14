@@ -3,6 +3,8 @@
 Hand-derived: on + mesh input replaces the one exposed fragment and removes
 its one LoRA; ordinary renders and off retain both. Covering removes both.
 The active rig's size is exactly 1.5 and its explicit radius stays 0.02.
+A part without a tpose_prompt (optional since Ruling A74a) names nothing in the
+mesh input: no exposed fragment, its LoRA still removed.
 Synthetic registry only; storage is initialised before world modules import.
 """
 import sys
@@ -28,6 +30,9 @@ with tempfile.TemporaryDirectory() as tmp:
     with patch.object(bs, '_species_packages_for', return_value=[pkg]), patch('app.plugins.registry.packages', return_value=[pkg]), patch('app.core.outfit_renderer.is_free_text_wardrobe', return_value=False):
         assert bs.prompt_fragments('', profile=profile, mesh_input=True)['exposed'] == ['flat large slot']
         assert bs.exposed_slot_loras('', profile=profile, mesh_input=True) == []
+        with patch.object(slot.mesh_part, 'tpose_prompt', ''):
+            assert bs.prompt_fragments('', profile=profile, mesh_input=True)['exposed'] == []
+            assert bs.exposed_slot_loras('', profile=profile, mesh_input=True) == []
         assert bs.prompt_fragments('', profile=profile)['exposed'] == ['visible large part']
         assert len(bs.exposed_slot_loras('', profile=profile)) == 1
         group = er.rig_groups_for('', profile)[0]

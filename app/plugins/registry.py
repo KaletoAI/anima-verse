@@ -292,9 +292,11 @@ class MeshPartSpec:
             raise ValueError("mesh_part must be a mapping")
         if set(raw) - {"switch", "tpose_prompt", "lora_patterns", "rigs"}:
             raise ValueError("unknown mesh_part keys")
-        for key in ("switch", "tpose_prompt"):
-            if not isinstance(raw.get(key), str) or not raw[key].strip():
-                raise ValueError(f"mesh_part.{key} must be a non-empty string")
+        if not isinstance(raw.get("switch"), str) or not raw["switch"].strip():
+            raise ValueError("mesh_part.switch must be a non-empty string")
+        # Optional since Ruling A74a: without it the mesh input names nothing for the part.
+        if "tpose_prompt" in raw and (not isinstance(raw["tpose_prompt"], str) or not raw["tpose_prompt"].strip()):
+            raise ValueError("mesh_part.tpose_prompt must be a non-empty string when given")
         switch = attributes.get(raw["switch"], {})
         if (not isinstance(switch, dict) or switch.get("type") != "select"
                 or not isinstance(switch.get("options"), list) or "on" not in switch["options"]):
@@ -328,7 +330,7 @@ class MeshPartSpec:
                         for key, value in values.items()):
                     raise ValueError("mesh_part attribute values require declared options and finite numbers")
             clean[rig_id] = {"params": dict(params), "attribute_params": dict(mappings)}
-        return cls(raw["switch"], raw["tpose_prompt"].strip(), list(patterns), clean)
+        return cls(raw["switch"], str(raw.get("tpose_prompt") or "").strip(), list(patterns), clean)
 
 
 @dataclass
