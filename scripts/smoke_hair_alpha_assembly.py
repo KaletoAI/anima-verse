@@ -40,7 +40,7 @@ temp world's), ``doubleSided`` true, ``pbrMetallicRoughness.baseColorTexture`` p
 [5] Fails on the old code: BASE ``e1ad6a344``'s ``glb_mesh.graft`` of the same textured garment without
     overrides writes ``alphaMode`` "OPAQUE" (and no cutoff); BASE's ``garment_assembly._state`` has no
     ``alpha_cutoff`` (read from the BASE source text: the key does not occur in it) and BASE's
-    ``FIT_VERSION["hair"]`` is 12 (now 15).
+    ``FIT_VERSION["hair"]`` is 12 (now 16).
 """
 import copy
 import hashlib
@@ -269,8 +269,8 @@ def run_checks(tmp):
     check(seen[1] is None, f"[1] _publish_fit: clothing gets no overrides (got {seen[1]})")
     check(fit == gs.garment_path(CHAR, ITEM, FSIG, "fit"), "[1] the fit lands at its garment path")
     four_facts(fit.read_bytes(), NAME, 0.12, "[1] published fit")
-    check(gs.read_record(fit.with_suffix(".json")).get("fit_version") == garment_fit.FIT_VERSION["hair"] == 15,
-          "[1] record fit_version 15")
+    check(gs.read_record(fit.with_suffix(".json")).get("fit_version") == garment_fit.FIT_VERSION["hair"] == 16,
+          "[1] record fit_version 16")
 
     # [2] the assembly, full tier
     directory = tmp / "model3d"

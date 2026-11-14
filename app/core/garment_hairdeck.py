@@ -135,16 +135,23 @@ CAP_INNER_DEPTH_M = VOX_M
 # 14.8 mm). Cut, the edge is the straight line where that level meets the head. CAP_TUCK_M keeps it under the hair:
 # the hair cards end at the hairline and the fill cards (``scalp_fill_cards``) run down to it, 3 mm past the cap.
 CAP_TUCK_M = 0.003
-# The cap never reaches below the brows in the face (Ruling A80, FIT_VERSION hair 15). The hairline above is the
+# The cap never reaches into the face (Ruling A80, FIT_VERSION hair 15; A80b, hair 16). The hairline above is the
 # lowest FRONT hair vertex, and on a fringe that is the fringe's tip, not where the hair grows: Vallerie's fringe
 # ends at 1.5335 m, on her nasion floor (1.5332), so the one level y = hairline + CAP_TUCK_M cut the cap 43.3 mm below
 # her brow line (1.5786) and 22.5 mm below her eye line (1.5578) — a brown band over forehead, brows and eyes,
 # because the fringe hangs in front of the face and every face triangle there has hair within CAP_REACH_M (Glut's
-# fringe fit: 21.1 mm below the brow). In the face sector the cap's floor (the hairline height its edge sits
-# CAP_TUCK_M above, ``cap_floor``) is lifted to the brow line of the placement landmarks: azimuth about the head's
-# centre (atan2(x - cx, z - cz), the face looks along +z) within FACE_SECTOR_DEG of the front, fading linearly to
-# the plain hairline over FACE_SECTOR_FADE_DEG (the temples; at 85 deg the sideburn in front of the ear follows the
-# hair as before). The fill cards land on the same floor. A fringe covers the forehead with its own hair cards.
+# fringe fit: 21.1 mm below the brow). Hair 15 lifted the cap to the brow: the eyes were clear, but the forehead
+# became a flat 4 cm slab of cap and fill with a hard edge on the brows (a visor, not hair). On a FRINGE (a front
+# hairline at or below the brow line, as in ``_clear_face``) the cap's floor in the face sector — the hairline height
+# its edge sits CAP_TUCK_M above, ``cap_floor`` — is the natural hairline of the scalp instead: ``hairline_target``,
+# brow + HAIRLINE_BROW_RATIO * (crown - brow) of the placement landmarks — the height the auto tilt brings every
+# hairline without a fringe to, so a fringe fit's cap ends where a fit without one ends anyway (pushed hairlines
+# of Anima Divide's fits without a fringe against it: Glut +1.4, Rosi +0.9, Ylva -0.9, Lirien -1.8, Kira -3.4 mm).
+# Below it the forehead is skin; the fringe's own cards are the only hair over it. The face sector: azimuth about the
+# head's centre (atan2(x - cx, z - cz), the face looks along +z) within FACE_SECTOR_DEG of the front, fading linearly
+# to the plain hairline over FACE_SECTOR_FADE_DEG (the temples; at 85 deg the sideburn in front of the ear follows
+# the hair as before). The fill cards land on the same floor (the T-U2b edge: they run CAP_TUCK_M past the cap and
+# fill the band above it). A hairline above the brow is no fringe: its cap is today's, bit for bit.
 FACE_SECTOR_DEG = 60.0
 FACE_SECTOR_FADE_DEG = 25.0
 # Front hairline region: z > head centre z + 0.25 * head depth and |x - head cx| < 0.15 * head width. The plan said
@@ -731,12 +738,23 @@ def face_weight(points: np.ndarray, centre_xz: Tuple[float, float]) -> np.ndarra
     return np.clip((FACE_SECTOR_DEG + FACE_SECTOR_FADE_DEG - azimuth) / FACE_SECTOR_FADE_DEG, 0.0, 1.0)
 
 
-def cap_floor(hairline: float, brow_y: Optional[float], centre_xz: Tuple[float, float]):
+def fringe_floor(hairline: Optional[float], landmarks: Optional[Dict[str, float]]) -> Optional[float]:
+    """The natural hairline height the cap ends at in the face (Ruling A80b) when the front ``hairline`` is a fringe
+    — at or below the landmarks' brow line: ``hairline_target(brow, crown)``; None without a hairline, without
+    landmarks or above the brow (no fringe: the cap keeps the hairline)."""
+    if hairline is None or not landmarks or landmarks.get("brow_y") is None or landmarks.get("crown_y") is None:
+        return None
+    if hairline > float(landmarks["brow_y"]):
+        return None
+    return hairline_target(float(landmarks["brow_y"]), float(landmarks["crown_y"]))
+
+
+def cap_floor(hairline: float, face_y: Optional[float], centre_xz: Tuple[float, float]):
     """The cap's floor per point (Ruling A80): ``floor(points (N, 3)) -> (N,)`` heights, the hairline lifted towards
-    the brow line by ``face_weight`` where the hairline lies below the brow (a fringe): ``hairline + w * max(0,
-    brow - hairline)``. The cap's edge lies ``CAP_TUCK_M`` above it, the fill cards land on it. Without a brow (no
-    landmarks) or a hairline at or above it the floor is the hairline everywhere."""
-    lift = 0.0 if brow_y is None else max(0.0, float(brow_y) - float(hairline))
+    ``face_y`` (``fringe_floor``) by ``face_weight``: ``hairline + w * max(0, face_y - hairline)``. The cap's edge
+    lies ``CAP_TUCK_M`` above it, the fill cards land on it. Without ``face_y`` or with one at or below the hairline
+    the floor is the hairline everywhere."""
+    lift = 0.0 if face_y is None else max(0.0, float(face_y) - float(hairline))
 
     def floor(points: np.ndarray) -> np.ndarray:
         X = np.asarray(points, np.float64).reshape(-1, 3)
@@ -747,7 +765,7 @@ def cap_floor(hairline: float, brow_y: Optional[float], centre_xz: Tuple[float, 
 
 
 def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optional[float] = None,
-               brow_y: Optional[float] = None
+               landmarks: Optional[Dict[str, float]] = None
                ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[float], Dict[str, Any]]:
     """``(positions, faces, normals, hairline_y, info)`` of the scalp cap (faces index the returned positions).
 
@@ -756,8 +774,8 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
     ``CAP_INNER_DEPTH_M`` inside the body SDF), cut along the edge (``clip_patch``); offset ``CAP_OFFSET_M`` along
     the outward vertex normals. The edge lies ``CAP_TUCK_M`` above the floor ``cap_floor``: the front hairline —
     the lowest hair vertex with ``z > head cz + 0.25 depth`` and ``|x - head cx| < 0.15 width`` (head bbox = the
-    Head-weighted vertices) at or above ``floor_y`` (the nasion) — lifted to ``brow_y`` in the face sector (Ruling
-    A80). Face normals are oriented by the SDF gradient at the centroid before they are accumulated into vertex
+    Head-weighted vertices) at or above ``floor_y`` (the nasion) — lifted in the face sector to ``fringe_floor``
+    when it is a fringe (Ruling A80b; ``landmarks`` = the placement's). Face normals are oriented by the SDF gradient at the centroid before they are accumulated into vertex
     normals — the generator body's winding is never trusted — and the winding is flipped to match, so a cap face
     looks outward.
     """
@@ -774,7 +792,8 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
     centroid = P[F].mean(1)
     near, _ = cKDTree(hair_X).query(centroid, distance_upper_bound=CAP_REACH_M * 1.0001)
     edge_y = hairline + CAP_TUCK_M
-    level = P[:, 1] - (cap_floor(hairline, brow_y, (cx, cz))(P) + CAP_TUCK_M)
+    face_y = fringe_floor(hairline, landmarks)
+    level = P[:, 1] - (cap_floor(hairline, face_y, (cx, cz))(P) + CAP_TUCK_M)
     sel = head_v[F].all(1) & (level[F].max(1) > 0) & (near <= CAP_REACH_M)
     candidates = int(sel.sum())
     sel[sel] = sdf.sample(centroid[sel]) > -CAP_INNER_DEPTH_M
@@ -782,14 +801,16 @@ def _scalp_cap(body, head_w: np.ndarray, hair_X: np.ndarray, sdf, floor_y: Optio
         return (*empty, hairline, {"note": "no scalp triangle above the hairline near the hair"})
     Pc, Fcut = clip_patch(P, F[sel], level)
     V, Fl, N, flipped = offset_patch(Pc, Fcut, sdf, CAP_OFFSET_M)
-    lifted = brow_y is not None and brow_y > hairline
+    lifted = face_y is not None and face_y > hairline
+    brow_y = (landmarks or {}).get("brow_y")
     info = {"head_centre_xz": [round(float(cx), 5), round(float(cz), 5)],
             "head_width_m": round(float(width), 5), "head_depth_m": round(float(depth), 5),
             "front_hair_vertices": int(front.sum()), "flipped_faces": flipped,
             "inner_wall_dropped": candidates - int(sel.sum()), "edge_y": round(float(edge_y), 5),
             "brow_y": None if brow_y is None else round(float(brow_y), 5),
-            "face_edge_y": round(float((brow_y if lifted else hairline) + CAP_TUCK_M), 5),
-            "face_lift_m": round(float(brow_y - hairline), 5) if lifted else 0.0}
+            "face_floor_y": round(float(face_y), 5) if lifted else None,
+            "face_edge_y": round(float((face_y if lifted else hairline) + CAP_TUCK_M), 5),
+            "face_lift_m": round(float(face_y - hairline), 5) if lifted else 0.0}
     return V, Fl, N, hairline, info
 
 
@@ -859,8 +880,8 @@ def scalp_fill_cards(Vc: np.ndarray, Fc: np.ndarray, hair: np.ndarray, sdf, crow
                      ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
     """``(V, F, UV, normals, card, report)`` of the flat cards that fill the open scalp (``FILL_COVER_M`` and the
     rest above): ``Vc`` / ``Fc`` the cap, ``hair`` the fitted hair cards' vertices, ``sdf`` the body, ``crown`` the
-    head's top point, ``floor_y`` the cap's floor — a height, or per point (``cap_floor``: lifted to the brow in
-    the face, Ruling A80) — (a card running down to it ends with a row exactly on it), ``front`` = ``(z_min,
+    head's top point, ``floor_y`` the cap's floor — a height, or per point (``cap_floor``: lifted to the natural
+    hairline in the face on a fringe, Ruling A80b) — (a card running down to it ends with a row exactly on it), ``front`` = ``(z_min,
     above_m)``: cap triangles whose centroid lies in front of ``z_min`` and less than ``above_m`` above the floor
     are open whatever hair lies near (the hair ending band, ``CAP_TUCK_M + FILL_EDGE_BAND_M``). Each card is rows
     of two vertices (left, right), root row first; ``card`` numbers the fill cards 0.. in order; ``UV`` u 0 / 1,
@@ -1646,8 +1667,8 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
         colours, colour_info = _correct_colours(C, colour_target)
 
     # scalp cap
-    brow_y = (placement.get("landmarks") or {}).get("brow_y")
-    Vc, Fc, Nc, hairline, cap_info = _scalp_cap(body, head_w, Qp, sdf, placement["hairline_floor_y"], brow_y)
+    landmarks = placement.get("landmarks")
+    Vc, Fc, Nc, hairline, cap_info = _scalp_cap(body, head_w, Qp, sdf, placement["hairline_floor_y"], landmarks)
     nc = len(Vc)
     cap_colour = np.r_[np.percentile(colours[:, :3], CAP_COLOUR_PERCENTILE, axis=0), 1.0]
     below = int((Vc[Fc].mean(1)[:, 1] < hairline).sum()) if len(Fc) else 0
@@ -1656,7 +1677,8 @@ def fit_hairdeck(nohead_glb: bytes, proxy_glb: bytes, rigged_base_glb: bytes, *,
     head_box = _head_box(body.positions, head_v)
     Vf, Ff, Uf, Nf, fill_card, fill_info = scalp_fill_cards(
         Vc, Fc, X, sdf, np.array([head_box[0], top, head_box[1]]),
-        hairline if hairline is None else cap_floor(hairline, brow_y, (head_box[0], head_box[1])),
+        hairline if hairline is None else cap_floor(hairline, fringe_floor(hairline, landmarks),
+                                                    (head_box[0], head_box[1])),
         front=None if hairline is None else (head_box[1] + HAIRLINE_FRONT_DEPTH * head_box[3],
                                              CAP_TUCK_M + FILL_EDGE_BAND_M))
     nf = len(Vf)

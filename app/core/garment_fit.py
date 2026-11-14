@@ -176,6 +176,11 @@ SIDE_DEEP_M = 0.03
 #: 43.3 mm below her brow and 22.5 mm below her eye line, Glut's fringe fit 21.1 mm below the brow. In the face sector
 #: the cap's floor is lifted to the brow (fading out over the temples), the fill cards land on it; the sides and the
 #: back keep the hairline. A fit whose hairline lies above the brow is rebuilt unchanged.
+#: hair 16 (2026-11-15, Ruling A80b — one CPU refit of every HairDeck fit, no hub job; only fringe fits change): on a
+#: fringe (front hairline at or below the brow) the cap and the fill end in the face at the natural hairline of the
+#: scalp, ``garment_hairdeck.fringe_floor`` = brow + 0.25 * (crown - brow) — the height the auto tilt brings every
+#: hairline without a fringe to — instead of the brow: hair 15 left a flat 4 cm slab of cap and fill over the forehead
+#: (Vallerie). The forehead below it is skin under the fringe's own cards.
 #: clothing 10 (2026-11-14, Ruling A35 — one CPU refit of every clothing fit, no hub job): the limb and trunk frames
 #: of a refit / outfit-body transfer come from the skeleton's bind joints (``FRAME_BASIS``; Kai's jeans on
 #: ``obf6474c3b``: off the left thigh 0.1478 -> 0.0002), the sleeves are re-centred on their arms
@@ -206,7 +211,7 @@ SIDE_DEEP_M = 0.03
 #: weights wherever such a vertex is among a garment vertex's nearest, so Ruling A51's exemption of version 12 fits
 #: without a deep opening went with this version.
 #: footwear: its own fit (``footwear_fit``), versioned there.
-FIT_VERSION: Dict[str, int] = {"hair": 15, "clothing": 14, "footwear": FOOTWEAR_FIT_VERSION}
+FIT_VERSION: Dict[str, int] = {"hair": 16, "clothing": 14, "footwear": FOOTWEAR_FIT_VERSION}
 
 
 def fit_version_for(kind: str, method: str = "") -> Optional[int]:
