@@ -48,7 +48,7 @@
  *     `${path}/preview`, deletes with apiDelete(path), and shows no Delete button when the preview says not deletable
  *     (`preview && !preview.deletable ? null`); FigureStored uses StoredDeleteDialog and no ConfirmDialog, labels its
  *     button "Delete…", writes refusalText under a row that cannot be deleted; FitBodySwitch renders "Delete this body
- *     shape…" for a shape (`shown.body && shown.variant !== 'derived'`), disabled when `shown.current`, with
+ *     shape…" for a shape (`shown.body && shown.variant !== 'derived'`), disabled on the current body (`shown.role === 'current'`, Ruling A67), with
  *     STANDS_ON as the reason, and opens StoredDeleteDialog with kind="shape". No window.confirm anywhere in these
  *     files. de.json holds a key for every string of [1]–[3] and the two buttons.
  */
@@ -204,7 +204,7 @@ has('[6] stored list: a light per row', stored, '<StepLight light={storedState(e
 const sw = src('frontend/src/tabs/characters/FitBodySwitch.tsx');
 has('[6] body switch: Delete this body shape…', sw, "t('Delete this body shape…')");
 has('[6] body switch: only a shape', sw, "{shown.body && shown.variant !== 'derived' ? (");
-has('[6] body switch: disabled when current', sw, 'disabled={busy || !!shown.current}');
+has('[6] body switch: disabled when current', sw, "disabled={busy || shown.role === 'current'}");
 has('[6] body switch: says why', sw, 't(STANDS_ON)');
 has('[6] body switch: opens the dialog', sw, 'kind="shape"');
 for (const [name, text] of [['dialog', dialog], ['stored', stored], ['switch', sw]]) {

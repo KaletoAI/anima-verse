@@ -207,14 +207,14 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
       ) : null}
       {shown.body && shown.variant !== 'derived' ? (
         <div style={ROW}>
-          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !!shown.current}
-            title={shown.current ? undefined
+          <button type="button" className="ga-btn ga-btn-sm" disabled={busy || shown.role === 'current'}
+            title={shown.role === 'current' ? undefined
               : t('Shows the files, their size and what becomes due before anything is deleted — no jobs.')}
             onClick={() => setDeleting(shown)}>
             {t('Delete this body shape…')}
           </button>
           <span className="ga-hint">
-            {shown.current ? t(STANDS_ON) : t('Stored for reuse; deleting it spends nothing.')}
+            {shown.role === 'current' ? t(STANDS_ON) : t('Stored for reuse; deleting it spends nothing.')}
           </span>
         </div>
       ) : null}
