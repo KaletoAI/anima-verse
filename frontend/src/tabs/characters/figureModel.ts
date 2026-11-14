@@ -551,7 +551,23 @@ export interface FitBody {
   current: boolean
   /** Ruling A47: skin seen inside the sleeves of what is shown (`garment_fit.arm_light`), null before it existed. */
   arm_light?: ArmLight | null
+  /** Ruling A50: this body's own numbers (`fit_attempts.body_numbers` of what is shown), {} when nothing is. */
+  numbers?: FitBodyNumbers
 }
+
+/** A body's own fit numbers (Ruling A50): the sleeve skin per side, the push / tightness shares, the trunk
+ *  coverage per side against the source (the outfit-body gate's shares). */
+export interface FitBodyNumbers {
+  sleeve_skin_left_cm2?: number | null
+  sleeve_skin_right_cm2?: number | null
+  deep_push_share?: number | null
+  torso_tight_share?: number | null
+  scale_retry?: number | null
+  torso?: Partial<Record<'front' | 'side' | 'back', { fit: number; source: number }>> | null
+}
+
+/** The slot of a body shape's Re-fit button (its run feedback, Ruling A50). */
+export const refitSlot = (body: string) => `fit|body:${body}`
 
 /** The body switch is worth showing when there is more than the plain body's accepted fit to see. */
 export function showBodySwitch(bodies: FitBody[] | undefined): boolean {

@@ -2010,6 +2010,9 @@ class GarmentRunRequest(BaseModel):
     # With a view (Ruling A33): run the view's missing prerequisite views first (the button's explicit "first"
     # action); without it a missing one is a 409 before anything is spent.
     prerequisites: bool = False
+    # Ruling A50: with step "fit", the body shape the Re-fit fits on (an outfit body id; "plain" / None = the plain
+    # body) — the piece dialog's selected body.
+    body: Optional[str] = None
 
 
 class GarmentMeshFetchRequest(BaseModel):
@@ -2675,7 +2678,9 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
     ``{started, queued, position, behind}``. ``state`` (``open`` /
     ``closed``) builds that state's own mesh of a closable piece (the Figure
     tab's "Build the open mesh"); 400 for a state on a piece without one, or
-    ``open`` for a piece not worn now."""
+    ``open`` for a piece not worn now. ``body`` (Ruling A50, with step ``fit``): the body shape the Re-fit fits
+    on — the plain body's fit first when it is due, then the fit on that body (``garments.refit_on_body``); 400
+    for a body that is not stored or a run that is not the fit alone."""
     from app.core import base_body, garments
     _require_character(character_name)
     try:
@@ -2683,10 +2688,11 @@ def run_character_garment(character_name: str, item_id: str, body: GarmentRunReq
                            prerequisites=body.prerequisites)
         if base_body.current_base(character_name) is None:
             raise ValueError(f"{character_name} is not on the base-body pipeline")
+        on = "" if body.body in (None, "", "plain") else str(body.body)
         return garments.start_garment(character_name, item_id, steps=body.step, view=body.view,
                                       force=body.force, state=body.state,
                                       only=bool(body.step) and (not body.chain or body.view is not None),
-                                      prerequisites=body.prerequisites)
+                                      prerequisites=body.prerequisites, body=on)
     except garments.PrerequisiteMissing as e:
         raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:

@@ -78,7 +78,7 @@ import type {
 } from './useGarment'
 import {
   AUTO_BUILD_NOTE, BUILD_STATUS, MESH_MODES, MESH_MODE_HINTS, MESH_MODE_LABELS, PIECE_STATES, PIECE_STATE_LABELS,
-  closableDisabled, showBodySwitch, wearersLine,
+  bodyWords, closableDisabled, refitSlot, showBodySwitch, wearersLine,
 } from './figureModel'
 import type { FitBody, MeshMode, PieceState } from './figureModel'
 import { chainRunAll } from './baseBodyModel'
@@ -641,9 +641,17 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
   const [bodyKey, setBodyKey] = useState('plain')
   const switchOn = showBodySwitch(bodies)
   const shownBody = switchOn ? bodies.find((b) => b.key === bodyKey) || bodies[0] : null
+  // Ruling A50: with a body shape selected, Re-fit fits on THAT body (the plain body's fit first when it is due)
+  // and every button says which body; the numbers beside the plain body's settings are named as the plain body's.
+  const refitBody = shownBody?.body || ''
+  const refitOn = refitBody && shownBody ? bodyWords(shownBody.label, t) : ''
+  const numbersOf = switchOn ? t('Plain body') : ''
+  const onRunFit = (run: GarmentRunBody, slot?: string) =>
+    onRun(refitBody && run.step === 'fit' ? { ...run, body: refitBody } : run, slot)
   const bodySwitch = switchOn ? (
     <FitBodySwitch character={character} itemId={itemId} bodies={bodies} selected={shownBody?.key || 'plain'}
-      onSelect={setBodyKey} onChanged={() => startPoll(0)} />
+      onSelect={setBodyKey} onChanged={() => startPoll(0)} feedback={feedback} refitDisabled={busy}
+      onRefit={noRunAll ? undefined : (b) => onRun({ step: 'fit', force: true, body: b }, refitSlot(b))} />
   ) : null
   /** The model the viewer shows: the selected body's (the plain body's accepted fit = the piece's own preview). */
   const viewed = (own: { url: string | null | undefined; builtAt: string | null | undefined; footPose?: unknown }) =>
@@ -748,7 +756,8 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
             limits={info.limits || {}}
             fitChips={FIT_CHIPS}
             busy={busy || using}
-            onRun={onRun}
+            onRun={onRunFit}
+            refitOn={refitOn}
             feedback={feedback}
             viewRuns={info.view_runs}
             useRuns={info.use_runs}
@@ -776,9 +785,14 @@ export function GarmentPieceDialog({ character, itemId, name, onStatus, onClose,
           )}
           {garment?.fit_settings ? (
             <FitSettings character={character} itemId={itemId} info={garment.fit_settings} busy={busy}
-              feedback={feedback} onRun={onRun} onSaved={() => startPoll(0)} noRunAll={noRunAll} />
+              feedback={feedback} onRun={onRunFit} onSaved={() => startPoll(0)} noRunAll={noRunAll}
+              numbersOf={numbersOf} refitOn={refitOn} />
           ) : null}
-          <GateChips specs={FIT_CHIPS} record={fitRecord} limits={info.limits?.fit} />
+          {numbersOf && fitRecord ? (
+            <div className="ga-hint" style={{ ...ROW, gap: 6 }}>
+              {numbersOf}:<GateChips specs={FIT_CHIPS} record={fitRecord} limits={info.limits?.fit} />
+            </div>
+          ) : <GateChips specs={FIT_CHIPS} record={fitRecord} limits={info.limits?.fit} />}
           {fit?.low && fit.low.ok === false ? (
             <div className="ga-hint" style={WARN_STYLE}>
               {t('Distance tier failed — the full piece is used')}: {fit.low.error}

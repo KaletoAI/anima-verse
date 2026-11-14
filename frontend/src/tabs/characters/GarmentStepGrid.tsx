@@ -333,7 +333,8 @@ function upToText(n: number, t: (s: string) => string): string {
 }
 
 export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitChips, busy, onRun, feedback,
-  viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched, pieceName = '' }: {
+  viewRuns = null, useRuns = null, onUse, onPieceView, meshFetchUrl = null, onMeshFetched, pieceName = '',
+  refitOn = '' }: {
   garment: GarmentInfo | null
   imageSteps: ImageStepSpec[]
   stepLabels: Record<string, string>
@@ -357,6 +358,9 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
   onMeshFetched?: () => void
   /** The piece's name (the mesh viewer's title). */
   pieceName?: string
+  /** Ruling A50: the body shape selected in the dialog's body switch ("" = the plain body) — Re-fit fits on it and
+   *  says so; the row's own numbers are then named as the plain body's. */
+  refitOn?: string
 }) {
   useClockSettings()
   const { t } = useI18n()
@@ -609,7 +613,7 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
             title={armLightText(garment.fit_settings.arm_light, garment.fit_settings.numbers, t)}>
             <StepLight light={armLightColour(garment.fit_settings.arm_light)} />
-            {armLightShort(garment.fit_settings.arm_light, t)}
+            {refitOn ? `${t('Plain body')}: ` : ''}{armLightShort(garment.fit_settings.arm_light, t)}
           </span>
         ) : null}
         <RunBadge mark={runMark(feedback, garment, order, 'fit')} />
@@ -618,8 +622,10 @@ export function GarmentStepGrid({ garment, imageSteps, stepLabels, limits, fitCh
           feedback={feedback}
           slot={runSlot({ step: 'fit' })}
           disabled={busy || !garment || mesh?.status !== 'accepted'}
-          title={garment && mesh?.status !== 'accepted' ? t('Run the previous step first') : t(STEP_HELP.fit)}
-          label={t('Re-fit')}
+          title={garment && mesh?.status !== 'accepted' ? t('Run the previous step first') : refitOn
+            ? t('Fits the piece on the selected body shape again on the CPU — 0 hub jobs. The plain body is fitted first when its fit is due.')
+            : t(STEP_HELP.fit)}
+          label={refitOn ? `${t('Re-fit')} · ${refitOn}` : t('Re-fit')}
           onClick={() => onRun({ step: 'fit', force: true })}
         />
       </div>

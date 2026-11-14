@@ -76,20 +76,6 @@ html, * {
   font-weight: 600;
 }
 
-.ga-header .ga-back {
-  font-size: 13px;
-  color: var(--text-muted, #8b949e);
-  text-decoration: none;
-  padding: 4px 10px;
-  border-radius: var(--radius, 6px);
-  border: 1px solid var(--border, #30363d);
-}
-
-.ga-header .ga-back:hover {
-  color: var(--text, #e6edf3);
-  background: var(--bg-hover, #1f2937);
-}
-
 .ga-tabs {
   display: flex;
   gap: 2px;

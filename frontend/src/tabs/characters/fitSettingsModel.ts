@@ -150,6 +150,18 @@ export function armLightShort(light: ArmLight | null | undefined, t: T): string 
   return t('Arms: {n} cm² of skin seen inside a sleeve').replace('{n}', cm(light.worst_cm2))
 }
 
+/** Ruling A50: a body's trunk coverage in words — "Trunk covered: front 82 % (source 85 %) · side 93 % (source
+ *  92 %) · back 100 % (source 95 %)", the shares the outfit-body gate compares; '' without all three. */
+export function trunkCoverText(torso: Partial<Record<'front' | 'side' | 'back', { fit: number; source: number }>>
+  | null | undefined, t: T): string {
+  const f = torso?.front, s = torso?.side, b = torso?.back
+  if (!f || !s || !b) return ''
+  const pct = (v: number) => `${Math.round(v * 100)} %`
+  return t('Trunk covered: front {f} (source {fs}) · side {s} (source {ss}) · back {b} (source {bs})')
+    .replace('{f}', pct(f.fit)).replace('{fs}', pct(f.source)).replace('{s}', pct(s.fit))
+    .replace('{ss}', pct(s.source)).replace('{b}', pct(b.fit)).replace('{bs}', pct(b.source))
+}
+
 /** "Pushed out over 3 cm 2.7 % · Trunk closer than 1.5 cm 23 % · width +2 %". */
 export function allowanceNumbers(info: FitSettingsInfo, t: T): string {
   const n = info.numbers || {}

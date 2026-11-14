@@ -31,7 +31,8 @@ const SPAN: CSSProperties = { gridColumn: '1 / -1', display: 'flex', gap: 8, ali
 const REASON: CSSProperties = { minWidth: 0, overflowWrap: 'anywhere' }
 const SELECT: CSSProperties = { width: '100%', padding: '1px 4px', fontSize: '1em' }
 
-export function FitSettings({ character, itemId, info, busy, feedback, onRun, onSaved, noRunAll = false }: {
+export function FitSettings({ character, itemId, info, busy, feedback, onRun, onSaved, noRunAll = false,
+  numbersOf = '', refitOn = '' }: {
   character: string
   itemId: string
   info: FitSettingsInfo
@@ -42,6 +43,10 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
   onSaved: () => void
   /** Opened from the Figure tab: no run buttons there (its Build refits). */
   noRunAll?: boolean
+  /** Ruling A50: the body the shown numbers belong to ("Plain body" while a body switch is shown; "" = unnamed). */
+  numbersOf?: string
+  /** Ruling A50: the body shape the Re-fit fits on ("" = the plain body); the button names it. */
+  refitOn?: string
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -100,7 +105,7 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
         <StepLight light={armLightColour(light)} />
         <span style={{ ...REASON, flex: '1 1 0' }}
           title={t('Measured on the shown fit: skin of the arm visible through the sleeve outline, front and back view; green none, yellow below 30 cm², red from 30 cm²')}>
-          {armLightText(light, info.numbers, t)}
+          {numbersOf ? `${numbersOf}: ` : ''}{armLightText(light, info.numbers, t)}
         </span>
         {built ? <span className="ga-hint">{t('Built')} {built}</span> : null}
       </div>
@@ -121,7 +126,9 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
         {t('(width only)')} {info.recorded ? allowanceReason(info, t) : ''}
       </span>
       {info.recorded ? (
-        <div style={SPAN} className="ga-hint" title={t(ALLOWANCE_HINT)}>{allowanceNumbers(info, t)}</div>
+        <div style={SPAN} className="ga-hint" title={t(ALLOWANCE_HINT)}>
+          {numbersOf ? `${numbersOf}: ` : ''}{allowanceNumbers(info, t)}
+        </div>
       ) : null}
       {info.due ? (
         <div style={SPAN}>
@@ -130,7 +137,8 @@ export function FitSettings({ character, itemId, info, busy, feedback, onRun, on
           {noRunAll ? <span className="ga-hint">{t('The next Build refits it.')}</span> : (
             <RunButton feedback={feedback} slot="fitsettings" disabled={busy}
               title={t('Fits the piece again with these settings on the CPU — 0 hub jobs; the shown fit stays in use until then')}
-              label={t('Re-fit (0 hub jobs)')} onClick={() => onRun({ step: 'fit', force: true }, 'fitsettings')} />
+              label={refitOn ? `${t('Re-fit (0 hub jobs)')} · ${refitOn}` : t('Re-fit (0 hub jobs)')}
+              onClick={() => onRun({ step: 'fit', force: true }, 'fitsettings')} />
           )}
         </div>
       ) : (

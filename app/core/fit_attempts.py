@@ -883,7 +883,7 @@ def bodies(character_name: str, item_id: str, *, profile: Optional[Dict[str, Any
     ("plain" | body id), label, status, reason, current (the figure stands on it now), url (the model to show,
     versioned; None: nothing to show), built_at, marks [{kind, count, colour, label}], foot_pose, can_accept,
     accept_block (why not), accepted_at, arm_light (Ruling A47: ``garment_fit.arm_light`` of what is shown, None
-    without)}``. ``status``: ``accepted`` (the gates accepted it), ``user_accepted``
+    without), numbers (Ruling A50, ``body_numbers`` of what is shown: this body's own)}``. ``status``: ``accepted`` (the gates accepted it), ``user_accepted``
     (light green, "Accepted by you", ``reason`` the gates' refusal), ``refused`` (``reason``), ``stale`` (made
     on an older body / piece / algorithm; refitted by the next Build), ``missing``. ``method_note``: how a body
     shape's shoe was fitted (``FIT_METHOD_NOTES``, "" otherwise), ``variant`` "" or ``DERIVED``: a body shape's
@@ -936,6 +936,27 @@ def _built_at(path: Optional[Path]) -> Optional[str]:
         return None
 
 
+#: ``body_numbers``: the metrics a body's entry carries (Ruling A50).
+BODY_NUMBER_KEYS = ("sleeve_skin_left_cm2", "sleeve_skin_right_cm2", "deep_push_share", "torso_tight_share",
+                    "scale_retry")
+
+
+def body_numbers(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Ruling A50 — the numbers of the fit or attempt a body's entry SHOWS (``record``: its fit record or its kept
+    attempt; {} when nothing is shown), so the dialog never shows another body's: ``BODY_NUMBER_KEYS`` from its
+    metrics (None when not measured) and ``torso`` {front, side, back: {fit, source}} — the trunk coverage the
+    outfit-body gate compares (``frame.torso`` of a fit, the refusing ``gates.torso`` of an attempt), None without."""
+    if not record:
+        return {}
+    metrics = record.get("metrics") or {}
+    out: Dict[str, Any] = {k: metrics.get(k) for k in BODY_NUMBER_KEYS}
+    torso = ((record.get("attempt") or {}).get("gates") or {}).get("torso") \
+        or (record.get("frame") or {}).get("torso") or {}
+    shares = torso.get("shares") if isinstance(torso, dict) else None
+    out["torso"] = shares if isinstance(shares, dict) and shares else None
+    return out
+
+
 def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any],
            names: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     from app.core import garment_store as gs
@@ -977,7 +998,8 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
         words(error, attempt.get("gates") if same else None)
     elif status["state"] in ("stale", "outdated") or (current_attempt and attempt):
         entry.update(status="stale", reason=("Made on an older body, piece or fit algorithm, or with other fit "
-                                             "settings — the next Build fits it again"))
+                                             "settings — Re-fit with this body selected, or the next Build, fits "
+                                             "it again"))
     # how a body shape's shoe was fitted (Ruling A40): the fit's record when it is the body's fit, else the attempt's
     method_of = fit_record if entry["status"] in ("accepted", "user_accepted") else (
         record if entry["status"] == "refused" and current_attempt else {})
@@ -1000,6 +1022,7 @@ def _entry(character_name: str, item_id: str, body: str, profile: Dict[str, Any]
     # Ruling A47: the arm light of what the preview shows (skin seen inside the sleeves), None before it existed.
     shown_record = record if show_attempt else (fit_record if entry["_shown"] is not None else {})
     entry["arm_light"] = (shown_record.get("report") or {}).get("arm_light")
+    entry["numbers"] = body_numbers(shown_record)
     if entry["status"] == "refused":
         if found is None or not current_attempt:
             entry["accept_block"] = ("No attempt kept for this refusal (made before attempts were kept) — "
@@ -1037,7 +1060,8 @@ def _derived_entry(character_name: str, item_id: str, body: str, profile: Dict[s
                              record.get("foot_pose"), "can_accept": False, "accept_block": "", "accepted_at": None,
                              "method_note": FIT_METHOD_NOTES["derived"], "variant": DERIVED,
                              "_shown": (glb, marks_path is not None) if glb is not None else None,
-                             "arm_light": (record.get("report") or {}).get("arm_light")}
+                             "arm_light": (record.get("report") or {}).get("arm_light"),
+                             "numbers": body_numbers(record)}
     plain = plain_reason(str(attempt.get("error") or ""), attempt.get("gates"), on_shape=True)
     entry.update(reason=plain["text"], reason_detail=plain["detail"], piece_broken=plain["piece"])
     entry["marks"] = [{"kind": k, "count": int(n), **MARK_KINDS[k]}

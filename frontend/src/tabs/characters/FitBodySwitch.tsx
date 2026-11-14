@@ -9,6 +9,11 @@
  * re-assembly on the CPU (the server's estimate is shown before the click and after it). "Accepted by you" (green)
  * holds until the fit, its body or the fit version changes; "Undo accept" brings the refusal back. Server:
  * `fit_attempts.bodies` (GET …/garments/{item} `bodies`), POST …/garments/{item}/fits/{body}/accept | unaccept.
+ *
+ * Ruling A50: under the buttons the SELECTED body's own numbers, each line named with its body — the skin seen
+ * inside the sleeves per side and the trunk coverage against the source (`numbers`, never the plain body's under a
+ * body shape) — and for a body shape "Re-fit on this body": the piece fitted on it again on the CPU (0 hub jobs;
+ * the plain body's fit first when that is due), a refusal shown red with its reason and its attempt in the viewer.
  */
 import { useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
@@ -17,9 +22,13 @@ import { apiPost } from '../../lib/api'
 import { useToast } from '../../lib/Toast'
 import { StepLight } from './StepRows'
 import { ACCEPTED_BY_YOU, bodyWords } from './figureModel'
+import { refitSlot } from './figureModel'
 import type { FitBody } from './figureModel'
 import type { Light } from './hairstylesModel'
-import { armLightColour, armLightShort } from './fitSettingsModel'
+import { armLightColour, armLightShort, armLightText, trunkCoverText } from './fitSettingsModel'
+import type { FitSettingsInfo } from './fitSettingsModel'
+import { RunButton } from './GarmentSteps'
+import type { RunFeedback } from './useGarment'
 
 /** The follow-up the server estimates after an acceptance or its undo (`figure_build.cost`). */
 interface FollowUp { hub_jobs: number | null; steps: Array<{ name: string; label: string; jobs: number | null }> }
@@ -58,7 +67,8 @@ function followUpWords(f: FollowUp | null | undefined, t: (s: string) => string)
   return `${f.steps.map((s) => s.label).join(', ')} (${jobs})`
 }
 
-export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, onChanged }: {
+export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, onChanged, onRefit, refitDisabled,
+  feedback }: {
   character: string
   itemId: string
   bodies: FitBody[]
@@ -67,6 +77,10 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
   onSelect: (key: string) => void
   /** After an accept / undo: poll the panel again. */
   onChanged: () => void
+  /** Ruling A50: Re-fit the piece on a body shape (absent: no button — the Figure tab's Build refits). */
+  onRefit?: (body: string) => void
+  refitDisabled?: boolean
+  feedback?: RunFeedback
 }) {
   const { t } = useI18n()
   const { toast } = useToast()
@@ -137,7 +151,17 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
           ) : null}
         </div>
       ))}
+      <BodyNumbers body={shown} />
       {legend}
+      {onRefit && shown.body && shown.variant !== 'derived' ? (
+        <div style={ROW}>
+          <RunButton feedback={feedback} slot={refitSlot(shown.body)} disabled={refitDisabled}
+            title={t('Fits the piece on this body shape again on the CPU — 0 hub jobs. The plain body is fitted first when its fit is due. A refusal is shown here with its reason and the refused fit in the viewer.')}
+            label={t('Re-fit on this body (0 hub jobs)')}
+            onClick={() => onRefit(shown.body)} />
+          <span className="ga-hint">{bodyName(shown, t)}</span>
+        </div>
+      ) : null}
       {shown.status === 'refused' ? (
         <div style={ROW}>
           <button type="button" className="ga-btn ga-btn-sm" disabled={busy || !shown.can_accept}
@@ -167,6 +191,29 @@ export function FitBodySwitch({ character, itemId, bodies, selected, onSelect, o
           {after.text} {t('The Figure tab shows it as due.')}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/** Ruling A50: the shown body's own numbers, each line named with the body — never another body's. */
+function BodyNumbers({ body }: { body: FitBody }) {
+  const { t } = useI18n()
+  const n = body.numbers || {}
+  const name = bodyName(body, t)
+  const arms = body.arm_light && body.arm_light.state !== 'none'
+    ? armLightText(body.arm_light, n as FitSettingsInfo['numbers'], t) : ''
+  const trunk = trunkCoverText(n.torso, t)
+  if (!arms && !trunk) return null
+  return (
+    <div className="ga-hint" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+      aria-label={t('Numbers of the body shown')}>
+      {arms ? (
+        <span style={{ display: 'flex', gap: 4, alignItems: 'baseline' }}>
+          <StepLight light={armLightColour(body.arm_light)} />
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{name}: {arms}</span>
+        </span>
+      ) : null}
+      {trunk ? <span>{name}: {trunk}</span> : null}
     </div>
   )
 }

@@ -79,9 +79,6 @@ export default function App() {
     <CharacterFormHostProvider>
     <div className="ga-shell">
       <header className="ga-header">
-        <a className="ga-back" href="/" title={t('Back to chat')}>
-          ← {t('Back to chat')}
-        </a>
         <h1>{t('Game Admin')}</h1>
         <div className="ga-header-controls" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           <GameClock />

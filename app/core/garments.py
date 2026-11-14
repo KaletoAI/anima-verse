@@ -2048,6 +2048,55 @@ def body_fit(character_name: str, item_id: str, *, body_id: str, body_sha: str,
             "record": record if usable else {}, "fsig": fsig, "pending": pending, "error": error}
 
 
+
+#: ``refit_on_body``'s refusal without a plain-body fit to derive from (Ruling A50).
+NO_BASE_FIT_TO_DERIVE = "No fit on the plain body to derive from — Re-fit the plain body first"
+
+
+def refit_on_body(character_name: str, item_id: str, body_id: str, *,
+                  profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Ruling A50 — "Re-fit" with a body shape selected in the piece dialog: fit the clothing / footwear piece
+    ``item_id`` on the outfit body ``body_id`` once more, on the CPU, from the plain body's fit served now. The
+    body's cached refusal is dropped first, the fit runs as the assembly's would (``body_fit`` with ``build``,
+    serialised per body) and records a refusal again — with its attempt kept (Ruling A31: the dialog shows it).
+    Nothing is assembled (the Build or its automatic run does that, as after an acceptance). ``{ok, body, fsig,
+    error}``; ``ok`` False with ``error`` when refused or when nothing can be fitted (``NO_BASE_FIT_TO_DERIVE``,
+    a body that is no longer stored). The caller (``_execute``) re-fits the plain body first when its fit is due."""
+    from app.core import base_body, figure, garment_store as gs
+    if not gs.is_body_id(body_id):
+        raise ValueError(f"not an outfit body id: {str(body_id)[:40]!r}")
+    if profile is None:
+        from app.models.character import get_character_profile
+        profile = get_character_profile(character_name) or {}
+    out: Dict[str, Any] = {"ok": False, "body": body_id, "fsig": "", "error": ""}
+    body_sha = body_sha256(character_name, body_id)
+    if not body_sha:
+        out["error"] = "The body shape is no longer stored"
+        return out
+    if gs._garment_kind(item_id) == _footwear():
+        from app.core import garment_footwear
+        fsig = gs.garment_fsig(character_name, item_id, profile=profile)
+        gs.clear_failure_on_body(character_name, item_id, fsig, body_id)
+        result = garment_footwear.body_fit(character_name, item_id, body_id=body_id, body_sha=body_sha,
+                                           profile=profile, build=True)
+    else:
+        base = base_body.current_base(character_name, profile=profile)
+        base_fit = gs.accepted_fit(character_name, item_id, base_model_sha=base[1], profile=profile) \
+            if base and base[1] else None
+        parsed = gs.parse_name(Path(base_fit[0])) if base_fit else None
+        if not parsed:
+            out["error"] = NO_BASE_FIT_TO_DERIVE
+            return out
+        fsig = parsed[1]
+        gs.clear_failure_on_body(character_name, item_id, fsig, body_id)
+        result = body_fit(character_name, item_id, body_id=body_id, body_sha=body_sha, base_fit=base_fit,
+                          profile=profile, build=True)
+    figure.invalidate()
+    ok = result.get("fit") is not None and not result.get("error")
+    out.update(ok=ok, fsig=fsig, error="" if ok else str(result.get("error") or "not fitted on this body"))
+    logger.info("Re-fit %s/%s on %s: %s", character_name, item_id, body_id, "accepted" if ok else out["error"])
+    return out
+
 def body_fit_info(character_name: str, item_id: str, *,
                   profile: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """The fit of ``item_id`` on the body the CURRENT outfit model stands on
@@ -3198,13 +3247,31 @@ def check_run(character_name: str, item_id: str, *, steps: Union[None, str, Iter
         _check_view_run(character_name, item_id, wanted[0], view, state=state, prerequisites=prerequisites)
 
 
+def check_body_run(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]],
+                   body: Optional[str]) -> None:
+    """Ruling A50: a run's ``body`` — "" / None, or the id of a STORED outfit body for a fit-only run of a clothing
+    or footwear piece; ValueError otherwise."""
+    if not body:
+        return
+    from app.core import garment_store as gs
+    from app.core.garment_footwear import stored_outfit_bodies
+    if not _fit_only(steps):
+        raise ValueError("A body is only named for a Re-fit (the fit step alone)")
+    if gs._garment_kind(item_id) not in (_clothing(), _footwear()):
+        raise ValueError("Only clothing and footwear are fitted per body shape")
+    if not gs.is_body_id(body) or body not in stored_outfit_bodies(character_name):
+        raise ValueError(f"No stored body shape {str(body)[:40]!r}")
+
+
 class _Job:
     """One queued run of a character's worker (``_queues``)."""
 
     def __init__(self, item_id: str, steps: Union[None, str, Iterable[str]], view: Optional[str],
                  force: bool, automatic: bool = False, state: Optional[str] = None, only: bool = False,
-                 prerequisites: bool = False):
+                 prerequisites: bool = False, body: str = ""):
         self.item_id, self.steps, self.view, self.force = item_id, steps, view, force
+        #: Ruling A50: the outfit body a fit-only run re-fits on ("" = the plain body, ``refit_on_body``).
+        self.body = body
         #: Only the named steps, nothing after them (``run_garment(only=…)``, ruling F13 d); a view run always.
         self.only = (bool(only) or view is not None) and steps is not None
         #: A view run that makes its missing prerequisite views first (Ruling A33, the explicit "first" action).
@@ -3229,14 +3296,15 @@ class _Job:
     @property
     def plain(self) -> bool:
         """A default run (first missing step on, the worn state) — what a trigger asks for."""
-        return self.steps is None and self.view is None and not self.force and self.state is None
+        return self.steps is None and self.view is None and not self.force and self.state is None and not self.body
 
-    def key(self) -> Tuple[str, Any, Optional[str], bool, Optional[str], bool, bool]:
-        """What makes two runs the same request (the steps as a tuple, the state, ``only``, ``prerequisites``)."""
+    def key(self) -> Tuple[str, Any, Optional[str], bool, Optional[str], bool, bool, str]:
+        """What makes two runs the same request (the steps as a tuple, the state, ``only``, ``prerequisites``,
+        the body)."""
         steps = self.steps
         if steps is not None and not isinstance(steps, str):
             steps = tuple(steps)
-        return self.item_id, steps, self.view, bool(self.force), self.state, self.only, self.prerequisites
+        return self.item_id, steps, self.view, bool(self.force), self.state, self.only, self.prerequisites, self.body
 
 
 def _fit_only(steps: Union[None, str, Iterable[str]]) -> bool:
@@ -3396,6 +3464,19 @@ def _worker(character_name: str) -> None:
                 return
 
 
+def _refit_body_job(character_name: str, job: "_Job") -> Dict[str, Any]:
+    """Ruling A50: a fit-only run for an outfit body — the plain body's fit first when it is not current (the
+    body's fit is derived from it: a Re-fit after a fit-settings change applies them on both), then
+    ``refit_on_body``."""
+    from app.core import fit_attempts
+    plain = fit_attempts.fit_status(character_name, job.item_id, "")
+    if plain["state"] != "accepted":
+        first = run_garment(character_name, job.item_id, steps="fit", force=True, only=True, beside=job.beside)
+        if not first.get("ok"):
+            return {**first, "body": ""}
+    return refit_on_body(character_name, job.item_id, job.body)
+
+
 def _execute(character_name: str, job: "_Job") -> Optional[str]:
     """Run one job (the FIFO worker's and a refit's beside it): ``job.result`` is set, the tracked CPU task
     ends; returns the error of a run that raised, else None."""
@@ -3413,6 +3494,8 @@ def _execute(character_name: str, job: "_Job") -> Optional[str]:
                         str(failure.get("error") or "")[:120])
             job.result = {"ok": False, "fsig": failure.get("fsig"), "step": failure.get("step"),
                           "error": failure.get("error"), "cached": True, "ran": []}
+        elif job.body:
+            job.result = _refit_body_job(character_name, job)
         elif job.beside:
             job.result = run_garment(character_name, job.item_id, steps=job.steps, view=job.view,
                                      force=job.force, state=job.state, only=job.only, beside=True)
@@ -3522,7 +3605,7 @@ def _position_locked(character_name: str, job: "_Job") -> Dict[str, Any]:
 def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, Iterable[str]] = None,
                   view: Optional[str] = None, force: bool = False,
                   state: Optional[str] = None, only: bool = False,
-                  prerequisites: bool = False) -> Dict[str, Any]:
+                  prerequisites: bool = False, body: str = "") -> Dict[str, Any]:
     """Run ``run_garment`` in the character's worker thread — at once when
     the character has no garment run, else queued behind its runs (never
     refused). An identical waiting run (same item, steps, view, force) is not
@@ -3554,11 +3637,17 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
     another item (``_side_worker``, ``_beside_ok_locked``) — ``{started True,
     queued False, position 0, behind None, beside True}`` — unless a base-body
     step or the 3D generation guard is in flight (``_base_in_flight``) or a
-    refit sweep holds the character: then it queues as before."""
+    refit sweep holds the character: then it queues as before.
+
+    ``body`` (Ruling A50, a fit-only run of a clothing or footwear piece): the outfit body the Re-fit fits on
+    (``refit_on_body``, after the plain body's fit when that is due) — "" the plain body; ValueError otherwise
+    (``check_body_run``)."""
     from app.core import garment_store as gs
     check_run(character_name, item_id, steps=steps, view=view, state=state,
               **({"prerequisites": True} if prerequisites else {}))
-    wanted = _Job(item_id, steps, view, bool(force), state=state, only=only, prerequisites=prerequisites)
+    check_body_run(character_name, item_id, steps=steps, body=body)
+    wanted = _Job(item_id, steps, view, bool(force), state=state, only=only, prerequisites=prerequisites,
+                  body=body or "")
     # A default run builds the worn state: an explicit run of the OTHER state never takes its place.
     takes_default = wanted.state is None or wanted.state == _worn_state(character_name, item_id)
     # A fit-only run is a CPU refit: tracked from the click on (pending while it waits behind other runs).
@@ -3596,7 +3685,7 @@ def start_garment(character_name: str, item_id: str, *, steps: Union[None, str, 
             if job is not None:
                 # Explicit wins, the place in the queue stays.
                 job.steps, job.view, job.force, job.state = wanted.steps, wanted.view, wanted.force, wanted.state
-                job.only, job.prerequisites = wanted.only, wanted.prerequisites
+                job.only, job.prerequisites, job.body = wanted.only, wanted.prerequisites, wanted.body
         if job is None:
             job = wanted
             queue.append(job)
